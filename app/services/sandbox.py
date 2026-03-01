@@ -9,15 +9,11 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 logger = structlog.get_logger()
 
 
-def _get_retry_decorator():
-    from app.config import settings
-    return retry(
-        stop=stop_after_attempt(settings.SANDBOX_MAX_RETRIES),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        reraise=True,
-    )
-
-
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    reraise=True,
+)
 async def execute_in_sandbox(
     code: str,
     language: str = "python",
