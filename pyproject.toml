@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aads-server"
+version = "0.1.0"
+description = "AADS — Autonomous AI Development System Server"
+requires-python = ">=3.11"
+dependencies = [
+    # LangGraph (T-001)
+    "langgraph==1.0.10",
+    "langgraph-checkpoint==4.0.1",
+    "langgraph-checkpoint-postgres==3.0.4",
+    # FastAPI
+    "fastapi==0.134.0",
+    "uvicorn[standard]>=0.34.0",
+    "sse-starlette>=2.0.0",
+    "python-multipart>=0.0.18",
+    # Anthropic / LLM
+    "anthropic==0.84.0",
+    "langchain-anthropic>=0.6.0",
+    "langchain-openai>=0.5.0",
+    "langchain-google-genai>=2.0.0",
+    "langchain-mcp-adapters==0.2.0",
+    # E2B
+    "e2b-code-interpreter==2.4.1",
+    # DB
+    "psycopg[binary]>=3.2.0",
+    # Redis
+    "redis[hiredis]>=5.0.0",
+    "upstash-redis>=1.0.0",
+    # Config / Utils
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    "structlog>=24.4.0",
+    "tenacity>=9.0.0",
+    "httpx>=0.28.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.25.0",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.14.0",
+    "mypy>=1.14.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+ignore_missing_imports = true
