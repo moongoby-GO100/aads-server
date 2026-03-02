@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     # Redis
     UPSTASH_REDIS_URL: str = ""
 
+    # MCP 서버 설정 (T-003)
+    GITHUB_TOKEN: SecretStr = SecretStr("")
+    BRAVE_API_KEY: SecretStr = SecretStr("")
+    MCP_SERVER_HOST: str = "localhost"
+
     # 비용/한도 (R-012, 설계서 Section 21)
     MAX_LLM_CALLS_PER_TASK: int = 15
     MAX_COST_PER_TASK_USD: float = 10.0
