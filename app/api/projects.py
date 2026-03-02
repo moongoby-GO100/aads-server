@@ -172,3 +172,77 @@ async def get_project_status(project_id: str):
         "created_at": state.values.get("created_at"),
         "error_log": state.values.get("error_log", []),
     }
+
+
+@router.post("/projects/{project_id}/resume")
+async def resume_project(project_id: str, approved: bool = True, feedback: str = "자동 승인"):
+    """인터럽트된 프로젝트를 재개합니다 (승인/거절)."""
+    from app.main import app_state
+
+    graph = app_state.get("graph")
+    if not graph:
+        raise HTTPException(503, "Graph not ready")
+
+    thread_id = f"project-{project_id}"
+    config = {"configurable": {"thread_id": thread_id}}
+
+    # interrupt를 resume — LangGraph Command 사용
+    from langgraph.types import Command
+    resume_value = True if approved else feedback
+    result = await graph.ainvoke(Command(resume=resume_value), config=config)
+
+    interrupt_payload = None
+    if "__interrupt__" in result:
+        interrupts = result["__interrupt__"]
+        if interrupts:
+            interrupt_payload = {
+                "value": interrupts[0].value,
+                "id": str(interrupts[0].id) if hasattr(interrupts[0], "id") else None,
+            }
+
+    state = await graph.aget_state(config)
+    stage = state.values.get("checkpoint_stage", "unknown") if state and state.values else "unknown"
+
+    return {
+        "project_id": project_id,
+        "status": "completed" if stage == "completed" else "in_progress",
+        "checkpoint_stage": stage,
+        "interrupt_payload": interrupt_payload,
+    }
+
+
+@router.post("/projects/{project_id}/auto_run")
+async def auto_run_project(project_id: str):
+    """프로젝트를 자동 승인 모드로 전체 실행합니다 (Phase 1.5 호환)."""
+    from app.main import app_state
+
+    graph = app_state.get("graph")
+    if not graph:
+        raise HTTPException(503, "Graph not ready")
+
+    thread_id = f"project-{project_id}"
+    config = {"configurable": {"thread_id": thread_id}}
+
+    # 최대 10회 자동 승인 루프
+    max_iterations = 10
+    for i in range(max_iterations):
+        from langgraph.types import Command
+        result = await graph.ainvoke(Command(resume=True), config=config)
+        state = await graph.aget_state(config)
+        stage = state.values.get("checkpoint_stage", "unknown") if state and state.values else "unknown"
+
+        if "__interrupt__" not in result or not result.get("__interrupt__"):
+            # 더 이상 interrupt 없음 → 완료
+            return {
+                "project_id": project_id,
+                "status": "completed",
+                "checkpoint_stage": stage,
+                "iterations": i + 1,
+            }
+
+    return {
+        "project_id": project_id,
+        "status": "max_iterations_reached",
+        "checkpoint_stage": "unknown",
+        "iterations": max_iterations,
+    }

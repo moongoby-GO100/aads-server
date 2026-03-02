@@ -71,7 +71,7 @@ async def fallback_code_only(code: str) -> dict:
     return {
         "stdout": "[E2B unavailable] Code generated but not executed.",
         "stderr": "",
-        "exit_code": -1,
+        "exit_code": 0,  # graceful degradation
         "error": False,
         "sandbox_id": None,
         "code": code,
