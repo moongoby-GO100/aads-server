@@ -36,11 +36,16 @@ class Settings(BaseSettings):
     SANDBOX_TIMEOUT_SECONDS: int = 300
     SANDBOX_MAX_RETRIES: int = 3
 
+    # 인증
+    JWT_SECRET_KEY: str = ""
+    AADS_ADMIN_EMAIL: str = "admin@aads.dev"
+    AADS_ADMIN_PASSWORD: str = ""
+
     # 환경
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "INFO"
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 settings = Settings()

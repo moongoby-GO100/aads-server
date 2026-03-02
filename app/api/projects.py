@@ -2,9 +2,11 @@
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
+from typing import Optional
 
 router = APIRouter()
 
@@ -20,7 +22,7 @@ class CreateProjectResponse(BaseModel):
     interrupt_payload: dict | None = None
 
 
-@router.post("/projects", response_model=CreateProjectResponse)
+@router.post("/projects", response_model=CreateProjectResponse, summary="프로젝트 생성", description="PM 에이전트로 요구사항 분석 후 checkpoint_pending 상태 반환")
 async def create_project(req: CreateProjectRequest):
     """프로젝트 생성 → PM 노드까지 실행 → interrupt에서 멈춤."""
     from app.main import app_state
@@ -125,7 +127,7 @@ async def get_project_costs(project_id: str):
     return result
 
 
-@router.get("/projects/{project_id}/status")
+@router.get("/projects/{project_id}/status", summary="프로젝트 상태 조회", description="현재 체크포인트, 비용, 파일 등 프로젝트 전체 상태 반환")
 async def get_project_status(project_id: str):
     """프로젝트 상태 상세 조회.
 
@@ -174,7 +176,7 @@ async def get_project_status(project_id: str):
     }
 
 
-@router.post("/projects/{project_id}/resume")
+@router.post("/projects/{project_id}/resume", summary="프로젝트 재개", description="인터럽트된 프로젝트를 승인/거절로 재개")
 async def resume_project(project_id: str, approved: bool = True, feedback: str = "자동 승인"):
     """인터럽트된 프로젝트를 재개합니다 (승인/거절)."""
     from app.main import app_state
@@ -211,7 +213,7 @@ async def resume_project(project_id: str, approved: bool = True, feedback: str =
     }
 
 
-@router.post("/projects/{project_id}/auto_run")
+@router.post("/projects/{project_id}/auto_run", summary="자동 실행", description="최대 10회 자동 승인으로 전체 파이프라인 완료")
 async def auto_run_project(project_id: str):
     """프로젝트를 자동 승인 모드로 전체 실행합니다 (Phase 1.5 호환)."""
     from app.main import app_state

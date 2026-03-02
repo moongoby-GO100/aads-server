@@ -5,7 +5,9 @@ lifespan으로 그래프 컴파일 + checkpointer + MCP 초기화.
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from app.logging_config import configure_logging
 
 from app.api import health, projects, checkpoints, stream, auth
 from app.config import settings
@@ -22,7 +24,11 @@ app_state: dict = {"graph": None, "checkpointer": None, "mcp_manager": None}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """서버 시작 시 그래프 + checkpointer + MCP 초기화."""
-    logger.info("aads_server_starting", env=settings.ENVIRONMENT)
+    # 로깅 설정 초기화
+    import os
+    json_logs = os.getenv("ENVIRONMENT", "development") == "production"
+    configure_logging(log_level=settings.LOG_LEVEL, json_format=json_logs)
+    logger.info("aads_server_starting", env=settings.ENVIRONMENT, json_logs=json_logs)
 
     # MCP 매니저 초기화 (graceful degradation — MCP 없이도 동작)
     mcp_manager = MCPClientManager()
@@ -62,6 +68,26 @@ app = FastAPI(
     description="Autonomous AI Development System — Phase 2 Dashboard",
     lifespan=lifespan,
 )
+
+# 글로벌 예외 핸들러
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.error(
+        unhandled_exception,
+        path=request.url.path,
+        method=request.method,
+        error=str(exc),
+        error_type=type(exc).__name__,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "internal_server_error",
+            "message": "예기치 않은 오류가 발생했습니다",
+            "type": type(exc).__name__,
+        },
+    )
+
 
 # 라우터 등록
 app.include_router(health.router, prefix="/api/v1", tags=["health"])

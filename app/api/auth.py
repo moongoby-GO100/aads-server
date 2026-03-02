@@ -22,6 +22,8 @@ class LoginResponse(BaseModel):
 async def login(req: LoginRequest):
     if not auth_module.JWT_AVAILABLE:
         raise HTTPException(status_code=503, detail="JWT 인증 모듈 미설치 (pip install PyJWT)")
+    if not auth_module.ADMIN_PASSWORD:
+        raise HTTPException(status_code=503, detail="관리자 비밀번호 미설정 (AADS_ADMIN_PASSWORD env var 필요)")
     if not auth_module.check_admin_credentials(req.email, req.password):
         raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다")
     token = auth_module.create_token("1", req.email)
