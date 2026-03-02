@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 import structlog
 from fastapi import FastAPI
 
-from app.api import health, projects, checkpoints, stream
+from app.api import health, projects, checkpoints, stream, auth
 from app.config import settings
 from app.graph.builder import compile_graph
 from app.services.checkpointer import get_checkpointer
@@ -59,7 +59,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AADS API",
     version="0.2.0",
-    description="Autonomous AI Development System — Phase 1 Week 2",
+    description="Autonomous AI Development System — Phase 2 Dashboard",
     lifespan=lifespan,
 )
 
@@ -68,3 +68,4 @@ app.include_router(health.router, prefix="/api/v1", tags=["health"])
 app.include_router(projects.router, prefix="/api/v1", tags=["projects"])
 app.include_router(checkpoints.router, prefix="/api/v1", tags=["checkpoints"])
 app.include_router(stream.router, prefix="/api/v1", tags=["stream"])
+app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
