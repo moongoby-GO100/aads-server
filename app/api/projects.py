@@ -100,3 +100,26 @@ async def get_project(project_id: str):
         "total_cost_usd": state.values.get("total_cost_usd", 0.0),
         "error_log": state.values.get("error_log", []),
     }
+
+
+@router.get("/projects/{project_id}/costs")
+async def get_project_costs(project_id: str):
+    """프로젝트 비용 상세 조회 (에이전트별 토큰 비용)."""
+    from app.main import app_state
+    from app.services.cost_tracker import get_project_costs as _get_costs
+
+    graph = app_state.get("graph")
+    if not graph:
+        raise HTTPException(503, "Graph not ready")
+
+    thread_id = f"project-{project_id}"
+    config = {"configurable": {"thread_id": thread_id}}
+
+    state = await graph.aget_state(config)
+    if not state or not state.values:
+        raise HTTPException(404, "Project not found")
+
+    breakdown = state.values.get("cost_breakdown", {})
+    result = await _get_costs(project_id, breakdown)
+    result["llm_calls_count"] = state.values.get("llm_calls_count", 0)
+    return result
