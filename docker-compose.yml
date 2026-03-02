@@ -1,0 +1,28 @@
+version: '3.9'
+
+services:
+  aads-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aads-server
+    restart: always
+    ports:
+      - "8100:8080"
+    env_file:
+      - .env
+    environment:
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+    networks:
+      - aads_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  aads_network:
+    external: true
