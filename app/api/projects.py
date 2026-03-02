@@ -123,3 +123,52 @@ async def get_project_costs(project_id: str):
     result = await _get_costs(project_id, breakdown)
     result["llm_calls_count"] = state.values.get("llm_calls_count", 0)
     return result
+
+
+@router.get("/projects/{project_id}/status")
+async def get_project_status(project_id: str):
+    """프로젝트 상태 상세 조회.
+
+    응답: project_id, status, current_agent, progress_percent,
+          checkpoints, costs, created_at, updated_at
+    """
+    from app.main import app_state
+    from app.checkpoints import get_checkpoint_logs
+
+    graph = app_state.get("graph")
+    if not graph:
+        raise HTTPException(503, "Graph not ready")
+
+    thread_id = f"project-{project_id}"
+    config = {"configurable": {"thread_id": thread_id}}
+
+    state = await graph.aget_state(config)
+    if not state or not state.values:
+        raise HTTPException(404, "Project not found")
+
+    stage = state.values.get("checkpoint_stage", "unknown")
+    STAGE_PROGRESS = {
+        "requirements": 10, "plan_review": 20, "design_review": 30,
+        "development": 50, "midpoint_review": 60, "final_review": 80,
+        "completed": 100, "cancelled": 0,
+    }
+    progress = STAGE_PROGRESS.get(stage, 50)
+
+    checkpoint_logs = await get_checkpoint_logs(project_id)
+
+    return {
+        "project_id": project_id,
+        "status": "completed" if stage == "completed" else "in_progress",
+        "checkpoint_stage": stage,
+        "current_agent": state.values.get("next_agent"),
+        "progress_percent": progress,
+        "checkpoints": checkpoint_logs,
+        "costs": {
+            "total_usd": state.values.get("total_cost_usd", 0.0),
+            "llm_calls_count": state.values.get("llm_calls_count", 0),
+            "by_agent": state.values.get("cost_breakdown", {}),
+        },
+        "generated_files_count": len(state.values.get("generated_files", [])),
+        "created_at": state.values.get("created_at"),
+        "error_log": state.values.get("error_log", []),
+    }

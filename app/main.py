@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 import structlog
 from fastapi import FastAPI
 
-from app.api import health, projects, checkpoints
+from app.api import health, projects, checkpoints, stream
 from app.config import settings
 from app.graph.builder import compile_graph
 from app.services.checkpointer import get_checkpointer
@@ -67,3 +67,4 @@ app = FastAPI(
 app.include_router(health.router, prefix="/api/v1", tags=["health"])
 app.include_router(projects.router, prefix="/api/v1", tags=["projects"])
 app.include_router(checkpoints.router, prefix="/api/v1", tags=["checkpoints"])
+app.include_router(stream.router, prefix="/api/v1", tags=["stream"])
