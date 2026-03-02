@@ -72,8 +72,12 @@ class AADSState(TypedDict):
     generated_files: list[dict]        # [{path, content, language}]
     sandbox_results: list[dict]        # [{stdout, stderr, exit_code}]
 
+    # QA/Judge 결과 (Phase 1 Week 2)
+    qa_test_results: list[dict]        # QA 테스트 결과 목록
+    judge_verdict: Optional[dict]      # JudgeVerdict.model_dump()
+
     # 메타
     project_id: str
     created_at: str
-    iteration_count: int               # 루프 카운터, max 5
+    iteration_count: int               # 루프 카운터, Developer 재작업 횟수 추적
     error_log: list[str]

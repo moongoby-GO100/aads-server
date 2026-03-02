@@ -14,14 +14,39 @@ def route_after_pm(state: AADSState) -> str:
 
 
 def route_after_developer(state: AADSState) -> str:
-    """Developer 이후: Week 1에서는 바로 종료. Week 2에서 QA→Judge 추가."""
+    """Developer 이후: QA로 전달 (Week 2). 실패 시 supervisor 재시도."""
     task = state.get("current_task", {})
     if task.get("status") == "completed":
-        return "__end__"
+        return "qa"
     elif task.get("status") == "failed":
-        # 재시도 가능한 경우 supervisor로 복귀
         iteration = state.get("iteration_count", 0)
         if iteration < 5:
             return "supervisor"
         return "__end__"
-    return "__end__"
+    # 기본: QA로 전달
+    return "qa"
+
+
+def route_after_qa(state: AADSState) -> str:
+    """QA 이후: 항상 Judge로 전달 (Judge가 최종 판정)."""
+    stage = state.get("checkpoint_stage", "final_review")
+    if stage == "cancelled":
+        return "__end__"
+    return "judge"
+
+
+def route_after_judge(state: AADSState) -> str:
+    """Judge 이후: pass/conditional_pass → END, fail → Developer 재작업."""
+    stage = state.get("checkpoint_stage", "completed")
+    verdict_data = state.get("judge_verdict", {})
+    verdict = verdict_data.get("verdict", "fail") if verdict_data else "fail"
+
+    if stage == "completed":
+        return "__end__"
+    elif stage == "cancelled":
+        return "__end__"
+    elif stage == "development":
+        # fail → Developer 재작업
+        return "developer"
+    else:
+        return "__end__"
