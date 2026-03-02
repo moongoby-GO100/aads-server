@@ -81,3 +81,12 @@ class AADSState(TypedDict):
     created_at: str
     iteration_count: int               # 루프 카운터, Developer 재작업 횟수 추적
     error_log: list[str]
+    # Architect 설계 결과 (Phase 1 Week 2+)
+    architect_design: Optional[dict]       # Architect 설계 문서
+
+    # DevOps 결과 (Phase 1 Week 2+)
+    devops_result: Optional[dict]          # 배포 스크립트 + 헬스체크
+
+    # Researcher 결과 (온디맨드)
+    research_results: list[dict]           # [{query, findings, agent}]
+
