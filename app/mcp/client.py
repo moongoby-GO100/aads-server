@@ -1,13 +1,15 @@
 """
 MCP 클라이언트 매니저.
 - MultiServerMCPClient (langchain-mcp-adapters) 래퍼
-- 상시 가동 4개: 서버 시작 시 연결
+- 상시 가동 4개: 서버 시작 시 연결 (실제 HTTP ping 검증)
 - 온디맨드 3개: 요청 시 lazy 연결
 - 연결 실패 시 graceful degradation
 """
+import asyncio
 import structlog
 from typing import Optional
 
+import httpx
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from app.mcp.config import (
@@ -19,6 +21,17 @@ from app.mcp.config import (
 )
 
 logger = structlog.get_logger()
+
+
+async def _ping_mcp_server(url: str, timeout: float = 3.0) -> bool:
+    """SSE 엔드포인트 HTTP 연결 가능 여부 확인."""
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            # SSE 엔드포인트에 GET — 200 또는 405면 서버 기동 중
+            resp = await client.get(url)
+            return resp.status_code in (200, 405, 406)
+    except Exception:
+        return False
 
 # 전역 매니저 인스턴스 (main.py lifespan에서 초기화)
 _mcp_manager: Optional["MCPClientManager"] = None
@@ -40,19 +53,36 @@ class MCPClientManager:
     async def initialize(self) -> None:
         """
         서버 시작 시 호출.
-        상시 가동 4개 서버 연결 시도 + graceful degradation.
+        상시 가동 4개 서버 실제 HTTP ping 후 연결 가능 서버만 등록 + graceful degradation.
         """
         always_on_connections = get_always_on_connections()
         available = {}
 
-        for server_name, conn_config in always_on_connections.items():
-            try:
-                # 연결 가능 여부 확인 (실제 연결 없이 설정 검증)
-                if conn_config.get("url"):
-                    available[server_name] = conn_config
-                    logger.info("mcp_server_configured", server=server_name, url=conn_config["url"])
-            except Exception as e:
-                logger.warning("mcp_server_config_failed", server=server_name, error=str(e))
+        # 병렬 ping으로 빠른 응답 확인
+        async def _check(server_name: str, conn_config: dict) -> tuple[str, dict | None]:
+            url = conn_config.get("url", "")
+            if not url:
+                logger.warning("mcp_server_no_url", server=server_name)
+                return server_name, None
+            reachable = await _ping_mcp_server(url)
+            if reachable:
+                logger.info("mcp_server_reachable", server=server_name, url=url)
+                return server_name, conn_config
+            else:
+                logger.warning("mcp_server_unreachable", server=server_name, url=url)
+                return server_name, None
+
+        results = await asyncio.gather(
+            *[_check(name, cfg) for name, cfg in always_on_connections.items()],
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, Exception):
+                logger.warning("mcp_ping_exception", error=str(result))
+                continue
+            server_name, conn_config = result
+            if conn_config is not None:
+                available[server_name] = conn_config
 
         if available:
             try:
