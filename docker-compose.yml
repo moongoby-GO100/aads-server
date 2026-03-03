@@ -1,26 +1,10 @@
 version: '3.9'
 
-services:
-  postgres:
-    image: postgres:15-alpine
-    container_name: aads-postgres
-    restart: always
-    environment:
-      POSTGRES_DB: aads
-      POSTGRES_USER: aads
-      POSTGRES_PASSWORD: aads_dev_local
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    networks:
-      - aads_network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aads"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
+# PostgreSQL: 호스트 PostgreSQL 9.6 사용 (port 5432 충돌 방지)
+# host.docker.internal → 172.17.0.1 (host-gateway) → 호스트 postgres
+# iptables: 172.17.0.0/16 + 172.18.0.0/16 → 5432 ACCEPT 필수
 
+services:
   aads-server:
     build:
       context: .
@@ -50,7 +34,4 @@ services:
 networks:
   aads_network:
     external: true
-
-volumes:
-  pgdata:
 
