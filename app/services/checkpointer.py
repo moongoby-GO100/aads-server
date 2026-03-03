@@ -39,6 +39,10 @@ async def get_checkpointer():
     연결 성공 시 setup() 호출하여 체크포인트 테이블 생성.
     """
     from app.config import settings
+    import os
+
+    # 로컬 postgres(Docker 내부 DNS) 우선, 없으면 Supabase
+    db_url = os.getenv("DATABASE_URL") or settings.SUPABASE_DIRECT_URL
 
     # 1순위: 로컬 PostgreSQL (DATABASE_URL)
     local_url = getattr(settings, "DATABASE_URL", None)
