@@ -1,6 +1,26 @@
 version: '3.9'
 
 services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: aads-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: aads
+      POSTGRES_USER: aads
+      POSTGRES_PASSWORD: aads_dev_local
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - aads_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aads"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   aads-server:
     build:
       context: .
@@ -14,6 +34,10 @@ services:
     environment:
       - ENVIRONMENT=production
       - LOG_LEVEL=INFO
+      - DATABASE_URL=postgresql://aads:aads_dev_local@postgres:5432/aads
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - aads_network
     healthcheck:
@@ -26,3 +50,7 @@ services:
 networks:
   aads_network:
     external: true
+
+volumes:
+  pgdata:
+
