@@ -9,9 +9,13 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: SecretStr = SecretStr("")
     E2B_API_KEY: SecretStr
 
-    # Supabase 직접 연결 (R-011: port 5432 필수)
+    # 로컬 PostgreSQL (Docker Compose postgres 서비스)
+    # 우선순위 1: DATABASE_URL → 2: SUPABASE_DIRECT_URL → 3: MemorySaver
+    DATABASE_URL: str = ""
+
+    # Supabase 직접 연결 (R-011: port 5432 필수, IPv6 금지)
     # 형식: postgresql://postgres:[pw]@db.[ref].supabase.co:5432/postgres
-    SUPABASE_DIRECT_URL: str
+    SUPABASE_DIRECT_URL: str = ""
 
     # Redis
     UPSTASH_REDIS_URL: str = ""

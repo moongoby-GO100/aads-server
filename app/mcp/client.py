@@ -24,12 +24,15 @@ logger = structlog.get_logger()
 
 
 async def _ping_mcp_server(url: str, timeout: float = 3.0) -> bool:
-    """SSE 엔드포인트 HTTP 연결 가능 여부 확인."""
+    """SSE 엔드포인트 HTTP 연결 가능 여부 확인.
+    stream=True로 헤더만 확인 — SSE는 응답 본문이 무한 스트림이므로
+    client.get()으로 대기하면 timeout까지 블로킹됨.
+    """
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            # SSE 엔드포인트에 GET — 200 또는 405면 서버 기동 중
-            resp = await client.get(url)
-            return resp.status_code in (200, 405, 406)
+            async with client.stream("GET", url) as resp:
+                # 헤더 수신 즉시 반환 — 본문 읽지 않음
+                return resp.status_code in (200, 405, 406)
     except Exception:
         return False
 

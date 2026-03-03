@@ -14,6 +14,10 @@ services:
     environment:
       - ENVIRONMENT=production
       - LOG_LEVEL=INFO
+      # host.docker.internal → 호스트 PostgreSQL (9.6) 연결
+      - DATABASE_URL=postgresql://aads:aads_dev_local@host.docker.internal:5432/aads
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - aads_network
     healthcheck:
