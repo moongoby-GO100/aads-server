@@ -60,6 +60,34 @@ async def researcher_node(state: AADSState) -> dict:
     """
     logger.info("researcher_node_start")
 
+    # === Search past experiences for similar projects ===
+    from app.memory.store import memory_store
+
+    try:
+        async with memory_store.pool.acquire() as conn:
+            # 텍스트 기반 검색 (Phase 2에서 벡터 검색으로 업그레이드)
+            task_desc = state.get("current_task", {}).get("description", "")
+            if task_desc:
+                rows = await conn.fetch("""
+                    SELECT content, experience_type, domain, rif_score
+                    FROM experience_memory
+                    WHERE content::text ILIKE $1
+                    ORDER BY rif_score DESC, created_at DESC
+                    LIMIT 5
+                """, f"%{task_desc[:50]}%")
+
+                if rows:
+                    past_experiences = [dict(r) for r in rows]
+                    state["research_results"] = state.get("research_results", []) + [{
+                        "source": "experience_memory",
+                        "type": "past_experiences",
+                        "data": past_experiences,
+                        "count": len(past_experiences)
+                    }]
+                    logger.info(f"Found {len(past_experiences)} relevant past experiences")
+    except Exception as e:
+        logger.warning(f"Experience search failed (non-blocking): {e}")
+
     task = state.get("current_task", {})
     description = task.get("description", "Unknown task")
     research_query = task.get("research_query", description)

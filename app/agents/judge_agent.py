@@ -6,6 +6,7 @@ Judge Agent: 독립 출력 검증 — TaskSpec success_criteria 대비 코드 �
 """
 import json
 import structlog
+from typing import List, Dict
 from langchain_core.messages import AIMessage
 
 from app.graph.state import AADSState, JudgeVerdict
@@ -167,6 +168,29 @@ QA 결과: {qa_summary or "(없음)"}
     # 재작업 카운터
     iteration = state.get("iteration_count", 0)
 
+    # === Experience extraction on project completion ===
+    from app.memory.experience_extractor import extract_and_store_experience
+
+    if final_verdict == "pass":
+        try:
+            project_result = {
+                "description": state.get("current_task", {}).get("description", ""),
+                "tech_stack": _detect_tech_stack(state.get("generated_files", [])),
+                "domain": _detect_domain(state.get("current_task", {})),
+                "outcome": "success",
+                "total_cost_usd": state.get("total_cost_usd", 0),
+                "llm_calls_count": state.get("llm_calls_count", 0),
+                "generated_files": state.get("generated_files", []),
+                "issues_encountered": _extract_issues(state.get("error_log", "")),
+                "solutions_applied": _extract_solutions(state.get("error_log", ""))
+            }
+            await extract_and_store_experience(
+                project_id=state.get("project_id", "unknown"),
+                project_result=project_result
+            )
+        except Exception as e:
+            logger.warning(f"Experience extraction failed (non-blocking): {e}")
+
     if final_verdict == "pass":
         stage = "completed"
     elif final_verdict == "conditional_pass":
@@ -188,3 +212,32 @@ QA 결과: {qa_summary or "(없음)"}
         )],
         **cost_update,
     }
+
+
+def _detect_tech_stack(files: List[str]) -> List[str]:
+    stack = set()
+    for f in files:
+        if f.endswith('.py'): stack.add('Python')
+        if f.endswith('.ts') or f.endswith('.tsx'): stack.add('TypeScript')
+        if f.endswith('.js') or f.endswith('.jsx'): stack.add('JavaScript')
+        if 'react' in f.lower(): stack.add('React')
+        if 'next' in f.lower(): stack.add('Next.js')
+        if 'fastapi' in f.lower() or 'main.py' in f: stack.add('FastAPI')
+        if 'docker' in f.lower(): stack.add('Docker')
+    return list(stack)
+
+def _detect_domain(task: Dict) -> str:
+    desc = str(task.get("description", "")).lower()
+    if any(w in desc for w in ["web", "site", "dashboard", "frontend"]): return "web"
+    if any(w in desc for w in ["api", "server", "backend"]): return "backend"
+    if any(w in desc for w in ["mobile", "app", "ios", "android"]): return "mobile"
+    if any(w in desc for w in ["data", "ml", "ai", "model"]): return "data_science"
+    if any(w in desc for w in ["cli", "tool", "script"]): return "tooling"
+    return "general"
+
+def _extract_issues(error_log: str) -> List[str]:
+    if not error_log: return []
+    return [line.strip() for line in error_log.split('\n') if line.strip() and len(line.strip()) > 10][:10]
+
+def _extract_solutions(error_log: str) -> List[str]:
+    return []  # Phase 2에서 LLM 기반 솔루션 추출 추가
