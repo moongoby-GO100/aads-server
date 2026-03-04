@@ -288,6 +288,184 @@ async def run_full_qa(
 
 
 # ---------------------------------------------------------------------------
+# 모바일 QA 파이프라인 (T-039)
+# ---------------------------------------------------------------------------
+
+
+async def run_mobile_qa(state: dict, project_type: str) -> dict:
+    """
+    모바일 QA 파이프라인 실행.
+
+    project_type:
+      - mobile_android: Android 에뮬레이터 + Appium + Gemini Vision
+      - mobile_ios: Mac 연결 필요, 미연결 시 skip
+
+    Returns:
+        mobile QA 결과 dict (overall_verdict, overall_score, ...)
+    """
+    import os
+
+    package_name = state.get("package_name", state.get("project_id", "unknown"))
+    apk_url = state.get("apk_url", "")
+    activity_name = state.get("activity_name", ".MainActivity")
+    scenarios = state.get("qa_scenarios", [])
+
+    logger.info(
+        "run_mobile_qa_start",
+        project_type=project_type,
+        package_name=package_name,
+    )
+
+    # iOS: Mac 연결 여부 확인
+    if project_type == "mobile_ios":
+        ios_appium_url = os.getenv("IOS_APPIUM_URL", "")
+        if not ios_appium_url:
+            logger.warning("run_mobile_qa_ios_not_connected")
+            return {
+                "status": "skipped",
+                "reason": "iOS Mac not connected. Set IOS_APPIUM_URL environment variable.",
+                "project_type": project_type,
+                "package_name": package_name,
+                "overall_verdict": "CEO 확인 요청",
+                "overall_score": 0,
+            }
+
+    # Android: MobileQAService 사용
+    try:
+        from app.services.mobile_qa import mobile_qa_service
+        from app.services.design_auditor import design_auditor
+        from pathlib import Path
+        import tempfile
+        import base64
+
+        # Appium 상태 확인
+        appium_status = mobile_qa_service.check_appium_server()
+        if appium_status != "running":
+            logger.error("run_mobile_qa_appium_not_running")
+            return {
+                "status": "error",
+                "reason": "Appium server is not running",
+                "project_type": project_type,
+                "package_name": package_name,
+                "overall_verdict": "AUTO FAIL",
+                "overall_score": 0,
+            }
+
+        result = {
+            "project_type": project_type,
+            "package_name": package_name,
+            "install_success": False,
+            "scenario_results": [],
+            "audit_results": [],
+            "overall_verdict": "AUTO FAIL",
+            "overall_score": 0.0,
+            "crash_detected": False,
+        }
+
+        if not apk_url:
+            result["reason"] = "apk_url이 state에 없습니다"
+            return result
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import os as _os
+            apk_path = _os.path.join(tmpdir, "app.apk")
+            downloaded = mobile_qa_service.download_apk(apk_url, apk_path)
+            if not downloaded:
+                result["reason"] = f"APK 다운로드 실패: {apk_url}"
+                return result
+
+            appium_url = os.getenv("APPIUM_URL", "http://localhost:4723")
+            if project_type == "mobile_ios":
+                appium_url = os.getenv("IOS_APPIUM_URL", appium_url)
+
+            driver = None
+            try:
+                if project_type == "mobile_android":
+                    driver = mobile_qa_service.connect_android()
+                else:
+                    driver = mobile_qa_service.connect_ios(
+                        platform_version=os.getenv("IOS_PLATFORM_VERSION", "17.0"),
+                        device_name=os.getenv("IOS_DEVICE_NAME", "iPhone 15"),
+                    )
+
+                install_ok = mobile_qa_service.install_and_launch(
+                    driver, apk_path, package_name, activity_name
+                )
+                result["install_success"] = install_ok
+
+                if install_ok:
+                    import time
+                    time.sleep(2)
+
+                    screenshot_dir = Path("/tmp/mobile_qa_screenshots")
+                    screenshot_dir.mkdir(parents=True, exist_ok=True)
+                    from datetime import datetime as _dt
+                    ts = _dt.utcnow().strftime("%Y%m%d_%H%M%S")
+
+                    # 시나리오 실행
+                    if scenarios:
+                        augmented = []
+                        for i, step in enumerate(scenarios):
+                            augmented.append(step)
+                            augmented.append({
+                                "action": "screenshot",
+                                "path": str(screenshot_dir / f"{ts}_step{i}.png"),
+                            })
+                        result["scenario_results"] = mobile_qa_service.run_test_scenario(driver, augmented)
+                    else:
+                        init_shot = str(screenshot_dir / f"{ts}_initial.png")
+                        mobile_qa_service.take_screenshot(driver, init_shot)
+                        result["scenario_results"] = [{"action": "initial_screenshot", "screenshot": init_shot, "success": True}]
+
+                    # 크래시 감지
+                    crash_info = mobile_qa_service.check_crash(driver, package_name)
+                    result["crash_detected"] = crash_info["crashed"]
+
+                    # 화면 감리
+                    platform_name = "android" if project_type == "mobile_android" else "ios"
+                    audit_results = []
+                    for step_r in result["scenario_results"]:
+                        shot = step_r.get("screenshot")
+                        if shot and Path(shot).exists():
+                            audit = await design_auditor.audit_mobile_screen(shot, platform=platform_name)
+                            audit_results.append(audit)
+                    result["audit_results"] = audit_results
+
+                    # 종합 판정
+                    valid = [a for a in audit_results if a.get("verdict") not in ("ERROR", None)]
+                    if valid:
+                        avg_score = sum(a["total_score"] for a in valid) / len(valid)
+                        result["overall_score"] = round(avg_score, 1)
+                        if crash_info["crashed"]:
+                            result["overall_verdict"] = VERDICT_AUTO_FAIL
+                        elif avg_score >= 48:
+                            result["overall_verdict"] = VERDICT_AUTO_PASS
+                        elif avg_score >= 36:
+                            result["overall_verdict"] = VERDICT_CONDITIONAL
+                        else:
+                            result["overall_verdict"] = VERDICT_AUTO_FAIL
+                    else:
+                        result["overall_verdict"] = VERDICT_AUTO_FAIL if crash_info["crashed"] else VERDICT_CONDITIONAL
+
+            finally:
+                if driver:
+                    mobile_qa_service.close(driver)
+
+        return result
+
+    except Exception as e:
+        logger.error("run_mobile_qa_error", error=str(e))
+        return {
+            "status": "error",
+            "reason": str(e),
+            "project_type": project_type,
+            "package_name": package_name,
+            "overall_verdict": "AUTO FAIL",
+            "overall_score": 0,
+        }
+
+
+# ---------------------------------------------------------------------------
 # 내부 헬퍼
 # ---------------------------------------------------------------------------
 

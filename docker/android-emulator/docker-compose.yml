@@ -1,0 +1,25 @@
+services:
+  android-emulator:
+    image: halimqarroum/docker-android:api-33
+    container_name: aads-android-emulator
+    devices:
+      - /dev/kvm
+    ports:
+      - "5555:5555"   # ADB
+      - "5554:5554"   # Emulator console
+    environment:
+      - MEMORY=4096
+      - CORES=2
+      - DISABLE_ANIMATION=true
+      - SKIP_AUTH=true
+    volumes:
+      - android_avd:/data
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2'
+
+volumes:
+  android_avd:

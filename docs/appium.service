@@ -1,0 +1,13 @@
+[Unit]
+Description=Appium Server for AADS Mobile QA
+After=network.target docker.service
+
+[Service]
+Type=simple
+ExecStart=/home/claudebot/npm-global/bin/appium --address 0.0.0.0 --port 4723 --relaxed-security
+Restart=always
+Environment=ANDROID_HOME=/opt/android
+Environment=JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+
+[Install]
+WantedBy=multi-user.target

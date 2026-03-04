@@ -82,6 +82,52 @@ IMAGE_AUDIT_CATEGORIES = (
     "commercial_readiness",
 )
 
+MOBILE_AUDIT_PROMPT = """
+모바일 앱 스크린샷을 분석하세요. 6개 항목 각 10점(총 60점):
+1. layout_consistency (레이아웃 정렬, 여백, 간격)
+2. touch_target_size (터치 영역 최소 44x44dp)
+3. text_readability (폰트 크기, 대비, 가독성)
+4. navigation_clarity (내비게이션 명확성, 뒤로가기)
+5. visual_hierarchy (시각적 계층, CTA 버튼 강조)
+6. platform_compliance (Material Design / iOS HIG 준수)
+
+[출력 형식 - 반드시 JSON]
+{
+  "scores": {
+    "layout_consistency": {"score": 8, "issues": ["..."], "fixes": ["..."]},
+    "touch_target_size": {"score": 7, "issues": ["..."], "fixes": ["..."]},
+    "text_readability": {"score": 9, "issues": [], "fixes": []},
+    "navigation_clarity": {"score": 8, "issues": ["..."], "fixes": ["..."]},
+    "visual_hierarchy": {"score": 7, "issues": ["..."], "fixes": ["..."]},
+    "platform_compliance": {"score": 8, "issues": ["..."], "fixes": ["..."]}
+  },
+  "total_score": 47,
+  "verdict": "CONDITIONAL",
+  "summary": "한 줄 요약",
+  "critical_issues": ["즉시 수정 필요 항목"],
+  "platform": "android"
+}
+
+판정 기준: PASS 48+(80%), CONDITIONAL 36-47, FAIL 35이하
+"""
+
+MOBILE_AUDIT_CATEGORIES = (
+    "layout_consistency",
+    "touch_target_size",
+    "text_readability",
+    "navigation_clarity",
+    "visual_hierarchy",
+    "platform_compliance",
+)
+
+
+def _calc_mobile_verdict(total: int) -> str:
+    if total >= 48:
+        return "PASS"
+    if total >= 36:
+        return "CONDITIONAL"
+    return "FAIL"
+
 
 def _calc_image_verdict(total: int) -> str:
     if total >= 48:
@@ -474,6 +520,142 @@ class DesignAuditor:
             "scores": scores,
             "total_score": total_score,
             "verdict": verdict,
+            "summary": summary,
+            "critical_issues": critical_issues,
+            "error": None,
+            "provider_used": provider_used,
+        }
+
+    async def audit_mobile_screen(
+        self,
+        screenshot_path_or_base64: str,
+        platform: str = "android",
+        is_base64: bool = False,
+    ) -> dict:
+        """
+        모바일 앱 스크린샷 Gemini Vision 6항목 감리.
+
+        Args:
+            screenshot_path_or_base64: 이미지 파일 경로 또는 base64 문자열
+            platform: "android" 또는 "ios"
+            is_base64: True면 base64 문자열로 처리
+
+        Returns:
+            스코어카드 dict (scores, total_score, verdict, platform, summary, critical_issues)
+        """
+        logger.info("mobile_audit_start", platform=platform, is_base64=is_base64)
+
+        if is_base64:
+            image_b64 = screenshot_path_or_base64
+            image_ref = "base64_input"
+        else:
+            if not Path(screenshot_path_or_base64).exists():
+                return {
+                    "image_ref": screenshot_path_or_base64,
+                    "scores": {},
+                    "total_score": 0,
+                    "verdict": "ERROR",
+                    "platform": platform,
+                    "summary": f"파일 없음: {screenshot_path_or_base64}",
+                    "critical_issues": [],
+                    "error": f"파일 없음: {screenshot_path_or_base64}",
+                }
+            try:
+                image_b64 = _image_to_base64(screenshot_path_or_base64)
+            except Exception as e:
+                return {
+                    "image_ref": screenshot_path_or_base64,
+                    "scores": {},
+                    "total_score": 0,
+                    "verdict": "ERROR",
+                    "platform": platform,
+                    "summary": f"이미지 읽기 실패: {e}",
+                    "critical_issues": [],
+                    "error": str(e),
+                }
+            image_ref = screenshot_path_or_base64
+
+        if not image_b64:
+            return {
+                "image_ref": "empty",
+                "scores": {},
+                "total_score": 0,
+                "verdict": "ERROR",
+                "platform": platform,
+                "summary": "이미지 데이터 없음",
+                "critical_issues": [],
+                "error": "empty_image",
+            }
+
+        # platform 정보를 프롬프트에 추가
+        prompt = MOBILE_AUDIT_PROMPT.replace('"platform": "android"', f'"platform": "{platform}"')
+
+        raw_text = ""
+        provider_used = ""
+        try:
+            raw_text = await _call_gemini_vision(image_b64, prompt, "")
+            provider_used = "gemini-2.5-flash"
+        except Exception as e:
+            logger.warning("mobile_audit_gemini_failed", error=str(e))
+            try:
+                raw_text = await _call_claude_vision(image_b64, prompt, "")
+                provider_used = "claude-sonnet-4-5"
+            except Exception as e2:
+                logger.error("mobile_audit_all_llm_failed", error=str(e2))
+                return {
+                    "image_ref": image_ref,
+                    "scores": {},
+                    "total_score": 0,
+                    "verdict": "ERROR",
+                    "platform": platform,
+                    "summary": f"LLM 호출 실패: {e2}",
+                    "critical_issues": [],
+                    "error": str(e2),
+                }
+
+        try:
+            data = _extract_json(raw_text)
+            scores_raw = data.get("scores", {})
+            scores = {}
+            for key in MOBILE_AUDIT_CATEGORIES:
+                raw = scores_raw.get(key, {})
+                scores[key] = {
+                    "score": int(raw.get("score", 0)) if isinstance(raw, dict) else int(raw),
+                    "issues": raw.get("issues", []) if isinstance(raw, dict) else [],
+                    "fixes": raw.get("fixes", []) if isinstance(raw, dict) else [],
+                }
+            total_score = int(data.get("total_score", sum(v["score"] for v in scores.values())))
+            verdict = data.get("verdict", _calc_mobile_verdict(total_score))
+            summary = data.get("summary", "")
+            critical_issues = data.get("critical_issues", [])
+        except Exception as e:
+            logger.error("mobile_audit_json_parse_error", raw=raw_text[:300], error=str(e))
+            return {
+                "image_ref": image_ref,
+                "scores": {},
+                "total_score": 0,
+                "verdict": "ERROR",
+                "platform": platform,
+                "summary": f"JSON 파싱 실패: {e}",
+                "critical_issues": [],
+                "error": str(e),
+            }
+
+        logger.info(
+            "mobile_audit_done",
+            image_ref=image_ref,
+            platform=platform,
+            total_score=total_score,
+            verdict=verdict,
+            provider=provider_used,
+        )
+
+        return {
+            "image_ref": image_ref,
+            "scores": scores,
+            "total_score": total_score,
+            "verdict": verdict,
+            "platform": platform,
             "summary": summary,
             "critical_issues": critical_issues,
             "error": None,

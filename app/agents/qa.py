@@ -1,12 +1,14 @@
 """
-QA Agent — T-026: 디자인 검수 단계 통합.
+QA Agent — T-026/T-039: 디자인 검수 + 모바일 QA 통합.
 
 검증 파이프라인:
   기존: 코드 테스트 → 판정
-  변경: 코드 테스트 → 스크린샷 촬영 → Visual Regression → LLM 디자인 감리 → 종합 판정
+  T-026: 코드 테스트 → 스크린샷 촬영 → Visual Regression → LLM 디자인 감리 → 종합 판정
+  T-039: project_type=mobile_android|mobile_ios → 모바일 QA 파이프라인 분기
 
 qa_node()는 qa_agent.py의 기존 로직을 유지하면서
-state에 deploy_url이 있을 경우 qa_pipeline.run_full_qa()를 추가 실행한다.
+state에 deploy_url이 있을 경우 qa_pipeline.run_full_qa()를 추가 실행하고,
+project_type이 mobile_*이면 mobile QA 파이프라인으로 분기한다.
 """
 from __future__ import annotations
 
@@ -21,28 +23,65 @@ logger = structlog.get_logger()
 
 async def qa_node(state: AADSState) -> dict:
     """
-    QA Agent 진입점 (T-026 통합 버전).
+    QA Agent 진입점 (T-026/T-039 통합 버전).
+
+    project_type 분기:
+      - web|video|image (기본): Visual Regression + LLM 감리
+      - mobile_android: MobileQAService.full_qa() 호출
+      - mobile_ios: Mac 연결 확인 후 동일 플로우, 미연결 시 skip+경고
 
     1. 기존 코드 테스트 실행 (qa_agent.qa_node)
-    2. deploy_url이 state에 있으면 full QA 파이프라인 실행
-       - Visual Regression
-       - LLM 디자인 감리
-       - 종합 판정 (AUTO PASS / CEO 확인 요청 / AUTO FAIL)
+    2. project_type 확인 후 분기
     3. 결과를 state에 병합하여 반환
     """
-    logger.info("qa_node_t026_start")
+    logger.info("qa_node_t039_start")
 
     # Step 1: 기존 코드 테스트
     base_result = await _base_qa_node(state)
 
-    # deploy_url 없으면 기존 결과만 반환
+    # project_type 확인
+    project_type = state.get("project_type", "web")
+    project_id = state.get("project_id", "unknown")
+
+    # ------------------------------------------------------------------
+    # Mobile 분기 (T-039)
+    # ------------------------------------------------------------------
+    if project_type in ("mobile_android", "mobile_ios"):
+        try:
+            from app.services.qa_pipeline import run_mobile_qa
+            mobile_result = await run_mobile_qa(state, project_type)
+
+            merged = dict(base_result)
+            merged["qa_full_result"] = mobile_result
+            merged["qa_verdict"] = mobile_result.get("overall_verdict", mobile_result.get("status", "UNKNOWN"))
+            merged["messages"] = base_result.get("messages", []) + [
+                AIMessage(
+                    content=(
+                        f"모바일 QA 결과: {merged['qa_verdict']} "
+                        f"(플랫폼: {project_type}, "
+                        f"점수: {mobile_result.get('overall_score', 0)}/60)"
+                    )
+                )
+            ]
+            logger.info(
+                "qa_node_mobile_done",
+                project_type=project_type,
+                verdict=merged["qa_verdict"],
+            )
+            return merged
+
+        except Exception as e:
+            logger.error("qa_node_mobile_pipeline_error", error=str(e))
+            return base_result
+
+    # ------------------------------------------------------------------
+    # Web/기존 분기 (T-026)
+    # ------------------------------------------------------------------
     deploy_url = state.get("deploy_url", "")
     if not deploy_url:
         logger.info("qa_node_t026_no_deploy_url_skip_visual")
         return base_result
 
-    # Step 2: Visual + Design QA
-    project_id = state.get("project_id", "unknown")
     pages = state.get("qa_pages", ["/"])
 
     try:
