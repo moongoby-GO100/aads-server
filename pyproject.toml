@@ -25,6 +25,9 @@ dependencies = [
     "langchain-mcp-adapters==0.2.0",
     # Docker (D-011, 로컬 샌드박스)
     "docker>=7.0.0",
+    # Visual QA (T-024)
+    "playwright>=1.48.0",
+    "Pillow>=10.0.0",
     # E2B (Phase 3+ 옵션, 현재 사용 안 함)
     "e2b-code-interpreter==2.4.1",
     # DB
