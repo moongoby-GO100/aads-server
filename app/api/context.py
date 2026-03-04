@@ -183,7 +183,7 @@ async def get_public_summary():
         )
         # procedural_memory 상위 10건
         proc_rows = await conn.fetch(
-            "SELECT procedure_name, description, steps, success_rate, last_used "
+            "SELECT id, agent_name, procedure_type, content, success_rate, use_count, updated_at "
             "FROM procedural_memory ORDER BY success_rate DESC LIMIT 10"
         )
 
@@ -220,9 +220,9 @@ async def get_public_summary():
     procedures = []
     for r in proc_rows:
         entry = dict(r)
-        entry['steps'] = _sanitize(entry.get('steps'))
-        if entry.get('last_used'):
-            entry['last_used'] = str(entry['last_used'])
+        entry['content'] = _sanitize(entry.get('content'))
+        if entry.get('updated_at'):
+            entry['updated_at'] = str(entry['updated_at'])
         procedures.append(entry)
 
     return {
