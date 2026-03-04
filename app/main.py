@@ -31,6 +31,14 @@ async def lifespan(app: FastAPI):
     configure_logging(log_level=settings.LOG_LEVEL, json_format=json_logs)
     logger.info("aads_server_starting", env=settings.ENVIRONMENT, json_logs=json_logs)
 
+    # Docker 샌드박스 이미지 사전 풀 (T-015, D-011)
+    try:
+        from app.services.sandbox import pull_images
+        await pull_images()
+        logger.info("sandbox_images_pulled")
+    except Exception as e:
+        logger.warning("sandbox_image_pull_failed_graceful_degradation", error=str(e))
+
     # Memory Store 초기화 (T-011)
     try:
         await memory_store.initialize()
