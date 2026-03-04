@@ -20,6 +20,9 @@ services:
       - LOG_LEVEL=INFO
       # host.docker.internal → 호스트 PostgreSQL (9.6) 연결
       - DATABASE_URL=postgresql://aads:aads_dev_local@host.docker.internal:5432/aads
+    volumes:
+      # Docker-in-Docker: DockerSandbox (D-011) 실행을 위한 소켓 마운트
+      - /var/run/docker.sock:/var/run/docker.sock
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
