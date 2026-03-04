@@ -1,0 +1,125 @@
+version: '3.9'
+
+# AADS Production Docker Compose — T-032
+# CEO 승인: 옵션 A (68서버 유지, 도메인 aads.newtalk.kr 고정)
+
+services:
+  aads-postgres:
+    image: pgvector/pgvector:pg15
+    container_name: aads-postgres
+    restart: always
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_USER=aads
+      - POSTGRES_PASSWORD=aads_dev_local
+      - POSTGRES_DB=aads
+    command: >
+      postgres
+      -c shared_buffers=256MB
+      -c max_connections=50
+    volumes:
+      - aads_postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_memory_schema.sql:/docker-entrypoint-initdb.d/init_memory_schema.sql:ro
+    networks:
+      - aads_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aads -d aads"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    container_name: aads-redis
+    restart: always
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    networks:
+      - aads_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  aads-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aads-server
+    restart: always
+    ports:
+      - "8100:8080"
+    env_file:
+      - .env
+    environment:
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      - DATABASE_URL=postgresql://aads:aads_dev_local@aads-postgres:5432/aads
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - aads_network
+    depends_on:
+      aads-postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  aads-dashboard:
+    build:
+      context: ../aads-dashboard
+      dockerfile: Dockerfile
+    container_name: aads-dashboard
+    restart: always
+    ports:
+      - "3100:3100"
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=https://aads.newtalk.kr/api/v1
+      - PORT=3100
+    networks:
+      - aads_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  aads_postgres_data:
+
+networks:
+  aads_network:
+    external: true

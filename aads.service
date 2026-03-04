@@ -1,0 +1,14 @@
+[Unit]
+Description=AADS Production
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/docker compose -f /root/aads/aads-server/docker-compose.prod.yml up -d
+ExecStop=/usr/bin/docker compose -f /root/aads/aads-server/docker-compose.prod.yml down
+WorkingDirectory=/root/aads/aads-server
+
+[Install]
+WantedBy=multi-user.target
