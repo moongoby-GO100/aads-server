@@ -156,7 +156,7 @@ def _sanitize(data: Any) -> Any:
         sanitized = {}
         for k, v in data.items():
             if any(s.lower() in str(k).lower() for s in SENSITIVE_KEYS):
-                sanitized[k] = "[REDACTED]"
+                sanitized["[SENSITIVE_KEY]"] = "[REDACTED]"
             else:
                 sanitized[k] = _sanitize(v)
         return sanitized
