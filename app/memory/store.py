@@ -106,10 +106,18 @@ class AADSMemoryStore:
     # === L3: Experience Memory ===
     async def store_experience(self, experience_type: str, domain: str, tags: List[str], content: Dict, embedding: List[float] = None):
         async with self.pool.acquire() as conn:
-            await conn.execute("""
-                INSERT INTO experience_memory (experience_type, domain, tags, content, embedding)
-                VALUES ($1, $2, $3, $4, $5)
-            """, experience_type, domain, tags, json.dumps(content), embedding)
+            # title 컬럼이 NOT NULL인 DB 호환: content에서 title 추출 또는 자동 생성
+            title = content.get('title', f'{experience_type}:{domain or "general"}')
+            if embedding:
+                await conn.execute("""
+                    INSERT INTO experience_memory (experience_type, domain, tags, content, embedding, title)
+                    VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+                """, experience_type, domain, tags, json.dumps(content), embedding, title)
+            else:
+                await conn.execute("""
+                    INSERT INTO experience_memory (experience_type, domain, tags, content, title)
+                    VALUES ($1, $2, $3, $4::jsonb, $5)
+                """, experience_type, domain, tags, json.dumps(content), title)
 
     async def search_experience_by_embedding(self, embedding: List[float], limit: int = 5, experience_type: str = None) -> List[Dict]:
         async with self.pool.acquire() as conn:
@@ -139,11 +147,13 @@ class AADSMemoryStore:
     # === L5: Procedural Memory ===
     async def store_procedure(self, agent_name: str, procedure_type: str, content: Dict):
         async with self.pool.acquire() as conn:
+            # DB에 procedure_name/steps NOT NULL 컬럼이 있을 경우 자동 채움
+            procedure_name = f'{agent_name}:{procedure_type}'
             await conn.execute("""
-                INSERT INTO procedural_memory (agent_name, procedure_type, content)
-                VALUES ($1, $2, $3)
+                INSERT INTO procedural_memory (agent_name, procedure_type, content, procedure_name, steps)
+                VALUES ($1, $2, $3::jsonb, $4, $3::jsonb)
                 ON CONFLICT DO NOTHING
-            """, agent_name, procedure_type, json.dumps(content))
+            """, agent_name, procedure_type, json.dumps(content), procedure_name)
 
     async def get_procedures(self, agent_name: str) -> List[Dict]:
         async with self.pool.acquire() as conn:

@@ -1,16 +1,32 @@
 """
 AADS Context API - System Memory CRUD + HANDOVER 자동생성
-인증: X-Monitor-Key (읽기) 또는 JWT (읽기/쓰기)
+인증: X-Monitor-Key (읽기/쓰기) 또는 JWT (읽기/쓰기)
 """
-from fastapi import APIRouter, HTTPException, Header, Depends
+from fastapi import APIRouter, HTTPException, Header, Depends, Request
 from typing import Optional, Dict, List, Any
 from pydantic import BaseModel
 from app.memory.store import memory_store
-import hmac, os, json
+import hmac, os, json, time
+from collections import defaultdict
 
 router = APIRouter()
 
 MONITOR_KEY = os.getenv("AADS_MONITOR_KEY", "")
+
+# --- Rate Limiting (POST /context/system: 분당 30회/IP) ---
+_rate_limit_store: Dict[str, List[float]] = defaultdict(list)
+POST_RATE_LIMIT = 30  # 분당 최대 요청 수
+RATE_LIMIT_WINDOW = 60.0  # 초
+
+def check_rate_limit(request: Request):
+    ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    window_start = now - RATE_LIMIT_WINDOW
+    # 만료된 타임스탬프 제거
+    _rate_limit_store[ip] = [t for t in _rate_limit_store[ip] if t > window_start]
+    if len(_rate_limit_store[ip]) >= POST_RATE_LIMIT:
+        raise HTTPException(429, "Too Many Requests: POST /context/system 분당 30회 제한")
+    _rate_limit_store[ip].append(now)
 
 def verify_monitor_key(x_monitor_key: str = Header(None)):
     if not MONITOR_KEY:
@@ -48,10 +64,15 @@ async def get_system_entry(category: str, key: str, auth: bool = Depends(verify_
         raise HTTPException(404, f"Key '{category}/{key}' not found")
     return {"status": "ok", "data": data}
 
-# --- 쓰기 엔드포인트 (내부 에이전트 전용) ---
+# --- 쓰기 엔드포인트 (Monitor Key 인증 필수) ---
 @router.post("/context/system")
-async def put_system_memory(req: SystemMemoryRequest):
-    """시스템 메모리 저장/업데이트 (에이전트가 호출)"""
+async def put_system_memory(
+    req: SystemMemoryRequest,
+    request: Request,
+    auth: bool = Depends(verify_monitor_key),
+    _rate: None = Depends(check_rate_limit),
+):
+    """시스템 메모리 저장/업데이트 (Monitor Key 인증 필수)"""
     await memory_store.put_system(
         category=req.category,
         key=req.key,
@@ -59,7 +80,9 @@ async def put_system_memory(req: SystemMemoryRequest):
         version=req.version,
         updated_by="agent"
     )
-    return {"status": "ok", "saved": f"{req.category}/{req.key}"}
+    # 저장 확인: 저장된 값 반환
+    saved_data = await memory_store.get_system(req.category, req.key)
+    return {"status": "ok", "saved": f"{req.category}/{req.key}", "data": saved_data}
 
 # --- HANDOVER 자동생성 ---
 @router.get("/context/handover")

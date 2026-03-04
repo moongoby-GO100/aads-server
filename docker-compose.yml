@@ -17,6 +17,8 @@ services:
       - POSTGRES_DB=aads
     volumes:
       - aads_postgres_data:/var/lib/postgresql/data
+      # 컨테이너 첫 시작 시 init_memory_schema.sql 자동 실행 (T-018)
+      - ./scripts/init_memory_schema.sql:/docker-entrypoint-initdb.d/init_memory_schema.sql:ro
     networks:
       - aads_network
     healthcheck:
