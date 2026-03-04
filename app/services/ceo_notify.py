@@ -226,3 +226,44 @@ async def notify_ceo(
         "context_saved": context_saved,
         "notified_at": notified_at,
     }
+
+
+async def notify_ceo_escalation(
+    project_id: str,
+    task_id: str,
+    reason: str,
+    context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    CEO 에스컬레이션 알림 — Supervisor max_iterations / LLM 한도 초과 시.
+    텔레그램으로 즉시 알림 + Context API 저장.
+    """
+    notified_at = datetime.utcnow().isoformat()
+    token = _get_telegram_token()
+    chat_id = _get_telegram_chat_id()
+    telegram_sent = False
+
+    ctx = context or {}
+    message = (
+        f"🚨 <b>AADS CEO 에스컬레이션</b>\n\n"
+        f"<b>프로젝트</b>: {project_id}\n"
+        f"<b>태스크 ID</b>: {task_id}\n"
+        f"<b>사유</b>: {reason}\n\n"
+        f"<b>반복 횟수</b>: {ctx.get('iteration_count', 0)}\n"
+        f"<b>LLM 호출</b>: {ctx.get('llm_calls_count', 0)}\n"
+        f"<b>비용</b>: ${ctx.get('total_cost_usd', 0.0):.4f}\n"
+        f"<b>설명</b>: {ctx.get('description', '')[:200]}\n\n"
+        f"<i>{notified_at} UTC</i>"
+    )
+
+    if token and chat_id:
+        telegram_sent = await _send_telegram_message(token, chat_id, message)
+
+    logger.info(
+        "ceo_escalation_sent",
+        project_id=project_id,
+        task_id=task_id,
+        reason=reason,
+        telegram_sent=telegram_sent,
+    )
+    return {"telegram_sent": telegram_sent, "notified_at": notified_at}
