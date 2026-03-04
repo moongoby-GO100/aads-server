@@ -14,11 +14,12 @@ from app.config import settings
 from app.graph.builder import compile_graph
 from app.services.checkpointer import get_checkpointer
 from app.mcp.client import MCPClientManager, set_mcp_manager
+from app.memory.store import memory_store
 
 logger = structlog.get_logger()
 
 # 전역 그래프 (lifespan에서 초기화)
-app_state: dict = {"graph": None, "checkpointer": None, "mcp_manager": None}
+app_state: dict = {"graph": None, "checkpointer": None, "mcp_manager": None, "memory_store": None}
 
 
 @asynccontextmanager
@@ -29,6 +30,14 @@ async def lifespan(app: FastAPI):
     json_logs = os.getenv("ENVIRONMENT", "development") == "production"
     configure_logging(log_level=settings.LOG_LEVEL, json_format=json_logs)
     logger.info("aads_server_starting", env=settings.ENVIRONMENT, json_logs=json_logs)
+
+    # Memory Store 초기화 (T-011)
+    try:
+        await memory_store.initialize()
+        app_state["memory_store"] = memory_store
+        logger.info("memory_store_initialized")
+    except Exception as e:
+        logger.warning("memory_store_init_failed_graceful_degradation", error=str(e))
 
     # MCP 매니저 초기화 (graceful degradation — MCP 없이도 동작)
     mcp_manager = MCPClientManager()
@@ -56,9 +65,11 @@ async def lifespan(app: FastAPI):
     # 종료 정리
     if mcp_manager:
         await mcp_manager.shutdown()
+    await memory_store.close()
     app_state["graph"] = None
     app_state["checkpointer"] = None
     app_state["mcp_manager"] = None
+    app_state["memory_store"] = None
     logger.info("aads_server_shutdown")
 
 

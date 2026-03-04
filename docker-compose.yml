@@ -1,10 +1,30 @@
 version: '3.9'
 
-# PostgreSQL: 호스트 PostgreSQL 9.6 사용 (port 5432 충돌 방지)
-# host.docker.internal → 172.17.0.1 (host-gateway) → 호스트 postgres
-# iptables: 172.17.0.0/16 + 172.18.0.0/16 → 5432 ACCEPT 필수
+# PostgreSQL: pgvector/pgvector:pg15 컨테이너 (T-011 Memory 인프라)
+# 기존 호스트 PostgreSQL 9.6 (port 5432) → 5433으로 매핑해 공존
+# aads-server는 aads-postgres 서비스로 연결 (DATABASE_URL 업데이트)
 
 services:
+  aads-postgres:
+    image: pgvector/pgvector:pg15
+    container_name: aads-postgres
+    restart: always
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_USER=aads
+      - POSTGRES_PASSWORD=aads_dev_local
+      - POSTGRES_DB=aads
+    volumes:
+      - aads_postgres_data:/var/lib/postgresql/data
+    networks:
+      - aads_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aads -d aads"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   aads-server:
     build:
       context: .
@@ -18,8 +38,8 @@ services:
     environment:
       - ENVIRONMENT=production
       - LOG_LEVEL=INFO
-      # host.docker.internal → 호스트 PostgreSQL (9.6) 연결
-      - DATABASE_URL=postgresql://aads:aads_dev_local@host.docker.internal:5432/aads
+      # aads-postgres 컨테이너 (pgvector/pg15) 연결 (T-011)
+      - DATABASE_URL=postgresql://aads:aads_dev_local@aads-postgres:5432/aads
     volumes:
       # Docker-in-Docker: DockerSandbox (D-011) 실행을 위한 소켓 마운트
       - /var/run/docker.sock:/var/run/docker.sock
@@ -27,6 +47,9 @@ services:
       - "host.docker.internal:host-gateway"
     networks:
       - aads_network
+    depends_on:
+      aads-postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
       interval: 30s
@@ -34,7 +57,9 @@ services:
       retries: 3
       start_period: 60s
 
+volumes:
+  aads_postgres_data:
+
 networks:
   aads_network:
     external: true
-

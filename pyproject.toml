@@ -29,6 +29,8 @@ dependencies = [
     "e2b-code-interpreter==2.4.1",
     # DB
     "psycopg[binary]>=3.2.0",
+    "asyncpg>=0.29.0",
+    "pgvector>=0.3.0",
     # Redis
     "redis[hiredis]>=5.0.0",
     "upstash-redis>=1.0.0",
