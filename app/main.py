@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from app.logging_config import configure_logging
 
-from app.api import health, projects, checkpoints, stream, auth, context
+from app.api import health, projects, checkpoints, stream, auth, context, chat
 from app.config import settings
 from app.graph.builder import compile_graph
 from app.services.checkpointer import get_checkpointer
@@ -107,3 +107,4 @@ app.include_router(checkpoints.router, prefix="/api/v1", tags=["checkpoints"])
 app.include_router(stream.router, prefix="/api/v1", tags=["stream"])
 app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
 app.include_router(context.router, prefix="/api/v1", tags=["context"])
+app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
