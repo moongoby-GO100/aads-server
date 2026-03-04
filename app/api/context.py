@@ -183,7 +183,7 @@ async def get_public_summary():
         )
         # procedural_memory 상위 10건
         proc_rows = await conn.fetch(
-            "SELECT id, agent_name, procedure_type, content, success_rate, use_count, updated_at "
+            "SELECT id, procedure_name, steps, success_rate, execution_count, agent_name, procedure_type "
             "FROM procedural_memory ORDER BY success_rate DESC LIMIT 10"
         )
 
