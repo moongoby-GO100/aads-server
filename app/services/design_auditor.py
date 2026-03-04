@@ -59,6 +59,38 @@ AUDIT_PROMPT = """
 판정 기준: PASS(35+) / CONDITIONAL(25-34) / FAIL(24 이하)
 """
 
+IMAGE_AUDIT_PROMPT = """
+시니어 이커머스 이미지 검수관으로서 아래 상품 이미지를 6가지 기준으로 심사하세요.
+## 기준 (각 10점, 총 60점)
+1. resolution_clarity (해상도/선명도): 최소 800x800, 블러없음, 노이즈없음
+2. background_quality (배경): 깨끗한 배경, 불필요 요소 없음, 일관성
+3. product_visibility (상품 가시성): 상품이 화면의 60%+, 잘림없음, 그림자적절
+4. color_accuracy (색상 정확도): 자연스러운 색감, 과보정없음, 화이트밸런스
+5. text_overlay (텍스트/워터마크): 가독성, 위치적절, 상품가림없음 (텍스트없으면 10점)
+6. commercial_readiness (상업적 완성도): 구매 전환 유도, 신뢰감, 프로 수준
+## JSON만 반환
+{"scores":{...},"total_score":0,"verdict":"PASS|CONDITIONAL|FAIL","summary":"","critical_issues":[]}
+판정: PASS 48+(80%), CONDITIONAL 36-47(60-79%), FAIL 35이하
+"""
+
+IMAGE_AUDIT_CATEGORIES = (
+    "resolution_clarity",
+    "background_quality",
+    "product_visibility",
+    "color_accuracy",
+    "text_overlay",
+    "commercial_readiness",
+)
+
+
+def _calc_image_verdict(total: int) -> str:
+    if total >= 48:
+        return "PASS"
+    if total >= 36:
+        return "CONDITIONAL"
+    return "FAIL"
+
+
 # ---------------------------------------------------------------------------
 # 데이터 클래스
 # ---------------------------------------------------------------------------
@@ -321,6 +353,143 @@ class DesignAuditor:
         ]
         results = await asyncio.gather(*tasks, return_exceptions=False)
         logger.info("audit_multiple_done", count=len(results))
+        return list(results)
+
+    async def audit_product_image(
+        self,
+        image_path_or_base64: str,
+        is_base64: bool = False,
+    ) -> dict:
+        """
+        상품 이미지 심사 → 스코어카드.
+
+        Args:
+            image_path_or_base64: 이미지 파일 경로 또는 base64 문자열
+            is_base64: True면 base64 문자열로 처리
+        Returns:
+            스코어카드 dict (scores, total_score, verdict, summary, critical_issues)
+        """
+        logger.info("image_audit_start", is_base64=is_base64)
+
+        if is_base64:
+            image_b64 = image_path_or_base64
+            image_ref = "base64_input"
+        else:
+            if not Path(image_path_or_base64).exists():
+                logger.error("image_not_found", path=image_path_or_base64)
+                return {
+                    "image_ref": image_path_or_base64,
+                    "scores": {},
+                    "total_score": 0,
+                    "verdict": "ERROR",
+                    "summary": f"파일 없음: {image_path_or_base64}",
+                    "critical_issues": [],
+                    "error": f"파일 없음: {image_path_or_base64}",
+                }
+            try:
+                image_b64 = _image_to_base64(image_path_or_base64)
+            except Exception as e:
+                logger.error("image_read_error", path=image_path_or_base64, error=str(e))
+                return {
+                    "image_ref": image_path_or_base64,
+                    "scores": {},
+                    "total_score": 0,
+                    "verdict": "ERROR",
+                    "summary": f"이미지 읽기 실패: {e}",
+                    "critical_issues": [],
+                    "error": str(e),
+                }
+            image_ref = image_path_or_base64
+
+        if not image_b64:
+            return {
+                "image_ref": image_ref,
+                "scores": {},
+                "total_score": 0,
+                "verdict": "ERROR",
+                "summary": "이미지 데이터 없음",
+                "critical_issues": ["이미지 base64가 비어 있습니다"],
+                "error": "empty_image",
+            }
+
+        raw_text = ""
+        provider_used = ""
+        try:
+            raw_text = await _call_gemini_vision(image_b64, IMAGE_AUDIT_PROMPT, "")
+            provider_used = "gemini-2.5-flash"
+        except Exception as e:
+            logger.warning("image_audit_gemini_failed", error=str(e))
+            try:
+                raw_text = await _call_claude_vision(image_b64, IMAGE_AUDIT_PROMPT, "")
+                provider_used = "claude-sonnet-4-5"
+            except Exception as e2:
+                logger.error("image_audit_all_llm_failed", error=str(e2))
+                return {
+                    "image_ref": image_ref,
+                    "scores": {},
+                    "total_score": 0,
+                    "verdict": "ERROR",
+                    "summary": f"LLM 호출 실패: {e2}",
+                    "critical_issues": [],
+                    "error": str(e2),
+                }
+
+        try:
+            data = _extract_json(raw_text)
+            scores_raw = data.get("scores", {})
+            scores = {}
+            for key in IMAGE_AUDIT_CATEGORIES:
+                raw = scores_raw.get(key, {})
+                scores[key] = {
+                    "score": int(raw.get("score", 0)) if isinstance(raw, dict) else int(raw),
+                    "issues": raw.get("issues", []) if isinstance(raw, dict) else [],
+                    "fixes": raw.get("fixes", []) if isinstance(raw, dict) else [],
+                }
+            total_score = int(data.get("total_score", sum(v["score"] for v in scores.values())))
+            verdict = data.get("verdict", _calc_image_verdict(total_score))
+            summary = data.get("summary", "")
+            critical_issues = data.get("critical_issues", [])
+        except Exception as e:
+            logger.error("image_audit_json_parse_error", raw=raw_text[:300], error=str(e))
+            return {
+                "image_ref": image_ref,
+                "scores": {},
+                "total_score": 0,
+                "verdict": "ERROR",
+                "summary": f"JSON 파싱 실패: {e}",
+                "critical_issues": [],
+                "error": str(e),
+            }
+
+        logger.info(
+            "image_audit_done",
+            image_ref=image_ref,
+            total_score=total_score,
+            verdict=verdict,
+            provider=provider_used,
+        )
+
+        return {
+            "image_ref": image_ref,
+            "scores": scores,
+            "total_score": total_score,
+            "verdict": verdict,
+            "summary": summary,
+            "critical_issues": critical_issues,
+            "error": None,
+            "provider_used": provider_used,
+        }
+
+    async def audit_product_images_batch(
+        self,
+        images: List[str],
+        is_base64: bool = False,
+    ) -> List[dict]:
+        """여러 상품 이미지 일괄 심사."""
+        logger.info("image_audit_batch_start", count=len(images))
+        tasks = [self.audit_product_image(img, is_base64=is_base64) for img in images]
+        results = await asyncio.gather(*tasks, return_exceptions=False)
+        logger.info("image_audit_batch_done", count=len(results))
         return list(results)
 
     async def generate_report(self, audit_results: List[AuditResult]) -> str:

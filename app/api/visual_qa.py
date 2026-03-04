@@ -1062,3 +1062,229 @@ async def extract_benchmark_spec(req: ExtractSpecRequest):
         ffmpeg_params=ffmpeg_params,
         saved=saved,
     )
+
+
+# ---------------------------------------------------------------------------
+# T-028: 이커머스 이미지 검수 (뉴톡 V2)
+# ---------------------------------------------------------------------------
+
+
+class ImageItem(BaseModel):
+    image_base64: str
+    image_id: str
+    category: str = "상품"
+
+
+class ImageQARequest(BaseModel):
+    """POST /visual-qa/image-qa 요청 모델."""
+    project_id: str
+    images: List[ImageItem]
+
+
+class ImageScoreItem(BaseModel):
+    score: int
+    issues: List[str] = []
+    fixes: List[str] = []
+
+
+class ImageAuditResultItem(BaseModel):
+    image_id: str
+    category: str
+    scores: Dict[str, ImageScoreItem]
+    total_score: int
+    verdict: str
+    summary: str
+    critical_issues: List[str]
+    error: Optional[str] = None
+
+
+class ImageQAResponse(BaseModel):
+    project_id: str
+    results: List[ImageAuditResultItem]
+    total: int
+    pass_count: int
+    conditional_count: int
+    fail_count: int
+    error_count: int
+    overall_verdict: str
+
+
+class ImageQualityGateRequest(BaseModel):
+    """POST /visual-qa/image-quality-gate 요청 모델."""
+    project_id: str
+    image_base64: str
+    image_id: str
+    min_score: int = 48
+
+
+class ImageQualityGateResponse(BaseModel):
+    action: str       # approve | reject | error
+    project_id: str
+    image_id: str
+    verdict: str
+    total_score: int
+    min_score: int
+    issues: List[str] = []
+    summary: str = ""
+    error: Optional[str] = None
+
+
+@router.post("/image-qa", response_model=ImageQAResponse)
+async def image_qa(req: ImageQARequest):
+    """
+    T-028: 이커머스 상품 이미지 일괄 검수.
+
+    - 6개 기준 스코어카드 (resolution_clarity, background_quality, product_visibility,
+      color_accuracy, text_overlay, commercial_readiness)
+    - PASS 48+(80%), CONDITIONAL 36-47, FAIL 35이하
+    """
+    logger.info("api_image_qa_start", project_id=req.project_id, count=len(req.images))
+
+    if not req.images:
+        return ImageQAResponse(
+            project_id=req.project_id,
+            results=[],
+            total=0,
+            pass_count=0,
+            conditional_count=0,
+            fail_count=0,
+            error_count=0,
+            overall_verdict="SKIP",
+        )
+
+    tasks = [
+        design_auditor.audit_product_image(item.image_base64, is_base64=True)
+        for item in req.images
+    ]
+    raw_results = await _asyncio.gather(*tasks, return_exceptions=False)
+
+    result_items = []
+    for item, raw in zip(req.images, raw_results):
+        scores_dict = raw.get("scores", {})
+        scores_items = {
+            k: ImageScoreItem(
+                score=v.get("score", 0) if isinstance(v, dict) else int(v),
+                issues=v.get("issues", []) if isinstance(v, dict) else [],
+                fixes=v.get("fixes", []) if isinstance(v, dict) else [],
+            )
+            for k, v in scores_dict.items()
+        }
+        result_items.append(ImageAuditResultItem(
+            image_id=item.image_id,
+            category=item.category,
+            scores=scores_items,
+            total_score=raw.get("total_score", 0),
+            verdict=raw.get("verdict", "ERROR"),
+            summary=raw.get("summary", ""),
+            critical_issues=raw.get("critical_issues", []),
+            error=raw.get("error"),
+        ))
+
+    pass_count = sum(1 for r in result_items if r.verdict == "PASS")
+    conditional_count = sum(1 for r in result_items if r.verdict == "CONDITIONAL")
+    fail_count = sum(1 for r in result_items if r.verdict == "FAIL")
+    error_count = sum(1 for r in result_items if r.verdict == "ERROR")
+
+    if fail_count > 0 or error_count > 0:
+        overall_verdict = "FAIL"
+    elif conditional_count > 0:
+        overall_verdict = "CONDITIONAL"
+    else:
+        overall_verdict = "PASS"
+
+    logger.info(
+        "api_image_qa_done",
+        project_id=req.project_id,
+        total=len(result_items),
+        pass_count=pass_count,
+        fail_count=fail_count,
+        overall_verdict=overall_verdict,
+    )
+
+    return ImageQAResponse(
+        project_id=req.project_id,
+        results=result_items,
+        total=len(result_items),
+        pass_count=pass_count,
+        conditional_count=conditional_count,
+        fail_count=fail_count,
+        error_count=error_count,
+        overall_verdict=overall_verdict,
+    )
+
+
+@router.post("/image-quality-gate", response_model=ImageQualityGateResponse)
+async def image_quality_gate(req: ImageQualityGateRequest):
+    """
+    T-028: 단일 이미지 품질 게이트.
+
+    PASS(total_score >= min_score) → {"action": "approve"}
+    FAIL → {"action": "reject", "issues": [...]}
+    """
+    logger.info(
+        "api_image_quality_gate_start",
+        project_id=req.project_id,
+        image_id=req.image_id,
+        min_score=req.min_score,
+    )
+
+    if not req.image_base64:
+        return ImageQualityGateResponse(
+            action="error",
+            project_id=req.project_id,
+            image_id=req.image_id,
+            verdict="ERROR",
+            total_score=0,
+            min_score=req.min_score,
+            issues=["이미지 base64가 비어 있습니다"],
+            summary="이미지 데이터 없음",
+            error="empty_image_base64",
+        )
+
+    raw = await design_auditor.audit_product_image(req.image_base64, is_base64=True)
+
+    if raw.get("verdict") == "ERROR":
+        return ImageQualityGateResponse(
+            action="error",
+            project_id=req.project_id,
+            image_id=req.image_id,
+            verdict="ERROR",
+            total_score=0,
+            min_score=req.min_score,
+            issues=raw.get("critical_issues", []),
+            summary=raw.get("summary", ""),
+            error=raw.get("error"),
+        )
+
+    total_score = raw.get("total_score", 0)
+    verdict = raw.get("verdict", "FAIL")
+    issues = raw.get("critical_issues", [])
+
+    if total_score >= req.min_score:
+        action = "approve"
+    else:
+        action = "reject"
+        # 점수 미달 항목 이슈 수집
+        for cat_scores in raw.get("scores", {}).values():
+            if isinstance(cat_scores, dict):
+                issues.extend(cat_scores.get("issues", []))
+
+    logger.info(
+        "api_image_quality_gate_done",
+        project_id=req.project_id,
+        image_id=req.image_id,
+        total_score=total_score,
+        verdict=verdict,
+        action=action,
+    )
+
+    return ImageQualityGateResponse(
+        action=action,
+        project_id=req.project_id,
+        image_id=req.image_id,
+        verdict=verdict,
+        total_score=total_score,
+        min_score=req.min_score,
+        issues=issues,
+        summary=raw.get("summary", ""),
+    )
