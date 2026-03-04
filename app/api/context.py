@@ -145,6 +145,98 @@ async def get_project_memories(project_id: str, memory_type: Optional[str] = Non
     data = await memory_store.get_project_memories(project_id, memory_type)
     return {"status": "ok", "project_id": project_id, "count": len(data), "data": data}
 
+# --- Public Summary (읽기 전용, 인증 불필요) ---
+SENSITIVE_KEYS = [
+    "api_key", "secret", "password", "token", "pat", "sk-ant", "sk-proj", "AIzaSy",
+    "ADMIN_PASSWORD", "JWT_SECRET", "MONITOR_KEY", "ssh_key", "private_key"
+]
+
+def _sanitize(data: Any) -> Any:
+    if isinstance(data, dict):
+        sanitized = {}
+        for k, v in data.items():
+            if any(s.lower() in str(k).lower() for s in SENSITIVE_KEYS):
+                sanitized[k] = "[REDACTED]"
+            else:
+                sanitized[k] = _sanitize(v)
+        return sanitized
+    elif isinstance(data, list):
+        return [_sanitize(item) for item in data]
+    elif isinstance(data, str):
+        if any(pattern in data for pattern in ["sk-ant", "sk-proj", "AIzaSy"]):
+            return "[REDACTED]"
+        return data
+    return data
+
+@router.get("/context/public-summary")
+async def get_public_summary():
+    """읽기 전용 공개 메모리 요약 (Monitor Key 불필요, 민감 데이터 자동 제거)"""
+    async with memory_store.pool.acquire() as conn:
+        # system_memory 전체 카테고리 조회
+        sys_rows = await conn.fetch(
+            "SELECT category, key, value FROM system_memory ORDER BY category, key"
+        )
+        # experience_memory 최근 10건
+        exp_rows = await conn.fetch(
+            "SELECT id, experience_type, domain, tags, content, access_count, rif_score, created_at "
+            "FROM experience_memory ORDER BY created_at DESC LIMIT 10"
+        )
+        # procedural_memory 상위 10건
+        proc_rows = await conn.fetch(
+            "SELECT procedure_name, description, steps, success_rate, last_used "
+            "FROM procedural_memory ORDER BY success_rate DESC LIMIT 10"
+        )
+
+    # system_memory 카테고리별 그룹화
+    data: Dict[str, List] = {}
+    for r in sys_rows:
+        cat = r['category']
+        if cat not in data:
+            data[cat] = []
+        raw_value = r['value']
+        if isinstance(raw_value, str):
+            try:
+                raw_value = json.loads(raw_value)
+            except Exception:
+                pass
+        data[cat].append({"key": r['key'], "value": _sanitize(raw_value)})
+
+    category_list = sorted(data.keys())
+    total_categories = len(category_list)
+
+    # project:* 카테고리 추출
+    active_projects = [c for c in category_list if c.startswith("project:")]
+
+    # experience 정제
+    recent_experiences = []
+    for r in exp_rows:
+        entry = dict(r)
+        entry['content'] = _sanitize(entry.get('content'))
+        if entry.get('created_at'):
+            entry['created_at'] = str(entry['created_at'])
+        recent_experiences.append(entry)
+
+    # procedural 정제
+    procedures = []
+    for r in proc_rows:
+        entry = dict(r)
+        entry['steps'] = _sanitize(entry.get('steps'))
+        if entry.get('last_used'):
+            entry['last_used'] = str(entry['last_used'])
+        procedures.append(entry)
+
+    return {
+        "status": "ok",
+        "memory_system": "5-layer PostgreSQL + pgvector",
+        "total_categories": total_categories,
+        "category_list": category_list,
+        "data": data,
+        "recent_experiences": recent_experiences,
+        "procedures": procedures,
+        "active_projects": active_projects,
+        "note": "Sensitive data automatically removed"
+    }
+
 # --- 경험 메모리 조회 ---
 @router.get("/context/experiences")
 async def get_experiences(experience_type: Optional[str] = None, domain: Optional[str] = None, auth: bool = Depends(verify_monitor_key)):
