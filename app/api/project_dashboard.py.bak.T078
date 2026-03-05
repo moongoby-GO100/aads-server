@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import re
-from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -682,54 +681,29 @@ REPORTS_LOCAL_DIR = Path("/root/project-docs/aads/reports")
 GITHUB_REPORTS_BASE = "https://github.com/moongoby/project-docs/blob/main/aads/reports"
 
 
-def _classify_project(filename: str, content: str) -> str:
-    """파일명 프리픽스 + 보고서 본문 키워드로 프로젝트 자동 분류 (T-078)
-
-    1단계: 파일명 프리픽스 (AADS_ 제외) — KIS_, GO100_, SF_, NT_
-    2단계: 보고서 본문 키워드 탐색
-    """
-    # 1단계: 파일명 프리픽스 (AADS_ 는 제외하여 본문 분류로 진행)
-    fname = filename.upper()
-    if fname.startswith("KIS_"):
-        return "KIS"
-    if fname.startswith("GO100_"):
-        return "GO100"
-    if fname.startswith("SF_"):
-        return "ShortFlow"
-    if fname.startswith("NT_"):
-        return "NewTalk"
-
-    # 2단계: 본문 키워드 탐색
+def _classify_project(content: str) -> str:
+    """보고서/지시서 내용에서 프로젝트 자동 분류 (T-074: 정확도 개선 - AADS 1순위)"""
     content_lower = content.lower()
-
-    # KIS
-    kis_keywords = ['kis', 'kis-autotrade', 'kis_autotrade', '자동매매', 'desk',
-                    '한국투자', '매수', '매도', '백억이', 'autotrade', 'fractal']
-    if any(kw in content_lower for kw in kis_keywords):
-        return "KIS"
-
-    # GO100
-    go100_keywords = ['go100', 'go_100', '단기목표', '100일']
-    if any(kw in content_lower for kw in go100_keywords):
-        return "GO100"
-
-    # ShortFlow
-    sf_keywords = ['shortflow', '쇼츠', 'shorts', '템빨', 'youtube short']
-    if any(kw in content_lower for kw in sf_keywords):
-        return "ShortFlow"
-
-    # NewTalk
-    nt_keywords = ['newtalk', '뉴톡', 'newtalk_v2']
-    if any(kw in content_lower for kw in nt_keywords):
-        return "NewTalk"
-
-    # NAS
-    nas_keywords = ['nasync', 'nas동기화', 'nas 동기화']
-    if any(kw in content_lower for kw in nas_keywords):
-        return "NAS"
-
-    # 기본값: AADS
-    return "AADS"
+    # 1순위: AADS 자체 작업 (가장 먼저 체크)
+    aads_keywords = ['aads', 'dashboard', 'ceo chat', 'ceo 채팅', '대시보드', 'handover',
+                     'tasks 페이지', 'task-history', 'project_dashboard',
+                     'cost', '비용', '분석', 'remote', '원격', 'bridge', '브릿지',
+                     'memory', 'context api', '계층 메모리', '모델 분기', '실행 엔진']
+    if any(kw in content_lower for kw in aads_keywords):
+        return 'AADS'
+    # 2순위: 프로젝트별 (정확 매칭)
+    if any(kw in content_lower for kw in ['kis-autotrade', 'kis_autotrade', '주식', 'autotrade', '백억이']):
+        return 'KIS'
+    if any(kw in content_lower for kw in ['shortflow', '쇼츠', 'shorts', '템빨', 'youtube short']):
+        return 'ShortFlow'
+    if any(kw in content_lower for kw in ['newtalk', '뉴톡', 'newtalk_v2']):
+        return 'NewTalk'
+    if any(kw in content_lower for kw in ['nasync', 'nas동기화']):
+        return 'NAS'
+    if any(kw in content_lower for kw in ['go100', 'go_100']):
+        return 'GO100'
+    # 기본값
+    return 'AADS'
 
 
 def _classify_error(content: str) -> Optional[str]:
@@ -833,7 +807,7 @@ def _parse_directive_file(filepath: Path, default_status: str) -> Dict:
 
     # 프로젝트 자동 분류 (project가 기본값이면 내용으로 분류)
     if project == "AADS":
-        project = _classify_project(filename, raw[:2000])
+        project = _classify_project(raw[:2000])
 
     # 파일명에서 날짜 추출 (AADS_YYYYMMDD_HHMMSS_...)
     fname_dt = re.search(r"(\d{8}_\d{6})", filename)
@@ -935,9 +909,9 @@ def _parse_report_file(filepath: Path) -> Dict:
     # 에러 유형 분류
     error_type = _classify_error(head) if status == "error" else ""
 
-    # 프로젝트 자동 분류 (project가 기본값이면 내용+파일명으로 분류)
+    # 프로젝트 자동 분류 (project가 기본값이면 내용+제목으로 분류)
     if project == "AADS":
-        project = _classify_project(filename, head)
+        project = _classify_project(head + " " + filename)
 
     github_url = f"{GITHUB_REPORTS_BASE}/{filename}" if REPORTS_LOCAL_DIR.exists() else ""
 
@@ -1297,79 +1271,13 @@ async def get_task_history():
         raise HTTPException(500, f"Task history error: {e}")
 
 
-# ─── (9) GET /dashboard/analytics ─────────────────────────────────────────── T-080
+# ─── (9) GET /dashboard/analytics ─────────────────────────────────────────── T-070
 @router.get("/dashboard/analytics")
 async def get_analytics():
-    """비용/시간 분석 — directives 파일 기반 + DB 보조 (T-080)"""
+    """비용/시간 분석 — aads_conversations + cross_msg + directives 집계 (T-070)"""
     try:
-        # ── Part 1: 지시서 파일 기반 통계 ─────────────────────────────────────
-        all_directives: List[Dict] = []
-        if DIRECTIVES_RUNNING_DIR.exists():
-            for f in DIRECTIVES_RUNNING_DIR.glob("*.md"):
-                all_directives.append(_parse_directive_file(f, "running"))
-        if DIRECTIVES_DONE_DIR.exists():
-            for f in DIRECTIVES_DONE_DIR.glob("*.md"):
-                all_directives.append(_parse_directive_file(f, "completed"))
-
-        total_tasks = len(all_directives)
-        completed_tasks = sum(1 for d in all_directives if d["status"] == "completed")
-        error_tasks = sum(1 for d in all_directives if d["status"] == "error")
-        running_tasks = sum(1 for d in all_directives if d["status"] == "running")
-
-        # success_rate = completed / (completed + error) * 100 (T-080)
-        denom = completed_tasks + error_tasks
-        success_rate = round(completed_tasks / denom * 100, 1) if denom > 0 else 0.0
-
-        # avg_task_duration_min — 파일명 날짜 ~ mtime 기반 추정
-        durations = []
-        if DIRECTIVES_DONE_DIR.exists():
-            for f_path in DIRECTIVES_DONE_DIR.glob("*.md"):
-                fname_match = re.search(r"(\d{8}_\d{6})", f_path.name)
-                if fname_match:
-                    try:
-                        dt_start = datetime.strptime(fname_match.group(1), "%Y%m%d_%H%M%S").replace(tzinfo=KST)
-                        dt_end = datetime.fromtimestamp(f_path.stat().st_mtime, tz=KST)
-                        diff_min = (dt_end - dt_start).total_seconds() / 60
-                        if 0 < diff_min < 480:  # 0~8시간 범위만 유효값으로 처리
-                            durations.append(diff_min)
-                    except Exception:
-                        pass
-        avg_task_duration_min = round(sum(durations) / len(durations), 1) if durations else -1.0
-
-        # by_project 집계 (directives 기반)
-        by_project_dir: Dict[str, Dict] = defaultdict(lambda: {"completed": 0, "error": 0, "total": 0})
-        for d in all_directives:
-            proj = d["project"]
-            by_project_dir[proj]["total"] += 1
-            if d["status"] == "completed":
-                by_project_dir[proj]["completed"] += 1
-            elif d["status"] == "error":
-                by_project_dir[proj]["error"] += 1
-
-        # daily_trend — 지시서 파일 created_at 기반 (최근 7일)
-        now_kst = datetime.now(KST)
-        daily_count: Dict[str, int] = defaultdict(int)
-        for d in all_directives:
-            ca = d.get("created_at", "")
-            if ca and len(ca) >= 10:
-                daily_count[ca[:10]] += 1
-        daily_trend = []
-        for i in range(6, -1, -1):
-            day = (now_kst - timedelta(days=i)).strftime("%Y-%m-%d")
-            daily_trend.append({"date": day, "tasks": daily_count.get(day, 0), "cost_usd": 0.0})
-
-        # error_distribution — directive error_type 분류
-        error_type_count: Dict[str, int] = defaultdict(int)
-        for d in all_directives:
-            if d["status"] == "error" and d.get("error_type"):
-                error_type_count[d["error_type"]] += 1
-        error_distribution = [
-            {"error_type": et, "count": cnt}
-            for et, cnt in sorted(error_type_count.items(), key=lambda x: -x[1])
-        ]
-
-        # ── Part 2: DB 쿼리 (비용/토큰, 서버별) ───────────────────────────────
         async with memory_store.pool.acquire() as conn:
+            # aads_conversations: project별 대화수/토큰/비용
             try:
                 aads_conv_rows = await conn.fetch(
                     """
@@ -1384,6 +1292,44 @@ async def get_analytics():
             except Exception:
                 aads_conv_rows = []
 
+            # go100_user_memory cross_msg 타입별 집계
+            cross_type_rows = await conn.fetch(
+                """
+                SELECT memory_type, COUNT(*) AS cnt, MAX(created_at) AS last_at
+                FROM go100_user_memory
+                WHERE user_id = 2
+                  AND memory_type LIKE 'cross_msg_%'
+                GROUP BY memory_type
+                ORDER BY cnt DESC
+                """
+            )
+
+            # 태스크 상태 집계 (task_result + cross_msg)
+            task_rows = await conn.fetch(
+                """
+                SELECT memory_type, content, created_at
+                FROM go100_user_memory
+                WHERE user_id = 2
+                  AND (memory_type LIKE 'task_result%' OR memory_type LIKE 'cross_msg_%')
+                ORDER BY created_at DESC
+                LIMIT 500
+                """
+            )
+
+            # 일별 트렌드 (최근 7일)
+            daily_rows = await conn.fetch(
+                """
+                SELECT DATE(created_at) AS d, COUNT(*) AS cnt
+                FROM go100_user_memory
+                WHERE user_id = 2
+                  AND memory_type LIKE 'cross_msg_%'
+                  AND created_at > NOW() - INTERVAL '7 days'
+                GROUP BY DATE(created_at)
+                ORDER BY d
+                """
+            )
+
+            # 원격 서버별 집계
             server_rows = await conn.fetch(
                 """
                 SELECT
@@ -1404,11 +1350,11 @@ async def get_analytics():
 
         now_utc = datetime.now(timezone.utc)
 
-        # aads_conversations 집계 (비용/토큰)
+        # aads_conversations 집계
         total_tokens = 0
         total_cost_usd = 0.0
         total_conversations = 0
-        by_project_conv: Dict[str, Dict] = {}
+        by_project_map: Dict[str, Dict] = {}
         for r in aads_conv_rows:
             proj = CONV_PROJECT_MAP.get(r["project"] or "", r["project"] or "unknown")
             cnt = int(r["cnt"])
@@ -1417,34 +1363,56 @@ async def get_analytics():
             total_conversations += cnt
             total_tokens += tok
             total_cost_usd += cost
-            if proj not in by_project_conv:
-                by_project_conv[proj] = {"conversations": 0, "tokens": 0, "cost_usd": 0.0}
-            by_project_conv[proj]["conversations"] += cnt
-            by_project_conv[proj]["tokens"] += tok
-            by_project_conv[proj]["cost_usd"] += cost
+            if proj not in by_project_map:
+                by_project_map[proj] = {"conversations": 0, "tokens": 0, "cost_usd": 0.0}
+            by_project_map[proj]["conversations"] += cnt
+            by_project_map[proj]["tokens"] += tok
+            by_project_map[proj]["cost_usd"] += cost
 
-        # total_cost: 데이터 없으면 -1.0 ("추적 미설정" 신호)
-        if total_cost_usd == 0.0 and not aads_conv_rows:
-            total_cost_usd = -1.0
+        # 태스크 상태 집계
+        total_tasks = 0
+        completed_tasks = 0
+        error_tasks = 0
+        for r in task_rows:
+            total_tasks += 1
+            content = r["content"] if isinstance(r["content"], dict) else _parse_value(r["content"])
+            body_raw = content.get("body", "")
+            if not body_raw and isinstance(content.get("details"), dict):
+                body_raw = content["details"].get("body", "")
+            body_parsed: Dict = {}
+            if isinstance(body_raw, str) and body_raw:
+                try:
+                    body_parsed = json.loads(body_raw)
+                except Exception:
+                    pass
+            elif isinstance(body_raw, dict):
+                body_parsed = body_raw
+            mt = (
+                body_parsed.get("message_type") or content.get("message_type", "")
+            ).lower()
+            raw_s = (content.get("status") or body_parsed.get("status", "")).lower()
+            if r["memory_type"].startswith("task_result"):
+                if raw_s in ("error", "fail", "failed"):
+                    error_tasks += 1
+                else:
+                    completed_tasks += 1
+            elif mt in ("notify", "auto_report"):
+                completed_tasks += 1
 
-        # by_project 최종 병합 (directives + conversations)
-        all_projs = set(by_project_dir.keys()) | set(by_project_conv.keys())
-        by_project = []
-        for proj in sorted(all_projs):
-            dir_info = by_project_dir.get(proj, {})
-            conv_info = by_project_conv.get(proj, {})
-            by_project.append({
-                "project": proj,
-                "conversations": conv_info.get("conversations", 0),
-                "cost_usd": round(conv_info.get("cost_usd", 0.0), 6),
-                "tokens": conv_info.get("tokens", 0),
-                "last_activity": "",
-                "completed": dir_info.get("completed", 0),
-                "error": dir_info.get("error", 0),
-                "total": dir_info.get("total", 0),
-            })
+        success_rate = round(completed_tasks / total_tasks * 100, 1) if total_tasks > 0 else 0.0
 
-        # 서버별 현황 (cross_msg 기반)
+        # 지시서 폴더 통계 (done 디렉터리)
+        dir_completed = 0
+        dir_error = 0
+        if DIRECTIVES_DONE_DIR.exists():
+            for f in DIRECTIVES_DONE_DIR.glob("*.md"):
+                parsed = _parse_directive_file(f, "completed")
+                if parsed["status"] == "error":
+                    dir_error += 1
+                else:
+                    dir_completed += 1
+
+        # 활성 서버 수 (최근 5분 cross_msg)
         active_servers = 0
         by_server = []
         for r in server_rows:
@@ -1455,10 +1423,36 @@ async def get_analytics():
                 active_servers += 1
             by_server.append({
                 "server": r["server"],
-                "tasks": int(r["tasks"]),
+                "tasks": r["tasks"],
                 "status": "online" if diff_min < 5 else "offline",
                 "last_report": _to_kst_str(lr_aware) if lr else "",
             })
+
+        # 프로젝트별 정리
+        by_project = [
+            {
+                "project": proj,
+                "conversations": info["conversations"],
+                "cost_usd": round(info["cost_usd"], 6),
+                "tokens": info["tokens"],
+            }
+            for proj, info in by_project_map.items()
+        ]
+
+        # 일별 트렌드
+        daily_trend = [
+            {"date": str(r["d"]), "tasks": r["cnt"], "cost_usd": 0.0}
+            for r in daily_rows
+        ]
+
+        # cross_msg 타입별 분포 (error_distribution) — array format for frontend (T-074)
+        error_distribution = [
+            {"error_type": r["memory_type"], "count": int(r["cnt"])}
+            for r in cross_type_rows
+        ]
+
+        # avg_task_duration_min — 현재 집계 없음: 0.0 반환
+        avg_task_duration_min = 0.0
 
         return {
             "status": "ok",
@@ -1467,13 +1461,14 @@ async def get_analytics():
                 "total_tasks": total_tasks,
                 "completed_tasks": completed_tasks,
                 "error_tasks": error_tasks,
-                "running_tasks": running_tasks,
                 "success_rate": success_rate,
                 "total_conversations": total_conversations,
                 "total_cost_usd": round(total_cost_usd, 6),
                 "total_tokens": total_tokens,
                 "avg_task_duration_min": avg_task_duration_min,
                 "active_servers": active_servers,
+                "directives_completed": dir_completed,
+                "directives_error": dir_error,
             },
             "by_project": by_project,
             "by_server": by_server,
