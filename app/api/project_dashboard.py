@@ -663,31 +663,34 @@ GITHUB_REPORTS_BASE = "https://github.com/moongoby/project-docs/blob/main/aads/r
 
 
 def _classify_project(content: str) -> str:
-    """보고서/지시서 내용에서 프로젝트 자동 분류"""
-    if re.search(r"kis-autotrade|KIS|kis_autotrade|한국투자", content):
-        return "KIS"
-    if re.search(r"shortflow|ShortFlow|숏폼|쇼츠|템빨", content):
-        return "ShortFlow"
-    if re.search(r"newtalk|뉴톡|NewTalk|newtalk-v2", content):
-        return "NewTalk"
-    if re.search(r"nas-image|nasync|NAS|nas(?!\w)", content):
-        return "NAS"
-    if re.search(r"go100|GO100", content):
-        return "GO100"
-    return "AADS"
+    """보고서/지시서 내용에서 프로젝트 자동 분류 (T-072: 키워드 매핑 강화)"""
+    mappings = [
+        (['kis-autotrade', 'KIS', 'kis_autotrade', '주식', 'autotrade'], 'KIS'),
+        (['shortflow', 'ShortFlow', '쇼츠', 'shorts', '템빨'], 'ShortFlow'),
+        (['newtalk', 'NewTalk', '뉴톡'], 'NewTalk'),
+        (['nas', 'NAS', 'nasync'], 'NAS'),
+        (['go100', 'GO100', 'go_100'], 'GO100'),
+    ]
+    content_lower = content.lower()
+    for keywords, project in mappings:
+        if any(kw.lower() in content_lower for kw in keywords):
+            return project
+    return 'AADS'
 
 
-def _classify_error(content: str) -> str:
-    """에러 내용에서 에러 유형 분류"""
-    if re.search(r"OAuth|401|Failed to authenticate", content):
-        return "auth_expired"
-    if re.search(r"Permission denied", content):
-        return "permission_denied"
-    if re.search(r"command not found", content):
-        return "env_error"
-    if re.search(r"timeout|Watchdog|1200초|Session terminated", content, re.IGNORECASE):
-        return "timeout"
-    return "task_failure"
+def _classify_error(content: str) -> Optional[str]:
+    """에러 내용에서 에러 유형 분류 (T-072: 패턴 강화)"""
+    if any(x in content for x in ['401', 'OAuth', 'token expired', 'Unauthorized']):
+        return 'auth_expired'
+    if any(x in content for x in ['Permission denied', 'EACCES', 'permission']):
+        return 'permission_denied'
+    if any(x in content for x in ['env', 'environment', 'variable not set']):
+        return 'env_error'
+    if any(x in content for x in ['timeout', 'watchdog', 'TIMEOUT']):
+        return 'timeout'
+    if any(x in content for x in ['error', 'failed', 'failure', 'ERROR']):
+        return 'task_failure'
+    return None
 
 
 def _parse_directive_file(filepath: Path, default_status: str) -> Dict:
@@ -713,6 +716,8 @@ def _parse_directive_file(filepath: Path, default_status: str) -> Dict:
         return {
             "task_id": task_id, "title": title, "status": status,
             "project": project, "created_at": created_at, "file_path": str(filepath),
+            "started_at": created_at, "completed_at": created_at if default_status == "completed" else "",
+            "duration_seconds": None, "error_type": "",
         }
 
     # YAML 프런트매터 (--- ... ---)
@@ -786,12 +791,19 @@ def _parse_directive_file(filepath: Path, default_status: str) -> Dict:
         except Exception:
             pass
 
+    # 에러 유형 분류 (T-072: 지시서에도 error_type 포함)
+    error_type = _classify_error(raw[:2000]) if status == "error" else None
+
     return {
         "task_id": task_id,
         "title": title,
         "status": status,
         "project": project,
+        "error_type": error_type or "",
         "created_at": created_at,
+        "started_at": created_at,
+        "completed_at": created_at if default_status == "completed" else "",
+        "duration_seconds": None,
         "file_path": str(filepath),
     }
 
@@ -889,7 +901,7 @@ def _parse_report_file(filepath: Path) -> Dict:
 
 # ─── (5) GET /dashboard/directives ───────────────────────────────────────────
 @router.get("/dashboard/directives")
-async def get_directives():
+async def get_directives(project: Optional[str] = None):
     """작업지시서 현황: running + done 디렉터리 스캔"""
     directives: List[Dict] = []
 
@@ -929,37 +941,62 @@ async def get_directives():
 
     unique_directives = list(seen_task_ids.values())
 
-    # by_project 집계
+    # 프로젝트 필터 적용 (T-072)
+    if project and project.upper() not in ("ALL", ""):
+        unique_directives = [d for d in unique_directives if d.get("project", "").upper() == project.upper()]
+
+    # by_project / project_breakdown 집계
     by_project: Dict[str, int] = {}
     for d in unique_directives:
         proj = d["project"]
         by_project[proj] = by_project.get(proj, 0) + 1
 
-    # error 유형 집계 (directives는 유형 분류 없이 총계만)
+    # error 유형 집계 — T-072: error_breakdown 분리, "error" 키는 숫자로만
+    error_items = [d for d in unique_directives if d["status"] == "error"]
     error_breakdown: Dict[str, int] = {
-        "total": error_count,
         "auth_expired": 0,
         "permission_denied": 0,
         "env_error": 0,
         "timeout": 0,
-        "task_failure": error_count,
+        "task_failure": 0,
     }
+    for d in error_items:
+        et = d.get("error_type", "") or "task_failure"
+        if et in error_breakdown:
+            error_breakdown[et] += 1
+        else:
+            error_breakdown["task_failure"] += 1
+
+    # 필터 적용 후 카운트 재계산 (T-072)
+    f_running = sum(1 for d in unique_directives if d["status"] == "running")
+    f_completed = sum(1 for d in unique_directives if d["status"] == "completed")
+    f_error = sum(1 for d in unique_directives if d["status"] == "error")
 
     return {
         "status": "ok",
-        "total": len(directives),
+        "total": len(unique_directives),
         "unique_tasks": len(unique_directives),
-        "running": running_count,
-        "completed": completed_count,
-        "error": error_breakdown,
+        "running": f_running,
+        "completed": f_completed,
+        "error": f_error,               # T-072: 숫자로만 (React Error #31 방지)
+        "error_breakdown": error_breakdown,  # T-072: 별도 키로 분리
+        "summary": {
+            "completed": f_completed,
+            "error": f_error,
+            "running": f_running,
+            "timeout": error_breakdown.get("timeout", 0),
+            "pending": 0,
+        },
+        "project_breakdown": by_project,
         "by_project": by_project,
+        "items": unique_directives,      # T-072: items 키 추가 (별칭)
         "directives": unique_directives,
     }
 
 
 # ─── (6) GET /dashboard/reports ──────────────────────────────────────────────
 @router.get("/dashboard/reports")
-async def get_reports():
+async def get_reports(project: Optional[str] = None):
     """작업결과보고서 목록"""
     reports: List[Dict] = []
 
@@ -997,6 +1034,10 @@ async def get_reports():
 
     unique_reports = list(seen_task_ids.values())
 
+    # 프로젝트 필터 적용 (T-072)
+    if project and project.upper() not in ("ALL", ""):
+        unique_reports = [r for r in unique_reports if r.get("project", "").upper() == project.upper()]
+
     # 집계
     success_count = sum(1 for r in unique_reports if r["status"] == "success")
     error_reports = [r for r in unique_reports if r["status"] == "error"]
@@ -1024,10 +1065,12 @@ async def get_reports():
 
     return {
         "status": "ok",
-        "total": len(reports),
+        "total": len(unique_reports),
         "unique_reports": len(unique_reports),
         "success": success_count,
-        "error": error_breakdown,
+        "error": len(error_reports),     # T-072: 숫자로만 (React Error #31 방지)
+        "error_breakdown": error_breakdown,  # T-072: 별도 키로 분리
+        "project_breakdown": by_project,
         "by_project": by_project,
         "reports": unique_reports,
     }
@@ -1200,52 +1243,60 @@ async def get_task_history():
         raise HTTPException(500, f"Task history error: {e}")
 
 
-# ─── (9) GET /dashboard/analytics ────────────────────────────────────────────
+# ─── (9) GET /dashboard/analytics ─────────────────────────────────────────── T-070
 @router.get("/dashboard/analytics")
 async def get_analytics():
-    """비용/시간 분석 — cross_msg + system_memory 집계"""
+    """비용/시간 분석 — aads_conversations + cross_msg + directives 집계 (T-070)"""
     try:
         async with memory_store.pool.acquire() as conn:
-            # 전체 cross_msg 집계
-            task_rows = await conn.fetch(
+            # aads_conversations: project별 대화수/토큰/비용
+            try:
+                aads_conv_rows = await conn.fetch(
+                    """
+                    SELECT project,
+                           COUNT(*) AS cnt,
+                           COALESCE(SUM(total_tokens), 0) AS tokens,
+                           COALESCE(SUM(total_cost), 0) AS cost
+                    FROM aads_conversations
+                    GROUP BY project
+                    """
+                )
+            except Exception:
+                aads_conv_rows = []
+
+            # go100_user_memory cross_msg 타입별 집계
+            cross_type_rows = await conn.fetch(
                 """
-                SELECT
-                    memory_type,
-                    content,
-                    created_at
+                SELECT memory_type, COUNT(*) AS cnt, MAX(created_at) AS last_at
                 FROM go100_user_memory
                 WHERE user_id = 2
-                  AND (memory_type LIKE 'cross_msg_%' OR memory_type LIKE 'task_result%')
-                ORDER BY created_at DESC
-                LIMIT 500
+                  AND memory_type LIKE 'cross_msg_%'
+                GROUP BY memory_type
+                ORDER BY cnt DESC
                 """
             )
 
-            # 프로젝트별 대화 수 (system_memory conversation:* 카테고리)
-            conv_rows = await conn.fetch(
+            # 태스크 상태 집계 (task_result + cross_msg)
+            task_rows = await conn.fetch(
                 """
-                SELECT
-                    REPLACE(category, 'conversation:', '') AS project,
-                    COUNT(*) AS conversations,
-                    MAX(updated_at) AS last_activity
-                FROM system_memory
-                WHERE category LIKE 'conversation:%'
-                GROUP BY category
-                ORDER BY conversations DESC
+                SELECT memory_type, content, created_at
+                FROM go100_user_memory
+                WHERE user_id = 2
+                  AND (memory_type LIKE 'task_result%' OR memory_type LIKE 'cross_msg_%')
+                ORDER BY created_at DESC
+                LIMIT 500
                 """
             )
 
             # 일별 트렌드 (최근 7일)
             daily_rows = await conn.fetch(
                 """
-                SELECT
-                    (created_at AT TIME ZONE 'Asia/Seoul')::date AS d,
-                    COUNT(*) AS tasks
+                SELECT DATE(created_at) AS d, COUNT(*) AS cnt
                 FROM go100_user_memory
                 WHERE user_id = 2
                   AND memory_type LIKE 'cross_msg_%'
                   AND created_at > NOW() - INTERVAL '7 days'
-                GROUP BY d
+                GROUP BY DATE(created_at)
                 ORDER BY d
                 """
             )
@@ -1271,6 +1322,25 @@ async def get_analytics():
 
         now_utc = datetime.now(timezone.utc)
 
+        # aads_conversations 집계
+        total_tokens = 0
+        total_cost_usd = 0.0
+        total_conversations = 0
+        by_project_map: Dict[str, Dict] = {}
+        for r in aads_conv_rows:
+            proj = CONV_PROJECT_MAP.get(r["project"] or "", r["project"] or "unknown")
+            cnt = int(r["cnt"])
+            tok = int(r["tokens"])
+            cost = float(r["cost"])
+            total_conversations += cnt
+            total_tokens += tok
+            total_cost_usd += cost
+            if proj not in by_project_map:
+                by_project_map[proj] = {"conversations": 0, "tokens": 0, "cost_usd": 0.0}
+            by_project_map[proj]["conversations"] += cnt
+            by_project_map[proj]["tokens"] += tok
+            by_project_map[proj]["cost_usd"] += cost
+
         # 태스크 상태 집계
         total_tasks = 0
         completed_tasks = 0
@@ -1290,8 +1360,7 @@ async def get_analytics():
             elif isinstance(body_raw, dict):
                 body_parsed = body_raw
             mt = (
-                body_parsed.get("message_type")
-                or content.get("message_type", "")
+                body_parsed.get("message_type") or content.get("message_type", "")
             ).lower()
             raw_s = (content.get("status") or body_parsed.get("status", "")).lower()
             if r["memory_type"].startswith("task_result"):
@@ -1302,33 +1371,28 @@ async def get_analytics():
             elif mt in ("notify", "auto_report"):
                 completed_tasks += 1
 
-        # 활성 서버 수 (최근 5분 cross_msg 있는 서버)
+        success_rate = round(completed_tasks / total_tasks * 100, 1) if total_tasks > 0 else 0.0
+
+        # 지시서 폴더 통계 (done 디렉터리)
+        dir_completed = 0
+        dir_error = 0
+        if DIRECTIVES_DONE_DIR.exists():
+            for f in DIRECTIVES_DONE_DIR.glob("*.md"):
+                parsed = _parse_directive_file(f, "completed")
+                if parsed["status"] == "error":
+                    dir_error += 1
+                else:
+                    dir_completed += 1
+
+        # 활성 서버 수 (최근 5분 cross_msg)
         active_servers = 0
-        for r in server_rows:
-            lr = r["last_report"]
-            if lr:
-                lr_aware = lr if lr.tzinfo else lr.replace(tzinfo=timezone.utc)
-                if (now_utc - lr_aware).total_seconds() < 300:
-                    active_servers += 1
-
-        # 프로젝트별 정리
-        by_project = []
-        for r in conv_rows:
-            proj = CONV_PROJECT_MAP.get(r["project"], r["project"])
-            by_project.append({
-                "project": proj,
-                "conversations": r["conversations"],
-                "cost_usd": 0.0,
-                "tokens": 0,
-                "last_activity": str(r["last_activity"]) if r["last_activity"] else "",
-            })
-
-        # 서버별 정리
         by_server = []
         for r in server_rows:
             lr = r["last_report"]
             lr_aware = lr.replace(tzinfo=timezone.utc) if lr and not lr.tzinfo else lr
             diff_min = (now_utc - lr_aware).total_seconds() / 60 if lr_aware else 9999
+            if diff_min < 5:
+                active_servers += 1
             by_server.append({
                 "server": r["server"],
                 "tasks": r["tasks"],
@@ -1336,13 +1400,27 @@ async def get_analytics():
                 "last_report": str(lr)[:19] if lr else "",
             })
 
+        # 프로젝트별 정리
+        by_project = [
+            {
+                "project": proj,
+                "conversations": info["conversations"],
+                "cost_usd": round(info["cost_usd"], 6),
+                "tokens": info["tokens"],
+            }
+            for proj, info in by_project_map.items()
+        ]
+
         # 일별 트렌드
         daily_trend = [
-            {"date": str(r["d"]), "tasks": r["tasks"], "cost_usd": 0.0}
+            {"date": str(r["d"]), "tasks": r["cnt"], "cost_usd": 0.0}
             for r in daily_rows
         ]
 
-        total_conversations = sum(p["conversations"] for p in by_project)
+        # cross_msg 타입별 분포 (error_distribution)
+        error_distribution: Dict[str, int] = {
+            r["memory_type"]: r["cnt"] for r in cross_type_rows
+        }
 
         return {
             "status": "ok",
@@ -1351,15 +1429,18 @@ async def get_analytics():
                 "total_tasks": total_tasks,
                 "completed_tasks": completed_tasks,
                 "error_tasks": error_tasks,
+                "success_rate": success_rate,
                 "total_conversations": total_conversations,
-                "total_cost_usd": 0.0,
-                "total_tokens": 0,
-                "avg_task_duration_min": 0.0,
+                "total_cost_usd": round(total_cost_usd, 6),
+                "total_tokens": total_tokens,
                 "active_servers": active_servers,
+                "directives_completed": dir_completed,
+                "directives_error": dir_error,
             },
             "by_project": by_project,
             "by_server": by_server,
             "daily_trend": daily_trend,
+            "error_distribution": error_distribution,
         }
 
     except Exception as e:
