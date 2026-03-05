@@ -68,6 +68,8 @@ services:
       - DATABASE_URL=postgresql://aads:aads_dev_local@aads-postgres:5432/aads
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /root/.genspark/directives:/root/.genspark/directives:ro
+      - /root/project-docs:/root/project-docs:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -106,7 +108,7 @@ services:
     networks:
       - aads_network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      test: ["CMD-SHELL", "wget -q --spider http://$(hostname -i | awk '{print $1}'):3100/login || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

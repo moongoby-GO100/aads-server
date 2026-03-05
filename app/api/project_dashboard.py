@@ -10,7 +10,10 @@ from fastapi import APIRouter, HTTPException
 from typing import Optional, Dict, List, Any
 import json
 import logging
+import os
+import re
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 from app.memory.store import memory_store
 from app.config import Settings
@@ -648,3 +651,315 @@ async def get_project_detail(project_id: str):
     except Exception as e:
         logger.error(f"project_detail error: {e}")
         raise HTTPException(500, f"Project detail error: {e}")
+
+
+# ─── T-066: Directives / Reports / Task-History APIs ─────────────────────────
+
+DIRECTIVES_RUNNING_DIR = Path("/root/.genspark/directives/running")
+DIRECTIVES_DONE_DIR = Path("/root/.genspark/directives/done")
+REPORTS_LOCAL_DIR = Path("/root/project-docs/aads/reports")
+
+GITHUB_REPORTS_BASE = "https://github.com/moongoby/project-docs/blob/main/aads/reports"
+
+
+def _parse_directive_file(filepath: Path, default_status: str) -> Dict:
+    """지시서 파일 파싱 — running/done 양쪽 지원"""
+    filename = filepath.name
+    task_id = "UNKNOWN"
+    title = filename
+    project = "AADS"
+    status = default_status
+    created_at = ""
+
+    # 파일 수정 시각 (생성시각 대용)
+    try:
+        mtime = filepath.stat().st_mtime
+        created_at = datetime.fromtimestamp(mtime, tz=KST).strftime("%Y-%m-%dT%H:%M:%S+09:00")
+    except Exception:
+        created_at = _now_kst()
+
+    # 파일 내용 파싱
+    try:
+        raw = filepath.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return {
+            "task_id": task_id, "title": title, "status": status,
+            "project": project, "created_at": created_at, "file_path": str(filepath),
+        }
+
+    # YAML 프런트매터 (--- ... ---)
+    yaml_match = re.match(r"^---\s*\n(.*?)\n---", raw, re.DOTALL)
+    if yaml_match:
+        yaml_block = yaml_match.group(1)
+        for line in yaml_block.splitlines():
+            line = line.strip()
+            if line.startswith("task_id:"):
+                task_id = line.split(":", 1)[1].strip()
+            elif line.startswith("project:"):
+                project = line.split(":", 1)[1].strip()
+            elif line.startswith("status:"):
+                status = line.split(":", 1)[1].strip()
+            elif line.startswith("completed_at:"):
+                created_at = line.split(":", 1)[1].strip()
+        # 제목은 파일명에서 유추
+        title_match = re.search(r"제목[:\s]+(.+)", raw)
+        if title_match:
+            title = title_match.group(1).strip()
+        else:
+            title = filename
+    else:
+        # 일반 텍스트 형식
+        m_id = re.search(r"Task\s*ID\s*[:\s]+([^\s\n]+)", raw, re.IGNORECASE)
+        if m_id:
+            task_id = m_id.group(1).strip()
+        m_title = re.search(r"제목\s*[:\s]+(.+)", raw)
+        if m_title:
+            title = m_title.group(1).strip()
+        m_proj = re.search(r"프로젝트\s*[:\s]+(.+)", raw)
+        if m_proj:
+            project = m_proj.group(1).strip()
+
+    # 파일명에서 날짜 추출 (AADS_YYYYMMDD_HHMMSS_...)
+    fname_dt = re.search(r"(\d{8}_\d{6})", filename)
+    if fname_dt and not created_at:
+        dt_str = fname_dt.group(1)
+        try:
+            dt = datetime.strptime(dt_str, "%Y%m%d_%H%M%S").replace(tzinfo=KST)
+            created_at = dt.strftime("%Y-%m-%dT%H:%M:%S+09:00")
+        except Exception:
+            pass
+
+    return {
+        "task_id": task_id,
+        "title": title,
+        "status": status,
+        "project": project,
+        "created_at": created_at,
+        "file_path": str(filepath),
+    }
+
+
+def _parse_report_file(filepath: Path) -> Dict:
+    """보고서 파일 파싱"""
+    filename = filepath.name
+    task_id = "UNKNOWN"
+    completed_at = ""
+    status = "success"
+    project = "AADS"
+    summary = ""
+
+    try:
+        mtime = filepath.stat().st_mtime
+        completed_at = datetime.fromtimestamp(mtime, tz=KST).strftime("%Y-%m-%dT%H:%M:%S+09:00")
+    except Exception:
+        completed_at = _now_kst()
+
+    try:
+        raw = filepath.read_text(encoding="utf-8", errors="replace")
+        # 처음 2000자만 파싱
+        head = raw[:2000]
+    except Exception:
+        head = ""
+
+    # YAML 프런트매터
+    yaml_match = re.match(r"^---\s*\n(.*?)\n---", head, re.DOTALL)
+    if yaml_match:
+        yaml_block = yaml_match.group(1)
+        for line in yaml_block.splitlines():
+            line = line.strip()
+            if line.startswith("task_id:"):
+                task_id = line.split(":", 1)[1].strip()
+            elif line.startswith("project:"):
+                project = line.split(":", 1)[1].strip()
+            elif line.startswith("status:"):
+                v = line.split(":", 1)[1].strip().lower()
+                status = "error" if v in ("error", "fail", "failed") else "success"
+            elif line.startswith("completed_at:"):
+                completed_at = line.split(":", 1)[1].strip()
+
+    # 요약: 첫 비YAML 단락
+    body = re.sub(r"^---.*?---\s*\n", "", head, flags=re.DOTALL).strip()
+    summary = body[:200].replace("\n", " ") if body else filename
+
+    # 파일명에서 task_id 추출 (예: AADS_20260305_130433_BRIDGE_RESULT.md)
+    if task_id == "UNKNOWN":
+        fname_match = re.search(r"_(T-\d+)_", filename)
+        if fname_match:
+            task_id = fname_match.group(1)
+
+    github_url = f"{GITHUB_REPORTS_BASE}/{filename}" if REPORTS_LOCAL_DIR.exists() else ""
+
+    return {
+        "task_id": task_id,
+        "filename": filename,
+        "status": status,
+        "completed_at": completed_at,
+        "project": project,
+        "github_url": github_url,
+        "summary": summary,
+    }
+
+
+# ─── (5) GET /dashboard/directives ───────────────────────────────────────────
+@router.get("/dashboard/directives")
+async def get_directives():
+    """작업지시서 현황: running + done 디렉터리 스캔"""
+    directives: List[Dict] = []
+
+    # running 디렉터리
+    if DIRECTIVES_RUNNING_DIR.exists():
+        for f in sorted(DIRECTIVES_RUNNING_DIR.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True):
+            directives.append(_parse_directive_file(f, "running"))
+
+    # done 디렉터리
+    if DIRECTIVES_DONE_DIR.exists():
+        for f in sorted(DIRECTIVES_DONE_DIR.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True):
+            item = _parse_directive_file(f, "completed")
+            directives.append(item)
+
+    running_count = sum(1 for d in directives if d["status"] == "running")
+    completed_count = sum(1 for d in directives if d["status"] == "completed")
+    error_count = sum(1 for d in directives if d["status"] == "error")
+
+    return {
+        "status": "ok",
+        "total": len(directives),
+        "running": running_count,
+        "completed": completed_count,
+        "error": error_count,
+        "directives": directives,
+    }
+
+
+# ─── (6) GET /dashboard/reports ──────────────────────────────────────────────
+@router.get("/dashboard/reports")
+async def get_reports():
+    """작업결과보고서 목록"""
+    reports: List[Dict] = []
+
+    # 로컬 reports 디렉터리
+    if REPORTS_LOCAL_DIR.exists():
+        for f in sorted(REPORTS_LOCAL_DIR.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True):
+            reports.append(_parse_report_file(f))
+    else:
+        # fallback: done 디렉터리에서 RESULT 파일만
+        if DIRECTIVES_DONE_DIR.exists():
+            result_files = sorted(
+                [f for f in DIRECTIVES_DONE_DIR.glob("*RESULT*.md")],
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            for f in result_files:
+                reports.append(_parse_report_file(f))
+
+    return {
+        "status": "ok",
+        "total": len(reports),
+        "reports": reports,
+    }
+
+
+# ─── (7) GET /dashboard/reports/{filename} ───────────────────────────────────
+@router.get("/dashboard/reports/{filename}")
+async def get_report_detail(filename: str):
+    """특정 보고서 전문 반환 (마크다운)"""
+    # 경로 순회 방지
+    if ".." in filename or "/" in filename:
+        raise HTTPException(400, "Invalid filename")
+
+    # 로컬 reports 디렉터리 우선
+    candidate = REPORTS_LOCAL_DIR / filename
+    if not candidate.exists():
+        candidate = DIRECTIVES_DONE_DIR / filename
+    if not candidate.exists():
+        raise HTTPException(404, f"Report '{filename}' not found")
+
+    try:
+        content = candidate.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        raise HTTPException(500, f"Failed to read report: {e}")
+
+    return {
+        "status": "ok",
+        "filename": filename,
+        "content": content,
+    }
+
+
+# ─── (8) GET /dashboard/task-history ─────────────────────────────────────────
+@router.get("/dashboard/task-history")
+async def get_task_history():
+    """원격 서버 작업 이력 (go100_user_memory task_result 타입)"""
+    try:
+        async with memory_store.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, memory_type, content, importance, created_at
+                FROM go100_user_memory
+                WHERE user_id = 2
+                  AND (memory_type LIKE 'task_result%' OR memory_type LIKE 'cross_msg_%')
+                ORDER BY created_at DESC
+                LIMIT 200
+                """
+            )
+
+            # agent_registry에서 원격 서버 목록
+            try:
+                agent_rows = await conn.fetch(
+                    "SELECT agent_id, last_ping, status FROM agent_registry ORDER BY last_ping DESC LIMIT 20"
+                )
+            except Exception:
+                agent_rows = []
+
+        tasks: List[Dict] = []
+        for r in rows:
+            content = r["content"] if isinstance(r["content"], dict) else _parse_value(r["content"])
+            task_id = content.get("task_id", content.get("id", str(r["id"])))
+            server = content.get("server", content.get("agent_id", "unknown"))
+            status = content.get("status", content.get("result_status", "unknown"))
+            started_at = content.get("started_at", str(r["created_at"]))
+            finished_at = content.get("finished_at", content.get("completed_at", ""))
+            from_agent = content.get("from_agent", content.get("agent_id", ""))
+            tasks.append({
+                "task_id": task_id,
+                "server": server,
+                "status": status,
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "from_agent": from_agent,
+                "memory_type": r["memory_type"],
+            })
+
+        # 원격 서버 health
+        remote_servers: Dict[str, Dict] = {
+            "REMOTE_211": {"name": "REMOTE_211", "health": "unknown", "last_ping": None},
+            "REMOTE_116": {"name": "REMOTE_116", "health": "unknown", "last_ping": None},
+        }
+        now = datetime.now(timezone.utc)
+        for a in agent_rows:
+            agent_id = a["agent_id"]
+            if agent_id in remote_servers:
+                lp = a["last_ping"]
+                if lp:
+                    lp_aware = lp if lp.tzinfo else lp.replace(tzinfo=timezone.utc)
+                    diff_min = (now - lp_aware).total_seconds() / 60
+                    health = "online" if diff_min < 10 else "offline"
+                else:
+                    health = "offline"
+                remote_servers[agent_id] = {
+                    "name": agent_id,
+                    "health": health,
+                    "last_ping": str(lp) if lp else None,
+                    "status": a["status"],
+                }
+
+        return {
+            "status": "ok",
+            "total": len(tasks),
+            "tasks": tasks,
+            "remote_servers": list(remote_servers.values()),
+        }
+
+    except Exception as e:
+        logger.error(f"task_history error: {e}")
+        raise HTTPException(500, f"Task history error: {e}")
