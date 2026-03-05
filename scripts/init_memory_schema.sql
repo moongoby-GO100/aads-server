@@ -126,3 +126,49 @@ CREATE TABLE IF NOT EXISTS recovery_log (
     output TEXT,
     executed_at TIMESTAMP DEFAULT NOW()
 );
+
+-- ======================================================
+-- T-039: CEO 승인 큐
+-- ======================================================
+CREATE TABLE IF NOT EXISTS approval_queue (
+    id SERIAL PRIMARY KEY,
+    error_log_id INTEGER REFERENCES error_log(id),
+    title VARCHAR(200) NOT NULL,
+    description TEXT NOT NULL,
+    suggested_action TEXT NOT NULL,
+    action_type VARCHAR(20) NOT NULL,          -- auto_command, claude_code, manual
+    action_command TEXT,
+    target_server VARCHAR(50) NOT NULL,        -- 68, 211, 114, NAS
+    severity VARCHAR(20) DEFAULT 'medium',     -- critical, high, medium, low
+    status VARCHAR(20) DEFAULT 'pending',      -- pending, approved, rejected, executed, failed
+    telegram_message_id BIGINT,
+    requested_at TIMESTAMP DEFAULT NOW(),
+    responded_at TIMESTAMP,
+    executed_at TIMESTAMP,
+    execution_result TEXT,
+    created_by VARCHAR(50) DEFAULT 'watchdog'
+);
+
+CREATE INDEX IF NOT EXISTS idx_approval_queue_status ON approval_queue(status);
+CREATE INDEX IF NOT EXISTS idx_approval_queue_severity ON approval_queue(severity);
+CREATE INDEX IF NOT EXISTS idx_approval_queue_telegram ON approval_queue(telegram_message_id);
+
+-- T-039: 서버 감시 대상 등록 테이블
+CREATE TABLE IF NOT EXISTS monitored_services (
+    id SERIAL PRIMARY KEY,
+    server VARCHAR(50) NOT NULL,
+    service_name VARCHAR(100) NOT NULL,
+    check_type VARCHAR(30) NOT NULL,           -- http_health, process, port, ssh_command
+    check_target TEXT NOT NULL,
+    check_interval INTEGER DEFAULT 30,
+    timeout INTEGER DEFAULT 10,
+    auto_recovery_command TEXT,
+    enabled BOOLEAN DEFAULT TRUE,
+    last_check TIMESTAMP,
+    last_status VARCHAR(20) DEFAULT 'unknown', -- ok, error, timeout, unknown
+    consecutive_failures INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_monitored_services_unique
+    ON monitored_services(server, service_name);
