@@ -83,6 +83,25 @@ def _now_kst() -> str:
     return datetime.now(KST).strftime("%Y-%m-%dT%H:%M:%S+09:00")
 
 
+def _to_kst_str(dt_or_str) -> str:
+    """datetime 또는 문자열을 KST ISO 형식으로 변환 (T-074)"""
+    if not dt_or_str:
+        return ""
+    if isinstance(dt_or_str, datetime):
+        dt = dt_or_str if dt_or_str.tzinfo else dt_or_str.replace(tzinfo=timezone.utc)
+        return dt.astimezone(KST).strftime("%Y-%m-%dT%H:%M:%S+09:00")
+    s = str(dt_or_str)
+    try:
+        # try parsing ISO format
+        s_clean = s.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s_clean)
+        if not dt.tzinfo:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(KST).strftime("%Y-%m-%dT%H:%M:%S+09:00")
+    except Exception:
+        return s
+
+
 def _parse_value(raw) -> Dict:
     if isinstance(raw, dict):
         return raw
@@ -663,18 +682,27 @@ GITHUB_REPORTS_BASE = "https://github.com/moongoby/project-docs/blob/main/aads/r
 
 
 def _classify_project(content: str) -> str:
-    """보고서/지시서 내용에서 프로젝트 자동 분류 (T-072: 키워드 매핑 강화)"""
-    mappings = [
-        (['kis-autotrade', 'KIS', 'kis_autotrade', '주식', 'autotrade'], 'KIS'),
-        (['shortflow', 'ShortFlow', '쇼츠', 'shorts', '템빨'], 'ShortFlow'),
-        (['newtalk', 'NewTalk', '뉴톡'], 'NewTalk'),
-        (['nas', 'NAS', 'nasync'], 'NAS'),
-        (['go100', 'GO100', 'go_100'], 'GO100'),
-    ]
+    """보고서/지시서 내용에서 프로젝트 자동 분류 (T-074: 정확도 개선 - AADS 1순위)"""
     content_lower = content.lower()
-    for keywords, project in mappings:
-        if any(kw.lower() in content_lower for kw in keywords):
-            return project
+    # 1순위: AADS 자체 작업 (가장 먼저 체크)
+    aads_keywords = ['aads', 'dashboard', 'ceo chat', 'ceo 채팅', '대시보드', 'handover',
+                     'tasks 페이지', 'task-history', 'project_dashboard',
+                     'cost', '비용', '분석', 'remote', '원격', 'bridge', '브릿지',
+                     'memory', 'context api', '계층 메모리', '모델 분기', '실행 엔진']
+    if any(kw in content_lower for kw in aads_keywords):
+        return 'AADS'
+    # 2순위: 프로젝트별 (정확 매칭)
+    if any(kw in content_lower for kw in ['kis-autotrade', 'kis_autotrade', '주식', 'autotrade', '백억이']):
+        return 'KIS'
+    if any(kw in content_lower for kw in ['shortflow', '쇼츠', 'shorts', '템빨', 'youtube short']):
+        return 'ShortFlow'
+    if any(kw in content_lower for kw in ['newtalk', '뉴톡', 'newtalk_v2']):
+        return 'NewTalk'
+    if any(kw in content_lower for kw in ['nasync', 'nas동기화']):
+        return 'NAS'
+    if any(kw in content_lower for kw in ['go100', 'go_100']):
+        return 'GO100'
+    # 기본값
     return 'AADS'
 
 
@@ -1139,8 +1167,8 @@ async def get_task_history():
             content = r["content"] if isinstance(r["content"], dict) else _parse_value(r["content"])
             task_id = content.get("task_id", content.get("id", str(r["id"])))
             server = content.get("server", content.get("agent_id", "unknown"))
-            started_at = content.get("started_at", str(r["created_at"]))
-            finished_at = content.get("finished_at", content.get("completed_at", ""))
+            started_at = _to_kst_str(content.get("started_at") or r["created_at"])
+            finished_at = _to_kst_str(content.get("finished_at") or content.get("completed_at", ""))
             from_agent = content.get("from_agent", content.get("agent_id", ""))
 
             # body / details.body에서 JSON 파싱
@@ -1397,7 +1425,7 @@ async def get_analytics():
                 "server": r["server"],
                 "tasks": r["tasks"],
                 "status": "online" if diff_min < 5 else "offline",
-                "last_report": str(lr)[:19] if lr else "",
+                "last_report": _to_kst_str(lr_aware) if lr else "",
             })
 
         # 프로젝트별 정리
@@ -1417,10 +1445,14 @@ async def get_analytics():
             for r in daily_rows
         ]
 
-        # cross_msg 타입별 분포 (error_distribution)
-        error_distribution: Dict[str, int] = {
-            r["memory_type"]: r["cnt"] for r in cross_type_rows
-        }
+        # cross_msg 타입별 분포 (error_distribution) — array format for frontend (T-074)
+        error_distribution = [
+            {"error_type": r["memory_type"], "count": int(r["cnt"])}
+            for r in cross_type_rows
+        ]
+
+        # avg_task_duration_min — 현재 집계 없음: 0.0 반환
+        avg_task_duration_min = 0.0
 
         return {
             "status": "ok",
@@ -1433,6 +1465,7 @@ async def get_analytics():
                 "total_conversations": total_conversations,
                 "total_cost_usd": round(total_cost_usd, 6),
                 "total_tokens": total_tokens,
+                "avg_task_duration_min": avg_task_duration_min,
                 "active_servers": active_servers,
                 "directives_completed": dir_completed,
                 "directives_error": dir_error,
