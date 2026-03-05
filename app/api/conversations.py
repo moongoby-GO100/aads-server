@@ -6,7 +6,28 @@ from fastapi import APIRouter, Query
 from typing import Optional
 import json
 import re
+from datetime import datetime, timezone, timedelta
 from app.memory.store import memory_store
+
+KST = timezone(timedelta(hours=9))
+
+
+def _to_kst_str(dt_or_str) -> str:
+    """datetime 또는 문자열을 KST 포맷으로 변환 (T-085)"""
+    if not dt_or_str:
+        return None
+    if isinstance(dt_or_str, datetime):
+        dt = dt_or_str if dt_or_str.tzinfo else dt_or_str.replace(tzinfo=timezone.utc)
+        return dt.astimezone(KST).strftime("%Y-%m-%dT%H:%M:%S+09:00")
+    s = str(dt_or_str)
+    try:
+        s_clean = s.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s_clean)
+        if not dt.tzinfo:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(KST).strftime("%Y-%m-%dT%H:%M:%S+09:00")
+    except Exception:
+        return s
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
@@ -115,26 +136,31 @@ async def list_channels():
             ORDER BY MAX(created_at) DESC
         """)
         channels = []
-        has_go100 = False
+        present = set()
         for row in rows:
             ch_name = _category_to_channel(row["category"])
-            if ch_name.upper() == "GO100":
-                has_go100 = True
+            present.add(ch_name.upper())
             channels.append({
                 "name": ch_name,
                 "category": row["category"],
                 "count": row["count"],
-                "last_message": str(row["last_message"]),
+                # T-085: last_message를 KST ISO 형식으로 통일
+                "last_message": _to_kst_str(row["last_message"]),
             })
-        # GO100 채널이 없으면 "수집 미설정" 상태로 추가 (T-081)
-        if not has_go100:
-            channels.append({
-                "name": "GO100",
-                "category": "conversation:go100",
-                "count": 0,
-                "last_message": None,
-                "status": "수집 미설정",
-            })
+        # T-081: GO100, T-086: NewTalk/NAS — 데이터 없으면 "수집 미설정" 으로 항상 표시
+        for missing_name, missing_cat in [
+            ("GO100", "conversation:go100"),
+            ("NewTalk", "conversation:ntv2"),
+            ("NAS", "conversation:nas"),
+        ]:
+            if missing_name.upper() not in present:
+                channels.append({
+                    "name": missing_name,
+                    "category": missing_cat,
+                    "count": 0,
+                    "last_message": None,
+                    "status": "수집 미설정",
+                })
         return {"channels": channels}
 
 

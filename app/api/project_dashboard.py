@@ -1481,6 +1481,20 @@ async def get_analytics():
                 """
             )
 
+            # T-083: task_cost_log 테이블에서 실제 비용 집계 (async with 블록 내)
+            try:
+                cost_rows = await conn.fetch(
+                    """
+                    SELECT project,
+                           COALESCE(SUM(total_tokens),0) AS tot_tok,
+                           COALESCE(SUM(cost_usd),0) AS cost
+                    FROM task_cost_log
+                    GROUP BY project
+                    """
+                )
+            except Exception:
+                cost_rows = []
+
         now_utc = datetime.now(timezone.utc)
 
         # aads_conversations 집계 (비용/토큰)
@@ -1501,20 +1515,6 @@ async def get_analytics():
             by_project_conv[proj]["conversations"] += cnt
             by_project_conv[proj]["tokens"] += tok
             by_project_conv[proj]["cost_usd"] += cost
-
-        # T-083: task_cost_log 테이블에서 실제 비용 집계
-        try:
-            cost_rows = await conn.fetch(
-                """
-                SELECT project,
-                       COALESCE(SUM(total_tokens),0) AS tot_tok,
-                       COALESCE(SUM(cost_usd),0) AS cost
-                FROM task_cost_log
-                GROUP BY project
-                """
-            )
-        except Exception:
-            cost_rows = []
 
         cost_total_usd = 0.0
         cost_total_tokens = 0
