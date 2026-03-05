@@ -903,54 +903,115 @@ async def get_task_history():
                 """
             )
 
-            # agent_registry에서 원격 서버 목록
-            try:
-                agent_rows = await conn.fetch(
-                    "SELECT agent_id, last_ping, status FROM agent_registry ORDER BY last_ping DESC LIMIT 20"
-                )
-            except Exception:
-                agent_rows = []
+            # go100_user_memory의 cross_msg 최신 시각으로 원격 서버 health 확인
+            cross_msg_rows = await conn.fetch(
+                """
+                SELECT
+                    CASE WHEN memory_type LIKE '%REMOTE_211%' THEN 'REMOTE_211'
+                         WHEN memory_type LIKE '%REMOTE_114%' THEN 'REMOTE_114' END AS agent,
+                    MAX(created_at) AS last_msg
+                FROM go100_user_memory
+                WHERE user_id = 2
+                  AND (memory_type LIKE '%REMOTE_211%' OR memory_type LIKE '%REMOTE_114%')
+                GROUP BY 1
+                """
+            )
 
         tasks: List[Dict] = []
         for r in rows:
             content = r["content"] if isinstance(r["content"], dict) else _parse_value(r["content"])
             task_id = content.get("task_id", content.get("id", str(r["id"])))
             server = content.get("server", content.get("agent_id", "unknown"))
-            status = content.get("status", content.get("result_status", "unknown"))
             started_at = content.get("started_at", str(r["created_at"]))
             finished_at = content.get("finished_at", content.get("completed_at", ""))
             from_agent = content.get("from_agent", content.get("agent_id", ""))
+
+            # body / details.body에서 JSON 파싱
+            body_raw = content.get("body", "")
+            if not body_raw and isinstance(content.get("details"), dict):
+                body_raw = content["details"].get("body", "")
+            body_parsed: Dict = {}
+            if isinstance(body_raw, str) and body_raw:
+                try:
+                    body_parsed = json.loads(body_raw)
+                except Exception:
+                    pass
+            elif isinstance(body_raw, dict):
+                body_parsed = body_raw
+
+            # message_type: body > content > memory_type에서 추출
+            message_type = (
+                body_parsed.get("message_type")
+                or content.get("message_type")
+                or content.get("details", {}).get("message_type", "")
+                if isinstance(content.get("details"), dict) else
+                body_parsed.get("message_type") or content.get("message_type", "")
+            )
+            mem_type = r["memory_type"]  # e.g. task_result, cross_msg_...
+
+            # status / finished_at 결정 로직
+            mt_lower = (message_type or "").lower()
+            if mt_lower in ("notify", "auto_report") or "auto_report" in mt_lower:
+                status = "reported"
+                finished_at = started_at  # 보고 시점 = 완료 시점
+            elif mt_lower == "install_complete" or "install_complete" in mt_lower:
+                status = "completed"
+                if not finished_at:
+                    finished_at = started_at
+            elif mem_type.startswith("task_result") or mt_lower == "task_result":
+                # task_result: content의 success/error 여부로 판단
+                raw_status = (
+                    content.get("status")
+                    or content.get("result_status")
+                    or body_parsed.get("status", "")
+                )
+                raw_lower = (raw_status or "").lower()
+                if raw_lower in ("error", "fail", "failed"):
+                    status = "error"
+                else:
+                    status = "completed"
+                if not finished_at:
+                    finished_at = started_at
+            else:
+                # 기본: content 직접 → body → 'active'
+                raw_status = (
+                    content.get("status")
+                    or content.get("result_status")
+                    or body_parsed.get("status", "")
+                )
+                status = raw_status if raw_status else "active"
+
             tasks.append({
                 "task_id": task_id,
                 "server": server,
                 "status": status,
+                "message_type": message_type or mem_type,
                 "started_at": started_at,
                 "finished_at": finished_at,
                 "from_agent": from_agent,
-                "memory_type": r["memory_type"],
+                "memory_type": mem_type,
             })
 
-        # 원격 서버 health
+        # 원격 서버 health: cross_msg 최신 시각 기준 5분 이내 → online
         remote_servers: Dict[str, Dict] = {
-            "REMOTE_211": {"name": "REMOTE_211", "health": "unknown", "last_ping": None},
-            "REMOTE_116": {"name": "REMOTE_116", "health": "unknown", "last_ping": None},
+            "REMOTE_211": {"name": "REMOTE_211", "health": "offline", "last_msg": None},
+            "REMOTE_114": {"name": "REMOTE_114", "health": "offline", "last_msg": None},
         }
         now = datetime.now(timezone.utc)
-        for a in agent_rows:
-            agent_id = a["agent_id"]
-            if agent_id in remote_servers:
-                lp = a["last_ping"]
-                if lp:
-                    lp_aware = lp if lp.tzinfo else lp.replace(tzinfo=timezone.utc)
-                    diff_min = (now - lp_aware).total_seconds() / 60
-                    health = "online" if diff_min < 10 else "offline"
-                else:
-                    health = "offline"
-                remote_servers[agent_id] = {
-                    "name": agent_id,
+        for a in cross_msg_rows:
+            agent = a["agent"]
+            if not agent or agent not in remote_servers:
+                continue
+            lm = a["last_msg"]
+            if lm:
+                lm_aware = lm if lm.tzinfo else lm.replace(tzinfo=timezone.utc)
+                diff_min = (now - lm_aware).total_seconds() / 60
+                health = "online" if diff_min < 5 else "offline"
+                remote_servers[agent] = {
+                    "name": agent,
                     "health": health,
-                    "last_ping": str(lp) if lp else None,
-                    "status": a["status"],
+                    "last_msg": str(lm),
+                    "minutes_ago": round(diff_min, 1),
                 }
 
         return {
@@ -963,3 +1024,170 @@ async def get_task_history():
     except Exception as e:
         logger.error(f"task_history error: {e}")
         raise HTTPException(500, f"Task history error: {e}")
+
+
+# ─── (9) GET /dashboard/analytics ────────────────────────────────────────────
+@router.get("/dashboard/analytics")
+async def get_analytics():
+    """비용/시간 분석 — cross_msg + system_memory 집계"""
+    try:
+        async with memory_store.pool.acquire() as conn:
+            # 전체 cross_msg 집계
+            task_rows = await conn.fetch(
+                """
+                SELECT
+                    memory_type,
+                    content,
+                    created_at
+                FROM go100_user_memory
+                WHERE user_id = 2
+                  AND (memory_type LIKE 'cross_msg_%' OR memory_type LIKE 'task_result%')
+                ORDER BY created_at DESC
+                LIMIT 500
+                """
+            )
+
+            # 프로젝트별 대화 수 (system_memory conversation:* 카테고리)
+            conv_rows = await conn.fetch(
+                """
+                SELECT
+                    REPLACE(category, 'conversation:', '') AS project,
+                    COUNT(*) AS conversations,
+                    MAX(updated_at) AS last_activity
+                FROM system_memory
+                WHERE category LIKE 'conversation:%'
+                GROUP BY category
+                ORDER BY conversations DESC
+                """
+            )
+
+            # 일별 트렌드 (최근 7일)
+            daily_rows = await conn.fetch(
+                """
+                SELECT
+                    (created_at AT TIME ZONE 'Asia/Seoul')::date AS d,
+                    COUNT(*) AS tasks
+                FROM go100_user_memory
+                WHERE user_id = 2
+                  AND memory_type LIKE 'cross_msg_%'
+                  AND created_at > NOW() - INTERVAL '7 days'
+                GROUP BY d
+                ORDER BY d
+                """
+            )
+
+            # 원격 서버별 집계
+            server_rows = await conn.fetch(
+                """
+                SELECT
+                    CASE
+                        WHEN memory_type LIKE '%REMOTE_211%' THEN 'REMOTE_211'
+                        WHEN memory_type LIKE '%REMOTE_114%' THEN 'REMOTE_114'
+                        ELSE SPLIT_PART(REPLACE(memory_type, 'cross_msg_', ''), '_AADS_MGR', 1)
+                    END AS server,
+                    COUNT(*) AS tasks,
+                    MAX(created_at) AS last_report
+                FROM go100_user_memory
+                WHERE user_id = 2
+                  AND memory_type LIKE 'cross_msg_%'
+                GROUP BY 1
+                ORDER BY tasks DESC
+                """
+            )
+
+        now_utc = datetime.now(timezone.utc)
+
+        # 태스크 상태 집계
+        total_tasks = 0
+        completed_tasks = 0
+        error_tasks = 0
+        for r in task_rows:
+            total_tasks += 1
+            content = r["content"] if isinstance(r["content"], dict) else _parse_value(r["content"])
+            body_raw = content.get("body", "")
+            if not body_raw and isinstance(content.get("details"), dict):
+                body_raw = content["details"].get("body", "")
+            body_parsed: Dict = {}
+            if isinstance(body_raw, str) and body_raw:
+                try:
+                    body_parsed = json.loads(body_raw)
+                except Exception:
+                    pass
+            elif isinstance(body_raw, dict):
+                body_parsed = body_raw
+            mt = (
+                body_parsed.get("message_type")
+                or content.get("message_type", "")
+            ).lower()
+            raw_s = (content.get("status") or body_parsed.get("status", "")).lower()
+            if r["memory_type"].startswith("task_result"):
+                if raw_s in ("error", "fail", "failed"):
+                    error_tasks += 1
+                else:
+                    completed_tasks += 1
+            elif mt in ("notify", "auto_report"):
+                completed_tasks += 1
+
+        # 활성 서버 수 (최근 5분 cross_msg 있는 서버)
+        active_servers = 0
+        for r in server_rows:
+            lr = r["last_report"]
+            if lr:
+                lr_aware = lr if lr.tzinfo else lr.replace(tzinfo=timezone.utc)
+                if (now_utc - lr_aware).total_seconds() < 300:
+                    active_servers += 1
+
+        # 프로젝트별 정리
+        by_project = []
+        for r in conv_rows:
+            proj = CONV_PROJECT_MAP.get(r["project"], r["project"])
+            by_project.append({
+                "project": proj,
+                "conversations": r["conversations"],
+                "cost_usd": 0.0,
+                "tokens": 0,
+                "last_activity": str(r["last_activity"]) if r["last_activity"] else "",
+            })
+
+        # 서버별 정리
+        by_server = []
+        for r in server_rows:
+            lr = r["last_report"]
+            lr_aware = lr.replace(tzinfo=timezone.utc) if lr and not lr.tzinfo else lr
+            diff_min = (now_utc - lr_aware).total_seconds() / 60 if lr_aware else 9999
+            by_server.append({
+                "server": r["server"],
+                "tasks": r["tasks"],
+                "status": "online" if diff_min < 5 else "offline",
+                "last_report": str(lr)[:19] if lr else "",
+            })
+
+        # 일별 트렌드
+        daily_trend = [
+            {"date": str(r["d"]), "tasks": r["tasks"], "cost_usd": 0.0}
+            for r in daily_rows
+        ]
+
+        total_conversations = sum(p["conversations"] for p in by_project)
+
+        return {
+            "status": "ok",
+            "generated_at": _now_kst(),
+            "summary": {
+                "total_tasks": total_tasks,
+                "completed_tasks": completed_tasks,
+                "error_tasks": error_tasks,
+                "total_conversations": total_conversations,
+                "total_cost_usd": 0.0,
+                "total_tokens": 0,
+                "avg_task_duration_min": 0.0,
+                "active_servers": active_servers,
+            },
+            "by_project": by_project,
+            "by_server": by_server,
+            "daily_trend": daily_trend,
+        }
+
+    except Exception as e:
+        logger.error(f"analytics error: {e}")
+        raise HTTPException(500, f"Analytics error: {e}")
