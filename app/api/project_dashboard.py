@@ -1058,10 +1058,58 @@ def _parse_report_file(filepath: Path) -> Dict:
     }
 
 
+# ─── T-090: project_tasks → Directive 형식 변환 헬퍼 ─────────────────────────
+def _pt_row_to_directive(row) -> Dict:
+    """project_tasks 레코드를 directive 형식으로 변환"""
+    raw = row.get("raw_data") or {}
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = {}
+    status_raw = (row.get("status") or "reported").lower()
+    if status_raw in ("done", "finished", "success", "completed"):
+        status = "completed"
+    elif status_raw in ("running", "active"):
+        status = "running"
+    elif status_raw in ("error", "failed", "fail"):
+        status = "error"
+    else:
+        status = "completed"
+    return {
+        "task_id": row.get("task_id") or "UNKNOWN",
+        "title": row.get("title") or "",
+        "status": status,
+        "project": _validate_project_name(row.get("project") or "AADS"),
+        "error_type": "",
+        "created_at": _to_kst_str(row.get("started_at") or row.get("created_at")),
+        "started_at": _to_kst_str(row.get("started_at")),
+        "completed_at": _to_kst_str(row.get("completed_at")),
+        "duration_seconds": None,
+        "file_path": f"[{row.get('source','remote')}] {row.get('task_id','')}",
+        "source": row.get("source") or "remote",
+    }
+
+
+def _pt_row_to_report(row) -> Dict:
+    """project_tasks 레코드를 report 형식으로 변환"""
+    return {
+        "task_id": row.get("task_id") or "UNKNOWN",
+        "filename": f"[{row.get('source','remote')}] {row.get('task_id','')}",
+        "status": "success" if (row.get("status") or "") in ("completed", "done", "success") else "reported",
+        "error_type": "",
+        "completed_at": _to_kst_str(row.get("completed_at")),
+        "project": _validate_project_name(row.get("project") or "AADS"),
+        "github_url": "",
+        "summary": row.get("summary") or "",
+        "source": row.get("source") or "remote",
+    }
+
+
 # ─── (5) GET /dashboard/directives ───────────────────────────────────────────
 @router.get("/dashboard/directives")
 async def get_directives(project: Optional[str] = None):
-    """작업지시서 현황: running + done 디렉터리 스캔"""
+    """작업지시서 현황: running + done 디렉터리 스캔 + project_tasks UNION (T-090)"""
     directives: List[Dict] = []
 
     # running 디렉터리
@@ -1074,6 +1122,26 @@ async def get_directives(project: Optional[str] = None):
         for f in sorted(DIRECTIVES_DONE_DIR.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True):
             item = _parse_directive_file(f, "completed")
             directives.append(item)
+
+    # T-090: project_tasks 테이블에서 원격 보고서 UNION
+    try:
+        async with memory_store.pool.acquire() as conn:
+            # 테이블 존재 확인
+            tbl_exists = await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='project_tasks')"
+            )
+            if tbl_exists:
+                query = "SELECT task_id, project, source, title, status, summary, started_at, completed_at FROM project_tasks"
+                params: list = []
+                if project and project.upper() not in ("ALL", ""):
+                    query += " WHERE project ILIKE $1"
+                    params.append(project)
+                query += " ORDER BY completed_at DESC NULLS LAST LIMIT 500"
+                pt_rows = await conn.fetch(query, *params)
+                for row in pt_rows:
+                    directives.append(_pt_row_to_directive(dict(row)))
+    except Exception as e:
+        logger.warning(f"project_tasks 조회 실패 (무시): {e}")
 
     running_count = sum(1 for d in directives if d["status"] == "running")
     completed_count = sum(1 for d in directives if d["status"] == "completed")
@@ -1160,7 +1228,7 @@ async def get_directives(project: Optional[str] = None):
 # ─── (6) GET /dashboard/reports ──────────────────────────────────────────────
 @router.get("/dashboard/reports")
 async def get_reports(project: Optional[str] = None):
-    """작업결과보고서 목록"""
+    """작업결과보고서 목록 + project_tasks UNION (T-090)"""
     reports: List[Dict] = []
 
     # 로컬 reports 디렉터리
@@ -1177,6 +1245,28 @@ async def get_reports(project: Optional[str] = None):
             )
             for f in result_files:
                 reports.append(_parse_report_file(f))
+
+    # T-090: project_tasks 테이블에서 완료된 원격 작업 보고서 UNION
+    try:
+        async with memory_store.pool.acquire() as conn:
+            tbl_exists = await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='project_tasks')"
+            )
+            if tbl_exists:
+                query = (
+                    "SELECT task_id, project, source, title, status, summary, started_at, completed_at "
+                    "FROM project_tasks WHERE source != 'local'"
+                )
+                params: list = []
+                if project and project.upper() not in ("ALL", ""):
+                    query += " AND project ILIKE $1"
+                    params.append(project)
+                query += " ORDER BY completed_at DESC NULLS LAST LIMIT 300"
+                pt_rows = await conn.fetch(query, *params)
+                for row in pt_rows:
+                    reports.append(_pt_row_to_report(dict(row)))
+    except Exception as e:
+        logger.warning(f"project_tasks reports 조회 실패 (무시): {e}")
 
     # 중복 제거: 같은 task_id는 가장 최신 1건만
     seen_task_ids: Dict[str, Dict] = {}
@@ -1577,6 +1667,34 @@ async def get_analytics():
         else:
             cost_status = "active"
             cost_message = ""
+
+        # T-090: project_tasks 기반 집계 추가
+        try:
+            async with memory_store.pool.acquire() as conn:
+                tbl_exists = await conn.fetchval(
+                    "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='project_tasks')"
+                )
+                if tbl_exists:
+                    pt_agg_rows = await conn.fetch(
+                        """
+                        SELECT project,
+                               COUNT(*) AS total,
+                               SUM(CASE WHEN status IN ('completed','done','success') THEN 1 ELSE 0 END) AS completed,
+                               SUM(CASE WHEN status IN ('error','failed','fail') THEN 1 ELSE 0 END) AS error
+                        FROM project_tasks
+                        GROUP BY project
+                        """
+                    )
+                    for r in pt_agg_rows:
+                        proj = _validate_project_name(r["project"] or "AADS")
+                        if proj not in by_project_dir:
+                            by_project_dir[proj] = {"completed": 0, "error": 0, "total": 0}
+                        # project_tasks 수치 병합 (중복 방지: local는 이미 directives 파일에서 집계됨)
+                        by_project_dir[proj]["total"] = max(by_project_dir[proj]["total"], int(r["total"]))
+                        by_project_dir[proj]["completed"] = max(by_project_dir[proj]["completed"], int(r["completed"]))
+                        by_project_dir[proj]["error"] = max(by_project_dir[proj]["error"], int(r["error"]))
+        except Exception as e:
+            logger.warning(f"project_tasks analytics 조회 실패 (무시): {e}")
 
         # by_project 최종 병합 (directives + conversations)
         all_projs = set(by_project_dir.keys()) | set(by_project_conv.keys())
