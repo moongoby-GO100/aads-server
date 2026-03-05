@@ -11,6 +11,7 @@ from app.logging_config import configure_logging
 
 from app.api import health, projects, checkpoints, stream, auth, context, chat, visual_qa, mobile_qa, memory
 from app.api.conversations import router as conversations_router
+from app.api.project_dashboard import router as project_dashboard_router
 from app.config import settings
 from app.graph.builder import compile_graph
 from app.services.checkpointer import get_checkpointer
@@ -111,6 +112,7 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 
 # 라우터 등록
 app.include_router(health.router, prefix="/api/v1", tags=["health"])
+app.include_router(project_dashboard_router, prefix="/api/v1", tags=["project-dashboard"])
 app.include_router(projects.router, prefix="/api/v1", tags=["projects"])
 app.include_router(checkpoints.router, prefix="/api/v1", tags=["checkpoints"])
 app.include_router(stream.router, prefix="/api/v1", tags=["stream"])
