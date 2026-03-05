@@ -87,3 +87,42 @@ CREATE INDEX IF NOT EXISTS idx_go100_user_memory_user_id     ON go100_user_memor
 CREATE INDEX IF NOT EXISTS idx_go100_user_memory_type        ON go100_user_memory(memory_type);
 CREATE INDEX IF NOT EXISTS idx_go100_user_memory_importance  ON go100_user_memory(importance);
 CREATE INDEX IF NOT EXISTS idx_go100_user_memory_created_at  ON go100_user_memory(created_at DESC);
+
+-- ======================================================
+-- T-038: 에러 자동기록·학습·자동복구
+-- ======================================================
+CREATE TABLE IF NOT EXISTS error_log (
+    id SERIAL PRIMARY KEY,
+    error_hash VARCHAR(64) NOT NULL,
+    error_type VARCHAR(100) NOT NULL,
+    source VARCHAR(100) NOT NULL,
+    server VARCHAR(50) NOT NULL,
+    message TEXT NOT NULL,
+    stack_trace TEXT,
+    context JSONB DEFAULT '{}',
+    resolution TEXT,
+    resolution_type VARCHAR(20) DEFAULT 'pending',
+    resolved_at TIMESTAMP,
+    auto_recoverable BOOLEAN DEFAULT FALSE,
+    recovery_command TEXT,
+    occurrence_count INTEGER DEFAULT 1,
+    first_seen TIMESTAMP DEFAULT NOW(),
+    last_seen TIMESTAMP DEFAULT NOW(),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_error_log_hash ON error_log(error_hash);
+CREATE INDEX IF NOT EXISTS idx_error_log_type ON error_log(error_type);
+CREATE INDEX IF NOT EXISTS idx_error_log_source ON error_log(source);
+CREATE INDEX IF NOT EXISTS idx_error_log_last_seen ON error_log(last_seen DESC);
+CREATE INDEX IF NOT EXISTS idx_error_log_pending ON error_log(resolution_type) WHERE resolution_type = 'pending';
+
+-- 자동복구 이력
+CREATE TABLE IF NOT EXISTS recovery_log (
+    id SERIAL PRIMARY KEY,
+    error_log_id INTEGER REFERENCES error_log(id),
+    recovery_command TEXT NOT NULL,
+    success BOOLEAN NOT NULL,
+    output TEXT,
+    executed_at TIMESTAMP DEFAULT NOW()
+);

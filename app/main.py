@@ -13,6 +13,7 @@ from app.api import health, projects, checkpoints, stream, auth, context, chat, 
 from app.api.conversations import router as conversations_router
 from app.api.project_dashboard import router as project_dashboard_router
 from app.api.ceo_chat import router as ceo_chat_router
+from app.api.watchdog import router as watchdog_router
 from app.config import settings
 from app.graph.builder import compile_graph
 from app.services.checkpointer import get_checkpointer
@@ -125,3 +126,4 @@ app.include_router(mobile_qa.router, prefix="/api/v1", tags=["mobile-qa"])
 app.include_router(memory.router, prefix="/api/v1", tags=["memory"])
 app.include_router(conversations_router, prefix="/api/v1", tags=["conversations"])
 app.include_router(ceo_chat_router, prefix="/api/v1", tags=["ceo-chat"])
+app.include_router(watchdog_router, prefix="/api/v1", tags=["watchdog"])
