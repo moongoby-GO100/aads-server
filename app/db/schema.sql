@@ -45,6 +45,25 @@ CREATE INDEX IF NOT EXISTS idx_experience_embedding ON experience_memory
   USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 CREATE INDEX IF NOT EXISTS idx_experience_type ON experience_memory(experience_type);
 
+-- Project Tasks (원격 에이전트 task_result 자동 수집, T-091)
+CREATE TABLE IF NOT EXISTS project_tasks (
+    id SERIAL PRIMARY KEY,
+    project VARCHAR(50) NOT NULL,
+    task_id VARCHAR(100) NOT NULL,
+    status VARCHAR(50) DEFAULT 'pending',
+    title VARCHAR(200),
+    summary TEXT,
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    server_id VARCHAR(50),
+    source VARCHAR(50) DEFAULT 'manual',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(project, task_id)
+);
+CREATE INDEX IF NOT EXISTS idx_project_tasks_project ON project_tasks(project);
+CREATE INDEX IF NOT EXISTS idx_project_tasks_task_id ON project_tasks(task_id);
+
 -- Agent Procedural Memory (에이전트 절차기억)
 CREATE TABLE IF NOT EXISTS procedural_memory (
   id SERIAL PRIMARY KEY,

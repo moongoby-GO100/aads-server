@@ -38,8 +38,13 @@ def verify_monitor_key(x_monitor_key: str = Header(None)):
 class SystemMemoryRequest(BaseModel):
     category: str
     key: str
-    value: Dict[str, Any]
+    value: Optional[Dict[str, Any]] = None
+    data: Optional[Dict[str, Any]] = None   # "data" 필드도 허용 (원격 에이전트 호환)
     version: Optional[str] = None
+
+    def get_value(self) -> Dict[str, Any]:
+        """value 또는 data 필드에서 실제 값 반환"""
+        return self.value if self.value is not None else (self.data or {})
 
 # --- 읽기 엔드포인트 (Monitor Key) ---
 @router.get("/context/system")
@@ -73,16 +78,116 @@ async def put_system_memory(
     _rate: None = Depends(check_rate_limit),
 ):
     """시스템 메모리 저장/업데이트 (Monitor Key 인증 필수)"""
+    value = req.get_value()
     await memory_store.put_system(
         category=req.category,
         key=req.key,
-        value=req.value,
+        value=value,
         version=req.version,
         updated_by="agent"
     )
+
+    # T-090: task_result 또는 '완료'/'completed' 포함 시 project_tasks upsert
+    task_upsert_result = None
+    content_str_lower = json.dumps(value, ensure_ascii=False).lower()
+    is_task_event = (
+        value.get("message_type") == "task_result" or
+        "완료" in content_str_lower or
+        "completed" in content_str_lower or
+        req.category.startswith("cross_msg_REMOTE_")
+    )
+    if is_task_event and value.get("task_id"):
+        task_upsert_result = await _upsert_task_result(value, req.category)
+
     # 저장 확인: 저장된 값 반환
     saved_data = await memory_store.get_system(req.category, req.key)
-    return {"status": "ok", "saved": f"{req.category}/{req.key}", "data": saved_data}
+    resp = {"status": "ok", "saved": f"{req.category}/{req.key}", "data": saved_data}
+    if task_upsert_result is not None:
+        resp["task_upsert"] = task_upsert_result
+    return resp
+
+
+async def _upsert_task_result(value: Dict[str, Any], category: str) -> Dict[str, Any]:
+    """T-090: task_result 메시지를 project_tasks 테이블에 upsert (UNIQUE(task_id, source) 기준)"""
+    import re as _re
+    task_id = str(value.get("task_id", "")).strip()
+    if not task_id:
+        return {"status": "skip", "reason": "task_id 없음"}
+
+    # source 결정 (category: cross_msg_REMOTE_211_AADS_MGR 등)
+    source = "REMOTE_211"
+    m = _re.search(r"cross_msg_(REMOTE_\d+)", category)
+    if m:
+        source = m.group(1)
+    elif "REMOTE_114" in category or "114" in str(value.get("server", "")):
+        source = "REMOTE_114"
+    elif "211" in str(value.get("server", "")):
+        source = "REMOTE_211"
+
+    # 프로젝트 정규화
+    project = str(value.get("project") or "AADS").strip()
+    _pmap = {
+        "kis": "KIS", "go100": "GO100", "shortflow": "ShortFlow",
+        "sf": "ShortFlow", "newtalk": "NewTalk", "ntv2": "NewTalk",
+        "nas": "NAS", "aads": "AADS", "sales": "SALES",
+    }
+    project = _pmap.get(project.lower(), project) if project else "AADS"
+
+    status_raw = str(value.get("status", "reported")).lower()
+    if status_raw in ("done", "finished", "success", "completed", "완료"):
+        status = "completed"
+    elif status_raw in ("running", "active"):
+        status = "running"
+    else:
+        status = "reported"
+
+    title = str(value.get("title") or task_id)[:500]
+    summary = str(value.get("summary") or value.get("result") or title)[:500]
+
+    def _parse_ts(s):
+        if not s:
+            return None
+        from datetime import datetime as _dt
+        if isinstance(s, _dt):
+            return s
+        try:
+            return _dt.fromisoformat(str(s))
+        except Exception:
+            return None
+
+    started_at = _parse_ts(value.get("started_at"))
+    completed_at = _parse_ts(value.get("completed_at") or value.get("finished_at"))
+
+    try:
+        async with memory_store.pool.acquire() as conn:
+            # 테이블 존재 확인
+            tbl_exists = await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='project_tasks')"
+            )
+            if not tbl_exists:
+                return {"status": "skip", "reason": "project_tasks 테이블 없음"}
+
+            await conn.execute(
+                """
+                INSERT INTO project_tasks
+                    (task_id, project, source, title, status, summary, started_at, completed_at, raw_data)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT (task_id, source) DO UPDATE
+                    SET project = EXCLUDED.project,
+                        title = EXCLUDED.title,
+                        status = EXCLUDED.status,
+                        summary = EXCLUDED.summary,
+                        started_at = COALESCE(EXCLUDED.started_at, project_tasks.started_at),
+                        completed_at = COALESCE(EXCLUDED.completed_at, project_tasks.completed_at),
+                        raw_data = EXCLUDED.raw_data
+                """,
+                task_id, project, source, title, status, summary,
+                started_at, completed_at,
+                json.dumps(value, ensure_ascii=False),
+            )
+        return {"status": "ok", "project": project, "task_id": task_id, "source": source}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
 
 # --- HANDOVER 자동생성 ---
 @router.get("/context/handover")
