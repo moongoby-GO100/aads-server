@@ -103,6 +103,7 @@ async def list_channels():
     """
     채널(프로젝트)별 대화 건수 및 마지막 활동 시간.
     Response: {"channels": [{"name":"KIS","count":N,"last_message":"..."},...]}
+    GO100 채널은 system_memory에 데이터가 없으면 "수집 미설정" 상태로 항상 포함 (T-081)
     """
     async with memory_store.pool.acquire() as conn:
         rows = await conn.fetch("""
@@ -114,12 +115,25 @@ async def list_channels():
             ORDER BY MAX(created_at) DESC
         """)
         channels = []
+        has_go100 = False
         for row in rows:
+            ch_name = _category_to_channel(row["category"])
+            if ch_name.upper() == "GO100":
+                has_go100 = True
             channels.append({
-                "name": _category_to_channel(row["category"]),
+                "name": ch_name,
                 "category": row["category"],
                 "count": row["count"],
                 "last_message": str(row["last_message"]),
+            })
+        # GO100 채널이 없으면 "수집 미설정" 상태로 추가 (T-081)
+        if not has_go100:
+            channels.append({
+                "name": "GO100",
+                "category": "conversation:go100",
+                "count": 0,
+                "last_message": None,
+                "status": "수집 미설정",
             })
         return {"channels": channels}
 
