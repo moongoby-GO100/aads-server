@@ -60,6 +60,19 @@ PROJECTS_META = {
     },
 }
 
+# aads_conversations.project 컬럼값 → PROJECTS_META project_id 매핑
+CONV_PROJECT_MAP = {
+    "sf": "shortflow",
+    "sales": "newtalk_v2",
+    "kis": "kis_v41",
+    "aads": "aads",
+    "go100": "go100",
+    "nas": "nas",
+    "shortflow": "shortflow",
+    "newtalk_v2": "newtalk_v2",
+    "kis_v41": "kis_v41",
+}
+
 KST = timezone(timedelta(hours=9))
 
 
@@ -111,6 +124,27 @@ async def get_dashboard():
                 """
             )
 
+            # go100_user_memory에서 project_status 최신 레코드 (project_id당 최신 1건)
+            status_rows = await conn.fetch(
+                """
+                SELECT content FROM go100_user_memory
+                WHERE user_id = 2 AND memory_type = 'project_status'
+                ORDER BY created_at DESC
+                """
+            )
+
+            # aads_conversations 테이블에서 project별 대화 수 (존재하는 경우)
+            try:
+                aads_conv_rows = await conn.fetch(
+                    """
+                    SELECT project, COUNT(*) as cnt
+                    FROM aads_conversations
+                    GROUP BY project
+                    """
+                )
+            except Exception:
+                aads_conv_rows = []
+
             # agent_registry 가능 여부 확인 후 에이전트 수 조회
             try:
                 agent_count = await conn.fetchval(
@@ -131,6 +165,14 @@ async def get_dashboard():
                 "updated_at": str(r["updated_at"]),
             })
 
+        # project_status override 맵 (project_id당 최신 1건)
+        status_map: Dict[str, Dict] = {}
+        for r in status_rows:
+            c = r["content"] if isinstance(r["content"], dict) else json.loads(r["content"])
+            pid = c.get("project_id")
+            if pid and pid not in status_map:
+                status_map[pid] = c
+
         # conversation 통계
         conv_stats: Dict[str, Dict] = {}
         total_conversations = 0
@@ -143,6 +185,17 @@ async def get_dashboard():
                 "count": cnt,
                 "last_updated": str(r["last_updated"]),
             }
+
+        # aads_conversations 테이블 대화 수 병합 (CONV_PROJECT_MAP으로 매핑)
+        for r in aads_conv_rows:
+            raw_proj = r["project"] or "aads"
+            mapped = CONV_PROJECT_MAP.get(raw_proj, raw_proj)
+            cnt = r["cnt"]
+            total_conversations += cnt
+            if mapped in conv_stats:
+                conv_stats[mapped]["count"] += cnt
+            else:
+                conv_stats[mapped] = {"count": cnt, "last_updated": _now_kst()}
 
         # 프로젝트 목록 조립
         projects = []
@@ -180,6 +233,18 @@ async def get_dashboard():
                     handover_url = v["handover_url"]
                 if entry["updated_at"]:
                     last_updated = entry["updated_at"]
+
+            # project_status 데이터로 override
+            s = status_map.get(project_id, {})
+            if s:
+                progress_percent = s.get("progress_percent", progress_percent)
+                total_tasks = s.get("total_tasks", total_tasks)
+                completed_tasks = s.get("completed_tasks", completed_tasks)
+                handover_url = s.get("handover_url", handover_url)
+                if s.get("key_issues"):
+                    key_issues = s["key_issues"]
+                if s.get("status"):
+                    status = s["status"]
 
             conv_info = conv_stats.get(project_id, {})
             conversation_count = conv_info.get("count", 0)
