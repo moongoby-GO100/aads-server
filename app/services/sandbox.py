@@ -198,3 +198,14 @@ async def pull_images():
                 logger.info(f"Pulled image: {img}")
             except Exception as e:
                 logger.warning(f"Failed to pull {img}: {e}")
+
+
+# Backward-compatible aliases for developer agent
+async def execute_in_sandbox(code: str, language: str = "python", timeout: int = 30) -> Dict:
+    """Alias for execute_code (used by developer agent)."""
+    return await execute_code(code, language, timeout)
+
+
+async def fallback_code_only(code: str) -> Dict:
+    """Async wrapper for _fallback_result (used by developer agent)."""
+    return _fallback_result(code, "sandbox_unavailable")

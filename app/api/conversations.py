@@ -22,7 +22,7 @@ async def list_conversations(
     데이터 소스: system_memory 테이블의 conversation:* 카테고리
     """
     async with memory_store.pool.acquire() as conn:
-        base_query = "SELECT key, value, category, importance, updated_at FROM system_memory WHERE category LIKE 'conversation:%'"
+        base_query = "SELECT key, value, category, updated_at FROM system_memory WHERE category LIKE 'conversation:%'"
         params = []
         idx = 1
 

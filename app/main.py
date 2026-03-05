@@ -9,7 +9,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from app.logging_config import configure_logging
 
-from app.api import health, projects, checkpoints, stream, auth, context, chat, visual_qa, mobile_qa
+from app.api import health, projects, checkpoints, stream, auth, context, chat, visual_qa, mobile_qa, memory
+from app.api.conversations import router as conversations_router
 from app.config import settings
 from app.graph.builder import compile_graph
 from app.services.checkpointer import get_checkpointer
@@ -118,3 +119,5 @@ app.include_router(context.router, prefix="/api/v1", tags=["context"])
 app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
 app.include_router(visual_qa.router, prefix="/api/v1", tags=["visual-qa"])
 app.include_router(mobile_qa.router, prefix="/api/v1", tags=["mobile-qa"])
+app.include_router(memory.router, prefix="/api/v1", tags=["memory"])
+app.include_router(conversations_router, prefix="/api/v1", tags=["conversations"])

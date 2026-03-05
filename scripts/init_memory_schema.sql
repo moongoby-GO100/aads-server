@@ -70,3 +70,20 @@ CREATE TABLE IF NOT EXISTS procedural_memory (
   updated_at     TIMESTAMP    DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_procedural_memory_agent ON procedural_memory(agent_name);
+
+-- ======================================================
+-- go100_user_memory (T-038: 매니저 협업 API)
+-- ======================================================
+CREATE TABLE IF NOT EXISTS go100_user_memory (
+  id          SERIAL PRIMARY KEY,
+  user_id     INTEGER      NOT NULL DEFAULT 2,
+  memory_type VARCHAR(100) NOT NULL,
+  content     JSONB        NOT NULL DEFAULT '{}',
+  importance  FLOAT        NOT NULL DEFAULT 5.0,
+  expires_at  TIMESTAMP,
+  created_at  TIMESTAMP    DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_go100_user_memory_user_id     ON go100_user_memory(user_id);
+CREATE INDEX IF NOT EXISTS idx_go100_user_memory_type        ON go100_user_memory(memory_type);
+CREATE INDEX IF NOT EXISTS idx_go100_user_memory_importance  ON go100_user_memory(importance);
+CREATE INDEX IF NOT EXISTS idx_go100_user_memory_created_at  ON go100_user_memory(created_at DESC);
