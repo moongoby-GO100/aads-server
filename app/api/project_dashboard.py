@@ -177,14 +177,18 @@ async def get_dashboard():
         conv_stats: Dict[str, Dict] = {}
         total_conversations = 0
         for r in conv_rows:
-            # category: conversation:go100 → project_id: go100
+            # category: conversation:sf → proj_key: sf → mapped: shortflow (CONV_PROJECT_MAP)
             proj_key = r["category"].replace("conversation:", "")
+            proj_key = CONV_PROJECT_MAP.get(proj_key, proj_key)
             cnt = r["cnt"]
             total_conversations += cnt
-            conv_stats[proj_key] = {
-                "count": cnt,
-                "last_updated": str(r["last_updated"]),
-            }
+            if proj_key in conv_stats:
+                conv_stats[proj_key]["count"] += cnt
+            else:
+                conv_stats[proj_key] = {
+                    "count": cnt,
+                    "last_updated": str(r["last_updated"]),
+                }
 
         # aads_conversations 테이블 대화 수 병합 (CONV_PROJECT_MAP으로 매핑)
         for r in aads_conv_rows:
@@ -555,11 +559,25 @@ async def get_project_detail(project_id: str):
                 f"%_{meta['manager']}",
             ) or 0
 
+            # go100_user_memory project_status 최신 레코드 조회
+            status_row = await conn.fetchrow(
+                """
+                SELECT content FROM go100_user_memory
+                WHERE user_id = 2 AND memory_type = 'project_status'
+                  AND content->>'project_id' = $1
+                ORDER BY created_at DESC LIMIT 1
+                """, project_id
+            )
+
         # 태스크 분류
         tasks: Dict[str, List] = {"completed": [], "in_progress": [], "blocked": []}
         handover_summary = ""
         status = "active"
         progress_percent = 0
+        total_tasks = 0
+        completed_tasks = 0
+        handover_url = ""
+        key_issues: List[str] = []
 
         for r in sys_rows:
             v = _parse_value(r["value"])
@@ -582,6 +600,17 @@ async def get_project_detail(project_id: str):
             if "blocked_tasks" in v and isinstance(v["blocked_tasks"], list):
                 tasks["blocked"].extend(v["blocked_tasks"])
 
+        # project_status override from go100_user_memory
+        if status_row:
+            s = status_row["content"] if isinstance(status_row["content"], dict) else json.loads(status_row["content"])
+            progress_percent = s.get("progress_percent", progress_percent)
+            total_tasks = s.get("total_tasks", total_tasks)
+            completed_tasks = s.get("completed_tasks", completed_tasks)
+            handover_url = s.get("handover_url", handover_url)
+            key_issues = s.get("key_issues", key_issues)
+            if s.get("status"):
+                status = s["status"]
+
         # 최근 대화 5건 정제
         recent_conversations = []
         for r in conv_rows:
@@ -601,6 +630,10 @@ async def get_project_detail(project_id: str):
             "server": meta["server"],
             "project_status": status,
             "progress_percent": progress_percent,
+            "total_tasks": total_tasks,
+            "completed_tasks": completed_tasks,
+            "handover_url": handover_url,
+            "key_issues": key_issues,
             "tasks": tasks,
             "recent_conversations": recent_conversations,
             "manager_info": {
