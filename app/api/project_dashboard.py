@@ -84,6 +84,31 @@ def _now_kst() -> str:
     return datetime.now(KST).strftime("%Y-%m-%dT%H:%M:%S+09:00")
 
 
+# ─── T-082: 프로젝트명 정규화 맵 ───────────────────────────────────────────
+_PROJECT_NORM_MAP = {
+    "aads": "AADS",
+    "aads-server": "AADS",
+    "aads_server": "AADS",
+    "kis": "KIS",
+    "kis-autotrade-v41": "KIS",
+    "kis-autotrade-v4.1": "KIS",
+    "kis-v41": "KIS",
+    "go100": "GO100",
+    "shortflow": "ShortFlow",
+    "sf": "ShortFlow",
+    "newtalk": "NewTalk",
+    "newtalk_v2": "NewTalk",
+    "ntv2": "NewTalk",
+    "nas": "NAS",
+}
+
+
+def _normalize_project(proj: str) -> str:
+    """프로젝트명 정규화 (T-082): 소문자·변형 → 표준명으로 통일"""
+    v = proj.strip()
+    return _PROJECT_NORM_MAP.get(v.lower(), v)
+
+
 def _to_kst_str(dt_or_str) -> str:
     """datetime 또는 문자열을 KST ISO 형식으로 변환 (T-074)"""
     if not dt_or_str:
@@ -682,35 +707,39 @@ REPORTS_LOCAL_DIR = Path("/root/project-docs/aads/reports")
 GITHUB_REPORTS_BASE = "https://github.com/moongoby/project-docs/blob/main/aads/reports"
 
 
-def _classify_project(filename: str, content: str) -> str:
-    """파일명 프리픽스 + 보고서 본문 키워드로 프로젝트 자동 분류 (T-081 개선)
+VALID_PROJECT_NAMES = frozenset({
+    "AADS", "KIS", "GO100", "ShortFlow", "NewTalk", "NAS", "SALES",
+    "aads-server", "aads-dashboard",
+})
 
-    1단계: AADS 인프라 확정 키워드 (최우선) → AADS
-    2단계: 프로젝트 고유 키워드 (좁은 범위)
-    3단계: 기본값 AADS
 
-    핵심 원칙: 이 작업이 특정 프로젝트의 비즈니스 로직을 직접 구현/수정하는가?
-    YES → 해당 프로젝트 | NO (인프라/대시보드/시스템) → AADS
+def validate_project_name(project: str) -> str:
+    """프로젝트명 유효성 검사 — 한글 문장 등 비정상 값은 AADS로 대체 (T-082)
+
+    허용값: AADS, KIS, GO100, ShortFlow, NewTalk, NAS, SALES, aads-server, aads-dashboard
     """
-    # 1단계: AADS 인프라 확정 키워드 — 하나라도 있으면 무조건 AADS
-    aads_definitive = [
-        '대시보드', 'dashboard', 'Tasks 페이지', 'Conversations 탭', 'CEO Chat', 'ceo_chat',
-        'project_dashboard', 'bridge.py', 'genspark_bridge', 'auto_trigger', 'claude_exec',
-        'HANDOVER', 'handover', 'Docker', 'docker-compose', 'nginx', 'aads-server', 'aads-dashboard',
-        '원격 에이전트', 'remote agent', 'aads_remote', 'cross-message', 'cross_msg',
-        'system_memory', 'context.py', 'memory API', 'Memory', 'QA Agent', 'Visual Regression',
-        '프로덕션 강화', '보고서 레포', 'Git push', 'React Error', 'API 평탄화', '4탭',
-        'KPI', '분석 탭', '비용 엔진', 'cost_engine', '모델 분기', 'model routing',
-        'Task ID:', 'DIRECTIVE', 'classify_project', 'safeRender', 'error_breakdown',
-        '프론트엔드', 'frontend', '빌드', 'npm run build', 'TypeScript',
-    ]
-    content_check = content  # 원본 대소문자 유지 체크
-    content_lower = content.lower()
-    for kw in aads_definitive:
-        if kw.lower() in content_lower:
-            return "AADS"
+    if not project or len(project) > 30:
+        return "AADS"
+    if project in VALID_PROJECT_NAMES:
+        return project
+    project_lower = project.lower()
+    for valid in VALID_PROJECT_NAMES:
+        if project_lower == valid.lower():
+            return valid
+    return "AADS"
 
-    # 파일명 프리픽스 (1단계 통과 후)
+
+def _classify_project(filename: str, content: str) -> str:
+    """파일명 접두사 + 본문 키워드로 프로젝트 자동 분류 (T-082 전면 재작성)
+
+    1단계: 파일명 접두사 매칭 (최우선) → 해당 프로젝트
+    2단계: AADS 인프라 키워드 리스트 매칭 → AADS
+    3단계: 프로젝트 고유 키워드 매칭
+    4단계: 기본값 AADS
+    """
+    content_lower = content.lower()
+
+    # 1단계: 파일명 접두사 매칭 (최우선)
     fname = filename.upper()
     if fname.startswith("KIS_"):
         return "KIS"
@@ -720,37 +749,62 @@ def _classify_project(filename: str, content: str) -> str:
         return "ShortFlow"
     if fname.startswith("NT_"):
         return "NewTalk"
+    if fname.startswith("SALES_"):
+        return "SALES"
+    if fname.startswith("NAS_"):
+        return "NAS"
 
-    # 2단계: 프로젝트 고유 키워드 (좁은 범위)
-    # KIS — 반드시 복합 키워드 (단독 'kis'는 경로명 오분류 위험)
-    kis_keywords = ['kis-autotrade', 'KIS-V41', 'DESK1', 'DESK2', 'DESK3', 'DESK4', 'DESK5',
-                    '자동매매 전략', '분할매수', '프랙탈 추세', '한국투자증권', '백억이 군단',
+    # 2단계: AADS 인프라 키워드 → AADS
+    aads_keywords = [
+        'dashboard', 'bridge', 'handover', 'ceo_chat', 'context', 'memory',
+        'supervisor', 'agent', 'pipeline', 'docker', 'nginx', 'remote_agent',
+        'classify_project', 'saferender', 'parse_engine', 'visual_qa', 'mobile_qa',
+        'mcp', 'langgraph', 'sandbox', 'directives', 'deploy',
+        'typescript', 'npm build', 'git push', 'aads-server', 'aads-dashboard', 'aads-docs',
+        'project_dashboard', 'bridge.py', 'genspark_bridge', 'auto_trigger', 'claude_exec',
+        'docker-compose', 'aads_remote', 'cross-message', 'cross_msg',
+        'system_memory', 'context.py', 'task id:', 'directive',
+        'error_breakdown', 'frontend', 'npm run build',
+        '대시보드', 'ceo chat', '원격 에이전트', 'remote agent', '프론트엔드',
+    ]
+    for kw in aads_keywords:
+        if kw in content_lower:
+            return "AADS"
+
+    # 3단계: 프로젝트 고유 키워드 매칭
+    # KIS
+    kis_keywords = ['kis', 'autotrade', '자동매매', '피라미딩', 'desk', '한국투자',
                     'fractal trend', 'pyramiding']
     if any(kw.lower() in content_lower for kw in kis_keywords):
         return "KIS"
 
-    # GO100 — 단독 'go100' 금지, 프로젝트 이름으로 명시적 사용 시만
-    go100_keywords = ['go100 프로젝트', 'GO100 목표', '100일 목표', 'go100_user_memory', '단기목표 달성']
+    # GO100
+    go100_keywords = ['go100', '지오백', '100세']
     if any(kw.lower() in content_lower for kw in go100_keywords):
         return "GO100"
 
     # ShortFlow
-    sf_keywords = ['shortflow 영상', 'shortflow 파이프라인', 'ffmpeg 편집', '숏폼 영상',
-                   'shortform video', 'run_v4_pipeline', 'shortflow 검수']
+    sf_keywords = ['shortflow', 'sf', '숏폼', '영상', 'economy', 'finance', 'tech',
+                   'ffmpeg', 'shortform video', 'run_v4_pipeline']
     if any(kw.lower() in content_lower for kw in sf_keywords):
         return "ShortFlow"
 
-    # NewTalk — 단독 '뉴톡' 제외, 서비스 명시 시만
-    nt_keywords = ['newtalk v2 서비스', 'ntv2 배포', '뉴톡 V2', '뉴톡 챗봇 서비스', 'newtalk_v2 운영']
+    # NewTalk
+    nt_keywords = ['newtalk', '뉴톡', 'v1fix', 'v2', '이미지', 'goods']
     if any(kw.lower() in content_lower for kw in nt_keywords):
         return "NewTalk"
 
     # NAS
-    nas_keywords = ['nasync', 'nas동기화', 'nas 동기화']
+    nas_keywords = ['nas', 'nasync', 'n2']
     if any(kw.lower() in content_lower for kw in nas_keywords):
         return "NAS"
 
-    # 3단계: 기본값 AADS
+    # SALES
+    sales_keywords = ['sales', 'marketing', '마케팅', '영업']
+    if any(kw.lower() in content_lower for kw in sales_keywords):
+        return "SALES"
+
+    # 4단계: 기본값 AADS
     return "AADS"
 
 
@@ -807,25 +861,28 @@ def _parse_directive_file(filepath: Path, default_status: str) -> Dict:
                 if re.match(r"T-\d+", val):
                     task_id = val
             elif line.startswith("project:"):
-                project = line.split(":", 1)[1].strip()
+                project = validate_project_name(_normalize_project(line.split(":", 1)[1].strip()))
             elif line.startswith("status:"):
                 status = line.split(":", 1)[1].strip()
             elif line.startswith("completed_at:"):
                 created_at = line.split(":", 1)[1].strip()
-        # 제목은 파일명에서 유추
-        title_match = re.search(r"제목[:\s]+(.+)", raw)
+        # 제목은 파일명에서 유추 (T-082: 50자 초과 시 description으로 취급)
+        title_match = re.search(r"^제목\s*:\s*(.+)", raw, re.MULTILINE)
         if title_match:
-            title = title_match.group(1).strip()
+            _t = title_match.group(1).strip()
+            title = _t if len(_t) <= 50 else filename
         else:
             title = filename
     else:
         # 일반 텍스트 형식
-        m_title = re.search(r"제목\s*[:\s]+(.+)", raw)
+        m_title = re.search(r"^제목\s*:\s*(.+)", raw, re.MULTILINE)
         if m_title:
-            title = m_title.group(1).strip()
-        m_proj = re.search(r"프로젝트\s*[:\s]+(.+)", raw)
+            _t = m_title.group(1).strip()
+            title = _t if len(_t) <= 50 else filename
+        # T-082: 콜론 필수 + 50자 이하만 허용 (본문 내용 오분류 방지)
+        m_proj = re.search(r"^프로젝트\s*:\s*([^\n]{1,50})", raw, re.MULTILINE)
         if m_proj:
-            project = m_proj.group(1).strip()
+            project = validate_project_name(_normalize_project(m_proj.group(1).strip()))
 
     # Task ID 파싱 우선순위 (YAML에서 못 찾은 경우)
     if task_id == "UNKNOWN":
@@ -917,7 +974,7 @@ def _parse_report_file(filepath: Path) -> Dict:
                 if re.match(r"T-\d+", val):
                     task_id = val
             elif line.startswith("project:"):
-                project = line.split(":", 1)[1].strip()
+                project = validate_project_name(_normalize_project(line.split(":", 1)[1].strip()))
             elif line.startswith("status:"):
                 v = line.split(":", 1)[1].strip().lower()
                 status = "error" if v in ("error", "fail", "failed") else "success"
@@ -1021,10 +1078,10 @@ async def get_directives(project: Optional[str] = None):
     if project and project.upper() not in ("ALL", ""):
         unique_directives = [d for d in unique_directives if d.get("project", "").upper() == project.upper()]
 
-    # by_project / project_breakdown 집계
+    # by_project / project_breakdown 집계 — T-082: validate_project_name 적용
     by_project: Dict[str, int] = {}
     for d in unique_directives:
-        proj = d["project"]
+        proj = validate_project_name(d["project"])
         by_project[proj] = by_project.get(proj, 0) + 1
 
     # error 유형 집계 — T-072: error_breakdown 분리, "error" 키는 숫자로만
@@ -1133,10 +1190,10 @@ async def get_reports(project: Optional[str] = None):
         else:
             error_breakdown["task_failure"] += 1
 
-    # by_project 집계
+    # by_project 집계 — T-082: validate_project_name 적용
     by_project: Dict[str, int] = {}
     for r in unique_reports:
-        proj = r["project"]
+        proj = validate_project_name(r["project"])
         by_project[proj] = by_project.get(proj, 0) + 1
 
     return {
@@ -1358,10 +1415,10 @@ async def get_analytics():
                         pass
         avg_task_duration_min = round(sum(durations) / len(durations), 1) if durations else -1.0
 
-        # by_project 집계 (directives 기반)
+        # by_project 집계 (directives 기반) — T-082: validate_project_name 적용
         by_project_dir: Dict[str, Dict] = defaultdict(lambda: {"completed": 0, "error": 0, "total": 0})
         for d in all_directives:
-            proj = d["project"]
+            proj = validate_project_name(d["project"])
             by_project_dir[proj]["total"] += 1
             if d["status"] == "completed":
                 by_project_dir[proj]["completed"] += 1
@@ -1432,7 +1489,7 @@ async def get_analytics():
         total_conversations = 0
         by_project_conv: Dict[str, Dict] = {}
         for r in aads_conv_rows:
-            proj = CONV_PROJECT_MAP.get(r["project"] or "", r["project"] or "unknown")
+            proj = validate_project_name(CONV_PROJECT_MAP.get(r["project"] or "", r["project"] or "AADS"))
             cnt = int(r["cnt"])
             tok = int(r["tokens"])
             cost = float(r["cost"])
@@ -1445,11 +1502,44 @@ async def get_analytics():
             by_project_conv[proj]["tokens"] += tok
             by_project_conv[proj]["cost_usd"] += cost
 
-        # total_cost: 데이터 없으면 cost_status = "not_configured"
-        if total_cost_usd == 0.0 and not aads_conv_rows:
+        # T-083: task_cost_log 테이블에서 실제 비용 집계
+        try:
+            cost_rows = await conn.fetch(
+                """
+                SELECT project,
+                       COALESCE(SUM(total_tokens),0) AS tot_tok,
+                       COALESCE(SUM(cost_usd),0) AS cost
+                FROM task_cost_log
+                GROUP BY project
+                """
+            )
+        except Exception:
+            cost_rows = []
+
+        cost_total_usd = 0.0
+        cost_total_tokens = 0
+        for cr in cost_rows:
+            proj = _normalize_project(cr["project"] or "AADS")
+            cost = float(cr["cost"])
+            tok = int(cr["tot_tok"])
+            cost_total_usd += cost
+            cost_total_tokens += tok
+            mapped = CONV_PROJECT_MAP.get(proj.lower(), proj)
+            if mapped not in by_project_conv:
+                by_project_conv[mapped] = {"conversations": 0, "tokens": 0, "cost_usd": 0.0}
+            by_project_conv[mapped]["tokens"] += tok
+            by_project_conv[mapped]["cost_usd"] += cost
+
+        # task_cost_log 우선, 없으면 aads_conversations fallback
+        if cost_total_usd > 0:
+            total_cost_usd = cost_total_usd
+            total_tokens = cost_total_tokens
+            cost_status = "active"
+            cost_message = ""
+        elif total_cost_usd == 0.0 and not aads_conv_rows:
             total_cost_usd = -1.0
             cost_status = "not_configured"
-            cost_message = "비용 추적 미설정 (T-082 예정)"
+            cost_message = "비용 추적 미설정"
         else:
             cost_status = "active"
             cost_message = ""
@@ -1513,3 +1603,44 @@ async def get_analytics():
     except Exception as e:
         logger.error(f"analytics error: {e}")
         raise HTTPException(500, f"Analytics error: {e}")
+
+
+# ─── (10) POST /dashboard/cost-log — T-083 ───────────────────────────────────
+from pydantic import BaseModel
+
+class CostLogEntry(BaseModel):
+    task_id: str
+    session_id: str = ""
+    model: str = "claude-sonnet-4-6"
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    project: str = "AADS"
+    server: str = ""
+
+
+@router.post("/dashboard/cost-log")
+async def post_cost_log(entry: CostLogEntry):
+    """Claude API 비용 로그 기록 (T-083).
+    원격 에이전트/브릿지에서 task 완료 시 호출.
+    """
+    total_tokens = entry.input_tokens + entry.output_tokens
+    proj = _normalize_project(entry.project)
+    try:
+        async with memory_store.pool.acquire() as conn:
+            row_id = await conn.fetchval(
+                """
+                INSERT INTO task_cost_log
+                    (task_id, session_id, model, input_tokens, output_tokens,
+                     total_tokens, cost_usd, project, server, logged_at)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+                RETURNING id
+                """,
+                entry.task_id, entry.session_id, entry.model,
+                entry.input_tokens, entry.output_tokens,
+                total_tokens, entry.cost_usd, proj, entry.server,
+            )
+        return {"status": "ok", "id": row_id, "total_tokens": total_tokens, "cost_usd": entry.cost_usd}
+    except Exception as e:
+        logger.error(f"cost_log error: {e}")
+        raise HTTPException(500, f"cost_log error: {e}")
