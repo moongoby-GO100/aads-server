@@ -1,0 +1,23 @@
+[Unit]
+Description=AADS Remote Agent Daemon (T-062: 116서버 newtalk_v2)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/aads-remote
+ExecStart=/usr/bin/python3 /root/aads-remote/aads_remote_agent.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aads-remote-agent
+
+# 환경변수
+EnvironmentFile=/root/aads-remote/.env
+Environment=AADS_AGENT_ID=REMOTE_116
+Environment=AADS_REMOTE_PORT=9900
+
+[Install]
+WantedBy=multi-user.target

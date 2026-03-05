@@ -1,0 +1,26 @@
+[Unit]
+Description=AADS Remote Agent Daemon (T-061)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/aads-remote
+ExecStart=/usr/bin/python3 /root/aads-remote/aads_remote_agent.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aads-remote-agent
+
+# 환경변수 (.env 파일로 관리 — git 커밋 금지)
+# EnvironmentFile=/root/aads-remote/.env
+Environment=AADS_REMOTE_KEY=changeme
+Environment=AADS_SERVER=https://aads.newtalk.kr/api/v1
+Environment=AADS_AGENT_ID=REMOTE_211
+Environment=AADS_REMOTE_PORT=9900
+Environment=AADS_LOG_FILE=/var/log/aads_remote_agent.log
+
+[Install]
+WantedBy=multi-user.target
