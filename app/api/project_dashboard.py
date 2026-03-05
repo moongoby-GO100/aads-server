@@ -662,6 +662,34 @@ REPORTS_LOCAL_DIR = Path("/root/project-docs/aads/reports")
 GITHUB_REPORTS_BASE = "https://github.com/moongoby/project-docs/blob/main/aads/reports"
 
 
+def _classify_project(content: str) -> str:
+    """보고서/지시서 내용에서 프로젝트 자동 분류"""
+    if re.search(r"kis-autotrade|KIS|kis_autotrade|한국투자", content):
+        return "KIS"
+    if re.search(r"shortflow|ShortFlow|숏폼|쇼츠|템빨", content):
+        return "ShortFlow"
+    if re.search(r"newtalk|뉴톡|NewTalk|newtalk-v2", content):
+        return "NewTalk"
+    if re.search(r"nas-image|nasync|NAS|nas(?!\w)", content):
+        return "NAS"
+    if re.search(r"go100|GO100", content):
+        return "GO100"
+    return "AADS"
+
+
+def _classify_error(content: str) -> str:
+    """에러 내용에서 에러 유형 분류"""
+    if re.search(r"OAuth|401|Failed to authenticate", content):
+        return "auth_expired"
+    if re.search(r"Permission denied", content):
+        return "permission_denied"
+    if re.search(r"command not found", content):
+        return "env_error"
+    if re.search(r"timeout|Watchdog|1200초|Session terminated", content, re.IGNORECASE):
+        return "timeout"
+    return "task_failure"
+
+
 def _parse_directive_file(filepath: Path, default_status: str) -> Dict:
     """지시서 파일 파싱 — running/done 양쪽 지원"""
     filename = filepath.name
@@ -694,7 +722,9 @@ def _parse_directive_file(filepath: Path, default_status: str) -> Dict:
         for line in yaml_block.splitlines():
             line = line.strip()
             if line.startswith("task_id:"):
-                task_id = line.split(":", 1)[1].strip()
+                val = line.split(":", 1)[1].strip()
+                if re.match(r"T-\d+", val):
+                    task_id = val
             elif line.startswith("project:"):
                 project = line.split(":", 1)[1].strip()
             elif line.startswith("status:"):
@@ -709,15 +739,42 @@ def _parse_directive_file(filepath: Path, default_status: str) -> Dict:
             title = filename
     else:
         # 일반 텍스트 형식
-        m_id = re.search(r"Task\s*ID\s*[:\s]+([^\s\n]+)", raw, re.IGNORECASE)
-        if m_id:
-            task_id = m_id.group(1).strip()
         m_title = re.search(r"제목\s*[:\s]+(.+)", raw)
         if m_title:
             title = m_title.group(1).strip()
         m_proj = re.search(r"프로젝트\s*[:\s]+(.+)", raw)
         if m_proj:
             project = m_proj.group(1).strip()
+
+    # Task ID 파싱 우선순위 (YAML에서 못 찾은 경우)
+    if task_id == "UNKNOWN":
+        _INVALID_IDS = {"ERROR", "UNKNOWN", "TIMEOUT"}
+        # 1순위: "Task ID: T-NNN"
+        m1 = re.search(r"Task\s*ID\s*:\s*(T-\d+)", raw, re.IGNORECASE)
+        if m1 and m1.group(1) not in _INVALID_IDS:
+            task_id = m1.group(1)
+        else:
+            # 2순위: "task_id: T-NNN"
+            m2 = re.search(r"task_id\s*:\s*(T-\d+)", raw, re.IGNORECASE)
+            if m2 and m2.group(1) not in _INVALID_IDS:
+                task_id = m2.group(1)
+            else:
+                # 3순위: "# T-NNN"
+                m3 = re.search(r"#\s*(T-\d+)", raw)
+                if m3 and m3.group(1) not in _INVALID_IDS:
+                    task_id = m3.group(1)
+                else:
+                    # 4순위: 파일명에서 T-NNN
+                    m4 = re.search(r"(T-\d+)", filename)
+                    if m4 and m4.group(1) not in _INVALID_IDS:
+                        task_id = m4.group(1)
+                    else:
+                        # 최종: UNTAGGED-{파일명 앞8자}
+                        task_id = f"UNTAGGED-{filename[:8]}"
+
+    # 프로젝트 자동 분류 (project가 기본값이면 내용으로 분류)
+    if project == "AADS":
+        project = _classify_project(raw[:2000])
 
     # 파일명에서 날짜 추출 (AADS_YYYYMMDD_HHMMSS_...)
     fname_dt = re.search(r"(\d{8}_\d{6})", filename)
@@ -768,7 +825,9 @@ def _parse_report_file(filepath: Path) -> Dict:
         for line in yaml_block.splitlines():
             line = line.strip()
             if line.startswith("task_id:"):
-                task_id = line.split(":", 1)[1].strip()
+                val = line.split(":", 1)[1].strip()
+                if re.match(r"T-\d+", val):
+                    task_id = val
             elif line.startswith("project:"):
                 project = line.split(":", 1)[1].strip()
             elif line.startswith("status:"):
@@ -781,11 +840,38 @@ def _parse_report_file(filepath: Path) -> Dict:
     body = re.sub(r"^---.*?---\s*\n", "", head, flags=re.DOTALL).strip()
     summary = body[:200].replace("\n", " ") if body else filename
 
-    # 파일명에서 task_id 추출 (예: AADS_20260305_130433_BRIDGE_RESULT.md)
+    # Task ID 파싱 우선순위
     if task_id == "UNKNOWN":
-        fname_match = re.search(r"_(T-\d+)_", filename)
-        if fname_match:
-            task_id = fname_match.group(1)
+        _INVALID_IDS = {"ERROR", "UNKNOWN", "TIMEOUT"}
+        # 1순위: "Task ID: T-NNN"
+        m1 = re.search(r"Task\s*ID\s*:\s*(T-\d+)", head, re.IGNORECASE)
+        if m1 and m1.group(1) not in _INVALID_IDS:
+            task_id = m1.group(1)
+        else:
+            # 2순위: "task_id: T-NNN"
+            m2 = re.search(r"task_id\s*:\s*(T-\d+)", head, re.IGNORECASE)
+            if m2 and m2.group(1) not in _INVALID_IDS:
+                task_id = m2.group(1)
+            else:
+                # 3순위: "# T-NNN"
+                m3 = re.search(r"#\s*(T-\d+)", head)
+                if m3 and m3.group(1) not in _INVALID_IDS:
+                    task_id = m3.group(1)
+                else:
+                    # 4순위: 파일명에서 T-NNN
+                    m4 = re.search(r"(T-\d+)", filename)
+                    if m4 and m4.group(1) not in _INVALID_IDS:
+                        task_id = m4.group(1)
+                    else:
+                        # 최종: UNTAGGED-{파일명 앞8자}
+                        task_id = f"UNTAGGED-{filename[:8]}"
+
+    # 에러 유형 분류
+    error_type = _classify_error(head) if status == "error" else ""
+
+    # 프로젝트 자동 분류 (project가 기본값이면 내용+제목으로 분류)
+    if project == "AADS":
+        project = _classify_project(head + " " + filename)
 
     github_url = f"{GITHUB_REPORTS_BASE}/{filename}" if REPORTS_LOCAL_DIR.exists() else ""
 
@@ -793,6 +879,7 @@ def _parse_report_file(filepath: Path) -> Dict:
         "task_id": task_id,
         "filename": filename,
         "status": status,
+        "error_type": error_type,
         "completed_at": completed_at,
         "project": project,
         "github_url": github_url,
@@ -821,13 +908,52 @@ async def get_directives():
     completed_count = sum(1 for d in directives if d["status"] == "completed")
     error_count = sum(1 for d in directives if d["status"] == "error")
 
+    # 중복 제거: 같은 task_id는 가장 최신 1건만
+    seen_task_ids: Dict[str, Dict] = {}
+    duplicates: List[Dict] = []
+    for d in directives:
+        tid = d["task_id"]
+        if tid.startswith("UNTAGGED-"):
+            # UNTAGGED는 중복 처리 없이 그대로
+            seen_task_ids[f"__uniq_{d['file_path']}"] = d
+        elif tid not in seen_task_ids:
+            seen_task_ids[tid] = d
+        else:
+            # 이미 있으면 최신 것을 유지
+            existing = seen_task_ids[tid]
+            if d["created_at"] > existing["created_at"]:
+                duplicates.append(existing)
+                seen_task_ids[tid] = d
+            else:
+                duplicates.append(d)
+
+    unique_directives = list(seen_task_ids.values())
+
+    # by_project 집계
+    by_project: Dict[str, int] = {}
+    for d in unique_directives:
+        proj = d["project"]
+        by_project[proj] = by_project.get(proj, 0) + 1
+
+    # error 유형 집계 (directives는 유형 분류 없이 총계만)
+    error_breakdown: Dict[str, int] = {
+        "total": error_count,
+        "auth_expired": 0,
+        "permission_denied": 0,
+        "env_error": 0,
+        "timeout": 0,
+        "task_failure": error_count,
+    }
+
     return {
         "status": "ok",
         "total": len(directives),
+        "unique_tasks": len(unique_directives),
         "running": running_count,
         "completed": completed_count,
-        "error": error_count,
-        "directives": directives,
+        "error": error_breakdown,
+        "by_project": by_project,
+        "directives": unique_directives,
     }
 
 
@@ -852,10 +978,58 @@ async def get_reports():
             for f in result_files:
                 reports.append(_parse_report_file(f))
 
+    # 중복 제거: 같은 task_id는 가장 최신 1건만
+    seen_task_ids: Dict[str, Dict] = {}
+    duplicates: List[Dict] = []
+    for r in reports:
+        tid = r["task_id"]
+        if tid.startswith("UNTAGGED-"):
+            seen_task_ids[f"__uniq_{r['filename']}"] = r
+        elif tid not in seen_task_ids:
+            seen_task_ids[tid] = r
+        else:
+            existing = seen_task_ids[tid]
+            if r["completed_at"] > existing["completed_at"]:
+                duplicates.append(existing)
+                seen_task_ids[tid] = r
+            else:
+                duplicates.append(r)
+
+    unique_reports = list(seen_task_ids.values())
+
+    # 집계
+    success_count = sum(1 for r in unique_reports if r["status"] == "success")
+    error_reports = [r for r in unique_reports if r["status"] == "error"]
+
+    error_breakdown: Dict[str, int] = {
+        "total": len(error_reports),
+        "auth_expired": 0,
+        "permission_denied": 0,
+        "env_error": 0,
+        "timeout": 0,
+        "task_failure": 0,
+    }
+    for r in error_reports:
+        et = r.get("error_type", "task_failure") or "task_failure"
+        if et in error_breakdown:
+            error_breakdown[et] += 1
+        else:
+            error_breakdown["task_failure"] += 1
+
+    # by_project 집계
+    by_project: Dict[str, int] = {}
+    for r in unique_reports:
+        proj = r["project"]
+        by_project[proj] = by_project.get(proj, 0) + 1
+
     return {
         "status": "ok",
         "total": len(reports),
-        "reports": reports,
+        "unique_reports": len(unique_reports),
+        "success": success_count,
+        "error": error_breakdown,
+        "by_project": by_project,
+        "reports": unique_reports,
     }
 
 
