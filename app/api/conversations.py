@@ -31,6 +31,18 @@ def _to_kst_str(dt_or_str) -> str:
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
+# T-089: 필수 채널 정의
+REQUIRED_CHANNELS = [
+    {"name": "AADS", "category": "conversation:aads"},
+    {"name": "KIS", "category": "conversation:kis"},
+    {"name": "SALES", "category": "conversation:sales"},
+    {"name": "ShortFlow", "category": "conversation:sf"},
+    {"name": "GO100", "category": "conversation:go100"},
+    {"name": "NewTalk", "category": "conversation:newtalk"},
+    {"name": "NAS", "category": "conversation:nas"},
+    {"name": "통합지휘소", "category": "cross_msg"},
+]
+
 # channel name ↔ DB category 매핑
 CHANNEL_MAP = {
     "aads": "conversation:aads",
@@ -39,7 +51,9 @@ CHANNEL_MAP = {
     "sf": "conversation:sf",
     "shortflow": "conversation:sf",
     "ntv2": "conversation:ntv2",
-    "newtalk": "conversation:ntv2",
+    "newtalk": "conversation:newtalk",
+    "go100": "conversation:go100",
+    "nas": "conversation:nas",
 }
 
 CHANNEL_DISPLAY = {
@@ -47,7 +61,11 @@ CHANNEL_DISPLAY = {
     "kis": "KIS",
     "sales": "SALES",
     "sf": "ShortFlow",
+    "shortflow": "ShortFlow",
     "ntv2": "NewTalk",
+    "newtalk": "NewTalk",
+    "go100": "GO100",
+    "nas": "NAS",
 }
 
 
@@ -123,8 +141,8 @@ def _merge_chunks(rows: list) -> list:
 async def list_channels():
     """
     채널(프로젝트)별 대화 건수 및 마지막 활동 시간.
-    Response: {"channels": [{"name":"KIS","count":N,"last_message":"..."},...]}
-    GO100 채널은 system_memory에 데이터가 없으면 "수집 미설정" 상태로 항상 포함 (T-081)
+    T-089: REQUIRED_CHANNELS 기반으로 누락 채널은 count=0, status="수집 미설정" 추가.
+    통합지휘소: system_memory WHERE category LIKE 'cross_msg_%' 집계.
     """
     async with memory_store.pool.acquire() as conn:
         rows = await conn.fetch("""
@@ -135,32 +153,49 @@ async def list_channels():
             GROUP BY category
             ORDER BY MAX(created_at) DESC
         """)
-        channels = []
-        present = set()
+        # 통합지휘소: cross_msg_ 집계
+        cross_msg_row = await conn.fetchrow("""
+            SELECT COUNT(*) as count, MAX(created_at) as last_message
+            FROM system_memory
+            WHERE category LIKE 'cross_msg_%'
+        """)
+
+        # DB에서 실제 데이터 있는 채널 조회
+        db_channels: dict = {}
         for row in rows:
             ch_name = _category_to_channel(row["category"])
-            present.add(ch_name.upper())
-            channels.append({
+            db_channels[ch_name.upper()] = {
                 "name": ch_name,
                 "category": row["category"],
                 "count": row["count"],
-                # T-085: last_message를 KST ISO 형식으로 통일
                 "last_message": _to_kst_str(row["last_message"]),
-            })
-        # T-081: GO100, T-086: NewTalk/NAS — 데이터 없으면 "수집 미설정" 으로 항상 표시
-        for missing_name, missing_cat in [
-            ("GO100", "conversation:go100"),
-            ("NewTalk", "conversation:ntv2"),
-            ("NAS", "conversation:nas"),
-        ]:
-            if missing_name.upper() not in present:
+            }
+
+        # 통합지휘소 추가
+        cross_count = int(cross_msg_row["count"]) if cross_msg_row else 0
+        cross_last = _to_kst_str(cross_msg_row["last_message"]) if cross_msg_row else None
+        db_channels["통합지휘소"] = {
+            "name": "통합지휘소",
+            "category": "cross_msg",
+            "count": cross_count,
+            "last_message": cross_last,
+        }
+
+        # REQUIRED_CHANNELS 순서대로 응답 구성 (누락 채널은 수집 미설정 추가)
+        channels = []
+        for rc in REQUIRED_CHANNELS:
+            key = rc["name"].upper() if rc["name"] != "통합지휘소" else "통합지휘소"
+            if key in db_channels:
+                channels.append(db_channels[key])
+            else:
                 channels.append({
-                    "name": missing_name,
-                    "category": missing_cat,
+                    "name": rc["name"],
+                    "category": rc["category"],
                     "count": 0,
                     "last_message": None,
                     "status": "수집 미설정",
                 })
+
         return {"channels": channels}
 
 

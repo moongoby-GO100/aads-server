@@ -84,6 +84,32 @@ def _now_kst() -> str:
     return datetime.now(KST).strftime("%Y-%m-%dT%H:%M:%S+09:00")
 
 
+# ─── T-089: VALID_PROJECTS 화이트리스트 ────────────────────────────────────
+VALID_PROJECTS = {'AADS', 'KIS', 'GO100', 'ShortFlow', 'NewTalk', 'NAS', 'SALES'}
+
+
+def _validate_project_name(raw: str) -> str:
+    """T-089: 화이트리스트 기반 프로젝트명 정규화"""
+    if not raw or not isinstance(raw, str):
+        return 'AADS'
+    cleaned = raw.strip()
+    if len(cleaned) > 30:
+        return 'AADS'
+    upper = cleaned.upper()
+    MAPPING = {
+        'AADS': 'AADS', 'AADS-SERVER': 'AADS', 'AADS-DASHBOARD': 'AADS',
+        'KIS': 'KIS', 'KIS-AUTOTRADE-V41': 'KIS', 'KIS-AUTOTRADE-V4.1': 'KIS',
+        'GO100': 'GO100', 'SHORTFLOW': 'ShortFlow', 'SF': 'ShortFlow',
+        'NEWTALK': 'NewTalk', 'NAS': 'NAS', 'SALES': 'SALES',
+    }
+    if upper in MAPPING:
+        return MAPPING[upper]
+    for key, val in MAPPING.items():
+        if key in upper:
+            return val
+    return 'AADS'
+
+
 # ─── T-082: 프로젝트명 정규화 맵 ───────────────────────────────────────────
 _PROJECT_NORM_MAP = {
     "aads": "AADS",
@@ -742,17 +768,17 @@ def _classify_project(filename: str, content: str) -> str:
     # 1단계: 파일명 접두사 매칭 (최우선)
     fname = filename.upper()
     if fname.startswith("KIS_"):
-        return "KIS"
+        return _validate_project_name("KIS")
     if fname.startswith("GO100_"):
-        return "GO100"
+        return _validate_project_name("GO100")
     if fname.startswith("SF_"):
-        return "ShortFlow"
+        return _validate_project_name("ShortFlow")
     if fname.startswith("NT_"):
-        return "NewTalk"
+        return _validate_project_name("NewTalk")
     if fname.startswith("SALES_"):
-        return "SALES"
+        return _validate_project_name("SALES")
     if fname.startswith("NAS_"):
-        return "NAS"
+        return _validate_project_name("NAS")
 
     # 2단계: AADS 인프라 키워드 → AADS
     aads_keywords = [
@@ -769,43 +795,43 @@ def _classify_project(filename: str, content: str) -> str:
     ]
     for kw in aads_keywords:
         if kw in content_lower:
-            return "AADS"
+            return _validate_project_name("AADS")
 
     # 3단계: 프로젝트 고유 키워드 매칭
     # KIS
     kis_keywords = ['kis', 'autotrade', '자동매매', '피라미딩', 'desk', '한국투자',
                     'fractal trend', 'pyramiding']
     if any(kw.lower() in content_lower for kw in kis_keywords):
-        return "KIS"
+        return _validate_project_name("KIS")
 
     # GO100
     go100_keywords = ['go100', '지오백', '100세']
     if any(kw.lower() in content_lower for kw in go100_keywords):
-        return "GO100"
+        return _validate_project_name("GO100")
 
     # ShortFlow
     sf_keywords = ['shortflow', 'sf', '숏폼', '영상', 'economy', 'finance', 'tech',
                    'ffmpeg', 'shortform video', 'run_v4_pipeline']
     if any(kw.lower() in content_lower for kw in sf_keywords):
-        return "ShortFlow"
+        return _validate_project_name("ShortFlow")
 
     # NewTalk
     nt_keywords = ['newtalk', '뉴톡', 'v1fix', 'v2', '이미지', 'goods']
     if any(kw.lower() in content_lower for kw in nt_keywords):
-        return "NewTalk"
+        return _validate_project_name("NewTalk")
 
     # NAS
     nas_keywords = ['nas', 'nasync', 'n2']
     if any(kw.lower() in content_lower for kw in nas_keywords):
-        return "NAS"
+        return _validate_project_name("NAS")
 
     # SALES
     sales_keywords = ['sales', 'marketing', '마케팅', '영업']
     if any(kw.lower() in content_lower for kw in sales_keywords):
-        return "SALES"
+        return _validate_project_name("SALES")
 
     # 4단계: 기본값 AADS
-    return "AADS"
+    return _validate_project_name("AADS")
 
 
 def _classify_error(content: str) -> Optional[str]:
@@ -870,7 +896,7 @@ def _parse_directive_file(filepath: Path, default_status: str) -> Dict:
         title_match = re.search(r"^제목\s*:\s*(.+)", raw, re.MULTILINE)
         if title_match:
             _t = title_match.group(1).strip()
-            title = _t if len(_t) <= 50 else filename
+            title = _t[:100] if _t else filename
         else:
             title = filename
     else:
@@ -878,7 +904,7 @@ def _parse_directive_file(filepath: Path, default_status: str) -> Dict:
         m_title = re.search(r"^제목\s*:\s*(.+)", raw, re.MULTILINE)
         if m_title:
             _t = m_title.group(1).strip()
-            title = _t if len(_t) <= 50 else filename
+            title = _t[:100] if _t else filename
         # T-082: 콜론 필수 + 50자 이하만 허용 (본문 내용 오분류 방지)
         m_proj = re.search(r"^프로젝트\s*:\s*([^\n]{1,50})", raw, re.MULTILINE)
         if m_proj:
@@ -1105,6 +1131,10 @@ async def get_directives(project: Optional[str] = None):
     f_completed = sum(1 for d in unique_directives if d["status"] == "completed")
     f_error = sum(1 for d in unique_directives if d["status"] == "error")
 
+    # T-089: 반환 전 일괄 정규화
+    for item in unique_directives:
+        item['project'] = _validate_project_name(item.get('project', 'AADS'))
+
     return {
         "status": "ok",
         "total": len(unique_directives),
@@ -1195,6 +1225,10 @@ async def get_reports(project: Optional[str] = None):
     for r in unique_reports:
         proj = validate_project_name(r["project"])
         by_project[proj] = by_project.get(proj, 0) + 1
+
+    # T-089: 반환 전 일괄 정규화
+    for item in unique_reports:
+        item['project'] = _validate_project_name(item.get('project', 'AADS'))
 
     return {
         "status": "ok",
@@ -1551,7 +1585,7 @@ async def get_analytics():
             dir_info = by_project_dir.get(proj, {})
             conv_info = by_project_conv.get(proj, {})
             by_project.append({
-                "project": proj,
+                "project": _validate_project_name(proj),
                 "conversations": conv_info.get("conversations", 0),
                 "cost_usd": round(conv_info.get("cost_usd", 0.0), 6),
                 "tokens": conv_info.get("tokens", 0),
@@ -1617,6 +1651,78 @@ class CostLogEntry(BaseModel):
     cost_usd: float = 0.0
     project: str = "AADS"
     server: str = ""
+
+
+@router.get("/dashboard/costs")
+async def get_costs():
+    """비용 추적 현황 — task_cost_log 기반 (T-089)"""
+    try:
+        async with memory_store.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT task_id, project, model, input_tokens, output_tokens,
+                       total_tokens, cost_usd, logged_at
+                FROM task_cost_log
+                ORDER BY logged_at DESC
+                LIMIT 100
+                """
+            )
+            summary_row = await conn.fetchrow(
+                """
+                SELECT
+                    COUNT(*) AS total_entries,
+                    COALESCE(SUM(cost_usd), 0) AS total_cost_usd,
+                    COALESCE(SUM(total_tokens), 0) AS total_tokens
+                FROM task_cost_log
+                """
+            )
+            by_project_rows = await conn.fetch(
+                """
+                SELECT project,
+                       COUNT(*) AS entries,
+                       COALESCE(SUM(cost_usd), 0) AS cost_usd,
+                       COALESCE(SUM(total_tokens), 0) AS tokens
+                FROM task_cost_log
+                GROUP BY project
+                ORDER BY cost_usd DESC
+                """
+            )
+
+        entries = []
+        for r in rows:
+            entries.append({
+                "task_id": r["task_id"],
+                "project": _validate_project_name(r["project"] or "AADS"),
+                "model": r["model"] or "",
+                "input_tokens": r["input_tokens"] or 0,
+                "output_tokens": r["output_tokens"] or 0,
+                "total_tokens": r["total_tokens"] or 0,
+                "cost_usd": float(r["cost_usd"] or 0),
+                "logged_at": _to_kst_str(r["logged_at"]),
+            })
+
+        by_project = []
+        for r in by_project_rows:
+            by_project.append({
+                "project": _validate_project_name(r["project"] or "AADS"),
+                "entries": int(r["entries"]),
+                "cost_usd": float(r["cost_usd"] or 0),
+                "tokens": int(r["tokens"] or 0),
+            })
+
+        return {
+            "status": "ok",
+            "summary": {
+                "total_entries": int(summary_row["total_entries"]),
+                "total_cost_usd": round(float(summary_row["total_cost_usd"]), 6),
+                "total_tokens": int(summary_row["total_tokens"]),
+            },
+            "by_project": by_project,
+            "entries": entries,
+        }
+    except Exception as e:
+        logger.error(f"costs error: {e}")
+        raise HTTPException(500, f"Costs error: {e}")
 
 
 @router.post("/dashboard/cost-log")
