@@ -48,7 +48,6 @@ services:
       # 지시서/보고서 파일 접근 (T-090: directive content API)
       - /root/.genspark:/root/.genspark:ro
       - /root/project-docs:/root/project-docs:ro
-      - /root/aads/aads-docs:/root/aads/aads-docs:rw
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:

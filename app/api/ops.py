@@ -8,6 +8,10 @@ AADS-113: 운영 통합 DB API 엔드포인트
 - /api/v1/ops/health-check         (GET)
 - /api/v1/ops/stalled              (GET)
 - /api/v1/ops/auto-recover         (POST)
+AADS-116: 유지보수 모드 API
+- /api/v1/ops/maintenance/start    (POST)
+- /api/v1/ops/maintenance/end      (POST)
+- /api/v1/ops/maintenance/status   (GET)
 """
 import os
 from datetime import datetime, timezone, timedelta
@@ -67,6 +71,18 @@ class CommitRecord(BaseModel):
     lines_added: int = 0
     lines_deleted: int = 0
     http_verified: bool = False
+
+
+class MaintenanceStartRequest(BaseModel):
+    server: str
+    reason: str
+    estimated_minutes: int = 15
+    services: List[str] = []
+    started_by: str = "ceo"
+
+
+class MaintenanceEndRequest(BaseModel):
+    server: str
 
 
 # ─── Directive Lifecycle ──────────────────────────────────────────────────────
@@ -399,6 +415,11 @@ async def health_check():
                 "WHERE server='68' AND metric_name='blocked_tasks_count' "
                 "ORDER BY recorded_at DESC LIMIT 1"
             )
+            # AADS-116: 유지보수 모드 상태
+            maintenance_row = await conn.fetchrow(
+                "SELECT server, reason FROM maintenance_schedule "
+                "WHERE status='active' ORDER BY started_at DESC LIMIT 1"
+            )
         finally:
             await conn.close()
 
@@ -411,6 +432,7 @@ async def health_check():
             if last_seen_check_ts else None
         )
 
+        maintenance_active = maintenance_row is not None
         return {
             "pipeline_healthy": pipeline_healthy,
             "stalled_count": stalled_count,
@@ -423,6 +445,9 @@ async def health_check():
             "blocked_tasks_count": int(blocked_tasks or 0),
             "undetected_tasks_count": int(undetected_tasks or 0),
             "last_seen_tasks_check": last_seen_check_kst,
+            "maintenance_active": maintenance_active,
+            "maintenance_server": maintenance_row["server"] if maintenance_active else None,
+            "maintenance_reason": maintenance_row["reason"] if maintenance_active else None,
             "issues": _build_issues(stalled_queue, stalled_running, pipeline_blocked),
         }
     except Exception as e:
@@ -431,6 +456,9 @@ async def health_check():
             "pipeline_healthy": False,
             "error": str(e),
             "stalled_count": -1,
+            "maintenance_active": False,
+            "maintenance_server": None,
+            "maintenance_reason": None,
             "issues": [{"type": "db_error", "detail": str(e)}],
         }
 
@@ -487,4 +515,104 @@ async def auto_recover(request: Request):
         return {"ok": True, "issues_found": len(results), "results": results}
     except Exception as e:
         logger.error("ops_auto_recover_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Maintenance Mode (AADS-116) ──────────────────────────────────────────────
+
+@router.post("/ops/maintenance/start")
+async def maintenance_start(req: MaintenanceStartRequest):
+    """유지보수 모드 시작 — 해당 서비스 감시 일시 정지."""
+    try:
+        conn = await _get_conn()
+        try:
+            # 기존 active 유지보수 종료
+            await conn.execute(
+                "UPDATE maintenance_schedule SET status='ended', actual_end=NOW() "
+                "WHERE server=$1 AND status='active'",
+                req.server
+            )
+            estimated_end = datetime.now(tz=KST) + timedelta(minutes=req.estimated_minutes)
+            row = await conn.fetchrow(
+                """
+                INSERT INTO maintenance_schedule
+                    (server, reason, services_paused, started_at, estimated_end, started_by, status)
+                VALUES ($1, $2, $3, NOW(), $4, $5, 'active')
+                RETURNING id, started_at, estimated_end
+                """,
+                req.server, req.reason, req.services, estimated_end, req.started_by
+            )
+        finally:
+            await conn.close()
+        logger.info("maintenance_start", server=req.server, reason=req.reason,
+                    services=req.services, estimated_minutes=req.estimated_minutes)
+        return {
+            "ok": True,
+            "id": row["id"],
+            "server": req.server,
+            "reason": req.reason,
+            "services_paused": req.services,
+            "started_at": row["started_at"].isoformat(),
+            "estimated_end": row["estimated_end"].isoformat(),
+        }
+    except Exception as e:
+        logger.error("maintenance_start_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/ops/maintenance/end")
+async def maintenance_end(req: MaintenanceEndRequest):
+    """유지보수 모드 종료 — 감시 재개."""
+    try:
+        conn = await _get_conn()
+        try:
+            result = await conn.execute(
+                "UPDATE maintenance_schedule SET status='ended', actual_end=NOW() "
+                "WHERE server=$1 AND status='active'",
+                req.server
+            )
+        finally:
+            await conn.close()
+        updated = int(result.split()[-1]) if result else 0
+        logger.info("maintenance_end", server=req.server, updated=updated)
+        return {"ok": True, "server": req.server, "ended_count": updated}
+    except Exception as e:
+        logger.error("maintenance_end_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/ops/maintenance/status")
+async def maintenance_status(server: Optional[str] = None):
+    """현재 유지보수 상태 조회."""
+    try:
+        conn = await _get_conn()
+        try:
+            if server:
+                row = await conn.fetchrow(
+                    "SELECT * FROM maintenance_schedule "
+                    "WHERE server=$1 AND status='active' ORDER BY started_at DESC LIMIT 1",
+                    server
+                )
+            else:
+                row = await conn.fetchrow(
+                    "SELECT * FROM maintenance_schedule "
+                    "WHERE status='active' ORDER BY started_at DESC LIMIT 1"
+                )
+        finally:
+            await conn.close()
+
+        if not row:
+            return {"active": False, "server": server}
+
+        return {
+            "active": True,
+            "server": row["server"],
+            "reason": row["reason"],
+            "started_at": row["started_at"].isoformat() if row["started_at"] else None,
+            "estimated_end": row["estimated_end"].isoformat() if row["estimated_end"] else None,
+            "services_paused": list(row["services_paused"]) if row["services_paused"] else [],
+            "started_by": row["started_by"],
+        }
+    except Exception as e:
+        logger.error("maintenance_status_error", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))

@@ -755,20 +755,6 @@ def validate_project_name(project: str) -> str:
     return "AADS"
 
 
-def _project_from_task_id(task_id: str):
-    """T-107: task_id에서 프로젝트 직접 판별.
-    AADS-095 → 'AADS', KIS-168 → 'KIS', T-095 → None (기존 _classify_project 폴백 필요)
-    """
-    REVERSE_MAP = {
-        "AADS": "AADS", "KIS": "KIS", "GO100": "GO100",
-        "SF": "ShortFlow", "NT": "NewTalk", "SALES": "SALES", "NAS": "NAS",
-    }
-    for prefix, project in REVERSE_MAP.items():
-        if task_id.startswith(f"{prefix}-"):
-            return project
-    return None  # T-xxx는 기존 _classify_project 사용
-
-
 def _classify_project(filename: str, content: str) -> str:
     """파일명 접두사 + 본문 키워드로 프로젝트 자동 분류 (T-082 전면 재작성)
 
@@ -1181,7 +1167,7 @@ async def get_directives(project: Optional[str] = None):
                 if project and project.upper() not in ("ALL", ""):
                     query += " WHERE project ILIKE $1"
                     params.append(project)
-                query += " ORDER BY (CASE WHEN status='running' THEN 0 ELSE 1 END), completed_at DESC NULLS LAST LIMIT 1000"
+                query += " ORDER BY completed_at DESC NULLS LAST LIMIT 500"
                 pt_rows = await conn.fetch(query, *params)
                 for row in pt_rows:
                     directives.append(_pt_row_to_directive(dict(row)))
@@ -1306,7 +1292,7 @@ async def get_reports(project: Optional[str] = None):
                 if project and project.upper() not in ("ALL", ""):
                     query += " AND project ILIKE $1"
                     params.append(project)
-                query += " ORDER BY completed_at DESC NULLS LAST LIMIT 600"
+                query += " ORDER BY completed_at DESC NULLS LAST LIMIT 300"
                 pt_rows = await conn.fetch(query, *params)
                 # T-095: task_cost_log에서 task_id별 비용 조회
                 task_ids = [r["task_id"] for r in pt_rows if r["task_id"]]
@@ -1970,105 +1956,35 @@ async def get_analytics():
 
 
 # ─── (10-a) POST /dashboard/complete-running ─────────────────────────────────
-# 프로젝트 → 담당 서버 SSH 매핑
-_PROJECT_SERVER_MAP = {
-    "KIS": "root@211.188.53.126",
-    "GO100": "root@211.188.53.126",
-    "AADS": "local",  # aads-server 자신의 호스트 마운트 없음 → SSH로 68 접근
-    "SF": "root@114.203.209.93",
-    "SHORTFLOW": "root@114.203.209.93",
-    "NAS": "root@114.203.209.93",
-    "NEWTALK": "root@114.203.209.93",
-    "NTV2": "root@114.203.209.93",
-    "SALES": "root@114.203.209.93",
-}
-_RUNNING_DIR = "/root/.genspark/directives/running"
-
-def _is_task_still_running_on_server(task_id: str, server_ssh: str) -> bool:
-    """해당 서버의 running/ 디렉토리에 task_id가 포함된 파일이 있으면 True(실제 실행 중)"""
-    import subprocess, shlex
-    try:
-        clean_id = task_id.replace("KIS-", "T-").replace("GO100-", "T-").replace("AADS-", "T-")
-        raw_id = task_id.split("-", 1)[-1] if "-" in task_id else task_id
-        if server_ssh == "local":
-            result = subprocess.run(
-                ["sh", "-c", f"grep -rl '{raw_id}\|{task_id}' {_RUNNING_DIR}/ 2>/dev/null | head -1"],
-                capture_output=True, text=True, timeout=5
-            )
-        else:
-            result = subprocess.run(
-                ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5", server_ssh,
-                 f"grep -rl '{raw_id}' {_RUNNING_DIR}/ 2>/dev/null | head -1"],
-                capture_output=True, text=True, timeout=8
-            )
-        return bool(result.stdout.strip())
-    except Exception as e:
-        logger.warning(f"running 확인 실패({task_id}@{server_ssh}): {e}")
-        return False  # 확인 불가 시 완료 처리 안 함 (보수적)
-
 @router.post("/dashboard/complete-running")
 async def complete_running_tasks(project: Optional[str] = None):
-    """running 태스크 중 서버 running/ 디렉토리에 없는 것만 completed 처리 (실제 완료 검증)"""
-    import asyncio
-    skipped_ids: List[str] = []   # 실제 실행 중 → 건너뜀
-    verified_ids: List[str] = []  # 파일 없음 = 완료 확인
-    unverified_ids: List[str] = []  # SSH 실패 등 확인 불가
-
+    """진행중 상태인 task를 일괄 완료(completed) 처리 — 스턱 태스크 정리"""
+    updated = 0
     try:
         async with memory_store.pool.acquire() as conn:
             if project and project != "all":
                 rows = await conn.fetch(
-                    "SELECT task_id, project, source FROM project_tasks WHERE status='running' AND project=$1",
+                    "SELECT task_id, source FROM project_tasks WHERE status = 'running' AND project = $1",
+                    project
+                )
+                result = await conn.execute(
+                    "UPDATE project_tasks SET status='completed', completed_at=NOW() WHERE status='running' AND project=$1",
                     project
                 )
             else:
                 rows = await conn.fetch(
-                    "SELECT task_id, project, source FROM project_tasks WHERE status='running'"
+                    "SELECT task_id, source FROM project_tasks WHERE status = 'running'"
                 )
-
-        # 각 task 실제 실행 여부 병렬 확인
-        loop = asyncio.get_event_loop()
-        for row in rows:
-            tid = row["task_id"]
-            proj = (row["project"] or "").upper()
-            server_ssh = _PROJECT_SERVER_MAP.get(proj, "root@211.188.53.126")
-            still_running = await loop.run_in_executor(
-                None, _is_task_still_running_on_server, tid, server_ssh
-            )
-            if still_running:
-                skipped_ids.append(tid)
-            else:
-                verified_ids.append(tid)
-
-        # 검증 완료된 것만 DB 업데이트
-        updated = 0
-        if verified_ids:
-            async with memory_store.pool.acquire() as conn:
                 result = await conn.execute(
-                    "UPDATE project_tasks SET status='completed', completed_at=NOW() WHERE task_id = ANY($1::varchar[]) AND status='running'",
-                    verified_ids
+                    "UPDATE project_tasks SET status='completed', completed_at=NOW() WHERE status='running'"
                 )
-                updated = int(result.split()[-1]) if result else 0
-
+            updated = int(result.split()[-1]) if result else 0
     except Exception as e:
         logger.error(f"complete_running error: {e}")
         raise HTTPException(500, str(e))
 
-    msg_parts = []
-    if updated:
-        msg_parts.append(f"{updated}건 완료 처리")
-    if skipped_ids:
-        msg_parts.append(f"{len(skipped_ids)}건 실행 중 (유지): {', '.join(skipped_ids)}")
-    if not msg_parts:
-        msg_parts.append("완료 처리할 항목 없음")
-
-    logger.info(f"complete_running: 완료={updated}, 실행중유지={len(skipped_ids)}, 확인불가={len(unverified_ids)}")
-    return {
-        "status": "ok",
-        "updated": updated,
-        "skipped": skipped_ids,
-        "message": " / ".join(msg_parts),
-    }
+    logger.info(f"complete_running: {updated}건 완료처리 (project={project or 'all'})")
+    return {"status": "ok", "updated": updated, "message": f"{updated}건이 완료 처리되었습니다."}
 
 
 # ─── (10) POST /dashboard/cost-log — T-083 ───────────────────────────────────
