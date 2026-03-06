@@ -120,10 +120,55 @@ if [ "${PREEMPT_P0:-false}" = "true" ]; then
     fi
 fi
 
+# ─── R-014: WRAP 게이트 — P0/P1 완료 후 다음 P0/P1 진입 차단 ──────────────
+_WRAP_GATE_LOG_FILE="/tmp/.aads_wrap_gate_log"
+check_wrap_gate() {
+    local pending_file="$1"
+    local cur_priority
+    cur_priority=$(grep -m1 -iE '^priority[[:space:]]*[:：]' "$pending_file" 2>/dev/null \
+        | sed 's/^[^:：]*[:：][[:space:]]*//' | awk '{print $1}' | tr -d '[:space:]')
+    case "$cur_priority" in
+        P2|P3|p2|p3) return 0 ;;
+    esac
+    local last_done_file
+    last_done_file=$(ls -t "$DONE_DIR"/*.md 2>/dev/null | grep -v WRAP | head -1 || true)
+    [ -z "$last_done_file" ] && return 0
+    local last_priority
+    last_priority=$(grep -m1 -iE '^priority[[:space:]]*[:：]' "$last_done_file" 2>/dev/null \
+        | sed 's/^[^:：]*[:：][[:space:]]*//' | awk '{print $1}' | tr -d '[:space:]')
+    case "$last_priority" in
+        P0|P1|p0|p1) ;;
+        *) return 0 ;;
+    esac
+    local last_task_id
+    last_task_id=$(grep -m1 "^Task ID:" "$last_done_file" 2>/dev/null \
+        | sed 's/^Task ID:[[:space:]]*//' | tr -d '[:space:]' || true)
+    [ -z "$last_task_id" ] && return 0
+    local wrap_found=false
+    ls "$DONE_DIR"/*"${last_task_id}"*WRAP*.md 2>/dev/null | grep -q . && wrap_found=true
+    if ! $wrap_found; then
+        ls /root/aads/aads-docs/shared/verify/*WRAP* 2>/dev/null | grep -q . && wrap_found=true
+    fi
+    $wrap_found && return 0
+    local _now _last
+    _now=$(date +%s)
+    _last=$(cat "$_WRAP_GATE_LOG_FILE" 2>/dev/null || echo 0)
+    if [ $((_now - _last)) -ge 600 ]; then
+        echo "[WRAP_GATE_BLOCKED: ${last_task_id}] WRAP 파일 없음 — 다음 P0/P1 작업 10분 대기"
+        echo "$_now" > "$_WRAP_GATE_LOG_FILE"
+    fi
+    return 1
+}
+# ─────────────────────────────────────────────────────────────────────────────
+
 # ─── T-106: pending → running 우선순위 선택 이동 ────────────
 if [ -d "$PENDING_DIR" ] && ls "${PENDING_DIR}"/*.md 2>/dev/null | head -1 > /dev/null 2>&1; then
     NEXT_FILE=$(_select_next_file "$PENDING_DIR")
     if [ -n "$NEXT_FILE" ] && [ -f "$NEXT_FILE" ]; then
+        if ! check_wrap_gate "$NEXT_FILE"; then
+            echo "$(date '+%Y-%m-%d %H:%M:%S') WRAP_GATE_BLOCKED: $(basename "$NEXT_FILE") — 대기"
+            exit 0
+        fi
         echo "$(date '+%Y-%m-%d %H:%M:%S') Selected: $(basename "$NEXT_FILE")"
         if [ "$DRY_RUN" = "true" ]; then
             echo "[DRY-RUN] Would move: $NEXT_FILE → $RUNNING_DIR/"
