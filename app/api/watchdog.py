@@ -214,9 +214,16 @@ async def watchdog_summary():
             FROM error_log ORDER BY last_seen DESC LIMIT 5
         """)
 
+        recovery_seeds = await conn.fetchval(
+            "SELECT COUNT(*) FROM recovery_log WHERE auto_executable = true"
+        )
+
+        stats_dict = dict(stats)
+        stats_dict["recovery_seeds"] = int(recovery_seeds or 0)
+
         return {
             "status": "ok",
-            "stats": dict(stats),
+            "stats": stats_dict,
             "recent_errors": [dict(r) for r in recent],
         }
 
