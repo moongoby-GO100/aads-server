@@ -206,6 +206,32 @@ async def _upsert_task_result(value: Dict[str, Any], category: str) -> Dict[str,
                 started_at, completed_at,
                 json.dumps(value, ensure_ascii=False),
             )
+        # running→completed 전이: task_id가 달라도 같은 작업이면 running 레코드 업데이트
+        # (auto_trigger는 "AADS-120"으로, done_watcher는 "AADS_20260306_..._BRIDGE"로 기록할 수 있음)
+        if status == "completed":
+            try:
+                # 1) 같은 task_id의 running 레코드 → completed
+                await conn.execute(
+                    """UPDATE project_tasks SET status='completed',
+                       completed_at=COALESCE($2, NOW()), summary=COALESCE($3, summary)
+                       WHERE task_id=$1 AND status='running'""",
+                    task_id, completed_at, summary
+                )
+                # 2) RESULT 파일명 기반 task_id에서 원본 task_id 추출 매칭
+                #    done_watcher가 "AADS-120"으로 기록하면, auto_trigger의 "AADS-120" running도 업데이트
+                #    반대로 파일명 기반이면 directive_lifecycle에서 실제 task_id 찾아서 매칭
+                import re as _re2
+                if _re2.match(r"[A-Z]+-\d+$", task_id):
+                    # 실제 task_id (AADS-120 형식) → 파일명 기반 running 레코드도 완료 처리
+                    await conn.execute(
+                        """UPDATE project_tasks SET status='completed',
+                           completed_at=COALESCE($2, NOW()), summary=COALESCE($3, summary)
+                           WHERE task_id LIKE $1 || '%' AND status='running' AND project=$4""",
+                        task_id, completed_at, summary, project
+                    )
+            except Exception:
+                pass  # best-effort
+
         return {"status": "ok", "project": project, "task_id": task_id, "source": source}
     except Exception as e:
         return {"status": "error", "detail": str(e)}
