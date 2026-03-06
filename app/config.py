@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     AADS_ADMIN_EMAIL: str = "admin@aads.dev"
     AADS_ADMIN_PASSWORD: str = ""
 
+    # Strategist 에이전트 모델 (AADS-125)
+    STRATEGIST_COLLECT_MODEL: str = "gemini-2.5-flash"
+    STRATEGIST_ANALYZE_MODEL: str = "claude-opus-4.6"
+
     # 환경
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "INFO"

@@ -19,6 +19,7 @@ from app.api.approval import router as approval_router
 from app.api.documents import router as documents_router
 from app.api.ops import router as ops_router
 from app.api.lessons import router as lessons_router
+from app.api.strategy import router as strategy_router
 from app.config import settings
 from app.graph.builder import compile_graph
 from app.services.checkpointer import get_checkpointer
@@ -137,3 +138,4 @@ app.include_router(documents_router, prefix="/api/v1/documents", tags=["document
 app.include_router(channels_router, prefix="/api/v1", tags=["channels"])
 app.include_router(ops_router, prefix="/api/v1", tags=["ops"])
 app.include_router(lessons_router, prefix="/api/v1", tags=["lessons"])
+app.include_router(strategy_router, prefix="/api/v1", tags=["strategy"])
