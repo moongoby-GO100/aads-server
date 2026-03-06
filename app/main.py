@@ -17,6 +17,7 @@ from app.api.ceo_chat import router as ceo_chat_router
 from app.api.watchdog import router as watchdog_router
 from app.api.approval import router as approval_router
 from app.api.documents import router as documents_router
+from app.api.ops import router as ops_router
 from app.config import settings
 from app.graph.builder import compile_graph
 from app.services.checkpointer import get_checkpointer
@@ -133,3 +134,4 @@ app.include_router(watchdog_router, prefix="/api/v1", tags=["watchdog"])
 app.include_router(approval_router, prefix="/api/v1", tags=["approval"])
 app.include_router(documents_router, prefix="/api/v1/documents", tags=["documents"])
 app.include_router(channels_router, prefix="/api/v1", tags=["channels"])
+app.include_router(ops_router, prefix="/api/v1", tags=["ops"])
