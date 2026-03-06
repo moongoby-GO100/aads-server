@@ -45,6 +45,9 @@ services:
     volumes:
       # Docker-in-Docker: DockerSandbox (D-011) 실행을 위한 소켓 마운트
       - /var/run/docker.sock:/var/run/docker.sock
+      # 지시서/보고서 파일 접근 (T-090: directive content API)
+      - /root/.genspark:/root/.genspark:ro
+      - /root/project-docs:/root/project-docs:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:

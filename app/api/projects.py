@@ -22,6 +22,54 @@ class CreateProjectResponse(BaseModel):
     interrupt_payload: dict | None = None
 
 
+
+@router.get("/projects", summary="파이프라인 프로젝트 목록")
+async def list_projects(limit: int = 20, offset: int = 0):
+    """체크포인트 DB에서 pipeline 프로젝트 목록 반환."""
+    from app.main import app_state
+    import asyncpg
+    import os
+
+    db_url = os.getenv('DATABASE_URL', '').replace('postgresql://', 'postgres://')
+    if not db_url:
+        return {"projects": [], "total": 0}
+
+    try:
+        conn = await asyncpg.connect(db_url)
+        rows = await conn.fetch(
+            "SELECT DISTINCT thread_id FROM checkpoints WHERE thread_id LIKE 'project-%' ORDER BY thread_id LIMIT $1 OFFSET $2",
+            limit, offset
+        )
+        total_row = await conn.fetchval("SELECT COUNT(DISTINCT thread_id) FROM checkpoints WHERE thread_id LIKE 'project-%'")
+        await conn.close()
+    except Exception:
+        return {"projects": [], "total": 0}
+
+    graph = app_state.get("graph")
+    projects = []
+    for row in rows:
+        thread_id = row["thread_id"]
+        project_id = thread_id.replace("project-", "", 1)
+        proj = {"project_id": project_id, "thread_id": thread_id, "status": "unknown",
+                "checkpoint_stage": None, "progress_percent": 0, "llm_calls": 0, "total_cost_usd": 0.0}
+        if graph:
+            try:
+                state = await graph.aget_state({"configurable": {"thread_id": thread_id}})
+                if state and state.values:
+                    v = state.values
+                    stage = v.get("checkpoint_stage", "")
+                    proj["checkpoint_stage"] = stage
+                    proj["status"] = "checkpoint_pending" if stage == "interrupted" or state.next else stage or "completed"
+                    proj["llm_calls"] = v.get("llm_calls_count", 0)
+                    proj["total_cost_usd"] = v.get("total_cost_usd", 0.0)
+                    STAGES = ["requirements", "design", "development", "testing", "judging", "deployment"]
+                    proj["progress_percent"] = int((STAGES.index(stage) / len(STAGES)) * 100) if stage in STAGES else 0
+            except Exception:
+                pass
+        projects.append(proj)
+
+    return {"projects": projects, "total": int(total_row or 0)}
+
 @router.post("/projects", response_model=CreateProjectResponse, summary="프로젝트 생성", description="PM 에이전트로 요구사항 분석 후 checkpoint_pending 상태 반환")
 async def create_project(req: CreateProjectRequest):
     """프로젝트 생성 → PM 노드까지 실행 → interrupt에서 멈춤."""

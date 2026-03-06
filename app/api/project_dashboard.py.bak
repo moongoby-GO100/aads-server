@@ -878,7 +878,6 @@ def _parse_directive_file(filepath: Path, default_status: str) -> Dict:
 
     # YAML 프런트매터 (--- ... ---)
     yaml_match = re.match(r"^---\s*\n(.*?)\n---", raw, re.DOTALL)
-    completed_at_from_yaml = ""
     if yaml_match:
         yaml_block = yaml_match.group(1)
         for line in yaml_block.splitlines():
@@ -892,7 +891,7 @@ def _parse_directive_file(filepath: Path, default_status: str) -> Dict:
             elif line.startswith("status:"):
                 status = line.split(":", 1)[1].strip()
             elif line.startswith("completed_at:"):
-                completed_at_from_yaml = line.split(":", 1)[1].strip()
+                created_at = line.split(":", 1)[1].strip()
         # 제목은 파일명에서 유추 (T-082: 50자 초과 시 description으로 취급)
         title_match = re.search(r"^제목\s*:\s*(.+)", raw, re.MULTILINE)
         if title_match:
@@ -941,46 +940,30 @@ def _parse_directive_file(filepath: Path, default_status: str) -> Dict:
     if project == "AADS":
         project = _classify_project(filename, raw[:2000])
 
-    # 파일명에서 시작 시각 추출 (AADS_YYYYMMDD_HHMMSS_...) — started_at 기준
-    started_at_from_fname = ""
+    # 파일명에서 날짜 추출 (AADS_YYYYMMDD_HHMMSS_...)
     fname_dt = re.search(r"(\d{8}_\d{6})", filename)
-    if fname_dt:
+    if fname_dt and not created_at:
         dt_str = fname_dt.group(1)
         try:
             dt = datetime.strptime(dt_str, "%Y%m%d_%H%M%S").replace(tzinfo=KST)
-            started_at_from_fname = dt.strftime("%Y-%m-%dT%H:%M:%S+09:00")
+            created_at = dt.strftime("%Y-%m-%dT%H:%M:%S+09:00")
         except Exception:
             pass
-    if started_at_from_fname and not created_at:
-        created_at = started_at_from_fname
 
     # 에러 유형 분류 (T-072: 지시서에도 error_type 포함)
     error_type = _classify_error(raw[:2000]) if status == "error" else None
 
-    # Summary: first 500 chars of non-frontmatter content
-    summary_text = ""
-    try:
-        raw_no_front = re.sub(r"^---\s*\n.*?\n---\s*\n", "", raw, count=1, flags=re.DOTALL)
-        summary_text = raw_no_front.strip()[:500]
-    except Exception:
-        pass
-
-    # started_at: 파일명 타임스탬프 우선 (작업 시작 시각)
-    # completed_at: YAML completed_at 우선, 없으면 파일 mtime
-    _started = started_at_from_fname or created_at
-    _completed = completed_at_from_yaml or (created_at if default_status == "completed" else "")
     return {
         "task_id": task_id,
         "title": title,
         "status": status,
         "project": project,
         "error_type": error_type or "",
-        "created_at": _started,
-        "started_at": _started,
-        "completed_at": _completed,
+        "created_at": created_at,
+        "started_at": created_at,
+        "completed_at": created_at if default_status == "completed" else "",
         "duration_seconds": None,
         "file_path": str(filepath),
-        "summary": summary_text,
     }
 
 
@@ -1076,18 +1059,6 @@ def _parse_report_file(filepath: Path) -> Dict:
 
 
 # ─── T-090: project_tasks → Directive 형식 변환 헬퍼 ─────────────────────────
-def _extract_dt_from_id(task_id: str) -> str:
-    """task_id / filename에서 날짜 추출: YYYYMMDD_HHMMSS → KST ISO"""
-    m = re.search(r"(\d{8}_\d{6})", task_id or "")
-    if m:
-        try:
-            dt = datetime.strptime(m.group(1), "%Y%m%d_%H%M%S").replace(tzinfo=KST)
-            return dt.strftime("%Y-%m-%dT%H:%M:%S+09:00")
-        except Exception:
-            pass
-    return ""
-
-
 def _pt_row_to_directive(row) -> Dict:
     """project_tasks 레코드를 directive 형식으로 변환"""
     raw = row.get("raw_data") or {}
@@ -1111,13 +1082,12 @@ def _pt_row_to_directive(row) -> Dict:
         "status": status,
         "project": _validate_project_name(row.get("project") or "AADS"),
         "error_type": "",
-        "created_at": _to_kst_str(row.get("started_at") or _extract_dt_from_id(row.get("task_id","")) or row.get("created_at")),
-        "started_at": _to_kst_str(row.get("started_at") or _extract_dt_from_id(row.get("task_id","")) or row.get("created_at")),
+        "created_at": _to_kst_str(row.get("started_at") or row.get("created_at")),
+        "started_at": _to_kst_str(row.get("started_at")),
         "completed_at": _to_kst_str(row.get("completed_at")),
         "duration_seconds": None,
         "file_path": f"[{row.get('source','remote')}] {row.get('task_id','')}",
         "source": row.get("source") or "remote",
-        "summary": row.get("summary") or "",
     }
 
 
@@ -1133,7 +1103,6 @@ def _pt_row_to_report(row) -> Dict:
         "github_url": "",
         "summary": row.get("summary") or "",
         "source": row.get("source") or "remote",
-        "cost_usd": 0.0,
     }
 
 
@@ -1294,27 +1263,8 @@ async def get_reports(project: Optional[str] = None):
                     params.append(project)
                 query += " ORDER BY completed_at DESC NULLS LAST LIMIT 300"
                 pt_rows = await conn.fetch(query, *params)
-                # T-095: task_cost_log에서 task_id별 비용 조회
-                task_ids = [r["task_id"] for r in pt_rows if r["task_id"]]
-                cost_by_task: Dict[str, float] = {}
-                if task_ids:
-                    try:
-                        cost_log_rows = await conn.fetch(
-                            """
-                            SELECT task_id, COALESCE(SUM(cost_usd), 0) AS cost
-                            FROM task_cost_log
-                            WHERE task_id = ANY($1::varchar[])
-                            GROUP BY task_id
-                            """,
-                            task_ids
-                        )
-                        cost_by_task = {r["task_id"]: float(r["cost"]) for r in cost_log_rows}
-                    except Exception:
-                        cost_by_task = {}
                 for row in pt_rows:
-                    r = _pt_row_to_report(dict(row))
-                    r["cost_usd"] = cost_by_task.get(r["task_id"], 0.0)
-                    reports.append(r)
+                    reports.append(_pt_row_to_report(dict(row)))
     except Exception as e:
         logger.warning(f"project_tasks reports 조회 실패 (무시): {e}")
 
@@ -1384,142 +1334,30 @@ async def get_reports(project: Optional[str] = None):
 
 
 # ─── (7) GET /dashboard/reports/{filename} ───────────────────────────────────
-@router.get("/dashboard/reports/{filename:path}")
+@router.get("/dashboard/reports/{filename}")
 async def get_report_detail(filename: str):
-    """특정 보고서 전문 반환 (마크다운 또는 project_tasks summary)"""
+    """특정 보고서 전문 반환 (마크다운)"""
     # 경로 순회 방지
-    if ".." in filename:
+    if ".." in filename or "/" in filename:
         raise HTTPException(400, "Invalid filename")
 
-    # [REMOTE_...] 형식 처리 → project_tasks 조회
-    import re as _re
-    _remote_match = _re.match(r"^\[(.+?)\]\s+(.+)$", filename)
-    if _remote_match:
-        _source = _remote_match.group(1)
-        _task_id = _remote_match.group(2).strip()
-        try:
-            async with memory_store.pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    "SELECT task_id, project, title, summary, status, completed_at FROM project_tasks WHERE task_id=$1 LIMIT 1",
-                    _task_id
-                )
-                if row:
-                    d = dict(row)
-                    content_text = ("# " + str(d.get('title', _task_id)) + "\n\n" +
-                        "**Task ID**: " + str(d.get('task_id','')) + "\n" +
-                        "**Project**: " + str(d.get('project','')) + "\n" +
-                        "**Status**: " + str(d.get('status','')) + "\n" +
-                        "**Source**: " + _source + "\n" +
-                        "**Completed**: " + _to_kst_str(d.get('completed_at','')) + "\n\n" +
-                        "## Summary\n\n" + str(d.get('summary', '')))
-                    return {"status": "ok", "filename": filename, "content": content_text, "source": "project_tasks"}
-        except Exception as e:
-            logger.warning(f"report detail DB 조회 실패: {e}")
-        raise HTTPException(404, f"Report '{filename}' not found in DB")
-
-    # 로컬 파일 검색
-    if "/" in filename:
-        raise HTTPException(400, "Invalid filename")
+    # 로컬 reports 디렉터리 우선
     candidate = REPORTS_LOCAL_DIR / filename
     if not candidate.exists():
         candidate = DIRECTIVES_DONE_DIR / filename
     if not candidate.exists():
-        # Archived 검색
-        archived = Path("/root/.genspark/directives/archived")
-        if archived.exists():
-            matches = list(archived.rglob(filename))
-            if matches:
-                candidate = matches[0]
-            else:
-                candidate = None
-        else:
-            candidate = None
-
-    if not candidate or not candidate.exists():
-        # project_tasks fallback: task_id로 검색
-        try:
-            async with memory_store.pool.acquire() as conn:
-                _tid = filename.replace("_RESULT.md", "").replace(".md", "")
-                row = await conn.fetchrow(
-                    "SELECT task_id, project, title, summary, status, completed_at FROM project_tasks WHERE task_id=$1 LIMIT 1",
-                    _tid
-                )
-                if row:
-                    d = dict(row)
-                    content_text = ("# " + str(d.get('title', _tid)) + "\n\n" +
-                        "**Summary**\n\n" + str(d.get('summary', '내용 없음')))
-                    return {"status": "ok", "filename": filename, "content": content_text, "source": "project_tasks_fallback"}
-        except Exception:
-            pass
         raise HTTPException(404, f"Report '{filename}' not found")
 
     try:
-        file_content = candidate.read_text(encoding="utf-8", errors="replace")
+        content = candidate.read_text(encoding="utf-8", errors="replace")
     except Exception as e:
         raise HTTPException(500, f"Failed to read report: {e}")
 
     return {
         "status": "ok",
         "filename": filename,
-        "content": file_content,
+        "content": content,
     }
-
-
-# ─── (7b) GET /dashboard/directives/{task_id} ────────────────────────────────
-@router.get("/dashboard/directives/{task_id}")
-async def get_directive_detail(task_id: str):
-    """특정 지시서/결과 내용 반환 (task_id 또는 파일명)"""
-    if ".." in task_id or "/" in task_id:
-        raise HTTPException(400, "Invalid task_id")
-
-    # 1) 로컬 파일 검색 (done 디렉터리)
-    if task_id.endswith(".md"):
-        for candidate in [DIRECTIVES_DONE_DIR / task_id]:
-            if candidate.exists():
-                try:
-                    return {"status": "ok", "task_id": task_id, "content": candidate.read_text(encoding="utf-8", errors="replace"), "source": "file"}
-                except Exception as e:
-                    raise HTTPException(500, str(e))
-
-    # 2) 파일 패턴 검색 (done 디렉터리에서 task_id 포함 파일)
-    if DIRECTIVES_DONE_DIR.exists():
-        matches = list(DIRECTIVES_DONE_DIR.glob(f"*{task_id}*"))
-        if matches:
-            try:
-                return {"status": "ok", "task_id": task_id, "content": matches[0].read_text(encoding="utf-8", errors="replace"), "source": "file", "filename": matches[0].name}
-            except Exception:
-                pass
-
-    # 3) archived 디렉터리 검색
-    archived = Path("/root/.genspark/directives/archived")
-    if archived.exists():
-        matches = list(archived.rglob(f"*{task_id}*"))
-        if matches:
-            try:
-                return {"status": "ok", "task_id": task_id, "content": matches[0].read_text(encoding="utf-8", errors="replace"), "source": "archived", "filename": matches[0].name}
-            except Exception:
-                pass
-
-    # 4) project_tasks DB 조회 (summary 반환)
-    try:
-        async with memory_store.pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT task_id, project, title, summary, status, completed_at FROM project_tasks WHERE task_id=$1 LIMIT 1",
-                task_id
-            )
-            if row:
-                d = dict(row)
-                content_text = ("# " + str(d.get('title','')) + "\n\n" +
-                    "**Task ID**: " + str(d.get('task_id','')) + "\n" +
-                    "**Project**: " + str(d.get('project','')) + "\n" +
-                    "**Status**: " + str(d.get('status','')) + "\n" +
-                    "**Completed**: " + _to_kst_str(d.get('completed_at','')) + "\n\n" +
-                    "## Summary\n\n" + str(d.get('summary','')))
-                return {"status": "ok", "task_id": task_id, "content": content_text, "source": "project_tasks"}
-    except Exception as e:
-        logger.warning(f"directive detail DB 조회 실패: {e}")
-
-    raise HTTPException(404, f"Directive '{task_id}' not found")
 
 
 # ─── (8) GET /dashboard/task-history ─────────────────────────────────────────
@@ -1711,14 +1549,17 @@ async def get_analytics():
             elif d["status"] == "error":
                 by_project_dir[proj]["error"] += 1
 
-        # daily_trend — 지시서 파일 created_at 기반 (최근 7일) — cost는 DB 쿼리 후 채움
+        # daily_trend — 지시서 파일 created_at 기반 (최근 7일)
         now_kst = datetime.now(KST)
         daily_count: Dict[str, int] = defaultdict(int)
         for d in all_directives:
             ca = d.get("created_at", "")
             if ca and len(ca) >= 10:
                 daily_count[ca[:10]] += 1
-        daily_cost_map: Dict[str, float] = {}  # T-095: async block에서 채워짐
+        daily_trend = []
+        for i in range(6, -1, -1):
+            day = (now_kst - timedelta(days=i)).strftime("%Y-%m-%d")
+            daily_trend.append({"date": day, "tasks": daily_count.get(day, 0), "cost_usd": 0.0})
 
         # error_distribution — directive error_type 분류
         error_type_count: Dict[str, int] = defaultdict(int)
@@ -1777,26 +1618,6 @@ async def get_analytics():
                 )
             except Exception:
                 cost_rows = []
-
-            # T-095: 일별 비용 집계 (daily_trend에 반영)
-            try:
-                daily_cost_rows = await conn.fetch(
-                    """
-                    SELECT DATE(logged_at AT TIME ZONE 'Asia/Seoul') AS day,
-                           COALESCE(SUM(cost_usd), 0) AS cost
-                    FROM task_cost_log
-                    GROUP BY 1
-                    """
-                )
-                daily_cost_map = {str(r["day"]): float(r["cost"]) for r in daily_cost_rows}
-            except Exception:
-                daily_cost_map = {}
-
-        # T-095: daily_trend 완성 (cost는 DB 쿼리 결과 반영)
-        daily_trend = []
-        for i in range(6, -1, -1):
-            day = (now_kst - timedelta(days=i)).strftime("%Y-%m-%d")
-            daily_trend.append({"date": day, "tasks": daily_count.get(day, 0), "cost_usd": daily_cost_map.get(day, 0.0)})
 
         now_utc = datetime.now(timezone.utc)
 
@@ -1882,46 +1703,32 @@ async def get_analytics():
 
         # by_project 최종 병합 (directives + conversations)
         all_projs = set(by_project_dir.keys()) | set(by_project_conv.keys())
-        _merged: Dict[str, Dict] = {}
-        for proj in all_projs:
-            norm = _validate_project_name(proj)
+        by_project = []
+        for proj in sorted(all_projs):
             dir_info = by_project_dir.get(proj, {})
             conv_info = by_project_conv.get(proj, {})
-            if norm not in _merged:
-                _merged[norm] = {"conversations": 0, "cost_usd": 0.0, "tokens": 0,
-                                  "completed": 0, "error": 0, "total": 0}
-            _merged[norm]["conversations"] += conv_info.get("conversations", 0)
-            _merged[norm]["cost_usd"] += conv_info.get("cost_usd", 0.0)
-            _merged[norm]["tokens"] += conv_info.get("tokens", 0)
-            _merged[norm]["completed"] = max(_merged[norm]["completed"], dir_info.get("completed", 0))
-            _merged[norm]["error"] = max(_merged[norm]["error"], dir_info.get("error", 0))
-            _merged[norm]["total"] = max(_merged[norm]["total"], dir_info.get("total", 0))
-        by_project = [
-            {"project": k, "conversations": v["conversations"],
-             "cost_usd": round(v["cost_usd"], 6), "tokens": v["tokens"],
-             "last_activity": "", "completed": v["completed"],
-             "error": v["error"], "total": v["total"]}
-            for k, v in sorted(_merged.items())
-            if v["total"] > 0 or v["conversations"] > 0
-        ]
+            by_project.append({
+                "project": _validate_project_name(proj),
+                "conversations": conv_info.get("conversations", 0),
+                "cost_usd": round(conv_info.get("cost_usd", 0.0), 6),
+                "tokens": conv_info.get("tokens", 0),
+                "last_activity": "",
+                "completed": dir_info.get("completed", 0),
+                "error": dir_info.get("error", 0),
+                "total": dir_info.get("total", 0),
+            })
 
         # 서버별 현황 (cross_msg 기반)
         active_servers = 0
         by_server = []
-        _seen_servers: set = set()
         for r in server_rows:
-            svr = r["server"] or ""
-            # 오염된 서버 이름 필터링: 25자 초과, AADS_MGR 포함, 중복
-            if len(svr) > 25 or "AADS_MGR" in svr or svr in _seen_servers:
-                continue
-            _seen_servers.add(svr)
             lr = r["last_report"]
             lr_aware = lr.replace(tzinfo=timezone.utc) if lr and not lr.tzinfo else lr
             diff_min = (now_utc - lr_aware).total_seconds() / 60 if lr_aware else 9999
             if diff_min < 5:
                 active_servers += 1
             by_server.append({
-                "server": svr,
+                "server": r["server"],
                 "tasks": int(r["tasks"]),
                 "status": "online" if diff_min < 5 else "offline",
                 "last_report": _to_kst_str(lr_aware) if lr else "",
@@ -1953,38 +1760,6 @@ async def get_analytics():
     except Exception as e:
         logger.error(f"analytics error: {e}")
         raise HTTPException(500, f"Analytics error: {e}")
-
-
-# ─── (10-a) POST /dashboard/complete-running ─────────────────────────────────
-@router.post("/dashboard/complete-running")
-async def complete_running_tasks(project: Optional[str] = None):
-    """진행중 상태인 task를 일괄 완료(completed) 처리 — 스턱 태스크 정리"""
-    updated = 0
-    try:
-        async with memory_store.pool.acquire() as conn:
-            if project and project != "all":
-                rows = await conn.fetch(
-                    "SELECT task_id, source FROM project_tasks WHERE status = 'running' AND project = $1",
-                    project
-                )
-                result = await conn.execute(
-                    "UPDATE project_tasks SET status='completed', completed_at=NOW() WHERE status='running' AND project=$1",
-                    project
-                )
-            else:
-                rows = await conn.fetch(
-                    "SELECT task_id, source FROM project_tasks WHERE status = 'running'"
-                )
-                result = await conn.execute(
-                    "UPDATE project_tasks SET status='completed', completed_at=NOW() WHERE status='running'"
-                )
-            updated = int(result.split()[-1]) if result else 0
-    except Exception as e:
-        logger.error(f"complete_running error: {e}")
-        raise HTTPException(500, str(e))
-
-    logger.info(f"complete_running: {updated}건 완료처리 (project={project or 'all'})")
-    return {"status": "ok", "updated": updated, "message": f"{updated}건이 완료 처리되었습니다."}
 
 
 # ─── (10) POST /dashboard/cost-log — T-083 ───────────────────────────────────
