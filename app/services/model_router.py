@@ -86,6 +86,12 @@ AGENT_MODELS: dict[str, dict[str, ModelConfig]] = {
         "fallback": ModelConfig("anthropic", "claude-sonnet-4-6",  3.0,  15.0),
         "error":    ModelConfig("anthropic", "claude-haiku-4-5",   0.80,  4.0),
     },
+    # Planner: claude-sonnet-4-6 ($3/$15) — PRD/아키텍처/Phase 생성 (AADS-126)
+    "planner": {
+        "primary":  ModelConfig("anthropic", "claude-sonnet-4-6",  3.0,  15.0),
+        "fallback": ModelConfig("anthropic", "claude-haiku-4-5",   0.80,  4.0),
+        "error":    ModelConfig("anthropic", "claude-haiku-4-5",   0.80,  4.0),
+    },
 }
 
 
