@@ -755,6 +755,20 @@ def validate_project_name(project: str) -> str:
     return "AADS"
 
 
+def _project_from_task_id(task_id: str):
+    """T-107: task_id에서 프로젝트 직접 판별.
+    AADS-095 → 'AADS', KIS-168 → 'KIS', T-095 → None (기존 _classify_project 폴백 필요)
+    """
+    REVERSE_MAP = {
+        "AADS": "AADS", "KIS": "KIS", "GO100": "GO100",
+        "SF": "ShortFlow", "NT": "NewTalk", "SALES": "SALES", "NAS": "NAS",
+    }
+    for prefix, project in REVERSE_MAP.items():
+        if task_id.startswith(f"{prefix}-"):
+            return project
+    return None  # T-xxx는 기존 _classify_project 사용
+
+
 def _classify_project(filename: str, content: str) -> str:
     """파일명 접두사 + 본문 키워드로 프로젝트 자동 분류 (T-082 전면 재작성)
 

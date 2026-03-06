@@ -107,6 +107,24 @@ async def put_system_memory(
     return resp
 
 
+def _normalize_task_id_for_db(task_id: str, project: str) -> str:
+    """T-107: DB 저장 시 접두사 ID로 정규화 (AADS-095, KIS-168 등)"""
+    PREFIX_MAP = {
+        "AADS": "AADS", "KIS": "KIS", "GO100": "GO100",
+        "ShortFlow": "SF", "NewTalk": "NT", "SALES": "SALES", "NAS": "NAS",
+    }
+    task_id = (
+        task_id.replace("\u2011", "-").replace("\u2013", "-").replace("\u2014", "-")
+    )
+    for p in PREFIX_MAP.values():
+        if task_id.startswith(f"{p}-"):
+            return task_id
+    if task_id.startswith("T-"):
+        prefix = PREFIX_MAP.get(project, "AADS")
+        return f"{prefix}-{task_id[2:]}"
+    return task_id
+
+
 async def _upsert_task_result(value: Dict[str, Any], category: str) -> Dict[str, Any]:
     """T-090: task_result 메시지를 project_tasks 테이블에 upsert (UNIQUE(task_id, source) 기준)"""
     import re as _re
@@ -132,6 +150,9 @@ async def _upsert_task_result(value: Dict[str, Any], category: str) -> Dict[str,
         "nas": "NAS", "aads": "AADS", "sales": "SALES",
     }
     project = _pmap.get(project.lower(), project) if project else "AADS"
+
+    # T-107: task_id를 접두사 형식으로 정규화 (AADS-095, KIS-168 등)
+    task_id = _normalize_task_id_for_db(task_id, project)
 
     status_raw = str(value.get("status", "reported")).lower()
     if status_raw in ("done", "finished", "success", "completed", "완료"):
