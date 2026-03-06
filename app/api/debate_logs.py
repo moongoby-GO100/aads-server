@@ -28,32 +28,44 @@ async def _get_conn():
 
 @router.get("/debate-logs")
 async def get_debate_logs(
-    project_id: str = Query(..., description="프로젝트 UUID"),
+    project_id: Optional[str] = Query(None, description="프로젝트 UUID (없으면 전체)"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
-    """프로젝트별 토론 이력 조회."""
+    """프로젝트별(또는 전체) 토론 이력 조회."""
     try:
         conn = await _get_conn()
         try:
-            rows = await conn.fetch(
-                """
-                SELECT id, project_id, round_number,
-                       strategist_message, planner_message,
-                       consensus_reached, escalated, created_at
-                FROM debate_logs
-                WHERE project_id = $1::uuid
-                ORDER BY round_number ASC, created_at ASC
-                LIMIT $2 OFFSET $3
-                """,
-                project_id,
-                limit,
-                offset,
-            )
-            total = await conn.fetchval(
-                "SELECT COUNT(*) FROM debate_logs WHERE project_id = $1::uuid",
-                project_id,
-            )
+            if project_id:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, project_id, round_number,
+                           strategist_message, planner_message,
+                           consensus_reached, escalated, created_at
+                    FROM debate_logs
+                    WHERE project_id = $1::uuid
+                    ORDER BY round_number ASC, created_at ASC
+                    LIMIT $2 OFFSET $3
+                    """,
+                    project_id, limit, offset,
+                )
+                total = await conn.fetchval(
+                    "SELECT COUNT(*) FROM debate_logs WHERE project_id = $1::uuid",
+                    project_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, project_id, round_number,
+                           strategist_message, planner_message,
+                           consensus_reached, escalated, created_at
+                    FROM debate_logs
+                    ORDER BY created_at DESC
+                    LIMIT $1 OFFSET $2
+                    """,
+                    limit, offset,
+                )
+                total = await conn.fetchval("SELECT COUNT(*) FROM debate_logs")
         finally:
             await conn.close()
 
@@ -72,7 +84,7 @@ async def get_debate_logs(
 
         logger.info("debate_logs_fetched", project_id=project_id, count=len(items))
         return {
-            "project_id": project_id,
+            "project_id": project_id or "all",
             "total": total,
             "limit": limit,
             "offset": offset,
