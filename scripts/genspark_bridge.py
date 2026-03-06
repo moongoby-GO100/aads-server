@@ -40,6 +40,12 @@ import sys
 import time
 import urllib.request
 import urllib.error
+import asyncio
+try:
+    import aiohttp as _aiohttp
+    _AIOHTTP_AVAILABLE = True
+except ImportError:
+    _AIOHTTP_AVAILABLE = False
 from datetime import datetime, timedelta, timezone
 
 # ─── T-100: 완료보고 메시지 필터링 ───────────────────────────────────────────
@@ -552,6 +558,168 @@ def process_message(message: str, source: str = "bridge",
         "directive_blocks_saved": directive_blocks_saved,
         "document_saved": document_saved,
     }
+
+# ─── AADS-109: 지시서 환경 호환성 사전 검증 ──────────────────────────────
+
+class DirectiveValidator:
+    """지시서 환경 호환성 사전 검증"""
+
+    def __init__(self, aads_api_url: str):
+        self.api_url = aads_api_url
+
+    async def get_server_env(self, server: str) -> dict:
+        """Context API에서 서버 환경 스냅샷 조회"""
+        if not _AIOHTTP_AVAILABLE:
+            return {}
+        try:
+            async with _aiohttp.ClientSession() as session:
+                r = await session.get(
+                    f"{self.api_url}/context/system",
+                    params={"category": "server_environment", "key": f"env_{server}"},
+                    timeout=_aiohttp.ClientTimeout(total=5)
+                )
+                if r.status == 200:
+                    data = await r.json()
+                    items = data.get("items", [])
+                    if items:
+                        return items[0].get("data", {})
+        except Exception:
+            pass
+        return {}
+
+    async def validate(self, directive_content: str, target_server: str) -> dict:
+        """지시서 내용 vs 서버 환경 교차 검증"""
+        env = await self.get_server_env(target_server)
+        if not env:
+            return {"valid": True, "warnings": ["⚠️ 서버 환경 스냅샷 없음 — 검증 불가"], "blockers": []}
+
+        warnings = []
+        blockers = []
+        runtimes = env.get("runtimes", {})
+        projects = env.get("projects", {})
+
+        # 1) PHP 버전 체크
+        if any(kw in directive_content for kw in ["composer require", "php artisan", "Laravel", "laravel"]):
+            php_ver = runtimes.get("php", "not installed")
+            if "not installed" in php_ver:
+                blockers.append("🚫 PHP 미설치 — 지시서에 PHP 명령어 포함")
+            elif "5." in php_ver or "7.0" in php_ver or "7.1" in php_ver:
+                blockers.append(f"🚫 PHP {php_ver} — Laravel 11+ 에는 PHP 8.2+ 필요")
+
+        # 2) Node 체크
+        if any(kw in directive_content for kw in ["npm install", "npm run", "npx", "node "]):
+            node_ver = runtimes.get("node", "not installed")
+            if "not installed" in node_ver:
+                blockers.append("🚫 Node.js 미설치 — 지시서에 npm/node 명령어 포함")
+
+        # 3) Python 체크
+        if any(kw in directive_content for kw in ["pip install", "python3 ", "pip3 "]):
+            py_ver = runtimes.get("python3", "not installed")
+            if "not installed" in py_ver:
+                warnings.append("⚠️ Python3 미설치 — pip/python3 명령어 포함")
+
+        # 4) Docker 체크
+        if any(kw in directive_content for kw in ["docker compose", "docker-compose", "docker build"]):
+            docker_ver = runtimes.get("docker", "not installed")
+            if "not installed" in docker_ver:
+                blockers.append("🚫 Docker 미설치 — 지시서에 Docker 명령어 포함")
+
+        # 5) 경로 존재 확인
+        cd_paths = re.findall(r'cd\s+(/[^\s;&&|]+)', directive_content)
+        for path in set(cd_paths):
+            found = False
+            for proj_path, proj_info in projects.items():
+                if path.startswith(proj_path) and proj_info.get("exists"):
+                    found = True
+                    break
+            if not found and path not in ("/root", "/tmp", "/var/log"):
+                blockers.append(f"🚫 경로 {path} — 서버에 존재하지 않음")
+
+        # 6) DB 테이블 참조 확인
+        schema_refs = re.findall(r"Schema::table\('(\w+)'", directive_content)
+        alter_refs = re.findall(r"ALTER TABLE\s+(\w+)", directive_content, re.IGNORECASE)
+        existing_tables = str(env.get("databases", {}))
+        for table in set(schema_refs + alter_refs):
+            if table not in existing_tables:
+                warnings.append(f"⚠️ 테이블 '{table}' — DB에 없음 (신규 생성 확인 필요)")
+
+        # 7) systemd 서비스 참조 확인
+        service_refs = re.findall(r"systemctl\s+(?:restart|start|stop|enable)\s+(\S+)", directive_content)
+        active_services = str(env.get("services", {}).get("systemd_active", ""))
+        for svc in set(service_refs):
+            if svc not in active_services:
+                warnings.append(f"⚠️ 서비스 '{svc}' — 현재 active 목록에 없음")
+
+        is_valid = len(blockers) == 0
+
+        return {
+            "valid": is_valid,
+            "blockers": blockers,
+            "warnings": warnings,
+            "server": target_server,
+            "env_collected_at": env.get("collected_at", "unknown"),
+        }
+
+
+# ─── AADS-109: 브릿지 투입 시 자동 검증 연동 ────────────────────────────
+
+async def _process_directive_async(content: str, project: str) -> object:
+    """지시서 투입 전 환경 호환성 사전 검증 후 저장 (async 내부 구현)"""
+    aads_api_url = os.getenv("AADS_API_URL", "http://localhost:8000/api/v1")
+
+    # 대상 서버 추출
+    server_match = re.search(r'서버:\s*(\d+)', content)
+    target_server = server_match.group(1) if server_match else "68"
+
+    # 사전 검증
+    validator = DirectiveValidator(aads_api_url)
+    result = await validator.validate(content, target_server)
+
+    if result["blockers"]:
+        warning_content = f"""# ⚠️ 지시서 사전 검증 실패 — CEO 확인 필요
+
+서버: {target_server}
+환경 스냅샷: {result['env_collected_at']}
+
+## 차단 사유 (blockers):
+{''.join(f'- {b}' + chr(10) for b in result['blockers'])}
+
+## 경고 (warnings):
+{''.join(f'- {w}' + chr(10) for w in result['warnings'])}
+
+## 원본 지시서:
+{content[:500]}...
+
+---
+이 지시서를 실행하면 실패할 가능성이 높습니다.
+서버 환경 업그레이드 후 재투입하거나, 지시서를 수정해주세요.
+"""
+        warning_path = f"/root/.genspark/directives/blocked/{project}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_BLOCKED.md"
+        os.makedirs(os.path.dirname(warning_path), exist_ok=True)
+        with open(warning_path, "w") as f:
+            f.write(warning_content)
+        return False
+
+    if result["warnings"]:
+        warning_header = "# ⚠️ 환경 경고 (자동 검증)\n"
+        for w in result["warnings"]:
+            warning_header += f"# {w}\n"
+        warning_header += f"# 환경 스냅샷: {result['env_collected_at']}\n---\n\n"
+        content = warning_header + content
+
+    # 정상 투입 — pending 디렉터리에 저장
+    pending_path = f"/root/.genspark/directives/pending/{project}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_BRIDGE.md"
+    os.makedirs(os.path.dirname(pending_path), exist_ok=True)
+    with open(pending_path, "w") as f:
+        f.write(content)
+    return pending_path
+
+
+def process_directive(content: str, project: str = "AADS") -> object:
+    """지시서 투입 전 환경 호환성 사전 검증 후 저장 (동기 래퍼, Python 3.6 호환)"""
+    loop = asyncio.get_event_loop()
+    return loop.run_until_complete(_process_directive_async(content, project))
+
 
 # ─── CLI ─────────────────────────────────────────────────────────────────
 def main():
