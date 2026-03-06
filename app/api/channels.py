@@ -1,6 +1,7 @@
 """
 AADS Channels API — 대화창(Genspark 채팅창) CRUD + 컨텍스트 자동주입
 T-103: CEO가 자유롭게 대화창 추가/수정/삭제 + context_docs 등록 + context-package 조합
+AADS-115: 매니저 Context API 주입 강화 — 자동 맥락 복원 + 세션 시작 컨텍스트 패키지
 
 엔드포인트:
   GET    /api/v1/channels                        — 대화창 목록
@@ -18,10 +19,16 @@ from typing import Optional, List
 import json
 import asyncpg
 import os
+import time
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone, timedelta
 from app.config import Settings
+
+# ─── AADS-115: context_docs URL 캐시 (TTL 300초) ────────────────────────────
+# { url: {"content": str, "fetched_at": float, "etag": str|None} }
+_URL_CACHE: dict = {}
+_CACHE_TTL = 300  # seconds
 
 KST = timezone(timedelta(hours=9))
 
@@ -90,6 +97,204 @@ def _fetch_url(url: str, timeout: int = 5) -> str:
             return resp.read().decode("utf-8", errors="replace")
     except Exception as e:
         return f"[{url} 로드 실패: {e}]"
+
+
+def _fetch_url_cached(url: str, timeout: int = 5, force_refresh: bool = False) -> str:
+    """AADS-115: TTL 300초 캐시로 URL fetch. 실패 시 마지막 캐시 반환."""
+    now = time.time()
+    cached = _URL_CACHE.get(url)
+
+    # HANDOVER.md 변경 감지: URL에 HANDOVER 포함 시 ETag 비교
+    if cached and not force_refresh:
+        age = now - cached["fetched_at"]
+        if age < _CACHE_TTL:
+            return cached["content"]
+        # TTL 만료 → 갱신 시도 (실패 시 캐시 반환)
+
+    try:
+        headers = {"User-Agent": "AADS-ContextFetcher/1.0"}
+        if cached and cached.get("etag"):
+            headers["If-None-Match"] = cached["etag"]
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status == 304 and cached:
+                # 변경 없음 — 캐시 TTL 갱신
+                _URL_CACHE[url]["fetched_at"] = now
+                return cached["content"]
+            content = resp.read().decode("utf-8", errors="replace")
+            etag = resp.headers.get("ETag")
+            _URL_CACHE[url] = {"content": content, "fetched_at": now, "etag": etag}
+            return content
+    except Exception as e:
+        if cached:
+            # graceful degradation: 마지막 성공 캐시 사용
+            return cached["content"]
+        return f"[{url} 로드 실패: {e}]"
+
+
+def _invalidate_handover_cache() -> int:
+    """HANDOVER.md 캐시 즉시 무효화. 무효화된 항목 수 반환."""
+    count = 0
+    for url in list(_URL_CACHE.keys()):
+        if "HANDOVER" in url.upper():
+            del _URL_CACHE[url]
+            count += 1
+    return count
+
+
+async def get_recent_completed_tasks(limit: int = 5) -> list:
+    """AADS-115: 최근 완료 태스크 N건 조회 (task_id, title, completed_at, summary 100자)."""
+    conn = await _get_conn()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT task_id, project, title, completed_at, error_detail
+            FROM directive_lifecycle
+            WHERE status = 'completed' AND completed_at IS NOT NULL
+            ORDER BY completed_at DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+        result = []
+        for r in rows:
+            title = r["title"] or ""
+            summary = title[:100] if len(title) <= 100 else title[:97] + "..."
+            completed_kst = None
+            if r["completed_at"]:
+                try:
+                    completed_kst = r["completed_at"].astimezone(
+                        timezone(timedelta(hours=9))
+                    ).strftime("%Y-%m-%d %H:%M KST")
+                except Exception:
+                    completed_kst = str(r["completed_at"])
+            result.append({
+                "task_id": r["task_id"],
+                "project": r["project"],
+                "title": title,
+                "completed_at": completed_kst,
+                "summary": summary,
+            })
+        return result
+    except Exception:
+        return []
+    finally:
+        await conn.close()
+
+
+async def get_active_errors() -> list:
+    """AADS-115: 현재 미해결 에러 목록 (error_type, count)."""
+    conn = await _get_conn()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT
+                COALESCE(
+                    CASE
+                        WHEN error_detail ILIKE '%credit%' OR error_detail ILIKE '%balance%' THEN 'credit_exhausted'
+                        WHEN error_detail ILIKE '%auth%' OR error_detail ILIKE '%token%expired%' THEN 'auth_expired'
+                        WHEN error_detail ILIKE '%permission%' THEN 'permission_denied'
+                        WHEN error_detail ILIKE '%timeout%' THEN 'timeout'
+                        ELSE 'task_failure'
+                    END,
+                    'unknown'
+                ) AS error_type,
+                COUNT(*) AS count
+            FROM directive_lifecycle
+            WHERE status = 'failed'
+              AND completed_at > NOW() - INTERVAL '24 hours'
+            GROUP BY error_type
+            ORDER BY count DESC
+            """
+        )
+        return [{"error_type": r["error_type"], "count": int(r["count"])} for r in rows]
+    except Exception:
+        return []
+    finally:
+        await conn.close()
+
+
+async def get_pipeline_status() -> dict:
+    """AADS-115: 파이프라인 상태 요약 (healthy, stalled_count, blocked_count)."""
+    conn = await _get_conn()
+    try:
+        stalled_queue = await conn.fetchval(
+            "SELECT COUNT(*) FROM directive_lifecycle "
+            "WHERE status='queued' AND queued_at < NOW() - INTERVAL '10 min'"
+        )
+        stalled_running = await conn.fetchval(
+            "SELECT COUNT(*) FROM directive_lifecycle "
+            "WHERE status='running' AND started_at < NOW() - INTERVAL '60 min'"
+        )
+        blocked_tasks = await conn.fetchval(
+            "SELECT metric_value FROM system_metrics "
+            "WHERE server='68' AND metric_name='blocked_tasks_count' "
+            "ORDER BY recorded_at DESC LIMIT 1"
+        )
+        stalled_count = int(stalled_queue or 0) + int(stalled_running or 0)
+        blocked_count = int(blocked_tasks or 0)
+        return {
+            "healthy": stalled_count == 0 and blocked_count == 0,
+            "stalled_count": stalled_count,
+            "blocked_count": blocked_count,
+        }
+    except Exception:
+        return {"healthy": None, "stalled_count": -1, "blocked_count": -1}
+    finally:
+        await conn.close()
+
+
+def _build_session_restore_prompt(
+    channel: dict,
+    recent_tasks: list,
+    pipeline: dict,
+    active_errors: list,
+    now_kst: str,
+) -> str:
+    """AADS-115: CEO-DIRECTIVES 9-6 형식 세션 복원 프롬프트 자동 생성."""
+    lines = [
+        "## 세션 복원 프롬프트 (AADS CEO-DIRECTIVES 9-6)",
+        f"> 자동 생성: {now_kst}",
+        "",
+        "### 역할",
+        "당신은 AADS 프로젝트의 CEO 직속 지휘 AI(웹 Claude)입니다.",
+        "CEO와 직접 대화하며 전략 수립, 지시서 작성, 교차검증을 담당합니다.",
+        "서버에 직접 접근할 수 없으며, HANDOVER.md를 통해 맥락을 유지합니다.",
+        "",
+        "### 핵심 규칙 (CEO-DIRECTIVES)",
+        "- R-001: 작업 완료 후 반드시 HANDOVER.md 업데이트",
+        "- R-002: 지시서는 DIRECTIVE_START/END 형식으로 작성",
+        "- R-003: Task ID는 프로젝트 접두사 체계 사용 (AADS-xxx, KIS-xxx 등)",
+        "- R-004: 완료 조건 4가지: 코드 작성, 테스트 통과, Git push, HANDOVER 업데이트",
+        "- R-013: Task ID 접두사 체계 엄수",
+        "",
+        "### 최근 완료 작업 (최근 3건)",
+    ]
+    for t in recent_tasks[:3]:
+        lines.append(f"- [{t['task_id']}] {t['title']} — {t['completed_at']}")
+
+    lines += [
+        "",
+        "### 파이프라인 상태",
+        f"- 건강: {'정상' if pipeline.get('healthy') else '이상 발생'}",
+        f"- 정체: {pipeline.get('stalled_count', '?')}건",
+        f"- 차단: {pipeline.get('blocked_count', '?')}건",
+    ]
+
+    if active_errors:
+        lines += ["", "### 미해결 에러"]
+        for e in active_errors:
+            lines.append(f"- {e['error_type']}: {e['count']}건")
+
+    lines += [
+        "",
+        "### 참조 문서",
+        "- HANDOVER: https://raw.githubusercontent.com/moongoby-GO100/aads-docs/main/HANDOVER.md",
+        "- CEO-DIRECTIVES: https://raw.githubusercontent.com/moongoby-GO100/aads-docs/main/CEO-DIRECTIVES.md",
+        "",
+        "> 이 프롬프트는 대화창 컨텍스트 압축 시 자동 재주입됩니다 (BRIDGE-CONTEXT-RESTORE).",
+    ]
+    return "\n".join(lines)
 
 
 async def get_server_environment(server: str) -> dict:
@@ -321,7 +526,14 @@ async def get_context_package(channel_id: str):
     now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M KST")
 
     # AADS-110: 서버 환경 스냅샷 조회
-    env_snapshot = await get_server_environment(server)
+    # AADS-115: recent_completed_tasks, active_errors, pipeline_status 병렬 조회
+    import asyncio as _asyncio
+    env_snapshot, recent_tasks, active_errors, pipeline_status = await _asyncio.gather(
+        get_server_environment(server),
+        get_recent_completed_tasks(limit=5),
+        get_active_errors(),
+        get_pipeline_status(),
+    )
 
     sections = []
     sections.append(f"# {ch.get('name', channel_id)} 컨텍스트 패키지")
@@ -356,18 +568,25 @@ async def get_context_package(channel_id: str):
         url = doc.get("url", "")
         if not url:
             continue
-        content = _fetch_url(url)
+        # AADS-115: 캐시 fetch 사용 (TTL 300s, graceful degradation)
+        content = _fetch_url_cached(url)
         # HANDOVER는 최근 50줄만
         if role == "HANDOVER":
-            lines = content.splitlines()
-            if len(lines) > 50:
-                content = "\n".join(lines[-50:])
+            doc_lines = content.splitlines()
+            if len(doc_lines) > 50:
+                content = "\n".join(doc_lines[-50:])
                 content = f"[최근 50줄만 표시]\n{content}"
         sections.append(f"## {role}")
         sections.append(content)
         sections.append("")
 
     package_text = "\n".join(sections)
+
+    # AADS-115: 세션 복원 프롬프트 생성
+    session_restore_prompt = _build_session_restore_prompt(
+        ch, recent_tasks, pipeline_status, active_errors, now_kst
+    )
+
     return {
         "channel_id": channel_id,
         "channel_name": ch.get("name", channel_id),
@@ -376,4 +595,9 @@ async def get_context_package(channel_id: str):
         "env_snapshot_at": env_snapshot.get("collected_at", "없음"),
         "context_package": package_text,
         "doc_count": len(context_docs),
+        # AADS-115: 신규 필드
+        "recent_completed_tasks": recent_tasks,
+        "active_errors": active_errors,
+        "pipeline_status": pipeline_status,
+        "session_restore_prompt": session_restore_prompt,
     }
