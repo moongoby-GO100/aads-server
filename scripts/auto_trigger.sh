@@ -276,6 +276,9 @@ except Exception as e:
     sys.stdout.write("  phase 업데이트 실패: " + str(e) + "\n")
 PYEOF
 
+        # AADS-108: 지시서 완료 시 환경 스냅샷 즉시 갱신
+        python3 /root/aads/scripts/collect_env_snapshot.py event "task_completed_${task_id}" &
+
     else
         echo "  ❌ 실행 실패: ${task_id} (exit=${exec_exit})"
         # T-038: 실행 실패 자동 보고
