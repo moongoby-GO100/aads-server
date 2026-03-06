@@ -13,6 +13,7 @@ router = APIRouter()
 
 class CreateProjectRequest(BaseModel):
     description: str
+    mode: Optional[str] = "execution_only"  # "full_cycle" | "execution_only"
 
 
 class CreateProjectResponse(BaseModel):
@@ -72,10 +73,21 @@ async def list_projects(limit: int = 20, offset: int = 0):
 
 @router.post("/projects", response_model=CreateProjectResponse, summary="프로젝트 생성", description="PM 에이전트로 요구사항 분석 후 checkpoint_pending 상태 반환")
 async def create_project(req: CreateProjectRequest):
-    """프로젝트 생성 → PM 노드까지 실행 → interrupt에서 멈춤."""
+    """프로젝트 생성 → PM 노드까지 실행 → interrupt에서 멈춤.
+
+    mode="full_cycle"     → full_cycle_graph (ideation + execution)
+    mode="execution_only" → 기존 8-agent graph (기본값, 하위 호환)
+    """
     from app.main import app_state
 
-    graph = app_state.get("graph")
+    mode = req.mode or "execution_only"
+
+    if mode == "full_cycle":
+        from app.graphs.full_cycle_graph import build_full_cycle_graph
+        graph = build_full_cycle_graph(checkpointer=app_state.get("checkpointer"))
+    else:
+        graph = app_state.get("graph")
+
     if not graph:
         raise HTTPException(503, "Graph not ready")
 
@@ -83,25 +95,40 @@ async def create_project(req: CreateProjectRequest):
     thread_id = f"project-{project_id}"
     config = {"configurable": {"thread_id": thread_id}}
 
-    initial_state = {
-        "messages": [HumanMessage(content=req.description)],
-        "current_task": None,
-        "task_queue": [],
-        "next_agent": None,
-        "active_agents": [],
-        "checkpoint_stage": "requirements",
-        "approved_stages": [],
-        "revision_count": 0,
-        "llm_calls_count": 0,
-        "total_cost_usd": 0.0,
-        "cost_breakdown": {},
-        "generated_files": [],
-        "sandbox_results": [],
-        "project_id": project_id,
-        "created_at": datetime.utcnow().isoformat(),
-        "iteration_count": 0,
-        "error_log": [],
-    }
+    if mode == "full_cycle":
+        initial_state = {
+            # Full-cycle 전용 필드
+            "direction": req.description,
+            "mode": mode,
+            "project_id": project_id,
+            "created_at": datetime.utcnow().isoformat(),
+            "full_cycle_status": "ideation",
+            # 기본값
+            "llm_calls_count": 0,
+            "total_cost_usd": 0.0,
+            "cost_breakdown": {},
+            "error_log": [],
+        }
+    else:
+        initial_state = {
+            "messages": [HumanMessage(content=req.description)],
+            "current_task": None,
+            "task_queue": [],
+            "next_agent": None,
+            "active_agents": [],
+            "checkpoint_stage": "requirements",
+            "approved_stages": [],
+            "revision_count": 0,
+            "llm_calls_count": 0,
+            "total_cost_usd": 0.0,
+            "cost_breakdown": {},
+            "generated_files": [],
+            "sandbox_results": [],
+            "project_id": project_id,
+            "created_at": datetime.utcnow().isoformat(),
+            "iteration_count": 0,
+            "error_log": [],
+        }
 
     # 그래프 실행 → PM의 interrupt()에서 멈춤
     result = await graph.ainvoke(initial_state, config=config)

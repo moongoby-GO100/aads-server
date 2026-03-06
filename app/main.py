@@ -22,6 +22,7 @@ from app.api.lessons import router as lessons_router
 from app.api.strategy import router as strategy_router
 from app.api.plans import router as plans_router
 from app.api.debate_logs import router as debate_logs_router
+from app.api.artifacts import router as artifacts_router
 from app.config import settings
 from app.graph.builder import compile_graph
 from app.services.checkpointer import get_checkpointer
@@ -143,3 +144,4 @@ app.include_router(lessons_router, prefix="/api/v1", tags=["lessons"])
 app.include_router(strategy_router, prefix="/api/v1", tags=["strategy"])
 app.include_router(plans_router, prefix="/api/v1", tags=["plans"])
 app.include_router(debate_logs_router, prefix="/api/v1", tags=["debate-logs"])
+app.include_router(artifacts_router, prefix="/api/v1", tags=["artifacts"])

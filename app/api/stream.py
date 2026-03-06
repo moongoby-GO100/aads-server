@@ -20,17 +20,42 @@ def _sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-async def _stream_project_execution(project_id: str):
-    """프로젝트 실행 상태를 SSE로 스트리밍."""
+async def _get_graph_for_project(project_id: str):
+    """프로젝트 mode에 따라 적절한 그래프와 config 반환."""
     from app.main import app_state
 
     graph = app_state.get("graph")
+    if not graph:
+        return None, None
+
+    thread_id = f"project-{project_id}"
+    config = {"configurable": {"thread_id": thread_id}}
+
+    try:
+        state = await graph.aget_state(config)
+        if state and state.values:
+            mode = state.values.get("mode", "execution_only")
+            if mode == "full_cycle":
+                from app.graphs.full_cycle_graph import build_full_cycle_graph
+                checkpointer = app_state.get("checkpointer")
+                fc_graph = build_full_cycle_graph(checkpointer=checkpointer)
+                return fc_graph, config
+    except Exception:
+        pass
+
+    return graph, config
+
+
+async def _stream_project_execution(project_id: str):
+    """프로젝트 실행 상태를 SSE로 스트리밍. mode에 따라 다른 그래프 사용."""
+    graph, config = await _get_graph_for_project(project_id)
     if not graph:
         yield _sse_event("error", {"message": "Graph not ready", "project_id": project_id})
         return
 
     thread_id = f"project-{project_id}"
-    config = {"configurable": {"thread_id": thread_id}}
+    if config is None:
+        config = {"configurable": {"thread_id": thread_id}}
 
     state = await graph.aget_state(config)
     if not state or not state.values:
