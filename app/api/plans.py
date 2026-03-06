@@ -255,7 +255,7 @@ async def get_project_plan_architecture(plan_id: int):
 async def approve_project_plan(plan_id: int):
     """CEO 승인 처리."""
     pool = _get_pool()
-    now = datetime.now(timezone.utc)
+    now = datetime.utcnow()
     async with pool.acquire() as conn:
         try:
             row = await conn.fetchrow(
