@@ -30,8 +30,9 @@ class TestModelConfig:
 class TestAgentModels:
     def test_all_8_agents_defined(self):
         from app.services.model_router import AGENT_MODELS
-        expected = {"pm", "supervisor", "developer", "architect", "qa", "judge", "devops", "researcher"}
-        assert set(AGENT_MODELS.keys()) == expected
+        # AADS-125/126 추가: strategist_collect, strategist_analyze, planner
+        base_agents = {"pm", "supervisor", "developer", "architect", "qa", "judge", "devops", "researcher"}
+        assert base_agents.issubset(set(AGENT_MODELS.keys()))
 
     def test_each_agent_has_primary_fallback(self):
         from app.services.model_router import AGENT_MODELS
