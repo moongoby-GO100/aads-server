@@ -34,6 +34,7 @@ async def _get_conn():
 class CeoChatRequest(BaseModel):
     session_id: str = "auto"
     message: str
+    model: Optional[str] = None  # T-104: CEO가 ModelSelector로 직접 선택한 모델 (None이면 자동 라우팅)
 
 
 class CeoEndSessionRequest(BaseModel):
@@ -330,8 +331,18 @@ async def send_ceo_message(req: CeoChatRequest):
         system_prompt = await ctx_mgr.build_context(session_id)
         active_tasks = await ctx_mgr.load_active_tasks()
 
-        # 모델 선택
-        model = route_model(req.message)
+        # 모델 선택: CEO가 직접 지정하면 override, 아니면 자동 라우팅 (T-104)
+        MODEL_ID_MAP = {
+            "claude-opus-4-6":   "claude-opus-4-5",
+            "claude-sonnet-4-6": "claude-sonnet-4-5",
+            "gemini-2.0-flash":  "gemini-2.0-flash",
+            "gpt-5-mini":        "claude-sonnet-4-5",  # fallback: GPT-5 mini 미지원 시 Sonnet
+            "mixture":           None,  # 자동 라우팅
+        }
+        if req.model and req.model in MODEL_ID_MAP and MODEL_ID_MAP[req.model] is not None:
+            model = MODEL_ID_MAP[req.model]
+        else:
+            model = route_model(req.message)
 
         # 이전 메시지 로드 (최근 10턴 = 20 rows)
         prev_msgs = await conn.fetch(
