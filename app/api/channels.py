@@ -20,8 +20,10 @@ import asyncpg
 import os
 import urllib.request
 import urllib.error
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from app.config import Settings
+
+KST = timezone(timedelta(hours=9))
 
 router = APIRouter()
 _settings = Settings()
@@ -88,6 +90,85 @@ def _fetch_url(url: str, timeout: int = 5) -> str:
             return resp.read().decode("utf-8", errors="replace")
     except Exception as e:
         return f"[{url} 로드 실패: {e}]"
+
+
+async def get_server_environment(server: str) -> dict:
+    """system_memory에서 서버 환경 스냅샷 조회 (category=server_environment, key=env_{server})."""
+    conn = await _get_conn()
+    try:
+        row = await conn.fetchrow(
+            "SELECT value FROM system_memory WHERE category = 'server_environment' AND key = $1",
+            f"env_{server}",
+        )
+        if not row:
+            return {"collected_at": "스냅샷 없음", "runtimes": {}, "projects": {}, "databases": {}, "services": {}}
+        raw = row["value"]
+        return json.loads(raw) if isinstance(raw, str) else dict(raw)
+    except Exception:
+        return {"collected_at": "조회 실패", "runtimes": {}, "projects": {}, "databases": {}, "services": {}}
+    finally:
+        await conn.close()
+
+
+def format_runtimes(runtimes: dict) -> str:
+    if not runtimes:
+        return "- (데이터 없음)"
+    lines = []
+    for k, v in runtimes.items():
+        lines.append(f"- **{k}**: {v}")
+    return "\n".join(lines)
+
+
+def format_projects(projects: dict) -> str:
+    if not projects:
+        return "- (데이터 없음)"
+    lines = []
+    for path, info in projects.items():
+        if not isinstance(info, dict):
+            lines.append(f"- `{path}`: {info}")
+            continue
+        exists = info.get("exists", True)
+        if not exists:
+            lines.append(f"- `{path}`: 디렉터리 없음")
+            continue
+        branch = info.get("git_branch", "-")
+        last3 = info.get("git_last3", "-")
+        lines.append(f"- `{path}` (브랜치: {branch})")
+        if last3 and last3 != "-":
+            for l in last3.splitlines()[:3]:
+                lines.append(f"  - {l}")
+    return "\n".join(lines) if lines else "- (데이터 없음)"
+
+
+def format_databases(databases: dict) -> str:
+    if not databases:
+        return "- (데이터 없음)"
+    lines = []
+    for db_key, info in databases.items():
+        lines.append(f"- **{db_key}**")
+        if isinstance(info, dict):
+            schema = info.get("schema", "")
+            if schema:
+                for l in schema.splitlines()[:10]:
+                    lines.append(f"  {l}")
+    return "\n".join(lines) if lines else "- (데이터 없음)"
+
+
+def format_services(services: dict) -> str:
+    if not services:
+        return "- (데이터 없음)"
+    lines = []
+    systemd = services.get("systemd_active", "")
+    docker = services.get("docker", "")
+    if systemd:
+        lines.append("**systemd 활성 서비스:**")
+        for l in systemd.splitlines()[:15]:
+            lines.append(f"  {l}")
+    if docker:
+        lines.append("**Docker 컨테이너:**")
+        for l in docker.splitlines()[:10]:
+            lines.append(f"  {l}")
+    return "\n".join(lines) if lines else "- (데이터 없음)"
 
 
 @router.get("/channels")
@@ -218,7 +299,8 @@ async def delete_channel(channel_id: str):
 async def get_context_package(channel_id: str):
     """
     브릿지용: 채널의 context_docs URL들을 fetch하여 하나의 마크다운으로 조합 반환.
-    지시서 전달 시 AI가 프로젝트 맥락을 자동으로 알 수 있게 함.
+    AADS-110: 채널에 연결된 서버의 환경 스냅샷을 자동 포함.
+    지시서 전달 시 AI가 프로젝트 맥락 + 서버 환경을 자동으로 인식.
     """
     conn = await _get_conn()
     try:
@@ -235,12 +317,16 @@ async def get_context_package(channel_id: str):
 
     context_docs = ch.get("context_docs", [])
     system_prompt = ch.get("system_prompt", "")
-    now_kst = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M KST")
+    server = ch.get("server", "68")
+    now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M KST")
+
+    # AADS-110: 서버 환경 스냅샷 조회
+    env_snapshot = await get_server_environment(server)
 
     sections = []
     sections.append(f"# {ch.get('name', channel_id)} 컨텍스트 패키지")
     sections.append(f"> 자동 생성: {now_kst}")
-    sections.append(f"> 프로젝트: {ch.get('project', '-')} | 서버: {ch.get('server', '-')}")
+    sections.append(f"> 프로젝트: {ch.get('project', '-')} | 서버: {server}")
     sections.append("")
 
     if system_prompt:
@@ -248,13 +334,30 @@ async def get_context_package(channel_id: str):
         sections.append(system_prompt)
         sections.append("")
 
+    # AADS-110: 서버 환경 스냅샷 섹션
+    sections.append(f"## 서버 {server} 실시간 환경 (스냅샷: {env_snapshot.get('collected_at', '?')})")
+    sections.append("")
+    sections.append("### 런타임")
+    sections.append(format_runtimes(env_snapshot.get("runtimes", {})))
+    sections.append("")
+    sections.append("### 프로젝트 디렉터리")
+    sections.append(format_projects(env_snapshot.get("projects", {})))
+    sections.append("")
+    sections.append("### DB 스키마")
+    sections.append(format_databases(env_snapshot.get("databases", {})))
+    sections.append("")
+    sections.append("### 서비스 상태")
+    sections.append(format_services(env_snapshot.get("services", {})))
+    sections.append("")
+    sections.append("---")
+
     for doc in context_docs:
         role = doc.get("role", "DOCUMENT")
         url = doc.get("url", "")
         if not url:
             continue
         content = _fetch_url(url)
-        # HANDOVER는 최근 10줄만
+        # HANDOVER는 최근 50줄만
         if role == "HANDOVER":
             lines = content.splitlines()
             if len(lines) > 50:
@@ -269,6 +372,8 @@ async def get_context_package(channel_id: str):
         "channel_id": channel_id,
         "channel_name": ch.get("name", channel_id),
         "generated_at": now_kst,
+        "server": server,
+        "env_snapshot_at": env_snapshot.get("collected_at", "없음"),
         "context_package": package_text,
         "doc_count": len(context_docs),
     }
