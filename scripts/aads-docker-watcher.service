@@ -1,0 +1,11 @@
+[Unit]
+Description=AADS Docker Event Watcher
+After=docker.service
+
+[Service]
+Type=simple
+ExecStart=/bin/bash -c 'docker events --filter type=container --format "{{.Action}} {{.Actor.Attributes.name}}" | while read event; do python3 /root/aads/scripts/collect_env_snapshot.py event "docker_${event}" & done'
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
