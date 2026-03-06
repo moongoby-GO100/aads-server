@@ -228,6 +228,50 @@ async def watchdog_summary():
         }
 
 
+# --- 감시 서비스 목록 (GET, 인증 불필요) ---
+@router.get("/watchdog/services")
+async def watchdog_services():
+    """감시 서비스 상태 목록 — public 엔드포인트. 서버별 그룹화."""
+    async with memory_store.pool.acquire() as conn:
+        tbl_exists = await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='monitored_services')"
+        )
+        if not tbl_exists:
+            return {"status": "ok", "servers": {}}
+
+        rows = await conn.fetch("""
+            SELECT server, service_name, check_type, check_target,
+                   last_status, consecutive_failures, enabled, last_check
+            FROM monitored_services
+            ORDER BY server, service_name
+        """)
+
+    servers: dict = {}
+    for r in rows:
+        srv = r["server"]
+        if srv not in servers:
+            servers[srv] = []
+        servers[srv].append({
+            "service_name": r["service_name"],
+            "check_type": r["check_type"],
+            "last_status": r["last_status"] if r["enabled"] else "disabled",
+            "consecutive_failures": r["consecutive_failures"],
+            "enabled": r["enabled"],
+            "last_check": str(r["last_check"]) if r["last_check"] else None,
+        })
+
+    total_ok = sum(1 for r in rows if r["enabled"] and r["last_status"] == "ok")
+    total_enabled = sum(1 for r in rows if r["enabled"])
+
+    return {
+        "status": "ok",
+        "total_services": total_enabled,
+        "healthy": total_ok,
+        "unhealthy": total_enabled - total_ok,
+        "servers": servers,
+    }
+
+
 # --- 자동 복구 실행 ---
 async def _attempt_recovery(error_id: int, command: str) -> bool:
     """안전한 명령만 실행. 화이트리스트 기반."""
