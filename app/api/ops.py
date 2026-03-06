@@ -383,12 +383,33 @@ async def health_check():
             bridge_recent = await conn.fetchval(
                 "SELECT COUNT(*) FROM bridge_activity_log WHERE detected_at > NOW() - INTERVAL '1 hour'"
             )
+            # 체크 8/9: 최신 blocked/undetected 카운트 및 마지막 체크 시각
+            blocked_tasks = await conn.fetchval(
+                "SELECT metric_value FROM system_metrics "
+                "WHERE server='68' AND metric_name='blocked_tasks_count' "
+                "ORDER BY recorded_at DESC LIMIT 1"
+            )
+            undetected_tasks = await conn.fetchval(
+                "SELECT metric_value FROM system_metrics "
+                "WHERE server='68' AND metric_name='undetected_tasks_count' "
+                "ORDER BY recorded_at DESC LIMIT 1"
+            )
+            last_seen_check_ts = await conn.fetchval(
+                "SELECT recorded_at FROM system_metrics "
+                "WHERE server='68' AND metric_name='blocked_tasks_count' "
+                "ORDER BY recorded_at DESC LIMIT 1"
+            )
         finally:
             await conn.close()
 
         stalled_count = int(stalled_queue or 0) + int(stalled_running or 0)
         pipeline_blocked = (int(recent_completed or 0) == 0 and int(active_count or 0) > 0)
         pipeline_healthy = (stalled_count == 0 and not pipeline_blocked)
+
+        last_seen_check_kst = (
+            last_seen_check_ts.astimezone(KST).isoformat()
+            if last_seen_check_ts else None
+        )
 
         return {
             "pipeline_healthy": pipeline_healthy,
@@ -399,6 +420,9 @@ async def health_check():
             "recent_completed_30m": int(recent_completed or 0),
             "pipeline_blocked": pipeline_blocked,
             "bridge_activity_1h": int(bridge_recent or 0),
+            "blocked_tasks_count": int(blocked_tasks or 0),
+            "undetected_tasks_count": int(undetected_tasks or 0),
+            "last_seen_tasks_check": last_seen_check_kst,
             "issues": _build_issues(stalled_queue, stalled_running, pipeline_blocked),
         }
     except Exception as e:

@@ -1,11 +1,13 @@
 """
-AADS-113: 교차검증 엔진 + 자동복구 — CrossValidator / AutoRecovery
-7종 검증: 정체감지/브릿지정합/커밋정합/비용추적/환경트렌드/매니저응답/파이프라인흐름
+AADS-113/118: 교차검증 엔진 + 자동복구 — CrossValidator / AutoRecovery
+9종 검증: 정체감지/브릿지정합/커밋정합/비용추적/환경트렌드/매니저응답/파이프라인흐름
+         +체크8(seen_tasks 차단감지)/체크9(미감지 지시서 복원)
 2분마다 watchdog_daemon.py에서 호출
 """
 import asyncio
 import json
 import os
+import re
 import subprocess
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -144,10 +146,13 @@ class AutoRecovery:
 
 
 class CrossValidator(AutoRecovery):
-    """7종 교차검증 엔진."""
+    """9종 교차검증 엔진 (AADS-113/118)."""
 
     def __init__(self, pool):
         self.pool = pool
+        self.blocked_tasks_count: int = 0
+        self.undetected_tasks_count: int = 0
+        self.last_seen_tasks_check: Optional[str] = None
 
     async def run_all_checks(self) -> list:
         """모든 검증 실행 → critical은 자동복구, warning은 CEO 알림."""
@@ -160,6 +165,8 @@ class CrossValidator(AutoRecovery):
             self.check_env_trend,
             self.check_agent_responsiveness,
             self.check_pipeline_flow,
+            self.check_seen_tasks_blocked,
+            self.check_undetected_directives,
         ]
         for check in checks:
             try:
@@ -392,6 +399,224 @@ class CrossValidator(AutoRecovery):
             })
         return issues
 
+    # ─── 검증 8: seen_tasks 차단 감지 및 자동 해제 ───────────────────────────
+
+    async def check_seen_tasks_blocked(self) -> list:
+        """체크 8: seen_tasks에 error/미등록 상태로 차단된 작업 감지 및 해제."""
+        issues = []
+        if not os.path.exists(SEEN_TASKS_FILE):
+            self.last_seen_tasks_check = datetime.now(tz=KST).isoformat()
+            return issues
+
+        try:
+            with open(SEEN_TASKS_FILE, "r", encoding="utf-8") as f:
+                seen = json.load(f)
+        except Exception as e:
+            logger.error("seen_tasks_load_failed", error=str(e))
+            return issues
+
+        failed_statuses = {"error", "auth_expired", "permission_denied", "task_failure"}
+        to_release = []
+
+        async with self.pool.acquire() as conn:
+            for task_id in list(seen.keys()):
+                row = await conn.fetchrow(
+                    "SELECT task_id, project, status, content, title FROM directive_lifecycle "
+                    "WHERE task_id=$1 ORDER BY id DESC LIMIT 1",
+                    task_id
+                )
+                db_status = row["status"] if row else None
+                if db_status is None or db_status in failed_statuses:
+                    to_release.append((task_id, db_status, row))
+
+        for task_id, db_status, row in to_release:
+            seen.pop(task_id, None)
+            restored = await self._restore_directive_to_pending(task_id, db_status, row)
+            issue = {
+                "type": "BLOCKED_TASK_RELEASED",
+                "task_id": task_id,
+                "db_status": db_status or "not_registered",
+                "restored_to_pending": restored,
+                "severity": "warning",
+            }
+            issues.append(issue)
+            logger.info("blocked_task_released", task_id=task_id, db_status=db_status)
+            await self._notify_ceo(issue, self.pool)
+
+        if to_release:
+            try:
+                with open(SEEN_TASKS_FILE, "w", encoding="utf-8") as f:
+                    json.dump(seen, f, indent=2, ensure_ascii=False)
+            except Exception as e:
+                logger.error("seen_tasks_save_failed", error=str(e))
+
+        # 서버 211 SSH 체크
+        await self._check_seen_tasks_server211(issues)
+
+        self.blocked_tasks_count = len([i for i in issues if i.get("type") == "BLOCKED_TASK_RELEASED"])
+        self.last_seen_tasks_check = datetime.now(tz=KST).isoformat()
+        return issues
+
+    async def _restore_directive_to_pending(
+        self, task_id: str, db_status: Optional[str], row
+    ) -> bool:
+        """directive 내용을 pending 폴더에 .md 파일로 복원."""
+        try:
+            os.makedirs(PENDING_DIR, exist_ok=True)
+            content = None
+            title = "복원된 지시서"
+
+            if row:
+                content = row.get("content")
+                title = row.get("title") or title
+
+            if not content:
+                content = await self._restore_from_bridge_log(task_id)
+
+            if not content:
+                content = (
+                    f"%%%\nTask ID: {task_id}\n"
+                    f"제목: {title}\n"
+                    f"상태: {db_status or 'unknown'} — 수동 재지시 필요\n%%%"
+                )
+
+            ts = datetime.now(tz=KST).strftime("%Y%m%d_%H%M%S")
+            fname = f"{task_id.replace('-', '_')}_{ts}_RESTORED.md"
+            fpath = os.path.join(PENDING_DIR, fname)
+            with open(fpath, "w", encoding="utf-8") as f:
+                f.write(content)
+            logger.info("directive_restored_to_pending", task_id=task_id, path=fpath)
+            return True
+        except Exception as e:
+            logger.error("restore_directive_failed", task_id=task_id, error=str(e))
+            return False
+
+    async def _restore_from_bridge_log(self, task_id: str) -> Optional[str]:
+        """bridge_activity_log에서 원본 directive 정보 복원 시도."""
+        try:
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT * FROM bridge_activity_log "
+                    "WHERE directive_task_id=$1 ORDER BY detected_at DESC LIMIT 1",
+                    task_id
+                )
+            if row:
+                return (
+                    f"%%%\nTask ID: {task_id}\n"
+                    f"출처: bridge_activity_log\n"
+                    f"감지시각: {row['detected_at']}\n"
+                    f"채널: {row.get('source_channel', '')}\n%%%"
+                )
+        except Exception:
+            pass
+        return None
+
+    async def _check_seen_tasks_server211(self, issues: list):
+        """서버 211의 seen_tasks도 동일 체크 (SSH, 68→211)."""
+        try:
+            result = subprocess.run(
+                ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                 "root@211.45.72.195",
+                 f"cat {SEEN_TASKS_FILE} 2>/dev/null || echo '{{}}'"],
+                capture_output=True, text=True, timeout=15
+            )
+            if result.returncode != 0:
+                return
+            seen_211 = json.loads(result.stdout.strip() or "{}")
+            if not seen_211:
+                return
+
+            failed_statuses = {"error", "auth_expired", "permission_denied", "task_failure"}
+            to_release_211 = []
+            async with self.pool.acquire() as conn:
+                for task_id in list(seen_211.keys()):
+                    row = await conn.fetchrow(
+                        "SELECT status FROM directive_lifecycle "
+                        "WHERE task_id=$1 ORDER BY id DESC LIMIT 1",
+                        task_id
+                    )
+                    db_status = row["status"] if row else None
+                    if db_status is None or db_status in failed_statuses:
+                        to_release_211.append((task_id, db_status))
+
+            for task_id, db_status in to_release_211:
+                seen_211.pop(task_id, None)
+                issues.append({
+                    "type": "BLOCKED_TASK_RELEASED",
+                    "task_id": task_id,
+                    "server": "211",
+                    "db_status": db_status or "not_registered",
+                    "severity": "warning",
+                })
+
+            if to_release_211:
+                updated_json = json.dumps(seen_211, indent=2, ensure_ascii=False)
+                subprocess.run(
+                    ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                     "root@211.45.72.195",
+                     f"cat > {SEEN_TASKS_FILE} << 'EOJSON'\n{updated_json}\nEOJSON"],
+                    capture_output=True, text=True, timeout=15
+                )
+        except Exception as e:
+            logger.warning("server211_seen_tasks_check_failed", error=str(e))
+
+    # ─── 검증 9: 미감지 지시서 복원 ──────────────────────────────────────────
+
+    async def check_undetected_directives(self) -> list:
+        """체크 9: 브릿지 미감지 지시서 복원 (24h 역스캔)."""
+        issues = []
+        task_id_pattern = re.compile(r'\b((?:AADS|KIS|T)-\d+)\b')
+
+        async with self.pool.acquire() as conn:
+            bridge_rows = await conn.fetch("""
+                SELECT directive_task_id, detected_at, source_channel, classification
+                FROM bridge_activity_log
+                WHERE detected_at > NOW() - INTERVAL '24 hours'
+                  AND directive_task_id IS NOT NULL
+                  AND directive_task_id != ''
+            """)
+
+            found_task_ids: set = set()
+            for row in bridge_rows:
+                tid = row["directive_task_id"]
+                if tid:
+                    found_task_ids.update(task_id_pattern.findall(tid) or [tid])
+
+            for task_id in found_task_ids:
+                db_row = await conn.fetchrow(
+                    "SELECT task_id, status FROM directive_lifecycle WHERE task_id=$1 LIMIT 1",
+                    task_id
+                )
+                if db_row:
+                    continue
+
+                bridge_row = await conn.fetchrow(
+                    "SELECT * FROM bridge_activity_log "
+                    "WHERE directive_task_id=$1 ORDER BY detected_at DESC LIMIT 1",
+                    task_id
+                )
+                restored = await self._restore_directive_to_pending(task_id, None, None)
+
+                if restored:
+                    issue = {
+                        "type": "UNDETECTED_DIRECTIVE_RESTORED",
+                        "task_id": task_id,
+                        "severity": "warning",
+                        "detected_at": str(bridge_row["detected_at"]) if bridge_row else None,
+                    }
+                else:
+                    issue = {
+                        "type": "UNDETECTED_DIRECTIVE_MANUAL_NEEDED",
+                        "task_id": task_id,
+                        "severity": "warning",
+                    }
+                issues.append(issue)
+                logger.info("undetected_directive", task_id=task_id, type=issue["type"])
+                await self._notify_ceo(issue, self.pool)
+
+        self.undetected_tasks_count = len(issues)
+        return issues
+
     # ─── 메트릭 기록 ─────────────────────────────────────────────────────────
 
     async def _record_metrics(self, results: list):
@@ -407,6 +632,8 @@ class CrossValidator(AutoRecovery):
                     ("68", "cross_validator_issues_critical", critical_count, "count"),
                     ("68", "cross_validator_issues_warning", warning_count, "count"),
                     ("68", "cross_validator_total_issues", len(results), "count"),
+                    ("68", "blocked_tasks_count", self.blocked_tasks_count, "count"),
+                    ("68", "undetected_tasks_count", self.undetected_tasks_count, "count"),
                 ])
         except Exception as e:
             logger.warning("metrics_record_failed", error=str(e))
