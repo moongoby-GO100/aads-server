@@ -84,6 +84,15 @@ class MaintenanceStartRequest(BaseModel):
 class MaintenanceEndRequest(BaseModel):
     server: str
 
+class BridgeLogRecord(BaseModel):
+    message_id: Optional[str] = None
+    source_channel: Optional[str] = None
+    classification: Optional[str] = None
+    action_taken: Optional[str] = None
+    directive_task_id: Optional[str] = None
+    blocked_reason: Optional[str] = None
+    raw_length: int = 0
+
 
 # ─── Directive Lifecycle ──────────────────────────────────────────────────────
 
@@ -109,30 +118,29 @@ async def upsert_lifecycle(req: LifecycleUpdate):
     try:
         conn = await _get_conn()
         try:
-            # UPSERT
+            # UPSERT — 타임스탬프를 status에 따라 미리 계산하여 전달
+            q_at = ts if req.status in ("queued", "requeued") else None
+            s_at = ts if req.status == "running" else None
+            c_at = ts if req.status in ("completed", "failed") else None
             await conn.execute("""
                 INSERT INTO directive_lifecycle
                     (task_id, project, title, server, priority, executor, file_path, status,
                      created_at, queued_at, started_at, completed_at, error_detail)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),
-                    CASE WHEN $8='queued' OR $8='requeued' THEN $9 ELSE NULL END,
-                    CASE WHEN $8='running' THEN $9 ELSE NULL END,
-                    CASE WHEN $8='completed' OR $8='failed' THEN $9 ELSE NULL END,
-                    $10)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),$9,$10,$11,$12)
                 ON CONFLICT (task_id, project) DO UPDATE SET
-                    status = EXCLUDED.status,
-                    queued_at   = COALESCE(CASE WHEN $8 IN ('queued','requeued') THEN $9 END, directive_lifecycle.queued_at),
-                    started_at  = COALESCE(CASE WHEN $8 = 'running' THEN $9 END, directive_lifecycle.started_at),
-                    completed_at= COALESCE(CASE WHEN $8 IN ('completed','failed') THEN $9 END, directive_lifecycle.completed_at),
-                    title       = COALESCE(EXCLUDED.title, directive_lifecycle.title),
-                    server      = COALESCE(EXCLUDED.server, directive_lifecycle.server),
-                    priority    = COALESCE(EXCLUDED.priority, directive_lifecycle.priority),
-                    executor    = COALESCE(EXCLUDED.executor, directive_lifecycle.executor),
-                    file_path   = COALESCE(EXCLUDED.file_path, directive_lifecycle.file_path),
-                    error_detail= COALESCE(EXCLUDED.error_detail, directive_lifecycle.error_detail)
+                    status       = EXCLUDED.status,
+                    queued_at    = COALESCE(EXCLUDED.queued_at, directive_lifecycle.queued_at),
+                    started_at   = COALESCE(EXCLUDED.started_at, directive_lifecycle.started_at),
+                    completed_at = COALESCE(EXCLUDED.completed_at, directive_lifecycle.completed_at),
+                    title        = COALESCE(EXCLUDED.title, directive_lifecycle.title),
+                    server       = COALESCE(EXCLUDED.server, directive_lifecycle.server),
+                    priority     = COALESCE(EXCLUDED.priority, directive_lifecycle.priority),
+                    executor     = COALESCE(EXCLUDED.executor, directive_lifecycle.executor),
+                    file_path    = COALESCE(EXCLUDED.file_path, directive_lifecycle.file_path),
+                    error_detail = COALESCE(EXCLUDED.error_detail, directive_lifecycle.error_detail)
             """, req.task_id, req.project, req.title, req.server,
                 req.priority, req.executor, req.file_path, req.status,
-                ts, req.error_detail)
+                q_at, s_at, c_at, req.error_detail)
         finally:
             await conn.close()
         return {"ok": True, "task_id": req.task_id, "status": req.status}
@@ -324,6 +332,27 @@ async def list_commits(
 
 
 # ─── Bridge Log ──────────────────────────────────────────────────────────────
+
+
+@router.post("/ops/bridge-log")
+async def record_bridge_log(req: BridgeLogRecord):
+    """브릿지 활동 기록."""
+    try:
+        conn = await _get_conn()
+        try:
+            await conn.execute("""
+                INSERT INTO bridge_activity_log
+                    (message_id, source_channel, classification, action_taken,
+                     directive_task_id, blocked_reason, raw_length)
+                VALUES ($1,$2,$3,$4,$5,$6,$7)
+            """, req.message_id, req.source_channel, req.classification,
+                req.action_taken, req.directive_task_id, req.blocked_reason,
+                req.raw_length)
+        finally:
+            await conn.close()
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/ops/bridge-log")
 async def bridge_log(
