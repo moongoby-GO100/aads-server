@@ -156,7 +156,7 @@ def map_plan_to_execution(state: FullCycleState) -> dict:
         "qa_test_results": [],
         "judge_verdict": None,
         "project_id": project_id,
-        "created_at": state.get("created_at", datetime.utcnow().isoformat()),
+        "created_at": state.get("created_at", datetime.now().isoformat()),
         "iteration_count": 0,
         "error_log": [],
         "architect_design": None,
