@@ -6,14 +6,14 @@ watchdog_daemon.py와 escalation_engine.py에서 import하여 사용
 import asyncio
 import subprocess
 import time
-from typing import Optional
+from typing import Dict, List, Optional, Tuple
 import structlog
 
 logger = structlog.get_logger()
 
 # ─── 복구 경로 정의 ────────────────────────────────────────────────────────────
 
-RECOVERY_ROUTES: dict[str, list[dict]] = {
+RECOVERY_ROUTES: Dict[str, List[Dict]] = {
     "114": [
         {"via": "direct",     "method": "ssh",       "host": "서버114_IP"},
         {"via": "relay_211",  "method": "ssh_relay",  "relay": "211.188.51.113", "target": "서버114_IP"},
@@ -32,45 +32,49 @@ RECOVERY_ROUTES: dict[str, list[dict]] = {
 }
 
 # 실행 이력 (메모리, 재시작 시 초기화)
-recovery_logs: list[dict] = []
+recovery_logs: List[Dict] = []
 
 SSH_TIMEOUT = 10  # seconds
 
 
-def _run_ssh_direct(host: str, command: str, timeout: int = SSH_TIMEOUT) -> tuple[bool, str]:
+def _run_ssh_direct(host: str, command: str, timeout: int = SSH_TIMEOUT) -> tuple:
     """SSH 직접 연결로 명령 실행"""
     try:
         result = subprocess.run(
             ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
              "-o", "StrictHostKeyChecking=no",
-             f"root@{host}", command],
-            capture_output=True, text=True, timeout=timeout
+             "root@{}".format(host), command],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout
         )
-        return result.returncode == 0, result.stdout.strip() or result.stderr.strip()
+        stdout = result.stdout.decode(errors="replace").strip()
+        stderr = result.stderr.decode(errors="replace").strip()
+        return result.returncode == 0, stdout or stderr
     except subprocess.TimeoutExpired:
         return False, "timeout"
     except Exception as e:
         return False, str(e)
 
 
-def _run_ssh_relay(relay: str, target: str, command: str, timeout: int = SSH_TIMEOUT) -> tuple[bool, str]:
+def _run_ssh_relay(relay: str, target: str, command: str, timeout: int = SSH_TIMEOUT) -> tuple:
     """SSH 릴레이 경유 명령 실행 (ProxyJump)"""
     try:
         result = subprocess.run(
             ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
              "-o", "StrictHostKeyChecking=no",
-             "-J", f"root@{relay}",
-             f"root@{target}", command],
-            capture_output=True, text=True, timeout=timeout
+             "-J", "root@{}".format(relay),
+             "root@{}".format(target), command],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout
         )
-        return result.returncode == 0, result.stdout.strip() or result.stderr.strip()
+        stdout = result.stdout.decode(errors="replace").strip()
+        stderr = result.stderr.decode(errors="replace").strip()
+        return result.returncode == 0, stdout or stderr
     except subprocess.TimeoutExpired:
         return False, "timeout"
     except Exception as e:
         return False, str(e)
 
 
-async def remote_execute(server: str, command: str) -> tuple[bool, str]:
+async def remote_execute(server: str, command: str) -> Tuple[bool, str]:
     """
     routes에 정의된 순서대로 시도.
     각 시도 결과를 recovery_logs에 기록 (route 경로 포함).
