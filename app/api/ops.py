@@ -610,6 +610,133 @@ async def maintenance_end(req: MaintenanceEndRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ─── Recovery Logs (AADS-132) ─────────────────────────────────────────────────
+
+@router.get("/ops/recovery-logs")
+async def list_recovery_logs(
+    issue_type: Optional[str] = None,
+    result: Optional[str] = None,
+    server: Optional[str] = None,
+    limit: int = Query(50, le=500),
+):
+    """복구 이력 조회."""
+    conditions = []
+    params: list = []
+    idx = 1
+    if issue_type:
+        conditions.append(f"issue_type = ${idx}")
+        params.append(issue_type); idx += 1
+    if result:
+        conditions.append(f"result = ${idx}")
+        params.append(result); idx += 1
+    if server:
+        conditions.append(f"affected_server = ${idx}")
+        params.append(server); idx += 1
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    params.append(limit)
+    try:
+        conn = await _get_conn()
+        try:
+            rows = await conn.fetch(
+                f"SELECT * FROM recovery_logs {where} ORDER BY created_at DESC LIMIT ${idx}",
+                *params
+            )
+        finally:
+            await conn.close()
+        return {"items": [dict(r) for r in rows], "count": len(rows)}
+    except Exception as e:
+        logger.error("ops_recovery_logs_list_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/ops/recovery-logs/stats")
+async def recovery_logs_stats():
+    """복구 통계 — 이슈 유형별 발생 횟수, 성공률, 평균 복구 시간."""
+    try:
+        conn = await _get_conn()
+        try:
+            by_type = await conn.fetch("""
+                SELECT
+                    issue_type,
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN result='success' THEN 1 ELSE 0 END) AS success_count,
+                    ROUND(
+                        100.0 * SUM(CASE WHEN result='success' THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0),
+                        1
+                    ) AS success_rate_pct,
+                    ROUND(AVG(duration_seconds)::numeric, 1) AS avg_duration_seconds
+                FROM recovery_logs
+                GROUP BY issue_type
+                ORDER BY total DESC
+            """)
+            by_tier = await conn.fetch("""
+                SELECT tier, COUNT(*) AS total,
+                    SUM(CASE WHEN result='success' THEN 1 ELSE 0 END) AS success_count
+                FROM recovery_logs
+                GROUP BY tier ORDER BY tier
+            """)
+            totals = await conn.fetchrow("""
+                SELECT COUNT(*) AS total,
+                    SUM(CASE WHEN result='success' THEN 1 ELSE 0 END) AS total_success
+                FROM recovery_logs
+            """)
+        finally:
+            await conn.close()
+        return {
+            "by_issue_type": [dict(r) for r in by_type],
+            "by_tier": [dict(r) for r in by_tier],
+            "total": int(totals["total"] or 0),
+            "total_success": int(totals["total_success"] or 0),
+        }
+    except Exception as e:
+        logger.error("ops_recovery_stats_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Circuit Breaker (AADS-132) ───────────────────────────────────────────────
+
+@router.get("/ops/circuit-breaker")
+async def circuit_breaker_status():
+    """서킷브레이커 상태 조회 (3서버)."""
+    try:
+        conn = await _get_conn()
+        try:
+            rows = await conn.fetch(
+                "SELECT * FROM circuit_breaker_state ORDER BY server"
+            )
+        finally:
+            await conn.close()
+        return {"servers": [dict(r) for r in rows], "count": len(rows)}
+    except Exception as e:
+        logger.error("ops_circuit_breaker_status_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/ops/circuit-breaker/{server}/reset")
+async def circuit_breaker_reset(server: str):
+    """서킷브레이커 수동 리셋 — closed 상태로 강제 전환."""
+    allowed = {"68", "211", "114"}
+    if server not in allowed:
+        raise HTTPException(status_code=400, detail=f"server must be one of {allowed}")
+    try:
+        conn = await _get_conn()
+        try:
+            await conn.execute(
+                "UPDATE circuit_breaker_state "
+                "SET state='closed', failure_count=0, cooldown_until=NULL, "
+                "    opened_at=NULL, updated_at=NOW() "
+                "WHERE server=$1",
+                server
+            )
+        finally:
+            await conn.close()
+        logger.info("circuit_breaker_manual_reset", server=server)
+        return {"ok": True, "server": server, "state": "closed"}
+    except Exception as e:
+        logger.error("ops_circuit_breaker_reset_error", server=server, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/ops/maintenance/status")
 async def maintenance_status(server: Optional[str] = None):
     """현재 유지보수 상태 조회."""
@@ -645,3 +772,108 @@ async def maintenance_status(server: Optional[str] = None):
     except Exception as e:
         logger.error("maintenance_status_error", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── AADS-132: 복구 로그 + 서킷브레이커 API ────────────────────────────────
+
+
+@router.get("/ops/recovery-logs")
+async def list_recovery_logs(
+    issue_type: Optional[str] = None,
+    result: Optional[str] = None,
+    server: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    """복구 이력 조회 (issue_type, result, server 필터)."""
+    try:
+        conn = await _get_conn()
+        try:
+            conditions, params, idx = [], [], 1
+            if issue_type:
+                conditions.append(f"issue_type = ${idx}"); params.append(issue_type); idx += 1
+            if result:
+                conditions.append(f"result = ${idx}"); params.append(result); idx += 1
+            if server:
+                conditions.append(f"affected_server = ${idx}"); params.append(server); idx += 1
+            where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+            params.extend([limit, offset])
+            rows = await conn.fetch(
+                f"""
+                SELECT id, issue_type, affected_task_id, affected_server,
+                       tier, action_taken, result, duration_seconds,
+                       recovery_route, error_message, recovered_by, created_at::text
+                FROM recovery_logs {where}
+                ORDER BY created_at DESC
+                LIMIT ${idx} OFFSET ${idx+1}
+                """,
+                *params,
+            )
+            total = await conn.fetchval(
+                f"SELECT COUNT(*) FROM recovery_logs {where}", *params[:-2]
+            )
+        finally:
+            await conn.close()
+        return {
+            "items": [dict(r) for r in rows],
+            "total": int(total or 0),
+            "limit": limit,
+            "offset": offset,
+        }
+    except Exception as e:
+        logger.error("recovery_logs_list_error", error=str(e))
+        raise HTTPException(500, str(e))
+
+
+@router.get("/ops/recovery-logs/stats")
+async def recovery_logs_stats():
+    """복구 통계: 이슈 유형별 발생 횟수, 성공률, 평균 복구 시간."""
+    try:
+        conn = await _get_conn()
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT issue_type,
+                       COUNT(*) AS total,
+                       SUM(CASE WHEN result='success' THEN 1 ELSE 0 END) AS success_count,
+                       AVG(duration_seconds) AS avg_duration_seconds
+                FROM recovery_logs
+                GROUP BY issue_type
+                ORDER BY total DESC
+                """
+            )
+        finally:
+            await conn.close()
+        return {
+            "stats": [
+                {
+                    "issue_type": r["issue_type"],
+                    "total": r["total"],
+                    "success_count": r["success_count"],
+                    "success_rate": round(r["success_count"] / r["total"] * 100, 1) if r["total"] else 0,
+                    "avg_duration_seconds": round(float(r["avg_duration_seconds"] or 0), 2),
+                }
+                for r in rows
+            ]
+        }
+    except Exception as e:
+        logger.error("recovery_logs_stats_error", error=str(e))
+        raise HTTPException(500, str(e))
+
+
+@router.get("/ops/circuit-breaker")
+async def circuit_breaker_status():
+    """서킷브레이커 상태 조회 (3서버)."""
+    from app.services.circuit_breaker import get_all_states
+    states = await get_all_states()
+    return {"circuit_breakers": states}
+
+
+@router.post("/ops/circuit-breaker/{server}/reset")
+async def circuit_breaker_reset(server: str):
+    """서킷브레이커 수동 리셋 → closed 상태로 전환."""
+    from app.services.circuit_breaker import reset_circuit
+    ok = await reset_circuit(server)
+    if not ok:
+        raise HTTPException(500, f"Circuit breaker reset failed for server {server}")
+    return {"ok": True, "server": server, "state": "closed"}
