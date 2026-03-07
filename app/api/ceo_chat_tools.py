@@ -1,15 +1,20 @@
 """
-CEO Chat 도구 정의 및 실행 (AADS-157)
+CEO Chat 도구 정의 및 실행 (AADS-157 + AADS-159)
 
-5개 도구: read_file, read_github, search_logs, query_db, fetch_url
+5개 기존 도구: read_file, read_github, search_logs, query_db, fetch_url
+6개 browser 도구: browser_navigate, browser_snapshot, browser_screenshot,
+                  browser_click, browser_fill, browser_tab_list
 
 보안 규칙 (하드코딩, LLM 우회 불가):
   - read_file: /root/aads/ 하위만 허용. /etc, /proc, /root/.ssh 차단
   - query_db: SELECT만 허용. INSERT/UPDATE/DELETE/DROP/ALTER 차단
   - search_logs: 최근 100줄, 최대 10KB
   - fetch_url: 최대 20KB
+  - browser: 허용 도메인만 접근 (*.newtalk.kr, github.com, localhost)
 """
+import asyncio
 import asyncpg
+import base64
 import httpx
 import logging
 import re
@@ -17,6 +22,7 @@ import subprocess
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +112,80 @@ TOOL_DEFINITIONS: List[Dict] = [
             "required": ["url"],
         },
     },
+    # ── Browser 도구 (AADS-159) ────────────────────────────────────────────
+    {
+        "name": "browser_navigate",
+        "description": "브라우저로 URL 이동. 허용 도메인: *.newtalk.kr, github.com, raw.githubusercontent.com, localhost",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "이동할 URL (예: https://aads.newtalk.kr/)",
+                }
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "browser_snapshot",
+        "description": "현재 페이지의 접근성 트리를 텍스트로 추출. LLM이 페이지 구조·콘텐츠를 분석하는 데 최적.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "browser_screenshot",
+        "description": "현재 페이지 PNG 스크린샷 촬영. base64 인코딩 결과 반환.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "browser_click",
+        "description": "CSS selector 또는 텍스트로 요소 클릭.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "클릭할 요소의 CSS selector (예: button#submit, text=로그인)",
+                }
+            },
+            "required": ["selector"],
+        },
+    },
+    {
+        "name": "browser_fill",
+        "description": "입력 필드에 텍스트 채우기.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "입력 필드의 CSS selector (예: input[name=username])",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "입력할 텍스트",
+                },
+            },
+            "required": ["selector", "value"],
+        },
+    },
+    {
+        "name": "browser_tab_list",
+        "description": "현재 열린 브라우저 탭 목록 반환 (URL + 제목).",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
 ]
 
 # ─── 보안 상수 ─────────────────────────────────────────────────────────────────
@@ -118,6 +198,24 @@ _SQL_BLOCKED = re.compile(
 _MAX_LOG_BYTES = 10 * 1024   # 10 KB
 _MAX_URL_BYTES = 20 * 1024   # 20 KB
 _MAX_DB_ROWS = 50
+
+# ─── Browser 보안 상수 (AADS-159, 하드코딩 — LLM 우회 불가) ──────────────
+_BROWSER_ALLOWED_DOMAINS = frozenset([
+    "aads.newtalk.kr",
+    "github.com",
+    "raw.githubusercontent.com",
+    "localhost",
+    "127.0.0.1",
+])
+_BROWSER_ALLOWED_SUFFIX = ".newtalk.kr"
+_BROWSER_TIMEOUT_MS = 60_000   # 60초 세션 타임아웃
+_BROWSER_MAX_TABS = 3          # 최대 3탭
+
+# Playwright 싱글턴 (FastAPI event loop 내 유지)
+_pw_handle = None
+_pw_browser = None
+_pw_context = None
+_pw_init_lock: Optional[asyncio.Lock] = None
 
 
 # ─── 도구 실행 함수들 ──────────────────────────────────────────────────────────
@@ -245,6 +343,178 @@ async def tool_fetch_url(url: str) -> str:
         return f"[ERROR] URL 조회 실패: {e}"
 
 
+# ─── Browser 도구 함수 (AADS-159) ──────────────────────────────────────────────
+
+def _browser_domain_ok(url: str) -> Optional[str]:
+    """도메인 화이트리스트 검사. 차단이면 에러 문자열, 통과이면 None."""
+    try:
+        hostname = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return "[접근 차단] URL 파싱 실패"
+    if hostname in _BROWSER_ALLOWED_DOMAINS:
+        return None
+    if hostname.endswith(_BROWSER_ALLOWED_SUFFIX):
+        return None
+    return f"[접근 차단] 허용되지 않은 도메인입니다: {hostname}"
+
+
+async def _acquire_pw_context() -> Tuple[Any, Optional[str]]:
+    """Playwright 컨텍스트 싱글턴 취득. 실패 시 (None, 에러메시지)."""
+    global _pw_handle, _pw_browser, _pw_context, _pw_init_lock
+    if _pw_init_lock is None:
+        _pw_init_lock = asyncio.Lock()
+    async with _pw_init_lock:
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            return None, "[브라우저 도구 사용 불가] playwright 패키지가 설치되지 않았습니다."
+        try:
+            need_init = (
+                _pw_context is None
+                or _pw_browser is None
+                or not _pw_browser.is_connected()
+            )
+            if need_init:
+                if _pw_handle is not None:
+                    try:
+                        await _pw_handle.stop()
+                    except Exception:
+                        pass
+                _pw_handle = await async_playwright().start()
+                _pw_browser = await _pw_handle.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--memory-pressure-off",
+                    ],
+                )
+                _pw_context = await _pw_browser.new_context(
+                    viewport={"width": 1280, "height": 720},
+                    java_script_enabled=True,
+                )
+            return _pw_context, None
+        except Exception as e:
+            return None, f"[브라우저 도구 사용 불가] 초기화 실패: {e}"
+
+
+async def _current_page(ctx: Any) -> Any:
+    """현재(최신) 페이지 반환. 없으면 새 페이지 생성."""
+    pages = ctx.pages
+    return pages[-1] if pages else await ctx.new_page()
+
+
+def _snapshot_to_text(node: Dict, depth: int = 0) -> str:
+    """접근성 트리 노드를 들여쓰기 텍스트로 변환."""
+    indent = "  " * depth
+    role = node.get("role", "")
+    name = node.get("name", "")
+    value = node.get("value", "")
+    line = f"{indent}[{role}]{(' ' + name) if name else ''}{(' = ' + str(value)) if value else ''}"
+    child_lines = "\n".join(
+        _snapshot_to_text(c, depth + 1) for c in node.get("children", [])
+    )
+    return line + ("\n" + child_lines if child_lines else "")
+
+
+async def tool_browser_navigate(url: str) -> str:
+    """브라우저로 URL 이동 (도메인 화이트리스트 검사 포함)."""
+    blocked = _browser_domain_ok(url)
+    if blocked:
+        return blocked
+    ctx, err = await _acquire_pw_context()
+    if err:
+        return err
+    try:
+        pages = ctx.pages
+        if len(pages) >= _BROWSER_MAX_TABS:
+            page = pages[-1]  # 마지막 탭 재사용
+        else:
+            page = await ctx.new_page()
+        await page.goto(url, timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
+        title = await page.title()
+        return f"[탐색 완료]\n제목: {title}\nURL: {page.url}"
+    except Exception as e:
+        return f"[ERROR] 브라우저 탐색 실패: {e}"
+
+
+async def tool_browser_snapshot() -> str:
+    """현재 페이지의 접근성 트리를 텍스트로 추출 (LLM 최적)."""
+    ctx, err = await _acquire_pw_context()
+    if err:
+        return err
+    try:
+        page = await _current_page(ctx)
+        snap = await page.accessibility.snapshot()
+        if not snap:
+            return "(접근성 트리 없음 — 페이지가 로드되지 않았을 수 있습니다)"
+        text = _snapshot_to_text(snap)
+        if len(text) > 20_000:
+            text = text[:20_000] + "\n...(20KB 초과, 잘림)"
+        return f"[접근성 트리 — {page.url}]\n{text}"
+    except Exception as e:
+        return f"[ERROR] 스냅샷 실패: {e}"
+
+
+async def tool_browser_screenshot() -> str:
+    """현재 페이지 PNG 스크린샷 촬영 (base64 반환)."""
+    ctx, err = await _acquire_pw_context()
+    if err:
+        return err
+    try:
+        page = await _current_page(ctx)
+        data = await page.screenshot(full_page=False, timeout=_BROWSER_TIMEOUT_MS)
+        b64 = base64.b64encode(data).decode("ascii")
+        return f"[스크린샷 PNG — base64]\nURL: {page.url}\nDATA:{b64}"
+    except Exception as e:
+        return f"[ERROR] 스크린샷 실패: {e}"
+
+
+async def tool_browser_click(selector: str) -> str:
+    """CSS selector로 요소 클릭."""
+    ctx, err = await _acquire_pw_context()
+    if err:
+        return err
+    try:
+        page = await _current_page(ctx)
+        await page.click(selector, timeout=30_000)
+        return f"[클릭 완료] selector={selector}"
+    except Exception as e:
+        return f"[ERROR] 클릭 실패 ({selector}): {e}"
+
+
+async def tool_browser_fill(selector: str, value: str) -> str:
+    """입력 필드에 텍스트 채우기."""
+    ctx, err = await _acquire_pw_context()
+    if err:
+        return err
+    try:
+        page = await _current_page(ctx)
+        await page.fill(selector, value, timeout=30_000)
+        return f"[입력 완료] selector={selector}, value='{value[:50]}'"
+    except Exception as e:
+        return f"[ERROR] 입력 실패 ({selector}): {e}"
+
+
+async def tool_browser_tab_list() -> str:
+    """열린 탭 목록 반환."""
+    ctx, err = await _acquire_pw_context()
+    if err:
+        return err
+    try:
+        pages = ctx.pages
+        if not pages:
+            return f"(열린 탭 없음 — 최대 {_BROWSER_MAX_TABS}개)"
+        lines = [f"[열린 탭 {len(pages)}/{_BROWSER_MAX_TABS}]"]
+        for i, p in enumerate(pages):
+            title = await p.title()
+            lines.append(f"  [{i}] {title} — {p.url}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"[ERROR] 탭 목록 조회 실패: {e}"
+
+
 # ─── 디스패처 ──────────────────────────────────────────────────────────────────
 
 async def execute_tool(name: str, params: Dict[str, Any], dsn: str) -> str:
@@ -266,5 +536,18 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str) -> str:
         return await tool_query_db(params.get("sql", ""), dsn)
     elif name == "fetch_url":
         return await tool_fetch_url(params.get("url", ""))
+    # ── Browser 도구 (AADS-159) ─────────────────────────────────────────────
+    elif name == "browser_navigate":
+        return await tool_browser_navigate(params.get("url", ""))
+    elif name == "browser_snapshot":
+        return await tool_browser_snapshot()
+    elif name == "browser_screenshot":
+        return await tool_browser_screenshot()
+    elif name == "browser_click":
+        return await tool_browser_click(params.get("selector", ""))
+    elif name == "browser_fill":
+        return await tool_browser_fill(params.get("selector", ""), params.get("value", ""))
+    elif name == "browser_tab_list":
+        return await tool_browser_tab_list()
     else:
         return f"[ERROR] 알 수 없는 도구: {name}"

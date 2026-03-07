@@ -107,19 +107,21 @@ SUPPORTED_MODELS: List[Dict[str, Any]] = [
 _MODEL_META: Dict[str, Dict] = {m["id"]: m for m in SUPPORTED_MODELS}
 
 
-# ─── Intent Classifier (AADS-157) ────────────────────────────────────────
+# ─── Intent Classifier (AADS-157 + AADS-159) ─────────────────────────────
 _INTENT_PATTERNS: Dict[str, List[str]] = {
     "dashboard": ["상태", "확인", "보고", "현황", "서버", "대시보드", "요약", "overview"],
     "diagnosis": ["왜", "안돼", "오류", "에러", "문제", "분석", "실패", "죽었", "죽어", "안됨", "error", "fail"],
     "research":  ["검색", "조사", "비교", "찾아", "최신", "찾아봐", "알아봐", "어떤", "무엇"],
     "execute":   ["만들어", "수정해", "고쳐", "배포", "진행", "승인", "작성해", "추가해", "구현", "지시서"],
     "strategy":  ["기획", "방향", "전략", "의도", "검토", "설계", "아키텍처", "계획"],
+    # AADS-159: 브라우저 자동화 의도
+    "browser":   ["스크린샷", "페이지", "열어", "화면", "브라우저", "사이트", "접속"],
 }
 
 
 def classify_intent(message: str) -> str:
-    """메시지 의도 5분류. 우선순위: execute > dashboard > diagnosis > research > strategy."""
-    for intent in ["execute", "dashboard", "diagnosis", "research", "strategy"]:
+    """메시지 의도 6분류. 우선순위: execute > browser > dashboard > diagnosis > research > strategy."""
+    for intent in ["execute", "browser", "dashboard", "diagnosis", "research", "strategy"]:
         if any(kw in message for kw in _INTENT_PATTERNS[intent]):
             return intent
     return "strategy"
@@ -789,6 +791,12 @@ async def send_ceo_message(req: CeoChatRequest):
             tool_model = model if model.startswith("claude") else "claude-sonnet-4-6"
             response_text, input_tokens, output_tokens = await _call_anthropic_with_tools(
                 tool_model, enriched_prompt, messages, dsn
+            )
+        elif intent == "browser":
+            # 브라우저 자동화 tool-use (AADS-159)
+            tool_model = model if model.startswith("claude") else "claude-sonnet-4-6"
+            response_text, input_tokens, output_tokens = await _call_anthropic_with_tools(
+                tool_model, system_prompt, messages, dsn
             )
         elif intent in ("diagnosis", "research"):
             # tool-use 활성화 (Anthropic 전용)
