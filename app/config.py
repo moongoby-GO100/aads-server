@@ -5,6 +5,7 @@ from pydantic import SecretStr
 class Settings(BaseSettings):
     # API Keys (SecretStr로 로그 마스킹)
     ANTHROPIC_API_KEY: SecretStr
+    ANTHROPIC_API_KEY_2: SecretStr = SecretStr("")   # 2차 키: 1차 크레딧 소진(402) 시 자동 전환
     OPENAI_API_KEY: SecretStr = SecretStr("")
     GOOGLE_API_KEY: SecretStr = SecretStr("")
     E2B_API_KEY: SecretStr

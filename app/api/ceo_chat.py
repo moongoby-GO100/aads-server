@@ -1,12 +1,13 @@
 """
 CEO Chat v2 - 계층 메모리 + 컨텍스트 DB + 모델 분기 엔진
 T-073: Context Manager + Model Router + Session Memory
+AADS-156: 모델 라우팅 수정 + 전체 지원 모델 업데이트 + 402 fallback
 
 모델 라우터:
-  complex  → claude-opus-4   (claude-opus-4-5)
-  code     → claude-sonnet-4 (claude-sonnet-4-5)
-  simple   → gemini-2.0-flash
-  default  → claude-sonnet-4 (claude-sonnet-4-5)
+  complex  → claude-opus-4-6
+  code     → claude-sonnet-4-6
+  simple   → gemini-2.5-flash
+  default  → claude-sonnet-4-6
 """
 import json
 import uuid
@@ -16,13 +17,28 @@ from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Tuple
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropic, APIStatusError
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
 settings = Settings()
-router = APIRouter()
+
+# ─── Anthropic 클라이언트 (1차/2차 키) ──────────────────────────────────────
 anthropic_client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY.get_secret_value())
+_api_key_2 = settings.ANTHROPIC_API_KEY_2.get_secret_value()
+anthropic_client_2: Optional[AsyncAnthropic] = AsyncAnthropic(api_key=_api_key_2) if _api_key_2 else None
+
+# ─── OpenAI 클라이언트 (옵션) ─────────────────────────────────────────────
+openai_client = None
+_openai_key = settings.OPENAI_API_KEY.get_secret_value()
+if _openai_key:
+    try:
+        from openai import AsyncOpenAI
+        openai_client = AsyncOpenAI(api_key=_openai_key)
+    except ImportError:
+        logger.warning("openai package not installed; GPT models unavailable")
+
+router = APIRouter()
 
 
 # ─── DB 연결 ─────────────────────────────────────────────────────────────
@@ -41,41 +57,91 @@ class CeoEndSessionRequest(BaseModel):
     session_id: str
 
 
+# ─── 지원 모델 목록 (AADS-156) ───────────────────────────────────────────
+# Claude 11개 + GPT 11개 + Gemini 6개 = 28개
+SUPPORTED_MODELS: List[Dict[str, Any]] = [
+    # Claude
+    {"id": "claude-opus-4-6",            "provider": "anthropic", "name": "Claude Opus 4.6",            "input_$/M": 5.0,   "output_$/M": 25.0},
+    {"id": "claude-sonnet-4-6",          "provider": "anthropic", "name": "Claude Sonnet 4.6",          "input_$/M": 3.0,   "output_$/M": 15.0},
+    {"id": "claude-haiku-4-5-20251001",  "provider": "anthropic", "name": "Claude Haiku 4.5",           "input_$/M": 0.80,  "output_$/M": 4.0},
+    {"id": "claude-opus-4-5",            "provider": "anthropic", "name": "Claude Opus 4.5",            "input_$/M": 5.0,   "output_$/M": 25.0},
+    {"id": "claude-sonnet-4-5",          "provider": "anthropic", "name": "Claude Sonnet 4.5",          "input_$/M": 3.0,   "output_$/M": 15.0},
+    {"id": "claude-3-5-sonnet-20241022", "provider": "anthropic", "name": "Claude 3.5 Sonnet",          "input_$/M": 3.0,   "output_$/M": 15.0},
+    {"id": "claude-3-5-haiku-20241022",  "provider": "anthropic", "name": "Claude 3.5 Haiku",           "input_$/M": 0.80,  "output_$/M": 4.0},
+    {"id": "claude-3-opus-20240229",     "provider": "anthropic", "name": "Claude 3 Opus",              "input_$/M": 15.0,  "output_$/M": 75.0},
+    {"id": "claude-3-sonnet-20240229",   "provider": "anthropic", "name": "Claude 3 Sonnet",            "input_$/M": 3.0,   "output_$/M": 15.0},
+    {"id": "claude-3-haiku-20240307",    "provider": "anthropic", "name": "Claude 3 Haiku",             "input_$/M": 0.25,  "output_$/M": 1.25},
+    {"id": "claude-2.1",                 "provider": "anthropic", "name": "Claude 2.1",                 "input_$/M": 8.0,   "output_$/M": 24.0},
+    # GPT
+    {"id": "gpt-5",                      "provider": "openai",    "name": "GPT-5",                      "input_$/M": 10.0,  "output_$/M": 30.0},
+    {"id": "gpt-5-mini",                 "provider": "openai",    "name": "GPT-5 mini",                 "input_$/M": 0.25,  "output_$/M": 2.0},
+    {"id": "gpt-5.2-chat-latest",        "provider": "openai",    "name": "GPT-5.2 Chat",               "input_$/M": 5.0,   "output_$/M": 15.0},
+    {"id": "gpt-4o",                     "provider": "openai",    "name": "GPT-4o",                     "input_$/M": 5.0,   "output_$/M": 15.0},
+    {"id": "gpt-4o-mini",                "provider": "openai",    "name": "GPT-4o mini",                "input_$/M": 0.15,  "output_$/M": 0.60},
+    {"id": "gpt-4-turbo",                "provider": "openai",    "name": "GPT-4 Turbo",                "input_$/M": 10.0,  "output_$/M": 30.0},
+    {"id": "gpt-4",                      "provider": "openai",    "name": "GPT-4",                      "input_$/M": 30.0,  "output_$/M": 60.0},
+    {"id": "gpt-3.5-turbo",              "provider": "openai",    "name": "GPT-3.5 Turbo",              "input_$/M": 0.5,   "output_$/M": 1.5},
+    {"id": "o1",                         "provider": "openai",    "name": "o1",                         "input_$/M": 15.0,  "output_$/M": 60.0},
+    {"id": "o1-mini",                    "provider": "openai",    "name": "o1-mini",                    "input_$/M": 3.0,   "output_$/M": 12.0},
+    {"id": "o3-mini",                    "provider": "openai",    "name": "o3-mini",                    "input_$/M": 1.1,   "output_$/M": 4.4},
+    # Gemini
+    {"id": "gemini-2.5-pro",             "provider": "google",    "name": "Gemini 2.5 Pro",             "input_$/M": 7.0,   "output_$/M": 21.0},
+    {"id": "gemini-3.1-pro-preview",     "provider": "google",    "name": "Gemini 3.1 Pro Preview",     "input_$/M": 2.0,   "output_$/M": 12.0},
+    {"id": "gemini-2.5-flash",           "provider": "google",    "name": "Gemini 2.5 Flash",           "input_$/M": 0.30,  "output_$/M": 2.50},
+    {"id": "gemini-2.0-flash",           "provider": "google",    "name": "Gemini 2.0 Flash",           "input_$/M": 0.075, "output_$/M": 0.30},
+    {"id": "gemini-1.5-pro",             "provider": "google",    "name": "Gemini 1.5 Pro",             "input_$/M": 3.50,  "output_$/M": 10.50},
+    {"id": "gemini-1.5-flash",           "provider": "google",    "name": "Gemini 1.5 Flash",           "input_$/M": 0.075, "output_$/M": 0.30},
+]
+
+# 빠른 조회용 dict
+_MODEL_META: Dict[str, Dict] = {m["id"]: m for m in SUPPORTED_MODELS}
+
+
 # ─── Model Router ────────────────────────────────────────────────────────
 def route_model(message: str) -> str:
     """메시지 키워드에 따라 최적 모델 선택 (T-073 지시서 기준)."""
-    simple    = ['실행해', '결과', '상태', '확인', '스크린샷', '봐', '알려']
-    code      = ['수정해', '만들어', '추가해', '지시서', '코드', '고쳐', '수정']
+    simple     = ['실행해', '결과', '상태', '확인', '스크린샷', '봐', '알려']
+    code       = ['수정해', '만들어', '추가해', '지시서', '코드', '고쳐', '수정']
     complex_kw = ['설계', '분석', '개선안', '보고', '아키텍처', '전략', '검토', '평가']
     if any(p in message for p in complex_kw):
-        return 'claude-opus-4-5'
+        return 'claude-opus-4-6'
     if any(p in message for p in code):
-        return 'claude-sonnet-4-5'
+        return 'claude-sonnet-4-6'
     if any(p in message for p in simple):
-        return 'gemini-2.0-flash'
-    return 'claude-sonnet-4-5'
+        return 'gemini-2.5-flash'
+    return 'claude-sonnet-4-6'
 
 
 # ─── 비용 계산 ────────────────────────────────────────────────────────────
-MODEL_PRICING = {
-    'claude-opus-4-5':   {'input': 15.0,  'output': 75.0},
-    'claude-sonnet-4-5': {'input': 3.0,   'output': 15.0},
-    'gemini-2.0-flash':  {'input': 0.075, 'output': 0.30},
-    'gemini-1.5-flash':  {'input': 0.075, 'output': 0.30},
-}
-
-# 지시서 표시용 모델명
-MODEL_DISPLAY = {
-    'claude-opus-4-5':   'claude-opus-4',
-    'claude-sonnet-4-5': 'claude-sonnet-4',
-    'gemini-2.0-flash':  'gemini-2.0-flash',
-    'gemini-1.5-flash':  'gemini-2.0-flash',
-}
+def _get_pricing(model: str) -> Dict[str, float]:
+    meta = _MODEL_META.get(model)
+    if meta:
+        return {"input": meta["input_$/M"], "output": meta["output_$/M"]}
+    return {"input": 3.0, "output": 15.0}  # 알 수 없는 모델 → Sonnet 수준
 
 
 def calc_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    pricing = MODEL_PRICING.get(model, {'input': 3.0, 'output': 15.0})
-    return (input_tokens * pricing['input'] + output_tokens * pricing['output']) / 1_000_000
+    pricing = _get_pricing(model)
+    return (input_tokens * pricing["input"] + output_tokens * pricing["output"]) / 1_000_000
+
+
+# 지시서 표시용 모델명
+def _model_display_name(model: str) -> str:
+    meta = _MODEL_META.get(model)
+    if meta:
+        return meta["name"]
+    # 패턴 기반 fallback
+    if "haiku" in model:
+        return "Claude Haiku"
+    if "sonnet" in model:
+        return "Claude Sonnet"
+    if "opus" in model:
+        return "Claude Opus"
+    if "gemini" in model:
+        return model
+    if "gpt" in model or model.startswith("o1") or model.startswith("o3"):
+        return model
+    return model
 
 
 # ─── LLM 호출 ─────────────────────────────────────────────────────────────
@@ -83,18 +149,54 @@ async def call_llm(model: str, system_prompt: str, messages: List[Dict]) -> Tupl
     """모델에 따라 적합한 API 호출 → (응답텍스트, input_tokens, output_tokens)"""
     if model.startswith('gemini'):
         return await _call_gemini(model, system_prompt, messages)
+    if model.startswith('gpt') or model.startswith('o1') or model.startswith('o3'):
+        return await _call_openai(model, system_prompt, messages)
     return await _call_anthropic(model, system_prompt, messages)
 
 
 async def _call_anthropic(model: str, system_prompt: str, messages: List[Dict]) -> Tuple[str, int, int]:
-    resp = await anthropic_client.messages.create(
+    """Anthropic API 호출. 402(credit_balance_too_low) 시 2차 키로 자동 전환."""
+    clients = [c for c in [anthropic_client, anthropic_client_2] if c is not None]
+    last_exc: Optional[Exception] = None
+    for client in clients:
+        try:
+            resp = await client.messages.create(
+                model=model,
+                max_tokens=2000,
+                system=system_prompt,
+                messages=messages,
+            )
+            text = resp.content[0].text
+            return text, resp.usage.input_tokens, resp.usage.output_tokens
+        except APIStatusError as e:
+            if e.status_code == 402:
+                logger.warning(
+                    "anthropic_credit_exhausted_402",
+                    model=model,
+                    key_index=clients.index(client) + 1,
+                    trying_next=(client is not clients[-1]),
+                )
+                last_exc = e
+                continue
+            raise
+    raise last_exc or RuntimeError("All Anthropic API keys exhausted")
+
+
+async def _call_openai(model: str, system_prompt: str, messages: List[Dict]) -> Tuple[str, int, int]:
+    """OpenAI API 호출."""
+    if openai_client is None:
+        logger.warning(f"OpenAI client unavailable, falling back to claude-sonnet-4-6 for model={model}")
+        return await _call_anthropic('claude-sonnet-4-6', system_prompt, messages)
+    all_messages = [{"role": "system", "content": system_prompt}] + messages
+    resp = await openai_client.chat.completions.create(
         model=model,
         max_tokens=2000,
-        system=system_prompt,
-        messages=messages,
+        messages=all_messages,
     )
-    text = resp.content[0].text
-    return text, resp.usage.input_tokens, resp.usage.output_tokens
+    text = resp.choices[0].message.content or ""
+    input_tokens = resp.usage.prompt_tokens
+    output_tokens = resp.usage.completion_tokens
+    return text, input_tokens, output_tokens
 
 
 async def _call_gemini(model: str, system_prompt: str, messages: List[Dict]) -> Tuple[str, int, int]:
@@ -132,8 +234,8 @@ async def _call_gemini(model: str, system_prompt: str, messages: List[Dict]) -> 
         return text, in_tok, out_tok
 
     except Exception as e:
-        logger.warning(f"Gemini call failed, fallback to Sonnet: {e}")
-        return await _call_anthropic('claude-sonnet-4-5', system_prompt, messages)
+        logger.warning(f"Gemini call failed, fallback to claude-sonnet-4-6: {e}")
+        return await _call_anthropic('claude-sonnet-4-6', system_prompt, messages)
 
 
 # ─── Context Manager ─────────────────────────────────────────────────────
@@ -210,10 +312,10 @@ class ContextManager:
 
     async def build_context(self, session_id: str) -> str:
         """Layer 1~4 조합하여 시스템 프롬프트 구성. 예상 토큰: 3,500~5,500"""
-        facts            = await self.load_facts()
+        facts             = await self.load_facts()
         session_summaries = await self.load_session_summary(3)
-        active_tasks     = await self.load_active_tasks()
-        recent_turns     = await self.load_recent_turns(session_id, 3)
+        active_tasks      = await self.load_active_tasks()
+        recent_turns      = await self.load_recent_turns(session_id, 3)
 
         parts = [
             "당신은 AADS(Autonomous AI Development System)의 CEO 어시스턴트입니다.",
@@ -271,7 +373,7 @@ async def generate_session_summary(conn, session_id: str) -> None:
 
     try:
         text, _, _ = await call_llm(
-            'gemini-2.0-flash',
+            'gemini-2.5-flash',
             '당신은 회의록 요약 전문가입니다.',
             [{"role": "user", "content": prompt}],
         )
@@ -331,16 +433,9 @@ async def send_ceo_message(req: CeoChatRequest):
         system_prompt = await ctx_mgr.build_context(session_id)
         active_tasks = await ctx_mgr.load_active_tasks()
 
-        # 모델 선택: CEO가 직접 지정하면 override, 아니면 자동 라우팅 (T-104)
-        MODEL_ID_MAP = {
-            "claude-opus-4-6":   "claude-opus-4-5",
-            "claude-sonnet-4-6": "claude-sonnet-4-5",
-            "gemini-2.0-flash":  "gemini-2.0-flash",
-            "gpt-5-mini":        "claude-sonnet-4-5",  # fallback: GPT-5 mini 미지원 시 Sonnet
-            "mixture":           None,  # 자동 라우팅
-        }
-        if req.model and req.model in MODEL_ID_MAP and MODEL_ID_MAP[req.model] is not None:
-            model = MODEL_ID_MAP[req.model]
+        # 모델 선택: CEO가 직접 지정하면 패스스루, "mixture"/None이면 자동 라우팅 (AADS-156)
+        if req.model and req.model != "mixture":
+            model = req.model
         else:
             model = route_model(req.message)
 
@@ -391,7 +486,8 @@ async def send_ceo_message(req: CeoChatRequest):
         return {
             "session_id": session_id,
             "response": response_text,
-            "model_used": MODEL_DISPLAY.get(model, model),
+            "model_used": _model_display_name(model),
+            "model_id": model,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "cost_usd": round(cost, 6),
@@ -399,6 +495,20 @@ async def send_ceo_message(req: CeoChatRequest):
         }
     finally:
         await conn.close()
+
+
+@router.get("/ceo-chat/models")
+async def get_supported_models():
+    """지원 모델 목록 반환 (AADS-156: 28개)."""
+    return {
+        "models": SUPPORTED_MODELS,
+        "total": len(SUPPORTED_MODELS),
+        "by_provider": {
+            "anthropic": [m for m in SUPPORTED_MODELS if m["provider"] == "anthropic"],
+            "openai":    [m for m in SUPPORTED_MODELS if m["provider"] == "openai"],
+            "google":    [m for m in SUPPORTED_MODELS if m["provider"] == "google"],
+        },
+    }
 
 
 @router.get("/ceo-chat/sessions")
@@ -492,7 +602,7 @@ async def get_ceo_cost_summary():
         by_model: Dict[str, float] = {}
         for r in model_rows:
             key = r['model_used'] or 'unknown'
-            display = MODEL_DISPLAY.get(key, key)
+            display = _model_display_name(key)
             by_model[display] = float(r['cost'])
 
         total_month = float(month_row['cost'])

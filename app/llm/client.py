@@ -8,21 +8,17 @@ from typing import Optional, Any
 
 log = structlog.get_logger()
 
-# CEO-DIRECTIVES T-002 모델 ID 매핑 (2026 Anthropic API 기준)
-# 실제 사용 가능한 모델 ID로 매핑
+# CEO-DIRECTIVES T-002 모델 ID 매핑 (AADS-156 업데이트)
+# 내부 ID → 실제 API 모델 ID 변환 (다른 경우만 매핑, 동일하면 생략)
 MODEL_ALIASES = {
-    # Anthropic
-    "claude-opus-4-6": "claude-opus-4-5",       # Opus 4.6 → 4.5 (최신)
-    "claude-sonnet-4-6": "claude-sonnet-4-5",    # Sonnet 4.6 → 4.5
-    "claude-haiku-4-5": "claude-haiku-4-5",      # Haiku 4.5 그대로
-    # OpenAI
+    # Anthropic — 버전 접미사 없는 short ID → 실제 API ID
+    "claude-haiku-4-5": "claude-haiku-4-5-20251001",   # Haiku 4.5 날짜 버전
+    # OpenAI — 내부 별칭 → 실제 API ID (미지원 시 최신 동급 모델로 매핑)
     "gpt-5.2-chat-latest": "gpt-4o",
     "gpt-5.3-codex": "gpt-4o",
-    "gpt-5-mini": "gpt-4o-mini",
     "gpt-5-nano": "gpt-4o-mini",
-    # Google
+    # Google — 내부 프리뷰명 → 실제 API ID
     "gemini-3.1-pro-preview": "gemini-1.5-pro",
-    "gemini-2.5-flash": "gemini-1.5-flash",
 }
 
 
@@ -102,9 +98,9 @@ def create_llm_with_fallback(
             return llm
 
     # 3. 최종 Anthropic sonnet fallback
-    llm = _try_create("anthropic", "claude-sonnet-4-5")
+    llm = _try_create("anthropic", "claude-sonnet-4-6")
     if llm:
-        log.info("using_final_fallback", model="claude-sonnet-4-5")
+        log.info("using_final_fallback", model="claude-sonnet-4-6")
         return llm
 
     raise RuntimeError(f"모든 LLM 생성 실패: primary={primary_provider}/{primary_model}")
