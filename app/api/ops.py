@@ -974,6 +974,104 @@ async def sync_project_docs(request: Request):
             await conn.close()
 
 
+@router.post("/ops/sync-trigger-messages")
+async def sync_trigger_messages(request: Request):
+    """프로젝트별 트리거 메시지를 DB에 저장하고 aads-docs 레포에 자동 push."""
+    import subprocess
+    body = await request.json()
+    trigger_messages = body.get("trigger_messages")
+    if not trigger_messages or not isinstance(trigger_messages, dict):
+        raise HTTPException(400, "trigger_messages (object) is required")
+
+    conn = None
+    try:
+        conn = await _get_conn()
+        now = datetime.now(KST).isoformat()
+
+        for project, msg in trigger_messages.items():
+            await conn.execute("""
+                INSERT INTO system_memory (category, key, value, updated_by, created_at, updated_at)
+                VALUES ('trigger_messages', $1, $2::jsonb, 'dashboard', NOW(), NOW())
+                ON CONFLICT (category, key) DO UPDATE
+                SET value = EXCLUDED.value, updated_at = NOW(), updated_by = 'dashboard'
+            """, project, json.dumps(msg))
+
+        docs_repo = "/root/aads/aads-docs"
+        json_path = f"{docs_repo}/shared/trigger-messages.json"
+        os.makedirs(f"{docs_repo}/shared", exist_ok=True)
+
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "updated_at": now,
+                "updated_by": "dashboard",
+                "trigger_messages": trigger_messages
+            }, f, ensure_ascii=False, indent=2)
+
+        subprocess.run(
+            ["git", "-C", docs_repo, "add", "shared/trigger-messages.json"],
+            capture_output=True, text=True, timeout=30
+        )
+        diff_result = subprocess.run(
+            ["git", "-C", docs_repo, "diff", "--cached", "--quiet"],
+            capture_output=True, text=True, timeout=10
+        )
+        git_pushed = False
+        commit_sha = ""
+        if diff_result.returncode != 0:
+            commit_result = subprocess.run(
+                ["git", "-C", docs_repo, "commit", "-m",
+                 f"[AADS] docs: trigger-messages.json 자동 업데이트 ({now})"],
+                capture_output=True, text=True, timeout=30
+            )
+            if commit_result.returncode == 0:
+                push_result = subprocess.run(
+                    ["git", "-C", docs_repo, "push", "origin", "main"],
+                    capture_output=True, text=True, timeout=60
+                )
+                git_pushed = push_result.returncode == 0
+                sha_result = subprocess.run(
+                    ["git", "-C", docs_repo, "rev-parse", "--short", "HEAD"],
+                    capture_output=True, text=True, timeout=10
+                )
+                commit_sha = sha_result.stdout.strip()
+
+        return {
+            "ok": True,
+            "saved_projects": list(trigger_messages.keys()),
+            "git_pushed": git_pushed,
+            "commit_sha": commit_sha,
+            "updated_at": now
+        }
+    except Exception as e:
+        logger.error("sync_trigger_messages_error", error=str(e))
+        raise HTTPException(500, str(e))
+    finally:
+        if conn:
+            await conn.close()
+
+
+@router.get("/ops/trigger-messages")
+async def get_trigger_messages():
+    """DB에서 프로젝트별 트리거 메시지 조회."""
+    conn = None
+    try:
+        conn = await _get_conn()
+        rows = await conn.fetch(
+            "SELECT key, value FROM system_memory WHERE category = 'trigger_messages' ORDER BY key"
+        )
+        trigger_messages = {}
+        for r in rows:
+            val = r["value"]
+            trigger_messages[r["key"]] = json.loads(val) if isinstance(val, str) else val
+        return {"ok": True, "trigger_messages": trigger_messages}
+    except Exception as e:
+        logger.error("get_trigger_messages_error", error=str(e))
+        raise HTTPException(500, str(e))
+    finally:
+        if conn:
+            await conn.close()
+
+
 @router.get("/ops/project-docs")
 async def get_project_docs():
     """DB에서 프로젝트별 중요 문서 링크 조회."""
