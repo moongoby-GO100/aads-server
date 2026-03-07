@@ -33,12 +33,33 @@ DONE_DIR="${DONE_DIR:-/root/.genspark/directives/done}"
 PENDING_DIR="${PENDING_DIR:-/root/.genspark/directives/pending}"
 RUNNING_DIR="${RUNNING_DIR:-/root/.genspark/directives/running}"
 PRIORITY_LOG="/var/log/aads/auto_trigger_priority.log"
+_TDLOG_PRIMARY="/var/log/aads/trigger_decisions.log"
+if touch "${_TDLOG_PRIMARY}" 2>/dev/null; then
+    TRIGGER_DECISION_LOG="${_TDLOG_PRIMARY}"
+else
+    TRIGGER_DECISION_LOG="/root/aads/logs/trigger_decisions.log"
+    mkdir -p /root/aads/logs 2>/dev/null || true
+fi
+
+# AADS-141 A-1: signal 파일 경로
+SIGNAL_FILE="/tmp/aads_trigger_next.signal"
 
 # T-106: --dry-run 플래그 파싱
 DRY_RUN=false
+SIGNAL_TRIGGERED=false
 for _arg in "$@"; do
     [ "$_arg" = "--dry-run" ] && DRY_RUN=true
 done
+
+# AADS-141 A-1: signal 파일 감지 → 즉시 실행 모드
+if [ -f "${SIGNAL_FILE}" ]; then
+    _SIGNAL_CONTENT=$(cat "${SIGNAL_FILE}" 2>/dev/null || echo "")
+    rm -f "${SIGNAL_FILE}"
+    SIGNAL_TRIGGERED=true
+    mkdir -p "$(dirname "${TRIGGER_DECISION_LOG}")" 2>/dev/null || true
+    echo "$(date '+%Y-%m-%d %H:%M:%S') | SIGNAL_TRIGGER | content=${_SIGNAL_CONTENT} | mode=immediate | skip_cron_wait=true" \
+        >> "${TRIGGER_DECISION_LOG}" 2>/dev/null || true
+fi
 
 TS_START=$(TZ='Asia/Seoul' date '+%Y-%m-%d %H:%M KST')
 
@@ -46,6 +67,11 @@ echo "======================================================"
 echo "AADS Auto Trigger"
 echo "감시 디렉토리: ${DIRECTIVES_DIR}"
 echo "시작: ${TS_START}"
+if [ "$SIGNAL_TRIGGERED" = "true" ]; then
+    echo "모드: SIGNAL 기반 즉시 투입 (크론 주기 대기 없음)"
+else
+    echo "모드: 크론 주기 실행 (fallback)"
+fi
 echo "======================================================"
 
 # ─── T-106: 우선순위 로그 함수 ──────────────────────────────
@@ -57,6 +83,91 @@ _log_priority() {
         echo "$(date '+%Y-%m-%d %H:%M:%S') | SCAN: P0=${p0}, P1=${p1}, P2=${p2} | SELECTED: ${selected}" \
             >> "${PRIORITY_LOG}" 2>/dev/null || true
     fi
+}
+
+# ─── AADS-143: git-push 검증 함수 ───────────────────────────
+# 사용: verify_git_push <PROJECT> <RESULT_FILE> [REPO_OWNER] [REPO_NAME] [BRANCH]
+verify_git_push() {
+    local proj="$1"
+    local result_file="$2"
+    local repo_owner="${3:-moongoby-GO100}"
+    local repo_name="${4:-aads-docs}"
+    local branch="${5:-master}"
+    local LOG_DIR="/root/.genspark/logs"
+    local TELEGRAM_SCRIPT="/root/.genspark/send_telegram.sh"
+
+    # RESULT_FILE이 생성될 때까지 최대 7200초 대기 (폴링 10초)
+    local waited=0
+    while [ ! -f "$result_file" ] && [ "$waited" -lt 7200 ]; do
+        sleep 10
+        waited=$((waited + 10))
+    done
+
+    if [ ! -f "$result_file" ]; then
+        echo "[PUSH-VERIFY] RESULT 파일 없음 (7200초 초과): $result_file" >> "${LOG_DIR}/push_verify.log"
+        return 1
+    fi
+
+    # commit_sha 추출
+    local sha
+    sha=$(grep -m1 '^commit_sha:' "$result_file" 2>/dev/null | awk '{print $2}' | tr -d '[:space:]')
+
+    if [ -z "$sha" ] || [ "$sha" = "null" ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] [PUSH-VERIFY] commit_sha 없음 — push 검증 스킵: $result_file" >> "${LOG_DIR}/push_verify.log"
+        return 0
+    fi
+
+    echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] [PUSH-VERIFY] $proj commit_sha=${sha:0:8} push 확인 시작" >> "${LOG_DIR}/push_verify.log"
+
+    # GitHub raw URL 생성 (HANDOVER.md 기준)
+    local raw_url="https://raw.githubusercontent.com/${repo_owner}/${repo_name}/${sha}/HANDOVER.md"
+    local retries=3
+    local backoff=10
+    local http_code
+
+    for i in $(seq 1 $retries); do
+        http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "$raw_url" 2>/dev/null)
+        if [ "$http_code" = "200" ]; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] [PUSH-VERIFY] OK $proj SHA=${sha:0:8} HTTP 200" >> "${LOG_DIR}/push_verify.log"
+            return 0
+        fi
+        echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] [PUSH-VERIFY] $proj HTTP ${http_code} (시도 ${i}/${retries}) ${backoff}초 대기" >> "${LOG_DIR}/push_verify.log"
+        sleep $backoff
+        backoff=$((backoff * 2))
+    done
+
+    # 3회 실패 처리
+    echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] [PUSH-VERIFY] FAILED $proj SHA=${sha:0:8} url=${raw_url}" >> "${LOG_DIR}/push_failed.log"
+
+    # Telegram 알림
+    bash "$TELEGRAM_SCRIPT" "🔴 [${proj}] git-push 검증 실패
+SHA: ${sha:0:8}
+→ 수동 push 확인 필요" 2>/dev/null
+
+    # recovery_logs DB 기록
+    local aads_url
+    aads_url=$(grep '^AADS_API_URL=' /root/.env.aads 2>/dev/null | cut -d= -f2-)
+    [ -n "$aads_url" ] && curl -s -X POST "${aads_url}/ops/recovery-logs" \
+        -H "Content-Type: application/json" \
+        -d "{\"project\":\"${proj}\",\"issue_type\":\"push_failed\",\"detail\":\"commit_sha=${sha}\",\"status\":\"failed\",\"created_at\":\"$(date '+%Y-%m-%d %H:%M KST')\"}" \
+        --max-time 10 > /dev/null 2>&1
+
+    # 매니저 에스컬레이션 트리거
+    bash "$TELEGRAM_SCRIPT" "🚨 [ESCALATION] ${proj} git-push_failed 매니저 확인 요청" 2>/dev/null
+
+    return 1
+}
+# ─── push 검증 함수 끝 ───────────────────────────────────────
+
+# ─── AADS-113: 지시서 라이프사이클 DB 기록 함수 ─────────────
+record_lifecycle() {
+    local task_id="$1" status="$2" timestamp="$3"
+    local project="${PROJECT:-AADS}"
+    [ -z "$timestamp" ] && timestamp=$(TZ='Asia/Seoul' date '+%Y-%m-%dT%H:%M:%S+09:00')
+    curl -s -X POST "http://localhost:8080/api/v1/ops/directive-lifecycle" \
+        -H "Content-Type: application/json" \
+        -d "{\"task_id\":\"${task_id}\",\"project\":\"${project}\",\"status\":\"${status}\",\"timestamp\":\"${timestamp}\"}" \
+        > /dev/null 2>&1 || true
 }
 
 # ─── D-025: impact/effort 점수 계산 함수 ────────────────────
@@ -86,6 +197,32 @@ _best_by_score() {
     done
     echo "$best_file"
 }
+
+# ─── AADS-145: 투기적 실행 — final_commit 기반 다음작업 프리로드 ─
+_speculative_preload() {
+    local _pend_dir="$1" _fail_flag="$2"
+    # 다음 후보 선택
+    local _next_file
+    _next_file=$(_select_next_file "$_pend_dir" 2>/dev/null) || return 0
+    [ -z "$_next_file" ] || [ ! -f "$_next_file" ] && return 0
+    echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] [SPEC-PRELOAD] 다음 작업 git pull 시작: $(basename "$_next_file")"
+    # 주요 repo git pull 선제 실행 (컨텍스트 준비)
+    for _repo_dir in /root/aads/aads-docs /root/aads/aads-server /root/aads/aads-dashboard; do
+        if [ -d "${_repo_dir}/.git" ]; then
+            git -C "$_repo_dir" pull --quiet 2>/dev/null &
+        fi
+    done
+    wait 2>/dev/null
+    # 후처리 실패 확인
+    if [ -f "$_fail_flag" ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] [SPEC-PRELOAD] 후처리 실패 감지 — 프리로드 취소"
+        rm -f "$_fail_flag"
+        return 1
+    fi
+    echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] [SPEC-PRELOAD] 프리로드 완료: $(basename "$_next_file")"
+    return 0
+}
+# ─── 투기적 실행 함수 끝 ────────────────────────────────────────
 
 # ─── T-106: pending에서 우선순위 기반 파일 선택 함수 ─────────
 _select_next_file() {
@@ -176,55 +313,10 @@ if [ "${PREEMPT_P0:-false}" = "true" ]; then
     fi
 fi
 
-# ─── R-014: WRAP 게이트 — P0/P1 완료 후 다음 P0/P1 진입 차단 ──────────────
-_WRAP_GATE_LOG_FILE="/tmp/.aads_wrap_gate_log"
-check_wrap_gate() {
-    local pending_file="$1"
-    local cur_priority
-    cur_priority=$(grep -m1 -iE '^priority[[:space:]]*[:：]' "$pending_file" 2>/dev/null \
-        | sed 's/^[^:：]*[:：][[:space:]]*//' | awk '{print $1}' | tr -d '[:space:]')
-    case "$cur_priority" in
-        P2|P3|p2|p3) return 0 ;;
-    esac
-    local last_done_file
-    last_done_file=$(ls -t "$DONE_DIR"/*.md 2>/dev/null | grep -v WRAP | head -1 || true)
-    [ -z "$last_done_file" ] && return 0
-    local last_priority
-    last_priority=$(grep -m1 -iE '^priority[[:space:]]*[:：]' "$last_done_file" 2>/dev/null \
-        | sed 's/^[^:：]*[:：][[:space:]]*//' | awk '{print $1}' | tr -d '[:space:]')
-    case "$last_priority" in
-        P0|P1|p0|p1) ;;
-        *) return 0 ;;
-    esac
-    local last_task_id
-    last_task_id=$(grep -m1 "^Task ID:" "$last_done_file" 2>/dev/null \
-        | sed 's/^Task ID:[[:space:]]*//' | tr -d '[:space:]' || true)
-    [ -z "$last_task_id" ] && return 0
-    local wrap_found=false
-    ls "$DONE_DIR"/*"${last_task_id}"*WRAP*.md 2>/dev/null | grep -q . && wrap_found=true
-    if ! $wrap_found; then
-        ls /root/aads/aads-docs/shared/verify/*WRAP* 2>/dev/null | grep -q . && wrap_found=true
-    fi
-    $wrap_found && return 0
-    local _now _last
-    _now=$(date +%s)
-    _last=$(cat "$_WRAP_GATE_LOG_FILE" 2>/dev/null || echo 0)
-    if [ $((_now - _last)) -ge 600 ]; then
-        echo "[WRAP_GATE_BLOCKED: ${last_task_id}] WRAP 파일 없음 — 다음 P0/P1 작업 10분 대기"
-        echo "$_now" > "$_WRAP_GATE_LOG_FILE"
-    fi
-    return 1
-}
-# ─────────────────────────────────────────────────────────────────────────────
-
 # ─── T-106: pending → running 우선순위 선택 이동 ────────────
 if [ -d "$PENDING_DIR" ] && ls "${PENDING_DIR}"/*.md 2>/dev/null | head -1 > /dev/null 2>&1; then
     NEXT_FILE=$(_select_next_file "$PENDING_DIR")
     if [ -n "$NEXT_FILE" ] && [ -f "$NEXT_FILE" ]; then
-        if ! check_wrap_gate "$NEXT_FILE"; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') WRAP_GATE_BLOCKED: $(basename "$NEXT_FILE") — 대기"
-            exit 0
-        fi
         echo "$(date '+%Y-%m-%d %H:%M:%S') Selected: $(basename "$NEXT_FILE")"
         if [ "$DRY_RUN" = "true" ]; then
             echo "[DRY-RUN] Would move: $NEXT_FILE → $RUNNING_DIR/"
@@ -232,6 +324,13 @@ if [ -d "$PENDING_DIR" ] && ls "${PENDING_DIR}"/*.md 2>/dev/null | head -1 > /de
         fi
         mkdir -p "$RUNNING_DIR"
         mv "$NEXT_FILE" "$RUNNING_DIR/"
+        # AADS-113: queued 상태 기록 (pending → running 이동 시)
+        _QUEUED_TASK_ID=$(grep -oP '(AADS|KIS|GO100|SF|NT|SALES|NAS|T)-\d+' "$RUNNING_DIR/$(basename "$NEXT_FILE")" 2>/dev/null | head -1 || true)
+        [ -n "$_QUEUED_TASK_ID" ] && record_lifecycle "$_QUEUED_TASK_ID" "queued"
+        # AADS-141 A-2: 투입 결정 로그
+        mkdir -p "$(dirname "${TRIGGER_DECISION_LOG}")" 2>/dev/null || true
+        echo "$(date '+%Y-%m-%d %H:%M:%S') | DISPATCH | task=${_QUEUED_TASK_ID:-unknown} | file=$(basename "$NEXT_FILE") | signal=${SIGNAL_TRIGGERED} | mode=$([ "$SIGNAL_TRIGGERED" = "true" ] && echo IMMEDIATE || echo CRON)" \
+            >> "${TRIGGER_DECISION_LOG}" 2>/dev/null || true
         DIRECTIVES_DIR="$RUNNING_DIR"
     fi
 fi
@@ -242,10 +341,9 @@ _process_directive() {
     local filename
     filename=$(basename "$directive_file")
 
-    # Task ID 추출: 파일 내 "Task ID: T-XXX" 줄 우선, 없으면 파일명에서 추출
+    # T-107: Task ID 추출 — 접두사 패턴 인식 (AADS-xxx, KIS-xxx, T-xxx 등)
     local task_id
-    task_id=$(grep -m1 "^Task ID:" "$directive_file" 2>/dev/null \
-        | sed 's/^Task ID:[[:space:]]*//' | tr -d '[:space:]') || true
+    task_id=$(grep -oP '(AADS|KIS|GO100|SF|NT|SALES|NAS|T)-\d+' "$directive_file" 2>/dev/null | head -1) || true
     if [ -z "$task_id" ]; then
         # 파일명 패턴: AADS_YYYYMMDD_HHMMSS_LABEL.md → LABEL
         task_id=$(echo "$filename" \
@@ -288,11 +386,25 @@ except Exception:
 
     echo "  현재 상태: ${current_status}"
 
+    # ─── AADS-145: Tasks 시스템으로 완료 여부 확인 (PENDING/DONE 이중관리 제거) ───
+    local _tasks_json="/home/claudebot/.claude/tasks/${task_id}.json"
+    if [ -f "$_tasks_json" ]; then
+        local _ts
+        _ts=$(python3 -c "import json; d=json.load(open('${_tasks_json}')); print(d.get('status',''))" 2>/dev/null || echo "")
+        if [ "$_ts" = "done" ]; then
+            echo "  ✅ [TASKS] 이미 완료 (${task_id}) — 스킵"
+            return 0
+        fi
+    fi
+
     # ─── 이미 COMPLETED면 스킵 ───
     if echo "${current_status}" | grep -qi "^COMPLETED"; then
         echo "  ✅ 이미 COMPLETED — 스킵"
         return 0
     fi
+
+    # ─── AADS-113: running 상태 기록 ───
+    record_lifecycle "$task_id" "running"
 
     # ─── claude_exec.sh로 실행 ───
     echo "  🚀 실행 시작..."
@@ -325,6 +437,36 @@ except Exception:
 
     if [ $exec_exit -eq 0 ]; then
         echo "  ✅ 실행 완료: ${task_id} (${ts_done})"
+        # AADS-113: completed 상태 기록
+        record_lifecycle "$task_id" "completed"
+
+        # AADS-145: final_commit 신호 감지 → 투기적 프리로드 (후처리와 병렬)
+        local _fc_signal="/tmp/aads_final_commit_${task_id}.signal"
+        local _preload_fail="/tmp/aads_preload_fail_${task_id}_$$"
+        if [ -f "$_fc_signal" ]; then
+            rm -f "$_fc_signal"
+            echo "  🚀 [SPEC] final_commit 감지 — 다음 작업 프리로드 병렬 시작"
+            _speculative_preload "$PENDING_DIR" "$_preload_fail" &
+        fi
+
+        # AADS-143: git-push 검증 (백그라운드 비동기 실행)
+        if [ -n "$result_file" ]; then
+            local _proj_upper
+            _proj_upper=$(echo "${PROJECT:-AADS}" | tr '[:lower:]' '[:upper:]')
+            # 프로젝트별 repo 매핑
+            local _repo_owner _repo_name
+            case "$_proj_upper" in
+                AADS)   _repo_owner="moongoby-GO100"; _repo_name="aads-docs" ;;
+                GO100)  _repo_owner="moongoby-GO100"; _repo_name="go100-docs" ;;
+                KIS)    _repo_owner="moongoby-GO100"; _repo_name="kis-docs" ;;
+                SF)     _repo_owner="moongoby-GO100"; _repo_name="sf-docs" ;;
+                NTV2)   _repo_owner="moongoby-GO100"; _repo_name="ntv2-docs" ;;
+                NAS)    _repo_owner="moongoby-GO100"; _repo_name="nas-docs" ;;
+                *)      _repo_owner="moongoby-GO100"; _repo_name="aads-docs" ;;
+            esac
+            ( verify_git_push "$_proj_upper" "$result_file" "$_repo_owner" "$_repo_name" "master" ) &
+            echo "  🔍 git-push 검증 백그라운드 시작 (PID: $!)"
+        fi
 
         # current_phase.last_completed 자동 업데이트
         export _AT_TASK_ID="$task_id"
@@ -382,6 +524,10 @@ PYEOF
 
     else
         echo "  ❌ 실행 실패: ${task_id} (exit=${exec_exit})"
+        # AADS-113: failed 상태 기록
+        record_lifecycle "$task_id" "failed"
+        # AADS-145: 투기적 프리로드 취소 (실행 실패시)
+        [ -n "${_preload_fail:-}" ] && touch "$_preload_fail" 2>/dev/null || true
         # T-038: 실행 실패 자동 보고
         report_error \
             "task_execution_failure" \

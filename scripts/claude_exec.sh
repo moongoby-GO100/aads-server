@@ -1,447 +1,390 @@
 #!/bin/bash
+# AADS Claude Exec — Claude Code 세션 실행 with Context API 연동
+# 생성: 2026-03-04 T-021
+#
+# 사용: ./claude_exec.sh <task_id> [directive_file]
+#   task_id       : 작업 식별자 (예: T-021, BRIDGE)
+#   directive_file: 실행할 지시서 .md 파일 경로 (생략 시 task_id만으로 실행)
+#
+# 동작:
+#   1) Context API에서 최신 phase/pending 맥락 조회
+#   2) 이미 COMPLETED인 task면 스킵
+#   3) 맥락을 Claude Code 세션 프롬프트에 주입하여 실행
+#   4) 완료 후 task 결과를 POST /context/system (category: history)에 기록
+#   5) 실패 시 에러를 POST /context/system (category: errors)에 기록
 
-# 동시 실행 제한 (실제 claude 바이너리 기준, 최대 4개)
-MAX_CONCURRENT=4
-CURRENT=$(pgrep -u claudebot -x claude | wc -l)
-if [ "$CURRENT" -ge "$MAX_CONCURRENT" ]; then
-  echo "[$(date)] 동시 실행 제한 초과 ($CURRENT/$MAX_CONCURRENT) - 대기"
-  exit 1
-fi
-# Usage: claude_exec.sh <directive_file> <project> <workdir> [timeout] [max_turns] [model]
+set -euo pipefail
 
-# === 계정 스위치 로직 (API Key 기반 — OAuth 만료 무관) ===
-CRED_DIR="/root/.claude"
-CRED_A1="${CRED_DIR}/.credentials_account1.json"
-CRED_A2="${CRED_DIR}/.credentials_account2.json"
-CRED_CURRENT="${CRED_DIR}/.credentials.json"
-CRED_BOT="/home/claudebot/.claude/.credentials.json"
-API_KEYS_FILE="${CRED_DIR}/api_keys.env"
-CLAUDEBOT_PROFILE="/home/claudebot/.profile"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=memory_helper.sh
+source "${SCRIPT_DIR}/memory_helper.sh"
 
-_load_api_key() {
-  local OAUTH_FILE="/root/.genspark/.env.oauth"
-  # OAuth 토큰 우선 (1년 setup-token)
-  if [ -f "$OAUTH_FILE" ]; then
-    local cur_oauth tok
-    cur_oauth=$(grep '^CURRENT_OAUTH=' "$OAUTH_FILE" | cut -d= -f2 | tr -d ' ')
-    tok=$(grep "^OAUTH_TOKEN_${cur_oauth:-2}=" "$OAUTH_FILE" | cut -d= -f2 | tr -d ' ')
-    if [ -n "$tok" ]; then echo "OAUTH:${tok}"; return; fi
-  fi
-  # fallback: API Key
-  if [ -f "$API_KEYS_FILE" ]; then
-    local cur_acct key1 key2
-    cur_acct=$(grep '^CURRENT_ACCOUNT=' "$API_KEYS_FILE" | cut -d= -f2 | tr -d ' ')
-    key1=$(grep '^API_KEY_1=' "$API_KEYS_FILE" | cut -d= -f2 | tr -d ' ')
-    key2=$(grep '^API_KEY_2=' "$API_KEYS_FILE" | cut -d= -f2 | tr -d ' ')
-    if [ "${cur_acct}" = "2" ] && [ -n "$key2" ]; then echo "$key2"; return; fi
-    [ -n "$key1" ] && { echo "$key1"; return; }
-  fi
-  grep '^export ANTHROPIC_API_KEY=' "$CLAUDEBOT_PROFILE" 2>/dev/null | cut -d= -f2- | tr -d '"'
-}
+TASK_ID="${1:?사용법: $0 <task_id> [directive_file]}"
+DIRECTIVE_FILE="${2:-}"
 
-switch_account() {
-  local OAUTH_FILE="/root/.genspark/.env.oauth"
+# === AADS-145: Tasks 시스템 통합 ===
+CLAUDEBOT_TASKS_DIR="/home/claudebot/.claude/tasks"
+mkdir -p "$CLAUDEBOT_TASKS_DIR" 2>/dev/null || true
+TASK_FILE="${CLAUDEBOT_TASKS_DIR}/${TASK_ID}.json"
+TASK_LIST_ID="aads-$(echo "$TASK_ID" | tr '[:upper:]' '[:lower:]')-$(date +%s)"
 
-  # OAuth 토큰 방식 스위치 (우선)
-  if [ -f "$OAUTH_FILE" ]; then
-    local cur_oauth tok1 tok2 new_oauth new_tok
-    cur_oauth=$(grep '^CURRENT_OAUTH=' "$OAUTH_FILE" | cut -d= -f2 | tr -d ' ')
-    tok1=$(grep '^OAUTH_TOKEN_1=' "$OAUTH_FILE" | cut -d= -f2 | tr -d ' ')
-    tok2=$(grep '^OAUTH_TOKEN_2=' "$OAUTH_FILE" | cut -d= -f2 | tr -d ' ')
-
-    if [ "${cur_oauth:-2}" = "2" ] && [ -n "$tok1" ]; then
-      new_oauth=1; new_tok="$tok1"
-    elif [ "${cur_oauth}" = "1" ] && [ -n "$tok2" ]; then
-      new_oauth=2; new_tok="$tok2"
-    else
-      echo "[SWITCH] OAuth 토큰 스위치 불가 — 토큰 없음"
-      return 1
+# 세션 복구: Tasks 파일에 이미 done이면 스킵 (PENDING/DONE 이중관리 제거)
+if [ -f "$TASK_FILE" ]; then
+    _tasks_prev=$(python3 -c "import json; d=json.load(open('${TASK_FILE}')); print(d.get('status',''))" 2>/dev/null || echo "")
+    if [ "${_tasks_prev}" = "done" ]; then
+        echo "✅ [TASKS] ${TASK_ID} 이미 완료 (Tasks 기록) — 스킵"
+        exit 0
     fi
-
-    python3 -c "
-import re
-path='$OAUTH_FILE'
-with open(path) as f: c=f.read()
-c=re.sub(r'^CURRENT_OAUTH=.*','CURRENT_OAUTH=${new_oauth}',c,flags=re.M)
-with open(path,'w') as f: f.write(c)
-" 2>/dev/null
-
-    # claudebot profile 업데이트
-    if grep -q 'CLAUDE_CODE_OAUTH_TOKEN' "$CLAUDEBOT_PROFILE" 2>/dev/null; then
-      python3 -c "
-import re
-with open('$CLAUDEBOT_PROFILE') as f: c=f.read()
-c=re.sub(r'^export CLAUDE_CODE_OAUTH_TOKEN=.*','export CLAUDE_CODE_OAUTH_TOKEN=${new_tok}',c,flags=re.M)
-with open('$CLAUDEBOT_PROFILE','w') as f: f.write(c)
-" 2>/dev/null
-    else
-      echo "export CLAUDE_CODE_OAUTH_TOKEN=${new_tok}" >> "$CLAUDEBOT_PROFILE"
-    fi
-    export CLAUDE_CODE_OAUTH_TOKEN="$new_tok"
-    unset ANTHROPIC_API_KEY
-    echo "[SWITCH] OAuth token${cur_oauth:-2} → token${new_oauth} 교체 완료"
-    return 0
-  fi
-
-  # fallback: API Key 방식
-  local cur_acct key1 key2 new_key new_acct
-  cur_acct=$(grep '^CURRENT_ACCOUNT=' "$API_KEYS_FILE" | cut -d= -f2 | tr -d ' ')
-  key1=$(grep '^API_KEY_1=' "$API_KEYS_FILE" | cut -d= -f2 | tr -d ' ')
-  key2=$(grep '^API_KEY_2=' "$API_KEYS_FILE" | cut -d= -f2 | tr -d ' ')
-  if [ "${cur_acct:-1}" = "1" ] && [ -n "$key2" ]; then
-    new_acct=2; new_key="$key2"
-  elif [ -n "$key1" ]; then
-    new_acct=1; new_key="$key1"
-  else
-    echo "[SWITCH] API Key 스위치 불가"; return 1
-  fi
-  python3 -c "
-import re
-with open('$API_KEYS_FILE') as f: c=f.read()
-c=re.sub(r'^CURRENT_ACCOUNT=.*','CURRENT_ACCOUNT=${new_acct}',c,flags=re.M)
-with open('$API_KEYS_FILE','w') as f: f.write(c)
-" 2>/dev/null
-  python3 -c "
-import re
-with open('$CLAUDEBOT_PROFILE') as f: c=f.read()
-c=re.sub(r'^#?export ANTHROPIC_API_KEY=.*','export ANTHROPIC_API_KEY=${new_key}',c,flags=re.M)
-with open('$CLAUDEBOT_PROFILE','w') as f: f.write(c)
-" 2>/dev/null
-  export ANTHROPIC_API_KEY="$new_key"
-  echo "[SWITCH] API Key account${cur_acct:-1} → account${new_acct} 교체 완료"
-}
-# === 계정 스위치 끝 ===
-
-# === 인증 주입 (OAuth 토큰 우선, fallback: API Key) ===
-_ACTIVE_KEY=$(_load_api_key)
-if [[ "$_ACTIVE_KEY" == OAUTH:* ]]; then
-  export CLAUDE_CODE_OAUTH_TOKEN="${_ACTIVE_KEY#OAUTH:}"
-  unset ANTHROPIC_API_KEY
-elif [ -n "$_ACTIVE_KEY" ]; then
-  export ANTHROPIC_API_KEY="$_ACTIVE_KEY"
-  unset CLAUDE_CODE_OAUTH_TOKEN
-fi
-DIRECTIVE_FILE="$1"
-PROJECT="$2"
-WORKDIR="$3"
-MAX_TIMEOUT="${4:-1200}"
-MAX_TURNS="${5:-200}"
-# D-024: 지시서 model 필드 → size 기반 자동 라우팅 → arg fallback → sonnet
-_DIR_MODEL=$(grep -m1 '^model:' "${DIRECTIVE_FILE}" 2>/dev/null | awk '{print $2}' | tr -d ' ')
-_DIR_SIZE=$(grep -m1 '^size:' "${DIRECTIVE_FILE}" 2>/dev/null | awk '{print $2}' | tr -d ' ')
-if [ -n "$_DIR_MODEL" ]; then MODEL="$_DIR_MODEL"
-elif [ "$_DIR_SIZE" = "XS" ]; then MODEL="haiku"
-elif [ "$_DIR_SIZE" = "XL" ]; then MODEL="opus"
-else MODEL="${6:-sonnet}"; fi
-
-# PRIORITY 추출 (P0/P1/P2/P3)
-PRIORITY=$(grep -m1 -iE '^priority[[:space:]]*[:：]' "$DIRECTIVE_FILE" 2>/dev/null \
-    | sed 's/^[^:：]*[:：][[:space:]]*//' | awk '{print $1}' | tr -d '[:space:]')
-PRIORITY="${PRIORITY:-P2}"
-
-DONE_DIR="/root/.genspark/directives/done"
-RUNNING_DIR="/root/.genspark/directives/running"
-LOG_DIR="/root/.genspark/logs"
-TELEGRAM_SCRIPT="/root/.genspark/send_telegram.sh"
-FILENAME=$(basename "$DIRECTIVE_FILE")
-
-# ── AADS Lifecycle API 함수 ──────────────────────────────────────────────────
-AADS_OPS_URL="https://aads.newtalk.kr/api/v1/ops"
-
-# task_id 추출 (지시서 파일에서)
-_extract_task_id() {
-    local f="$1"
-    grep -m1 -oP '(?:Task ID|task_id)\s*[:：]\s*\K\S+' "$f" 2>/dev/null | head -1
-}
-
-# project 태그 추출 (파일명에서)
-_extract_project() {
-    echo "$1" | cut -d'_' -f1 | tr '[:lower:]' '[:upper:]'
-}
-
-# 서버명 (hostname 기반)
-_this_server() {
-    local ip
-    ip=$(hostname -I 2>/dev/null | awk '{print $1}')
-    case "$ip" in
-        211.*) echo "211" ;;
-        68.*)  echo "68"  ;;
-        114.*) echo "114" ;;
-        *)     hostname -s 2>/dev/null ;;
-    esac
-}
-
-# Lifecycle 상태 보고: aads_lifecycle <task_id> <project> <status> [error_detail] [title] [file_path]
-aads_lifecycle() {
-    local tid="$1" proj="$2" st="$3" err="$4" title="$5" fpath="$6"
-    [ -z "$tid" ] || [ -z "$proj" ] || [ -z "$st" ] && return 1
-    local srv
-    srv=$(_this_server)
-    local json="{\"task_id\":\"${tid}\",\"project\":\"${proj}\",\"status\":\"${st}\",\"server\":\"${srv}\""
-    [ -n "$title" ] && json="${json},\"title\":\"${title}\""
-    [ -n "$fpath" ] && json="${json},\"file_path\":\"${fpath}\""
-    [ -n "$err" ]   && json="${json},\"error_detail\":$(python3 -c "import json; print(json.dumps('$err'))" 2>/dev/null || echo "\"${err}\"")}"
-    [ -z "$err" ]   && json="${json}}"
-    curl -s -X POST "${AADS_OPS_URL}/directive-lifecycle" \
-        -H "Content-Type: application/json" \
-        -d "$json" --connect-timeout 5 --max-time 10 > /dev/null 2>&1 &
-}
-
-# Cost 기록: aads_cost <task_id> <project> <log_file>
-aads_cost() {
-    local tid="$1" proj="$2" logf="$3"
-    [ -z "$tid" ] || [ ! -f "$logf" ] && return 1
-    # Claude JSON 출력에서 usage 추출
-    local cost_usd input_tok output_tok
-    cost_usd=$(grep -oP '"total_cost_usd"\s*:\s*\K[0-9.]+' "$logf" 2>/dev/null | tail -1)
-    input_tok=$(grep -oP '"input_tokens"\s*:\s*\K[0-9]+' "$logf" 2>/dev/null | tail -1)
-    output_tok=$(grep -oP '"output_tokens"\s*:\s*\K[0-9]+' "$logf" 2>/dev/null | tail -1)
-    [ -z "$cost_usd" ] && cost_usd="0"
-    [ -z "$input_tok" ] && input_tok="0"
-    [ -z "$output_tok" ] && output_tok="0"
-    local model_name
-    model_name=$(grep -oP '"model"\s*:\s*"\K[^"]+' "$logf" 2>/dev/null | tail -1)
-    [ -z "$model_name" ] && model_name="$MODEL"
-    curl -s -X POST "${AADS_OPS_URL}/cost" \
-        -H "Content-Type: application/json" \
-        -d "{\"task_id\":\"${tid}\",\"project\":\"${proj}\",\"model\":\"${model_name:-sonnet}\",\"input_tokens\":${input_tok},\"output_tokens\":${output_tok},\"cost_usd\":${cost_usd}}" \
-        --connect-timeout 5 --max-time 10 > /dev/null 2>&1 &
-}
-
-# Commit 기록: aads_commit <task_id> <result_file>
-aads_commit() {
-    local tid="$1" rf="$2"
-    [ -z "$tid" ] || [ ! -f "$rf" ] && return 1
-    local sha msg repo
-    sha=$(grep -oP '(?:commit|커밋)[:\s]*\K[0-9a-f]{7,40}' "$rf" 2>/dev/null | head -1)
-    [ -z "$sha" ] && return 0
-    msg=$(grep -m1 -oP '(?:feat|fix|docs|refactor|chore)\(.+?\):.+' "$rf" 2>/dev/null | head -1)
-    repo=$(grep -oP 'github\.com[:/]\K[^/]+/[^/.\s]+' "$rf" 2>/dev/null | head -1)
-    curl -s -X POST "${AADS_OPS_URL}/commit" \
-        -H "Content-Type: application/json" \
-        -d "{\"task_id\":\"${tid}\",\"repo\":\"${repo:-unknown}\",\"commit_sha\":\"${sha}\",\"message\":$(python3 -c "import json; print(json.dumps('${msg:-no message}'))" 2>/dev/null || echo "\"commit\"")}" \
-        --connect-timeout 5 --max-time 10 > /dev/null 2>&1 &
-}
-# ── AADS Lifecycle API 끝 ───────────────────────────────────────────────────
-
-# ── AADS message_queue write 함수 (CUR-BRIDGE-AADS-MSGQUEUE-001) ──────────
-aads_queue_msg() {
-    local target="$1" type="$2" msg_text="$3"
-    local aads_url aads_key epoch item_key
-    aads_url=$(grep '^AADS_API_URL=' /root/.env.aads 2>/dev/null | cut -d= -f2-)
-    aads_key=$(grep '^AADS_MONITOR_KEY=' /root/.env.aads 2>/dev/null | cut -d= -f2-)
-    [ -z "$aads_url" ] || [ -z "$aads_key" ] && return 1
-    epoch=$(date +%s)
-    item_key="${target}_${epoch}_${type}"
-    local msg_json
-    msg_json=$(python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))" 2>/dev/null <<< "${msg_text}" || echo "\"${msg_text}\"")
-    curl -s -X POST "${aads_url}/context/system" \
-        -H "Content-Type: application/json" \
-        -H "X-Monitor-Key: ${aads_key}" \
-        -d "{\"category\":\"message_queue\",\"key\":\"${item_key}\",\"value\":{\"target\":\"${target}\",\"type\":\"${type}\",\"message\":${msg_json},\"status\":\"pending\",\"created_at\":\"$(date '+%Y-%m-%d %H:%M KST')\",\"source\":\"claude_exec\"}}" \
-        > /dev/null 2>&1
-    echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] [AADS-QUEUE] ${target}/${type} 메시지 등록: ${item_key}" >> "${LOG_DIR}/auto_trigger.log"
-}
-# ────────────────────────────────────────────────────────────────────────────
-RESULT_FILE="${DONE_DIR}/${FILENAME%.md}_RESULT.md"
-LOG_FILE="${LOG_DIR}/claude_${PROJECT}_$(date +%Y%m%d_%H%M%S).log"
-
-mkdir -p "$LOG_DIR" "$DONE_DIR"
-
-# ── 사전 검증: WORKDIR 쓰기 가능 여부 확인 ────────────────────────────────
-# symlink 해소 후 실제 경로 확인
-REAL_WORKDIR=$(readlink -f "${WORKDIR}" 2>/dev/null || echo "${WORKDIR}")
-if [ ! -d "${REAL_WORKDIR}" ]; then
-    bash "$TELEGRAM_SCRIPT" "❌ [${PROJECT}] WORKDIR 없음: ${WORKDIR} (실제: ${REAL_WORKDIR})" 2>/dev/null
-    cat > "$RESULT_FILE" <<EOF
----
-project: ${PROJECT}
-task_id: PREFLIGHT_FAIL
-completed_at: $(date '+%Y-%m-%d %H:%M:%S KST')
-status: error
-reason: WORKDIR not found (${WORKDIR} -> ${REAL_WORKDIR})
----
-EOF
-    rm -f "${RUNNING_DIR}/${FILENAME}" 2>/dev/null
-    exit 1
 fi
 
-# 쓰기 전 선제 권한 보장 (실제 경로 기준)
-find "${REAL_WORKDIR}" -maxdepth 0 -type d -exec chmod o+w {} \; 2>/dev/null
-WRITE_TEST=$(su - claudebot -c "touch '${WORKDIR}/.write_test_$$' 2>&1 && rm '${WORKDIR}/.write_test_$$' && echo OK" 2>/dev/null)
-if [ "$WRITE_TEST" != "OK" ]; then
-    # 자동 복구: 전체 하위 디렉토리 권한 재적용
-    find "${REAL_WORKDIR}" -type d -exec chmod g+w,o+w {} \; 2>/dev/null
-    WRITE_TEST2=$(su - claudebot -c "touch '${WORKDIR}/.write_test_$$' 2>&1 && rm '${WORKDIR}/.write_test_$$' && echo OK" 2>/dev/null)
-    if [ "$WRITE_TEST2" != "OK" ]; then
-        bash "$TELEGRAM_SCRIPT" "❌ [${PROJECT}] WORKDIR 쓰기 권한 없음: ${WORKDIR} — 작업 중단" 2>/dev/null
-        cat > "$RESULT_FILE" <<EOF
----
-project: ${PROJECT}
-task_id: PREFLIGHT_FAIL
-completed_at: $(date '+%Y-%m-%d %H:%M:%S KST')
-status: error
-reason: claudebot has no write access to ${WORKDIR}
----
-EOF
-        rm -f "${RUNNING_DIR}/${FILENAME}" 2>/dev/null
-        exit 1
-    fi
-    bash "$TELEGRAM_SCRIPT" "⚠️ [${PROJECT}] WORKDIR 권한 자동 복구 완료: ${WORKDIR}" 2>/dev/null
-fi
+# Tasks 파일 생성 (in_progress 상태)
+python3 -c "
+import json, time
+task = {
+    'id': '${TASK_ID}',
+    'list_id': '${TASK_LIST_ID}',
+    'title': '${TASK_ID}',
+    'status': 'in_progress',
+    'directive': '${DIRECTIVE_FILE:-none}',
+    'created_at': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+}
+with open('${TASK_FILE}', 'w') as f:
+    json.dump(task, f, ensure_ascii=False, indent=2)
+" 2>/dev/null || true
 
-# 텔레그램: 작업 시작
-bash "$TELEGRAM_SCRIPT" "🔄 [${PROJECT}] 작업 시작: ${FILENAME}" 2>/dev/null
+export CLAUDE_CODE_TASK_LIST_ID="${TASK_LIST_ID}"
+echo "[TASKS] list_id=${TASK_LIST_ID} file=${TASK_FILE}"
+# === Tasks 통합 끝 ===
 
-# ── Lifecycle: running 기록 ──────────────────────────────────────────────────
-_TASK_ID=$(_extract_task_id "$DIRECTIVE_FILE")
-[ -z "$_TASK_ID" ] && _TASK_ID=$(echo "$FILENAME" | sed 's/_BRIDGE\.md$//' | sed 's/\.md$//')
-_TITLE=$(grep -m1 -oP '제목\s*[:：]\s*\K.+' "$DIRECTIVE_FILE" 2>/dev/null | head -c 120)
-aads_lifecycle "$_TASK_ID" "$PROJECT" "running" "" "$_TITLE" "$DIRECTIVE_FILE"
-# AADS-139: source_channel_id 추출 — 완료 시 원본 대화창에 보고
-_SOURCE_CHANNEL=$(grep -m1 '<!-- source_channel_id:' "$DIRECTIVE_FILE" 2>/dev/null | sed 's/.*source_channel_id:[[:space:]]*//' | sed 's/[[:space:]]*-->.*//' | tr -d '[:space:]')
+# ─────────────────────────────────────────────────────────
+# 하트비트 설정 (A-1)
+# Safety net only. Primary timeout managed by session_watchdog via heartbeat.
+HARD_TIMEOUT=7200
+HEARTBEAT_FILE="/tmp/claude_session_${TASK_ID}.heartbeat"
+HEARTBEAT_LOG="/tmp/claude_session_${TASK_ID}.heartbeat_log"
+WORK_DIR="${AADS_ROOT:-/root/aads}"
+INOTIFY_PID=""
 
-# ── Claude Code 실행 ──────────────────────────────────────────────────────
-# 핵심 지시 순서:
-#  1. WORKDIR에서만 작업 (절대 /tmp 사용 금지)
-#  2. 지시서 읽기 및 실행
-#  3. 결과 RESULT_FILE에 저장
-timeout ${MAX_TIMEOUT} su - claudebot -c \
-  "cd ${WORKDIR} && \$(which claude 2>/dev/null || echo /usr/local/bin/claude) -p \
-  --dangerously-skip-permissions --max-turns ${MAX_TURNS} --model ${MODEL} --output-format json \
-  '중요: 작업 디렉토리는 ${WORKDIR} 이다. 모든 파일 생성·수정은 반드시 ${WORKDIR} 내부에서만 수행하라. /tmp, /home, ~/ 등 다른 경로에 절대 파일을 생성하지 마라. cat ${DIRECTIVE_FILE} 파일을 읽고 지시대로 모두 실행하라. 작업 완료 후 실행한 모든 내용과 결과를 빠짐없이 원문 그대로 ${RESULT_FILE} 에 저장하라. 절대 요약하지 마라. YAML 프런트매터(project, task_id, completed_at KST)를 파일 상단에 포함하라.'" \
-  > "$LOG_FILE" 2>&1
+# AADS-145: 컨텍스트 모니터링용 임시 로그
+CTX_TMPLOG="/tmp/claude_ctx_${TASK_ID}_$$.log"
+CTX_SIGNAL="/tmp/.ctx_sig_${TASK_ID}_$$.flag"
+CTX_EDIT_FAIL="/tmp/.ctx_edit_${TASK_ID}_$$.flag"
 
-EXIT_CODE=$?
+update_heartbeat() {
+    local event_type=$1  # progress | complete | error
+    local detail=$2
+    local ts
+    ts=$(date +%s)
+    echo "{\"ts\":${ts},\"type\":\"${event_type}\",\"detail\":\"${detail}\"}" > "$HEARTBEAT_FILE"
+    echo "{\"ts\":${ts},\"type\":\"${event_type}\",\"detail\":\"${detail}\"}" >> "$HEARTBEAT_LOG"
+}
 
-# === 사용량 DB 기록 ===
-if [ -f "$LOG_FILE" ]; then
-  cat "$LOG_FILE" | bash /root/.genspark/scripts/usage_logger.sh "$PROJECT" "$FILENAME" 2>/dev/null
-fi
-
-# === Rate Limit / Auth 오류 재시도 로직 ===
-if [ $EXIT_CODE -ne 0 ] && [ $EXIT_CODE -ne 124 ]; then
-  _needs_retry=0
-  _retry_reason=""
-  if grep -qi "rate.limit\|too many\|429\|quota\|overloaded" "$LOG_FILE" 2>/dev/null; then
-    _needs_retry=1; _retry_reason="rate_limit"
-  elif grep -qi "authentication_error\|OAuth.*expired\|401.*auth\|Failed to authenticate\|Credit balance\|credit.*low\|balance.*too low" "$LOG_FILE" 2>/dev/null; then
-    _needs_retry=1; _retry_reason="auth_error"
-  fi
-  if [ "$_needs_retry" = "1" ]; then
-    echo "[$(date +'%Y-%m-%d %H:%M:%S KST')] [RETRY] ${_retry_reason} 감지 — 계정 스위치 후 재시도" >> "$LOG_FILE"
-    _switch_result=$(switch_account 2>&1)
-    echo "[$(date +'%Y-%m-%d %H:%M:%S KST')] [RETRY] ${_switch_result}" >> "$LOG_FILE"
-    # 스위치 후 새 API Key 로드
-    _NEW_KEY=$(_load_api_key)
-    [ -n "$_NEW_KEY" ] && export ANTHROPIC_API_KEY="$_NEW_KEY"
-    sleep 5
-    timeout ${MAX_TIMEOUT} su - claudebot -c \
-      "cd ${WORKDIR} && \$(which claude 2>/dev/null || echo /usr/local/bin/claude) -p \
-      --dangerously-skip-permissions --max-turns ${MAX_TURNS} --model ${MODEL} --output-format json \
-      '중요: 작업 디렉토리는 ${WORKDIR} 이다. cat ${DIRECTIVE_FILE} 파일을 읽고 지시대로 모두 실행하라. 결과를 ${RESULT_FILE} 에 저장하라.'" \
-      >> "$LOG_FILE" 2>&1
-    EXIT_CODE=$?
-    echo "[$(date +'%Y-%m-%d %H:%M:%S KST')] [RETRY] 재시도 완료 (exit_code: $EXIT_CODE)" >> "$LOG_FILE"
-  fi
-fi
-# === Rate Limit / Auth 오류 재시도 끝 ===
-
-if [ $EXIT_CODE -eq 124 ]; then
-    cat > "$RESULT_FILE" <<EOF
----
-project: ${PROJECT}
-task_id: TIMEOUT
-completed_at: $(date '+%Y-%m-%d %H:%M:%S KST')
-status: timeout
----
-## 타임아웃 종료 (${MAX_TIMEOUT}초)
-$(tail -20 "$LOG_FILE")
-EOF
-    aads_lifecycle "$_TASK_ID" "$PROJECT" "failed" "timeout_${MAX_TIMEOUT}s"
-    bash "$TELEGRAM_SCRIPT" "⏰ [${PROJECT}] 타임아웃 (${MAX_TIMEOUT}초): ${FILENAME}" 2>/dev/null
-    aads_queue_msg "${PROJECT}" "chat" "⏰ [${PROJECT}] 타임아웃 종료 (${MAX_TIMEOUT}초)
-파일: ${FILENAME}
-상태: timeout"
-    aads_queue_msg "${PROJECT}" "telegram" "⏰ [${PROJECT}] 타임아웃: ${FILENAME}"
-    # AADS-139: source_channel에 결과 보고
-    [ -n "$_SOURCE_CHANNEL" ] && [ "$_SOURCE_CHANNEL" != "$PROJECT" ] && \
-        aads_queue_msg "${_SOURCE_CHANNEL}" "chat" "[AADS] ${_TASK_ID} timeout
-소요: ${MAX_TIMEOUT}초 초과
-커밋: N/A
-결과: TIMEOUT
-다음: 지시 대기"
-elif [ $EXIT_CODE -ne 0 ]; then
-    if [ ! -f "$RESULT_FILE" ]; then
-        cat > "$RESULT_FILE" <<EOF
----
-project: ${PROJECT}
-task_id: ERROR
-completed_at: $(date '+%Y-%m-%d %H:%M:%S KST')
-status: error
-exit_code: ${EXIT_CODE}
----
-## 에러 종료
-$(tail -20 "$LOG_FILE")
-EOF
-    fi
-    aads_lifecycle "$_TASK_ID" "$PROJECT" "failed" "exit_code_${EXIT_CODE}"
-    bash "$TELEGRAM_SCRIPT" "❌ [${PROJECT}] 에러 종료 (code:${EXIT_CODE}): ${FILENAME}" 2>/dev/null
-    aads_queue_msg "${PROJECT}" "chat" "❌ [${PROJECT}] 에러 종료 (code:${EXIT_CODE})
-파일: ${FILENAME}
-$(tail -5 "$LOG_FILE" 2>/dev/null)"
-    aads_queue_msg "${PROJECT}" "telegram" "❌ [${PROJECT}] 에러 (code:${EXIT_CODE}): ${FILENAME}"
-    # AADS-139: source_channel에 결과 보고
-    [ -n "$_SOURCE_CHANNEL" ] && [ "$_SOURCE_CHANNEL" != "$PROJECT" ] && \
-        aads_queue_msg "${_SOURCE_CHANNEL}" "chat" "[AADS] ${_TASK_ID} failed
-소요: N/A
-커밋: N/A
-결과: FAIL (exit_code: ${EXIT_CODE})
-다음: 지시 대기"
-else
-    bash "$TELEGRAM_SCRIPT" "✅ [${PROJECT}] 작업 완료: ${FILENAME}" 2>/dev/null
-    # RESULT 파일에서 task_id 추출 (더 정확한 값으로 업데이트)
-    _task_id=$(grep -m1 '^task_id:' "$RESULT_FILE" 2>/dev/null | awk '{print $2}')
-    [ -n "$_task_id" ] && [ "$_task_id" != "ERROR" ] && [ "$_task_id" != "TIMEOUT" ] && _TASK_ID="$_task_id"
-    aads_lifecycle "$_TASK_ID" "$PROJECT" "completed"
-    aads_cost "$_TASK_ID" "$PROJECT" "$LOG_FILE"
-    aads_commit "$_TASK_ID" "$RESULT_FILE"
-    aads_queue_msg "${PROJECT}" "chat" "✅ [${PROJECT}] 작업 완료
-Task: ${_TASK_ID:-${FILENAME%.md}}
-파일: ${FILENAME}
-보고서: https://github.com/moongoby/project-docs/blob/master"
-    aads_queue_msg "${PROJECT}" "telegram" "✅ [${PROJECT}] 완료: ${_TASK_ID:-${FILENAME}}"
-    # AADS-139: source_channel에 결과 보고
-    _commit_sha=$(grep -m1 'commit_sha\|커밋' "$RESULT_FILE" 2>/dev/null | grep -oE '[0-9a-f]{7,40}' | head -1)
-    [ -n "$_SOURCE_CHANNEL" ] && [ "$_SOURCE_CHANNEL" != "$PROJECT" ] && \
-        aads_queue_msg "${_SOURCE_CHANNEL}" "chat" "[AADS] ${_TASK_ID} completed
-소요: N/A
-커밋: ${_commit_sha:-N/A}
-결과: PASS
-다음: 지시 대기"
-
-    # ── P2(15분 이하)/P3: 자동 health-check ──────────────────────────────
-    if [ "$PRIORITY" = "P2" ] || [ "$PRIORITY" = "P3" ]; then
-        echo "Auto health-check (5min wait)..."
-        sleep 300
-        HEALTH=$(curl -s "${AADS_OPS_URL}/health-check" --connect-timeout 10 --max-time 15 2>/dev/null)
-        HEALTHY=$(echo "$HEALTH" | python3 -c "import sys,json; print(json.load(sys.stdin).get('pipeline_healthy',False))" 2>/dev/null)
-        if [ "$HEALTHY" != "True" ]; then
-            echo "HEALTH_CHECK_FAILED — auto-generating WRAP file"
-            cat > "/root/.genspark/directives/done/${_TASK_ID}_WRAP_AUTO.md" <<EOF
-# ${_TASK_ID} Auto Wrap up (health-check 실패)
-- date: $(date '+%Y-%m-%d %H:%M:%S')
-- health_check: FAILED
-- pipeline_healthy: $HEALTHY
-- action_required: CEO 확인 필요
-EOF
-            bash "$TELEGRAM_SCRIPT" "⚠️ ${_TASK_ID} health-check 실패 — WRAP 자동 생성" 2>/dev/null
+# === AADS-145: 컨텍스트 모니터링 백그라운드 함수 ===
+_ctx_monitor_bg() {
+    local _tmplog="$1" _sig="$2" _edit_sig="$3"
+    local _warned_70=false
+    local _ctx_max=200000   # 추정 최대 토큰 (행 기준 환산)
+    while true; do
+        sleep 15
+        [ -f "$_tmplog" ] || continue
+        # 2회 연속 수정 실패 감지 (Edit 오류 패턴)
+        local _efail
+        _efail=$(grep -c "old_string.*not found\|no match found\|수정 실패\|Edit.*failed" "$_tmplog" 2>/dev/null || echo 0)
+        if [ "${_efail:-0}" -ge 2 ] && [ ! -f "$_edit_sig" ]; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] [CTX-EDIT-FAIL] 2회 연속 수정 실패 → /clear 권고" >&2
+            touch "$_edit_sig"
         fi
+        # 행 수 기반 토큰 추정 (~50자/행 × 행 수 ÷ 4 ≈ 토큰)
+        local _lines
+        _lines=$(wc -l < "$_tmplog" 2>/dev/null || echo 0)
+        local _est_tokens=$(( _lines * 50 / 4 ))
+        if [ "$_est_tokens" -ge $(( _ctx_max * 90 / 100 )) ]; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] [CTX-90%] 컨텍스트 90% 추정 초과 (${_lines}행, ~${_est_tokens}토큰) — 재시작 신호" >&2
+            touch "$_sig"
+            break
+        elif [ "$_est_tokens" -ge $(( _ctx_max * 70 / 100 )) ] && [ "$_warned_70" = "false" ]; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] [CTX-70%] 컨텍스트 70% 추정 (${_lines}행, ~${_est_tokens}토큰) — /compact 권고" >&2
+            _warned_70=true
+        fi
+    done
+}
+# === 컨텍스트 모니터링 함수 끝 ===
+
+# A-2: inotifywait 기반 자동 하트비트
+start_inotify_watcher() {
+    if command -v inotifywait &>/dev/null; then
+        inotifywait -m -r -e modify,create,delete --format '%w%f' "$WORK_DIR" 2>/dev/null | while read -r FILE; do
+            update_heartbeat "progress" "file_changed: ${FILE##*/}"
+        done &
+        INOTIFY_PID=$!
+    else
+        # Fallback: 30초마다 git status --porcelain 변화 체크
+        (
+            PREV_STAT=""
+            while true; do
+                sleep 30
+                CUR_STAT=$(git -C "$WORK_DIR" status --porcelain 2>/dev/null | md5sum | awk '{print $1}')
+                if [ "$CUR_STAT" != "$PREV_STAT" ]; then
+                    update_heartbeat "progress" "git_status_changed"
+                    PREV_STAT="$CUR_STAT"
+                fi
+            done
+        ) &
+        INOTIFY_PID=$!
     fi
-    # ─────────────────────────────────────────────────────────────────────
+}
+
+cleanup_inotify() {
+    if [ -n "$INOTIFY_PID" ] && kill -0 "$INOTIFY_PID" 2>/dev/null; then
+        kill "$INOTIFY_PID" 2>/dev/null || true
+    fi
+    # AADS-145: 컨텍스트 모니터 정리
+    [ -n "${CTX_MONITOR_PID:-}" ] && kill "$CTX_MONITOR_PID" 2>/dev/null || true
+    rm -f "$CTX_TMPLOG" "$CTX_SIGNAL" "$CTX_EDIT_FAIL" 2>/dev/null || true
+}
+trap cleanup_inotify EXIT
+
+# A-4: 프로세스 PID 기록
+echo $$ > "/tmp/claude_session_${TASK_ID}.pid"
+
+# 초기 하트비트
+update_heartbeat "progress" "claude_exec_start"
+
+# inotify 감시 시작
+start_inotify_watcher
+
+# AADS-145: 컨텍스트 모니터링 백그라운드 시작
+CTX_MONITOR_PID=""
+_ctx_monitor_bg "$CTX_TMPLOG" "$CTX_SIGNAL" "$CTX_EDIT_FAIL" &
+CTX_MONITOR_PID=$!
+
+TS_START=$(TZ='Asia/Seoul' date '+%Y-%m-%d %H:%M KST')
+
+echo "======================================================"
+echo "AADS Claude Exec — Task: ${TASK_ID}"
+echo "시작: ${TS_START}"
+echo "======================================================"
+
+# ─────────────────────────────────────────────────────────
+# STEP 1: Context API에서 최신 맥락 조회
+# ─────────────────────────────────────────────────────────
+echo ""
+echo "[1/4] 최신 맥락 조회 중..."
+
+PHASE_JSON=$(read_context "phase" 2>/dev/null || echo '{}')
+PENDING_JSON=$(read_context "pending" 2>/dev/null || echo '{}')
+
+# current_progress에서 task 상태 확인
+TASK_STATUS=$(echo "$PHASE_JSON" | python3 -c "
+import json, sys
+task_id = '${TASK_ID}'
+try:
+    d = json.load(sys.stdin)
+    items = d.get('data', [])
+    # data가 list일 수도 있고 dict일 수도 있음
+    if isinstance(items, dict):
+        items = [items]
+    for item in items:
+        if isinstance(item, dict) and item.get('key') == 'current_progress':
+            v = item.get('value', {})
+            if isinstance(v, str):
+                v = json.loads(v)
+            print(v.get(task_id, 'PENDING'))
+            sys.exit(0)
+    print('PENDING')
+except Exception as e:
+    print('PENDING')
+" 2>/dev/null || echo "PENDING")
+
+CURRENT_PHASE=$(echo "$PHASE_JSON" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    items = d.get('data', [])
+    if isinstance(items, dict):
+        items = [items]
+    for item in items:
+        if isinstance(item, dict) and item.get('key') == 'current_phase':
+            v = item.get('value', {})
+            if isinstance(v, str):
+                v = json.loads(v)
+            print(v.get('phase', 'unknown'))
+            sys.exit(0)
+    print('unknown')
+except Exception:
+    print('unknown')
+" 2>/dev/null || echo "unknown")
+
+echo "  현재 Phase : ${CURRENT_PHASE}"
+echo "  Task ${TASK_ID}: ${TASK_STATUS}"
+
+# ─────────────────────────────────────────────────────────
+# STEP 2: 이미 COMPLETED인 task는 스킵
+# ─────────────────────────────────────────────────────────
+if echo "${TASK_STATUS}" | grep -qi "^COMPLETED"; then
+    echo ""
+    echo "✅ Task ${TASK_ID}는 이미 COMPLETED — 스킵"
+    exit 0
 fi
 
-# running 파일 정리
-rm -f "${RUNNING_DIR}/${FILENAME}" 2>/dev/null
+# ─────────────────────────────────────────────────────────
+# STEP 3: 맥락 프롬프트 구성 + Claude Code 실행
+# ─────────────────────────────────────────────────────────
+echo ""
+echo "[2/4] 맥락 프롬프트 구성 중..."
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] ${PROJECT} 실행 완료 (exit:${EXIT_CODE})" >> "${LOG_DIR}/auto_trigger.log"
+CONTEXT_HEADER=$(cat <<HEADER_EOF
+=== AADS System Context (${TS_START}) ===
+Current Phase : ${CURRENT_PHASE}
+Task ID       : ${TASK_ID}
+Task Status   : ${TASK_STATUS}
+Context API   : ${CONTEXT_API}
+==========================================
+
+HEADER_EOF
+)
+
+echo "  Context header 생성 완료"
+
+echo ""
+echo "[3/4] Claude Code 실행 중..."
+
+EXEC_EXIT=0
+if [ -n "$DIRECTIVE_FILE" ] && [ -f "$DIRECTIVE_FILE" ]; then
+    echo "  지시서: ${DIRECTIVE_FILE}"
+    FULL_PROMPT="${CONTEXT_HEADER}$(cat "$DIRECTIVE_FILE")"
+    # A-5: 하드 타임아웃 (안전망) 적용 + AADS-145 컨텍스트 캡처
+    timeout "$HARD_TIMEOUT" bash -c 'echo "$FULL_PROMPT" | claude --print 2>&1' | tee -a "$CTX_TMPLOG" || EXEC_EXIT=$?
+    # Claude Code 서브프로세스 PID 기록 (A-4)
+    pgrep -n -f "claude --print" > "/tmp/claude_session_${TASK_ID}.claude_pid" 2>/dev/null || true
+else
+    echo "  지시서: 없음 (Task ID만으로 실행)"
+    FULL_PROMPT="${CONTEXT_HEADER}Task ${TASK_ID}를 실행하라."
+    timeout "$HARD_TIMEOUT" bash -c 'echo "$FULL_PROMPT" | claude --print 2>&1' | tee -a "$CTX_TMPLOG" || EXEC_EXIT=$?
+    pgrep -n -f "claude --print" > "/tmp/claude_session_${TASK_ID}.claude_pid" 2>/dev/null || true
+fi
+
+# AADS-145: 컨텍스트 90% 재시작 처리
+if [ -f "$CTX_SIGNAL" ] && [ $EXEC_EXIT -ne 0 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] [CTX-RESTART] 컨텍스트 한계 감지 — 요약 후 재시작" >&2
+    _ctx_summary="[CTX-RESTART] 이전 세션 컨텍스트 한계 도달. 지금까지 진행한 내용을 이어서 완료하라. Task: ${TASK_ID}"
+    if [ -n "$DIRECTIVE_FILE" ] && [ -f "$DIRECTIVE_FILE" ]; then
+        timeout "$HARD_TIMEOUT" bash -c 'echo "$_ctx_summary\n$(cat "$DIRECTIVE_FILE")" | claude --print 2>&1' | tee -a "$CTX_TMPLOG" || EXEC_EXIT=$?
+    fi
+fi
+
+update_heartbeat "progress" "claude_exec_finished: exit=${EXEC_EXIT}"
+
+TS_END=$(TZ='Asia/Seoul' date '+%Y-%m-%d %H:%M KST')
+
+# ─────────────────────────────────────────────────────────
+# STEP 4: 결과 Context API에 기록
+# ─────────────────────────────────────────────────────────
+echo ""
+echo "[4/4] 결과 기록 중..."
+
+COMMIT_SHA=$(git -C "${AADS_ROOT}" rev-parse --short HEAD 2>/dev/null || echo "")
+
+if [ $EXEC_EXIT -eq 0 ]; then
+    STATUS="COMPLETED"
+    REPORT="claude_exec 성공 (${TS_END})"
+    echo "  ✅ 실행 성공 — history 카테고리에 기록"
+    # A-3: DONE 이벤트
+    update_heartbeat "complete" "task_done"
+
+    # AADS-145: final_commit 하트비트 + 신호 파일 (투기적 실행 트리거)
+    _fc_sha=$(git -C "${WORK_DIR}" rev-parse HEAD 2>/dev/null | tr -d '[:space:]' || echo "")
+    if [ -n "$_fc_sha" ]; then
+        update_heartbeat "final_commit" "sha=${_fc_sha:0:8}"
+        echo "${TASK_ID}" > "/tmp/aads_final_commit_${TASK_ID}.signal"
+    fi
+
+    write_task_result "$TASK_ID" "$REPORT" "$STATUS"
+    # T-037 B-2: 매니저 보고를 go100_user_memory에도 저장
+    save_manager_report "$TASK_ID" "$STATUS" "$REPORT" "$COMMIT_SHA" "0"
+
+    # phase/current_progress 업데이트
+    export _CP_TASK_ID="$TASK_ID"
+    export _CP_TS="$TS_END"
+    export _CP_KEY="$AADS_MONITOR_KEY"
+    export _CP_API="$CONTEXT_API"
+
+    python3 - <<'PYEOF'
+import json, urllib.request, os, sys
+
+task_id = os.environ.get('_CP_TASK_ID', '')
+ts      = os.environ.get('_CP_TS', '')
+key     = os.environ.get('_CP_KEY', '')
+api     = os.environ.get('_CP_API', '')
+
+# 현재 current_progress 읽기
+req = urllib.request.Request(
+    api + "/phase/current_progress",
+    headers={"X-Monitor-Key": key, "User-Agent": "curl/7.64.0"})
+try:
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read())
+        current = data.get("data", {})
+        if isinstance(current, dict):
+            v = current.get("value", {})
+        else:
+            v = {}
+        if isinstance(v, str):
+            v = json.loads(v)
+except Exception:
+    v = {}
+
+# 해당 task COMPLETED로 업데이트
+v[task_id] = "COMPLETED - claude_exec (" + ts + ")"
+
+# 저장
+body = json.dumps({
+    "category": "phase",
+    "key": "current_progress",
+    "value": v
+}).encode()
+req2 = urllib.request.Request(api, data=body,
+    headers={"Content-Type": "application/json", "X-Monitor-Key": key,
+             "User-Agent": "curl/7.64.0"},
+    method="POST")
+try:
+    with urllib.request.urlopen(req2, timeout=10) as resp:
+        sys.stdout.write("  current_progress 업데이트: " + task_id + " → COMPLETED\n")
+except Exception as e:
+    sys.stdout.write("  current_progress 업데이트 실패: " + str(e) + "\n")
+PYEOF
+
+else
+    STATUS="FAILED"
+    REPORT="claude_exec 실패 (exit=${EXEC_EXIT}, ${TS_END})"
+    echo "  ❌ 실행 실패 (exit=${EXEC_EXIT}) — errors 카테고리에 기록"
+    # A-3: 에러 이벤트
+    update_heartbeat "error" "claude_exec_failed: exit=${EXEC_EXIT}"
+    write_error "$TASK_ID" "$REPORT"
+    # T-037 B-2: 실패 보고도 go100_user_memory에 저장
+    save_manager_report "$TASK_ID" "$STATUS" "$REPORT" "$COMMIT_SHA" "${EXEC_EXIT}"
+fi
+
+# === AADS-145: Tasks 완료 상태 업데이트 ===
+if [ -n "${TASK_FILE:-}" ] && [ -f "$TASK_FILE" ]; then
+    _t_done_status="failed"
+    [ $EXEC_EXIT -eq 0 ] && _t_done_status="done"
+    python3 -c "
+import json, time
+try:
+    with open('${TASK_FILE}') as f: d = json.load(f)
+    d['status'] = '${_t_done_status}'
+    d['completed_at'] = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+    d['exit_code'] = ${EXEC_EXIT}
+    with open('${TASK_FILE}', 'w') as f: json.dump(d, f, ensure_ascii=False, indent=2)
+except: pass
+" 2>/dev/null || true
+    echo "[TASKS] 상태 업데이트: ${_t_done_status} (${TASK_FILE})"
+fi
+# === Tasks 완료 끝 ===
+
+echo ""
+echo "======================================================"
+echo "완료: ${TASK_ID} | ${TS_END}"
+echo "======================================================"
+exit $EXEC_EXIT
