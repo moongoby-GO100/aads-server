@@ -2,17 +2,27 @@
 CEO Chat v2 - 계층 메모리 + 컨텍스트 DB + 모델 분기 엔진
 T-073: Context Manager + Model Router + Session Memory
 AADS-156: 모델 라우팅 수정 + 전체 지원 모델 업데이트 + 402 fallback
+AADS-157: Intent Classifier + DashboardCollector + Tool-use 루프 + Directive Submit
 
 모델 라우터:
   complex  → claude-opus-4-6
   code     → claude-sonnet-4-6
   simple   → gemini-2.5-flash
   default  → claude-sonnet-4-6
+
+Intent Classifier (5분류):
+  dashboard  → DashboardCollector + tool-use
+  diagnosis  → tool-use 활성화
+  research   → tool-use 활성화
+  execute    → 지시서 자동 생성 + /directives/submit
+  strategy   → 현행 유지 (tool-use 없이 대화)
 """
 import json
+import re
 import uuid
 import logging
 import asyncpg
+import httpx
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Tuple
 from fastapi import APIRouter, HTTPException
@@ -95,6 +105,24 @@ SUPPORTED_MODELS: List[Dict[str, Any]] = [
 
 # 빠른 조회용 dict
 _MODEL_META: Dict[str, Dict] = {m["id"]: m for m in SUPPORTED_MODELS}
+
+
+# ─── Intent Classifier (AADS-157) ────────────────────────────────────────
+_INTENT_PATTERNS: Dict[str, List[str]] = {
+    "dashboard": ["상태", "확인", "보고", "현황", "서버", "대시보드", "요약", "overview"],
+    "diagnosis": ["왜", "안돼", "오류", "에러", "문제", "분석", "실패", "죽었", "죽어", "안됨", "error", "fail"],
+    "research":  ["검색", "조사", "비교", "찾아", "최신", "찾아봐", "알아봐", "어떤", "무엇"],
+    "execute":   ["만들어", "수정해", "고쳐", "배포", "진행", "승인", "작성해", "추가해", "구현", "지시서"],
+    "strategy":  ["기획", "방향", "전략", "의도", "검토", "설계", "아키텍처", "계획"],
+}
+
+
+def classify_intent(message: str) -> str:
+    """메시지 의도 5분류. 우선순위: execute > dashboard > diagnosis > research > strategy."""
+    for intent in ["execute", "dashboard", "diagnosis", "research", "strategy"]:
+        if any(kw in message for kw in _INTENT_PATTERNS[intent]):
+            return intent
+    return "strategy"
 
 
 # ─── Model Router ────────────────────────────────────────────────────────
@@ -197,6 +225,104 @@ async def _call_openai(model: str, system_prompt: str, messages: List[Dict]) -> 
     input_tokens = resp.usage.prompt_tokens
     output_tokens = resp.usage.completion_tokens
     return text, input_tokens, output_tokens
+
+
+async def _call_anthropic_with_tools(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict],
+    dsn: str,
+    max_iterations: int = 5,
+) -> Tuple[str, int, int]:
+    """Tool-use 루프 포함 Anthropic 호출 (AADS-157).
+
+    while 루프: stop_reason='tool_use' → 도구 실행 → 결과 재전달.
+    stop_reason='end_turn' 또는 max_iterations 초과 시 종료.
+    """
+    from app.api.ceo_chat_tools import TOOL_DEFINITIONS, execute_tool
+
+    clients = [c for c in [anthropic_client, anthropic_client_2] if c is not None]
+    if not clients:
+        raise RuntimeError("Anthropic API 클라이언트 없음")
+
+    total_input = 0
+    total_output = 0
+    current_messages = list(messages)
+
+    for iteration in range(max_iterations):
+        last_exc: Optional[Exception] = None
+        resp = None
+        for client in clients:
+            try:
+                resp = await client.messages.create(
+                    model=model,
+                    max_tokens=4096,
+                    system=system_prompt,
+                    messages=current_messages,
+                    tools=TOOL_DEFINITIONS,
+                )
+                break
+            except APIStatusError as e:
+                if e.status_code == 402:
+                    last_exc = e
+                    continue
+                raise
+        if resp is None:
+            raise last_exc or RuntimeError("All Anthropic API keys exhausted")
+
+        total_input += resp.usage.input_tokens
+        total_output += resp.usage.output_tokens
+
+        if resp.stop_reason == "end_turn":
+            text = "".join(
+                block.text for block in resp.content if hasattr(block, "text")
+            )
+            return text, total_input, total_output
+
+        if resp.stop_reason == "tool_use":
+            # assistant 메시지에 content blocks 추가
+            assistant_content = []
+            tool_use_blocks = []
+            for block in resp.content:
+                if block.type == "text":
+                    assistant_content.append({"type": "text", "text": block.text})
+                elif block.type == "tool_use":
+                    assistant_content.append(
+                        {
+                            "type": "tool_use",
+                            "id": block.id,
+                            "name": block.name,
+                            "input": block.input,
+                        }
+                    )
+                    tool_use_blocks.append(block)
+
+            current_messages.append({"role": "assistant", "content": assistant_content})
+
+            # 도구 실행 및 결과 수집
+            tool_results = []
+            for block in tool_use_blocks:
+                logger.info("ceo_chat_tool_call", tool=block.name, params=block.input)
+                result = await execute_tool(block.name, block.input, dsn)
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                    }
+                )
+
+            current_messages.append({"role": "user", "content": tool_results})
+            continue
+
+        # 기타 stop_reason (max_tokens 등)
+        text = "".join(
+            block.text for block in resp.content if hasattr(block, "text")
+        )
+        return text, total_input, total_output
+
+    # max_iterations 초과
+    return "[경고] 도구 호출 최대 반복 횟수 초과. 부분 결과만 반환됩니다.", total_input, total_output
 
 
 async def _call_gemini(model: str, system_prompt: str, messages: List[Dict]) -> Tuple[str, int, int]:
@@ -349,6 +475,206 @@ class ContextManager:
         return "\n".join(parts)
 
 
+# ─── Dashboard Collector (AADS-157) ──────────────────────────────────────
+class DashboardCollector:
+    """상태확인 시 6개 소스에서 데이터 자동 수집."""
+
+    def __init__(self, conn, dsn: str):
+        self.conn = conn
+        self.dsn = dsn
+
+    async def _fetch_health(self) -> str:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                r = await client.get("https://aads.newtalk.kr/api/v1/health")
+                return r.text[:2000]
+        except Exception as e:
+            return f"(health 조회 실패: {e})"
+
+    async def _fetch_status_md(self) -> str:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(
+                    "https://raw.githubusercontent.com/moongoby-GO100/aads-docs/main/STATUS.md"
+                )
+                return r.text[:3000] if r.status_code == 200 else f"(STATUS.md 없음: {r.status_code})"
+        except Exception as e:
+            return f"(STATUS.md 조회 실패: {e})"
+
+    async def _fetch_projects(self) -> str:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                r = await client.get("https://aads.newtalk.kr/api/v1/projects")
+                return r.text[:2000]
+        except Exception as e:
+            return f"(projects 조회 실패: {e})"
+
+    async def _fetch_session_cost(self) -> str:
+        try:
+            row = await self.conn.fetchrow(
+                """SELECT
+                     COUNT(*) AS total_sessions,
+                     COALESCE(SUM(total_cost_usd), 0) AS total_cost,
+                     COALESCE(SUM(total_turns), 0) AS total_turns
+                   FROM ceo_chat_sessions
+                   WHERE started_at >= date_trunc('month', now())"""
+            )
+            return (
+                f"이번달 세션: {row['total_sessions']}개, "
+                f"총 비용: ${float(row['total_cost']):.4f}, "
+                f"총 턴: {int(row['total_turns'])}"
+            )
+        except Exception as e:
+            return f"(세션 비용 집계 실패: {e})"
+
+    async def _fetch_task_tracking(self) -> str:
+        try:
+            rows = await self.conn.fetch(
+                """SELECT task_id, title, status, project
+                   FROM task_tracking
+                   WHERE status IN ('pending', 'running')
+                   ORDER BY created_at DESC LIMIT 10"""
+            )
+            if not rows:
+                return "(진행중 태스크 없음)"
+            lines = [f"  {r['task_id']}: [{r['status']}] {r['title']} ({r['project']})" for r in rows]
+            return "\n".join(lines)
+        except Exception as e:
+            return f"(태스크 현황 조회 실패: {e})"
+
+    async def collect(self) -> Dict[str, str]:
+        """6개 소스 병렬 수집."""
+        import asyncio
+        health, status_md, projects, session_cost, task_tracking = await asyncio.gather(
+            self._fetch_health(),
+            self._fetch_status_md(),
+            self._fetch_projects(),
+            self._fetch_session_cost(),
+            self._fetch_task_tracking(),
+            return_exceptions=False,
+        )
+        return {
+            "health": health,
+            "status_md": status_md,
+            "projects": projects,
+            "session_cost": session_cost,
+            "task_tracking": task_tracking,
+        }
+
+
+def _inject_dashboard(system_prompt: str, data: Dict[str, str]) -> str:
+    """수집된 대시보드 데이터를 system_prompt에 주입."""
+    dashboard_section = f"""
+[실시간 대시보드 데이터 — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}]
+
+[Health 상태]
+{data.get('health', '(없음)')}
+
+[STATUS.md]
+{data.get('status_md', '(없음)')}
+
+[Projects]
+{data.get('projects', '(없음)')}
+
+[이번달 CEO Chat 비용]
+{data.get('session_cost', '(없음)')}
+
+[진행중 태스크]
+{data.get('task_tracking', '(없음)')}
+"""
+    return system_prompt + "\n" + dashboard_section
+
+
+async def _handle_execute_intent(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict],
+    dsn: str,
+) -> Tuple[str, int, int]:
+    """execute 의도 처리: LLM으로 지시서 생성 → submit → 응답 반환."""
+    from app.api.directives import DirectiveSubmitRequest, submit_directive_sync
+
+    # 지시서 생성 전용 프롬프트
+    directive_system = (
+        system_prompt
+        + "\n\n[지시서 생성 모드]\n"
+        "CEO의 요청을 분석하여 D-022 포맷 지시서를 JSON으로 생성하세요.\n"
+        "반드시 아래 JSON 형식만 반환하세요 (마크다운 코드블록 없이):\n"
+        '{"task_id": "AADS-XXX", "project": "AADS", "priority": "P2", '
+        '"size": "S", "description": "...", "success_criteria": "...", '
+        '"files_owned": ["..."], "impact": "M", "effort": "M"}\n'
+        "task_id는 현재 최신 번호 다음 번호를 사용하세요 (알 수 없으면 AADS-200 사용).\n"
+        "size: XS/S/M/L/XL, priority: P0-CRITICAL/P1/P2/P3, impact/effort: H/M/L"
+    )
+
+    # Anthropic 모델로 지시서 JSON 생성
+    tool_model = model if model.startswith("claude") else "claude-sonnet-4-6"
+    clients = [c for c in [anthropic_client, anthropic_client_2] if c is not None]
+
+    resp_text = ""
+    total_input = 0
+    total_output = 0
+    for client in clients:
+        try:
+            resp = await client.messages.create(
+                model=tool_model,
+                max_tokens=1024,
+                system=directive_system,
+                messages=messages,
+            )
+            resp_text = resp.content[0].text
+            total_input = resp.usage.input_tokens
+            total_output = resp.usage.output_tokens
+            break
+        except APIStatusError as e:
+            if e.status_code == 402:
+                continue
+            raise
+
+    if not resp_text:
+        return "지시서 생성 실패 (API 키 소진)", 0, 0
+
+    # JSON 파싱
+    try:
+        json_match = re.search(r"\{.*\}", resp_text, re.DOTALL)
+        if not json_match:
+            raise ValueError("JSON 없음")
+        data = json.loads(json_match.group())
+    except Exception as e:
+        logger.warning(f"directive_json_parse_failed: {e}, raw={resp_text[:500]}")
+        return f"지시서 JSON 파싱 실패. LLM 응답:\n{resp_text}", total_input, total_output
+
+    # 지시서 제출
+    try:
+        req = DirectiveSubmitRequest(
+            task_id=data.get("task_id", "AADS-200"),
+            project=data.get("project", "AADS"),
+            priority=data.get("priority", "P2"),
+            size=data.get("size", "S"),
+            description=data.get("description", ""),
+            success_criteria=data.get("success_criteria"),
+            files_owned=data.get("files_owned"),
+            impact=data.get("impact", "M"),
+            effort=data.get("effort", "M"),
+        )
+        result = submit_directive_sync(req)
+        response_text = (
+            f"지시서 생성 완료.\n"
+            f"  task_id: {result.task_id}\n"
+            f"  파일: {result.filename}\n"
+            f"  경로: {result.path}\n\n"
+            f"파이프라인이 감지하면 자동 실행됩니다."
+        )
+    except Exception as e:
+        logger.error(f"directive_submit_failed: {e}")
+        response_text = (
+            f"지시서 파일 생성 실패: {e}\n\n"
+            f"생성된 지시서 내용 (수동 투입 가능):\n{resp_text}"
+        )
+
+    return response_text, total_input, total_output
+
+
 # ─── 세션 요약 생성 ───────────────────────────────────────────────────────
 async def generate_session_summary(conn, session_id: str) -> None:
     """Gemini Flash로 세션 요약 생성 후 DB 저장 (비용 최소화)."""
@@ -439,6 +765,10 @@ async def send_ceo_message(req: CeoChatRequest):
         else:
             model = route_model(req.message)
 
+        # Intent 분류 (AADS-157)
+        intent = classify_intent(req.message)
+        logger.info("ceo_chat_intent", intent=intent, model=model, session=session_id)
+
         # 이전 메시지 로드 (최근 10턴 = 20 rows)
         prev_msgs = await conn.fetch(
             """SELECT role, content FROM ceo_chat_messages
@@ -449,8 +779,32 @@ async def send_ceo_message(req: CeoChatRequest):
         messages = [{"role": r['role'], "content": r['content']} for r in prev_msgs]
         messages.append({"role": "user", "content": req.message})
 
-        # LLM 호출
-        response_text, input_tokens, output_tokens = await call_llm(model, system_prompt, messages)
+        # Intent 기반 LLM 호출 (AADS-157)
+        dsn = settings.DATABASE_URL or settings.SUPABASE_DIRECT_URL
+        if intent == "dashboard":
+            # DashboardCollector + tool-use
+            collector = DashboardCollector(conn, dsn)
+            dashboard_data = await collector.collect()
+            enriched_prompt = _inject_dashboard(system_prompt, dashboard_data)
+            tool_model = model if model.startswith("claude") else "claude-sonnet-4-6"
+            response_text, input_tokens, output_tokens = await _call_anthropic_with_tools(
+                tool_model, enriched_prompt, messages, dsn
+            )
+        elif intent in ("diagnosis", "research"):
+            # tool-use 활성화 (Anthropic 전용)
+            tool_model = model if model.startswith("claude") else "claude-sonnet-4-6"
+            response_text, input_tokens, output_tokens = await _call_anthropic_with_tools(
+                tool_model, system_prompt, messages, dsn
+            )
+        elif intent == "execute":
+            # 지시서 자동 생성 + submit
+            response_text, input_tokens, output_tokens = await _handle_execute_intent(
+                model, system_prompt, messages, dsn
+            )
+        else:
+            # strategy: 현행 유지 (tool-use 없이 대화)
+            response_text, input_tokens, output_tokens = await call_llm(model, system_prompt, messages)
+
         cost = calc_cost(model, input_tokens, output_tokens)
 
         # 메시지 저장
@@ -488,6 +842,7 @@ async def send_ceo_message(req: CeoChatRequest):
             "response": response_text,
             "model_used": _model_display_name(model),
             "model_id": model,
+            "intent": intent,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "cost_usd": round(cost, 6),

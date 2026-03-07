@@ -15,6 +15,7 @@ from app.api.managers import router as managers_router
 from app.api.conversations import router as conversations_router
 from app.api.project_dashboard import router as project_dashboard_router
 from app.api.ceo_chat import router as ceo_chat_router
+from app.api.directives import router as directives_router
 from app.api.watchdog import router as watchdog_router
 from app.api.approval import router as approval_router
 from app.api.documents import router as documents_router
@@ -136,6 +137,7 @@ app.include_router(mobile_qa.router, prefix="/api/v1", tags=["mobile-qa"])
 app.include_router(memory.router, prefix="/api/v1", tags=["memory"])
 app.include_router(conversations_router, prefix="/api/v1", tags=["conversations"])
 app.include_router(ceo_chat_router, prefix="/api/v1", tags=["ceo-chat"])
+app.include_router(directives_router, prefix="/api/v1", tags=["directives"])
 app.include_router(watchdog_router, prefix="/api/v1", tags=["watchdog"])
 app.include_router(approval_router, prefix="/api/v1", tags=["approval"])
 app.include_router(documents_router, prefix="/api/v1/documents", tags=["documents"])
