@@ -304,7 +304,7 @@ async def _call_anthropic_with_tools(
             # 도구 실행 및 결과 수집
             tool_results = []
             for block in tool_use_blocks:
-                logger.info("ceo_chat_tool_call", tool=block.name, params=block.input)
+                logger.info(f"ceo_chat_tool_call tool={block.name} params={block.input}")
                 result = await execute_tool(block.name, block.input, dsn)
                 tool_results.append(
                     {
