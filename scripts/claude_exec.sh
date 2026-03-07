@@ -126,7 +126,13 @@ PROJECT="$2"
 WORKDIR="$3"
 MAX_TIMEOUT="${4:-1200}"
 MAX_TURNS="${5:-200}"
-MODEL="${6:-sonnet}"
+# D-024: 지시서 model 필드 → size 기반 자동 라우팅 → arg fallback → sonnet
+_DIR_MODEL=$(grep -m1 '^model:' "${DIRECTIVE_FILE}" 2>/dev/null | awk '{print $2}' | tr -d ' ')
+_DIR_SIZE=$(grep -m1 '^size:' "${DIRECTIVE_FILE}" 2>/dev/null | awk '{print $2}' | tr -d ' ')
+if [ -n "$_DIR_MODEL" ]; then MODEL="$_DIR_MODEL"
+elif [ "$_DIR_SIZE" = "XS" ]; then MODEL="haiku"
+elif [ "$_DIR_SIZE" = "XL" ]; then MODEL="opus"
+else MODEL="${6:-sonnet}"; fi
 
 # PRIORITY 추출 (P0/P1/P2/P3)
 PRIORITY=$(grep -m1 -iE '^priority[[:space:]]*[:：]' "$DIRECTIVE_FILE" 2>/dev/null \

@@ -59,6 +59,34 @@ _log_priority() {
     fi
 }
 
+# ─── D-025: impact/effort 점수 계산 함수 ────────────────────
+# 점수 = impact_score(H=3,M=2,L=1) × 10 + effort_score(L=3,M=2,H=1)
+# 높은 점수 = 먼저 실행
+_impact_effort_score() {
+    local file="$1"
+    local impact effort impact_score effort_score
+    impact=$(grep -m1 '^impact:' "$file" 2>/dev/null | awk '{print toupper($2)}' | tr -d ' ')
+    effort=$(grep -m1 '^effort:' "$file" 2>/dev/null | awk '{print toupper($2)}' | tr -d ' ')
+    case "${impact:-M}" in H) impact_score=3 ;; L) impact_score=1 ;; *) impact_score=2 ;; esac
+    case "${effort:-M}" in L) effort_score=3 ;; H) effort_score=1 ;; *) effort_score=2 ;; esac
+    echo $(( impact_score * 10 + effort_score ))
+}
+
+# ─── D-025: 후보 목록에서 impact/effort 점수 최고 파일 선택 ──
+_best_by_score() {
+    local best_file="" best_score=-1
+    for f in "$@"; do
+        [ -f "$f" ] || continue
+        local score
+        score=$(_impact_effort_score "$f")
+        if [ "$score" -gt "$best_score" ]; then
+            best_score=$score
+            best_file="$f"
+        fi
+    done
+    echo "$best_file"
+}
+
 # ─── T-106: pending에서 우선순위 기반 파일 선택 함수 ─────────
 _select_next_file() {
     local pending_dir="$1"
@@ -73,34 +101,62 @@ _select_next_file() {
 
     local next_file="" reason=""
 
-    # 1순위: 파일명에 _P0_ 포함
-    next_file=$(ls "${pending_dir}"/*_P0_*.md 2>/dev/null | head -1 || true)
-    if [ -n "$next_file" ]; then
-        reason="filename P0 priority"
+    # 1순위: 파일명에 _P0_ 포함 → D-025 impact/effort 정렬
+    local p0_name_files
+    p0_name_files=$(ls "${pending_dir}"/*_P0_*.md 2>/dev/null || true)
+    if [ -n "$p0_name_files" ]; then
+        # shellcheck disable=SC2086
+        next_file=$(_best_by_score $p0_name_files)
+        [ -n "$next_file" ] && reason="filename P0 priority (impact/effort sorted)"
     fi
 
-    # 2순위: 내용에 P0-CRITICAL 포함
+    # 2순위: 내용에 P0-CRITICAL 포함 → D-025 impact/effort 정렬
     if [ -z "$next_file" ]; then
-        next_file=$(grep -rl "P0-CRITICAL" "${pending_dir}"/*.md 2>/dev/null | head -1 || true)
-        [ -n "$next_file" ] && reason="content P0-CRITICAL priority"
+        local p0_content_files
+        p0_content_files=$(grep -rl "P0-CRITICAL" "${pending_dir}"/*.md 2>/dev/null || true)
+        if [ -n "$p0_content_files" ]; then
+            # shellcheck disable=SC2086
+            next_file=$(_best_by_score $p0_content_files)
+            [ -n "$next_file" ] && reason="content P0-CRITICAL priority (impact/effort sorted)"
+        fi
     fi
 
-    # 3순위: 파일명에 _P1_ 포함
+    # 3순위: 파일명에 _P1_ 포함 → D-025 impact/effort 정렬
     if [ -z "$next_file" ]; then
-        next_file=$(ls "${pending_dir}"/*_P1_*.md 2>/dev/null | head -1 || true)
-        [ -n "$next_file" ] && reason="filename P1 priority"
+        local p1_name_files
+        p1_name_files=$(ls "${pending_dir}"/*_P1_*.md 2>/dev/null || true)
+        if [ -n "$p1_name_files" ]; then
+            # shellcheck disable=SC2086
+            next_file=$(_best_by_score $p1_name_files)
+            [ -n "$next_file" ] && reason="filename P1 priority (impact/effort sorted)"
+        fi
     fi
 
-    # 4순위: 내용에 P1-HIGH 포함
+    # 4순위: 내용에 P1-HIGH 포함 → D-025 impact/effort 정렬
     if [ -z "$next_file" ]; then
-        next_file=$(grep -rl "P1-HIGH" "${pending_dir}"/*.md 2>/dev/null | head -1 || true)
-        [ -n "$next_file" ] && reason="content P1-HIGH priority"
+        local p1_content_files
+        p1_content_files=$(grep -rl "P1-HIGH" "${pending_dir}"/*.md 2>/dev/null || true)
+        if [ -n "$p1_content_files" ]; then
+            # shellcheck disable=SC2086
+            next_file=$(_best_by_score $p1_content_files)
+            [ -n "$next_file" ] && reason="content P1-HIGH priority (impact/effort sorted)"
+        fi
     fi
 
-    # 5순위: 기존 FIFO (가장 오래된 파일)
+    # 5순위: P2 전체 → D-025 impact/effort 정렬 후 FIFO fallback
     if [ -z "$next_file" ]; then
-        next_file=$(ls -t "${pending_dir}"/*.md 2>/dev/null | tail -1 || true)
-        [ -n "$next_file" ] && reason="FIFO (P2-NORMAL)"
+        local p2_files
+        p2_files=$(ls "${pending_dir}"/*.md 2>/dev/null || true)
+        if [ -n "$p2_files" ]; then
+            # shellcheck disable=SC2086
+            next_file=$(_best_by_score $p2_files)
+            if [ -n "$next_file" ]; then
+                reason="P2-NORMAL (impact/effort sorted)"
+            else
+                next_file=$(ls -t "${pending_dir}"/*.md 2>/dev/null | tail -1 || true)
+                [ -n "$next_file" ] && reason="FIFO (P2-NORMAL fallback)"
+            fi
+        fi
     fi
 
     if [ -n "$next_file" ]; then
