@@ -14,6 +14,7 @@ services:
       - POSTGRES_USER=aads
       - POSTGRES_PASSWORD=aads_dev_local
       - POSTGRES_DB=aads
+      - TZ=Asia/Seoul
     command: >
       postgres
       -c shared_buffers=256MB
@@ -39,6 +40,8 @@ services:
     container_name: aads-redis
     restart: always
     command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    environment:
+      - TZ=Asia/Seoul
     networks:
       - aads_network
     healthcheck:
@@ -66,6 +69,7 @@ services:
       - ENVIRONMENT=production
       - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql://aads:aads_dev_local@aads-postgres:5432/aads
+      - TZ=Asia/Seoul
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /root/.genspark/directives:/root/.genspark/directives:ro
@@ -106,6 +110,7 @@ services:
       - NODE_ENV=production
       - NEXT_PUBLIC_API_URL=https://aads.newtalk.kr/api/v1
       - PORT=3100
+      - TZ=Asia/Seoul
     networks:
       - aads_network
     healthcheck:
