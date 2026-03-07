@@ -625,6 +625,23 @@ except Exception:
     local ts_done
     ts_done=$(TZ='Asia/Seoul' date '+%Y-%m-%d %H:%M KST')
 
+    # === AADS-163: RESULT_FILE에서 qa_status / design_status 추출 ===
+    local _qa_status _design_status
+    _qa_status=$(grep -m1 '^qa_status:' "${result_file}" 2>/dev/null | awk '{print $2}' | tr -d '[:space:]' || echo "")
+    _design_status=$(grep -m1 '^design_status:' "${result_file}" 2>/dev/null | awk '{print $2}' | tr -d '[:space:]' || echo "")
+    if [ "${_qa_status}" = "FAIL" ]; then
+        echo "  ❌ [QA-GATE] qa_status=FAIL — 서킷브레이커 카운트 증가"
+        local _aads_url
+        _aads_url=$(grep '^AADS_API_URL=' /root/.env.aads 2>/dev/null | cut -d= -f2-)
+        [ -n "$_aads_url" ] && curl -s -X POST "${_aads_url}/ops/circuit-breaker/increment" \
+            -H "Content-Type: application/json" \
+            -d "{\"project\":\"${project}\",\"task_id\":\"${task_id}\",\"reason\":\"qa_gate_fail\"}" \
+            --max-time 10 > /dev/null 2>&1 || true
+        bash "/root/.genspark/send_telegram.sh" "🚨 [QA-FAIL] ${task_id} QA 2회 초과 — 서킷브레이커+1 (project=${project})" 2>/dev/null || true
+        exec_exit=1
+    fi
+    # === QA/디자인 상태 추출 끝 ===
+
     if [ $exec_exit -eq 0 ]; then
         echo "  ✅ 실행 완료: ${task_id} (${ts_done})"
         # AADS-113: completed 상태 기록
@@ -648,6 +665,11 @@ except Exception:
         _status_next=$(_select_next_file "$PENDING_DIR" 2>/dev/null | xargs -r basename | sed 's/\.md$//' || echo "none")
         [ -z "$_status_next" ] && _status_next="none"
         _update_status_md "$task_id" "SUCCESS" "$_status_sha" "$_status_report" "$_status_next"
+
+        # AADS-163: Telegram 알림에 QA/디자인 판정 포함
+        bash "/root/.genspark/send_telegram.sh" "✅ [${project}] ${task_id} 완료
+QA: ${_qa_status:-N/A} | 디자인: ${_design_status:-N/A}
+커밋: ${_status_sha:0:8}" 2>/dev/null || true
 
         # AADS-145: final_commit 신호 감지 → 투기적 프리로드 (후처리와 병렬)
         local _fc_signal="/tmp/aads_final_commit_${task_id}.signal"

@@ -401,6 +401,91 @@ else
     save_manager_report "$TASK_ID" "$STATUS" "$REPORT" "$COMMIT_SHA" "${EXEC_EXIT}"
 fi
 
+# === AADS-163: 3단계 품질 게이트 (QA → 디자인) ===
+_AGENTS_DIR="${SCRIPT_DIR}/../.claude/agents"
+_LOG_DIR="${LOG_DIR:-/root/.genspark/logs}"
+_RESULT_FILE="${RESULT_FILE:-/root/.genspark/directives/done/${TASK_ID}_RESULT.md}"
+_TELEGRAM_SCRIPT="/root/.genspark/send_telegram.sh"
+
+if [ $EXEC_EXIT -eq 0 ]; then
+    # QA 게이트
+    _qa_agent="${_AGENTS_DIR}/test-writer.md"
+    _qa_out="/tmp/aads_qa_${TASK_ID}_$$.txt"
+    _qa_verdict="PASS"
+    _qa_retry=0
+    while [ $_qa_retry -le 2 ]; do
+        if [ -f "$_qa_agent" ]; then
+            _qa_prompt="$(cat "$_qa_agent") ## QA 대상: ${TASK_ID}
+$([ -n "${DIRECTIVE_FILE:-}" ] && cat "$DIRECTIVE_FILE" 2>/dev/null | head -40 || echo '')
+success_criteria 기준으로 검토 후 QA_VERDICT: PASS 또는 QA_VERDICT: FAIL 을 출력하라."
+        else
+            _qa_prompt="[QA] task=${TASK_ID} 완료 여부를 검토하고 QA_VERDICT: PASS 또는 QA_VERDICT: FAIL 을 출력하라."
+        fi
+        echo "$_qa_prompt" | timeout 600 claude --print 2>&1 > "$_qa_out" || true
+        _qa_verdict=$(grep -m1 "QA_VERDICT:" "$_qa_out" 2>/dev/null | awk '{print $2}' | tr -d '[:space:]' || echo "PASS")
+        [ -z "$_qa_verdict" ] && _qa_verdict="PASS"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] [QA-GATE] 시도$((_qa_retry+1)): ${_qa_verdict}"
+        [ "$_qa_verdict" = "PASS" ] && break
+        [ $_qa_retry -ge 2 ] && break
+        # FAIL → 재작업
+        _qa_feedback=$(cat "$_qa_out" 2>/dev/null | tail -20)
+        echo "QA FAIL — 재작업 시도 $((_qa_retry+1))/2: ${_qa_feedback}" | timeout 600 claude --print 2>&1 >> "${_LOG_DIR}/qa_${TASK_ID}.log" || true
+        _qa_retry=$((_qa_retry+1))
+    done
+    # RESULT_FILE에 qa_status 기록
+    if [ -f "$_RESULT_FILE" ]; then
+        python3 -c "
+import re
+p='${_RESULT_FILE}'
+try:
+    with open(p) as f: c=f.read()
+except: c='---\n---\n'
+if 'qa_status:' not in c:
+    c=re.sub(r'^---\n','---\nqa_status: ${_qa_verdict}\n',c,count=1,flags=re.M)
+    with open(p,'w') as f: f.write(c)
+" 2>/dev/null || true
+    fi
+    if [ "$_qa_verdict" = "FAIL" ]; then
+        echo "[QA-GATE] FAIL (2회 초과) — 서킷브레이커 카운트 신호"
+        bash "$_TELEGRAM_SCRIPT" "🚨 [QA-FAIL] ${TASK_ID} QA 2회 초과 — 서킷브레이커 트리거" 2>/dev/null || true
+        EXEC_EXIT=1
+    else
+        # 디자인 게이트
+        _dg_agent="${_AGENTS_DIR}/doc-writer.md"
+        _dg_out="/tmp/aads_design_${TASK_ID}_$$.txt"
+        if [ -f "$_dg_agent" ]; then
+            _dg_prompt="$(cat "$_dg_agent") ## 디자인 검증: ${TASK_ID}
+UI/UX 변경이 있으면 DESIGN_VERDICT: REVIEW_NEEDED, 없으면 DESIGN_VERDICT: PASS 를 출력하라."
+        else
+            _dg_prompt="[DESIGN] task=${TASK_ID} UI/UX 변경 여부 확인. DESIGN_VERDICT: PASS 또는 DESIGN_VERDICT: REVIEW_NEEDED 출력."
+        fi
+        echo "$_dg_prompt" | timeout 300 claude --print 2>&1 > "$_dg_out" || true
+        _dg_verdict=$(grep -m1 "DESIGN_VERDICT:" "$_dg_out" 2>/dev/null | awk '{print $2}' | tr -d '[:space:]' || echo "PASS")
+        [ -z "$_dg_verdict" ] && _dg_verdict="PASS"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] [DESIGN-GATE] ${_dg_verdict}"
+        if [ "$_dg_verdict" = "REVIEW_NEEDED" ]; then
+            bash "$_TELEGRAM_SCRIPT" "🎨 [DESIGN-REVIEW] ${TASK_ID} CEO 검토 필요 — 60초 타임아웃" 2>/dev/null || true
+            sleep 60
+            _dg_verdict="PASS_TIMEOUT"
+        fi
+        if [ -f "$_RESULT_FILE" ]; then
+            python3 -c "
+import re
+p='${_RESULT_FILE}'
+try:
+    with open(p) as f: c=f.read()
+except: c='---\n---\n'
+if 'design_status:' not in c:
+    c=re.sub(r'^---\n','---\ndesign_status: ${_dg_verdict}\n',c,count=1,flags=re.M)
+    with open(p,'w') as f: f.write(c)
+" 2>/dev/null || true
+        fi
+        rm -f "$_dg_out" 2>/dev/null
+    fi
+    rm -f "$_qa_out" 2>/dev/null
+fi
+# === 3단계 품질 게이트 끝 ===
+
 # === AADS-146: 서브에이전트 실행 (subagents 필드 기반) ===
 if [ -n "$SUBAGENTS_LIST" ] && [ $EXEC_EXIT -eq 0 ]; then
     IFS=',' read -ra _agent_names <<< "$SUBAGENTS_LIST"
