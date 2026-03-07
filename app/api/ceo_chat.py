@@ -769,7 +769,7 @@ async def send_ceo_message(req: CeoChatRequest):
 
         # Intent 분류 (AADS-157)
         intent = classify_intent(req.message)
-        logger.info("ceo_chat_intent", intent=intent, model=model, session=session_id)
+        logger.info(f"ceo_chat_intent intent={intent} model={model} session={session_id}")
 
         # 이전 메시지 로드 (최근 10턴 = 20 rows)
         prev_msgs = await conn.fetch(
