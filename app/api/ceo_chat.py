@@ -118,25 +118,73 @@ _INTENT_PATTERNS: Dict[str, List[str]] = {
     # AADS-164: 에이전트 개별 호출 의도 (높은 우선순위)
     "design_fix":  ["디자인수정", "디자인 수정", "UI수정", "UI 수정", "CSS수정", "스타일수정"],
     "design":      ["디자인검수", "디자인 검수", "화면검수", "디자인", "UI검수", "UI 검수", "UX검수", "레이아웃"],
-    "qa":          ["QA", "qa", "테스트", "검수", "품질", "QA 진행", "테스트해", "검증해"],
+    "qa":          ["QA", "qa", "테스트", "검수", "품질", "QA 진행", "테스트해", "검증해",
+                    "KIS", "GO100", "ShortFlow", "NTV2", "코드 검수", "백테스트", "코드검수"],
     "architect":   ["설계검토", "설계 검토", "아키텍처검토", "아키텍처 검토", "구조검토", "설계해"],
+    # AADS-166: 헬스체크 의도
+    "health_check": ["헬스체크", "건강", "시스템 상태", "인프라", "health", "전체 점검", "헬스 체크", "health-check", "healthcheck"],
     # 기존 의도
     "dashboard":   ["상태", "확인", "보고", "현황", "서버", "대시보드", "요약", "overview"],
     "diagnosis":   ["왜", "안돼", "오류", "에러", "문제", "분석", "실패", "죽었", "죽어", "안됨", "error", "fail"],
     "research":    ["검색", "조사", "비교", "찾아", "최신", "찾아봐", "알아봐", "어떤", "무엇"],
     "execute":     ["만들어", "수정해", "고쳐", "배포", "진행", "승인", "작성해", "추가해", "구현", "지시서"],
     "strategy":    ["기획", "방향", "전략", "의도", "검토", "설계", "아키텍처", "계획"],
+    # AADS-165: 실행 검증 의도
+    "execution_verify": ["실행 검증", "실행해", "실행검증", "pytest", "백테스트 실행", "돌려봐", "실행 검증해"],
     # AADS-159: 브라우저 자동화 의도
     "browser":     ["스크린샷", "페이지", "열어", "화면", "브라우저", "사이트", "접속"],
 }
 
 
+_CROSS_PROJECT_NAMES = {"KIS", "GO100", "ShortFlow", "NTV2"}
+_CROSS_PROJECT_QA_KEYWORDS = {"검수", "테스트", "코드", "백테스트", "분석", "검증", "리뷰", "코드검수", "코드 검수"}
+
+
 def classify_intent(message: str) -> str:
-    """메시지 의도 10분류. 우선순위: design_fix > design > qa > architect > execute > browser > dashboard > diagnosis > research > strategy."""
-    for intent in ["design_fix", "design", "qa", "architect", "execute", "browser", "dashboard", "diagnosis", "research", "strategy"]:
+    """메시지 의도 12분류. 우선순위: design_fix > design > qa > execution_verify > architect > health_check > execute > browser > dashboard > diagnosis > research > strategy."""
+    for intent in ["design_fix", "design", "qa", "execution_verify", "architect", "health_check", "execute", "browser", "dashboard", "diagnosis", "research", "strategy"]:
+        if intent not in _INTENT_PATTERNS:
+            continue
         if any(kw in message for kw in _INTENT_PATTERNS[intent]):
+            # 프로젝트명만 매칭된 경우: QA 키워드 동반 확인 (예: "KIS 상태" → dashboard)
+            if intent == "qa":
+                matched_kw = [kw for kw in _INTENT_PATTERNS[intent] if kw in message]
+                is_only_project = all(kw in _CROSS_PROJECT_NAMES for kw in matched_kw)
+                if is_only_project and not any(qk in message for qk in _CROSS_PROJECT_QA_KEYWORDS):
+                    continue  # 프로젝트명만 있고 QA 키워드 없으면 건너뛰기
             return intent
     return "strategy"
+
+
+# ─── 크로스 프로젝트 도구 (AADS-165) ──────────────────────────────────────
+_PROJECT_NAME_MAP = {
+    "KIS": "KIS", "kis": "KIS",
+    "GO100": "GO100", "go100": "GO100",
+    "ShortFlow": "SF", "SF": "SF", "sf": "SF", "숏플로우": "SF",
+    "NTV2": "NTV2", "ntv2": "NTV2", "뉴톡": "NTV2",
+}
+
+
+def _extract_project(message: str) -> Optional[str]:
+    """메시지에서 프로젝트명 추출. 없으면 None."""
+    for keyword, project in _PROJECT_NAME_MAP.items():
+        if keyword in message:
+            return project
+    return None
+
+
+_CODE_REVIEW_SYSTEM_PROMPT = """당신은 시니어 코드 리뷰어입니다. 제공된 코드를 다음 기준으로 분석하세요:
+
+1. **코드 품질** (가독성, 구조, 네이밍)
+2. **로직 오류** (잠재적 버그, 엣지 케이스)
+3. **보안 취약점** (하드코딩된 시크릿, SQL 인젝션, 입력 검증)
+4. **성능** (비효율적 루프, 메모리 누수, 불필요한 I/O)
+5. **테스트 커버리지** (테스트 파일 존재 여부, 테스트 패턴)
+
+종합 판정: PASS / WARNING / FAIL + 개선 사항 목록을 한국어로 제공하세요.
+응답 마지막에 다음 안내를 추가하세요:
+"실행 검증(pytest/백테스트 실행)이 필요하면 '실행 검증해줘'라고 입력하세요."
+"""
 
 
 # ─── Model Router ────────────────────────────────────────────────────────
@@ -599,6 +647,82 @@ def _inject_dashboard(system_prompt: str, data: Dict[str, str]) -> str:
     return system_prompt + "\n" + dashboard_section
 
 
+async def _handle_health_check_intent(
+    session_id: str = "",
+) -> Tuple[str, int, int]:
+    """AADS-166: 헬스체크 의도 처리 — /api/v1/ops/full-health 호출 후 한국어 요약."""
+    import time
+    start = time.time()
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get("https://aads.newtalk.kr/api/v1/ops/full-health")
+            data = r.json() if r.status_code == 200 else {"status": "ERROR", "error": f"HTTP {r.status_code}"}
+    except Exception as e:
+        data = {"status": "ERROR", "error": str(e)}
+
+    duration_ms = int((time.time() - start) * 1000)
+
+    status = data.get("status", "UNKNOWN")
+    status_emoji = {"HEALTHY": "HEALTHY", "DEGRADED": "DEGRADED", "CRITICAL": "CRITICAL"}.get(status, status)
+    sections = data.get("sections", {})
+    issues = data.get("issues", [])
+
+    lines = [f"[시스템 헬스체크 결과: {status_emoji}] ({duration_ms}ms)"]
+    lines.append("")
+
+    # 파이프라인
+    pipeline = sections.get("pipeline", {})
+    p_status = pipeline.get("overall", "?")
+    lines.append(f"  파이프라인: {'정상' if p_status == 'HEALTHY' else p_status}")
+    s211 = pipeline.get("server_211", {})
+    if isinstance(s211, dict) and s211.get("reachable"):
+        bridge = s211.get("bridge_py", s211.get("bridge", {}))
+        if isinstance(bridge, dict) and bridge.get("running"):
+            lines.append(f"    bridge PID {bridge.get('pid', '?')}")
+
+    # 인프라
+    infra = sections.get("infra", {})
+    i_status = infra.get("overall", "?")
+    lines.append(f"  인프라: {'정상' if i_status == 'HEALTHY' else i_status}")
+    for key in ["db", "ssh_211", "ssh_114", "disk_68", "disk_211", "disk_114", "memory_68"]:
+        check = infra.get(key, {})
+        if isinstance(check, dict) and not check.get("ok", True):
+            detail = check.get("error", check.get("severity", ""))
+            if key.startswith("disk_"):
+                detail = f"사용률 {check.get('usage_pct', '?')}%"
+            lines.append(f"    {key}: {detail}")
+
+    # 정합성
+    consistency = sections.get("consistency", {})
+    c_status = consistency.get("overall", "?")
+    lines.append(f"  정합성: {'정상' if c_status == 'HEALTHY' else c_status}")
+    pending_sync = consistency.get("pending_sync", {})
+    if isinstance(pending_sync, dict) and not pending_sync.get("ok", True):
+        lines.append(f"    DB {pending_sync.get('db_queued', '?')}건 queued, 폴더 {pending_sync.get('folder_count', '?')}건")
+
+    # 디렉티브
+    directives = sections.get("directives", {})
+    if isinstance(directives, dict):
+        counts = []
+        for s in ["pending", "running", "done"]:
+            d = directives.get(s, {})
+            if isinstance(d, dict):
+                counts.append(f"{s}: {d.get('count', 0)}")
+        if counts:
+            lines.append(f"  디렉티브: {', '.join(counts)}")
+
+    # 이슈
+    if issues:
+        lines.append("")
+        lines.append(f"  이슈 {len(issues)}건:")
+        for issue in issues[:5]:
+            lines.append(f"    - [{issue.get('severity', 'info')}] {issue.get('type', '?')}: {issue.get('detail', '')[:100]}")
+
+    response_text = "\n".join(lines)
+    return response_text, 0, 0
+
+
 async def _handle_execute_intent(
     model: str,
     system_prompt: str,
@@ -717,14 +841,22 @@ async def _handle_qa_intent(
     dsn: str,
     session_id: str = "",
 ) -> Tuple[str, int, int]:
-    """QA 의도: qa_node + judge_node 실행, 결과를 CEO에게 요약 보고."""
+    """QA 의도: 크로스 프로젝트 감지 시 SSH 정적 분석, 아니면 qa_node + judge_node 실행."""
     import time
-    from app.services.agent_state_builder import build_agent_state
 
     start = time.time()
     user_msg = messages[-1]["content"] if messages else ""
 
-    # CEO 메시지에서 QA 대상 추출
+    # 크로스 프로젝트 감지 (AADS-165)
+    detected_project = _extract_project(user_msg)
+    if detected_project:
+        return await _handle_cross_project_qa(
+            model, system_prompt, messages, dsn, session_id, detected_project, user_msg
+        )
+
+    # 기존 로컬 QA: qa_node + judge_node (AADS-164)
+    from app.services.agent_state_builder import build_agent_state
+
     state = build_agent_state(
         description=f"CEO QA 요청: {user_msg}",
         success_criteria=["CEO가 지정한 기능/페이지의 정상 동작 확인"],
@@ -781,6 +913,251 @@ async def _handle_qa_intent(
         pass
 
     # 토큰은 에이전트 내부에서 소비되므로 여기서는 0 반환 (비용은 agent 내부 추적)
+    return response_text, 0, 0
+
+
+async def _handle_cross_project_qa(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict],
+    dsn: str,
+    session_id: str,
+    project: str,
+    user_msg: str,
+) -> Tuple[str, int, int]:
+    """크로스 프로젝트 SSH 정적 분석 (AADS-165 1단계)."""
+    import time
+    from app.api.ceo_chat_tools import tool_list_remote_dir, tool_read_remote_file
+
+    start = time.time()
+
+    # 사용자 메시지에서 핵심어 추출 (한국어→영어 키워드 매핑)
+    keyword_map = {
+        "백테스트": "backtest", "매매": "trade", "주문": "order",
+        "전략": "strategy", "봇": "bot", "매수": "buy", "매도": "sell",
+        "잔고": "balance", "로그": "log", "설정": "config",
+        "메인": "main", "서버": "server", "API": "api", "api": "api",
+    }
+    search_keyword = ""
+    for kr, en in keyword_map.items():
+        if kr in user_msg:
+            search_keyword = en
+            break
+
+    # 1) 파일 탐색
+    dir_result = await tool_list_remote_dir(project, "", search_keyword, 3)
+    files = []
+    if not dir_result.startswith("[ERROR]"):
+        for line in dir_result.splitlines():
+            line = line.strip()
+            if line and not line.startswith("[") and line.startswith("/"):
+                files.append(line)
+
+    if not files:
+        # 키워드 없이 재시도
+        dir_result = await tool_list_remote_dir(project, "", "", 2)
+        if not dir_result.startswith("[ERROR]"):
+            for line in dir_result.splitlines():
+                line = line.strip()
+                if line and not line.startswith("[") and line.startswith("/"):
+                    files.append(line)
+
+    if not files:
+        duration_ms = int((time.time() - start) * 1000)
+        return (
+            f"[{project} 크로스 프로젝트 검수] ({duration_ms}ms)\n\n"
+            f"파일 탐색 결과 없음.\n{dir_result}\n\n"
+            "프로젝트 경로나 키워드를 더 구체적으로 지정해주세요.",
+            0, 0,
+        )
+
+    # 2) 상위 5개 파일 읽기 (Python/JS 우선)
+    code_extensions = {".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs"}
+    prioritized = sorted(
+        files,
+        key=lambda f: (0 if any(f.endswith(ext) for ext in code_extensions) else 1, f),
+    )[:5]
+
+    code_contents = []
+    from app.api.ceo_chat_tools import _PROJECT_SERVER_MAP
+    workdir = _PROJECT_SERVER_MAP.get(project, {}).get("workdir", "")
+    for fpath in prioritized:
+        rel_path = fpath[len(workdir):].lstrip("/") if fpath.startswith(workdir) else fpath
+        content = await tool_read_remote_file(project, rel_path)
+        if not content.startswith("[ERROR]"):
+            code_contents.append(f"### {rel_path}\n```\n{content[:8000]}\n```")
+
+    if not code_contents:
+        duration_ms = int((time.time() - start) * 1000)
+        return (
+            f"[{project} 크로스 프로젝트 검수] ({duration_ms}ms)\n\n"
+            f"파일 {len(prioritized)}개 발견했으나 읽기 실패.\n\n"
+            "SSH 연결 또는 파일 권한 문제일 수 있습니다.",
+            0, 0,
+        )
+
+    # 3) LLM 정적 분석
+    analysis_messages = [
+        {"role": "user", "content": (
+            f"CEO가 [{project}] 프로젝트 코드 검수를 요청했습니다.\n"
+            f"CEO 원문: {user_msg}\n\n"
+            f"탐색된 파일 {len(files)}개 중 상위 {len(code_contents)}개 코드:\n\n"
+            + "\n\n".join(code_contents)
+        )},
+    ]
+
+    analysis_model = model if model.startswith("claude") else "claude-sonnet-4-6"
+    try:
+        response = await anthropic_client.messages.create(
+            model=analysis_model,
+            max_tokens=4096,
+            system=_CODE_REVIEW_SYSTEM_PROMPT,
+            messages=analysis_messages,
+        )
+        analysis_text = response.content[0].text if response.content else "(분석 결과 없음)"
+        input_tokens = response.usage.input_tokens
+        output_tokens = response.usage.output_tokens
+    except Exception as e:
+        logger.error(f"cross_project_qa_llm_failed: {e}")
+        analysis_text = f"LLM 분석 실패: {str(e)[:300]}"
+        input_tokens, output_tokens = 0, 0
+
+    duration_ms = int((time.time() - start) * 1000)
+    cost = calc_cost(analysis_model, input_tokens, output_tokens)
+
+    response_text = (
+        f"[{project} 크로스 프로젝트 정적 분석] ({duration_ms}ms, ${cost:.4f})\n"
+        f"분석 대상: {', '.join(f.split('/')[-1] for f in prioritized)}\n\n"
+        f"{analysis_text}"
+    )
+
+    # 세션에 분석 컨텍스트 저장 (execution_verify용)
+    try:
+        conn = await asyncpg.connect(dsn=dsn)
+        await _log_agent_execution(
+            conn, session_id, "cross-project-qa", "qa", user_msg[:200],
+            response_text[:500], "success", cost, duration_ms,
+        )
+        # 세션 메모리에 분석 대상 파일 저장
+        await conn.execute(
+            """INSERT INTO system_memory (category, key, value)
+               VALUES ('cross_project_qa', $1, $2)
+               ON CONFLICT (category, key) DO UPDATE SET value = $2""",
+            session_id,
+            json.dumps({"project": project, "files": prioritized, "workdir": workdir}),
+        )
+        await conn.close()
+    except Exception as e:
+        logger.warning(f"cross_project_qa_log_failed: {e}")
+
+    return response_text, input_tokens, output_tokens
+
+
+async def _handle_execution_verify_intent(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict],
+    dsn: str,
+    session_id: str = "",
+) -> Tuple[str, int, int]:
+    """실행 검증 의도: 직전 QA 세션의 프로젝트 정보로 claudebot 지시서 자동 생성 (AADS-165 3단계)."""
+    from datetime import datetime
+
+    user_msg = messages[-1]["content"] if messages else ""
+
+    # 세션 메모리에서 직전 cross-project QA 정보 가져오기
+    project_info = None
+    try:
+        conn = await asyncpg.connect(dsn=dsn)
+        row = await conn.fetchrow(
+            "SELECT value FROM system_memory WHERE category = 'cross_project_qa' AND key = $1",
+            session_id,
+        )
+        if row:
+            project_info = json.loads(row["value"])
+        await conn.close()
+    except Exception as e:
+        logger.warning(f"execution_verify_load_session_failed: {e}")
+
+    if not project_info:
+        # 직접 프로젝트 추출 시도
+        detected = _extract_project(user_msg)
+        if detected:
+            from app.api.ceo_chat_tools import _PROJECT_SERVER_MAP
+            mapping = _PROJECT_SERVER_MAP.get(detected, {})
+            project_info = {
+                "project": detected,
+                "files": [],
+                "workdir": mapping.get("workdir", ""),
+            }
+        else:
+            return (
+                "직전 크로스 프로젝트 QA 세션이 없습니다. "
+                "먼저 'KIS 코드 검수해' 등으로 정적 분석을 실행한 후 '실행 검증해줘'를 입력하세요.",
+                0, 0,
+            )
+
+    project = project_info["project"]
+    files = project_info.get("files", [])
+    workdir = project_info.get("workdir", "")
+
+    from app.api.ceo_chat_tools import _PROJECT_SERVER_MAP
+    mapping = _PROJECT_SERVER_MAP.get(project, {})
+    server_ip = mapping.get("server", "unknown")
+
+    # 서버 번호 매핑
+    server_label = "211" if "211" in server_ip else "114" if "155" in server_ip else "68"
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    task_id = f"{project}-VERIFY-{ts}"
+    file_list = "\n".join(f"  - {f}" for f in files[:10]) if files else "  (정적 분석 시 탐색된 파일 전체)"
+
+    directive_content = f""">>>DIRECTIVE_START
+TASK_ID: {task_id}
+TITLE: "{project} 코드 실행 검증 -- CEO Chat 요청"
+PRIORITY: P1-HIGH
+SIZE: M
+MODEL: sonnet
+SERVER: {server_label}
+WORKDIR: {workdir}
+ASSIGNEE: Claude ({server_label}, {workdir})
+DESCRIPTION: |
+  CEO Chat에서 정적 분석 완료된 파일들에 대한 실행 검증.
+  대상 파일:
+{file_list}
+  수행 항목:
+  1. pytest 실행 (존재 시)
+  2. 코드 실행 가능 여부 확인 (import 오류, syntax 오류)
+  3. 주요 함수 단위 테스트
+SUCCESS_CRITERIA: |
+  1. 모든 테스트 통과 또는 실패 목록 제공
+  2. 실행 오류 0건 또는 오류 목록 제공
+  3. 결과 보고서 reports/{task_id}-RESULT.md 생성
+<<<DIRECTIVE_END"""
+
+    # /directives/submit 으로 제출
+    try:
+        from app.api.directives import DirectiveSubmitRequest, submit_directive_sync
+        submit_req = DirectiveSubmitRequest(
+            content=directive_content,
+            source="ceo-chat-execution-verify",
+        )
+        submit_result = await submit_directive_sync(submit_req)
+        submit_status = "제출 완료"
+    except Exception as e:
+        logger.error(f"execution_verify_submit_failed: {e}")
+        submit_status = f"제출 실패: {str(e)[:200]}"
+
+    response_text = (
+        f"[{project} 실행 검증 지시서 생성]\n\n"
+        f"Task ID: `{task_id}`\n"
+        f"대상 서버: {server_label} ({server_ip})\n"
+        f"대상 경로: {workdir}\n"
+        f"파일 수: {len(files)}개\n"
+        f"지시서 상태: {submit_status}\n\n"
+        "claudebot이 실행 검증을 시작합니다. 완료되면 결과가 자동 보고됩니다."
+    )
+
     return response_text, 0, 0
 
 
@@ -1058,8 +1435,13 @@ async def send_ceo_message(req: CeoChatRequest):
         # Intent 기반 LLM 호출 (AADS-157 + AADS-164)
         dsn = settings.DATABASE_URL or settings.SUPABASE_DIRECT_URL
         if intent == "qa":
-            # AADS-164: QA Agent + Judge
+            # AADS-164: QA Agent + Judge (+ AADS-165 크로스 프로젝트)
             response_text, input_tokens, output_tokens = await _handle_qa_intent(
+                model, system_prompt, messages, dsn, session_id
+            )
+        elif intent == "execution_verify":
+            # AADS-165: 실행 검증 지시서 자동 생성
+            response_text, input_tokens, output_tokens = await _handle_execution_verify_intent(
                 model, system_prompt, messages, dsn, session_id
             )
         elif intent == "design":
@@ -1076,6 +1458,11 @@ async def send_ceo_message(req: CeoChatRequest):
             # AADS-164: Architect Agent 설계
             response_text, input_tokens, output_tokens = await _handle_architect_intent(
                 model, system_prompt, messages, dsn, session_id
+            )
+        elif intent == "health_check":
+            # AADS-166: 헬스체크
+            response_text, input_tokens, output_tokens = await _handle_health_check_intent(
+                session_id
             )
         elif intent == "dashboard":
             # DashboardCollector + tool-use

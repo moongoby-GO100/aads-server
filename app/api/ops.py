@@ -1,25 +1,17 @@
 """
 AADS-113: 운영 통합 DB API 엔드포인트
-- /api/v1/ops/directive-lifecycle  (POST/GET)
-- /api/v1/ops/cost                 (POST/GET summary)
-- /api/v1/ops/commit               (POST/GET)
-- /api/v1/ops/bridge-log           (GET)
-- /api/v1/ops/env-history/{server} (GET)
-- /api/v1/ops/health-check         (GET)
-- /api/v1/ops/stalled              (GET)
-- /api/v1/ops/auto-recover         (POST)
 AADS-116: 유지보수 모드 API
-- /api/v1/ops/maintenance/start    (POST)
-- /api/v1/ops/maintenance/end      (POST)
-- /api/v1/ops/maintenance/status   (GET)
+AADS-166: 파이프라인 전체 헬스체크 + SSE 스트리밍
 """
 import os
 import json
+import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Any, Dict
 import structlog
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import asyncpg
 
@@ -1101,3 +1093,128 @@ async def circuit_breaker_reset(server: str):
     if not ok:
         raise HTTPException(500, f"Circuit breaker reset failed for server {server}")
     return {"ok": True, "server": server, "state": "closed"}
+
+
+# ─── AADS-166: 디렉티브 폴더 스캔 (Part 1) ─────────────────────────────────
+
+@router.get("/directives/{status}")
+async def get_directives_folder(status: str):
+    """디렉티브 폴더 실시간 조회. status: pending|running|done|archived."""
+    allowed = {"pending", "running", "done", "archived"}
+    if status not in allowed:
+        raise HTTPException(400, f"status must be one of {allowed}")
+    from app.services.health_checker import scan_directive_folder
+    return await scan_directive_folder(status)
+
+
+# ─── AADS-166: 파이프라인 프로세스 liveness (Part 2) ─────────────────────────
+
+@router.get("/ops/pipeline-status")
+async def pipeline_status():
+    """파이프라인 프로세스 liveness 체크."""
+    from app.services.health_checker import check_pipeline_status
+    try:
+        return await check_pipeline_status()
+    except Exception as e:
+        logger.error("pipeline_status_error", error=str(e))
+        raise HTTPException(500, str(e))
+
+
+# ─── AADS-166: 인프라 점검 (Part 3) ─────────────────────────────────────────
+
+@router.get("/ops/infra-check")
+async def infra_check():
+    """인프라 전체 점검 (DB/GitHub/SSH/디스크/메모리/CPU)."""
+    from app.services.health_checker import check_infra
+    try:
+        return await check_infra()
+    except Exception as e:
+        logger.error("infra_check_error", error=str(e))
+        raise HTTPException(500, str(e))
+
+
+# ─── AADS-166: 정합성 검증 (Part 4) ─────────────────────────────────────────
+
+@router.get("/ops/consistency-check")
+async def consistency_check():
+    """정합성 검증 (STATUS↔DB, pending↔큐, commit SHA)."""
+    from app.services.health_checker import check_consistency
+    try:
+        return await check_consistency()
+    except Exception as e:
+        logger.error("consistency_check_error", error=str(e))
+        raise HTTPException(500, str(e))
+
+
+# ─── AADS-166: 통합 헬스 (Part 5) ───────────────────────────────────────────
+
+@router.get("/ops/full-health")
+async def full_health():
+    """통합 헬스체크 — Part 1~4 + 기존 health-check 병렬 실행."""
+    from app.services.health_checker import full_health_check
+    try:
+        return await full_health_check()
+    except Exception as e:
+        logger.error("full_health_error", error=str(e))
+        raise HTTPException(500, str(e))
+
+
+# ─── AADS-166: SSE 실시간 스트리밍 (Part 7) ─────────────────────────────────
+
+_sse_connections = 0
+_MAX_SSE_CONNECTIONS = 5
+
+
+@router.get("/ops/stream")
+async def ops_stream():
+    """SSE 실시간 스트리밍 — 5초 주기 health/directive/pipeline 이벤트."""
+    global _sse_connections
+    if _sse_connections >= _MAX_SSE_CONNECTIONS:
+        raise HTTPException(429, "최대 SSE 연결 수 초과")
+
+    from app.services.health_checker import quick_health, directive_changes_since, pipeline_quick_status
+
+    async def event_generator():
+        global _sse_connections
+        _sse_connections += 1
+        last_check = datetime.now(tz=timezone(timedelta(hours=9))) - timedelta(seconds=30)
+        try:
+            while True:
+                # 1) health 이벤트
+                try:
+                    health = await quick_health()
+                    yield f"event: health\ndata: {json.dumps(health, default=str)}\n\n"
+                except Exception as e:
+                    yield f"event: health\ndata: {json.dumps({'error': str(e)})}\n\n"
+
+                # 2) directive 이벤트
+                try:
+                    changes = await directive_changes_since(last_check)
+                    if changes:
+                        yield f"event: directive\ndata: {json.dumps(changes, default=str)}\n\n"
+                    last_check = datetime.now(tz=timezone(timedelta(hours=9)))
+                except Exception:
+                    pass
+
+                # 3) pipeline 이벤트
+                try:
+                    pipeline = await pipeline_quick_status()
+                    yield f"event: pipeline\ndata: {json.dumps(pipeline, default=str)}\n\n"
+                except Exception:
+                    pass
+
+                await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            _sse_connections -= 1
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
