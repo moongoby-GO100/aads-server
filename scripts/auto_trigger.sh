@@ -85,6 +85,44 @@ _log_priority() {
     fi
 }
 
+# ─── AADS-147: STATUS.md 자동 업데이트 함수 ─────────────────
+# 사용: _update_status_md <task_id> <result> <commit_sha> <report_url> <next_pending>
+# result: SUCCESS | FAILED | PARTIAL
+_update_status_md() {
+    local task_id="$1"
+    local result="${2:-SUCCESS}"
+    local commit_sha="${3:-}"
+    local report_url="${4:-}"
+    local next_pending="${5:-none}"
+    local status_file="/root/aads/aads-docs/STATUS.md"
+    local completed_at
+    completed_at=$(TZ='Asia/Seoul' date '+%Y-%m-%dT%H:%M:%S+09:00')
+
+    cat > "$status_file" <<EOF
+last_completed: ${task_id}
+completed_at: "${completed_at}"
+result: ${result}
+commit_sha: ${commit_sha}
+report_url: ${report_url}
+chat_delivered: false
+next_pending: ${next_pending}
+EOF
+
+    # git add + commit + push
+    local docs_dir="/root/aads/aads-docs"
+    if [ -d "${docs_dir}/.git" ]; then
+        local git_out
+        git_out=$(git -C "$docs_dir" add STATUS.md 2>&1 && \
+            git -C "$docs_dir" commit -m "chore(status): ${task_id} 완료 — ${result} $(date '+%Y-%m-%d %H:%M KST')" 2>&1 && \
+            git -C "$docs_dir" push origin main 2>&1) || true
+        echo "[STATUS-MD] 업데이트 완료: task=${task_id} result=${result} sha=${commit_sha:0:8}"
+        echo "[STATUS-MD] git: $(echo "$git_out" | tail -2)"
+    else
+        echo "[STATUS-MD] WARNING: aads-docs git 디렉토리 없음"
+    fi
+}
+# ─── STATUS.md 업데이트 함수 끝 ──────────────────────────────
+
 # ─── AADS-143: git-push 검증 함수 ───────────────────────────
 # 사용: verify_git_push <PROJECT> <RESULT_FILE> [REPO_OWNER] [REPO_NAME] [BRANCH]
 verify_git_push() {
@@ -440,6 +478,15 @@ except Exception:
         # AADS-113: completed 상태 기록
         record_lifecycle "$task_id" "completed"
 
+        # AADS-147: STATUS.md 자동 업데이트
+        local _status_sha _status_report _status_next
+        _status_sha=$(grep -m1 '^commit_sha:' "${result_file}" 2>/dev/null | awk '{print $2}' | tr -d '[:space:]')
+        [ -z "$_status_sha" ] && _status_sha=$(git -C /root/aads/aads-docs log --format="%H" -1 2>/dev/null || echo "")
+        _status_report="https://github.com/moongoby-GO100/aads-docs/blob/main/reports/$(basename "${result_file}" 2>/dev/null || echo '')"
+        _status_next=$(_select_next_file "$PENDING_DIR" 2>/dev/null | xargs -r basename | sed 's/\.md$//' || echo "none")
+        [ -z "$_status_next" ] && _status_next="none"
+        _update_status_md "$task_id" "SUCCESS" "$_status_sha" "$_status_report" "$_status_next"
+
         # AADS-145: final_commit 신호 감지 → 투기적 프리로드 (후처리와 병렬)
         local _fc_signal="/tmp/aads_final_commit_${task_id}.signal"
         local _preload_fail="/tmp/aads_preload_fail_${task_id}_$$"
@@ -526,6 +573,8 @@ PYEOF
         echo "  ❌ 실행 실패: ${task_id} (exit=${exec_exit})"
         # AADS-113: failed 상태 기록
         record_lifecycle "$task_id" "failed"
+        # AADS-147: STATUS.md 실패 업데이트
+        _update_status_md "$task_id" "FAILED" "" "" "none"
         # AADS-145: 투기적 프리로드 취소 (실행 실패시)
         [ -n "${_preload_fail:-}" ] && touch "$_preload_fail" 2>/dev/null || true
         # T-038: 실행 실패 자동 보고
