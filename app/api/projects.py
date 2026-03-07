@@ -1,6 +1,8 @@
 """프로젝트 생성 + 상태 조회."""
+import asyncio
 import uuid
 from datetime import datetime
+import os
 
 from fastapi import APIRouter, HTTPException, Header, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -9,6 +11,42 @@ from pydantic import BaseModel
 from typing import Optional
 
 router = APIRouter()
+
+async def _get_healing_engine():
+    """ProjectHealingEngine singleton (DB URL이 없으면 None)."""
+    from app.main import app_state
+    engine = app_state.get("project_healing")
+    if engine is not None:
+        return engine
+    db_url = os.getenv("DATABASE_URL", "").replace("postgresql://", "postgres://")
+    if not db_url:
+        app_state["project_healing"] = None
+        return None
+    try:
+        from app.services.project_healing import ProjectHealingEngine
+        engine = ProjectHealingEngine(db_url)
+        app_state["project_healing"] = engine
+        return engine
+    except Exception:
+        app_state["project_healing"] = None
+        return None
+
+async def _init_project_healing(engine, project_id: str) -> None:
+    """프로젝트 생성 시 healing_config 자동 부여 (베스트 에포트)."""
+    if not engine:
+        return
+    db_url = os.getenv("DATABASE_URL", "").replace("postgresql://", "postgres://")
+    if not db_url:
+        return
+    try:
+        import asyncpg
+        conn = await asyncpg.connect(db_url, timeout=10)
+        try:
+            await engine.on_project_created(project_id, conn)
+        finally:
+            await conn.close()
+    except Exception:
+        pass
 
 
 class CreateProjectRequest(BaseModel):
@@ -95,6 +133,9 @@ async def create_project(req: CreateProjectRequest):
     thread_id = f"project-{project_id}"
     config = {"configurable": {"thread_id": thread_id}}
 
+    engine = await _get_healing_engine()
+    await _init_project_healing(engine, project_id)
+
     if mode == "full_cycle":
         initial_state = {
             # Full-cycle 전용 필드
@@ -131,7 +172,15 @@ async def create_project(req: CreateProjectRequest):
         }
 
     # 그래프 실행 → PM의 interrupt()에서 멈춤
-    result = await graph.ainvoke(initial_state, config=config)
+    if engine and engine.is_circuit_open(project_id):
+        raise HTTPException(status_code=429, detail="Circuit breaker open for project")
+    try:
+        if engine:
+            result = await engine.apply_l1_timer(project_id, "create_project", graph.ainvoke(initial_state, config=config))
+        else:
+            result = await graph.ainvoke(initial_state, config=config)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Project L1 timeout")
 
     # interrupt 정보 추출
     interrupt_payload = None
@@ -266,7 +315,16 @@ async def resume_project(project_id: str, approved: bool = True, feedback: str =
     # interrupt를 resume — LangGraph Command 사용
     from langgraph.types import Command
     resume_value = True if approved else feedback
-    result = await graph.ainvoke(Command(resume=resume_value), config=config)
+    engine = await _get_healing_engine()
+    if engine and engine.is_circuit_open(project_id):
+        raise HTTPException(status_code=429, detail="Circuit breaker open for project")
+    try:
+        if engine:
+            result = await engine.apply_l1_timer(project_id, "resume_project", graph.ainvoke(Command(resume=resume_value), config=config))
+        else:
+            result = await graph.ainvoke(Command(resume=resume_value), config=config)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Project L1 timeout")
 
     interrupt_payload = None
     if "__interrupt__" in result:
@@ -302,9 +360,22 @@ async def auto_run_project(project_id: str):
 
     # 최대 10회 자동 승인 루프
     max_iterations = 10
+    engine = await _get_healing_engine()
     for i in range(max_iterations):
         from langgraph.types import Command
-        result = await graph.ainvoke(Command(resume=True), config=config)
+        if engine and engine.is_circuit_open(project_id):
+            raise HTTPException(status_code=429, detail="Circuit breaker open for project")
+        try:
+            if engine:
+                result = await engine.apply_l1_timer(
+                    project_id,
+                    f"auto_run_{i + 1}",
+                    graph.ainvoke(Command(resume=True), config=config),
+                )
+            else:
+                result = await graph.ainvoke(Command(resume=True), config=config)
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="Project L1 timeout")
         state = await graph.aget_state(config)
         stage = state.values.get("checkpoint_stage", "unknown") if state and state.values else "unknown"
 

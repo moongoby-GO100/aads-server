@@ -66,7 +66,7 @@ RECOVERY_DEFINITIONS: dict[str, dict] = {
         "priority": 1, "timeout_seconds": 30, "max_attempts": 5,
         "applicable_servers": ["68", "211", "114"],
         "actions": {"tier_1": ["soft_kill"], "tier_2": ["hard_kill"]},
-        "triggers": ["task_timeout", "stalled_task"],
+        "triggers": ["task_timeout", "stalled_task", "task_failure"],
     },
     "R07": {
         "id": "R07", "name": "승인 큐 정리",
@@ -260,6 +260,7 @@ async def _execute_single_recovery(
         "issue_data": issue,
         "affected_task_id": issue.get("task_id"),
         "affected_server": issue.get("server", "68"),
+        "project_id": issue.get("project_id"),
         "tier": tier_used,
         "action_taken": action_taken,
         "result": result_status,
@@ -290,26 +291,51 @@ async def _record_recovery_log(log_entry: dict) -> None:
         import asyncpg
         conn = await asyncpg.connect(db_url, timeout=5)
         try:
-            await conn.execute(
-                """
-                INSERT INTO recovery_logs
-                    (issue_type, issue_data, affected_task_id, affected_server,
-                     tier, action_taken, result, duration_seconds,
-                     recovery_route, error_message, recovered_by)
-                VALUES ($1, $2::jsonb, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                """,
-                log_entry["issue_type"],
-                json.dumps(log_entry["issue_data"], ensure_ascii=False),
-                log_entry.get("affected_task_id"),
-                log_entry.get("affected_server"),
-                log_entry["tier"],
-                log_entry["action_taken"],
-                log_entry["result"],
-                log_entry.get("duration_seconds"),
-                log_entry.get("recovery_route"),
-                log_entry.get("error_message"),
-                log_entry.get("recovered_by", "watchdog"),
-            )
+            try:
+                await conn.execute(
+                    """
+                    INSERT INTO recovery_logs
+                        (issue_type, issue_data, affected_task_id, affected_server, project_id,
+                         tier, action_taken, result, duration_seconds,
+                         recovery_route, error_message, recovered_by)
+                    VALUES ($1, $2::jsonb, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    """,
+                    log_entry["issue_type"],
+                    json.dumps(log_entry["issue_data"], ensure_ascii=False),
+                    log_entry.get("affected_task_id"),
+                    log_entry.get("affected_server"),
+                    log_entry.get("project_id"),
+                    log_entry["tier"],
+                    log_entry["action_taken"],
+                    log_entry["result"],
+                    log_entry.get("duration_seconds"),
+                    log_entry.get("recovery_route"),
+                    log_entry.get("error_message"),
+                    log_entry.get("recovered_by", "watchdog"),
+                )
+            except Exception as e:
+                # project_id 컬럼 미존재 환경은 fallback
+                logger.warning("recovery_log_insert_fallback", error=str(e))
+                await conn.execute(
+                    """
+                    INSERT INTO recovery_logs
+                        (issue_type, issue_data, affected_task_id, affected_server,
+                         tier, action_taken, result, duration_seconds,
+                         recovery_route, error_message, recovered_by)
+                    VALUES ($1, $2::jsonb, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    """,
+                    log_entry["issue_type"],
+                    json.dumps(log_entry["issue_data"], ensure_ascii=False),
+                    log_entry.get("affected_task_id"),
+                    log_entry.get("affected_server"),
+                    log_entry["tier"],
+                    log_entry["action_taken"],
+                    log_entry["result"],
+                    log_entry.get("duration_seconds"),
+                    log_entry.get("recovery_route"),
+                    log_entry.get("error_message"),
+                    log_entry.get("recovered_by", "watchdog"),
+                )
         finally:
             await conn.close()
     except Exception as e:

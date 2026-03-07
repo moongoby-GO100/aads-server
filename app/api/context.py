@@ -157,7 +157,7 @@ async def _upsert_task_result(value: Dict[str, Any], category: str) -> Dict[str,
     status_raw = str(value.get("status", "reported")).lower()
     if status_raw in ("done", "finished", "success", "completed", "완료"):
         status = "completed"
-    elif status_raw in ("running", "active"):
+    elif status_raw in ("running", "active", "queued", "pending"):
         status = "running"
     else:
         status = "reported"

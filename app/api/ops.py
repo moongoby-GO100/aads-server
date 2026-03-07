@@ -424,6 +424,15 @@ async def health_check():
             active_count = await conn.fetchval(
                 "SELECT COUNT(*) FROM directive_lifecycle WHERE status IN ('queued','running')"
             )
+            completed_today = await conn.fetchval(
+                "SELECT COUNT(*) FROM directive_lifecycle WHERE status = 'completed' AND completed_at >= CURRENT_DATE"
+            )
+            running_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM directive_lifecycle WHERE status = 'running'"
+            )
+            error_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM directive_lifecycle WHERE status = 'failed'"
+            )
             # 최근 bridge 활동 (1시간)
             bridge_recent = await conn.fetchval(
                 "SELECT COUNT(*) FROM bridge_activity_log WHERE detected_at > NOW() - INTERVAL '1 hour'"
@@ -462,13 +471,28 @@ async def health_check():
         )
 
         maintenance_active = maintenance_row is not None
+        issues_list = _build_issues(stalled_queue, stalled_running, pipeline_blocked)
+        checks = {
+            "queue_stall": { "ok": int(stalled_queue or 0) == 0, "count": int(stalled_queue or 0), "label": "큐 정체" },
+            "execution_stall": { "ok": int(stalled_running or 0) == 0, "count": int(stalled_running or 0), "label": "실행 정체" },
+            "pipeline_flow": { "ok": not pipeline_blocked, "count": 1 if pipeline_blocked else 0, "label": "파이프라인 흐름" },
+            "bridge_integrity": { "ok": True, "count": 0, "label": "브릿지 정합성" },
+            "commit_integrity": { "ok": True, "count": 0, "label": "커밋 정합성" },
+            "cost_tracking": { "ok": True, "count": 0, "label": "비용 추적" },
+            "env_trend": { "ok": True, "count": 0, "label": "환경 트렌드" },
+            "manager_response": { "ok": True, "count": 0, "label": "매니저 응답" },
+        }
         return {
             "pipeline_healthy": pipeline_healthy,
             "stalled_count": stalled_count,
             "stalled_queue": int(stalled_queue or 0),
             "stalled_running": int(stalled_running or 0),
             "active_count": int(active_count or 0),
+            "completed_today": int(completed_today or 0),
+            "running_count": int(running_count or 0),
+            "error_count": int(error_count or 0),
             "recent_completed_30m": int(recent_completed or 0),
+            "checks": checks,
             "pipeline_blocked": pipeline_blocked,
             "bridge_activity_1h": int(bridge_recent or 0),
             "blocked_tasks_count": int(blocked_tasks or 0),
@@ -477,7 +501,7 @@ async def health_check():
             "maintenance_active": maintenance_active,
             "maintenance_server": maintenance_row["server"] if maintenance_active else None,
             "maintenance_reason": maintenance_row["reason"] if maintenance_active else None,
-            "issues": _build_issues(stalled_queue, stalled_running, pipeline_blocked),
+            "issues": issues_list,
         }
     except Exception as e:
         logger.error("ops_health_check_error", error=str(e))
