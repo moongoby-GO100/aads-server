@@ -14,6 +14,7 @@ AADS-116: 유지보수 모드 API
 - /api/v1/ops/maintenance/status   (GET)
 """
 import os
+import json
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Any, Dict
 import structlog
@@ -891,6 +892,107 @@ async def circuit_breaker_status():
     from app.services.circuit_breaker import get_all_states
     states = await get_all_states()
     return {"circuit_breakers": states}
+
+
+@router.post("/ops/sync-project-docs")
+async def sync_project_docs(request: Request):
+    """프로젝트별 중요 문서 링크를 DB에 저장하고 aads-docs 레포에 자동 push."""
+    import subprocess
+    body = await request.json()
+    project_docs = body.get("project_docs")
+    if not project_docs or not isinstance(project_docs, dict):
+        raise HTTPException(400, "project_docs (object) is required")
+
+    conn = None
+    try:
+        conn = await _get_conn()
+        now = datetime.now(KST).isoformat()
+
+        # 1) DB 저장 (system_memory, category=project_docs)
+        for project, docs in project_docs.items():
+            await conn.execute("""
+                INSERT INTO system_memory (category, key, value, updated_by, created_at, updated_at)
+                VALUES ('project_docs', $1, $2::jsonb, 'dashboard', NOW(), NOW())
+                ON CONFLICT (category, key) DO UPDATE
+                SET value = EXCLUDED.value, updated_at = NOW(), updated_by = 'dashboard'
+            """, project, json.dumps(docs))
+
+        # 2) aads-docs 레포에 JSON 파일 쓰기 + push
+        docs_repo = "/root/aads/aads-docs"
+        json_path = f"{docs_repo}/shared/project-docs.json"
+        os.makedirs(f"{docs_repo}/shared", exist_ok=True)
+
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "updated_at": now,
+                "updated_by": "dashboard",
+                "project_docs": project_docs
+            }, f, ensure_ascii=False, indent=2)
+
+        # git add + commit + push
+        subprocess.run(
+            ["git", "-C", docs_repo, "add", "shared/project-docs.json"],
+            capture_output=True, text=True, timeout=30
+        )
+        diff_result = subprocess.run(
+            ["git", "-C", docs_repo, "diff", "--cached", "--quiet"],
+            capture_output=True, text=True, timeout=10
+        )
+        git_pushed = False
+        commit_sha = ""
+        if diff_result.returncode != 0:
+            commit_result = subprocess.run(
+                ["git", "-C", docs_repo, "commit", "-m",
+                 f"[AADS] docs: project-docs.json 자동 업데이트 ({now})"],
+                capture_output=True, text=True, timeout=30
+            )
+            if commit_result.returncode == 0:
+                push_result = subprocess.run(
+                    ["git", "-C", docs_repo, "push", "origin", "main"],
+                    capture_output=True, text=True, timeout=60
+                )
+                git_pushed = push_result.returncode == 0
+                sha_result = subprocess.run(
+                    ["git", "-C", docs_repo, "rev-parse", "--short", "HEAD"],
+                    capture_output=True, text=True, timeout=10
+                )
+                commit_sha = sha_result.stdout.strip()
+
+        return {
+            "ok": True,
+            "saved_projects": list(project_docs.keys()),
+            "git_pushed": git_pushed,
+            "commit_sha": commit_sha,
+            "json_path": "shared/project-docs.json",
+            "updated_at": now
+        }
+    except Exception as e:
+        logger.error("sync_project_docs_error", error=str(e))
+        raise HTTPException(500, str(e))
+    finally:
+        if conn:
+            await conn.close()
+
+
+@router.get("/ops/project-docs")
+async def get_project_docs():
+    """DB에서 프로젝트별 중요 문서 링크 조회."""
+    conn = None
+    try:
+        conn = await _get_conn()
+        rows = await conn.fetch(
+            "SELECT key, value FROM system_memory WHERE category = 'project_docs' ORDER BY key"
+        )
+        project_docs = {}
+        for r in rows:
+            project_docs[r["key"]] = json.loads(r["value"]) if isinstance(r["value"], str) else r["value"]
+        return {"ok": True, "project_docs": project_docs}
+    except Exception as e:
+        logger.error("get_project_docs_error", error=str(e))
+        raise HTTPException(500, str(e))
+    finally:
+        if conn:
+            await conn.close()
 
 
 @router.post("/ops/circuit-breaker/{server}/reset")
