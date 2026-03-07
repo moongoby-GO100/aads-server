@@ -158,6 +158,17 @@ CTX_MONITOR_PID=""
 _ctx_monitor_bg "$CTX_TMPLOG" "$CTX_SIGNAL" "$CTX_EDIT_FAIL" &
 CTX_MONITOR_PID=$!
 
+# === AADS-146: subagents 필드 파싱 ===
+SUBAGENTS_LIST=""
+if [ -n "$DIRECTIVE_FILE" ] && [ -f "$DIRECTIVE_FILE" ]; then
+    SUBAGENTS_LIST=$(grep -m1 '^subagents:' "$DIRECTIVE_FILE" 2>/dev/null | sed 's/^subagents:\s*//' | tr -d ' ' || true)
+fi
+AGENTS_DIR="/root/aads/.claude/agents"
+if [ -n "$SUBAGENTS_LIST" ]; then
+    echo "[SUBAGENTS] 감지: ${SUBAGENTS_LIST}"
+fi
+# === subagents 파싱 끝 ===
+
 TS_START=$(TZ='Asia/Seoul' date '+%Y-%m-%d %H:%M KST')
 
 echo "======================================================"
@@ -364,6 +375,25 @@ else
     # T-037 B-2: 실패 보고도 go100_user_memory에 저장
     save_manager_report "$TASK_ID" "$STATUS" "$REPORT" "$COMMIT_SHA" "${EXEC_EXIT}"
 fi
+
+# === AADS-146: 서브에이전트 실행 (subagents 필드 기반) ===
+if [ -n "$SUBAGENTS_LIST" ] && [ $EXEC_EXIT -eq 0 ]; then
+    IFS=',' read -ra _agent_names <<< "$SUBAGENTS_LIST"
+    for _agent in "${_agent_names[@]}"; do
+        _agent=$(echo "$_agent" | tr -d ' ')
+        _agent_file="${AGENTS_DIR}/${_agent}.md"
+        if [ -f "$_agent_file" ]; then
+            echo "[SUBAGENT] 실행: ${_agent}"
+            _agent_prompt="[SUBAGENT: ${_agent}] 다음 에이전트 정의에 따라 task=${TASK_ID}의 결과를 검토하라.\n$(cat "$_agent_file")\n\n지시서: $(cat "$DIRECTIVE_FILE" 2>/dev/null || echo '')"
+            _agent_exit=0
+            echo "$_agent_prompt" | timeout 1800 claude --print 2>&1 || _agent_exit=$?
+            echo "[SUBAGENT] ${_agent} 완료 (exit=${_agent_exit})"
+        else
+            echo "[SUBAGENT] WARNING: 에이전트 파일 없음: ${_agent_file}"
+        fi
+    done
+fi
+# === 서브에이전트 끝 ===
 
 # === AADS-145: Tasks 완료 상태 업데이트 ===
 if [ -n "${TASK_FILE:-}" ] && [ -f "$TASK_FILE" ]; then

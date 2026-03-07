@@ -85,6 +85,158 @@ _log_priority() {
     fi
 }
 
+# ─── AADS-146: Writer/Reviewer 리뷰 세션 스폰 함수 ──────────
+# 사용: _spawn_review_session <task_id> <directive_file> <result_file>
+# P0/P1 + review_required:true 시 자동 리뷰 세션 생성
+# PASS → 자동 push 유지, NEEDS_REVISION → 피드백 파일 생성 후 재실행 트리거
+_spawn_review_session() {
+    local task_id="$1"
+    local directive_file="$2"
+    local result_file="$3"
+    local review_log="/var/log/aads/review_sessions.log"
+    local review_result_file="/tmp/aads_review_${task_id}_$$.txt"
+    mkdir -p "$(dirname "$review_log")" 2>/dev/null || true
+
+    echo "$(date '+%Y-%m-%d %H:%M:%S') | REVIEW_START | task=${task_id}" >> "$review_log" 2>/dev/null || true
+
+    # security-reviewer 에이전트로 리뷰 수행
+    local _agent_file="/root/aads/.claude/agents/security-reviewer.md"
+    local _review_prompt=""
+    if [ -f "$_agent_file" ]; then
+        _review_prompt="$(cat "$_agent_file")
+
+## 리뷰 대상 태스크: ${task_id}
+지시서:
+$(cat "$directive_file" 2>/dev/null || echo '[지시서 없음]')
+
+결과 파일:
+$(cat "$result_file" 2>/dev/null | head -200 || echo '[결과 파일 없음]')
+
+위 내용을 검토하고 SECURITY_REVIEW: PASS 또는 NEEDS_REVISION 결과를 출력하라."
+    else
+        _review_prompt="[REVIEW] task=${task_id} 완료 결과를 검토하라.
+결과: $(cat "$result_file" 2>/dev/null | head -100 || echo '[없음]')
+검토 후 반드시 SECURITY_REVIEW: PASS 또는 SECURITY_REVIEW: NEEDS_REVISION 을 출력하라."
+    fi
+
+    local _review_exit=0
+    echo "$_review_prompt" | timeout 1800 claude --print 2>&1 > "$review_result_file" || _review_exit=$?
+
+    # 결과 파싱
+    local _verdict
+    _verdict=$(grep -m1 "SECURITY_REVIEW:" "$review_result_file" 2>/dev/null | awk '{print $2}' || echo "UNKNOWN")
+
+    echo "$(date '+%Y-%m-%d %H:%M:%S') | REVIEW_RESULT | task=${task_id} | verdict=${_verdict}" >> "$review_log" 2>/dev/null || true
+
+    if [ "$_verdict" = "PASS" ]; then
+        echo "  ✅ [REVIEW] PASS — git push 유지"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') | REVIEW_PASS | task=${task_id}" >> "$review_log" 2>/dev/null || true
+    elif [ "$_verdict" = "NEEDS_REVISION" ]; then
+        echo "  ⚠️ [REVIEW] NEEDS_REVISION — 피드백 파일 생성"
+        local _feedback_file="${PENDING_DIR}/REVIEW_FEEDBACK_${task_id}_$(date +%Y%m%d%H%M%S).md"
+        cat > "$_feedback_file" <<FEEDEOF
+task_id: ${task_id}-REVISION
+project: AADS
+priority: P1-HIGH
+review_feedback: true
+original_task: ${task_id}
+description: 리뷰 결과 수정 필요 (NEEDS_REVISION)
+
+## 리뷰 피드백
+$(cat "$review_result_file" 2>/dev/null || echo '[리뷰 결과 없음]')
+
+위 피드백을 반영하여 ${task_id} 작업을 수정하라.
+FEEDEOF
+        echo "$(date '+%Y-%m-%d %H:%M:%S') | REVIEW_NEEDS_REVISION | task=${task_id} | feedback=${_feedback_file}" >> "$review_log" 2>/dev/null || true
+    else
+        echo "  ⚠️ [REVIEW] 결과 파싱 실패 (verdict=${_verdict}) — PASS로 처리"
+    fi
+
+    rm -f "$review_result_file" 2>/dev/null || true
+}
+# ─── 리뷰 세션 함수 끝 ───────────────────────────────────────
+
+# ─── AADS-146: Git Worktree 병렬 실행 함수 ──────────────────
+# 사용: _parallel_worktree <parallel_group_id> <directive_file1> [directive_file2 ...]
+# parallel_group 필드가 있는 지시서를 감지하여 각각 별도 worktree에서 병렬 실행
+_parallel_worktree() {
+    local group_id="$1"
+    shift
+    local files=("$@")
+    local wt_base="/root/aads/.worktrees"
+    local merge_log="/var/log/aads/worktree_merge.log"
+    mkdir -p "$wt_base" "$(dirname "$merge_log")" 2>/dev/null || true
+
+    echo "[WORKTREE] parallel_group=${group_id} 병렬 실행 시작 (${#files[@]}개 지시서)"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') | WORKTREE_START | group=${group_id} | count=${#files[@]}" >> "$merge_log" 2>/dev/null || true
+
+    local pids=()
+    local wt_paths=()
+    local wt_results=()
+
+    for directive_file in "${files[@]}"; do
+        local task_id
+        task_id=$(grep -oP '(AADS|KIS|GO100|SF|NT|SALES|NAS|T)-\d+' "$directive_file" 2>/dev/null | head -1 \
+            || basename "$directive_file" .md)
+        local wt_path="${wt_base}/${group_id}_${task_id}"
+
+        # worktree 생성 (각 task별 독립 브랜치)
+        local wt_branch="worktree/${group_id}/${task_id}_$$"
+        local wt_exit=0
+
+        # aads-server repo에 worktree 생성
+        local _repo="/root/aads/aads-server"
+        if [ -d "${_repo}/.git" ]; then
+            git -C "$_repo" worktree add -b "$wt_branch" "$wt_path" HEAD 2>/dev/null \
+                || { echo "[WORKTREE] WARNING: worktree 생성 실패 — fallback to main"; wt_path="$_repo"; }
+        fi
+
+        echo "[WORKTREE] task=${task_id} worktree=${wt_path}"
+
+        # 백그라운드에서 claude_exec.sh 실행 (worktree 경로 주입)
+        (
+            export WORKTREE_PATH="$wt_path"
+            export WORKTREE_BRANCH="$wt_branch"
+            export WORKTREE_GROUP="$group_id"
+            "${SCRIPT_DIR}/claude_exec.sh" "$task_id" "$directive_file"
+            echo $? > "${wt_path}.exit"
+        ) &
+        pids+=($!)
+        wt_paths+=("$wt_path")
+        wt_results+=("${wt_path}.exit")
+    done
+
+    # 모든 병렬 작업 완료 대기
+    echo "[WORKTREE] 모든 병렬 작업 대기 중..."
+    for pid in "${pids[@]}"; do
+        wait "$pid" 2>/dev/null || true
+    done
+
+    echo "[WORKTREE] 모든 병렬 작업 완료 — 머지 시작"
+
+    # 자동 머지 스크립트 실행
+    "${SCRIPT_DIR}/merge_worktree.sh" "$group_id" "${wt_paths[@]}" \
+        >> "$merge_log" 2>&1 || true
+
+    echo "$(date '+%Y-%m-%d %H:%M:%S') | WORKTREE_DONE | group=${group_id}" >> "$merge_log" 2>/dev/null || true
+}
+
+# ─── AADS-146: parallel_group 지시서 감지 함수 ───────────────
+# pending 디렉토리에서 동일 parallel_group을 가진 지시서들을 묶어 반환
+_get_parallel_groups() {
+    local pending_dir="$1"
+    # parallel_group 필드가 있는 파일들 추출
+    grep -rl "^parallel_group:" "${pending_dir}"/*.md 2>/dev/null \
+        | xargs -r grep -h "^parallel_group:" 2>/dev/null \
+        | awk '{print $2}' | sort -u || true
+}
+
+_get_files_by_group() {
+    local pending_dir="$1" group="$2"
+    grep -rl "^parallel_group:.*${group}" "${pending_dir}"/*.md 2>/dev/null || true
+}
+# ─── Worktree 함수 끝 ────────────────────────────────────────
+
 # ─── AADS-147: STATUS.md 자동 업데이트 함수 ─────────────────
 # 사용: _update_status_md <task_id> <result> <commit_sha> <report_url> <next_pending>
 # result: SUCCESS | FAILED | PARTIAL
@@ -478,6 +630,16 @@ except Exception:
         # AADS-113: completed 상태 기록
         record_lifecycle "$task_id" "completed"
 
+        # AADS-146: Writer/Reviewer 패턴 — review_required:true 감지
+        local _review_required _priority
+        _review_required=$(grep -m1 '^review_required:' "$directive_file" 2>/dev/null | awk '{print tolower($2)}' | tr -d ' ' || echo "false")
+        _priority=$(grep -m1 '^priority:' "$directive_file" 2>/dev/null | awk '{print $2}' | tr -d ' ' || echo "")
+        if [ "$_review_required" = "true" ] && echo "$_priority" | grep -qiE "P0|P1"; then
+            echo "  🔍 [REVIEW] review_required=true + ${_priority} 감지 → 리뷰 세션 스폰"
+            _spawn_review_session "$task_id" "$directive_file" "$result_file" &
+            echo "  🔍 [REVIEW] 리뷰 세션 백그라운드 시작 (PID: $!)"
+        fi
+
         # AADS-147: STATUS.md 자동 업데이트
         local _status_sha _status_report _status_next
         _status_sha=$(grep -m1 '^commit_sha:' "${result_file}" 2>/dev/null | awk '{print $2}' | tr -d '[:space:]')
@@ -594,9 +756,38 @@ fi
 
 mkdir -p "$DONE_DIR"
 
+# AADS-146: parallel_group 지시서 선제 처리
+_PROCESSED_BY_GROUP=()
+if [ -d "$PENDING_DIR" ]; then
+    _groups=$(_get_parallel_groups "$PENDING_DIR" 2>/dev/null || true)
+    for _grp in $_groups; do
+        mapfile -t _grp_files < <(_get_files_by_group "$PENDING_DIR" "$_grp" 2>/dev/null || true)
+        if [ "${#_grp_files[@]}" -gt 1 ]; then
+            echo "[PARALLEL] group=${_grp} 지시서 ${#_grp_files[@]}개 감지 → Worktree 병렬 실행"
+            # running으로 이동
+            for _gf in "${_grp_files[@]}"; do
+                [ -f "$_gf" ] && mv "$_gf" "$RUNNING_DIR/" 2>/dev/null || true
+                _PROCESSED_BY_GROUP+=("$(basename "$_gf")")
+            done
+            _grp_running=()
+            for _gf in "${_grp_files[@]}"; do
+                _grp_running+=("${RUNNING_DIR}/$(basename "$_gf")")
+            done
+            _parallel_worktree "$_grp" "${_grp_running[@]}"
+        fi
+    done
+fi
+
 FOUND=0
 for f in "${DIRECTIVES_DIR}"/*.md; do
     [ -f "$f" ] || continue
+    # 이미 parallel_group 처리된 파일은 스킵
+    _basename_f=$(basename "$f")
+    _skip=false
+    for _pg in "${_PROCESSED_BY_GROUP[@]}"; do
+        [ "$_pg" = "$_basename_f" ] && _skip=true && break
+    done
+    [ "$_skip" = "true" ] && continue
     FOUND=1
     _process_directive "$f"
 done
