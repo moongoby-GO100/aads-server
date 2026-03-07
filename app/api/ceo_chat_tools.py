@@ -186,7 +186,75 @@ TOOL_DEFINITIONS: List[Dict] = [
             "required": [],
         },
     },
+    # ── SSH 원격 파일 접근 도구 (AADS-165) ────────────────────────────────────
+    {
+        "name": "list_remote_dir",
+        "description": "원격 서버의 디렉터리 구조 탐색. 프로젝트명으로 서버·경로 자동 매핑.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "프로젝트명 (KIS, GO100, SF, NTV2)",
+                    "enum": ["KIS", "GO100", "SF", "NTV2"],
+                },
+                "path": {
+                    "type": "string",
+                    "description": "WORKDIR 기준 상대경로 (선택, 기본: 루트)",
+                    "default": "",
+                },
+                "keyword": {
+                    "type": "string",
+                    "description": "파일명 검색어 (선택)",
+                },
+                "max_depth": {
+                    "type": "integer",
+                    "description": "탐색 깊이 (기본: 3, 최대: 5)",
+                    "default": 3,
+                },
+            },
+            "required": ["project"],
+        },
+    },
+    {
+        "name": "read_remote_file",
+        "description": "원격 서버의 파일 내용 읽기. 프로젝트명으로 서버·경로 자동 매핑.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "프로젝트명 (KIS, GO100, SF, NTV2)",
+                    "enum": ["KIS", "GO100", "SF", "NTV2"],
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": "WORKDIR 기준 상대 파일 경로 (예: src/main.py)",
+                },
+            },
+            "required": ["project", "file_path"],
+        },
+    },
 ]
+
+# ─── SSH 원격 접근 상수 (AADS-165, 하드코딩 — LLM 우회 불가) ─────────────────
+_PROJECT_SERVER_MAP: Dict[str, Dict[str, str]] = {
+    "KIS":  {"server": "211.188.51.113", "workdir": "/root/kis-autotrade-v4"},
+    "GO100": {"server": "211.188.51.113", "workdir": "/root/go100"},
+    "SF":   {"server": "116.120.58.155", "workdir": "/data/shortflow"},
+    "NTV2": {"server": "116.120.58.155", "workdir": "/srv/newtalk-v2"},
+}
+
+# SSH 보안 규칙 (하드코딩, LLM 우회 불가)
+_SSH_DANGEROUS_CHARS = re.compile(r'[;|&$`\n]|\$\(|>>')
+_SSH_SENSITIVE_PATTERNS = re.compile(
+    r'(\.env|\.ssh/|id_rsa|\.git/config|secrets|password|token)',
+    re.IGNORECASE,
+)
+_SSH_TIMEOUT = 10  # 초 (ConnectTimeout=5 + CommandTimeout=5)
+_SSH_MAX_RESULT_BYTES = 50 * 1024  # 50KB
+_SSH_MAX_FILES = 100
+_SSH_MAX_DEPTH = 5
 
 # ─── 보안 상수 ─────────────────────────────────────────────────────────────────
 _FILE_WHITELIST = "/root/aads/"
@@ -341,6 +409,112 @@ async def tool_fetch_url(url: str) -> str:
             return content
     except Exception as e:
         return f"[ERROR] URL 조회 실패: {e}"
+
+
+# ─── SSH 원격 접근 도구 함수 (AADS-165) ──────────────────────────────────────────
+
+def _validate_ssh_path(raw_path: str, workdir: str) -> Optional[str]:
+    """SSH 경로 보안 검증. 위반 시 에러 문자열, 통과 시 None."""
+    if _SSH_DANGEROUS_CHARS.search(raw_path):
+        return "[ERROR] 접근 거부: 경로에 허용되지 않는 문자가 포함되어 있습니다."
+    if _SSH_SENSITIVE_PATTERNS.search(raw_path):
+        return "[ERROR] 접근 거부: 민감한 파일 패턴이 감지되었습니다."
+    # WORKDIR 탈출 방지: .. resolve
+    from posixpath import normpath, join as pjoin
+    resolved = normpath(pjoin(workdir, raw_path))
+    if not resolved.startswith(workdir):
+        return f"[ERROR] 접근 거부: WORKDIR({workdir}) 바깥 경로 접근 불가."
+    return None
+
+
+async def tool_list_remote_dir(
+    project: str, path: str = "", keyword: str = "", max_depth: int = 3
+) -> str:
+    """원격 서버 디렉터리 탐색 (읽기 전용, find)."""
+    project = project.upper()
+    mapping = _PROJECT_SERVER_MAP.get(project)
+    if not mapping:
+        return f"[ERROR] 알 수 없는 프로젝트: {project}. 사용 가능: {', '.join(_PROJECT_SERVER_MAP.keys())}"
+
+    server = mapping["server"]
+    workdir = mapping["workdir"]
+    max_depth = min(max(1, max_depth), _SSH_MAX_DEPTH)
+
+    # 보안 검증
+    if path:
+        err = _validate_ssh_path(path, workdir)
+        if err:
+            return err
+    if keyword and _SSH_DANGEROUS_CHARS.search(keyword):
+        return "[ERROR] 접근 거부: keyword에 허용되지 않는 문자가 포함되어 있습니다."
+
+    from posixpath import normpath, join as pjoin
+    target = normpath(pjoin(workdir, path)) if path else workdir
+
+    # find 명령 조립 (읽기 전용)
+    find_cmd = f"find {target} -maxdepth {max_depth} -type f"
+    if keyword:
+        find_cmd += f" -name '*{keyword}*'"
+    find_cmd += f" | head -{_SSH_MAX_FILES}"
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+            f"root@{server}", find_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_SSH_TIMEOUT)
+        output = stdout.decode("utf-8", errors="replace")
+        if not output.strip():
+            err_msg = stderr.decode("utf-8", errors="replace")[:500]
+            return f"[{project}] 파일 없음 (경로: {target})\n{err_msg}" if err_msg else f"[{project}] 파일 없음 (경로: {target})"
+        if len(output.encode("utf-8")) > _SSH_MAX_RESULT_BYTES:
+            output = output[:_SSH_MAX_RESULT_BYTES] + "\n...(50KB 초과, 잘림)"
+        return f"[{project} 디렉터리 — {target}]\n{output}"
+    except asyncio.TimeoutError:
+        return f"[ERROR] SSH 타임아웃 ({_SSH_TIMEOUT}초): {server}"
+    except Exception as e:
+        return f"[ERROR] SSH 접속 실패: {e}"
+
+
+async def tool_read_remote_file(project: str, file_path: str) -> str:
+    """원격 서버 파일 읽기 (읽기 전용, cat)."""
+    project = project.upper()
+    mapping = _PROJECT_SERVER_MAP.get(project)
+    if not mapping:
+        return f"[ERROR] 알 수 없는 프로젝트: {project}. 사용 가능: {', '.join(_PROJECT_SERVER_MAP.keys())}"
+
+    server = mapping["server"]
+    workdir = mapping["workdir"]
+
+    # 보안 검증
+    err = _validate_ssh_path(file_path, workdir)
+    if err:
+        return err
+
+    from posixpath import normpath, join as pjoin
+    resolved = normpath(pjoin(workdir, file_path))
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+            f"root@{server}", f"cat {resolved}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_SSH_TIMEOUT)
+        output = stdout.decode("utf-8", errors="replace")
+        if proc.returncode != 0:
+            err_msg = stderr.decode("utf-8", errors="replace")[:500]
+            return f"[ERROR] 파일 읽기 실패 ({resolved}): {err_msg}"
+        if len(output.encode("utf-8")) > _SSH_MAX_RESULT_BYTES:
+            output = output[:_SSH_MAX_RESULT_BYTES] + "\n...(50KB 초과, 잘림)"
+        return f"[{project} 파일 — {resolved}]\n{output}"
+    except asyncio.TimeoutError:
+        return f"[ERROR] SSH 타임아웃 ({_SSH_TIMEOUT}초): {server}"
+    except Exception as e:
+        return f"[ERROR] SSH 접속 실패: {e}"
 
 
 # ─── Browser 도구 함수 (AADS-159) ──────────────────────────────────────────────
@@ -549,5 +723,18 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str) -> str:
         return await tool_browser_fill(params.get("selector", ""), params.get("value", ""))
     elif name == "browser_tab_list":
         return await tool_browser_tab_list()
+    # ── SSH 원격 접근 도구 (AADS-165) ────────────────────────────────────────
+    elif name == "list_remote_dir":
+        return await tool_list_remote_dir(
+            params.get("project", ""),
+            params.get("path", ""),
+            params.get("keyword", ""),
+            params.get("max_depth", 3),
+        )
+    elif name == "read_remote_file":
+        return await tool_read_remote_file(
+            params.get("project", ""),
+            params.get("file_path", ""),
+        )
     else:
         return f"[ERROR] 알 수 없는 도구: {name}"
