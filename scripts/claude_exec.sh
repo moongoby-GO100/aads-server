@@ -292,6 +292,8 @@ _TASK_ID=$(_extract_task_id "$DIRECTIVE_FILE")
 [ -z "$_TASK_ID" ] && _TASK_ID=$(echo "$FILENAME" | sed 's/_BRIDGE\.md$//' | sed 's/\.md$//')
 _TITLE=$(grep -m1 -oP '제목\s*[:：]\s*\K.+' "$DIRECTIVE_FILE" 2>/dev/null | head -c 120)
 aads_lifecycle "$_TASK_ID" "$PROJECT" "running" "" "$_TITLE" "$DIRECTIVE_FILE"
+# AADS-139: source_channel_id 추출 — 완료 시 원본 대화창에 보고
+_SOURCE_CHANNEL=$(grep -m1 '<!-- source_channel_id:' "$DIRECTIVE_FILE" 2>/dev/null | sed 's/.*source_channel_id:[[:space:]]*//' | sed 's/[[:space:]]*-->.*//' | tr -d '[:space:]')
 
 # ── Claude Code 실행 ──────────────────────────────────────────────────────
 # 핵심 지시 순서:
@@ -356,6 +358,13 @@ EOF
 파일: ${FILENAME}
 상태: timeout"
     aads_queue_msg "${PROJECT}" "telegram" "⏰ [${PROJECT}] 타임아웃: ${FILENAME}"
+    # AADS-139: source_channel에 결과 보고
+    [ -n "$_SOURCE_CHANNEL" ] && [ "$_SOURCE_CHANNEL" != "$PROJECT" ] && \
+        aads_queue_msg "${_SOURCE_CHANNEL}" "chat" "[AADS] ${_TASK_ID} timeout
+소요: ${MAX_TIMEOUT}초 초과
+커밋: N/A
+결과: TIMEOUT
+다음: 지시 대기"
 elif [ $EXIT_CODE -ne 0 ]; then
     if [ ! -f "$RESULT_FILE" ]; then
         cat > "$RESULT_FILE" <<EOF
@@ -376,6 +385,13 @@ EOF
 파일: ${FILENAME}
 $(tail -5 "$LOG_FILE" 2>/dev/null)"
     aads_queue_msg "${PROJECT}" "telegram" "❌ [${PROJECT}] 에러 (code:${EXIT_CODE}): ${FILENAME}"
+    # AADS-139: source_channel에 결과 보고
+    [ -n "$_SOURCE_CHANNEL" ] && [ "$_SOURCE_CHANNEL" != "$PROJECT" ] && \
+        aads_queue_msg "${_SOURCE_CHANNEL}" "chat" "[AADS] ${_TASK_ID} failed
+소요: N/A
+커밋: N/A
+결과: FAIL (exit_code: ${EXIT_CODE})
+다음: 지시 대기"
 else
     bash "$TELEGRAM_SCRIPT" "✅ [${PROJECT}] 작업 완료: ${FILENAME}" 2>/dev/null
     # RESULT 파일에서 task_id 추출 (더 정확한 값으로 업데이트)
@@ -389,6 +405,14 @@ Task: ${_TASK_ID:-${FILENAME%.md}}
 파일: ${FILENAME}
 보고서: https://github.com/moongoby/project-docs/blob/master"
     aads_queue_msg "${PROJECT}" "telegram" "✅ [${PROJECT}] 완료: ${_TASK_ID:-${FILENAME}}"
+    # AADS-139: source_channel에 결과 보고
+    _commit_sha=$(grep -m1 'commit_sha\|커밋' "$RESULT_FILE" 2>/dev/null | grep -oE '[0-9a-f]{7,40}' | head -1)
+    [ -n "$_SOURCE_CHANNEL" ] && [ "$_SOURCE_CHANNEL" != "$PROJECT" ] && \
+        aads_queue_msg "${_SOURCE_CHANNEL}" "chat" "[AADS] ${_TASK_ID} completed
+소요: N/A
+커밋: ${_commit_sha:-N/A}
+결과: PASS
+다음: 지시 대기"
 
     # ── P2(15분 이하)/P3: 자동 health-check ──────────────────────────────
     if [ "$PRIORITY" = "P2" ] || [ "$PRIORITY" = "P3" ]; then
