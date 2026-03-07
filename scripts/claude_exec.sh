@@ -19,6 +19,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=memory_helper.sh
 source "${SCRIPT_DIR}/memory_helper.sh"
 
+# === AADS-148: 프로세스 그룹 PGID 기록 (고아 프로세스 방지) ===
+PGID=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || echo $$)
+
 TASK_ID="${1:?사용법: $0 <task_id> [directive_file]}"
 DIRECTIVE_FILE="${2:-}"
 
@@ -141,6 +144,24 @@ cleanup_inotify() {
     # AADS-145: 컨텍스트 모니터 정리
     [ -n "${CTX_MONITOR_PID:-}" ] && kill "$CTX_MONITOR_PID" 2>/dev/null || true
     rm -f "$CTX_TMPLOG" "$CTX_SIGNAL" "$CTX_EDIT_FAIL" 2>/dev/null || true
+
+    # === AADS-148: 프로세스 그룹 전체 kill (고아 프로세스 방지) ===
+    if [ -n "${PGID:-}" ] && [ "$PGID" -gt 1 ]; then
+        kill -- -"$PGID" 2>/dev/null || true
+    fi
+    # AADS-148: claudebot 소유 고아 프로세스 잔여분 정리 (PPID=1 AND 현 세션 관련)
+    local _task_id_clean="${TASK_ID:-}"
+    if [ -n "$_task_id_clean" ]; then
+        local _claude_pid_file="/tmp/claude_session_${_task_id_clean}.claude_pid"
+        if [ -f "$_claude_pid_file" ]; then
+            local _cpid
+            _cpid=$(cat "$_claude_pid_file" 2>/dev/null || echo "")
+            if [ -n "$_cpid" ] && kill -0 "$_cpid" 2>/dev/null; then
+                kill -9 "$_cpid" 2>/dev/null || true
+            fi
+        fi
+    fi
+    # === AADS-148 cleanup 끝 ===
 }
 trap cleanup_inotify EXIT
 
@@ -250,6 +271,10 @@ Current Phase : ${CURRENT_PHASE}
 Task ID       : ${TASK_ID}
 Task Status   : ${TASK_STATUS}
 Context API   : ${CONTEXT_API}
+==========================================
+[보안 규칙 AADS-148] 절대로 /proc, /sys 경로에 grep -r을 실행하지 마라.
+프로세스 탐색 시 /proc, /sys 경로에 grep -r을 실행하면 소켓·파이프 fd 블로킹으로 CPU 100% 고착 장애가 발생한다.
+프로세스 탐색은 반드시 pgrep, ps, lsof를 사용하라.
 ==========================================
 
 HEADER_EOF
