@@ -3,6 +3,7 @@ CEO Chat v2 - 계층 메모리 + 컨텍스트 DB + 모델 분기 엔진
 T-073: Context Manager + Model Router + Session Memory
 AADS-156: 모델 라우팅 수정 + 전체 지원 모델 업데이트 + 402 fallback
 AADS-157: Intent Classifier + DashboardCollector + Tool-use 루프 + Directive Submit
+AADS-164: Agent Individual Call System (10 intents)
 
 모델 라우터:
   complex  → claude-opus-4-6
@@ -10,12 +11,17 @@ AADS-157: Intent Classifier + DashboardCollector + Tool-use 루프 + Directive S
   simple   → gemini-2.5-flash
   default  → claude-sonnet-4-6
 
-Intent Classifier (5분류):
-  dashboard  → DashboardCollector + tool-use
-  diagnosis  → tool-use 활성화
-  research   → tool-use 활성화
-  execute    → 지시서 자동 생성 + /directives/submit
-  strategy   → 현행 유지 (tool-use 없이 대화)
+Intent Classifier (10분류):
+  qa           → QA Agent + Judge 실행
+  design       → 스크린샷 + Vision 분석
+  design_fix   → 디자인 분석 + Developer 코드 수정
+  architect    → Architect Agent 설계 JSON
+  dashboard    → DashboardCollector + tool-use
+  diagnosis    → tool-use 활성화
+  research     → tool-use 활성화
+  execute      → 지시서 자동 생성 + /directives/submit
+  browser      → 브라우저 자동화 tool-use
+  strategy     → 현행 유지 (tool-use 없이 대화)
 """
 import json
 import re
@@ -107,21 +113,27 @@ SUPPORTED_MODELS: List[Dict[str, Any]] = [
 _MODEL_META: Dict[str, Dict] = {m["id"]: m for m in SUPPORTED_MODELS}
 
 
-# ─── Intent Classifier (AADS-157 + AADS-159) ─────────────────────────────
+# ─── Intent Classifier (AADS-157 + AADS-159 + AADS-164) ──────────────────
 _INTENT_PATTERNS: Dict[str, List[str]] = {
-    "dashboard": ["상태", "확인", "보고", "현황", "서버", "대시보드", "요약", "overview"],
-    "diagnosis": ["왜", "안돼", "오류", "에러", "문제", "분석", "실패", "죽었", "죽어", "안됨", "error", "fail"],
-    "research":  ["검색", "조사", "비교", "찾아", "최신", "찾아봐", "알아봐", "어떤", "무엇"],
-    "execute":   ["만들어", "수정해", "고쳐", "배포", "진행", "승인", "작성해", "추가해", "구현", "지시서"],
-    "strategy":  ["기획", "방향", "전략", "의도", "검토", "설계", "아키텍처", "계획"],
+    # AADS-164: 에이전트 개별 호출 의도 (높은 우선순위)
+    "design_fix":  ["디자인수정", "디자인 수정", "UI수정", "UI 수정", "CSS수정", "스타일수정"],
+    "design":      ["디자인검수", "디자인 검수", "화면검수", "디자인", "UI검수", "UI 검수", "UX검수", "레이아웃"],
+    "qa":          ["QA", "qa", "테스트", "검수", "품질", "QA 진행", "테스트해", "검증해"],
+    "architect":   ["설계검토", "설계 검토", "아키텍처검토", "아키텍처 검토", "구조검토", "설계해"],
+    # 기존 의도
+    "dashboard":   ["상태", "확인", "보고", "현황", "서버", "대시보드", "요약", "overview"],
+    "diagnosis":   ["왜", "안돼", "오류", "에러", "문제", "분석", "실패", "죽었", "죽어", "안됨", "error", "fail"],
+    "research":    ["검색", "조사", "비교", "찾아", "최신", "찾아봐", "알아봐", "어떤", "무엇"],
+    "execute":     ["만들어", "수정해", "고쳐", "배포", "진행", "승인", "작성해", "추가해", "구현", "지시서"],
+    "strategy":    ["기획", "방향", "전략", "의도", "검토", "설계", "아키텍처", "계획"],
     # AADS-159: 브라우저 자동화 의도
-    "browser":   ["스크린샷", "페이지", "열어", "화면", "브라우저", "사이트", "접속"],
+    "browser":     ["스크린샷", "페이지", "열어", "화면", "브라우저", "사이트", "접속"],
 }
 
 
 def classify_intent(message: str) -> str:
-    """메시지 의도 6분류. 우선순위: execute > browser > dashboard > diagnosis > research > strategy."""
-    for intent in ["execute", "browser", "dashboard", "diagnosis", "research", "strategy"]:
+    """메시지 의도 10분류. 우선순위: design_fix > design > qa > architect > execute > browser > dashboard > diagnosis > research > strategy."""
+    for intent in ["design_fix", "design", "qa", "architect", "execute", "browser", "dashboard", "diagnosis", "research", "strategy"]:
         if any(kw in message for kw in _INTENT_PATTERNS[intent]):
             return intent
     return "strategy"
@@ -677,6 +689,268 @@ async def _handle_execute_intent(
     return response_text, total_input, total_output
 
 
+# ─── AADS-164: Agent Individual Call Handlers ─────────────────────────────
+
+async def _log_agent_execution(
+    conn, session_id: str, agent_type: str, intent: str,
+    input_summary: str, output_summary: str, status: str,
+    cost_usd: float, duration_ms: int, error_message: str = None,
+):
+    """agent_executions 테이블에 실행 이력 저장."""
+    try:
+        await conn.execute(
+            """INSERT INTO agent_executions
+               (session_id, agent_type, intent, input_summary, output_summary, status, cost_usd, duration_ms, error_message, completed_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())""",
+            session_id, agent_type, intent, input_summary[:500],
+            output_summary[:2000] if output_summary else None,
+            status, cost_usd, duration_ms, error_message,
+        )
+    except Exception as e:
+        logger.warning(f"agent_execution_log_failed: {e}")
+
+
+async def _handle_qa_intent(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict],
+    dsn: str,
+    session_id: str = "",
+) -> Tuple[str, int, int]:
+    """QA 의도: qa_node + judge_node 실행, 결과를 CEO에게 요약 보고."""
+    import time
+    from app.services.agent_state_builder import build_agent_state
+
+    start = time.time()
+    user_msg = messages[-1]["content"] if messages else ""
+
+    # CEO 메시지에서 QA 대상 추출
+    state = build_agent_state(
+        description=f"CEO QA 요청: {user_msg}",
+        success_criteria=["CEO가 지정한 기능/페이지의 정상 동작 확인"],
+    )
+
+    results = []
+    total_cost = 0.0
+
+    # 1) QA Agent 호출
+    try:
+        from app.agents.qa_agent import qa_node
+        qa_result = await qa_node(state)
+        state.update(qa_result)
+        qa_tests = qa_result.get("qa_test_results", [])
+        if qa_tests:
+            last = qa_tests[-1] if isinstance(qa_tests, list) and qa_tests else qa_tests
+            results.append(f"**QA 결과**: {last.get('status', 'unknown')} — 통과: {last.get('tests_passed', 0)}/{last.get('tests_total', 0)}")
+        else:
+            results.append("**QA 결과**: 테스트 항목 없음")
+        total_cost += state.get("total_cost_usd", 0)
+    except Exception as e:
+        logger.error(f"qa_node_failed: {e}")
+        results.append(f"**QA Agent 오류**: {str(e)[:200]}")
+
+    # 2) Judge Agent 호출
+    try:
+        from app.agents.judge_agent import judge_node
+        judge_result = await judge_node(state)
+        verdict = judge_result.get("judge_verdict", {})
+        results.append(
+            f"**Judge 판정**: {verdict.get('verdict', 'N/A')} "
+            f"(점수: {verdict.get('score', 0):.2f})\n"
+            f"  추천: {verdict.get('recommendation', 'N/A')}"
+        )
+        if verdict.get("issues"):
+            results.append(f"  이슈: {', '.join(verdict['issues'][:3])}")
+        total_cost += judge_result.get("total_cost_usd", state.get("total_cost_usd", 0))
+    except Exception as e:
+        logger.error(f"judge_node_failed: {e}")
+        results.append(f"**Judge Agent 오류**: {str(e)[:200]}")
+
+    duration_ms = int((time.time() - start) * 1000)
+    response_text = f"[QA + Judge 실행 완료] ({duration_ms}ms, ${total_cost:.4f})\n\n" + "\n".join(results)
+
+    # 실행 이력 로깅 (non-blocking)
+    try:
+        conn = await asyncpg.connect(dsn=dsn)
+        await _log_agent_execution(
+            conn, session_id, "qa+judge", "qa", user_msg[:200],
+            response_text, "success", total_cost, duration_ms,
+        )
+        await conn.close()
+    except Exception:
+        pass
+
+    # 토큰은 에이전트 내부에서 소비되므로 여기서는 0 반환 (비용은 agent 내부 추적)
+    return response_text, 0, 0
+
+
+async def _handle_design_intent(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict],
+    dsn: str,
+    session_id: str = "",
+) -> Tuple[str, int, int]:
+    """디자인 검수: 스크린샷 + Claude Vision 분석."""
+    import time
+    start = time.time()
+    user_msg = messages[-1]["content"] if messages else ""
+
+    # tool-use로 스크린샷 + Vision 분석
+    design_prompt = (
+        system_prompt
+        + "\n\n[디자인 검수 모드]\n"
+        "CEO가 디자인/UI 검수를 요청했습니다.\n"
+        "1. 관련 페이지의 스크린샷을 browser_screenshot 도구로 캡처하세요.\n"
+        "2. 캡처된 이미지를 분석하여 UI/UX 품질을 평가하세요.\n"
+        "3. 레이아웃, 색상, 폰트, 간격, 반응형, 접근성 관점에서 피드백을 제시하세요.\n"
+        "4. 개선 사항을 구체적으로 나열하세요."
+    )
+
+    tool_model = model if model.startswith("claude") else "claude-sonnet-4-6"
+    response_text, input_tokens, output_tokens = await _call_anthropic_with_tools(
+        tool_model, design_prompt, messages, dsn
+    )
+
+    duration_ms = int((time.time() - start) * 1000)
+
+    try:
+        conn = await asyncpg.connect(dsn=dsn)
+        await _log_agent_execution(
+            conn, session_id, "design", "design", user_msg[:200],
+            response_text[:500], "success", calc_cost(tool_model, input_tokens, output_tokens),
+            duration_ms,
+        )
+        await conn.close()
+    except Exception:
+        pass
+
+    return response_text, input_tokens, output_tokens
+
+
+async def _handle_design_fix_intent(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict],
+    dsn: str,
+    session_id: str = "",
+) -> Tuple[str, int, int]:
+    """디자인 수정: Vision 분석 → Developer Agent 코드 수정."""
+    import time
+    from app.services.agent_state_builder import build_agent_state
+
+    start = time.time()
+    user_msg = messages[-1]["content"] if messages else ""
+
+    # Step 1: Vision 분석 (tool-use)
+    analysis_prompt = (
+        system_prompt
+        + "\n\n[디자인 수정 분석 모드]\n"
+        "CEO가 디자인/UI 수정을 요청했습니다.\n"
+        "1. 관련 페이지의 스크린샷을 browser_screenshot 도구로 캡처하세요.\n"
+        "2. 현재 디자인 문제점을 분석하세요.\n"
+        "3. 수정이 필요한 CSS/HTML/컴포넌트를 구체적으로 나열하세요.\n"
+        "결과를 JSON으로 요약하세요: {\"issues\": [...], \"fix_targets\": [{\"file\": \"...\", \"change\": \"...\"}]}"
+    )
+
+    tool_model = model if model.startswith("claude") else "claude-sonnet-4-6"
+    analysis_text, in_tok, out_tok = await _call_anthropic_with_tools(
+        tool_model, analysis_prompt, messages, dsn
+    )
+
+    # Step 2: Developer Agent로 수정 시도
+    dev_result_text = ""
+    try:
+        from app.agents.developer import developer_node
+        state = build_agent_state(
+            description=f"디자인 수정 요청: {user_msg}\n\n분석 결과:\n{analysis_text[:2000]}",
+            success_criteria=["디자인 이슈 수정 코드 생성"],
+        )
+        dev_result = await developer_node(state)
+        files = dev_result.get("generated_files", [])
+        if files:
+            dev_result_text = f"\n\n**Developer Agent 코드 생성**: {len(files)}개 파일"
+            for f in files[:3]:
+                path = f.get("path", f.get("name", "unknown"))
+                dev_result_text += f"\n  - {path}"
+        else:
+            dev_result_text = "\n\n**Developer Agent**: 코드 생성 없음 (수동 수정 필요)"
+    except Exception as e:
+        logger.error(f"developer_node_failed_in_design_fix: {e}")
+        dev_result_text = f"\n\n**Developer Agent 오류**: {str(e)[:200]}"
+
+    duration_ms = int((time.time() - start) * 1000)
+    response_text = f"[디자인 수정 분석 + 코드 생성] ({duration_ms}ms)\n\n{analysis_text}{dev_result_text}"
+
+    try:
+        conn = await asyncpg.connect(dsn=dsn)
+        await _log_agent_execution(
+            conn, session_id, "design+developer", "design_fix", user_msg[:200],
+            response_text[:500], "success",
+            calc_cost(tool_model, in_tok, out_tok), duration_ms,
+        )
+        await conn.close()
+    except Exception:
+        pass
+
+    return response_text, in_tok, out_tok
+
+
+async def _handle_architect_intent(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict],
+    dsn: str,
+    session_id: str = "",
+) -> Tuple[str, int, int]:
+    """설계 검토: Architect Agent로 시스템 설계 JSON 생성."""
+    import time
+    from app.services.agent_state_builder import build_agent_state
+
+    start = time.time()
+    user_msg = messages[-1]["content"] if messages else ""
+
+    state = build_agent_state(
+        description=f"CEO 설계 검토 요청: {user_msg}",
+        success_criteria=["시스템 설계 JSON 생성", "DB 스키마, API 구조, 파일 구조 포함"],
+    )
+
+    try:
+        from app.agents.architect_agent import architect_node
+        arch_result = await architect_node(state)
+        design = arch_result.get("architect_design", {})
+        total_cost = arch_result.get("total_cost_usd", state.get("total_cost_usd", 0))
+
+        if design:
+            # 설계 JSON을 읽기 좋게 포맷
+            design_text = json.dumps(design, ensure_ascii=False, indent=2)
+            if len(design_text) > 3000:
+                design_text = design_text[:3000] + "\n... (truncated)"
+            response_text = f"[Architect Agent 설계 완료] (${total_cost:.4f})\n\n```json\n{design_text}\n```"
+        else:
+            response_text = "[Architect Agent] 설계 결과 없음"
+
+    except Exception as e:
+        logger.error(f"architect_node_failed: {e}")
+        response_text = f"[Architect Agent 오류] {str(e)[:300]}"
+        total_cost = 0
+
+    duration_ms = int((time.time() - start) * 1000)
+
+    try:
+        conn = await asyncpg.connect(dsn=dsn)
+        await _log_agent_execution(
+            conn, session_id, "architect", "architect", user_msg[:200],
+            response_text[:500], "success" if "오류" not in response_text else "error",
+            total_cost, duration_ms,
+        )
+        await conn.close()
+    except Exception:
+        pass
+
+    return response_text, 0, 0
+
+
 # ─── 세션 요약 생성 ───────────────────────────────────────────────────────
 async def generate_session_summary(conn, session_id: str) -> None:
     """Gemini Flash로 세션 요약 생성 후 DB 저장 (비용 최소화)."""
@@ -781,9 +1055,29 @@ async def send_ceo_message(req: CeoChatRequest):
         messages = [{"role": r['role'], "content": r['content']} for r in prev_msgs]
         messages.append({"role": "user", "content": req.message})
 
-        # Intent 기반 LLM 호출 (AADS-157)
+        # Intent 기반 LLM 호출 (AADS-157 + AADS-164)
         dsn = settings.DATABASE_URL or settings.SUPABASE_DIRECT_URL
-        if intent == "dashboard":
+        if intent == "qa":
+            # AADS-164: QA Agent + Judge
+            response_text, input_tokens, output_tokens = await _handle_qa_intent(
+                model, system_prompt, messages, dsn, session_id
+            )
+        elif intent == "design":
+            # AADS-164: 스크린샷 + Vision 분석
+            response_text, input_tokens, output_tokens = await _handle_design_intent(
+                model, system_prompt, messages, dsn, session_id
+            )
+        elif intent == "design_fix":
+            # AADS-164: 디자인 분석 + Developer 코드 수정
+            response_text, input_tokens, output_tokens = await _handle_design_fix_intent(
+                model, system_prompt, messages, dsn, session_id
+            )
+        elif intent == "architect":
+            # AADS-164: Architect Agent 설계
+            response_text, input_tokens, output_tokens = await _handle_architect_intent(
+                model, system_prompt, messages, dsn, session_id
+            )
+        elif intent == "dashboard":
             # DashboardCollector + tool-use
             collector = DashboardCollector(conn, dsn)
             dashboard_data = await collector.collect()
