@@ -1,0 +1,60 @@
+# AADS-186C: Langfuse v3 셀프호스팅
+# 포트 3001 (AADS 대시보드 3000, 서버 8100과 충돌 방지)
+# Langfuse DB는 AADS 메인 DB와 분리 (별도 langfuse_db)
+version: '3.9'
+
+services:
+  langfuse-postgres:
+    image: postgres:15-alpine
+    container_name: langfuse-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse_dev
+      POSTGRES_DB: langfuse_db
+    volumes:
+      - langfuse_postgres_data:/var/lib/postgresql/data
+    networks:
+      - aads_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  langfuse:
+    image: langfuse/langfuse:3
+    container_name: langfuse
+    restart: always
+    ports:
+      - "3001:3000"
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse_dev@langfuse-postgres:5432/langfuse_db
+      NEXTAUTH_URL: http://localhost:3001
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-langfuse_nextauth_secret_change_in_prod}
+      SALT: ${LANGFUSE_SALT:-langfuse_salt_change_in_prod}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-placeholder}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-placeholder}
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+    volumes:
+      - langfuse_data:/data
+    depends_on:
+      langfuse-postgres:
+        condition: service_healthy
+    networks:
+      - aads_network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/public/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  langfuse_postgres_data:
+  langfuse_data:
+
+networks:
+  aads_network:
+    external: true

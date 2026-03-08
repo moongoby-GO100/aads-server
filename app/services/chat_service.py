@@ -18,6 +18,15 @@ from anthropic import AsyncAnthropic, APIStatusError
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
+
+# AADS-186C: Langfuse 트레이스 (optional — graceful degradation)
+try:
+    from app.core.langfuse_config import create_trace, is_enabled as langfuse_is_enabled
+    _LANGFUSE_AVAILABLE = True
+except ImportError:
+    _LANGFUSE_AVAILABLE = False
+    def create_trace(*args, **kwargs): return None  # type: ignore[misc]
+    def langfuse_is_enabled() -> bool: return False  # type: ignore[misc]
 settings = Settings()
 
 # ─── DB 연결 ──────────────────────────────────────────────────────────────────
@@ -254,6 +263,17 @@ async def send_message_stream(
     SSE 청크: data: {"type": "delta"|"thinking"|"tool_use"|"tool_result"|"done"|"error", ...}
     """
     conn = await _get_conn()
+    # AADS-186C: Langfuse 트레이스 시작
+    _lf_trace = create_trace(
+        name="chat_turn",
+        session_id=session_id,
+        user_id="CEO",
+        input_data={"content": content[:500], "model_override": model_override},
+    )
+    _lf_span_intent = None
+    _lf_span_llm = None
+    _trace_start_time = __import__("time").monotonic()
+
     try:
         sid = uuid.UUID(session_id)
 
@@ -302,6 +322,19 @@ async def send_message_stream(
         from app.services.intent_router import classify, get_model_for_override
         intent_result = await classify(content, workspace_name)
         intent = intent_result.intent
+        # Langfuse: intent_classification span
+        if _lf_trace is not None:
+            try:
+                _lf_span_intent = _lf_trace.span(
+                    name="intent_classification",
+                    input={"content": content[:300], "workspace": workspace_name},
+                    output={"intent": intent, "model": intent_result.model, "use_tools": intent_result.use_tools},
+                    metadata={"use_gemini_direct": intent_result.use_gemini_direct},
+                )
+                if _lf_span_intent:
+                    _lf_span_intent.end()
+            except Exception:
+                pass
 
         if model_override:
             intent_result.model = get_model_for_override(model_override)
@@ -351,6 +384,15 @@ async def send_message_stream(
 
         # 9. 모델 선택기 → SSE 스트리밍
         from app.services.model_selector import call_stream
+        # Langfuse: llm_generation span 시작
+        if _lf_trace is not None:
+            try:
+                _lf_span_llm = _lf_trace.span(
+                    name="llm_generation",
+                    input={"model": intent_result.model, "intent": intent},
+                )
+            except Exception:
+                pass
         full_response = ""
         thinking_summary = ""
         model_used = intent_result.model

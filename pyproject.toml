@@ -44,6 +44,14 @@ dependencies = [
     "structlog>=24.4.0",
     "tenacity>=9.0.0",
     "httpx>=0.28.0",
+    # Scheduler (AADS-186C: APScheduler for alert evaluation + daily summary)
+    "apscheduler>=3.10.0",
+    # Observability: Langfuse (AADS-186C, optional — graceful degradation)
+    "langfuse>=3.0.0",
+    # MCP 서버 노출 (AADS-186C, optional — graceful degradation)
+    "fastapi-mcp>=0.3.0",
+    # Telegram 알림 봇 (AADS-186C, optional — graceful degradation)
+    "python-telegram-bot>=21.0",
 ]
 
 [project.optional-dependencies]

@@ -31,6 +31,7 @@ from app.graph.builder import compile_graph
 from app.services.checkpointer import get_checkpointer
 from app.mcp.client import MCPClientManager, set_mcp_manager
 from app.memory.store import memory_store
+from app.core.mcp_server import setup_mcp
 
 logger = structlog.get_logger()
 
@@ -54,6 +55,57 @@ async def lifespan(app: FastAPI):
         logger.info("sandbox_images_pulled")
     except Exception as e:
         logger.warning("sandbox_image_pull_failed_graceful_degradation", error=str(e))
+
+    # AADS-186C: Langfuse 초기화 (optional — graceful degradation)
+    try:
+        from app.core.langfuse_config import init_langfuse
+        lf_enabled = init_langfuse()
+        logger.info("langfuse_status", enabled=lf_enabled)
+    except Exception as e:
+        logger.warning("langfuse_init_failed", error=str(e))
+
+    # AADS-186C: Telegram 봇 초기화 (optional — graceful degradation)
+    try:
+        from app.services.telegram_bot import init_telegram_bot
+        init_telegram_bot()
+    except Exception as e:
+        logger.warning("telegram_bot_init_failed", error=str(e))
+
+    # AADS-186C: APScheduler 시작 (2분 주기 알림평가 + 09:00 KST 일일요약)
+    scheduler = None
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        from apscheduler.triggers.cron import CronTrigger
+        from app.services.alert_manager import get_alert_manager
+        from app.services.telegram_bot import get_telegram_bot
+
+        async def _run_alert_evaluation():
+            try:
+                mgr = get_alert_manager()
+                alerts = await mgr.evaluate_rules()
+                for alert in alerts:
+                    await mgr.send_alert(alert)
+            except Exception as e:
+                logger.warning("scheduler_alert_eval_failed", error=str(e))
+
+        async def _run_daily_summary():
+            try:
+                bot = get_telegram_bot()
+                if bot and bot.is_ready:
+                    await bot.send_daily_summary()
+            except Exception as e:
+                logger.warning("scheduler_daily_summary_failed", error=str(e))
+
+        scheduler = AsyncIOScheduler()
+        # 2분마다 규칙 평가
+        scheduler.add_job(_run_alert_evaluation, "interval", minutes=2, id="alert_eval")
+        # 매일 09:00 KST (= UTC 00:00)
+        scheduler.add_job(_run_daily_summary, CronTrigger(hour=0, minute=0, timezone="UTC"), id="daily_summary")
+        scheduler.start()
+        logger.info("apscheduler_started", jobs=["alert_eval", "daily_summary"])
+    except Exception as e:
+        logger.warning("apscheduler_start_failed_graceful_degradation", error=str(e))
+        scheduler = None
 
     # Memory Store 초기화 (T-011)
     try:
@@ -87,6 +139,14 @@ async def lifespan(app: FastAPI):
         yield
 
     # 종료 정리
+    if scheduler:
+        scheduler.shutdown(wait=False)
+        logger.info("apscheduler_stopped")
+    try:
+        from app.core.langfuse_config import flush_langfuse
+        flush_langfuse()
+    except Exception:
+        pass
     if mcp_manager:
         await mcp_manager.shutdown()
     await memory_store.close()
@@ -151,3 +211,6 @@ app.include_router(plans_router, prefix="/api/v1", tags=["plans"])
 app.include_router(debate_logs_router, prefix="/api/v1", tags=["debate-logs"])
 app.include_router(artifacts_router, prefix="/api/v1", tags=["artifacts"])
 app.include_router(chat_v2_router, prefix="/api/v1", tags=["chat-v2"])
+
+# AADS-186C: FastAPI-MCP 마운트 (graceful — MCP_ENABLED=false 시 비활성)
+setup_mcp(app)

@@ -50,6 +50,15 @@ services:
       # LiteLLM 프록시 (AADS-185)
       - LITELLM_BASE_URL=${LITELLM_BASE_URL:-http://litellm:4000}
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-litellm}
+      # AADS-186C: Langfuse Observability (optional)
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
+      # AADS-186C: Telegram 알림 봇 (optional)
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      # AADS-186C: MCP 서버
+      - MCP_ENABLED=${MCP_ENABLED:-true}
     volumes:
       # Docker-in-Docker: DockerSandbox (D-011) 실행을 위한 소켓 마운트
       - /var/run/docker.sock:/var/run/docker.sock
