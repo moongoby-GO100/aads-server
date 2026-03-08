@@ -1,11 +1,13 @@
 """
 Directive Submit + Pre-Flight Check 엔드포인트 (AADS-157, AADS-178)
+AADS-181: GET /directives/all — 3서버 통합 디렉티브 조회.
 
 CEO Chat에서 '진행해/만들어' 의도 감지 시 D-022 포맷 지시서를
 /root/.genspark/directives/pending/ 에 파일로 생성.
 bridge.py가 감지 → 기존 파이프라인 실행.
 
 AADS-178: GET /directives/preflight — 지시서 발행 전 큐 상태 확인.
+AADS-181: GET /directives/all — 3서버 통합 디렉티브 조회.
 """
 import logging
 import os
@@ -164,6 +166,74 @@ class PreflightResponse(BaseModel):
     conflicts: List[str]
     recommendation: str  # "PROCEED" | "WAIT" | "BLOCKED"
 
+
+# ── AADS-181: 3서버 통합 디렉티브 조회 ───────────────────────────────────────
+
+@router.get("/directives/all")
+async def get_all_directives(
+    status: Optional[str] = Query(
+        None,
+        description="필터: pending|running|done|archived|all (기본: all)",
+    ),
+    project: Optional[str] = Query(
+        None,
+        description="프로젝트 필터: AADS|KIS|GO100|SF|NTV2|NAS|all (기본: all)",
+    ),
+    force_refresh: bool = Query(False, description="캐시 무시 강제 스캔"),
+):
+    """
+    3대 서버(68/211/114) directives 통합 조회.
+
+    - SSH 직접 스캔 (211/114), 로컬 스캔 (68)
+    - SSH 실패 시 HTTP fallback
+    - 30초 캐싱 (반복 SSH 방지)
+    - project/status 필터 지원
+    """
+    from app.services.cross_server_checker import scan_all_servers
+    from app.services.server_registry import ALL_STATUSES
+
+    # statuses 목록 결정
+    if not status or status.lower() in ("all", ""):
+        statuses = ALL_STATUSES
+    elif status in ALL_STATUSES:
+        statuses = [status]
+    else:
+        raise HTTPException(400, f"status must be one of {ALL_STATUSES} or 'all'")
+
+    # project 필터 정규화
+    proj_filter = None
+    if project and project.lower() not in ("all", ""):
+        proj_filter = project.upper()
+
+    try:
+        data = await scan_all_servers(
+            statuses=statuses,
+            project_filter=proj_filter,
+            force_refresh=force_refresh,
+        )
+        return {
+            "status": "ok",
+            "total_count": data["total_count"],
+            "counts": data["counts"],
+            "by_server": {
+                sid: {
+                    "reachable": sdata.get("reachable", False),
+                    "method": sdata.get("method", "unknown"),
+                    "counts": sdata.get("counts", {}),
+                    "total": sdata.get("total", 0),
+                }
+                for sid, sdata in data["by_server"].items()
+            },
+            "directives": data["directives"],
+            "cached": data.get("cached", False),
+            "scanned_at": data.get("scanned_at"),
+        }
+    except Exception as e:
+        logger.error("get_all_directives_error", error=str(e))
+        raise HTTPException(500, f"3서버 디렉티브 조회 실패: {e}")
+
+
+# ── AADS-178: Pre-Flight Check ────────────────────────────────────────────────
 
 @router.get("/directives/preflight", response_model=PreflightResponse)
 async def get_directive_preflight(

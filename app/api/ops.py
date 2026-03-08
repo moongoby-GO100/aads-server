@@ -1095,6 +1095,23 @@ async def circuit_breaker_reset(server: str):
     return {"ok": True, "server": server, "state": "closed"}
 
 
+# ─── AADS-181: 3서버 통합 요약 ───────────────────────────────────────────────
+
+@router.get("/ops/server-summary")
+async def get_server_summary():
+    """
+    3대 서버(68/211/114) 요약.
+    - 각 서버: pending/running/done 건수 + active claude 세션 수
+    - SSH 불가 시 HTTP fallback (cross_server_checker 내부 처리)
+    """
+    from app.services.cross_server_checker import get_server_summary as _get_server_summary
+    try:
+        return await _get_server_summary()
+    except Exception as e:
+        logger.error("server_summary_error", error=str(e))
+        raise HTTPException(500, f"서버 요약 조회 실패: {e}")
+
+
 # ─── AADS-166: 디렉티브 폴더 스캔 (Part 1) ─────────────────────────────────
 
 @router.get("/directives/{status}")
@@ -1178,6 +1195,8 @@ async def ops_stream():
         global _sse_connections
         _sse_connections += 1
         last_check = datetime.now(tz=timezone(timedelta(hours=9))) - timedelta(seconds=30)
+        _cross_server_tick = 0  # 30초마다 cross_server_directives (6 * 5s)
+        _cross_server_prev_counts: dict = {}
         try:
             while True:
                 # 1) health 이벤트
@@ -1230,6 +1249,34 @@ async def ops_stream():
                             yield f"event: claude_watchdog\ndata: {json.dumps(wd_summary, default=str)}\n\n"
                 except Exception:
                     pass
+
+                # 5) cross_server_directives 이벤트 (AADS-181): 30초마다 3서버 스캔 변경 감지
+                _cross_server_tick += 1
+                if _cross_server_tick >= 6:  # 6 * 5s = 30s
+                    _cross_server_tick = 0
+                    try:
+                        from app.services.cross_server_checker import scan_all_servers
+                        cs_data = await scan_all_servers(statuses=["pending", "running"])
+                        cs_counts = cs_data.get("counts", {})
+                        # 변경 감지: 이전 카운트와 다를 때만 이벤트 발송
+                        if cs_counts != _cross_server_prev_counts:
+                            _cross_server_prev_counts = cs_counts.copy()
+                            cs_event = {
+                                "total_count": cs_data.get("total_count", 0),
+                                "counts": cs_counts,
+                                "by_server": {
+                                    sid: {
+                                        "reachable": sdata.get("reachable", False),
+                                        "pending": sdata.get("counts", {}).get("pending", 0),
+                                        "running": sdata.get("counts", {}).get("running", 0),
+                                    }
+                                    for sid, sdata in cs_data.get("by_server", {}).items()
+                                },
+                                "scanned_at": cs_data.get("scanned_at"),
+                            }
+                            yield f"event: cross_server_directives\ndata: {json.dumps(cs_event, default=str)}\n\n"
+                    except Exception:
+                        pass
 
                 await asyncio.sleep(5)
         except asyncio.CancelledError:
