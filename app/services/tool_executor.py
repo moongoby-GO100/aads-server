@@ -1,7 +1,7 @@
 """
-AADS-185: 도구 실행기 — Anthropic Tool Use API 도구 실행
-10초 타임아웃, 결과 2000토큰(~6000자) 제한.
-기존 chat_tools.py의 함수를 래핑.
+AADS-186A: 도구 실행기 — Anthropic Tool Use API 도구 실행
+10초 타임아웃, 결과 2000토큰(~6000자) 제한 (기본값, 실제 25,000 토큰 허용).
+신규 워크플로우 도구: inspect_service, get_all_service_status, generate_directive
 """
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
 LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
 _AADS_API_BASE = os.getenv("AADS_API_BASE", "http://localhost:8080")
 
-_MAX_RESULT_CHARS = 6000  # ~2000 토큰
-_TOOL_TIMEOUT = 10.0
+_MAX_RESULT_CHARS = 25000  # ~8000 토큰 (지시서 기준 25,000 허용)
+_TOOL_TIMEOUT = 20.0  # 워크플로우 도구(inspect_service 등)는 더 오래 걸릴 수 있음
 
 
 class ToolExecutor:
@@ -54,16 +54,21 @@ class ToolExecutor:
     async def _dispatch(self, tool_name: str, tool_input: Dict[str, Any]) -> Any:
         """도구 이름 → 실제 함수 매핑."""
         dispatch = {
-            "health_check":     self._health_check,
-            "dashboard_query":  self._dashboard_query,
-            "task_history":     self._task_history,
-            "server_status":    self._server_status,
-            "directive_create": self._directive_create,
-            "read_github_file": self._read_github_file,
-            "query_database":   self._query_database,
-            "read_remote_file": self._read_remote_file,
-            "cost_report":      self._cost_report,
-            "web_search_brave": self._web_search_brave,
+            "health_check":           self._health_check,
+            "dashboard_query":        self._dashboard_query,
+            "task_history":           self._task_history,
+            "server_status":          self._server_status,
+            "directive_create":       self._directive_create,
+            "read_github_file":       self._read_github_file,
+            "query_database":         self._query_database,
+            "read_remote_file":       self._read_remote_file,
+            "list_remote_dir":        self._list_remote_dir,
+            "cost_report":            self._cost_report,
+            "web_search_brave":       self._web_search_brave,
+            # AADS-186A 신규 워크플로우 도구
+            "inspect_service":        self._inspect_service,
+            "get_all_service_status": self._get_all_service_status,
+            "generate_directive":     self._generate_directive,
         }
         fn = dispatch.get(tool_name)
         if fn is None:
@@ -182,9 +187,30 @@ class ToolExecutor:
             return {"error": str(e)}
 
     async def _read_remote_file(self, inp: Dict[str, Any]) -> Any:
+        """원격 서버 파일 읽기 (SSH, 프로젝트별 서버 매핑)."""
+        project = (inp.get("project") or "").upper()
+        path = inp.get("path") or inp.get("file_path") or ""
+        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        if not path:
+            return {"error": "path 또는 file_path 필수"}
         try:
-            from app.services.chat_tools import read_remote_file
-            return await read_remote_file(inp.get("path", ""), "")
+            from app.api.ceo_chat_tools import tool_read_remote_file
+            return await tool_read_remote_file(project, path)
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _list_remote_dir(self, inp: Dict[str, Any]) -> Any:
+        """원격 서버 디렉터리/파일 검색 (SSH)."""
+        project = (inp.get("project") or "").upper()
+        path = inp.get("path", "")
+        keyword = inp.get("keyword", "")
+        max_depth = min(int(inp.get("max_depth", 3)), 5)
+        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        try:
+            from app.api.ceo_chat_tools import tool_list_remote_dir
+            return await tool_list_remote_dir(project, path, keyword, max_depth)
         except Exception as e:
             return {"error": str(e)}
 
@@ -207,24 +233,220 @@ class ToolExecutor:
         result = await svc.search(inp.get("query", ""), count=inp.get("count", 5))
         return {"text": result.text, "citations": result.citations}
 
+    # ── AADS-186A 신규 워크플로우 도구 ──────────────────────────────────────
+
+    async def _inspect_service(self, inp: Dict[str, Any]) -> Any:
+        """
+        서비스 종합 점검: 프로세스/Docker/로그/헬스체크 수행.
+        list_remote_dir + read_remote_file + health_check 조합.
+        """
+        project = (inp.get("project") or "").upper()
+        checks_input = inp.get("checks", ["all"])
+        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+
+        do_all = "all" in checks_input
+        do_process = do_all or "process" in checks_input
+        do_docker = do_all or "docker" in checks_input
+        do_log_tail = do_all or "log_tail" in checks_input
+        do_health = do_all or "health" in checks_input
+
+        results: Dict[str, Any] = {"project": project, "checks_performed": []}
+
+        try:
+            from app.api.ceo_chat_tools import tool_list_remote_dir, tool_read_remote_file
+        except ImportError:
+            tool_list_remote_dir = None
+            tool_read_remote_file = None
+
+        if do_process and tool_list_remote_dir:
+            try:
+                proc_result = await asyncio.wait_for(
+                    tool_list_remote_dir(project, "", "*.py", 2),
+                    timeout=8.0,
+                )
+                results["process_files"] = proc_result
+                results["checks_performed"].append("process")
+            except Exception as e:
+                results["process_error"] = str(e)
+
+        if do_docker:
+            try:
+                docker_result = await self._health_check({"server": "all"})
+                results["docker_status"] = docker_result
+                results["checks_performed"].append("docker")
+            except Exception as e:
+                results["docker_error"] = str(e)
+
+        if do_log_tail and tool_list_remote_dir:
+            try:
+                log_result = await asyncio.wait_for(
+                    tool_list_remote_dir(project, "", "*.log", 3),
+                    timeout=8.0,
+                )
+                results["log_files"] = log_result
+                results["checks_performed"].append("log_tail")
+            except Exception as e:
+                results["log_error"] = str(e)
+
+        if do_health:
+            try:
+                health_result = await self._health_check({})
+                results["health"] = health_result
+                results["checks_performed"].append("health")
+            except Exception as e:
+                results["health_error"] = str(e)
+
+        return results
+
+    async def _get_all_service_status(self, inp: Dict[str, Any]) -> Any:
+        """
+        6개 서비스 헬스체크 병렬 수행 → 마크다운 테이블 반환.
+        """
+        include_details = inp.get("include_details", False)
+
+        # 헬스체크 URL 정의
+        services = {
+            "AADS": f"{_AADS_API_BASE}/api/v1/ops/health-check",
+            "KIS":  "http://211.188.51.113:8082/health",
+            "GO100":"http://211.188.51.113:8083/health",
+            "SF":   "http://116.120.58.155:7916/health",
+            "NTV2": "http://116.120.58.155:8080/health",
+            "NAS":  "http://cafe24-nas-placeholder/health",
+        }
+
+        async def check_one(name: str, url: str) -> Dict[str, Any]:
+            import time
+            start = time.monotonic()
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as c:
+                    r = await c.get(url)
+                    elapsed = round((time.monotonic() - start) * 1000)
+                    status = "✅ UP" if r.status_code < 400 else f"⚠️ {r.status_code}"
+                    result = {"service": name, "status": status, "response_ms": elapsed}
+                    if include_details:
+                        try:
+                            result["detail"] = r.json()
+                        except Exception:
+                            result["detail"] = r.text[:200]
+                    return result
+            except Exception as e:
+                elapsed = round((time.monotonic() - start) * 1000)
+                return {"service": name, "status": "❌ DOWN", "response_ms": elapsed, "error": str(e)[:100]}
+
+        tasks = [check_one(name, url) for name, url in services.items()]
+        results = await asyncio.gather(*tasks, return_exceptions=False)
+
+        # 마크다운 테이블 생성
+        lines = ["| 서비스 | 상태 | 응답(ms) |", "|--------|------|----------|"]
+        for r in results:
+            lines.append(f"| {r['service']} | {r['status']} | {r.get('response_ms', '-')} |")
+        table = "\n".join(lines)
+
+        if include_details:
+            return {"table": table, "details": results}
+        return {"table": table, "summary": results}
+
+    async def _generate_directive(self, inp: Dict[str, Any]) -> Any:
+        """
+        자연어 설명 → AADS 형식 지시서 자동 생성.
+        TASK_ID 자동 채번, auto_submit=true 시 API 제출.
+        """
+        description = inp.get("description", "")
+        priority = inp.get("priority", "P1-HIGH")
+        size = inp.get("size", "M")
+        project = (inp.get("project") or "AADS").upper()
+        auto_submit = inp.get("auto_submit", False)
+
+        if not description:
+            return {"error": "description 필수"}
+
+        # TASK_ID 채번: DB에서 최대 번호 조회
+        task_id = f"{project}-NEW"
+        try:
+            import asyncpg
+            db_url = os.getenv("DATABASE_URL", "").replace("postgresql://", "postgres://")
+            conn = await asyncpg.connect(db_url, timeout=8)
+            try:
+                row = await conn.fetchrow(
+                    "SELECT task_id FROM directive_lifecycle "
+                    "WHERE task_id ILIKE $1 ORDER BY created_at DESC LIMIT 1",
+                    f"{project}-%",
+                )
+                if row:
+                    last_id = row["task_id"]
+                    parts = last_id.split("-")
+                    if len(parts) == 2 and parts[1].isdigit():
+                        next_num = int(parts[1]) + 1
+                        task_id = f"{project}-{next_num}"
+            finally:
+                await conn.close()
+        except Exception as e:
+            logger.warning(f"generate_directive task_id lookup failed: {e}")
+
+        # 모델 라우팅 (size 기반)
+        size_model = {"XS": "haiku", "S": "sonnet", "M": "sonnet", "L": "opus", "XL": "opus"}
+        model = size_model.get(size, "sonnet")
+
+        # 지시서 생성
+        directive_block = (
+            f">>>DIRECTIVE_START\n"
+            f"TASK_ID: {task_id}\n"
+            f"TITLE: {description[:60]}\n"
+            f"PRIORITY: {priority}\n"
+            f"SIZE: {size}\n"
+            f"MODEL: {model}\n"
+            f"ASSIGNEE: Claude (서버 68, /root/aads)\n"
+            f"\nDESCRIPTION:\n{description}\n"
+            f">>>DIRECTIVE_END"
+        )
+
+        result: Dict[str, Any] = {
+            "task_id": task_id,
+            "directive": directive_block,
+            "auto_submit": auto_submit,
+        }
+
+        if auto_submit:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as c:
+                    r = await c.post(
+                        f"{_AADS_API_BASE}/api/v1/directives/submit",
+                        json={
+                            "task_id": task_id,
+                            "content": directive_block,
+                            "priority": priority,
+                        },
+                    )
+                    result["submit_status"] = r.status_code
+                    result["submit_response"] = r.json() if r.status_code < 400 else r.text[:200]
+            except Exception as e:
+                result["submit_error"] = str(e)
+
+        return result
+
 
 # ─── 하위 호환성 ─────────────────────────────────────────────────────────────
 
 _INTENT_TOOL_MAP: Dict[str, list] = {
-    "health_check":     ["health_check"],
-    "dashboard":        ["dashboard_query"],
-    "diagnosis":        ["dashboard_query", "health_check"],
-    "search":           ["web_search_brave"],
-    "memory_recall":    ["read_github_file", "query_database"],
-    "directive_gen":    ["directive_create"],
-    "execute":          ["directive_create"],
-    "workspace_switch": ["dashboard_query"],
-    "qa":               ["read_remote_file"],
-    "execution_verify": ["read_remote_file"],
-    "task_history":     ["task_history"],
-    "cost_report":      ["cost_report"],
-    "system_status":    ["health_check", "dashboard_query"],
-    "url_analyze":      ["read_github_file"],
+    "health_check":        ["health_check"],
+    "dashboard":           ["dashboard_query"],
+    "diagnosis":           ["dashboard_query", "health_check"],
+    "search":              ["web_search_brave"],
+    "memory_recall":       ["read_github_file", "query_database"],
+    "directive_gen":       ["directive_create", "generate_directive"],
+    "execute":             ["directive_create"],
+    "workspace_switch":    ["dashboard_query"],
+    "qa":                  ["read_remote_file", "list_remote_dir"],
+    "execution_verify":    ["read_remote_file", "list_remote_dir"],
+    "task_history":        ["task_history"],
+    "cost_report":         ["cost_report"],
+    "system_status":       ["health_check", "dashboard_query", "get_all_service_status"],
+    "url_analyze":         ["read_github_file"],
+    "server_file":         ["list_remote_dir", "read_remote_file"],
+    # AADS-186A 신규 인텐트
+    "service_inspection":  ["inspect_service"],
+    "all_service_status":  ["get_all_service_status"],
 }
 
 
