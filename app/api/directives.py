@@ -1,9 +1,11 @@
 """
-Directive Submit 엔드포인트 (AADS-157)
+Directive Submit + Pre-Flight Check 엔드포인트 (AADS-157, AADS-178)
 
 CEO Chat에서 '진행해/만들어' 의도 감지 시 D-022 포맷 지시서를
 /root/.genspark/directives/pending/ 에 파일로 생성.
 bridge.py가 감지 → 기존 파이프라인 실행.
+
+AADS-178: GET /directives/preflight — 지시서 발행 전 큐 상태 확인.
 """
 import logging
 import os
@@ -12,8 +14,10 @@ import re
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
+
+from app.services.preflight_checker import run_preflight
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -149,3 +153,33 @@ def submit_directive_sync(req: DirectiveSubmitRequest) -> DirectiveSubmitRespons
         filename=filename,
         path=filepath,
     )
+
+
+# ── AADS-178: Pre-Flight Check ────────────────────────────────────────────────
+
+class PreflightResponse(BaseModel):
+    queue_clear: bool
+    depends_met: bool
+    duplicate: bool
+    conflicts: List[str]
+    recommendation: str  # "PROCEED" | "WAIT" | "BLOCKED"
+
+
+@router.get("/directives/preflight", response_model=PreflightResponse)
+async def get_directive_preflight(
+    task_id: Optional[str] = Query(None, description="발행 예정 task_id (중복 검사용)"),
+    depends_on: Optional[str] = Query(None, description="선행 task_id (완료 여부 확인)"),
+):
+    """
+    매니저 지시서 발행 전 Pre-Flight Check.
+
+    - pending/running 큐에서 중복 task_id 감지
+    - depends_on이 있으면 done 폴더에서 완료 여부 확인
+    - recommendation: PROCEED | WAIT | BLOCKED 반환
+    """
+    try:
+        result = run_preflight(task_id=task_id, depends_on=depends_on)
+        return PreflightResponse(**result)
+    except Exception as e:
+        logger.error("preflight_check_failed", task_id=task_id, depends_on=depends_on, error=str(e))
+        raise HTTPException(status_code=500, detail=f"Pre-Flight Check 실패: {e}")
