@@ -123,6 +123,20 @@ _INTENT_PATTERNS: Dict[str, List[str]] = {
     "architect":   ["설계검토", "설계 검토", "아키텍처검토", "아키텍처 검토", "구조검토", "설계해"],
     # AADS-166: 헬스체크 의도
     "health_check": ["헬스체크", "건강", "시스템 상태", "인프라", "health", "전체 점검", "헬스 체크", "health-check", "healthcheck"],
+    # AADS-170: 신규 Chat-First 인텐트 (높은 우선순위 — 기존 인텐트보다 앞에 위치)
+    "casual":           ["안녕", "ㅎㅇ", "ㅋㅋ", "ㄱㄱ", "잡담", "날씨", "오늘", "기분", "피곤"],
+    "deep_research":    ["deep research", "딥리서치", "심층조사", "심층 조사", "완전 조사", "보고서 써", "보고서 작성"],
+    "url_analyze":      ["URL 분석", "url 분석", "링크 분석", "문서 분석", "웹페이지 분석", "URL:", "http://", "https://"],
+    "video_analyze":    ["동영상 분석", "비디오 분석", "영상 분석", "유튜브 분석", "youtube 분석", "video 분석"],
+    "image_analyze":    ["이미지 분석", "사진 분석", "그림 분석", "이미지를 봐", "사진을 봐", "이미지 설명"],
+    "planning":         ["기획안", "로드맵", "플랜", "plan", "전략 수립", "방향 잡아", "방향성"],
+    "decision":         ["결정해줘", "판단해줘", "선택해줘", "최선", "비교분석", "pros cons", "장단점"],
+    "code_exec":        ["코드 실행", "실행해봐", "run", "코드 돌려", "실행 결과", "실행시켜"],
+    "directive_gen":    ["지시서 만들어", "지시서 생성", "태스크 만들어", "태스크 생성", "task 생성", "지시서를 작성"],
+    "memory_recall":    ["기억해", "이전에", "저번에", "지난번에", "회상", "recall", "조사 결과 찾아", "히스토리"],
+    "workspace_switch": ["워크스페이스 전환", "workspace 전환", "CEO 모드", "AADS 모드", "SF 모드", "KIS 모드",
+                         "GO100 모드", "NTV2 모드", "NAS 모드"],
+    "search":           ["구글", "검색해줘", "찾아줘", "최신 뉴스", "news", "검색 결과"],
     # 기존 의도
     "dashboard":   ["상태", "확인", "보고", "현황", "서버", "대시보드", "요약", "overview"],
     "diagnosis":   ["왜", "안돼", "오류", "에러", "문제", "분석", "실패", "죽었", "죽어", "안됨", "error", "fail"],
@@ -135,14 +149,54 @@ _INTENT_PATTERNS: Dict[str, List[str]] = {
     "browser":     ["스크린샷", "페이지", "열어", "화면", "브라우저", "사이트", "접속"],
 }
 
+# AADS-170 신규 인텐트 목록 (라우팅용)
+_CHAT_FIRST_INTENTS = {
+    "casual", "deep_research", "url_analyze", "video_analyze", "image_analyze",
+    "planning", "decision", "code_exec", "directive_gen", "memory_recall",
+    "workspace_switch", "search",
+}
+
+# 신규 인텐트 → 권장 모델 매핑
+_CHAT_FIRST_MODEL_MAP: Dict[str, str] = {
+    "casual":           "gemini-2.0-flash",
+    "search":           "gemini-2.5-flash",
+    "deep_research":    "gemini-2.5-pro",
+    "url_analyze":      "gemini-2.5-flash",
+    "video_analyze":    "gemini-2.5-flash",
+    "image_analyze":    "gemini-2.5-flash",
+    "planning":         "claude-sonnet-4-6",
+    "decision":         "claude-opus-4-6",
+    "code_exec":        "gemini-2.5-flash",
+    "directive_gen":    "claude-sonnet-4-6",
+    "memory_recall":    "claude-sonnet-4-6",
+    "workspace_switch": "claude-sonnet-4-6",
+}
 
 _CROSS_PROJECT_NAMES = {"KIS", "GO100", "ShortFlow", "NTV2"}
 _CROSS_PROJECT_QA_KEYWORDS = {"검수", "테스트", "코드", "백테스트", "분석", "검증", "리뷰", "코드검수", "코드 검수"}
 
 
 def classify_intent(message: str) -> str:
-    """메시지 의도 12분류. 우선순위: design_fix > design > qa > execution_verify > architect > health_check > execute > browser > dashboard > diagnosis > research > strategy."""
-    for intent in ["design_fix", "design", "qa", "execution_verify", "architect", "health_check", "execute", "browser", "dashboard", "diagnosis", "research", "strategy"]:
+    """
+    메시지 의도 분류 (AADS-170 확장: 24분류).
+    우선순위:
+      신규(casual/deep_research/url_analyze/video_analyze/image_analyze/
+           planning/decision/code_exec/directive_gen/memory_recall/
+           workspace_switch/search)
+      > design_fix > design > qa > execution_verify > architect > health_check
+      > execute > browser > dashboard > diagnosis > research > strategy
+    """
+    priority_order = [
+        # AADS-170 신규 (높은 우선순위)
+        "workspace_switch", "directive_gen", "deep_research", "url_analyze",
+        "video_analyze", "image_analyze", "memory_recall", "code_exec",
+        "decision", "planning", "search", "casual",
+        # 기존 (우선순위 유지)
+        "design_fix", "design", "qa", "execution_verify", "architect",
+        "health_check", "execute", "browser", "dashboard", "diagnosis",
+        "research", "strategy",
+    ]
+    for intent in priority_order:
         if intent not in _INTENT_PATTERNS:
             continue
         if any(kw in message for kw in _INTENT_PATTERNS[intent]):
