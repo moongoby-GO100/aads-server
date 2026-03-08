@@ -1,189 +1,250 @@
 """
-AADS-184: 도구 실행 엔진 — 인텐트→도구 매핑 + 병렬 실행 + 결과 주입 포맷
-
-흐름:
-  classify_intent() → INTENT_TOOL_MAP 조회 → execute_tools() 병렬 실행
-  → 결과 합산 → LLM 시스템 메시지 주입
-
-타임아웃:
-  - 개별 도구: 10초
-  - 전체 실행: 15초
-  - casual 인텐트: 도구 없음 → 즉시 LLM
-
-도구 결과:
-  - 최대 2000 토큰 (~6000자)
-  - 초과 시 잘라내기
-  - 실패 시 fallback 메시지 접두사 추가
+AADS-185: 도구 실행기 — Anthropic Tool Use API 도구 실행
+10초 타임아웃, 결과 2000토큰(~6000자) 제한.
+기존 chat_tools.py의 함수를 래핑.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-from typing import Any, Callable, Coroutine, Dict, List
+import os
+from typing import Any, Dict
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
-# ─── 도구 함수 임포트 ──────────────────────────────────────────────────────────
-from app.services.chat_tools import (
-    health_check,
-    dashboard_query,
-    search_web,
-    read_github_file,
-    query_database,
-    read_remote_file,
-    fetch_url,
-    generate_directive,
-    list_workspaces_sessions,
-)
+LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
+LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
+_AADS_API_BASE = os.getenv("AADS_API_BASE", "http://localhost:8080")
 
-# ─── 인텐트 → 도구 매핑 ───────────────────────────────────────────────────────
-# 각 인텐트에 대해 실행할 도구 함수 리스트 정의
-# 빈 리스트 = 도구 없이 바로 LLM 응답
-
-ToolFn = Callable[..., Coroutine[Any, Any, Dict[str, Any]]]
-
-INTENT_TOOL_MAP: Dict[str, List[ToolFn]] = {
-    # ── 실시간 데이터 필요 인텐트 ──────────────────────────────────────────────
-    "health_check":     [health_check],
-    "dashboard":        [dashboard_query],
-    "diagnosis":        [dashboard_query, health_check],
-    # ── 웹/파일 리서치 인텐트 ─────────────────────────────────────────────────
-    "search":           [search_web],
-    "research":         [read_github_file, fetch_url, search_web],
-    "deep_research":    [search_web, read_github_file],
-    "url_analyze":      [fetch_url],
-    # ── GitHub/원격 파일 인텐트 ───────────────────────────────────────────────
-    "memory_recall":    [read_github_file, query_database],
-    # ── DB 쿼리 인텐트 ────────────────────────────────────────────────────────
-    # dashboard 이미 포함, 추가로 DB 직접 조회 원할 때
-    # ── 지시서 생성 인텐트 ────────────────────────────────────────────────────
-    "directive_gen":    [dashboard_query, generate_directive],
-    "execute":          [dashboard_query, generate_directive],
-    # ── 워크스페이스/세션 조회 인텐트 ─────────────────────────────────────────
-    "workspace_switch": [list_workspaces_sessions],
-    # ── 원격 파일 접근 인텐트 ─────────────────────────────────────────────────
-    "qa":               [read_remote_file],
-    "execution_verify": [read_remote_file],
-    # ── 도구 없이 바로 LLM 응답 ───────────────────────────────────────────────
-    "casual":           [],      # 잡담: 빠른 응답 (<2초)
-    "strategy":         [],      # 전략: LLM 지식 기반
-    "planning":         [],      # 기획: LLM 지식 기반
-    "decision":         [],      # 결정: LLM 지식 기반
-    "design":           [],      # 디자인: LLM 지식 기반
-    "design_fix":       [],      # 디자인 수정: LLM 지식 기반
-    "architect":        [],      # 아키텍처: LLM 지식 기반
-    "code_exec":        [],      # 코드 실행: 향후 샌드박스 연동
-    "browser":          [],      # 브라우저: 기존 ceo_chat.py 핸들러 사용
-    "image_analyze":    [],      # 이미지: 멀티모달 LLM
-    "video_analyze":    [],      # 동영상: 향후 연동
-}
-
-# 도구 결과 최대 토큰 (약 2000토큰 = 6000자)
-_MAX_TOOL_RESULT_CHARS = 6000
-
-# 도구 이름 매핑 (로깅/표시용)
-_TOOL_NAME_MAP: Dict[str, str] = {
-    "health_check":            "서버헬스",
-    "dashboard_query":         "대시보드",
-    "search_web":              "웹검색",
-    "read_github_file":        "GitHub파일",
-    "query_database":          "DB조회",
-    "read_remote_file":        "원격파일",
-    "fetch_url":               "URL조회",
-    "generate_directive":      "지시서생성",
-    "list_workspaces_sessions": "워크스페이스",
-}
+_MAX_RESULT_CHARS = 6000  # ~2000 토큰
+_TOOL_TIMEOUT = 10.0
 
 
-# ─── 메인 실행 함수 ────────────────────────────────────────────────────────────
+class ToolExecutor:
+    """단일 도구 실행 + 타임아웃 + 결과 제한."""
 
-async def execute_tools(intent: str, message: str, workspace_id: str) -> str:
-    """
-    인텐트에 매핑된 도구들을 병렬 실행하고 결과를 문자열로 반환.
-
-    Args:
-        intent: 분류된 인텐트 (예: "health_check", "dashboard", "casual")
-        message: 사용자 메시지 원문
-        workspace_id: 현재 워크스페이스 ID
-
-    Returns:
-        도구 결과 합산 문자열 (없으면 "")
-        형식:
-          [도구명]
-          {JSON 결과}
-
-          [도구명2]
-          ...
-    """
-    tools = INTENT_TOOL_MAP.get(intent, [])
-    if not tools:
-        return ""  # 도구 없음 → LLM만으로 응답
-
-    async def _run_tool(tool_fn: ToolFn) -> tuple[str, str]:
-        """단일 도구 실행. (도구명, 결과 문자열) 반환."""
-        tool_name = _TOOL_NAME_MAP.get(tool_fn.__name__, tool_fn.__name__)
+    async def execute(self, tool_name: str, tool_input: Dict[str, Any]) -> str:
+        """
+        도구 실행. 10초 타임아웃, 결과 6000자 제한.
+        실패 시 JSON error 반환.
+        """
         try:
             result = await asyncio.wait_for(
-                tool_fn(message, workspace_id),
-                timeout=10,
+                self._dispatch(tool_name, tool_input),
+                timeout=_TOOL_TIMEOUT,
             )
-            result_str = json.dumps(result, ensure_ascii=False, indent=2)
-            return tool_name, result_str
+            result_str = (
+                json.dumps(result, ensure_ascii=False, indent=2)
+                if not isinstance(result, str)
+                else result
+            )
+            if len(result_str) > _MAX_RESULT_CHARS:
+                result_str = result_str[:_MAX_RESULT_CHARS] + "\n...[결과 일부 생략]"
+            return result_str
         except asyncio.TimeoutError:
-            logger.warning(f"tool_executor_timeout: tool={tool_fn.__name__} intent={intent}")
-            return tool_name, '{"error": "타임아웃 (10초 초과)"}'
+            logger.warning(f"tool_executor timeout: tool={tool_name}")
+            return json.dumps({"error": "timeout", "tool": tool_name})
         except Exception as e:
-            logger.error(f"tool_executor_error: tool={tool_fn.__name__} error={e}")
-            return tool_name, f'{{"error": "{str(e)}"}}'
+            logger.error(f"tool_executor error: tool={tool_name} error={e}")
+            return json.dumps({"error": str(e), "tool": tool_name})
 
-    # 전체 도구 병렬 실행 (최대 15초)
-    try:
-        task_results = await asyncio.wait_for(
-            asyncio.gather(*[_run_tool(t) for t in tools]),
-            timeout=15,
+    async def _dispatch(self, tool_name: str, tool_input: Dict[str, Any]) -> Any:
+        """도구 이름 → 실제 함수 매핑."""
+        dispatch = {
+            "health_check":     self._health_check,
+            "dashboard_query":  self._dashboard_query,
+            "task_history":     self._task_history,
+            "server_status":    self._server_status,
+            "directive_create": self._directive_create,
+            "read_github_file": self._read_github_file,
+            "query_database":   self._query_database,
+            "read_remote_file": self._read_remote_file,
+            "cost_report":      self._cost_report,
+            "web_search_brave": self._web_search_brave,
+        }
+        fn = dispatch.get(tool_name)
+        if fn is None:
+            return {"error": f"unknown_tool: {tool_name}"}
+        return await fn(tool_input)
+
+    # ── system 도구 ─────────────────────────────────────────────────────────
+
+    async def _health_check(self, inp: Dict[str, Any]) -> Any:
+        try:
+            from app.services.chat_tools import health_check
+            return await health_check("", "")
+        except ImportError:
+            async with httpx.AsyncClient(timeout=8.0) as c:
+                r = await c.get(f"{_AADS_API_BASE}/api/v1/ops/full-health")
+                return r.json() if r.status_code == 200 else {"error": f"status {r.status_code}"}
+
+    async def _dashboard_query(self, inp: Dict[str, Any]) -> Any:
+        try:
+            from app.services.chat_tools import dashboard_query
+            return await dashboard_query("", "")
+        except ImportError:
+            async with httpx.AsyncClient(timeout=8.0) as c:
+                r = await c.get(f"{_AADS_API_BASE}/api/v1/ops/pipeline-status")
+                return r.json() if r.status_code == 200 else {"error": f"status {r.status_code}"}
+
+    async def _task_history(self, inp: Dict[str, Any]) -> Any:
+        limit = min(inp.get("limit", 10), 50)
+        project = inp.get("project", "")
+        try:
+            import asyncpg
+            db_url = os.getenv("DATABASE_URL", "").replace("postgresql://", "postgres://")
+            conn = await asyncpg.connect(db_url, timeout=8)
+            try:
+                if project:
+                    rows = await conn.fetch(
+                        "SELECT task_id, title, status, completed_at FROM directive_lifecycle "
+                        "WHERE task_id ILIKE $1 ORDER BY completed_at DESC LIMIT $2",
+                        f"{project}%", limit,
+                    )
+                else:
+                    rows = await conn.fetch(
+                        "SELECT task_id, title, status, completed_at FROM directive_lifecycle "
+                        "ORDER BY completed_at DESC LIMIT $1",
+                        limit,
+                    )
+                return [dict(r) for r in rows]
+            finally:
+                await conn.close()
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _server_status(self, inp: Dict[str, Any]) -> Any:
+        try:
+            from app.services.chat_tools import health_check
+            return await health_check("", "")
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ── action 도구 ─────────────────────────────────────────────────────────
+
+    async def _directive_create(self, inp: Dict[str, Any]) -> str:
+        task_id = inp.get("task_id", "AADS-XXX")
+        title = inp.get("title", "")
+        priority = inp.get("priority", "P2-MEDIUM")
+        size = inp.get("size", "M")
+        model = inp.get("model", "sonnet")
+        description = inp.get("description", "")
+        depends_on = inp.get("depends_on", "none")
+        return (
+            f">>>DIRECTIVE_START\n"
+            f"TASK_ID: {task_id}\n"
+            f"TITLE: {title}\n"
+            f"PRIORITY: {priority}\n"
+            f"SIZE: {size}\n"
+            f"MODEL: {model}\n"
+            f"DEPENDS_ON: {depends_on}\n"
+            f"ASSIGNEE: Claude (서버 68, /root/aads)\n"
+            f"\nDESCRIPTION: {description}\n"
+            f">>>DIRECTIVE_END"
         )
-    except asyncio.TimeoutError:
-        logger.warning(f"tool_executor_total_timeout: intent={intent}")
-        return "[도구 조회 타임아웃 (15초 초과)]"
 
-    # 결과 조합
-    parts: List[str] = []
-    has_error_only = True
-    for tool_name, result_str in task_results:
-        parts.append(f"[{tool_name}]\n{result_str}")
-        # 에러가 아닌 실제 데이터가 있는지 확인
-        if '"error"' not in result_str or len(result_str) > 100:
-            has_error_only = False
+    async def _read_github_file(self, inp: Dict[str, Any]) -> Any:
+        try:
+            from app.services.chat_tools import read_github_file
+            query = f"repo={inp.get('repo', '')} path={inp.get('path', '')} branch={inp.get('branch', 'main')}"
+            return await read_github_file(query, "")
+        except ImportError:
+            repo = inp.get("repo", "moongoby-GO100/aads-docs")
+            path = inp.get("path", "HANDOVER.md")
+            branch = inp.get("branch", "main")
+            url = f"https://raw.githubusercontent.com/{repo}/{branch}/{path}"
+            async with httpx.AsyncClient(timeout=8.0) as c:
+                r = await c.get(url)
+                if r.status_code == 200:
+                    return r.text[:3000]
+                return {"error": f"github {r.status_code}: {url}"}
 
-    combined = "\n\n".join(parts)
+    async def _query_database(self, inp: Dict[str, Any]) -> Any:
+        query = inp.get("query", "")
+        limit = min(inp.get("limit", 20), 100)
+        if not query.strip().upper().startswith("SELECT"):
+            return {"error": "SELECT 쿼리만 허용됩니다"}
+        try:
+            import asyncpg
+            db_url = os.getenv("DATABASE_URL", "").replace("postgresql://", "postgres://")
+            conn = await asyncpg.connect(db_url, timeout=8)
+            try:
+                if "LIMIT" not in query.upper():
+                    query = query.rstrip(";") + f" LIMIT {limit}"
+                rows = await conn.fetch(query)
+                return [dict(r) for r in rows]
+            finally:
+                await conn.close()
+        except Exception as e:
+            return {"error": str(e)}
 
-    # 크기 제한
-    if len(combined) > _MAX_TOOL_RESULT_CHARS:
-        combined = combined[:_MAX_TOOL_RESULT_CHARS] + "\n\n...(도구 결과 잘림)"
+    async def _read_remote_file(self, inp: Dict[str, Any]) -> Any:
+        try:
+            from app.services.chat_tools import read_remote_file
+            return await read_remote_file(inp.get("path", ""), "")
+        except Exception as e:
+            return {"error": str(e)}
 
-    logger.info(
-        f"tool_executor_done: intent={intent} tools={len(tools)} "
-        f"result_chars={len(combined)} has_error_only={has_error_only}"
-    )
-    return combined
+    async def _cost_report(self, inp: Dict[str, Any]) -> Any:
+        days = inp.get("days", 7)
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as c:
+                r = await c.get(
+                    f"{LITELLM_BASE_URL}/api/spend/logs",
+                    headers={"Authorization": f"Bearer {LITELLM_API_KEY}"},
+                    params={"days": days},
+                )
+                return r.json() if r.status_code == 200 else {"error": f"status {r.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _web_search_brave(self, inp: Dict[str, Any]) -> Any:
+        from app.services.brave_search_service import BraveSearchService
+        svc = BraveSearchService()
+        result = await svc.search(inp.get("query", ""), count=inp.get("count", 5))
+        return {"text": result.text, "citations": result.citations}
+
+
+# ─── 하위 호환성 ─────────────────────────────────────────────────────────────
+
+_INTENT_TOOL_MAP: Dict[str, list] = {
+    "health_check":     ["health_check"],
+    "dashboard":        ["dashboard_query"],
+    "diagnosis":        ["dashboard_query", "health_check"],
+    "search":           ["web_search_brave"],
+    "memory_recall":    ["read_github_file", "query_database"],
+    "directive_gen":    ["directive_create"],
+    "execute":          ["directive_create"],
+    "workspace_switch": ["dashboard_query"],
+    "qa":               ["read_remote_file"],
+    "execution_verify": ["read_remote_file"],
+    "task_history":     ["task_history"],
+    "cost_report":      ["cost_report"],
+    "system_status":    ["health_check", "dashboard_query"],
+    "url_analyze":      ["read_github_file"],
+}
+
+
+async def execute_tools(intent: str, message: str, workspace_id: str) -> str:
+    tool_names = _INTENT_TOOL_MAP.get(intent, [])
+    if not tool_names:
+        return ""
+    executor = ToolExecutor()
+    parts = []
+    for name in tool_names:
+        result = await executor.execute(name, {"message": message, "workspace_id": workspace_id})
+        parts.append(f"[{name}]\n{result}")
+    return "\n\n".join(parts)
 
 
 def build_tool_injection(tool_result: str) -> str:
-    """
-    도구 결과를 LLM 메시지 주입 포맷으로 변환.
-
-    Returns:
-        빈 문자열 (도구 결과 없음) 또는 주입 문자열
-    """
     if not tool_result:
         return ""
-    return (
-        "[시스템 도구 조회 결과 — 아래 데이터를 기반으로 정확하게 답변하세요]\n\n"
-        + tool_result
-    )
+    return "[시스템 도구 조회 결과 — 아래 데이터를 기반으로 정확하게 답변하세요]\n\n" + tool_result
 
 
 def has_tools_for_intent(intent: str) -> bool:
-    """해당 인텐트에 도구가 매핑되어 있는지 확인."""
-    return bool(INTENT_TOOL_MAP.get(intent))
+    return bool(_INTENT_TOOL_MAP.get(intent))

@@ -44,6 +44,12 @@ services:
       - DATABASE_URL=postgresql://aads:aads_dev_local@aads-postgres:5432/aads
       # GitHub PAT (AADS-179): 미설정 시 infra-check severity=warning (critical 아님)
       - GITHUB_PAT=${GITHUB_PAT:-}
+      # AADS-185: CEO Chat 전면 재설계 — 검색/리서치 API 키
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - BRAVE_API_KEY=${BRAVE_API_KEY:-}
+      # LiteLLM 프록시 (AADS-185)
+      - LITELLM_BASE_URL=${LITELLM_BASE_URL:-http://litellm:4000}
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-litellm}
     volumes:
       # Docker-in-Docker: DockerSandbox (D-011) 실행을 위한 소켓 마운트
       - /var/run/docker.sock:/var/run/docker.sock

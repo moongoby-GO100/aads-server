@@ -1,0 +1,301 @@
+"""
+AADS-185: 모델 선택기 — LiteLLM vs 직접 Anthropic SDK 분기
+- Gemini 인텐트 (casual, greeting): LiteLLM 경유
+- Claude 인텐트: Anthropic SDK 직접 (Tool Use + Extended Thinking + Prompt Caching 지원)
+- Gemini Direct (grounding, deep_research): gemini_search_service / gemini_research_service
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+from decimal import Decimal
+from typing import Any, AsyncGenerator, Dict, List, Optional
+
+import httpx
+from anthropic import AsyncAnthropic, APIStatusError
+from app.config import Settings
+from app.services.intent_router import IntentResult
+
+logger = logging.getLogger(__name__)
+
+settings = Settings()
+_anthropic = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY.get_secret_value())
+
+LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
+LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
+
+# 모델별 비용 (per 1M tokens, USD)
+_COST_MAP = {
+    "claude-opus":       (15.0, 75.0),
+    "claude-sonnet":     (3.0,  15.0),
+    "claude-haiku":      (0.25, 1.25),
+    "gemini-flash":      (0.075, 0.3),
+    "gemini-flash-lite": (0.01,  0.04),
+    "gemini-pro":        (1.25,  5.0),
+}
+
+# LiteLLM alias → Anthropic model ID
+_ANTHROPIC_MODEL_ID = {
+    "claude-sonnet": "claude-sonnet-4-6",
+    "claude-opus":   "claude-opus-4-6",
+    "claude-haiku":  "claude-haiku-4-5-20251001",
+}
+
+# Gemini 모델 (LiteLLM 경유)
+_GEMINI_MODELS = {"gemini-flash", "gemini-flash-lite", "gemini-pro"}
+
+
+def _estimate_cost(model: str, in_tokens: int, out_tokens: int) -> Decimal:
+    in_rate, out_rate = _COST_MAP.get(model, (3.0, 15.0))
+    return Decimal(str(round(in_tokens * in_rate / 1_000_000 + out_tokens * out_rate / 1_000_000, 6)))
+
+
+async def call_stream(
+    intent_result: IntentResult,
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    model_override: Optional[str] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """
+    인텐트 결과에 따라 LiteLLM 또는 Anthropic SDK로 SSE 스트리밍.
+
+    Yields dict with keys:
+      type: 'delta' | 'thinking' | 'tool_use' | 'tool_result' | 'done' | 'error'
+      content: str (delta/error)
+      thinking: str (thinking delta)
+      tool_name: str
+      tool_input: dict
+      tool_use_id: str
+      model: str
+      cost: str
+      input_tokens: int
+      output_tokens: int
+    """
+    model = model_override or intent_result.model
+
+    # Gemini 모델 → LiteLLM 경유
+    if model in _GEMINI_MODELS:
+        async for event in _stream_litellm(model, system_prompt, messages):
+            yield event
+        return
+
+    # Claude 모델 → Anthropic SDK 직접
+    async for event in _stream_anthropic(intent_result, model, system_prompt, messages, tools):
+        yield event
+
+
+async def _stream_litellm(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """LiteLLM 프록시를 통한 스트리밍."""
+    msgs = [{"role": "system", "content": system_prompt}] + messages
+
+    full_text = ""
+    input_tokens = 0
+    output_tokens = 0
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            async with client.stream(
+                "POST",
+                f"{LITELLM_BASE_URL}/chat/completions",
+                headers={"Authorization": f"Bearer {LITELLM_API_KEY}"},
+                json={
+                    "model": model,
+                    "messages": msgs,
+                    "max_tokens": 4096,
+                    "stream": True,
+                },
+            ) as resp:
+                if resp.status_code != 200:
+                    body = await resp.aread()
+                    yield {"type": "error", "content": f"LiteLLM error {resp.status_code}: {body.decode()[:200]}"}
+                    return
+
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    raw = line[6:]
+                    if raw.strip() == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(raw)
+                    except Exception:
+                        continue
+
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    text = delta.get("content", "")
+                    if text:
+                        full_text += text
+                        yield {"type": "delta", "content": text}
+
+                    # 토큰 집계 (usage 포함 시)
+                    usage = chunk.get("usage", {})
+                    if usage:
+                        input_tokens = usage.get("prompt_tokens", input_tokens)
+                        output_tokens = usage.get("completion_tokens", output_tokens)
+
+    except Exception as e:
+        logger.error(f"model_selector litellm error: {e}")
+        yield {"type": "error", "content": str(e)}
+        return
+
+    cost = _estimate_cost(model, input_tokens, output_tokens)
+    yield {
+        "type": "done",
+        "model": model,
+        "cost": str(cost),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+    }
+
+
+async def _stream_anthropic(
+    intent_result: IntentResult,
+    model_alias: str,
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]],
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """Anthropic SDK 직접 스트리밍 (Tool Use + Extended Thinking + Prompt Caching)."""
+    model_id = _ANTHROPIC_MODEL_ID.get(model_alias, "claude-sonnet-4-6")
+    max_tokens = 8192 if intent_result.use_extended_thinking else 4096
+
+    # 시스템 프롬프트 (Prompt Caching: Layer 1 정적 부분에 cache_control)
+    system_blocks = _build_system_with_cache(system_prompt)
+
+    # Extended Thinking 설정
+    thinking_config = None
+    if intent_result.use_extended_thinking:
+        thinking_config = {"type": "enabled", "budget_tokens": 8000}
+
+    full_text = ""
+    thinking_text = ""
+    input_tokens = 0
+    output_tokens = 0
+
+    # Tool Use 루프 (최대 5회)
+    current_messages = list(messages)
+    tool_calls_made = []
+
+    for _turn in range(5):
+        api_kwargs: Dict[str, Any] = {
+            "model": model_id,
+            "max_tokens": max_tokens,
+            "system": system_blocks,
+            "messages": current_messages,
+        }
+        if tools:
+            api_kwargs["tools"] = tools
+        if thinking_config:
+            api_kwargs["thinking"] = thinking_config
+            api_kwargs["betas"] = ["interleaved-thinking-2025-05-14"]
+
+        try:
+            async with _anthropic.messages.stream(**api_kwargs) as stream:
+                async for event in stream:
+                    event_type = type(event).__name__
+
+                    if event_type == "RawContentBlockDeltaEvent":
+                        delta = event.delta
+                        delta_type = type(delta).__name__
+                        if delta_type == "TextDelta":
+                            full_text += delta.text
+                            yield {"type": "delta", "content": delta.text}
+                        elif delta_type == "ThinkingDelta":
+                            thinking_text += delta.thinking
+                            yield {"type": "thinking", "thinking": delta.thinking}
+                        elif delta_type == "InputJsonDelta":
+                            pass  # tool_use 입력 JSON 누적 (스트림 종료 후 처리)
+
+                final_msg = await stream.get_final_message()
+
+        except APIStatusError as e:
+            logger.error(f"model_selector anthropic error: {e}")
+            yield {"type": "error", "content": str(e)}
+            return
+        except Exception as e:
+            logger.error(f"model_selector anthropic unexpected: {e}")
+            yield {"type": "error", "content": str(e)}
+            return
+
+        input_tokens = final_msg.usage.input_tokens
+        output_tokens = final_msg.usage.output_tokens
+
+        # Tool Use 처리
+        tool_use_blocks = [b for b in final_msg.content if b.type == "tool_use"]
+        if not tool_use_blocks:
+            break  # 도구 없음 → 완료
+
+        # 도구 실행
+        from app.services.tool_executor import ToolExecutor
+        executor = ToolExecutor()
+
+        tool_results = []
+        for tu in tool_use_blocks:
+            yield {
+                "type": "tool_use",
+                "tool_name": tu.name,
+                "tool_input": tu.input,
+                "tool_use_id": tu.id,
+            }
+            tool_calls_made.append(tu.name)
+
+            result_str = await executor.execute(tu.name, tu.input)
+            yield {
+                "type": "tool_result",
+                "tool_name": tu.name,
+                "tool_use_id": tu.id,
+                "content": result_str,
+            }
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": tu.id,
+                "content": result_str,
+            })
+
+        # 메시지에 AI 응답 + 도구 결과 추가
+        current_messages = current_messages + [
+            {"role": "assistant", "content": final_msg.content},
+            {"role": "user", "content": tool_results},
+        ]
+
+    cost = _estimate_cost(model_alias, input_tokens, output_tokens)
+    yield {
+        "type": "done",
+        "model": model_alias,
+        "cost": str(cost),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "thinking_summary": thinking_text[:500] if thinking_text else None,
+        "tools_called": tool_calls_made,
+    }
+
+
+def _build_system_with_cache(system_prompt: str) -> List[Dict[str, Any]]:
+    """
+    시스템 프롬프트를 정적/동적 파트로 분리하고 정적 파트에 cache_control 적용.
+    """
+    # "## 현재 상태" 구분자로 Layer 1 / Layer 2 분리
+    sep = "\n\n## 현재 상태"
+    if sep in system_prompt:
+        idx = system_prompt.index(sep)
+        static_part = system_prompt[:idx]
+        dynamic_part = system_prompt[idx:]
+        return [
+            {
+                "type": "text",
+                "text": static_part,
+                "cache_control": {"type": "ephemeral"},
+            },
+            {
+                "type": "text",
+                "text": dynamic_part,
+            },
+        ]
+    # 분리 불가 시 단일 블록
+    return [{"type": "text", "text": system_prompt}]

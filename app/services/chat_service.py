@@ -211,12 +211,15 @@ async def _save_message(
     tokens_out: int = 0,
     attachments: Optional[List[Any]] = None,
     sources: Optional[List[Any]] = None,
+    tools_called: Optional[List[str]] = None,
+    thinking_summary: Optional[str] = None,
 ) -> Dict[str, Any]:
     row = await conn.fetchrow(
         """
         INSERT INTO chat_messages
-            (session_id, role, content, model_used, intent, cost, tokens_in, tokens_out, attachments, sources)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb)
+            (session_id, role, content, model_used, intent, cost, tokens_in, tokens_out,
+             attachments, sources, tools_called, thinking_summary)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12)
         RETURNING *
         """,
         session_id,
@@ -229,6 +232,8 @@ async def _save_message(
         tokens_out,
         json.dumps(attachments or []),
         json.dumps(sources or []),
+        json.dumps(tools_called or []),
+        thinking_summary,
     )
     # Update session message count
     await conn.execute(
@@ -245,8 +250,8 @@ async def send_message_stream(
     model_override: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """
-    사용자 메시지 저장 → 인텐트 분류 → Claude SSE 스트리밍 응답 → 응답 저장.
-    각 SSE 청크: data: {"type": "delta"|"done"|"error", "content": "..."}
+    AADS-185: 3계층 Context Engineering + IntentRouter + ModelSelector + Tool Use 루프.
+    SSE 청크: data: {"type": "delta"|"thinking"|"tool_use"|"tool_result"|"done"|"error", ...}
     """
     conn = await _get_conn()
     try:
@@ -255,28 +260,7 @@ async def send_message_stream(
         # 1. 사용자 메시지 저장
         await _save_message(conn, sid, "user", content, attachments=attachments or [])
 
-        # 2. 인텐트 분류 (ceo_chat.py 의 classify_intent 재사용)
-        try:
-            from app.api.ceo_chat import classify_intent
-            intent = classify_intent(content)
-        except Exception:
-            intent = "strategy"
-
-        # 3. 모델 결정
-        model = model_override or "claude-sonnet-4-6"
-
-        # 4. 세션 히스토리 조회 (최근 10개)
-        hist_rows = await conn.fetch(
-            """
-            SELECT role, content FROM chat_messages
-            WHERE session_id = $1
-            ORDER BY created_at DESC LIMIT 10
-            """,
-            sid,
-        )
-        history = [{"role": r["role"], "content": r["content"]} for r in reversed(hist_rows)]
-
-        # system_prompt + 워크스페이스 이름/ID 조회
+        # 2. 워크스페이스 정보 조회
         sp_row = await conn.fetchrow(
             """
             SELECT w.id::text AS workspace_id, w.system_prompt, w.name AS workspace_name
@@ -286,110 +270,143 @@ async def send_message_stream(
             """,
             sid,
         )
-        base_prompt = (sp_row["system_prompt"] if sp_row and sp_row["system_prompt"]
-                       else "당신은 CEO 전용 AI 어시스턴트입니다.")
-        workspace_name = (sp_row["workspace_name"] if sp_row and sp_row["workspace_name"] else "")
-        workspace_id_str = (sp_row["workspace_id"] if sp_row and sp_row["workspace_id"] else "")
+        base_prompt = (sp_row["system_prompt"] if sp_row and sp_row["system_prompt"] else "")
+        workspace_name = (sp_row["workspace_name"] if sp_row and sp_row["workspace_name"] else "CEO")
 
-        # AADS-183: 컨텍스트 풍부화 — HANDOVER 정보 + 날짜 + 도구 정보 주입
-        from app.services.context_builder import build_system_context
-        injected_context = build_system_context(workspace_name)
-        system_prompt = injected_context + "---\n" + base_prompt
+        # 3. 세션 히스토리 조회 (최근 25개)
+        hist_rows = await conn.fetch(
+            """
+            SELECT role, content FROM chat_messages
+            WHERE session_id = $1 AND (is_compacted IS NULL OR is_compacted = false)
+            ORDER BY created_at DESC LIMIT 25
+            """,
+            sid,
+        )
+        raw_messages = [{"role": r["role"], "content": r["content"]} for r in reversed(hist_rows)]
 
-        # AADS-184: 인텐트→도구 호출→결과 주입
-        tool_result_str = ""
-        sources_data: list = []
-        try:
-            from app.services.tool_executor import execute_tools, build_tool_injection
-            tool_result_str = await execute_tools(intent, content, workspace_id_str)
-            if tool_result_str:
-                sources_data = [{"tool_result": tool_result_str[:500]}]
-                logger.info(f"chat_tool_executed: intent={intent} result_chars={len(tool_result_str)}")
-        except Exception as _tool_err:
-            logger.warning(f"chat_tool_execution_failed: intent={intent} error={_tool_err}")
-            tool_result_str = ""
+        # 4. 3계층 컨텍스트 빌드
+        from app.services.context_builder import build_messages_context
+        messages, system_prompt = await build_messages_context(
+            workspace_name=workspace_name,
+            session_id=session_id,
+            raw_messages=raw_messages,
+            base_system_prompt=base_prompt,
+            db_conn=conn,
+        )
 
-        # 도구 결과를 메시지로 주입 (있을 때만)
-        tool_injection = ""
-        if tool_result_str:
-            from app.services.tool_executor import build_tool_injection
-            tool_injection = build_tool_injection(tool_result_str)
+        # 5. 자동 압축 (20턴 초과 시)
+        from app.services.compaction_service import check_and_compact
+        messages = await check_and_compact(session_id, messages, db_conn=conn)
 
-        # 메시지 구성: 히스토리 + 도구 결과 주입
-        # history[-1]이 현재 user 메시지 — 도구 결과를 해당 메시지에 합산
-        # (Anthropic API: 연속 user 메시지 불가 → 합산 방식 사용)
-        messages_payload = list(history)
-        if tool_injection and messages_payload and messages_payload[-1]["role"] == "user":
-            # 현재 user 메시지에 도구 결과 합산
-            messages_payload[-1] = {
-                "role": "user",
-                "content": messages_payload[-1]["content"] + "\n\n" + tool_injection,
-            }
+        # 6. 인텐트 분류 + 모델/도구 결정
+        from app.services.intent_router import classify, get_model_for_override
+        intent_result = await classify(content, workspace_name)
+        intent = intent_result.intent
 
-        # 5. SSE 스트리밍
+        if model_override:
+            intent_result.model = get_model_for_override(model_override)
+            intent_result.use_gemini_direct = False
+
+        # 7. Gemini Direct (Grounding / Deep Research)
+        if intent_result.use_gemini_direct:
+            if intent_result.gemini_mode == "grounding":
+                from app.services.gemini_search_service import GeminiSearchService
+                svc = GeminiSearchService()
+                result = None
+                try:
+                    result = await svc.search_grounded(content)
+                except Exception as e:
+                    logger.warning(f"gemini_grounding_failed: {e}")
+                if result is None:
+                    from app.services.brave_search_service import BraveSearchService
+                    brave = BraveSearchService()
+                    result = await brave.search(content)
+                yield f"data: {json.dumps({'type': 'delta', 'content': result.text})}\n\n"
+                if result.citations:
+                    yield f"data: {json.dumps({'type': 'sources', 'sources': result.citations})}\n\n"
+                await _save_message(conn, sid, "assistant", result.text,
+                    model_used="gemini-flash", intent=intent, cost=Decimal("0"), sources=result.citations)
+                await conn.execute(
+                    "UPDATE chat_sessions SET updated_at = NOW() WHERE id = $1", sid)
+                yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': 'gemini-flash', 'cost': '0'})}\n\n"
+                return
+
+            elif intent_result.gemini_mode == "deep_research":
+                from app.services.gemini_research_service import GeminiResearchService
+                svc = GeminiResearchService()
+                try:
+                    async for event in svc.start_research_stream(content, session_id, conn):
+                        yield f"data: {json.dumps(event)}\n\n"
+                    return
+                except Exception as e:
+                    logger.warning(f"gemini_deep_research_failed: {e}")
+                    intent_result.model = "claude-sonnet"
+                    intent_result.use_gemini_direct = False
+
+        # 8. 도구 목록 (Anthropic Tool Use 포맷)
+        tools_for_api = None
+        if intent_result.use_tools:
+            from app.services.tool_registry import ToolRegistry
+            tools_for_api = ToolRegistry().get_tools(intent_result.tool_group)
+
+        # 9. 모델 선택기 → SSE 스트리밍
+        from app.services.model_selector import call_stream
         full_response = ""
+        thinking_summary = ""
+        model_used = intent_result.model
+        cost_usd = Decimal("0")
         input_tokens = 0
         output_tokens = 0
-        cost_usd = Decimal("0")
-        # fallback 접두사: 도구 실패 시
-        _fallback_prefix = ""
-        if intent not in ("casual", "strategy", "planning", "decision", "design",
-                          "design_fix", "architect", "code_exec", "browser",
-                          "image_analyze", "video_analyze") and not tool_result_str:
-            try:
-                from app.services.tool_executor import has_tools_for_intent
-                if has_tools_for_intent(intent):
-                    _fallback_prefix = "현재 도구 조회가 실패하여 제한된 정보로 답변합니다.\n\n"
-            except Exception:
-                pass
+        tools_called: list = []
 
-        try:
-            async with _anthropic.messages.stream(
-                model=model,
-                max_tokens=4096,
-                system=system_prompt,
-                messages=messages_payload,
-            ) as stream:
-                # fallback 접두사 먼저 스트리밍
-                if _fallback_prefix:
-                    full_response += _fallback_prefix
-                    yield f"data: {json.dumps({'type': 'delta', 'content': _fallback_prefix})}\n\n"
+        async for event in call_stream(
+            intent_result=intent_result,
+            system_prompt=system_prompt,
+            messages=messages,
+            tools=tools_for_api,
+            model_override=model_override,
+        ):
+            etype = event.get("type", "")
+            if etype == "delta":
+                full_response += event.get("content", "")
+                yield f"data: {json.dumps({'type': 'delta', 'content': event['content']})}\n\n"
+            elif etype == "thinking":
+                thinking_summary += event.get("thinking", "")
+                yield f"data: {json.dumps({'type': 'thinking', 'thinking': event['thinking']})}\n\n"
+            elif etype == "tool_use":
+                tools_called.append(event["tool_name"])
+                yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event['tool_use_id']})}\n\n"
+            elif etype == "tool_result":
+                yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': event['tool_name'], 'content': str(event.get('content', ''))[:500]})}\n\n"
+            elif etype == "done":
+                model_used = event.get("model", intent_result.model)
+                cost_usd = Decimal(str(event.get("cost", "0")))
+                input_tokens = event.get("input_tokens", 0) or 0
+                output_tokens = event.get("output_tokens", 0) or 0
+                thinking_summary = event.get("thinking_summary") or thinking_summary
+                tools_called = event.get("tools_called", tools_called)
+            elif etype == "error":
+                yield f"data: {json.dumps({'type': 'error', 'content': event.get('content', '오류')})}\n\n"
+                return
 
-                async for text in stream.text_stream:
-                    full_response += text
-                    yield f"data: {json.dumps({'type': 'delta', 'content': text})}\n\n"
-
-                final_msg = await stream.get_final_message()
-                input_tokens = final_msg.usage.input_tokens
-                output_tokens = final_msg.usage.output_tokens
-                # 비용 추정 (claude-sonnet-4-6 기준 $3/$15 per 1M)
-                cost_usd = Decimal(str(round(
-                    input_tokens * 3e-6 + output_tokens * 15e-6, 6
-                )))
-
-        except APIStatusError as e:
-            logger.error(f"chat_stream_api_error: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
-            return
-
-        # 6. 어시스턴트 응답 저장 (sources: 도구 호출 결과 JSON)
+        # 10. 응답 저장
         await _save_message(
             conn, sid, "assistant", full_response,
-            model_used=model,
+            model_used=model_used,
             intent=intent,
             cost=cost_usd,
             tokens_in=input_tokens,
             tokens_out=output_tokens,
-            sources=sources_data if sources_data else [],
+            sources=[],
+            tools_called=tools_called,
+            thinking_summary=thinking_summary or None,
         )
-        # 세션 비용 합산
         await conn.execute(
             "UPDATE chat_sessions SET cost_total = cost_total + $1, updated_at = NOW() WHERE id = $2",
-            cost_usd,
-            sid,
+            cost_usd, sid,
         )
 
-        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': model, 'cost': str(cost_usd)})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'thinking_summary': (thinking_summary[:300] if thinking_summary else None)})}\n\n"
 
     finally:
         await conn.close()
