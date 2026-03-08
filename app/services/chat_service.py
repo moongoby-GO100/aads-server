@@ -276,10 +276,10 @@ async def send_message_stream(
         )
         history = [{"role": r["role"], "content": r["content"]} for r in reversed(hist_rows)]
 
-        # system_prompt + 워크스페이스 이름 조회
+        # system_prompt + 워크스페이스 이름/ID 조회
         sp_row = await conn.fetchrow(
             """
-            SELECT w.system_prompt, w.name AS workspace_name
+            SELECT w.id::text AS workspace_id, w.system_prompt, w.name AS workspace_name
             FROM chat_workspaces w
             JOIN chat_sessions s ON s.workspace_id = w.id
             WHERE s.id = $1
@@ -289,25 +289,72 @@ async def send_message_stream(
         base_prompt = (sp_row["system_prompt"] if sp_row and sp_row["system_prompt"]
                        else "당신은 CEO 전용 AI 어시스턴트입니다.")
         workspace_name = (sp_row["workspace_name"] if sp_row and sp_row["workspace_name"] else "")
+        workspace_id_str = (sp_row["workspace_id"] if sp_row and sp_row["workspace_id"] else "")
 
         # AADS-183: 컨텍스트 풍부화 — HANDOVER 정보 + 날짜 + 도구 정보 주입
         from app.services.context_builder import build_system_context
         injected_context = build_system_context(workspace_name)
         system_prompt = injected_context + "---\n" + base_prompt
 
+        # AADS-184: 인텐트→도구 호출→결과 주입
+        tool_result_str = ""
+        sources_data: list = []
+        try:
+            from app.services.tool_executor import execute_tools, build_tool_injection
+            tool_result_str = await execute_tools(intent, content, workspace_id_str)
+            if tool_result_str:
+                sources_data = [{"tool_result": tool_result_str[:500]}]
+                logger.info(f"chat_tool_executed: intent={intent} result_chars={len(tool_result_str)}")
+        except Exception as _tool_err:
+            logger.warning(f"chat_tool_execution_failed: intent={intent} error={_tool_err}")
+            tool_result_str = ""
+
+        # 도구 결과를 메시지로 주입 (있을 때만)
+        tool_injection = ""
+        if tool_result_str:
+            from app.services.tool_executor import build_tool_injection
+            tool_injection = build_tool_injection(tool_result_str)
+
+        # 메시지 구성: 히스토리 + 도구 결과 주입
+        # history[-1]이 현재 user 메시지 — 도구 결과를 해당 메시지에 합산
+        # (Anthropic API: 연속 user 메시지 불가 → 합산 방식 사용)
+        messages_payload = list(history)
+        if tool_injection and messages_payload and messages_payload[-1]["role"] == "user":
+            # 현재 user 메시지에 도구 결과 합산
+            messages_payload[-1] = {
+                "role": "user",
+                "content": messages_payload[-1]["content"] + "\n\n" + tool_injection,
+            }
+
         # 5. SSE 스트리밍
         full_response = ""
         input_tokens = 0
         output_tokens = 0
         cost_usd = Decimal("0")
+        # fallback 접두사: 도구 실패 시
+        _fallback_prefix = ""
+        if intent not in ("casual", "strategy", "planning", "decision", "design",
+                          "design_fix", "architect", "code_exec", "browser",
+                          "image_analyze", "video_analyze") and not tool_result_str:
+            try:
+                from app.services.tool_executor import has_tools_for_intent
+                if has_tools_for_intent(intent):
+                    _fallback_prefix = "현재 도구 조회가 실패하여 제한된 정보로 답변합니다.\n\n"
+            except Exception:
+                pass
 
         try:
             async with _anthropic.messages.stream(
                 model=model,
                 max_tokens=4096,
                 system=system_prompt,
-                messages=history,
+                messages=messages_payload,
             ) as stream:
+                # fallback 접두사 먼저 스트리밍
+                if _fallback_prefix:
+                    full_response += _fallback_prefix
+                    yield f"data: {json.dumps({'type': 'delta', 'content': _fallback_prefix})}\n\n"
+
                 async for text in stream.text_stream:
                     full_response += text
                     yield f"data: {json.dumps({'type': 'delta', 'content': text})}\n\n"
@@ -325,7 +372,7 @@ async def send_message_stream(
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
             return
 
-        # 6. 어시스턴트 응답 저장
+        # 6. 어시스턴트 응답 저장 (sources: 도구 호출 결과 JSON)
         await _save_message(
             conn, sid, "assistant", full_response,
             model_used=model,
@@ -333,6 +380,7 @@ async def send_message_stream(
             cost=cost_usd,
             tokens_in=input_tokens,
             tokens_out=output_tokens,
+            sources=sources_data if sources_data else [],
         )
         # 세션 비용 합산
         await conn.execute(
