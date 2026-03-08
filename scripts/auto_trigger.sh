@@ -32,6 +32,8 @@ DONE_DIR="${DONE_DIR:-/root/.genspark/directives/done}"
 # T-106: 우선순위 디렉토리 및 로그 경로
 PENDING_DIR="${PENDING_DIR:-/root/.genspark/directives/pending}"
 RUNNING_DIR="${RUNNING_DIR:-/root/.genspark/directives/running}"
+# AADS-178: archived 디렉토리 (유효하지 않은 파일 이동)
+ARCHIVED_DIR="${ARCHIVED_DIR:-/root/.genspark/directives/archived}"
 PRIORITY_LOG="/var/log/aads/auto_trigger_priority.log"
 _TDLOG_PRIMARY="/var/log/aads/trigger_decisions.log"
 if touch "${_TDLOG_PRIMARY}" 2>/dev/null; then
@@ -414,6 +416,111 @@ _speculative_preload() {
 }
 # ─── 투기적 실행 함수 끝 ────────────────────────────────────────
 
+# ─── AADS-178: 브릿지 파일 유효성 필터링 ──────────────────────
+# >>>DIRECTIVE_START 블록이 없는 pending 파일을 archived로 이동
+# 동일 task_id 중복 파일은 최신 1개만 유지, 나머지 archived
+_filter_invalid_pending() {
+    local pending_dir="$1"
+    local archived_dir
+    archived_dir="${pending_dir%pending}archived"
+    mkdir -p "$archived_dir" 2>/dev/null || true
+
+    # 1) >>>DIRECTIVE_START 블록 없는 파일 archived 이동
+    for _pf in "${pending_dir}"/*.md; do
+        [ -f "$_pf" ] || continue
+        if ! grep -q ">>>DIRECTIVE_START" "$_pf" 2>/dev/null; then
+            echo "[PREFLIGHT-FILTER] DIRECTIVE_START 없음 → archived: $(basename "$_pf")"
+            mv "$_pf" "$archived_dir/" 2>/dev/null || true
+        fi
+    done
+
+    # 2) 동일 task_id 중복 파일 처리 — 최신 1개 유지, 나머지 archived
+    declare -A _seen_task_ids
+    # 최신 순으로 정렬 (ls -t: 수정시간 최신 우선)
+    while IFS= read -r _pf; do
+        [ -f "$_pf" ] || continue
+        local _tid
+        _tid=$(grep -oP '(AADS|KIS|GO100|SF|NT|SALES|NAS|T)-\d+' "$_pf" 2>/dev/null | head -1 || true)
+        [ -z "$_tid" ] && continue
+        if [ -n "${_seen_task_ids[$_tid]:-}" ]; then
+            echo "[PREFLIGHT-FILTER] 중복 task_id=${_tid} → archived: $(basename "$_pf")"
+            mv "$_pf" "$archived_dir/" 2>/dev/null || true
+        else
+            _seen_task_ids["$_tid"]="$_pf"
+        fi
+    done < <(ls -t "${pending_dir}"/*.md 2>/dev/null || true)
+}
+
+# ─── AADS-178: DEPENDS_ON 교차 확인 (done폴더 + API) ──────────
+# 사용: _check_depends_on <task_id> <directive_file>
+# 반환: 0=충족, 1=미충족(pending 유지)
+# 미충족 시 30초 후 재확인 (최대 3회, exponential backoff: 30/60/120s)
+_check_depends_on() {
+    local task_id="$1"
+    local directive_file="$2"
+    local depends_on_id
+    depends_on_id=$(grep -m1 '^DEPENDS_ON:' "$directive_file" 2>/dev/null | awk '{print $2}' | tr -d '[:space:]' || true)
+    [ -z "$depends_on_id" ] && return 0  # DEPENDS_ON 없으면 통과
+
+    local done_dir="${DONE_DIR:-/root/.genspark/directives/done}"
+    local pending_dir="${PENDING_DIR:-/root/.genspark/directives/pending}"
+    local aads_url
+    aads_url=$(grep '^AADS_API_URL=' /root/.env.aads 2>/dev/null | cut -d= -f2-)
+    [ -z "$aads_url" ] && aads_url="http://localhost:8080/api/v1"
+
+    local max_retries=3
+    local backoff=30
+
+    for i in $(seq 1 $max_retries); do
+        # 1차: done 폴더 파일명 매칭
+        local folder_met=false
+        if ls "${done_dir}"/*"${depends_on_id}"*RESULT*.md 2>/dev/null | head -1 | grep -q .; then
+            folder_met=true
+        fi
+
+        # 2차: AADS API 교차 확인
+        local api_met=false
+        if [ "$folder_met" = "true" ]; then
+            api_met=true  # 폴더에서 확인됐으면 API는 추가 검증 생략 가능
+        else
+            local preflight_resp
+            preflight_resp=$(curl -s --max-time 10 \
+                "${aads_url}/directives/preflight?task_id=${task_id}&depends_on=${depends_on_id}" \
+                2>/dev/null || echo "")
+            if echo "$preflight_resp" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('depends_met') else 1)" 2>/dev/null; then
+                api_met=true
+            fi
+        fi
+
+        if [ "$folder_met" = "true" ] || [ "$api_met" = "true" ]; then
+            echo "  ✅ [DEPENDS_ON] ${depends_on_id} 충족 (시도 ${i}/${max_retries})"
+            return 0
+        fi
+
+        echo "  ⏳ [DEPENDS_ON] ${depends_on_id} 미충족 (시도 ${i}/${max_retries}) — ${backoff}초 후 재확인"
+
+        if [ "$i" -lt "$max_retries" ]; then
+            sleep "$backoff"
+            backoff=$(( backoff * 2 ))
+        fi
+    done
+
+    # 3회 실패 → pending 유지 + Telegram 알림
+    echo "  ❌ [DEPENDS_ON] ${depends_on_id} 미충족 — pending 유지 + Telegram 알림"
+    # 파일을 다시 pending으로 이동 (이미 running 이동 전이므로 위치 확인)
+    if [ -f "${pending_dir}/$(basename "$directive_file")" ]; then
+        echo "  [DEPENDS_ON] 파일이 이미 pending에 있음"
+    else
+        mv "$directive_file" "${pending_dir}/" 2>/dev/null || true
+    fi
+
+    bash "/root/.genspark/send_telegram.sh" \
+        "⚠️ [DEPENDS_ON 미충족] ${task_id}
+선행 태스크: ${depends_on_id}
+→ pending 유지 (3회 확인 실패)" 2>/dev/null || true
+    return 1
+}
+
 # ─── T-106: pending에서 우선순위 기반 파일 선택 함수 ─────────
 _select_next_file() {
     local pending_dir="$1"
@@ -492,6 +599,11 @@ _select_next_file() {
         echo "$next_file"
     fi
 }
+
+# ─── AADS-178: pending 파일 유효성 필터링 (DIRECTIVE_START 블록 + 중복 task_id) ──
+if [ -d "$PENDING_DIR" ] && ls "${PENDING_DIR}"/*.md 2>/dev/null | head -1 > /dev/null 2>&1; then
+    _filter_invalid_pending "$PENDING_DIR"
+fi
 
 # ─── T-106: PREEMPT_P0 긴급 선점 처리 ──────────────────────
 if [ "${PREEMPT_P0:-false}" = "true" ]; then
@@ -593,6 +705,12 @@ except Exception:
         return 0
     fi
 
+    # ─── AADS-178: DEPENDS_ON 교차 확인 (done폴더 + API) ───
+    if ! _check_depends_on "$task_id" "$directive_file"; then
+        echo "  ⏭️ [DEPENDS_ON] 미충족 — 이 지시서 스킵"
+        return 0
+    fi
+
     # ─── AADS-113: running 상태 기록 ───
     record_lifecycle "$task_id" "running"
 
@@ -629,15 +747,18 @@ except Exception:
     local _qa_status _design_status
     _qa_status=$(grep -m1 '^qa_status:' "${result_file}" 2>/dev/null | awk '{print $2}' | tr -d '[:space:]' || echo "")
     _design_status=$(grep -m1 '^design_status:' "${result_file}" 2>/dev/null | awk '{print $2}' | tr -d '[:space:]' || echo "")
+
+    # qa_status=FAIL → 서킷브레이커 차단 신호
     if [ "${_qa_status}" = "FAIL" ]; then
-        echo "  ❌ [QA-GATE] qa_status=FAIL — 서킷브레이커 카운트 증가"
+        echo "  ❌ [QA-GATE] qa_status=FAIL — 서킷브레이커 카운트 증가 (project=${project})"
+        # circuit_breaker_state API에 실패 기록
         local _aads_url
         _aads_url=$(grep '^AADS_API_URL=' /root/.env.aads 2>/dev/null | cut -d= -f2-)
         [ -n "$_aads_url" ] && curl -s -X POST "${_aads_url}/ops/circuit-breaker/increment" \
             -H "Content-Type: application/json" \
             -d "{\"project\":\"${project}\",\"task_id\":\"${task_id}\",\"reason\":\"qa_gate_fail\"}" \
             --max-time 10 > /dev/null 2>&1 || true
-        bash "/root/.genspark/send_telegram.sh" "🚨 [QA-FAIL] ${task_id} QA 2회 초과 — 서킷브레이커+1 (project=${project})" 2>/dev/null || true
+        bash "/root/.genspark/send_telegram.sh" "🚨 [QA-FAIL] ${task_id} QA 2회 초과 실패 — 서킷브레이커 카운트+1 (project=${project})" 2>/dev/null || true
         exec_exit=1
     fi
     # === QA/디자인 상태 추출 끝 ===
@@ -667,8 +788,9 @@ except Exception:
         _update_status_md "$task_id" "SUCCESS" "$_status_sha" "$_status_report" "$_status_next"
 
         # AADS-163: Telegram 알림에 QA/디자인 판정 포함
+        local _qa_tg="${_qa_status:-N/A}" _dg_tg="${_design_status:-N/A}"
         bash "/root/.genspark/send_telegram.sh" "✅ [${project}] ${task_id} 완료
-QA: ${_qa_status:-N/A} | 디자인: ${_design_status:-N/A}
+QA: ${_qa_tg} | 디자인: ${_dg_tg}
 커밋: ${_status_sha:0:8}" 2>/dev/null || true
 
         # AADS-145: final_commit 신호 감지 → 투기적 프리로드 (후처리와 병렬)
