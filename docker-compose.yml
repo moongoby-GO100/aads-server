@@ -42,6 +42,8 @@ services:
       - LOG_LEVEL=INFO
       # aads-postgres 컨테이너 (pgvector/pg15) 연결 (T-011)
       - DATABASE_URL=postgresql://aads:aads_dev_local@aads-postgres:5432/aads
+      # GitHub PAT (AADS-179): 미설정 시 infra-check severity=warning (critical 아님)
+      - GITHUB_PAT=${GITHUB_PAT:-}
     volumes:
       # Docker-in-Docker: DockerSandbox (D-011) 실행을 위한 소켓 마운트
       - /var/run/docker.sock:/var/run/docker.sock

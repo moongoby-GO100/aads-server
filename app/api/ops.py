@@ -1136,11 +1136,11 @@ async def infra_check():
 # ─── AADS-166: 정합성 검증 (Part 4) ─────────────────────────────────────────
 
 @router.get("/ops/consistency-check")
-async def consistency_check():
-    """정합성 검증 (STATUS↔DB, pending↔큐, commit SHA)."""
+async def consistency_check(auto_fix: bool = Query(False, description="불일치 자동 수정 여부")):
+    """정합성 검증 (STATUS↔DB, pending↔큐, commit SHA). auto_fix=true 시 자동 복구."""
     from app.services.health_checker import check_consistency
     try:
-        return await check_consistency()
+        return await check_consistency(auto_fix=auto_fix)
     except Exception as e:
         logger.error("consistency_check_error", error=str(e))
         raise HTTPException(500, str(e))
