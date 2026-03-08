@@ -69,39 +69,61 @@ _FETCH_ALLOWED_SUFFIX = ".newtalk.kr"
 
 async def health_check(message: str, workspace_id: str) -> Dict[str, Any]:
     """
-    서버 3대 상태 + DB + 디스크 + 파이프라인 조회.
-    기존 health_checker.full_health_check() 재사용.
+    서버 3대 상태 + DB + 디스크 + 파이프라인 조회 (경량 버전, 8초 이내).
+    quick_health() + _check_db() + _check_disk() 병렬 실행.
     """
     try:
-        from app.services.health_checker import full_health_check
-        result = await asyncio.wait_for(full_health_check(), timeout=12)
-        # 핵심 정보만 추출 (크기 제한)
-        sections = result.get("sections", {})
-        infra = sections.get("infra", {})
-        pipeline = sections.get("pipeline", {})
-        directives = sections.get("directives", {})
-        existing = sections.get("existing_health", {})
+        from app.services.health_checker import (
+            quick_health, _check_db, _check_disk,
+            scan_directive_folder,
+        )
 
-        summary = {
-            "status": result.get("status", "UNKNOWN"),
-            "checked_at": result.get("checked_at", ""),
-            "summary_kr": result.get("summary_kr", ""),
-            "db": infra.get("db", {}),
-            "disk_68": infra.get("disk_68", {}),
-            "disk_211": infra.get("disk_211", {}),
-            "disk_114": infra.get("disk_114", {}),
-            "ssh_211": infra.get("ssh_211", {}),
-            "ssh_114": infra.get("ssh_114", {}),
-            "pipeline_overall": pipeline.get("overall", ""),
-            "server_211": pipeline.get("server_211", {}),
-            "directives": directives,
-            "stalled_running": existing.get("stalled_running", 0),
-            "completed_today": existing.get("completed_today", 0),
-            "issues": result.get("issues", [])[:5],
+        # 로컬 체크만 병렬 실행 (외부 SSH/HTTP 제외 — 타임아웃 방지)
+        quick, db_res, disk_res, pending_scan, running_scan = (
+            await asyncio.gather(
+                quick_health(),
+                _check_db(),
+                _check_disk(),
+                scan_directive_folder("pending"),
+                scan_directive_folder("running"),
+                return_exceptions=True,
+            )
+        )
+
+        def _safe(v: Any, default: Any = {}) -> Any:
+            return default if isinstance(v, Exception) else (v or default)
+
+        quick = _safe(quick, {})
+        db_res = _safe(db_res, {})
+        disk_res = _safe(disk_res, {})
+        pending_scan = _safe(pending_scan, {"count": 0})
+        running_scan = _safe(running_scan, {"count": 0})
+
+        return {
+            "status": quick.get("status", "UNKNOWN"),
+            "checked_at": quick.get("checked_at", datetime.now(KST).strftime("%Y-%m-%d %H:%M KST")),
+            "server_68": {
+                "ok": True,
+                "role": "AADS Backend+Dashboard (현재 서버)",
+                "db_ok": db_res.get("ok", False),
+                "db_latency_ms": db_res.get("latency_ms", "?"),
+                "disk_usage_pct": disk_res.get("usage_pct", "?"),
+                "disk_used": disk_res.get("used", "?"),
+                "disk_total": disk_res.get("total", "?"),
+            },
+            "server_211": {"note": "Hub/bridge — SSH 체크 제외 (별도 모니터링)"},
+            "server_114": {"note": "SF/NTV2/NAS — SSH 체크 제외 (별도 모니터링)"},
+            "directives": {
+                "pending": pending_scan.get("count", 0),
+                "running": running_scan.get("count", 0),
+            },
+            "pipeline": {
+                "stalled": quick.get("stalled", 0),
+                "running_sessions": quick.get("running", 0),
+                "pipeline_status": quick.get("status", "UNKNOWN"),
+            },
+            "completed_today": quick.get("completed_today", 0),
         }
-        return summary
-    except asyncio.TimeoutError:
-        return {"error": "헬스체크 타임아웃 (12초 초과)", "status": "TIMEOUT"}
     except Exception as e:
         logger.error(f"chat_tool_health_check_error: {e}")
         return {"error": str(e), "status": "ERROR"}
