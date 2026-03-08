@@ -276,17 +276,24 @@ async def send_message_stream(
         )
         history = [{"role": r["role"], "content": r["content"]} for r in reversed(hist_rows)]
 
-        # system_prompt 조회
+        # system_prompt + 워크스페이스 이름 조회
         sp_row = await conn.fetchrow(
             """
-            SELECT w.system_prompt FROM chat_workspaces w
+            SELECT w.system_prompt, w.name AS workspace_name
+            FROM chat_workspaces w
             JOIN chat_sessions s ON s.workspace_id = w.id
             WHERE s.id = $1
             """,
             sid,
         )
-        system_prompt = (sp_row["system_prompt"] if sp_row and sp_row["system_prompt"]
-                         else "당신은 CEO 전용 AI 어시스턴트입니다.")
+        base_prompt = (sp_row["system_prompt"] if sp_row and sp_row["system_prompt"]
+                       else "당신은 CEO 전용 AI 어시스턴트입니다.")
+        workspace_name = (sp_row["workspace_name"] if sp_row and sp_row["workspace_name"] else "")
+
+        # AADS-183: 컨텍스트 풍부화 — HANDOVER 정보 + 날짜 + 도구 정보 주입
+        from app.services.context_builder import build_system_context
+        injected_context = build_system_context(workspace_name)
+        system_prompt = injected_context + "---\n" + base_prompt
 
         # 5. SSE 스트리밍
         full_response = ""
