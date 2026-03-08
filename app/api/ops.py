@@ -1218,3 +1218,175 @@ async def ops_stream():
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ─── AADS-168: Claude 프로세스 감시 데몬 API ─────────────────────────────────
+
+import glob as _glob
+import subprocess as _subprocess
+
+_WATCHDOG_LOG_DIR = "/root/aads/logs/watchdog_reports"
+_WATCHDOG_SCRIPT = "/root/aads/scripts/claude_watchdog.py"
+_SERVER_211_HOST_OPS = "211.188.51.113"
+_SSH_KEY_OPS = "/root/.ssh/id_ed25519_newtalk"
+
+
+class ClaudeCleanupRequest(BaseModel):
+    server: Optional[str] = None  # "68"|"211"|"114"|None(전체)
+    reason: Optional[str] = "manual_ceo_trigger"
+
+
+class BridgeRestartRequest(BaseModel):
+    reason: Optional[str] = "manual_ceo_trigger"
+
+
+@router.get("/ops/claude-processes")
+async def get_claude_processes(limit: int = Query(5, le=20)):
+    """최근 watchdog 보고서 조회 (3서버 프로세스 현황, 이슈, 자동정리 이력)."""
+    try:
+        log_dir = _WATCHDOG_LOG_DIR
+        if not os.path.isdir(log_dir):
+            return {"ok": True, "reports": [], "message": "watchdog_reports 디렉토리 없음"}
+
+        pattern = os.path.join(log_dir, "*.json")
+        files = sorted(_glob.glob(pattern), reverse=True)[:limit]
+
+        reports = []
+        for fpath in files:
+            try:
+                with open(fpath, encoding="utf-8") as f:
+                    data = json.load(f)
+                reports.append({
+                    "file": os.path.basename(fpath),
+                    "generated_at": data.get("generated_at"),
+                    "summary": data.get("summary"),
+                    "issues": data.get("issues", {}).get("all", []),
+                    "cleanup_log": data.get("cleanup_log", []),
+                    "servers": {
+                        sid: {
+                            "scan_ok": sdata.get("scan_ok"),
+                            "process_counts": sdata.get("process_counts"),
+                            "running_slots_db": sdata.get("running_slots_db"),
+                            "bridge_alive": sdata.get("bridge_alive"),
+                            "auto_trigger_alive": sdata.get("auto_trigger_alive"),
+                        }
+                        for sid, sdata in (data.get("servers") or {}).items()
+                    },
+                })
+            except Exception:
+                continue
+
+        return {
+            "ok": True,
+            "count": len(reports),
+            "reports": reports,
+        }
+    except Exception as e:
+        logger.error("get_claude_processes_error", error=str(e))
+        raise HTTPException(500, str(e))
+
+
+@router.post("/ops/claude-cleanup")
+async def claude_cleanup(req: ClaudeCleanupRequest):
+    """수동 claude_watchdog.py 정리 트리거 (CEO 확인용)."""
+    try:
+        env = os.environ.copy()
+        # watchdog에 필요한 env 주입 (DB, Telegram)
+        env_file = "/root/aads/aads-server/.env"
+        if os.path.isfile(env_file):
+            with open(env_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if "=" in line and not line.startswith("#"):
+                        k, _, v = line.partition("=")
+                        env.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+        cmd = ["python3", _WATCHDOG_SCRIPT]
+        proc = _subprocess.run(
+            cmd,
+            capture_output=True, text=True, timeout=90, env=env,
+            cwd="/root/aads"
+        )
+        stdout = proc.stdout.strip()
+        stderr = proc.stderr[-500:].strip() if proc.stderr else ""
+
+        summary = {}
+        if stdout:
+            try:
+                summary = json.loads(stdout)
+            except Exception:
+                summary = {"raw_output": stdout[:500]}
+
+        logger.info(
+            "claude_cleanup_manual",
+            server=req.server, reason=req.reason,
+            returncode=proc.returncode, summary=summary
+        )
+        return {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "summary": summary,
+            "stderr": stderr,
+            "reason": req.reason,
+            "server_filter": req.server,
+        }
+    except _subprocess.TimeoutExpired:
+        logger.error("claude_cleanup_timeout")
+        raise HTTPException(504, "watchdog 실행 타임아웃 (90초)")
+    except Exception as e:
+        logger.error("claude_cleanup_error", error=str(e))
+        raise HTTPException(500, str(e))
+
+
+@router.post("/ops/bridge-restart")
+async def bridge_restart(req: BridgeRestartRequest):
+    """bridge.py 원격 재시작 (서버 211 SSH)."""
+    try:
+        ssh_cmd = [
+            "ssh",
+            "-i", _SSH_KEY_OPS,
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=10",
+            "-o", "BatchMode=yes",
+            f"root@{_SERVER_211_HOST_OPS}",
+            "nohup python3 /root/aads/scripts/bridge.py >> /root/aads/logs/bridge.log 2>&1 &",
+        ]
+        result = _subprocess.run(
+            ssh_cmd, capture_output=True, text=True, timeout=20
+        )
+        ok = result.returncode == 0
+
+        # 재시작 후 bridge.py 실제 실행 확인
+        import time
+        time.sleep(2)
+        chk_cmd = [
+            "ssh",
+            "-i", _SSH_KEY_OPS,
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=5",
+            "-o", "BatchMode=yes",
+            f"root@{_SERVER_211_HOST_OPS}",
+            "pgrep -f bridge.py",
+        ]
+        chk = _subprocess.run(chk_cmd, capture_output=True, text=True, timeout=10)
+        bridge_alive = chk.returncode == 0 and chk.stdout.strip() != ""
+
+        logger.info(
+            "bridge_restart",
+            reason=req.reason,
+            ssh_ok=ok,
+            bridge_alive=bridge_alive
+        )
+        return {
+            "ok": ok,
+            "bridge_alive": bridge_alive,
+            "returncode": result.returncode,
+            "stderr": result.stderr[:300] if result.stderr else "",
+            "reason": req.reason,
+            "server": "211",
+        }
+    except _subprocess.TimeoutExpired:
+        raise HTTPException(504, "SSH 타임아웃")
+    except Exception as e:
+        logger.error("bridge_restart_error", error=str(e))
+        raise HTTPException(500, str(e))
