@@ -1203,6 +1203,34 @@ async def ops_stream():
                 except Exception:
                     pass
 
+                # 4) claude_watchdog 이벤트 (AADS-169): 최신 watchdog 보고서 요약
+                try:
+                    wd_dir = "/root/aads/logs/watchdog_reports"
+                    if os.path.isdir(wd_dir):
+                        import glob as _wd_glob
+                        wd_files = sorted(_wd_glob.glob(os.path.join(wd_dir, "*.json")), reverse=True)
+                        if wd_files:
+                            with open(wd_files[0], encoding="utf-8") as _wf:
+                                wd_data = json.load(_wf)
+                            wd_summary = {
+                                "generated_at": wd_data.get("generated_at"),
+                                "summary": wd_data.get("summary"),
+                                "servers": {
+                                    sid: {
+                                        "scan_ok": sdata.get("scan_ok"),
+                                        "process_counts": sdata.get("process_counts"),
+                                        "bridge_alive": sdata.get("bridge_alive"),
+                                        "auto_trigger_alive": sdata.get("auto_trigger_alive"),
+                                    }
+                                    for sid, sdata in (wd_data.get("servers") or {}).items()
+                                },
+                                "issues": wd_data.get("issues", {}).get("all", [])[:5],
+                                "cleanup_log": wd_data.get("cleanup_log", [])[:5],
+                            }
+                            yield f"event: claude_watchdog\ndata: {json.dumps(wd_summary, default=str)}\n\n"
+                except Exception:
+                    pass
+
                 await asyncio.sleep(5)
         except asyncio.CancelledError:
             pass
@@ -1234,6 +1262,7 @@ _SSH_KEY_OPS = "/root/.ssh/id_ed25519_newtalk"
 class ClaudeCleanupRequest(BaseModel):
     server: Optional[str] = None  # "68"|"211"|"114"|None(전체)
     reason: Optional[str] = "manual_ceo_trigger"
+    dry_run: bool = False  # True시 스크립트 실행 없이 최신 보고서만 반환 (AADS-169)
 
 
 class BridgeRestartRequest(BaseModel):
@@ -1288,8 +1317,41 @@ async def get_claude_processes(limit: int = Query(5, le=20)):
 
 @router.post("/ops/claude-cleanup")
 async def claude_cleanup(req: ClaudeCleanupRequest):
-    """수동 claude_watchdog.py 정리 트리거 (CEO 확인용)."""
+    """수동 claude_watchdog.py 정리 트리거 (CEO 확인용). dry_run=True시 최신 보고서만 반환."""
     try:
+        # AADS-169: dry_run=True → 스크립트 실행 없이 최신 보고서 반환
+        if req.dry_run:
+            log_dir = _WATCHDOG_LOG_DIR
+            latest_report = {}
+            if os.path.isdir(log_dir):
+                pattern = os.path.join(log_dir, "*.json")
+                files = sorted(_glob.glob(pattern), reverse=True)
+                if files:
+                    try:
+                        with open(files[0], encoding="utf-8") as f:
+                            latest_report = json.load(f)
+                    except Exception:
+                        pass
+            logger.info("claude_cleanup_dry_run", server=req.server, reason=req.reason)
+            return {
+                "ok": True,
+                "dry_run": True,
+                "summary": latest_report.get("summary", {}),
+                "issues": latest_report.get("issues", {}).get("all", []),
+                "servers": {
+                    sid: {
+                        "scan_ok": sdata.get("scan_ok"),
+                        "process_counts": sdata.get("process_counts"),
+                        "bridge_alive": sdata.get("bridge_alive"),
+                        "auto_trigger_alive": sdata.get("auto_trigger_alive"),
+                    }
+                    for sid, sdata in (latest_report.get("servers") or {}).items()
+                },
+                "generated_at": latest_report.get("generated_at"),
+                "reason": req.reason,
+                "server_filter": req.server,
+            }
+
         env = os.environ.copy()
         # watchdog에 필요한 env 주입 (DB, Telegram)
         env_file = "/root/aads/aads-server/.env"
@@ -1324,6 +1386,7 @@ async def claude_cleanup(req: ClaudeCleanupRequest):
         )
         return {
             "ok": proc.returncode == 0,
+            "dry_run": False,
             "returncode": proc.returncode,
             "summary": summary,
             "stderr": stderr,
