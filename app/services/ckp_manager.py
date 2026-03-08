@@ -189,16 +189,54 @@ class CKPManager:
     # ─── 원격 프로젝트 스캔 ──────────────────────────────────────────────────
 
     async def scan_remote_project(self, project: str) -> CKPScanResult:
-        """원격 프로젝트(SSH 경유) 스캔 — 스텁 구현."""
-        # SSH 접근 불가(claudebot 키 없음) → 로컬 staged HANDOVER로 대체
+        """원격 프로젝트(SSH 경유) 스캔.
+        SSH 접근 불가(claudebot 키 없음) → .claude/projects/{project}/ CKP 파일 사용.
+        staged HANDOVER로 보완하여 DB 메타데이터 등록.
+        """
+        import time
+        start = time.monotonic()
         result = CKPScanResult(project=project)
-        handover_path = AADS_ROOT / "aads-docs" / f"{project}-HANDOVER.md"
-        if handover_path.exists():
-            result.scanned_files = 1
-            result.generated_files = [str(handover_path)]
-            logger.info(f"[CKP] 원격 프로젝트 {project}: staged HANDOVER 사용")
+
+        # .claude/projects/{project}/ CKP 디렉토리 확인
+        projects_ckp_dir = AADS_ROOT / ".claude" / "projects" / project
+        if projects_ckp_dir.exists():
+            generated = []
+            scanned = 0
+            for fname in ["CLAUDE.md", "ARCHITECTURE.md", "CODEBASE-MAP.md",
+                          "DEPENDENCY-MAP.md", "LESSONS.md"]:
+                fpath = projects_ckp_dir / fname
+                if fpath.exists():
+                    generated.append(str(fpath.relative_to(AADS_ROOT)))
+                    scanned += 1
+            result.scanned_files = scanned
+            result.generated_files = generated
+            result.total_tokens = sum(
+                len((projects_ckp_dir / f).read_text(encoding="utf-8", errors="ignore")) // 4
+                for f in ["CLAUDE.md", "ARCHITECTURE.md", "CODEBASE-MAP.md",
+                          "DEPENDENCY-MAP.md", "LESSONS.md"]
+                if (projects_ckp_dir / f).exists()
+            )
+            logger.info(
+                f"[CKP] 원격 프로젝트 {project}: .claude/projects/ CKP {scanned}파일 사용"
+            )
         else:
-            result.errors.append(f"SSH 접근 불가, staged HANDOVER 없음: {project}")
+            # 폴백: staged HANDOVER.md
+            handover_path = AADS_ROOT / "aads-docs" / f"{project}-HANDOVER.md"
+            if handover_path.exists():
+                result.scanned_files = 1
+                result.generated_files = [str(handover_path)]
+                logger.info(f"[CKP] 원격 프로젝트 {project}: staged HANDOVER 사용")
+            else:
+                result.errors.append(
+                    f"SSH 접근 불가, CKP 디렉토리·staged HANDOVER 없음: {project}"
+                )
+
+        result.duration_seconds = time.monotonic() - start
+
+        # DB 메타데이터 기록
+        if self.db and result.scanned_files > 0:
+            await self._upsert_ckp_index(project, projects_ckp_dir, result)
+
         return result
 
     # ─── 증분 업데이트 ────────────────────────────────────────────────────────
@@ -242,9 +280,15 @@ class CKPManager:
     # ─── CKP 요약 생성 ────────────────────────────────────────────────────────
 
     async def get_ckp_summary(self, project: str, max_tokens: int = 2000) -> str:
-        """Context Builder에 주입할 CKP 요약 생성."""
-        root = AADS_ROOT if project == "AADS" else AADS_ROOT / project.lower()
-        ckp_dir = root / ".claude"
+        """Context Builder에 주입할 CKP 요약 생성.
+        AADS: .claude/ 직접 사용.
+        원격 프로젝트: .claude/projects/{project}/ 우선, 없으면 AADS_ROOT/.claude/ fallback.
+        """
+        if project == "AADS":
+            ckp_dir = AADS_ROOT / ".claude"
+        else:
+            projects_dir = AADS_ROOT / ".claude" / "projects" / project
+            ckp_dir = projects_dir if projects_dir.exists() else AADS_ROOT / ".claude"
 
         parts = []
         used_tokens = 0

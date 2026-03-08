@@ -74,19 +74,74 @@ async def _build_layer2_dynamic(
 
 
 async def _build_ckp_layer(workspace_name: str) -> str:
-    """AADS-186B: CKP 요약을 <codebase_knowledge> 태그로 반환."""
+    """AADS-186B/D: CKP 요약을 <codebase_knowledge> 태그로 반환.
+    AADS/CEO 워크스페이스: AADS 프로젝트 CKP 주입.
+    원격 프로젝트 워크스페이스 (KIS/GO100/SF/NTV2/NAS): 해당 프로젝트 CKP 주입.
+    """
     ws = (workspace_name or "").upper()
-    if ws not in ("AADS", "CEO"):
+    _SUPPORTED_WS = {"AADS", "CEO", "KIS", "GO100", "SF", "NTV2", "NAS"}
+    if ws not in _SUPPORTED_WS:
         return ""
     try:
         from app.services.ckp_manager import CKPManager
         mgr = CKPManager(db_conn=None)
-        summary = await mgr.get_ckp_summary("AADS", max_tokens=1500)
+        project_key = "AADS" if ws in ("AADS", "CEO") else ws
+        summary = await mgr.get_ckp_summary(project_key, max_tokens=1500)
         if summary:
             return f"\n<codebase_knowledge>\n{summary}\n</codebase_knowledge>"
     except Exception as e:
         logger.debug(f"[CKP] context_builder CKP 주입 실패: {e}")
     return ""
+
+
+def _build_tool_guide_layer() -> str:
+    """AADS-186D: 도구 카테고리 안내 텍스트 반환 (Layer 1 보조)."""
+    try:
+        from app.services.tool_registry import TOOL_CATEGORY_GUIDE
+        return f"\n\n{TOOL_CATEGORY_GUIDE}"
+    except Exception as e:
+        logger.debug(f"[ToolGuide] 도구 안내 로드 실패: {e}")
+        return ""
+
+
+async def _build_memory_layer() -> str:
+    """
+    AADS-186E-2: 영속 메모리 주입.
+    <recent_sessions>: 최근 3개 세션 노트 (Layer 2)
+    <learned_patterns>: CEO 선호도 + 알려진 이슈 (Layer 4)
+    186B의 <codebase_knowledge>와 별도 XML 태그 사용.
+    """
+    parts: list[str] = []
+    try:
+        from app.services.memory_manager import get_memory_manager
+        mgr = get_memory_manager()
+
+        # 최근 세션 노트 (Layer 2)
+        notes = await mgr.get_recent_notes(3)
+        if notes:
+            note_lines = []
+            for note in notes:
+                line = f"- {note.summary}"
+                if note.key_decisions:
+                    line += f" | 결정: {', '.join(note.key_decisions[:2])}"
+                if note.action_items:
+                    line += f" | 액션: {', '.join(note.action_items[:2])}"
+                note_lines.append(line)
+            parts.append(
+                "<recent_sessions>\n"
+                + "\n".join(note_lines)
+                + "\n</recent_sessions>"
+            )
+
+        # 메타 기억 요약 (Layer 4)
+        meta = await mgr.get_meta_context(max_tokens=500)
+        if meta:
+            parts.append(f"<learned_patterns>\n{meta}\n</learned_patterns>")
+
+    except Exception as e:
+        logger.debug(f"[Memory] context_builder 메모리 주입 실패: {e}")
+
+    return "\n" + "\n".join(parts) if parts else ""
 
 
 # ─── Layer 3: 대화 히스토리 ────────────────────────────────────────────────
@@ -156,10 +211,13 @@ async def build_messages_context(
     # Layer 1 (system_prompt_v2 기반 XML 섹션)
     layer1 = build_layer1(ws_key, base_system_prompt)
 
-    # Layer 2
+    # Layer 2 (동적 상태)
     layer2 = await _build_layer2_dynamic(workspace_name, db_conn=db_conn)
 
-    system_prompt = layer1 + "\n\n" + layer2
+    # Layer 2+: 메모리 주입 (AADS-186E-2) — 186B CKP와 별도 XML 태그
+    memory_layer = await _build_memory_layer()
+
+    system_prompt = layer1 + "\n\n" + layer2 + memory_layer
 
     # Layer 3
     messages = _build_layer3_messages(raw_messages)
@@ -204,26 +262,35 @@ async def build(
     """
     ws_key = _normalize_workspace(workspace_name)
 
-    # Layer 1 (정적 — 캐싱 대상, system_prompt_v2 기반 XML 섹션)
-    layer1 = build_layer1(ws_key, base_system_prompt)
+    # Layer 1 (정적 — 캐싱 대상, system_prompt_v2 기반 XML 섹션 + 도구 안내)
+    layer1_base = build_layer1(ws_key, base_system_prompt)
+    tool_guide = _build_tool_guide_layer()  # AADS-186D: 도구 카테고리 안내
+    layer1 = layer1_base + tool_guide
 
-    # Layer 2 (동적) + CKP 주입 (AADS-186B)
+    # Layer 2 (동적) + CKP 주입 (AADS-186B/D) + 메모리 주입 (AADS-186E-2)
     layer2 = await _build_layer2_dynamic(workspace_name, db_conn=db_conn)
     ckp_layer = await _build_ckp_layer(workspace_name)
-    layer2_full = layer2 + ckp_layer
+    memory_layer = await _build_memory_layer()  # <recent_sessions> + <learned_patterns>
+    layer2_full = layer2 + ckp_layer + memory_layer
 
-    # Anthropic 시스템 블록 (cache_control = Prompt Caching 대상)
-    system_blocks: List[Dict[str, Any]] = [
-        {
-            "type": "text",
-            "text": layer1,
-            "cache_control": {"type": "ephemeral"},
-        },
-        {
-            "type": "text",
-            "text": layer2_full,
-        },
-    ]
+    # AADS-186D: Prompt Caching 최적화 적용
+    try:
+        from app.core.cache_config import build_cached_system_blocks
+        system_blocks = build_cached_system_blocks(layer1, layer2, ckp_layer + memory_layer)
+    except Exception:
+        # fallback: 기존 방식
+        system_blocks = [
+            {
+                "type": "text",
+                "text": layer1,
+                "cache_control": {"type": "ephemeral"},
+            },
+            {
+                "type": "text",
+                "text": layer2_full,
+            },
+        ]
+
     system_text = layer1 + "\n\n---\n\n" + layer2_full
 
     return ContextResult(
