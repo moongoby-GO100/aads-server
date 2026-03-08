@@ -70,6 +70,8 @@ services:
       - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql://aads:aads_dev_local@aads-postgres:5432/aads
       - TZ=Asia/Seoul
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - BRAVE_API_KEY=${BRAVE_API_KEY}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /root/.genspark/directives:/root/.genspark/directives:ro
