@@ -18,6 +18,7 @@ import base64
 import httpx
 import logging
 import re
+import shlex
 import subprocess
 
 from pathlib import Path
@@ -246,9 +247,13 @@ _PROJECT_SERVER_MAP: Dict[str, Dict[str, str]] = {
 }
 
 # SSH 보안 규칙 (하드코딩, LLM 우회 불가)
-_SSH_DANGEROUS_CHARS = re.compile(r'[;|&$`\n]|\$\(|>>')
+# 화이트리스트: 영숫자, 점, 하이픈, 밑줄, 슬래시만 허용 (보안 리뷰 반영)
+_SSH_PATH_WHITELIST = re.compile(r'^[a-zA-Z0-9._/\-]*$')
+_SSH_KEYWORD_WHITELIST = re.compile(r'^[a-zA-Z0-9._\-]*$')
 _SSH_SENSITIVE_PATTERNS = re.compile(
-    r'(\.env|\.ssh/|id_rsa|\.git/config|secrets|password|token)',
+    r'(\.env|\.ssh/|id_rsa|\.git/config|secrets|password|token'
+    r'|\.npmrc|\.pypirc|\.netrc|credentials|private_key|kubeconfig'
+    r'|\.aws/|\.kube/|\.docker/|\.pem$|\.key$|authorized_keys|known_hosts)',
     re.IGNORECASE,
 )
 _SSH_TIMEOUT = 10  # 초 (ConnectTimeout=5 + CommandTimeout=5)
@@ -415,7 +420,7 @@ async def tool_fetch_url(url: str) -> str:
 
 def _validate_ssh_path(raw_path: str, workdir: str) -> Optional[str]:
     """SSH 경로 보안 검증. 위반 시 에러 문자열, 통과 시 None."""
-    if _SSH_DANGEROUS_CHARS.search(raw_path):
+    if not _SSH_PATH_WHITELIST.match(raw_path):
         return "[ERROR] 접근 거부: 경로에 허용되지 않는 문자가 포함되어 있습니다."
     if _SSH_SENSITIVE_PATTERNS.search(raw_path):
         return "[ERROR] 접근 거부: 민감한 파일 패턴이 감지되었습니다."
@@ -445,16 +450,16 @@ async def tool_list_remote_dir(
         err = _validate_ssh_path(path, workdir)
         if err:
             return err
-    if keyword and _SSH_DANGEROUS_CHARS.search(keyword):
+    if keyword and not _SSH_KEYWORD_WHITELIST.match(keyword):
         return "[ERROR] 접근 거부: keyword에 허용되지 않는 문자가 포함되어 있습니다."
 
     from posixpath import normpath, join as pjoin
     target = normpath(pjoin(workdir, path)) if path else workdir
 
-    # find 명령 조립 (읽기 전용)
-    find_cmd = f"find {target} -maxdepth {max_depth} -type f"
+    # find 명령 조립 (읽기 전용, shlex.quote로 인젝션 방지)
+    find_cmd = f"find {shlex.quote(target)} -maxdepth {max_depth} -type f"
     if keyword:
-        find_cmd += f" -name '*{keyword}*'"
+        find_cmd += f" -name {shlex.quote('*' + keyword + '*')}"
     find_cmd += f" | head -{_SSH_MAX_FILES}"
 
     try:
@@ -468,7 +473,9 @@ async def tool_list_remote_dir(
         output = stdout.decode("utf-8", errors="replace")
         if not output.strip():
             err_msg = stderr.decode("utf-8", errors="replace")[:500]
-            return f"[{project}] 파일 없음 (경로: {target})\n{err_msg}" if err_msg else f"[{project}] 파일 없음 (경로: {target})"
+            if err_msg:
+                logger.warning(f"ssh_list_remote_dir_stderr project={project} err={err_msg}")
+            return f"[{project}] 파일 없음 (경로: {target})"
         if len(output.encode("utf-8")) > _SSH_MAX_RESULT_BYTES:
             output = output[:_SSH_MAX_RESULT_BYTES] + "\n...(50KB 초과, 잘림)"
         return f"[{project} 디렉터리 — {target}]\n{output}"
@@ -499,7 +506,7 @@ async def tool_read_remote_file(project: str, file_path: str) -> str:
     try:
         proc = await asyncio.create_subprocess_exec(
             "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
-            f"root@{server}", f"cat {resolved}",
+            f"root@{server}", f"cat {shlex.quote(resolved)}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -507,7 +514,8 @@ async def tool_read_remote_file(project: str, file_path: str) -> str:
         output = stdout.decode("utf-8", errors="replace")
         if proc.returncode != 0:
             err_msg = stderr.decode("utf-8", errors="replace")[:500]
-            return f"[ERROR] 파일 읽기 실패 ({resolved}): {err_msg}"
+            logger.warning(f"ssh_read_remote_file_failed project={project} path={resolved} err={err_msg}")
+            return f"[ERROR] 파일 읽기 실패: 파일이 존재하지 않거나 읽기 권한이 없습니다."
         if len(output.encode("utf-8")) > _SSH_MAX_RESULT_BYTES:
             output = output[:_SSH_MAX_RESULT_BYTES] + "\n...(50KB 초과, 잘림)"
         return f"[{project} 파일 — {resolved}]\n{output}"
