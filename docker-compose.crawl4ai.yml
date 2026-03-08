@@ -1,0 +1,33 @@
+# AADS-186E-1: Crawl4AI 선택적 배포
+# 서버 68 디스크 여유 시 배포 (이미지 약 2GB)
+# 미배포 시에도 Jina Reader만으로 동작
+#
+# 배포: docker compose -f docker-compose.crawl4ai.yml up -d
+# 헬스: curl http://localhost:11235/health
+
+services:
+  crawl4ai:
+    image: unclecode/crawl4ai:latest
+    container_name: aads-crawl4ai
+    ports:
+      - "11235:11235"
+    restart: unless-stopped
+    environment:
+      - CRAWL4AI_API_TOKEN=${CRAWL4AI_API_TOKEN:-}
+    volumes:
+      - crawl4ai_data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11235/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  crawl4ai_data:
+    driver: local

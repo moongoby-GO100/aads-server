@@ -1,13 +1,68 @@
 """
-AADS-186A: 도구 레지스트리 — Anthropic Tool Use API 포맷
+AADS-186A/186D: 도구 레지스트리 — Anthropic Tool Use API 포맷
 - 각 도구에 input_examples 추가 (실제 AADS 데이터 기반)
 - list_remote_dir/read_remote_file/query_database에 response_format 파라미터 추가
 - 신규 고수준 워크플로우 도구: inspect_service, get_all_service_status, generate_directive
+- AADS-186D: Tool Search Tool — defer_loading 메타데이터 추가
+  * defer_loading: false → 상시 로드 (항상 Anthropic API에 포함)
+  * defer_loading: true  → 온디맨드 (Tool Search Tool 검색 후 사용)
 tool_group: 'system' | 'action' | 'search' | 'workflow' | 'all'
 """
 from __future__ import annotations
 
 from typing import Any, Dict, List
+
+# ─── AADS-186D: defer_loading 분류 ───────────────────────────────────────────
+# false (상시 로드): AI가 매 요청마다 반드시 알아야 하는 핵심 도구
+# true  (온디맨드):  특정 작업 시에만 필요한 도구
+_DEFER_LOADING: Dict[str, bool] = {
+    "health_check": False,            # 상태 확인 — 빈번 사용
+    "dashboard_query": True,
+    "task_history": True,
+    "server_status": True,
+    "directive_create": False,        # 지시서 생성 — 핵심 액션
+    "read_github_file": True,
+    "query_database": True,
+    "read_remote_file": True,
+    "list_remote_dir": True,
+    "cost_report": True,
+    "web_search_brave": True,
+    "inspect_service": True,
+    "get_all_service_status": False,  # 전체 상태 — 빈번 조회
+    "generate_directive": False,      # 지시서 자동생성 — 핵심 액션
+    # AADS-186E-1: 크롤링 도구 — 온디맨드
+    "jina_read": True,
+    "crawl4ai_fetch": True,
+    "deep_crawl": True,
+    # AADS-186E-2: 메모리 도구 — 온디맨드
+    "code_execution": True,
+    "save_note": True,
+    "recall_notes": True,
+    "learn_pattern": True,
+}
+
+# 도구 카테고리 안내 (시스템 프롬프트 주입용 — context_builder.py에서 사용)
+TOOL_CATEGORY_GUIDE = """\
+## 사용 가능한 도구 카테고리
+
+### 상시 로드 도구 (항상 사용 가능)
+- health_check: AADS 서버 헬스체크 (서버68/211/114)
+- directive_create: 지시서 블록 생성 (>>>DIRECTIVE_START 포맷)
+- get_all_service_status: 6개 서비스 전체 상태 조회
+- generate_directive: 자연어로 지시서 자동 생성
+
+### 온디맨드 도구 (필요 시 사용 가능)
+- dashboard_query: 파이프라인 대시보드 조회
+- task_history: 작업 이력 조회
+- server_status: Docker 컨테이너 상태
+- read_github_file: GitHub 문서 읽기
+- query_database: PostgreSQL SELECT 쿼리 실행
+- read_remote_file: 원격 서버 파일 읽기 (KIS/GO100/SF/NTV2)
+- list_remote_dir: 원격 디렉토리 탐색
+- cost_report: LiteLLM 비용 분석
+- web_search_brave: Brave 웹 검색
+- inspect_service: 서비스 종합 점검 (process/docker/log/health)\
+"""
 
 # ─── 도구 스키마 정의 (Anthropic Tool Use 포맷) ──────────────────────────────
 
@@ -359,6 +414,84 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"include_details": True},
         ],
     },
+    # ── crawl 그룹 (AADS-186E-1) ──────────────────────────────────────────────
+    "jina_read": {
+        "name": "jina_read",
+        "description": "URL의 전체 내용을 깨끗한 마크다운으로 변환하여 읽는다. 기술 문서, 블로그, 뉴스 등 모든 웹페이지 지원.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "읽을 URL (http:// 또는 https:// 포함)",
+                },
+                "max_tokens": {
+                    "type": "integer",
+                    "description": "최대 토큰 수 (기본 25000)",
+                    "default": 25000,
+                },
+            },
+            "required": ["url"],
+        },
+        "input_examples": [
+            {"url": "https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking"},
+            {"url": "https://fastapi.tiangolo.com/tutorial/background-tasks/", "max_tokens": 10000},
+        ],
+        "defer_loading": True,
+    },
+    "crawl4ai_fetch": {
+        "name": "crawl4ai_fetch",
+        "description": "JavaScript 렌더링이 필요한 SPA 페이지를 크롤링한다. jina_read 실패 시 폴백으로 사용.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "크롤링할 URL",
+                },
+                "js_render": {
+                    "type": "boolean",
+                    "description": "JS 렌더링 여부 (기본 true)",
+                    "default": True,
+                },
+            },
+            "required": ["url"],
+        },
+        "input_examples": [
+            {"url": "https://example.com/spa-page"},
+            {"url": "https://dashboard.example.com", "js_render": True},
+        ],
+        "defer_loading": True,
+    },
+    "deep_crawl": {
+        "name": "deep_crawl",
+        "description": "주제에 대해 검색 후 상위 페이지를 자동 크롤링하고 내용을 종합 분석한다. 시장 조사, 기술 비교, 트렌드 파악에 사용.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "검색 및 분석할 주제",
+                },
+                "max_pages": {
+                    "type": "integer",
+                    "description": "크롤링할 최대 페이지 수 (기본 5)",
+                    "default": 5,
+                },
+                "summarize": {
+                    "type": "boolean",
+                    "description": "종합 요약 수행 여부 (기본 true)",
+                    "default": True,
+                },
+            },
+            "required": ["query"],
+        },
+        "input_examples": [
+            {"query": "AI 코딩 에이전트 2026 비교", "max_pages": 5},
+            {"query": "FastAPI MCP 통합 방법", "max_pages": 3, "summarize": False},
+        ],
+        "defer_loading": True,
+    },
     "generate_directive": {
         "name": "generate_directive",
         "description": (
@@ -411,6 +544,101 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             },
         ],
     },
+    # ── AADS-186E-2: PTC 도구 ─────────────────────────────────────────────────
+    "code_execution": {
+        "type": "code_execution_20250825",
+        "name": "code_execution",
+        "description": (
+            "Python 코드를 실행하여 여러 도구를 병렬로 호출합니다. "
+            "service_inspection, health_check(전체), cto_code_analysis 인텐트에서 자동 활성화. "
+            "allowed_callers: CALLABLE_TOOLS(읽기 전용) — 쓰기 도구 제외."
+        ),
+        "allowed_callers": ["code_execution_20250825"],
+    },
+    # ── AADS-186E-2: 메모리 도구 ──────────────────────────────────────────────
+    "save_note": {
+        "name": "save_note",
+        "description": (
+            "현재 대화의 중요 결정, 이슈, 액션 아이템을 영구 저장한다. "
+            "다음 세션에서 자동으로 불러온다. "
+            "중요한 결정이나 이슈가 나오면 반드시 호출한다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "summary": {
+                    "type": "string",
+                    "description": "대화 핵심 요약 (200자 이내)",
+                },
+                "key_decisions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "주요 결정 사항 목록",
+                },
+                "action_items": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "후속 액션 아이템 목록",
+                },
+                "unresolved_issues": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "미해결 이슈 목록 (선택)",
+                },
+            },
+            "required": ["summary"],
+        },
+        "defer_loading": True,
+    },
+    "recall_notes": {
+        "name": "recall_notes",
+        "description": (
+            "이전 세션의 기록을 검색한다. "
+            "'어제 논의한 것', '지난주 결정 사항', '이전에 한 작업' 등."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "검색 쿼리 (키워드 또는 날짜 범위)",
+                },
+                "count": {
+                    "type": "integer",
+                    "description": "반환할 최대 건수 (기본 5, 최대 20)",
+                },
+            },
+            "required": [],
+        },
+        "defer_loading": True,
+    },
+    "learn_pattern": {
+        "name": "learn_pattern",
+        "description": (
+            "CEO 선호도, 프로젝트 특이사항, 반복 패턴을 기억한다. "
+            "예: CEO가 항상 한국어로 답하길 원한다, 서버211이 불안정하다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "description": "카테고리. 'ceo_preference' | 'project_pattern' | 'known_issue' | 'decision_history'",
+                    "enum": ["ceo_preference", "project_pattern", "known_issue", "decision_history"],
+                },
+                "key": {
+                    "type": "string",
+                    "description": "패턴 키 (영문 snake_case, 예: response_language)",
+                },
+                "value": {
+                    "type": "object",
+                    "description": "저장할 값 (임의 JSON 객체)",
+                },
+            },
+            "required": ["category", "key", "value"],
+        },
+        "defer_loading": True,
+    },
 }
 
 # ─── 그룹 → 도구 매핑 ─────────────────────────────────────────────────────────
@@ -420,6 +648,10 @@ _GROUPS: Dict[str, List[str]] = {
     "action": ["directive_create", "read_github_file", "query_database", "read_remote_file", "list_remote_dir", "cost_report"],
     "search": ["web_search_brave"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
+    # AADS-186E-1: 크롤링 도구 그룹
+    "crawl": ["jina_read", "crawl4ai_fetch", "deep_crawl"],
+    # AADS-186E-2: 메모리 도구 그룹
+    "memory": ["save_note", "recall_notes", "learn_pattern"],
     "all": list(_TOOLS.keys()),
 }
 
@@ -445,8 +677,9 @@ class ToolRegistry:
         for name in tool_names:
             if name not in _TOOLS:
                 continue
-            # input_examples는 API 전송 시 제외
-            tool = {k: v for k, v in _TOOLS[name].items() if k != "input_examples"}
+            # input_examples, defer_loading, allowed_callers는 API 전송 시 제외
+            _EXCLUDE_KEYS = {"input_examples", "defer_loading", "allowed_callers"}
+            tool = {k: v for k, v in _TOOLS[name].items() if k not in _EXCLUDE_KEYS}
             result.append(tool)
         return result
 
@@ -462,3 +695,31 @@ class ToolRegistry:
 
     def list_groups(self) -> Dict[str, List[str]]:
         return dict(_GROUPS)
+
+    # ─── AADS-186D: Tool Search Tool 지원 ──────────────────────────────────
+
+    def get_eager_tools(self) -> List[Dict[str, Any]]:
+        """상시 로드 도구 반환 (defer_loading=false). Anthropic API 매 요청 포함."""
+        _EXCLUDE = {"input_examples", "defer_loading", "allowed_callers"}
+        return [
+            {k: v for k, v in _TOOLS[name].items() if k not in _EXCLUDE}
+            for name in _TOOLS
+            if not _DEFER_LOADING.get(name, True)
+        ]
+
+    def get_deferred_tools(self) -> List[Dict[str, Any]]:
+        """온디맨드 도구 반환 (defer_loading=true). Tool Search Tool 검색 결과용."""
+        _EXCLUDE = {"input_examples", "defer_loading", "allowed_callers"}
+        return [
+            {k: v for k, v in _TOOLS[name].items() if k not in _EXCLUDE}
+            for name in _TOOLS
+            if _DEFER_LOADING.get(name, True)
+        ]
+
+    def get_tool_category_guide(self) -> str:
+        """시스템 프롬프트 주입용 도구 카테고리 안내 텍스트 반환."""
+        return TOOL_CATEGORY_GUIDE
+
+    def is_deferred(self, name: str) -> bool:
+        """도구가 온디맨드(defer_loading=true) 여부 반환."""
+        return _DEFER_LOADING.get(name, True)

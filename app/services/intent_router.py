@@ -62,16 +62,20 @@ INTENT_MAP: dict[str, dict] = {
     "image_analyze":    {"model": "claude-sonnet",               "tools": False, "group": ""},
     "video_analyze":    {"model": "gemini-flash",                "tools": False, "group": ""},
     "server_file":      {"model": "claude-sonnet",               "tools": True,  "group": "action"},
-    # ─── CTO 모드 인텐트 (AADS-186B) ─────────────────────────────────────────
+    # ─── CTO 모드 인텐트 (AADS-186B / AADS-186E-2) ────────────────────────────
+    # cto_strategy/cto_code_analysis/cto_verify/cto_impact: Opus + Extended Thinking
     "cto_strategy":     {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
-    "cto_code_analysis":{"model": "claude-sonnet",               "tools": True,  "group": "action"},
+    "cto_code_analysis":{"model": "claude-opus",                 "tools": True,  "group": "action",  "thinking": True},
     "cto_directive":    {"model": "claude-sonnet",               "tools": True,  "group": "action"},
-    "cto_verify":       {"model": "claude-sonnet",               "tools": True,  "group": "system"},
-    "cto_impact":       {"model": "claude-sonnet",               "tools": True,  "group": "action"},
+    "cto_verify":       {"model": "claude-opus",                 "tools": True,  "group": "system",  "thinking": True},
+    "cto_impact":       {"model": "claude-opus",                 "tools": True,  "group": "action",  "thinking": True},
     "cto_tech_debt":    {"model": "claude-sonnet",               "tools": True,  "group": "system"},
     # AADS-186A 신규 인텐트
     "service_inspection": {"model": "claude-sonnet",             "tools": True,  "group": "workflow"},
     "all_service_status": {"model": "claude-sonnet",             "tools": True,  "group": "workflow"},
+    # AADS-186E-1 크롤링 인텐트
+    "url_read":           {"model": "claude-sonnet",             "tools": True,  "group": "crawl"},
+    "deep_crawl":         {"model": "claude-sonnet",             "tools": True,  "group": "crawl"},
 }
 
 _DEFAULT_INTENT = IntentResult(
@@ -91,7 +95,8 @@ search, url_analyze, deep_research, code_task, directive, directive_gen, complex
 strategy, planning, decision, design, design_fix, architect, code_exec, memory_recall,
 qa, execution_verify, workspace_switch, cost_report, browser, image_analyze, video_analyze, server_file,
 cto_strategy, cto_code_analysis, cto_directive, cto_verify, cto_impact, cto_tech_debt,
-service_inspection, all_service_status
+service_inspection, all_service_status,
+url_read, deep_crawl
 
 규칙:
 - "안녕", "안녕하세요", 인사 → greeting
@@ -106,6 +111,8 @@ service_inspection, all_service_status
 - 검색해줘, 찾아봐, 최신 뉴스 → search
 - 심층 분석, 리서치 보고서, 시장 조사 → deep_research
 - URL 분석, 링크 내용 확인 → url_analyze
+- 이 URL 읽어, 이 문서 분석, 이 페이지 내용, http로 시작하는 URL → url_read
+- 조사해서 정리, 여러 소스 비교, 크롤링해서 분석, 리서치, 딥 크롤 → deep_crawl
 - 지시서 작성, DIRECTIVE_START → directive_gen
 - 코드 작성, 버그 수정 → code_task
 - 설계, 아키텍처 → architect
@@ -224,6 +231,10 @@ def _keyword_fallback(message: str) -> IntentResult:
         return _make_result("cto_impact")
     if any(w in msg for w in ("기술 부채", "todo 정리", "fixme", "정리 필요")):
         return _make_result("cto_tech_debt")
+    if any(w in msg for w in ("이 url 읽어", "이 문서 분석", "이 페이지 내용", "http://", "https://", "url 열어", "링크 내용")):
+        return _make_result("url_read")
+    if any(w in msg for w in ("조사해서 정리", "여러 소스 비교", "크롤링해서 분석", "리서치", "딥 크롤", "deep crawl")):
+        return _make_result("deep_crawl")
 
     return _make_result("casual")
 

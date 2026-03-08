@@ -69,6 +69,16 @@ class ToolExecutor:
             "inspect_service":        self._inspect_service,
             "get_all_service_status": self._get_all_service_status,
             "generate_directive":     self._generate_directive,
+            # AADS-186E-1 크롤링 도구
+            "jina_read":              self._jina_read,
+            "crawl4ai_fetch":         self._crawl4ai_fetch,
+            "deep_crawl":             self._deep_crawl,
+            # 하위호환: fetch_url → jina_read 내부 리다이렉트 (AADS-186E-1 제약)
+            "fetch_url":              self._jina_read,
+            # AADS-186E-2: 메모리 도구
+            "save_note":              self._save_note,
+            "recall_notes":           self._recall_notes,
+            "learn_pattern":          self._learn_pattern,
         }
         fn = dispatch.get(tool_name)
         if fn is None:
@@ -425,6 +435,154 @@ class ToolExecutor:
 
         return result
 
+    # ── AADS-186E-1 크롤링 도구 ────────────────────────────────────────────
+
+    async def _jina_read(self, inp: Dict[str, Any]) -> Any:
+        """Jina Reader API로 URL → 마크다운 변환. 실패 시 crawl4ai 폴백."""
+        url = inp.get("url", "")
+        max_tokens = int(inp.get("max_tokens", 25000))
+        if not url:
+            return {"error": "url 필수"}
+        from app.services.jina_reader_service import JinaReaderService
+        jina = JinaReaderService()
+        result = await jina.read_url(url, max_tokens=max_tokens)
+        if result and result.content:
+            return {
+                "title": result.title,
+                "content": result.content,
+                "word_count": result.word_count,
+                "source_url": result.source_url,
+                "truncated": result.truncated,
+            }
+        # crawl4ai 폴백
+        logger.info(f"jina_read fallback to crawl4ai: {url}")
+        from app.services.crawl4ai_service import Crawl4AIService
+        c4 = Crawl4AIService()
+        c4_result = await c4.fetch_page(url)
+        if c4_result and c4_result.content:
+            return {
+                "title": url,
+                "content": c4_result.content,
+                "word_count": c4_result.word_count,
+                "source_url": url,
+                "via": "crawl4ai_fallback",
+            }
+        return {"error": f"jina_read 및 crawl4ai 모두 실패: {url}"}
+
+    async def _crawl4ai_fetch(self, inp: Dict[str, Any]) -> Any:
+        """Crawl4AI Docker 서버로 JS 렌더링 포함 크롤링."""
+        url = inp.get("url", "")
+        js_render = bool(inp.get("js_render", True))
+        if not url:
+            return {"error": "url 필수"}
+        from app.services.crawl4ai_service import Crawl4AIService
+        c4 = Crawl4AIService()
+        result = await c4.fetch_page(url, js_render=js_render)
+        if result is None:
+            return {"error": "crawl4ai 서버 미가용 — docker-compose.crawl4ai.yml로 배포 필요"}
+        if result.error:
+            return {"error": result.error, "url": url}
+        return {
+            "url": result.url,
+            "content": result.content,
+            "word_count": result.word_count,
+            "js_rendered": result.js_rendered,
+        }
+
+    async def _deep_crawl(self, inp: Dict[str, Any]) -> Any:
+        """검색 → 다중 크롤링 → 종합 요약 파이프라인."""
+        query = inp.get("query", "")
+        max_pages = min(int(inp.get("max_pages", 5)), 10)
+        summarize = bool(inp.get("summarize", True))
+        if not query:
+            return {"error": "query 필수"}
+        from app.services.deep_crawl_service import DeepCrawlService
+        svc = DeepCrawlService()
+        result = await svc.research_crawl(query, max_pages=max_pages, summarize=summarize)
+        return {
+            "query": result.query,
+            "synthesis": result.synthesis,
+            "citations": result.citations,
+            "pages_crawled": result.pages_crawled,
+            "pages_failed": result.pages_failed,
+            "error": result.error,
+        }
+
+    # ── AADS-186E-2: 메모리 도구 ─────────────────────────────────────────────
+
+    async def _save_note(self, inp: Dict[str, Any]) -> Any:
+        """세션 노트 저장 — session_notes 테이블에 INSERT."""
+        summary = inp.get("summary", "")
+        if not summary:
+            return {"error": "summary 필수"}
+        key_decisions = inp.get("key_decisions", [])
+        action_items = inp.get("action_items", [])
+        unresolved_issues = inp.get("unresolved_issues", [])
+
+        from app.services.memory_manager import get_memory_manager
+        mgr = get_memory_manager()
+        note = await mgr.save_session_note(
+            session_id="tool_call",
+            messages=[],
+            summary=summary,
+            key_decisions=key_decisions,
+            action_items=action_items,
+            unresolved_issues=unresolved_issues,
+        )
+        return {
+            "status": "saved",
+            "note_id": note.id,
+            "summary": note.summary,
+        }
+
+    async def _recall_notes(self, inp: Dict[str, Any]) -> Any:
+        """최근 세션 노트 검색 — session_notes 테이블 조회."""
+        count = min(int(inp.get("count", 5)), 20)
+        query = inp.get("query", "")
+
+        from app.services.memory_manager import get_memory_manager
+        mgr = get_memory_manager()
+
+        if query:
+            # 쿼리 있으면 recall (메타메모리 검색)
+            memories = await mgr.recall(query=query)
+            return [
+                {
+                    "category": m.category,
+                    "key": m.key,
+                    "value": m.value,
+                    "confidence": m.confidence,
+                }
+                for m in memories[:count]
+            ]
+        else:
+            # 최근 노트 반환
+            notes = await mgr.get_recent_notes(count)
+            return [
+                {
+                    "session_id": n.session_id,
+                    "summary": n.summary,
+                    "key_decisions": n.key_decisions,
+                    "action_items": n.action_items,
+                    "created_at": n.created_at.isoformat() if n.created_at else None,
+                }
+                for n in notes
+            ]
+
+    async def _learn_pattern(self, inp: Dict[str, Any]) -> Any:
+        """패턴 학습 — ai_meta_memory UPSERT."""
+        category = inp.get("category", "")
+        key = inp.get("key", "")
+        value = inp.get("value", {})
+
+        if not category or not key:
+            return {"error": "category, key 필수"}
+
+        from app.services.memory_manager import get_memory_manager
+        mgr = get_memory_manager()
+        await mgr.learn(category, key, value)
+        return {"status": "learned", "category": category, "key": key}
+
 
 # ─── 하위 호환성 ─────────────────────────────────────────────────────────────
 
@@ -442,11 +600,14 @@ _INTENT_TOOL_MAP: Dict[str, list] = {
     "task_history":        ["task_history"],
     "cost_report":         ["cost_report"],
     "system_status":       ["health_check", "dashboard_query", "get_all_service_status"],
-    "url_analyze":         ["read_github_file"],
+    "url_analyze":         ["jina_read"],
+    "url_read":            ["jina_read"],
     "server_file":         ["list_remote_dir", "read_remote_file"],
     # AADS-186A 신규 인텐트
     "service_inspection":  ["inspect_service"],
     "all_service_status":  ["get_all_service_status"],
+    # AADS-186E-1 크롤링 인텐트
+    "deep_crawl":          ["deep_crawl"],
 }
 
 
