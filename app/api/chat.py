@@ -201,6 +201,84 @@ async def chat(req: ChatRequest):
 
     return ChatResponse(**response_data)
 
+@router.get("/chat/cost-summary")
+async def get_chat_cost_summary():
+    """
+    LiteLLM /spend/logs API 기반 일별/월별 비용 요약.
+    일 $5 초과 시 Opus 차단 여부도 포함.
+    """
+    import httpx
+    import os
+    from datetime import date
+
+    litellm_base = os.environ.get("LITELLM_BASE_URL", "http://litellm:4000/v1").replace("/v1", "")
+    master_key = os.environ.get("LITELLM_MASTER_KEY", "")
+    headers = {"Authorization": f"Bearer {master_key}"}
+
+    daily_spend = 0.0
+    monthly_spend = 0.0
+    model_breakdown: dict = {}
+    litellm_reachable = False
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            # 오늘 비용
+            r_day = await client.get(
+                f"{litellm_base}/spend/logs",
+                headers=headers,
+                params={"start_date": str(date.today())},
+            )
+            if r_day.status_code == 200:
+                litellm_reachable = True
+                daily_spend = float(r_day.json().get("total_cost", 0.0))
+
+            # 이번 달 비용
+            first_of_month = date.today().replace(day=1).isoformat()
+            r_month = await client.get(
+                f"{litellm_base}/spend/logs",
+                headers=headers,
+                params={"start_date": first_of_month},
+            )
+            if r_month.status_code == 200:
+                monthly_spend = float(r_month.json().get("total_cost", 0.0))
+                model_breakdown = r_month.json().get("model_breakdown", {})
+    except Exception as e:
+        logger.warning(f"litellm_cost_summary_failed: {e}")
+
+    daily_budget = float(os.environ.get("LITELLM_DAILY_BUDGET_USD", "5.0"))
+    monthly_budget_warn = float(os.environ.get("LITELLM_MONTHLY_BUDGET_WARN_USD", "150.0"))
+
+    return {
+        "litellm_reachable": litellm_reachable,
+        "today": {
+            "cost_usd": round(daily_spend, 4),
+            "budget_usd": daily_budget,
+            "used_pct": round(daily_spend / daily_budget * 100, 1) if daily_budget > 0 else 0,
+            "opus_blocked": daily_spend >= daily_budget,
+        },
+        "this_month": {
+            "cost_usd": round(monthly_spend, 4),
+            "budget_warn_usd": monthly_budget_warn,
+            "used_pct": round(monthly_spend / monthly_budget_warn * 100, 1) if monthly_budget_warn > 0 else 0,
+            "over_warn": monthly_spend >= monthly_budget_warn,
+        },
+        "model_breakdown": model_breakdown,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@router.get("/chat/intent-model-map")
+async def get_intent_model_map():
+    """인텐트→모델 매핑 테이블 반환 (LiteLLM 라우팅 확인용)."""
+    import os
+    from app.services.model_router import INTENT_MODEL_MAP
+    return {
+        "status": "ok",
+        "intent_model_map": INTENT_MODEL_MAP,
+        "litellm_base_url": os.environ.get("LITELLM_BASE_URL", "http://litellm:4000/v1"),
+    }
+
+
 @router.get("/chat/intents")
 async def list_intents():
     """사용 가능한 의도(intent) 목록 반환 - 브릿지 설정용"""
