@@ -144,6 +144,37 @@ async def _build_memory_layer() -> str:
     return "\n" + "\n".join(parts) if parts else ""
 
 
+
+
+async def _build_semantic_code_layer(
+    last_user_message: str,
+    workspace_name: str = "",
+) -> str:
+    """
+    AADS-188B: 시맨틱 코드 컨텍스트 주입.
+    CEO 질의에서 코드 관련 키워드 감지 시 ChromaDB에서 관련 청크 검색·삽입.
+    최대 5개 청크, 약 3000토큰 이하.
+    ChromaDB 미초기화 / 임베딩 실패 시 graceful skip.
+    """
+    if not last_user_message:
+        return ""
+    _CODE_KEYWORDS = (
+        "어디", "함수", "클래스", "로직", "코드", "파일",
+        "where", "function", "class", "logic", "code", "file",
+        "구현", "메서드", "찾아", "검색", "어떻게",
+    )
+    if not any(kw in last_user_message for kw in _CODE_KEYWORDS):
+        return ""
+    try:
+        from app.services.semantic_code_search import SemanticCodeSearch
+        svc = SemanticCodeSearch()
+        ws = (workspace_name or "").upper()
+        project: Optional[str] = ws if ws in ("AADS", "KIS", "GO100", "SF", "NTV2", "NAS") else None
+        return await svc.build_code_context(last_user_message, project=project)
+    except Exception as e:
+        logger.debug(f"[SemanticCode] context_builder 시맨틱 검색 실패: {e}")
+        return ""
+
 # ─── Layer 3: 대화 히스토리 ────────────────────────────────────────────────
 
 COMPRESS_AFTER_TURNS = 5
