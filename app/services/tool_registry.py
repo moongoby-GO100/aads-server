@@ -16,107 +16,121 @@ from typing import Any, Dict, List
 # false (상시 로드): AI가 매 요청마다 반드시 알아야 하는 핵심 도구
 # true  (온디맨드):  특정 작업 시에만 필요한 도구
 _DEFER_LOADING: Dict[str, bool] = {
-    "health_check": False,            # 상태 확인 — 빈번 사용
+    # ── Tier 1: 상시 로드 (내부 데이터, 빈번 사용) ──────────────────────
+    "health_check": False,
+    "get_all_service_status": False,
+    "check_directive_status": False,
+    "read_remote_file": False,           # 코드 분석 1순위 — 상시 로드
+    "query_database": False,             # DB 조회 2순위 — 상시 로드
+    "task_history": False,               # 작업 현황 — 빈번 조회
+    "list_remote_dir": False,            # 파일 탐색 — 빈번 사용
     "dashboard_query": True,
-    "task_history": True,
     "server_status": True,
-    "directive_create": False,        # 지시서 생성 — 핵심 액션
     "read_github_file": True,
-    "query_database": True,
-    "read_remote_file": True,
-    "list_remote_dir": True,
-    "cost_report": True,
-    "web_search_brave": True,
+    # ── Tier 2: 분석/탐색 (온디맨드) ─────────────────────────────────────
+    "code_explorer": True,
+    "semantic_code_search": True,
+    "analyze_changes": True,
     "inspect_service": True,
-    "get_all_service_status": False,  # 전체 상태 — 빈번 조회
-    "generate_directive": False,      # 지시서 자동생성 — 핵심 액션
-    # AADS-186E-1: 크롤링 도구 — 온디맨드
-    "jina_read": True,
-    "crawl4ai_fetch": True,
-    "deep_crawl": True,
-    # AADS-186E-2: 메모리 도구 — 온디맨드
-    "code_execution": True,
+    # ── Tier 3: 액션/실행 ────────────────────────────────────────────────
+    "directive_create": False,           # 지시서 — 핵심 액션
+    "generate_directive": False,
+    "delegate_to_agent": False,          # Orchestrator 핵심
+    "delegate_to_research": False,
     "save_note": True,
     "recall_notes": True,
     "learn_pattern": True,
-    # AADS-186E-3: 자동 관찰 도구 — 온디맨드
-    "observe": True,
-    # AADS-188C Phase 2: 메타 도구 — 상시 로드 (Orchestrator 핵심)
-    "check_directive_status": False,
-    "delegate_to_agent": False,
-    "delegate_to_research": False,
-    # AADS-186E-3: 딥리서치 + 코드탐색 도구 — 온디맨드
+    "cost_report": True,
+    # ── Tier 4: 외부 검색 (온디맨드, API 비용) ───────────────────────────
+    "web_search_brave": True,
+    "jina_read": True,
+    "crawl4ai_fetch": True,
+    # ── Tier 5: 고비용/장시간 (온디맨드) ─────────────────────────────────
     "deep_research": True,
-    "code_explorer": True,
-    "analyze_changes": True,
+    "deep_crawl": True,
     "search_all_projects": True,
-    # AADS-188B: 시맨틱 코드 검색 — 온디맨드
-    "semantic_code_search": True,
-    # AADS-159: 브라우저 도구 — 상시 로드 (화면 분석 요청 빈번)
-    "browser_navigate": False,
-    "browser_snapshot": False,
-    "browser_screenshot": False,
+    # ── Tier 6: 브라우저 보조 (온디맨드 — 소스 분석 후 보조) ─────────────
+    "browser_navigate": True,
+    "browser_snapshot": True,
+    "browser_screenshot": True,
     "browser_click": True,
     "browser_fill": True,
     "browser_tab_list": True,
+    # ── 기타 ─────────────────────────────────────────────────────────────
+    "code_execution": True,
+    "observe": True,
 }
 
 # 도구 카테고리 안내 (시스템 프롬프트 주입용 — context_builder.py에서 사용)
 TOOL_CATEGORY_GUIDE = """\
-## 사용 가능한 도구 카테고리 (총 25개)
+## 도구 우선순위 가이드 (총 35개)
 
-### 상시 로드 도구 (항상 사용 가능)
-- health_check: AADS 서버 헬스체크 (서버68/211/114)
-- directive_create: 지시서 블록 생성 (>>>DIRECTIVE_START 포맷)
-- get_all_service_status: 6개 서비스 전체 상태 조회
-- generate_directive: 자연어로 지시서 자동 생성
-
-### 온디맨드 도구 (필요 시 사용 가능)
-- dashboard_query: 파이프라인 대시보드 조회
-- task_history: 작업 이력 조회
+### 🔴 Tier 1 — 즉시 사용 (내부 데이터, 무료, <3초) ★ 최우선
+- read_remote_file: 원격 서버 소스 코드/설정 읽기 — 코드 분석 1순위
+- list_remote_dir: 원격 디렉터리 탐색/검색
+- query_database: PostgreSQL SELECT — 데이터 확인 2순위
+- health_check: 서버 헬스체크
+- get_all_service_status: 6개 서비스 상태 병렬 조회
+- check_directive_status: 지시사항 진행 종합 확인
+- task_history: 작업 이력
+- dashboard_query: 파이프라인 현황
 - server_status: Docker 컨테이너 상태
 - read_github_file: GitHub 문서 읽기
-- query_database: PostgreSQL SELECT 쿼리 실행
-- read_remote_file: 원격 서버 파일 읽기 (KIS/GO100/SF/NTV2)
-- list_remote_dir: 원격 디렉토리 탐색
-- cost_report: LiteLLM 비용 분석
+
+### 🟠 Tier 2 — 분석/탐색 (내부, 무료, 3~15초)
+- code_explorer: 함수 호출 체인 추적 (depth 3)
+- semantic_code_search: 벡터 코드 검색
+- analyze_changes: Git 변경 + 위험도
+- inspect_service: 서비스 종합 점검
+
+### 🟡 Tier 3 — 액션/실행 (요청 시 즉시)
+- directive_create / generate_directive: 지시서 생성
+- delegate_to_agent: 복잡한 작업 위임
+- delegate_to_research: 심층 리서치 위임
+- save_note / recall_notes / learn_pattern: 기억 관리
+- cost_report: 비용 분석
+
+### 🟢 Tier 4 — 외부 검색 (API 비용, 3~10초)
 - web_search_brave: Brave 웹 검색
-- inspect_service: 서비스 종합 점검 (process/docker/log/health)
-- deep_research: Gemini Deep Research — 수십 개 소스 자동 탐색 종합 보고서 ($2~5/건, 3~10분)
-- code_explorer: 함수 호출 체인 추적 (depth 3, 6개 프로젝트)
-- analyze_changes: 프로젝트 최근 Git 변경 분석 + 위험도 평가
-- search_all_projects: 6개 프로젝트 코드베이스 동시 검색
-- semantic_code_search: 벡터 기반 시맨틱 코드 검색 (ChromaDB, "인증 로직 어디?" 질의 가능)
+- jina_read / crawl4ai_fetch: URL 페이지 추출
+
+### 🔵 Tier 5 — 고비용/장시간 (CEO 명시 요청 시)
+- deep_research: Gemini Deep Research ($2~5, 3~10분)
+- deep_crawl: 다수 URL 동시 크롤링
+- search_all_projects: 6개 프로젝트 동시 검색
+
+### ⚪ Tier 6 — 브라우저 보조 (소스 분석 후 렌더링 확인 시)
+- browser_navigate/snapshot/screenshot/click/fill/tab_list
 
 ### Agent SDK (execute/code_modify 인텐트 시 자동 활성화)
-- 코드 수정/작성, Bash 명령, git 커밋/푸시, 파일 생성 — 자율 실행 가능
-- 위험 명령(rm -rf, DROP TABLE 등)은 자동 차단
-
-### 브라우저 도구 (Playwright 헤드리스 — 화면 분석/PC 컨트롤)
-- browser_navigate: URL 접속 (aads.newtalk.kr, GitHub 등)
-- browser_snapshot: 페이지 접근성 트리 텍스트 추출 (UI 구조 분석)
-- browser_screenshot: PNG 스크린샷 촬영 (base64)
-- browser_click: CSS selector로 요소 클릭
-- browser_fill: 입력 필드에 텍스트 입력
-- browser_tab_list: 열린 탭 목록
-
-### 메타 도구 (Orchestrator — 복합 조회/위임)
-- check_directive_status: 작업 이력 + 서비스 상태 통합 확인
-- delegate_to_agent: Agent SDK에 복잡한 코드 작업 위임
-- delegate_to_research: Deep Research에 심층 리서치 위임
-
-### 불가능한 작업 (도구 없음 — 요청 시 명확히 거절)
-- 외부 에이전트(Cursor/Genspark) 실시간 상태 조회 (대안: dashboard_query, check_directive_status)
-- SMS/이메일/알림 발송\
+- 코드 수정/작성, Bash, git — 자율 실행. 위험 명령 자동 차단.\
 """
 
 # ─── AADS-188C Phase 2: 인텐트별 필수 도구 매핑 ──────────────────────────────
 # 이 매핑에 있는 인텐트는 반드시 해당 도구가 호출되어야 한다.
 INTENT_REQUIRED_TOOLS: Dict[str, list] = {
-    "task_query":    ["check_directive_status"],
-    "status_check":  ["check_directive_status", "get_all_service_status"],
-    "directive":     ["generate_directive"],
-    "code_analysis": ["code_explorer", "semantic_code_search"],
+    # Tier 1: 반드시 해당 도구 호출 필요
+    "task_query":         ["check_directive_status"],
+    "status_check":       ["check_directive_status", "get_all_service_status"],
+    "health_check":       ["health_check"],
+    "all_service_status": ["get_all_service_status"],
+    "cost_report":        ["cost_report"],
+    "dashboard":          ["dashboard_query"],
+    "task_history":       ["task_history"],
+    # Tier 2: 분석 인텐트
+    "cto_code_analysis":  ["read_remote_file"],         # 소스 코드 우선
+    "code_explorer":      ["code_explorer"],
+    "analyze_changes":    ["analyze_changes"],
+    "service_inspection": ["inspect_service"],
+    # Tier 3: 액션 인텐트
+    "directive":          ["generate_directive"],
+    "directive_gen":      ["generate_directive"],
+    "cto_directive":      ["generate_directive"],
+    # Tier 4: 외부 검색
+    "search":             ["web_search_brave"],
+    "url_read":           ["jina_read"],
+    # Tier 6: 브라우저 — 명시적 요청 시만
+    "browser":            ["browser_navigate"],
 }
 
 # ─── 도구 스키마 정의 (Anthropic Tool Use 포맷) ──────────────────────────────
@@ -1085,8 +1099,8 @@ _GROUPS: Dict[str, List[str]] = {
     "action": ["directive_create", "read_github_file", "query_database", "read_remote_file", "list_remote_dir", "cost_report"],
     "search": ["web_search_brave"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
-    # AADS-159: 브라우저 도구 그룹
-    "browser": ["browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_fill", "browser_tab_list"],
+    # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
+    "browser": ["read_remote_file", "list_remote_dir", "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_fill", "browser_tab_list"],
     # AADS-188C Phase 2: 메타 도구 그룹 (Orchestrator)
     "meta": ["check_directive_status", "delegate_to_agent", "delegate_to_research"],
     # AADS-186E-1: 크롤링 도구 그룹

@@ -202,24 +202,40 @@ async def _stream_anthropic(
         }
         if tools:
             api_kwargs["tools"] = tools
-            # Layer ③: 인텐트별 동적 tool_choice (AADS-188C Phase 3)
-            # greeting/casual → none (도구 불필요)
-            # status_check/dashboard/task_query/task_history/health_check → any (반드시 도구 호출)
-            # 나머지 → auto
+            # Layer ③: 인텐트별 동적 tool_choice (AADS-188C Phase 3 + Priority)
+            # force_any: 반드시 도구 호출해야 하는 인텐트 (데이터 조회 필수)
+            # auto: 도구 사용 여부를 AI가 판단 (대부분 인텐트)
+            # 생략: 도구 불필요 인텐트
             _intent = intent_result.intent
             if _turn == 0:
                 _force_tool_intents = (
+                    # Tier 1: 데이터 조회 필수
                     "status_check", "dashboard", "task_query", "task_history",
-                    "health_check", "all_service_status", "service_inspection",
-                    "cost_report",
+                    "health_check", "all_service_status", "cost_report",
+                    # Tier 2: 분석 필수
+                    "service_inspection", "code_explorer", "analyze_changes",
+                    # Tier 4: 검색 필수
+                    "search", "url_read",
+                    # Tier 6: 브라우저 명시 요청
+                    "browser",
                 )
                 _no_tool_intents = ("greeting", "casual")
+                _auto_tool_intents = (
+                    # AI가 도구 필요 여부 판단하는 인텐트
+                    "cto_code_analysis", "cto_strategy", "cto_verify", "cto_impact",
+                    "code_task", "directive", "directive_gen", "cto_directive",
+                    "complex_analysis", "strategy", "planning", "decision",
+                    "architect", "design", "design_fix", "cto_tech_debt",
+                    "execute", "code_modify", "server_file",
+                )
                 if _intent in _force_tool_intents and intent_result.use_tools:
                     api_kwargs["tool_choice"] = {"type": "any"}
                 elif _intent in _no_tool_intents:
-                    pass  # tool_choice 생략 → auto (도구 제공은 하지만 강제 아님)
+                    pass  # tool_choice 생략
+                elif _intent in _auto_tool_intents and intent_result.use_tools:
+                    api_kwargs["tool_choice"] = {"type": "auto"}
                 elif intent_result.use_tools:
-                    api_kwargs["tool_choice"] = {"type": "any"}
+                    api_kwargs["tool_choice"] = {"type": "auto"}
         if thinking_config:
             api_kwargs["thinking"] = thinking_config
             api_kwargs["betas"] = ["interleaved-thinking-2025-05-14"]
