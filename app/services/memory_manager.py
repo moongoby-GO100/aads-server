@@ -1,9 +1,9 @@
 """
-AADS-186E-2: 4계층 영속 메모리 관리자
+AADS-186E-2/186E-3: 4계층 영속 메모리 관리자
 Layer 1: Session Buffer (기존 chat_service 히스토리)
 Layer 2: Working Memory — session_notes (세션 종료 시 요약 저장)
 Layer 3: CKP — 코드베이스 지식 (기존 ckp_manager)
-Layer 4: Meta Memory — ai_meta_memory (CEO 선호도, 패턴 학습)
+Layer 4: Meta Memory — ai_meta_memory(수동 학습) + ai_observations(자동 관찰)
 """
 from __future__ import annotations
 
@@ -46,13 +46,27 @@ class SessionNote:
 
 @dataclass
 class Memory:
-    """Layer 4: 메타 메모리 항목."""
+    """Layer 4: 메타 메모리 항목 (ai_meta_memory)."""
     id: int = 0
     category: str = ""
     key: str = ""
     value: Dict[str, Any] = field(default_factory=dict)
     confidence: float = 1.0
     last_used_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+@dataclass
+class Observation:
+    """Layer 4: AI 자동 관찰 항목 (ai_observations, AADS-186E-3)."""
+    id: int = 0
+    category: str = ""  # 'ceo_preference' | 'project_pattern' | 'recurring_issue' | 'decision' | 'learning'
+    key: str = ""
+    value: str = ""
+    confidence: float = 0.5
+    source_session_id: Optional[int] = None
+    last_confirmed_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -275,6 +289,249 @@ class MemoryManager:
         finally:
             await conn.close()
 
+    # ── Layer 4: AI 자동 관찰 (ai_observations, AADS-186E-3) ────────────────
+
+    async def observe(
+        self,
+        category: str,
+        key: str,
+        value: str,
+        confidence: float = 0.5,
+        source_session_id: Optional[int] = None,
+    ) -> None:
+        """
+        AI가 관찰한 패턴/선호도를 ai_observations에 UPSERT.
+        기존 키 존재 시: confidence 증가 (min(1.0, existing + 0.1)).
+        value 변경 시: value 업데이트 + confidence 리셋.
+        """
+        valid_categories = {"ceo_preference", "project_pattern", "recurring_issue", "decision", "learning"}
+        if category not in valid_categories:
+            logger.warning(f"memory_manager observe: 유효하지 않은 category={category}")
+            return
+
+        conn = await _get_conn()
+        try:
+            await conn.execute(
+                """
+                INSERT INTO ai_observations
+                    (category, key, value, confidence, source_session_id, last_confirmed_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+                ON CONFLICT (category, key) DO UPDATE SET
+                    confidence = CASE
+                        WHEN ai_observations.value = EXCLUDED.value
+                        THEN LEAST(ai_observations.confidence + 0.1, 1.0)
+                        ELSE EXCLUDED.confidence
+                    END,
+                    value = EXCLUDED.value,
+                    last_confirmed_at = NOW(),
+                    updated_at = NOW()
+                """,
+                category, key, value, confidence, source_session_id,
+            )
+            logger.debug(f"memory_manager observe: category={category} key={key}")
+        except Exception as e:
+            logger.error(f"memory_manager observe error: {e}")
+        finally:
+            await conn.close()
+
+    async def recall_observations(
+        self,
+        category: Optional[str] = None,
+        min_confidence: float = 0.3,
+    ) -> List[Observation]:
+        """
+        ai_observations 검색.
+        category 지정 시 해당 카테고리만, min_confidence 기준 필터링.
+        최근 confirmed 순 정렬.
+        """
+        conn = await _get_conn()
+        try:
+            if category:
+                rows = await conn.fetch(
+                    """
+                    SELECT * FROM ai_observations
+                    WHERE category = $1 AND confidence >= $2
+                    ORDER BY last_confirmed_at DESC NULLS LAST, confidence DESC
+                    LIMIT 30
+                    """,
+                    category, min_confidence,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT * FROM ai_observations
+                    WHERE confidence >= $1
+                    ORDER BY last_confirmed_at DESC NULLS LAST, confidence DESC
+                    LIMIT 30
+                    """,
+                    min_confidence,
+                )
+            return [_row_to_observation(r) for r in rows]
+        except Exception as e:
+            logger.debug(f"memory_manager recall_observations error: {e}")
+            return []
+        finally:
+            await conn.close()
+
+    async def build_meta_context(self, max_tokens: int = 500) -> str:
+        """
+        Context Builder Layer 4에 주입할 메타 메모리 자연어 요약.
+        ai_observations + ai_meta_memory 통합.
+        가장 confident한 관찰 10~15개를 자연어로 정리.
+        """
+        lines: List[str] = []
+        char_limit = max_tokens * 3  # 한국어 기준
+
+        # ai_observations에서 high-confidence 항목
+        try:
+            obs = await self.recall_observations(min_confidence=0.4)
+            if obs:
+                by_cat: Dict[str, List[str]] = {}
+                for o in obs[:15]:
+                    cat = o.category
+                    if cat not in by_cat:
+                        by_cat[cat] = []
+                    by_cat[cat].append(f"{o.key}: {o.value}")
+
+                for cat, items in by_cat.items():
+                    cat_label = {
+                        "ceo_preference": "CEO 선호",
+                        "project_pattern": "프로젝트 패턴",
+                        "recurring_issue": "반복 이슈",
+                        "decision": "결정 사항",
+                        "learning": "학습",
+                    }.get(cat, cat)
+                    for item in items[:3]:
+                        line = f"[{cat_label}] {item}"
+                        lines.append(line)
+                        if sum(len(l) for l in lines) > char_limit:
+                            break
+                    if sum(len(l) for l in lines) > char_limit:
+                        break
+        except Exception as e:
+            logger.debug(f"memory_manager build_meta_context obs error: {e}")
+
+        # ai_meta_memory에서 CEO 선호도 + 결정 이력
+        if sum(len(l) for l in lines) < char_limit:
+            try:
+                meta_text = await self.get_meta_context(max_tokens=max_tokens // 2)
+                if meta_text:
+                    lines.append(meta_text)
+            except Exception:
+                pass
+
+        return "\n".join(lines) if lines else ""
+
+    async def auto_observe_from_session(self, messages: List[Dict[str, Any]]) -> None:
+        """
+        세션 종료 시 자동으로 패턴 추출·기록 (백그라운드 실행).
+        Haiku로 메시지 분석 → observe() 호출.
+        비용: ~$0.001/호출.
+        """
+        if not messages:
+            return
+
+        recent = messages[-20:]
+        dialog = "\n".join(
+            f"{m.get('role', 'user')}: {str(m.get('content', ''))[:200]}"
+            for m in recent
+        )
+
+        try:
+            from anthropic import AsyncAnthropic
+            from app.config import Settings
+            s = Settings()
+            client = AsyncAnthropic(api_key=s.ANTHROPIC_API_KEY.get_secret_value())
+
+            resp = await client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=500,
+                system=(
+                    "대화를 분석하여 CEO의 선호도, 반복 패턴, 새로운 결정을 추출하라. "
+                    "JSON 배열로 반환: "
+                    "[{'category': 'ceo_preference'|'project_pattern'|'recurring_issue'|'decision'|'learning', "
+                    "'key': '영문_snake_case', 'value': '한국어 설명', 'confidence': 0.3~0.9}] "
+                    "최대 5개. 없으면 빈 배열 []."
+                ),
+                messages=[{"role": "user", "content": f"대화:\n{dialog}"}],
+            )
+
+            raw = resp.content[0].text.strip()
+            # JSON 배열 파싱
+            if raw.startswith("["):
+                observations = json.loads(raw)
+                for obs in observations[:5]:
+                    if all(k in obs for k in ("category", "key", "value")):
+                        await self.observe(
+                            category=obs["category"],
+                            key=obs["key"],
+                            value=str(obs["value"]),
+                            confidence=float(obs.get("confidence", 0.5)),
+                        )
+                logger.debug(f"auto_observe_from_session: {len(observations)}개 관찰 저장")
+        except Exception as e:
+            logger.debug(f"memory_manager auto_observe_from_session error: {e}")
+
+    # ── Layer 2 도구 인터페이스 (AADS-186E-3) ───────────────────────────────
+
+    async def save_note(
+        self, title: str, content: str, category: str = "general"
+    ) -> str:
+        """
+        AI가 명시적으로 노트 저장 (도구 인터페이스).
+        session_notes 테이블에 저장. 반환: "노트 저장 완료: {title}"
+        """
+        if not title or not content:
+            return "오류: title과 content 필수"
+
+        summary = f"[{category}] {title}: {content[:500]}"
+        conn = await _get_conn()
+        try:
+            await conn.execute(
+                """
+                INSERT INTO session_notes
+                    (session_id, summary, key_decisions, action_items, unresolved_issues, projects_discussed)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                """,
+                f"note_{category}",
+                summary,
+                [title],
+                [],
+                [],
+                _extract_projects([{"content": content}]),
+            )
+            return f"노트 저장 완료: {title}"
+        except Exception as e:
+            logger.error(f"memory_manager save_note error: {e}")
+            return f"노트 저장 실패: {e}"
+        finally:
+            await conn.close()
+
+    async def recall_notes(self, query: str, limit: int = 5) -> List[SessionNote]:
+        """
+        키워드로 노트 검색 (도구 인터페이스).
+        session_notes에서 title/content ILIKE 검색, 최근순 정렬.
+        """
+        conn = await _get_conn()
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT * FROM session_notes
+                WHERE summary ILIKE $1
+                   OR $1 ILIKE '%' || session_id || '%'
+                ORDER BY created_at DESC
+                LIMIT $2
+                """,
+                f"%{query}%",
+                min(limit, 20),
+            )
+            return [_row_to_session_note(r) for r in rows]
+        except Exception as e:
+            logger.debug(f"memory_manager recall_notes error: {e}")
+            return []
+        finally:
+            await conn.close()
+
     # ── 자동 요약 (Claude Haiku) ─────────────────────────────────────────────
 
     async def _auto_summarize(
@@ -358,6 +615,22 @@ def _row_to_session_note(row: asyncpg.Record) -> SessionNote:
         unresolved_issues=list(row.get("unresolved_issues") or []),
         projects_discussed=list(row.get("projects_discussed") or []),
         created_at=row.get("created_at"),
+    )
+
+
+def _row_to_observation(row: asyncpg.Record) -> Observation:
+    if not row:
+        return Observation()
+    return Observation(
+        id=row["id"],
+        category=row.get("category") or "",
+        key=row.get("key") or "",
+        value=row.get("value") or "",
+        confidence=float(row.get("confidence") or 0.5),
+        source_session_id=row.get("source_session_id"),
+        last_confirmed_at=row.get("last_confirmed_at"),
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
     )
 
 

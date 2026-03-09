@@ -133,10 +133,10 @@ async def _build_memory_layer() -> str:
                 + "\n</recent_sessions>"
             )
 
-        # 메타 기억 요약 (Layer 4)
-        meta = await mgr.get_meta_context(max_tokens=500)
+        # 메타 기억 요약 (Layer 4) — ai_observations + ai_meta_memory 통합
+        meta = await mgr.build_meta_context(max_tokens=500)
         if meta:
-            parts.append(f"<learned_patterns>\n{meta}\n</learned_patterns>")
+            parts.append(f"<meta_memory>\n{meta}\n</meta_memory>")
 
     except Exception as e:
         logger.debug(f"[Memory] context_builder 메모리 주입 실패: {e}")

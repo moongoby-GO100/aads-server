@@ -426,6 +426,59 @@ async def send_message_stream(
             from app.services.tool_registry import ToolRegistry
             tools_for_api = ToolRegistry().get_tools(intent_result.tool_group)
 
+        # 8.5. 복잡 인텐트 → AutonomousExecutor (max_iterations=25) (AADS-186E-3)
+        _AUTONOMOUS_INTENTS = frozenset({
+            "cto_code_analysis", "cto_verify", "service_inspection", "cto_impact",
+        })
+        if intent in _AUTONOMOUS_INTENTS and intent_result.use_tools and tools_for_api:
+            from app.services.autonomous_executor import AutonomousExecutor
+            auto_exec = AutonomousExecutor(max_iterations=25, cost_limit=2.0)
+            full_response = ""
+            thinking_summary = ""
+            model_used = intent_result.model
+            cost_usd = Decimal("0")
+            input_tokens = 0
+            output_tokens = 0
+            tools_called: list = []
+
+            async for sse_line in auto_exec.execute_task(
+                task_description="",
+                tools=tools_for_api,
+                messages=messages,
+                model=intent_result.model,
+                system_prompt=system_prompt,
+            ):
+                yield sse_line
+                # 완료/비용/오류 이벤트 파싱하여 응답 수집
+                try:
+                    import json as _json
+                    _data = _json.loads(sse_line.replace("data: ", "").strip())
+                    _etype = _data.get("type", "")
+                    if _etype == "delta":
+                        full_response += _data.get("content", "")
+                    elif _etype in ("complete", "max_iterations", "cost_limit"):
+                        cost_usd = Decimal(str(_data.get("total_cost", "0")))
+                        if _etype == "complete":
+                            full_response = _data.get("content", full_response)
+                    elif _etype == "tool_use":
+                        tools_called.append(_data.get("tool_name", ""))
+                except Exception:
+                    pass
+
+            # 응답 저장 및 done 이벤트
+            await _save_message(
+                conn, sid, "assistant", full_response,
+                model_used=model_used, intent=intent,
+                cost=cost_usd, tokens_in=0, tokens_out=0,
+                sources=[], tools_called=tools_called, thinking_summary=None,
+            )
+            await conn.execute(
+                "UPDATE chat_sessions SET cost_total = cost_total + $1, updated_at = NOW() WHERE id = $2",
+                cost_usd, sid,
+            )
+            yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': 0, 'output_tokens': 0, 'autonomous': True})}\n\n"
+            return
+
         # 9. 모델 선택기 → SSE 스트리밍
         from app.services.model_selector import call_stream
         # Langfuse: llm_generation span 시작
@@ -492,15 +545,16 @@ async def send_message_stream(
             cost_usd, sid,
         )
 
-        # 11. 20턴 이상 시 세션 노트 자동 저장 (AADS-186E-2, 비동기 — 응답 지연 없음)
+        # 11. 20턴 이상 시 세션 노트 자동 저장 + 자동 관찰 (AADS-186E-2/186E-3, 비동기)
         try:
             msg_count_row = await conn.fetchrow(
                 "SELECT message_count FROM chat_sessions WHERE id = $1", sid
             )
             msg_count = (msg_count_row["message_count"] if msg_count_row else 0) or 0
             if msg_count >= 20 and msg_count % 20 == 0:
-                import asyncio
-                asyncio.create_task(_auto_save_session_note(session_id, raw_messages))
+                import asyncio as _asyncio
+                _asyncio.create_task(_auto_save_session_note(session_id, raw_messages))
+                _asyncio.create_task(_auto_observe_session(raw_messages))
         except Exception:
             pass
 
@@ -519,6 +573,17 @@ async def _auto_save_session_note(session_id: str, messages: List[Dict[str, Any]
         logger.debug(f"auto_save_session_note: session_id={session_id}")
     except Exception as e:
         logger.debug(f"auto_save_session_note error: {e}")
+
+
+async def _auto_observe_session(messages: List[Dict[str, Any]]) -> None:
+    """세션 종료 시 자동 패턴 관찰 (백그라운드 태스크, AADS-186E-3)."""
+    try:
+        from app.services.memory_manager import get_memory_manager
+        mgr = get_memory_manager()
+        await mgr.auto_observe_from_session(messages)
+        logger.debug("auto_observe_session: 완료")
+    except Exception as e:
+        logger.debug(f"auto_observe_session error: {e}")
 
 
 async def toggle_bookmark(message_id: str) -> Optional[Dict[str, Any]]:

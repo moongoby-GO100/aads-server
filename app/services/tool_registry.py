@@ -39,6 +39,8 @@ _DEFER_LOADING: Dict[str, bool] = {
     "save_note": True,
     "recall_notes": True,
     "learn_pattern": True,
+    # AADS-186E-3: 자동 관찰 도구 — 온디맨드
+    "observe": True,
     # AADS-186E-3: 딥리서치 + 코드탐색 도구 — 온디맨드
     "deep_research": True,
     "code_explorer": True,
@@ -570,61 +572,62 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         ),
         "allowed_callers": ["code_execution_20250825"],
     },
-    # ── AADS-186E-2: 메모리 도구 ──────────────────────────────────────────────
+    # ── AADS-186E-2/186E-3: 메모리 도구 ────────────────────────────────────────
     "save_note": {
         "name": "save_note",
         "description": (
-            "현재 대화의 중요 결정, 이슈, 액션 아이템을 영구 저장한다. "
-            "다음 세션에서 자동으로 불러온다. "
+            "중요한 정보, 결정, 분석 결과를 영구 저장. "
+            "다음 세션에서 recall_notes로 검색 가능. "
             "중요한 결정이나 이슈가 나오면 반드시 호출한다."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "summary": {
+                "title": {
                     "type": "string",
-                    "description": "대화 핵심 요약 (200자 이내)",
+                    "description": "노트 제목 (50자 이내)",
                 },
-                "key_decisions": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "주요 결정 사항 목록",
+                "content": {
+                    "type": "string",
+                    "description": "노트 내용 (500자 이내)",
                 },
-                "action_items": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "후속 액션 아이템 목록",
-                },
-                "unresolved_issues": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "미해결 이슈 목록 (선택)",
+                "category": {
+                    "type": "string",
+                    "description": "카테고리 (선택). 예: 'decision', 'analysis', 'general'",
                 },
             },
-            "required": ["summary"],
+            "required": ["title", "content"],
         },
+        "input_examples": [
+            {"title": "마이크로서비스 전환 결정", "content": "6개 서비스 중 KIS와 NTV2를 우선 분리", "category": "decision"},
+            {"title": "서버211 SSH 불안정", "content": "ConnectTimeout=30 설정 필요, 이유: 망 레이턴시", "category": "known_issue"},
+        ],
         "defer_loading": True,
     },
     "recall_notes": {
         "name": "recall_notes",
         "description": (
-            "이전 세션의 기록을 검색한다. "
-            "'어제 논의한 것', '지난주 결정 사항', '이전에 한 작업' 등."
+            "이전에 저장한 노트를 키워드로 검색. "
+            "지난 세션의 결정, 분석, 메모를 찾을 때 사용."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "검색 쿼리 (키워드 또는 날짜 범위)",
+                    "description": "검색 쿼리 (키워드)",
                 },
-                "count": {
+                "limit": {
                     "type": "integer",
                     "description": "반환할 최대 건수 (기본 5, 최대 20)",
                 },
             },
-            "required": [],
+            "required": ["query"],
         },
+        "input_examples": [
+            {"query": "마이크로서비스"},
+            {"query": "KIS 주문", "limit": 3},
+        ],
         "defer_loading": True,
     },
     "learn_pattern": {
@@ -652,6 +655,42 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             },
             "required": ["category", "key", "value"],
         },
+        "defer_loading": True,
+    },
+    # ── AADS-186E-3: 자동 관찰 도구 ────────────────────────────────────────────
+    "observe": {
+        "name": "observe",
+        "description": (
+            "CEO 선호도, 반복 패턴, 결정 사항을 자동 관찰 기록. "
+            "대화에서 발견한 패턴이나 새로운 정보를 장기 메모리에 저장할 때 사용."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "description": "카테고리",
+                    "enum": ["ceo_preference", "project_pattern", "recurring_issue", "decision", "learning"],
+                },
+                "key": {
+                    "type": "string",
+                    "description": "관찰 키 (영문 snake_case)",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "관찰 내용 (한국어)",
+                },
+                "confidence": {
+                    "type": "number",
+                    "description": "확신도 0.0~1.0 (기본 0.5)",
+                },
+            },
+            "required": ["category", "key", "value"],
+        },
+        "input_examples": [
+            {"category": "ceo_preference", "key": "response_language", "value": "한국어 응답 선호", "confidence": 0.9},
+            {"category": "recurring_issue", "key": "server_211_ssh", "value": "SSH 자주 타임아웃", "confidence": 0.7},
+        ],
         "defer_loading": True,
     },
     # ── AADS-186E-3: 딥리서치 + 코드탐색 도구 ──────────────────────────────────
@@ -779,7 +818,7 @@ _GROUPS: Dict[str, List[str]] = {
     # AADS-186E-1: 크롤링 도구 그룹
     "crawl": ["jina_read", "crawl4ai_fetch", "deep_crawl"],
     # AADS-186E-2: 메모리 도구 그룹
-    "memory": ["save_note", "recall_notes", "learn_pattern"],
+    "memory": ["save_note", "recall_notes", "learn_pattern", "observe"],
     # AADS-186E-3: 딥리서치 + 코드탐색 도구 그룹
     "research": ["deep_research", "code_explorer", "analyze_changes", "search_all_projects"],
     "all": list(_TOOLS.keys()),

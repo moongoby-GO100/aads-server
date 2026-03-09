@@ -75,10 +75,11 @@ class ToolExecutor:
             "deep_crawl":             self._deep_crawl,
             # 하위호환: fetch_url → jina_read 내부 리다이렉트 (AADS-186E-1 제약)
             "fetch_url":              self._jina_read,
-            # AADS-186E-2: 메모리 도구
+            # AADS-186E-2/186E-3: 메모리 도구
             "save_note":              self._save_note,
             "recall_notes":           self._recall_notes,
             "learn_pattern":          self._learn_pattern,
+            "observe":                self._observe,
             # AADS-186E-3: 딥리서치 + 코드탐색 도구
             "deep_research":          self._deep_research,
             "code_explorer":          self._code_explorer,
@@ -513,56 +514,61 @@ class ToolExecutor:
             "error": result.error,
         }
 
-    # ── AADS-186E-2: 메모리 도구 ─────────────────────────────────────────────
+    # ── AADS-186E-2/186E-3: 메모리 도구 ─────────────────────────────────────
 
     async def _save_note(self, inp: Dict[str, Any]) -> Any:
-        """세션 노트 저장 — session_notes 테이블에 INSERT."""
-        summary = inp.get("summary", "")
-        if not summary:
-            return {"error": "summary 필수"}
-        key_decisions = inp.get("key_decisions", [])
-        action_items = inp.get("action_items", [])
-        unresolved_issues = inp.get("unresolved_issues", [])
+        """노트 저장 — title/content 기반 (AADS-186E-3 업데이트)."""
+        title = inp.get("title", "") or inp.get("summary", "")  # 하위호환
+        content = inp.get("content", "")
+        category = inp.get("category", "general")
+
+        if not title:
+            return {"error": "title 필수"}
 
         from app.services.memory_manager import get_memory_manager
         mgr = get_memory_manager()
-        note = await mgr.save_session_note(
-            session_id="tool_call",
-            messages=[],
-            summary=summary,
-            key_decisions=key_decisions,
-            action_items=action_items,
-            unresolved_issues=unresolved_issues,
-        )
-        return {
-            "status": "saved",
-            "note_id": note.id,
-            "summary": note.summary,
-        }
+
+        # 새 title/content 인터페이스
+        if content:
+            result = await mgr.save_note(title=title, content=content, category=category)
+            return {"status": "saved", "message": result}
+        else:
+            # 하위호환: 구 인터페이스 (summary만)
+            key_decisions = inp.get("key_decisions", [])
+            action_items = inp.get("action_items", [])
+            unresolved_issues = inp.get("unresolved_issues", [])
+            note = await mgr.save_session_note(
+                session_id="tool_call",
+                messages=[],
+                summary=title,
+                key_decisions=key_decisions,
+                action_items=action_items,
+                unresolved_issues=unresolved_issues,
+            )
+            return {"status": "saved", "note_id": note.id, "summary": note.summary}
 
     async def _recall_notes(self, inp: Dict[str, Any]) -> Any:
-        """최근 세션 노트 검색 — session_notes 테이블 조회."""
-        count = min(int(inp.get("count", 5)), 20)
+        """노트 검색 — keyword 기반 (AADS-186E-3 업데이트)."""
         query = inp.get("query", "")
+        limit = min(int(inp.get("limit", inp.get("count", 5))), 20)
 
         from app.services.memory_manager import get_memory_manager
         mgr = get_memory_manager()
 
         if query:
-            # 쿼리 있으면 recall (메타메모리 검색)
-            memories = await mgr.recall(query=query)
+            # 새 인터페이스: recall_notes(query)
+            notes = await mgr.recall_notes(query=query, limit=limit)
             return [
                 {
-                    "category": m.category,
-                    "key": m.key,
-                    "value": m.value,
-                    "confidence": m.confidence,
+                    "summary": n.summary,
+                    "key_decisions": n.key_decisions,
+                    "created_at": n.created_at.isoformat() if n.created_at else None,
                 }
-                for m in memories[:count]
+                for n in notes
             ]
         else:
-            # 최근 노트 반환
-            notes = await mgr.get_recent_notes(count)
+            # 쿼리 없으면 최근 노트 반환
+            notes = await mgr.get_recent_notes(limit)
             return [
                 {
                     "session_id": n.session_id,
@@ -587,6 +593,21 @@ class ToolExecutor:
         mgr = get_memory_manager()
         await mgr.learn(category, key, value)
         return {"status": "learned", "category": category, "key": key}
+
+    async def _observe(self, inp: Dict[str, Any]) -> Any:
+        """자동 관찰 기록 — ai_observations UPSERT (AADS-186E-3)."""
+        category = inp.get("category", "")
+        key = inp.get("key", "")
+        value = inp.get("value", "")
+        confidence = float(inp.get("confidence", 0.5))
+
+        if not category or not key or not value:
+            return {"error": "category, key, value 필수"}
+
+        from app.services.memory_manager import get_memory_manager
+        mgr = get_memory_manager()
+        await mgr.observe(category=category, key=key, value=value, confidence=confidence)
+        return {"status": "observed", "category": category, "key": key, "confidence": confidence}
 
 
     # ── AADS-186E-3: 딥리서치 + 코드탐색 도구 ────────────────────────────────

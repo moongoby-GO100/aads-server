@@ -97,60 +97,22 @@ async def lifespan(app: FastAPI):
                 logger.warning("scheduler_daily_summary_failed", error=str(e))
 
         async def _run_weekly_briefing():
-            """AADS-186D: 주간 CEO 브리핑 — 매주 월요일 09:00 KST (= UTC 00:00)."""
+            """AADS-186E-3: 주간 CEO 브리핑 — AutonomousExecutor 기반 자율 생성."""
             try:
                 from datetime import datetime
                 from zoneinfo import ZoneInfo
-                from app.services.ckp_manager import CKPManager
+                from app.services.autonomous_executor import generate_weekly_briefing
 
                 now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
                 logger.info("weekly_briefing_started", date=now_kst.strftime("%Y-%m-%d"))
 
-                projects = ["AADS", "KIS", "GO100", "SF", "NTV2", "NAS"]
-                mgr = CKPManager(db_conn=None)
-                summaries: list = []
-                for proj in projects:
-                    try:
-                        summary = await mgr.get_ckp_summary(proj, max_tokens=200)
-                        first_line = next(
-                            (ln for ln in summary.splitlines() if ln.startswith("# ")),
-                            f"# {proj}",
-                        )
-                        summaries.append(f"• *{proj}*: {first_line.lstrip('# ').strip()}")
-                    except Exception:
-                        summaries.append(f"• *{proj}*: CKP 로드 실패")
-
-                # 비용 요약 (최근 7일)
-                cost_txt = "비용 조회 불가"
-                try:
-                    import asyncpg, os
-                    db_url = os.getenv("DATABASE_URL", "").replace("postgresql://", "postgres://")
-                    if db_url:
-                        conn = await asyncpg.connect(db_url, timeout=5)
-                        try:
-                            row = await conn.fetchrow(
-                                "SELECT COALESCE(SUM(cost_usd),0) AS wk_cost,"
-                                " COUNT(*) AS msg_cnt FROM chat_messages"
-                                " WHERE created_at > now() - interval '7 days'"
-                            )
-                            if row:
-                                cost_txt = (
-                                    f"7일 비용: ${float(row['wk_cost']):.3f}"
-                                    f" ({row['msg_cnt']}건)"
-                                )
-                        finally:
-                            await conn.close()
-                except Exception:
-                    pass
+                briefing = await generate_weekly_briefing()
 
                 bot = get_telegram_bot()
                 if bot and bot.is_ready:
-                    msg = (
-                        f"📊 *AADS 주간 CEO 브리핑* — {now_kst.strftime('%Y-%m-%d')} (월)\n\n"
-                        + "\n".join(summaries)
-                        + f"\n\n💰 {cost_txt}\n"
-                        + "🔗 대시보드: https://aads.newtalk.kr/"
-                    )
+                    header = f"📊 *AADS 주간 CEO 브리핑* — {now_kst.strftime('%Y-%m-%d')} (월)\n\n"
+                    # Telegram 메시지 최대 4096자
+                    msg = header + briefing[:3800] + "\n\n🔗 https://aads.newtalk.kr/"
                     await bot.send_message(msg)
                     logger.info("weekly_briefing_sent")
                 else:
