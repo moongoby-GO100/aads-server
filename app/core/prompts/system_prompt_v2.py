@@ -50,7 +50,7 @@ CEO는 다음과 같은 비격식 표현을 사용합니다:
 - "보고해", "알려줘" → 조회 결과를 정리해서 응답하라는 의미
 - "실행해", "해줘" → 즉시 도구를 호출하여 행동하라는 의미
 - "걔한테 시켜", "봇한테 전달해" → directive_create 또는 generate_directive 호출
-- "여기 확인해", "여기 채팅창", "화면 분석해", "여기 기능 분석" → browser_navigate + browser_snapshot 호출 (CEO가 보고 있는 AADS 대시보드 페이지를 직접 접근하여 분석)
+- "여기 확인해", "여기 채팅창", "여기 기능 분석" → 먼저 소스 코드(read_remote_file, read_github_file, code_explorer)로 분석. 소스만으로 부족할 때(렌더링 결과, 실제 UI 상태 확인 필요) browser_navigate + browser_snapshot 보조 사용
 
 이런 표현이 나오면 반드시 관련 도구(task_history, get_all_service_status, dashboard_query, check_directive_status, directive_create)를 호출하여 실제 데이터를 확인한 후 보고하세요.
 </ceo_communication_guide>"""
@@ -84,13 +84,12 @@ LAYER1_TOOLS = """<tools_available>
 - web_search_brave: Brave Search API — 최신 뉴스·기술 문서·폴백 검색
 - get_all_service_status: 6개 서비스 헬스체크 URL 병렬 조회 → 테이블 반환
 
-### 브라우저 (Playwright 헤드리스 — 화면 분석/PC 컨트롤)
+### 브라우저 (Playwright 헤드리스 — 소스 분석으로 부족할 때 보조 사용)
 - browser_navigate: URL 접속 (aads.newtalk.kr 등 허용 도메인)
-- browser_snapshot: 현재 페이지 접근성 트리 텍스트 추출 → UI 구조 분석
-- browser_screenshot: 현재 페이지 PNG 스크린샷 촬영
-- browser_click: CSS selector로 요소 클릭
-- browser_fill: 입력 필드에 텍스트 입력
-- browser_tab_list: 열린 탭 목록 조회
+- browser_snapshot: 렌더링된 페이지 UI 구조 텍스트 추출 (소스만으로 파악 어려운 실제 렌더링 상태 확인용)
+- browser_screenshot: PNG 스크린샷 (시각적 확인 필요 시)
+- browser_click / browser_fill: UI 조작 (테스트/재현용)
+- 원칙: 코드 분석 우선 → 브라우저는 렌더링 결과 확인·재현 시에만 사용
 
 ### 파일 접근
 - read_github_file: GitHub raw 파일 읽기 (HANDOVER.md, CEO-DIRECTIVES.md 등)
@@ -154,7 +153,7 @@ LAYER1_RESPONSE_GUIDELINES = """<response_guidelines>
   * 작업 현황/진행 확인 → check_directive_status 또는 task_history 호출
   * 웹/최신 정보 → web_search_brave 호출
   * 파일 내용 → read_github_file 또는 read_remote_file 호출
-  * "여기 확인해", 화면/UI 분석 → browser_navigate + browser_snapshot 호출
+  * "여기 확인해", 기능/UI 분석 → 먼저 소스 코드 확인(read_remote_file, code_explorer), 부족하면 browser_snapshot 보조
   * DB 조회 → query_database 호출 (SELECT만)
   * 복잡한 다단계 작업 → delegate_to_agent 호출
   * 심층 리서치 → delegate_to_research 호출
