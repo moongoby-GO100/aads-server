@@ -602,7 +602,7 @@ class DashboardCollector:
     async def _fetch_health(self) -> str:
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                r = await client.get("https://aads.newtalk.kr/api/v1/health")
+                r = await client.get("http://localhost:8080/api/v1/health")
                 return r.text[:2000]
         except Exception as e:
             return f"(health 조회 실패: {e})"
@@ -710,7 +710,7 @@ async def _handle_health_check_intent(
     try:
         import httpx
         async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.get("https://aads.newtalk.kr/api/v1/ops/full-health")
+            r = await client.get("http://localhost:8080/api/v1/ops/full-health")
             data = r.json() if r.status_code == 200 else {"status": "ERROR", "error": f"HTTP {r.status_code}"}
     except Exception as e:
         data = {"status": "ERROR", "error": str(e)}
@@ -956,15 +956,18 @@ async def _handle_qa_intent(
     response_text = f"[QA + Judge 실행 완료] ({duration_ms}ms, ${total_cost:.4f})\n\n" + "\n".join(results)
 
     # 실행 이력 로깅 (non-blocking)
+    conn = None
     try:
         conn = await asyncpg.connect(dsn=dsn)
         await _log_agent_execution(
             conn, session_id, "qa+judge", "qa", user_msg[:200],
             response_text, "success", total_cost, duration_ms,
         )
-        await conn.close()
     except Exception:
         pass
+    finally:
+        if conn:
+            await conn.close()
 
     # 토큰은 에이전트 내부에서 소비되므로 여기서는 0 반환 (비용은 agent 내부 추적)
     return response_text, 0, 0
@@ -1086,6 +1089,7 @@ async def _handle_cross_project_qa(
     )
 
     # 세션에 분석 컨텍스트 저장 (execution_verify용)
+    conn = None
     try:
         conn = await asyncpg.connect(dsn=dsn)
         await _log_agent_execution(
@@ -1100,9 +1104,11 @@ async def _handle_cross_project_qa(
             session_id,
             json.dumps({"project": project, "files": prioritized, "workdir": workdir}),
         )
-        await conn.close()
     except Exception as e:
         logger.warning(f"cross_project_qa_log_failed: {e}")
+    finally:
+        if conn:
+            await conn.close()
 
     return response_text, input_tokens, output_tokens
 
@@ -1121,6 +1127,7 @@ async def _handle_execution_verify_intent(
 
     # 세션 메모리에서 직전 cross-project QA 정보 가져오기
     project_info = None
+    conn = None
     try:
         conn = await asyncpg.connect(dsn=dsn)
         row = await conn.fetchrow(
@@ -1129,9 +1136,11 @@ async def _handle_execution_verify_intent(
         )
         if row:
             project_info = json.loads(row["value"])
-        await conn.close()
     except Exception as e:
         logger.warning(f"execution_verify_load_session_failed: {e}")
+    finally:
+        if conn:
+            await conn.close()
 
     if not project_info:
         # 직접 프로젝트 추출 시도
@@ -1193,10 +1202,15 @@ SUCCESS_CRITERIA: |
     try:
         from app.api.directives import DirectiveSubmitRequest, submit_directive_sync
         submit_req = DirectiveSubmitRequest(
-            content=directive_content,
-            source="ceo-chat-execution-verify",
+            task_id=task_id,
+            project=project,
+            priority="P1",
+            size="M",
+            description=f"CEO Chat 실행 검증 요청: {project} 코드 실행 검증",
+            success_criteria="모든 테스트 통과\n실행 오류 0건\n결과 보고서 생성",
+            files_owned=files[:10] if files else None,
         )
-        submit_result = await submit_directive_sync(submit_req)
+        submit_result = submit_directive_sync(submit_req)
         submit_status = "제출 완료"
     except Exception as e:
         logger.error(f"execution_verify_submit_failed: {e}")
@@ -1245,6 +1259,7 @@ async def _handle_design_intent(
 
     duration_ms = int((time.time() - start) * 1000)
 
+    conn = None
     try:
         conn = await asyncpg.connect(dsn=dsn)
         await _log_agent_execution(
@@ -1252,9 +1267,11 @@ async def _handle_design_intent(
             response_text[:500], "success", calc_cost(tool_model, input_tokens, output_tokens),
             duration_ms,
         )
-        await conn.close()
     except Exception:
         pass
+    finally:
+        if conn:
+            await conn.close()
 
     return response_text, input_tokens, output_tokens
 
@@ -1313,6 +1330,7 @@ async def _handle_design_fix_intent(
     duration_ms = int((time.time() - start) * 1000)
     response_text = f"[디자인 수정 분석 + 코드 생성] ({duration_ms}ms)\n\n{analysis_text}{dev_result_text}"
 
+    conn = None
     try:
         conn = await asyncpg.connect(dsn=dsn)
         await _log_agent_execution(
@@ -1320,9 +1338,11 @@ async def _handle_design_fix_intent(
             response_text[:500], "success",
             calc_cost(tool_model, in_tok, out_tok), duration_ms,
         )
-        await conn.close()
     except Exception:
         pass
+    finally:
+        if conn:
+            await conn.close()
 
     return response_text, in_tok, out_tok
 
@@ -1368,6 +1388,7 @@ async def _handle_architect_intent(
 
     duration_ms = int((time.time() - start) * 1000)
 
+    conn = None
     try:
         conn = await asyncpg.connect(dsn=dsn)
         await _log_agent_execution(
@@ -1375,9 +1396,11 @@ async def _handle_architect_intent(
             response_text[:500], "success" if "오류" not in response_text else "error",
             total_cost, duration_ms,
         )
-        await conn.close()
     except Exception:
         pass
+    finally:
+        if conn:
+            await conn.close()
 
     return response_text, 0, 0
 

@@ -5,7 +5,7 @@ AADS-170: CEO Chat-First 시스템 — 채팅 라우터
 """
 from __future__ import annotations
 
-import logging
+import structlog
 from typing import List, Optional
 from uuid import UUID
 
@@ -32,7 +32,7 @@ from app.models.chat import (
 from app.services import chat_service as svc
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 _NOT_FOUND = lambda name: HTTPException(status_code=404, detail=f"{name} not found")
 
@@ -110,7 +110,7 @@ async def delete_session(session_id: UUID):
 @router.get("/chat/messages", response_model=List[MessageOut], tags=["chat-message"])
 async def get_messages(
     session_id: UUID = Query(...),
-    limit: int = Query(50, le=200),
+    limit: int = Query(200, le=1000),
     offset: int = Query(0, ge=0),
 ):
     """메시지 목록."""
@@ -123,15 +123,19 @@ async def send_message(req: MessageSendRequest):
     메시지 전송 — SSE 스트리밍 응답.
     Content-Type: text/event-stream
     """
-    return StreamingResponse(
-        svc.with_heartbeat(
-            svc.send_message_stream(
-                session_id=str(req.session_id),
-                content=req.content,
-                attachments=req.attachments,
-                model_override=req.model_override,
-            ),
+    session_id_str = str(req.session_id)
+    stream = svc.with_heartbeat(
+        svc.send_message_stream(
+            session_id=session_id_str,
+            content=req.content,
+            attachments=req.attachments,
+            model_override=req.model_override,
         ),
+    )
+    # 클라이언트 연결 종료 시 백그라운드에서 LLM 생성 완료 → DB 저장 보장
+    bg_stream = svc.with_background_completion(stream, session_id=session_id_str)
+    return StreamingResponse(
+        bg_stream,
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

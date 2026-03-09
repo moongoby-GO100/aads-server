@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import logging
 import os
+import structlog
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 @dataclass

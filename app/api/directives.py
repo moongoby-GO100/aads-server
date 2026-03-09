@@ -9,9 +9,10 @@ bridge.py가 감지 → 기존 파이프라인 실행.
 AADS-178: GET /directives/preflight — 지시서 발행 전 큐 상태 확인.
 AADS-181: GET /directives/all — 3서버 통합 디렉티브 조회.
 """
-import logging
 import os
 import re
+
+import structlog
 
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -21,7 +22,7 @@ from pydantic import BaseModel
 
 from app.services.preflight_checker import run_preflight
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 router = APIRouter()
 
 _PENDING_DIR = "/root/.genspark/directives/pending"

@@ -27,7 +27,7 @@ MCP_PORTS = {
 }
 
 # 상시 가동 MCP 서버 (서버 시작 시 연결)
-ALWAYS_ON_SERVERS = ["filesystem", "git", "memory", "postgres"]
+ALWAYS_ON_SERVERS = ["filesystem", "git", "memory"]
 
 # 온디맨드 MCP 서버 (필요 시 lazy 연결)
 ON_DEMAND_SERVERS = ["github", "brave_search", "fetch"]

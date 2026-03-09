@@ -18,11 +18,11 @@ LiteLLM Proxy 라우팅 (인텐트 기반):
 """
 from dataclasses import dataclass
 import os
-import logging
+
 import structlog
 
-logger = structlog.get_logger()
-_budget_logger = logging.getLogger("aads.budget")
+logger = structlog.get_logger(__name__)
+_budget_logger = structlog.get_logger("aads.budget")
 
 # LiteLLM Proxy 기본 URL (Docker 내부 네트워크)
 LITELLM_BASE_URL = os.environ.get("LITELLM_BASE_URL", "http://litellm:4000/v1")

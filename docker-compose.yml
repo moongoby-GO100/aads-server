@@ -70,6 +70,9 @@ services:
       - /root/.genspark:/root/.genspark:ro
       - /root/project-docs:/root/project-docs:ro
       - /root/aads/aads-docs:/root/aads/aads-docs:rw
+      # 서버 소스코드 읽기 (read_file / code_explorer 도구용)
+      - /root/aads/aads-server:/root/aads/aads-server:ro
+      - /root/aads/aads-dashboard:/root/aads/aads-dashboard:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:

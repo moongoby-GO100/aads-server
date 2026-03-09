@@ -59,6 +59,68 @@ async def with_heartbeat(
             yield f'data: {json.dumps({"type": "error", "content": f"Stream error: {type(exc).__name__}"})}\n\n'
             break
 
+# ── Background completion wrapper ─────────────────────────────────
+# 클라이언트 SSE 연결이 끊겨도 LLM 생성을 백그라운드에서 완료하여 DB에 저장.
+# _active_bg_tasks: session_id → asyncio.Task (동시 중복 방지)
+_active_bg_tasks: Dict[str, _heartbeat_asyncio.Task] = {}
+
+
+async def _drain_generator_to_db(gen: AsyncGenerator[str, None], session_id: str) -> None:
+    """SSE generator를 끝까지 소비하여 DB 저장을 보장 (yield 결과는 버림)."""
+    try:
+        async for _ in gen:
+            pass  # generator 내부에서 DB 저장이 일어남
+    except Exception as e:
+        logger.warning(f"bg_drain_error session={session_id}: {e}")
+    finally:
+        _active_bg_tasks.pop(session_id, None)
+        logger.info(f"bg_completion_done session={session_id}")
+
+
+async def with_background_completion(
+    gen: AsyncGenerator[str, None],
+    session_id: str,
+) -> AsyncGenerator[str, None]:
+    """SSE generator를 감싸서, 클라이언트 연결 종료 시 백그라운드로 이어받는 래퍼.
+
+    동작 방식:
+    1. 정상: yield로 클라이언트에 SSE 전달 (generator 소비)
+    2. 클라이언트 disconnect → GeneratorExit 발생
+    3. 남은 generator를 asyncio.Task로 백그라운드 실행 → DB 저장 보장
+    """
+    inner_gen = gen.__aiter__()
+    exhausted = False
+    try:
+        async for chunk in inner_gen:
+            yield chunk
+        exhausted = True
+    except (GeneratorExit, _heartbeat_asyncio.CancelledError):
+        # 클라이언트가 연결을 끊음 → 백그라운드로 이어받기
+        logger.info(f"client_disconnected session={session_id} — continuing in background")
+
+        async def _continue():
+            try:
+                async for _ in inner_gen:
+                    pass
+            except Exception as e:
+                logger.warning(f"bg_continue_error session={session_id}: {e}")
+            finally:
+                _active_bg_tasks.pop(session_id, None)
+                logger.info(f"bg_completion_done session={session_id}")
+
+        if session_id not in _active_bg_tasks:
+            task = _heartbeat_asyncio.create_task(_continue())
+            _active_bg_tasks[session_id] = task
+    except Exception as e:
+        logger.error(f"with_background_completion error: {e}")
+        raise
+
+
+def get_active_bg_tasks() -> Dict[str, bool]:
+    """현재 백그라운드 진행 중인 세션 목록 (health check / 디버그용)."""
+    return {sid: not task.done() for sid, task in _active_bg_tasks.items()}
+
+
 # AADS-186C: Langfuse 트레이스 (optional — graceful degradation)
 try:
     from app.core.langfuse_config import create_trace, is_enabled as langfuse_is_enabled

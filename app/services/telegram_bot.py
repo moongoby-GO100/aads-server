@@ -8,15 +8,16 @@ AADS-186C: Telegram 알림 봇
 """
 from __future__ import annotations
 
-import logging
 import os
+
+import structlog
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.services.alert_manager import Alert
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 # KST = UTC+9
 KST = timezone(timedelta(hours=9))

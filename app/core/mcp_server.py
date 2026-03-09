@@ -6,14 +6,15 @@ AADS-186C: FastAPI-MCP 통합
 """
 from __future__ import annotations
 
-import logging
 import os
+
+import structlog
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 # 노출 대상 operation ID 패턴 (화이트리스트)
 _EXPOSED_OPERATIONS = [

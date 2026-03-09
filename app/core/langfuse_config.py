@@ -6,11 +6,12 @@ AADS-186C: Langfuse Observability 설정
 """
 from __future__ import annotations
 
-import logging
 import os
+
+import structlog
 from typing import Any, Dict, Optional
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 # Langfuse 활성화 여부 (환경변수 미설정 시 False)
 _langfuse_enabled: bool = False
