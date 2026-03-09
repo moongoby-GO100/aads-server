@@ -74,6 +74,7 @@ services:
       - BRAVE_API_KEY=${BRAVE_API_KEY}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /root/.ssh:/root/.ssh:rw
       - /root/.genspark/directives:/root/.genspark/directives:ro
       - /root/project-docs:/root/project-docs:ro
       - /root/aads/aads-docs/reports/ceo-documents:/root/aads/aads-docs/reports/ceo-documents:rw

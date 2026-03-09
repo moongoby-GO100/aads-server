@@ -4,7 +4,7 @@ WORKDIR /app
 
 # psycopg binary 의존성 + Rust(tiktoken 빌드) + supervisord + git
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev gcc curl git supervisor && \
+    libpq-dev gcc curl git supervisor openssh-client && \
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
     rm -rf /var/lib/apt/lists/*
 
