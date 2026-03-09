@@ -1,6 +1,7 @@
 """
 AADS-170: CEO Chat-First 시스템 — 채팅 서비스 레이어
 DB CRUD, 메시지 전송(SSE 스트리밍), 파일 업로드/다운로드 비즈니스 로직.
+AADS-188C: Claude Agent SDK 통합 (execute/code_modify 인텐트 → SDK primary, bridge fallback).
 """
 from __future__ import annotations
 
@@ -376,44 +377,50 @@ async def send_message_stream(
                         # research_start SSE 발송
                         yield f"data: {json.dumps({'type': 'research_start', 'message': '딥리서치를 시작합니다... (3~10분 소요, 수십 개 소스 탐색)'})}\n\n"
 
-                        collected_report = ""
-                        citations = []
+                        collected_report_parts: list[str] = []
+                        final_citations: list[dict] = []
+                        final_interaction_id = ""
+                        cost_usd = 3.0
 
-                        async def _on_stream(event_type: str, text: str) -> None:
-                            nonlocal collected_report
-                            if event_type == "thinking":
-                                pass  # thinking은 프론트엔드에 바로 전달하지 않음 (배경 처리)
-                            elif event_type == "research_progress":
-                                collected_report += text
+                        # AADS-188A: research_stream() 사용 — planning/searching/analyzing 실시간 SSE
+                        async for ev in await dr_svc.research_stream(content, timeout=600):
+                            ev_type = ev.type
+                            if ev_type in ("planning", "searching", "analyzing"):
+                                yield f"data: {json.dumps({'type': 'research_progress', 'phase': ev_type, 'content': ev.content or '', 'progress_pct': ev.progress_pct or 0})}\n\n"
+                            elif ev_type == "thinking" and ev.content:
+                                yield f"data: {json.dumps({'type': 'thinking', 'thinking': (ev.content or '')[:300]})}\n\n"
+                            elif ev_type == "content" and ev.content:
+                                collected_report_parts.append(ev.content)
+                                yield f"data: {json.dumps({'type': 'delta', 'content': ev.content})}\n\n"
+                            elif ev_type == "complete":
+                                if ev.content and not collected_report_parts:
+                                    # 청크 없이 완료된 경우 — 보고서를 delta로 분할 전송
+                                    chunk_size = 500
+                                    report_text = ev.content
+                                    collected_report_parts.append(report_text)
+                                    for i in range(0, len(report_text), chunk_size):
+                                        yield f"data: {json.dumps({'type': 'delta', 'content': report_text[i:i+chunk_size]})}\n\n"
+                                if ev.sources:
+                                    final_citations = ev.sources
+                                if ev.interaction_id:
+                                    final_interaction_id = ev.interaction_id
+                            elif ev_type == "error":
+                                # error 이벤트: Claude 폴백으로 이동
+                                raise Exception(ev.content or "deep_research error")
 
-                        result = await dr_svc.research(
-                            content,
-                            stream_callback=_on_stream,
-                            timeout=600,
-                        )
+                        report_text = "".join(collected_report_parts)
 
-                        # research_complete SSE 발송
-                        if result.thinking_summary:
-                            yield f"data: {json.dumps({'type': 'thinking', 'thinking': result.thinking_summary[:300]})}\n\n"
+                        if final_citations:
+                            yield f"data: {json.dumps({'type': 'sources', 'sources': final_citations})}\n\n"
 
-                        # 보고서 전달 (최대 8000자 청크)
-                        report_text = result.report or collected_report
-                        chunk_size = 500
-                        for i in range(0, len(report_text), chunk_size):
-                            chunk = report_text[i:i + chunk_size]
-                            yield f"data: {json.dumps({'type': 'delta', 'content': chunk})}\n\n"
-
-                        if result.citations:
-                            yield f"data: {json.dumps({'type': 'sources', 'sources': result.citations})}\n\n"
-
-                        yield f"data: {json.dumps({'type': 'research_complete', 'interaction_id': result.interaction_id, 'cost': str(result.cost_usd)})}\n\n"
+                        yield f"data: {json.dumps({'type': 'research_complete', 'interaction_id': final_interaction_id, 'cost': str(cost_usd)})}\n\n"
 
                         await _save_message(conn, sid, "assistant", report_text,
                             model_used="gemini-deep-research", intent=intent,
-                            cost=Decimal(str(result.cost_usd)), sources=result.citations)
+                            cost=Decimal(str(cost_usd)), sources=final_citations)
                         await conn.execute(
                             "UPDATE chat_sessions SET updated_at = NOW() WHERE id = $1", sid)
-                        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': 'gemini-deep-research', 'cost': str(result.cost_usd)})}\n\n"
+                        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': 'gemini-deep-research', 'cost': str(cost_usd)})}\n\n"
                         return
                     except Exception as e:
                         logger.warning(f"gemini_deep_research_failed: {e}")
@@ -425,6 +432,87 @@ async def send_message_stream(
         if intent_result.use_tools:
             from app.services.tool_registry import ToolRegistry
             tools_for_api = ToolRegistry().get_tools(intent_result.tool_group)
+
+        # 8.5a. AADS-188C: Agent SDK 실시간 자율 실행 (execute/code_modify 인텐트)
+        # primary: Agent SDK, fallback: bridge(AutonomousExecutor) 경로
+        _AGENT_SDK_INTENTS = frozenset({"execute", "code_modify"})
+        if intent in _AGENT_SDK_INTENTS:
+            # resume 지원: 세션 메타에서 sdk_session_id 조회
+            sdk_session_id: Optional[str] = None
+            try:
+                meta_row = await conn.fetchrow(
+                    "SELECT settings FROM chat_sessions WHERE id = $1", sid
+                )
+                if meta_row:
+                    _settings = _row_to_dict(meta_row).get("settings") or {}
+                    sdk_session_id = _settings.get("sdk_session_id")
+            except Exception:
+                pass
+
+            from app.services.agent_sdk_service import get_agent_sdk_service, AGENT_SDK_ENABLED as _sdk_flag
+            sdk_svc = get_agent_sdk_service()
+            sdk_success = False
+
+            if sdk_svc.is_available() and _sdk_flag:
+                try:
+                    full_response = ""
+                    _captured_sdk_sid: Optional[str] = None
+                    model_used = "claude-opus-4-6"
+                    cost_usd = Decimal("0")
+                    tools_called: list = []
+
+                    async for sse_line in sdk_svc.execute_stream(
+                        prompt=content,
+                        session_id=sdk_session_id,
+                    ):
+                        yield sse_line
+                        # 이벤트 파싱: session_id 캡처 + 텍스트 수집
+                        try:
+                            _ev = json.loads(sse_line.replace("data: ", "").strip())
+                            _et = _ev.get("type", "")
+                            if _et == "sdk_session":
+                                _captured_sdk_sid = _ev.get("session_id")
+                            elif _et == "delta":
+                                full_response += _ev.get("content", "")
+                            elif _et == "sdk_complete":
+                                sdk_success = True
+                        except Exception:
+                            pass
+
+                    # sdk_session_id를 세션 설정에 저장 (resume용)
+                    if _captured_sdk_sid:
+                        try:
+                            _new_settings = {}
+                            _s_row = await conn.fetchrow(
+                                "SELECT settings FROM chat_sessions WHERE id = $1", sid
+                            )
+                            if _s_row:
+                                _new_settings = _row_to_dict(_s_row).get("settings") or {}
+                            _new_settings["sdk_session_id"] = _captured_sdk_sid
+                            await conn.execute(
+                                "UPDATE chat_sessions SET settings = $1::jsonb, updated_at = NOW() WHERE id = $2",
+                                json.dumps(_new_settings), sid,
+                            )
+                        except Exception as _se:
+                            logger.debug(f"sdk_session_id 저장 실패: {_se}")
+
+                    if sdk_success:
+                        await _save_message(
+                            conn, sid, "assistant", full_response,
+                            model_used=model_used, intent=intent,
+                            cost=cost_usd, tokens_in=0, tokens_out=0,
+                            sources=[], tools_called=tools_called,
+                        )
+                        await conn.execute(
+                            "UPDATE chat_sessions SET cost_total = cost_total + $1, updated_at = NOW() WHERE id = $2",
+                            cost_usd, sid,
+                        )
+                        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'agent_sdk': True})}\n\n"
+                        return
+
+                except Exception as _sdk_err:
+                    logger.warning(f"agent_sdk_failed (fallback to bridge): {_sdk_err}")
+                    # SDK 실패 → AutonomousExecutor fallback으로 계속 진행
 
         # 8.5. 복잡 인텐트 → AutonomousExecutor (max_iterations=25) (AADS-186E-3)
         _AUTONOMOUS_INTENTS = frozenset({

@@ -52,6 +52,10 @@ dependencies = [
     "fastapi-mcp>=0.3.0",
     # Telegram 알림 봇 (AADS-186C, optional — graceful degradation)
     "python-telegram-bot>=21.0",
+    # AADS-188C: Claude Agent SDK (bridge.py 대체, graceful degradation)
+    "claude-agent-sdk>=0.1.0",
+    # AADS-188B: 벡터 코드베이스 인덱싱 (optional — graceful degradation)
+    "chromadb>=0.5.0",
 ]
 
 [project.optional-dependencies]
