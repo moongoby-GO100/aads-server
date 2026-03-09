@@ -315,6 +315,35 @@ async def send_message_stream(
             db_conn=conn,
         )
 
+        # 4.5. AADS-188E: 시맨틱 코드 검색 컨텍스트 주입 (code_search 관련 키워드 감지)
+        _CODE_SEARCH_KEYWORDS = (
+            "코드", "함수", "클래스", "어디", "어디야", "파일", "소스", "구현",
+            "처리", "로직", "어디서", "찾아", "검색", "code", "where", "function",
+        )
+        if any(kw in content for kw in _CODE_SEARCH_KEYWORDS) and len(content) < 200:
+            try:
+                from app.services.semantic_code_search import SemanticCodeSearch
+                _scs = SemanticCodeSearch()
+                if _scs._is_available():
+                    _search_results = await _scs.search(content, top_k=3)
+                    if _search_results and not any("error" in r for r in _search_results):
+                        _ctx_lines = ["<codebase_knowledge_inline>"]
+                        for _r in _search_results[:3]:
+                            _ctx_lines.append(
+                                f"  {_r.get('file','?')}:{_r.get('start_line','?')} "
+                                f"[{_r.get('type','?')}] {_r.get('name','?')} "
+                                f"(유사도: {_r.get('similarity_score', 0):.2f})"
+                            )
+                            if _r.get("code_snippet"):
+                                _ctx_lines.append(f"    {_r['code_snippet'][:150]}")
+                        _ctx_lines.append("</codebase_knowledge_inline>")
+                        _inline_ctx = "\n".join(_ctx_lines)
+                        # 시스템 프롬프트 마지막에 삽입
+                        system_prompt = system_prompt + "\n\n" + _inline_ctx
+                        logger.debug(f"[188E] 시맨틱 코드 검색 컨텍스트 주입: {len(_search_results)}개 청크")
+            except Exception as _sce:
+                logger.debug(f"[188E] 시맨틱 코드 검색 컨텍스트 주입 실패 (무시): {_sce}")
+
         # 5. 자동 압축 (20턴 초과 시)
         from app.services.compaction_service import check_and_compact
         messages = await check_and_compact(session_id, messages, db_conn=conn)
