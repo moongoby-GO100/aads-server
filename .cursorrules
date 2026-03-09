@@ -1,0 +1,31 @@
+# AADS-Server Cursor Rules v1.0
+# 최종 수정: 2026-03-09
+
+## API 키 보안 절대 규칙 (R-KEY) — 최우선 준수
+- **절대 API 키를 소스코드/docker-compose/yaml/config 파일에 하드코딩하지 않는다**
+- 모든 시크릿(API 키, 비밀번호, 토큰)은 `.env` 또는 `.env.litellm` 파일에만 저장
+- docker-compose에서는 `${VAR:-}` 형태로 환경변수 참조
+- `.env`, `.env.*` 파일은 `.gitignore`에 포함 — git에 절대 커밋 금지
+- 커밋 전 pre-commit hook이 API 키 패턴 자동 감지 → 차단
+  - 감지 패턴: Google(AIzaSy), Anthropic(sk-ant-api), OpenAI(sk-proj-), Groq(gsk_), DeepSeek(sk-hex), Slack(xoxb-), GitHub(ghp_), AWS(AKIA)
+- LiteLLM 컨테이너: `env_file: .env.litellm` 사용 (DATABASE_URL 누수 방지)
+- 위반 시: 제공사(Google 등)가 키를 leaked 처리하여 영구 비활성화됨
+
+## 필수 규칙 (MUST)
+
+### Git 커밋/푸시
+1. 코드 변경 후 반드시 `git add && git commit && git push` 실행
+2. push 없이 작업 완료 보고 금지
+3. 커밋 메시지 형식: `type: 설명` (feat/fix/security/refactor)
+
+### 코드 변경
+4. .env 파일 절대 커밋 금지 (.gitignore 확인)
+5. docker-compose.yml 수정 시 API 키 하드코딩 여부 반드시 확인
+6. Python 코드: FastAPI + async/await 패턴 준수
+7. DB: PostgreSQL (pgvector/pg15) — SQLAlchemy 또는 asyncpg 사용
+
+## 금지 사항 (MUST NOT)
+- .env, .env.litellm 커밋 금지
+- API 키 하드코딩 금지 (pre-commit hook이 차단)
+- git push 없이 "완료" 보고 금지
+- docker-compose에 API 키 직접 기입 금지 (반드시 ${VAR:-} 참조)
