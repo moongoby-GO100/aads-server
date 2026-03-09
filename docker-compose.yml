@@ -45,7 +45,7 @@ services:
       # GitHub PAT (AADS-179): 미설정 시 infra-check severity=warning (critical 아님)
       - GITHUB_PAT=${GITHUB_PAT:-}
       # AADS-185: CEO Chat 전면 재설계 — 검색/리서치 API 키
-      - GEMINI_API_KEY=AIzaSyAGS716g8pJ6AFROK40jHBwYWrCS2MBdCE
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - BRAVE_API_KEY=${BRAVE_API_KEY:-}
       # Naver / Kakao 검색 API
       - NAVER_CLIENT_ID=${NAVER_CLIENT_ID:-}
@@ -90,12 +90,9 @@ services:
     restart: always
     ports:
       - "4000:4000"
+    env_file:
+      - .env.litellm
     environment:
-      - LITELLM_MASTER_KEY=sk-litellm
-      - GEMINI_API_KEY=AIzaSyAGS716g8pJ6AFROK40jHBwYWrCS2MBdCE
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
-      - GROQ_API_KEY=${GROQ_API_KEY:-}
       - DISABLE_SCHEMA_UPDATE=true
       - DISABLE_SPEND_LOGS=true
       - TZ=Asia/Seoul
