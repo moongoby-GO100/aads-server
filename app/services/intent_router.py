@@ -29,6 +29,7 @@ class IntentResult:
     use_extended_thinking: bool = False
     use_gemini_direct: bool = False
     gemini_mode: str = ""  # 'grounding' | 'deep_research' | ''
+    naver_type: str = ""   # 'news' | 'blog' | 'shop' | 'local' | 'book' | 'image' | 'encyc' | 'kin' | ''
 
 
 INTENT_MAP: dict[str, dict] = {
@@ -80,6 +81,15 @@ INTENT_MAP: dict[str, dict] = {
     "code_explorer":      {"model": "claude-sonnet",             "tools": True,  "group": "research"},
     "analyze_changes":    {"model": "claude-sonnet",             "tools": True,  "group": "research"},
     "search_all_projects":{"model": "claude-sonnet",             "tools": True,  "group": "research"},
+    # Naver 특화 검색 인텐트
+    "news_search":        {"model": "gemini-flash",              "tools": True,  "group": "search",  "gemini_direct": "grounding", "naver_type": "news"},
+    "blog_search":        {"model": "gemini-flash",              "tools": True,  "group": "search",  "gemini_direct": "grounding", "naver_type": "blog"},
+    "shop_search":        {"model": "gemini-flash",              "tools": True,  "group": "search",  "gemini_direct": "grounding", "naver_type": "shop"},
+    "local_search":       {"model": "gemini-flash",              "tools": True,  "group": "search",  "gemini_direct": "grounding", "naver_type": "local"},
+    "book_search":        {"model": "gemini-flash",              "tools": True,  "group": "search",  "gemini_direct": "grounding", "naver_type": "book"},
+    "image_search":       {"model": "gemini-flash",              "tools": True,  "group": "search",  "gemini_direct": "grounding", "naver_type": "image"},
+    "encyclopedia_search":{"model": "gemini-flash",              "tools": True,  "group": "search",  "gemini_direct": "grounding", "naver_type": "encyc"},
+    "knowledge_search":   {"model": "gemini-flash",              "tools": True,  "group": "search",  "gemini_direct": "grounding", "naver_type": "kin"},
 }
 
 _DEFAULT_INTENT = IntentResult(
@@ -101,7 +111,8 @@ qa, execution_verify, workspace_switch, cost_report, browser, image_analyze, vid
 cto_strategy, cto_code_analysis, cto_directive, cto_verify, cto_impact, cto_tech_debt,
 service_inspection, all_service_status,
 url_read, deep_crawl,
-code_explorer, analyze_changes, search_all_projects
+code_explorer, analyze_changes, search_all_projects,
+news_search, blog_search, shop_search, local_search, book_search, image_search, encyclopedia_search, knowledge_search
 
 규칙:
 - "안녕", "안녕하세요", 인사 → greeting
@@ -113,7 +124,15 @@ code_explorer, analyze_changes, search_all_projects
 - 서버 검색, 원격 서버 파일, SSH 파일 목록, 프로젝트 서버에서 찾아줘 → server_file
 - 서비스 점검, {프로젝트} 점검해, 프로세스 확인, 서비스 상태 자세히 → service_inspection
 - 전체 서비스 상태, 6개 서비스, 올 스테이터스, 모든 서비스 → all_service_status
-- 검색해줘, 찾아봐, 최신 뉴스 → search
+- 검색해줘, 찾아봐, 웹 검색 → search
+- 뉴스, 오늘 뉴스, 뉴스 검색, 기사 → news_search
+- 블로그, 블로그 검색, 후기, 리뷰 → blog_search
+- 쇼핑, 가격 비교, 최저가, 상품 검색 → shop_search
+- 맛집, 근처, 지역 검색, 장소, 위치 → local_search
+- 책, 도서, 책 검색, 서적, 저자 → book_search
+- 이미지 검색, 사진 찾기, 이미지 찾아 → image_search
+- 백과사전, 사전, 뜻, 정의, 의미 → encyclopedia_search
+- 지식인, 지식iN, 질문, Q&A → knowledge_search
 - 딥리서치, "깊이 조사", "조사해서 보고서 써줘", "시장 분석 보고서", "경쟁 분석 보고서", 기술 동향 보고, 논문 조사 → deep_research
 - "검색해"만 있으면 → search (빠르고 저렴)
 - URL 분석, 링크 내용 확인 → url_analyze
@@ -196,6 +215,7 @@ def _make_result(intent: str) -> IntentResult:
         use_extended_thinking=cfg.get("thinking", False),
         use_gemini_direct=bool(gemini_direct),
         gemini_mode=gemini_direct,
+        naver_type=cfg.get("naver_type", ""),
     )
 
 
@@ -217,7 +237,24 @@ def _keyword_fallback(message: str) -> IntentResult:
         return _make_result("all_service_status")
     if any(w in msg for w in ("심층", "deep research", "리서치 보고서", "시장 조사", "리서치", "경쟁사 분석", "트렌드 분석")):
         return _make_result("deep_research")
-    if any(w in msg for w in ("검색", "찾아봐", "최신", "뉴스")):
+    # Naver 특화 검색 키워드
+    if any(w in msg for w in ("뉴스", "기사", "속보", "뉴스 검색")):
+        return _make_result("news_search")
+    if any(w in msg for w in ("블로그", "후기", "리뷰 검색", "블로그 검색")):
+        return _make_result("blog_search")
+    if any(w in msg for w in ("쇼핑", "최저가", "가격 비교", "상품 검색", "쇼핑 검색")):
+        return _make_result("shop_search")
+    if any(w in msg for w in ("맛집", "근처", "지역 검색", "장소 검색", "주변")):
+        return _make_result("local_search")
+    if any(w in msg for w in ("책 검색", "도서 검색", "서적", "isbn")):
+        return _make_result("book_search")
+    if any(w in msg for w in ("이미지 검색", "사진 찾", "이미지 찾")):
+        return _make_result("image_search")
+    if any(w in msg for w in ("백과사전", "사전", "의미", "뜻이")):
+        return _make_result("encyclopedia_search")
+    if any(w in msg for w in ("지식인", "지식in", "q&a")):
+        return _make_result("knowledge_search")
+    if any(w in msg for w in ("검색", "찾아봐", "최신")):
         return _make_result("search")
     if any(w in msg for w in ("지시서", "directive_start", ">>>directive")):
         return _make_result("directive_gen")

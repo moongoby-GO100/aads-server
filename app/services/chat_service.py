@@ -409,12 +409,18 @@ async def send_message_stream(
                 except Exception as e:
                     logger.warning(f"gemini_grounding_failed: {e}")
                 if result is None:
-                    # Fallback: Naver → Kakao → Brave
+                    # Fallback: Naver (타입별 or 통합) → Kakao → Brave
                     from app.services.naver_search_service import NaverSearchService
                     naver = NaverSearchService()
                     if naver.is_available():
                         try:
-                            result = await naver.search(content)
+                            naver_type = getattr(intent_result, "naver_type", "")
+                            if naver_type:
+                                # 특화 검색 (뉴스/블로그/쇼핑/지역/책/이미지/백과/지식iN)
+                                result = await naver.search(content, search_type=naver_type, count=5)
+                            else:
+                                # 일반 검색: 웹+블로그+뉴스+지식iN 통합
+                                result = await naver.multi_search(content, count=3)
                             if result.error:
                                 result = None
                         except Exception as e:
