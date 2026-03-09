@@ -734,6 +734,58 @@ async def send_message_stream(
                 yield f"data: {json.dumps({'type': 'error', 'content': event.get('content', '오류')})}\n\n"
                 return
 
+        # 9.5 Layer ④: Output Validator — 빈 약속 응답 감지 및 재시도 (AADS-188C Phase 3)
+        from app.services.output_validator import validate_response
+        _validation = validate_response(
+            response_text=full_response,
+            tools_called=bool(tools_called),
+            intent=intent,
+        )
+        if not _validation.is_valid:
+            logger.warning(
+                f"output_validator: {_validation.violation_type} — {_validation.message} "
+                f"(intent={intent}, model={model_used}, tokens_out={output_tokens})"
+            )
+            # 재시도: output_validator가 생성한 retry_prompt 사용
+            _retry_messages = list(messages)
+            _retry_messages.append({"role": "assistant", "content": full_response.strip()})
+            _retry_messages.append({"role": "user", "content": _validation.retry_prompt})
+
+            _retry_response = ""
+            async for event in call_stream(
+                intent_result=intent_result,
+                system_prompt=system_prompt,
+                messages=_retry_messages,
+                tools=tools_for_api,
+                model_override=model_override,
+            ):
+                etype = event.get("type", "")
+                if etype == "heartbeat":
+                    yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                elif etype == "delta":
+                    _retry_response += event.get("content", "")
+                    yield f"data: {json.dumps({'type': 'delta', 'content': event['content']})}\n\n"
+                elif etype == "thinking":
+                    yield f"data: {json.dumps({'type': 'thinking', 'thinking': event['thinking']})}\n\n"
+                elif etype == "tool_use":
+                    tools_called.append(event["tool_name"])
+                    yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event['tool_use_id']})}\n\n"
+                elif etype == "tool_result":
+                    yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': event['tool_name'], 'content': str(event.get('content', ''))[:5000]})}\n\n"
+                elif etype == "done":
+                    model_used = event.get("model", intent_result.model)
+                    cost_usd += Decimal(str(event.get("cost", "0")))
+                    input_tokens = event.get("input_tokens", 0) or 0
+                    output_tokens = event.get("output_tokens", 0) or 0
+                    tools_called = event.get("tools_called", tools_called)
+                elif etype == "error":
+                    yield f"data: {json.dumps({'type': 'error', 'content': event.get('content', '오류')})}\n\n"
+                    return
+
+            # 재시도 응답으로 교체
+            if _retry_response.strip():
+                full_response = full_response + "\n\n" + _retry_response
+
         # 10. 응답 저장
         await _save_message(
             conn, sid, "assistant", full_response,

@@ -71,6 +71,12 @@ INTENT_MAP: dict[str, dict] = {
     "cto_verify":       {"model": "claude-opus",                 "tools": True,  "group": "system",  "thinking": True},
     "cto_impact":       {"model": "claude-opus",                 "tools": True,  "group": "action",  "thinking": True},
     "cto_tech_debt":    {"model": "claude-sonnet",               "tools": True,  "group": "system"},
+    # AADS-188C: Agent SDK 자율 실행 인텐트
+    "execute":            {"model": "claude-opus",                "tools": True,  "group": "all"},
+    "code_modify":        {"model": "claude-opus",                "tools": True,  "group": "all"},
+    # AADS-188C Phase 2: 메타 도구 인텐트
+    "task_query":         {"model": "claude-sonnet",              "tools": True,  "group": "meta"},
+    "status_check":       {"model": "claude-sonnet",              "tools": True,  "group": "meta"},
     # AADS-186A 신규 인텐트
     "service_inspection": {"model": "claude-sonnet",             "tools": True,  "group": "workflow"},
     "all_service_status": {"model": "claude-sonnet",             "tools": True,  "group": "workflow"},
@@ -112,9 +118,14 @@ cto_strategy, cto_code_analysis, cto_directive, cto_verify, cto_impact, cto_tech
 service_inspection, all_service_status,
 url_read, deep_crawl,
 code_explorer, analyze_changes, search_all_projects,
+execute, code_modify, task_query, status_check,
 news_search, blog_search, shop_search, local_search, book_search, image_search, encyclopedia_search, knowledge_search
 
 규칙:
+- "다른 친구에게 시킨거 진행 확인", "걔 작업 됐나", "작업 현황", "시킨거 확인", "진행 상태 확인해줘" → task_query
+- "전체 상태 보고", "서비스 상태 확인해줘", "시스템 체크", "상태 체크", "현재 상태 알려줘" → status_check
+- "이 파일 수정해", "코드 고쳐", "버그 수정해서 배포해", "이거 반영해", "직접 수정해" → code_modify
+- "실행해", "배포해", "서버 재시작", "빌드해", "테스트 돌려" → execute
 - "안녕", "안녕하세요", 인사 → greeting
 - 날씨/시간/간단한 질문 → casual
 - 서버 상태, 헬스체크 → health_check
@@ -225,6 +236,14 @@ def _keyword_fallback(message: str) -> IntentResult:
 
     if any(w in msg for w in ("안녕", "hello", "hi ", "반가")):
         return _make_result("greeting")
+    # AADS-188C Phase 2: task_query — 2개 이상 키워드 매칭으로 정확도 향상
+    _tq_keywords = ["시킨거", "진행", "확인", "됐나", "했나", "작업 현황", "다른 친구", "다른 애", "걔", "그 봇", "진행 상태"]
+    _tq_hits = sum(1 for w in _tq_keywords if w in msg)
+    if _tq_hits >= 2:
+        return _make_result("task_query")
+    # AADS-188C Phase 2: status_check
+    if any(w in msg for w in ("전체 상태 보고", "시스템 체크", "상태 체크", "현재 상태 알려", "전체 현황")):
+        return _make_result("status_check")
     if any(w in msg for w in ("헬스체크", "서버 상태", "health")):
         return _make_result("health_check")
     if any(w in msg for w in ("대시보드", "작업현황", "pipeline", "파이프라인")):
@@ -262,6 +281,10 @@ def _keyword_fallback(message: str) -> IntentResult:
         return _make_result("architect")
     if any(w in msg for w in ("전략", "strategy")):
         return _make_result("strategy")
+    if any(w in msg for w in ("직접 수정", "코드 고쳐", "파일 수정", "반영해", "코드 수정해", "수정해서 배포", "수정하고 배포")):
+        return _make_result("code_modify")
+    if any(w in msg for w in ("실행해", "배포해", "서버 재시작", "빌드해", "테스트 돌려", "deploy")):
+        return _make_result("execute")
     if any(w in msg for w in ("코드", "버그", "수정", "개발")):
         return _make_result("code_task")
     # CTO 모드 키워드 폴백

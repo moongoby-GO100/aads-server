@@ -87,6 +87,10 @@ class ToolExecutor:
             "search_all_projects":    self._search_all_projects,
             # AADS-188B: 시맨틱 코드 검색
             "semantic_code_search":   self._semantic_code_search,
+            # AADS-188C Phase 2: 메타 도구 (Orchestrator)
+            "check_directive_status": self._check_directive_status,
+            "delegate_to_agent":      self._delegate_to_agent,
+            "delegate_to_research":   self._delegate_to_research,
         }
         fn = dispatch.get(tool_name)
         if fn is None:
@@ -741,6 +745,105 @@ class ToolExecutor:
             "total_matches": len(result.matches),
         }
 
+    # ── AADS-188C Phase 2: 메타 도구 (Orchestrator) ─────────────────────────
+
+    async def _check_directive_status(self, inp: Dict[str, Any]) -> Any:
+        """
+        지시사항 진행 상태 종합 확인.
+        task_history + get_all_service_status 통합 메타 도구.
+        """
+        project = inp.get("project", "")
+        limit = min(inp.get("limit", 10), 50)
+
+        results: Dict[str, Any] = {}
+
+        # 1) task_history 조회
+        try:
+            task_result = await self._task_history({"project": project, "limit": limit})
+            results["task_history"] = task_result
+        except Exception as e:
+            results["task_history_error"] = str(e)
+
+        # 2) 전체 서비스 상태
+        try:
+            status_result = await self._get_all_service_status({"include_details": False})
+            results["service_status"] = status_result
+        except Exception as e:
+            results["service_status_error"] = str(e)
+
+        # 3) 요약 생성
+        task_count = len(task_result) if isinstance(task_result, list) else 0
+        results["summary"] = (
+            f"최근 작업 {task_count}건 조회 완료. "
+            f"서비스 상태 확인 완료."
+        )
+
+        return results
+
+    async def _delegate_to_agent(self, inp: Dict[str, Any]) -> Any:
+        """
+        복잡한 다단계 작업을 Agent SDK에 위임.
+        코드 분석/수정, 5턴 이상 필요한 복잡 작업에 사용.
+        """
+        task = inp.get("task", "")
+        project = inp.get("project", "AADS")
+
+        if not task:
+            return {"error": "task 필수 — 위임할 작업 설명을 입력하세요"}
+
+        # Agent SDK 가용 여부 확인
+        try:
+            from app.services.agent_sdk_service import get_agent_sdk_service
+            sdk = get_agent_sdk_service()
+            if not sdk.is_available():
+                return {
+                    "status": "unavailable",
+                    "message": "Agent SDK 비활성 상태. AGENT_SDK_ENABLED=true 필요.",
+                    "alternative": "generate_directive 도구로 지시서를 생성하여 파이프라인에 제출할 수 있습니다.",
+                }
+
+            # SDK 실행은 SSE 스트림이므로 여기서는 가용성만 확인
+            return {
+                "status": "ready",
+                "message": f"Agent SDK 사용 가능. 프로젝트: {project}",
+                "task": task,
+                "hint": "이 작업은 Agent SDK 자율 실행 루프를 통해 처리됩니다. "
+                        "CEO Chat에서 execute/code_modify 인텐트로 자동 라우팅됩니다.",
+            }
+        except Exception as e:
+            return {"error": f"Agent SDK 확인 실패: {e}"}
+
+    async def _delegate_to_research(self, inp: Dict[str, Any]) -> Any:
+        """
+        심층 리서치를 Deep Research 에이전트에게 위임.
+        시장 분석, 기술 트렌드, 경쟁 분석 등.
+        내부적으로 deep_research 도구를 호출.
+        """
+        query = inp.get("query", "")
+        context = inp.get("context", "")
+        format_type = inp.get("format", "detailed")
+
+        if not query:
+            return {"error": "query 필수 — 리서치 주제를 입력하세요"}
+
+        # deep_research 도구로 위임
+        research_input = {
+            "query": query,
+            "format": format_type,
+        }
+        if context:
+            research_input["context"] = context
+
+        try:
+            result = await self._deep_research(research_input)
+            result["delegated_from"] = "delegate_to_research"
+            return result
+        except Exception as e:
+            return {
+                "error": f"Deep Research 위임 실패: {e}",
+                "alternative": "web_search_brave로 간단한 검색을 시도하거나, deep_crawl로 크롤링 기반 분석을 할 수 있습니다.",
+            }
+
     async def _semantic_code_search(self, inp: Dict[str, Any]) -> Any:
         """AADS-188B: ChromaDB 벡터 기반 시맨틱 코드 검색."""
         query = inp.get("query", "")
@@ -804,6 +907,9 @@ _INTENT_TOOL_MAP: Dict[str, list] = {
     "search_all_projects":    ["search_all_projects"],
     # AADS-188B 시맨틱 코드 검색 인텐트
     "semantic_code_search":   ["semantic_code_search"],
+    # AADS-188C Phase 2: 메타 도구 인텐트
+    "task_query":             ["check_directive_status"],
+    "status_check":           ["check_directive_status"],
 }
 
 

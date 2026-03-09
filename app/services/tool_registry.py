@@ -41,6 +41,10 @@ _DEFER_LOADING: Dict[str, bool] = {
     "learn_pattern": True,
     # AADS-186E-3: 자동 관찰 도구 — 온디맨드
     "observe": True,
+    # AADS-188C Phase 2: 메타 도구 — 상시 로드 (Orchestrator 핵심)
+    "check_directive_status": False,
+    "delegate_to_agent": False,
+    "delegate_to_research": False,
     # AADS-186E-3: 딥리서치 + 코드탐색 도구 — 온디맨드
     "deep_research": True,
     "code_explorer": True,
@@ -75,8 +79,30 @@ TOOL_CATEGORY_GUIDE = """\
 - code_explorer: 함수 호출 체인 추적 (depth 3, 6개 프로젝트)
 - analyze_changes: 프로젝트 최근 Git 변경 분석 + 위험도 평가
 - search_all_projects: 6개 프로젝트 코드베이스 동시 검색
-- semantic_code_search: 벡터 기반 시맨틱 코드 검색 (ChromaDB, "인증 로직 어디?" 질의 가능)\
+- semantic_code_search: 벡터 기반 시맨틱 코드 검색 (ChromaDB, "인증 로직 어디?" 질의 가능)
+
+### Agent SDK (execute/code_modify 인텐트 시 자동 활성화)
+- 코드 수정/작성, Bash 명령, git 커밋/푸시, 파일 생성 — 자율 실행 가능
+- 위험 명령(rm -rf, DROP TABLE 등)은 자동 차단
+
+### 메타 도구 (Orchestrator — 복합 조회/위임)
+- check_directive_status: 작업 이력 + 서비스 상태 통합 확인
+- delegate_to_agent: Agent SDK에 복잡한 코드 작업 위임
+- delegate_to_research: Deep Research에 심층 리서치 위임
+
+### 불가능한 작업 (도구 없음 — 요청 시 명확히 거절)
+- 외부 에이전트(Cursor/Genspark) 실시간 상태 조회 (대안: dashboard_query, check_directive_status)
+- SMS/이메일/알림 발송\
 """
+
+# ─── AADS-188C Phase 2: 인텐트별 필수 도구 매핑 ──────────────────────────────
+# 이 매핑에 있는 인텐트는 반드시 해당 도구가 호출되어야 한다.
+INTENT_REQUIRED_TOOLS: Dict[str, list] = {
+    "task_query":    ["check_directive_status"],
+    "status_check":  ["check_directive_status", "get_all_service_status"],
+    "directive":     ["generate_directive"],
+    "code_analysis": ["code_explorer", "semantic_code_search"],
+}
 
 # ─── 도구 스키마 정의 (Anthropic Tool Use 포맷) ──────────────────────────────
 
@@ -818,6 +844,89 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         ],
         "defer_loading": True,
     },
+    # ── AADS-188C Phase 2: 메타 도구 (Orchestrator) ────────────────────────
+    "check_directive_status": {
+        "name": "check_directive_status",
+        "description": (
+            "지시사항 진행 상태 종합 확인. task_history와 get_all_service_status를 "
+            "동시 호출하여 작업 이력 + 서비스 상태를 통합 보고한다. "
+            "'다른 친구한테 시킨거 됐나?', '진행 확인해줘', '작업 현황 알려줘'에 사용."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "프로젝트 필터 (선택). AADS, KIS, GO100, SF, NTV2, NAS",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "작업 이력 최대 건수 (기본 10)",
+                },
+            },
+            "required": [],
+        },
+        "input_examples": [
+            {},
+            {"project": "KIS", "limit": 5},
+        ],
+    },
+    "delegate_to_agent": {
+        "name": "delegate_to_agent",
+        "description": (
+            "복잡한 다단계 작업을 Agent SDK 자율 실행 에이전트에게 위임한다. "
+            "코드 분석/수정, 5턴 이상 필요한 복잡 작업에 사용. "
+            "'이거 직접 수정해줘', '코드 고쳐서 배포해', '걔한테 시켜'에 사용."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "위임할 작업 설명",
+                },
+                "project": {
+                    "type": "string",
+                    "description": "대상 프로젝트 (기본 'AADS')",
+                },
+            },
+            "required": ["task"],
+        },
+        "input_examples": [
+            {"task": "chat_service.py의 SSE 하트비트 로직 개선", "project": "AADS"},
+            {"task": "KIS 주문 실패 에러 핸들링 추가", "project": "KIS"},
+        ],
+    },
+    "delegate_to_research": {
+        "name": "delegate_to_research",
+        "description": (
+            "심층 리서치를 Deep Research 에이전트에게 위임한다. "
+            "시장 분석, 기술 트렌드, 경쟁 분석에 사용. "
+            "'시장 조사해서 보고서 써줘', '경쟁사 분석 해줘'에 사용."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "리서치 주제/질문",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "추가 배경 컨텍스트 (선택)",
+                },
+                "format": {
+                    "type": "string",
+                    "description": "보고서 형식. summary/detailed/report",
+                    "enum": ["summary", "detailed", "report"],
+                },
+            },
+            "required": ["query"],
+        },
+        "input_examples": [
+            {"query": "AI 코딩 에이전트 시장 동향 2026", "format": "report"},
+        ],
+    },
     # AADS-188B: 시맨틱 코드 검색
     "semantic_code_search": {
         "name": "semantic_code_search",
@@ -864,6 +973,8 @@ _GROUPS: Dict[str, List[str]] = {
     "action": ["directive_create", "read_github_file", "query_database", "read_remote_file", "list_remote_dir", "cost_report"],
     "search": ["web_search_brave"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
+    # AADS-188C Phase 2: 메타 도구 그룹 (Orchestrator)
+    "meta": ["check_directive_status", "delegate_to_agent", "delegate_to_research"],
     # AADS-186E-1: 크롤링 도구 그룹
     "crawl": ["jina_read", "crawl4ai_fetch", "deep_crawl"],
     # AADS-186E-2: 메모리 도구 그룹

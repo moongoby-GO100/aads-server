@@ -202,9 +202,30 @@ async def _stream_anthropic(
         }
         if tools:
             api_kwargs["tools"] = tools
+            # Layer ③: 인텐트별 동적 tool_choice (AADS-188C Phase 3)
+            # greeting/casual → none (도구 불필요)
+            # status_check/dashboard/task_query/task_history/health_check → any (반드시 도구 호출)
+            # 나머지 → auto
+            _intent = intent_result.intent
+            if _turn == 0:
+                _force_tool_intents = (
+                    "status_check", "dashboard", "task_query", "task_history",
+                    "health_check", "all_service_status", "service_inspection",
+                    "cost_report",
+                )
+                _no_tool_intents = ("greeting", "casual")
+                if _intent in _force_tool_intents and intent_result.use_tools:
+                    api_kwargs["tool_choice"] = {"type": "any"}
+                elif _intent in _no_tool_intents:
+                    pass  # tool_choice 생략 → auto (도구 제공은 하지만 강제 아님)
+                elif intent_result.use_tools:
+                    api_kwargs["tool_choice"] = {"type": "any"}
         if thinking_config:
             api_kwargs["thinking"] = thinking_config
             api_kwargs["betas"] = ["interleaved-thinking-2025-05-14"]
+            # Extended Thinking + tool_choice="any" 비호환 — auto로 복귀
+            if "tool_choice" in api_kwargs:
+                del api_kwargs["tool_choice"]
 
         try:
             async with _anthropic.messages.stream(**api_kwargs) as stream:

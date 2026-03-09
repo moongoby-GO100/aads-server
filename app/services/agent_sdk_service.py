@@ -82,9 +82,14 @@ _TOOL_GRADES: Dict[str, str] = {
 }
 
 _GREEN_TOOLS: List[str] = [k for k, v in _TOOL_GRADES.items() if v == "Green"]
+_YELLOW_TOOLS: List[str] = [k for k, v in _TOOL_GRADES.items() if v == "Yellow"]
 
-# SDK Built-in 도구 (파일/코드 탐색 허용)
-_BUILTIN_ALLOWED: List[str] = ["Read", "Glob", "Grep"]
+# SDK Built-in 도구 (파일 읽기/쓰기/실행 전체 허용 — CEO 승인 완료)
+_BUILTIN_ALLOWED: List[str] = [
+    "Read", "Glob", "Grep",        # 읽기
+    "Write", "Edit",                # 쓰기 (agent_hooks.py에서 민감 경로 차단)
+    "Bash",                         # 실행 (agent_hooks.py에서 위험 명령 차단)
+]
 
 
 # ─── AADS 도구 → SDK MCP @tool 래퍼 ─────────────────────────────────────────
@@ -186,11 +191,11 @@ class AgentSDKService:
         mcp_server = self._get_mcp_server()
         mcp_servers = {"aads": mcp_server} if mcp_server else {}
 
-        # 훅: Bash/Write/Edit 검사
+        # 훅: 전체 도구 자동 승인 (위험 패턴만 차단)
         hooks = {
             "PreToolUse": [
                 HookMatcher(
-                    matcher="Bash|Write|Edit",
+                    matcher=None,  # 모든 도구에 적용
                     hooks=[pre_tool_use_hook],
                 )
             ],
@@ -207,10 +212,10 @@ class AgentSDKService:
             model="claude-opus-4-6",
             max_turns=self.max_turns,
             max_budget_usd=self.max_budget_usd,
-            permission_mode="acceptEdits",
+            permission_mode="default",  # 훅에서 자동 승인 (root 환경 bypassPermissions 불가)
             mcp_servers=mcp_servers,
             hooks=hooks,
-            allowed_tools=_BUILTIN_ALLOWED + _GREEN_TOOLS,
+            allowed_tools=_BUILTIN_ALLOWED + _GREEN_TOOLS + _YELLOW_TOOLS,
             system_prompt=(
                 "당신은 AADS 자율 실행 에이전트입니다. "
                 "CEO moongoby의 요청을 처리하며 /root/aads 코드베이스와 6개 서비스를 관리합니다. "
@@ -256,7 +261,8 @@ class AgentSDKService:
             async for message in sdk_query(prompt=prompt, options=options):
                 # ── 세션 ID 캡처 ────────────────────────────────────────────
                 if isinstance(message, SystemMessage) and getattr(message, "subtype", "") == "init":
-                    captured_session_id = message.session_id
+                    _data = getattr(message, "data", {}) or {}
+                    captured_session_id = _data.get("session_id", "")
                     yield f"data: {json.dumps({'type': 'sdk_session', 'session_id': captured_session_id})}\n\n"
 
                 # ── 텍스트 스트리밍 ─────────────────────────────────────────

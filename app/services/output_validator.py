@@ -1,0 +1,124 @@
+"""
+AADS-188C Phase 3: Output Validator — 빈 약속 응답 탐지 및 재시도.
+
+"확인하겠습니다" 류의 행동 없는 빈 약속 응답을 탐지하고,
+도구 호출을 강제하는 재시도 프롬프트를 생성한다.
+
+탐지 유형:
+  EMPTY_PROMISE     — 행동 없이 "하겠습니다"로 끝나는 응답
+  NO_TOOL_FOR_ACTION — 도구 호출 없이 행동을 약속하는 응답
+  TOO_SHORT         — 도구 결과 없이 극단적으로 짧은 응답
+"""
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import List, Optional
+
+logger = logging.getLogger(__name__)
+
+# ─── 빈 약속 패턴 ─────────────────────────────────────────────────────────────
+
+_EMPTY_PROMISE_PATTERNS: List[str] = [
+    "확인하겠습니다",
+    "알겠습니다",
+    "처리하겠습니다",
+    "잠시만요",
+    "확인해보겠습니다",
+    "살펴보겠습니다",
+    "조치하겠습니다",
+    "진행하겠습니다",
+    "검토하겠습니다",
+    "바로 확인",
+    "지금 확인",
+    "확인해 드리겠습니다",
+    "알아보겠습니다",
+]
+
+# 행동 약속 동사 — 도구 호출 없이 사용되면 빈 약속
+_ACTION_VERBS: List[str] = [
+    "확인해", "조회해", "점검해", "분석해", "검색해",
+    "살펴보", "파악해", "조사해", "체크해",
+]
+
+# ─── 검증 결과 ─────────────────────────────────────────────────────────────────
+
+@dataclass
+class ValidationResult:
+    is_valid: bool
+    violation_type: str  # "" | "EMPTY_PROMISE" | "NO_TOOL_FOR_ACTION" | "TOO_SHORT"
+    message: str
+    retry_prompt: str  # 재시도 시 추가할 사용자 메시지
+
+
+def validate_response(
+    response_text: str,
+    tools_called: bool,
+    intent: str = "",
+) -> ValidationResult:
+    """
+    모델 응답을 검증하여 빈 약속 여부를 판단한다.
+
+    Args:
+        response_text: 모델이 생성한 텍스트 응답
+        tools_called: 이 턴에서 도구가 호출되었는지 여부
+        intent: 분류된 인텐트 (greeting/casual이면 검증 스킵)
+
+    Returns:
+        ValidationResult — is_valid=False면 재시도 필요
+    """
+    _OK = ValidationResult(is_valid=True, violation_type="", message="", retry_prompt="")
+
+    # greeting/casual은 도구 호출 불필요
+    if intent in ("greeting", "casual", ""):
+        return _OK
+
+    # 도구가 호출된 응답은 유효
+    if tools_called:
+        return _OK
+
+    stripped = response_text.strip()
+
+    # ── EMPTY_PROMISE: 짧은 텍스트 + 빈 약속 패턴 ─────────────────────────
+    if len(stripped) < 100:
+        for pat in _EMPTY_PROMISE_PATTERNS:
+            if pat in stripped:
+                return ValidationResult(
+                    is_valid=False,
+                    violation_type="EMPTY_PROMISE",
+                    message=f"빈 약속 탐지: '{pat}' — 도구 호출 없이 약속만 함",
+                    retry_prompt=(
+                        "[시스템 재시도 지시] 방금 응답은 빈 약속입니다. "
+                        "반드시 관련 도구를 호출하여 실제 데이터를 확인한 후 보고하세요. "
+                        "도구 호출 없이 '하겠습니다'로 응답하는 것은 금지입니다."
+                    ),
+                )
+
+    # ── NO_TOOL_FOR_ACTION: 행동 약속 동사가 있지만 도구 미호출 ─────────────
+    if len(stripped) < 200:
+        for verb in _ACTION_VERBS:
+            if verb in stripped and "겠" in stripped:
+                return ValidationResult(
+                    is_valid=False,
+                    violation_type="NO_TOOL_FOR_ACTION",
+                    message=f"행동 약속 탐지: '{verb}...겠' — 도구 호출 없음",
+                    retry_prompt=(
+                        "[시스템 재시도 지시] 행동을 약속했지만 도구를 호출하지 않았습니다. "
+                        "즉시 관련 도구(health_check, task_history, check_directive_status, "
+                        "query_database, read_remote_file 등)를 호출하세요."
+                    ),
+                )
+
+    # ── TOO_SHORT: 도구 호출 없이 극단적으로 짧은 응답 ──────────────────────
+    if len(stripped) < 30 and intent not in ("greeting", "casual"):
+        return ValidationResult(
+            is_valid=False,
+            violation_type="TOO_SHORT",
+            message=f"응답 너무 짧음: {len(stripped)}자 — 도구 호출 없음",
+            retry_prompt=(
+                "[시스템 재시도 지시] 응답이 너무 짧습니다. "
+                "요청에 맞는 도구를 호출하여 충분한 정보를 제공하세요."
+            ),
+        )
+
+    return _OK
