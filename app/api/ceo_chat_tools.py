@@ -610,6 +610,29 @@ async def _ensure_aads_auth(page: Any) -> None:
         logger.debug(f"browser auth inject failed: {e}")
 
 
+async def _do_aads_login(page: Any) -> None:
+    """AADS 대시보드 로그인 페이지에서 자동 로그인 수행."""
+    import os
+    email = os.getenv("AADS_ADMIN_EMAIL", "admin@aads.dev")
+    password = os.getenv("AADS_ADMIN_PASSWORD", "")
+    if not password:
+        # 비밀번호 없으면 토큰 직접 주입 시도
+        await _ensure_aads_auth(page)
+        return
+
+    # 이메일 입력
+    email_input = page.locator("input[type='email'], input[name='email'], input[placeholder*='이메일']").first
+    await email_input.fill(email, timeout=5000)
+    # 비밀번호 입력
+    pw_input = page.locator("input[type='password'], input[name='password']").first
+    await pw_input.fill(password, timeout=5000)
+    # 로그인 버튼 클릭
+    login_btn = page.locator("button:has-text('로그인'), button[type='submit']").first
+    await login_btn.click(timeout=5000)
+    # 로그인 후 페이지 로드 대기
+    await page.wait_for_load_state("domcontentloaded", timeout=10000)
+
+
 async def tool_browser_navigate(url: str) -> str:
     """브라우저로 URL 이동 (도메인 화이트리스트 검사 포함)."""
     blocked = _browser_domain_ok(url)
@@ -625,21 +648,15 @@ async def tool_browser_navigate(url: str) -> str:
         else:
             page = await ctx.new_page()
 
-        # AADS 대시보드 접근 시 인증 토큰 사전 주입
-        if "newtalk.kr" in url:
-            # 먼저 도메인에 접속해서 localStorage 접근 가능하게 함
-            try:
-                await page.goto(url.split("/chat")[0].split("/ops")[0] or url,
-                                timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
-                await _ensure_aads_auth(page)
-            except Exception:
-                pass
-
         await page.goto(url, timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
-        # 로그인 리다이렉트 감지 → 재시도
-        if "/login" in page.url and "/login" not in url:
-            await _ensure_aads_auth(page)
-            await page.goto(url, timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
+
+        # AADS 대시보드 로그인 리다이렉트 감지 → 자동 로그인
+        if "/login" in page.url and "/login" not in url and "newtalk.kr" in url:
+            try:
+                await _do_aads_login(page)
+                await page.goto(url, timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
+            except Exception as login_err:
+                logger.warning(f"browser auto-login failed: {login_err}")
 
         title = await page.title()
         return f"[탐색 완료]\n제목: {title}\nURL: {page.url}"
