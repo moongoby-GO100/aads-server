@@ -104,44 +104,22 @@ def _build_tool_guide_layer() -> str:
         return ""
 
 
-async def _build_memory_layer() -> str:
+async def _build_memory_layer(
+    session_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+) -> str:
     """
-    AADS-186E-2: 영속 메모리 주입.
-    <recent_sessions>: 최근 3개 세션 노트 (Layer 2)
-    <learned_patterns>: CEO 선호도 + 알려진 이슈 (Layer 4)
-    186B의 <codebase_knowledge>와 별도 XML 태그 사용.
+    AADS 메모리 자동 주입 (memory_recall 모듈 사용).
+    5개 섹션: 대화 요약 / CEO 선호 / 도구 전략 / 활성 Directive / 발견 사항
+    총 2,000 토큰 이내. 실패 시 빈 문자열 (기본 프롬프트 유지).
     """
-    parts: list[str] = []
     try:
-        from app.services.memory_manager import get_memory_manager
-        mgr = get_memory_manager()
-
-        # 최근 세션 노트 (Layer 2)
-        notes = await mgr.get_recent_notes(3)
-        if notes:
-            note_lines = []
-            for note in notes:
-                line = f"- {note.summary}"
-                if note.key_decisions:
-                    line += f" | 결정: {', '.join(note.key_decisions[:2])}"
-                if note.action_items:
-                    line += f" | 액션: {', '.join(note.action_items[:2])}"
-                note_lines.append(line)
-            parts.append(
-                "<recent_sessions>\n"
-                + "\n".join(note_lines)
-                + "\n</recent_sessions>"
-            )
-
-        # 메타 기억 요약 (Layer 4) — ai_observations + ai_meta_memory 통합
-        meta = await mgr.build_meta_context(max_tokens=500)
-        if meta:
-            parts.append(f"<meta_memory>\n{meta}\n</meta_memory>")
-
+        from app.core.memory_recall import build_memory_context
+        block = await build_memory_context(session_id=session_id, project_id=project_id)
+        return f"\n{block}" if block else ""
     except Exception as e:
-        logger.debug(f"[Memory] context_builder 메모리 주입 실패: {e}")
-
-    return "\n" + "\n".join(parts) if parts else ""
+        logger.warning(f"[Memory] context_builder 메모리 주입 실패: {e}")
+        return ""
 
 
 
@@ -245,8 +223,9 @@ async def build_messages_context(
     # Layer 2 (동적 상태)
     layer2 = await _build_layer2_dynamic(workspace_name, db_conn=db_conn)
 
-    # Layer 2+: 메모리 주입 (AADS-186E-2) — 186B CKP와 별도 XML 태그
-    memory_layer = await _build_memory_layer()
+    # Layer 2+: 메모리 주입 (5섹션 자동 주입)
+    _project = _normalize_workspace(workspace_name)
+    memory_layer = await _build_memory_layer(session_id=session_id, project_id=_project)
 
     system_prompt = layer1 + "\n\n" + layer2 + memory_layer
 
@@ -301,7 +280,8 @@ async def build(
     # Layer 2 (동적) + CKP 주입 (AADS-186B/D) + 메모리 주입 (AADS-186E-2)
     layer2 = await _build_layer2_dynamic(workspace_name, db_conn=db_conn)
     ckp_layer = await _build_ckp_layer(workspace_name)
-    memory_layer = await _build_memory_layer()  # <recent_sessions> + <learned_patterns>
+    _project = _normalize_workspace(workspace_name)
+    memory_layer = await _build_memory_layer(session_id=session_id, project_id=_project)
     layer2_full = layer2 + ckp_layer + memory_layer
 
     # AADS-186D: Prompt Caching 최적화 적용

@@ -623,11 +623,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     "code_execution": {
         "type": "code_execution_20250825",
         "name": "code_execution",
-        "description": (
-            "Python 코드를 실행하여 여러 도구를 병렬로 호출합니다. "
-            "service_inspection, health_check(전체), cto_code_analysis 인텐트에서 자동 활성화. "
-            "allowed_callers: CALLABLE_TOOLS(읽기 전용) — 쓰기 도구 제외."
-        ),
+        # description/input_schema 등 추가 필드 금지 — Anthropic 내장 도구 타입은 type+name만 허용
         "allowed_callers": ["code_execution_20250825"],
     },
     # ── AADS-186E-2/186E-3: 메모리 도구 ────────────────────────────────────────

@@ -187,6 +187,20 @@ class AutonomousExecutor:
                     "iterations": iteration,
                     "total_cost": total_cost,
                 })
+                # 에이전트 작업 완료 → 발견사항 메모리 자동 기록 (AADS-186E Task4)
+                try:
+                    from app.core.memory_recall import save_observation
+                    if iteration >= 2 and full_response:
+                        _summary = full_response[:200].replace("\n", " ")
+                        await save_observation(
+                            category="discovery",
+                            key=f"agent_task_{iteration}iter",
+                            content=f"에이전트 {iteration}회 반복 완료: {_summary}",
+                            source="autonomous_executor",
+                            confidence=0.4,
+                        )
+                except Exception as _mem_err:
+                    logger.warning(f"autonomous_executor memory save error: {_mem_err}")
                 return
 
             # 도구 실행 (어시스턴트 응답 먼저 추가)
@@ -251,6 +265,18 @@ class AutonomousExecutor:
             "total_cost": total_cost,
             "iterations": iteration,
         })
+        # 최대 반복 도달도 메모리에 기록 (AADS-186E Task4)
+        try:
+            from app.core.memory_recall import save_observation
+            await save_observation(
+                category="recurring_issue",
+                key="agent_max_iterations",
+                content=f"에이전트 최대 반복({self.max_iterations}) 도달 — 비용: ${total_cost:.4f}",
+                source="autonomous_executor",
+                confidence=0.5,
+            )
+        except Exception:
+            pass
 
 
 # ─── 주간 브리핑 헬퍼 ─────────────────────────────────────────────────────────
@@ -356,7 +382,7 @@ async def generate_weekly_briefing() -> str:
             if resp.status_code == 200:
                 briefing = resp.json()["choices"][0]["message"]["content"]
     except Exception as e:
-        logger.debug(f"generate_weekly_briefing gemini error: {e}")
+        logger.warning(f"generate_weekly_briefing gemini error: {e}")
 
     # 5. session_notes에 저장
     try:

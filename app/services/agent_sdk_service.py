@@ -8,6 +8,7 @@ max_turns=30, max_budget_usd=10 (환경 변수로 CEO 조정 가능)
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -258,7 +259,21 @@ class AgentSDKService:
         captured_session_id: Optional[str] = None
 
         try:
-            async for message in sdk_query(prompt=prompt, options=options):
+            HEARTBEAT_SSE = f'data: {json.dumps({"type": "heartbeat"})}\n\n'
+            sdk_iter = sdk_query(prompt=prompt, options=options).__aiter__()
+
+            while True:
+                # 8초 내에 SDK 메시지가 안 오면 heartbeat 전송 (Cloudflare 100s 대비)
+                try:
+                    message = await asyncio.wait_for(
+                        sdk_iter.__anext__(), timeout=8.0
+                    )
+                except asyncio.TimeoutError:
+                    yield HEARTBEAT_SSE
+                    continue
+                except StopAsyncIteration:
+                    break
+
                 # ── 세션 ID 캡처 ────────────────────────────────────────────
                 if isinstance(message, SystemMessage) and getattr(message, "subtype", "") == "init":
                     _data = getattr(message, "data", {}) or {}
@@ -273,10 +288,13 @@ class AgentSDKService:
 
                 # ── 최종 결과 ───────────────────────────────────────────────
                 elif isinstance(message, ResultMessage):
-                    # ResultMessage.result가 있으면 마지막 delta로 보강
                     if message.result:
                         yield f"data: {json.dumps({'type': 'delta', 'content': message.result})}\n\n"
                     yield f"data: {json.dumps({'type': 'sdk_complete', 'session_id': captured_session_id, 'stop_reason': getattr(message, 'stop_reason', 'end_turn')})}\n\n"
+
+                # ── 기타 메시지 → heartbeat 겸 keep-alive ──────────────────
+                else:
+                    yield HEARTBEAT_SSE
 
         except CLINotFoundError:
             msg = "Claude Code CLI 미설치. 설치: pip install claude-agent-sdk"

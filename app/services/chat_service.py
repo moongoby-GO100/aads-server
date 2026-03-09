@@ -27,16 +27,15 @@ import asyncio as _heartbeat_asyncio
 
 async def with_heartbeat(
     gen: AsyncGenerator[str, None],
-    interval: float = 10.0,
+    interval: float = 8.0,
 ) -> AsyncGenerator[str, None]:
     """Wrap an SSE async generator to interleave heartbeat events.
 
     If the inner generator hasn't yielded anything for *interval* seconds,
     a lightweight ``{"type": "heartbeat"}`` SSE line is emitted so that
-    the frontend can reset its inactivity timeout.
+    Cloudflare(100s)/Nginx/frontend can keep the connection alive.
 
-    Uses asyncio.shield to prevent cancellation of the inner generator's
-    __anext__ coroutine, which would corrupt the generator state.
+    interval=8s → Cloudflare 100s 유휴 타임아웃 대비 충분한 여유.
     """
     HEARTBEAT = f'data: {json.dumps({"type": "heartbeat"})}\n\n'
     ait = gen.__aiter__()
@@ -54,7 +53,10 @@ async def with_heartbeat(
             yield HEARTBEAT  # pending is still running, will retry
         except StopAsyncIteration:
             break
-        except Exception:
+        except Exception as exc:
+            logger.warning(f"with_heartbeat inner generator error: {type(exc).__name__}: {exc}")
+            # 에러도 SSE로 전달 후 종료 (조용히 삼키지 않음)
+            yield f'data: {json.dumps({"type": "error", "content": f"Stream error: {type(exc).__name__}"})}\n\n'
             break
 
 # AADS-186C: Langfuse 트레이스 (optional — graceful degradation)
@@ -232,7 +234,7 @@ async def delete_session(session_id: str) -> bool:
 
 # ─── Message ──────────────────────────────────────────────────────────────────
 
-async def list_messages(session_id: str, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+async def list_messages(session_id: str, limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
     conn = await _get_conn()
     try:
         rows = await conn.fetch(
@@ -828,9 +830,9 @@ async def _auto_save_session_note(session_id: str, messages: List[Dict[str, Any]
         from app.services.memory_manager import get_memory_manager
         mgr = get_memory_manager()
         await mgr.save_session_note(session_id=session_id, messages=messages)
-        logger.debug(f"auto_save_session_note: session_id={session_id}")
+        logger.info(f"auto_save_session_note: session_id={session_id}")
     except Exception as e:
-        logger.debug(f"auto_save_session_note error: {e}")
+        logger.warning(f"auto_save_session_note error: {e}")
 
 
 async def _auto_observe_session(messages: List[Dict[str, Any]]) -> None:
@@ -839,9 +841,9 @@ async def _auto_observe_session(messages: List[Dict[str, Any]]) -> None:
         from app.services.memory_manager import get_memory_manager
         mgr = get_memory_manager()
         await mgr.auto_observe_from_session(messages)
-        logger.debug("auto_observe_session: 완료")
+        logger.info("auto_observe_session: 완료")
     except Exception as e:
-        logger.debug(f"auto_observe_session error: {e}")
+        logger.warning(f"auto_observe_session error: {e}")
 
 
 async def toggle_bookmark(message_id: str) -> Optional[Dict[str, Any]]:

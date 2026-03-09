@@ -172,3 +172,104 @@ CREATE TABLE IF NOT EXISTS monitored_services (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_monitored_services_unique
     ON monitored_services(server, service_name);
+
+-- ======================================================
+-- AADS-186E-2: 4계층 메모리 — session_notes (Working Memory)
+-- ======================================================
+-- session_notes는 chat_sessions FK 없이 독립 (도구 save_note에서 "note_xxx" 형태 session_id 사용)
+CREATE TABLE IF NOT EXISTS session_notes (
+    id SERIAL PRIMARY KEY,
+    session_id VARCHAR(100),
+    summary TEXT NOT NULL,
+    key_decisions TEXT[] DEFAULT '{}',
+    action_items TEXT[] DEFAULT '{}',
+    unresolved_issues TEXT[] DEFAULT '{}',
+    projects_discussed VARCHAR(50)[] DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_session_notes_session_id ON session_notes (session_id);
+CREATE INDEX IF NOT EXISTS idx_session_notes_created_at ON session_notes (created_at DESC);
+
+-- ======================================================
+-- AADS-186E-2: ai_meta_memory (Meta Memory Layer 4)
+-- CEO 선호도, 프로젝트 패턴, 알려진 이슈, 결정 이력
+-- ======================================================
+CREATE TABLE IF NOT EXISTS ai_meta_memory (
+    id SERIAL PRIMARY KEY,
+    category VARCHAR(30) NOT NULL,
+    key VARCHAR(100) NOT NULL UNIQUE,
+    value JSONB NOT NULL,
+    confidence FLOAT DEFAULT 1.0,
+    last_used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ai_meta_memory_category ON ai_meta_memory (category);
+CREATE INDEX IF NOT EXISTS idx_ai_meta_memory_updated_at ON ai_meta_memory (updated_at DESC);
+
+-- ======================================================
+-- AADS-186E-3: ai_observations (AI 자동 관찰)
+-- Haiku가 대화에서 CEO 선호/패턴/이슈 자동 추출·누적
+-- ======================================================
+CREATE TABLE IF NOT EXISTS ai_observations (
+    id SERIAL PRIMARY KEY,
+    category VARCHAR(30) NOT NULL,
+    key VARCHAR(100) NOT NULL,
+    value TEXT NOT NULL,
+    confidence FLOAT DEFAULT 0.5,
+    source_session_id INTEGER,
+    last_confirmed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    project VARCHAR(20) DEFAULT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_observations_cat_key_proj ON ai_observations (category, key, COALESCE(project, ''));
+CREATE INDEX IF NOT EXISTS idx_ai_observations_category ON ai_observations (category);
+CREATE INDEX IF NOT EXISTS idx_ai_observations_confidence ON ai_observations (confidence DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_observations_project ON ai_observations (project);
+
+-- 시드 데이터: CEO 선호 + 운영 패턴 (ON CONFLICT 무시)
+INSERT INTO ai_observations (category, key, value, confidence, project) VALUES
+  ('ceo_preference', 'language_korean', '한국어 우선, CEO 보고는 한국어로', 0.9, NULL),
+  ('ceo_preference', 'cost_efficiency', '최고 성능을 유지하면서 비용 효율적이어야 함', 0.8, NULL),
+  ('ceo_preference', 'optimize_over_replace', '모델 교체보다 같은 모델 내 최적화 우선', 0.8, NULL),
+  ('ceo_preference', 'report_format', '보고서는 정형화된 포맷으로, 캐주얼 대화는 자연스럽게', 0.7, NULL),
+  ('ceo_preference', 'concise_reports', '간결한 보고 선호 — 불필요한 설명 제거, 핵심만 전달', 0.8, NULL),
+  ('decision', 'main_model_claude', 'DeepSeek는 fallback 전용, 메인은 Claude 유지', 0.9, NULL),
+  ('decision', 'default_model_sonnet', 'Sonnet 4.6을 기본 모델로, Opus는 심층 분석에만', 0.8, NULL),
+  ('decision', 'prompt_caching_3block', 'Prompt Caching 3-Block 구조 적용 (1h/5min/no-cache)', 0.7, NULL),
+  ('project_pattern', 'aads_chat_timeout', '채팅 SSE 타임아웃 수정 후 heartbeat 도입 — 8초 간격 keep-alive', 0.7, 'AADS'),
+  ('project_pattern', 'status_check_order', 'CEO가 진행 확인 요청 시 task_history → service_status 순서로 조회', 0.7, NULL),
+  ('project_pattern', 'code_analysis_order', '코드 분석 시 code_explorer 먼저 실행 후 결과 기반으로 보고', 0.6, NULL),
+  ('project_pattern', 'health_check_order', '서버 상태 확인 시 health_check → dashboard_query 순서', 0.6, NULL),
+  ('project_pattern', 'deep_research_cost', 'Deep Research는 비용이 크므로 꼭 필요할 때만 사용', 0.7, NULL),
+  -- KIS
+  ('project_pattern', 'kis_token_refresh', 'KIS Access Token 23시간마다 갱신 필수 — 만료 시 주문 실패', 0.8, 'KIS'),
+  ('project_pattern', 'kis_market_hours', 'KIS 매매 가능 시간: 09:00~15:30 KST — 장 마감 후 주문 거부', 0.8, 'KIS'),
+  ('project_pattern', 'kis_paper_vs_live', 'KIS 모의투자(paper) vs 실거래(live) URL 엔드포인트 구분 필수', 0.7, 'KIS'),
+  ('project_pattern', 'kis_workdir', 'KIS 작업 디렉터리: /root/kis-autotrade-v4 (서버211)', 0.7, 'KIS'),
+  ('discovery', 'kis_server_independent', 'KIS(서버211)는 AADS(서버68)와 독립 — bridge.py 경유 실행', 0.6, 'KIS'),
+  -- GO100
+  ('project_pattern', 'go100_forced_exit', 'GO100 15:20 KST 강제 청산 시작, 15:25 전량 매도 — 오버나잇 금지', 0.8, 'GO100'),
+  ('project_pattern', 'go100_claude_cost', 'GO100 Claude 호출은 5분봉 주요 시점에만 — 매 틱 호출 시 비용 폭증', 0.8, 'GO100'),
+  ('project_pattern', 'go100_max_iterations', 'GO100 LangGraph 에이전트 max_iterations=50, 태스크당 $5 한도', 0.7, 'GO100'),
+  ('project_pattern', 'go100_workdir', 'GO100 작업 디렉터리: /root/kis-autotrade-v4/go100/ (서버211)', 0.7, 'GO100'),
+  ('discovery', 'go100_slippage', 'GO100 백테스트 vs 실거래 괴리: 슬리피지 0.05% + 수수료 0.015%', 0.6, 'GO100'),
+  -- SF
+  ('project_pattern', 'sf_pipeline', 'SF 파이프라인: Script(Claude) → TTS(ElevenLabs) → Render(FFmpeg) → Upload', 0.8, 'SF'),
+  ('project_pattern', 'sf_ssh_port', 'SF 서버114 SSH 포트 7916 (비표준) — SSH_PORT 환경변수 필수', 0.8, 'SF'),
+  ('project_pattern', 'sf_youtube_quota', 'SF YouTube API 일일 10K units — 하루 5영상 제한, 시간 분산 업로드', 0.7, 'SF'),
+  ('project_pattern', 'sf_workdir', 'SF 작업 디렉터리: /data/shortflow (서버114:7916)', 0.7, 'SF'),
+  ('discovery', 'sf_elevenlabs_quota', 'ElevenLabs 무료 10K자/월 — 캐싱+요약으로 절약 필요', 0.6, 'SF'),
+  -- NTV2
+  ('project_pattern', 'ntv2_copyright', 'NTV2 뉴스 원문 직접 사용 금지 — Gemini 요약 → Claude 창작 재작성', 0.8, 'NTV2'),
+  ('project_pattern', 'ntv2_pipeline', 'NTV2 파이프라인: 뉴스크롤 → 요약 → 스크립트 → TTS → 배포(팟캐스트+SNS)', 0.7, 'NTV2'),
+  ('project_pattern', 'ntv2_workdir', 'NTV2 작업 디렉터리: /srv/newtalk-v2 (서버114:7916)', 0.7, 'NTV2'),
+  ('discovery', 'ntv2_phase1_done', 'NTV2 Phase 1(환경구축) 완료, Phase 2(파이프라인 구현) 대기중', 0.6, 'NTV2'),
+  -- NAS
+  ('project_pattern', 'nas_mount_fstab', 'NAS 마운트 /etc/fstab에 nofail 옵션 필수 — 서버 재시작 시 마운트 해제 방지', 0.8, 'NAS'),
+  ('project_pattern', 'nas_image_resize', 'NAS Claude Vision 이미지 20MB 제한 — 썸네일 2048x2048 리사이즈 필수', 0.7, 'NAS'),
+  ('project_pattern', 'nas_backup_schedule', 'NAS 백업: 매일 02:00 KST rsync --update (증분) — full 백업은 타임아웃', 0.7, 'NAS'),
+  ('project_pattern', 'nas_storage_alert', 'NAS 용량 80% 도달 시 텔레그램 알림 — 모니터링 필수', 0.7, 'NAS'),
+  ('discovery', 'nas_workdir_root', 'NAS WORKDIR이 /root 전체 — auto_trigger.sh에 명시적 경로 지정 필요', 0.6, 'NAS')
+ON CONFLICT (category, key, COALESCE(project, '')) DO NOTHING;

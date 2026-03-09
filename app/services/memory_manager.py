@@ -147,7 +147,7 @@ class MemoryManager:
                 result.append(note)
             return result
         except Exception as e:
-            logger.debug(f"memory_manager get_recent_notes error: {e}")
+            logger.warning(f"memory_manager get_recent_notes error: {e}")
             return []
         finally:
             await conn.close()
@@ -180,7 +180,7 @@ class MemoryManager:
                 key,
                 json.dumps(value),
             )
-            logger.debug(f"memory_manager learn: category={category} key={key}")
+            logger.info(f"memory_manager learn: category={category} key={key}")
         except Exception as e:
             logger.error(f"memory_manager learn error: {e}")
         finally:
@@ -241,7 +241,7 @@ class MemoryManager:
 
             return memories
         except Exception as e:
-            logger.debug(f"memory_manager recall error: {e}")
+            logger.warning(f"memory_manager recall error: {e}")
             return []
         finally:
             await conn.close()
@@ -284,7 +284,7 @@ class MemoryManager:
 
             return "\n".join(lines)
         except Exception as e:
-            logger.debug(f"memory_manager get_meta_context error: {e}")
+            logger.warning(f"memory_manager get_meta_context error: {e}")
             return ""
         finally:
             await conn.close()
@@ -328,7 +328,7 @@ class MemoryManager:
                 """,
                 category, key, value, confidence, source_session_id,
             )
-            logger.debug(f"memory_manager observe: category={category} key={key}")
+            logger.info(f"memory_manager observe: category={category} key={key}")
         except Exception as e:
             logger.error(f"memory_manager observe error: {e}")
         finally:
@@ -368,7 +368,7 @@ class MemoryManager:
                 )
             return [_row_to_observation(r) for r in rows]
         except Exception as e:
-            logger.debug(f"memory_manager recall_observations error: {e}")
+            logger.warning(f"memory_manager recall_observations error: {e}")
             return []
         finally:
             await conn.close()
@@ -409,7 +409,7 @@ class MemoryManager:
                     if sum(len(l) for l in lines) > char_limit:
                         break
         except Exception as e:
-            logger.debug(f"memory_manager build_meta_context obs error: {e}")
+            logger.warning(f"memory_manager build_meta_context obs error: {e}")
 
         # ai_meta_memory에서 CEO 선호도 + 결정 이력
         if sum(len(l) for l in lines) < char_limit:
@@ -468,9 +468,9 @@ class MemoryManager:
                             value=str(obs["value"]),
                             confidence=float(obs.get("confidence", 0.5)),
                         )
-                logger.debug(f"auto_observe_from_session: {len(observations)}개 관찰 저장")
+                logger.info(f"auto_observe_from_session: {len(observations)}개 관찰 저장")
         except Exception as e:
-            logger.debug(f"memory_manager auto_observe_from_session error: {e}")
+            logger.warning(f"memory_manager auto_observe_from_session error: {e}")
 
     # ── Layer 2 도구 인터페이스 (AADS-186E-3) ───────────────────────────────
 
@@ -527,7 +527,7 @@ class MemoryManager:
             )
             return [_row_to_session_note(r) for r in rows]
         except Exception as e:
-            logger.debug(f"memory_manager recall_notes error: {e}")
+            logger.warning(f"memory_manager recall_notes error: {e}")
             return []
         finally:
             await conn.close()
@@ -582,7 +582,7 @@ class MemoryManager:
                     parsed.get("unresolved_issues", []),
                 )
         except Exception as e:
-            logger.debug(f"memory_manager auto_summarize haiku error: {e}")
+            logger.warning(f"memory_manager auto_summarize haiku error: {e}")
 
         # 폴백: 마지막 사용자 메시지 첫 줄
         last_user = next(
