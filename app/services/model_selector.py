@@ -6,6 +6,7 @@ AADS-185: 모델 선택기 — LiteLLM vs 직접 Anthropic SDK 분기
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -241,7 +242,7 @@ async def _stream_anthropic(
         if not tool_use_blocks:
             break  # 도구 없음 → 완료
 
-        # 도구 실행
+        # 도구 실행 (heartbeat 포함 — SSE 연결 유지)
         from app.services.tool_executor import ToolExecutor
         executor = ToolExecutor()
 
@@ -255,7 +256,17 @@ async def _stream_anthropic(
             }
             tool_calls_made.append(tu.name)
 
-            result_str = await executor.execute(tu.name, tu.input)
+            # tool 실행 중 5초마다 heartbeat yield (SSE 타임아웃 방지)
+            task = asyncio.create_task(executor.execute(tu.name, tu.input))
+            while not task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+                except asyncio.TimeoutError:
+                    yield {"type": "heartbeat"}
+                except Exception:
+                    break
+            result_str = task.result() if task.done() and not task.cancelled() else '{"error": "tool execution failed"}'
+
             yield {
                 "type": "tool_result",
                 "tool_name": tu.name,

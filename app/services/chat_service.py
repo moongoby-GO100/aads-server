@@ -34,18 +34,27 @@ async def with_heartbeat(
     If the inner generator hasn't yielded anything for *interval* seconds,
     a lightweight ``{"type": "heartbeat"}`` SSE line is emitted so that
     the frontend can reset its inactivity timeout.
+
+    Uses asyncio.shield to prevent cancellation of the inner generator's
+    __anext__ coroutine, which would corrupt the generator state.
     """
     HEARTBEAT = f'data: {json.dumps({"type": "heartbeat"})}\n\n'
     ait = gen.__aiter__()
+    pending: _heartbeat_asyncio.Task | None = None
     while True:
+        if pending is None:
+            pending = _heartbeat_asyncio.ensure_future(ait.__anext__())
         try:
             chunk = await _heartbeat_asyncio.wait_for(
-                ait.__anext__(), timeout=interval,
+                _heartbeat_asyncio.shield(pending), timeout=interval,
             )
+            pending = None  # consumed — get next on next iteration
             yield chunk
         except _heartbeat_asyncio.TimeoutError:
-            yield HEARTBEAT
+            yield HEARTBEAT  # pending is still running, will retry
         except StopAsyncIteration:
+            break
+        except Exception:
             break
 
 # AADS-186C: Langfuse 트레이스 (optional — graceful degradation)
@@ -701,7 +710,9 @@ async def send_message_stream(
             model_override=model_override,
         ):
             etype = event.get("type", "")
-            if etype == "delta":
+            if etype == "heartbeat":
+                yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+            elif etype == "delta":
                 full_response += event.get("content", "")
                 yield f"data: {json.dumps({'type': 'delta', 'content': event['content']})}\n\n"
             elif etype == "thinking":
