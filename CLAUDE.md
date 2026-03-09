@@ -25,9 +25,16 @@ docs/shared-lessons/INDEX.md 참조. 작업 전 관련 교훈 확인 필수.
 ## AADS 전용 지식
 docs/knowledge/AADS-KNOWLEDGE.md — 아키텍처, 파이프라인, 교차검증, 함정
 
+## 메모리 자동 주입 시스템 (AADS-186E, 2026-03-09)
+- **모듈**: `app/core/memory_recall.py` — 5섹션 메모리 빌더 (session_notes/preferences/tool_strategy/directives/discoveries)
+- **프로젝트별 필터**: ai_observations.project 컬럼으로 AADS/KIS/GO100/SF/NTV2/NAS 분리 주입
+- **자동 축적**: 20턴마다 session_notes 저장 + CEO 패턴 관찰, 에이전트 완료 시 discovery 기록
+- **시드 데이터**: 37건 (공통 12 + 프로젝트별 25) — `scripts/init_memory_schema.sql`
+- **DB 테이블**: session_notes, ai_observations (project 컬럼), ai_meta_memory
+
 ## 현재 상태
 - Phase: Phase 2 운영
-- 최근: AADS-121(Claude Code 설정), AADS-120(교훈), AADS-119(HANDOVER v6.0)
+- 최근: AADS-186E(메모리 자동 주입), AADS-188C(도구 우선순위), AADS-121(Claude Code 설정)
 - 긴급: 없음
 
 ## 빌드/배포
