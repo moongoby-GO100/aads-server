@@ -600,6 +600,16 @@ def _snapshot_to_text(node: Dict, depth: int = 0) -> str:
     return line + ("\n" + child_lines if child_lines else "")
 
 
+async def _ensure_aads_auth(page: Any) -> None:
+    """AADS 대시보드 인증 토큰 자동 주입 (내부 서비스용)."""
+    try:
+        from app.auth import create_token
+        token = create_token(user_id="browser-agent", email="ceo@aads.dev")
+        await page.evaluate(f"() => localStorage.setItem('aads_token', '{token}')")
+    except Exception as e:
+        logger.debug(f"browser auth inject failed: {e}")
+
+
 async def tool_browser_navigate(url: str) -> str:
     """브라우저로 URL 이동 (도메인 화이트리스트 검사 포함)."""
     blocked = _browser_domain_ok(url)
@@ -614,7 +624,23 @@ async def tool_browser_navigate(url: str) -> str:
             page = pages[-1]  # 마지막 탭 재사용
         else:
             page = await ctx.new_page()
+
+        # AADS 대시보드 접근 시 인증 토큰 사전 주입
+        if "newtalk.kr" in url:
+            # 먼저 도메인에 접속해서 localStorage 접근 가능하게 함
+            try:
+                await page.goto(url.split("/chat")[0].split("/ops")[0] or url,
+                                timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
+                await _ensure_aads_auth(page)
+            except Exception:
+                pass
+
         await page.goto(url, timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
+        # 로그인 리다이렉트 감지 → 재시도
+        if "/login" in page.url and "/login" not in url:
+            await _ensure_aads_auth(page)
+            await page.goto(url, timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
+
         title = await page.title()
         return f"[탐색 완료]\n제목: {title}\nURL: {page.url}"
     except Exception as e:
@@ -622,19 +648,63 @@ async def tool_browser_navigate(url: str) -> str:
 
 
 async def tool_browser_snapshot() -> str:
-    """현재 페이지의 접근성 트리를 텍스트로 추출 (LLM 최적)."""
+    """현재 페이지의 UI 구조를 텍스트로 추출 (LLM 최적)."""
     ctx, err = await _acquire_pw_context()
     if err:
         return err
     try:
         page = await _current_page(ctx)
-        snap = await page.accessibility.snapshot()
-        if not snap:
-            return "(접근성 트리 없음 — 페이지가 로드되지 않았을 수 있습니다)"
-        text = _snapshot_to_text(snap)
-        if len(text) > 20_000:
-            text = text[:20_000] + "\n...(20KB 초과, 잘림)"
-        return f"[접근성 트리 — {page.url}]\n{text}"
+        url = page.url
+        title = await page.title()
+
+        # Playwright 1.47+ : page.accessibility 제거됨
+        # aria snapshot 사용 (1.49+), 실패 시 DOM 텍스트 추출 폴백
+        snap_text = ""
+        try:
+            snap_text = await page.locator("body").aria_snapshot()
+        except Exception:
+            pass
+
+        if not snap_text:
+            # 폴백: 주요 UI 요소 텍스트 추출
+            elements = await page.evaluate("""() => {
+                const items = [];
+                const els = document.querySelectorAll(
+                    'button, a, input, select, textarea, h1, h2, h3, h4, [role], label, nav, header, footer, main, aside'
+                );
+                for (const el of els) {
+                    const tag = el.tagName.toLowerCase();
+                    const role = el.getAttribute('role') || '';
+                    const text = (el.textContent || '').trim().substring(0, 100);
+                    const placeholder = el.getAttribute('placeholder') || '';
+                    const type = el.getAttribute('type') || '';
+                    const href = el.getAttribute('href') || '';
+                    if (text || placeholder) {
+                        items.push({tag, role, text, placeholder, type, href});
+                    }
+                    if (items.length >= 200) break;
+                }
+                return items;
+            }""")
+            lines = [f"[UI 요소 추출 — {url}]", f"제목: {title}", ""]
+            for el in elements:
+                parts = [f"<{el['tag']}>"]
+                if el.get('role'):
+                    parts.append(f"role={el['role']}")
+                if el.get('type'):
+                    parts.append(f"type={el['type']}")
+                if el.get('text'):
+                    parts.append(f"'{el['text'][:80]}'")
+                if el.get('placeholder'):
+                    parts.append(f"placeholder='{el['placeholder']}'")
+                if el.get('href'):
+                    parts.append(f"href={el['href'][:80]}")
+                lines.append("  " + " ".join(parts))
+            snap_text = "\n".join(lines)
+
+        if len(snap_text) > 20_000:
+            snap_text = snap_text[:20_000] + "\n...(20KB 초과, 잘림)"
+        return snap_text if snap_text.startswith("[") else f"[ARIA 스냅샷 — {url}]\n{snap_text}"
     except Exception as e:
         return f"[ERROR] 스냅샷 실패: {e}"
 
