@@ -46,6 +46,8 @@ _DEFER_LOADING: Dict[str, bool] = {
     "code_explorer": True,
     "analyze_changes": True,
     "search_all_projects": True,
+    # AADS-188B: 시맨틱 코드 검색 — 온디맨드
+    "semantic_code_search": True,
 }
 
 # 도구 카테고리 안내 (시스템 프롬프트 주입용 — context_builder.py에서 사용)
@@ -72,7 +74,8 @@ TOOL_CATEGORY_GUIDE = """\
 - deep_research: Gemini Deep Research — 수십 개 소스 자동 탐색 종합 보고서 ($2~5/건, 3~10분)
 - code_explorer: 함수 호출 체인 추적 (depth 3, 6개 프로젝트)
 - analyze_changes: 프로젝트 최근 Git 변경 분석 + 위험도 평가
-- search_all_projects: 6개 프로젝트 코드베이스 동시 검색\
+- search_all_projects: 6개 프로젝트 코드베이스 동시 검색
+- semantic_code_search: 벡터 기반 시맨틱 코드 검색 (ChromaDB, "인증 로직 어디?" 질의 가능)\
 """
 
 # ─── 도구 스키마 정의 (Anthropic Tool Use 포맷) ──────────────────────────────
@@ -708,16 +711,26 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "type": "string",
                     "description": "리서치 주제/질문",
                 },
+                "context": {
+                    "type": "string",
+                    "description": "추가 배경 컨텍스트 (선택). 예: '우리 회사는 B2B SaaS 스타트업'",
+                },
+                "format": {
+                    "type": "string",
+                    "description": "보고서 형식 프리셋. summary=간결요약, detailed=상세분석, report=공식보고서",
+                    "enum": ["summary", "detailed", "report"],
+                },
                 "format_instructions": {
                     "type": "string",
-                    "description": "보고서 형식 지시 (선택). 예: '1. 요약 2. 주요 플레이어 3. 비용 비교'",
+                    "description": "보고서 형식 자유 지시 (선택). 예: '1. 요약 2. 주요 플레이어 3. 비용 비교'",
                 },
             },
             "required": ["query"],
         },
         "input_examples": [
-            {"query": "AI 코딩 에이전트 시장 동향 2026", "format_instructions": "1. 요약 2. 주요 플레이어 3. 비용 비교 4. 추천"},
-            {"query": "FastAPI vs Django 성능 비교 최신"},
+            {"query": "AI 코딩 에이전트 시장 동향 2026", "format": "report"},
+            {"query": "FastAPI vs Django 성능 비교 최신", "format": "detailed"},
+            {"query": "경쟁사 분석", "context": "우리 회사는 B2B SaaS HR 플랫폼", "format": "summary"},
         ],
         "defer_loading": True,
     },
@@ -805,6 +818,42 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         ],
         "defer_loading": True,
     },
+    # AADS-188B: 시맨틱 코드 검색
+    "semantic_code_search": {
+        "name": "semantic_code_search",
+        "description": (
+            "ChromaDB 벡터 인덱스로 코드베이스를 시맨틱 검색한다. "
+            "'인증 로직 어디 있어?', '헬스체크 함수 찾아줘' 같은 자연어 질의에 "
+            "관련 코드 청크(파일, 라인, 스니펫, 유사도 점수)를 반환한다. "
+            "index_project를 먼저 실행해야 결과가 나온다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "자연어 검색 질의 (예: '헬스체크 로직', '인텐트 분류 함수')",
+                },
+                "project": {
+                    "type": "string",
+                    "description": "프로젝트 필터 (AADS/KIS/GO100/SF/NTV2/NAS). 생략 시 전체 검색.",
+                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2", "NAS"],
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "반환할 결과 수 (기본 5, 최대 20)",
+                    "default": 5,
+                },
+            },
+            "required": ["query"],
+        },
+        "input_examples": [
+            {"query": "헬스체크 로직", "project": "AADS", "top_k": 5},
+            {"query": "인텐트 분류", "project": "AADS"},
+            {"query": "인증 미들웨어"},
+        ],
+        "defer_loading": True,
+    },
 }
 
 
@@ -819,8 +868,8 @@ _GROUPS: Dict[str, List[str]] = {
     "crawl": ["jina_read", "crawl4ai_fetch", "deep_crawl"],
     # AADS-186E-2: 메모리 도구 그룹
     "memory": ["save_note", "recall_notes", "learn_pattern", "observe"],
-    # AADS-186E-3: 딥리서치 + 코드탐색 도구 그룹
-    "research": ["deep_research", "code_explorer", "analyze_changes", "search_all_projects"],
+    # AADS-186E-3 / AADS-188B: 딥리서치 + 코드탐색 + 시맨틱 검색 도구 그룹
+    "research": ["deep_research", "code_explorer", "analyze_changes", "search_all_projects", "semantic_code_search"],
     "all": list(_TOOLS.keys()),
 }
 

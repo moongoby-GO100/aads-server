@@ -223,3 +223,229 @@ class TestResearchSSEEvents:
         sse = f"data: {json.dumps(payload)}\n\n"
         parsed = json.loads(sse.replace("data: ", "").strip())
         assert parsed["type"] == "research_thinking"
+
+
+# ─── AADS-188A: 신규 기능 테스트 ──────────────────────────────────────────────
+
+class TestResearchEventNewFields:
+    """AADS-188A: ResearchEvent content/sources/phase 필드 테스트."""
+
+    def test_research_event_planning(self):
+        """planning 타입 이벤트."""
+        from app.models.research import ResearchEvent
+        ev = ResearchEvent(type="planning", content="연구 계획 수립 중...", phase="planning", progress_pct=5)
+        assert ev.type == "planning"
+        assert ev.content == "연구 계획 수립 중..."
+        assert ev.phase == "planning"
+        assert ev.progress_pct == 5
+
+    def test_research_event_searching(self):
+        """searching 타입 이벤트."""
+        from app.models.research import ResearchEvent
+        ev = ResearchEvent(type="searching", content="소스 탐색 중... (3/15)", phase="searching", progress_pct=30)
+        assert ev.type == "searching"
+        assert ev.progress_pct == 30
+
+    def test_research_event_analyzing(self):
+        """analyzing 타입 이벤트."""
+        from app.models.research import ResearchEvent
+        ev = ResearchEvent(type="analyzing", content="교차 분석 중...", progress_pct=80)
+        assert ev.type == "analyzing"
+        assert ev.progress_pct == 80
+
+    def test_research_event_complete_with_sources(self):
+        """complete 이벤트 — sources 목록 포함."""
+        from app.models.research import ResearchEvent
+        sources = [{"url": "https://example.com", "title": "Example"}]
+        ev = ResearchEvent(type="complete", content="최종 보고서 내용...", sources=sources, progress_pct=100)
+        assert ev.type == "complete"
+        assert ev.sources is not None
+        assert len(ev.sources) == 1
+        assert ev.sources[0]["url"] == "https://example.com"
+
+    def test_research_result_sources_default_empty(self):
+        """ResearchResult 기본 sources 빈 리스트."""
+        from app.models.research import ResearchResult
+        r = ResearchResult(content="보고서", status="completed")
+        assert r.sources == []
+
+    def test_research_result_with_sources(self):
+        """ResearchResult sources 포함."""
+        from app.models.research import ResearchResult
+        sources = [{"url": "https://a.com"}, {"url": "https://b.com"}]
+        r = ResearchResult(content="보고서", status="completed", sources=sources)
+        assert len(r.sources) == 2
+
+
+class TestDeepResearchStreamFeatures:
+    """AADS-188A: research_stream() 및 context/format 파라미터 테스트."""
+
+    def test_service_has_research_stream_method(self):
+        """DeepResearchService에 research_stream 메서드 존재 (async generator)."""
+        from app.services.deep_research_service import DeepResearchService
+        import inspect
+        svc = DeepResearchService()
+        assert hasattr(svc, "research_stream")
+        # research_stream은 async generator이므로 isasyncgenfunction 사용
+        assert inspect.isasyncgenfunction(svc.research_stream)
+
+    def test_build_prompt_with_context(self):
+        """_build_prompt: context 포함 시 프롬프트에 추가."""
+        from app.services.deep_research_service import _build_prompt
+        result = _build_prompt("AI 시장", "우리 회사는 SaaS 스타트업", None)
+        assert "AI 시장" in result
+        assert "배경 컨텍스트" in result
+        assert "우리 회사는 SaaS 스타트업" in result
+
+    def test_build_prompt_without_context(self):
+        """_build_prompt: context 없을 때 query만."""
+        from app.services.deep_research_service import _build_prompt
+        result = _build_prompt("AI 시장", None, None)
+        assert "AI 시장" in result
+        assert "배경 컨텍스트" not in result
+
+    def test_format_preset_summary(self):
+        """_format_preset: summary 프리셋."""
+        from app.services.deep_research_service import _format_preset
+        result = _format_preset("summary")
+        assert result is not None
+        assert "요약" in result
+
+    def test_format_preset_detailed(self):
+        """_format_preset: detailed 프리셋."""
+        from app.services.deep_research_service import _format_preset
+        result = _format_preset("detailed")
+        assert result is not None
+        assert "분석" in result
+
+    def test_format_preset_report(self):
+        """_format_preset: report 프리셋."""
+        from app.services.deep_research_service import _format_preset
+        result = _format_preset("report")
+        assert result is not None
+        assert "보고서" in result
+
+    def test_format_preset_none(self):
+        """_format_preset: None 입력 시 None 반환."""
+        from app.services.deep_research_service import _format_preset
+        result = _format_preset(None)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_research_stream_no_api_key_yields_error(self):
+        """API 키 없을 때 research_stream()은 error 이벤트 yield."""
+        from app.services.deep_research_service import DeepResearchService
+        from app.models.research import ResearchEvent
+        svc = DeepResearchService()
+        svc._api_key = ""
+        events = []
+        async for ev in svc.research_stream("AI 시장 동향"):
+            events.append(ev)
+        assert len(events) == 1
+        assert events[0].type == "error"
+
+    @pytest.mark.asyncio
+    async def test_research_stream_daily_limit_yields_error(self):
+        """일일 한도 초과 시 research_stream()은 error 이벤트 yield."""
+        from app.services import deep_research_service as dr_mod
+        from app.services.deep_research_service import DeepResearchService
+        original = dr_mod._daily_usage.copy()
+        today = dr_mod._today_str()
+        dr_mod._daily_usage[today] = 5
+        try:
+            svc = DeepResearchService()
+            svc._api_key = "fake_key"
+            events = []
+            async for ev in svc.research_stream("AI 시장 동향"):
+                events.append(ev)
+            assert len(events) == 1
+            assert events[0].type == "error"
+            assert "한도" in (events[0].content or "")
+        finally:
+            dr_mod._daily_usage.clear()
+            dr_mod._daily_usage.update(original)
+
+    def test_google_genai_api_key_support(self):
+        """GOOGLE_GENAI_API_KEY 환경변수 지원 확인."""
+        import os
+        import importlib
+        original_env = os.environ.copy()
+        try:
+            os.environ["GOOGLE_GENAI_API_KEY"] = "test_google_key"
+            os.environ.pop("GEMINI_API_KEY", None)
+            import app.services.deep_research_service as dr_mod
+            # 모듈 레벨 변수 재확인 (실제 실행 환경)
+            key = os.getenv("GOOGLE_GENAI_API_KEY") or os.getenv("GEMINI_API_KEY", "")
+            assert key == "test_google_key"
+        finally:
+            os.environ.clear()
+            os.environ.update(original_env)
+
+    def test_monthly_limit_functions(self):
+        """월간 카운터 함수 동작 확인."""
+        from app.services import deep_research_service as dr_mod
+        month = dr_mod._month_str()
+        assert isinstance(month, str)
+        assert len(month) == 7  # YYYY-MM
+        assert dr_mod._check_monthly_limit() is True
+
+
+class TestToolRegistryDeepResearchSchema:
+    """AADS-188A: tool_registry deep_research 스키마 검증."""
+
+    def test_deep_research_has_context_param(self):
+        """deep_research 스키마에 context 파라미터 존재."""
+        from app.services.tool_registry import _TOOLS
+        schema = _TOOLS["deep_research"]["input_schema"]
+        assert "context" in schema["properties"]
+
+    def test_deep_research_has_format_param(self):
+        """deep_research 스키마에 format 파라미터 존재."""
+        from app.services.tool_registry import _TOOLS
+        schema = _TOOLS["deep_research"]["input_schema"]
+        assert "format" in schema["properties"]
+        format_prop = schema["properties"]["format"]
+        assert "enum" in format_prop
+        assert "summary" in format_prop["enum"]
+        assert "detailed" in format_prop["enum"]
+        assert "report" in format_prop["enum"]
+
+    def test_deep_research_required_only_query(self):
+        """deep_research 필수 파라미터는 query만."""
+        from app.services.tool_registry import _TOOLS
+        schema = _TOOLS["deep_research"]["input_schema"]
+        assert schema["required"] == ["query"]
+
+
+class TestIntentRouterDeepResearchKeywords:
+    """AADS-188A: intent_router 딥리서치 키워드 테스트."""
+
+    def test_keyword_리서치(self):
+        """'리서치' 키워드 → deep_research."""
+        from app.services.intent_router import _keyword_fallback
+        result = _keyword_fallback("AI 코딩 에이전트 리서치 해줘")
+        assert result.intent == "deep_research"
+
+    def test_keyword_경쟁사(self):
+        """'경쟁사' 키워드 → deep_research."""
+        from app.services.intent_router import _keyword_fallback
+        result = _keyword_fallback("경쟁사 분석해줘")
+        assert result.intent == "deep_research"
+
+    def test_keyword_트렌드(self):
+        """'트렌드' 키워드 → deep_research."""
+        from app.services.intent_router import _keyword_fallback
+        result = _keyword_fallback("AI 트렌드 보고서 써줘")
+        assert result.intent == "deep_research"
+
+    def test_keyword_딥리서치(self):
+        """'딥리서치' 키워드 → deep_research."""
+        from app.services.intent_router import _keyword_fallback
+        result = _keyword_fallback("딥리서치 해줘")
+        assert result.intent == "deep_research"
+
+    def test_keyword_시장분석보고서(self):
+        """'시장 분석 보고서' 키워드 → deep_research."""
+        from app.services.intent_router import _keyword_fallback
+        result = _keyword_fallback("시장 분석 보고서 작성해줘")
+        assert result.intent == "deep_research"

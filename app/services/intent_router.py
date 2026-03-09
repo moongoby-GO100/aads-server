@@ -215,7 +215,7 @@ def _keyword_fallback(message: str) -> IntentResult:
         return _make_result("service_inspection")
     if any(w in msg for w in ("전체 서비스 상태", "6개 서비스", "올 스테이터스", "모든 서비스 상태")):
         return _make_result("all_service_status")
-    if any(w in msg for w in ("심층", "deep research", "리서치 보고서", "시장 조사")):
+    if any(w in msg for w in ("심층", "deep research", "리서치 보고서", "시장 조사", "리서치", "경쟁사 분석", "트렌드 분석")):
         return _make_result("deep_research")
     if any(w in msg for w in ("검색", "찾아봐", "최신", "뉴스")):
         return _make_result("search")
@@ -244,7 +244,7 @@ def _keyword_fallback(message: str) -> IntentResult:
         return _make_result("url_read")
     if any(w in msg for w in ("조사해서 정리", "여러 소스 비교", "크롤링해서 분석", "딥 크롤", "deep crawl")):
         return _make_result("deep_crawl")
-    if any(w in msg for w in ("딥리서치", "깊이 조사", "종합 보고서 써줘", "시장 분석 보고서", "경쟁 분석 보고서", "기술 동향 보고", "논문 조사")):
+    if any(w in msg for w in ("딥리서치", "깊이 조사", "종합 보고서 써줘", "시장 분석 보고서", "경쟁 분석 보고서", "기술 동향 보고", "논문 조사", "조사해줘", "조사해서", "경쟁사", "트렌드", "보고서 작성")):
         return _make_result("deep_research")
     if any(w in msg for w in ("함수 호출 체인", "로직 흐름 추적", "코드 탐색", "함수 추적 다이어그램", "trace_function")):
         return _make_result("code_explorer")

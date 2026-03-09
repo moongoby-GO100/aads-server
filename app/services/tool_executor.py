@@ -85,6 +85,8 @@ class ToolExecutor:
             "code_explorer":          self._code_explorer,
             "analyze_changes":        self._analyze_changes,
             "search_all_projects":    self._search_all_projects,
+            # AADS-188B: 시맨틱 코드 검색
+            "semantic_code_search":   self._semantic_code_search,
         }
         fn = dispatch.get(tool_name)
         if fn is None:
@@ -613,19 +615,57 @@ class ToolExecutor:
     # ── AADS-186E-3: 딥리서치 + 코드탐색 도구 ────────────────────────────────
 
     async def _deep_research(self, inp: Dict[str, Any]) -> Any:
-        """Gemini Deep Research API — 수십 개 소스 종합 보고서."""
+        """Gemini Deep Research API — 수십 개 소스 종합 보고서 (AADS-188A: Langfuse span + context/format)."""
         query = inp.get("query", "")
         if not query:
             return {"error": "query 필수"}
+        context = inp.get("context")
+        format_param = inp.get("format")
         format_instructions = inp.get("format_instructions")
         from app.services.deep_research_service import DeepResearchService
         svc = DeepResearchService()
         if not svc.is_available():
             return {"error": "GEMINI_API_KEY 미설정 — Deep Research 비활성"}
+
+        # Langfuse span (AADS-188A)
+        lf_span = None
+        try:
+            from app.core.langfuse_config import get_langfuse, is_enabled
+            if is_enabled():
+                lf = get_langfuse()
+                if lf:
+                    trace = lf.trace(name="tool_deep_research", input=query, user_id="CEO")
+                    lf_span = trace.span(
+                        name="deep_research_tool",
+                        input={"query": query, "context": context, "format": format_param},
+                    )
+        except Exception:
+            pass
+
         result = await asyncio.wait_for(
-            svc.research(query, format_instructions=format_instructions),
+            svc.research(
+                query,
+                context=context,
+                format=format_param,
+                format_instructions=format_instructions,
+            ),
             timeout=600.0,  # 10분 타임아웃
         )
+
+        if lf_span:
+            try:
+                lf_span.end(
+                    output=result.report[:300],
+                    metadata={
+                        "sources_count": len(result.citations),
+                        "cost_usd": result.cost_usd,
+                        "elapsed_sec": result.elapsed_sec,
+                        "status": result.status,
+                    },
+                )
+            except Exception:
+                pass
+
         return {
             "report": result.report,
             "interaction_id": result.interaction_id,
@@ -701,6 +741,38 @@ class ToolExecutor:
             "total_matches": len(result.matches),
         }
 
+    async def _semantic_code_search(self, inp: Dict[str, Any]) -> Any:
+        """AADS-188B: ChromaDB 벡터 기반 시맨틱 코드 검색."""
+        query = inp.get("query", "")
+        if not query:
+            return {"error": "query 필수"}
+        project = inp.get("project") or None
+        top_k = min(int(inp.get("top_k", 5)), 20)
+
+        from app.services.semantic_code_search import SemanticCodeSearch
+        svc = SemanticCodeSearch()
+
+        if not svc._is_available():
+            return {
+                "error": "ChromaDB 미초기화",
+                "hint": "먼저 index_project를 실행하세요 (예: code_indexer.index_project('AADS'))",
+            }
+
+        try:
+            results = await asyncio.wait_for(
+                svc.search(query, project=project, top_k=top_k),
+                timeout=30.0,
+            )
+        except asyncio.TimeoutError:
+            return {"error": "timeout — 30초 초과"}
+
+        return {
+            "query": query,
+            "project_filter": project,
+            "results": results,
+            "total": len(results),
+        }
+
 # ─── 하위 호환성 ─────────────────────────────────────────────────────────────
 
 _INTENT_TOOL_MAP: Dict[str, list] = {
@@ -726,10 +798,12 @@ _INTENT_TOOL_MAP: Dict[str, list] = {
     # AADS-186E-1 크롤링 인텐트
     "deep_crawl":          ["deep_crawl"],
     # AADS-186E-3 딥리서치 + 코드탐색 인텐트
-    "deep_research":       ["deep_research"],
-    "code_explorer":       ["code_explorer"],
-    "analyze_changes":     ["analyze_changes"],
-    "search_all_projects": ["search_all_projects"],
+    "deep_research":          ["deep_research"],
+    "code_explorer":          ["code_explorer"],
+    "analyze_changes":        ["analyze_changes"],
+    "search_all_projects":    ["search_all_projects"],
+    # AADS-188B 시맨틱 코드 검색 인텐트
+    "semantic_code_search":   ["semantic_code_search"],
 }
 
 
