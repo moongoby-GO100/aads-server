@@ -409,6 +409,27 @@ async def send_message_stream(
                 except Exception as e:
                     logger.warning(f"gemini_grounding_failed: {e}")
                 if result is None:
+                    # Fallback: Naver → Kakao → Brave
+                    from app.services.naver_search_service import NaverSearchService
+                    naver = NaverSearchService()
+                    if naver.is_available():
+                        try:
+                            result = await naver.search(content)
+                            if result.error:
+                                result = None
+                        except Exception as e:
+                            logger.warning(f"naver_search_failed: {e}")
+                if result is None:
+                    from app.services.kakao_search_service import KakaoSearchService
+                    kakao = KakaoSearchService()
+                    if kakao.is_available():
+                        try:
+                            result = await kakao.search(content)
+                            if result.error:
+                                result = None
+                        except Exception as e:
+                            logger.warning(f"kakao_search_failed: {e}")
+                if result is None:
                     from app.services.brave_search_service import BraveSearchService
                     brave = BraveSearchService()
                     result = await brave.search(content)

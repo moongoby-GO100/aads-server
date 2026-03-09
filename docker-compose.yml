@@ -47,6 +47,10 @@ services:
       # AADS-185: CEO Chat 전면 재설계 — 검색/리서치 API 키
       - GEMINI_API_KEY=AIzaSyAGS716g8pJ6AFROK40jHBwYWrCS2MBdCE
       - BRAVE_API_KEY=${BRAVE_API_KEY:-}
+      # Naver / Kakao 검색 API
+      - NAVER_CLIENT_ID=${NAVER_CLIENT_ID:-}
+      - NAVER_CLIENT_SECRET=${NAVER_CLIENT_SECRET:-}
+      - KAKAO_REST_API_KEY=${KAKAO_REST_API_KEY:-}
       # LiteLLM 프록시 (AADS-185)
       - LITELLM_BASE_URL=${LITELLM_BASE_URL:-http://litellm:4000}
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-litellm}
