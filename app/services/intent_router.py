@@ -59,7 +59,7 @@ INTENT_MAP: dict[str, dict] = {
     "execution_verify": {"model": "claude-sonnet",               "tools": True,  "group": "system"},
     "workspace_switch": {"model": "claude-sonnet",               "tools": True,  "group": "system"},
     "cost_report":      {"model": "claude-sonnet",               "tools": True,  "group": "system"},
-    "browser":          {"model": "gemini-flash",                "tools": False, "group": ""},
+    "browser":          {"model": "claude-sonnet",               "tools": True,  "group": "browser"},
     "image_analyze":    {"model": "claude-sonnet",               "tools": False, "group": ""},
     "video_analyze":    {"model": "gemini-flash",                "tools": False, "group": ""},
     "server_file":      {"model": "claude-sonnet",               "tools": True,  "group": "action"},
@@ -159,6 +159,7 @@ news_search, blog_search, shop_search, local_search, book_search, image_search, 
 - 기획 → planning
 - 의사결정 → decision
 - 디자인 → design
+- "여기 확인해", "여기 채팅창", "화면 분석", "화면 봐줘", "페이지 확인", "UI 분석", "스크린샷", "화면 캡처" → browser
 - 이미지 분석 → image_analyze
 - 영상 분석 → video_analyze
 - 코드 실행 → code_exec
@@ -300,6 +301,9 @@ def _keyword_fallback(message: str) -> IntentResult:
         return _make_result("cto_impact")
     if any(w in msg for w in ("기술 부채", "todo 정리", "fixme", "정리 필요")):
         return _make_result("cto_tech_debt")
+    # 브라우저 도구 — "여기 확인해", "화면 분석" 등
+    if any(w in msg for w in ("여기 확인", "여기 채팅", "화면 분석", "화면 봐", "페이지 확인", "ui 분석", "스크린샷", "화면 캡처", "여기 기능", "채팅창 기능")):
+        return _make_result("browser")
     if any(w in msg for w in ("이 url 읽어", "이 문서 분석", "이 페이지 내용", "http://", "https://", "url 열어", "링크 내용")):
         return _make_result("url_read")
     if any(w in msg for w in ("조사해서 정리", "여러 소스 비교", "크롤링해서 분석", "딥 크롤", "deep crawl")):

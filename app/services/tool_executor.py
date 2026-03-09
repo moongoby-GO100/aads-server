@@ -91,6 +91,13 @@ class ToolExecutor:
             "check_directive_status": self._check_directive_status,
             "delegate_to_agent":      self._delegate_to_agent,
             "delegate_to_research":   self._delegate_to_research,
+            # AADS-159: 브라우저 도구 (Playwright 기반)
+            "browser_navigate":       self._browser_navigate,
+            "browser_snapshot":       self._browser_snapshot,
+            "browser_screenshot":     self._browser_screenshot,
+            "browser_click":          self._browser_click,
+            "browser_fill":           self._browser_fill,
+            "browser_tab_list":       self._browser_tab_list,
         }
         fn = dispatch.get(tool_name)
         if fn is None:
@@ -844,6 +851,48 @@ class ToolExecutor:
                 "alternative": "web_search_brave로 간단한 검색을 시도하거나, deep_crawl로 크롤링 기반 분석을 할 수 있습니다.",
             }
 
+    # ── AADS-159: 브라우저 도구 (Playwright — ceo_chat_tools 래퍼) ────────────
+
+    async def _browser_navigate(self, inp: Dict[str, Any]) -> Any:
+        """브라우저로 URL 이동."""
+        url = inp.get("url", "")
+        if not url:
+            return {"error": "url 필수"}
+        from app.api.ceo_chat_tools import tool_browser_navigate
+        return await tool_browser_navigate(url)
+
+    async def _browser_snapshot(self, inp: Dict[str, Any]) -> Any:
+        """현재 페이지 접근성 트리 추출 (텍스트 기반 UI 분석)."""
+        from app.api.ceo_chat_tools import tool_browser_snapshot
+        return await tool_browser_snapshot()
+
+    async def _browser_screenshot(self, inp: Dict[str, Any]) -> Any:
+        """현재 페이지 PNG 스크린샷 촬영."""
+        from app.api.ceo_chat_tools import tool_browser_screenshot
+        return await tool_browser_screenshot()
+
+    async def _browser_click(self, inp: Dict[str, Any]) -> Any:
+        """CSS selector로 요소 클릭."""
+        selector = inp.get("selector", "")
+        if not selector:
+            return {"error": "selector 필수"}
+        from app.api.ceo_chat_tools import tool_browser_click
+        return await tool_browser_click(selector)
+
+    async def _browser_fill(self, inp: Dict[str, Any]) -> Any:
+        """입력 필드에 텍스트 채우기."""
+        selector = inp.get("selector", "")
+        value = inp.get("value", "")
+        if not selector:
+            return {"error": "selector 필수"}
+        from app.api.ceo_chat_tools import tool_browser_fill
+        return await tool_browser_fill(selector, value)
+
+    async def _browser_tab_list(self, inp: Dict[str, Any]) -> Any:
+        """열린 탭 목록 반환."""
+        from app.api.ceo_chat_tools import tool_browser_tab_list
+        return await tool_browser_tab_list()
+
     async def _semantic_code_search(self, inp: Dict[str, Any]) -> Any:
         """AADS-188B: ChromaDB 벡터 기반 시맨틱 코드 검색."""
         query = inp.get("query", "")
@@ -910,6 +959,9 @@ _INTENT_TOOL_MAP: Dict[str, list] = {
     # AADS-188C Phase 2: 메타 도구 인텐트
     "task_query":             ["check_directive_status"],
     "status_check":           ["check_directive_status"],
+    # AADS-159: 브라우저 인텐트
+    "browser":                ["browser_navigate", "browser_snapshot"],
+    "browser_action":         ["browser_navigate", "browser_snapshot", "browser_screenshot"],
 }
 
 

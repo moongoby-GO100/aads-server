@@ -52,6 +52,13 @@ _DEFER_LOADING: Dict[str, bool] = {
     "search_all_projects": True,
     # AADS-188B: 시맨틱 코드 검색 — 온디맨드
     "semantic_code_search": True,
+    # AADS-159: 브라우저 도구 — 상시 로드 (화면 분석 요청 빈번)
+    "browser_navigate": False,
+    "browser_snapshot": False,
+    "browser_screenshot": False,
+    "browser_click": True,
+    "browser_fill": True,
+    "browser_tab_list": True,
 }
 
 # 도구 카테고리 안내 (시스템 프롬프트 주입용 — context_builder.py에서 사용)
@@ -84,6 +91,14 @@ TOOL_CATEGORY_GUIDE = """\
 ### Agent SDK (execute/code_modify 인텐트 시 자동 활성화)
 - 코드 수정/작성, Bash 명령, git 커밋/푸시, 파일 생성 — 자율 실행 가능
 - 위험 명령(rm -rf, DROP TABLE 등)은 자동 차단
+
+### 브라우저 도구 (Playwright 헤드리스 — 화면 분석/PC 컨트롤)
+- browser_navigate: URL 접속 (aads.newtalk.kr, GitHub 등)
+- browser_snapshot: 페이지 접근성 트리 텍스트 추출 (UI 구조 분석)
+- browser_screenshot: PNG 스크린샷 촬영 (base64)
+- browser_click: CSS selector로 요소 클릭
+- browser_fill: 입력 필드에 텍스트 입력
+- browser_tab_list: 열린 탭 목록
 
 ### 메타 도구 (Orchestrator — 복합 조회/위임)
 - check_directive_status: 작업 이력 + 서비스 상태 통합 확인
@@ -844,6 +859,103 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         ],
         "defer_loading": True,
     },
+    # ── AADS-159: 브라우저 도구 (Playwright 기반) ──────────────────────────
+    "browser_navigate": {
+        "name": "browser_navigate",
+        "description": (
+            "Playwright 헤드리스 브라우저로 URL에 접속한다. "
+            "AADS 대시보드(aads.newtalk.kr), GitHub 등 허용 도메인만 접근 가능. "
+            "'여기 확인해', '이 페이지 봐줘', '화면 열어봐'에 사용."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "접속할 URL (https://aads.newtalk.kr/chat 등)",
+                },
+            },
+            "required": ["url"],
+        },
+        "input_examples": [
+            {"url": "https://aads.newtalk.kr/chat"},
+            {"url": "https://aads.newtalk.kr/ops"},
+        ],
+    },
+    "browser_snapshot": {
+        "name": "browser_snapshot",
+        "description": (
+            "현재 열린 페이지의 접근성 트리를 텍스트로 추출한다. "
+            "화면에 보이는 모든 UI 요소(버튼, 텍스트, 입력칸 등)를 파악할 수 있다. "
+            "스크린샷 대신 텍스트 기반 분석이므로 LLM이 직접 UI를 이해할 수 있다. "
+            "'화면 분석해', '뭐가 보여?', 'UI 구조 알려줘'에 사용."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    "browser_screenshot": {
+        "name": "browser_screenshot",
+        "description": (
+            "현재 열린 페이지의 PNG 스크린샷을 촬영한다. base64 인코딩으로 반환. "
+            "'스크린샷 찍어', '화면 캡처', '어떻게 보이는지 확인'에 사용."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    "browser_click": {
+        "name": "browser_click",
+        "description": "현재 페이지에서 CSS selector로 요소를 클릭한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "클릭할 요소의 CSS selector 또는 'text=버튼텍스트'",
+                },
+            },
+            "required": ["selector"],
+        },
+        "input_examples": [
+            {"selector": "button:has-text('새 대화')"},
+            {"selector": "#submit-btn"},
+        ],
+        "defer_loading": True,
+    },
+    "browser_fill": {
+        "name": "browser_fill",
+        "description": "현재 페이지의 입력 필드에 텍스트를 채운다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "입력 필드의 CSS selector",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "입력할 텍스트",
+                },
+            },
+            "required": ["selector", "value"],
+        },
+        "defer_loading": True,
+    },
+    "browser_tab_list": {
+        "name": "browser_tab_list",
+        "description": "헤드리스 브라우저에 열린 탭 목록을 조회한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+        "defer_loading": True,
+    },
     # ── AADS-188C Phase 2: 메타 도구 (Orchestrator) ────────────────────────
     "check_directive_status": {
         "name": "check_directive_status",
@@ -973,6 +1085,8 @@ _GROUPS: Dict[str, List[str]] = {
     "action": ["directive_create", "read_github_file", "query_database", "read_remote_file", "list_remote_dir", "cost_report"],
     "search": ["web_search_brave"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
+    # AADS-159: 브라우저 도구 그룹
+    "browser": ["browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_fill", "browser_tab_list"],
     # AADS-188C Phase 2: 메타 도구 그룹 (Orchestrator)
     "meta": ["check_directive_status", "delegate_to_agent", "delegate_to_research"],
     # AADS-186E-1: 크롤링 도구 그룹
