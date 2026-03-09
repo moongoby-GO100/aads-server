@@ -25,6 +25,9 @@ _anthropic = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY.get_secret_value(
 LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
 LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
 
+# AADS-186E-2: Extended Thinking 전역 스위치 (기본 활성화)
+_EXTENDED_THINKING_ENABLED = os.getenv("EXTENDED_THINKING_ENABLED", "true").lower() == "true"
+
 # 모델별 비용 (per 1M tokens, USD)
 _COST_MAP = {
     "claude-opus":       (15.0, 75.0),
@@ -163,15 +166,22 @@ async def _stream_anthropic(
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Anthropic SDK 직접 스트리밍 (Tool Use + Extended Thinking + Prompt Caching)."""
     model_id = _ANTHROPIC_MODEL_ID.get(model_alias, "claude-sonnet-4-6")
-    max_tokens = 8192 if intent_result.use_extended_thinking else 4096
+
+    # AADS-186E-2: Extended Thinking — Opus 전용, 환경변수로 제어
+    use_thinking = (
+        _EXTENDED_THINKING_ENABLED
+        and intent_result.use_extended_thinking
+        and model_alias == "claude-opus"
+    )
+    max_tokens = 16000 if use_thinking else 4096
 
     # 시스템 프롬프트 (Prompt Caching: Layer 1 정적 부분에 cache_control)
     system_blocks = _build_system_with_cache(system_prompt)
 
     # Extended Thinking 설정
     thinking_config = None
-    if intent_result.use_extended_thinking:
-        thinking_config = {"type": "enabled", "budget_tokens": 8000}
+    if use_thinking:
+        thinking_config = {"type": "enabled", "budget_tokens": 10000}
 
     full_text = ""
     thinking_text = ""

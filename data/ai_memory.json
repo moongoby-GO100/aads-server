@@ -1,0 +1,75 @@
+{
+  "_comment": "AADS-186E-2: Layer 4 메타 메모리 초기값 (ai_meta_memory 테이블 시딩용)",
+  "_version": "1.0",
+  "_updated": "2026-03-09",
+  "initial_memories": [
+    {
+      "category": "ceo_preference",
+      "key": "response_language",
+      "value": {"lang": "ko", "style": "concise", "note": "직접적, 핵심만, 미사여구 없음"},
+      "confidence": 1.0
+    },
+    {
+      "category": "ceo_preference",
+      "key": "plan_before_execute",
+      "value": {"required": true, "note": "계획 먼저 보고, 승인 후 실행"},
+      "confidence": 1.0
+    },
+    {
+      "category": "ceo_preference",
+      "key": "no_completion_without_verification",
+      "value": {"required": true, "note": "검증 없이 완료 선언 금지"},
+      "confidence": 1.0
+    },
+    {
+      "category": "project_pattern",
+      "key": "aads_deployment",
+      "value": {
+        "command": "docker compose -f docker-compose.prod.yml up -d --build aads-server",
+        "healthcheck": "curl -s https://aads.newtalk.kr/api/v1/ops/health-check",
+        "server": "68.183.183.11"
+      },
+      "confidence": 1.0
+    },
+    {
+      "category": "project_pattern",
+      "key": "db_connection",
+      "value": {
+        "host": "aads-postgres",
+        "note": "Docker 내부 호스트명. postgres는 잘못된 값."
+      },
+      "confidence": 1.0
+    },
+    {
+      "category": "known_issue",
+      "key": "server_211_ssh",
+      "value": {
+        "status": "no_ssh_access",
+        "note": "claudebot SSH 키 없음. 직접 접속 불가."
+      },
+      "confidence": 1.0
+    },
+    {
+      "category": "known_issue",
+      "key": "proc_grep_blocking",
+      "value": {
+        "status": "forbidden",
+        "note": "L-010: /proc grep -r 실행 시 서버 블로킹. pgrep/ps/lsof 사용.",
+        "learned_from": "AADS-148"
+      },
+      "confidence": 1.0
+    },
+    {
+      "category": "decision_history",
+      "key": "extended_thinking_budget",
+      "value": {
+        "budget_tokens": 10000,
+        "max_tokens": 16000,
+        "model": "claude-opus",
+        "reason": "비용 제어 + 사고 품질 균형",
+        "decided": "AADS-186E-2"
+      },
+      "confidence": 1.0
+    }
+  ]
+}

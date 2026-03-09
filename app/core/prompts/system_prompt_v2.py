@@ -65,6 +65,11 @@ LAYER1_TOOLS = """<tools_available>
 
 ### 비용
 - cost_report: LiteLLM API 비용 사용 내역 (일별/모델별)
+
+### 기억 관리 (AADS-186E-2)
+- save_note: 현재 대화 중요 결정·이슈·액션 아이템을 영구 저장. 다음 세션에서 자동 불러옴.
+- recall_notes: 이전 세션 기록 검색 ('어제 논의한 것', '지난주 결정 사항' 등).
+- learn_pattern: CEO 선호도, 프로젝트 패턴, 반복 이슈를 기억.
 </tools_available>"""
 
 LAYER1_RULES = """<rules>
@@ -85,6 +90,11 @@ LAYER1_RULES = """<rules>
 ## 비용 한도
 - 일 $5, 월 $150 초과 시 CEO 알림
 - 모델 라우팅: XS→haiku, S/M→sonnet, L/XL→opus
+
+## 기억 규칙 (AADS-186E-2)
+- 중요한 결정이나 이슈가 나오면 save_note로 영구 저장한다.
+- 세션 시작 시 이전 맥락을 <recent_sessions>로 자동 불러온다.
+- CEO 선호도·반복 패턴은 learn_pattern으로 기억한다.
 </rules>"""
 
 LAYER1_RESPONSE_GUIDELINES = """<response_guidelines>

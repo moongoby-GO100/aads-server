@@ -448,10 +448,33 @@ async def send_message_stream(
             cost_usd, sid,
         )
 
+        # 11. 20턴 이상 시 세션 노트 자동 저장 (AADS-186E-2, 비동기 — 응답 지연 없음)
+        try:
+            msg_count_row = await conn.fetchrow(
+                "SELECT message_count FROM chat_sessions WHERE id = $1", sid
+            )
+            msg_count = (msg_count_row["message_count"] if msg_count_row else 0) or 0
+            if msg_count >= 20 and msg_count % 20 == 0:
+                import asyncio
+                asyncio.create_task(_auto_save_session_note(session_id, raw_messages))
+        except Exception:
+            pass
+
         yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'thinking_summary': (thinking_summary[:300] if thinking_summary else None)})}\n\n"
 
     finally:
         await conn.close()
+
+
+async def _auto_save_session_note(session_id: str, messages: List[Dict[str, Any]]) -> None:
+    """20턴 컴팩션 시 자동 세션 노트 저장 (백그라운드 태스크)."""
+    try:
+        from app.services.memory_manager import get_memory_manager
+        mgr = get_memory_manager()
+        await mgr.save_session_note(session_id=session_id, messages=messages)
+        logger.debug(f"auto_save_session_note: session_id={session_id}")
+    except Exception as e:
+        logger.debug(f"auto_save_session_note error: {e}")
 
 
 async def toggle_bookmark(message_id: str) -> Optional[Dict[str, Any]]:
