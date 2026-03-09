@@ -133,13 +133,19 @@ async def post_tool_use_hook(
     tool_input = input_data.get("tool_input", {})
     tool_output = input_data.get("tool_output", {})
 
-    # ── Write/Edit → diff_preview SSE ──────────────────────────────────────
+    # ── Write/Edit → diff_preview SSE (AADS-188D: original/modified 포함) ─────
     if tool_name in ("Write", "Edit"):
         file_path = (
             tool_input.get("file_path", "")
             or tool_input.get("path", "")
             or ""
         )
+        original_content = tool_input.get("original_content") or tool_input.get("previous_content") or ""
+        modified_content = tool_input.get("contents") or tool_input.get("content") or tool_input.get("modified_content") or ""
+        if isinstance(modified_content, (list, dict)):
+            modified_content = str(modified_content)
+        if isinstance(original_content, (list, dict)):
+            original_content = str(original_content)
         try:
             sse_callback = getattr(context, "sse_callback", None)
             if sse_callback and callable(sse_callback):
@@ -147,6 +153,8 @@ async def post_tool_use_hook(
                     "type": "diff_preview",
                     "file_path": file_path,
                     "tool_use_id": tool_use_id,
+                    "original_content": original_content[:50000] if original_content else "",
+                    "modified_content": modified_content[:50000] if modified_content else "",
                 })
                 await sse_callback(f"data: {payload}\n\n")
         except Exception as e:

@@ -101,6 +101,21 @@ class MessageSearchOut(BaseModel):
     total: int
 
 
+# ─── AADS-188D: Diff 승인 ────────────────────────────────────────────────────
+
+class ApproveDiffRequest(BaseModel):
+    """코드 수정 diff 승인/거부 (Monaco DiffEditor UI → API)."""
+    session_id: uuid.UUID
+    tool_use_id: str = Field(..., min_length=1)
+    action: str = Field(..., description="approve | reject")
+
+
+class ApproveDiffOut(BaseModel):
+    success: bool
+    action: str
+    message: Optional[str] = None
+
+
 # ─── Artifact ────────────────────────────────────────────────────────────────
 
 class ArtifactUpdate(BaseModel):

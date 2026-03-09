@@ -13,6 +13,8 @@ from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse, Response
 
 from app.models.chat import (
+    ApproveDiffOut,
+    ApproveDiffRequest,
     ArtifactExportRequest,
     ArtifactOut,
     ArtifactUpdate,
@@ -155,6 +157,31 @@ async def search_messages(
         limit=limit,
     )
     return {"messages": results, "total": len(results)}
+
+
+# ─── AADS-188D: Diff 승인 API ────────────────────────────────────────────────
+
+_diff_approval_store: dict = {}  # (session_id, tool_use_id) -> action
+
+
+@router.post("/chat/approve-diff", response_model=ApproveDiffOut, tags=["chat-message"])
+async def approve_diff(req: ApproveDiffRequest):
+    """
+    코드 수정 diff 승인/거부. Monaco DiffEditor UI에서 Accept/Reject 시 호출.
+    저장된 결정은 Agent SDK resume 시 참조 가능.
+    """
+    action = (req.action or "").strip().lower()
+    if action not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
+    key = (str(req.session_id), req.tool_use_id)
+    _diff_approval_store[key] = action
+    logger.info("approve_diff", session_id=str(req.session_id), tool_use_id=req.tool_use_id, action=action)
+    return ApproveDiffOut(success=True, action=action, message=f"Diff {action} recorded.")
+
+
+def get_diff_decision(session_id: str, tool_use_id: str) -> Optional[str]:
+    """Agent SDK 등에서 승인 여부 조회 (AADS-188D)."""
+    return _diff_approval_store.get((session_id, tool_use_id))
 
 
 # ════════════════════════════════════════════════════════════════════════════════
