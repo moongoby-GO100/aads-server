@@ -265,7 +265,11 @@ async def _stream_anthropic(
                     yield {"type": "heartbeat"}
                 except Exception:
                     break
-            result_str = task.result() if task.done() and not task.cancelled() else '{"error": "tool execution failed"}'
+            try:
+                result_str = task.result() if task.done() and not task.cancelled() else '{"error": "tool execution failed"}'
+            except Exception as exc:
+                logger.warning(f"tool execution error: tool={tu.name} error={exc}")
+                result_str = json.dumps({"error": str(exc), "tool": tu.name})
 
             yield {
                 "type": "tool_result",
