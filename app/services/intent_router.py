@@ -317,5 +317,15 @@ def get_model_for_override(model_override: str) -> str:
         "gemini-3.1-pro-preview":  "gemini-3.1-pro-preview",
         "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite-preview",
         "gemma-3-27b-it":    "gemma-3-27b-it",
+        "deepseek-chat":     "deepseek-chat",
+        "deepseek-reasoner": "deepseek-reasoner",
+        "groq-llama-70b":    "groq-llama-70b",
+        "groq-llama-8b":     "groq-llama-8b",
+        "groq-llama4-maverick": "groq-llama4-maverick",
+        "groq-llama4-scout": "groq-llama4-scout",
+        "groq-qwen3-32b":   "groq-qwen3-32b",
+        "groq-kimi-k2":     "groq-kimi-k2",
+        "groq-gpt-oss-120b":"groq-gpt-oss-120b",
+        "groq-compound":    "groq-compound",
     }
     return mapping.get(model_override, model_override)

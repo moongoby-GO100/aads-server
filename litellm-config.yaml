@@ -64,6 +64,60 @@ model_list:
       model: gemini/gemini-2.5-pro
       api_key: os.environ/GEMINI_API_KEY
 
+  # ── DeepSeek ──
+  - model_name: deepseek-chat
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/DEEPSEEK_API_KEY
+      api_base: https://api.deepseek.com
+
+  - model_name: deepseek-reasoner
+    litellm_params:
+      model: deepseek/deepseek-reasoner
+      api_key: os.environ/DEEPSEEK_API_KEY
+      api_base: https://api.deepseek.com
+
+  # ── Groq (초고속 추론) ──
+  - model_name: groq-llama-70b
+    litellm_params:
+      model: groq/llama-3.3-70b-versatile
+      api_key: os.environ/GROQ_API_KEY
+
+  - model_name: groq-llama-8b
+    litellm_params:
+      model: groq/llama-3.1-8b-instant
+      api_key: os.environ/GROQ_API_KEY
+
+  - model_name: groq-llama4-maverick
+    litellm_params:
+      model: groq/meta-llama/llama-4-maverick-17b-128e-instruct
+      api_key: os.environ/GROQ_API_KEY
+
+  - model_name: groq-llama4-scout
+    litellm_params:
+      model: groq/meta-llama/llama-4-scout-17b-16e-instruct
+      api_key: os.environ/GROQ_API_KEY
+
+  - model_name: groq-qwen3-32b
+    litellm_params:
+      model: groq/qwen/qwen3-32b
+      api_key: os.environ/GROQ_API_KEY
+
+  - model_name: groq-kimi-k2
+    litellm_params:
+      model: groq/moonshotai/kimi-k2-instruct
+      api_key: os.environ/GROQ_API_KEY
+
+  - model_name: groq-gpt-oss-120b
+    litellm_params:
+      model: groq/openai/gpt-oss-120b
+      api_key: os.environ/GROQ_API_KEY
+
+  - model_name: groq-compound
+    litellm_params:
+      model: groq/groq/compound
+      api_key: os.environ/GROQ_API_KEY
+
   # ── Claude (Anthropic) ──
   - model_name: claude-sonnet
     litellm_params:
