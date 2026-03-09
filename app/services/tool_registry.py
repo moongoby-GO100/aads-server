@@ -39,11 +39,16 @@ _DEFER_LOADING: Dict[str, bool] = {
     "save_note": True,
     "recall_notes": True,
     "learn_pattern": True,
+    # AADS-186E-3: 딥리서치 + 코드탐색 도구 — 온디맨드
+    "deep_research": True,
+    "code_explorer": True,
+    "analyze_changes": True,
+    "search_all_projects": True,
 }
 
 # 도구 카테고리 안내 (시스템 프롬프트 주입용 — context_builder.py에서 사용)
 TOOL_CATEGORY_GUIDE = """\
-## 사용 가능한 도구 카테고리
+## 사용 가능한 도구 카테고리 (총 25개)
 
 ### 상시 로드 도구 (항상 사용 가능)
 - health_check: AADS 서버 헬스체크 (서버68/211/114)
@@ -61,7 +66,11 @@ TOOL_CATEGORY_GUIDE = """\
 - list_remote_dir: 원격 디렉토리 탐색
 - cost_report: LiteLLM 비용 분석
 - web_search_brave: Brave 웹 검색
-- inspect_service: 서비스 종합 점검 (process/docker/log/health)\
+- inspect_service: 서비스 종합 점검 (process/docker/log/health)
+- deep_research: Gemini Deep Research — 수십 개 소스 자동 탐색 종합 보고서 ($2~5/건, 3~10분)
+- code_explorer: 함수 호출 체인 추적 (depth 3, 6개 프로젝트)
+- analyze_changes: 프로젝트 최근 Git 변경 분석 + 위험도 평가
+- search_all_projects: 6개 프로젝트 코드베이스 동시 검색\
 """
 
 # ─── 도구 스키마 정의 (Anthropic Tool Use 포맷) ──────────────────────────────
@@ -86,6 +95,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"server": "all"},
             {"server": "68"},
         ],
+        "allowed_callers": ["code_execution_20250825"],
     },
     "dashboard_query": {
         "name": "dashboard_query",
@@ -242,6 +252,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "response_format": "detailed",
             },
         ],
+        "allowed_callers": ["code_execution_20250825"],
     },
     "read_remote_file": {
         "name": "read_remote_file",
@@ -272,6 +283,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"project": "KIS", "path": "/root/kis-autotrade-v4/config.py", "response_format": "concise"},
             {"project": "NTV2", "path": "/var/www/newtalk/app/Http/Controllers/AuthController.php", "response_format": "detailed"},
         ],
+        "allowed_callers": ["code_execution_20250825"],
     },
     "list_remote_dir": {
         "name": "list_remote_dir",
@@ -311,6 +323,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"project": "SF", "path": "/data/shortflow", "max_depth": 2, "response_format": "concise"},
             {"project": "NTV2", "keyword": "Controller", "response_format": "detailed"},
         ],
+        "allowed_callers": ["code_execution_20250825"],
     },
     "cost_report": {
         "name": "cost_report",
@@ -329,6 +342,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"days": 7},
             {"days": 30},
         ],
+        "allowed_callers": ["code_execution_20250825"],
     },
     # ── search 그룹 ──────────────────────────────────────────────────────────
     "web_search_brave": {
@@ -438,6 +452,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"url": "https://fastapi.tiangolo.com/tutorial/background-tasks/", "max_tokens": 10000},
         ],
         "defer_loading": True,
+        "allowed_callers": ["code_execution_20250825"],
     },
     "crawl4ai_fetch": {
         "name": "crawl4ai_fetch",
@@ -639,7 +654,120 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         },
         "defer_loading": True,
     },
+    # ── AADS-186E-3: 딥리서치 + 코드탐색 도구 ──────────────────────────────────
+    "deep_research": {
+        "name": "deep_research",
+        "description": (
+            "주제에 대해 수십 개 웹 소스를 자동 탐색하여 상세 보고서를 생성한다. "
+            "시장 분석, 기술 동향, 경쟁 비교에 사용. 3~10분 소요. 비용 $2~5/건. "
+            "일일 최대 5건. '딥리서치', '조사해서 보고서 써줘', '깊이 분석해'에 사용."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "리서치 주제/질문",
+                },
+                "format_instructions": {
+                    "type": "string",
+                    "description": "보고서 형식 지시 (선택). 예: '1. 요약 2. 주요 플레이어 3. 비용 비교'",
+                },
+            },
+            "required": ["query"],
+        },
+        "input_examples": [
+            {"query": "AI 코딩 에이전트 시장 동향 2026", "format_instructions": "1. 요약 2. 주요 플레이어 3. 비용 비교 4. 추천"},
+            {"query": "FastAPI vs Django 성능 비교 최신"},
+        ],
+        "defer_loading": True,
+    },
+    "code_explorer": {
+        "name": "code_explorer",
+        "description": (
+            "프로젝트 소스코드의 함수 호출 체인을 추적한다. "
+            "'이 함수가 어디서 호출되는지', '이 로직의 전체 흐름' 분석. depth 3까지 재귀 탐색."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "프로젝트명. AADS, KIS, GO100, SF, NTV2, NAS 중 하나.",
+                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2", "NAS"],
+                },
+                "entry_point": {
+                    "type": "string",
+                    "description": "진입점. 'file.py::function_name' 형식 (예: app/services/order_service.py::create_order)",
+                },
+                "depth": {
+                    "type": "integer",
+                    "description": "추적 깊이 (기본 3, 최대 3)",
+                    "default": 3,
+                },
+            },
+            "required": ["project", "entry_point"],
+        },
+        "input_examples": [
+            {"project": "KIS", "entry_point": "app/order_handler.py::process_order", "depth": 3},
+            {"project": "AADS", "entry_point": "app/services/chat_service.py::send_message"},
+        ],
+        "defer_loading": True,
+    },
+    "analyze_changes": {
+        "name": "analyze_changes",
+        "description": (
+            "프로젝트의 최근 Git 변경사항을 분석하고 위험도를 평가한다. "
+            "커밋 카테고리(기능추가/버그수정/리팩터), 핵심 파일 변경 감지, 영향 범위 포함."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "프로젝트명. AADS, KIS, GO100, SF, NTV2, NAS 중 하나.",
+                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2", "NAS"],
+                },
+                "days": {
+                    "type": "integer",
+                    "description": "분석 기간 (일 단위, 기본 7)",
+                    "default": 7,
+                },
+            },
+            "required": ["project"],
+        },
+        "input_examples": [
+            {"project": "KIS", "days": 7},
+            {"project": "AADS", "days": 14},
+            {"project": "SF"},
+        ],
+        "defer_loading": True,
+    },
+    "search_all_projects": {
+        "name": "search_all_projects",
+        "description": (
+            "6개 프로젝트(AADS/KIS/GO100/SF/NTV2/NAS)의 코드베이스를 동시 검색한다. "
+            "중복 코드, 공유 패턴, 특정 함수 위치 파악에 사용."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "검색어 (파일명, 함수명, 클래스명, 키워드)",
+                },
+            },
+            "required": ["query"],
+        },
+        "input_examples": [
+            {"query": "health_check"},
+            {"query": "authenticate"},
+            {"query": "config.py"},
+        ],
+        "defer_loading": True,
+    },
 }
+
 
 # ─── 그룹 → 도구 매핑 ─────────────────────────────────────────────────────────
 
@@ -652,6 +780,8 @@ _GROUPS: Dict[str, List[str]] = {
     "crawl": ["jina_read", "crawl4ai_fetch", "deep_crawl"],
     # AADS-186E-2: 메모리 도구 그룹
     "memory": ["save_note", "recall_notes", "learn_pattern"],
+    # AADS-186E-3: 딥리서치 + 코드탐색 도구 그룹
+    "research": ["deep_research", "code_explorer", "analyze_changes", "search_all_projects"],
     "all": list(_TOOLS.keys()),
 }
 

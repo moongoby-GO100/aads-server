@@ -365,16 +365,60 @@ async def send_message_stream(
                 return
 
             elif intent_result.gemini_mode == "deep_research":
-                from app.services.gemini_research_service import GeminiResearchService
-                svc = GeminiResearchService()
-                try:
-                    async for event in svc.start_research_stream(content, session_id, conn):
-                        yield f"data: {json.dumps(event)}\n\n"
-                    return
-                except Exception as e:
-                    logger.warning(f"gemini_deep_research_failed: {e}")
+                from app.services.deep_research_service import DeepResearchService
+                dr_svc = DeepResearchService()
+                if not dr_svc.is_available():
+                    # API 키 없으면 Claude 폴백
                     intent_result.model = "claude-sonnet"
                     intent_result.use_gemini_direct = False
+                else:
+                    try:
+                        # research_start SSE 발송
+                        yield f"data: {json.dumps({'type': 'research_start', 'message': '딥리서치를 시작합니다... (3~10분 소요, 수십 개 소스 탐색)'})}\n\n"
+
+                        collected_report = ""
+                        citations = []
+
+                        async def _on_stream(event_type: str, text: str) -> None:
+                            nonlocal collected_report
+                            if event_type == "thinking":
+                                pass  # thinking은 프론트엔드에 바로 전달하지 않음 (배경 처리)
+                            elif event_type == "research_progress":
+                                collected_report += text
+
+                        result = await dr_svc.research(
+                            content,
+                            stream_callback=_on_stream,
+                            timeout=600,
+                        )
+
+                        # research_complete SSE 발송
+                        if result.thinking_summary:
+                            yield f"data: {json.dumps({'type': 'thinking', 'thinking': result.thinking_summary[:300]})}\n\n"
+
+                        # 보고서 전달 (최대 8000자 청크)
+                        report_text = result.report or collected_report
+                        chunk_size = 500
+                        for i in range(0, len(report_text), chunk_size):
+                            chunk = report_text[i:i + chunk_size]
+                            yield f"data: {json.dumps({'type': 'delta', 'content': chunk})}\n\n"
+
+                        if result.citations:
+                            yield f"data: {json.dumps({'type': 'sources', 'sources': result.citations})}\n\n"
+
+                        yield f"data: {json.dumps({'type': 'research_complete', 'interaction_id': result.interaction_id, 'cost': str(result.cost_usd)})}\n\n"
+
+                        await _save_message(conn, sid, "assistant", report_text,
+                            model_used="gemini-deep-research", intent=intent,
+                            cost=Decimal(str(result.cost_usd)), sources=result.citations)
+                        await conn.execute(
+                            "UPDATE chat_sessions SET updated_at = NOW() WHERE id = $1", sid)
+                        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': 'gemini-deep-research', 'cost': str(result.cost_usd)})}\n\n"
+                        return
+                    except Exception as e:
+                        logger.warning(f"gemini_deep_research_failed: {e}")
+                        intent_result.model = "claude-sonnet"
+                        intent_result.use_gemini_direct = False
 
         # 8. 도구 목록 (Anthropic Tool Use 포맷)
         tools_for_api = None

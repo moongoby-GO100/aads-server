@@ -79,6 +79,11 @@ class ToolExecutor:
             "save_note":              self._save_note,
             "recall_notes":           self._recall_notes,
             "learn_pattern":          self._learn_pattern,
+            # AADS-186E-3: 딥리서치 + 코드탐색 도구
+            "deep_research":          self._deep_research,
+            "code_explorer":          self._code_explorer,
+            "analyze_changes":        self._analyze_changes,
+            "search_all_projects":    self._search_all_projects,
         }
         fn = dispatch.get(tool_name)
         if fn is None:
@@ -584,6 +589,97 @@ class ToolExecutor:
         return {"status": "learned", "category": category, "key": key}
 
 
+    # ── AADS-186E-3: 딥리서치 + 코드탐색 도구 ────────────────────────────────
+
+    async def _deep_research(self, inp: Dict[str, Any]) -> Any:
+        """Gemini Deep Research API — 수십 개 소스 종합 보고서."""
+        query = inp.get("query", "")
+        if not query:
+            return {"error": "query 필수"}
+        format_instructions = inp.get("format_instructions")
+        from app.services.deep_research_service import DeepResearchService
+        svc = DeepResearchService()
+        if not svc.is_available():
+            return {"error": "GEMINI_API_KEY 미설정 — Deep Research 비활성"}
+        result = await asyncio.wait_for(
+            svc.research(query, format_instructions=format_instructions),
+            timeout=600.0,  # 10분 타임아웃
+        )
+        return {
+            "report": result.report,
+            "interaction_id": result.interaction_id,
+            "citations": result.citations,
+            "status": result.status,
+            "cost_usd": result.cost_usd,
+            "elapsed_sec": result.elapsed_sec,
+        }
+
+    async def _code_explorer(self, inp: Dict[str, Any]) -> Any:
+        """함수 호출 체인 추적."""
+        project = inp.get("project", "")
+        entry_point = inp.get("entry_point", "")
+        depth = min(int(inp.get("depth", 3)), 3)
+        if not project or not entry_point:
+            return {"error": "project, entry_point 필수"}
+        from app.services.code_explorer_service import CodeExplorerService
+        svc = CodeExplorerService()
+        result = await asyncio.wait_for(
+            svc.trace_function_chain(project, entry_point, depth),
+            timeout=180.0,  # 3분
+        )
+        return {
+            "project": result.project,
+            "entry_point": result.entry_point,
+            "diagram": result.diagram,
+            "chain_depth": len(result.chain),
+            "error": result.error,
+        }
+
+    async def _analyze_changes(self, inp: Dict[str, Any]) -> Any:
+        """최근 Git 변경 분석 + 위험도 평가."""
+        project = inp.get("project", "")
+        days = min(int(inp.get("days", 7)), 30)
+        if not project:
+            return {"error": "project 필수"}
+        from app.services.code_explorer_service import CodeExplorerService
+        svc = CodeExplorerService()
+        result = await asyncio.wait_for(
+            svc.analyze_recent_changes(project, days),
+            timeout=60.0,
+        )
+        return {
+            "project": result.project,
+            "days": result.days,
+            "commits": result.commits[:10],
+            "changed_files": result.changed_files[:10],
+            "categories": result.categories,
+            "risk_level": result.risk_level,
+            "affected_services": result.affected_services,
+            "summary": result.summary,
+            "error": result.error,
+        }
+
+    async def _search_all_projects(self, inp: Dict[str, Any]) -> Any:
+        """6개 프로젝트 코드베이스 동시 검색."""
+        query = inp.get("query", "")
+        if not query:
+            return {"error": "query 필수"}
+        from app.services.code_explorer_service import CodeExplorerService
+        svc = CodeExplorerService()
+        result = await asyncio.wait_for(
+            svc.search_all_projects(query),
+            timeout=180.0,  # 3분
+        )
+        return {
+            "query": result.query,
+            "matches": result.matches[:30],
+            "duplicate_patterns": result.duplicate_patterns,
+            "shared_modules": result.shared_modules,
+            "projects_searched": result.projects_searched,
+            "projects_failed": result.projects_failed,
+            "total_matches": len(result.matches),
+        }
+
 # ─── 하위 호환성 ─────────────────────────────────────────────────────────────
 
 _INTENT_TOOL_MAP: Dict[str, list] = {
@@ -608,6 +704,11 @@ _INTENT_TOOL_MAP: Dict[str, list] = {
     "all_service_status":  ["get_all_service_status"],
     # AADS-186E-1 크롤링 인텐트
     "deep_crawl":          ["deep_crawl"],
+    # AADS-186E-3 딥리서치 + 코드탐색 인텐트
+    "deep_research":       ["deep_research"],
+    "code_explorer":       ["code_explorer"],
+    "analyze_changes":     ["analyze_changes"],
+    "search_all_projects": ["search_all_projects"],
 }
 
 

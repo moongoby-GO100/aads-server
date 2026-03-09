@@ -76,6 +76,10 @@ INTENT_MAP: dict[str, dict] = {
     # AADS-186E-1 크롤링 인텐트
     "url_read":           {"model": "claude-sonnet",             "tools": True,  "group": "crawl"},
     "deep_crawl":         {"model": "claude-sonnet",             "tools": True,  "group": "crawl"},
+    # AADS-186E-3 딥리서치 + 코드탐색 인텐트
+    "code_explorer":      {"model": "claude-sonnet",             "tools": True,  "group": "research"},
+    "analyze_changes":    {"model": "claude-sonnet",             "tools": True,  "group": "research"},
+    "search_all_projects":{"model": "claude-sonnet",             "tools": True,  "group": "research"},
 }
 
 _DEFAULT_INTENT = IntentResult(
@@ -96,7 +100,8 @@ strategy, planning, decision, design, design_fix, architect, code_exec, memory_r
 qa, execution_verify, workspace_switch, cost_report, browser, image_analyze, video_analyze, server_file,
 cto_strategy, cto_code_analysis, cto_directive, cto_verify, cto_impact, cto_tech_debt,
 service_inspection, all_service_status,
-url_read, deep_crawl
+url_read, deep_crawl,
+code_explorer, analyze_changes, search_all_projects
 
 규칙:
 - "안녕", "안녕하세요", 인사 → greeting
@@ -109,10 +114,14 @@ url_read, deep_crawl
 - 서비스 점검, {프로젝트} 점검해, 프로세스 확인, 서비스 상태 자세히 → service_inspection
 - 전체 서비스 상태, 6개 서비스, 올 스테이터스, 모든 서비스 → all_service_status
 - 검색해줘, 찾아봐, 최신 뉴스 → search
-- 심층 분석, 리서치 보고서, 시장 조사 → deep_research
+- 딥리서치, "깊이 조사", "조사해서 보고서 써줘", "시장 분석 보고서", "경쟁 분석 보고서", 기술 동향 보고, 논문 조사 → deep_research
+- "검색해"만 있으면 → search (빠르고 저렴)
 - URL 분석, 링크 내용 확인 → url_analyze
 - 이 URL 읽어, 이 문서 분석, 이 페이지 내용, http로 시작하는 URL → url_read
-- 조사해서 정리, 여러 소스 비교, 크롤링해서 분석, 리서치, 딥 크롤 → deep_crawl
+- 조사해서 정리, 여러 소스 비교, 크롤링해서 분석, 딥 크롤 → deep_crawl
+- 함수 호출 체인, 로직 흐름 추적, 코드 탐색, 함수 추적 다이어그램 → code_explorer
+- git 변경 분석, 최근 커밋, 변경사항 위험도, 이번주 변경 → analyze_changes
+- 전체 프로젝트 검색, 6개 서비스에서 찾아줘, 모든 프로젝트 코드 검색 → search_all_projects
 - 지시서 작성, DIRECTIVE_START → directive_gen
 - 코드 작성, 버그 수정 → code_task
 - 설계, 아키텍처 → architect
@@ -233,8 +242,16 @@ def _keyword_fallback(message: str) -> IntentResult:
         return _make_result("cto_tech_debt")
     if any(w in msg for w in ("이 url 읽어", "이 문서 분석", "이 페이지 내용", "http://", "https://", "url 열어", "링크 내용")):
         return _make_result("url_read")
-    if any(w in msg for w in ("조사해서 정리", "여러 소스 비교", "크롤링해서 분석", "리서치", "딥 크롤", "deep crawl")):
+    if any(w in msg for w in ("조사해서 정리", "여러 소스 비교", "크롤링해서 분석", "딥 크롤", "deep crawl")):
         return _make_result("deep_crawl")
+    if any(w in msg for w in ("딥리서치", "깊이 조사", "종합 보고서 써줘", "시장 분석 보고서", "경쟁 분석 보고서", "기술 동향 보고", "논문 조사")):
+        return _make_result("deep_research")
+    if any(w in msg for w in ("함수 호출 체인", "로직 흐름 추적", "코드 탐색", "함수 추적 다이어그램", "trace_function")):
+        return _make_result("code_explorer")
+    if any(w in msg for w in ("git 변경 분석", "최근 커밋 분석", "변경사항 위험도", "이번주 변경", "이번달 변경")):
+        return _make_result("analyze_changes")
+    if any(w in msg for w in ("전체 프로젝트 검색", "6개 서비스에서", "모든 프로젝트 코드", "전체 코드 검색")):
+        return _make_result("search_all_projects")
 
     return _make_result("casual")
 
