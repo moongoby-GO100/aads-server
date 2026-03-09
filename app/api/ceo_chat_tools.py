@@ -620,17 +620,18 @@ async def _do_aads_login(page: Any) -> None:
         await _ensure_aads_auth(page)
         return
 
-    # 이메일 입력
-    email_input = page.locator("input[type='email'], input[name='email'], input[placeholder*='이메일']").first
+    # 이메일 입력 (첫 번째 input 필드)
+    email_input = page.locator("input").first
+    await email_input.clear(timeout=5000)
     await email_input.fill(email, timeout=5000)
     # 비밀번호 입력
-    pw_input = page.locator("input[type='password'], input[name='password']").first
+    pw_input = page.locator("input[type='password']").first
     await pw_input.fill(password, timeout=5000)
     # 로그인 버튼 클릭
-    login_btn = page.locator("button:has-text('로그인'), button[type='submit']").first
+    login_btn = page.locator("button:has-text('로그인')").first
     await login_btn.click(timeout=5000)
-    # 로그인 후 페이지 로드 대기
-    await page.wait_for_load_state("domcontentloaded", timeout=10000)
+    # 로그인 후 페이지 전환 대기
+    await page.wait_for_timeout(3000)
 
 
 async def tool_browser_navigate(url: str) -> str:
