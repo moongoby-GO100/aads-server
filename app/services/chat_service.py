@@ -20,6 +20,34 @@ from app.config import Settings
 
 logger = logging.getLogger(__name__)
 
+
+# ── SSE heartbeat wrapper ─────────────────────────────────────────
+import asyncio as _heartbeat_asyncio
+
+
+async def with_heartbeat(
+    gen: AsyncGenerator[str, None],
+    interval: float = 10.0,
+) -> AsyncGenerator[str, None]:
+    """Wrap an SSE async generator to interleave heartbeat events.
+
+    If the inner generator hasn't yielded anything for *interval* seconds,
+    a lightweight ``{"type": "heartbeat"}`` SSE line is emitted so that
+    the frontend can reset its inactivity timeout.
+    """
+    HEARTBEAT = f'data: {json.dumps({"type": "heartbeat"})}\n\n'
+    ait = gen.__aiter__()
+    while True:
+        try:
+            chunk = await _heartbeat_asyncio.wait_for(
+                ait.__anext__(), timeout=interval,
+            )
+            yield chunk
+        except _heartbeat_asyncio.TimeoutError:
+            yield HEARTBEAT
+        except StopAsyncIteration:
+            break
+
 # AADS-186C: Langfuse 트레이스 (optional — graceful degradation)
 try:
     from app.core.langfuse_config import create_trace, is_enabled as langfuse_is_enabled

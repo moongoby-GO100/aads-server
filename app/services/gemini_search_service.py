@@ -33,65 +33,66 @@ class GeminiSearchService:
 
     async def search_grounded(self, query: str, context: str = "") -> SearchResult:
         """
-        Gemini Flash + Google Search Grounding.
-        groundingMetadata → CitationCard 데이터로 변환.
+        Gemini 2.5 Flash + Google Search tool.
+        google-genai SDK 우선, 없으면 REST API 폴백.
         """
         if not self._api_key:
             raise ValueError("GEMINI_API_KEY not set")
 
         try:
-            import google.generativeai as genai  # type: ignore
-            genai.configure(api_key=self._api_key)
+            from google import genai as genai_sdk
+            from google.genai import types as genai_types
 
-            model = genai.GenerativeModel(
-                model_name="gemini-2.5-flash",
-                tools="google_search_retrieval",
-            )
-
+            client = genai_sdk.Client(api_key=self._api_key)
             prompt = f"{context}\n\n{query}" if context else query
-            response = model.generate_content(prompt)
+
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(
+                    tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
+                ),
+            )
 
             text = response.text or ""
             citations: List[Dict[str, Any]] = []
             queries: List[str] = []
 
-            # groundingMetadata 파싱
-            if hasattr(response, "candidates") and response.candidates:
+            if response.candidates:
                 candidate = response.candidates[0]
-                if hasattr(candidate, "grounding_metadata") and candidate.grounding_metadata:
-                    gm = candidate.grounding_metadata
-                    # 검색 쿼리
+                gm = getattr(candidate, "grounding_metadata", None)
+                if gm:
                     if hasattr(gm, "web_search_queries"):
                         queries = list(gm.web_search_queries or [])
-                    # 출처 청크
                     if hasattr(gm, "grounding_chunks"):
                         for chunk in (gm.grounding_chunks or [])[:5]:
-                            if hasattr(chunk, "web"):
+                            web = getattr(chunk, "web", None)
+                            if web:
                                 citations.append({
-                                    "url": chunk.web.uri or "",
-                                    "title": chunk.web.title or "",
-                                    "favicon": f"https://www.google.com/s2/favicons?domain={chunk.web.uri or ''}",
+                                    "url": getattr(web, "uri", "") or "",
+                                    "title": getattr(web, "title", "") or "",
+                                    "favicon": f"https://www.google.com/s2/favicons?domain={getattr(web, 'uri', '') or ''}",
                                 })
 
             return SearchResult(text=text, citations=citations, queries=queries)
 
         except ImportError:
-            # google-generativeai 미설치 시 httpx 직접 호출
-            return await self._search_via_api(query)
+            return await self._search_via_rest(query, context)
         except Exception as e:
-            logger.error(f"gemini_search_service error: {e}")
-            raise
+            logger.warning(f"gemini_search_sdk_error (fallback to REST): {e}")
+            return await self._search_via_rest(query, context)
 
-    async def _search_via_api(self, query: str) -> SearchResult:
-        """google-generativeai 미설치 시 REST API 직접 호출."""
+    async def _search_via_rest(self, query: str, context: str = "") -> SearchResult:
+        """REST API 폴백 — google_search tool (2.5 호환)."""
         import httpx
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
             f"gemini-2.5-flash:generateContent?key={self._api_key}"
         )
+        prompt = f"{context}\n\n{query}" if context else query
         payload = {
-            "contents": [{"parts": [{"text": query}]}],
-            "tools": [{"googleSearchRetrieval": {}}],
+            "contents": [{"parts": [{"text": prompt}]}],
+            "tools": [{"google_search": {}}],
         }
         async with httpx.AsyncClient(timeout=30.0) as c:
             r = await c.post(url, json=payload)

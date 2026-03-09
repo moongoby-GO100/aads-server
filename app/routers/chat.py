@@ -124,11 +124,13 @@ async def send_message(req: MessageSendRequest):
     Content-Type: text/event-stream
     """
     return StreamingResponse(
-        svc.send_message_stream(
-            session_id=str(req.session_id),
-            content=req.content,
-            attachments=req.attachments,
-            model_override=req.model_override,
+        svc.with_heartbeat(
+            svc.send_message_stream(
+                session_id=str(req.session_id),
+                content=req.content,
+                attachments=req.attachments,
+                model_override=req.model_override,
+            ),
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

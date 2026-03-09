@@ -45,7 +45,7 @@ services:
       # GitHub PAT (AADS-179): 미설정 시 infra-check severity=warning (critical 아님)
       - GITHUB_PAT=${GITHUB_PAT:-}
       # AADS-185: CEO Chat 전면 재설계 — 검색/리서치 API 키
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_API_KEY=AIzaSyAGS716g8pJ6AFROK40jHBwYWrCS2MBdCE
       - BRAVE_API_KEY=${BRAVE_API_KEY:-}
       # LiteLLM 프록시 (AADS-185)
       - LITELLM_BASE_URL=${LITELLM_BASE_URL:-http://litellm:4000}
@@ -79,6 +79,42 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+
+  aads-litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: aads-litellm
+    restart: always
+    ports:
+      - "4000:4000"
+    environment:
+      - LITELLM_MASTER_KEY=sk-litellm
+      - GEMINI_API_KEY=AIzaSyAGS716g8pJ6AFROK40jHBwYWrCS2MBdCE
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - DISABLE_SCHEMA_UPDATE=true
+      - DISABLE_SPEND_LOGS=true
+      - TZ=Asia/Seoul
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    networks:
+      aads_network:
+        aliases:
+          - litellm
+    mem_limit: 1g
+    depends_on:
+      aads-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/readiness')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   aads_postgres_data:

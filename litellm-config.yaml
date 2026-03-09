@@ -1,8 +1,57 @@
 model_list:
-  # Gemini 모델
+  # ── Gemini 2.5 ──
+  - model_name: gemini-2.5-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+
+  - model_name: gemini-2.5-flash-lite
+    litellm_params:
+      model: gemini/gemini-2.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY
+
+  - model_name: gemini-2.5-pro
+    litellm_params:
+      model: gemini/gemini-2.5-pro
+      api_key: os.environ/GEMINI_API_KEY
+
+  - model_name: gemini-2.5-flash-image
+    litellm_params:
+      model: gemini/gemini-2.5-flash-image
+      api_key: os.environ/GEMINI_API_KEY
+
+  # ── Gemini 3.0 ──
+  - model_name: gemini-3-pro-preview
+    litellm_params:
+      model: gemini/gemini-3-pro-preview
+      api_key: os.environ/GEMINI_API_KEY
+
+  - model_name: gemini-3-flash-preview
+    litellm_params:
+      model: gemini/gemini-3-flash-preview
+      api_key: os.environ/GEMINI_API_KEY
+
+  # ── Gemini 3.1 ──
+  - model_name: gemini-3.1-pro-preview
+    litellm_params:
+      model: gemini/gemini-3.1-pro-preview
+      api_key: os.environ/GEMINI_API_KEY
+
+  - model_name: gemini-3.1-flash-lite-preview
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite-preview
+      api_key: os.environ/GEMINI_API_KEY
+
+  # ── Gemma 3 (오픈소스) ──
+  - model_name: gemma-3-27b-it
+    litellm_params:
+      model: gemini/gemma-3-27b-it
+      api_key: os.environ/GEMINI_API_KEY
+
+  # ── 기존 alias (하위 호환) ──
   - model_name: gemini-flash-lite
     litellm_params:
-      model: gemini/gemini-2.5-flash-lite-preview-06-17
+      model: gemini/gemini-2.5-flash-lite
       api_key: os.environ/GEMINI_API_KEY
 
   - model_name: gemini-flash
@@ -15,7 +64,7 @@ model_list:
       model: gemini/gemini-2.5-pro
       api_key: os.environ/GEMINI_API_KEY
 
-  # Claude 모델
+  # ── Claude (Anthropic) ──
   - model_name: claude-sonnet
     litellm_params:
       model: anthropic/claude-sonnet-4-5
@@ -34,10 +83,10 @@ model_list:
 litellm_settings:
   drop_params: true
   set_verbose: false
-  max_budget: 5.0  # 일 $5 상한
+  max_budget: 10.0  # 일 $10 상한
   budget_duration: 1d
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
-  database_url: os.environ/DATABASE_URL
-  enable_spend_logs: true
+  store_model_in_db: false
+  disable_spend_logs: true

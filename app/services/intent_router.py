@@ -271,5 +271,14 @@ def get_model_for_override(model_override: str) -> str:
         "gemini-flash":      "gemini-flash",
         "gemini-flash-lite": "gemini-flash-lite",
         "gemini-pro":        "gemini-pro",
+        "gemini-2.5-flash":  "gemini-2.5-flash",
+        "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
+        "gemini-2.5-pro":    "gemini-2.5-pro",
+        "gemini-2.5-flash-image": "gemini-2.5-flash-image",
+        "gemini-3-pro-preview":   "gemini-3-pro-preview",
+        "gemini-3-flash-preview":  "gemini-3-flash-preview",
+        "gemini-3.1-pro-preview":  "gemini-3.1-pro-preview",
+        "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite-preview",
+        "gemma-3-27b-it":    "gemma-3-27b-it",
     }
     return mapping.get(model_override, model_override)
