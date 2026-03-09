@@ -306,7 +306,30 @@ async def send_message_stream(
     try:
         sid = uuid.UUID(session_id)
 
-        # 1. 사용자 메시지 저장
+        # 1. 첨부파일 내용 추출 → content에 추가
+        if attachments:
+            file_texts = []
+            for att in attachments:
+                file_path = att.get("path", "") if isinstance(att, dict) else ""
+                file_name = att.get("name", "") if isinstance(att, dict) else str(att)
+                if file_path and os.path.isfile(file_path):
+                    try:
+                        ext = os.path.splitext(file_path)[1].lower()
+                        if ext in (".txt", ".md", ".csv", ".json", ".py", ".js", ".ts", ".html", ".css", ".yaml", ".yml", ".toml", ".sh", ".sql", ".log", ".xml"):
+                            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                                file_content = f.read(100000)  # 100KB 제한
+                            file_texts.append(f"\n\n--- 첨부파일: {file_name} ---\n{file_content}")
+                        else:
+                            file_texts.append(f"\n\n[첨부파일: {file_name} ({ext} 파일)]")
+                    except Exception as e:
+                        logger.warning(f"attachment_read_error: {file_name}: {e}")
+                        file_texts.append(f"\n\n[첨부파일: {file_name} (읽기 실패)]")
+                elif file_name:
+                    file_texts.append(f"\n\n[첨부파일: {file_name}]")
+            if file_texts:
+                content = content + "".join(file_texts)
+
+        # 사용자 메시지 저장
         await _save_message(conn, sid, "user", content, attachments=attachments or [])
 
         # 2. 워크스페이스 정보 조회
@@ -472,7 +495,7 @@ async def send_message_stream(
                             if ev_type in ("planning", "searching", "analyzing"):
                                 yield f"data: {json.dumps({'type': 'research_progress', 'phase': ev_type, 'content': ev.content or '', 'progress_pct': ev.progress_pct or 0})}\n\n"
                             elif ev_type == "thinking" and ev.content:
-                                yield f"data: {json.dumps({'type': 'thinking', 'thinking': (ev.content or '')[:300]})}\n\n"
+                                yield f"data: {json.dumps({'type': 'thinking', 'thinking': (ev.content or '')[:2000]})}\n\n"
                             elif ev_type == "content" and ev.content:
                                 collected_report_parts.append(ev.content)
                                 yield f"data: {json.dumps({'type': 'delta', 'content': ev.content})}\n\n"
@@ -688,7 +711,7 @@ async def send_message_stream(
                 tools_called.append(event["tool_name"])
                 yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event['tool_use_id']})}\n\n"
             elif etype == "tool_result":
-                yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': event['tool_name'], 'content': str(event.get('content', ''))[:500]})}\n\n"
+                yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': event['tool_name'], 'content': str(event.get('content', ''))[:5000]})}\n\n"
             elif etype == "done":
                 model_used = event.get("model", intent_result.model)
                 cost_usd = Decimal(str(event.get("cost", "0")))
@@ -730,7 +753,7 @@ async def send_message_stream(
         except Exception:
             pass
 
-        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'thinking_summary': (thinking_summary[:300] if thinking_summary else None)})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None)})}\n\n"
 
     finally:
         await conn.close()

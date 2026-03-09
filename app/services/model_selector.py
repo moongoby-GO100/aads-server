@@ -102,7 +102,7 @@ async def _stream_litellm(
     output_tokens = 0
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=300.0) as client:
             async with client.stream(
                 "POST",
                 f"{LITELLM_BASE_URL}/chat/completions",
@@ -110,7 +110,7 @@ async def _stream_litellm(
                 json={
                     "model": model,
                     "messages": msgs,
-                    "max_tokens": 4096,
+                    "max_tokens": 16384,
                     "stream": True,
                 },
             ) as resp:
@@ -173,7 +173,7 @@ async def _stream_anthropic(
         and intent_result.use_extended_thinking
         and model_alias == "claude-opus"
     )
-    max_tokens = 16000 if use_thinking else 4096
+    max_tokens = 64000 if use_thinking else 16384
 
     # 시스템 프롬프트 (Prompt Caching: Layer 1 정적 부분에 cache_control)
     system_blocks = _build_system_with_cache(system_prompt)
@@ -181,7 +181,7 @@ async def _stream_anthropic(
     # Extended Thinking 설정
     thinking_config = None
     if use_thinking:
-        thinking_config = {"type": "enabled", "budget_tokens": 10000}
+        thinking_config = {"type": "enabled", "budget_tokens": 32000}
 
     full_text = ""
     thinking_text = ""
@@ -281,7 +281,7 @@ async def _stream_anthropic(
         "cost": str(cost),
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
-        "thinking_summary": thinking_text[:500] if thinking_text else None,
+        "thinking_summary": thinking_text[:2000] if thinking_text else None,
         "tools_called": tool_calls_made,
     }
 
