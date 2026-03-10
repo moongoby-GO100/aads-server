@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 # 프로젝트 → 서버 정보 매핑 (server_registry.py 연동)
 _PROJECT_MAP: Dict[str, Dict[str, str]] = {
-    "KIS": {"host": "211.188.51.113", "workdir": "/root/kis-autotrade-v4", "lang": "python"},
+    "KIS": {"host": "211.188.51.113", "workdir": "/root/webapp", "lang": "python"},
     "GO100": {"host": "211.188.51.113", "workdir": "/root/go100", "lang": "python"},
     "SF": {"host": "116.120.58.155", "workdir": "/data/shortflow", "lang": "python"},
     "NTV2": {"host": "116.120.58.155", "workdir": "/srv/newtalk-v2", "lang": "php"},

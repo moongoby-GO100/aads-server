@@ -247,13 +247,13 @@ INSERT INTO ai_observations (category, key, value, confidence, project) VALUES
   ('project_pattern', 'kis_token_refresh', 'KIS Access Token 23시간마다 갱신 필수 — 만료 시 주문 실패', 0.8, 'KIS'),
   ('project_pattern', 'kis_market_hours', 'KIS 매매 가능 시간: 09:00~15:30 KST — 장 마감 후 주문 거부', 0.8, 'KIS'),
   ('project_pattern', 'kis_paper_vs_live', 'KIS 모의투자(paper) vs 실거래(live) URL 엔드포인트 구분 필수', 0.7, 'KIS'),
-  ('project_pattern', 'kis_workdir', 'KIS 작업 디렉터리: /root/kis-autotrade-v4 (서버211)', 0.7, 'KIS'),
+  ('project_pattern', 'kis_workdir', 'KIS 작업 디렉터리: /root/webapp (서버211)', 0.7, 'KIS'),
   ('discovery', 'kis_server_independent', 'KIS(서버211)는 AADS(서버68)와 독립 — bridge.py 경유 실행', 0.6, 'KIS'),
   -- GO100
   ('project_pattern', 'go100_forced_exit', 'GO100 15:20 KST 강제 청산 시작, 15:25 전량 매도 — 오버나잇 금지', 0.8, 'GO100'),
   ('project_pattern', 'go100_claude_cost', 'GO100 Claude 호출은 5분봉 주요 시점에만 — 매 틱 호출 시 비용 폭증', 0.8, 'GO100'),
   ('project_pattern', 'go100_max_iterations', 'GO100 LangGraph 에이전트 max_iterations=50, 태스크당 $5 한도', 0.7, 'GO100'),
-  ('project_pattern', 'go100_workdir', 'GO100 작업 디렉터리: /root/kis-autotrade-v4/go100/ (서버211)', 0.7, 'GO100'),
+  ('project_pattern', 'go100_workdir', 'GO100 작업 디렉터리: /root/go100 (서버211)', 0.7, 'GO100'),
   ('discovery', 'go100_slippage', 'GO100 백테스트 vs 실거래 괴리: 슬리피지 0.05% + 수수료 0.015%', 0.6, 'GO100'),
   -- SF
   ('project_pattern', 'sf_pipeline', 'SF 파이프라인: Script(Claude) → TTS(ElevenLabs) → Render(FFmpeg) → Upload', 0.8, 'SF'),

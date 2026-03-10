@@ -294,7 +294,7 @@ async def _run_claude_code(instruction: str, target_server: str) -> dict:
         if target_server == "68":
             work_dir = "/root/aads/aads-server"
         elif target_server == "211":
-            work_dir = "/root/kis-autotrade-v4"
+            work_dir = "/root/webapp"
         else:
             work_dir = "/root"
 

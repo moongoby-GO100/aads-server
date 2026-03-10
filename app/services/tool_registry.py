@@ -488,7 +488,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         },
         "input_examples": [
             {"project": "SF", "path": "/data/shortflow/app/main.py"},
-            {"project": "KIS", "path": "/root/kis-autotrade-v4/config.py", "response_format": "concise"},
+            {"project": "KIS", "path": "/root/webapp/backend/app/core/config.py", "response_format": "concise"},
             {"project": "NTV2", "path": "/var/www/newtalk/app/Http/Controllers/AuthController.php", "response_format": "detailed"},
         ],
         "allowed_callers": ["code_execution_20250825"],
@@ -527,7 +527,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "required": ["project"],
         },
         "input_examples": [
-            {"project": "KIS", "path": "/root/kis-autotrade-v4", "keyword": "config"},
+            {"project": "KIS", "path": "", "keyword": "config"},
             {"project": "SF", "path": "/data/shortflow", "max_depth": 2, "response_format": "concise"},
             {"project": "NTV2", "keyword": "Controller", "response_format": "detailed"},
         ],

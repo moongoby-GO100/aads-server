@@ -240,7 +240,7 @@ TOOL_DEFINITIONS: List[Dict] = [
 
 # ─── SSH 원격 접근 상수 (AADS-165, 하드코딩 — LLM 우회 불가) ─────────────────
 _PROJECT_SERVER_MAP: Dict[str, Dict[str, str]] = {
-    "KIS":  {"server": "211.188.51.113", "workdir": "/root/kis-autotrade-v4"},
+    "KIS":  {"server": "211.188.51.113", "workdir": "/root/webapp"},
     "GO100": {"server": "211.188.51.113", "workdir": "/root/go100"},
     "SF":   {"server": "116.120.58.155", "workdir": "/data/shortflow"},
     "NTV2": {"server": "116.120.58.155", "workdir": "/srv/newtalk-v2"},
