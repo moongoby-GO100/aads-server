@@ -299,7 +299,18 @@ async def _stream_anthropic(
         # Tool Use 처리
         tool_use_blocks = [b for b in final_msg.content if b.type == "tool_use"]
         if not tool_use_blocks:
-            break  # 도구 없음 → 완료
+            # 빈 응답 자동 재시도: 도구가 있는데 사용 안 하고 너무 짧은 응답 → 도구 강제 호출
+            if _turn == 0 and tools and len(full_text) < 100 and intent_result.use_tools:
+                logger.warning(f"empty_response_retry: '{full_text[:50]}' ({len(full_text)} chars), forcing tool_choice=any")
+                # 응답 리셋 후 tool_choice=any로 재시도
+                full_text = ""
+                yield {"type": "delta", "content": ""}  # 프론트 스트림 리셋 신호
+                api_kwargs["tool_choice"] = {"type": "any"}
+                if "thinking" in api_kwargs:
+                    del api_kwargs["tool_choice"]  # thinking과 tool_choice=any 비호환
+                _turn += 1
+                continue  # while 루프 재시도
+            break  # 정상 종료
 
         # 도구 실행 (heartbeat 포함 — SSE 연결 유지)
         from app.services.tool_executor import ToolExecutor

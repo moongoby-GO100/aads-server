@@ -481,7 +481,7 @@ async def send_message_stream(
 
         # 6. 인텐트 분류 + 모델/도구 결정
         from app.services.intent_router import classify, get_model_for_override
-        intent_result = await classify(content, workspace_name)
+        intent_result = await classify(content, workspace_name, recent_messages=messages)
         intent = intent_result.intent
         # Langfuse: intent_classification span
         if _lf_trace is not None:

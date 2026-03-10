@@ -188,12 +188,43 @@ news_search, blog_search, shop_search, local_search, book_search, image_search, 
 JSON으로만 응답하세요: {"intent": "...", "confidence": 0.0~1.0}"""
 
 
-async def classify(message: str, workspace: str = "CEO") -> IntentResult:
+async def classify(
+    message: str,
+    workspace: str = "CEO",
+    recent_messages: list | None = None,
+) -> IntentResult:
     """
     Gemini Flash-Lite로 인텐트 분류.
+    recent_messages: 최근 대화 히스토리 (컨텍스트 인식 분류용).
     실패 시 키워드 기반 폴백.
     """
+    # ─── 컨텍스트 인식: 이전 대화에서 도구 사용 중이면 짧은 후속 지시는 casual 아님 ───
+    _prev_used_tools = False
+    _prev_intent = ""
+    if recent_messages and len(recent_messages) >= 2:
+        # 마지막 assistant 메시지에서 도구 사용 흔적 감지
+        for m in reversed(recent_messages[:-1]):  # 현재 user 메시지 제외
+            if m.get("role") == "assistant":
+                c = m.get("content", "")
+                if any(marker in c for marker in ("도구 조회 결과", "tool_use", "🔧", "실행 중")):
+                    _prev_used_tools = True
+                break
+
     try:
+        # LLM에 최근 컨텍스트 제공 (짧은 메시지의 맥락 파악용)
+        _context_hint = ""
+        if recent_messages and len(message) <= 30:
+            # 짧은 메시지: 직전 2개 메시지를 컨텍스트로 제공
+            _recent = recent_messages[-4:] if len(recent_messages) >= 4 else recent_messages
+            _ctx_parts = []
+            for m in _recent:
+                role = m.get("role", "")
+                content = (m.get("content", "") or "")[:100]
+                if role in ("user", "assistant") and content:
+                    _ctx_parts.append(f"[{role}] {content}")
+            if _ctx_parts:
+                _context_hint = "\n최근 대화 컨텍스트:\n" + "\n".join(_ctx_parts[-3:])
+
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(
                 f"{LITELLM_BASE_URL}/chat/completions",
@@ -202,7 +233,7 @@ async def classify(message: str, workspace: str = "CEO") -> IntentResult:
                     "model": "gemini-flash-lite",
                     "messages": [
                         {"role": "system", "content": _CLASSIFY_PROMPT},
-                        {"role": "user", "content": f"워크스페이스: {workspace}\n메시지: {message}"},
+                        {"role": "user", "content": f"워크스페이스: {workspace}\n메시지: {message}{_context_hint}"},
                     ],
                     "max_tokens": 80,
                     "temperature": 0.1,
@@ -221,12 +252,21 @@ async def classify(message: str, workspace: str = "CEO") -> IntentResult:
                         if override:
                             logger.info(f"intent_override: {intent} → {override} for '{message[:40]}'")
                             return _make_result(override)
+                        # 컨텍스트 보정: 이전에 도구를 쓰고 있었고 짧은 후속 지시면 → status_check
+                        if _prev_used_tools and len(message) <= 30:
+                            logger.info(f"intent_context_override: {intent} → status_check (prev used tools) for '{message[:40]}'")
+                            return _make_result("status_check")
                     return _make_result(intent)
     except Exception as e:
         logger.debug(f"intent_router classify error: {e}")
 
     # 키워드 폴백
-    return _keyword_fallback(message)
+    result = _keyword_fallback(message)
+    # 키워드도 casual인데 이전 대화에서 도구 사용 중이었으면 → status_check
+    if result.intent == "casual" and _prev_used_tools and len(message) <= 30:
+        logger.info(f"intent_fallback_context_override: casual → status_check for '{message[:40]}'")
+        return _make_result("status_check")
+    return result
 
 
 def _make_result(intent: str) -> IntentResult:
