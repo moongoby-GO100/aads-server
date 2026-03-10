@@ -63,6 +63,27 @@ services:
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
       # AADS-186C: MCP 서버
       - MCP_ENABLED=${MCP_ENABLED:-true}
+      # AADS-190: 프로젝트별 원격 DB 접속 (query_project_database)
+      - KIS_DB_HOST=${KIS_DB_HOST:-}
+      - KIS_DB_PORT=${KIS_DB_PORT:-5432}
+      - KIS_DB_NAME=${KIS_DB_NAME:-}
+      - KIS_DB_USER=${KIS_DB_USER:-}
+      - KIS_DB_PASSWORD=${KIS_DB_PASSWORD:-}
+      - GO100_DB_HOST=${GO100_DB_HOST:-}
+      - GO100_DB_PORT=${GO100_DB_PORT:-5432}
+      - GO100_DB_NAME=${GO100_DB_NAME:-}
+      - GO100_DB_USER=${GO100_DB_USER:-}
+      - GO100_DB_PASSWORD=${GO100_DB_PASSWORD:-}
+      - SF_DB_HOST=${SF_DB_HOST:-}
+      - SF_DB_PORT=${SF_DB_PORT:-5432}
+      - SF_DB_NAME=${SF_DB_NAME:-}
+      - SF_DB_USER=${SF_DB_USER:-}
+      - SF_DB_PASSWORD=${SF_DB_PASSWORD:-}
+      - NTV2_DB_HOST=${NTV2_DB_HOST:-}
+      - NTV2_DB_PORT=${NTV2_DB_PORT:-5432}
+      - NTV2_DB_NAME=${NTV2_DB_NAME:-}
+      - NTV2_DB_USER=${NTV2_DB_USER:-}
+      - NTV2_DB_PASSWORD=${NTV2_DB_PASSWORD:-}
     volumes:
       # ★ 소스 볼륨 마운트: 호스트 수정 → 컨테이너 즉시 반영 (docker cp 불필요)
       - /root/aads/aads-server/app:/app/app:rw

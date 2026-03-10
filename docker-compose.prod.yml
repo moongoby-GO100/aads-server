@@ -73,6 +73,12 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - BRAVE_API_KEY=${BRAVE_API_KEY}
     volumes:
+      # ★ 소스 볼륨 마운트: 호스트 수정 → 컨테이너 즉시 반영
+      - /root/aads/aads-server/app:/app/app:rw
+      - /root/aads/aads-server/mcp_servers:/app/mcp_servers:rw
+      - /root/aads/aads-server/migrations:/app/migrations:rw
+      - /root/aads/aads-server/scripts:/app/scripts:rw
+      - /root/aads/aads-server/supervisord.conf:/app/supervisord.conf:ro
       - /var/run/docker.sock:/var/run/docker.sock
       - /root/.ssh:/root/.ssh:rw
       - /root/.genspark/directives:/root/.genspark/directives:ro
