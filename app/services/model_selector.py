@@ -191,6 +191,7 @@ async def _stream_anthropic(
 
     # Tool Use 루프 (최대 20회 — 무한 대화 지원)
     _MAX_TOOL_TURNS = int(os.getenv("MAX_TOOL_TURNS", "20"))
+    _TOOL_TURN_EXTEND = 10  # CEO 승인 시 추가 턴
     current_messages = list(messages)
     tool_calls_made = []
     _consecutive_yellow = 0  # Yellow 등급 도구 연속 호출 카운터
@@ -201,8 +202,10 @@ async def _stream_anthropic(
         "spawn_subagent", "spawn_parallel_subagents",
     }
     _YELLOW_CONSECUTIVE_LIMIT = 5
+    _effective_max_turns = _MAX_TOOL_TURNS
+    _turn = 0
 
-    for _turn in range(_MAX_TOOL_TURNS):
+    while _turn < _effective_max_turns:
         api_kwargs: Dict[str, Any] = {
             "model": model_id,
             "max_tokens": max_tokens,
@@ -368,6 +371,19 @@ async def _stream_anthropic(
             {"role": "assistant", "content": final_msg.content},
             {"role": "user", "content": tool_results},
         ]
+
+        _turn += 1
+
+        # 도구 턴 한도 도달 시 CEO 승인 요청 이벤트 발행 + 자동 연장
+        if _turn >= _effective_max_turns and tool_use_blocks:
+            logger.warning(f"tool_turn_limit: {_turn}/{_effective_max_turns} turns used, extending by {_TOOL_TURN_EXTEND}")
+            _effective_max_turns += _TOOL_TURN_EXTEND
+            yield {
+                "type": "tool_turn_limit",
+                "content": f"도구 호출이 {_turn}회에 도달했습니다. {_TOOL_TURN_EXTEND}턴 자동 연장합니다.",
+                "current_turn": _turn,
+                "extended_to": _effective_max_turns,
+            }
 
     cost = _estimate_cost(model_alias, input_tokens, output_tokens)
     yield {
