@@ -33,69 +33,70 @@ class IntentResult:
 
 
 INTENT_MAP: dict[str, dict] = {
+    # ─── 도구 불필요 인텐트 ───────────────────────────────────────────────────
     "casual":           {"model": "gemini-flash-lite",           "tools": False, "group": ""},
     "greeting":         {"model": "gemini-flash-lite",           "tools": False, "group": ""},
-    "system_status":    {"model": "claude-sonnet",               "tools": True,  "group": "system"},
-    "health_check":     {"model": "claude-sonnet",               "tools": True,  "group": "system"},
-    "dashboard":        {"model": "claude-sonnet",               "tools": True,  "group": "system"},
-    "diagnosis":        {"model": "claude-sonnet",               "tools": True,  "group": "system"},
-    "task_history":     {"model": "claude-sonnet",               "tools": True,  "group": "system"},
-    "search":           {"model": "gemini-flash",                "tools": True,  "group": "search",  "gemini_direct": "grounding"},
-    "url_analyze":      {"model": "claude-sonnet",               "tools": True,  "group": "action"},
     "deep_research":    {"model": "gemini-flash",                "tools": False, "group": "",        "gemini_direct": "deep_research"},
-    "code_task":        {"model": "claude-sonnet",               "tools": True,  "group": "action"},
-    "directive":        {"model": "claude-opus",                 "tools": True,  "group": "action",  "thinking": True},
-    "directive_gen":    {"model": "claude-opus",                 "tools": True,  "group": "action",  "thinking": True},
-    "complex_analysis": {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
     "strategy":         {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
     "planning":         {"model": "claude-sonnet",               "tools": False, "group": ""},
     "decision":         {"model": "claude-sonnet",               "tools": False, "group": ""},
     "design":           {"model": "claude-sonnet",               "tools": False, "group": ""},
     "design_fix":       {"model": "claude-sonnet",               "tools": False, "group": ""},
-    "architect":        {"model": "claude-opus",                 "tools": True,  "group": "action",  "thinking": True},
-    "code_exec":        {"model": "claude-sonnet",               "tools": True,  "group": "action"},
-    "memory_recall":    {"model": "claude-sonnet",               "tools": True,  "group": "action"},
-    "qa":               {"model": "claude-sonnet",               "tools": True,  "group": "system"},
-    "execution_verify": {"model": "claude-sonnet",               "tools": True,  "group": "system"},
-    "workspace_switch": {"model": "claude-sonnet",               "tools": True,  "group": "system"},
-    "cost_report":      {"model": "claude-sonnet",               "tools": True,  "group": "system"},
-    "browser":          {"model": "claude-sonnet",               "tools": True,  "group": "browser"},
     "image_analyze":    {"model": "claude-sonnet",               "tools": False, "group": ""},
     "video_analyze":    {"model": "gemini-flash",                "tools": False, "group": ""},
-    "server_file":      {"model": "claude-sonnet",               "tools": True,  "group": "action"},
-    # ─── CTO 모드 인텐트 (AADS-186B / AADS-186E-2) ────────────────────────────
-    # cto_strategy/cto_code_analysis/cto_verify/cto_impact: Opus + Extended Thinking
     "cto_strategy":     {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
-    "cto_code_analysis":{"model": "claude-opus",                 "tools": True,  "group": "action",  "thinking": True},
-    "cto_directive":    {"model": "claude-sonnet",               "tools": True,  "group": "action"},
-    "cto_verify":       {"model": "claude-opus",                 "tools": True,  "group": "system",  "thinking": True},
-    "cto_impact":       {"model": "claude-opus",                 "tools": True,  "group": "action",  "thinking": True},
-    "cto_tech_debt":    {"model": "claude-sonnet",               "tools": True,  "group": "system"},
+    # ─── 도구 사용 인텐트 — 전부 group="all" ─────────────────────────────────
+    "system_status":    {"model": "claude-sonnet",               "tools": True,  "group": "all"},
+    "health_check":     {"model": "claude-sonnet",               "tools": True,  "group": "all"},
+    "dashboard":        {"model": "claude-sonnet",               "tools": True,  "group": "all"},
+    "diagnosis":        {"model": "claude-sonnet",               "tools": True,  "group": "all"},
+    "task_history":     {"model": "claude-sonnet",               "tools": True,  "group": "all"},
+    "search":           {"model": "gemini-flash",                "tools": True,  "group": "all",     "gemini_direct": "grounding"},
+    "url_analyze":      {"model": "claude-sonnet",               "tools": True,  "group": "all"},
+    "code_task":        {"model": "claude-sonnet",               "tools": True,  "group": "all"},
+    "directive":        {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
+    "directive_gen":    {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
+    "complex_analysis": {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
+    "architect":        {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
+    "code_exec":        {"model": "claude-sonnet",               "tools": True,  "group": "all"},
+    "memory_recall":    {"model": "claude-sonnet",               "tools": True,  "group": "all"},
+    "qa":               {"model": "claude-sonnet",               "tools": True,  "group": "all"},
+    "execution_verify": {"model": "claude-sonnet",               "tools": True,  "group": "all"},
+    "workspace_switch": {"model": "claude-sonnet",               "tools": True,  "group": "all"},
+    "cost_report":      {"model": "claude-sonnet",               "tools": True,  "group": "all"},
+    "browser":          {"model": "claude-sonnet",               "tools": True,  "group": "all"},
+    "server_file":      {"model": "claude-sonnet",               "tools": True,  "group": "all"},
+    # ─── CTO 모드 인텐트 ─────────────────────────────────────────────────────
+    "cto_code_analysis":{"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
+    "cto_directive":    {"model": "claude-sonnet",               "tools": True,  "group": "all"},
+    "cto_verify":       {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
+    "cto_impact":       {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
+    "cto_tech_debt":    {"model": "claude-sonnet",               "tools": True,  "group": "all"},
     # AADS-188C: Agent SDK 자율 실행 인텐트
-    "execute":            {"model": "claude-opus",                "tools": True,  "group": "all"},
-    "code_modify":        {"model": "claude-opus",                "tools": True,  "group": "all"},
+    "execute":            {"model": "claude-opus",               "tools": True,  "group": "all"},
+    "code_modify":        {"model": "claude-opus",               "tools": True,  "group": "all"},
     # AADS-188C Phase 2: 메타 도구 인텐트
-    "task_query":         {"model": "claude-sonnet",              "tools": True,  "group": "meta"},
-    "status_check":       {"model": "claude-sonnet",              "tools": True,  "group": "meta"},
+    "task_query":         {"model": "claude-sonnet",             "tools": True,  "group": "all"},
+    "status_check":       {"model": "claude-sonnet",             "tools": True,  "group": "all"},
     # AADS-186A 신규 인텐트
-    "service_inspection": {"model": "claude-sonnet",             "tools": True,  "group": "workflow"},
-    "all_service_status": {"model": "claude-sonnet",             "tools": True,  "group": "workflow"},
+    "service_inspection": {"model": "claude-sonnet",             "tools": True,  "group": "all"},
+    "all_service_status": {"model": "claude-sonnet",             "tools": True,  "group": "all"},
     # AADS-186E-1 크롤링 인텐트
-    "url_read":           {"model": "claude-sonnet",             "tools": True,  "group": "crawl"},
-    "deep_crawl":         {"model": "claude-sonnet",             "tools": True,  "group": "crawl"},
+    "url_read":           {"model": "claude-sonnet",             "tools": True,  "group": "all"},
+    "deep_crawl":         {"model": "claude-sonnet",             "tools": True,  "group": "all"},
     # AADS-186E-3 딥리서치 + 코드탐색 인텐트
-    "code_explorer":      {"model": "claude-sonnet",             "tools": True,  "group": "research"},
-    "analyze_changes":    {"model": "claude-sonnet",             "tools": True,  "group": "research"},
-    "search_all_projects":{"model": "claude-sonnet",             "tools": True,  "group": "research"},
+    "code_explorer":      {"model": "claude-sonnet",             "tools": True,  "group": "all"},
+    "analyze_changes":    {"model": "claude-sonnet",             "tools": True,  "group": "all"},
+    "search_all_projects":{"model": "claude-sonnet",             "tools": True,  "group": "all"},
     # Naver 특화 검색 인텐트
-    "news_search":        {"model": "gemini-flash",              "tools": True,  "group": "search",  "gemini_direct": "grounding", "naver_type": "news"},
-    "blog_search":        {"model": "gemini-flash",              "tools": True,  "group": "search",  "gemini_direct": "grounding", "naver_type": "blog"},
-    "shop_search":        {"model": "gemini-flash",              "tools": True,  "group": "search",  "gemini_direct": "grounding", "naver_type": "shop"},
-    "local_search":       {"model": "gemini-flash",              "tools": True,  "group": "search",  "gemini_direct": "grounding", "naver_type": "local"},
-    "book_search":        {"model": "gemini-flash",              "tools": True,  "group": "search",  "gemini_direct": "grounding", "naver_type": "book"},
-    "image_search":       {"model": "gemini-flash",              "tools": True,  "group": "search",  "gemini_direct": "grounding", "naver_type": "image"},
-    "encyclopedia_search":{"model": "gemini-flash",              "tools": True,  "group": "search",  "gemini_direct": "grounding", "naver_type": "encyc"},
-    "knowledge_search":   {"model": "gemini-flash",              "tools": True,  "group": "search",  "gemini_direct": "grounding", "naver_type": "kin"},
+    "news_search":        {"model": "gemini-flash",              "tools": True,  "group": "all",     "gemini_direct": "grounding", "naver_type": "news"},
+    "blog_search":        {"model": "gemini-flash",              "tools": True,  "group": "all",     "gemini_direct": "grounding", "naver_type": "blog"},
+    "shop_search":        {"model": "gemini-flash",              "tools": True,  "group": "all",     "gemini_direct": "grounding", "naver_type": "shop"},
+    "local_search":       {"model": "gemini-flash",              "tools": True,  "group": "all",     "gemini_direct": "grounding", "naver_type": "local"},
+    "book_search":        {"model": "gemini-flash",              "tools": True,  "group": "all",     "gemini_direct": "grounding", "naver_type": "book"},
+    "image_search":       {"model": "gemini-flash",              "tools": True,  "group": "all",     "gemini_direct": "grounding", "naver_type": "image"},
+    "encyclopedia_search":{"model": "gemini-flash",              "tools": True,  "group": "all",     "gemini_direct": "grounding", "naver_type": "encyc"},
+    "knowledge_search":   {"model": "gemini-flash",              "tools": True,  "group": "all",     "gemini_direct": "grounding", "naver_type": "kin"},
 }
 
 _DEFAULT_INTENT = IntentResult(
@@ -126,6 +127,7 @@ news_search, blog_search, shop_search, local_search, book_search, image_search, 
 - "전체 상태 보고", "서비스 상태 확인해줘", "시스템 체크", "상태 체크", "현재 상태 알려줘" → status_check
 - "이 파일 수정해", "코드 고쳐", "버그 수정해서 배포해", "이거 반영해", "직접 수정해" → code_modify
 - "실행해", "배포해", "서버 재시작", "빌드해", "테스트 돌려" → execute
+- "도구 테스트", "전체 테스트", "전부 테스트", "모든 도구", "tool test" → complex_analysis
 - "안녕", "안녕하세요", 인사 → greeting
 - 날씨/시간/간단한 질문 → casual
 - 서버 상태, 헬스체크 → health_check
@@ -177,6 +179,12 @@ news_search, blog_search, shop_search, local_search, book_search, image_search, 
 - 영향 분석, 이거 바꾸면, 사전 분석 → cto_impact
 - 기술 부채, TODO 정리, 정리 필요한 것 → cto_tech_debt
 
+중요 규칙 — CEO 명령형 메시지:
+- "확인하고 보고하라", "확인해봐", "보고해", "점검하라", "진단하라", "체크해" → status_check (casual이 절대 아님)
+- "~하라", "~해라", "~해봐", "~해줘" 형태의 짧은 명령 + 확인/점검/보고/진단/조회/분석 키워드 → status_check 또는 execute
+- 대화 맥락상 이전에 서버 확인, 작업 보고 등의 대화가 있었고 짧은 후속 지시가 오면 → 이전 맥락의 인텐트 유지 (casual이 아님)
+- "넌 ~할 수 있다", "너는 ~가 가능하다" + 서버/도구/접근 → status_check (능력 확인 후 실행 기대)
+
 JSON으로만 응답하세요: {"intent": "...", "confidence": 0.0~1.0}"""
 
 
@@ -207,6 +215,12 @@ async def classify(message: str, workspace: str = "CEO") -> IntentResult:
                 if raw.startswith("{"):
                     parsed = json.loads(raw)
                     intent = parsed.get("intent", "casual")
+                    # CEO 명령형 오분류 보정: casual/greeting인데 실제 명령형 패턴이면 override
+                    if intent in ("casual", "greeting"):
+                        override = _command_override(message)
+                        if override:
+                            logger.info(f"intent_override: {intent} → {override} for '{message[:40]}'")
+                            return _make_result(override)
                     return _make_result(intent)
     except Exception as e:
         logger.debug(f"intent_router classify error: {e}")
@@ -232,12 +246,38 @@ def _make_result(intent: str) -> IntentResult:
     )
 
 
+def _command_override(message: str) -> str | None:
+    """CEO 명령형 메시지가 casual/greeting으로 오분류된 경우 보정."""
+    msg = message.lower().strip()
+    # 명령형 키워드 + 어미 조합
+    _cmd_keywords = ("확인", "보고", "점검", "진단", "체크", "조회", "분석", "파악", "살펴", "알아봐")
+    _action_keywords = ("수정", "배포", "실행", "재시작", "적용", "반영", "시작")
+    _cmd_suffixes = ("하라", "해라", "해봐", "해줘", "하고", "해서", "하라고")
+
+    has_cmd = any(kw in msg for kw in _cmd_keywords)
+    has_action = any(kw in msg for kw in _action_keywords)
+    has_suffix = any(sf in msg for sf in _cmd_suffixes)
+
+    # "확인하고 보고하라" / "점검해봐" / "진단해줘"
+    if has_cmd and (has_suffix or len(message) <= 30):
+        return "status_check"
+    # "수정해라" / "배포하라" / "적용해줘"
+    if has_action and (has_suffix or len(message) <= 30):
+        return "execute"
+    # "넌 ~가능하다" 패턴
+    if ("넌 " in msg or "너는 " in msg) and any(w in msg for w in ("가능", "접근", "할 수", "할수", "서버")):
+        return "status_check"
+    return None
+
+
 def _keyword_fallback(message: str) -> IntentResult:
     """Gemini 실패 시 키워드 기반 분류."""
     msg = message.lower()
 
     if any(w in msg for w in ("안녕", "hello", "hi ", "반가")):
         return _make_result("greeting")
+    if any(w in msg for w in ("도구 테스트", "전체 테스트", "전부 테스트", "모든 도구", "tool test", "도구 전부", "도구 모두")):
+        return _make_result("complex_analysis")
     # AADS-188C Phase 2: task_query — 2개 이상 키워드 매칭으로 정확도 향상
     _tq_keywords = ["시킨거", "진행", "확인", "됐나", "했나", "작업 현황", "다른 친구", "다른 애", "걔", "그 봇", "진행 상태"]
     _tq_hits = sum(1 for w in _tq_keywords if w in msg)
@@ -320,6 +360,18 @@ def _keyword_fallback(message: str) -> IntentResult:
         return _make_result("analyze_changes")
     if any(w in msg for w in ("전체 프로젝트 검색", "6개 서비스에서", "모든 프로젝트 코드", "전체 코드 검색")):
         return _make_result("search_all_projects")
+
+    # ─── CEO 명령형 패턴 (casual 오분류 방지) ─────────────────────────────
+    # "확인하라", "보고하라", "점검해", "진단해" 등 짧은 명령형
+    _cmd_keywords = ("확인", "보고", "점검", "진단", "체크", "조회", "분석", "파악", "살펴", "알아봐", "찾아봐")
+    _cmd_suffixes = ("하라", "해라", "해봐", "해줘", "하고", "해서")
+    if any(kw in msg for kw in _cmd_keywords):
+        # 명령형 어미가 있거나 메시지가 짧으면(CEO 지시 스타일) → status_check
+        if any(msg.endswith(sf) or sf in msg for sf in _cmd_suffixes) or len(message) <= 30:
+            return _make_result("status_check")
+    # "넌 ~할 수 있다" 패턴 → 능력 확인 후 실행 기대
+    if ("넌 " in msg or "너는 " in msg) and any(w in msg for w in ("가능", "접근", "할 수", "할수", "서버")):
+        return _make_result("status_check")
 
     return _make_result("casual")
 
