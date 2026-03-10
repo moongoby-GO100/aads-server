@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 settings = Settings()
 _anthropic = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY.get_secret_value())
 
-COMPACTION_TRIGGER_TURNS = 20
+COMPACTION_TRIGGER_TURNS = int(os.getenv("COMPACTION_TRIGGER_TURNS", "20"))
 _DB_URL_ENV = "DATABASE_URL"
 
 

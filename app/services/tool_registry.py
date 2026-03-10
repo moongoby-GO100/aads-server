@@ -37,12 +37,15 @@ _DEFER_LOADING: Dict[str, bool] = {
     "generate_directive": False,
     "delegate_to_agent": False,          # Orchestrator 핵심
     "delegate_to_research": False,
+    "spawn_subagent": False,              # 서브에이전트 — 핵심 위임 도구
+    "spawn_parallel_subagents": True,     # 병렬 서브에이전트 — 지연 로드
     "save_note": True,
     "recall_notes": True,
     "learn_pattern": True,
     "cost_report": True,
     # ── Tier 4: 외부 검색 (온디맨드, API 비용) ───────────────────────────
     "web_search_brave": True,
+    "web_search": True,
     "jina_read": True,
     "crawl4ai_fetch": True,
     # ── Tier 5: 고비용/장시간 (온디맨드) ─────────────────────────────────
@@ -91,7 +94,7 @@ TOOL_CATEGORY_GUIDE = """\
 - cost_report: 비용 분석
 
 ### 🟢 Tier 4 — 외부 검색 (API 비용, 3~10초)
-- web_search_brave: Brave 웹 검색
+- web_search_brave / web_search: 통합 웹 검색 (Google/Naver/Kakao 자동 폴백)
 - jina_read / crawl4ai_fetch: URL 페이지 추출
 
 ### 🔵 Tier 5 — 고비용/장시간 (CEO 명시 요청 시)
@@ -127,7 +130,7 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
     "directive_gen":      ["generate_directive"],
     "cto_directive":      ["generate_directive"],
     # Tier 4: 외부 검색
-    "search":             ["web_search_brave"],
+    "search":             ["web_search"],
     "url_read":           ["jina_read"],
     # Tier 6: 브라우저 — 명시적 요청 시만
     "browser":            ["browser_navigate"],
@@ -407,7 +410,12 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     # ── search 그룹 ──────────────────────────────────────────────────────────
     "web_search_brave": {
         "name": "web_search_brave",
-        "description": "Brave Search API로 웹 검색을 수행합니다. 최신 정보, 뉴스, 기술 문서 검색에 사용합니다.",
+        "description": (
+            "통합 웹 검색 — Google(Gemini Grounding), Naver, Kakao(Daum) 3개 엔진 자동 폴백. "
+            "engine='auto'(기본): Google→Naver→Kakao 순 시도. "
+            "engine='all': 3개 병렬 실행 후 통합. "
+            "engine='google'/'naver'/'kakao': 특정 엔진만 사용."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -419,19 +427,37 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "type": "integer",
                     "description": "반환할 결과 수 (기본 5, 최대 10)",
                 },
-                "freshness": {
+                "engine": {
                     "type": "string",
-                    "description": "최신성 필터. 'pd'(24시간), 'pw'(1주), 'pm'(1달), 'py'(1년)",
-                    "enum": ["pd", "pw", "pm", "py"],
+                    "description": "검색 엔진 선택 (기본 auto)",
+                    "enum": ["auto", "all", "google", "naver", "kakao"],
+                },
+                "search_type": {
+                    "type": "string",
+                    "description": "Naver 전용: 검색 타입 (기본 webkr)",
+                    "enum": ["webkr", "blog", "news", "kin", "encyc", "book", "image", "shop", "cafearticle"],
                 },
             },
             "required": ["query"],
         },
         "input_examples": [
             {"query": "FastAPI MCP 통합 가이드"},
-            {"query": "AI 에이전트 트렌드 2025", "freshness": "pw"},
-            {"query": "LangGraph Tool Use best practices", "count": 8},
+            {"query": "AI 에이전트 트렌드 2026", "engine": "all"},
+            {"query": "삼성전자 주가", "engine": "naver", "search_type": "news"},
         ],
+    },
+    "web_search": {
+        "name": "web_search",
+        "description": "web_search_brave의 별칭. 통합 웹 검색 (Google/Naver/Kakao 자동 폴백).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "검색 쿼리"},
+                "engine": {"type": "string", "enum": ["auto", "all", "google", "naver", "kakao"]},
+                "count": {"type": "integer"},
+            },
+            "required": ["query"],
+        },
     },
     # ── workflow 그룹 (신규) ──────────────────────────────────────────────────
     "inspect_service": {
@@ -1049,6 +1075,83 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"query": "AI 코딩 에이전트 시장 동향 2026", "format": "report"},
         ],
     },
+    # AADS-190 Phase2-A: 서브에이전트
+    "spawn_subagent": {
+        "name": "spawn_subagent",
+        "description": (
+            "독립적 서브에이전트를 실행하여 복잡한 작업을 분할 위임한다. "
+            "서브에이전트는 자체 LLM 호출로 작업을 수행하며 읽기 도구를 사용할 수 있다. "
+            "'이 부분 분석해줘', '동시에 여러 파일 조사해', '코드 리뷰 해줘'에 사용."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "서브에이전트에게 위임할 작업 설명",
+                },
+                "model": {
+                    "type": "string",
+                    "description": "사용할 모델 (sonnet/opus/haiku, 기본 sonnet)",
+                    "enum": ["sonnet", "opus", "haiku"],
+                },
+                "context": {
+                    "type": "string",
+                    "description": "추가 컨텍스트 (파일 내용, DB 결과 등)",
+                },
+                "enable_tools": {
+                    "type": "boolean",
+                    "description": "도구 사용 허용 여부 (기본 true)",
+                },
+            },
+            "required": ["task"],
+        },
+        "input_examples": [
+            {"task": "KIS 프로젝트의 order_executor.py 분석 후 개선점 보고", "model": "sonnet"},
+            {"task": "DB 스키마 분석하고 인덱스 최적화 방안 제시", "enable_tools": True},
+        ],
+    },
+    "spawn_parallel_subagents": {
+        "name": "spawn_parallel_subagents",
+        "description": (
+            "여러 서브에이전트를 병렬로 동시 실행하여 결과를 취합한다. "
+            "각 서브에이전트는 독립적으로 LLM 호출을 수행한다. "
+            "'4개 프로젝트 동시에 헬스체크해', '여러 파일 동시에 분석해'에 사용."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tasks": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "task": {"type": "string"},
+                            "model": {"type": "string"},
+                            "context": {"type": "string"},
+                            "enable_tools": {"type": "boolean"},
+                        },
+                        "required": ["task"],
+                    },
+                    "description": "실행할 서브에이전트 작업 리스트",
+                },
+                "max_concurrent": {
+                    "type": "integer",
+                    "description": "최대 동시 실행 수 (기본 5)",
+                },
+            },
+            "required": ["tasks"],
+        },
+        "input_examples": [
+            {
+                "tasks": [
+                    {"task": "KIS 프로젝트 헬스체크 및 현황 보고"},
+                    {"task": "GO100 프로젝트 최근 에러 로그 분석"},
+                    {"task": "AADS 서버 DB 커넥션 상태 확인"},
+                ],
+            },
+        ],
+    },
     # AADS-188B: 시맨틱 코드 검색
     "semantic_code_search": {
         "name": "semantic_code_search",
@@ -1093,12 +1196,12 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
     "action": ["directive_create", "read_github_file", "query_database", "read_remote_file", "list_remote_dir", "cost_report"],
-    "search": ["web_search_brave"],
+    "search": ["web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
     "browser": ["read_remote_file", "list_remote_dir", "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_fill", "browser_tab_list"],
     # AADS-188C Phase 2: 메타 도구 그룹 (Orchestrator)
-    "meta": ["check_directive_status", "delegate_to_agent", "delegate_to_research"],
+    "meta": ["check_directive_status", "delegate_to_agent", "delegate_to_research", "spawn_subagent", "spawn_parallel_subagents"],
     # AADS-186E-1: 크롤링 도구 그룹
     "crawl": ["jina_read", "crawl4ai_fetch", "deep_crawl"],
     # AADS-186E-2: 메모리 도구 그룹

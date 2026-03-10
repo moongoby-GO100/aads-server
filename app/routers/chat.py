@@ -9,8 +9,9 @@ import structlog
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, Response
+from pydantic import BaseModel, Field
 
 from app.models.chat import (
     ApproveDiffOut,
@@ -298,3 +299,55 @@ async def get_research_cache(topic: str = Query(...)):
 async def get_research_history(limit: int = Query(50, le=200)):
     """전체 조사 이력."""
     return await svc.list_research_history(limit=limit)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# AADS-190: Frontend Error Reporting
+# ════════════════════════════════════════════════════════════════════════════════
+
+class ErrorReportRequest(BaseModel):
+    error_type: str = Field(..., description="SSE_DISCONNECT|API_ERROR|STREAM_TIMEOUT|SESSION_SWITCH|UNHANDLED")
+    message: str = Field(..., max_length=2000)
+    session_id: Optional[str] = None
+    url: Optional[str] = None
+    stack: Optional[str] = Field(None, max_length=5000)
+    context: Optional[dict] = None
+
+class ErrorReportOut(BaseModel):
+    ok: bool = True
+    error_id: str
+
+
+@router.post("/chat/errors/report", response_model=ErrorReportOut, tags=["chat-errors"])
+async def report_frontend_error(req: ErrorReportRequest, request: Request):
+    """프론트엔드 에러를 백엔드에 기록 — AI가 다음 턴에서 인지 가능."""
+    import uuid
+    from datetime import datetime
+
+    error_id = str(uuid.uuid4())[:12]
+
+    # 로그에 구조화된 에러 기록
+    logger.warning(
+        "frontend_error_report",
+        error_id=error_id,
+        error_type=req.error_type,
+        message=req.message[:500],
+        session_id=req.session_id,
+        url=req.url,
+        client_ip=request.client.host if request.client else None,
+    )
+
+    # ai_observations에 저장 → 메모리 주입으로 AI가 인지
+    try:
+        from app.core.memory_recall import save_observation
+        await save_observation(
+            category="recurring_issue",
+            key=f"frontend_{req.error_type.lower()}",
+            content=f"[{datetime.now().strftime('%m/%d %H:%M')}] {req.message[:300]}",
+            source="error_reporter",
+            confidence=0.4,
+        )
+    except Exception as e:
+        logger.debug(f"error_report_save_failed: {e}")
+
+    return ErrorReportOut(ok=True, error_id=error_id)

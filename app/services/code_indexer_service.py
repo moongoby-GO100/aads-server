@@ -123,10 +123,10 @@ class CodeIndexerService:
 
     async def _embed_texts(self, texts: List[str]) -> List[List[float]]:
         """
-        Google Gemini text-embedding-004 로 텍스트 임베딩.
+        Google Gemini gemini-embedding-001 (3072차원) 으로 텍스트 임베딩.
         GEMINI_API_KEY 없으면 hash 기반 dummy 임베딩 반환.
         """
-        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
         if not api_key:
             logger.debug("[CodeIndexer] GEMINI_API_KEY 없음 — dummy 임베딩 사용")
             return [self._dummy_embedding(t) for t in texts]
@@ -142,7 +142,7 @@ class CodeIndexerService:
 
                 def _call(b: List[str] = batch) -> Any:
                     return client.models.embed_content(
-                        model="models/text-embedding-004",
+                        model="models/gemini-embedding-001",
                         contents=b,
                     )
 
@@ -155,7 +155,7 @@ class CodeIndexerService:
             logger.warning(f"[CodeIndexer] Gemini 임베딩 실패: {e} — dummy 사용")
             return [self._dummy_embedding(t) for t in texts]
 
-    def _dummy_embedding(self, text: str, dim: int = 768) -> List[float]:
+    def _dummy_embedding(self, text: str, dim: int = 3072) -> List[float]:
         """테스트/폴백용 hash 기반 dummy 임베딩 (재현 가능)."""
         h = hashlib.sha256(text.encode()).digest()
         # 32바이트 → 8개 float, 반복하여 768차원 채우기

@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 # ─── 환경 플래그 ───────────────────────────────────────────────────────────────
 
 AGENT_SDK_ENABLED: bool = os.getenv("AGENT_SDK_ENABLED", "true").lower() == "true"
-_MAX_TURNS: int = int(os.getenv("AGENT_SDK_MAX_TURNS", "30"))
-_MAX_BUDGET_USD: float = float(os.getenv("AGENT_SDK_MAX_BUDGET_USD", "10.0"))
+_MAX_TURNS: int = int(os.getenv("AGENT_SDK_MAX_TURNS", "100"))
+_MAX_BUDGET_USD: float = float(os.getenv("AGENT_SDK_MAX_BUDGET_USD", "50.0"))
 _CWD: str = os.getenv("AGENT_SDK_CWD", "/root/aads")
 
 # ─── SDK 임포트 (graceful degradation) ────────────────────────────────────────
@@ -75,8 +75,17 @@ _TOOL_GRADES: Dict[str, str] = {
     # Yellow: CEO 확인 권장 (쓰기/부작용)
     "write_remote_file":    "Yellow",
     "patch_remote_file":    "Yellow",
+    "run_remote_command":   "Yellow",
+    "git_remote_add":       "Yellow",
+    "git_remote_commit":    "Yellow",
+    "git_remote_push":      "Yellow",
+    "git_remote_status":    "Green",
+    "git_remote_create_branch": "Yellow",
     "deep_crawl":           "Yellow",
     "deep_research":        "Yellow",
+    # AADS-190: 서브에이전트 (Yellow — LLM 비용 발생)
+    "spawn_subagent":       "Yellow",
+    "spawn_parallel_subagents": "Yellow",
     # Red: 항상 차단 (파이프라인 트리거)
     "directive_create":     "Red",
     "submit_directive":     "Red",
@@ -140,6 +149,29 @@ def _build_aads_sdk_tools() -> list:
               {"query": str, "project": str, "limit": int}),
         _wrap("deep_research",  "Gemini 딥리서치 — 다수 소스 탐색 종합 (Yellow)",
               {"query": str, "max_sources": int}),
+        # AADS-190: 원격 파일 쓰기/패치/명령 실행 (Yellow)
+        _wrap("write_remote_file", "원격 서버(68/211/114) 파일 쓰기 — 자동 백업 포함 (Yellow)",
+              {"project": str, "file_path": str, "content": str, "backup": bool}),
+        _wrap("patch_remote_file", "원격 서버 파일 부분 수정 — old→new 교체 (Yellow)",
+              {"project": str, "file_path": str, "old_string": str, "new_string": str}),
+        _wrap("run_remote_command", "원격 서버 명령 실행 — 화이트리스트 기반 (Yellow)",
+              {"project": str, "command": str}),
+        # AADS-190: Git 원격 쓰기 도구 (Yellow)
+        _wrap("git_remote_add", "원격 서버 git add (파일 스테이징)",
+              {"project": str, "files": str}),
+        _wrap("git_remote_commit", "원격 서버 git commit",
+              {"project": str, "message": str}),
+        _wrap("git_remote_push", "원격 서버 git push (force push 차단)",
+              {"project": str, "branch": str}),
+        _wrap("git_remote_status", "원격 서버 git status",
+              {"project": str}),
+        _wrap("git_remote_create_branch", "원격 서버 새 브랜치 생성",
+              {"project": str, "branch_name": str}),
+        # AADS-190 Phase2-A: 서브에이전트
+        _wrap("spawn_subagent", "독립적 서브에이전트 실행 — 복잡한 작업을 분할 위임 (Yellow)",
+              {"task": str, "model": str, "context": str, "enable_tools": bool}),
+        _wrap("spawn_parallel_subagents", "여러 서브에이전트를 병렬 실행 후 결과 취합 (Yellow)",
+              {"tasks": list, "max_concurrent": int}),
     ]
 
     logger.debug(f"_build_aads_sdk_tools: {len(tools)}개 도구 생성")
@@ -202,7 +234,7 @@ class AgentSDKService:
             ],
             "PostToolUse": [
                 HookMatcher(
-                    matcher="Write|Edit",
+                    matcher="Write|Edit|write_remote_file|patch_remote_file|run_remote_command|git_remote_commit|git_remote_push|spawn_subagent|spawn_parallel_subagents",
                     hooks=[post_tool_use_hook],
                 )
             ],

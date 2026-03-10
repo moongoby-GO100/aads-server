@@ -1,7 +1,8 @@
 """
 Git MCP 서버 — 포트 8766.
-도구: git_log, git_status, git_diff, git_show, git_branches
-읽기 전용 (write 작업 제외). 허용된 repo 경로만 접근.
+도구: git_log, git_status, git_diff, git_show, git_branches, git_file_history
+      + git_add, git_commit, git_push, git_create_branch (AADS-190 쓰기 도구)
+허용된 repo 경로만 접근. force push 차단.
 """
 import os
 import subprocess
@@ -135,6 +136,90 @@ def git_file_history(repo_path: str = ".", file_path: str = "", max_count: int =
     if file_path:
         cmd += ["--", file_path]
     return _run_git(cmd, cwd=cwd)
+
+
+# ─── AADS-190: Git 쓰기 도구 ─────────────────────────────────────────────────
+
+
+@mcp.tool()
+def git_add(repo_path: str = ".", files: str = ".") -> str:
+    """git add — 파일 스테이징.
+
+    Args:
+        repo_path: 저장소 경로 (ALLOWED_REPO_ROOT 기준 상대 경로)
+        files: 추가할 파일 (기본: 전체). 공백으로 여러 파일 구분
+    Returns:
+        완료 메시지
+    """
+    cwd = str(ALLOWED_REPO_ROOT / repo_path)
+    file_list = files.split() if files.strip() != "." else ["."]
+    return _run_git(["add"] + file_list, cwd=cwd)
+
+
+@mcp.tool()
+def git_commit(repo_path: str = ".", message: str = "") -> str:
+    """git commit — 커밋 생성.
+
+    Args:
+        repo_path: 저장소 경로
+        message: 커밋 메시지 (필수)
+    Returns:
+        커밋 결과
+    """
+    if not message or not message.strip():
+        return "[git 오류] 커밋 메시지 필수"
+    cwd = str(ALLOWED_REPO_ROOT / repo_path)
+    return _run_git(["commit", "-m", message], cwd=cwd)
+
+
+@mcp.tool()
+def git_push(repo_path: str = ".", remote: str = "origin", branch: str = "") -> str:
+    """git push — 원격 저장소에 푸시 (force push 차단).
+
+    Args:
+        repo_path: 저장소 경로
+        remote: 원격 이름 (기본: origin)
+        branch: 브랜치명 (비어있으면 현재 브랜치)
+    Returns:
+        푸시 결과
+    """
+    cwd = str(ALLOWED_REPO_ROOT / repo_path)
+    cmd = ["push", remote]
+    if branch:
+        cmd.append(branch)
+    return _run_git(cmd, cwd=cwd)
+
+
+@mcp.tool()
+def git_create_branch(repo_path: str = ".", branch_name: str = "") -> str:
+    """새 브랜치 생성 및 체크아웃.
+
+    Args:
+        repo_path: 저장소 경로
+        branch_name: 새 브랜치 이름 (필수)
+    Returns:
+        생성 결과
+    """
+    if not branch_name or not branch_name.strip():
+        return "[git 오류] 브랜치 이름 필수"
+    cwd = str(ALLOWED_REPO_ROOT / repo_path)
+    return _run_git(["checkout", "-b", branch_name], cwd=cwd)
+
+
+@mcp.tool()
+def git_checkout(repo_path: str = ".", branch: str = "") -> str:
+    """기존 브랜치로 체크아웃.
+
+    Args:
+        repo_path: 저장소 경로
+        branch: 체크아웃할 브랜치명 (필수)
+    Returns:
+        체크아웃 결과
+    """
+    if not branch or not branch.strip():
+        return "[git 오류] 브랜치 이름 필수"
+    cwd = str(ALLOWED_REPO_ROOT / repo_path)
+    return _run_git(["checkout", branch], cwd=cwd)
 
 
 if __name__ == "__main__":

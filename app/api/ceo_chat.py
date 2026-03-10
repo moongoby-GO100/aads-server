@@ -1484,10 +1484,20 @@ async def send_ceo_message(req: CeoChatRequest):
                 "INSERT INTO ceo_chat_sessions (session_id) VALUES ($1)", session_id
             )
 
-        # 컨텍스트 빌드
+        # 컨텍스트 빌드 (AADS-190: memory_recall 통합)
         ctx_mgr = ContextManager(conn)
         system_prompt = await ctx_mgr.build_context(session_id)
         active_tasks = await ctx_mgr.load_active_tasks()
+
+        # AADS-190: 메모리 자동 주입 (5섹션: 세션요약/CEO선호/도구전략/활성Directive/학습사항)
+        try:
+            from app.core.memory_recall import build_memory_context
+            _memory_block = await build_memory_context(session_id=session_id, project_id=None)
+            if _memory_block:
+                system_prompt += "\n\n" + _memory_block
+                logger.debug(f"ceo_chat_memory_injected chars={len(_memory_block)}")
+        except Exception as _mem_err:
+            logger.warning(f"ceo_chat_memory_injection_failed: {_mem_err}")
 
         # 모델 선택: CEO가 직접 지정하면 패스스루, "mixture"/None이면 자동 라우팅 (AADS-156)
         if req.model and req.model != "mixture":

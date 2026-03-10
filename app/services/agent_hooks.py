@@ -102,6 +102,39 @@ async def pre_tool_use_hook(
                 logger.warning(f"pre_tool_use: {reason}")
                 return {"behavior": "deny", "message": reason}
 
+    # ── write_remote_file / patch_remote_file 민감 경로 차단 ─────────────
+    if tool_name in ("write_remote_file", "patch_remote_file"):
+        file_path = ""
+        if isinstance(tool_input, dict):
+            file_path = tool_input.get("file_path", "") or tool_input.get("path", "") or ""
+        for sensitive in _SENSITIVE_WRITE_PATHS:
+            if sensitive in file_path:
+                reason = f"원격 민감 경로 쓰기 차단: {file_path}"
+                logger.warning(f"pre_tool_use: {reason}")
+                return {"behavior": "deny", "message": reason}
+        logger.info(f"pre_tool_use: Yellow 도구 자동 승인 | tool={tool_name} path={file_path}")
+
+    # ── run_remote_command 위험 명령 차단 ─────────────────────────────────
+    if tool_name == "run_remote_command":
+        command = ""
+        if isinstance(tool_input, dict):
+            command = tool_input.get("command", "") or ""
+        for pattern in _DANGEROUS_BASH_PATTERNS:
+            if re.search(pattern, command, re.IGNORECASE):
+                reason = f"원격 위험 명령 차단: {command[:120]}"
+                logger.warning(f"pre_tool_use: {reason}")
+                return {"behavior": "deny", "message": reason}
+        # force push 차단
+        if re.search(r"git\s+push\s+.*--force", command, re.IGNORECASE):
+            reason = f"force push 차단: {command[:120]}"
+            logger.warning(f"pre_tool_use: {reason}")
+            return {"behavior": "deny", "message": reason}
+        logger.info(f"pre_tool_use: Yellow 도구 자동 승인 | tool={tool_name} cmd={command[:80]}")
+
+    # ── git_remote_push force push 차단 ──────────────────────────────────
+    if tool_name == "git_remote_push":
+        logger.info(f"pre_tool_use: Yellow 도구 자동 승인 | tool={tool_name}")
+
     # ── 안전 → 자동 승인 ─────────────────────────────────────────────────
     logger.debug(f"pre_tool_use: 자동 승인 | tool={tool_name}")
     return {"behavior": "allow"}

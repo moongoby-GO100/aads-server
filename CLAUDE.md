@@ -32,9 +32,17 @@ docs/knowledge/AADS-KNOWLEDGE.md — 아키텍처, 파이프라인, 교차검증
 - **시드 데이터**: 37건 (공통 12 + 프로젝트별 25) — `scripts/init_memory_schema.sql`
 - **DB 테이블**: session_notes, ai_observations (project 컬럼), ai_meta_memory
 
+## AADS-190: 원격 쓰기/실행 + 서브에이전트 (2026-03-10)
+- **Phase 0**: 에러 리포팅(`/chat/errors/report`), StreamManager(멀티세션), CEO Chat 메모리 주입, 임베딩 검증
+- **Phase 1**: 9개 원격 도구 — write_remote_file, patch_remote_file, run_remote_command, git 5종
+  - 보안: blocked regex → whitelist → pipe 제한, 민감 경로 차단, force push 차단
+- **Phase 2**: 서브에이전트(`spawn_subagent`, `spawn_parallel_subagents`), 턴 100/예산 $50, 압축 환경변수화
+  - 서브에이전트: 독립 LLM 호출, 읽기 도구 7종, asyncio.gather 병렬 실행
+- **리포트**: `reports/20260310_AADS190_phase0_phase1_phase2_report.md`
+
 ## 현재 상태
 - Phase: Phase 2 운영
-- 최근: AADS-186E(메모리 자동 주입), AADS-188C(도구 우선순위), AADS-121(Claude Code 설정)
+- 최근: AADS-190(원격 쓰기+서브에이전트), AADS-186E(메모리 자동 주입), AADS-188C(도구 우선순위)
 - 긴급: 없음
 
 ## 빌드/배포

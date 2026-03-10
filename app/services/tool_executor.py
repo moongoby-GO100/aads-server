@@ -15,7 +15,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
+LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://aads-litellm:4000")
 LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
 _AADS_API_BASE = os.getenv("AADS_API_BASE", "http://localhost:8080")
 
@@ -62,9 +62,21 @@ class ToolExecutor:
             "read_github_file":       self._read_github_file,
             "query_database":         self._query_database,
             "read_remote_file":       self._read_remote_file,
+            "write_remote_file":      self._write_remote_file,
+            "patch_remote_file":      self._patch_remote_file,
+            "run_remote_command":     self._run_remote_command,
+            "git_remote_add":         self._git_remote_add,
+            "git_remote_commit":      self._git_remote_commit,
+            "git_remote_push":        self._git_remote_push,
+            "git_remote_status":      self._git_remote_status,
+            "git_remote_create_branch": self._git_remote_create_branch,
             "list_remote_dir":        self._list_remote_dir,
             "cost_report":            self._cost_report,
-            "web_search_brave":       self._web_search_brave,
+            "web_search_brave":       self._web_search,
+            "web_search":             self._web_search,
+            "web_search_naver":       self._web_search_naver,
+            "web_search_kakao":       self._web_search_kakao,
+            "web_search_google":      self._web_search_google,
             # AADS-186A 신규 워크플로우 도구
             "inspect_service":        self._inspect_service,
             "get_all_service_status": self._get_all_service_status,
@@ -98,6 +110,9 @@ class ToolExecutor:
             "browser_click":          self._browser_click,
             "browser_fill":           self._browser_fill,
             "browser_tab_list":       self._browser_tab_list,
+            # AADS-190 Phase2-A: 서브에이전트
+            "spawn_subagent":         self._spawn_subagent,
+            "spawn_parallel_subagents": self._spawn_parallel_subagents,
         }
         fn = dispatch.get(tool_name)
         if fn is None:
@@ -229,6 +244,119 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e)}
 
+    async def _write_remote_file(self, inp: Dict[str, Any]) -> Any:
+        """원격 서버 파일 쓰기 (SSH, 자동 백업). Yellow 등급."""
+        project = (inp.get("project") or "").upper()
+        file_path = inp.get("file_path") or inp.get("path") or ""
+        content = inp.get("content") or ""
+        backup = inp.get("backup", True)
+        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        if not file_path:
+            return {"error": "file_path 필수"}
+        if not content:
+            return {"error": "content 필수"}
+        try:
+            from app.api.ceo_chat_tools import tool_write_remote_file
+            return await tool_write_remote_file(project, file_path, content, backup)
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _patch_remote_file(self, inp: Dict[str, Any]) -> Any:
+        """원격 서버 파일 부분 수정 (old→new 교체). Yellow 등급."""
+        project = (inp.get("project") or "").upper()
+        file_path = inp.get("file_path") or inp.get("path") or ""
+        old_string = inp.get("old_string") or ""
+        new_string = inp.get("new_string") or ""
+        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        if not file_path:
+            return {"error": "file_path 필수"}
+        if not old_string:
+            return {"error": "old_string 필수"}
+        try:
+            from app.api.ceo_chat_tools import tool_patch_remote_file
+            return await tool_patch_remote_file(project, file_path, old_string, new_string)
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _run_remote_command(self, inp: Dict[str, Any]) -> Any:
+        """원격 서버 명령 실행 (화이트리스트 기반). Yellow 등급."""
+        project = (inp.get("project") or "").upper()
+        command = inp.get("command") or ""
+        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        if not command:
+            return {"error": "command 필수"}
+        try:
+            from app.api.ceo_chat_tools import tool_run_remote_command
+            return await tool_run_remote_command(project, command)
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _git_remote_add(self, inp: Dict[str, Any]) -> Any:
+        """원격 서버 git add."""
+        project = (inp.get("project") or "").upper()
+        files = inp.get("files") or "."
+        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        try:
+            from app.api.ceo_chat_tools import tool_git_remote_add
+            return await tool_git_remote_add(project, files)
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _git_remote_commit(self, inp: Dict[str, Any]) -> Any:
+        """원격 서버 git commit."""
+        project = (inp.get("project") or "").upper()
+        message = inp.get("message") or ""
+        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        if not message:
+            return {"error": "commit message 필수"}
+        try:
+            from app.api.ceo_chat_tools import tool_git_remote_commit
+            return await tool_git_remote_commit(project, message)
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _git_remote_push(self, inp: Dict[str, Any]) -> Any:
+        """원격 서버 git push (force push 차단)."""
+        project = (inp.get("project") or "").upper()
+        branch = inp.get("branch") or ""
+        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        try:
+            from app.api.ceo_chat_tools import tool_git_remote_push
+            return await tool_git_remote_push(project, branch)
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _git_remote_status(self, inp: Dict[str, Any]) -> Any:
+        """원격 서버 git status."""
+        project = (inp.get("project") or "").upper()
+        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        try:
+            from app.api.ceo_chat_tools import tool_git_remote_status
+            return await tool_git_remote_status(project)
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _git_remote_create_branch(self, inp: Dict[str, Any]) -> Any:
+        """원격 서버 새 브랜치 생성."""
+        project = (inp.get("project") or "").upper()
+        branch_name = inp.get("branch_name") or ""
+        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        if not branch_name:
+            return {"error": "branch_name 필수"}
+        try:
+            from app.api.ceo_chat_tools import tool_git_remote_create_branch
+            return await tool_git_remote_create_branch(project, branch_name)
+        except Exception as e:
+            return {"error": str(e)}
+
     async def _list_remote_dir(self, inp: Dict[str, Any]) -> Any:
         """원격 서버 디렉터리/파일 검색 (SSH)."""
         project = (inp.get("project") or "").upper()
@@ -256,11 +384,113 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e)}
 
-    async def _web_search_brave(self, inp: Dict[str, Any]) -> Any:
-        from app.services.brave_search_service import BraveSearchService
-        svc = BraveSearchService()
-        result = await svc.search(inp.get("query", ""), count=inp.get("count", 5))
-        return {"text": result.text, "citations": result.citations}
+    async def _web_search(self, inp: Dict[str, Any]) -> Any:
+        """통합 웹 검색 — Gemini Google → Naver → Kakao 순 폴백 체인."""
+        query = inp.get("query", "")
+        count = inp.get("count", 5)
+        engine = inp.get("engine", "auto")  # auto|google|naver|kakao|all
+
+        if not query:
+            return {"error": "query 필수"}
+
+        if engine == "all":
+            return await self._web_search_all(query, count)
+
+        if engine in ("google", "auto"):
+            try:
+                result = await self._web_search_google(inp)
+                if not result.get("error"):
+                    return result
+            except Exception:
+                pass
+            if engine == "google":
+                return result
+
+        if engine in ("naver", "auto"):
+            try:
+                result = await self._web_search_naver(inp)
+                if not result.get("error"):
+                    return result
+            except Exception:
+                pass
+            if engine == "naver":
+                return result
+
+        if engine in ("kakao", "auto"):
+            try:
+                result = await self._web_search_kakao(inp)
+                if not result.get("error"):
+                    return result
+            except Exception:
+                pass
+            if engine == "kakao":
+                return result
+
+        return {"error": "모든 검색 엔진 실패", "query": query}
+
+    async def _web_search_all(self, query: str, count: int = 5) -> Any:
+        """3개 검색 엔진 병렬 실행 → 통합 결과."""
+        inp = {"query": query, "count": count}
+        results = await asyncio.gather(
+            self._web_search_google(inp),
+            self._web_search_naver(inp),
+            self._web_search_kakao(inp),
+            return_exceptions=True,
+        )
+        merged_text = []
+        merged_citations = []
+        engines_ok = []
+        for name, r in zip(["google", "naver", "kakao"], results):
+            if isinstance(r, Exception) or (isinstance(r, dict) and r.get("error")):
+                continue
+            engines_ok.append(name)
+            if isinstance(r, dict):
+                merged_text.append(f"【{name.upper()}】\n{r.get('text', '')}")
+                merged_citations.extend(r.get("citations", []))
+        return {
+            "text": "\n\n".join(merged_text) if merged_text else f"모든 검색 엔진 실패: {query}",
+            "citations": merged_citations,
+            "engines_used": engines_ok,
+        }
+
+    async def _web_search_google(self, inp: Dict[str, Any]) -> Any:
+        """Gemini Google Search Grounding."""
+        query = inp.get("query", "")
+        from app.services.gemini_search_service import GeminiSearchService
+        svc = GeminiSearchService()
+        if not svc._api_key:
+            return {"error": "GEMINI_API_KEY 미설정", "engine": "google"}
+        result = await svc.search_grounded(query)
+        if result.error:
+            return {"error": result.error, "engine": "google"}
+        return {"text": result.text, "citations": result.citations, "engine": "google"}
+
+    async def _web_search_naver(self, inp: Dict[str, Any]) -> Any:
+        """Naver 웹 검색."""
+        query = inp.get("query", "")
+        count = inp.get("count", 5)
+        search_type = inp.get("search_type", "webkr")
+        from app.services.naver_search_service import NaverSearchService
+        svc = NaverSearchService()
+        if not svc.is_available():
+            return {"error": "NAVER API 키 미설정", "engine": "naver"}
+        result = await svc.search(query, search_type=search_type, count=count)
+        if result.error:
+            return {"error": result.error, "engine": "naver"}
+        return {"text": result.text, "citations": result.citations, "engine": "naver"}
+
+    async def _web_search_kakao(self, inp: Dict[str, Any]) -> Any:
+        """Kakao (Daum) 웹 검색."""
+        query = inp.get("query", "")
+        count = inp.get("count", 5)
+        from app.services.kakao_search_service import KakaoSearchService
+        svc = KakaoSearchService()
+        if not svc.is_available():
+            return {"error": "KAKAO API 키 미설정", "engine": "kakao"}
+        result = await svc.search(query, count=count)
+        if result.error:
+            return {"error": result.error, "engine": "kakao"}
+        return {"text": result.text, "citations": result.citations, "engine": "kakao"}
 
     # ── AADS-186A 신규 워크플로우 도구 ──────────────────────────────────────
 
@@ -851,6 +1081,40 @@ class ToolExecutor:
                 "alternative": "web_search_brave로 간단한 검색을 시도하거나, deep_crawl로 크롤링 기반 분석을 할 수 있습니다.",
             }
 
+    # ── AADS-190 Phase2-A: 서브에이전트 ──────────────────────────────────────
+
+    async def _spawn_subagent(self, inp: Dict[str, Any]) -> Any:
+        """독립적 서브에이전트 실행 — 복잡한 작업을 분할 위임."""
+        task = inp.get("task", "")
+        if not task:
+            return {"error": "task 필수 — 서브에이전트에게 위임할 작업 설명을 입력하세요"}
+
+        from app.services.subagent_service import spawn_subagent
+        return await spawn_subagent(
+            task=task,
+            model=inp.get("model", "sonnet"),
+            system_prompt=inp.get("system_prompt"),
+            context=inp.get("context"),
+            enable_tools=inp.get("enable_tools", True),
+        )
+
+    async def _spawn_parallel_subagents(self, inp: Dict[str, Any]) -> Any:
+        """여러 서브에이전트를 병렬 실행 후 결과 취합."""
+        tasks = inp.get("tasks", [])
+        if not tasks:
+            return {"error": "tasks 필수 — [{task, model?, context?}, ...] 형태 리스트"}
+
+        from app.services.subagent_service import spawn_parallel_subagents
+        results = await spawn_parallel_subagents(
+            tasks=tasks,
+            max_concurrent=inp.get("max_concurrent", 5),
+        )
+        return {
+            "total": len(results),
+            "completed": sum(1 for r in results if r["status"] == "completed"),
+            "results": results,
+        }
+
     # ── AADS-159: 브라우저 도구 (Playwright — ceo_chat_tools 래퍼) ────────────
 
     async def _browser_navigate(self, inp: Dict[str, Any]) -> Any:
@@ -931,7 +1195,7 @@ _INTENT_TOOL_MAP: Dict[str, list] = {
     "health_check":        ["health_check"],
     "dashboard":           ["dashboard_query"],
     "diagnosis":           ["dashboard_query", "health_check"],
-    "search":              ["web_search_brave"],
+    "search":              ["web_search"],
     "memory_recall":       ["read_github_file", "query_database"],
     "directive_gen":       ["directive_create", "generate_directive"],
     "execute":             ["directive_create"],
@@ -962,6 +1226,12 @@ _INTENT_TOOL_MAP: Dict[str, list] = {
     # AADS-159: 브라우저 인텐트
     "browser":                ["browser_navigate", "browser_snapshot"],
     "browser_action":         ["browser_navigate", "browser_snapshot", "browser_screenshot"],
+    # AADS-190: 원격 쓰기/패치/실행/Git 인텐트
+    "code_modify":            ["read_remote_file", "write_remote_file", "patch_remote_file", "run_remote_command"],
+    "code_fix":               ["read_remote_file", "patch_remote_file", "run_remote_command"],
+    "deploy":                 ["run_remote_command", "git_remote_status", "git_remote_add", "git_remote_commit", "git_remote_push"],
+    "git_operation":          ["git_remote_status", "git_remote_add", "git_remote_commit", "git_remote_push", "git_remote_create_branch"],
+    "remote_execute":         ["run_remote_command", "read_remote_file"],
 }
 
 

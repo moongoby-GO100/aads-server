@@ -257,9 +257,73 @@ _SSH_SENSITIVE_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 _SSH_TIMEOUT = 10  # 초 (ConnectTimeout=5 + CommandTimeout=5)
+_SSH_WRITE_TIMEOUT = 15  # 쓰기 작업은 조금 더 여유
+_SSH_CMD_TIMEOUT = 30  # 원격 명령 실행 타임아웃
 _SSH_MAX_RESULT_BYTES = 50 * 1024  # 50KB
+_SSH_MAX_WRITE_BYTES = 1024 * 1024  # 1MB 쓰기 제한
 _SSH_MAX_FILES = 100
 _SSH_MAX_DEPTH = 5
+
+# run_remote_command 허용 명령 화이트리스트 (보안 하드코딩, LLM 우회 불가)
+_REMOTE_CMD_WHITELIST: List[str] = [
+    "systemctl restart",
+    "systemctl start",
+    "systemctl stop",
+    "systemctl status",
+    "docker restart",
+    "docker start",
+    "docker stop",
+    "docker ps",
+    "docker logs",
+    "pip install",
+    "pip list",
+    "python -m py_compile",
+    "python -c",
+    "pytest",
+    "cat /proc/meminfo",
+    "cat /proc/cpuinfo",
+    "df -h",
+    "free -m",
+    "ps aux",
+    "tail -n",
+    "head -n",
+    "wc -l",
+    "grep",
+    "find",
+    "ls",
+    "pwd",
+    "whoami",
+    "date",
+    "uptime",
+    "crontab -l",
+    # Git 명령 (AADS-190)
+    "git status",
+    "git log",
+    "git diff",
+    "git add",
+    "git commit",
+    "git push",
+    "git pull",
+    "git checkout",
+    "git branch",
+    "git stash",
+    "git show",
+    "git remote",
+]
+
+# run_remote_command 차단 패턴 (보안 하드코딩, LLM 우회 불가)
+_REMOTE_CMD_BLOCKED = re.compile(
+    r"(rm\s+-[rf]|mkfs|dd\s+if=|shutdown|halt|reboot|kill\s+-9\s+1\b"
+    r"|>\s*/dev/|chmod\s+[0-7]{3,4}\s+/|pkill\s+-9"
+    r"|DROP\s+(TABLE|DATABASE)|DELETE\s+FROM|TRUNCATE"
+    r"|curl.*\|.*sh|wget.*\|.*sh|bash\s+-c"
+    r"|\brm\b.*\s+/[a-z]"  # rm /anything 차단
+    r"|:(){:|fork\s*bomb"
+    r"|git\s+push\s+.*--force"  # force push 차단
+    r"|git\s+reset\s+--hard"  # hard reset 차단
+    r"|git\s+clean\s+-[fd])",  # clean 차단
+    re.IGNORECASE,
+)
 
 # ─── 보안 상수 ─────────────────────────────────────────────────────────────────
 _FILE_WHITELIST = "/root/aads/"
@@ -523,6 +587,253 @@ async def tool_read_remote_file(project: str, file_path: str) -> str:
         return f"[ERROR] SSH 타임아웃 ({_SSH_TIMEOUT}초): {server}"
     except Exception as e:
         return f"[ERROR] SSH 접속 실패: {e}"
+
+
+# ─── SSH 원격 쓰기 도구 함수 (AADS-190: write_remote_file, patch_remote_file, run_remote_command) ───
+
+
+async def tool_write_remote_file(project: str, file_path: str, content: str, backup: bool = True) -> str:
+    """원격 서버 파일 쓰기 (SSH, 자동 백업 포함). Yellow 등급."""
+    project = project.upper()
+    mapping = _PROJECT_SERVER_MAP.get(project)
+    if not mapping:
+        return f"[ERROR] 알 수 없는 프로젝트: {project}. 사용 가능: {', '.join(_PROJECT_SERVER_MAP.keys())}"
+
+    server = mapping["server"]
+    workdir = mapping["workdir"]
+
+    if not file_path:
+        return "[ERROR] file_path 필수"
+    if not content:
+        return "[ERROR] content 필수 (빈 파일 쓰기 차단)"
+
+    # 크기 제한
+    content_bytes = content.encode("utf-8")
+    if len(content_bytes) > _SSH_MAX_WRITE_BYTES:
+        return f"[ERROR] 파일 크기 초과: {len(content_bytes):,} bytes > 1MB 제한"
+
+    # 보안 검증 (읽기와 동일 경로 검증)
+    err = _validate_ssh_path(file_path, workdir)
+    if err:
+        return err
+
+    from posixpath import normpath, join as pjoin
+    resolved = normpath(pjoin(workdir, file_path))
+
+    # 추가 쓰기 보안: .env, .ssh, credentials 등 민감 파일 차단
+    _write_blocked = [".env", ".ssh/", "id_rsa", "id_ed25519", "credentials",
+                      "private_key", ".pem", ".key", "authorized_keys", ".netrc",
+                      ".aws/", ".kube/", ".docker/"]
+    for pattern in _write_blocked:
+        if pattern in resolved.lower():
+            return f"[ERROR] 민감 파일 쓰기 차단: {file_path}"
+
+    try:
+        # 1단계: 백업 (기존 파일이 있으면)
+        if backup:
+            backup_cmd = (
+                f"test -f {shlex.quote(resolved)} && "
+                f"cp {shlex.quote(resolved)} {shlex.quote(resolved + '.bak_aads')}"
+            )
+            proc = await asyncio.create_subprocess_exec(
+                "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                f"root@{server}", backup_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await asyncio.wait_for(proc.communicate(), timeout=_SSH_WRITE_TIMEOUT)
+
+        # 2단계: 디렉토리 생성 + 파일 쓰기 (stdin pipe)
+        from posixpath import dirname as pdirname
+        mkdir_and_cat = f"mkdir -p {shlex.quote(pdirname(resolved))} && cat > {shlex.quote(resolved)}"
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+            f"root@{server}", mkdir_and_cat,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(input=content_bytes), timeout=_SSH_WRITE_TIMEOUT
+        )
+        if proc.returncode != 0:
+            err_msg = stderr.decode("utf-8", errors="replace")[:500]
+            logger.error(f"ssh_write_remote_file_failed project={project} path={resolved} err={err_msg}")
+            return f"[ERROR] 파일 쓰기 실패: {err_msg}"
+
+        logger.info(f"write_remote_file OK | project={project} path={resolved} size={len(content_bytes)}")
+        backup_note = " (백업: .bak_aads)" if backup else ""
+        return f"[{project} 파일 쓰기 완료 — {resolved}] {len(content_bytes):,} bytes{backup_note}"
+
+    except asyncio.TimeoutError:
+        return f"[ERROR] SSH 쓰기 타임아웃 ({_SSH_WRITE_TIMEOUT}초): {server}"
+    except Exception as e:
+        return f"[ERROR] SSH 쓰기 실패: {e}"
+
+
+async def tool_patch_remote_file(project: str, file_path: str, old_string: str, new_string: str) -> str:
+    """원격 서버 파일 부분 수정 (diff 기반 패치). Yellow 등급.
+    old_string을 찾아 new_string으로 교체. 정확히 1개만 매치되어야 함."""
+    project = project.upper()
+    mapping = _PROJECT_SERVER_MAP.get(project)
+    if not mapping:
+        return f"[ERROR] 알 수 없는 프로젝트: {project}. 사용 가능: {', '.join(_PROJECT_SERVER_MAP.keys())}"
+
+    if not file_path:
+        return "[ERROR] file_path 필수"
+    if not old_string:
+        return "[ERROR] old_string 필수"
+    if old_string == new_string:
+        return "[ERROR] old_string과 new_string이 동일"
+
+    # 1단계: 현재 파일 읽기
+    current = await tool_read_remote_file(project, file_path)
+    if current.startswith("[ERROR]"):
+        return current
+
+    # read_remote_file 출력에서 헤더 제거하고 실제 내용만 추출
+    lines = current.split("\n", 1)
+    if len(lines) > 1 and lines[0].startswith(f"[{project}"):
+        file_content = lines[1]
+    else:
+        file_content = current
+
+    # 2단계: old_string 매치 확인
+    count = file_content.count(old_string)
+    if count == 0:
+        return f"[ERROR] old_string을 찾을 수 없음 (파일에 해당 문자열 없음)"
+    if count > 1:
+        return f"[ERROR] old_string이 {count}회 중복 발견. 더 구체적인 문자열 필요"
+
+    # 3단계: 교체 후 쓰기
+    patched_content = file_content.replace(old_string, new_string, 1)
+    result = await tool_write_remote_file(project, file_path, patched_content, backup=True)
+
+    if result.startswith("[ERROR]"):
+        return result
+
+    # 변경 요약
+    old_lines = old_string.count("\n") + 1
+    new_lines = new_string.count("\n") + 1
+    return f"[{project} 파일 패치 완료 — {file_path}] {old_lines}줄 → {new_lines}줄 교체\n{result}"
+
+
+async def tool_run_remote_command(project: str, command: str) -> str:
+    """원격 서버 명령 실행 (허용 명령 화이트리스트 기반). Yellow 등급."""
+    project = project.upper()
+    mapping = _PROJECT_SERVER_MAP.get(project)
+    if not mapping:
+        return f"[ERROR] 알 수 없는 프로젝트: {project}. 사용 가능: {', '.join(_PROJECT_SERVER_MAP.keys())}"
+
+    server = mapping["server"]
+    workdir = mapping["workdir"]
+
+    if not command or not command.strip():
+        return "[ERROR] command 필수"
+
+    command = command.strip()
+
+    # 보안 1: 차단 패턴 검사
+    if _REMOTE_CMD_BLOCKED.search(command):
+        logger.warning(f"run_remote_command BLOCKED | project={project} cmd={command[:120]}")
+        return f"[ERROR] 위험 명령 차단: {command[:80]}"
+
+    # 보안 2: 화이트리스트 검사 (명령 앞부분이 허용 목록에 있어야 함)
+    cmd_allowed = False
+    for allowed in _REMOTE_CMD_WHITELIST:
+        if command.startswith(allowed):
+            cmd_allowed = True
+            break
+    if not cmd_allowed:
+        logger.warning(f"run_remote_command WHITELIST_DENY | project={project} cmd={command[:120]}")
+        return (
+            f"[ERROR] 허용되지 않은 명령: {command[:80]}\n"
+            f"허용 명령 목록: {', '.join(sorted(set(c.split()[0] for c in _REMOTE_CMD_WHITELIST)))}"
+        )
+
+    # 보안 3: 파이프/리다이렉트/세미콜론 차단 (단일 명령만 허용)
+    if any(c in command for c in ["|", ";", "&&", "||", "`", "$(", ">>"]):
+        # 단, grep | head 같은 안전한 파이프는 허용
+        if "|" in command:
+            pipe_parts = command.split("|")
+            for part in pipe_parts[1:]:
+                part_cmd = part.strip().split()[0] if part.strip() else ""
+                if part_cmd not in ("head", "tail", "wc", "grep", "sort", "uniq"):
+                    return f"[ERROR] 파이프/체인 명령 차단 (보안): {command[:80]}"
+        else:
+            return f"[ERROR] 파이프/체인 명령 차단 (보안): {command[:80]}"
+
+    # 실행: workdir에서 명령 수행
+    full_cmd = f"cd {shlex.quote(workdir)} && {command}"
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+            f"root@{server}", full_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_SSH_CMD_TIMEOUT)
+        out = stdout.decode("utf-8", errors="replace")
+        err_out = stderr.decode("utf-8", errors="replace")
+
+        # 결과 크기 제한
+        if len(out.encode("utf-8")) > _SSH_MAX_RESULT_BYTES:
+            out = out[:_SSH_MAX_RESULT_BYTES] + "\n...(50KB 초과, 잘림)"
+
+        result_parts = [f"[{project} 명령 실행 — exit={proc.returncode}]"]
+        result_parts.append(f"$ {command}")
+        if out.strip():
+            result_parts.append(out.strip())
+        if err_out.strip() and proc.returncode != 0:
+            result_parts.append(f"[STDERR] {err_out.strip()[:2000]}")
+
+        logger.info(f"run_remote_command OK | project={project} cmd={command[:80]} exit={proc.returncode}")
+        return "\n".join(result_parts)
+
+    except asyncio.TimeoutError:
+        return f"[ERROR] SSH 명령 타임아웃 ({_SSH_CMD_TIMEOUT}초): {server}"
+    except Exception as e:
+        return f"[ERROR] SSH 명령 실행 실패: {e}"
+
+
+# ─── Git 쓰기 도구 함수 (AADS-190: git_add, git_commit, git_push) ────────────
+
+
+async def tool_git_remote_add(project: str, files: str = ".") -> str:
+    """원격 서버 git add (스테이징)."""
+    return await tool_run_remote_command(project, f"git add {files}")
+
+
+async def tool_git_remote_commit(project: str, message: str) -> str:
+    """원격 서버 git commit."""
+    if not message or not message.strip():
+        return "[ERROR] commit message 필수"
+    # 메시지에서 위험 문자 제거
+    safe_msg = message.replace("'", "\\'").replace('"', '\\"')[:200]
+    return await tool_run_remote_command(project, f'git commit -m "{safe_msg}"')
+
+
+async def tool_git_remote_push(project: str, branch: str = "") -> str:
+    """원격 서버 git push (force push 차단)."""
+    cmd = "git push"
+    if branch:
+        if not re.match(r'^[a-zA-Z0-9._/\-]+$', branch):
+            return "[ERROR] 브랜치명에 허용되지 않는 문자"
+        cmd += f" origin {branch}"
+    return await tool_run_remote_command(project, cmd)
+
+
+async def tool_git_remote_status(project: str) -> str:
+    """원격 서버 git status."""
+    return await tool_run_remote_command(project, "git status --short")
+
+
+async def tool_git_remote_create_branch(project: str, branch_name: str) -> str:
+    """원격 서버 새 브랜치 생성 및 체크아웃."""
+    if not branch_name or not re.match(r'^[a-zA-Z0-9._/\-]+$', branch_name):
+        return "[ERROR] 유효하지 않은 브랜치명"
+    return await tool_run_remote_command(project, f"git checkout -b {branch_name}")
 
 
 # ─── Browser 도구 함수 (AADS-159) ──────────────────────────────────────────────
