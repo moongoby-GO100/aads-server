@@ -155,24 +155,31 @@ async def _build_semantic_code_layer(
 
 # ─── Layer 3: 대화 히스토리 ────────────────────────────────────────────────
 
-COMPRESS_AFTER_TURNS = 5
+_OBSERVATION_WINDOW = 10  # 최근 10턴 도구 결과 유지, 이전은 마스킹
 
 def _build_layer3_messages(
     raw_messages: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """최근 20개 메시지, 5턴 이전 도구 결과 압축."""
+    """
+    대화 히스토리 구성 — Observation Masking 적용.
+    - 최근 _OBSERVATION_WINDOW 턴: 도구 결과 유지
+    - 이전 턴: 도구 결과를 플레이스홀더로 교체 (AI 추론/결정은 보존)
+    - JetBrains Research 근거: 도구 출력만 마스킹하는 것이 LLM 요약보다 비용 대비 동등+
+    """
     if not raw_messages:
         return []
 
-    messages = raw_messages[-20:]
+    # 전체 메시지 사용 (이전의 20개 제한 제거 — 무한 대화 지원)
+    messages = raw_messages
     result = []
 
     for i, msg in enumerate(messages):
         role = msg.get("role", "user")
         content = msg.get("content", "")
 
-        # 5턴 이전 메시지의 도구 결과 압축
-        if i < len(messages) - COMPRESS_AFTER_TURNS:
+        # _OBSERVATION_WINDOW 이전 메시지: 도구 결과 마스킹
+        if i < len(messages) - _OBSERVATION_WINDOW:
+            # 패턴 1: "[시스템 도구 조회 결과" 블록 마스킹
             if "[시스템 도구 조회 결과" in content:
                 lines = content.split("\n")
                 header_idx = next(
@@ -182,7 +189,28 @@ def _build_layer3_messages(
                     before = "\n".join(lines[:header_idx])
                     content = before + "\n[도구 결과 생략 — 이전 조회]"
 
+            # 패턴 2: 매우 긴 assistant 메시지 중 도구 raw 출력 부분 축소
+            if role == "assistant" and len(content) > 3000:
+                # JSON 블록이나 코드 블록이 대부분인 경우 축소
+                import re
+                content = re.sub(
+                    r'```[\s\S]{1500,}?```',
+                    lambda m: m.group(0)[:500] + f"\n... [{len(m.group(0))}자 코드 블록 생략]\n```",
+                    content
+                )
+
         result.append({"role": role, "content": content})
+
+    # 토큰 추정 및 추가 압축 (80K 초과 시)
+    try:
+        from app.services.context_compressor import estimate_tokens, mask_old_observations
+        total_est = estimate_tokens(result, "")
+        if total_est > 60000:
+            # 더 공격적인 observation masking
+            result = mask_old_observations(result, window=max(5, _OBSERVATION_WINDOW // 2))
+            logger.info(f"layer3_aggressive_masking: {total_est}t → window=5")
+    except Exception:
+        pass
 
     return result
 
@@ -231,6 +259,17 @@ async def build_messages_context(
 
     # Layer 3
     messages = _build_layer3_messages(raw_messages)
+
+    # 컨텍스트 크기 체크 — 80K 토큰 초과 시 구조화 요약 트리거
+    try:
+        from app.services.context_compressor import estimate_tokens, needs_structured_summary
+        _est = estimate_tokens(messages, system_prompt)
+        if needs_structured_summary(messages, system_prompt, threshold=80000):
+            logger.warning(f"context_builder: tokens={_est} > 80K, triggering structured summary")
+            from app.services.compaction_service import check_and_compact
+            messages = await check_and_compact(session_id, messages, db_conn=db_conn)
+    except Exception as e:
+        logger.debug(f"context_builder token check error: {e}")
 
     return messages, system_prompt
 

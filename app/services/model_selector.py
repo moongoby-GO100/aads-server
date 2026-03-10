@@ -189,11 +189,20 @@ async def _stream_anthropic(
     input_tokens = 0
     output_tokens = 0
 
-    # Tool Use 루프 (최대 5회)
+    # Tool Use 루프 (최대 20회 — 무한 대화 지원)
+    _MAX_TOOL_TURNS = int(os.getenv("MAX_TOOL_TURNS", "20"))
     current_messages = list(messages)
     tool_calls_made = []
+    _consecutive_yellow = 0  # Yellow 등급 도구 연속 호출 카운터
+    _YELLOW_TOOLS = {
+        "write_remote_file", "patch_remote_file", "run_remote_command",
+        "git_remote_add", "git_remote_commit", "git_remote_push",
+        "git_remote_create_branch", "deep_crawl", "deep_research",
+        "spawn_subagent", "spawn_parallel_subagents",
+    }
+    _YELLOW_CONSECUTIVE_LIMIT = 5
 
-    for _turn in range(5):
+    for _turn in range(_MAX_TOOL_TURNS):
         api_kwargs: Dict[str, Any] = {
             "model": model_id,
             "max_tokens": max_tokens,
@@ -201,7 +210,12 @@ async def _stream_anthropic(
             "messages": current_messages,
         }
         if tools:
-            api_kwargs["tools"] = tools
+            # 도구 정의 캐싱 (AADS-190: Prompt Caching 적용)
+            try:
+                from app.core.cache_config import build_cached_tools
+                api_kwargs["tools"] = build_cached_tools(tools)
+            except Exception:
+                api_kwargs["tools"] = tools
             # Layer ③: 인텐트별 동적 tool_choice (AADS-188C Phase 3 + Priority)
             # force_any: 반드시 도구 호출해야 하는 인텐트 (데이터 조회 필수)
             # auto: 도구 사용 여부를 AI가 판단 (대부분 인텐트)
@@ -273,6 +287,11 @@ async def _stream_anthropic(
 
         input_tokens = final_msg.usage.input_tokens
         output_tokens = final_msg.usage.output_tokens
+        # Prompt Caching 히트율 로깅
+        _cache_read = getattr(final_msg.usage, 'cache_read_input_tokens', 0) or 0
+        _cache_create = getattr(final_msg.usage, 'cache_creation_input_tokens', 0) or 0
+        if _cache_read or _cache_create:
+            logger.info(f"prompt_cache: read={_cache_read} create={_cache_create} input={input_tokens} turn={_turn}")
 
         # Tool Use 처리
         tool_use_blocks = [b for b in final_msg.content if b.type == "tool_use"]
@@ -285,6 +304,23 @@ async def _stream_anthropic(
 
         tool_results = []
         for tu in tool_use_blocks:
+            # Yellow 도구 연속 실행 제한 체크
+            if tu.name in _YELLOW_TOOLS:
+                _consecutive_yellow += 1
+            else:
+                _consecutive_yellow = 0
+
+            if _consecutive_yellow >= _YELLOW_CONSECUTIVE_LIMIT:
+                logger.warning(f"yellow_consecutive_limit: {_consecutive_yellow} calls, pausing for CEO confirm")
+                yield {
+                    "type": "yellow_limit",
+                    "content": f"쓰기 도구가 연속 {_consecutive_yellow}회 호출되었습니다. 계속 진행할까요?",
+                    "tool_name": tu.name,
+                    "consecutive_count": _consecutive_yellow,
+                }
+                # 제한 리셋 (경고 후 계속 진행 — 프론트에서 차단 UI 표시)
+                _consecutive_yellow = 0
+
             yield {
                 "type": "tool_use",
                 "tool_name": tu.name,
@@ -308,16 +344,23 @@ async def _stream_anthropic(
                 logger.warning(f"tool execution error: tool={tu.name} error={exc}")
                 result_str = json.dumps({"error": str(exc), "tool": tu.name})
 
+            # 도구 결과 자동 압축 (컨텍스트에 넣기 전)
+            try:
+                from app.services.context_compressor import compress_tool_output
+                compressed_str = compress_tool_output(tu.name, result_str)
+            except Exception:
+                compressed_str = result_str  # fallback: 원본 유지
+
             yield {
                 "type": "tool_result",
                 "tool_name": tu.name,
                 "tool_use_id": tu.id,
-                "content": result_str,
+                "content": result_str,  # 프론트에는 원본 전달
             }
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": tu.id,
-                "content": result_str,
+                "content": compressed_str,  # 컨텍스트에는 압축본
             })
 
         # 메시지에 AI 응답 + 도구 결과 추가

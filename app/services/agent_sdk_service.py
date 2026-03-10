@@ -19,8 +19,9 @@ logger = logging.getLogger(__name__)
 # ─── 환경 플래그 ───────────────────────────────────────────────────────────────
 
 AGENT_SDK_ENABLED: bool = os.getenv("AGENT_SDK_ENABLED", "true").lower() == "true"
-_MAX_TURNS: int = int(os.getenv("AGENT_SDK_MAX_TURNS", "100"))
-_MAX_BUDGET_USD: float = float(os.getenv("AGENT_SDK_MAX_BUDGET_USD", "50.0"))
+# 무한 대화 지원: 턴/예산 제한 제거 (0 = 무제한)
+_MAX_TURNS: int = int(os.getenv("AGENT_SDK_MAX_TURNS", "0"))
+_MAX_BUDGET_USD: float = float(os.getenv("AGENT_SDK_MAX_BUDGET_USD", "0"))
 _CWD: str = os.getenv("AGENT_SDK_CWD", "/root/aads")
 
 # ─── SDK 임포트 (graceful degradation) ────────────────────────────────────────

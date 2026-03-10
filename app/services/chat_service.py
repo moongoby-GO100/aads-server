@@ -418,16 +418,23 @@ async def send_message_stream(
         base_prompt = (sp_row["system_prompt"] if sp_row and sp_row["system_prompt"] else "")
         workspace_name = (sp_row["workspace_name"] if sp_row and sp_row["workspace_name"] else "CEO")
 
-        # 3. 세션 히스토리 조회 (최근 25개)
+        # 3. 세션 히스토리 조회 (무한 대화 — 전체 비압축 메시지, observation masking은 context_builder에서)
         hist_rows = await conn.fetch(
             """
             SELECT role, content FROM chat_messages
             WHERE session_id = $1 AND (is_compacted IS NULL OR is_compacted = false)
-            ORDER BY created_at DESC LIMIT 25
+            ORDER BY created_at DESC LIMIT 200
             """,
             sid,
         )
         raw_messages = [{"role": r["role"], "content": r["content"]} for r in reversed(hist_rows)]
+
+        # 세션 누적 비용 조회 (프론트엔드 표시용)
+        _session_cost_row = await conn.fetchrow(
+            "SELECT cost_total, message_count FROM chat_sessions WHERE id = $1", sid
+        )
+        _session_cost = float(_session_cost_row["cost_total"] or 0) if _session_cost_row else 0
+        _session_turns = int(_session_cost_row["message_count"] or 0) if _session_cost_row else 0
 
         # 4. 3계층 컨텍스트 빌드
         from app.services.context_builder import build_messages_context
@@ -787,6 +794,8 @@ async def send_message_stream(
                 yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event['tool_use_id']})}\n\n"
             elif etype == "tool_result":
                 yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': event['tool_name'], 'content': str(event.get('content', ''))[:5000]})}\n\n"
+            elif etype == "yellow_limit":
+                yield f"data: {json.dumps({'type': 'yellow_limit', 'content': event.get('content', ''), 'tool_name': event.get('tool_name', ''), 'consecutive_count': event.get('consecutive_count', 0)})}\n\n"
             elif etype == "done":
                 model_used = event.get("model", intent_result.model)
                 cost_usd = Decimal(str(event.get("cost", "0")))
@@ -880,7 +889,11 @@ async def send_message_stream(
         except Exception:
             pass
 
-        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None)})}\n\n"
+        # 누적 비용 업데이트
+        _session_cost += float(cost_usd)
+        _session_turns += 2  # user + assistant
+
+        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns})}\n\n"
 
     finally:
         await conn.close()
