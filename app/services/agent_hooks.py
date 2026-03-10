@@ -135,6 +135,23 @@ async def pre_tool_use_hook(
     if tool_name == "git_remote_push":
         logger.info(f"pre_tool_use: Yellow 도구 자동 승인 | tool={tool_name}")
 
+    # ── query_project_database SQL 검증 ──────────────────────────────────
+    if tool_name == "query_project_database":
+        query = ""
+        if isinstance(tool_input, dict):
+            query = tool_input.get("query", "") or ""
+        # validate_query 호출
+        try:
+            from app.api.ceo_chat_tools_db import validate_query
+            error = validate_query(query)
+            if error:
+                reason = f"프로젝트 DB 쿼리 차단: {error} | query={query[:120]}"
+                logger.warning(f"pre_tool_use: {reason}")
+                return {"behavior": "deny", "message": reason}
+        except ImportError:
+            pass
+        logger.info(f"pre_tool_use: Yellow 도구 자동 승인 | tool={tool_name} query={query[:80]}")
+
     # ── 안전 → 자동 승인 ─────────────────────────────────────────────────
     logger.debug(f"pre_tool_use: 자동 승인 | tool={tool_name}")
     return {"behavior": "allow"}

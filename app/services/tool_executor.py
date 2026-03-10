@@ -61,6 +61,8 @@ class ToolExecutor:
             "directive_create":       self._directive_create,
             "read_github_file":       self._read_github_file,
             "query_database":         self._query_database,
+            "query_project_database": self._query_project_database,
+            "list_project_databases": self._list_project_databases,
             "read_remote_file":       self._read_remote_file,
             "write_remote_file":      self._write_remote_file,
             "patch_remote_file":      self._patch_remote_file,
@@ -113,6 +115,11 @@ class ToolExecutor:
             # AADS-190 Phase2-A: 서브에이전트
             "spawn_subagent":         self._spawn_subagent,
             "spawn_parallel_subagents": self._spawn_parallel_subagents,
+            # AADS-190: 내보내기 + 스케줄러
+            "export_data":            self._export_data,
+            "schedule_task":          self._schedule_task,
+            "unschedule_task":        self._unschedule_task,
+            "list_scheduled_tasks":   self._list_scheduled_tasks,
         }
         fn = dispatch.get(tool_name)
         if fn is None:
@@ -227,6 +234,27 @@ class ToolExecutor:
                 return [dict(r) for r in rows]
             finally:
                 await conn.close()
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _query_project_database(self, inp: Dict[str, Any]) -> Any:
+        """프로젝트별 원격 DB SELECT 쿼리 (KIS/GO100/SF/NTV2). Yellow 등급."""
+        try:
+            from app.api.ceo_chat_tools_db import query_project_database
+            return await query_project_database(
+                project=inp.get("project", ""),
+                query=inp.get("query", ""),
+                limit=inp.get("limit", 100),
+                db_name=inp.get("db_name"),
+            )
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _list_project_databases(self, inp: Dict[str, Any]) -> Any:
+        """설정된 프로젝트 DB 목록 및 연결 상태."""
+        try:
+            from app.api.ceo_chat_tools_db import list_project_databases
+            return await list_project_databases()
         except Exception as e:
             return {"error": str(e)}
 
@@ -1114,6 +1142,64 @@ class ToolExecutor:
             "completed": sum(1 for r in results if r["status"] == "completed"),
             "results": results,
         }
+
+    # ── AADS-190: 내보내기 + 스케줄러 도구 ───────────────────────────────────
+
+    async def _export_data(self, inp: Dict[str, Any]) -> Any:
+        """데이터를 CSV/Excel/PDF로 내보내기. 쿼리 결과 또는 직접 데이터."""
+        try:
+            data = inp.get("data")
+            fmt = inp.get("format", "xlsx")
+            title = inp.get("title")
+            filename = inp.get("filename")
+
+            # data가 없으면 project+query로 자동 조회
+            if not data and inp.get("project") and inp.get("query"):
+                from app.api.ceo_chat_tools_db import query_project_database
+                result = await query_project_database(
+                    inp["project"], inp["query"], limit=inp.get("limit", 1000)
+                )
+                if result.get("error"):
+                    return result
+                data = result.get("rows", [])
+
+            if not data:
+                return {"error": "data 또는 project+query 필수"}
+
+            from app.api.ceo_chat_tools_export import export_data
+            return await export_data(data, fmt, filename, title)
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _schedule_task(self, inp: Dict[str, Any]) -> Any:
+        """예약 작업 등록. Yellow 등급."""
+        try:
+            from app.api.ceo_chat_tools_scheduler import schedule_task
+            return await schedule_task(
+                name=inp.get("name", ""),
+                schedule_type=inp.get("schedule_type", ""),
+                action_type=inp.get("action_type", ""),
+                action_config=inp.get("action_config", {}),
+                schedule_config=inp.get("schedule_config"),
+            )
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _unschedule_task(self, inp: Dict[str, Any]) -> Any:
+        """예약 작업 삭제. Yellow 등급."""
+        try:
+            from app.api.ceo_chat_tools_scheduler import unschedule_task
+            return await unschedule_task(name=inp.get("name", ""))
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _list_scheduled_tasks(self, inp: Dict[str, Any]) -> Any:
+        """등록된 예약 작업 목록."""
+        try:
+            from app.api.ceo_chat_tools_scheduler import list_scheduled_tasks
+            return await list_scheduled_tasks()
+        except Exception as e:
+            return {"error": str(e)}
 
     # ── AADS-159: 브라우저 도구 (Playwright — ceo_chat_tools 래퍼) ────────────
 

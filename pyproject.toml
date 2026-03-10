@@ -35,6 +35,10 @@ dependencies = [
     "psycopg[binary]>=3.2.0",
     "asyncpg>=0.29.0",
     "pgvector>=0.3.0",
+    # MySQL (SF/NTV2 원격 DB 접근, SSH 터널은 subprocess/openssh-client 사용)
+    "pymysql>=1.1.0",
+    # Excel 내보내기 (AADS-190)
+    "openpyxl>=3.1.0",
     # Redis
     "redis[hiredis]>=5.0.0",
     "upstash-redis>=1.0.0",

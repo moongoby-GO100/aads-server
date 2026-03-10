@@ -64,6 +64,12 @@ _TOOL_GRADES: Dict[str, str] = {
     # Green: 항상 허용 (읽기/조회 전용)
     "health_check":         "Green",
     "query_database":       "Green",
+    "query_project_database": "Yellow",
+    "list_project_databases":  "Green",
+    "export_data":             "Yellow",
+    "schedule_task":           "Yellow",
+    "unschedule_task":         "Yellow",
+    "list_scheduled_tasks":    "Green",
     "read_remote_file":     "Green",
     "list_remote_dir":      "Green",
     "cost_report":          "Green",
@@ -128,8 +134,12 @@ def _build_aads_sdk_tools() -> list:
     tools = [
         _wrap("health_check",   "서버 68 및 6개 서비스 헬스체크",
               {"server": str}),
-        _wrap("query_database", "PostgreSQL SELECT 쿼리 실행 (읽기 전용)",
+        _wrap("query_database", "PostgreSQL SELECT 쿼리 실행 (읽기 전용, AADS 내부 DB)",
               {"query": str, "limit": int}),
+        _wrap("query_project_database", "프로젝트별 원격 DB SELECT 쿼리 (KIS/GO100/SF/NTV2)",
+              {"project": str, "query": str, "limit": int}),
+        _wrap("list_project_databases", "프로젝트 DB 목록 및 연결 상태 조회",
+              {}),
         _wrap("read_remote_file", "원격 서버(68/211/114) 파일 읽기",
               {"path": str, "server": str}),
         _wrap("list_remote_dir", "원격 서버 디렉토리 파일 목록",
@@ -173,6 +183,15 @@ def _build_aads_sdk_tools() -> list:
               {"task": str, "model": str, "context": str, "enable_tools": bool}),
         _wrap("spawn_parallel_subagents", "여러 서브에이전트를 병렬 실행 후 결과 취합 (Yellow)",
               {"tasks": list, "max_concurrent": int}),
+        # AADS-190: 내보내기 + 스케줄러
+        _wrap("export_data", "데이터를 Excel/CSV/PDF로 내보내기 — 다운로드 링크 제공 (Yellow)",
+              {"data": list, "project": str, "query": str, "format": str, "title": str}),
+        _wrap("schedule_task", "예약 작업 등록 — cron/interval/once (Yellow)",
+              {"name": str, "schedule_type": str, "action_type": str, "action_config": dict}),
+        _wrap("unschedule_task", "예약 작업 삭제 (Yellow)",
+              {"name": str}),
+        _wrap("list_scheduled_tasks", "예약 작업 목록 조회",
+              {}),
     ]
 
     logger.debug(f"_build_aads_sdk_tools: {len(tools)}개 도구 생성")

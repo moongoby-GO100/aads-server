@@ -22,6 +22,8 @@ _DEFER_LOADING: Dict[str, bool] = {
     "check_directive_status": False,
     "read_remote_file": False,           # 코드 분석 1순위 — 상시 로드
     "query_database": False,             # DB 조회 2순위 — 상시 로드
+    "query_project_database": False,     # 프로젝트 DB 조회 — 상시 로드
+    "list_project_databases": True,      # DB 목록 — 온디맨드
     "task_history": False,               # 작업 현황 — 빈번 조회
     "list_remote_dir": False,            # 파일 탐색 — 빈번 사용
     "dashboard_query": True,
@@ -62,6 +64,11 @@ _DEFER_LOADING: Dict[str, bool] = {
     # ── 기타 ─────────────────────────────────────────────────────────────
     "code_execution": True,
     "observe": True,
+    # ── AADS-190: 내보내기 + 스케줄러 ──────────────────────────────────
+    "export_data": True,              # 온디맨드
+    "schedule_task": True,            # 온디맨드
+    "unschedule_task": True,
+    "list_scheduled_tasks": True,
 }
 
 # 도구 카테고리 안내 (시스템 프롬프트 주입용 — context_builder.py에서 사용)
@@ -71,7 +78,8 @@ TOOL_CATEGORY_GUIDE = """\
 ### 🔴 Tier 1 — 즉시 사용 (내부 데이터, 무료, <3초) ★ 최우선
 - read_remote_file: 원격 서버 소스 코드/설정 읽기 — 코드 분석 1순위
 - list_remote_dir: 원격 디렉터리 탐색/검색
-- query_database: PostgreSQL SELECT — 데이터 확인 2순위
+- query_database: PostgreSQL SELECT — 데이터 확인 2순위 (AADS 내부 DB)
+- query_project_database: 프로젝트별 원격 DB SELECT — KIS/GO100/SF/NTV2
 - health_check: 서버 헬스체크
 - get_all_service_status: 6개 서비스 상태 병렬 조회
 - check_directive_status: 지시사항 진행 종합 확인
@@ -119,6 +127,10 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
     "all_service_status": ["get_all_service_status"],
     "cost_report":        ["cost_report"],
     "dashboard":          ["dashboard_query"],
+    "database_query":     ["query_project_database", "query_database"],
+    "project_db":         ["query_project_database", "list_project_databases"],
+    "export":             ["export_data"],
+    "scheduler":          ["schedule_task", "list_scheduled_tasks"],
     "task_history":       ["task_history"],
     # Tier 2: 분석 인텐트
     "cto_code_analysis":  ["read_remote_file"],         # 소스 코드 우선
@@ -316,6 +328,139 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             },
         ],
         "allowed_callers": ["code_execution_20250825"],
+    },
+    "query_project_database": {
+        "name": "query_project_database",
+        "description": "프로젝트별 원격 DB에 SELECT 쿼리를 실행합니다. KIS(주식자동매매), GO100, SF, NTV2 프로젝트의 PostgreSQL DB에 직접 접근. SELECT/WITH/EXPLAIN만 허용, 민감 컬럼 자동 마스킹.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "프로젝트명. KIS(주식자동매매), GO100, SF, NTV2 중 하나.",
+                    "enum": ["KIS", "GO100", "SF", "NTV2"],
+                },
+                "query": {
+                    "type": "string",
+                    "description": "실행할 SELECT SQL 쿼리 (최대 2000자). SELECT/WITH/EXPLAIN만 허용.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "반환할 최대 행 수 (기본 100, 최대 1000)",
+                    "default": 100,
+                },
+                "db_name": {
+                    "type": "string",
+                    "description": "DB 이름 (미지정 시 프로젝트 메인 DB 사용)",
+                },
+            },
+            "required": ["project", "query"],
+        },
+        "input_examples": [
+            {"project": "KIS", "query": "SELECT count(*) FROM users"},
+            {"project": "KIS", "query": "SELECT id, username, created_at FROM users ORDER BY created_at DESC LIMIT 10"},
+            {"project": "KIS", "query": "SELECT symbol, side, qty, price, status FROM auto_trade_orders WHERE created_at > now() - interval '1 day' ORDER BY created_at DESC", "limit": 50},
+        ],
+    },
+    "list_project_databases": {
+        "name": "list_project_databases",
+        "description": "설정된 프로젝트 DB 목록과 연결 상태를 조회합니다. 어떤 프로젝트 DB가 사용 가능한지 확인할 때 사용.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+        "input_examples": [{}],
+    },
+    # ── AADS-190: 내보내기 도구 ────────────────────────────────────────────
+    "export_data": {
+        "name": "export_data",
+        "description": "데이터를 Excel/CSV/PDF 파일로 내보내 다운로드 링크를 제공합니다. 직접 데이터 전달 또는 project+query로 자동 조회 가능.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "array",
+                    "description": "내보낼 데이터 (dict 배열). project+query 지정 시 생략 가능.",
+                    "items": {"type": "object"},
+                },
+                "project": {
+                    "type": "string",
+                    "description": "data 없을 때 자동 조회할 프로젝트 (KIS/GO100/SF/NTV2)",
+                    "enum": ["KIS", "GO100", "SF", "NTV2"],
+                },
+                "query": {
+                    "type": "string",
+                    "description": "data 없을 때 자동 조회할 SELECT 쿼리",
+                },
+                "format": {
+                    "type": "string",
+                    "description": "출력 포맷: csv, xlsx(기본), pdf",
+                    "enum": ["csv", "xlsx", "pdf"],
+                    "default": "xlsx",
+                },
+                "title": {"type": "string", "description": "파일 제목 (선택)"},
+                "filename": {"type": "string", "description": "파일명 (선택, 자동 생성)"},
+                "limit": {"type": "integer", "description": "쿼리 최대 행 수 (기본 1000)", "default": 1000},
+            },
+        },
+        "input_examples": [
+            {"project": "KIS", "query": "SELECT id, email, is_active FROM users", "format": "xlsx", "title": "KIS 사용자 목록"},
+            {"project": "KIS", "query": "SELECT symbol, side, qty, price, status FROM orders ORDER BY created_at DESC", "format": "csv"},
+            {"data": [{"name": "A", "value": 100}, {"name": "B", "value": 200}], "format": "xlsx"},
+        ],
+    },
+    # ── AADS-190: 스케줄러 도구 ────────────────────────────────────────────
+    "schedule_task": {
+        "name": "schedule_task",
+        "description": "예약 작업을 등록합니다. 매일/매주/주기적 서버 점검, DB 조회, URL 체크 등을 예약. 결과는 텔레그램으로 알림.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "작업 이름 (고유 ID)"},
+                "schedule_type": {
+                    "type": "string",
+                    "description": "스케줄 유형: cron(반복), interval(주기), once(1회)",
+                    "enum": ["cron", "interval", "once"],
+                },
+                "action_type": {
+                    "type": "string",
+                    "description": "실행 유형: remote_command, health_check, db_query, url_check",
+                    "enum": ["remote_command", "health_check", "db_query", "url_check"],
+                },
+                "action_config": {
+                    "type": "object",
+                    "description": "실행 설정. remote_command: {project, command}, db_query: {project, query}, url_check: {url}",
+                },
+                "schedule_config": {
+                    "type": "object",
+                    "description": "스케줄 설정. cron: {hour, minute, day_of_week}, interval: {minutes 또는 hours}, once: {delay_minutes}",
+                },
+            },
+            "required": ["name", "schedule_type", "action_type", "action_config"],
+        },
+        "input_examples": [
+            {"name": "매일아침서버점검", "schedule_type": "cron", "action_type": "health_check", "action_config": {}, "schedule_config": {"hour": 9, "minute": 0}},
+            {"name": "KIS디스크체크", "schedule_type": "interval", "action_type": "remote_command", "action_config": {"project": "KIS", "command": "df -h"}, "schedule_config": {"hours": 6}},
+            {"name": "1회테스트", "schedule_type": "once", "action_type": "url_check", "action_config": {"url": "https://aads.newtalk.kr"}, "schedule_config": {"delay_minutes": 5}},
+        ],
+    },
+    "unschedule_task": {
+        "name": "unschedule_task",
+        "description": "등록된 예약 작업을 삭제합니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "삭제할 작업 이름"},
+            },
+            "required": ["name"],
+        },
+        "input_examples": [{"name": "매일아침서버점검"}],
+    },
+    "list_scheduled_tasks": {
+        "name": "list_scheduled_tasks",
+        "description": "등록된 예약 작업 목록과 다음 실행 시간을 조회합니다.",
+        "input_schema": {"type": "object", "properties": {}},
+        "input_examples": [{}],
     },
     "read_remote_file": {
         "name": "read_remote_file",
@@ -1195,7 +1340,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
-    "action": ["directive_create", "read_github_file", "query_database", "read_remote_file", "list_remote_dir", "cost_report"],
+    "action": ["directive_create", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task"],
     "search": ["web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
