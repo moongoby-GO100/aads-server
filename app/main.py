@@ -18,6 +18,7 @@ from app.api.ceo_chat import router as ceo_chat_router
 from app.api.directives import router as directives_router
 from app.api.watchdog import router as watchdog_router
 from app.api.approval import router as approval_router
+from app.api.briefing import router as briefing_router
 from app.api.documents import router as documents_router
 from app.api.ops import router as ops_router
 from app.api.lessons import router as lessons_router
@@ -132,6 +133,12 @@ async def lifespan(app: FastAPI):
             id="weekly_briefing",
         )
         scheduler.start()
+        # AADS-190: 스케줄러 인스턴스를 동적 스케줄 도구에 공유
+        try:
+            from app.api.ceo_chat_tools_scheduler import set_scheduler
+            set_scheduler(scheduler)
+        except Exception:
+            pass
         logger.info("apscheduler_started", jobs=["alert_eval", "daily_summary", "weekly_briefing"])
     except Exception as e:
         logger.warning("apscheduler_start_failed_graceful_degradation", error=str(e))
@@ -240,7 +247,6 @@ app.include_router(strategy_router, prefix="/api/v1", tags=["strategy"])
 app.include_router(plans_router, prefix="/api/v1", tags=["plans"])
 app.include_router(debate_logs_router, prefix="/api/v1", tags=["debate-logs"])
 app.include_router(artifacts_router, prefix="/api/v1", tags=["artifacts"])
-app.include_router(chat_v2_router, prefix="/api/v1", tags=["chat-v2"])
-
-# AADS-186C: FastAPI-MCP 마운트 (graceful — MCP_ENABLED=false 시 비활성)
+app.include_router(briefing_router, prefix="/api/v1", tags=["briefing"])
+app.include_router(chat_v2_router, prefix="/api/v1", tags=["chat-v2"])# AADS-186C: FastAPI-MCP 마운트 (graceful — MCP_ENABLED=false 시 비활성)
 setup_mcp(app)
