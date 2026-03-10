@@ -27,14 +27,8 @@ _MAX_CHUNK_SIZE = 1500       # 청크당 최대 문자 수
 _EMBED_BATCH_SIZE = 50       # Gemini API 배치 크기
 _MAX_FILES_PER_PROJECT = 300  # 프로젝트당 최대 파일 수
 
-# 프로젝트 → 서버 정보 매핑 (code_explorer_service.py 와 동일)
-_PROJECT_MAP: Dict[str, Dict[str, str]] = {
-    "KIS":   {"host": "211.188.51.113", "workdir": "/root/webapp", "lang": "python"},
-    "GO100": {"host": "211.188.51.113", "workdir": "/root/go100",            "lang": "python"},
-    "SF":    {"host": "116.120.58.155", "workdir": "/data/shortflow",        "lang": "python"},
-    "NTV2":  {"host": "116.120.58.155", "workdir": "/srv/newtalk-v2",        "lang": "php"},
-    "AADS":  {"host": "localhost",      "workdir": "/root/aads/aads-server",  "lang": "python"},
-}
+# 프로젝트 → 서버 정보 (중앙 설정에서 import)
+from app.core.project_config import PROJECT_MAP as _PROJECT_MAP
 
 _SUPPORTED_EXTS: Dict[str, List[str]] = {
     "python":     [".py"],
@@ -172,7 +166,7 @@ class CodeIndexerService:
         info = _PROJECT_MAP.get(project)
         if not info:
             return []
-        host = info["host"]
+        host = info["server"]
         workdir = info["workdir"]
         lang = info.get("lang", "python")
         exts = _SUPPORTED_EXTS.get(lang, [".py"])
@@ -394,7 +388,7 @@ class CodeIndexerService:
             result.error = f"미지원 프로젝트: {project}. 지원: {list(_PROJECT_MAP)}"
             return result
 
-        host = info["host"]
+        host = info["server"]
         workdir = info["workdir"]
         lang = info.get("lang", "python")
 
@@ -463,7 +457,7 @@ class CodeIndexerService:
             result.error = f"미지원 프로젝트: {project}"
             return result
 
-        host = info["host"]
+        host = info["server"]
         workdir = info["workdir"]
         lang = info.get("lang", "python")
         result.files_scanned = len(changed_files)

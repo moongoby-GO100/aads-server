@@ -238,12 +238,10 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
 ]
 
-# ─── SSH 원격 접근 상수 (AADS-165, 하드코딩 — LLM 우회 불가) ─────────────────
+# ─── SSH 원격 접근 상수 (중앙 설정에서 import, AADS-165) ──────────────────────
+from app.core.project_config import PROJECT_MAP as _PROJECT_MAP_FULL, REMOTE_PROJECTS
 _PROJECT_SERVER_MAP: Dict[str, Dict[str, str]] = {
-    "KIS":  {"server": "211.188.51.113", "workdir": "/root/webapp"},
-    "GO100": {"server": "211.188.51.113", "workdir": "/root/go100"},
-    "SF":   {"server": "116.120.58.155", "workdir": "/data/shortflow"},
-    "NTV2": {"server": "116.120.58.155", "workdir": "/srv/newtalk-v2"},
+    k: v for k, v in _PROJECT_MAP_FULL.items() if k in REMOTE_PROJECTS
 }
 
 # SSH 보안 규칙 (하드코딩, LLM 우회 불가)

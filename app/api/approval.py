@@ -291,12 +291,8 @@ async def _run_claude_code(instruction: str, target_server: str) -> dict:
     try:
         claude_cmd = f'claude -p "{instruction}" --allowedTools "Bash,Write,Read" --max-turns 20'
 
-        if target_server == "68":
-            work_dir = "/root/aads/aads-server"
-        elif target_server == "211":
-            work_dir = "/root/webapp"
-        else:
-            work_dir = "/root"
+        from app.core.project_config import get_server_by_number
+        work_dir = get_server_by_number(target_server).get("workdir", "/root")
 
         result = subprocess.run(
             claude_cmd,

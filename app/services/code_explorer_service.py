@@ -17,16 +17,8 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# 프로젝트 → 서버 정보 매핑 (server_registry.py 연동)
-_PROJECT_MAP: Dict[str, Dict[str, str]] = {
-    "KIS": {"host": "211.188.51.113", "workdir": "/root/webapp", "lang": "python"},
-    "GO100": {"host": "211.188.51.113", "workdir": "/root/go100", "lang": "python"},
-    "SF": {"host": "116.120.58.155", "workdir": "/data/shortflow", "lang": "python"},
-    "NTV2": {"host": "116.120.58.155", "workdir": "/srv/newtalk-v2", "lang": "php"},
-    "AADS": {"host": "localhost", "workdir": "/root/aads/aads-server", "lang": "python"},
-}
-
-_ALL_PROJECTS = list(_PROJECT_MAP.keys())
+# 프로젝트 → 서버 정보 (중앙 설정에서 import)
+from app.core.project_config import PROJECT_MAP as _PROJECT_MAP, ALL_PROJECTS as _ALL_PROJECTS
 
 
 # ─── 결과 데이터클래스 ──────────────────────────────────────────────────────
@@ -141,7 +133,7 @@ class CodeExplorerService:
             file_path = entry_point
             func_name = ""
 
-        host = info["host"]
+        host = info["server"]
         workdir = info["workdir"]
         lang = info["lang"]
 
@@ -372,7 +364,7 @@ class CodeExplorerService:
         if not info:
             return ChangeReport(error=f"미지원 프로젝트: {project}")
 
-        host = info["host"]
+        host = info["server"]
         workdir = info["workdir"]
 
         # git log
@@ -574,7 +566,7 @@ class CodeExplorerService:
         """단일 프로젝트 검색 (CKP + 파일 그렙)."""
         matches: List[Dict[str, Any]] = []
         info = _PROJECT_MAP.get(project, {})
-        host = info.get("host", "")
+        host = info.get("server", "")
         workdir = info.get("workdir", "")
 
         # 1. CKP CODEBASE-MAP 검색
