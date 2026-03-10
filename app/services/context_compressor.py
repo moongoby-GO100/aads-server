@@ -211,7 +211,7 @@ def _mask_tool_result_content(
 
 def mask_old_observations(
     messages: List[Dict[str, Any]],
-    window: int = 10,
+    window: int = 20,
 ) -> List[Dict[str, Any]]:
     """Mask tool_result content outside the most recent sliding window.
 

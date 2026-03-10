@@ -479,9 +479,8 @@ async def send_message_stream(
             except Exception as _sce:
                 logger.debug(f"[188E] 시맨틱 코드 검색 컨텍스트 주입 실패 (무시): {_sce}")
 
-        # 5. 자동 압축 (20턴 초과 시)
-        from app.services.compaction_service import check_and_compact
-        messages = await check_and_compact(session_id, messages, db_conn=conn)
+        # 5. 자동 압축은 context_builder.build_messages_context() 내에서 토큰 기반으로 트리거됨
+        # (80K 토큰 초과 시 compaction_service.check_and_compact 자동 호출)
 
         # 6. 인텐트 분류 + 모델/도구 결정
         from app.services.intent_router import classify, get_model_for_override
