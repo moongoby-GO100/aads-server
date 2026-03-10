@@ -32,9 +32,8 @@ _PROJECT_MAP: Dict[str, Dict[str, str]] = {
     "KIS":   {"host": "211.188.51.113", "workdir": "/root/webapp", "lang": "python"},
     "GO100": {"host": "211.188.51.113", "workdir": "/root/go100",            "lang": "python"},
     "SF":    {"host": "116.120.58.155", "workdir": "/data/shortflow",        "lang": "python"},
-    "NTV2":  {"host": "116.120.58.155", "workdir": "/var/www/newtalk",       "lang": "php"},
+    "NTV2":  {"host": "116.120.58.155", "workdir": "/srv/newtalk-v2",        "lang": "php"},
     "AADS":  {"host": "localhost",      "workdir": "/root/aads/aads-server",  "lang": "python"},
-    "NAS":   {"host": "116.120.58.155", "workdir": "/data/nas",              "lang": "python"},
 }
 
 _SUPPORTED_EXTS: Dict[str, List[str]] = {

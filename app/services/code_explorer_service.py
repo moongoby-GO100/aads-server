@@ -24,7 +24,6 @@ _PROJECT_MAP: Dict[str, Dict[str, str]] = {
     "SF": {"host": "116.120.58.155", "workdir": "/data/shortflow", "lang": "python"},
     "NTV2": {"host": "116.120.58.155", "workdir": "/srv/newtalk-v2", "lang": "php"},
     "AADS": {"host": "localhost", "workdir": "/root/aads/aads-server", "lang": "python"},
-    "NAS": {"host": "116.120.58.155", "workdir": "/data/nas", "lang": "python"},
 }
 
 _ALL_PROJECTS = list(_PROJECT_MAP.keys())

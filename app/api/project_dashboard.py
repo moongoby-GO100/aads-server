@@ -35,25 +35,25 @@ PROJECTS_META = {
     "kis_v41": {
         "name": "KIS-V41 자동매매",
         "manager": "KIS_MGR",
-        "server": "68",
+        "server": "211",
         "category": "project:kis_v41",
     },
     "shortflow": {
         "name": "ShortFlow 숏폼",
         "manager": "SF_MGR",
-        "server": "68",
+        "server": "114",
         "category": "project:shortflow",
     },
     "nas": {
         "name": "NAS 스토리지",
         "manager": "NAS_MGR",
-        "server": "68",
+        "server": "114",
         "category": "project:nas",
     },
     "newtalk_v2": {
         "name": "NewTalk-V2",
         "manager": "NT_MGR",
-        "server": "68",
+        "server": "114",
         "category": "project:newtalk_v2",
     },
     "aads": {
