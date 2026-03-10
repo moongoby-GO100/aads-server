@@ -108,9 +108,13 @@ async def with_background_completion(
                 _active_bg_tasks.pop(session_id, None)
                 logger.info(f"bg_completion_done session={session_id}")
 
-        if session_id not in _active_bg_tasks:
-            task = _heartbeat_asyncio.create_task(_continue())
-            _active_bg_tasks[session_id] = task
+        # 기존 백그라운드 태스크가 있으면 취소 후 교체 (응답 유실 방지)
+        old_task = _active_bg_tasks.pop(session_id, None)
+        if old_task and not old_task.done():
+            old_task.cancel()
+            logger.info(f"bg_task_replaced session={session_id}")
+        task = _heartbeat_asyncio.create_task(_continue())
+        _active_bg_tasks[session_id] = task
     except Exception as e:
         logger.error(f"with_background_completion error: {e}")
         raise
