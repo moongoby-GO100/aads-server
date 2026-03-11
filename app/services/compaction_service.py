@@ -290,8 +290,8 @@ async def _summarize(messages: List[Dict[str, Any]]) -> str:
 async def _merge_summaries(existing_summary: str, new_summary: str) -> str:
     """기존 압축 요약과 새 요약을 증분 병합 (append 우선 전략).
 
-    8000자 이하: 기존 요약 보존 + 새 요약 append (LLM 호출 없음, 정보 손실 방지)
-    8000자 초과: LLM 병합 (강화된 보존 규칙 적용)
+    12000자 이하: 기존 요약 보존 + 새 요약 append (LLM 호출 없음, 정보 손실 방지)
+    12000자 초과: LLM 병합 (강화된 보존 규칙 적용)
     """
     # #21: append되는 새 요약 최대 3000자 제한
     if len(new_summary) > 3000:
@@ -338,7 +338,7 @@ async def _merge_summaries(existing_summary: str, new_summary: str) -> str:
     except Exception as e:
         logger.warning(f"compaction_service merge error: {e}")
         # 병합 실패 시 append 결과라도 반환 (새 요약만 반환하는 것보다 나음)
-        return combined[:8000]
+        return combined[:12000]
 
 
 async def _sync_to_observations(db_conn, session_id: str, summary: str) -> None:

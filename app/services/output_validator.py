@@ -8,10 +8,12 @@ AADS-188C Phase 3: Output Validator — 빈 약속 응답 탐지 및 재시도.
   EMPTY_PROMISE     — 행동 없이 "하겠습니다"로 끝나는 응답
   NO_TOOL_FOR_ACTION — 도구 호출 없이 행동을 약속하는 응답
   TOO_SHORT         — 도구 결과 없이 극단적으로 짧은 응답
+  UNVERIFIED_COUNT  — 도구 호출 없이 DB 수치/건수를 보고하는 응답 (경고)
 """
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -121,4 +123,52 @@ def validate_response(
             ),
         )
 
+    # ── UNVERIFIED_COUNT: 도구 호출 없이 수치/건수 보고 (경고만, 차단 안 함) ──
+    _warn = check_unverified_counts(stripped, tools_called)
+    if _warn:
+        logger.warning(f"[OutputValidator] {_warn.message}")
+
     return _OK
+
+
+# ─── 수치 환각 감지 (경고 전용) ──────────────────────────────────────────────
+
+# DB 건수/수량을 나타내는 패턴: "50건", "120개", "총 30", "약 200건" 등
+_COUNT_PATTERN = re.compile(
+    r'(?:총\s*|약\s*)?(\d{1,6})\s*(?:건|개|행|row|rows|개의|건의)',
+    re.IGNORECASE,
+)
+
+
+def check_unverified_counts(
+    response_text: str,
+    tools_called: bool,
+) -> Optional[ValidationResult]:
+    """
+    도구 호출 없이 DB 수치/건수를 보고하는 응답을 탐지한다.
+    차단하지 않고 경고 로그만 남긴다 (is_valid=True).
+
+    Returns:
+        ValidationResult with violation_type="UNVERIFIED_COUNT" if detected, else None
+    """
+    if tools_called:
+        return None
+
+    matches = _COUNT_PATTERN.findall(response_text)
+    if not matches:
+        return None
+
+    # 숫자 1~2 같은 소규모 수치는 일반 대화일 가능성이 높으므로 무시
+    significant = [m for m in matches if int(m) >= 3]
+    if not significant:
+        return None
+
+    return ValidationResult(
+        is_valid=True,  # 경고만, 차단하지 않음
+        violation_type="UNVERIFIED_COUNT",
+        message=(
+            f"도구 미호출 상태에서 수치 보고 감지: "
+            f"{', '.join(significant)} — 환각 가능성 경고"
+        ),
+        retry_prompt="",  # 차단하지 않으므로 재시도 프롬프트 없음
+    )

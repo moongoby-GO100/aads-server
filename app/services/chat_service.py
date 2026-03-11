@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -390,6 +391,12 @@ async def _save_message(
     tools_called: Optional[List[str]] = None,
     thinking_summary: Optional[str] = None,
 ) -> Dict[str, Any]:
+    # Strip raw XML tool-call / tool-response blocks from assistant messages
+    if role == "assistant" and content:
+        content = re.sub(r'<function_calls>.*?</function_calls>', '', content, flags=re.DOTALL)
+        content = re.sub(r'<function_response>.*?</function_response>', '', content, flags=re.DOTALL)
+        content = content.strip()
+
     # AADS-CRITICAL-FIX #2: INSERT + UPDATE를 트랜잭션으로 감싸 message_count 정합성 보장
     async with conn.transaction():
         row = await conn.fetchrow(
