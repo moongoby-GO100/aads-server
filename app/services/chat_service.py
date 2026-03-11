@@ -474,7 +474,8 @@ async def _save_and_update_session(
 
 
 # ── 재귀 방지 플래그: trigger_ai_reaction → send_message_stream → tool → trigger 무한 루프 차단 ──
-_ai_reaction_active: set[str] = set()  # session_id 집합
+import time as _time
+_ai_reaction_active: dict[str, float] = {}  # session_id → timestamp
 
 
 async def trigger_ai_reaction(
@@ -495,10 +496,15 @@ async def trigger_ai_reaction(
     import asyncio as _asyncio
 
     # 재귀 방지: 이미 이 세션에서 AI 반응이 진행 중이면 스킵
+    # TTL 기반 만료: 5분 이상 된 항목 자동 정리 (크래시 잔류 방지)
+    now = _time.time()
+    expired = [k for k, v in _ai_reaction_active.items() if now - v > 300]
+    for k in expired:
+        _ai_reaction_active.pop(k, None)
     if session_id in _ai_reaction_active:
         logger.info(f"trigger_ai_reaction: skipped (already active) session={session_id[:8]}...")
         return
-    _ai_reaction_active.add(session_id)
+    _ai_reaction_active[session_id] = now
 
     # ContextVar 설정 (백그라운드 task에서도 session_id 사용 가능하도록)
     from app.services.tool_executor import current_chat_session_id
@@ -523,14 +529,14 @@ async def trigger_ai_reaction(
         except Exception as e:
             logger.warning(f"trigger_ai_reaction error session={session_id}: {e}")
         finally:
-            _ai_reaction_active.discard(session_id)
+            _ai_reaction_active.pop(session_id, None)
 
     try:
         loop = _asyncio.get_running_loop()
         loop.create_task(_consume_stream())
         logger.info(f"trigger_ai_reaction: triggered for session={session_id[:8]}...")
     except RuntimeError:
-        _ai_reaction_active.discard(session_id)
+        _ai_reaction_active.pop(session_id, None)
         logger.error("trigger_ai_reaction: no running event loop")
 
 
@@ -1195,19 +1201,20 @@ async def delete_message_and_response(message_id: str) -> int:
         if next_ai:
             ids_to_delete.append(next_ai["id"])
 
-        deleted = await conn.execute(
-            "DELETE FROM chat_messages WHERE id = ANY($1::uuid[])",
-            ids_to_delete,
-        )
-        count = int(deleted.split()[-1])
-
-        # message_count 갱신
-        if count > 0:
-            await conn.execute(
-                "UPDATE chat_sessions SET message_count = GREATEST(message_count - $2, 0), updated_at = NOW() WHERE id = $1",
-                session_id,
-                count,
+        async with conn.transaction():
+            deleted = await conn.execute(
+                "DELETE FROM chat_messages WHERE id = ANY($1::uuid[])",
+                ids_to_delete,
             )
+            count = int(deleted.split()[-1])
+
+            # message_count 갱신
+            if count > 0:
+                await conn.execute(
+                    "UPDATE chat_sessions SET message_count = GREATEST(message_count - $2, 0), updated_at = NOW() WHERE id = $1",
+                    session_id,
+                    count,
+                )
         return count
     finally:
         await get_pool().release(conn)

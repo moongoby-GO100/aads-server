@@ -338,7 +338,7 @@ _REMOTE_CMD_WHITELIST: List[str] = [
     "pip install",
     "pip list",
     "python -m py_compile",
-    "python -c",
+    # "python -c" 제거됨 (임의 코드 실행 위험)
     "pytest",
     "cat /proc/meminfo",
     "cat /proc/cpuinfo",
@@ -385,7 +385,7 @@ _REMOTE_CMD_WHITELIST: List[str] = [
     "wget -q",
     "top -bn1",
     "du -sh",
-    "env",
+    # "env" 제거됨 (시크릿 노출 위험)
     "cat /etc/os-release",
     # Git 명령 (AADS-190)
     "git status",
@@ -412,7 +412,10 @@ _REMOTE_CMD_BLOCKED = re.compile(
     r"|:(){:|fork\s*bomb"
     r"|git\s+push\s+.*--force"  # force push 차단
     r"|git\s+reset\s+--hard"  # hard reset 차단
-    r"|git\s+clean\s+-[fd])",  # clean 차단
+    r"|git\s+clean\s+-[fd]"  # clean 차단
+    r"|\bfind\b.*\s-exec\b"  # find -exec 차단
+    r"|\bfind\b.*\s-delete\b"  # find -delete 차단
+    r"|\bfind\b.*\s-ok\b)",  # find -ok 차단
     re.IGNORECASE,
 )
 
@@ -497,10 +500,14 @@ async def tool_read_github(
 
 async def tool_search_logs(source: str, keyword: Optional[str] = None) -> str:
     """Docker logs 또는 journalctl 검색 (최근 100줄, 최대 10KB)."""
+    _ALLOWED_LOG_SOURCES = {"aads-server", "aads-dashboard", "aads-postgres", "aads-redis", "aads-litellm", "aads-core", "journalctl"}
     try:
         if source.lower() == "journalctl":
             cmd = ["journalctl", "--no-pager", "-n", "100"]
         else:
+            # 컨테이너 이름 검증 (인젝션 방지)
+            if source not in _ALLOWED_LOG_SOURCES:
+                return f"[ERROR] 허용되지 않는 로그 소스: {source}. 허용 목록: {', '.join(sorted(_ALLOWED_LOG_SOURCES))}"
             cmd = ["docker", "logs", "--tail", "100", source]
 
         result = subprocess.run(
@@ -914,10 +921,15 @@ async def tool_run_remote_command(project: str, command: str) -> str:
         logger.warning(f"run_remote_command BLOCKED | project={project} cmd={command[:120]}")
         return f"[ERROR] 위험 명령 차단: {command[:80]}"
 
-    # 보안 2: 화이트리스트 검사 (명령 앞부분이 허용 목록에 있어야 함)
+    # 보안 2: 화이트리스트 검사 (첫 토큰 exact match 또는 "prefix " match)
+    try:
+        cmd_tokens = shlex.split(command)
+    except ValueError:
+        return "[ERROR] 명령어 파싱 실패"
+    first_cmd = cmd_tokens[0] if cmd_tokens else ""
     cmd_allowed = False
     for allowed in _REMOTE_CMD_WHITELIST:
-        if command.startswith(allowed):
+        if first_cmd == allowed or command.startswith(allowed + " "):
             cmd_allowed = True
             break
     if not cmd_allowed:
@@ -927,8 +939,21 @@ async def tool_run_remote_command(project: str, command: str) -> str:
             f"허용 명령 목록: {', '.join(sorted(set(c.split()[0] for c in _REMOTE_CMD_WHITELIST)))}"
         )
 
+    # 보안 2.5: docker exec 컨테이너 허용 목록 검사
+    if command.startswith("docker exec"):
+        _ALLOWED_CONTAINERS = {"aads-server", "aads-dashboard", "aads-postgres", "aads-redis", "aads-litellm", "aads-core"}
+        parts = command.split()
+        # docker exec [-it] CONTAINER CMD...
+        container = None
+        for p in parts[2:]:
+            if not p.startswith("-"):
+                container = p
+                break
+        if container not in _ALLOWED_CONTAINERS:
+            return f"[ERROR] 허용되지 않는 컨테이너: {container}"
+
     # 보안 3: 파이프/리다이렉트/세미콜론 차단 (단일 명령만 허용)
-    if any(c in command for c in ["|", ";", "&&", "||", "`", "$(", ">>"]):
+    if any(c in command for c in ["|", ";", "&&", "||", "`", "$(", ">>", ">", "\n", "\r", "${"]):
         # 단, grep | head 같은 안전한 파이프는 허용
         if "|" in command:
             pipe_parts = command.split("|")
@@ -1019,9 +1044,9 @@ async def tool_git_remote_commit(project: str, message: str) -> str:
     """원격 서버 git commit."""
     if not message or not message.strip():
         return "[ERROR] commit message 필수"
-    # 메시지에서 위험 문자 제거
-    safe_msg = message.replace("'", "\\'").replace('"', '\\"')[:200]
-    return await tool_run_remote_command(project, f'git commit -m "{safe_msg}"')
+    # shlex.quote()로 안전한 메시지 이스케이프
+    safe_msg = shlex.quote(message[:200])
+    return await tool_run_remote_command(project, f"git commit -m {safe_msg}")
 
 
 async def tool_git_remote_push(project: str, branch: str = "") -> str:

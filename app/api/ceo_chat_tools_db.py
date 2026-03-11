@@ -83,11 +83,18 @@ _INJECTION_PATTERNS = [
     re.compile(r"--\s*$", re.MULTILINE),
 ]
 
+# C1: WITH CTE에서 DML 사용 차단
+_DML_IN_CTE = re.compile(
+    r'\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE)\b',
+    re.IGNORECASE,
+)
+
 # ─── 연결 캐시 ───────────────────────────────────────────────────────────────
 
 _pg_pools: Dict[str, Any] = {}       # asyncpg 풀
 _ssh_tunnels: Dict[str, Any] = {}    # sshtunnel 인스턴스
 _MAX_POOL_SIZE = 3
+_pool_lock = asyncio.Lock()          # H2: pool/tunnel 생성 경쟁 방지
 
 
 # ─── 환경변수에서 DB 설정 조회 ────────────────────────────────────────────────
@@ -136,6 +143,12 @@ def validate_query(query: str) -> Optional[str]:
     for pattern in _INJECTION_PATTERNS:
         if pattern.search(q):
             return "잠재적 SQL 인젝션 패턴이 감지되었습니다"
+
+    # C1: string literals 제거 후 DML 키워드 검사 (WITH CTE 악용 차단)
+    stripped_for_dml = re.sub(r"'[^']*'", "", cleaned)
+    if _DML_IN_CTE.search(stripped_for_dml):
+        return "쿼리에 금지된 DML 키워드가 포함되어 있습니다"
+
     return None
 
 
@@ -175,38 +188,48 @@ def _serialize_value(v: Any) -> Any:
 # ─── PostgreSQL 연결 (asyncpg) ────────────────────────────────────────────────
 
 async def _get_pg_pool(project: str):
-    """PostgreSQL asyncpg 풀 반환 (캐싱)."""
+    """PostgreSQL asyncpg 풀 반환 (캐싱). H2: Lock으로 경쟁 방지."""
     import asyncpg
 
     resolved = _PROJECT_ALIAS.get(project, project)
-    if resolved in _pg_pools:
-        pool = _pg_pools[resolved]
-        if not pool._closed:
-            return pool
-        del _pg_pools[resolved]
 
-    config = _get_project_db_config(project)
-    if not config or not config["database"]:
-        raise ValueError(f"프로젝트 {project} DB 설정 없음")
+    async with _pool_lock:
+        if resolved in _pg_pools:
+            pool = _pg_pools[resolved]
+            if not pool._closed:
+                return pool
+            del _pg_pools[resolved]
 
-    dsn = (
-        f"postgresql://{config['user']}:{config['password']}"
-        f"@{config['host']}:{config['port']}/{config['database']}"
-    )
-    pool = await asyncpg.create_pool(
-        dsn, min_size=1, max_size=_MAX_POOL_SIZE,
-        command_timeout=30, timeout=10,
-    )
-    _pg_pools[resolved] = pool
-    logger.info(f"query_project_database: PG 풀 생성 | {project}({resolved})")
-    return pool
+        config = _get_project_db_config(project)
+        if not config or not config["database"]:
+            raise ValueError(f"프로젝트 {project} DB 설정 없음")
+
+        try:
+            dsn = (
+                f"postgresql://{config['user']}:{config['password']}"
+                f"@{config['host']}:{config['port']}/{config['database']}"
+            )
+            pool = await asyncpg.create_pool(
+                dsn, min_size=1, max_size=_MAX_POOL_SIZE,
+                command_timeout=30, timeout=10,
+            )
+        except Exception:
+            # H3: DSN에 credentials 포함 — 상세 에러 로그만 남기고 안전한 메시지 반환
+            logger.exception(f"query_project_database: PG 풀 생성 실패 | {project}({resolved})")
+            raise ConnectionError(f"프로젝트 {resolved} PostgreSQL 연결 실패") from None
+
+        _pg_pools[resolved] = pool
+        logger.info(f"query_project_database: PG 풀 생성 | {project}({resolved})")
+        return pool
 
 
 async def _query_postgresql(project: str, q: str) -> List[Dict[str, Any]]:
-    """PostgreSQL 쿼리 실행."""
+    """PostgreSQL 쿼리 실행. C2: read-only 트랜잭션으로 안전하게 실행."""
     pool = await _get_pg_pool(project)
     async with pool.acquire() as conn:
-        rows = await conn.fetch(q)
+        async with conn.transaction():
+            await conn.execute("SET LOCAL default_transaction_read_only = on")
+            rows = await conn.fetch(q)
         return [{k: _serialize_value(v) for k, v in dict(r).items()} for r in rows]
 
 
@@ -324,6 +347,27 @@ async def _query_mysql(project: str, q: str) -> List[Dict[str, Any]]:
     return await asyncio.to_thread(_query_mysql_sync, project, q, config)
 
 
+# ─── H1: 셧다운 시 SSH 터널/PG 풀 정리 ────────────────────────────────────────
+
+async def close_all_project_connections():
+    """서버 종료 시 모든 프로젝트 DB 연결 및 SSH 터널 정리."""
+    for key, pool in list(_pg_pools.items()):
+        try:
+            await pool.close()
+        except Exception:
+            pass
+    _pg_pools.clear()
+
+    for key, info in list(_tunnel_procs.items()):
+        try:
+            info["proc"].kill()
+        except Exception:
+            pass
+    _tunnel_procs.clear()
+
+    logger.info("close_all_project_connections: 모든 프로젝트 DB 연결 정리 완료")
+
+
 # ─── 메인 쿼리 함수 ──────────────────────────────────────────────────────────
 
 async def query_project_database(
@@ -384,8 +428,13 @@ async def query_project_database(
         }
 
     except Exception as e:
+        # H3: credentials가 포함될 수 있는 에러 메시지는 로그에만 기록
         logger.error(f"query_project_database: FAIL | project={project} error={e}")
-        return {"error": f"DB 쿼리 실패 ({project}): {str(e)}"}
+        safe_msg = str(e)
+        # DSN/credentials 패턴 제거
+        if any(kw in safe_msg.lower() for kw in ("password", "postgresql://", "mysql://", "credentials")):
+            safe_msg = "연결 오류가 발생했습니다 (상세 내용은 서버 로그 참조)"
+        return {"error": f"DB 쿼리 실패 ({project}): {safe_msg}"}
 
 
 # ─── DB 목록 조회 ─────────────────────────────────────────────────────────────

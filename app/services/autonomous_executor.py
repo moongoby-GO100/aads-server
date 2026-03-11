@@ -295,9 +295,17 @@ class AutonomousExecutor:
             # 도구 결과 메시지 추가
             work_messages.append({"role": "user", "content": tool_results})
 
-            # C8: 메시지 히스토리 슬라이딩 윈도우 (처음 2개 + 최근 20개 유지)
+            # C8: 메시지 히스토리 슬라이딩 윈도우 (처음 2개 + 최근 N개 유지)
+            # assistant/tool_result 쌍이 깨지지 않도록 짝수 단위로 자름
             if len(work_messages) > 22:
-                work_messages = work_messages[:2] + work_messages[-20:]
+                keep_recent = 20
+                tail = work_messages[-keep_recent:]
+                # 첫 메시지가 tool_result(user)면 쌍이 깨진 것 → 1개 더 포함
+                if tail and tail[0].get("role") == "user" and isinstance(tail[0].get("content"), list):
+                    # tool_result 메시지 — 앞의 assistant 메시지도 포함
+                    if keep_recent < len(work_messages) - 2:
+                        tail = work_messages[-(keep_recent + 1):]
+                work_messages = work_messages[:2] + tail
 
         # 최대 반복 도달
         yield _sse("max_iterations", {
@@ -354,8 +362,8 @@ async def generate_weekly_briefing() -> str:
     # 2. 비용 요약 (최근 7일)
     cost_txt = "비용 조회 불가"
     try:
-        from app.core.database import get_pool
-        pool = await get_pool()
+        from app.core.db_pool import get_pool
+        pool = get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT COALESCE(SUM(cost_usd),0) AS wk_cost,"

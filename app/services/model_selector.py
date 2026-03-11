@@ -329,8 +329,8 @@ async def _stream_anthropic(
             yield {"type": "error", "content": str(e)}
             return
 
-        input_tokens = final_msg.usage.input_tokens
-        output_tokens = final_msg.usage.output_tokens
+        input_tokens += final_msg.usage.input_tokens
+        output_tokens += final_msg.usage.output_tokens
         # Prompt Caching 히트율 로깅
         _cache_read = getattr(final_msg.usage, 'cache_read_input_tokens', 0) or 0
         _cache_create = getattr(final_msg.usage, 'cache_creation_input_tokens', 0) or 0
@@ -432,6 +432,8 @@ async def _stream_anthropic(
         if _turn >= _effective_max_turns and tool_use_blocks:
             logger.warning(f"tool_turn_limit: {_turn}/{_effective_max_turns} turns used, extending by {_TOOL_TURN_EXTEND}")
             _effective_max_turns += _TOOL_TURN_EXTEND
+            if _effective_max_turns > 100:
+                _effective_max_turns = 100
             yield {
                 "type": "tool_turn_limit",
                 "content": f"도구 호출이 {_turn}회에 도달했습니다. {_TOOL_TURN_EXTEND}턴 자동 연장합니다.",

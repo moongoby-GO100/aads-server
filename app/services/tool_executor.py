@@ -263,11 +263,13 @@ class ToolExecutor:
             from app.core.db_pool import get_pool
             pool = get_pool()
             async with pool.acquire() as conn:
-                await conn.execute("SET default_transaction_read_only = on")
-                if "LIMIT" not in upper_q:
-                    clean_query = clean_query + f" LIMIT {limit}"
-                rows = await conn.fetch(clean_query)
-                return [dict(r) for r in rows]
+                # SET LOCAL: 현재 트랜잭션에서만 적용, 커넥션 반환 시 원복됨
+                async with conn.transaction():
+                    await conn.execute("SET LOCAL default_transaction_read_only = on")
+                    if "LIMIT" not in upper_q:
+                        clean_query = clean_query + f" LIMIT {limit}"
+                    rows = await conn.fetch(clean_query)
+                    return [dict(r) for r in rows]
         except Exception as e:
             return {"error": str(e)}
 
