@@ -13,6 +13,7 @@ Pipeline C Orchestrator — 채팅 → Claude Code 자율 작업 → 검수 → 
 import asyncio
 import json
 import logging
+import os
 import shlex
 import time
 import uuid
@@ -32,7 +33,12 @@ _CLAUDE_TIMEOUT = 3600      # Claude Code 직접 대기 타임아웃 (60분, 폴
 _CLAUDE_POLL_INTERVAL = 30  # 분리 실행 폴링 주기 (초)
 _CLAUDE_MAX_WAIT = 7200     # 분리 실행 최대 대기 (2시간)
 _MAX_OUTPUT_CHARS = 6000    # 결과 최대 문자수
+_MAX_DIFF_CHARS = 50000     # git diff 최대 문자수 (L3)
 _REVIEW_MODEL = "claude-sonnet-4-6"
+
+# M1: SSH/LLM 재시도 설정
+_SSH_MAX_RETRIES = 3
+_SSH_RETRY_BASE_DELAY = 2   # 초 (지수 백오프: 2, 4, 8)
 
 # 프로젝트별 서비스 재시작 명령
 _RESTART_CMD: Dict[str, str] = {
@@ -234,7 +240,7 @@ class PipelineCJob:
                 self.cycle += 1
 
                 # git diff 가져오기
-                self.git_diff = await self._ssh_command("git diff HEAD")
+                self.git_diff = (await self._ssh_command("git diff HEAD"))[:_MAX_DIFF_CHARS]
 
                 # AI 검수
                 self._log("ai_review", f"[{self.cycle}차] AI 검수 중...")
@@ -296,7 +302,7 @@ class PipelineCJob:
                 )
 
             # Phase 4: 승인 대기
-            self.git_diff = await self._ssh_command("git diff HEAD")
+            self.git_diff = (await self._ssh_command("git diff HEAD"))[:_MAX_DIFF_CHARS]
             self._log("awaiting_approval", "CEO 승인 대기 중. 채팅에서 승인해주세요.")
             self.status = "awaiting_approval"
             await self._save_to_db()
@@ -374,8 +380,17 @@ class PipelineCJob:
                 )
                 # 재시작 실행 (이후 이 프로세스도 재시작됨)
                 await self._ssh_command(restart_cmd)
-                # 재시작 후 복귀 대기 (uvicorn reload 시 프로세스 유지 가능)
-                await asyncio.sleep(8)
+                # M4: 재시작 후 health polling (sleep 대신)
+                for _poll in range(15):  # 최대 30초 (2초 × 15)
+                    await asyncio.sleep(2)
+                    _health = await self._ssh_command(
+                        "curl -sf http://localhost:8080/health 2>/dev/null && echo OK || echo WAIT",
+                        timeout=5, retries=1,
+                    )
+                    if "OK" in _health:
+                        break
+                else:
+                    logger.warning(f"pipeline_c job={self.job_id} AADS health poll timeout after 30s")
 
                 # 복귀 확인: health check
                 verify = await self._final_verify()
@@ -721,36 +736,52 @@ class PipelineCJob:
 
     # ─── SSH 유틸 ───────────────────────────────────────────────────────────
 
-    async def _ssh_command(self, command: str, timeout: int = 30) -> str:
-        """원격 서버 명령 실행 (내부용, 보안 화이트리스트 없음 — 오케스트레이터 전용)."""
+    async def _ssh_command(self, command: str, timeout: int = 30, retries: int = 0) -> str:
+        """원격 서버 명령 실행 (내부용, 보안 화이트리스트 없음 — 오케스트레이터 전용).
+        M1: SSH 실패 시 지수 백오프 재시도 (retries=0이면 _SSH_MAX_RETRIES 사용)."""
+        max_retries = retries or _SSH_MAX_RETRIES
         full_cmd = f"cd {shlex.quote(self.workdir)} && {command}"
-        try:
-            if self.server == "localhost":
-                proc = await asyncio.create_subprocess_shell(
-                    full_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            else:
-                proc = await asyncio.create_subprocess_exec(
-                    "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
-                    "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
-                    "-p", self.ssh_port,
-                    f"root@{self.server}", full_cmd,
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
 
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            out = stdout.decode("utf-8", errors="replace")
-            if len(out) > _MAX_OUTPUT_CHARS:
-                out = out[-_MAX_OUTPUT_CHARS:]
-            return out
-        except asyncio.TimeoutError:
-            if proc and proc.returncode is None:
-                try:
-                    proc.kill()
-                    await proc.wait()
-                except Exception:
-                    pass
-            return f"[TIMEOUT {timeout}s]"
-        except Exception as e:
-            return f"[ERROR] {e}"
+        for attempt in range(max_retries):
+            proc = None
+            try:
+                if self.server == "localhost":
+                    proc = await asyncio.create_subprocess_shell(
+                        full_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                else:
+                    proc = await asyncio.create_subprocess_exec(
+                        "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                        "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
+                        "-p", self.ssh_port,
+                        f"root@{self.server}", full_cmd,
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                out = stdout.decode("utf-8", errors="replace")
+                if len(out) > _MAX_OUTPUT_CHARS:
+                    out = out[-_MAX_OUTPUT_CHARS:]
+                return out
+            except asyncio.TimeoutError:
+                if proc and proc.returncode is None:
+                    try:
+                        proc.kill()
+                        await proc.wait()
+                    except Exception:
+                        pass
+                if attempt < max_retries - 1:
+                    delay = _SSH_RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning(f"ssh_retry job={self.job_id} attempt={attempt+1}/{max_retries} timeout={timeout}s delay={delay}s cmd={command[:80]}")
+                    await asyncio.sleep(delay)
+                    continue
+                return f"[TIMEOUT {timeout}s after {max_retries} retries]"
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    delay = _SSH_RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning(f"ssh_retry job={self.job_id} attempt={attempt+1}/{max_retries} error={e} delay={delay}s")
+                    await asyncio.sleep(delay)
+                    continue
+                return f"[ERROR after {max_retries} retries] {e}"
+        return "[ERROR] max retries exhausted"
 
     # ─── DB 저장 ────────────────────────────────────────────────────────────
 
@@ -1110,13 +1141,18 @@ async def _check_stalled_jobs():
         if job.status in ("done", "error", "awaiting_approval"):
             continue
 
-        # 마지막 로그 시간 확인
+        # L2: 마지막 로그 시간 확인 (타임스탬프 파싱 강화)
         last_log_time = job.created_at
         if job.logs:
             try:
                 last_ts = job.logs[-1].get("timestamp", "")
-                last_log_time = datetime.fromisoformat(last_ts)
-            except (ValueError, TypeError):
+                if last_ts:
+                    # isoformat 파싱 + Z suffix 대응 + 숫자만 체크
+                    last_ts = last_ts.replace("Z", "+00:00")
+                    last_log_time = datetime.fromisoformat(last_ts)
+            except (ValueError, TypeError, AttributeError) as ts_err:
+                logger.debug(f"watchdog_ts_parse_fail job={job_id}: {ts_err}, ts='{job.logs[-1].get('timestamp', '')}'")
+                # 파싱 실패 시 updated_at가 있으면 사용
                 pass
 
         elapsed = (now - last_log_time).total_seconds()
@@ -1141,7 +1177,7 @@ async def _check_stalled_jobs():
                 job._log("stall_detected", f"{stall_minutes}분 스톨 감지")
                 await job._save_to_db()
 
-        # 오래된 완료 작업 정리 (1시간 이상)
+        # L4: 오래된 완료 작업 정리 (10분 이상)
         if job.status in ("done", "error"):
-            if (now - job.created_at).total_seconds() > 3600:
+            if (now - job.created_at).total_seconds() > 600:
                 _active_jobs.pop(job_id, None)

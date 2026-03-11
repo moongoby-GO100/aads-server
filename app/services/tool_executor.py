@@ -1121,11 +1121,13 @@ class ToolExecutor:
             import json as _json
             result_text = ""
             error_text = ""
+            total_cost = 0.0  # M2: 비용 추적
             try:
                 from app.services.autonomous_executor import AutonomousExecutor
                 from app.services.tool_registry import ToolRegistry
 
-                executor = AutonomousExecutor(max_iterations=15, cost_limit=1.5)
+                _agent_max_iter = int(os.environ.get("AGENT_MAX_ITERATIONS", "15"))
+                executor = AutonomousExecutor(max_iterations=_agent_max_iter, cost_limit=1.5)
                 registry = ToolRegistry()
                 tools = registry.get_tools("all")
                 messages = [{"role": "user", "content": task}]
@@ -1145,6 +1147,7 @@ class ToolExecutor:
                         data = _json.loads(sse_event.replace("data: ", "").strip())
                         if data.get("type") == "complete":
                             result_text = data.get("content", "")[:5000]
+                            total_cost = data.get("total_cost", 0.0)
                         elif data.get("type") == "error":
                             error_text = data.get("content", "")
                         elif data.get("type") == "delta":
@@ -1169,10 +1172,11 @@ class ToolExecutor:
                             """
                             UPDATE directive_lifecycle
                             SET status = 'failed', error_detail = $2,
+                                total_cost = $4,
                                 completed_at = NOW(), started_at = COALESCE(started_at, NOW())
                             WHERE task_id = $1 AND project = $3
                             """,
-                            task_id, error_text[:2000], project,
+                            task_id, error_text[:2000], project, total_cost,
                         )
                     else:
                         await conn.execute(
@@ -1180,15 +1184,30 @@ class ToolExecutor:
                             UPDATE directive_lifecycle
                             SET status = 'completed',
                                 validation_result = $2::jsonb,
+                                total_cost = $4,
                                 completed_at = NOW(), started_at = COALESCE(started_at, NOW())
                             WHERE task_id = $1 AND project = $3
                             """,
                             task_id,
-                            _json.dumps({"result": result_text[:3000], "task_id": task_id}, ensure_ascii=False),
-                            project,
+                            _json.dumps({"result": result_text[:3000], "task_id": task_id, "cost": total_cost}, ensure_ascii=False),
+                            project, total_cost,
                         )
             except Exception as db_err:
                 logger.error(f"delegate_to_agent DB update failed task={task_id}: {db_err}")
+
+            # M3: 전체 결과를 artifact 파일로 저장
+            artifact_path = ""
+            if result_text and len(result_text) > 1500:
+                try:
+                    import pathlib
+                    artifact_dir = pathlib.Path("/tmp/aads_artifacts")
+                    artifact_dir.mkdir(exist_ok=True)
+                    artifact_file = artifact_dir / f"{task_id}.txt"
+                    artifact_file.write_text(result_text, encoding="utf-8")
+                    artifact_path = str(artifact_file)
+                    logger.info(f"delegate_to_agent artifact saved: {artifact_path} ({len(result_text)}자)")
+                except Exception as art_err:
+                    logger.warning(f"delegate_to_agent artifact save failed: {art_err}")
 
             # 4) 채팅방에 결과 보고 (캡처된 session_id 사용)
             try:
@@ -1197,8 +1216,9 @@ class ToolExecutor:
                     from app.core.db_pool import get_pool
                     pool = get_pool()
                     status_emoji = "❌" if error_text else "✅"
+                    cost_str = f" | 비용: ${total_cost:.4f}" if total_cost > 0 else ""
                     msg = (
-                        f"{status_emoji} **[Agent 작업 완료]** `{task_id}`\n"
+                        f"{status_emoji} **[Agent 작업 완료]** `{task_id}`{cost_str}\n"
                         f"프로젝트: **{project}**\n"
                         f"작업: {task[:200]}\n\n"
                     )
@@ -1206,6 +1226,8 @@ class ToolExecutor:
                         msg += f"**오류:** {error_text[:500]}"
                     else:
                         msg += f"**결과:**\n{result_text[:1500]}"
+                        if artifact_path:
+                            msg += f"\n\n📄 전체 결과: `{artifact_path}` ({len(result_text)}자)"
 
                     async with pool.acquire() as conn:
                         async with conn.transaction():

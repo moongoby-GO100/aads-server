@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from decimal import Decimal
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
@@ -26,9 +27,13 @@ except ImportError:
 
 # ─── 상수 ─────────────────────────────────────────────────────────────────────
 
-_MAX_ITERATIONS = 25
+_MAX_ITERATIONS = int(os.environ.get("AGENT_MAX_ITERATIONS", "25"))  # L1: 환경변수화
 _COST_LIMIT_PER_TASK = 2.0  # USD
 _DANGEROUS_TOOLS = frozenset({"submit_directive", "directive_create"})
+
+# M1: LLM 재시도 설정
+_LLM_MAX_RETRIES = 3
+_LLM_RETRY_BASE_DELAY = 3  # 초 (지수 백오프: 3, 6, 12)
 
 
 # ─── SSE 이벤트 헬퍼 ──────────────────────────────────────────────────────────
@@ -141,44 +146,58 @@ class AutonomousExecutor:
             iter_input_tokens = 0
             iter_output_tokens = 0
 
-            # LLM 호출
-            try:
-                async for event in _call_stream(
-                    intent_result=intent_result,
-                    system_prompt=system_prompt or "",
-                    messages=work_messages,
-                    tools=tools or None,
-                    model_override=None,
-                ):
-                    etype = event.get("type", "")
-                    if etype == "delta":
-                        content = event.get("content", "")
-                        iter_response += content
-                        full_response += content
-                        yield _sse("delta", {"content": content, "iteration": iteration})
-                    elif etype == "tool_use":
-                        tool_call = {
-                            "id": event.get("tool_use_id", ""),
-                            "name": event.get("tool_name", ""),
-                            "input": event.get("tool_input", {}),
-                        }
-                        iter_tool_calls.append(tool_call)
-                        stop_reason = "tool_use"
-                        yield _sse("tool_use", {
-                            "tool_name": event["tool_name"],
-                            "tool_use_id": event.get("tool_use_id", ""),
-                            "iteration": iteration,
-                        })
-                    elif etype == "done":
-                        iter_input_tokens = event.get("input_tokens", 0) or 0
-                        iter_output_tokens = event.get("output_tokens", 0) or 0
-                        stop_reason = event.get("stop_reason", stop_reason)
-                    elif etype == "error":
-                        yield _sse("error", {"content": event.get("content", "LLM 오류"), "iteration": iteration})
-                        return
-            except Exception as e:
-                logger.error(f"autonomous_executor LLM error iter={iteration}: {e}")
-                yield _sse("error", {"content": f"LLM 오류: {e}", "iteration": iteration})
+            # M1: LLM 호출 (지수 백오프 재시도)
+            _llm_success = False
+            for _llm_attempt in range(_LLM_MAX_RETRIES):
+                try:
+                    async for event in _call_stream(
+                        intent_result=intent_result,
+                        system_prompt=system_prompt or "",
+                        messages=work_messages,
+                        tools=tools or None,
+                        model_override=None,
+                    ):
+                        etype = event.get("type", "")
+                        if etype == "delta":
+                            content = event.get("content", "")
+                            iter_response += content
+                            full_response += content
+                            yield _sse("delta", {"content": content, "iteration": iteration})
+                        elif etype == "tool_use":
+                            tool_call = {
+                                "id": event.get("tool_use_id", ""),
+                                "name": event.get("tool_name", ""),
+                                "input": event.get("tool_input", {}),
+                            }
+                            iter_tool_calls.append(tool_call)
+                            stop_reason = "tool_use"
+                            yield _sse("tool_use", {
+                                "tool_name": event["tool_name"],
+                                "tool_use_id": event.get("tool_use_id", ""),
+                                "iteration": iteration,
+                            })
+                        elif etype == "done":
+                            iter_input_tokens = event.get("input_tokens", 0) or 0
+                            iter_output_tokens = event.get("output_tokens", 0) or 0
+                            stop_reason = event.get("stop_reason", stop_reason)
+                        elif etype == "error":
+                            yield _sse("error", {"content": event.get("content", "LLM 오류"), "iteration": iteration})
+                            return
+                    _llm_success = True
+                    break
+                except Exception as e:
+                    if _llm_attempt < _LLM_MAX_RETRIES - 1:
+                        _delay = _LLM_RETRY_BASE_DELAY * (2 ** _llm_attempt)
+                        logger.warning(f"autonomous_executor LLM retry iter={iteration} attempt={_llm_attempt+1}/{_LLM_MAX_RETRIES} error={e} delay={_delay}s")
+                        await asyncio.sleep(_delay)
+                        # 재시도 시 iter_response/tool_calls 초기화
+                        iter_response = ""
+                        iter_tool_calls = []
+                        continue
+                    logger.error(f"autonomous_executor LLM error iter={iteration} after {_LLM_MAX_RETRIES} retries: {e}")
+                    yield _sse("error", {"content": f"LLM 오류 ({_LLM_MAX_RETRIES}회 재시도 실패): {e}", "iteration": iteration})
+                    return
+            if not _llm_success:
                 return
 
             # 비용 누적
