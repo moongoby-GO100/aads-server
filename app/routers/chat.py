@@ -22,6 +22,7 @@ from app.models.chat import (
     DriveFileOut,
     MessageOut,
     MessageSendRequest,
+    MessageUpdateRequest,
     ResearchOut,
     SessionCreate,
     SessionOut,
@@ -149,6 +150,24 @@ async def toggle_bookmark(message_id: UUID):
     if not result:
         raise _NOT_FOUND("message")
     return result
+
+
+@router.put("/chat/messages/{message_id}", response_model=MessageOut, tags=["chat-message"])
+async def update_message(message_id: UUID, req: MessageUpdateRequest):
+    """사용자 메시지 내용 수정 (방식A: 수정 후 재전송용)."""
+    result = await svc.update_message(str(message_id), req.content)
+    if not result:
+        raise _NOT_FOUND("message")
+    return result
+
+
+@router.delete("/chat/messages/{message_id}", tags=["chat-message"])
+async def delete_message(message_id: UUID):
+    """메시지 삭제 + 해당 AI 응답도 함께 삭제 (방식A: 수정재전송 시 기존 응답 제거)."""
+    deleted = await svc.delete_message_and_response(str(message_id))
+    if not deleted:
+        raise _NOT_FOUND("message")
+    return {"status": "deleted", "deleted_count": deleted}
 
 
 @router.get("/chat/messages/search", tags=["chat-message"])

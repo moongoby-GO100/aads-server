@@ -79,6 +79,10 @@ class MessageSendRequest(BaseModel):
     model_override: Optional[str] = None
 
 
+class MessageUpdateRequest(BaseModel):
+    content: str = Field(..., min_length=1)
+
+
 class MessageOut(BaseModel):
     id: uuid.UUID
     session_id: uuid.UUID
@@ -93,6 +97,7 @@ class MessageOut(BaseModel):
     attachments: List[Any]
     sources: List[Any]
     artifact_id: Optional[uuid.UUID]
+    edited_at: Optional[datetime] = None
     created_at: datetime
 
 

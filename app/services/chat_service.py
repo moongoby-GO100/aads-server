@@ -1078,6 +1078,78 @@ async def toggle_bookmark(message_id: str) -> Optional[Dict[str, Any]]:
         await get_pool().release(conn)
 
 
+async def update_message(message_id: str, new_content: str) -> Optional[Dict[str, Any]]:
+    """사용자 메시지 내용 수정 (role=user만 허용). edited_at 기록."""
+    conn = await _get_conn()
+    try:
+        row = await conn.fetchrow(
+            """
+            UPDATE chat_messages
+            SET content = $2, edited_at = NOW()
+            WHERE id = $1 AND role = 'user'
+            RETURNING *
+            """,
+            uuid.UUID(message_id),
+            new_content,
+        )
+        return _row_to_dict(row) if row else None
+    finally:
+        await get_pool().release(conn)
+
+
+async def delete_message_and_response(message_id: str) -> int:
+    """
+    사용자 메시지 삭제 + 바로 뒤의 AI 응답도 함께 삭제.
+    방식A(수정재전송)에서 기존 메시지+응답 제거 용도.
+    Returns 삭제된 메시지 수.
+    """
+    conn = await _get_conn()
+    try:
+        # 먼저 해당 메시지 정보 조회
+        msg = await conn.fetchrow(
+            "SELECT id, session_id, role, created_at FROM chat_messages WHERE id = $1",
+            uuid.UUID(message_id),
+        )
+        if not msg:
+            return 0
+
+        session_id = msg["session_id"]
+        created_at = msg["created_at"]
+
+        # 해당 메시지 + 바로 다음 AI 응답 삭제
+        # (created_at 이후 가장 가까운 assistant 메시지 1개)
+        next_ai = await conn.fetchrow(
+            """
+            SELECT id FROM chat_messages
+            WHERE session_id = $1 AND role = 'assistant' AND created_at > $2
+            ORDER BY created_at ASC LIMIT 1
+            """,
+            session_id,
+            created_at,
+        )
+
+        ids_to_delete = [msg["id"]]
+        if next_ai:
+            ids_to_delete.append(next_ai["id"])
+
+        deleted = await conn.execute(
+            "DELETE FROM chat_messages WHERE id = ANY($1::uuid[])",
+            ids_to_delete,
+        )
+        count = int(deleted.split()[-1])
+
+        # message_count 갱신
+        if count > 0:
+            await conn.execute(
+                "UPDATE chat_sessions SET message_count = GREATEST(message_count - $2, 0), updated_at = NOW() WHERE id = $1",
+                session_id,
+                count,
+            )
+        return count
+    finally:
+        await get_pool().release(conn)
+
+
 async def search_messages(query: str, workspace_id: Optional[str] = None, limit: int = 20) -> List[Dict[str, Any]]:
     conn = await _get_conn()
     try:
