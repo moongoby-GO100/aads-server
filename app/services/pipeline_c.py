@@ -622,6 +622,47 @@ class PipelineCJob:
             logger.error(f"pipeline_c_save_db_error job={self.job_id}: {e}")
 
 
+# ─── 프로젝트 → 세션 자동 매핑 ─────────────────────────────────────────────────
+
+async def _find_recent_session(project: str) -> str:
+    """프로젝트의 워크스페이스에서 가장 최근 활성 세션 ID를 찾는다.
+    워크스페이스 이름이 [KIS], [NTV2] 형태이므로 `[PROJECT]` 패턴으로 검색."""
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        # 워크스페이스 이름 패턴: "[KIS] 자동매매", "[NTV2] NewTalk V2" 등
+        ws_pattern = f"[{project.upper()}]%"
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT cs.id
+                FROM chat_sessions cs
+                JOIN chat_workspaces cw ON cs.workspace_id = cw.id
+                WHERE cw.name LIKE $1
+                ORDER BY cs.updated_at DESC
+                LIMIT 1
+                """,
+                ws_pattern,
+            )
+            if row:
+                return str(row["id"])
+            # 폴백: CEO 통합지시 세션 (프로젝트별 워크스페이스 없을 때)
+            row = await conn.fetchrow(
+                """
+                SELECT cs.id
+                FROM chat_sessions cs
+                JOIN chat_workspaces cw ON cs.workspace_id = cw.id
+                WHERE cw.name LIKE '[CEO]%'
+                ORDER BY cs.updated_at DESC
+                LIMIT 1
+                """,
+            )
+            return str(row["id"]) if row else ""
+    except Exception as e:
+        logger.warning(f"_find_recent_session error for {project}: {e}")
+        return ""
+
+
 # ─── 외부 API 함수 ────────────────────────────────────────────────────────────
 
 async def start_pipeline(
@@ -633,6 +674,15 @@ async def start_pipeline(
 ) -> dict:
     """파이프라인C 시작 (asyncio.create_task로 백그라운드 실행)."""
     logger.info(f"[DIAG] start_pipeline: chat_session_id='{chat_session_id}' project={project}")
+
+    # chat_session_id가 비어있으면 해당 프로젝트 워크스페이스의 최근 세션을 자동 조회
+    if not chat_session_id:
+        chat_session_id = await _find_recent_session(project)
+        if chat_session_id:
+            logger.info(f"pipeline_c: auto-resolved session_id='{chat_session_id}' for project={project}")
+        else:
+            logger.warning(f"pipeline_c: 프로젝트 {project}의 활성 세션을 찾을 수 없음 — 채팅 보고 비활성")
+
     job = PipelineCJob(
         project=project,
         instruction=instruction,
