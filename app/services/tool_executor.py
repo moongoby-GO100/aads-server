@@ -1248,6 +1248,21 @@ class ToolExecutor:
             except Exception as chat_err:
                 logger.warning(f"delegate_to_agent chat post failed: {chat_err}")
 
+            # 5) AI 자동 반응 트리거: 작업 결과를 AI가 확인하고 조치하도록
+            try:
+                if session_id:
+                    from app.services.chat_service import trigger_ai_reaction
+                    status_word = "오류" if error_text else "완료"
+                    result_summary = error_text[:300] if error_text else result_text[:500]
+                    await trigger_ai_reaction(
+                        session_id,
+                        f"[시스템] Agent 작업 `{task_id}` (프로젝트: {project})이 {status_word}되었습니다. "
+                        f"결과: {result_summary}\n\n"
+                        f"위 결과를 확인하고 필요한 후속 조치가 있으면 실행해주세요."
+                    )
+            except Exception as trigger_err:
+                logger.warning(f"delegate_to_agent ai_trigger failed: {trigger_err}")
+
         # 백그라운드 실행
         try:
             loop = asyncio.get_running_loop()

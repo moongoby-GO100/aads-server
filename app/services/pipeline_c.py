@@ -158,6 +158,17 @@ class PipelineCJob:
         except Exception as e:
             logger.warning(f"pipeline_c_chat_post_error job={self.job_id}: {e}")
 
+    async def _trigger_ai_reaction(self, message: str) -> None:
+        """채팅 AI가 결과를 확인하고 자동으로 반응하도록 트리거."""
+        if not self.chat_session_id:
+            return
+        try:
+            from app.services.chat_service import trigger_ai_reaction
+            await trigger_ai_reaction(self.chat_session_id, message)
+            logger.info(f"pipeline_c_ai_trigger job={self.job_id} session={self.chat_session_id[:8]}...")
+        except Exception as e:
+            logger.warning(f"pipeline_c_ai_trigger_error job={self.job_id}: {e}")
+
     def _format_diff_summary(self, diff: str, max_lines: int = 30) -> str:
         """git diff를 보기 좋은 요약 형태로."""
         if not diff or not diff.strip():
@@ -300,6 +311,13 @@ class PipelineCJob:
                 f"거부하려면: \"거부해\" 또는 \"reject\""
             )
 
+            # ★ AI 자동 반응 트리거: 승인 요청을 AI가 확인하고 CEO에게 요약 보고
+            await self._trigger_ai_reaction(
+                f"[시스템] Pipeline C 작업 `{self.job_id}` (프로젝트: {self.project})이 "
+                f"승인 대기 상태입니다. 위 변경사항을 확인하고 CEO에게 간단히 요약해주세요. "
+                f"승인/거부 판단에 필요한 핵심 정보를 알려주세요."
+            )
+
         except Exception as e:
             logger.exception(f"pipeline_c_error job={self.job_id}")
             self._log("error", str(e))
@@ -309,6 +327,13 @@ class PipelineCJob:
                 f"❌ **[Pipeline C 예외]** `{self.job_id}`\n{str(e)[:500]}"
             )
             await self._save_to_db()
+
+            # ★ AI 자동 반응 트리거: 에러 발생 시 AI가 원인 분석 및 대안 제시
+            await self._trigger_ai_reaction(
+                f"[시스템] Pipeline C 작업 `{self.job_id}` (프로젝트: {self.project})에서 "
+                f"오류가 발생했습니다: {str(e)[:300]}. "
+                f"오류 원인을 분석하고 해결 방안을 제시해주세요."
+            )
 
     async def approve(self) -> dict:
         """CEO 승인 → Phase 5~7 배포 + 검증."""

@@ -473,6 +473,66 @@ async def _save_and_update_session(
                 pass
 
 
+# ── 재귀 방지 플래그: trigger_ai_reaction → send_message_stream → tool → trigger 무한 루프 차단 ──
+_ai_reaction_active: set[str] = set()  # session_id 집합
+
+
+async def trigger_ai_reaction(
+    session_id: str,
+    system_message: str,
+) -> None:
+    """
+    채팅방에 시스템 사용자 메시지를 삽입한 후 AI가 자동 반응하도록 트리거.
+    Pipeline C / delegate_to_agent 완료 후 AI가 결과를 확인·조치하게 함.
+
+    동작:
+    1. 재귀 호출 방지 (같은 세션에서 이미 반응 중이면 스킵)
+    2. send_message_stream()을 백그라운드에서 소비 → AI 응답 생성 + DB 저장
+
+    주의: [시스템] 접두사 메시지에 대해 AI가 다시 delegate_to_agent를 호출하면
+    무한 루프가 될 수 있으므로, 재귀 방지 플래그로 차단함.
+    """
+    import asyncio as _asyncio
+
+    # 재귀 방지: 이미 이 세션에서 AI 반응이 진행 중이면 스킵
+    if session_id in _ai_reaction_active:
+        logger.info(f"trigger_ai_reaction: skipped (already active) session={session_id[:8]}...")
+        return
+    _ai_reaction_active.add(session_id)
+
+    # ContextVar 설정 (백그라운드 task에서도 session_id 사용 가능하도록)
+    from app.services.tool_executor import current_chat_session_id
+    current_chat_session_id.set(session_id)
+
+    # 시스템 메시지에 도구 사용 금지 지시 추가 (무한 루프 방지)
+    safe_message = (
+        system_message + "\n\n"
+        "⚠️ 이 메시지는 자동 트리거입니다. "
+        "delegate_to_agent, pipeline_c_start 등 백그라운드 작업 도구를 호출하지 마세요. "
+        "텍스트 응답만 해주세요."
+    )
+
+    async def _consume_stream():
+        try:
+            async for _ in send_message_stream(
+                session_id=session_id,
+                content=safe_message,
+            ):
+                pass  # 스트림 전체 소비 → DB에 AI 응답 자동 저장
+        except Exception as e:
+            logger.warning(f"trigger_ai_reaction error session={session_id}: {e}")
+        finally:
+            _ai_reaction_active.discard(session_id)
+
+    try:
+        loop = _asyncio.get_running_loop()
+        loop.create_task(_consume_stream())
+        logger.info(f"trigger_ai_reaction: triggered for session={session_id[:8]}...")
+    except RuntimeError:
+        _ai_reaction_active.discard(session_id)
+        logger.error("trigger_ai_reaction: no running event loop")
+
+
 async def send_message_stream(
     session_id: str,
     content: str,
