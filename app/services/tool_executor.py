@@ -1363,6 +1363,7 @@ class ToolExecutor:
         from app.api.ceo_chat_tools import tool_pipeline_c_start
         # 현재 채팅 세션 ID를 컨텍스트에서 가져와서 전달
         _session_id = current_chat_session_id.get("")
+        logger.info(f"[DIAG] _pipeline_c_start: ContextVar session_id='{_session_id}'")
         if not _session_id:
             logger.warning("_pipeline_c_start: chat_session_id 없음 — 채팅방 보고가 비활성됩니다")
         return await tool_pipeline_c_start(

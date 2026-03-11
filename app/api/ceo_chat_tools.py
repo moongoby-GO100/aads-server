@@ -1317,7 +1317,7 @@ async def tool_browser_tab_list() -> str:
 
 # ─── 디스패처 ──────────────────────────────────────────────────────────────────
 
-async def execute_tool(name: str, params: Dict[str, Any], dsn: str) -> str:
+async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session_id: str = "") -> str:
     """도구 이름과 파라미터로 실제 실행."""
     if name == "read_file":
         return await tool_read_file(params.get("path", ""))
@@ -1364,13 +1364,16 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str) -> str:
         )
     # ── Pipeline C 도구 ────────────────────────────────────────────────────
     elif name == "pipeline_c_start":
+        # 명시적 chat_session_id 우선, 없으면 ContextVar 폴백
         from app.services.tool_executor import current_chat_session_id
+        _sid = chat_session_id or current_chat_session_id.get("")
+        logger.info(f"[DIAG] execute_tool(pipeline_c_start): session_id='{_sid}' (explicit={chat_session_id}, cv={current_chat_session_id.get('')})")
         return await tool_pipeline_c_start(
             params.get("project", ""),
             params.get("instruction", ""),
             params.get("max_cycles", 3),
             dsn,
-            chat_session_id=current_chat_session_id.get(""),
+            chat_session_id=_sid,
         )
     elif name == "pipeline_c_status":
         return await tool_pipeline_c_status(params.get("job_id", ""))

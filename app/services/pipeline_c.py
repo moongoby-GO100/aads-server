@@ -632,6 +632,7 @@ async def start_pipeline(
     dsn: str = "",
 ) -> dict:
     """파이프라인C 시작 (asyncio.create_task로 백그라운드 실행)."""
+    logger.info(f"[DIAG] start_pipeline: chat_session_id='{chat_session_id}' project={project}")
     job = PipelineCJob(
         project=project,
         instruction=instruction,
