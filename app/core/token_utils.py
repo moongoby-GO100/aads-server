@@ -48,3 +48,28 @@ def estimate_tokens_for_messages(
 
 # 역변환 상수: 토큰 → 문자 변환 시 사용 (혼합 텍스트 평균)
 CHARS_PER_TOKEN = 2  # 한국어+영어 혼합 평균 (보수적)
+
+
+# ── 비용 계산 ──────────────────────────────────────────────────────
+from decimal import Decimal
+
+# Model pricing per 1M tokens (input_rate, output_rate) in USD
+COST_MAP: dict[str, tuple[float, float]] = {
+    "claude-opus": (15.0, 75.0),
+    "claude-sonnet": (3.0, 15.0),
+    "claude-haiku": (0.25, 1.25),
+    "gemini-flash": (0.075, 0.3),
+    "gemini-flash-lite": (0.01, 0.04),
+    "gemini-pro": (1.25, 5.0),
+    "gemini-3-flash-preview": (0.1, 0.4),
+    "gemini-deep-research": (1.25, 5.0),
+    "brave-search": (0.0, 0.0),  # API 건당 $0.005 별도
+}
+
+
+def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> Decimal:
+    """모델 + 토큰 기반 비용 추정."""
+    in_rate, out_rate = COST_MAP.get(model, (3.0, 15.0))
+    return Decimal(str(round(
+        input_tokens * in_rate / 1_000_000 + output_tokens * out_rate / 1_000_000, 6
+    )))

@@ -144,6 +144,15 @@ async def lifespan(app: FastAPI):
             CronTrigger(day_of_week="mon", hour=0, minute=0, timezone="UTC"),
             id="weekly_briefing",
         )
+        # F11: 매일 03:00 UTC — ai_observations GC (confidence 감쇠 + 삭제)
+        async def _run_memory_gc():
+            try:
+                from app.core.memory_gc import gc_observations
+                from app.core.db_pool import get_pool
+                await gc_observations(get_pool())
+            except Exception as e:
+                logger.warning(f"memory_gc_job_error: {e}")
+        scheduler.add_job(_run_memory_gc, CronTrigger(hour=3, minute=0, timezone="UTC"), id="memory_gc")
         scheduler.start()
         await healer_init()
         # AADS-190: 스케줄러 인스턴스를 동적 스케줄 도구에 공유

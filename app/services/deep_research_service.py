@@ -69,7 +69,7 @@ class ResearchResult:
     citations: List[Dict[str, Any]] = field(default_factory=list)
     thinking_summary: str = ""
     status: str = "done"   # 'done' | 'timeout' | 'error' | 'daily_limit'
-    cost_usd: float = 3.0
+    cost_usd: float = 0.0  # F7: 고정값 제거, chat_service에서 토큰 기반 추정
     elapsed_sec: float = 0.0
 
 
@@ -261,7 +261,7 @@ class DeepResearchService:
                         output=("".join(collected_report))[:500],
                         metadata={
                             "sources_count": len(collected_sources),
-                            "cost_usd": 3.0,
+                            "cost_usd": "estimated_in_chat_service",
                             "elapsed_sec": elapsed,
                         },
                     )

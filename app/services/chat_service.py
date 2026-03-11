@@ -788,10 +788,18 @@ async def send_message_stream(
                 yield f"data: {json.dumps({'type': 'delta', 'content': result.text})}\n\n"
                 if result.citations:
                     yield f"data: {json.dumps({'type': 'sources', 'sources': result.citations})}\n\n"
+                # F7: 실제 비용 추정 — result.cost가 있으면 사용, 없으면 토큰 기반 추정
+                _search_cost = getattr(result, "cost", None)
+                if _search_cost is None or _search_cost == Decimal("0"):
+                    from app.core.token_utils import estimate_tokens
+                    _in_tok = estimate_tokens(content)
+                    _out_tok = estimate_tokens(result.text)
+                    # Gemini Flash: $0.075/1M in, $0.3/1M out
+                    _search_cost = Decimal(str(round(_in_tok * 0.075 / 1_000_000 + _out_tok * 0.3 / 1_000_000, 6)))
                 await _save_and_update_session(
                     sid, result.text, model_used="gemini-flash", intent=intent,
-                    cost=Decimal("0"), sources=result.citations)
-                yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': 'gemini-flash', 'cost': '0'})}\n\n"
+                    cost=_search_cost, sources=result.citations)
+                yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': 'gemini-flash', 'cost': str(_search_cost)})}\n\n"
                 return
 
             elif intent_result.gemini_mode == "deep_research":
@@ -809,7 +817,7 @@ async def send_message_stream(
                         collected_report_parts: list[str] = []
                         final_citations: list[dict] = []
                         final_interaction_id = ""
-                        cost_usd = 3.0
+                        cost_usd = 0.0  # F7: 고정값 제거, 실제 토큰 기반 추정
 
                         # AADS-188A: research_stream() 사용 — planning/searching/analyzing 실시간 SSE
                         async for ev in await dr_svc.research_stream(content, timeout=600):
@@ -841,6 +849,16 @@ async def send_message_stream(
 
                         if final_citations:
                             yield f"data: {json.dumps({'type': 'sources', 'sources': final_citations})}\n\n"
+
+                        # F7: 딥리서치 비용 — 토큰 기반 추정 (Gemini Pro 요금 적용)
+                        if cost_usd == 0.0:
+                            from app.core.token_utils import estimate_tokens
+                            _dr_in = estimate_tokens(content)
+                            _dr_out = estimate_tokens(report_text)
+                            # Deep Research: 내부적으로 다수 API 호출 → Gemini Pro 요금 × 10 (경험치)
+                            cost_usd = round(_dr_in * 1.25 / 1_000_000 * 10 + _dr_out * 5.0 / 1_000_000 * 10, 4)
+                            if cost_usd < 0.5:
+                                cost_usd = 0.5  # 최소 $0.50 (수십 페이지 크롤링 비용)
 
                         yield f"data: {json.dumps({'type': 'research_complete', 'interaction_id': final_interaction_id, 'cost': str(cost_usd)})}\n\n"
 
@@ -1075,9 +1093,15 @@ async def send_message_stream(
                 f"output_validator: {_validation.violation_type} — {_validation.message} "
                 f"(intent={intent}, model={model_used}, tokens_out={output_tokens})"
             )
+            # F8: 클라이언트에 stream_reset 전송 — 이전 잘못된 텍스트 초기화
+            yield f"data: {json.dumps({'type': 'stream_reset', 'reason': _validation.violation_type})}\n\n"
+            # DB 저장 시 재시도 응답만 사용하도록 원본 응답 별도 보관
+            _failed_response = full_response
+            full_response = ""
+
             # 재시도: output_validator가 생성한 retry_prompt 사용
             _retry_messages = list(messages)
-            _retry_messages.append({"role": "assistant", "content": full_response.strip()})
+            _retry_messages.append({"role": "assistant", "content": _failed_response.strip()})
             _retry_messages.append({"role": "user", "content": _validation.retry_prompt})
 
             _retry_response = ""
@@ -1128,7 +1152,8 @@ async def send_message_stream(
                         "⚠️ 요청을 처리하는 중 검증에 실패했습니다. "
                         "정확한 정보를 위해 도구를 직접 호출하여 확인해주세요."
                     )
-                full_response = full_response + "\n\n" + _retry_response
+                # F8: stream_reset했으므로 재시도 응답만 저장 (이전 실패 응답 제외)
+                full_response = _retry_response
 
         # ═══ #19: Phase C — 응답 저장 (별도 커넥션) ═══
         _thinking_truncated = (thinking_summary or "")[:2000] or None

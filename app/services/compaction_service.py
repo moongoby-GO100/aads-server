@@ -152,8 +152,12 @@ async def check_and_compact(
             logger.warning(f"compaction_service: 기존 요약 조회 실패: {e}")
 
     # #9: 압축 대상 메시지 해시 비교 — 변경 없으면 LLM 호출 스킵
+    # F18: content[:200]만 해시하면 동일 시작+다른 내용 시 skip → 처음1000+끝1000+길이 조합
     import hashlib
-    _msg_hash = hashlib.md5("".join(m.get("content","")[:200] for m in to_compress).encode()).hexdigest()
+    def _msg_fingerprint(m: Dict[str, Any]) -> str:
+        c = str(m.get("content", ""))
+        return f"{c[:1000]}|{c[-1000:] if len(c) > 1000 else ''}|{len(c)}"
+    _msg_hash = hashlib.md5("".join(_msg_fingerprint(m) for m in to_compress).encode()).hexdigest()
     if existing_summary and db_conn:
         try:
             _hash_row = await db_conn.fetchval(
