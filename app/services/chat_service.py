@@ -255,18 +255,68 @@ async def list_sessions(workspace_id: str, limit: int = 50) -> List[Dict[str, An
 async def create_session(data: Dict[str, Any]) -> Dict[str, Any]:
     conn = await _get_conn()
     try:
+        ws_id = uuid.UUID(str(data["workspace_id"]))
+        title = data.get("title")
+
+        # 버전 관리형 세션명 자동 생성
+        if not title or title in ("새 대화", "New Chat", ""):
+            title = await _generate_versioned_title(conn, ws_id)
+
         row = await conn.fetchrow(
             """
             INSERT INTO chat_sessions (workspace_id, title)
             VALUES ($1, $2)
             RETURNING *
             """,
-            uuid.UUID(str(data["workspace_id"])),
-            data.get("title"),
+            ws_id,
+            title,
         )
         return _row_to_dict(row)
     finally:
         await get_pool().release(conn)
+
+
+async def _generate_versioned_title(conn, ws_id: uuid.UUID) -> str:
+    """워크스페이스명에서 프로젝트 코드 추출 → 버전 넘버링 세션명 생성.
+    예: [KIS] 자동매매 → KIS-001, KIS-002, ...
+        [CEO] 통합지시 → CEO-001, CEO-002, ...
+    """
+    import re as _re
+    # 워크스페이스명 조회
+    ws_row = await conn.fetchrow(
+        "SELECT name FROM chat_workspaces WHERE id = $1", ws_id
+    )
+    if not ws_row:
+        return "새 대화"
+
+    ws_name = ws_row["name"] or ""
+    # [PROJECT] 패턴에서 코드 추출
+    m = _re.match(r'\[([A-Za-z0-9]+)\]', ws_name)
+    project_code = m.group(1).upper() if m else ws_name.strip()[:10]
+
+    # 해당 워크스페이스의 동일 패턴 세션 최대 번호 조회
+    prefix = f"{project_code}-"
+    pattern = f'^{_re.escape(prefix)}[0-9]+$'
+    rows = await conn.fetch(
+        "SELECT title FROM chat_sessions WHERE workspace_id = $1 AND title ~ $2",
+        ws_id, pattern,
+    )
+    max_num = 0
+    for r in rows:
+        try:
+            num = int(r["title"][len(prefix):])
+            if num > max_num:
+                max_num = num
+        except (ValueError, IndexError):
+            pass
+    # 패턴 매칭 안 되는 기존 세션도 카운트 (최소 보장)
+    count_row = await conn.fetchrow(
+        "SELECT COUNT(*) AS cnt FROM chat_sessions WHERE workspace_id = $1", ws_id
+    )
+    total = count_row["cnt"] if count_row else 0
+
+    next_num = max(max_num + 1, total + 1)
+    return f"{project_code}-{next_num:03d}"
 
 
 async def update_session(session_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
