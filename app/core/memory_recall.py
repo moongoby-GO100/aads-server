@@ -13,11 +13,13 @@ AADS 메모리 자동 주입 시스템 — 공유 메모리 리콜 모듈
 """
 from __future__ import annotations
 
-import logging
+import asyncio
 import os
+import re
+import structlog
 from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 # 토큰 예산 (한국어 1토큰 ≈ 1.5자 → 자수 상한)
 _BUDGET = {
@@ -29,15 +31,37 @@ _BUDGET = {
 }
 _TOTAL_CHAR_LIMIT = 3000  # ~2000 토큰
 
+# #14: 카테고리별 confidence 임계값 (환경변수 오버라이드 가능)
+_CONFIDENCE = {
+    "ceo_preference": float(os.getenv("CONFIDENCE_CEO_PREF", "0.2")),
+    "decision": float(os.getenv("CONFIDENCE_CEO_PREF", "0.2")),
+    "tool_strategy": float(os.getenv("CONFIDENCE_TOOL_STRATEGY", "0.3")),
+    "project_pattern": float(os.getenv("CONFIDENCE_TOOL_STRATEGY", "0.3")),
+    "discovery": float(os.getenv("CONFIDENCE_DISCOVERY", "0.4")),
+    "learning": float(os.getenv("CONFIDENCE_DISCOVERY", "0.4")),
+    "recurring_issue": float(os.getenv("CONFIDENCE_DISCOVERY", "0.4")),
+}
 
-def _db_url() -> str:
-    url = os.getenv("DATABASE_URL", "")
-    return url.replace("postgresql://", "postgres://") if url else url
+# #25: observation key 허용 패턴 (영문/한글/숫자/밑줄/하이픈/공백/점 — 줄바꿈 제외)
+_KEY_PATTERN = re.compile(r'[^a-zA-Z0-9가-힣_\-\. ]')
+_KEY_MAX_LEN = 200
 
 
-async def _get_conn():
-    import asyncpg
-    return await asyncpg.connect(_db_url(), timeout=10)
+def _get_pool():
+    """DB 커넥션 풀 반환."""
+    from app.core.db_pool import get_pool
+    return get_pool()
+
+
+def _sanitize_key(key: str) -> str:
+    """#25: observation key 정제 — 특수문자 제거, 200자 제한."""
+    cleaned = _KEY_PATTERN.sub('', key).strip()
+    return cleaned[:_KEY_MAX_LEN] if cleaned else "unnamed"
+
+
+def _normalize_project(project: Optional[str]) -> Optional[str]:
+    """#23: project 값 항상 대문자로 정규화."""
+    return project.upper().strip() if project else None
 
 
 def _truncate(text: str, char_limit: int) -> str:
@@ -63,10 +87,8 @@ async def _build_session_notes(
 ) -> str:
     """섹션 1: 이전 대화 요약 (session_notes 최근 3개, 해당 프로젝트 우선)."""
     try:
-        conn = await _get_conn()
-        try:
+        async with _get_pool().acquire() as conn:
             if project_id:
-                # 해당 프로젝트가 projects_discussed에 포함된 노트 우선, 나머지 보조
                 rows = await conn.fetch(
                     """
                     SELECT summary, key_decisions, created_at, projects_discussed
@@ -99,92 +121,90 @@ async def _build_session_notes(
                 lines.append(line)
             text = "\n".join(lines)
             return _truncate(text, _BUDGET["session_notes"])
-        finally:
-            await conn.close()
     except Exception as e:
-        logger.warning(f"memory_recall session_notes 조회 실패: {e}")
+        # #13: 섹션별 실패 로깅
+        logger.warning("memory_recall_section_failed", section="session_notes", error=str(e))
         return ""
 
 
 async def _build_preferences() -> str:
     """섹션 2: CEO 운영 원칙/선호 — 전역 공통 (프로젝트 필터 없음)."""
     try:
-        conn = await _get_conn()
-        try:
+        _conf = _CONFIDENCE.get("ceo_preference", 0.2)
+        async with _get_pool().acquire() as conn:
             rows = await conn.fetch(
                 """
                 SELECT key, value FROM ai_observations
                 WHERE category IN ('ceo_preference', 'decision')
-                  AND confidence >= 0.3
+                  AND confidence >= $1
                 ORDER BY confidence DESC, updated_at DESC
                 LIMIT 15
                 """,
+                _conf,
             )
             if not rows:
                 return ""
             lines = [f"- {r['value']}" for r in rows]
             text = "\n".join(lines)
             return _truncate(text, _BUDGET["preferences"])
-        finally:
-            await conn.close()
     except Exception as e:
-        logger.warning(f"memory_recall preferences 조회 실패: {e}")
+        logger.warning("memory_recall_section_failed", section="preferences", error=str(e))
         return ""
 
 
 async def _build_tool_strategy(project_id: Optional[str] = None) -> str:
     """섹션 3: 도구 사용 전략 — 해당 프로젝트 + 공통(project IS NULL)."""
     try:
-        conn = await _get_conn()
-        try:
+        _conf = _CONFIDENCE.get("tool_strategy", 0.3)
+        async with _get_pool().acquire() as conn:
+            # #22: 프로젝트 필터링 통일 — 항상 (project = $1 OR project IS NULL)
             if project_id:
                 rows = await conn.fetch(
                     """
                     SELECT key, value FROM ai_observations
                     WHERE category IN ('project_pattern', 'tool_strategy')
-                      AND confidence >= 0.3
+                      AND confidence >= $2
                       AND (project IS NULL OR project = $1)
                     ORDER BY
                         CASE WHEN project = $1 THEN 0 ELSE 1 END,
                         confidence DESC, updated_at DESC
                     LIMIT 10
                     """,
-                    project_id,
+                    project_id, _conf,
                 )
             else:
                 rows = await conn.fetch(
                     """
                     SELECT key, value FROM ai_observations
                     WHERE category IN ('project_pattern', 'tool_strategy')
-                      AND confidence >= 0.3
+                      AND confidence >= $1
                     ORDER BY confidence DESC, updated_at DESC
                     LIMIT 10
                     """,
+                    _conf,
                 )
             if not rows:
                 return ""
             lines = [f"- {r['value']}" for r in rows]
             text = "\n".join(lines)
             return _truncate(text, _BUDGET["tool_strategy"])
-        finally:
-            await conn.close()
     except Exception as e:
-        logger.warning(f"memory_recall tool_strategy 조회 실패: {e}")
+        logger.warning("memory_recall_section_failed", section="tool_strategy", error=str(e))
         return ""
 
 
 async def _build_active_directives(project_id: Optional[str] = None) -> str:
-    """섹션 4: 활성 Directive (directive_lifecycle pending/running)."""
+    """섹션 4: 활성 Directive (directive_lifecycle pending/running).
+    #22: 프로젝트 필터 통일 — project = $1 OR project IS NULL."""
     try:
-        conn = await _get_conn()
-        try:
+        async with _get_pool().acquire() as conn:
             if project_id:
                 rows = await conn.fetch(
                     """
                     SELECT task_id, title, status, priority
                     FROM directive_lifecycle
                     WHERE status IN ('pending', 'running', 'queued')
-                      AND project = $1
+                      AND (project IS NULL OR project = $1)
                     ORDER BY
                         CASE WHEN status = 'running' THEN 0 ELSE 1 END,
                         created_at DESC
@@ -213,51 +233,49 @@ async def _build_active_directives(project_id: Optional[str] = None) -> str:
                 lines.append(f"- {status_icon} [{r['task_id']}] {r['title']} ({priority})")
             text = "\n".join(lines)
             return _truncate(text, _BUDGET["directives"])
-        finally:
-            await conn.close()
     except Exception as e:
-        logger.warning(f"memory_recall active_directives 조회 실패: {e}")
+        logger.warning("memory_recall_section_failed", section="active_directives", error=str(e))
         return ""
 
 
 async def _build_discoveries(project_id: Optional[str] = None) -> str:
     """섹션 5: 이전 작업 발견 사항 — 해당 프로젝트 + 공통(project IS NULL)."""
     try:
-        conn = await _get_conn()
-        try:
+        _conf = _CONFIDENCE.get("discovery", 0.4)
+        async with _get_pool().acquire() as conn:
+            # #22: 프로젝트 필터 통일
             if project_id:
                 rows = await conn.fetch(
                     """
                     SELECT key, value FROM ai_observations
                     WHERE category IN ('learning', 'recurring_issue', 'discovery')
-                      AND confidence >= 0.3
+                      AND confidence >= $2
                       AND (project IS NULL OR project = $1)
                     ORDER BY
                         CASE WHEN project = $1 THEN 0 ELSE 1 END,
                         updated_at DESC, confidence DESC
                     LIMIT 10
                     """,
-                    project_id,
+                    project_id, _conf,
                 )
             else:
                 rows = await conn.fetch(
                     """
                     SELECT key, value FROM ai_observations
                     WHERE category IN ('learning', 'recurring_issue', 'discovery')
-                      AND confidence >= 0.3
+                      AND confidence >= $1
                     ORDER BY updated_at DESC, confidence DESC
                     LIMIT 10
                     """,
+                    _conf,
                 )
             if not rows:
                 return ""
             lines = [f"- {r['value']}" for r in rows]
             text = "\n".join(lines)
             return _truncate(text, _BUDGET["discoveries"])
-        finally:
-            await conn.close()
     except Exception as e:
-        logger.warning(f"memory_recall discoveries 조회 실패: {e}")
+        logger.warning("memory_recall_section_failed", section="discoveries", error=str(e))
         return ""
 
 
@@ -272,30 +290,27 @@ async def build_memory_context(
     project_id에 따라 해당 프로젝트 메모리 우선 주입.
     총 2,000 토큰 이내. 실패 시 빈 문자열 반환 (기본 프롬프트 유지).
     """
+    # #23: project 정규화
+    project_id = _normalize_project(project_id)
     blocks: List[str] = []
 
-    # 1. 이전 대화 요약 (프로젝트 우선)
-    notes = await _build_session_notes(session_id, project_id)
+    # 5개 섹션 병렬 조회 (AADS-CRITICAL-FIX #30)
+    notes, prefs, tools, dirs, disc = await asyncio.gather(
+        _build_session_notes(session_id, project_id),
+        _build_preferences(),
+        _build_tool_strategy(project_id),
+        _build_active_directives(project_id),
+        _build_discoveries(project_id),
+    )
+
     if notes:
         blocks.append(f"<memory_session_notes>\n## 이전 대화 요약\n{notes}\n</memory_session_notes>")
-
-    # 2. CEO 운영 원칙/선호 (전역 공통)
-    prefs = await _build_preferences()
     if prefs:
         blocks.append(f"<memory_preferences>\n## CEO 운영 원칙 및 선호\n{prefs}\n</memory_preferences>")
-
-    # 3. 도구 사용 전략 (프로젝트+공통)
-    tools = await _build_tool_strategy(project_id)
     if tools:
         blocks.append(f"<memory_tool_strategy>\n## 도구 사용 전략\n{tools}\n</memory_tool_strategy>")
-
-    # 4. 활성 Directive (프로젝트 필터)
-    dirs = await _build_active_directives(project_id)
     if dirs:
         blocks.append(f"<memory_directives>\n## 활성 지시사항\n{dirs}\n</memory_directives>")
-
-    # 5. 발견 사항 (프로젝트+공통)
-    disc = await _build_discoveries(project_id)
     if disc:
         blocks.append(f"<memory_discoveries>\n## 이전 작업에서 발견한 사항\n{disc}\n</memory_discoveries>")
 
@@ -320,14 +335,14 @@ async def save_observation(
 ) -> bool:
     """
     채팅 또는 에이전트가 메모리에 기록.
-    category: 'ceo_preference', 'project_pattern', 'recurring_issue',
-              'decision', 'learning', 'discovery', 'tool_strategy'
-    project: 'AADS', 'KIS', 'GO100', 'SF', 'NTV2', 'NAS' 또는 None(전역)
-    동일 (category, key, project)가 있으면 confidence 증가 + value 업데이트.
+    #18: GREATEST로 confidence 보호 (동시 upsert race condition 방지)
+    #23: project 대문자 정규화
+    #25: key 특수문자 정제, 200자 제한
     """
+    key = _sanitize_key(key)
+    project = _normalize_project(project)
     try:
-        conn = await _get_conn()
-        try:
+        async with _get_pool().acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO ai_observations (category, key, value, confidence, project, updated_at)
@@ -335,17 +350,16 @@ async def save_observation(
                 ON CONFLICT (category, key, COALESCE(project, ''))
                 DO UPDATE SET
                     value = EXCLUDED.value,
-                    confidence = LEAST(ai_observations.confidence + 0.1, 1.0),
+                    confidence = GREATEST(EXCLUDED.confidence, ai_observations.confidence),
                     updated_at = NOW()
                 """,
                 category, key, content, confidence, project,
             )
-            logger.info(f"memory_recall save_observation: [{category}] {key} project={project} (source={source})")
+            logger.info("memory_recall_save_observation",
+                        category=category, key=key[:50], project=project, source=source)
             return True
-        finally:
-            await conn.close()
     except Exception as e:
-        logger.warning(f"memory_recall save_observation 실패: {e}")
+        logger.warning("memory_recall_save_observation_failed", error=str(e), category=category, key=key[:50])
         # fallback: memory_manager 경로
         try:
             from app.services.memory_manager import get_memory_manager
@@ -356,8 +370,10 @@ async def save_observation(
                 value=content,
                 confidence=confidence,
             )
-            logger.info(f"memory_recall save_observation fallback: [{category}] {key} (source={source})")
+            logger.info("memory_recall_save_observation_fallback", category=category, key=key[:50])
             return True
         except Exception as e2:
-            logger.warning(f"memory_recall save_observation fallback도 실패: {e2}")
+            # #13: 최종 폴백 실패 로깅
+            logger.warning("memory_recall_save_observation_all_fallbacks_failed",
+                           error=str(e2), category=category, key=key[:50])
             return False

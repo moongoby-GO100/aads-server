@@ -18,7 +18,24 @@ logger = logging.getLogger(__name__)
 
 # ─── Tool Output Compression ────────────────────────────────────────────────
 
+# #37: 도구별 차등 절단 한계
 _DEFAULT_TRUNCATE = 2000
+_TOOL_TRUNCATE_LIMITS: Dict[str, int] = {
+    "health_check": 200,
+    "read_remote_file": 500,
+    "code_explorer": 500,
+    "semantic_code_search": 500,
+    "query_database": 300,
+    "dashboard_query": 300,
+    "query_project_database": 300,
+    "web_search": 300,
+    "web_search_brave": 300,
+    "web_search_naver": 300,
+    "web_search_kakao": 300,
+    "jina_read": 300,
+    "git_remote_status": 200,
+    "run_remote_command": 300,
+}
 _ERROR_PATTERNS = re.compile(
     r"(error|exception|traceback|failed|fatal|critical)",
     re.IGNORECASE,
@@ -108,11 +125,11 @@ def _compress_web(raw: str) -> str:
     return raw[:500] + f"\n[...truncated, {len(raw) - 500} chars omitted...]"
 
 
-def _truncate_default(raw: str) -> str:
-    """Default truncation at 2000 characters."""
-    if len(raw) <= _DEFAULT_TRUNCATE:
+def _truncate_default(raw: str, limit: int = _DEFAULT_TRUNCATE) -> str:
+    """Default truncation at given limit (default 2000 chars)."""
+    if len(raw) <= limit:
         return raw
-    return raw[:_DEFAULT_TRUNCATE] + f"\n[...truncated, {len(raw) - _DEFAULT_TRUNCATE} chars omitted...]"
+    return raw[:limit] + f"\n[...truncated, {len(raw) - limit} chars omitted...]"
 
 
 # Tool name -> compressor mapping
@@ -162,14 +179,21 @@ def compress_tool_output(tool_name: str, raw_output: str) -> str:
                 compressor = fn
                 break
 
+    # #37: 도구별 차등 절단 한계 적용
+    tool_limit = _TOOL_TRUNCATE_LIMITS.get(base_name, _DEFAULT_TRUNCATE)
+
     if compressor is None:
-        compressor = _truncate_default
+        return _truncate_default(raw_output, tool_limit)
 
     try:
-        return compressor(raw_output)
+        result = compressor(raw_output)
+        # 압축기 결과도 도구별 한계 적용
+        if len(result) > tool_limit:
+            result = _truncate_default(result, tool_limit)
+        return result
     except Exception:
         logger.warning("compress_tool_output failed for %s, using truncation", tool_name)
-        return _truncate_default(raw_output)
+        return _truncate_default(raw_output, tool_limit)
 
 
 # ─── Observation Masking ─────────────────────────────────────────────────────

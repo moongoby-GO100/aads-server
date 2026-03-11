@@ -88,6 +88,22 @@ async def create_artifact(req: CreateArtifactRequest):
         logger.error("create_artifact_failed", error=str(e))
         raise HTTPException(500, f"DB error: {e}")
 
+    # #27: Artifact 생성을 메모리에 반영 (fire-and-forget)
+    try:
+        from app.core.memory_recall import save_observation
+        import asyncio as _aio
+        _content_str = json.dumps(req.content, ensure_ascii=False) if isinstance(req.content, dict) else str(req.content)
+        _aio.create_task(save_observation(
+            category="discovery",
+            key=f"artifact_{req.artifact_name[:50]}",
+            content=f"[Artifact 생성: {req.artifact_name}, 타입={req.artifact_type}, 크기={len(_content_str)}자]",
+            source="artifact_api",
+            confidence=0.6,
+            project=req.project_id,
+        ))
+    except Exception:
+        pass
+
     return ArtifactResponse(
         id=row["id"],
         project_id=row["project_id"],

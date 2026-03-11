@@ -219,10 +219,11 @@ async def _stream_anthropic(
     # 시스템 프롬프트 (Prompt Caching: Layer 1 정적 부분에 cache_control)
     system_blocks = _build_system_with_cache(system_prompt)
 
-    # Extended Thinking 설정
+    # #26: Extended Thinking 설정 (환경변수 오버라이드)
     thinking_config = None
     if use_thinking:
-        thinking_config = {"type": "enabled", "budget_tokens": 32000}
+        _thinking_budget = int(os.getenv("MAX_THINKING_TOKENS", "8000"))
+        thinking_config = {"type": "enabled", "budget_tokens": _thinking_budget}
 
     full_text = ""
     thinking_text = ""

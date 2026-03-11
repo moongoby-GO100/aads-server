@@ -19,7 +19,9 @@ _langfuse_client: Any = None
 
 
 def _is_configured() -> bool:
-    """필수 환경변수 존재 여부 확인."""
+    """필수 환경변수 존재 여부 확인. #36: LANGFUSE_ENABLED=false로 명시 비활성화 가능."""
+    if os.getenv("LANGFUSE_ENABLED", "true").lower() == "false":
+        return False
     return bool(
         os.getenv("LANGFUSE_SECRET_KEY")
         and os.getenv("LANGFUSE_PUBLIC_KEY")

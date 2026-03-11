@@ -151,6 +151,25 @@ async def check_and_compact(
         except Exception as e:
             logger.warning(f"compaction_service: 기존 요약 조회 실패: {e}")
 
+    # #9: 압축 대상 메시지 해시 비교 — 변경 없으면 LLM 호출 스킵
+    import hashlib
+    _msg_hash = hashlib.md5("".join(m.get("content","")[:200] for m in to_compress).encode()).hexdigest()
+    if existing_summary and db_conn:
+        try:
+            _hash_row = await db_conn.fetchval(
+                "SELECT content FROM session_notes WHERE session_id = $1 AND note_type = 'compaction_hash' ORDER BY created_at DESC LIMIT 1",
+                str(session_id),
+            )
+            if _hash_row == _msg_hash:
+                logger.info(f"compaction_service: skip — messages unchanged (hash={_msg_hash[:8]})")
+                compaction_msg = {
+                    "role": "user",
+                    "content": f"[대화 압축 요약 — 이전 {len(to_compress)}개 메시지]\n\n{existing_summary}",
+                }
+                return [compaction_msg] + recent
+        except Exception:
+            pass
+
     # 도구 출력 압축 후 요약 생성
     compressed_messages = _compress_tool_outputs_in_messages(to_compress)
     new_summary = await _summarize(compressed_messages)
@@ -161,35 +180,43 @@ async def check_and_compact(
     else:
         summary = new_summary
 
-    # DB에 압축 요약 저장
+    # DB에 압축 요약 저장 (AADS-CRITICAL-FIX #3: 트랜잭션 + 테이블 순서 고정)
+    # 순서: session_notes → chat_messages → ai_observations (데드락 방지)
     if db_conn:
         try:
-            await db_conn.execute(
-                """
-                INSERT INTO session_notes (session_id, note_type, summary, content)
-                VALUES ($1, 'compaction', $2, $2)
-                """,
-                str(session_id),
-                summary,
-            )
-            # 이전 메시지 is_compacted 마킹 (최근 COMPACTION_KEEP_RECENT*2 보존)
-            await db_conn.execute(
-                """
-                UPDATE chat_messages
-                SET is_compacted = true
-                WHERE session_id = $1
-                  AND id NOT IN (
-                      SELECT id FROM chat_messages
-                      WHERE session_id = $1
-                      ORDER BY created_at DESC
-                      LIMIT $2
-                  )
-                """,
-                uuid.UUID(session_id) if len(session_id) == 36 else session_id,
-                COMPACTION_KEEP_RECENT * 2,
-            )
-            # Stage 7: 양방향 메모리 동기화 — ai_observations에 핵심 지시사항 저장
-            await _sync_to_observations(db_conn, session_id, summary)
+            async with db_conn.transaction():
+                # 1. session_notes INSERT
+                await db_conn.execute(
+                    """
+                    INSERT INTO session_notes (session_id, note_type, summary, content)
+                    VALUES ($1, 'compaction', $2, $2)
+                    """,
+                    str(session_id),
+                    summary,
+                )
+                # 1.5 #9: 압축 해시 저장 (다음 호출 시 변경 감지용)
+                await db_conn.execute(
+                    "INSERT INTO session_notes (session_id, note_type, summary, content) VALUES ($1, 'compaction_hash', $2, $2)",
+                    str(session_id), _msg_hash,
+                )
+                # 2. chat_messages UPDATE (is_compacted 마킹)
+                await db_conn.execute(
+                    """
+                    UPDATE chat_messages
+                    SET is_compacted = true
+                    WHERE session_id = $1
+                      AND id NOT IN (
+                          SELECT id FROM chat_messages
+                          WHERE session_id = $1
+                          ORDER BY created_at DESC
+                          LIMIT $2
+                      )
+                    """,
+                    uuid.UUID(session_id) if len(session_id) == 36 else session_id,
+                    COMPACTION_KEEP_RECENT * 2,
+                )
+                # 3. ai_observations UPSERT (양방향 메모리 동기화)
+                await _sync_to_observations(db_conn, session_id, summary)
         except Exception as e:
             logger.error(f"compaction_service db error: {e}", exc_info=True)
 
@@ -250,10 +277,13 @@ async def _summarize(messages: List[Dict[str, Any]]) -> str:
             max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
         )
-        return msg.content[0].text.strip()
+        result = msg.content[0].text.strip()
+        # #21: 요약 길이 경고
+        if len(result) > 4000:
+            logger.warning(f"compaction_summary_too_long: {len(result)} chars (session context)")
+        return result
     except Exception as e:
         logger.warning(f"compaction_service summarize error: {e}")
-        # 폴백: 간단 트리밍
         return f"[압축 오류, 원본 {len(messages)}개 메시지 — 최근 내용 우선 참고]"
 
 
@@ -263,15 +293,20 @@ async def _merge_summaries(existing_summary: str, new_summary: str) -> str:
     8000자 이하: 기존 요약 보존 + 새 요약 append (LLM 호출 없음, 정보 손실 방지)
     8000자 초과: LLM 병합 (강화된 보존 규칙 적용)
     """
+    # #21: append되는 새 요약 최대 3000자 제한
+    if len(new_summary) > 3000:
+        new_summary = new_summary[:3000] + "\n[... 나머지 생략]"
+
     # Append strategy: preserve existing, add new
     combined = existing_summary + "\n\n---\n\n## 추가 요약 (최신)\n" + new_summary
 
-    if len(combined) <= 8000:
+    # #35: 점진적 전환 — 12KB 미만 append only, 12KB 초과만 LLM 호출
+    if len(combined) <= 12000:
         logger.info(f"compaction_service: append merge ({len(combined)} chars, no LLM needed)")
         return combined
 
     # Combined too large — use LLM merge with stronger preservation rules
-    logger.info(f"compaction_service: LLM merge needed ({len(combined)} chars > 8000)")
+    logger.info(f"compaction_service: LLM merge needed ({len(combined)} chars > 12K)")
     prompt = f"""아래 두 개의 구조화 요약을 하나로 병합하세요.
 
 규칙:
@@ -318,9 +353,9 @@ async def _sync_to_observations(db_conn, session_id: str, summary: str) -> None:
         return
 
     try:
-        # "## CEO 주요 지시사항" 섹션 추출
+        # #24: 유연한 정규식 — "CEO 주요 지시사항", "CEO의 지시사항", "### CEO 지시", "대표 지시" 등 매치
         directives_match = re.search(
-            r"## CEO 주요 지시사항\s*\n(.*?)(?=\n## |\Z)",
+            r"#{1,3}\s*(?:CEO|대표)[\s의]*(?:주요\s*)?지시사항?\s*\n(.*?)(?=\n#{1,3}\s|\Z)",
             summary,
             re.DOTALL,
         )
