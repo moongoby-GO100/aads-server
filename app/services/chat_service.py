@@ -392,12 +392,13 @@ async def _save_message(
     thinking_summary: Optional[str] = None,
 ) -> Dict[str, Any]:
     # Strip raw XML tool-call / tool-response / fabricated-result blocks from assistant messages
+    # 닫힌 태그 + 닫히지 않은 태그(이후 전부) 모두 제거
     if role == "assistant" and content:
-        content = re.sub(r'<function_calls>.*?</function_calls>', '', content, flags=re.DOTALL)
-        content = re.sub(r'<function_response>.*?</function_response>', '', content, flags=re.DOTALL)
-        content = re.sub(r'<function_results>.*?</function_results>', '', content, flags=re.DOTALL)
+        for tag in ("function_calls", "function_response", "function_results", "tool_results"):
+            content = re.sub(rf'<{tag}>.*?</{tag}>', '', content, flags=re.DOTALL)
+            content = re.sub(rf'<{tag}>.*', '', content, flags=re.DOTALL)  # 닫히지 않은 태그
         content = re.sub(r'<invoke\s+name=[^>]*>.*?</invoke>', '', content, flags=re.DOTALL)
-        content = re.sub(r'<tool_results>.*?</tool_results>', '', content, flags=re.DOTALL)
+        content = re.sub(r'<invoke\s+name=[^>]*>.*', '', content, flags=re.DOTALL)  # 닫히지 않은 invoke
         content = content.strip()
 
     # AADS-CRITICAL-FIX #2: INSERT + UPDATE를 트랜잭션으로 감싸 message_count 정합성 보장
@@ -918,8 +919,11 @@ async def send_message_stream(
                         )
                         if not _sdk_val.is_valid:
                             logger.error(f"sdk_path_validation_failed: {_sdk_val.violation_type} — {_sdk_val.message}")
-                            full_response = re.sub(r'<function_results>.*?</function_results>', '', full_response, flags=re.DOTALL)
+                            for _tag in ("function_calls", "function_response", "function_results", "tool_results"):
+                                full_response = re.sub(rf'<{_tag}>.*?</{_tag}>', '', full_response, flags=re.DOTALL)
+                                full_response = re.sub(rf'<{_tag}>.*', '', full_response, flags=re.DOTALL)
                             full_response = re.sub(r'<invoke\s+name=[^>]*>.*?</invoke>', '', full_response, flags=re.DOTALL)
+                            full_response = re.sub(r'<invoke\s+name=[^>]*>.*', '', full_response, flags=re.DOTALL)
                         await _save_and_update_session(
                             sid, full_response, model_used=model_used, intent=intent,
                             cost=cost_usd, tools_called=tools_called)
@@ -995,8 +999,11 @@ async def send_message_stream(
             )
             if not _auto_val.is_valid:
                 logger.error(f"autonomous_executor_validation_failed: {_auto_val.violation_type} — {_auto_val.message}")
-                full_response = re.sub(r'<function_results>.*?</function_results>', '', full_response, flags=re.DOTALL)
+                for _tag in ("function_calls", "function_response", "function_results", "tool_results"):
+                    full_response = re.sub(rf'<{_tag}>.*?</{_tag}>', '', full_response, flags=re.DOTALL)
+                    full_response = re.sub(rf'<{_tag}>.*', '', full_response, flags=re.DOTALL)
                 full_response = re.sub(r'<invoke\s+name=[^>]*>.*?</invoke>', '', full_response, flags=re.DOTALL)
+                full_response = re.sub(r'<invoke\s+name=[^>]*>.*', '', full_response, flags=re.DOTALL)
             await _save_and_update_session(
                 sid, full_response, model_used=model_used, intent=intent,
                 cost=cost_usd, tools_called=tools_called)
