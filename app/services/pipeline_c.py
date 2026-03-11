@@ -511,6 +511,8 @@ class PipelineCJob:
         if continue_session:
             claude_cmd = f"claude -p --output-format text -c {escaped}"
         else:
+            # 매 실행마다 새 session-id 발급 ("Session ID already in use" 충돌 방지)
+            self.claude_session_id = str(uuid.uuid4())
             claude_cmd = (
                 f"claude -p --output-format text "
                 f"--session-id {self.claude_session_id} "
@@ -620,6 +622,8 @@ class PipelineCJob:
         if continue_session:
             claude_cmd = f"claude -p --output-format text -c {escaped}"
         else:
+            # 매 실행마다 새 session-id 발급 ("Session ID already in use" 충돌 방지)
+            self.claude_session_id = str(uuid.uuid4())
             claude_cmd = (
                 f"claude -p --output-format text "
                 f"--session-id {self.claude_session_id} "
@@ -1013,6 +1017,7 @@ async def recover_interrupted_jobs():
     2. running/queued 상태로 남아있는 고아 pipeline_jobs를 error 처리
     3. in_progress 상태로 24시간 이상 남아있는 고아 directive_lifecycle을 failed 처리
     """
+    logger.info("pipeline_c_recovery: starting recover_interrupted_jobs")
     try:
         from app.core.db_pool import get_pool
         pool = get_pool()
@@ -1227,6 +1232,7 @@ async def recover_interrupted_jobs():
                 """
             )
             if not rows:
+                logger.info("pipeline_c_recovery: no restarting jobs found — done")
                 return
 
             for row in rows:
