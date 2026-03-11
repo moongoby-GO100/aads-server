@@ -101,6 +101,7 @@ class ToolExecutor:
             # AADS-186E-2/186E-3: 메모리 도구
             "save_note":              self._save_note,
             "recall_notes":           self._recall_notes,
+            "delete_note":            self._delete_note,
             "learn_pattern":          self._learn_pattern,
             "observe":                self._observe,
             # AADS-186E-3: 딥리서치 + 코드탐색 도구
@@ -859,6 +860,19 @@ class ToolExecutor:
             return d
 
         return [_note_to_dict(n) for n in notes]
+
+    async def _delete_note(self, inp: Dict[str, Any]) -> Any:
+        """노트 삭제 — id 또는 keyword 기반."""
+        note_id = int(inp.get("note_id", inp.get("id", 0)) or 0)
+        keyword = (inp.get("keyword", "") or "").strip()
+
+        if not note_id and not keyword:
+            return {"error": "note_id 또는 keyword 중 하나 필수"}
+
+        from app.services.memory_manager import get_memory_manager
+        mgr = get_memory_manager()
+        result = await mgr.delete_note(note_id=note_id, keyword=keyword)
+        return {"status": "deleted" if "완료" in result else "not_found", "message": result}
 
     async def _learn_pattern(self, inp: Dict[str, Any]) -> Any:
         """패턴 학습 — ai_meta_memory UPSERT."""

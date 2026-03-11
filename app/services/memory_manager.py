@@ -514,6 +514,50 @@ class MemoryManager:
         finally:
             await conn.close()
 
+    async def delete_note(self, note_id: int = 0, keyword: str = "") -> str:
+        """
+        노트 삭제 (도구 인터페이스).
+        note_id 지정 시 해당 ID 삭제, keyword 지정 시 summary/content ILIKE 매칭 삭제.
+        반환: 삭제 결과 메시지.
+        """
+        if not note_id and not keyword:
+            return "오류: note_id 또는 keyword 중 하나 필수"
+
+        conn = await _get_conn()
+        try:
+            if note_id:
+                result = await conn.execute(
+                    "DELETE FROM session_notes WHERE id = $1", note_id
+                )
+                count = int(result.split()[-1])  # "DELETE N"
+                if count:
+                    return f"노트 #{note_id} 삭제 완료"
+                return f"노트 #{note_id}를 찾을 수 없습니다"
+            else:
+                # keyword 기반: 먼저 매칭 건수 확인
+                rows = await conn.fetch(
+                    """
+                    SELECT id, summary FROM session_notes
+                    WHERE summary ILIKE $1 OR content ILIKE $1
+                    ORDER BY created_at DESC LIMIT 10
+                    """,
+                    f"%{keyword}%",
+                )
+                if not rows:
+                    return f"'{keyword}' 키워드와 일치하는 노트가 없습니다"
+                ids = [r["id"] for r in rows]
+                result = await conn.execute(
+                    "DELETE FROM session_notes WHERE id = ANY($1)", ids
+                )
+                count = int(result.split()[-1])
+                titles = ", ".join(r["summary"][:30] for r in rows[:3])
+                return f"'{keyword}' 매칭 노트 {count}건 삭제 완료 ({titles}{'...' if len(rows) > 3 else ''})"
+        except Exception as e:
+            logger.error(f"memory_manager delete_note error: {e}")
+            return f"노트 삭제 실패: {e}"
+        finally:
+            await conn.close()
+
     async def recall_notes(self, query: str, limit: int = 5) -> List[SessionNote]:
         """
         키워드로 노트 검색 (도구 인터페이스).

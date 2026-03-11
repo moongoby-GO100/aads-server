@@ -43,6 +43,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "spawn_parallel_subagents": True,     # 병렬 서브에이전트 — 지연 로드
     "save_note": True,
     "recall_notes": True,
+    "delete_note": True,
     "learn_pattern": True,
     "cost_report": True,
     # ── Tier 4: 외부 검색 (온디맨드, API 비용) ───────────────────────────
@@ -103,7 +104,7 @@ TOOL_CATEGORY_GUIDE = """\
 - directive_create / generate_directive: 지시서 생성
 - delegate_to_agent: 복잡한 작업 위임
 - delegate_to_research: 심층 리서치 위임
-- save_note / recall_notes / learn_pattern: 기억 관리
+- save_note / recall_notes / delete_note / learn_pattern: 기억 관리
 - cost_report: 비용 분석
 
 ### 🟢 Tier 4 — 외부 검색 (API 비용, 3~10초)
@@ -876,6 +877,31 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         ],
         "defer_loading": True,
     },
+    "delete_note": {
+        "name": "delete_note",
+        "description": (
+            "저장된 노트를 삭제. note_id(정확한 ID) 또는 keyword(키워드 매칭)로 삭제. "
+            "recall_notes로 먼저 검색하여 ID를 확인한 후 삭제하는 것을 권장."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "note_id": {
+                    "type": "integer",
+                    "description": "삭제할 노트 ID (recall_notes 결과에서 확인)",
+                },
+                "keyword": {
+                    "type": "string",
+                    "description": "키워드로 매칭되는 노트 삭제 (summary/content 검색)",
+                },
+            },
+        },
+        "input_examples": [
+            {"note_id": 42},
+            {"keyword": "NTV2 V2 구조"},
+        ],
+        "defer_loading": True,
+    },
     "learn_pattern": {
         "name": "learn_pattern",
         "description": (
@@ -1475,7 +1501,7 @@ _GROUPS: Dict[str, List[str]] = {
     # AADS-186E-1: 크롤링 도구 그룹
     "crawl": ["jina_read", "crawl4ai_fetch", "deep_crawl"],
     # AADS-186E-2: 메모리 도구 그룹
-    "memory": ["save_note", "recall_notes", "learn_pattern", "observe"],
+    "memory": ["save_note", "recall_notes", "delete_note", "learn_pattern", "observe"],
     # AADS-186E-3 / AADS-188B: 딥리서치 + 코드탐색 + 시맨틱 검색 도구 그룹
     "research": ["deep_research", "code_explorer", "analyze_changes", "search_all_projects", "semantic_code_search"],
     "all": list(_TOOLS.keys()),
