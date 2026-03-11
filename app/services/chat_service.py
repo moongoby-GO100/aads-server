@@ -909,6 +909,17 @@ async def send_message_stream(
                             logger.debug(f"sdk_session_id 저장 실패: {_se}")
 
                     if sdk_success:
+                        # 날조 방지: SDK 경로도 검증
+                        from app.services.output_validator import validate_response as _sdk_validate
+                        _sdk_val = _sdk_validate(
+                            response_text=full_response,
+                            tools_called=bool(tools_called),
+                            intent=intent,
+                        )
+                        if not _sdk_val.is_valid:
+                            logger.error(f"sdk_path_validation_failed: {_sdk_val.violation_type} — {_sdk_val.message}")
+                            full_response = re.sub(r'<function_results>.*?</function_results>', '', full_response, flags=re.DOTALL)
+                            full_response = re.sub(r'<invoke\s+name=[^>]*>.*?</invoke>', '', full_response, flags=re.DOTALL)
                         await _save_and_update_session(
                             sid, full_response, model_used=model_used, intent=intent,
                             cost=cost_usd, tools_called=tools_called)
@@ -975,7 +986,17 @@ async def send_message_stream(
                 except Exception:
                     pass
 
-            # #19: 응답 저장 (별도 커넥션)
+            # #19: 날조 방지 검증 후 응답 저장 (별도 커넥션)
+            from app.services.output_validator import validate_response as _auto_validate
+            _auto_val = _auto_validate(
+                response_text=full_response,
+                tools_called=bool(tools_called),
+                intent=intent,
+            )
+            if not _auto_val.is_valid:
+                logger.error(f"autonomous_executor_validation_failed: {_auto_val.violation_type} — {_auto_val.message}")
+                full_response = re.sub(r'<function_results>.*?</function_results>', '', full_response, flags=re.DOTALL)
+                full_response = re.sub(r'<invoke\s+name=[^>]*>.*?</invoke>', '', full_response, flags=re.DOTALL)
             await _save_and_update_session(
                 sid, full_response, model_used=model_used, intent=intent,
                 cost=cost_usd, tools_called=tools_called)
@@ -1083,8 +1104,23 @@ async def send_message_stream(
                     yield f"data: {json.dumps({'type': 'error', 'content': event.get('content', '오류')})}\n\n"
                     return
 
-            # 재시도 응답으로 교체
+            # 재시도 응답도 검증 (날조 방지 — 재시도에서도 가짜 결과 차단)
             if _retry_response.strip():
+                _retry_validation = validate_response(
+                    response_text=_retry_response,
+                    tools_called=bool(tools_called),
+                    intent=intent,
+                )
+                if not _retry_validation.is_valid:
+                    logger.error(
+                        f"output_validator_retry_also_failed: {_retry_validation.violation_type} — "
+                        f"{_retry_validation.message} (intent={intent})"
+                    )
+                    # 재시도도 실패하면 날조된 부분 제거하고 경고 메시지로 대체
+                    _retry_response = (
+                        "⚠️ 요청을 처리하는 중 검증에 실패했습니다. "
+                        "정확한 정보를 위해 도구를 직접 호출하여 확인해주세요."
+                    )
                 full_response = full_response + "\n\n" + _retry_response
 
         # ═══ #19: Phase C — 응답 저장 (별도 커넥션) ═══

@@ -1,15 +1,13 @@
 """
-AADS-188C Phase 3: Output Validator — 빈 약속 응답 탐지 및 재시도.
-
-"확인하겠습니다" 류의 행동 없는 빈 약속 응답을 탐지하고,
-도구 호출을 강제하는 재시도 프롬프트를 생성한다.
+AADS-188C Phase 3 + R-CRITICAL-002: Output Validator — 거짓 보고 방지.
 
 탐지 유형:
-  EMPTY_PROMISE       — 행동 없이 "하겠습니다"로 끝나는 응답
-  NO_TOOL_FOR_ACTION  — 도구 호출 없이 행동을 약속하는 응답
-  TOO_SHORT           — 도구 결과 없이 극단적으로 짧은 응답
-  UNVERIFIED_COUNT    — 도구 호출 없이 DB 수치/건수를 보고하는 응답 (경고)
-  FABRICATED_RESULTS  — 도구를 호출하지 않고 가짜 도구 결과 XML을 텍스트로 생성한 응답
+  EMPTY_PROMISE          — 행동 없이 "하겠습니다"로 끝나는 응답
+  NO_TOOL_FOR_ACTION     — 도구 호출 없이 행동을 약속하는 응답
+  TOO_SHORT              — 도구 결과 없이 극단적으로 짧은 응답
+  UNVERIFIED_COUNT       — 도구 호출 없이 DB 수치/건수를 보고하는 응답 (차단)
+  FABRICATED_RESULTS     — 가짜 도구 결과 XML 태그를 텍스트로 생성한 응답 (차단)
+  FABRICATED_DATA_TABLE  — 도구 미호출 상태에서 DB 조회/결과처럼 보이는 마크다운 테이블 생성 (차단)
 """
 from __future__ import annotations
 
@@ -44,9 +42,7 @@ _ACTION_VERBS: List[str] = [
     "살펴보", "파악해", "조사해", "체크해",
 ]
 
-# ─── 검증 결과 ─────────────────────────────────────────────────────────────────
-
-# ─── 날조 도구 결과 패턴 ──────────────────────────────────────────────────────
+# ─── 날조 도구 결과 패턴 (XML) ────────────────────────────────────────────────
 
 _FABRICATED_XML_PATTERNS: List[re.Pattern] = [
     re.compile(r'<function_results>', re.IGNORECASE),
@@ -56,13 +52,29 @@ _FABRICATED_XML_PATTERNS: List[re.Pattern] = [
     re.compile(r'<tool_results>', re.IGNORECASE),
 ]
 
+# ─── 날조 데이터 테이블 패턴 (마크다운) ──────────────────────────────────────
+
+# "DB 조회 결과", "실측 확인", "쿼리 결과" 등 키워드 뒤에 마크다운 테이블이 오는 패턴
+_DATA_CLAIM_KEYWORDS = re.compile(
+    r'(?:DB\s*조회|쿼리\s*결과|실측\s*확인|실측\s*결과|database\s*(?:query|result)|'
+    r'query\s*result|SELECT\s+.*?FROM|조회\s*결과|테이블\s*조회|데이터\s*확인)',
+    re.IGNORECASE,
+)
+
+# 마크다운 테이블 패턴 (헤더행 + 구분행)
+_MARKDOWN_TABLE = re.compile(
+    r'\|[^\n]+\|\s*\n\s*\|[\s\-:]+\|',
+)
+
+# ─── 검증 결과 ─────────────────────────────────────────────────────────────────
+
 
 @dataclass
 class ValidationResult:
     is_valid: bool
-    violation_type: str  # "" | "EMPTY_PROMISE" | "NO_TOOL_FOR_ACTION" | "TOO_SHORT" | "FABRICATED_RESULTS"
+    violation_type: str
     message: str
-    retry_prompt: str  # 재시도 시 추가할 사용자 메시지
+    retry_prompt: str
 
 
 def validate_response(
@@ -71,23 +83,13 @@ def validate_response(
     intent: str = "",
 ) -> ValidationResult:
     """
-    모델 응답을 검증하여 빈 약속 여부를 판단한다.
-
-    Args:
-        response_text: 모델이 생성한 텍스트 응답
-        tools_called: 이 턴에서 도구가 호출되었는지 여부
-        intent: 분류된 인텐트 (greeting/casual이면 검증 스킵)
-
-    Returns:
-        ValidationResult — is_valid=False면 재시도 필요
+    모델 응답을 검증하여 거짓 보고 여부를 판단한다.
     """
     _OK = ValidationResult(is_valid=True, violation_type="", message="", retry_prompt="")
 
-    # greeting/casual은 도구 호출 불필요 (단, 날조 검사는 항상 수행)
     stripped = response_text.strip()
 
-    # ── FABRICATED_RESULTS: 가짜 도구 결과 XML 태그 생성 탐지 ──────────────
-    # 도구 호출 여부와 무관하게 항상 검사 — AI가 텍스트로 XML 태그를 생성하면 차단
+    # ── FABRICATED_RESULTS: 가짜 XML 태그 (모든 인텐트, 모든 경로에서 항상 검사) ──
     _fab = check_fabricated_results(stripped)
     if _fab:
         logger.error(f"[OutputValidator] FABRICATED_RESULTS detected: {_fab.message}")
@@ -96,9 +98,15 @@ def validate_response(
     if intent in ("greeting", "casual", ""):
         return _OK
 
-    # 도구가 호출된 응답은 유효
+    # 도구가 호출된 응답은 유효 (단, XML 날조는 위에서 이미 검사)
     if tools_called:
         return _OK
+
+    # ── FABRICATED_DATA_TABLE: 도구 미호출인데 DB 조회 결과처럼 보이는 테이블 ──
+    _fdt = check_fabricated_data_table(stripped)
+    if _fdt:
+        logger.error(f"[OutputValidator] FABRICATED_DATA_TABLE detected: {_fdt.message}")
+        return _fdt
 
     # ── EMPTY_PROMISE: 짧은 텍스트 + 빈 약속 패턴 ─────────────────────────
     if len(stripped) < 100:
@@ -142,19 +150,20 @@ def validate_response(
             ),
         )
 
-    # ── UNVERIFIED_COUNT: 도구 호출 없이 수치/건수 보고 (경고만, 차단 안 함) ──
+    # ── UNVERIFIED_COUNT: 도구 호출 없이 수치/건수 보고 (차단) ──────────────
     _warn = check_unverified_counts(stripped, tools_called)
     if _warn:
         logger.warning(f"[OutputValidator] {_warn.message}")
+        return _warn  # 이제 차단 (is_valid=False)
 
     return _OK
 
 
-# ─── 수치 환각 감지 (경고 전용) ──────────────────────────────────────────────
+# ─── 수치 환각 감지 (차단) ────────────────────────────────────────────────────
 
-# DB 건수/수량을 나타내는 패턴: "50건", "120개", "총 30", "약 200건" 등
+# DB 건수/수량을 나타내는 패턴: "50건", "120개", "총 30종목", "약 200건" 등
 _COUNT_PATTERN = re.compile(
-    r'(?:총\s*|약\s*)?(\d{1,6})\s*(?:건|개|행|row|rows|개의|건의)',
+    r'(?:총\s*|약\s*)?(\d{1,6})\s*(?:건|개|행|종목|row|rows|개의|건의|종목의|건이|개가|종목이|명|대|곳|장|EA)',
     re.IGNORECASE,
 )
 
@@ -165,10 +174,7 @@ def check_unverified_counts(
 ) -> Optional[ValidationResult]:
     """
     도구 호출 없이 DB 수치/건수를 보고하는 응답을 탐지한다.
-    차단하지 않고 경고 로그만 남긴다 (is_valid=True).
-
-    Returns:
-        ValidationResult with violation_type="UNVERIFIED_COUNT" if detected, else None
+    차단 + 재시도.
     """
     if tools_called:
         return None
@@ -177,23 +183,29 @@ def check_unverified_counts(
     if not matches:
         return None
 
-    # 숫자 1~2 같은 소규모 수치는 일반 대화일 가능성이 높으므로 무시
-    significant = [m for m in matches if int(m) >= 3]
+    # 숫자 1~9 같은 소규모 수치는 일반 대화일 가능성이 높으므로 무시
+    significant = [m for m in matches if int(m) >= 10]
     if not significant:
         return None
 
     return ValidationResult(
-        is_valid=True,  # 경고만, 차단하지 않음
+        is_valid=False,
         violation_type="UNVERIFIED_COUNT",
         message=(
             f"도구 미호출 상태에서 수치 보고 감지: "
-            f"{', '.join(significant)} — 환각 가능성 경고"
+            f"{', '.join(significant)} — 환각 가능성"
         ),
-        retry_prompt="",  # 차단하지 않으므로 재시도 프롬프트 없음
+        retry_prompt=(
+            "[시스템 재시도 지시 — 미검증 수치 감지] "
+            "방금 응답에서 도구를 호출하지 않고 수치(건수/개수)를 보고했습니다. "
+            "DB 수치는 반드시 query_database 도구로 실제 조회한 결과만 사용하세요. "
+            "추정이나 이전 대화의 수치를 재활용하지 마세요. "
+            "지금 즉시 query_database 또는 관련 도구를 호출하여 실측 데이터로 보고하세요."
+        ),
     )
 
 
-# ─── 날조 도구 결과 감지 (차단) ───────────────────────────────────────────────
+# ─── 날조 도구 결과 XML 감지 (차단) ──────────────────────────────────────────
 
 
 def check_fabricated_results(
@@ -202,10 +214,6 @@ def check_fabricated_results(
     """
     AI가 도구를 호출하지 않고 가짜 <function_results>, <invoke name=...> 등
     XML 태그를 텍스트로 직접 생성한 경우를 탐지한다.
-    이는 CEO에 대한 거짓 보고이므로 차단 + 재시도한다.
-
-    Returns:
-        ValidationResult with violation_type="FABRICATED_RESULTS" if detected, else None
     """
     for pattern in _FABRICATED_XML_PATTERNS:
         match = pattern.search(response_text)
@@ -229,3 +237,41 @@ def check_fabricated_results(
             )
 
     return None
+
+
+# ─── 날조 데이터 테이블 감지 (차단) ──────────────────────────────────────────
+
+
+def check_fabricated_data_table(
+    response_text: str,
+) -> Optional[ValidationResult]:
+    """
+    도구를 호출하지 않고 'DB 조회 결과', '실측 확인' 등의 키워드 뒤에
+    마크다운 테이블을 배치하여 마치 실제 데이터인 것처럼 보이게 하는 패턴을 탐지한다.
+    """
+    # "DB 조회 결과" 류 키워드가 있는지 확인
+    has_data_claim = _DATA_CLAIM_KEYWORDS.search(response_text)
+    if not has_data_claim:
+        return None
+
+    # 마크다운 테이블이 있는지 확인
+    has_table = _MARKDOWN_TABLE.search(response_text)
+    if not has_table:
+        return None
+
+    return ValidationResult(
+        is_valid=False,
+        violation_type="FABRICATED_DATA_TABLE",
+        message=(
+            f"날조 데이터 테이블 감지: '{has_data_claim.group(0)}' 키워드 + 마크다운 테이블 — "
+            f"도구 호출 없이 DB 결과처럼 보이는 데이터를 생성함"
+        ),
+        retry_prompt=(
+            "[시스템 재시도 지시 — 날조 데이터 테이블 감지] "
+            "방금 응답에서 도구를 호출하지 않고 'DB 조회 결과'나 '실측 확인' 등의 표현과 함께 "
+            "마크다운 테이블을 작성했습니다. 이는 실제 데이터가 아닌 날조된 내용입니다. "
+            "데이터를 보고하려면 반드시 query_database, read_remote_file, task_history 등 "
+            "도구를 실제로 호출하고 그 결과를 사용하세요. "
+            "도구로 확인할 수 없다면 '현재 실시간 데이터를 확인할 수 없습니다'라고 솔직히 답하세요."
+        ),
+    )
