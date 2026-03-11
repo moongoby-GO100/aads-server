@@ -166,10 +166,9 @@ class ToolExecutor:
         limit = min(inp.get("limit", 10), 50)
         project = inp.get("project", "")
         try:
-            import asyncpg
-            db_url = os.getenv("DATABASE_URL", "").replace("postgresql://", "postgres://")
-            conn = await asyncpg.connect(db_url, timeout=8)
-            try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
                 if project:
                     rows = await conn.fetch(
                         "SELECT task_id, title, status, completed_at FROM directive_lifecycle "
@@ -183,8 +182,6 @@ class ToolExecutor:
                         limit,
                     )
                 return [dict(r) for r in rows]
-            finally:
-                await conn.close()
         except Exception as e:
             return {"error": str(e)}
 
@@ -249,19 +246,28 @@ class ToolExecutor:
     async def _query_database(self, inp: Dict[str, Any]) -> Any:
         query = inp.get("query", "")
         limit = min(inp.get("limit", 20), 100)
-        if not query.strip().upper().startswith("SELECT"):
+        # SQL 안전성 검증
+        clean_query = query.strip().rstrip(";").strip()
+        if not clean_query.upper().startswith("SELECT"):
             return {"error": "SELECT 쿼리만 허용됩니다"}
+        # 세미콜론으로 다중 쿼리 차단
+        if ";" in clean_query:
+            return {"error": "다중 쿼리(;) 사용 불가"}
+        # 위험 키워드 차단
+        _DANGEROUS_SQL = {"DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "TRUNCATE", "CREATE", "GRANT", "REVOKE", "EXEC"}
+        upper_q = clean_query.upper()
+        for kw in _DANGEROUS_SQL:
+            if kw in upper_q:
+                return {"error": f"금지된 키워드: {kw}"}
         try:
-            import asyncpg
-            db_url = os.getenv("DATABASE_URL", "").replace("postgresql://", "postgres://")
-            conn = await asyncpg.connect(db_url, timeout=8)
-            try:
-                if "LIMIT" not in query.upper():
-                    query = query.rstrip(";") + f" LIMIT {limit}"
-                rows = await conn.fetch(query)
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute("SET default_transaction_read_only = on")
+                if "LIMIT" not in upper_q:
+                    clean_query = clean_query + f" LIMIT {limit}"
+                rows = await conn.fetch(clean_query)
                 return [dict(r) for r in rows]
-            finally:
-                await conn.close()
         except Exception as e:
             return {"error": str(e)}
 
@@ -451,6 +457,8 @@ class ToolExecutor:
 
         if engine == "all":
             return await self._web_search_all(query, count)
+
+        result = {"error": "search failed", "citations": []}
 
         if engine in ("google", "auto"):
             try:
@@ -679,10 +687,9 @@ class ToolExecutor:
         # TASK_ID 채번: DB에서 최대 번호 조회
         task_id = f"{project}-NEW"
         try:
-            import asyncpg
-            db_url = os.getenv("DATABASE_URL", "").replace("postgresql://", "postgres://")
-            conn = await asyncpg.connect(db_url, timeout=8)
-            try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
                 row = await conn.fetchrow(
                     "SELECT task_id FROM directive_lifecycle "
                     "WHERE task_id ILIKE $1 ORDER BY created_at DESC LIMIT 1",
@@ -694,8 +701,6 @@ class ToolExecutor:
                     if len(parts) == 2 and parts[1].isdigit():
                         next_num = int(parts[1]) + 1
                         task_id = f"{project}-{next_num}"
-            finally:
-                await conn.close()
         except Exception as e:
             logger.warning(f"generate_directive task_id lookup failed: {e}")
 
@@ -1122,6 +1127,7 @@ class ToolExecutor:
             result_text = ""
             error_text = ""
             total_cost = 0.0  # M2: 비용 추적
+            session_id = _captured_session_id  # C7: ContextVar 캡처값을 함수 최상단에서 바인딩
             try:
                 from app.services.autonomous_executor import AutonomousExecutor
                 from app.services.tool_registry import ToolRegistry
@@ -1209,9 +1215,20 @@ class ToolExecutor:
                 except Exception as art_err:
                     logger.warning(f"delegate_to_agent artifact save failed: {art_err}")
 
+            # 오래된 artifact 정리 (1시간 이상)
+            try:
+                import time as _time
+                import pathlib as _pathlib
+                _artifact_dir = _pathlib.Path("/tmp/aads_artifacts")
+                if _artifact_dir.exists():
+                    for old_f in _artifact_dir.iterdir():
+                        if _time.time() - old_f.stat().st_mtime > 3600:
+                            old_f.unlink(missing_ok=True)
+            except Exception:
+                pass
+
             # 4) 채팅방에 결과 보고 (캡처된 session_id 사용)
             try:
-                session_id = _captured_session_id  # ContextVar 대신 명시적 캡처값 사용
                 if session_id:
                     from app.core.db_pool import get_pool
                     pool = get_pool()
@@ -1533,15 +1550,13 @@ class ToolExecutor:
 
     async def _read_uploaded_file(self, inp: Dict[str, Any]) -> Any:
         """워크스페이스에 업로드된 파일을 읽거나 목록 반환."""
-        import asyncpg
         filename = inp.get("filename", "").strip()
         workspace_id = inp.get("workspace_id", "").strip()
         max_chars = int(inp.get("max_chars", 100000))
 
         from app.core.db_pool import get_pool
         pool = get_pool()
-        conn: asyncpg.Connection = await pool.acquire()
-        try:
+        async with pool.acquire() as conn:
             if workspace_id:
                 import uuid as _uuid
                 ws_filter = _uuid.UUID(workspace_id)
@@ -1578,8 +1593,6 @@ class ToolExecutor:
                         "FROM chat_drive_files "
                         "ORDER BY created_at DESC LIMIT 20",
                     )
-        finally:
-            await pool.release(conn)
 
         if not rows:
             return {"status": "not_found", "message": f"'{filename}' 파일을 찾을 수 없습니다.", "hint": "filename을 비워서 전체 목록을 조회해 보세요."}

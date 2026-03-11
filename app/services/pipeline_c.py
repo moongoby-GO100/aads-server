@@ -11,6 +11,7 @@ Pipeline C Orchestrator — 채팅 → Claude Code 자율 작업 → 검수 → 
   Phase 7: done              — 완료 → 채팅방에 최종 보고
 """
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -52,6 +53,9 @@ _RESTART_CMD: Dict[str, str] = {
 # 활성 작업 저장 (메모리)
 _active_jobs: Dict[str, "PipelineCJob"] = {}
 
+# 프로젝트별 동시 실행 방지 락
+_project_locks: Dict[str, asyncio.Lock] = {}
+
 
 def get_job(job_id: str) -> Optional["PipelineCJob"]:
     return _active_jobs.get(job_id)
@@ -82,7 +86,7 @@ class PipelineCJob:
             logger.warning(f"pipeline_c: 유효하지 않은 chat_session_id='{chat_session_id}' → 채팅 보고 비활성")
             self.chat_session_id = ""
         self.claude_session_id = str(uuid.uuid4())
-        self.max_cycles = max_cycles
+        self.max_cycles = min(max_cycles, 5)
         self.dsn = dsn
         self.phase = "queued"
         self.cycle = 0
@@ -199,6 +203,12 @@ class PipelineCJob:
 
     async def run(self):
         """Phase 1~3 자율 실행 → Phase 4 승인 대기에서 멈춤. 매 단계 채팅방 기록."""
+        lock = _project_locks.setdefault(self.project, asyncio.Lock())
+        async with lock:
+            await self._run_inner()
+
+    async def _run_inner(self):
+        """run()의 실제 본체 — 프로젝트 락 안에서 실행."""
         try:
             await self._save_to_db()
 
@@ -357,7 +367,7 @@ class PipelineCJob:
                 f"CEO 승인 완료. git commit + push + 서비스 재시작 진행 중..."
             )
 
-            await self._ssh_command("git add -A")
+            await self._ssh_command("git add -u")
             commit_msg = f"Pipeline-C: {self.instruction[:80]} (job: {self.job_id})"
             safe_msg = shlex.quote(commit_msg)
             await self._ssh_command(f'git commit -m {safe_msg}')
@@ -460,8 +470,8 @@ class PipelineCJob:
             return {"error": f"거부 불가 상태: {self.status}"}
 
         self._log("rejected", f"CEO 거부: {reason}")
-        # git checkout으로 변경사항 원복
-        await self._ssh_command("git checkout -- .")
+        # git stash로 변경사항 원복 (관련 없는 작업 보존)
+        await self._ssh_command(f"git stash push -m 'pipeline_c_reject_{self.job_id}'")
         self.status = "done"
         self.review_feedback = f"REJECTED: {reason}"
         await self._save_to_db()
@@ -510,13 +520,13 @@ class PipelineCJob:
         pid_file = f"/tmp/pipeline_c_{self.job_id}.pid"
         done_file = f"/tmp/pipeline_c_{self.job_id}.done"
 
-        # nohup 래퍼: Claude Code 실행 → 완료 시 .done 파일 생성 (exit code 기록)
+        # base64로 명령어 인코딩하여 쉘 이스케이프 문제 회피
+        encoded_cmd = base64.b64encode(f'{claude_cmd} > {out_file} 2> {err_file}; echo $? > {done_file}'.encode()).decode()
         detach_cmd = (
             f"{api_key_setup}"
             f"cd {shlex.quote(self.workdir)} && "
-            f"nohup bash -c '"
-            f'{claude_cmd} > {out_file} 2> {err_file}; echo $? > {done_file}'
-            f"' > /dev/null 2>&1 & echo $!"
+            f"nohup bash -c \"$(echo {encoded_cmd} | base64 -d)\" "
+            f"> /dev/null 2>&1 & echo $!"
         )
 
         try:
@@ -685,6 +695,7 @@ class PipelineCJob:
 반드시 아래 JSON 형식으로만 응답하세요:
 {{"verdict": "PASS 또는 FAIL", "summary": "한줄 요약", "feedback": "수정이 필요한 구체적 내용 (PASS면 빈 문자열)"}}"""
 
+        response_text = ""
         try:
             response_text, _, _ = await call_llm(
                 _REVIEW_MODEL,
@@ -697,7 +708,7 @@ class PipelineCJob:
                 text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
             return json.loads(text)
         except (json.JSONDecodeError, Exception) as e:
-            logger.error(f"ai_review_parse_failed: {e}, raw={response_text[:300] if 'response_text' in dir() else 'N/A'}")
+            logger.error(f"ai_review_parse_failed: {e}, raw={response_text[:300] if response_text else 'N/A'}")
             return {
                 "verdict": "FAIL",
                 "summary": "AI 검수 응답 파싱 실패",
@@ -828,7 +839,7 @@ async def _find_recent_session(project: str) -> str:
         from app.core.db_pool import get_pool
         pool = get_pool()
         # 워크스페이스 이름 패턴: "[KIS] 자동매매", "[NTV2] NewTalk V2" 등
-        ws_pattern = f"[{project.upper()}]%"
+        ws_pattern = f"\\[{project.upper()}\\]%"  # escape for LIKE
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
@@ -849,7 +860,7 @@ async def _find_recent_session(project: str) -> str:
                 SELECT cs.id
                 FROM chat_sessions cs
                 JOIN chat_workspaces cw ON cs.workspace_id = cw.id
-                WHERE cw.name LIKE '[CEO]%'
+                WHERE cw.name LIKE '\\[CEO\\]%'
                 ORDER BY cs.updated_at DESC
                 LIMIT 1
                 """,
@@ -1169,7 +1180,16 @@ async def _check_stalled_jobs():
     """스톨된 작업 감지 → 채팅방에 경고 메시지 삽입."""
     now = datetime.now()
     for job_id, job in list(_active_jobs.items()):
-        if job.status in ("done", "error", "awaiting_approval"):
+        if job.status in ("done", "error"):
+            # L4: 오래된 완료 작업 정리 (10분 이상)
+            if (now - job.created_at).total_seconds() > 600:
+                _active_jobs.pop(job_id, None)
+            continue
+
+        # awaiting_approval 24시간 초과 정리
+        if job.status == "awaiting_approval":
+            if (now - job.created_at).total_seconds() > 86400:
+                _active_jobs.pop(job_id, None)
             continue
 
         # L2: 마지막 로그 시간 확인 (타임스탬프 파싱 강화)
@@ -1207,8 +1227,3 @@ async def _check_stalled_jobs():
             if not job.logs or job.logs[-1].get("phase") != "stall_detected":
                 job._log("stall_detected", f"{stall_minutes}분 스톨 감지")
                 await job._save_to_db()
-
-        # L4: 오래된 완료 작업 정리 (10분 이상)
-        if job.status in ("done", "error"):
-            if (now - job.created_at).total_seconds() > 600:
-                _active_jobs.pop(job_id, None)

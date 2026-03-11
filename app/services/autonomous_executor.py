@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import os
+import uuid
 from decimal import Decimal
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
@@ -29,7 +30,11 @@ except ImportError:
 
 _MAX_ITERATIONS = int(os.environ.get("AGENT_MAX_ITERATIONS", "25"))  # L1: 환경변수화
 _COST_LIMIT_PER_TASK = 2.0  # USD
-_DANGEROUS_TOOLS = frozenset({"submit_directive", "directive_create"})
+_DANGEROUS_TOOLS = frozenset({
+    "submit_directive", "directive_create",
+    "run_remote_command", "write_remote_file", "patch_remote_file",
+    "git_remote_push", "git_remote_commit",
+})
 
 # M1: LLM 재시도 설정
 _LLM_MAX_RETRIES = 3
@@ -57,7 +62,12 @@ _COST_PER_1M: Dict[str, Dict[str, float]] = {
 
 
 def _calc_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    rates = _COST_PER_1M.get(model, _COST_PER_1M["claude-sonnet"])
+    if "opus" in model:
+        rates = _COST_PER_1M["claude-opus"]
+    elif "haiku" in model:
+        rates = _COST_PER_1M["claude-haiku"]
+    else:
+        rates = _COST_PER_1M["claude-sonnet"]
     return (input_tokens * rates["in"] + output_tokens * rates["out"]) / 1_000_000
 
 
@@ -148,6 +158,7 @@ class AutonomousExecutor:
 
             # M1: LLM 호출 (지수 백오프 재시도)
             _llm_success = False
+            _fr_checkpoint = len(full_response)  # C9: retry 시 full_response 롤백 지점
             for _llm_attempt in range(_LLM_MAX_RETRIES):
                 try:
                     async for event in _call_stream(
@@ -193,6 +204,7 @@ class AutonomousExecutor:
                         # 재시도 시 iter_response/tool_calls 초기화
                         iter_response = ""
                         iter_tool_calls = []
+                        full_response = full_response[:_fr_checkpoint]  # C9: full_response 롤백
                         continue
                     logger.error(f"autonomous_executor LLM error iter={iteration} after {_LLM_MAX_RETRIES} retries: {e}")
                     yield _sse("error", {"content": f"LLM 오류 ({_LLM_MAX_RETRIES}회 재시도 실패): {e}", "iteration": iteration})
@@ -218,7 +230,7 @@ class AutonomousExecutor:
                         _summary = full_response[:200].replace("\n", " ")
                         await save_observation(
                             category="discovery",
-                            key=f"agent_task_{iteration}iter",
+                            key=f"agent_task_{uuid.uuid4().hex[:6]}_{iteration}iter",
                             content=f"에이전트 {iteration}회 반복 완료: {_summary}",
                             source="autonomous_executor",
                             confidence=0.4,
@@ -283,6 +295,10 @@ class AutonomousExecutor:
             # 도구 결과 메시지 추가
             work_messages.append({"role": "user", "content": tool_results})
 
+            # C8: 메시지 히스토리 슬라이딩 윈도우 (처음 2개 + 최근 20개 유지)
+            if len(work_messages) > 22:
+                work_messages = work_messages[:2] + work_messages[-20:]
+
         # 최대 반복 도달
         yield _sse("max_iterations", {
             "message": f"최대 반복 도달 ({self.max_iterations})",
@@ -313,7 +329,6 @@ async def generate_weekly_briefing() -> str:
     """
     from app.services.code_explorer_service import CodeExplorerService
     import os
-    import asyncpg
 
     sections: List[str] = []
 
@@ -339,19 +354,16 @@ async def generate_weekly_briefing() -> str:
     # 2. 비용 요약 (최근 7일)
     cost_txt = "비용 조회 불가"
     try:
-        db_url = os.getenv("DATABASE_URL", "").replace("postgresql://", "postgres://")
-        if db_url:
-            conn = await asyncpg.connect(db_url, timeout=5)
-            try:
-                row = await conn.fetchrow(
-                    "SELECT COALESCE(SUM(cost_usd),0) AS wk_cost,"
-                    " COUNT(*) AS msg_cnt FROM chat_messages"
-                    " WHERE created_at > now() - interval '7 days'"
-                )
-                if row:
-                    cost_txt = f"7일 비용: ${float(row['wk_cost']):.3f} ({row['msg_cnt']}건)"
-            finally:
-                await conn.close()
+        from app.core.database import get_pool
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT COALESCE(SUM(cost_usd),0) AS wk_cost,"
+                " COUNT(*) AS msg_cnt FROM chat_messages"
+                " WHERE created_at > now() - interval '7 days'"
+            )
+            if row:
+                cost_txt = f"7일 비용: ${float(row['wk_cost']):.3f} ({row['msg_cnt']}건)"
     except Exception:
         pass
     sections.append(f"### 비용\n{cost_txt}")
