@@ -67,6 +67,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     # ── AADS-190: 내보내기 + 스케줄러 ──────────────────────────────────
     "export_data": True,              # 온디맨드
     "schedule_task": True,            # 온디맨드
+    "read_uploaded_file": False,      # 첨부파일 재읽기 — 상시 로드
     "unschedule_task": True,
     "list_scheduled_tasks": True,
     # ── Pipeline C: 자율 작업 파이프라인 ──────────────────────────────
@@ -142,6 +143,7 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
     "scheduler":          ["schedule_task", "list_scheduled_tasks"],
     "pipeline_c":         ["pipeline_c_start", "pipeline_c_status", "pipeline_c_approve"],
     "task_history":       ["task_history"],
+    "file_read":          ["read_uploaded_file"],
     # Tier 2: 분석 인텐트
     "cto_code_analysis":  ["read_remote_file"],         # 소스 코드 우선
     "code_explorer":      ["code_explorer"],
@@ -1416,6 +1418,37 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"job_id": "pc-1741654800-abc123", "approved": False, "reason": "테스트 실패"},
         ],
     },
+    # ─── 첨부파일 재읽기 도구 ─────────────────────────────────────────────────
+    "read_uploaded_file": {
+        "name": "read_uploaded_file",
+        "description": "이전에 업로드된 첨부파일을 다시 읽습니다. 파일명(일부 가능) 또는 워크스페이스 내 전체 파일 목록 조회.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "filename": {
+                    "type": "string",
+                    "description": "파일명 또는 검색어 (부분 일치). 비워두면 최근 파일 목록 반환.",
+                    "default": "",
+                },
+                "workspace_id": {
+                    "type": "string",
+                    "description": "워크스페이스 ID (선택, 현재 세션 워크스페이스 자동 사용).",
+                    "default": "",
+                },
+                "max_chars": {
+                    "type": "integer",
+                    "description": "최대 읽기 문자 수 (기본 100000).",
+                    "default": 100000,
+                },
+            },
+            "required": [],
+        },
+        "input_examples": [
+            {"filename": "DESK-MANAGER"},
+            {"filename": "보고서"},
+            {"filename": ""},
+        ],
+    },
 }
 
 
@@ -1423,7 +1456,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
-    "action": ["directive_create", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task"],
+    "action": ["directive_create", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file"],
     "search": ["web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)

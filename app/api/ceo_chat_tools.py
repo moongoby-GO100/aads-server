@@ -306,9 +306,10 @@ _PROJECT_SERVER_MAP: Dict[str, Dict[str, str]] = {
 }
 
 # SSH 보안 규칙 (하드코딩, LLM 우회 불가)
-# 화이트리스트: 영숫자, 점, 하이픈, 밑줄, 슬래시만 허용 (보안 리뷰 반영)
-_SSH_PATH_WHITELIST = re.compile(r'^[a-zA-Z0-9._/\-]*$')
-_SSH_KEYWORD_WHITELIST = re.compile(r'^[a-zA-Z0-9._\-]*$')
+# 화이트리스트: 영숫자, 유니코드(한글 등), 점, 하이픈(표준+비표준), 밑줄, 슬래시, 공백 허용
+# 위험 문자(; | & ` $ ( ) > < \n \r 등) 차단 — shlex.quote()로도 방어
+_SSH_PATH_WHITELIST = re.compile(r'^[\w._/\- \u2010-\u2015\u00a0]+$', re.UNICODE)
+_SSH_KEYWORD_WHITELIST = re.compile(r'^[\w._\- \u2010-\u2015]+$', re.UNICODE)
 _SSH_SENSITIVE_PATTERNS = re.compile(
     r'(\.env|\.ssh/|id_rsa|\.git/config|secrets|password|token'
     r'|\.npmrc|\.pypirc|\.netrc|credentials|private_key|kubeconfig'

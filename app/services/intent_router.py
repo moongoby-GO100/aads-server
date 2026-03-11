@@ -77,6 +77,8 @@ INTENT_MAP: dict[str, dict] = {
     "code_modify":        {"model": "claude-opus",               "tools": True,  "group": "all"},
     # Pipeline C: Claude Code 자율 작업 파이프라인
     "pipeline_c":         {"model": "claude-sonnet",             "tools": True,  "group": "all"},
+    # 첨부파일 읽기
+    "file_read":          {"model": "claude-sonnet",             "tools": True,  "group": "all"},
     # AADS-188C Phase 2: 메타 도구 인텐트
     "task_query":         {"model": "claude-sonnet",             "tools": True,  "group": "all"},
     "status_check":       {"model": "claude-sonnet",             "tools": True,  "group": "all"},
@@ -121,7 +123,7 @@ cto_strategy, cto_code_analysis, cto_directive, cto_verify, cto_impact, cto_tech
 service_inspection, all_service_status,
 url_read, deep_crawl,
 code_explorer, analyze_changes, search_all_projects,
-execute, code_modify, task_query, status_check, pipeline_c,
+execute, code_modify, task_query, status_check, pipeline_c, file_read,
 news_search, blog_search, shop_search, local_search, book_search, image_search, encyclopedia_search, knowledge_search
 
 규칙:
@@ -136,6 +138,7 @@ news_search, blog_search, shop_search, local_search, book_search, image_search, 
 - 대시보드, 작업현황, 파이프라인 → dashboard
 - 진단, 종합 상태 → diagnosis
 - 최근 작업, 완료 목록 → task_history
+- 파일 읽어, 첨부파일, 업로드한 파일, 이전 파일, 파일 다시, 보고서 파일, 파일 내용 보여줘, 파일 검토 → file_read
 - 서버 검색, 원격 서버 파일, SSH 파일 목록, 프로젝트 서버에서 찾아줘 → server_file
 - 서비스 점검, {프로젝트} 점검해, 프로세스 확인, 서비스 상태 자세히 → service_inspection
 - 전체 서비스 상태, 6개 서비스, 올 스테이터스, 모든 서비스 → all_service_status

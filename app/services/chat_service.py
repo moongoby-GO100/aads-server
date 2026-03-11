@@ -371,6 +371,51 @@ async def _save_message(
     return _row_to_dict(row)
 
 
+async def _save_and_update_session(
+    sid: uuid.UUID,
+    content: str,
+    *,
+    session_id_str: str = "",
+    raw_messages: Optional[List[Dict[str, Any]]] = None,
+    model_used: str = "",
+    intent: str = "",
+    cost: Decimal = Decimal("0"),
+    tokens_in: int = 0,
+    tokens_out: int = 0,
+    sources: Optional[list] = None,
+    tools_called: Optional[list] = None,
+    thinking_summary: Optional[str] = None,
+    auto_save_check: bool = False,
+) -> None:
+    """#19: Phase C — 별도 커넥션으로 응답 저장 + 세션 비용 업데이트."""
+    async with get_pool().acquire() as conn:
+        async with conn.transaction():
+            await _save_message(
+                conn, sid, "assistant", content,
+                model_used=model_used, intent=intent, cost=cost,
+                tokens_in=tokens_in, tokens_out=tokens_out,
+                sources=sources or [], tools_called=tools_called or [],
+                thinking_summary=thinking_summary,
+            )
+            await conn.execute(
+                "UPDATE chat_sessions SET cost_total = cost_total + $1, updated_at = NOW() WHERE id = $2",
+                cost, sid,
+            )
+        # 20턴마다 자동 세션 노트 (트랜잭션 밖)
+        if auto_save_check and session_id_str:
+            try:
+                msg_count_row = await conn.fetchrow(
+                    "SELECT message_count FROM chat_sessions WHERE id = $1", sid
+                )
+                msg_count = (msg_count_row["message_count"] if msg_count_row else 0) or 0
+                if msg_count >= 20 and msg_count % 20 == 0:
+                    import asyncio as _asyncio
+                    _asyncio.create_task(_auto_save_session_note(session_id_str, raw_messages or []))
+                    _asyncio.create_task(_auto_observe_session(raw_messages or []))
+            except Exception:
+                pass
+
+
 async def send_message_stream(
     session_id: str,
     content: str,
@@ -472,6 +517,19 @@ async def send_message_stream(
             system_prompt = base_prompt or "You are a helpful AI assistant."
             messages = [{"role": m["role"], "content": m["content"]} for m in raw_messages[-20:]]
 
+        # ★ #19: Agent SDK resume용 세션 설정 프리페치
+        _session_settings: dict = {}
+        try:
+            _ss_row = await conn.fetchrow("SELECT settings FROM chat_sessions WHERE id = $1", sid)
+            if _ss_row:
+                _session_settings = _row_to_dict(_ss_row).get("settings") or {}
+        except Exception:
+            pass
+
+        # ★ #19: Phase A 종료 — DB 커넥션 조기 반환 (LLM 스트리밍 중 점유 방지)
+        await get_pool().release(conn)
+        conn = None
+
         # 4.5. AADS-188E: 시맨틱 코드 검색 컨텍스트 주입 (code_search 관련 키워드 감지)
         _CODE_SEARCH_KEYWORDS = (
             "코드", "함수", "클래스", "어디", "어디야", "파일", "소스", "구현",
@@ -526,6 +584,18 @@ async def send_message_stream(
             except Exception:
                 pass
 
+        # 6.5. 첨부파일 키워드 감지 → file_read 인텐트 강제 (업로드 파일 재읽기)
+        _file_keywords = ("업로드한 파일", "첨부파일", "첨부한 파일", "파일 읽어", "파일 다시", "이전 파일", "올린 파일", "파일 검토")
+        if any(kw in content for kw in _file_keywords) and not intent_result.use_tools:
+            from app.services.intent_router import INTENT_MAP, IntentResult as _IR
+            _fm = INTENT_MAP.get("file_read", {})
+            intent_result = _IR(
+                intent="file_read", model=_fm.get("model", "claude-sonnet"),
+                use_tools=True, tool_group="all",
+            )
+            intent = "file_read"
+            logger.info(f"[INTENT_OVERRIDE] file_read forced for content containing file keywords")
+
         if model_override:
             intent_result.model = get_model_for_override(model_override)
             intent_result.use_gemini_direct = False
@@ -574,10 +644,9 @@ async def send_message_stream(
                 yield f"data: {json.dumps({'type': 'delta', 'content': result.text})}\n\n"
                 if result.citations:
                     yield f"data: {json.dumps({'type': 'sources', 'sources': result.citations})}\n\n"
-                await _save_message(conn, sid, "assistant", result.text,
-                    model_used="gemini-flash", intent=intent, cost=Decimal("0"), sources=result.citations)
-                await conn.execute(
-                    "UPDATE chat_sessions SET updated_at = NOW() WHERE id = $1", sid)
+                await _save_and_update_session(
+                    sid, result.text, model_used="gemini-flash", intent=intent,
+                    cost=Decimal("0"), sources=result.citations)
                 yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': 'gemini-flash', 'cost': '0'})}\n\n"
                 return
 
@@ -631,11 +700,9 @@ async def send_message_stream(
 
                         yield f"data: {json.dumps({'type': 'research_complete', 'interaction_id': final_interaction_id, 'cost': str(cost_usd)})}\n\n"
 
-                        await _save_message(conn, sid, "assistant", report_text,
-                            model_used="gemini-deep-research", intent=intent,
+                        await _save_and_update_session(
+                            sid, report_text, model_used="gemini-deep-research", intent=intent,
                             cost=Decimal(str(cost_usd)), sources=final_citations)
-                        await conn.execute(
-                            "UPDATE chat_sessions SET updated_at = NOW() WHERE id = $1", sid)
                         yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': 'gemini-deep-research', 'cost': str(cost_usd)})}\n\n"
                         return
                     except Exception as e:
@@ -653,17 +720,8 @@ async def send_message_stream(
         # primary: Agent SDK, fallback: bridge(AutonomousExecutor) 경로
         _AGENT_SDK_INTENTS = frozenset({"execute", "code_modify"})
         if intent in _AGENT_SDK_INTENTS:
-            # resume 지원: 세션 메타에서 sdk_session_id 조회
-            sdk_session_id: Optional[str] = None
-            try:
-                meta_row = await conn.fetchrow(
-                    "SELECT settings FROM chat_sessions WHERE id = $1", sid
-                )
-                if meta_row:
-                    _settings = _row_to_dict(meta_row).get("settings") or {}
-                    sdk_session_id = _settings.get("sdk_session_id")
-            except Exception:
-                pass
+            # resume 지원: Phase A에서 프리페치한 세션 설정 사용 (#19)
+            sdk_session_id: Optional[str] = _session_settings.get("sdk_session_id")
 
             from app.services.agent_sdk_service import get_agent_sdk_service, AGENT_SDK_ENABLED as _sdk_flag
             sdk_svc = get_agent_sdk_service()
@@ -695,34 +753,22 @@ async def send_message_stream(
                         except Exception:
                             pass
 
-                    # sdk_session_id를 세션 설정에 저장 (resume용)
+                    # #19: sdk_session_id 저장 (별도 커넥션)
                     if _captured_sdk_sid:
                         try:
-                            _new_settings = {}
-                            _s_row = await conn.fetchrow(
-                                "SELECT settings FROM chat_sessions WHERE id = $1", sid
-                            )
-                            if _s_row:
-                                _new_settings = _row_to_dict(_s_row).get("settings") or {}
-                            _new_settings["sdk_session_id"] = _captured_sdk_sid
-                            await conn.execute(
-                                "UPDATE chat_sessions SET settings = $1::jsonb, updated_at = NOW() WHERE id = $2",
-                                json.dumps(_new_settings), sid,
-                            )
+                            _new_settings = {**_session_settings, "sdk_session_id": _captured_sdk_sid}
+                            async with get_pool().acquire() as _c:
+                                await _c.execute(
+                                    "UPDATE chat_sessions SET settings = $1::jsonb, updated_at = NOW() WHERE id = $2",
+                                    json.dumps(_new_settings), sid,
+                                )
                         except Exception as _se:
                             logger.debug(f"sdk_session_id 저장 실패: {_se}")
 
                     if sdk_success:
-                        await _save_message(
-                            conn, sid, "assistant", full_response,
-                            model_used=model_used, intent=intent,
-                            cost=cost_usd, tokens_in=0, tokens_out=0,
-                            sources=[], tools_called=tools_called,
-                        )
-                        await conn.execute(
-                            "UPDATE chat_sessions SET cost_total = cost_total + $1, updated_at = NOW() WHERE id = $2",
-                            cost_usd, sid,
-                        )
+                        await _save_and_update_session(
+                            sid, full_response, model_used=model_used, intent=intent,
+                            cost=cost_usd, tools_called=tools_called)
                         yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'agent_sdk': True})}\n\n"
                         return
 
@@ -782,17 +828,10 @@ async def send_message_stream(
                 except Exception:
                     pass
 
-            # 응답 저장 및 done 이벤트
-            await _save_message(
-                conn, sid, "assistant", full_response,
-                model_used=model_used, intent=intent,
-                cost=cost_usd, tokens_in=0, tokens_out=0,
-                sources=[], tools_called=tools_called, thinking_summary=None,
-            )
-            await conn.execute(
-                "UPDATE chat_sessions SET cost_total = cost_total + $1, updated_at = NOW() WHERE id = $2",
-                cost_usd, sid,
-            )
+            # #19: 응답 저장 (별도 커넥션)
+            await _save_and_update_session(
+                sid, full_response, model_used=model_used, intent=intent,
+                cost=cost_usd, tools_called=tools_called)
             yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': 0, 'output_tokens': 0, 'autonomous': True})}\n\n"
             return
 
@@ -901,39 +940,23 @@ async def send_message_stream(
             if _retry_response.strip():
                 full_response = full_response + "\n\n" + _retry_response
 
-        # 10. 응답 저장 (#15: thinking 2000자 제한, #29: cost를 같은 트랜잭션에 포함)
+        # ═══ #19: Phase C — 응답 저장 (별도 커넥션) ═══
         _thinking_truncated = (thinking_summary or "")[:2000] or None
         if thinking_summary and len(thinking_summary) > 2000:
             logger.info("thinking_truncated", original_len=len(thinking_summary), session_id=session_id)
-        async with conn.transaction():
-            await _save_message(
-                conn, sid, "assistant", full_response,
-                model_used=model_used,
-                intent=intent,
-                cost=cost_usd,
-                tokens_in=input_tokens,
-                tokens_out=output_tokens,
-                sources=[],
-                tools_called=tools_called,
-                thinking_summary=_thinking_truncated,
-            )
-            await conn.execute(
-                "UPDATE chat_sessions SET cost_total = cost_total + $1, updated_at = NOW() WHERE id = $2",
-                cost_usd, sid,
-            )
-
-        # 11. 20턴 이상 시 세션 노트 자동 저장 + 자동 관찰 (AADS-186E-2/186E-3, 비동기)
-        try:
-            msg_count_row = await conn.fetchrow(
-                "SELECT message_count FROM chat_sessions WHERE id = $1", sid
-            )
-            msg_count = (msg_count_row["message_count"] if msg_count_row else 0) or 0
-            if msg_count >= 20 and msg_count % 20 == 0:
-                import asyncio as _asyncio
-                _asyncio.create_task(_auto_save_session_note(session_id, raw_messages))
-                _asyncio.create_task(_auto_observe_session(raw_messages))
-        except Exception:
-            pass
+        await _save_and_update_session(
+            sid, full_response,
+            session_id_str=session_id,
+            raw_messages=raw_messages,
+            model_used=model_used,
+            intent=intent,
+            cost=cost_usd,
+            tokens_in=input_tokens,
+            tokens_out=output_tokens,
+            tools_called=tools_called,
+            thinking_summary=_thinking_truncated,
+            auto_save_check=True,
+        )
 
         # 누적 비용 업데이트
         _session_cost += float(cost_usd)
@@ -942,7 +965,8 @@ async def send_message_stream(
         yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns})}\n\n"
 
     finally:
-        await get_pool().release(conn)
+        if conn is not None:
+            await get_pool().release(conn)
 
 
 async def _auto_save_session_note(session_id: str, messages: List[Dict[str, Any]]) -> None:

@@ -124,6 +124,8 @@ class ToolExecutor:
             "pipeline_c_start":       self._pipeline_c_start,
             "pipeline_c_status":      self._pipeline_c_status,
             "pipeline_c_approve":     self._pipeline_c_approve,
+            # 첨부파일 재읽기
+            "read_uploaded_file":     self._read_uploaded_file,
         }
         fn = dispatch.get(tool_name)
         if fn is None:
@@ -1304,6 +1306,100 @@ class ToolExecutor:
             "results": results,
             "total": len(results),
         }
+
+    # ── 첨부파일 재읽기 도구 ─────────────────────────────────────────────────
+
+    async def _read_uploaded_file(self, inp: Dict[str, Any]) -> Any:
+        """워크스페이스에 업로드된 파일을 읽거나 목록 반환."""
+        import asyncpg
+        filename = inp.get("filename", "").strip()
+        workspace_id = inp.get("workspace_id", "").strip()
+        max_chars = int(inp.get("max_chars", 100000))
+
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        conn: asyncpg.Connection = await pool.acquire()
+        try:
+            if workspace_id:
+                import uuid as _uuid
+                ws_filter = _uuid.UUID(workspace_id)
+            else:
+                ws_filter = None
+
+            # 파일명 검색 또는 전체 목록
+            if filename:
+                if ws_filter:
+                    rows = await conn.fetch(
+                        "SELECT id, filename, file_path, file_type, file_size, created_at "
+                        "FROM chat_drive_files WHERE workspace_id = $1 AND filename ILIKE $2 "
+                        "ORDER BY created_at DESC LIMIT 10",
+                        ws_filter, f"%{filename}%",
+                    )
+                else:
+                    rows = await conn.fetch(
+                        "SELECT id, filename, file_path, file_type, file_size, created_at "
+                        "FROM chat_drive_files WHERE filename ILIKE $1 "
+                        "ORDER BY created_at DESC LIMIT 10",
+                        f"%{filename}%",
+                    )
+            else:
+                if ws_filter:
+                    rows = await conn.fetch(
+                        "SELECT id, filename, file_path, file_type, file_size, created_at "
+                        "FROM chat_drive_files WHERE workspace_id = $1 "
+                        "ORDER BY created_at DESC LIMIT 20",
+                        ws_filter,
+                    )
+                else:
+                    rows = await conn.fetch(
+                        "SELECT id, filename, file_path, file_type, file_size, created_at "
+                        "FROM chat_drive_files "
+                        "ORDER BY created_at DESC LIMIT 20",
+                    )
+        finally:
+            await pool.release(conn)
+
+        if not rows:
+            return {"status": "not_found", "message": f"'{filename}' 파일을 찾을 수 없습니다.", "hint": "filename을 비워서 전체 목록을 조회해 보세요."}
+
+        # 1건이면 내용 읽기, 여러 건이면 목록 반환
+        if len(rows) == 1 or (filename and len(rows) >= 1):
+            target = rows[0]
+            fpath = target["file_path"]
+            fname = target["filename"]
+
+            if not os.path.isfile(fpath):
+                return {"status": "file_missing", "filename": fname, "path": fpath, "message": "디스크에서 파일을 찾을 수 없습니다."}
+
+            ext = os.path.splitext(fpath)[1].lower()
+            text_exts = {".txt", ".md", ".csv", ".json", ".py", ".js", ".ts", ".html", ".css",
+                         ".yaml", ".yml", ".toml", ".sh", ".sql", ".log", ".xml", ".ini", ".cfg", ".conf"}
+            if ext in text_exts:
+                try:
+                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                        content = f.read(max_chars)
+                    return {
+                        "status": "ok",
+                        "filename": fname,
+                        "file_size": target["file_size"],
+                        "content": content,
+                        "truncated": len(content) >= max_chars,
+                    }
+                except Exception as e:
+                    return {"status": "read_error", "filename": fname, "error": str(e)}
+            else:
+                return {"status": "binary_file", "filename": fname, "file_type": ext, "file_size": target["file_size"],
+                        "message": f"바이너리 파일({ext})은 텍스트로 읽을 수 없습니다."}
+
+        # 여러 건 → 목록
+        file_list = [
+            {"filename": r["filename"], "type": r["file_type"], "size": r["file_size"],
+             "uploaded": str(r["created_at"])[:19]}
+            for r in rows
+        ]
+        return {"status": "list", "files": file_list, "total": len(file_list),
+                "hint": "특정 파일을 읽으려면 filename에 정확한 이름을 지정하세요."}
+
 
 # ─── 하위 호환성 ─────────────────────────────────────────────────────────────
 
