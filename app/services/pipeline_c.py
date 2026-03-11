@@ -173,6 +173,15 @@ class PipelineCJob:
     async def _trigger_ai_reaction(self, message: str) -> None:
         """채팅 AI가 결과를 확인하고 자동으로 반응하도록 트리거."""
         if not self.chat_session_id:
+            # 폴백: 프로젝트 워크스페이스에서 최근 세션 조회
+            try:
+                self.chat_session_id = await _find_recent_session(self.project)
+                if self.chat_session_id:
+                    logger.info(f"pipeline_c_trigger_session_resolved: job={self.job_id} session={self.chat_session_id[:8]}...")
+            except Exception as e:
+                logger.warning(f"pipeline_c_trigger_session_fallback_error: {e}")
+        if not self.chat_session_id:
+            logger.warning(f"pipeline_c_trigger_skipped: job={self.job_id} no session_id")
             return
         try:
             from app.services.chat_service import trigger_ai_reaction

@@ -1116,12 +1116,15 @@ class ToolExecutor:
         _captured_session_id = current_chat_session_id.get("")
         if not _captured_session_id:
             # Pipeline C와 동일한 폴백: 프로젝트 워크스페이스의 최근 세션 조회
-            from app.services.pipeline_c import _find_recent_session
-            _captured_session_id = await _find_recent_session(project)
-            logger.warning(
-                f"pipeline_b_session_fallback: project={project} "
-                f"fallback_session_id={_captured_session_id[:8] if _captured_session_id else '(none)'}"
-            )
+            try:
+                from app.services.pipeline_c import _find_recent_session
+                _captured_session_id = await _find_recent_session(project)
+                logger.warning(
+                    f"pipeline_b_session_fallback: project={project} "
+                    f"fallback_session_id={_captured_session_id[:8] if _captured_session_id else '(none)'}"
+                )
+            except Exception as _fb_err:
+                logger.error(f"pipeline_b_session_fallback_error: project={project} err={_fb_err}")
         logger.info(f"delegate_to_agent: task_id={task_id} captured_session_id={_captured_session_id[:8] if _captured_session_id else '(empty)'}")
 
         async def _run_agent_task():
@@ -1130,6 +1133,17 @@ class ToolExecutor:
             error_text = ""
             total_cost = 0.0  # M2: 비용 추적
             session_id = _captured_session_id  # C7: ContextVar 캡처값을 함수 최상단에서 바인딩
+            # 내부 폴백: 외부 캡처가 실패했을 경우 백그라운드 task 내에서 재시도
+            if not session_id:
+                try:
+                    from app.services.pipeline_c import _find_recent_session
+                    session_id = await _find_recent_session(project)
+                    logger.warning(
+                        f"delegate_to_agent_inner_fallback: project={project} "
+                        f"session_id={session_id[:8] if session_id else '(none)'}"
+                    )
+                except Exception as _ifb_err:
+                    logger.error(f"delegate_to_agent_inner_fallback_error: {_ifb_err}")
             try:
                 from app.services.autonomous_executor import AutonomousExecutor
                 from app.services.tool_registry import ToolRegistry
@@ -1230,6 +1244,7 @@ class ToolExecutor:
                 pass
 
             # 4) 채팅방에 결과 보고 (캡처된 session_id 사용)
+            logger.info(f"delegate_to_agent_chat_report: task_id={task_id} session_id={session_id[:8] if session_id else '(none)'} has_error={bool(error_text)}")
             try:
                 if session_id:
                     from app.core.db_pool import get_pool
@@ -1290,6 +1305,7 @@ class ToolExecutor:
                 logger.warning(f"delegate_to_agent chat post failed: {chat_err}")
 
             # 5) AI 자동 반응 트리거: 작업 결과를 AI가 확인하고 조치하도록
+            logger.info(f"delegate_to_agent_ai_trigger: task_id={task_id} session_id={session_id[:8] if session_id else '(none)'}")
             try:
                 if session_id:
                     from app.services.chat_service import trigger_ai_reaction
