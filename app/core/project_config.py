@@ -19,13 +19,13 @@ PROJECT_MAP: Dict[str, Dict[str, str]] = {
     "GO100": {"server": "211.188.51.113", "workdir": "/root/go100",           "lang": "python"},
     "SF":    {"server": "116.120.58.155", "workdir": "/data/shortflow",       "lang": "python"},
     "NTV2":  {"server": "116.120.58.155", "workdir": "/srv/newtalk-v2",       "lang": "php"},
-    "AADS":  {"server": "localhost",      "workdir": "/root/aads/aads-server", "lang": "python"},
+    "AADS":  {"server": "host.docker.internal", "workdir": "/root/aads/aads-server", "lang": "python"},
 }
 
 ALL_PROJECTS = list(PROJECT_MAP.keys())
 
 # 외부 프로젝트만 (SSH 접근 대상)
-REMOTE_PROJECTS = [k for k, v in PROJECT_MAP.items() if v["server"] != "localhost"]
+REMOTE_PROJECTS = [k for k, v in PROJECT_MAP.items() if v["server"] not in ("localhost", "host.docker.internal")]
 
 
 def get_workdir(project: str) -> str:
@@ -41,7 +41,7 @@ def get_server(project: str) -> str:
 def get_server_by_number(server_num: str) -> dict:
     """서버 번호(211, 114, 68) → {server, workdir} 매핑."""
     _SERVER_NUM_MAP = {
-        "68": {"server": "localhost", "workdir": "/root/aads/aads-server"},
+        "68": {"server": "host.docker.internal", "workdir": "/root/aads/aads-server"},
         "211": {"server": "211.188.51.113", "workdir": "/root/webapp"},
         "114": {"server": "116.120.58.155", "workdir": "/data/shortflow"},
     }

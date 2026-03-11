@@ -28,7 +28,7 @@ from app.core.project_config import PROJECT_MAP
 logger = logging.getLogger(__name__)
 
 # ─── 설정 ─────────────────────────────────────────────────────────────────────
-_CLAUDE_TIMEOUT = 600       # Claude Code 실행 타임아웃 (10분)
+_CLAUDE_TIMEOUT = 1800      # Claude Code 실행 타임아웃 (30분)
 _MAX_OUTPUT_CHARS = 6000    # 결과 최대 문자수
 _REVIEW_MODEL = "claude-sonnet-4-6"
 

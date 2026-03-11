@@ -1056,36 +1056,164 @@ class ToolExecutor:
 
     async def _delegate_to_agent(self, inp: Dict[str, Any]) -> Any:
         """
-        복잡한 다단계 작업을 Agent SDK에 위임.
-        코드 분석/수정, 5턴 이상 필요한 복잡 작업에 사용.
+        복잡한 다단계 작업을 AutonomousExecutor에 위임.
+        실제 실행 후 결과를 directive_lifecycle에 저장.
         """
+        import asyncio
+        import uuid
+        from datetime import datetime
+
         task = inp.get("task", "")
         project = inp.get("project", "AADS")
 
         if not task:
             return {"error": "task 필수 — 위임할 작업 설명을 입력하세요"}
 
-        # Agent SDK 가용 여부 확인
-        try:
-            from app.services.agent_sdk_service import get_agent_sdk_service
-            sdk = get_agent_sdk_service()
-            if not sdk.is_available():
-                return {
-                    "status": "unavailable",
-                    "message": "Agent SDK 비활성 상태. AGENT_SDK_ENABLED=true 필요.",
-                    "alternative": "generate_directive 도구로 지시서를 생성하여 파이프라인에 제출할 수 있습니다.",
-                }
+        task_id = f"agent-{uuid.uuid4().hex[:8]}"
 
-            # SDK 실행은 SSE 스트림이므로 여기서는 가용성만 확인
-            return {
-                "status": "ready",
-                "message": f"Agent SDK 사용 가능. 프로젝트: {project}",
-                "task": task,
-                "hint": "이 작업은 Agent SDK 자율 실행 루프를 통해 처리됩니다. "
-                        "CEO Chat에서 execute/code_modify 인텐트로 자동 라우팅됩니다.",
-            }
+        # 1) directive_lifecycle에 작업 등록
+        try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO directive_lifecycle
+                        (task_id, project, title, content, executor, status, priority, created_at, queued_at)
+                    VALUES ($1, $2, $3, $4, 'autonomous_executor', 'in_progress', 'P2-NORMAL', NOW(), NOW())
+                    """,
+                    task_id, project,
+                    f"[Agent] {task[:100]}",
+                    task,
+                )
         except Exception as e:
-            return {"error": f"Agent SDK 확인 실패: {e}"}
+            logger.error(f"delegate_to_agent DB insert failed: {e}")
+            return {"error": f"DB 등록 실패: {e}"}
+
+        # 2) AutonomousExecutor로 실제 실행 (백그라운드 task)
+        async def _run_agent_task():
+            import json as _json
+            result_text = ""
+            error_text = ""
+            try:
+                from app.services.autonomous_executor import AutonomousExecutor
+                from app.services.tool_registry import ToolRegistry
+
+                executor = AutonomousExecutor(max_iterations=15, cost_limit=1.5)
+                registry = ToolRegistry()
+                tools = registry.get_tools("all")
+                messages = [{"role": "user", "content": task}]
+                system_prompt = (
+                    f"당신은 AADS 자율 에이전트입니다. 프로젝트: {project}.\n"
+                    f"주어진 작업을 도구를 활용하여 완료하세요. 완료 후 결과를 명확하게 요약하세요."
+                )
+
+                async for sse_event in executor.execute_task(
+                    task_description=task,
+                    tools=tools,
+                    messages=messages,
+                    model="claude-sonnet",
+                    system_prompt=system_prompt,
+                ):
+                    try:
+                        data = _json.loads(sse_event.replace("data: ", "").strip())
+                        if data.get("type") == "complete":
+                            result_text = data.get("content", "")[:5000]
+                        elif data.get("type") == "error":
+                            error_text = data.get("content", "")
+                        elif data.get("type") == "delta":
+                            result_text += data.get("content", "")
+                    except (_json.JSONDecodeError, AttributeError):
+                        pass
+
+                if len(result_text) > 5000:
+                    result_text = result_text[-5000:]
+
+            except Exception as e:
+                error_text = str(e)
+                logger.error(f"delegate_to_agent execution failed task={task_id}: {e}")
+
+            # 3) DB 결과 업데이트
+            try:
+                from app.core.db_pool import get_pool
+                pool = get_pool()
+                async with pool.acquire() as conn:
+                    if error_text:
+                        await conn.execute(
+                            """
+                            UPDATE directive_lifecycle
+                            SET status = 'failed', error_detail = $2,
+                                completed_at = NOW(), started_at = COALESCE(started_at, NOW())
+                            WHERE task_id = $1 AND project = $3
+                            """,
+                            task_id, error_text[:2000], project,
+                        )
+                    else:
+                        await conn.execute(
+                            """
+                            UPDATE directive_lifecycle
+                            SET status = 'completed',
+                                validation_result = $2::jsonb,
+                                completed_at = NOW(), started_at = COALESCE(started_at, NOW())
+                            WHERE task_id = $1 AND project = $3
+                            """,
+                            task_id,
+                            _json.dumps({"result": result_text[:3000], "task_id": task_id}, ensure_ascii=False),
+                            project,
+                        )
+            except Exception as db_err:
+                logger.error(f"delegate_to_agent DB update failed task={task_id}: {db_err}")
+
+            # 4) 채팅방에 결과 보고 (contextvars에서 session_id 가져오기)
+            try:
+                session_id = current_chat_session_id.get("")
+                if session_id:
+                    from app.core.db_pool import get_pool
+                    pool = get_pool()
+                    status_emoji = "❌" if error_text else "✅"
+                    msg = (
+                        f"{status_emoji} **[Agent 작업 완료]** `{task_id}`\n"
+                        f"프로젝트: **{project}**\n"
+                        f"작업: {task[:200]}\n\n"
+                    )
+                    if error_text:
+                        msg += f"**오류:** {error_text[:500]}"
+                    else:
+                        msg += f"**결과:**\n{result_text[:1500]}"
+
+                    async with pool.acquire() as conn:
+                        async with conn.transaction():
+                            await conn.execute(
+                                """
+                                INSERT INTO chat_messages
+                                    (session_id, role, content, intent, cost,
+                                     tokens_in, tokens_out, attachments, sources, tools_called)
+                                VALUES ($1::uuid, 'assistant', $2, 'agent_result', 0,
+                                        0, 0, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)
+                                """,
+                                session_id, msg,
+                            )
+                            await conn.execute(
+                                "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1::uuid",
+                                session_id,
+                            )
+            except Exception as chat_err:
+                logger.warning(f"delegate_to_agent chat post failed: {chat_err}")
+
+        # 백그라운드 실행
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_run_agent_task())
+        except RuntimeError:
+            logger.error("delegate_to_agent: no running event loop")
+            return {"error": "이벤트 루프 없음"}
+
+        return {
+            "status": "started",
+            "task_id": task_id,
+            "project": project,
+            "message": f"Agent 작업이 시작되었습니다. task_id: {task_id}. 완료 후 채팅방에 결과가 보고됩니다.",
+        }
 
     async def _delegate_to_research(self, inp: Dict[str, Any]) -> Any:
         """
