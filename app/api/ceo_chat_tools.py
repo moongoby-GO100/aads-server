@@ -641,11 +641,32 @@ async def tool_list_remote_dir(
 
 
 async def tool_read_remote_file(project: str, file_path: str) -> str:
-    """원격 서버 파일 읽기 (읽기 전용, cat)."""
+    """원격 서버 파일 읽기 (읽기 전용, cat). AADS는 로컬 직접 읽기."""
     project = project.upper()
+
+    # AADS 프로젝트: 로컬 파일 직접 읽기 (SSH 불필요)
+    if project == "AADS":
+        from app.core.project_config import PROJECT_MAP
+        workdir = PROJECT_MAP["AADS"]["workdir"]
+        from posixpath import normpath, join as pjoin
+        resolved = normpath(pjoin(workdir, file_path))
+        if not resolved.startswith(workdir):
+            return f"[ERROR] 경로 탈출 차단: {resolved}"
+        try:
+            with open(resolved, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            if len(content.encode("utf-8")) > _SSH_MAX_RESULT_BYTES:
+                content = content[:_SSH_MAX_RESULT_BYTES] + "\n...(50KB 초과, 잘림)"
+            return f"[AADS 파일 — {resolved}]\n{content}"
+        except FileNotFoundError:
+            return f"[ERROR] 파일 없음: {resolved}"
+        except Exception as e:
+            return f"[ERROR] 파일 읽기 실패: {e}"
+
     mapping = _PROJECT_SERVER_MAP.get(project)
     if not mapping:
-        return f"[ERROR] 알 수 없는 프로젝트: {project}. 사용 가능: {', '.join(_PROJECT_SERVER_MAP.keys())}"
+        avail = ", ".join(["AADS"] + list(_PROJECT_SERVER_MAP.keys()))
+        return f"[ERROR] 알 수 없는 프로젝트: {project}. 사용 가능: {avail}"
 
     server = mapping["server"]
     workdir = mapping["workdir"]

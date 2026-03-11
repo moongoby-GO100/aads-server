@@ -279,17 +279,21 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     },
     "read_github_file": {
         "name": "read_github_file",
-        "description": "GitHub raw 파일 내용을 읽습니다. HANDOVER.md, CEO-DIRECTIVES.md 등 문서 조회에 사용합니다.",
+        "description": (
+            "GitHub 저장소 파일을 읽습니다. "
+            "사용 가능한 리포: aads-docs(HANDOVER/CEO-DIRECTIVES), aads-server(백엔드), aads-dashboard(프론트). "
+            "⚠️ SF/NTV2/GO100/KIS 프로젝트는 GitHub 리포 없음 → read_remote_file(SSH) 사용."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "repo": {
                     "type": "string",
-                    "description": "저장소 경로 (예: 'moongoby-GO100/aads-docs')",
+                    "description": "저장소명 또는 전체 경로 (예: 'aads-docs', 'aads-server', 'moongoby-GO100/aads-dashboard')",
                 },
                 "path": {
                     "type": "string",
-                    "description": "파일 경로 (예: 'HANDOVER.md', 'CEO-DIRECTIVES.md')",
+                    "description": "파일 경로 (예: 'HANDOVER.md', 'app/services/chat_service.py')",
                 },
                 "branch": {
                     "type": "string",
@@ -299,8 +303,8 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "required": ["repo", "path"],
         },
         "input_examples": [
-            {"repo": "moongoby-GO100/aads-docs", "path": "HANDOVER.md"},
-            {"repo": "moongoby-GO100/aads-docs", "path": "CEO-DIRECTIVES.md", "branch": "main"},
+            {"repo": "aads-docs", "path": "HANDOVER.md"},
+            {"repo": "aads-server", "path": "app/services/chat_service.py", "branch": "main"},
         ],
     },
     "query_database": {
@@ -476,14 +480,19 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     },
     "read_remote_file": {
         "name": "read_remote_file",
-        "description": "원격 서버의 파일 내용을 읽습니다 (SSH, 프로젝트별 서버 자동 매핑). KIS/GO100/SF/NTV2 프로젝트 지정 가능.",
+        "description": (
+            "프로젝트 서버의 파일을 읽습니다 (SSH 자동 매핑). "
+            "AADS=68서버(/root/aads/), KIS/GO100=211서버(/root/webapp/), "
+            "SF=114서버(/data/shortflow/), NTV2=114서버(/var/www/newtalk/). "
+            "⚠️ AADS는 read_github_file도 가능하지만, SF/NTV2/KIS/GO100은 이 도구만 사용."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "project": {
                     "type": "string",
-                    "description": "프로젝트명 (서버 자동 매핑). KIS, GO100, SF, NTV2 중 하나.",
-                    "enum": ["KIS", "GO100", "SF", "NTV2"],
+                    "description": "프로젝트명 (서버 자동 매핑).",
+                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
                 },
                 "path": {
                     "type": "string",
