@@ -391,10 +391,13 @@ async def _save_message(
     tools_called: Optional[List[str]] = None,
     thinking_summary: Optional[str] = None,
 ) -> Dict[str, Any]:
-    # Strip raw XML tool-call / tool-response blocks from assistant messages
+    # Strip raw XML tool-call / tool-response / fabricated-result blocks from assistant messages
     if role == "assistant" and content:
         content = re.sub(r'<function_calls>.*?</function_calls>', '', content, flags=re.DOTALL)
         content = re.sub(r'<function_response>.*?</function_response>', '', content, flags=re.DOTALL)
+        content = re.sub(r'<function_results>.*?</function_results>', '', content, flags=re.DOTALL)
+        content = re.sub(r'<invoke\s+name=[^>]*>.*?</invoke>', '', content, flags=re.DOTALL)
+        content = re.sub(r'<tool_results>.*?</tool_results>', '', content, flags=re.DOTALL)
         content = content.strip()
 
     # AADS-CRITICAL-FIX #2: INSERT + UPDATE를 트랜잭션으로 감싸 message_count 정합성 보장

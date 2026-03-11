@@ -5,10 +5,11 @@ AADS-188C Phase 3: Output Validator — 빈 약속 응답 탐지 및 재시도.
 도구 호출을 강제하는 재시도 프롬프트를 생성한다.
 
 탐지 유형:
-  EMPTY_PROMISE     — 행동 없이 "하겠습니다"로 끝나는 응답
-  NO_TOOL_FOR_ACTION — 도구 호출 없이 행동을 약속하는 응답
-  TOO_SHORT         — 도구 결과 없이 극단적으로 짧은 응답
-  UNVERIFIED_COUNT  — 도구 호출 없이 DB 수치/건수를 보고하는 응답 (경고)
+  EMPTY_PROMISE       — 행동 없이 "하겠습니다"로 끝나는 응답
+  NO_TOOL_FOR_ACTION  — 도구 호출 없이 행동을 약속하는 응답
+  TOO_SHORT           — 도구 결과 없이 극단적으로 짧은 응답
+  UNVERIFIED_COUNT    — 도구 호출 없이 DB 수치/건수를 보고하는 응답 (경고)
+  FABRICATED_RESULTS  — 도구를 호출하지 않고 가짜 도구 결과 XML을 텍스트로 생성한 응답
 """
 from __future__ import annotations
 
@@ -45,10 +46,21 @@ _ACTION_VERBS: List[str] = [
 
 # ─── 검증 결과 ─────────────────────────────────────────────────────────────────
 
+# ─── 날조 도구 결과 패턴 ──────────────────────────────────────────────────────
+
+_FABRICATED_XML_PATTERNS: List[re.Pattern] = [
+    re.compile(r'<function_results>', re.IGNORECASE),
+    re.compile(r'<invoke\s+name=', re.IGNORECASE),
+    re.compile(r'<function_calls>', re.IGNORECASE),
+    re.compile(r'<function_response>', re.IGNORECASE),
+    re.compile(r'<tool_results>', re.IGNORECASE),
+]
+
+
 @dataclass
 class ValidationResult:
     is_valid: bool
-    violation_type: str  # "" | "EMPTY_PROMISE" | "NO_TOOL_FOR_ACTION" | "TOO_SHORT"
+    violation_type: str  # "" | "EMPTY_PROMISE" | "NO_TOOL_FOR_ACTION" | "TOO_SHORT" | "FABRICATED_RESULTS"
     message: str
     retry_prompt: str  # 재시도 시 추가할 사용자 메시지
 
@@ -71,15 +83,22 @@ def validate_response(
     """
     _OK = ValidationResult(is_valid=True, violation_type="", message="", retry_prompt="")
 
-    # greeting/casual은 도구 호출 불필요
+    # greeting/casual은 도구 호출 불필요 (단, 날조 검사는 항상 수행)
+    stripped = response_text.strip()
+
+    # ── FABRICATED_RESULTS: 가짜 도구 결과 XML 태그 생성 탐지 ──────────────
+    # 도구 호출 여부와 무관하게 항상 검사 — AI가 텍스트로 XML 태그를 생성하면 차단
+    _fab = check_fabricated_results(stripped)
+    if _fab:
+        logger.error(f"[OutputValidator] FABRICATED_RESULTS detected: {_fab.message}")
+        return _fab
+
     if intent in ("greeting", "casual", ""):
         return _OK
 
     # 도구가 호출된 응답은 유효
     if tools_called:
         return _OK
-
-    stripped = response_text.strip()
 
     # ── EMPTY_PROMISE: 짧은 텍스트 + 빈 약속 패턴 ─────────────────────────
     if len(stripped) < 100:
@@ -172,3 +191,41 @@ def check_unverified_counts(
         ),
         retry_prompt="",  # 차단하지 않으므로 재시도 프롬프트 없음
     )
+
+
+# ─── 날조 도구 결과 감지 (차단) ───────────────────────────────────────────────
+
+
+def check_fabricated_results(
+    response_text: str,
+) -> Optional[ValidationResult]:
+    """
+    AI가 도구를 호출하지 않고 가짜 <function_results>, <invoke name=...> 등
+    XML 태그를 텍스트로 직접 생성한 경우를 탐지한다.
+    이는 CEO에 대한 거짓 보고이므로 차단 + 재시도한다.
+
+    Returns:
+        ValidationResult with violation_type="FABRICATED_RESULTS" if detected, else None
+    """
+    for pattern in _FABRICATED_XML_PATTERNS:
+        match = pattern.search(response_text)
+        if match:
+            tag = match.group(0)
+            return ValidationResult(
+                is_valid=False,
+                violation_type="FABRICATED_RESULTS",
+                message=(
+                    f"날조된 도구 결과 태그 감지: '{tag}' — "
+                    f"AI가 도구를 호출하지 않고 가짜 결과를 텍스트로 생성함"
+                ),
+                retry_prompt=(
+                    "[시스템 재시도 지시 — 거짓 보고 감지] "
+                    "방금 응답에서 <function_results>, <invoke> 등의 XML 태그를 텍스트로 직접 작성했습니다. "
+                    "이것은 도구를 실제로 호출한 것이 아니라 가짜 결과를 날조한 것입니다. "
+                    "절대로 도구 결과 XML 태그를 텍스트로 생성하지 마세요. "
+                    "작업 상태를 확인하려면 check_directive_status, task_history, query_database 등 "
+                    "실제 도구를 호출하세요. 도구 없이 확인할 수 없다면 솔직히 '현재 확인할 수 없습니다'라고 답하세요."
+                ),
+            )
+
+    return None
