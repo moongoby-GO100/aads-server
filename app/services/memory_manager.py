@@ -37,6 +37,7 @@ class SessionNote:
     id: int = 0
     session_id: str = ""
     summary: str = ""
+    content: str = ""
     key_decisions: List[str] = field(default_factory=list)
     action_items: List[str] = field(default_factory=list)
     unresolved_issues: List[str] = field(default_factory=list)
@@ -479,26 +480,32 @@ class MemoryManager:
     ) -> str:
         """
         AI가 명시적으로 노트 저장 (도구 인터페이스).
-        session_notes 테이블에 저장. 반환: "노트 저장 완료: {title}"
+        session_notes 테이블에 저장. content 컬럼에 전문 보존.
+        반환: "노트 저장 완료: {title}"
         """
         if not title or not content:
             return "오류: title과 content 필수"
 
-        summary = f"[{category}] {title}: {content[:500]}"
+        summary = f"[{category}] {title}"
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        session_id = f"note_{category}_{ts}"
         conn = await _get_conn()
         try:
             await conn.execute(
                 """
                 INSERT INTO session_notes
-                    (session_id, summary, key_decisions, action_items, unresolved_issues, projects_discussed)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                    (session_id, summary, content, key_decisions, action_items,
+                     unresolved_issues, projects_discussed, note_type)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 """,
-                f"note_{category}",
+                session_id,
                 summary,
+                content,
                 [title],
                 [],
                 [],
                 _extract_projects([{"content": content}]),
+                "tool_note",
             )
             return f"노트 저장 완료: {title}"
         except Exception as e:
@@ -510,7 +517,7 @@ class MemoryManager:
     async def recall_notes(self, query: str, limit: int = 5) -> List[SessionNote]:
         """
         키워드로 노트 검색 (도구 인터페이스).
-        session_notes에서 title/content ILIKE 검색, 최근순 정렬.
+        session_notes에서 summary/content/session_id ILIKE 검색, 최근순 정렬.
         """
         conn = await _get_conn()
         try:
@@ -518,6 +525,7 @@ class MemoryManager:
                 """
                 SELECT * FROM session_notes
                 WHERE summary ILIKE $1
+                   OR content ILIKE $1
                    OR $1 ILIKE '%' || session_id || '%'
                 ORDER BY created_at DESC
                 LIMIT $2
@@ -610,6 +618,7 @@ def _row_to_session_note(row: asyncpg.Record) -> SessionNote:
         id=row["id"],
         session_id=row.get("session_id") or "",
         summary=row.get("summary") or "",
+        content=row.get("content") or "",
         key_decisions=list(row.get("key_decisions") or []),
         action_items=list(row.get("action_items") or []),
         unresolved_issues=list(row.get("unresolved_issues") or []),

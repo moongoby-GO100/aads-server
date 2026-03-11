@@ -805,24 +805,12 @@ class ToolExecutor:
         from app.services.memory_manager import get_memory_manager
         mgr = get_memory_manager()
 
-        # 새 title/content 인터페이스
-        if content:
-            result = await mgr.save_note(title=title, content=content, category=category)
-            return {"status": "saved", "message": result}
-        else:
-            # 하위호환: 구 인터페이스 (summary만)
-            key_decisions = inp.get("key_decisions", [])
-            action_items = inp.get("action_items", [])
-            unresolved_issues = inp.get("unresolved_issues", [])
-            note = await mgr.save_session_note(
-                session_id="tool_call",
-                messages=[],
-                summary=title,
-                key_decisions=key_decisions,
-                action_items=action_items,
-                unresolved_issues=unresolved_issues,
-            )
-            return {"status": "saved", "note_id": note.id, "summary": note.summary}
+        # content가 없으면 title을 content로 사용 (하위호환)
+        if not content:
+            content = title
+
+        result = await mgr.save_note(title=title, content=content, category=category)
+        return {"status": "saved", "message": result, "title": title, "category": category}
 
     async def _recall_notes(self, inp: Dict[str, Any]) -> Any:
         """노트 검색 — keyword 기반 (AADS-186E-3 업데이트)."""
@@ -833,29 +821,23 @@ class ToolExecutor:
         mgr = get_memory_manager()
 
         if query:
-            # 새 인터페이스: recall_notes(query)
             notes = await mgr.recall_notes(query=query, limit=limit)
-            return [
-                {
-                    "summary": n.summary,
-                    "key_decisions": n.key_decisions,
-                    "created_at": n.created_at.isoformat() if n.created_at else None,
-                }
-                for n in notes
-            ]
         else:
-            # 쿼리 없으면 최근 노트 반환
             notes = await mgr.get_recent_notes(limit)
-            return [
-                {
-                    "session_id": n.session_id,
-                    "summary": n.summary,
-                    "key_decisions": n.key_decisions,
-                    "action_items": n.action_items,
-                    "created_at": n.created_at.isoformat() if n.created_at else None,
-                }
-                for n in notes
-            ]
+
+        def _note_to_dict(n):
+            d = {
+                "session_id": n.session_id,
+                "summary": n.summary,
+                "key_decisions": n.key_decisions,
+                "action_items": n.action_items,
+                "created_at": n.created_at.isoformat() if n.created_at else None,
+            }
+            if n.content:
+                d["content"] = n.content[:2000]
+            return d
+
+        return [_note_to_dict(n) for n in notes]
 
     async def _learn_pattern(self, inp: Dict[str, Any]) -> Any:
         """패턴 학습 — ai_meta_memory UPSERT."""
