@@ -1527,3 +1527,236 @@ def _row_to_dict(row: asyncpg.Record) -> Dict[str, Any]:
                 pass
         result[key] = val
     return result
+
+
+# ─── 메모리 컨텍스트 뷰어 API (AADS 메모리 & 맥락 뷰어) ─────────────────────
+
+async def get_memory_context_info(session_id: str) -> Dict[str, Any]:
+    """세션의 주입 메모리 + 맥락 상태 + 이전 세션 요약 조회."""
+    pool = get_pool()
+    conn = await pool.acquire()
+    try:
+        # 1) 세션 + 워크스페이스 기본 정보
+        session_row = await conn.fetchrow(
+            """
+            SELECT s.id, s.title, s.message_count, s.cost_total, s.summary,
+                   s.workspace_id, s.created_at, s.updated_at,
+                   w.name AS workspace_name, w.system_prompt
+            FROM chat_sessions s
+            LEFT JOIN chat_workspaces w ON s.workspace_id = w.id
+            WHERE s.id = $1
+            """,
+            uuid.UUID(session_id),
+        )
+        if not session_row:
+            return {}
+
+        workspace_name = session_row["workspace_name"] or ""
+        workspace_id = session_row["workspace_id"]
+        system_prompt = session_row["system_prompt"] or ""
+        system_prompt_tokens = max(1, len(system_prompt)) * 2 // 3  # 대략 추정
+
+        # 2) 토큰 합계 조회
+        token_row = await conn.fetchrow(
+            """
+            SELECT COALESCE(SUM(tokens_in), 0) AS total_in,
+                   COALESCE(SUM(tokens_out), 0) AS total_out,
+                   COALESCE(SUM(cost), 0) AS total_cost,
+                   COUNT(*) AS msg_count
+            FROM chat_messages
+            WHERE session_id = $1
+            """,
+            uuid.UUID(session_id),
+        )
+
+        message_count = int(token_row["msg_count"]) if token_row else 0
+        tokens_in = int(token_row["total_in"]) if token_row else 0
+        tokens_out = int(token_row["total_out"]) if token_row else 0
+        total_cost = float(token_row["total_cost"]) if token_row else 0.0
+
+        # 3) 장기 메모리 (ai_meta_memory)
+        meta_rows = await conn.fetch(
+            """
+            SELECT category, key, value, confidence
+            FROM ai_meta_memory
+            WHERE category IN ('ceo_preference', 'project_pattern', 'known_issue', 'decision_history')
+            ORDER BY confidence DESC, updated_at DESC
+            """,
+        )
+        long_term_items = []
+        ltm_text_len = 0
+        for r in meta_rows:
+            val = r["value"]
+            if isinstance(val, str):
+                try:
+                    val = json.loads(val)
+                except Exception:
+                    pass
+            summary = ""
+            if isinstance(val, dict):
+                summary = val.get("summary") or val.get("description") or json.dumps(val, ensure_ascii=False)[:120]
+            else:
+                summary = str(val)[:120]
+            long_term_items.append({
+                "key": r["key"],
+                "category": r["category"],
+                "summary": summary,
+            })
+            ltm_text_len += len(summary)
+        ltm_tokens = max(1, ltm_text_len) * 2 // 3
+
+        # 4) AI observations (세션 주입되는 것들)
+        obs_rows = await conn.fetch(
+            """
+            SELECT category, key, value, confidence
+            FROM ai_observations
+            WHERE confidence >= 0.2
+            ORDER BY confidence DESC, updated_at DESC
+            """,
+        )
+        obs_items = []
+        obs_text_len = 0
+        for r in obs_rows:
+            obs_items.append({
+                "key": r["key"],
+                "category": r["category"],
+                "summary": str(r["value"])[:120],
+            })
+            obs_text_len += min(len(str(r["value"])), 120)
+        obs_tokens = max(1, obs_text_len) * 2 // 3
+
+        # 5) 세션 노트 (session_notes)
+        note_rows = await conn.fetch(
+            """
+            SELECT summary, key_decisions, created_at, projects_discussed
+            FROM session_notes
+            ORDER BY created_at DESC
+            """,
+        )
+        session_summaries = []
+        ss_text_len = 0
+        for r in note_rows:
+            ts = r["created_at"].strftime("%Y-%m-%d") if r["created_at"] else ""
+            summ = r["summary"] or ""
+            session_summaries.append({
+                "date": ts,
+                "summary": summ[:200],
+            })
+            ss_text_len += min(len(summ), 200)
+        ss_tokens = max(1, ss_text_len) * 2 // 3
+
+        # 5b) experience_memory
+        exp_rows = await conn.fetch(
+            """
+            SELECT experience_type, domain, tags, content, rif_score, created_at
+            FROM experience_memory
+            ORDER BY rif_score DESC, created_at DESC
+            """,
+        )
+        exp_items = []
+        exp_text_len = 0
+        for r in exp_rows:
+            val = r["content"]
+            if isinstance(val, str):
+                try:
+                    val = json.loads(val)
+                except Exception:
+                    pass
+            summary = ""
+            if isinstance(val, dict):
+                summary = val.get("summary") or val.get("description") or json.dumps(val, ensure_ascii=False)[:120]
+            else:
+                summary = str(val)[:120]
+            exp_items.append({
+                "experience_type": r["experience_type"],
+                "domain": r["domain"] or "",
+                "tags": r["tags"] or [],
+                "summary": summary,
+                "rif_score": float(r["rif_score"]) if r["rif_score"] else 1.0,
+            })
+            exp_text_len += len(summary)
+        exp_tokens = max(1, exp_text_len) * 2 // 3
+
+        total_memory_count = len(long_term_items) + len(obs_items) + len(exp_items)
+        total_injected_tokens = system_prompt_tokens + ltm_tokens + obs_tokens + ss_tokens + exp_tokens
+
+        # 6) Compaction 상태
+        compaction_threshold = 30
+        compaction_needed = message_count >= compaction_threshold
+        has_summary = bool(session_row["summary"])
+
+        # 건강도 판정
+        if compaction_needed and not has_summary:
+            health = "danger"
+        elif compaction_needed:
+            health = "warning"
+        else:
+            health = "normal"
+
+        # 7) 같은 워크스페이스의 다른 세션 이력
+        history_rows = await conn.fetch(
+            """
+            SELECT s.id, s.title, s.summary, s.message_count, s.created_at
+            FROM chat_sessions s
+            WHERE s.workspace_id = $1 AND s.id != $2
+            ORDER BY s.updated_at DESC
+            LIMIT 10
+            """,
+            workspace_id,
+            uuid.UUID(session_id),
+        )
+        session_history = []
+        for r in history_rows:
+            session_history.append({
+                "date": r["created_at"].strftime("%Y-%m-%d") if r["created_at"] else "",
+                "title": r["title"] or "",
+                "summary": (r["summary"] or "")[:200],
+                "message_count": r["message_count"] or 0,
+            })
+
+        return {
+            "session_id": session_id,
+            "workspace_name": workspace_name,
+            "injected_memory": {
+                "system_prompt_tokens": system_prompt_tokens,
+                "long_term_memory": {
+                    "count": len(long_term_items),
+                    "tokens": ltm_tokens,
+                    "items": long_term_items,
+                },
+                "observations": {
+                    "count": len(obs_items),
+                    "tokens": obs_tokens,
+                    "items": obs_items,
+                },
+                "session_summaries": {
+                    "count": len(session_summaries),
+                    "tokens": ss_tokens,
+                    "items": session_summaries,
+                },
+                "experience_memory": {
+                    "count": len(exp_items),
+                    "tokens": exp_tokens,
+                    "items": exp_items,
+                },
+                "total_memory_count": total_memory_count,
+                "total_injected_tokens": total_injected_tokens,
+            },
+            "context_status": {
+                "session_title": session_row["title"] or "",
+                "message_count": message_count,
+                "total_cost": round(total_cost, 4),
+                "tokens_in": tokens_in,
+                "tokens_out": tokens_out,
+                "compaction_needed": compaction_needed,
+                "compaction_threshold": compaction_threshold,
+                "has_summary": has_summary,
+                "health": health,
+            },
+            "session_history": session_history,
+        }
+    except Exception as e:
+        logger.error(f"get_memory_context_info failed: {e}")
+        return {"error": str(e)}
+    finally:
+        await pool.release(conn)

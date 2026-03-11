@@ -345,6 +345,19 @@ class ErrorReportOut(BaseModel):
     error_id: str
 
 
+# ════════════════════════════════════════════════════════════════════════════════
+# Memory Context Viewer (메모리 & 맥락 뷰어)
+# ════════════════════════════════════════════════════════════════════════════════
+
+@router.get("/chat/sessions/{session_id}/memory-context", tags=["chat-memory"])
+async def get_memory_context(session_id: UUID):
+    """세션의 주입 메모리 + 맥락 상태 + 이전 세션 요약 조회."""
+    result = await svc.get_memory_context_info(str(session_id))
+    if not result or "error" in result:
+        raise _NOT_FOUND("session or memory context")
+    return result
+
+
 @router.post("/chat/errors/report", response_model=ErrorReportOut, tags=["chat-errors"])
 async def report_frontend_error(req: ErrorReportRequest, request: Request):
     """프론트엔드 에러를 백엔드에 기록 — AI가 다음 턴에서 인지 가능."""
