@@ -354,8 +354,10 @@ async def _stream_anthropic(
             break  # 정상 종료
 
         # 도구 실행 (heartbeat 포함 — SSE 연결 유지)
-        from app.services.tool_executor import ToolExecutor
+        from app.services.tool_executor import ToolExecutor, current_chat_session_id as _cv_sid
         executor = ToolExecutor()
+        if any(tu.name.startswith("pipeline_c") for tu in tool_use_blocks):
+            logger.info(f"[DIAG] call_stream tool exec: ContextVar session_id='{_cv_sid.get('')}'")
 
         tool_results = []
         for tu in tool_use_blocks:

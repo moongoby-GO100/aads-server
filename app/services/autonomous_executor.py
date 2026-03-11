@@ -104,6 +104,11 @@ class AutonomousExecutor:
         total_cost = 0.0
         full_response = ""
 
+        # ContextVar 전파 진단
+        from app.services.tool_executor import current_chat_session_id
+        _diag_sid = current_chat_session_id.get("")
+        logger.info(f"[DIAG] AutonomousExecutor.execute_task: ContextVar session_id='{_diag_sid}'")
+
         # 작업 시작 메시지 추가
         work_messages = list(messages)
         if task_description and (not work_messages or work_messages[-1].get("role") != "user"):
