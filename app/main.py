@@ -14,7 +14,8 @@ from app.api.channels import router as channels_router
 from app.api.managers import router as managers_router
 from app.api.conversations import router as conversations_router
 from app.api.project_dashboard import router as project_dashboard_router
-from app.api.ceo_chat import router as ceo_chat_router
+# ceo_chat_router 등록 해제 — /chat (chat_v2_router)으로 통합 완료. ceo_chat.py는 pipeline_c에서 call_llm() 참조용으로 유지
+# from app.api.ceo_chat import router as ceo_chat_router
 from app.api.directives import router as directives_router
 from app.api.watchdog import router as watchdog_router
 from app.api.approval import router as approval_router
@@ -121,9 +122,20 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("weekly_briefing_failed", error=str(e))
 
+        # Unified Healer 초기화
+        from app.services.unified_healer import healing_cycle, initialize as healer_init
+
+        async def _run_healing_cycle():
+            try:
+                await healing_cycle()
+            except Exception as e:
+                logger.warning("scheduler_healing_cycle_failed", error=str(e))
+
         scheduler = AsyncIOScheduler()
         # 2분마다 규칙 평가
         scheduler.add_job(_run_alert_evaluation, "interval", minutes=2, id="alert_eval")
+        # 30초마다 자율복구 사이클
+        scheduler.add_job(_run_healing_cycle, "interval", seconds=30, id="healing_cycle")
         # 매일 09:00 KST (= UTC 00:00)
         scheduler.add_job(_run_daily_summary, CronTrigger(hour=0, minute=0, timezone="UTC"), id="daily_summary")
         # 매주 월요일 09:00 KST (= UTC 00:00, day_of_week=mon) — AADS-186D
@@ -133,13 +145,14 @@ async def lifespan(app: FastAPI):
             id="weekly_briefing",
         )
         scheduler.start()
+        await healer_init()
         # AADS-190: 스케줄러 인스턴스를 동적 스케줄 도구에 공유
         try:
             from app.api.ceo_chat_tools_scheduler import set_scheduler
             set_scheduler(scheduler)
         except Exception:
             pass
-        logger.info("apscheduler_started", jobs=["alert_eval", "daily_summary", "weekly_briefing"])
+        logger.info("apscheduler_started", jobs=["alert_eval", "healing_cycle", "daily_summary", "weekly_briefing"])
     except Exception as e:
         logger.warning("apscheduler_start_failed_graceful_degradation", error=str(e))
         scheduler = None
@@ -234,7 +247,7 @@ app.include_router(visual_qa.router, prefix="/api/v1", tags=["visual-qa"])
 app.include_router(mobile_qa.router, prefix="/api/v1", tags=["mobile-qa"])
 app.include_router(memory.router, prefix="/api/v1", tags=["memory"])
 app.include_router(conversations_router, prefix="/api/v1", tags=["conversations"])
-app.include_router(ceo_chat_router, prefix="/api/v1", tags=["ceo-chat"])
+# app.include_router(ceo_chat_router, prefix="/api/v1", tags=["ceo-chat"])  # /chat으로 통합
 app.include_router(directives_router, prefix="/api/v1", tags=["directives"])
 app.include_router(watchdog_router, prefix="/api/v1", tags=["watchdog"])
 app.include_router(approval_router, prefix="/api/v1", tags=["approval"])

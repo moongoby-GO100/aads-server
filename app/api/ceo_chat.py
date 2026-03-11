@@ -141,6 +141,8 @@ _INTENT_PATTERNS: Dict[str, List[str]] = {
     "dashboard":   ["상태", "확인", "보고", "현황", "서버", "대시보드", "요약", "overview"],
     "diagnosis":   ["왜", "안돼", "오류", "에러", "문제", "분석", "실패", "죽었", "죽어", "안됨", "error", "fail"],
     "research":    ["검색", "조사", "비교", "찾아", "최신", "찾아봐", "알아봐", "어떤", "무엇"],
+    "pipeline_c":  ["파이프라인", "pipeline", "클로드봇", "claude code", "자율작업", "자율 작업", "봇한테", "봇에게",
+                    "파이프라인C", "pipeline c", "파이프라인 시작", "봇 작업"],
     "execute":     ["만들어", "수정해", "고쳐", "배포", "진행", "승인", "작성해", "추가해", "구현", "지시서"],
     "strategy":    ["기획", "방향", "전략", "의도", "검토", "설계", "아키텍처", "계획"],
     # AADS-165: 실행 검증 의도
@@ -193,7 +195,7 @@ def classify_intent(message: str) -> str:
         "decision", "planning", "search", "casual",
         # 기존 (우선순위 유지)
         "design_fix", "design", "qa", "execution_verify", "architect",
-        "health_check", "execute", "browser", "dashboard", "diagnosis",
+        "health_check", "pipeline_c", "execute", "browser", "dashboard", "diagnosis",
         "research", "strategy",
     ]
     for intent in priority_order:
@@ -587,6 +589,24 @@ class ContextManager:
             parts.append("")
 
         parts.append("간결하고 실용적으로 답변하세요. 지시서 생성이 필요하면 구체적인 내용을 제시하세요.")
+
+        # Pipeline C 가이드
+        parts.append("")
+        parts.append("""[Pipeline C — Claude Code 자율 작업 시스템]
+각 서버(211/114/68)에 설치된 Claude Code CLI에 직접 작업을 지시할 수 있습니다.
+
+사용 가능한 도구:
+- pipeline_c_start(project, instruction): 파이프라인 시작 (작업→자동검수→승인대기)
+- pipeline_c_status(job_id): 진행 상황 확인
+- pipeline_c_approve(job_id, approved, reason): 승인(배포) 또는 거부(원복)
+
+프로젝트: KIS(211서버), GO100(211서버), SF(114서버), NTV2(114서버), AADS(68서버)
+
+플로우: 작업지시 → Claude Code 자율수행 → AI 자동검수 → 재지시(필요시) → CEO 승인 대기 → 승인 시 git commit+push+서비스재시작+최종검증
+
+CEO가 "클로드봇에게 시켜", "파이프라인 시작", "봇한테 맡겨" 등 요청하면 pipeline_c_start를 사용하세요.
+간단한 조회(파일 목록, 상태 확인)는 read_remote_file/list_remote_dir로 직접 처리하세요.
+코드 수정/버그 수정/리팩토링 등 복잡한 작업만 파이프라인C를 사용하세요.""")
 
         return "\n".join(parts)
 
@@ -1565,6 +1585,22 @@ async def send_ceo_message(req: CeoChatRequest):
             tool_model = model if model.startswith("claude") else "claude-sonnet-4-6"
             response_text, input_tokens, output_tokens = await _call_anthropic_with_tools(
                 tool_model, system_prompt, messages, dsn
+            )
+        elif intent == "pipeline_c":
+            # Pipeline C: 자율 작업 파이프라인 (tool-use 활성화)
+            pipeline_prompt = (
+                system_prompt
+                + "\n\n[Pipeline C 모드]\n"
+                "CEO가 Claude Code 자율 작업을 요청했습니다.\n"
+                "1. 작업 시작: pipeline_c_start 도구를 사용하세요.\n"
+                "2. 상태 확인: pipeline_c_status 도구를 사용하세요.\n"
+                "3. 승인/거부: pipeline_c_approve 도구를 사용하세요.\n"
+                "프로젝트명을 메시지에서 추출하고, 구체적 지시를 instruction에 전달하세요.\n"
+                "승인 요청이 오면 변경사항(git diff)을 먼저 확인 후 CEO에게 보고하세요."
+            )
+            tool_model = model if model.startswith("claude") else "claude-sonnet-4-6"
+            response_text, input_tokens, output_tokens = await _call_anthropic_with_tools(
+                tool_model, pipeline_prompt, messages, dsn, max_iterations=8
             )
         elif intent in ("diagnosis", "research"):
             # tool-use 활성화 (Anthropic 전용)

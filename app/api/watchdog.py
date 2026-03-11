@@ -95,18 +95,32 @@ async def report_error(
                 "has_resolution": bool(existing.get("auto_recoverable")),
             }
         else:
+            # 자동 복구 가능 여부 판단
+            from app.services.unified_healer import ERROR_RECOVERY_MAP, _extract_service_name, _is_safe_command
+            matched_cmd = None
+            auto_recoverable = False
+            if req.error_type in ERROR_RECOVERY_MAP:
+                cmd_template = ERROR_RECOVERY_MAP[req.error_type]
+                service_name = _extract_service_name(req.source, req.message)
+                matched_cmd = cmd_template.replace("{service}", service_name)
+                auto_recoverable = _is_safe_command(matched_cmd)
+
             row = await conn.fetchrow("""
-                INSERT INTO error_log (error_hash, error_type, source, server, message, stack_trace, context, resolution_type)
-                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'pending')
+                INSERT INTO error_log (error_hash, error_type, source, server, message, stack_trace, context,
+                                       resolution_type, auto_recoverable, recovery_command)
+                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'pending', $8, $9)
                 RETURNING id
             """, eh, req.error_type, req.source, req.server,
-                req.message, req.stack_trace, str(req.context or {}))
+                req.message, req.stack_trace, str(req.context or {}),
+                auto_recoverable, matched_cmd)
 
             return {
                 "status": "recorded_new",
                 "error_hash": eh,
                 "error_id": row["id"],
                 "occurrence_count": 1,
+                "auto_recoverable": auto_recoverable,
+                "recovery_command": matched_cmd,
             }
 
 

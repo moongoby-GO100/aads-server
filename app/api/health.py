@@ -72,3 +72,10 @@ async def deep_health_check():
         "checks": checks,
         "failed": [k for k, v in checks.items() if not v],
     }
+
+
+@router.get("/health/healer")
+async def healer_status():
+    """Unified Self-Healing Engine 상태 조회."""
+    from app.services.unified_healer import get_healer_status
+    return await get_healer_status()

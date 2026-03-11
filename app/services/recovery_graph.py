@@ -229,6 +229,58 @@ async def execute_recovery_chain(issues: list[dict]) -> list[dict]:
     return results
 
 
+ACTION_COMMAND_MAP = {
+    "soft_kill": "kill -15 {pid}",
+    "hard_kill": "kill -9 {pid}",
+    "service_restart": "docker restart {service}",
+    "docker_restart": "docker restart {service}",
+    "bridge_full_restart": "docker compose -f /root/go100/docker-compose.yml restart bridge",
+    "config_refresh": "docker exec {service} kill -HUP 1",
+    "emergency_slot_clear": None,  # 코드 내 처리
+    "session_switch": None,  # 코드 내 처리
+    "dump_diagnostics": None,  # 로그만
+    "create_incident_report": None,  # 로그만
+}
+
+
+async def _run_action_command(action: str, issue: dict) -> tuple[bool, str]:
+    """실제 복구 명령 실행. (success, output) 반환."""
+    cmd_template = ACTION_COMMAND_MAP.get(action)
+    if cmd_template is None:
+        logger.info("recovery_action_noop", action=action)
+        return True, f"noop:{action}"
+
+    service = issue.get("service", issue.get("source", "aads-server"))
+    pid = issue.get("pid", "")
+    cmd = cmd_template.replace("{service}", str(service)).replace("{pid}", str(pid))
+
+    # 안전성 검사
+    SAFE_PREFIXES = [
+        "docker restart", "docker compose", "docker exec",
+        "systemctl restart", "systemctl reload",
+        "supervisorctl restart", "kill -15", "kill -HUP",
+    ]
+    if not any(cmd.startswith(p) for p in SAFE_PREFIXES):
+        logger.warning("recovery_action_blocked", cmd=cmd)
+        return False, f"blocked:{cmd}"
+
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        output = (stdout.decode()[:300] + stderr.decode()[:200]).strip()
+        success = proc.returncode == 0
+        logger.info("recovery_action_executed", action=action, cmd=cmd, success=success)
+        return success, output
+    except asyncio.TimeoutError:
+        return False, "timeout:120s"
+    except Exception as e:
+        return False, str(e)[:300]
+
+
 async def _execute_single_recovery(
     recovery_id: str, rdef: dict, issue: dict
 ) -> dict:
@@ -246,12 +298,22 @@ async def _execute_single_recovery(
             continue
         tier_used = tier_key
         action_taken = ",".join(tier_actions)
-        try:
-            await asyncio.sleep(0.01)  # 실제 액션 대신 비동기 양보
+
+        tier_success = True
+        tier_outputs = []
+        for action in tier_actions:
+            success, output = await _run_action_command(action, issue)
+            tier_outputs.append(f"{action}:{output}")
+            if not success:
+                tier_success = False
+
+        if tier_success:
+            result_status = "success"
             break
-        except Exception as e:
-            error_msg = str(e)
+        else:
+            error_msg = "; ".join(tier_outputs)
             result_status = "failed"
+            # 다음 tier로 에스컬레이션
 
     duration = int(time.time() - start_time)
 

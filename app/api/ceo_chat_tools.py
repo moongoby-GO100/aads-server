@@ -236,6 +236,67 @@ TOOL_DEFINITIONS: List[Dict] = [
             "required": ["project", "file_path"],
         },
     },
+    # ── Pipeline C 도구 (자율 작업 파이프라인) ──────────────────────────────
+    {
+        "name": "pipeline_c_start",
+        "description": "프로젝트별 Claude Code 자율 작업 파이프라인 시작. 작업→자동검수→재지시→승인대기까지 자율 수행.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "대상 프로젝트 (KIS, GO100, SF, NTV2, AADS)",
+                    "enum": ["KIS", "GO100", "SF", "NTV2", "AADS"],
+                },
+                "instruction": {
+                    "type": "string",
+                    "description": "Claude Code에 보낼 작업 지시 내용 (구체적으로 작성)",
+                },
+                "max_cycles": {
+                    "type": "integer",
+                    "description": "최대 검수-재지시 반복 횟수 (기본: 3)",
+                    "default": 3,
+                },
+            },
+            "required": ["project", "instruction"],
+        },
+    },
+    {
+        "name": "pipeline_c_status",
+        "description": "실행 중인 파이프라인C 작업 상태 확인. job_id 없으면 전체 목록 반환.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {
+                    "type": "string",
+                    "description": "파이프라인 작업 ID (예: pc-1741654800-abc123). 생략 시 전체 목록.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "pipeline_c_approve",
+        "description": "파이프라인C 작업 승인(배포) 또는 거부(원복). 승인 시 git commit+push+서비스 재시작 자동 수행.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {
+                    "type": "string",
+                    "description": "승인할 파이프라인 작업 ID",
+                },
+                "approved": {
+                    "type": "boolean",
+                    "description": "true=승인(배포), false=거부(원복)",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "거부 사유 (거부 시에만)",
+                },
+            },
+            "required": ["job_id", "approved"],
+        },
+    },
 ]
 
 # ─── SSH 원격 접근 상수 (중앙 설정에서 import, AADS-165) ──────────────────────
@@ -865,6 +926,112 @@ async def tool_git_remote_create_branch(project: str, branch_name: str) -> str:
     return await tool_run_remote_command(project, f"git checkout -b {branch_name}")
 
 
+# ─── Pipeline C 도구 함수 ─────────────────────────────────────────────────────
+
+
+async def tool_pipeline_c_start(project: str, instruction: str, max_cycles: int, dsn: str) -> str:
+    """파이프라인C 시작."""
+    if not project:
+        return "[ERROR] project 필수"
+    if not instruction or len(instruction.strip()) < 10:
+        return "[ERROR] instruction 필수 (최소 10자 이상의 구체적 지시 필요)"
+
+    try:
+        from app.services.pipeline_c import start_pipeline
+        result = await start_pipeline(
+            project=project.upper(),
+            instruction=instruction,
+            chat_session_id="ceo",  # CEO 채팅에서 호출
+            max_cycles=min(max_cycles, 5),
+            dsn=dsn,
+        )
+        return (
+            f"[Pipeline C 시작]\n"
+            f"Job ID: {result['job_id']}\n"
+            f"프로젝트: {result['project']}\n"
+            f"상태: {result['status']}\n\n"
+            f"{result['message']}\n\n"
+            f"진행 확인: pipeline_c_status(job_id=\"{result['job_id']}\")\n"
+            f"작업이 완료되면 승인 요청이 표시됩니다."
+        )
+    except ValueError as e:
+        return f"[ERROR] {e}"
+    except Exception as e:
+        logger.error(f"pipeline_c_start_error: {e}")
+        return f"[ERROR] 파이프라인 시작 실패: {e}"
+
+
+async def tool_pipeline_c_status(job_id: str) -> str:
+    """파이프라인C 상태 조회."""
+    from app.services.pipeline_c import get_pipeline_status, list_pipelines
+
+    if not job_id:
+        # 전체 목록
+        jobs = await list_pipelines()
+        if not jobs:
+            return "실행 중인 파이프라인이 없습니다."
+        lines = ["[활성 파이프라인 목록]"]
+        for j in jobs:
+            lines.append(
+                f"  {j['job_id']} | {j['project']} | {j['phase']} | "
+                f"{j['status']} | {j['elapsed_sec']}초 | {j['instruction'][:60]}"
+            )
+        return "\n".join(lines)
+
+    result = await get_pipeline_status(job_id)
+    if "error" in result:
+        return f"[ERROR] {result['error']}"
+
+    lines = [
+        f"[Pipeline C 상태: {result['job_id']}]",
+        f"프로젝트: {result['project']}",
+        f"지시: {result.get('instruction', '')[:200]}",
+        f"단계: {result['phase']}",
+        f"검수 횟수: {result['cycle']}",
+        f"상태: {result['status']}",
+    ]
+    if result.get("review_feedback"):
+        lines.append(f"검수 결과: {result['review_feedback']}")
+    if result.get("git_diff"):
+        lines.append(f"\n[변경사항]\n{result['git_diff'][:1500]}")
+    if result.get("logs"):
+        lines.append("\n[최근 로그]")
+        for log in result["logs"][-5:]:
+            lines.append(f"  [{log.get('timestamp', '')[-8:]}] {log['phase']}: {log['message'][:150]}")
+
+    if result["status"] == "awaiting_approval":
+        lines.append(f"\n** CEO 승인 대기 중 **")
+        lines.append(f"승인: pipeline_c_approve(job_id=\"{job_id}\", approved=true)")
+        lines.append(f"거부: pipeline_c_approve(job_id=\"{job_id}\", approved=false, reason=\"사유\")")
+
+    return "\n".join(lines)
+
+
+async def tool_pipeline_c_approve(job_id: str, approved: bool, reason: str) -> str:
+    """파이프라인C 승인/거부."""
+    if not job_id:
+        return "[ERROR] job_id 필수"
+
+    from app.services.pipeline_c import approve_pipeline, reject_pipeline
+
+    if approved:
+        result = await approve_pipeline(job_id)
+        if "error" in result:
+            return f"[ERROR] {result['error']}"
+        return (
+            f"[Pipeline C 배포 완료]\n"
+            f"Job: {job_id}\n"
+            f"결과: {result.get('summary', 'OK')}\n"
+            f"Health: {result.get('health', 'N/A')[:200]}\n"
+            f"에러: {result.get('errors', '없음')[:200]}"
+        )
+    else:
+        result = await reject_pipeline(job_id, reason)
+        if "error" in result:
+            return f"[ERROR] {result['error']}"
+        return f"[Pipeline C 거부] {result.get('message', '변경사항 원복됨')}"
+
+
 # ─── Browser 도구 함수 (AADS-159) ──────────────────────────────────────────────
 
 def _browser_domain_ok(url: str) -> Optional[str]:
@@ -1171,6 +1338,22 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str) -> str:
         return await tool_read_remote_file(
             params.get("project", ""),
             params.get("file_path", ""),
+        )
+    # ── Pipeline C 도구 ────────────────────────────────────────────────────
+    elif name == "pipeline_c_start":
+        return await tool_pipeline_c_start(
+            params.get("project", ""),
+            params.get("instruction", ""),
+            params.get("max_cycles", 3),
+            dsn,
+        )
+    elif name == "pipeline_c_status":
+        return await tool_pipeline_c_status(params.get("job_id", ""))
+    elif name == "pipeline_c_approve":
+        return await tool_pipeline_c_approve(
+            params.get("job_id", ""),
+            params.get("approved", True),
+            params.get("reason", ""),
         )
     else:
         return f"[ERROR] 알 수 없는 도구: {name}"
