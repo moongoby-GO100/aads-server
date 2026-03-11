@@ -997,7 +997,15 @@ async def recover_interrupted_jobs():
         from app.core.db_pool import get_pool
         pool = get_pool()
         async with pool.acquire() as conn:
-            # ── Phase 0: 고아 pipeline_jobs 정리 (running/queued → error) ──
+            # ── Phase 0: 고아 pipeline_jobs 정리 (running/queued → error) + 채팅방 알림 ──
+            # 먼저 알림 대상 조회
+            orphan_rows = await conn.fetch(
+                """
+                SELECT job_id, chat_session_id, project, substring(instruction from 1 for 100) as instr
+                FROM pipeline_jobs
+                WHERE status = 'running' AND phase NOT IN ('restarting', 'done', 'error')
+                """
+            )
             orphan_count = await conn.execute(
                 """
                 UPDATE pipeline_jobs
@@ -1009,6 +1017,29 @@ async def recover_interrupted_jobs():
             )
             if orphan_count and orphan_count != "UPDATE 0":
                 logger.info(f"pipeline_c_recovery: orphan pipeline_jobs cleaned: {orphan_count}")
+                # 채팅방에 중단 알림 전송
+                for orow in orphan_rows:
+                    sid = orow.get("chat_session_id")
+                    if not sid:
+                        continue
+                    try:
+                        await conn.execute(
+                            """
+                            INSERT INTO chat_messages
+                                (session_id, role, content, intent, cost,
+                                 tokens_in, tokens_out, attachments, sources, tools_called)
+                            VALUES ($1::uuid, 'assistant', $2, 'pipeline_c', 0,
+                                    0, 0, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)
+                            """,
+                            sid,
+                            f"⚠️ **[Pipeline C 중단]** `{orow['job_id']}`\n"
+                            f"프로젝트: **{orow.get('project', '?')}**\n"
+                            f"사유: 서버 재시작으로 중단됨\n"
+                            f"작업: {orow.get('instr', '')[:200]}\n\n"
+                            f"재실행이 필요하면 다시 지시해주세요.",
+                        )
+                    except Exception as post_err:
+                        logger.warning(f"pipeline_c_recovery: chat post failed for {orow['job_id']}: {post_err}")
 
             # ── Phase 0b: 고아 directive_lifecycle 정리 (24시간 이상 in_progress → failed) ──
             stale_count = await conn.execute(

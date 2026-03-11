@@ -517,6 +517,7 @@ async def trigger_ai_reaction(
             async for _ in send_message_stream(
                 session_id=session_id,
                 content=safe_message,
+                intent_override="auto_reaction",
             ):
                 pass  # 스트림 전체 소비 → DB에 AI 응답 자동 저장
         except Exception as e:
@@ -538,6 +539,7 @@ async def send_message_stream(
     content: str,
     attachments: Optional[List[Any]] = None,
     model_override: Optional[str] = None,
+    intent_override: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """
     AADS-185: 3계층 Context Engineering + IntentRouter + ModelSelector + Tool Use 루프.
@@ -701,7 +703,7 @@ async def send_message_stream(
         # 6. 인텐트 분류 + 모델/도구 결정
         from app.services.intent_router import classify, get_model_for_override
         intent_result = await classify(content, workspace_name, recent_messages=messages)
-        intent = intent_result.intent
+        intent = intent_override if intent_override else intent_result.intent
         # Langfuse: intent_classification span
         if _lf_trace is not None:
             try:
