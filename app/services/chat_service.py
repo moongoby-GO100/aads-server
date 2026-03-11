@@ -17,6 +17,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 import asyncpg
 from anthropic import AsyncAnthropic, APIStatusError
 from app.config import Settings
+from app.core.db_pool import get_pool
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +122,12 @@ async def with_background_completion(
 
 
 def get_active_bg_tasks() -> Dict[str, bool]:
-    """현재 백그라운드 진행 중인 세션 목록 (health check / 디버그용)."""
+    """현재 백그라운드 진행 중인 세션 목록 (health check / 디버그용).
+    AADS-CRITICAL-FIX #4: 완료된 태스크 자동 정리."""
+    # 완료된 태스크 제거
+    done_sids = [sid for sid, task in _active_bg_tasks.items() if task.done()]
+    for sid in done_sids:
+        _active_bg_tasks.pop(sid, None)
     return {sid: not task.done() for sid, task in _active_bg_tasks.items()}
 
 
@@ -143,7 +149,12 @@ def _db_url() -> str:
 
 
 async def _get_conn() -> asyncpg.Connection:
-    return await asyncpg.connect(_db_url(), timeout=10)
+    """풀에서 커넥션 acquire. 호출자가 반드시 release해야 함.
+    기존 코드 호환: conn = await _get_conn() → conn.close() 대신 pool.release(conn).
+    새 코드는 async with get_pool().acquire() as conn: 패턴 권장.
+    """
+    pool = get_pool()
+    return await pool.acquire(timeout=10)
 
 
 # ─── Anthropic 클라이언트 ──────────────────────────────────────────────────────
@@ -161,7 +172,7 @@ async def list_workspaces() -> List[Dict[str, Any]]:
         )
         return [_row_to_dict(r) for r in rows]
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 async def create_workspace(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -182,7 +193,7 @@ async def create_workspace(data: Dict[str, Any]) -> Dict[str, Any]:
         )
         return _row_to_dict(row)
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 async def update_workspace(workspace_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -212,7 +223,7 @@ async def update_workspace(workspace_id: str, data: Dict[str, Any]) -> Optional[
         )
         return _row_to_dict(row) if row else None
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 async def delete_workspace(workspace_id: str) -> bool:
@@ -223,7 +234,7 @@ async def delete_workspace(workspace_id: str) -> bool:
         )
         return result == "DELETE 1"
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 # ─── Session CRUD ─────────────────────────────────────────────────────────────
@@ -238,7 +249,7 @@ async def list_sessions(workspace_id: str, limit: int = 50) -> List[Dict[str, An
         )
         return [_row_to_dict(r) for r in rows]
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 async def create_session(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -255,7 +266,7 @@ async def create_session(data: Dict[str, Any]) -> Dict[str, Any]:
         )
         return _row_to_dict(row)
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 async def update_session(session_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -284,7 +295,7 @@ async def update_session(session_id: str, data: Dict[str, Any]) -> Optional[Dict
         )
         return _row_to_dict(row) if row else None
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 async def delete_session(session_id: str) -> bool:
@@ -295,7 +306,7 @@ async def delete_session(session_id: str) -> bool:
         )
         return result == "DELETE 1"
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 # ─── Message ──────────────────────────────────────────────────────────────────
@@ -311,7 +322,7 @@ async def list_messages(session_id: str, limit: int = 200, offset: int = 0) -> L
         )
         return [_row_to_dict(r) for r in rows]
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 async def _save_message(
@@ -329,32 +340,34 @@ async def _save_message(
     tools_called: Optional[List[str]] = None,
     thinking_summary: Optional[str] = None,
 ) -> Dict[str, Any]:
-    row = await conn.fetchrow(
-        """
-        INSERT INTO chat_messages
-            (session_id, role, content, model_used, intent, cost, tokens_in, tokens_out,
-             attachments, sources, tools_called, thinking_summary)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12)
-        RETURNING *
-        """,
-        session_id,
-        role,
-        content,
-        model_used,
-        intent,
-        cost,
-        tokens_in,
-        tokens_out,
-        json.dumps(attachments or []),
-        json.dumps(sources or []),
-        json.dumps(tools_called or []),
-        thinking_summary,
-    )
-    # Update session message count
-    await conn.execute(
-        "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
-        session_id,
-    )
+    # AADS-CRITICAL-FIX #2: INSERT + UPDATE를 트랜잭션으로 감싸 message_count 정합성 보장
+    async with conn.transaction():
+        row = await conn.fetchrow(
+            """
+            INSERT INTO chat_messages
+                (session_id, role, content, model_used, intent, cost, tokens_in, tokens_out,
+                 attachments, sources, tools_called, thinking_summary)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12)
+            RETURNING *
+            """,
+            session_id,
+            role,
+            content,
+            model_used,
+            intent,
+            cost,
+            tokens_in,
+            tokens_out,
+            json.dumps(attachments or []),
+            json.dumps(sources or []),
+            json.dumps(tools_called or []),
+            thinking_summary,
+        )
+        # Update session message count (atomic with INSERT)
+        await conn.execute(
+            "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
+            session_id,
+        )
     return _row_to_dict(row)
 
 
@@ -384,11 +397,13 @@ async def send_message_stream(
         sid = uuid.UUID(session_id)
 
         # 1. 첨부파일 내용 추출 → content에 추가
+        logger.info(f"[ATTACH] session={session_id[:8]} attachments={attachments}")
         if attachments:
             file_texts = []
             for att in attachments:
                 file_path = att.get("path", "") if isinstance(att, dict) else ""
                 file_name = att.get("name", "") if isinstance(att, dict) else str(att)
+                logger.info(f"[ATTACH] file_path={file_path!r} exists={os.path.isfile(file_path) if file_path else 'N/A'}")
                 if file_path and os.path.isfile(file_path):
                     try:
                         ext = os.path.splitext(file_path)[1].lower()
@@ -422,16 +437,18 @@ async def send_message_stream(
         base_prompt = (sp_row["system_prompt"] if sp_row and sp_row["system_prompt"] else "")
         workspace_name = (sp_row["workspace_name"] if sp_row and sp_row["workspace_name"] else "CEO")
 
-        # 3. 세션 히스토리 조회 (무한 대화 — 전체 비압축 메시지, observation masking은 context_builder에서)
+        # 3. 세션 히스토리 조회 (#16: 서브쿼리로 ASC 정렬, Python reverse 제거)
         hist_rows = await conn.fetch(
             """
-            SELECT role, content FROM chat_messages
-            WHERE session_id = $1 AND (is_compacted IS NULL OR is_compacted = false)
-            ORDER BY created_at DESC LIMIT 200
+            SELECT role, content FROM (
+                SELECT role, content, created_at FROM chat_messages
+                WHERE session_id = $1 AND (is_compacted IS NULL OR is_compacted = false)
+                ORDER BY created_at DESC LIMIT 200
+            ) sub ORDER BY created_at ASC
             """,
             sid,
         )
-        raw_messages = [{"role": r["role"], "content": r["content"]} for r in reversed(hist_rows)]
+        raw_messages = [{"role": r["role"], "content": r["content"]} for r in hist_rows]
 
         # 세션 누적 비용 조회 (프론트엔드 표시용)
         _session_cost_row = await conn.fetchrow(
@@ -440,15 +457,20 @@ async def send_message_stream(
         _session_cost = float(_session_cost_row["cost_total"] or 0) if _session_cost_row else 0
         _session_turns = int(_session_cost_row["message_count"] or 0) if _session_cost_row else 0
 
-        # 4. 3계층 컨텍스트 빌드
+        # 4. 3계층 컨텍스트 빌드 (AADS-CRITICAL-FIX #7: fallback 방어)
         from app.services.context_builder import build_messages_context
-        messages, system_prompt = await build_messages_context(
-            workspace_name=workspace_name,
-            session_id=session_id,
-            raw_messages=raw_messages,
-            base_system_prompt=base_prompt,
-            db_conn=conn,
-        )
+        try:
+            messages, system_prompt = await build_messages_context(
+                workspace_name=workspace_name,
+                session_id=session_id,
+                raw_messages=raw_messages,
+                base_system_prompt=base_prompt,
+                db_conn=conn,
+            )
+        except Exception as _ctx_err:
+            logger.error(f"context_builder failed, using raw fallback: {_ctx_err}")
+            system_prompt = base_prompt or "You are a helpful AI assistant."
+            messages = [{"role": m["role"], "content": m["content"]} for m in raw_messages[-20:]]
 
         # 4.5. AADS-188E: 시맨틱 코드 검색 컨텍스트 주입 (code_search 관련 키워드 감지)
         _CODE_SEARCH_KEYWORDS = (
@@ -475,7 +497,11 @@ async def send_message_stream(
                         _inline_ctx = "\n".join(_ctx_lines)
                         # 시스템 프롬프트 마지막에 삽입
                         system_prompt = system_prompt + "\n\n" + _inline_ctx
-                        logger.debug(f"[188E] 시맨틱 코드 검색 컨텍스트 주입: {len(_search_results)}개 청크")
+                        # #20: 시맨틱 코드 검색 감사 로그
+                        logger.info("semantic_code_search_injected",
+                                    query=content[:100], results=len(_search_results),
+                                    files=[r.get('file','?') for r in _search_results[:3]],
+                                    tokens_est=len(_inline_ctx) // 3)
             except Exception as _sce:
                 logger.debug(f"[188E] 시맨틱 코드 검색 컨텍스트 주입 실패 (무시): {_sce}")
 
@@ -875,22 +901,26 @@ async def send_message_stream(
             if _retry_response.strip():
                 full_response = full_response + "\n\n" + _retry_response
 
-        # 10. 응답 저장
-        await _save_message(
-            conn, sid, "assistant", full_response,
-            model_used=model_used,
-            intent=intent,
-            cost=cost_usd,
-            tokens_in=input_tokens,
-            tokens_out=output_tokens,
-            sources=[],
-            tools_called=tools_called,
-            thinking_summary=thinking_summary or None,
-        )
-        await conn.execute(
-            "UPDATE chat_sessions SET cost_total = cost_total + $1, updated_at = NOW() WHERE id = $2",
-            cost_usd, sid,
-        )
+        # 10. 응답 저장 (#15: thinking 2000자 제한, #29: cost를 같은 트랜잭션에 포함)
+        _thinking_truncated = (thinking_summary or "")[:2000] or None
+        if thinking_summary and len(thinking_summary) > 2000:
+            logger.info("thinking_truncated", original_len=len(thinking_summary), session_id=session_id)
+        async with conn.transaction():
+            await _save_message(
+                conn, sid, "assistant", full_response,
+                model_used=model_used,
+                intent=intent,
+                cost=cost_usd,
+                tokens_in=input_tokens,
+                tokens_out=output_tokens,
+                sources=[],
+                tools_called=tools_called,
+                thinking_summary=_thinking_truncated,
+            )
+            await conn.execute(
+                "UPDATE chat_sessions SET cost_total = cost_total + $1, updated_at = NOW() WHERE id = $2",
+                cost_usd, sid,
+            )
 
         # 11. 20턴 이상 시 세션 노트 자동 저장 + 자동 관찰 (AADS-186E-2/186E-3, 비동기)
         try:
@@ -912,7 +942,7 @@ async def send_message_stream(
         yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns})}\n\n"
 
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 async def _auto_save_session_note(session_id: str, messages: List[Dict[str, Any]]) -> None:
@@ -946,7 +976,7 @@ async def toggle_bookmark(message_id: str) -> Optional[Dict[str, Any]]:
         )
         return _row_to_dict(row) if row else None
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 async def search_messages(query: str, workspace_id: Optional[str] = None, limit: int = 20) -> List[Dict[str, Any]]:
@@ -977,7 +1007,7 @@ async def search_messages(query: str, workspace_id: Optional[str] = None, limit:
             )
         return [_row_to_dict(r) for r in rows]
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 # ─── Artifact ────────────────────────────────────────────────────────────────
@@ -991,7 +1021,7 @@ async def list_artifacts(session_id: str) -> List[Dict[str, Any]]:
         )
         return [_row_to_dict(r) for r in rows]
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 async def get_artifact(artifact_id: str) -> Optional[Dict[str, Any]]:
@@ -1003,7 +1033,7 @@ async def get_artifact(artifact_id: str) -> Optional[Dict[str, Any]]:
         )
         return _row_to_dict(row) if row else None
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 async def update_artifact(artifact_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1032,7 +1062,7 @@ async def update_artifact(artifact_id: str, data: Dict[str, Any]) -> Optional[Di
         )
         return _row_to_dict(row) if row else None
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 async def export_artifact(artifact_id: str, fmt: str) -> Dict[str, Any]:
@@ -1068,7 +1098,7 @@ async def list_drive_files(workspace_id: str) -> List[Dict[str, Any]]:
         )
         return [_row_to_dict(r) for r in rows]
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 async def save_drive_file(
@@ -1100,7 +1130,7 @@ async def save_drive_file(
         )
         return _row_to_dict(row)
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 async def delete_drive_file(file_id: str) -> bool:
@@ -1117,7 +1147,7 @@ async def delete_drive_file(file_id: str) -> bool:
             path.unlink(missing_ok=True)
         return True
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 async def get_drive_file(file_id: str) -> Optional[Dict[str, Any]]:
@@ -1129,7 +1159,7 @@ async def get_drive_file(file_id: str) -> Optional[Dict[str, Any]]:
         )
         return _row_to_dict(row) if row else None
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 # ─── Research Archive ────────────────────────────────────────────────────────
@@ -1149,7 +1179,7 @@ async def get_research_cache(topic: str, days: int = 7) -> Optional[Dict[str, An
         )
         return _row_to_dict(row) if row else None
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 async def list_research_history(limit: int = 50) -> List[Dict[str, Any]]:
@@ -1161,20 +1191,24 @@ async def list_research_history(limit: int = 50) -> List[Dict[str, Any]]:
         )
         return [_row_to_dict(r) for r in rows]
     finally:
-        await conn.close()
+        await get_pool().release(conn)
 
 
 # ─── 내부 헬퍼 ────────────────────────────────────────────────────────────────
 
+# #8: JSONB 필드 목록 (파싱 필요한 컬럼만)
+_JSONB_FIELDS = frozenset({"attachments", "sources", "tools_called", "settings", "files", "content", "metadata"})
+
+
 def _row_to_dict(row: asyncpg.Record) -> Dict[str, Any]:
-    """asyncpg Record → Python dict. JSONB 문자열 파싱 포함."""
+    """asyncpg Record → Python dict. #8: JSONB 필드만 선택적 파싱."""
     if row is None:
         return {}
     result = {}
     for key in row.keys():
         val = row[key]
-        # asyncpg는 JSONB를 문자열로 반환하는 경우가 있음 → 배열/객체 모두 파싱
-        if isinstance(val, str) and len(val) >= 2 and val[0] in ("{", "["):
+        # JSONB 필드만 파싱 시도 (전체 필드 순회 대신)
+        if key in _JSONB_FIELDS and isinstance(val, str) and len(val) >= 2 and val[0] in ("{", "["):
             try:
                 val = json.loads(val)
             except Exception:
