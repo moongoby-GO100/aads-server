@@ -1107,6 +1107,14 @@ class ToolExecutor:
         # 2) AutonomousExecutor로 실제 실행 (백그라운드 task)
         # ContextVar를 명시적으로 캡처 (background task 생성 전)
         _captured_session_id = current_chat_session_id.get("")
+        if not _captured_session_id:
+            # Pipeline C와 동일한 폴백: 프로젝트 워크스페이스의 최근 세션 조회
+            from app.services.pipeline_c import _find_recent_session
+            _captured_session_id = await _find_recent_session(project)
+            logger.warning(
+                f"pipeline_b_session_fallback: project={project} "
+                f"fallback_session_id={_captured_session_id[:8] if _captured_session_id else '(none)'}"
+            )
         logger.info(f"delegate_to_agent: task_id={task_id} captured_session_id={_captured_session_id[:8] if _captured_session_id else '(empty)'}")
 
         async def _run_agent_task():
@@ -1215,6 +1223,28 @@ class ToolExecutor:
                                 "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1::uuid",
                                 session_id,
                             )
+                else:
+                    # session_id 폴백도 실패 — 작업 결과는 DB에 저장됨, 채팅 보고만 누락
+                    logger.error(
+                        f"delegate_to_agent: no session_id for chat report. "
+                        f"task_id={task_id} project={project}. "
+                        f"Result saved to directive_lifecycle but chat report skipped."
+                    )
+                    # 프로액티브 브리핑용 알림 생성
+                    from app.core.db_pool import get_pool
+                    pool = get_pool()
+                    async with pool.acquire() as conn:
+                        await conn.execute(
+                            """
+                            INSERT INTO alert_history
+                                (severity, category, title, message, server, project)
+                            VALUES ('info', 'pipeline', $1, $2, 'aads-server', $3)
+                            """,
+                            f"Agent 작업 완료 — 채팅 보고 실패 ({task_id})",
+                            f"task_id={task_id}, 작업: {task[:200]}. "
+                            f"directive_lifecycle에 결과 저장됨. session_id를 찾지 못해 채팅 보고 누락.",
+                            project,
+                        )
             except Exception as chat_err:
                 logger.warning(f"delegate_to_agent chat post failed: {chat_err}")
 

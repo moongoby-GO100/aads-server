@@ -91,6 +91,7 @@ class PipelineCJob:
             raise ValueError(f"Unknown project: {self.project}")
         self.server = conf["server"]
         self.workdir = conf["workdir"]
+        self.ssh_port = conf.get("port", "22")
 
     def to_dict(self) -> dict:
         return {
@@ -325,8 +326,8 @@ class PipelineCJob:
 
             await self._ssh_command("git add -A")
             commit_msg = f"Pipeline-C: {self.instruction[:80]} (job: {self.job_id})"
-            safe_msg = commit_msg.replace('"', '\\"')
-            await self._ssh_command(f'git commit -m "{safe_msg}"')
+            safe_msg = shlex.quote(commit_msg)
+            await self._ssh_command(f'git commit -m {safe_msg}')
             push_result = await self._ssh_command("git push")
             self._log("push_done", f"push 완료: {push_result[:200]}")
 
@@ -464,6 +465,8 @@ class PipelineCJob:
             else:
                 proc = await asyncio.create_subprocess_exec(
                     "ssh", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=no",
+                    "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
+                    "-p", self.ssh_port,
                     f"root@{self.server}", full_cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
@@ -485,6 +488,13 @@ class PipelineCJob:
             }
 
         except asyncio.TimeoutError:
+            # 타임아웃 시 자식 프로세스 강제 종료 (좀비 방지)
+            if proc and proc.returncode is None:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
             return {"error": f"Claude Code 타임아웃 ({_CLAUDE_TIMEOUT}초)", "output": ""}
         except Exception as e:
             return {"error": str(e), "output": ""}
@@ -529,8 +539,13 @@ class PipelineCJob:
                 text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
             return json.loads(text)
         except (json.JSONDecodeError, Exception) as e:
-            logger.warning(f"ai_review_parse_error: {e}, raw={response_text[:300] if 'response_text' in dir() else 'N/A'}")
-            return {"verdict": "PASS", "summary": "검수 파싱 실패 — 수동 확인 필요", "feedback": ""}
+            logger.error(f"ai_review_parse_failed: {e}, raw={response_text[:300] if 'response_text' in dir() else 'N/A'}")
+            return {
+                "verdict": "FAIL",
+                "summary": "AI 검수 응답 파싱 실패",
+                "feedback": "AI 검수 응답을 파싱할 수 없습니다. 수동 확인이 필요합니다.",
+                "parse_error": str(e),
+            }
 
     # ─── 최종 검증 ──────────────────────────────────────────────────────────
 
@@ -573,6 +588,8 @@ class PipelineCJob:
             else:
                 proc = await asyncio.create_subprocess_exec(
                     "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                    "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
+                    "-p", self.ssh_port,
                     f"root@{self.server}", full_cmd,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
 
@@ -582,6 +599,12 @@ class PipelineCJob:
                 out = out[-_MAX_OUTPUT_CHARS:]
             return out
         except asyncio.TimeoutError:
+            if proc and proc.returncode is None:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
             return f"[TIMEOUT {timeout}s]"
         except Exception as e:
             return f"[ERROR] {e}"

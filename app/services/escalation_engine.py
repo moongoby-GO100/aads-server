@@ -190,7 +190,7 @@ async def _emergency_slot_clear(issue_data: dict) -> bool:
                 await conn.execute(
                     """
                     UPDATE directive_lifecycle
-                    SET status='failed', error_type='emergency_slot_clear',
+                    SET status='failed', error_detail='emergency_slot_clear',
                         completed_at=NOW()
                     WHERE task_id=$1
                     """,
