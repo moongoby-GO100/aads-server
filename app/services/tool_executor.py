@@ -20,7 +20,9 @@ LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
 _AADS_API_BASE = os.getenv("AADS_API_BASE", "http://localhost:8080")
 
 _MAX_RESULT_CHARS = 25000  # ~8000 토큰 (지시서 기준 25,000 허용)
-_TOOL_TIMEOUT = 20.0  # 워크플로우 도구(inspect_service 등)는 더 오래 걸릴 수 있음
+_TOOL_TIMEOUT = 20.0  # 일반 도구 타임아웃
+_LONG_TOOL_TIMEOUT = 120.0  # 서브에이전트/딥리서치 등 장시간 도구
+_LONG_TOOLS = frozenset({"spawn_subagent", "spawn_parallel_subagents", "deep_research", "delegate_to_agent", "delegate_to_research"})
 
 
 class ToolExecutor:
@@ -32,9 +34,10 @@ class ToolExecutor:
         실패 시 JSON error 반환.
         """
         try:
+            _timeout = _LONG_TOOL_TIMEOUT if tool_name in _LONG_TOOLS else _TOOL_TIMEOUT
             result = await asyncio.wait_for(
                 self._dispatch(tool_name, tool_input),
-                timeout=_TOOL_TIMEOUT,
+                timeout=_timeout,
             )
             result_str = (
                 json.dumps(result, ensure_ascii=False, indent=2)
