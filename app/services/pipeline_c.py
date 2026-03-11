@@ -1018,12 +1018,12 @@ async def recover_interrupted_jobs():
         pool = get_pool()
         async with pool.acquire() as conn:
             # ── Phase 0: 고아 pipeline_jobs 정리 (running/queued → error) + 채팅방 알림 ──
-            # 먼저 알림 대상 조회
+            # claude_code_detached는 원격 프로세스가 완료됐을 수 있으므로 Phase 0.5에서 별도 처리
             orphan_rows = await conn.fetch(
                 """
                 SELECT job_id, chat_session_id, project, substring(instruction from 1 for 100) as instr
                 FROM pipeline_jobs
-                WHERE status = 'running' AND phase NOT IN ('restarting', 'done', 'error')
+                WHERE status = 'running' AND phase NOT IN ('restarting', 'done', 'error', 'claude_code_detached')
                 """
             )
             orphan_count = await conn.execute(
@@ -1032,7 +1032,7 @@ async def recover_interrupted_jobs():
                 SET status = 'error', phase = 'error',
                     review_feedback = COALESCE(review_feedback, '') || ' | 서버 재시작으로 중단됨',
                     updated_at = now()
-                WHERE status = 'running' AND phase NOT IN ('restarting', 'done', 'error')
+                WHERE status = 'running' AND phase NOT IN ('restarting', 'done', 'error', 'claude_code_detached')
                 """
             )
             if orphan_count and orphan_count != "UPDATE 0":
@@ -1060,6 +1060,148 @@ async def recover_interrupted_jobs():
                         )
                     except Exception as post_err:
                         logger.warning(f"pipeline_c_recovery: chat post failed for {orow['job_id']}: {post_err}")
+
+            # ── Phase 0.5: detached 작업 복구 — 원격 .done 파일 확인 후 결과 수거 ──
+            detached_rows = await conn.fetch(
+                """
+                SELECT job_id, chat_session_id, project, substring(instruction from 1 for 200) as instr
+                FROM pipeline_jobs
+                WHERE status = 'running' AND phase = 'claude_code_detached'
+                """
+            )
+            for drow in detached_rows:
+                _djob_id = drow["job_id"]
+                _dproject = drow.get("project", "?")
+                _dsid = drow.get("chat_session_id", "")
+                try:
+                    _conf = PROJECT_MAP.get(_dproject.upper(), {})
+                    _server = _conf.get("server", "")
+                    _ssh_port = _conf.get("port", "22")
+                    _done_file = f"/tmp/pipeline_c_{_djob_id}.done"
+                    _out_file = f"/tmp/pipeline_c_{_djob_id}.out"
+
+                    if _server:
+                        # 원격 서버에서 .done 파일 확인
+                        _check_cmd = f"ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -p {_ssh_port} root@{_server} 'cat {_done_file} 2>/dev/null'"
+                    else:
+                        # 로컬 (AADS)
+                        _check_cmd = f"cat {_done_file} 2>/dev/null"
+
+                    _proc = await asyncio.create_subprocess_shell(
+                        _check_cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    _stdout, _ = await asyncio.wait_for(_proc.communicate(), timeout=15)
+                    _exit_code_str = _stdout.decode("utf-8", errors="replace").strip()
+
+                    if _exit_code_str != "":
+                        # .done 파일 존재 → 원격 완료! 결과 수거
+                        if _server:
+                            _read_cmd = f"ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -p {_ssh_port} root@{_server} 'cat {_out_file} 2>/dev/null'"
+                        else:
+                            _read_cmd = f"cat {_out_file} 2>/dev/null"
+                        _rproc = await asyncio.create_subprocess_shell(
+                            _read_cmd,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                        )
+                        _rstdout, _ = await asyncio.wait_for(_rproc.communicate(), timeout=15)
+                        _result_text = _rstdout.decode("utf-8", errors="replace").strip()[:_MAX_OUTPUT_CHARS]
+                        _success = _exit_code_str == "0"
+                        _status = "done" if _success else "error"
+
+                        await conn.execute(
+                            """
+                            UPDATE pipeline_jobs
+                            SET status = $2, phase = $2,
+                                review_feedback = COALESCE(review_feedback, '') || $3,
+                                updated_at = now()
+                            WHERE job_id = $1
+                            """,
+                            _djob_id, _status,
+                            f" | 서버재시작후 결과수거: exit={_exit_code_str} output={len(_result_text)}자",
+                        )
+
+                        # 채팅방에 결과 보고
+                        if _dsid:
+                            _emoji = "✅" if _success else "⚠️"
+                            _chat_msg = (
+                                f"{_emoji} **[Pipeline C 결과 수거]** `{_djob_id}`\n"
+                                f"프로젝트: **{_dproject}**\n"
+                                f"서버 재시작 중 원격 작업이 완료되어 결과를 수거했습니다.\n\n"
+                                f"**결과:**\n{_result_text[:1500]}"
+                            )
+                            try:
+                                await conn.execute(
+                                    """
+                                    INSERT INTO chat_messages
+                                        (session_id, role, content, intent, cost,
+                                         tokens_in, tokens_out, attachments, sources, tools_called)
+                                    VALUES ($1::uuid, 'assistant', $2, 'pipeline_c', 0,
+                                            0, 0, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)
+                                    """,
+                                    _dsid, _chat_msg,
+                                )
+                                await conn.execute(
+                                    "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1::uuid",
+                                    _dsid,
+                                )
+                            except Exception as _chat_err:
+                                logger.warning(f"pipeline_c_recovery_detached_chat_error: {_chat_err}")
+
+                            # AI 자동 반응 트리거
+                            try:
+                                from app.services.chat_service import trigger_ai_reaction
+                                await trigger_ai_reaction(
+                                    _dsid,
+                                    f"[시스템] Pipeline C 작업 `{_djob_id}` (프로젝트: {_dproject})이 완료되었습니다. "
+                                    f"결과: {_result_text[:500]}\n\n위 결과를 확인하고 필요한 후속 조치가 있으면 보고해주세요."
+                                )
+                            except Exception as _trig_err:
+                                logger.warning(f"pipeline_c_recovery_trigger_error: {_trig_err}")
+
+                        logger.info(f"pipeline_c_recovery: detached job {_djob_id} completed (exit={_exit_code_str}, output={len(_result_text)}자)")
+                    else:
+                        # .done 파일 없음 → 아직 실행 중이거나 실패
+                        # 생성 후 2시간 이상이면 error 처리
+                        _age_row = await conn.fetchrow(
+                            "SELECT EXTRACT(EPOCH FROM (NOW() - created_at)) as age_sec FROM pipeline_jobs WHERE job_id = $1",
+                            _djob_id,
+                        )
+                        _age = _age_row["age_sec"] if _age_row else 0
+                        if _age > _CLAUDE_MAX_WAIT:
+                            await conn.execute(
+                                """
+                                UPDATE pipeline_jobs
+                                SET status = 'error', phase = 'error',
+                                    review_feedback = COALESCE(review_feedback, '') || ' | 서버 재시작 후 원격 작업 타임아웃',
+                                    updated_at = now()
+                                WHERE job_id = $1
+                                """,
+                                _djob_id,
+                            )
+                            logger.warning(f"pipeline_c_recovery: detached job {_djob_id} timed out ({_age:.0f}s)")
+                        else:
+                            # 아직 실행 중일 수 있음 — 폴링 재개
+                            logger.info(f"pipeline_c_recovery: detached job {_djob_id} still running ({_age:.0f}s), resuming polling")
+                            # 폴링 재개를 위한 백그라운드 태스크 생성
+                            asyncio.get_running_loop().create_task(
+                                _resume_detached_polling(_djob_id, _dproject, _dsid, drow.get("instr", ""))
+                            )
+
+                except Exception as _derr:
+                    logger.error(f"pipeline_c_recovery_detached_error: job={_djob_id} err={_derr}")
+                    await conn.execute(
+                        """
+                        UPDATE pipeline_jobs
+                        SET status = 'error', phase = 'error',
+                            review_feedback = COALESCE(review_feedback, '') || $2,
+                            updated_at = now()
+                        WHERE job_id = $1
+                        """,
+                        _djob_id, f" | 복구 실패: {str(_derr)[:200]}",
+                    )
 
             # ── Phase 0b: 고아 directive_lifecycle 정리 (24시간 이상 in_progress → failed) ──
             stale_count = await conn.execute(
@@ -1156,6 +1298,97 @@ async def recover_interrupted_jobs():
 
     except Exception as e:
         logger.error(f"pipeline_c_recovery_error: {e}")
+
+
+# ─── Detached 작업 폴링 재개 ──────────────────────────────────────────────────
+
+
+async def _resume_detached_polling(job_id: str, project: str, chat_session_id: str, instruction: str):
+    """서버 재시작 후 아직 실행 중인 detached 작업의 폴링을 재개."""
+    _conf = PROJECT_MAP.get(project.upper(), {})
+    _server = _conf.get("server", "")
+    _ssh_port = _conf.get("port", "22")
+    _done_file = f"/tmp/pipeline_c_{job_id}.done"
+    _out_file = f"/tmp/pipeline_c_{job_id}.out"
+    _poll_start = time.time()
+
+    logger.info(f"pipeline_c_resume_polling: job={job_id} server={_server}")
+
+    while time.time() - _poll_start < _CLAUDE_MAX_WAIT:
+        await asyncio.sleep(_CLAUDE_POLL_INTERVAL)
+        try:
+            if _server:
+                _cmd = f"ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -p {_ssh_port} root@{_server} 'cat {_done_file} 2>/dev/null'"
+            else:
+                _cmd = f"cat {_done_file} 2>/dev/null"
+            _proc = await asyncio.create_subprocess_shell(
+                _cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            _stdout, _ = await asyncio.wait_for(_proc.communicate(), timeout=15)
+            _exit_str = _stdout.decode("utf-8", errors="replace").strip()
+            if _exit_str == "":
+                continue  # 아직 실행 중
+
+            # 완료! 결과 읽기
+            if _server:
+                _rcmd = f"ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -p {_ssh_port} root@{_server} 'cat {_out_file} 2>/dev/null'"
+            else:
+                _rcmd = f"cat {_out_file} 2>/dev/null"
+            _rproc = await asyncio.create_subprocess_shell(
+                _rcmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            _rstdout, _ = await asyncio.wait_for(_rproc.communicate(), timeout=15)
+            _result = _rstdout.decode("utf-8", errors="replace").strip()[:_MAX_OUTPUT_CHARS]
+            _ok = _exit_str == "0"
+
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                _st = "done" if _ok else "error"
+                await conn.execute(
+                    "UPDATE pipeline_jobs SET status=$2, phase=$2, review_feedback=COALESCE(review_feedback,'')||$3, updated_at=now() WHERE job_id=$1",
+                    job_id, _st, f" | 폴링재개후 완료: exit={_exit_str}",
+                )
+                if chat_session_id:
+                    _emoji = "✅" if _ok else "⚠️"
+                    await conn.execute(
+                        """INSERT INTO chat_messages (session_id,role,content,intent,cost,tokens_in,tokens_out,attachments,sources,tools_called)
+                        VALUES($1::uuid,'assistant',$2,'pipeline_c',0,0,0,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb)""",
+                        chat_session_id,
+                        f"{_emoji} **[Pipeline C 완료]** `{job_id}`\n프로젝트: **{project}**\n\n**결과:**\n{_result[:1500]}",
+                    )
+                    await conn.execute(
+                        "UPDATE chat_sessions SET message_count=message_count+1, updated_at=NOW() WHERE id=$1::uuid",
+                        chat_session_id,
+                    )
+                    try:
+                        from app.services.chat_service import trigger_ai_reaction
+                        await trigger_ai_reaction(
+                            chat_session_id,
+                            f"[시스템] Pipeline C 작업 `{job_id}` (프로젝트: {project})이 완료되었습니다. "
+                            f"결과: {_result[:500]}\n\n위 결과를 확인하고 필요한 후속 조치가 있으면 보고해주세요."
+                        )
+                    except Exception:
+                        pass
+
+            logger.info(f"pipeline_c_resume_polling: job={job_id} completed (exit={_exit_str})")
+            return
+
+        except Exception as e:
+            logger.warning(f"pipeline_c_resume_polling_error: job={job_id} err={e}")
+
+    # 타임아웃
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE pipeline_jobs SET status='error', phase='error', review_feedback=COALESCE(review_feedback,'')||' | 폴링재개후 타임아웃', updated_at=now() WHERE job_id=$1",
+                job_id,
+            )
+    except Exception:
+        pass
+    logger.warning(f"pipeline_c_resume_polling: job={job_id} timed out")
 
 
 # ─── Watchdog: 작업 감시 + 스톨 감지 + 채팅방 알림 ───────────────────────────
