@@ -963,7 +963,7 @@ async def tool_pipeline_c_start(project: str, instruction: str, max_cycles: int,
         result = await start_pipeline(
             project=project.upper(),
             instruction=instruction,
-            chat_session_id=chat_session_id or "ceo",
+            chat_session_id=chat_session_id or "",  # 빈 문자열이면 _post_to_chat 비활성
             max_cycles=min(max_cycles, 5),
             dsn=dsn,
         )

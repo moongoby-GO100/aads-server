@@ -139,7 +139,11 @@ async def _execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> str:
         return f"[도구 사용 불가: {tool_name} — 서브에이전트는 읽기 전용 도구만 허용]"
 
     try:
-        from app.services.tool_executor import ToolExecutor
+        from app.services.tool_executor import ToolExecutor, current_chat_session_id
+        # ContextVar 전파 확인 로그
+        _sid = current_chat_session_id.get("")
+        if not _sid:
+            logger.warning(f"subagent _execute_tool: current_chat_session_id 미설정 (tool={tool_name})")
         executor = ToolExecutor()
         result = await asyncio.wait_for(
             executor.execute(tool_name, tool_input),

@@ -1105,6 +1105,10 @@ class ToolExecutor:
             return {"error": f"DB 등록 실패: {e}"}
 
         # 2) AutonomousExecutor로 실제 실행 (백그라운드 task)
+        # ContextVar를 명시적으로 캡처 (background task 생성 전)
+        _captured_session_id = current_chat_session_id.get("")
+        logger.info(f"delegate_to_agent: task_id={task_id} captured_session_id={_captured_session_id[:8] if _captured_session_id else '(empty)'}")
+
         async def _run_agent_task():
             import json as _json
             result_text = ""
@@ -1178,9 +1182,9 @@ class ToolExecutor:
             except Exception as db_err:
                 logger.error(f"delegate_to_agent DB update failed task={task_id}: {db_err}")
 
-            # 4) 채팅방에 결과 보고 (contextvars에서 session_id 가져오기)
+            # 4) 채팅방에 결과 보고 (캡처된 session_id 사용)
             try:
-                session_id = current_chat_session_id.get("")
+                session_id = _captured_session_id  # ContextVar 대신 명시적 캡처값 사용
                 if session_id:
                     from app.core.db_pool import get_pool
                     pool = get_pool()
@@ -1359,6 +1363,8 @@ class ToolExecutor:
         from app.api.ceo_chat_tools import tool_pipeline_c_start
         # 현재 채팅 세션 ID를 컨텍스트에서 가져와서 전달
         _session_id = current_chat_session_id.get("")
+        if not _session_id:
+            logger.warning("_pipeline_c_start: chat_session_id 없음 — 채팅방 보고가 비활성됩니다")
         return await tool_pipeline_c_start(
             project=inp.get("project", ""),
             instruction=inp.get("instruction", ""),

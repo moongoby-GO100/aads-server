@@ -65,7 +65,14 @@ class PipelineCJob:
         self.job_id = f"pc-{int(time.time())}-{uuid.uuid4().hex[:6]}"
         self.project = project.upper()
         self.instruction = instruction
-        self.chat_session_id = chat_session_id
+        # UUID 형식 검증 — 유효하지 않으면 빈 문자열로 처리 (채팅 보고 비활성)
+        try:
+            if chat_session_id:
+                uuid.UUID(chat_session_id)
+            self.chat_session_id = chat_session_id
+        except (ValueError, AttributeError):
+            logger.warning(f"pipeline_c: 유효하지 않은 chat_session_id='{chat_session_id}' → 채팅 보고 비활성")
+            self.chat_session_id = ""
         self.claude_session_id = str(uuid.uuid4())
         self.max_cycles = max_cycles
         self.dsn = dsn
@@ -120,6 +127,7 @@ class PipelineCJob:
         CEO가 채팅방에서 실시간으로 전 과정을 확인할 수 있도록 함.
         """
         if not self.chat_session_id:
+            logger.warning(f"pipeline_c | job={self.job_id} | _post_to_chat 건너뜀: chat_session_id 없음 (content={content[:80]}...)")
             return
         try:
             from app.core.db_pool import get_pool
