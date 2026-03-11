@@ -55,9 +55,9 @@ _DEFER_LOADING: Dict[str, bool] = {
     "deep_research": True,
     "deep_crawl": True,
     "search_all_projects": True,
-    # ── Tier 6: 브라우저 보조 (온디맨드 — 소스 분석 후 보조) ─────────────
-    "browser_navigate": True,
-    "browser_snapshot": True,
+    # ── Tier 6: 브라우저 보조 (핵심 2개 상시로드, 나머지 온디맨드) ──────
+    "browser_navigate": False,     # 상시 로드 — AI가 항상 브라우저 접근 가능
+    "browser_snapshot": False,     # 상시 로드 — 페이지 구조 확인 필수
     "browser_screenshot": True,
     "browser_click": True,
     "browser_fill": True,

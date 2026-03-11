@@ -429,6 +429,7 @@ _MAX_DB_ROWS = 50
 
 # ─── Browser 보안 상수 (AADS-159, 하드코딩 — LLM 우회 불가) ──────────────
 _BROWSER_ALLOWED_DOMAINS = frozenset([
+    "newtalk.kr",
     "aads.newtalk.kr",
     "github.com",
     "raw.githubusercontent.com",
