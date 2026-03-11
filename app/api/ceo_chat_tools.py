@@ -593,9 +593,38 @@ async def tool_list_remote_dir(
 ) -> str:
     """원격 서버 디렉터리 탐색 (읽기 전용, find)."""
     project = project.upper()
+
+    # AADS 프로젝트: 로컬 직접 탐색 (SSH 불필요)
+    if project == "AADS":
+        from app.core.project_config import PROJECT_MAP
+        # 컨테이너 내부 경로 사용 (호스트 /root/aads/aads-server/app → 컨테이너 /app/app)
+        workdir = "/app"
+        max_depth = min(max(1, max_depth), _SSH_MAX_DEPTH)
+        from posixpath import normpath, join as pjoin
+        target = normpath(pjoin(workdir, path)) if path else workdir
+        if not target.startswith(workdir):
+            return f"[ERROR] 경로 탈출 차단: {target}"
+        try:
+            find_cmd = f"find {shlex.quote(target)} -maxdepth {max_depth} -type f"
+            if keyword:
+                find_cmd += f" -name {shlex.quote('*' + keyword + '*')}"
+            find_cmd += f" | head -{_SSH_MAX_FILES}"
+            proc = await asyncio.create_subprocess_shell(
+                find_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+            output = stdout.decode("utf-8", errors="replace")
+            if not output.strip():
+                return f"[AADS] 파일 없음 (경로: {target})"
+            if len(output.encode("utf-8")) > _SSH_MAX_RESULT_BYTES:
+                output = output[:_SSH_MAX_RESULT_BYTES] + "\n...(50KB 초과, 잘림)"
+            return f"[AADS 디렉터리 — {target}]\n{output}"
+        except Exception as e:
+            return f"[ERROR] 로컬 탐색 실패: {e}"
+
     mapping = _PROJECT_SERVER_MAP.get(project)
     if not mapping:
-        return f"[ERROR] 알 수 없는 프로젝트: {project}. 사용 가능: {', '.join(_PROJECT_SERVER_MAP.keys())}"
+        avail = ", ".join(["AADS"] + list(_PROJECT_SERVER_MAP.keys()))
+        return f"[ERROR] 알 수 없는 프로젝트: {project}. 사용 가능: {avail}"
 
     server = mapping["server"]
     workdir = mapping["workdir"]
@@ -648,7 +677,8 @@ async def tool_read_remote_file(project: str, file_path: str) -> str:
     # AADS 프로젝트: 로컬 파일 직접 읽기 (SSH 불필요)
     if project == "AADS":
         from app.core.project_config import PROJECT_MAP
-        workdir = PROJECT_MAP["AADS"]["workdir"]
+        # 컨테이너 내부 경로 사용 (호스트 /root/aads/aads-server/app → 컨테이너 /app/app)
+        workdir = "/app"
         from posixpath import normpath, join as pjoin
         resolved = normpath(pjoin(workdir, file_path))
         if not resolved.startswith(workdir):
@@ -708,17 +738,54 @@ async def tool_read_remote_file(project: str, file_path: str) -> str:
 async def tool_write_remote_file(project: str, file_path: str, content: str, backup: bool = True) -> str:
     """원격 서버 파일 쓰기 (SSH, 자동 백업 포함). Yellow 등급."""
     project = project.upper()
-    mapping = _PROJECT_SERVER_MAP.get(project)
-    if not mapping:
-        return f"[ERROR] 알 수 없는 프로젝트: {project}. 사용 가능: {', '.join(_PROJECT_SERVER_MAP.keys())}"
-
-    server = mapping["server"]
-    workdir = mapping["workdir"]
 
     if not file_path:
         return "[ERROR] file_path 필수"
     if not content:
         return "[ERROR] content 필수 (빈 파일 쓰기 차단)"
+
+    # AADS 프로젝트: 로컬 직접 쓰기 (SSH 불필요)
+    if project == "AADS":
+        from app.core.project_config import PROJECT_MAP
+        # 컨테이너 내부 경로 사용 (호스트 /root/aads/aads-server/app → 컨테이너 /app/app)
+        workdir = "/app"
+        content_bytes = content.encode("utf-8")
+        if len(content_bytes) > _SSH_MAX_WRITE_BYTES:
+            return f"[ERROR] 파일 크기 초과: {len(content_bytes):,} bytes > 1MB 제한"
+        err = _validate_ssh_path(file_path, workdir)
+        if err:
+            return err
+        from posixpath import normpath, join as pjoin, dirname as pdirname
+        resolved = normpath(pjoin(workdir, file_path))
+        if not resolved.startswith(workdir):
+            return f"[ERROR] 경로 탈출 차단: {resolved}"
+        _write_blocked = [".env", ".ssh/", "id_rsa", "id_ed25519", "credentials",
+                          "private_key", ".pem", ".key", "authorized_keys", ".netrc",
+                          ".aws/", ".kube/", ".docker/"]
+        for pattern in _write_blocked:
+            if pattern in resolved.lower():
+                return f"[ERROR] 민감 파일 쓰기 차단: {file_path}"
+        try:
+            import os
+            os.makedirs(pdirname(resolved), exist_ok=True)
+            if backup and os.path.exists(resolved):
+                import shutil
+                shutil.copy2(resolved, resolved + ".bak_aads")
+            with open(resolved, "w", encoding="utf-8") as f:
+                f.write(content)
+            logger.info(f"write_remote_file OK | project=AADS path={resolved} size={len(content_bytes)}")
+            backup_note = " (백업: .bak_aads)" if backup else ""
+            return f"[AADS 파일 쓰기 완료 — {resolved}] {len(content_bytes):,} bytes{backup_note}"
+        except Exception as e:
+            return f"[ERROR] 로컬 파일 쓰기 실패: {e}"
+
+    mapping = _PROJECT_SERVER_MAP.get(project)
+    if not mapping:
+        avail = ", ".join(["AADS"] + list(_PROJECT_SERVER_MAP.keys()))
+        return f"[ERROR] 알 수 없는 프로젝트: {project}. 사용 가능: {avail}"
+
+    server = mapping["server"]
+    workdir = mapping["workdir"]
 
     # 크기 제한
     content_bytes = content.encode("utf-8")
@@ -788,9 +855,11 @@ async def tool_patch_remote_file(project: str, file_path: str, old_string: str, 
     """원격 서버 파일 부분 수정 (diff 기반 패치). Yellow 등급.
     old_string을 찾아 new_string으로 교체. 정확히 1개만 매치되어야 함."""
     project = project.upper()
-    mapping = _PROJECT_SERVER_MAP.get(project)
-    if not mapping:
-        return f"[ERROR] 알 수 없는 프로젝트: {project}. 사용 가능: {', '.join(_PROJECT_SERVER_MAP.keys())}"
+    # 프로젝트 유효성 검사 (AADS 포함 — read/write가 내부에서 각각 로컬 처리)
+    from app.core.project_config import PROJECT_MAP
+    if project not in PROJECT_MAP:
+        avail = ", ".join(PROJECT_MAP.keys())
+        return f"[ERROR] 알 수 없는 프로젝트: {project}. 사용 가능: {avail}"
 
     if not file_path:
         return "[ERROR] file_path 필수"
@@ -834,12 +903,6 @@ async def tool_patch_remote_file(project: str, file_path: str, old_string: str, 
 async def tool_run_remote_command(project: str, command: str) -> str:
     """원격 서버 명령 실행 (허용 명령 화이트리스트 기반). Yellow 등급."""
     project = project.upper()
-    mapping = _PROJECT_SERVER_MAP.get(project)
-    if not mapping:
-        return f"[ERROR] 알 수 없는 프로젝트: {project}. 사용 가능: {', '.join(_PROJECT_SERVER_MAP.keys())}"
-
-    server = mapping["server"]
-    workdir = mapping["workdir"]
 
     if not command or not command.strip():
         return "[ERROR] command 필수"
@@ -875,6 +938,40 @@ async def tool_run_remote_command(project: str, command: str) -> str:
                     return f"[ERROR] 파이프/체인 명령 차단 (보안): {command[:80]}"
         else:
             return f"[ERROR] 파이프/체인 명령 차단 (보안): {command[:80]}"
+
+    # AADS 프로젝트: 로컬 직접 실행 (SSH 불필요)
+    if project == "AADS":
+        from app.core.project_config import PROJECT_MAP
+        # 컨테이너 내부 경로 사용 (호스트 /root/aads/aads-server/app → 컨테이너 /app/app)
+        workdir = "/app"
+        full_cmd = f"cd {shlex.quote(workdir)} && {command}"
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                full_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_SSH_CMD_TIMEOUT)
+            out = stdout.decode("utf-8", errors="replace")
+            err_out = stderr.decode("utf-8", errors="replace")
+            if len(out.encode("utf-8")) > _SSH_MAX_RESULT_BYTES:
+                out = out[:_SSH_MAX_RESULT_BYTES] + "\n...(50KB 초과, 잘림)"
+            result_parts = [f"[AADS 명령 실행 — exit={proc.returncode}]", f"$ {command}"]
+            if out.strip():
+                result_parts.append(out.strip())
+            if err_out.strip() and proc.returncode != 0:
+                result_parts.append(f"[STDERR] {err_out.strip()[:2000]}")
+            logger.info(f"run_remote_command OK | project=AADS cmd={command[:80]} exit={proc.returncode}")
+            return "\n".join(result_parts)
+        except asyncio.TimeoutError:
+            return f"[ERROR] 로컬 명령 타임아웃 ({_SSH_CMD_TIMEOUT}초)"
+        except Exception as e:
+            return f"[ERROR] 로컬 명령 실행 실패: {e}"
+
+    mapping = _PROJECT_SERVER_MAP.get(project)
+    if not mapping:
+        avail = ", ".join(["AADS"] + list(_PROJECT_SERVER_MAP.keys()))
+        return f"[ERROR] 알 수 없는 프로젝트: {project}. 사용 가능: {avail}"
+
+    server = mapping["server"]
+    workdir = mapping["workdir"]
 
     # 실행: workdir에서 명령 수행
     full_cmd = f"cd {shlex.quote(workdir)} && {command}"

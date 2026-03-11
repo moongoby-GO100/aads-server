@@ -542,8 +542,8 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "properties": {
                 "project": {
                     "type": "string",
-                    "description": "프로젝트명. KIS, GO100, SF, NTV2 중 하나.",
-                    "enum": ["KIS", "GO100", "SF", "NTV2"],
+                    "description": "프로젝트명. AADS, KIS, GO100, SF, NTV2 중 하나.",
+                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
                 },
                 "path": {
                     "type": "string",
