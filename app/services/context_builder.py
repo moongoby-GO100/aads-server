@@ -253,10 +253,11 @@ async def build_messages_context(
     raw_messages: List[Dict[str, Any]],
     base_system_prompt: str = "",
     db_conn=None,
+    document_context: str = "",
 ) -> tuple[List[Dict[str, Any]], str]:
     """
-    3계층 컨텍스트 구성 → (messages, system_prompt) 반환.
-    system_prompt: Layer 1 + Layer 2
+    3+D 계층 컨텍스트 구성 → (messages, system_prompt) 반환.
+    system_prompt: Layer 1 + Layer 2 + (Layer D: 임시 문서 컨텍스트)
     messages: Layer 3 대화 히스토리
     """
     ws_key = _normalize_workspace(workspace_name)
@@ -272,6 +273,12 @@ async def build_messages_context(
     )
 
     system_prompt = layer1 + "\n\n" + layer2 + memory_layer
+
+    # Layer D: 임시 문서 컨텍스트 (현재 턴에만 주입, 다음 턴 제거)
+    if document_context:
+        system_prompt += "\n\n" + document_context
+        _doc_tokens = len(document_context) // 4
+        logger.info(f"[LayerD] ephemeral document injected: ~{_doc_tokens} tokens")
 
     # Layer 3 (동기 — CPU 연산만)
     messages = _build_layer3_messages(raw_messages)

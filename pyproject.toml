@@ -39,6 +39,8 @@ dependencies = [
     "pymysql>=1.1.0",
     # Excel 내보내기 (AADS-190)
     "openpyxl>=3.1.0",
+    # PDF 텍스트 추출 (Ephemeral Document Context)
+    "pdfplumber>=0.11.0",
     # Redis
     "redis[hiredis]>=5.0.0",
     "upstash-redis>=1.0.0",

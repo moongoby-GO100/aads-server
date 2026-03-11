@@ -498,30 +498,39 @@ async def send_message_stream(
     try:
         sid = uuid.UUID(session_id)
 
-        # 1. 첨부파일 내용 추출 → content에 추가
+        # 1. 첨부파일 처리 — Ephemeral Document Context (#파일맥락보호)
+        #    파일 전문은 content에 넣지 않고 Layer D로 현재 턴에만 주입.
+        #    히스토리에는 참조 요약만 저장하여 컨텍스트 낭비 방지.
+        _ephemeral_doc_context = ""
         logger.info(f"[ATTACH] session={session_id[:8]} attachments={attachments}")
         if attachments:
-            file_texts = []
-            for att in attachments:
-                file_path = att.get("path", "") if isinstance(att, dict) else ""
-                file_name = att.get("name", "") if isinstance(att, dict) else str(att)
-                logger.info(f"[ATTACH] file_path={file_path!r} exists={os.path.isfile(file_path) if file_path else 'N/A'}")
-                if file_path and os.path.isfile(file_path):
-                    try:
-                        ext = os.path.splitext(file_path)[1].lower()
-                        if ext in (".txt", ".md", ".csv", ".json", ".py", ".js", ".ts", ".html", ".css", ".yaml", ".yml", ".toml", ".sh", ".sql", ".log", ".xml"):
-                            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                                file_content = f.read(100000)  # 100KB 제한
-                            file_texts.append(f"\n\n--- 첨부파일: {file_name} ---\n{file_content}")
-                        else:
-                            file_texts.append(f"\n\n[첨부파일: {file_name} ({ext} 파일)]")
-                    except Exception as e:
-                        logger.warning(f"attachment_read_error: {file_name}: {e}")
-                        file_texts.append(f"\n\n[첨부파일: {file_name} (읽기 실패)]")
-                elif file_name:
-                    file_texts.append(f"\n\n[첨부파일: {file_name}]")
-            if file_texts:
-                content = content + "".join(file_texts)
+            from app.core.document_context import (
+                extract_file_contents,
+                build_ephemeral_document_layer,
+                build_file_reference_summary,
+            )
+            _file_contents = extract_file_contents(attachments)
+            _readable_count = sum(1 for f in _file_contents if f.get("readable"))
+            _total_tokens = sum(f["tokens"] for f in _file_contents)
+            logger.info(f"[ATTACH] extracted {_readable_count} files, ~{_total_tokens} tokens")
+
+            # Layer D: 현재 턴에만 주입될 전문 컨텍스트
+            _ephemeral_doc_context = build_ephemeral_document_layer(_file_contents)
+
+            # 히스토리에 저장할 참조 요약 (전문 대신)
+            _ref_summary = build_file_reference_summary(_file_contents)
+            if _ref_summary:
+                content = content + "\n\n" + _ref_summary
+        else:
+            # Stage 3: 첨부파일 없지만 이전 파일 재참조 감지 시 Layer D 재주입
+            from app.core.document_context import (
+                detect_file_rereference,
+                build_rereference_context,
+            )
+            if detect_file_rereference(content):
+                _ephemeral_doc_context = await build_rereference_context(
+                    content, session_id, get_pool(),
+                )
 
         # 사용자 메시지 저장
         await _save_message(conn, sid, "user", content, attachments=attachments or [])
@@ -568,6 +577,7 @@ async def send_message_stream(
                 raw_messages=raw_messages,
                 base_system_prompt=base_prompt,
                 db_conn=conn,
+                document_context=_ephemeral_doc_context,
             )
         except Exception as _ctx_err:
             logger.error(f"context_builder failed, using raw fallback: {_ctx_err}")
