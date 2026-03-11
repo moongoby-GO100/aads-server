@@ -597,6 +597,10 @@ async def send_message_stream(
         await get_pool().release(conn)
         conn = None
 
+        # Pipeline C 등 도구에서 현재 세션 ID를 참조할 수 있도록 컨텍스트 변수 설정
+        from app.services.tool_executor import current_chat_session_id
+        current_chat_session_id.set(session_id)
+
         # 4.5. AADS-188E: 시맨틱 코드 검색 컨텍스트 주입 (code_search 관련 키워드 감지)
         _CODE_SEARCH_KEYWORDS = (
             "코드", "함수", "클래스", "어디", "어디야", "파일", "소스", "구현",

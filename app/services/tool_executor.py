@@ -6,6 +6,7 @@ AADS-186A: 도구 실행기 — Anthropic Tool Use API 도구 실행
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
@@ -14,6 +15,11 @@ from typing import Any, Dict
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# Pipeline C 등에서 현재 채팅 세션 ID를 도구에 전달하기 위한 컨텍스트 변수
+current_chat_session_id: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "current_chat_session_id", default=""
+)
 
 LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://aads-litellm:4000")
 LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
@@ -1209,11 +1215,14 @@ class ToolExecutor:
     async def _pipeline_c_start(self, inp: Dict[str, Any]) -> Any:
         """Pipeline C 시작 — Claude Code 자율 작업."""
         from app.api.ceo_chat_tools import tool_pipeline_c_start
+        # 현재 채팅 세션 ID를 컨텍스트에서 가져와서 전달
+        _session_id = current_chat_session_id.get("")
         return await tool_pipeline_c_start(
             project=inp.get("project", ""),
             instruction=inp.get("instruction", ""),
             max_cycles=inp.get("max_cycles", 3),
             dsn="",
+            chat_session_id=_session_id,
         )
 
     async def _pipeline_c_status(self, inp: Dict[str, Any]) -> Any:

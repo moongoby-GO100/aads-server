@@ -951,7 +951,7 @@ async def tool_git_remote_create_branch(project: str, branch_name: str) -> str:
 # ─── Pipeline C 도구 함수 ─────────────────────────────────────────────────────
 
 
-async def tool_pipeline_c_start(project: str, instruction: str, max_cycles: int, dsn: str) -> str:
+async def tool_pipeline_c_start(project: str, instruction: str, max_cycles: int, dsn: str, chat_session_id: str = "") -> str:
     """파이프라인C 시작."""
     if not project:
         return "[ERROR] project 필수"
@@ -963,7 +963,7 @@ async def tool_pipeline_c_start(project: str, instruction: str, max_cycles: int,
         result = await start_pipeline(
             project=project.upper(),
             instruction=instruction,
-            chat_session_id="ceo",  # CEO 채팅에서 호출
+            chat_session_id=chat_session_id or "ceo",
             max_cycles=min(max_cycles, 5),
             dsn=dsn,
         )
@@ -1363,11 +1363,13 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str) -> str:
         )
     # ── Pipeline C 도구 ────────────────────────────────────────────────────
     elif name == "pipeline_c_start":
+        from app.services.tool_executor import current_chat_session_id
         return await tool_pipeline_c_start(
             params.get("project", ""),
             params.get("instruction", ""),
             params.get("max_cycles", 3),
             dsn,
+            chat_session_id=current_chat_session_id.get(""),
         )
     elif name == "pipeline_c_status":
         return await tool_pipeline_c_status(params.get("job_id", ""))
