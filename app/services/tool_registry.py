@@ -69,6 +69,10 @@ _DEFER_LOADING: Dict[str, bool] = {
     "schedule_task": True,            # 온디맨드
     "unschedule_task": True,
     "list_scheduled_tasks": True,
+    # ── Pipeline C: 자율 작업 파이프라인 ──────────────────────────────
+    "pipeline_c_start": False,        # 상시 로드 — CEO 핵심 도구
+    "pipeline_c_status": False,
+    "pipeline_c_approve": False,
 }
 
 # 도구 카테고리 안내 (시스템 프롬프트 주입용 — context_builder.py에서 사용)
@@ -114,7 +118,12 @@ TOOL_CATEGORY_GUIDE = """\
 - browser_navigate/snapshot/screenshot/click/fill/tab_list
 
 ### Agent SDK (execute/code_modify 인텐트 시 자동 활성화)
-- 코드 수정/작성, Bash, git — 자율 실행. 위험 명령 자동 차단.\
+- 코드 수정/작성, Bash, git — 자율 실행. 위험 명령 자동 차단.
+
+### 🟣 Pipeline C — 자율 작업 파이프라인 (CEO 요청 시)
+- pipeline_c_start: Claude Code 자율 작업 시작 (작업→검수→재지시→승인대기)
+- pipeline_c_status: 파이프라인 진행 상태 확인
+- pipeline_c_approve: CEO 승인/거부 → 배포 또는 원복\
 """
 
 # ─── AADS-188C Phase 2: 인텐트별 필수 도구 매핑 ──────────────────────────────
@@ -131,6 +140,7 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
     "project_db":         ["query_project_database", "list_project_databases"],
     "export":             ["export_data"],
     "scheduler":          ["schedule_task", "list_scheduled_tasks"],
+    "pipeline_c":         ["pipeline_c_start", "pipeline_c_status", "pipeline_c_approve"],
     "task_history":       ["task_history"],
     # Tier 2: 분석 인텐트
     "cto_code_analysis":  ["read_remote_file"],         # 소스 코드 우선
@@ -1332,6 +1342,79 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"query": "인증 미들웨어"},
         ],
         "defer_loading": True,
+    },
+    # ── Pipeline C: 자율 작업 파이프라인 도구 ──────────────────────────────────
+    "pipeline_c_start": {
+        "name": "pipeline_c_start",
+        "description": "프로젝트별 Claude Code 자율 작업 파이프라인 시작. 작업→자동검수→재지시→승인대기까지 자율 수행.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "대상 프로젝트 (KIS, GO100, SF, NTV2, AADS)",
+                    "enum": ["KIS", "GO100", "SF", "NTV2", "AADS"],
+                },
+                "instruction": {
+                    "type": "string",
+                    "description": "Claude Code에 보낼 작업 지시 내용 (구체적으로 작성)",
+                },
+                "max_cycles": {
+                    "type": "integer",
+                    "description": "최대 검수-재지시 반복 횟수 (기본: 3)",
+                    "default": 3,
+                },
+            },
+            "required": ["project", "instruction"],
+        },
+        "input_examples": [
+            {"project": "KIS", "instruction": "order_executor.py에서 NoneType 에러 방어 코드 추가"},
+            {"project": "AADS", "instruction": "헬스체크 API에 디스크 사용량 지표 추가", "max_cycles": 2},
+        ],
+    },
+    "pipeline_c_status": {
+        "name": "pipeline_c_status",
+        "description": "실행 중인 파이프라인C 작업 상태 확인. job_id 없으면 전체 목록 반환.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {
+                    "type": "string",
+                    "description": "파이프라인 작업 ID (예: pc-1741654800-abc123). 생략 시 전체 목록.",
+                },
+            },
+            "required": [],
+        },
+        "input_examples": [
+            {"job_id": "pc-1741654800-abc123"},
+            {},
+        ],
+    },
+    "pipeline_c_approve": {
+        "name": "pipeline_c_approve",
+        "description": "파이프라인C 작업 승인(배포) 또는 거부(원복). 승인 시 git commit+push+서비스 재시작 자동 수행.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {
+                    "type": "string",
+                    "description": "승인할 파이프라인 작업 ID",
+                },
+                "approved": {
+                    "type": "boolean",
+                    "description": "true=승인(배포), false=거부(원복)",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "거부 사유 (거부 시에만)",
+                },
+            },
+            "required": ["job_id", "approved"],
+        },
+        "input_examples": [
+            {"job_id": "pc-1741654800-abc123", "approved": True},
+            {"job_id": "pc-1741654800-abc123", "approved": False, "reason": "테스트 실패"},
+        ],
     },
 }
 

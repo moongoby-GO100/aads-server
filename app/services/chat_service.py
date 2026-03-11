@@ -707,8 +707,21 @@ async def send_message_stream(
         # 8.5. 복잡 인텐트 → AutonomousExecutor (max_iterations=25) (AADS-186E-3)
         _AUTONOMOUS_INTENTS = frozenset({
             "cto_code_analysis", "cto_verify", "service_inspection", "cto_impact",
+            "pipeline_c",
         })
         if intent in _AUTONOMOUS_INTENTS and intent_result.use_tools and tools_for_api:
+            # Pipeline C: 시스템 프롬프트에 파이프라인 가이드 주입
+            _auto_system = system_prompt
+            if intent == "pipeline_c":
+                _auto_system += (
+                    "\n\n[Pipeline C 모드]\n"
+                    "CEO가 Claude Code 자율 작업을 요청했습니다.\n"
+                    "1. 작업 시작: pipeline_c_start 도구를 사용하세요.\n"
+                    "2. 상태 확인: pipeline_c_status 도구를 사용하세요.\n"
+                    "3. 승인/거부: pipeline_c_approve 도구를 사용하세요.\n"
+                    "프로젝트명을 메시지에서 추출하고, 구체적 지시를 instruction에 전달하세요.\n"
+                    "승인 요청이 오면 변경사항(git diff)을 먼저 확인 후 CEO에게 보고하세요."
+                )
             from app.services.autonomous_executor import AutonomousExecutor
             auto_exec = AutonomousExecutor(max_iterations=25, cost_limit=2.0)
             full_response = ""
@@ -724,7 +737,7 @@ async def send_message_stream(
                 tools=tools_for_api,
                 messages=messages,
                 model=intent_result.model,
-                system_prompt=system_prompt,
+                system_prompt=_auto_system,
             ):
                 yield sse_line
                 # 완료/비용/오류 이벤트 파싱하여 응답 수집

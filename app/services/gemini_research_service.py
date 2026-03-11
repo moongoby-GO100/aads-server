@@ -16,7 +16,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
 _BASE = "https://generativelanguage.googleapis.com"
 _AGENT = "deep-research-pro-preview-12-2025"
 

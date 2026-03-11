@@ -120,6 +120,10 @@ class ToolExecutor:
             "schedule_task":          self._schedule_task,
             "unschedule_task":        self._unschedule_task,
             "list_scheduled_tasks":   self._list_scheduled_tasks,
+            # Pipeline C: 자율 작업 파이프라인
+            "pipeline_c_start":       self._pipeline_c_start,
+            "pipeline_c_status":      self._pipeline_c_status,
+            "pipeline_c_approve":     self._pipeline_c_approve,
         }
         fn = dispatch.get(tool_name)
         if fn is None:
@@ -1200,6 +1204,32 @@ class ToolExecutor:
             return await list_scheduled_tasks()
         except Exception as e:
             return {"error": str(e)}
+
+    # ── Pipeline C: 자율 작업 파이프라인 ──────────────────────────────────────
+
+    async def _pipeline_c_start(self, inp: Dict[str, Any]) -> Any:
+        """Pipeline C 시작 — Claude Code 자율 작업."""
+        from app.api.ceo_chat_tools import tool_pipeline_c_start
+        return await tool_pipeline_c_start(
+            project=inp.get("project", ""),
+            instruction=inp.get("instruction", ""),
+            max_cycles=inp.get("max_cycles", 3),
+            dsn="",
+        )
+
+    async def _pipeline_c_status(self, inp: Dict[str, Any]) -> Any:
+        """Pipeline C 상태 조회."""
+        from app.api.ceo_chat_tools import tool_pipeline_c_status
+        return await tool_pipeline_c_status(job_id=inp.get("job_id", ""))
+
+    async def _pipeline_c_approve(self, inp: Dict[str, Any]) -> Any:
+        """Pipeline C 승인/거부."""
+        from app.api.ceo_chat_tools import tool_pipeline_c_approve
+        return await tool_pipeline_c_approve(
+            job_id=inp.get("job_id", ""),
+            approved=inp.get("approved", False),
+            reason=inp.get("reason", ""),
+        )
 
     # ── AADS-159: 브라우저 도구 (Playwright — ceo_chat_tools 래퍼) ────────────
 

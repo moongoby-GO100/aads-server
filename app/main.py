@@ -157,6 +157,15 @@ async def lifespan(app: FastAPI):
         logger.warning("apscheduler_start_failed_graceful_degradation", error=str(e))
         scheduler = None
 
+    # DB Connection Pool 초기화 (AADS-CRITICAL-FIX #1)
+    try:
+        from app.core.db_pool import init_pool
+        db_pool = await init_pool()
+        app_state["db_pool"] = db_pool
+    except Exception as e:
+        logger.error("db_pool_init_failed", error=str(e))
+        app_state["db_pool"] = None
+
     # Memory Store 초기화 (T-011)
     try:
         await memory_store.initialize()
@@ -200,10 +209,17 @@ async def lifespan(app: FastAPI):
     if mcp_manager:
         await mcp_manager.shutdown()
     await memory_store.close()
+    # DB Connection Pool 종료 (AADS-CRITICAL-FIX #1)
+    try:
+        from app.core.db_pool import close_pool
+        await close_pool()
+    except Exception:
+        pass
     app_state["graph"] = None
     app_state["checkpointer"] = None
     app_state["mcp_manager"] = None
     app_state["memory_store"] = None
+    app_state["db_pool"] = None
     logger.info("aads_server_shutdown")
 
 

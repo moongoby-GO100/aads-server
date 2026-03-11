@@ -15,7 +15,7 @@ MONITOR_KEY = os.getenv("AADS_MONITOR_KEY", "")
 
 # --- Rate Limiting (POST /context/system: 분당 30회/IP) ---
 _rate_limit_store: Dict[str, List[float]] = defaultdict(list)
-POST_RATE_LIMIT = 30  # 분당 최대 요청 수
+POST_RATE_LIMIT = 200  # 분당 최대 요청 수 (대화 청크 저장: 최대 ~80건/회)
 RATE_LIMIT_WINDOW = 60.0  # 초
 
 def check_rate_limit(request: Request):

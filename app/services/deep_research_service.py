@@ -21,7 +21,7 @@ from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # GOOGLE_GENAI_API_KEY 우선, GEMINI_API_KEY 폴백 (두 환경변수 모두 지원)
-GEMINI_API_KEY = os.getenv("GOOGLE_GENAI_API_KEY") or os.getenv("GEMINI_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GOOGLE_GENAI_API_KEY") or os.getenv("GEMINI_API_KEY", "")
 _DAILY_LIMIT = 5
 _MONTHLY_LIMIT = 50
 _TIMEOUT_STANDARD = 1200   # 20분
