@@ -34,7 +34,8 @@ class ASTAnalyzer:
             tree = ast.parse(content)
         except SyntaxError as e:
             analysis.error = f"SyntaxError: {e}"
-            analysis.token_estimate = len(content) // 4
+            from app.core.token_utils import estimate_tokens as _est
+            analysis.token_estimate = _est(content)
             return analysis
 
         for node in ast.walk(tree):
@@ -61,7 +62,8 @@ class ASTAnalyzer:
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 analysis.functions.append(self._parse_function(node))
 
-        analysis.token_estimate = len(content) // 4
+        from app.core.token_utils import estimate_tokens as _est
+        analysis.token_estimate = _est(content)
         return analysis
 
     def _parse_function(
@@ -180,7 +182,8 @@ class ASTAnalyzer:
             if func.name not in [f.name for f in analysis.functions]:
                 analysis.functions.append(func)
 
-        analysis.token_estimate = len(content) // 4
+        from app.core.token_utils import estimate_tokens as _est
+        analysis.token_estimate = _est(content)
         return analysis
 
     # ─── 의존성 그래프 ────────────────────────────────────────────────────────

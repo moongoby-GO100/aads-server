@@ -194,7 +194,8 @@ class SemanticCodeSearch:
 
         lines: List[str] = []
         total_chars = 0
-        char_limit = _CONTEXT_MAX_TOKENS * 4  # 토큰당 ~4자 근사
+        from app.core.token_utils import CHARS_PER_TOKEN
+        char_limit = _CONTEXT_MAX_TOKENS * CHARS_PER_TOKEN  # 토큰→문자 역변환
 
         for r in valid:
             snippet = r.get("code_snippet", "")[:400]

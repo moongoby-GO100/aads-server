@@ -655,7 +655,7 @@ async def list_recovery_logs(
         conn = await _get_conn()
         try:
             rows = await conn.fetch(
-                f"SELECT * FROM recovery_logs {where} ORDER BY created_at DESC LIMIT ${idx}",
+                f"SELECT * FROM escalation_recovery {where} ORDER BY created_at DESC LIMIT ${idx}",
                 *params
             )
         finally:
@@ -682,20 +682,20 @@ async def recovery_logs_stats():
                         1
                     ) AS success_rate_pct,
                     ROUND(AVG(duration_seconds)::numeric, 1) AS avg_duration_seconds
-                FROM recovery_logs
+                FROM escalation_recovery
                 GROUP BY issue_type
                 ORDER BY total DESC
             """)
             by_tier = await conn.fetch("""
                 SELECT tier, COUNT(*) AS total,
                     SUM(CASE WHEN result='success' THEN 1 ELSE 0 END) AS success_count
-                FROM recovery_logs
+                FROM escalation_recovery
                 GROUP BY tier ORDER BY tier
             """)
             totals = await conn.fetchrow("""
                 SELECT COUNT(*) AS total,
                     SUM(CASE WHEN result='success' THEN 1 ELSE 0 END) AS total_success
-                FROM recovery_logs
+                FROM escalation_recovery
             """)
         finally:
             await conn.close()
@@ -820,14 +820,14 @@ async def list_recovery_logs(
                 SELECT id, issue_type, affected_task_id, affected_server,
                        tier, action_taken, result, duration_seconds,
                        recovery_route, error_message, recovered_by, created_at::text
-                FROM recovery_logs {where}
+                FROM escalation_recovery {where}
                 ORDER BY created_at DESC
                 LIMIT ${idx} OFFSET ${idx+1}
                 """,
                 *params,
             )
             total = await conn.fetchval(
-                f"SELECT COUNT(*) FROM recovery_logs {where}", *params[:-2]
+                f"SELECT COUNT(*) FROM escalation_recovery {where}", *params[:-2]
             )
         finally:
             await conn.close()
@@ -854,7 +854,7 @@ async def recovery_logs_stats():
                        COUNT(*) AS total,
                        SUM(CASE WHEN result='success' THEN 1 ELSE 0 END) AS success_count,
                        AVG(duration_seconds) AS avg_duration_seconds
-                FROM recovery_logs
+                FROM escalation_recovery
                 GROUP BY issue_type
                 ORDER BY total DESC
                 """

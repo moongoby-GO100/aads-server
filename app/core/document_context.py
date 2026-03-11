@@ -36,8 +36,9 @@ EXCEL_EXTENSIONS = frozenset({".xlsx", ".xls"})
 
 
 def estimate_tokens(text: str) -> int:
-    """빠른 토큰 추정 (chars // 4 휴리스틱)."""
-    return len(text) // 4 if text else 0
+    """한국어/다국어를 고려한 토큰 추정 (UTF-8 bytes // 3)."""
+    from app.core.token_utils import estimate_tokens as _est
+    return _est(text)
 
 
 def extract_file_contents(
@@ -203,14 +204,15 @@ def build_ephemeral_document_layer(
             parts.append(content)
         else:
             # 분할 모드: 앞뒤만 삽입
-            char_limit = CHUNK_MAX_TOKENS * 4  # 토큰→문자 역변환
+            from app.core.token_utils import CHARS_PER_TOKEN
+            char_limit = CHUNK_MAX_TOKENS * CHARS_PER_TOKEN  # 토큰→문자 역변환
             if len(content) <= char_limit * 2:
                 parts.append(content)
             else:
                 head = content[:char_limit]
                 tail = content[-char_limit:]
                 omitted_chars = len(content) - char_limit * 2
-                omitted_tokens = omitted_chars // 4
+                omitted_tokens = estimate_tokens(content[char_limit:-char_limit])
                 parts.append(head)
                 parts.append(f"\n\n... [중간 {omitted_tokens:,}토큰 ({omitted_chars:,}자) 생략] ...\n")
                 parts.append(tail)

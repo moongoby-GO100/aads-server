@@ -28,7 +28,8 @@ def make_cacheable_block(text: str, force: bool = False) -> Dict[str, Any]:
     Returns:
         {"type": "text", "text": ..., "cache_control": ...} 또는 cache_control 없는 블록
     """
-    estimated_tokens = len(text) // 4
+    from app.core.token_utils import estimate_tokens as _est_tokens
+    estimated_tokens = _est_tokens(text)
     block: Dict[str, Any] = {"type": "text", "text": text}
     if force or estimated_tokens >= MIN_CACHE_TOKENS:
         block["cache_control"] = _CACHE_CONTROL
@@ -84,8 +85,9 @@ def build_cached_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not tools:
         return tools
 
+    from app.core.token_utils import estimate_tokens as _est_tokens
     total_tokens = sum(
-        len(str(t.get("description", "")) + str(t.get("input_schema", ""))) // 4
+        _est_tokens(str(t.get("description", "")) + str(t.get("input_schema", "")))
         for t in tools
     )
     if total_tokens < MIN_CACHE_TOKENS:

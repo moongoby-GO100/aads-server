@@ -97,9 +97,10 @@ class CKPManager:
                 except Exception:
                     continue
 
-                tokens = len(content) // 4
+                from app.core.token_utils import estimate_tokens as _est_tokens, CHARS_PER_TOKEN
+                tokens = _est_tokens(content)
                 if tokens > MAX_FILE_TOKENS:
-                    content = content[:MAX_FILE_TOKENS * 4]
+                    content = content[:MAX_FILE_TOKENS * CHARS_PER_TOKEN]
                     tokens = MAX_FILE_TOKENS
 
                 if total_tokens + tokens > MAX_TOKENS_PER_SCAN:
@@ -210,8 +211,9 @@ class CKPManager:
                     scanned += 1
             result.scanned_files = scanned
             result.generated_files = generated
+            from app.core.token_utils import estimate_tokens as _est_tokens
             result.total_tokens = sum(
-                len((projects_ckp_dir / f).read_text(encoding="utf-8", errors="ignore")) // 4
+                _est_tokens((projects_ckp_dir / f).read_text(encoding="utf-8", errors="ignore"))
                 for f in ["CLAUDE.md", "ARCHITECTURE.md", "CODEBASE-MAP.md",
                           "DEPENDENCY-MAP.md", "LESSONS.md"]
                 if (projects_ckp_dir / f).exists()
@@ -297,7 +299,8 @@ class CKPManager:
         claude_path = ckp_dir / "CLAUDE.md"
         if claude_path.exists():
             content = claude_path.read_text(encoding="utf-8")
-            tokens = len(content) // 4
+            from app.core.token_utils import estimate_tokens as _est_tokens
+            tokens = _est_tokens(content)
             if used_tokens + tokens <= max_tokens:
                 parts.append(content)
                 used_tokens += tokens
@@ -307,7 +310,7 @@ class CKPManager:
         if arch_path.exists():
             lines = arch_path.read_text(encoding="utf-8").splitlines()[:50]
             snippet = "\n".join(lines)
-            tokens = len(snippet) // 4
+            tokens = _est_tokens(snippet)
             if used_tokens + tokens <= max_tokens:
                 parts.append(f"\n## Architecture (요약)\n{snippet}")
                 used_tokens += tokens
@@ -330,7 +333,7 @@ class CKPManager:
                     lesson_txt = "\n## 최근 교훈\n"
                     for r in rows:
                         lesson_txt += f"- [{r['source_task_id']}] {r['title']}: {r['description'][:100]}\n"
-                    tokens = len(lesson_txt) // 4
+                    tokens = _est_tokens(lesson_txt)
                     if used_tokens + tokens <= max_tokens:
                         parts.append(lesson_txt)
             except Exception as e:
@@ -642,7 +645,8 @@ curl -s https://aads.newtalk.kr/api/v1/ops/health-check | python3 -m json.tool
                 if not fpath.exists():
                     continue
                 content = fpath.read_text(encoding="utf-8")
-                token_count = len(content) // 4
+                from app.core.token_utils import estimate_tokens as _est_tokens
+                token_count = _est_tokens(content)
                 rel_path = f".claude/{fname}"
                 await self.db.execute(
                     """

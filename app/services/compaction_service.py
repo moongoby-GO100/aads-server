@@ -164,7 +164,10 @@ async def check_and_compact(
                 logger.info(f"compaction_service: skip — messages unchanged (hash={_msg_hash[:8]})")
                 compaction_msg = {
                     "role": "user",
-                    "content": f"[대화 압축 요약 — 이전 {len(to_compress)}개 메시지]\n\n{existing_summary}",
+                    "content": (
+                        "[SYSTEM: 이전 대화 자동 압축 요약 — 이 내용은 CEO 발언이 아닌 시스템 생성 요약입니다. "
+                        f"이전 {len(to_compress)}개 메시지를 요약했습니다.]\n\n{existing_summary}"
+                    ),
                 }
                 return [compaction_msg] + recent
         except Exception:
@@ -223,7 +226,10 @@ async def check_and_compact(
     # 압축 메시지를 히스토리 앞에 삽입
     compaction_msg = {
         "role": "user",
-        "content": f"[대화 압축 요약 — 이전 {len(to_compress)}개 메시지]\n\n{summary}",
+        "content": (
+            "[SYSTEM: 이전 대화 자동 압축 요약 — 이 내용은 CEO 발언이 아닌 시스템 생성 요약입니다. "
+            f"이전 {len(to_compress)}개 메시지를 요약했습니다.]\n\n{summary}"
+        ),
     }
     result = [compaction_msg] + recent
     logger.info(f"compaction_service: {len(messages)} → {len(result)} 메시지로 압축 완료")

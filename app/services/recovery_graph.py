@@ -345,7 +345,7 @@ async def _execute_single_recovery(
 
 
 async def _record_recovery_log(log_entry: dict) -> None:
-    """recovery_logs 테이블에 복구 이력 기록."""
+    """escalation_recovery 테이블에 복구 이력 기록."""
     db_url = os.getenv("DATABASE_URL", "").replace("postgresql://", "postgres://")
     if not db_url:
         return
@@ -356,7 +356,7 @@ async def _record_recovery_log(log_entry: dict) -> None:
             try:
                 await conn.execute(
                     """
-                    INSERT INTO recovery_logs
+                    INSERT INTO escalation_recovery
                         (issue_type, issue_data, affected_task_id, affected_server, project_id,
                          tier, action_taken, result, duration_seconds,
                          recovery_route, error_message, recovered_by)
@@ -380,7 +380,7 @@ async def _record_recovery_log(log_entry: dict) -> None:
                 logger.warning("recovery_log_insert_fallback", error=str(e))
                 await conn.execute(
                     """
-                    INSERT INTO recovery_logs
+                    INSERT INTO escalation_recovery
                         (issue_type, issue_data, affected_task_id, affected_server,
                          tier, action_taken, result, duration_seconds,
                          recovery_route, error_message, recovered_by)

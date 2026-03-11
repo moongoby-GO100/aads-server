@@ -277,7 +277,8 @@ async def build_messages_context(
     # Layer D: 임시 문서 컨텍스트 (현재 턴에만 주입, 다음 턴 제거)
     if document_context:
         system_prompt += "\n\n" + document_context
-        _doc_tokens = len(document_context) // 4
+        from app.core.token_utils import estimate_tokens as _est_tokens
+        _doc_tokens = _est_tokens(document_context)
         logger.info(f"[LayerD] ephemeral document injected: ~{_doc_tokens} tokens")
 
     # Layer 3 (동기 — CPU 연산만)

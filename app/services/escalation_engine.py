@@ -297,7 +297,7 @@ async def _create_incident_report(issue_data: dict) -> bool:
         async with pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO recovery_logs
+                INSERT INTO escalation_recovery
                     (issue_type, issue_data, tier, action_taken, result, recovered_by,
                      affected_task_id, affected_server)
                 VALUES ($1, $2::jsonb, 'tier_3', 'create_incident_report', 'escalated',

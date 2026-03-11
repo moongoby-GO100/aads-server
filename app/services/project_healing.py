@@ -241,13 +241,13 @@ class ProjectHealingEngine:
         duration_seconds: Optional[float] = None,
         detail: Optional[str] = None,
     ) -> None:
-        """recovery_logs 테이블에 project_id 포함 기록."""
+        """escalation_recovery 테이블에 project_id 포함 기록."""
         try:
             conn = await self._get_conn()
             try:
                 await conn.execute(
                     """
-                    INSERT INTO recovery_logs
+                    INSERT INTO escalation_recovery
                         (issue_type, affected_server, affected_task, tier,
                          action_taken, result, duration_seconds, detail, project_id, created_at)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())

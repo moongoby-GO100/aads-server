@@ -13,8 +13,8 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# 약 4자 = 1토큰 (보수적 추정)
-_CHARS_PER_TOKEN = 4
+# 한국어/다국어 혼합 기준 (~2자 = 1토큰)
+from app.core.token_utils import CHARS_PER_TOKEN as _CHARS_PER_TOKEN
 _DEFAULT_MAX_TOKENS = 25000
 _JINA_BASE = "https://r.jina.ai"
 

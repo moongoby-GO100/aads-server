@@ -24,7 +24,8 @@ BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
 _BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 
 _MAX_TOTAL_TOKENS = 15000
-_MAX_PAGE_SUMMARY_CHARS = 5000 * 4  # 5000 토큰 ≈ 20000자
+from app.core.token_utils import CHARS_PER_TOKEN as _CPT
+_MAX_PAGE_SUMMARY_CHARS = 5000 * _CPT  # 5000 토큰 → 문자 변환
 
 
 @dataclass
@@ -209,8 +210,8 @@ class DeepCrawlService:
             for i, p in enumerate(pages)
         )
         # 최대 토큰 제한
-        if len(summaries_text) > _MAX_TOTAL_TOKENS * 4:
-            summaries_text = summaries_text[:_MAX_TOTAL_TOKENS * 4] + "\n...[내용 절삭됨]"
+        if len(summaries_text) > _MAX_TOTAL_TOKENS * _CPT:
+            summaries_text = summaries_text[:_MAX_TOTAL_TOKENS * _CPT] + "\n...[내용 절삭됨]"
 
         prompt = (
             f"다음은 '{query}' 주제로 검색·크롤링한 {len(pages)}개 페이지의 요약입니다.\n\n"

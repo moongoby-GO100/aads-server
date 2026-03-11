@@ -703,7 +703,7 @@ async def send_message_stream(
                         logger.info("semantic_code_search_injected",
                                     query=content[:100], results=len(_search_results),
                                     files=[r.get('file','?') for r in _search_results[:3]],
-                                    tokens_est=len(_inline_ctx) // 3)
+                                    tokens_est=len(_inline_ctx.encode('utf-8')) // 3)
             except Exception as _sce:
                 logger.debug(f"[188E] 시맨틱 코드 검색 컨텍스트 주입 실패 (무시): {_sce}")
 

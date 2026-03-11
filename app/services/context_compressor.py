@@ -333,7 +333,7 @@ def estimate_tokens(
     messages: List[Dict[str, Any]],
     system_prompt: str = "",
 ) -> int:
-    """Quick token estimate using len(text) // 4 heuristic.
+    """한국어/다국어를 고려한 메시지 토큰 추정 (UTF-8 bytes // 3).
 
     Args:
         messages: Conversation message list.
@@ -342,11 +342,8 @@ def estimate_tokens(
     Returns:
         Estimated total token count.
     """
-    total_chars = len(system_prompt)
-    for msg in messages:
-        total_chars += len(msg.get("role", ""))
-        total_chars += len(_text_from_content(msg.get("content", "")))
-    return total_chars // 4
+    from app.core.token_utils import estimate_tokens_for_messages
+    return estimate_tokens_for_messages(messages, system_prompt)
 
 
 def needs_structured_summary(
