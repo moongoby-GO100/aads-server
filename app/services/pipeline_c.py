@@ -28,7 +28,9 @@ from app.core.project_config import PROJECT_MAP
 logger = logging.getLogger(__name__)
 
 # ─── 설정 ─────────────────────────────────────────────────────────────────────
-_CLAUDE_TIMEOUT = 1800      # Claude Code 실행 타임아웃 (30분)
+_CLAUDE_TIMEOUT = 3600      # Claude Code 직접 대기 타임아웃 (60분, 폴링 모드 폴백용)
+_CLAUDE_POLL_INTERVAL = 30  # 분리 실행 폴링 주기 (초)
+_CLAUDE_MAX_WAIT = 7200     # 분리 실행 최대 대기 (2시간)
 _MAX_OUTPUT_CHARS = 6000    # 결과 최대 문자수
 _REVIEW_MODEL = "claude-sonnet-4-6"
 
@@ -461,7 +463,15 @@ class PipelineCJob:
     # ─── Claude Code CLI 실행 ───────────────────────────────────────────────
 
     async def _run_claude_code(self, instruction: str, continue_session: bool) -> dict:
-        """SSH로 원격 서버의 Claude Code CLI 실행."""
+        """
+        SSH로 원격 서버의 Claude Code CLI 실행.
+
+        동작 방식: nohup 분리 실행 + 폴링
+        1. 원격 서버에서 nohup으로 Claude Code를 백그라운드 실행 (출력 → 임시 파일)
+        2. 주기적으로 SSH로 프로세스 완료 여부 확인
+        3. 완료되면 출력 파일을 읽어서 반환
+        → SSH 연결 끊김, 30분 타임아웃 문제 없음 (최대 2시간 대기)
+        """
         escaped = shlex.quote(instruction)
 
         if continue_session:
@@ -478,8 +488,117 @@ class PipelineCJob:
             "source ~/.claude/api_keys.env 2>/dev/null; "
             "export ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-$API_KEY_1}; "
         )
+
+        # 고유 출력 파일 경로
+        out_file = f"/tmp/pipeline_c_{self.job_id}.out"
+        err_file = f"/tmp/pipeline_c_{self.job_id}.err"
+        pid_file = f"/tmp/pipeline_c_{self.job_id}.pid"
+        done_file = f"/tmp/pipeline_c_{self.job_id}.done"
+
+        # nohup 래퍼: Claude Code 실행 → 완료 시 .done 파일 생성 (exit code 기록)
+        detach_cmd = (
+            f"{api_key_setup}"
+            f"cd {shlex.quote(self.workdir)} && "
+            f"nohup bash -c '"
+            f'{claude_cmd} > {out_file} 2> {err_file}; echo $? > {done_file}'
+            f"' > /dev/null 2>&1 & echo $!"
+        )
+
+        try:
+            # Step 1: 분리 실행 시작
+            pid_output = await self._ssh_command(detach_cmd, timeout=15)
+            remote_pid = pid_output.strip()
+            if not remote_pid.isdigit():
+                # 분리 실행 실패 시 직접 실행으로 폴백
+                logger.warning(f"pipeline_c detach failed: {pid_output[:200]}, falling back to direct exec")
+                return await self._run_claude_code_direct(instruction, continue_session)
+
+            self._log("claude_code_detached", f"원격 분리 실행 시작 (PID={remote_pid})")
+
+            # 채팅방에 진행 상황 보고
+            await self._post_to_chat(
+                f"⏳ **[작업 실행 중]** `{self.job_id}`\n"
+                f"Claude Code가 원격 서버에서 실행 중입니다 (PID={remote_pid}).\n"
+                f"최대 2시간까지 대기하며, 30초마다 상태를 확인합니다."
+            )
+
+            # Step 2: 폴링으로 완료 대기
+            elapsed = 0
+            last_report = 0
+            while elapsed < _CLAUDE_MAX_WAIT:
+                await asyncio.sleep(_CLAUDE_POLL_INTERVAL)
+                elapsed += _CLAUDE_POLL_INTERVAL
+
+                # .done 파일 존재 확인 = 작업 완료
+                check = await self._ssh_command(f"cat {done_file} 2>/dev/null || echo RUNNING", timeout=10)
+                check = check.strip()
+
+                if check != "RUNNING":
+                    # 완료! 출력 읽기
+                    exit_code = int(check) if check.isdigit() else -1
+                    output = await self._ssh_command(f"tail -c 50000 {out_file} 2>/dev/null", timeout=15)
+                    err = await self._ssh_command(f"cat {err_file} 2>/dev/null", timeout=10)
+
+                    # 임시 파일 정리
+                    await self._ssh_command(
+                        f"rm -f {out_file} {err_file} {pid_file} {done_file}", timeout=5
+                    )
+
+                    if exit_code != 0 and not output.strip():
+                        return {"error": f"exit={exit_code}: {err[:500]}", "output": ""}
+
+                    self._log("claude_code_complete", f"완료 (exit={exit_code}, {len(output)}자, {elapsed}초)")
+                    return {
+                        "output": output[-_MAX_OUTPUT_CHARS:],
+                        "exit_code": exit_code,
+                        "error": None,
+                    }
+
+                # 10분마다 진행 상황 보고
+                if elapsed - last_report >= 600:
+                    last_report = elapsed
+                    minutes = elapsed // 60
+                    # 프로세스가 아직 살아있는지 확인
+                    alive = await self._ssh_command(f"kill -0 {remote_pid} 2>&1 && echo ALIVE || echo DEAD", timeout=5)
+                    if "DEAD" in alive:
+                        # 프로세스 죽었는데 .done 없음 → 비정상 종료
+                        output = await self._ssh_command(f"tail -c 50000 {out_file} 2>/dev/null", timeout=15)
+                        err = await self._ssh_command(f"cat {err_file} 2>/dev/null", timeout=10)
+                        await self._ssh_command(f"rm -f {out_file} {err_file} {pid_file} {done_file}", timeout=5)
+                        return {"error": f"프로세스 비정상 종료 (PID={remote_pid}): {err[:500]}", "output": output[-_MAX_OUTPUT_CHARS:]}
+
+                    await self._post_to_chat(
+                        f"⏳ **[작업 진행 중]** `{self.job_id}` — {minutes}분 경과\n"
+                        f"Claude Code가 계속 실행 중입니다 (PID={remote_pid})."
+                    )
+
+            # 최대 대기 시간 초과
+            await self._ssh_command(f"kill {remote_pid} 2>/dev/null; rm -f {out_file} {err_file} {pid_file} {done_file}", timeout=5)
+            return {"error": f"Claude Code 최대 대기시간 초과 ({_CLAUDE_MAX_WAIT // 60}분)", "output": ""}
+
+        except Exception as e:
+            return {"error": str(e), "output": ""}
+
+    async def _run_claude_code_direct(self, instruction: str, continue_session: bool) -> dict:
+        """직접 실행 폴백 (분리 실행 불가 시)."""
+        escaped = shlex.quote(instruction)
+
+        if continue_session:
+            claude_cmd = f"claude -p --output-format text -c {escaped}"
+        else:
+            claude_cmd = (
+                f"claude -p --output-format text "
+                f"--session-id {self.claude_session_id} "
+                f"{escaped}"
+            )
+
+        api_key_setup = (
+            "source ~/.claude/api_keys.env 2>/dev/null; "
+            "export ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-$API_KEY_1}; "
+        )
         full_cmd = f"{api_key_setup}cd {shlex.quote(self.workdir)} && {claude_cmd}"
 
+        proc = None
         try:
             if self.server == "localhost":
                 proc = await asyncio.create_subprocess_shell(
@@ -513,7 +632,6 @@ class PipelineCJob:
             }
 
         except asyncio.TimeoutError:
-            # 타임아웃 시 자식 프로세스 강제 종료 (좀비 방지)
             if proc and proc.returncode is None:
                 try:
                     proc.kill()
