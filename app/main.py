@@ -157,12 +157,13 @@ async def lifespan(app: FastAPI):
         logger.warning("apscheduler_start_failed_graceful_degradation", error=str(e))
         scheduler = None
 
-    # Pipeline C Watchdog 시작 (2분마다 스톨 감지)
+    # Pipeline C: 재시작 복구 + Watchdog 시작
     try:
-        from app.services.pipeline_c import start_watchdog
+        from app.services.pipeline_c import recover_interrupted_jobs, start_watchdog
+        await recover_interrupted_jobs()
         await start_watchdog(interval=120)
     except Exception as e:
-        logger.warning("pipeline_c_watchdog_start_failed", error=str(e))
+        logger.warning("pipeline_c_init_failed", error=str(e))
 
     # DB Connection Pool 초기화 (AADS-CRITICAL-FIX #1)
     try:

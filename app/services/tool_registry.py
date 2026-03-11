@@ -1357,7 +1357,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     # ── Pipeline C: 자율 작업 파이프라인 도구 ──────────────────────────────────
     "pipeline_c_start": {
         "name": "pipeline_c_start",
-        "description": "프로젝트별 Claude Code 자율 작업 파이프라인 시작. 작업→자동검수→재지시→승인대기까지 자율 수행.",
+        "description": "프로젝트별 Claude Code 자율 작업 파이프라인 시작. 작업→자동검수→재지시→승인대기까지 자율 수행. 현재 세션과 무관하게 어떤 프로젝트든 지정 가능 (크로스 프로젝트).",
         "input_schema": {
             "type": "object",
             "properties": {

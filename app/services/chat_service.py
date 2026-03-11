@@ -861,8 +861,12 @@ async def send_message_stream(
                     "CEO가 Claude Code 자율 작업을 요청했습니다.\n"
                     "1. 작업 시작: pipeline_c_start 도구를 사용하세요.\n"
                     "2. 상태 확인: pipeline_c_status 도구를 사용하세요.\n"
-                    "3. 승인/거부: pipeline_c_approve 도구를 사용하세요.\n"
-                    "프로젝트명을 메시지에서 추출하고, 구체적 지시를 instruction에 전달하세요.\n"
+                    "3. 승인/거부: pipeline_c_approve 도구를 사용하세요.\n\n"
+                    "## 크로스 프로젝트 규칙\n"
+                    "- 현재 세션의 워크스페이스와 관계없이, 메시지에서 대상 프로젝트를 추출하세요.\n"
+                    "- 사용 가능한 프로젝트: KIS(211서버), GO100(211서버), SF(114서버), NTV2(114서버), AADS(68서버/localhost)\n"
+                    "- 프로젝트명이 명시되지 않으면 반드시 CEO에게 확인하세요: \"어느 프로젝트에 적용할까요?\"\n"
+                    "- 현재 세션과 다른 프로젝트를 지정한 경우, 시작 전 확인하세요: \"NTV2 세션에서 AADS(68서버) 작업을 시작합니다. 맞습니까?\"\n\n"
                     "승인 요청이 오면 변경사항(git diff)을 먼저 확인 후 CEO에게 보고하세요."
                 )
             from app.services.autonomous_executor import AutonomousExecutor

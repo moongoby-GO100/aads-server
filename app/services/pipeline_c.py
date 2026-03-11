@@ -324,6 +324,43 @@ class PipelineCJob:
 
             # 서비스 재시작
             restart_cmd = _RESTART_CMD.get(self.project, "")
+
+            # ★ AADS 자기수정 안전장치: 재시작 전에 모든 상태를 DB에 선저장
+            if self.project == "AADS" and restart_cmd:
+                self._log("aads_pre_restart", "AADS 자기수정 감지 — 재시작 전 상태 선저장")
+                self.phase = "restarting"
+                await self._save_to_db()
+                # 완료 보고를 재시작 전에 채팅방에 미리 삽입
+                await self._post_to_chat(
+                    f"⚠️ **[AADS 자기수정 — 재시작]** `{self.job_id}`\n"
+                    f"AADS 서비스를 재시작합니다. 잠시 연결이 끊길 수 있습니다.\n"
+                    f"재시작 후 자동으로 검증을 진행합니다."
+                )
+                # 재시작 실행 (이후 이 프로세스도 재시작됨)
+                await self._ssh_command(restart_cmd)
+                # 재시작 후 복귀 대기 (uvicorn reload 시 프로세스 유지 가능)
+                await asyncio.sleep(8)
+
+                # 복귀 확인: health check
+                verify = await self._final_verify()
+                self._log("done", f"최종 완료: {verify['summary']}")
+                self.status = "done"
+                await self._save_to_db()
+                await self._post_to_chat(
+                    f"✅ **[Pipeline C 완료 — AADS 자기수정]** `{self.job_id}`\n"
+                    f"커밋: {verify.get('last_commit', 'N/A')}\n"
+                    f"Health: {verify.get('health', 'N/A')[:200]}\n"
+                    f"에러: {verify.get('errors', '없음')[:200] or '없음'}\n\n"
+                    f"**결과: {verify['summary']}**"
+                )
+                return {
+                    "status": "done",
+                    "summary": verify["summary"],
+                    "health": verify.get("health", ""),
+                    "errors": verify.get("errors", ""),
+                }
+
+            # 일반 프로젝트 재시작
             if restart_cmd:
                 self._log("restarting", f"서비스 재시작: {restart_cmd}")
                 await self._ssh_command(restart_cmd)
@@ -689,6 +726,99 @@ async def reject_pipeline(job_id: str, reason: str = "") -> dict:
     if not job:
         return {"error": f"활성 작업을 찾을 수 없음: {job_id}"}
     return await job.reject(reason)
+
+
+# ─── AADS 자기수정 복구: 재시작으로 중단된 작업 검출 + 완료 처리 ──────────────
+
+async def recover_interrupted_jobs():
+    """
+    서버 시작 시 호출: restarting phase에서 중단된 AADS 파이프라인을 복구.
+    DB에서 status='running', phase='restarting' 인 작업을 찾아 Phase 6~7 완료 처리.
+    """
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT job_id, chat_session_id, project, instruction, phase, status
+                FROM pipeline_jobs
+                WHERE status = 'running' AND phase = 'restarting'
+                ORDER BY updated_at DESC LIMIT 5
+                """
+            )
+            if not rows:
+                return
+
+            for row in rows:
+                job_id = row["job_id"]
+                logger.info(f"pipeline_c_recovery: recovering interrupted job {job_id}")
+
+                # 검증 수행
+                health_cmd = "curl -sf http://localhost:8100/api/v1/health 2>/dev/null || echo FAIL"
+                proc = await asyncio.create_subprocess_shell(
+                    health_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+                health = stdout.decode("utf-8", errors="replace").strip()
+
+                last_commit_proc = await asyncio.create_subprocess_shell(
+                    "cd /root/aads/aads-server && git log --oneline -1",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                lc_stdout, _ = await asyncio.wait_for(last_commit_proc.communicate(), timeout=10)
+                last_commit = lc_stdout.decode("utf-8", errors="replace").strip()
+
+                all_ok = "ok" in health.lower() or "status" in health.lower()
+                summary = f"{'복구 정상' if all_ok else '복구 확인 필요'} | commit: {last_commit} | health: {health[:100]}"
+
+                # DB 업데이트: done 처리
+                await conn.execute(
+                    """
+                    UPDATE pipeline_jobs
+                    SET status = 'done', phase = 'done',
+                        review_feedback = review_feedback || $2,
+                        updated_at = now()
+                    WHERE job_id = $1
+                    """,
+                    job_id,
+                    f" | 재시작 복구: {summary}",
+                )
+
+                # 채팅방에 복구 완료 메시지
+                chat_sid = row["chat_session_id"]
+                if chat_sid:
+                    try:
+                        async with conn.transaction():
+                            await conn.execute(
+                                """
+                                INSERT INTO chat_messages
+                                    (session_id, role, content, intent, cost,
+                                     tokens_in, tokens_out, attachments, sources, tools_called)
+                                VALUES ($1::uuid, 'assistant', $2, 'pipeline_c', 0,
+                                        0, 0, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)
+                                """,
+                                chat_sid,
+                                f"✅ **[Pipeline C 재시작 복구]** `{job_id}`\n"
+                                f"AADS 재시작 후 자동 복구 완료.\n"
+                                f"Health: {health[:200]}\n"
+                                f"커밋: {last_commit}\n"
+                                f"**결과: {summary}**",
+                            )
+                            await conn.execute(
+                                "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1::uuid",
+                                chat_sid,
+                            )
+                    except Exception as e2:
+                        logger.warning(f"pipeline_c_recovery_chat_error: {e2}")
+
+                logger.info(f"pipeline_c_recovery: job {job_id} recovered — {summary}")
+
+    except Exception as e:
+        logger.error(f"pipeline_c_recovery_error: {e}")
 
 
 # ─── Watchdog: 작업 감시 + 스톨 감지 + 채팅방 알림 ───────────────────────────
