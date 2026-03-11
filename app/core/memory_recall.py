@@ -28,8 +28,9 @@ _BUDGET = {
     "tool_strategy": 600,       # ~400 토큰
     "directives": 600,          # ~400 토큰
     "discoveries": 600,         # ~400 토큰
+    "learned_memory": 450,      # ~300 토큰 (ai_meta_memory)
 }
-_TOTAL_CHAR_LIMIT = 3000  # ~2000 토큰
+_TOTAL_CHAR_LIMIT = 3400  # ~2300 토큰 (섹션6 추가분 반영)
 
 # #14: 카테고리별 confidence 임계값 (환경변수 오버라이드 가능)
 _CONFIDENCE = {
@@ -279,6 +280,43 @@ async def _build_discoveries(project_id: Optional[str] = None) -> str:
         return ""
 
 
+async def _build_learned_memory(project_id: Optional[str] = None) -> str:
+    """섹션 6: learn_pattern으로 저장된 AI 학습 메모리 (ai_meta_memory).
+    CEO 선호 + 프로젝트 패턴 + 결정 이력을 프로젝트 무관하게 전체 주입.
+    """
+    try:
+        async with _get_pool().acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT category, key, value FROM ai_meta_memory
+                WHERE category IN ('ceo_preference', 'project_pattern', 'known_issue', 'decision_history')
+                ORDER BY confidence DESC, updated_at DESC
+                LIMIT 15
+                """,
+            )
+            if not rows:
+                return ""
+            import json as _json
+            lines = []
+            for r in rows:
+                val = r["value"]
+                if isinstance(val, str):
+                    try:
+                        val = _json.loads(val)
+                    except Exception:
+                        pass
+                if isinstance(val, dict):
+                    val_str = val.get("summary") or val.get("description") or _json.dumps(val, ensure_ascii=False)
+                else:
+                    val_str = str(val)
+                lines.append(f"- [{r['category']}] {r['key']}: {val_str[:100]}")
+            text = "\n".join(lines)
+            return _truncate(text, _BUDGET["learned_memory"])
+    except Exception as e:
+        logger.warning("memory_recall_section_failed", section="learned_memory", error=str(e))
+        return ""
+
+
 # ── 메인 빌더 ────────────────────────────────────────────────────────────────
 
 async def build_memory_context(
@@ -294,13 +332,14 @@ async def build_memory_context(
     project_id = _normalize_project(project_id)
     blocks: List[str] = []
 
-    # 5개 섹션 병렬 조회 (AADS-CRITICAL-FIX #30)
-    notes, prefs, tools, dirs, disc = await asyncio.gather(
+    # 6개 섹션 병렬 조회 (AADS-CRITICAL-FIX #30 + 섹션6 ai_meta_memory 추가)
+    notes, prefs, tools, dirs, disc, learned = await asyncio.gather(
         _build_session_notes(session_id, project_id),
         _build_preferences(),
         _build_tool_strategy(project_id),
         _build_active_directives(project_id),
         _build_discoveries(project_id),
+        _build_learned_memory(project_id),
     )
 
     if notes:
@@ -313,6 +352,8 @@ async def build_memory_context(
         blocks.append(f"<memory_directives>\n## 활성 지시사항\n{dirs}\n</memory_directives>")
     if disc:
         blocks.append(f"<memory_discoveries>\n## 이전 작업에서 발견한 사항\n{disc}\n</memory_discoveries>")
+    if learned:
+        blocks.append(f"<memory_learned>\n## AI 학습 메모리 (learn_pattern)\n{learned}\n</memory_learned>")
 
     result = "\n\n".join(blocks) if blocks else ""
 
