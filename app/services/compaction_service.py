@@ -138,15 +138,16 @@ async def check_and_compact(
         try:
             row = await db_conn.fetchrow(
                 """
-                SELECT content FROM session_notes
+                SELECT summary, content FROM session_notes
                 WHERE session_id = $1 AND note_type = 'compaction'
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
-                uuid.UUID(session_id),
+                str(session_id),
             )
             if row:
-                existing_summary = row["content"]
+                # summary 컬럼 우선, 없으면 content 폴백
+                existing_summary = row["summary"] if row["summary"] else row["content"]
         except Exception as e:
             logger.warning(f"compaction_service: 기존 요약 조회 실패: {e}")
 
@@ -165,10 +166,10 @@ async def check_and_compact(
         try:
             await db_conn.execute(
                 """
-                INSERT INTO session_notes (session_id, note_type, content)
-                VALUES ($1, 'compaction', $2)
+                INSERT INTO session_notes (session_id, note_type, summary, content)
+                VALUES ($1, 'compaction', $2, $2)
                 """,
-                uuid.UUID(session_id),
+                str(session_id),
                 summary,
             )
             # 이전 메시지 is_compacted 마킹 (최근 COMPACTION_KEEP_RECENT*2 보존)
@@ -184,13 +185,13 @@ async def check_and_compact(
                       LIMIT $2
                   )
                 """,
-                uuid.UUID(session_id),
+                uuid.UUID(session_id) if len(session_id) == 36 else session_id,
                 COMPACTION_KEEP_RECENT * 2,
             )
             # Stage 7: 양방향 메모리 동기화 — ai_observations에 핵심 지시사항 저장
             await _sync_to_observations(db_conn, session_id, summary)
         except Exception as e:
-            logger.warning(f"compaction_service db error: {e}")
+            logger.error(f"compaction_service db error: {e}", exc_info=True)
 
     # 압축 메시지를 히스토리 앞에 삽입
     compaction_msg = {

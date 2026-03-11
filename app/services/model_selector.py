@@ -31,12 +31,13 @@ _EXTENDED_THINKING_ENABLED = os.getenv("EXTENDED_THINKING_ENABLED", "true").lowe
 
 # 모델별 비용 (per 1M tokens, USD)
 _COST_MAP = {
-    "claude-opus":       (15.0, 75.0),
-    "claude-sonnet":     (3.0,  15.0),
-    "claude-haiku":      (0.25, 1.25),
-    "gemini-flash":      (0.075, 0.3),
-    "gemini-flash-lite": (0.01,  0.04),
-    "gemini-pro":        (1.25,  5.0),
+    "claude-opus":            (15.0, 75.0),
+    "claude-sonnet":          (3.0,  15.0),
+    "claude-haiku":           (0.25, 1.25),
+    "gemini-flash":           (0.075, 0.3),
+    "gemini-flash-lite":      (0.01,  0.04),
+    "gemini-pro":             (1.25,  5.0),
+    "gemini-3-flash-preview": (0.1,   0.4),
 }
 
 # LiteLLM alias → Anthropic model ID
@@ -47,7 +48,10 @@ _ANTHROPIC_MODEL_ID = {
 }
 
 # Gemini 모델 (LiteLLM 경유)
-_GEMINI_MODELS = {"gemini-flash", "gemini-flash-lite", "gemini-pro"}
+_GEMINI_MODELS = {"gemini-flash", "gemini-flash-lite", "gemini-pro", "gemini-3-flash-preview"}
+
+# Gemini Thinking 모델 — reasoning_effort=low + 높은 max_tokens 필요
+_GEMINI_THINKING_MODELS = {"gemini-pro", "gemini-flash", "gemini-3-flash-preview"}
 
 
 def _estimate_cost(model: str, in_tokens: int, out_tokens: int) -> Decimal:
@@ -79,15 +83,42 @@ async def call_stream(
     """
     model = model_override or intent_result.model
 
-    # Gemini 모델 → LiteLLM 경유
+    # Gemini 모델 → LiteLLM 경유 (실패 시 Claude Haiku 폴백)
     if model in _GEMINI_MODELS:
+        _had_error = False
         async for event in _stream_litellm(model, system_prompt, messages):
+            if event.get("type") == "error":
+                _had_error = True
+                logger.warning(f"gemini_fallback: {model} failed, falling back to claude-haiku")
+                break
             yield event
+        if _had_error:
+            # Gemini 실패 → Claude Haiku로 폴백 (가장 저렴한 Claude)
+            _fallback_intent = IntentResult(
+                intent=intent_result.intent,
+                model="claude-haiku",
+                use_tools=intent_result.use_tools,
+                tool_group=intent_result.tool_group,
+            )
+            yield {"type": "delta", "content": ""}  # 스트림 리셋
+            async for event in _stream_anthropic(_fallback_intent, "claude-haiku", system_prompt, messages, tools):
+                yield event
         return
 
-    # Claude 모델 → Anthropic SDK 직접
+    # Claude 모델 → Anthropic SDK 직접 (실패 시 Gemini Flash 폴백)
+    _had_error = False
     async for event in _stream_anthropic(intent_result, model, system_prompt, messages, tools):
+        if event.get("type") == "error":
+            _had_error = True
+            _error_content = event.get("content", "")
+            logger.warning(f"claude_fallback: {model} failed ({_error_content[:100]}), falling back to gemini-flash")
+            break
         yield event
+    if _had_error:
+        # Claude 실패 → Gemini 3 Flash로 폴백 (도구 미지원 경량 모드)
+        yield {"type": "delta", "content": "[Claude API 일시 장애, Gemini로 전환]\n\n"}
+        async for event in _stream_litellm("gemini-3-flash-preview", system_prompt, messages):
+            yield event
 
 
 async def _stream_litellm(
@@ -102,18 +133,27 @@ async def _stream_litellm(
     input_tokens = 0
     output_tokens = 0
 
+    # Thinking 모델: reasoning_effort=low로 사고 토큰 절감 + max_tokens 확대
+    is_thinking = model in _GEMINI_THINKING_MODELS
+    max_tokens = 32768 if is_thinking else 16384
+    extra_params: Dict[str, Any] = {}
+    if is_thinking:
+        extra_params["reasoning_effort"] = "low"
+
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
+            req_body: Dict[str, Any] = {
+                "model": model,
+                "messages": msgs,
+                "max_tokens": max_tokens,
+                "stream": True,
+                **extra_params,
+            }
             async with client.stream(
                 "POST",
                 f"{LITELLM_BASE_URL}/chat/completions",
                 headers={"Authorization": f"Bearer {LITELLM_API_KEY}"},
-                json={
-                    "model": model,
-                    "messages": msgs,
-                    "max_tokens": 16384,
-                    "stream": True,
-                },
+                json=req_body,
             ) as resp:
                 if resp.status_code != 200:
                     body = await resp.aread()

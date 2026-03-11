@@ -260,8 +260,9 @@ def generate_summary(ceo_input: str, ai_response: str) -> str:
 # ─── T-037 A-3: 저장 함수 ────────────────────────────────────────────────
 def save_aads_conversation(ceo_input: str, ai_response: str = "", session_id: str = "") -> dict:
     """
-    CEO↔웹 Claude 일반 대화를 go100_user_memory에 저장 (POST /memory/log).
-    결정 키워드 없어도 저장. 실패 시 로그만 남기고 대화 흐름 중단하지 않음 (try/except).
+    CEO↔웹 Claude 일반 대화를 저장.
+    1) go100_user_memory (POST /memory/log) — 기존 경로
+    2) system_memory (POST /context/system) — /conversations 페이지 표시용
     """
     try:
         kst = timezone(timedelta(hours=9))
@@ -269,6 +270,8 @@ def save_aads_conversation(ceo_input: str, ai_response: str = "", session_id: st
             session_id = "web-claude-" + datetime.now(kst).strftime("%Y%m%d")
         combined = ceo_input + " " + ai_response
         category, importance = classify_aads_conversation(combined)
+
+        # 1) go100_user_memory 저장 (기존)
         payload = {
             "user_id": 2,
             "memory_type": "aads_" + category,
@@ -290,7 +293,42 @@ def save_aads_conversation(ceo_input: str, ai_response: str = "", session_id: st
             "importance": importance,
             "expires_at": None,
         }
-        return _write_to_memory_api(payload)
+        result = _write_to_memory_api(payload)
+
+        # 2) system_memory 저장 — /conversations 페이지에서 조회되도록
+        try:
+            # 프로젝트 분류: category → conversation:aads 등
+            _proj_map = {
+                "ceo_directive": "aads", "architecture": "aads",
+                "cost_analysis": "aads", "task_planning": "aads",
+                "troubleshooting": "aads", "research": "aads", "general": "aads",
+            }
+            proj = _proj_map.get(category, "aads")
+            # session_id에서 프로젝트 힌트 추출
+            sid_lower = session_id.lower()
+            for p in ("kis", "go100", "sf", "sales", "ntv2", "newtalk", "nas"):
+                if p in sid_lower:
+                    proj = p
+                    break
+
+            epoch = int(time.time())
+            snapshot = f"[USER]\n{ceo_input[:2000]}\n---MSG_SEP---\n[ASSISTANT]\n{ai_response[:2000]}"
+            write_to_api(
+                category=f"conversation:{proj}",
+                key=f"chat_{epoch}",
+                value={
+                    "snapshot": snapshot,
+                    "char_count": len(ceo_input) + len(ai_response),
+                    "logged_at": _now_iso_kst(),
+                    "source": "genspark_bridge",
+                    "project": proj.upper(),
+                    "session_id": session_id,
+                },
+            )
+        except Exception as e2:
+            logging.warning("save_to_system_memory failed (non-fatal): %s", e2)
+
+        return result
     except Exception as e:
         logging.warning("save_aads_conversation failed: %s", e)
         return {"status": "error", "detail": str(e)}
