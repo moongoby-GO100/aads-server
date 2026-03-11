@@ -209,20 +209,32 @@ class ToolExecutor:
         )
 
     async def _read_github_file(self, inp: Dict[str, Any]) -> Any:
-        try:
-            from app.services.chat_tools import read_github_file
-            query = f"repo={inp.get('repo', '')} path={inp.get('path', '')} branch={inp.get('branch', 'main')}"
-            return await read_github_file(query, "")
-        except ImportError:
-            repo = inp.get("repo", "moongoby-GO100/aads-docs")
-            path = inp.get("path", "HANDOVER.md")
-            branch = inp.get("branch", "main")
-            url = f"https://raw.githubusercontent.com/{repo}/{branch}/{path}"
-            async with httpx.AsyncClient(timeout=8.0) as c:
-                r = await c.get(url)
-                if r.status_code == 200:
-                    return r.text[:3000]
-                return {"error": f"github {r.status_code}: {url}"}
+        repo = (inp.get("repo") or "").strip()
+        path = (inp.get("path") or "").strip()
+        branch = (inp.get("branch") or "main").strip()
+
+        if not repo or not path:
+            return {"error": "repo와 path 필수 (예: repo='moongoby-GO100/aads-docs', path='HANDOVER.md')"}
+
+        # repo가 owner/name 형식이 아니면 기본 owner 추가
+        if "/" not in repo:
+            repo = f"moongoby-GO100/{repo}"
+
+        url = f"https://raw.githubusercontent.com/{repo}/{branch}/{path}"
+        headers: Dict[str, str] = {}
+        pat = os.getenv("GITHUB_PAT", os.getenv("GITHUB_TOKEN", ""))
+        if pat:
+            headers["Authorization"] = f"token {pat}"
+
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.get(url, headers=headers)
+            if r.status_code == 404:
+                return {"error": f"파일 없음: {url}", "repo": repo, "path": path}
+            r.raise_for_status()
+            content = r.text
+            if len(content) > 25000:
+                content = content[:25000] + "\n...(내용 잘림)"
+            return {"repo": repo, "path": path, "branch": branch, "content": content}
 
     async def _query_database(self, inp: Dict[str, Any]) -> Any:
         query = inp.get("query", "")
