@@ -814,13 +814,43 @@ async def reject_pipeline(job_id: str, reason: str = "") -> dict:
 
 async def recover_interrupted_jobs():
     """
-    서버 시작 시 호출: restarting phase에서 중단된 AADS 파이프라인을 복구.
-    DB에서 status='running', phase='restarting' 인 작업을 찾아 Phase 6~7 완료 처리.
+    서버 시작 시 호출:
+    1. restarting phase에서 중단된 AADS 파이프라인을 복구
+    2. running/queued 상태로 남아있는 고아 pipeline_jobs를 error 처리
+    3. in_progress 상태로 24시간 이상 남아있는 고아 directive_lifecycle을 failed 처리
     """
     try:
         from app.core.db_pool import get_pool
         pool = get_pool()
         async with pool.acquire() as conn:
+            # ── Phase 0: 고아 pipeline_jobs 정리 (running/queued → error) ──
+            orphan_count = await conn.execute(
+                """
+                UPDATE pipeline_jobs
+                SET status = 'error', phase = 'error',
+                    review_feedback = COALESCE(review_feedback, '') || ' | 서버 재시작으로 중단됨',
+                    updated_at = now()
+                WHERE status = 'running' AND phase NOT IN ('restarting', 'done', 'error')
+                """
+            )
+            if orphan_count and orphan_count != "UPDATE 0":
+                logger.info(f"pipeline_c_recovery: orphan pipeline_jobs cleaned: {orphan_count}")
+
+            # ── Phase 0b: 고아 directive_lifecycle 정리 (24시간 이상 in_progress → failed) ──
+            stale_count = await conn.execute(
+                """
+                UPDATE directive_lifecycle
+                SET status = 'failed',
+                    error_detail = COALESCE(error_detail, '') || '서버 재시작으로 중단됨',
+                    completed_at = NOW()
+                WHERE status = 'in_progress'
+                  AND created_at < NOW() - INTERVAL '24 hours'
+                """
+            )
+            if stale_count and stale_count != "UPDATE 0":
+                logger.info(f"pipeline_c_recovery: stale directives cleaned: {stale_count}")
+
+            # ── Phase 1: restarting 작업 복구 ──
             rows = await conn.fetch(
                 """
                 SELECT job_id, chat_session_id, project, instruction, phase, status

@@ -126,6 +126,14 @@ async def send_message(req: MessageSendRequest):
     Content-Type: text/event-stream
     """
     session_id_str = str(req.session_id)
+
+    # ★ ContextVar를 HTTP 핸들러에서 조기 설정
+    # with_heartbeat의 ensure_future()가 새 Task를 생성하여 generator 내부의
+    # ContextVar.set()이 격리되는 문제 방지 — HTTP task context에서 설정하면
+    # 모든 자식 Task가 올바른 session_id를 상속받음
+    from app.services.tool_executor import current_chat_session_id
+    current_chat_session_id.set(session_id_str)
+
     stream = svc.with_heartbeat(
         svc.send_message_stream(
             session_id=session_id_str,
