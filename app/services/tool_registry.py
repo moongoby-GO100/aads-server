@@ -75,11 +75,20 @@ _DEFER_LOADING: Dict[str, bool] = {
     "pipeline_c_start": False,        # 상시 로드 — CEO 핵심 도구
     "pipeline_c_status": False,
     "pipeline_c_approve": False,
+    # ── 원격 쓰기/실행/Git 도구 (AADS-190) ──────────────────────────
+    "write_remote_file": False,       # 코드 수정 핵심 — 상시 로드
+    "patch_remote_file": False,       # 코드 수정 핵심 — 상시 로드
+    "run_remote_command": False,      # 명령 실행 핵심 — 상시 로드
+    "git_remote_add": True,           # Git — 온디맨드
+    "git_remote_commit": True,
+    "git_remote_push": True,
+    "git_remote_status": True,
+    "git_remote_create_branch": True,
 }
 
 # 도구 카테고리 안내 (시스템 프롬프트 주입용 — context_builder.py에서 사용)
 TOOL_CATEGORY_GUIDE = """\
-## 도구 우선순위 가이드 (총 35개)
+## 도구 우선순위 가이드 (총 43개)
 
 ### 🔴 Tier 1 — 즉시 사용 (내부 데이터, 무료, <3초) ★ 최우선
 - read_remote_file: 원격 서버 소스 코드/설정 읽기 — 코드 분석 1순위
@@ -101,6 +110,10 @@ TOOL_CATEGORY_GUIDE = """\
 - inspect_service: 서비스 종합 점검
 
 ### 🟡 Tier 3 — 액션/실행 (요청 시 즉시)
+- write_remote_file: 원격 서버 파일 쓰기 (자동 백업, SSH)
+- patch_remote_file: 원격 서버 파일 부분 수정 (diff 기반 패치)
+- run_remote_command: 원격 서버 명령 실행 (화이트리스트 제한)
+- git_remote_add/commit/push/status/create_branch: 원격 Git 조작
 - directive_create / generate_directive: 지시서 생성
 - delegate_to_agent: 복잡한 작업 위임
 - delegate_to_research: 심층 리서치 위임
@@ -150,6 +163,12 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
     "code_explorer":      ["code_explorer"],
     "analyze_changes":    ["analyze_changes"],
     "service_inspection": ["inspect_service"],
+    # Tier 2.5: 코드 수정/배포 인텐트
+    "code_modify":        ["read_remote_file", "write_remote_file", "patch_remote_file", "run_remote_command"],
+    "code_fix":           ["read_remote_file", "patch_remote_file", "run_remote_command"],
+    "deploy":             ["run_remote_command", "git_remote_status", "git_remote_add", "git_remote_commit", "git_remote_push"],
+    "git_operation":      ["git_remote_status", "git_remote_add", "git_remote_commit", "git_remote_push", "git_remote_create_branch"],
+    "remote_execute":     ["run_remote_command", "read_remote_file"],
     # Tier 3: 액션 인텐트
     "directive":          ["generate_directive"],
     "directive_gen":      ["generate_directive"],
@@ -555,6 +574,170 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         ],
         "allowed_callers": ["code_execution_20250825"],
     },
+    # ── 원격 쓰기/실행/Git 도구 (AADS-190) ──────────────────────────────
+    "write_remote_file": {
+        "name": "write_remote_file",
+        "description": (
+            "원격 서버 파일 쓰기 (SSH). 기존 파일은 자동 백업(.bak_aads). "
+            "민감 파일(.env, .ssh 등) 차단. 최대 1MB. "
+            "KIS=211서버, SF/NTV2=114서버. AADS는 로컬."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "프로젝트명",
+                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": "WORKDIR 기준 상대 경로 (예: app/main.py)",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "파일에 쓸 전체 내용",
+                },
+                "backup": {
+                    "type": "boolean",
+                    "description": "기존 파일 백업 여부 (기본 true)",
+                    "default": True,
+                },
+            },
+            "required": ["project", "file_path", "content"],
+        },
+        "input_examples": [
+            {"project": "KIS", "file_path": "backend/app/test.py", "content": "print('hello')"},
+        ],
+    },
+    "patch_remote_file": {
+        "name": "patch_remote_file",
+        "description": (
+            "원격 서버 파일 부분 수정 (diff 기반). old_string을 찾아 new_string으로 교체. "
+            "정확히 1회만 매치되어야 함 (중복 시 실패). 자동 백업 포함. "
+            "전체 파일 재작성보다 안전 — 부분 수정 시 우선 사용."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "프로젝트명",
+                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": "WORKDIR 기준 상대 경로",
+                },
+                "old_string": {
+                    "type": "string",
+                    "description": "교체할 기존 문자열 (정확히 1회 매치 필요)",
+                },
+                "new_string": {
+                    "type": "string",
+                    "description": "새 문자열",
+                },
+            },
+            "required": ["project", "file_path", "old_string", "new_string"],
+        },
+        "input_examples": [
+            {"project": "KIS", "file_path": "backend/app/main.py", "old_string": "DEBUG = True", "new_string": "DEBUG = False"},
+        ],
+    },
+    "run_remote_command": {
+        "name": "run_remote_command",
+        "description": (
+            "원격 서버에서 명령 실행 (SSH, 화이트리스트 제한). "
+            "허용: systemctl, docker, pip, python, pytest, cat, df, free, ps, tail, head, "
+            "grep, find, ls, uptime, crontab, nginx, supervisorctl, journalctl, ss, curl, git 등. "
+            "차단: rm -rf, DROP, shutdown, reboot 등 위험 명령."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "프로젝트명 (서버+workdir 자동 매핑)",
+                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                },
+                "command": {
+                    "type": "string",
+                    "description": "실행할 명령어 (화이트리스트 검사)",
+                },
+            },
+            "required": ["project", "command"],
+        },
+        "input_examples": [
+            {"project": "KIS", "command": "git status --short"},
+            {"project": "SF", "command": "docker ps"},
+            {"project": "KIS", "command": "supervisorctl status"},
+        ],
+    },
+    "git_remote_add": {
+        "name": "git_remote_add",
+        "description": "원격 서버 git add (스테이징). 기본 '.'(전체).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]},
+                "files": {"type": "string", "description": "스테이징할 파일 (기본: '.')", "default": "."},
+            },
+            "required": ["project"],
+        },
+        "input_examples": [{"project": "KIS", "files": "backend/app/main.py"}],
+    },
+    "git_remote_commit": {
+        "name": "git_remote_commit",
+        "description": "원격 서버 git commit. 메시지 필수.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]},
+                "message": {"type": "string", "description": "커밋 메시지"},
+            },
+            "required": ["project", "message"],
+        },
+        "input_examples": [{"project": "KIS", "message": "fix: 잔고 조회 오류 수정"}],
+    },
+    "git_remote_push": {
+        "name": "git_remote_push",
+        "description": "원격 서버 git push. force push 차단.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]},
+                "branch": {"type": "string", "description": "브랜치명 (빈 값이면 현재 브랜치)", "default": ""},
+            },
+            "required": ["project"],
+        },
+        "input_examples": [{"project": "KIS"}, {"project": "KIS", "branch": "main"}],
+    },
+    "git_remote_status": {
+        "name": "git_remote_status",
+        "description": "원격 서버 git status --short 조회.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]},
+            },
+            "required": ["project"],
+        },
+        "input_examples": [{"project": "KIS"}],
+    },
+    "git_remote_create_branch": {
+        "name": "git_remote_create_branch",
+        "description": "원격 서버 새 브랜치 생성 및 체크아웃.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]},
+                "branch_name": {"type": "string", "description": "새 브랜치명 (영문/숫자/._-/ 허용)"},
+            },
+            "required": ["project", "branch_name"],
+        },
+        "input_examples": [{"project": "KIS", "branch_name": "feature/balance-fix"}],
+    },
+    # ── action 그룹 (기존) ─────────────────────────────────────────────────
     "cost_report": {
         "name": "cost_report",
         "description": "LiteLLM API 비용 사용 내역을 조회합니다. 일별/모델별 비용 분석.",
