@@ -443,12 +443,18 @@ _REMOTE_CMD_WHITELIST: List[str] = [
     "git stash",
     "git show",
     "git remote",
+    # 프로세스 관리 (Chromium 등 좀비 프로세스 정리용)
+    "kill",
+    "pkill",
+    "killall",
+    "top",
+    "htop",
 ]
 
 # run_remote_command 차단 패턴 (보안 하드코딩, LLM 우회 불가)
 _REMOTE_CMD_BLOCKED = re.compile(
     r"(rm\s+-[rf]|mkfs|dd\s+if=|shutdown|halt|reboot|kill\s+-9\s+1\b"
-    r"|>\s*/dev/|chmod\s+[0-7]{3,4}\s+/|pkill\s+-9"
+    r"|>\s*/dev/|chmod\s+[0-7]{3,4}\s+/"
     r"|DROP\s+(TABLE|DATABASE)|DELETE\s+FROM|TRUNCATE"
     r"|curl.*\|.*sh|wget.*\|.*sh|bash\s+-c"
     r"|\brm\b.*\s+/[a-z]"  # rm /anything 차단
