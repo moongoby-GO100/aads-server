@@ -286,10 +286,12 @@ async def build_messages_context(
 
     # 컨텍스트 크기 체크 — 80K 토큰 초과 시 구조화 요약 트리거
     # Layer 0/1/2 (system_prompt) is NEVER modified by compaction — only Layer 3 messages
+    # ★ Layer D(ephemeral document)는 컴팩션 판정에서 제외 — 다음 턴 자동 소멸하므로
+    _prompt_for_compaction = system_prompt.split("<ephemeral_document_context>")[0].rstrip() if "<ephemeral_document_context>" in system_prompt else system_prompt
     try:
         from app.services.context_compressor import estimate_tokens, needs_structured_summary
-        _est = estimate_tokens(messages, system_prompt)
-        if needs_structured_summary(messages, system_prompt, threshold=80000):
+        _est = estimate_tokens(messages, _prompt_for_compaction)
+        if needs_structured_summary(messages, _prompt_for_compaction, threshold=80000):
             logger.warning(f"context_builder: tokens={_est} > 80K, triggering structured summary")
             from app.services.compaction_service import check_and_compact
             messages = await check_and_compact(session_id, messages, db_conn=db_conn)
