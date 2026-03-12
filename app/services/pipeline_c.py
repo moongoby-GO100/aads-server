@@ -254,6 +254,12 @@ class PipelineCJob:
                     f"Claude Code 실행 실패: {work_result['error'][:500]}"
                 )
                 await self._save_to_db()
+                # 채팅 AI에게 에러 조치 트리거 — CEO가 채팅방에서 바로 확인+지시 가능
+                await self._trigger_ai_reaction(
+                    f"[시스템] Pipeline C 작업 `{self.job_id}` (프로젝트: {self.project})이 실패했습니다.\n"
+                    f"오류: {work_result['error'][:300]}\n\n"
+                    f"CEO에게 오류 원인과 해결 방안을 간단히 보고해주세요."
+                )
                 return
 
             self.result_output = work_result.get("output", "")
@@ -316,6 +322,11 @@ class PipelineCJob:
                         f"Claude Code 재실행 실패: {work_result['error'][:500]}"
                     )
                     await self._save_to_db()
+                    await self._trigger_ai_reaction(
+                        f"[시스템] Pipeline C 재작업 `{self.job_id}` (프로젝트: {self.project})이 실패했습니다.\n"
+                        f"오류: {work_result['error'][:300]}\n\n"
+                        f"CEO에게 오류 원인과 해결 방안을 간단히 보고해주세요."
+                    )
                     return
 
                 self.result_output = work_result.get("output", "")
@@ -484,6 +495,11 @@ class PipelineCJob:
                 f"❌ **[배포 오류]** `{self.job_id}`\n{str(e)[:500]}"
             )
             await self._save_to_db()
+            await self._trigger_ai_reaction(
+                f"[시스템] Pipeline C 배포 작업 `{self.job_id}` (프로젝트: {self.project})에서 오류가 발생했습니다.\n"
+                f"오류: {str(e)[:300]}\n\n"
+                f"CEO에게 오류 원인과 해결 방안을 간단히 보고해주세요."
+            )
             return {"error": str(e)}
 
     async def reject(self, reason: str = "") -> dict:
@@ -521,11 +537,11 @@ class PipelineCJob:
         """
         escaped = shlex.quote(instruction)
 
+        # 항상 새 session-id 발급 ("Session ID already in use" 충돌 근본 방지)
+        self.claude_session_id = str(uuid.uuid4())
         if continue_session:
-            claude_cmd = f"claude -p --output-format text -c {escaped}"
+            claude_cmd = f"claude -p --output-format text --session-id {self.claude_session_id} -c {escaped}"
         else:
-            # 매 실행마다 새 session-id 발급 ("Session ID already in use" 충돌 방지)
-            self.claude_session_id = str(uuid.uuid4())
             claude_cmd = (
                 f"claude -p --output-format text "
                 f"--session-id {self.claude_session_id} "
@@ -632,11 +648,11 @@ class PipelineCJob:
         """직접 실행 폴백 (분리 실행 불가 시)."""
         escaped = shlex.quote(instruction)
 
+        # 항상 새 session-id 발급 ("Session ID already in use" 충돌 근본 방지)
+        self.claude_session_id = str(uuid.uuid4())
         if continue_session:
-            claude_cmd = f"claude -p --output-format text -c {escaped}"
+            claude_cmd = f"claude -p --output-format text --session-id {self.claude_session_id} -c {escaped}"
         else:
-            # 매 실행마다 새 session-id 발급 ("Session ID already in use" 충돌 방지)
-            self.claude_session_id = str(uuid.uuid4())
             claude_cmd = (
                 f"claude -p --output-format text "
                 f"--session-id {self.claude_session_id} "
