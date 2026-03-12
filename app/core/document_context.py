@@ -19,8 +19,8 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # ── 환경 설정 ────────────────────────────────────────────────────────
-FULL_INSERT_MAX_TOKENS = int(os.getenv("DOCUMENT_FULL_INSERT_MAX_TOKENS", "30000"))
-CHUNK_MAX_TOKENS = int(os.getenv("DOCUMENT_CHUNK_MAX_TOKENS", "6000"))
+FULL_INSERT_MAX_TOKENS = int(os.getenv("DOCUMENT_FULL_INSERT_MAX_TOKENS", "60000"))
+CHUNK_MAX_TOKENS = int(os.getenv("DOCUMENT_CHUNK_MAX_TOKENS", "15000"))
 
 # 지원 텍스트 확장자
 TEXT_EXTENSIONS = frozenset({
@@ -43,7 +43,7 @@ def estimate_tokens(text: str) -> int:
 
 def extract_file_contents(
     attachments: List[Dict[str, Any]],
-    max_read_bytes: int = 200_000,
+    max_read_bytes: int = 500_000,
 ) -> List[Dict[str, Any]]:
     """
     첨부파일 목록에서 파일 내용을 추출.
@@ -109,7 +109,7 @@ def extract_file_contents(
     return results
 
 
-def _extract_pdf(file_path: str, max_bytes: int = 200_000) -> str:
+def _extract_pdf(file_path: str, max_bytes: int = 500_000) -> str:
     """PDF 텍스트 추출 (pymupdf 우선, pdfplumber 폴백)."""
     # pymupdf (fitz)
     try:
@@ -204,8 +204,11 @@ def build_ephemeral_document_layer(
             parts.append(content)
         else:
             # 분할 모드: 앞뒤만 삽입
-            from app.core.token_utils import CHARS_PER_TOKEN
-            char_limit = CHUNK_MAX_TOKENS * CHARS_PER_TOKEN  # 토큰→문자 역변환
+            # 코드 파일(ASCII 위주)은 chars_per_token≈3, 한국어 문서는 2
+            _ext = f.get("ext", "")
+            _code_exts = {".py",".js",".ts",".tsx",".jsx",".go",".rs",".java",".c",".cpp",".h",".rb",".php",".swift",".kt",".sql",".sh",".css",".html",".xml",".json",".yaml",".yml",".toml",".ini",".conf",".cfg",".env"}
+            _cpt = 3 if _ext in _code_exts else 2
+            char_limit = CHUNK_MAX_TOKENS * _cpt  # 토큰→문자 역변환
             if len(content) <= char_limit * 2:
                 parts.append(content)
             else:
