@@ -17,8 +17,8 @@ from typing import Dict
 PROJECT_MAP: Dict[str, Dict[str, str]] = {
     "KIS":   {"server": "211.188.51.113", "workdir": "/root/webapp",          "lang": "python"},
     "GO100": {"server": "211.188.51.113", "workdir": "/root/go100",           "lang": "python"},
-    "SF":    {"server": "116.120.58.155", "workdir": "/data/shortflow",       "lang": "python"},
-    "NTV2":  {"server": "116.120.58.155", "workdir": "/srv/newtalk-v2",       "lang": "php"},
+    "SF":    {"server": "114.207.244.86", "port": "7916", "workdir": "/data/shortflow",       "lang": "python"},
+    "NTV2":  {"server": "114.207.244.86", "port": "7916", "workdir": "/home/danharoo/www", "lang": "php", "workdir_v2": "/srv/newtalk-v2"},
     "AADS":  {"server": "host.docker.internal", "workdir": "/root/aads/aads-server", "lang": "python"},
 }
 
@@ -43,6 +43,6 @@ def get_server_by_number(server_num: str) -> dict:
     _SERVER_NUM_MAP = {
         "68": {"server": "host.docker.internal", "workdir": "/root/aads/aads-server"},
         "211": {"server": "211.188.51.113", "workdir": "/root/webapp"},
-        "114": {"server": "116.120.58.155", "workdir": "/data/shortflow"},
+        "114": {"server": "114.207.244.86", "port": "7916", "workdir": "/data/shortflow"},
     }
     return _SERVER_NUM_MAP.get(server_num, {"server": "", "workdir": "/root"})

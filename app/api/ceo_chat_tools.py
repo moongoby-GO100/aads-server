@@ -684,6 +684,7 @@ async def tool_list_remote_dir(
 
     server = mapping["server"]
     workdir = mapping["workdir"]
+    ssh_port = mapping.get("port", "22")
     max_depth = min(max(1, max_depth), _SSH_MAX_DEPTH)
 
     # 보안 검증
@@ -706,6 +707,7 @@ async def tool_list_remote_dir(
     try:
         proc = await asyncio.create_subprocess_exec(
             "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+            "-p", ssh_port,
             f"root@{server}", find_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -757,6 +759,7 @@ async def tool_read_remote_file(project: str, file_path: str) -> str:
 
     server = mapping["server"]
     workdir = mapping["workdir"]
+    ssh_port = mapping.get("port", "22")
 
     # 보안 검증
     err = _validate_ssh_path(file_path, workdir)
@@ -769,6 +772,7 @@ async def tool_read_remote_file(project: str, file_path: str) -> str:
     try:
         proc = await asyncio.create_subprocess_exec(
             "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+            "-p", ssh_port,
             f"root@{server}", f"cat {shlex.quote(resolved)}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -842,6 +846,7 @@ async def tool_write_remote_file(project: str, file_path: str, content: str, bac
 
     server = mapping["server"]
     workdir = mapping["workdir"]
+    ssh_port = mapping.get("port", "22")
 
     # 크기 제한
     content_bytes = content.encode("utf-8")
@@ -873,6 +878,7 @@ async def tool_write_remote_file(project: str, file_path: str, content: str, bac
             )
             proc = await asyncio.create_subprocess_exec(
                 "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                "-p", ssh_port,
                 f"root@{server}", backup_cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -884,6 +890,7 @@ async def tool_write_remote_file(project: str, file_path: str, content: str, bac
         mkdir_and_cat = f"mkdir -p {shlex.quote(pdirname(resolved))} && cat > {shlex.quote(resolved)}"
         proc = await asyncio.create_subprocess_exec(
             "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+            "-p", ssh_port,
             f"root@{server}", mkdir_and_cat,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
@@ -1046,6 +1053,7 @@ async def tool_run_remote_command(project: str, command: str) -> str:
 
     server = mapping["server"]
     workdir = mapping["workdir"]
+    ssh_port = mapping.get("port", "22")
 
     # 실행: workdir에서 명령 수행
     full_cmd = f"cd {shlex.quote(workdir)} && {command}"
@@ -1053,6 +1061,7 @@ async def tool_run_remote_command(project: str, command: str) -> str:
     try:
         proc = await asyncio.create_subprocess_exec(
             "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+            "-p", ssh_port,
             f"root@{server}", full_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
