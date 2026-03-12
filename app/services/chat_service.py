@@ -66,8 +66,72 @@ async def with_heartbeat(
 # 핵심: 생성 태스크(producer)와 SSE 전송(consumer)을 asyncio.Queue로 분리.
 # 클라이언트 disconnect → consumer만 중단, producer는 독립적으로 계속 실행.
 _active_bg_tasks: Dict[str, _heartbeat_asyncio.Task] = {}
+# 스트리밍 중간 상태 추적: session_id → {content, tool_count, last_tool, updated_at}
+_streaming_state: Dict[str, Dict[str, Any]] = {}
 
 _SENTINEL = object()  # Queue 종료 신호
+
+import time as _bg_time
+
+
+async def _interim_save_streaming(session_id: str, state: Dict[str, Any]) -> None:
+    """백그라운드 생성 중 중간 상태를 DB에 저장 (세션 이동 후 돌아왔을 때 보이도록)."""
+    try:
+        content = state.get("content", "")
+        tool_count = state.get("tool_count", 0)
+        last_tool = state.get("last_tool", "")
+        # 스트리밍 중임을 나타내는 마커 + 현재 진행상황
+        streaming_note = f"\n\n⏳ _생성 중... (도구 {tool_count}회 호출{', 최근: ' + last_tool if last_tool else ''})_"
+        display_content = (content + streaming_note) if content else f"⏳ _AI가 응답을 생성 중입니다... (도구 {tool_count}회 호출 중)_"
+
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            # streaming placeholder 메시지가 있으면 UPDATE, 없으면 INSERT
+            existing = await conn.fetchval(
+                "SELECT id FROM chat_messages WHERE session_id = $1 AND role = 'assistant' AND intent = 'streaming_placeholder' ORDER BY created_at DESC LIMIT 1",
+                uuid.UUID(session_id),
+            )
+            if existing:
+                await conn.execute(
+                    "UPDATE chat_messages SET content = $1, edited_at = NOW() WHERE id = $2",
+                    display_content, existing,
+                )
+            else:
+                await conn.execute(
+                    """INSERT INTO chat_messages (session_id, role, content, intent, model_used)
+                       VALUES ($1, 'assistant', $2, 'streaming_placeholder', 'streaming')""",
+                    uuid.UUID(session_id), display_content,
+                )
+                await conn.execute(
+                    "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
+                    uuid.UUID(session_id),
+                )
+        logger.info(f"interim_save session={session_id[:8]} tools={tool_count} content_len={len(content)}")
+    except Exception as e:
+        logger.warning(f"interim_save_failed session={session_id[:8]}: {e}")
+
+
+async def _delete_streaming_placeholder(session_id: str) -> None:
+    """스트리밍 완료 후 placeholder 메시지 삭제 (최종 응답이 별도로 저장되므로)."""
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            count = await conn.fetchval(
+                "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder'",
+                uuid.UUID(session_id),
+            )
+            if count and count > 0:
+                await conn.execute(
+                    "DELETE FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder'",
+                    uuid.UUID(session_id),
+                )
+                await conn.execute(
+                    "UPDATE chat_sessions SET message_count = GREATEST(message_count - $1, 0), updated_at = NOW() WHERE id = $2",
+                    count, uuid.UUID(session_id),
+                )
+                logger.info(f"placeholder_deleted session={session_id[:8]} count={count}")
+    except Exception as e:
+        logger.warning(f"delete_placeholder_failed session={session_id[:8]}: {e}")
 
 
 async def with_background_completion(
@@ -80,21 +144,56 @@ async def with_background_completion(
     1. Producer task: gen을 소비하여 Queue에 chunk를 넣음 (독립 태스크)
     2. Consumer (이 generator): Queue에서 읽어 yield (SSE 전달)
     3. 클라이언트 disconnect → consumer만 중단, producer는 계속 실행 → DB 저장 완료
+    4. 클라이언트 disconnect 후 10초마다 중간 결과를 DB에 저장 (세션 돌아왔을 때 보임)
     """
-    # maxsize=0 (무제한): 클라이언트 disconnect 시 consumer가 죽어도
-    # producer의 queue.put()이 block되지 않아 LLM 생성이 끝까지 완료됨.
-    # 일반 응답은 수십KB 수준이므로 메모리 문제 없음.
     queue: _heartbeat_asyncio.Queue = _heartbeat_asyncio.Queue(maxsize=0)
+    _client_gone = False
+
+    # 스트리밍 상태 초기화
+    state: Dict[str, Any] = {"content": "", "tool_count": 0, "last_tool": "", "last_save": _bg_time.monotonic()}
+    _streaming_state[session_id] = state
 
     async def _producer():
+        nonlocal _client_gone
         try:
             async for chunk in gen:
                 await queue.put(chunk)
-        except Exception as e:
-            logger.warning(f"bg_producer_error session={session_id}: {e}")
+                # SSE 이벤트 파싱하여 상태 추적
+                if 'data: {' in chunk:
+                    try:
+                        _d = json.loads(chunk[chunk.index('{'):chunk.rstrip().rindex('}') + 1])
+                        _t = _d.get("type", "")
+                        if _t == "delta":
+                            state["content"] += _d.get("content", "")
+                        elif _t == "tool_use":
+                            state["tool_count"] += 1
+                            state["last_tool"] = _d.get("tool_name", "")
+                        elif _t == "tool_result":
+                            state["last_tool"] = _d.get("tool_name", "")
+                    except Exception:
+                        pass
+
+                # 클라이언트 disconnect 후 15초마다 중간 저장
+                if _client_gone:
+                    now = _bg_time.monotonic()
+                    if now - state["last_save"] > 15:
+                        state["last_save"] = now
+                        await _interim_save_streaming(session_id, state)
+        except BaseException as e:
+            # BaseException: CancelledError, GeneratorExit 등 모두 잡음
+            logger.warning(f"bg_producer_error session={session_id}: {type(e).__name__}: {e}")
         finally:
-            await queue.put(_SENTINEL)
+            try:
+                await queue.put(_SENTINEL)
+            except Exception:
+                pass
             _active_bg_tasks.pop(session_id, None)
+            _streaming_state.pop(session_id, None)
+            # 스트리밍 완료 → placeholder 삭제 (최종 응답이 generator 내부에서 저장됨)
+            try:
+                await _delete_streaming_placeholder(session_id)
+            except Exception as del_err:
+                logger.warning(f"bg_producer_placeholder_delete_err session={session_id}: {del_err}")
             logger.info(f"bg_producer_done session={session_id}")
 
     # 기존 태스크가 있으면 취소 후 교체
@@ -107,7 +206,6 @@ async def with_background_completion(
     _active_bg_tasks[session_id] = task
 
     # Consumer: Queue에서 읽어서 yield — 클라이언트 disconnect 시 자연스럽게 종료
-    # Producer는 독립 태스크이므로 계속 실행됨
     try:
         while True:
             item = await queue.get()
@@ -115,17 +213,34 @@ async def with_background_completion(
                 break
             yield item
     except (GeneratorExit, _heartbeat_asyncio.CancelledError):
-        logger.info(f"client_disconnected session={session_id} — producer continues in background")
+        _client_gone = True
+        # 즉시 중간 저장 (돌아왔을 때 바로 보이도록)
+        _heartbeat_asyncio.create_task(_interim_save_streaming(session_id, state))
+        logger.info(f"client_disconnected session={session_id} — producer continues in background, interim save triggered")
 
 
 def get_active_bg_tasks() -> Dict[str, bool]:
     """현재 백그라운드 진행 중인 세션 목록 (health check / 디버그용).
     AADS-CRITICAL-FIX #4: 완료된 태스크 자동 정리."""
-    # 완료된 태스크 제거
     done_sids = [sid for sid, task in _active_bg_tasks.items() if task.done()]
     for sid in done_sids:
         _active_bg_tasks.pop(sid, None)
     return {sid: not task.done() for sid, task in _active_bg_tasks.items()}
+
+
+def get_streaming_status(session_id: str) -> Optional[Dict[str, Any]]:
+    """특정 세션의 스트리밍 상태 반환 (프론트엔드 폴링용)."""
+    if session_id in _streaming_state:
+        s = _streaming_state[session_id]
+        return {
+            "is_streaming": True,
+            "content_length": len(s.get("content", "")),
+            "tool_count": s.get("tool_count", 0),
+            "last_tool": s.get("last_tool", ""),
+        }
+    if session_id in _active_bg_tasks and not _active_bg_tasks[session_id].done():
+        return {"is_streaming": True, "content_length": 0, "tool_count": 0, "last_tool": ""}
+    return None
 
 
 # AADS-186C: Langfuse 트레이스 (optional — graceful degradation)

@@ -152,6 +152,15 @@ async def send_message(req: MessageSendRequest):
     )
 
 
+@router.get("/chat/sessions/{session_id}/streaming-status", tags=["chat-session"])
+async def get_streaming_status(session_id: UUID):
+    """세션의 AI 응답 생성 상태 조회 (세션 이동 후 돌아왔을 때 '생성 중' 표시용)."""
+    status = svc.get_streaming_status(str(session_id))
+    if status:
+        return status
+    return {"is_streaming": False}
+
+
 @router.put("/chat/messages/{message_id}/bookmark", response_model=MessageOut, tags=["chat-message"])
 async def toggle_bookmark(message_id: UUID):
     """북마크 토글."""
