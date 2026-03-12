@@ -338,13 +338,27 @@ def _query_mysql_sync(project: str, q: str, config: Dict[str, str]) -> List[Dict
         conn.close()
 
 
-async def _query_mysql(project: str, q: str) -> List[Dict[str, Any]]:
-    """MySQL 쿼리 실행 (async wrapper)."""
-    config = _get_project_db_config(project)
-    if not config or not config["database"]:
-        raise ValueError(f"프로젝트 {project} DB 설정 없음")
+async def _query_mysql(project: str, q: str, db_name: Optional[str] = None) -> List[Dict[str, Any]]:
+    """MySQL 쿼리 실행 (async wrapper). db_name으로 DB 오버라이드 가능."""
+    # NTV2에서 autoda(V1 DB) 접근 시 → SF 터널(port 3306, 호스트 MariaDB) 경유
+    tunnel_project = project
+    if project == "NTV2" and db_name and db_name.lower() == "autoda":
+        tunnel_project = "SF"
+        config = _get_project_db_config("SF")
+        if config:
+            config = dict(config)
+            config["database"] = db_name
+        else:
+            raise ValueError("SF DB 설정 없음 (NTV2 V1 autoda 접근용)")
+    else:
+        config = _get_project_db_config(project)
+        if not config or not config["database"]:
+            raise ValueError(f"프로젝트 {project} DB 설정 없음")
+        if db_name:
+            config = dict(config)
+            config["database"] = db_name
 
-    return await asyncio.to_thread(_query_mysql_sync, project, q, config)
+    return await asyncio.to_thread(_query_mysql_sync, tunnel_project, q, config)
 
 
 # ─── H1: 셧다운 시 SSH 터널/PG 풀 정리 ────────────────────────────────────────
@@ -408,7 +422,7 @@ async def query_project_database(
         if db_type == "postgresql":
             result_rows = await _query_postgresql(project, q)
         else:
-            result_rows = await _query_mysql(resolved, q)
+            result_rows = await _query_mysql(resolved, q, db_name=db_name)
 
         result_rows = _mask_sensitive_values(result_rows)
         columns = list(result_rows[0].keys()) if result_rows else []

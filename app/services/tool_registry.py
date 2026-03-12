@@ -393,7 +393,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 },
                 "db_name": {
                     "type": "string",
-                    "description": "DB 이름 (미지정 시 프로젝트 메인 DB 사용)",
+                    "description": "DB 이름 (미지정 시 프로젝트 메인 DB 사용). NTV2 V1 DB 조회 시: project=NTV2, db_name=autoda",
                 },
             },
             "required": ["project", "query"],
@@ -402,6 +402,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"project": "KIS", "query": "SELECT count(*) FROM users"},
             {"project": "KIS", "query": "SELECT id, username, created_at FROM users ORDER BY created_at DESC LIMIT 10"},
             {"project": "KIS", "query": "SELECT symbol, side, qty, price, status FROM auto_trade_orders WHERE created_at > now() - interval '1 day' ORDER BY created_at DESC", "limit": 50},
+            {"project": "NTV2", "query": "SHOW TABLES", "db_name": "autoda"},
         ],
     },
     "list_project_databases": {
