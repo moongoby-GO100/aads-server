@@ -599,17 +599,6 @@ class PipelineCJob:
 
         escaped = shlex.quote(instruction)
 
-        # 항상 새 session-id 발급 ("Session ID already in use" 충돌 근본 방지)
-        self.claude_session_id = str(uuid.uuid4())
-        if continue_session:
-            claude_cmd = f"claude -p --output-format text --session-id {self.claude_session_id} -c {escaped}"
-        else:
-            claude_cmd = (
-                f"claude -p --output-format text "
-                f"--session-id {self.claude_session_id} "
-                f"{escaped}"
-            )
-
         # API 키 주입 (OAuth 만료 대비)
         api_key_setup = (
             "source ~/.claude/api_keys.env 2>/dev/null; "
@@ -622,18 +611,42 @@ class PipelineCJob:
         pid_file = f"/tmp/pipeline_c_{self.job_id}.pid"
         done_file = f"/tmp/pipeline_c_{self.job_id}.done"
 
-        # base64로 명령어 인코딩하여 쉘 이스케이프 문제 회피
-        encoded_cmd = base64.b64encode(f'{claude_cmd} > {out_file} 2> {err_file}; echo $? > {done_file}'.encode()).decode()
-        detach_cmd = (
-            f"{api_key_setup}"
-            f"cd {shlex.quote(self.workdir)} && "
-            f"nohup bash -c \"$(echo {encoded_cmd} | base64 -d)\" "
-            f"> /dev/null 2>&1 & echo $!"
-        )
-
         try:
-            # Step 1: 분리 실행 시작
-            pid_output = await self._ssh_command(detach_cmd, timeout=15)
+            # Step 1: 분리 실행 시작 — 매 시도마다 새 session-id + 이전 프로세스 kill
+            # SSH 타임아웃 시 nohup 프로세스가 원격에서 살아있을 수 있으므로
+            # 재시도 전 반드시 이전 프로세스 kill + 새 UUID 발급
+            pid_output = None
+            for _detach_attempt in range(3):
+                # 매 시도마다 새 session-id 발급 (재시도 시 충돌 방지)
+                self.claude_session_id = str(uuid.uuid4())
+                if continue_session:
+                    claude_cmd = f"claude -p --output-format text --session-id {self.claude_session_id} -c {escaped}"
+                else:
+                    claude_cmd = (
+                        f"claude -p --output-format text "
+                        f"--session-id {self.claude_session_id} "
+                        f"{escaped}"
+                    )
+                encoded_cmd = base64.b64encode(
+                    f'{claude_cmd} > {out_file} 2> {err_file}; echo $? > {done_file}'.encode()
+                ).decode()
+                detach_cmd = (
+                    f"{api_key_setup}"
+                    f"cd {shlex.quote(self.workdir)} && "
+                    f"nohup bash -c \"$(echo {encoded_cmd} | base64 -d)\" "
+                    f"> /dev/null 2>&1 & echo $!"
+                )
+                # retries=1: nohup 명령은 재시도 금지 (내부에서 직접 재시도 관리)
+                pid_output = await self._ssh_command(detach_cmd, timeout=15, retries=1)
+                if pid_output.strip().isdigit():
+                    break  # 성공
+                # 실패 시: 이전 시도에서 살아있을 수 있는 프로세스 kill 후 재시도
+                logger.warning(
+                    f"pipeline_c detach_attempt={_detach_attempt+1}/3 failed: {pid_output[:100]}, "
+                    f"killing existing + retrying with new session-id"
+                )
+                await self._kill_existing_claude_process(context=f"detach_retry_{_detach_attempt+1}")
+                await asyncio.sleep(2)
             remote_pid = pid_output.strip()
             if not remote_pid.isdigit():
                 # 분리 실행 실패 시 직접 실행으로 폴백
