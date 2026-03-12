@@ -20,6 +20,9 @@ _DEFER_LOADING: Dict[str, bool] = {
     "health_check": False,
     "get_all_service_status": False,
     "check_directive_status": False,
+    "check_task_status": False,           # 작업 모니터 — 상시 로드
+    "read_task_logs": False,              # 작업 로그 — 상시 로드
+    "terminate_task": False,              # 작업 강제종료 — 상시 로드
     "read_remote_file": False,           # 코드 분석 1순위 — 상시 로드
     "query_database": False,             # DB 조회 2순위 — 상시 로드
     "query_project_database": False,     # 프로젝트 DB 조회 — 상시 로드
@@ -145,8 +148,9 @@ TOOL_CATEGORY_GUIDE = """\
 # 이 매핑에 있는 인텐트는 반드시 해당 도구가 호출되어야 한다.
 INTENT_REQUIRED_TOOLS: Dict[str, list] = {
     # Tier 1: 반드시 해당 도구 호출 필요
-    "task_query":         ["check_directive_status"],
-    "status_check":       ["check_directive_status", "get_all_service_status"],
+    "task_query":         ["check_directive_status", "check_task_status"],
+    "task_terminate":     ["terminate_task"],
+    "status_check":       ["check_directive_status", "check_task_status", "get_all_service_status"],
     "health_check":       ["health_check"],
     "all_service_status": ["get_all_service_status"],
     "cost_report":        ["cost_report"],
@@ -1368,6 +1372,50 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "defer_loading": True,
     },
     # ── AADS-188C Phase 2: 메타 도구 (Orchestrator) ────────────────────────
+    "check_task_status": {
+        "name": "check_task_status",
+        "description": (
+            "현재 활성 중이거나 최근 완료된 Pipeline B/C 작업 목록 조회. "
+            "'지금 작업 어떻게 돼?', '에이전트 뭐 하고 있어?', '작업 상태', '진행 상황' 등에 사용."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    "read_task_logs": {
+        "name": "read_task_logs",
+        "description": (
+            "특정 작업(task_id)의 실시간 로그 조회. 도구 실행, 출력, 에러 등 상세 기록. "
+            "'그 작업 로그 보여줘', '에이전트 로그', '무슨 작업하고 있는지 자세히'에 사용."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "조회할 작업 ID (예: agent-abc12345, pc-1234567890-abcdef)"},
+                "last_n": {"type": "integer", "description": "최근 N줄 (기본 30, 최대 100)"},
+                "log_type": {"type": "string", "description": "로그 타입 필터: info, command, output, error, phase_change (생략 시 전체)"},
+            },
+            "required": ["task_id"],
+        },
+    },
+    "terminate_task": {
+        "name": "terminate_task",
+        "description": (
+            "스톨되거나 문제 있는 작업(에이전트/클로드봇)을 강제 종료. "
+            "Pipeline C는 원격 프로세스 kill + DB 상태 변경, Pipeline B는 DB 상태 변경. "
+            "'그 작업 중단해', '에이전트 종료시켜', '멈춰있는거 죽여', '다시 시작하려면 먼저 종료'에 사용."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "종료할 작업 ID (예: agent-abc12345, pc-1234567890-abcdef)"},
+                "reason": {"type": "string", "description": "종료 사유 (선택, 기본='AI 판단에 의한 강제 종료')"},
+            },
+            "required": ["task_id"],
+        },
+    },
     "check_directive_status": {
         "name": "check_directive_status",
         "description": (
@@ -1680,7 +1728,7 @@ _GROUPS: Dict[str, List[str]] = {
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
     "browser": ["read_remote_file", "list_remote_dir", "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_fill", "browser_tab_list"],
     # AADS-188C Phase 2: 메타 도구 그룹 (Orchestrator)
-    "meta": ["check_directive_status", "delegate_to_agent", "delegate_to_research", "spawn_subagent", "spawn_parallel_subagents"],
+    "meta": ["check_directive_status", "check_task_status", "read_task_logs", "terminate_task", "delegate_to_agent", "delegate_to_research", "spawn_subagent", "spawn_parallel_subagents"],
     # AADS-186E-1: 크롤링 도구 그룹
     "crawl": ["jina_read", "crawl4ai_fetch", "deep_crawl"],
     # AADS-186E-2: 메모리 도구 그룹

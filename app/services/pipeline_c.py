@@ -131,6 +131,13 @@ class PipelineCJob:
         self.logs.append(entry)
         self.phase = phase
         logger.info(f"pipeline_c | job={self.job_id} phase={phase} cycle={self.cycle} | {message[:200]}")
+        # 실시간 로그 발행 (fire-and-forget)
+        try:
+            from app.services.task_logger import emit_task_log
+            log_type = "phase_change" if phase in ("claude_code_work","ai_review","revision","awaiting_approval","deploying","verifying","done","error") else "info"
+            asyncio.ensure_future(emit_task_log(self.job_id, log_type, message[:500], phase))
+        except Exception:
+            pass
 
     # ─── 채팅방 메시지 삽입 ──────────────────────────────────────────────────
 
@@ -220,6 +227,12 @@ class PipelineCJob:
         """run()의 실제 본체 — 프로젝트 락 안에서 실행."""
         try:
             await self._save_to_db()
+            # 작업 시작 이벤트
+            try:
+                from app.services.task_logger import emit_task_started
+                await emit_task_started(self.job_id, self.project, self.instruction[:100], "pipeline_c", self.chat_session_id)
+            except Exception:
+                pass
 
             # Phase 1: Claude Code로 작업 수행
             self._log("claude_code_work", f"Claude Code에 작업 지시 중: {self.instruction[:100]}")
@@ -839,6 +852,13 @@ class PipelineCJob:
                     (self.git_diff or "")[:10000],
                     self.review_feedback or "",
                 )
+            # 작업 완료/실패 이벤트
+            if self.status in ("done", "error"):
+                try:
+                    from app.services.task_logger import emit_task_completed
+                    await emit_task_completed(self.job_id, self.status, self.review_feedback or self.error_msg or "")
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"pipeline_c_save_db_error job={self.job_id}: {e}")
 

@@ -94,6 +94,7 @@ class AutonomousExecutor:
         messages: List[Dict[str, Any]],
         model: str = "claude-sonnet",
         system_prompt: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
         자율 도구 루프.
@@ -223,6 +224,13 @@ class AutonomousExecutor:
                     "iterations": iteration,
                     "total_cost": total_cost,
                 })
+                if task_id:
+                    try:
+                        from app.services.task_logger import emit_task_log, emit_task_completed
+                        await emit_task_log(task_id, "info", f"작업 완료 ({iteration}회 반복, ${total_cost:.4f})", "done")
+                        await emit_task_completed(task_id, "done", f"{iteration}회 반복 완료")
+                    except Exception:
+                        pass
                 # 에이전트 작업 완료 → 발견사항 메모리 자동 기록 (AADS-186E Task4)
                 try:
                     from app.core.memory_recall import save_observation
@@ -259,6 +267,14 @@ class AutonomousExecutor:
                 tool_input = tc["input"]
                 tool_id = tc["id"]
 
+                # 실시간 로그 발행
+                if task_id:
+                    try:
+                        from app.services.task_logger import emit_task_log
+                        await emit_task_log(task_id, "command", f"🔍 {tool_name} 실행 중...", f"iteration_{iteration}")
+                    except Exception:
+                        pass
+
                 # 위험 도구 확인
                 if tool_name in _DANGEROUS_TOOLS:
                     yield _sse("confirm_required", {
@@ -279,6 +295,13 @@ class AutonomousExecutor:
                             "summary": str(tool_result_content)[:300],
                             "iteration": iteration,
                         })
+                        # 도구 결과 로그
+                        if task_id:
+                            try:
+                                from app.services.task_logger import emit_task_log
+                                await emit_task_log(task_id, "output", f"✅ {tool_name}: {str(tool_result_content)[:200]}", f"iteration_{iteration}")
+                            except Exception:
+                                pass
                     except asyncio.TimeoutError:
                         tool_result_content = json.dumps({"error": "timeout", "tool": tool_name})
                         logger.warning(f"autonomous_executor tool timeout: {tool_name}")

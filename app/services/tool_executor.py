@@ -136,6 +136,10 @@ class ToolExecutor:
             "pipeline_c_approve":     self._pipeline_c_approve,
             # 첨부파일 재읽기
             "read_uploaded_file":     self._read_uploaded_file,
+            # 작업 모니터
+            "check_task_status":      self._check_task_status,
+            "read_task_logs":         self._read_task_logs,
+            "terminate_task":         self._terminate_task,
         }
         fn = dispatch.get(tool_name)
         if fn is None:
@@ -1075,6 +1079,133 @@ class ToolExecutor:
 
         return results
 
+    async def _check_task_status(self, inp: Dict[str, Any]) -> Any:
+        """활성/최근 작업 목록 조회 (Pipeline B/C)."""
+        try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                # Pipeline C
+                pc_rows = await conn.fetch(
+                    """
+                    SELECT job_id AS task_id, project, instruction AS title,
+                           'pipeline_c' AS pipeline, phase, status, created_at
+                    FROM pipeline_jobs
+                    WHERE status IN ('running','awaiting_approval','queued')
+                       OR updated_at > NOW() - interval '1 hour'
+                    ORDER BY created_at DESC LIMIT 10
+                    """
+                )
+                # Pipeline B
+                pb_rows = await conn.fetch(
+                    """
+                    SELECT task_id, project, title,
+                           'pipeline_b' AS pipeline, status AS phase, status, created_at
+                    FROM directive_lifecycle
+                    WHERE executor = 'autonomous_executor'
+                      AND (status = 'in_progress' OR completed_at > NOW() - interval '1 hour')
+                    ORDER BY created_at DESC LIMIT 10
+                    """
+                )
+            tasks = []
+            for r in list(pc_rows) + list(pb_rows):
+                tasks.append({
+                    "task_id": r["task_id"],
+                    "project": r["project"] or "",
+                    "title": (r["title"] or "")[:150],
+                    "pipeline": r["pipeline"],
+                    "phase": r["phase"] or "",
+                    "status": r["status"] or "",
+                })
+            # stall 감지
+            from app.services.task_logger import get_stalled_tasks
+            stalled = get_stalled_tasks(300)
+            return {"tasks": tasks, "stalled_tasks": stalled, "count": len(tasks)}
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _read_task_logs(self, inp: Dict[str, Any]) -> Any:
+        """특정 작업의 최근 로그 조회."""
+        task_id = inp.get("task_id", "")
+        if not task_id:
+            return {"error": "task_id 필수"}
+        last_n = min(inp.get("last_n", 30), 100)
+        log_type = inp.get("log_type", "")
+        try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                if log_type:
+                    rows = await conn.fetch(
+                        "SELECT log_type, content, phase, created_at FROM task_logs "
+                        "WHERE task_id = $1 AND log_type = $2 ORDER BY created_at DESC LIMIT $3",
+                        task_id, log_type, last_n,
+                    )
+                else:
+                    rows = await conn.fetch(
+                        "SELECT log_type, content, phase, created_at FROM task_logs "
+                        "WHERE task_id = $1 ORDER BY created_at DESC LIMIT $2",
+                        task_id, last_n,
+                    )
+            logs = [
+                {"type": r["log_type"], "content": r["content"], "phase": r["phase"] or "", "at": r["created_at"].isoformat()}
+                for r in reversed(rows)
+            ]
+            return {"task_id": task_id, "logs": logs, "count": len(logs)}
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _terminate_task(self, inp: Dict[str, Any]) -> Any:
+        """스톨된 작업을 강제 종료. Pipeline C는 원격 PID kill, Pipeline B는 DB 상태 변경."""
+        task_id = inp.get("task_id", "")
+        reason = inp.get("reason", "AI 판단에 의한 강제 종료")
+        if not task_id:
+            return {"error": "task_id 필수"}
+        try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                # Pipeline C (pipeline_jobs)
+                row = await conn.fetchrow(
+                    "SELECT job_id, status, phase, project FROM pipeline_jobs WHERE job_id = $1",
+                    task_id,
+                )
+                if row:
+                    if row["status"] in ("done", "error", "rejected"):
+                        return {"task_id": task_id, "result": "already_finished", "status": row["status"]}
+                    await conn.execute(
+                        "UPDATE pipeline_jobs SET status='error', phase='error', "
+                        "review_feedback=COALESCE(review_feedback,'')||$2, updated_at=now() WHERE job_id=$1",
+                        task_id, f" | 강제종료: {reason}",
+                    )
+                    # Note: 원격 프로세스는 Watchdog이 다음 사이클에서 정리
+                    from app.services.task_logger import emit_task_log, emit_task_completed
+                    asyncio.create_task(emit_task_log(task_id, "error", f"강제 종료: {reason}", phase="terminated"))
+                    asyncio.create_task(emit_task_completed(task_id, "error"))
+                    return {"task_id": task_id, "result": "terminated", "pipeline": "C", "project": row["project"]}
+
+                # Pipeline B (directive_lifecycle)
+                row2 = await conn.fetchrow(
+                    "SELECT id, status, project FROM directive_lifecycle WHERE id = $1",
+                    task_id,
+                )
+                if row2:
+                    if row2["status"] in ("done", "error", "failed"):
+                        return {"task_id": task_id, "result": "already_finished", "status": row2["status"]}
+                    await conn.execute(
+                        "UPDATE directive_lifecycle SET status='error', "
+                        "result=COALESCE(result,'')||$2, updated_at=now() WHERE id=$1",
+                        task_id, f" | 강제종료: {reason}",
+                    )
+                    from app.services.task_logger import emit_task_log, emit_task_completed
+                    asyncio.create_task(emit_task_log(task_id, "error", f"강제 종료: {reason}", phase="terminated"))
+                    asyncio.create_task(emit_task_completed(task_id, "error"))
+                    return {"task_id": task_id, "result": "terminated", "pipeline": "B", "project": row2["project"] or "AADS"}
+
+                return {"error": f"task_id '{task_id}' not found in pipeline_jobs or directive_lifecycle"}
+        except Exception as e:
+            return {"error": str(e)}
+
     async def _delegate_to_agent(self, inp: Dict[str, Any]) -> Any:
         """
         복잡한 다단계 작업을 AutonomousExecutor에 위임.
@@ -1158,12 +1289,20 @@ class ToolExecutor:
                     f"주어진 작업을 도구를 활용하여 완료하세요. 완료 후 결과를 명확하게 요약하세요."
                 )
 
+                # 작업 시작 이벤트
+                try:
+                    from app.services.task_logger import emit_task_started
+                    await emit_task_started(task_id, project, task[:100], "pipeline_b", session_id)
+                except Exception:
+                    pass
+
                 async for sse_event in executor.execute_task(
                     task_description=task,
                     tools=tools,
                     messages=messages,
                     model="claude-sonnet",
                     system_prompt=system_prompt,
+                    task_id=task_id,
                 ):
                     try:
                         data = _json.loads(sse_event.replace("data: ", "").strip())

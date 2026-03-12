@@ -27,6 +27,7 @@ from app.api.strategy import router as strategy_router
 from app.api.plans import router as plans_router
 from app.api.debate_logs import router as debate_logs_router
 from app.api.artifacts import router as artifacts_router
+from app.api.task_monitor import router as task_monitor_router
 from app.routers.chat import router as chat_v2_router
 from app.config import settings
 from app.graph.builder import compile_graph
@@ -153,6 +154,14 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"memory_gc_job_error: {e}")
         scheduler.add_job(_run_memory_gc, CronTrigger(hour=3, minute=0, timezone="UTC"), id="memory_gc")
+        # task_logs GC: 매일 03:30 UTC — 7일 이상 된 로그 삭제
+        async def _run_task_logs_gc():
+            try:
+                from app.services.task_logger import gc_old_logs
+                await gc_old_logs(7)
+            except Exception as e:
+                logger.warning(f"task_logs_gc_error: {e}")
+        scheduler.add_job(_run_task_logs_gc, CronTrigger(hour=3, minute=30, timezone="UTC"), id="task_logs_gc")
         scheduler.start()
         await healer_init()
         # AADS-190: 스케줄러 인스턴스를 동적 스케줄 도구에 공유
@@ -295,6 +304,7 @@ app.include_router(plans_router, prefix="/api/v1", tags=["plans"])
 app.include_router(debate_logs_router, prefix="/api/v1", tags=["debate-logs"])
 app.include_router(artifacts_router, prefix="/api/v1", tags=["artifacts"])
 app.include_router(briefing_router, prefix="/api/v1", tags=["briefing"])
+app.include_router(task_monitor_router, prefix="/api/v1", tags=["task-monitor"])
 app.include_router(chat_v2_router, prefix="/api/v1", tags=["chat-v2"])
 # AADS-186C: FastAPI-MCP 마운트 (graceful — MCP_ENABLED=false 시 비활성)
 setup_mcp(app)
