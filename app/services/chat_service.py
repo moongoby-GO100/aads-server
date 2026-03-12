@@ -81,7 +81,10 @@ async def with_background_completion(
     2. Consumer (이 generator): Queue에서 읽어 yield (SSE 전달)
     3. 클라이언트 disconnect → consumer만 중단, producer는 계속 실행 → DB 저장 완료
     """
-    queue: _heartbeat_asyncio.Queue = _heartbeat_asyncio.Queue(maxsize=64)
+    # maxsize=0 (무제한): 클라이언트 disconnect 시 consumer가 죽어도
+    # producer의 queue.put()이 block되지 않아 LLM 생성이 끝까지 완료됨.
+    # 일반 응답은 수십KB 수준이므로 메모리 문제 없음.
+    queue: _heartbeat_asyncio.Queue = _heartbeat_asyncio.Queue(maxsize=0)
 
     async def _producer():
         try:
