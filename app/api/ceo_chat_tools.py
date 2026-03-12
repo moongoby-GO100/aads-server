@@ -20,6 +20,8 @@ import logging
 import re
 import shlex
 import subprocess
+import uuid
+from datetime import datetime
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -1517,6 +1519,47 @@ async def tool_browser_screenshot() -> str:
         return f"[스크린샷 PNG — base64]\nURL: {page.url}\nDATA:{b64}"
     except Exception as e:
         return f"[ERROR] 스크린샷 실패: {e}"
+
+
+async def tool_capture_screenshot(url: str, full_page: bool = False) -> str:
+    """URL 스크린샷을 캡처하여 이미지 URL 반환 (채팅에 인라인 표시용)."""
+    if not url:
+        return "[ERROR] url 필수"
+    blocked = _browser_domain_ok(url)
+    if blocked:
+        return blocked
+    ctx, err = await _acquire_pw_context()
+    if err:
+        return err
+    try:
+        page = await ctx.new_page()
+        try:
+            await page.goto(url, wait_until="networkidle", timeout=30_000)
+            await asyncio.sleep(1)  # 렌더링 대기
+            data = await page.screenshot(full_page=full_page, timeout=_BROWSER_TIMEOUT_MS)
+        finally:
+            await page.close()
+        import base64 as b64mod
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"screenshot_{ts}_{uuid.uuid4().hex[:6]}.png"
+        # 호스트에 SSH로 저장 (컨테이너→호스트, 볼륨 마운트 없어도 동작)
+        b64_data = b64mod.b64encode(data).decode("ascii")
+        save_cmd = (
+            f"mkdir -p /var/www/aads_exports/screenshots && "
+            f"echo '{b64_data}' | base64 -d > /var/www/aads_exports/screenshots/{filename}"
+        )
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+            "root@host.docker.internal", save_cmd,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=30)
+        if proc.returncode != 0:
+            return f"[ERROR] 호스트에 스크린샷 저장 실패 (exit={proc.returncode})"
+        image_url = f"https://aads.newtalk.kr/screenshots/{filename}"
+        return f"스크린샷 저장 완료.\n\n![{url} 스크린샷]({image_url})"
+    except Exception as e:
+        return f"[ERROR] 스크린샷 캡처 실패: {e}"
 
 
 async def tool_browser_click(selector: str) -> str:

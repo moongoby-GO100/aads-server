@@ -23,6 +23,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "check_task_status": False,           # 작업 모니터 — 상시 로드
     "read_task_logs": False,              # 작업 로그 — 상시 로드
     "terminate_task": False,              # 작업 강제종료 — 상시 로드
+    "capture_screenshot": False,          # 스크린샷 캡처 — 상시 로드
     "read_remote_file": False,           # 코드 분석 1순위 — 상시 로드
     "query_database": False,             # DB 조회 2순위 — 상시 로드
     "query_project_database": False,     # 프로젝트 DB 조회 — 상시 로드
@@ -150,6 +151,7 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
     # Tier 1: 반드시 해당 도구 호출 필요
     "task_query":         ["check_directive_status", "check_task_status"],
     "task_terminate":     ["terminate_task"],
+    "screenshot":         ["capture_screenshot"],
     "status_check":       ["check_directive_status", "check_task_status", "get_all_service_status"],
     "health_check":       ["health_check"],
     "all_service_status": ["get_all_service_status"],
@@ -1323,6 +1325,29 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "required": [],
         },
     },
+    "capture_screenshot": {
+        "name": "capture_screenshot",
+        "description": (
+            "웹 페이지 스크린샷을 캡처하여 채팅에 이미지로 표시한다. "
+            "URL을 입력하면 해당 페이지를 캡처하여 이미지 링크를 반환한다. "
+            "CEO에게 화면을 보여줘야 할 때 사용. 허용 도메인: *.newtalk.kr, localhost. "
+            "'스크린샷 찍어줘', '화면 보여줘', '페이지 캡처해서 보여줘'에 사용."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "캡처할 웹 페이지 URL (예: https://aads.newtalk.kr/)",
+                },
+                "full_page": {
+                    "type": "boolean",
+                    "description": "전체 페이지 캡처 여부 (기본: false, 뷰포트만)",
+                },
+            },
+            "required": ["url"],
+        },
+    },
     "browser_click": {
         "name": "browser_click",
         "description": "현재 페이지에서 CSS selector로 요소를 클릭한다.",
@@ -1726,7 +1751,7 @@ _GROUPS: Dict[str, List[str]] = {
     "search": ["web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
-    "browser": ["read_remote_file", "list_remote_dir", "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_fill", "browser_tab_list"],
+    "browser": ["read_remote_file", "list_remote_dir", "browser_navigate", "browser_snapshot", "browser_screenshot", "capture_screenshot", "browser_click", "browser_fill", "browser_tab_list"],
     # AADS-188C Phase 2: 메타 도구 그룹 (Orchestrator)
     "meta": ["check_directive_status", "check_task_status", "read_task_logs", "terminate_task", "delegate_to_agent", "delegate_to_research", "spawn_subagent", "spawn_parallel_subagents"],
     # AADS-186E-1: 크롤링 도구 그룹

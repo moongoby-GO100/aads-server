@@ -28,7 +28,7 @@ _AADS_API_BASE = os.getenv("AADS_API_BASE", "http://localhost:8080")
 _MAX_RESULT_CHARS = 25000  # ~8000 토큰 (지시서 기준 25,000 허용)
 _TOOL_TIMEOUT = 20.0  # 일반 도구 타임아웃
 _LONG_TOOL_TIMEOUT = 120.0  # 서브에이전트/딥리서치 등 장시간 도구
-_LONG_TOOLS = frozenset({"spawn_subagent", "spawn_parallel_subagents", "deep_research", "delegate_to_agent", "delegate_to_research"})
+_LONG_TOOLS = frozenset({"spawn_subagent", "spawn_parallel_subagents", "deep_research", "delegate_to_agent", "delegate_to_research", "capture_screenshot"})
 
 
 class ToolExecutor:
@@ -140,6 +140,7 @@ class ToolExecutor:
             "check_task_status":      self._check_task_status,
             "read_task_logs":         self._read_task_logs,
             "terminate_task":         self._terminate_task,
+            "capture_screenshot":     self._capture_screenshot,
         }
         fn = dispatch.get(tool_name)
         if fn is None:
@@ -1154,6 +1155,15 @@ class ToolExecutor:
             return {"task_id": task_id, "logs": logs, "count": len(logs)}
         except Exception as e:
             return {"error": str(e)}
+
+    async def _capture_screenshot(self, inp: Dict[str, Any]) -> Any:
+        """URL 스크린샷 캡처 후 이미지 URL 반환."""
+        url = inp.get("url", "")
+        if not url:
+            return {"error": "url 필수"}
+        full_page = inp.get("full_page", False)
+        from app.api.ceo_chat_tools import tool_capture_screenshot
+        return await tool_capture_screenshot(url, full_page)
 
     async def _terminate_task(self, inp: Dict[str, Any]) -> Any:
         """스톨된 작업을 강제 종료. Pipeline C는 원격 PID kill, Pipeline B는 DB 상태 변경."""
