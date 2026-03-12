@@ -243,7 +243,9 @@ class PipelineCJob:
                 f"Claude Code에 작업을 전달합니다. 완료까지 최대 {_CLAUDE_TIMEOUT // 60}분 소요됩니다."
             )
 
-            work_result = await self._run_claude_code(self.instruction, continue_session=False)
+            # AADS-1864: 검증 체크리스트 자동 삽입
+            enriched_instruction = _append_verification_checklist(self.instruction, self.project)
+            work_result = await self._run_claude_code(enriched_instruction, continue_session=False)
 
             if work_result.get("error"):
                 self._log("error", f"Claude Code 실행 오류: {work_result['error']}")
@@ -308,6 +310,9 @@ class PipelineCJob:
                     f"피드백: {review['feedback'][:500]}\n\n"
                     f"Claude Code에 수정을 재지시합니다... ({self.cycle}/{self.max_cycles})"
                 )
+
+                # QA FAIL 후 재지시: 이전 프로세스 완전 종료 확인 + 추가 대기
+                await asyncio.sleep(5)
 
                 work_result = await self._run_claude_code(
                     f"이전 작업에 대한 검수 피드백입니다. 수정해주세요:\n{review['feedback']}",
@@ -479,6 +484,22 @@ class PipelineCJob:
                 f"**결과: {verify['summary']}**"
             )
 
+            # AADS-1864: 매니저 AI에 QA 자동 보고
+            try:
+                from app.api.qa import auto_report_on_completion
+                await auto_report_on_completion(
+                    job_id=self.job_id,
+                    project=self.project,
+                    summary=verify.get("summary", ""),
+                    checklist_results={
+                        "service_running": "OK" in verify.get("health", ""),
+                        "error_log_zero": not verify.get("errors"),
+                        "health_check": verify.get("summary", "").startswith("OK"),
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"pipeline_c_qa_auto_report_error job={self.job_id}: {e}")
+
             return {
                 "status": "done",
                 "summary": verify["summary"],
@@ -523,6 +544,42 @@ class PipelineCJob:
 
         return {"status": "rejected", "message": "변경사항이 원복되었습니다."}
 
+    # ─── Claude Code 프로세스 종료 헬퍼 ─────────────────────────────────────
+
+    async def _kill_existing_claude_process(self, context: str = "pre-run"):
+        """기존 Claude Code 프로세스 완전 종료 후 대기.
+        동일 프로젝트 workdir에서 실행 중인 claude 프로세스를 찾아 강제 종료."""
+        try:
+            # 해당 workdir에서 실행 중인 claude 프로세스 PID 조회
+            ps_cmd = (
+                f"ps aux | grep -E 'claude.*session-id' | grep -v grep | "
+                f"grep {shlex.quote(self.workdir)} | awk '{{print $2}}'"
+            )
+            ps_out = await self._ssh_command(ps_cmd, timeout=10, retries=1)
+            pids = [p.strip() for p in ps_out.strip().split("\n") if p.strip().isdigit()]
+
+            if not pids:
+                # workdir 매칭이 안 되면 nohup 임시파일 기반으로 조회
+                ps_cmd2 = (
+                    f"ps aux | grep -E 'claude.*session-id' | grep -v grep | awk '{{print $2}}'"
+                )
+                ps_out2 = await self._ssh_command(ps_cmd2, timeout=10, retries=1)
+                pids = [p.strip() for p in ps_out2.strip().split("\n") if p.strip().isdigit()]
+
+            if pids:
+                logger.warning(
+                    f"pipeline_c_kill_existing job={self.job_id} context={context} "
+                    f"killing {len(pids)} claude processes: {pids}"
+                )
+                await self._ssh_command(f"kill -9 {' '.join(pids)}", timeout=10, retries=1)
+                # 프로세스 완전 종료 대기
+                await asyncio.sleep(3)
+                logger.info(f"pipeline_c_kill_existing job={self.job_id} done, waited 3s")
+            else:
+                logger.debug(f"pipeline_c_kill_existing job={self.job_id} no existing claude processes found")
+        except Exception as e:
+            logger.warning(f"pipeline_c_kill_existing error job={self.job_id}: {e}")
+
     # ─── Claude Code CLI 실행 ───────────────────────────────────────────────
 
     async def _run_claude_code(self, instruction: str, continue_session: bool) -> dict:
@@ -535,6 +592,11 @@ class PipelineCJob:
         3. 완료되면 출력 파일을 읽어서 반환
         → SSH 연결 끊김, 30분 타임아웃 문제 없음 (최대 2시간 대기)
         """
+        # 이전 Claude Code 프로세스 완전 종료 (Session ID 충돌 방지)
+        await self._kill_existing_claude_process(
+            context="revision" if continue_session else "initial"
+        )
+
         escaped = shlex.quote(instruction)
 
         # 항상 새 session-id 발급 ("Session ID already in use" 충돌 근본 방지)
@@ -646,6 +708,9 @@ class PipelineCJob:
 
     async def _run_claude_code_direct(self, instruction: str, continue_session: bool) -> dict:
         """직접 실행 폴백 (분리 실행 불가 시)."""
+        # 이전 Claude Code 프로세스 완전 종료 (Session ID 충돌 방지)
+        await self._kill_existing_claude_process(context="direct-fallback")
+
         escaped = shlex.quote(instruction)
 
         # 항상 새 session-id 발급 ("Session ID already in use" 충돌 근본 방지)
@@ -918,6 +983,29 @@ async def _find_recent_session(project: str) -> str:
     except Exception as e:
         logger.warning(f"_find_recent_session error for {project}: {e}")
         return ""
+
+
+# ─── AADS-1864: 검증 체크리스트 ──────────────────────────────────────────────
+
+_VERIFICATION_CHECKLIST_TEMPLATE = """
+
+## 검증 체크리스트 (완료 필수 조건)
+- [ ] 구현 목표: (무엇을 구현했는지 1줄 요약)
+- [ ] 검증 방법: (curl 명령 또는 URL 또는 UI 셀렉터)
+- [ ] 완료 기준: (어떤 응답/결과가 나와야 완료인지)
+- [ ] 실패 기준: (이런 결과면 실패로 간주)
+- [ ] 서비스 재시작 확인: docker ps → container running
+- [ ] 에러 로그 0건: docker logs --since 60s | grep -i error
+
+RESULT 파일에 위 체크리스트 항목별 실행 결과를 반드시 포함하세요.
+"""
+
+
+def _append_verification_checklist(instruction: str, project: str) -> str:
+    """지시서 끝에 검증 체크리스트 자동 append (AADS-1864)."""
+    if "검증 체크리스트" in instruction:
+        return instruction  # 이미 포함된 경우 중복 방지
+    return instruction.rstrip() + _VERIFICATION_CHECKLIST_TEMPLATE
 
 
 # ─── 외부 API 함수 ────────────────────────────────────────────────────────────

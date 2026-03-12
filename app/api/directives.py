@@ -70,6 +70,17 @@ def build_directive_content(req: DirectiveSubmitRequest) -> str:
 
     review_val = "true" if req.review_required else "false"
 
+    # AADS-1864: 검증 체크리스트 섹션 (지시서 포맷 v2.1)
+    verification_section = f"""
+verification_checklist:
+  - goal: "{req.description.strip().split(chr(10))[0][:100]}"
+  - method: "curl 또는 UI 검증 (구현 시 구체화)"
+  - pass_criteria: "정상 응답 또는 기대 동작 확인"
+  - fail_criteria: "에러 응답 또는 기대 동작 미충족"
+  - service_running: "docker ps → container running 확인"
+  - error_log_zero: "docker logs --since 60s | grep -i error → 0건"
+"""
+
     return f"""task_id: {req.task_id}
 project: {req.project}
 priority: {req.priority}
@@ -89,7 +100,7 @@ effort: {req.effort}
 review_required: {review_val}
 parallel_group: null
 subagents: null
-"""
+{verification_section}"""
 
 
 @router.post("/directives/submit", response_model=DirectiveSubmitResponse)

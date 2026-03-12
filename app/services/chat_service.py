@@ -636,12 +636,14 @@ async def trigger_ai_reaction(
     from app.services.tool_executor import current_chat_session_id
     current_chat_session_id.set(session_id)
 
-    # 시스템 메시지에 도구 사용 금지 지시 추가 (무한 루프 방지)
+    # 시스템 메시지에 작업 재실행 도구만 금지 (무한 루프 방지), 진단 도구는 허용
     safe_message = (
         system_message + "\n\n"
-        "⚠️ 이 메시지는 자동 트리거입니다. "
-        "delegate_to_agent, pipeline_c_start 등 백그라운드 작업 도구를 호출하지 마세요. "
-        "텍스트 응답만 해주세요."
+        "⚠️ 이 메시지는 자동 트리거입니다.\n"
+        "**금지 도구** (무한 루프 방지): delegate_to_agent, pipeline_c_start, spawn_subagent, spawn_parallel_subagents\n"
+        "**허용 도구** (진단·조치용): run_remote_command, check_task_status, read_task_logs, "
+        "terminate_task, health_check, query_database, read_remote_file 등 읽기/진단 도구는 자유롭게 사용하세요.\n"
+        "오류가 발생했으면 도구로 원인을 직접 확인하고, 가능한 한 자율적으로 조치하세요."
     )
 
     async def _consume_stream():

@@ -268,7 +268,8 @@ CEO 지시를 실행으로 옮기는 도구. 요청 시 즉시 사용.
 소스만으로 부족한 렌더링 결과·실제 UI 상태 확인 시에만 사용.
 - browser_navigate: URL 접속 (aads.newtalk.kr 등)
 - browser_snapshot: 페이지 UI 구조 텍스트 추출
-- browser_screenshot: PNG 스크린샷
+- browser_screenshot: PNG 스크린샷 (AI 분석용, base64)
+- **capture_screenshot**: URL 스크린샷 캡처 → **채팅에 이미지로 표시** (CEO에게 보여줄 때 사용)
 - browser_click / browser_fill: UI 조작 (테스트/재현)
 - browser_tab_list: 열린 탭 목록
 </tools_available>"""
@@ -343,7 +344,8 @@ LAYER1_RESPONSE_GUIDELINES = """<response_guidelines>
 
 ### Step 4: UI/렌더링 확인 (Tier 6 — 소스 분석 후 보조)
 - "여기 확인해" → **먼저** read_remote_file/code_explorer → **부족하면** browser_snapshot
-- "스크린샷", "화면 봐줘" → browser_navigate + browser_screenshot
+- "스크린샷", "화면 봐줘", "보여줘" → **capture_screenshot** (CEO에게 이미지 표시)
+- AI 내부 분석용 스크린샷 → browser_navigate + browser_screenshot (base64, CEO에게 안 보임)
 
 ### 액션 실행 (요청 즉시)
 | 요청 유형 | 도구 |
