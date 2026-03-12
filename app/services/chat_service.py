@@ -430,7 +430,17 @@ async def _save_message(
             "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
             session_id,
         )
-    return _row_to_dict(row)
+    result = _row_to_dict(row)
+    # 비동기 임베딩 생성 (실패해도 메시지 저장에 영향 없음)
+    try:
+        import asyncio as _emb_asyncio
+        from app.services.chat_embedding_service import embed_and_store_message
+        _emb_asyncio.create_task(
+            embed_and_store_message(get_pool(), str(result["id"]), content)
+        )
+    except Exception:
+        pass  # 임베딩 실패는 무시
+    return result
 
 
 async def _save_and_update_session(
@@ -605,8 +615,9 @@ async def send_message_stream(
                     content, session_id, get_pool(),
                 )
 
-        # 사용자 메시지 저장
-        await _save_message(conn, sid, "user", content, attachments=attachments or [])
+        # 사용자 메시지 저장 (trigger 메시지는 intent로 구분)
+        user_intent = "system_trigger" if intent_override else None
+        await _save_message(conn, sid, "user", content, intent=user_intent, attachments=attachments or [])
 
         # 2. 워크스페이스 정보 조회
         sp_row = await conn.fetchrow(

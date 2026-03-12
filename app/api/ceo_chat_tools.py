@@ -297,6 +297,46 @@ TOOL_DEFINITIONS: List[Dict] = [
             "required": ["job_id", "approved"],
         },
     },
+    {
+        "name": "search_chat_history",
+        "description": "과거 대화 내용을 키워드/시맨틱으로 검색. 컴팩션으로 사라진 오래된 대화도 DB 원문에서 찾아줌.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "검색 키워드 또는 자연어 질의 (한국어 가능)",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["keyword", "semantic"],
+                    "description": "검색 모드: keyword(FTS+LIKE), semantic(임베딩 유사도). 기본=keyword",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "특정 세션 ID (생략 시 전체 세션 검색)",
+                },
+                "date_from": {
+                    "type": "string",
+                    "description": "시작 날짜 (YYYY-MM-DD, 선택)",
+                },
+                "date_to": {
+                    "type": "string",
+                    "description": "종료 날짜 (YYYY-MM-DD, 선택)",
+                },
+                "role": {
+                    "type": "string",
+                    "enum": ["user", "assistant", "all"],
+                    "description": "발화자 필터 (기본=all)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "최대 결과 수 (1-30, 기본=10)",
+                },
+            },
+            "required": ["query"],
+        },
+    },
 ]
 
 # ─── SSH 원격 접근 상수 (중앙 설정에서 import, AADS-165) ──────────────────────
@@ -1437,6 +1477,125 @@ async def tool_browser_tab_list() -> str:
         return f"[ERROR] 탭 목록 조회 실패: {e}"
 
 
+# ─── 대화 히스토리 검색 ────────────────────────────────────────────────────────
+
+async def tool_search_chat_history(
+    query: str,
+    dsn: str,
+    mode: str = "keyword",
+    session_id: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    role: str = "all",
+    limit: int = 10,
+) -> str:
+    """과거 대화 검색 — keyword(FTS+LIKE) / semantic(임베딩 유사도)."""
+    if not query or not query.strip():
+        return "[ERROR] query 필수"
+    query = query.strip()
+    limit = max(1, min(30, limit))
+
+    # ── Semantic 모드 ──
+    if mode == "semantic":
+        try:
+            from app.services.chat_embedding_service import search_semantic
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            results = await search_semantic(pool, query, session_id or None, limit)
+            if not results:
+                return f"시맨틱 검색 '{query}' — 결과 없음 (임베딩 미생성 메시지가 많으면 backfill 필요)"
+            lines = [f"[시맨틱 검색] '{query}' — {len(results)}건"]
+            for r in results:
+                lines.append(
+                    f"\n📅 {r['created_at'][:16]} | {r['role']} | 유사도 {r['similarity']}"
+                    f" | 세션: {r['session_name']}"
+                    f"\n{r['content']}"
+                )
+            return "\n".join(lines)
+        except Exception as e:
+            return f"[ERROR] 시맨틱 검색 실패: {e}"
+
+    # ── Keyword 모드 (FTS → LIKE 폴백) ──
+    try:
+        conn = await asyncpg.connect(dsn, timeout=10)
+    except Exception as e:
+        return f"[ERROR] DB 연결 실패: {e}"
+
+    try:
+        # 필터 조건 구성
+        conditions = []
+        params: list = []
+        param_idx = 1
+
+        # FTS 조건
+        conditions.append(f"to_tsvector('simple', m.content) @@ plainto_tsquery('simple', ${param_idx})")
+        params.append(query)
+        param_idx += 1
+
+        if session_id:
+            conditions.append(f"m.session_id = ${param_idx}::uuid")
+            params.append(session_id)
+            param_idx += 1
+        if role and role != "all":
+            conditions.append(f"m.role = ${param_idx}")
+            params.append(role)
+            param_idx += 1
+        if date_from:
+            conditions.append(f"m.created_at >= ${param_idx}::date")
+            params.append(date_from)
+            param_idx += 1
+        if date_to:
+            conditions.append(f"m.created_at < (${param_idx}::date + interval '1 day')")
+            params.append(date_to)
+            param_idx += 1
+
+        where_clause = " AND ".join(conditions)
+        sql = f"""
+            SELECT m.id, m.role, m.content, m.created_at, s.title AS session_name
+            FROM chat_messages m
+            JOIN chat_sessions s ON s.id = m.session_id
+            WHERE {where_clause}
+            ORDER BY m.created_at DESC
+            LIMIT {limit}
+        """
+        rows = await conn.fetch(sql, *params)
+
+        # FTS 결과 0건 → LIKE 폴백
+        if not rows:
+            conditions[0] = f"m.content ILIKE ${1}"
+            params[0] = f"%{query}%"
+            where_clause = " AND ".join(conditions)
+            sql = f"""
+                SELECT m.id, m.role, m.content, m.created_at, s.title AS session_name
+                FROM chat_messages m
+                JOIN chat_sessions s ON s.id = m.session_id
+                WHERE {where_clause}
+                ORDER BY m.created_at DESC
+                LIMIT {limit}
+            """
+            rows = await conn.fetch(sql, *params)
+            search_type = "LIKE"
+        else:
+            search_type = "FTS"
+
+        if not rows:
+            return f"키워드 검색 '{query}' — 결과 없음"
+
+        lines = [f"[{search_type} 검색] '{query}' — {len(rows)}건"]
+        for r in rows:
+            ts = r["created_at"].strftime("%Y-%m-%d %H:%M")
+            content_preview = r["content"][:500].replace("\n", " ")
+            lines.append(
+                f"\n📅 {ts} | {r['role']} | 세션: {r['session_name']}"
+                f"\n{content_preview}"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        return f"[ERROR] 검색 실패: {e}"
+    finally:
+        await conn.close()
+
+
 # ─── 디스패처 ──────────────────────────────────────────────────────────────────
 
 async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session_id: str = "") -> str:
@@ -1504,6 +1663,18 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             params.get("job_id", ""),
             params.get("approved", True),
             params.get("reason", ""),
+        )
+    # ── 대화 히스토리 검색 ─────────────────────────────────────────────
+    elif name == "search_chat_history":
+        return await tool_search_chat_history(
+            query=params.get("query", ""),
+            dsn=dsn,
+            mode=params.get("mode", "keyword"),
+            session_id=params.get("session_id", ""),
+            date_from=params.get("date_from", ""),
+            date_to=params.get("date_to", ""),
+            role=params.get("role", "all"),
+            limit=params.get("limit", 10),
         )
     else:
         return f"[ERROR] 알 수 없는 도구: {name}"
