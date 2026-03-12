@@ -294,12 +294,16 @@ async def _stream_anthropic(
                     api_kwargs["tool_choice"] = {"type": "auto"}
                 elif intent_result.use_tools:
                     api_kwargs["tool_choice"] = {"type": "auto"}
-        # 1M context window beta — 항상 적용
-        _betas = ["context-1m-2025-08-07"]
+        # Beta features — extra_headers로 전달 (SDK 0.84+에서 betas 직접 파라미터 미지원)
+        _betas = []
         if thinking_config:
             api_kwargs["thinking"] = thinking_config
             _betas.append("interleaved-thinking-2025-05-14")
-        api_kwargs["betas"] = _betas
+        if _betas:
+            api_kwargs["extra_headers"] = {
+                **(api_kwargs.get("extra_headers") or {}),
+                "anthropic-beta": ",".join(_betas),
+            }
         # Extended Thinking + tool_choice="any" 비호환 — auto로 복귀
         if thinking_config and "tool_choice" in api_kwargs:
             del api_kwargs["tool_choice"]
