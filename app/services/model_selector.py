@@ -234,6 +234,9 @@ async def _stream_anthropic(
     _MAX_TOOL_TURNS = int(os.getenv("MAX_TOOL_TURNS", "20"))
     _TOOL_TURN_EXTEND = 10  # CEO 승인 시 추가 턴
     current_messages = list(messages)
+    # 방어: 마지막 메시지가 user가 아니면 Claude API "must end with user message" 에러 방지
+    if current_messages and current_messages[-1].get("role") != "user":
+        current_messages.append({"role": "user", "content": "계속해주세요."})
     tool_calls_made = []
     _consecutive_yellow = 0  # Yellow 등급 도구 연속 호출 카운터
     _YELLOW_TOOLS = {
