@@ -1418,6 +1418,7 @@ async def _watchdog_loop(interval: int):
         try:
             await asyncio.sleep(interval)
             await _check_stalled_jobs()
+            await _collect_orphan_results()
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -1475,3 +1476,97 @@ async def _check_stalled_jobs():
             if not job.logs or job.logs[-1].get("phase") != "stall_detected":
                 job._log("stall_detected", f"{stall_minutes}분 스톨 감지")
                 await job._save_to_db()
+
+
+async def _collect_orphan_results():
+    """
+    2분마다 실행: DB에서 error 상태인 최근 작업 중 원격 .done 파일이 존재하는 것을 수거.
+    서버 재시작으로 폴링이 죽었지만 원격 Claude Code는 완료된 경우를 처리.
+    """
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            # 최근 2시간 이내 error 처리된 작업 (서버 재시작으로 중단된 것만)
+            rows = await conn.fetch(
+                """
+                SELECT job_id, chat_session_id, project, review_feedback
+                FROM pipeline_jobs
+                WHERE status = 'error'
+                  AND review_feedback LIKE '%서버 재시작으로 중단%'
+                  AND updated_at > NOW() - INTERVAL '2 hours'
+                ORDER BY updated_at DESC LIMIT 5
+                """
+            )
+            if not rows:
+                return
+
+            for row in rows:
+                _jid = row["job_id"]
+                _proj = row["project"]
+                _conf = PROJECT_MAP.get(_proj.upper(), {})
+                _server = _conf.get("server", "")
+                _ssh_port = _conf.get("port", "22")
+                _done_file = f"/tmp/pipeline_c_{_jid}.done"
+                _out_file = f"/tmp/pipeline_c_{_jid}.out"
+
+                try:
+                    if _server and _server != "host.docker.internal":
+                        _cmd = f"ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -p {_ssh_port} root@{_server} 'cat {_done_file} 2>/dev/null'"
+                    else:
+                        _cmd = f"cat {_done_file} 2>/dev/null"
+                    _proc = await asyncio.create_subprocess_shell(
+                        _cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    )
+                    _stdout, _ = await asyncio.wait_for(_proc.communicate(), timeout=15)
+                    _exit_str = _stdout.decode("utf-8", errors="replace").strip()
+                    if not _exit_str:
+                        continue  # .done 파일 없음 = 아직 완료 안 됨
+
+                    # .done 존재 → 결과 수거
+                    if _server and _server != "host.docker.internal":
+                        _rcmd = f"ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -p {_ssh_port} root@{_server} 'tail -c 50000 {_out_file} 2>/dev/null'"
+                    else:
+                        _rcmd = f"tail -c 50000 {_out_file} 2>/dev/null"
+                    _rproc = await asyncio.create_subprocess_shell(
+                        _rcmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    )
+                    _rstdout, _ = await asyncio.wait_for(_rproc.communicate(), timeout=15)
+                    _result = _rstdout.decode("utf-8", errors="replace").strip()[:_MAX_OUTPUT_CHARS]
+                    _ok = _exit_str.strip() == "0"
+                    _st = "done" if _ok else "error"
+
+                    await conn.execute(
+                        "UPDATE pipeline_jobs SET status=$2, phase=$2, result_output=$3, review_feedback=COALESCE(review_feedback,'')||$4, updated_at=now() WHERE job_id=$1",
+                        _jid, _st, _result[:5000],
+                        f" | watchdog 결과수거: exit={_exit_str}",
+                    )
+
+                    _sid = row.get("chat_session_id")
+                    if _sid:
+                        _emoji = "✅" if _ok else "⚠️"
+                        await conn.execute(
+                            """INSERT INTO chat_messages (session_id,role,content,intent,cost,tokens_in,tokens_out,attachments,sources,tools_called)
+                            VALUES($1::uuid,'assistant',$2,'pipeline_c',0,0,0,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb)""",
+                            _sid,
+                            f"{_emoji} **[Pipeline C 결과 수거]** `{_jid}`\n프로젝트: **{_proj}** | exit={_exit_str}\n\n**결과:**\n{_result[:1500]}",
+                        )
+                        try:
+                            from app.services.chat_service import trigger_ai_reaction
+                            await trigger_ai_reaction(
+                                _sid,
+                                f"[시스템] Pipeline C 작업 `{_jid}` (프로젝트: {_proj})이 완료되었습니다. "
+                                f"결과: {_result[:500]}\n\n위 결과를 확인하고 필요한 후속 조치가 있으면 보고해주세요."
+                            )
+                        except Exception:
+                            pass
+
+                    logger.info(f"watchdog_orphan_collected: job={_jid} exit={_exit_str} output={len(_result)}자")
+
+                except asyncio.TimeoutError:
+                    pass  # SSH 타임아웃 — 다음 주기에 재시도
+                except Exception as _e:
+                    logger.debug(f"watchdog_orphan_check_error: job={_jid} err={_e}")
+    except Exception as e:
+        if "DB pool" not in str(e):
+            logger.debug(f"watchdog_orphan_collect_error: {e}")
