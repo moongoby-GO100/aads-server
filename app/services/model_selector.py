@@ -242,7 +242,7 @@ async def _stream_anthropic(
         "git_remote_create_branch", "deep_crawl", "deep_research",
         "spawn_subagent", "spawn_parallel_subagents",
     }
-    _YELLOW_CONSECUTIVE_LIMIT = 5
+    _YELLOW_CONSECUTIVE_LIMIT = 100  # 전체 턴 상한(100)과 동일 — 사실상 무제한
     _effective_max_turns = _MAX_TOOL_TURNS
     _turn = 0
 
@@ -294,9 +294,12 @@ async def _stream_anthropic(
                     api_kwargs["tool_choice"] = {"type": "auto"}
                 elif intent_result.use_tools:
                     api_kwargs["tool_choice"] = {"type": "auto"}
+        # 1M context window beta — 항상 적용
+        _betas = ["context-1m-2025-08-07"]
         if thinking_config:
             api_kwargs["thinking"] = thinking_config
-            api_kwargs["betas"] = ["interleaved-thinking-2025-05-14"]
+            _betas.append("interleaved-thinking-2025-05-14")
+        api_kwargs["betas"] = _betas
             # Extended Thinking + tool_choice="any" 비호환 — auto로 복귀
             if "tool_choice" in api_kwargs:
                 del api_kwargs["tool_choice"]
