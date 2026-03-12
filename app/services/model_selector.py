@@ -300,9 +300,9 @@ async def _stream_anthropic(
             api_kwargs["thinking"] = thinking_config
             _betas.append("interleaved-thinking-2025-05-14")
         api_kwargs["betas"] = _betas
-            # Extended Thinking + tool_choice="any" 비호환 — auto로 복귀
-            if "tool_choice" in api_kwargs:
-                del api_kwargs["tool_choice"]
+        # Extended Thinking + tool_choice="any" 비호환 — auto로 복귀
+        if thinking_config and "tool_choice" in api_kwargs:
+            del api_kwargs["tool_choice"]
 
         try:
             async with _anthropic.messages.stream(**api_kwargs) as stream:
