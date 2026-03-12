@@ -630,17 +630,18 @@ async def tool_fetch_url(url: str) -> str:
 
 # ─── SSH 원격 접근 도구 함수 (AADS-165) ──────────────────────────────────────────
 
-def _validate_ssh_path(raw_path: str, workdir: str) -> Optional[str]:
+def _validate_ssh_path(raw_path: str, workdir: str, extra_workdirs: Optional[List[str]] = None) -> Optional[str]:
     """SSH 경로 보안 검증. 위반 시 에러 문자열, 통과 시 None."""
     if not _SSH_PATH_WHITELIST.match(raw_path):
         return "[ERROR] 접근 거부: 경로에 허용되지 않는 문자가 포함되어 있습니다."
     if _SSH_SENSITIVE_PATTERNS.search(raw_path):
         return "[ERROR] 접근 거부: 민감한 파일 패턴이 감지되었습니다."
-    # WORKDIR 탈출 방지: .. resolve
+    # WORKDIR 탈출 방지: .. resolve (메인 + 추가 workdir 모두 허용)
     from posixpath import normpath, join as pjoin
+    allowed_dirs = [workdir] + (extra_workdirs or [])
     resolved = normpath(pjoin(workdir, raw_path))
-    if not resolved.startswith(workdir):
-        return f"[ERROR] 접근 거부: WORKDIR({workdir}) 바깥 경로 접근 불가."
+    if not any(resolved.startswith(d) for d in allowed_dirs):
+        return f"[ERROR] 접근 거부: 허용 경로({', '.join(allowed_dirs)}) 바깥 접근 불가."
     return None
 
 
@@ -685,11 +686,12 @@ async def tool_list_remote_dir(
     server = mapping["server"]
     workdir = mapping["workdir"]
     ssh_port = mapping.get("port", "22")
+    _extra = [mapping["workdir_v2"]] if "workdir_v2" in mapping else []
     max_depth = min(max(1, max_depth), _SSH_MAX_DEPTH)
 
     # 보안 검증
     if path:
-        err = _validate_ssh_path(path, workdir)
+        err = _validate_ssh_path(path, workdir, _extra)
         if err:
             return err
     if keyword and not _SSH_KEYWORD_WHITELIST.match(keyword):
@@ -760,9 +762,10 @@ async def tool_read_remote_file(project: str, file_path: str) -> str:
     server = mapping["server"]
     workdir = mapping["workdir"]
     ssh_port = mapping.get("port", "22")
+    _extra = [mapping["workdir_v2"]] if "workdir_v2" in mapping else []
 
     # 보안 검증
-    err = _validate_ssh_path(file_path, workdir)
+    err = _validate_ssh_path(file_path, workdir, _extra)
     if err:
         return err
 
@@ -847,6 +850,7 @@ async def tool_write_remote_file(project: str, file_path: str, content: str, bac
     server = mapping["server"]
     workdir = mapping["workdir"]
     ssh_port = mapping.get("port", "22")
+    _extra = [mapping["workdir_v2"]] if "workdir_v2" in mapping else []
 
     # 크기 제한
     content_bytes = content.encode("utf-8")
@@ -854,7 +858,7 @@ async def tool_write_remote_file(project: str, file_path: str, content: str, bac
         return f"[ERROR] 파일 크기 초과: {len(content_bytes):,} bytes > 1MB 제한"
 
     # 보안 검증 (읽기와 동일 경로 검증)
-    err = _validate_ssh_path(file_path, workdir)
+    err = _validate_ssh_path(file_path, workdir, _extra)
     if err:
         return err
 
