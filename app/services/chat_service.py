@@ -362,11 +362,12 @@ async def delete_session(session_id: str) -> bool:
 
 # ─── Message ──────────────────────────────────────────────────────────────────
 
-async def list_messages(session_id: str, limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
+async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort: str = "asc") -> List[Dict[str, Any]]:
     conn = await _get_conn()
     try:
+        order = "DESC" if sort == "desc" else "ASC"
         rows = await conn.fetch(
-            "SELECT * FROM chat_messages WHERE session_id = $1 ORDER BY created_at LIMIT $2 OFFSET $3",
+            f"SELECT * FROM chat_messages WHERE session_id = $1 ORDER BY created_at {order} LIMIT $2 OFFSET $3",
             uuid.UUID(session_id),
             limit,
             offset,
