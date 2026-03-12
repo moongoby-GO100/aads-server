@@ -127,7 +127,9 @@ async def _stream_litellm(
     messages: List[Dict[str, Any]],
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """LiteLLM 프록시를 통한 스트리밍."""
-    msgs = [{"role": "system", "content": system_prompt}] + messages
+    # messages에서 기존 system role 제거 후 새 system 프롬프트 추가
+    clean_msgs = [m for m in messages if m.get("role") != "system"]
+    msgs = [{"role": "system", "content": system_prompt}] + clean_msgs
 
     full_text = ""
     input_tokens = 0
@@ -233,7 +235,8 @@ async def _stream_anthropic(
     # Tool Use 루프 (최대 20회 — 무한 대화 지원)
     _MAX_TOOL_TURNS = int(os.getenv("MAX_TOOL_TURNS", "20"))
     _TOOL_TURN_EXTEND = 10  # CEO 승인 시 추가 턴
-    current_messages = list(messages)
+    # 방어: messages에서 role="system" 필터링 — Claude API는 system을 top-level 파라미터로만 허용
+    current_messages = [m for m in messages if m.get("role") != "system"]
     # 방어: 마지막 메시지가 user가 아니면 Claude API "must end with user message" 에러 방지
     if current_messages and current_messages[-1].get("role") != "user":
         current_messages.append({"role": "user", "content": "계속해주세요."})
