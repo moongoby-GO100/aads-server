@@ -1044,6 +1044,119 @@ async def reject_pipeline(job_id: str, reason: str = "") -> dict:
     return await job.reject(reason)
 
 
+async def cancel_pipeline(job_id: str) -> dict:
+    """파이프라인 강제 취소: 원격 Claude 프로세스 kill + 상태 error 전환."""
+    job = get_job(job_id)
+    killed_pids = []
+
+    # 메모리에 있으면 원격 프로세스 kill 시도
+    if job:
+        try:
+            # claude_session_id로 프로세스 찾아 kill
+            ps_out = await job._ssh_command(
+                f"ps aux | grep 'session-id {job.claude_session_id}' | grep -v grep | awk '{{print $2}}'",
+                timeout=10,
+            )
+            pids = [p.strip() for p in ps_out.strip().split("\n") if p.strip().isdigit()]
+            if pids:
+                await job._ssh_command(f"kill {' '.join(pids)}", timeout=10)
+                killed_pids = pids
+        except Exception as e:
+            logger.warning(f"cancel_pipeline kill error job={job_id}: {e}")
+
+        job.status = "error"
+        job.phase = "cancelled"
+        job.error_msg = "CEO/AI에 의해 강제 취소됨"
+        await job._save_to_db()
+        if job_id in _active_jobs:
+            del _active_jobs[job_id]
+
+        return {
+            "status": "cancelled",
+            "job_id": job_id,
+            "killed_pids": killed_pids,
+            "message": f"작업 취소 완료. Kill된 프로세스: {killed_pids or '없음'}",
+        }
+
+    # 메모리에 없으면 DB에서 조회 후 상태만 업데이트
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT project, status, phase FROM pipeline_jobs WHERE job_id = $1", job_id
+            )
+            if not row:
+                return {"error": f"작업을 찾을 수 없음: {job_id}"}
+            if row["status"] in ("done", "error") and row["phase"] == "cancelled":
+                return {"error": f"이미 취소된 작업: {job_id}"}
+
+            await conn.execute(
+                "UPDATE pipeline_jobs SET status='error', phase='cancelled', "
+                "review_feedback=COALESCE(review_feedback,'')||' | 강제취소', updated_at=now() "
+                "WHERE job_id=$1",
+                job_id,
+            )
+            return {
+                "status": "cancelled",
+                "job_id": job_id,
+                "killed_pids": [],
+                "message": f"DB 상태 취소 처리 완료 (메모리에 없어 프로세스 kill 미수행, 필요 시 수동 kill)",
+            }
+    except Exception as e:
+        return {"error": f"취소 실패: {e}"}
+
+
+async def retry_pipeline(job_id: str) -> dict:
+    """에러/취소된 파이프라인을 동일 지시로 재실행."""
+    # 먼저 메모리에서 찾기
+    job = get_job(job_id)
+    if job:
+        if job.status not in ("error", "done"):
+            return {"error": f"재실행 불가 — 현재 상태: {job.status}/{job.phase}. 먼저 cancel 필요."}
+        project = job.project
+        instruction = job.instruction
+        chat_session_id = job.chat_session_id
+        max_cycles = job.max_cycles
+        dsn = getattr(job, "dsn", "")
+        # 기존 작업 메모리 정리
+        if job_id in _active_jobs:
+            del _active_jobs[job_id]
+    else:
+        # DB에서 조회
+        try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT project, instruction, chat_session_id, max_cycles, status, phase FROM pipeline_jobs WHERE job_id = $1",
+                    job_id,
+                )
+                if not row:
+                    return {"error": f"작업을 찾을 수 없음: {job_id}"}
+                if row["status"] not in ("error", "done"):
+                    return {"error": f"재실행 불가 — 현재 상태: {row['status']}/{row['phase']}. 먼저 cancel 필요."}
+                project = row["project"]
+                instruction = row["instruction"]
+                chat_session_id = row["chat_session_id"] or ""
+                max_cycles = row["max_cycles"] or 3
+                dsn = ""
+        except Exception as e:
+            return {"error": f"DB 조회 실패: {e}"}
+
+    # 새 파이프라인 시작 (동일 지시)
+    result = await start_pipeline(
+        project=project,
+        instruction=instruction,
+        chat_session_id=chat_session_id,
+        max_cycles=max_cycles,
+        dsn=dsn,
+    )
+    result["retry_from"] = job_id
+    result["message"] = f"재실행 시작 (원본: {job_id}). 새 job_id: {result['job_id']}"
+    return result
+
+
 # ─── AADS 자기수정 복구: 재시작으로 중단된 작업 검출 + 완료 처리 ──────────────
 
 async def recover_interrupted_jobs():

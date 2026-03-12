@@ -298,6 +298,34 @@ TOOL_DEFINITIONS: List[Dict] = [
         },
     },
     {
+        "name": "pipeline_c_cancel",
+        "description": "에러나거나 멈춘 파이프라인C 작업을 강제 취소. 원격 Claude 프로세스도 자동 kill.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {
+                    "type": "string",
+                    "description": "취소할 파이프라인 작업 ID",
+                },
+            },
+            "required": ["job_id"],
+        },
+    },
+    {
+        "name": "pipeline_c_retry",
+        "description": "에러/취소된 파이프라인C 작업을 동일 지시로 재실행. 먼저 cancel 후 retry 권장.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {
+                    "type": "string",
+                    "description": "재실행할 파이프라인 작업 ID (에러/취소 상태여야 함)",
+                },
+            },
+            "required": ["job_id"],
+        },
+    },
+    {
         "name": "search_chat_history",
         "description": "과거 대화 내용을 키워드/시맨틱으로 검색. 컴팩션으로 사라진 오래된 대화도 DB 원문에서 찾아줌.",
         "input_schema": {
@@ -1239,6 +1267,40 @@ async def tool_pipeline_c_approve(job_id: str, approved: bool, reason: str) -> s
         return f"[Pipeline C 거부] {result.get('message', '변경사항 원복됨')}"
 
 
+async def tool_pipeline_c_cancel(job_id: str) -> str:
+    """파이프라인C 강제 취소."""
+    if not job_id:
+        return "[ERROR] job_id 필수"
+    from app.services.pipeline_c import cancel_pipeline
+    result = await cancel_pipeline(job_id)
+    if "error" in result:
+        return f"[ERROR] {result['error']}"
+    return (
+        f"[Pipeline C 취소 완료]\n"
+        f"Job: {job_id}\n"
+        f"Kill된 프로세스: {result.get('killed_pids', [])}\n"
+        f"{result.get('message', '')}"
+    )
+
+
+async def tool_pipeline_c_retry(job_id: str) -> str:
+    """에러/취소된 파이프라인C 재실행."""
+    if not job_id:
+        return "[ERROR] job_id 필수"
+    from app.services.pipeline_c import retry_pipeline
+    result = await retry_pipeline(job_id)
+    if "error" in result:
+        return f"[ERROR] {result['error']}"
+    return (
+        f"[Pipeline C 재실행]\n"
+        f"원본 Job: {job_id}\n"
+        f"새 Job: {result['job_id']}\n"
+        f"프로젝트: {result['project']}\n"
+        f"{result.get('message', '')}\n\n"
+        f"진행 확인: pipeline_c_status(job_id=\"{result['job_id']}\")"
+    )
+
+
 # ─── Browser 도구 함수 (AADS-159) ──────────────────────────────────────────────
 
 def _browser_domain_ok(url: str) -> Optional[str]:
@@ -1686,6 +1748,10 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             params.get("approved", True),
             params.get("reason", ""),
         )
+    elif name == "pipeline_c_cancel":
+        return await tool_pipeline_c_cancel(params.get("job_id", ""))
+    elif name == "pipeline_c_retry":
+        return await tool_pipeline_c_retry(params.get("job_id", ""))
     # ── 대화 히스토리 검색 ─────────────────────────────────────────────
     elif name == "search_chat_history":
         return await tool_search_chat_history(
