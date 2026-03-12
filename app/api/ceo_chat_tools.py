@@ -1017,7 +1017,7 @@ async def tool_run_remote_command(project: str, command: str) -> str:
     first_cmd = cmd_tokens[0] if cmd_tokens else ""
     cmd_allowed = False
     for allowed in _REMOTE_CMD_WHITELIST:
-        if first_cmd == allowed or command.startswith(allowed + " "):
+        if first_cmd == allowed or command.startswith(allowed + " ") or command == allowed:
             cmd_allowed = True
             break
     if not cmd_allowed:
@@ -1052,15 +1052,17 @@ async def tool_run_remote_command(project: str, command: str) -> str:
         else:
             return f"[ERROR] 파이프/체인 명령 차단 (보안): {command[:80]}"
 
-    # AADS 프로젝트: 로컬 직접 실행 (SSH 불필요)
+    # AADS 프로젝트: 호스트 OS SSH 실행 (컨테이너→호스트)
     if project == "AADS":
-        from app.core.project_config import PROJECT_MAP
-        # 컨테이너 내부 경로 사용 (호스트 /root/aads/aads-server/app → 컨테이너 /app/app)
-        workdir = "/app"
+        workdir = "/root/aads/aads-server"
         full_cmd = f"cd {shlex.quote(workdir)} && {command}"
         try:
-            proc = await asyncio.create_subprocess_shell(
-                full_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            proc = await asyncio.create_subprocess_exec(
+                "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                "root@host.docker.internal", full_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_SSH_CMD_TIMEOUT)
             out = stdout.decode("utf-8", errors="replace")
             err_out = stderr.decode("utf-8", errors="replace")
@@ -1074,9 +1076,9 @@ async def tool_run_remote_command(project: str, command: str) -> str:
             logger.info(f"run_remote_command OK | project=AADS cmd={command[:80]} exit={proc.returncode}")
             return "\n".join(result_parts)
         except asyncio.TimeoutError:
-            return f"[ERROR] 로컬 명령 타임아웃 ({_SSH_CMD_TIMEOUT}초)"
+            return f"[ERROR] AADS 호스트 명령 타임아웃 ({_SSH_CMD_TIMEOUT}초)"
         except Exception as e:
-            return f"[ERROR] 로컬 명령 실행 실패: {e}"
+            return f"[ERROR] AADS 호스트 명령 실행 실패: {e}"
 
     mapping = _PROJECT_SERVER_MAP.get(project)
     if not mapping:

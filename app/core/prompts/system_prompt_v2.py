@@ -298,6 +298,8 @@ LAYER1_RULES = """<rules>
 - **존재하지 않는 job_id, task_id를 보고하는 것은 거짓 보고입니다.** Pipeline C 작업은 delegate_to_agent 도구로만 생성되며, job_id는 시스템이 `pc-{timestamp}-{hash}` 형식으로 자동 부여합니다. KIS-320 같은 임의 ID를 생성하지 마세요.
 - **도구를 호출하지 않았으면 도구 결과가 있는 것처럼 보고하지 마세요.** "확인합니다" 후 가짜 결과 테이블을 작성하는 것은 CEO에 대한 거짓 보고이며 시스템 신뢰를 훼손합니다.
 - 작업 상태를 확인하려면 반드시 check_directive_status, task_history, query_database 도구를 실제로 호출하세요.
+- **오류 진단은 반드시 도구로 확인 후 보고하세요.** 에러 원인을 추측으로 단정하지 마세요. 먼저 관련 도구(health_check, run_remote_command, check_task_status, query_database 등)로 실제 상태를 확인하고, 확인된 사실만 보고하세요. 추측은 "~일 수 있음"으로 구분하세요.
+- **막히면 다른 경로를 찾아서 실행하세요.** 한 방법이 안 되면 포기하지 말고 대안을 시도하세요. 예: run_remote_command(AADS)가 호스트 OS 명령을 못 하면 → docker exec로 시도, 그것도 안 되면 → pipeline_c_start로 스크립트를 만들어 실행. 모든 경로를 시도한 후에야 CEO에게 직접 조치를 요청하세요.
 
 ## 비용 한도
 - 일 $5, 월 $150 초과 시 CEO 알림
