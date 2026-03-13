@@ -307,9 +307,11 @@ class ToolExecutor:
             return {"error": "project 필수: AADS, KIS, GO100, SF, NTV2 중 하나"}
         if not path:
             return {"error": "path 또는 file_path 필수"}
+        offset = int(inp.get("offset", 1) or 1)
+        limit = int(inp.get("limit", 2000) or 2000)
         try:
             from app.api.ceo_chat_tools import tool_read_remote_file
-            return await tool_read_remote_file(project, path)
+            return await tool_read_remote_file(project, path, offset=offset, limit=limit)
         except Exception as e:
             return {"error": str(e)}
 

@@ -68,13 +68,14 @@ def _compress_health_check(raw: str) -> str:
 
 
 def _compress_read_remote_file(raw: str) -> str:
-    """Keep first 80 + last 20 lines, omit the middle."""
+    """Keep file content as-is (offset/limit already applied server-side).
+    Only trim if exceeding 2000 lines (very unusual with limit=2000 default)."""
     lines = raw.splitlines()
-    if len(lines) <= 100:
+    if len(lines) <= 2000:
         return raw
-    head = lines[:80]
-    tail = lines[-20:]
-    omitted = len(lines) - 100
+    head = lines[:1800]
+    tail = lines[-200:]
+    omitted = len(lines) - 2000
     return "\n".join(head + [f"[...{omitted} lines omitted...]"] + tail)
 
 

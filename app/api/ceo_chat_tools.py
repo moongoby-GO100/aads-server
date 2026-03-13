@@ -221,7 +221,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "read_remote_file",
-        "description": "원격 서버의 파일 내용 읽기. 프로젝트명으로 서버·경로 자동 매핑.",
+        "description": "원격 서버의 파일 내용 읽기. 프로젝트명으로 서버·경로 자동 매핑. Claude Code의 Read tool과 동일한 offset/limit 지원.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -233,6 +233,16 @@ TOOL_DEFINITIONS: List[Dict] = [
                 "file_path": {
                     "type": "string",
                     "description": "WORKDIR 기준 상대 파일 경로 (예: src/main.py)",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "읽기 시작 줄 번호 (1부터 시작). 생략 시 처음부터.",
+                    "default": 1,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "읽을 최대 줄 수. 생략 시 2000줄 (Claude Code 동일).",
+                    "default": 2000,
                 },
             },
             "required": ["project", "file_path"],
@@ -765,14 +775,44 @@ async def tool_list_remote_dir(
         return f"[ERROR] SSH 접속 실패: {e}"
 
 
-async def tool_read_remote_file(project: str, file_path: str) -> str:
-    """원격 서버 파일 읽기 (읽기 전용, cat). AADS는 로컬 직접 읽기."""
+async def tool_read_remote_file(project: str, file_path: str, offset: int = 1, limit: int = 2000) -> str:
+    """원격 서버 파일 읽기 (Claude Code Read tool과 동일한 offset/limit 지원).
+
+    Args:
+        offset: 읽기 시작 줄 번호 (1부터, 기본 1)
+        limit: 읽을 최대 줄 수 (기본 2000, Claude Code 동일)
+    """
     project = project.upper()
+    offset = max(1, int(offset or 1))
+    limit = max(1, min(int(limit or 2000), 5000))  # 최대 5000줄
+
+    def _apply_line_range(content: str) -> tuple:
+        """offset/limit 적용 + 줄 번호 추가 (cat -n 형식). returns (result, total_lines)"""
+        lines = content.splitlines(keepends=True)
+        total = len(lines)
+        start_idx = offset - 1  # 0-based
+        end_idx = min(start_idx + limit, total)
+        selected = lines[start_idx:end_idx]
+
+        # Claude Code cat -n 형식: "     1\tcontent"
+        numbered = []
+        for i, line in enumerate(selected, start=offset):
+            numbered.append(f"{i:>6}\t{line.rstrip()}")
+        result = "\n".join(numbered)
+
+        meta_parts = []
+        if offset > 1:
+            meta_parts.append(f"offset={offset}")
+        if end_idx < total:
+            meta_parts.append(f"showing {end_idx - start_idx}/{total} lines")
+        elif total > 0:
+            meta_parts.append(f"{total} lines total")
+        meta = f" ({', '.join(meta_parts)})" if meta_parts else f" ({total} lines)"
+        return result, meta
 
     # AADS 프로젝트: 로컬 파일 직접 읽기 (SSH 불필요)
     if project == "AADS":
         from app.core.project_config import PROJECT_MAP
-        # 컨테이너 내부 경로 사용 (호스트 /root/aads/aads-server/app → 컨테이너 /app/app)
         workdir = "/app"
         from posixpath import normpath, join as pjoin
         resolved = normpath(pjoin(workdir, file_path))
@@ -781,9 +821,8 @@ async def tool_read_remote_file(project: str, file_path: str) -> str:
         try:
             with open(resolved, "r", encoding="utf-8", errors="replace") as f:
                 content = f.read()
-            if len(content.encode("utf-8")) > _SSH_MAX_RESULT_BYTES:
-                content = content[:_SSH_MAX_RESULT_BYTES] + "\n...(50KB 초과, 잘림)"
-            return f"[AADS 파일 — {resolved}]\n{content}"
+            result, meta = _apply_line_range(content)
+            return f"[AADS 파일 — {resolved}{meta}]\n{result}"
         except FileNotFoundError:
             return f"[ERROR] 파일 없음: {resolved}"
         except Exception as e:
@@ -808,10 +847,15 @@ async def tool_read_remote_file(project: str, file_path: str) -> str:
     resolved = normpath(pjoin(workdir, file_path))
 
     try:
+        # SSH로 sed를 사용하여 서버 측에서 줄 범위 추출 (대용량 파일 효율)
+        end_line = offset + limit - 1
+        cmd = f"sed -n '{offset},{end_line}p' {shlex.quote(resolved)}"
+        # 전체 줄 수도 함께 조회
+        full_cmd = f"wc -l < {shlex.quote(resolved)} && echo '---SEPARATOR---' && {cmd}"
         proc = await asyncio.create_subprocess_exec(
             "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
             "-p", ssh_port,
-            f"root@{server}", f"cat {shlex.quote(resolved)}",
+            f"root@{server}", full_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -821,9 +865,33 @@ async def tool_read_remote_file(project: str, file_path: str) -> str:
             err_msg = stderr.decode("utf-8", errors="replace")[:500]
             logger.warning(f"ssh_read_remote_file_failed project={project} path={resolved} err={err_msg}")
             return f"[ERROR] 파일 읽기 실패: 파일이 존재하지 않거나 읽기 권한이 없습니다."
-        if len(output.encode("utf-8")) > _SSH_MAX_RESULT_BYTES:
-            output = output[:_SSH_MAX_RESULT_BYTES] + "\n...(50KB 초과, 잘림)"
-        return f"[{project} 파일 — {resolved}]\n{output}"
+
+        # 줄 수와 내용 분리
+        if "---SEPARATOR---" in output:
+            total_str, content = output.split("---SEPARATOR---\n", 1)
+            total_lines = int(total_str.strip())
+        else:
+            content = output
+            total_lines = content.count("\n")
+
+        # 줄 번호 추가 (cat -n 형식)
+        lines = content.splitlines()
+        numbered = []
+        for i, line in enumerate(lines, start=offset):
+            numbered.append(f"{i:>6}\t{line}")
+        result = "\n".join(numbered)
+
+        meta_parts = []
+        if offset > 1:
+            meta_parts.append(f"offset={offset}")
+        shown = len(lines)
+        if offset + shown - 1 < total_lines:
+            meta_parts.append(f"showing {shown}/{total_lines} lines")
+        else:
+            meta_parts.append(f"{total_lines} lines total")
+        meta = f" ({', '.join(meta_parts)})" if meta_parts else ""
+
+        return f"[{project} 파일 — {resolved}{meta}]\n{result}"
     except asyncio.TimeoutError:
         return f"[ERROR] SSH 타임아웃 ({_SSH_TIMEOUT}초): {server}"
     except Exception as e:
@@ -1777,6 +1845,8 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         return await tool_read_remote_file(
             params.get("project", ""),
             params.get("file_path", ""),
+            offset=int(params.get("offset", 1) or 1),
+            limit=int(params.get("limit", 2000) or 2000),
         )
     # ── Pipeline C 도구 ────────────────────────────────────────────────────
     elif name == "pipeline_c_start":
