@@ -7,11 +7,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import logging
 import os
 from typing import Any, List, Optional
 
-logger = logging.getLogger(__name__)
+import structlog
+
+logger = structlog.get_logger(__name__)
 
 _EMBED_BATCH_SIZE = 50
 _EMBED_DIM = 768
@@ -30,7 +31,7 @@ async def embed_texts(texts: List[str]) -> List[List[float]]:
     try:
         from google import genai as google_genai  # type: ignore
         client = google_genai.Client(api_key=api_key)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         all_embeddings: List[List[float]] = []
 
         for i in range(0, len(texts), _EMBED_BATCH_SIZE):

@@ -300,7 +300,8 @@ def get_streaming_status(session_id: str) -> Optional[Dict[str, Any]]:
         }
     if session_id in _active_bg_tasks and not _active_bg_tasks[session_id].done():
         return {"is_streaming": True, "content_length": 0, "tool_count": 0, "last_tool": ""}
-    return None
+    # 스트리밍 없음: 명시적 False 반환 → 프론트 폴링 즉시 중단
+    return {"is_streaming": False, "content_length": 0, "tool_count": 0, "last_tool": ""}
 
 
 # AADS-186C: Langfuse 트레이스 (optional — graceful degradation)
@@ -1118,10 +1119,22 @@ async def send_message_stream(
         current_chat_session_id.set(session_id)
         logger.info(f"[DIAG] current_chat_session_id SET to '{session_id}' in send_message_stream")
 
+        # 프로젝트명 정규화 (workspace_name → project code)
+        _PROJECT_KEYS = ("KIS", "AADS", "GO100", "SF", "NTV2", "NAS", "CEO")
+        _normalized_project = None
+        if workspace_name:
+            _ws_upper = workspace_name.upper()
+            for _pk in _PROJECT_KEYS:
+                if _pk in _ws_upper:
+                    _normalized_project = _pk
+                    break
+            if not _normalized_project:
+                _normalized_project = _ws_upper[:20]
+
         # 4.5-pre. F10: Contradiction Detection (모순 감지)
         try:
             from app.services.contradiction_detector import detect_contradictions
-            _contradiction_warning = await detect_contradictions(content, project=workspace_name)
+            _contradiction_warning = await detect_contradictions(content, project=_normalized_project)
             if _contradiction_warning:
                 system_prompt = system_prompt + "\n\n" + _contradiction_warning
                 logger.info("contradiction_warning_injected", session=session_id[:8])
@@ -1519,9 +1532,9 @@ async def send_message_stream(
                 yield f"data: {json.dumps({'type': 'thinking', 'thinking': event['thinking']})}\n\n"
             elif etype == "tool_use":
                 tools_called.append(event["tool_name"])
-                yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event['tool_use_id']})}\n\n"
+                yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event['tool_use_id'], 'tool_input': event.get('tool_input', {})})}\n\n"
             elif etype == "tool_result":
-                yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': event['tool_name'], 'content': str(event.get('content', ''))[:5000]})}\n\n"
+                yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': event['tool_name'], 'content': str(event.get('content', ''))[:300]})}\n\n"
             elif etype == "yellow_limit":
                 yield f"data: {json.dumps({'type': 'yellow_limit', 'content': event.get('content', ''), 'tool_name': event.get('tool_name', ''), 'consecutive_count': event.get('consecutive_count', 0)})}\n\n"
             elif etype == "done":
@@ -1576,9 +1589,9 @@ async def send_message_stream(
                     yield f"data: {json.dumps({'type': 'thinking', 'thinking': event['thinking']})}\n\n"
                 elif etype == "tool_use":
                     tools_called.append(event["tool_name"])
-                    yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event['tool_use_id']})}\n\n"
+                    yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event['tool_use_id'], 'tool_input': event.get('tool_input', {})})}\n\n"
                 elif etype == "tool_result":
-                    yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': event['tool_name'], 'content': str(event.get('content', ''))[:5000]})}\n\n"
+                    yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': event['tool_name'], 'content': str(event.get('content', ''))[:300]})}\n\n"
                 elif etype == "done":
                     model_used = event.get("model", intent_result.model)
                     cost_usd += Decimal(str(event.get("cost", "0")))
@@ -1635,18 +1648,18 @@ async def send_message_stream(
             _bg_asyncio.create_task(
                 extract_facts(content, full_response, session_id,
                               workspace_id=None,
-                              project=workspace_name)
+                              project=_normalized_project)
             )
-        except Exception:
-            pass
+        except Exception as _bg_err:
+            logger.debug("bg_fact_extraction_launch_error", error=str(_bg_err))
         # F8: CEO Pattern Tracking
         try:
             from app.services.ceo_pattern_tracker import track_interaction
             _bg_asyncio.create_task(
                 track_interaction(content, workspace_name=workspace_name, intent=intent)
             )
-        except Exception:
-            pass
+        except Exception as _bg_err:
+            logger.debug("bg_ceo_pattern_launch_error", error=str(_bg_err))
         # F11: Self-Evaluation
         try:
             from app.services.self_evaluator import evaluate_response
@@ -1659,10 +1672,10 @@ async def send_message_stream(
             if _last_msg:
                 _bg_asyncio.create_task(
                     evaluate_response(content, full_response, _last_msg,
-                                       session_id=session_id, project=workspace_name)
+                                       session_id=session_id, project=_normalized_project)
                 )
-        except Exception:
-            pass
+        except Exception as _bg_err:
+            logger.debug("bg_self_eval_launch_error", error=str(_bg_err))
 
         # 누적 비용 업데이트
         _session_cost += float(cost_usd)

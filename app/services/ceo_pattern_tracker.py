@@ -61,42 +61,36 @@ async def track_interaction(
 
 
 async def _upsert_pattern(conn, pattern_type: str, pattern_key: str, value: dict) -> None:
-    """패턴 upsert — 기존 값이 있으면 count 누적."""
+    """패턴 upsert — 원자적 INSERT ON CONFLICT DO UPDATE (TOCTOU 방지)."""
     try:
-        existing = await conn.fetchrow(
-            "SELECT pattern_value FROM ceo_interaction_patterns WHERE pattern_type = $1 AND pattern_key = $2",
-            pattern_type, pattern_key,
+        await conn.execute(
+            """
+            INSERT INTO ceo_interaction_patterns (pattern_type, pattern_key, pattern_value)
+            VALUES ($1, $2, $3::jsonb)
+            ON CONFLICT (pattern_type, pattern_key) DO UPDATE SET
+                pattern_value = jsonb_set(
+                    jsonb_set(
+                        jsonb_set(
+                            jsonb_set(
+                                ceo_interaction_patterns.pattern_value,
+                                '{count}',
+                                to_jsonb(COALESCE((ceo_interaction_patterns.pattern_value->>'count')::int, 0) + 1)
+                            ),
+                            '{workspace}',
+                            COALESCE(to_jsonb($4::text), ceo_interaction_patterns.pattern_value->'workspace')
+                        ),
+                        '{intent}',
+                        COALESCE(to_jsonb($5::text), ceo_interaction_patterns.pattern_value->'intent')
+                    ),
+                    '{last_content_preview}',
+                    COALESCE(to_jsonb($6::text), ceo_interaction_patterns.pattern_value->'last_content_preview')
+                ),
+                confidence = LEAST(1.0, ceo_interaction_patterns.confidence + 0.01),
+                updated_at = NOW()
+            """,
+            pattern_type, pattern_key, json.dumps(value),
+            value.get("workspace"), value.get("intent"), value.get("last_content_preview"),
         )
-
-        if existing:
-            old_val = existing["pattern_value"] if isinstance(existing["pattern_value"], dict) else json.loads(existing["pattern_value"])
-            old_count = old_val.get("count", 0)
-            value["count"] = old_count + 1
-            # 가장 최근 intent/workspace 유지
-            for k in ("workspace", "intent", "last_content_preview"):
-                if value.get(k):
-                    old_val[k] = value[k]
-            old_val["count"] = value["count"]
-            await conn.execute(
-                """
-                UPDATE ceo_interaction_patterns
-                SET pattern_value = $1::jsonb, updated_at = NOW(),
-                    confidence = LEAST(1.0, confidence + 0.01)
-                WHERE pattern_type = $2 AND pattern_key = $3
-                """,
-                json.dumps(old_val), pattern_type, pattern_key,
-            )
-        else:
-            await conn.execute(
-                """
-                INSERT INTO ceo_interaction_patterns (pattern_type, pattern_key, pattern_value)
-                VALUES ($1, $2, $3::jsonb)
-                ON CONFLICT (pattern_type, pattern_key) DO UPDATE SET
-                    pattern_value = EXCLUDED.pattern_value,
-                    updated_at = NOW()
-                """,
-                pattern_type, pattern_key, json.dumps(value),
-            )
     except Exception as e:
         logger.debug("upsert_pattern_error", error=str(e), type=pattern_type)
 

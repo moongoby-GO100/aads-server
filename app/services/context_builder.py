@@ -402,7 +402,7 @@ async def build(
     # AADS-186D: Prompt Caching 최적화 적용
     try:
         from app.core.cache_config import build_cached_system_blocks
-        system_blocks = build_cached_system_blocks(layer1, layer2, ckp_layer + memory_layer)
+        system_blocks = build_cached_system_blocks(layer1, layer2, ckp_layer + memory_layer + preload_layer + auto_rag_layer)
     except Exception:
         # fallback: 기존 방식
         system_blocks = [

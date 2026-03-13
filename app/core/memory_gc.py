@@ -124,6 +124,7 @@ async def consolidate_memory_facts(pool) -> dict:
 
     try:
         async with pool.acquire() as conn:
+          async with conn.transaction():
             # 1. 자주 참조된 사실 강화
             boosted = await conn.execute(
                 """
@@ -169,12 +170,13 @@ async def consolidate_memory_facts(pool) -> dict:
                        OR last_referenced_at < NOW() - INTERVAL '14 days')
                   AND created_at < NOW() - make_interval(days => $2)
                   AND superseded_by IS NULL
-                  AND confidence > 0.1
+                  AND confidence > $4
                   AND category NOT IN (SELECT unnest($3::text[]))
                 """,
                 _DECAY_DEFAULT,
                 _FACTS_DECAY_DAYS,
                 known_cats,
+                GC_DELETE_THRESHOLD,
             )
             total_decayed += int(default_decayed.split()[-1]) if default_decayed else 0
             result["decayed"] = total_decayed
@@ -404,8 +406,8 @@ async def sleep_time_consolidation(pool) -> dict:
     result = {"insights": 0, "optimizations": 0}
 
     try:
+        # 프로젝트 목록 조회 후 커넥션 즉시 반환 (LLM 호출 중 점유 방지)
         async with pool.acquire() as conn:
-            # ── C1: 프로젝트별 인사이트 생성 ──────────────────────────────
             projects = await conn.fetch(
                 """
                 SELECT DISTINCT project FROM memory_facts
@@ -413,20 +415,23 @@ async def sleep_time_consolidation(pool) -> dict:
                 """
             )
 
-            for p_row in projects:
-                project = p_row["project"]
-                try:
-                    insights_count = await _generate_project_insights(conn, project)
-                    result["insights"] += insights_count
-                except Exception as e:
-                    logger.debug("sleep_agent_insight_error", project=project, error=str(e))
-
-            # ── C2: 프롬프트 자동 최적화 ──────────────────────────────────
+        # ── C1: 프로젝트별 인사이트 생성 (별도 커넥션으로 LLM 호출) ──
+        for p_row in projects:
+            project = p_row["project"]
             try:
-                opt_count = await _analyze_quality_and_optimize(conn)
-                result["optimizations"] = opt_count
+                async with pool.acquire() as conn_insight:
+                    insights_count = await _generate_project_insights(conn_insight, project)
+                    result["insights"] += insights_count
             except Exception as e:
-                logger.debug("sleep_agent_optimization_error", error=str(e))
+                logger.debug("sleep_agent_insight_error", project=project, error=str(e))
+
+        # ── C2: 프롬프트 자동 최적화 (별도 커넥션) ──
+        try:
+            async with pool.acquire() as conn_opt:
+                opt_count = await _analyze_quality_and_optimize(conn_opt)
+                result["optimizations"] = opt_count
+        except Exception as e:
+            logger.debug("sleep_agent_optimization_error", error=str(e))
 
         logger.info("sleep_time_consolidation_complete", **result)
     except Exception as e:

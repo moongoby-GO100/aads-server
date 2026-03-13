@@ -2090,7 +2090,7 @@ async def tool_query_decision_graph(
                     marker = "|-- " if depth > 0 else ""
                     lines.append(
                         f"{indent}{marker}[{proj}:{row['category']}] {row['subject']} "
-                        f"(conf={row['confidence']:.2f}, {ts})"
+                        f"(conf={float(row['confidence'] or 0):.2f}, {ts})"
                     )
                     if row["detail"]:
                         lines.append(f"{indent}{'    ' if depth > 0 else ''}  -> {row['detail'][:120]}")
@@ -2107,7 +2107,7 @@ async def tool_query_decision_graph(
                 proj = root["project"] or ""
                 lines.append(
                     f"[{proj}:{root['category']}] {root['subject']} "
-                    f"(conf={root['confidence']:.2f}, {ts})"
+                    f"(conf={float(root['confidence'] or 0):.2f}, {ts})"
                 )
                 if root["detail"]:
                     lines.append(f"  -> {root['detail'][:120]}")
