@@ -141,6 +141,9 @@ class ToolExecutor:
             "read_task_logs":         self._read_task_logs,
             "terminate_task":         self._terminate_task,
             "capture_screenshot":     self._capture_screenshot,
+            # Memory Upgrade: F5 + F12
+            "query_timeline":         self._query_timeline,
+            "recall_tool_result":     self._recall_tool_result,
         }
         fn = dispatch.get(tool_name)
         if fn is None:
@@ -1217,6 +1220,25 @@ class ToolExecutor:
                 return {"error": f"task_id '{task_id}' not found in pipeline_jobs or directive_lifecycle"}
         except Exception as e:
             return {"error": str(e)}
+
+    async def _query_timeline(self, inp: Dict[str, Any]) -> Any:
+        """F12: 프로젝트별 시간순 이력 조회."""
+        from app.api.ceo_chat_tools import tool_query_timeline
+        return await tool_query_timeline(
+            project=inp.get("project", ""),
+            period=inp.get("period", "7d"),
+            category=inp.get("category", ""),
+            limit=min(int(inp.get("limit", 20) or 20), 50),
+        )
+
+    async def _recall_tool_result(self, inp: Dict[str, Any]) -> Any:
+        """F5: 과거 도구 실행 결과 검색."""
+        from app.api.ceo_chat_tools import tool_recall_tool_result
+        return await tool_recall_tool_result(
+            tool_name=inp.get("tool_name", ""),
+            keyword=inp.get("keyword", ""),
+            limit=min(int(inp.get("limit", 5) or 5), 20),
+        )
 
     async def _delegate_to_agent(self, inp: Dict[str, Any]) -> Any:
         """

@@ -477,6 +477,22 @@ async def _stream_anthropic(
                 "tool_use_id": tu.id,
                 "content": compressed_str,  # 컨텍스트에는 압축본
             })
+            # F5: Tool Result Archive — 도구 결과 전문 보관 (백그라운드)
+            try:
+                from app.services.tool_archive import archive_tool_result as _archive
+                _f5_sid = _cv_sid.get("") if _cv_sid else ""
+                if _f5_sid:
+                    from app.core.db_pool import get_pool as _get_pool_f5
+                    _f5_pool = _get_pool_f5()
+                    async with _f5_pool.acquire() as _f5c:
+                        _f5_mid = await _f5c.fetchval(
+                            "SELECT id::text FROM chat_messages WHERE session_id = $1::uuid AND role = 'user' ORDER BY created_at DESC LIMIT 1",
+                            _f5_sid,
+                        )
+                    if _f5_mid:
+                        asyncio.create_task(_archive(_f5_mid, tu.id, tu.name, dict(tu.input), result_str))
+            except Exception:
+                pass
 
         # 메시지에 AI 응답 + 도구 결과 추가
         current_messages = current_messages + [

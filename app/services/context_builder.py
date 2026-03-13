@@ -137,6 +137,39 @@ async def _build_memory_layer(
 
 
 
+async def _build_auto_rag_layer(
+    last_user_message: str,
+    session_id: str,
+    project: Optional[str] = None,
+) -> str:
+    """F1/F3: Auto-RAG — 매 턴 사용자 메시지에 대한 시맨틱 검색 결과 주입 (Layer 4.5)."""
+    try:
+        from app.services.auto_rag import build_auto_rag_context
+        block = await build_auto_rag_context(
+            user_message=last_user_message,
+            session_id=session_id,
+            project=project,
+        )
+        return f"\n{block}" if block else ""
+    except Exception as e:
+        logger.debug(f"[AutoRAG] context_builder Auto-RAG 주입 실패: {e}")
+        return ""
+
+
+async def _build_workspace_preload_layer(
+    project: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> str:
+    """F6: Workspace Preloading — 프로젝트 컨텍스트 자동 주입 (Layer 2.5)."""
+    try:
+        from app.services.workspace_preloader import build_workspace_preload
+        block = await build_workspace_preload(project=project, session_id=session_id)
+        return f"\n{block}" if block else ""
+    except Exception as e:
+        logger.debug(f"[PreLoad] context_builder Workspace Preload 주입 실패: {e}")
+        return ""
+
+
 async def _build_semantic_code_layer(
     last_user_message: str,
     workspace_name: str = "",
@@ -265,14 +298,25 @@ async def build_messages_context(
     # Layer 1 (동기 — system_prompt_v2 기반 XML 섹션)
     layer1 = build_layer1(ws_key, base_system_prompt)
 
-    # Layer 2 + 메모리 주입을 병렬 실행 (AADS-CRITICAL-FIX #31)
+    # Layer 2 + 메모리 주입 + Auto-RAG(F1/F3) + Workspace Preload(F6) 병렬 실행
     _project = _normalize_workspace(workspace_name)
-    layer2, memory_layer = await asyncio.gather(
+    # 마지막 user 메시지 추출 (Auto-RAG용)
+    _last_user_msg = ""
+    for _m in reversed(raw_messages):
+        if _m.get("role") == "user":
+            _last_user_msg = _m.get("content", "")
+            if isinstance(_last_user_msg, list):
+                _last_user_msg = " ".join(b.get("text", "") for b in _last_user_msg if isinstance(b, dict) and b.get("type") == "text")
+            break
+
+    layer2, memory_layer, auto_rag_layer, preload_layer = await asyncio.gather(
         _build_layer2_dynamic(workspace_name, db_conn=db_conn),
         _build_memory_layer(session_id=session_id, project_id=_project),
+        _build_auto_rag_layer(_last_user_msg, session_id, _project),
+        _build_workspace_preload_layer(_project, session_id),
     )
 
-    system_prompt = layer1 + "\n\n" + layer2 + memory_layer
+    system_prompt = layer1 + "\n\n" + layer2 + memory_layer + preload_layer + auto_rag_layer
 
     # Layer D: 임시 문서 컨텍스트 (현재 턴에만 주입, 다음 턴 제거)
     if document_context:
@@ -343,14 +387,15 @@ async def build(
     tool_guide = _build_tool_guide_layer()  # AADS-186D: 도구 카테고리 안내
     layer1 = layer1_base + tool_guide
 
-    # Layer 2 (동적) + CKP 주입 + 메모리 주입 — 병렬 실행 (AADS-CRITICAL-FIX #31)
+    # Layer 2 (동적) + CKP + 메모리 + Workspace Preload(F6) — 병렬 실행
     _project = _normalize_workspace(workspace_name)
-    layer2, ckp_layer, memory_layer = await asyncio.gather(
+    layer2, ckp_layer, memory_layer, preload_layer = await asyncio.gather(
         _build_layer2_dynamic(workspace_name, db_conn=db_conn),
         _build_ckp_layer(workspace_name),
         _build_memory_layer(session_id=session_id, project_id=_project),
+        _build_workspace_preload_layer(_project, session_id),
     )
-    layer2_full = layer2 + ckp_layer + memory_layer
+    layer2_full = layer2 + ckp_layer + memory_layer + preload_layer
 
     # AADS-186D: Prompt Caching 최적화 적용
     try:

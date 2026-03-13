@@ -155,6 +155,15 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"memory_gc_job_error: {e}")
         scheduler.add_job(_run_memory_gc, CronTrigger(hour=3, minute=0, timezone="UTC"), id="memory_gc")
+        # F4: Memory Consolidation — 매일 04:00 UTC (중복 병합, confidence 강화/감쇠)
+        async def _run_memory_consolidation():
+            try:
+                from app.core.memory_gc import consolidate_memory_facts
+                from app.core.db_pool import get_pool
+                await consolidate_memory_facts(get_pool())
+            except Exception as e:
+                logger.warning(f"memory_consolidation_job_error: {e}")
+        scheduler.add_job(_run_memory_consolidation, CronTrigger(hour=4, minute=0, timezone="UTC"), id="memory_consolidation")
         # task_logs GC: 매일 03:30 UTC — 7일 이상 된 로그 삭제
         async def _run_task_logs_gc():
             try:

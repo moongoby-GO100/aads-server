@@ -1718,6 +1718,55 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"job_id": "pc-1741654800-abc123", "approved": False, "reason": "테스트 실패"},
         ],
     },
+    # ─── Memory Upgrade: F12 Timeline + F5 Tool Recall ───────────────────────
+    "query_timeline": {
+        "name": "query_timeline",
+        "description": "프로젝트별 시간순 이력 조회. memory_facts에서 타임라인 형태로 프로젝트 이벤트, 결정, 변경 이력을 보여줌.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "프로젝트명 (KIS, AADS, GO100, SF, NTV2 등)",
+                },
+                "period": {
+                    "type": "string",
+                    "description": "기간 (예: '7d', '30d', '2026-03-01~2026-03-13'). 기본=7d",
+                },
+                "category": {
+                    "type": "string",
+                    "description": "카테고리 필터 (decision, file_change, error_resolution 등, 선택)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "최대 결과 수 (기본 20, 최대 50)",
+                },
+            },
+            "required": ["project"],
+        },
+    },
+    "recall_tool_result": {
+        "name": "recall_tool_result",
+        "description": "과거 도구 실행 결과를 검색. 재실행 없이 이전 도구 결과를 즉시 참조.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tool_name": {
+                    "type": "string",
+                    "description": "도구 이름 (query_db, read_file 등, 선택)",
+                },
+                "keyword": {
+                    "type": "string",
+                    "description": "결과 내 검색 키워드 (선택)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "최대 결과 수 (기본 5)",
+                },
+            },
+            "required": [],
+        },
+    },
     # ─── 첨부파일 재읽기 도구 ─────────────────────────────────────────────────
     "read_uploaded_file": {
         "name": "read_uploaded_file",
@@ -1765,8 +1814,8 @@ _GROUPS: Dict[str, List[str]] = {
     "meta": ["check_directive_status", "check_task_status", "read_task_logs", "terminate_task", "delegate_to_agent", "delegate_to_research", "spawn_subagent", "spawn_parallel_subagents"],
     # AADS-186E-1: 크롤링 도구 그룹
     "crawl": ["jina_read", "crawl4ai_fetch", "deep_crawl"],
-    # AADS-186E-2: 메모리 도구 그룹
-    "memory": ["save_note", "recall_notes", "delete_note", "learn_pattern", "observe"],
+    # AADS-186E-2: 메모리 도구 그룹 (+ Memory Upgrade F5/F12)
+    "memory": ["save_note", "recall_notes", "delete_note", "learn_pattern", "observe", "query_timeline", "recall_tool_result"],
     # AADS-186E-3 / AADS-188B: 딥리서치 + 코드탐색 + 시맨틱 검색 도구 그룹
     "research": ["deep_research", "code_explorer", "analyze_changes", "search_all_projects", "semantic_code_search"],
     "all": list(_TOOLS.keys()),

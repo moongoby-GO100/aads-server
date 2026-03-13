@@ -1089,6 +1089,16 @@ async def send_message_stream(
         current_chat_session_id.set(session_id)
         logger.info(f"[DIAG] current_chat_session_id SET to '{session_id}' in send_message_stream")
 
+        # 4.5-pre. F10: Contradiction Detection (모순 감지)
+        try:
+            from app.services.contradiction_detector import detect_contradictions
+            _contradiction_warning = await detect_contradictions(content, project=workspace_name)
+            if _contradiction_warning:
+                system_prompt = system_prompt + "\n\n" + _contradiction_warning
+                logger.info("contradiction_warning_injected", session=session_id[:8])
+        except Exception as _cd_err:
+            logger.debug(f"contradiction_detection_skipped: {_cd_err}")
+
         # 4.5. AADS-188E: 시맨틱 코드 검색 컨텍스트 주입 (code_search 관련 키워드 감지)
         _CODE_SEARCH_KEYWORDS = (
             "코드", "함수", "클래스", "어디", "어디야", "파일", "소스", "구현",
@@ -1587,6 +1597,42 @@ async def send_message_stream(
             thinking_summary=_thinking_truncated,
             auto_save_check=True,
         )
+
+        # ═══ Phase C-2: Memory Upgrade Background Tasks ═══
+        import asyncio as _bg_asyncio
+        # F2: Fact Extraction (핵심사실 추출)
+        try:
+            from app.services.fact_extractor import extract_facts
+            _bg_asyncio.create_task(
+                extract_facts(content, full_response, session_id,
+                              workspace_id="",
+                              project=workspace_name)
+            )
+        except Exception:
+            pass
+        # F8: CEO Pattern Tracking
+        try:
+            from app.services.ceo_pattern_tracker import track_interaction
+            _bg_asyncio.create_task(
+                track_interaction(content, workspace_name=workspace_name, intent=intent)
+            )
+        except Exception:
+            pass
+        # F11: Self-Evaluation
+        try:
+            from app.services.self_evaluator import evaluate_response
+            # 최근 저장된 assistant message ID 조회
+            async with get_pool().acquire() as _eval_conn:
+                _last_msg = await _eval_conn.fetchval(
+                    "SELECT id::text FROM chat_messages WHERE session_id = $1 AND role = 'assistant' ORDER BY created_at DESC LIMIT 1",
+                    sid,
+                )
+            if _last_msg:
+                _bg_asyncio.create_task(
+                    evaluate_response(content, full_response, _last_msg)
+                )
+        except Exception:
+            pass
 
         # 누적 비용 업데이트
         _session_cost += float(cost_usd)

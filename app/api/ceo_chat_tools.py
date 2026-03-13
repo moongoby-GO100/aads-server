@@ -382,6 +382,56 @@ TOOL_DEFINITIONS: List[Dict] = [
             "required": ["query"],
         },
     },
+    # ── F12: Timeline Memory ─────────────────────────────────────────────
+    {
+        "name": "query_timeline",
+        "description": "프로젝트별 시간순 이력 조회. memory_facts에서 타임라인 형태로 프로젝트 이벤트, 결정, 변경 이력을 보여줌.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "프로젝트명 (KIS, AADS, GO100, SF, NTV2 등)",
+                },
+                "period": {
+                    "type": "string",
+                    "description": "기간 (예: '7d', '30d', '2026-03-01~2026-03-13'). 기본=7d",
+                },
+                "category": {
+                    "type": "string",
+                    "description": "카테고리 필터 (decision, file_change, error_resolution 등, 선택)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "최대 결과 수 (기본 20, 최대 50)",
+                },
+            },
+            "required": ["project"],
+        },
+    },
+    # ── F5: Tool Result Recall ───────────────────────────────────────────
+    {
+        "name": "recall_tool_result",
+        "description": "과거 도구 실행 결과를 검색. 재실행 없이 이전 도구 결과를 즉시 참조.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tool_name": {
+                    "type": "string",
+                    "description": "도구 이름 (query_db, read_file 등, 선택)",
+                },
+                "keyword": {
+                    "type": "string",
+                    "description": "결과 내 검색 키워드 (선택)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "최대 결과 수 (기본 5)",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 # ─── SSH 원격 접근 상수 (중앙 설정에서 import, AADS-165) ──────────────────────
@@ -1799,6 +1849,137 @@ async def tool_search_chat_history(
         await conn.close()
 
 
+# ─── F12: Timeline Memory ─────────────────────────────────────────────────────
+
+async def tool_query_timeline(
+    project: str,
+    period: str = "7d",
+    category: str = "",
+    limit: int = 20,
+) -> str:
+    """프로젝트별 시간순 이력 조회 (memory_facts 기반)."""
+    if not project:
+        return "[ERROR] project 필수"
+
+    project = project.upper().strip()
+
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+
+        # 기간 파싱
+        interval_sql = "7 days"
+        date_filter = ""
+        if "~" in period:
+            # 날짜 범위: 2026-03-01~2026-03-13
+            parts = period.split("~")
+            date_filter = f"AND created_at >= '{parts[0]}'::date AND created_at < '{parts[1]}'::date + interval '1 day'"
+        elif period.endswith("d"):
+            days = int(period[:-1])
+            interval_sql = f"{days} days"
+
+        async with pool.acquire() as conn:
+            if date_filter:
+                sql = f"""
+                    SELECT category, subject, detail, created_at, confidence
+                    FROM memory_facts
+                    WHERE project = $1
+                      AND superseded_by IS NULL
+                      {date_filter}
+                      {'AND category = $2' if category else ''}
+                    ORDER BY created_at ASC
+                    LIMIT ${'3' if category else '2'}
+                """
+                params_list = [project]
+                if category:
+                    params_list.append(category)
+                params_list.append(limit)
+                rows = await conn.fetch(sql, *params_list)
+            else:
+                if category:
+                    rows = await conn.fetch(
+                        """
+                        SELECT category, subject, detail, created_at, confidence
+                        FROM memory_facts
+                        WHERE project = $1
+                          AND superseded_by IS NULL
+                          AND category = $2
+                          AND created_at > NOW() - $3::interval
+                        ORDER BY created_at ASC
+                        LIMIT $4
+                        """,
+                        project, category, interval_sql, limit,
+                    )
+                else:
+                    rows = await conn.fetch(
+                        """
+                        SELECT category, subject, detail, created_at, confidence
+                        FROM memory_facts
+                        WHERE project = $1
+                          AND superseded_by IS NULL
+                          AND created_at > NOW() - $2::interval
+                        ORDER BY created_at ASC
+                        LIMIT $3
+                        """,
+                        project, interval_sql, limit,
+                    )
+
+            if not rows:
+                return f"[{project}] 기간 '{period}' 내 타임라인 이벤트 없음"
+
+            lines = [f"📅 [{project}] 타임라인 ({period}) — {len(rows)}건"]
+            for r in rows:
+                ts = r["created_at"].strftime("%m/%d %H:%M") if r["created_at"] else ""
+                conf = f"{r['confidence']:.1f}" if r["confidence"] else ""
+                lines.append(f"  {ts} | [{r['category']}] {r['subject']} (신뢰도:{conf})")
+                if r["detail"]:
+                    lines.append(f"         {r['detail'][:150]}")
+
+            return "\n".join(lines)
+
+    except Exception as e:
+        return f"[ERROR] 타임라인 조회 실패: {e}"
+
+
+# ─── F5: Tool Result Recall ───────────────────────────────────────────────────
+
+async def tool_recall_tool_result(
+    tool_name: str = "",
+    keyword: str = "",
+    limit: int = 5,
+) -> str:
+    """과거 도구 실행 결과를 검색."""
+    try:
+        from app.services.tool_archive import recall_tool_result
+        results = await recall_tool_result(
+            tool_name=tool_name or None,
+            keyword=keyword or None,
+            limit=limit,
+        )
+
+        if not results:
+            filters = []
+            if tool_name:
+                filters.append(f"도구={tool_name}")
+            if keyword:
+                filters.append(f"키워드={keyword}")
+            return f"도구 결과 검색 결과 없음 ({', '.join(filters) if filters else '전체'})"
+
+        lines = [f"🔧 도구 결과 검색 — {len(results)}건"]
+        for r in results:
+            ts = r.get("created_at", "")[:16] if r.get("created_at") else ""
+            lines.append(f"\n  [{ts}] {r['tool_name']}")
+            if r.get("input_params"):
+                params_str = str(r["input_params"])[:100]
+                lines.append(f"    입력: {params_str}")
+            lines.append(f"    결과: {r.get('output_preview', '')[:300]}")
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"[ERROR] 도구 결과 검색 실패: {e}"
+
+
 # ─── 디스패처 ──────────────────────────────────────────────────────────────────
 
 async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session_id: str = "") -> str:
@@ -1885,6 +2066,21 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             date_to=params.get("date_to", ""),
             role=params.get("role", "all"),
             limit=params.get("limit", 10),
+        )
+    # ── F12: Timeline Memory ──────────────────────────────────────────
+    elif name == "query_timeline":
+        return await tool_query_timeline(
+            project=params.get("project", ""),
+            period=params.get("period", "7d"),
+            category=params.get("category", ""),
+            limit=min(int(params.get("limit", 20) or 20), 50),
+        )
+    # ── F5: Tool Result Recall ────────────────────────────────────────
+    elif name == "recall_tool_result":
+        return await tool_recall_tool_result(
+            tool_name=params.get("tool_name", ""),
+            keyword=params.get("keyword", ""),
+            limit=min(int(params.get("limit", 5) or 5), 20),
         )
     else:
         return f"[ERROR] 알 수 없는 도구: {name}"
