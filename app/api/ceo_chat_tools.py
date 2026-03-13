@@ -259,6 +259,11 @@ TOOL_DEFINITIONS: List[Dict] = [
                     "description": "최대 검수-재지시 반복 횟수 (기본: 3)",
                     "default": 3,
                 },
+                "model": {
+                    "type": "string",
+                    "description": "Claude Code가 사용할 모델. 단순작업→sonnet, 복잡작업→opus (기본: sonnet)",
+                    "enum": ["sonnet", "opus", "haiku"],
+                },
             },
             "required": ["project", "instruction"],
         },
@@ -1168,7 +1173,7 @@ async def tool_git_remote_create_branch(project: str, branch_name: str) -> str:
 # ─── Pipeline C 도구 함수 ─────────────────────────────────────────────────────
 
 
-async def tool_pipeline_c_start(project: str, instruction: str, max_cycles: int, dsn: str, chat_session_id: str = "") -> str:
+async def tool_pipeline_c_start(project: str, instruction: str, max_cycles: int, dsn: str, chat_session_id: str = "", model: str = "") -> str:
     """파이프라인C 시작."""
     if not project:
         return "[ERROR] project 필수"
@@ -1183,6 +1188,7 @@ async def tool_pipeline_c_start(project: str, instruction: str, max_cycles: int,
             chat_session_id=chat_session_id or "",  # 빈 문자열이면 _post_to_chat 비활성
             max_cycles=min(max_cycles, 5),
             dsn=dsn,
+            model=model or "",
         )
         return (
             f"[Pipeline C 시작]\n"
@@ -1784,6 +1790,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             params.get("max_cycles", 3),
             dsn,
             chat_session_id=_sid,
+            model=params.get("model", ""),
         )
     elif name == "pipeline_c_status":
         return await tool_pipeline_c_status(params.get("job_id", ""))

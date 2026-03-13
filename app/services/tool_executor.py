@@ -1227,6 +1227,7 @@ class ToolExecutor:
 
         task = inp.get("task", "")
         project = inp.get("project", "AADS")
+        agent_model = inp.get("model", "claude-sonnet")  # AI가 작업 복잡도에 따라 선택
 
         if not task:
             return {"error": "task 필수 — 위임할 작업 설명을 입력하세요"}
@@ -1310,7 +1311,7 @@ class ToolExecutor:
                     task_description=task,
                     tools=tools,
                     messages=messages,
-                    model="claude-sonnet",
+                    model=agent_model,
                     system_prompt=system_prompt,
                     task_id=task_id,
                 ):
@@ -1481,7 +1482,8 @@ class ToolExecutor:
             "status": "started",
             "task_id": task_id,
             "project": project,
-            "message": f"Agent 작업이 시작되었습니다. task_id: {task_id}. 완료 후 채팅방에 결과가 보고됩니다.",
+            "model": agent_model,
+            "message": f"Agent 작업이 시작되었습니다. task_id: {task_id}, model: {agent_model}. 완료 후 채팅방에 결과가 보고됩니다.",
         }
 
     async def _delegate_to_research(self, inp: Dict[str, Any]) -> Any:

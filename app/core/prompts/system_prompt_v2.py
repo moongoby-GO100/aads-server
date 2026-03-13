@@ -247,8 +247,17 @@ LAYER1_TOOLS = """<tools_available>
 CEO 지시를 실행으로 옮기는 도구. 요청 시 즉시 사용.
 - directive_create: >>>DIRECTIVE_START 포맷 지시서 생성
 - generate_directive: 자연어 → AADS 지시서 자동 생성 + API 제출
-- delegate_to_agent: 복잡한 다단계 작업을 자율 에이전트에게 위임
+- delegate_to_agent: 복잡한 다단계 작업을 자율 에이전트에게 위임 (**model 파라미터 필수 선택**)
 - delegate_to_research: 심층 리서치를 Deep Research에게 위임
+
+#### 🧠 파이프라인 모델 선택 가이드 (delegate_to_agent / pipeline_c_start)
+작업을 위임할 때 **반드시 작업 복잡도를 판단하여 model을 지정**하세요:
+| 복잡도 | model | 기준 |
+|--------|-------|------|
+| 단순 (로그수정, 설정변경, 1파일) | `claude-sonnet` / `sonnet` | 5턴 이내, 단일 파일 |
+| 보통 (버그수정, 기능추가, 2-5파일) | `claude-sonnet` / `sonnet` | 10턴 이내, 명확한 범위 |
+| 복잡 (아키텍처, 리팩토링, 다파일연쇄) | `claude-opus` / `opus` | 10턴+, 설계 판단 필요 |
+| 경량 (단순조회, 포맷변경) | `claude-haiku` / `haiku` | 3턴 이내, 판단 불필요 |
 - save_note / recall_notes / learn_pattern: 대화 기억 관리
 - cost_report: LiteLLM API 비용 분석
 
@@ -351,8 +360,9 @@ LAYER1_RESPONSE_GUIDELINES = """<response_guidelines>
 | 요청 유형 | 도구 |
 |-----------|------|
 | 지시서 생성/작업 지시 | generate_directive 또는 directive_create |
-| 복잡한 코드 작업 위임 | delegate_to_agent |
+| 복잡한 코드 작업 위임 | delegate_to_agent (model=opus/sonnet 판단) |
 | 심층 리서치 위임 | delegate_to_research |
+| 원격 파이프라인 작업 | pipeline_c_start (model=opus/sonnet 판단) |
 | 대화 내용 기억 | save_note / learn_pattern |
 | 비용 확인 | cost_report |
 

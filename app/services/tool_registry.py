@@ -1486,12 +1486,17 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "type": "string",
                     "description": "대상 프로젝트 (기본 'AADS')",
                 },
+                "model": {
+                    "type": "string",
+                    "description": "사용할 모델. 작업 복잡도에 따라 선택: 단순작업→claude-sonnet, 복잡분석/아키텍처→claude-opus (기본: claude-sonnet)",
+                    "enum": ["claude-sonnet", "claude-opus", "claude-haiku"],
+                },
             },
             "required": ["task"],
         },
         "input_examples": [
-            {"task": "chat_service.py의 SSE 하트비트 로직 개선", "project": "AADS"},
-            {"task": "KIS 주문 실패 에러 핸들링 추가", "project": "KIS"},
+            {"task": "chat_service.py의 SSE 하트비트 로직 개선", "project": "AADS", "model": "claude-sonnet"},
+            {"task": "전체 아키텍처 리팩토링 설계", "project": "KIS", "model": "claude-opus"},
         ],
     },
     "delegate_to_research": {

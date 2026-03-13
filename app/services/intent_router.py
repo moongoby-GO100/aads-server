@@ -77,6 +77,8 @@ INTENT_MAP: dict[str, dict] = {
     "code_modify":        {"model": "claude-opus",               "tools": True,  "group": "all"},
     # Pipeline C: Claude Code 자율 작업 파이프라인
     "pipeline_c":         {"model": "claude-sonnet",             "tools": True,  "group": "all"},
+    # 자동 반응 (파이프라인 완료 후)
+    "auto_reaction":      {"model": "claude-sonnet",             "tools": True,  "group": "all"},
     # 첨부파일 읽기
     "file_read":          {"model": "claude-sonnet",             "tools": True,  "group": "all"},
     # AADS-188C Phase 2: 메타 도구 인텐트

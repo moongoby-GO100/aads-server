@@ -73,7 +73,7 @@ class PipelineCJob:
 
     def __init__(self, project: str, instruction: str,
                  chat_session_id: str, max_cycles: int = 3,
-                 dsn: str = ""):
+                 dsn: str = "", model: str = ""):
         self.job_id = f"pc-{int(time.time())}-{uuid.uuid4().hex[:6]}"
         self.project = project.upper()
         self.instruction = instruction
@@ -88,6 +88,8 @@ class PipelineCJob:
         self.claude_session_id = str(uuid.uuid4())
         self.max_cycles = min(max_cycles, 5)
         self.dsn = dsn
+        # AI가 선택한 모델 (sonnet/opus/haiku, 빈 문자열이면 기본 sonnet)
+        self.model = model if model in ("sonnet", "opus", "haiku") else ""
         self.phase = "queued"
         self.cycle = 0
         self.status = "running"  # running | awaiting_approval | done | error
@@ -620,10 +622,13 @@ class PipelineCJob:
                 # 매 시도마다 새 session-id 발급 (재시도 시 충돌 방지)
                 self.claude_session_id = str(uuid.uuid4())
                 if continue_session:
-                    claude_cmd = f"claude -p --output-format text --session-id {self.claude_session_id} -c {escaped}"
+                    _model_flag_c = f" --model {self.model}" if self.model else ""
+                    claude_cmd = f"claude -p --output-format text{_model_flag_c} --session-id {self.claude_session_id} -c {escaped}"
                 else:
+                    _model_flag = f" --model {self.model}" if self.model else ""
                     claude_cmd = (
-                        f"claude -p --output-format text "
+                        f"claude -p --output-format text"
+                        f"{_model_flag} "
                         f"--session-id {self.claude_session_id} "
                         f"{escaped}"
                     )
@@ -728,11 +733,13 @@ class PipelineCJob:
 
         # 항상 새 session-id 발급 ("Session ID already in use" 충돌 근본 방지)
         self.claude_session_id = str(uuid.uuid4())
+        _model_flag = f" --model {self.model}" if self.model else ""
         if continue_session:
-            claude_cmd = f"claude -p --output-format text --session-id {self.claude_session_id} -c {escaped}"
+            claude_cmd = f"claude -p --output-format text{_model_flag} --session-id {self.claude_session_id} -c {escaped}"
         else:
             claude_cmd = (
-                f"claude -p --output-format text "
+                f"claude -p --output-format text"
+                f"{_model_flag} "
                 f"--session-id {self.claude_session_id} "
                 f"{escaped}"
             )
@@ -1029,6 +1036,7 @@ async def start_pipeline(
     chat_session_id: str,
     max_cycles: int = 3,
     dsn: str = "",
+    model: str = "",
 ) -> dict:
     """파이프라인C 시작 (asyncio.create_task로 백그라운드 실행)."""
     logger.info(f"[DIAG] start_pipeline: chat_session_id='{chat_session_id}' project={project}")
@@ -1047,6 +1055,7 @@ async def start_pipeline(
         chat_session_id=chat_session_id,
         max_cycles=max_cycles,
         dsn=dsn,
+        model=model,
     )
     _active_jobs[job.job_id] = job
 
