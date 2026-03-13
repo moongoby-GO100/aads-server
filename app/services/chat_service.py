@@ -776,12 +776,52 @@ async def process_files_for_claude(files: list) -> list:
     return content_parts
 
 
+async def process_video_with_gemini(file_data: dict, user_message: str) -> str:
+    """동영상 raw bytes를 Gemini Flash로 분석하여 텍스트 반환.
+
+    Args:
+        file_data: {"filename": str, "data": bytes, "mime_type": str}
+        user_message: 사용자 메시지 (분석 컨텍스트)
+    Returns:
+        분석 결과 텍스트
+    """
+    import base64 as _b64
+    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
+    if not api_key:
+        return f"[동영상 분석 실패: GOOGLE_API_KEY 미설정 — {file_data.get('filename', 'video')}]"
+    try:
+        import google.generativeai as genai
+        import tempfile, time
+        genai.configure(api_key=api_key)
+        suffix = Path(file_data.get("filename", "video.mp4")).suffix or ".mp4"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+            f.write(file_data["data"])
+            tmp_path = f.name
+        video_file = genai.upload_file(path=tmp_path)
+        while video_file.state.name == "PROCESSING":
+            time.sleep(2)
+            video_file = genai.get_file(video_file.name)
+        model_g = genai.GenerativeModel("gemini-2.0-flash-exp")
+        response = model_g.generate_content(
+            [video_file, user_message or "이 동영상의 내용을 분석하고 설명해주세요."]
+        )
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+        return f"[동영상 분석 결과 (Gemini Flash) — {file_data.get('filename', 'video')}]\n{response.text}"
+    except Exception as e:
+        logger.error(f"[VIDEO_RAW] Gemini error: {e}")
+        return f"[동영상 분석 실패: {str(e)}]"
+
+
 async def send_message_stream(
     session_id: str,
     content: str,
     attachments: Optional[List[Any]] = None,
     model_override: Optional[str] = None,
     intent_override: Optional[str] = None,
+    uploaded_files: Optional[List[Any]] = None,
 ) -> AsyncGenerator[str, None]:
     """
     AADS-185: 3계층 Context Engineering + IntentRouter + ModelSelector + Tool Use 루프.
@@ -866,6 +906,53 @@ async def send_message_stream(
                 _ephemeral_doc_context = await build_rereference_context(
                     content, session_id, get_pool(),
                 )
+
+        # 1-B. uploaded_files 처리 (multipart/form-data로 전송된 raw 파일들)
+        if uploaded_files:
+            import base64 as _uf_b64
+            logger.info(f"[UPLOAD] session={session_id[:8]} uploaded_files={len(uploaded_files)}")
+            _uf_ref_lines = []
+            for uf in uploaded_files:
+                fname = uf.get("filename", "unknown")
+                data = uf.get("data", b"")
+                mime = uf.get("mime_type", "application/octet-stream")
+                if mime.startswith("image/"):
+                    _vision_images.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": mime,
+                            "data": _uf_b64.b64encode(data).decode(),
+                        },
+                    })
+                    _uf_ref_lines.append(f"- [이미지: {fname}] (Vision API 분석)")
+                elif mime.startswith("video/"):
+                    _vtext = await process_video_with_gemini(uf, content)
+                    _ephemeral_doc_context = (_ephemeral_doc_context + "\n\n" + _vtext).strip()
+                    _uf_ref_lines.append(f"- [동영상: {fname}] Gemini 분석 완료")
+                elif mime == "application/pdf":
+                    try:
+                        import pdfplumber, io as _io
+                        with pdfplumber.open(_io.BytesIO(data)) as _pdf:
+                            _pdf_text = "\n".join(p.extract_text() or "" for p in _pdf.pages)
+                        _ephemeral_doc_context = (_ephemeral_doc_context + f"\n\n[PDF: {fname}]\n{_pdf_text[:10000]}").strip()
+                    except Exception as _pe:
+                        _ephemeral_doc_context = (_ephemeral_doc_context + f"\n\n[PDF: {fname} — 추출 실패: {_pe}]").strip()
+                    _uf_ref_lines.append(f"- [PDF: {fname}]")
+                elif mime.startswith("text/") or Path(fname).suffix.lower() in (
+                    ".py", ".js", ".ts", ".tsx", ".md", ".txt", ".json", ".yaml", ".yml", ".csv", ".sh", ".sql"
+                ):
+                    try:
+                        _txt = data.decode("utf-8", errors="replace")
+                        _ephemeral_doc_context = (_ephemeral_doc_context + f"\n\n[파일: {fname}]\n```\n{_txt[:10000]}\n```").strip()
+                    except Exception:
+                        pass
+                    _uf_ref_lines.append(f"- [텍스트파일: {fname}]")
+                else:
+                    _uf_ref_lines.append(f"- [첨부파일: {fname} ({mime})]")
+            if _uf_ref_lines:
+                _ref_block = "\n\n[첨부파일 목록]\n" + "\n".join(_uf_ref_lines)
+                content = content + _ref_block
 
         # 사용자 메시지 저장 (trigger 메시지는 intent로 구분)
         user_intent = "system_trigger" if intent_override else None
