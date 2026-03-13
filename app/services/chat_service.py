@@ -729,6 +729,53 @@ async def _analyze_videos_with_gemini(
     return results
 
 
+async def process_files_for_claude(files: list) -> list:
+    """파일 데이터 목록을 Claude API content 배열 형식으로 변환.
+
+    Args:
+        files: [{"filename": str, "data": bytes, "mime_type": str}, ...]
+    Returns:
+        Claude API content blocks 리스트
+    """
+    import base64 as b64
+    content_parts = []
+    for file_data in files:
+        filename = file_data.get("filename", "unknown")
+        data = file_data.get("data", b"")
+        mime_type = file_data.get("mime_type", "application/octet-stream")
+
+        if mime_type.startswith("image/"):
+            content_parts.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": mime_type,
+                    "data": b64.b64encode(data).decode(),
+                },
+            })
+        elif mime_type == "application/pdf":
+            try:
+                import pdfplumber
+                import io
+                with pdfplumber.open(io.BytesIO(data)) as pdf:
+                    text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+                content_parts.append({"type": "text", "text": f"[PDF: {filename}]\n{text[:10000]}"})
+            except Exception as e:
+                content_parts.append({"type": "text", "text": f"[첨부파일: {filename} - PDF 추출 실패: {e}]"})
+        elif mime_type.startswith("text/") or Path(filename).suffix.lower() in (
+            ".py", ".js", ".ts", ".md", ".txt", ".json", ".yaml", ".yml", ".csv",
+            ".tsx", ".jsx", ".sh", ".sql", ".go", ".rs", ".java", ".c", ".cpp",
+        ):
+            try:
+                text = data.decode("utf-8", errors="replace")
+                content_parts.append({"type": "text", "text": f"[파일: {filename}]\n```\n{text[:10000]}\n```"})
+            except Exception:
+                content_parts.append({"type": "text", "text": f"[첨부파일: {filename}]"})
+        else:
+            content_parts.append({"type": "text", "text": f"[첨부파일: {filename} ({mime_type})]"})
+    return content_parts
+
+
 async def send_message_stream(
     session_id: str,
     content: str,

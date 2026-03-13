@@ -121,12 +121,63 @@ async def get_messages(
 
 
 @router.post("/chat/messages/send", tags=["chat-message"])
-async def send_message(req: MessageSendRequest):
+async def send_message(request: Request):
     """
     메시지 전송 — SSE 스트리밍 응답.
     Content-Type: text/event-stream
+    JSON({session_id, content, model_override, attachments}) 또는
+    multipart/form-data(session_id, content, model, files[]) 모두 지원.
     """
-    session_id_str = str(req.session_id)
+    import base64 as _b64
+
+    content_type = request.headers.get("content-type", "")
+
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        session_id_str = str(form.get("session_id", ""))
+        content = str(form.get("content", ""))
+        model_override = form.get("model") or form.get("model_override") or None
+        attachments = []
+        for f in form.getlist("files"):
+            if hasattr(f, "read"):
+                data = await f.read()
+                mime = f.content_type or "application/octet-stream"
+                fname = f.filename or "unknown"
+                if mime.startswith("image/"):
+                    attachments.append({
+                        "type": "image",
+                        "base64": _b64.b64encode(data).decode(),
+                        "media_type": mime,
+                        "name": fname,
+                    })
+                elif mime.startswith("video/"):
+                    attachments.append({
+                        "type": "video",
+                        "base64": _b64.b64encode(data).decode(),
+                        "media_type": mime,
+                        "name": fname,
+                    })
+                elif mime == "application/pdf":
+                    attachments.append({
+                        "type": "pdf",
+                        "base64": _b64.b64encode(data).decode(),
+                        "name": fname,
+                        "media_type": mime,
+                    })
+                else:
+                    try:
+                        text_content = data.decode("utf-8", errors="replace")
+                        attachments.append({"type": "text", "name": fname, "content": text_content})
+                    except Exception:
+                        attachments.append({"type": "file", "name": fname})
+    else:
+        body = await request.json()
+        from app.models.chat import MessageSendRequest
+        req = MessageSendRequest(**body)
+        session_id_str = str(req.session_id)
+        content = req.content
+        model_override = req.model_override
+        attachments = req.attachments
 
     # ★ ContextVar를 HTTP 핸들러에서 조기 설정
     # with_heartbeat의 ensure_future()가 새 Task를 생성하여 generator 내부의
@@ -138,9 +189,9 @@ async def send_message(req: MessageSendRequest):
     stream = svc.with_heartbeat(
         svc.send_message_stream(
             session_id=session_id_str,
-            content=req.content,
-            attachments=req.attachments,
-            model_override=req.model_override,
+            content=content,
+            attachments=attachments,
+            model_override=model_override,
         ),
     )
     # 클라이언트 연결 종료 시 백그라운드에서 LLM 생성 완료 → DB 저장 보장
