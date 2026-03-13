@@ -255,9 +255,11 @@ async def _stream_anthropic(
     input_tokens = 0
     output_tokens = 0
 
-    # Tool Use 루프 — 무제한 (compaction이 컨텍스트 관리)
+    # Tool Use 루프 — 절대 상한 + wall-clock 타임아웃
     _MAX_TOOL_TURNS = int(os.getenv("MAX_TOOL_TURNS", "500"))
     _TOOL_TURN_EXTEND = 50  # 자동 연장 턴
+    _WALL_CLOCK_TIMEOUT = int(os.getenv("TOOL_LOOP_TIMEOUT_SEC", "1800"))  # 30분 절대 타임아웃
+    _wall_clock_start = __import__("time").monotonic()
     # 방어: messages에서 role="system" 필터링 — Claude API는 system을 top-level 파라미터로만 허용
     current_messages = [m for m in messages if m.get("role") != "system"]
     # 방어: 마지막 메시지가 user가 아니면 Claude API "must end with user message" 에러 방지
@@ -276,6 +278,13 @@ async def _stream_anthropic(
     _turn = 0
 
     while _turn < _effective_max_turns:
+        # Wall-clock 타임아웃 체크 (30분 기본)
+        _elapsed = __import__("time").monotonic() - _wall_clock_start
+        if _elapsed > _WALL_CLOCK_TIMEOUT:
+            logger.warning(f"wall_clock_timeout: {_elapsed:.0f}s > {_WALL_CLOCK_TIMEOUT}s, forcing stop at turn {_turn}")
+            yield {"type": "timeout", "content": f"⏱ 응답 시간 초과 ({_elapsed/60:.0f}분). 현재까지 결과를 반환합니다."}
+            break
+
         api_kwargs: Dict[str, Any] = {
             "model": model_id,
             "max_tokens": max_tokens,
@@ -425,16 +434,27 @@ async def _stream_anthropic(
             tool_calls_made.append(tu.name)
 
             # tool 실행 중 5초마다 heartbeat yield (SSE 타임아웃 방지)
+            # 개별 도구 120초 타임아웃 (deep_research/spawn_subagent는 600초)
+            _LONG_TOOLS = {"deep_research", "deep_crawl", "spawn_subagent", "spawn_parallel_subagents", "pipeline_c_execute"}
+            _tool_timeout = 600 if tu.name in _LONG_TOOLS else 120
             task = asyncio.create_task(executor.execute(tu.name, tu.input))
+            _tool_start = __import__("time").monotonic()
             while not task.done():
                 try:
                     await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
                 except asyncio.TimeoutError:
                     yield {"type": "heartbeat"}
+                    # 도구 실행 타임아웃 체크
+                    if __import__("time").monotonic() - _tool_start > _tool_timeout:
+                        task.cancel()
+                        logger.warning(f"tool_timeout: {tu.name} exceeded {_tool_timeout}s, cancelled")
+                        break
                 except Exception:
                     break
             try:
-                result_str = task.result() if task.done() and not task.cancelled() else '{"error": "tool execution failed"}'
+                result_str = task.result() if task.done() and not task.cancelled() else json.dumps({"error": f"tool execution timeout ({_tool_timeout}s)", "tool": tu.name})
+            except asyncio.CancelledError:
+                result_str = json.dumps({"error": f"tool execution timeout ({_tool_timeout}s)", "tool": tu.name})
             except Exception as exc:
                 logger.warning(f"tool execution error: tool={tu.name} error={exc}")
                 result_str = json.dumps({"error": str(exc), "tool": tu.name})

@@ -212,6 +212,17 @@ async def get_streaming_status(session_id: UUID):
     return {"is_streaming": False}
 
 
+@router.post("/chat/sessions/{session_id}/stop", tags=["chat-session"])
+async def stop_session_streaming(session_id: UUID):
+    """세션의 진행 중인 AI 응답 생성을 강제 중단.
+
+    현재까지 생성된 내용과 도구 호출 수를 반환.
+    프론트엔드 '중단' 버튼에서 호출하여 백엔드 프로세스까지 완전히 중단.
+    """
+    result = await svc.stop_session_streaming(str(session_id))
+    return result
+
+
 @router.put("/chat/messages/{message_id}/bookmark", response_model=MessageOut, tags=["chat-message"])
 async def toggle_bookmark(message_id: UUID):
     """북마크 토글."""

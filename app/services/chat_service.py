@@ -68,6 +68,8 @@ async def with_heartbeat(
 _active_bg_tasks: Dict[str, _heartbeat_asyncio.Task] = {}
 # 스트리밍 중간 상태 추적: session_id → {content, tool_count, last_tool, updated_at}
 _streaming_state: Dict[str, Dict[str, Any]] = {}
+# 클라이언트 이탈 후 자동 종료 시간 (초)
+_BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "300"))  # 5분
 
 _SENTINEL = object()  # Queue 종료 신호
 
@@ -153,8 +155,10 @@ async def with_background_completion(
     state: Dict[str, Any] = {"content": "", "tool_count": 0, "last_tool": "", "last_save": _bg_time.monotonic()}
     _streaming_state[session_id] = state
 
+    _client_gone_since: float = 0  # 클라이언트 이탈 시각 (monotonic)
+
     async def _producer():
-        nonlocal _client_gone
+        nonlocal _client_gone, _client_gone_since
         try:
             async for chunk in gen:
                 await queue.put(chunk)
@@ -173,12 +177,18 @@ async def with_background_completion(
                     except Exception:
                         pass
 
-                # 클라이언트 disconnect 후 15초마다 중간 저장
+                # 클라이언트 disconnect 후 처리
                 if _client_gone:
                     now = _bg_time.monotonic()
+                    # 15초마다 중간 저장
                     if now - state["last_save"] > 15:
                         state["last_save"] = now
                         await _interim_save_streaming(session_id, state)
+                    # 클라이언트 이탈 후 _BG_AUTO_CANCEL_SEC(5분) 경과 시 자동 중단
+                    if _client_gone_since and (now - _client_gone_since) > _BG_AUTO_CANCEL_SEC:
+                        logger.warning(f"bg_auto_cancel: session={session_id[:8]} client gone for {now - _client_gone_since:.0f}s, auto-stopping")
+                        await _interim_save_streaming(session_id, state)
+                        return  # producer 종료 → finally에서 cleanup
         except BaseException as e:
             # BaseException: CancelledError, GeneratorExit 등 모두 잡음
             logger.warning(f"bg_producer_error session={session_id}: {type(e).__name__}: {e}")
@@ -214,9 +224,10 @@ async def with_background_completion(
             yield item
     except (GeneratorExit, _heartbeat_asyncio.CancelledError):
         _client_gone = True
+        _client_gone_since = _bg_time.monotonic()
         # 즉시 중간 저장 (돌아왔을 때 바로 보이도록)
         _heartbeat_asyncio.create_task(_interim_save_streaming(session_id, state))
-        logger.info(f"client_disconnected session={session_id} — producer continues in background, interim save triggered")
+        logger.info(f"client_disconnected session={session_id} — producer continues in background (auto-cancel in {_BG_AUTO_CANCEL_SEC}s), interim save triggered")
 
 
 def get_active_bg_tasks() -> Dict[str, bool]:
@@ -226,6 +237,46 @@ def get_active_bg_tasks() -> Dict[str, bool]:
     for sid in done_sids:
         _active_bg_tasks.pop(sid, None)
     return {sid: not task.done() for sid, task in _active_bg_tasks.items()}
+
+
+async def stop_session_streaming(session_id: str) -> Dict[str, Any]:
+    """세션의 진행 중인 스트리밍을 강제 중단하고 현재까지 결과를 반환.
+
+    Returns:
+        {"stopped": True/False, "content": "현재까지 내용", "tool_count": N}
+    """
+    task = _active_bg_tasks.get(session_id)
+    state = _streaming_state.get(session_id, {})
+    result = {
+        "stopped": False,
+        "content": state.get("content", ""),
+        "tool_count": state.get("tool_count", 0),
+        "last_tool": state.get("last_tool", ""),
+    }
+
+    if task and not task.done():
+        # 중간 결과를 DB에 저장
+        if state:
+            await _interim_save_streaming(session_id, state)
+        # 태스크 취소
+        task.cancel()
+        try:
+            await _heartbeat_asyncio.wait_for(
+                _heartbeat_asyncio.shield(task), timeout=3.0
+            )
+        except (_heartbeat_asyncio.CancelledError, _heartbeat_asyncio.TimeoutError, Exception):
+            pass
+        _active_bg_tasks.pop(session_id, None)
+        _streaming_state.pop(session_id, None)
+        result["stopped"] = True
+        logger.info(f"session_streaming_stopped session={session_id[:8]} content_len={len(result['content'])} tools={result['tool_count']}")
+    else:
+        # 이미 완료되었거나 존재하지 않음
+        _active_bg_tasks.pop(session_id, None)
+        _streaming_state.pop(session_id, None)
+        result["stopped"] = False
+
+    return result
 
 
 def get_streaming_status(session_id: str) -> Optional[Dict[str, Any]]:
