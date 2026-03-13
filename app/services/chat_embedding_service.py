@@ -115,13 +115,18 @@ async def backfill_embeddings(pool: Any, batch_size: int = 20) -> str:
     return f"임베딩 백필 완료: {updated}/{len(rows)}건 처리"
 
 
-async def search_semantic(pool: Any, query: str, session_id: Optional[str] = None,
-                          limit: int = 10) -> List[dict]:
-    """시맨틱 검색 — 쿼리 임베딩 → pgvector 코사인 유사도."""
-    embeddings = await embed_texts([query])
-    if not embeddings:
-        return []
-    query_emb = embeddings[0]
+async def search_semantic(pool: Any, query: Any, session_id: Optional[str] = None,
+                          limit: int = 10, pre_embedded: bool = False) -> List[dict]:
+    """시맨틱 검색 — 쿼리 임베딩 → pgvector 코사인 유사도.
+    pre_embedded=True이면 query를 이미 생성된 임베딩 벡터로 사용 (중복 API 호출 방지).
+    """
+    if pre_embedded:
+        query_emb = query
+    else:
+        embeddings = await embed_texts([query])
+        if not embeddings:
+            return []
+        query_emb = embeddings[0]
 
     session_filter = ""
     params: list = [str(query_emb), limit]

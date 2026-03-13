@@ -159,32 +159,33 @@ async def auto_resolve_contradictions(
     import uuid as _uuid
     resolved_ids = []
     try:
-        # 새 지시를 memory_facts에 저장하여 supersede 대상 ID 확보
-        new_fact_id = _uuid.uuid4()
-        await conn.execute(
-            """INSERT INTO memory_facts (id, project, category, subject, detail, confidence, tags)
-               VALUES ($1, $2, 'ceo_instruction', $3, $4, 0.9, ARRAY['auto_resolved', 'directive'])""",
-            new_fact_id,
-            (project or "").upper()[:20] or None,
-            f"CEO 지시: {user_message[:80]}",
-            user_message[:500],
-        )
+        async with conn.transaction():
+            # 새 지시를 memory_facts에 저장하여 supersede 대상 ID 확보
+            new_fact_id = _uuid.uuid4()
+            await conn.execute(
+                """INSERT INTO memory_facts (id, project, category, subject, detail, confidence, tags)
+                   VALUES ($1, $2, 'ceo_instruction', $3, $4, 0.9, ARRAY['auto_resolved', 'directive'])""",
+                new_fact_id,
+                (project or "").upper()[:20] or None,
+                f"CEO 지시: {user_message[:80]}",
+                user_message[:500],
+            )
 
-        for c in contradictions:
-            try:
-                old_id = _uuid.UUID(c["id"])
-                await conn.execute(
-                    "UPDATE memory_facts SET superseded_by = $1 WHERE id = $2 AND superseded_by IS NULL",
-                    new_fact_id, old_id,
-                )
-                resolved_ids.append(c["id"])
-                logger.info(
-                    "b4_auto_resolved",
-                    old_subject=c["subject"][:50],
-                    new_fact_id=str(new_fact_id)[:8],
-                )
-            except Exception as e_res:
-                logger.debug("b4_auto_resolve_item_error", error=str(e_res))
+            for c in contradictions:
+                try:
+                    old_id = _uuid.UUID(c["id"])
+                    await conn.execute(
+                        "UPDATE memory_facts SET superseded_by = $1 WHERE id = $2 AND superseded_by IS NULL",
+                        new_fact_id, old_id,
+                    )
+                    resolved_ids.append(c["id"])
+                    logger.info(
+                        "b4_auto_resolved",
+                        old_subject=c["subject"][:50],
+                        new_fact_id=str(new_fact_id)[:8],
+                    )
+                except Exception as e_res:
+                    logger.debug("b4_auto_resolve_item_error", error=str(e_res))
 
     except Exception as e:
         logger.debug("b4_auto_resolve_error", error=str(e))

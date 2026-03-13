@@ -18,6 +18,20 @@ _ENABLED = os.getenv("SELF_EVAL_ENABLED", "true").lower() == "true"
 _MIN_RESPONSE_LEN = int(os.getenv("SELF_EVAL_MIN_LEN", "200"))
 _HAIKU_MODEL = os.getenv("SELF_EVAL_MODEL", "claude-haiku-4-5-20251001")
 
+_PROJECT_KEYS = ("KIS", "AADS", "GO100", "SF", "NTV2", "NAS", "CEO")
+
+
+def _normalize_project(raw: str | None) -> str | None:
+    """'[KIS] 자동매매' → 'KIS', '[AADS] 프로젝트 매니저' → 'AADS' 등."""
+    if not raw:
+        return None
+    upper = raw.upper()
+    for key in _PROJECT_KEYS:
+        if key in upper:
+            return key
+    return upper[:20] if raw else None
+
+
 _EVAL_PROMPT = """다음 AI 응답의 품질을 평가하세요.
 
 사용자 질문: {user_msg}
@@ -86,22 +100,39 @@ async def evaluate_response(
             try:
                 async with pool.acquire() as conn2:
                     session_row = await conn2.fetchrow(
-                        "SELECT session_id FROM chat_messages WHERE id = $1",
+                        "SELECT session_id, project FROM chat_messages WHERE id = $1",
                         uuid.UUID(message_id),
                     )
                     if session_row and session_row["session_id"]:
-                        await conn2.execute(
-                            """UPDATE memory_facts SET confidence = confidence * $1
+                        # 1차: session_id 기준 60분 이내 facts
+                        updated = await conn2.execute(
+                            """UPDATE memory_facts
+                               SET confidence = GREATEST(0.1, confidence * $1)
                                WHERE session_id = $2::uuid
-                                 AND created_at > NOW() - interval '60 seconds'
+                                 AND created_at > NOW() - interval '60 minutes'
                                  AND confidence > 0.1""",
                             max(0.3, overall),
                             session_row["session_id"],
                         )
+                        affected = int(updated.split()[-1]) if updated else 0
+                        # 2차: session hit 없으면 project + 1시간 이내 (보호 카테고리 제외)
+                        if affected == 0 and session_row.get("project"):
+                            await conn2.execute(
+                                """UPDATE memory_facts
+                                   SET confidence = GREATEST(0.1, confidence * $1)
+                                   WHERE project = $2
+                                     AND created_at > NOW() - interval '1 hour'
+                                     AND confidence > 0.3
+                                     AND category NOT IN ('ceo_instruction','ceo_preference','decision')""",
+                                max(0.5, overall + 0.2),
+                                session_row["project"],
+                            )
+                            affected = -1  # fallback used
                         logger.info(
                             "a1_fact_confidence_reduced",
                             score=overall,
                             session=str(session_row["session_id"])[:8],
+                            affected=affected,
                         )
             except Exception as e_a1:
                 logger.debug("a1_fact_confidence_error", error=str(e_a1))
@@ -126,12 +157,14 @@ async def evaluate_response(
                 )
                 reflection = _refl_resp.content[0].text.strip() if _refl_resp.content else ""
                 if reflection:
+                    # MEDIUM-6: 프로젝트명 정규화 (workspace_name → project code)
+                    normalized_project = _normalize_project(project)
                     async with pool.acquire() as conn_refl:
                         await conn_refl.execute(
                             """INSERT INTO memory_facts (session_id, project, category, subject, detail, confidence, tags)
                                VALUES ($1::uuid, $2, 'error_pattern', $3, $4, 0.85, ARRAY['reflexion', 'self-improvement'])""",
                             uuid.UUID(session_id),
-                            (project or "").upper()[:20] or None,
+                            normalized_project,
                             f"품질 부족: {details.get('note', '')[:100]}",
                             reflection[:500],
                         )

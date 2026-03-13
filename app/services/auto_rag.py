@@ -37,14 +37,21 @@ async def build_auto_rag_context(
         return ""
 
     try:
-        results = await _search_relevant(user_message, session_id, project, current_message_ids)
+        # 임베딩을 한 번만 생성하여 search + reask detection에 재사용
+        from app.services.chat_embedding_service import embed_texts
+        embeddings = await embed_texts([user_message[:500]])
+        if not embeddings or not embeddings[0]:
+            return ""
+        query_emb = embeddings[0]
+
+        results = await _search_relevant(query_emb, session_id, project, current_message_ids)
         if not results:
             return ""
 
-        # A4: Re-ask detection — same session, high similarity, recent
+        # A4: Re-ask detection — same session, high similarity, recent (임베딩 재사용)
         reask_warning = ""
         try:
-            reask_detected = await _detect_reask(user_message, session_id)
+            reask_detected = await _detect_reask(query_emb, session_id)
             if reask_detected:
                 reask_warning = (
                     "\u26a0\ufe0f \uc774\uc804\uc5d0 \uc720\uc0ac\ud55c \uc9c8\ubb38\uc774 "
@@ -58,6 +65,7 @@ async def build_auto_rag_context(
         lines = []
         from app.core.token_utils import estimate_tokens
         total_tokens = 0
+        used_fact_ids = []  # HIGH-5: 최종 출력에 포함된 fact ID만 추적
 
         for r in results:
             source = r.get("source", "")
@@ -78,9 +86,28 @@ async def build_auto_rag_context(
 
             lines.append(line)
             total_tokens += line_tokens
+            # fact_id가 있으면 (memory_facts 출처) 추적
+            if r.get("fact_id"):
+                used_fact_ids.append(r["fact_id"])
 
         if not lines:
             return ""
+
+        # HIGH-5: 최종 출력에 포함된 fact만 referenced_count 증가
+        if used_fact_ids:
+            try:
+                from app.core.db_pool import get_pool
+                pool = get_pool()
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        """UPDATE memory_facts
+                           SET referenced_count = referenced_count + 1,
+                               last_referenced_at = NOW()
+                           WHERE id = ANY($1::uuid[])""",
+                        used_fact_ids,
+                    )
+            except Exception as e_ref:
+                logger.debug("auto_rag_ref_update_error", error=str(e_ref))
 
         context = "\n".join(lines)
         block = (
@@ -100,20 +127,20 @@ async def build_auto_rag_context(
 
 
 async def _search_relevant(
-    query: str,
+    query_emb: list,
     session_id: str,
     project: Optional[str],
     current_message_ids: Optional[set],
 ) -> List[Dict[str, Any]]:
-    """memory_facts + chat_messages에서 시맨틱 검색."""
+    """memory_facts + chat_messages에서 시맨틱 검색. query_emb는 사전 생성된 임베딩."""
     import asyncio
 
     results = []
     try:
         # 병렬: memory_facts 검색 + chat_messages 검색
         fact_results, msg_results = await asyncio.gather(
-            _search_memory_facts(query, project),
-            _search_chat_messages(query, session_id),
+            _search_memory_facts(query_emb, project),
+            _search_chat_messages(query_emb, session_id),
             return_exceptions=True,
         )
 
@@ -136,22 +163,15 @@ async def _search_relevant(
         return []
 
 
-async def _search_memory_facts(query: str, project: Optional[str]) -> List[Dict]:
-    """memory_facts 테이블에서 시맨틱 검색."""
+async def _search_memory_facts(query_emb: list, project: Optional[str]) -> List[Dict]:
+    """memory_facts 테이블에서 시맨틱 검색. query_emb는 사전 생성된 임베딩."""
     try:
-        from app.services.chat_embedding_service import embed_texts
         from app.core.db_pool import get_pool
 
-        embeddings = await embed_texts([query[:500]])
-        if not embeddings or not embeddings[0]:
-            return []
-
-        query_emb = embeddings[0]
         pool = get_pool()
 
         async with pool.acquire() as conn:
             if project:
-                # 같은 프로젝트 우선, 다른 프로젝트는 크로스세션으로 표시
                 rows = await conn.fetch(
                     """
                     SELECT id, subject, detail, category, project, created_at,
@@ -194,7 +214,6 @@ async def _search_memory_facts(query: str, project: Optional[str]) -> List[Dict]
                 origin = "same_project" if proj == (project or "").upper() else "cross_session"
 
                 # A2: Triple search score (Stanford Generative Agents style)
-                # recency_weight = exp(-days_old / 30)
                 days_old = 0.0
                 if r["created_at"]:
                     created = r["created_at"]
@@ -203,17 +222,13 @@ async def _search_memory_facts(query: str, project: Optional[str]) -> List[Dict]
                     days_old = max(0, (now_utc - created).total_seconds() / 86400)
                 recency_weight = math.exp(-days_old / 30)
 
-                # importance_weight = 1.0 + log(1 + referenced_count) * 0.1
                 ref_count = int(r["referenced_count"] or 0)
                 importance_weight = 1.0 + math.log(1 + ref_count) * 0.1
 
                 final_score = sim * recency_weight * importance_weight
 
-                # referenced_count 증가
-                await conn.execute(
-                    "UPDATE memory_facts SET referenced_count = referenced_count + 1, last_referenced_at = NOW() WHERE id = $1",
-                    r["id"],
-                )
+                # HIGH-5: referenced_count는 여기서 증가하지 않음
+                # → build_auto_rag_context에서 최종 출력 fact만 batch update
 
                 results.append({
                     "source": f"[{proj}] {r['category']}",
@@ -221,6 +236,7 @@ async def _search_memory_facts(query: str, project: Optional[str]) -> List[Dict]
                     "similarity": final_score,
                     "timestamp": ts,
                     "origin": origin,
+                    "fact_id": r["id"],  # UUID for batch update
                 })
 
             # Re-sort by composite score
@@ -232,15 +248,15 @@ async def _search_memory_facts(query: str, project: Optional[str]) -> List[Dict]
         return []
 
 
-async def _search_chat_messages(query: str, session_id: str) -> List[Dict]:
-    """chat_messages 테이블에서 시맨틱 검색 (크로스 세션 포함)."""
+async def _search_chat_messages(query_emb: list, session_id: str) -> List[Dict]:
+    """chat_messages 테이블에서 시맨틱 검색 (크로스 세션 포함). query_emb는 사전 생성된 임베딩."""
     try:
         from app.services.chat_embedding_service import search_semantic
         from app.core.db_pool import get_pool
 
         pool = get_pool()
         # 같은 세션 내에서만 검색 (크로스 프로젝트 오염 방지)
-        results_all = await search_semantic(pool, query, session_id=session_id, limit=_RAG_TOP_K * 2)
+        results_all = await search_semantic(pool, query_emb, session_id=session_id, limit=_RAG_TOP_K * 2, pre_embedded=True)
 
         output = []
         for r in results_all:
@@ -271,18 +287,14 @@ async def _search_chat_messages(query: str, session_id: str) -> List[Dict]:
         return []
 
 
-async def _detect_reask(query: str, session_id: str) -> bool:
-    """A4: Detect if user is re-asking a similar question within the same session (last 30 min)."""
+async def _detect_reask(query_emb: list, session_id: str) -> bool:
+    """A4: Detect if user is re-asking a similar question within the same session (last 30 min).
+    MEDIUM-1 fix: query_emb는 사전 생성된 임베딩을 재사용 (중복 API 호출 제거).
+    """
     try:
         import uuid as _uuid
-        from app.services.chat_embedding_service import embed_texts
         from app.core.db_pool import get_pool
 
-        embeddings = await embed_texts([query[:500]])
-        if not embeddings or not embeddings[0]:
-            return False
-
-        query_emb = embeddings[0]
         pool = get_pool()
         sid = _uuid.UUID(session_id)
 

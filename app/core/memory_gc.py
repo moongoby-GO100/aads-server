@@ -113,6 +113,15 @@ async def consolidate_memory_facts(pool) -> dict:
     """
     result = {"boosted": 0, "decayed": 0, "merged": 0, "snapshots": 0}
 
+    # B3: ensure is_error column exists
+    try:
+        async with pool.acquire() as conn_ddl:
+            await conn_ddl.execute(
+                "ALTER TABLE tool_results_archive ADD COLUMN IF NOT EXISTS is_error BOOLEAN DEFAULT FALSE"
+            )
+    except Exception:
+        pass
+
     try:
         async with pool.acquire() as conn:
             # 1. 자주 참조된 사실 강화
@@ -136,17 +145,17 @@ async def consolidate_memory_facts(pool) -> dict:
                     """
                     UPDATE memory_facts
                     SET confidence = confidence * $1
-                    WHERE category = $4
+                    WHERE category = $3
                       AND (referenced_count = 0 OR last_referenced_at IS NULL
                            OR last_referenced_at < NOW() - INTERVAL '14 days')
                       AND created_at < NOW() - make_interval(days => $2)
                       AND superseded_by IS NULL
-                      AND confidence > 0.1
+                      AND confidence > $4
                     """,
                     rate,
                     _FACTS_DECAY_DAYS,
-                    GC_DELETE_THRESHOLD,
                     cat,
+                    GC_DELETE_THRESHOLD,
                 )
                 total_decayed += int(cat_decayed.split()[-1]) if cat_decayed else 0
 
@@ -328,66 +337,56 @@ async def _generate_project_snapshots(conn) -> int:
 
 
 async def _analyze_tool_efficiency(pool) -> None:
-    """B3: Tool efficiency analysis — 도구 사용 통계를 ai_observations에 저장.
-
-    tool_results_archive에서 최근 7일 데이터를 분석:
-    - 도구별 성공률 (error/Error/실패 미포함 비율)
-    - 가장 많이 사용된 도구 Top 5
-    결과를 ai_observations에 tool_strategy 카테고리로 upsert.
-    """
+    """B3: 도구 효율 분석 — tool_results_archive 기반 성공률 주간 분석."""
     try:
         async with pool.acquire() as conn:
-            # 도구별 사용 횟수 + 에러 횟수 (최근 7일)
-            rows = await conn.fetch(
-                """
-                SELECT tool_name,
-                       COUNT(*) AS total,
-                       COUNT(*) FILTER (
-                           WHERE raw_output ILIKE '%error%'
-                              OR raw_output ILIKE '%Error%'
-                              OR raw_output ILIKE '%실패%'
-                       ) AS error_count
-                FROM tool_results_archive
-                WHERE created_at > NOW() - INTERVAL '7 days'
-                GROUP BY tool_name
-                ORDER BY COUNT(*) DESC
-                """
+            # is_error 컬럼 존재 확인
+            col_exists = await conn.fetchval(
+                """SELECT COUNT(*) FROM information_schema.columns
+                   WHERE table_name='tool_results_archive' AND column_name='is_error'"""
             )
+            if not col_exists:
+                return
 
+            rows = await conn.fetch(
+                """SELECT tool_name,
+                          COUNT(*) as total,
+                          SUM(CASE WHEN is_error THEN 1 ELSE 0 END) as errors,
+                          AVG(output_tokens) as avg_tokens
+                   FROM tool_results_archive
+                   WHERE created_at > NOW() - INTERVAL '7 days'
+                   GROUP BY tool_name
+                   HAVING COUNT(*) >= 3
+                   ORDER BY errors DESC"""
+            )
             if not rows:
                 return
 
-            # Top 5 most-used tools
-            top5 = []
-            for r in rows[:5]:
-                total = int(r["total"])
-                errors = int(r["error_count"])
-                success_rate = ((total - errors) / total * 100) if total > 0 else 0
-                top5.append(f"{r['tool_name']}: {total}회 (성공률 {success_rate:.0f}%)")
+            insights = []
+            for r in rows:
+                error_rate = float(r["errors"]) / float(r["total"]) if r["total"] else 0
+                if error_rate > 0.3:
+                    insights.append(
+                        f"{r['tool_name']}: 에러율 {error_rate:.0%} ({r['errors']}/{r['total']}건) — 사용 주의"
+                    )
+                elif r["avg_tokens"] and float(r["avg_tokens"]) > 3000:
+                    insights.append(
+                        f"{r['tool_name']}: 평균 {r['avg_tokens']:.0f} 토큰 — 고비용 도구"
+                    )
 
-            summary = "주간 도구 사용 분석 Top5:\n" + "\n".join(top5)
-
-            # 전체 통계
-            total_all = sum(int(r["total"]) for r in rows)
-            error_all = sum(int(r["error_count"]) for r in rows)
-            overall_rate = ((total_all - error_all) / total_all * 100) if total_all > 0 else 0
-            summary += f"\n전체: {total_all}회, 성공률 {overall_rate:.0f}%"
-
-            # ai_observations에 upsert
-            await conn.execute(
-                """
-                INSERT INTO ai_observations (category, key, value, confidence, updated_at)
-                VALUES ('tool_strategy', 'weekly_tool_efficiency', $1, 0.7, NOW())
-                ON CONFLICT (category, key) DO UPDATE SET
-                    value = EXCLUDED.value,
-                    confidence = EXCLUDED.confidence,
-                    updated_at = NOW()
-                """,
-                summary,
-            )
-
-            logger.info("b3_tool_efficiency_saved", tools=len(rows), total=total_all)
-
+            if insights:
+                insight_text = "주간 도구 효율 분석:\n" + "\n".join(f"- {i}" for i in insights)
+                async with pool.acquire() as conn2:
+                    await conn2.execute(
+                        """INSERT INTO ai_observations (category, key, value, confidence)
+                           VALUES ('tool_strategy', 'weekly_tool_efficiency', $1, 0.8)
+                           ON CONFLICT (category, key, COALESCE(project, '')) DO UPDATE SET
+                               value = EXCLUDED.value,
+                               confidence = 0.8,
+                               updated_at = NOW()""",
+                        insight_text,
+                    )
+                logger.info("b3_tool_efficiency_updated", insights=len(insights))
     except Exception as e:
         logger.debug("b3_tool_efficiency_error", error=str(e))
 
@@ -482,6 +481,12 @@ async def _generate_project_insights(conn, project: str) -> int:
 - 마크다운 코드블록 없이 JSON만 반환"""
 
     try:
+        import os as _os
+        api_key = _os.getenv("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            logger.warning("sleep_agent_no_api_key", project=project, hint="ANTHROPIC_API_KEY not set")
+            return 0
+
         from anthropic import AsyncAnthropic
         client = AsyncAnthropic()
 
@@ -499,6 +504,7 @@ async def _generate_project_insights(conn, project: str) -> int:
 
         insights = json.loads(text)
         if not isinstance(insights, list):
+            logger.debug("sleep_agent_invalid_json", project=project, text=text[:100])
             return 0
 
         saved = 0
@@ -536,8 +542,11 @@ async def _generate_project_insights(conn, project: str) -> int:
         logger.info("sleep_agent_insights_generated", project=project, count=saved)
         return saved
 
+    except json.JSONDecodeError as e_json:
+        logger.warning("sleep_agent_json_parse_error", project=project, error=str(e_json))
+        return 0
     except Exception as e:
-        logger.debug("sleep_agent_haiku_error", project=project, error=str(e))
+        logger.warning("sleep_agent_haiku_error", project=project, error=str(e))
         return 0
 
 
@@ -614,6 +623,11 @@ async def _analyze_quality_and_optimize(conn) -> int:
 교정 지시만 반환하세요 (설명 불필요)."""
 
         try:
+            import os as _os
+            if not _os.getenv("ANTHROPIC_API_KEY", ""):
+                logger.warning("sleep_agent_c2_no_api_key", workspace=workspace)
+                continue
+
             from anthropic import AsyncAnthropic
             client = AsyncAnthropic()
 
