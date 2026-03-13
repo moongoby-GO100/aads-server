@@ -18,23 +18,26 @@ logger = logging.getLogger(__name__)
 
 # ─── Tool Output Compression ────────────────────────────────────────────────
 
-# #37: 도구별 차등 절단 한계
-_DEFAULT_TRUNCATE = 2000
+# #37: 도구별 차등 절단 한계 — 파일 읽기/코드 탐색은 충분한 크기 보장
+_DEFAULT_TRUNCATE = 8000
 _TOOL_TRUNCATE_LIMITS: Dict[str, int] = {
-    "health_check": 200,
-    "read_remote_file": 500,
-    "code_explorer": 500,
-    "semantic_code_search": 500,
-    "query_database": 300,
-    "dashboard_query": 300,
-    "query_project_database": 300,
-    "web_search": 300,
-    "web_search_brave": 300,
-    "web_search_naver": 300,
-    "web_search_kakao": 300,
-    "jina_read": 300,
-    "git_remote_status": 200,
-    "run_remote_command": 300,
+    "health_check": 2000,
+    "read_remote_file": 30000,
+    "code_explorer": 15000,
+    "semantic_code_search": 15000,
+    "query_database": 8000,
+    "dashboard_query": 8000,
+    "query_project_database": 8000,
+    "web_search": 5000,
+    "web_search_brave": 5000,
+    "web_search_naver": 5000,
+    "web_search_kakao": 5000,
+    "jina_read": 10000,
+    "git_remote_status": 3000,
+    "run_remote_command": 15000,
+    "list_remote_dir": 8000,
+    "write_remote_file": 3000,
+    "patch_remote_file": 5000,
 }
 _ERROR_PATTERNS = re.compile(
     r"(error|exception|traceback|failed|fatal|critical)",

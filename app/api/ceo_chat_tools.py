@@ -394,7 +394,7 @@ _SSH_SENSITIVE_PATTERNS = re.compile(
 _SSH_TIMEOUT = 10  # 초 (ConnectTimeout=5 + CommandTimeout=5)
 _SSH_WRITE_TIMEOUT = 15  # 쓰기 작업은 조금 더 여유
 _SSH_CMD_TIMEOUT = 30  # 원격 명령 실행 타임아웃
-_SSH_MAX_RESULT_BYTES = 50 * 1024  # 50KB
+_SSH_MAX_RESULT_BYTES = 200 * 1024  # 200KB (파일 분할 읽기 방지)
 _SSH_MAX_WRITE_BYTES = 1024 * 1024  # 1MB 쓰기 제한
 _SSH_MAX_FILES = 100
 _SSH_MAX_DEPTH = 5
