@@ -12,6 +12,7 @@ Ephemeral Document Context — 파일 첨부 시 대화 맥락 보호 시스템.
 """
 from __future__ import annotations
 
+import base64
 import logging
 import os
 from typing import Any, Dict, List, Optional
@@ -34,6 +35,18 @@ TEXT_EXTENSIONS = frozenset({
 PDF_EXTENSIONS = frozenset({".pdf"})
 EXCEL_EXTENSIONS = frozenset({".xlsx", ".xls"})
 
+# 이미지 파일 (Claude Vision API 지원)
+IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp"})
+IMAGE_MEDIA_TYPES: Dict[str, str] = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+# Vision API 이미지 크기 제한 (5MB)
+IMAGE_MAX_BYTES = int(os.getenv("VISION_IMAGE_MAX_BYTES", str(5 * 1024 * 1024)))
+
 
 def estimate_tokens(text: str) -> int:
     """한국어/다국어를 고려한 토큰 추정 (UTF-8 bytes // 3)."""
@@ -50,11 +63,14 @@ def extract_file_contents(
 
     Returns:
         list of {name, path, ext, content, tokens, readable, error}
+        이미지의 경우: 추가로 {base64_data, media_type, is_image} 포함
     """
     results = []
     for att in attachments:
-        file_path = att.get("path", "") if isinstance(att, dict) else ""
-        file_name = att.get("name", "") if isinstance(att, dict) else str(att)
+        if not isinstance(att, dict):
+            att = {}
+        file_path = att.get("path", "")
+        file_name = att.get("name", "unknown")
         ext = os.path.splitext(file_path)[1].lower() if file_path else ""
 
         entry: Dict[str, Any] = {
@@ -67,8 +83,64 @@ def extract_file_contents(
             "error": None,
         }
 
+        # ── 인라인 base64 이미지 (Ctrl+V 클립보드 붙여넣기 등, 디스크 저장 없이 직접 전달)
+        if att.get("type") == "image" and att.get("base64"):
+            entry["base64_data"] = att["base64"]
+            entry["media_type"] = att.get("media_type", "image/jpeg")
+            entry["is_image"] = True
+            entry["readable"] = True
+            entry["tokens"] = len(att["base64"]) // 1000  # base64 길이 기반 토큰 추정
+            results.append(entry)
+            continue
+
+        # ── 인라인 PDF base64 (브라우저에서 직접 전달 — 텍스트 추출)
+        if att.get("type") == "pdf" and att.get("base64"):
+            try:
+                raw_bytes = base64.b64decode(att["base64"])
+                pdf_text = _extract_pdf_from_bytes(raw_bytes, max_read_bytes)
+                if pdf_text:
+                    entry["content"] = pdf_text
+                    entry["tokens"] = estimate_tokens(pdf_text)
+                    entry["readable"] = True
+                else:
+                    entry["content"] = f"[PDF 파일: {file_name}] (텍스트 추출 불가)"
+                    entry["readable"] = True
+                    entry["tokens"] = 10
+            except Exception as e:
+                entry["error"] = f"pdf_decode_error: {e}"
+            results.append(entry)
+            continue
+
+        # ── 인라인 텍스트 (클라이언트 측에서 읽어 직접 전달 — 디스크 저장 불필요)
+        if att.get("type") == "text" and att.get("content") is not None:
+            content_str = att["content"]
+            entry["content"] = content_str
+            entry["tokens"] = estimate_tokens(content_str)
+            entry["readable"] = True
+            results.append(entry)
+            continue
+
         if not file_path or not os.path.isfile(file_path):
             entry["error"] = "file_not_found"
+            results.append(entry)
+            continue
+
+        # 이미지 파일 (Claude Vision API) — 디스크에서 읽기
+        if ext in IMAGE_EXTENSIONS:
+            try:
+                file_size = os.path.getsize(file_path)
+                if file_size > IMAGE_MAX_BYTES:
+                    entry["error"] = f"image_too_large: {file_size // 1024}KB > {IMAGE_MAX_BYTES // 1024}KB"
+                else:
+                    with open(file_path, "rb") as f:
+                        raw_bytes = f.read()
+                    entry["base64_data"] = base64.b64encode(raw_bytes).decode("utf-8")
+                    entry["media_type"] = IMAGE_MEDIA_TYPES.get(ext, "image/jpeg")
+                    entry["is_image"] = True
+                    entry["readable"] = True
+                    entry["tokens"] = len(raw_bytes) // 750  # 이미지 토큰 추정
+            except Exception as e:
+                entry["error"] = str(e)
             results.append(entry)
             continue
 
@@ -107,6 +179,49 @@ def extract_file_contents(
         results.append(entry)
 
     return results
+
+
+def _extract_pdf_from_bytes(raw_bytes: bytes, max_bytes: int = 500_000) -> str:
+    """인라인 PDF bytes에서 텍스트 추출 (pymupdf 우선, pdfplumber 폴백)."""
+    import io
+    # pymupdf (fitz)
+    try:
+        import fitz  # pymupdf
+        doc = fitz.open(stream=raw_bytes, filetype="pdf")
+        pages = []
+        total_chars = 0
+        for page in doc:
+            text = page.get_text()
+            pages.append(text)
+            total_chars += len(text)
+            if total_chars > max_bytes:
+                break
+        doc.close()
+        return "\n\n--- 페이지 구분 ---\n\n".join(pages)
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.debug(f"pymupdf bytes extraction failed: {e}")
+
+    # pdfplumber fallback
+    try:
+        import pdfplumber
+        pages = []
+        total_chars = 0
+        with pdfplumber.open(io.BytesIO(raw_bytes)) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text() or ""
+                pages.append(text)
+                total_chars += len(text)
+                if total_chars > max_bytes:
+                    break
+        return "\n\n--- 페이지 구분 ---\n\n".join(pages)
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.debug(f"pdfplumber bytes extraction failed: {e}")
+
+    return ""
 
 
 def _extract_pdf(file_path: str, max_bytes: int = 500_000) -> str:
@@ -241,7 +356,9 @@ def build_file_reference_summary(
         ext = f["ext"]
         readable = f.get("readable", False)
 
-        if readable and tokens > 0:
+        if f.get("is_image") and readable:
+            summaries.append(f"[첨부이미지: {name} ({ext})]")
+        elif readable and tokens > 0:
             # 파일 첫 200자 미리보기
             preview = f["content"][:200].replace("\n", " ").strip()
             if len(f["content"]) > 200:
@@ -255,6 +372,30 @@ def build_file_reference_summary(
             summaries.append(f"[첨부파일: {name} ({ext})]")
 
     return "\n".join(summaries)
+
+
+def extract_image_blocks(
+    file_contents: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Claude Vision API 형식의 이미지 content block 목록 추출.
+
+    Returns:
+        list of {"type": "image", "source": {"type": "base64", "media_type": ..., "data": ...}}
+    """
+    blocks = []
+    for f in file_contents:
+        if f.get("is_image") and f.get("readable") and f.get("base64_data"):
+            blocks.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": f.get("media_type", "image/jpeg"),
+                    "data": f["base64_data"],
+                },
+            })
+            logger.debug(f"[Vision] image block prepared: {f['name']} ({f.get('media_type')})")
+    return blocks
 
 
 # ── Stage 3: 파일 재참조 ──────────────────────────────────────────────

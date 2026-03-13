@@ -121,6 +121,24 @@ async def call_stream(
             yield event
 
 
+def _convert_content_for_openai(content: Any) -> Any:
+    """Anthropic content 블록 배열을 OpenAI/LiteLLM 포맷으로 변환."""
+    if not isinstance(content, list):
+        return content
+    result = []
+    for block in content:
+        if not isinstance(block, dict):
+            result.append({"type": "text", "text": str(block)})
+        elif block.get("type") == "text":
+            result.append({"type": "text", "text": block.get("text", "")})
+        elif block.get("type") == "image":
+            source = block.get("source", {})
+            if source.get("type") == "base64":
+                data_url = f"data:{source['media_type']};base64,{source['data']}"
+                result.append({"type": "image_url", "image_url": {"url": data_url}})
+    return result if len(result) != 1 or result[0].get("type") != "text" else result[0]["text"]
+
+
 async def _stream_litellm(
     model: str,
     system_prompt: str,
@@ -129,6 +147,10 @@ async def _stream_litellm(
     """LiteLLM 프록시를 통한 스트리밍."""
     # messages에서 기존 system role 제거 후 새 system 프롬프트 추가
     clean_msgs = [m for m in messages if m.get("role") != "system"]
+    # Anthropic content 블록 → OpenAI 포맷 변환 (이미지 포함 시)
+    clean_msgs = [
+        {**m, "content": _convert_content_for_openai(m["content"])} for m in clean_msgs
+    ]
     msgs = [{"role": "system", "content": system_prompt}] + clean_msgs
 
     full_text = ""

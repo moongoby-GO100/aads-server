@@ -698,6 +698,7 @@ async def send_message_stream(
         #    파일 전문은 content에 넣지 않고 Layer D로 현재 턴에만 주입.
         #    히스토리에는 참조 요약만 저장하여 컨텍스트 낭비 방지.
         _ephemeral_doc_context = ""
+        _vision_images: list = []  # Claude Vision API용 이미지 content blocks
         logger.info(f"[ATTACH] session={session_id[:8]} attachments={attachments}")
         if attachments:
             from app.core.document_context import (
@@ -710,7 +711,21 @@ async def send_message_stream(
             _total_tokens = sum(f["tokens"] for f in _file_contents)
             logger.info(f"[ATTACH] extracted {_readable_count} files, ~{_total_tokens} tokens")
 
-            # Layer D: 현재 턴에만 주입될 전문 컨텍스트
+            # Vision: 이미지 파일 추출 → Claude Vision API content blocks 구성
+            _image_files = [f for f in _file_contents if f.get("is_image") and f.get("base64_data")]
+            for _img in _image_files:
+                _vision_images.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": _img["media_type"],
+                        "data": _img["base64_data"],
+                    },
+                })
+            if _vision_images:
+                logger.info(f"[VISION] {len(_vision_images)} image(s) extracted for Vision API")
+
+            # Layer D: 현재 턴에만 주입될 전문 컨텍스트 (텍스트 파일만)
             _ephemeral_doc_context = build_ephemeral_document_layer(_file_contents)
 
             # 히스토리에 저장할 참조 요약 (전문 대신)
@@ -780,6 +795,19 @@ async def send_message_stream(
             logger.error(f"context_builder failed, using raw fallback: {_ctx_err}")
             system_prompt = base_prompt or "You are a helpful AI assistant."
             messages = [{"role": m["role"], "content": m["content"]} for m in raw_messages[-20:]]
+
+        # Vision: 이미지가 있으면 마지막 user 메시지를 멀티모달 content 배열로 교체
+        if _vision_images:
+            for _vi in range(len(messages) - 1, -1, -1):
+                if messages[_vi].get("role") == "user":
+                    _text = messages[_vi].get("content", "")
+                    if isinstance(_text, str):
+                        messages[_vi] = {
+                            "role": "user",
+                            "content": [{"type": "text", "text": _text}] + _vision_images,
+                        }
+                    break
+            logger.info(f"[VISION] injected {len(_vision_images)} image(s) into last user message")
 
         # ★ #19: Agent SDK resume용 세션 설정 프리페치
         _session_settings: dict = {}
