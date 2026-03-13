@@ -255,9 +255,9 @@ async def _stream_anthropic(
     input_tokens = 0
     output_tokens = 0
 
-    # Tool Use 루프 (최대 20회 — 무한 대화 지원)
-    _MAX_TOOL_TURNS = int(os.getenv("MAX_TOOL_TURNS", "20"))
-    _TOOL_TURN_EXTEND = 20  # CEO 승인 시 추가 턴
+    # Tool Use 루프 — 무제한 (compaction이 컨텍스트 관리)
+    _MAX_TOOL_TURNS = int(os.getenv("MAX_TOOL_TURNS", "500"))
+    _TOOL_TURN_EXTEND = 50  # 자동 연장 턴
     # 방어: messages에서 role="system" 필터링 — Claude API는 system을 top-level 파라미터로만 허용
     current_messages = [m for m in messages if m.get("role") != "system"]
     # 방어: 마지막 메시지가 user가 아니면 Claude API "must end with user message" 에러 방지
@@ -470,8 +470,7 @@ async def _stream_anthropic(
         if _turn >= _effective_max_turns and tool_use_blocks:
             logger.warning(f"tool_turn_limit: {_turn}/{_effective_max_turns} turns used, extending by {_TOOL_TURN_EXTEND}")
             _effective_max_turns += _TOOL_TURN_EXTEND
-            if _effective_max_turns > 200:
-                _effective_max_turns = 200
+            # 무제한 — compaction이 컨텍스트 자동 관리
             yield {
                 "type": "tool_turn_limit",
                 "content": f"도구 호출이 {_turn}회에 도달했습니다. {_TOOL_TURN_EXTEND}턴 자동 연장합니다.",
