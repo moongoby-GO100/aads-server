@@ -366,10 +366,11 @@ async def read_remote_file(message: str, workspace_id: str) -> Dict[str, Any]:
                 break
 
         if not project:
-            return {"error": "프로젝트명을 찾을 수 없음 (KIS, GO100, SF, NTV2 중 하나 포함 필요)"}
+            return {"error": "프로젝트명을 찾을 수 없음 (AADS, KIS, GO100, SF, NTV2 중 하나 포함 필요)"}
 
         # 파일 경로 추출 (기본값: 주요 설정 파일)
         default_files = {
+            "AADS": "app/config.py",
             "KIS": "config.py",
             "GO100": "config.py",
             "SF": "config.py",

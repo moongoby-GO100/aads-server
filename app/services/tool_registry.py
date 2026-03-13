@@ -95,10 +95,10 @@ TOOL_CATEGORY_GUIDE = """\
 ## 도구 우선순위 가이드 (총 43개)
 
 ### 🔴 Tier 1 — 즉시 사용 (내부 데이터, 무료, <3초) ★ 최우선
-- read_remote_file: 원격 서버 소스 코드/설정 읽기 — 코드 분석 1순위
+- read_remote_file: 원격 서버 소스 코드/설정 읽기 (AADS/KIS/GO100/SF/NTV2) — 코드 분석 1순위
 - list_remote_dir: 원격 디렉터리 탐색/검색
 - query_database: PostgreSQL SELECT — 데이터 확인 2순위 (AADS 내부 DB)
-- query_project_database: 프로젝트별 원격 DB SELECT — KIS/GO100/SF/NTV2
+- query_project_database: 프로젝트별 원격 DB SELECT — AADS/KIS/GO100/SF/NTV2
 - health_check: 서버 헬스체크
 - get_all_service_status: 6개 서비스 상태 병렬 조회
 - check_directive_status: 지시사항 진행 종합 확인
@@ -380,7 +380,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "project": {
                     "type": "string",
                     "description": "프로젝트명. KIS(주식자동매매), GO100, SF, NTV2 중 하나.",
-                    "enum": ["KIS", "GO100", "SF", "NTV2"],
+                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
                 },
                 "query": {
                     "type": "string",
@@ -429,7 +429,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "project": {
                     "type": "string",
                     "description": "data 없을 때 자동 조회할 프로젝트 (KIS/GO100/SF/NTV2)",
-                    "enum": ["KIS", "GO100", "SF", "NTV2"],
+                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
                 },
                 "query": {
                     "type": "string",
@@ -830,7 +830,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "project": {
                     "type": "string",
                     "description": "점검할 프로젝트명. KIS, GO100, SF, NTV2 중 하나.",
-                    "enum": ["KIS", "GO100", "SF", "NTV2"],
+                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
                 },
                 "checks": {
                     "type": "array",

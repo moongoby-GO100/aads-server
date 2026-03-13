@@ -29,13 +29,14 @@ logger = logging.getLogger(__name__)
 
 # ─── 프로젝트별 DB 설정 ──────────────────────────────────────────────────────
 
-_SUPPORTED_PROJECTS = ("KIS", "GO100", "SF", "NTV2")
+_SUPPORTED_PROJECTS = ("AADS", "KIS", "GO100", "SF", "NTV2")
 
 # GO100은 KIS와 동일 DB — 별칭 매핑
 _PROJECT_ALIAS = {"GO100": "KIS"}
 
 # DB 엔진 타입 (환경변수 {PROJECT}_DB_TYPE으로 오버라이드 가능)
 _DEFAULT_DB_TYPE: Dict[str, str] = {
+    "AADS": "postgresql",  # 내부 DB (Docker postgres)
     "KIS": "postgresql",
     "GO100": "postgresql",  # KIS 별칭
     "SF": "mysql",

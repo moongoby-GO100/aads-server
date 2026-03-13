@@ -303,8 +303,8 @@ class ToolExecutor:
         """원격 서버 파일 읽기 (SSH, 프로젝트별 서버 매핑)."""
         project = (inp.get("project") or "").upper()
         path = inp.get("path") or inp.get("file_path") or ""
-        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
-            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        if not project or project not in ("AADS", "KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: AADS, KIS, GO100, SF, NTV2 중 하나"}
         if not path:
             return {"error": "path 또는 file_path 필수"}
         try:
@@ -319,8 +319,8 @@ class ToolExecutor:
         file_path = inp.get("file_path") or inp.get("path") or ""
         content = inp.get("content") or ""
         backup = inp.get("backup", True)
-        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
-            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        if not project or project not in ("AADS", "KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: AADS, KIS, GO100, SF, NTV2 중 하나"}
         if not file_path:
             return {"error": "file_path 필수"}
         if not content:
@@ -337,8 +337,8 @@ class ToolExecutor:
         file_path = inp.get("file_path") or inp.get("path") or ""
         old_string = inp.get("old_string") or ""
         new_string = inp.get("new_string") or ""
-        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
-            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        if not project or project not in ("AADS", "KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: AADS, KIS, GO100, SF, NTV2 중 하나"}
         if not file_path:
             return {"error": "file_path 필수"}
         if not old_string:
@@ -353,8 +353,8 @@ class ToolExecutor:
         """원격 서버 명령 실행 (화이트리스트 기반). Yellow 등급."""
         project = (inp.get("project") or "").upper()
         command = inp.get("command") or ""
-        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
-            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        if not project or project not in ("AADS", "KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: AADS, KIS, GO100, SF, NTV2 중 하나"}
         if not command:
             return {"error": "command 필수"}
         try:
@@ -367,8 +367,8 @@ class ToolExecutor:
         """원격 서버 git add."""
         project = (inp.get("project") or "").upper()
         files = inp.get("files") or "."
-        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
-            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        if not project or project not in ("AADS", "KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: AADS, KIS, GO100, SF, NTV2 중 하나"}
         try:
             from app.api.ceo_chat_tools import tool_git_remote_add
             return await tool_git_remote_add(project, files)
@@ -379,8 +379,8 @@ class ToolExecutor:
         """원격 서버 git commit."""
         project = (inp.get("project") or "").upper()
         message = inp.get("message") or ""
-        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
-            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        if not project or project not in ("AADS", "KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: AADS, KIS, GO100, SF, NTV2 중 하나"}
         if not message:
             return {"error": "commit message 필수"}
         try:
@@ -393,8 +393,8 @@ class ToolExecutor:
         """원격 서버 git push (force push 차단)."""
         project = (inp.get("project") or "").upper()
         branch = inp.get("branch") or ""
-        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
-            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        if not project or project not in ("AADS", "KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: AADS, KIS, GO100, SF, NTV2 중 하나"}
         try:
             from app.api.ceo_chat_tools import tool_git_remote_push
             return await tool_git_remote_push(project, branch)
@@ -404,8 +404,8 @@ class ToolExecutor:
     async def _git_remote_status(self, inp: Dict[str, Any]) -> Any:
         """원격 서버 git status."""
         project = (inp.get("project") or "").upper()
-        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
-            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        if not project or project not in ("AADS", "KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: AADS, KIS, GO100, SF, NTV2 중 하나"}
         try:
             from app.api.ceo_chat_tools import tool_git_remote_status
             return await tool_git_remote_status(project)
@@ -416,8 +416,8 @@ class ToolExecutor:
         """원격 서버 새 브랜치 생성."""
         project = (inp.get("project") or "").upper()
         branch_name = inp.get("branch_name") or ""
-        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
-            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        if not project or project not in ("AADS", "KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: AADS, KIS, GO100, SF, NTV2 중 하나"}
         if not branch_name:
             return {"error": "branch_name 필수"}
         try:
@@ -432,8 +432,8 @@ class ToolExecutor:
         path = inp.get("path", "")
         keyword = inp.get("keyword", "")
         max_depth = min(int(inp.get("max_depth", 3)), 5)
-        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
-            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        if not project or project not in ("AADS", "KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: AADS, KIS, GO100, SF, NTV2 중 하나"}
         try:
             from app.api.ceo_chat_tools import tool_list_remote_dir
             return await tool_list_remote_dir(project, path, keyword, max_depth)
@@ -572,8 +572,8 @@ class ToolExecutor:
         """
         project = (inp.get("project") or "").upper()
         checks_input = inp.get("checks", ["all"])
-        if not project or project not in ("KIS", "GO100", "SF", "NTV2"):
-            return {"error": "project 필수: KIS, GO100, SF, NTV2 중 하나"}
+        if not project or project not in ("AADS", "KIS", "GO100", "SF", "NTV2"):
+            return {"error": "project 필수: AADS, KIS, GO100, SF, NTV2 중 하나"}
 
         do_all = "all" in checks_input
         do_process = do_all or "process" in checks_input

@@ -136,7 +136,7 @@ def _build_aads_sdk_tools() -> list:
               {"server": str}),
         _wrap("query_database", "PostgreSQL SELECT 쿼리 실행 (읽기 전용, AADS 내부 DB)",
               {"query": str, "limit": int}),
-        _wrap("query_project_database", "프로젝트별 원격 DB SELECT 쿼리 (KIS/GO100/SF/NTV2)",
+        _wrap("query_project_database", "프로젝트별 원격 DB SELECT 쿼리 (AADS/KIS/GO100/SF/NTV2)",
               {"project": str, "query": str, "limit": int}),
         _wrap("list_project_databases", "프로젝트 DB 목록 및 연결 상태 조회",
               {}),
