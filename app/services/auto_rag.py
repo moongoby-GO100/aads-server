@@ -134,6 +134,7 @@ async def _search_memory_facts(query: str, project: Optional[str]) -> List[Dict]
 
         async with pool.acquire() as conn:
             if project:
+                # 같은 프로젝트 우선, 다른 프로젝트는 크로스세션으로 표시
                 rows = await conn.fetch(
                     """
                     SELECT subject, detail, category, project, created_at,
@@ -142,10 +143,11 @@ async def _search_memory_facts(query: str, project: Optional[str]) -> List[Dict]
                     WHERE embedding IS NOT NULL
                       AND superseded_by IS NULL
                       AND confidence > 0.3
+                      AND project = $3
                     ORDER BY embedding <=> $1::vector
                     LIMIT $2
                     """,
-                    str(query_emb), _RAG_TOP_K * 2,
+                    str(query_emb), _RAG_TOP_K * 2, project.upper(),
                 )
             else:
                 rows = await conn.fetch(
@@ -199,8 +201,8 @@ async def _search_chat_messages(query: str, session_id: str) -> List[Dict]:
         from app.core.db_pool import get_pool
 
         pool = get_pool()
-        # 전체 세션 검색 (크로스 세션 = F3)
-        results_all = await search_semantic(pool, query, session_id=None, limit=_RAG_TOP_K * 2)
+        # 같은 세션 내에서만 검색 (크로스 프로젝트 오염 방지)
+        results_all = await search_semantic(pool, query, session_id=session_id, limit=_RAG_TOP_K * 2)
 
         output = []
         for r in results_all:
