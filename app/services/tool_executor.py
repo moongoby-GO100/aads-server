@@ -10,11 +10,24 @@ import contextvars
 import json
 import logging
 import os
+import uuid
+from datetime import date, datetime
 from typing import Any, Dict
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+def _json_default(obj: Any) -> Any:
+    """Custom JSON serializer for objects not handled by default json encoder."""
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if isinstance(obj, uuid.UUID):
+        return str(obj)
+    if isinstance(obj, (bytes, bytearray)):
+        return f"<binary {len(obj)} bytes>"
+    return str(obj)
 
 # Pipeline C 등에서 현재 채팅 세션 ID를 도구에 전달하기 위한 컨텍스트 변수
 current_chat_session_id: contextvars.ContextVar[str] = contextvars.ContextVar(
@@ -46,7 +59,7 @@ class ToolExecutor:
                 timeout=_timeout,
             )
             result_str = (
-                json.dumps(result, ensure_ascii=False, indent=2)
+                json.dumps(result, ensure_ascii=False, indent=2, default=_json_default)
                 if not isinstance(result, str)
                 else result
             )

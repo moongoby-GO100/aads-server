@@ -1864,11 +1864,12 @@ async def tool_query_timeline(
     project = project.upper().strip()
 
     try:
+        from datetime import timedelta
         from app.core.db_pool import get_pool
         pool = get_pool()
 
         # 기간 파싱
-        interval_sql = "7 days"
+        interval_td = timedelta(days=7)
         date_filter = ""
         if "~" in period:
             # 날짜 범위: 2026-03-01~2026-03-13
@@ -1876,7 +1877,7 @@ async def tool_query_timeline(
             date_filter = f"AND created_at >= '{parts[0]}'::date AND created_at < '{parts[1]}'::date + interval '1 day'"
         elif period.endswith("d"):
             days = int(period[:-1])
-            interval_sql = f"{days} days"
+            interval_td = timedelta(days=days)
 
         async with pool.acquire() as conn:
             if date_filter:
@@ -1904,11 +1905,11 @@ async def tool_query_timeline(
                         WHERE project = $1
                           AND superseded_by IS NULL
                           AND category = $2
-                          AND created_at > NOW() - $3::interval
+                          AND created_at > NOW() - $3
                         ORDER BY created_at ASC
                         LIMIT $4
                         """,
-                        project, category, interval_sql, limit,
+                        project, category, interval_td, limit,
                     )
                 else:
                     rows = await conn.fetch(
@@ -1917,11 +1918,11 @@ async def tool_query_timeline(
                         FROM memory_facts
                         WHERE project = $1
                           AND superseded_by IS NULL
-                          AND created_at > NOW() - $2::interval
+                          AND created_at > NOW() - $2
                         ORDER BY created_at ASC
                         LIMIT $3
                         """,
-                        project, interval_sql, limit,
+                        project, interval_td, limit,
                     )
 
             if not rows:

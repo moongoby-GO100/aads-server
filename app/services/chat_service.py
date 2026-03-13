@@ -1005,6 +1005,26 @@ async def send_message_stream(
                 _ref_block = "\n\n[첨부파일 목록]\n" + "\n".join(_uf_ref_lines)
                 content = content + _ref_block
 
+        # ── AADS-191: URL 감지 및 크롤링 ────────────────────────────────
+        try:
+            from app.services.media.url_processor import UrlProcessor
+            _url_proc = UrlProcessor()
+            _detected_urls = _url_proc.extract_urls(content)
+            _url_contexts = []
+            for _u in _detected_urls[:3]:  # 최대 3개 URL
+                try:
+                    _url_result = await _url_proc.process(_u)
+                    if _url_result.content:
+                        _url_text = _url_result.content[:5000]
+                        _url_contexts.append(f"[URL 내용: {_url_result.url}]\n제목: {_url_result.title}\n{_url_text}")
+                except Exception as _ue:
+                    logger.warning(f"url_process_failed: {_ue}")
+            if _url_contexts:
+                _ephemeral_doc_context = (_ephemeral_doc_context + "\n\n" + "\n\n".join(_url_contexts)).strip()
+                logger.info(f"[URL] {len(_url_contexts)} URL(s) crawled for session={session_id[:8]}")
+        except Exception as _url_err:
+            logger.warning(f"url_detection_skipped: {_url_err}")
+
         # 사용자 메시지 저장 (trigger 메시지는 intent로 구분)
         user_intent = "system_trigger" if intent_override else None
         await _save_message(conn, sid, "user", content, intent=user_intent, attachments=attachments or [])
