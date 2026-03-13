@@ -62,6 +62,7 @@ async def evaluate_response(
 
         details = json.loads(text)
         overall = float(details.get("overall", 0.5))
+        overall = min(1.0, max(0.0, overall))
 
         # DB 저장
         from app.core.db_pool import get_pool

@@ -137,7 +137,7 @@ async def _search_memory_facts(query: str, project: Optional[str]) -> List[Dict]
                 # 같은 프로젝트 우선, 다른 프로젝트는 크로스세션으로 표시
                 rows = await conn.fetch(
                     """
-                    SELECT subject, detail, category, project, created_at,
+                    SELECT id, subject, detail, category, project, created_at,
                            1 - (embedding <=> $1::vector) AS similarity
                     FROM memory_facts
                     WHERE embedding IS NOT NULL
@@ -152,7 +152,7 @@ async def _search_memory_facts(query: str, project: Optional[str]) -> List[Dict]
             else:
                 rows = await conn.fetch(
                     """
-                    SELECT subject, detail, category, project, created_at,
+                    SELECT id, subject, detail, category, project, created_at,
                            1 - (embedding <=> $1::vector) AS similarity
                     FROM memory_facts
                     WHERE embedding IS NOT NULL
@@ -175,8 +175,8 @@ async def _search_memory_facts(query: str, project: Optional[str]) -> List[Dict]
 
                 # referenced_count 증가
                 await conn.execute(
-                    "UPDATE memory_facts SET referenced_count = referenced_count + 1, last_referenced_at = NOW() WHERE subject = $1 AND category = $2",
-                    r["subject"], r["category"],
+                    "UPDATE memory_facts SET referenced_count = referenced_count + 1, last_referenced_at = NOW() WHERE id = $1",
+                    r["id"],
                 )
 
                 results.append({

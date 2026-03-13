@@ -1871,30 +1871,40 @@ async def tool_query_timeline(
         # 기간 파싱
         interval_td = timedelta(days=7)
         date_filter = ""
+        date_start = None
+        date_end = None
         if "~" in period:
             # 날짜 범위: 2026-03-01~2026-03-13
             parts = period.split("~")
-            date_filter = f"AND created_at >= '{parts[0]}'::date AND created_at < '{parts[1]}'::date + interval '1 day'"
+            date_start = parts[0].strip()
+            date_end = parts[1].strip()
+            date_filter = "range"
         elif period.endswith("d"):
             days = int(period[:-1])
             interval_td = timedelta(days=days)
 
         async with pool.acquire() as conn:
             if date_filter:
+                # Build parameterized query for date range
+                params_list = [project, date_start, date_end]
+                param_idx = 4  # next available $N
+                cat_clause = ""
+                if category:
+                    cat_clause = f"AND category = ${param_idx}"
+                    params_list.append(category)
+                    param_idx += 1
+                params_list.append(limit)
+                limit_param = f"${param_idx}"
                 sql = f"""
                     SELECT category, subject, detail, created_at, confidence
                     FROM memory_facts
                     WHERE project = $1
                       AND superseded_by IS NULL
-                      {date_filter}
-                      {'AND category = $2' if category else ''}
+                      AND created_at >= $2::date AND created_at < $3::date + interval '1 day'
+                      {cat_clause}
                     ORDER BY created_at ASC
-                    LIMIT ${'3' if category else '2'}
+                    LIMIT {limit_param}
                 """
-                params_list = [project]
-                if category:
-                    params_list.append(category)
-                params_list.append(limit)
                 rows = await conn.fetch(sql, *params_list)
             else:
                 if category:

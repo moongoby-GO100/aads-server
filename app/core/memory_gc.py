@@ -251,23 +251,25 @@ async def _generate_project_snapshots(conn) -> int:
 
             snapshot_text = "\n".join(snapshot_lines)
 
-            # 기존 스냅샷 supersede
-            await conn.execute(
-                """
-                UPDATE memory_facts SET superseded_by = gen_random_uuid()
-                WHERE project = $1 AND category = 'project_snapshot' AND superseded_by IS NULL
-                """,
-                project,
-            )
-
-            await conn.execute(
+            # 새 스냅샷 삽입 후 ID 획득
+            new_snapshot_id = await conn.fetchval(
                 """
                 INSERT INTO memory_facts (project, category, subject, detail, confidence)
                 VALUES ($1, 'project_snapshot', $2, $3, 0.6)
+                RETURNING id
                 """,
                 project,
                 f"{project} 일일 스냅샷",
                 snapshot_text,
+            )
+
+            # 기존 스냅샷을 새 스냅샷으로 supersede (FK 유효)
+            await conn.execute(
+                """
+                UPDATE memory_facts SET superseded_by = $2
+                WHERE project = $1 AND category = 'project_snapshot' AND superseded_by IS NULL AND id != $2
+                """,
+                project, new_snapshot_id,
             )
             snapshot_count += 1
 

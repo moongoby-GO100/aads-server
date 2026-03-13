@@ -50,20 +50,37 @@ async def detect_contradictions(
         pool = get_pool()
 
         async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT subject, detail, category, project, created_at,
-                       1 - (embedding <=> $1::vector) AS similarity
-                FROM memory_facts
-                WHERE embedding IS NOT NULL
-                  AND category IN ('decision', 'ceo_instruction')
-                  AND superseded_by IS NULL
-                  AND confidence > 0.5
-                ORDER BY embedding <=> $1::vector
-                LIMIT 3
-                """,
-                str(query_emb),
-            )
+            if project:
+                rows = await conn.fetch(
+                    """
+                    SELECT subject, detail, category, project, created_at,
+                           1 - (embedding <=> $1::vector) AS similarity
+                    FROM memory_facts
+                    WHERE embedding IS NOT NULL
+                      AND category IN ('decision', 'ceo_instruction')
+                      AND superseded_by IS NULL
+                      AND confidence > 0.5
+                      AND project = $2
+                    ORDER BY embedding <=> $1::vector
+                    LIMIT 3
+                    """,
+                    str(query_emb), project.upper(),
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT subject, detail, category, project, created_at,
+                           1 - (embedding <=> $1::vector) AS similarity
+                    FROM memory_facts
+                    WHERE embedding IS NOT NULL
+                      AND category IN ('decision', 'ceo_instruction')
+                      AND superseded_by IS NULL
+                      AND confidence > 0.5
+                    ORDER BY embedding <=> $1::vector
+                    LIMIT 3
+                    """,
+                    str(query_emb),
+                )
 
             contradictions = []
             for r in rows:

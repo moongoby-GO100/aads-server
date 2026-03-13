@@ -255,10 +255,7 @@ async def stop_session_streaming(session_id: str) -> Dict[str, Any]:
     }
 
     if task and not task.done():
-        # 중간 결과를 DB에 저장
-        if state:
-            await _interim_save_streaming(session_id, state)
-        # 태스크 취소
+        # 태스크 취소 (중간 저장 안 함 — 불완전 placeholder 방지)
         task.cancel()
         try:
             await _heartbeat_asyncio.wait_for(
@@ -268,6 +265,11 @@ async def stop_session_streaming(session_id: str) -> Dict[str, Any]:
             pass
         _active_bg_tasks.pop(session_id, None)
         _streaming_state.pop(session_id, None)
+        # 불완전한 streaming placeholder 삭제
+        try:
+            await _delete_streaming_placeholder(session_id)
+        except Exception:
+            pass
         result["stopped"] = True
         logger.info(f"session_streaming_stopped session={session_id[:8]} content_len={len(result['content'])} tools={result['tool_count']}")
     else:
@@ -1625,7 +1627,7 @@ async def send_message_stream(
             from app.services.fact_extractor import extract_facts
             _bg_asyncio.create_task(
                 extract_facts(content, full_response, session_id,
-                              workspace_id="",
+                              workspace_id=None,
                               project=workspace_name)
             )
         except Exception:

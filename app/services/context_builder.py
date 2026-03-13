@@ -374,6 +374,7 @@ async def build(
     db_conn=None,
     workspace_id: str = "",
     base_system_prompt: str = "",
+    last_user_message: str = "",
 ) -> ContextResult:
     """
     AADS-185-A1: 비동기 3계층 컨텍스트 빌드 → ContextResult 반환.
@@ -387,15 +388,16 @@ async def build(
     tool_guide = _build_tool_guide_layer()  # AADS-186D: 도구 카테고리 안내
     layer1 = layer1_base + tool_guide
 
-    # Layer 2 (동적) + CKP + 메모리 + Workspace Preload(F6) — 병렬 실행
+    # Layer 2 (동적) + CKP + 메모리 + Workspace Preload(F6) + Auto-RAG(F1/F3) — 병렬 실행
     _project = _normalize_workspace(workspace_name)
-    layer2, ckp_layer, memory_layer, preload_layer = await asyncio.gather(
+    layer2, ckp_layer, memory_layer, preload_layer, auto_rag_layer = await asyncio.gather(
         _build_layer2_dynamic(workspace_name, db_conn=db_conn),
         _build_ckp_layer(workspace_name),
         _build_memory_layer(session_id=session_id, project_id=_project),
         _build_workspace_preload_layer(_project, session_id),
+        _build_auto_rag_layer(last_user_message, session_id, _project),
     )
-    layer2_full = layer2 + ckp_layer + memory_layer + preload_layer
+    layer2_full = layer2 + ckp_layer + memory_layer + preload_layer + auto_rag_layer
 
     # AADS-186D: Prompt Caching 최적화 적용
     try:
