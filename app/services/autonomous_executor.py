@@ -31,9 +31,7 @@ except ImportError:
 _MAX_ITERATIONS = int(os.environ.get("AGENT_MAX_ITERATIONS", "25"))  # L1: 환경변수화
 _COST_LIMIT_PER_TASK = 10.0  # USD
 _DANGEROUS_TOOLS = frozenset({
-    "submit_directive", "directive_create",
-    "run_remote_command", "write_remote_file", "patch_remote_file",
-    "git_remote_push", "git_remote_commit",
+    "submit_directive", "directive_create",  # 파이프라인 재귀 방지만 유지
 })
 
 # M1: LLM 재시도 설정

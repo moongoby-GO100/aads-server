@@ -39,104 +39,72 @@ _MAX_TOKENS = 16384
 _MAX_TOOL_TURNS = 50  # 도구 루프 최대 반복
 _SUBAGENT_TIMEOUT = 600  # 초 (10분)
 
-# 서브에이전트가 사용 가능한 도구 목록 (Green 등급만 자동 허용)
+# 서브에이전트 사용 가능 도구 (Red 등급 제외 전체 허용)
 _SUBAGENT_TOOLS = [
+    # Green: 읽기/조회
     "read_remote_file", "list_remote_dir", "query_database",
+    "query_project_database", "list_project_databases",
     "code_explorer", "semantic_code_search", "health_check",
-    "jina_read", "recall_notes", "cost_report",
+    "get_all_service_status", "inspect_service", "analyze_changes",
+    "search_all_projects", "dashboard_query", "server_status",
+    "task_history", "read_github_file", "check_directive_status",
+    "check_task_status", "read_task_logs",
+    "jina_read", "crawl4ai_fetch", "recall_notes", "cost_report",
+    "git_remote_status",
+    # Yellow: 쓰기/실행 (CEO 채팅에서 위임된 작업이므로 허용)
+    "write_remote_file", "patch_remote_file", "run_remote_command",
+    "git_remote_add", "git_remote_commit", "git_remote_push",
+    "git_remote_create_branch",
+    "web_search", "web_search_brave", "web_search_naver", "web_search_kakao",
+    "deep_research", "deep_crawl",
+    "save_note", "delete_note", "learn_pattern", "observe",
+    "export_data",
+    # 브라우저
+    "browser_navigate", "browser_snapshot", "browser_screenshot",
+    "browser_click", "browser_fill", "browser_tab_list",
 ]
 
 
 def _build_tool_schemas() -> List[Dict[str, Any]]:
-    """서브에이전트용 Anthropic Tool Use 스키마 생성."""
-    return [
-        {
-            "name": "read_remote_file",
-            "description": "원격 서버(KIS/GO100/SF/NTV2) 파일 읽기",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "project": {"type": "string", "enum": ["KIS", "GO100", "SF", "NTV2"]},
-                    "file_path": {"type": "string", "description": "읽을 파일 경로"},
-                },
-                "required": ["project", "file_path"],
-            },
-        },
-        {
-            "name": "list_remote_dir",
-            "description": "원격 서버 디렉토리 파일 목록",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "project": {"type": "string", "enum": ["KIS", "GO100", "SF", "NTV2"]},
-                    "path": {"type": "string"},
-                },
-                "required": ["project", "path"],
-            },
-        },
-        {
-            "name": "query_database",
-            "description": "PostgreSQL SELECT 쿼리 실행 (읽기 전용)",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "SQL SELECT 쿼리"},
-                },
-                "required": ["query"],
-            },
-        },
-        {
-            "name": "code_explorer",
-            "description": "프로젝트 코드베이스 탐색 및 분석",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "project": {"type": "string", "enum": ["KIS", "GO100", "SF", "NTV2", "AADS"]},
-                },
-                "required": ["query", "project"],
-            },
-        },
-        {
-            "name": "semantic_code_search",
-            "description": "전체 프로젝트 시맨틱 코드 검색",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "project": {"type": "string"},
-                },
-                "required": ["query"],
-            },
-        },
-        {
-            "name": "health_check",
-            "description": "서버 및 서비스 헬스체크",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "server": {"type": "string"},
+    """서브에이전트용 Anthropic Tool Use 스키마 — ToolRegistry에서 허용 도구만 동적 로드."""
+    try:
+        from app.services.tool_registry import ToolRegistry
+        registry = ToolRegistry()
+        all_tools = registry.get_tools("all")
+        # _SUBAGENT_TOOLS에 포함된 도구 스키마만 필터링
+        return [t for t in all_tools if t.get("name") in _SUBAGENT_TOOLS]
+    except Exception as e:
+        logger.warning(f"subagent_tool_schema_fallback: {e}")
+        # 폴백: 최소 읽기 도구
+        return [
+            {
+                "name": "read_remote_file",
+                "description": "원격 서버 파일 읽기",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "project": {"type": "string", "enum": ["KIS", "GO100", "SF", "NTV2", "AADS"]},
+                        "file_path": {"type": "string"},
+                    },
+                    "required": ["project", "file_path"],
                 },
             },
-        },
-        {
-            "name": "jina_read",
-            "description": "URL 콘텐츠를 마크다운으로 읽기",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string"},
+            {
+                "name": "query_database",
+                "description": "PostgreSQL SELECT 쿼리 실행",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
                 },
-                "required": ["url"],
             },
-        },
-    ]
+        ]
 
 
 async def _execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> str:
     """서브에이전트 도구 실행 — ToolExecutor 위임."""
     if tool_name not in _SUBAGENT_TOOLS:
-        return f"[도구 사용 불가: {tool_name} — 서브에이전트는 읽기 전용 도구만 허용]"
+        return f"[도구 사용 불가: {tool_name} — 서브에이전트 허용 목록에 없음]"
 
     try:
         from app.services.tool_executor import ToolExecutor, current_chat_session_id
@@ -147,12 +115,12 @@ async def _execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> str:
         executor = ToolExecutor()
         result = await asyncio.wait_for(
             executor.execute(tool_name, tool_input),
-            timeout=30,
+            timeout=120,
         )
         # 결과가 dict이면 JSON, 아니면 str
         if isinstance(result, dict):
-            return json.dumps(result, ensure_ascii=False, default=str)[:4000]
-        return str(result)[:4000]
+            return json.dumps(result, ensure_ascii=False, default=str)[:12000]
+        return str(result)[:12000]
     except asyncio.TimeoutError:
         return f"[도구 타임아웃: {tool_name}]"
     except Exception as e:
@@ -190,8 +158,8 @@ async def spawn_subagent(
     # 시스템 프롬프트 구성
     sys_prompt = system_prompt or (
         "당신은 AADS 서브에이전트입니다. 메인 에이전트가 위임한 작업을 독립적으로 수행합니다.\n"
-        "핵심만 간결하게 답변하세요. 읽기 전용 도구를 활용하여 정확한 정보를 제공하세요.\n"
-        "작업 완료 시 결과를 구조화된 형태로 반환하세요."
+        "읽기/쓰기/실행/Git/검색 등 모든 도구를 활용하여 작업을 완수하세요.\n"
+        "핵심만 간결하게 답변하고, 작업 완료 시 결과를 구조화된 형태로 반환하세요."
     )
 
     # 메시지 구성
