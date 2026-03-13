@@ -83,6 +83,16 @@ def extract_file_contents(
             "error": None,
         }
 
+        # ── 인라인 video base64 (브라우저에서 직접 전달 — Gemini Video API로 분석)
+        if att.get("type") == "video" and att.get("base64"):
+            entry["base64_data"] = att["base64"]
+            entry["media_type"] = att.get("media_type", "video/mp4")
+            entry["is_video"] = True
+            entry["readable"] = True
+            entry["tokens"] = len(att["base64"]) // 2000  # base64 길이 기반 토큰 추정
+            results.append(entry)
+            continue
+
         # ── 인라인 base64 이미지 (Ctrl+V 클립보드 붙여넣기 등, 디스크 저장 없이 직접 전달)
         if att.get("type") == "image" and att.get("base64"):
             entry["base64_data"] = att["base64"]
@@ -356,7 +366,9 @@ def build_file_reference_summary(
         ext = f["ext"]
         readable = f.get("readable", False)
 
-        if f.get("is_image") and readable:
+        if f.get("is_video") and readable:
+            summaries.append(f"[첨부동영상: {name} ({ext})]")
+        elif f.get("is_image") and readable:
             summaries.append(f"[첨부이미지: {name} ({ext})]")
         elif readable and tokens > 0:
             # 파일 첫 200자 미리보기

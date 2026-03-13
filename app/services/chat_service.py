@@ -668,6 +668,67 @@ async def trigger_ai_reaction(
         logger.error("trigger_ai_reaction: no running event loop")
 
 
+async def _analyze_videos_with_gemini(
+    video_attachments: list,
+    user_prompt: str,
+) -> list:
+    """
+    동영상 파일 목록을 Gemini 2.0 Flash API로 분석.
+    base64 인라인 데이터 방식 (최대 20MB).
+
+    Returns:
+        list of {name, analysis} 딕셔너리
+    """
+    import os
+    import base64 as _b64
+
+    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
+    if not api_key:
+        logger.warning("[VIDEO] GOOGLE_API_KEY not set — skipping video analysis")
+        return []
+
+    results = []
+    try:
+        from google import genai as genai_sdk
+        from google.genai import types as genai_types
+
+        client = genai_sdk.Client(api_key=api_key)
+
+        for att in video_attachments:
+            file_name = att.get("name", "video")
+            media_type = att.get("media_type", "video/mp4")
+            raw_b64 = att.get("base64", "")
+            if not raw_b64:
+                continue
+
+            try:
+                video_bytes = _b64.b64decode(raw_b64)
+                analysis_prompt = (
+                    f"다음 동영상을 분석해주세요. 사용자 요청: {user_prompt}\n"
+                    "동영상의 주요 내용, 장면, 텍스트, 중요한 시각 정보를 한국어로 상세히 설명해주세요."
+                )
+                response = client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=[
+                        genai_types.Part.from_bytes(data=video_bytes, mime_type=media_type),
+                        analysis_prompt,
+                    ],
+                )
+                analysis_text = response.text or "(분석 결과 없음)"
+                results.append({"name": file_name, "analysis": f"[동영상 분석: {file_name}]\n{analysis_text}"})
+                logger.info(f"[VIDEO] Gemini analyzed '{file_name}': {len(analysis_text)} chars")
+            except Exception as e:
+                logger.error(f"[VIDEO] Gemini analysis failed for '{file_name}': {e}")
+                results.append({"name": file_name, "analysis": f"[동영상: {file_name}] (Gemini 분석 실패: {e})"})
+
+    except ImportError:
+        logger.warning("[VIDEO] google-genai not installed — skipping video analysis")
+    except Exception as e:
+        logger.error(f"[VIDEO] Gemini client error: {e}")
+
+    return results
+
+
 async def send_message_stream(
     session_id: str,
     content: str,
@@ -724,6 +785,22 @@ async def send_message_stream(
                 })
             if _vision_images:
                 logger.info(f"[VISION] {len(_vision_images)} image(s) extracted for Vision API")
+
+            # Gemini: 동영상 파일 → Gemini 2.0 Flash 분석 후 텍스트로 변환
+            _video_attachments = [a for a in attachments if isinstance(a, dict) and a.get("type") == "video" and a.get("base64")]
+            if _video_attachments:
+                _video_texts = await _analyze_videos_with_gemini(_video_attachments, content)
+                for _vt in _video_texts:
+                    _file_contents.append({
+                        "name": _vt["name"],
+                        "path": "",
+                        "ext": "",
+                        "content": _vt["analysis"],
+                        "tokens": len(_vt["analysis"]) // 4,
+                        "readable": True,
+                        "error": None,
+                    })
+                logger.info(f"[VIDEO] {len(_video_attachments)} video(s) analyzed via Gemini API")
 
             # Layer D: 현재 턴에만 주입될 전문 컨텍스트 (텍스트 파일만)
             _ephemeral_doc_context = build_ephemeral_document_layer(_file_contents)
