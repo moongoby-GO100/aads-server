@@ -1,23 +1,32 @@
 """
-과거 대화에서 memory_facts 백필.
-user+assistant 쌍을 Haiku로 분석하여 핵심사실 추출.
+과거 대화에서 memory_facts 백필 (v2).
+user+assistant 쌍을 Gemini 3 Flash로 분석하여 핵심사실 추출.
 
 실행: docker exec aads-server python3 /app/scripts/backfill_memory_facts.py
+재실행 안전: session_id 기반 중복 방지 (이미 처리된 세션턴 스킵)
 """
 import asyncio
 import json
 import os
 import sys
-import uuid
 from datetime import datetime
 
-# 앱 경로 설정
 sys.path.insert(0, "/app")
 
 MAX_FACTS_PER_TURN = 5
-BATCH_SIZE = 10  # 동시 처리 수
-DELAY_BETWEEN_BATCHES = 0.5  # 초
-USE_GEMINI = True  # Gemini Flash 사용 (LiteLLM 경유)
+BATCH_SIZE = 10
+DELAY_BETWEEN_BATCHES = 0.5
+
+# 워크스페이스명 → 프로젝트 코드 매핑
+WORKSPACE_PROJECT_MAP = {
+    "KIS": "KIS",
+    "AADS": "AADS",
+    "GO100": "GO100",
+    "SF": "SF",
+    "NTV2": "NTV2",
+    "NAS": "NAS",
+    "CEO": "CEO",
+}
 
 EXTRACTION_PROMPT = """다음 대화 턴에서 핵심 사실을 최대 {max_facts}건 추출하세요.
 
@@ -31,8 +40,9 @@ EXTRACTION_PROMPT = """다음 대화 턴에서 핵심 사실을 최대 {max_fact
 - timeline_event: 프로젝트 마일스톤/이벤트
 
 JSON 배열로 반환. 각 항목:
-{{"category": "...", "subject": "50자 이내 요약", "detail": "상세 설명 100자 이내", "tags": ["태그1"]}}
+{{"category": "...", "subject": "50자 이내 요약", "detail": "상세 설명 150자 이내", "tags": ["태그1"]}}
 
+프로젝트: {project}
 워크스페이스: {workspace}
 시각: {timestamp}
 
@@ -40,8 +50,17 @@ JSON 배열로 반환. 각 항목:
 사용자: {user_msg}
 AI: {ai_msg}
 
-중요하지 않은 인사/잡담/단순확인은 건너뛰고 빈 배열 [] 반환.
+중요하지 않은 인사/잡담/단순확인/반복질문은 건너뛰고 빈 배열 [] 반환.
 JSON만 반환하세요. 마크다운 코드블록 없이."""
+
+
+def resolve_project(workspace_name: str) -> str:
+    """워크스페이스명에서 프로젝트 코드 추출."""
+    ws_upper = (workspace_name or "").upper()
+    for key in WORKSPACE_PROJECT_MAP:
+        if key in ws_upper:
+            return WORKSPACE_PROJECT_MAP[key]
+    return "CEO"
 
 
 async def main():
@@ -51,13 +70,23 @@ async def main():
     dsn = os.getenv("DATABASE_URL", "postgresql://aads:aads@aads-postgres:5432/aads")
     pool = await asyncpg.create_pool(dsn, min_size=2, max_size=5)
 
-    # Gemini Flash 직접 호출
     api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
+    if not api_key:
+        print("ERROR: GOOGLE_API_KEY or GEMINI_API_KEY not set")
+        return
+    print(f"API key: ...{api_key[-6:]}")
+
     client = httpx.AsyncClient(timeout=30.0)
     client._gemini_key = api_key
 
-    # 대화 쌍 추출: user → 바로 다음 assistant
+    # 이미 처리된 session_id + created_at 조합 조회 (중복 방지)
     async with pool.acquire() as conn:
+        processed = await conn.fetch(
+            "SELECT DISTINCT session_id, created_at FROM memory_facts WHERE session_id IS NOT NULL"
+        )
+        processed_set = {(r["session_id"], r["created_at"]) for r in processed}
+
+        # 대화 쌍 추출
         pairs = await conn.fetch("""
             WITH numbered AS (
                 SELECT id, session_id, role, content, created_at,
@@ -65,8 +94,7 @@ async def main():
                 FROM chat_messages
                 WHERE role IN ('user', 'assistant')
                   AND content IS NOT NULL
-                  AND LENGTH(content) > 30
-                ORDER BY session_id, created_at
+                  AND LENGTH(content) > 20
             )
             SELECT
                 u.session_id,
@@ -79,27 +107,29 @@ async def main():
             JOIN chat_sessions s ON s.id = u.session_id
             JOIN chat_workspaces w ON w.id = s.workspace_id
             WHERE u.role = 'user'
-              AND LENGTH(u.content) > 20
-              AND LENGTH(a.content) > 50
+              AND LENGTH(u.content) > 10
+              AND LENGTH(a.content) > 30
             ORDER BY u.created_at ASC
         """)
 
-    total = len(pairs)
-    print(f"총 {total}개 대화 쌍 발견. 백필 시작...")
+    # 이미 처리된 쌍 필터링
+    new_pairs = [p for p in pairs if (p["session_id"], p["turn_time"]) not in processed_set]
+    total = len(new_pairs)
+    print(f"총 {len(pairs)}개 대화 쌍 중 {total}개 미처리. 백필 시작...")
+
+    if total == 0:
+        print("모든 대화 쌍이 이미 처리됨. 임베딩 확인...")
+        await generate_embeddings(pool)
+        await pool.close()
+        return
 
     saved_total = 0
     skipped = 0
     errors = 0
 
     for batch_start in range(0, total, BATCH_SIZE):
-        batch = pairs[batch_start:batch_start + BATCH_SIZE]
-        tasks = []
-
-        for pair in batch:
-            tasks.append(extract_and_save(
-                client, pool, pair,
-            ))
-
+        batch = new_pairs[batch_start:batch_start + BATCH_SIZE]
+        tasks = [extract_and_save(client, pool, pair) for pair in batch]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for r in results:
@@ -119,34 +149,26 @@ async def main():
 
     print(f"\n완료! 총 {saved_total}건 memory_facts 저장. 스킵: {skipped}, 에러: {errors}")
 
-    # 임베딩 생성
     print("임베딩 생성 중...")
     await generate_embeddings(pool)
-
     await pool.close()
 
 
 async def extract_and_save(client, pool, pair) -> int:
-    """단일 대화 쌍에서 사실 추출 + 저장. Gemini Flash via LiteLLM."""
-    user_msg = pair["user_content"][:500]
-    ai_msg = pair["ai_content"][:2000]
+    """단일 대화 쌍에서 사실 추출 + 저장."""
+    user_msg = pair["user_content"][:800]
+    ai_msg = pair["ai_content"][:4000]
     workspace = pair["workspace_name"] or "CEO"
     timestamp = pair["turn_time"].strftime("%Y-%m-%d %H:%M") if pair["turn_time"] else ""
     session_id = pair["session_id"]
-
-    # 프로젝트 추출
-    project = ""
-    ws_upper = workspace.upper()
-    for key in ("KIS", "AADS", "GO100", "SF", "NTV2", "NAS", "CEO"):
-        if key in ws_upper:
-            project = key
-            break
+    project = resolve_project(workspace)
 
     prompt = EXTRACTION_PROMPT.format(
         max_facts=MAX_FACTS_PER_TURN,
         user_msg=user_msg,
         ai_msg=ai_msg,
         workspace=workspace,
+        project=project,
         timestamp=timestamp,
     )
 
@@ -186,10 +208,10 @@ async def extract_and_save(client, pool, pair) -> int:
                     continue
 
                 try:
-                    # 중복 체크
+                    # subject + category 기반 중복 체크
                     existing = await conn.fetchval(
                         "SELECT 1 FROM memory_facts WHERE subject = $1 AND category = $2 AND project = $3 LIMIT 1",
-                        subject[:300], category, project or None,
+                        subject[:300], category, project,
                     )
                     if existing:
                         continue
@@ -201,7 +223,7 @@ async def extract_and_save(client, pool, pair) -> int:
                         VALUES ($1, $2, $3, $4, $5, $6, 0.7, $7)
                         """,
                         session_id,
-                        project or None,
+                        project,
                         category,
                         subject[:300],
                         detail,
@@ -209,8 +231,8 @@ async def extract_and_save(client, pool, pair) -> int:
                         pair["turn_time"] or datetime.utcnow(),
                     )
                     saved += 1
-                except Exception as e:
-                    pass  # 중복 등 무시
+                except Exception:
+                    pass
 
         return saved
 
@@ -228,7 +250,7 @@ async def generate_embeddings(pool):
 
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT id, category, subject FROM memory_facts WHERE embedding IS NULL LIMIT 200"
+                "SELECT id, category, subject FROM memory_facts WHERE embedding IS NULL LIMIT 500"
             )
 
         if not rows:
@@ -237,7 +259,6 @@ async def generate_embeddings(pool):
 
         print(f"  {len(rows)}건 임베딩 생성 중...")
 
-        # 배치 처리
         batch_size = 20
         embedded = 0
         for i in range(0, len(rows), batch_size):

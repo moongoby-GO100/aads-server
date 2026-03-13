@@ -17,6 +17,20 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# 워크스페이스명 → 프로젝트 코드 정규화
+_PROJECT_KEYS = ("KIS", "AADS", "GO100", "SF", "NTV2", "NAS", "CEO")
+
+
+def _normalize_project(raw: str | None) -> str | None:
+    """'[KIS] 자동매매' → 'KIS', '[AADS] 프로젝트 매니저' → 'AADS' 등."""
+    if not raw:
+        return None
+    upper = raw.upper()
+    for key in _PROJECT_KEYS:
+        if key in upper:
+            return key
+    return raw.upper()[:20] if raw else None
+
 _HAIKU_MODEL = os.getenv("FACT_EXTRACTOR_MODEL", "claude-haiku-4-5-20251001")
 _MAX_FACTS_PER_TURN = int(os.getenv("FACT_EXTRACTOR_MAX_FACTS", "5"))
 
@@ -129,7 +143,7 @@ async def _save_facts(
                     row = await conn.fetchrow(
                         "SELECT id FROM memory_facts WHERE subject ILIKE $1 AND project = $2 ORDER BY created_at DESC LIMIT 1",
                         f"%{depends_on[:100]}%",
-                        (project or "").upper() or None,
+                        _normalize_project(project),
                     )
                     if row:
                         related.append(row["id"])
@@ -141,7 +155,7 @@ async def _save_facts(
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0.7)
                     """,
                     fact_id, sid, wid,
-                    (project or "").upper() or None,
+                    _normalize_project(project),
                     category, subject[:300], detail, tags, related,
                 )
                 saved.append({"id": str(fact_id), "category": category, "subject": subject})
