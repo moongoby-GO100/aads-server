@@ -31,9 +31,9 @@ _EXTENDED_THINKING_ENABLED = os.getenv("EXTENDED_THINKING_ENABLED", "true").lowe
 
 # 모델별 비용 (per 1M tokens, USD)
 _COST_MAP = {
-    "claude-opus":            (15.0, 75.0),
+    "claude-opus":            (5.0,  25.0),   # Opus 4.6 실제 가격
     "claude-sonnet":          (3.0,  15.0),
-    "claude-haiku":           (0.25, 1.25),
+    "claude-haiku":           (1.0,   5.0),   # Haiku 4.5 실제 가격
     "gemini-flash":           (0.075, 0.3),
     "gemini-flash-lite":      (0.01,  0.04),
     "gemini-pro":             (1.25,  5.0),
@@ -238,7 +238,7 @@ async def _stream_anthropic(
         and intent_result.use_extended_thinking
         and model_alias == "claude-opus"
     )
-    max_tokens = 64000 if use_thinking else 16384
+    max_tokens = 128000 if use_thinking else 16384
 
     # 시스템 프롬프트 (Prompt Caching: Layer 1 정적 부분에 cache_control)
     system_blocks = _build_system_with_cache(system_prompt)
@@ -256,7 +256,7 @@ async def _stream_anthropic(
 
     # Tool Use 루프 (최대 20회 — 무한 대화 지원)
     _MAX_TOOL_TURNS = int(os.getenv("MAX_TOOL_TURNS", "20"))
-    _TOOL_TURN_EXTEND = 10  # CEO 승인 시 추가 턴
+    _TOOL_TURN_EXTEND = 20  # CEO 승인 시 추가 턴
     # 방어: messages에서 role="system" 필터링 — Claude API는 system을 top-level 파라미터로만 허용
     current_messages = [m for m in messages if m.get("role") != "system"]
     # 방어: 마지막 메시지가 user가 아니면 Claude API "must end with user message" 에러 방지
@@ -467,8 +467,8 @@ async def _stream_anthropic(
         if _turn >= _effective_max_turns and tool_use_blocks:
             logger.warning(f"tool_turn_limit: {_turn}/{_effective_max_turns} turns used, extending by {_TOOL_TURN_EXTEND}")
             _effective_max_turns += _TOOL_TURN_EXTEND
-            if _effective_max_turns > 100:
-                _effective_max_turns = 100
+            if _effective_max_turns > 200:
+                _effective_max_turns = 200
             yield {
                 "type": "tool_turn_limit",
                 "content": f"도구 호출이 {_turn}회에 도달했습니다. {_TOOL_TURN_EXTEND}턴 자동 연장합니다.",

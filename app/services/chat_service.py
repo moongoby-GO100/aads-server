@@ -1339,7 +1339,7 @@ async def send_message_stream(
                     "승인 요청이 오면 변경사항(git diff)을 먼저 확인 후 CEO에게 보고하세요."
                 )
             from app.services.autonomous_executor import AutonomousExecutor
-            auto_exec = AutonomousExecutor(max_iterations=25, cost_limit=2.0)
+            auto_exec = AutonomousExecutor(max_iterations=60, cost_limit=10.0)
             full_response = ""
             thinking_summary = ""
             model_used = intent_result.model

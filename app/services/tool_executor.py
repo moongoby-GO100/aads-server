@@ -1290,8 +1290,8 @@ class ToolExecutor:
                 from app.services.autonomous_executor import AutonomousExecutor
                 from app.services.tool_registry import ToolRegistry
 
-                _agent_max_iter = int(os.environ.get("AGENT_MAX_ITERATIONS", "15"))
-                executor = AutonomousExecutor(max_iterations=_agent_max_iter, cost_limit=1.5)
+                _agent_max_iter = int(os.environ.get("AGENT_MAX_ITERATIONS", "60"))
+                executor = AutonomousExecutor(max_iterations=_agent_max_iter, cost_limit=10.0)
                 registry = ToolRegistry()
                 tools = registry.get_tools("all")
                 messages = [{"role": "user", "content": task}]

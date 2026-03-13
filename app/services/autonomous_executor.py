@@ -1,6 +1,6 @@
 """
 AADS-186E-3: 자율 실행 루프 — 복잡한 멀티스텝 작업 수행
-MAX_ITERATIONS=25, COST_LIMIT_PER_TASK=$2.0
+MAX_ITERATIONS=60, COST_LIMIT_PER_TASK=$10.0
 위험 도구(submit_directive 등) 자동 실행 금지.
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ except ImportError:
 # ─── 상수 ─────────────────────────────────────────────────────────────────────
 
 _MAX_ITERATIONS = int(os.environ.get("AGENT_MAX_ITERATIONS", "25"))  # L1: 환경변수화
-_COST_LIMIT_PER_TASK = 2.0  # USD
+_COST_LIMIT_PER_TASK = 10.0  # USD
 _DANGEROUS_TOOLS = frozenset({
     "submit_directive", "directive_create",
     "run_remote_command", "write_remote_file", "patch_remote_file",
@@ -55,9 +55,9 @@ def _sse(event_type: str, payload: Any) -> str:
 # ─── 비용 계산 ────────────────────────────────────────────────────────────────
 
 _COST_PER_1M: Dict[str, Dict[str, float]] = {
-    "claude-opus":   {"in": 15.0,  "out": 75.0},
+    "claude-opus":   {"in": 5.0,   "out": 25.0},   # Opus 4.6 실제 가격
     "claude-sonnet": {"in": 3.0,   "out": 15.0},
-    "claude-haiku":  {"in": 0.8,   "out": 4.0},
+    "claude-haiku":  {"in": 1.0,   "out": 5.0},    # Haiku 4.5 실제 가격
 }
 
 

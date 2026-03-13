@@ -158,42 +158,42 @@ AGENT_MODELS: dict[str, dict[str, ModelConfig]] = {
     "supervisor": {
         "primary":  ModelConfig("anthropic", "claude-opus-4-6",   5.0,  25.0),
         "fallback": ModelConfig("anthropic", "claude-sonnet-4-6", 3.0,  15.0),
-        "error":    ModelConfig("anthropic", "claude-haiku-4-5",  0.80,  4.0),
+        "error":    ModelConfig("anthropic", "claude-haiku-4-5",  1.0,   5.0),
     },
     # Architect: claude-opus-4-6 ($5/$25)
     "architect": {
         "primary":  ModelConfig("anthropic", "claude-opus-4-6",   5.0,  25.0),
         "fallback": ModelConfig("anthropic", "claude-sonnet-4-6", 3.0,  15.0),
-        "error":    ModelConfig("anthropic", "claude-haiku-4-5",  0.80,  4.0),
+        "error":    ModelConfig("anthropic", "claude-haiku-4-5",  1.0,   5.0),
     },
     # PM: claude-sonnet-4-6 ($3/$15)
     "pm": {
         "primary":  ModelConfig("anthropic", "claude-sonnet-4-6", 3.0,  15.0),
         "fallback": ModelConfig("openai",    "gpt-5.2-chat-latest", 5.0, 15.0),
-        "error":    ModelConfig("anthropic", "claude-haiku-4-5",  0.80,  4.0),
+        "error":    ModelConfig("anthropic", "claude-haiku-4-5",  1.0,   5.0),
     },
     # Developer: claude-sonnet-4-6 ($3/$15)
     "developer": {
         "primary":  ModelConfig("anthropic", "claude-sonnet-4-6", 3.0,  15.0),
         "fallback": ModelConfig("openai",    "gpt-5.2-chat-latest", 5.0, 15.0),
-        "error":    ModelConfig("anthropic", "claude-haiku-4-5",  0.80,  4.0),
+        "error":    ModelConfig("anthropic", "claude-haiku-4-5",  1.0,   5.0),
     },
     # QA: claude-sonnet-4-6 ($3/$15)
     "qa": {
         "primary":  ModelConfig("anthropic", "claude-sonnet-4-6", 3.0,  15.0),
-        "fallback": ModelConfig("anthropic", "claude-haiku-4-5",  0.80,  4.0),
-        "error":    ModelConfig("anthropic", "claude-haiku-4-5",  0.80,  4.0),
+        "fallback": ModelConfig("anthropic", "claude-haiku-4-5",  1.0,   5.0),
+        "error":    ModelConfig("anthropic", "claude-haiku-4-5",  1.0,   5.0),
     },
     # Judge: gemini-3.1-pro-preview ($2/$12) — Developer/QA와 다른 모델 (T-002)
     "judge": {
         "primary":  ModelConfig("google",    "gemini-3.1-pro-preview", 2.0, 12.0),
         "fallback": ModelConfig("anthropic", "claude-sonnet-4-6",      3.0, 15.0),
-        "error":    ModelConfig("anthropic", "claude-haiku-4-5",       0.80, 4.0),
+        "error":    ModelConfig("anthropic", "claude-haiku-4-5",       1.0,  5.0),
     },
     # DevOps: gpt-5-mini ($0.25/$2)
     "devops": {
         "primary":  ModelConfig("openai",    "gpt-5-mini",         0.25,  2.0),
-        "fallback": ModelConfig("anthropic", "claude-haiku-4-5",   0.80,  4.0),
+        "fallback": ModelConfig("anthropic", "claude-haiku-4-5",   1.0,   5.0),
         "error":    ModelConfig("anthropic", "claude-sonnet-4-6",  3.0,  15.0),
     },
     # Researcher: gemini-2.5-flash ($0.30/$2.50)

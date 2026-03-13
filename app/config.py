@@ -27,8 +27,8 @@ class Settings(BaseSettings):
     MCP_SERVER_HOST: str = "localhost"
 
     # 비용/한도 (R-012, 설계서 Section 21)
-    MAX_LLM_CALLS_PER_TASK: int = 15
-    MAX_COST_PER_TASK_USD: float = 10.0
+    MAX_LLM_CALLS_PER_TASK: int = 50
+    MAX_COST_PER_TASK_USD: float = 30.0
     MAX_COST_MONTHLY_USD: float = 500.0
     COST_WARNING_THRESHOLD: float = 0.8  # 80%에서 경고
 
