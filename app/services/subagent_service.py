@@ -36,8 +36,8 @@ _MODEL_MAP = {
 # 서브에이전트 기본 설정
 _DEFAULT_MODEL = "sonnet"
 _MAX_TOKENS = 16384
-_MAX_TOOL_TURNS = 15  # 도구 루프 최대 반복
-_SUBAGENT_TIMEOUT = 300  # 초
+_MAX_TOOL_TURNS = 50  # 도구 루프 최대 반복
+_SUBAGENT_TIMEOUT = 600  # 초 (10분)
 
 # 서브에이전트가 사용 가능한 도구 목록 (Green 등급만 자동 허용)
 _SUBAGENT_TOOLS = [
