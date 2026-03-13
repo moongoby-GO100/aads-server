@@ -1730,15 +1730,32 @@ async def get_memory_context_info(session_id: str) -> Dict[str, Any]:
             ltm_text_len += len(summary)
         ltm_tokens = max(1, ltm_text_len) * 2 // 3
 
-        # 4) AI observations (세션 주입되는 것들)
-        obs_rows = await conn.fetch(
-            """
-            SELECT category, key, value, confidence
-            FROM ai_observations
-            WHERE confidence >= 0.2
-            ORDER BY confidence DESC, updated_at DESC
-            """,
-        )
+        # 4) AI observations (세션 주입되는 것들) — 워크스페이스 프로젝트로 필터
+        # 워크스페이스명에서 프로젝트 추출: "[KIS] 자동매매" → "KIS"
+        _ws_project = ""
+        if workspace_name and workspace_name.startswith("["):
+            _ws_project = workspace_name.split("]")[0].lstrip("[").strip()
+        
+        if _ws_project and _ws_project != "CEO":
+            obs_rows = await conn.fetch(
+                """
+                SELECT category, key, value, confidence
+                FROM ai_observations
+                WHERE confidence >= 0.2
+                  AND (project = $1 OR project IS NULL)
+                ORDER BY confidence DESC, updated_at DESC
+                """,
+                _ws_project,
+            )
+        else:
+            obs_rows = await conn.fetch(
+                """
+                SELECT category, key, value, confidence
+                FROM ai_observations
+                WHERE confidence >= 0.2
+                ORDER BY confidence DESC, updated_at DESC
+                """,
+            )
         obs_items = []
         obs_text_len = 0
         for r in obs_rows:
@@ -1750,13 +1767,16 @@ async def get_memory_context_info(session_id: str) -> Dict[str, Any]:
             obs_text_len += min(len(str(r["value"])), 120)
         obs_tokens = max(1, obs_text_len) * 2 // 3
 
-        # 5) 세션 노트 (session_notes)
+        # 5) 세션 노트 (session_notes) — 같은 워크스페이스의 세션만
         note_rows = await conn.fetch(
             """
-            SELECT summary, key_decisions, created_at, projects_discussed
-            FROM session_notes
-            ORDER BY created_at DESC
+            SELECT sn.summary, sn.key_decisions, sn.created_at, sn.projects_discussed
+            FROM session_notes sn
+            JOIN chat_sessions cs ON sn.session_id = cs.id
+            WHERE cs.workspace_id = $1
+            ORDER BY sn.created_at DESC
             """,
+            workspace_id,
         )
         session_summaries = []
         ss_text_len = 0
@@ -1770,14 +1790,25 @@ async def get_memory_context_info(session_id: str) -> Dict[str, Any]:
             ss_text_len += min(len(summ), 200)
         ss_tokens = max(1, ss_text_len) * 2 // 3
 
-        # 5b) experience_memory
-        exp_rows = await conn.fetch(
-            """
-            SELECT experience_type, domain, tags, content, rif_score, created_at
-            FROM experience_memory
-            ORDER BY rif_score DESC, created_at DESC
-            """,
-        )
+        # 5b) experience_memory — 워크스페이스 프로젝트로 필터
+        if _ws_project and _ws_project != "CEO":
+            exp_rows = await conn.fetch(
+                """
+                SELECT experience_type, domain, tags, content, rif_score, created_at
+                FROM experience_memory
+                WHERE domain = $1 OR domain IS NULL OR domain = ''
+                ORDER BY rif_score DESC, created_at DESC
+                """,
+                _ws_project,
+            )
+        else:
+            exp_rows = await conn.fetch(
+                """
+                SELECT experience_type, domain, tags, content, rif_score, created_at
+                FROM experience_memory
+                ORDER BY rif_score DESC, created_at DESC
+                """,
+            )
         exp_items = []
         exp_text_len = 0
         for r in exp_rows:
