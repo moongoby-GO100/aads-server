@@ -232,22 +232,23 @@ async def _stream_anthropic(
     """Anthropic SDK 직접 스트리밍 (Tool Use + Extended Thinking + Prompt Caching)."""
     model_id = _ANTHROPIC_MODEL_ID.get(model_alias, "claude-sonnet-4-6")
 
-    # AADS-186E-2: Extended Thinking — Opus 전용, 환경변수로 제어
+    # AADS-186E-2: Extended Thinking — Opus/Sonnet 4.6 Adaptive Thinking
     use_thinking = (
         _EXTENDED_THINKING_ENABLED
         and intent_result.use_extended_thinking
-        and model_alias == "claude-opus"
+        and model_alias in ("claude-opus", "claude-sonnet")
     )
     max_tokens = 128000 if use_thinking else 16384
 
     # 시스템 프롬프트 (Prompt Caching: Layer 1 정적 부분에 cache_control)
     system_blocks = _build_system_with_cache(system_prompt)
 
-    # #26: Extended Thinking 설정 (환경변수 오버라이드)
+    # Adaptive Thinking (4.6 모델 권장) — 모델이 자동으로 사고 깊이 결정
     thinking_config = None
+    _output_config = None
     if use_thinking:
-        _thinking_budget = int(os.getenv("MAX_THINKING_TOKENS", "8000"))
-        thinking_config = {"type": "enabled", "budget_tokens": _thinking_budget}
+        thinking_config = {"type": "adaptive"}
+        _output_config = {"effort": "high"}  # low/medium/high/max
 
     full_text = ""
     thinking_text = ""
@@ -326,6 +327,8 @@ async def _stream_anthropic(
         _betas = []
         if thinking_config:
             api_kwargs["thinking"] = thinking_config
+            if _output_config:
+                api_kwargs["output_config"] = _output_config
             _betas.append("interleaved-thinking-2025-05-14")
         if _betas:
             api_kwargs["extra_headers"] = {
