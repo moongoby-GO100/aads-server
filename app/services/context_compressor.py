@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_TRUNCATE = 8000
 _TOOL_TRUNCATE_LIMITS: Dict[str, int] = {
     "health_check": 2000,
-    "read_remote_file": 30000,
+    "read_remote_file": 999999,  # 압축 안 함 (Claude Code 동일)
     "code_explorer": 15000,
     "semantic_code_search": 15000,
     "query_database": 8000,
@@ -34,7 +34,7 @@ _TOOL_TRUNCATE_LIMITS: Dict[str, int] = {
     "web_search_kakao": 5000,
     "jina_read": 10000,
     "git_remote_status": 3000,
-    "run_remote_command": 15000,
+    "run_remote_command": 999999,  # 압축 안 함 (Claude Code 동일)
     "list_remote_dir": 8000,
     "write_remote_file": 3000,
     "patch_remote_file": 5000,

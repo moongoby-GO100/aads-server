@@ -241,7 +241,7 @@ TOOL_DEFINITIONS: List[Dict] = [
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "읽을 최대 줄 수. 생략 시 2000줄 (Claude Code 동일).",
+                    "description": "읽을 최대 줄 수. 생략 시 2000줄. 제한 없음.",
                     "default": 2000,
                 },
             },
@@ -404,7 +404,7 @@ _SSH_SENSITIVE_PATTERNS = re.compile(
 _SSH_TIMEOUT = 10  # 초 (ConnectTimeout=5 + CommandTimeout=5)
 _SSH_WRITE_TIMEOUT = 15  # 쓰기 작업은 조금 더 여유
 _SSH_CMD_TIMEOUT = 30  # 원격 명령 실행 타임아웃
-_SSH_MAX_RESULT_BYTES = 200 * 1024  # 200KB (파일 분할 읽기 방지)
+_SSH_MAX_RESULT_BYTES = 1024 * 1024  # 1MB (제한 없음 — Claude Code 동일)
 _SSH_MAX_WRITE_BYTES = 1024 * 1024  # 1MB 쓰기 제한
 _SSH_MAX_FILES = 100
 _SSH_MAX_DEPTH = 5
@@ -784,7 +784,7 @@ async def tool_read_remote_file(project: str, file_path: str, offset: int = 1, l
     """
     project = project.upper()
     offset = max(1, int(offset or 1))
-    limit = max(1, min(int(limit or 2000), 5000))  # 최대 5000줄
+    limit = max(1, int(limit or 2000))  # 제한 없음 (Claude Code 동일)
 
     def _apply_line_range(content: str) -> tuple:
         """offset/limit 적용 + 줄 번호 추가 (cat -n 형식). returns (result, total_lines)"""

@@ -532,7 +532,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "읽을 최대 줄 수 (기본 2000, 최대 5000).",
+                    "description": "읽을 최대 줄 수 (기본 2000, 제한 없음).",
                 },
             },
             "required": ["project", "path"],
