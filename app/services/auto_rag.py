@@ -7,7 +7,9 @@ Top-5 관련 과거 컨텍스트를 Layer 4.5로 자동 주입.
 """
 from __future__ import annotations
 
+import math
 import os
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import structlog
@@ -39,6 +41,20 @@ async def build_auto_rag_context(
         if not results:
             return ""
 
+        # A4: Re-ask detection — same session, high similarity, recent
+        reask_warning = ""
+        try:
+            reask_detected = await _detect_reask(user_message, session_id)
+            if reask_detected:
+                reask_warning = (
+                    "\u26a0\ufe0f \uc774\uc804\uc5d0 \uc720\uc0ac\ud55c \uc9c8\ubb38\uc774 "
+                    "\uc788\uc5c8\uc2b5\ub2c8\ub2e4. \uc774\uc804 \ub2f5\ubcc0\uc774 "
+                    "\ubd80\uc871\ud588\uc744 \uc218 \uc788\uc73c\ub2c8 \ub354 \uc815\ud655\ud558\uace0 "
+                    "\uc0c1\uc138\ud558\uac8c \ub2f5\ubcc0\ud558\uc138\uc694.\n"
+                )
+        except Exception:
+            pass
+
         lines = []
         from app.core.token_utils import estimate_tokens
         total_tokens = 0
@@ -69,6 +85,7 @@ async def build_auto_rag_context(
         context = "\n".join(lines)
         block = (
             f"<auto_rag_context>\n"
+            f"{reask_warning}"
             f"## 관련 과거 컨텍스트 (자동 검색)\n"
             f"{context}\n"
             f"</auto_rag_context>"
@@ -138,6 +155,7 @@ async def _search_memory_facts(query: str, project: Optional[str]) -> List[Dict]
                 rows = await conn.fetch(
                     """
                     SELECT id, subject, detail, category, project, created_at,
+                           referenced_count,
                            1 - (embedding <=> $1::vector) AS similarity
                     FROM memory_facts
                     WHERE embedding IS NOT NULL
@@ -153,6 +171,7 @@ async def _search_memory_facts(query: str, project: Optional[str]) -> List[Dict]
                 rows = await conn.fetch(
                     """
                     SELECT id, subject, detail, category, project, created_at,
+                           referenced_count,
                            1 - (embedding <=> $1::vector) AS similarity
                     FROM memory_facts
                     WHERE embedding IS NOT NULL
@@ -165,6 +184,7 @@ async def _search_memory_facts(query: str, project: Optional[str]) -> List[Dict]
                 )
 
             results = []
+            now_utc = datetime.now(timezone.utc)
             for r in rows:
                 sim = float(r["similarity"]) if r["similarity"] else 0
                 if sim < 0.3:
@@ -172,6 +192,22 @@ async def _search_memory_facts(query: str, project: Optional[str]) -> List[Dict]
                 proj = r["project"] or ""
                 ts = r["created_at"].strftime("%m/%d") if r["created_at"] else ""
                 origin = "same_project" if proj == (project or "").upper() else "cross_session"
+
+                # A2: Triple search score (Stanford Generative Agents style)
+                # recency_weight = exp(-days_old / 30)
+                days_old = 0.0
+                if r["created_at"]:
+                    created = r["created_at"]
+                    if created.tzinfo is None:
+                        created = created.replace(tzinfo=timezone.utc)
+                    days_old = max(0, (now_utc - created).total_seconds() / 86400)
+                recency_weight = math.exp(-days_old / 30)
+
+                # importance_weight = 1.0 + log(1 + referenced_count) * 0.1
+                ref_count = int(r["referenced_count"] or 0)
+                importance_weight = 1.0 + math.log(1 + ref_count) * 0.1
+
+                final_score = sim * recency_weight * importance_weight
 
                 # referenced_count 증가
                 await conn.execute(
@@ -182,11 +218,13 @@ async def _search_memory_facts(query: str, project: Optional[str]) -> List[Dict]
                 results.append({
                     "source": f"[{proj}] {r['category']}",
                     "text": f"{r['subject']}: {r['detail'][:200]}",
-                    "similarity": sim,
+                    "similarity": final_score,
                     "timestamp": ts,
                     "origin": origin,
                 })
 
+            # Re-sort by composite score
+            results.sort(key=lambda x: x.get("similarity", 0), reverse=True)
             return results
 
     except Exception as e:
@@ -231,3 +269,45 @@ async def _search_chat_messages(query: str, session_id: str) -> List[Dict]:
     except Exception as e:
         logger.debug("auto_rag_messages_search_error", error=str(e))
         return []
+
+
+async def _detect_reask(query: str, session_id: str) -> bool:
+    """A4: Detect if user is re-asking a similar question within the same session (last 30 min)."""
+    try:
+        import uuid as _uuid
+        from app.services.chat_embedding_service import embed_texts
+        from app.core.db_pool import get_pool
+
+        embeddings = await embed_texts([query[:500]])
+        if not embeddings or not embeddings[0]:
+            return False
+
+        query_emb = embeddings[0]
+        pool = get_pool()
+        sid = _uuid.UUID(session_id)
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT 1 - (embedding <=> $1::vector) AS similarity
+                FROM chat_messages
+                WHERE session_id = $2
+                  AND role = 'user'
+                  AND embedding IS NOT NULL
+                  AND created_at > NOW() - interval '30 minutes'
+                ORDER BY embedding <=> $1::vector
+                LIMIT 3
+                """,
+                str(query_emb), sid,
+            )
+
+            for r in rows:
+                sim = float(r["similarity"]) if r["similarity"] else 0
+                if sim > 0.85:
+                    logger.info("a4_reask_detected", similarity=sim, session=session_id[:8])
+                    return True
+
+        return False
+    except Exception as e:
+        logger.debug("a4_reask_detection_error", error=str(e))
+        return False

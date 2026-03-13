@@ -154,9 +154,10 @@ class ToolExecutor:
             "read_task_logs":         self._read_task_logs,
             "terminate_task":         self._terminate_task,
             "capture_screenshot":     self._capture_screenshot,
-            # Memory Upgrade: F5 + F12
+            # Memory Upgrade: F5 + F12 + C4
             "query_timeline":         self._query_timeline,
             "recall_tool_result":     self._recall_tool_result,
+            "query_decision_graph":   self._query_decision_graph,
         }
         fn = dispatch.get(tool_name)
         if fn is None:
@@ -1251,6 +1252,15 @@ class ToolExecutor:
             tool_name=inp.get("tool_name", ""),
             keyword=inp.get("keyword", ""),
             limit=min(int(inp.get("limit", 5) or 5), 20),
+        )
+
+    async def _query_decision_graph(self, inp: Dict[str, Any]) -> Any:
+        """C4: 결정 의존관계 그래프 탐색."""
+        from app.api.ceo_chat_tools import tool_query_decision_graph
+        return await tool_query_decision_graph(
+            subject=inp.get("subject", ""),
+            fact_id=inp.get("fact_id", ""),
+            max_depth=min(int(inp.get("max_depth", 3) or 3), 3),
         )
 
     async def _delegate_to_agent(self, inp: Dict[str, Any]) -> Any:

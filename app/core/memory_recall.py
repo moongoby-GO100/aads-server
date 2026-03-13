@@ -289,7 +289,7 @@ async def _build_learned_memory(project_id: Optional[str] = None) -> str:
             rows = await conn.fetch(
                 """
                 SELECT category, key, value FROM ai_meta_memory
-                WHERE category IN ('ceo_preference', 'project_pattern', 'known_issue', 'decision_history')
+                WHERE category IN ('ceo_preference', 'project_pattern', 'known_issue', 'decision_history', 'prompt_optimization')
                 ORDER BY confidence DESC, updated_at DESC
                 LIMIT 15
                 """,

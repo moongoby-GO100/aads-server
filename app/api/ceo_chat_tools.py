@@ -432,6 +432,29 @@ TOOL_DEFINITIONS: List[Dict] = [
             "required": [],
         },
     },
+    # ── C4: Decision Dependency Graph ────────────────────────────────────
+    {
+        "name": "query_decision_graph",
+        "description": "결정/사실의 의존관계 트리를 탐색. subject 또는 fact_id로 시작하여 related_facts를 최대 3단계 재귀 탐색.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "subject": {
+                    "type": "string",
+                    "description": "검색할 사실의 subject (부분 일치, 선택)",
+                },
+                "fact_id": {
+                    "type": "string",
+                    "description": "시작 사실의 UUID (정확히 지정, 선택)",
+                },
+                "max_depth": {
+                    "type": "integer",
+                    "description": "탐색 깊이 (1~3, 기본 3)",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 # ─── SSH 원격 접근 상수 (중앙 설정에서 import, AADS-165) ──────────────────────
@@ -1991,6 +2014,133 @@ async def tool_recall_tool_result(
         return f"[ERROR] 도구 결과 검색 실패: {e}"
 
 
+async def tool_query_decision_graph(
+    subject: str = "",
+    fact_id: str = "",
+    max_depth: int = 3,
+) -> str:
+    """C4: 결정 의존관계 그래프 탐색 — related_facts를 최대 3단계 재귀 추적."""
+    if not subject and not fact_id:
+        return "[ERROR] subject 또는 fact_id 중 하나는 필수"
+
+    max_depth = min(max(max_depth, 1), 3)
+
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+
+        async with pool.acquire() as conn:
+            # 시작 사실 찾기
+            if fact_id:
+                try:
+                    root_facts = await conn.fetch(
+                        """
+                        SELECT id, project, category, subject, detail, confidence,
+                               related_facts, created_at
+                        FROM memory_facts
+                        WHERE id = $1 AND superseded_by IS NULL
+                        """,
+                        uuid.UUID(fact_id),
+                    )
+                except (ValueError, Exception):
+                    return f"[ERROR] 유효하지 않은 fact_id: {fact_id}"
+            else:
+                root_facts = await conn.fetch(
+                    """
+                    SELECT id, project, category, subject, detail, confidence,
+                           related_facts, created_at
+                    FROM memory_facts
+                    WHERE subject ILIKE $1 AND superseded_by IS NULL
+                    ORDER BY confidence DESC, created_at DESC
+                    LIMIT 5
+                    """,
+                    f"%{subject}%",
+                )
+
+            if not root_facts:
+                return f"관련 사실을 찾을 수 없습니다: {subject or fact_id}"
+
+            # BFS로 의존관계 트리 구성
+            lines = ["의존관계 그래프:"]
+            visited = set()
+
+            async def _traverse(fact_ids: list, depth: int, prefix: str):
+                if depth > max_depth:
+                    return
+                for fid in fact_ids:
+                    if fid in visited:
+                        continue
+                    visited.add(fid)
+
+                    row = await conn.fetchrow(
+                        """
+                        SELECT id, project, category, subject, detail, confidence,
+                               related_facts, created_at
+                        FROM memory_facts
+                        WHERE id = $1
+                        """,
+                        fid,
+                    )
+                    if not row:
+                        continue
+
+                    ts = row["created_at"].strftime("%m/%d") if row["created_at"] else ""
+                    proj = row["project"] or ""
+                    indent = "  " * depth
+                    marker = "|-- " if depth > 0 else ""
+                    lines.append(
+                        f"{indent}{marker}[{proj}:{row['category']}] {row['subject']} "
+                        f"(conf={row['confidence']:.2f}, {ts})"
+                    )
+                    if row["detail"]:
+                        lines.append(f"{indent}{'    ' if depth > 0 else ''}  -> {row['detail'][:120]}")
+
+                    # 재귀 탐색
+                    children = row["related_facts"]
+                    if children and depth < max_depth:
+                        await _traverse(children, depth + 1, prefix + "  ")
+
+            # 루트 사실들에서 시작
+            for root in root_facts:
+                visited.add(root["id"])
+                ts = root["created_at"].strftime("%m/%d") if root["created_at"] else ""
+                proj = root["project"] or ""
+                lines.append(
+                    f"[{proj}:{root['category']}] {root['subject']} "
+                    f"(conf={root['confidence']:.2f}, {ts})"
+                )
+                if root["detail"]:
+                    lines.append(f"  -> {root['detail'][:120]}")
+
+                children = root["related_facts"]
+                if children:
+                    await _traverse(children, 1, "")
+
+                # 역방향 탐색: 이 사실을 참조하는 다른 사실
+                reverse_refs = await conn.fetch(
+                    """
+                    SELECT id FROM memory_facts
+                    WHERE $1 = ANY(related_facts) AND superseded_by IS NULL
+                    LIMIT 10
+                    """,
+                    root["id"],
+                )
+                if reverse_refs:
+                    reverse_ids = [r["id"] for r in reverse_refs if r["id"] not in visited]
+                    if reverse_ids:
+                        lines.append("  [역참조 (이 사실을 참조하는 노드):]")
+                        await _traverse(reverse_ids, 1, "")
+
+            if len(lines) <= 1:
+                return f"의존관계 없음: {subject or fact_id}"
+
+            lines.append(f"\n탐색 노드: {len(visited)}개, 최대 깊이: {max_depth}")
+            return "\n".join(lines)
+
+    except Exception as e:
+        return f"[ERROR] 의존관계 그래프 탐색 실패: {e}"
+
+
 # ─── 디스패처 ──────────────────────────────────────────────────────────────────
 
 async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session_id: str = "") -> str:
@@ -2092,6 +2242,13 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             tool_name=params.get("tool_name", ""),
             keyword=params.get("keyword", ""),
             limit=min(int(params.get("limit", 5) or 5), 20),
+        )
+    # ── C4: Decision Dependency Graph ─────────────────────────────────
+    elif name == "query_decision_graph":
+        return await tool_query_decision_graph(
+            subject=params.get("subject", ""),
+            fact_id=params.get("fact_id", ""),
+            max_depth=min(int(params.get("max_depth", 3) or 3), 3),
         )
     else:
         return f"[ERROR] 알 수 없는 도구: {name}"

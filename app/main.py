@@ -164,6 +164,15 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"memory_consolidation_job_error: {e}")
         scheduler.add_job(_run_memory_consolidation, CronTrigger(hour=4, minute=0, timezone="UTC"), id="memory_consolidation")
+        # C1: Sleep-Time Agent — 매일 05:00 UTC (인사이트 생성 + 프롬프트 최적화)
+        async def _run_sleep_time_agent():
+            try:
+                from app.core.memory_gc import sleep_time_consolidation
+                from app.core.db_pool import get_pool
+                await sleep_time_consolidation(get_pool())
+            except Exception as e:
+                logger.warning(f"sleep_time_agent_job_error: {e}")
+        scheduler.add_job(_run_sleep_time_agent, CronTrigger(hour=5, minute=0, timezone="UTC"), id="sleep_time_agent")
         # task_logs GC: 매일 03:30 UTC — 7일 이상 된 로그 삭제
         async def _run_task_logs_gc():
             try:

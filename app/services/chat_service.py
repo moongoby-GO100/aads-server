@@ -177,6 +177,13 @@ async def with_background_completion(
                     except Exception:
                         pass
 
+                # 클라이언트 연결 중에도 30초마다 실시간 중간 저장 (토큰 절약 + 데이터 보호)
+                if not _client_gone:
+                    _now_rt = _bg_time.monotonic()
+                    if _now_rt - state["last_save"] > 30:
+                        state["last_save"] = _now_rt
+                        await _interim_save_streaming(session_id, state)
+
                 # 클라이언트 disconnect 후 처리
                 if _client_gone:
                     now = _bg_time.monotonic()
@@ -1651,7 +1658,8 @@ async def send_message_stream(
                 )
             if _last_msg:
                 _bg_asyncio.create_task(
-                    evaluate_response(content, full_response, _last_msg)
+                    evaluate_response(content, full_response, _last_msg,
+                                       session_id=session_id, project=workspace_name)
                 )
         except Exception:
             pass
@@ -1702,9 +1710,17 @@ async def toggle_bookmark(message_id: str) -> Optional[Dict[str, Any]]:
 
 
 async def update_message(message_id: str, new_content: str) -> Optional[Dict[str, Any]]:
-    """사용자 메시지 내용 수정 (role=user만 허용). edited_at 기록."""
+    """사용자 메시지 내용 수정 (role=user만 허용). edited_at 기록. B2: CEO 교정 학습."""
     conn = await _get_conn()
     try:
+        # B2: 수정 전 원본 내용 조회
+        original_row = await conn.fetchrow(
+            "SELECT content, session_id FROM chat_messages WHERE id = $1 AND role = 'user'",
+            uuid.UUID(message_id),
+        )
+        original_content = original_row["content"] if original_row else None
+        original_session_id = original_row["session_id"] if original_row else None
+
         row = await conn.fetchrow(
             """
             UPDATE chat_messages
@@ -1715,6 +1731,39 @@ async def update_message(message_id: str, new_content: str) -> Optional[Dict[str
             uuid.UUID(message_id),
             new_content,
         )
+
+        # B2: CEO correction learning — 수정 내용을 memory_facts에 저장
+        if row and original_content and original_content != new_content:
+            try:
+                # 프로젝트 정보 조회
+                proj_row = await conn.fetchrow(
+                    """SELECT w.name FROM chat_workspaces w
+                       JOIN chat_sessions s ON s.workspace_id = w.id
+                       WHERE s.id = $1""",
+                    original_session_id,
+                )
+                proj_name = proj_row["name"] if proj_row else None
+                # 프로젝트 정규화
+                _proj = None
+                if proj_name:
+                    for _pk in ("KIS", "AADS", "GO100", "SF", "NTV2", "NAS", "CEO"):
+                        if _pk in proj_name.upper():
+                            _proj = _pk
+                            break
+
+                diff_summary = f"원본: {original_content[:150]} → 수정: {new_content[:150]}"
+                await conn.execute(
+                    """INSERT INTO memory_facts (session_id, project, category, subject, detail, confidence, tags)
+                       VALUES ($1, $2, 'ceo_instruction', $3, $4, 0.9, ARRAY['ceo_correction', 'learning'])""",
+                    original_session_id,
+                    _proj,
+                    f"CEO 교정: {new_content[:80]}",
+                    diff_summary[:500],
+                )
+                logger.info("b2_ceo_correction_saved", message_id=message_id[:8])
+            except Exception as e_b2:
+                logger.debug("b2_ceo_correction_error", error=str(e_b2))
+
         return _row_to_dict(row) if row else None
     finally:
         await get_pool().release(conn)

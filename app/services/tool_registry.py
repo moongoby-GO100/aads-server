@@ -69,6 +69,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     # ── 기타 ─────────────────────────────────────────────────────────────
     "code_execution": True,
     "observe": True,
+    "query_decision_graph": True,       # 온디맨드 — 의존관계 탐색
     # ── AADS-190: 내보내기 + 스케줄러 ──────────────────────────────────
     "export_data": True,              # 온디맨드
     "schedule_task": True,            # 온디맨드
@@ -1745,6 +1746,29 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "required": ["project"],
         },
     },
+    # ─── C4: Decision Dependency Graph ──────────────────────────────────
+    "query_decision_graph": {
+        "name": "query_decision_graph",
+        "description": "결정/사실의 의존관계 트리를 탐색. subject 또는 fact_id로 시작하여 related_facts를 최대 3단계 재귀 탐색.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "subject": {
+                    "type": "string",
+                    "description": "검색할 사실의 subject (부분 일치, 선택)",
+                },
+                "fact_id": {
+                    "type": "string",
+                    "description": "시작 사실의 UUID (정확히 지정, 선택)",
+                },
+                "max_depth": {
+                    "type": "integer",
+                    "description": "탐색 깊이 (1~3, 기본 3)",
+                },
+            },
+            "required": [],
+        },
+    },
     "recall_tool_result": {
         "name": "recall_tool_result",
         "description": "과거 도구 실행 결과를 검색. 재실행 없이 이전 도구 결과를 즉시 참조.",
@@ -1815,7 +1839,7 @@ _GROUPS: Dict[str, List[str]] = {
     # AADS-186E-1: 크롤링 도구 그룹
     "crawl": ["jina_read", "crawl4ai_fetch", "deep_crawl"],
     # AADS-186E-2: 메모리 도구 그룹 (+ Memory Upgrade F5/F12)
-    "memory": ["save_note", "recall_notes", "delete_note", "learn_pattern", "observe", "query_timeline", "recall_tool_result"],
+    "memory": ["save_note", "recall_notes", "delete_note", "learn_pattern", "observe", "query_timeline", "recall_tool_result", "query_decision_graph"],
     # AADS-186E-3 / AADS-188B: 딥리서치 + 코드탐색 + 시맨틱 검색 도구 그룹
     "research": ["deep_research", "code_explorer", "analyze_changes", "search_all_projects", "semantic_code_search"],
     "all": list(_TOOLS.keys()),

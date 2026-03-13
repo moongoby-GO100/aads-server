@@ -29,9 +29,12 @@ async def build_workspace_preload(
 
     try:
         import asyncio
-        recent_facts, last_summary = await asyncio.gather(
+        from app.services.ceo_pattern_tracker import get_predicted_interests
+
+        recent_facts, last_summary, predicted_interests = await asyncio.gather(
             _get_recent_facts(project),
             _get_last_session_summary(project, session_id),
+            get_predicted_interests(),
             return_exceptions=True,
         )
 
@@ -51,6 +54,14 @@ async def build_workspace_preload(
             t = estimate_tokens(last_summary)
             if total + t <= _PRELOAD_TOKEN_BUDGET:
                 parts.append(last_summary)
+                total += t
+
+        # A3: CEO 패턴 기반 예상 관심사항
+        if isinstance(predicted_interests, str) and predicted_interests:
+            interest_block = f"예상 관심사항:\n{predicted_interests}"
+            t = estimate_tokens(interest_block)
+            if total + t <= _PRELOAD_TOKEN_BUDGET:
+                parts.append(interest_block)
                 total += t
 
         if not parts:

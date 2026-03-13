@@ -33,8 +33,10 @@ async def evaluate_response(
     user_message: str,
     ai_response: str,
     message_id: str,
+    session_id: Optional[str] = None,
+    project: Optional[str] = None,
 ) -> Optional[float]:
-    """AI 응답 품질을 평가하고 DB에 저장."""
+    """AI 응답 품질을 평가하고 DB에 저장. B1: 낮은 품질 시 reflexion 생성."""
     if not _ENABLED or len(ai_response) < _MIN_RESPONSE_LEN:
         return None
 
@@ -78,6 +80,64 @@ async def evaluate_response(
                 json.dumps(details),
                 uuid.UUID(message_id),
             )
+
+        # A1: Low quality → reduce confidence of recently extracted facts
+        if overall < 0.5:
+            try:
+                async with pool.acquire() as conn2:
+                    session_row = await conn2.fetchrow(
+                        "SELECT session_id FROM chat_messages WHERE id = $1",
+                        uuid.UUID(message_id),
+                    )
+                    if session_row and session_row["session_id"]:
+                        await conn2.execute(
+                            """UPDATE memory_facts SET confidence = confidence * $1
+                               WHERE session_id = $2::uuid
+                                 AND created_at > NOW() - interval '60 seconds'
+                                 AND confidence > 0.1""",
+                            max(0.3, overall),
+                            session_row["session_id"],
+                        )
+                        logger.info(
+                            "a1_fact_confidence_reduced",
+                            score=overall,
+                            session=str(session_row["session_id"])[:8],
+                        )
+            except Exception as e_a1:
+                logger.debug("a1_fact_confidence_error", error=str(e_a1))
+
+        # B1: Reflexion — auto-reflect on poor quality responses
+        if overall < 0.4 and session_id:
+            try:
+                reflection_prompt = (
+                    f"이 AI 응답의 품질이 낮습니다 (점수: {overall:.1f}).\n"
+                    f"무엇이 잘못되었고, 다음에 어떻게 개선해야 하는지 1-2문장으로 반성하세요.\n\n"
+                    f"사용자: {user_message[:300]}\n"
+                    f"AI: {ai_response[:500]}\n"
+                    f"품질 세부: {json.dumps(details, ensure_ascii=False)}\n\n"
+                    f"반성문만 작성하세요."
+                )
+                from anthropic import AsyncAnthropic as _ReflexionClient
+                _refl_client = _ReflexionClient()
+                _refl_resp = await _refl_client.messages.create(
+                    model=_HAIKU_MODEL,
+                    max_tokens=256,
+                    messages=[{"role": "user", "content": reflection_prompt}],
+                )
+                reflection = _refl_resp.content[0].text.strip() if _refl_resp.content else ""
+                if reflection:
+                    async with pool.acquire() as conn_refl:
+                        await conn_refl.execute(
+                            """INSERT INTO memory_facts (session_id, project, category, subject, detail, confidence, tags)
+                               VALUES ($1::uuid, $2, 'error_pattern', $3, $4, 0.85, ARRAY['reflexion', 'self-improvement'])""",
+                            uuid.UUID(session_id),
+                            (project or "").upper()[:20] or None,
+                            f"품질 부족: {details.get('note', '')[:100]}",
+                            reflection[:500],
+                        )
+                    logger.info("b1_reflexion_saved", score=overall, session=session_id[:8])
+            except Exception as e_refl:
+                logger.debug("b1_reflexion_error", error=str(e_refl))
 
         logger.info("self_eval_complete", score=overall, message=message_id[:8])
         return overall
