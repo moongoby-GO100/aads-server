@@ -15,6 +15,12 @@
 
 set -euo pipefail
 
+# === locale 강제 설정 (manpath/grep 오류 방지 — Pipeline C 안정화) ===
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export LANGUAGE=en_US.UTF-8
+# =====================================================================
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=memory_helper.sh
 source "${SCRIPT_DIR}/memory_helper.sh"
