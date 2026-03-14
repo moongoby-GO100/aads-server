@@ -45,6 +45,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "delegate_to_research": False,
     "spawn_subagent": False,              # 서브에이전트 — 핵심 위임 도구
     "spawn_parallel_subagents": True,     # 병렬 서브에이전트 — 지연 로드
+    "run_agent_team": False,              # 멀티에이전트 팀 — 핵심 오케스트레이션
     "save_note": True,
     "recall_notes": True,
     "delete_note": True,
@@ -93,16 +94,19 @@ _DEFER_LOADING: Dict[str, bool] = {
 
 # 도구 카테고리 안내 (시스템 프롬프트 주입용 — context_builder.py에서 사용)
 TOOL_CATEGORY_GUIDE = """\
-## 도구 우선순위 가이드 (총 43개)
+## 도구 우선순위 가이드 (총 49개, 40개 LLM 등록)
 
 ### 🔴 Tier 1 — 즉시 사용 (내부 데이터, 무료, <3초) ★ 최우선
 - read_remote_file: 원격 서버 소스 코드/설정 읽기 (AADS/KIS/GO100/SF/NTV2) — 코드 분석 1순위
 - list_remote_dir: 원격 디렉터리 탐색/검색
 - query_database: PostgreSQL SELECT — 데이터 확인 2순위 (AADS 내부 DB)
-- query_project_database: 프로젝트별 원격 DB SELECT — AADS/KIS/GO100/SF/NTV2
-- health_check: 서버 헬스체크
+- query_project_database: 프로젝트별 원격 DB SELECT (KIS→PG, SF→MariaDB, NTV2→MySQL)
+- list_project_databases: 프로젝트 DB 목록 및 연결 상태
+- health_check: 서버 헬스체크 (68/211/114)
 - get_all_service_status: 6개 서비스 상태 병렬 조회
 - check_directive_status: 지시사항 진행 종합 확인
+- check_task_status: Pipeline B/C 활성 작업 현황 + stall 감지
+- read_task_logs: 작업 실행 로그 조회
 - task_history: 작업 이력
 - dashboard_query: 파이프라인 현황
 - server_status: Docker 컨테이너 상태
@@ -113,20 +117,26 @@ TOOL_CATEGORY_GUIDE = """\
 - semantic_code_search: 벡터 코드 검색
 - analyze_changes: Git 변경 + 위험도
 - inspect_service: 서비스 종합 점검
+- search_chat_history: 과거 대화 키워드/시맨틱 검색
+- recall_tool_result: 과거 도구 결과 재참조 (재실행 불필요)
+- query_timeline: 프로젝트 이벤트 시간순 이력
+- query_decision_graph: 결정 의존관계 BFS 탐색
 
 ### 🟡 Tier 3 — 액션/실행 (요청 시 즉시)
-- write_remote_file: 원격 서버 파일 쓰기 (자동 백업, SSH)
+- write_remote_file: 원격 서버 파일 쓰기 (자동 백업, SSH, 1MB 제한)
 - patch_remote_file: 원격 서버 파일 부분 수정 (diff 기반 패치)
-- run_remote_command: 원격 서버 명령 실행 (화이트리스트 제한)
-- git_remote_add/commit/push/status/create_branch: 원격 Git 조작
+- run_remote_command: 원격 서버 명령 실행 (화이트리스트 60+개, 위험 명령 차단)
+- git_remote_status/add/commit/push/create_branch: 원격 Git 조작
 - directive_create / generate_directive: 지시서 생성
-- delegate_to_agent: 복잡한 작업 위임
-- delegate_to_research: 심층 리서치 위임
+- delegate_to_agent / delegate_to_research: 작업 위임
+- terminate_task: 활성 작업 강제 종료
+- export_data: CSV/Excel/PDF 내보내기 → 다운로드 URL 반환
+- schedule_task / unschedule_task / list_scheduled_tasks: 예약 작업 관리
 - save_note / recall_notes / delete_note / learn_pattern: 기억 관리
 - cost_report: 비용 분석
 
 ### 🟢 Tier 4 — 외부 검색 (API 비용, 3~10초)
-- web_search_brave / web_search: 통합 웹 검색 (Google/Naver/Kakao 자동 폴백)
+- web_search_brave / web_search: 통합 웹 검색
 - jina_read / crawl4ai_fetch: URL 페이지 추출
 
 ### 🔵 Tier 5 — 고비용/장시간 (CEO 명시 요청 시)
@@ -134,16 +144,16 @@ TOOL_CATEGORY_GUIDE = """\
 - deep_crawl: 다수 URL 동시 크롤링
 - search_all_projects: 6개 프로젝트 동시 검색
 
-### ⚪ Tier 6 — 브라우저 보조 (소스 분석 후 렌더링 확인 시)
+### ⚪ Tier 6 — 브라우저 (소스 분석 후 렌더링 확인 시)
 - browser_navigate/snapshot/screenshot/click/fill/tab_list
-
-### Agent SDK (execute/code_modify 인텐트 시 자동 활성화)
-- 코드 수정/작성, Bash, git — 자율 실행. 위험 명령 자동 차단.
+- capture_screenshot: URL 스크린샷 캡처 → 이미지 URL 반환
 
 ### 🟣 Pipeline C — 자율 작업 파이프라인 (CEO 요청 시)
-- pipeline_c_start: Claude Code 자율 작업 시작 (작업→검수→재지시→승인대기)
-- pipeline_c_status: 파이프라인 진행 상태 확인
-- pipeline_c_approve: CEO 승인/거부 → 배포 또는 원복\
+- pipeline_c_start: 작업→AI검수→재지시→CEO승인→배포 자율 수행
+- pipeline_c_status: 진행 상태 확인
+- pipeline_c_approve: CEO 승인/거부 → 배포 또는 원복
+- pipeline_c_cancel: 멈춘 작업 강제 취소
+- pipeline_c_retry: 에러 작업 재실행\
 """
 
 # ─── AADS-188C Phase 2: 인텐트별 필수 도구 매핑 ──────────────────────────────

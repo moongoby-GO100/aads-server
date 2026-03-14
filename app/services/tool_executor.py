@@ -41,7 +41,7 @@ _AADS_API_BASE = os.getenv("AADS_API_BASE", "http://localhost:8080")
 _MAX_RESULT_CHARS = 25000  # ~8000 토큰 (지시서 기준 25,000 허용)
 _TOOL_TIMEOUT = 20.0  # 일반 도구 타임아웃
 _LONG_TOOL_TIMEOUT = 120.0  # 서브에이전트/딥리서치 등 장시간 도구
-_LONG_TOOLS = frozenset({"spawn_subagent", "spawn_parallel_subagents", "deep_research", "delegate_to_agent", "delegate_to_research", "capture_screenshot"})
+_LONG_TOOLS = frozenset({"spawn_subagent", "spawn_parallel_subagents", "run_agent_team", "deep_research", "delegate_to_agent", "delegate_to_research", "capture_screenshot"})
 
 
 class ToolExecutor:
@@ -138,6 +138,7 @@ class ToolExecutor:
             # AADS-190 Phase2-A: 서브에이전트
             "spawn_subagent":         self._spawn_subagent,
             "spawn_parallel_subagents": self._spawn_parallel_subagents,
+            "run_agent_team":         self._run_agent_team,
             # AADS-190: 내보내기 + 스케줄러
             "export_data":            self._export_data,
             "schedule_task":          self._schedule_task,
@@ -1597,6 +1598,21 @@ class ToolExecutor:
             "completed": sum(1 for r in results if r["status"] == "completed"),
             "results": results,
         }
+
+    async def _run_agent_team(self, inp: Dict[str, Any]) -> Any:
+        """멀티에이전트 팀 실행 — 단계별 순차, 단계 내 병렬, 발견사항 공유."""
+        name = inp.get("name", "Agent Team")
+        phases = inp.get("phases", [])
+        if not phases:
+            return {"error": "phases 필수 — [{name, tasks: [{task, role}]}] 형태"}
+
+        from app.services.agent_orchestrator import run_agent_team
+        return await run_agent_team(
+            name=name,
+            phases=phases,
+            max_concurrent=inp.get("max_concurrent", 5),
+            cost_limit_usd=inp.get("cost_limit_usd", 10.0),
+        )
 
     # ── AADS-190: 내보내기 + 스케줄러 도구 ───────────────────────────────────
 

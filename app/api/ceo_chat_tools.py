@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 TOOL_DEFINITIONS: List[Dict] = [
     {
         "name": "read_file",
-        "description": "서버 68 로컬 파일 읽기. /root/aads/ 하위 경로만 허용.",
+        "description": "서버 68 로컬 파일 읽기. /root/aads/ 하위만 허용. 최대 50KB.\n예: read_file(path='/root/aads/aads-server/app/main.py')",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -47,7 +47,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "read_github",
-        "description": "moongoby-GO100 GitHub 레포의 파일을 raw URL로 읽기.",
+        "description": "moongoby-GO100 GitHub 레포의 파일을 raw URL로 읽기. 최대 50KB.\n예: read_github(path='HANDOVER.md', repo='aads-docs')",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -71,7 +71,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "search_logs",
-        "description": "Docker 컨테이너 로그 또는 journalctl에서 최근 100줄 검색. 최대 10KB 반환.",
+        "description": "Docker 컨테이너 로그 또는 journalctl에서 최근 100줄 검색. 최대 10KB.\n허용 소스: aads-server, aads-dashboard, aads-postgres, aads-redis, aads-litellm, aads-core, journalctl.\n예: search_logs(source='aads-server', keyword='ERROR')",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -89,7 +89,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "query_db",
-        "description": "PostgreSQL SELECT 쿼리 실행. SELECT 전용, 최대 50행 반환.",
+        "description": "AADS 내부 PostgreSQL SELECT 쿼리 실행. SELECT 전용, 최대 50행.\n다른 프로젝트 DB는 query_project_database 사용.\n예: query_db(sql='SELECT * FROM chat_sessions ORDER BY updated_at DESC LIMIT 5')",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -103,7 +103,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "fetch_url",
-        "description": "외부 URL GET 요청. 응답 최대 20KB 반환.",
+        "description": "외부 URL GET 요청. 응답 최대 20KB. HTML/JSON 모두 지원.\n예: fetch_url(url='https://aads.newtalk.kr/api/v1/health')",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -118,7 +118,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     # ── Browser 도구 (AADS-159) ────────────────────────────────────────────
     {
         "name": "browser_navigate",
-        "description": "브라우저로 URL 이동. 허용 도메인: *.newtalk.kr, github.com, raw.githubusercontent.com, localhost",
+        "description": "Playwright 브라우저로 URL 이동. 허용 도메인: *.newtalk.kr, github.com, localhost.\n이동 후 browser_snapshot으로 페이지 확인.\n예: browser_navigate(url='https://aads.newtalk.kr/')",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -132,7 +132,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "browser_snapshot",
-        "description": "현재 페이지의 접근성 트리를 텍스트로 추출. LLM이 페이지 구조·콘텐츠를 분석하는 데 최적.",
+        "description": "현재 브라우저 페이지의 접근성 트리를 텍스트로 추출. 스크린샷보다 정확한 구조 분석. browser_navigate 후 사용.",
         "input_schema": {
             "type": "object",
             "properties": {},
@@ -141,7 +141,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "browser_screenshot",
-        "description": "현재 페이지 PNG 스크린샷 촬영. base64 인코딩 결과 반환.",
+        "description": "현재 브라우저 페이지 PNG 스크린샷. base64 반환. 시각적 레이아웃 확인용. browser_navigate 후 사용.",
         "input_schema": {
             "type": "object",
             "properties": {},
@@ -150,7 +150,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "browser_click",
-        "description": "CSS selector 또는 텍스트로 요소 클릭.",
+        "description": "브라우저 페이지에서 CSS selector 또는 텍스트로 요소 클릭.\n예: browser_click(selector='button#submit') 또는 browser_click(selector='text=로그인')",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -164,7 +164,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "browser_fill",
-        "description": "입력 필드에 텍스트 채우기.",
+        "description": "브라우저 입력 필드에 텍스트 입력.\n예: browser_fill(selector='input[name=username]', value='admin')",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -182,7 +182,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "browser_tab_list",
-        "description": "현재 열린 브라우저 탭 목록 반환 (URL + 제목).",
+        "description": "현재 열린 브라우저 탭 목록 (URL + 제목). 최대 3탭.",
         "input_schema": {
             "type": "object",
             "properties": {},
@@ -192,7 +192,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     # ── SSH 원격 파일 접근 도구 (AADS-165) ────────────────────────────────────
     {
         "name": "list_remote_dir",
-        "description": "원격 서버의 디렉터리 구조 탐색. 프로젝트명으로 서버·경로 자동 매핑.",
+        "description": "원격 서버의 디렉터리 구조 탐색. 프로젝트명으로 서버·WORKDIR 자동 매핑.\n예: list_remote_dir(project='KIS', path='backend/app', keyword='executor')",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -221,7 +221,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "read_remote_file",
-        "description": "원격 서버의 파일 내용 읽기. 프로젝트명으로 서버·경로 자동 매핑. Claude Code의 Read tool과 동일한 offset/limit 지원.",
+        "description": "원격 서버의 파일 내용 읽기 (코드 분석 1순위 도구). 프로젝트명으로 서버·WORKDIR 자동 매핑. offset/limit으로 부분 읽기 지원.\n예: read_remote_file(project='KIS', file_path='backend/app/main.py')",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -251,7 +251,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     # ── Pipeline C 도구 (자율 작업 파이프라인) ──────────────────────────────
     {
         "name": "pipeline_c_start",
-        "description": "프로젝트별 Claude Code 자율 작업 파이프라인 시작. 작업→자동검수→재지시→승인대기까지 자율 수행.",
+        "description": "프로젝트별 Claude Code 자율 작업 파이프라인 시작.\n워크플로우: 작업→AI검수→재지시(max_cycles)→CEO 승인대기→배포.\n예: pipeline_c_start(project='KIS', instruction='order_executor.py의 null check 추가', model='sonnet')",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -280,7 +280,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "pipeline_c_status",
-        "description": "실행 중인 파이프라인C 작업 상태 확인. job_id 없으면 전체 목록 반환.",
+        "description": "파이프라인C 작업 상태 확인 (phase, cycle 수, 리뷰 피드백). job_id 없으면 전체 목록.\n예: pipeline_c_status(job_id='pc-1741654800-abc123')",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -294,7 +294,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "pipeline_c_approve",
-        "description": "파이프라인C 작업 승인(배포) 또는 거부(원복). 승인 시 git commit+push+서비스 재시작 자동 수행.",
+        "description": "파이프라인C 작업 CEO 승인/거부. 승인 시 git commit+push+서비스 재시작 자동 수행. 거부 시 git stash로 원복.\n예: pipeline_c_approve(job_id='pc-...', approved=true)",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -316,7 +316,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "pipeline_c_cancel",
-        "description": "에러나거나 멈춘 파이프라인C 작업을 강제 취소. 원격 Claude 프로세스도 자동 kill.",
+        "description": "파이프라인C 작업 강제 취소. 원격 Claude 프로세스도 kill. 멈춘 작업 정리용.\n예: pipeline_c_cancel(job_id='pc-...')",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -330,7 +330,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "pipeline_c_retry",
-        "description": "에러/취소된 파이프라인C 작업을 동일 지시로 재실행. 먼저 cancel 후 retry 권장.",
+        "description": "에러/취소된 파이프라인C 작업을 동일 지시로 재실행. 먼저 cancel 후 retry 권장.\n예: pipeline_c_retry(job_id='pc-...')",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -344,7 +344,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "search_chat_history",
-        "description": "과거 대화 내용을 키워드/시맨틱으로 검색. 컴팩션으로 사라진 오래된 대화도 DB 원문에서 찾아줌.",
+        "description": "과거 대화 내용을 키워드(FTS+LIKE) 또는 시맨틱(임베딩 유사도)으로 검색.\n컴팩션으로 사라진 오래된 대화도 DB 원문에서 검색 가능.\n예: search_chat_history(query='토큰 갱신 오류', mode='semantic', limit=5)",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -385,7 +385,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     # ── F12: Timeline Memory ─────────────────────────────────────────────
     {
         "name": "query_timeline",
-        "description": "프로젝트별 시간순 이력 조회. memory_facts에서 타임라인 형태로 프로젝트 이벤트, 결정, 변경 이력을 보여줌.",
+        "description": "프로젝트별 시간순 이력 조회 (memory_facts 기반). 이벤트/결정/변경 이력을 타임라인 형태로 표시.\n예: query_timeline(project='KIS', period='7d', category='decision')",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -412,7 +412,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     # ── F5: Tool Result Recall ───────────────────────────────────────────
     {
         "name": "recall_tool_result",
-        "description": "과거 도구 실행 결과를 검색. 재실행 없이 이전 도구 결과를 즉시 참조.",
+        "description": "과거 도구 실행 결과를 검색하여 재실행 없이 즉시 참조. tool_results_archive에서 검색.\n예: recall_tool_result(tool_name='query_db', keyword='users', limit=3)",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -435,24 +435,502 @@ TOOL_DEFINITIONS: List[Dict] = [
     # ── C4: Decision Dependency Graph ────────────────────────────────────
     {
         "name": "query_decision_graph",
-        "description": "결정/사실의 의존관계 트리를 탐색. subject 또는 fact_id로 시작하여 related_facts를 최대 3단계 재귀 탐색.",
+        "description": (
+            "결정/사실의 의존관계 트리를 BFS 탐색. "
+            "subject(부분 일치) 또는 fact_id(UUID)로 시작점을 지정하면 related_facts를 재귀적으로 추적하여 "
+            "상위/하위 결정 체인을 보여줌. 결정 변경 시 영향 범위 파악에 활용.\n"
+            "예: query_decision_graph(subject='auth middleware') → 해당 결정에 의존하는 모든 후속 결정 표시."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "subject": {
                     "type": "string",
-                    "description": "검색할 사실의 subject (부분 일치, 선택)",
+                    "description": "검색할 사실의 subject (부분 일치). 예: 'auth middleware', '토큰 갱신'",
                 },
                 "fact_id": {
                     "type": "string",
-                    "description": "시작 사실의 UUID (정확히 지정, 선택)",
+                    "description": "시작 사실의 UUID (정확히 지정). subject 대신 사용 가능.",
                 },
                 "max_depth": {
                     "type": "integer",
-                    "description": "탐색 깊이 (1~3, 기본 3)",
+                    "description": "탐색 깊이 (1~3, 기본 3). 1=직접 관계만, 3=3단계까지 재귀.",
                 },
             },
             "required": [],
+        },
+    },
+    # ── 멀티에이전트 팀 오케스트레이션 ─────────────────────────────────
+    {
+        "name": "run_agent_team",
+        "description": (
+            "전문 에이전트 팀을 구성하여 단계별로 실행. "
+            "단계(phase) 내 태스크는 병렬 실행, 단계 간은 순차 실행. "
+            "에이전트 간 발견사항 자동 공유 + 결과 종합.\n"
+            "역할: researcher(조사), developer(코드수정), qa(테스트), devops(배포), architect(설계).\n"
+            "예: run_agent_team(name='KIS 수정', phases=[\n"
+            "  {name:'조사', tasks:[{task:'에러로그확인', role:'researcher'}, {task:'코드분석', role:'researcher'}]},\n"
+            "  {name:'수정', tasks:[{task:'버그수정', role:'developer'}]},\n"
+            "  {name:'검증', tasks:[{task:'문법확인', role:'qa'}]}\n"
+            "])"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "팀/작업 이름 (예: 'KIS 주문 버그 수정')",
+                },
+                "phases": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "description": "단계 이름 (예: '조사', '수정', '검증')"},
+                            "tasks": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "task": {"type": "string", "description": "작업 지시"},
+                                        "role": {
+                                            "type": "string",
+                                            "enum": ["researcher", "developer", "qa", "devops", "architect", "general"],
+                                            "description": "에이전트 역할",
+                                        },
+                                        "model": {
+                                            "type": "string",
+                                            "enum": ["sonnet", "opus", "haiku"],
+                                            "description": "모델 (기본 sonnet)",
+                                        },
+                                    },
+                                    "required": ["task", "role"],
+                                },
+                            },
+                            "model": {"type": "string", "description": "단계 기본 모델"},
+                        },
+                        "required": ["name", "tasks"],
+                    },
+                    "description": "실행 단계 목록. 단계 내 태스크 병렬, 단계 간 순차.",
+                },
+                "max_concurrent": {
+                    "type": "integer",
+                    "description": "동시 실행 에이전트 수 (기본 5)",
+                },
+                "cost_limit_usd": {
+                    "type": "number",
+                    "description": "비용 한도 USD (기본 10.0)",
+                },
+            },
+            "required": ["name", "phases"],
+        },
+    },
+    # ── SSH 원격 쓰기 도구 (Yellow 등급) ─────────────────────────────────
+    {
+        "name": "write_remote_file",
+        "description": (
+            "원격 서버에 파일 쓰기 (SSH). 쓰기 전 자동 .bak_aads 백업 생성.\n"
+            "보안: .env/.ssh/credentials 등 민감 파일 차단. 최대 1MB.\n"
+            "예: write_remote_file(project='KIS', file_path='backend/config.py', content='...')"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "대상 프로젝트",
+                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": "WORKDIR 기준 상대 파일 경로. 예: backend/app/main.py",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "파일에 쓸 전체 내용 (최대 1MB)",
+                },
+                "backup": {
+                    "type": "boolean",
+                    "description": "쓰기 전 .bak_aads 백업 생성 여부 (기본 true)",
+                },
+            },
+            "required": ["project", "file_path", "content"],
+        },
+    },
+    {
+        "name": "patch_remote_file",
+        "description": (
+            "원격 서버 파일의 특정 부분만 교체 (diff 기반 패치). "
+            "old_string이 파일 내 정확히 1회만 나타나야 성공. 자동 백업 생성.\n"
+            "예: patch_remote_file(project='AADS', file_path='app/main.py', "
+            "old_string='port=8000', new_string='port=8080')"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "대상 프로젝트",
+                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": "WORKDIR 기준 상대 파일 경로",
+                },
+                "old_string": {
+                    "type": "string",
+                    "description": "교체할 원본 문자열 (정확히 1회만 매치되어야 함)",
+                },
+                "new_string": {
+                    "type": "string",
+                    "description": "새로 교체할 문자열 (old_string과 달라야 함)",
+                },
+            },
+            "required": ["project", "file_path", "old_string", "new_string"],
+        },
+    },
+    {
+        "name": "run_remote_command",
+        "description": (
+            "원격 서버에서 화이트리스트 명령 실행 (SSH). 출력 최대 50KB.\n"
+            "허용 명령: ls, cat, grep, find, git, docker, pip, python, systemctl, "
+            "supervisorctl, nginx, journalctl, curl, du, ps, top, df, free, "
+            "crontab -l, kill/pkill 등.\n"
+            "차단: rm -rf, sudo, force push, hard reset, bash -c, 파이프 체인(; && ||).\n"
+            "예: run_remote_command(project='KIS', command='git status --short')"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "대상 프로젝트",
+                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                },
+                "command": {
+                    "type": "string",
+                    "description": "실행할 셸 명령 (화이트리스트 기반, 위험 명령 차단)",
+                },
+            },
+            "required": ["project", "command"],
+        },
+    },
+    # ── Git 원격 도구 ────────────────────────────────────────────────────
+    {
+        "name": "git_remote_status",
+        "description": "원격 서버의 git 작업 트리 상태 조회 (git status --short).\n예: git_remote_status(project='KIS')",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "대상 프로젝트",
+                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                },
+            },
+            "required": ["project"],
+        },
+    },
+    {
+        "name": "git_remote_add",
+        "description": "원격 서버에서 git add (스테이징).\n예: git_remote_add(project='KIS', files='backend/') 또는 files='.' (전체)",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "대상 프로젝트",
+                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                },
+                "files": {
+                    "type": "string",
+                    "description": "스테이징할 파일/디렉터리 (기본 '.' = 전체)",
+                },
+            },
+            "required": ["project"],
+        },
+    },
+    {
+        "name": "git_remote_commit",
+        "description": "원격 서버에서 git commit. 메시지는 shlex 이스케이프 적용.\n예: git_remote_commit(project='KIS', message='fix: order executor null check')",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "대상 프로젝트",
+                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                },
+                "message": {
+                    "type": "string",
+                    "description": "커밋 메시지 (최대 200자)",
+                },
+            },
+            "required": ["project", "message"],
+        },
+    },
+    {
+        "name": "git_remote_push",
+        "description": "원격 서버에서 git push. force push 차단.\n예: git_remote_push(project='KIS') 또는 git_remote_push(project='KIS', branch='main')",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "대상 프로젝트",
+                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                },
+                "branch": {
+                    "type": "string",
+                    "description": "푸시할 브랜치 (선택, 생략 시 현재 브랜치)",
+                },
+            },
+            "required": ["project"],
+        },
+    },
+    {
+        "name": "git_remote_create_branch",
+        "description": "원격 서버에서 새 브랜치 생성 및 체크아웃.\n예: git_remote_create_branch(project='KIS', branch_name='feature/order-fix')",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "대상 프로젝트",
+                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                },
+                "branch_name": {
+                    "type": "string",
+                    "description": "새 브랜치 이름 (영숫자, 점, 하이픈, 슬래시 허용)",
+                },
+            },
+            "required": ["project", "branch_name"],
+        },
+    },
+    # ── 프로젝트 DB 조회 도구 ────────────────────────────────────────────
+    {
+        "name": "query_project_database",
+        "description": (
+            "프로젝트별 원격 DB에 SELECT 쿼리 실행.\n"
+            "- KIS/GO100: PostgreSQL (211서버)\n"
+            "- SF: MariaDB (114서버, SSH 터널)\n"
+            "- NTV2: MySQL 8.0 (114서버, SSH 터널)\n"
+            "보안: SELECT/WITH/EXPLAIN만 허용. DML/DDL 차단. password/token 컬럼 자동 마스킹.\n"
+            "예: query_project_database(project='KIS', query='SELECT * FROM users LIMIT 5')"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "대상 프로젝트",
+                    "enum": ["KIS", "GO100", "SF", "NTV2"],
+                },
+                "query": {
+                    "type": "string",
+                    "description": "SELECT SQL 쿼리",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "최대 반환 행 수 (기본 100, 최대 1000)",
+                },
+                "db_name": {
+                    "type": "string",
+                    "description": "DB 이름 (미지정 시 프로젝트 메인 DB). NTV2의 autoda DB 접근 시 사용.",
+                },
+            },
+            "required": ["project", "query"],
+        },
+    },
+    {
+        "name": "list_project_databases",
+        "description": "설정된 프로젝트 DB 목록 및 연결 상태 조회. 각 프로젝트의 호스트/포트/DB종류/연결 성공 여부 반환.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    # ── 데이터 내보내기 도구 ──────────────────────────────────────────────
+    {
+        "name": "export_data",
+        "description": (
+            "데이터를 CSV/Excel/PDF로 내보내기. 파일은 /exports/에서 다운로드 가능.\n"
+            "예: export_data(data=[{'이름':'삼성','가격':70000}], fmt='xlsx', title='종목 리스트')\n"
+            "반환: {url: 'https://aads.newtalk.kr/exports/filename.xlsx', rows: N}"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "내보낼 데이터 (dict 리스트). 예: [{'col1': 'val1', 'col2': 'val2'}, ...]",
+                },
+                "fmt": {
+                    "type": "string",
+                    "enum": ["csv", "xlsx", "pdf"],
+                    "description": "출력 포맷 (기본 xlsx)",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "파일명 (선택, 자동 생성)",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "문서 제목 (선택)",
+                },
+            },
+            "required": ["data"],
+        },
+    },
+    # ── 스케줄러 도구 ────────────────────────────────────────────────────
+    {
+        "name": "schedule_task",
+        "description": (
+            "예약 작업 등록 (cron/interval/once). 결과는 텔레그램으로 알림.\n"
+            "action_type: remote_command(명령실행), health_check(헬스체크), "
+            "db_query(DB조회), url_check(URL 확인).\n"
+            "예(매일 9:30 KST): schedule_task(name='daily_check', schedule_type='cron', "
+            "action_type='health_check', action_config={}, schedule_config={'hour':9,'minute':30})"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "작업 이름 (고유 ID로 사용)",
+                },
+                "schedule_type": {
+                    "type": "string",
+                    "enum": ["cron", "interval", "once"],
+                    "description": "스케줄 유형. cron=크론, interval=주기, once=1회",
+                },
+                "action_type": {
+                    "type": "string",
+                    "enum": ["remote_command", "health_check", "db_query", "url_check"],
+                    "description": "실행할 액션 유형",
+                },
+                "action_config": {
+                    "type": "object",
+                    "description": (
+                        "액션별 설정. remote_command: {project, command}. "
+                        "db_query: {project, query}. url_check: {url}. "
+                        "health_check: {} (빈 객체)"
+                    ),
+                },
+                "schedule_config": {
+                    "type": "object",
+                    "description": (
+                        "스케줄 설정. cron: {hour, minute, day_of_week(선택)}. "
+                        "interval: {minutes} 또는 {hours}. "
+                        "once: {delay_minutes} (N분 후 1회)"
+                    ),
+                },
+            },
+            "required": ["name", "schedule_type", "action_type", "action_config"],
+        },
+    },
+    {
+        "name": "unschedule_task",
+        "description": "등록된 예약 작업 삭제.\n예: unschedule_task(name='daily_check')",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "삭제할 예약 작업 이름",
+                },
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "list_scheduled_tasks",
+        "description": "등록된 예약 작업 목록 조회. 시스템 작업과 사용자 작업 구분하여 반환. next_run(다음 실행 시각) 포함.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    # ── 스크린샷 캡처 도구 ───────────────────────────────────────────────
+    {
+        "name": "capture_screenshot",
+        "description": (
+            "URL 스크린샷을 캡처하여 이미지 URL 반환. 채팅 내 인라인 표시용.\n"
+            "browser_screenshot과 달리 독립 캡처→이미지 파일 저장→URL 반환.\n"
+            "예: capture_screenshot(url='https://aads.newtalk.kr/')"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "캡처할 URL (허용 도메인: *.newtalk.kr, github.com, localhost)",
+                },
+                "full_page": {
+                    "type": "boolean",
+                    "description": "전체 페이지 캡처 여부 (기본 false = 뷰포트만)",
+                },
+            },
+            "required": ["url"],
+        },
+    },
+    # ── 작업 모니터 도구 ─────────────────────────────────────────────────
+    {
+        "name": "check_task_status",
+        "description": (
+            "Pipeline B/C 활성 작업 현황 조회. 진행 중인 작업의 phase, 경과시간, stall 감지 정보 반환.\n"
+            "예: check_task_status() → 전체 활성 작업 목록"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "read_task_logs",
+        "description": (
+            "특정 작업의 실행 로그 조회. 최근 N건 또는 특정 시점 이후 로그.\n"
+            "예: read_task_logs(task_id='pc-1741654800-abc123', last_n=20)"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "작업 ID (Pipeline B: directive ID, Pipeline C: pc-* ID)",
+                },
+                "last_n": {
+                    "type": "integer",
+                    "description": "최근 N건 조회 (기본 50, 최대 200)",
+                },
+                "log_type": {
+                    "type": "string",
+                    "enum": ["info", "command", "output", "error", "phase_change"],
+                    "description": "로그 유형 필터 (선택)",
+                },
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "terminate_task",
+        "description": (
+            "활성 작업 강제 종료. Pipeline C는 원격 Claude 프로세스도 정리.\n"
+            "예: terminate_task(task_id='pc-1741654800-abc123')"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "종료할 작업 ID",
+                },
+            },
+            "required": ["task_id"],
         },
     },
 ]
