@@ -8,6 +8,7 @@ AADS-188C Phase 3 + R-CRITICAL-002: Output Validator — 거짓 보고 방지.
   UNVERIFIED_COUNT       — 도구 호출 없이 DB 수치/건수를 보고하는 응답 (차단)
   FABRICATED_RESULTS     — 가짜 도구 결과 XML 태그를 텍스트로 생성한 응답 (차단)
   FABRICATED_DATA_TABLE  — 도구 미호출 상태에서 DB 조회/결과처럼 보이는 마크다운 테이블 생성 (차단)
+  INCONSISTENT_DATA      — 응답 내 수치가 동일 턴의 도구 결과와 모순되는 경우 (차단)
 """
 from __future__ import annotations
 
@@ -81,6 +82,7 @@ def validate_response(
     response_text: str,
     tools_called: bool,
     intent: str = "",
+    tool_results_text: str = "",
 ) -> ValidationResult:
     """
     모델 응답을 검증하여 거짓 보고 여부를 판단한다.
@@ -98,8 +100,13 @@ def validate_response(
     if intent in ("greeting", "casual", ""):
         return _OK
 
-    # 도구가 호출된 응답은 유효 (단, XML 날조는 위에서 이미 검사)
+    # 도구가 호출된 응답 — XML 날조는 위에서 이미 검사, 데이터 불일치만 추가 검사
     if tools_called:
+        if tool_results_text:
+            _incon = check_inconsistent_data(stripped, tool_results_text)
+            if _incon:
+                logger.error(f"[OutputValidator] INCONSISTENT_DATA detected: {_incon.message}")
+                return _incon
         return _OK
 
     # ── FABRICATED_DATA_TABLE: 도구 미호출인데 DB 조회 결과처럼 보이는 테이블 ──
@@ -275,3 +282,68 @@ def check_fabricated_data_table(
             "도구로 확인할 수 없다면 '현재 실시간 데이터를 확인할 수 없습니다'라고 솔직히 답하세요."
         ),
     )
+
+
+# ─── 데이터 불일치 감지 (차단) ────────────────────────────────────────────────
+
+# 응답에서 유의미한 숫자를 추출하는 패턴 (소수점 포함, 3자리 이상 또는 단위 동반)
+_SIGNIFICANT_NUMBER = re.compile(
+    r'(?<!\d)(\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(?:건|개|행|종목|row|rows|원|%|명|대|곳|장|EA)',
+    re.IGNORECASE,
+)
+
+
+def check_inconsistent_data(
+    response_text: str,
+    tool_results_text: str,
+) -> Optional[ValidationResult]:
+    """
+    응답에 포함된 수치가 동일 턴의 도구 결과와 모순되는지 감지한다.
+    도구 결과에 나타나지 않는 유의미한 수치가 응답에 있으면 불일치로 판단.
+    """
+    if not tool_results_text or not response_text:
+        return None
+
+    # 응답에서 수치+단위 추출
+    response_numbers = _SIGNIFICANT_NUMBER.findall(response_text)
+    if not response_numbers:
+        return None
+
+    # 도구 결과 텍스트에서 모든 숫자 추출 (정규화: 콤마 제거)
+    tool_numbers_raw = re.findall(r'\d{1,3}(?:,\d{3})*(?:\.\d+)?', tool_results_text)
+    tool_numbers_normalized = {n.replace(",", "") for n in tool_numbers_raw}
+
+    # 응답 수치 중 도구 결과에 없는 것 찾기
+    mismatched = []
+    for num in response_numbers:
+        normalized = num.replace(",", "")
+        # 작은 숫자(0~9)는 일반 표현일 수 있으므로 무시
+        try:
+            if float(normalized) < 10:
+                continue
+        except ValueError:
+            continue
+        if normalized not in tool_numbers_normalized:
+            mismatched.append(num)
+
+    if not mismatched:
+        return None
+
+    # 불일치 수치가 3개 이상이면 확실한 모순
+    if len(mismatched) >= 3:
+        return ValidationResult(
+            is_valid=False,
+            violation_type="INCONSISTENT_DATA",
+            message=(
+                f"도구 결과와 불일치하는 수치 감지: {', '.join(mismatched[:5])} — "
+                f"도구 결과에 없는 데이터를 응답에 포함"
+            ),
+            retry_prompt=(
+                "[시스템 재시도 지시 — 데이터 불일치 감지] "
+                "방금 응답에서 도구 결과와 다른 수치를 보고했습니다. "
+                "응답에 포함하는 모든 수치는 반드시 도구 호출 결과에서 직접 인용해야 합니다. "
+                "도구 결과를 다시 확인하고, 실제 데이터만 사용하여 정확하게 보고하세요."
+            ),
+        )
+
+    return None

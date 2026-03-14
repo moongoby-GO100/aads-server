@@ -37,9 +37,16 @@ _EVAL_PROMPT = """다음 AI 응답의 품질을 평가하세요.
 사용자 질문: {user_msg}
 AI 응답 (앞 1000자): {ai_msg}
 
-3가지 기준으로 0.0~1.0 점수와 간단한 이유를 JSON으로 반환:
-{{"accuracy": 0.0~1.0, "completeness": 0.0~1.0, "relevance": 0.0~1.0, "overall": 0.0~1.0, "note": "한줄 평가"}}
+5가지 기준으로 0.0~1.0 점수와 간단한 이유를 JSON으로 반환:
+- accuracy: 사실적 정확성
+- completeness: 응답의 완성도
+- relevance: 질문과의 관련성
+- tool_grounding: 도구를 사용하여 주장/데이터를 검증했는가? (도구 미사용 시 0.0~0.3)
+- actionability: 구체적인 다음 단계를 제시하는가? (모호한 서술만 있으면 낮음)
 
+{{"accuracy": 0.0~1.0, "completeness": 0.0~1.0, "relevance": 0.0~1.0, "tool_grounding": 0.0~1.0, "actionability": 0.0~1.0, "overall": 0.0~1.0, "note": "한줄 평가"}}
+
+overall = tool_grounding×0.3 + accuracy×0.25 + completeness×0.2 + relevance×0.15 + actionability×0.1 으로 계산.
 JSON만 반환. 마크다운 코드블록 없이."""
 
 
@@ -77,8 +84,16 @@ async def evaluate_response(
             text = text.strip()
 
         details = json.loads(text)
-        overall = float(details.get("overall", 0.5))
+        # Weighted overall: tool_grounding×0.3 + accuracy×0.25 + completeness×0.2 + relevance×0.15 + actionability×0.1
+        overall = (
+            float(details.get("tool_grounding", 0.5)) * 0.3
+            + float(details.get("accuracy", 0.5)) * 0.25
+            + float(details.get("completeness", 0.5)) * 0.2
+            + float(details.get("relevance", 0.5)) * 0.15
+            + float(details.get("actionability", 0.5)) * 0.1
+        )
         overall = min(1.0, max(0.0, overall))
+        details["overall"] = round(overall, 3)
 
         # DB 저장
         from app.core.db_pool import get_pool
@@ -169,6 +184,11 @@ async def evaluate_response(
                             reflection[:500],
                         )
                     logger.info("b1_reflexion_saved", score=overall, session=session_id[:8])
+                    # Check for repeated errors → generate permanent correction directive
+                    await _check_repeated_errors(
+                        pool, session_id, normalized_project,
+                        f"품질 부족: {details.get('note', '')[:100]}",
+                    )
             except Exception as e_refl:
                 logger.debug("b1_reflexion_error", error=str(e_refl))
 
@@ -178,3 +198,101 @@ async def evaluate_response(
     except Exception as e:
         logger.debug("self_eval_error", error=str(e))
         return None
+
+
+async def _check_repeated_errors(
+    pool,
+    session_id: str,
+    project: Optional[str],
+    subject: str,
+) -> None:
+    """
+    동일 error_pattern subject가 최근 7일 내 3회 이상 반복되면
+    ai_meta_memory에 permanent correction directive를 생성한다.
+    """
+    if not subject or not project:
+        return
+    try:
+        # subject 핵심 키워드 추출 (앞 50자)
+        subject_key = subject[:50]
+        async with pool.acquire() as conn:
+            count = await conn.fetchval(
+                """SELECT COUNT(*) FROM memory_facts
+                   WHERE project = $1
+                     AND category = 'error_pattern'
+                     AND subject LIKE $2
+                     AND created_at > NOW() - interval '7 days'""",
+                project,
+                f"%{subject_key}%",
+            )
+            if count is not None and int(count) >= 3:
+                # 이미 동일 교정 지시가 있는지 확인
+                existing = await conn.fetchval(
+                    """SELECT COUNT(*) FROM ai_meta_memory
+                       WHERE project = $1
+                         AND category = 'correction_directive'
+                         AND key LIKE $2""",
+                    project,
+                    f"%{subject_key[:30]}%",
+                )
+                if existing and int(existing) > 0:
+                    logger.debug("repeated_error_directive_exists", subject=subject_key[:30])
+                    return
+
+                # 영구 교정 지시 생성
+                from anthropic import AsyncAnthropic as _CorrClient
+                _corr_client = _CorrClient()
+                _corr_resp = await _corr_client.messages.create(
+                    model=_HAIKU_MODEL,
+                    max_tokens=256,
+                    messages=[{"role": "user", "content": (
+                        f"다음 AI 오류가 {count}회 반복되고 있습니다.\n"
+                        f"오류 유형: {subject}\n"
+                        f"프로젝트: {project}\n\n"
+                        f"이 오류를 영구적으로 방지하기 위한 구체적 지시를 1-2문장으로 작성하세요.\n"
+                        f"'항상 ~하라', '절대 ~하지 마라' 형태로 작성.\n"
+                        f"지시문만 반환하세요."
+                    )}],
+                )
+                directive = _corr_resp.content[0].text.strip() if _corr_resp.content else ""
+                if directive:
+                    await conn.execute(
+                        """INSERT INTO ai_meta_memory (project, category, key, value)
+                           VALUES ($1, 'correction_directive', $2, $3)
+                           ON CONFLICT (project, category, key) DO UPDATE SET value = $3""",
+                        project,
+                        f"반복오류교정: {subject_key[:30]}",
+                        directive[:500],
+                    )
+                    logger.warning(
+                        "repeated_error_correction_created",
+                        project=project,
+                        subject=subject_key[:30],
+                        count=count,
+                    )
+    except Exception as e:
+        logger.debug("check_repeated_errors_error", error=str(e))
+
+
+def should_stop_generation(quality_scores: list) -> tuple[bool, str]:
+    """
+    자율 실행기에서 품질 점수 추이를 보고 중단 여부를 판단한다.
+    Returns: (should_stop, reason)
+    """
+    if not quality_scores:
+        return (False, "")
+
+    # 조건 1: 최근 3개 모두 0.3 미만
+    if len(quality_scores) >= 3:
+        last3 = quality_scores[-3:]
+        if all(s < 0.3 for s in last3):
+            return (True, "품질 연속 하락 — 접근 방식 재검토 필요")
+
+    # 조건 2: 최근 5개가 지속적으로 하락 (각각 이전보다 작음)
+    if len(quality_scores) >= 5:
+        last5 = quality_scores[-5:]
+        declining = all(last5[i] < last5[i - 1] for i in range(1, 5))
+        if declining:
+            return (True, "품질 추세 하락 — 전략 변경 필요")
+
+    return (False, "")
