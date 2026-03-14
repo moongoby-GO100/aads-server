@@ -65,6 +65,7 @@ async def call_stream(
     messages: List[Dict[str, Any]],
     tools: Optional[List[Dict[str, Any]]] = None,
     model_override: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     인텐트 결과에 따라 LiteLLM 또는 Anthropic SDK로 SSE 스트리밍.
@@ -101,13 +102,13 @@ async def call_stream(
                 tool_group=intent_result.tool_group,
             )
             yield {"type": "delta", "content": ""}  # 스트림 리셋
-            async for event in _stream_anthropic(_fallback_intent, "claude-haiku", system_prompt, messages, tools):
+            async for event in _stream_anthropic(_fallback_intent, "claude-haiku", system_prompt, messages, tools, session_id=session_id):
                 yield event
         return
 
     # Claude 모델 → Anthropic SDK 직접 (실패 시 Gemini Flash 폴백)
     _had_error = False
-    async for event in _stream_anthropic(intent_result, model, system_prompt, messages, tools):
+    async for event in _stream_anthropic(intent_result, model, system_prompt, messages, tools, session_id=session_id):
         if event.get("type") == "error":
             _had_error = True
             _error_content = event.get("content", "")
@@ -228,6 +229,7 @@ async def _stream_anthropic(
     system_prompt: str,
     messages: List[Dict[str, Any]],
     tools: Optional[List[Dict[str, Any]]],
+    session_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Anthropic SDK 직접 스트리밍 (Tool Use + Extended Thinking + Prompt Caching)."""
     model_id = _ANTHROPIC_MODEL_ID.get(model_alias, "claude-sonnet-4-6")
@@ -499,6 +501,18 @@ async def _stream_anthropic(
             {"role": "assistant", "content": final_msg.content},
             {"role": "user", "content": tool_results},
         ]
+
+        # CEO 인터럽트 체크: 도구 실행 완료 후, 다음 API 호출 전
+        if session_id:
+            from app.core.interrupt_queue import has_interrupt, pop_interrupts
+            if has_interrupt(session_id):
+                interrupts = pop_interrupts(session_id)
+                interrupt_text = "\n".join(interrupts)
+                current_messages.append({
+                    "role": "user",
+                    "content": f"[CEO 추가 지시] 작업 도중 CEO가 새로운 지시를 보냈습니다. 현재까지의 작업 결과를 고려하고, 이 새 지시를 반영하여 다음 행동을 판단하세요. CEO 지시가 기존 작업과 충돌하면 CEO 지시를 우선합니다.\n\n{interrupt_text}"
+                })
+                yield {"type": "interrupt_applied", "content": "CEO 추가 지시 반영 중..."}
 
         _turn += 1
 

@@ -56,7 +56,7 @@ async def with_heartbeat(
         except StopAsyncIteration:
             break
         except Exception as exc:
-            logger.warning(f"with_heartbeat inner generator error: {type(exc).__name__}: {exc}")
+            logger.warning(f"with_heartbeat inner generator error: {type(exc).__name__}: {exc}", exc_info=True)
             # 에러도 SSE로 전달 후 종료 (조용히 삼키지 않음)
             yield f'data: {json.dumps({"type": "error", "content": f"Stream error: {type(exc).__name__}"})}\n\n'
             break
@@ -901,6 +901,8 @@ async def send_message_stream(
     _trace_start_time = __import__("time").monotonic()
 
     try:
+        from app.core.interrupt_queue import set_streaming
+        set_streaming(session_id, True)
         sid = uuid.UUID(session_id)
 
         # 1. 첨부파일 처리 — Ephemeral Document Context (#파일맥락보호)
@@ -1520,10 +1522,13 @@ async def send_message_stream(
             messages=messages,
             tools=tools_for_api,
             model_override=model_override,
+            session_id=session_id,
         ):
             etype = event.get("type", "")
             if etype == "heartbeat":
                 yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+            elif etype == "interrupt_applied":
+                yield f"event: interrupt_applied\ndata: {json.dumps({'type': 'interrupt_applied', 'content': event.get('content', '')})}\n\n"
             elif etype == "delta":
                 full_response += event.get("content", "")
                 yield f"data: {json.dumps({'type': 'delta', 'content': event['content']})}\n\n"
@@ -1578,6 +1583,7 @@ async def send_message_stream(
                 messages=_retry_messages,
                 tools=tools_for_api,
                 model_override=model_override,
+                session_id=session_id,
             ):
                 etype = event.get("type", "")
                 if etype == "heartbeat":
@@ -1684,6 +1690,7 @@ async def send_message_stream(
         yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns})}\n\n"
 
     finally:
+        set_streaming(session_id, False)
         if conn is not None:
             await get_pool().release(conn)
 
