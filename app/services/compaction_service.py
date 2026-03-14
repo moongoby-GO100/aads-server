@@ -222,8 +222,14 @@ async def check_and_compact(
                     uuid.UUID(session_id) if len(session_id) == 36 else session_id,
                     COMPACTION_KEEP_RECENT * 2,
                 )
-                # 3. ai_observations UPSERT (양방향 메모리 동기화)
-                await _sync_to_observations(db_conn, session_id, summary)
+                # 3. ai_observations UPSERT (양방향 메모리 동기화) — 별도 커넥션 (트랜잭션 격리)
+                try:
+                    from app.core.db_pool import get_pool as _get_compact_pool
+                    _cp = _get_compact_pool()
+                    async with _cp.acquire() as _obs_conn:
+                        await _sync_to_observations(_obs_conn, session_id, summary)
+                except Exception as _obs_err:
+                    logger.warning(f"compaction_service _sync_to_observations isolated error: {_obs_err}")
         except Exception as e:
             logger.error(f"compaction_service db error: {e}", exc_info=True)
 
