@@ -553,19 +553,15 @@ class PipelineCJob:
         동일 프로젝트 workdir에서 실행 중인 claude 프로세스를 찾아 강제 종료."""
         try:
             # 해당 workdir에서 실행 중인 claude 프로세스 PID 조회
-            ps_cmd = (
-                f"ps aux | grep -E 'claude.*session-id' | grep -v grep | "
-                f"grep {shlex.quote(self.workdir)} | awk '{{print $2}}'"
-            )
+            # [Fix-B] pgrep -f으로 실제 claude 바이너리 탐지 (nohup bash 래퍼 무관)
+            ps_cmd = "pgrep -f 'claude -p' 2>/dev/null || true"
             ps_out = await self._ssh_command(ps_cmd, timeout=10, retries=1)
             pids = [p.strip() for p in ps_out.strip().split("\n") if p.strip().isdigit()]
 
             if not pids:
-                # workdir 매칭이 안 되면 nohup 임시파일 기반으로 조회
-                ps_cmd2 = (
-                    f"ps aux | grep -E 'claude.*session-id' | grep -v grep | awk '{{print $2}}'"
-                )
-                ps_out2 = await self._ssh_command(ps_cmd2, timeout=10, retries=1)
+                # 2차: job별 임시 PID 파일로 조회
+                pid_file = f"/tmp/pipeline_c_{self.job_id}.pid"
+                ps_out2 = await self._ssh_command(f"cat {pid_file} 2>/dev/null || true", timeout=10, retries=1)
                 pids = [p.strip() for p in ps_out2.strip().split("\n") if p.strip().isdigit()]
 
             if pids:
@@ -573,7 +569,8 @@ class PipelineCJob:
                     f"pipeline_c_kill_existing job={self.job_id} context={context} "
                     f"killing {len(pids)} claude processes: {pids}"
                 )
-                await self._ssh_command(f"kill -9 {' '.join(pids)}", timeout=10, retries=1)
+                kill_cmd = "kill -9 " + " ".join(pids) + " 2>/dev/null || true"
+                await self._ssh_command(kill_cmd, timeout=10, retries=1)
                 # 프로세스 완전 종료 대기
                 await asyncio.sleep(3)
                 logger.info(f"pipeline_c_kill_existing job={self.job_id} done, waited 3s")
@@ -603,7 +600,7 @@ class PipelineCJob:
 
         # API 키 주입 (OAuth 만료 대비)
         api_key_setup = (
-            "source ~/.claude/api_keys.env 2>/dev/null; "
+            "export LANG=C.UTF-8; export LC_ALL=C.UTF-8; source ~/.claude/api_keys.env 2>/dev/null; "
             "export ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-$API_KEY_1}; "
         )
 
@@ -621,17 +618,15 @@ class PipelineCJob:
             for _detach_attempt in range(3):
                 # 매 시도마다 새 session-id 발급 (재시도 시 충돌 방지)
                 self.claude_session_id = str(uuid.uuid4())
-                if continue_session:
-                    _model_flag_c = f" --model {self.model}" if self.model else ""
-                    claude_cmd = f"claude -p --output-format text{_model_flag_c} --session-id {self.claude_session_id} -c {escaped}"
-                else:
-                    _model_flag = f" --model {self.model}" if self.model else ""
-                    claude_cmd = (
-                        f"claude -p --output-format text"
-                        f"{_model_flag} "
-                        f"--session-id {self.claude_session_id} "
-                        f"{escaped}"
-                    )
+                # [Fix-D] continue_session 무관하게 항상 새 세션으로 실행
+                # '--session-id -c' 조합은 Claude CLI 오류 유발 → 플래그 제거
+                # 재지시 시 이전 컨텍스트는 instruction 텍스트에 포함됨
+                _model_flag = f" --model {self.model}" if self.model else ""
+                claude_cmd = (
+                    f"claude -p --output-format text"
+                    f"{_model_flag} "
+                    f"{escaped}"
+                )
                 encoded_cmd = base64.b64encode(
                     f'{claude_cmd} > {out_file} 2> {err_file}; echo $? > {done_file}'.encode()
                 ).decode()
@@ -745,7 +740,7 @@ class PipelineCJob:
             )
 
         api_key_setup = (
-            "source ~/.claude/api_keys.env 2>/dev/null; "
+            "export LANG=C.UTF-8; export LC_ALL=C.UTF-8; source ~/.claude/api_keys.env 2>/dev/null; "
             "export ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-$API_KEY_1}; "
         )
         full_cmd = f"{api_key_setup}cd {shlex.quote(self.workdir)} && {claude_cmd}"

@@ -52,7 +52,47 @@ async def lifespan(app: FastAPI):
     configure_logging(log_level=settings.LOG_LEVEL, json_format=json_logs)
     logger.info("aads_server_starting", env=settings.ENVIRONMENT, json_logs=json_logs)
 
-    # Docker 샌드박스 이미지 사전 풀 (T-015, D-011)
+    # -- 서버 재시작 시 orphan streaming_placeholder 정리 --
+    try:
+        from app.core.db_pool import get_pool as _gp
+        _pool = _gp()
+        async with _pool.acquire() as _c:
+            _del = await _c.fetchval(
+            "WITH d AS (DELETE FROM chat_messages WHERE intent='streaming_placeholder' RETURNING id) SELECT COUNT(*) FROM d"
+            )
+            if _del:
+                logger.info(f"startup_cleanup: {_del} orphan placeholder(s) removed")
+    except Exception as _e:
+        logger.warning(f"startup_placeholder_cleanup_failed: {_e}")
+
+
+
+    # -- [Fix-C] 서버 재시작 시 잔존 claude 프로세스 + 고아 pipeline_c_jobs 정리 --
+    try:
+        import subprocess as _sp
+        _kill_result = _sp.run(
+            ["pkill", "-9", "-f", "claude -p"],
+            capture_output=True, text=True
+        )
+        logger.info(f"startup_claude_kill: rc={_kill_result.returncode} (0=killed, 1=none_found)")
+    except Exception as _e:
+        logger.warning(f"startup_claude_kill_failed: {_e}")
+
+    try:
+        from app.core.db_pool import get_pool as _gp2
+        _pool2 = _gp2()
+        async with _pool2.acquire() as _c2:
+            _orphan = await _c2.fetchval(
+                "WITH d AS (UPDATE pipeline_c_jobs SET status='error', "
+                "error_msg='서버 재시작으로 중단됨 (KST)' WHERE status='running' RETURNING id) "
+                "SELECT COUNT(*) FROM d"
+            )
+            if _orphan:
+                logger.info(f"startup_cleanup: {_orphan} orphan pipeline_c_jobs set to error")
+    except Exception as _e:
+        logger.warning(f"startup_pipeline_c_cleanup_failed: {_e}")
+
+        # Docker 샌드박스 이미지 사전 풀 (T-015, D-011)
     try:
         from app.services.sandbox import pull_images
         await pull_images()
@@ -200,6 +240,15 @@ async def lifespan(app: FastAPI):
         from app.core.db_pool import init_pool
         db_pool = await init_pool()
         app_state["db_pool"] = db_pool
+        # B3: tool_results_archive is_error 컬럼 마이그레이션
+        try:
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    "ALTER TABLE tool_results_archive ADD COLUMN IF NOT EXISTS is_error BOOLEAN DEFAULT FALSE"
+                )
+            logger.info("b3_is_error_column_ensured")
+        except Exception as e:
+            logger.warning("b3_is_error_column_migration_failed", error=str(e))
     except Exception as e:
         logger.error("db_pool_init_failed", error=str(e))
         app_state["db_pool"] = None
