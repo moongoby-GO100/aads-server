@@ -265,7 +265,7 @@ class AgentSDKService:
             model="claude-opus-4-6",
             max_turns=self.max_turns,
             max_budget_usd=self.max_budget_usd,
-            permission_mode="default",  # 훅에서 자동 승인 (root 환경 bypassPermissions 불가)
+            permission_mode="acceptEdits",  # Docker stdin 없음 → default 모드 시 permission prompt에서 exit=1
             mcp_servers=mcp_servers,
             hooks=hooks,
             allowed_tools=_BUILTIN_ALLOWED + _GREEN_TOOLS + _YELLOW_TOOLS,
