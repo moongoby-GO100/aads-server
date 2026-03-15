@@ -1472,7 +1472,7 @@ async def recover_interrupted_jobs():
                     )
 
             # ── Phase 0a: 서버 재시작으로 중단된 작업 자동 재실행 ──
-            # 조건: 최근 30분 내 생성 + 서버 재시작으로 중단 + cycle 0 (아직 시작 단계)
+            # 최근 30분 내 중단 작업 → 원본 instruction 추출 → 최대 2회 재실행
             resume_rows = await conn.fetch(
                 """
                 SELECT job_id, chat_session_id, project, instruction, cycle, max_cycles, model_used
@@ -1485,7 +1485,6 @@ async def recover_interrupted_jobs():
                     WHERE pj.status = 'error'
                       AND pj.review_feedback LIKE '%서버 재시작으로 중단%'
                       AND pj.review_feedback NOT LIKE '%자동 재실행됨%'
-                      AND pj.instruction NOT LIKE '%서버 재시작으로 이전 작업%'
                       AND pj.created_at > NOW() - INTERVAL '30 minutes'
                       AND pj.cycle < pj.max_cycles
                 ) sub
@@ -1504,6 +1503,28 @@ async def recover_interrupted_jobs():
                 if not _rinstr or not _rproject:
                     continue
 
+                # 원본 instruction 추출 — [시스템: ...] 프리픽스 반복 제거
+                import re as _re
+                _original_instr = _re.sub(
+                    r'\[시스템: 서버 재시작으로 이전 작업\([^)]+\)이 중단되었습니다\.[^\]]*\]\s*',
+                    '', _rinstr
+                ).strip()
+                if not _original_instr:
+                    continue
+
+                # 같은 원본 instruction으로 이미 2회 이상 재실행됐는지 확인 (무한루프 방지)
+                _retry_count = await conn.fetchval(
+                    """SELECT count(*) FROM pipeline_jobs
+                       WHERE project = $1
+                         AND instruction LIKE '%' || left($2, 80) || '%'
+                         AND review_feedback LIKE '%자동 재실행됨%'
+                         AND created_at > NOW() - INTERVAL '2 hours'""",
+                    _rproject, _original_instr[:80],
+                )
+                if _retry_count and _retry_count >= 2:
+                    logger.info(f"pipeline_c_auto_resume_skip: {_rjob_id} already retried {_retry_count}x, skipping")
+                    continue
+
                 try:
                     # 이전 작업을 resumed 상태로 마킹
                     await conn.execute(
@@ -1514,12 +1535,8 @@ async def recover_interrupted_jobs():
                         _rjob_id,
                     )
 
-                    # 새 작업으로 재실행 (이전 cycle 유지)
-                    _resume_instruction = (
-                        f"[시스템: 서버 재시작으로 이전 작업({_rjob_id})이 중단되었습니다. "
-                        f"이전 진행 상황을 확인하고 이어서 작업을 완료하세요.]\n\n"
-                        f"{_rinstr}"
-                    )
+                    # 원본 instruction으로 재실행 (체인 프리픽스 없이)
+                    _resume_instruction = _original_instr
                     result = await start_pipeline(
                         project=_rproject,
                         instruction=_resume_instruction,
