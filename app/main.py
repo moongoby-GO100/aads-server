@@ -29,6 +29,8 @@ from app.api.debate_logs import router as debate_logs_router
 from app.api.artifacts import router as artifacts_router
 from app.api.task_monitor import router as task_monitor_router
 from app.api.qa import router as qa_router
+from app.api.image import router as image_router
+from app.api.fact_check import router as fact_check_router
 from app.routers.chat import router as chat_v2_router
 from app.config import settings
 from app.graph.builder import compile_graph
@@ -404,5 +406,7 @@ app.include_router(briefing_router, prefix="/api/v1", tags=["briefing"])
 app.include_router(task_monitor_router, prefix="/api/v1", tags=["task-monitor"])
 app.include_router(qa_router, prefix="/api/v1", tags=["qa"])
 app.include_router(chat_v2_router, prefix="/api/v1", tags=["chat-v2"])
+app.include_router(image_router, prefix="/api/v1/image", tags=["image"])
+app.include_router(fact_check_router, prefix="/api/v1/fact-check", tags=["fact-check"])
 # AADS-186C: FastAPI-MCP 마운트 (graceful — MCP_ENABLED=false 시 비활성)
 setup_mcp(app)

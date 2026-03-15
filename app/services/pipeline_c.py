@@ -554,9 +554,16 @@ class PipelineCJob:
         try:
             # 해당 workdir에서 실행 중인 claude 프로세스 PID 조회
             # [Fix-B] pgrep -f으로 실제 claude 바이너리 탐지 (nohup bash 래퍼 무관)
-            ps_cmd = "pgrep -f 'claude -p' 2>/dev/null || true"
+            # [Fix-E] workdir 기반 프로젝트 격리
+            ps_cmd = "pgrep -af 'claude' 2>/dev/null || true"
             ps_out = await self._ssh_command(ps_cmd, timeout=10, retries=1)
-            pids = [p.strip() for p in ps_out.strip().split("\n") if p.strip().isdigit()]
+            pids = []
+            for _line in ps_out.strip().split("\n"):
+                _parts = _line.strip().split(None, 1)
+                if _parts and _parts[0].isdigit():
+                    _cmd_part = _parts[1] if len(_parts) > 1 else ''
+                    if self.workdir in _cmd_part or 'claude -p' in _cmd_part:
+                        pids.append(_parts[0])
 
             if not pids:
                 # 2차: job별 임시 PID 파일로 조회
@@ -731,15 +738,13 @@ class PipelineCJob:
         # 항상 새 session-id 발급 ("Session ID already in use" 충돌 근본 방지)
         self.claude_session_id = str(uuid.uuid4())
         _model_flag = f" --model {self.model}" if self.model else ""
-        if continue_session:
-            claude_cmd = f"claude -p --output-format text{_model_flag} --session-id {self.claude_session_id} -c {escaped}"
-        else:
-            claude_cmd = (
-                f"claude -p --output-format text"
-                f"{_model_flag} "
-                f"--session-id {self.claude_session_id} "
-                f"{escaped}"
-            )
+        # [Fix-D2] continue_session 무관하게 항상 새 세션으로 실행
+        # '--session-id -c' 조합 Claude CLI 오류 완전 제거
+        claude_cmd = (
+            f"claude -p --output-format text"
+            f"{_model_flag} "
+            f"{escaped}"
+        )
 
         api_key_setup_direct = (
             "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; export LANGUAGE=en_US:en; "
@@ -1811,10 +1816,30 @@ async def _check_stalled_jobs():
                 f"확인이 필요합니다. `pipeline_c_status(job_id=\"{job.job_id}\")` 로 상태를 조회하세요."
             )
 
-            # 스톨 로그 기록 (중복 방지: 이미 stall 로그가 마지막이면 skip)
+            # [Fix-F] stall 로그 기록 + 자동 kill (좀비 방지)
             if not job.logs or job.logs[-1].get("phase") != "stall_detected":
                 job._log("stall_detected", f"{stall_minutes}분 스톨 감지")
                 await job._save_to_db()
+
+            # 30분 이상 stall이면 자동 강제 종료
+            if elapsed > _STALL_THRESHOLD_SEC:
+                try:
+                    await job._kill_existing_claude_process(context="watchdog-auto-kill")
+                    from app.core.db_pool import get_pool
+                    _pool = get_pool()
+                    async with _pool.acquire() as _conn:
+                        await _conn.execute(
+                            "UPDATE pipeline_jobs SET status='error', phase='error', "
+                            "review_feedback=COALESCE(review_feedback,'')||$2, updated_at=now() "
+                            "WHERE job_id=$1",
+                            job.job_id, f" | watchdog 자동종료: {stall_minutes}분 스톨"
+                        )
+                    job.status = "error"
+                    job.phase = "error"
+                    _active_jobs.pop(job.job_id, None)
+                    logger.warning(f"pipeline_c_watchdog_auto_killed job={job.job_id} after {stall_minutes}min")
+                except Exception as _ke:
+                    logger.error(f"pipeline_c_watchdog_kill_err job={job.job_id}: {_ke}")
 
 
 async def _collect_orphan_results():

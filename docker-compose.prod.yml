@@ -61,6 +61,7 @@ services:
       dockerfile: Dockerfile
     container_name: aads-server
     restart: always
+    stop_grace_period: 30s
     ports:
       - "8100:8080"
     env_file:
