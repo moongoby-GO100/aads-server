@@ -1466,6 +1466,86 @@ async def recover_interrupted_jobs():
                         _djob_id, f" | 복구 실패: {str(_derr)[:200]}",
                     )
 
+            # ── Phase 0a: 서버 재시작으로 중단된 작업 자동 재실행 ──
+            # 조건: 최근 30분 내 생성 + 서버 재시작으로 중단 + cycle 0 (아직 시작 단계)
+            resume_rows = await conn.fetch(
+                """
+                SELECT job_id, chat_session_id, project, instruction, cycle, max_cycles, model_used
+                FROM (
+                    SELECT pj.*,
+                           (SELECT model_used FROM chat_messages
+                            WHERE session_id = pj.chat_session_id::uuid AND model_used IS NOT NULL
+                            ORDER BY created_at DESC LIMIT 1) as model_used
+                    FROM pipeline_jobs pj
+                    WHERE pj.status = 'error'
+                      AND pj.review_feedback LIKE '%서버 재시작으로 중단%'
+                      AND pj.created_at > NOW() - INTERVAL '30 minutes'
+                      AND pj.cycle < pj.max_cycles
+                ) sub
+                ORDER BY created_at DESC LIMIT 3
+                """
+            )
+            _auto_resumed = 0
+            for rrow in resume_rows:
+                _rjob_id = rrow["job_id"]
+                _rproject = rrow.get("project", "")
+                _rsid = rrow.get("chat_session_id", "")
+                _rinstr = rrow.get("instruction", "")
+                _rcycle = rrow.get("cycle", 0)
+                _rmax = rrow.get("max_cycles", 3)
+
+                if not _rinstr or not _rproject:
+                    continue
+
+                try:
+                    # 이전 작업을 resumed 상태로 마킹
+                    await conn.execute(
+                        """UPDATE pipeline_jobs
+                           SET review_feedback = COALESCE(review_feedback, '') || ' | 자동 재실행됨',
+                               updated_at = NOW()
+                           WHERE job_id = $1""",
+                        _rjob_id,
+                    )
+
+                    # 새 작업으로 재실행 (이전 cycle 유지)
+                    _resume_instruction = (
+                        f"[시스템: 서버 재시작으로 이전 작업({_rjob_id})이 중단되었습니다. "
+                        f"이전 진행 상황을 확인하고 이어서 작업을 완료하세요.]\n\n"
+                        f"{_rinstr}"
+                    )
+                    result = await start_pipeline(
+                        project=_rproject,
+                        instruction=_resume_instruction,
+                        chat_session_id=_rsid,
+                        max_cycles=max(1, _rmax - _rcycle),
+                        model=rrow.get("model_used") or "",
+                    )
+                    _auto_resumed += 1
+
+                    # 채팅방에 재실행 알림
+                    if _rsid:
+                        try:
+                            await conn.execute(
+                                """INSERT INTO chat_messages
+                                    (session_id, role, content, intent, cost,
+                                     tokens_in, tokens_out, attachments, sources, tools_called)
+                                VALUES ($1::uuid, 'assistant', $2, 'pipeline_c', 0,
+                                        0, 0, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)""",
+                                _rsid,
+                                f"🔄 **[Pipeline C 자동 재실행]** `{_rjob_id}` → `{result.get('job_id', '?')}`\n"
+                                f"프로젝트: **{_rproject}**\n"
+                                f"서버 재시작으로 중단된 작업을 자동으로 이어서 실행합니다.",
+                            )
+                        except Exception:
+                            pass
+
+                    logger.info(f"pipeline_c_auto_resume: {_rjob_id} → {result.get('job_id', '?')} (project={_rproject})")
+                except Exception as _rerr:
+                    logger.warning(f"pipeline_c_auto_resume_failed: {_rjob_id} error={_rerr}")
+
+            if _auto_resumed:
+                logger.info(f"pipeline_c_recovery: auto-resumed {_auto_resumed} interrupted job(s)")
+
             # ── Phase 0b: 고아 directive_lifecycle 정리 (24시간 이상 in_progress → failed) ──
             stale_count = await conn.execute(
                 """
