@@ -598,9 +598,11 @@ class PipelineCJob:
 
         escaped = shlex.quote(instruction)
 
-        # API 키 주입 (OAuth 만료 대비)
+        # locale + API 키 주입 (locale 미설정 시 Claude CLI 경고→exit=137 방지)
         api_key_setup = (
-            "export LANG=C.UTF-8; export LC_ALL=C.UTF-8; source ~/.claude/api_keys.env 2>/dev/null; "
+            "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; export LANGUAGE=en_US:en; "
+            "export MANPATH=; "  # manpath locale 경고 억제
+            "source ~/.claude/api_keys.env 2>/dev/null; "
             "export ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-$API_KEY_1}; "
         )
 
@@ -739,11 +741,13 @@ class PipelineCJob:
                 f"{escaped}"
             )
 
-        api_key_setup = (
-            "export LANG=C.UTF-8; export LC_ALL=C.UTF-8; source ~/.claude/api_keys.env 2>/dev/null; "
+        api_key_setup_direct = (
+            "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; export LANGUAGE=en_US:en; "
+            "export MANPATH=; "
+            "source ~/.claude/api_keys.env 2>/dev/null; "
             "export ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-$API_KEY_1}; "
         )
-        full_cmd = f"{api_key_setup}cd {shlex.quote(self.workdir)} && {claude_cmd}"
+        full_cmd = f"{api_key_setup_direct}cd {shlex.quote(self.workdir)} && {claude_cmd}"
 
         proc = None
         try:
@@ -1653,7 +1657,7 @@ async def _resume_detached_polling(job_id: str, project: str, chat_session_id: s
 
 # ─── Watchdog: 작업 감시 + 스톨 감지 + 채팅방 알림 ───────────────────────────
 
-_STALL_THRESHOLD_SEC = 600  # 10분 이상 같은 phase에 머무르면 스톨로 판단
+_STALL_THRESHOLD_SEC = 1800  # 30분 이상 같은 phase에 머무르면 스톨로 판단 (Claude Code 긴 작업 대응)
 _watchdog_task: Optional[asyncio.Task] = None
 
 
@@ -1683,10 +1687,9 @@ async def _check_stalled_jobs():
     """스톨된 작업 감지 → 채팅방에 경고 메시지 삽입."""
     now = datetime.now()
     for job_id, job in list(_active_jobs.items()):
-        if job.status in ("done", "error"):
-            # L4: 오래된 완료 작업 정리 (10분 이상)
-            if (now - job.created_at).total_seconds() > 600:
-                _active_jobs.pop(job_id, None)
+        if job.status in ("done", "error", "failed", "cancelled"):
+            # 완료/에러 작업 즉시 정리 (스톨 알림 반복 방지)
+            _active_jobs.pop(job_id, None)
             continue
 
         # awaiting_approval 24시간 초과 정리
