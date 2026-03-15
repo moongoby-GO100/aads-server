@@ -205,12 +205,22 @@ async def with_background_completion(
             except Exception:
                 pass
             _active_bg_tasks.pop(session_id, None)
-            _streaming_state.pop(session_id, None)
             # 스트리밍 완료 → placeholder 삭제 (최종 응답이 generator 내부에서 저장됨)
             try:
                 await _delete_streaming_placeholder(session_id)
             except Exception as del_err:
                 logger.warning(f"bg_producer_placeholder_delete_err session={session_id}: {del_err}")
+            # 상태를 즉시 삭제하지 않고 completed로 전환 (세션 복귀 시 감지용, 30초 후 자동 정리)
+            if session_id in _streaming_state:
+                _streaming_state[session_id]["completed"] = True
+                _streaming_state[session_id]["completed_at"] = _bg_time.monotonic()
+
+                async def _delayed_cleanup(sid: str):
+                    await _heartbeat_asyncio.sleep(30)
+                    _streaming_state.pop(sid, None)
+                    logger.debug(f"streaming_state_cleaned session={sid[:8]}")
+
+                _heartbeat_asyncio.create_task(_delayed_cleanup(session_id))
             logger.info(f"bg_producer_done session={session_id}")
 
     # 기존 태스크가 있으면 취소 후 교체
@@ -494,19 +504,29 @@ async def _resume_single_stream(
 
 
 def get_streaming_status(session_id: str) -> Optional[Dict[str, Any]]:
-    """특정 세션의 스트리밍 상태 반환 (프론트엔드 폴링용)."""
+    """특정 세션의 스트리밍 상태 반환 (프론트엔드 폴링용).
+
+    Returns:
+        is_streaming: True if still generating
+        just_completed: True if finished within last 30s (세션 복귀 시 즉시 메시지 reload 트리거)
+        content_length: 현재까지 생성된 텍스트 길이
+        tool_count: 도구 호출 횟수
+        last_tool: 마지막 호출 도구 이름
+    """
     if session_id in _streaming_state:
         s = _streaming_state[session_id]
+        is_completed = s.get("completed", False)
         return {
-            "is_streaming": True,
+            "is_streaming": not is_completed,
+            "just_completed": is_completed,
             "content_length": len(s.get("content", "")),
             "tool_count": s.get("tool_count", 0),
             "last_tool": s.get("last_tool", ""),
         }
     if session_id in _active_bg_tasks and not _active_bg_tasks[session_id].done():
-        return {"is_streaming": True, "content_length": 0, "tool_count": 0, "last_tool": ""}
+        return {"is_streaming": True, "just_completed": False, "content_length": 0, "tool_count": 0, "last_tool": ""}
     # 스트리밍 없음: 명시적 False 반환 → 프론트 폴링 즉시 중단
-    return {"is_streaming": False, "content_length": 0, "tool_count": 0, "last_tool": ""}
+    return {"is_streaming": False, "just_completed": False, "content_length": 0, "tool_count": 0, "last_tool": ""}
 
 
 # AADS-186C: Langfuse 트레이스 (optional — graceful degradation)
