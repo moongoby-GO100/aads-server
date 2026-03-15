@@ -1479,6 +1479,8 @@ async def recover_interrupted_jobs():
                     FROM pipeline_jobs pj
                     WHERE pj.status = 'error'
                       AND pj.review_feedback LIKE '%서버 재시작으로 중단%'
+                      AND pj.review_feedback NOT LIKE '%자동 재실행됨%'
+                      AND pj.instruction NOT LIKE '%서버 재시작으로 이전 작업%'
                       AND pj.created_at > NOW() - INTERVAL '30 minutes'
                       AND pj.cycle < pj.max_cycles
                 ) sub
