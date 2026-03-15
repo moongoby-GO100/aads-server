@@ -52,45 +52,73 @@ async def lifespan(app: FastAPI):
     configure_logging(log_level=settings.LOG_LEVEL, json_format=json_logs)
     logger.info("aads_server_starting", env=settings.ENVIRONMENT, json_logs=json_logs)
 
-    # -- 서버 재시작 시 orphan streaming_placeholder 정리 --
+    # -- 서버 재시작 시 중단된 스트리밍 자동 이어서 생성 --
     try:
-        from app.core.db_pool import get_pool as _gp
-        _pool = _gp()
-        async with _pool.acquire() as _c:
-            _del = await _c.fetchval(
-            "WITH d AS (DELETE FROM chat_messages WHERE intent='streaming_placeholder' RETURNING id) SELECT COUNT(*) FROM d"
-            )
-            if _del:
-                logger.info(f"startup_cleanup: {_del} orphan placeholder(s) removed")
+        from app.services.chat_service import resume_interrupted_streams
+        _resumed = await resume_interrupted_streams()
+        if _resumed:
+            logger.info(f"startup_resume: {_resumed} interrupted stream(s) resumed")
+        else:
+            logger.info("startup_resume: no interrupted streams found")
     except Exception as _e:
-        logger.warning(f"startup_placeholder_cleanup_failed: {_e}")
+        logger.warning(f"startup_resume_failed: {_e}")
+        # 폴백: resume 실패 시 placeholder 정리
+        try:
+            from app.core.db_pool import get_pool as _gp
+            _pool = _gp()
+            async with _pool.acquire() as _c:
+                _del = await _c.fetchval(
+                    "WITH d AS (DELETE FROM chat_messages WHERE intent='streaming_placeholder' RETURNING id) SELECT COUNT(*) FROM d"
+                )
+                if _del:
+                    logger.info(f"startup_cleanup_fallback: {_del} orphan placeholder(s) removed")
+        except Exception:
+            pass
 
 
 
-    # -- [Fix-C] 서버 재시작 시 잔존 claude 프로세스 + 고아 pipeline_c_jobs 정리 --
+    # -- [P1-Fix] restart recovery: check done files, set interrupted not error --
     try:
-        import subprocess as _sp
-        _kill_result = _sp.run(
-            ["pkill", "-9", "-f", "claude -p"],
-            capture_output=True, text=True
-        )
-        logger.info(f"startup_claude_kill: rc={_kill_result.returncode} (0=killed, 1=none_found)")
-    except Exception as _e:
-        logger.warning(f"startup_claude_kill_failed: {_e}")
-
-    try:
+        import os as _os
         from app.core.db_pool import get_pool as _gp2
         _pool2 = _gp2()
         async with _pool2.acquire() as _c2:
-            _orphan = await _c2.fetchval(
-                "WITH d AS (UPDATE pipeline_c_jobs SET status='error', "
-                "error_msg='서버 재시작으로 중단됨 (KST)' WHERE status='running' RETURNING id) "
-                "SELECT COUNT(*) FROM d"
+            _running_jobs = await _c2.fetch(
+                "SELECT job_id FROM pipeline_c_jobs WHERE status='running'"
             )
-            if _orphan:
-                logger.info(f"startup_cleanup: {_orphan} orphan pipeline_c_jobs set to error")
+            _recovered = 0
+            _interrupted = 0
+            for _row in _running_jobs:
+                _jid = _row["job_id"]
+                _done_file = "/tmp/pipeline_c_" + _jid + ".done"
+                try:
+                    if _os.path.exists(_done_file):
+                        _exit_code = open(_done_file).read().strip()
+                        if _exit_code == "0":
+                            await _c2.execute(
+                                "UPDATE pipeline_c_jobs SET status='awaiting_approval',"
+                                "phase='awaiting_approval',error_msg='recovered after restart'"
+                                " WHERE job_id=$1", _jid
+                            )
+                            _recovered += 1
+                        else:
+                            await _c2.execute(
+                                "UPDATE pipeline_c_jobs SET status='error',"
+                                "error_msg='exit=" + str(_exit_code) + "' WHERE job_id=$1", _jid
+                            )
+                    else:
+                        await _c2.execute(
+                            "UPDATE pipeline_c_jobs SET status='interrupted',"
+                            "error_msg='server restarted, nohup may still run'"
+                            " WHERE job_id=$1", _jid
+                        )
+                        _interrupted += 1
+                except Exception as _je:
+                    logger.warning("startup_recovery_job_error job=" + _jid + ": " + str(_je))
+            if _running_jobs:
+                logger.info("startup_recovery total=" + str(len(_running_jobs)) + " recovered=" + str(_recovered) + " interrupted=" + str(_interrupted))
     except Exception as _e:
-        logger.warning(f"startup_pipeline_c_cleanup_failed: {_e}")
+        logger.warning("startup_pipeline_c_cleanup_failed: " + str(_e))
 
         # Docker 샌드박스 이미지 사전 풀 (T-015, D-011)
     try:

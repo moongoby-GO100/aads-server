@@ -288,6 +288,211 @@ async def stop_session_streaming(session_id: str) -> Dict[str, Any]:
     return result
 
 
+async def resume_interrupted_streams() -> int:
+    """서버 재시작 후 중단된 스트리밍을 자동 이어서 생성.
+
+    streaming_placeholder가 남은 세션을 찾아서:
+    1. placeholder의 중간 결과를 보존
+    2. 마지막 user 메시지 기반으로 이어서 생성
+    3. 완료 후 placeholder를 최종 응답으로 교체
+
+    Returns: 이어서 생성한 세션 수
+    """
+    resumed = 0
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            # streaming_placeholder가 남은 세션 + 마지막 user 메시지 조회
+            rows = await conn.fetch("""
+                SELECT DISTINCT ON (m.session_id)
+                    m.session_id,
+                    m.id AS placeholder_id,
+                    m.content AS partial_content,
+                    (SELECT content FROM chat_messages
+                     WHERE session_id = m.session_id AND role = 'user'
+                     ORDER BY created_at DESC LIMIT 1) AS last_user_msg,
+                    (SELECT name FROM chat_workspaces w
+                     JOIN chat_sessions s ON s.workspace_id = w.id
+                     WHERE s.id = m.session_id) AS workspace_name
+                FROM chat_messages m
+                WHERE m.intent = 'streaming_placeholder'
+                ORDER BY m.session_id, m.created_at DESC
+            """)
+
+        if not rows:
+            return 0
+
+        logger.info(f"resume_interrupted: found {len(rows)} interrupted session(s)")
+
+        for row in rows:
+            sid = str(row["session_id"])
+            placeholder_id = row["placeholder_id"]
+            partial = row["partial_content"] or ""
+            last_user = row["last_user_msg"] or ""
+            workspace = row["workspace_name"] or "CEO"
+
+            if not last_user:
+                # user 메시지 없으면 placeholder만 삭제
+                async with pool.acquire() as c:
+                    await c.execute("DELETE FROM chat_messages WHERE id = $1", placeholder_id)
+                logger.info(f"resume_skip: session={sid[:8]} no user message, placeholder removed")
+                continue
+
+            # 중간 결과에서 ⏳ 마커 제거
+            clean_partial = re.sub(r'\n\n⏳ _.*?_$', '', partial, flags=re.DOTALL).strip()
+
+            try:
+                # 이어서 생성
+                import asyncio as _resume_asyncio
+                _resume_asyncio.create_task(
+                    _resume_single_stream(sid, placeholder_id, clean_partial, last_user, workspace)
+                )
+                resumed += 1
+                logger.info(f"resume_launched: session={sid[:8]} partial_len={len(clean_partial)}")
+            except Exception as e:
+                logger.warning(f"resume_launch_failed: session={sid[:8]} error={e}")
+                # 실패 시 placeholder를 중단 메시지로 교체
+                async with pool.acquire() as c:
+                    final = clean_partial + "\n\n⚠️ _서버 재시작으로 응답이 중단되었습니다. 다시 질문해주세요._" if clean_partial else "⚠️ _서버 재시작으로 응답이 중단되었습니다. 다시 질문해주세요._"
+                    await c.execute(
+                        "UPDATE chat_messages SET content = $1, intent = NULL, model_used = 'interrupted' WHERE id = $2",
+                        final, placeholder_id,
+                    )
+
+    except Exception as e:
+        logger.warning(f"resume_interrupted_streams_error: {e}")
+
+    return resumed
+
+
+async def _resume_single_stream(
+    session_id: str,
+    placeholder_id,
+    partial_content: str,
+    last_user_msg: str,
+    workspace_name: str,
+) -> None:
+    """단일 세션의 중단된 스트리밍을 이어서 생성."""
+    try:
+        pool = get_pool()
+        sid = uuid.UUID(session_id)
+
+        # 1. 히스토리 로드 (placeholder 제외)
+        async with pool.acquire() as conn:
+            hist_rows = await conn.fetch("""
+                SELECT role, content FROM (
+                    SELECT role, content, created_at FROM chat_messages
+                    WHERE session_id = $1
+                      AND (is_compacted IS NULL OR is_compacted = false)
+                      AND intent != 'streaming_placeholder'
+                    ORDER BY created_at DESC LIMIT 30
+                ) sub ORDER BY created_at ASC
+            """, sid)
+
+        raw_messages = [{"role": r["role"], "content": r["content"]} for r in hist_rows]
+
+        # 2. 이어서 생성 프롬프트 구성
+        resume_instruction = (
+            "[시스템: 서버 재시작으로 이전 응답이 중단되었습니다. "
+            "아래는 중단 전까지 생성된 부분 응답입니다. "
+            "이어서 완성해주세요. 이미 작성된 내용을 반복하지 말고, 끊긴 지점부터 자연스럽게 이어 작성하세요.]\n\n"
+            f"--- 중단된 부분 응답 ---\n{partial_content}\n--- 여기서 이어서 작성 ---"
+        ) if partial_content else (
+            "[시스템: 서버 재시작으로 이전 응답 생성이 시작되지 못했습니다. 처음부터 응답해주세요.]"
+        )
+        raw_messages.append({"role": "user", "content": resume_instruction})
+
+        # 3. 컨텍스트 빌드
+        from app.services.context_builder import build_messages_context
+        # workspace에서 base_prompt 조회
+        async with pool.acquire() as conn:
+            sp_row = await conn.fetchrow("""
+                SELECT w.system_prompt FROM chat_workspaces w
+                JOIN chat_sessions s ON s.workspace_id = w.id
+                WHERE s.id = $1
+            """, sid)
+        base_prompt = (sp_row["system_prompt"] if sp_row and sp_row["system_prompt"] else "")
+
+        try:
+            messages, system_prompt = await build_messages_context(
+                workspace_name=workspace_name,
+                session_id=session_id,
+                raw_messages=raw_messages,
+                base_system_prompt=base_prompt,
+            )
+        except Exception:
+            system_prompt = base_prompt or "You are a helpful AI assistant."
+            messages = raw_messages[-20:]
+
+        # 4. LLM 호출 (도구 포함)
+        from app.services.model_selector import call_stream
+        from app.services.intent_router import IntentResult
+
+        intent_result = IntentResult(
+            intent="status_check",
+            model="claude-opus",
+            use_tools=True,
+            tool_group="all",
+        )
+
+        from app.services.tool_registry import ToolRegistry
+        tools_for_api = ToolRegistry().get_tools("all")
+
+        full_response = partial_content  # 기존 부분 응답에 이어붙임
+        cost_usd = Decimal("0")
+        tools_called = []
+
+        async for event in call_stream(
+            intent_result=intent_result,
+            system_prompt=system_prompt,
+            messages=messages,
+            tools=tools_for_api,
+            session_id=session_id,
+        ):
+            etype = event.get("type", "")
+            if etype == "delta":
+                full_response += event.get("content", "")
+            elif etype == "tool_use":
+                tools_called.append(event["tool_name"])
+            elif etype == "done":
+                cost_usd = Decimal(str(event.get("cost", "0")))
+
+        # 5. placeholder를 최종 응답으로 교체
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """UPDATE chat_messages
+                   SET content = $1, intent = NULL, model_used = 'claude-opus-4-6',
+                       cost = $2, edited_at = NOW()
+                   WHERE id = $3""",
+                full_response,
+                cost_usd,
+                placeholder_id,
+            )
+            await conn.execute(
+                "UPDATE chat_sessions SET cost_total = cost_total + $1, updated_at = NOW() WHERE id = $2",
+                cost_usd, sid,
+            )
+
+        logger.info(
+            f"resume_completed: session={session_id[:8]} "
+            f"partial={len(partial_content)} final={len(full_response)} "
+            f"tools={len(tools_called)} cost=${cost_usd}"
+        )
+
+    except Exception as e:
+        logger.error(f"resume_single_stream_error: session={session_id[:8]} error={e}")
+        # 실패 시 중단 메시지로 교체
+        try:
+            async with get_pool().acquire() as c:
+                final = partial_content + "\n\n⚠️ _서버 재시작 후 이어서 생성에 실패했습니다. 다시 질문해주세요._" if partial_content else "⚠️ _서버 재시작 후 응답 생성에 실패했습니다. 다시 질문해주세요._"
+                await c.execute(
+                    "UPDATE chat_messages SET content = $1, intent = NULL, model_used = 'interrupted' WHERE id = $2",
+                    final, placeholder_id,
+                )
+        except Exception:
+            pass
+
+
 def get_streaming_status(session_id: str) -> Optional[Dict[str, Any]]:
     """특정 세션의 스트리밍 상태 반환 (프론트엔드 폴링용)."""
     if session_id in _streaming_state:

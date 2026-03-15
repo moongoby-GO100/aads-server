@@ -223,6 +223,82 @@ async def stop_session_streaming(session_id: UUID):
     return result
 
 
+# ════════════════════════════════════════════════════════════════════════════════
+# Interrupt (스트리밍 중 CEO 추가 지시)
+# ════════════════════════════════════════════════════════════════════════════════
+
+class InterruptRequest(BaseModel):
+    content: str = Field(..., description="스트리밍 중 CEO가 추가로 보내는 지시")
+
+
+@router.post("/chat/sessions/{session_id}/interrupt", tags=["chat-session"])
+async def interrupt_session(session_id: UUID, req: InterruptRequest):
+    """스트리밍(AI 응답 생성) 중 CEO 추가 지시를 큐에 삽입.
+
+    is_streaming() 상태일 때만 interrupt_queue에 push.
+    아닐 때는 일반 메시지 전송 안내 반환.
+    도구 루프 완료 시점에 model_selector.py가 has_interrupt() 체크 후 반영.
+    """
+    from app.core.interrupt_queue import push_interrupt, is_streaming
+    sid = str(session_id)
+    if is_streaming(sid):
+        push_interrupt(sid, req.content)
+        logger.info("interrupt_queued", session_id=sid, content=req.content[:100])
+        return {"queued": True, "message": "추가 지시가 다음 도구 완료 시점에 반영됩니다."}
+    else:
+        return {"queued": False, "message": "현재 AI가 응답 생성 중이 아닙니다. 일반 메시지로 전송하세요."}
+
+
+@router.post("/chat/sessions/{session_id}/resume", tags=["chat-session"])
+async def resume_interrupted(session_id: UUID):
+    """서버 재시작으로 중단된 응답을 수동으로 이어서 생성 요청.
+
+    streaming_placeholder가 남아있는 세션에서만 동작.
+    이미 이어서 생성 중이면 중복 실행 방지.
+    """
+    from app.services.chat_service import _resume_single_stream, get_streaming_status
+    import re
+
+    sid = str(session_id)
+
+    # 이미 스트리밍 중이면 거부
+    status = get_streaming_status(sid)
+    if status and status.get("is_streaming"):
+        return {"resumed": False, "message": "이미 응답 생성 중입니다."}
+
+    # placeholder 확인
+    from app.core.db_pool import get_pool
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT m.id AS placeholder_id, m.content AS partial_content,
+                   (SELECT content FROM chat_messages
+                    WHERE session_id = m.session_id AND role = 'user'
+                    ORDER BY created_at DESC LIMIT 1) AS last_user_msg,
+                   (SELECT name FROM chat_workspaces w
+                    JOIN chat_sessions s ON s.workspace_id = w.id
+                    WHERE s.id = m.session_id) AS workspace_name
+            FROM chat_messages m
+            WHERE m.session_id = $1 AND m.intent = 'streaming_placeholder'
+            ORDER BY m.created_at DESC LIMIT 1
+        """, session_id)
+
+    if not row:
+        return {"resumed": False, "message": "중단된 응답이 없습니다."}
+
+    partial = row["partial_content"] or ""
+    clean_partial = re.sub(r'\n\n⏳ _.*?_$', '', partial, flags=re.DOTALL).strip()
+
+    import asyncio
+    asyncio.create_task(
+        _resume_single_stream(
+            sid, row["placeholder_id"], clean_partial,
+            row["last_user_msg"] or "", row["workspace_name"] or "CEO",
+        )
+    )
+    return {"resumed": True, "message": "이어서 생성을 시작합니다. 잠시 후 채팅창을 확인하세요."}
+
+
 @router.put("/chat/messages/{message_id}/bookmark", response_model=MessageOut, tags=["chat-message"])
 async def toggle_bookmark(message_id: UUID):
     """북마크 토글."""
