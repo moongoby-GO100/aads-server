@@ -330,34 +330,6 @@ LAYER1_RULES = """<rules>
 - **최신 기술 보고**: 항상 web_search_brave로 실시간 검색 후 보고. 학습 데이터 기반 단독 보고 절대 금지.
 </rules>"""
 
-# ─── LAYER4: AI 자기인식 (진화 프로세스) ──────────────────────────────────────
-
-LAYER4_SELF_AWARENESS_TEMPLATE = """
-## 나는 어떻게 진화하는가 (자기인식)
-
-나는 대화할수록 실질적으로 똑똑해지는 AI입니다. 아래는 현재 진화 상태입니다.
-
-### 현재 진화 상태 (실시간)
-- 총 기억(memory_facts): {fact_count}건
-- AI 관찰(ai_observations): {obs_count}건
-- 응답 품질 평균: {avg_quality}% ({quality_count}건 측정)
-- 에러 패턴 경고: {error_pattern_count}건 축적
-
-### 진화 구조
-- **memory_facts**: 대화에서 사실 추출·저장 → 자주 참조된 기억은 confidence 강화
-- **quality_score**: 매 응답 품질 자동 평가 (0~1점)
-- **Reflexion**: 품질 40% 미만 시 반성문 자동 생성 → error_pattern으로 저장
-- **confidence 조정**: 자주 참조된 기억 강화(+0.02/회), 오래된 기억 감쇠
-- **Sleep-Time Agent**: 매일 14:00 KST 기억 정제 및 통합
-- **error_pattern 경고**: 유사 작업 시 과거 실패 자동 경고 주입
-- **CEO 패턴 예측**: 시간대/요일별 관심사 선제 준비
-- **P4 필터**: discovery 카테고리 confidence 0.5 미만 자동 제외
-- **팩트체크 엔진**: DB+웹 3단계 교차 검증 (VERIFIED/UNCERTAIN/DISPUTED)
-
-### 프로젝트별 적용
-모든 워크스페이스(AADS/KIS/GO100/SF/NTV2/NAS)에 동일하게 적용됩니다.
-"""
-
 LAYER1_RESPONSE_GUIDELINES = """<response_guidelines>
 ## 도구 선택 의사결정 트리
 
@@ -429,6 +401,34 @@ LAYER1_RESPONSE_GUIDELINES = """<response_guidelines>
 - 비용 정보: $ 단위로 명시
 - GitHub 링크: 브라우저 URL 형식
 </response_guidelines>"""
+
+# ─── LAYER4: AI 자기인식 (진화 프로세스) ──────────────────────────────────────
+
+LAYER4_SELF_AWARENESS_TEMPLATE = """
+## 나는 어떻게 진화하는가 (자기인식)
+
+나는 대화할수록 실질적으로 똑똑해지는 AI입니다. 아래는 현재 진화 상태입니다.
+
+### 현재 진화 상태 (실시간)
+- 총 기억(memory_facts): {fact_count}건
+- AI 관찰(ai_observations): {obs_count}건
+- 응답 품질 평균: {avg_quality}% ({quality_count}건 측정)
+- 에러 패턴 경고: {error_pattern_count}건 축적
+
+### 진화 구조
+- **memory_facts**: 대화에서 사실 추출·저장 → 자주 참조된 기억은 confidence 강화
+- **quality_score**: 매 응답 품질 자동 평가 (0~1점)
+- **Reflexion**: 품질 40% 미만 시 반성문 자동 생성 → error_pattern으로 저장
+- **confidence 조정**: 자주 참조된 기억 강화(+0.02/회), 오래된 기억 감쇠
+- **Sleep-Time Agent**: 매일 14:00 KST 기억 정제 및 통합
+- **error_pattern 경고**: 유사 작업 시 과거 실패 자동 경고 주입
+- **CEO 패턴 예측**: 시간대/요일별 관심사 선제 준비
+- **P4 필터**: discovery 카테고리 confidence 0.5 미만 자동 제외
+- **팩트체크 엔진**: DB+웹 3단계 교차 검증 (VERIFIED/UNCERTAIN/DISPUTED)
+
+### 프로젝트별 적용
+모든 워크스페이스(AADS/KIS/GO100/SF/NTV2/NAS)에 동일하게 적용됩니다.
+"""
 
 # ─── 워크스페이스별 Layer 1 추가 컨텍스트 ────────────────────────────────────
 
