@@ -1305,12 +1305,26 @@ async def recover_interrupted_jobs():
             )
             if orphan_count and orphan_count != "UPDATE 0":
                 logger.info(f"pipeline_c_recovery: orphan pipeline_jobs cleaned: {orphan_count}")
-                # 채팅방에 중단 알림 전송
+                # 채팅방에 중단 알림 전송 (같은 세션에 최근 1시간 내 동일 중단 메시지 있으면 중복 방지)
                 for orow in orphan_rows:
                     sid = orow.get("chat_session_id")
                     if not sid:
                         continue
                     try:
+                        # 중복 체크: 같은 세션에 최근 1시간 내 Pipeline C 중단 메시지가 있는지
+                        _instr_preview = orow.get('instr', '')[:60]
+                        _dup_count = await conn.fetchval(
+                            """SELECT count(*) FROM chat_messages
+                               WHERE session_id = $1::uuid
+                                 AND content LIKE '%Pipeline C 중단%'
+                                 AND content LIKE $2
+                                 AND created_at > NOW() - INTERVAL '1 hour'""",
+                            sid, f"%{_instr_preview[:40]}%",
+                        )
+                        if _dup_count and _dup_count > 0:
+                            logger.info(f"pipeline_c_recovery: skip duplicate interrupt msg for {orow['job_id']}")
+                            continue
+
                         await conn.execute(
                             """
                             INSERT INTO chat_messages
