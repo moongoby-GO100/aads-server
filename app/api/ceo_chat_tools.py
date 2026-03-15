@@ -1045,6 +1045,11 @@ _REMOTE_CMD_WHITELIST: List[str] = [
     "killall",
     "top",
     "htop",
+    # Swap 관리 (CEO 요청: 메모리 확장용)
+    "swapon",
+    "swapoff",
+    "fallocate",
+    "mkswap",
 ]
 
 # run_remote_command 차단 패턴 (보안 하드코딩, LLM 우회 불가)
