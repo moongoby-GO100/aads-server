@@ -738,11 +738,11 @@ class PipelineCJob:
         # 항상 새 session-id 발급 ("Session ID already in use" 충돌 근본 방지)
         self.claude_session_id = str(uuid.uuid4())
         _model_flag = f" --model {self.model}" if self.model else ""
-        # [Fix-D2] continue_session 무관하게 항상 새 세션으로 실행
-        # '--session-id -c' 조합 Claude CLI 오류 완전 제거
+        # [Fix D-2] continue_session 분기 제거 - 항상 새 세션
         claude_cmd = (
             f"claude -p --output-format text"
             f"{_model_flag} "
+            f"--session-id {self.claude_session_id} "
             f"{escaped}"
         )
 
