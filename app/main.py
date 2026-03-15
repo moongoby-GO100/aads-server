@@ -52,28 +52,8 @@ async def lifespan(app: FastAPI):
     configure_logging(log_level=settings.LOG_LEVEL, json_format=json_logs)
     logger.info("aads_server_starting", env=settings.ENVIRONMENT, json_logs=json_logs)
 
-    # -- 서버 재시작 시 중단된 스트리밍 자동 이어서 생성 --
-    try:
-        from app.services.chat_service import resume_interrupted_streams
-        _resumed = await resume_interrupted_streams()
-        if _resumed:
-            logger.info(f"startup_resume: {_resumed} interrupted stream(s) resumed")
-        else:
-            logger.info("startup_resume: no interrupted streams found")
-    except Exception as _e:
-        logger.warning(f"startup_resume_failed: {_e}")
-        # 폴백: resume 실패 시 placeholder 정리
-        try:
-            from app.core.db_pool import get_pool as _gp
-            _pool = _gp()
-            async with _pool.acquire() as _c:
-                _del = await _c.fetchval(
-                    "WITH d AS (DELETE FROM chat_messages WHERE intent='streaming_placeholder' RETURNING id) SELECT COUNT(*) FROM d"
-                )
-                if _del:
-                    logger.info(f"startup_cleanup_fallback: {_del} orphan placeholder(s) removed")
-        except Exception:
-            pass
+    # -- 서버 재시작 시 중단된 스트리밍: DB pool 초기화 후 resume (아래 참조) --
+    # resume_interrupted_streams는 DB pool 이후에 실행됨 (line ~290)
 
 
 
@@ -280,6 +260,27 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("db_pool_init_failed", error=str(e))
         app_state["db_pool"] = None
+
+    # 중단된 스트리밍 자동 이어서 생성 (DB 풀 초기화 이후)
+    try:
+        from app.services.chat_service import resume_interrupted_streams
+        _resumed = await resume_interrupted_streams()
+        if _resumed:
+            logger.info(f"startup_resume: {_resumed} interrupted stream(s) resumed")
+        else:
+            logger.info("startup_resume: no interrupted streams found")
+    except Exception as _e:
+        logger.warning(f"startup_resume_failed: {_e}")
+        # 폴백: resume 실패 시 placeholder 정리
+        try:
+            async with db_pool.acquire() as _c:
+                _del = await _c.fetchval(
+                    "WITH d AS (DELETE FROM chat_messages WHERE intent='streaming_placeholder' RETURNING id) SELECT COUNT(*) FROM d"
+                )
+                if _del:
+                    logger.info(f"startup_cleanup_fallback: {_del} orphan placeholder(s) removed")
+        except Exception:
+            pass
 
     # Pipeline C: 재시작 복구 + Watchdog 시작 (DB 풀 초기화 이후)
     try:
