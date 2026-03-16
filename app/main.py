@@ -33,6 +33,7 @@ from app.api.qa import router as qa_router
 from app.api.image import router as image_router
 from app.api.fact_check import router as fact_check_router
 from app.api.pipeline_runner import router as pipeline_runner_router
+from app.api.quality import router as quality_router
 from app.routers.chat import router as chat_v2_router
 from app.config import settings
 from app.graph.builder import compile_graph
@@ -225,6 +226,41 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"sleep_time_agent_job_error: {e}")
         scheduler.add_job(_run_sleep_time_agent, CronTrigger(hour=5, minute=0, timezone="UTC"), id="sleep_time_agent")
+        # P2: eval_pipeline — 품질 대시보드 집계 (매일 06:00 UTC, sleep-time 이후)
+        async def _run_quality_stats():
+            try:
+                from app.services.eval_pipeline import aggregate_quality_stats
+                from app.core.db_pool import get_pool
+                result = await aggregate_quality_stats(get_pool())
+                logger.info("eval_pipeline_quality_stats_done", total=result.get("overall", {}).get("total_scored", 0))
+            except Exception as e:
+                logger.warning(f"eval_pipeline_quality_stats_error: {e}")
+        scheduler.add_job(_run_quality_stats, CronTrigger(hour=6, minute=0, timezone="UTC"), id="eval_quality_stats")
+        # P2: eval_pipeline — 품질 회귀 감지 (매일 06:30 UTC)
+        async def _run_quality_regression():
+            try:
+                from app.services.eval_pipeline import detect_quality_regression
+                from app.core.db_pool import get_pool
+                regressions = await detect_quality_regression(get_pool())
+                if regressions:
+                    logger.warning("eval_pipeline_regression_detected", count=len(regressions))
+            except Exception as e:
+                logger.warning(f"eval_pipeline_quality_regression_error: {e}")
+        scheduler.add_job(_run_quality_regression, CronTrigger(hour=6, minute=30, timezone="UTC"), id="eval_quality_regression")
+        # P2: eval_pipeline — 주간 품질 리포트 (매주 월요일 07:00 UTC)
+        async def _run_weekly_quality_report():
+            try:
+                from app.services.eval_pipeline import generate_weekly_report
+                from app.core.db_pool import get_pool
+                report = await generate_weekly_report(get_pool())
+                logger.info("eval_pipeline_weekly_report_done", length=len(report))
+            except Exception as e:
+                logger.warning(f"eval_pipeline_weekly_report_error: {e}")
+        scheduler.add_job(
+            _run_weekly_quality_report,
+            CronTrigger(day_of_week="mon", hour=7, minute=0, timezone="UTC"),
+            id="eval_weekly_report",
+        )
         # task_logs GC: 매일 03:30 UTC — 7일 이상 된 로그 삭제
         async def _run_task_logs_gc():
             try:
@@ -535,5 +571,6 @@ app.include_router(chat_v2_router, prefix="/api/v1", tags=["chat-v2"])
 app.include_router(image_router, prefix="/api/v1/image", tags=["image"])
 app.include_router(fact_check_router, prefix="/api/v1/fact-check", tags=["fact-check"])
 app.include_router(pipeline_runner_router, prefix="/api/v1", tags=["pipeline-runner"])
+app.include_router(quality_router, prefix="/api/v1", tags=["quality"])
 # AADS-186C: FastAPI-MCP 마운트 (graceful — MCP_ENABLED=false 시 비활성)
 setup_mcp(app)

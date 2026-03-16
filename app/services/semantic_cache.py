@@ -22,7 +22,7 @@ logger = structlog.get_logger(__name__)
 _DEFAULT_SIMILARITY_THRESHOLD = 0.92
 _DEFAULT_TTL_HOURS = 24
 _DEFAULT_MAX_ENTRIES = 500
-_DEFAULT_MIN_QUALITY = 0.7
+_DEFAULT_MIN_QUALITY = 0.5
 
 
 def _embedding_hash(embedding: List[float]) -> str:
@@ -177,10 +177,8 @@ class SemanticCache:
         workspace_id: str | None = None,
         tools_used: List[str] | None = None,
     ) -> bool:
-        """응답 캐시 저장. quality_score >= min_quality 이고 도구 사용된 경우만 저장."""
+        """응답 캐시 저장. quality_score >= min_quality 인 고품질 응답 저장."""
         if quality_score < self.min_quality:
-            return False
-        if not tools_used:
             return False
         if not query or not response:
             return False

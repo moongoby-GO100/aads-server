@@ -125,6 +125,7 @@ class AutonomousExecutor:
 
         # 작업 시작 메시지 추가
         work_messages = list(messages)
+        quality_scores: List[float] = []  # P3: track per-iteration quality for stop check
         if task_description and (not work_messages or work_messages[-1].get("role") != "user"):
             work_messages.append({"role": "user", "content": task_description})
 
@@ -186,6 +187,15 @@ class AutonomousExecutor:
                                 "tool_use_id": event.get("tool_use_id", ""),
                                 "iteration": iteration,
                             })
+                        elif etype == "heartbeat":
+                            # 도구 실행 중 heartbeat 전달 — SSE 연결 유지 (AADS 채팅 품질 고도화)
+                            yield _sse("heartbeat", {})
+                        elif etype == "tool_result":
+                            yield _sse("tool_result", {
+                                "tool_name": event.get("tool_name", ""),
+                                "content": str(event.get("content", ""))[:300],
+                                "iteration": iteration,
+                            })
                         elif etype == "done":
                             iter_input_tokens = event.get("input_tokens", 0) or 0
                             iter_output_tokens = event.get("output_tokens", 0) or 0
@@ -214,6 +224,33 @@ class AutonomousExecutor:
             # 비용 누적
             iter_cost = _calc_cost(model, iter_input_tokens, iter_output_tokens)
             total_cost += iter_cost
+
+            # P3: 품질 점수 추적 + should_stop_generation 체크
+            if iter_response and len(iter_response) >= 100:
+                try:
+                    from app.services.self_evaluator import evaluate_response, should_stop_generation
+                    _eval_score = await evaluate_response(
+                        user_message=task_description or "",
+                        ai_response=iter_response,
+                        message_id=str(uuid.uuid4()),
+                        session_id=None,
+                    )
+                    if _eval_score is not None:
+                        quality_scores.append(_eval_score)
+                        _should_stop, _stop_reason = should_stop_generation(quality_scores)
+                        if _should_stop:
+                            logger.warning(
+                                f"quality_stop: autonomous_executor iteration {iteration} — {_stop_reason}"
+                            )
+                            yield _sse("quality_stop", {
+                                "message": f"품질 저하로 중단: {_stop_reason}",
+                                "scores": quality_scores[-5:],
+                                "iterations": iteration,
+                                "total_cost": total_cost,
+                            })
+                            return
+                except Exception as _qe:
+                    logger.debug(f"autonomous_executor quality check skipped: {_qe}")
 
             # 도구 사용 없으면 종료
             if stop_reason == "end_turn" or not iter_tool_calls:

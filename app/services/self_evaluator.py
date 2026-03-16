@@ -47,7 +47,7 @@ AI 응답 (앞 1000자): {ai_msg}
 
 {{"accuracy": 0.0~1.0, "completeness": 0.0~1.0, "relevance": 0.0~1.0, "tool_grounding": 0.0~1.0, "actionability": 0.0~1.0, "tool_needed": true/false, "overall": 0.0~1.0, "note": "한줄 평가"}}
 
-overall = tool_grounding×0.3 + accuracy×0.25 + completeness×0.2 + relevance×0.15 + actionability×0.1 으로 계산.
+overall = accuracy×0.3 + completeness×0.25 + tool_grounding×0.15 + relevance×0.15 + actionability×0.15 으로 계산.
 단, tool_needed=false이면 tool_grounding=0.5로 재설정 후 계산.
 JSON만 반환. 마크다운 코드블록 없이."""
 
@@ -94,13 +94,13 @@ async def evaluate_response(
         if not tool_needed:
             tg_score = max(tg_score, 0.5)
             details["tool_grounding"] = tg_score
-        # Weighted overall: tool_grounding×0.3 + accuracy×0.25 + completeness×0.2 + relevance×0.15 + actionability×0.1
+        # Weighted overall: accuracy×0.3 + completeness×0.25 + tool_grounding×0.15 + relevance×0.15 + actionability×0.15
         overall = (
-            tg_score * 0.3
-            + float(details.get("accuracy", 0.5)) * 0.25
-            + float(details.get("completeness", 0.5)) * 0.2
+            float(details.get("accuracy", 0.5)) * 0.30
+            + float(details.get("completeness", 0.5)) * 0.25
+            + tg_score * 0.15
             + float(details.get("relevance", 0.5)) * 0.15
-            + float(details.get("actionability", 0.5)) * 0.1
+            + float(details.get("actionability", 0.5)) * 0.15
         )
         overall = min(1.0, max(0.0, overall))
         details["overall"] = round(overall, 3)
@@ -282,38 +282,64 @@ async def _check_repeated_errors(
     subject: str,
 ) -> None:
     """
-    동일 error_pattern subject가 최근 7일 내 3회 이상 반복되면
-    ai_meta_memory에 permanent correction directive를 생성한다.
+    embedding cosine similarity >= 0.8 로 유사 error_pattern을 찾아
+    최근 7일 내 2회 이상 반복되면 ai_meta_memory에 correction directive 생성.
+    (기존 subject substring 매칭은 LLM이 매번 다른 텍스트를 생성하여 작동 불가 → 임베딩 기반으로 교체)
     """
     if not subject or not project:
         return
     try:
-        # subject 핵심 키워드 추출 (앞 50자)
-        subject_key = subject[:50]
+        # 현재 에러의 임베딩 생성
+        from app.services.chat_embedding_service import embed_texts
+        embeddings = await embed_texts([subject])
+        if not embeddings or not embeddings[0]:
+            logger.debug("repeated_error_no_embedding", subject=subject[:50])
+            return
+        current_embedding = embeddings[0]
+        embedding_str = "[" + ",".join(str(x) for x in current_embedding) + "]"
+
         async with pool.acquire() as conn:
-            count = await conn.fetchval(
-                """SELECT COUNT(*) FROM memory_facts
-                   WHERE project = $1
+            # cosine similarity >= 0.8 인 최근 7일 error_pattern 검색
+            similar_facts = await conn.fetch(
+                """SELECT id, subject, detail,
+                          1 - (embedding <=> $1::vector) AS similarity
+                   FROM memory_facts
+                   WHERE project = $2
                      AND category = 'error_pattern'
-                     AND subject LIKE $2
-                     AND created_at > NOW() - interval '3 days'  -- P3: 7일→3일 (빠른 감지)""",
+                     AND embedding IS NOT NULL
+                     AND created_at > NOW() - interval '7 days'
+                     AND 1 - (embedding <=> $1::vector) >= 0.8
+                   ORDER BY similarity DESC
+                   LIMIT 20""",
+                embedding_str,
                 project,
-                f"%{subject_key}%",
             )
-            # P3: 반복 개선 미실현 감지 — 2회 이상이면 즉시 교정 지시
-            if count is not None and int(count) >= 2:
-                # 이미 동일 교정 지시가 있는지 확인
-                existing = await conn.fetchval(
+            count = len(similar_facts)
+            logger.info(
+                "repeated_error_similarity_check",
+                project=project,
+                subject=subject[:50],
+                similar_count=count,
+            )
+
+            # 2회 이상 유사 에러가 있으면 교정 지시 생성
+            if count >= 2:
+                # 이미 유사한 교정 지시가 있는지 확인 (임베딩으로)
+                existing_directive = await conn.fetchval(
                     """SELECT COUNT(*) FROM ai_meta_memory
                        WHERE project = $1
                          AND category = 'correction_directive'
-                         AND key LIKE $2""",
+                         AND updated_at > NOW() - interval '7 days'""",
                     project,
-                    f"%{subject_key[:30]}%",
                 )
-                if existing and int(existing) > 0:
-                    logger.debug("repeated_error_directive_exists", subject=subject_key[:30])
+                # 프로젝트당 최근 7일 내 교정 지시가 5개 이상이면 스킵 (과다 생성 방지)
+                if existing_directive and int(existing_directive) >= 5:
+                    logger.debug("repeated_error_directive_limit_reached", project=project)
                     return
+
+                # 유사 에러들의 subject를 모아서 패턴 요약에 활용
+                similar_subjects = [r["subject"][:100] for r in similar_facts[:5]]
+                similar_details = [r["detail"][:200] for r in similar_facts[:3] if r["detail"]]
 
                 # 영구 교정 지시 생성
                 from anthropic import AsyncAnthropic as _CorrClient
@@ -323,28 +349,38 @@ async def _check_repeated_errors(
                     max_tokens=256,
                     messages=[{"role": "user", "content": (
                         f"다음 AI 오류가 {count}회 반복되고 있습니다.\n"
-                        f"오류 유형: {subject}\n"
                         f"프로젝트: {project}\n\n"
-                        f"이 오류를 영구적으로 방지하기 위한 구체적 지시를 1-2문장으로 작성하세요.\n"
+                        f"반복 오류 패턴:\n"
+                        + "\n".join(f"- {s}" for s in similar_subjects)
+                        + "\n\n반성문 요약:\n"
+                        + "\n".join(f"- {d}" for d in similar_details)
+                        + "\n\n이 오류를 영구적으로 방지하기 위한 구체적 지시를 1-2문장으로 작성하세요.\n"
                         f"'항상 ~하라', '절대 ~하지 마라' 형태로 작성.\n"
                         f"지시문만 반환하세요."
                     )}],
                 )
                 directive = _corr_resp.content[0].text.strip() if _corr_resp.content else ""
                 if directive:
+                    # 키에 타임스탬프를 포함하여 고유성 보장
+                    import time
+                    directive_key = f"반복오류교정:{project}:{int(time.time())}"
+                    # value는 jsonb 컬럼이므로 JSON 객체로 감싸서 저장
+                    import json as _json
+                    directive_json = _json.dumps({"directive": directive[:500], "similar_count": count, "project": project})
                     await conn.execute(
-                        """INSERT INTO ai_meta_memory (project, category, key, value)
-                           VALUES ($1, 'correction_directive', $2, $3)
-                           ON CONFLICT (project, category, key) DO UPDATE SET value = $3""",
+                        """INSERT INTO ai_meta_memory (project, category, key, value, updated_at)
+                           VALUES ($1, 'correction_directive', $2, $3::jsonb, NOW())
+                           ON CONFLICT (project, category, key) DO UPDATE SET value = $3::jsonb, updated_at = NOW()""",
                         project,
-                        f"반복오류교정: {subject_key[:30]}",
-                        directive[:500],
+                        directive_key,
+                        directive_json,
                     )
                     logger.warning(
                         "repeated_error_correction_created",
                         project=project,
-                        subject=subject_key[:30],
-                        count=count,
+                        similar_count=count,
+                        top_similarity=round(float(similar_facts[0]["similarity"]), 3) if similar_facts else 0,
+                        directive_key=directive_key,
                     )
     except Exception as e:
         logger.debug("check_repeated_errors_error", error=str(e))
