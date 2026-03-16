@@ -240,6 +240,125 @@ async def _stream_litellm(
     }
 
 
+def _trim_tool_loop_context(
+    current_messages: list,
+    current_turn: int,
+    max_budget: int = 120_000,
+) -> list:
+    """도구 루프 중 컨텍스트 토큰 예산 관리.
+
+    CEO 메시지(user role)는 절대 삭제하지 않음.
+    도구 결과는 F5(tool_archive)에 원본 보관되므로 축소 안전.
+
+    단계별 축소:
+    - > max_budget(120K): 10턴 이전 tool_result를 1줄 요약으로 교체
+    - > max_budget+30K(150K): 15턴 이전 assistant 500자 절삭
+    - > max_budget+50K(170K): 최근 20턴만 유지, 나머지 드롭 + 요약 메시지
+    """
+    # Estimate total tokens in current_messages
+    total_text = ""
+    for m in current_messages:
+        content = m.get("content", "")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    total_text += str(block.get("content", "")) + str(block.get("text", ""))
+                else:
+                    total_text += str(block)
+        elif isinstance(content, str):
+            total_text += content
+
+    est_tokens = len(total_text.encode("utf-8")) // 3
+
+    if est_tokens <= max_budget:
+        return current_messages
+
+    logger.warning(f"trim_tool_loop: {est_tokens:,} tokens > {max_budget:,}, trimming (turn={current_turn})")
+
+    result = list(current_messages)
+
+    # Phase 1: > 120K — Replace old tool_results with placeholders
+    if est_tokens > max_budget:
+        cutoff = max(0, len(result) - current_turn * 2 - 20)  # ~10 turns back roughly
+        for i in range(cutoff):
+            m = result[i]
+            content = m.get("content", "")
+            if m.get("role") == "user" and isinstance(content, list):
+                # tool_result blocks
+                new_blocks = []
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        tool_id = block.get("tool_use_id", "")
+                        new_blocks.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_id,
+                            "content": "[이전 도구 결과 축소됨. 원본은 tool_archive에 보관. 필요시 도구 재호출.]",
+                        })
+                    else:
+                        new_blocks.append(block)
+                result[i] = {**m, "content": new_blocks}
+            elif m.get("role") == "user" and isinstance(content, str) and "[시스템 도구 조회 결과" in content:
+                # Compressed tool result string
+                result[i] = {**m, "content": "[이전 도구 결과 축소됨. 필요시 재호출.]"}
+
+    # Re-estimate after Phase 1
+    total_text2 = ""
+    for m in result:
+        c = m.get("content", "")
+        if isinstance(c, list):
+            for b in c:
+                total_text2 += str(b.get("content", "")) + str(b.get("text", "")) if isinstance(b, dict) else str(b)
+        elif isinstance(c, str):
+            total_text2 += c
+    est2 = len(total_text2.encode("utf-8")) // 3
+
+    # Phase 2: > 150K — Truncate old assistant messages
+    if est2 > max_budget + 30_000:
+        cutoff2 = max(0, len(result) - 30)  # Keep last 15 turns (30 messages)
+        for i in range(cutoff2):
+            m = result[i]
+            if m.get("role") == "assistant":
+                content = m.get("content", "")
+                if isinstance(content, str) and len(content) > 500:
+                    result[i] = {**m, "content": content[:500] + "\n\n[...응답 축소됨...]"}
+                elif isinstance(content, list):
+                    new_blocks = []
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            text = block.get("text", "")
+                            if len(text) > 500:
+                                new_blocks.append({**block, "text": text[:500] + "\n\n[...응답 축소됨...]"})
+                            else:
+                                new_blocks.append(block)
+                        else:
+                            new_blocks.append(block)
+                    result[i] = {**m, "content": new_blocks}
+
+    # Phase 3: > 170K — Keep only last 20 turns
+    total_text3 = ""
+    for m in result:
+        c = m.get("content", "")
+        if isinstance(c, list):
+            for b in c:
+                total_text3 += str(b.get("content", "")) + str(b.get("text", "")) if isinstance(b, dict) else str(b)
+        elif isinstance(c, str):
+            total_text3 += c
+    est3 = len(total_text3.encode("utf-8")) // 3
+
+    if est3 > max_budget + 50_000:
+        keep_count = 40  # ~20 turns
+        if len(result) > keep_count:
+            dropped = len(result) - keep_count
+            summary_msg = {
+                "role": "user",
+                "content": f"[이전 {dropped}개 메시지 생략됨. 핵심 사항은 memory_facts에 보존됨. 최근 대화만 표시됩니다.]",
+            }
+            result = [summary_msg] + result[-keep_count:]
+            logger.warning(f"trim_tool_loop_emergency: dropped {dropped} messages, keeping {keep_count}")
+
+    return result
+
+
 async def _stream_anthropic(
     intent_result: IntentResult,
     model_alias: str,
@@ -380,6 +499,23 @@ async def _stream_anthropic(
         # Extended Thinking + tool_choice="any" 비호환 — auto로 복귀
         if thinking_config and "tool_choice" in api_kwargs:
             del api_kwargs["tool_choice"]
+
+        # 디버그: API 호출 전 payload 요약 로깅
+        _n_msgs = len(api_kwargs.get("messages", []))
+        _n_tools = len(api_kwargs.get("tools", []) or [])
+        _has_thinking = "thinking" in api_kwargs
+        _tool_choice = api_kwargs.get("tool_choice", {}).get("type", "none")
+        if _turn == 0:
+            logger.info(f"anthropic_api_call: model={model_id} msgs={_n_msgs} tools={_n_tools} thinking={_has_thinking} tool_choice={_tool_choice} turn={_turn}")
+            # 메시지 role 시퀀스 검증
+            _roles = [m.get("role") for m in api_kwargs.get("messages", [])]
+            if _roles:
+                logger.info(f"anthropic_msg_roles: {_roles[:20]}{'...' if len(_roles)>20 else ''}")
+                # content 타입 검증
+                for _mi, _m in enumerate(api_kwargs.get("messages", [])[:5]):
+                    _ct = type(_m.get("content")).__name__
+                    _preview = str(_m.get("content", ""))[:80] if isinstance(_m.get("content"), str) else f"[{_ct}] len={len(_m.get('content', []))}" if isinstance(_m.get("content"), list) else str(type(_m.get("content")))
+                    logger.info(f"anthropic_msg[{_mi}]: role={_m.get('role')} content_type={_ct} preview={_preview}")
 
         # 재시도 로직: 일시적 에러(429/529/503/네트워크)는 최대 3회 재시도
         _RETRYABLE_STATUS = {429, 503, 529}
@@ -643,6 +779,9 @@ async def _stream_anthropic(
             {"role": "assistant", "content": _serialized},
             {"role": "user", "content": tool_results},
         ]
+
+        # Layer A: 도구 루프 토큰 예산 관리 (120K)
+        current_messages = _trim_tool_loop_context(current_messages, _turn)
 
         # CEO 인터럽트 체크: 도구 실행 완료 후, 다음 API 호출 전
         if session_id:

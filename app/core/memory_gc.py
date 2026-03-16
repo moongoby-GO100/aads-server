@@ -706,3 +706,44 @@ async def _analyze_quality_and_optimize(conn) -> int:
                          workspace=workspace, error=str(e))
 
     return optimization_count
+
+
+async def background_session_compaction():
+    """2시간마다: 200건 이상 미압축 세션 자동 압축."""
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            sessions = await conn.fetch("""
+                SELECT session_id, COUNT(*) as msg_count
+                FROM chat_messages
+                WHERE is_compacted = false OR is_compacted IS NULL
+                GROUP BY session_id
+                HAVING COUNT(*) > 200
+                ORDER BY COUNT(*) DESC
+                LIMIT 5
+            """)
+
+        if not sessions:
+            return
+
+        logger.info(f"background_compaction: {len(sessions)} sessions need compaction")
+
+        from app.services.compaction_service import check_and_compact
+        for s in sessions:
+            sid = str(s['session_id'])
+            try:
+                async with pool.acquire() as conn:
+                    msgs = await conn.fetch(
+                        "SELECT role, content FROM chat_messages WHERE session_id = $1 AND (is_compacted = false OR is_compacted IS NULL) ORDER BY created_at LIMIT 500",
+                        s['session_id']
+                    )
+                    msg_list = [{"role": r["role"], "content": r["content"]} for r in msgs]
+
+                if msg_list:
+                    await check_and_compact(sid, msg_list)
+                    logger.info(f"background_compaction: session {sid[:8]} compacted ({s['msg_count']} msgs)")
+            except Exception as e:
+                logger.warning(f"background_compaction_error: session {sid[:8]}: {e}")
+    except Exception as e:
+        logger.warning(f"background_session_compaction error: {e}")

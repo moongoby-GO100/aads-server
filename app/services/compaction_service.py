@@ -108,7 +108,9 @@ async def check_and_compact(
     Returns:
         압축 후 메시지 리스트 (최근 COMPACTION_KEEP_RECENT턴 + 압축 요약 메시지)
     """
-    # Tool-loop deferral: if last message is a tool_result, skip compaction this turn
+    # Tool-result stripping: instead of deferring compaction entirely,
+    # filter out tool_result blocks from messages before summarizing
+    _has_tool_results = False
     if messages and messages[-1].get("role") == "user":
         last_content = messages[-1].get("content", "")
         if isinstance(last_content, list):
@@ -116,13 +118,13 @@ async def check_and_compact(
                 isinstance(block, dict) and block.get("type") == "tool_result"
                 for block in last_content
             ):
-                logger.info("compaction_service: tool_result detected in last message, deferring compaction")
-                return messages
+                _has_tool_results = True
+                logger.info("compaction_service: tool_result detected in last message, will strip before summarizing")
         elif isinstance(last_content, str) and "[시스템 도구 조회 결과" in last_content:
-            logger.info("compaction_service: tool result pattern in last message, deferring compaction")
-            return messages
+            _has_tool_results = True
+            logger.info("compaction_service: tool result pattern in last message, will strip before summarizing")
 
-    logger.info(f"compaction_service: session={session_id} turns={len(messages)} → 압축 시작")
+    logger.info(f"compaction_service: session={session_id} turns={len(messages)} tool_results={_has_tool_results} → 압축 시작")
 
     # 압축 대상: 최근 COMPACTION_KEEP_RECENT턴 이전 메시지들
     keep = min(COMPACTION_KEEP_RECENT, len(messages))
@@ -177,8 +179,24 @@ async def check_and_compact(
         except Exception:
             pass
 
-    # 도구 출력 압축 후 요약 생성
-    compressed_messages = _compress_tool_outputs_in_messages(to_compress)
+    # 도구 출력 압축 후 요약 생성 (tool_result 블록은 텍스트 요약으로 대체)
+    filtered_to_compress = []
+    for msg in to_compress:
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            # Strip tool_result blocks, keep text blocks
+            text_blocks = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    # Replace with short summary
+                    tool_id = block.get("tool_use_id", "unknown")
+                    text_blocks.append({"type": "text", "text": f"[도구 결과 ({tool_id}) 생략]"})
+                else:
+                    text_blocks.append(block)
+            filtered_to_compress.append({**msg, "content": text_blocks})
+        else:
+            filtered_to_compress.append(msg)
+    compressed_messages = _compress_tool_outputs_in_messages(filtered_to_compress)
     new_summary = await _summarize(compressed_messages)
 
     # 기존 요약이 있으면 증분 병합

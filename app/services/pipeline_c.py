@@ -1796,6 +1796,8 @@ async def _resume_detached_polling(job_id: str, project: str, chat_session_id: s
 
 _STALL_THRESHOLD_SEC = 1800  # 30분 이상 같은 phase에 머무르면 스톨로 판단 (Claude Code 긴 작업 대응)
 _watchdog_task: Optional[asyncio.Task] = None
+_stall_chat_count: dict[str, int] = {}  # job_id -> number of stall chat messages sent
+_STALL_CHAT_MAX = 3  # max stall messages per job to prevent spam
 
 
 async def start_watchdog(interval: int = 120):
@@ -1827,6 +1829,7 @@ async def _check_stalled_jobs():
         if job.status in ("done", "error", "failed", "cancelled"):
             # 완료/에러 작업 즉시 정리 (스톨 알림 반복 방지)
             _active_jobs.pop(job_id, None)
+            _stall_chat_count.pop(job_id, None)
             continue
 
         # awaiting_approval 24시간 초과 정리
@@ -1857,14 +1860,19 @@ async def _check_stalled_jobs():
                 f"stalled_for={stall_minutes}min"
             )
 
-            # 채팅방에 스톨 경고
-            await job._post_to_chat(
-                f"⚠️ **[Pipeline C 스톨 감지]** `{job.job_id}`\n"
-                f"Phase: {job.phase} | 마지막 활동: {stall_minutes}분 전\n"
-                f"프로젝트: {job.project}\n\n"
-                f"작업이 {stall_minutes}분간 진행되지 않고 있습니다.\n"
-                f"확인이 필요합니다. `pipeline_c_status(job_id=\"{job.job_id}\")` 로 상태를 조회하세요."
-            )
+            # 채팅방에 스톨 경고 (rate limit: max _STALL_CHAT_MAX per job)
+            _stall_sent = _stall_chat_count.get(job_id, 0)
+            if _stall_sent < _STALL_CHAT_MAX:
+                await job._post_to_chat(
+                    f"⚠️ **[Pipeline C 스톨 감지]** `{job.job_id}`\n"
+                    f"Phase: {job.phase} | 마지막 활동: {stall_minutes}분 전\n"
+                    f"프로젝트: {job.project}\n\n"
+                    f"작업이 {stall_minutes}분간 진행되지 않고 있습니다.\n"
+                    f"확인이 필요합니다. `pipeline_c_status(job_id=\"{job.job_id}\")` 로 상태를 조회하세요."
+                )
+                _stall_chat_count[job_id] = _stall_sent + 1
+            else:
+                logger.debug(f"pipeline_c_stall_chat_suppressed job={job_id} (sent {_stall_sent}/{_STALL_CHAT_MAX})")
 
             # [Fix-F] stall 로그 기록 + 자동 kill (좀비 방지)
             if not job.logs or job.logs[-1].get("phase") != "stall_detected":
@@ -1887,6 +1895,7 @@ async def _check_stalled_jobs():
                     job.status = "error"
                     job.phase = "error"
                     _active_jobs.pop(job.job_id, None)
+                    _stall_chat_count.pop(job.job_id, None)
                     logger.warning(f"pipeline_c_watchdog_auto_killed job={job.job_id} after {stall_minutes}min")
                 except Exception as _ke:
                     logger.error(f"pipeline_c_watchdog_kill_err job={job.job_id}: {_ke}")

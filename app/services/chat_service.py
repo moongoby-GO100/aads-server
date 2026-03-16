@@ -855,7 +855,7 @@ async def _save_message(
     # Strip raw XML tool-call / tool-response / fabricated-result blocks from assistant messages
     # 닫힌 태그 + 닫히지 않은 태그(이후 전부) 모두 제거
     if role == "assistant" and content:
-        for tag in ("function_calls", "function_response", "function_results", "tool_results"):
+        for tag in ("function_calls", "function_response", "function_results", "tool_results", "tool_call", "tool_response"):
             content = re.sub(rf'<{tag}>.*?</{tag}>', '', content, flags=re.DOTALL)
             content = re.sub(rf'<{tag}>.*', '', content, flags=re.DOTALL)  # 닫히지 않은 태그
         content = re.sub(r'<invoke\s+name=[^>]*>.*?</invoke>', '', content, flags=re.DOTALL)
@@ -1348,7 +1348,7 @@ async def send_message_stream(
             SELECT role, content FROM (
                 SELECT role, content, created_at FROM chat_messages
                 WHERE session_id = $1 AND (is_compacted IS NULL OR is_compacted = false)
-                ORDER BY created_at DESC LIMIT 200
+                ORDER BY created_at DESC LIMIT 500
             ) sub ORDER BY created_at ASC
             """,
             sid,
@@ -1988,6 +1988,33 @@ async def send_message_stream(
             thinking_summary=_thinking_truncated,
             auto_save_check=True,
         )
+
+        # ═══ Phase C-1.5: Output Validator violation → quality_details 기록 ═══
+        if not _validation.is_valid:
+            try:
+                _violation_details = json.dumps({
+                    "violation_type": _validation.violation_type,
+                    "violation_message": _validation.message,
+                    "retried": True,
+                    "original_response_len": len(_failed_response) if '_failed_response' in dir() else 0,
+                })
+                async with get_pool().acquire() as _viol_conn:
+                    await _viol_conn.execute(
+                        """
+                        UPDATE chat_messages
+                        SET quality_details = $1::jsonb,
+                            quality_score = CASE WHEN quality_score IS NULL THEN 0.2 ELSE LEAST(quality_score, 0.3) END
+                        WHERE id = (
+                            SELECT id FROM chat_messages
+                            WHERE session_id = $2 AND role = 'assistant'
+                            ORDER BY created_at DESC LIMIT 1
+                        )
+                        """,
+                        _violation_details, sid,
+                    )
+                logger.info(f"output_validator_violation_recorded: {_validation.violation_type}", session_id=session_id)
+            except Exception as _viol_err:
+                logger.warning(f"output_validator_violation_save_error: {_viol_err}")
 
         # ═══ Phase C-2: Memory Upgrade Background Tasks ═══
         import asyncio as _bg_asyncio

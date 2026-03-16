@@ -336,7 +336,8 @@ async def build_messages_context(
     try:
         from app.services.context_compressor import estimate_tokens, needs_structured_summary
         _est = estimate_tokens(messages, _prompt_for_compaction)
-        if needs_structured_summary(messages, _prompt_for_compaction, threshold=80000):
+        _COMPACTION_THRESHOLD = int(os.getenv("COMPACTION_TRIGGER_TOKENS", "80000"))
+        if needs_structured_summary(messages, _prompt_for_compaction, threshold=_COMPACTION_THRESHOLD):
             logger.warning(f"context_builder: tokens={_est} > 80K, triggering structured summary")
             from app.services.compaction_service import check_and_compact
             messages = await check_and_compact(session_id, messages, db_conn=db_conn)

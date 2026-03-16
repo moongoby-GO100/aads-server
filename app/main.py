@@ -226,6 +226,14 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"sleep_time_agent_job_error: {e}")
         scheduler.add_job(_run_sleep_time_agent, CronTrigger(hour=5, minute=0, timezone="UTC"), id="sleep_time_agent")
+        # Layer C: Background Session Compaction — 2시간마다 (200건 이상 미압축 세션 자동 압축)
+        async def _run_background_compaction():
+            try:
+                from app.core.memory_gc import background_session_compaction
+                await background_session_compaction()
+            except Exception as e:
+                logger.warning(f"background_compaction_job_error: {e}")
+        scheduler.add_job(_run_background_compaction, 'interval', hours=2, id='background_compaction')
         # P2: eval_pipeline — 품질 대시보드 집계 (매일 06:00 UTC, sleep-time 이후)
         async def _run_quality_stats():
             try:
