@@ -160,10 +160,85 @@ def main():
         print(f"\n❌ 도구 정합성 오류 {len(errors)}건:")
         for e in errors:
             print(f"  {e}")
+
+        # 자동 수정 시도
+        if "--fix" in sys.argv:
+            fixed = _auto_fix(registry_tools, executor_tools, ceo_tools_defs,
+                              registry_file, executor_file, tools_file)
+            if fixed:
+                print(f"\n🔧 자동 수정 완료 ({fixed}건) — 파일 확인 후 다시 커밋하세요.")
+                return 0
+        else:
+            print(f"\n💡 자동 수정: python3 scripts/check_tool_consistency.py --fix")
         return 1
     else:
         print("✅ 도구 정합성 검증 통과")
         return 0
+
+
+def _auto_fix(registry_tools, executor_tools, ceo_tools_defs,
+              registry_file, executor_file, tools_file) -> int:
+    """누락된 도구를 자동으로 추가."""
+    fixed = 0
+
+    # 1) tool_executor에 누락된 도구 → stub 메서드 + dispatch 항목 추가
+    _CEO_ONLY = {
+        'generate_image', 'fact_check', 'fact_check_multiple',
+        'gemini_grounding_search', 'execute_sandbox', 'send_telegram',
+        'search_kakao', 'search_naver', 'search_naver_multi',
+        'search_chat_history', 'fetch_url', 'search_logs',
+        'visual_qa_test', 'evaluate_alerts', 'send_alert_message',
+        'crawl4ai_fetch',
+    }
+    _SPECIAL = {'code_execution', 'code_explorer', 'run_agent_team'}
+    missing_in_executor = registry_tools - executor_tools - _CEO_ONLY - _SPECIAL
+
+    if missing_in_executor:
+        content = executor_file.read_text()
+
+        # dispatch dict에 추가
+        dispatch_insert_point = content.find("# 첨부파일 재읽기")
+        if dispatch_insert_point == -1:
+            dispatch_insert_point = content.find("# 작업 모니터")
+        if dispatch_insert_point > 0:
+            new_entries = ""
+            for tool_name in sorted(missing_in_executor):
+                new_entries += f'            "{tool_name}": self._{tool_name},\n'
+            content = content[:dispatch_insert_point] + \
+                f"# 자동 추가 (check_tool_consistency --fix)\n            {new_entries}" + \
+                content[dispatch_insert_point:]
+
+        # stub 메서드 추가 (파일 끝)
+        stubs = "\n"
+        for tool_name in sorted(missing_in_executor):
+            stubs += f'''
+    async def _{tool_name}(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("{tool_name}", inp, "", "")
+'''
+        content += stubs
+
+        executor_file.write_text(content)
+        fixed += len(missing_in_executor)
+        print(f"  tool_executor.py: {sorted(missing_in_executor)} 추가됨")
+
+    # 2) tool_registry._DEFER_LOADING에 누락된 도구 → True(온디맨드)로 추가
+    defer_keys = extract_defer_loading_keys(registry_file)
+    missing_in_defer = registry_tools - defer_keys - _SPECIAL
+    if missing_in_defer:
+        content = registry_file.read_text()
+        insert_point = content.find("}\n\n")  # _DEFER_LOADING 끝
+        if insert_point > 0:
+            new_entries = ""
+            for tool_name in sorted(missing_in_defer):
+                new_entries += f'    "{tool_name}": True,  # 자동 추가\n'
+            content = content[:insert_point] + new_entries + content[insert_point:]
+            registry_file.write_text(content)
+            fixed += len(missing_in_defer)
+            print(f"  tool_registry.py _DEFER_LOADING: {sorted(missing_in_defer)} 추가됨")
+
+    return fixed
 
 
 if __name__ == "__main__":
