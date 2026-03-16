@@ -258,7 +258,7 @@ async def _stream_anthropic(
     output_tokens = 0
 
     # Tool Use 루프 — 절대 상한 + wall-clock 타임아웃
-    _MAX_TOOL_TURNS = int(os.getenv("MAX_TOOL_TURNS", "100"))
+    _MAX_TOOL_TURNS = int(os.getenv("MAX_TOOL_TURNS", "500"))
     _TOOL_TURN_EXTEND = 50  # 자동 연장 턴
     _WALL_CLOCK_TIMEOUT = int(os.getenv("TOOL_LOOP_TIMEOUT_SEC", "1800"))  # 30분 절대 타임아웃
     _wall_clock_start = __import__("time").monotonic()
@@ -278,10 +278,11 @@ async def _stream_anthropic(
         "query_database", "query_project_database", "recall_notes", "search_chat_history",
         "check_task_status", "pipeline_c_status", "dashboard_query", "capture_screenshot",
     }
-    _CONSECUTIVE_ERROR_WARN = 5   # 연속 5회 에러 시 경고 주입
-    _CONSECUTIVE_ERROR_STOP = 15  # 연속 15회 에러 시 도구 루프 강제 중단
-    _TOTAL_ERROR_STOP = 40        # 총 40회 에러 시 강제 중단
-    _SAME_TOOL_ERROR_LIMIT = 5    # 같은 도구가 5회 연속 에러 시 해당 도구 차단
+    _CONSECUTIVE_ERROR_WARN = 10   # 연속 10회 에러 시 경고 주입 (차단 없음)
+    _CONSECUTIVE_ERROR_STOP = 999  # 사실상 비활성 — 연속 에러로 중단하지 않음
+    _TOTAL_ERROR_STOP = 999        # 사실상 비활성 — 총 에러로 중단하지 않음
+    _SAME_TOOL_ERROR_LIMIT = 10    # Yellow 도구: 10회 연속 에러 시 경고 (차단 아님)
+    _SAME_TOOL_ERROR_LIMIT_GREEN = 999  # Green 도구: 제한 없음
     _YELLOW_TOOLS = {
         "write_remote_file", "patch_remote_file", "run_remote_command",
         "git_remote_add", "git_remote_commit", "git_remote_push",
@@ -508,13 +509,14 @@ async def _stream_anthropic(
 
             # 같은 도구 반복 실패 감지 — 해당 도구만 차단 메시지 주입
             _same_err = _same_tool_error_count.get(tu.name, 0)
-            if _same_err >= _SAME_TOOL_ERROR_LIMIT:
+            _same_limit = _SAME_TOOL_ERROR_LIMIT_GREEN if _is_green else _SAME_TOOL_ERROR_LIMIT
+            if _same_err >= _same_limit and _same_err % _same_limit == 0:
+                # 경고만 주입 (차단하지 않음) — AI가 참고하여 전략 변경 유도
                 tool_results[-1]["content"] = (
-                    compressed_str + f"\n\n⛔ {tu.name}이 {_same_err}회 연속 실패. "
-                    "이 도구를 같은 방식으로 다시 호출하지 마세요. "
-                    "다른 도구나 다른 접근법을 사용하세요."
+                    compressed_str + f"\n\n⚠️ {tu.name}이 {_same_err}회 연속 실패 중. "
+                    "다른 파라미터나 다른 접근법도 검토해보세요."
                 )
-                logger.warning(f"same_tool_error_limit: {tu.name}={_same_err}, turn={_turn}")
+                logger.warning(f"same_tool_error_warn: {tu.name}={_same_err}, turn={_turn}")
 
             # 연속 에러 경고/중단 (Green 도구는 관대, Yellow 도구는 엄격)
             _is_green = tu.name in _GREEN_TOOLS
