@@ -88,6 +88,24 @@ async def _get_conn():
     return await asyncpg.connect(_get_db_url(), timeout=10)
 
 
+# ── Docker API 헬퍼 ──────────────────────────────────────────────────────────
+
+def _docker_curl_args(endpoint: str, method: str = "GET", timeout_sec: int = 10) -> list[str]:
+    """DOCKER_HOST 환경변수에 따라 curl 인자 생성 (tcp proxy 또는 unix socket)."""
+    docker_host = os.environ.get("DOCKER_HOST", "")
+    if docker_host.startswith("tcp://"):
+        base_url = docker_host.replace("tcp://", "http://")
+        url = f"{base_url}/v1.24{endpoint}"
+        args = ["curl", "-sf", url, "--max-time", str(timeout_sec)]
+    else:
+        url = f"http://localhost/v1.24{endpoint}"
+        args = ["curl", "-sf", "--unix-socket", "/var/run/docker.sock", url, "--max-time", str(timeout_sec)]
+    if method != "GET":
+        args.insert(2, "-X")
+        args.insert(3, method)
+    return args
+
+
 # ── 서비스 체크 ──────────────────────────────────────────────────────────────
 
 async def _check_service(svc: dict) -> str:
@@ -98,11 +116,10 @@ async def _check_service(svc: dict) -> str:
 
     try:
         if check_type == "docker":
-            # Docker Engine API via Unix socket (컨테이너 내부용)
+            # Docker Engine API via proxy 또는 unix socket
+            args = _docker_curl_args(f"/containers/{target}/json", timeout_sec=timeout_sec)
             proc = await asyncio.create_subprocess_exec(
-                "curl", "-sf", "--unix-socket", "/var/run/docker.sock",
-                f"http://localhost/v1.24/containers/{target}/json",
-                "--max-time", str(timeout_sec),
+                *args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -212,10 +229,9 @@ async def _docker_api(action: str, container: str) -> dict:
         return {"success": False, "output": f"Unknown docker action: {action}"}
 
     try:
+        args = _docker_curl_args(endpoint, method="POST", timeout_sec=60)
         proc = await asyncio.create_subprocess_exec(
-            "curl", "-sf", "--unix-socket", "/var/run/docker.sock",
-            "-X", "POST", f"http://localhost/v1.24{endpoint}",
-            "--max-time", "60",
+            *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

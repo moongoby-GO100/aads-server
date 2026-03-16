@@ -55,6 +55,32 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ★ Docker Socket Proxy — R-SEC-01: 호스트 root 탈취 방지
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: aads-socket-proxy
+    restart: always
+    environment:
+      - CONTAINERS=1
+      - EXEC=1
+      - IMAGES=1
+      - INFO=1
+      - NETWORKS=0
+      - VOLUMES=0
+      - SWARM=0
+      - SECRETS=0
+      - POST=1
+      - TZ=Asia/Seoul
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - aads_network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   aads-server:
     build:
       context: .
@@ -73,6 +99,7 @@ services:
       - TZ=Asia/Seoul
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - BRAVE_API_KEY=${BRAVE_API_KEY}
+      - DOCKER_HOST=tcp://aads-socket-proxy:2375
     volumes:
       # ★ 소스 볼륨 마운트: 호스트 수정 → 컨테이너 즉시 반영
       - /root/aads/aads-server/app:/app/app:rw
@@ -80,7 +107,6 @@ services:
       - /root/aads/aads-server/migrations:/app/migrations:rw
       - /root/aads/aads-server/scripts:/app/scripts:rw
       - /root/aads/aads-server/supervisord.conf:/app/supervisord.conf:ro
-      - /var/run/docker.sock:/var/run/docker.sock
       - /root/.ssh:/root/.ssh:rw
       - /root/.genspark/directives:/root/.genspark/directives:ro
       - /root/project-docs:/root/project-docs:ro
@@ -92,6 +118,8 @@ services:
     depends_on:
       aads-postgres:
         condition: service_healthy
+      docker-socket-proxy:
+        condition: service_started
     deploy:
       resources:
         limits:

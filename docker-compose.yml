@@ -27,6 +27,31 @@ services:
       timeout: 5s
       retries: 5
 
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: aads-socket-proxy
+    restart: always
+    environment:
+      - CONTAINERS=1
+      - EXEC=1
+      - IMAGES=1
+      - INFO=1
+      - NETWORKS=0
+      - VOLUMES=0
+      - SWARM=0
+      - SECRETS=0
+      - POST=1
+      - TZ=Asia/Seoul
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - aads_network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   aads-server:
     build:
       context: .
@@ -40,6 +65,7 @@ services:
     environment:
       - ENVIRONMENT=production
       - LOG_LEVEL=INFO
+      - DOCKER_HOST=tcp://aads-socket-proxy:2375
       # aads-postgres 컨테이너 (pgvector/pg15) 연결 (T-011)
       - DATABASE_URL=postgresql://aads:${POSTGRES_PASSWORD}@aads-postgres:5432/aads
       # GitHub PAT (AADS-179): 미설정 시 infra-check severity=warning (critical 아님)
@@ -89,10 +115,6 @@ services:
       - /root/aads/aads-server/migrations:/app/migrations:rw
       - /root/aads/aads-server/scripts:/app/scripts:rw
       - /root/aads/aads-server/supervisord.conf:/app/supervisord.conf:ro
-      # ⚠️ SECURITY WARNING (C-12): Docker socket grants root-equivalent access to the host.
-      # Required for DockerSandbox (D-011) and Pipeline C operations.
-      # TODO: Replace with docker-socket-proxy (e.g. tecnativa/docker-socket-proxy) to restrict API access.
-      - /var/run/docker.sock:/var/run/docker.sock
       # SSH 키 마운트: 211/114 서버 접근용 (H-04: ro로 변경 — known_hosts는 호스트에서 관리)
       - /root/.ssh:/root/.ssh:ro
       # 지시서/보고서 파일 접근 (T-090: directive content API)
@@ -113,6 +135,8 @@ services:
     depends_on:
       aads-postgres:
         condition: service_healthy
+      docker-socket-proxy:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
       interval: 30s
