@@ -570,7 +570,8 @@ async def _stream_anthropic(
                     await asyncio.sleep(_wait)
                 else:
                     # 영구적 에러 (400, 401 등) 또는 재시도 소진
-                    logger.error(f"model_selector anthropic error: status={_status}, error={e}")
+                    _err_body = getattr(e, 'body', None) or getattr(e, 'response', None)
+                    logger.error(f"model_selector anthropic error: status={_status}, error={e}, body={str(_err_body)[:500]}, model={model_id}, msgs={len(current_messages)}, tools={len(tools or [])}")
                     yield {"type": "error", "content": str(e)}
                     return
 

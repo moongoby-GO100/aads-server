@@ -2047,6 +2047,11 @@ class ToolRegistry:
         for name in tool_names:
             if name not in _TOOLS:
                 continue
+            # Anthropic 내장 도구 (code_execution 등)는 tools 배열에 넣으면 400 에러
+            # type이 "tool"이 아닌 특수 타입은 제외
+            _tool_type = _TOOLS[name].get("type", "")
+            if _tool_type and _tool_type not in ("", "tool"):
+                continue
             # input_examples, defer_loading, allowed_callers는 API 전송 시 제외
             _EXCLUDE_KEYS = {"input_examples", "defer_loading", "allowed_callers"}
             tool = {k: v for k, v in _TOOLS[name].items() if k not in _EXCLUDE_KEYS}
@@ -2075,6 +2080,7 @@ class ToolRegistry:
             {k: v for k, v in _TOOLS[name].items() if k not in _EXCLUDE}
             for name in _TOOLS
             if not _DEFER_LOADING.get(name, True)
+            and not (_TOOLS[name].get("type", "") and _TOOLS[name].get("type", "") not in ("", "tool"))
         ]
 
     def get_deferred_tools(self) -> List[Dict[str, Any]]:
