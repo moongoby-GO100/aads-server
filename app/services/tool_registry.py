@@ -77,10 +77,14 @@ _DEFER_LOADING: Dict[str, bool] = {
     "read_uploaded_file": False,      # 첨부파일 재읽기 — 상시 로드
     "unschedule_task": True,
     "list_scheduled_tasks": True,
-    # ── Pipeline C: 자율 작업 파이프라인 ──────────────────────────────
-    "pipeline_c_start": False,        # 상시 로드 — CEO 핵심 도구
-    "pipeline_c_status": False,
-    "pipeline_c_approve": False,
+    # ── Pipeline Runner: 호스트 독립 실행 (권장) ────────────────────
+    "pipeline_runner_submit": False,  # 상시 로드 — 코드수정/배포 기본 도구
+    "pipeline_runner_status": False,  # 상시 로드
+    "pipeline_runner_approve": False, # 상시 로드
+    # ── Pipeline C: 레거시 (Runner 사용 권장) ─────────────────────
+    "pipeline_c_start": True,         # 온디맨드 (레거시)
+    "pipeline_c_status": True,
+    "pipeline_c_approve": True,
     # ── 원격 쓰기/실행/Git 도구 (AADS-190) ──────────────────────────
     "write_remote_file": False,       # 코드 수정 핵심 — 상시 로드
     "patch_remote_file": False,       # 코드 수정 핵심 — 상시 로드
@@ -148,12 +152,13 @@ TOOL_CATEGORY_GUIDE = """\
 - browser_navigate/snapshot/screenshot/click/fill/tab_list
 - capture_screenshot: URL 스크린샷 캡처 → 이미지 URL 반환
 
-### 🟣 Pipeline C — 자율 작업 파이프라인 (CEO 요청 시)
-- pipeline_c_start: 작업→AI검수→재지시→CEO승인→배포 자율 수행
-- pipeline_c_status: 진행 상태 확인
-- pipeline_c_approve: CEO 승인/거부 → 배포 또는 원복
-- pipeline_c_cancel: 멈춘 작업 강제 취소
-- pipeline_c_retry: 에러 작업 재실행\
+### 🟣 Pipeline Runner — 코드수정/배포 (기본 권장)
+- pipeline_runner_submit: 작업 제출 → 호스트 Runner가 Claude Code 독립 실행
+- pipeline_runner_status: 작업 상태 조회
+- pipeline_runner_approve: CEO 승인/거부 → 배포
+
+### ⚫ Pipeline C — 레거시 (Runner 사용 권장)
+- pipeline_c_start/status/approve: 레거시, 특별한 경우에만\
 """
 
 # ─── AADS-188C Phase 2: 인텐트별 필수 도구 매핑 ──────────────────────────────
@@ -172,6 +177,7 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
     "project_db":         ["query_project_database", "list_project_databases"],
     "export":             ["export_data"],
     "scheduler":          ["schedule_task", "list_scheduled_tasks"],
+    "pipeline_runner":    ["pipeline_runner_submit", "pipeline_runner_status", "pipeline_runner_approve"],
     "pipeline_c":         ["pipeline_c_start", "pipeline_c_status", "pipeline_c_approve"],
     "task_history":       ["task_history"],
     "file_read":          ["read_uploaded_file"],
@@ -1656,7 +1662,69 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         ],
         "defer_loading": True,
     },
-    # ── Pipeline C: 자율 작업 파이프라인 도구 ──────────────────────────────────
+    # ── Pipeline Runner: 호스트 독립 실행 (권장) ────────────────────────────
+    "pipeline_runner_submit": {
+        "name": "pipeline_runner_submit",
+        "description": "코드 수정/배포 작업을 Pipeline Runner로 제출. 각 서버의 Runner가 독립적으로 Claude Code를 실행. 서버 재시작 무영향. 서버매핑: AADS→68서버, KIS/GO100→211서버, SF/NTV2→114서버.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "대상 프로젝트",
+                    "enum": ["KIS", "GO100", "SF", "NTV2", "AADS"],
+                },
+                "instruction": {
+                    "type": "string",
+                    "description": "Claude Code에 보낼 작업 지시 (구체적으로)",
+                },
+                "max_cycles": {
+                    "type": "integer",
+                    "description": "최대 검수 반복 (기본: 3)",
+                    "default": 3,
+                },
+            },
+            "required": ["project", "instruction"],
+        },
+        "input_examples": [
+            {"project": "KIS", "instruction": "order_executor.py에서 NoneType 에러 방어 코드 추가"},
+            {"project": "AADS", "instruction": "헬스체크 API에 디스크 사용량 지표 추가", "max_cycles": 2},
+        ],
+    },
+    "pipeline_runner_status": {
+        "name": "pipeline_runner_status",
+        "description": "Pipeline Runner 작업 상태 조회. job_id 없으면 전체 목록.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string", "description": "작업 ID (없으면 전체 목록)"},
+                "status": {"type": "string", "description": "필터: queued, running, awaiting_approval, done, error"},
+            },
+        },
+        "input_examples": [
+            {"job_id": "runner-abc12345"},
+            {"status": "awaiting_approval"},
+            {},
+        ],
+    },
+    "pipeline_runner_approve": {
+        "name": "pipeline_runner_approve",
+        "description": "Pipeline Runner 작업 승인 또는 거부. awaiting_approval 상태에서만 가능.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string", "description": "작업 ID"},
+                "action": {"type": "string", "enum": ["approve", "reject"], "description": "승인/거부"},
+                "feedback": {"type": "string", "description": "피드백 (거부 시 사유)"},
+            },
+            "required": ["job_id", "action"],
+        },
+        "input_examples": [
+            {"job_id": "runner-abc12345", "action": "approve"},
+            {"job_id": "runner-abc12345", "action": "reject", "feedback": "테스트 코드 누락"},
+        ],
+    },
+    # ── Pipeline C: 레거시 (Runner 사용 권장) ─────────────────────────────
     "pipeline_c_start": {
         "name": "pipeline_c_start",
         "description": "프로젝트별 Claude Code 자율 작업 파이프라인 시작. 작업→자동검수→재지시→승인대기까지 자율 수행. 현재 세션과 무관하게 어떤 프로젝트든 지정 가능 (크로스 프로젝트).",
