@@ -1,6 +1,6 @@
 # AADS 채팅 AI — 메모리 저장~진화 전체 아키텍처
 
-> 작성일: 2026-03-14 | 대상: aads.newtalk.kr 채팅 AI 시스템
+> 작성일: 2026-03-14 | 최종 갱신: 2026-03-16 | 대상: aads.newtalk.kr 채팅 AI 시스템
 > 소스: `/root/aads/aads-server/app/`
 
 ---
@@ -37,6 +37,11 @@ AADS 채팅 AI는 **3-Tier 12-Feature 메모리 아키텍처**와 **Evolution En
 │              └─────────────────────────┘                         │
 │                            ▼                                     │
 │              ┌─────────────────────────┐                         │
+│              │  Layer 4: 자기인식       │                         │
+│              │  (진화 메트릭 실시간)     │                         │
+│              └─────────────────────────┘                         │
+│                            ▼                                     │
+│              ┌─────────────────────────┐                         │
 │              │  Layer 3: 대화 히스토리   │                         │
 │              │  (마스킹+압축)           │                         │
 │              └─────────────────────────┘                         │
@@ -54,10 +59,10 @@ AADS 채팅 AI는 **3-Tier 12-Feature 메모리 아키텍처**와 **Evolution En
 │  │ 메시지   │  │ F2 사실  │  │ F5 도구  │  │ F11 자기 │        │
 │  │ DB 저장  │  │ 추출     │  │ 아카이브 │  │ 평가     │        │
 │  └──────────┘  └──────────┘  └──────────┘  └──────────┘        │
-│                ┌──────────┐  ┌──────────┐                        │
-│                │ F8 CEO   │  │ B4 모순  │                        │
-│                │ 패턴추적 │  │ 감지     │                        │
-│                └──────────┘  └──────────┘                        │
+│                ┌──────────┐  ┌──────────┐  ┌──────────┐        │
+│                │ F8 CEO   │  │ B4 모순  │  │ 팩트체크 │        │
+│                │ 패턴추적 │  │ 감지     │  │ 3단계    │        │
+│                └──────────┘  └──────────┘  └──────────┘        │
 └──────────────────────────────────────────────────────────────────┘
                             ▼
 ┌────────────── 야간 배치 (04:00~05:00 UTC) ───────────────────────┐
@@ -115,6 +120,32 @@ AADS 채팅 AI는 **3-Tier 12-Feature 메모리 아키텍처**와 **Evolution En
 | 동작 | 파일 첨부 → 현재 턴만 전문 주입 → 다음 턴 자동 제거 |
 | 제한 | 30K 토큰 이하=전문, 초과=앞뒤 분할 |
 | 지원 | PDF(pdfplumber), Excel(openpyxl), 텍스트 |
+
+### 2.7 Layer 4 — 자기인식 (Self-Awareness)
+| 항목 | 값 |
+|------|-----|
+| 파일 | `system_prompt_v2.py` (lines 407-469, `LAYER4_SELF_AWARENESS_TEMPLATE`) |
+| 크기 | ~200 토큰 |
+| 갱신 | 매 턴 — `context_builder`에서 실시간 수치 주입 |
+
+AI에게 자신의 진화 상태를 실시간으로 인식시키는 레이어. `build_layer1()`에서 시스템 프롬프트 말미에 주입된다.
+
+**실시간 메트릭:**
+- `fact_count`: memory_facts 총 건수
+- `obs_count`: ai_observations 총 건수
+- `avg_quality`: 응답 품질 평균 (%)
+- `error_pattern_count`: 축적된 에러 패턴 수
+
+**"나는 어떻게 진화하는가" 섹션 — AI가 인식하는 자기 구조:**
+- **memory_facts**: 대화에서 사실 추출·저장 → 자주 참조된 기억은 confidence 강화
+- **quality_score**: 매 응답 품질 자동 평가 (0~1점)
+- **Reflexion**: 품질 40% 미만 시 반성문 자동 생성 → error_pattern으로 저장
+- **confidence 조정**: 자주 참조된 기억 강화(+0.02/회), 오래된 기억 감쇠
+- **Sleep-Time Agent**: 매일 14:00 KST(05:00 UTC) 기억 정제 및 통합
+- **error_pattern 경고**: 유사 작업 시 과거 실패 자동 경고 주입
+- **CEO 패턴 예측**: 시간대/요일별 관심사 선제 준비
+- **P4 필터**: discovery 카테고리 confidence 0.5 미만 자동 제외
+- **팩트체크 엔진**: DB+웹 3단계 교차 검증 (VERIFIED/UNCERTAIN/DISPUTED)
 
 ---
 
@@ -178,6 +209,38 @@ ai_observations UPSERT (ON CONFLICT → GREATEST(confidence))
 카테고리: ceo_preference, tool_strategy, discovery, learning 등
 ```
 
+### 4.5 팩트체크 엔진 — 3단계 교차 검증 (`fact_checker.py`)
+
+**파일**: `app/services/fact_checker.py` (595줄) + `app/api/fact_check.py` (API)
+
+```
+클레임 텍스트 입력
+    ↓
+┌─── Stage 1: DB 검증 ──────────────────────┐
+│ memory_facts, ai_observations, chat_messages │
+│ 에서 관련 기록 검색 → DB 근거 확보           │
+└──────────────────────────────────────────────┘
+    ↓
+┌─── Stage 2: 웹 교차 검증 ─────────────────┐
+│ Google + Naver 병렬 검색                    │
+│ 검색 결과와 클레임 대조                      │
+└──────────────────────────────────────────────┘
+    ↓
+┌─── Stage 3: 판정 + 신뢰도 산출 ───────────┐
+│ Verdict:                                    │
+│   VERIFIED     — DB+웹 모두 확인            │
+│   DB_ONLY      — DB에만 근거 존재           │
+│   WEB_ONLY     — 웹에만 근거 존재           │
+│   UNCERTAIN    — 근거 불충분                │
+│   DISPUTED     — 상충하는 근거 발견         │
+│   UNVERIFIED   — 검증 불가                  │
+└──────────────────────────────────────────────┘
+```
+
+**API 엔드포인트:**
+- `POST /api/v1/fact-check/verify` — 단건 팩트체크
+- `POST /api/v1/fact-check/verify-batch` — 배치 팩트체크 (최대 10건)
+
 ---
 
 ## 5. Evolution Engine — 12개 피드백 루프
@@ -200,6 +263,15 @@ ai_observations UPSERT (ON CONFLICT → GREATEST(confidence))
 | **B3** | 도구 효율 분석 | `memory_gc.py` | 주간 배치: 에러율 >30% 또는 avg_tokens >3000 플래그 |
 | **B4** | 모순 자동 해결 | `contradiction_detector.py` | CEO 지시 키워드(변경/취소/결정 등) → 이전 사실 supersede |
 
+### Phase B 확장: should_stop_generation()
+
+`self_evaluator.py`에 구현된 생성 중단 메커니즘:
+
+- **3연속 저품질 중단**: 최근 3턴 연속 quality_score < 0.3 → 생성 즉시 중단
+- **5턴 하락 트렌드 중단**: 최근 5턴 지속적 품질 하락 감지 → 생성 중단
+
+중단 시 AI는 품질 저하 원인을 자가 분석하고 에러 패턴으로 기록한다.
+
 ### Phase C: 오프라인 최적화 (야간 배치)
 
 | ID | 기능 | 파일 | 스케줄 |
@@ -208,6 +280,109 @@ ai_observations UPSERT (ON CONFLICT → GREATEST(confidence))
 | **C2** | 프롬프트 자동최적화 | `memory_gc.py` | 05:00 UTC — quality_score <0.5 → 교정 지시 생성 |
 | **C3** | 적응형 망각곡선 | `memory_gc.py` | 04:00 UTC — 카테고리별 차등 decay |
 | **C4** | 결정 의존성 그래프 | `ceo_chat_tools.py` | CEO 도구 호출 — BFS depth 3 탐색 |
+
+### P-Series: 진화 품질 개선
+
+| ID | 기능 | 파일 | 동작 |
+|----|------|------|------|
+| **P2** | 에러 패턴 경고 | `workspace_preloader.py` | 프리로드 시 error_pattern top-3 경고 주입 (최고 우선순위) |
+| **P3** | Reflexion 효과 추적 | `self_evaluator.py` | 반성 후 개선(+0.05 effective boost) / 미개선(×0.85 decay) |
+| **P4** | Discovery 신뢰도 필터 | `auto_rag.py`, `workspace_preloader.py` | confidence < 0.5 → recall + preloader에서 자동 제외 |
+| **P5** | 참조 비례 부스팅 | `memory_gc.py` | 5+회→+0.03, 10+회→+0.05, 20+회→+0.08 부스트 |
+
+---
+
+## 5.5 품질 평가 파이프라인 (`eval_pipeline.py`)
+
+**파일**: `app/services/eval_pipeline.py` (675줄)
+
+응답 품질을 정량적으로 추적하고 회귀를 감지하는 파이프라인.
+
+### 평가 메트릭 (5개)
+| 메트릭 | 가중치 | 설명 |
+|--------|--------|------|
+| accuracy | 20% | 사실 정확성 |
+| completeness | 20% | 답변 완전성 |
+| relevance | 15% | 질문 관련성 |
+| **tool_grounding** | **30%** | 도구 기반 근거 비율 (가장 중요) |
+| actionability | 15% | 실행 가능성 |
+
+### 주요 함수
+| 함수 | 동작 |
+|------|------|
+| `aggregate_quality_stats()` | 워크스페이스별 7일 윈도우 통계 (평균/분포/트렌드) |
+| `detect_quality_regression()` | 직전 기간 대비 15% 이상 하락 → 경고 생성 |
+| `generate_weekly_report()` | 마크다운 주간 리포트 — 워크스페이스별 분포 + 상위/하위 응답 |
+| `calculate_grounding_score()` | 도구 호출 기반 근거 점수 산출 |
+| `record_ab_metric()` | A/B 테스트 메트릭 추적 |
+
+---
+
+## 5.6 시맨틱 캐시 (`semantic_cache.py`)
+
+**파일**: `app/services/semantic_cache.py` (417줄)
+
+유사 질문에 대한 고품질 응답을 재활용하여 비용과 지연을 줄이는 캐시.
+
+```
+사용자 메시지
+    ↓
+Gemini 임베딩 생성 (768차원)
+    ↓
+ai_meta_memory (category='semantic_cache') 검색
+    ↓ 유사도 ≥ 0.92
+캐시 히트 → 저장된 응답 반환 (LLM 미호출)
+    ↓ 유사도 < 0.92
+캐시 미스 → LLM 호출 → 조건 충족 시 캐시 저장
+```
+
+| 설정 | 값 |
+|------|-----|
+| 유사도 임계값 | ≥ 0.92 (`SEMANTIC_CACHE_SIMILARITY`) |
+| 품질 게이트 | quality_score ≥ 0.7 |
+| 캐시 조건 | 도구 사용 응답만 캐시 |
+| TTL | 24시간 (`SEMANTIC_CACHE_TTL_HOURS`) |
+| 최대 항목 | 500건 (`SEMANTIC_CACHE_MAX_ENTRIES`) |
+| 저장소 | `ai_meta_memory` 테이블 (category=`semantic_cache`) |
+| 격리 | 워크스페이스별 분리 — 타 워크스페이스 캐시 미참조 |
+
+---
+
+## 5.7 멀티에이전트 오케스트레이션 (`agent_orchestrator.py`)
+
+**파일**: `app/services/agent_orchestrator.py` (722줄)
+
+복잡한 작업을 역할 기반 에이전트 팀으로 분할·실행하는 오케스트레이터.
+
+### 핵심 컴포넌트
+
+| 컴포넌트 | 설명 |
+|----------|------|
+| **AgentMessage** | 에이전트 간 통신 메시지 (6종: request, response, discovery, error, status, complete) |
+| **SharedDiscoveryStore** | 에이전트 간 발견 공유 저장소 (pub/sub + 태그 기반 검색) |
+| **AgentOrchestrator** | DAG 기반 작업 스케줄링 + 비용 제어 |
+| **AgentTeam** | 역할 기반 에이전트 팀 단계별 실행 |
+
+### 에이전트 역할 (5종)
+
+| 역할 | 담당 |
+|------|------|
+| `researcher` | 조사·분석 — 코드/DB/로그 탐색 |
+| `developer` | 구현 — 코드 작성/수정/테스트 |
+| `qa` | 품질 보증 — 테스트 실행/회귀 검증 |
+| `devops` | 배포·인프라 — 서버/Docker/CI/CD |
+| `architect` | 설계 — 아키텍처 리뷰/의사결정 |
+
+### 도구 통합
+
+`run_agent_team` 도구로 채팅 AI에서 직접 멀티에이전트 팀을 호출할 수 있다:
+```
+CEO: "KIS 백엔드 리팩토링해줘"
+    ↓
+run_agent_team(task="KIS 백엔드 리팩토링", roles=["researcher","developer","qa"])
+    ↓
+AgentOrchestrator → DAG 스케줄링 → 순차/병렬 실행 → 결과 통합
+```
 
 ---
 
@@ -225,7 +400,7 @@ config_change ────── 0.85 ▓▓▓▓▓▓▓▓▓▓▓  (빠른
 ```
 
 - 14일 이상 미참조 + 생성 14일 이상 → decay 적용
-- 참조된 사실: +0.05 부스트 (7일 내 참조)
+- 참조 비례 부스트 (P5): 5+회→+0.03, 10+회→+0.05, 20+회→+0.08
 - 삭제 임계: 신뢰도 < 0.1 + 30일 경과
 
 ---
@@ -291,8 +466,16 @@ created_at, updated_at TIMESTAMPTZ
 -- 기존 + 메모리 확장:
 embedding       vector(768)     -- F1 Auto-RAG 검색
 quality_score   FLOAT           -- F11 자기평가 0.0~1.0
-quality_details JSONB           -- {accuracy, completeness, relevance, overall}
+quality_details JSONB           -- {accuracy, completeness, relevance, tool_grounding, actionability, overall}
 edited_at       TIMESTAMPTZ     -- B2 CEO 수정 감지
+```
+
+### 7.6 ai_meta_memory 카테고리
+```
+기존:     learning, meta, correction, ...
+추가:     semantic_cache          ← 5.6 시맨틱 캐시 저장소
+          correction_directive    ← C2 프롬프트 최적화 교정 지시
+          prompt_optimization     ← C2 프롬프트 최적화 결과
 ```
 
 ---
@@ -303,7 +486,7 @@ edited_at       TIMESTAMPTZ     -- B2 CEO 수정 감지
 03:00 UTC ─── gc_observations()        ai_observations 30일+ decay→삭제
 03:30 UTC ─── task_logs GC             7일+ 로그 삭제
 04:00 UTC ─── consolidate_memory_facts()
-              ├── 참조 부스트 (+0.05)
+              ├── 참조 비례 부스트 (P5: 5+→+0.03, 10+→+0.05, 20+→+0.08)
               ├── 미참조 decay (C3 곡선)
               ├── 중복 병합 (유사도 >0.92)
               ├── 프로젝트 스냅샷 생성
@@ -324,12 +507,14 @@ edited_at       TIMESTAMPTZ     -- B2 CEO 수정 감지
    ├── 세션 히스토리 로드
    ├── Memory Recall 6섹션 (6 async 쿼리 병렬)
    ├── Auto-RAG: 임베딩 → pgvector 검색 → top-5
-   ├── Workspace Preload: 프로젝트 사실 + CEO 예측
+   ├── Workspace Preload: 프로젝트 사실 + CEO 예측 + P2 에러 경고
    ├── Document Context: 첨부 파일 처리
+   ├── Layer 4 자기인식: 진화 메트릭 실시간 주입
    ├── Contradiction Detection (B4): 모순 경고
    └── DB 커넥션 해제 ✓
 
 ③ Phase B — LLM 호출 (DB 미사용)
+   ├── should_stop_generation(): 3연속 <0.3 또는 5턴 하락 시 중단
    └── Claude API → SSE 스트리밍 → 도구 실행
 
 ④ Phase C — 저장 (별도 conn)
@@ -338,7 +523,7 @@ edited_at       TIMESTAMPTZ     -- B2 CEO 수정 감지
        ├── F2: 사실 추출 (Haiku → memory_facts)
        ├── F5: 도구 결과 아카이브
        ├── F8: CEO 패턴 추적
-       ├── F11: 자기평가 (quality_score)
+       ├── F11: 자기평가 (quality_score) + P3 Reflexion 효과 추적
        └── B1: 품질 <0.4 시 Reflexion 반성
 ```
 
@@ -354,8 +539,9 @@ edited_at       TIMESTAMPTZ     -- B2 CEO 수정 감지
 | Layer 2.5 프리로드 | ~1,000 | - (DB 검색) |
 | Memory Recall 6섹션 | ~2,300 | - (DB 검색) |
 | Auto-RAG | ~2,000 | - (임베딩 검색) |
+| Layer 4 자기인식 | ~200 | - |
 | Layer D 문서 | 0~60,000 | - |
-| **총 오버헤드** | **~7,000** | |
+| **총 오버헤드** | **~7,200** | |
 
 ### 매 턴 백그라운드 비용
 | 컴포넌트 | 비용/턴 |
@@ -383,21 +569,28 @@ edited_at       TIMESTAMPTZ     -- B2 CEO 수정 감지
 │   ├── memory_recall.py          ← 6섹션 컨텍스트 주입
 │   ├── memory_gc.py              ← GC + 통합 + C1/C2/C3
 │   ├── document_context.py       ← Layer D 임시 문서
-│   └── token_utils.py            ← 한국어 토큰 추정
+│   ├── token_utils.py            ← 한국어 토큰 추정
+│   └── prompts/
+│       └── system_prompt_v2.py   ← Layer 1 + Layer 4 자기인식 (LAYER4_SELF_AWARENESS_TEMPLATE)
 ├── services/
 │   ├── context_builder.py        ← 3+D 레이어 오케스트레이션
 │   ├── auto_rag.py               ← F1/F3 시맨틱 검색
 │   ├── fact_extractor.py         ← F2 사실 추출
+│   ├── fact_checker.py           ← 팩트체크 3단계 엔진 (DB+웹 교차 검증)
 │   ├── tool_archive.py           ← F5 도구 결과 캐시
-│   ├── workspace_preloader.py    ← F6 프로젝트 프리로드
-│   ├── self_evaluator.py         ← F11/B1 자기평가+반성
+│   ├── workspace_preloader.py    ← F6 프로젝트 프리로드 + P2 에러 경고
+│   ├── self_evaluator.py         ← F11/B1 자기평가+반성 + P3 효과추적 + should_stop_generation()
 │   ├── contradiction_detector.py ← F10/B4 모순 감지
 │   ├── ceo_pattern_tracker.py    ← F8/A3 CEO 패턴
 │   ├── chat_embedding_service.py ← Gemini 768차원 임베딩
-│   ├── chat_service.py           ← 메인 오케스트레이션
-│   └── memory_manager.py         ← Layer 2/4 관리
+│   ├── chat_service.py           ← 메인 오케스트레이션 + 스트리밍 복구
+│   ├── memory_manager.py         ← Layer 2/4 관리
+│   ├── eval_pipeline.py          ← 품질 평가 파이프라인 (5메트릭, 주간 리포트)
+│   ├── semantic_cache.py         ← 시맨틱 캐시 (유사도 ≥0.92, 24h TTL)
+│   └── agent_orchestrator.py     ← 멀티에이전트 오케스트레이션 (DAG, 5역할)
 ├── api/
 │   ├── ceo_chat_tools.py         ← C4 의존성그래프, F12 타임라인 도구
+│   ├── fact_check.py             ← 팩트체크 API (verify, verify-batch)
 │   └── memory.py                 ← 메모리 API
 └── migrations/
     ├── 024_memory_tables.sql     ← session_notes, ai_meta_memory
@@ -431,13 +624,30 @@ MEMORY_GC_DELETE_THRESHOLD=0.1
 CONSOLIDATION_SIMILARITY=0.92
 CONSOLIDATION_REFERENCED_BOOST=0.05
 FACTS_DECAY_DAYS=14
+FACTS_DECAY_FACTOR=0.95
+
+# 자기평가
+SELF_EVAL_ENABLED=true
+SELF_EVAL_MIN_LEN=200
+SELF_EVAL_MODEL=claude-haiku-4-5-20251001
+
+# 시맨틱 캐시
+SEMANTIC_CACHE_SIMILARITY=0.92
+SEMANTIC_CACHE_TTL_HOURS=24
+SEMANTIC_CACHE_MAX_ENTRIES=500
+SEMANTIC_CACHE_MIN_QUALITY=0.7
+
+# 워크스페이스 프리로드
+WORKSPACE_PRELOAD_ENABLED=true
+WORKSPACE_PRELOAD_TOKENS=1000
+
+# Sleep-Time Agent
+SLEEP_AGENT_MODEL=claude-haiku-4-5-20251001
 
 # 기능 토글
 AUTO_RAG_ENABLED=true
-SELF_EVAL_ENABLED=true
 CONTRADICTION_DETECTION_ENABLED=true
 CEO_PATTERN_TRACKING_ENABLED=true
-WORKSPACE_PRELOAD_ENABLED=true
 LANGFUSE_ENABLED=true
 ```
 
@@ -468,7 +678,9 @@ LANGFUSE_ENABLED=true
               │ save_observation()
               │
          ai_meta_memory ←──── C2 프롬프트 최적화
-         (manual/hybrid)
+         (manual/hybrid)       semantic_cache (5.6)
+                               correction_directive
+                               prompt_optimization
 
          memory_facts ←───── F2 사실추출 (Haiku)
          │ (embedding,       Auto-RAG 검색 (F1)
@@ -476,6 +688,7 @@ LANGFUSE_ENABLED=true
          │  related_facts[], Sleep-Time 인사이트 (C1)
          │  superseded_by)   통합/병합 (F4)
          │                   모순 감지 (B4)
+         │                   팩트체크 검증 (4.5)
          │ self-ref (versioning)
          └──→ memory_facts
 
@@ -496,3 +709,44 @@ LANGFUSE_ENABLED=true
 6. **보호 카테고리**: ceo_preference, ceo_directive, compaction_directive는 GC 면제
 7. **원자적 DB 연산**: ON CONFLICT + GREATEST()로 경쟁조건 방지
 8. **프로젝트 필터링**: `project = $1 OR project IS NULL` 패턴 일관 적용
+
+---
+
+## 15. 스트리밍 자동 복구
+
+### 서버 재시작 시 중단 스트리밍 복구
+
+```
+서버 재시작
+    ↓
+resume_interrupted_streams()
+    ↓
+chat_messages에서 streaming_placeholder 남은 세션 탐색
+    ↓
+┌─── _resume_single_stream() ──────────────────┐
+│ 1. 세션 히스토리에서 중간 결과 보존             │
+│ 2. 이전 컨텍스트 기반 LLM 재호출               │
+│ 3. placeholder를 최종 응답으로 교체             │
+│ 실패 시 → placeholder 삭제 폴백               │
+└──────────────────────────────────────────────────┘
+```
+
+**실행 시점**: `main.py`에서 DB pool 초기화 직후 자동 실행
+
+### 수동 복구 API
+
+`POST /chat/sessions/{id}/resume` — 특정 세션의 중단된 스트리밍을 수동 재개
+
+### 클라이언트 연결 해제 시 (with_background_completion)
+
+```
+클라이언트 disconnect 감지
+    ↓
+producer(LLM 스트리밍) 계속 실행
+    ↓
+15초마다 중간 결과 DB 저장 (interim save)
+    ↓
+완료 시 최종 응답 DB 저장
+    ↓
+사용자 재접속 시 완성된 응답 확인 가능
+```
