@@ -19,6 +19,7 @@ EnvironmentFile=-/root/.config/aads-runner.env
 Environment=POLL_INTERVAL=5
 Environment=MAX_RUNTIME=7200
 Environment=MAX_RETRIES=2
+Environment=MAX_CONCURRENT_GLOBAL=10
 Environment=RUNNER_PROJECTS=AADS
 Environment=HOME=/root
 Environment=PATH=/root/.nvm/versions/node/v20.20.0/bin:/usr/local/bin:/usr/bin:/bin

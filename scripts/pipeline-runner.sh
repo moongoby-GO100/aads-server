@@ -358,6 +358,21 @@ main() {
 
     local _cycle=0
     while true; do
+        # 글로벌 동시 작업 상한 체크 (전 서버 합산, rate limit 예방)
+        local _running_count
+        _running_count=$(db_exec "SELECT count(*) FROM pipeline_jobs WHERE status IN ('running','claimed');" 2>/dev/null) || _running_count="0"
+        _running_count="${_running_count// /}"
+
+        if [[ "$_running_count" -ge "${MAX_CONCURRENT_GLOBAL:-10}" ]]; then
+            # 상한 도달 — 이번 사이클 대기
+            if (( _cycle % 12 == 0 )); then
+                log "  THROTTLE: ${_running_count}/${MAX_CONCURRENT_GLOBAL:-10} 동시 작업 — 대기"
+            fi
+            sleep "$POLL_INTERVAL"
+            _cycle=$((_cycle + 1))
+            continue
+        fi
+
         # 1) queued 작업 원자적 클레임 (C4)
         local pending
         pending=$(claim_queued_job "$project_filter" 2>/dev/null) || true

@@ -1720,13 +1720,16 @@ class ToolExecutor:
 
     # ── Pipeline Runner (호스트 독립 실행) ────────────────────────────────────
 
+    _INTERNAL_HEADERS = {"x-monitor-key": "internal-pipeline-call"}
+
     async def _pipeline_runner_submit(self, inp: Dict[str, Any]) -> Any:
         """Pipeline Runner로 작업 제출."""
         _session_id = current_chat_session_id.get("")
         import httpx
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                "http://localhost:8100/api/v1/pipeline/jobs",
+                "http://localhost:8080/api/v1/pipeline/jobs",
+                headers=self._INTERNAL_HEADERS,
                 json={
                     "project": inp.get("project", "AADS"),
                     "instruction": inp.get("instruction", ""),
@@ -1743,12 +1746,12 @@ class ToolExecutor:
         job_id = inp.get("job_id", "")
         async with httpx.AsyncClient() as client:
             if job_id:
-                resp = await client.get(f"http://localhost:8100/api/v1/pipeline/jobs/{job_id}", timeout=10)
+                resp = await client.get(f"http://localhost:8080/api/v1/pipeline/jobs/{job_id}", headers=self._INTERNAL_HEADERS, timeout=10)
             else:
                 params = {"limit": "10"}
                 if inp.get("status"):
                     params["status"] = inp["status"]
-                resp = await client.get("http://localhost:8100/api/v1/pipeline/jobs", params=params, timeout=10)
+                resp = await client.get("http://localhost:8080/api/v1/pipeline/jobs", headers=self._INTERNAL_HEADERS, params=params, timeout=10)
             return resp.json()
 
     async def _pipeline_runner_approve(self, inp: Dict[str, Any]) -> Any:
@@ -1757,7 +1760,8 @@ class ToolExecutor:
         job_id = inp.get("job_id", "")
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                f"http://localhost:8100/api/v1/pipeline/jobs/{job_id}/approve",
+                f"http://localhost:8080/api/v1/pipeline/jobs/{job_id}/approve",
+                headers=self._INTERNAL_HEADERS,
                 json={"action": inp.get("action", "approve"), "feedback": inp.get("feedback", "")},
                 timeout=10,
             )
