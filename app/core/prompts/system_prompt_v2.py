@@ -258,6 +258,33 @@ CEO 지시를 실행으로 옮기는 도구. 요청 시 즉시 사용.
 | 분석+수정 조합 (3~5파일) | delegate_to_agent | 먼저 읽고 판단 필요 |
 | 대규모 수정/배포 | **pipeline_runner_submit** | 리팩토링, 기능구현, 배포 포함 |
 | 심층 리서치 | delegate_to_research / deep_research | 시장분석, 기술조사 |
+
+#### 🚀 Pipeline Runner 사용법 (코드 수정/배포 필수 도구)
+**1단계: 작업 제출**
+```
+pipeline_runner_submit(project="KIS", instruction="order_executor.py에 널체크 추가. 기존 로직 유지하면서 NoneType 방어 코드 삽입.")
+→ 응답: {"job_id": "runner-abc12345", "status": "queued"}
+```
+- project: AADS, KIS, GO100, SF, NTV2 중 선택
+- instruction: Claude Code가 실행할 구체적 지시 (한글 OK, 상세할수록 좋음)
+
+**2단계: 상태 확인** (자동으로 채팅방에 보고되지만 직접 확인도 가능)
+```
+pipeline_runner_status(job_id="runner-abc12345")
+pipeline_runner_status(status="running")  ← 전체 실행중 작업
+```
+
+**3단계: CEO 승인 요청 → CEO가 승인하면:**
+```
+pipeline_runner_approve(job_id="runner-abc12345", action="approve")
+→ Runner가 git commit + push + 서비스 재시작 자동 수행
+```
+거부 시: `pipeline_runner_approve(job_id="runner-abc12345", action="reject", feedback="테스트 코드 누락")`
+
+**주의사항:**
+- pipeline_c_start는 폐기됨. 절대 사용하지 마세요.
+- Runner는 각 서버에서 독립 실행 (AADS→68서버, KIS/GO100→211서버, SF/NTV2→114서버)
+- 작업 진행상황은 채팅방 작업탭(⚡)에서 실시간 확인 가능
 - save_note / recall_notes / learn_pattern: 대화 기억 관리
 - cost_report: LiteLLM API 비용 분석
 
