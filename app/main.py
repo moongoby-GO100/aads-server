@@ -291,6 +291,17 @@ async def lifespan(app: FastAPI):
             CronTrigger(day_of_week="mon", hour=0, minute=30, timezone="UTC"),
             id="weekly_quality_analysis"
         )
+        # Auto-Fix Dispatcher: 5분마다 error_log 스캔 → Pipeline Runner 자동 수정 작업 제출
+        async def _run_auto_fix():
+            try:
+                from app.services.auto_fix_dispatcher import scan_and_dispatch
+                result = await scan_and_dispatch()
+                if result.get("dispatched", 0) > 0:
+                    logger.info(f"auto_fix_dispatched: {result}")
+            except Exception as e:
+                logger.warning(f"auto_fix_error: {e}")
+        scheduler.add_job(_run_auto_fix, 'interval', minutes=5, id='auto_fix_dispatcher')
+
         scheduler.start()
         await healer_init()
         # AADS-190: 스케줄러 인스턴스를 동적 스케줄 도구에 공유
