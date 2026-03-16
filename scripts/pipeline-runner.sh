@@ -22,10 +22,23 @@ MAX_RUNTIME="${MAX_RUNTIME:-7200}"           # 작업 최대 실행 시간 (초,
 LOG_DIR="/var/log/aads-pipeline"
 ARTIFACT_DIR="/tmp/aads_pipeline_artifacts"
 
+# Claude Code API 키 — 기존 Pipeline C와 동일 방식
+# ~/.claude/api_keys.env에서 CURRENT_ACCOUNT에 따라 키 선택
+source ~/.claude/api_keys.env 2>/dev/null || true
+if [[ "${CURRENT_ACCOUNT:-1}" == "2" && -n "${API_KEY_2:-}" ]]; then
+    export ANTHROPIC_API_KEY="$API_KEY_2"
+elif [[ -n "${API_KEY_1:-}" ]]; then
+    export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-$API_KEY_1}"
+fi
+export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LANGUAGE=en_US:en MANPATH=
+
 # 프로젝트별 workdir 매핑
 declare -A PROJECT_WORKDIR=(
     ["AADS"]="/root/aads/aads-server"
     ["KIS"]="/root/webapp"
+    ["GO100"]="/root/go100"
+    ["SF"]="/data/shortflow"
+    ["NTV2"]="/srv/newtalk-v2"
 )
 
 # SSH 접속이 필요한 원격 프로젝트
@@ -41,16 +54,39 @@ mkdir -p "$LOG_DIR" "$ARTIFACT_DIR"
 # ── 유틸리티 ──────────────────────────────────────────────────────────
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_DIR/runner.log"; }
 
+# DB 접속 방식: 로컬(docker exec) vs 원격(psql 직접)
+DB_MODE="${DB_MODE:-auto}"  # auto | docker | psql
 PG_CONTAINER="${PG_CONTAINER:-aads-postgres}"
 
+_init_db_mode() {
+    if [[ "$DB_MODE" == "auto" ]]; then
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "$PG_CONTAINER"; then
+            DB_MODE="docker"
+        else
+            DB_MODE="psql"
+        fi
+    fi
+    log "DB_MODE=$DB_MODE (PG=${PGHOST}:${PGPORT})"
+}
+
 db_exec() {
-    docker exec "$PG_CONTAINER" psql -U "$PGUSER" -d "$PGDATABASE" \
-         -t -A -c "$1" 2>/dev/null
+    if [[ "$DB_MODE" == "docker" ]]; then
+        docker exec "$PG_CONTAINER" psql -U "$PGUSER" -d "$PGDATABASE" \
+             -t -A -c "$1" 2>/dev/null
+    else
+        PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
+             -t -A -c "$1" 2>/dev/null
+    fi
 }
 
 db_update() {
-    docker exec "$PG_CONTAINER" psql -U "$PGUSER" -d "$PGDATABASE" \
-         -c "$1" >/dev/null 2>&1
+    if [[ "$DB_MODE" == "docker" ]]; then
+        docker exec "$PG_CONTAINER" psql -U "$PGUSER" -d "$PGDATABASE" \
+             -c "$1" >/dev/null 2>&1
+    else
+        PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
+             -c "$1" >/dev/null 2>&1
+    fi
 }
 
 # 채팅방에 메시지 전송 (aads-server가 표시)
@@ -202,14 +238,29 @@ deploy_job() {
 
 # ── 메인 루프 ─────────────────────────────────────────────────────────
 main() {
+    _init_db_mode
     log "═══ Pipeline Runner 시작 (poll=${POLL_INTERVAL}s, max_runtime=${MAX_RUNTIME}s) ═══"
+
+    # 이 Runner가 처리할 프로젝트 (쉼표 구분, 비어있으면 전체)
+    local project_filter=""
+    if [[ -n "${RUNNER_PROJECTS:-}" ]]; then
+        # RUNNER_PROJECTS="AADS,KIS" → "AND project IN ('AADS','KIS')"
+        local _pf=""
+        IFS=',' read -ra _projects <<< "$RUNNER_PROJECTS"
+        for _p in "${_projects[@]}"; do
+            [[ -n "$_pf" ]] && _pf="$_pf,"
+            _pf="$_pf'$_p'"
+        done
+        project_filter="AND project IN ($_pf)"
+        log "프로젝트 필터: $RUNNER_PROJECTS"
+    fi
 
     while true; do
         # 1) pending(queued) 작업 감지
         local pending
         pending=$(db_exec "SELECT job_id, project, instruction, chat_session_id, max_cycles
                            FROM pipeline_jobs
-                           WHERE status='queued' AND phase='queued'
+                           WHERE status='queued' AND phase='queued' $project_filter
                            ORDER BY created_at ASC LIMIT 1;" 2>/dev/null) || true
 
         if [[ -n "$pending" ]]; then
@@ -223,7 +274,7 @@ main() {
         local approved
         approved=$(db_exec "SELECT job_id, project, chat_session_id
                             FROM pipeline_jobs
-                            WHERE status='approved' AND phase='awaiting_approval'
+                            WHERE status='approved' AND phase='awaiting_approval' $project_filter
                             ORDER BY updated_at ASC LIMIT 1;" 2>/dev/null) || true
 
         if [[ -n "$approved" ]]; then

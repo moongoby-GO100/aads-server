@@ -22,7 +22,9 @@ Environment=PGDATABASE=aads
 Environment=PGPASSWORD=aads_dev_local
 Environment=POLL_INTERVAL=5
 Environment=MAX_RUNTIME=7200
+Environment=RUNNER_PROJECTS=AADS
 Environment=PATH=/root/.nvm/versions/node/v20.20.0/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/root
 
 # 리소스 제한
 LimitNOFILE=65535
