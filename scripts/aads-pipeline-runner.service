@@ -14,19 +14,15 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=aads-pipeline-runner
 
-# 환경변수
-Environment=PGHOST=localhost
-Environment=PGPORT=5433
-Environment=PGUSER=aads
-Environment=PGDATABASE=aads
-Environment=PGPASSWORD=aads_dev_local
+# 민감정보는 별도 파일에서 로드 (H2: 하드코딩 제거)
+EnvironmentFile=-/root/.config/aads-runner.env
 Environment=POLL_INTERVAL=5
 Environment=MAX_RUNTIME=7200
+Environment=MAX_RETRIES=2
 Environment=RUNNER_PROJECTS=AADS
-Environment=PATH=/root/.nvm/versions/node/v20.20.0/bin:/usr/local/bin:/usr/bin:/bin
 Environment=HOME=/root
+Environment=PATH=/root/.nvm/versions/node/v20.20.0/bin:/usr/local/bin:/usr/bin:/bin
 
-# 리소스 제한
 LimitNOFILE=65535
 TimeoutStopSec=30
 

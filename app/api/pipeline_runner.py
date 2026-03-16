@@ -1,28 +1,46 @@
 """
-Pipeline Runner API — DB 기반 작업 제출/승인/조회.
+Pipeline Runner API v2 — DB 기반 작업 제출/승인/조회.
 
-호스트의 pipeline-runner.sh가 DB를 폴링하여 작업을 실행.
-aads-server는 제출/승인/상태 조회만 담당.
+보안: 입력 검증(H6), 파라미터화 쿼리(C1), JWT 인증(C2 — main.py 미들웨어)
 """
 from __future__ import annotations
 
+import re
 import uuid
-from datetime import datetime, timezone
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field, field_validator
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
 
+# H6 + M4: 허용 프로젝트 화이트리스트
+_VALID_PROJECTS = {"AADS", "KIS", "GO100", "SF", "NTV2"}
+_UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+_JOB_ID_RE = re.compile(r'^runner-[0-9a-f]{8}$')
+
 
 class JobSubmitRequest(BaseModel):
-    project: str = Field(..., description="프로젝트 코드 (AADS, KIS 등)")
-    instruction: str = Field(..., description="Claude Code에 전달할 지시")
+    project: str = Field(..., description="프로젝트 코드")
+    instruction: str = Field(..., max_length=50000, description="Claude Code에 전달할 지시")
     session_id: Optional[str] = Field(None, description="채팅 세션 ID (보고용)")
-    max_cycles: int = Field(3, description="최대 검수 사이클")
+    max_cycles: int = Field(3, ge=1, le=10, description="최대 검수 사이클")
+
+    @field_validator('project')
+    @classmethod
+    def validate_project(cls, v):
+        if v not in _VALID_PROJECTS:
+            raise ValueError(f"허용 프로젝트: {', '.join(sorted(_VALID_PROJECTS))}")
+        return v
+
+    @field_validator('session_id')
+    @classmethod
+    def validate_session_id(cls, v):
+        if v and not _UUID_RE.match(v):
+            raise ValueError("session_id는 UUID 형식이어야 합니다")
+        return v
 
 
 class JobSubmitResponse(BaseModel):
@@ -33,7 +51,14 @@ class JobSubmitResponse(BaseModel):
 
 class JobApproveRequest(BaseModel):
     action: str = Field(..., description="approve 또는 reject")
-    feedback: str = Field("", description="피드백 (reject 시)")
+    feedback: str = Field("", max_length=2000, description="피드백")
+
+    @field_validator('action')
+    @classmethod
+    def validate_action(cls, v):
+        if v not in ("approve", "reject"):
+            raise ValueError("action은 approve 또는 reject만 가능")
+        return v
 
 
 @router.post("/pipeline/jobs", response_model=JobSubmitResponse, tags=["pipeline-runner"])
@@ -45,7 +70,6 @@ async def submit_job(req: JobSubmitRequest):
     job_id = f"runner-{uuid.uuid4().hex[:8]}"
     session_id = req.session_id or ""
 
-    # 세션 ID가 없으면 프로젝트 워크스페이스의 최근 세션 사용
     if not session_id:
         try:
             async with pool.acquire() as conn:
@@ -75,21 +99,21 @@ async def submit_job(req: JobSubmitRequest):
             )
     except Exception as e:
         logger.error("pipeline_runner.submit_fail", error=str(e))
-        raise HTTPException(status_code=500, detail=f"작업 저장 실패: {e}")
+        raise HTTPException(status_code=500, detail="작업 저장 실패")
 
     logger.info("pipeline_runner.job_submitted", job_id=job_id, project=req.project)
     return JobSubmitResponse(
         job_id=job_id,
         status="queued",
-        message=f"작업이 대기열에 추가되었습니다. Runner가 곧 실행합니다.",
+        message="작업이 대기열에 추가되었습니다. Runner가 곧 실행합니다.",
     )
 
 
 @router.get("/pipeline/jobs", tags=["pipeline-runner"])
 async def list_jobs(
-    status: Optional[str] = None,
-    project: Optional[str] = None,
-    limit: int = 20,
+    status: Optional[str] = Query(None, max_length=30),
+    project: Optional[str] = Query(None, max_length=10),
+    limit: int = Query(20, ge=1, le=100),
 ):
     """작업 목록 조회."""
     from app.core.db_pool import get_pool
@@ -104,6 +128,8 @@ async def list_jobs(
         params.append(status)
         idx += 1
     if project:
+        if project not in _VALID_PROJECTS:
+            raise HTTPException(status_code=400, detail="유효하지 않은 프로젝트")
         conditions.append(f"project = ${idx}")
         params.append(project)
         idx += 1
@@ -141,6 +167,9 @@ async def list_jobs(
 @router.get("/pipeline/jobs/{job_id}", tags=["pipeline-runner"])
 async def get_job(job_id: str):
     """작업 상세 조회."""
+    if not _JOB_ID_RE.match(job_id) and not job_id.startswith("pc-"):
+        raise HTTPException(status_code=400, detail="유효하지 않은 job_id 형식")
+
     from app.core.db_pool import get_pool
     pool = get_pool()
 
@@ -171,11 +200,13 @@ async def get_job(job_id: str):
 @router.post("/pipeline/jobs/{job_id}/approve", tags=["pipeline-runner"])
 async def approve_or_reject(job_id: str, req: JobApproveRequest):
     """작업 승인/거부 — Runner가 감지하여 배포 또는 롤백."""
+    if not _JOB_ID_RE.match(job_id) and not job_id.startswith("pc-"):
+        raise HTTPException(status_code=400, detail="유효하지 않은 job_id 형식")
+
     from app.core.db_pool import get_pool
     pool = get_pool()
 
     async with pool.acquire() as conn:
-        # 원자적 상태 전이
         result = await conn.execute(
             """
             UPDATE pipeline_jobs

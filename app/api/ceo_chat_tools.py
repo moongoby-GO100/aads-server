@@ -2916,14 +2916,21 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             return resp.text
     elif name == "pipeline_runner_status":
         import httpx
+        from urllib.parse import quote
         job_id = params.get("job_id", "")
         if job_id:
-            url = f"http://localhost:8100/api/v1/pipeline/jobs/{job_id}"
+            url = f"http://localhost:8100/api/v1/pipeline/jobs/{quote(job_id, safe='')}"
         else:
-            status = params.get("status", "")
-            url = f"http://localhost:8100/api/v1/pipeline/jobs?status={status}&limit=10"
+            status_val = params.get("status", "")
+            url = f"http://localhost:8100/api/v1/pipeline/jobs"
+            _qp = {"limit": "10"}
+            if status_val:
+                _qp["status"] = status_val
         async with httpx.AsyncClient() as client:
-            resp = await client.get(url, timeout=10)
+            if job_id:
+                resp = await client.get(url, timeout=10)
+            else:
+                resp = await client.get(url, params=_qp, timeout=10)
             return resp.text
     elif name == "pipeline_runner_approve":
         import httpx

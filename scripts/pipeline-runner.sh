@@ -1,29 +1,34 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════
-# AADS Pipeline Runner — 호스트 독립 실행기
+# AADS Pipeline Runner v2 — 호스트 독립 실행기
 #
 # DB(pipeline_jobs)에서 pending 작업을 감지하여 Claude Code CLI로 실행.
 # aads-server 재시작과 완전히 독립. systemd로 관리.
 #
-# Usage: systemctl start aads-pipeline-runner
+# 보안: C1(SQL인젝션방지), C3(크래시복구), C4(원자적Job클레임),
+#       H3(임시파일정리), H4(승인타임아웃), H5(재시도)
 # ═══════════════════════════════════════════════════════════════════════
-set -euo pipefail
+set -eo pipefail
 
 # ── 설정 ──────────────────────────────────────────────────────────────
 PGHOST="${PGHOST:-localhost}"
 PGPORT="${PGPORT:-5433}"
 PGUSER="${PGUSER:-aads}"
 PGDATABASE="${PGDATABASE:-aads}"
-PGPASSWORD="${PGPASSWORD:-aads_dev_local}"
+# 비밀번호는 EnvironmentFile에서 로드 (systemd)
+PGPASSWORD="${PGPASSWORD:-}"
 export PGPASSWORD
 
-POLL_INTERVAL="${POLL_INTERVAL:-5}"          # DB 폴링 간격 (초)
-MAX_RUNTIME="${MAX_RUNTIME:-7200}"           # 작업 최대 실행 시간 (초, 2시간)
+POLL_INTERVAL="${POLL_INTERVAL:-5}"
+MAX_RUNTIME="${MAX_RUNTIME:-7200}"
+MAX_RETRIES="${MAX_RETRIES:-2}"               # H5: Claude 실패 시 재시도 횟수
+APPROVAL_TIMEOUT_HOURS="${APPROVAL_TIMEOUT_HOURS:-24}"  # H4: 승인 대기 타임아웃
+ARTIFACT_MAX_AGE_HOURS="${ARTIFACT_MAX_AGE_HOURS:-24}"  # H3: 임시파일 보존 시간
 LOG_DIR="/var/log/aads-pipeline"
 ARTIFACT_DIR="/tmp/aads_pipeline_artifacts"
+RUNNER_HOSTNAME=$(hostname -s)
 
-# Claude Code API 키 — 기존 Pipeline C와 동일 방식
-# ~/.claude/api_keys.env에서 CURRENT_ACCOUNT에 따라 키 선택
+# Claude Code API 키 — ~/.claude/api_keys.env에서 로드
 source ~/.claude/api_keys.env 2>/dev/null || true
 if [[ "${CURRENT_ACCOUNT:-1}" == "2" && -n "${API_KEY_2:-}" ]]; then
     export ANTHROPIC_API_KEY="$API_KEY_2"
@@ -41,21 +46,16 @@ declare -A PROJECT_WORKDIR=(
     ["NTV2"]="/srv/newtalk-v2"
 )
 
-# SSH 접속이 필요한 원격 프로젝트
-declare -A PROJECT_SSH=(
-    ["GO100"]="211.188.51.113:/root/go100"
-    ["SF"]="114.207.244.86:7916:/data/shortflow"
-    ["NTV2"]="114.207.244.86:7916:/srv/newtalk-v2"
-    ["KIS_211"]="211.188.51.113:/root/webapp"
-)
+# 프로젝트별 허용 목록 (M4: 화이트리스트 검증)
+VALID_PROJECTS="AADS KIS GO100 SF NTV2"
 
 mkdir -p "$LOG_DIR" "$ARTIFACT_DIR"
 
 # ── 유틸리티 ──────────────────────────────────────────────────────────
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_DIR/runner.log"; }
 
-# DB 접속 방식: 로컬(docker exec) vs 원격(psql 직접)
-DB_MODE="${DB_MODE:-auto}"  # auto | docker | psql
+# DB 접속 방식
+DB_MODE="${DB_MODE:-auto}"
 PG_CONTAINER="${PG_CONTAINER:-aads-postgres}"
 
 _init_db_mode() {
@@ -66,106 +66,153 @@ _init_db_mode() {
             DB_MODE="psql"
         fi
     fi
-    log "DB_MODE=$DB_MODE (PG=${PGHOST}:${PGPORT})"
+    log "DB_MODE=$DB_MODE host=$RUNNER_HOSTNAME"
+}
+
+_psql_cmd() {
+    if [[ "$DB_MODE" == "docker" ]]; then
+        docker exec "$PG_CONTAINER" psql -U "$PGUSER" -d "$PGDATABASE" "$@"
+    else
+        PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
+    fi
 }
 
 db_exec() {
-    if [[ "$DB_MODE" == "docker" ]]; then
-        docker exec "$PG_CONTAINER" psql -U "$PGUSER" -d "$PGDATABASE" \
-             -t -A -c "$1" 2>/dev/null
-    else
-        PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
-             -t -A -c "$1" 2>/dev/null
-    fi
+    _psql_cmd -t -A -c "$1" 2>/dev/null
 }
 
 db_update() {
-    if [[ "$DB_MODE" == "docker" ]]; then
-        docker exec "$PG_CONTAINER" psql -U "$PGUSER" -d "$PGDATABASE" \
-             -c "$1" >/dev/null 2>&1
-    else
-        PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
-             -c "$1" >/dev/null 2>&1
-    fi
+    _psql_cmd -c "$1" >/dev/null 2>&1
 }
 
-# 채팅방에 메시지 전송 (aads-server가 표시)
+# C1: SQL 안전 — dollar-quoting (내부에 $esc$가 없는 한 안전)
+sql_escape() {
+    local val="$1"
+    # $esc$ 토큰이 포함되면 제거 (인젝션 방지)
+    val="${val//\$esc\$/}"
+    echo "\$esc\$${val}\$esc\$"
+}
+
+# C1: 채팅방 메시지 — session_id는 UUID 포맷 검증
 post_to_chat() {
     local session_id="$1" content="$2"
-    # content에서 작은따옴표 이스케이프
-    content="${content//\'/\'\'}"
+    # UUID 포맷 검증 (C1: SQL 인젝션 방지)
+    if [[ ! "$session_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+        log "  WARN: invalid session_id, skip chat post"
+        return 0
+    fi
+    local safe_content
+    safe_content=$(sql_escape "$content")
     db_update "INSERT INTO chat_messages (id, session_id, role, content, created_at)
                VALUES (gen_random_uuid(), '${session_id}'::uuid, 'assistant',
-                       '${content}', NOW());"
+                       ${safe_content}, NOW());" || true
+}
+
+# C4: 원자적 Job 클레임 — UPDATE ... RETURNING으로 동시 실행 방지
+claim_queued_job() {
+    local filter="$1"
+    db_exec "UPDATE pipeline_jobs SET status='claimed', updated_at=NOW()
+             WHERE job_id = (
+                SELECT job_id FROM pipeline_jobs
+                WHERE status='queued' AND phase='queued' $filter
+                ORDER BY created_at ASC LIMIT 1
+                FOR UPDATE SKIP LOCKED
+             )
+             RETURNING job_id, project, instruction, chat_session_id, max_cycles;"
+}
+
+claim_approved_job() {
+    local filter="$1"
+    db_exec "UPDATE pipeline_jobs SET status='deploying', phase='deploying', updated_at=NOW()
+             WHERE job_id = (
+                SELECT job_id FROM pipeline_jobs
+                WHERE status='approved' $filter
+                ORDER BY updated_at ASC LIMIT 1
+                FOR UPDATE SKIP LOCKED
+             )
+             RETURNING job_id, project, chat_session_id;"
 }
 
 # ── 작업 실행 ─────────────────────────────────────────────────────────
 run_job() {
     local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5"
-    local workdir="" output_file="$ARTIFACT_DIR/${job_id}.out" err_file="$ARTIFACT_DIR/${job_id}.err"
+    local output_file="$ARTIFACT_DIR/${job_id}.out" err_file="$ARTIFACT_DIR/${job_id}.err"
 
-    log "▶ START job=$job_id project=$project"
+    # M4: 프로젝트 화이트리스트 검증
+    if [[ ! " $VALID_PROJECTS " =~ " $project " ]]; then
+        log "  ERROR: invalid project '$project'"
+        db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+                   result_output='허용되지 않은 프로젝트', updated_at=NOW()
+                   WHERE job_id='${job_id}';"
+        return 1
+    fi
 
-    # 상태 업데이트: running
+    local workdir="${PROJECT_WORKDIR[$project]:-}"
+    if [[ -z "$workdir" || ! -d "$workdir" ]]; then
+        log "  ERROR: workdir not found for $project"
+        db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+                   result_output=$(sql_escape "workdir 없음: ${workdir:-unknown}"),
+                   updated_at=NOW() WHERE job_id='${job_id}';"
+        return 1
+    fi
+
+    log "▶ START job=$job_id project=$project workdir=$workdir"
     db_update "UPDATE pipeline_jobs SET status='running', phase='claude_code_work',
                updated_at=NOW() WHERE job_id='${job_id}';"
     post_to_chat "$session_id" "🔧 [Pipeline Runner] 작업 시작: ${instruction:0:200}"
 
-    # workdir 결정
-    workdir="${PROJECT_WORKDIR[$project]:-}"
-    if [[ -z "$workdir" ]]; then
-        log "  ERROR: unknown project $project"
-        db_update "UPDATE pipeline_jobs SET status='error', phase='error',
-                   result_output='알 수 없는 프로젝트: ${project}', updated_at=NOW()
-                   WHERE job_id='${job_id}';"
-        post_to_chat "$session_id" "❌ 알 수 없는 프로젝트: ${project}"
-        return 1
-    fi
+    # H5: 재시도 루프
+    local attempt=0 exit_code=0
+    while [[ $attempt -le $MAX_RETRIES ]]; do
+        exit_code=0
+        cd "$workdir"
 
-    if [[ ! -d "$workdir" ]]; then
-        log "  ERROR: workdir not found: $workdir"
-        db_update "UPDATE pipeline_jobs SET status='error', phase='error',
-                   result_output='workdir 없음: ${workdir}', updated_at=NOW()
-                   WHERE job_id='${job_id}';"
-        return 1
-    fi
+        # H6: instruction 크기 제한 (50KB)
+        local safe_instruction="${instruction:0:50000}"
 
-    # ── Phase 1: Claude Code 실행 ────────────────────────────────────
-    local exit_code=0
-    cd "$workdir"
+        timeout "$MAX_RUNTIME" claude -p --output-format text "$safe_instruction" \
+            > "$output_file" 2> "$err_file" || exit_code=$?
 
-    # Claude Code 실행 (타임아웃 적용)
-    timeout "$MAX_RUNTIME" claude -p --output-format text "$instruction" \
-        > "$output_file" 2> "$err_file" || exit_code=$?
+        if [[ $exit_code -eq 0 ]]; then
+            break
+        fi
+
+        attempt=$((attempt + 1))
+        if [[ $attempt -le $MAX_RETRIES ]]; then
+            local wait_sec=$((2 ** attempt))
+            log "  RETRY job=$job_id attempt=$attempt/$MAX_RETRIES wait=${wait_sec}s exit=$exit_code"
+            sleep "$wait_sec"
+        fi
+    done
 
     local output=""
     [[ -f "$output_file" ]] && output=$(head -c 50000 "$output_file")
 
     if [[ $exit_code -ne 0 ]]; then
-        log "  FAIL job=$job_id exit=$exit_code"
+        log "  FAIL job=$job_id exit=$exit_code attempts=$((attempt))"
         local err_content=""
         [[ -f "$err_file" ]] && err_content=$(tail -c 2000 "$err_file")
         db_update "UPDATE pipeline_jobs SET status='error', phase='error',
-                   result_output=$(psql_escape "$output"),
-                   review_feedback=$(psql_escape "exit=$exit_code: $err_content"),
+                   result_output=$(sql_escape "$output"),
+                   review_feedback=$(sql_escape "exit=$exit_code (${attempt}회 시도): $err_content"),
                    updated_at=NOW() WHERE job_id='${job_id}';"
-        post_to_chat "$session_id" "❌ [Pipeline Runner] 작업 실패 (exit=$exit_code): ${err_content:0:500}"
+        post_to_chat "$session_id" "❌ [Pipeline Runner] 작업 실패 (exit=$exit_code, ${attempt}회 시도): ${err_content:0:500}"
+        _cleanup_artifacts "$job_id"
         return 1
     fi
 
     log "  DONE Phase1 job=$job_id"
 
-    # ── Phase 2: git diff 캡처 ───────────────────────────────────────
+    # git diff 캡처
     local git_diff=""
     git_diff=$(cd "$workdir" && git diff HEAD 2>/dev/null | head -c 50000) || true
 
     db_update "UPDATE pipeline_jobs SET phase='awaiting_approval',
                status='awaiting_approval',
-               result_output=$(psql_escape "$output"),
-               git_diff=$(psql_escape "$git_diff"),
+               result_output=$(sql_escape "$output"),
+               git_diff=$(sql_escape "$git_diff"),
                updated_at=NOW() WHERE job_id='${job_id}';"
 
-    # 승인 요청
     local diff_summary="${git_diff:0:3000}"
     post_to_chat "$session_id" "🔔 [Pipeline Runner] 작업 완료 — CEO 승인 대기
 
@@ -175,35 +222,32 @@ run_job() {
 ${diff_summary}
 \`\`\`
 
-승인하려면 채팅에서 'approve ${job_id}' 또는 API 호출하세요."
+승인: pipeline_runner_approve(job_id='${job_id}', action='approve')"
 
     log "  AWAITING_APPROVAL job=$job_id"
+    _cleanup_artifacts "$job_id"
 }
 
-# SQL 안전 이스케이프 (psql dollar-quote)
-psql_escape() {
-    local val="$1"
-    # dollar-quoting으로 안전하게 감싸기
-    echo "\$esc\$${val}\$esc\$"
+# H3: 임시파일 정리
+_cleanup_artifacts() {
+    local job_id="$1"
+    rm -f "$ARTIFACT_DIR/${job_id}.out" "$ARTIFACT_DIR/${job_id}.err" 2>/dev/null || true
 }
 
 # ── 승인된 작업 배포 ──────────────────────────────────────────────────
 deploy_job() {
     local job_id="$1" project="$2" session_id="$3"
     local workdir="${PROJECT_WORKDIR[$project]:-}"
-
-    [[ -z "$workdir" ]] && return 1
+    [[ -z "$workdir" || ! -d "$workdir" ]] && return 1
 
     log "▶ DEPLOY job=$job_id project=$project"
-    db_update "UPDATE pipeline_jobs SET phase='deploying', updated_at=NOW()
-               WHERE job_id='${job_id}';"
+    post_to_chat "$session_id" "🚀 [Pipeline Runner] 배포 시작: $job_id"
 
     cd "$workdir"
 
     # git commit + push
-    local commit_msg="Pipeline-Runner: ${job_id}"
     git add -u 2>/dev/null || true
-    git commit -m "$commit_msg" --no-verify 2>/dev/null || true
+    git commit -m "Pipeline-Runner: ${job_id}" 2>/dev/null || true
     git push 2>/dev/null || true
 
     # 서비스 재시작 (프로젝트별)
@@ -213,7 +257,10 @@ deploy_job() {
             sleep 5
             ;;
         KIS)
-            # KIS는 별도 재시작 불필요 (uvicorn --reload)
+            # uvicorn --reload
+            ;;
+        GO100)
+            # uvicorn --reload
             ;;
     esac
 
@@ -221,30 +268,63 @@ deploy_job() {
     local health_ok="unknown"
     case "$project" in
         AADS)
-            if curl -s -o /dev/null -w "%{http_code}" http://localhost:8100/api/v1/health | grep -q 200; then
-                health_ok="OK"
-            else
-                health_ok="FAIL"
-            fi
+            curl -sf -o /dev/null http://localhost:8100/api/v1/health && health_ok="OK" || health_ok="FAIL"
+            ;;
+        KIS)
+            curl -sf -o /dev/null http://211.188.51.113:8080/health && health_ok="OK" || health_ok="FAIL"
             ;;
     esac
 
     db_update "UPDATE pipeline_jobs SET status='done', phase='done',
-               review_feedback=COALESCE(review_feedback,'') || E'\n[배포완료] health=${health_ok}',
+               review_feedback=COALESCE(review_feedback,'') || E'\n[배포완료] health=${health_ok} by=${RUNNER_HOSTNAME}',
                updated_at=NOW() WHERE job_id='${job_id}';"
     post_to_chat "$session_id" "✅ [Pipeline Runner] 배포 완료 (health=${health_ok})"
     log "  DEPLOYED job=$job_id health=$health_ok"
 }
 
+# C3: 크래시 복구 — 시작 시 stuck 작업 정리
+_recover_stuck_jobs() {
+    local filter="$1"
+    # running/claimed 상태가 30분 이상 된 작업 → error로 전환
+    local stuck
+    stuck=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='error',
+                     review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 크래시 복구] ${RUNNER_HOSTNAME}',
+                     updated_at=NOW()
+                     WHERE status IN ('running','claimed')
+                       AND updated_at < NOW() - INTERVAL '30 minutes'
+                       $filter
+                     RETURNING job_id;" 2>/dev/null) || true
+    if [[ -n "$stuck" ]]; then
+        log "  RECOVERED stuck jobs: $stuck"
+    fi
+
+    # H4: 승인 대기 타임아웃
+    local expired
+    expired=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='error',
+                       review_feedback=COALESCE(review_feedback,'') || E'\n[승인 타임아웃 ${APPROVAL_TIMEOUT_HOURS}h]',
+                       updated_at=NOW()
+                       WHERE status='awaiting_approval'
+                         AND updated_at < NOW() - INTERVAL '${APPROVAL_TIMEOUT_HOURS} hours'
+                         $filter
+                       RETURNING job_id;" 2>/dev/null) || true
+    if [[ -n "$expired" ]]; then
+        log "  EXPIRED approval-timeout jobs: $expired"
+    fi
+}
+
+# H3: 오래된 임시파일 정리
+_cleanup_old_artifacts() {
+    find "$ARTIFACT_DIR" -type f -mmin +$((ARTIFACT_MAX_AGE_HOURS * 60)) -delete 2>/dev/null || true
+}
+
 # ── 메인 루프 ─────────────────────────────────────────────────────────
 main() {
     _init_db_mode
-    log "═══ Pipeline Runner 시작 (poll=${POLL_INTERVAL}s, max_runtime=${MAX_RUNTIME}s) ═══"
+    log "═══ Pipeline Runner v2 시작 (poll=${POLL_INTERVAL}s, max_runtime=${MAX_RUNTIME}s, retries=${MAX_RETRIES}) ═══"
 
-    # 이 Runner가 처리할 프로젝트 (쉼표 구분, 비어있으면 전체)
+    # 프로젝트 필터 구성
     local project_filter=""
     if [[ -n "${RUNNER_PROJECTS:-}" ]]; then
-        # RUNNER_PROJECTS="AADS,KIS" → "AND project IN ('AADS','KIS')"
         local _pf=""
         IFS=',' read -ra _projects <<< "$RUNNER_PROJECTS"
         for _p in "${_projects[@]}"; do
@@ -255,33 +335,38 @@ main() {
         log "프로젝트 필터: $RUNNER_PROJECTS"
     fi
 
+    # C3: 시작 시 stuck 작업 복구
+    _recover_stuck_jobs "$project_filter"
+
+    local _cycle=0
     while true; do
-        # 1) pending(queued) 작업 감지
+        # 1) queued 작업 원자적 클레임 (C4)
         local pending
-        pending=$(db_exec "SELECT job_id, project, instruction, chat_session_id, max_cycles
-                           FROM pipeline_jobs
-                           WHERE status='queued' AND phase='queued' $project_filter
-                           ORDER BY created_at ASC LIMIT 1;" 2>/dev/null) || true
+        pending=$(claim_queued_job "$project_filter" 2>/dev/null) || true
 
         if [[ -n "$pending" ]]; then
             IFS='|' read -r job_id project instruction session_id max_cycles <<< "$pending"
-            if [[ -n "$job_id" ]]; then
-                run_job "$job_id" "$project" "$instruction" "$session_id" "$max_cycles" || true
+            if [[ -n "$job_id" && -n "$project" ]]; then
+                run_job "$job_id" "$project" "$instruction" "$session_id" "${max_cycles:-3}" || true
             fi
         fi
 
-        # 2) approved 작업 감지 (CEO가 승인한 것)
+        # 2) approved 작업 원자적 클레임 (C4)
         local approved
-        approved=$(db_exec "SELECT job_id, project, chat_session_id
-                            FROM pipeline_jobs
-                            WHERE status='approved' AND phase='awaiting_approval' $project_filter
-                            ORDER BY updated_at ASC LIMIT 1;" 2>/dev/null) || true
+        approved=$(claim_approved_job "$project_filter" 2>/dev/null) || true
 
         if [[ -n "$approved" ]]; then
             IFS='|' read -r job_id project session_id <<< "$approved"
-            if [[ -n "$job_id" ]]; then
+            if [[ -n "$job_id" && -n "$project" ]]; then
                 deploy_job "$job_id" "$project" "$session_id" || true
             fi
+        fi
+
+        # 주기적 정리 (60 cycle = ~5분마다)
+        _cycle=$((_cycle + 1))
+        if (( _cycle % 60 == 0 )); then
+            _recover_stuck_jobs "$project_filter"
+            _cleanup_old_artifacts
         fi
 
         sleep "$POLL_INTERVAL"
@@ -289,8 +374,16 @@ main() {
 }
 
 # ── 시그널 핸들링 ────────────────────────────────────────────────────
+_current_job_id=""
 cleanup() {
-    log "═══ Pipeline Runner 종료 ═══"
+    log "═══ Pipeline Runner v2 종료 ═══"
+    # 현재 실행 중인 작업이 있으면 error로 마킹
+    if [[ -n "$_current_job_id" ]]; then
+        db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+                   review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 종료로 중단]',
+                   updated_at=NOW() WHERE job_id='${_current_job_id}' AND status='running';" || true
+        log "  Marked $_current_job_id as error (runner shutdown)"
+    fi
     exit 0
 }
 trap cleanup SIGTERM SIGINT
