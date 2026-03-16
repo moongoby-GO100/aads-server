@@ -451,23 +451,30 @@ async def _stream_anthropic(
             }
             tool_calls_made.append(tu.name)
 
-            # tool 실행 중 5초마다 heartbeat yield (SSE 타임아웃 방지)
-            # 개별 도구 120초 타임아웃 (deep_research/spawn_subagent는 600초)
+            # 도구 실행 — 별도 asyncio.Task + Event 기반 heartbeat (P0-FIX: shield→Event 전환)
+            # asyncio.shield 패턴 대신 Event + done_callback으로 도구 블로킹과 heartbeat 완전 분리
             _LONG_TOOLS = {"deep_research", "deep_crawl", "spawn_subagent", "spawn_parallel_subagents", "pipeline_c_execute"}
             _tool_timeout = 600 if tu.name in _LONG_TOOLS else 120
+            _HB_TOOL_SEC = 8.0  # heartbeat 간격 (초)
             task = asyncio.create_task(executor.execute(tu.name, tu.input))
             _tool_start = __import__("time").monotonic()
-            while not task.done():
+
+            # Event 기반: 도구 완료 시 콜백으로 이벤트 설정 → heartbeat 루프 즉시 탈출
+            _tool_done_evt = asyncio.Event()
+            task.add_done_callback(lambda _: _tool_done_evt.set())
+
+            while not _tool_done_evt.is_set():
                 try:
-                    await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+                    await asyncio.wait_for(_tool_done_evt.wait(), timeout=_HB_TOOL_SEC)
+                    break  # 도구 완료 신호 수신
                 except asyncio.TimeoutError:
                     yield {"type": "heartbeat"}
-                    # 도구 실행 타임아웃 체크
-                    if __import__("time").monotonic() - _tool_start > _tool_timeout:
+                    _elapsed = __import__("time").monotonic() - _tool_start
+                    if _elapsed > _tool_timeout:
                         task.cancel()
                         logger.warning(f"tool_timeout: {tu.name} exceeded {_tool_timeout}s, cancelled")
                         break
-                except Exception:
+                except (asyncio.CancelledError, Exception):
                     break
             try:
                 result_str = task.result() if task.done() and not task.cancelled() else json.dumps({"error": f"tool execution timeout ({_tool_timeout}s)", "tool": tu.name})
@@ -531,12 +538,9 @@ async def _stream_anthropic(
                     "다른 접근 방식을 시도하거나, 현재까지의 결과를 정리하여 응답하세요. "
                     "동일한 도구를 같은 방식으로 반복 호출하지 마세요."
                 )
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tu.id,
-                    "content": _err_msg,
-                    "is_error": True,
-                })
+                # L-08: 중복 tool_use_id 방지 — 기존 결과 교체
+                tool_results[-1]["content"] = _err_msg
+                tool_results[-1]["is_error"] = True
                 logger.warning(f"error_circuit_breaker: consecutive={_consecutive_errors}, total={_total_errors}, tool={tu.name}, turn={_turn}")
                 break  # 이 턴의 남은 도구 실행 스킵
             elif _consecutive_errors >= _eff_warn:
@@ -563,8 +567,17 @@ async def _stream_anthropic(
                 pass
 
         # 메시지에 AI 응답 + 도구 결과 추가
+        # L-07: SDK ContentBlock → dict 직렬화 (재전송 안정성)
+        _serialized = []
+        for _blk in (final_msg.content if isinstance(final_msg.content, list) else [final_msg.content]):
+            if hasattr(_blk, "model_dump"):
+                _serialized.append(_blk.model_dump())
+            elif isinstance(_blk, dict):
+                _serialized.append(_blk)
+            else:
+                _serialized.append({"type": "text", "text": str(_blk)})
         current_messages = current_messages + [
-            {"role": "assistant", "content": final_msg.content},
+            {"role": "assistant", "content": _serialized},
             {"role": "user", "content": tool_results},
         ]
 

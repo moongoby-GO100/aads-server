@@ -155,7 +155,7 @@ async def search_semantic(pool: Any, query: Any, session_id: Optional[str] = Non
             "id": str(r["id"]),
             "role": r["role"],
             "content": r["content"][:500],
-            "created_at": r["created_at"].isoformat(),
+            "created_at": r["created_at"],
             "session_name": r["session_name"],
             "similarity": round(float(r["similarity"]), 4),
         }

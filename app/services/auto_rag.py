@@ -269,7 +269,10 @@ async def _search_chat_messages(query_emb: list, session_id: str) -> List[Dict]:
             session_name = r.get("session_name", "")
             ts = ""
             if r.get("created_at"):
-                ts = r["created_at"].strftime("%m/%d") if hasattr(r["created_at"], "strftime") else str(r["created_at"])[:10]
+                try:
+                    ts = r["created_at"].strftime("%m/%d")
+                except (AttributeError, TypeError):
+                    ts = str(r["created_at"])[:10]
 
             output.append({
                 "source": f"대화({session_name[:20]})" if session_name else "대화",
