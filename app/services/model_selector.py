@@ -119,9 +119,9 @@ async def call_stream(
             break
         yield event
     if _had_error:
-        # Claude 3회 재시도 실패 → Gemini 3 Flash로 폴백 (도구 미지원 경량 모드)
-        _fallback_prompt = system_prompt + "\n\n[SYSTEM] 현재 Gemini 폴백 모드입니다. 도구(tool) 호출이 불가능합니다. <tool_call> XML을 텍스트로 작성하지 마세요. 도구 없이 답변 가능한 범위에서만 응답하세요."
-        yield {"type": "delta", "content": f"[Claude API 재시도 3회 실패 → Gemini 전환: {_error_content[:80]}]\n\n"}
+        # Claude 3회 재시도 실패 → Gemini로 폴백 (도구 포함)
+        _fallback_prompt = system_prompt + "\n\n[SYSTEM] Claude API 장애로 Gemini로 전환되었습니다. 동일한 도구를 사용할 수 있습니다. 정확한 데이터 기반으로 답변하세요."
+        yield {"type": "delta", "content": f"[Claude 일시 장애 → Gemini 전환]\n\n"}
         # error_log에 기록
         try:
             from app.core.db_pool import get_pool
@@ -135,7 +135,8 @@ async def call_stream(
                 )
         except Exception as _log_err:
             logger.warning(f"error_log insert failed: {_log_err}")
-        async for event in _stream_litellm("gemini-3-flash-preview", _fallback_prompt, messages):
+        # Gemini도 도구 사용 가능 — LiteLLM function calling 지원
+        async for event in _stream_litellm("gemini-3-flash-preview", _fallback_prompt, messages, tools=tools):
             yield event
 
 
@@ -161,8 +162,9 @@ async def _stream_litellm(
     model: str,
     system_prompt: str,
     messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    """LiteLLM 프록시를 통한 스트리밍."""
+    """LiteLLM 프록시를 통한 스트리밍 (Gemini function calling 지원)."""
     # messages에서 기존 system role 제거 후 새 system 프롬프트 추가
     clean_msgs = [m for m in messages if m.get("role") != "system"]
     # Anthropic content 블록 → OpenAI 포맷 변환 (이미지 포함 시)
@@ -191,6 +193,21 @@ async def _stream_litellm(
                 "stream": True,
                 **extra_params,
             }
+            # Gemini function calling — OpenAI 포맷 tools 전달
+            if tools:
+                _oai_tools = []
+                for t in tools:
+                    if t.get("input_schema"):
+                        _oai_tools.append({
+                            "type": "function",
+                            "function": {
+                                "name": t["name"],
+                                "description": t.get("description", ""),
+                                "parameters": t["input_schema"],
+                            }
+                        })
+                if _oai_tools:
+                    req_body["tools"] = _oai_tools
             async with client.stream(
                 "POST",
                 f"{LITELLM_BASE_URL}/chat/completions",
@@ -213,11 +230,35 @@ async def _stream_litellm(
                     except Exception:
                         continue
 
-                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    choice = chunk.get("choices", [{}])[0]
+                    delta = choice.get("delta", {})
+                    finish_reason = choice.get("finish_reason", "")
+
                     text = delta.get("content", "")
                     if text:
                         full_text += text
                         yield {"type": "delta", "content": text}
+
+                    # Gemini function call 응답 처리
+                    _tool_calls = delta.get("tool_calls", [])
+                    for _tc in _tool_calls:
+                        _fn = _tc.get("function", {})
+                        _fn_name = _fn.get("name", "")
+                        _fn_args = _fn.get("arguments", "{}")
+                        if _fn_name:
+                            try:
+                                import json as _j
+                                _args = _j.loads(_fn_args) if isinstance(_fn_args, str) else _fn_args
+                                # 실제 도구 실행
+                                from app.api.ceo_chat_tools import execute_tool as _exec_tool
+                                _tool_result = await _exec_tool(_fn_name, _args, "", "")
+                                yield {"type": "tool_use", "tool_name": _fn_name, "tool_use_id": _tc.get("id", ""), "tool_input": _args}
+                                yield {"type": "tool_result", "tool_name": _fn_name, "content": str(_tool_result)[:3000]}
+                                # 도구 결과를 텍스트로 AI에게 다시 전달하지 않음 (단일 턴)
+                                # 대신 결과를 직접 yield하여 프론트에 표시
+                            except Exception as _te:
+                                logger.warning(f"gemini_tool_call_error: {_fn_name}: {_te}")
+                                yield {"type": "delta", "content": f"\n[도구 {_fn_name} 실행 실패: {str(_te)[:100]}]\n"}
 
                     # 토큰 집계 (usage 포함 시)
                     usage = chunk.get("usage", {})
