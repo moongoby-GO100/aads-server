@@ -199,6 +199,7 @@ run_job() {
                    updated_at=NOW() WHERE job_id='${job_id}';"
         post_to_chat "$session_id" "❌ [Pipeline Runner] 작업 실패 (exit=$exit_code, ${attempt}회 시도): ${err_content:0:500}"
         _cleanup_artifacts "$job_id"
+        _notify_ai "$job_id"
         return 1
     fi
 
@@ -227,6 +228,19 @@ ${diff_summary}
 
     log "  AWAITING_APPROVAL job=$job_id"
     _cleanup_artifacts "$job_id"
+
+    # 채팅AI 자동 반응 트리거 — AI가 결과 확인 후 CEO에게 보고
+    _notify_ai "$job_id"
+}
+
+# 채팅AI 자동 반응 트리거 — 작업 완료/실패 시 AI가 결과를 확인·검수·조치
+_notify_ai() {
+    local job_id="$1"
+    # aads-server의 notify API 호출 (백그라운드, 실패해도 무시)
+    curl -4 -sf -X POST "http://127.0.0.1:8100/api/v1/pipeline/jobs/${job_id}/notify" \
+         -H "x-monitor-key: internal" \
+         --max-time 5 >/dev/null 2>&1 &
+    log "  NOTIFY_AI job=$job_id"
 }
 
 # H3: 임시파일 정리
@@ -281,6 +295,9 @@ deploy_job() {
                updated_at=NOW() WHERE job_id='${job_id}';"
     post_to_chat "$session_id" "✅ [Pipeline Runner] 배포 완료 (health=${health_ok})"
     log "  DEPLOYED job=$job_id health=$health_ok"
+
+    # 채팅AI 자동 반응 트리거
+    _notify_ai "$job_id"
 }
 
 # C3: 크래시 복구 — 시작 시 stuck 작업 정리
