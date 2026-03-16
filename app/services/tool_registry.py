@@ -846,7 +846,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     },
     "web_search": {
         "name": "web_search",
-        "description": "통합 웹 검색 (Google Gemini → Naver → Kakao 자동 폴백). engine=auto(기본)/all/google/naver/kakao 선택 가능.",
+        "description": "스마트 듀얼 웹 검색. 한국어 쿼리→Google+Naver 동시 검색, 영어→Google 단독. engine=auto(스마트)/all(3개동시)/google/naver/kakao 선택 가능.",
         "input_schema": {
             "type": "object",
             "properties": {

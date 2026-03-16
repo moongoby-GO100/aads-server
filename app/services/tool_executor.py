@@ -473,8 +473,13 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e)}
 
+    def _is_korean(self, text: str) -> bool:
+        """한국어 포함 여부 판정."""
+        korean_count = sum(1 for c in text if '\uac00' <= c <= '\ud7a3' or '\u3131' <= c <= '\u318e')
+        return korean_count >= len(text) * 0.1 or korean_count >= 2
+
     async def _web_search(self, inp: Dict[str, Any]) -> Any:
-        """통합 웹 검색 — Gemini Google → Naver → Kakao 순 폴백 체인."""
+        """스마트 듀얼 검색 — 한국어: Google+Naver 동시, 영어: Google 단독."""
         query = inp.get("query", "")
         count = inp.get("count", 5)
         engine = inp.get("engine", "auto")  # auto|google|naver|kakao|all
@@ -482,42 +487,73 @@ class ToolExecutor:
         if not query:
             return {"error": "query 필수"}
 
+        # 명시 지정 시 해당 엔진만
         if engine == "all":
             return await self._web_search_all(query, count)
+        if engine in ("google", "naver", "kakao"):
+            return await self._web_search_single(inp, engine)
 
-        result = {"error": "search failed", "citations": []}
+        # auto: 스마트 듀얼 — 한국어면 Google+Naver 동시, 영어면 Google만
+        if self._is_korean(query):
+            # 한국어: Google + Naver 동시 검색
+            results = await asyncio.gather(
+                self._web_search_google(inp),
+                self._web_search_naver(inp),
+                return_exceptions=True,
+            )
+            merged_text = []
+            merged_citations = []
+            engines_ok = []
+            for name, r in zip(["google", "naver"], results):
+                if isinstance(r, Exception) or (isinstance(r, dict) and r.get("error")):
+                    continue
+                engines_ok.append(name)
+                if isinstance(r, dict):
+                    merged_text.append(f"【{name.upper()}】\n{r.get('text', '')}")
+                    merged_citations.extend(r.get("citations", []))
 
-        if engine in ("google", "auto"):
-            try:
-                result = await self._web_search_google(inp)
-                if not result.get("error"):
-                    return result
-            except Exception:
-                pass
-            if engine == "google":
-                return result
-
-        if engine in ("naver", "auto"):
-            try:
-                result = await self._web_search_naver(inp)
-                if not result.get("error"):
-                    return result
-            except Exception:
-                pass
-            if engine == "naver":
-                return result
-
-        if engine in ("kakao", "auto"):
+            if merged_text:
+                return {
+                    "text": "\n\n".join(merged_text),
+                    "citations": merged_citations,
+                    "engines_used": engines_ok,
+                }
+            # 둘 다 실패 → Kakao 폴백
             try:
                 result = await self._web_search_kakao(inp)
                 if not result.get("error"):
                     return result
             except Exception:
                 pass
-            if engine == "kakao":
-                return result
+            return {"error": "모든 검색 엔진 실패", "query": query}
+        else:
+            # 영어: Google 단독 → 실패 시 Naver 폴백
+            try:
+                result = await self._web_search_google(inp)
+                if not result.get("error"):
+                    return result
+            except Exception:
+                pass
+            try:
+                result = await self._web_search_naver(inp)
+                if not result.get("error"):
+                    return result
+            except Exception:
+                pass
+            return {"error": "모든 검색 엔진 실패", "query": query}
 
-        return {"error": "모든 검색 엔진 실패", "query": query}
+    async def _web_search_single(self, inp: Dict[str, Any], engine: str) -> Any:
+        """단일 엔진 검색."""
+        try:
+            if engine == "google":
+                return await self._web_search_google(inp)
+            elif engine == "naver":
+                return await self._web_search_naver(inp)
+            elif engine == "kakao":
+                return await self._web_search_kakao(inp)
+        except Exception as e:
+            return {"error": str(e), "engine": engine}
+        return {"error": f"알 수 없는 엔진: {engine}"}
 
     async def _web_search_all(self, query: str, count: int = 5) -> Any:
         """3개 검색 엔진 병렬 실행 → 통합 결과."""
