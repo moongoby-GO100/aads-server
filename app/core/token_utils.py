@@ -55,9 +55,14 @@ from decimal import Decimal
 
 # Model pricing per 1M tokens (input_rate, output_rate) in USD
 COST_MAP: dict[str, tuple[float, float]] = {
-    "claude-opus": (15.0, 75.0),
+    # Claude — Anthropic 공식 가격 (per 1M tokens)
+    "claude-opus": (5.0, 25.0),
+    "claude-opus-4-6": (5.0, 25.0),
     "claude-sonnet": (3.0, 15.0),
-    "claude-haiku": (0.25, 1.25),
+    "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-haiku": (0.80, 4.0),
+    "claude-haiku-4-5": (0.80, 4.0),
+    # Gemini
     "gemini-flash": (0.075, 0.3),
     "gemini-flash-lite": (0.01, 0.04),
     "gemini-pro": (1.25, 5.0),

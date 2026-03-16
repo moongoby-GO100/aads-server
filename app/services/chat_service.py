@@ -37,7 +37,7 @@ async def with_heartbeat(
     a lightweight ``{"type": "heartbeat"}`` SSE line is emitted so that
     Cloudflare(100s)/Nginx/frontend can keep the connection alive.
 
-    interval=8s → Cloudflare 100s 유휴 타임아웃 대비 충분한 여유.
+    interval=5s → Cloudflare 100s 유휴 타임아웃 대비 충분한 여유 (P0-FIX: 8s→5s).
     """
     HEARTBEAT = f'data: {json.dumps({"type": "heartbeat"})}\n\n'
     ait = gen.__aiter__()
@@ -221,7 +221,7 @@ async def with_background_completion(
                 _streaming_state[session_id]["completed_at"] = _bg_time.monotonic()
 
                 async def _delayed_cleanup(sid: str):
-                    await _heartbeat_asyncio.sleep(90)
+                    await _heartbeat_asyncio.sleep(300)  # 90s→300s: 장시간 도구 실행 후 just_completed 감지 여유
                     _streaming_state.pop(sid, None)
                     logger.debug(f"streaming_state_cleaned session={sid[:8]}")
 
@@ -237,34 +237,54 @@ async def with_background_completion(
     task = _heartbeat_asyncio.create_task(_producer())
     _active_bg_tasks[session_id] = task
 
-    # ── 독립 heartbeat task ──────────────────────────────────────────
-    # 도구 실행(30s+)이 generator를 block해도 heartbeat가 끊기지 않도록
-    # producer와 별개의 asyncio.Task에서 8초마다 heartbeat를 queue에 직접 투입.
-    _HB_INTERVAL = 8.0
+    # ── 독립 heartbeat task (P0-FIX: 도구 실행 30s+ 시에도 연결 유지) ──────
+    # producer/도구 블로킹과 완전 분리된 asyncio.Task에서 5초마다 heartbeat 전송.
+    # 3중 안전장치: (1) heartbeat_pump → queue, (2) consumer timeout → 직접 yield,
+    # (3) pump 비정상 종료 시 자동 재시작.
+    _HB_INTERVAL = 8.0  # P0-FIX: 도구 실행 heartbeat와 동일 간격 (8초)
     _HB_LINE = f'data: {json.dumps({"type": "heartbeat"})}\n\n'
 
     async def _heartbeat_pump():
-        """독립 heartbeat — producer/도구 블로킹과 무관하게 8초마다 queue에 heartbeat 삽입."""
+        """독립 heartbeat — producer/도구 블로킹과 무관하게 5초마다 queue에 heartbeat 삽입.
+        도구 실행 중에는 tool_count/last_tool 포함 → 프론트 timeout 리셋 + 진행상황 표시."""
         while not _hb_stop.is_set():
             try:
                 await _heartbeat_asyncio.wait_for(_hb_stop.wait(), timeout=_HB_INTERVAL)
                 break  # stop 신호 수신 → 정상 종료
             except _heartbeat_asyncio.TimeoutError:
-                # 8초 경과, stop 미수신 → heartbeat 전송
+                # 5초 경과, stop 미수신 → heartbeat 전송
                 if _client_gone:
                     break  # 클라이언트 이탈 시 heartbeat 불필요
                 try:
-                    queue.put_nowait(_HB_LINE)
+                    # P0-FIX: 도구 실행 중이면 tool 정보 포함 → 프론트 timeout 리셋 유도
+                    _tc = state.get("tool_count", 0)
+                    _lt = state.get("last_tool", "")
+                    if _tc > 0 and _lt:
+                        _hb_data = f'data: {json.dumps({"type": "heartbeat", "tool_count": _tc, "last_tool": _lt})}\n\n'
+                    else:
+                        _hb_data = _HB_LINE
+                    queue.put_nowait(_hb_data)
                 except Exception:
                     pass
+            except Exception as _hb_exc:
+                # P0-FIX: 예상치 못한 예외로 pump 죽지 않도록 방어
+                logger.warning(f"heartbeat_pump_error session={session_id[:8]}: {_hb_exc}")
+                await _heartbeat_asyncio.sleep(1)  # 짧은 대기 후 재시도
         logger.debug(f"heartbeat_pump_done session={session_id[:8]}")
 
     hb_task = _heartbeat_asyncio.create_task(_heartbeat_pump())
+
+    # P0-FIX: 초기 heartbeat 즉시 전송 — 연결 수립 직후 SSE 채널 활성화 확인
+    yield _HB_LINE
 
     # Consumer: Queue에서 읽어서 yield — 클라이언트 disconnect 시 자연스럽게 종료
     # queue.get()에 timeout을 걸어 heartbeat_pump 실패 시에도 직접 heartbeat 전송 (이중 안전)
     try:
         while True:
+            # P0-FIX: pump 비정상 종료 감지 → 자동 재시작
+            if hb_task.done() and not _hb_stop.is_set() and not _client_gone:
+                logger.warning(f"heartbeat_pump_died session={session_id[:8]}, restarting")
+                hb_task = _heartbeat_asyncio.create_task(_heartbeat_pump())
             try:
                 item = await _heartbeat_asyncio.wait_for(queue.get(), timeout=_HB_INTERVAL)
             except _heartbeat_asyncio.TimeoutError:
@@ -554,13 +574,18 @@ def get_streaming_status(session_id: str) -> Optional[Dict[str, Any]]:
     if session_id in _streaming_state:
         s = _streaming_state[session_id]
         is_completed = s.get("completed", False)
-        return {
+        result = {
             "is_streaming": not is_completed,
             "just_completed": is_completed,
             "content_length": len(s.get("content", "")),
             "tool_count": s.get("tool_count", 0),
             "last_tool": s.get("last_tool", ""),
         }
+        # P1-FIX: just_completed=True 반환 후 즉시 state 제거 (one-shot)
+        # → 프론트의 반복 reload 방지 (기존: 90초간 매 폴링마다 중복 reload)
+        if is_completed:
+            _streaming_state.pop(session_id, None)
+        return result
     if session_id in _active_bg_tasks and not _active_bg_tasks[session_id].done():
         return {"is_streaming": True, "just_completed": False, "content_length": 0, "tool_count": 0, "last_tool": ""}
     # 스트리밍 없음: 명시적 False 반환 → 프론트 폴링 즉시 중단
@@ -2262,7 +2287,10 @@ async def export_artifact(artifact_id: str, fmt: str) -> Dict[str, Any]:
         body = f"# {artifact.get('title', 'Artifact')}\n\n{content}"
         mime = "text/markdown"
     elif fmt == "html":
-        body = f"<html><body><h1>{artifact.get('title', 'Artifact')}</h1><pre>{content}</pre></body></html>"
+        import html as _html_mod
+        _t = _html_mod.escape(artifact.get('title', 'Artifact'))
+        _c = _html_mod.escape(content)
+        body = f"<html><body><h1>{_t}</h1><pre>{_c}</pre></body></html>"
         mime = "text/html"
     else:
         # pdf: 텍스트로 반환 (실제 PDF 변환은 별도 라이브러리 필요)
@@ -2361,7 +2389,7 @@ async def get_research_cache(topic: str, days: int = 7) -> Optional[Dict[str, An
               AND created_at >= NOW() - ($2 || ' days')::INTERVAL
             ORDER BY created_at DESC LIMIT 1
             """,
-            f"%{topic}%",
+            f"%{topic.replace(chr(92), chr(92)*2).replace('%', chr(92)+'%').replace('_', chr(92)+'_')}%",
             str(days),
         )
         return _row_to_dict(row) if row else None

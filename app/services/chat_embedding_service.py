@@ -25,7 +25,7 @@ async def embed_texts(texts: List[str]) -> List[List[float]]:
     """
     api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
     if not api_key:
-        logger.debug("[ChatEmbed] GEMINI_API_KEY 없음 — dummy 임베딩")
+        logger.warning("[ChatEmbed] GEMINI_API_KEY 없음 — 시맨틱 검색 비활성화 (dummy 임베딩)")
         return [_dummy_embedding(t) for t in texts]
 
     try:
@@ -75,7 +75,7 @@ async def embed_and_store_message(pool: Any, message_id: str, content: str) -> N
         embedding = embeddings[0]
         async with pool.acquire() as conn:
             await conn.execute(
-                "UPDATE chat_messages SET embedding = $1 WHERE id = $2",
+                "UPDATE chat_messages SET embedding = $1::vector WHERE id = $2",
                 str(embedding), message_id,
             )
         logger.debug(f"[ChatEmbed] 메시지 {message_id[:8]}... 임베딩 저장 완료")

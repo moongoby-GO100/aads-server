@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # ── 환경 설정 ────────────────────────────────────────────────────────
-FULL_INSERT_MAX_TOKENS = int(os.getenv("DOCUMENT_FULL_INSERT_MAX_TOKENS", "60000"))
+FULL_INSERT_MAX_TOKENS = int(os.getenv("DOCUMENT_FULL_INSERT_MAX_TOKENS", "30000"))
 CHUNK_MAX_TOKENS = int(os.getenv("DOCUMENT_CHUNK_MAX_TOKENS", "15000"))
 
 # 지원 텍스트 확장자

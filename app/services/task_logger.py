@@ -39,13 +39,19 @@ def unsubscribe(task_id: str, q: asyncio.Queue) -> None:
             del _subscribers[task_id]
 
 
+_seq_numbers: Dict[str, int] = defaultdict(int)
+
+
 def _broadcast(task_id: str, event: dict) -> None:
-    """모든 구독자에게 이벤트 전달."""
+    """모든 구독자에게 이벤트 전달 (시퀀스 번호 포함)."""
+    seq = _seq_numbers[task_id]
+    _seq_numbers[task_id] = seq + 1
+    event["seq"] = seq
     for q in _subscribers.get(task_id, []):
         try:
             q.put_nowait(event)
         except asyncio.QueueFull:
-            pass  # 느린 소비자는 스킵
+            logger.warning(f"[TaskLog] Queue full task={task_id} seq={seq} dropped")
 
 
 async def emit_task_log(
@@ -109,13 +115,6 @@ async def emit_task_started(
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     _broadcast(task_id, event)
-    # 전체 구독자에게도 (session 레벨)
-    for q_list in _subscribers.values():
-        for q in q_list:
-            try:
-                q.put_nowait(event)
-            except asyncio.QueueFull:
-                pass
 
 
 async def emit_task_completed(
