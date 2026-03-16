@@ -2934,10 +2934,11 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             return resp.text
     elif name == "pipeline_runner_approve":
         import httpx
+        from urllib.parse import quote
         job_id = params.get("job_id", "")
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                f"http://localhost:8100/api/v1/pipeline/jobs/{job_id}/approve",
+                f"http://localhost:8100/api/v1/pipeline/jobs/{quote(job_id, safe='')}/approve",
                 json={"action": params.get("action", "approve"), "feedback": params.get("feedback", "")},
                 timeout=10,
             )
