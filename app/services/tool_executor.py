@@ -3,6 +3,8 @@ AADS-186A: 도구 실행기 — Anthropic Tool Use API 도구 실행
 10초 타임아웃, 결과 2000토큰(~6000자) 제한 (기본값, 실제 25,000 토큰 허용).
 신규 워크플로우 도구: inspect_service, get_all_service_status, generate_directive
 """
+from __future__ import annotations
+
 import asyncio
 import contextvars
 import json

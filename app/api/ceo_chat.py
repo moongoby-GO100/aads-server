@@ -33,16 +33,16 @@ from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Tuple
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from anthropic import AsyncAnthropic, APIStatusError
+from anthropic import APIStatusError
 from app.config import Settings
+from app.core.anthropic_client import get_client
 
 logger = logging.getLogger(__name__)
 settings = Settings()
 
-# ─── Anthropic 클라이언트 (1차/2차 키) ──────────────────────────────────────
-anthropic_client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY.get_secret_value())
-_api_key_2 = settings.ANTHROPIC_API_KEY_2.get_secret_value()
-anthropic_client_2: Optional[AsyncAnthropic] = AsyncAnthropic(api_key=_api_key_2) if _api_key_2 else None
+# ─── Anthropic 클라이언트 (LiteLLM 프록시 경유) ──────────────────────────────
+anthropic_client = get_client()
+anthropic_client_2 = get_client()  # 2차 키도 동일 LiteLLM 경유
 
 # ─── OpenAI 클라이언트 (옵션) ─────────────────────────────────────────────
 openai_client = None
