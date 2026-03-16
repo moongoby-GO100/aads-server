@@ -3065,20 +3065,25 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
                 timeout=10,
             )
             return resp.text
-    # ── Pipeline C 도구 (레거시) ──────────────────────────────────────────
+    # ── Pipeline C → Runner 자동 리다이렉트 ─────────────────────────────
     elif name == "pipeline_c_start":
-        # 명시적 chat_session_id 우선, 없으면 ContextVar 폴백
+        # Pipeline C는 폐기됨 — Runner로 자동 전환
+        logger.warning(f"pipeline_c_start called but redirecting to Runner: project={params.get('project')}")
         from app.services.tool_executor import current_chat_session_id
         _sid = chat_session_id or current_chat_session_id.get("")
-        logger.info(f"[DIAG] execute_tool(pipeline_c_start): session_id='{_sid}' (explicit={chat_session_id}, cv={current_chat_session_id.get('')})")
-        return await tool_pipeline_c_start(
-            params.get("project", ""),
-            params.get("instruction", ""),
-            params.get("max_cycles", 3),
-            dsn,
-            chat_session_id=_sid,
-            model=params.get("model", ""),
-        )
+        import httpx
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "http://localhost:8100/api/v1/pipeline/jobs",
+                json={
+                    "project": params.get("project", "AADS"),
+                    "instruction": params.get("instruction", ""),
+                    "session_id": _sid,
+                    "max_cycles": int(params.get("max_cycles", 3)),
+                },
+                timeout=10,
+            )
+            return f"[자동전환] pipeline_c_start → Pipeline Runner로 전환됨.\n{resp.text}"
     elif name == "pipeline_c_status":
         return await tool_pipeline_c_status(params.get("job_id", ""))
     elif name == "pipeline_c_approve":

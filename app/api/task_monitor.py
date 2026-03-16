@@ -20,23 +20,38 @@ async def get_active_tasks(session_id: str = Query(default="")):
         from app.core.db_pool import get_pool
         pool = get_pool()
         async with pool.acquire() as conn:
-            # Pipeline Runner + Legacy C (pipeline_jobs), Runner는 job_id가 'runner-'로 시작
-            _pj_filter = "WHERE chat_session_id = $1 AND" if session_id else "WHERE"
-            _pj_params = [session_id] if session_id else []
-            pc_rows = await conn.fetch(
-                f"""
-                SELECT job_id AS task_id, project, instruction AS title,
-                       CASE WHEN job_id LIKE 'runner-%' THEN 'runner' ELSE 'pipeline_c' END AS pipeline,
-                       phase, status, created_at, updated_at
-                FROM pipeline_jobs
-                {_pj_filter} (status IN ('running','awaiting_approval','queued','claimed','approved')
-                     OR updated_at > NOW() - interval '1 hour')
-                ORDER BY created_at DESC
-                LIMIT 20
-                """,
-                *_pj_params,
-            )
-            # Pipeline B (directive_lifecycle)
+            # Pipeline Runner + Legacy C (pipeline_jobs)
+            if session_id:
+                # 해당 세션 작업만 + 활성 전체
+                pc_rows = await conn.fetch(
+                    """
+                    SELECT job_id AS task_id, project, instruction AS title,
+                           CASE WHEN job_id LIKE 'runner-%' THEN 'runner' ELSE 'pipeline_c' END AS pipeline,
+                           phase, status, created_at, updated_at
+                    FROM pipeline_jobs
+                    WHERE (chat_session_id = $1
+                           OR status IN ('running','claimed','queued'))
+                      AND (status IN ('running','awaiting_approval','queued','claimed','approved')
+                           OR updated_at > NOW() - interval '1 hour')
+                    ORDER BY created_at DESC
+                    LIMIT 20
+                    """,
+                    session_id,
+                )
+            else:
+                pc_rows = await conn.fetch(
+                    """
+                    SELECT job_id AS task_id, project, instruction AS title,
+                           CASE WHEN job_id LIKE 'runner-%' THEN 'runner' ELSE 'pipeline_c' END AS pipeline,
+                           phase, status, created_at, updated_at
+                    FROM pipeline_jobs
+                    WHERE status IN ('running','awaiting_approval','queued','claimed','approved')
+                       OR updated_at > NOW() - interval '1 hour'
+                    ORDER BY created_at DESC
+                    LIMIT 20
+                    """,
+                )
+            # Pipeline B (directive_lifecycle) — 활성 작업만 (전체 세션 공유)
             pb_rows = await conn.fetch(
                 """
                 SELECT task_id, project,
@@ -46,9 +61,9 @@ async def get_active_tasks(session_id: str = Query(default="")):
                 FROM directive_lifecycle
                 WHERE executor = 'autonomous_executor'
                   AND (status = 'in_progress'
-                       OR completed_at > NOW() - interval '30 minutes')
+                       OR completed_at > NOW() - interval '10 minutes')
                 ORDER BY created_at DESC
-                LIMIT 20
+                LIMIT 10
                 """,
             )
 
