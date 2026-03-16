@@ -1,0 +1,32 @@
+[Unit]
+Description=AADS Pipeline Runner — DB-driven Claude Code executor
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/aads/aads-server
+ExecStart=/root/aads/aads-server/scripts/pipeline-runner.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aads-pipeline-runner
+
+# 환경변수
+Environment=PGHOST=localhost
+Environment=PGPORT=5433
+Environment=PGUSER=aads
+Environment=PGDATABASE=aads
+Environment=PGPASSWORD=aads_dev_local
+Environment=POLL_INTERVAL=5
+Environment=MAX_RUNTIME=7200
+Environment=PATH=/root/.nvm/versions/node/v20.20.0/bin:/usr/local/bin:/usr/bin:/bin
+
+# 리소스 제한
+LimitNOFILE=65535
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
