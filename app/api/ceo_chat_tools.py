@@ -250,6 +250,220 @@ TOOL_DEFINITIONS: List[Dict] = [
             "required": ["project", "file_path"],
         },
     },
+    # ── 이미지/팩트체크/검색/샌드박스/알림 도구 ──────────────────────────────
+    {
+        "name": "generate_image",
+        "description": "이미지 생성 (Imagen 4.0 / GPT-Image-1). 프롬프트로 이미지 생성 후 URL 반환.\n예: generate_image(prompt='한국 전통 한옥 마을 일러스트', size='1024x1024')",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "생성할 이미지 설명 프롬프트",
+                },
+                "size": {
+                    "type": "string",
+                    "description": "이미지 크기 (기본: 1024x1024)",
+                    "default": "1024x1024",
+                },
+            },
+            "required": ["prompt"],
+        },
+    },
+    {
+        "name": "fact_check",
+        "description": "팩트체크 (DB + 웹 교차검증). 주장의 사실 여부를 검증하고 근거 반환.\n예: fact_check(claim='삼성전자 2025년 매출이 300조를 넘었다')",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "claim": {
+                    "type": "string",
+                    "description": "검증할 주장 또는 사실",
+                },
+            },
+            "required": ["claim"],
+        },
+    },
+    {
+        "name": "fact_check_multiple",
+        "description": "다건 팩트체크. 여러 주장을 한 번에 교차검증.\n예: fact_check_multiple(claims=['주장1', '주장2'])",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "claims": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "검증할 주장 목록",
+                },
+            },
+            "required": ["claims"],
+        },
+    },
+    {
+        "name": "gemini_grounding_search",
+        "description": "Gemini 실시간 팩트 검색 (Google Search grounding). 질문에 대해 근거 있는 답변 + 출처 반환.\n예: gemini_grounding_search(query='현재 코스피 지수는?')",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "검색할 질문",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "추가 컨텍스트 (선택)",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "execute_sandbox",
+        "description": "Docker 격리 환경에서 코드 실행. Python/JavaScript/Bash 지원. 타임아웃 최대 60초.\n예: execute_sandbox(code='print(2+2)', language='python')",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "실행할 코드",
+                },
+                "language": {
+                    "type": "string",
+                    "description": "언어 (python, javascript, bash)",
+                    "enum": ["python", "javascript", "bash"],
+                    "default": "python",
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "타임아웃 초 (기본: 30, 최대: 60)",
+                    "default": 30,
+                },
+            },
+            "required": ["code"],
+        },
+    },
+    {
+        "name": "send_telegram",
+        "description": "CEO 텔레그램 알림 전송. 즉시 메시지 발송.\n예: send_telegram(message='배포 완료: AADS v2.1')",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "전송할 메시지 내용",
+                },
+            },
+            "required": ["message"],
+        },
+    },
+    {
+        "name": "search_kakao",
+        "description": "카카오 검색 API. 웹/블로그/카페 검색.\n예: search_kakao(query='FastAPI 배포 가이드', search_type='web')",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "검색어",
+                },
+                "search_type": {
+                    "type": "string",
+                    "description": "검색 유형 (web, blog, cafe)",
+                    "enum": ["web", "blog", "cafe"],
+                    "default": "web",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "search_naver",
+        "description": "네이버 검색 API. 웹/블로그/뉴스/지식iN/백과/이미지/쇼핑 검색.\n예: search_naver(query='삼성전자 실적', search_type='news')",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "검색어",
+                },
+                "search_type": {
+                    "type": "string",
+                    "description": "검색 유형 (webkr, blog, news, kin, encyc, image, shop)",
+                    "enum": ["webkr", "blog", "news", "kin", "encyc", "image", "shop"],
+                    "default": "webkr",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "search_naver_multi",
+        "description": "네이버 다중 검색. 여러 검색 유형을 동시에 실행하여 종합 결과 반환.\n예: search_naver_multi(query='코스피 전망', types=['news', 'blog', 'webkr'])",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "검색어",
+                },
+                "types": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "검색 유형 목록 (기본: ['webkr', 'news', 'blog'])",
+                    "default": ["webkr", "news", "blog"],
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "visual_qa_test",
+        "description": "UI 비주얼 QA 테스트. URL의 페이지를 Playwright로 캡처 후 시각적 검증.\n예: visual_qa_test(url='https://aads.newtalk.kr/', checks=['로그인 버튼 존재', '헤더 렌더링'])",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "테스트할 URL",
+                },
+                "checks": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "확인할 항목 목록 (선택)",
+                },
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "evaluate_alerts",
+        "description": "알림 규칙 평가 + 발송. 등록된 모든 알림 규칙을 평가하고 조건 충족 시 발송.\n예: evaluate_alerts()",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "send_alert_message",
+        "description": "커스텀 알림 메시지 발송. 레벨별 텔레그램 알림.\n예: send_alert_message(message='서버 디스크 90% 초과', level='critical')",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "알림 메시지 내용",
+                },
+                "level": {
+                    "type": "string",
+                    "description": "알림 레벨 (info, warning, critical)",
+                    "enum": ["info", "warning", "critical"],
+                    "default": "info",
+                },
+            },
+            "required": ["message"],
+        },
+    },
     # ── Pipeline Runner 도구 (호스트 독립 실행 — 권장) ─────────────────────
     {
         "name": "pipeline_runner_submit",
@@ -3003,5 +3217,75 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             fact_id=params.get("fact_id", ""),
             max_depth=min(int(params.get("max_depth", 3) or 3), 3),
         )
+    # ── 이미지/팩트체크/검색/샌드박스/알림 도구 ──────────────────────────
+    elif name == "generate_image":
+        from app.services.image_service import image_service
+        result = await image_service.generate(params.get("prompt", ""), params.get("size", "1024x1024"))
+        return json.dumps(result, ensure_ascii=False)
+    elif name == "fact_check":
+        from app.services.fact_checker import FactChecker
+        checker = FactChecker()
+        result = await checker.check(params.get("claim", ""))
+        return json.dumps(result.to_dict(), ensure_ascii=False)
+    elif name == "fact_check_multiple":
+        from app.services.fact_checker import FactChecker
+        checker = FactChecker()
+        result = await checker.check_multiple(params.get("claims", []))
+        return json.dumps([r.to_dict() for r in result], ensure_ascii=False)
+    elif name == "gemini_grounding_search":
+        from app.services.gemini_search_service import GeminiSearchService
+        svc = GeminiSearchService()
+        result = await svc.search_grounded(params.get("query", ""), params.get("context", ""))
+        return json.dumps({"answer": result.answer, "sources": result.sources, "grounding_score": result.grounding_score}, ensure_ascii=False, default=str)
+    elif name == "execute_sandbox":
+        from app.services.sandbox import execute_code
+        result = await execute_code(params.get("code", ""), params.get("language", "python"), params.get("timeout", 30))
+        return json.dumps(result, ensure_ascii=False)
+    elif name == "send_telegram":
+        from app.services.telegram_bot import get_telegram_bot
+        bot = get_telegram_bot()
+        if bot and bot.is_ready:
+            await bot.send_message(params.get("message", ""))
+            return "텔레그램 전송 완료"
+        return "[ERROR] 텔레그램 봇 미설정"
+    elif name == "search_kakao":
+        from app.services.kakao_search_service import KakaoSearchService
+        svc = KakaoSearchService()
+        if not svc.is_available():
+            return "[ERROR] 카카오 API 키 미설정"
+        result = await svc.search(params.get("query", ""), params.get("search_type", "web"))
+        return json.dumps({"answer": result.answer, "sources": result.sources}, ensure_ascii=False, default=str)
+    elif name == "search_naver":
+        from app.services.naver_search_service import NaverSearchService
+        svc = NaverSearchService()
+        if not svc.is_available():
+            return "[ERROR] 네이버 API 키 미설정"
+        result = await svc.search(params.get("query", ""), params.get("search_type", "webkr"))
+        return json.dumps({"answer": result.answer, "sources": result.sources}, ensure_ascii=False, default=str)
+    elif name == "search_naver_multi":
+        from app.services.naver_search_service import NaverSearchService
+        svc = NaverSearchService()
+        if not svc.is_available():
+            return "[ERROR] 네이버 API 키 미설정"
+        results = await svc.multi_search(params.get("query", ""), params.get("types", ["webkr", "news", "blog"]))
+        return json.dumps([{"type": r.sources[0]["type"] if r.sources else "unknown", "answer": r.answer, "sources": r.sources} for r in results], ensure_ascii=False, default=str)
+    elif name == "visual_qa_test":
+        return "[INFO] Visual QA는 현재 Playwright 기반 배치 모드만 지원. capture_screenshot + read_remote_file 조합 사용 권장."
+    elif name == "evaluate_alerts":
+        from app.services.alert_manager import get_alert_manager
+        mgr = get_alert_manager()
+        alerts = await mgr.evaluate_rules()
+        for alert in alerts:
+            await mgr.send_alert(alert)
+        return f"알림 평가 완료: {len(alerts)}건 발송"
+    elif name == "send_alert_message":
+        from app.services.telegram_bot import get_telegram_bot
+        bot = get_telegram_bot()
+        level = params.get("level", "info")
+        msg = f"[{level.upper()}] {params.get('message', '')}"
+        if bot and bot.is_ready:
+            await bot.send_message(msg)
+            return f"알림 발송 완료: {msg[:100]}"
+        return "[ERROR] 텔레그램 봇 미설정"
     else:
         return f"[ERROR] 알 수 없는 도구: {name}"

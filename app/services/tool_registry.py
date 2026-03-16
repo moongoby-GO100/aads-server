@@ -94,6 +94,27 @@ _DEFER_LOADING: Dict[str, bool] = {
     "git_remote_push": True,
     "git_remote_status": True,
     "git_remote_create_branch": True,
+    # ── 미디어/생성 도구 ──────────────────────────────────────────────
+    "generate_image": False,          # 핵심 — CEO 이미지 요청 빈번
+    # ── 검색 도구 (한국어 특화) ───────────────────────────────────────
+    "search_naver": False,            # 핵심 — 한국어 뉴스/블로그
+    "search_naver_multi": True,       # 온디맨드
+    "search_kakao": True,             # 온디맨드
+    "gemini_grounding_search": False, # 핵심 — 실시간 팩트 검색
+    "search_chat_history": False,     # 핵심 — 이전 대화 검색
+    "fetch_url": True,                # 온디맨드
+    # ── 검증/팩트체크 ─────────────────────────────────────────────────
+    "fact_check": False,              # 핵심 — CEO 수치/사실 검증 요청
+    "fact_check_multiple": True,      # 온디맨드
+    # ── 실행/샌드박스 ─────────────────────────────────────────────────
+    "execute_sandbox": True,          # 온디맨드 — Docker 격리 실행
+    "search_logs": True,              # 온디맨드
+    # ── 알림/커뮤니케이션 ─────────────────────────────────────────────
+    "send_telegram": False,           # 핵심 — CEO 알림
+    "evaluate_alerts": True,          # 온디맨드
+    "send_alert_message": True,       # 온디맨드
+    # ── QA ────────────────────────────────────────────────────────────
+    "visual_qa_test": True,           # 온디맨드
 }
 
 # 도구 카테고리 안내 (시스템 프롬프트 주입용 — context_builder.py에서 사용)
@@ -1899,6 +1920,87 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"filename": "보고서"},
             {"filename": ""},
         ],
+    },
+    # ── 미디어/생성 ──────────────────────────────────────────────────────────
+    "generate_image": {
+        "name": "generate_image",
+        "description": "이미지 생성 (Google Imagen 4.0 → GPT-Image-1 폴백). 프롬프트 기반 이미지 생성 후 base64 data URI 반환.",
+        "input_schema": {"type": "object", "properties": {"prompt": {"type": "string", "description": "이미지 생성 프롬프트"}, "size": {"type": "string", "default": "1024x1024"}}, "required": ["prompt"]},
+    },
+    # ── 한국어 검색 ──────────────────────────────────────────────────────────
+    "search_naver": {
+        "name": "search_naver",
+        "description": "네이버 검색 (웹/뉴스/블로그/지식인/백과). 한국어 콘텐츠 검색에 최적.",
+        "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "search_type": {"type": "string", "enum": ["webkr","blog","news","kin","encyc","image","shop"], "default": "webkr"}}, "required": ["query"]},
+    },
+    "search_naver_multi": {
+        "name": "search_naver_multi",
+        "description": "네이버 다중 검색 (웹+뉴스+블로그 동시). 종합 한국어 검색.",
+        "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "types": {"type": "array", "items": {"type": "string"}, "default": ["webkr","news","blog"]}}, "required": ["query"]},
+    },
+    "search_kakao": {
+        "name": "search_kakao",
+        "description": "카카오 검색 (웹/블로그/카페).",
+        "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "search_type": {"type": "string", "enum": ["web","blog","cafe"], "default": "web"}}, "required": ["query"]},
+    },
+    "gemini_grounding_search": {
+        "name": "gemini_grounding_search",
+        "description": "Gemini Grounding 실시간 팩트 검색. Google 검색 기반 근거 있는 답변 생성.",
+        "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "context": {"type": "string", "default": ""}}, "required": ["query"]},
+    },
+    "search_chat_history": {
+        "name": "search_chat_history",
+        "description": "이전 채팅 히스토리 검색 (키워드+시맨틱). 크로스세션 대화 내용 탐색.",
+        "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "project": {"type": "string", "default": ""}, "limit": {"type": "integer", "default": 10}}, "required": ["query"]},
+    },
+    "fetch_url": {
+        "name": "fetch_url",
+        "description": "URL 페이지 내용 가져오기 (SSRF 방어 적용).",
+        "input_schema": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
+    },
+    # ── 검증/팩트체크 ────────────────────────────────────────────────────────
+    "fact_check": {
+        "name": "fact_check",
+        "description": "팩트체크 — DB 데이터 + 웹 검색 교차 검증으로 주장의 사실 여부 판정.",
+        "input_schema": {"type": "object", "properties": {"claim": {"type": "string", "description": "검증할 주장/사실"}}, "required": ["claim"]},
+    },
+    "fact_check_multiple": {
+        "name": "fact_check_multiple",
+        "description": "다건 팩트체크 — 여러 주장을 한 번에 검증.",
+        "input_schema": {"type": "object", "properties": {"claims": {"type": "array", "items": {"type": "string"}}}, "required": ["claims"]},
+    },
+    # ── 실행/샌드박스 ────────────────────────────────────────────────────────
+    "execute_sandbox": {
+        "name": "execute_sandbox",
+        "description": "Docker 격리 환경에서 코드 실행 (Python/JS/Bash). 안전한 코드 테스트용.",
+        "input_schema": {"type": "object", "properties": {"code": {"type": "string"}, "language": {"type": "string", "enum": ["python","javascript","bash"], "default": "python"}, "timeout": {"type": "integer", "default": 30}}, "required": ["code"]},
+    },
+    "search_logs": {
+        "name": "search_logs",
+        "description": "서버 로그 검색 (에러/경고 탐색).",
+        "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "service": {"type": "string", "default": ""}, "lines": {"type": "integer", "default": 100}}, "required": ["query"]},
+    },
+    # ── 알림/커뮤니케이션 ────────────────────────────────────────────────────
+    "send_telegram": {
+        "name": "send_telegram",
+        "description": "CEO 텔레그램으로 메시지 발송. 긴급 알림, 작업 완료 보고 등.",
+        "input_schema": {"type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"]},
+    },
+    "evaluate_alerts": {
+        "name": "evaluate_alerts",
+        "description": "알림 규칙 평가 — 서버 메트릭 수집 후 임계값 초과 시 자동 알림 발송.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    "send_alert_message": {
+        "name": "send_alert_message",
+        "description": "커스텀 레벨 알림 발송 (info/warning/critical).",
+        "input_schema": {"type": "object", "properties": {"message": {"type": "string"}, "level": {"type": "string", "enum": ["info","warning","critical"], "default": "info"}}, "required": ["message"]},
+    },
+    # ── QA ────────────────────────────────────────────────────────────────────
+    "visual_qa_test": {
+        "name": "visual_qa_test",
+        "description": "UI 비주얼 테스트 (Playwright 기반). 현재 capture_screenshot + 분석 조합 권장.",
+        "input_schema": {"type": "object", "properties": {"url": {"type": "string"}, "checks": {"type": "array", "items": {"type": "string"}}}, "required": ["url"]},
     },
 }
 
