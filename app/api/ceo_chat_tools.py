@@ -1711,8 +1711,10 @@ async def tool_run_remote_command(project: str, command: str) -> str:
 
     command = command.strip()
 
-    # 보안 1: 차단 패턴 검사
-    if _REMOTE_CMD_BLOCKED.search(command):
+    # 보안 1: 차단 패턴 검사 (안전한 리다이렉트는 제외 후 검사)
+    _cmd_for_block_check = re.sub(r'2>&1', '', command)
+    _cmd_for_block_check = re.sub(r'2>/dev/null', '', _cmd_for_block_check)
+    if _REMOTE_CMD_BLOCKED.search(_cmd_for_block_check):
         logger.warning(f"run_remote_command BLOCKED | project={project} cmd={command[:120]}")
         return f"[ERROR] 위험 명령 차단: {command[:80]}"
 
