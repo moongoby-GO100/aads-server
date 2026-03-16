@@ -1381,7 +1381,11 @@ async def tool_read_remote_file(project: str, file_path: str, offset: int = 1, l
             result, meta = _apply_line_range(content)
             return f"[AADS 파일 — {resolved}{meta}]\n{result}"
         except FileNotFoundError:
-            return f"[ERROR] 파일 없음: {resolved}"
+            return (
+                f"[ERROR] 파일 없음: {resolved}\n"
+                f"→ AADS 경로 규칙: 상대 경로 사용 (예: app/main.py, app/api/ceo_chat_tools.py)\n"
+                f"→ aads-dashboard 파일은 run_remote_command로: cat /root/aads/aads-dashboard/src/..."
+            )
         except Exception as e:
             return f"[ERROR] 파일 읽기 실패: {e}"
 
@@ -1666,7 +1670,22 @@ async def tool_patch_remote_file(project: str, file_path: str, old_string: str, 
     # 2단계: old_string 매치 확인
     count = file_content.count(old_string)
     if count == 0:
-        return f"[ERROR] old_string을 찾을 수 없음 (파일에 해당 문자열 없음)"
+        # 유사 문자열 힌트 — 첫 줄 기준으로 가장 가까운 매치 찾기
+        _first_line = old_string.split("\n")[0].strip()
+        _hints = []
+        if _first_line and len(_first_line) > 10:
+            for i, line in enumerate(file_content.splitlines(), 1):
+                if _first_line[:20] in line:
+                    _hints.append(f"  Line {i}: {line.strip()[:120]}")
+                    if len(_hints) >= 3:
+                        break
+        _hint_msg = ""
+        if _hints:
+            _hint_msg = "\n\n[힌트] old_string 첫 줄과 유사한 부분:\n" + "\n".join(_hints)
+            _hint_msg += "\n\n→ read_remote_file로 해당 라인 주변을 다시 읽고, 정확한 문자열을 복사하세요."
+        else:
+            _hint_msg = "\n\n→ read_remote_file로 파일을 먼저 읽고, 줄 번호를 제외한 실제 코드를 old_string에 사용하세요."
+        return f"[ERROR] old_string을 찾을 수 없음 (파일에 해당 문자열 없음){_hint_msg}"
     if count > 1:
         return f"[ERROR] old_string이 {count}회 중복 발견. 더 구체적인 문자열 필요"
 
@@ -1718,9 +1737,11 @@ async def tool_run_remote_command(project: str, command: str) -> str:
                 break
     if not cmd_allowed:
         logger.warning(f"run_remote_command WHITELIST_DENY | project={project} cmd={command[:120]}")
+        _first_tok_list = sorted(set(c.split()[0] for c in _REMOTE_CMD_WHITELIST)) + sorted(_FIRST_TOKEN_ALLOW)
         return (
             f"[ERROR] 허용되지 않은 명령: {command[:80]}\n"
-            f"허용 명령 목록: {', '.join(sorted(set(c.split()[0] for c in _REMOTE_CMD_WHITELIST)))}"
+            f"허용 명령: {', '.join(sorted(set(_first_tok_list)))}\n"
+            f"→ 이 명령 대신 허용된 명령으로 같은 결과를 얻을 수 있는지 검토하세요."
         )
 
     # 보안 2.5: docker exec 컨테이너 허용 목록 검사
@@ -1748,9 +1769,17 @@ async def tool_run_remote_command(project: str, command: str) -> str:
             for part in pipe_parts[1:]:
                 part_cmd = part.strip().split()[0] if part.strip() else ""
                 if part_cmd not in ("head", "tail", "wc", "grep", "sort", "uniq", "cat", "less", "tr"):
-                    return f"[ERROR] 파이프/체인 명령 차단 (보안): {command[:80]}"
-        elif "||" not in _check_cmd:  # || (OR 연산자)는 별도 검사 — 여기서는 파이프가 아님
-            return f"[ERROR] 파이프/체인 명령 차단 (보안): {command[:80]}"
+                    return (
+                        f"[ERROR] 파이프/체인 명령 차단 (보안): {command[:80]}\n"
+                        f"→ 허용 파이프: cmd | head/tail/wc/grep/sort/uniq/cat/tr\n"
+                        f"→ 2>&1, 2>/dev/null 리다이렉트는 허용됩니다."
+                    )
+        elif "||" not in _check_cmd:
+            return (
+                f"[ERROR] 파이프/체인 명령 차단 (보안): {command[:80]}\n"
+                f"→ 세미콜론(;), 리다이렉트(>), 백틱(`) 사용 불가.\n"
+                f"→ 명령을 분리하여 각각 실행하세요."
+            )
 
     # AADS 프로젝트: 호스트 OS SSH 실행 (컨테이너→호스트)
     if project == "AADS":
