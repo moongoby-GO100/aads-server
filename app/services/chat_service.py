@@ -1358,6 +1358,34 @@ async def send_message_stream(
             if not _normalized_project:
                 _normalized_project = _ws_upper[:20]
 
+        # 4.4. 시맨틱 캐시 조회 (유사 질문 즉시 응답)
+        _semantic_cache_hit = None
+        try:
+            from app.services.semantic_cache import SemanticCache
+            _sem_cache = SemanticCache(pool=get_pool())
+            _ws_id = sp_row["workspace_id"] if sp_row and sp_row.get("workspace_id") else None
+            _semantic_cache_hit = await _sem_cache.lookup(content, workspace_id=_ws_id)
+            if _semantic_cache_hit:
+                _cached_resp = _semantic_cache_hit.get("cached_response", "")
+                _cached_sim = _semantic_cache_hit.get("similarity", 0)
+                logger.info("semantic_cache_hit", similarity=f"{_cached_sim:.3f}", session=session_id[:8])
+                # 캐시 응답을 SSE 형식으로 직접 반환
+                yield f'data: {json.dumps({"type": "delta", "content": _cached_resp})}\n\n'
+                yield f'data: {json.dumps({"type": "message_stop", "cached": True})}\n\n'
+                # Phase C: 캐시 응답도 DB에 저장
+                await _save_and_update_session(
+                    sid, _cached_resp,
+                    session_id_str=session_id,
+                    raw_messages=raw_messages,
+                    model_used="semantic_cache",
+                    intent=intent_override or "cache_hit",
+                    cost=0.0, tokens_in=0, tokens_out=0,
+                    tools_called=[], thinking_summary=None,
+                )
+                return
+        except Exception as _sc_err:
+            logger.debug(f"semantic_cache_lookup_skipped: {_sc_err}")
+
         # 4.5-pre. F10: Contradiction Detection (모순 감지)
         try:
             from app.services.contradiction_detector import detect_contradictions
@@ -1907,6 +1935,18 @@ async def send_message_stream(
                 )
         except Exception as _bg_err:
             logger.debug("bg_self_eval_launch_error", error=str(_bg_err))
+
+        # 시맨틱 캐시 저장 (도구 사용 + quality >= 0.7인 응답만)
+        if tools_called and len(full_response) > 200:
+            try:
+                from app.services.semantic_cache import SemanticCache
+                _sem_cache_store = SemanticCache(pool=get_pool())
+                _ws_id = sp_row["workspace_id"] if sp_row and sp_row.get("workspace_id") else None
+                _bg_asyncio.create_task(
+                    _sem_cache_store.store(content, full_response, quality_score=0.7, workspace_id=_ws_id)
+                )
+            except Exception as _sc_store_err:
+                logger.debug(f"semantic_cache_store_skipped: {_sc_store_err}")
 
         # 누적 비용 업데이트
         _session_cost += float(cost_usd)

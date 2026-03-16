@@ -231,6 +231,20 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"task_logs_gc_error: {e}")
         scheduler.add_job(_run_task_logs_gc, CronTrigger(hour=3, minute=30, timezone="UTC"), id="task_logs_gc")
+        # P5: 주간 품질 분석 -- 매주 월요일 09:30 KST (= UTC 00:30)
+        async def _run_weekly_quality_analysis():
+            try:
+                from app.services.self_evaluator import weekly_quality_analysis
+                from app.core.db_pool import get_pool
+                await weekly_quality_analysis(get_pool())
+                logger.info("weekly_quality_analysis_done")
+            except Exception as e:
+                logger.warning(f"weekly_quality_analysis_error: {e}")
+        scheduler.add_job(
+            _run_weekly_quality_analysis,
+            CronTrigger(day_of_week="mon", hour=0, minute=30, timezone="UTC"),
+            id="weekly_quality_analysis"
+        )
         scheduler.start()
         await healer_init()
         # AADS-190: 스케줄러 인스턴스를 동적 스케줄 도구에 공유
@@ -291,6 +305,54 @@ async def lifespan(app: FastAPI):
         await start_watchdog(interval=120)
     except Exception as e:
         logger.warning("pipeline_c_init_failed", error=str(e))
+
+    # 누락 임베딩 백필 (memory_facts에서 embedding IS NULL인 항목)
+    async def _backfill_missing_embeddings():
+        try:
+            from app.services.chat_embedding_service import embed_texts
+            from app.core.db_pool import get_pool
+            import uuid as _uuid
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT id, category, subject FROM memory_facts WHERE embedding IS NULL AND superseded_by IS NULL LIMIT 50"
+                )
+            if not rows:
+                return
+            texts = [f"{r['category']}: {r['subject']}" for r in rows]
+            embeddings = await embed_texts(texts)
+            async with pool.acquire() as conn:
+                updated = 0
+                for row, emb in zip(rows, embeddings):
+                    if emb:
+                        await conn.execute("UPDATE memory_facts SET embedding = $1 WHERE id = $2", str(emb), row["id"])
+                        updated += 1
+                logger.info(f"startup_embedding_backfill: {updated}/{len(rows)} facts embedded")
+        except Exception as e:
+            logger.warning(f"startup_embedding_backfill_failed: {e}")
+
+    import asyncio as _startup_asyncio
+    _startup_asyncio.create_task(_backfill_missing_embeddings())
+
+    # missed sleep-time agent 체크 — 24시간 이상 인사이트 미생성 시 즉시 실행
+    async def _check_missed_sleep_time():
+        try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                latest = await conn.fetchval(
+                    "SELECT MAX(created_at) FROM memory_facts WHERE category = 'project_insight'"
+                )
+            from datetime import datetime, timezone
+            if not latest or (datetime.now(timezone.utc) - latest).total_seconds() > 86400:
+                logger.info("startup_missed_sleep_time: running catch-up consolidation")
+                from app.core.memory_gc import sleep_time_consolidation
+                await sleep_time_consolidation(get_pool())
+                logger.info("startup_missed_sleep_time: done")
+        except Exception as e:
+            logger.warning(f"startup_missed_sleep_time_failed: {e}")
+
+    _startup_asyncio.create_task(_check_missed_sleep_time())
 
     # Memory Store 초기화 (T-011)
     try:

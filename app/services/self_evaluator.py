@@ -41,12 +41,14 @@ AI 응답 (앞 1000자): {ai_msg}
 - accuracy: 사실적 정확성
 - completeness: 응답의 완성도
 - relevance: 질문과의 관련성
-- tool_grounding: 도구를 사용하여 주장/데이터를 검증했는가? (도구 미사용 시 0.0~0.3)
+- tool_grounding: 도구를 사용하여 주장/데이터를 검증했는가? 단, 대화/인사/의견/설명 등 도구가 불필요한 질문이면 0.5로 평가.
 - actionability: 구체적인 다음 단계를 제시하는가? (모호한 서술만 있으면 낮음)
+- tool_needed: 이 질문에 도구 사용이 필요했는가? (true/false)
 
-{{"accuracy": 0.0~1.0, "completeness": 0.0~1.0, "relevance": 0.0~1.0, "tool_grounding": 0.0~1.0, "actionability": 0.0~1.0, "overall": 0.0~1.0, "note": "한줄 평가"}}
+{{"accuracy": 0.0~1.0, "completeness": 0.0~1.0, "relevance": 0.0~1.0, "tool_grounding": 0.0~1.0, "actionability": 0.0~1.0, "tool_needed": true/false, "overall": 0.0~1.0, "note": "한줄 평가"}}
 
 overall = tool_grounding×0.3 + accuracy×0.25 + completeness×0.2 + relevance×0.15 + actionability×0.1 으로 계산.
+단, tool_needed=false이면 tool_grounding=0.5로 재설정 후 계산.
 JSON만 반환. 마크다운 코드블록 없이."""
 
 
@@ -84,9 +86,17 @@ async def evaluate_response(
             text = text.strip()
 
         details = json.loads(text)
+        # tool_needed=false이면 tool_grounding을 중립값 0.5로 재설정 (대화형 응답 패널티 방지)
+        tool_needed = details.get("tool_needed", True)
+        if isinstance(tool_needed, str):
+            tool_needed = tool_needed.lower() not in ("false", "no", "0")
+        tg_score = float(details.get("tool_grounding", 0.5))
+        if not tool_needed:
+            tg_score = max(tg_score, 0.5)
+            details["tool_grounding"] = tg_score
         # Weighted overall: tool_grounding×0.3 + accuracy×0.25 + completeness×0.2 + relevance×0.15 + actionability×0.1
         overall = (
-            float(details.get("tool_grounding", 0.5)) * 0.3
+            tg_score * 0.3
             + float(details.get("accuracy", 0.5)) * 0.25
             + float(details.get("completeness", 0.5)) * 0.2
             + float(details.get("relevance", 0.5)) * 0.15
@@ -184,6 +194,20 @@ async def evaluate_response(
                             reflection[:500],
                         )
                     logger.info("b1_reflexion_saved", score=overall, session=session_id[:8])
+                    # 임베딩 생성 (fact_extractor 공용 함수 활용)
+                    try:
+                        from app.services.fact_extractor import _embed_facts
+                        import asyncio
+                        asyncio.create_task(_embed_facts([{
+                            "id": str((await conn_refl.fetchval(
+                                "SELECT id FROM memory_facts WHERE session_id = $1::uuid AND category = 'error_pattern' ORDER BY created_at DESC LIMIT 1",
+                                uuid.UUID(session_id),
+                            ))),
+                            "category": "error_pattern",
+                            "subject": f"품질 부족: {details.get('note', '')[:100]}",
+                        }]))
+                    except Exception:
+                        pass  # 임베딩 실패해도 reflexion 저장은 유지
                     # Check for repeated errors → generate permanent correction directive
                     await _check_repeated_errors(
                         pool, session_id, normalized_project,
@@ -193,6 +217,52 @@ async def evaluate_response(
                 logger.debug("b1_reflexion_error", error=str(e_refl))
 
         logger.info("self_eval_complete", score=overall, message=message_id[:8])
+
+        # P3: Reflexion 효과 검증 — 반성 후 실제 품질 개선 여부 추적
+        if session_id and pool:
+            try:
+                async with pool.acquire() as conn_p3:
+                    recent_scores = await conn_p3.fetch(
+                        """SELECT quality_score FROM chat_messages
+                           WHERE session_id = $1::uuid
+                             AND quality_score IS NOT NULL
+                             AND role = 'assistant'
+                           ORDER BY created_at DESC LIMIT 3""",
+                        uuid.UUID(session_id),
+                    )
+                    if len(recent_scores) >= 2:
+                        scores = [r["quality_score"] for r in recent_scores]
+                        prev_avg = sum(scores[1:]) / len(scores[1:])
+                        curr_score = scores[0]
+                        if curr_score > prev_avg + 0.1:
+                            # 반성이 효과적 → 최근 반성문 confidence 강화
+                            await conn_p3.execute(
+                                """UPDATE memory_facts
+                                   SET confidence = LEAST(0.95, confidence + 0.05),
+                                       updated_at = NOW()
+                                   WHERE session_id = $1::uuid
+                                     AND category = 'error_pattern'
+                                     AND tags @> ARRAY['reflexion']
+                                     AND created_at > NOW() - interval '1 hour'""",
+                                uuid.UUID(session_id),
+                            )
+                            logger.info("p3_reflexion_effective", improvement=round(curr_score - prev_avg, 3))
+                        elif curr_score < prev_avg - 0.05:
+                            # 반성이 비효과적 → 반성문 confidence 감쇠
+                            await conn_p3.execute(
+                                """UPDATE memory_facts
+                                   SET confidence = GREATEST(0.3, confidence * 0.85),
+                                       updated_at = NOW()
+                                   WHERE session_id = $1::uuid
+                                     AND category = 'error_pattern'
+                                     AND tags @> ARRAY['reflexion']
+                                     AND created_at > NOW() - interval '1 hour'""",
+                                uuid.UUID(session_id),
+                            )
+                            logger.info("p3_reflexion_ineffective", delta=round(curr_score - prev_avg, 3))
+            except Exception as e_p3:
+                logger.debug("p3_reflexion_verify_error", error=str(e_p3))
+
         return overall
 
     except Exception as e:
@@ -221,11 +291,12 @@ async def _check_repeated_errors(
                    WHERE project = $1
                      AND category = 'error_pattern'
                      AND subject LIKE $2
-                     AND created_at > NOW() - interval '7 days'""",
+                     AND created_at > NOW() - interval '3 days'  -- P3: 7일→3일 (빠른 감지)""",
                 project,
                 f"%{subject_key}%",
             )
-            if count is not None and int(count) >= 3:
+            # P3: 반복 개선 미실현 감지 — 2회 이상이면 즉시 교정 지시
+            if count is not None and int(count) >= 2:
                 # 이미 동일 교정 지시가 있는지 확인
                 existing = await conn.fetchval(
                     """SELECT COUNT(*) FROM ai_meta_memory
