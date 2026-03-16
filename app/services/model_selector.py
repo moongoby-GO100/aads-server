@@ -808,13 +808,23 @@ async def _stream_anthropic(
                 pass
 
         # 메시지에 AI 응답 + 도구 결과 추가
-        # L-07: SDK ContentBlock → dict 직렬화 (재전송 안정성)
+        # L-07 fix: SDK ContentBlock → API 허용 필드만 추출 (parsed_output 등 제거)
         _serialized = []
         for _blk in (final_msg.content if isinstance(final_msg.content, list) else [final_msg.content]):
-            if hasattr(_blk, "model_dump"):
-                _serialized.append(_blk.model_dump())
+            _blk_type = getattr(_blk, "type", None) or (isinstance(_blk, dict) and _blk.get("type")) or ""
+            if _blk_type == "text":
+                _serialized.append({"type": "text", "text": getattr(_blk, "text", "") or (_blk.get("text", "") if isinstance(_blk, dict) else str(_blk))})
+            elif _blk_type == "tool_use":
+                _serialized.append({
+                    "type": "tool_use",
+                    "id": getattr(_blk, "id", "") or (_blk.get("id", "") if isinstance(_blk, dict) else ""),
+                    "name": getattr(_blk, "name", "") or (_blk.get("name", "") if isinstance(_blk, dict) else ""),
+                    "input": getattr(_blk, "input", {}) or (_blk.get("input", {}) if isinstance(_blk, dict) else {}),
+                })
             elif isinstance(_blk, dict):
-                _serialized.append(_blk)
+                # 알 수 없는 타입은 허용 필드만 전달
+                _clean = {k: v for k, v in _blk.items() if k in ("type", "text", "id", "name", "input", "content")}
+                _serialized.append(_clean if _clean else {"type": "text", "text": str(_blk)})
             else:
                 _serialized.append({"type": "text", "text": str(_blk)})
         current_messages = current_messages + [
