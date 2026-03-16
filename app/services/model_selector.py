@@ -271,9 +271,17 @@ async def _stream_anthropic(
     _consecutive_yellow = 0  # Yellow 등급 도구 연속 호출 카운터
     _consecutive_errors = 0  # 도구 연속 에러 카운터
     _total_errors = 0  # 도구 총 에러 수
-    _CONSECUTIVE_ERROR_WARN = 5  # 연속 5회 에러 시 경고 주입
-    _CONSECUTIVE_ERROR_STOP = 10  # 연속 10회 에러 시 도구 루프 강제 중단
-    _TOTAL_ERROR_STOP = 30  # 총 30회 에러 시 강제 중단
+    _same_tool_error_count: Dict[str, int] = {}  # 도구별 에러 횟수 (같은 도구 반복 실패 감지)
+    # Green(읽기) 도구: 관대한 제한 — 대용량 파일 탐색 시 연속 호출 정상
+    _GREEN_TOOLS = {
+        "read_remote_file", "list_remote_dir", "read_github_file", "read_task_logs",
+        "query_database", "query_project_database", "recall_notes", "search_chat_history",
+        "check_task_status", "pipeline_c_status", "dashboard_query", "capture_screenshot",
+    }
+    _CONSECUTIVE_ERROR_WARN = 5   # 연속 5회 에러 시 경고 주입
+    _CONSECUTIVE_ERROR_STOP = 15  # 연속 15회 에러 시 도구 루프 강제 중단
+    _TOTAL_ERROR_STOP = 40        # 총 40회 에러 시 강제 중단
+    _SAME_TOOL_ERROR_LIMIT = 5    # 같은 도구가 5회 연속 에러 시 해당 도구 차단
     _YELLOW_TOOLS = {
         "write_remote_file", "patch_remote_file", "run_remote_command",
         "git_remote_add", "git_remote_commit", "git_remote_push",
@@ -473,7 +481,7 @@ async def _stream_anthropic(
             except Exception:
                 compressed_str = result_str  # fallback: 원본 유지
 
-            # 도구 에러 감지 — 연속 에러 카운터
+            # 도구 에러 감지 — Green/Yellow 구분 카운팅
             _is_tool_error = (
                 (isinstance(result_str, str) and ("[ERROR]" in result_str or '"error"' in result_str[:50]))
                 or (isinstance(result_str, dict) and "error" in result_str)
@@ -481,8 +489,10 @@ async def _stream_anthropic(
             if _is_tool_error:
                 _consecutive_errors += 1
                 _total_errors += 1
+                _same_tool_error_count[tu.name] = _same_tool_error_count.get(tu.name, 0) + 1
             else:
-                _consecutive_errors = 0  # 성공하면 리셋
+                _consecutive_errors = 0  # 성공하면 연속 에러 리셋
+                _same_tool_error_count[tu.name] = 0  # 해당 도구 에러 카운트 리셋
 
             yield {
                 "type": "tool_result",
@@ -496,8 +506,22 @@ async def _stream_anthropic(
                 "content": compressed_str,  # 컨텍스트에는 압축본
             })
 
-            # 연속 에러 경고/중단
-            if _consecutive_errors >= _CONSECUTIVE_ERROR_STOP or _total_errors >= _TOTAL_ERROR_STOP:
+            # 같은 도구 반복 실패 감지 — 해당 도구만 차단 메시지 주입
+            _same_err = _same_tool_error_count.get(tu.name, 0)
+            if _same_err >= _SAME_TOOL_ERROR_LIMIT:
+                tool_results[-1]["content"] = (
+                    compressed_str + f"\n\n⛔ {tu.name}이 {_same_err}회 연속 실패. "
+                    "이 도구를 같은 방식으로 다시 호출하지 마세요. "
+                    "다른 도구나 다른 접근법을 사용하세요."
+                )
+                logger.warning(f"same_tool_error_limit: {tu.name}={_same_err}, turn={_turn}")
+
+            # 연속 에러 경고/중단 (Green 도구는 관대, Yellow 도구는 엄격)
+            _is_green = tu.name in _GREEN_TOOLS
+            _eff_stop = _CONSECUTIVE_ERROR_STOP if not _is_green else _CONSECUTIVE_ERROR_STOP * 2
+            _eff_warn = _CONSECUTIVE_ERROR_WARN if not _is_green else _CONSECUTIVE_ERROR_WARN * 2
+
+            if _consecutive_errors >= _eff_stop or _total_errors >= _TOTAL_ERROR_STOP:
                 _err_msg = (
                     f"⚠️ 도구 호출이 연속 {_consecutive_errors}회 실패했습니다 (총 {_total_errors}회). "
                     "다른 접근 방식을 시도하거나, 현재까지의 결과를 정리하여 응답하세요. "
@@ -509,9 +533,9 @@ async def _stream_anthropic(
                     "content": _err_msg,
                     "is_error": True,
                 })
-                logger.warning(f"consecutive_error_stop: {_consecutive_errors} consecutive, {_total_errors} total, turn={_turn}")
+                logger.warning(f"error_circuit_breaker: consecutive={_consecutive_errors}, total={_total_errors}, tool={tu.name}, turn={_turn}")
                 break  # 이 턴의 남은 도구 실행 스킵
-            elif _consecutive_errors >= _CONSECUTIVE_ERROR_WARN:
+            elif _consecutive_errors >= _eff_warn:
                 # 경고 주입 — AI가 다른 방식을 시도하도록 유도
                 tool_results[-1]["content"] = (
                     compressed_str + f"\n\n⚠️ 연속 {_consecutive_errors}회 도구 에러. "
