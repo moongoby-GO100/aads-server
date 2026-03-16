@@ -51,6 +51,8 @@ _FABRICATED_XML_PATTERNS: List[re.Pattern] = [
     re.compile(r'<function_calls>', re.IGNORECASE),
     re.compile(r'<function_response>', re.IGNORECASE),
     re.compile(r'<tool_results>', re.IGNORECASE),
+    re.compile(r'<tool_call>', re.IGNORECASE),
+    re.compile(r'<tool_response>', re.IGNORECASE),
 ]
 
 # ─── 날조 데이터 테이블 패턴 (마크다운) ──────────────────────────────────────

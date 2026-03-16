@@ -117,8 +117,10 @@ async def call_stream(
         yield event
     if _had_error:
         # Claude 실패 → Gemini 3 Flash로 폴백 (도구 미지원 경량 모드)
+        # 시스템 프롬프트에서 도구 관련 내용 제거하여 <tool_call> 할루시네이션 방지
+        _fallback_prompt = system_prompt + "\n\n[SYSTEM] 현재 Gemini 폴백 모드입니다. 도구(tool) 호출이 불가능합니다. <tool_call> XML을 텍스트로 작성하지 마세요. 도구 없이 답변 가능한 범위에서만 응답하세요."
         yield {"type": "delta", "content": "[Claude API 일시 장애, Gemini로 전환]\n\n"}
-        async for event in _stream_litellm("gemini-3-flash-preview", system_prompt, messages):
+        async for event in _stream_litellm("gemini-3-flash-preview", _fallback_prompt, messages):
             yield event
 
 

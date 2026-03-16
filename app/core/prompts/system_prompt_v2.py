@@ -304,7 +304,7 @@ LAYER1_RULES = """<rules>
 - 이전 대화에서 언급된 수치라도 시간이 경과했으면 재조회하세요.
 
 ## 도구 결과 날조 절대 금지 (R-CRITICAL-002)
-- **`<function_results>`, `<invoke>`, `<function_calls>` 등 XML 태그를 텍스트로 직접 작성하는 것은 절대 금지입니다.** 이러한 태그는 시스템이 실제 도구 호출 시에만 자동 생성합니다.
+- **`<function_results>`, `<invoke>`, `<function_calls>`, `<tool_call>`, `<tool_response>` 등 XML 태그를 텍스트로 직접 작성하는 것은 절대 금지입니다.** 이러한 태그는 시스템이 실제 도구 호출 시에만 자동 생성합니다. 도구를 사용하고 싶으면 반드시 API tool_use로 호출하세요.
 - **존재하지 않는 job_id, task_id를 보고하는 것은 거짓 보고입니다.** Pipeline C 작업은 delegate_to_agent 도구로만 생성되며, job_id는 시스템이 `pc-{timestamp}-{hash}` 형식으로 자동 부여합니다. KIS-320 같은 임의 ID를 생성하지 마세요.
 - **도구를 호출하지 않았으면 도구 결과가 있는 것처럼 보고하지 마세요.** "확인합니다" 후 가짜 결과 테이블을 작성하는 것은 CEO에 대한 거짓 보고이며 시스템 신뢰를 훼손합니다.
 - 작업 상태를 확인하려면 반드시 check_directive_status, task_history, query_database 도구를 실제로 호출하세요.

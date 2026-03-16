@@ -1450,6 +1450,19 @@ async def send_message_stream(
             except Exception:
                 pass
 
+        # 6.4. casual/greeting 인텐트인데 도구가 필요한 키워드 감지 → 도구 활성화
+        _tool_requiring_keywords = (
+            "확인", "조회", "점검", "검수", "진단", "분석", "조사", "체크", "보고",
+            "수정", "배포", "실행", "테스트", "로그", "상태", "서버", "DB", "쿼리",
+            "코드", "파일", "에러", "버그", "fix", "deploy", "check", "status",
+        )
+        if intent in ("casual", "greeting") and not intent_result.use_tools:
+            if any(kw in content for kw in _tool_requiring_keywords) and len(content) > 5:
+                intent_result.use_tools = True
+                if not intent_result.tool_group:
+                    intent_result.tool_group = "all"
+                logger.info(f"[INTENT_FIX] casual→tool_enabled for keyword match in: {content[:80]}")
+
         # 6.5. 첨부파일 키워드 감지 → file_read 인텐트 강제 (업로드 파일 재읽기)
         _file_keywords = ("업로드한 파일", "첨부파일", "첨부한 파일", "파일 읽어", "파일 다시", "이전 파일", "올린 파일", "파일 검토")
         if any(kw in content for kw in _file_keywords) and not intent_result.use_tools:
@@ -1465,6 +1478,13 @@ async def send_message_stream(
         if model_override:
             intent_result.model = get_model_for_override(model_override)
             intent_result.use_gemini_direct = False
+            # Claude 모델 선택 시 도구 항상 활성화 (시스템프롬프트에 도구 설명이 있으므로
+            # tools 없이 호출하면 <tool_call> XML 할루시네이션 발생)
+            _override_lower = (model_override or "").lower()
+            if "claude" in _override_lower or "opus" in _override_lower or "sonnet" in _override_lower or "haiku" in _override_lower:
+                intent_result.use_tools = True
+                if not intent_result.tool_group:
+                    intent_result.tool_group = "all"
 
         # 7. Gemini Direct (Grounding / Deep Research)
         if intent_result.use_gemini_direct:
