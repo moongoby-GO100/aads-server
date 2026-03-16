@@ -23,10 +23,37 @@ from app.services.intent_router import IntentResult
 logger = logging.getLogger(__name__)
 
 settings = Settings()
-# OAuth 토큰(oat) 우선, 없으면 API 키(api03) 폴백
-_auth_token = settings.ANTHROPIC_AUTH_TOKEN.get_secret_value() if settings.ANTHROPIC_AUTH_TOKEN.get_secret_value() else ""
-_api_key = settings.ANTHROPIC_API_KEY.get_secret_value() if not _auth_token else None
-_anthropic = AsyncAnthropic(auth_token=_auth_token or None, api_key=_api_key)
+
+# OAuth 토큰 자동 스위치: 토큰1 → 토큰2 (402/429 시 자동 전환)
+_oat_1 = settings.ANTHROPIC_AUTH_TOKEN.get_secret_value() or ""
+_oat_2 = settings.ANTHROPIC_AUTH_TOKEN_2.get_secret_value() or ""
+_current_oat_index = 0  # 0=토큰1, 1=토큰2
+
+def _get_anthropic_client() -> AsyncAnthropic:
+    """현재 활성 OAuth 토큰으로 클라이언트 반환."""
+    token = _oat_1 if _current_oat_index == 0 else _oat_2
+    if token:
+        return AsyncAnthropic(auth_token=token)
+    # 폴백: API 키 (레거시)
+    api_key = settings.ANTHROPIC_API_KEY.get_secret_value()
+    if api_key:
+        return AsyncAnthropic(api_key=api_key)
+    raise RuntimeError("ANTHROPIC_AUTH_TOKEN 또는 ANTHROPIC_API_KEY가 필요합니다")
+
+def _switch_oat_token():
+    """OAuth 토큰 자동 전환 (402/429 시 호출)."""
+    global _current_oat_index
+    if _oat_2 and _current_oat_index == 0:
+        _current_oat_index = 1
+        logger.warning(f"oat_token_switch: 1→2")
+        return True
+    elif _oat_1 and _current_oat_index == 1:
+        _current_oat_index = 0
+        logger.warning(f"oat_token_switch: 2→1")
+        return True
+    return False
+
+_anthropic = _get_anthropic_client()
 
 LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
 LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
@@ -593,10 +620,16 @@ async def _stream_anthropic(
                 _retry_attempt += 1
                 _last_error = e
                 _status = getattr(e, 'status_code', 0)
+                # 429: 토큰 자동 스위치 시도
+                if _status == 429 and _switch_oat_token():
+                    _anthropic = _get_anthropic_client()
+                    api_kwargs["_client_refreshed"] = True
+                    logger.warning(f"oat_switch_on_429: switched token, retrying")
+                    _retry_attempt -= 1  # 스위치 후 재시도 카운트 차감
                 if _retry_attempt <= _MAX_RETRIES:
-                    _wait = min(2 ** _retry_attempt, 10)  # 2, 4, 8초 (최대 10초)
+                    _wait = min(2 ** _retry_attempt, 10)
                     logger.warning(f"claude_retry: attempt {_retry_attempt}/{_MAX_RETRIES}, status={_status}, wait={_wait}s, error={str(e)[:100]}")
-                    yield {"type": "heartbeat"}  # SSE 연결 유지
+                    yield {"type": "heartbeat"}
                     await asyncio.sleep(_wait)
                 else:
                     logger.error(f"claude_retry_exhausted: {_MAX_RETRIES} retries failed, status={_status}, error={str(e)[:100]}")
@@ -607,13 +640,23 @@ async def _stream_anthropic(
                 _retry_attempt += 1
                 _last_error = e
                 _status = getattr(e, 'status_code', 0)
+                # 402(크레딧 소진): 토큰 자동 스위치
+                if _status == 402 and _switch_oat_token():
+                    _anthropic = _get_anthropic_client()
+                    logger.warning(f"oat_switch_on_402: credit exhausted, switched token")
+                    _retry_attempt -= 1
                 if _status in _RETRYABLE_STATUS and _retry_attempt <= _MAX_RETRIES:
                     _wait = min(2 ** _retry_attempt, 10)
                     logger.warning(f"claude_retry: attempt {_retry_attempt}/{_MAX_RETRIES}, status={_status}, wait={_wait}s, error={str(e)[:100]}")
                     yield {"type": "heartbeat"}
                     await asyncio.sleep(_wait)
+                elif _status == 402:
+                    # 402는 재시도 대상에 추가
+                    _wait = 2
+                    logger.warning(f"claude_retry_402: attempt {_retry_attempt}, switching token and retrying")
+                    yield {"type": "heartbeat"}
+                    await asyncio.sleep(_wait)
                 else:
-                    # 영구적 에러 (400, 401 등) 또는 재시도 소진
                     _err_body = getattr(e, 'body', None) or getattr(e, 'response', None)
                     logger.error(f"model_selector anthropic error: status={_status}, error={e}, body={str(_err_body)[:500]}, model={model_id}, msgs={len(current_messages)}, tools={len(tools or [])}")
                     yield {"type": "error", "content": str(e)}
