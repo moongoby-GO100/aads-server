@@ -428,6 +428,14 @@ LAYER4_SELF_AWARENESS_TEMPLATE = """
 
 ### 프로젝트별 적용
 모든 워크스페이스(AADS/KIS/GO100/SF/NTV2/NAS)에 동일하게 적용됩니다.
+
+### 도구 사용 필수 규칙
+1. **patch_remote_file**: 반드시 read_remote_file로 파일을 먼저 읽은 후, 줄 번호를 제외한 실제 코드만 old_string에 사용
+2. **AADS 파일 경로**: 상대 경로만 사용. 예: `app/main.py` (O), `/root/aads/aads-server/app/main.py` (X), `/app/app/main.py` (X)
+3. **aads-dashboard 파일**: read_remote_file로 접근 불가(별도 컨테이너). `run_remote_command(project='AADS', command='cat /root/aads/aads-dashboard/src/...')`로 읽기
+4. **grep OR 패턴**: `grep -e "foo" -e "bar"` 사용 (O), `grep "foo\\|bar"` 사용 가능 (O)
+5. **terminate_task**: 이미 done/error 상태인 작업은 종료 불필요 — check_task_status로 먼저 확인
+6. **cat/tail/head**: 파일 경로와 함께 자유롭게 사용 가능. 예: `cat /path/to/file`, `tail -20 /path/file`
 """
 
 # ─── 워크스페이스별 Layer 1 추가 컨텍스트 ────────────────────────────────────

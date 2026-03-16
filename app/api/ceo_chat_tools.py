@@ -1368,6 +1368,7 @@ async def tool_read_remote_file(project: str, file_path: str, offset: int = 1, l
 
     # AADS 프로젝트: 로컬 파일 직접 읽기 (SSH 불필요)
     if project == "AADS":
+        file_path = _normalize_aads_path(file_path)
         from app.core.project_config import PROJECT_MAP
         workdir = "/app"
         from posixpath import normpath, join as pjoin
@@ -1468,6 +1469,7 @@ async def tool_write_remote_file(project: str, file_path: str, content: str, bac
 
     # AADS 프로젝트: 로컬 직접 쓰기 (SSH 불필요)
     if project == "AADS":
+        file_path = _normalize_aads_path(file_path)
         from app.core.project_config import PROJECT_MAP
         # 컨테이너 내부 경로 사용 (호스트 /root/aads/aads-server/app → 컨테이너 /app/app)
         workdir = "/app"
@@ -1577,6 +1579,68 @@ async def tool_write_remote_file(project: str, file_path: str, content: str, bac
         return f"[ERROR] SSH 쓰기 실패: {e}"
 
 
+def _normalize_aads_path(file_path: str) -> str:
+    """AADS 프로젝트 경로 자동교정 — AI가 자주 혼동하는 패턴 보정."""
+    # /root/aads/aads-server/app/... → app/...
+    if file_path.startswith("/root/aads/aads-server/"):
+        file_path = file_path[len("/root/aads/aads-server/"):]
+    # /app/aads-server/... → strip
+    if file_path.startswith("/app/aads-server/"):
+        file_path = file_path[len("/app/aads-server/"):]
+    # aads-server/app/... → app/...
+    if file_path.startswith("aads-server/"):
+        file_path = file_path[len("aads-server/"):]
+    # /app/app/... → app/...  (double prefix)
+    if file_path.startswith("/app/"):
+        file_path = file_path[len("/app/"):]
+    return file_path
+
+
+async def _read_raw_file(project: str, file_path: str) -> str:
+    """줄 번호 없는 순수 파일 내용 반환 (patch 매칭용)."""
+    project = project.upper()
+    if project == "AADS":
+        file_path = _normalize_aads_path(file_path)
+        workdir = "/app"
+        from posixpath import normpath, join as pjoin
+        resolved = normpath(pjoin(workdir, file_path))
+        if not resolved.startswith(workdir):
+            return f"[ERROR] 경로 탈출 차단: {resolved}"
+        try:
+            with open(resolved, "r", encoding="utf-8", errors="replace") as f:
+                return f.read()
+        except FileNotFoundError:
+            return f"[ERROR] 파일 없음: {resolved}"
+        except Exception as e:
+            return f"[ERROR] 파일 읽기 실패: {e}"
+
+    mapping = _PROJECT_SERVER_MAP.get(project)
+    if not mapping:
+        return f"[ERROR] 알 수 없는 프로젝트: {project}"
+    server = mapping["server"]
+    workdir = mapping["workdir"]
+    from posixpath import normpath, join as pjoin
+    resolved = normpath(pjoin(workdir, file_path))
+    if not resolved.startswith(workdir):
+        return f"[ERROR] 경로 탈출 차단: {resolved}"
+    cmd = f"cat {shlex.quote(resolved)}"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+            f"{server['user']}@{server['host']}", "-p", str(server.get("port", 22)),
+            cmd,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+        if proc.returncode != 0:
+            return f"[ERROR] 파일 읽기 실패: {stderr.decode('utf-8', errors='replace')[:200]}"
+        return stdout.decode("utf-8", errors="replace")
+    except asyncio.TimeoutError:
+        return "[ERROR] SSH 타임아웃"
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
 async def tool_patch_remote_file(project: str, file_path: str, old_string: str, new_string: str) -> str:
     """원격 서버 파일 부분 수정 (diff 기반 패치). Yellow 등급.
     old_string을 찾아 new_string으로 교체. 정확히 1개만 매치되어야 함."""
@@ -1594,17 +1658,10 @@ async def tool_patch_remote_file(project: str, file_path: str, old_string: str, 
     if old_string == new_string:
         return "[ERROR] old_string과 new_string이 동일"
 
-    # 1단계: 현재 파일 읽기
-    current = await tool_read_remote_file(project, file_path)
-    if current.startswith("[ERROR]"):
-        return current
-
-    # read_remote_file 출력에서 헤더 제거하고 실제 내용만 추출
-    lines = current.split("\n", 1)
-    if len(lines) > 1 and lines[0].startswith(f"[{project}"):
-        file_content = lines[1]
-    else:
-        file_content = current
+    # 1단계: 현재 파일 읽기 (줄 번호 없는 raw content — 패치 매칭용)
+    file_content = await _read_raw_file(project, file_path)
+    if file_content.startswith("[ERROR]"):
+        return file_content
 
     # 2단계: old_string 매치 확인
     count = file_content.count(old_string)
@@ -1646,11 +1703,19 @@ async def tool_run_remote_command(project: str, command: str) -> str:
     except ValueError:
         return "[ERROR] 명령어 파싱 실패"
     first_cmd = cmd_tokens[0] if cmd_tokens else ""
-    cmd_allowed = False
-    for allowed in _REMOTE_CMD_WHITELIST:
-        if first_cmd == allowed or command.startswith(allowed + " ") or command == allowed:
-            cmd_allowed = True
-            break
+    # first-token 직접 허용 (cat, tail, head 등 기본 Unix 도구)
+    _FIRST_TOKEN_ALLOW = {
+        "cat", "tail", "head", "wc", "sort", "uniq", "stat", "file",
+        "pgrep", "lsof", "readlink", "realpath", "dirname", "basename",
+        "md5sum", "sha256sum", "tee", "xargs", "tr", "cut", "awk", "sed",
+        "id", "hostname", "uname", "swapon", "swapoff",
+    }
+    cmd_allowed = first_cmd in _FIRST_TOKEN_ALLOW
+    if not cmd_allowed:
+        for allowed in _REMOTE_CMD_WHITELIST:
+            if first_cmd == allowed or command.startswith(allowed + " ") or command == allowed:
+                cmd_allowed = True
+                break
     if not cmd_allowed:
         logger.warning(f"run_remote_command WHITELIST_DENY | project={project} cmd={command[:120]}")
         return (
@@ -1672,15 +1737,19 @@ async def tool_run_remote_command(project: str, command: str) -> str:
             return f"[ERROR] 허용되지 않는 컨테이너: {container}"
 
     # 보안 3: 파이프/리다이렉트/세미콜론 차단 (단일 명령만 허용)
-    if any(c in command for c in ["|", ";", "&&", "||", "`", "$(", ">>", ">", "\n", "\r", "${"]):
+    # 사전 정규화: grep의 \| (이스케이프 파이프)와 안전한 리다이렉트는 검사에서 제외
+    _check_cmd = command.replace("\\|", "__ESC_PIPE__")  # grep "foo\|bar" 오탐 방지
+    _check_cmd = re.sub(r'2>&1', '', _check_cmd)  # stderr→stdout 리다이렉트 허용
+    _check_cmd = re.sub(r'2>/dev/null', '', _check_cmd)  # stderr 억제 허용
+    if any(c in _check_cmd for c in ["|", ";", "&&", "`", "$(", ">>", ">", "\n", "\r", "${"]):
         # 단, grep | head 같은 안전한 파이프는 허용
-        if "|" in command:
-            pipe_parts = command.split("|")
+        if "|" in _check_cmd:
+            pipe_parts = _check_cmd.split("|")
             for part in pipe_parts[1:]:
                 part_cmd = part.strip().split()[0] if part.strip() else ""
-                if part_cmd not in ("head", "tail", "wc", "grep", "sort", "uniq"):
+                if part_cmd not in ("head", "tail", "wc", "grep", "sort", "uniq", "cat", "less", "tr"):
                     return f"[ERROR] 파이프/체인 명령 차단 (보안): {command[:80]}"
-        else:
+        elif "||" not in _check_cmd:  # || (OR 연산자)는 별도 검사 — 여기서는 파이프가 아님
             return f"[ERROR] 파이프/체인 명령 차단 (보안): {command[:80]}"
 
     # AADS 프로젝트: 호스트 OS SSH 실행 (컨테이너→호스트)

@@ -1214,18 +1214,24 @@ class ToolExecutor:
                     asyncio.create_task(emit_task_completed(task_id, "error"))
                     return {"task_id": task_id, "result": "terminated", "pipeline": "C", "project": row["project"]}
 
-                # Pipeline B (directive_lifecycle)
-                row2 = await conn.fetchrow(
-                    "SELECT id, status, project FROM directive_lifecycle WHERE id = $1",
-                    task_id,
-                )
+                # Pipeline B (directive_lifecycle) — id is INTEGER
+                try:
+                    _int_id = int(task_id)
+                except (ValueError, TypeError):
+                    _int_id = None
+                row2 = None
+                if _int_id is not None:
+                    row2 = await conn.fetchrow(
+                        "SELECT id, status, project FROM directive_lifecycle WHERE id = $1",
+                        _int_id,
+                    )
                 if row2:
                     if row2["status"] in ("done", "error", "failed"):
                         return {"task_id": task_id, "result": "already_finished", "status": row2["status"]}
                     await conn.execute(
                         "UPDATE directive_lifecycle SET status='error', "
                         "result=COALESCE(result,'')||$2, updated_at=now() WHERE id=$1",
-                        task_id, f" | 강제종료: {reason}",
+                        _int_id, f" | 강제종료: {reason}",
                     )
                     from app.services.task_logger import emit_task_log, emit_task_completed
                     asyncio.create_task(emit_task_log(task_id, "error", f"강제 종료: {reason}", phase="terminated"))
