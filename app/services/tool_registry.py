@@ -52,8 +52,8 @@ _DEFER_LOADING: Dict[str, bool] = {
     "learn_pattern": True,
     "cost_report": True,
     # ── Tier 4: 외부 검색 (온디맨드, API 비용) ───────────────────────────
-    "web_search_brave": True,
-    "web_search": True,
+    "web_search_brave": True,       # 온디맨드 — Brave 단독
+    "web_search": False,             # 핵심 — 통합 검색 (Google→Naver→Kakao 폴백)
     "jina_read": True,
     "crawl4ai_fetch": True,
     # ── Tier 5: 고비용/장시간 (온디맨드) ─────────────────────────────────
@@ -846,7 +846,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     },
     "web_search": {
         "name": "web_search",
-        "description": "web_search_brave의 별칭. 통합 웹 검색 (Google/Naver/Kakao 자동 폴백).",
+        "description": "통합 웹 검색 (Google Gemini → Naver → Kakao 자동 폴백). engine=auto(기본)/all/google/naver/kakao 선택 가능.",
         "input_schema": {
             "type": "object",
             "properties": {
