@@ -144,8 +144,12 @@ class ToolExecutor:
             "schedule_task":          self._schedule_task,
             "unschedule_task":        self._unschedule_task,
             "list_scheduled_tasks":   self._list_scheduled_tasks,
-            # Pipeline C: 자율 작업 파이프라인
-            "pipeline_c_start":       self._pipeline_c_start,
+            # Pipeline Runner (호스트 독립 실행)
+            "pipeline_runner_submit":  self._pipeline_runner_submit,
+            "pipeline_runner_status":  self._pipeline_runner_status,
+            "pipeline_runner_approve": self._pipeline_runner_approve,
+            # Pipeline C: 레거시 → Runner 자동 리다이렉트
+            "pipeline_c_start":       self._pipeline_runner_submit,  # 자동 전환
             "pipeline_c_status":      self._pipeline_c_status,
             "pipeline_c_approve":     self._pipeline_c_approve,
             # 첨부파일 재읽기
@@ -1714,7 +1718,52 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e)}
 
-    # ── Pipeline C: 자율 작업 파이프라인 ──────────────────────────────────────
+    # ── Pipeline Runner (호스트 독립 실행) ────────────────────────────────────
+
+    async def _pipeline_runner_submit(self, inp: Dict[str, Any]) -> Any:
+        """Pipeline Runner로 작업 제출."""
+        _session_id = current_chat_session_id.get("")
+        import httpx
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "http://localhost:8100/api/v1/pipeline/jobs",
+                json={
+                    "project": inp.get("project", "AADS"),
+                    "instruction": inp.get("instruction", ""),
+                    "session_id": _session_id,
+                    "max_cycles": int(inp.get("max_cycles", 3)),
+                },
+                timeout=10,
+            )
+            return resp.json()
+
+    async def _pipeline_runner_status(self, inp: Dict[str, Any]) -> Any:
+        """Pipeline Runner 작업 상태 조회."""
+        import httpx
+        job_id = inp.get("job_id", "")
+        async with httpx.AsyncClient() as client:
+            if job_id:
+                resp = await client.get(f"http://localhost:8100/api/v1/pipeline/jobs/{job_id}", timeout=10)
+            else:
+                params = {"limit": "10"}
+                if inp.get("status"):
+                    params["status"] = inp["status"]
+                resp = await client.get("http://localhost:8100/api/v1/pipeline/jobs", params=params, timeout=10)
+            return resp.json()
+
+    async def _pipeline_runner_approve(self, inp: Dict[str, Any]) -> Any:
+        """Pipeline Runner 작업 승인/거부."""
+        import httpx
+        job_id = inp.get("job_id", "")
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"http://localhost:8100/api/v1/pipeline/jobs/{job_id}/approve",
+                json={"action": inp.get("action", "approve"), "feedback": inp.get("feedback", "")},
+                timeout=10,
+            )
+            return resp.json()
+
+    # ── Pipeline C: 레거시 (Runner로 자동 전환) ──────────────────────────────
 
     async def _pipeline_c_start(self, inp: Dict[str, Any]) -> Any:
         """Pipeline C 시작 — Claude Code 자율 작업."""
