@@ -205,11 +205,28 @@ async def send_message(request: Request):
 
 @router.get("/chat/sessions/{session_id}/streaming-status", tags=["chat-session"])
 async def get_streaming_status(session_id: UUID):
-    """세션의 AI 응답 생성 상태 조회 (세션 이동 후 돌아왔을 때 '생성 중' 표시용)."""
+    """세션의 AI 응답 생성 상태 조회 (세션 이동 후 돌아왔을 때 '생성 중' 표시용).
+
+    메모리에 상태가 없을 때 DB에서 streaming_placeholder 존재 여부도 확인
+    (서버 재시작으로 메모리 유실된 경우 대비).
+    """
     status = svc.get_streaming_status(str(session_id))
-    if status:
+    if status and (status.get("is_streaming") or status.get("just_completed")):
         return status
-    return {"is_streaming": False}
+    # 메모리에 없으면 DB에서 placeholder 확인
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            cnt = await conn.fetchval(
+                "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder'",
+                session_id,
+            )
+            if cnt and cnt > 0:
+                return {"is_streaming": True, "just_completed": False, "content_length": 0, "tool_count": 0, "last_tool": ""}
+    except Exception:
+        pass
+    return status or {"is_streaming": False}
 
 
 @router.post("/chat/sessions/{session_id}/stop", tags=["chat-session"])

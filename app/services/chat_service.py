@@ -210,13 +210,13 @@ async def with_background_completion(
                 await _delete_streaming_placeholder(session_id)
             except Exception as del_err:
                 logger.warning(f"bg_producer_placeholder_delete_err session={session_id}: {del_err}")
-            # 상태를 즉시 삭제하지 않고 completed로 전환 (세션 복귀 시 감지용, 30초 후 자동 정리)
+            # 상태를 즉시 삭제하지 않고 completed로 전환 (세션 복귀 시 감지용, 90초 후 자동 정리)
             if session_id in _streaming_state:
                 _streaming_state[session_id]["completed"] = True
                 _streaming_state[session_id]["completed_at"] = _bg_time.monotonic()
 
                 async def _delayed_cleanup(sid: str):
-                    await _heartbeat_asyncio.sleep(30)
+                    await _heartbeat_asyncio.sleep(90)
                     _streaming_state.pop(sid, None)
                     logger.debug(f"streaming_state_cleaned session={sid[:8]}")
 
