@@ -111,6 +111,7 @@ post_to_chat() {
 # C4: 원자적 Job 클레임 — UPDATE ... RETURNING으로 동시 실행 방지
 claim_queued_job() {
     local filter="$1"
+    # instruction의 줄바꿈을 \\n으로 치환하여 단일행 RETURNING 보장
     db_exec "UPDATE pipeline_jobs SET status='claimed', updated_at=NOW()
              WHERE job_id = (
                 SELECT job_id FROM pipeline_jobs
@@ -118,7 +119,7 @@ claim_queued_job() {
                 ORDER BY created_at ASC LIMIT 1
                 FOR UPDATE SKIP LOCKED
              )
-             RETURNING job_id, project, instruction, chat_session_id, max_cycles;"
+             RETURNING job_id, project, replace(instruction, E'\\n', ' '), chat_session_id, max_cycles;"
 }
 
 claim_approved_job() {
