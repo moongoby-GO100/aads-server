@@ -485,6 +485,7 @@ async def _stream_anthropic(
                 compressed_str = result_str  # fallback: 원본 유지
 
             # 도구 에러 감지 — Green/Yellow 구분 카운팅
+            _is_green = tu.name in _GREEN_TOOLS
             _is_tool_error = (
                 (isinstance(result_str, str) and ("[ERROR]" in result_str or '"error"' in result_str[:50]))
                 or (isinstance(result_str, dict) and "error" in result_str)
@@ -521,7 +522,6 @@ async def _stream_anthropic(
                 logger.warning(f"same_tool_error_warn: {tu.name}={_same_err}, turn={_turn}")
 
             # 연속 에러 경고/중단 (Green 도구는 관대, Yellow 도구는 엄격)
-            _is_green = tu.name in _GREEN_TOOLS
             _eff_stop = _CONSECUTIVE_ERROR_STOP if not _is_green else _CONSECUTIVE_ERROR_STOP * 2
             _eff_warn = _CONSECUTIVE_ERROR_WARN if not _is_green else _CONSECUTIVE_ERROR_WARN * 2
 
