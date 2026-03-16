@@ -1678,10 +1678,17 @@ async def send_message_stream(
                         intent_result.use_gemini_direct = False
 
         # 8. 도구 목록 (Anthropic Tool Use 포맷)
-        tools_for_api = None
+        # 인텐트 오분류 방지: tools=False여도 핵심 도구는 항상 제공
+        from app.services.tool_registry import ToolRegistry
+        _registry = ToolRegistry()
         if intent_result.use_tools:
-            from app.services.tool_registry import ToolRegistry
-            tools_for_api = ToolRegistry().get_tools(intent_result.tool_group)
+            tools_for_api = _registry.get_tools(intent_result.tool_group)
+        else:
+            # Gemini 직접 호출 모델은 도구 미지원 → 제외
+            if not intent_result.use_gemini_direct:
+                tools_for_api = _registry.get_eager_tools()
+            else:
+                tools_for_api = None
 
         # 8.5a. AADS-188C: Agent SDK 실시간 자율 실행 (execute/code_modify 인텐트)
         # primary: Agent SDK, fallback: bridge(AutonomousExecutor) 경로
