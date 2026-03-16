@@ -132,6 +132,8 @@ async def send_message(request: Request):
 
     content_type = request.headers.get("content-type", "")
 
+    _MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
+
     if "multipart/form-data" in content_type:
         form = await request.form()
         session_id_str = str(form.get("session_id", ""))
@@ -141,6 +143,8 @@ async def send_message(request: Request):
         for f in form.getlist("files"):
             if hasattr(f, "read"):
                 data = await f.read()
+                if len(data) > _MAX_UPLOAD_SIZE:
+                    raise HTTPException(status_code=413, detail=f"파일 크기 초과: {len(data)} bytes > {_MAX_UPLOAD_SIZE} bytes (50MB 제한)")
                 mime = f.content_type or "application/octet-stream"
                 fname = f.filename or "unknown"
                 if mime.startswith("image/"):
@@ -440,7 +444,10 @@ async def upload_file(
     file: UploadFile = File(...),
 ):
     """파일 업로드 (multipart)."""
+    _MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
     file_bytes = await file.read()
+    if len(file_bytes) > _MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail=f"파일 크기 초과: {len(file_bytes)} bytes > {_MAX_UPLOAD_SIZE} bytes (50MB 제한)")
     ext = file.filename.rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else ""
     result = await svc.save_drive_file(
         workspace_id=str(workspace_id),

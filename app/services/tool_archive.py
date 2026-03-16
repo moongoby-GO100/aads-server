@@ -32,22 +32,39 @@ async def archive_tool_result(
         pool = get_pool()
         output_tokens = estimate_tokens(raw_output)
 
+        # P1: 에러 키워드 확장 감지
+        _result_lower = raw_output[:500].lower()
+        is_error = (
+            "[error]" in _result_lower
+            or "exception" in _result_lower
+            or "traceback" in _result_lower
+            or "old_string을 찾을 수 없음" in raw_output[:500]
+            or "exit=1" in raw_output[:200]
+            or "exit=137" in raw_output[:200]
+            or "허용되지 않은" in raw_output[:200]
+            or "차단" in raw_output[:200]
+            or "no such file" in _result_lower
+            or "permissionerror" in _result_lower
+        )
+
         async with pool.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO tool_results_archive
-                    (message_id, tool_use_id, tool_name, input_params, raw_output, output_tokens)
-                VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+                    (message_id, tool_use_id, tool_name, input_params, raw_output, output_tokens, is_error)
+                VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
                 ON CONFLICT (message_id, tool_use_id) DO UPDATE SET
                     raw_output = EXCLUDED.raw_output,
-                    output_tokens = EXCLUDED.output_tokens
+                    output_tokens = EXCLUDED.output_tokens,
+                    is_error = EXCLUDED.is_error
                 """,
                 uuid.UUID(message_id),
                 tool_use_id,
                 tool_name,
                 json.dumps(input_params or {}),
-                raw_output[:500000],  # 500KB limit
+                raw_output[:500000],
                 output_tokens,
+                is_error,
             )
         return True
     except Exception as e:

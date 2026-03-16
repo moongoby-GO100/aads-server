@@ -198,13 +198,13 @@ async def check_and_compact(
                     INSERT INTO session_notes (session_id, note_type, summary, content)
                     VALUES ($1, 'compaction', $2, $2)
                     """,
-                    str(session_id),
+                    uuid.UUID(session_id) if isinstance(session_id, str) else session_id,
                     summary,
                 )
                 # 1.5 #9: 압축 해시 저장 (다음 호출 시 변경 감지용)
                 await db_conn.execute(
                     "INSERT INTO session_notes (session_id, note_type, summary, content) VALUES ($1, 'compaction_hash', $2, $2)",
-                    str(session_id), _msg_hash,
+                    uuid.UUID(session_id) if isinstance(session_id, str) else session_id, _msg_hash,
                 )
                 # 2. chat_messages UPDATE (is_compacted 마킹)
                 await db_conn.execute(
@@ -386,8 +386,8 @@ async def _sync_to_observations(db_conn, session_id: str, summary: str) -> None:
         project = None
         try:
             ws_row = await db_conn.fetchrow(
-                "SELECT workspace_name FROM chat_sessions WHERE id = $1",
-                uuid.UUID(session_id),
+                "SELECT w.name AS workspace_name FROM chat_sessions s JOIN chat_workspaces w ON s.workspace_id = w.id WHERE s.id = $1",
+                uuid.UUID(session_id) if isinstance(session_id, str) else session_id,
             )
             if ws_row and ws_row["workspace_name"]:
                 project = ws_row["workspace_name"].upper().strip()

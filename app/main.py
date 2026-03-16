@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.logging_config import configure_logging
 
@@ -417,6 +418,68 @@ app = FastAPI(
     description="Autonomous AI Development System — Phase 2 Dashboard",
     lifespan=lifespan,
 )
+
+# H-07: CORS middleware — restrict to AADS dashboard origin
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://aads.newtalk.kr"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# C-01: JWT 인증 미들웨어 — 인증 없는 외부 접근 차단
+import app.auth as _auth_mod
+
+# 인증 불필요 경로 (prefix match)
+_AUTH_EXEMPT_PREFIXES = (
+    "/api/v1/health",
+    "/api/v1/auth/login",
+    "/api/v1/auth/me",
+    "/docs",
+    "/openapi.json",
+    "/redoc",
+    "/mcp",
+)
+# 내부 모니터링 (verify_monitor_key로 별도 인증)
+_MONITOR_KEY_PATHS = (
+    "/api/v1/context",
+    "/api/v1/watchdog",
+    "/api/v1/approval",
+)
+
+
+@app.middleware("http")
+async def jwt_auth_middleware(request: Request, call_next):
+    path = request.url.path
+
+    # 1) 면제 경로
+    if any(path.startswith(p) for p in _AUTH_EXEMPT_PREFIXES):
+        return await call_next(request)
+
+    # 2) 모니터 키 인증 경로 (별도 인증 체계)
+    if any(path.startswith(p) for p in _MONITOR_KEY_PATHS):
+        return await call_next(request)
+
+    # 3) OPTIONS (CORS preflight)
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    # 4) JWT Bearer 토큰 검증
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        payload = _auth_mod.verify_token(token)
+        if payload:
+            request.state.user = payload
+            return await call_next(request)
+
+    # 5) X-Monitor-Key 헤더가 있으면 통과 (내부 서비스 간 호출)
+    if request.headers.get("x-monitor-key"):
+        return await call_next(request)
+
+    # 인증 실패
+    return JSONResponse(status_code=401, content={"detail": "인증이 필요합니다. Bearer 토큰을 제공하세요."})
 
 # 글로벌 예외 핸들러
 @app.exception_handler(Exception)

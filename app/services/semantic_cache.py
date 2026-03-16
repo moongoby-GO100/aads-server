@@ -92,8 +92,18 @@ class SemanticCache:
             return None
 
         # ai_meta_memory에서 semantic_cache 항목 로드
+        # H-13: Early return when no cache entries exist to avoid O(n) full scan.
+        # TODO: Migrate to pgvector <=> operator for server-side cosine similarity
+        #       instead of loading all rows into Python. Example:
+        #       SELECT ... ORDER BY embedding <=> $1::vector LIMIT 1
         try:
             async with self.pool.acquire() as conn:
+                entry_count = await conn.fetchval(
+                    "SELECT COUNT(*) FROM ai_meta_memory WHERE category = 'semantic_cache'"
+                )
+                if not entry_count:
+                    self._misses += 1
+                    return None
                 rows = await conn.fetch(
                     """
                     SELECT key, value, updated_at
@@ -384,6 +394,20 @@ class SemanticCache:
             }
 
 
+# ── Module-level Singleton ────────────────────────────────────────────
+
+# H-13: Avoid creating new SemanticCache instances per convenience call.
+# The singleton is lazily initialized on first use.
+_singleton_cache: Optional[SemanticCache] = None
+
+
+def _get_singleton(pool: Any) -> SemanticCache:
+    global _singleton_cache
+    if _singleton_cache is None or _singleton_cache.pool is not pool:
+        _singleton_cache = SemanticCache(pool)
+    return _singleton_cache
+
+
 # ── Convenience Functions ────────────────────────────────────────────
 
 
@@ -391,7 +415,7 @@ async def get_or_none(
     pool: Any, query: str, workspace_id: str | None = None
 ) -> Optional[str]:
     """Quick lookup — returns cached response text or None."""
-    cache = SemanticCache(pool)
+    cache = _get_singleton(pool)
     result = await cache.lookup(query, workspace_id=workspace_id)
     if result:
         return result["cached_response"]
@@ -407,7 +431,7 @@ async def cache_if_worthy(
     tools_used: List[str] | None = None,
 ) -> None:
     """Store response if it meets quality threshold."""
-    cache = SemanticCache(pool)
+    cache = _get_singleton(pool)
     await cache.store(
         query=query,
         response=response,

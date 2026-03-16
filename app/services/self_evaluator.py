@@ -184,6 +184,8 @@ async def evaluate_response(
                 if reflection:
                     # MEDIUM-6: 프로젝트명 정규화 (workspace_name → project code)
                     normalized_project = _normalize_project(project)
+                    # H-10 fix: fetch the fact ID inside the async with block
+                    fact_id_for_embed = None
                     async with pool.acquire() as conn_refl:
                         await conn_refl.execute(
                             """INSERT INTO memory_facts (session_id, project, category, subject, detail, confidence, tags)
@@ -193,19 +195,22 @@ async def evaluate_response(
                             f"품질 부족: {details.get('note', '')[:100]}",
                             reflection[:500],
                         )
+                        # Fetch the ID while connection is still active
+                        fact_id_for_embed = await conn_refl.fetchval(
+                            "SELECT id FROM memory_facts WHERE session_id = $1::uuid AND category = 'error_pattern' ORDER BY created_at DESC LIMIT 1",
+                            uuid.UUID(session_id),
+                        )
                     logger.info("b1_reflexion_saved", score=overall, session=session_id[:8])
                     # 임베딩 생성 (fact_extractor 공용 함수 활용)
                     try:
                         from app.services.fact_extractor import _embed_facts
                         import asyncio
-                        asyncio.create_task(_embed_facts([{
-                            "id": str((await conn_refl.fetchval(
-                                "SELECT id FROM memory_facts WHERE session_id = $1::uuid AND category = 'error_pattern' ORDER BY created_at DESC LIMIT 1",
-                                uuid.UUID(session_id),
-                            ))),
-                            "category": "error_pattern",
-                            "subject": f"품질 부족: {details.get('note', '')[:100]}",
-                        }]))
+                        if fact_id_for_embed:
+                            asyncio.create_task(_embed_facts([{
+                                "id": str(fact_id_for_embed),
+                                "category": "error_pattern",
+                                "subject": f"품질 부족: {details.get('note', '')[:100]}",
+                            }]))
                     except Exception:
                         pass  # 임베딩 실패해도 reflexion 저장은 유지
                     # Check for repeated errors → generate permanent correction directive

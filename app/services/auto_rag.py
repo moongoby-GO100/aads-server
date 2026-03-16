@@ -255,8 +255,8 @@ async def _search_chat_messages(query_emb: list, session_id: str) -> List[Dict]:
         from app.core.db_pool import get_pool
 
         pool = get_pool()
-        # 같은 세션 내에서만 검색 (크로스 프로젝트 오염 방지)
-        results_all = await search_semantic(pool, query_emb, session_id=session_id, limit=_RAG_TOP_K * 2, pre_embedded=True)
+        # Cross-session search: session_id를 전달하지 않아 모든 세션에서 검색 (F3)
+        results_all = await search_semantic(pool, query_emb, session_id=None, limit=_RAG_TOP_K * 2, pre_embedded=True)
 
         output = []
         for r in results_all:

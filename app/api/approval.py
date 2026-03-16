@@ -3,6 +3,7 @@ T-039: CEO 승인 큐 API
 에러 → 승인 요청 → CEO 텔레그램 승인/반려 → 자동 실행
 """
 import os
+import shlex
 import subprocess
 import urllib.request
 import urllib.error
@@ -251,7 +252,7 @@ async def _run_command(command: str, target_server: str) -> dict:
     try:
         if target_server == "68":
             result = subprocess.run(
-                command, shell=True, capture_output=True, text=True, timeout=120
+                shlex.split(command), shell=False, capture_output=True, text=True, timeout=120
             )
         else:
             ssh_key_map = {
@@ -268,12 +269,15 @@ async def _run_command(command: str, target_server: str) -> dict:
             if not host:
                 return {"success": False, "output": f"No SSH config for server {target_server}"}
 
-            ssh_cmd = (
-                f'ssh -i {key} -o StrictHostKeyChecking=no -o ConnectTimeout=10 '
-                f'root@{host} "{command}"'
-            )
+            ssh_cmd = [
+                "ssh", "-i", key,
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "ConnectTimeout=10",
+                f"root@{host}",
+                shlex.quote(command),
+            ]
             result = subprocess.run(
-                ssh_cmd, shell=True, capture_output=True, text=True, timeout=120
+                ssh_cmd, shell=False, capture_output=True, text=True, timeout=120
             )
 
         return {

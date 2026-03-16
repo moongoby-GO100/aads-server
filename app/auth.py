@@ -23,8 +23,10 @@ ADMIN_EMAIL = os.getenv('AADS_ADMIN_EMAIL', 'admin@aads.dev')
 ADMIN_PASSWORD = os.getenv('AADS_ADMIN_PASSWORD', '')
 
 if not SECRET_KEY:
-    log.warning('jwt_secret_key_not_set', detail='Using insecure default - set JWT_SECRET_KEY in production')
-    SECRET_KEY = 'aads-insecure-default-CHANGE-ME'
+    raise RuntimeError(
+        'JWT_SECRET_KEY environment variable is not set. '
+        'Set it in .env before starting the server.'
+    )
 
 if not ADMIN_PASSWORD:
     log.warning('admin_password_not_set', detail='Auth endpoints will return 503 until AADS_ADMIN_PASSWORD is set')

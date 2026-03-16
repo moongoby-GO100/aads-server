@@ -135,6 +135,12 @@ def extract_file_contents(
             results.append(entry)
             continue
 
+        # Path traversal protection: reject paths containing '..'
+        if ".." in file_path:
+            entry["error"] = "path_traversal_rejected"
+            results.append(entry)
+            continue
+
         # 이미지 파일 (Claude Vision API) — 디스크에서 읽기
         if ext in IMAGE_EXTENSIONS:
             try:

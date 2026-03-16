@@ -132,12 +132,32 @@ async def consolidate_memory_facts(pool) -> dict:
                 SET confidence = LEAST(1.0, confidence + $1),
                     updated_at = NOW()
                 WHERE referenced_count > 0
-                  AND last_referenced_at > NOW() - INTERVAL '7 days'
+                  AND last_referenced_at > NOW() - INTERVAL '14 days'
                   AND superseded_by IS NULL
                 """,
                 _REFERENCED_BOOST,
             )
             result["boosted"] = int(boosted.split()[-1]) if boosted else 0
+
+            # P5: referenced_count 비례 추가 강화 (자주 참조된 사실일수록 더 크게 강화)
+            await conn.execute(
+                """
+                UPDATE memory_facts
+                SET confidence = LEAST(1.0, confidence +
+                    CASE
+                        WHEN referenced_count >= 20 THEN 0.08
+                        WHEN referenced_count >= 10 THEN 0.05
+                        WHEN referenced_count >= 5  THEN 0.03
+                        ELSE 0.0
+                    END
+                ),
+                updated_at = NOW()
+                WHERE referenced_count >= 5
+                  AND last_referenced_at > NOW() - INTERVAL '14 days'
+                  AND superseded_by IS NULL
+                  AND confidence < 0.98
+                """,
+            )
 
             # 2. 미참조 사실 감쇠 (C3: 카테고리별 적응형 감쇠율)
             total_decayed = 0

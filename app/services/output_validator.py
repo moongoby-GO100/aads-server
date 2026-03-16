@@ -331,8 +331,8 @@ def check_inconsistent_data(
     if not mismatched:
         return None
 
-    # 불일치 수치가 3개 이상이면 확실한 모순
-    if len(mismatched) >= 3:
+    # 불일치 수치가 1개 이상이면 모순으로 판단
+    if len(mismatched) >= 1:
         return ValidationResult(
             is_valid=False,
             violation_type="INCONSISTENT_DATA",

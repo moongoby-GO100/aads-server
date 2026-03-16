@@ -46,6 +46,9 @@ async def export_to_csv(
     fname = filename or f"export_{_now_kst()}_{uuid.uuid4().hex[:6]}.csv"
     if not fname.endswith(".csv"):
         fname += ".csv"
+    fname = Path(fname).name  # strip directory components
+    if ".." in fname:
+        return {"error": "잘못된 파일명입니다 (경로 탐색 문자 포함)"}
 
     filepath = _EXPORT_DIR / fname
     columns = list(rows[0].keys())
@@ -88,6 +91,9 @@ async def export_to_excel(
     fname = filename or f"export_{_now_kst()}_{uuid.uuid4().hex[:6]}.xlsx"
     if not fname.endswith(".xlsx"):
         fname += ".xlsx"
+    fname = Path(fname).name  # strip directory components
+    if ".." in fname:
+        return {"error": "잘못된 파일명입니다 (경로 탐색 문자 포함)"}
 
     filepath = _EXPORT_DIR / fname
     columns = list(rows[0].keys())
@@ -152,6 +158,9 @@ async def export_to_pdf(
     fname = filename or f"export_{_now_kst()}_{uuid.uuid4().hex[:6]}.pdf"
     if not fname.endswith(".pdf"):
         fname += ".pdf"
+    fname = Path(fname).name  # strip directory components
+    if ".." in fname:
+        return {"error": "잘못된 파일명입니다 (경로 탐색 문자 포함)"}
 
     filepath = _EXPORT_DIR / fname
     columns = list(rows[0].keys())

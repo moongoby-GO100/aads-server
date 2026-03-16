@@ -56,6 +56,9 @@ _active_jobs: Dict[str, "PipelineCJob"] = {}
 # 프로젝트별 동시 실행 방지 락
 _project_locks: Dict[str, asyncio.Lock] = {}
 
+# H-11: job_id별 approve/reject 동시 호출 방지 락
+_job_approve_locks: Dict[str, asyncio.Lock] = {}
+
 
 def get_job(job_id: str) -> Optional["PipelineCJob"]:
     return _active_jobs.get(job_id)
@@ -395,6 +398,14 @@ class PipelineCJob:
 
     async def approve(self) -> dict:
         """CEO 승인 → Phase 5~7 배포 + 검증."""
+        # H-11: per-job lock to prevent race between concurrent approve/reject calls
+        lock = _job_approve_locks.setdefault(self.job_id, asyncio.Lock())
+        if lock.locked():
+            return {"error": "이미 처리 중입니다 (approve/reject 동시 호출 방지)"}
+        async with lock:
+            return await self._approve_inner()
+
+    async def _approve_inner(self) -> dict:
         if self.status != "awaiting_approval":
             return {"error": f"승인 불가 상태: {self.status}"}
 
@@ -527,6 +538,14 @@ class PipelineCJob:
 
     async def reject(self, reason: str = "") -> dict:
         """CEO 거부 → 변경사항 되돌리기."""
+        # H-11: per-job lock to prevent race between concurrent approve/reject calls
+        lock = _job_approve_locks.setdefault(self.job_id, asyncio.Lock())
+        if lock.locked():
+            return {"error": "이미 처리 중입니다 (approve/reject 동시 호출 방지)"}
+        async with lock:
+            return await self._reject_inner(reason)
+
+    async def _reject_inner(self, reason: str = "") -> dict:
         if self.status != "awaiting_approval":
             return {"error": f"거부 불가 상태: {self.status}"}
 

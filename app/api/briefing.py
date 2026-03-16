@@ -33,181 +33,186 @@ DATABASE_URL = os.getenv(
 
 
 async def _fetch_pending_alerts(
-    conn, since: Optional[datetime] = None,
+    pool, since: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """alert_history에서 미확인(acknowledged=FALSE) 알림 조회."""
     try:
-        tbl = await conn.fetchval(
-            "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
-            "WHERE table_name='alert_history')"
-        )
-        if not tbl:
-            return {"items": [], "counts": {}}
+        async with pool.acquire() as conn:
+            tbl = await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+                "WHERE table_name='alert_history')"
+            )
+            if not tbl:
+                return {"items": [], "counts": {}}
 
-        where = "WHERE acknowledged = FALSE"
-        params: list = []
-        if since:
-            where += " AND created_at > $1"
-            params.append(since)
+            where = "WHERE acknowledged = FALSE"
+            params: list = []
+            if since:
+                where += " AND created_at > $1"
+                params.append(since)
 
-        rows = await conn.fetch(
-            f"SELECT severity, category, title, message, server, created_at "
-            f"FROM alert_history {where} "
-            f"ORDER BY CASE severity "
-            f"  WHEN 'CRITICAL' THEN 1 WHEN 'WARNING' THEN 2 ELSE 3 END, "
-            f"created_at DESC LIMIT 20",
-            *params,
-        )
+            rows = await conn.fetch(
+                f"SELECT severity, category, title, message, server, created_at "
+                f"FROM alert_history {where} "
+                f"ORDER BY CASE severity "
+                f"  WHEN 'CRITICAL' THEN 1 WHEN 'WARNING' THEN 2 ELSE 3 END, "
+                f"created_at DESC LIMIT 20",
+                *params,
+            )
 
-        counts: Dict[str, int] = {}
-        items = []
-        for r in rows:
-            sev = r["severity"] or "INFO"
-            counts[sev] = counts.get(sev, 0) + 1
-            items.append({
-                "severity": sev,
-                "category": r["category"],
-                "title": r["title"],
-                "message": r["message"],
-                "server": r["server"],
-            })
-        return {"items": items[:10], "counts": counts}
+            counts: Dict[str, int] = {}
+            items = []
+            for r in rows:
+                sev = r["severity"] or "INFO"
+                counts[sev] = counts.get(sev, 0) + 1
+                items.append({
+                    "severity": sev,
+                    "category": r["category"],
+                    "title": r["title"],
+                    "message": r["message"],
+                    "server": r["server"],
+                })
+            return {"items": items[:10], "counts": counts}
     except Exception as e:
         logger.warning("briefing_alerts_failed", error=str(e))
         return {"items": [], "counts": {}}
 
 
-async def _fetch_pending_directives(conn) -> Dict[str, Any]:
+async def _fetch_pending_directives(pool) -> Dict[str, Any]:
     """directive_lifecycle에서 pending/running/queued 조회."""
     try:
-        tbl = await conn.fetchval(
-            "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
-            "WHERE table_name='directive_lifecycle')"
-        )
-        if not tbl:
-            return {"items": [], "count": 0}
+        async with pool.acquire() as conn:
+            tbl = await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+                "WHERE table_name='directive_lifecycle')"
+            )
+            if not tbl:
+                return {"items": [], "count": 0}
 
-        rows = await conn.fetch(
-            "SELECT task_id, title, status, priority, project "
-            "FROM directive_lifecycle "
-            "WHERE status IN ('pending', 'running', 'queued') "
-            "ORDER BY CASE WHEN status='running' THEN 0 "
-            "  WHEN status='queued' THEN 1 ELSE 2 END, "
-            "created_at DESC LIMIT 10",
-        )
-        items = []
-        for r in rows:
-            icon = "🔄" if r["status"] == "running" else "⏳"
-            items.append({
-                "icon": icon,
-                "task_id": r["task_id"],
-                "title": r["title"],
-                "status": r["status"],
-                "priority": r.get("priority") or "",
-                "project": r.get("project") or "",
-            })
-        return {"items": items, "count": len(items)}
+            rows = await conn.fetch(
+                "SELECT task_id, title, status, priority, project "
+                "FROM directive_lifecycle "
+                "WHERE status IN ('pending', 'running', 'queued') "
+                "ORDER BY CASE WHEN status='running' THEN 0 "
+                "  WHEN status='queued' THEN 1 ELSE 2 END, "
+                "created_at DESC LIMIT 10",
+            )
+            items = []
+            for r in rows:
+                icon = "🔄" if r["status"] == "running" else "⏳"
+                items.append({
+                    "icon": icon,
+                    "task_id": r["task_id"],
+                    "title": r["title"],
+                    "status": r["status"],
+                    "priority": r.get("priority") or "",
+                    "project": r.get("project") or "",
+                })
+            return {"items": items, "count": len(items)}
     except Exception as e:
         logger.warning("briefing_directives_failed", error=str(e))
         return {"items": [], "count": 0}
 
 
 async def _fetch_recent_errors(
-    conn, since: Optional[datetime] = None,
+    pool, since: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """error_log에서 최근 에러 조회."""
     try:
-        tbl = await conn.fetchval(
-            "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
-            "WHERE table_name='error_log')"
-        )
-        if not tbl:
-            return {"items": [], "count": 0}
+        async with pool.acquire() as conn:
+            tbl = await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+                "WHERE table_name='error_log')"
+            )
+            if not tbl:
+                return {"items": [], "count": 0}
 
-        where = "WHERE 1=1"
-        params: list = []
-        if since:
-            where += " AND last_seen > $1"
-            params.append(since)
+            where = "WHERE 1=1"
+            params: list = []
+            if since:
+                where += " AND last_seen > $1"
+                params.append(since)
 
-        count = await conn.fetchval(
-            f"SELECT COUNT(*) FROM error_log {where}", *params,
-        )
+            count = await conn.fetchval(
+                f"SELECT COUNT(*) FROM error_log {where}", *params,
+            )
 
-        rows = await conn.fetch(
-            f"SELECT error_type, source, server, message, occurrence_count, last_seen "
-            f"FROM error_log {where} "
-            f"ORDER BY last_seen DESC LIMIT 5",
-            *params,
-        )
-        items = []
-        for r in rows:
-            items.append({
-                "error_type": r["error_type"],
-                "source": r["source"],
-                "server": r["server"],
-                "message": (r["message"] or "")[:120],
-                "count": r["occurrence_count"],
-            })
-        return {"items": items, "count": int(count or 0)}
+            rows = await conn.fetch(
+                f"SELECT error_type, source, server, message, occurrence_count, last_seen "
+                f"FROM error_log {where} "
+                f"ORDER BY last_seen DESC LIMIT 5",
+                *params,
+            )
+            items = []
+            for r in rows:
+                items.append({
+                    "error_type": r["error_type"],
+                    "source": r["source"],
+                    "server": r["server"],
+                    "message": (r["message"] or "")[:120],
+                    "count": r["occurrence_count"],
+                })
+            return {"items": items, "count": int(count or 0)}
     except Exception as e:
         logger.warning("briefing_errors_failed", error=str(e))
         return {"items": [], "count": 0}
 
 
-async def _fetch_server_health(conn) -> Dict[str, Any]:
+async def _fetch_server_health(pool) -> Dict[str, Any]:
     """최근 저장된 monitored_services 또는 quick_health 결과 활용."""
     try:
-        tbl = await conn.fetchval(
-            "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
-            "WHERE table_name='monitored_services')"
-        )
-        if not tbl:
-            return {"status": "UNKNOWN", "servers": {}}
+        async with pool.acquire() as conn:
+            tbl = await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+                "WHERE table_name='monitored_services')"
+            )
+            if not tbl:
+                return {"status": "UNKNOWN", "servers": {}}
 
-        rows = await conn.fetch(
-            "SELECT server, service_name, last_status, consecutive_failures "
-            "FROM monitored_services WHERE enabled = TRUE "
-            "ORDER BY server, service_name",
-        )
-        servers: Dict[str, Dict[str, Any]] = {}
-        for r in rows:
-            srv = r["server"]
-            if srv not in servers:
-                servers[srv] = {"ok": 0, "fail": 0, "services": []}
-            if r["last_status"] == "ok":
-                servers[srv]["ok"] += 1
-            else:
-                servers[srv]["fail"] += 1
-                servers[srv]["services"].append(r["service_name"])
+            rows = await conn.fetch(
+                "SELECT server, service_name, last_status, consecutive_failures "
+                "FROM monitored_services WHERE enabled = TRUE "
+                "ORDER BY server, service_name",
+            )
+            servers: Dict[str, Dict[str, Any]] = {}
+            for r in rows:
+                srv = r["server"]
+                if srv not in servers:
+                    servers[srv] = {"ok": 0, "fail": 0, "services": []}
+                if r["last_status"] == "ok":
+                    servers[srv]["ok"] += 1
+                else:
+                    servers[srv]["fail"] += 1
+                    servers[srv]["services"].append(r["service_name"])
 
-        overall = "정상"
-        for srv, info in servers.items():
-            if info["fail"] > 0:
-                overall = "주의"
-                break
+            overall = "정상"
+            for srv, info in servers.items():
+                if info["fail"] > 0:
+                    overall = "주의"
+                    break
 
-        return {"status": overall, "servers": servers}
+            return {"status": overall, "servers": servers}
     except Exception as e:
         logger.warning("briefing_health_failed", error=str(e))
         return {"status": "UNKNOWN", "servers": {}}
 
 
-async def _fetch_last_session_summary(conn) -> Optional[str]:
+async def _fetch_last_session_summary(pool) -> Optional[str]:
     """가장 최근 세션 요약 반환."""
     try:
-        tbl = await conn.fetchval(
-            "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
-            "WHERE table_name='session_notes')"
-        )
-        if not tbl:
-            return None
+        async with pool.acquire() as conn:
+            tbl = await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+                "WHERE table_name='session_notes')"
+            )
+            if not tbl:
+                return None
 
-        row = await conn.fetchrow(
-            "SELECT summary FROM session_notes "
-            "ORDER BY created_at DESC LIMIT 1",
-        )
-        return row["summary"] if row else None
+            row = await conn.fetchrow(
+                "SELECT summary FROM session_notes "
+                "ORDER BY created_at DESC LIMIT 1",
+            )
+            return row["summary"] if row else None
     except Exception as e:
         logger.warning("briefing_session_summary_failed", error=str(e))
         return None
@@ -336,54 +341,56 @@ async def get_briefing(
     has_briefing이 false면 프론트엔드에서 아무것도 표시하지 않는다.
     """
     try:
-        async with memory_store.pool.acquire() as conn:
-            # 마지막 브리핑 시간 조회
+        pool = memory_store.pool
+        async with pool.acquire() as conn:
+            # 마지막 브리핑 시간 조회 (sequential — single conn is fine)
             last_briefing = await _get_last_briefing_at(conn)
 
-            # 병렬로 데이터 수집
-            alerts_task = _fetch_pending_alerts(conn, since=last_briefing)
-            directives_task = _fetch_pending_directives(conn)
-            errors_task = _fetch_recent_errors(conn, since=last_briefing)
-            health_task = _fetch_server_health(conn)
-            summary_task = _fetch_last_session_summary(conn)
+        # 병렬로 데이터 수집 (각 함수가 자체 conn을 pool에서 획득)
+        alerts_task = _fetch_pending_alerts(pool, since=last_briefing)
+        directives_task = _fetch_pending_directives(pool)
+        errors_task = _fetch_recent_errors(pool, since=last_briefing)
+        health_task = _fetch_server_health(pool)
+        summary_task = _fetch_last_session_summary(pool)
 
-            alerts, directives, errors, health, session_summary = await asyncio.gather(
-                alerts_task, directives_task, errors_task, health_task, summary_task,
-            )
+        alerts, directives, errors, health, session_summary = await asyncio.gather(
+            alerts_task, directives_task, errors_task, health_task, summary_task,
+        )
 
-            # 브리핑 텍스트 생성
-            briefing_message = _format_briefing(
-                alerts, directives, errors, health, session_summary,
-            )
+        # 브리핑 텍스트 생성
+        briefing_message = _format_briefing(
+            alerts, directives, errors, health, session_summary,
+        )
 
-            has_briefing = bool(briefing_message)
+        has_briefing = bool(briefing_message)
 
-            alert_counts = alerts.get("counts", {})
-            directive_count = directives.get("count", 0)
-            error_count = errors.get("count", 0)
+        alert_counts = alerts.get("counts", {})
+        directive_count = directives.get("count", 0)
+        error_count = errors.get("count", 0)
 
-            # 브리핑 시간 기록 (has_briefing 여부와 무관하게 갱신)
+        # 브리핑 시간 기록
+        async with pool.acquire() as conn:
             await _update_last_briefing_at(conn)
 
-            logger.info(
-                "briefing_served",
-                has_briefing=has_briefing,
-                alert_count=sum(alert_counts.values()),
-                directive_count=directive_count,
-                error_count=error_count,
-            )
+        logger.info(
+            "briefing_served",
+            has_briefing=has_briefing,
+            alert_count=sum(alert_counts.values()),
+            directive_count=directive_count,
+            error_count=error_count,
+        )
 
-            return {
-                "has_briefing": has_briefing,
-                "briefing_message": briefing_message,
-                "alert_count": {
-                    "emergency": alert_counts.get("CRITICAL", 0),
-                    "warning": alert_counts.get("WARNING", 0),
-                    "info": alert_counts.get("INFO", 0),
-                },
-                "directive_pending_count": directive_count,
-                "error_count_since_last": error_count,
-            }
+        return {
+            "has_briefing": has_briefing,
+            "briefing_message": briefing_message,
+            "alert_count": {
+                "emergency": alert_counts.get("CRITICAL", 0),
+                "warning": alert_counts.get("WARNING", 0),
+                "info": alert_counts.get("INFO", 0),
+            },
+            "directive_pending_count": directive_count,
+            "error_count_since_last": error_count,
+        }
     except Exception as e:
         logger.error("briefing_failed", error=str(e))
         return {

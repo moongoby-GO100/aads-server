@@ -38,9 +38,9 @@ _CONFIDENCE = {
     "decision": float(os.getenv("CONFIDENCE_CEO_PREF", "0.2")),
     "tool_strategy": float(os.getenv("CONFIDENCE_TOOL_STRATEGY", "0.3")),
     "project_pattern": float(os.getenv("CONFIDENCE_TOOL_STRATEGY", "0.3")),
-    "discovery": float(os.getenv("CONFIDENCE_DISCOVERY", "0.4")),
-    "learning": float(os.getenv("CONFIDENCE_DISCOVERY", "0.4")),
-    "recurring_issue": float(os.getenv("CONFIDENCE_DISCOVERY", "0.4")),
+    "discovery": float(os.getenv("CONFIDENCE_DISCOVERY", "0.55")),  # P4: 0.4→0.55 (불확실 발견 필터)
+    "learning": float(os.getenv("CONFIDENCE_DISCOVERY", "0.55")),
+    "recurring_issue": float(os.getenv("CONFIDENCE_DISCOVERY", "0.55")),
 }
 
 # #25: observation key 허용 패턴 (영문/한글/숫자/밑줄/하이픈/공백/점 — 줄바꿈 제외)
@@ -418,3 +418,36 @@ async def save_observation(
             logger.warning("memory_recall_save_observation_all_fallbacks_failed",
                            error=str(e2), category=category, key=key[:50])
             return False
+
+
+# ── 진화 프로세스 수치 조회 ────────────────────────────────────────────────────
+
+async def get_evolution_stats(db) -> dict:
+    """진화 프로세스 실시간 수치 조회 — LAYER4 시스템 프롬프트 주입용.
+    모든 워크스페이스(AADS/KIS/GO100/SF/NTV2/NAS) 공통 호출.
+    """
+    try:
+        row = await db.fetchrow(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM memory_facts) AS fact_count,
+                (SELECT COUNT(*) FROM ai_observations) AS obs_count,
+                (SELECT COUNT(*) FROM memory_facts WHERE category = 'error_pattern') AS error_count
+            """
+        )
+        return {
+            "fact_count": row["fact_count"] if row else "?",
+            "obs_count": row["obs_count"] if row else "?",
+            "avg_quality": "측정중",
+            "quality_count": "측정중",
+            "error_pattern_count": row["error_count"] if row else "?",
+        }
+    except Exception as e:
+        logger.warning("get_evolution_stats_failed", error=str(e))
+        return {
+            "fact_count": "?",
+            "obs_count": "?",
+            "avg_quality": "?",
+            "quality_count": "?",
+            "error_pattern_count": "?",
+        }

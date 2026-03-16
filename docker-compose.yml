@@ -13,7 +13,7 @@ services:
       - "5433:5432"
     environment:
       - POSTGRES_USER=aads
-      - POSTGRES_PASSWORD=aads_dev_local
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=aads
     volumes:
       - aads_postgres_data:/var/lib/postgresql/data
@@ -41,7 +41,7 @@ services:
       - ENVIRONMENT=production
       - LOG_LEVEL=INFO
       # aads-postgres 컨테이너 (pgvector/pg15) 연결 (T-011)
-      - DATABASE_URL=postgresql://aads:aads_dev_local@aads-postgres:5432/aads
+      - DATABASE_URL=postgresql://aads:${POSTGRES_PASSWORD}@aads-postgres:5432/aads
       # GitHub PAT (AADS-179): 미설정 시 infra-check severity=warning (critical 아님)
       - GITHUB_PAT=${GITHUB_PAT:-}
       # AADS-185: CEO Chat 전면 재설계 — 검색/리서치 API 키
@@ -89,10 +89,12 @@ services:
       - /root/aads/aads-server/migrations:/app/migrations:rw
       - /root/aads/aads-server/scripts:/app/scripts:rw
       - /root/aads/aads-server/supervisord.conf:/app/supervisord.conf:ro
-      # Docker-in-Docker: DockerSandbox (D-011) 실행을 위한 소켓 마운트
+      # ⚠️ SECURITY WARNING (C-12): Docker socket grants root-equivalent access to the host.
+      # Required for DockerSandbox (D-011) and Pipeline C operations.
+      # TODO: Replace with docker-socket-proxy (e.g. tecnativa/docker-socket-proxy) to restrict API access.
       - /var/run/docker.sock:/var/run/docker.sock
-      # SSH 키 마운트: 211/114 서버 접근용 (rw: known_hosts 갱신 필요)
-      - /root/.ssh:/root/.ssh:rw
+      # SSH 키 마운트: 211/114 서버 접근용 (H-04: ro로 변경 — known_hosts는 호스트에서 관리)
+      - /root/.ssh:/root/.ssh:ro
       # 지시서/보고서 파일 접근 (T-090: directive content API)
       - /root/.genspark:/root/.genspark:ro
       - /root/project-docs:/root/project-docs:ro

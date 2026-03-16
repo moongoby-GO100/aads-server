@@ -16,9 +16,11 @@ import asyncio
 import asyncpg
 import base64
 import httpx
+import ipaddress
 import logging
 import re
 import shlex
+import socket
 import subprocess
 import uuid
 from datetime import datetime
@@ -974,10 +976,8 @@ _REMOTE_CMD_WHITELIST: List[str] = [
     "pip install",
     "pip list",
     "python -m py_compile",
-    "python -c",
-    "python3 -c",
-    "python3",
-    "python",
+    "python3 -m py_compile",
+    "python -m py_compile",
     "pytest",
     "cat /proc/meminfo",
     "cat /proc/cpuinfo",
@@ -1057,7 +1057,7 @@ _REMOTE_CMD_BLOCKED = re.compile(
     r"(rm\s+-[rf]|mkfs|dd\s+if=|shutdown|halt|reboot|kill\s+-9\s+1\b"
     r"|>\s*/dev/|chmod\s+[0-7]{3,4}\s+/"
     r"|DROP\s+(TABLE|DATABASE)|DELETE\s+FROM|TRUNCATE"
-    r"|curl.*\|.*sh|wget.*\|.*sh|bash\s+-c"
+    r"|curl.*\|.*sh|wget.*\|.*sh|bash\s+-c|python3?\s+-c|python3?\s.*\beval\b|python3?\s.*\bexec\b"
     r"|\brm\b.*\s+/[a-z]"  # rm /anything 차단
     r"|:(){:|fork\s*bomb"
     r"|git\s+push\s+.*--force"  # force push 차단
@@ -1213,8 +1213,48 @@ async def tool_query_db(sql: str, dsn: str) -> str:
         return f"[ERROR] DB 쿼리 실패: {e}"
 
 
+_SSRF_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fd00::/8"),
+]
+_SSRF_BLOCKED_HOSTS = {"localhost", "metadata.google.internal", "169.254.169.254"}
+
+
+def _is_ssrf_target(url: str) -> Optional[str]:
+    """Return error string if URL resolves to a private/blocked address, else None."""
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if not hostname:
+            return "[ERROR] SSRF 차단: 호스트명을 파싱할 수 없습니다."
+        if hostname.lower() in _SSRF_BLOCKED_HOSTS:
+            return f"[ERROR] SSRF 차단: 차단된 호스트 ({hostname})"
+        # Resolve hostname and check all IPs
+        try:
+            addrinfos = socket.getaddrinfo(hostname, parsed.port or 80, proto=socket.IPPROTO_TCP)
+        except socket.gaierror:
+            return f"[ERROR] SSRF 차단: DNS 확인 실패 ({hostname})"
+        for family, _, _, _, sockaddr in addrinfos:
+            ip = ipaddress.ip_address(sockaddr[0])
+            for net in _SSRF_BLOCKED_NETWORKS:
+                if ip in net:
+                    return f"[ERROR] SSRF 차단: 내부 네트워크 접근 불가 ({ip})"
+    except Exception as e:
+        return f"[ERROR] SSRF 검증 실패: {e}"
+    return None
+
+
 async def tool_fetch_url(url: str) -> str:
     """외부 URL GET (최대 20KB)."""
+    # SSRF protection: block private IPs and internal hosts
+    ssrf_err = _is_ssrf_target(url)
+    if ssrf_err:
+        return ssrf_err
     try:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             r = await client.get(url)
@@ -1728,7 +1768,7 @@ async def tool_run_remote_command(project: str, command: str) -> str:
     _FIRST_TOKEN_ALLOW = {
         "cat", "tail", "head", "wc", "sort", "uniq", "stat", "file",
         "pgrep", "lsof", "readlink", "realpath", "dirname", "basename",
-        "md5sum", "sha256sum", "tee", "xargs", "tr", "cut", "awk", "sed",
+        "md5sum", "sha256sum", "tee", "tr", "cut",
         "id", "hostname", "uname", "swapon", "swapoff",
     }
     cmd_allowed = first_cmd in _FIRST_TOKEN_ALLOW
@@ -1864,9 +1904,44 @@ async def tool_git_remote_add(project: str, files: str = ".") -> str:
 
 
 async def tool_git_remote_commit(project: str, message: str) -> str:
-    """원격 서버 git commit."""
+    """원격 서버 git commit (커밋 전 자동 검수 포함)."""
     if not message or not message.strip():
         return "[ERROR] commit message 필수"
+
+    # ── 커밋 전 자동 검수: staged .py 파일 구문 + import 검증 ──
+    if project == "AADS":
+        # staged 파일 목록 조회
+        staged_out = await tool_run_remote_command(project, "git diff --cached --name-only -- '*.py'")
+        staged_files = [
+            f.strip() for f in staged_out.split("\n")
+            if f.strip().endswith(".py") and not f.startswith("[")
+        ]
+        if staged_files:
+            check_errors = []
+            for sf in staged_files[:20]:  # 최대 20파일
+                # 구문 검사
+                syntax_result = await tool_run_remote_command(
+                    project, f"python3 -m py_compile {shlex.quote(sf)}"
+                )
+                if "OK" not in syntax_result:
+                    check_errors.append(f"구문오류: {sf}")
+                    continue
+                # Docker 내부 import 검증 (app/ 하위만)
+                if sf.startswith("app/"):
+                    module = sf.replace("/", ".").replace(".py", "")
+                    import_cmd = f"docker exec aads-server python3 -m importlib {shlex.quote(module)}"
+                    import_result = await tool_run_remote_command(project, import_cmd)
+                    if "Error" in import_result and "exit=0" not in import_result:
+                        err_line = [l for l in import_result.split("\n") if "Error" in l]
+                        check_errors.append(f"import실패: {module} — {err_line[-1][:100] if err_line else '?'}")
+            if check_errors:
+                return (
+                    f"[ERROR] 커밋 전 검수 실패 ({len(check_errors)}건):\n"
+                    + "\n".join(f"  - {e}" for e in check_errors)
+                    + "\n\n수정 후 다시 커밋하세요."
+                )
+            logger.info(f"git_commit_pre_check PASSED | project={project} files={len(staged_files)}")
+
     # shlex.quote()로 안전한 메시지 이스케이프
     safe_msg = shlex.quote(message[:200])
     return await tool_run_remote_command(project, f"git commit -m {safe_msg}")

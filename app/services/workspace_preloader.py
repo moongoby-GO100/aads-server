@@ -31,16 +31,24 @@ async def build_workspace_preload(
         import asyncio
         from app.services.ceo_pattern_tracker import get_predicted_interests
 
-        recent_facts, last_summary, predicted_interests = await asyncio.gather(
+        recent_facts, last_summary, predicted_interests, error_warnings = await asyncio.gather(
             _get_recent_facts(project),
             _get_last_session_summary(project, session_id),
             get_predicted_interests(),
+            _get_error_pattern_warnings(project),  # P2: 에러 패턴 자동 경고
             return_exceptions=True,
         )
 
         parts = []
         from app.core.token_utils import estimate_tokens
         total = 0
+
+        # P2: 에러 패턴 경고 (최우선 주입)
+        if isinstance(error_warnings, str) and error_warnings:
+            t = estimate_tokens(error_warnings)
+            if total + t <= _PRELOAD_TOKEN_BUDGET:
+                parts.append(error_warnings)
+                total += t
 
         # 최근 사실 (최대 10건)
         if isinstance(recent_facts, str) and recent_facts:
@@ -83,8 +91,8 @@ async def build_workspace_preload(
         return ""
 
 
-async def _get_recent_facts(project: str) -> str:
-    """프로젝트의 최근 memory_facts 10건."""
+async def _get_error_pattern_warnings(project: str) -> str:
+    """P2: 프로젝트의 최근 error_pattern 상위 3건을 경고로 주입."""
     try:
         from app.core.db_pool import get_pool
         pool = get_pool()
@@ -92,12 +100,50 @@ async def _get_recent_facts(project: str) -> str:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT category, subject, detail, created_at
+                SELECT subject, detail, referenced_count, confidence
+                FROM memory_facts
+                WHERE project = $1
+                  AND category = 'error_pattern'
+                  AND superseded_by IS NULL
+                  AND confidence > 0.5
+                ORDER BY referenced_count DESC, updated_at DESC
+                LIMIT 3
+                """,
+                project.upper(),
+            )
+            if not rows:
+                return ""
+
+            lines = []
+            for r in rows:
+                ref = r["referenced_count"] or 0
+                lines.append(f"  ⚠️ [{ref}회 발생] {r['subject']}")
+            return "## 반복 에러 패턴 경고 (유사 작업 시 주의):\n" + "\n".join(lines)
+    except Exception as e:
+        logger.debug("workspace_preload_error_pattern_error", error=str(e))
+        return ""
+
+
+async def _get_recent_facts(project: str) -> str:
+    """프로젝트의 최근 memory_facts 10건. P4: discovery confidence<0.5 제외."""
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT category, subject, detail, created_at, referenced_count, confidence
                 FROM memory_facts
                 WHERE project = $1
                   AND superseded_by IS NULL
                   AND confidence > 0.4
-                ORDER BY created_at DESC
+                  AND NOT (category = 'discovery' AND confidence < 0.5)
+                ORDER BY (
+                    confidence * 0.4
+                    + LEAST(1.0, referenced_count::float / 20.0) * 0.4
+                    + (1.0 / (1.0 + EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0)) * 0.2
+                ) DESC
                 LIMIT 10
                 """,
                 project.upper(),
@@ -108,7 +154,8 @@ async def _get_recent_facts(project: str) -> str:
             lines = []
             for r in rows:
                 ts = r["created_at"].strftime("%m/%d") if r["created_at"] else ""
-                lines.append(f"  - [{ts}][{r['category']}] {r['subject']}")
+                ref = r["referenced_count"] if "referenced_count" in r.keys() else 0
+                lines.append(f"  - [{ts}][{r['category']}] {r['subject']}" + (f" (참조:{ref}회)" if ref > 5 else ""))
             return "최근 사실:\n" + "\n".join(lines)
     except Exception as e:
         logger.debug("workspace_preload_facts_error", error=str(e))

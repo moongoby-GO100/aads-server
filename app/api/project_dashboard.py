@@ -1181,7 +1181,7 @@ async def get_directives(project: Optional[str] = None):
                 if project and project.upper() not in ("ALL", ""):
                     query += " WHERE project ILIKE $1"
                     params.append(project)
-                query += " ORDER BY (CASE WHEN status='running' THEN 0 ELSE 1 END), completed_at DESC NULLS LAST LIMIT 1000"
+                query += " ORDER BY (CASE WHEN status='running' THEN 0 ELSE 1 END), COALESCE(completed_at, started_at) DESC NULLS LAST LIMIT 2000"
                 pt_rows = await conn.fetch(query, *params)
                 for row in pt_rows:
                     directives.append(_pt_row_to_directive(dict(row)))
@@ -1990,15 +1990,17 @@ def _is_task_still_running_on_server(task_id: str, server_ssh: str) -> bool:
     try:
         clean_id = task_id.replace("KIS-", "T-").replace("GO100-", "T-").replace("AADS-", "T-")
         raw_id = task_id.split("-", 1)[-1] if "-" in task_id else task_id
+        safe_raw_id = shlex.quote(raw_id)
+        safe_task_id = shlex.quote(task_id)
         if server_ssh == "local":
             result = subprocess.run(
-                ["sh", "-c", f"grep -rl '{raw_id}\|{task_id}' {_RUNNING_DIR}/ 2>/dev/null | head -1"],
+                ["sh", "-c", f"grep -rl {safe_raw_id}'\\|'{safe_task_id} {_RUNNING_DIR}/ 2>/dev/null | head -1"],
                 capture_output=True, text=True, timeout=5
             )
         else:
             result = subprocess.run(
                 ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5", server_ssh,
-                 f"grep -rl '{raw_id}' {_RUNNING_DIR}/ 2>/dev/null | head -1"],
+                 f"grep -rl {safe_raw_id} {_RUNNING_DIR}/ 2>/dev/null | head -1"],
                 capture_output=True, text=True, timeout=8
             )
         return bool(result.stdout.strip())
