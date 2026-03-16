@@ -250,10 +250,59 @@ TOOL_DEFINITIONS: List[Dict] = [
             "required": ["project", "file_path"],
         },
     },
-    # ── Pipeline C 도구 (자율 작업 파이프라인) ──────────────────────────────
+    # ── Pipeline Runner 도구 (호스트 독립 실행 — 권장) ─────────────────────
+    {
+        "name": "pipeline_runner_submit",
+        "description": "코드 수정/배포 작업을 Pipeline Runner로 제출.\n각 서버의 Runner가 독립적으로 Claude Code를 실행. 서버 재시작 무영향.\n서버매핑: AADS→68서버, KIS/GO100→211서버, SF/NTV2→114서버.\n예: pipeline_runner_submit(project='KIS', instruction='order_executor.py null check 추가')",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "대상 프로젝트",
+                    "enum": ["KIS", "GO100", "SF", "NTV2", "AADS"],
+                },
+                "instruction": {
+                    "type": "string",
+                    "description": "Claude Code에 보낼 작업 지시 (구체적으로)",
+                },
+                "max_cycles": {
+                    "type": "integer",
+                    "description": "최대 검수 반복 (기본: 3)",
+                    "default": 3,
+                },
+            },
+            "required": ["project", "instruction"],
+        },
+    },
+    {
+        "name": "pipeline_runner_status",
+        "description": "Pipeline Runner 작업 상태 조회. status: queued/running/awaiting_approval/done/error",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string", "description": "작업 ID (없으면 전체 목록)"},
+                "status": {"type": "string", "description": "필터: queued, running, awaiting_approval, done, error"},
+            },
+        },
+    },
+    {
+        "name": "pipeline_runner_approve",
+        "description": "Pipeline Runner 작업 승인 또는 거부. awaiting_approval 상태에서만 가능.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string", "description": "작업 ID"},
+                "action": {"type": "string", "enum": ["approve", "reject"], "description": "승인/거부"},
+                "feedback": {"type": "string", "description": "피드백 (거부 시 사유)"},
+            },
+            "required": ["job_id", "action"],
+        },
+    },
+    # ── Pipeline C 도구 (레거시 — Runner 사용 권장) ──────────────────────
     {
         "name": "pipeline_c_start",
-        "description": "프로젝트별 Claude Code 자율 작업 파이프라인 시작.\n워크플로우: 작업→AI검수→재지시(max_cycles)→CEO 승인대기→배포.\n예: pipeline_c_start(project='KIS', instruction='order_executor.py의 null check 추가', model='sonnet')",
+        "description": "[레거시 — pipeline_runner_submit 사용 권장] 프로젝트별 Claude Code 자율 작업 파이프라인 시작.\n워크플로우: 작업→AI검수→재지시(max_cycles)→CEO 승인대기→배포.\n예: pipeline_c_start(project='KIS', instruction='order_executor.py의 null check 추가', model='sonnet')",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -2848,7 +2897,45 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             offset=int(params.get("offset", 1) or 1),
             limit=int(params.get("limit", 2000) or 2000),
         )
-    # ── Pipeline C 도구 ────────────────────────────────────────────────────
+    # ── Pipeline Runner 도구 (호스트 독립 실행) ─────────────────────────────
+    elif name == "pipeline_runner_submit":
+        from app.services.tool_executor import current_chat_session_id
+        _sid = chat_session_id or current_chat_session_id.get("")
+        import httpx
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "http://localhost:8100/api/v1/pipeline/jobs",
+                json={
+                    "project": params.get("project", "AADS"),
+                    "instruction": params.get("instruction", ""),
+                    "session_id": _sid,
+                    "max_cycles": int(params.get("max_cycles", 3)),
+                },
+                timeout=10,
+            )
+            return resp.text
+    elif name == "pipeline_runner_status":
+        import httpx
+        job_id = params.get("job_id", "")
+        if job_id:
+            url = f"http://localhost:8100/api/v1/pipeline/jobs/{job_id}"
+        else:
+            status = params.get("status", "")
+            url = f"http://localhost:8100/api/v1/pipeline/jobs?status={status}&limit=10"
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url, timeout=10)
+            return resp.text
+    elif name == "pipeline_runner_approve":
+        import httpx
+        job_id = params.get("job_id", "")
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"http://localhost:8100/api/v1/pipeline/jobs/{job_id}/approve",
+                json={"action": params.get("action", "approve"), "feedback": params.get("feedback", "")},
+                timeout=10,
+            )
+            return resp.text
+    # ── Pipeline C 도구 (레거시) ──────────────────────────────────────────
     elif name == "pipeline_c_start":
         # 명시적 chat_session_id 우선, 없으면 ContextVar 폴백
         from app.services.tool_executor import current_chat_session_id
