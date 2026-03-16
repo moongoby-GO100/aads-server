@@ -20,64 +20,37 @@ async def get_active_tasks(session_id: str = Query(default="")):
         from app.core.db_pool import get_pool
         pool = get_pool()
         async with pool.acquire() as conn:
-            if session_id:
-                # Pipeline C 작업 (pipeline_jobs 테이블)
-                pc_rows = await conn.fetch(
-                    """
-                    SELECT job_id AS task_id, project, instruction AS title,
-                           'pipeline_c' AS pipeline, phase, status,
-                           created_at, updated_at
-                    FROM pipeline_jobs
-                    WHERE chat_session_id = $1
-                      AND (status IN ('running','awaiting_approval','queued')
-                           OR updated_at > NOW() - interval '30 minutes')
-                    ORDER BY created_at DESC
-                    LIMIT 20
-                    """,
-                    session_id,
-                )
-                # Pipeline B 작업 (directive_lifecycle 테이블)
-                pb_rows = await conn.fetch(
-                    """
-                    SELECT task_id, project,
-                           title, 'pipeline_b' AS pipeline,
-                           status AS phase, status,
-                           created_at, completed_at AS updated_at
-                    FROM directive_lifecycle
-                    WHERE executor = 'autonomous_executor'
-                      AND (status = 'in_progress'
-                           OR completed_at > NOW() - interval '30 minutes')
-                    ORDER BY created_at DESC
-                    LIMIT 20
-                    """,
-                )
-            else:
-                pc_rows = await conn.fetch(
-                    """
-                    SELECT job_id AS task_id, project, instruction AS title,
-                           'pipeline_c' AS pipeline, phase, status,
-                           created_at, updated_at
-                    FROM pipeline_jobs
-                    WHERE status IN ('running','awaiting_approval','queued')
-                       OR updated_at > NOW() - interval '30 minutes'
-                    ORDER BY created_at DESC
-                    LIMIT 20
-                    """,
-                )
-                pb_rows = await conn.fetch(
-                    """
-                    SELECT task_id, project,
-                           title, 'pipeline_b' AS pipeline,
-                           status AS phase, status,
-                           created_at, completed_at AS updated_at
-                    FROM directive_lifecycle
-                    WHERE executor = 'autonomous_executor'
-                      AND (status = 'in_progress'
-                           OR completed_at > NOW() - interval '30 minutes')
-                    ORDER BY created_at DESC
-                    LIMIT 20
-                    """,
-                )
+            # Pipeline Runner + Legacy C (pipeline_jobs), Runner는 job_id가 'runner-'로 시작
+            _pj_filter = "WHERE chat_session_id = $1 AND" if session_id else "WHERE"
+            _pj_params = [session_id] if session_id else []
+            pc_rows = await conn.fetch(
+                f"""
+                SELECT job_id AS task_id, project, instruction AS title,
+                       CASE WHEN job_id LIKE 'runner-%' THEN 'runner' ELSE 'pipeline_c' END AS pipeline,
+                       phase, status, created_at, updated_at
+                FROM pipeline_jobs
+                {_pj_filter} (status IN ('running','awaiting_approval','queued','claimed','approved')
+                     OR updated_at > NOW() - interval '1 hour')
+                ORDER BY created_at DESC
+                LIMIT 20
+                """,
+                *_pj_params,
+            )
+            # Pipeline B (directive_lifecycle)
+            pb_rows = await conn.fetch(
+                """
+                SELECT task_id, project,
+                       title, 'agent' AS pipeline,
+                       status AS phase, status,
+                       created_at, completed_at AS updated_at
+                FROM directive_lifecycle
+                WHERE executor = 'autonomous_executor'
+                  AND (status = 'in_progress'
+                       OR completed_at > NOW() - interval '30 minutes')
+                ORDER BY created_at DESC
+                LIMIT 20
+                """,
+            )
 
         tasks = []
         for r in list(pc_rows) + list(pb_rows):
