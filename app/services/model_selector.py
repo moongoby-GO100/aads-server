@@ -13,8 +13,10 @@ import os
 from decimal import Decimal
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
+import time as _time_mod
+
 import httpx
-from anthropic import AsyncAnthropic, APIStatusError
+from anthropic import AsyncAnthropic, APIStatusError, APIConnectionError, RateLimitError
 from app.config import Settings
 from app.services.intent_router import IntentResult
 
@@ -106,20 +108,33 @@ async def call_stream(
                 yield event
         return
 
-    # Claude 모델 → Anthropic SDK 직접 (실패 시 Gemini Flash 폴백)
+    # Claude 모델 → Anthropic SDK 직접 (3회 재시도 후에도 실패 시 Gemini Flash 폴백)
     _had_error = False
+    _error_content = ""
     async for event in _stream_anthropic(intent_result, model, system_prompt, messages, tools, session_id=session_id):
         if event.get("type") == "error":
             _had_error = True
             _error_content = event.get("content", "")
-            logger.warning(f"claude_fallback: {model} failed ({_error_content[:100]}), falling back to gemini-flash")
+            logger.error(f"claude_fallback_to_gemini: {model} failed after retries ({_error_content[:200]})")
             break
         yield event
     if _had_error:
-        # Claude 실패 → Gemini 3 Flash로 폴백 (도구 미지원 경량 모드)
-        # 시스템 프롬프트에서 도구 관련 내용 제거하여 <tool_call> 할루시네이션 방지
+        # Claude 3회 재시도 실패 → Gemini 3 Flash로 폴백 (도구 미지원 경량 모드)
         _fallback_prompt = system_prompt + "\n\n[SYSTEM] 현재 Gemini 폴백 모드입니다. 도구(tool) 호출이 불가능합니다. <tool_call> XML을 텍스트로 작성하지 마세요. 도구 없이 답변 가능한 범위에서만 응답하세요."
-        yield {"type": "delta", "content": "[Claude API 일시 장애, Gemini로 전환]\n\n"}
+        yield {"type": "delta", "content": f"[Claude API 재시도 3회 실패 → Gemini 전환: {_error_content[:80]}]\n\n"}
+        # error_log에 기록
+        try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO error_log (error_type, source, server, message, stack_trace, created_at) VALUES ($1, $2, $3, $4, $5, NOW())",
+                    "claude_api_fallback", "model_selector", "aads-server",
+                    f"Claude {model} → Gemini 전환 (3회 재시도 실패)",
+                    _error_content[:500],
+                )
+        except Exception as _log_err:
+            logger.warning(f"error_log insert failed: {_log_err}")
         async for event in _stream_litellm("gemini-3-flash-preview", _fallback_prompt, messages):
             yield event
 
@@ -366,32 +381,80 @@ async def _stream_anthropic(
         if thinking_config and "tool_choice" in api_kwargs:
             del api_kwargs["tool_choice"]
 
-        try:
-            async with _anthropic.messages.stream(**api_kwargs) as stream:
-                async for event in stream:
-                    event_type = type(event).__name__
+        # 재시도 로직: 일시적 에러(429/529/503/네트워크)는 최대 3회 재시도
+        _RETRYABLE_STATUS = {429, 503, 529}
+        _MAX_RETRIES = 3
+        _retry_attempt = 0
+        _last_error = None
+        final_msg = None
 
-                    if event_type == "RawContentBlockDeltaEvent":
-                        delta = event.delta
-                        delta_type = type(delta).__name__
-                        if delta_type == "TextDelta":
-                            full_text += delta.text
-                            yield {"type": "delta", "content": delta.text}
-                        elif delta_type == "ThinkingDelta":
-                            thinking_text += delta.thinking
-                            yield {"type": "thinking", "thinking": delta.thinking}
-                        elif delta_type == "InputJsonDelta":
-                            pass  # tool_use 입력 JSON 누적 (스트림 종료 후 처리)
+        while _retry_attempt <= _MAX_RETRIES:
+            try:
+                async with _anthropic.messages.stream(**api_kwargs) as stream:
+                    async for event in stream:
+                        event_type = type(event).__name__
 
-                final_msg = await stream.get_final_message()
+                        if event_type == "RawContentBlockDeltaEvent":
+                            delta = event.delta
+                            delta_type = type(delta).__name__
+                            if delta_type == "TextDelta":
+                                full_text += delta.text
+                                yield {"type": "delta", "content": delta.text}
+                            elif delta_type == "ThinkingDelta":
+                                thinking_text += delta.thinking
+                                yield {"type": "thinking", "thinking": delta.thinking}
+                            elif delta_type == "InputJsonDelta":
+                                pass  # tool_use 입력 JSON 누적 (스트림 종료 후 처리)
 
-        except APIStatusError as e:
-            logger.error(f"model_selector anthropic error: {e}")
-            yield {"type": "error", "content": str(e)}
-            return
-        except Exception as e:
-            logger.error(f"model_selector anthropic unexpected: {e}")
-            yield {"type": "error", "content": str(e)}
+                    final_msg = await stream.get_final_message()
+                break  # 성공 → 재시도 루프 탈출
+
+            except (RateLimitError, APIConnectionError) as e:
+                _retry_attempt += 1
+                _last_error = e
+                _status = getattr(e, 'status_code', 0)
+                if _retry_attempt <= _MAX_RETRIES:
+                    _wait = min(2 ** _retry_attempt, 10)  # 2, 4, 8초 (최대 10초)
+                    logger.warning(f"claude_retry: attempt {_retry_attempt}/{_MAX_RETRIES}, status={_status}, wait={_wait}s, error={str(e)[:100]}")
+                    yield {"type": "heartbeat"}  # SSE 연결 유지
+                    await asyncio.sleep(_wait)
+                else:
+                    logger.error(f"claude_retry_exhausted: {_MAX_RETRIES} retries failed, status={_status}, error={str(e)[:100]}")
+                    yield {"type": "error", "content": str(e)}
+                    return
+
+            except APIStatusError as e:
+                _retry_attempt += 1
+                _last_error = e
+                _status = getattr(e, 'status_code', 0)
+                if _status in _RETRYABLE_STATUS and _retry_attempt <= _MAX_RETRIES:
+                    _wait = min(2 ** _retry_attempt, 10)
+                    logger.warning(f"claude_retry: attempt {_retry_attempt}/{_MAX_RETRIES}, status={_status}, wait={_wait}s, error={str(e)[:100]}")
+                    yield {"type": "heartbeat"}
+                    await asyncio.sleep(_wait)
+                else:
+                    # 영구적 에러 (400, 401 등) 또는 재시도 소진
+                    logger.error(f"model_selector anthropic error: status={_status}, error={e}")
+                    yield {"type": "error", "content": str(e)}
+                    return
+
+            except Exception as e:
+                _retry_attempt += 1
+                _last_error = e
+                if _retry_attempt <= _MAX_RETRIES:
+                    _wait = min(2 ** _retry_attempt, 10)
+                    logger.warning(f"claude_retry_unexpected: attempt {_retry_attempt}/{_MAX_RETRIES}, wait={_wait}s, error={str(e)[:80]}")
+                    yield {"type": "heartbeat"}
+                    await asyncio.sleep(_wait)
+                    full_text = ""  # 부분 응답 리셋
+                else:
+                    logger.error(f"model_selector anthropic unexpected after {_MAX_RETRIES} retries: {e}")
+                    yield {"type": "error", "content": str(e)}
+                    return
+
+        if final_msg is None:
+            logger.error(f"model_selector: final_msg is None after retries, last_error={_last_error}")
+            yield {"type": "error", "content": f"Claude API 응답 없음 (재시도 {_MAX_RETRIES}회 소진)"}
             return
 
         input_tokens += final_msg.usage.input_tokens
