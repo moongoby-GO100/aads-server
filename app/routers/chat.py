@@ -184,22 +184,20 @@ async def send_message(request: Request):
         attachments = req.attachments
 
     # ★ ContextVar를 HTTP 핸들러에서 조기 설정
-    # with_heartbeat의 ensure_future()가 새 Task를 생성하여 generator 내부의
-    # ContextVar.set()이 격리되는 문제 방지 — HTTP task context에서 설정하면
-    # 모든 자식 Task가 올바른 session_id를 상속받음
+    # with_background_completion 내부의 producer Task가 올바른 session_id를 상속받도록
     from app.services.tool_executor import current_chat_session_id
     current_chat_session_id.set(session_id_str)
 
-    stream = svc.with_heartbeat(
-        svc.send_message_stream(
-            session_id=session_id_str,
-            content=content,
-            attachments=attachments,
-            model_override=model_override,
-        ),
+    # with_background_completion이 독립 heartbeat task(_heartbeat_pump)를 운영하므로
+    # with_heartbeat 이중 래핑 불필요 — 도구 30s+ 블로킹 시에도 heartbeat 보장
+    raw_stream = svc.send_message_stream(
+        session_id=session_id_str,
+        content=content,
+        attachments=attachments,
+        model_override=model_override,
     )
     # 클라이언트 연결 종료 시 백그라운드에서 LLM 생성 완료 → DB 저장 보장
-    bg_stream = svc.with_background_completion(stream, session_id=session_id_str)
+    bg_stream = svc.with_background_completion(raw_stream, session_id=session_id_str)
     return StreamingResponse(
         bg_stream,
         media_type="text/event-stream",

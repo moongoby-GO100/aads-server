@@ -2,14 +2,17 @@
 AADS 메모리 자동 주입 시스템 — 공유 메모리 리콜 모듈
 채팅(chat_service)과 에이전트(autonomous_executor, agent_sdk_service) 공통 사용.
 
-5개 섹션 조립 (프로젝트별 필터 적용):
+7개 섹션 조립 (프로젝트별 필터 적용):
 1. 이전 대화 요약 (session_notes, ~500 토큰) — 해당 프로젝트 우선
+   + correction_directive 상단 강제 주입 (Reflexion B1 반성 → 행동 변화)
 2. CEO 운영 원칙/선호 (ai_observations category='ceo_preference', ~300 토큰) — 공통(전역)
 3. 도구 사용 전략 (ai_observations category='tool_strategy'|'project_pattern', ~400 토큰) — 프로젝트+공통
 4. 활성 Directive (directive_lifecycle status IN pending/running, ~400 토큰) — 프로젝트 필터
 5. 이전 작업 발견 사항 (ai_observations category='discovery'|'learning', ~400 토큰) — 프로젝트+공통
+6. AI 학습 메모리 (ai_meta_memory, ~300 토큰) — CEO 선호/프로젝트 패턴
+7. 반성 지시사항 (ai_meta_memory correction_directive, ~200 토큰) — 최근 3건
 
-총 토큰 예산: 2,000 토큰 이내 (한국어 기준 1토큰 ≈ 1.5자)
+총 토큰 예산: ~2,300 토큰 이내 (한국어 기준 1토큰 ≈ 1.5자)
 """
 from __future__ import annotations
 
@@ -29,8 +32,9 @@ _BUDGET = {
     "directives": 600,          # ~400 토큰
     "discoveries": 600,         # ~400 토큰
     "learned_memory": 450,      # ~300 토큰 (ai_meta_memory)
+    "correction_directives": 300,  # ~200 토큰 (Reflexion B1 반성 지시, 최근 3건)
 }
-_TOTAL_CHAR_LIMIT = 3400  # ~2300 토큰 (섹션6 추가분 반영)
+_TOTAL_CHAR_LIMIT = 4000  # ~2700 토큰 (correction_directive 이중 배치 + 세션노트 통합분 반영)
 
 # #14: 카테고리별 confidence 임계값 (환경변수 오버라이드 가능)
 _CONFIDENCE = {
@@ -280,6 +284,43 @@ async def _build_discoveries(project_id: Optional[str] = None) -> str:
         return ""
 
 
+async def _build_correction_directives() -> str:
+    """Reflexion(B1) correction_directive → 다음 턴 시스템 프롬프트 강제 주입.
+    ai_meta_memory에서 최근 3건만 조회하여 토큰 절약.
+    P2-FIX: COALESCE(updated_at, created_at)로 NULL 안전 정렬, 즉시 반영 보장."""
+    try:
+        async with _get_pool().acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT key, value FROM ai_meta_memory
+                WHERE category = 'correction_directive'
+                ORDER BY COALESCE(updated_at, created_at) DESC NULLS LAST
+                LIMIT 3
+                """,
+            )
+            if not rows:
+                return ""
+            import json as _json
+            lines = []
+            for r in rows:
+                val = r["value"]
+                if isinstance(val, str):
+                    try:
+                        val = _json.loads(val)
+                    except Exception:
+                        pass
+                if isinstance(val, dict):
+                    val_str = val.get("directive") or val.get("summary") or val.get("description") or _json.dumps(val, ensure_ascii=False)
+                else:
+                    val_str = str(val)
+                lines.append(f"- [반성지시] {r['key']}: {val_str[:150]}")
+            text = "\n".join(lines)
+            return _truncate(text, _BUDGET["correction_directives"])
+    except Exception as e:
+        logger.warning("memory_recall_section_failed", section="correction_directives", error=str(e))
+        return ""
+
+
 async def _build_learned_memory(project_id: Optional[str] = None) -> str:
     """섹션 6: learn_pattern으로 저장된 AI 학습 메모리 (ai_meta_memory).
     CEO 선호 + 프로젝트 패턴 + 결정 이력을 프로젝트 무관하게 전체 주입.
@@ -332,16 +373,29 @@ async def build_memory_context(
     project_id = _normalize_project(project_id)
     blocks: List[str] = []
 
-    # 6개 섹션 병렬 조회 (AADS-CRITICAL-FIX #30 + 섹션6 ai_meta_memory 추가)
-    notes, prefs, tools, dirs, disc, learned = await asyncio.gather(
+    # 7개 섹션 병렬 조회 (AADS-CRITICAL-FIX #30 + 섹션6 ai_meta_memory + 섹션7 correction_directive)
+    notes, prefs, tools, dirs, disc, learned, corrections = await asyncio.gather(
         _build_session_notes(session_id, project_id),
         _build_preferences(),
         _build_tool_strategy(project_id),
         _build_active_directives(project_id),
         _build_discoveries(project_id),
         _build_learned_memory(project_id),
+        _build_correction_directives(),
     )
 
+    # P2-FIX: correction_directive → 세션 노트(Layer2) 상단 강제 주입
+    # 반성 지시사항이 세션 맥락과 함께 전달되어 행동 변화 유도력 향상
+    # 별도 블록(최우선) + 세션 노트 내부 이중 배치로 절대 누락 방지
+    if corrections:
+        blocks.append(f"<memory_correction_directives>\n## ⚠️ 반성 지시사항 (이번 턴에서 즉시 반영할 것)\n{corrections}\n</memory_correction_directives>")
+        logger.info("correction_directive_injected", count=corrections.count("[반성지시]"), chars=len(corrections))
+    # 세션 노트에 correction_directive 상단 강제 주입 (Layer2 통합) — 우선순위 최상위
+    _correction_header = f"⚠️ [즉시반영 필수] 이전 턴 반성 결과:\n{corrections}" if corrections else ""
+    if _correction_header and notes:
+        notes = f"{_correction_header}\n---\n{notes}"
+    elif _correction_header and not notes:
+        notes = _correction_header
     if notes:
         blocks.append(f"<memory_session_notes>\n## 이전 대화 요약\n{notes}\n</memory_session_notes>")
     if prefs:
