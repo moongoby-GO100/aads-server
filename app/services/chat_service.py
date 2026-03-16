@@ -144,12 +144,15 @@ async def with_background_completion(
 
     동작 방식:
     1. Producer task: gen을 소비하여 Queue에 chunk를 넣음 (독립 태스크)
-    2. Consumer (이 generator): Queue에서 읽어 yield (SSE 전달)
-    3. 클라이언트 disconnect → consumer만 중단, producer는 계속 실행 → DB 저장 완료
-    4. 클라이언트 disconnect 후 10초마다 중간 결과를 DB에 저장 (세션 돌아왔을 때 보임)
+    2. Heartbeat task: 8초 간격 독립 heartbeat → Queue에 직접 주입 (도구 실행 중에도 보장)
+    3. Consumer (이 generator): Queue에서 읽어 yield (SSE 전달)
+    4. 클라이언트 disconnect → consumer만 중단, producer는 계속 실행 → DB 저장 완료
+    5. 클라이언트 disconnect 후 10초마다 중간 결과를 DB에 저장 (세션 돌아왔을 때 보임)
     """
     queue: _heartbeat_asyncio.Queue = _heartbeat_asyncio.Queue(maxsize=0)
     _client_gone = False
+    # heartbeat 정지 신호 — producer 완료 또는 client disconnect 시 set
+    _hb_stop = _heartbeat_asyncio.Event()
 
     # 스트리밍 상태 초기화
     state: Dict[str, Any] = {"content": "", "tool_count": 0, "last_tool": "", "last_save": _bg_time.monotonic()}
@@ -200,6 +203,8 @@ async def with_background_completion(
             # BaseException: CancelledError, GeneratorExit 등 모두 잡음
             logger.warning(f"bg_producer_error session={session_id}: {type(e).__name__}: {e}")
         finally:
+            # heartbeat 태스크 정지 신호 (producer 완료 시 heartbeat 불필요)
+            _hb_stop.set()
             try:
                 await queue.put(_SENTINEL)
             except Exception:
@@ -232,10 +237,40 @@ async def with_background_completion(
     task = _heartbeat_asyncio.create_task(_producer())
     _active_bg_tasks[session_id] = task
 
+    # ── 독립 heartbeat task ──────────────────────────────────────────
+    # 도구 실행(30s+)이 generator를 block해도 heartbeat가 끊기지 않도록
+    # producer와 별개의 asyncio.Task에서 8초마다 heartbeat를 queue에 직접 투입.
+    _HB_INTERVAL = 8.0
+    _HB_LINE = f'data: {json.dumps({"type": "heartbeat"})}\n\n'
+
+    async def _heartbeat_pump():
+        """독립 heartbeat — producer/도구 블로킹과 무관하게 8초마다 queue에 heartbeat 삽입."""
+        while not _hb_stop.is_set():
+            try:
+                await _heartbeat_asyncio.wait_for(_hb_stop.wait(), timeout=_HB_INTERVAL)
+                break  # stop 신호 수신 → 정상 종료
+            except _heartbeat_asyncio.TimeoutError:
+                # 8초 경과, stop 미수신 → heartbeat 전송
+                if _client_gone:
+                    break  # 클라이언트 이탈 시 heartbeat 불필요
+                try:
+                    queue.put_nowait(_HB_LINE)
+                except Exception:
+                    pass
+        logger.debug(f"heartbeat_pump_done session={session_id[:8]}")
+
+    hb_task = _heartbeat_asyncio.create_task(_heartbeat_pump())
+
     # Consumer: Queue에서 읽어서 yield — 클라이언트 disconnect 시 자연스럽게 종료
+    # queue.get()에 timeout을 걸어 heartbeat_pump 실패 시에도 직접 heartbeat 전송 (이중 안전)
     try:
         while True:
-            item = await queue.get()
+            try:
+                item = await _heartbeat_asyncio.wait_for(queue.get(), timeout=_HB_INTERVAL)
+            except _heartbeat_asyncio.TimeoutError:
+                # heartbeat_pump이 큐에 넣지 못한 경우 → consumer에서 직접 heartbeat yield
+                yield _HB_LINE
+                continue
             if item is _SENTINEL:
                 break
             yield item
@@ -245,6 +280,9 @@ async def with_background_completion(
         # 즉시 중간 저장 (돌아왔을 때 바로 보이도록)
         _heartbeat_asyncio.create_task(_interim_save_streaming(session_id, state))
         logger.info(f"client_disconnected session={session_id} — producer continues in background (auto-cancel in {_BG_AUTO_CANCEL_SEC}s), interim save triggered")
+    finally:
+        _hb_stop.set()
+        hb_task.cancel()
 
 
 def get_active_bg_tasks() -> Dict[str, bool]:
@@ -1085,7 +1123,7 @@ async def process_video_with_gemini(file_data: dict, user_message: str) -> str:
             tmp_path = f.name
         video_file = genai.upload_file(path=tmp_path)
         while video_file.state.name == "PROCESSING":
-            time.sleep(2)
+            await _heartbeat_asyncio.sleep(2)
             video_file = genai.get_file(video_file.name)
         model_g = genai.GenerativeModel("gemini-2.0-flash-exp")
         response = model_g.generate_content(

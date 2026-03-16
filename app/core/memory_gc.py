@@ -234,57 +234,73 @@ async def consolidate_memory_facts(pool) -> dict:
 
 
 async def _merge_duplicate_facts(conn) -> int:
-    """중복 사실 병합: 같은 카테고리에서 임베딩 유사도 > 0.92인 쌍 병합."""
+    """중복 사실 병합: pgvector self-join으로 유사도 >= 0.92인 쌍 일괄 병합.
+    H-14: O(n²) Python 루프 → 단일 SQL로 전환."""
     merged_count = 0
     try:
-        # 카테고리별로 최근 사실 조회
-        categories = await conn.fetch(
-            "SELECT DISTINCT category FROM memory_facts WHERE superseded_by IS NULL AND embedding IS NOT NULL"
+        # 1) detail 보강: 중복 쌍에서 더 긴 detail을 primary에 반영
+        await conn.execute(
+            """
+            WITH duplicate_pairs AS (
+              SELECT
+                CASE WHEN f1.confidence >= f2.confidence THEN f1.id ELSE f2.id END AS keep_id,
+                CASE WHEN f1.confidence >= f2.confidence THEN f2.id ELSE f1.id END AS drop_id,
+                CASE WHEN f1.confidence >= f2.confidence
+                     THEN LENGTH(COALESCE(f1.detail,'')) < LENGTH(COALESCE(f2.detail,''))
+                     ELSE LENGTH(COALESCE(f2.detail,'')) < LENGTH(COALESCE(f1.detail,''))
+                END AS swap_detail
+              FROM memory_facts f1
+              JOIN memory_facts f2
+                ON f1.category = f2.category
+               AND f1.id < f2.id
+               AND f1.superseded_by IS NULL
+               AND f2.superseded_by IS NULL
+               AND f1.embedding IS NOT NULL
+               AND f2.embedding IS NOT NULL
+              WHERE 1 - (f1.embedding <=> f2.embedding) >= $1
+            ),
+            detail_swap AS (
+              SELECT dp.keep_id, f_drop.detail AS better_detail
+              FROM duplicate_pairs dp
+              JOIN memory_facts f_drop ON dp.drop_id = f_drop.id
+              WHERE dp.swap_detail = true
+            )
+            UPDATE memory_facts f
+            SET detail = ds.better_detail
+            FROM detail_swap ds
+            WHERE f.id = ds.keep_id
+            """,
+            _CONSOLIDATION_SIMILARITY,
         )
 
-        for cat_row in categories:
-            cat = cat_row["category"]
-            facts = await conn.fetch(
-                """
-                SELECT id, subject, detail, confidence, embedding, created_at
-                FROM memory_facts
-                WHERE category = $1 AND superseded_by IS NULL AND embedding IS NOT NULL
-                ORDER BY confidence DESC, created_at DESC
-                LIMIT 50
-                """,
-                cat,
+        # 2) 중복 마킹: drop_id를 superseded_by = keep_id로 설정
+        result = await conn.execute(
+            """
+            WITH duplicate_pairs AS (
+              SELECT
+                CASE WHEN f1.confidence >= f2.confidence THEN f1.id ELSE f2.id END AS keep_id,
+                CASE WHEN f1.confidence >= f2.confidence THEN f2.id ELSE f1.id END AS drop_id
+              FROM memory_facts f1
+              JOIN memory_facts f2
+                ON f1.category = f2.category
+               AND f1.id < f2.id
+               AND f1.superseded_by IS NULL
+               AND f2.superseded_by IS NULL
+               AND f1.embedding IS NOT NULL
+               AND f2.embedding IS NOT NULL
+              WHERE 1 - (f1.embedding <=> f2.embedding) >= $1
             )
+            UPDATE memory_facts
+            SET superseded_by = dp.keep_id
+            FROM duplicate_pairs dp
+            WHERE memory_facts.id = dp.drop_id
+            """,
+            _CONSOLIDATION_SIMILARITY,
+        )
 
-            # 쌍별 유사도 비교 (O(n²) but n ≤ 50)
-            seen_merged = set()
-            for i, f1 in enumerate(facts):
-                if str(f1["id"]) in seen_merged:
-                    continue
-                for f2 in facts[i + 1:]:
-                    if str(f2["id"]) in seen_merged:
-                        continue
-
-                    # DB에서 유사도 계산
-                    sim_row = await conn.fetchrow(
-                        "SELECT 1 - ($1::vector <=> $2::vector) AS sim",
-                        str(f1["embedding"]), str(f2["embedding"]),
-                    )
-                    sim = float(sim_row["sim"]) if sim_row else 0
-
-                    if sim >= _CONSOLIDATION_SIMILARITY:
-                        # f2를 f1에 병합 (f1이 confidence 높은 쪽)
-                        await conn.execute(
-                            "UPDATE memory_facts SET superseded_by = $1 WHERE id = $2",
-                            f1["id"], f2["id"],
-                        )
-                        # f1의 detail에 f2 정보 보강 (짧으면)
-                        if len(f1["detail"]) < len(f2["detail"]):
-                            await conn.execute(
-                                "UPDATE memory_facts SET detail = $1 WHERE id = $2",
-                                f2["detail"], f1["id"],
-                            )
-                        seen_merged.add(str(f2["id"]))
-                        merged_count += 1
+        merged_count = int(result.split()[-1]) if result else 0
+        if merged_count > 0:
+            logger.info("memory_facts_merged_pgvector", count=merged_count)
 
     except Exception as e:
         logger.debug("merge_duplicate_facts_error", error=str(e))

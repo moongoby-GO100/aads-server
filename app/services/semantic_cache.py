@@ -1,13 +1,14 @@
 """
 Semantic Response Cache — 유사 질문에 대한 즉시 응답 캐시.
 
-Gemini 임베딩으로 쿼리를 벡터화하고, 코사인 유사도가 임계값 이상이면
-캐시된 응답을 반환. ai_meta_memory 테이블(category='semantic_cache')에 저장.
+Gemini 임베딩으로 쿼리를 벡터화하고, pgvector <=> 연산자로 코사인 유사도가
+임계값 이상이면 캐시된 응답을 반환. ai_meta_memory 테이블(category='semantic_cache')에 저장.
+H-13: pgvector 서버사이드 유사도 검색으로 O(1) 조회.
 """
 from __future__ import annotations
 
 import hashlib
-import math
+import json
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -22,16 +23,6 @@ _DEFAULT_SIMILARITY_THRESHOLD = 0.92
 _DEFAULT_TTL_HOURS = 24
 _DEFAULT_MAX_ENTRIES = 500
 _DEFAULT_MIN_QUALITY = 0.7
-
-
-def _cosine_similarity(a: List[float], b: List[float]) -> float:
-    """두 벡터의 코사인 유사도 계산."""
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(x * x for x in b))
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
 
 
 def _embedding_hash(embedding: List[float]) -> str:
@@ -63,15 +54,16 @@ class SemanticCache:
         self.min_quality = float(
             os.getenv("SEMANTIC_CACHE_MIN_QUALITY", str(_DEFAULT_MIN_QUALITY))
         )
-        # 간단한 히트/미스 카운터 (인메모리, 재시작 시 리셋)
         self._hits = 0
         self._misses = 0
+        # cosine distance threshold = 1 - similarity
+        self._distance_threshold = 1.0 - self.similarity_threshold
 
     async def lookup(
         self, query: str, workspace_id: str | None = None
     ) -> Optional[Dict]:
         """
-        캐시 조회 — 유사 쿼리가 있으면 캐시된 응답 반환.
+        캐시 조회 — pgvector <=> 연산자로 유사 쿼리 서버사이드 검색.
 
         Returns:
             {"cached_response": str, "original_query": str,
@@ -91,99 +83,91 @@ class SemanticCache:
             self._misses += 1
             return None
 
-        # ai_meta_memory에서 semantic_cache 항목 로드
-        # H-13: Early return when no cache entries exist to avoid O(n) full scan.
-        # TODO: Migrate to pgvector <=> operator for server-side cosine similarity
-        #       instead of loading all rows into Python. Example:
-        #       SELECT ... ORDER BY embedding <=> $1::vector LIMIT 1
         try:
             async with self.pool.acquire() as conn:
-                entry_count = await conn.fetchval(
-                    "SELECT COUNT(*) FROM ai_meta_memory WHERE category = 'semantic_cache'"
-                )
-                if not entry_count:
-                    self._misses += 1
-                    return None
-                rows = await conn.fetch(
-                    """
-                    SELECT key, value, updated_at
-                    FROM ai_meta_memory
-                    WHERE category = 'semantic_cache'
-                    ORDER BY updated_at DESC
-                    LIMIT $1
-                    """,
-                    self.max_entries,
-                )
+                # pgvector HNSW index로 O(1) 조회
+                if workspace_id:
+                    row = await conn.fetchrow(
+                        """
+                        SELECT key, value, updated_at,
+                               (embedding <=> $1::vector) AS distance
+                        FROM ai_meta_memory
+                        WHERE category = 'semantic_cache'
+                          AND embedding IS NOT NULL
+                          AND (value->>'workspace_id' IS NULL
+                               OR value->>'workspace_id' = $3)
+                          AND (embedding <=> $1::vector) <= $2
+                        ORDER BY (embedding <=> $1::vector) ASC
+                        LIMIT 1
+                        """,
+                        str(query_emb), self._distance_threshold, workspace_id,
+                    )
+                else:
+                    row = await conn.fetchrow(
+                        """
+                        SELECT key, value, updated_at,
+                               (embedding <=> $1::vector) AS distance
+                        FROM ai_meta_memory
+                        WHERE category = 'semantic_cache'
+                          AND embedding IS NOT NULL
+                          AND (embedding <=> $1::vector) <= $2
+                        ORDER BY (embedding <=> $1::vector) ASC
+                        LIMIT 1
+                        """,
+                        str(query_emb), self._distance_threshold,
+                    )
         except Exception as e:
             logger.warning("semantic_cache.lookup.db_fail", error=str(e))
             self._misses += 1
             return None
 
-        if not rows:
+        if not row:
             self._misses += 1
             return None
 
+        val = row["value"]
+        if not isinstance(val, dict):
+            self._misses += 1
+            return None
+
+        # TTL 체크
+        expires_at_str = val.get("expires_at")
+        if expires_at_str:
+            try:
+                expires_at = datetime.fromisoformat(expires_at_str)
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) > expires_at:
+                    self._misses += 1
+                    return None
+            except (ValueError, TypeError):
+                pass
+
+        similarity = round(1.0 - float(row["distance"]), 4)
         now = datetime.now(timezone.utc)
-        best_match: Optional[Dict] = None
-        best_sim = 0.0
+        created_str = val.get("created_at", "")
+        try:
+            created_at = datetime.fromisoformat(created_str)
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            age_minutes = int((now - created_at).total_seconds() / 60)
+        except (ValueError, TypeError):
+            age_minutes = 0
 
-        for row in rows:
-            val = row["value"]
-            if not isinstance(val, dict):
-                continue
-
-            # TTL 체크
-            expires_at_str = val.get("expires_at")
-            if expires_at_str:
-                try:
-                    expires_at = datetime.fromisoformat(expires_at_str)
-                    if expires_at.tzinfo is None:
-                        expires_at = expires_at.replace(tzinfo=timezone.utc)
-                    if now > expires_at:
-                        continue
-                except (ValueError, TypeError):
-                    pass
-
-            # workspace 필터
-            if workspace_id and val.get("workspace_id") != workspace_id:
-                continue
-
-            # 임베딩 유사도 계산
-            cached_emb = val.get("embedding")
-            if not cached_emb or not isinstance(cached_emb, list):
-                continue
-
-            sim = _cosine_similarity(query_emb, cached_emb)
-            if sim >= self.similarity_threshold and sim > best_sim:
-                best_sim = sim
-                created_str = val.get("created_at", "")
-                try:
-                    created_at = datetime.fromisoformat(created_str)
-                    if created_at.tzinfo is None:
-                        created_at = created_at.replace(tzinfo=timezone.utc)
-                    age_minutes = int((now - created_at).total_seconds() / 60)
-                except (ValueError, TypeError):
-                    age_minutes = 0
-
-                best_match = {
-                    "cached_response": val.get("response", ""),
-                    "original_query": val.get("query", ""),
-                    "similarity": round(sim, 4),
-                    "age_minutes": age_minutes,
-                }
-
-        if best_match:
-            self._hits += 1
-            logger.info(
-                "semantic_cache.hit",
-                similarity=best_match["similarity"],
-                age_minutes=best_match["age_minutes"],
-                query_preview=query[:60],
-            )
-            return best_match
-
-        self._misses += 1
-        return None
+        self._hits += 1
+        result = {
+            "cached_response": val.get("response", ""),
+            "original_query": val.get("query", ""),
+            "similarity": similarity,
+            "age_minutes": age_minutes,
+        }
+        logger.info(
+            "semantic_cache.hit",
+            similarity=similarity,
+            age_minutes=age_minutes,
+            query_preview=query[:60],
+        )
+        return result
 
     async def store(
         self,
@@ -193,24 +177,11 @@ class SemanticCache:
         workspace_id: str | None = None,
         tools_used: List[str] | None = None,
     ) -> bool:
-        """
-        응답 캐시 저장. quality_score >= min_quality 이고 도구 사용된 경우만 저장.
-
-        Returns:
-            True if stored, False otherwise.
-        """
+        """응답 캐시 저장. quality_score >= min_quality 이고 도구 사용된 경우만 저장."""
         if quality_score < self.min_quality:
-            logger.debug(
-                "semantic_cache.store.skip_low_quality",
-                quality_score=quality_score,
-                threshold=self.min_quality,
-            )
             return False
-
         if not tools_used:
-            logger.debug("semantic_cache.store.skip_no_tools")
             return False
-
         if not query or not response:
             return False
 
@@ -230,7 +201,6 @@ class SemanticCache:
         value = {
             "query": query[:2000],
             "response": response[:10000],
-            "embedding": query_emb,
             "quality_score": quality_score,
             "workspace_id": workspace_id,
             "tools_used": tools_used,
@@ -242,16 +212,19 @@ class SemanticCache:
             async with self.pool.acquire() as conn:
                 await conn.execute(
                     """
-                    INSERT INTO ai_meta_memory (category, key, value, confidence, last_used_at, updated_at)
-                    VALUES ('semantic_cache', $1, $2::jsonb, $3, NOW(), NOW())
-                    ON CONFLICT (key) DO UPDATE SET
+                    INSERT INTO ai_meta_memory
+                      (category, key, value, embedding, confidence, last_used_at, updated_at)
+                    VALUES ('semantic_cache', $1, $2::jsonb, $3::vector, $4, NOW(), NOW())
+                    ON CONFLICT (project, category, key) DO UPDATE SET
                         value = $2::jsonb,
-                        confidence = $3,
+                        embedding = $3::vector,
+                        confidence = $4,
                         last_used_at = NOW(),
                         updated_at = NOW()
                     """,
                     cache_key,
-                    __import__("json").dumps(value, ensure_ascii=False),
+                    json.dumps(value, ensure_ascii=False),
+                    str(query_emb),
                     quality_score,
                 )
 
@@ -291,12 +264,7 @@ class SemanticCache:
         workspace_id: str | None = None,
         older_than_hours: int | None = None,
     ) -> int:
-        """
-        캐시 무효화 — 만료 항목 또는 특정 workspace 항목 삭제.
-
-        Returns:
-            삭제된 항목 수.
-        """
+        """캐시 무효화 — 만료 항목 또는 특정 workspace 항목 삭제."""
         try:
             async with self.pool.acquire() as conn:
                 if workspace_id and older_than_hours:
@@ -307,8 +275,7 @@ class SemanticCache:
                           AND value->>'workspace_id' = $1
                           AND updated_at < NOW() - ($2 || ' hours')::interval
                         """,
-                        workspace_id,
-                        str(older_than_hours),
+                        workspace_id, str(older_than_hours),
                     )
                 elif workspace_id:
                     result = await conn.execute(
@@ -329,7 +296,6 @@ class SemanticCache:
                         str(older_than_hours),
                     )
                 else:
-                    # 만료 항목만 삭제 (expires_at 기준)
                     result = await conn.execute(
                         """
                         DELETE FROM ai_meta_memory
@@ -396,8 +362,6 @@ class SemanticCache:
 
 # ── Module-level Singleton ────────────────────────────────────────────
 
-# H-13: Avoid creating new SemanticCache instances per convenience call.
-# The singleton is lazily initialized on first use.
 _singleton_cache: Optional[SemanticCache] = None
 
 
