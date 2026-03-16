@@ -258,7 +258,7 @@ async def _stream_anthropic(
     output_tokens = 0
 
     # Tool Use 루프 — 절대 상한 + wall-clock 타임아웃
-    _MAX_TOOL_TURNS = int(os.getenv("MAX_TOOL_TURNS", "500"))
+    _MAX_TOOL_TURNS = int(os.getenv("MAX_TOOL_TURNS", "100"))
     _TOOL_TURN_EXTEND = 50  # 자동 연장 턴
     _WALL_CLOCK_TIMEOUT = int(os.getenv("TOOL_LOOP_TIMEOUT_SEC", "1800"))  # 30분 절대 타임아웃
     _wall_clock_start = __import__("time").monotonic()
@@ -269,6 +269,11 @@ async def _stream_anthropic(
         current_messages.append({"role": "user", "content": "계속해주세요."})
     tool_calls_made = []
     _consecutive_yellow = 0  # Yellow 등급 도구 연속 호출 카운터
+    _consecutive_errors = 0  # 도구 연속 에러 카운터
+    _total_errors = 0  # 도구 총 에러 수
+    _CONSECUTIVE_ERROR_WARN = 5  # 연속 5회 에러 시 경고 주입
+    _CONSECUTIVE_ERROR_STOP = 10  # 연속 10회 에러 시 도구 루프 강제 중단
+    _TOTAL_ERROR_STOP = 30  # 총 30회 에러 시 강제 중단
     _YELLOW_TOOLS = {
         "write_remote_file", "patch_remote_file", "run_remote_command",
         "git_remote_add", "git_remote_commit", "git_remote_push",
@@ -468,6 +473,17 @@ async def _stream_anthropic(
             except Exception:
                 compressed_str = result_str  # fallback: 원본 유지
 
+            # 도구 에러 감지 — 연속 에러 카운터
+            _is_tool_error = (
+                (isinstance(result_str, str) and ("[ERROR]" in result_str or '"error"' in result_str[:50]))
+                or (isinstance(result_str, dict) and "error" in result_str)
+            )
+            if _is_tool_error:
+                _consecutive_errors += 1
+                _total_errors += 1
+            else:
+                _consecutive_errors = 0  # 성공하면 리셋
+
             yield {
                 "type": "tool_result",
                 "tool_name": tu.name,
@@ -479,6 +495,28 @@ async def _stream_anthropic(
                 "tool_use_id": tu.id,
                 "content": compressed_str,  # 컨텍스트에는 압축본
             })
+
+            # 연속 에러 경고/중단
+            if _consecutive_errors >= _CONSECUTIVE_ERROR_STOP or _total_errors >= _TOTAL_ERROR_STOP:
+                _err_msg = (
+                    f"⚠️ 도구 호출이 연속 {_consecutive_errors}회 실패했습니다 (총 {_total_errors}회). "
+                    "다른 접근 방식을 시도하거나, 현재까지의 결과를 정리하여 응답하세요. "
+                    "동일한 도구를 같은 방식으로 반복 호출하지 마세요."
+                )
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": _err_msg,
+                    "is_error": True,
+                })
+                logger.warning(f"consecutive_error_stop: {_consecutive_errors} consecutive, {_total_errors} total, turn={_turn}")
+                break  # 이 턴의 남은 도구 실행 스킵
+            elif _consecutive_errors >= _CONSECUTIVE_ERROR_WARN:
+                # 경고 주입 — AI가 다른 방식을 시도하도록 유도
+                tool_results[-1]["content"] = (
+                    compressed_str + f"\n\n⚠️ 연속 {_consecutive_errors}회 도구 에러. "
+                    "같은 방식 재시도 금지. 다른 도구나 다른 파라미터를 시도하세요."
+                )
             # F5: Tool Result Archive — 도구 결과 전문 보관 (백그라운드)
             try:
                 from app.services.tool_archive import archive_tool_result as _archive
