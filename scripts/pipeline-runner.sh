@@ -28,12 +28,9 @@ LOG_DIR="/var/log/aads-pipeline"
 ARTIFACT_DIR="/tmp/aads_pipeline_artifacts"
 RUNNER_HOSTNAME=$(hostname -s)
 
-# Claude Code API 키 — ~/.claude/api_keys.env에서 로드
-source ~/.claude/api_keys.env 2>/dev/null || true
-if [[ "${CURRENT_ACCOUNT:-1}" == "2" && -n "${API_KEY_2:-}" ]]; then
-    export ANTHROPIC_API_KEY="$API_KEY_2"
-elif [[ -n "${API_KEY_1:-}" ]]; then
-    export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-$API_KEY_1}"
+# Claude Code 인증: current.env (oat 키) 사용 — API 키(api03) 사용 금지
+source ~/.claude/current.env 2>/dev/null || true
+if false; then
 fi
 export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LANGUAGE=en_US:en MANPATH=
 

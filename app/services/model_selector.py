@@ -23,7 +23,10 @@ from app.services.intent_router import IntentResult
 logger = logging.getLogger(__name__)
 
 settings = Settings()
-_anthropic = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY.get_secret_value())
+# OAuth 토큰(oat) 우선, 없으면 API 키(api03) 폴백
+_auth_token = settings.ANTHROPIC_AUTH_TOKEN.get_secret_value() if settings.ANTHROPIC_AUTH_TOKEN.get_secret_value() else ""
+_api_key = settings.ANTHROPIC_API_KEY.get_secret_value() if not _auth_token else None
+_anthropic = AsyncAnthropic(auth_token=_auth_token or None, api_key=_api_key)
 
 LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
 LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
