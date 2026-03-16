@@ -837,6 +837,71 @@ async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort
         await get_pool().release(conn)
 
 
+async def _extract_artifacts(session_id: uuid.UUID, content: str) -> None:
+    """AI 응답에서 아티팩트 자동 추출 → chat_artifacts 저장."""
+    if not content or len(content) < 100:
+        return
+
+    import re as _re
+
+    artifacts = []
+
+    # 1) 코드 블록 추출 (```language ... ```)
+    code_blocks = _re.findall(
+        r'```(\w+)\n(.*?)```', content, _re.DOTALL
+    )
+    for lang, code in code_blocks:
+        if lang.lower() in ('diff', 'text', 'log', 'output', 'bash', 'sh', 'shell'):
+            continue  # diff, 로그, 명령어는 제외
+        if len(code.strip()) < 50:
+            continue  # 너무 짧은 코드 제외
+        title = f"{lang} 코드"
+        # 첫 줄에서 파일명/함수명 추출 시도
+        first_line = code.strip().split('\n')[0]
+        if 'def ' in first_line:
+            title = first_line.strip()[:80]
+        elif 'class ' in first_line:
+            title = first_line.strip()[:80]
+        artifacts.append(("code", title, code.strip(), {"language": lang}))
+
+    # 2) 보고서 추출 (# 제목으로 시작하는 구조화된 보고서)
+    report_match = _re.search(
+        r'(^#{1,2}\s+.+?\n(?:.*?\n){10,})', content, _re.MULTILINE
+    )
+    if report_match and len(report_match.group(1)) > 300:
+        report_text = report_match.group(1)
+        title_match = _re.search(r'^#{1,2}\s+(.+)', report_text)
+        title = title_match.group(1)[:100] if title_match else "보고서"
+        artifacts.append(("report", title, report_text, {}))
+
+    # 3) 테이블 추출 (마크다운 테이블)
+    table_blocks = _re.findall(
+        r'(\|.+\|(?:\n\|[-:| ]+\|)?\n(?:\|.+\|\n?){3,})', content
+    )
+    for table in table_blocks:
+        if len(table) > 200:
+            header = table.split('\n')[0].strip()
+            title = f"테이블: {header[:60]}"
+            artifacts.append(("table", title, table, {}))
+
+    if not artifacts:
+        return
+
+    # 최대 3개만 저장 (과다 추출 방지)
+    import json as _json
+    async with get_pool().acquire() as conn:
+        for art_type, title, art_content, metadata in artifacts[:3]:
+            await conn.execute(
+                """
+                INSERT INTO chat_artifacts (session_id, type, title, content, metadata)
+                VALUES ($1, $2, $3, $4, $5::jsonb)
+                """,
+                session_id, art_type, title[:200], art_content[:50000],
+                _json.dumps(metadata, ensure_ascii=False),
+            )
+    logger.info(f"artifacts_extracted: session={str(session_id)[:8]} count={min(len(artifacts), 3)}")
+
+
 async def _save_message(
     conn: asyncpg.Connection,
     session_id: uuid.UUID,
@@ -933,6 +998,12 @@ async def _save_and_update_session(
                 "UPDATE chat_sessions SET cost_total = cost_total + $1, updated_at = NOW() WHERE id = $2",
                 cost, sid,
             )
+        # 아티팩트 자동 추출 (코드 블록, 보고서, 테이블)
+        try:
+            await _extract_artifacts(sid, content)
+        except Exception as _art_err:
+            logger.debug(f"artifact_extract_error: {_art_err}")
+
         # 20턴마다 자동 세션 노트 (트랜잭션 밖)
         if auto_save_check and session_id_str:
             try:
