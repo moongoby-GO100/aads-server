@@ -16,8 +16,9 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import asyncpg
-from anthropic import AsyncAnthropic, APIStatusError
+from anthropic import APIStatusError
 from app.config import Settings
+from app.core.anthropic_client import get_client
 from app.core.db_pool import get_pool
 
 logger = logging.getLogger(__name__)
@@ -77,11 +78,19 @@ import time as _bg_time
 
 
 async def _interim_save_streaming(session_id: str, state: Dict[str, Any]) -> None:
-    """백그라운드 생성 중 중간 상태를 DB에 저장 (세션 이동 후 돌아왔을 때 보이도록)."""
+    """백그라운드 생성 중 중간 상태를 DB에 저장 (세션 이동 후 돌아왔을 때 보이도록).
+    변경이 없으면 스킵 (1초 간격 호출 시 불필요한 DB write 방지).
+    """
     try:
         content = state.get("content", "")
         tool_count = state.get("tool_count", 0)
         last_tool = state.get("last_tool", "")
+
+        # 변경 감지: 이전 저장 내용과 동일하면 스킵
+        _save_key = f"{len(content)}:{tool_count}:{last_tool}"
+        if state.get("_last_save_key") == _save_key:
+            return
+        state["_last_save_key"] = _save_key
         # 스트리밍 중임을 나타내는 마커 + 현재 진행상황
         streaming_note = f"\n\n⏳ _생성 중... (도구 {tool_count}회 호출{', 최근: ' + last_tool if last_tool else ''})_"
         display_content = (content + streaming_note) if content else f"⏳ _AI가 응답을 생성 중입니다... (도구 {tool_count}회 호출 중)_"
@@ -180,18 +189,18 @@ async def with_background_completion(
                     except Exception:
                         pass
 
-                # 클라이언트 연결 중에도 30초마다 실시간 중간 저장 (토큰 절약 + 데이터 보호)
+                # 클라이언트 연결 중에도 1초마다 실시간 중간 저장 (서버 재시작 시 데이터 보호)
                 if not _client_gone:
                     _now_rt = _bg_time.monotonic()
-                    if _now_rt - state["last_save"] > 30:
+                    if _now_rt - state["last_save"] > 1:
                         state["last_save"] = _now_rt
                         await _interim_save_streaming(session_id, state)
 
                 # 클라이언트 disconnect 후 처리
                 if _client_gone:
                     now = _bg_time.monotonic()
-                    # 15초마다 중간 저장
-                    if now - state["last_save"] > 15:
+                    # 1초마다 중간 저장
+                    if now - state["last_save"] > 1:
                         state["last_save"] = now
                         await _interim_save_streaming(session_id, state)
                     # 클라이언트 이탈 후 _BG_AUTO_CANCEL_SEC(5분) 경과 시 자동 중단
@@ -620,7 +629,7 @@ async def _get_conn() -> asyncpg.Connection:
 
 # ─── Anthropic 클라이언트 ──────────────────────────────────────────────────────
 
-_anthropic = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY.get_secret_value())
+_anthropic = get_client()
 
 
 # ─── Workspace CRUD ───────────────────────────────────────────────────────────
@@ -1941,6 +1950,9 @@ async def send_message_stream(
             etype = event.get("type", "")
             if etype == "heartbeat":
                 yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+            elif etype == "model_info":
+                model_used = event.get("model", model_used)
+                yield f"data: {json.dumps({'type': 'model_info', 'model': model_used})}\n\n"
             elif etype == "interrupt_applied":
                 yield f"event: interrupt_applied\ndata: {json.dumps({'type': 'interrupt_applied', 'content': event.get('content', '')})}\n\n"
             elif etype == "delta":
