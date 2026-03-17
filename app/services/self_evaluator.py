@@ -15,7 +15,7 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 _ENABLED = os.getenv("SELF_EVAL_ENABLED", "true").lower() == "true"
-_MIN_RESPONSE_LEN = int(os.getenv("SELF_EVAL_MIN_LEN", "5"))
+_MIN_RESPONSE_LEN = int(os.getenv("SELF_EVAL_MIN_LEN", "1"))
 _HAIKU_MODEL = os.getenv("SELF_EVAL_MODEL", "claude-haiku-4-5-20251001")
 
 _PROJECT_KEYS = ("KIS", "AADS", "GO100", "SF", "NTV2", "NAS", "CEO")
@@ -34,21 +34,23 @@ def _normalize_project(raw: str | None) -> str | None:
 
 _EVAL_PROMPT = """다음 AI 응답의 품질을 평가하세요.
 
+이전 대화 맥락: {prev_context}
 사용자 질문: {user_msg}
 AI 응답 (앞 1000자): {ai_msg}
 
-5가지 기준으로 0.0~1.0 점수와 간단한 이유를 JSON으로 반환:
+6가지 기준으로 0.0~1.0 점수를 JSON으로 반환:
+- context_awareness: 이전 대화 맥락을 정확히 이해하고 답변했는가? 이전에 논의된 내용을 무시하거나 엉뚱한 답을 하면 0점. 맥락 없는 첫 질문이면 0.5.
 - accuracy: 사실적 정확성
 - completeness: 응답의 완성도
 - relevance: 질문과의 관련성
-- tool_grounding: 도구를 사용하여 주장/데이터를 검증했는가? 단, 대화/인사/의견/설명 등 도구가 불필요한 질문이면 0.5로 평가.
-- actionability: 구체적인 다음 단계를 제시하는가? (모호한 서술만 있으면 낮음)
+- tool_grounding: 도구를 사용하여 주장/데이터를 검증했는가? 대화/인사/의견/설명 등 도구 불필요 시 0.5.
+- actionability: 구체적인 다음 단계를 제시하는가?
 - tool_needed: 이 질문에 도구 사용이 필요했는가? (true/false)
 
-{{"accuracy": 0.0~1.0, "completeness": 0.0~1.0, "relevance": 0.0~1.0, "tool_grounding": 0.0~1.0, "actionability": 0.0~1.0, "tool_needed": true/false, "overall": 0.0~1.0, "note": "한줄 평가"}}
+{{"context_awareness": 0.0~1.0, "accuracy": 0.0~1.0, "completeness": 0.0~1.0, "relevance": 0.0~1.0, "tool_grounding": 0.0~1.0, "actionability": 0.0~1.0, "tool_needed": true/false, "overall": 0.0~1.0, "note": "한줄 평가"}}
 
-overall = accuracy×0.3 + completeness×0.25 + tool_grounding×0.15 + relevance×0.15 + actionability×0.15 으로 계산.
-단, tool_needed=false이면 tool_grounding=0.5로 재설정 후 계산.
+overall = context_awareness×0.25 + accuracy×0.25 + completeness×0.15 + tool_grounding×0.15 + relevance×0.10 + actionability×0.10 으로 계산.
+단, tool_needed=false이면 tool_grounding=0.5로 재설정 후 계산. 이전 맥락이 없으면 context_awareness=0.5.
 JSON만 반환. 마크다운 코드블록 없이."""
 
 
@@ -58,6 +60,7 @@ async def evaluate_response(
     message_id: str,
     session_id: Optional[str] = None,
     project: Optional[str] = None,
+    prev_messages: Optional[list] = None,
 ) -> Optional[float]:
     """AI 응답 품질을 평가하고 DB에 저장. B1: 낮은 품질 시 reflexion 생성."""
     if not _ENABLED or len(ai_response) < _MIN_RESPONSE_LEN:
@@ -67,7 +70,24 @@ async def evaluate_response(
         from app.core.anthropic_client import get_client
         client = get_client()
 
+        # 이전 대화 맥락 구성 (최근 6개 메시지)
+        prev_context = "없음 (첫 대화)"
+        if prev_messages:
+            ctx_parts = []
+            for m in prev_messages[-6:]:
+                role = m.get("role", "")
+                content = m.get("content", "")
+                if isinstance(content, list):
+                    content = " ".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+                if not isinstance(content, str):
+                    content = str(content)
+                if content.strip() and role in ("user", "assistant"):
+                    label = "CEO" if role == "user" else "AI"
+                    ctx_parts.append(f"[{label}] {content[:150]}")
+            prev_context = "\n".join(ctx_parts[-6:]) if ctx_parts else "없음 (첫 대화)"
+
         prompt = _EVAL_PROMPT.format(
+            prev_context=prev_context[:800],
             user_msg=user_message[:300],
             ai_msg=ai_response[:1000],
         )
@@ -99,13 +119,15 @@ async def evaluate_response(
             details["actionability"] = act_score
         else:
             act_score = float(details.get("actionability", 0.5))
-        # Weighted overall: accuracy×0.3 + completeness×0.25 + tool_grounding×0.15 + relevance×0.15 + actionability×0.15
+        # Weighted overall: context×0.25 + accuracy×0.25 + completeness×0.15 + tool_grounding×0.15 + relevance×0.10 + actionability×0.10
+        ctx_score = float(details.get("context_awareness", 0.5))
         overall = (
-            float(details.get("accuracy", 0.5)) * 0.30
-            + float(details.get("completeness", 0.5)) * 0.25
+            ctx_score * 0.25
+            + float(details.get("accuracy", 0.5)) * 0.25
+            + float(details.get("completeness", 0.5)) * 0.15
             + tg_score * 0.15
-            + float(details.get("relevance", 0.5)) * 0.15
-            + act_score * 0.15
+            + float(details.get("relevance", 0.5)) * 0.10
+            + act_score * 0.10
         )
         overall = min(1.0, max(0.0, overall))
         details["overall"] = round(overall, 3)

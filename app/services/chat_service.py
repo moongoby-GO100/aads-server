@@ -535,8 +535,24 @@ async def _resume_single_stream(
         from app.services.model_selector import call_stream
         from app.services.intent_router import IntentResult
 
-        # BUG-4 FIX: 워크스페이스 기반 모델 선택 (하드코딩 제거)
-        _resume_model = "claude-sonnet"  # 기본: sonnet (비용 효율)
+        # BUG-4 FIX v2: 세션의 마지막 사용 모델로 이어서 생성 (CEO 선택 모델 유지)
+        _resume_model = "claude-sonnet"  # 폴백 기본값
+        try:
+            async with pool.acquire() as conn:
+                _last_model_row = await conn.fetchval("""
+                    SELECT model_used FROM chat_messages
+                    WHERE session_id = $1
+                      AND role = 'assistant'
+                      AND model_used IS NOT NULL
+                      AND model_used NOT IN ('stopped', 'interrupted', 'semantic_cache')
+                    ORDER BY created_at DESC LIMIT 1
+                """, sid)
+                if _last_model_row:
+                    _resume_model = _last_model_row
+                    logger.info(f"resume_model_from_session session={session_id[:8]} model={_resume_model}")
+        except Exception as _model_err:
+            logger.warning(f"resume_model_lookup_failed session={session_id[:8]}: {_model_err}")
+
         intent_result = IntentResult(
             intent="status_check",
             model=_resume_model,
@@ -570,12 +586,13 @@ async def _resume_single_stream(
         async with pool.acquire() as conn:
             await conn.execute(
                 """UPDATE chat_messages
-                   SET content = $1, intent = NULL, model_used = 'claude-opus-4-6',
+                   SET content = $1, intent = NULL, model_used = $4,
                        cost = $2, edited_at = NOW()
                    WHERE id = $3""",
                 full_response,
                 cost_usd,
                 placeholder_id,
+                _resume_model,
             )
             await conn.execute(
                 "UPDATE chat_sessions SET cost_total = cost_total + $1, updated_at = NOW() WHERE id = $2",
