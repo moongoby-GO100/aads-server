@@ -60,6 +60,13 @@ LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
 _CLAUDE_RELAY_URL = os.getenv("CLAUDE_RELAY_URL", "http://host.docker.internal:8199")
 _CLAUDE_CLI_ENABLED = os.getenv("CLAUDE_CLI_ENABLED", "true").lower() == "true"
 
+# Agent SDK OAuth 토큰 자동 교대 (Naver 우선 → Gmail 폴백)
+_ANTHROPIC_KEYS = [
+    os.getenv("ANTHROPIC_API_KEY", ""),          # Naver (우선)
+    os.getenv("ANTHROPIC_API_KEY_FALLBACK", ""),  # Gmail (폴백)
+]
+_ANTHROPIC_KEYS = [k for k in _ANTHROPIC_KEYS if k]  # 빈값 제거
+
 
 # AADS-186E-2: Extended Thinking 전역 스위치 (기본 활성화)
 _EXTENDED_THINKING_ENABLED = os.getenv("EXTENDED_THINKING_ENABLED", "true").lower() == "true"
@@ -550,17 +557,77 @@ async def _stream_agent_sdk(
     tools: Optional[List[Dict[str, Any]]] = None,
     session_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    """Claude Agent SDK를 통한 스트리밍.
+    """Claude Agent SDK를 통한 스트리밍 (토큰 자동 교대).
 
     Agent SDK → 번들 CLI → Anthropic API (OAuth 직접 인증).
+    Naver 토큰 우선 → 실패 시 Gmail 토큰 폴백.
     MCP 브릿지로 55개 도구 사용. 세션 자동 관리.
     """
-    from claude_agent_sdk import query as sdk_query, ClaudeAgentOptions
-
     sdk_model = _ANTHROPIC_MODEL_ID.get(model, model)
     user_message = _format_messages_as_text(messages)
 
-    yield {"type": "model_info", "model": sdk_model}
+    # 토큰 교대: 사용 가능한 키 순서대로 시도
+    keys_to_try = _ANTHROPIC_KEYS if _ANTHROPIC_KEYS else [os.getenv("ANTHROPIC_API_KEY", "")]
+
+    for key_idx, api_key in enumerate(keys_to_try):
+        if not api_key:
+            continue
+
+        # 첫 번째 키에서만 model_info 전송 (중복 방지)
+        if key_idx == 0:
+            yield {"type": "model_info", "model": sdk_model}
+
+        result = []
+        error_msg = ""
+        async for evt in _run_agent_sdk_with_key(
+            api_key, sdk_model, system_prompt, user_message, session_id,
+        ):
+            if evt.get("type") == "error":
+                error_msg = evt.get("content", "")
+                break
+            result.append(evt)
+            yield evt
+
+        if not error_msg:
+            return  # 성공 — 종료
+
+        # 토큰 교대 판단: 재시도 가능한 에러인지 확인
+        _RETRYABLE_PATTERNS = [
+            "rate_limit", "429", "Rate limit",
+            "overloaded", "529", "503", "Overloaded",
+            "credit", "402", "Credit",
+            "authentication", "401", "Unauthorized",
+            "exit code 1",  # CLI 일반 에러 (인증 실패 포함)
+            "No connected db",
+            "server_error", "500", "Internal",
+        ]
+        is_retryable = any(p.lower() in error_msg.lower() for p in _RETRYABLE_PATTERNS)
+
+        if is_retryable and key_idx < len(keys_to_try) - 1:
+            _key_label = "Naver" if key_idx == 0 else "Gmail"
+            _next_label = "Gmail" if key_idx == 0 else "Naver"
+            logger.warning(f"token_switch: {_key_label} failed ({error_msg[:80]}), trying {_next_label}")
+            yield {"type": "heartbeat"}
+            await asyncio.sleep(0.5)
+            continue  # 다음 키로 재시도
+
+        # 재시도 불가 또는 마지막 키 — 에러 전달
+        yield {"type": "error", "content": error_msg}
+        return
+
+    # 모든 키 소진
+    yield {"type": "error", "content": "All OAuth tokens exhausted"}
+
+
+async def _run_agent_sdk_with_key(
+    api_key: str,
+    sdk_model: str,
+    system_prompt: str,
+    user_message: str,
+    session_id: Optional[str] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """단일 API 키로 Agent SDK 실행. 성공 시 이벤트 스트리밍, 실패 시 error 이벤트."""
+    from claude_agent_sdk import query as sdk_query, ClaudeAgentOptions
 
     # MCP config: 컨테이너 내부에서 직접 브릿지 실행
     _mcp_cfg = json.dumps({
@@ -574,7 +641,6 @@ async def _stream_agent_sdk(
         }
     })
 
-    # SDK 옵션
     opts = ClaudeAgentOptions(
         model=sdk_model,
         max_turns=200,
@@ -585,6 +651,7 @@ async def _stream_agent_sdk(
         allowed_tools=["mcp__aads-tools__*"],
         disallowed_tools=["Bash", "Read", "Edit", "Write", "Glob", "Grep",
                           "WebFetch", "WebSearch", "Agent", "NotebookEdit"],
+        env={"ANTHROPIC_API_KEY": api_key},
     )
 
     full_text = ""
@@ -599,14 +666,18 @@ async def _stream_agent_sdk(
             msg_type = type(msg).__name__
 
             if msg_type == "AssistantMessage":
+                # 에러 응답 감지 (CLI가 에러를 assistant 메시지로 반환하는 경우)
                 for block in msg.content:
                     block_type = type(block).__name__
                     if block_type == "TextBlock":
-                        if block.text:
-                            full_text += block.text
-                            yield {"type": "delta", "content": block.text}
+                        text = block.text or ""
+                        if text.startswith("API Error:") or "authentication_failed" in text:
+                            yield {"type": "error", "content": text}
+                            return
+                        if text:
+                            full_text += text
+                            yield {"type": "delta", "content": text}
                     elif block_type == "ToolUseBlock":
-                        # MCP 접두사 제거
                         raw_name = block.name or ""
                         tool_name = raw_name.split("__")[-1] if raw_name.startswith("mcp__") else raw_name
                         tool_id = block.id or ""
@@ -625,7 +696,6 @@ async def _stream_agent_sdk(
                             yield {"type": "thinking", "thinking": thinking}
 
             elif msg_type == "UserMessage":
-                # tool_result 이벤트 (SDK가 도구 결과를 UserMessage로 전달)
                 content = msg.content
                 if isinstance(content, list):
                     for block in content:
@@ -644,26 +714,29 @@ async def _stream_agent_sdk(
                                 "tool_use_id": tool_id,
                                 "content": str(result_content)[:3000],
                             }
-                # heartbeat (SSE 연결 유지)
                 yield {"type": "heartbeat"}
 
             elif msg_type == "ResultMessage":
+                is_error = getattr(msg, "is_error", False)
+                if is_error:
+                    yield {"type": "error", "content": getattr(msg, "result", "SDK error")}
+                    return
                 total_cost = getattr(msg, "total_cost_usd", 0) or 0
                 usage = getattr(msg, "usage", {}) or {}
                 in_tokens = usage.get("input_tokens", 0) or 0
                 out_tokens = usage.get("output_tokens", 0) or 0
 
             elif msg_type == "SystemMessage":
-                # init, progress 등 — heartbeat로 전달
                 yield {"type": "heartbeat"}
 
     except Exception as e:
-        logger.error(f"agent_sdk_error: {e}")
-        yield {"type": "error", "content": str(e)}
+        error_str = str(e)
+        logger.error(f"agent_sdk_key_error: {error_str[:200]}")
+        yield {"type": "error", "content": error_str}
         return
 
     # done 이벤트
-    cost = total_cost if total_cost else float(_estimate_cost(model, in_tokens, out_tokens))
+    cost = total_cost if total_cost else float(_estimate_cost("claude-sonnet", in_tokens, out_tokens))
     yield {
         "type": "done",
         "model": sdk_model,
