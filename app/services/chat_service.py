@@ -2194,7 +2194,8 @@ async def send_message_stream(
             if _last_msg:
                 _bg_asyncio.create_task(
                     evaluate_response(content, full_response, _last_msg,
-                                       session_id=session_id, project=_normalized_project)
+                                       session_id=session_id, project=_normalized_project,
+                                       prev_messages=messages[-8:] if messages else None)
                 )
         except Exception as _bg_err:
             logger.debug("bg_self_eval_launch_error", error=str(_bg_err))
