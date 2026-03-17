@@ -1,7 +1,7 @@
 """
-AADS-185: 모델 선택기 — LiteLLM vs 직접 Anthropic SDK 분기
+AADS-185: 모델 선택기 — Claude CLI Relay + LiteLLM 분기
+- Claude 인텐트: Claude Code CLI 경유 (MCP 도구 브릿지, OAuth 토큰 자동 관리)
 - Gemini 인텐트 (casual, greeting): LiteLLM 경유
-- Claude 인텐트: Anthropic SDK 직접 (Tool Use + Extended Thinking + Prompt Caching 지원)
 - Gemini Direct (grounding, deep_research): gemini_search_service / gemini_research_service
 """
 from __future__ import annotations
@@ -24,39 +24,42 @@ logger = logging.getLogger(__name__)
 
 settings = Settings()
 
-# OAuth 토큰 자동 스위치: 토큰1 → 토큰2 (402/429 시 자동 전환)
-_oat_1 = settings.ANTHROPIC_AUTH_TOKEN.get_secret_value() or ""
-_oat_2 = settings.ANTHROPIC_AUTH_TOKEN_2.get_secret_value() or ""
-_current_oat_index = 0  # 0=토큰1, 1=토큰2
+# LiteLLM 경유: OAuth 토큰은 LiteLLM이 관리 (sync_litellm_oauth.sh)
+_LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
+_LITELLM_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
+
+class _StripAuthTransport(httpx.AsyncBaseTransport):
+    """SDK 자동 Authorization 헤더 제거 — LiteLLM x-api-key만 사용."""
+    def __init__(self):
+        self._inner = httpx.AsyncHTTPTransport()
+    async def handle_async_request(self, request):
+        raw = [(k, v) for k, v in request.headers.raw if k.lower() != b"authorization"]
+        request.headers = httpx.Headers(raw)
+        return await self._inner.handle_async_request(request)
 
 def _get_anthropic_client() -> AsyncAnthropic:
-    """현재 활성 OAuth 토큰으로 클라이언트 반환."""
-    token = _oat_1 if _current_oat_index == 0 else _oat_2
-    if token:
-        return AsyncAnthropic(auth_token=token)
-    # 폴백: API 키 (레거시)
-    api_key = settings.ANTHROPIC_API_KEY.get_secret_value()
-    if api_key:
-        return AsyncAnthropic(api_key=api_key)
-    raise RuntimeError("ANTHROPIC_AUTH_TOKEN 또는 ANTHROPIC_API_KEY가 필요합니다")
+    """LiteLLM 경유 Anthropic 클라이언트 반환."""
+    return AsyncAnthropic(
+        api_key=_LITELLM_API_KEY,
+        base_url=_LITELLM_URL,
+        http_client=httpx.AsyncClient(transport=_StripAuthTransport()),
+        max_retries=5,
+    )
 
 def _switch_oat_token():
-    """OAuth 토큰 자동 전환 (402/429 시 호출)."""
-    global _current_oat_index
-    if _oat_2 and _current_oat_index == 0:
-        _current_oat_index = 1
-        logger.warning(f"oat_token_switch: 1→2")
-        return True
-    elif _oat_1 and _current_oat_index == 1:
-        _current_oat_index = 0
-        logger.warning(f"oat_token_switch: 2→1")
-        return True
+    """LiteLLM 경유이므로 토큰 스위치는 sync_litellm_oauth.sh가 처리. 여기선 no-op."""
+    logger.warning("oat_token_switch: LiteLLM managed — run sync_litellm_oauth.sh")
     return False
 
 _anthropic = _get_anthropic_client()
 
 LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
 LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
+
+# Claude CLI Relay (호스트에서 실행, Docker → host.docker.internal)
+_CLAUDE_RELAY_URL = os.getenv("CLAUDE_RELAY_URL", "http://host.docker.internal:8199")
+_CLAUDE_CLI_ENABLED = os.getenv("CLAUDE_CLI_ENABLED", "true").lower() == "true"
+
 
 # AADS-186E-2: Extended Thinking 전역 스위치 (기본 활성화)
 _EXTENDED_THINKING_ENABLED = os.getenv("EXTENDED_THINKING_ENABLED", "true").lower() == "true"
@@ -115,6 +118,30 @@ async def call_stream(
       output_tokens: int
     """
     model = model_override or intent_result.model
+
+    # model_override가 구체적 모델명(claude-sonnet-4-6 등)이면 LiteLLM alias로 변환
+    _OVERRIDE_TO_ALIAS = {
+        "claude-sonnet-4-6": "claude-sonnet", "claude-sonnet-4-5": "claude-sonnet",
+        "claude-opus-4-6": "claude-opus", "claude-opus-4-5": "claude-opus",
+        "claude-haiku-4-5": "claude-haiku",
+    }
+    if model in _OVERRIDE_TO_ALIAS:
+        model = _OVERRIDE_TO_ALIAS[model]
+
+    # Claude 모델 → Agent SDK (OAuth 토큰 직접 인증, MCP 도구 브릿지)
+    if _CLAUDE_CLI_ENABLED and model not in _GEMINI_MODELS and model in _ANTHROPIC_MODEL_ID:
+        _had_error = False
+        async for event in _stream_agent_sdk(model, system_prompt, messages, tools=tools, session_id=session_id):
+            if event.get("type") == "error":
+                _had_error = True
+                logger.warning(f"agent_sdk_error: {model} failed, trying Gemini fallback")
+                break
+            yield event
+        if _had_error:
+            yield {"type": "delta", "content": f"[Claude 장애 → Gemini 전환]\n\n"}
+            async for event in _stream_litellm("gemini-3-flash-preview", system_prompt, messages, tools=tools):
+                yield event
+        return
 
     # Gemini 모델 → LiteLLM 경유 (실패 시 Claude Haiku 폴백)
     if model in _GEMINI_MODELS:
@@ -194,7 +221,214 @@ async def _stream_litellm(
     messages: List[Dict[str, Any]],
     tools: Optional[List[Dict[str, Any]]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    """LiteLLM 프록시를 통한 스트리밍 (Gemini function calling 지원)."""
+    """LiteLLM 프록시를 통한 스트리밍.
+    Claude 모델: /v1/messages?beta=true (Anthropic 네이티브, 도구 호환성 보장)
+    Gemini 모델: /chat/completions (OpenAI 호환)
+    """
+    _is_claude = model in _ANTHROPIC_MODEL_ID
+
+    if _is_claude:
+        async for event in _stream_litellm_anthropic(model, system_prompt, messages, tools):
+            yield event
+    else:
+        async for event in _stream_litellm_openai(model, system_prompt, messages, tools):
+            yield event
+
+
+async def _stream_litellm_anthropic(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """Claude 모델 → LiteLLM /v1/messages?beta=true (멀티턴 도구 루프 지원)."""
+    current_msgs = [m for m in messages if m.get("role") != "system"]
+    litellm_model = _ANTHROPIC_MODEL_ID.get(model, model)
+    _display_model = litellm_model
+
+    full_text = ""
+    input_tokens = 0
+    output_tokens = 0
+    _MAX_RETRIES = 10
+    _MAX_TOOL_TURNS = 50
+    _headers = {
+        "x-api-key": LITELLM_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    _url = f"{LITELLM_BASE_URL}/v1/messages?beta=true"
+
+    yield {"type": "model_info", "model": _display_model}
+
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            for _turn in range(_MAX_TOOL_TURNS):
+                req_body: Dict[str, Any] = {
+                    "model": litellm_model,
+                    "system": system_prompt,
+                    "messages": current_msgs,
+                    "max_tokens": 16384,
+                    "stream": True,
+                }
+                if tools:
+                    req_body["tools"] = tools
+
+                # 재시도 루프
+                resp_ctx = None
+                for _attempt in range(_MAX_RETRIES):
+                    resp_ctx = client.stream("POST", _url, headers=_headers, json=req_body)
+                    resp = await resp_ctx.__aenter__()
+                    if resp.status_code == 200:
+                        break
+                    await resp.aread()
+                    await resp_ctx.__aexit__(None, None, None)
+                    resp_ctx = None
+                    if _attempt < _MAX_RETRIES - 1:
+                        logger.warning(f"litellm_anthropic_retry: turn={_turn} attempt={_attempt+1}/{_MAX_RETRIES} status={resp.status_code}")
+                        await asyncio.sleep(0.3)
+                    else:
+                        yield {"type": "error", "content": f"Claude API {resp.status_code} after {_MAX_RETRIES} retries"}
+                        return
+
+                if resp_ctx is None:
+                    yield {"type": "error", "content": "no response"}
+                    return
+
+                # SSE 파싱
+                _tool_uses = []  # 이번 턴의 도구 호출들
+                _assistant_content = []  # assistant 메시지 content 블록
+
+                try:
+                    _current_tool_id = ""
+                    _current_tool_name = ""
+                    _current_tool_input_json = ""
+                    _current_text = ""
+
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        raw = line[6:].strip()
+                        if not raw:
+                            continue
+                        try:
+                            event = json.loads(raw)
+                        except Exception:
+                            continue
+
+                        evt_type = event.get("type", "")
+
+                        if evt_type == "content_block_start":
+                            cb = event.get("content_block", {})
+                            if cb.get("type") == "tool_use":
+                                if _current_text:
+                                    _assistant_content.append({"type": "text", "text": _current_text})
+                                    _current_text = ""
+                                _current_tool_id = cb.get("id", "")
+                                _current_tool_name = cb.get("name", "")
+                                _current_tool_input_json = ""
+
+                        elif evt_type == "content_block_delta":
+                            delta = event.get("delta", {})
+                            if delta.get("type") == "text_delta":
+                                text = delta.get("text", "")
+                                if text:
+                                    full_text += text
+                                    _current_text += text
+                                    yield {"type": "delta", "content": text}
+                            elif delta.get("type") == "input_json_delta":
+                                _current_tool_input_json += delta.get("partial_json", "")
+
+                        elif evt_type == "content_block_stop":
+                            if _current_tool_name:
+                                _args = json.loads(_current_tool_input_json) if _current_tool_input_json else {}
+                                _tool_uses.append({
+                                    "id": _current_tool_id,
+                                    "name": _current_tool_name,
+                                    "input": _args,
+                                })
+                                _assistant_content.append({
+                                    "type": "tool_use",
+                                    "id": _current_tool_id,
+                                    "name": _current_tool_name,
+                                    "input": _args,
+                                })
+                                _current_tool_name = ""
+                                _current_tool_id = ""
+                                _current_tool_input_json = ""
+
+                        elif evt_type == "message_delta":
+                            usage = event.get("usage", {})
+                            output_tokens += usage.get("output_tokens", 0)
+
+                        elif evt_type == "message_start":
+                            msg = event.get("message", {})
+                            usage = msg.get("usage", {})
+                            input_tokens += usage.get("input_tokens", 0)
+
+                finally:
+                    await resp_ctx.__aexit__(None, None, None)
+
+                # 남은 텍스트 블록 추가
+                if _current_text:
+                    _assistant_content.append({"type": "text", "text": _current_text})
+
+                # 도구 호출이 없으면 종료
+                if not _tool_uses:
+                    break
+
+                # 도구 실행 + tool_results 구성
+                tool_results = []
+                from app.api.ceo_chat_tools import execute_tool as _exec_tool
+                for tu in _tool_uses:
+                    yield {"type": "tool_use", "tool_name": tu["name"], "tool_use_id": tu["id"], "tool_input": tu["input"]}
+                    try:
+                        result = await _exec_tool(tu["name"], tu["input"], "", "")
+                        yield {"type": "tool_result", "tool_name": tu["name"], "content": str(result)[:3000]}
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tu["id"],
+                            "content": str(result)[:10000],
+                        })
+                    except Exception as _te:
+                        logger.warning(f"tool_error: {tu['name']}: {_te}")
+                        yield {"type": "delta", "content": f"\n[도구 {tu['name']} 실패: {str(_te)[:80]}]\n"}
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tu["id"],
+                            "content": f"Error: {str(_te)[:500]}",
+                            "is_error": True,
+                        })
+                    # heartbeat (SSE 연결 유지)
+                    yield {"type": "heartbeat"}
+
+                # 다음 턴: assistant 메시지 + tool_results 추가
+                current_msgs = current_msgs + [
+                    {"role": "assistant", "content": _assistant_content},
+                    {"role": "user", "content": tool_results},
+                ]
+
+    except Exception as e:
+        logger.error(f"model_selector litellm_anthropic error: {e}")
+        yield {"type": "error", "content": str(e)}
+        return
+
+    cost = _estimate_cost(model, input_tokens, output_tokens)
+    yield {
+        "type": "done",
+        "model": _display_model,
+        "cost": str(cost),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+    }
+
+
+async def _stream_litellm_openai(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """Gemini 등 비-Claude 모델 → LiteLLM /chat/completions (OpenAI 호환 포맷)."""
     # messages에서 기존 system role 제거 후 새 system 프롬프트 추가
     clean_msgs = [m for m in messages if m.get("role") != "system"]
     # Anthropic content 블록 → OpenAI 포맷 변환 (이미지 포함 시)
@@ -284,8 +518,6 @@ async def _stream_litellm(
                                 _tool_result = await _exec_tool(_fn_name, _args, "", "")
                                 yield {"type": "tool_use", "tool_name": _fn_name, "tool_use_id": _tc.get("id", ""), "tool_input": _args}
                                 yield {"type": "tool_result", "tool_name": _fn_name, "content": str(_tool_result)[:3000]}
-                                # 도구 결과를 텍스트로 AI에게 다시 전달하지 않음 (단일 턴)
-                                # 대신 결과를 직접 yield하여 프론트에 표시
                             except Exception as _te:
                                 logger.warning(f"gemini_tool_call_error: {_fn_name}: {_te}")
                                 yield {"type": "delta", "content": f"\n[도구 {_fn_name} 실행 실패: {str(_te)[:100]}]\n"}
@@ -309,6 +541,296 @@ async def _stream_litellm(
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
     }
+
+
+async def _stream_agent_sdk(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    session_id: Optional[str] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """Claude Agent SDK를 통한 스트리밍.
+
+    Agent SDK → 번들 CLI → Anthropic API (OAuth 직접 인증).
+    MCP 브릿지로 55개 도구 사용. 세션 자동 관리.
+    """
+    from claude_agent_sdk import query as sdk_query, ClaudeAgentOptions
+
+    sdk_model = _ANTHROPIC_MODEL_ID.get(model, model)
+    user_message = _format_messages_as_text(messages)
+
+    yield {"type": "model_info", "model": sdk_model}
+
+    # MCP config: 컨테이너 내부에서 직접 브릿지 실행
+    _mcp_cfg = json.dumps({
+        "mcpServers": {
+            "aads-tools": {
+                "command": "python",
+                "args": ["-m", "mcp_servers.aads_tools_bridge"],
+                "cwd": "/app",
+                "env": {"AADS_SESSION_ID": session_id or ""},
+            }
+        }
+    })
+
+    # SDK 옵션
+    opts = ClaudeAgentOptions(
+        model=sdk_model,
+        max_turns=200,
+        permission_mode="acceptEdits",
+        cwd="/app",
+        system_prompt=system_prompt,
+        mcp_servers=_mcp_cfg,
+        allowed_tools=["mcp__aads-tools__*"],
+        disallowed_tools=["Bash", "Read", "Edit", "Write", "Glob", "Grep",
+                          "WebFetch", "WebSearch", "Agent", "NotebookEdit"],
+    )
+
+    full_text = ""
+    tools_called_list: List[str] = []
+    _tool_id_to_name: Dict[str, str] = {}
+    total_cost = 0.0
+    in_tokens = 0
+    out_tokens = 0
+
+    try:
+        async for msg in sdk_query(prompt=user_message, options=opts):
+            msg_type = type(msg).__name__
+
+            if msg_type == "AssistantMessage":
+                for block in msg.content:
+                    block_type = type(block).__name__
+                    if block_type == "TextBlock":
+                        if block.text:
+                            full_text += block.text
+                            yield {"type": "delta", "content": block.text}
+                    elif block_type == "ToolUseBlock":
+                        # MCP 접두사 제거
+                        raw_name = block.name or ""
+                        tool_name = raw_name.split("__")[-1] if raw_name.startswith("mcp__") else raw_name
+                        tool_id = block.id or ""
+                        if tool_id and tool_name:
+                            _tool_id_to_name[tool_id] = tool_name
+                        tools_called_list.append(tool_name)
+                        yield {
+                            "type": "tool_use",
+                            "tool_name": tool_name,
+                            "tool_use_id": tool_id,
+                            "tool_input": block.input if hasattr(block, "input") else {},
+                        }
+                    elif block_type == "ThinkingBlock":
+                        thinking = getattr(block, "thinking", "")
+                        if thinking:
+                            yield {"type": "thinking", "thinking": thinking}
+
+            elif msg_type == "UserMessage":
+                # tool_result 이벤트 (SDK가 도구 결과를 UserMessage로 전달)
+                content = msg.content
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "tool_result":
+                            tool_id = block.get("tool_use_id", "")
+                            tool_name = _tool_id_to_name.get(tool_id, "")
+                            result_content = block.get("content", "")
+                            if isinstance(result_content, list):
+                                result_content = "\n".join(
+                                    b.get("text", "") for b in result_content
+                                    if isinstance(b, dict) and b.get("type") == "text"
+                                )
+                            yield {
+                                "type": "tool_result",
+                                "tool_name": tool_name,
+                                "tool_use_id": tool_id,
+                                "content": str(result_content)[:3000],
+                            }
+                # heartbeat (SSE 연결 유지)
+                yield {"type": "heartbeat"}
+
+            elif msg_type == "ResultMessage":
+                total_cost = getattr(msg, "total_cost_usd", 0) or 0
+                usage = getattr(msg, "usage", {}) or {}
+                in_tokens = usage.get("input_tokens", 0) or 0
+                out_tokens = usage.get("output_tokens", 0) or 0
+
+            elif msg_type == "SystemMessage":
+                # init, progress 등 — heartbeat로 전달
+                yield {"type": "heartbeat"}
+
+    except Exception as e:
+        logger.error(f"agent_sdk_error: {e}")
+        yield {"type": "error", "content": str(e)}
+        return
+
+    # done 이벤트
+    cost = total_cost if total_cost else float(_estimate_cost(model, in_tokens, out_tokens))
+    yield {
+        "type": "done",
+        "model": sdk_model,
+        "cost": str(round(cost, 6)),
+        "input_tokens": in_tokens,
+        "output_tokens": out_tokens,
+        "tools_called": tools_called_list,
+    }
+
+
+def _format_messages_as_text(messages: List[Dict[str, Any]]) -> str:
+    """메시지 배열에서 최신 사용자 메시지만 추출.
+
+    CLI --resume 모드에서는 대화 히스토리를 CLI가 자체 관리하므로
+    현재 턴의 사용자 메시지만 전달하면 됨.
+    """
+    # 마지막 user 메시지만 추출
+    for msg in reversed(messages):
+        role = msg.get("role", "")
+        if role != "user":
+            continue
+
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            text_parts = []
+            for block in content:
+                if isinstance(block, dict):
+                    if block.get("type") == "text":
+                        text_parts.append(block.get("text", ""))
+                elif isinstance(block, str):
+                    text_parts.append(block)
+            content = "\n".join(text_parts)
+        elif not isinstance(content, str):
+            content = str(content)
+
+        if content.strip():
+            return content
+
+    # 폴백: 전체 메시지 직렬화
+    parts = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        if role == "system":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            content = "\n".join(
+                b.get("text", "") for b in content
+                if isinstance(b, dict) and b.get("type") == "text"
+            )
+        elif not isinstance(content, str):
+            content = str(content)
+        if content.strip():
+            role_label = "CEO" if role == "user" else "AI"
+            parts.append("[%s]\n%s" % (role_label, content))
+    return "\n\n".join(parts)
+
+
+def _map_cli_event(event: dict) -> Optional[List[Dict[str, Any]]]:
+    """Claude CLI NDJSON 이벤트 → AADS SSE 이벤트 리스트로 변환.
+
+    Returns None if event should be skipped, otherwise a list of AADS events.
+    """
+    evt_type = event.get("type", "")
+
+    # init 이벤트 — 스킵
+    if evt_type == "system" and event.get("subtype") == "init":
+        return None
+
+    # assistant 메시지 — 텍스트/도구 추출
+    if evt_type == "assistant":
+        msg = event.get("message", {})
+        content_blocks = msg.get("content", [])
+        events = []
+        for block in content_blocks:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    text = block.get("text", "")
+                    if text:
+                        events.append({"type": "delta", "content": text})
+                elif block.get("type") == "tool_use":
+                    # MCP 접두사 제거: mcp__aads-tools__query_db → query_db
+                    raw_name = block.get("name", "")
+                    tool_name = raw_name.split("__")[-1] if raw_name.startswith("mcp__") else raw_name
+                    events.append({
+                        "type": "tool_use",
+                        "tool_name": tool_name,
+                        "tool_use_id": block.get("id", ""),
+                        "tool_input": block.get("input", {}),
+                    })
+        # usage 정보 (부분)
+        usage = msg.get("usage", {})
+        if usage.get("input_tokens") or usage.get("output_tokens"):
+            # heartbeat로 진행 표시
+            events.append({"type": "heartbeat"})
+        return events if events else None
+
+    # user 이벤트 — MCP 도구 결과 (CLI가 tool_result를 user 메시지로 감싸서 전달)
+    if evt_type == "user":
+        msg = event.get("message", {})
+        content_blocks = msg.get("content", [])
+        events = []
+        for block in content_blocks:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                # tool_result 내부의 텍스트 추출
+                result_content = block.get("content", "")
+                if isinstance(result_content, list):
+                    result_content = "\n".join(
+                        b.get("text", "") for b in result_content
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    )
+                tool_use_id = block.get("tool_use_id", "")
+                events.append({
+                    "type": "tool_result",
+                    "tool_name": "",  # _stream_claude_cli에서 복원
+                    "tool_use_id": tool_use_id,
+                    "content": str(result_content)[:3000],
+                })
+        return events if events else None
+
+    # tool_result 이벤트 (직접 형식 — 폴백)
+    if evt_type == "tool_result":
+        tool_name = event.get("tool_name", "")
+        content = event.get("content", "")
+        if isinstance(content, list):
+            content = "\n".join(
+                b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
+            )
+        return [{
+            "type": "tool_result",
+            "tool_name": tool_name,
+            "content": str(content)[:3000],
+        }]
+
+    # result 이벤트 — 최종 완료
+    if evt_type == "result":
+        usage = event.get("usage", {})
+        model = ""
+        # modelUsage에서 모델명과 토큰 추출
+        model_usage = event.get("modelUsage", {})
+        in_tokens = usage.get("input_tokens", 0)
+        out_tokens = usage.get("output_tokens", 0)
+        total_cost = event.get("total_cost_usd", 0)
+        for m, mu in model_usage.items():
+            model = m.split("[")[0]  # "claude-opus-4-6[1m]" → "claude-opus-4-6"
+            in_tokens = mu.get("inputTokens", in_tokens)
+            out_tokens = mu.get("outputTokens", out_tokens)
+            if mu.get("costUSD"):
+                total_cost = mu["costUSD"]
+            break
+
+        # result 텍스트 (CLI가 최종 결과를 result 필드에도 넣음)
+        result_text = event.get("result", "")
+        events = []
+        # result에 텍스트가 있고 아직 delta로 안 보냈으면 보내기
+        # (보통 assistant 이벤트에서 이미 보냄 — 중복 방지를 위해 스킵)
+        events.append({
+            "type": "done",
+            "model": model,
+            "cost": str(round(total_cost, 6)),
+            "input_tokens": in_tokens,
+            "output_tokens": out_tokens,
+        })
+        return events
+
+    # 그 외: heartbeat
+    return [{"type": "heartbeat"}]
 
 
 def _trim_tool_loop_context(
@@ -439,6 +961,7 @@ async def _stream_anthropic(
     session_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Anthropic SDK 직접 스트리밍 (Tool Use + Extended Thinking + Prompt Caching)."""
+    global _anthropic
     model_id = _ANTHROPIC_MODEL_ID.get(model_alias, "claude-sonnet-4-6")
 
     # AADS-186E-2: Extended Thinking — Opus/Sonnet 4.6 Adaptive Thinking
@@ -499,6 +1022,10 @@ async def _stream_anthropic(
     _YELLOW_CONSECUTIVE_LIMIT = 100  # 전체 턴 상한(100)과 동일 — 사실상 무제한
     _effective_max_turns = _MAX_TOOL_TURNS
     _turn = 0
+
+    # 스트리밍 시작 시 모델 정보 전송 (프론트에서 대답 중 모델명 표시용)
+    _display_model = _ANTHROPIC_MODEL_ID.get(model_alias, model_alias)
+    yield {"type": "model_info", "model": _display_model}
 
     while _turn < _effective_max_turns:
         # Wall-clock 타임아웃 체크 (30분 기본)
@@ -588,9 +1115,10 @@ async def _stream_anthropic(
                     _preview = str(_m.get("content", ""))[:80] if isinstance(_m.get("content"), str) else f"[{_ct}] len={len(_m.get('content', []))}" if isinstance(_m.get("content"), list) else str(type(_m.get("content")))
                     logger.info(f"anthropic_msg[{_mi}]: role={_m.get('role')} content_type={_ct} preview={_preview}")
 
-        # 재시도 로직: 일시적 에러(429/529/503/네트워크)는 최대 3회 재시도
-        _RETRYABLE_STATUS = {429, 503, 529}
-        _MAX_RETRIES = 3
+        # 재시도 로직: 일시적 에러(400/429/529/503/네트워크)는 최대 10회 재시도
+        # 400: Anthropic API 간헐적 invalid_request_error (2026-03 발생, ~50% 실패율)
+        _RETRYABLE_STATUS = {400, 429, 503, 529}
+        _MAX_RETRIES = 10
         _retry_attempt = 0
         _last_error = None
         final_msg = None
@@ -646,8 +1174,9 @@ async def _stream_anthropic(
                     logger.warning(f"oat_switch_on_402: credit exhausted, switched token")
                     _retry_attempt -= 1
                 if _status in _RETRYABLE_STATUS and _retry_attempt <= _MAX_RETRIES:
-                    _wait = min(2 ** _retry_attempt, 10)
-                    logger.warning(f"claude_retry: attempt {_retry_attempt}/{_MAX_RETRIES}, status={_status}, wait={_wait}s, error={str(e)[:100]}")
+                    # 400: 간헐적 에러 → 짧은 대기, 429/503: rate limit → 지수 백오프
+                    _wait = 0.3 if _status == 400 else min(2 ** _retry_attempt, 10)
+                    logger.warning(f"claude_retry: attempt {_retry_attempt}/{_MAX_RETRIES}, status={_status}, wait={_wait}s")
                     yield {"type": "heartbeat"}
                     await asyncio.sleep(_wait)
                 elif _status == 402:
@@ -881,6 +1410,9 @@ async def _stream_anthropic(
         # Layer A: 도구 루프 토큰 예산 관리 (120K)
         current_messages = _trim_tool_loop_context(current_messages, _turn)
 
+        # api_kwargs에 업데이트된 messages 반영 (참조가 끊어지므로 명시적 갱신)
+        api_kwargs["messages"] = current_messages
+
         # CEO 인터럽트 체크: 도구 실행 완료 후, 다음 API 호출 전
         if session_id:
             from app.core.interrupt_queue import has_interrupt, pop_interrupts
@@ -908,9 +1440,11 @@ async def _stream_anthropic(
             }
 
     cost = _estimate_cost(model_alias, input_tokens, output_tokens)
+    # 프론트 표시용: alias(claude-opus) → 실제 모델ID(claude-opus-4-6)
+    _display_model = _ANTHROPIC_MODEL_ID.get(model_alias, model_alias)
     yield {
         "type": "done",
-        "model": model_alias,
+        "model": _display_model,
         "cost": str(cost),
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
