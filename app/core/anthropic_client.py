@@ -1,35 +1,23 @@
 """
 중앙 Anthropic 클라이언트 팩토리.
 
-모든 Claude 호출을 LiteLLM 프록시 경유로 처리합니다.
-LiteLLM은 .env.litellm의 ANTHROPIC_API_KEY(OAuth 토큰)로 Anthropic API에 접근합니다.
+OAuth 토큰으로 Anthropic API 직접 호출.
+백그라운드 시스템(self_evaluator, fact_extractor, compaction 등)에서 사용.
 """
 import os
 import logging
-import httpx
 from anthropic import AsyncAnthropic
 
 logger = logging.getLogger(__name__)
 
-_LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
-_LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
-
-
-class _StripAuthTransport(httpx.AsyncBaseTransport):
-    """SDK 자동 Authorization 헤더 제거 — LiteLLM x-api-key만 사용."""
-    def __init__(self):
-        self._inner = httpx.AsyncHTTPTransport()
-
-    async def handle_async_request(self, request):
-        raw = [(k, v) for k, v in request.headers.raw if k.lower() != b"authorization"]
-        request.headers = httpx.Headers(raw)
-        return await self._inner.handle_async_request(request)
+# OAuth 토큰 직접 사용 (Agent SDK 채팅 AI와 동일 경로)
+_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 
 
 def get_client(model_hint: str = "claude-haiku") -> AsyncAnthropic:
-    """LiteLLM 경유 Anthropic 클라이언트 반환."""
+    """Anthropic API 직접 클라이언트 반환 (OAuth 토큰 인증)."""
     return AsyncAnthropic(
-        api_key=_LITELLM_API_KEY,
-        base_url=_LITELLM_BASE_URL,
-        http_client=httpx.AsyncClient(transport=_StripAuthTransport()),
+        api_key=_API_KEY,
+        base_url=_BASE_URL,
     )
