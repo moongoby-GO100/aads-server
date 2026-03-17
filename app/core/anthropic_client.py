@@ -25,7 +25,7 @@ _GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 # LiteLLM의 Gemini 키 폴백
 if not _GEMINI_API_KEY:
     _GEMINI_API_KEY = os.getenv("LITELLM_GEMINI_KEY", "")
-_GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
+_GEMINI_FALLBACK_MODEL = "gemini-3.1-flash-lite-preview"
 
 
 def get_client(model_hint: str = "claude-haiku") -> AsyncAnthropic:
