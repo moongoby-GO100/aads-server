@@ -929,7 +929,9 @@ async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort
 
 
 async def _extract_artifacts(session_id: uuid.UUID, content: str) -> None:
-    """AI 응답에서 아티팩트 자동 추출 → chat_artifacts 저장."""
+    """AI 응답에서 아티팩트 자동 추출 → chat_artifacts 저장.
+    감지 유형: 코드, 보고서, 기획서, 계획서, 분석, 지시서, 체크리스트, 테이블
+    """
     if not content or len(content) < 100:
         return
 
@@ -943,11 +945,10 @@ async def _extract_artifacts(session_id: uuid.UUID, content: str) -> None:
     )
     for lang, code in code_blocks:
         if lang.lower() in ('diff', 'text', 'log', 'output', 'bash', 'sh', 'shell'):
-            continue  # diff, 로그, 명령어는 제외
+            continue
         if len(code.strip()) < 50:
-            continue  # 너무 짧은 코드 제외
+            continue
         title = f"{lang} 코드"
-        # 첫 줄에서 파일명/함수명 추출 시도
         first_line = code.strip().split('\n')[0]
         if 'def ' in first_line:
             title = first_line.strip()[:80]
@@ -955,7 +956,8 @@ async def _extract_artifacts(session_id: uuid.UUID, content: str) -> None:
             title = first_line.strip()[:80]
         artifacts.append(("code", title, code.strip(), {"language": lang}))
 
-    # 2) 보고서 추출 (# 제목으로 시작하는 구조화된 보고서)
+    # 2) 보고서/기획서/분석 추출 (# 또는 이모지 제목으로 시작하는 구조화된 문서)
+    # 2a) 마크다운 헤더 (# / ##) 시작
     report_match = _re.search(
         r'(^#{1,2}\s+.+?\n(?:.*?\n){10,})', content, _re.MULTILINE
     )
@@ -965,7 +967,53 @@ async def _extract_artifacts(session_id: uuid.UUID, content: str) -> None:
         title = title_match.group(1)[:100] if title_match else "보고서"
         artifacts.append(("report", title, report_text, {}))
 
-    # 3) 테이블 추출 (마크다운 테이블)
+    # 2b) 이모지 제목 시작 (📋 📊 🔬 📄 🎯 💡 🚀 ✅ 등)
+    if not report_match or (report_match and len(report_match.group(1)) <= 300):
+        emoji_report = _re.search(
+            r'(^[\U0001F300-\U0001FAFFa-zA-Z가-힣]?[📋📊🔬📄🎯💡🚀✅⚠️🛠️📌🔍📈📉🗂️🧬🏗️].+?\n(?:.*?\n){8,})',
+            content, _re.MULTILINE
+        )
+        if emoji_report and len(emoji_report.group(1)) > 300:
+            report_text = emoji_report.group(1)
+            first_line = report_text.split('\n')[0].strip()
+            artifacts.append(("report", first_line[:100], report_text, {}))
+
+    # 3) 기획서/계획서/제안서 감지 (키워드 기반)
+    _plan_keywords = [
+        '기획서', '계획서', '제안서', '설계서', '명세서', '가이드',
+        '로드맵', 'PRD', '스펙', '아키텍처', '수정 방안', '수정 계획',
+        '구현 계획', '개선 방안', '마이그레이션', '체크리스트',
+    ]
+    for kw in _plan_keywords:
+        if kw.lower() in content.lower():
+            # 키워드 포함 섹션 추출 (해당 키워드가 있는 줄부터 다음 빈줄 2개 또는 끝까지)
+            kw_match = _re.search(
+                rf'(^.*{_re.escape(kw)}.*\n(?:.*\n){{5,}})',
+                content, _re.MULTILINE | _re.IGNORECASE
+            )
+            if kw_match and len(kw_match.group(1)) > 400:
+                plan_text = kw_match.group(1)
+                first_line = plan_text.split('\n')[0].strip()
+                # 중복 방지: 이미 report로 잡힌 내용과 80% 이상 겹치면 스킵
+                is_dup = any(
+                    a[0] == "report" and len(set(a[2][:200]) & set(plan_text[:200])) > 160
+                    for a in artifacts
+                )
+                if not is_dup:
+                    artifacts.append(("report", first_line[:100] or kw, plan_text, {"subtype": "plan"}))
+                break  # 첫 번째 매칭만
+
+    # 4) 지시서 (>>>DIRECTIVE_START 블록)
+    directive_match = _re.search(
+        r'(>>>DIRECTIVE_START.*?>>>DIRECTIVE_END)', content, _re.DOTALL
+    )
+    if directive_match:
+        directive_text = directive_match.group(1)
+        title_m = _re.search(r'TITLE:\s*(.+)', directive_text)
+        title = title_m.group(1).strip()[:100] if title_m else "지시서"
+        artifacts.append(("report", f"📋 지시서: {title}", directive_text, {"subtype": "directive"}))
+
+    # 5) 테이블 추출 (마크다운 테이블)
     table_blocks = _re.findall(
         r'(\|.+\|(?:\n\|[-:| ]+\|)?\n(?:\|.+\|\n?){3,})', content
     )
@@ -975,13 +1023,32 @@ async def _extract_artifacts(session_id: uuid.UUID, content: str) -> None:
             title = f"테이블: {header[:60]}"
             artifacts.append(("table", title, table, {}))
 
+    # 6) 번호 목록 구조 문서 (1. 2. 3. ... 5개 이상 + 500자 이상)
+    numbered_items = _re.findall(r'^(?:\d+[\.\)]\s+.+)', content, _re.MULTILINE)
+    if len(numbered_items) >= 5:
+        # 번호 목록 전체 영역 추출
+        num_match = _re.search(
+            r'((?:^.*\n)?(?:^\d+[\.\)]\s+.+\n(?:(?!\d+[\.\)]).+\n)*){5,})',
+            content, _re.MULTILINE
+        )
+        if num_match and len(num_match.group(0)) > 500:
+            num_text = num_match.group(0)
+            # 이미 다른 타입으로 잡혔는지 중복 체크
+            is_dup = any(
+                len(set(a[2][:200]) & set(num_text[:200])) > 160
+                for a in artifacts
+            )
+            if not is_dup:
+                first_line = num_text.strip().split('\n')[0].strip()
+                artifacts.append(("report", first_line[:100] or "구조화 문서", num_text, {"subtype": "numbered_list"}))
+
     if not artifacts:
         return
 
-    # 최대 3개만 저장 (과다 추출 방지)
+    # 최대 5개 저장 (기존 3개 → 확장)
     import json as _json
     async with get_pool().acquire() as conn:
-        for art_type, title, art_content, metadata in artifacts[:3]:
+        for art_type, title, art_content, metadata in artifacts[:5]:
             await conn.execute(
                 """
                 INSERT INTO chat_artifacts (session_id, type, title, content, metadata)
@@ -990,7 +1057,7 @@ async def _extract_artifacts(session_id: uuid.UUID, content: str) -> None:
                 session_id, art_type, title[:200], art_content[:50000],
                 _json.dumps(metadata, ensure_ascii=False),
             )
-    logger.info(f"artifacts_extracted: session={str(session_id)[:8]} count={min(len(artifacts), 3)}")
+    logger.info(f"artifacts_extracted: session={str(session_id)[:8]} count={min(len(artifacts), 5)}")
 
 
 async def _save_message(
