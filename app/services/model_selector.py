@@ -566,57 +566,61 @@ async def _stream_agent_sdk(
     sdk_model = _ANTHROPIC_MODEL_ID.get(model, model)
     user_message = _format_messages_as_text(messages)
 
-    # 토큰 교대: 사용 가능한 키 순서대로 시도
-    keys_to_try = _ANTHROPIC_KEYS if _ANTHROPIC_KEYS else [os.getenv("ANTHROPIC_API_KEY", "")]
+    # 토큰 교대: Naver → Gmail → Naver → Gmail ... (3라운드, 총 6회)
+    keys = _ANTHROPIC_KEYS if _ANTHROPIC_KEYS else [os.getenv("ANTHROPIC_API_KEY", "")]
+    keys = [k for k in keys if k]
+    _MAX_ROUNDS = 3  # 라운드 수 (각 라운드에서 모든 키 시도)
+    _RETRYABLE_PATTERNS = [
+        "rate_limit", "429", "rate limit",
+        "overloaded", "529", "503", "overloaded",
+        "credit", "402", "credit",
+        "authentication", "401", "unauthorized",
+        "exit code 1", "no connected db",
+        "server_error", "500", "internal",
+        "timeout", "connection",
+    ]
 
-    for key_idx, api_key in enumerate(keys_to_try):
-        if not api_key:
-            continue
+    yield {"type": "model_info", "model": sdk_model}
 
-        # 첫 번째 키에서만 model_info 전송 (중복 방지)
-        if key_idx == 0:
-            yield {"type": "model_info", "model": sdk_model}
+    _attempt = 0
+    _last_error = ""
+    for _round in range(_MAX_ROUNDS):
+        for key_idx, api_key in enumerate(keys):
+            _attempt += 1
+            _key_label = "Naver" if "5ZEDHaA7" in api_key else "Gmail"
 
-        result = []
-        error_msg = ""
-        async for evt in _run_agent_sdk_with_key(
-            api_key, sdk_model, system_prompt, user_message, session_id,
-        ):
-            if evt.get("type") == "error":
-                error_msg = evt.get("content", "")
-                break
-            result.append(evt)
-            yield evt
+            error_msg = ""
+            async for evt in _run_agent_sdk_with_key(
+                api_key, sdk_model, system_prompt, user_message, session_id,
+            ):
+                if evt.get("type") == "error":
+                    error_msg = evt.get("content", "")
+                    break
+                yield evt
 
-        if not error_msg:
-            return  # 성공 — 종료
+            if not error_msg:
+                return  # 성공
 
-        # 토큰 교대 판단: 재시도 가능한 에러인지 확인
-        _RETRYABLE_PATTERNS = [
-            "rate_limit", "429", "Rate limit",
-            "overloaded", "529", "503", "Overloaded",
-            "credit", "402", "Credit",
-            "authentication", "401", "Unauthorized",
-            "exit code 1",  # CLI 일반 에러 (인증 실패 포함)
-            "No connected db",
-            "server_error", "500", "Internal",
-        ]
-        is_retryable = any(p.lower() in error_msg.lower() for p in _RETRYABLE_PATTERNS)
+            _last_error = error_msg
+            is_retryable = any(p in error_msg.lower() for p in _RETRYABLE_PATTERNS)
 
-        if is_retryable and key_idx < len(keys_to_try) - 1:
-            _key_label = "Naver" if key_idx == 0 else "Gmail"
-            _next_label = "Gmail" if key_idx == 0 else "Naver"
-            logger.warning(f"token_switch: {_key_label} failed ({error_msg[:80]}), trying {_next_label}")
+            if not is_retryable:
+                # 재시도 불가 에러 (구문 오류 등) — 즉시 중단
+                logger.error(f"token_fatal: {_key_label} attempt={_attempt} error={error_msg[:100]}")
+                yield {"type": "error", "content": error_msg}
+                return
+
+            logger.warning(f"token_retry: {_key_label} attempt={_attempt}/{_MAX_ROUNDS*len(keys)} round={_round+1} error={error_msg[:80]}")
             yield {"type": "heartbeat"}
-            await asyncio.sleep(0.5)
-            continue  # 다음 키로 재시도
 
-        # 재시도 불가 또는 마지막 키 — 에러 전달
-        yield {"type": "error", "content": error_msg}
-        return
+        # 라운드 사이 대기 (지수 백오프: 1초, 2초, 4초)
+        if _round < _MAX_ROUNDS - 1:
+            _wait = min(2 ** _round, 4)
+            logger.info(f"token_round_wait: round={_round+1} wait={_wait}s before next round")
+            await asyncio.sleep(_wait)
 
-    # 모든 키 소진
-    yield {"type": "error", "content": "All OAuth tokens exhausted"}
+    # 모든 라운드 소진
+    yield {"type": "error", "content": f"All OAuth tokens exhausted after {_attempt} attempts: {_last_error[:100]}"}
 
 
 async def _run_agent_sdk_with_key(
