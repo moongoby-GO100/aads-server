@@ -176,7 +176,14 @@ TOOL_CATEGORY_GUIDE = """\
 - pipeline_runner_approve: CEO 승인/거부 → 배포
 
 ### ⚫ Pipeline C — 레거시 (Runner 사용 권장)
-- pipeline_c_start/status/approve: 레거시, 특별한 경우에만\
+- pipeline_c_start/status/approve: 레거시, 특별한 경우에만
+
+### 🤖 Agent 팀 — 서브에이전트 자동 분업
+내장 서브에이전트 3종이 활성화되어 있습니다. 복잡한 작업 시 자동으로 분배됩니다:
+- **researcher** (Sonnet): 코드 탐색, DB 조회, 로그 분석 등 조사 작업. 독립 컨텍스트에서 실행되므로 대량 조사에 효율적.
+- **developer** (Sonnet): 코드 수정, 파일 작성, git 커밋/푸시. 변경 전 반드시 현재 코드 확인 후 수정.
+- **qa** (Sonnet): 테스트 실행, 변경사항 검증, 에러 확인.
+사용법: 복잡한 작업("서버 점검하고 에러 수정해") 시 Agent 도구로 서브에이전트를 호출하면 각자 독립 컨텍스트에서 병렬 작업 후 결과만 반환합니다. 간단한 질문에는 직접 답하세요.\
 """
 
 # ─── AADS-188C Phase 2: 인텐트별 필수 도구 매핑 ──────────────────────────────
@@ -205,9 +212,9 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
     "analyze_changes":    ["analyze_changes"],
     "service_inspection": ["inspect_service"],
     # Tier 2.5: 코드 수정/배포 인텐트
-    "code_modify":        ["read_remote_file", "write_remote_file", "patch_remote_file", "run_remote_command"],
-    "code_fix":           ["read_remote_file", "patch_remote_file", "run_remote_command"],
-    "deploy":             ["run_remote_command", "git_remote_status", "git_remote_add", "git_remote_commit", "git_remote_push"],
+    "code_modify":        ["read_remote_file", "write_remote_file", "patch_remote_file", "run_remote_command", "pipeline_runner_submit", "pipeline_runner_status", "pipeline_runner_approve"],
+    "code_fix":           ["read_remote_file", "patch_remote_file", "run_remote_command", "pipeline_runner_submit", "pipeline_runner_status", "pipeline_runner_approve"],
+    "deploy":             ["run_remote_command", "git_remote_status", "git_remote_add", "git_remote_commit", "git_remote_push", "pipeline_runner_submit", "pipeline_runner_status", "pipeline_runner_approve"],
     "git_operation":      ["git_remote_status", "git_remote_add", "git_remote_commit", "git_remote_push", "git_remote_create_branch"],
     "remote_execute":     ["run_remote_command", "read_remote_file"],
     # Tier 3: 액션 인텐트
