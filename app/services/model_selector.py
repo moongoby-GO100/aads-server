@@ -67,6 +67,9 @@ _ANTHROPIC_KEYS = [
 ]
 _ANTHROPIC_KEYS = [k for k in _ANTHROPIC_KEYS if k]  # 빈값 제거
 
+# AADS session_id → CLI session_id 매핑 (대화 이어가기용)
+_cli_session_map: Dict[str, str] = {}  # {aads_session_id: cli_session_id}
+
 
 # AADS-186E-2: Extended Thinking 전역 스위치 (기본 활성화)
 _EXTENDED_THINKING_ENABLED = os.getenv("EXTENDED_THINKING_ENABLED", "true").lower() == "true"
@@ -630,7 +633,7 @@ async def _run_agent_sdk_with_key(
     user_message: str,
     session_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    """단일 API 키로 Agent SDK 실행. 성공 시 이벤트 스트리밍, 실패 시 error 이벤트."""
+    """단일 API 키로 Agent SDK 실행. 세션 이어가기(--resume) 지원."""
     from claude_agent_sdk import query as sdk_query, ClaudeAgentOptions
 
     # MCP config: 컨테이너 내부에서 직접 브릿지 실행
@@ -645,6 +648,9 @@ async def _run_agent_sdk_with_key(
         }
     })
 
+    # 세션 이어가기: AADS session_id → CLI session_id 매핑
+    cli_session_id = _cli_session_map.get(session_id) if session_id else None
+
     opts = ClaudeAgentOptions(
         model=sdk_model,
         max_turns=200,
@@ -657,6 +663,10 @@ async def _run_agent_sdk_with_key(
                           "WebFetch", "WebSearch", "Agent", "NotebookEdit"],
         env={"ANTHROPIC_API_KEY": api_key},
     )
+    # --resume: 이전 대화가 있으면 이어가기
+    if cli_session_id:
+        opts.resume = cli_session_id
+        logger.info(f"agent_sdk_resume: aads={session_id[:8]} cli={cli_session_id[:8]}")
 
     full_text = ""
     tools_called_list: List[str] = []
@@ -664,6 +674,7 @@ async def _run_agent_sdk_with_key(
     total_cost = 0.0
     in_tokens = 0
     out_tokens = 0
+    _captured_cli_sid = cli_session_id or ""  # resume 시 기존 ID 유지
 
     try:
         async for msg in sdk_query(prompt=user_message, options=opts):
@@ -720,6 +731,13 @@ async def _run_agent_sdk_with_key(
                             }
                 yield {"type": "heartbeat"}
 
+            elif msg_type == "SystemMessage":
+                # init 이벤트에서 CLI session_id 캡처
+                data = getattr(msg, "data", None) or {}
+                if isinstance(data, dict) and data.get("session_id"):
+                    _captured_cli_sid = data["session_id"]
+                yield {"type": "heartbeat"}
+
             elif msg_type == "ResultMessage":
                 is_error = getattr(msg, "is_error", False)
                 if is_error:
@@ -729,15 +747,21 @@ async def _run_agent_sdk_with_key(
                 usage = getattr(msg, "usage", {}) or {}
                 in_tokens = usage.get("input_tokens", 0) or 0
                 out_tokens = usage.get("output_tokens", 0) or 0
-
-            elif msg_type == "SystemMessage":
-                yield {"type": "heartbeat"}
+                # ResultMessage에서도 session_id 캡처 (폴백)
+                result_sid = getattr(msg, "session_id", None)
+                if result_sid:
+                    _captured_cli_sid = result_sid
 
     except Exception as e:
         error_str = str(e)
         logger.error(f"agent_sdk_key_error: {error_str[:200]}")
         yield {"type": "error", "content": error_str}
         return
+
+    # 세션 매핑 저장 (대화 이어가기용)
+    if session_id and _captured_cli_sid:
+        _cli_session_map[session_id] = _captured_cli_sid
+        logger.info(f"agent_sdk_session_map: aads={session_id[:8]} -> cli={_captured_cli_sid[:8]}")
 
     # done 이벤트
     cost = total_cost if total_cost else float(_estimate_cost("claude-sonnet", in_tokens, out_tokens))
