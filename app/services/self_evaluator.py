@@ -15,7 +15,7 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 _ENABLED = os.getenv("SELF_EVAL_ENABLED", "true").lower() == "true"
-_MIN_RESPONSE_LEN = int(os.getenv("SELF_EVAL_MIN_LEN", "50"))
+_MIN_RESPONSE_LEN = int(os.getenv("SELF_EVAL_MIN_LEN", "5"))
 _HAIKU_MODEL = os.getenv("SELF_EVAL_MODEL", "claude-haiku-4-5-20251001")
 
 _PROJECT_KEYS = ("KIS", "AADS", "GO100", "SF", "NTV2", "NAS", "CEO")
