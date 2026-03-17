@@ -8,6 +8,7 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from app.logging_config import configure_logging
 
 from app.api import health, projects, checkpoints, stream, auth, context, chat, visual_qa, mobile_qa, memory
@@ -591,5 +592,11 @@ app.include_router(image_router, prefix="/api/v1/image", tags=["image"])
 app.include_router(fact_check_router, prefix="/api/v1/fact-check", tags=["fact-check"])
 app.include_router(pipeline_runner_router, prefix="/api/v1", tags=["pipeline-runner"])
 app.include_router(quality_router, prefix="/api/v1", tags=["quality"])
+# 정적 파일 서빙
+import pathlib as _pathlib
+_static_dir = _pathlib.Path(__file__).resolve().parent / "static"
+if _static_dir.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
 # AADS-186C: FastAPI-MCP 마운트 (graceful — MCP_ENABLED=false 시 비활성)
 setup_mcp(app)

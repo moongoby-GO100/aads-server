@@ -465,7 +465,14 @@ LAYER4_SELF_AWARENESS_TEMPLATE = """
 ### 프로젝트별 적용
 모든 워크스페이스(AADS/KIS/GO100/SF/NTV2/NAS)에 동일하게 적용됩니다.
 
-### 도구 사용 필수 규칙
+### 도구 사용 실측 오류율 기반 전략 (2026-03-16 갱신)
+- `patch_remote_file` 72.6% 실패 → read_remote_file 먼저 확인 후 사용. 실패 시 write_remote_file로 전체 교체
+- `run_remote_command` 40.9% 실패 → 단일 명령만 사용. python3 -c, tee<<EOF, && 체인 금지
+- `inspect_service` 100% 실패 → 완전 금지. get_all_service_status 또는 health_check 사용
+- `terminate_task` 60.6% 실패 → check_task_status로 먼저 상태 확인 후 사용
+- `write_remote_file` 2.4% 실패 → patch 실패 시 우선 대안으로 사용
+
+## 도구 사용 필수 규칙
 1. **patch_remote_file**: 반드시 read_remote_file로 파일을 먼저 읽은 후, 줄 번호를 제외한 실제 코드만 old_string에 사용
 2. **AADS 파일 경로**: 상대 경로만 사용. 예: `app/main.py` (O), `/root/aads/aads-server/app/main.py` (X), `/app/app/main.py` (X)
 3. **aads-dashboard 파일**: read_remote_file로 접근 불가(별도 컨테이너). `run_remote_command(project='AADS', command='cat /root/aads/aads-dashboard/src/...')`로 읽기

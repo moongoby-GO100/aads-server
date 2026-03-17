@@ -561,3 +561,26 @@ async def report_frontend_error(req: ErrorReportRequest, request: Request):
         logger.debug(f"error_report_save_failed: {e}")
 
     return ErrorReportOut(ok=True, error_id=error_id)
+
+
+# ═══ OAuth 토큰 순서 관리 ═══════════════════════════════════════════════════
+
+@router.get("/settings/auth-keys")
+async def get_auth_key_order():
+    """현재 인증 키 순서 조회."""
+    from app.services.model_selector import get_key_order
+    return {"keys": get_key_order()}
+
+
+class KeyOrderRequest(BaseModel):
+    primary: str = Field(..., description="우선 사용할 키: 'naver' 또는 'gmail'")
+
+
+@router.post("/settings/auth-keys")
+async def set_auth_key_order(req: KeyOrderRequest):
+    """인증 키 순서 변경."""
+    from app.services.model_selector import set_key_order, get_key_order
+    ok = set_key_order(req.primary)
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"Unknown key: {req.primary}")
+    return {"ok": True, "keys": get_key_order()}

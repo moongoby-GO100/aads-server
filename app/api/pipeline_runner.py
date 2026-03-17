@@ -19,7 +19,7 @@ logger = structlog.get_logger(__name__)
 # H6 + M4: 허용 프로젝트 화이트리스트
 _VALID_PROJECTS = {"AADS", "KIS", "GO100", "SF", "NTV2"}
 _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
-_JOB_ID_RE = re.compile(r'^runner-[0-9a-f]{8}$')
+_JOB_ID_RE = re.compile(r'^runner-[0-9a-zA-Z_-]+$')
 
 
 class JobSubmitRequest(BaseModel):

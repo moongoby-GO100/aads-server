@@ -528,8 +528,8 @@ async def _generate_project_insights(conn, project: str) -> int:
             logger.warning("sleep_agent_no_api_key", project=project, hint="ANTHROPIC_API_KEY not set")
             return 0
 
-        from anthropic import AsyncAnthropic
-        client = AsyncAnthropic()
+        from app.core.anthropic_client import get_client
+        client = get_client()
 
         response = await client.messages.create(
             model=_HAIKU_MODEL,
@@ -669,8 +669,8 @@ async def _analyze_quality_and_optimize(conn) -> int:
                 logger.warning("sleep_agent_c2_no_api_key", workspace=workspace)
                 continue
 
-            from anthropic import AsyncAnthropic
-            client = AsyncAnthropic()
+            from app.core.anthropic_client import get_client
+            client = get_client()
 
             response = await client.messages.create(
                 model=_HAIKU_MODEL,
