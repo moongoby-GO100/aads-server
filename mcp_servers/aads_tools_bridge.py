@@ -62,22 +62,32 @@ def _get_tool_definitions():
 
 
 async def _call_tool(name: str, params: dict) -> str:
-    """도구 실행 래퍼."""
-    global _execute_tool
-    if _execute_tool is None:
-        from app.api.ceo_chat_tools import execute_tool
-        _execute_tool = execute_tool
+    """도구 실행 래퍼 — ToolExecutor 우선, execute_tool 폴백.
 
+    ToolExecutor에 51개 전체 도구가 등록되어 있음.
+    execute_tool에는 32개만 등록 (19개 누락).
+    """
     await _ensure_db()
 
-    session_id = os.getenv("AADS_SESSION_ID", "")
-    dsn = os.getenv("DATABASE_URL", "")
+    # 1순위: ToolExecutor (전체 51개 도구)
     try:
-        result = await _execute_tool(name, params, dsn, session_id)
+        from app.services.tool_executor import ToolExecutor
+        executor = ToolExecutor()
+        result = await executor.execute(name, params)
         return result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
-    except Exception as e:
-        logger.error(f"Tool {name} error: {e}")
-        return json.dumps({"error": str(e), "tool": name}, ensure_ascii=False)
+    except Exception as e1:
+        logger.debug(f"ToolExecutor fallback for {name}: {e1}")
+
+    # 2순위: execute_tool (레거시 폴백)
+    try:
+        from app.api.ceo_chat_tools import execute_tool
+        session_id = os.getenv("AADS_SESSION_ID", "")
+        dsn = os.getenv("DATABASE_URL", "")
+        result = await execute_tool(name, params, dsn, session_id)
+        return result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
+    except Exception as e2:
+        logger.error(f"Tool {name} error: {e2}")
+        return json.dumps({"error": str(e2), "tool": name}, ensure_ascii=False)
 
 
 @server.list_tools()
