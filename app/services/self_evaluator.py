@@ -64,8 +64,8 @@ async def evaluate_response(
         return None
 
     try:
-        from anthropic import AsyncAnthropic
-        client = AsyncAnthropic()
+        from app.core.anthropic_client import get_client
+        client = get_client()
 
         prompt = _EVAL_PROMPT.format(
             user_msg=user_message[:300],
@@ -163,7 +163,7 @@ async def evaluate_response(
                 logger.debug("a1_fact_confidence_error", error=str(e_a1))
 
         # B1: Reflexion — auto-reflect on poor quality responses
-        if overall < 0.4 and session_id:
+        if overall < 0.5 and session_id:
             try:
                 reflection_prompt = (
                     f"이 AI 응답의 품질이 낮습니다 (점수: {overall:.1f}).\n"
@@ -173,8 +173,8 @@ async def evaluate_response(
                     f"품질 세부: {json.dumps(details, ensure_ascii=False)}\n\n"
                     f"반성문만 작성하세요."
                 )
-                from anthropic import AsyncAnthropic as _ReflexionClient
-                _refl_client = _ReflexionClient()
+                from app.core.anthropic_client import get_client as _get_refl_client
+                _refl_client = _get_refl_client()
                 _refl_resp = await _refl_client.messages.create(
                     model=_HAIKU_MODEL,
                     max_tokens=256,
@@ -342,8 +342,8 @@ async def _check_repeated_errors(
                 similar_details = [r["detail"][:200] for r in similar_facts[:3] if r["detail"]]
 
                 # 영구 교정 지시 생성
-                from anthropic import AsyncAnthropic as _CorrClient
-                _corr_client = _CorrClient()
+                from app.core.anthropic_client import get_client as _get_corr_client
+                _corr_client = _get_corr_client()
                 _corr_resp = await _corr_client.messages.create(
                     model=_HAIKU_MODEL,
                     max_tokens=256,

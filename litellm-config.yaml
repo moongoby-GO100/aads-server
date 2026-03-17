@@ -118,27 +118,103 @@ model_list:
       model: groq/groq/compound
       api_key: os.environ/GROQ_API_KEY
 
-  # ── Claude (Anthropic) ──
+  # ── Claude (Anthropic) — 토큰 2개 자동 폴백 (gmail/naver) ──
   - model_name: claude-sonnet
     litellm_params:
-      model: anthropic/claude-sonnet-4-5
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY_1
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY_2
 
   - model_name: claude-opus
     litellm_params:
       model: anthropic/claude-opus-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY
+      api_key: os.environ/ANTHROPIC_API_KEY_1
+  - model_name: claude-opus
+    litellm_params:
+      model: anthropic/claude-opus-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY_2
 
   - model_name: claude-haiku
     litellm_params:
       model: anthropic/claude-haiku-4-5
-      api_key: os.environ/ANTHROPIC_API_KEY
+      api_key: os.environ/ANTHROPIC_API_KEY_1
+  - model_name: claude-haiku
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY_2
+
+  # Claude CLI 호환 — 토큰 2개 폴백
+  - model_name: claude-opus-4-6
+    litellm_params:
+      model: anthropic/claude-opus-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY_1
+  - model_name: claude-opus-4-6
+    litellm_params:
+      model: anthropic/claude-opus-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY_2
+
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY_1
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY_2
+
+  - model_name: claude-haiku-4-5
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY_1
+  - model_name: claude-haiku-4-5
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY_2
+
+  - model_name: claude-sonnet-4-5-20250514
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY_1
+  - model_name: claude-sonnet-4-5-20250514
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY_2
+
+  - model_name: claude-haiku-4-5-20251001
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+      api_key: os.environ/ANTHROPIC_API_KEY_1
+  - model_name: claude-haiku-4-5-20251001
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+      api_key: os.environ/ANTHROPIC_API_KEY_2
+
+  - model_name: claude-opus-4-6-20250610
+    litellm_params:
+      model: anthropic/claude-opus-4-6-20250610
+      api_key: os.environ/ANTHROPIC_API_KEY_1
+  - model_name: claude-opus-4-6-20250610
+    litellm_params:
+      model: anthropic/claude-opus-4-6-20250610
+      api_key: os.environ/ANTHROPIC_API_KEY_2
+
+  - model_name: claude-sonnet-4-6-20250610
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6-20250610
+      api_key: os.environ/ANTHROPIC_API_KEY_1
+  - model_name: claude-sonnet-4-6-20250610
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6-20250610
+      api_key: os.environ/ANTHROPIC_API_KEY_2
 
 litellm_settings:
   drop_params: true
-  set_verbose: false
-  max_budget: 10.0  # 일 $10 상한
-  budget_duration: 1d
+  set_verbose: true
+  # max_budget: 10.0  # 일 $10 상한 — 임시 비활성화 (AADS 차단 원인 의심)
+  # budget_duration: 1d
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY

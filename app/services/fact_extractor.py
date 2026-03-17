@@ -68,8 +68,8 @@ async def extract_facts(
         return []
 
     try:
-        from anthropic import AsyncAnthropic
-        client = AsyncAnthropic()
+        from app.core.anthropic_client import get_client
+        client = get_client()
 
         prompt = _EXTRACTION_PROMPT.format(
             max_facts=_MAX_FACTS_PER_TURN,

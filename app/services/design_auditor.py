@@ -277,7 +277,8 @@ async def _call_claude_vision(image_b64: str, prompt: str, project_context: str)
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY not set")
 
-    client = anthropic.AsyncAnthropic(api_key=api_key)
+    from app.core.anthropic_client import get_client as _get_da_client
+    client = _get_da_client()
 
     full_prompt = f"{prompt}\n\n[프로젝트 컨텍스트]\n{project_context}" if project_context else prompt
 

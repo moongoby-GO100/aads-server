@@ -18,13 +18,11 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from anthropic import AsyncAnthropic
-from app.config import Settings
+from app.core.anthropic_client import get_client
 
 logger = logging.getLogger(__name__)
 
-settings = Settings()
-_anthropic = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY.get_secret_value())
+_anthropic = get_client()
 
 # 서브에이전트 모델 매핑
 _MODEL_MAP = {

@@ -439,10 +439,8 @@ class MemoryManager:
         )
 
         try:
-            from anthropic import AsyncAnthropic
-            from app.config import Settings
-            s = Settings()
-            client = AsyncAnthropic(api_key=s.ANTHROPIC_API_KEY.get_secret_value())
+            from app.core.anthropic_client import get_client
+            client = get_client()
 
             resp = await client.messages.create(
                 model="claude-haiku-4-5-20251001",
@@ -605,10 +603,8 @@ class MemoryManager:
         )
 
         try:
-            from anthropic import AsyncAnthropic
-            from app.config import Settings
-            s = Settings()
-            client = AsyncAnthropic(api_key=s.ANTHROPIC_API_KEY.get_secret_value())
+            from app.core.anthropic_client import get_client
+            client = get_client()
 
             resp = await client.messages.create(
                 model="claude-haiku-4-5-20251001",

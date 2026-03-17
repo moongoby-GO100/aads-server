@@ -152,7 +152,8 @@ async def _call_claude_vision_frames(frames_b64: List[str], prompt: str) -> str:
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY not set")
 
-    client = anthropic.AsyncAnthropic(api_key=api_key)
+    from app.core.anthropic_client import get_client as _get_bs_client
+    client = _get_bs_client()
 
     content_blocks: List[dict] = []
     for b64 in frames_b64[:3]:  # 최대 3프레임
