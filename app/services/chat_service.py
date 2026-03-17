@@ -535,23 +535,55 @@ async def _resume_single_stream(
         from app.services.model_selector import call_stream
         from app.services.intent_router import IntentResult
 
-        # BUG-4 FIX v2: 세션의 마지막 사용 모델로 이어서 생성 (CEO 선택 모델 유지)
-        _resume_model = "claude-sonnet"  # 폴백 기본값
+        # BUG-4 FIX v3: 세션의 마지막 사용 모델로 이어서 생성 (CEO 선택 모델 유지)
+        # 우선순위: 1) user 메시지의 model_override → 2) assistant model_used → 3) 워크스페이스 기본 모델
+        _resume_model: Optional[str] = None
         try:
             async with pool.acquire() as conn:
-                _last_model_row = await conn.fetchval("""
+                # 1순위: 마지막 user 메시지의 model_used (CEO가 선택한 model_override)
+                _user_model = await conn.fetchval("""
                     SELECT model_used FROM chat_messages
                     WHERE session_id = $1
-                      AND role = 'assistant'
+                      AND role = 'user'
                       AND model_used IS NOT NULL
-                      AND model_used NOT IN ('stopped', 'interrupted', 'semantic_cache')
+                      AND model_used != ''
                     ORDER BY created_at DESC LIMIT 1
                 """, sid)
-                if _last_model_row:
-                    _resume_model = _last_model_row
-                    logger.info(f"resume_model_from_session session={session_id[:8]} model={_resume_model}")
+                if _user_model:
+                    from app.services.intent_router import get_model_for_override
+                    _resume_model = get_model_for_override(_user_model)
+                    logger.info(f"resume_model_from_user_override session={session_id[:8]} model={_resume_model}")
+                else:
+                    # 2순위: 마지막 assistant 메시지의 실제 사용 모델
+                    _asst_model = await conn.fetchval("""
+                        SELECT model_used FROM chat_messages
+                        WHERE session_id = $1
+                          AND role = 'assistant'
+                          AND model_used IS NOT NULL
+                          AND model_used NOT IN ('stopped', 'interrupted', 'semantic_cache', 'streaming')
+                        ORDER BY created_at DESC LIMIT 1
+                    """, sid)
+                    if _asst_model:
+                        _resume_model = _asst_model
+                        logger.info(f"resume_model_from_assistant session={session_id[:8]} model={_resume_model}")
+
+                # 3순위: 워크스페이스 settings에서 기본 모델 조회
+                if not _resume_model:
+                    _ws_settings = await conn.fetchval("""
+                        SELECT w.settings FROM chat_workspaces w
+                        JOIN chat_sessions s ON s.workspace_id = w.id
+                        WHERE s.id = $1
+                    """, sid)
+                    if _ws_settings and isinstance(_ws_settings, dict):
+                        _resume_model = _ws_settings.get("default_model")
+                    if _resume_model:
+                        logger.info(f"resume_model_from_workspace session={session_id[:8]} model={_resume_model}")
         except Exception as _model_err:
             logger.warning(f"resume_model_lookup_failed session={session_id[:8]}: {_model_err}")
+
+        if not _resume_model:
+            _resume_model = "claude-sonnet"
+            logger.info(f"resume_model_fallback session={session_id[:8]} model={_resume_model}")
 
         intent_result = IntentResult(
             intent="status_check",
@@ -572,6 +604,7 @@ async def _resume_single_stream(
             system_prompt=system_prompt,
             messages=messages,
             tools=tools_for_api,
+            model_override=_resume_model,
             session_id=session_id,
         ):
             etype = event.get("type", "")
@@ -1458,8 +1491,9 @@ async def send_message_stream(
             logger.warning(f"url_detection_skipped: {_url_err}")
 
         # 사용자 메시지 저장 (trigger 메시지는 intent로 구분)
+        # model_override를 user 메시지의 model_used에 저장 → 재개 시 CEO 선택 모델 복원용
         user_intent = "system_trigger" if intent_override else None
-        await _save_message(conn, sid, "user", content, intent=user_intent, attachments=attachments or [])
+        await _save_message(conn, sid, "user", content, model_used=model_override, intent=user_intent, attachments=attachments or [])
 
         # 2. 워크스페이스 정보 조회
         sp_row = await conn.fetchrow(
