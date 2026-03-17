@@ -609,7 +609,10 @@ async def _stream_agent_sdk(
     MCP 브릿지로 55개 도구 사용. 세션 자동 관리.
     """
     sdk_model = _ANTHROPIC_MODEL_ID.get(model, model)
-    user_message = _format_messages_as_text(messages)
+
+    # 세션 이어가기 여부에 따라 메시지 포맷 결정
+    _has_resume = bool(_cli_session_map.get(session_id)) if session_id else False
+    user_message = _format_messages_as_text(messages, has_resume=_has_resume)
 
     # 토큰 교대: Naver → Gmail → Naver → Gmail ... (3라운드, 총 6회)
     keys = _ANTHROPIC_KEYS if _ANTHROPIC_KEYS else [os.getenv("ANTHROPIC_API_KEY", "")]
@@ -852,51 +855,60 @@ async def _run_agent_sdk_with_key(
     }
 
 
-def _format_messages_as_text(messages: List[Dict[str, Any]]) -> str:
-    """메시지 배열에서 최신 사용자 메시지만 추출.
+def _format_messages_as_text(messages: List[Dict[str, Any]], has_resume: bool = False) -> str:
+    """메시지 배열 → 텍스트 변환.
 
-    CLI --resume 모드에서는 대화 히스토리를 CLI가 자체 관리하므로
-    현재 턴의 사용자 메시지만 전달하면 됨.
+    has_resume=True: CLI가 이전 대화를 기억하므로 최신 user 메시지만 전달.
+    has_resume=False: 대화 기록 포함 (최근 40개 메시지, CLI에 컨텍스트 제공).
     """
-    # 마지막 user 메시지만 추출
-    for msg in reversed(messages):
-        role = msg.get("role", "")
-        if role != "user":
-            continue
 
-        content = msg.get("content", "")
+    def _extract_text(content) -> str:
         if isinstance(content, list):
-            text_parts = []
+            parts = []
             for block in content:
                 if isinstance(block, dict):
                     if block.get("type") == "text":
-                        text_parts.append(block.get("text", ""))
+                        parts.append(block.get("text", ""))
+                    elif block.get("type") == "tool_result":
+                        tc = block.get("content", "")
+                        if isinstance(tc, str):
+                            parts.append("[도구결과] %s" % tc[:500])
+                        elif isinstance(tc, list):
+                            for b in tc:
+                                if isinstance(b, dict) and b.get("type") == "text":
+                                    parts.append("[도구결과] %s" % b.get("text", "")[:500])
+                    elif block.get("type") == "tool_use":
+                        parts.append("[도구호출: %s]" % block.get("name", ""))
                 elif isinstance(block, str):
-                    text_parts.append(block)
-            content = "\n".join(text_parts)
-        elif not isinstance(content, str):
-            content = str(content)
-
-        if content.strip():
+                    parts.append(block)
+            return "\n".join(parts)
+        elif isinstance(content, str):
             return content
+        return str(content)
 
-    # 폴백: 전체 메시지 직렬화
+    # --resume 있으면: 최신 user 메시지만
+    if has_resume:
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                text = _extract_text(msg.get("content", ""))
+                if text.strip():
+                    return text
+
+    # --resume 없으면: 최근 대화 기록 포함 (최대 40개 메시지)
+    recent = messages[-40:] if len(messages) > 40 else messages
     parts = []
-    for msg in messages:
+    for msg in recent:
         role = msg.get("role", "user")
         if role == "system":
             continue
-        content = msg.get("content", "")
-        if isinstance(content, list):
-            content = "\n".join(
-                b.get("text", "") for b in content
-                if isinstance(b, dict) and b.get("type") == "text"
-            )
-        elif not isinstance(content, str):
-            content = str(content)
-        if content.strip():
-            role_label = "CEO" if role == "user" else "AI"
-            parts.append("[%s]\n%s" % (role_label, content))
+        content = _extract_text(msg.get("content", ""))
+        if not content.strip():
+            continue
+        # 긴 응답은 축소
+        if role == "assistant" and len(content) > 1000:
+            content = content[:800] + "\n...[응답 축소]..." + content[-200:]
+        role_label = "CEO" if role == "user" else "AI"
+        parts.append("[%s]\n%s" % (role_label, content))
     return "\n\n".join(parts)
 
 
