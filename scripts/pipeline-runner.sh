@@ -20,6 +20,7 @@ PGPASSWORD="${PGPASSWORD:-}"
 export PGPASSWORD
 
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
+AADS_API_URL="${AADS_API_URL:-http://127.0.0.1:8100}"
 MAX_RUNTIME="${MAX_RUNTIME:-7200}"
 MAX_RETRIES="${MAX_RETRIES:-2}"               # H5: Claude 실패 시 재시도 횟수
 APPROVAL_TIMEOUT_HOURS="${APPROVAL_TIMEOUT_HOURS:-24}"  # H4: 승인 대기 타임아웃
@@ -30,8 +31,6 @@ RUNNER_HOSTNAME=$(hostname -s)
 
 # Claude Code 인증: current.env (oat 키) 사용 — API 키(api03) 사용 금지
 source ~/.claude/current.env 2>/dev/null || true
-if false; then
-fi
 export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LANGUAGE=en_US:en MANPATH=
 
 # 프로젝트별 workdir 매핑
@@ -75,7 +74,9 @@ _psql_cmd() {
 }
 
 db_exec() {
-    _psql_cmd -t -A -c "$1" 2>/dev/null
+    # FIX: ASCII Record Separator(0x1E)를 필드 구분자로 사용
+    # instruction에 | 문자가 포함되면 IFS='|' 파싱이 깨지는 버그 수정
+    _psql_cmd -t -A -F $'\x1e' -c "$1" 2>/dev/null
 }
 
 db_update() {
@@ -116,7 +117,7 @@ claim_queued_job() {
                 ORDER BY created_at ASC LIMIT 1
                 FOR UPDATE SKIP LOCKED
              )
-             RETURNING job_id, project, replace(instruction, E'\\n', ' '), chat_session_id, max_cycles;"
+             RETURNING job_id, project, replace(replace(instruction, E'\\n', ' '), '|', ' '), chat_session_id, max_cycles;"
 }
 
 claim_approved_job() {
@@ -234,9 +235,9 @@ ${diff_summary}
 _notify_ai() {
     local job_id="$1"
     # aads-server의 notify API 호출 (백그라운드, 실패해도 무시)
-    curl -4 -sf -X POST "http://127.0.0.1:8100/api/v1/pipeline/jobs/${job_id}/notify" \
+    curl -4 -sf -X POST "${AADS_API_URL}/api/v1/pipeline/jobs/${job_id}/notify" \
          -H "x-monitor-key: internal" \
-         --max-time 5 >/dev/null 2>&1 &
+         --max-time 10 >/dev/null 2>&1 &
     log "  NOTIFY_AI job=$job_id"
 }
 
@@ -375,7 +376,8 @@ main() {
         pending=$(claim_queued_job "$project_filter" 2>/dev/null) || true
 
         if [[ -n "$pending" ]]; then
-            IFS='|' read -r job_id project instruction session_id max_cycles <<< "$pending"
+            # FIX: ASCII RS(0x1e) 구분자 사용 — instruction에 | 포함 시 파싱 깨짐 방지
+            IFS=$'\x1e' read -r job_id project instruction session_id max_cycles <<< "$pending"
             if [[ -n "$job_id" && -n "$project" ]]; then
                 run_job "$job_id" "$project" "$instruction" "$session_id" "${max_cycles:-3}" || true
             fi
@@ -386,7 +388,8 @@ main() {
         approved=$(claim_approved_job "$project_filter" 2>/dev/null) || true
 
         if [[ -n "$approved" ]]; then
-            IFS='|' read -r job_id project session_id <<< "$approved"
+            # FIX: ASCII RS(0x1e) 구분자 사용
+            IFS=$'\x1e' read -r job_id project session_id <<< "$approved"
             if [[ -n "$job_id" && -n "$project" ]]; then
                 deploy_job "$job_id" "$project" "$session_id" || true
             fi

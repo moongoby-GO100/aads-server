@@ -416,7 +416,9 @@ async def resume_interrupted_streams() -> int:
                 continue
 
             # 중간 결과에서 ⏳ 마커 제거
-            clean_partial = re.sub(r'\n\n⏳ _.*?_$', '', partial, flags=re.DOTALL).strip()
+            clean_partial = re.sub(r'\n\n⏳ _.*?_', '', partial, flags=re.DOTALL)
+            clean_partial = re.sub(r'^⏳ _[^\n]*_\s*', '', clean_partial)
+            clean_partial = clean_partial.strip()
 
             try:
                 # 이어서 생성
@@ -934,6 +936,9 @@ async def _save_message(
             content = re.sub(rf'<{tag}>.*', '', content, flags=re.DOTALL)  # 닫히지 않은 태그
         content = re.sub(r'<invoke\s+name=[^>]*>.*?</invoke>', '', content, flags=re.DOTALL)
         content = re.sub(r'<invoke\s+name=[^>]*>.*', '', content, flags=re.DOTALL)  # 닫히지 않은 invoke
+        # streaming_placeholder 텍스트 잔류 방지
+        content = re.sub(r'\n\n⏳ _.*?_', '', content, flags=re.DOTALL)
+        content = re.sub(r'^⏳ _[^\n]*_\s*', '', content)
         content = content.strip()
 
     # AADS-CRITICAL-FIX #2: INSERT + UPDATE를 트랜잭션으로 감싸 message_count 정합성 보장
