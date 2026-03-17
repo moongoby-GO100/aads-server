@@ -94,13 +94,18 @@ async def evaluate_response(
         if not tool_needed:
             tg_score = max(tg_score, 0.5)
             details["tool_grounding"] = tg_score
+            # 대화형 응답은 actionability 패널티 제거
+            act_score = max(float(details.get("actionability", 0.5)), 0.5)
+            details["actionability"] = act_score
+        else:
+            act_score = float(details.get("actionability", 0.5))
         # Weighted overall: accuracy×0.3 + completeness×0.25 + tool_grounding×0.15 + relevance×0.15 + actionability×0.15
         overall = (
             float(details.get("accuracy", 0.5)) * 0.30
             + float(details.get("completeness", 0.5)) * 0.25
             + tg_score * 0.15
             + float(details.get("relevance", 0.5)) * 0.15
-            + float(details.get("actionability", 0.5)) * 0.15
+            + act_score * 0.15
         )
         overall = min(1.0, max(0.0, overall))
         details["overall"] = round(overall, 3)

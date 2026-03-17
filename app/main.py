@@ -304,6 +304,7 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(_run_auto_fix, 'interval', minutes=5, id='auto_fix_dispatcher')
 
         scheduler.start()
+        app.state.scheduler = scheduler  # fallback: MCP 도구 경로에서 참조 가능
         await healer_init()
         # AADS-190: 스케줄러 인스턴스를 동적 스케줄 도구에 공유
         try:

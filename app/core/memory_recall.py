@@ -486,14 +486,18 @@ async def get_evolution_stats(db) -> dict:
             SELECT
                 (SELECT COUNT(*) FROM memory_facts) AS fact_count,
                 (SELECT COUNT(*) FROM ai_observations) AS obs_count,
-                (SELECT COUNT(*) FROM memory_facts WHERE category = 'error_pattern') AS error_count
+                (SELECT COUNT(*) FROM memory_facts WHERE category = 'error_pattern') AS error_count,
+                (SELECT COUNT(*) FROM chat_messages WHERE quality_score IS NOT NULL AND created_at > NOW() - INTERVAL '7 days') AS quality_count,
+                (SELECT ROUND(AVG(quality_score)::numeric, 1) FROM chat_messages WHERE quality_score IS NOT NULL AND created_at > NOW() - INTERVAL '7 days') AS avg_quality
             """
         )
+        avg_q = row["avg_quality"] if row and row["avg_quality"] is not None else "?"
+        q_cnt = row["quality_count"] if row and row["quality_count"] is not None else "?"
         return {
             "fact_count": row["fact_count"] if row else "?",
             "obs_count": row["obs_count"] if row else "?",
-            "avg_quality": "측정중",
-            "quality_count": "측정중",
+            "avg_quality": f"{float(avg_q)*100:.0f}%" if avg_q != "?" else "?",
+            "quality_count": q_cnt,
             "error_pattern_count": row["error_count"] if row else "?",
         }
     except Exception as e:

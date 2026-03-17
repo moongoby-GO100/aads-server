@@ -258,6 +258,7 @@ async def _stream_litellm(
     system_prompt: str,
     messages: List[Dict[str, Any]],
     tools: Optional[List[Dict[str, Any]]] = None,
+    session_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """LiteLLM 프록시를 통한 스트리밍.
     Claude 모델: /v1/messages?beta=true (Anthropic 네이티브, 도구 호환성 보장)
@@ -266,7 +267,7 @@ async def _stream_litellm(
     _is_claude = model in _ANTHROPIC_MODEL_ID
 
     if _is_claude:
-        async for event in _stream_litellm_anthropic(model, system_prompt, messages, tools):
+        async for event in _stream_litellm_anthropic(model, system_prompt, messages, tools, session_id=session_id):
             yield event
     else:
         async for event in _stream_litellm_openai(model, system_prompt, messages, tools):
@@ -278,6 +279,7 @@ async def _stream_litellm_anthropic(
     system_prompt: str,
     messages: List[Dict[str, Any]],
     tools: Optional[List[Dict[str, Any]]] = None,
+    session_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Claude 모델 → LiteLLM /v1/messages?beta=true (멀티턴 도구 루프 지원)."""
     current_msgs = [m for m in messages if m.get("role") != "system"]
@@ -444,6 +446,18 @@ async def _stream_litellm_anthropic(
                     {"role": "assistant", "content": _assistant_content},
                     {"role": "user", "content": tool_results},
                 ]
+
+                # CEO 인터럽트 체크 (BUG-1 FIX: LiteLLM 경로에서도 인터럽트 반영)
+                if session_id:
+                    from app.core.interrupt_queue import has_interrupt, pop_interrupts
+                    if has_interrupt(session_id):
+                        interrupts = pop_interrupts(session_id)
+                        interrupt_text = "\n".join(interrupts)
+                        current_msgs.append({
+                            "role": "user",
+                            "content": f"[CEO 추가 지시] 작업 도중 CEO가 새로운 지시를 보냈습니다. 현재까지의 작업 결과를 고려하고, 이 새 지시를 반영하여 다음 행동을 판단하세요. CEO 지시가 기존 작업과 충돌하면 CEO 지시를 우선합니다.\n\n{interrupt_text}"
+                        })
+                        yield {"type": "interrupt_applied", "content": "CEO 추가 지시 반영 중..."}
 
     except Exception as e:
         logger.error(f"model_selector litellm_anthropic error: {e}")

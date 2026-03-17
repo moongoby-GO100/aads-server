@@ -207,8 +207,17 @@ async def unschedule_task(name: str) -> Dict[str, Any]:
 
 async def list_scheduled_tasks() -> Dict[str, Any]:
     """등록된 예약 작업 목록 조회."""
+    global _scheduler
     if not _scheduler:
-        return {"error": "스케줄러가 초기화되지 않았습니다"}
+        # fallback: main.py의 app state에서 scheduler 가져오기 시도
+        try:
+            from app.main import app
+            if hasattr(app, 'state') and hasattr(app.state, 'scheduler'):
+                _scheduler = app.state.scheduler
+        except Exception:
+            pass
+    if not _scheduler:
+        return {"error": "스케줄러가 초기화되지 않았습니다. 서버 재시작 후 다시 시도하세요."}
 
     jobs = _scheduler.get_jobs()
     result = []

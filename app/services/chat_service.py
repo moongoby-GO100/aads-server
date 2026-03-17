@@ -189,10 +189,10 @@ async def with_background_completion(
                     except Exception:
                         pass
 
-                # 클라이언트 연결 중에도 1초마다 실시간 중간 저장 (서버 재시작 시 데이터 보호)
+                # 클라이언트 연결 중 10초마다 중간 저장 (BUG-5 FIX: 1초→10초, DB 부하 감소)
                 if not _client_gone:
                     _now_rt = _bg_time.monotonic()
-                    if _now_rt - state["last_save"] > 1:
+                    if _now_rt - state["last_save"] > 10:
                         state["last_save"] = _now_rt
                         await _interim_save_streaming(session_id, state)
 
@@ -339,7 +339,38 @@ async def stop_session_streaming(session_id: str) -> Dict[str, Any]:
     }
 
     if task and not task.done():
-        # 태스크 취소 (중간 저장 안 함 — 불완전 placeholder 방지)
+        # BUG-2 FIX: 부분 응답을 DB에 저장 (유실 방지)
+        partial_content = result["content"]
+        if partial_content.strip():
+            try:
+                pool = get_pool()
+                sid = uuid.UUID(session_id)
+                stopped_content = partial_content.strip() + "\n\n_(응답이 중지되었습니다)_"
+                async with pool.acquire() as conn:
+                    existing = await conn.fetchval(
+                        "SELECT id FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' ORDER BY created_at DESC LIMIT 1",
+                        sid,
+                    )
+                    if existing:
+                        await conn.execute(
+                            "UPDATE chat_messages SET content = $1, intent = NULL, model_used = 'stopped' WHERE id = $2",
+                            stopped_content, existing,
+                        )
+                    else:
+                        await conn.execute(
+                            """INSERT INTO chat_messages (session_id, role, content, model_used, intent)
+                               VALUES ($1, 'assistant', $2, 'stopped', NULL)""",
+                            sid, stopped_content,
+                        )
+                        await conn.execute(
+                            "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
+                            sid,
+                        )
+                logger.info(f"stop_partial_saved session={session_id[:8]} len={len(partial_content)}")
+            except Exception as save_err:
+                logger.warning(f"stop_partial_save_failed session={session_id[:8]}: {save_err}")
+
+        # 태스크 취소
         task.cancel()
         try:
             await _heartbeat_asyncio.wait_for(
@@ -349,13 +380,10 @@ async def stop_session_streaming(session_id: str) -> Dict[str, Any]:
             pass
         _active_bg_tasks.pop(session_id, None)
         _streaming_state.pop(session_id, None)
-        # 불완전한 streaming placeholder 삭제
-        try:
-            await _delete_streaming_placeholder(session_id)
-        except Exception:
-            pass
+        # placeholder가 이미 최종 응답으로 교체되었으므로 삭제 불필요
+        # (위에서 intent=NULL로 변경했으므로 _delete_streaming_placeholder는 아무것도 안 함)
         result["stopped"] = True
-        logger.info(f"session_streaming_stopped session={session_id[:8]} content_len={len(result['content'])} tools={result['tool_count']}")
+        logger.info(f"session_streaming_stopped session={session_id[:8]} content_len={len(partial_content)} tools={result['tool_count']}")
     else:
         # 이미 완료되었거나 존재하지 않음
         _active_bg_tasks.pop(session_id, None)
@@ -507,9 +535,11 @@ async def _resume_single_stream(
         from app.services.model_selector import call_stream
         from app.services.intent_router import IntentResult
 
+        # BUG-4 FIX: 워크스페이스 기반 모델 선택 (하드코딩 제거)
+        _resume_model = "claude-sonnet"  # 기본: sonnet (비용 효율)
         intent_result = IntentResult(
             intent="status_check",
-            model="claude-opus",
+            model=_resume_model,
             use_tools=True,
             tool_group="all",
         )
@@ -1507,32 +1537,43 @@ async def send_message_stream(
                 _normalized_project = _ws_upper[:20]
 
         # 4.4. 시맨틱 캐시 조회 (유사 질문 즉시 응답)
+        # BUG-3 FIX: 운영/조회성 질문은 캐시 바이패스 (실시간 데이터 필요)
+        _CACHE_BYPASS_KEYWORDS = (
+            "상태", "확인", "점검", "검수", "조회", "진단", "로그", "서버",
+            "DB", "현재", "최근", "지금", "오늘", "실행", "배포", "수정",
+            "에러", "버그", "장애", "모니터", "헬스", "status", "check",
+            "deploy", "fix", "error", "health", "지시서", "파이프라인",
+        )
+        _skip_cache = any(kw in content for kw in _CACHE_BYPASS_KEYWORDS)
         _semantic_cache_hit = None
-        try:
-            from app.services.semantic_cache import SemanticCache
-            _sem_cache = SemanticCache(pool=get_pool())
-            _ws_id = sp_row["workspace_id"] if sp_row and sp_row.get("workspace_id") else None
-            _semantic_cache_hit = await _sem_cache.lookup(content, workspace_id=_ws_id)
-            if _semantic_cache_hit:
-                _cached_resp = _semantic_cache_hit.get("cached_response", "")
-                _cached_sim = _semantic_cache_hit.get("similarity", 0)
-                logger.info("semantic_cache_hit", similarity=f"{_cached_sim:.3f}", session=session_id[:8])
-                # 캐시 응답을 SSE 형식으로 직접 반환
-                yield f'data: {json.dumps({"type": "delta", "content": _cached_resp})}\n\n'
-                yield f'data: {json.dumps({"type": "message_stop", "cached": True})}\n\n'
-                # Phase C: 캐시 응답도 DB에 저장
-                await _save_and_update_session(
-                    sid, _cached_resp,
-                    session_id_str=session_id,
-                    raw_messages=raw_messages,
-                    model_used="semantic_cache",
-                    intent=intent_override or "cache_hit",
-                    cost=0.0, tokens_in=0, tokens_out=0,
-                    tools_called=[], thinking_summary=None,
-                )
-                return
-        except Exception as _sc_err:
-            logger.debug(f"semantic_cache_lookup_skipped: {_sc_err}")
+        if _skip_cache:
+            logger.debug(f"semantic_cache_bypassed: operational query detected, session={session_id[:8]}")
+        else:
+            try:
+                from app.services.semantic_cache import SemanticCache
+                _sem_cache = SemanticCache(pool=get_pool())
+                _ws_id = sp_row["workspace_id"] if sp_row and sp_row.get("workspace_id") else None
+                _semantic_cache_hit = await _sem_cache.lookup(content, workspace_id=_ws_id)
+                if _semantic_cache_hit:
+                    _cached_resp = _semantic_cache_hit.get("cached_response", "")
+                    _cached_sim = _semantic_cache_hit.get("similarity", 0)
+                    logger.info("semantic_cache_hit", similarity=f"{_cached_sim:.3f}", session=session_id[:8])
+                    # 캐시 응답을 SSE 형식으로 직접 반환
+                    yield f'data: {json.dumps({"type": "delta", "content": _cached_resp})}\n\n'
+                    yield f'data: {json.dumps({"type": "message_stop", "cached": True})}\n\n'
+                    # Phase C: 캐시 응답도 DB에 저장
+                    await _save_and_update_session(
+                        sid, _cached_resp,
+                        session_id_str=session_id,
+                        raw_messages=raw_messages,
+                        model_used="semantic_cache",
+                        intent=intent_override or "cache_hit",
+                        cost=0.0, tokens_in=0, tokens_out=0,
+                        tools_called=[], thinking_summary=None,
+                    )
+                    return
+            except Exception as _sc_err:
+                logger.debug(f"semantic_cache_lookup_skipped: {_sc_err}")
 
         # 4.5-pre. F10: Contradiction Detection (모순 감지)
         try:
