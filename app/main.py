@@ -257,6 +257,27 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"eval_pipeline_quality_regression_error: {e}")
         scheduler.add_job(_run_quality_regression, CronTrigger(hour=6, minute=30, timezone="UTC"), id="eval_quality_regression")
+        # Phase 1: Quality Feedback Loop — 매일 06:45 UTC (eval_pipeline 이후)
+        async def _run_quality_feedback():
+            try:
+                from app.services.quality_feedback_loop import analyze_quality_weaknesses
+                from app.core.db_pool import get_pool
+                result = await analyze_quality_weaknesses(get_pool())
+                if result.get("directives_created", 0) > 0:
+                    logger.info("quality_feedback_directives_created", count=result["directives_created"])
+            except Exception as e:
+                logger.warning(f"quality_feedback_job_error: {e}")
+        scheduler.add_job(_run_quality_feedback, CronTrigger(hour=6, minute=45, timezone="UTC"), id="quality_feedback")
+        # Phase 2: Autonomous Research Agent — 매일 07:00 UTC (16:00 KST)
+        async def _run_research_agent():
+            try:
+                from app.services.research_agent import run_daily_research
+                from app.core.db_pool import get_pool
+                result = await run_daily_research(get_pool())
+                logger.info("research_agent_done", findings=len(result.get("findings", [])))
+            except Exception as e:
+                logger.warning(f"research_agent_job_error: {e}")
+        scheduler.add_job(_run_research_agent, CronTrigger(hour=7, minute=0, timezone="UTC"), id="research_agent")
         # P2: eval_pipeline — 주간 품질 리포트 (매주 월요일 07:00 UTC)
         async def _run_weekly_quality_report():
             try:
