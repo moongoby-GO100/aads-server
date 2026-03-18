@@ -41,7 +41,7 @@ def get_server(project: str) -> str:
 def get_server_by_number(server_num: str) -> dict:
     """서버 번호(211, 114, 68) → {server, workdir} 매핑."""
     _SERVER_NUM_MAP = {
-        "68": {"server": "host.docker.internal", "workdir": "/root"},
+        "68": {"server": "host.docker.internal", "workdir": "/root/aads"},
         "211": {"server": "211.188.51.113", "workdir": "/root"},
         "114": {"server": "114.207.244.86", "port": "7916", "workdir": "/"},
     }

@@ -3196,7 +3196,7 @@ async def get_memory_context_info(session_id: str) -> Dict[str, Any]:
 
 # ─── Chat Files (파일 첨부 시스템 Phase 1) ──────────────────────────────────
 
-CHAT_FILES_DIR = Path(os.getenv("CHAT_FILES_DIR", "/root/aads/uploads/chat_files"))
+CHAT_FILES_DIR = Path(os.getenv("CHAT_FILES_DIR", "/root/aads/uploads/chat/files"))
 
 
 async def save_chat_file(

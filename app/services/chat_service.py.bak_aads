@@ -252,6 +252,13 @@ async def with_background_completion(
             except Exception:
                 pass
             _active_bg_tasks.pop(session_id, None)
+            # 🆕 bg_task 완료 후 대기 중인 trigger_ai_reaction 큐 소비
+            if session_id in _ai_reaction_queue and _ai_reaction_queue[session_id]:
+                _next_msg = _ai_reaction_queue[session_id].pop(0)
+                if not _ai_reaction_queue[session_id]:
+                    del _ai_reaction_queue[session_id]
+                _ai_reaction_active[session_id] = _bg_time.monotonic()
+                _heartbeat_asyncio.create_task(_consume_next_reaction(session_id, _next_msg))
             # 스트리밍 완료 → placeholder 삭제 (최종 응답이 generator 내부에서 저장됨)
             try:
                 await _delete_streaming_placeholder(session_id)
@@ -951,7 +958,7 @@ async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort
     try:
         order = "DESC" if sort == "desc" else "ASC"
         rows = await conn.fetch(
-            f"SELECT * FROM chat_messages WHERE session_id = $1 ORDER BY created_at {order} LIMIT $2 OFFSET $3",
+            f"SELECT * FROM chat_messages WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate' ORDER BY created_at {order} LIMIT $2 OFFSET $3",
             uuid.UUID(session_id),
             limit,
             offset,
@@ -977,9 +984,17 @@ async def _extract_artifacts(session_id: uuid.UUID, content: str, workspace_id: 
         r'```(\w+)\n(.*?)```', content, _re.DOTALL
     )
     for lang, code in code_blocks:
-        if lang.lower() in ('diff', 'text', 'log', 'output', 'bash', 'sh', 'shell'):
+        if lang.lower() in ('diff', 'text', 'log', 'output', 'bash', 'sh', 'shell',
+                              'json', 'xml', 'yaml', 'toml', 'ini', 'conf', 'env'):
             continue
-        if len(code.strip()) < 50:
+        if len(code.strip()) < 200:
+            continue
+        # JSON 형태 코드 블록 제외 (언어 태그 무관)
+        stripped = code.strip()
+        if stripped.startswith('{') and stripped.endswith('}'):
+            continue
+        if stripped.startswith('[') and stripped.endswith(']'):
+            continue
             continue
         title = f"{lang} 코드"
         first_line = code.strip().split('\n')[0]
@@ -1109,6 +1124,13 @@ async def _extract_artifacts(session_id: uuid.UUID, content: str, workspace_id: 
     import json as _json
     async with get_pool().acquire() as conn:
         for art_type, title, art_content, metadata in artifacts[:5]:
+            # 중복 방지: 같은 session_id + type + title 조합이 이미 존재하면 스킵
+            existing = await conn.fetchval(
+                "SELECT 1 FROM chat_artifacts WHERE session_id = $1 AND type = $2 AND title = $3 LIMIT 1",
+                session_id, art_type, title[:200],
+            )
+            if existing:
+                continue
             await conn.execute(
                 """
                 INSERT INTO chat_artifacts (session_id, workspace_id, type, title, content, metadata)
@@ -1258,6 +1280,19 @@ async def _consume_next_reaction(sid: str, msg: str) -> None:
             intent_override="auto_reaction",
         ):
             pass
+        # message_count 보정
+        try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as _conn:
+                await _conn.execute(
+                    "UPDATE chat_sessions SET message_count = "
+                    "(SELECT COUNT(*) FROM chat_messages WHERE session_id = $1), "
+                    "updated_at = NOW() WHERE id = $1",
+                    uuid.UUID(sid),
+                )
+        except Exception as _mc_err:
+            logger.warning(f"_consume_next_reaction: message_count update failed session={sid[:8]}: {_mc_err}")
     except Exception as e:
         logger.warning(f"trigger_ai_reaction_queue error session={sid[:8]}: {e}")
     finally:
@@ -1308,8 +1343,21 @@ async def trigger_ai_reaction(
         "**배포 완료 보고 시 필수 규칙:**\n"
         "- 도구를 호출하지 않고 수치(건수/개수)를 보고하는 것은 금지. 반드시 query_database/run_remote_command로 실측.\n"
         "- '정상 완료'라고 보고하려면 최소 health_check 또는 docker ps로 실제 확인 필수.\n"
-        "- 프론트엔드 변경 시 browser_snapshot으로 렌더링 확인 권장."
+        "- 프론트엔드 변경 시 browser_snapshot으로 렌더링 확인 권장.\n\n"
+        f"[현재 세션 ID: {session_id}]\n"
+        f"pipeline_runner_submit 호출 시 반드시 session_id=\"{session_id}\"를 포함하세요."
     )
+
+    # 🆕 CEO의 SSE 스트리밍(with_background_completion) 실행 중이면 큐잉 (CEO 작업 중단 금지)
+    if session_id in _active_bg_tasks and not _active_bg_tasks[session_id].done():
+        if session_id not in _ai_reaction_queue:
+            _ai_reaction_queue[session_id] = []
+        q = _ai_reaction_queue[session_id]
+        if len(q) >= _AI_REACTION_MAX_QUEUE:
+            q.pop(0)
+        q.append(safe_message)
+        logger.info(f"trigger_ai_reaction: deferred (bg_task active) session={session_id[:8]}... queue_size={len(q)}")
+        return
 
     # 이미 이 세션에서 AI 반응이 진행 중이면 큐에 추가
     if session_id in _ai_reaction_active:
@@ -1337,6 +1385,19 @@ async def trigger_ai_reaction(
                 intent_override="auto_reaction",
             ):
                 pass  # 스트림 전체 소비 → DB에 AI 응답 자동 저장
+            # message_count 보정 (trigger_ai_reaction으로 생성된 시스템+AI 메시지 반영)
+            try:
+                from app.core.db_pool import get_pool
+                pool = get_pool()
+                async with pool.acquire() as _conn:
+                    await _conn.execute(
+                        "UPDATE chat_sessions SET message_count = "
+                        "(SELECT COUNT(*) FROM chat_messages WHERE session_id = $1), "
+                        "updated_at = NOW() WHERE id = $1",
+                        uuid.UUID(session_id),
+                    )
+            except Exception as _mc_err:
+                logger.warning(f"trigger_ai_reaction: message_count update failed session={session_id[:8]}: {_mc_err}")
         except Exception as e:
             logger.warning(f"trigger_ai_reaction error session={session_id}: {e}")
         finally:
@@ -1568,6 +1629,28 @@ async def send_message_stream(
                 })
             if _vision_images:
                 logger.info(f"[VISION] {len(_vision_images)} image(s) extracted for Vision API")
+
+            # file_id 기반 첨부파일 처리 (디스크 저장 파일 → Vision)
+            for att in attachments:
+                if isinstance(att, dict) and att.get("file_id"):
+                    try:
+                        _finfo = await get_chat_file(att["file_id"])
+                        if _finfo and _finfo["mime_type"].startswith("image/"):
+                            import base64 as _cf_b64
+                            _fpath = Path(_finfo["storage_path"])
+                            if _fpath.exists():
+                                _img_data = _fpath.read_bytes()
+                                _vision_images.append({
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": _finfo["mime_type"],
+                                        "data": _cf_b64.b64encode(_img_data).decode(),
+                                    },
+                                })
+                                logger.info(f"[VISION] file_id={att['file_id'][:8]} loaded from disk")
+                    except Exception as _fe:
+                        logger.warning(f"[VISION] file_id load failed: {_fe}")
 
             # Gemini: 동영상 파일 → Gemini 2.0 Flash 분석 후 텍스트로 변환
             _video_attachments = [a for a in attachments if isinstance(a, dict) and a.get("type") == "video" and a.get("base64")]
@@ -2334,7 +2417,7 @@ async def send_message_stream(
         # ═══ #19: Phase C — 응답 저장 (별도 커넥션) ═══
         _thinking_truncated = (thinking_summary or "")[:2000] or None
         if thinking_summary and len(thinking_summary) > 2000:
-            logger.info("thinking_truncated", original_len=len(thinking_summary), session_id=session_id)
+            logger.info(f"thinking_truncated original_len={len(thinking_summary)} session={session_id[:8]}")
         await _save_and_update_session(
             sid, full_response,
             session_id_str=session_id,
@@ -2680,6 +2763,18 @@ async def update_artifact(artifact_id: str, data: Dict[str, Any]) -> Optional[Di
         await get_pool().release(conn)
 
 
+async def delete_artifact(artifact_id: str) -> bool:
+    """아티팩트 삭제. 성공 시 True, 미존재 시 False."""
+    conn = await _get_conn()
+    try:
+        result = await conn.execute(
+            "DELETE FROM chat_artifacts WHERE id = $1", uuid.UUID(artifact_id)
+        )
+        return result == "DELETE 1"
+    finally:
+        await get_pool().release(conn)
+
+
 async def export_artifact(artifact_id: str, fmt: str) -> Dict[str, Any]:
     """단순 텍스트 내보내기. PDF는 향후 확장."""
     artifact = await get_artifact(artifact_id)
@@ -2815,7 +2910,7 @@ async def list_research_history(limit: int = 50) -> List[Dict[str, Any]]:
 # ─── 내부 헬퍼 ────────────────────────────────────────────────────────────────
 
 # #8: JSONB 필드 목록 (파싱 필요한 컬럼만)
-_JSONB_FIELDS = frozenset({"attachments", "sources", "tools_called", "settings", "files", "content", "metadata"})
+_JSONB_FIELDS = frozenset({"attachments", "sources", "tools_called", "settings", "files", "metadata"})
 
 
 def _row_to_dict(row: asyncpg.Record) -> Dict[str, Any]:
@@ -3097,3 +3192,104 @@ async def get_memory_context_info(session_id: str) -> Dict[str, Any]:
         return {"error": str(e)}
     finally:
         await pool.release(conn)
+
+
+# ─── Chat Files (파일 첨부 시스템 Phase 1) ──────────────────────────────────
+
+CHAT_FILES_DIR = Path(os.getenv("CHAT_FILES_DIR", "/root/aads/uploads/chat_files"))
+
+
+async def save_chat_file(
+    session_id: str,
+    file: Any,
+    data: bytes,
+    uploaded_by: str = "user",
+) -> Dict[str, Any]:
+    """파일 저장 + 이미지 압축 + DB 등록."""
+    file_id = str(uuid.uuid4())
+    ext = Path(file.filename).suffix.lower() if file.filename else ""
+    mime = file.content_type or "application/octet-stream"
+
+    # 디렉토리 생성
+    session_dir = CHAT_FILES_DIR / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    stored_name = f"{file_id}{ext}"
+    storage_path = session_dir / stored_name
+    thumbnail_path = None
+    width, height = None, None
+
+    is_image = mime.startswith("image/")
+
+    if is_image:
+        try:
+            from PIL import Image
+            from io import BytesIO
+
+            img = Image.open(BytesIO(data))
+            width, height = img.size
+
+            # AI 생성 이미지는 압축 안 함
+            if uploaded_by != "ai":
+                # 1024px 리사이즈 + WebP 변환
+                if max(img.size) > 1024:
+                    img.thumbnail((1024, 1024), Image.LANCZOS)
+                stored_name = f"{file_id}.webp"
+                storage_path = session_dir / stored_name
+                img.save(storage_path, "WEBP", quality=85)
+
+                # 썸네일 200px
+                thumb = img.copy()
+                thumb.thumbnail((200, 200), Image.LANCZOS)
+                thumb_name = f"{file_id}_thumb.webp"
+                thumb_path = session_dir / thumb_name
+                thumb.save(thumb_path, "WEBP", quality=75)
+                thumbnail_path = str(thumb_path)
+            else:
+                # AI 생성: 원본 저장
+                storage_path.write_bytes(data)
+        except Exception:
+            # 이미지 처리 실패 시 원본 저장
+            storage_path = session_dir / f"{file_id}{ext}"
+            storage_path.write_bytes(data)
+            is_image = False
+    else:
+        # 비이미지: 원본 저장
+        storage_path.write_bytes(data)
+
+    # DB 등록
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO chat_files (id, session_id, original_name, stored_name, mime_type,
+                                     file_size, uploaded_by, storage_path, thumbnail_path, width, height)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            """,
+            uuid.UUID(file_id), uuid.UUID(session_id), file.filename or "unknown",
+            stored_name, mime, len(data), uploaded_by, str(storage_path),
+            thumbnail_path, width, height,
+        )
+
+    return {
+        "file_id": file_id,
+        "original_name": file.filename,
+        "mime_type": mime,
+        "file_size": len(data),
+        "width": width,
+        "height": height,
+        "thumbnail_url": f"/api/v1/chat/files/{file_id}/thumbnail" if thumbnail_path else None,
+        "file_url": f"/api/v1/chat/files/{file_id}",
+    }
+
+
+async def get_chat_file(file_id: str) -> Optional[Dict[str, Any]]:
+    """파일 메타 조회."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM chat_files WHERE id = $1", uuid.UUID(file_id)
+        )
+    if not row:
+        return None
+    return dict(row)

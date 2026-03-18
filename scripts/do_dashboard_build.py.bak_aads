@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+"""대시보드 Docker 이미지 재빌드 스크립트"""
+import subprocess, sys
+
+cmds = [
+    ["docker", "compose", "-f", "/root/aads/aads-dashboard/docker-compose.yml", "build", "--no-cache"],
+    ["docker", "compose", "-f", "/root/aads/aads-dashboard/docker-compose.yml", "up", "-d"],
+]
+
+for cmd in cmds:
+    print("[RUN] %s" % " ".join(cmd))
+    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
+    out = r.stdout.decode("utf-8", errors="replace")
+    err = r.stderr.decode("utf-8", errors="replace")
+    print(out[-500:] if len(out) > 500 else out)
+    if r.returncode != 0:
+        print("[ERROR] exit=%d" % r.returncode)
+        print(err[-500:] if len(err) > 500 else err)
+        sys.exit(1)
+
+print("[DONE] Dashboard rebuild complete")

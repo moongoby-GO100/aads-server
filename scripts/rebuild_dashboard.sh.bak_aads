@@ -1,0 +1,4 @@
+#!/bin/bash
+cd /root/aads/aads-dashboard
+npm run build 2>&1 | tail -20
+echo "EXIT_CODE=$?"
