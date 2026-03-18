@@ -278,6 +278,17 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"research_agent_job_error: {e}")
         scheduler.add_job(_run_research_agent, CronTrigger(hour=7, minute=0, timezone="UTC"), id="research_agent")
+        # Phase 3: Experience Learner — 매일 07:30 UTC (연구 에이전트 이후)
+        async def _run_experience_learner():
+            try:
+                from app.services.experience_learner import process_completed_jobs
+                from app.core.db_pool import get_pool
+                result = await process_completed_jobs(get_pool())
+                if result.get("processed", 0) > 0:
+                    logger.info("experience_learner_done", processed=result["processed"])
+            except Exception as e:
+                logger.warning(f"experience_learner_job_error: {e}")
+        scheduler.add_job(_run_experience_learner, CronTrigger(hour=7, minute=30, timezone="UTC"), id="experience_learner")
         # P2: eval_pipeline — 주간 품질 리포트 (매주 월요일 07:00 UTC)
         async def _run_weekly_quality_report():
             try:
