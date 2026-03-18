@@ -495,6 +495,57 @@ async def download_file(file_id: UUID):
 
 
 # ════════════════════════════════════════════════════════════════════════════════
+# Chat Files (파일 첨부 시스템 Phase 1)
+# ════════════════════════════════════════════════════════════════════════════════
+
+@router.post("/chat/files/upload", tags=["chat-files"])
+async def upload_chat_file(
+    file: UploadFile = File(...),
+    session_id: str = Query(...),
+    uploaded_by: str = Query("user"),
+):
+    """파일 업로드 → 디스크 저장 + DB 등록 (이미지는 WebP 압축 + 썸네일 생성)."""
+    _MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
+    data = await file.read()
+    if len(data) > _MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail=f"파일 크기 초과: {len(data)} bytes > 50MB")
+    result = await svc.save_chat_file(session_id, file, data, uploaded_by)
+    return result
+
+
+@router.get("/chat/files/{file_id}", tags=["chat-files"])
+async def get_chat_file(file_id: str):
+    """파일 다운로드 (원본 또는 압축본)."""
+    from fastapi.responses import FileResponse
+    from pathlib import Path
+    file_info = await svc.get_chat_file(file_id)
+    if not file_info:
+        raise _NOT_FOUND("file")
+    path = Path(file_info["storage_path"])
+    if not path.exists():
+        raise HTTPException(status_code=410, detail="file deleted from disk")
+    return FileResponse(
+        path,
+        media_type=file_info["mime_type"],
+        filename=file_info["original_name"],
+    )
+
+
+@router.get("/chat/files/{file_id}/thumbnail", tags=["chat-files"])
+async def get_chat_file_thumbnail(file_id: str):
+    """썸네일 반환 (이미지만)."""
+    from fastapi.responses import FileResponse
+    from pathlib import Path
+    file_info = await svc.get_chat_file(file_id)
+    if not file_info or not file_info.get("thumbnail_path"):
+        raise _NOT_FOUND("thumbnail")
+    thumb = Path(file_info["thumbnail_path"])
+    if not thumb.exists():
+        raise HTTPException(status_code=410, detail="thumbnail deleted from disk")
+    return FileResponse(thumb, media_type="image/webp")
+
+
+# ════════════════════════════════════════════════════════════════════════════════
 # Research Archive
 # ════════════════════════════════════════════════════════════════════════════════
 

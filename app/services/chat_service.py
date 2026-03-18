@@ -1630,6 +1630,28 @@ async def send_message_stream(
             if _vision_images:
                 logger.info(f"[VISION] {len(_vision_images)} image(s) extracted for Vision API")
 
+            # file_id 기반 첨부파일 처리 (디스크 저장 파일 → Vision)
+            for att in attachments:
+                if isinstance(att, dict) and att.get("file_id"):
+                    try:
+                        _finfo = await get_chat_file(att["file_id"])
+                        if _finfo and _finfo["mime_type"].startswith("image/"):
+                            import base64 as _cf_b64
+                            _fpath = Path(_finfo["storage_path"])
+                            if _fpath.exists():
+                                _img_data = _fpath.read_bytes()
+                                _vision_images.append({
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": _finfo["mime_type"],
+                                        "data": _cf_b64.b64encode(_img_data).decode(),
+                                    },
+                                })
+                                logger.info(f"[VISION] file_id={att['file_id'][:8]} loaded from disk")
+                    except Exception as _fe:
+                        logger.warning(f"[VISION] file_id load failed: {_fe}")
+
             # Gemini: 동영상 파일 → Gemini 2.0 Flash 분석 후 텍스트로 변환
             _video_attachments = [a for a in attachments if isinstance(a, dict) and a.get("type") == "video" and a.get("base64")]
             if _video_attachments:
@@ -3170,3 +3192,104 @@ async def get_memory_context_info(session_id: str) -> Dict[str, Any]:
         return {"error": str(e)}
     finally:
         await pool.release(conn)
+
+
+# ─── Chat Files (파일 첨부 시스템 Phase 1) ──────────────────────────────────
+
+CHAT_FILES_DIR = Path(os.getenv("CHAT_FILES_DIR", "/root/aads/uploads/chat_files"))
+
+
+async def save_chat_file(
+    session_id: str,
+    file: Any,
+    data: bytes,
+    uploaded_by: str = "user",
+) -> Dict[str, Any]:
+    """파일 저장 + 이미지 압축 + DB 등록."""
+    file_id = str(uuid.uuid4())
+    ext = Path(file.filename).suffix.lower() if file.filename else ""
+    mime = file.content_type or "application/octet-stream"
+
+    # 디렉토리 생성
+    session_dir = CHAT_FILES_DIR / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    stored_name = f"{file_id}{ext}"
+    storage_path = session_dir / stored_name
+    thumbnail_path = None
+    width, height = None, None
+
+    is_image = mime.startswith("image/")
+
+    if is_image:
+        try:
+            from PIL import Image
+            from io import BytesIO
+
+            img = Image.open(BytesIO(data))
+            width, height = img.size
+
+            # AI 생성 이미지는 압축 안 함
+            if uploaded_by != "ai":
+                # 1024px 리사이즈 + WebP 변환
+                if max(img.size) > 1024:
+                    img.thumbnail((1024, 1024), Image.LANCZOS)
+                stored_name = f"{file_id}.webp"
+                storage_path = session_dir / stored_name
+                img.save(storage_path, "WEBP", quality=85)
+
+                # 썸네일 200px
+                thumb = img.copy()
+                thumb.thumbnail((200, 200), Image.LANCZOS)
+                thumb_name = f"{file_id}_thumb.webp"
+                thumb_path = session_dir / thumb_name
+                thumb.save(thumb_path, "WEBP", quality=75)
+                thumbnail_path = str(thumb_path)
+            else:
+                # AI 생성: 원본 저장
+                storage_path.write_bytes(data)
+        except Exception:
+            # 이미지 처리 실패 시 원본 저장
+            storage_path = session_dir / f"{file_id}{ext}"
+            storage_path.write_bytes(data)
+            is_image = False
+    else:
+        # 비이미지: 원본 저장
+        storage_path.write_bytes(data)
+
+    # DB 등록
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO chat_files (id, session_id, original_name, stored_name, mime_type,
+                                     file_size, uploaded_by, storage_path, thumbnail_path, width, height)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            """,
+            uuid.UUID(file_id), uuid.UUID(session_id), file.filename or "unknown",
+            stored_name, mime, len(data), uploaded_by, str(storage_path),
+            thumbnail_path, width, height,
+        )
+
+    return {
+        "file_id": file_id,
+        "original_name": file.filename,
+        "mime_type": mime,
+        "file_size": len(data),
+        "width": width,
+        "height": height,
+        "thumbnail_url": f"/api/v1/chat/files/{file_id}/thumbnail" if thumbnail_path else None,
+        "file_url": f"/api/v1/chat/files/{file_id}",
+    }
+
+
+async def get_chat_file(file_id: str) -> Optional[Dict[str, Any]]:
+    """파일 메타 조회."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM chat_files WHERE id = $1", uuid.UUID(file_id)
+        )
+    if not row:
+        return None
+    return dict(row)
