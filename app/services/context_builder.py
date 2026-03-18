@@ -171,6 +171,48 @@ async def _build_workspace_preload_layer(
         return ""
 
 
+async def _build_artifact_context_layer(
+    session_id: Optional[str] = None,
+    db_conn=None,
+) -> str:
+    """워크스페이스 최근 아티팩트 제목 목록을 AI에게 주입 (최대 20건)."""
+    if not session_id:
+        return ""
+    try:
+        import uuid as _uuid
+        from app.services.db import get_pool
+        _conn = db_conn or await get_pool().acquire()
+        _should_release = db_conn is None
+        try:
+            _ws_id = await _conn.fetchval(
+                "SELECT workspace_id FROM chat_sessions WHERE id = $1",
+                _uuid.UUID(session_id),
+            )
+            if not _ws_id:
+                return ""
+            _rows = await _conn.fetch(
+                """SELECT type, title, created_at::text
+                   FROM chat_artifacts
+                   WHERE workspace_id = $1
+                   ORDER BY created_at DESC LIMIT 20""",
+                _ws_id,
+            )
+            if not _rows:
+                return ""
+            _lines = [f"- [{r['type']}] {r['title']} ({r['created_at'][:16]})" for r in _rows]
+            return (
+                "\n<recent_artifacts>\n## 이 워크스페이스의 최근 아티팩트\n"
+                + "\n".join(_lines)
+                + "\n</recent_artifacts>\n"
+            )
+        finally:
+            if _should_release and not db_conn:
+                await get_pool().release(_conn)
+    except Exception as e:
+        logger.debug(f"[ArtifactCtx] 아티팩트 컨텍스트 주입 실패: {e}")
+        return ""
+
+
 async def _build_semantic_code_layer(
     last_user_message: str,
     workspace_name: str = "",
@@ -310,14 +352,15 @@ async def build_messages_context(
                 _last_user_msg = " ".join(b.get("text", "") for b in _last_user_msg if isinstance(b, dict) and b.get("type") == "text")
             break
 
-    layer2, memory_layer, auto_rag_layer, preload_layer = await asyncio.gather(
+    layer2, memory_layer, auto_rag_layer, preload_layer, artifact_layer = await asyncio.gather(
         _build_layer2_dynamic(workspace_name, db_conn=db_conn),
         _build_memory_layer(session_id=session_id, project_id=_project),
         _build_auto_rag_layer(_last_user_msg, session_id, _project),
         _build_workspace_preload_layer(_project, session_id),
+        _build_artifact_context_layer(session_id, db_conn=db_conn),
     )
 
-    system_prompt = layer1 + "\n\n" + layer2 + memory_layer + preload_layer + auto_rag_layer
+    system_prompt = layer1 + "\n\n" + layer2 + memory_layer + preload_layer + auto_rag_layer + artifact_layer
 
     # Layer D: 임시 문서 컨텍스트 (현재 턴에만 주입, 다음 턴 제거)
     if document_context:

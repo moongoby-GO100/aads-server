@@ -13,6 +13,7 @@ CEO Chat 도구 정의 및 실행 (AADS-157 + AADS-159)
   - browser: 허용 도메인만 접근 (*.newtalk.kr, github.com, localhost)
 """
 import asyncio
+import json
 import asyncpg
 import base64
 import httpx
@@ -485,6 +486,10 @@ TOOL_DEFINITIONS: List[Dict] = [
                     "description": "최대 검수 반복 (기본: 3)",
                     "default": 3,
                 },
+                "session_id": {
+                    "type": "string",
+                    "description": "작업 완료보고를 받을 세션 ID. 생략 시 현재 세션 자동 감지.",
+                },
             },
             "required": ["project", "instruction"],
         },
@@ -513,7 +518,7 @@ TOOL_DEFINITIONS: List[Dict] = [
             "required": ["job_id", "action"],
         },
     },
-    # Pipeline C 도구 완전 제거 (2026-03-16) — pipeline_runner_submit으로 대체
+    # Pipeline Runner(구 Pipeline C) 도구 완전 제거 (2026-03-16) — pipeline_runner_submit으로 대체
     # execute_tool 디스패처에 핸들러는 남아있어 기존 호출 시 에러 안내 반환
     {
         "name": "search_chat_history",
@@ -1074,7 +1079,7 @@ TOOL_DEFINITIONS: List[Dict] = [
             "properties": {
                 "task_id": {
                     "type": "string",
-                    "description": "작업 ID (Pipeline B: directive ID, Pipeline C: pc-* ID)",
+                    "description": "작업 ID (Pipeline B: directive ID, Pipeline Runner: runner-* ID)",
                 },
                 "last_n": {
                     "type": "integer",
@@ -1092,8 +1097,8 @@ TOOL_DEFINITIONS: List[Dict] = [
     {
         "name": "terminate_task",
         "description": (
-            "활성 작업 강제 종료. Pipeline C는 원격 Claude 프로세스도 정리.\n"
-            "예: terminate_task(task_id='pc-1741654800-abc123')"
+            "활성 작업 강제 종료. Pipeline Runner는 원격 Claude 프로세스도 정리.\n"
+            "예: terminate_task(task_id='runner-abc12345')"
         ),
         "input_schema": {
             "type": "object",
@@ -2140,11 +2145,11 @@ async def tool_git_remote_create_branch(project: str, branch_name: str) -> str:
     return await tool_run_remote_command(project, f"git checkout -b {branch_name}")
 
 
-# ─── Pipeline C 도구 함수 ─────────────────────────────────────────────────────
+# ─── Pipeline Runner 도구 함수 ────────────────────────────────────────────────
 
 
 async def tool_pipeline_c_start(project: str, instruction: str, max_cycles: int, dsn: str, chat_session_id: str = "", model: str = "") -> str:
-    """파이프라인C 시작."""
+    """Pipeline Runner 시작."""
     if not project:
         return "[ERROR] project 필수"
     if not instruction or len(instruction.strip()) < 10:
@@ -2161,7 +2166,7 @@ async def tool_pipeline_c_start(project: str, instruction: str, max_cycles: int,
             model=model or "",
         )
         return (
-            f"[Pipeline C 시작]\n"
+            f"[Pipeline Runner 시작]\n"
             f"Job ID: {result['job_id']}\n"
             f"프로젝트: {result['project']}\n"
             f"상태: {result['status']}\n\n"
@@ -2173,19 +2178,19 @@ async def tool_pipeline_c_start(project: str, instruction: str, max_cycles: int,
         return f"[ERROR] {e}"
     except Exception as e:
         logger.error(f"pipeline_c_start_error: {e}")
-        return f"[ERROR] 파이프라인 시작 실패: {e}"
+        return f"[ERROR] Pipeline Runner 시작 실패: {e}"
 
 
 async def tool_pipeline_c_status(job_id: str) -> str:
-    """파이프라인C 상태 조회."""
+    """Pipeline Runner 상태 조회."""
     from app.services.pipeline_c import get_pipeline_status, list_pipelines
 
     if not job_id:
         # 전체 목록
         jobs = await list_pipelines()
         if not jobs:
-            return "실행 중인 파이프라인이 없습니다."
-        lines = ["[활성 파이프라인 목록]"]
+            return "실행 중인 Runner 작업이 없습니다."
+        lines = ["[활성 Runner 작업 목록]"]
         for j in jobs:
             lines.append(
                 f"  {j['job_id']} | {j['project']} | {j['phase']} | "
@@ -2198,7 +2203,7 @@ async def tool_pipeline_c_status(job_id: str) -> str:
         return f"[ERROR] {result['error']}"
 
     lines = [
-        f"[Pipeline C 상태: {result['job_id']}]",
+        f"[Pipeline Runner 상태: {result['job_id']}]",
         f"프로젝트: {result['project']}",
         f"지시: {result.get('instruction', '')[:200]}",
         f"단계: {result['phase']}",
@@ -2223,7 +2228,7 @@ async def tool_pipeline_c_status(job_id: str) -> str:
 
 
 async def tool_pipeline_c_approve(job_id: str, approved: bool, reason: str) -> str:
-    """파이프라인C 승인/거부."""
+    """Pipeline Runner 승인/거부."""
     if not job_id:
         return "[ERROR] job_id 필수"
 
@@ -2234,7 +2239,7 @@ async def tool_pipeline_c_approve(job_id: str, approved: bool, reason: str) -> s
         if "error" in result:
             return f"[ERROR] {result['error']}"
         return (
-            f"[Pipeline C 배포 완료]\n"
+            f"[Pipeline Runner 배포 완료]\n"
             f"Job: {job_id}\n"
             f"결과: {result.get('summary', 'OK')}\n"
             f"Health: {result.get('health', 'N/A')[:200]}\n"
@@ -2244,11 +2249,11 @@ async def tool_pipeline_c_approve(job_id: str, approved: bool, reason: str) -> s
         result = await reject_pipeline(job_id, reason)
         if "error" in result:
             return f"[ERROR] {result['error']}"
-        return f"[Pipeline C 거부] {result.get('message', '변경사항 원복됨')}"
+        return f"[Pipeline Runner 거부] {result.get('message', '변경사항 원복됨')}"
 
 
 async def tool_pipeline_c_cancel(job_id: str) -> str:
-    """파이프라인C 강제 취소."""
+    """Pipeline Runner 강제 취소."""
     if not job_id:
         return "[ERROR] job_id 필수"
     from app.services.pipeline_c import cancel_pipeline
@@ -2256,7 +2261,7 @@ async def tool_pipeline_c_cancel(job_id: str) -> str:
     if "error" in result:
         return f"[ERROR] {result['error']}"
     return (
-        f"[Pipeline C 취소 완료]\n"
+        f"[Pipeline Runner 취소 완료]\n"
         f"Job: {job_id}\n"
         f"Kill된 프로세스: {result.get('killed_pids', [])}\n"
         f"{result.get('message', '')}"
@@ -2264,7 +2269,7 @@ async def tool_pipeline_c_cancel(job_id: str) -> str:
 
 
 async def tool_pipeline_c_retry(job_id: str) -> str:
-    """에러/취소된 파이프라인C 재실행."""
+    """에러/취소된 Pipeline Runner 재실행."""
     if not job_id:
         return "[ERROR] job_id 필수"
     from app.services.pipeline_c import retry_pipeline
@@ -2272,7 +2277,7 @@ async def tool_pipeline_c_retry(job_id: str) -> str:
     if "error" in result:
         return f"[ERROR] {result['error']}"
     return (
-        f"[Pipeline C 재실행]\n"
+        f"[Pipeline Runner 재실행]\n"
         f"원본 Job: {job_id}\n"
         f"새 Job: {result['job_id']}\n"
         f"프로젝트: {result['project']}\n"
@@ -3022,7 +3027,8 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
     # ── Pipeline Runner 도구 (호스트 독립 실행) ─────────────────────────────
     elif name == "pipeline_runner_submit":
         from app.services.tool_executor import current_chat_session_id
-        _sid = chat_session_id or current_chat_session_id.get("")
+        # 1순위: 도구 파라미터로 명시된 session_id, 2순위: 함수 인자, 3순위: ContextVar
+        _sid = params.get("session_id", "") or chat_session_id or current_chat_session_id.get("")
         import httpx
         _internal_h = {"x-monitor-key": "internal-pipeline-call"}
         async with httpx.AsyncClient() as client:
@@ -3070,9 +3076,9 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
                 timeout=10,
             )
             return resp.text
-    # ── Pipeline C → Runner 자동 리다이렉트 ─────────────────────────────
+    # ── Pipeline Runner 자동 리다이렉트 (구 pipeline_c_start 호환) ──────
     elif name == "pipeline_c_start":
-        # Pipeline C는 폐기됨 — Runner로 자동 전환
+        # 구 Pipeline C는 폐기됨 — Pipeline Runner로 자동 전환
         logger.warning(f"pipeline_c_start called but redirecting to Runner: project={params.get('project')}")
         from app.services.tool_executor import current_chat_session_id
         _sid = chat_session_id or current_chat_session_id.get("")

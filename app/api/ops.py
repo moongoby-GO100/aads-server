@@ -6,6 +6,8 @@ AADS-166: 파이프라인 전체 헬스체크 + SSE 스트리밍
 import os
 import json
 import asyncio
+import hashlib
+import time as _time
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Any, Dict
 import structlog
@@ -17,6 +19,15 @@ import asyncpg
 
 logger = structlog.get_logger()
 router = APIRouter()
+
+# 서버 시작 시 고유 빌드 해시 생성 (컨테이너 재시작 = 새 해시)
+_BUILD_HASH = hashlib.md5(f"{os.getpid()}-{_time.time()}".encode()).hexdigest()[:12]
+
+
+@router.get("/version")
+async def get_version():
+    """배포 버전 해시 반환 — 프론트엔드 자동 새로고침용"""
+    return {"build_hash": _BUILD_HASH, "timestamp": _time.time()}
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -629,43 +640,6 @@ async def maintenance_end(req: MaintenanceEndRequest):
 
 # ─── Recovery Logs (AADS-132) ─────────────────────────────────────────────────
 
-@router.get("/ops/recovery-logs")
-async def list_recovery_logs(
-    issue_type: Optional[str] = None,
-    result: Optional[str] = None,
-    server: Optional[str] = None,
-    limit: int = Query(50, le=500),
-):
-    """복구 이력 조회."""
-    conditions = []
-    params: list = []
-    idx = 1
-    if issue_type:
-        conditions.append(f"issue_type = ${idx}")
-        params.append(issue_type); idx += 1
-    if result:
-        conditions.append(f"result = ${idx}")
-        params.append(result); idx += 1
-    if server:
-        conditions.append(f"affected_server = ${idx}")
-        params.append(server); idx += 1
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-    params.append(limit)
-    try:
-        conn = await _get_conn()
-        try:
-            rows = await conn.fetch(
-                f"SELECT * FROM escalation_recovery {where} ORDER BY created_at DESC LIMIT ${idx}",
-                *params
-            )
-        finally:
-            await conn.close()
-        return {"items": [dict(r) for r in rows], "count": len(rows)}
-    except Exception as e:
-        logger.error("ops_recovery_logs_list_error", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.get("/ops/recovery-logs/stats")
 async def recovery_logs_stats():
     """복구 통계 — 이슈 유형별 발생 횟수, 성공률, 평균 복구 시간."""
@@ -707,50 +681,6 @@ async def recovery_logs_stats():
         }
     except Exception as e:
         logger.error("ops_recovery_stats_error", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ─── Circuit Breaker (AADS-132) ───────────────────────────────────────────────
-
-@router.get("/ops/circuit-breaker")
-async def circuit_breaker_status():
-    """서킷브레이커 상태 조회 (3서버)."""
-    try:
-        conn = await _get_conn()
-        try:
-            rows = await conn.fetch(
-                "SELECT * FROM circuit_breaker_state ORDER BY server"
-            )
-        finally:
-            await conn.close()
-        return {"servers": [dict(r) for r in rows], "count": len(rows)}
-    except Exception as e:
-        logger.error("ops_circuit_breaker_status_error", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/ops/circuit-breaker/{server}/reset")
-async def circuit_breaker_reset(server: str):
-    """서킷브레이커 수동 리셋 — closed 상태로 강제 전환."""
-    allowed = {"68", "211", "114"}
-    if server not in allowed:
-        raise HTTPException(status_code=400, detail=f"server must be one of {allowed}")
-    try:
-        conn = await _get_conn()
-        try:
-            await conn.execute(
-                "UPDATE circuit_breaker_state "
-                "SET state='closed', failure_count=0, cooldown_until=NULL, "
-                "    opened_at=NULL, updated_at=NOW() "
-                "WHERE server=$1",
-                server
-            )
-        finally:
-            await conn.close()
-        logger.info("circuit_breaker_manual_reset", server=server)
-        return {"ok": True, "server": server, "state": "closed"}
-    except Exception as e:
-        logger.error("ops_circuit_breaker_reset_error", server=server, error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -839,42 +769,6 @@ async def list_recovery_logs(
         }
     except Exception as e:
         logger.error("recovery_logs_list_error", error=str(e))
-        raise HTTPException(500, str(e))
-
-
-@router.get("/ops/recovery-logs/stats")
-async def recovery_logs_stats():
-    """복구 통계: 이슈 유형별 발생 횟수, 성공률, 평균 복구 시간."""
-    try:
-        conn = await _get_conn()
-        try:
-            rows = await conn.fetch(
-                """
-                SELECT issue_type,
-                       COUNT(*) AS total,
-                       SUM(CASE WHEN result='success' THEN 1 ELSE 0 END) AS success_count,
-                       AVG(duration_seconds) AS avg_duration_seconds
-                FROM escalation_recovery
-                GROUP BY issue_type
-                ORDER BY total DESC
-                """
-            )
-        finally:
-            await conn.close()
-        return {
-            "stats": [
-                {
-                    "issue_type": r["issue_type"],
-                    "total": r["total"],
-                    "success_count": r["success_count"],
-                    "success_rate": round(r["success_count"] / r["total"] * 100, 1) if r["total"] else 0,
-                    "avg_duration_seconds": round(float(r["avg_duration_seconds"] or 0), 2),
-                }
-                for r in rows
-            ]
-        }
-    except Exception as e:
-        logger.error("recovery_logs_stats_error", error=str(e))
         raise HTTPException(500, str(e))
 
 

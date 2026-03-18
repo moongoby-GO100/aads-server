@@ -81,7 +81,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "pipeline_runner_submit": False,  # 상시 로드 — 코드수정/배포 기본 도구
     "pipeline_runner_status": False,  # 상시 로드
     "pipeline_runner_approve": False, # 상시 로드
-    # Pipeline C: 제거됨 — Runner로 대체
+    # Pipeline Runner: 레거시 Pipeline C 제거됨 — Runner로 대체
     # ── 원격 쓰기/실행/Git 도구 (AADS-190) ──────────────────────────
     "write_remote_file": False,       # 코드 수정 핵심 — 상시 로드
     "patch_remote_file": False,       # 코드 수정 핵심 — 상시 로드
@@ -175,7 +175,7 @@ TOOL_CATEGORY_GUIDE = """\
 - pipeline_runner_status: 작업 상태 조회
 - pipeline_runner_approve: CEO 승인/거부 → 배포
 
-### ⚫ Pipeline C — 레거시 (Runner 사용 권장)
+### ⚫ Pipeline Runner — 레거시 도구 (Runner 사용 권장)
 - pipeline_c_start/status/approve: 레거시, 특별한 경우에만
 
 ### 🤖 Agent 팀 — 서브에이전트 자동 분업
@@ -1475,7 +1475,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "name": "terminate_task",
         "description": (
             "스톨되거나 문제 있는 작업(에이전트/클로드봇)을 강제 종료. "
-            "Pipeline C는 원격 프로세스 kill + DB 상태 변경, Pipeline B는 DB 상태 변경. "
+            "Pipeline Runner는 원격 프로세스 kill + DB 상태 변경, Pipeline B는 DB 상태 변경. "
             "'그 작업 중단해', '에이전트 종료시켜', '멈춰있는거 죽여', '다시 시작하려면 먼저 종료'에 사용."
         ),
         "input_schema": {
@@ -1749,7 +1749,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"job_id": "runner-abc12345", "action": "reject", "feedback": "테스트 코드 누락"},
         ],
     },
-    # ── Pipeline C: 완전 제거 (Runner로 대체) ─────────────────────────────
+    # ── Pipeline Runner: 레거시 Pipeline C 완전 제거 (Runner로 대체) ──────
     # pipeline_c_start/status/approve → 도구 정의 제거됨 (2026-03-16)
     # execute_tool 디스패처에는 남아있어 기존 호출은 에러 메시지 반환
     # ─── Memory Upgrade: F12 Timeline + F5 Tool Recall ───────────────────────

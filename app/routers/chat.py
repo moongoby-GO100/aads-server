@@ -389,13 +389,16 @@ def get_diff_decision(session_id: str, tool_use_id: str) -> Optional[str]:
 # Artifact
 # ════════════════════════════════════════════════════════════════════════════════
 
-@router.get("/chat/artifacts", response_model=List[ArtifactOut], tags=["chat-artifact"])
-async def get_artifacts(session_id: UUID = Query(...)):
-    """세션 내 아티팩트 목록."""
-    return await svc.list_artifacts(str(session_id))
+@router.get("/chat/artifacts", response_model=List[ArtifactOut], response_model_by_alias=False, tags=["chat-artifact"])
+async def get_artifacts(session_id: Optional[UUID] = Query(None), workspace_id: Optional[UUID] = Query(None)):
+    """세션 또는 워크스페이스 내 아티팩트 목록."""
+    return await svc.list_artifacts(
+        session_id=str(session_id) if session_id else None,
+        workspace_id=str(workspace_id) if workspace_id else None,
+    )
 
 
-@router.get("/chat/artifacts/{artifact_id}", response_model=ArtifactOut, tags=["chat-artifact"])
+@router.get("/chat/artifacts/{artifact_id}", response_model=ArtifactOut, response_model_by_alias=False, tags=["chat-artifact"])
 async def get_artifact(artifact_id: UUID):
     """아티팩트 상세."""
     result = await svc.get_artifact(str(artifact_id))
@@ -404,13 +407,22 @@ async def get_artifact(artifact_id: UUID):
     return result
 
 
-@router.put("/chat/artifacts/{artifact_id}", response_model=ArtifactOut, tags=["chat-artifact"])
+@router.put("/chat/artifacts/{artifact_id}", response_model=ArtifactOut, response_model_by_alias=False, tags=["chat-artifact"])
 async def update_artifact(artifact_id: UUID, req: ArtifactUpdate):
     """아티팩트 수정."""
     result = await svc.update_artifact(str(artifact_id), req.model_dump(exclude_none=True))
     if not result:
         raise _NOT_FOUND("artifact")
     return result
+
+
+@router.delete("/chat/artifacts/{artifact_id}", tags=["chat-artifact"])
+async def delete_artifact(artifact_id: UUID):
+    """아티팩트 삭제."""
+    deleted = await svc.delete_artifact(str(artifact_id))
+    if not deleted:
+        raise _NOT_FOUND("artifact")
+    return {"status": "deleted", "id": str(artifact_id)}
 
 
 @router.post("/chat/artifacts/{artifact_id}/export", tags=["chat-artifact"])

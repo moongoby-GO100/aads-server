@@ -1,5 +1,5 @@
 """
-Pipeline C Orchestrator — 채팅 → Claude Code 자율 작업 → 검수 → 재지시 → 승인 → 배포
+Pipeline Runner Orchestrator — 채팅 → Claude Code 자율 작업 → 검수 → 재지시 → 승인 → 배포
 
 채팅방 연동 플로우 (v2):
   Phase 1: claude_code_work  — Claude Code CLI로 작업 수행 → 완료 보고를 채팅방에 삽입
@@ -72,12 +72,12 @@ def list_jobs(chat_session_id: str = None) -> list:
 
 
 class PipelineCJob:
-    """단일 파이프라인C 작업."""
+    """단일 Pipeline Runner 작업."""
 
     def __init__(self, project: str, instruction: str,
                  chat_session_id: str, max_cycles: int = 3,
                  dsn: str = "", model: str = ""):
-        self.job_id = f"pc-{int(time.time())}-{uuid.uuid4().hex[:6]}"
+        self.job_id = f"runner-{uuid.uuid4().hex[:8]}"
         self.project = project.upper()
         self.instruction = instruction
         # UUID 형식 검증 — 유효하지 않으면 빈 문자열로 처리 (채팅 보고 비활성)
@@ -242,7 +242,7 @@ class PipelineCJob:
             # Phase 1: Claude Code로 작업 수행
             self._log("claude_code_work", f"Claude Code에 작업 지시 중: {self.instruction[:100]}")
             await self._post_to_chat(
-                f"🔧 **[Pipeline C 시작]** `{self.job_id}`\n"
+                f"🔧 **[Pipeline Runner 시작]** `{self.job_id}`\n"
                 f"프로젝트: **{self.project}**\n"
                 f"지시: {self.instruction[:300]}\n\n"
                 f"Claude Code에 작업을 전달합니다. 완료까지 최대 {_CLAUDE_TIMEOUT // 60}분 소요됩니다."
@@ -257,13 +257,13 @@ class PipelineCJob:
                 self.status = "error"
                 self.error_msg = work_result["error"]
                 await self._post_to_chat(
-                    f"❌ **[Pipeline C 오류]** `{self.job_id}`\n"
+                    f"❌ **[Pipeline Runner 오류]** `{self.job_id}`\n"
                     f"Claude Code 실행 실패: {work_result['error'][:500]}"
                 )
                 await self._save_to_db()
                 # 채팅 AI에게 에러 조치 트리거 — CEO가 채팅방에서 바로 확인+지시 가능
                 await self._trigger_ai_reaction(
-                    f"[시스템] Pipeline C 작업 `{self.job_id}` (프로젝트: {self.project})이 실패했습니다.\n"
+                    f"[시스템] Pipeline Runner 작업 `{self.job_id}` (프로젝트: {self.project})이 실패했습니다.\n"
                     f"오류: {work_result['error'][:300]}\n\n"
                     f"CEO에게 오류 원인과 해결 방안을 간단히 보고해주세요."
                 )
@@ -333,7 +333,7 @@ class PipelineCJob:
                     )
                     await self._save_to_db()
                     await self._trigger_ai_reaction(
-                        f"[시스템] Pipeline C 재작업 `{self.job_id}` (프로젝트: {self.project})이 실패했습니다.\n"
+                        f"[시스템] Pipeline Runner 재작업 `{self.job_id}` (프로젝트: {self.project})이 실패했습니다.\n"
                         f"오류: {work_result['error'][:300]}\n\n"
                         f"CEO에게 오류 원인과 해결 방안을 간단히 보고해주세요."
                     )
@@ -374,7 +374,7 @@ class PipelineCJob:
 
             # ★ AI 자동 반응 트리거: 승인 요청을 AI가 확인하고 CEO에게 요약 보고
             await self._trigger_ai_reaction(
-                f"[시스템] Pipeline C 작업 `{self.job_id}` (프로젝트: {self.project})이 "
+                f"[시스템] Pipeline Runner 작업 `{self.job_id}` (프로젝트: {self.project})이 "
                 f"승인 대기 상태입니다. 위 변경사항을 확인하고 CEO에게 간단히 요약해주세요. "
                 f"승인/거부 판단에 필요한 핵심 정보를 알려주세요."
             )
@@ -385,13 +385,13 @@ class PipelineCJob:
             self.status = "error"
             self.error_msg = str(e)
             await self._post_to_chat(
-                f"❌ **[Pipeline C 예외]** `{self.job_id}`\n{str(e)[:500]}"
+                f"❌ **[Pipeline Runner 예외]** `{self.job_id}`\n{str(e)[:500]}"
             )
             await self._save_to_db()
 
             # ★ AI 자동 반응 트리거: 에러 발생 시 AI가 원인 분석 및 대안 제시
             await self._trigger_ai_reaction(
-                f"[시스템] Pipeline C 작업 `{self.job_id}` (프로젝트: {self.project})에서 "
+                f"[시스템] Pipeline Runner 작업 `{self.job_id}` (프로젝트: {self.project})에서 "
                 f"오류가 발생했습니다: {str(e)[:300]}. "
                 f"오류 원인을 분석하고 해결 방안을 제시해주세요."
             )
@@ -411,17 +411,13 @@ class PipelineCJob:
 
         self.status = "running"
         try:
-            # Phase 5: 커밋 + 푸시
-            self._log("deploying", "git add + commit + push 진행 중...")
+            # Phase 5: 푸시 (commit은 Runner가 작업 완료 시 이미 수행)
+            self._log("deploying", "git push 진행 중...")
             await self._post_to_chat(
                 f"🚀 **[배포 시작]** `{self.job_id}`\n"
-                f"CEO 승인 완료. git commit + push + 서비스 재시작 진행 중..."
+                f"CEO 승인 완료. git push + 서비스 재시작 진행 중..."
             )
 
-            await self._ssh_command("git add -u")
-            commit_msg = f"Pipeline-C: {self.instruction[:80]} (job: {self.job_id})"
-            safe_msg = shlex.quote(commit_msg)
-            await self._ssh_command(f'git commit -m {safe_msg}')
             push_result = await self._ssh_command("git push")
             self._log("push_done", f"push 완료: {push_result[:200]}")
 
@@ -459,7 +455,7 @@ class PipelineCJob:
                 self.status = "done"
                 await self._save_to_db()
                 await self._post_to_chat(
-                    f"✅ **[Pipeline C 완료 — AADS 자기수정]** `{self.job_id}`\n"
+                    f"✅ **[Pipeline Runner 완료 — AADS 자기수정]** `{self.job_id}`\n"
                     f"커밋: {verify.get('last_commit', 'N/A')}\n"
                     f"Health: {verify.get('health', 'N/A')[:200]}\n"
                     f"에러: {verify.get('errors', '없음')[:200] or '없음'}\n\n"
@@ -489,7 +485,7 @@ class PipelineCJob:
 
             # 채팅방에 최종 완료 보고
             await self._post_to_chat(
-                f"✅ **[Pipeline C 완료]** `{self.job_id}`\n"
+                f"✅ **[Pipeline Runner 완료]** `{self.job_id}`\n"
                 f"프로젝트: **{self.project}**\n"
                 f"커밋: {verify.get('last_commit', 'N/A')}\n"
                 f"Health: {verify.get('health', 'N/A')[:200]}\n"
@@ -530,7 +526,7 @@ class PipelineCJob:
             )
             await self._save_to_db()
             await self._trigger_ai_reaction(
-                f"[시스템] Pipeline C 배포 작업 `{self.job_id}` (프로젝트: {self.project})에서 오류가 발생했습니다.\n"
+                f"[시스템] Pipeline Runner 배포 작업 `{self.job_id}` (프로젝트: {self.project})에서 오류가 발생했습니다.\n"
                 f"오류: {str(e)[:300]}\n\n"
                 f"CEO에게 오류 원인과 해결 방안을 간단히 보고해주세요."
             )
@@ -550,15 +546,17 @@ class PipelineCJob:
             return {"error": f"거부 불가 상태: {self.status}"}
 
         self._log("rejected", f"CEO 거부: {reason}")
-        # git stash로 변경사항 원복 (관련 없는 작업 보존)
-        await self._ssh_command(f"git stash push -m 'pipeline_c_reject_{self.job_id}'")
+        # 커밋 취소 + 변경사항 완전 제거 (commit은 Runner가 작업 완료 시 이미 수행됨)
+        await self._ssh_command("git reset HEAD~1 --mixed")
+        await self._ssh_command("git checkout .")
+        await self._ssh_command("git clean -fd")
         self.status = "done"
         self.review_feedback = f"REJECTED: {reason}"
         await self._save_to_db()
 
         # 채팅방에 거부+원복 기록
         await self._post_to_chat(
-            f"🚫 **[Pipeline C 거부]** `{self.job_id}`\n"
+            f"🚫 **[Pipeline Runner 거부]** `{self.job_id}`\n"
             f"사유: {reason or '(미지정)'}\n"
             f"변경사항이 원복되었습니다."
         )
@@ -1061,7 +1059,7 @@ async def start_pipeline(
     dsn: str = "",
     model: str = "",
 ) -> dict:
-    """파이프라인C 시작 (asyncio.create_task로 백그라운드 실행)."""
+    """Pipeline Runner 시작 (asyncio.create_task로 백그라운드 실행)."""
     logger.info(f"[DIAG] start_pipeline: chat_session_id='{chat_session_id}' project={project}")
 
     # chat_session_id가 비어있으면 해당 프로젝트 워크스페이스의 최근 세션을 자동 조회
@@ -1094,7 +1092,7 @@ async def start_pipeline(
         "job_id": job.job_id,
         "project": job.project,
         "status": "started",
-        "message": f"파이프라인C 시작됨. 작업 완료 후 채팅방에 보고됩니다. job_id: {job.job_id}",
+        "message": f"Pipeline Runner 시작됨. 작업 완료 후 채팅방에 보고됩니다. job_id: {job.job_id}",
     }
 
 
@@ -1157,7 +1155,7 @@ async def get_pipeline_status(job_id: str) -> dict:
 
 
 async def list_pipelines(chat_session_id: str = None) -> list:
-    """활성 파이프라인 목록."""
+    """활성 Runner 작업 목록."""
     return list_jobs(chat_session_id)
 
 
@@ -1330,12 +1328,12 @@ async def recover_interrupted_jobs():
                     if not sid:
                         continue
                     try:
-                        # 중복 체크: 같은 세션에 최근 1시간 내 Pipeline C 중단 메시지가 있는지
+                        # 중복 체크: 같은 세션에 최근 1시간 내 Pipeline Runner 중단 메시지가 있는지
                         _instr_preview = orow.get('instr', '')[:60]
                         _dup_count = await conn.fetchval(
                             """SELECT count(*) FROM chat_messages
                                WHERE session_id = $1::uuid
-                                 AND content LIKE '%Pipeline C 중단%'
+                                 AND content LIKE '%Pipeline Runner 중단%'
                                  AND content LIKE $2
                                  AND created_at > NOW() - INTERVAL '1 hour'""",
                             sid, f"%{_instr_preview[:40]}%",
@@ -1353,11 +1351,15 @@ async def recover_interrupted_jobs():
                                     0, 0, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)
                             """,
                             sid,
-                            f"⚠️ **[Pipeline C 중단]** `{orow['job_id']}`\n"
+                            f"⚠️ **[Pipeline Runner 중단]** `{orow['job_id']}`\n"
                             f"프로젝트: **{orow.get('project', '?')}**\n"
                             f"사유: 서버 재시작으로 중단됨\n"
                             f"작업: {orow.get('instr', '')[:200]}\n\n"
                             f"재실행이 필요하면 다시 지시해주세요.",
+                        )
+                        await conn.execute(
+                            "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1::uuid",
+                            sid,
                         )
                     except Exception as post_err:
                         logger.warning(f"pipeline_c_recovery: chat post failed for {orow['job_id']}: {post_err}")
@@ -1428,7 +1430,7 @@ async def recover_interrupted_jobs():
                         if _dsid:
                             _emoji = "✅" if _success else "⚠️"
                             _chat_msg = (
-                                f"{_emoji} **[Pipeline C 결과 수거]** `{_djob_id}`\n"
+                                f"{_emoji} **[Pipeline Runner 결과 수거]** `{_djob_id}`\n"
                                 f"프로젝트: **{_dproject}**\n"
                                 f"서버 재시작 중 원격 작업이 완료되어 결과를 수거했습니다.\n\n"
                                 f"**결과:**\n{_result_text[:1500]}"
@@ -1456,7 +1458,7 @@ async def recover_interrupted_jobs():
                                 from app.services.chat_service import trigger_ai_reaction
                                 await trigger_ai_reaction(
                                     _dsid,
-                                    f"[시스템] Pipeline C 작업 `{_djob_id}` (프로젝트: {_dproject})이 완료되었습니다. "
+                                    f"[시스템] Pipeline Runner 작업 `{_djob_id}` (프로젝트: {_dproject})이 완료되었습니다. "
                                     f"결과: {_result_text[:500]}\n\n위 결과를 확인하고 필요한 후속 조치가 있으면 보고해주세요."
                                 )
                             except Exception as _trig_err:
@@ -1589,9 +1591,13 @@ async def recover_interrupted_jobs():
                                 VALUES ($1::uuid, 'assistant', $2, 'pipeline_c', 0,
                                         0, 0, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)""",
                                 _rsid,
-                                f"🔄 **[Pipeline C 자동 재실행]** `{_rjob_id}` → `{result.get('job_id', '?')}`\n"
+                                f"🔄 **[Pipeline Runner 자동 재실행]** `{_rjob_id}` → `{result.get('job_id', '?')}`\n"
                                 f"프로젝트: **{_rproject}**\n"
                                 f"서버 재시작으로 중단된 작업을 자동으로 이어서 실행합니다.",
+                            )
+                            await conn.execute(
+                                "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1::uuid",
+                                _rsid,
                             )
                         except Exception:
                             pass
@@ -1682,7 +1688,7 @@ async def recover_interrupted_jobs():
                                         0, 0, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)
                                 """,
                                 chat_sid,
-                                f"✅ **[Pipeline C 재시작 복구]** `{job_id}`\n"
+                                f"✅ **[Pipeline Runner 재시작 복구]** `{job_id}`\n"
                                 f"AADS 재시작 후 자동 복구 완료.\n"
                                 f"Health: {health[:200]}\n"
                                 f"커밋: {last_commit}\n"
@@ -1756,7 +1762,7 @@ async def _resume_detached_polling(job_id: str, project: str, chat_session_id: s
                         """INSERT INTO chat_messages (session_id,role,content,intent,cost,tokens_in,tokens_out,attachments,sources,tools_called)
                         VALUES($1::uuid,'assistant',$2,'pipeline_c',0,0,0,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb)""",
                         chat_session_id,
-                        f"{_emoji} **[Pipeline C 완료]** `{job_id}`\n프로젝트: **{project}**\n\n**결과:**\n{_result[:1500]}",
+                        f"{_emoji} **[Pipeline Runner 완료]** `{job_id}`\n프로젝트: **{project}**\n\n**결과:**\n{_result[:1500]}",
                     )
                     await conn.execute(
                         "UPDATE chat_sessions SET message_count=message_count+1, updated_at=NOW() WHERE id=$1::uuid",
@@ -1766,7 +1772,7 @@ async def _resume_detached_polling(job_id: str, project: str, chat_session_id: s
                         from app.services.chat_service import trigger_ai_reaction
                         await trigger_ai_reaction(
                             chat_session_id,
-                            f"[시스템] Pipeline C 작업 `{job_id}` (프로젝트: {project})이 완료되었습니다. "
+                            f"[시스템] Pipeline Runner 작업 `{job_id}` (프로젝트: {project})이 완료되었습니다. "
                             f"결과: {_result[:500]}\n\n위 결과를 확인하고 필요한 후속 조치가 있으면 보고해주세요."
                         )
                     except Exception:
@@ -1864,11 +1870,11 @@ async def _check_stalled_jobs():
             _stall_sent = _stall_chat_count.get(job_id, 0)
             if _stall_sent < _STALL_CHAT_MAX:
                 await job._post_to_chat(
-                    f"⚠️ **[Pipeline C 스톨 감지]** `{job.job_id}`\n"
+                    f"⚠️ **[Pipeline Runner 스톨 감지]** `{job.job_id}`\n"
                     f"Phase: {job.phase} | 마지막 활동: {stall_minutes}분 전\n"
                     f"프로젝트: {job.project}\n\n"
                     f"작업이 {stall_minutes}분간 진행되지 않고 있습니다.\n"
-                    f"확인이 필요합니다. `pipeline_c_status(job_id=\"{job.job_id}\")` 로 상태를 조회하세요."
+                    f"확인이 필요합니다. `pipeline_runner_status(job_id=\"{job.job_id}\")` 로 상태를 조회하세요."
                 )
                 _stall_chat_count[job_id] = _stall_sent + 1
             else:
@@ -1972,13 +1978,17 @@ async def _collect_orphan_results():
                             """INSERT INTO chat_messages (session_id,role,content,intent,cost,tokens_in,tokens_out,attachments,sources,tools_called)
                             VALUES($1::uuid,'assistant',$2,'pipeline_c',0,0,0,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb)""",
                             _sid,
-                            f"{_emoji} **[Pipeline C 결과 수거]** `{_jid}`\n프로젝트: **{_proj}** | exit={_exit_str}\n\n**결과:**\n{_result[:1500]}",
+                            f"{_emoji} **[Pipeline Runner 결과 수거]** `{_jid}`\n프로젝트: **{_proj}** | exit={_exit_str}\n\n**결과:**\n{_result[:1500]}",
+                        )
+                        await conn.execute(
+                            "UPDATE chat_sessions SET message_count=message_count+1, updated_at=NOW() WHERE id=$1::uuid",
+                            _sid,
                         )
                         try:
                             from app.services.chat_service import trigger_ai_reaction
                             await trigger_ai_reaction(
                                 _sid,
-                                f"[시스템] Pipeline C 작업 `{_jid}` (프로젝트: {_proj})이 완료되었습니다. "
+                                f"[시스템] Pipeline Runner 작업 `{_jid}` (프로젝트: {_proj})이 완료되었습니다. "
                                 f"결과: {_result[:500]}\n\n위 결과를 확인하고 필요한 후속 조치가 있으면 보고해주세요."
                             )
                         except Exception:

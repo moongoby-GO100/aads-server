@@ -592,21 +592,78 @@ class ContextManager:
 
         # Pipeline C 가이드
         parts.append("")
-        parts.append("""[Pipeline C — Claude Code 자율 작업 시스템]
+        parts.append("""[Pipeline Runner — Claude Code 자율 작업 시스템]
 각 서버(211/114/68)에 설치된 Claude Code CLI에 직접 작업을 지시할 수 있습니다.
 
 사용 가능한 도구:
-- pipeline_c_start(project, instruction): 파이프라인 시작 (작업→자동검수→승인대기)
-- pipeline_c_status(job_id): 진행 상황 확인
-- pipeline_c_approve(job_id, approved, reason): 승인(배포) 또는 거부(원복)
+- pipeline_runner_submit(project, instruction): 작업 제출
+- pipeline_runner_status(job_id): 진행 상황 확인
+- pipeline_runner_approve(job_id, action, feedback): 승인(approve) 또는 거부(reject)
 
 프로젝트: KIS(211서버), GO100(211서버), SF(114서버), NTV2(114서버), AADS(68서버)
 
-플로우: 작업지시 → Claude Code 자율수행 → AI 자동검수 → 재지시(필요시) → CEO 승인 대기 → 승인 시 git commit+push+서비스재시작+최종검증
+⚠️ 필수 작업 프로세스 v2.3 (모든 코드 수정에 적용 — Runner/에이전트SDK/직접수정 모두 동일):
 
-CEO가 "클로드봇에게 시켜", "파이프라인 시작", "봇한테 맡겨" 등 요청하면 pipeline_c_start를 사용하세요.
+[기획 단계 — 기능 추가/개선 시 필수, 버그 수정/인프라/보안은 생략 가능]
+0. 작업 분류: "기능 추가/개선" → 기획 필수 | "버그 수정/인프라/보안" → 기획 생략, 바로 1단계
+0-1. AI 자체 기획 수립 (CEO 확인 대기 없이 자체 진행):
+   a. 목적: 이 기능이 해결하는 문제
+   b. 사용 시나리오: CEO/사용자의 실제 사용 동선
+   c. UI/UX 설계: 화면 구성, 버튼 위치, 인터랙션, 빈 상태 처리
+   d. 데이터 흐름: API → DB → 프론트 전체 흐름
+   e. 엣지 케이스: 빈 데이터, 에러, 대량 데이터, 권한 등
+   f. 완료 기준: "이것이 동작하면 완료" 체크리스트
+0-2. AI 자체 기획 검수 — UX 체크리스트 (모두 통과해야 구현 진행):
+   [사용자 중심]
+   ✓ 사용자 동선이 직관적인가? (3클릭 이내로 목적 달성)
+   ✓ 처음 보는 사용자도 설명 없이 사용할 수 있는가?
+   ✓ 빈 상태(데이터 0건)에서 안내 문구/가이드가 있는가?
+   ✓ 에러 발생 시 사용자에게 명확한 피드백이 있는가?
+   ✓ 로딩 상태 표시가 있는가? (스피너, 스켈레톤 등)
+   [모바일 최적화]
+   ✓ 모바일(360px~)에서 레이아웃 깨지지 않는가?
+   ✓ 터치 타겟 최소 44px 확보되었는가? (버튼, 링크)
+   ✓ 가로 스크롤 없이 콘텐츠가 표시되는가?
+   ✓ 모바일에서 모달/팝업 대신 풀스크린 또는 바텀시트 사용?
+   [화면 비중·가독성]
+   ✓ 버튼 크기가 기능 중요도에 비례하는가? (주요 액션 = 크고 눈에 띄게)
+   ✓ 글씨 크기: 본문 14px+, 보조텍스트 12px+, 제목 18px+
+   ✓ 색상 대비: 텍스트/배경 대비 4.5:1 이상
+   ✓ 여백이 충분한가? (빽빽하지 않고 숨 쉴 공간)
+   ✓ 정보 계층이 명확한가? (제목 > 본문 > 보조 순서)
+   [기능 정상 작동]
+   ✓ 핵심 기능의 정상/실패/경계값 케이스 모두 처리했는가?
+   ✓ API 응답 지연/실패 시 UI가 깨지지 않는가?
+   ✓ 기존 기능과 충돌 없는가? (같은 이벤트, 같은 API 경로)
+   ✓ 뒤로가기/새로고침 시 상태가 유지되는가?
+   → 체크리스트 미통과 항목은 기획에서 보완 후 진행
+   → 검수 통과 시 기획 내용을 instruction에 포함하여 Runner에 전달
+   → 기획 내용은 작업 완료보고에 포함하여 CEO가 사후 확인 가능
+
+[실행 단계]
+1. CEO 지시 수신
+2. 채팅AI가 Runner에 작업 지시 (pipeline_runner_submit) — 기획 내용을 instruction에 포함
+3. Runner가 코드 수정만 수행 (git commit/push/빌드/배포 절대 안 함) + 완료보고
+4. 채팅AI가 자동 검수 (diff 확인, 기존 코드 보존 여부, 변경 범위 적정성)
+   - ✅ 이상없음 → 승인 (pipeline_runner_approve approve) → Runner가 git add → commit → push → 빌드 → 배포
+   - ❌ 이상있음 → 거부 (pipeline_runner_approve reject + feedback) → Runner가 git checkout으로 원복 → 피드백 전달 → 재작업
+5. 배포 후 검증 5단계 (도구 호출 필수, 빈 보고 금지):
+   a. 컨테이너 healthy 확인 (run_remote_command: docker ps)
+   b. 변경 파일 반영 확인 (read_remote_file로 핵심 수정 라인)
+   c. API 헬스체크 (health_check 또는 curl)
+   d. DB 수치 실측 (query_database — 추정/이전 수치 재활용 금지)
+   e. 프론트 변경 시 UI 확인 (browser_snapshot 또는 capture_screenshot)
+   → 각 단계 도구 결과를 포함하여 CEO에게 보고
+
+핵심: 승인 전에는 코드 수정만 존재하고, commit도 push도 배포도 없음. 승인 후에야 commit→push→빌드→배포가 일어남. 거부 시: commit이 없으므로 git checkout만으로 깔끔하게 원복됨.
+
+에이전트SDK(delegate_to_agent)로 직접 코드를 수정할 때도 동일한 프로세스를 따르세요:
+- 수정 후 바로 commit/push/배포하지 말 것
+- diff 검토 → 검수 → 승인 후에만 commit → push → 배포 순서
+
+CEO가 "클로드봇에게 시켜", "파이프라인 시작", "봇한테 맡겨" 등 요청하면 pipeline_runner_submit을 사용하세요.
 간단한 조회(파일 목록, 상태 확인)는 read_remote_file/list_remote_dir로 직접 처리하세요.
-코드 수정/버그 수정/리팩토링 등 복잡한 작업만 파이프라인C를 사용하세요.""")
+코드 수정/버그 수정/리팩토링 등 복잡한 작업만 Runner를 사용하세요.""")
 
         return "\n".join(parts)
 
@@ -1507,6 +1564,12 @@ async def send_ceo_message(req: CeoChatRequest):
         # 컨텍스트 빌드 (AADS-190: memory_recall 통합)
         ctx_mgr = ContextManager(conn)
         system_prompt = await ctx_mgr.build_context(session_id)
+
+        # 세션 라우팅: AI가 pipeline_runner_submit 호출 시 명시적 session_id 전달하도록 안내
+        system_prompt += (
+            f"\n\n[현재 세션 ID: {session_id}]\n"
+            f"pipeline_runner_submit 호출 시 반드시 session_id=\"{session_id}\"를 포함하세요."
+        )
         active_tasks = await ctx_mgr.load_active_tasks()
 
         # AADS-190: 메모리 자동 주입 (5섹션: 세션요약/CEO선호/도구전략/활성Directive/학습사항)
@@ -1590,7 +1653,7 @@ async def send_ceo_message(req: CeoChatRequest):
             # Pipeline C: 자율 작업 파이프라인 (tool-use 활성화)
             pipeline_prompt = (
                 system_prompt
-                + "\n\n[Pipeline C 모드]\n"
+                + "\n\n[Pipeline Runner 모드]\n"
                 "CEO가 Claude Code 자율 작업을 요청했습니다.\n"
                 "1. 작업 시작: pipeline_c_start 도구를 사용하세요.\n"
                 "2. 상태 확인: pipeline_c_status 도구를 사용하세요.\n"

@@ -22,14 +22,15 @@ async def get_active_tasks(session_id: str = Query(default="")):
         async with pool.acquire() as conn:
             # Pipeline Runner + Legacy C (pipeline_jobs)
             if session_id:
-                # A방식: 해당 세션 작업만 (세션 완전 격리)
+                # 해당 세션 작업만 + 활성 전체
                 pc_rows = await conn.fetch(
                     """
                     SELECT job_id AS task_id, project, instruction AS title,
                            CASE WHEN job_id LIKE 'runner-%' THEN 'runner' ELSE 'pipeline_c' END AS pipeline,
                            phase, status, created_at, updated_at
                     FROM pipeline_jobs
-                    WHERE chat_session_id = $1
+                    WHERE (chat_session_id = $1
+                           OR status IN ('running','claimed','queued'))
                       AND (status IN ('running','awaiting_approval','queued','claimed','approved')
                            OR updated_at > NOW() - interval '1 hour')
                     ORDER BY created_at DESC

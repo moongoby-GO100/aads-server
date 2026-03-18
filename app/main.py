@@ -318,7 +318,7 @@ async def lifespan(app: FastAPI):
         scheduler = None
 
     # DB Connection Pool 초기화 (AADS-CRITICAL-FIX #1)
-    # ★ Pipeline C 복구보다 먼저 초기화해야 DB 조회 가능
+    # ★ Pipeline Runner 복구보다 먼저 초기화해야 DB 조회 가능
     try:
         from app.core.db_pool import init_pool
         db_pool = await init_pool()
@@ -357,7 +357,7 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
-    # Pipeline C: 재시작 복구 + Watchdog 시작 (DB 풀 초기화 이후)
+    # Pipeline Runner: 재시작 복구 + Watchdog 시작 (DB 풀 초기화 이후)
     try:
         from app.services.pipeline_c import recover_interrupted_jobs, start_watchdog
         await recover_interrupted_jobs()
@@ -597,7 +597,5 @@ app.include_router(quality_router, prefix="/api/v1", tags=["quality"])
 import pathlib as _pathlib
 _static_dir = _pathlib.Path(__file__).resolve().parent / "static"
 if _static_dir.is_dir():
-    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
-
-# AADS-186C: FastAPI-MCP 마운트 (graceful — MCP_ENABLED=false 시 비활성)
+    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")# AADS-186C: FastAPI-MCP 마운트 (graceful — MCP_ENABLED=false 시 비활성)
 setup_mcp(app)

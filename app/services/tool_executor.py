@@ -29,7 +29,7 @@ def _json_default(obj: Any) -> Any:
         return f"<binary {len(obj)} bytes>"
     return str(obj)
 
-# Pipeline C 등에서 현재 채팅 세션 ID를 도구에 전달하기 위한 컨텍스트 변수
+# Pipeline Runner 등에서 현재 채팅 세션 ID를 도구에 전달하기 위한 컨텍스트 변수
 current_chat_session_id: contextvars.ContextVar[str] = contextvars.ContextVar(
     "current_chat_session_id", default=""
 )
@@ -148,7 +148,7 @@ class ToolExecutor:
             "pipeline_runner_submit":  self._pipeline_runner_submit,
             "pipeline_runner_status":  self._pipeline_runner_status,
             "pipeline_runner_approve": self._pipeline_runner_approve,
-            # Pipeline C: 레거시 → Runner 자동 리다이렉트
+            # Pipeline Runner: 레거시 → Runner 자동 리다이렉트
             "pipeline_c_start":       self._pipeline_runner_submit,  # 자동 전환
             "pipeline_c_status":      self._pipeline_c_status,
             "pipeline_c_approve":     self._pipeline_c_approve,
@@ -1146,7 +1146,7 @@ class ToolExecutor:
             from app.core.db_pool import get_pool
             pool = get_pool()
             async with pool.acquire() as conn:
-                # Pipeline C
+                # Pipeline Runner (pipeline_c_jobs)
                 pc_rows = await conn.fetch(
                     """
                     SELECT job_id AS task_id, project, instruction AS title,
@@ -1226,7 +1226,7 @@ class ToolExecutor:
         return await tool_capture_screenshot(url, full_page)
 
     async def _terminate_task(self, inp: Dict[str, Any]) -> Any:
-        """스톨된 작업을 강제 종료. Pipeline C는 원격 PID kill, Pipeline B는 DB 상태 변경."""
+        """스톨된 작업을 강제 종료. Pipeline Runner는 원격 PID kill, Pipeline B는 DB 상태 변경."""
         task_id = inp.get("task_id", "")
         reason = inp.get("reason", "AI 판단에 의한 강제 종료")
         if not task_id:
@@ -1235,7 +1235,7 @@ class ToolExecutor:
             from app.core.db_pool import get_pool
             pool = get_pool()
             async with pool.acquire() as conn:
-                # Pipeline C (pipeline_jobs)
+                # Pipeline Runner (pipeline_jobs)
                 row = await conn.fetchrow(
                     "SELECT job_id, status, phase, project FROM pipeline_jobs WHERE job_id = $1",
                     task_id,
@@ -1351,7 +1351,7 @@ class ToolExecutor:
         # ContextVar를 명시적으로 캡처 (background task 생성 전)
         _captured_session_id = current_chat_session_id.get("")
         if not _captured_session_id:
-            # Pipeline C와 동일한 폴백: 프로젝트 워크스페이스의 최근 세션 조회
+            # Pipeline Runner와 동일한 폴백: 프로젝트 워크스페이스의 최근 세션 조회
             try:
                 from app.services.pipeline_c import _find_recent_session
                 _captured_session_id = await _find_recent_session(project)
@@ -1724,7 +1724,9 @@ class ToolExecutor:
 
     async def _pipeline_runner_submit(self, inp: Dict[str, Any]) -> Any:
         """Pipeline Runner로 작업 제출."""
-        _session_id = current_chat_session_id.get("")
+        # 1순위: 도구 호출 시 명시적으로 전달된 session_id
+        # 2순위: ContextVar (일반 대화에서는 정확함)
+        _session_id = inp.get("session_id", "") or current_chat_session_id.get("")
         import httpx
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -1767,10 +1769,10 @@ class ToolExecutor:
             )
             return resp.json()
 
-    # ── Pipeline C: 레거시 (Runner로 자동 전환) ──────────────────────────────
+    # ── Pipeline Runner: 레거시 (Runner로 자동 전환) ──────────────────────────────
 
     async def _pipeline_c_start(self, inp: Dict[str, Any]) -> Any:
-        """Pipeline C 시작 — Claude Code 자율 작업."""
+        """Pipeline Runner 시작 — Claude Code 자율 작업."""
         from app.api.ceo_chat_tools import tool_pipeline_c_start
         # 현재 채팅 세션 ID를 컨텍스트에서 가져와서 전달
         _session_id = current_chat_session_id.get("")
@@ -1786,12 +1788,12 @@ class ToolExecutor:
         )
 
     async def _pipeline_c_status(self, inp: Dict[str, Any]) -> Any:
-        """Pipeline C 상태 조회."""
+        """Pipeline Runner 상태 조회."""
         from app.api.ceo_chat_tools import tool_pipeline_c_status
         return await tool_pipeline_c_status(job_id=inp.get("job_id", ""))
 
     async def _pipeline_c_approve(self, inp: Dict[str, Any]) -> Any:
-        """Pipeline C 승인/거부."""
+        """Pipeline Runner 승인/거부."""
         from app.api.ceo_chat_tools import tool_pipeline_c_approve
         return await tool_pipeline_c_approve(
             job_id=inp.get("job_id", ""),

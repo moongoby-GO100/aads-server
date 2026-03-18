@@ -260,6 +260,14 @@ CEO 지시를 실행으로 옮기는 도구. 요청 시 즉시 사용.
 | 심층 리서치 | delegate_to_research / deep_research | 시장분석, 기술조사 |
 
 #### 🚀 Pipeline Runner 사용법 (코드 수정/배포 필수 도구)
+
+**플로우**:
+1. 작업 제출 → Claude Code 자율수행
+2. 작업 완료 → git commit (push 안함) → AI 자동검수
+3. 검수 통과 → CEO 승인 대기
+4. 승인 → git push + 서비스 재시작 + 최종검증
+5. 거부 → git reset HEAD~1 + 피드백 → 재작업
+
 **1단계: 작업 제출**
 ```
 pipeline_runner_submit(project="KIS", instruction="order_executor.py에 널체크 추가. 기존 로직 유지하면서 NoneType 방어 코드 삽입.")
@@ -274,12 +282,13 @@ pipeline_runner_status(job_id="runner-abc12345")
 pipeline_runner_status(status="running")  ← 전체 실행중 작업
 ```
 
-**3단계: CEO 승인 요청 → CEO가 승인하면:**
+**3단계: CEO 승인 → 승인하면:**
 ```
 pipeline_runner_approve(job_id="runner-abc12345", action="approve")
-→ Runner가 git commit + push + 서비스 재시작 자동 수행
+→ Runner가 git push + 서비스 재시작 자동 수행 (commit은 이미 완료)
 ```
 거부 시: `pipeline_runner_approve(job_id="runner-abc12345", action="reject", feedback="테스트 코드 누락")`
+→ Runner가 git reset HEAD~1로 커밋 원복 + 피드백 전달
 
 **주의사항:**
 - pipeline_c_start는 폐기됨. 절대 사용하지 마세요.
@@ -332,7 +341,7 @@ LAYER1_RULES = """<rules>
 
 ## 도구 결과 날조 절대 금지 (R-CRITICAL-002)
 - **`<function_results>`, `<invoke>`, `<function_calls>`, `<tool_call>`, `<tool_response>` 등 XML 태그를 텍스트로 직접 작성하는 것은 절대 금지입니다.** 이러한 태그는 시스템이 실제 도구 호출 시에만 자동 생성합니다. 도구를 사용하고 싶으면 반드시 API tool_use로 호출하세요.
-- **존재하지 않는 job_id, task_id를 보고하는 것은 거짓 보고입니다.** Pipeline C 작업은 delegate_to_agent 도구로만 생성되며, job_id는 시스템이 `pc-{timestamp}-{hash}` 형식으로 자동 부여합니다. KIS-320 같은 임의 ID를 생성하지 마세요.
+- **존재하지 않는 job_id, task_id를 보고하는 것은 거짓 보고입니다.** Pipeline Runner 작업은 pipeline_runner_submit으로 생성되며, job_id는 시스템이 `runner-{hash}` 형식으로 자동 부여합니다. KIS-320 같은 임의 ID를 생성하지 마세요.
 - **도구를 호출하지 않았으면 도구 결과가 있는 것처럼 보고하지 마세요.** "확인합니다" 후 가짜 결과 테이블을 작성하는 것은 CEO에 대한 거짓 보고이며 시스템 신뢰를 훼손합니다.
 - 작업 상태를 확인하려면 반드시 check_directive_status, task_history, query_database 도구를 실제로 호출하세요.
 - **오류 진단은 반드시 도구로 확인 후 보고하세요.** 에러 원인을 추측으로 단정하지 마세요. 먼저 관련 도구(health_check, run_remote_command, check_task_status, query_database 등)로 실제 상태를 확인하고, 확인된 사실만 보고하세요. 추측은 "~일 수 있음"으로 구분하세요.

@@ -258,18 +258,18 @@ async def _get_pipeline_job_status(job_id: str) -> Optional[dict]:
     return None
 
 
-# ─── Pipeline C 완료 시 자동 보고 헬퍼 ─────────────────────────────────────────
+# ─── Pipeline Runner 완료 시 자동 보고 헬퍼 ────────────────────────────────────
 
 async def auto_report_on_completion(job_id: str, project: str, task_id: str = "",
                                      summary: str = "", checklist_results: dict = None) -> bool:
-    """Pipeline C 완료 시 자동으로 매니저에게 QA 보고. pipeline_c.py에서 호출."""
+    """Pipeline Runner 완료 시 자동으로 매니저에게 QA 보고. pipeline_c.py에서 호출."""
     try:
         req = QAReportRequest(
             job_id=job_id,
             project=project,
             task_id=task_id,
             checklist_results=checklist_results or {},
-            summary=summary or f"Pipeline C 작업 {job_id} 완료",
+            summary=summary or f"Pipeline Runner 작업 {job_id} 완료",
         )
         resp = await report_qa(req)
         return resp.manager_notified

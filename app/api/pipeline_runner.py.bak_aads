@@ -71,7 +71,6 @@ async def submit_job(req: JobSubmitRequest):
     session_id = req.session_id or ""
 
     if not session_id:
-        logger.warning(f"pipeline_runner: no session_id provided, using fallback for project={req.project}")
         try:
             async with pool.acquire() as conn:
                 row = await conn.fetchrow(
@@ -79,13 +78,6 @@ async def submit_job(req: JobSubmitRequest):
                     SELECT s.id::text FROM chat_sessions s
                     JOIN chat_workspaces w ON s.workspace_id = w.id
                     WHERE w.name ILIKE $1
-                    AND EXISTS (
-                        SELECT 1 FROM chat_messages m
-                        WHERE m.session_id = s.id
-                        AND m.role = 'user'
-                        AND m.intent IS NULL
-                        ORDER BY m.created_at DESC LIMIT 1
-                    )
                     ORDER BY s.updated_at DESC LIMIT 1
                     """,
                     f"[{req.project}]%",
@@ -93,7 +85,7 @@ async def submit_job(req: JobSubmitRequest):
                 if row:
                     session_id = row["id"]
         except Exception as e:
-            logger.warning(f"pipeline_runner.session_lookup_fail error={e}")
+            logger.warning("pipeline_runner.session_lookup_fail", error=str(e))
 
     try:
         async with pool.acquire() as conn:
@@ -236,21 +228,15 @@ async def notify_completion(job_id: str):
     output = row["output_preview"] or ""
 
     if status == "awaiting_approval":
-        msg = (f"[시스템] Pipeline Runner 작업 완료 — AI 검수 중\n\n"
+        msg = (f"[시스템] Pipeline Runner 작업 완료 — CEO 승인 대기\n\n"
                f"**Job**: {job_id}\n**프로젝트**: {project}\n"
                f"**작업**: {instruction}\n**결과 미리보기**:\n{output[:300]}\n\n"
-               f"코드를 검수하고 승인/거부를 판단하세요. 승인: pipeline_runner_approve(job_id='{job_id}', action='approve')")
+               f"CEO에게 승인 요청하세요. 승인: pipeline_runner_approve(job_id='{job_id}', action='approve')")
     elif status == "done":
         msg = (f"[시스템] Pipeline Runner 작업 배포 완료\n\n"
                f"**Job**: {job_id}\n**프로젝트**: {project}\n"
                f"**결과**:\n{output[:300]}\n\n"
-               f"**배포 검증 5단계 필수 수행:**\n"
-               f"1. 컨테이너 상태 확인 (docker ps로 healthy 확인)\n"
-               f"2. 변경 파일 반영 확인 (read_remote_file로 핵심 수정 라인 확인)\n"
-               f"3. API 헬스체크 (health_check 또는 curl)\n"
-               f"4. DB 데이터 정합성 (query_database로 관련 수치 실측 확인)\n"
-               f"5. 프론트엔드 변경 시 UI 확인 (browser_snapshot 또는 capture_screenshot)\n"
-               f"각 단계를 도구로 실제 확인한 후 결과를 CEO에게 보고하세요. 도구 호출 없이 '정상 완료' 보고 금지.")
+               f"배포가 정상 완료되었는지 확인하세요.")
     elif status == "error":
         msg = (f"[시스템] Pipeline Runner 작업 실패\n\n"
                f"**Job**: {job_id}\n**프로젝트**: {project}\n"
@@ -262,7 +248,6 @@ async def notify_completion(job_id: str):
     try:
         from app.services.chat_service import trigger_ai_reaction
         import asyncio
-        logger.info("pipeline_runner.trigger_sent", job_id=job_id, session_id=session_id, status=status)
         asyncio.create_task(trigger_ai_reaction(session_id, msg))
         return {"status": "triggered", "session_id": session_id}
     except Exception as e:

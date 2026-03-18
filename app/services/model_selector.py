@@ -110,7 +110,11 @@ _COST_MAP = {
     "gemini-flash":           (0.075, 0.3),
     "gemini-flash-lite":      (0.01,  0.04),
     "gemini-pro":             (1.25,  5.0),
-    "gemini-3-flash-preview": (0.1,   0.4),
+    "gemini-3-flash-preview": (0.5,   3.0),   # 2026-03-12 공식 가격
+    "gemini-3.1-flash-lite-preview": (0.25, 1.5),  # 최고 효율 (thinking 포함)
+    "gemini-3.1-pro-preview": (2.0,  12.0),
+    "gemini-2.5-flash":       (0.15,  0.6),   # thinking 별도 $3.50 (여기선 non-thinking만)
+    "gemini-2.5-flash-lite":  (0.04,  0.1),
 }
 
 # LiteLLM alias → Anthropic model ID
@@ -121,10 +125,10 @@ _ANTHROPIC_MODEL_ID = {
 }
 
 # Gemini 모델 (LiteLLM 경유)
-_GEMINI_MODELS = {"gemini-flash", "gemini-flash-lite", "gemini-pro", "gemini-3-flash-preview"}
+_GEMINI_MODELS = {"gemini-flash", "gemini-flash-lite", "gemini-pro", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview", "gemini-3.1-pro-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"}
 
 # Gemini Thinking 모델 — reasoning_effort=low + 높은 max_tokens 필요
-_GEMINI_THINKING_MODELS = {"gemini-pro", "gemini-flash", "gemini-3-flash-preview"}
+_GEMINI_THINKING_MODELS = {"gemini-pro", "gemini-flash", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview", "gemini-3.1-pro-preview", "gemini-2.5-flash"}
 
 
 def _estimate_cost(model: str, in_tokens: int, out_tokens: int) -> Decimal:
@@ -196,7 +200,7 @@ async def call_stream(
 
         # 3단계: Gemini (최종 안전망)
         yield {"type": "delta", "content": "[Claude 장애 → Gemini 전환]\n\n"}
-        async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
+        async for event in _stream_litellm("gemini-3.1-flash-lite-preview", system_prompt, messages, tools=tools):
             yield event
         return
 
@@ -643,6 +647,14 @@ async def _stream_cli_relay(
 
     yield {"type": "model_info", "model": sdk_model}
 
+    # CLI가 에러를 텍스트로 반환하는 패턴 감지 (529, 401 등)
+    _CLI_ERROR_PATTERNS = [
+        "api error:", "overloaded", "529", "503",
+        "authentication_failed", "401", "unauthorized",
+        "rate_limit", "429", "rate limit",
+        "credit", "402",
+    ]
+
     full_text = ""
     _tool_id_to_name: Dict[str, str] = {}
     _captured_cli_sid = _cli_session_map.get(session_id, "") if session_id else ""
@@ -679,6 +691,13 @@ async def _stream_cli_relay(
                     except json.JSONDecodeError:
                         continue
 
+                    # result 이벤트에서 is_error 체크 (CLI가 529 등으로 실패 시)
+                    if event.get("type") == "result" and event.get("is_error"):
+                        error_text = event.get("result", "CLI error")
+                        logger.warning(f"cli_relay_result_error: {error_text[:100]}")
+                        yield {"type": "error", "content": error_text}
+                        return
+
                     # _map_cli_event 재사용하여 NDJSON → AADS 이벤트 변환
                     mapped = _map_cli_event(event)
                     if mapped is None:
@@ -705,20 +724,21 @@ async def _stream_cli_relay(
                             tid = aads_evt.get("tool_use_id", "")
                             aads_evt["tool_name"] = _tool_id_to_name.get(tid, "")
 
-                        # delta에서 full_text 누적
+                        # delta 텍스트에서 CLI 에러 패턴 감지 → error로 변환하여 폴백 유도
                         if evt_type == "delta":
-                            full_text += aads_evt.get("content", "")
+                            delta_text = aads_evt.get("content", "")
+                            full_text += delta_text
+                            delta_lower = delta_text.lower()
+                            if any(p in delta_lower for p in _CLI_ERROR_PATTERNS):
+                                logger.warning(f"cli_relay_delta_error: {delta_text[:100]}")
+                                yield {"type": "error", "content": delta_text}
+                                return
 
                         # done 이벤트에서 session_id 캡처 (result 이벤트)
                         if evt_type == "done":
-                            # result 이벤트의 session_id
                             result_sid = event.get("session_id")
                             if result_sid:
                                 _captured_cli_sid = result_sid
-
-                        # error 이벤트 전파
-                        if evt_type == "error" or (evt_type == "delta" and "error" in str(aads_evt.get("content", "")).lower()[:50]):
-                            pass  # 그대로 yield
 
                         yield aads_evt
 

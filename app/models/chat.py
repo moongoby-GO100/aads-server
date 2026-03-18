@@ -10,7 +10,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ─── Workspace ───────────────────────────────────────────────────────────────
@@ -130,9 +130,12 @@ class ArtifactUpdate(BaseModel):
 
 
 class ArtifactOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, serialize_by_name=True)
+
     id: uuid.UUID
     session_id: uuid.UUID
-    type: str
+    workspace_id: Optional[uuid.UUID] = None
+    artifact_type: str = Field(..., alias="type")
     title: Optional[str]
     content: str
     metadata: Dict[str, Any]
