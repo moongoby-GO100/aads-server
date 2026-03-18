@@ -166,19 +166,38 @@ async def call_stream(
     if model in _OVERRIDE_TO_ALIAS:
         model = _OVERRIDE_TO_ALIAS[model]
 
-    # Claude 모델 → Agent SDK (OAuth 토큰 직접 인증, MCP 도구 브릿지)
-    if _CLAUDE_CLI_ENABLED and model not in _GEMINI_MODELS and model in _ANTHROPIC_MODEL_ID:
+    # Claude 모델 → 3단계 폴백: CLI Relay → Agent SDK → Gemini
+    if model not in _GEMINI_MODELS and model in _ANTHROPIC_MODEL_ID:
+
+        # 1단계: CLI Relay (호스트 최신 CLI, OAuth 안정)
         _had_error = False
-        async for event in _stream_agent_sdk(model, system_prompt, messages, tools=tools, session_id=session_id):
+        async for event in _stream_cli_relay(model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
-                logger.warning(f"agent_sdk_error: {model} failed, trying Gemini fallback")
+                logger.warning(f"cli_relay_error: {model} failed, trying Agent SDK — {event.get('content', '')[:100]}")
                 break
             yield event
-        if _had_error:
-            yield {"type": "delta", "content": f"[Claude 장애 → Gemini 전환]\n\n"}
-            async for event in _stream_litellm("gemini-3-flash-preview", system_prompt, messages, tools=tools):
+        if not _had_error:
+            return
+
+        # 2단계: Agent SDK (컨테이너 번들 CLI)
+        _had_error = False
+        if _CLAUDE_CLI_ENABLED:
+            async for event in _stream_agent_sdk(model, system_prompt, messages, tools=tools, session_id=session_id):
+                if event.get("type") == "error":
+                    _had_error = True
+                    logger.warning(f"agent_sdk_error: {model} failed, trying Gemini — {event.get('content', '')[:100]}")
+                    break
                 yield event
+            if not _had_error:
+                return
+        else:
+            _had_error = True  # CLI 비활성화 시 바로 Gemini로
+
+        # 3단계: Gemini (최종 안전망)
+        yield {"type": "delta", "content": "[Claude 장애 → Gemini 전환]\n\n"}
+        async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
+            yield event
         return
 
     # Gemini 모델 → LiteLLM 경유 (실패 시 Claude Haiku 폴백)
@@ -457,7 +476,9 @@ async def _stream_litellm_anthropic(
                             "role": "user",
                             "content": f"[CEO 추가 지시] 작업 도중 CEO가 새로운 지시를 보냈습니다. 현재까지의 작업 결과를 고려하고, 이 새 지시를 반영하여 다음 행동을 판단하세요. CEO 지시가 기존 작업과 충돌하면 CEO 지시를 우선합니다.\n\n{interrupt_text}"
                         })
-                        yield {"type": "interrupt_applied", "content": "CEO 추가 지시 반영 중..."}
+                        # 각 interrupt마다 개별 이벤트 yield (프론트 큐 동기화용)
+                        for _intr in interrupts:
+                            yield {"type": "interrupt_applied", "content": _intr[:100]}
 
     except Exception as e:
         logger.error(f"model_selector litellm_anthropic error: {e}")
@@ -593,6 +614,129 @@ async def _stream_litellm_openai(
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
     }
+
+
+async def _stream_cli_relay(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    session_id: Optional[str] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """CLI Relay 서버(host.docker.internal:8199)를 통한 스트리밍.
+
+    호스트 최신 CLI를 사용하므로 OAuth 인증 안정성이 높음.
+    NDJSON 응답을 파싱하여 AADS SSE 이벤트로 변환.
+    """
+    sdk_model = _ANTHROPIC_MODEL_ID.get(model, model)
+
+    # 세션 이어가기 여부
+    _has_resume = bool(_cli_session_map.get(session_id)) if session_id else False
+    messages_text = _format_messages_as_text(messages, has_resume=_has_resume)
+
+    req_body = {
+        "model": model,
+        "system_prompt": system_prompt,
+        "messages_text": messages_text,
+        "session_id": session_id or "",
+    }
+
+    yield {"type": "model_info", "model": sdk_model}
+
+    full_text = ""
+    _tool_id_to_name: Dict[str, str] = {}
+    _captured_cli_sid = _cli_session_map.get(session_id, "") if session_id else ""
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
+            # Health check first (빠른 실패)
+            try:
+                hc = await client.get(f"{_CLAUDE_RELAY_URL}/health", timeout=5.0)
+                if hc.status_code != 200:
+                    yield {"type": "error", "content": f"CLI Relay not healthy: {hc.status_code}"}
+                    return
+            except Exception as hc_err:
+                yield {"type": "error", "content": f"CLI Relay unreachable: {hc_err}"}
+                return
+
+            async with client.stream(
+                "POST",
+                f"{_CLAUDE_RELAY_URL}/stream",
+                json=req_body,
+                timeout=httpx.Timeout(600.0, connect=10.0),
+            ) as resp:
+                if resp.status_code != 200:
+                    body = await resp.aread()
+                    yield {"type": "error", "content": f"CLI Relay {resp.status_code}: {body.decode()[:200]}"}
+                    return
+
+                async for line in resp.aiter_lines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    # _map_cli_event 재사용하여 NDJSON → AADS 이벤트 변환
+                    mapped = _map_cli_event(event)
+                    if mapped is None:
+                        # init 이벤트에서 session_id 캡처
+                        evt_type = event.get("type", "")
+                        if evt_type == "system" and event.get("subtype") == "init":
+                            sid = event.get("session_id")
+                            if sid:
+                                _captured_cli_sid = sid
+                        continue
+
+                    for aads_evt in mapped:
+                        evt_type = aads_evt.get("type", "")
+
+                        # tool_use에서 tool_id→name 매핑 저장
+                        if evt_type == "tool_use":
+                            tid = aads_evt.get("tool_use_id", "")
+                            tname = aads_evt.get("tool_name", "")
+                            if tid and tname:
+                                _tool_id_to_name[tid] = tname
+
+                        # tool_result에 tool_name 복원
+                        if evt_type == "tool_result" and not aads_evt.get("tool_name"):
+                            tid = aads_evt.get("tool_use_id", "")
+                            aads_evt["tool_name"] = _tool_id_to_name.get(tid, "")
+
+                        # delta에서 full_text 누적
+                        if evt_type == "delta":
+                            full_text += aads_evt.get("content", "")
+
+                        # done 이벤트에서 session_id 캡처 (result 이벤트)
+                        if evt_type == "done":
+                            # result 이벤트의 session_id
+                            result_sid = event.get("session_id")
+                            if result_sid:
+                                _captured_cli_sid = result_sid
+
+                        # error 이벤트 전파
+                        if evt_type == "error" or (evt_type == "delta" and "error" in str(aads_evt.get("content", "")).lower()[:50]):
+                            pass  # 그대로 yield
+
+                        yield aads_evt
+
+    except httpx.ConnectError as e:
+        yield {"type": "error", "content": f"CLI Relay connect failed: {e}"}
+        return
+    except httpx.ReadTimeout:
+        yield {"type": "error", "content": "CLI Relay timeout (600s)"}
+        return
+    except Exception as e:
+        logger.error(f"cli_relay_error: {e}")
+        yield {"type": "error", "content": str(e)}
+        return
+
+    # 세션 매핑 저장
+    if session_id and _captured_cli_sid:
+        _cli_session_map[session_id] = _captured_cli_sid
+        logger.info(f"cli_relay_session_map: aads={session_id[:8]} -> cli={_captured_cli_sid[:8]}")
 
 
 async def _stream_agent_sdk(
@@ -1613,7 +1757,9 @@ async def _stream_anthropic(
                     "role": "user",
                     "content": f"[CEO 추가 지시] 작업 도중 CEO가 새로운 지시를 보냈습니다. 현재까지의 작업 결과를 고려하고, 이 새 지시를 반영하여 다음 행동을 판단하세요. CEO 지시가 기존 작업과 충돌하면 CEO 지시를 우선합니다.\n\n{interrupt_text}"
                 })
-                yield {"type": "interrupt_applied", "content": "CEO 추가 지시 반영 중..."}
+                # 각 interrupt마다 개별 이벤트 yield (프론트 큐 동기화용)
+                for _intr in interrupts:
+                    yield {"type": "interrupt_applied", "content": _intr[:100]}
 
         _turn += 1
 

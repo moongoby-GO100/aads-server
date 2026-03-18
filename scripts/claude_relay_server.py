@@ -169,6 +169,39 @@ async def handle_stream(request):
                 if system_prompt:
                     prompt = "[SYSTEM PROMPT]\n" + system_prompt + "\n\n[CONVERSATION]\n" + messages_text
 
+            # Agent 팀 정의 (Agent SDK와 동일)
+            agents_json = json.dumps({
+                "researcher": {
+                    "description": "코드 탐색, DB 조회, 로그 분석, 서버 상태 확인 등 조사가 필요할 때 사용. 여러 파일/DB를 병렬로 조사할 때 효율적.",
+                    "prompt": (
+                        "당신은 시스템 조사 전문가입니다. "
+                        "MCP 도구(read_remote_file, query_db, query_project_database, search_logs, list_remote_dir, git_remote_status)를 사용하여 "
+                        "요청된 정보를 정확하게 수집하고 구조화된 보고서로 반환하세요. "
+                        "추측하지 말고 반드시 도구로 확인한 데이터만 보고하세요."
+                    ),
+                    "model": "sonnet",
+                },
+                "developer": {
+                    "description": "코드 수정, 파일 작성, 패치 적용, git 커밋/푸시 등 개발 작업이 필요할 때 사용.",
+                    "prompt": (
+                        "당신은 풀스택 개발자입니다. "
+                        "MCP 도구(write_remote_file, patch_remote_file, run_remote_command, git_remote_add, git_remote_commit, git_remote_push)를 사용하여 "
+                        "요청된 코드 변경을 정확하게 수행하세요. "
+                        "변경 전 반드시 현재 코드를 read_remote_file로 확인하고, 변경 후 검증하세요."
+                    ),
+                    "model": "sonnet",
+                },
+                "qa": {
+                    "description": "테스트 실행, 변경사항 검증, 서비스 헬스체크, 에러 확인 등 품질 검증이 필요할 때 사용.",
+                    "prompt": (
+                        "당신은 QA 엔지니어입니다. "
+                        "MCP 도구를 사용하여 시스템 상태를 검증하고, 에러를 탐지하고, 변경사항이 정상 반영되었는지 확인하세요. "
+                        "문제 발견 시 구체적인 에러 내용과 재현 경로를 보고하세요."
+                    ),
+                    "model": "sonnet",
+                },
+            })
+
             # CLI 명령어 구성
             cmd = [
                 CLAUDE_BIN,
@@ -178,9 +211,10 @@ async def handle_stream(request):
                 "--model", cli_model,
                 "--mcp-config", mcp_config_path,
                 "--strict-mcp-config",
-                "--allowedTools", "mcp__aads-tools__*",
-                "--disallowedTools", "Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,Agent,NotebookEdit",
+                "--allowedTools", "Agent,mcp__aads-tools__*",
+                "--disallowedTools", "Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,NotebookEdit",
                 "--max-turns", "200",
+                "--agents", agents_json,
             ]
 
             # 세션 이어가기
