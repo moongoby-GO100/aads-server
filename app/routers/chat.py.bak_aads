@@ -248,7 +248,6 @@ async def stop_session_streaming(session_id: UUID):
 
 class InterruptRequest(BaseModel):
     content: str = Field(..., description="스트리밍 중 CEO가 추가로 보내는 지시")
-    attachments: list[dict] = Field(default_factory=list, description="첨부파일 (이미지/PDF 등)")
 
 
 @router.post("/chat/sessions/{session_id}/interrupt", tags=["chat-session"])
@@ -262,9 +261,8 @@ async def interrupt_session(session_id: UUID, req: InterruptRequest):
     from app.core.interrupt_queue import push_interrupt, is_streaming
     sid = str(session_id)
     if is_streaming(sid):
-        push_interrupt(sid, req.content, req.attachments if req.attachments else None)
-        logger.info("interrupt_queued", session_id=sid, content=req.content[:100],
-                     attachments=len(req.attachments))
+        push_interrupt(sid, req.content)
+        logger.info("interrupt_queued", session_id=sid, content=req.content[:100])
         return {"queued": True, "message": "추가 지시가 다음 도구 완료 시점에 반영됩니다."}
     else:
         return {"queued": False, "message": "현재 AI가 응답 생성 중이 아닙니다. 일반 메시지로 전송하세요."}
