@@ -238,6 +238,48 @@ ${safe_instruction}"
     local git_diff=""
     git_diff=$(git diff HEAD 2>/dev/null | head -c 50000) || true
 
+    # ═══ AI Reviewer 단계 — CEO 승인 전 독립 AI 리뷰 ═══
+    local review_verdict="APPROVE"
+    local review_score="1.0"
+    if [[ -n "$git_diff" && ${#git_diff} -gt 10 ]]; then
+        log "  AI_REVIEW job=$job_id"
+        local review_response=""
+        # diff에서 변경 파일 목록 추출
+        local changed_files=""
+        changed_files=$(echo "$git_diff" | grep '^diff --git' | sed 's/diff --git a\///' | sed 's/ b\/.*//' | tr '\n' ',' | sed 's/,$//')
+
+        # JSON body 생성 (jq 사용)
+        local review_body=""
+        review_body=$(jq -n \
+            --arg jid "$job_id" \
+            --arg proj "$project" \
+            --arg diff "$git_diff" \
+            --arg inst "$instruction" \
+            --arg files "$changed_files" \
+            '{job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}')
+
+        review_response=$(curl -4 -sf -X POST "${AADS_API_URL}/api/v1/review/code-diff" \
+            -H "Content-Type: application/json" \
+            -d "$review_body" \
+            --max-time 30 2>/dev/null) || true
+
+        if [[ -n "$review_response" ]]; then
+            review_verdict=$(echo "$review_response" | jq -r '.verdict // "APPROVE"')
+            review_score=$(echo "$review_response" | jq -r '.score // "1.0"')
+            log "  AI_REVIEW_RESULT job=$job_id verdict=$review_verdict score=$review_score"
+
+            if [[ "$review_verdict" == "REQUEST_CHANGES" ]]; then
+                local review_issues=""
+                review_issues=$(echo "$review_response" | jq -r '.issues | join("; ")' 2>/dev/null || echo "")
+                log "  AI_REVIEW_REQUEST_CHANGES job=$job_id issues=$review_issues"
+                post_to_chat "$session_id" "🔍 [AI Reviewer] 코드 수정 요청 (score=${review_score}): ${review_issues:0:500}"
+                # REQUEST_CHANGES는 CEO에게 알리되 경고 표시
+            fi
+        else
+            log "  AI_REVIEW_SKIP job=$job_id (API 응답 없음)"
+        fi
+    fi
+
     db_update "UPDATE pipeline_jobs SET phase='awaiting_approval',
                status='awaiting_approval',
                result_output=$(sql_escape "$output"),
@@ -245,7 +287,16 @@ ${safe_instruction}"
                updated_at=NOW() WHERE job_id='${job_id}';"
 
     local diff_summary="${git_diff:0:3000}"
-    post_to_chat "$session_id" "🔔 [Pipeline Runner] 작업 완료 — AI 검수 중
+    local review_badge=""
+    if [[ "$review_verdict" == "APPROVE" ]]; then
+        review_badge="✅ AI 리뷰 통과 (score=${review_score})"
+    elif [[ "$review_verdict" == "REQUEST_CHANGES" ]]; then
+        review_badge="⚠️ AI 리뷰 수정 권고 (score=${review_score})"
+    elif [[ "$review_verdict" == "FLAG" ]]; then
+        review_badge="🔴 AI 리뷰 경고 (score=${review_score})"
+    fi
+
+    post_to_chat "$session_id" "🔔 [Pipeline Runner] 작업 완료 — ${review_badge}
 
 **작업**: ${instruction:0:200}
 **변경사항**:

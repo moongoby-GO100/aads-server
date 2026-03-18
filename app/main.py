@@ -34,6 +34,7 @@ from app.api.qa import router as qa_router
 from app.api.image import router as image_router
 from app.api.fact_check import router as fact_check_router
 from app.api.pipeline_runner import router as pipeline_runner_router
+from app.api.code_review import router as code_review_router
 from app.api.quality import router as quality_router
 from app.routers.chat import router as chat_v2_router
 from app.config import settings
@@ -592,6 +593,7 @@ app.include_router(chat_v2_router, prefix="/api/v1", tags=["chat-v2"])
 app.include_router(image_router, prefix="/api/v1/image", tags=["image"])
 app.include_router(fact_check_router, prefix="/api/v1/fact-check", tags=["fact-check"])
 app.include_router(pipeline_runner_router, prefix="/api/v1", tags=["pipeline-runner"])
+app.include_router(code_review_router)
 app.include_router(quality_router, prefix="/api/v1", tags=["quality"])
 # 정적 파일 서빙
 import pathlib as _pathlib
