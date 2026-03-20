@@ -189,13 +189,13 @@ async def call_stream(
         if not _had_error:
             return
 
-        # 2단계: LiteLLM Anthropic 직접 (10회 재시도 + 듀얼키 자동전환)
+        # 2단계: Agent SDK (OAuth 호환, CLI subprocess 기반)
         _had_error = False
-        logger.info(f"cli_relay_failed: trying LiteLLM Anthropic direct for {model}")
-        async for event in _stream_litellm_anthropic(model, system_prompt, messages, tools=tools, session_id=session_id):
+        logger.info(f"cli_relay_failed: trying Agent SDK for {model}")
+        async for event in _stream_agent_sdk(model, system_prompt, messages, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
-                logger.warning(f"litellm_anthropic_error: {model} failed, trying Gemini — {event.get('content', '')[:100]}")
+                logger.warning(f"agent_sdk_error: {model} failed, trying Gemini — {event.get('content', '')[:100]}")
                 break
             yield event
         if not _had_error:
@@ -768,61 +768,49 @@ async def _stream_agent_sdk(
     _has_resume = bool(_cli_session_map.get(session_id)) if session_id else False
     user_message = _format_messages_as_text(messages, has_resume=_has_resume)
 
-    # 토큰 교대: Naver → Gmail → Naver → Gmail ... (3라운드, 총 6회)
-    keys = _ANTHROPIC_KEYS if _ANTHROPIC_KEYS else [os.getenv("ANTHROPIC_API_KEY", "")]
-    keys = [k for k in keys if k]
-    _MAX_ROUNDS = 3  # 라운드 수 (각 라운드에서 모든 키 시도)
+    # Agent SDK는 CLI의 자체 OAuth 인증을 사용 (~/.claude/.credentials_account*.json)
+    # API 키를 env로 전달하지 않음 — CLI가 OAuth 토큰을 자동 관리
     _RETRYABLE_PATTERNS = [
         "rate_limit", "429", "rate limit",
-        "overloaded", "529", "503", "overloaded",
-        "credit", "402", "credit",
-        "authentication", "401", "unauthorized",
-        "exit code 1", "no connected db",
+        "overloaded", "529", "503",
+        "credit", "402",
+        "exit code 1",
         "server_error", "500", "internal",
         "timeout", "connection",
     ]
 
     yield {"type": "model_info", "model": sdk_model}
 
-    _attempt = 0
+    _MAX_RETRIES = 3
     _last_error = ""
-    for _round in range(_MAX_ROUNDS):
-        for key_idx, api_key in enumerate(keys):
-            _attempt += 1
-            _key_label = "Naver" if "5ZEDHaA7" in api_key else "Gmail"
+    for _attempt in range(_MAX_RETRIES):
+        error_msg = ""
+        async for evt in _run_agent_sdk_with_key(
+            "", sdk_model, system_prompt, user_message, session_id,
+        ):
+            if evt.get("type") == "error":
+                error_msg = evt.get("content", "")
+                break
+            yield evt
 
-            error_msg = ""
-            async for evt in _run_agent_sdk_with_key(
-                api_key, sdk_model, system_prompt, user_message, session_id,
-            ):
-                if evt.get("type") == "error":
-                    error_msg = evt.get("content", "")
-                    break
-                yield evt
+        if not error_msg:
+            return  # 성공
 
-            if not error_msg:
-                return  # 성공
+        _last_error = error_msg
+        is_retryable = any(p in error_msg.lower() for p in _RETRYABLE_PATTERNS)
 
-            _last_error = error_msg
-            is_retryable = any(p in error_msg.lower() for p in _RETRYABLE_PATTERNS)
+        if not is_retryable:
+            logger.error(f"agent_sdk_fatal: attempt={_attempt+1} error={error_msg[:100]}")
+            yield {"type": "error", "content": error_msg}
+            return
 
-            if not is_retryable:
-                # 재시도 불가 에러 (구문 오류 등) — 즉시 중단
-                logger.error(f"token_fatal: {_key_label} attempt={_attempt} error={error_msg[:100]}")
-                yield {"type": "error", "content": error_msg}
-                return
+        logger.warning(f"agent_sdk_retry: attempt={_attempt+1}/{_MAX_RETRIES} error={error_msg[:80]}")
+        yield {"type": "heartbeat"}
 
-            logger.warning(f"token_retry: {_key_label} attempt={_attempt}/{_MAX_ROUNDS*len(keys)} round={_round+1} error={error_msg[:80]}")
-            yield {"type": "heartbeat"}
+        if _attempt < _MAX_RETRIES - 1:
+            await asyncio.sleep(min(2 ** _attempt, 4))
 
-        # 라운드 사이 대기 (지수 백오프: 1초, 2초, 4초)
-        if _round < _MAX_ROUNDS - 1:
-            _wait = min(2 ** _round, 4)
-            logger.info(f"token_round_wait: round={_round+1} wait={_wait}s before next round")
-            await asyncio.sleep(_wait)
-
-    # 모든 라운드 소진
-    yield {"type": "error", "content": f"All OAuth tokens exhausted after {_attempt} attempts: {_last_error[:100]}"}
+    yield {"type": "error", "content": f"Agent SDK failed after {_MAX_RETRIES} attempts: {_last_error[:100]}"}
 
 
 async def _run_agent_sdk_with_key(
@@ -884,18 +872,25 @@ async def _run_agent_sdk_with_key(
         ),
     }
 
+    # cli_path: 컨테이너 내 번들 CLI 사용 (Debian 13 = GLIBC 2.40+, 실행 가능 확인됨)
+    # 호스트(CentOS 7)에서는 GLIBC 부족으로 번들 CLI 실행 불가 — 컨테이너 전용
+    _cli_path = os.getenv(
+        "CLAUDE_CLI_PATH",
+        "/usr/local/lib/python3.12/site-packages/claude_agent_sdk/_bundled/claude",
+    )
+
     opts = ClaudeAgentOptions(
         model=sdk_model,
         max_turns=200,
         permission_mode="acceptEdits",
         cwd="/app",
+        cli_path=_cli_path,
         system_prompt=system_prompt,
         mcp_servers=_mcp_cfg,
         agents=_agents,
         allowed_tools=["Agent", "mcp__aads-tools__*"],
         disallowed_tools=["Bash", "Read", "Edit", "Write", "Glob", "Grep",
                           "WebFetch", "WebSearch", "NotebookEdit"],
-        env={"ANTHROPIC_API_KEY": api_key},
     )
     # --resume: 이전 대화가 있으면 이어가기
     if cli_session_id:
