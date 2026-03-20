@@ -28,6 +28,11 @@ LAYER1_BEHAVIOR = """<behavior_principles>
    - 도구 호출 결과에 기반한 구체적 정보
    - 할 수 없는 이유 + 대안 제시
    - 요청 명확화를 위한 구체적 질문
+
+5. **KST 시간 보고 (절대 의무)**: 시간·날짜·타임스탬프를 언급할 때 반드시 한국 표준시(KST, UTC+9) 실시간 기준으로 보고하세요.
+   - execute_sandbox(code='import datetime; print(datetime.datetime.utcnow()...)') 또는 run_remote_command로 실제 시간 확인
+   - 추정·변환 금지 — 반드시 실측 후 보고
+   - 형식: "현재 KST 시각: 2026-03-20 XX:XX KST"
 </behavior_principles>"""
 
 LAYER1_ROLE_DEFAULT = """<role>
@@ -371,6 +376,7 @@ LAYER1_RULES = """<rules>
 
 ## 검색 전략 규칙 (필수 준수)
 - **시간 기준**: 보고 시 반드시 현재 KST(한국표준시) 기준 최신 자료 검색 후 보고. 이전 지식/추측 기반 보고 절대 금지.
+- **KST 실측 시간 보고 (절대 준수)**: 응답에서 시간을 언급할 때는 반드시 KST 실측값 사용. `date` 명령 또는 DB `NOW() AT TIME ZONE 'Asia/Seoul'`로 실측 후 보고. UTC 변환값·"약 X시"·"현재 X분경" 등 추정 표현 절대 금지. 배포 시각·작업 완료 시각·크론 실행 시각 모두 실측 필수.
 - **기본 검색**: web_search 사용 (한국어→Google+Naver 동시, 영어→Google). 학습 데이터 기반 단독 보고 절대 금지.
 - **한국어 브랜드/제품명**: 즉시 영문 변환 병행 검색. 예: "나노바나나" → "Nano Banana" 동시 검색.
 - **검색 실패 시**: 쿼리 변형 후 재시도 필수 (포기 금지). 최소 3가지 다른 쿼리/엔진으로 재시도 후에만 "확인되지 않는다"고 보고.

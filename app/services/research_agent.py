@@ -7,11 +7,15 @@ AI 자율 연구개선 — Phase 2: 자율 연구 에이전트
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
+import shutil
+import subprocess
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +32,41 @@ class ResearchFinding:
     description: str
     suggestion: str
     data: dict = field(default_factory=dict)
+
+
+@dataclass
+class RemediationMethod:
+    """단일 수정 시도."""
+    name: str
+    target_file: str
+    description: str
+
+
+@dataclass
+class RemediationResult:
+    """자동 수정 결과."""
+    success: bool
+    method: str
+    before_value: str = ""
+    after_value: str = ""
+    rollback_done: bool = False
+    error: str = ""
+
+
+# 자동 수정 가능한 유형 (CEO 승인 불필요)
+SAFE_TO_AUTO_FIX = {
+    "confidence_threshold",
+    "log_level_hidden_error",
+    "fallback_path",
+}
+
+# CEO 승인 필요 유형
+REQUIRES_CEO_APPROVAL = {
+    "db_schema_change",
+    "core_logic_change",
+    "docker_compose_change",
+    "api_key_change",
+}
 
 
 async def run_daily_research(pool) -> dict:
@@ -154,7 +193,50 @@ async def run_daily_research(pool) -> dict:
                     data={"total": total_jobs, "errors": error_jobs},
                 ))
 
-            # ── 5. 발견사항 저장 ──
+            # ── 5. quality_score NULL 비율 분석 ──
+            null_stats = await conn.fetchrow("""
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN quality_score IS NULL THEN 1 ELSE 0 END) as null_cnt
+                FROM chat_messages
+                WHERE role = 'assistant'
+                  AND created_at >= NOW() - interval '1 day'
+            """)
+            if null_stats and null_stats["total"] > 10:
+                null_ratio = null_stats["null_cnt"] / null_stats["total"]
+                if null_ratio > 0.5:
+                    findings.append(ResearchFinding(
+                        project="AADS",
+                        category="confidence_threshold",
+                        severity="high",
+                        title=f"quality_score NULL 비율 높음: {null_ratio*100:.0f}%",
+                        description=f"최근 24시간 {null_stats['null_cnt']}/{null_stats['total']} 메시지 quality_score=NULL",
+                        suggestion="self_evaluator LLM 호출 실패 — 환경변수·모델 폴백 점검 필요",
+                        data={"null_ratio": round(null_ratio, 3), "total": null_stats["total"]},
+                    ))
+
+            # ── 6. session_notes 빈값 비율 분석 ──
+            notes_stats = await conn.fetchrow("""
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN content IS NULL OR content = '' THEN 1 ELSE 0 END) as empty_cnt
+                FROM session_notes
+                WHERE created_at >= NOW() - interval '3 days'
+            """)
+            if notes_stats and notes_stats["total"] > 5:
+                empty_ratio = notes_stats["empty_cnt"] / notes_stats["total"]
+                if empty_ratio > 0.5:
+                    findings.append(ResearchFinding(
+                        project="AADS",
+                        category="log_level_hidden_error",
+                        severity="medium",
+                        title=f"session_notes 빈값 비율 높음: {empty_ratio*100:.0f}%",
+                        description=f"최근 3일 {notes_stats['empty_cnt']}/{notes_stats['total']} 노트 content 빈값",
+                        suggestion="memory_manager.py INSERT 쿼리 content 컬럼 누락 가능성",
+                        data={"empty_ratio": round(empty_ratio, 3)},
+                    ))
+
+            # ── 7. 발견사항 저장 ──
             for f in findings:
                 await conn.execute(
                     """INSERT INTO ai_observations
@@ -178,7 +260,7 @@ async def run_daily_research(pool) -> dict:
             for f in findings
         ]
 
-        # ── 6. CEO 알림 (high severity만) ──
+        # ── 8. CEO 알림 (high severity만) ──
         high_findings = [f for f in findings if f.severity == "high"]
         if high_findings:
             try:
@@ -193,6 +275,32 @@ async def run_daily_research(pool) -> dict:
             except Exception as tg_err:
                 logger.debug("research_agent_telegram_error", error=str(tg_err))
 
+        # ── Auto-Remediation 시도 ──
+        auto_fix_candidates = [
+            f for f in findings
+            if f.category in SAFE_TO_AUTO_FIX
+        ]
+        remediation_results = []
+        for finding in auto_fix_candidates[:3]:
+            rem = await _attempt_auto_remediation(pool, finding)
+            remediation_results.append({
+                "finding": finding.title,
+                "success": rem.success,
+                "method": rem.method,
+            })
+            if not rem.success and rem.method == "all_methods_exhausted":
+                try:
+                    from app.services.telegram_bot import get_telegram_bot
+                    bot = get_telegram_bot()
+                    if bot and bot.is_ready:
+                        await bot.send_message(
+                            f"⚠️ [Auto-Remediation 실패] {finding.title}\n"
+                            f"모든 방법 소진 — CEO 검토 필요\n오류: {rem.error}"
+                        )
+                except Exception:
+                    pass
+        result["remediation_results"] = remediation_results
+
         logger.info(
             "research_agent_complete",
             findings=len(findings),
@@ -203,6 +311,132 @@ async def run_daily_research(pool) -> dict:
         logger.error("research_agent_error", error=str(e))
 
     return result
+
+
+async def _attempt_auto_remediation(pool, finding: ResearchFinding) -> RemediationResult:
+    """발견사항에 대해 다방법 폴백 체인으로 자동 수정 시도.
+
+    모든 방법 소진 전까지 시도. 성공 즉시 반환.
+    """
+    if finding.category not in SAFE_TO_AUTO_FIX:
+        return RemediationResult(
+            success=False,
+            method="skipped_requires_approval",
+            error=f"{finding.category}는 CEO 승인 필요",
+        )
+
+    methods = _get_remediation_methods(finding)
+    if not methods:
+        return RemediationResult(success=False, method="no_methods_available")
+
+    for method in methods:
+        backup_path = None
+        try:
+            if os.path.exists(method.target_file):
+                backup_path = method.target_file + ".remediation_bak"
+                shutil.copy2(method.target_file, backup_path)
+
+            applied = await _apply_remediation(method, finding)
+            if not applied:
+                continue
+
+            await _restart_service()
+            await asyncio.sleep(60)
+            verified = await _verify_fix(pool, finding)
+
+            if verified:
+                if backup_path and os.path.exists(backup_path):
+                    os.remove(backup_path)
+                logger.info("auto_remediation_success", method=method.name, finding=finding.title)
+                return RemediationResult(success=True, method=method.name, after_value="fixed")
+            else:
+                if backup_path and os.path.exists(backup_path):
+                    shutil.copy2(backup_path, method.target_file)
+                    os.remove(backup_path)
+                    await _restart_service()
+                logger.warning("auto_remediation_rolled_back", method=method.name)
+
+        except Exception as e:
+            logger.error("auto_remediation_method_error", method=method.name, error=str(e))
+            if backup_path and os.path.exists(backup_path):
+                try:
+                    shutil.copy2(backup_path, method.target_file)
+                    os.remove(backup_path)
+                except Exception:
+                    pass
+
+    return RemediationResult(
+        success=False,
+        method="all_methods_exhausted",
+        error=f"{len(methods)}개 방법 모두 실패",
+    )
+
+
+def _get_remediation_methods(finding: ResearchFinding) -> List[RemediationMethod]:
+    """발견사항 유형별 수정 방법 목록 반환."""
+    methods = []
+    if finding.category == "confidence_threshold":
+        methods.append(RemediationMethod(
+            name="lower_confidence_threshold",
+            target_file="/app/app/core/memory_recall.py",
+            description="confidence 임계값 0.40으로 하향",
+        ))
+    return methods
+
+
+async def _apply_remediation(method: RemediationMethod, finding: ResearchFinding) -> bool:
+    """수정 적용."""
+    try:
+        if method.name == "lower_confidence_threshold":
+            with open(method.target_file, "r") as f:
+                content = f.read()
+            if '"0.40"' in content:
+                return False  # 이미 적용됨
+            new_content = content.replace('"0.55"', '"0.40"').replace('"0.50"', '"0.40"').replace('"0.45"', '"0.40"')
+            with open(method.target_file, "w") as f:
+                f.write(new_content)
+            return True
+        return False
+    except Exception as e:
+        logger.error("apply_remediation_error", error=str(e))
+        return False
+
+
+async def _restart_service() -> bool:
+    """supervisorctl로 aads-server 무중단 재시작."""
+    try:
+        result = subprocess.run(
+            ["supervisorctl", "restart", "aads-server"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            logger.error("restart_failed", stderr=result.stderr)
+            return False
+        await asyncio.sleep(10)  # 시작 대기
+        return True
+    except Exception as e:
+        logger.error("restart_service_error", error=str(e))
+        return False
+
+
+async def _verify_fix(pool, finding: ResearchFinding) -> bool:
+    """수정 후 DB 검증."""
+    try:
+        async with pool.acquire() as conn:
+            if "quality_score NULL" in finding.title:
+                row = await conn.fetchrow("""
+                    SELECT COUNT(*) as total,
+                           SUM(CASE WHEN quality_score IS NULL THEN 1 ELSE 0 END) as null_cnt
+                    FROM chat_messages
+                    WHERE role = 'assistant'
+                      AND created_at >= NOW() - interval '30 minutes'
+                """)
+                if row and row["total"] > 0:
+                    return (row["null_cnt"] / row["total"]) < 0.3
+        return True
+    except Exception as e:
+        logger.error("verify_fix_error", error=str(e))
+        return False
 
 
 async def get_recent_findings(pool, days: int = 3, limit: int = 10) -> list:

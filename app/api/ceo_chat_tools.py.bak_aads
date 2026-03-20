@@ -703,6 +703,43 @@ TOOL_DEFINITIONS: List[Dict] = [
             "required": ["name", "phases"],
         },
     },
+    # ── AI-to-AI: 다관점 토론 ────────────────────────────────────────────
+    {
+        "name": "run_debate",
+        "description": (
+            "전략적 의사결정이 필요한 질문에 대해 기술/비즈니스/리스크 3관점으로 병렬 분석 후 종합.\n"
+            "CEO가 '토론해봐', '다관점 분석', '장단점 비교', '어떻게 해야 할까' 등을 요청할 때 사용.\n"
+            "소요: 10~30초, 비용: ~$1~2/토론 (Sonnet x3~4)\n"
+            "예: run_debate(question='KIS에 새 전략을 추가해야 할까?')"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "토론할 질문 (전략, 의사결정, 설계 관련)",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "추가 배경 정보 (선택)",
+                },
+                "perspectives": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "description": "관점 이름 (예: '기술', '비즈니스')"},
+                            "role": {"type": "string", "description": "에이전트 역할"},
+                            "system": {"type": "string", "description": "관점별 시스템 프롬프트"},
+                        },
+                        "required": ["name", "system"],
+                    },
+                    "description": "커스텀 관점 목록 (선택, 기본: 기술/비즈니스/리스크 3관점)",
+                },
+            },
+            "required": ["question"],
+        },
+    },
     # ── SSH 원격 쓰기 도구 (Yellow 등급) ─────────────────────────────────
     {
         "name": "write_remote_file",
