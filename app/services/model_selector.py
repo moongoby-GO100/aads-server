@@ -166,7 +166,6 @@ async def call_stream(
         "claude-sonnet-4-6": "claude-sonnet", "claude-sonnet-4-5": "claude-sonnet",
         "claude-opus-4-6": "claude-opus", "claude-opus-4-5": "claude-opus",
         "claude-haiku-4-5": "claude-haiku",
-        "mixture": "claude-sonnet",  # 프론트엔드 자동 라우팅 (레거시)
         "auto": "claude-sonnet",    # 프론트엔드 자동 라우팅 (채팅 UI)
     }
     if model in _OVERRIDE_TO_ALIAS:
@@ -242,36 +241,6 @@ async def call_stream(
                 yield event
         return
 
-    # Claude 모델 → Anthropic SDK 직접 (3회 재시도 후에도 실패 시 Gemini Flash 폴백)
-    _had_error = False
-    _error_content = ""
-    async for event in _stream_anthropic(intent_result, model, system_prompt, messages, tools, session_id=session_id):
-        if event.get("type") == "error":
-            _had_error = True
-            _error_content = event.get("content", "")
-            logger.error(f"claude_fallback_to_gemini: {model} failed after retries ({_error_content[:200]})")
-            break
-        yield event
-    if _had_error:
-        # Claude 3회 재시도 실패 → Gemini로 폴백 (도구 포함)
-        _fallback_prompt = system_prompt + "\n\n[SYSTEM] Claude API 장애로 Gemini로 전환되었습니다. 동일한 도구를 사용할 수 있습니다. 정확한 데이터 기반으로 답변하세요."
-        yield {"type": "delta", "content": f"[Claude 일시 장애 → Gemini 전환]\n\n"}
-        # error_log에 기록
-        try:
-            from app.core.db_pool import get_pool
-            pool = get_pool()
-            async with pool.acquire() as conn:
-                await conn.execute(
-                    "INSERT INTO error_log (error_type, source, server, message, stack_trace, created_at) VALUES ($1, $2, $3, $4, $5, NOW())",
-                    "claude_api_fallback", "model_selector", "aads-server",
-                    f"Claude {model} → Gemini 전환 (3회 재시도 실패)",
-                    _error_content[:500],
-                )
-        except Exception as _log_err:
-            logger.warning(f"error_log insert failed: {_log_err}")
-        # Gemini도 도구 사용 가능 — LiteLLM function calling 지원
-        async for event in _stream_litellm("gemini-3-flash-preview", _fallback_prompt, messages, tools=tools):
-            yield event
 
 
 def _convert_content_for_openai(content: Any) -> Any:
