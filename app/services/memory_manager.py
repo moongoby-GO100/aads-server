@@ -109,8 +109,8 @@ class MemoryManager:
             row = await conn.fetchrow(
                 """
                 INSERT INTO session_notes
-                    (session_id, summary, key_decisions, action_items, unresolved_issues, projects_discussed)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                    (session_id, summary, content, key_decisions, action_items, unresolved_issues, projects_discussed, note_type)
+                VALUES ($1, $2, $2, $3, $4, $5, $6, 'auto_save')
                 RETURNING *
                 """,
                 session_id,
