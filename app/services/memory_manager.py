@@ -603,24 +603,23 @@ class MemoryManager:
         )
 
         try:
-            from app.core.anthropic_client import get_client
-            client = get_client()
-
-            resp = await client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=400,
-                system=(
-                    "대화를 분석하여 JSON으로 요약하라. "
-                    "{'summary': '한 문장 요약', "
-                    "'key_decisions': ['결정1', ...], "
-                    "'action_items': ['액션1', ...], "
-                    "'unresolved_issues': ['이슈1', ...]} 형식. "
-                    "각 목록은 최대 3개. 없으면 빈 배열."
-                ),
-                messages=[{"role": "user", "content": f"대화:\n{dialog}"}],
+            from app.core.anthropic_client import call_llm_with_fallback
+            _system = (
+                "대화를 분석하여 JSON으로 요약하라. "
+                "{'summary': '한 문장 요약', "
+                "'key_decisions': ['결정1', ...], "
+                "'action_items': ['액션1', ...], "
+                "'unresolved_issues': ['이슈1', ...]} 형식. "
+                "각 목록은 최대 3개. 없으면 빈 배열."
             )
+            raw_text = await call_llm_with_fallback(
+                f"대화:\n{dialog}", model="claude-haiku-4-5-20251001",
+                max_tokens=400, system=_system,
+            )
+            if not raw_text:
+                raise RuntimeError("all LLM failed")
 
-            raw = resp.content[0].text.strip()
+            raw = raw_text.strip()
             if raw.startswith("{"):
                 parsed = json.loads(raw)
                 return (

@@ -16,7 +16,7 @@ from anthropic import AsyncAnthropic
 logger = logging.getLogger(__name__)
 
 # OAuth 토큰 직접 사용 (Agent SDK 채팅 AI와 동일 경로)
-_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+_API_KEY = os.getenv("ANTHROPIC_API_KEY", "") or os.getenv("ANTHROPIC_AUTH_TOKEN", "")
 _API_KEY_FALLBACK = os.getenv("ANTHROPIC_API_KEY_FALLBACK", "")
 _BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 
