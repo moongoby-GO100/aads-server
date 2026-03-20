@@ -48,10 +48,22 @@ class SystemMemoryRequest(BaseModel):
 
 # --- 읽기 엔드포인트 (Monitor Key) ---
 @router.get("/context/system")
-async def get_all_system_memory(auth: bool = Depends(verify_monitor_key)):
-    """전체 시스템 메모리 조회 (카테고리별 그룹)"""
-    data = await memory_store.get_all_system()
-    return {"status": "ok", "categories": list(data.keys()), "data": data}
+async def get_all_system_memory(
+    include_conversation: bool = False,
+    auth: bool = Depends(verify_monitor_key),
+):
+    """전체 시스템 메모리 조회 (카테고리별 그룹).
+    기본값: conversation:* 카테고리 제외 (41,000건 이상, 224MB → ~2MB).
+    ?include_conversation=true 로 conversation 포함 가능.
+    """
+    exclude_conversation = not include_conversation
+    data = await memory_store.get_all_system(exclude_conversation=exclude_conversation)
+    return {
+        "status": "ok",
+        "categories": list(data.keys()),
+        "exclude_conversation": exclude_conversation,
+        "data": data,
+    }
 
 @router.get("/context/system/{category}")
 async def get_system_category(category: str, auth: bool = Depends(verify_monitor_key)):
@@ -324,9 +336,10 @@ def _sanitize(data: Any) -> Any:
 async def get_public_summary():
     """읽기 전용 공개 메모리 요약 (Monitor Key 불필요, 민감 데이터 자동 제거)"""
     async with memory_store.pool.acquire() as conn:
-        # system_memory 전체 카테고리 조회
+        # system_memory 전체 카테고리 조회 (conversation:* 제외 — 41,000건 이상 방지)
         sys_rows = await conn.fetch(
-            "SELECT category, key, value FROM system_memory ORDER BY category, key"
+            "SELECT category, key, value FROM system_memory "
+            "WHERE category NOT LIKE 'conversation:%' ORDER BY category, key"
         )
         # experience_memory 최근 10건
         exp_rows = await conn.fetch(

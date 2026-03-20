@@ -56,17 +56,27 @@ class AADSMemoryStore:
                 SET value=$3, version=$4, updated_by=$5, updated_at=NOW()
             """, category, key, json.dumps(value), version, updated_by)
 
-    async def get_system_by_category(self, category: str) -> List[Dict]:
+    async def get_system_by_category(self, category: str, limit: int = 1000) -> List[Dict]:
+        """카테고리별 시스템 메모리 조회. 기본 LIMIT 1000 (conversation:kis 19,420건 방지)"""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT key, value, version, updated_at FROM system_memory WHERE category=$1 ORDER BY key",
-                category
+                "SELECT key, value, version, updated_at FROM system_memory WHERE category=$1 ORDER BY key LIMIT $2",
+                category, limit
             )
             return [dict(r) for r in rows]
 
-    async def get_all_system(self) -> Dict[str, List[Dict]]:
+    async def get_all_system(self, exclude_conversation: bool = True) -> Dict[str, List[Dict]]:
+        """전체 시스템 메모리 조회. 기본값으로 conversation:* 카테고리 제외 (41,000건 이상, 99.6%)"""
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch("SELECT category, key, value, version, updated_at FROM system_memory ORDER BY category, key")
+            if exclude_conversation:
+                rows = await conn.fetch(
+                    "SELECT category, key, value, version, updated_at FROM system_memory "
+                    "WHERE category NOT LIKE 'conversation:%' ORDER BY category, key"
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT category, key, value, version, updated_at FROM system_memory ORDER BY category, key"
+                )
             result = {}
             for r in rows:
                 cat = r['category']
