@@ -20,12 +20,10 @@ _API_KEY = os.getenv("ANTHROPIC_API_KEY", "") or os.getenv("ANTHROPIC_AUTH_TOKEN
 _API_KEY_FALLBACK = os.getenv("ANTHROPIC_API_KEY_FALLBACK", "")
 _BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 
-# Gemini 폴백 (직접 API 호출)
-_GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-# LiteLLM의 Gemini 키 폴백
-if not _GEMINI_API_KEY:
-    _GEMINI_API_KEY = os.getenv("LITELLM_GEMINI_KEY", "")
-_GEMINI_FALLBACK_MODEL = "gemini-3.1-flash-lite-preview"
+# Gemini 폴백 — LiteLLM 프록시 경유 (직접 API 키 만료 대비)
+_LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
+_LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "")
+_GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
 
 
 def get_client(model_hint: str = "claude-haiku") -> AsyncAnthropic:
@@ -65,8 +63,8 @@ async def call_llm_with_fallback(
             logger.warning("claude_bg_error: key=%s model=%s error=%s", key[:12], model, str(e)[:80])
             continue
 
-    # 3순위: Gemini 2.5 Flash (직접 API)
-    if _GEMINI_API_KEY:
+    # 3순위: Gemini 2.5 Flash (LiteLLM 경유)
+    if _LITELLM_MASTER_KEY:
         try:
             return await _call_gemini(prompt, max_tokens, system)
         except Exception as e:
@@ -81,26 +79,26 @@ async def _call_gemini(
     max_tokens: int = 256,
     system: Optional[str] = None,
 ) -> str:
-    """Gemini 2.5 Flash — 직접 REST API 호출."""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{_GEMINI_FALLBACK_MODEL}:generateContent"
+    """Gemini 2.5 Flash — LiteLLM 프록시 경유 (OpenAI 호환 API)."""
+    url = f"{_LITELLM_BASE_URL}/v1/chat/completions"
 
-    contents = []
+    messages = []
     if system:
-        contents.append({"role": "user", "parts": [{"text": f"[SYSTEM] {system}"}]})
-        contents.append({"role": "model", "parts": [{"text": "Understood."}]})
-    contents.append({"role": "user", "parts": [{"text": prompt}]})
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
 
     body = {
-        "contents": contents,
-        "generationConfig": {"maxOutputTokens": max(max_tokens, 512)},
+        "model": _GEMINI_FALLBACK_MODEL,
+        "messages": messages,
+        "max_tokens": max(max_tokens, 512),
     }
 
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(url, params={"key": _GEMINI_API_KEY}, json=body)
+        resp = await client.post(
+            url,
+            json=body,
+            headers={"Authorization": f"Bearer {_LITELLM_MASTER_KEY}"},
+        )
         resp.raise_for_status()
         data = resp.json()
-        parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-        for p in parts:
-            if p.get("text"):
-                return p["text"]
-        raise ValueError("Gemini: no text in response")
+        return data["choices"][0]["message"]["content"]
