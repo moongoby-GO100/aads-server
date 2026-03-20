@@ -267,9 +267,33 @@ async def interrupt_session(session_id: UUID, req: InterruptRequest):
     is_streaming() 상태일 때만 interrupt_queue에 push.
     아닐 때는 일반 메시지 전송 안내 반환.
     도구 루프 완료 시점에 model_selector.py가 has_interrupt() 체크 후 반영.
+    AADS-FIX: 인터럽트 메시지를 DB에도 즉시 저장 (유실 방지)
     """
     from app.core.interrupt_queue import push_interrupt, is_streaming
     sid = str(session_id)
+
+    # DB에 즉시 저장 (유실 방지) — 스트리밍 여부와 무관하게 저장
+    try:
+        from app.core.db_pool import get_pool
+        import json as _json
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO chat_messages
+                   (session_id, role, content, attachments)
+                   VALUES ($1, 'user', $2, $3::jsonb)""",
+                session_id,
+                f"[추가 지시] {req.content}",
+                _json.dumps(req.attachments or []),
+            )
+            await conn.execute(
+                "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
+                session_id,
+            )
+        logger.info("interrupt_saved_to_db", session_id=sid, content=req.content[:100])
+    except Exception as e:
+        logger.error("interrupt_db_save_failed", session_id=sid, error=str(e))
+
     if is_streaming(sid):
         push_interrupt(sid, req.content, req.attachments if req.attachments else None)
         logger.info("interrupt_queued", session_id=sid, content=req.content[:100],

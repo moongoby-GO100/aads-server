@@ -1630,9 +1630,16 @@ async def send_message_stream(
         from app.services.tool_executor import current_chat_session_id
         current_chat_session_id.set(session_id)
 
-        from app.core.interrupt_queue import set_streaming
+        from app.core.interrupt_queue import set_streaming, has_pending_interrupts, pop_pending_interrupts
         set_streaming(session_id, True)
         sid = uuid.UUID(session_id)
+
+        # AADS-FIX: 이전 턴에서 미소비된 인터럽트를 현재 user 메시지 앞에 주입
+        if has_pending_interrupts(session_id):
+            _pending = pop_pending_interrupts(session_id)
+            _pending_text = "\n".join(f"[이전 추가 지시] {p['content']}" for p in _pending)
+            content = f"{_pending_text}\n\n{content}"
+            logger.info(f"[PENDING_INTERRUPT] session={session_id[:8]} injected={len(_pending)} items")
 
         # 1. 첨부파일 처리 — Ephemeral Document Context (#파일맥락보호)
         #    파일 전문은 content에 넣지 않고 Layer D로 현재 턴에만 주입.
@@ -2013,7 +2020,7 @@ async def send_message_stream(
             intent = "file_read"
             logger.info(f"[INTENT_OVERRIDE] file_read forced for content containing file keywords")
 
-        if model_override:
+        if model_override and model_override not in ("mixture", "auto"):
             intent_result.model = get_model_for_override(model_override)
             intent_result.use_gemini_direct = False
             # Claude 모델 선택 시 도구 항상 활성화 (시스템프롬프트에 도구 설명이 있으므로
