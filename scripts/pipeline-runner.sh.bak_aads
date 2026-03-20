@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════
-# AADS Pipeline Runner v2 — 호스트 독립 실행기
+# AADS Pipeline Runner v2.1 — 호스트 독립 실행기
+#
+# 핵심 원칙: "코드 수정만 → 승인 → 커밋 → 푸시 → 빌드 → 배포"
+# Claude Code는 코드 수정만 수행. 커밋/푸시/빌드/배포는 승인 후 Runner가 처리.
 #
 # DB(pipeline_jobs)에서 pending 작업을 감지하여 Claude Code CLI로 실행.
 # aads-server 재시작과 완전히 독립. systemd로 관리.
@@ -134,10 +137,10 @@ claim_approved_job() {
 
 claim_rejected_job() {
     local filter="$1"
-    db_exec "UPDATE pipeline_jobs SET phase='reverting', updated_at=NOW()
+    db_exec "UPDATE pipeline_jobs SET status='rolling_back', phase='rolling_back', updated_at=NOW()
              WHERE job_id = (
                 SELECT job_id FROM pipeline_jobs
-                WHERE status='rejected' AND phase != 'reverted' $filter
+                WHERE status='rejected' $filter
                 ORDER BY updated_at ASC LIMIT 1
                 FOR UPDATE SKIP LOCKED
              )
@@ -181,6 +184,21 @@ run_job() {
         # H6: instruction 크기 제한 (50KB)
         local safe_instruction="${instruction:0:50000}"
 
+        # H7: 빌드/배포 가드 v2.1 — Claude Code가 직접 배포하지 않도록 방지
+        safe_instruction="[필수 규칙 — 반드시 준수]
+1. 코드 수정만 수행하세요. 파일 생성/수정/삭제만 허용됩니다.
+2. 다음 명령은 절대 실행하지 마세요:
+   - docker build, docker compose, docker restart
+   - npm run build, npm start, next build
+   - supervisorctl, systemctl, service restart
+   - kill, pkill (프로세스 종료)
+3. 빌드와 배포는 CEO 승인 후 Runner가 자동으로 수행합니다.
+4. 작업 완료 시 '빌드 필요' 또는 '배포 필요' 등을 언급하지 마세요. Runner가 알아서 합니다.
+
+위 규칙을 위반하면 작업이 거부됩니다.
+
+${safe_instruction}"
+
         timeout "$MAX_RUNTIME" claude -p --output-format text "$safe_instruction" \
             > "$output_file" 2> "$err_file" || exit_code=$?
 
@@ -215,15 +233,52 @@ run_job() {
 
     log "  DONE Phase1 job=$job_id"
 
-    # git commit (push는 승인 후)
+    # v2.1: 커밋하지 않음 — uncommitted diff 캡처 (승인 후 커밋)
     cd "$workdir"
-    git add -u 2>/dev/null || true
-    local commit_msg="Pipeline-Runner: ${job_id} — ${instruction:0:80}"
-    git commit -m "$commit_msg" 2>/dev/null || log "  WARN: git commit skipped (no changes or hook failure)"
-
-    # git diff 캡처 (커밋된 변경사항 = HEAD vs HEAD~1)
     local git_diff=""
-    git_diff=$(cd "$workdir" && git diff HEAD~1 HEAD 2>/dev/null | head -c 50000) || true
+    git_diff=$(git diff HEAD 2>/dev/null | head -c 50000) || true
+
+    # ═══ AI Reviewer 단계 — CEO 승인 전 독립 AI 리뷰 ═══
+    local review_verdict="APPROVE"
+    local review_score="1.0"
+    if [[ -n "$git_diff" && ${#git_diff} -gt 10 ]]; then
+        log "  AI_REVIEW job=$job_id"
+        local review_response=""
+        # diff에서 변경 파일 목록 추출
+        local changed_files=""
+        changed_files=$(echo "$git_diff" | grep '^diff --git' | sed 's/diff --git a\///' | sed 's/ b\/.*//' | tr '\n' ',' | sed 's/,$//')
+
+        # JSON body 생성 (jq 사용)
+        local review_body=""
+        review_body=$(jq -n \
+            --arg jid "$job_id" \
+            --arg proj "$project" \
+            --arg diff "$git_diff" \
+            --arg inst "$instruction" \
+            --arg files "$changed_files" \
+            '{job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}')
+
+        review_response=$(curl -4 -sf -X POST "${AADS_API_URL}/api/v1/review/code-diff" \
+            -H "Content-Type: application/json" \
+            -d "$review_body" \
+            --max-time 30 2>/dev/null) || true
+
+        if [[ -n "$review_response" ]]; then
+            review_verdict=$(echo "$review_response" | jq -r '.verdict // "APPROVE"')
+            review_score=$(echo "$review_response" | jq -r '.score // "1.0"')
+            log "  AI_REVIEW_RESULT job=$job_id verdict=$review_verdict score=$review_score"
+
+            if [[ "$review_verdict" == "REQUEST_CHANGES" ]]; then
+                local review_issues=""
+                review_issues=$(echo "$review_response" | jq -r '.issues | join("; ")' 2>/dev/null || echo "")
+                log "  AI_REVIEW_REQUEST_CHANGES job=$job_id issues=$review_issues"
+                post_to_chat "$session_id" "🔍 [AI Reviewer] 코드 수정 요청 (score=${review_score}): ${review_issues:0:500}"
+                # REQUEST_CHANGES는 CEO에게 알리되 경고 표시
+            fi
+        else
+            log "  AI_REVIEW_SKIP job=$job_id (API 응답 없음)"
+        fi
+    fi
 
     db_update "UPDATE pipeline_jobs SET phase='awaiting_approval',
                status='awaiting_approval',
@@ -232,7 +287,16 @@ run_job() {
                updated_at=NOW() WHERE job_id='${job_id}';"
 
     local diff_summary="${git_diff:0:3000}"
-    post_to_chat "$session_id" "🔔 [Pipeline Runner] 작업 완료 — AI 검수 중
+    local review_badge=""
+    if [[ "$review_verdict" == "APPROVE" ]]; then
+        review_badge="✅ AI 리뷰 통과 (score=${review_score})"
+    elif [[ "$review_verdict" == "REQUEST_CHANGES" ]]; then
+        review_badge="⚠️ AI 리뷰 수정 권고 (score=${review_score})"
+    elif [[ "$review_verdict" == "FLAG" ]]; then
+        review_badge="🔴 AI 리뷰 경고 (score=${review_score})"
+    fi
+
+    post_to_chat "$session_id" "🔔 [Pipeline Runner] 작업 완료 — ${review_badge}
 
 **작업**: ${instruction:0:200}
 **변경사항**:
@@ -276,19 +340,38 @@ deploy_job() {
 
     cd "$workdir"
 
-    # git push (commit은 run_job에서 이미 완료)
+    # v2.1: 승인 후 커밋 → 푸시
+    git add -A 2>/dev/null || true
+    git commit -m "Pipeline-Runner: ${job_id}" 2>/dev/null || log "  WARN: git commit skipped (no changes or hook failure)"
     git push 2>/dev/null || true
 
     # 서비스 재시작 (프로젝트별)
     case "$project" in
         AADS)
             docker exec aads-server supervisorctl restart aads-api 2>/dev/null || true
-            # Dashboard 리빌드 (승인 후에만 실행)
-            if grep -q "aads-dashboard" /root/aads/docker-compose.prod.yml 2>/dev/null; then
-                log "  REBUILD aads-dashboard"
-                cd /root/aads
-                docker compose -f docker-compose.prod.yml up -d --build aads-dashboard 2>/dev/null || true
-                cd "$workdir"
+            # Dashboard 리빌드: 별도 git repo (/root/aads/aads-dashboard/)
+            # aads-dashboard에 uncommitted 변경이 있으면 먼저 커밋
+            if [ -n "$(git -C /root/aads/aads-dashboard status --porcelain 2>/dev/null)" ]; then
+                log "  COMMIT aads-dashboard changes"
+                git -C /root/aads/aads-dashboard add -A 2>/dev/null || true
+                git -C /root/aads/aads-dashboard commit -m "Pipeline-Runner: ${job_id} (dashboard)" 2>/dev/null || true
+                git -C /root/aads/aads-dashboard push 2>/dev/null || true
+                DASHBOARD_CHANGED=true
+            else
+                DASHBOARD_CHANGED=false
+            fi
+
+            # 대시보드 변경 감지: uncommitted 변경이 있었거나, 최근 10분 내 커밋이 있으면 리빌드
+            DASHBOARD_LAST_COMMIT=$(git -C /root/aads/aads-dashboard log -1 --format=%ct 2>/dev/null || echo 0)
+            CURRENT_TIME=$(date +%s)
+            DIFF_SECONDS=$((CURRENT_TIME - DASHBOARD_LAST_COMMIT))
+            if [ "$DASHBOARD_CHANGED" = true ] || [ "$DIFF_SECONDS" -lt 600 ]; then
+                log "  REBUILD aads-dashboard (recent commit detected: ${DIFF_SECONDS}s ago)"
+                cd /root/aads/aads-dashboard
+                docker compose -f /root/aads/aads-dashboard/docker-compose.yml up -d --build aads-dashboard 2>/dev/null || true
+                log "  aads-dashboard rebuild complete"
+            else
+                log "  SKIP aads-dashboard rebuild (no recent dashboard commits, last: ${DIFF_SECONDS}s ago)"
             fi
             ;;
         KIS)
@@ -321,7 +404,7 @@ deploy_job() {
     fi
 
     db_update "UPDATE pipeline_jobs SET status='done', phase='done',
-               review_feedback=COALESCE(review_feedback,'') || E'\n[배포완료] health=${health_ok} by=${RUNNER_HOSTNAME}',
+               review_feedback=COALESCE(review_feedback,'') || E'\n[v2.1][배포완료] health=${health_ok} by=${RUNNER_HOSTNAME}',
                updated_at=NOW() WHERE job_id='${job_id}';"
     post_to_chat "$session_id" "✅ [Pipeline Runner] 배포 완료 (health=${health_ok})"
     log "  DEPLOYED job=$job_id health=$health_ok"
@@ -331,22 +414,21 @@ deploy_job() {
 }
 
 # ── 거부된 작업 원복 ──────────────────────────────────────────────────
-revert_job() {
+reject_job() {
     local job_id="$1" project="$2" session_id="$3"
     local workdir="${PROJECT_WORKDIR[$project]:-}"
     [[ -z "$workdir" || ! -d "$workdir" ]] && return 1
 
-    log "▶ REVERT job=$job_id project=$project"
+    log "▶ REJECT job=$job_id project=$project"
     cd "$workdir"
 
-    # 커밋 취소 + 변경사항 완전 제거
-    git reset HEAD~1 --mixed 2>/dev/null || true
-    git checkout . 2>/dev/null || true
+    # v2.1: uncommitted 변경사항 제거 (커밋 전이므로 reset 불필요)
+    git checkout -- . 2>/dev/null || true
     git clean -fd 2>/dev/null || true
 
-    db_update "UPDATE pipeline_jobs SET phase='reverted', updated_at=NOW() WHERE job_id='${job_id}';"
+    db_update "UPDATE pipeline_jobs SET status='rejected_done', phase='rejected_done', updated_at=NOW() WHERE job_id='${job_id}';"
     post_to_chat "$session_id" "↩️ [Pipeline Runner] 거부된 작업 코드 원복 완료: $job_id"
-    log "  REVERTED job=$job_id"
+    log "  REJECTED job=$job_id"
 }
 
 # C3: 크래시 복구 — 시작 시 stuck 작업 정리
@@ -387,7 +469,7 @@ _cleanup_old_artifacts() {
 # ── 메인 루프 ─────────────────────────────────────────────────────────
 main() {
     _init_db_mode
-    log "═══ Pipeline Runner v2 시작 (poll=${POLL_INTERVAL}s, max_runtime=${MAX_RUNTIME}s, retries=${MAX_RETRIES}) ═══"
+    log "═══ Pipeline Runner v2.1 시작 (승인→커밋→푸시→빌드→배포) poll=${POLL_INTERVAL}s, max_runtime=${MAX_RUNTIME}s, retries=${MAX_RETRIES} ═══"
 
     # 프로젝트 필터 구성
     local project_filter=""
@@ -453,7 +535,7 @@ main() {
         if [[ -n "$rejected" ]]; then
             IFS=$'\x1e' read -r job_id project session_id <<< "$rejected"
             if [[ -n "$job_id" && -n "$project" ]]; then
-                revert_job "$job_id" "$project" "$session_id" || true
+                reject_job "$job_id" "$project" "$session_id" || true
             fi
         fi
 
@@ -471,7 +553,7 @@ main() {
 # ── 시그널 핸들링 ────────────────────────────────────────────────────
 _current_job_id=""
 cleanup() {
-    log "═══ Pipeline Runner v2 종료 ═══"
+    log "═══ Pipeline Runner v2.1 종료 ═══"
     # 현재 실행 중인 작업이 있으면 error로 마킹
     if [[ -n "$_current_job_id" ]]; then
         db_update "UPDATE pipeline_jobs SET status='error', phase='error',

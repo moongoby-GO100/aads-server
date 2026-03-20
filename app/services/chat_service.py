@@ -283,6 +283,28 @@ async def with_background_completion(
         old_task.cancel()
         logger.info(f"bg_task_replaced session={session_id}")
 
+    # BUG-SESSION-MIX FIX: 새 producer 시작 전 잔류 streaming_placeholder 즉시 삭제
+    # — old producer의 finally 정리보다 new producer 시작이 빠르면 이전 응답이 잔류
+    try:
+        _pool = get_pool()
+        async with _pool.acquire() as _conn:
+            _del_count = await _conn.fetchval(
+                "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder'",
+                uuid.UUID(session_id),
+            )
+            if _del_count and _del_count > 0:
+                await _conn.execute(
+                    "DELETE FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder'",
+                    uuid.UUID(session_id),
+                )
+                await _conn.execute(
+                    "UPDATE chat_sessions SET message_count = GREATEST(message_count - $1, 0), updated_at = NOW() WHERE id = $2",
+                    _del_count, uuid.UUID(session_id),
+                )
+                logger.info(f"stale_placeholder_cleaned session={session_id[:8]} count={_del_count}")
+    except Exception as _clean_err:
+        logger.warning(f"stale_placeholder_clean_failed session={session_id[:8]}: {_clean_err}")
+
     task = _heartbeat_asyncio.create_task(_producer())
     _active_bg_tasks[session_id] = task
 
@@ -830,6 +852,19 @@ async def delete_workspace(workspace_id: str) -> bool:
 
 
 # ─── Session CRUD ─────────────────────────────────────────────────────────────
+
+async def get_session(session_id: str) -> Optional[Dict[str, Any]]:
+    """단일 세션 조회 (ID 기반)."""
+    conn = await _get_conn()
+    try:
+        row = await conn.fetchrow(
+            "SELECT * FROM chat_sessions WHERE id = $1",
+            uuid.UUID(session_id),
+        )
+        return _row_to_dict(row) if row else None
+    finally:
+        await get_pool().release(conn)
+
 
 async def list_sessions(workspace_id: str, limit: int = 50) -> List[Dict[str, Any]]:
     conn = await _get_conn()
@@ -1992,30 +2027,41 @@ async def send_message_stream(
         # 7. Gemini Direct (Grounding / Deep Research)
         if intent_result.use_gemini_direct:
             if intent_result.gemini_mode == "grounding":
+                import asyncio as _search_asyncio
                 from app.services.gemini_search_service import GeminiSearchService
+                from app.services.naver_search_service import NaverSearchService
+
                 svc = GeminiSearchService()
-                result = None
-                try:
-                    result = await svc.search_grounded(content)
-                except Exception as e:
-                    logger.warning(f"gemini_grounding_failed: {e}")
-                if result is None:
-                    # Fallback: Naver (타입별 or 통합) → Kakao → Brave
-                    from app.services.naver_search_service import NaverSearchService
-                    naver = NaverSearchService()
-                    if naver.is_available():
-                        try:
-                            naver_type = getattr(intent_result, "naver_type", "")
-                            if naver_type:
-                                # 특화 검색 (뉴스/블로그/쇼핑/지역/책/이미지/백과/지식iN)
-                                result = await naver.search(content, search_type=naver_type, count=5)
-                            else:
-                                # 일반 검색: 웹+블로그+뉴스+지식iN 통합
-                                result = await naver.multi_search(content, count=3)
-                            if result.error:
-                                result = None
-                        except Exception as e:
-                            logger.warning(f"naver_search_failed: {e}")
+
+                async def _try_gemini():
+                    try:
+                        return await svc.search_grounded(content)
+                    except Exception as e:
+                        logger.warning(f"gemini_grounding_failed: {e}")
+                        return None
+
+                async def _try_naver():
+                    try:
+                        naver = NaverSearchService()
+                        if not naver.is_available():
+                            return None
+                        naver_type = getattr(intent_result, "naver_type", "")
+                        if naver_type:
+                            r = await naver.search(content, search_type=naver_type, count=5)
+                        else:
+                            r = await naver.multi_search(content, count=3)
+                        return None if r.error else r
+                    except Exception as e:
+                        logger.warning(f"naver_search_failed: {e}")
+                        return None
+
+                # Gemini + Naver 병렬 실행
+                gemini_result, naver_result = await _search_asyncio.gather(
+                    _try_gemini(), _try_naver()
+                )
+                result = gemini_result or naver_result  # Gemini 우선
+
+                # 둘 다 실패 시 Kakao → Brave 순차 폴백
                 if result is None:
                     from app.services.kakao_search_service import KakaoSearchService
                     kakao = KakaoSearchService()

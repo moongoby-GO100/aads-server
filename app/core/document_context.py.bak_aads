@@ -83,30 +83,6 @@ def extract_file_contents(
             "error": None,
         }
 
-        # ── file_id 기반 첨부파일 (디스크에 저장된 파일 — chat_service.py에서 별도 Vision 처리)
-        if att.get("file_id"):
-            _fname = att.get("name", "file")
-            _fext = os.path.splitext(_fname)[1].lower() if _fname else ""
-            entry["name"] = _fname
-            entry["ext"] = _fext
-            _mime = att.get("media_type", att.get("mime_type", ""))
-            if _mime.startswith("image/") or att.get("type") == "image" or _fext in IMAGE_EXTENSIONS:
-                entry["is_image"] = True
-                entry["readable"] = True
-                entry["media_type"] = _mime or IMAGE_MEDIA_TYPES.get(_fext, "image/jpeg")
-                entry["tokens"] = 200  # Vision 처리는 chat_service.py에서 별도 수행
-            elif _mime.startswith("video/") or att.get("type") == "video":
-                entry["is_video"] = True
-                entry["readable"] = True
-                entry["media_type"] = _mime or "video/mp4"
-                entry["tokens"] = 500
-            else:
-                entry["readable"] = True
-                entry["content"] = f"[첨부파일: {_fname} ({_fext})] — file_id 기반 파일"
-                entry["tokens"] = 10
-            results.append(entry)
-            continue
-
         # ── 인라인 video base64 (브라우저에서 직접 전달 — Gemini Video API로 분석)
         if att.get("type") == "video" and att.get("base64"):
             entry["base64_data"] = att["base64"]

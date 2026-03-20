@@ -82,6 +82,15 @@ async def get_sessions(workspace_id: UUID = Query(...)):
     return await svc.list_sessions(str(workspace_id))
 
 
+@router.get("/chat/sessions/{session_id}", response_model=SessionOut, tags=["chat-session"])
+async def get_session(session_id: UUID):
+    """단일 세션 조회 (해시 기반 세션 복원용)."""
+    result = await svc.get_session(str(session_id))
+    if not result:
+        raise _NOT_FOUND("session")
+    return result
+
+
 @router.post("/chat/sessions", response_model=SessionOut, status_code=201, tags=["chat-session"])
 async def create_session(req: SessionCreate):
     """세션 생성."""

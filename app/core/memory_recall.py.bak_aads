@@ -42,9 +42,9 @@ _CONFIDENCE = {
     "decision": float(os.getenv("CONFIDENCE_CEO_PREF", "0.2")),
     "tool_strategy": float(os.getenv("CONFIDENCE_TOOL_STRATEGY", "0.3")),
     "project_pattern": float(os.getenv("CONFIDENCE_TOOL_STRATEGY", "0.3")),
-    "discovery": float(os.getenv("CONFIDENCE_DISCOVERY", "0.40")),  # P5: 0.55→0.40 (실평균 0.41 반영, 대부분 필터링 문제 해결)
-    "learning": float(os.getenv("CONFIDENCE_DISCOVERY", "0.40")),
-    "recurring_issue": float(os.getenv("CONFIDENCE_DISCOVERY", "0.40")),
+    "discovery": float(os.getenv("CONFIDENCE_DISCOVERY", "0.55")),  # P4: 0.4→0.55 (불확실 발견 필터)
+    "learning": float(os.getenv("CONFIDENCE_DISCOVERY", "0.55")),
+    "recurring_issue": float(os.getenv("CONFIDENCE_DISCOVERY", "0.55")),
 }
 
 # #25: observation key 허용 패턴 (영문/한글/숫자/밑줄/하이픈/공백/점 — 줄바꿈 제외)

@@ -46,11 +46,11 @@ INTENT_MAP: dict[str, dict] = {
     "video_analyze":    {"model": "gemini-3-flash-preview",       "tools": False, "group": ""},
     "cto_strategy":     {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
     # ─── 도구 사용 인텐트 — 전부 group="all", 기본 Opus ───────────────────────
-    "system_status":    {"model": "claude-opus",                 "tools": True,  "group": "all"},
-    "health_check":     {"model": "claude-opus",                 "tools": True,  "group": "all"},
-    "dashboard":        {"model": "claude-opus",                 "tools": True,  "group": "all"},
+    "system_status":    {"model": "claude-sonnet",                "tools": True,  "group": "all"},
+    "health_check":     {"model": "claude-sonnet",                "tools": True,  "group": "all"},
+    "dashboard":        {"model": "claude-sonnet",                "tools": True,  "group": "all"},
     "diagnosis":        {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
-    "task_history":     {"model": "claude-opus",                 "tools": True,  "group": "all"},
+    "task_history":     {"model": "claude-sonnet",                "tools": True,  "group": "all"},
     "search":           {"model": "gemini-3-flash-preview",       "tools": True,  "group": "all",     "gemini_direct": "grounding"},
     "url_analyze":      {"model": "claude-opus",                 "tools": True,  "group": "all"},
     "code_task":        {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
@@ -59,11 +59,11 @@ INTENT_MAP: dict[str, dict] = {
     "complex_analysis": {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
     "architect":        {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
     "code_exec":        {"model": "claude-opus",                 "tools": True,  "group": "all"},
-    "memory_recall":    {"model": "claude-opus",                 "tools": True,  "group": "all"},
+    "memory_recall":    {"model": "claude-sonnet",                "tools": True,  "group": "all"},
     "qa":               {"model": "claude-opus",                 "tools": True,  "group": "all"},
     "execution_verify": {"model": "claude-opus",                 "tools": True,  "group": "all"},
     "workspace_switch": {"model": "claude-opus",                 "tools": True,  "group": "all"},
-    "cost_report":      {"model": "claude-opus",                 "tools": True,  "group": "all"},
+    "cost_report":      {"model": "claude-sonnet",                "tools": True,  "group": "all"},
     "browser":          {"model": "claude-opus",                 "tools": True,  "group": "all"},
     "server_file":      {"model": "claude-opus",                 "tools": True,  "group": "all"},
     # ─── CTO 모드 인텐트 ─────────────────────────────────────────────────────
@@ -78,15 +78,15 @@ INTENT_MAP: dict[str, dict] = {
     # Pipeline C: Claude Code 자율 작업 파이프라인
     "pipeline_c":         {"model": "claude-opus",               "tools": True,  "group": "all"},
     # 자동 반응 (파이프라인 완료 후)
-    "auto_reaction":      {"model": "claude-opus",               "tools": True,  "group": "all"},
+    "auto_reaction":      {"model": "claude-sonnet",              "tools": True,  "group": "all"},
     # 첨부파일 읽기
-    "file_read":          {"model": "claude-opus",               "tools": True,  "group": "all"},
+    "file_read":          {"model": "claude-sonnet",              "tools": True,  "group": "all"},
     # AADS-188C Phase 2: 메타 도구 인텐트
-    "task_query":         {"model": "claude-opus",               "tools": True,  "group": "all"},
-    "status_check":       {"model": "claude-opus",               "tools": True,  "group": "all"},
+    "task_query":         {"model": "claude-sonnet",              "tools": True,  "group": "all"},
+    "status_check":       {"model": "claude-sonnet",              "tools": True,  "group": "all"},
     # AADS-186A 신규 인텐트
     "service_inspection": {"model": "claude-opus",               "tools": True,  "group": "all"},
-    "all_service_status": {"model": "claude-opus",               "tools": True,  "group": "all"},
+    "all_service_status": {"model": "claude-sonnet",              "tools": True,  "group": "all"},
     # AADS-186E-1 크롤링 인텐트
     "url_read":           {"model": "claude-opus",               "tools": True,  "group": "all"},
     "deep_crawl":         {"model": "claude-opus",               "tools": True,  "group": "all"},

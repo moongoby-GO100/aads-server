@@ -422,7 +422,7 @@ async def _call_anthropic_with_tools(
             tool_results = []
             for block in tool_use_blocks:
                 logger.info(f"ceo_chat_tool_call tool={block.name} params={block.input}")
-                result = await execute_tool(block.name, block.input, dsn, chat_session_id)
+                result = await execute_tool(block.name, block.input, dsn)
                 tool_results.append(
                     {
                         "type": "tool_result",
@@ -1332,7 +1332,7 @@ async def _handle_design_intent(
 
     tool_model = model if model.startswith("claude") else "claude-sonnet-4-6"
     response_text, input_tokens, output_tokens = await _call_anthropic_with_tools(
-        tool_model, design_prompt, messages, dsn, chat_session_id=session_id
+        tool_model, design_prompt, messages, dsn
     )
 
     duration_ms = int((time.time() - start) * 1000)
@@ -1381,7 +1381,7 @@ async def _handle_design_fix_intent(
 
     tool_model = model if model.startswith("claude") else "claude-sonnet-4-6"
     analysis_text, in_tok, out_tok = await _call_anthropic_with_tools(
-        tool_model, analysis_prompt, messages, dsn, chat_session_id=session_id
+        tool_model, analysis_prompt, messages, dsn
     )
 
     # Step 2: Developer Agent로 수정 시도
@@ -1642,13 +1642,13 @@ async def send_ceo_message(req: CeoChatRequest):
             enriched_prompt = _inject_dashboard(system_prompt, dashboard_data)
             tool_model = model if model.startswith("claude") else "claude-sonnet-4-6"
             response_text, input_tokens, output_tokens = await _call_anthropic_with_tools(
-                tool_model, enriched_prompt, messages, dsn, chat_session_id=session_id
+                tool_model, enriched_prompt, messages, dsn
             )
         elif intent == "browser":
             # 브라우저 자동화 tool-use (AADS-159)
             tool_model = model if model.startswith("claude") else "claude-sonnet-4-6"
             response_text, input_tokens, output_tokens = await _call_anthropic_with_tools(
-                tool_model, system_prompt, messages, dsn, chat_session_id=session_id
+                tool_model, system_prompt, messages, dsn
             )
         elif intent == "pipeline_c":
             # Pipeline C: 자율 작업 파이프라인 (tool-use 활성화)
@@ -1664,13 +1664,13 @@ async def send_ceo_message(req: CeoChatRequest):
             )
             tool_model = model if model.startswith("claude") else "claude-sonnet-4-6"
             response_text, input_tokens, output_tokens = await _call_anthropic_with_tools(
-                tool_model, pipeline_prompt, messages, dsn, max_iterations=8, chat_session_id=session_id
+                tool_model, pipeline_prompt, messages, dsn, max_iterations=8
             )
         elif intent in ("diagnosis", "research"):
             # tool-use 활성화 (Anthropic 전용)
             tool_model = model if model.startswith("claude") else "claude-sonnet-4-6"
             response_text, input_tokens, output_tokens = await _call_anthropic_with_tools(
-                tool_model, system_prompt, messages, dsn, chat_session_id=session_id
+                tool_model, system_prompt, messages, dsn
             )
         elif intent == "execute":
             # 지시서 자동 생성 + submit

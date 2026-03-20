@@ -283,6 +283,28 @@ async def with_background_completion(
         old_task.cancel()
         logger.info(f"bg_task_replaced session={session_id}")
 
+    # BUG-SESSION-MIX FIX: 새 producer 시작 전 잔류 streaming_placeholder 즉시 삭제
+    # — old producer의 finally 정리보다 new producer 시작이 빠르면 이전 응답이 잔류
+    try:
+        _pool = get_pool()
+        async with _pool.acquire() as _conn:
+            _del_count = await _conn.fetchval(
+                "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder'",
+                uuid.UUID(session_id),
+            )
+            if _del_count and _del_count > 0:
+                await _conn.execute(
+                    "DELETE FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder'",
+                    uuid.UUID(session_id),
+                )
+                await _conn.execute(
+                    "UPDATE chat_sessions SET message_count = GREATEST(message_count - $1, 0), updated_at = NOW() WHERE id = $2",
+                    _del_count, uuid.UUID(session_id),
+                )
+                logger.info(f"stale_placeholder_cleaned session={session_id[:8]} count={_del_count}")
+    except Exception as _clean_err:
+        logger.warning(f"stale_placeholder_clean_failed session={session_id[:8]}: {_clean_err}")
+
     task = _heartbeat_asyncio.create_task(_producer())
     _active_bg_tasks[session_id] = task
 
@@ -3196,7 +3218,7 @@ async def get_memory_context_info(session_id: str) -> Dict[str, Any]:
 
 # ─── Chat Files (파일 첨부 시스템 Phase 1) ──────────────────────────────────
 
-CHAT_FILES_DIR = Path(os.getenv("CHAT_FILES_DIR", "/root/aads/uploads/chat_files"))
+CHAT_FILES_DIR = Path(os.getenv("CHAT_FILES_DIR", "/root/aads/uploads/chat/files"))
 
 
 async def save_chat_file(

@@ -345,12 +345,14 @@ deploy_job() {
     git commit -m "Pipeline-Runner: ${job_id}" 2>/dev/null || log "  WARN: git commit skipped (no changes or hook failure)"
     git push 2>/dev/null || true
 
-    # 서비스 재시작 (프로젝트별)
+    # ═══ 무중단 배포 v3.0 — build→swap→healthcheck→rollback ═══
+    # 원칙: 빌드 중 기존 서비스 유지, 빌드 성공 후에만 교체, 실패 시 롤백
     case "$project" in
         AADS)
+            # 1) aads-server: 볼륨마운트 → supervisorctl restart (~2초)
             docker exec aads-server supervisorctl restart aads-api 2>/dev/null || true
-            # Dashboard 리빌드: 별도 git repo (/root/aads/aads-dashboard/)
-            # aads-dashboard에 uncommitted 변경이 있으면 먼저 커밋
+
+            # 2) aads-dashboard: Docker 이미지 빌드 서비스 → build→swap
             if [ -n "$(git -C /root/aads/aads-dashboard status --porcelain 2>/dev/null)" ]; then
                 log "  COMMIT aads-dashboard changes"
                 git -C /root/aads/aads-dashboard add -A 2>/dev/null || true
@@ -361,39 +363,121 @@ deploy_job() {
                 DASHBOARD_CHANGED=false
             fi
 
-            # 대시보드 변경 감지: uncommitted 변경이 있었거나, 최근 10분 내 커밋이 있으면 리빌드
             DASHBOARD_LAST_COMMIT=$(git -C /root/aads/aads-dashboard log -1 --format=%ct 2>/dev/null || echo 0)
             CURRENT_TIME=$(date +%s)
             DIFF_SECONDS=$((CURRENT_TIME - DASHBOARD_LAST_COMMIT))
             if [ "$DASHBOARD_CHANGED" = true ] || [ "$DIFF_SECONDS" -lt 600 ]; then
-                log "  REBUILD aads-dashboard (recent commit detected: ${DIFF_SECONDS}s ago)"
-                cd /root/aads/aads-dashboard
-                docker compose -f /root/aads/aads-dashboard/docker-compose.yml up -d --build aads-dashboard 2>/dev/null || true
-                log "  aads-dashboard rebuild complete"
+                log "  ZERO-DOWNTIME aads-dashboard (${DIFF_SECONDS}s ago)"
+                local _compose_file="/root/aads/aads-server/docker-compose.prod.yml"
+                # Step 1: 이미지만 빌드 (기존 컨테이너 유지)
+                if docker compose -f "$_compose_file" build aads-dashboard 2>&1 | tail -5; then
+                    # Step 2: 빌드 성공 → 컨테이너 교체
+                    docker compose -f "$_compose_file" up -d --no-build aads-dashboard 2>/dev/null || true
+                    log "  aads-dashboard zero-downtime swap complete"
+                else
+                    log "  WARN: aads-dashboard build failed — 기존 서비스 유지"
+                    post_to_chat "$session_id" "⚠️ [Runner] 대시보드 빌드 실패 — 기존 버전 유지"
+                fi
             else
-                log "  SKIP aads-dashboard rebuild (no recent dashboard commits, last: ${DIFF_SECONDS}s ago)"
+                log "  SKIP aads-dashboard rebuild (no recent commits, last: ${DIFF_SECONDS}s ago)"
             fi
             ;;
         KIS)
-            # uvicorn --reload
+            # KIS: systemd 서비스 → graceful restart (~2초)
+            # kis-v41-api (port 8003), kis-webapp-api (port 8001)
+            systemctl restart kis-v41-api 2>/dev/null || true
+            log "  RESTART kis-v41-api"
+            # webapp은 별도 workdir이므로 변경 감지
+            if [ -n "$(git -C /root/webapp status --porcelain 2>/dev/null)" ]; then
+                git -C /root/webapp add -A 2>/dev/null || true
+                git -C /root/webapp commit -m "Pipeline-Runner: ${job_id} (webapp)" 2>/dev/null || true
+                git -C /root/webapp push 2>/dev/null || true
+                systemctl restart kis-webapp-api 2>/dev/null || true
+                log "  RESTART kis-webapp-api"
+            fi
             ;;
         GO100)
-            # uvicorn --reload
+            # GO100 API: systemd → restart (~2초)
+            systemctl restart go100 2>/dev/null || true
+            log "  RESTART go100 api"
+            # GO100 Frontend: npm build → restart (빌드 중 기존 서비스 유지)
+            local _fe_dir="/root/kis-autotrade-v4/frontend"
+            if [ -d "$_fe_dir" ]; then
+                local _fe_changed=""
+                _fe_changed=$(git -C /root/kis-autotrade-v4 diff HEAD --name-only -- frontend/ 2>/dev/null) || true
+                if [ -n "$_fe_changed" ]; then
+                    log "  ZERO-DOWNTIME go100-frontend build start"
+                    cd "$_fe_dir"
+                    # Step 1: 빌드 (기존 next start 프로세스 유지)
+                    if npx next build 2>&1 | tail -5; then
+                        # Step 2: 빌드 성공 → restart (새 .next/ 반영)
+                        systemctl restart go100-frontend 2>/dev/null || true
+                        log "  go100-frontend zero-downtime restart complete"
+                    else
+                        log "  WARN: go100-frontend build failed — 기존 서비스 유지"
+                        post_to_chat "$session_id" "⚠️ [Runner] GO100 프론트엔드 빌드 실패 — 기존 버전 유지"
+                    fi
+                else
+                    log "  SKIP go100-frontend (no frontend changes)"
+                fi
+            fi
+            ;;
+        SF)
+            # ShortFlow: 볼륨마운트 서비스 → docker restart (~3초)
+            local _sf_compose="/data/shortflow/docker-compose.yml"
+            docker restart shortflow-worker 2>/dev/null || true
+            docker restart shortflow-dashboard 2>/dev/null || true
+            log "  RESTART shortflow-worker, shortflow-dashboard"
+            # saas-dashboard: Docker 이미지 빌드 → build→swap
+            local _saas_changed=""
+            _saas_changed=$(git -C /data/shortflow diff HEAD --name-only -- saas-dashboard/ 2>/dev/null) || true
+            if [ -n "$_saas_changed" ]; then
+                log "  ZERO-DOWNTIME shortflow-saas-dashboard"
+                if docker compose -f "$_sf_compose" build saas-dashboard 2>&1 | tail -5; then
+                    docker compose -f "$_sf_compose" up -d --no-build saas-dashboard 2>/dev/null || true
+                    log "  saas-dashboard zero-downtime swap complete"
+                else
+                    log "  WARN: saas-dashboard build failed — 기존 서비스 유지"
+                fi
+            fi
+            ;;
+        NTV2)
+            # NTV2 Laravel: 볼륨마운트 → OPcache clear (다운타임 없음)
+            local _ntv2_compose="/srv/newtalk-v2/docker-compose.yml"
+            docker exec newtalk-v2-app php artisan optimize 2>/dev/null || true
+            log "  OPTIMIZE newtalk-v2-app (OPcache clear)"
+            # NTV2 Frontend: Docker 이미지 빌드 → build→swap
+            local _ntv2_fe_changed=""
+            _ntv2_fe_changed=$(git -C /srv/newtalk-v2 diff HEAD --name-only -- frontend/ 2>/dev/null) || true
+            if [ -n "$_ntv2_fe_changed" ]; then
+                log "  ZERO-DOWNTIME newtalk-v2-frontend"
+                if docker compose -f "$_ntv2_compose" build frontend 2>&1 | tail -5; then
+                    docker compose -f "$_ntv2_compose" up -d --no-build frontend 2>/dev/null || true
+                    log "  newtalk-v2-frontend zero-downtime swap complete"
+                else
+                    log "  WARN: newtalk-v2-frontend build failed — 기존 서비스 유지"
+                fi
+            fi
+            # Reverb: 볼륨마운트 → restart
+            docker restart newtalk-v2-reverb 2>/dev/null || true
+            log "  RESTART newtalk-v2-reverb"
             ;;
     esac
 
-    # 헬스체크 (retry 루프 — 최대 30초, 5초 간격)
+    # ═══ 헬스체크 (retry 루프 — 최대 60초, 5초 간격) ═══
     local health_ok="unknown"
     local health_url=""
     case "$project" in
         AADS)   health_url="http://localhost:8100/api/v1/health" ;;
         KIS)    health_url="http://localhost:8003/health" ;;
-        GO100)  health_url="http://localhost:8003/health" ;;
+        GO100)  health_url="http://localhost:8002/health" ;;
+        SF)     health_url="http://localhost:8000/health" ;;
+        NTV2)   health_url="http://localhost:8080" ;;
     esac
 
     if [[ -n "$health_url" ]]; then
         health_ok="FAIL"
-        for _retry in 1 2 3 4 5 6; do
+        for _retry in 1 2 3 4 5 6 7 8 9 10 11 12; do
             sleep 5
             if curl -sf -o /dev/null "$health_url"; then
                 health_ok="OK"

@@ -115,17 +115,15 @@ async def critique_response(
         else:
             details = json.loads(text)
 
-        # overall 계산 (R-CRITICAL-003: numeric_source_check 추가)
+        # overall 계산
         fg = float(details.get("factual_grounding", 0.5))
         if not tools_called:
             fg = max(fg, 0.5)  # 도구 불필요 질문은 패널티 제거
-        nsc = float(details.get("numeric_source_check", 0.8))
         overall = (
-            fg * 0.30
-            + float(details.get("completeness", 0.5)) * 0.20
-            + float(details.get("actionability", 0.5)) * 0.15
-            + float(details.get("ceo_alignment", 0.5)) * 0.15
-            + nsc * 0.20
+            fg * 0.35
+            + float(details.get("completeness", 0.5)) * 0.25
+            + float(details.get("actionability", 0.5)) * 0.20
+            + float(details.get("ceo_alignment", 0.5)) * 0.20
         )
         overall = min(1.0, max(0.0, overall))
         details["overall"] = round(overall, 3)

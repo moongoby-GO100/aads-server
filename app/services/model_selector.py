@@ -184,22 +184,32 @@ async def call_stream(
         if not _had_error:
             return
 
-        # 2단계: Agent SDK (컨테이너 번들 CLI)
+        # 2단계: LiteLLM Anthropic 직접 (10회 재시도 + 듀얼키 자동전환)
         _had_error = False
-        if _CLAUDE_CLI_ENABLED:
-            async for event in _stream_agent_sdk(model, system_prompt, messages, tools=tools, session_id=session_id):
-                if event.get("type") == "error":
-                    _had_error = True
-                    logger.warning(f"agent_sdk_error: {model} failed, trying Gemini — {event.get('content', '')[:100]}")
-                    break
-                yield event
-            if not _had_error:
-                return
-        else:
-            _had_error = True  # CLI 비활성화 시 바로 Gemini로
+        logger.info(f"cli_relay_failed: trying LiteLLM Anthropic direct for {model}")
+        async for event in _stream_litellm_anthropic(model, system_prompt, messages, tools=tools, session_id=session_id):
+            if event.get("type") == "error":
+                _had_error = True
+                logger.warning(f"litellm_anthropic_error: {model} failed, trying Gemini — {event.get('content', '')[:100]}")
+                break
+            yield event
+        if not _had_error:
+            return
 
-        # 3단계: Gemini (최종 안전망)
+        # 3단계: Gemini (최종 안전망) — error_log 기록
         yield {"type": "delta", "content": "[Claude 장애 → Gemini 전환]\n\n"}
+        try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO error_log (error_type, source, server, message, stack_trace, created_at) VALUES ($1, $2, $3, $4, $5, NOW())",
+                    "claude_api_fallback", "model_selector.cli_relay_path", "aads-server",
+                    f"Claude {model} → Gemini 전환 (CLI Relay + LiteLLM Anthropic 모두 실패)",
+                    "",
+                )
+        except Exception as _log_err:
+            logger.warning(f"error_log insert failed: {_log_err}")
         async for event in _stream_litellm("gemini-3.1-flash-lite-preview", system_prompt, messages, tools=tools):
             yield event
         return
@@ -445,7 +455,7 @@ async def _stream_litellm_anthropic(
                 for tu in _tool_uses:
                     yield {"type": "tool_use", "tool_name": tu["name"], "tool_use_id": tu["id"], "tool_input": tu["input"]}
                     try:
-                        result = await _exec_tool(tu["name"], tu["input"], "", "")
+                        result = await _exec_tool(tu["name"], tu["input"], "", session_id or "")
                         yield {"type": "tool_result", "tool_name": tu["name"], "content": str(result)[:3000]}
                         tool_results.append({
                             "type": "tool_result",
@@ -601,7 +611,7 @@ async def _stream_litellm_openai(
                                 _args = _j.loads(_fn_args) if isinstance(_fn_args, str) else _fn_args
                                 # 실제 도구 실행
                                 from app.api.ceo_chat_tools import execute_tool as _exec_tool
-                                _tool_result = await _exec_tool(_fn_name, _args, "", "")
+                                _tool_result = await _exec_tool(_fn_name, _args, "", session_id or "")
                                 yield {"type": "tool_use", "tool_name": _fn_name, "tool_use_id": _tc.get("id", ""), "tool_input": _args}
                                 yield {"type": "tool_result", "tool_name": _fn_name, "content": str(_tool_result)[:3000]}
                             except Exception as _te:

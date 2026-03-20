@@ -107,15 +107,6 @@ async def run_debate(
     # Phase 2: 종합
     synthesis = await _synthesize(question, perspective_results)
 
-    # R-CRITICAL-003: 토론 결과에 구체적 수치가 포함되면 경고 삽입
-    import re as _re
-    if _re.search(r'\d+[%배점건]|\d+\s*→\s*\d+|\d+\.\d+', synthesis):
-        synthesis += (
-            "\n\n⚠️ **주의**: 위 토론에서 제시된 구체적 수치(%, 배, →)는 "
-            "실측 근거가 아닌 LLM 추정입니다. "
-            "실제 적용 전 백테스트/실측으로 검증이 필요합니다."
-        )
-
     total_cost = sum(p.cost for p in perspective_results) + 0.01  # synthesis cost
     duration_ms = int((time.time() - start) * 1000)
 
