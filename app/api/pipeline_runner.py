@@ -25,7 +25,7 @@ _JOB_ID_RE = re.compile(r'^runner-[0-9a-zA-Z_-]+$')
 class JobSubmitRequest(BaseModel):
     project: str = Field(..., description="프로젝트 코드")
     instruction: str = Field(..., max_length=50000, description="Claude Code에 전달할 지시")
-    session_id: Optional[str] = Field(None, description="채팅 세션 ID (보고용)")
+    session_id: str = Field(..., description="채팅 세션 ID (필수 — 완료 보고 대상)")
     max_cycles: int = Field(3, ge=1, le=10, description="최대 검수 사이클")
 
     @field_validator('project')
@@ -38,8 +38,8 @@ class JobSubmitRequest(BaseModel):
     @field_validator('session_id')
     @classmethod
     def validate_session_id(cls, v):
-        if v and not _UUID_RE.match(v):
-            raise ValueError("session_id는 UUID 형식이어야 합니다")
+        if not v or not _UUID_RE.match(v):
+            raise ValueError("session_id는 필수이며 UUID 형식이어야 합니다")
         return v
 
 
@@ -68,32 +68,7 @@ async def submit_job(req: JobSubmitRequest):
     pool = get_pool()
 
     job_id = f"runner-{uuid.uuid4().hex[:8]}"
-    session_id = req.session_id or ""
-
-    if not session_id:
-        logger.warning(f"pipeline_runner: no session_id provided, using fallback for project={req.project}")
-        try:
-            async with pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    """
-                    SELECT s.id::text FROM chat_sessions s
-                    JOIN chat_workspaces w ON s.workspace_id = w.id
-                    WHERE w.name ILIKE $1
-                    AND EXISTS (
-                        SELECT 1 FROM chat_messages m
-                        WHERE m.session_id = s.id
-                        AND m.role = 'user'
-                        AND m.intent IS NULL
-                        ORDER BY m.created_at DESC LIMIT 1
-                    )
-                    ORDER BY s.updated_at DESC LIMIT 1
-                    """,
-                    f"[{req.project}]%",
-                )
-                if row:
-                    session_id = row["id"]
-        except Exception as e:
-            logger.warning(f"pipeline_runner.session_lookup_fail error={e}")
+    session_id = req.session_id  # 필수 필드 — validator에서 이미 검증됨
 
     try:
         async with pool.acquire() as conn:
