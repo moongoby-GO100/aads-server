@@ -1753,6 +1753,8 @@ class ToolExecutor:
         # 1순위: 도구 호출 시 명시적으로 전달된 session_id
         # 2순위: ContextVar (일반 대화에서는 정확함)
         _session_id = inp.get("session_id", "") or current_chat_session_id.get("")
+        if not _session_id:
+            return {"error": "session_id가 필요합니다. pipeline_runner_submit 호출 시 session_id를 명시하세요."}
         import httpx
         async with httpx.AsyncClient() as client:
             resp = await client.post(
