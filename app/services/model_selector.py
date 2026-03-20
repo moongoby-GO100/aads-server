@@ -166,9 +166,15 @@ async def call_stream(
         "claude-sonnet-4-6": "claude-sonnet", "claude-sonnet-4-5": "claude-sonnet",
         "claude-opus-4-6": "claude-opus", "claude-opus-4-5": "claude-opus",
         "claude-haiku-4-5": "claude-haiku",
+        "mixture": "claude-sonnet",  # 프론트엔드 자동 라우팅 (레거시)
+        "auto": "claude-sonnet",    # 프론트엔드 자동 라우팅 (채팅 UI)
     }
     if model in _OVERRIDE_TO_ALIAS:
         model = _OVERRIDE_TO_ALIAS[model]
+    # 안전망: 알 수 없는 모델명이 CLI relay를 우회하지 않도록 기본값 적용
+    if model not in _GEMINI_MODELS and model not in _ANTHROPIC_MODEL_ID:
+        logger.warning(f"unknown_model_fallback: '{model}' → 'claude-sonnet'")
+        model = "claude-sonnet"
 
     # Claude 모델 → 3단계 폴백: CLI Relay → Agent SDK → Gemini
     if model not in _GEMINI_MODELS and model in _ANTHROPIC_MODEL_ID:
@@ -523,6 +529,7 @@ async def _stream_litellm_openai(
     system_prompt: str,
     messages: List[Dict[str, Any]],
     tools: Optional[List[Dict[str, Any]]] = None,
+    session_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Gemini 등 비-Claude 모델 → LiteLLM /chat/completions (OpenAI 호환 포맷)."""
     # messages에서 기존 system role 제거 후 새 system 프롬프트 추가
@@ -743,15 +750,10 @@ async def _stream_cli_relay(
                             tid = aads_evt.get("tool_use_id", "")
                             aads_evt["tool_name"] = _tool_id_to_name.get(tid, "")
 
-                        # delta 텍스트에서 CLI 에러 패턴 감지 → error로 변환하여 폴백 유도
+                        # delta 텍스트 누적 (에러 패턴 검사는 result.is_error로 대체)
                         if evt_type == "delta":
                             delta_text = aads_evt.get("content", "")
                             full_text += delta_text
-                            delta_lower = delta_text.lower()
-                            if any(p in delta_lower for p in _CLI_ERROR_PATTERNS):
-                                logger.warning(f"cli_relay_delta_error: {delta_text[:100]}")
-                                yield {"type": "error", "content": delta_text}
-                                return
 
                         # done 이벤트에서 session_id 캡처 (result 이벤트)
                         if evt_type == "done":
