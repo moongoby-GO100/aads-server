@@ -1678,7 +1678,7 @@ class ToolExecutor:
         return {
             "question": result.question,
             "perspectives": [
-                {"name": p.perspective, "analysis": p.analysis, "verdict": p.verdict}
+                {"name": p.name, "analysis": p.analysis, "key_points": p.key_points}
                 for p in result.perspectives
             ],
             "synthesis": result.synthesis,

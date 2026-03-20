@@ -96,8 +96,8 @@ async def run_debate(
     debate_id = uuid.uuid4().hex[:12]
     persp_configs = perspectives or DEFAULT_PERSPECTIVES
 
-    logger.info("debate_start", debate_id=debate_id, question=question[:100],
-                perspectives=len(persp_configs))
+    logger.info("debate_start debate_id=%s question=%s perspectives=%d",
+                debate_id, question[:100], len(persp_configs))
 
     # Phase 1: 병렬 관점 분석
     perspective_results = await _run_perspectives(
@@ -153,12 +153,10 @@ async def run_debate(
                 total_cost, duration_ms,
             )
     except Exception as db_err:
-        logger.warning("debate_db_save_error", error=str(db_err))
+        logger.warning("debate_db_save_error: %s", str(db_err))
 
-    logger.info(
-        "debate_complete", debate_id=debate_id,
-        cost=round(total_cost, 4), duration_ms=duration_ms,
-    )
+    logger.info("debate_complete debate_id=%s cost=%.4f duration_ms=%d",
+                debate_id, total_cost, duration_ms)
 
     return result
 
@@ -179,8 +177,8 @@ async def _run_perspectives(
     perspective_results = []
     for i, result in enumerate(results):
         if isinstance(result, Exception):
-            logger.warning("perspective_failed", name=perspectives[i]["name"],
-                          error=str(result))
+            logger.warning("perspective_failed name=%s error=%s",
+                          perspectives[i]["name"], str(result))
             perspective_results.append(PerspectiveResult(
                 name=perspectives[i]["name"],
                 analysis=f"분석 실패: {str(result)[:200]}",
@@ -292,5 +290,5 @@ async def _synthesize(question: str, perspectives: list) -> str:
         )
         return result or "종합 분석 생성 실패"
     except Exception as e:
-        logger.error("synthesis_error", error=str(e))
+        logger.error("synthesis_error: %s", str(e))
         return f"종합 분석 오류: {str(e)[:200]}"
