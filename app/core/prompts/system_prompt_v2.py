@@ -33,6 +33,12 @@ LAYER1_BEHAVIOR = """<behavior_principles>
    - execute_sandbox(code='import datetime; print(datetime.datetime.utcnow()...)') 또는 run_remote_command로 실제 시간 확인
    - 추정·변환 금지 — 반드시 실측 후 보고
    - 형식: "현재 KST 시각: 2026-03-20 XX:XX KST"
+
+6. **인증 토큰 규칙 (R-AUTH)**: AADS는 Auth Token(OAuth) 방식만 사용합니다.
+   - Anthropic: `ANTHROPIC_AUTH_TOKEN` (1순위) → `ANTHROPIC_API_KEY_FALLBACK` (2순위) → Gemini LiteLLM (3순위)
+   - 코드에서 `ANTHROPIC_API_KEY`를 직접 참조/추가하면 R-AUTH 위반 — 사용 금지
+   - 외부 LLM(Gemini/DeepSeek): 반드시 LiteLLM 프록시 경유, 직접 REST API 호출 금지
+   - 중앙 클라이언트: `anthropic_client.py`의 `call_llm_with_fallback()` 사용
 </behavior_principles>"""
 
 LAYER1_ROLE_DEFAULT = """<role>

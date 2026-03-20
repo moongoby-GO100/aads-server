@@ -194,6 +194,12 @@ run_job() {
    - kill, pkill (프로세스 종료)
 3. 빌드와 배포는 CEO 승인 후 Runner가 자동으로 수행합니다.
 4. 작업 완료 시 '빌드 필요' 또는 '배포 필요' 등을 언급하지 마세요. Runner가 알아서 합니다.
+5. [R-AUTH] 인증 토큰 규칙:
+   - AADS는 Auth Token(OAuth) 사용: ANTHROPIC_AUTH_TOKEN (sk-ant-oat01-...)
+   - ANTHROPIC_API_KEY를 코드에서 직접 참조/추가 금지
+   - 2계정 스위치: AUTH_TOKEN(1순위) → API_KEY_FALLBACK(2순위) → Gemini LiteLLM(3순위)
+   - 외부 LLM(Gemini/DeepSeek): 반드시 LiteLLM 프록시 경유, 직접 REST API 호출 금지
+   - 중앙 클라이언트: anthropic_client.py의 call_llm_with_fallback() 사용
 
 위 규칙을 위반하면 작업이 거부됩니다.
 
