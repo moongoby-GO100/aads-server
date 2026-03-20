@@ -369,6 +369,17 @@ async def lifespan(app: FastAPI):
         logger.error("db_pool_init_failed", error=str(e))
         app_state["db_pool"] = None
 
+    # 서버 시작 시 stale placeholder 선정리 → 토스트 무한반복 방지
+    try:
+        async with db_pool.acquire() as _c:
+            _cleaned = await _c.fetchval(
+                "WITH d AS (UPDATE chat_messages SET intent = 'interrupted' WHERE intent = 'streaming_placeholder' RETURNING id) SELECT COUNT(*) FROM d"
+            )
+            if _cleaned and _cleaned > 0:
+                logger.info(f"startup_placeholder_cleanup: {_cleaned} stale placeholder(s) → interrupted")
+    except Exception as _e:
+        logger.warning(f"startup_placeholder_cleanup_failed: {_e}")
+
     # 중단된 스트리밍 자동 이어서 생성 (DB 풀 초기화 이후)
     try:
         from app.services.chat_service import resume_interrupted_streams
@@ -389,6 +400,26 @@ async def lifespan(app: FastAPI):
                     logger.info(f"startup_cleanup_fallback: {_del} orphan placeholder(s) removed")
         except Exception:
             pass
+
+    # 주기적 stale placeholder 자동 정리 (10분마다, 5분 초과분)
+    async def _periodic_placeholder_cleanup():
+        import asyncio as _pc_asyncio
+        while True:
+            await _pc_asyncio.sleep(600)  # 10분
+            try:
+                from app.core.db_pool import get_pool as _gp_pc
+                _pool = _gp_pc()
+                async with _pool.acquire() as _c:
+                    _n = await _c.fetchval(
+                        "WITH d AS (UPDATE chat_messages SET intent = 'interrupted' WHERE intent = 'streaming_placeholder' AND created_at < NOW() - interval '5 minutes' RETURNING id) SELECT COUNT(*) FROM d"
+                    )
+                    if _n and _n > 0:
+                        logger.info(f"periodic_placeholder_cleanup: {_n} stale placeholder(s) → interrupted")
+            except Exception:
+                pass
+
+    import asyncio as _startup_asyncio
+    _startup_asyncio.create_task(_periodic_placeholder_cleanup())
 
     # Pipeline Runner: 재시작 복구 + Watchdog 시작 (DB 풀 초기화 이후)
     try:

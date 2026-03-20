@@ -224,17 +224,22 @@ async def get_streaming_status(session_id: UUID):
     status = svc.get_streaming_status(str(session_id))
     if status and (status.get("is_streaming") or status.get("just_completed")):
         return status
-    # 메모리에 없으면 DB에서 placeholder 확인
+    # 메모리에 없으면 DB에서 placeholder 확인 (5분 이내만 유효)
     try:
         from app.core.db_pool import get_pool
         pool = get_pool()
         async with pool.acquire() as conn:
             cnt = await conn.fetchval(
-                "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder'",
+                "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at > NOW() - interval '5 minutes'",
                 session_id,
             )
             if cnt and cnt > 0:
                 return {"is_streaming": True, "just_completed": False, "content_length": 0, "tool_count": 0, "last_tool": ""}
+            # 5분 초과 stale placeholder 자동 정리
+            await conn.execute(
+                "UPDATE chat_messages SET intent = 'interrupted' WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at <= NOW() - interval '5 minutes'",
+                session_id,
+            )
     except Exception:
         pass
     return status or {"is_streaming": False}
