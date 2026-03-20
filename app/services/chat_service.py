@@ -1516,6 +1516,63 @@ async def _analyze_videos_with_gemini(
     return results
 
 
+async def _analyze_images_with_gemini(
+    image_contents: list,
+    user_prompt: str,
+) -> list:
+    """이미지 파일 목록을 Gemini Flash API로 분석하여 텍스트 설명 반환.
+    CLI Relay가 이미지를 직접 전달할 수 없으므로 Gemini Vision으로 전처리."""
+    import os
+    import base64 as _b64
+
+    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
+    if not api_key:
+        logger.warning("[VISION-PRE] GOOGLE_API_KEY not set — skipping image analysis")
+        return []
+
+    results = []
+    try:
+        from google import genai as genai_sdk
+        from google.genai import types as genai_types
+
+        client = genai_sdk.Client(api_key=api_key)
+
+        for img in image_contents:
+            file_name = img.get("name", "image")
+            media_type = img.get("media_type", "image/jpeg")
+            raw_b64 = img.get("base64_data", "")
+            if not raw_b64:
+                continue
+
+            try:
+                img_bytes = _b64.b64decode(raw_b64)
+                analysis_prompt = (
+                    f"다음 이미지를 분석해주세요. 사용자 요청: {user_prompt}\n"
+                    "이미지의 내용, 텍스트, UI 요소, 에러 메시지, 차트/그래프, 중요한 시각 정보를 한국어로 상세히 설명해주세요. "
+                    "코드나 에러가 보이면 정확히 옮겨 적어주세요."
+                )
+                response = client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=[
+                        genai_types.Part.from_bytes(data=img_bytes, mime_type=media_type),
+                        analysis_prompt,
+                    ],
+                )
+                analysis_text = response.text or "(분석 결과 없음)"
+                results.append({"name": file_name, "analysis": f"[이미지 분석: {file_name}]\n{analysis_text}"})
+                logger.info(f"[VISION-PRE] Gemini analyzed '{file_name}': {len(analysis_text)} chars")
+            except Exception as e:
+                logger.error(f"[VISION-PRE] Gemini analysis failed for '{file_name}': {e}")
+                results.append({"name": file_name, "analysis": f"[이미지: {file_name}] (Gemini 분석 실패: {e})"})
+
+    except ImportError:
+        logger.warning("[VISION-PRE] google-genai not installed — skipping image analysis")
+    except Exception as e:
+        logger.error(f"[VISION-PRE] Gemini client error: {e}")
+
+    return results
+
+
 async def process_files_for_claude(files: list) -> list:
     """파일 데이터 목록을 Claude API content 배열 형식으로 변환.
 
@@ -1709,6 +1766,22 @@ async def send_message_stream(
                         "error": None,
                     })
                 logger.info(f"[VIDEO] {len(_video_attachments)} video(s) analyzed via Gemini API")
+
+            # Vision 이미지도 Gemini로 전처리 (CLI Relay용 텍스트 변환)
+            _image_for_preprocess = [f for f in _file_contents if f.get("is_image") and f.get("base64_data")]
+            if _image_for_preprocess:
+                _image_texts = await _analyze_images_with_gemini(_image_for_preprocess, content)
+                for _it in _image_texts:
+                    _file_contents.append({
+                        "name": _it["name"],
+                        "path": "",
+                        "ext": "",
+                        "content": _it["analysis"],
+                        "tokens": len(_it["analysis"]) // 4,
+                        "readable": True,
+                        "error": None,
+                    })
+                logger.info(f"[VISION-PRE] {len(_image_for_preprocess)} image(s) pre-analyzed via Gemini for CLI Relay")
 
             # Layer D: 현재 턴에만 주입될 전문 컨텍스트 (텍스트 파일만)
             _ephemeral_doc_context = build_ephemeral_document_layer(_file_contents)
