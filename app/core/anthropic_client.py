@@ -23,7 +23,7 @@ _BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 # Gemini 폴백 — LiteLLM 프록시 경유 (직접 API 키 만료 대비)
 _LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
 _LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "")
-_GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
+_GEMINI_FALLBACK_MODEL = "gemini-3.1-flash-lite-preview"
 
 
 def get_client(model_hint: str = "claude-haiku") -> AsyncAnthropic:
