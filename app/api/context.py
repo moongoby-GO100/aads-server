@@ -251,8 +251,8 @@ async def _upsert_task_result(value: Dict[str, Any], category: str) -> Dict[str,
 # --- HANDOVER 자동생성 ---
 @router.get("/context/handover")
 async def generate_handover(auth: bool = Depends(verify_monitor_key)):
-    """DB에서 HANDOVER.md 형식 자동생성"""
-    data = await memory_store.get_all_system()
+    """DB에서 HANDOVER.md 형식 자동생성 (conversation:* 제외, LIMIT 1000)"""
+    data = await memory_store.get_all_system(exclude_conversation=True, limit=1000)
     md = _build_handover_markdown(data)
     return {"status": "ok", "format": "markdown", "content": md}
 

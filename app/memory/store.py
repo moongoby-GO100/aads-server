@@ -65,17 +65,21 @@ class AADSMemoryStore:
             )
             return [dict(r) for r in rows]
 
-    async def get_all_system(self, exclude_conversation: bool = True) -> Dict[str, List[Dict]]:
-        """전체 시스템 메모리 조회. 기본값으로 conversation:* 카테고리 제외 (41,000건 이상, 99.6%)"""
+    async def get_all_system(self, exclude_conversation: bool = True, limit: int = 1000) -> Dict[str, List[Dict]]:
+        """전체 시스템 메모리 조회. 기본값으로 conversation:* 카테고리 제외 (41,000건 이상, 99.6%).
+        LIMIT 1000 기본 적용으로 대량 반환 방지."""
         async with self.pool.acquire() as conn:
             if exclude_conversation:
                 rows = await conn.fetch(
                     "SELECT category, key, value, version, updated_at FROM system_memory "
-                    "WHERE category NOT LIKE 'conversation:%' ORDER BY category, key"
+                    "WHERE category NOT LIKE 'conversation:%' ORDER BY category, key LIMIT $1",
+                    limit
                 )
             else:
                 rows = await conn.fetch(
-                    "SELECT category, key, value, version, updated_at FROM system_memory ORDER BY category, key"
+                    "SELECT category, key, value, version, updated_at FROM system_memory "
+                    "ORDER BY category, key LIMIT $1",
+                    limit
                 )
             result = {}
             for r in rows:
