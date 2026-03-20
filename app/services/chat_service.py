@@ -1495,7 +1495,7 @@ async def _analyze_videos_with_gemini(
                     "동영상의 주요 내용, 장면, 텍스트, 중요한 시각 정보를 한국어로 상세히 설명해주세요."
                 )
                 response = client.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model="gemini-2.5-flash",
                     contents=[
                         genai_types.Part.from_bytes(data=video_bytes, mime_type=media_type),
                         analysis_prompt,
@@ -1552,7 +1552,7 @@ async def _analyze_images_with_gemini(
                     "코드나 에러가 보이면 정확히 옮겨 적어주세요."
                 )
                 response = client.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model="gemini-2.5-flash",
                     contents=[
                         genai_types.Part.from_bytes(data=img_bytes, mime_type=media_type),
                         analysis_prompt,
@@ -1645,7 +1645,7 @@ async def process_video_with_gemini(file_data: dict, user_message: str) -> str:
         while video_file.state.name == "PROCESSING":
             await _heartbeat_asyncio.sleep(2)
             video_file = genai.get_file(video_file.name)
-        model_g = genai.GenerativeModel("gemini-2.0-flash-exp")
+        model_g = genai.GenerativeModel("gemini-2.5-flash")
         response = model_g.generate_content(
             [video_file, user_message or "이 동영상의 내용을 분석하고 설명해주세요."]
         )
