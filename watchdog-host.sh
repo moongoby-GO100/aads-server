@@ -23,7 +23,7 @@ notify() {
 }
 
 # ── Layer 0: 의존 컨테이너 (postgres, redis) 먼저 확인 ──
-for DEP in aads-postgres aads-redis; do
+for DEP in aads-postgres aads-redis aads-socket-proxy aads-litellm aads-dashboard; do
     DEP_STATUS=$(docker inspect "$DEP" --format '{{.State.Status}}' 2>/dev/null)
     case "$DEP_STATUS" in
         running) ;;

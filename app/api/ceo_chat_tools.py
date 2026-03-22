@@ -1977,7 +1977,16 @@ async def tool_run_remote_command(project: str, command: str) -> str:
     # AADS 프로젝트: docker compose 명령 → deploy.sh 안전 리다이렉트
     if project == "AADS":
         _deploy_redirect = None
-        if re.search(r"docker\s+compose\s+(up|build|restart)", command) and "aads" in command.lower():
+        # docker compose down → 차단 (전체 컨테이너 삭제 위험)
+        if re.search(r"docker[\s-]+compose\s+down", command):
+            logger.warning("deploy_blocked_compose_down", command=command[:120])
+            return "[BLOCKED] docker compose down은 postgres 데이터 유실 위험. deploy.sh를 사용하세요."
+        # docker stop <aads 컨테이너> → 차단
+        if re.search(r"docker\s+(stop|kill)\s+aads-(postgres|redis|socket-proxy|litellm)", command):
+            logger.warning("deploy_blocked_container_stop", command=command[:120])
+            return "[BLOCKED] 의존 컨테이너 직접 정지는 서비스 장애를 유발합니다."
+        # docker compose up/build/restart → deploy.sh 리다이렉트 (하이픈 형식도 포함)
+        if re.search(r"docker[\s-]+compose\s+(up|build|restart)", command) and "aads" in command.lower():
             _deploy_redirect = "/root/aads/aads-server/deploy.sh build"
         elif re.search(r"docker\s+restart\s+aads-server", command):
             _deploy_redirect = "/root/aads/aads-server/deploy.sh code"

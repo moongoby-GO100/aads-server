@@ -36,7 +36,7 @@ echo "[deploy.sh] mode=${MODE} at $(date '+%Y-%m-%d %H:%M:%S')"
 
 # ── Phase 0: 의존 컨테이너 상태 확인 + 복구 ──
 echo "[deploy.sh] Phase 0: dependency check..."
-for DEP in aads-postgres aads-redis; do
+for DEP in aads-postgres aads-redis aads-socket-proxy aads-litellm; do
     DEP_STATUS=$(docker inspect "$DEP" --format '{{.State.Status}}' 2>/dev/null)
     if [[ "$DEP_STATUS" != "running" ]]; then
         echo "[deploy.sh] ⚠️ ${DEP} 상태: ${DEP_STATUS:-없음} — 복구 중..."
