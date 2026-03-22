@@ -1005,6 +1005,51 @@ async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort
         await get_pool().release(conn)
 
 
+async def list_messages_cursor(
+    session_id: str,
+    limit: int = 50,
+    cursor: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Cursor 기반 메시지 조회 — 최근 N건 또는 cursor 이전 N건 (항상 ASC 반환)."""
+    conn = await _get_conn()
+    try:
+        sid = uuid.UUID(session_id)
+        fetch_limit = limit + 1  # has_more 판별용 1건 추가
+        if cursor:
+            from datetime import datetime as _dt
+            cursor_dt = _dt.fromisoformat(cursor)
+            rows = await conn.fetch(
+                "SELECT * FROM ("
+                "  SELECT * FROM chat_messages"
+                "  WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate'"
+                "    AND created_at < $2"
+                "  ORDER BY created_at DESC LIMIT $3"
+                ") sub ORDER BY created_at ASC",
+                sid, cursor_dt, fetch_limit,
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT * FROM ("
+                "  SELECT * FROM chat_messages"
+                "  WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate'"
+                "  ORDER BY created_at DESC LIMIT $2"
+                ") sub ORDER BY created_at ASC",
+                sid, fetch_limit,
+            )
+        messages = [_row_to_dict(r) for r in rows]
+        has_more = len(messages) > limit
+        if has_more:
+            messages = messages[1:]  # 가장 오래된 1건 제거 (초과분)
+        next_cursor = messages[0]["created_at"].isoformat() if has_more and messages else None
+        return {
+            "messages": messages,
+            "next_cursor": next_cursor,
+            "has_more": has_more,
+        }
+    finally:
+        await get_pool().release(conn)
+
+
 async def _extract_artifacts(session_id: uuid.UUID, content: str, workspace_id: uuid.UUID = None) -> None:
     """AI 응답에서 아티팩트 자동 추출 → chat_artifacts 저장.
     감지 유형: 코드, 보고서, 기획서, 계획서, 분석, 지시서, 체크리스트, 테이블, 이미지, 차트, 파일

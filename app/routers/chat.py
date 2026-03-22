@@ -118,15 +118,27 @@ async def delete_session(session_id: UUID):
 # Message
 # ════════════════════════════════════════════════════════════════════════════════
 
-@router.get("/chat/messages", response_model=List[MessageOut], tags=["chat-message"])
+class PaginatedMessagesOut(BaseModel):
+    """Cursor 기반 페이지네이션 응답."""
+    messages: List[MessageOut]
+    next_cursor: Optional[str] = None
+    has_more: bool = False
+
+
+@router.get("/chat/messages", tags=["chat-message"])
 async def get_messages(
     session_id: UUID = Query(...),
-    limit: int = Query(200, le=1000),
-    offset: int = Query(0, ge=0),
+    limit: int = Query(50, le=1000),
+    cursor: Optional[str] = Query(None, description="created_at ISO 문자열 (이전 메시지 로딩 시)"),
+    offset: Optional[int] = Query(None, ge=0),
     sort: str = Query("asc", regex="^(asc|desc)$"),
 ):
-    """메시지 목록."""
-    return await svc.list_messages(str(session_id), limit=limit, offset=offset, sort=sort)
+    """메시지 목록 — cursor 기반 페이지네이션 (offset 레거시 호환 유지)."""
+    # 레거시 offset 모드: offset이 명시적으로 전달된 경우
+    if offset is not None:
+        return await svc.list_messages(str(session_id), limit=limit, offset=offset, sort=sort)
+    # cursor 모드: PaginatedMessagesOut 반환
+    return await svc.list_messages_cursor(str(session_id), limit=limit, cursor=cursor)
 
 
 @router.post("/chat/messages/send", tags=["chat-message"])
