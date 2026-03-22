@@ -375,6 +375,63 @@ async def resume_interrupted(session_id: UUID):
     return {"resumed": True, "message": "이어서 생성을 시작합니다. 잠시 후 채팅창을 확인하세요."}
 
 
+@router.post("/chat/messages/{message_id}/regenerate", tags=["chat-message"])
+async def regenerate_message(message_id: UUID, request: Request):
+    """AI 응답 재생성 — 해당 AI 메시지의 직전 user 메시지를 찾아 새 SSE 스트림 반환."""
+    from app.core.db_pool import get_pool
+    pool = get_pool()
+
+    async with pool.acquire() as conn:
+        # 1) message_id로 AI 응답 조회
+        ai_msg = await conn.fetchrow(
+            "SELECT id, session_id, role, created_at FROM chat_messages WHERE id = $1",
+            message_id,
+        )
+        if not ai_msg:
+            raise HTTPException(status_code=404, detail="message not found")
+        if ai_msg["role"] != "assistant":
+            raise HTTPException(status_code=400, detail="regenerate는 AI 응답에만 사용 가능")
+
+        # 2) 직전 user 메시지 찾기
+        user_msg = await conn.fetchrow(
+            """SELECT id, content, attachments FROM chat_messages
+               WHERE session_id = $1 AND created_at < $2 AND role = 'user'
+               ORDER BY created_at DESC LIMIT 1""",
+            ai_msg["session_id"], ai_msg["created_at"],
+        )
+        if not user_msg:
+            raise HTTPException(status_code=404, detail="이전 사용자 메시지를 찾을 수 없습니다")
+
+        # 3) 기존 AI 응답에 is_regenerated 마킹
+        await conn.execute(
+            "UPDATE chat_messages SET intent = 'regenerated' WHERE id = $1",
+            message_id,
+        )
+
+    session_id_str = str(ai_msg["session_id"])
+    content = user_msg["content"]
+    import json as _json
+    attachments = _json.loads(user_msg["attachments"]) if user_msg["attachments"] else []
+
+    # ContextVar 설정
+    from app.services.tool_executor import current_chat_session_id
+    current_chat_session_id.set(session_id_str)
+
+    raw_stream = svc.send_message_stream(
+        session_id=session_id_str,
+        content=content,
+        attachments=attachments,
+        model_override=None,
+        reply_to_id=str(ai_msg["id"]),
+    )
+    bg_stream = svc.with_background_completion(raw_stream, session_id=session_id_str)
+    return StreamingResponse(
+        bg_stream,
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.put("/chat/messages/{message_id}/bookmark", response_model=MessageOut, tags=["chat-message"])
 async def toggle_bookmark(message_id: UUID):
     """북마크 토글."""
