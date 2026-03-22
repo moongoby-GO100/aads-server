@@ -369,52 +369,37 @@ async def lifespan(app: FastAPI):
         logger.error("db_pool_init_failed", error=str(e))
         app_state["db_pool"] = None
 
-    # 서버 시작 시 stale placeholder 선정리 → 토스트 무한반복 방지
+    # 서버 시작 시 stale placeholder 즉시 정리 — 경고 메시지 추가 후 intent 변경
+    # resume_interrupted_streams 제거: resume가 새 placeholder를 만들어 문제 재발시킴
     try:
         async with db_pool.acquire() as _c:
             _cleaned = await _c.fetchval(
-                "WITH d AS (UPDATE chat_messages SET intent = 'interrupted' WHERE intent = 'streaming_placeholder' RETURNING id) SELECT COUNT(*) FROM d"
+                "WITH d AS (UPDATE chat_messages SET intent = 'bg_partial', "
+                "content = content || E'\\n\\n⚠️ _서버 재시작으로 응답이 중단되었습니다. 다시 질문해주세요._' "
+                "WHERE intent = 'streaming_placeholder' RETURNING id) SELECT COUNT(*) FROM d"
             )
             if _cleaned and _cleaned > 0:
-                logger.info(f"startup_placeholder_cleanup: {_cleaned} stale placeholder(s) → interrupted")
+                logger.info(f"startup_placeholder_cleanup: {_cleaned} stale placeholder(s) → bg_partial")
     except Exception as _e:
         logger.warning(f"startup_placeholder_cleanup_failed: {_e}")
 
-    # 중단된 스트리밍 자동 이어서 생성 (DB 풀 초기화 이후)
-    try:
-        from app.services.chat_service import resume_interrupted_streams
-        _resumed = await resume_interrupted_streams()
-        if _resumed:
-            logger.info(f"startup_resume: {_resumed} interrupted stream(s) resumed")
-        else:
-            logger.info("startup_resume: no interrupted streams found")
-    except Exception as _e:
-        logger.warning(f"startup_resume_failed: {_e}")
-        # 폴백: resume 실패 시 placeholder 정리
-        try:
-            async with db_pool.acquire() as _c:
-                _del = await _c.fetchval(
-                    "WITH d AS (DELETE FROM chat_messages WHERE intent='streaming_placeholder' RETURNING id) SELECT COUNT(*) FROM d"
-                )
-                if _del:
-                    logger.info(f"startup_cleanup_fallback: {_del} orphan placeholder(s) removed")
-        except Exception:
-            pass
-
-    # 주기적 stale placeholder 자동 정리 (10분마다, 5분 초과분)
+    # 주기적 stale placeholder 자동 정리 (2분마다, 2분 초과분)
     async def _periodic_placeholder_cleanup():
         import asyncio as _pc_asyncio
         while True:
-            await _pc_asyncio.sleep(600)  # 10분
+            await _pc_asyncio.sleep(120)  # 2분
             try:
                 from app.core.db_pool import get_pool as _gp_pc
                 _pool = _gp_pc()
                 async with _pool.acquire() as _c:
                     _n = await _c.fetchval(
-                        "WITH d AS (UPDATE chat_messages SET intent = 'interrupted' WHERE intent = 'streaming_placeholder' AND created_at < NOW() - interval '5 minutes' RETURNING id) SELECT COUNT(*) FROM d"
+                        "WITH d AS (UPDATE chat_messages SET intent = 'bg_partial', "
+                        "content = content || E'\\n\\n⚠️ _응답 생성이 중단되었습니다._' "
+                        "WHERE intent = 'streaming_placeholder' AND created_at < NOW() - interval '2 minutes' "
+                        "RETURNING id) SELECT COUNT(*) FROM d"
                     )
                     if _n and _n > 0:
-                        logger.info(f"periodic_placeholder_cleanup: {_n} stale placeholder(s) → interrupted")
+                        logger.info(f"periodic_placeholder_cleanup: {_n} stale placeholder(s) → bg_partial")
             except Exception:
                 pass
 
