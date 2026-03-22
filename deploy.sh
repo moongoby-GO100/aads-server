@@ -34,7 +34,18 @@ fi
 
 echo "[deploy.sh] mode=${MODE} at $(date '+%Y-%m-%d %H:%M:%S')"
 
-# ── Phase 0: 배포 전 정리 ──
+# ── Phase 0: 의존 컨테이너 상태 확인 + 복구 ──
+echo "[deploy.sh] Phase 0: dependency check..."
+for DEP in aads-postgres aads-redis; do
+    DEP_STATUS=$(docker inspect "$DEP" --format '{{.State.Status}}' 2>/dev/null)
+    if [[ "$DEP_STATUS" != "running" ]]; then
+        echo "[deploy.sh] ⚠️ ${DEP} 상태: ${DEP_STATUS:-없음} — 복구 중..."
+        docker start "$DEP" 2>/dev/null || (cd "$COMPOSE_DIR" && docker compose up -d --no-deps "$DEP")
+        sleep 3
+        notify "⚠️ 배포 전 ${DEP} 복구 실행 (이전 상태: ${DEP_STATUS:-없음})"
+    fi
+done
+
 echo "[deploy.sh] Phase 0: pre-deploy cleanup..."
 docker exec aads-postgres psql -U aads -d aads -q -c "
   DELETE FROM chat_messages WHERE intent = 'streaming_placeholder';

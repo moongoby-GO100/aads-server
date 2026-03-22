@@ -1,5 +1,9 @@
 version: '3.9'
 
+# ⚠️ 절대 규칙: docker compose up --build 시 반드시 --no-deps aads-server 사용!
+# ⚠️ postgres/redis를 재생성하면 데이터 유실 + 서비스 장애 발생
+# ⚠️ 올바른 명령: /root/aads/aads-server/deploy.sh [code|build]
+#
 # PostgreSQL: pgvector/pgvector:pg15 컨테이너 (T-011 Memory 인프라)
 # 기존 호스트 PostgreSQL 9.6 (port 5432) → 5433으로 매핑해 공존
 # aads-server는 aads-postgres 서비스로 연결 (DATABASE_URL 업데이트)
