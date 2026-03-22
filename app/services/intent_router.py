@@ -6,6 +6,7 @@ Gemini 2.5 Flash-Lite로 인텐트 분류 (LiteLLM 경유, ~200ms 목표)
 from __future__ import annotations
 
 import json
+import re as _re
 import logging
 import os
 from dataclasses import dataclass
@@ -251,8 +252,10 @@ async def classify(
                 data = resp.json()
                 raw = data["choices"][0]["message"]["content"].strip()
                 # JSON 파싱
-                if raw.startswith("{"):
-                    parsed = json.loads(raw)
+                # JSON 추출 — Gemini가 텍스트를 앞뒤로 붙이는 경우 대응
+                _json_match = _re.search(r'\{[^{}]*\}', raw)
+                if _json_match:
+                    parsed = json.loads(_json_match.group())
                     intent = parsed.get("intent", "casual")
                     # CEO 명령형 오분류 보정: casual/greeting인데 실제 명령형 패턴이면 override
                     if intent in ("casual", "greeting"):
