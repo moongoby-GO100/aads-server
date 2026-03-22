@@ -486,8 +486,82 @@ async def health_check():
             "env_trend": { "ok": True, "count": 0, "label": "환경 트렌드" },
             "manager_response": { "ok": True, "count": 0, "label": "매니저 응답" },
         }
+        # ── 인프라 상태 (컨테이너 + DB풀 + 디스크 + 메모리) ──
+        import shutil as _shutil
+        import subprocess as _sp
+
+        infra = {}
+        # 컨테이너 상태 (Docker API via socket proxy)
+        _docker_host = os.environ.get("DOCKER_HOST", "")
+        for cname in ["aads-server", "aads-postgres", "aads-redis", "aads-socket-proxy", "aads-litellm", "aads-dashboard"]:
+            try:
+                if _docker_host.startswith("tcp://"):
+                    _base = _docker_host.replace("tcp://", "http://")
+                    _url = f"{_base}/v1.24/containers/{cname}/json"
+                    _r = _sp.run(["curl", "-sf", _url, "--max-time", "3"], capture_output=True, text=True, timeout=5)
+                else:
+                    _url = f"http://localhost/v1.24/containers/{cname}/json"
+                    _r = _sp.run(["curl", "-sf", "--unix-socket", "/var/run/docker.sock", _url, "--max-time", "3"],
+                                 capture_output=True, text=True, timeout=5)
+                if _r.returncode == 0 and _r.stdout:
+                    import json as _j2
+                    _cdata = _j2.loads(_r.stdout)
+                    infra[cname] = _cdata.get("State", {}).get("Status", "unknown")
+                else:
+                    infra[cname] = "unknown"
+            except Exception:
+                infra[cname] = "unknown"
+
+        # DB 커넥션 풀
+        try:
+            from app.core.db_pool import get_pool_stats
+            infra["db_pool"] = get_pool_stats()
+        except Exception:
+            infra["db_pool"] = {"available": False}
+
+        # 디스크
+        try:
+            _du = _shutil.disk_usage("/")
+            infra["disk_pct"] = round(_du.used / _du.total * 100, 1)
+            infra["disk_free_gb"] = round(_du.free / (1024**3), 1)
+        except Exception:
+            infra["disk_pct"] = None
+
+        # 메모리
+        try:
+            with open("/proc/meminfo") as _f:
+                _lines = _f.readlines()
+            _mt = _ma = 0
+            for _l in _lines:
+                if _l.startswith("MemTotal:"): _mt = int(_l.split()[1])
+                elif _l.startswith("MemAvailable:"): _ma = int(_l.split()[1])
+            if _mt > 0:
+                infra["memory_pct"] = round((1 - _ma / _mt) * 100, 1)
+        except Exception:
+            infra["memory_pct"] = None
+
+        # 로드
+        try:
+            _load = os.getloadavg()
+            infra["load_1m"] = round(_load[0], 2)
+        except Exception:
+            infra["load_1m"] = None
+
+        # placeholder 잔존
+        try:
+            from app.core.db_pool import get_pool as _gp
+            async with _gp().acquire() as _hc:
+                infra["stale_placeholders"] = await _hc.fetchval(
+                    "SELECT count(*) FROM chat_messages WHERE intent = 'streaming_placeholder'"
+                )
+        except Exception:
+            infra["stale_placeholders"] = None
+
+        all_containers_ok = all(v == "running" for k, v in infra.items()
+                                if k in ("aads-server", "aads-postgres", "aads-redis", "aads-socket-proxy", "aads-litellm", "aads-dashboard"))
+
         return {
-            "pipeline_healthy": pipeline_healthy,
+            "pipeline_healthy": pipeline_healthy and all_containers_ok,
             "stalled_count": stalled_count,
             "stalled_queue": int(stalled_queue or 0),
             "stalled_running": int(stalled_running or 0),
@@ -506,6 +580,8 @@ async def health_check():
             "maintenance_server": maintenance_row["server"] if maintenance_active else None,
             "maintenance_reason": maintenance_row["reason"] if maintenance_active else None,
             "issues": issues_list,
+            "infra": infra,
+            "checked_at": datetime.now(KST).isoformat(),
         }
     except Exception as e:
         logger.error("ops_health_check_error", error=str(e))
@@ -518,6 +594,34 @@ async def health_check():
             "maintenance_reason": None,
             "issues": [{"type": "db_error", "detail": str(e)}],
         }
+
+
+_REMOTE_HEALTH_SERVERS = {
+    "211": {"host": "211.188.51.113", "port": 9090, "ssh": "root@211.188.51.113"},
+    "114": {"host": "114.207.244.86", "port": 9090, "ssh": "root@114.207.244.86 -p 7916"},
+}
+
+@router.get("/ops/server-health/{server_id}")
+async def remote_server_health(server_id: str):
+    """원격 서버 헬스체크 프록시 — 브라우저 CORS/방화벽 우회."""
+    cfg = _REMOTE_HEALTH_SERVERS.get(server_id)
+    if not cfg:
+        raise HTTPException(404, f"Unknown server: {server_id}")
+    try:
+        import subprocess as _sp
+        # SSH 경유로 localhost:9090 호출
+        ssh_parts = cfg["ssh"].split()
+        r = _sp.run(
+            ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no"] + ssh_parts +
+            [f"curl -sf http://localhost:{cfg['port']}/health"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            import json as _json
+            return _json.loads(r.stdout.strip())
+        return {"status": "fail", "error": r.stderr.strip()[:200]}
+    except Exception as e:
+        return {"status": "fail", "error": str(e)[:200]}
 
 
 def _build_issues(stalled_queue, stalled_running, pipeline_blocked):
