@@ -759,6 +759,96 @@ async def get_auth_key_order():
     return {"keys": get_key_order()}
 
 
+# ════════════════════════════════════════════════════════════════════════════════
+# Session Export (대화 내보내기)
+# ════════════════════════════════════════════════════════════════════════════════
+
+@router.get("/chat/sessions/{session_id}/export", tags=["chat-session"])
+async def export_session(session_id: UUID, format: str = Query("markdown", regex="^(markdown|txt)$")):
+    """세션 대화 내보내기 (markdown 또는 txt)."""
+    import re
+    from datetime import timezone, timedelta
+    from app.core.db_pool import get_pool
+
+    KST = timezone(timedelta(hours=9))
+    pool = get_pool()
+
+    async with pool.acquire() as conn:
+        # 세션 정보 조회
+        session = await conn.fetchrow(
+            "SELECT id, title, created_at FROM chat_sessions WHERE id = $1", session_id,
+        )
+        if not session:
+            raise _NOT_FOUND("session")
+
+        # 메시지 조회 (streaming_placeholder, regenerated 제외)
+        rows = await conn.fetch(
+            """SELECT role, content, model_used, created_at
+               FROM chat_messages
+               WHERE session_id = $1
+                 AND intent IS DISTINCT FROM 'streaming_placeholder'
+                 AND intent IS DISTINCT FROM 'regenerated'
+               ORDER BY created_at ASC""",
+            session_id,
+        )
+
+    title = session["title"] or "제목 없음"
+    from datetime import datetime
+    now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M KST")
+    total = len(rows)
+
+    lines = [
+        f"# 대화 내보내기 — {title}",
+        f"> 내보내기 일시: {now_kst}",
+        f"> 총 메시지: {total}건",
+        "",
+        "---",
+        "",
+    ]
+
+    for row in rows:
+        ts = row["created_at"]
+        if ts.tzinfo is None:
+            from datetime import timezone as _tz
+            ts = ts.replace(tzinfo=_tz.utc)
+        ts_kst = ts.astimezone(KST).strftime("%Y-%m-%d %H:%M KST")
+
+        content = row["content"] or ""
+        # thinking_summary 제거 (내부 추론 과정)
+        content = re.sub(r'<thinking_summary>.*?</thinking_summary>', '', content, flags=re.DOTALL).strip()
+        content = re.sub(r'</?thinking[^>]*>', '', content).strip()
+
+        if row["role"] == "user":
+            lines.append(f"## 👤 CEO ({ts_kst})")
+        elif row["role"] == "assistant":
+            model_tag = f" [모델: {row['model_used']}]" if row["model_used"] else ""
+            lines.append(f"## 🤖 AI ({ts_kst}){model_tag}")
+        else:
+            lines.append(f"## 📌 System ({ts_kst})")
+
+        lines.append(content)
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    md_content = "\n".join(lines)
+
+    # 파일명 생성 (특수문자 제거)
+    safe_title = re.sub(r'[^\w가-힣\s-]', '', title).strip().replace(' ', '_')[:50]
+    date_str = datetime.now(KST).strftime("%Y%m%d")
+    filename = f"session_{safe_title}_{date_str}.md"
+
+    mime = "text/markdown" if format == "markdown" else "text/plain"
+    return Response(
+        content=md_content.encode("utf-8"),
+        media_type=mime,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Type": f"{mime}; charset=utf-8",
+        },
+    )
+
+
 class KeyOrderRequest(BaseModel):
     primary: str = Field(..., description="우선 사용할 키: 'naver' 또는 'gmail'")
 
