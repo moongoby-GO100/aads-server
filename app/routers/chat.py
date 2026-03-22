@@ -28,6 +28,8 @@ from app.models.chat import (
     SessionCreate,
     SessionOut,
     SessionUpdate,
+    TemplateCreate,
+    TemplateOut,
     WorkspaceCreate,
     WorkspaceOut,
     WorkspaceUpdate,
@@ -935,6 +937,39 @@ async def export_session(session_id: UUID, format: str = Query("markdown", regex
             "Content-Type": f"{mime}; charset=utf-8",
         },
     )
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# Prompt Templates (P2-10)
+# ════════════════════════════════════════════════════════════════════════════════
+
+@router.get("/chat/templates", response_model=List[TemplateOut], tags=["chat-template"])
+async def list_templates(category: Optional[str] = Query(None)):
+    """템플릿 목록 (usage_count DESC 정렬)."""
+    return await svc.list_templates(category)
+
+
+@router.post("/chat/templates", response_model=TemplateOut, status_code=201, tags=["chat-template"])
+async def create_template(req: TemplateCreate):
+    """새 템플릿 생성."""
+    return await svc.create_template(req.model_dump())
+
+
+@router.delete("/chat/templates/{template_id}", status_code=204, tags=["chat-template"])
+async def delete_template(template_id: UUID):
+    """템플릿 삭제."""
+    ok = await svc.delete_template(str(template_id))
+    if not ok:
+        raise _NOT_FOUND("template")
+
+
+@router.post("/chat/templates/{template_id}/use", response_model=TemplateOut, tags=["chat-template"])
+async def use_template(template_id: UUID):
+    """템플릿 사용 → usage_count 증가."""
+    result = await svc.use_template(str(template_id))
+    if not result:
+        raise _NOT_FOUND("template")
+    return result
 
 
 class KeyOrderRequest(BaseModel):

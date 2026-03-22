@@ -1941,6 +1941,14 @@ async def send_message_stream(
         except Exception as _url_err:
             logger.warning(f"url_detection_skipped: {_url_err}")
 
+        # ── P2-7: 멘션(@) 프로젝트 감지 → 명시적 프로젝트 컨텍스트 오버라이드 ──
+        _MENTION_PROJECTS = {"KIS", "GO100", "AADS", "SF", "NTV2", "NAS"}
+        _mention_matches = re.findall(r'@(KIS|GO100|AADS|SF|NTV2|NAS)\b', content, re.IGNORECASE)
+        _mentioned_projects: list = []
+        if _mention_matches:
+            _mentioned_projects = list(dict.fromkeys(p.upper() for p in _mention_matches))
+            logger.info(f"[MENTION] session={session_id[:8]} projects={_mentioned_projects}")
+
         # Reply-to: 이전 AI 응답 지정 시 인용 컨텍스트 주입
         _reply_to_uuid = None
         if reply_to_id:
@@ -2040,6 +2048,25 @@ async def send_message_stream(
             system_prompt = base_prompt or "You are a helpful AI assistant."
             messages = [{"role": m["role"], "content": m["content"]} for m in raw_messages[-20:]]
 
+        # P2-7: 멘션된 프로젝트 컨텍스트를 system_prompt에 주입
+        if _mentioned_projects:
+            _mention_desc = {
+                "KIS": "KIS AI 자동매매 시스템 (서버62, /root/kis/)",
+                "GO100": "GO100 백억이 투자 교육 플랫폼 (서버62, /root/go100/)",
+                "AADS": "AADS 자율 AI 개발 시스템 (서버68, /root/aads/)",
+                "SF": "SmartFarm 스마트팜 시스템 (서버65, /root/sf/)",
+                "NTV2": "NTV2 뉴톡 v2 서비스 (서버65, /root/ntv2/)",
+                "NAS": "NAS 스토리지 시스템 (서버65, /root/nas/)",
+            }
+            _proj_lines = [f"- {p}: {_mention_desc.get(p, p)}" for p in _mentioned_projects]
+            _mention_ctx = (
+                "\n\n[CEO 멘션 프로젝트 — 아래 프로젝트를 대상으로 작업하세요]\n"
+                + "\n".join(_proj_lines)
+                + "\n이 멘션은 인텐트 분류보다 우선합니다. 반드시 해당 프로젝트 컨텍스트에서 답변하세요."
+            )
+            system_prompt = system_prompt + _mention_ctx
+            logger.info(f"[MENTION] injected project context: {_mentioned_projects}")
+
         # Vision: 이미지가 있으면 마지막 user 메시지를 멀티모달 content 배열로 교체
         if _vision_images:
             for _vi in range(len(messages) - 1, -1, -1):
@@ -2085,6 +2112,10 @@ async def send_message_stream(
                     break
             if not _normalized_project:
                 _normalized_project = _ws_upper[:20]
+
+        # P2-7: 멘션이 있으면 첫 번째 멘션 프로젝트로 _normalized_project 오버라이드
+        if _mentioned_projects:
+            _normalized_project = _mentioned_projects[0]
 
         # 4.4. 시맨틱 캐시 조회 (유사 질문 즉시 응답)
         # BUG-3 FIX: 운영/조회성 질문은 캐시 바이패스 (실시간 데이터 필요)
@@ -3536,6 +3567,63 @@ async def get_chat_file(file_id: str) -> Optional[Dict[str, Any]]:
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT * FROM chat_files WHERE id = $1", uuid.UUID(file_id)
+        )
+    if not row:
+        return None
+    return dict(row)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# Prompt Templates (P2-10)
+# ════════════════════════════════════════════════════════════════════════════════
+
+async def list_templates(category: Optional[str] = None) -> List[Dict[str, Any]]:
+    """템플릿 목록 (usage_count DESC 정렬)."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        if category:
+            rows = await conn.fetch(
+                "SELECT * FROM prompt_templates WHERE category = $1 ORDER BY usage_count DESC, updated_at DESC",
+                category,
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT * FROM prompt_templates ORDER BY usage_count DESC, updated_at DESC"
+            )
+    return [dict(r) for r in rows]
+
+
+async def create_template(data: Dict[str, Any]) -> Dict[str, Any]:
+    """새 템플릿 생성."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """INSERT INTO prompt_templates (title, content, category)
+               VALUES ($1, $2, $3) RETURNING *""",
+            data["title"], data["content"], data.get("category", "일반"),
+        )
+    return dict(row)
+
+
+async def delete_template(template_id: str) -> bool:
+    """템플릿 삭제."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM prompt_templates WHERE id = $1", uuid.UUID(template_id)
+        )
+    return result == "DELETE 1"
+
+
+async def use_template(template_id: str) -> Optional[Dict[str, Any]]:
+    """템플릿 사용 → usage_count 증가, 템플릿 반환."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """UPDATE prompt_templates
+               SET usage_count = usage_count + 1, updated_at = NOW()
+               WHERE id = $1 RETURNING *""",
+            uuid.UUID(template_id),
         )
     if not row:
         return None

@@ -187,3 +187,21 @@ class ResearchOut(BaseModel):
     cost: Optional[Decimal]
     session_id: Optional[uuid.UUID]
     created_at: datetime
+
+
+# ─── Prompt Template ────────────────────────────────────────────────────────
+
+class TemplateCreate(BaseModel):
+    title: str = Field(..., max_length=200)
+    content: str = Field(..., min_length=1)
+    category: str = Field(default="일반", max_length=50)
+
+
+class TemplateOut(BaseModel):
+    id: uuid.UUID
+    title: str
+    content: str
+    category: str
+    usage_count: int
+    created_at: datetime
+    updated_at: datetime

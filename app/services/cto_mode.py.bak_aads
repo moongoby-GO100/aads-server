@@ -13,7 +13,6 @@ from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 import asyncpg
-import httpx
 
 from app.core.anthropic_client import call_llm_with_fallback
 from app.models.ckp import (
