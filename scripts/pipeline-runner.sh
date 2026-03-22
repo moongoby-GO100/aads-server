@@ -48,6 +48,10 @@ declare -A PROJECT_WORKDIR=(
 # 프로젝트별 허용 목록 (M4: 화이트리스트 검증)
 VALID_PROJECTS="AADS KIS GO100 SF NTV2"
 
+MAX_JOB_RUNTIME="${MAX_JOB_RUNTIME:-3600}"      # 단일 작업 최대 60분 (stale 방지)
+WATCHDOG_INTERVAL="${WATCHDOG_INTERVAL:-300}"    # 5분마다 프로세스 생존 확인
+MIN_DISK_GB="${MIN_DISK_GB:-1}"                  # 최소 디스크 공간 (GB)
+
 mkdir -p "$LOG_DIR" "$ARTIFACT_DIR"
 
 # ── 유틸리티 ──────────────────────────────────────────────────────────
@@ -92,6 +96,166 @@ sql_escape() {
     # $esc$ 토큰이 포함되면 제거 (인젝션 방지)
     val="${val//\$esc\$/}"
     echo "\$esc\$${val}\$esc\$"
+}
+
+# ── 에러 분류 ─────────────────────────────────────────────────────────
+classify_error() {
+    local exit_code="$1" stderr_file="$2" stdout_file="$3"
+    local err_content=""
+    [[ -f "$stderr_file" ]] && err_content=$(tail -c 4000 "$stderr_file" 2>/dev/null)
+    local out_tail=""
+    [[ -f "$stdout_file" ]] && out_tail=$(tail -100 "$stdout_file" 2>/dev/null)
+
+    if [[ $exit_code -eq 124 ]]; then
+        echo "timeout"
+    elif echo "$err_content" | grep -qi "merge conflict\|CONFLICT"; then
+        echo "git_conflict"
+    elif echo "$err_content" | grep -qi "build fail\|compilation error\|SyntaxError\|ModuleNotFoundError"; then
+        echo "build_fail"
+    elif echo "$err_content" | grep -qi "permission denied\|EACCES"; then
+        echo "permission_denied"
+    elif echo "$err_content" | grep -qi "No space left\|ENOSPC"; then
+        echo "disk_full"
+    elif echo "$err_content" | grep -qi "rate limit\|429\|quota exceeded"; then
+        echo "rate_limit"
+    elif echo "$err_content" | grep -qi "network\|connection refused\|ETIMEDOUT\|ECONNRESET"; then
+        echo "network_error"
+    elif [[ $exit_code -eq 137 || $exit_code -eq 139 ]]; then
+        echo "claude_code_crash"
+    elif [[ $exit_code -ne 0 ]]; then
+        echo "claude_code_error_${exit_code}"
+    else
+        echo "unknown"
+    fi
+}
+
+# ── 사전 검증 (Pre-validation) ─────────────────────────────────────────
+pre_validate() {
+    local job_id="$1" project="$2" session_id="$3"
+    local workdir="${PROJECT_WORKDIR[$project]:-}"
+
+    # 1) WORKDIR 존재 여부
+    if [[ -z "$workdir" || ! -d "$workdir" ]]; then
+        _fail_job "$job_id" "$session_id" "workdir_missing" "WORKDIR 없음: ${workdir:-undefined}"
+        return 1
+    fi
+
+    # 2) 디스크 공간 확인 (최소 MIN_DISK_GB)
+    local avail_kb
+    avail_kb=$(df -k "$workdir" 2>/dev/null | tail -1 | awk '{print $4}')
+    local min_kb=$((MIN_DISK_GB * 1024 * 1024))
+    if [[ -n "$avail_kb" && "$avail_kb" -lt "$min_kb" ]]; then
+        _fail_job "$job_id" "$session_id" "disk_full" "디스크 부족: ${avail_kb}KB < ${min_kb}KB (최소 ${MIN_DISK_GB}GB)"
+        return 1
+    fi
+
+    # 3) git dirty 상태 → stash 후 진행
+    cd "$workdir"
+    if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+        log "  PRE_VALIDATE: git dirty → stash (job=$job_id)"
+        git stash push -m "pipeline-runner-auto-stash-${job_id}" 2>/dev/null || true
+    fi
+
+    return 0
+}
+
+# 빠른 실패 헬퍼 — 에러 상태 전환 + error_detail 기록
+_fail_job() {
+    local job_id="$1" session_id="$2" error_type="$3" detail="$4"
+    log "  FAIL_FAST job=$job_id type=$error_type: $detail"
+    local safe_detail
+    safe_detail=$(sql_escape "$detail")
+    db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+               error_detail='${error_type}',
+               result_output=${safe_detail},
+               updated_at=NOW() WHERE job_id='${job_id}';"
+    post_to_chat "$session_id" "❌ [Pipeline Runner] 사전 검증 실패 (${error_type}): ${detail:0:500}"
+    _notify_ai "$job_id"
+}
+
+# ── 중복 작업 확인 ─────────────────────────────────────────────────────
+compute_instruction_hash() {
+    echo -n "$1" | sha256sum | cut -d' ' -f1 | head -c 16
+}
+
+check_duplicate() {
+    local job_id="$1" project="$2" instruction="$3"
+    local inst_hash
+    inst_hash=$(compute_instruction_hash "$instruction")
+
+    # instruction_hash 저장
+    db_update "UPDATE pipeline_jobs SET instruction_hash='${inst_hash}' WHERE job_id='${job_id}';"
+
+    # 같은 프로젝트에서 running 상태 작업이 이미 있으면 → queued로 되돌림 (동시 실행 방지)
+    local running_count
+    running_count=$(db_exec "SELECT count(*) FROM pipeline_jobs
+                             WHERE project='${project}' AND status IN ('running','claimed')
+                             AND job_id != '${job_id}';" 2>/dev/null)
+    running_count="${running_count// /}"
+    if [[ -n "$running_count" && "$running_count" -gt 0 ]]; then
+        log "  DEDUP: 프로젝트 $project 에 running 작업 ${running_count}개 — $job_id 를 queued로 되돌림"
+        db_update "UPDATE pipeline_jobs SET status='queued', phase='queued', updated_at=NOW() WHERE job_id='${job_id}';"
+        return 1
+    fi
+
+    # 최근 30분 내 동일 instruction_hash의 done 작업이 있으면 경고 (실행은 계속)
+    local dup_job
+    dup_job=$(db_exec "SELECT job_id FROM pipeline_jobs
+                       WHERE project='${project}'
+                         AND instruction_hash='${inst_hash}'
+                         AND status='done'
+                         AND updated_at > NOW() - INTERVAL '30 minutes'
+                         AND job_id != '${job_id}'
+                       LIMIT 1;" 2>/dev/null) || true
+    if [[ -n "$dup_job" ]]; then
+        dup_job="${dup_job// /}"
+        log "  DEDUP_WARN: 30분 내 동일 작업 존재: $dup_job (계속 실행)"
+        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[DEDUP 경고] 유사 작업: ${dup_job}',
+                   updated_at=NOW() WHERE job_id='${job_id}';"
+    fi
+
+    return 0
+}
+
+# ── 프로세스 생존 확인 (watchdog) ──────────────────────────────────────
+_watchdog_check() {
+    local filter="$1"
+    # running 상태이면서 started_at이 MAX_JOB_RUNTIME 초과인 작업 → 타임아웃
+    local timed_out
+    timed_out=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='error',
+                         error_detail='timeout_max_runtime',
+                         review_feedback=COALESCE(review_feedback,'') || E'\n[Watchdog] 최대 실행시간 ${MAX_JOB_RUNTIME}s 초과 타임아웃',
+                         updated_at=NOW()
+                         WHERE status='running'
+                           AND started_at IS NOT NULL
+                           AND started_at < NOW() - INTERVAL '${MAX_JOB_RUNTIME} seconds'
+                           $filter
+                         RETURNING job_id;" 2>/dev/null) || true
+    if [[ -n "$timed_out" ]]; then
+        log "  WATCHDOG_TIMEOUT: $timed_out"
+    fi
+
+    # running 상태이면서 runner_pid가 설정된 작업 — 프로세스 생존 확인
+    local stale_rows
+    stale_rows=$(db_exec "SELECT job_id, runner_pid FROM pipeline_jobs
+                          WHERE status='running' AND runner_pid IS NOT NULL
+                          $filter;" 2>/dev/null) || true
+
+    if [[ -n "$stale_rows" ]]; then
+        while IFS=$'\x1e' read -r s_job_id s_pid; do
+            s_pid="${s_pid// /}"
+            s_job_id="${s_job_id// /}"
+            [[ -z "$s_job_id" || -z "$s_pid" ]] && continue
+            # 프로세스가 죽었는지 확인
+            if ! kill -0 "$s_pid" 2>/dev/null; then
+                log "  WATCHDOG_DEAD_PROCESS: job=$s_job_id pid=$s_pid — error로 전환"
+                db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+                           error_detail='process_died',
+                           review_feedback=COALESCE(review_feedback,'') || E'\n[Watchdog] Claude Code 프로세스(PID=${s_pid}) 죽음 감지',
+                           updated_at=NOW() WHERE job_id='${s_job_id}' AND status='running';"
+            fi
+        done <<< "$stale_rows"
+    fi
 }
 
 # C1: 채팅방 메시지 — session_id는 UUID 포맷 검증
@@ -154,25 +318,20 @@ run_job() {
 
     # M4: 프로젝트 화이트리스트 검증
     if [[ ! " $VALID_PROJECTS " =~ " $project " ]]; then
-        log "  ERROR: invalid project '$project'"
-        db_update "UPDATE pipeline_jobs SET status='error', phase='error',
-                   result_output='허용되지 않은 프로젝트', updated_at=NOW()
-                   WHERE job_id='${job_id}';"
+        _fail_job "$job_id" "$session_id" "invalid_project" "허용되지 않은 프로젝트: $project"
         return 1
     fi
+
+    # ── 사전 검증 (Pre-validation) ──
+    pre_validate "$job_id" "$project" "$session_id" || return 1
+
+    # ── 중복 작업 확인 ──
+    check_duplicate "$job_id" "$project" "$instruction" || return 0
 
     local workdir="${PROJECT_WORKDIR[$project]:-}"
-    if [[ -z "$workdir" || ! -d "$workdir" ]]; then
-        log "  ERROR: workdir not found for $project"
-        db_update "UPDATE pipeline_jobs SET status='error', phase='error',
-                   result_output=$(sql_escape "workdir 없음: ${workdir:-unknown}"),
-                   updated_at=NOW() WHERE job_id='${job_id}';"
-        return 1
-    fi
-
     log "▶ START job=$job_id project=$project workdir=$workdir"
     db_update "UPDATE pipeline_jobs SET status='running', phase='claude_code_work',
-               updated_at=NOW() WHERE job_id='${job_id}';"
+               started_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
     post_to_chat "$session_id" "🔧 [Pipeline Runner] 작업 시작: ${instruction:0:200}"
 
     # H5: 재시도 루프
@@ -206,7 +365,13 @@ run_job() {
 ${safe_instruction}"
 
         timeout "$MAX_RUNTIME" claude -p --output-format text "$safe_instruction" \
-            > "$output_file" 2> "$err_file" || exit_code=$?
+            > "$output_file" 2> "$err_file" &
+        local claude_pid=$!
+
+        # runner_pid 기록 (watchdog 프로세스 생존 확인용)
+        db_update "UPDATE pipeline_jobs SET runner_pid=${claude_pid}, updated_at=NOW() WHERE job_id='${job_id}';"
+
+        wait $claude_pid || exit_code=$?
 
         if [[ $exit_code -eq 0 ]]; then
             break
@@ -220,18 +385,37 @@ ${safe_instruction}"
         fi
     done
 
+    # runner_pid 클리어
+    db_update "UPDATE pipeline_jobs SET runner_pid=NULL WHERE job_id='${job_id}';"
+
     local output=""
     [[ -f "$output_file" ]] && output=$(head -c 50000 "$output_file")
 
     if [[ $exit_code -ne 0 ]]; then
-        log "  FAIL job=$job_id exit=$exit_code attempts=$((attempt))"
+        # 에러 분류 (classify_error)
+        local error_type
+        error_type=$(classify_error "$exit_code" "$err_file" "$output_file")
+        log "  FAIL job=$job_id exit=$exit_code type=$error_type attempts=$((attempt))"
+
         local err_content=""
         [[ -f "$err_file" ]] && err_content=$(tail -c 2000 "$err_file")
+        local out_tail=""
+        [[ -f "$output_file" ]] && out_tail=$(tail -100 "$output_file" | head -c 2000)
+
+        local safe_output safe_feedback safe_detail
+        safe_output=$(sql_escape "$output")
+        safe_feedback=$(sql_escape "exit=$exit_code type=$error_type (${attempt}회 시도)
+--- stderr (마지막 2KB) ---
+$err_content
+--- stdout (마지막 100줄) ---
+$out_tail")
+
         db_update "UPDATE pipeline_jobs SET status='error', phase='error',
-                   result_output=$(sql_escape "$output"),
-                   review_feedback=$(sql_escape "exit=$exit_code (${attempt}회 시도): $err_content"),
+                   error_detail='${error_type}',
+                   result_output=${safe_output},
+                   review_feedback=COALESCE(review_feedback,'') || E'\n' || ${safe_feedback},
                    updated_at=NOW() WHERE job_id='${job_id}';"
-        post_to_chat "$session_id" "❌ [Pipeline Runner] 작업 실패 (exit=$exit_code, ${attempt}회 시도): ${err_content:0:500}"
+        post_to_chat "$session_id" "❌ [Pipeline Runner] 작업 실패 (${error_type}, exit=$exit_code, ${attempt}회 시도): ${err_content:0:500}"
         _cleanup_artifacts "$job_id"
         _notify_ai "$job_id"
         return 1
@@ -527,6 +711,7 @@ _recover_stuck_jobs() {
     # running/claimed 상태가 30분 이상 된 작업 → error로 전환
     local stuck
     stuck=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='error',
+                     error_detail='stale_recovered',
                      review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 크래시 복구] ${RUNNER_HOSTNAME}',
                      updated_at=NOW()
                      WHERE status IN ('running','claimed')
@@ -540,6 +725,7 @@ _recover_stuck_jobs() {
     # H4: 승인 대기 타임아웃
     local expired
     expired=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='error',
+                       error_detail='approval_timeout',
                        review_feedback=COALESCE(review_feedback,'') || E'\n[승인 타임아웃 ${APPROVAL_TIMEOUT_HOURS}h]',
                        updated_at=NOW()
                        WHERE status='awaiting_approval'
@@ -633,6 +819,7 @@ main() {
         _cycle=$((_cycle + 1))
         if (( _cycle % 60 == 0 )); then
             _recover_stuck_jobs "$project_filter"
+            _watchdog_check "$project_filter"
             _cleanup_old_artifacts
         fi
 

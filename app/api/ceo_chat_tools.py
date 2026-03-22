@@ -496,7 +496,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "pipeline_runner_status",
-        "description": "Pipeline Runner 작업 상태 조회. status: queued/running/awaiting_approval/done/error",
+        "description": "Pipeline Runner 작업 상태 조회. error_detail(에러분류: timeout/claude_code_crash/git_conflict/build_fail/disk_full/rate_limit/process_died 등) 포함. status: queued/running/awaiting_approval/done/error",
         "input_schema": {
             "type": "object",
             "properties": {

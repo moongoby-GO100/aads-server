@@ -123,7 +123,7 @@ async def list_jobs(
         rows = await conn.fetch(
             f"""
             SELECT job_id, project, instruction, status, phase, cycle,
-                   created_at, updated_at
+                   error_detail, created_at, updated_at
             FROM pipeline_jobs
             {where}
             ORDER BY created_at DESC
@@ -140,6 +140,7 @@ async def list_jobs(
             "status": r["status"],
             "phase": r["phase"],
             "cycle": r["cycle"],
+            "error_detail": r.get("error_detail"),
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
             "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
         }
@@ -175,6 +176,8 @@ async def get_job(job_id: str):
         "result_output": row["result_output"],
         "git_diff": (row["git_diff"] or "")[:5000],
         "review_feedback": row["review_feedback"],
+        "error_detail": row.get("error_detail"),
+        "started_at": row["started_at"].isoformat() if row.get("started_at") else None,
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
         "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
     }
@@ -191,7 +194,7 @@ async def notify_completion(job_id: str):
 
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT job_id, project, status, phase, chat_session_id, "
+            "SELECT job_id, project, status, phase, chat_session_id, error_detail, "
             "substring(result_output from 1 for 500) as output_preview, "
             "substring(instruction from 1 for 200) as instruction_preview "
             "FROM pipeline_jobs WHERE job_id = $1", job_id
@@ -227,8 +230,10 @@ async def notify_completion(job_id: str):
                f"5. 프론트엔드 변경 시 UI 확인 (browser_snapshot 또는 capture_screenshot)\n"
                f"각 단계를 도구로 실제 확인한 후 결과를 CEO에게 보고하세요. 도구 호출 없이 '정상 완료' 보고 금지.")
     elif status == "error":
+        error_detail = row.get("error_detail") or "unknown"
         msg = (f"[시스템] Pipeline Runner 작업 실패\n\n"
                f"**Job**: {job_id}\n**프로젝트**: {project}\n"
+               f"**에러 분류**: {error_detail}\n"
                f"**에러**:\n{output[:300]}\n\n"
                f"원인을 진단하고 조치하세요.")
     else:
