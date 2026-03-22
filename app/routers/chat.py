@@ -143,11 +143,14 @@ async def send_message(request: Request):
 
     _MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
 
+    reply_to_id = None  # multipart에서도 초기화
+
     if "multipart/form-data" in content_type:
         form = await request.form()
         session_id_str = str(form.get("session_id", ""))
         content = str(form.get("content", ""))
         model_override = form.get("model") or form.get("model_override") or None
+        reply_to_id = str(form.get("reply_to_id")) if form.get("reply_to_id") else None
         attachments = []
         for f in form.getlist("files"):
             if hasattr(f, "read"):
@@ -191,6 +194,7 @@ async def send_message(request: Request):
         content = req.content
         model_override = req.model_override
         attachments = req.attachments
+        reply_to_id = str(req.reply_to_id) if req.reply_to_id else None
 
     # ★ ContextVar를 HTTP 핸들러에서 조기 설정
     # with_background_completion 내부의 producer Task가 올바른 session_id를 상속받도록
@@ -204,6 +208,7 @@ async def send_message(request: Request):
         content=content,
         attachments=attachments,
         model_override=model_override,
+        reply_to_id=reply_to_id,
     )
     # 클라이언트 연결 종료 시 백그라운드에서 LLM 생성 완료 → DB 저장 보장
     bg_stream = svc.with_background_completion(raw_stream, session_id=session_id_str)

@@ -1193,6 +1193,7 @@ async def _save_message(
     sources: Optional[List[Any]] = None,
     tools_called: Optional[List[str]] = None,
     thinking_summary: Optional[str] = None,
+    reply_to_id: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     # Strip raw XML tool-call / tool-response / fabricated-result blocks from assistant messages
     # 닫힌 태그 + 닫히지 않은 태그(이후 전부) 모두 제거
@@ -1213,8 +1214,8 @@ async def _save_message(
             """
             INSERT INTO chat_messages
                 (session_id, role, content, model_used, intent, cost, tokens_in, tokens_out,
-                 attachments, sources, tools_called, thinking_summary)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12)
+                 attachments, sources, tools_called, thinking_summary, reply_to_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13)
             RETURNING *
             """,
             session_id,
@@ -1229,6 +1230,7 @@ async def _save_message(
             json.dumps(sources or []),
             json.dumps(tools_called or []),
             thinking_summary,
+            reply_to_id,
         )
         # Update session message count (atomic with INSERT)
         await conn.execute(
@@ -1668,6 +1670,7 @@ async def send_message_stream(
     model_override: Optional[str] = None,
     intent_override: Optional[str] = None,
     uploaded_files: Optional[List[Any]] = None,
+    reply_to_id: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """
     AADS-185: 3계층 Context Engineering + IntentRouter + ModelSelector + Tool Use 루프.
@@ -1870,10 +1873,26 @@ async def send_message_stream(
         except Exception as _url_err:
             logger.warning(f"url_detection_skipped: {_url_err}")
 
+        # Reply-to: 이전 AI 응답 지정 시 인용 컨텍스트 주입
+        _reply_to_uuid = None
+        if reply_to_id:
+            try:
+                _reply_to_uuid = uuid.UUID(reply_to_id)
+                _quoted_row = await conn.fetchrow(
+                    "SELECT content FROM chat_messages WHERE id = $1 AND session_id = $2",
+                    _reply_to_uuid, sid,
+                )
+                if _quoted_row and _quoted_row["content"]:
+                    _quoted = _quoted_row["content"][:2000]
+                    content = f"[CEO가 지정한 이전 AI 응답 (reply_to)]\n{_quoted}\n\n[CEO 추가 지시]\n{content}"
+                    logger.info(f"[REPLY_TO] session={session_id[:8]} reply_to={reply_to_id[:8]} quoted={len(_quoted)}chars")
+            except Exception as _rte:
+                logger.warning(f"[REPLY_TO] failed: {_rte}")
+
         # 사용자 메시지 저장 (trigger 메시지는 intent로 구분)
         # model_override를 user 메시지의 model_used에 저장 → 재개 시 CEO 선택 모델 복원용
         user_intent = "system_trigger" if intent_override else None
-        await _save_message(conn, sid, "user", content, model_used=model_override, intent=user_intent, attachments=attachments or [])
+        await _save_message(conn, sid, "user", content, model_used=model_override, intent=user_intent, attachments=attachments or [], reply_to_id=_reply_to_uuid)
 
         # 2. 워크스페이스 정보 조회
         sp_row = await conn.fetchrow(

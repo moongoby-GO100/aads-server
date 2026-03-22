@@ -3003,8 +3003,10 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
     # ── Pipeline Runner 도구 (호스트 독립 실행) ─────────────────────────────
     elif name == "pipeline_runner_submit":
         from app.services.tool_executor import current_chat_session_id
-        # 1순위: 도구 파라미터로 명시된 session_id, 2순위: 함수 인자, 3순위: ContextVar
+        # session_id 강제: 1순위 도구파라미터, 2순위 함수인자, 3순위 ContextVar
         _sid = params.get("session_id", "") or chat_session_id or current_chat_session_id.get("")
+        if not _sid:
+            return "[ERROR] session_id가 필요합니다. pipeline_runner_submit 호출 시 session_id를 명시하세요."
         import httpx
         _internal_h = {"x-monitor-key": "internal-pipeline-call"}
         async with httpx.AsyncClient() as client:

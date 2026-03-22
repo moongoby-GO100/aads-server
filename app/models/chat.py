@@ -77,6 +77,7 @@ class MessageSendRequest(BaseModel):
     content: str
     attachments: List[Any] = Field(default_factory=list)
     model_override: Optional[str] = None
+    reply_to_id: Optional[uuid.UUID] = None
 
 
 class MessageUpdateRequest(BaseModel):
@@ -98,6 +99,7 @@ class MessageOut(BaseModel):
     sources: List[Any]
     artifact_id: Optional[uuid.UUID]
     edited_at: Optional[datetime] = None
+    reply_to_id: Optional[uuid.UUID] = None
     created_at: datetime
 
 
