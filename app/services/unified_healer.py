@@ -169,6 +169,11 @@ async def _check_service(svc: dict) -> str:
             await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
             return "ok" if proc.returncode == 0 else "fail"
 
+        elif check_type == "ssh_command":
+            # SSH를 통한 원격 서버 명령 실행 (systemctl is-active 등)
+            result = await _execute_command(target, svc.get("server", "68"))
+            return "ok" if result.get("success") else "fail"
+
         else:
             return "unknown"
 
