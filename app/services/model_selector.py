@@ -222,7 +222,7 @@ async def call_stream(
     # Gemini 모델 → LiteLLM 경유 (실패 시 Claude Haiku 폴백)
     if model in _GEMINI_MODELS:
         _had_error = False
-        async for event in _stream_litellm(model, system_prompt, messages):
+        async for event in _stream_litellm(model, system_prompt, messages, tools=tools):
             if event.get("type") == "error":
                 _had_error = True
                 logger.warning(f"gemini_fallback: {model} failed, falling back to claude-haiku")

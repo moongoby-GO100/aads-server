@@ -180,7 +180,7 @@ async def _build_artifact_context_layer(
         return ""
     try:
         import uuid as _uuid
-        from app.services.db import get_pool
+        from app.core.db_pool import get_pool
         _conn = db_conn or await get_pool().acquire()
         _should_release = db_conn is None
         try:

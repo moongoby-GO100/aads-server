@@ -277,29 +277,29 @@ async def interrupt_session(session_id: UUID, req: InterruptRequest):
     from app.core.interrupt_queue import push_interrupt, is_streaming
     sid = str(session_id)
 
-    # DB에 즉시 저장 (유실 방지) — 스트리밍 여부와 무관하게 저장
-    try:
-        from app.core.db_pool import get_pool
-        import json as _json
-        pool = get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                """INSERT INTO chat_messages
-                   (session_id, role, content, attachments)
-                   VALUES ($1, 'user', $2, $3::jsonb)""",
-                session_id,
-                f"[추가 지시] {req.content}",
-                _json.dumps(req.attachments or []),
-            )
-            await conn.execute(
-                "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
-                session_id,
-            )
-        logger.info("interrupt_saved_to_db", session_id=sid, content=req.content[:100])
-    except Exception as e:
-        logger.error("interrupt_db_save_failed", session_id=sid, error=str(e))
-
     if is_streaming(sid):
+        # DB에 즉시 저장 (유실 방지) — 스트리밍 중일 때만 저장
+        try:
+            from app.core.db_pool import get_pool
+            import json as _json
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """INSERT INTO chat_messages
+                       (session_id, role, content, attachments)
+                       VALUES ($1, 'user', $2, $3::jsonb)""",
+                    session_id,
+                    f"[추가 지시] {req.content}",
+                    _json.dumps(req.attachments or []),
+                )
+                await conn.execute(
+                    "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
+                    session_id,
+                )
+            logger.info("interrupt_saved_to_db", session_id=sid, content=req.content[:100])
+        except Exception as e:
+            logger.error("interrupt_db_save_failed", session_id=sid, error=str(e))
+
         push_interrupt(sid, req.content, req.attachments if req.attachments else None)
         logger.info("interrupt_queued", session_id=sid, content=req.content[:100],
                      attachments=len(req.attachments))
@@ -403,6 +403,15 @@ async def search_messages(
 # ─── AADS-188D: Diff 승인 API ────────────────────────────────────────────────
 
 _diff_approval_store: dict = {}  # (session_id, tool_use_id) -> action
+_DIFF_STORE_MAX = 1000  # 메모리 누수 방지: 최대 항목 수
+
+
+def _evict_diff_store():
+    """1000개 초과 시 오래된 항목 절반 삭제 (삽입 순서 기반, Python 3.7+ dict 보장)."""
+    if len(_diff_approval_store) > _DIFF_STORE_MAX:
+        keys = list(_diff_approval_store.keys())
+        for k in keys[: len(keys) // 2]:
+            del _diff_approval_store[k]
 
 
 @router.post("/chat/approve-diff", response_model=ApproveDiffOut, tags=["chat-message"])
@@ -416,6 +425,7 @@ async def approve_diff(req: ApproveDiffRequest):
         raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
     key = (str(req.session_id), req.tool_use_id)
     _diff_approval_store[key] = action
+    _evict_diff_store()
     logger.info("approve_diff", session_id=str(req.session_id), tool_use_id=req.tool_use_id, action=action)
     return ApproveDiffOut(success=True, action=action, message=f"Diff {action} recorded.")
 

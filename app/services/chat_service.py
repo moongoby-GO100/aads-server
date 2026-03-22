@@ -204,6 +204,7 @@ async def with_background_completion(
 
     async def _producer():
         nonlocal _client_gone, _client_gone_since
+        _my_task = _heartbeat_asyncio.current_task()
         try:
             async for chunk in gen:
                 await queue.put(chunk)
@@ -251,13 +252,14 @@ async def with_background_completion(
                 await queue.put(_SENTINEL)
             except Exception:
                 pass
-            _active_bg_tasks.pop(session_id, None)
+            if _active_bg_tasks.get(session_id) is _my_task:
+                _active_bg_tasks.pop(session_id, None)
             # 🆕 bg_task 완료 후 대기 중인 trigger_ai_reaction 큐 소비
             if session_id in _ai_reaction_queue and _ai_reaction_queue[session_id]:
                 _next_msg = _ai_reaction_queue[session_id].pop(0)
                 if not _ai_reaction_queue[session_id]:
                     del _ai_reaction_queue[session_id]
-                _ai_reaction_active[session_id] = _bg_time.monotonic()
+                _ai_reaction_active[session_id] = _time.time()
                 _heartbeat_asyncio.create_task(_consume_next_reaction(session_id, _next_msg))
             # 스트리밍 완료 → placeholder 삭제 (최종 응답이 generator 내부에서 저장됨)
             try:
