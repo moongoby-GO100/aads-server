@@ -868,14 +868,22 @@ async def get_session(session_id: str) -> Optional[Dict[str, Any]]:
         await get_pool().release(conn)
 
 
-async def list_sessions(workspace_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+async def list_sessions(workspace_id: str, limit: int = 50, tag: Optional[str] = None) -> List[Dict[str, Any]]:
     conn = await _get_conn()
     try:
-        rows = await conn.fetch(
-            "SELECT * FROM chat_sessions WHERE workspace_id = $1 ORDER BY pinned DESC, updated_at DESC LIMIT $2",
-            uuid.UUID(workspace_id),
-            limit,
-        )
+        if tag:
+            rows = await conn.fetch(
+                "SELECT * FROM chat_sessions WHERE workspace_id = $1 AND $3 = ANY(tags) ORDER BY pinned DESC, updated_at DESC LIMIT $2",
+                uuid.UUID(workspace_id),
+                limit,
+                tag,
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT * FROM chat_sessions WHERE workspace_id = $1 ORDER BY pinned DESC, updated_at DESC LIMIT $2",
+                uuid.UUID(workspace_id),
+                limit,
+            )
         return [_row_to_dict(r) for r in rows]
     finally:
         await get_pool().release(conn)
@@ -962,6 +970,10 @@ async def update_session(session_id: str, data: Dict[str, Any]) -> Optional[Dict
         if "pinned" in data and data["pinned"] is not None:
             sets.append(f"pinned = ${idx}")
             vals.append(data["pinned"])
+            idx += 1
+        if "tags" in data and data["tags"] is not None:
+            sets.append(f"tags = ${idx}")
+            vals.append(data["tags"])
             idx += 1
         if not sets:
             row = await conn.fetchrow("SELECT * FROM chat_sessions WHERE id = $1", uuid.UUID(session_id))

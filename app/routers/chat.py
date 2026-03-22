@@ -77,9 +77,9 @@ async def delete_workspace(workspace_id: UUID):
 # ════════════════════════════════════════════════════════════════════════════════
 
 @router.get("/chat/sessions", response_model=List[SessionOut], tags=["chat-session"])
-async def get_sessions(workspace_id: UUID = Query(...)):
-    """워크스페이스 내 세션 목록."""
-    return await svc.list_sessions(str(workspace_id))
+async def get_sessions(workspace_id: UUID = Query(...), tag: Optional[str] = Query(None)):
+    """워크스페이스 내 세션 목록. tag 파라미터로 필터 가능."""
+    return await svc.list_sessions(str(workspace_id), tag=tag)
 
 
 @router.get("/chat/sessions/{session_id}", response_model=SessionOut, tags=["chat-session"])

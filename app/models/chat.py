@@ -56,6 +56,7 @@ class SessionUpdate(BaseModel):
     title: Optional[str] = Field(None, max_length=200)
     pinned: Optional[bool] = None
     summary: Optional[str] = None
+    tags: Optional[List[str]] = None
 
 
 class SessionOut(BaseModel):
@@ -66,6 +67,7 @@ class SessionOut(BaseModel):
     message_count: int
     cost_total: Decimal
     pinned: bool
+    tags: List[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
