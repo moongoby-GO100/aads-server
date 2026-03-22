@@ -34,6 +34,8 @@ SAFE_COMMANDS = {
     "systemctl reload nginx",
     "supervisorctl restart aads-api",
     "docker system prune -f",
+    "/root/aads/aads-server/deploy.sh code",
+    "/root/aads/aads-server/deploy.sh build",
 }
 
 SAFE_PREFIXES = [
@@ -61,11 +63,11 @@ ERROR_RECOVERY_MAP = {
     "service_down_http_health": "docker restart {service}",
     "container_exit": "docker restart {service}",
     "docker_crash": "docker restart {service}",
-    "api_unreachable": "docker restart aads-server",
+    "api_unreachable": "/root/aads/aads-server/deploy.sh code",
     "nginx_down": "systemctl restart nginx",
     "nginx_error": "systemctl reload nginx",
     "disk_space_critical": "docker system prune -f",
-    "high_memory": "docker restart aads-server",
+    "high_memory": "/root/aads/aads-server/deploy.sh code",
     "db_connection_error": "docker restart aads-postgres",
     "redis_connection_error": "docker restart aads-redis",
 }
@@ -124,7 +126,15 @@ async def _check_service(svc: dict) -> str:
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec + 2)
-            return "ok" if b'"Running":true' in stdout else "fail"
+            if b'"Running":true' in stdout:
+                return "ok"
+            # Created/Exited 상태 = 컨테이너 존재하지만 미시작 → docker start로 복구
+            if b'"Status":"created"' in stdout or b'"Status":"exited"' in stdout:
+                logger.warning("container_not_running", container=target,
+                               status="created/exited", action="auto_start")
+                await _docker_api("start", target)
+                return "fail"  # 다음 사이클에서 재확인
+            return "fail"
 
         elif check_type in ("http", "https", "http_health"):
             proc = await asyncio.create_subprocess_exec(
@@ -678,6 +688,27 @@ async def _phase3_alert_auto_acknowledge(conn):
               AND acknowledged = false
               AND created_at < NOW() - INTERVAL '24 hours'
         """)
+
+        # P4: DB 커넥션 풀 사용률 경고 (80% 초과)
+        try:
+            from app.core.db_pool import get_pool_stats
+            stats = get_pool_stats()
+            if stats.get("available") and stats["usage_pct"] >= 80:
+                logger.warning("db_pool_high_usage",
+                               used=stats["used"], max=stats["max_size"],
+                               pct=stats["usage_pct"])
+                await conn.execute("""
+                    INSERT INTO alert_history (server, category, message, severity)
+                    VALUES ('68', 'db_pool_high', $1, 'warning')
+                """, f"DB 커넥션 풀 사용률 {stats['usage_pct']}% ({stats['used']}/{stats['max_size']})")
+            elif stats.get("available") and stats["usage_pct"] < 70:
+                await conn.execute("""
+                    UPDATE alert_history
+                    SET acknowledged = true, acknowledged_at = NOW()
+                    WHERE category = 'db_pool_high' AND acknowledged = false
+                """)
+        except Exception as _pe:
+            logger.debug("pool_check_error", error=str(_pe))
 
     except Exception as e:
         logger.debug("alert_auto_ack_error", error=str(e))

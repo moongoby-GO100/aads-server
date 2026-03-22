@@ -1,6 +1,6 @@
 #!/bin/bash
 # AADS 호스트 레벨 Watchdog — 크론 1분마다 실행
-# aads-server 컨테이너가 내부 Healer도 포함하므로, 컨테이너 자체 장애 시 외부 감시 필요
+# 3단계 검증: 컨테이너 상태 → API Health → DB 채팅 기능
 
 COMPOSE_DIR="/root/aads/aads-server"
 HEALTH_URL="http://localhost:8100/api/v1/health"
@@ -26,18 +26,59 @@ STATUS=$(docker inspect aads-server --format '{{.State.Status}}' 2>/dev/null)
 
 case "$STATUS" in
     running)
-        # 컨테이너는 running이지만 API가 응답하지 않을 수 있음
+        # Layer 1: API Health
         if ! curl -sf --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
             notify "⚠️ running but unhealthy — supervisorctl restart aads-api"
             docker exec aads-server supervisorctl restart aads-api
+            exit 0
+        fi
+
+        # Layer 2: DB 채팅 기능 테스트 (5분마다 = 매 5번째 실행)
+        MINUTE=$(date +%M)
+        if (( MINUTE % 5 == 0 )); then
+            DB_TEST=$(docker exec aads-postgres psql -U aads -d aads -t -A -c "
+              SELECT 'DB_OK' WHERE EXISTS(
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name='chat_messages' AND column_name='content'
+              );
+            " 2>/dev/null || echo "DB_FAIL")
+
+            if [[ "$DB_TEST" != *"DB_OK"* ]]; then
+                notify "🚨 DB 채팅 테이블 이상 감지 — 스키마 확인 필요"
+            fi
+
+            # streaming_placeholder 잔존 확인
+            STALE=$(docker exec aads-postgres psql -U aads -d aads -t -A -c "
+              SELECT count(*) FROM chat_messages
+              WHERE intent = 'streaming_placeholder'
+              AND created_at < NOW() - interval '3 minutes';
+            " 2>/dev/null || echo "0")
+
+            if [[ "$STALE" -gt 0 ]] 2>/dev/null; then
+                docker exec aads-postgres psql -U aads -d aads -q -c "
+                  DELETE FROM chat_messages WHERE intent = 'streaming_placeholder'
+                  AND created_at < NOW() - interval '3 minutes';
+                " 2>/dev/null
+                notify "⚠️ stale placeholder ${STALE}건 자동 정리"
+            fi
         fi
         ;;
     created|exited)
         notify "🚨 컨테이너 상태: ${STATUS} — docker start 실행"
         docker start aads-server
-        sleep 5
+        sleep 8
+        # V2: 복구 후 health + 채팅 INSERT 테스트
         if curl -sf --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
-            notify "✅ 복구 성공"
+            INSERT_TEST=$(docker exec aads-postgres psql -U aads -d aads -t -A -c "
+              WITH ins AS (INSERT INTO chat_messages (session_id, role, content) SELECT id, 'user', '_watchdog_test_' FROM chat_sessions LIMIT 1 RETURNING id),
+              del AS (DELETE FROM chat_messages WHERE id IN (SELECT id FROM ins))
+              SELECT 'OK' FROM ins LIMIT 1;
+            " 2>/dev/null || echo "FAIL")
+            if echo "$INSERT_TEST" | grep -q "OK"; then
+                notify "✅ 복구 성공 (health + 채팅 INSERT 검증)"
+            else
+                notify "⚠️ 복구됨 but 채팅 INSERT 실패 — DB 스키마 확인 필요"
+            fi
         else
             notify "❌ docker start 후에도 health 실패"
         fi
@@ -45,9 +86,19 @@ case "$STATUS" in
     "")
         notify "🚨 컨테이너 없음 — docker compose up -d --no-deps aads-server"
         cd "$COMPOSE_DIR" && docker compose up -d --no-deps aads-server
-        sleep 10
+        sleep 12
+        # V2: 복구 후 health + 채팅 INSERT 테스트
         if curl -sf --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
-            notify "✅ 컨테이너 재생성 + 복구 성공"
+            INSERT_TEST=$(docker exec aads-postgres psql -U aads -d aads -t -A -c "
+              WITH ins AS (INSERT INTO chat_messages (session_id, role, content) SELECT id, 'user', '_watchdog_test_' FROM chat_sessions LIMIT 1 RETURNING id),
+              del AS (DELETE FROM chat_messages WHERE id IN (SELECT id FROM ins))
+              SELECT 'OK' FROM ins LIMIT 1;
+            " 2>/dev/null || echo "FAIL")
+            if echo "$INSERT_TEST" | grep -q "OK"; then
+                notify "✅ 재생성 + 복구 성공 (health + 채팅 INSERT 검증)"
+            else
+                notify "⚠️ 재생성됨 but 채팅 INSERT 실패"
+            fi
         else
             notify "❌ 컨테이너 재생성 후 health 실패"
         fi

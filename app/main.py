@@ -356,50 +356,86 @@ async def lifespan(app: FastAPI):
         from app.core.db_pool import init_pool
         db_pool = await init_pool()
         app_state["db_pool"] = db_pool
-        # B3: tool_results_archive is_error 컬럼 마이그레이션
+        # ── 스키마 자동 검증 + 자동 마이그레이션 ──
         try:
             async with db_pool.acquire() as conn:
-                await conn.execute(
-                    "ALTER TABLE tool_results_archive ADD COLUMN IF NOT EXISTS is_error BOOLEAN DEFAULT FALSE"
+                # chat_messages 필수 컬럼 자동 생성
+                _auto_columns = [
+                    ("chat_messages", "branch_id", "UUID DEFAULT NULL"),
+                    ("chat_messages", "intent", "TEXT DEFAULT NULL"),
+                    ("tool_results_archive", "is_error", "BOOLEAN DEFAULT FALSE"),
+                ]
+                for _tbl, _col, _type in _auto_columns:
+                    await conn.execute(
+                        f"ALTER TABLE {_tbl} ADD COLUMN IF NOT EXISTS {_col} {_type}"
+                    )
+                # INSERT 기능 테스트
+                _test_ok = await conn.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name='chat_messages' AND column_name='content')"
                 )
-            logger.info("b3_is_error_column_ensured")
+                if not _test_ok:
+                    logger.error("startup_schema_validation_FAILED: chat_messages.content missing")
+                else:
+                    logger.info("startup_schema_validation_ok")
         except Exception as e:
-            logger.warning("b3_is_error_column_migration_failed", error=str(e))
+            logger.error("startup_schema_migration_failed", error=str(e))
+
+        # ── 필수 환경변수 검증 ──
+        _env_warnings = []
+        _budget = float(os.environ.get("AGENT_SDK_MAX_BUDGET_USD", "10"))
+        if _budget <= 0:
+            _env_warnings.append(f"AGENT_SDK_MAX_BUDGET_USD={_budget} (must be >0, defaulting to 10)")
+            os.environ["AGENT_SDK_MAX_BUDGET_USD"] = "10"
+        if not os.environ.get("JWT_SECRET_KEY"):
+            _env_warnings.append("JWT_SECRET_KEY not set")
+        if not os.environ.get("DATABASE_URL"):
+            _env_warnings.append("DATABASE_URL not set")
+        if _env_warnings:
+            logger.warning("startup_env_warnings", warnings=_env_warnings)
+        else:
+            logger.info("startup_env_validation_ok")
     except Exception as e:
         logger.error("db_pool_init_failed", error=str(e))
         app_state["db_pool"] = None
 
-    # 서버 시작 시 stale placeholder 즉시 정리 — 경고 메시지 추가 후 intent 변경
-    # resume_interrupted_streams 제거: resume가 새 placeholder를 만들어 문제 재발시킴
+    # 서버 시작 시 stale placeholder 즉시 삭제 (bg_partial 전환 아님 — 프론트 혼란 방지)
     try:
         async with db_pool.acquire() as _c:
             _cleaned = await _c.fetchval(
-                "WITH d AS (UPDATE chat_messages SET intent = 'bg_partial', "
-                "content = content || E'\\n\\n⚠️ _서버 재시작으로 응답이 중단되었습니다. 다시 질문해주세요._' "
+                "WITH d AS (DELETE FROM chat_messages "
                 "WHERE intent = 'streaming_placeholder' RETURNING id) SELECT COUNT(*) FROM d"
             )
             if _cleaned and _cleaned > 0:
-                logger.info(f"startup_placeholder_cleanup: {_cleaned} stale placeholder(s) → bg_partial")
+                logger.info(f"startup_placeholder_cleanup: {_cleaned} stale placeholder(s) DELETED")
+                # message_count 재동기화
+                await _c.execute(
+                    "UPDATE chat_sessions s SET message_count = "
+                    "(SELECT count(*) FROM chat_messages m WHERE m.session_id = s.id)"
+                )
     except Exception as _e:
         logger.warning(f"startup_placeholder_cleanup_failed: {_e}")
 
-    # 주기적 stale placeholder 자동 정리 (2분마다, 2분 초과분)
+    # 주기적 stale placeholder 자동 삭제 (1분마다, 2분 초과분)
     async def _periodic_placeholder_cleanup():
         import asyncio as _pc_asyncio
         while True:
-            await _pc_asyncio.sleep(120)  # 2분
+            await _pc_asyncio.sleep(60)  # 1분
             try:
                 from app.core.db_pool import get_pool as _gp_pc
                 _pool = _gp_pc()
                 async with _pool.acquire() as _c:
                     _n = await _c.fetchval(
-                        "WITH d AS (UPDATE chat_messages SET intent = 'bg_partial', "
-                        "content = content || E'\\n\\n⚠️ _응답 생성이 중단되었습니다._' "
+                        "WITH d AS (DELETE FROM chat_messages "
                         "WHERE intent = 'streaming_placeholder' AND created_at < NOW() - interval '2 minutes' "
                         "RETURNING id) SELECT COUNT(*) FROM d"
                     )
                     if _n and _n > 0:
-                        logger.info(f"periodic_placeholder_cleanup: {_n} stale placeholder(s) → bg_partial")
+                        logger.info(f"periodic_placeholder_cleanup: {_n} stale placeholder(s) DELETED")
+                        await _c.execute(
+                            "UPDATE chat_sessions s SET message_count = "
+                            "(SELECT count(*) FROM chat_messages m WHERE m.session_id = s.id)"
+                        )
             except Exception:
                 pass
 

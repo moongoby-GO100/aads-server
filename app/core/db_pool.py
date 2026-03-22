@@ -56,6 +56,45 @@ def get_pool() -> asyncpg.Pool:
     return _pool
 
 
+def get_pool_stats() -> dict:
+    """풀 사용률 통계 반환. P4: 커넥션 풀 고갈 사전 경고용."""
+    if _pool is None:
+        return {"available": False}
+    size = _pool.get_size()
+    free = _pool.get_idle_size()
+    used = size - free
+    max_size = _pool.get_max_size()
+    usage_pct = (used / max_size * 100) if max_size > 0 else 0
+    return {
+        "available": True,
+        "size": size,
+        "free": free,
+        "used": used,
+        "max_size": max_size,
+        "usage_pct": round(usage_pct, 1),
+    }
+
+
+async def execute_with_retry(query: str, *args, max_retries: int = 3):
+    """R4: 데드락/직렬화 실패 시 자동 재시도 (최대 3회)."""
+    import asyncio as _aio
+    pool = get_pool()
+    for attempt in range(max_retries):
+        try:
+            async with pool.acquire() as conn:
+                return await conn.execute(query, *args)
+        except asyncpg.DeadlockDetectedError as e:
+            logger.warning("db_deadlock_retry", attempt=attempt + 1, max=max_retries, error=str(e)[:100])
+            if attempt == max_retries - 1:
+                raise
+            await _aio.sleep(0.1 * (2 ** attempt))
+        except asyncpg.SerializationError as e:
+            logger.warning("db_serialization_retry", attempt=attempt + 1, error=str(e)[:100])
+            if attempt == max_retries - 1:
+                raise
+            await _aio.sleep(0.1 * (2 ** attempt))
+
+
 async def close_pool() -> None:
     """앱 종료 시 호출 — 풀 정리."""
     global _pool
