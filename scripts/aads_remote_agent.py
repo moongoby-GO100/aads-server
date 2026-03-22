@@ -258,7 +258,7 @@ _reported_tasks: dict = {}  # task_id → reported_at (중복 방지)
 PROJECTS_WITH_NAMES = {
     # 211서버 기본값 (환경변수 PROJECTS_CONFIG로 재정의 가능)
     "KIS":       {"path": "/root/kis",       "project": "KIS"},
-    "GO100":     {"path": "/root/go100",     "project": "GO100"},
+    "GO100":     {"path": "/root/kis-autotrade-v4", "project": "GO100"},
     "ShortFlow": {"path": "/root/shortflow", "project": "ShortFlow"},
 }
 
