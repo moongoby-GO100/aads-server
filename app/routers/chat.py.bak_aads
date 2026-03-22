@@ -82,6 +82,15 @@ async def get_sessions(workspace_id: UUID = Query(...)):
     return await svc.list_sessions(str(workspace_id))
 
 
+@router.get("/chat/sessions/{session_id}", response_model=SessionOut, tags=["chat-session"])
+async def get_session(session_id: UUID):
+    """단일 세션 조회 (해시 기반 세션 복원용)."""
+    result = await svc.get_session(str(session_id))
+    if not result:
+        raise _NOT_FOUND("session")
+    return result
+
+
 @router.post("/chat/sessions", response_model=SessionOut, status_code=201, tags=["chat-session"])
 async def create_session(req: SessionCreate):
     """세션 생성."""
@@ -215,17 +224,22 @@ async def get_streaming_status(session_id: UUID):
     status = svc.get_streaming_status(str(session_id))
     if status and (status.get("is_streaming") or status.get("just_completed")):
         return status
-    # 메모리에 없으면 DB에서 placeholder 확인
+    # 메모리에 없으면 DB에서 placeholder 확인 (5분 이내만 유효)
     try:
         from app.core.db_pool import get_pool
         pool = get_pool()
         async with pool.acquire() as conn:
             cnt = await conn.fetchval(
-                "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder'",
+                "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at > NOW() - interval '5 minutes'",
                 session_id,
             )
             if cnt and cnt > 0:
                 return {"is_streaming": True, "just_completed": False, "content_length": 0, "tool_count": 0, "last_tool": ""}
+            # 5분 초과 stale placeholder 자동 정리
+            await conn.execute(
+                "UPDATE chat_messages SET intent = 'interrupted' WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at <= NOW() - interval '5 minutes'",
+                session_id,
+            )
     except Exception:
         pass
     return status or {"is_streaming": False}
@@ -258,10 +272,34 @@ async def interrupt_session(session_id: UUID, req: InterruptRequest):
     is_streaming() 상태일 때만 interrupt_queue에 push.
     아닐 때는 일반 메시지 전송 안내 반환.
     도구 루프 완료 시점에 model_selector.py가 has_interrupt() 체크 후 반영.
+    AADS-FIX: 인터럽트 메시지를 DB에도 즉시 저장 (유실 방지)
     """
     from app.core.interrupt_queue import push_interrupt, is_streaming
     sid = str(session_id)
+
     if is_streaming(sid):
+        # DB에 즉시 저장 (유실 방지) — 스트리밍 중일 때만 저장
+        try:
+            from app.core.db_pool import get_pool
+            import json as _json
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """INSERT INTO chat_messages
+                       (session_id, role, content, attachments)
+                       VALUES ($1, 'user', $2, $3::jsonb)""",
+                    session_id,
+                    f"[추가 지시] {req.content}",
+                    _json.dumps(req.attachments or []),
+                )
+                await conn.execute(
+                    "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
+                    session_id,
+                )
+            logger.info("interrupt_saved_to_db", session_id=sid, content=req.content[:100])
+        except Exception as e:
+            logger.error("interrupt_db_save_failed", session_id=sid, error=str(e))
+
         push_interrupt(sid, req.content, req.attachments if req.attachments else None)
         logger.info("interrupt_queued", session_id=sid, content=req.content[:100],
                      attachments=len(req.attachments))

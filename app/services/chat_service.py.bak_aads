@@ -204,6 +204,7 @@ async def with_background_completion(
 
     async def _producer():
         nonlocal _client_gone, _client_gone_since
+        _my_task = _heartbeat_asyncio.current_task()
         try:
             async for chunk in gen:
                 await queue.put(chunk)
@@ -257,7 +258,7 @@ async def with_background_completion(
                 _next_msg = _ai_reaction_queue[session_id].pop(0)
                 if not _ai_reaction_queue[session_id]:
                     del _ai_reaction_queue[session_id]
-                _ai_reaction_active[session_id] = _bg_time.monotonic()
+                _ai_reaction_active[session_id] = _time.time()
                 _heartbeat_asyncio.create_task(_consume_next_reaction(session_id, _next_msg))
             # 스트리밍 완료 → placeholder 삭제 (최종 응답이 generator 내부에서 저장됨)
             try:
@@ -852,6 +853,19 @@ async def delete_workspace(workspace_id: str) -> bool:
 
 
 # ─── Session CRUD ─────────────────────────────────────────────────────────────
+
+async def get_session(session_id: str) -> Optional[Dict[str, Any]]:
+    """단일 세션 조회 (ID 기반)."""
+    conn = await _get_conn()
+    try:
+        row = await conn.fetchrow(
+            "SELECT * FROM chat_sessions WHERE id = $1",
+            uuid.UUID(session_id),
+        )
+        return _row_to_dict(row) if row else None
+    finally:
+        await get_pool().release(conn)
+
 
 async def list_sessions(workspace_id: str, limit: int = 50) -> List[Dict[str, Any]]:
     conn = await _get_conn()
@@ -1482,7 +1496,7 @@ async def _analyze_videos_with_gemini(
                     "동영상의 주요 내용, 장면, 텍스트, 중요한 시각 정보를 한국어로 상세히 설명해주세요."
                 )
                 response = client.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model="gemini-2.5-flash",
                     contents=[
                         genai_types.Part.from_bytes(data=video_bytes, mime_type=media_type),
                         analysis_prompt,
@@ -1499,6 +1513,63 @@ async def _analyze_videos_with_gemini(
         logger.warning("[VIDEO] google-genai not installed — skipping video analysis")
     except Exception as e:
         logger.error(f"[VIDEO] Gemini client error: {e}")
+
+    return results
+
+
+async def _analyze_images_with_gemini(
+    image_contents: list,
+    user_prompt: str,
+) -> list:
+    """이미지 파일 목록을 Gemini Flash API로 분석하여 텍스트 설명 반환.
+    CLI Relay가 이미지를 직접 전달할 수 없으므로 Gemini Vision으로 전처리."""
+    import os
+    import base64 as _b64
+
+    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
+    if not api_key:
+        logger.warning("[VISION-PRE] GOOGLE_API_KEY not set — skipping image analysis")
+        return []
+
+    results = []
+    try:
+        from google import genai as genai_sdk
+        from google.genai import types as genai_types
+
+        client = genai_sdk.Client(api_key=api_key)
+
+        for img in image_contents:
+            file_name = img.get("name", "image")
+            media_type = img.get("media_type", "image/jpeg")
+            raw_b64 = img.get("base64_data", "")
+            if not raw_b64:
+                continue
+
+            try:
+                img_bytes = _b64.b64decode(raw_b64)
+                analysis_prompt = (
+                    f"다음 이미지를 분석해주세요. 사용자 요청: {user_prompt}\n"
+                    "이미지의 내용, 텍스트, UI 요소, 에러 메시지, 차트/그래프, 중요한 시각 정보를 한국어로 상세히 설명해주세요. "
+                    "코드나 에러가 보이면 정확히 옮겨 적어주세요."
+                )
+                response = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=[
+                        genai_types.Part.from_bytes(data=img_bytes, mime_type=media_type),
+                        analysis_prompt,
+                    ],
+                )
+                analysis_text = response.text or "(분석 결과 없음)"
+                results.append({"name": file_name, "analysis": f"[이미지 분석: {file_name}]\n{analysis_text}"})
+                logger.info(f"[VISION-PRE] Gemini analyzed '{file_name}': {len(analysis_text)} chars")
+            except Exception as e:
+                logger.error(f"[VISION-PRE] Gemini analysis failed for '{file_name}': {e}")
+                results.append({"name": file_name, "analysis": f"[이미지: {file_name}] (Gemini 분석 실패: {e})"})
+
+    except ImportError:
+        logger.warning("[VISION-PRE] google-genai not installed — skipping image analysis")
+    except Exception as e:
+        logger.error(f"[VISION-PRE] Gemini client error: {e}")
 
     return results
 
@@ -1575,7 +1646,7 @@ async def process_video_with_gemini(file_data: dict, user_message: str) -> str:
         while video_file.state.name == "PROCESSING":
             await _heartbeat_asyncio.sleep(2)
             video_file = genai.get_file(video_file.name)
-        model_g = genai.GenerativeModel("gemini-2.0-flash-exp")
+        model_g = genai.GenerativeModel("gemini-2.5-flash")
         response = model_g.generate_content(
             [video_file, user_message or "이 동영상의 내용을 분석하고 설명해주세요."]
         )
@@ -1617,9 +1688,16 @@ async def send_message_stream(
         from app.services.tool_executor import current_chat_session_id
         current_chat_session_id.set(session_id)
 
-        from app.core.interrupt_queue import set_streaming
+        from app.core.interrupt_queue import set_streaming, has_pending_interrupts, pop_pending_interrupts
         set_streaming(session_id, True)
         sid = uuid.UUID(session_id)
+
+        # AADS-FIX: 이전 턴에서 미소비된 인터럽트를 현재 user 메시지 앞에 주입
+        if has_pending_interrupts(session_id):
+            _pending = pop_pending_interrupts(session_id)
+            _pending_text = "\n".join(f"[이전 추가 지시] {p['content']}" for p in _pending)
+            content = f"{_pending_text}\n\n{content}"
+            logger.info(f"[PENDING_INTERRUPT] session={session_id[:8]} injected={len(_pending)} items")
 
         # 1. 첨부파일 처리 — Ephemeral Document Context (#파일맥락보호)
         #    파일 전문은 content에 넣지 않고 Layer D로 현재 턴에만 주입.
@@ -1689,6 +1767,22 @@ async def send_message_stream(
                         "error": None,
                     })
                 logger.info(f"[VIDEO] {len(_video_attachments)} video(s) analyzed via Gemini API")
+
+            # Vision 이미지도 Gemini로 전처리 (CLI Relay용 텍스트 변환)
+            _image_for_preprocess = [f for f in _file_contents if f.get("is_image") and f.get("base64_data")]
+            if _image_for_preprocess:
+                _image_texts = await _analyze_images_with_gemini(_image_for_preprocess, content)
+                for _it in _image_texts:
+                    _file_contents.append({
+                        "name": _it["name"],
+                        "path": "",
+                        "ext": "",
+                        "content": _it["analysis"],
+                        "tokens": len(_it["analysis"]) // 4,
+                        "readable": True,
+                        "error": None,
+                    })
+                logger.info(f"[VISION-PRE] {len(_image_for_preprocess)} image(s) pre-analyzed via Gemini for CLI Relay")
 
             # Layer D: 현재 턴에만 주입될 전문 컨텍스트 (텍스트 파일만)
             _ephemeral_doc_context = build_ephemeral_document_layer(_file_contents)
@@ -2000,7 +2094,7 @@ async def send_message_stream(
             intent = "file_read"
             logger.info(f"[INTENT_OVERRIDE] file_read forced for content containing file keywords")
 
-        if model_override:
+        if model_override and model_override not in ("mixture", "auto"):
             intent_result.model = get_model_for_override(model_override)
             intent_result.use_gemini_direct = False
             # Claude 모델 선택 시 도구 항상 활성화 (시스템프롬프트에 도구 설명이 있으므로
@@ -2014,30 +2108,41 @@ async def send_message_stream(
         # 7. Gemini Direct (Grounding / Deep Research)
         if intent_result.use_gemini_direct:
             if intent_result.gemini_mode == "grounding":
+                import asyncio as _search_asyncio
                 from app.services.gemini_search_service import GeminiSearchService
+                from app.services.naver_search_service import NaverSearchService
+
                 svc = GeminiSearchService()
-                result = None
-                try:
-                    result = await svc.search_grounded(content)
-                except Exception as e:
-                    logger.warning(f"gemini_grounding_failed: {e}")
-                if result is None:
-                    # Fallback: Naver (타입별 or 통합) → Kakao → Brave
-                    from app.services.naver_search_service import NaverSearchService
-                    naver = NaverSearchService()
-                    if naver.is_available():
-                        try:
-                            naver_type = getattr(intent_result, "naver_type", "")
-                            if naver_type:
-                                # 특화 검색 (뉴스/블로그/쇼핑/지역/책/이미지/백과/지식iN)
-                                result = await naver.search(content, search_type=naver_type, count=5)
-                            else:
-                                # 일반 검색: 웹+블로그+뉴스+지식iN 통합
-                                result = await naver.multi_search(content, count=3)
-                            if result.error:
-                                result = None
-                        except Exception as e:
-                            logger.warning(f"naver_search_failed: {e}")
+
+                async def _try_gemini():
+                    try:
+                        return await svc.search_grounded(content)
+                    except Exception as e:
+                        logger.warning(f"gemini_grounding_failed: {e}")
+                        return None
+
+                async def _try_naver():
+                    try:
+                        naver = NaverSearchService()
+                        if not naver.is_available():
+                            return None
+                        naver_type = getattr(intent_result, "naver_type", "")
+                        if naver_type:
+                            r = await naver.search(content, search_type=naver_type, count=5)
+                        else:
+                            r = await naver.multi_search(content, count=3)
+                        return None if r.error else r
+                    except Exception as e:
+                        logger.warning(f"naver_search_failed: {e}")
+                        return None
+
+                # Gemini + Naver 병렬 실행
+                gemini_result, naver_result = await _search_asyncio.gather(
+                    _try_gemini(), _try_naver()
+                )
+                result = gemini_result or naver_result  # Gemini 우선
+
+                # 둘 다 실패 시 Kakao → Brave 순차 폴백
                 if result is None:
                     from app.services.kakao_search_service import KakaoSearchService
                     kakao = KakaoSearchService()

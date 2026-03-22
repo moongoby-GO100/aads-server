@@ -234,7 +234,7 @@ ACTION_COMMAND_MAP = {
     "hard_kill": "kill -9 {pid}",
     "service_restart": "docker restart {service}",
     "docker_restart": "docker restart {service}",
-    "bridge_full_restart": "docker compose -f /root/kis-autotrade-v4/docker-compose.yml restart bridge",
+    "bridge_full_restart": "docker compose -f /root/go100/docker-compose.yml restart bridge",
     "config_refresh": "docker exec {service} kill -HUP 1",
     "emergency_slot_clear": None,  # 코드 내 처리
     "session_switch": None,  # 코드 내 처리

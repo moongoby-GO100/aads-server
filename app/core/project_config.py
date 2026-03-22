@@ -16,7 +16,7 @@ from typing import Dict
 # lang: 주 프로그래밍 언어
 PROJECT_MAP: Dict[str, Dict[str, str]] = {
     "KIS":   {"server": "211.188.51.113", "workdir": "/root",                "lang": "python"},
-    "GO100": {"server": "211.188.51.113", "workdir": "/root/go100",           "lang": "python"},
+    "GO100": {"server": "211.188.51.113", "workdir": "/root/kis-autotrade-v4", "lang": "python"},
     "SF":    {"server": "114.207.244.86", "port": "7916", "workdir": "/",                     "lang": "python"},
     "NTV2":  {"server": "114.207.244.86", "port": "7916", "workdir": "/",              "lang": "php", "workdir_v2": "/srv/newtalk-v2"},
     "AADS":  {"server": "host.docker.internal", "workdir": "/root", "lang": "python"},
