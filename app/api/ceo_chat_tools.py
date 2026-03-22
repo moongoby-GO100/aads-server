@@ -1167,7 +1167,7 @@ _SSH_SENSITIVE_PATTERNS = re.compile(
     r'|\.aws/|\.kube/|\.docker/|\.pem$|\.key$|authorized_keys|known_hosts)',
     re.IGNORECASE,
 )
-_SSH_TIMEOUT = 10  # 초 (ConnectTimeout=5 + CommandTimeout=5)
+_SSH_TIMEOUT = 120  # 초 — docker build 등 장시간 명령 대응 (기존 10초→120초)
 _SSH_WRITE_TIMEOUT = 15  # 쓰기 작업은 조금 더 여유
 _SSH_CMD_TIMEOUT = 600  # 원격 명령 실행 타임아웃 (10분, CEO가 중지 버튼으로 직접 제어)
 _SSH_MAX_RESULT_BYTES = 1024 * 1024  # 1MB (제한 없음 — Claude Code 동일)
