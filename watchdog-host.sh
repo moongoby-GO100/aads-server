@@ -22,6 +22,24 @@ notify() {
     fi
 }
 
+# ── Layer 0: 의존 컨테이너 (postgres, redis) 먼저 확인 ──
+for DEP in aads-postgres aads-redis; do
+    DEP_STATUS=$(docker inspect "$DEP" --format '{{.State.Status}}' 2>/dev/null)
+    case "$DEP_STATUS" in
+        running) ;;
+        created|exited)
+            notify "🚨 ${DEP} 상태: ${DEP_STATUS} — docker start 실행"
+            docker start "$DEP"
+            sleep 3
+            ;;
+        "")
+            notify "🚨 ${DEP} 컨테이너 없음 — docker compose up"
+            cd "$COMPOSE_DIR" && docker compose up -d --no-deps "$DEP"
+            sleep 5
+            ;;
+    esac
+done
+
 STATUS=$(docker inspect aads-server --format '{{.State.Status}}' 2>/dev/null)
 
 case "$STATUS" in
