@@ -19,7 +19,7 @@ from app.services.chat_embedding_service import embed_texts
 
 logger = structlog.get_logger(__name__)
 
-_DEFAULT_SIMILARITY_THRESHOLD = 0.92
+_DEFAULT_SIMILARITY_THRESHOLD = 0.88
 _DEFAULT_TTL_HOURS = 24
 _DEFAULT_MAX_ENTRIES = 500
 _DEFAULT_MIN_QUALITY = 0.5

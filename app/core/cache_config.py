@@ -40,32 +40,38 @@ def build_cached_system_blocks(
     layer1_text: str,
     layer2_text: str,
     ckp_text: str = "",
+    memory_text: str = "",
 ) -> List[Dict[str, Any]]:
     """3계층 시스템 프롬프트를 Anthropic cache_control 블록 리스트로 구성.
 
-    Layer 1 (정적, ~1400t): cache_control 항상 적용 — 매 요청 캐시 히트 기대
-    Layer 2 (동적, ~300t): cache_control 없음 — 매 요청 변경
-    CKP    (동적, ~1500t): cache_control 적용 — 세션 내 반복 적중
+    Anthropic API는 최대 4개 cache_control breakpoint 지원.
+    Layer 1 (정적, ~1400t): cache_control 강제 적용 — 매 요청 캐시 히트 기대
+    Layer 2 (동적, ~300t+CKP): cache_control 적용 — 세션 내 반복 적중
+    Memory (동적, ~2000t): cache_control 적용 — 세션 내 반복 적중
+    → 총 3개 breakpoint (한도 4개 이내)
 
     Args:
         layer1_text: 정적 시스템 프롬프트 (build_layer1 결과)
         layer2_text: 동적 런타임 정보 (현재 시각, 작업 상태 등)
-        ckp_text:    CKP 요약 (선택, AADS/CEO 워크스페이스만)
+        ckp_text:    CKP + preload + auto_rag 텍스트 (선택)
+        memory_text: 메모리 주입 블록 (선택)
     Returns:
         Anthropic messages.create(system=...) 파라미터용 블록 리스트
     """
     blocks: List[Dict[str, Any]] = []
 
-    # Layer 1: 정적 — 캐싱 강제 적용 (최소 1024t 기준 충족 여부 무관)
+    # Breakpoint 1: Layer 1 정적 — 캐싱 강제 적용
     blocks.append(make_cacheable_block(layer1_text, force=True))
 
-    # CKP: 동적이지만 길이가 길므로 캐싱 시도
+    # Breakpoint 2: Layer 2 + CKP — 동적이지만 세션 내 자주 반복
+    layer2_combined = layer2_text
     if ckp_text:
-        combined_layer2 = layer2_text + "\n" + ckp_text
-        blocks.append(make_cacheable_block(combined_layer2))
-    else:
-        # Layer 2만 있을 때는 토큰 수 기반 판단
-        blocks.append(make_cacheable_block(layer2_text))
+        layer2_combined += "\n" + ckp_text
+    blocks.append(make_cacheable_block(layer2_combined, force=True))
+
+    # Breakpoint 3: 메모리 블록 — 세션 내 안정적 (60초 TTL 캐시)
+    if memory_text:
+        blocks.append(make_cacheable_block(memory_text, force=True))
 
     return blocks
 

@@ -12,15 +12,31 @@ import asyncio
 import hashlib
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
 # #34: Layer 1 캐시 (워크스페이스별 정적 프롬프트 — 변경 안 됨)
 _layer1_cache: Dict[str, str] = {}
+
+# ─── TTL 캐시: Layer 2 + 메모리 (TTFT 단축) ─────────────────────────────────
+_layer_cache: Dict[str, Tuple[float, str]] = {}
+_CACHE_TTL = 60  # 60초 — 같은 세션 내 반복 빌드 방지
+
+
+async def _get_cached_or_build(key: str, builder_coro) -> str:
+    """TTL 기반 async 빌더 캐시. TTL 내 히트 시 코루틴 실행 생략."""
+    now = time.monotonic()
+    cached = _layer_cache.get(key)
+    if cached and (now - cached[0]) < _CACHE_TTL:
+        return cached[1]
+    result = await builder_coro
+    _layer_cache[key] = (now, result)
+    return result
 
 # ─── Layer 1: system_prompt_v2.py 에서 로드 ──────────────────────────────────
 
@@ -352,9 +368,12 @@ async def build_messages_context(
                 _last_user_msg = " ".join(b.get("text", "") for b in _last_user_msg if isinstance(b, dict) and b.get("type") == "text")
             break
 
+    # Layer 2와 메모리는 TTL 캐시 적용 (60초, TTFT 단축)
+    _l2_cache_key = f"l2:{ws_key}:{session_id}"
+    _mem_cache_key = f"mem:{session_id}:{_project}"
     layer2, memory_layer, auto_rag_layer, preload_layer, artifact_layer = await asyncio.gather(
-        _build_layer2_dynamic(workspace_name, db_conn=db_conn),
-        _build_memory_layer(session_id=session_id, project_id=_project),
+        _get_cached_or_build(_l2_cache_key, _build_layer2_dynamic(workspace_name, db_conn=db_conn)),
+        _get_cached_or_build(_mem_cache_key, _build_memory_layer(session_id=session_id, project_id=_project)),
         _build_auto_rag_layer(_last_user_msg, session_id, _project),
         _build_workspace_preload_layer(_project, session_id),
         _build_artifact_context_layer(session_id, db_conn=db_conn),
@@ -434,20 +453,27 @@ async def build(
     layer1 = layer1_base + tool_guide
 
     # Layer 2 (동적) + CKP + 메모리 + Workspace Preload(F6) + Auto-RAG(F1/F3) — 병렬 실행
+    # Layer 2와 메모리는 TTL 캐시 적용 (60초, TTFT 단축)
     _project = _normalize_workspace(workspace_name)
+    _l2_cache_key = f"l2:{ws_key}:{session_id}"
+    _mem_cache_key = f"mem:{session_id}:{_project}"
     layer2, ckp_layer, memory_layer, preload_layer, auto_rag_layer = await asyncio.gather(
-        _build_layer2_dynamic(workspace_name, db_conn=db_conn),
+        _get_cached_or_build(_l2_cache_key, _build_layer2_dynamic(workspace_name, db_conn=db_conn)),
         _build_ckp_layer(workspace_name),
-        _build_memory_layer(session_id=session_id, project_id=_project),
+        _get_cached_or_build(_mem_cache_key, _build_memory_layer(session_id=session_id, project_id=_project)),
         _build_workspace_preload_layer(_project, session_id),
         _build_auto_rag_layer(last_user_message, session_id, _project),
     )
     layer2_full = layer2 + ckp_layer + memory_layer + preload_layer + auto_rag_layer
 
-    # AADS-186D: Prompt Caching 최적화 적용
+    # AADS-186D: Prompt Caching 최적화 적용 (3 breakpoints: Layer1 + Layer2+CKP + Memory)
+    _ckp_and_extras = ckp_layer + preload_layer + auto_rag_layer
+    _memory_block = memory_layer
     try:
         from app.core.cache_config import build_cached_system_blocks
-        system_blocks = build_cached_system_blocks(layer1, layer2, ckp_layer + memory_layer + preload_layer + auto_rag_layer)
+        system_blocks = build_cached_system_blocks(
+            layer1, layer2, _ckp_and_extras, memory_text=_memory_block,
+        )
     except Exception:
         # fallback: 기존 방식
         system_blocks = [
