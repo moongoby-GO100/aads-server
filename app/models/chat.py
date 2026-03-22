@@ -86,6 +86,13 @@ class MessageUpdateRequest(BaseModel):
     content: str = Field(..., min_length=1)
 
 
+class BranchCreateRequest(BaseModel):
+    """특정 메시지 시점에서 새로운 분기 생성 요청."""
+    content: str = Field(..., min_length=1)
+    model_override: Optional[str] = None
+    attachments: List[Any] = Field(default_factory=list)
+
+
 class MessageOut(BaseModel):
     id: uuid.UUID
     session_id: uuid.UUID
@@ -102,6 +109,8 @@ class MessageOut(BaseModel):
     artifact_id: Optional[uuid.UUID]
     edited_at: Optional[datetime] = None
     reply_to_id: Optional[uuid.UUID] = None
+    branch_id: Optional[uuid.UUID] = None
+    branch_point_id: Optional[uuid.UUID] = None
     created_at: datetime
 
 

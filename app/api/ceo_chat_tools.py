@@ -1215,10 +1215,9 @@ _REMOTE_CMD_WHITELIST: List[str] = [
     "uptime",
     "crontab -l",
     # Docker 확장 (AADS-190)
-    "docker compose up",
-    "docker compose down",
-    "docker compose build",
     "docker compose pull",
+    # deploy.sh 안전 배포 게이트웨이
+    "/root/aads/aads-server/deploy.sh",
     "docker exec",
     "docker images",
     "docker stats",
@@ -1975,8 +1974,17 @@ async def tool_run_remote_command(project: str, command: str) -> str:
 
     # 보안 2.5, 3: docker exec 컨테이너 제한 + 파이프/세미콜론 차단 — CEO 지시로 전면 해제
 
-    # AADS 프로젝트: 호스트 OS SSH 실행 (컨테이너→호스트)
+    # AADS 프로젝트: docker compose 명령 → deploy.sh 안전 리다이렉트
     if project == "AADS":
+        _deploy_redirect = None
+        if re.search(r"docker\s+compose\s+(up|build|restart)", command) and "aads" in command.lower():
+            _deploy_redirect = "/root/aads/aads-server/deploy.sh build"
+        elif re.search(r"docker\s+restart\s+aads-server", command):
+            _deploy_redirect = "/root/aads/aads-server/deploy.sh code"
+        if _deploy_redirect:
+            logger.warning("deploy_intercept", original=command[:120], redirect=_deploy_redirect)
+            command = _deploy_redirect
+
         workdir = get_workdir("AADS") or "/root"
         full_cmd = f"cd {shlex.quote(workdir)} && {command}"
         try:

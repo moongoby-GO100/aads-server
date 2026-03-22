@@ -23,6 +23,10 @@ from app.core.db_pool import get_pool
 
 logger = logging.getLogger(__name__)
 
+# P2-2: 분기 모드에서 AI 응답에 branch_id를 자동 부여하기 위한 ContextVar
+from contextvars import ContextVar as _ContextVar
+_current_branch_id: _ContextVar[Optional[str]] = _ContextVar("_current_branch_id", default=None)
+
 
 # ── SSE heartbeat wrapper ─────────────────────────────────────────
 import asyncio as _heartbeat_asyncio
@@ -1265,14 +1269,18 @@ async def _save_message(
         content = re.sub(r'^⏳ _[^\n]*_\s*', '', content)
         content = content.strip()
 
+    # P2-2: ContextVar에서 branch_id 가져오기 (분기 모드)
+    _branch_id_str = _current_branch_id.get(None)
+    _branch_uuid = uuid.UUID(_branch_id_str) if _branch_id_str else None
+
     # AADS-CRITICAL-FIX #2: INSERT + UPDATE를 트랜잭션으로 감싸 message_count 정합성 보장
     async with conn.transaction():
         row = await conn.fetchrow(
             """
             INSERT INTO chat_messages
                 (session_id, role, content, model_used, intent, cost, tokens_in, tokens_out,
-                 attachments, sources, tools_called, thinking_summary, reply_to_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13)
+                 attachments, sources, tools_called, thinking_summary, reply_to_id, branch_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14)
             RETURNING *
             """,
             session_id,
@@ -1288,6 +1296,7 @@ async def _save_message(
             json.dumps(tools_called or []),
             thinking_summary,
             reply_to_id,
+            _branch_uuid,
         )
         # Update session message count (atomic with INSERT)
         await conn.execute(
@@ -1728,6 +1737,8 @@ async def send_message_stream(
     intent_override: Optional[str] = None,
     uploaded_files: Optional[List[Any]] = None,
     reply_to_id: Optional[str] = None,
+    branch_id: Optional[str] = None,
+    branch_point_msg_id: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """
     AADS-185: 3계층 Context Engineering + IntentRouter + ModelSelector + Tool Use 루프.
@@ -1948,8 +1959,10 @@ async def send_message_stream(
 
         # 사용자 메시지 저장 (trigger 메시지는 intent로 구분)
         # model_override를 user 메시지의 model_used에 저장 → 재개 시 CEO 선택 모델 복원용
-        user_intent = "system_trigger" if intent_override else None
-        await _save_message(conn, sid, "user", content, model_used=model_override, intent=user_intent, attachments=attachments or [], reply_to_id=_reply_to_uuid)
+        # P2-2: branch 모드에서는 라우터에서 이미 저장했으므로 skip
+        if not branch_point_msg_id:
+            user_intent = "system_trigger" if intent_override else None
+            await _save_message(conn, sid, "user", content, model_used=model_override, intent=user_intent, attachments=attachments or [], reply_to_id=_reply_to_uuid)
 
         # 2. 워크스페이스 정보 조회
         sp_row = await conn.fetchrow(
@@ -1965,17 +1978,44 @@ async def send_message_stream(
         workspace_name = (sp_row["workspace_name"] if sp_row and sp_row["workspace_name"] else "CEO")
 
         # 3. 세션 히스토리 조회 (#16: 서브쿼리로 ASC 정렬, Python reverse 제거)
-        hist_rows = await conn.fetch(
-            """
-            SELECT role, content FROM (
-                SELECT role, content, created_at FROM chat_messages
-                WHERE session_id = $1 AND (is_compacted IS NULL OR is_compacted = false)
-                ORDER BY created_at DESC LIMIT 500
-            ) sub ORDER BY created_at ASC
-            """,
-            sid,
-        )
-        raw_messages = [{"role": r["role"], "content": r["content"]} for r in hist_rows]
+        # P2-2: branch 모드일 때는 branch_point 메시지 이전(포함)까지만 히스토리 사용
+        if branch_point_msg_id:
+            _bp_uuid = uuid.UUID(branch_point_msg_id)
+            _bp_row = await conn.fetchrow(
+                "SELECT created_at FROM chat_messages WHERE id = $1", _bp_uuid
+            )
+            if _bp_row:
+                hist_rows = await conn.fetch(
+                    """
+                    SELECT role, content FROM (
+                        SELECT role, content, created_at FROM chat_messages
+                        WHERE session_id = $1
+                          AND (is_compacted IS NULL OR is_compacted = false)
+                          AND branch_id IS NULL
+                          AND created_at <= $2
+                        ORDER BY created_at DESC LIMIT 500
+                    ) sub ORDER BY created_at ASC
+                    """,
+                    sid, _bp_row["created_at"],
+                )
+            else:
+                hist_rows = []
+            # 분기 user 메시지를 히스토리 끝에 추가
+            raw_messages = [{"role": r["role"], "content": r["content"]} for r in hist_rows]
+            raw_messages.append({"role": "user", "content": content})
+            logger.info(f"[BRANCH] session={session_id[:8]} branch_id={branch_id} point={branch_point_msg_id[:8]} hist={len(raw_messages)}")
+        else:
+            hist_rows = await conn.fetch(
+                """
+                SELECT role, content FROM (
+                    SELECT role, content, created_at FROM chat_messages
+                    WHERE session_id = $1 AND (is_compacted IS NULL OR is_compacted = false)
+                    ORDER BY created_at DESC LIMIT 500
+                ) sub ORDER BY created_at ASC
+                """,
+                sid,
+            )
+            raw_messages = [{"role": r["role"], "content": r["content"]} for r in hist_rows]
 
         # 세션 누적 비용 조회 (프론트엔드 표시용)
         _session_cost_row = await conn.fetchrow(
@@ -2030,6 +2070,9 @@ async def send_message_stream(
         from app.services.tool_executor import current_chat_session_id
         current_chat_session_id.set(session_id)
         logger.info(f"[DIAG] current_chat_session_id SET to '{session_id}' in send_message_stream")
+
+        # P2-2: 분기 모드 시 branch_id ContextVar 설정 → _save_message에서 자동 적용
+        _current_branch_id.set(branch_id if branch_id else None)
 
         # 프로젝트명 정규화 (workspace_name → project code)
         _PROJECT_KEYS = ("KIS", "AADS", "GO100", "SF", "NTV2", "NAS", "CEO")

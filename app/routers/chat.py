@@ -19,6 +19,7 @@ from app.models.chat import (
     ArtifactExportRequest,
     ArtifactOut,
     ArtifactUpdate,
+    BranchCreateRequest,
     DriveFileOut,
     MessageOut,
     MessageSendRequest,
@@ -472,6 +473,93 @@ async def search_messages(
         limit=limit,
     )
     return {"messages": results, "total": len(results)}
+
+
+# ─── P2-2: 대화 분기 (Branch) API ─────────────────────────────────────────────
+
+@router.post("/chat/messages/{message_id}/branch", tags=["chat-message"])
+async def create_branch(message_id: UUID, req: BranchCreateRequest):
+    """특정 메시지 시점에서 새로운 분기 생성 — SSE 스트리밍 응답."""
+    import uuid as _uuid
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        # 1) 분기 기준 메시지 조회
+        origin_msg = await conn.fetchrow(
+            "SELECT id, session_id, role, created_at FROM chat_messages WHERE id = $1",
+            message_id,
+        )
+        if not origin_msg:
+            raise HTTPException(status_code=404, detail="메시지를 찾을 수 없습니다")
+
+        session_id_str = str(origin_msg["session_id"])
+        branch_id = _uuid.uuid4()
+
+        # 2) 분기점 이전 메시지(자신 포함)만으로 히스토리 구성하여 user 메시지 저장
+        await conn.execute(
+            """INSERT INTO chat_messages
+                (session_id, role, content, model_used, attachments, branch_id, branch_point_id)
+            VALUES ($1, 'user', $2, $3, $4::jsonb, $5, $6)""",
+            origin_msg["session_id"],
+            req.content,
+            req.model_override,
+            __import__("json").dumps(req.attachments or []),
+            branch_id,
+            message_id,
+        )
+        await conn.execute(
+            "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
+            origin_msg["session_id"],
+        )
+
+    # 3) send_message_stream 호출 — branch_point 이전 히스토리만 사용
+    from app.services.tool_executor import current_chat_session_id
+    current_chat_session_id.set(session_id_str)
+
+    raw_stream = svc.send_message_stream(
+        session_id=session_id_str,
+        content=req.content,
+        attachments=req.attachments,
+        model_override=req.model_override,
+        branch_id=str(branch_id),
+        branch_point_msg_id=str(message_id),
+    )
+    bg_stream = svc.with_background_completion(raw_stream, session_id=session_id_str)
+    return StreamingResponse(
+        bg_stream,
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/chat/sessions/{session_id}/branches", tags=["chat-message"])
+async def list_branches(session_id: UUID):
+    """세션 내 분기 목록 조회."""
+    from app.core.db_pool import get_pool
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT DISTINCT branch_id, branch_point_id,
+                      MIN(created_at) AS branched_at,
+                      (SELECT content FROM chat_messages m2
+                       WHERE m2.branch_id = cm.branch_id AND m2.role = 'user'
+                       ORDER BY m2.created_at ASC LIMIT 1) AS first_message
+               FROM chat_messages cm
+               WHERE session_id = $1 AND branch_id IS NOT NULL
+               GROUP BY branch_id, branch_point_id
+               ORDER BY MIN(created_at) DESC""",
+            session_id,
+        )
+        return [
+            {
+                "branch_id": str(r["branch_id"]),
+                "branch_point_id": str(r["branch_point_id"]),
+                "branched_at": r["branched_at"].isoformat() if r["branched_at"] else None,
+                "first_message": r["first_message"],
+            }
+            for r in rows
+        ]
 
 
 # ─── AADS-188D: Diff 승인 API ────────────────────────────────────────────────
