@@ -53,10 +53,21 @@ docker exec aads-postgres psql -U aads -d aads -q -c "
 # ── Phase 1: 배포 실행 ──
 case "$MODE" in
     code)
-        echo "[deploy.sh] Phase 1: supervisorctl restart aads-api (graceful)"
+        echo "[deploy.sh] Phase 1: graceful restart aads-api (SIGTERM + 60s wait)"
         # 배포 플래그 파일 생성 → 서버 startup 시 미완료 대화 자동 재실행 스킵
         docker exec aads-server touch /tmp/aads_deploy_restart 2>/dev/null || true
-        docker exec aads-server supervisorctl restart aads-api || true
+        # graceful: SIGTERM → 60초 대기 → 강제종료 방지 (supervisord stopwaitsecs 무시 회피)
+        docker exec aads-server supervisorctl signal SIGTERM aads-api 2>/dev/null || true
+        echo "[deploy.sh] SIGTERM 전송 완료 — 진행중인 응답 완료 대기 (최대 60초)..."
+        for i in $(seq 1 30); do
+            sleep 2
+            STATUS=$(docker exec aads-server supervisorctl status aads-api 2>/dev/null | awk "{print \\}")
+            if [ "$STATUS" != "RUNNING" ]; then
+                echo "[deploy.sh] aads-api 종료 확인 (${i}x2=$((i*2))초)"
+                break
+            fi
+        done
+        docker exec aads-server supervisorctl start aads-api || true
         ;;
     build)
         echo "[deploy.sh] Phase 1: docker compose up -d --build --no-deps aads-server"
