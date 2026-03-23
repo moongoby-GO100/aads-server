@@ -37,6 +37,7 @@ from app.api.pipeline_runner import router as pipeline_runner_router
 from app.api.code_review import router as code_review_router
 from app.api.quality import router as quality_router
 from app.api.memory_monitor import router as memory_monitor_router
+from app.api.pc_agent import router as pc_agent_router
 from app.routers.chat import router as chat_v2_router
 from app.config import settings
 from app.graph.builder import compile_graph
@@ -806,6 +807,7 @@ app.include_router(pipeline_runner_router, prefix="/api/v1", tags=["pipeline-run
 app.include_router(code_review_router)
 app.include_router(quality_router, prefix="/api/v1", tags=["quality"])
 app.include_router(memory_monitor_router, prefix="/api/v1", tags=["memory-monitor"])
+app.include_router(pc_agent_router, prefix="/api/v1", tags=["pc-agent"])
 # 정적 파일 서빙
 import pathlib as _pathlib
 _static_dir = _pathlib.Path(__file__).resolve().parent / "static"
