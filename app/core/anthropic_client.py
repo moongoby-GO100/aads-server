@@ -5,6 +5,9 @@ OAuth 토큰으로 Anthropic API 직접 호출.
 Claude 실패 시 Gemini 3.1 Flash Preview (LiteLLM 경유)로 자동 폴백.
 백그라운드 시스템(self_evaluator, fact_extractor, compaction 등)에서 사용.
 """
+from __future__ import annotations
+
+import asyncio
 import os
 import json
 import logging
@@ -48,20 +51,34 @@ async def call_llm_with_fallback(
 
     Returns: 응답 텍스트 또는 None (전부 실패 시)
     """
-    # 1순위/2순위: Claude (Naver → Gmail)
+    # 1순위/2순위: Claude (Naver → Gmail) + 일시적 에러 재시도
+    _MAX_RETRIES = 2
     keys_to_try = [k for k in [_API_KEY, _API_KEY_FALLBACK] if k]
     for key in keys_to_try:
-        try:
-            client = AsyncAnthropic(api_key=key, base_url=_BASE_URL)
-            msgs = [{"role": "user", "content": prompt}]
-            kwargs = {"model": model, "max_tokens": max_tokens, "messages": msgs}
-            if system:
-                kwargs["system"] = system
-            resp = await client.messages.create(**kwargs)
-            return resp.content[0].text
-        except Exception as e:
-            logger.warning("claude_bg_error: key=%s model=%s error=%s", key[:12], model, str(e)[:80])
-            continue
+        for _attempt in range(_MAX_RETRIES + 1):
+            try:
+                client = AsyncAnthropic(api_key=key, base_url=_BASE_URL)
+                msgs = [{"role": "user", "content": prompt}]
+                kwargs = {"model": model, "max_tokens": max_tokens, "messages": msgs}
+                if system:
+                    kwargs["system"] = system
+                resp = await client.messages.create(**kwargs)
+                return resp.content[0].text
+            except Exception as e:
+                _err_str = str(e).lower()
+                _retryable = any(k in _err_str for k in (
+                    "timeout", "overloaded", "529", "rate_limit", "429", "500", "502", "503",
+                ))
+                if _retryable and _attempt < _MAX_RETRIES:
+                    _wait = 3 * (2 ** _attempt)  # 3초, 6초
+                    logger.warning(
+                        "claude_bg_retry: key=%s attempt=%d/%d wait=%ds error=%s",
+                        key[:12], _attempt + 1, _MAX_RETRIES, _wait, str(e)[:80],
+                    )
+                    await asyncio.sleep(_wait)
+                    continue
+                logger.warning("claude_bg_error: key=%s model=%s error=%s", key[:12], model, str(e)[:80])
+                break  # 이 키로는 더 이상 시도하지 않고 다음 키로
 
     # 3순위: Gemini 2.5 Flash (LiteLLM 경유)
     if _LITELLM_MASTER_KEY:
