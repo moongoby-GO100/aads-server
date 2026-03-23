@@ -302,7 +302,7 @@ async def _call_claude_vision(image_b64: str, prompt: str, project_context: str)
     full_prompt = f"{prompt}\n\n[프로젝트 컨텍스트]\n{project_context}" if project_context else prompt
 
     message = await client.messages.create(
-        model="claude-sonnet-4-5",
+        model="claude-haiku-4-5-20251001",
         max_tokens=2048,
         messages=[
             {
