@@ -337,6 +337,19 @@ async def lifespan(app: FastAPI):
                 logger.warning(f"auto_fix_error: {e}")
         scheduler.add_job(_run_auto_fix, 'interval', minutes=5, id='auto_fix_dispatcher')
 
+        # Learning Health Monitor: 3시간마다 대화 vs 학습 비율 체크 → 학습 없으면 자동 재스캔
+        async def _run_learning_health_check():
+            try:
+                from app.core.memory_recall import check_learning_health, rescan_recent_conversations
+                health = await check_learning_health(hours=6)
+                if health.get("action_needed") == "rescan":
+                    logger.info("learning_health_rescan_triggered", messages=health["messages"], learnings=health["learnings"])
+                    result = await rescan_recent_conversations(hours=6)
+                    logger.info("learning_health_rescan_done", scanned=result["scanned"], extracted=result["extracted"])
+            except Exception as e:
+                logger.warning(f"learning_health_check_error: {e}")
+        scheduler.add_job(_run_learning_health_check, 'interval', hours=3, id='learning_health_check')
+
         scheduler.start()
         app.state.scheduler = scheduler  # fallback: MCP 도구 경로에서 참조 가능
         await healer_init()

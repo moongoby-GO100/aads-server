@@ -586,3 +586,142 @@ async def get_evolution_stats(db) -> dict:
             "quality_count": "?",
             "error_pattern_count": "?",
         }
+
+
+# ── 학습 헬스 모니터 + 자동 재스캔 ──────────────────────────────────────────────
+
+# 학습 트리거 키워드 (순환 임포트 방지를 위해 별도 정의)
+_LEARNING_TRIGGERS = {
+    "correction": [
+        "아니", "틀렸", "그게 아니라", "다시 해", "잘못", "아닌데",
+        "수정해", "바꿔", "변경해", "고쳐", "안돼", "왜 이래", "이상해",
+    ],
+    "preference": [
+        "항상", "앞으로", "기억해", "절대", "반드시", "무조건", "금지",
+        "좋겠", "해줘", "이렇게", "저렇게", "중요", "우선",
+    ],
+    "positive": [
+        "잘했", "좋아", "이대로", "완벽", "훌륭", "정확",
+        "맞아", "그래", "오케이", "OK", "좋네", "괜찮",
+    ],
+}
+
+
+async def check_learning_health(hours: int = 6) -> dict:
+    """최근 N시간 대화량 vs 학습량 비교.
+    Returns: {"messages": int, "learnings": int, "healthy": bool, "action_needed": str|None}
+    """
+    try:
+        async with _get_pool().acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM chat_messages
+                     WHERE role = 'user'
+                       AND created_at > NOW() - make_interval(hours => $1)
+                       AND (intent IS NULL OR intent != 'system_trigger')
+                    ) AS msg_count,
+                    (SELECT COUNT(*) FROM ai_observations
+                     WHERE key LIKE 'chat_learning_%' OR key LIKE 'rescan_learning_%'
+                       AND updated_at > NOW() - make_interval(hours => $1)
+                    ) AS learn_count
+                """,
+                hours,
+            )
+            messages = row["msg_count"] if row else 0
+            learnings = row["learn_count"] if row else 0
+
+            action_needed = None
+            healthy = True
+            if messages >= 10 and learnings <= 1:
+                action_needed = "rescan"
+                healthy = False
+            elif messages >= 5 and learnings == 0:
+                action_needed = "rescan"
+                healthy = False
+
+            return {
+                "messages": messages,
+                "learnings": learnings,
+                "healthy": healthy,
+                "action_needed": action_needed,
+            }
+    except Exception as e:
+        logger.warning("check_learning_health_failed", error=str(e))
+        return {"messages": 0, "learnings": 0, "healthy": True, "action_needed": None, "error": str(e)}
+
+
+async def rescan_recent_conversations(hours: int = 6) -> dict:
+    """최근 대화를 재스캔하여 학습 트리거를 다시 분석.
+    Returns: {"scanned": int, "extracted": int, "alerted": bool}
+    """
+    import hashlib
+
+    extracted = 0
+    alerted = False
+
+    try:
+        async with _get_pool().acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, content FROM chat_messages
+                WHERE role = 'user'
+                  AND created_at > NOW() - make_interval(hours => $1)
+                  AND (intent IS NULL OR intent != 'system_trigger')
+                  AND LENGTH(content) > 5
+                ORDER BY created_at DESC
+                LIMIT 200
+                """,
+                hours,
+            )
+
+        scanned = len(rows)
+
+        for row in rows:
+            content = row["content"]
+            msg_hash = hashlib.md5(content[:50].encode()).hexdigest()[:8]
+
+            for trigger_type, keywords in _LEARNING_TRIGGERS.items():
+                matched = [kw for kw in keywords if kw in content]
+                if not matched:
+                    continue
+
+                key = f"rescan_learning_{msg_hash}"
+                if trigger_type == "correction":
+                    category, confidence = "ceo_correction", 0.7
+                elif trigger_type == "preference":
+                    category, confidence = "ceo_preference", 0.8
+                else:
+                    category, confidence = "ceo_preference", 0.6
+
+                saved = await save_observation(
+                    category=category,
+                    key=key,
+                    content=f"[재스캔] {content[:200]}",
+                    source="rescan",
+                    confidence=confidence,
+                    project="AADS",
+                )
+                if saved:
+                    extracted += 1
+                break  # 메시지당 1건만 추출
+
+        # 대화 많은데 추출 0건 → 텔레그램 알림
+        if scanned >= 5 and extracted == 0:
+            try:
+                from app.services.telegram_bot import get_telegram_bot
+                bot = get_telegram_bot()
+                if bot and bot.is_ready:
+                    await bot.send_message(
+                        f"⚠️ 메모리 학습 이상: 최근 {hours}시간 대화 {scanned}건 중 학습 추출 0건\n"
+                        "학습 트리거 키워드 확장이 필요할 수 있습니다."
+                    )
+                    alerted = True
+            except Exception as e:
+                logger.warning("rescan_telegram_alert_failed", error=str(e))
+
+        logger.info("rescan_recent_conversations_done", scanned=scanned, extracted=extracted, alerted=alerted)
+        return {"scanned": scanned, "extracted": extracted, "alerted": alerted}
+    except Exception as e:
+        logger.warning("rescan_recent_conversations_failed", error=str(e))
+        return {"scanned": 0, "extracted": 0, "alerted": False, "error": str(e)}

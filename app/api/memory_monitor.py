@@ -279,3 +279,11 @@ async def delete_memory_entry(source: str, entry_id: int):
 
     logger.info("memory_entry_deleted", source=source, entry_id=entry_id)
     return {"status": "deleted", "source": source, "id": entry_id, "archived": True}
+
+
+@router.get("/ops/memory/learning-health")
+async def get_learning_health():
+    """학습 헬스 상태 조회 — 대시보드 표시용.
+    24시간 기준으로 대화량 vs 학습량 비교."""
+    from app.core.memory_recall import check_learning_health
+    return await check_learning_health(hours=24)

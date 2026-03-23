@@ -265,6 +265,42 @@ async def get_streaming_status(session_id: UUID):
     return status or {"is_streaming": False}
 
 
+@router.get("/chat/sessions/{session_id}/last-response", tags=["chat-session"])
+async def get_last_response(session_id: UUID):
+    """SSE 끊김 시 마지막 AI 응답 복구용.
+
+    클라이언트가 네트워크 끊김 후 서버에서 완성된 응답이 있는지 확인.
+    """
+    import uuid as _uuid
+    from app.core.db_pool import get_pool
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id::text, content, model_used, created_at::text, intent
+            FROM chat_messages
+            WHERE session_id = $1 AND role = 'assistant'
+                AND intent IS DISTINCT FROM 'streaming_placeholder'
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            session_id,
+        )
+    if not row:
+        return {"found": False}
+    return {
+        "found": True,
+        "message": {
+            "id": row["id"],
+            "session_id": str(session_id),
+            "role": "assistant",
+            "content": row["content"],
+            "model_used": row["model_used"],
+            "created_at": row["created_at"],
+            "intent": row["intent"],
+        },
+    }
+
+
 @router.post("/chat/sessions/{session_id}/stop", tags=["chat-session"])
 async def stop_session_streaming(session_id: UUID):
     """세션의 진행 중인 AI 응답 생성을 강제 중단.

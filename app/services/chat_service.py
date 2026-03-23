@@ -1764,6 +1764,11 @@ async def send_message_stream(
         set_streaming(session_id, True)
         sid = uuid.UUID(session_id)
 
+        # SSE 재연결 프로토콜: 고유 stream_id 발행
+        import time as _stream_time
+        _stream_id = str(uuid.uuid4())[:8]
+        yield f"data: {json.dumps({'type': 'stream_start', 'stream_id': _stream_id})}\n\n"
+
         # AADS-FIX: 이전 턴에서 미소비된 인터럽트를 현재 user 메시지 앞에 주입
         if has_pending_interrupts(session_id):
             _pending = pop_pending_interrupts(session_id)
@@ -2490,7 +2495,7 @@ async def send_message_stream(
                         await _save_and_update_session(
                             sid, full_response, model_used=model_used, intent=intent,
                             cost=cost_usd, tools_called=tools_called)
-                        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'agent_sdk': True})}\n\n"
+                        yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'agent_sdk': True})}\n\n"
                         return
 
                 except Exception as _sdk_err:
@@ -2575,7 +2580,7 @@ async def send_message_stream(
             await _save_and_update_session(
                 sid, full_response, model_used=model_used, intent=intent,
                 cost=cost_usd, tools_called=tools_called)
-            yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': 0, 'output_tokens': 0, 'autonomous': True})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': 0, 'output_tokens': 0, 'autonomous': True})}\n\n"
             return
 
         # 9. 모델 선택기 → SSE 스트리밍
@@ -2811,7 +2816,7 @@ async def send_message_stream(
         _session_cost += float(cost_usd)
         _session_turns += 2  # user + assistant
 
-        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns})}\n\n"
 
     finally:
         set_streaming(session_id, False)
