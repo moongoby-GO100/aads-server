@@ -93,6 +93,7 @@ class AutonomousExecutor:
         model: str = "claude-sonnet",
         system_prompt: Optional[str] = None,
         task_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
         자율 도구 루프.
@@ -352,6 +353,23 @@ class AutonomousExecutor:
 
             # 도구 결과 메시지 추가
             work_messages.append({"role": "user", "content": tool_results})
+
+            # Interrupt 체크: 도구 실행 완료 후, 다음 LLM 호출 전에 CEO 추가 지시 확인
+            if session_id:
+                try:
+                    from app.core.interrupt_queue import has_interrupt, pop_interrupts
+                    if has_interrupt(session_id):
+                        _interrupts = pop_interrupts(session_id)
+                        for _intr in _interrupts:
+                            _intr_text = f"[CEO 추가 지시] {_intr}"
+                            work_messages.append({"role": "user", "content": _intr_text})
+                            yield _sse("interrupt_injected", {
+                                "content": _intr[:100],
+                                "iteration": iteration,
+                            })
+                            logger.info(f"autonomous_executor interrupt injected: session={session_id[:8]} iter={iteration}")
+                except Exception as _ie:
+                    logger.debug(f"autonomous_executor interrupt check error: {_ie}")
 
             # C8: 메시지 히스토리 슬라이딩 윈도우 (처음 2개 + 최근 N개 유지)
             # assistant/tool_result 쌍이 깨지지 않도록 짝수 단위로 자름

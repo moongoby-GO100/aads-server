@@ -2432,7 +2432,7 @@ async def send_message_stream(
         # CEO 명시적 직접 실행 지시 시에만 Agent SDK, 그 외는 Runner 위임
         # Runner 위임 대상: 코드 작업 + CTO 분석 + 서비스 점검 (모든 자율 실행 인텐트)
         _RUNNER_DELEGATION_INTENTS = frozenset({
-            "execute", "code_modify",
+            "execute", "code_modify", "code_task",
             "cto_code_analysis", "cto_verify", "service_inspection", "cto_impact",
         })
         _DIRECT_EXECUTION_TRIGGERS = (
@@ -2545,6 +2545,7 @@ async def send_message_stream(
                 messages=messages,
                 model=intent_result.model,
                 system_prompt=_auto_system,
+                session_id=sid,
             ):
                 yield sse_line
                 # 완료/비용/오류 이벤트 파싱하여 응답 수집
