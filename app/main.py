@@ -456,6 +456,78 @@ async def lifespan(app: FastAPI):
     import asyncio as _startup_asyncio
     _startup_asyncio.create_task(_periodic_placeholder_cleanup())
 
+    # 서버 재시작 후 미완료 대화 자동 재실행
+    async def _resume_incomplete_conversations():
+        """서버 재시작 시 마지막 메시지가 user인 최근 세션을 감지하여 자동 재실행.
+
+        조건:
+        1. 최근 10분 이내 사용자 메시지가 마지막인 세션
+        2. 배포 목적 재시작 구분: DEPLOY_RESTART 환경변수가 설정되어 있으면 스킵
+        """
+        import asyncio as _resume_asyncio
+        await _resume_asyncio.sleep(5)  # 서버 완전 기동 대기
+
+        if os.environ.get("DEPLOY_RESTART") == "1":
+            os.environ.pop("DEPLOY_RESTART", None)  # 일회성
+            logger.info("resume_incomplete: skipped (DEPLOY_RESTART=1)")
+            return
+
+        try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                # 최근 10분 이내, 마지막 메시지가 user인 세션 찾기
+                incomplete = await conn.fetch("""
+                    WITH last_msgs AS (
+                        SELECT DISTINCT ON (session_id)
+                            session_id, role, content, created_at,
+                            intent
+                        FROM chat_messages
+                        WHERE created_at > NOW() - INTERVAL '10 minutes'
+                          AND intent IS DISTINCT FROM 'system_trigger'
+                          AND intent IS DISTINCT FROM 'streaming_placeholder'
+                        ORDER BY session_id, created_at DESC
+                    )
+                    SELECT session_id::text, content, created_at
+                    FROM last_msgs
+                    WHERE role = 'user'
+                      AND content IS NOT NULL
+                      AND length(content) > 0
+                    LIMIT 3
+                """)
+
+                if not incomplete:
+                    logger.info("resume_incomplete: no incomplete conversations found")
+                    return
+
+                logger.info(f"resume_incomplete: found {len(incomplete)} incomplete conversation(s)")
+
+                for row in incomplete:
+                    sid = row["session_id"]
+                    user_content = row["content"]
+                    try:
+                        import httpx
+                        async with httpx.AsyncClient(timeout=10) as client:
+                            resp = await client.post(
+                                "http://localhost:8000/api/v1/chat/send",
+                                json={
+                                    "session_id": sid,
+                                    "content": user_content,
+                                    "intent_override": "auto_resume",
+                                },
+                                headers={"X-Internal": "resume"},
+                            )
+                            if resp.status_code == 200:
+                                logger.info(f"resume_incomplete: session={sid[:8]} re-triggered")
+                            else:
+                                logger.warning(f"resume_incomplete: session={sid[:8]} failed status={resp.status_code}")
+                    except Exception as e:
+                        logger.warning(f"resume_incomplete: session={sid[:8]} error={e}")
+        except Exception as e:
+            logger.warning(f"resume_incomplete_failed: {e}")
+
+    _startup_asyncio.create_task(_resume_incomplete_conversations())
+
     # Pipeline Runner: 재시작 복구 + Watchdog 시작 (DB 풀 초기화 이후)
     try:
         from app.services.pipeline_c import recover_interrupted_jobs, start_watchdog

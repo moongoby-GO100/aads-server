@@ -1970,6 +1970,11 @@ async def send_message_stream(
             except Exception as _rte:
                 logger.warning(f"[REPLY_TO] failed: {_rte}")
 
+        # auto_resume: 서버 재시작 후 자동 재실행 — 일반 사용자 메시지처럼 처리
+        if intent_override == "auto_resume":
+            logger.info(f"[AUTO_RESUME] session={session_id[:8]} re-processing after server restart")
+            intent_override = None  # 일반 흐름으로 전환
+
         # 사용자 메시지 저장 (trigger 메시지는 intent로 구분)
         # model_override를 user 메시지의 model_used에 저장 → 재개 시 CEO 선택 모델 복원용
         # P2-2: branch 모드에서는 라우터에서 이미 저장했으므로 skip
