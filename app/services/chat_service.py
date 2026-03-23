@@ -2425,12 +2425,16 @@ async def send_message_stream(
 
         # 8.5a. AADS-188C: Agent SDK 실시간 자율 실행 (execute/code_modify 인텐트)
         # CEO 명시적 직접 실행 지시 시에만 Agent SDK, 그 외는 Runner 위임
-        _AGENT_SDK_INTENTS = frozenset({"execute", "code_modify"})
+        # Runner 위임 대상: 코드 작업 + CTO 분석 + 서비스 점검 (모든 자율 실행 인텐트)
+        _RUNNER_DELEGATION_INTENTS = frozenset({
+            "execute", "code_modify",
+            "cto_code_analysis", "cto_verify", "service_inspection", "cto_impact",
+        })
         _DIRECT_EXECUTION_TRIGGERS = (
             "직접 해", "직접 수정", "여기서 해", "여기서 수정", "바로 고쳐",
             "바로 수정", "세션에서 해", "세션에서 수정", "직접 처리",
         )
-        if intent in _AGENT_SDK_INTENTS and any(t in content for t in _DIRECT_EXECUTION_TRIGGERS):
+        if intent in _RUNNER_DELEGATION_INTENTS and any(t in content for t in _DIRECT_EXECUTION_TRIGGERS):
             logger.info(f"[DIRECT_EXECUTION] session={sid[:8]} intent={intent} trigger_matched=True")
             # resume 지원: Phase A에서 프리페치한 세션 설정 사용 (#19)
             sdk_session_id: Optional[str] = _session_settings.get("sdk_session_id")
@@ -2503,13 +2507,12 @@ async def send_message_stream(
                     # SDK 실패 → AutonomousExecutor fallback으로 계속 진행
 
         # 8.5b. execute/code_modify 인텐트 중 직접 실행 조건 미충족 → Runner 위임
-        if intent in _AGENT_SDK_INTENTS and not any(t in content for t in _DIRECT_EXECUTION_TRIGGERS):
+        if intent in _RUNNER_DELEGATION_INTENTS and not any(t in content for t in _DIRECT_EXECUTION_TRIGGERS):
             logger.info(f"[RUNNER_DELEGATION] session={sid[:8]} intent={intent} → pipeline_runner")
             intent = "pipeline_runner"
 
         # 8.5. 복잡 인텐트 → AutonomousExecutor (max_iterations=25) (AADS-186E-3)
         _AUTONOMOUS_INTENTS = frozenset({
-            "cto_code_analysis", "cto_verify", "service_inspection", "cto_impact",
             "pipeline_runner",
         })
         if intent in _AUTONOMOUS_INTENTS and intent_result.use_tools and tools_for_api:
