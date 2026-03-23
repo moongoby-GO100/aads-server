@@ -269,7 +269,7 @@ async def _call_gemini_vision(image_b64: str, prompt: str, project_context: str)
 
     payload = {
         "model": "gemini-2.5-flash",
-        "max_tokens": 4096,
+        "max_tokens": 16384,
         "messages": [
             {
                 "role": "user",
