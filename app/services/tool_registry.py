@@ -552,7 +552,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "name": "read_remote_file",
         "description": (
             "프로젝트 서버의 파일을 읽습니다 (SSH 자동 매핑, Claude Code Read tool과 동일). "
-            "AADS=68서버(/root/aads/), KIS/GO100=211서버(/root/webapp/), "
+            "AADS=68서버(/root/aads/), KIS/GO100=211서버(/root/kis-autotrade-v4/), "
             "SF=114서버(/data/shortflow/), NTV2=114서버(/var/www/newtalk/). "
             "기본 2000줄 읽기, offset/limit으로 대용량 파일 분할 읽기 가능. "
             "⚠️ AADS는 read_github_file도 가능하지만, SF/NTV2/KIS/GO100은 이 도구만 사용."

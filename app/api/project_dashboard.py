@@ -1973,7 +1973,7 @@ async def get_analytics():
 # 프로젝트 → 담당 서버 SSH 매핑
 _PROJECT_SERVER_MAP = {
     "KIS": "root@211.188.53.126",
-    "GO100": "root@211.188.53.126",
+    "GO100": "root@211.188.51.113",
     "AADS": "local",  # aads-server 자신의 호스트 마운트 없음 → SSH로 68 접근
     "SF": "root@114.203.209.93",
     "SHORTFLOW": "root@114.203.209.93",
