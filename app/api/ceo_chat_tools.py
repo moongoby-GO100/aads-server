@@ -2111,58 +2111,55 @@ async def tool_git_remote_commit(project: str, message: str) -> str:
                 )
             logger.info(f"git_commit_pre_check PASSED | project={project} files={len(staged_files)}")
 
-    # shlex.quote()로 안전한 메시지 이스케이프
-    safe_msg = shlex.quote(message[:200])
-    return await tool_run_remote_command(project, f"git commit -m {safe_msg}")
-
-
-async def tool_git_remote_push(project: str, branch: str = "") -> str:
-    """원격 서버 git push (force push 차단 + AI 코드 검수 게이트)."""
-
-    # ── AI 코드 검수 게이트: push 전 마지막 커밋 diff를 AI가 검수 ──
+    # ── 커밋 전 AI 코드 검수: staged diff를 독립 AI(Gemini)가 리뷰 ──
     try:
-        diff = await tool_run_remote_command(project, "git diff HEAD~1 -- '*.py' '*.ts' '*.tsx'")
-        if diff and diff.strip() and "[ERROR]" not in diff:
+        staged_diff = await tool_run_remote_command(project, "git diff --cached -- '*.py' '*.ts' '*.tsx'")
+        if staged_diff and staged_diff.strip() and "[ERROR]" not in staged_diff:
             from app.services.code_reviewer import review_code_diff
             verdict = await review_code_diff(
                 project=project,
                 job_id="chat-direct",
-                diff=diff,
-                instruction="채팅 AI 직접 수정",
+                diff=staged_diff,
+                instruction=f"채팅 AI 직접 수정: {message[:200]}",
             )
             if verdict.verdict == "FLAG":
-                # 심각한 문제 → 커밋 revert + push 차단
-                await tool_run_remote_command(project, "git reset --soft HEAD~1")
-                logger.warning(f"git_push_blocked: project={project} verdict=FLAG score={verdict.score} issues={verdict.issues}")
+                logger.warning(f"git_commit_blocked: project={project} verdict=FLAG score={verdict.score} issues={verdict.issues}")
                 return (
-                    f"[검수 실패 — push 차단] score={verdict.score:.2f}\n"
+                    f"[AI 코드 검수 실패 — 커밋 차단] score={verdict.score:.2f}\n"
                     f"issues: {', '.join(verdict.issues)}\n"
-                    f"커밋이 revert되었습니다. 문제를 수정 후 다시 시도하세요."
+                    f"문제를 수정 후 다시 커밋하세요."
                 )
             elif verdict.verdict == "REQUEST_CHANGES":
-                logger.warning(f"git_push_warning: project={project} verdict=REQUEST_CHANGES score={verdict.score}")
-                # 경고만 표시하고 push는 허용 (CEO가 판단)
-                _warning = f"⚠️ [코드 검수 경고] score={verdict.score:.2f} — {', '.join(verdict.issues[:3])}\n"
+                logger.warning(f"git_commit_warning: project={project} verdict=REQUEST_CHANGES score={verdict.score}")
+                # 경고 포함하여 커밋 진행
+                _review_warning = f"⚠️ [코드 검수 경고] score={verdict.score:.2f} — {', '.join(verdict.issues[:3])}\n"
             else:
-                _warning = ""
-                logger.info(f"git_push_review_passed: project={project} score={verdict.score:.2f}")
+                _review_warning = ""
+                logger.info(f"git_commit_review_passed: project={project} score={verdict.score:.2f}")
         else:
-            _warning = ""
+            _review_warning = ""
     except Exception as _review_err:
-        # 검수 AI 자체 실패 시 → push 차단 (안전 우선)
-        logger.error(f"git_push_review_failed: project={project} error={_review_err}")
+        # 검수 AI 실패 시 → 커밋 차단 (안전 우선)
+        logger.error(f"git_commit_review_failed: project={project} error={_review_err}")
         return (
-            f"[검수 불가 — push 차단] AI 코드 검수 실행 실패: {str(_review_err)[:100]}\n"
-            f"LLM API 상태를 확인 후 다시 시도하세요."
+            f"[AI 코드 검수 불가 — 커밋 차단] {str(_review_err)[:100]}\n"
+            f"LLM API 상태 확인 후 다시 시도하세요."
         )
 
+    # shlex.quote()로 안전한 메시지 이스케이프
+    safe_msg = shlex.quote(message[:200])
+    result = await tool_run_remote_command(project, f"git commit -m {safe_msg}")
+    return _review_warning + result if _review_warning else result
+
+
+async def tool_git_remote_push(project: str, branch: str = "") -> str:
+    """원격 서버 git push (force push 차단). AI 코드 검수는 commit 단계에서 수행됨."""
     cmd = "git push"
     if branch:
         if not re.match(r'^[a-zA-Z0-9._/\-]+$', branch):
             return "[ERROR] 브랜치명에 허용되지 않는 문자"
         cmd += f" origin {branch}"
-    result = await tool_run_remote_command(project, cmd)
-    return _warning + result if '_warning' in dir() and _warning else result
+    return await tool_run_remote_command(project, cmd)
 
 
 async def tool_git_remote_status(project: str) -> str:
