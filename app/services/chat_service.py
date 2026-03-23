@@ -773,9 +773,9 @@ def _db_url() -> str:
 
 
 async def _get_conn() -> asyncpg.Connection:
-    """풀에서 커넥션 acquire. 호출자가 반드시 release해야 함.
+    """[DEPRECATED] async with get_pool().acquire() as conn: 패턴을 사용하세요.
+    풀에서 커넥션 acquire. 호출자가 반드시 release해야 함.
     기존 코드 호환: conn = await _get_conn() → conn.close() 대신 pool.release(conn).
-    새 코드는 async with get_pool().acquire() as conn: 패턴 권장.
     """
     pool = get_pool()
     return await pool.acquire(timeout=10)
@@ -789,19 +789,15 @@ _anthropic = get_client()
 # ─── Workspace CRUD ───────────────────────────────────────────────────────────
 
 async def list_workspaces() -> List[Dict[str, Any]]:
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         rows = await conn.fetch(
             "SELECT * FROM chat_workspaces ORDER BY created_at"
         )
         return [_row_to_dict(r) for r in rows]
-    finally:
-        await get_pool().release(conn)
 
 
 async def create_workspace(data: Dict[str, Any]) -> Dict[str, Any]:
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         row = await conn.fetchrow(
             """
             INSERT INTO chat_workspaces (name, system_prompt, files, settings, color, icon)
@@ -816,13 +812,10 @@ async def create_workspace(data: Dict[str, Any]) -> Dict[str, Any]:
             data.get("icon", "💬"),
         )
         return _row_to_dict(row)
-    finally:
-        await get_pool().release(conn)
 
 
 async def update_workspace(workspace_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         sets = []
         vals: List[Any] = []
         idx = 1
@@ -846,39 +839,30 @@ async def update_workspace(workspace_id: str, data: Dict[str, Any]) -> Optional[
             *vals,
         )
         return _row_to_dict(row) if row else None
-    finally:
-        await get_pool().release(conn)
 
 
 async def delete_workspace(workspace_id: str) -> bool:
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         result = await conn.execute(
             "DELETE FROM chat_workspaces WHERE id = $1", uuid.UUID(workspace_id)
         )
         return result == "DELETE 1"
-    finally:
-        await get_pool().release(conn)
 
 
 # ─── Session CRUD ─────────────────────────────────────────────────────────────
 
 async def get_session(session_id: str) -> Optional[Dict[str, Any]]:
     """단일 세션 조회 (ID 기반)."""
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         row = await conn.fetchrow(
             "SELECT * FROM chat_sessions WHERE id = $1",
             uuid.UUID(session_id),
         )
         return _row_to_dict(row) if row else None
-    finally:
-        await get_pool().release(conn)
 
 
 async def list_sessions(workspace_id: str, limit: int = 50, tag: Optional[str] = None) -> List[Dict[str, Any]]:
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         if tag:
             rows = await conn.fetch(
                 "SELECT * FROM chat_sessions WHERE workspace_id = $1 AND $3 = ANY(tags) ORDER BY pinned DESC, updated_at DESC LIMIT $2",
@@ -893,13 +877,10 @@ async def list_sessions(workspace_id: str, limit: int = 50, tag: Optional[str] =
                 limit,
             )
         return [_row_to_dict(r) for r in rows]
-    finally:
-        await get_pool().release(conn)
 
 
 async def create_session(data: Dict[str, Any]) -> Dict[str, Any]:
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         ws_id = uuid.UUID(str(data["workspace_id"]))
         title = data.get("title")
 
@@ -917,8 +898,6 @@ async def create_session(data: Dict[str, Any]) -> Dict[str, Any]:
             title,
         )
         return _row_to_dict(row)
-    finally:
-        await get_pool().release(conn)
 
 
 async def _generate_versioned_title(conn, ws_id: uuid.UUID) -> str:
@@ -965,8 +944,7 @@ async def _generate_versioned_title(conn, ws_id: uuid.UUID) -> str:
 
 
 async def update_session(session_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         sets = []
         vals: List[Any] = []
         idx = 1
@@ -993,26 +971,20 @@ async def update_session(session_id: str, data: Dict[str, Any]) -> Optional[Dict
             *vals,
         )
         return _row_to_dict(row) if row else None
-    finally:
-        await get_pool().release(conn)
 
 
 async def delete_session(session_id: str) -> bool:
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         result = await conn.execute(
             "DELETE FROM chat_sessions WHERE id = $1", uuid.UUID(session_id)
         )
         return result == "DELETE 1"
-    finally:
-        await get_pool().release(conn)
 
 
 # ─── Message ──────────────────────────────────────────────────────────────────
 
 async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort: str = "asc") -> List[Dict[str, Any]]:
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         order = "DESC" if sort == "desc" else "ASC"
         rows = await conn.fetch(
             f"SELECT * FROM chat_messages WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate' ORDER BY created_at {order} LIMIT $2 OFFSET $3",
@@ -1021,8 +993,6 @@ async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort
             offset,
         )
         return [_row_to_dict(r) for r in rows]
-    finally:
-        await get_pool().release(conn)
 
 
 async def list_messages_cursor(
@@ -1031,8 +1001,7 @@ async def list_messages_cursor(
     cursor: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Cursor 기반 메시지 조회 — 최근 N건 또는 cursor 이전 N건 (항상 ASC 반환)."""
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         sid = uuid.UUID(session_id)
         fetch_limit = limit + 1  # has_more 판별용 1건 추가
         if cursor:
@@ -1066,8 +1035,6 @@ async def list_messages_cursor(
             "next_cursor": next_cursor,
             "has_more": has_more,
         }
-    finally:
-        await get_pool().release(conn)
 
 
 async def _extract_artifacts(session_id: uuid.UUID, content: str, workspace_id: uuid.UUID = None) -> None:
@@ -2912,21 +2879,17 @@ async def _auto_observe_session(messages: List[Dict[str, Any]]) -> None:
 
 
 async def toggle_bookmark(message_id: str) -> Optional[Dict[str, Any]]:
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         row = await conn.fetchrow(
             "UPDATE chat_messages SET bookmarked = NOT bookmarked WHERE id = $1 RETURNING *",
             uuid.UUID(message_id),
         )
         return _row_to_dict(row) if row else None
-    finally:
-        await get_pool().release(conn)
 
 
 async def update_message(message_id: str, new_content: str) -> Optional[Dict[str, Any]]:
     """사용자 메시지 내용 수정 (role=user만 허용). edited_at 기록. B2: CEO 교정 학습."""
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         # B2: 수정 전 원본 내용 조회
         original_row = await conn.fetchrow(
             "SELECT content, session_id FROM chat_messages WHERE id = $1 AND role = 'user'",
@@ -2979,8 +2942,6 @@ async def update_message(message_id: str, new_content: str) -> Optional[Dict[str
                 logger.debug("b2_ceo_correction_error", error=str(e_b2))
 
         return _row_to_dict(row) if row else None
-    finally:
-        await get_pool().release(conn)
 
 
 async def delete_message_and_response(message_id: str) -> int:
@@ -2989,8 +2950,7 @@ async def delete_message_and_response(message_id: str) -> int:
     방식A(수정재전송)에서 기존 메시지+응답 제거 용도.
     Returns 삭제된 메시지 수.
     """
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         # 먼저 해당 메시지 정보 조회
         msg = await conn.fetchrow(
             "SELECT id, session_id, role, created_at FROM chat_messages WHERE id = $1",
@@ -3033,13 +2993,10 @@ async def delete_message_and_response(message_id: str) -> int:
                     count,
                 )
         return count
-    finally:
-        await get_pool().release(conn)
 
 
 async def search_messages(query: str, workspace_id: Optional[str] = None, limit: int = 20) -> List[Dict[str, Any]]:
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         if workspace_id:
             rows = await conn.fetch(
                 """
@@ -3064,15 +3021,12 @@ async def search_messages(query: str, workspace_id: Optional[str] = None, limit:
                 limit,
             )
         return [_row_to_dict(r) for r in rows]
-    finally:
-        await get_pool().release(conn)
 
 
 # ─── Artifact ────────────────────────────────────────────────────────────────
 
 async def list_artifacts(session_id: str = None, workspace_id: str = None) -> List[Dict[str, Any]]:
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         if workspace_id:
             rows = await conn.fetch(
                 "SELECT * FROM chat_artifacts WHERE workspace_id = $1 ORDER BY created_at DESC",
@@ -3086,25 +3040,19 @@ async def list_artifacts(session_id: str = None, workspace_id: str = None) -> Li
         else:
             return []
         return [_row_to_dict(r) for r in rows]
-    finally:
-        await get_pool().release(conn)
 
 
 async def get_artifact(artifact_id: str) -> Optional[Dict[str, Any]]:
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         row = await conn.fetchrow(
             "SELECT * FROM chat_artifacts WHERE id = $1",
             uuid.UUID(artifact_id),
         )
         return _row_to_dict(row) if row else None
-    finally:
-        await get_pool().release(conn)
 
 
 async def update_artifact(artifact_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         sets = []
         vals: List[Any] = []
         idx = 1
@@ -3127,20 +3075,15 @@ async def update_artifact(artifact_id: str, data: Dict[str, Any]) -> Optional[Di
             *vals,
         )
         return _row_to_dict(row) if row else None
-    finally:
-        await get_pool().release(conn)
 
 
 async def delete_artifact(artifact_id: str) -> bool:
     """아티팩트 삭제. 성공 시 True, 미존재 시 False."""
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         result = await conn.execute(
             "DELETE FROM chat_artifacts WHERE id = $1", uuid.UUID(artifact_id)
         )
         return result == "DELETE 1"
-    finally:
-        await get_pool().release(conn)
 
 
 async def export_artifact(artifact_id: str, fmt: str) -> Dict[str, Any]:
@@ -3171,15 +3114,12 @@ UPLOAD_DIR = Path(os.getenv("CHAT_UPLOAD_DIR", "/root/aads/uploads/chat"))
 
 
 async def list_drive_files(workspace_id: str) -> List[Dict[str, Any]]:
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         rows = await conn.fetch(
             "SELECT * FROM chat_drive_files WHERE workspace_id = $1 ORDER BY created_at DESC",
             uuid.UUID(workspace_id),
         )
         return [_row_to_dict(r) for r in rows]
-    finally:
-        await get_pool().release(conn)
 
 
 async def save_drive_file(
@@ -3194,8 +3134,7 @@ async def save_drive_file(
     file_path = UPLOAD_DIR / safe_name
     file_path.write_bytes(file_bytes)
 
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         row = await conn.fetchrow(
             """
             INSERT INTO chat_drive_files (workspace_id, filename, file_path, file_type, file_size, uploaded_by)
@@ -3210,13 +3149,10 @@ async def save_drive_file(
             uploaded_by,
         )
         return _row_to_dict(row)
-    finally:
-        await get_pool().release(conn)
 
 
 async def delete_drive_file(file_id: str) -> bool:
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         row = await conn.fetchrow(
             "DELETE FROM chat_drive_files WHERE id = $1 RETURNING file_path",
             uuid.UUID(file_id),
@@ -3227,27 +3163,21 @@ async def delete_drive_file(file_id: str) -> bool:
         if path.exists():
             path.unlink(missing_ok=True)
         return True
-    finally:
-        await get_pool().release(conn)
 
 
 async def get_drive_file(file_id: str) -> Optional[Dict[str, Any]]:
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         row = await conn.fetchrow(
             "SELECT * FROM chat_drive_files WHERE id = $1",
             uuid.UUID(file_id),
         )
         return _row_to_dict(row) if row else None
-    finally:
-        await get_pool().release(conn)
 
 
 # ─── Research Archive ────────────────────────────────────────────────────────
 
 async def get_research_cache(topic: str, days: int = 7) -> Optional[Dict[str, Any]]:
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         row = await conn.fetchrow(
             """
             SELECT * FROM research_archive
@@ -3259,20 +3189,15 @@ async def get_research_cache(topic: str, days: int = 7) -> Optional[Dict[str, An
             str(days),
         )
         return _row_to_dict(row) if row else None
-    finally:
-        await get_pool().release(conn)
 
 
 async def list_research_history(limit: int = 50) -> List[Dict[str, Any]]:
-    conn = await _get_conn()
-    try:
+    async with get_pool().acquire() as conn:
         rows = await conn.fetch(
             "SELECT * FROM research_archive ORDER BY created_at DESC LIMIT $1",
             limit,
         )
         return [_row_to_dict(r) for r in rows]
-    finally:
-        await get_pool().release(conn)
 
 
 # ─── 내부 헬퍼 ────────────────────────────────────────────────────────────────
