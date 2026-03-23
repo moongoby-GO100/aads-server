@@ -270,13 +270,7 @@ async def _call_gemini_vision(image_b64: str, prompt: str, project_context: str)
 
 
 async def _call_claude_vision(image_b64: str, prompt: str, project_context: str) -> str:
-    """Claude Sonnet Vision API 폴백 호출 (anthropic SDK)."""
-    import anthropic
-
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY not set")
-
+    """Claude Sonnet Vision API 폴백 호출 (중앙 클라이언트 사용, R-AUTH 준수)."""
     from app.core.anthropic_client import get_client as _get_da_client
     client = _get_da_client()
 
