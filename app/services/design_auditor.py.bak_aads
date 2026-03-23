@@ -41,7 +41,7 @@ AUDIT_PROMPT = """
 4. 브랜드 일관성 (Brand Coherence): 색상 톤, 폰트, 전체 무드 (10점)
 5. 완성도 (Polish): 빈 공간, 깨진 요소, 로딩 상태, 에러 처리 (10점)
 
-[출력 형식 - 반드시 JSON]
+[출력 형식 - 순수 JSON만 출력. ```json 마크다운 펜스 절대 금지. { 로 시작하고 } 로 끝나야 함]
 {
   "scores": {
     "visual_consistency": {"score": 8, "issues": ["..."], "fixes": ["..."]},
@@ -197,16 +197,33 @@ def _image_to_base64(path: str) -> str:
         return base64.b64encode(f.read()).decode("utf-8")
 
 
+def _sanitize_json_string(s: str) -> str:
+    """LLM이 생성한 비표준 JSON 보정 (trailing comma, 주석 제거)."""
+    s = re.sub(r'//[^\n]*', '', s)
+    s = re.sub(r',\s*([}\]])', r'\1', s)
+    return s
+
+
 def _extract_json(text: str) -> dict:
     """LLM 응답에서 JSON 블록 추출."""
-    # ```json ... ``` 블록 우선
-    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    candidates: list[str] = []
+    # ```json ... ``` 블록 우선 (greedy — 중첩 중괄호 포함)
+    m = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
     if m:
-        return json.loads(m.group(1))
+        candidates.append(m.group(1))
     # 중괄호 영역 직접 탐색
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if m:
-        return json.loads(m.group(0))
+        candidates.append(m.group(0))
+    for raw in candidates:
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+        try:
+            return json.loads(_sanitize_json_string(raw))
+        except json.JSONDecodeError:
+            continue
     raise ValueError(f"JSON 없음: {text[:200]}")
 
 
@@ -242,48 +259,50 @@ def _calc_verdict(total: int) -> str:
 # ---------------------------------------------------------------------------
 
 async def _call_gemini_vision(image_b64: str, prompt: str, project_context: str) -> str:
-    """Gemini 2.5 Flash Vision API 호출 (google-generativeai)."""
-    import google.generativeai as genai
+    """Gemini Vision API 호출 (LiteLLM 프록시 경유, R-AUTH 준수)."""
+    import httpx
 
-    api_key = os.getenv("GOOGLE_API_KEY", "")
-    if not api_key:
-        raise ValueError("GOOGLE_API_KEY not set")
-
-    genai.configure(api_key=api_key)
-
-    # gemini-2.5-flash → 실제 API ID (llm/client.py MODEL_ALIASES 참조)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    litellm_url = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
+    litellm_key = os.getenv("LITELLM_MASTER_KEY", "")
 
     full_prompt = f"{prompt}\n\n[프로젝트 컨텍스트]\n{project_context}" if project_context else prompt
 
-    import PIL.Image
-    import io
-    image_bytes = base64.b64decode(image_b64)
-    pil_image = PIL.Image.open(io.BytesIO(image_bytes))
+    payload = {
+        "model": "gemini-2.5-flash",
+        "max_tokens": 16384,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                    },
+                    {"type": "text", "text": full_prompt},
+                ],
+            }
+        ],
+    }
 
-    loop = asyncio.get_event_loop()
-    response = await loop.run_in_executor(
-        None,
-        lambda: model.generate_content([full_prompt, pil_image]),
-    )
-    return response.text
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            f"{litellm_url}/v1/chat/completions",
+            json=payload,
+            headers={"Authorization": f"Bearer {litellm_key}"},
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
 
 
 async def _call_claude_vision(image_b64: str, prompt: str, project_context: str) -> str:
-    """Claude Sonnet Vision API 폴백 호출 (anthropic SDK)."""
-    import anthropic
-
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY not set")
-
+    """Claude Sonnet Vision API 폴백 호출 (중앙 클라이언트 사용, R-AUTH 준수)."""
     from app.core.anthropic_client import get_client as _get_da_client
     client = _get_da_client()
 
     full_prompt = f"{prompt}\n\n[프로젝트 컨텍스트]\n{project_context}" if project_context else prompt
 
     message = await client.messages.create(
-        model="claude-sonnet-4-5",
+        model="claude-haiku-4-5-20251001",
         max_tokens=2048,
         messages=[
             {

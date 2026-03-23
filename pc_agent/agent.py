@@ -26,7 +26,7 @@ logger = logging.getLogger("pc-agent")
 
 # ── 설정 ─────────────────────────────────────────────────────────────────
 
-SERVER_URL = os.getenv("AADS_SERVER_URL", "wss://aads.newtalk.kr/api/v1/ws/pc-agent")
+SERVER_URL = os.getenv("AADS_SERVER_URL", "wss://aads.newtalk.kr/api/v1/pc-agent/ws")
 AGENT_SECRET = os.getenv("PC_AGENT_SECRET", "")
 HEARTBEAT_INTERVAL = 25  # 초
 RECONNECT_DELAY = 5  # 초
@@ -55,13 +55,12 @@ class PCAgent:
     async def _connect(self) -> None:
         """WebSocket 서버 연결."""
         url = f"{SERVER_URL}/{self.agent_id}"
-        headers = {}
         if AGENT_SECRET:
-            headers["Authorization"] = f"Bearer {AGENT_SECRET}"
+            url = f"{url}?token={AGENT_SECRET}"
 
         logger.info("서버 연결 중: %s", url)
 
-        async with websockets.connect(url, extra_headers=headers) as ws:
+        async with websockets.connect(url) as ws:
             logger.info("서버 연결 성공")
 
             # 등록 메시지 전송
