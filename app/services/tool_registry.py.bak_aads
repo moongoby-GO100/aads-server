@@ -46,6 +46,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "spawn_subagent": False,              # 서브에이전트 — 핵심 위임 도구
     "spawn_parallel_subagents": True,     # 병렬 서브에이전트 — 지연 로드
     "run_agent_team": False,              # 멀티에이전트 팀 — 핵심 오케스트레이션
+    "run_debate": True,                    # 다관점 토론 — 온디맨드 (CEO 요청 시)
     "save_note": True,
     "recall_notes": True,
     "delete_note": True,
