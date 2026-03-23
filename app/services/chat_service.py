@@ -2021,7 +2021,7 @@ async def send_message_stream(
                           AND (is_compacted IS NULL OR is_compacted = false)
                           AND branch_id IS NULL
                           AND created_at <= $2
-                        ORDER BY created_at DESC LIMIT 500
+                        ORDER BY created_at DESC LIMIT 200
                     ) sub ORDER BY created_at ASC
                     """,
                     sid, _bp_row["created_at"],
@@ -2038,7 +2038,7 @@ async def send_message_stream(
                 SELECT role, content FROM (
                     SELECT role, content, created_at FROM chat_messages
                     WHERE session_id = $1 AND (is_compacted IS NULL OR is_compacted = false)
-                    ORDER BY created_at DESC LIMIT 500
+                    ORDER BY created_at DESC LIMIT 200
                 ) sub ORDER BY created_at ASC
                 """,
                 sid,

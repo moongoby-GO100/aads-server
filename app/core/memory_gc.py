@@ -735,13 +735,13 @@ async def background_session_compaction():
             try:
                 async with pool.acquire() as conn:
                     msgs = await conn.fetch(
-                        "SELECT role, content FROM chat_messages WHERE session_id = $1 AND (is_compacted = false OR is_compacted IS NULL) ORDER BY created_at LIMIT 500",
+                        "SELECT role, content FROM chat_messages WHERE session_id = $1 AND (is_compacted = false OR is_compacted IS NULL) ORDER BY created_at LIMIT 200",
                         s['session_id']
                     )
                     msg_list = [{"role": r["role"], "content": r["content"]} for r in msgs]
 
-                if msg_list:
-                    await check_and_compact(sid, msg_list)
+                    if msg_list:
+                        await check_and_compact(sid, msg_list, db_conn=conn)
                     logger.info(f"background_compaction: session {sid[:8]} compacted ({s['msg_count']} msgs)")
             except Exception as e:
                 logger.warning(f"background_compaction_error: session {sid[:8]}: {e}")

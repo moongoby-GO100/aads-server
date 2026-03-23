@@ -408,7 +408,11 @@ async def build_messages_context(
             from app.services.compaction_service import check_and_compact
             messages = await check_and_compact(session_id, messages, db_conn=db_conn)
     except Exception as e:
-        logger.debug(f"context_builder token check error: {e}")
+        logger.warning(f"context_builder compaction error: {e}")
+        # Emergency Truncation: compaction 실패 시 LLM 없이 최근 30개만 유지
+        _EMERGENCY_KEEP = 30
+        if len(messages) > _EMERGENCY_KEEP:
+            messages = [{"role": "system", "content": f"[이전 {len(messages) - _EMERGENCY_KEEP}개 메시지 자동 생략]"}] + messages[-_EMERGENCY_KEEP:]
 
     return messages, system_prompt
 
