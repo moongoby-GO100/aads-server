@@ -88,6 +88,11 @@ INTENT_MAP: dict[str, dict] = {
     # AADS-186A 신규 인텐트
     "service_inspection": {"model": "claude-opus",               "tools": True,  "group": "all"},
     "all_service_status": {"model": "claude-sonnet",              "tools": True,  "group": "all"},
+    # AADS-195 Phase 3: PC 제어 인텐트
+    "pc_control":         {"model": "claude-sonnet",              "tools": True,  "group": "all"},
+    "pc_screenshot":      {"model": "claude-sonnet",              "tools": True,  "group": "all"},
+    "pc_file":            {"model": "claude-sonnet",              "tools": True,  "group": "all"},
+    "pc_kakao":           {"model": "claude-sonnet",              "tools": True,  "group": "all"},
     # AADS-186E-1 크롤링 인텐트
     "url_read":           {"model": "claude-opus",               "tools": True,  "group": "all"},
     "deep_crawl":         {"model": "claude-opus",               "tools": True,  "group": "all"},
@@ -127,7 +132,8 @@ service_inspection, all_service_status,
 url_read, deep_crawl,
 code_explorer, analyze_changes, search_all_projects,
 execute, code_modify, task_query, status_check, pipeline_runner, file_read,
-news_search, blog_search, shop_search, local_search, book_search, image_search, encyclopedia_search, knowledge_search
+news_search, blog_search, shop_search, local_search, book_search, image_search, encyclopedia_search, knowledge_search,
+pc_control, pc_screenshot, pc_file, pc_kakao
 
 규칙:
 - "다른 친구에게 시킨거 진행 확인", "걔 작업 됐나", "작업 현황", "시킨거 확인", "진행 상태 확인해줘" → task_query
@@ -171,6 +177,10 @@ news_search, blog_search, shop_search, local_search, book_search, image_search, 
 - 디자인 → design
 - "스크린샷 찍어", "화면 캡처", "렌더링 확인", "화면이 이상해", "화면 봐줘" → browser
 - "여기 확인해", "여기 채팅창 기능 분석", "여기 기능 분석", "페이지 기능 분석" → cto_code_analysis (소스 코드 우선 분석)
+- "PC 스크린샷 찍어", "PC 화면 캡처", "PC 화면" → pc_screenshot
+- "PC에서 메모장 열어", "PC 프로그램 실행", "PC 명령", "PC 제어", "PC 원격" → pc_control
+- "PC 파일 보여줘", "PC 파일 목록", "PC 파일 읽어" → pc_file
+- "카카오톡으로 보내", "카톡 보내", "카톡으로 전달", "카카오톡 메시지" → pc_kakao
 - 이미지 분석 → image_analyze
 - 영상 분석 → video_analyze
 - 코드 실행 → code_exec
@@ -325,6 +335,15 @@ def _keyword_fallback(message: str) -> IntentResult:
     """Gemini 실패 시 키워드 기반 분류."""
     msg = message.lower()
 
+    # AADS-195 Phase 3: PC 제어 인텐트 (키워드 우선)
+    if any(w in msg for w in ("카카오톡으로", "카톡 보내", "카톡으로", "카카오톡 메시지", "카톡 메시지")):
+        return _make_result("pc_kakao")
+    if any(w in msg for w in ("pc 스크린샷", "pc 화면 캡처", "pc 화면 찍", "pc화면")):
+        return _make_result("pc_screenshot")
+    if any(w in msg for w in ("pc 파일", "pc에서 파일", "pc 폴더")):
+        return _make_result("pc_file")
+    if any(w in msg for w in ("pc 제어", "pc 원격", "pc에서 실행", "pc에서 열어", "pc 프로그램", "pc 명령", "pc에서 메모장", "pc에서 크롬")):
+        return _make_result("pc_control")
     if any(w in msg for w in ("안녕", "hello", "hi ", "반가")):
         return _make_result("greeting")
     if any(w in msg for w in ("도구 테스트", "전체 테스트", "전부 테스트", "모든 도구", "tool test", "도구 전부", "도구 모두")):

@@ -25,6 +25,7 @@ class CommandRequest(BaseModel):
     command_type: Literal[
         "shell", "screenshot", "file_list",
         "process_list", "file_read", "file_write",
+        "kakao_send", "kakao_read", "system_info",
     ]
     params: Dict[str, Any] = Field(default_factory=dict)
 

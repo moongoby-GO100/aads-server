@@ -41,7 +41,7 @@ _AADS_API_BASE = os.getenv("AADS_API_BASE", "http://localhost:8080")
 _MAX_RESULT_CHARS = 25000  # ~8000 토큰 (지시서 기준 25,000 허용)
 _TOOL_TIMEOUT = 20.0  # 일반 도구 타임아웃
 _LONG_TOOL_TIMEOUT = 120.0  # 서브에이전트/딥리서치 등 장시간 도구
-_LONG_TOOLS = frozenset({"spawn_subagent", "spawn_parallel_subagents", "run_agent_team", "run_debate", "deep_research", "delegate_to_agent", "delegate_to_research", "capture_screenshot", "run_remote_command", "write_remote_file", "patch_remote_file"})
+_LONG_TOOLS = frozenset({"spawn_subagent", "spawn_parallel_subagents", "run_agent_team", "run_debate", "deep_research", "delegate_to_agent", "delegate_to_research", "capture_screenshot", "run_remote_command", "write_remote_file", "patch_remote_file", "pc_execute"})
 
 
 class ToolExecutor:
@@ -165,6 +165,9 @@ class ToolExecutor:
             "query_timeline":         self._query_timeline,
             "recall_tool_result":     self._recall_tool_result,
             "query_decision_graph":   self._query_decision_graph,
+            # AADS-195 Phase 3: PC Agent 도구
+            "pc_execute":             self._pc_execute,
+            "pc_list_agents":         self._pc_list_agents,
         }
         fn = dispatch.get(tool_name)
         if fn is None:
@@ -1311,6 +1314,54 @@ class ToolExecutor:
             fact_id=inp.get("fact_id", ""),
             max_depth=min(int(inp.get("max_depth", 3) or 3), 3),
         )
+
+    # ── AADS-195 Phase 3: PC Agent 도구 ──────────────────────────────────
+
+    async def _pc_execute(self, inp: Dict[str, Any]) -> Any:
+        """PC Agent에 명령 전송 및 결과 수신."""
+        from app.services.pc_agent_manager import pc_agent_manager
+
+        agent_id = inp.get("agent_id", "")
+        command_type = inp.get("command_type", "")
+        params = inp.get("params", {})
+
+        if not agent_id:
+            # 연결된 에이전트가 1개면 자동 선택
+            agents = pc_agent_manager.list_agents()
+            if len(agents) == 1:
+                agent_id = agents[0].agent_id
+            elif len(agents) == 0:
+                return {"error": "연결된 PC Agent가 없습니다. PC에서 에이전트를 실행해주세요."}
+            else:
+                return {
+                    "error": "agent_id를 지정해주세요.",
+                    "available_agents": [
+                        {"agent_id": a.agent_id, "hostname": a.hostname}
+                        for a in agents
+                    ],
+                }
+
+        if not command_type:
+            return {"error": "command_type 필수 (shell, screenshot, file_list, process_list, file_read, file_write, kakao_send, kakao_read, system_info)"}
+
+        try:
+            command_id = await pc_agent_manager.send_command(agent_id, command_type, params)
+            result = await pc_agent_manager.get_result(command_id, timeout=60.0)
+            return result.model_dump(mode="json")
+        except ValueError as e:
+            return {"error": str(e)}
+
+    async def _pc_list_agents(self, inp: Dict[str, Any]) -> Any:
+        """연결된 PC Agent 목록 조회."""
+        from app.services.pc_agent_manager import pc_agent_manager
+
+        agents = pc_agent_manager.list_agents()
+        if not agents:
+            return {"agents": [], "message": "연결된 PC Agent가 없습니다."}
+        return {
+            "agents": [a.model_dump(mode="json") for a in agents],
+            "count": len(agents),
+        }
 
     async def _delegate_to_agent(self, inp: Dict[str, Any]) -> Any:
         """
