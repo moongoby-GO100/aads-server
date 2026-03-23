@@ -197,16 +197,33 @@ def _image_to_base64(path: str) -> str:
         return base64.b64encode(f.read()).decode("utf-8")
 
 
+def _sanitize_json_string(s: str) -> str:
+    """LLM이 생성한 비표준 JSON 보정 (trailing comma, 주석 제거)."""
+    s = re.sub(r'//[^\n]*', '', s)
+    s = re.sub(r',\s*([}\]])', r'\1', s)
+    return s
+
+
 def _extract_json(text: str) -> dict:
     """LLM 응답에서 JSON 블록 추출."""
-    # ```json ... ``` 블록 우선
-    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    candidates: list[str] = []
+    # ```json ... ``` 블록 우선 (greedy — 중첩 중괄호 포함)
+    m = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
     if m:
-        return json.loads(m.group(1))
+        candidates.append(m.group(1))
     # 중괄호 영역 직접 탐색
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if m:
-        return json.loads(m.group(0))
+        candidates.append(m.group(0))
+    for raw in candidates:
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+        try:
+            return json.loads(_sanitize_json_string(raw))
+        except json.JSONDecodeError:
+            continue
     raise ValueError(f"JSON 없음: {text[:200]}")
 
 
