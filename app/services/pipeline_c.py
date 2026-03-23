@@ -481,6 +481,9 @@ class PipelineCJob:
                     f"에러: {verify.get('errors', '없음')[:200] or '없음'}\n\n"
                     f"**결과: {verify['summary']}**"
                 )
+                # ★ AADS 프론트엔드(dashboard) 배포 후 QA 자동 실행
+                await self._run_frontend_qa_if_needed()
+
                 return {
                     "status": "done",
                     "summary": verify["summary"],
@@ -529,6 +532,9 @@ class PipelineCJob:
             except Exception as e:
                 logger.warning(f"pipeline_c_qa_auto_report_error job={self.job_id}: {e}")
 
+            # ★ AADS 프론트엔드(dashboard) 배포 후 QA 자동 실행
+            await self._run_frontend_qa_if_needed()
+
             return {
                 "status": "done",
                 "summary": verify["summary"],
@@ -551,6 +557,53 @@ class PipelineCJob:
                 f"CEO에게 오류 원인과 해결 방안을 간단히 보고해주세요."
             )
             return {"error": str(e)}
+
+    async def _run_frontend_qa_if_needed(self):
+        """AADS 프로젝트 + aads-dashboard 변경 시 QA 파이프라인 자동 실행."""
+        if self.project != "AADS":
+            return
+        if "aads-dashboard/" not in (self.git_diff or ""):
+            return
+
+        try:
+            from app.services.qa_pipeline import run_full_qa
+            from app.services.ceo_notify import notify_ceo
+
+            self._log("frontend_qa", "프론트엔드(dashboard) 변경 감지 — QA 자동 실행 중...")
+            await self._post_to_chat(
+                f"🔍 **[프론트엔드 QA 시작]** `{self.job_id}`\n"
+                f"aads-dashboard 변경 감지. 시각적 QA 검사를 실행합니다..."
+            )
+
+            qa_result = await run_full_qa(
+                project_id="AADS",
+                deploy_url="https://aads.newtalk.kr/",
+                pages=["/", "/chat", "/ops"],
+                project_context="Pipeline Runner 자동 배포 후 프론트엔드 QA",
+            )
+
+            verdict = qa_result.get("verdict", "UNKNOWN")
+            is_fail = "FAIL" in verdict
+
+            await self._post_to_chat(
+                f"{'❌' if is_fail else '✅'} **[프론트엔드 QA 결과]** `{self.job_id}`\n"
+                f"판정: **{verdict}**\n"
+                f"디자인 점수: {qa_result.get('design_score', 'N/A')}\n"
+                f"테스트: {qa_result.get('test_status', 'N/A')} | "
+                f"시각: {qa_result.get('visual_status', 'N/A')}"
+            )
+
+            if is_fail:
+                await notify_ceo(
+                    project_id="AADS",
+                    qa_result=qa_result,
+                    screenshots=qa_result.get("screenshots"),
+                    scorecard=qa_result.get("scorecard"),
+                )
+                logger.warning(f"pipeline_c_frontend_qa_fail job={self.job_id}: {verdict}")
+
+        except Exception as e:
+            logger.warning(f"pipeline_c_frontend_qa_error job={self.job_id}: {e}")
 
     async def reject(self, reason: str = "") -> dict:
         """CEO 거부 → 변경사항 되돌리기."""
