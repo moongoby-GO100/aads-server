@@ -53,7 +53,9 @@ docker exec aads-postgres psql -U aads -d aads -q -c "
 # ── Phase 1: 배포 실행 ──
 case "$MODE" in
     code)
-        echo "[deploy.sh] Phase 1: supervisorctl restart aads-api"
+        echo "[deploy.sh] Phase 1: supervisorctl restart aads-api (graceful)"
+        # 배포 플래그 파일 생성 → 서버 startup 시 미완료 대화 자동 재실행 스킵
+        docker exec aads-server touch /tmp/aads_deploy_restart 2>/dev/null || true
         docker exec aads-server supervisorctl restart aads-api || true
         ;;
     build)

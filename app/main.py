@@ -462,14 +462,15 @@ async def lifespan(app: FastAPI):
 
         조건:
         1. 최근 10분 이내 사용자 메시지가 마지막인 세션
-        2. 배포 목적 재시작 구분: DEPLOY_RESTART 환경변수가 설정되어 있으면 스킵
+        2. 배포 목적 재시작 구분: /tmp/aads_deploy_restart 플래그 파일이 있으면 스킵
         """
         import asyncio as _resume_asyncio
         await _resume_asyncio.sleep(5)  # 서버 완전 기동 대기
 
-        if os.environ.get("DEPLOY_RESTART") == "1":
-            os.environ.pop("DEPLOY_RESTART", None)  # 일회성
-            logger.info("resume_incomplete: skipped (DEPLOY_RESTART=1)")
+        _deploy_flag = "/tmp/aads_deploy_restart"
+        if os.path.exists(_deploy_flag):
+            os.remove(_deploy_flag)
+            logger.info("resume_incomplete: skipped (deploy restart detected)")
             return
 
         try:
