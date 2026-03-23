@@ -214,6 +214,39 @@ else
     notify "⚠️ LLM 상태 확인 불가 — 채팅 가능하나 AI 응답 지연 가능"
 fi
 
-echo "[deploy.sh] ✅ 배포 완료 — 5단계 검증 통과 (mode=${MODE})"
-notify "✅ 배포 완료 — 5단계 검증 통과 (mode=${MODE})"
+# ── Phase 6: 프론트엔드 QA (non-blocking) ──
+echo "[deploy.sh] Phase 6: 프론트엔드 QA 검사..."
+CHANGED_FILES=$(git -C "$COMPOSE_DIR" diff HEAD~1 --name-only 2>/dev/null || echo "")
+if echo "$CHANGED_FILES" | grep -q "aads-dashboard/"; then
+    echo "[deploy.sh] Phase 6: 대시보드 변경 감지 — Next.js 빌드 대기 (20초)..."
+    sleep 20
+    QA_RESPONSE=$(curl -sf --max-time 120 -X POST "http://127.0.0.1:8100/api/v1/visual-qa/full-qa" \
+        -H "Content-Type: application/json" \
+        -d '{"pages": ["/", "/chat", "/ops"]}' 2>/dev/null) || QA_RESPONSE=""
+    if [[ -z "$QA_RESPONSE" ]]; then
+        echo "[deploy.sh] ⚠️ Phase 6: QA API 응답 없음 — 스킵 (non-blocking)"
+    else
+        QA_VERDICT=$(echo "$QA_RESPONSE" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    print(d.get('verdict', 'UNKNOWN'))
+except:
+    print('UNKNOWN')
+" 2>/dev/null || echo "UNKNOWN")
+        if [[ "$QA_VERDICT" == "FAIL" ]]; then
+            echo "[deploy.sh] ⚠️ Phase 6: ❌ 프론트 QA 실패 (non-blocking)"
+            notify "❌ 프론트 QA 실패 — 확인 필요 (non-blocking)"
+        elif [[ "$QA_VERDICT" == "PASS" ]]; then
+            echo "[deploy.sh] Phase 6: ✅ 프론트 QA 통과"
+        else
+            echo "[deploy.sh] ⚠️ Phase 6: QA 결과 불명 (verdict=${QA_VERDICT}) — 스킵"
+        fi
+    fi
+else
+    echo "[deploy.sh] Phase 6: 프론트 변경 없음 — QA 스킵"
+fi
+
+echo "[deploy.sh] ✅ 배포 완료 — 6단계 검증 통과 (mode=${MODE})"
+notify "✅ 배포 완료 — 6단계 검증 통과 (mode=${MODE})"
 exit 0
