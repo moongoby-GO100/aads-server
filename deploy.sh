@@ -61,7 +61,7 @@ case "$MODE" in
         echo "[deploy.sh] SIGTERM 전송 완료 — 진행중인 응답 완료 대기 (최대 60초)..."
         for i in $(seq 1 30); do
             sleep 2
-            STATUS=$(docker exec aads-server supervisorctl status aads-api 2>/dev/null | awk "{print \\}")
+            STATUS=$(docker exec aads-server supervisorctl status aads-api 2>/dev/null | awk '{print $2}')
             if [ "$STATUS" != "RUNNING" ]; then
                 echo "[deploy.sh] aads-api 종료 확인 (${i}x2=$((i*2))초)"
                 break
