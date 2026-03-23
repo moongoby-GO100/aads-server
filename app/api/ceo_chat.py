@@ -141,7 +141,7 @@ _INTENT_PATTERNS: Dict[str, List[str]] = {
     "dashboard":   ["상태", "확인", "보고", "현황", "서버", "대시보드", "요약", "overview"],
     "diagnosis":   ["왜", "안돼", "오류", "에러", "문제", "분석", "실패", "죽었", "죽어", "안됨", "error", "fail"],
     "research":    ["검색", "조사", "비교", "찾아", "최신", "찾아봐", "알아봐", "어떤", "무엇"],
-    "pipeline_c":  ["파이프라인", "pipeline", "클로드봇", "claude code", "자율작업", "자율 작업", "봇한테", "봇에게",
+    "pipeline_runner":  ["파이프라인", "pipeline", "클로드봇", "claude code", "자율작업", "자율 작업", "봇한테", "봇에게",
                     "파이프라인C", "pipeline c", "파이프라인 시작", "봇 작업"],
     "execute":     ["만들어", "수정해", "고쳐", "배포", "진행", "승인", "작성해", "추가해", "구현", "지시서"],
     "strategy":    ["기획", "방향", "전략", "의도", "검토", "설계", "아키텍처", "계획"],
@@ -195,7 +195,7 @@ def classify_intent(message: str) -> str:
         "decision", "planning", "search", "casual",
         # 기존 (우선순위 유지)
         "design_fix", "design", "qa", "execution_verify", "architect",
-        "health_check", "pipeline_c", "execute", "browser", "dashboard", "diagnosis",
+        "health_check", "pipeline_runner", "execute", "browser", "dashboard", "diagnosis",
         "research", "strategy",
     ]
     for intent in priority_order:
@@ -1650,8 +1650,8 @@ async def send_ceo_message(req: CeoChatRequest):
             response_text, input_tokens, output_tokens = await _call_anthropic_with_tools(
                 tool_model, system_prompt, messages, dsn, chat_session_id=session_id
             )
-        elif intent == "pipeline_c":
-            # Pipeline C: 자율 작업 파이프라인 (tool-use 활성화)
+        elif intent == "pipeline_runner":
+            # Pipeline Runner: 자율 작업 파이프라인 (tool-use 활성화)
             pipeline_prompt = (
                 system_prompt
                 + "\n\n[Pipeline Runner 모드]\n"

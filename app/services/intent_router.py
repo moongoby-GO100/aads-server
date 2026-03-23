@@ -76,8 +76,8 @@ INTENT_MAP: dict[str, dict] = {
     # AADS-188C: Agent SDK 자율 실행 인텐트
     "execute":            {"model": "claude-opus",               "tools": True,  "group": "all"},
     "code_modify":        {"model": "claude-opus",               "tools": True,  "group": "all"},
-    # Pipeline C: Claude Code 자율 작업 파이프라인
-    "pipeline_c":         {"model": "claude-opus",               "tools": True,  "group": "all"},
+    # Pipeline Runner: Claude Code 자율 작업 파이프라인
+    "pipeline_runner":    {"model": "claude-opus",               "tools": True,  "group": "all"},
     # 자동 반응 (파이프라인 완료 후)
     "auto_reaction":      {"model": "claude-sonnet",              "tools": True,  "group": "all"},
     # 첨부파일 읽기
@@ -126,7 +126,7 @@ cto_strategy, cto_code_analysis, cto_directive, cto_verify, cto_impact, cto_tech
 service_inspection, all_service_status,
 url_read, deep_crawl,
 code_explorer, analyze_changes, search_all_projects,
-execute, code_modify, task_query, status_check, pipeline_c, file_read,
+execute, code_modify, task_query, status_check, pipeline_runner, file_read,
 news_search, blog_search, shop_search, local_search, book_search, image_search, encyclopedia_search, knowledge_search
 
 규칙:
@@ -192,7 +192,7 @@ news_search, blog_search, shop_search, local_search, book_search, image_search, 
 - "~하라", "~해라", "~해봐", "~해줘" 형태의 짧은 명령 + 확인/점검/보고/진단/조회/분석 키워드 → status_check 또는 execute
 - 대화 맥락상 이전에 서버 확인, 작업 보고 등의 대화가 있었고 짧은 후속 지시가 오면 → 이전 맥락의 인텐트 유지 (casual이 아님)
 - "넌 ~할 수 있다", "너는 ~가 가능하다" + 서버/도구/접근 → status_check (능력 확인 후 실행 기대)
-- "파이프라인 시작", "클로드봇한테 시켜", "봇한테 시켜", "봇에게 시켜", "자율작업", "파이프라인C", "pipeline c" → pipeline_c
+- "파이프라인 시작", "클로드봇한테 시켜", "봇한테 시켜", "봇에게 시켜", "자율작업", "파이프라인C", "pipeline c" → pipeline_runner
 
 JSON으로만 응답하세요: {"intent": "...", "confidence": 0.0~1.0}"""
 
@@ -340,7 +340,7 @@ def _keyword_fallback(message: str) -> IntentResult:
     if any(w in msg for w in ("헬스체크", "서버 상태", "health")):
         return _make_result("health_check")
     if any(w in msg for w in ("파이프라인 시작", "파이프라인c", "pipeline c", "클로드봇", "봇한테 시켜", "봇에게 시켜", "자율작업", "자율 작업")):
-        return _make_result("pipeline_c")
+        return _make_result("pipeline_runner")
     if any(w in msg for w in ("대시보드", "작업현황", "pipeline", "파이프라인")):
         return _make_result("dashboard")
     if any(w in msg for w in ("서버 검색", "원격 서버", "ssh 파일", "서버 파일", "프로젝트 서버에서", "kis 서버", "sf 서버", "ntv2 서버", "go100 서버")):
