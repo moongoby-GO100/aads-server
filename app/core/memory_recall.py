@@ -417,28 +417,28 @@ async def build_memory_context(
     # 반성 지시사항이 세션 맥락과 함께 전달되어 행동 변화 유도력 향상
     # 별도 블록(최우선) + 세션 노트 내부 이중 배치로 절대 누락 방지
     if corrections:
-        blocks.append(f"<memory_correction_directives>\n## ⚠️ 반성 지시사항 (이번 턴에서 즉시 반영할 것)\n{corrections}\n</memory_correction_directives>")
+        blocks.append(f"<corrections>\n⚠️ 반성지시:\n{corrections}\n</corrections>")
         logger.info("correction_directive_injected", count=corrections.count("[반성지시]"), chars=len(corrections))
-    # 세션 노트에 correction_directive 상단 강제 주입 (Layer2 통합) — 우선순위 최상위
-    _correction_header = f"⚠️ [즉시반영 필수] 이전 턴 반성 결과:\n{corrections}" if corrections else ""
+    # 세션 노트에 correction_directive 상단 강제 주입 (Layer2 통합)
+    _correction_header = f"⚠️ 즉시반영:\n{corrections}" if corrections else ""
     if _correction_header and notes:
         notes = f"{_correction_header}\n---\n{notes}"
     elif _correction_header and not notes:
         notes = _correction_header
     if notes:
-        blocks.append(f"<memory_session_notes>\n## 이전 대화 요약\n{notes}\n</memory_session_notes>")
+        blocks.append(f"<session>\n{notes}\n</session>")
     if prefs:
-        blocks.append(f"<memory_preferences>\n## CEO 운영 원칙 및 선호\n{prefs}\n</memory_preferences>")
+        blocks.append(f"<ceo_rules>\n{prefs}\n</ceo_rules>")
     if tools:
-        blocks.append(f"<memory_tool_strategy>\n## 도구 사용 전략\n{tools}\n</memory_tool_strategy>")
+        blocks.append(f"<tools>\n{tools}\n</tools>")
     if dirs:
-        blocks.append(f"<memory_directives>\n## 활성 지시사항\n{dirs}\n</memory_directives>")
+        blocks.append(f"<directives>\n{dirs}\n</directives>")
     if disc:
-        blocks.append(f"<memory_discoveries>\n## 이전 작업에서 발견한 사항\n{disc}\n</memory_discoveries>")
+        blocks.append(f"<discoveries>\n{disc}\n</discoveries>")
     if learned:
-        blocks.append(f"<memory_learned>\n## AI 학습 메모리 (learn_pattern)\n{learned}\n</memory_learned>")
+        blocks.append(f"<learned>\n{learned}\n</learned>")
 
-    result = "\n\n".join(blocks) if blocks else ""
+    result = "\n\n".join(blocks).strip() if blocks else ""
 
     # 총 예산 초과 시 뒤에서부터 제거
     if len(result) > _TOTAL_CHAR_LIMIT:

@@ -381,6 +381,10 @@ async def build_messages_context(
 
     system_prompt = layer1 + "\n\n" + layer2 + memory_layer + preload_layer + auto_rag_layer + artifact_layer
 
+    # 토큰 절감 측정 로깅
+    _sp_chars = len(system_prompt)
+    logger.info("system_prompt_tokens", chars=_sp_chars, est_tokens=int(_sp_chars / 1.5))
+
     # Layer D: 임시 문서 컨텍스트 (현재 턴에만 주입, 다음 턴 제거)
     if document_context:
         system_prompt += "\n\n" + document_context
@@ -489,6 +493,10 @@ async def build(
         ]
 
     system_text = layer1 + "\n\n---\n\n" + layer2_full
+
+    # 토큰 절감 측정 로깅
+    _sp_chars = len(system_text)
+    logger.info("system_prompt_tokens", chars=_sp_chars, est_tokens=int(_sp_chars / 1.5))
 
     return ContextResult(
         system_blocks=system_blocks,
