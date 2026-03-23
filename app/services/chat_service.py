@@ -2545,7 +2545,7 @@ async def send_message_stream(
                 messages=messages,
                 model=intent_result.model,
                 system_prompt=_auto_system,
-                session_id=sid,
+                session_id=session_id,
             ):
                 yield sse_line
                 # 완료/비용/오류 이벤트 파싱하여 응답 수집

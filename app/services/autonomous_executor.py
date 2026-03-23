@@ -95,6 +95,9 @@ class AutonomousExecutor:
         task_id: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
+        # 타입 가드: UUID 객체가 전달되면 문자열로 변환 (chat_service의 sid/session_id 혼동 방어)
+        if session_id is not None and not isinstance(session_id, str):
+            session_id = str(session_id)
         """
         자율 도구 루프.
 
