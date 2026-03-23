@@ -503,23 +503,32 @@ async def lifespan(app: FastAPI):
             from app.core.db_pool import get_pool
             pool = get_pool()
             async with pool.acquire() as conn:
-                # 최근 10분 이내, 마지막 메시지가 user인 세션 찾기
+                # 최근 10분 이내, 미완료 세션 찾기:
+                # 1) 마지막 메시지가 user인 세션 (응답 없음)
+                # 2) 마지막 assistant가 recovered인 세션 (중단된 부분 응답)
                 incomplete = await conn.fetch("""
                     WITH last_msgs AS (
                         SELECT DISTINCT ON (session_id)
                             session_id, role, content, created_at,
-                            intent
+                            intent, model_used
                         FROM chat_messages
                         WHERE created_at > NOW() - INTERVAL '10 minutes'
                           AND intent IS DISTINCT FROM 'system_trigger'
                           AND intent IS DISTINCT FROM 'streaming_placeholder'
                         ORDER BY session_id, created_at DESC
                     )
-                    SELECT session_id::text, content, created_at
-                    FROM last_msgs
-                    WHERE role = 'user'
-                      AND content IS NOT NULL
-                      AND length(content) > 0
+                    SELECT lm.session_id::text,
+                           COALESCE(
+                               (SELECT content FROM chat_messages
+                                WHERE session_id = lm.session_id AND role = 'user'
+                                ORDER BY created_at DESC LIMIT 1),
+                               lm.content
+                           ) AS content,
+                           lm.created_at
+                    FROM last_msgs lm
+                    WHERE (lm.role = 'user' OR lm.model_used = 'recovered')
+                      AND lm.content IS NOT NULL
+                      AND length(lm.content) > 0
                     LIMIT 3
                 """)
 
@@ -533,21 +542,25 @@ async def lifespan(app: FastAPI):
                     sid = row["session_id"]
                     user_content = row["content"]
                     try:
-                        import httpx
-                        async with httpx.AsyncClient(timeout=10) as client:
-                            resp = await client.post(
-                                "http://localhost:8080/api/v1/chat/messages/send",
-                                json={
-                                    "session_id": sid,
-                                    "content": user_content,
-                                    "intent_override": "auto_resume",
-                                },
-                                headers={"X-Internal": "resume"},
-                            )
-                            if resp.status_code == 200:
-                                logger.info(f"resume_incomplete: session={sid[:8]} re-triggered")
-                            else:
-                                logger.warning(f"resume_incomplete: session={sid[:8]} failed status={resp.status_code}")
+                        # HTTP 대신 서비스 함수 직접 호출 (인증 우회)
+                        from app.services.chat_service import send_message_stream, with_background_completion
+                        import asyncio as _ri_asyncio
+
+                        async def _resume_session(_sid, _content):
+                            try:
+                                stream = send_message_stream(
+                                    session_id=_sid,
+                                    content=_content,
+                                )
+                                bg = with_background_completion(stream, session_id=_sid)
+                                async for _ in bg:
+                                    pass  # 백그라운드에서 완료까지 소비
+                                logger.info(f"resume_incomplete: session={_sid[:8]} completed")
+                            except Exception as _e:
+                                logger.warning(f"resume_incomplete: session={_sid[:8]} stream_error={_e}")
+
+                        _ri_asyncio.create_task(_resume_session(sid, user_content))
+                        logger.info(f"resume_incomplete: session={sid[:8]} re-triggered (direct)")
                     except Exception as e:
                         logger.warning(f"resume_incomplete: session={sid[:8]} error={e}")
         except Exception as e:
