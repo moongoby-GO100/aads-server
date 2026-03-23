@@ -23,6 +23,10 @@ from app.core.db_pool import get_pool
 
 logger = logging.getLogger(__name__)
 
+# P2-2: 분기 모드에서 AI 응답에 branch_id를 자동 부여하기 위한 ContextVar
+from contextvars import ContextVar as _ContextVar
+_current_branch_id: _ContextVar[Optional[str]] = _ContextVar("_current_branch_id", default=None)
+
 
 # ── SSE heartbeat wrapper ─────────────────────────────────────────
 import asyncio as _heartbeat_asyncio
@@ -252,7 +256,8 @@ async def with_background_completion(
                 await queue.put(_SENTINEL)
             except Exception:
                 pass
-            _active_bg_tasks.pop(session_id, None)
+            if _active_bg_tasks.get(session_id) is _my_task:
+                _active_bg_tasks.pop(session_id, None)
             # 🆕 bg_task 완료 후 대기 중인 trigger_ai_reaction 큐 소비
             if session_id in _ai_reaction_queue and _ai_reaction_queue[session_id]:
                 _next_msg = _ai_reaction_queue[session_id].pop(0)
@@ -867,14 +872,22 @@ async def get_session(session_id: str) -> Optional[Dict[str, Any]]:
         await get_pool().release(conn)
 
 
-async def list_sessions(workspace_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+async def list_sessions(workspace_id: str, limit: int = 50, tag: Optional[str] = None) -> List[Dict[str, Any]]:
     conn = await _get_conn()
     try:
-        rows = await conn.fetch(
-            "SELECT * FROM chat_sessions WHERE workspace_id = $1 ORDER BY pinned DESC, updated_at DESC LIMIT $2",
-            uuid.UUID(workspace_id),
-            limit,
-        )
+        if tag:
+            rows = await conn.fetch(
+                "SELECT * FROM chat_sessions WHERE workspace_id = $1 AND $3 = ANY(tags) ORDER BY pinned DESC, updated_at DESC LIMIT $2",
+                uuid.UUID(workspace_id),
+                limit,
+                tag,
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT * FROM chat_sessions WHERE workspace_id = $1 ORDER BY pinned DESC, updated_at DESC LIMIT $2",
+                uuid.UUID(workspace_id),
+                limit,
+            )
         return [_row_to_dict(r) for r in rows]
     finally:
         await get_pool().release(conn)
@@ -962,6 +975,10 @@ async def update_session(session_id: str, data: Dict[str, Any]) -> Optional[Dict
             sets.append(f"pinned = ${idx}")
             vals.append(data["pinned"])
             idx += 1
+        if "tags" in data and data["tags"] is not None:
+            sets.append(f"tags = ${idx}")
+            vals.append(data["tags"])
+            idx += 1
         if not sets:
             row = await conn.fetchrow("SELECT * FROM chat_sessions WHERE id = $1", uuid.UUID(session_id))
             return _row_to_dict(row) if row else None
@@ -1000,6 +1017,51 @@ async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort
             offset,
         )
         return [_row_to_dict(r) for r in rows]
+    finally:
+        await get_pool().release(conn)
+
+
+async def list_messages_cursor(
+    session_id: str,
+    limit: int = 50,
+    cursor: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Cursor 기반 메시지 조회 — 최근 N건 또는 cursor 이전 N건 (항상 ASC 반환)."""
+    conn = await _get_conn()
+    try:
+        sid = uuid.UUID(session_id)
+        fetch_limit = limit + 1  # has_more 판별용 1건 추가
+        if cursor:
+            from datetime import datetime as _dt
+            cursor_dt = _dt.fromisoformat(cursor)
+            rows = await conn.fetch(
+                "SELECT * FROM ("
+                "  SELECT * FROM chat_messages"
+                "  WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate'"
+                "    AND created_at < $2"
+                "  ORDER BY created_at DESC LIMIT $3"
+                ") sub ORDER BY created_at ASC",
+                sid, cursor_dt, fetch_limit,
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT * FROM ("
+                "  SELECT * FROM chat_messages"
+                "  WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate'"
+                "  ORDER BY created_at DESC LIMIT $2"
+                ") sub ORDER BY created_at ASC",
+                sid, fetch_limit,
+            )
+        messages = [_row_to_dict(r) for r in rows]
+        has_more = len(messages) > limit
+        if has_more:
+            messages = messages[1:]  # 가장 오래된 1건 제거 (초과분)
+        next_cursor = messages[0]["created_at"].isoformat() if has_more and messages else None
+        return {
+            "messages": messages,
+            "next_cursor": next_cursor,
+            "has_more": has_more,
+        }
     finally:
         await get_pool().release(conn)
 
@@ -1192,6 +1254,7 @@ async def _save_message(
     sources: Optional[List[Any]] = None,
     tools_called: Optional[List[str]] = None,
     thinking_summary: Optional[str] = None,
+    reply_to_id: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     # Strip raw XML tool-call / tool-response / fabricated-result blocks from assistant messages
     # 닫힌 태그 + 닫히지 않은 태그(이후 전부) 모두 제거
@@ -1206,14 +1269,18 @@ async def _save_message(
         content = re.sub(r'^⏳ _[^\n]*_\s*', '', content)
         content = content.strip()
 
+    # P2-2: ContextVar에서 branch_id 가져오기 (분기 모드)
+    _branch_id_str = _current_branch_id.get(None)
+    _branch_uuid = uuid.UUID(_branch_id_str) if _branch_id_str else None
+
     # AADS-CRITICAL-FIX #2: INSERT + UPDATE를 트랜잭션으로 감싸 message_count 정합성 보장
     async with conn.transaction():
         row = await conn.fetchrow(
             """
             INSERT INTO chat_messages
                 (session_id, role, content, model_used, intent, cost, tokens_in, tokens_out,
-                 attachments, sources, tools_called, thinking_summary)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12)
+                 attachments, sources, tools_called, thinking_summary, reply_to_id, branch_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14)
             RETURNING *
             """,
             session_id,
@@ -1228,6 +1295,8 @@ async def _save_message(
             json.dumps(sources or []),
             json.dumps(tools_called or []),
             thinking_summary,
+            reply_to_id,
+            _branch_uuid,
         )
         # Update session message count (atomic with INSERT)
         await conn.execute(
@@ -1667,6 +1736,9 @@ async def send_message_stream(
     model_override: Optional[str] = None,
     intent_override: Optional[str] = None,
     uploaded_files: Optional[List[Any]] = None,
+    reply_to_id: Optional[str] = None,
+    branch_id: Optional[str] = None,
+    branch_point_msg_id: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """
     AADS-185: 3계층 Context Engineering + IntentRouter + ModelSelector + Tool Use 루프.
@@ -1691,6 +1763,11 @@ async def send_message_stream(
         from app.core.interrupt_queue import set_streaming, has_pending_interrupts, pop_pending_interrupts
         set_streaming(session_id, True)
         sid = uuid.UUID(session_id)
+
+        # SSE 재연결 프로토콜: 고유 stream_id 발행
+        import time as _stream_time
+        _stream_id = str(uuid.uuid4())[:8]
+        yield f"data: {json.dumps({'type': 'stream_start', 'stream_id': _stream_id})}\n\n"
 
         # AADS-FIX: 이전 턴에서 미소비된 인터럽트를 현재 user 메시지 앞에 주입
         if has_pending_interrupts(session_id):
@@ -1869,10 +1946,51 @@ async def send_message_stream(
         except Exception as _url_err:
             logger.warning(f"url_detection_skipped: {_url_err}")
 
+        # ── P2-7: 멘션(@) 프로젝트 감지 → 명시적 프로젝트 컨텍스트 오버라이드 ──
+        _MENTION_PROJECTS = {"KIS", "GO100", "AADS", "SF", "NTV2", "NAS"}
+        _mention_matches = re.findall(r'@(KIS|GO100|AADS|SF|NTV2|NAS)\b', content, re.IGNORECASE)
+        _mentioned_projects: list = []
+        if _mention_matches:
+            _mentioned_projects = list(dict.fromkeys(p.upper() for p in _mention_matches))
+            logger.info(f"[MENTION] session={session_id[:8]} projects={_mentioned_projects}")
+
+        # Reply-to: 이전 AI 응답 지정 시 인용 컨텍스트 주입
+        _reply_to_uuid = None
+        if reply_to_id:
+            try:
+                _reply_to_uuid = uuid.UUID(reply_to_id)
+                _quoted_row = await conn.fetchrow(
+                    "SELECT content FROM chat_messages WHERE id = $1 AND session_id = $2",
+                    _reply_to_uuid, sid,
+                )
+                if _quoted_row and _quoted_row["content"]:
+                    _quoted = _quoted_row["content"][:2000]
+                    content = f"[CEO가 지정한 이전 AI 응답 (reply_to)]\n{_quoted}\n\n[CEO 추가 지시]\n{content}"
+                    logger.info(f"[REPLY_TO] session={session_id[:8]} reply_to={reply_to_id[:8]} quoted={len(_quoted)}chars")
+            except Exception as _rte:
+                logger.warning(f"[REPLY_TO] failed: {_rte}")
+
+        # auto_resume: 서버 재시작 후 자동 재실행 — 일반 사용자 메시지처럼 처리
+        if intent_override == "auto_resume":
+            logger.info(f"[AUTO_RESUME] session={session_id[:8]} re-processing after server restart")
+            intent_override = None  # 일반 흐름으로 전환
+
         # 사용자 메시지 저장 (trigger 메시지는 intent로 구분)
         # model_override를 user 메시지의 model_used에 저장 → 재개 시 CEO 선택 모델 복원용
-        user_intent = "system_trigger" if intent_override else None
-        await _save_message(conn, sid, "user", content, model_used=model_override, intent=user_intent, attachments=attachments or [])
+        # P2-2: branch 모드에서는 라우터에서 이미 저장했으므로 skip
+        if not branch_point_msg_id:
+            user_intent = "system_trigger" if intent_override else None
+            await _save_message(conn, sid, "user", content, model_used=model_override, intent=user_intent, attachments=attachments or [], reply_to_id=_reply_to_uuid)
+
+        # CEO 채팅 학습 트리거 (백그라운드, 비차단)
+        if not intent_override:
+            import asyncio as _asyncio_learn
+            _learn_project = _mentioned_projects[0] if _mentioned_projects else None
+            _asyncio_learn.create_task(_detect_and_save_learning(
+                session_id=session_id,
+                user_msg=content,
+                project=_learn_project,
+            ))
 
         # 2. 워크스페이스 정보 조회
         sp_row = await conn.fetchrow(
@@ -1888,17 +2006,44 @@ async def send_message_stream(
         workspace_name = (sp_row["workspace_name"] if sp_row and sp_row["workspace_name"] else "CEO")
 
         # 3. 세션 히스토리 조회 (#16: 서브쿼리로 ASC 정렬, Python reverse 제거)
-        hist_rows = await conn.fetch(
-            """
-            SELECT role, content FROM (
-                SELECT role, content, created_at FROM chat_messages
-                WHERE session_id = $1 AND (is_compacted IS NULL OR is_compacted = false)
-                ORDER BY created_at DESC LIMIT 500
-            ) sub ORDER BY created_at ASC
-            """,
-            sid,
-        )
-        raw_messages = [{"role": r["role"], "content": r["content"]} for r in hist_rows]
+        # P2-2: branch 모드일 때는 branch_point 메시지 이전(포함)까지만 히스토리 사용
+        if branch_point_msg_id:
+            _bp_uuid = uuid.UUID(branch_point_msg_id)
+            _bp_row = await conn.fetchrow(
+                "SELECT created_at FROM chat_messages WHERE id = $1", _bp_uuid
+            )
+            if _bp_row:
+                hist_rows = await conn.fetch(
+                    """
+                    SELECT role, content FROM (
+                        SELECT role, content, created_at FROM chat_messages
+                        WHERE session_id = $1
+                          AND (is_compacted IS NULL OR is_compacted = false)
+                          AND branch_id IS NULL
+                          AND created_at <= $2
+                        ORDER BY created_at DESC LIMIT 500
+                    ) sub ORDER BY created_at ASC
+                    """,
+                    sid, _bp_row["created_at"],
+                )
+            else:
+                hist_rows = []
+            # 분기 user 메시지를 히스토리 끝에 추가
+            raw_messages = [{"role": r["role"], "content": r["content"]} for r in hist_rows]
+            raw_messages.append({"role": "user", "content": content})
+            logger.info(f"[BRANCH] session={session_id[:8]} branch_id={branch_id} point={branch_point_msg_id[:8]} hist={len(raw_messages)}")
+        else:
+            hist_rows = await conn.fetch(
+                """
+                SELECT role, content FROM (
+                    SELECT role, content, created_at FROM chat_messages
+                    WHERE session_id = $1 AND (is_compacted IS NULL OR is_compacted = false)
+                    ORDER BY created_at DESC LIMIT 200
+                ) sub ORDER BY created_at ASC
+                """,
+                sid,
+            )
+            raw_messages = [{"role": r["role"], "content": r["content"]} for r in hist_rows]
 
         # 세션 누적 비용 조회 (프론트엔드 표시용)
         _session_cost_row = await conn.fetchrow(
@@ -1922,6 +2067,25 @@ async def send_message_stream(
             logger.error(f"context_builder failed, using raw fallback: {_ctx_err}")
             system_prompt = base_prompt or "You are a helpful AI assistant."
             messages = [{"role": m["role"], "content": m["content"]} for m in raw_messages[-20:]]
+
+        # P2-7: 멘션된 프로젝트 컨텍스트를 system_prompt에 주입
+        if _mentioned_projects:
+            _mention_desc = {
+                "KIS": "KIS AI 자동매매 시스템 (서버62, /root/kis/)",
+                "GO100": "GO100 백억이 투자 교육 플랫폼 (서버62, /root/go100/)",
+                "AADS": "AADS 자율 AI 개발 시스템 (서버68, /root/aads/)",
+                "SF": "SmartFarm 스마트팜 시스템 (서버65, /root/sf/)",
+                "NTV2": "NTV2 뉴톡 v2 서비스 (서버65, /root/ntv2/)",
+                "NAS": "NAS 스토리지 시스템 (서버65, /root/nas/)",
+            }
+            _proj_lines = [f"- {p}: {_mention_desc.get(p, p)}" for p in _mentioned_projects]
+            _mention_ctx = (
+                "\n\n[CEO 멘션 프로젝트 — 아래 프로젝트를 대상으로 작업하세요]\n"
+                + "\n".join(_proj_lines)
+                + "\n이 멘션은 인텐트 분류보다 우선합니다. 반드시 해당 프로젝트 컨텍스트에서 답변하세요."
+            )
+            system_prompt = system_prompt + _mention_ctx
+            logger.info(f"[MENTION] injected project context: {_mentioned_projects}")
 
         # Vision: 이미지가 있으면 마지막 user 메시지를 멀티모달 content 배열로 교체
         if _vision_images:
@@ -1954,6 +2118,9 @@ async def send_message_stream(
         current_chat_session_id.set(session_id)
         logger.info(f"[DIAG] current_chat_session_id SET to '{session_id}' in send_message_stream")
 
+        # P2-2: 분기 모드 시 branch_id ContextVar 설정 → _save_message에서 자동 적용
+        _current_branch_id.set(branch_id if branch_id else None)
+
         # 프로젝트명 정규화 (workspace_name → project code)
         _PROJECT_KEYS = ("KIS", "AADS", "GO100", "SF", "NTV2", "NAS", "CEO")
         _normalized_project = None
@@ -1965,6 +2132,10 @@ async def send_message_stream(
                     break
             if not _normalized_project:
                 _normalized_project = _ws_upper[:20]
+
+        # P2-7: 멘션이 있으면 첫 번째 멘션 프로젝트로 _normalized_project 오버라이드
+        if _mentioned_projects:
+            _normalized_project = _mentioned_projects[0]
 
         # 4.4. 시맨틱 캐시 조회 (유사 질문 즉시 응답)
         # BUG-3 FIX: 운영/조회성 질문은 캐시 바이패스 (실시간 데이터 필요)
@@ -2258,9 +2429,18 @@ async def send_message_stream(
                 tools_for_api = None
 
         # 8.5a. AADS-188C: Agent SDK 실시간 자율 실행 (execute/code_modify 인텐트)
-        # primary: Agent SDK, fallback: bridge(AutonomousExecutor) 경로
-        _AGENT_SDK_INTENTS = frozenset({"execute", "code_modify"})
-        if intent in _AGENT_SDK_INTENTS:
+        # CEO 명시적 직접 실행 지시 시에만 Agent SDK, 그 외는 Runner 위임
+        # Runner 위임 대상: 코드 작업 + CTO 분석 + 서비스 점검 (모든 자율 실행 인텐트)
+        _RUNNER_DELEGATION_INTENTS = frozenset({
+            "execute", "code_modify", "code_task",
+            "cto_code_analysis", "cto_verify", "service_inspection", "cto_impact",
+        })
+        _DIRECT_EXECUTION_TRIGGERS = (
+            "직접 해", "직접 수정", "여기서 해", "여기서 수정", "바로 고쳐",
+            "바로 수정", "세션에서 해", "세션에서 수정", "직접 처리",
+        )
+        if intent in _RUNNER_DELEGATION_INTENTS and any(t in content for t in _DIRECT_EXECUTION_TRIGGERS):
+            logger.info(f"[DIRECT_EXECUTION] session={sid[:8]} intent={intent} trigger_matched=True")
             # resume 지원: Phase A에서 프리페치한 세션 설정 사용 (#19)
             sdk_session_id: Optional[str] = _session_settings.get("sdk_session_id")
 
@@ -2324,34 +2504,30 @@ async def send_message_stream(
                         await _save_and_update_session(
                             sid, full_response, model_used=model_used, intent=intent,
                             cost=cost_usd, tools_called=tools_called)
-                        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'agent_sdk': True})}\n\n"
+                        yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'agent_sdk': True})}\n\n"
                         return
 
                 except Exception as _sdk_err:
                     logger.warning(f"agent_sdk_failed (fallback to bridge): {_sdk_err}")
                     # SDK 실패 → AutonomousExecutor fallback으로 계속 진행
 
+        # 8.5b. execute/code_modify 인텐트 중 직접 실행 조건 미충족 → Runner 위임
+        if intent in _RUNNER_DELEGATION_INTENTS and not any(t in content for t in _DIRECT_EXECUTION_TRIGGERS):
+            logger.info(f"[RUNNER_DELEGATION] session={sid[:8]} intent={intent} → pipeline_runner")
+            intent = "pipeline_runner"
+
         # 8.5. 복잡 인텐트 → AutonomousExecutor (max_iterations=25) (AADS-186E-3)
         _AUTONOMOUS_INTENTS = frozenset({
-            "cto_code_analysis", "cto_verify", "service_inspection", "cto_impact",
-            "pipeline_c",
+            "pipeline_runner",
         })
         if intent in _AUTONOMOUS_INTENTS and intent_result.use_tools and tools_for_api:
             # Pipeline Runner: 시스템 프롬프트에 파이프라인 가이드 주입
             _auto_system = system_prompt
-            if intent == "pipeline_c":
+            if intent == "pipeline_runner":
                 _auto_system += (
-                    "\n\n[Pipeline Runner 모드]\n"
-                    "CEO가 Claude Code 자율 작업을 요청했습니다.\n"
-                    "1. 작업 시작: pipeline_runner_submit 도구를 사용하세요.\n"
-                    "2. 상태 확인: pipeline_runner_status 도구를 사용하세요.\n"
-                    "3. 승인/거부: pipeline_runner_approve 도구를 사용하세요.\n\n"
-                    "## 크로스 프로젝트 규칙\n"
-                    "- 현재 세션의 워크스페이스와 관계없이, 메시지에서 대상 프로젝트를 추출하세요.\n"
-                    "- 사용 가능한 프로젝트: KIS(211서버), GO100(211서버), SF(114서버), NTV2(114서버), AADS(68서버/localhost)\n"
-                    "- 프로젝트명이 명시되지 않으면 반드시 CEO에게 확인하세요: \"어느 프로젝트에 적용할까요?\"\n"
-                    "- 현재 세션과 다른 프로젝트를 지정한 경우, 시작 전 확인하세요: \"NTV2 세션에서 AADS(68서버) 작업을 시작합니다. 맞습니까?\"\n\n"
-                    "승인 요청이 오면 변경사항(git diff)을 먼저 확인 후 CEO에게 보고하세요."
+                    "\n[Runner모드] 도구: submit→status→approve. "
+                    "프로젝트: KIS/GO100(211), SF/NTV2(114), AADS(68). "
+                    "미지정 시 확인 필수. 승인 시 diff 먼저 확인 후 보고."
                 )
             from app.services.autonomous_executor import AutonomousExecutor
             auto_exec = AutonomousExecutor(max_iterations=60, cost_limit=10.0)
@@ -2369,6 +2545,7 @@ async def send_message_stream(
                 messages=messages,
                 model=intent_result.model,
                 system_prompt=_auto_system,
+                session_id=sid,
             ):
                 yield sse_line
                 # 완료/비용/오류 이벤트 파싱하여 응답 수집
@@ -2404,7 +2581,7 @@ async def send_message_stream(
             await _save_and_update_session(
                 sid, full_response, model_used=model_used, intent=intent,
                 cost=cost_usd, tools_called=tools_called)
-            yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': 0, 'output_tokens': 0, 'autonomous': True})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': 0, 'output_tokens': 0, 'autonomous': True})}\n\n"
             return
 
         # 9. 모델 선택기 → SSE 스트리밍
@@ -2640,12 +2817,71 @@ async def send_message_stream(
         _session_cost += float(cost_usd)
         _session_turns += 2  # user + assistant
 
-        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns})}\n\n"
 
     finally:
         set_streaming(session_id, False)
         if conn is not None:
             await get_pool().release(conn)
+
+
+# ── CEO 채팅 학습 트리거 ────────────────────────────────────────────
+_LEARNING_TRIGGERS = {
+    "correction": ["아니", "틀렸", "그게 아니라", "다시 해", "잘못", "아닌데"],
+    "preference": ["항상", "앞으로", "기억해", "절대", "반드시", "무조건", "금지"],
+    "positive": ["잘했", "좋아", "이대로", "완벽", "훌륭", "정확"],
+}
+
+
+async def _detect_and_save_learning(
+    session_id: str,
+    user_msg: str,
+    project: str = None,
+) -> bool:
+    """CEO 메시지에서 학습 신호 감지 → observation 자동 저장.
+
+    Returns: True if learning was saved
+    """
+    detected_category = None
+    for category, triggers in _LEARNING_TRIGGERS.items():
+        if any(t in user_msg for t in triggers):
+            detected_category = category
+            break
+
+    if not detected_category:
+        return False
+
+    import hashlib
+    key = f"chat_learning_{hashlib.md5(user_msg[:50].encode()).hexdigest()[:8]}"
+
+    if detected_category == "correction":
+        content = f"CEO 교정: '{user_msg[:100]}' → AI 응답 수정 필요"
+        confidence = 0.7
+        save_category = "ceo_correction"
+    elif detected_category == "preference":
+        content = f"CEO 선호: {user_msg[:200]}"
+        confidence = 0.8
+        save_category = "ceo_preference"
+    else:  # positive
+        content = f"CEO 긍정 피드백: {user_msg[:100]}"
+        confidence = 0.6
+        save_category = "ceo_preference"
+
+    try:
+        from app.core.memory_recall import save_observation
+        await save_observation(
+            category=save_category,
+            key=key,
+            content=content,
+            source="chat_learning",
+            confidence=confidence,
+            project=project,
+        )
+        logger.info(f"chat_learning_saved: category={save_category} key={key} session={session_id[:8]}")
+        return True
+    except Exception as e:
+        logger.warning(f"chat_learning_save_failed: {e}")
+        return False
 
 
 async def _auto_save_session_note(session_id: str, messages: List[Dict[str, Any]]) -> None:
@@ -3416,6 +3652,63 @@ async def get_chat_file(file_id: str) -> Optional[Dict[str, Any]]:
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT * FROM chat_files WHERE id = $1", uuid.UUID(file_id)
+        )
+    if not row:
+        return None
+    return dict(row)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# Prompt Templates (P2-10)
+# ════════════════════════════════════════════════════════════════════════════════
+
+async def list_templates(category: Optional[str] = None) -> List[Dict[str, Any]]:
+    """템플릿 목록 (usage_count DESC 정렬)."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        if category:
+            rows = await conn.fetch(
+                "SELECT * FROM prompt_templates WHERE category = $1 ORDER BY usage_count DESC, updated_at DESC",
+                category,
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT * FROM prompt_templates ORDER BY usage_count DESC, updated_at DESC"
+            )
+    return [dict(r) for r in rows]
+
+
+async def create_template(data: Dict[str, Any]) -> Dict[str, Any]:
+    """새 템플릿 생성."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """INSERT INTO prompt_templates (title, content, category)
+               VALUES ($1, $2, $3) RETURNING *""",
+            data["title"], data["content"], data.get("category", "일반"),
+        )
+    return dict(row)
+
+
+async def delete_template(template_id: str) -> bool:
+    """템플릿 삭제."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM prompt_templates WHERE id = $1", uuid.UUID(template_id)
+        )
+    return result == "DELETE 1"
+
+
+async def use_template(template_id: str) -> Optional[Dict[str, Any]]:
+    """템플릿 사용 → usage_count 증가, 템플릿 반환."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """UPDATE prompt_templates
+               SET usage_count = usage_count + 1, updated_at = NOW()
+               WHERE id = $1 RETURNING *""",
+            uuid.UUID(template_id),
         )
     if not row:
         return None

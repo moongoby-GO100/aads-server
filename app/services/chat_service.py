@@ -164,10 +164,12 @@ async def _delete_streaming_placeholder(session_id: str) -> None:
             else:
                 # 최종 응답 없음 → placeholder를 최종 응답으로 전환 (응답 소실 방지)
                 content = placeholder['content'] or ""
+                # 마커 텍스트 제거 (⏳ 생성 중... 잔류 방지)
+                content = re.sub(r'\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\s*$', '', content).rstrip()
                 if content.strip():
                     await conn.execute(
-                        "UPDATE chat_messages SET intent = NULL, model_used = 'recovered' WHERE id = $1",
-                        placeholder['id'],
+                        "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'recovered' WHERE id = $1",
+                        placeholder['id'], content,
                     )
                     logger.warning(f"placeholder_promoted session={session_id[:8]} — final save missing, placeholder promoted to response")
                 else:
