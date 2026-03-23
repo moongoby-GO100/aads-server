@@ -85,6 +85,21 @@ async def get_memory_stats():
             ORDER BY count DESC
         """)
 
+        # 사용 추적 통계
+        never_used = await conn.fetchval("""
+            SELECT COUNT(*) FROM ai_observations
+            WHERE COALESCE(usage_count, 0) = 0
+              AND created_at < CURRENT_DATE - INTERVAL '7 days'
+        """)
+
+        most_used = await conn.fetch("""
+            SELECT id, category, key, usage_count, last_used_at::text
+            FROM ai_observations
+            WHERE usage_count > 0
+            ORDER BY usage_count DESC
+            LIMIT 5
+        """)
+
     return {
         "total_observations": row["total_observations"],
         "total_session_notes": row["total_session_notes"],
@@ -113,6 +128,10 @@ async def get_memory_stats():
             {"project": p["project"], "count": p["count"]}
             for p in projects
         ],
+        "usage_stats": {
+            "never_used_7d": never_used,
+            "most_used": [dict(r) for r in most_used],
+        },
     }
 
 
@@ -188,6 +207,7 @@ async def get_memory_entries(
                     value::text AS value,
                     confidence,
                     project,
+                    COALESCE(usage_count, 0) AS usage_count,
                     created_at::text AS created_at,
                     COALESCE(updated_at, created_at)::text AS updated_at
                 FROM ai_observations {obs_where}
@@ -200,6 +220,7 @@ async def get_memory_entries(
                     value::text AS value,
                     NULL::float AS confidence,
                     NULL::text AS project,
+                    0 AS usage_count,
                     created_at::text AS created_at,
                     COALESCE(updated_at, created_at)::text AS updated_at
                 FROM ai_meta_memory {meta_where}
@@ -220,6 +241,7 @@ async def get_memory_entries(
                 "value": item["value"],
                 "confidence": item["confidence"],
                 "project": item["project"],
+                "usage_count": item["usage_count"],
                 "created_at": item["created_at"],
                 "updated_at": item["updated_at"],
             }

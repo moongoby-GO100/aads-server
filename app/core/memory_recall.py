@@ -132,14 +132,14 @@ async def _build_session_notes(
         return ""
 
 
-async def _build_preferences() -> str:
+async def _build_preferences() -> tuple[str, list[int]]:
     """섹션 2: CEO 운영 원칙/선호 — 전역 공통 (프로젝트 필터 없음)."""
     try:
         _conf = _CONFIDENCE.get("ceo_preference", 0.2)
         async with _get_pool().acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT key, value FROM ai_observations
+                SELECT id, key, value FROM ai_observations
                 WHERE category IN ('ceo_preference', 'decision')
                   AND confidence >= $1
                 ORDER BY confidence DESC, updated_at DESC
@@ -148,16 +148,17 @@ async def _build_preferences() -> str:
                 _conf,
             )
             if not rows:
-                return ""
+                return "", []
+            used_ids = [r["id"] for r in rows]
             lines = [f"- {r['value']}" for r in rows]
             text = "\n".join(lines)
-            return _truncate(text, _BUDGET["preferences"])
+            return _truncate(text, _BUDGET["preferences"]), used_ids
     except Exception as e:
         logger.warning("memory_recall_section_failed", section="preferences", error=str(e))
-        return ""
+        return "", []
 
 
-async def _build_tool_strategy(project_id: Optional[str] = None) -> str:
+async def _build_tool_strategy(project_id: Optional[str] = None) -> tuple[str, list[int]]:
     """섹션 3: 도구 사용 전략 — 해당 프로젝트 + 공통(project IS NULL)."""
     try:
         _conf = _CONFIDENCE.get("tool_strategy", 0.3)
@@ -166,7 +167,7 @@ async def _build_tool_strategy(project_id: Optional[str] = None) -> str:
             if project_id:
                 rows = await conn.fetch(
                     """
-                    SELECT key, value FROM ai_observations
+                    SELECT id, key, value FROM ai_observations
                     WHERE category IN ('project_pattern', 'tool_strategy')
                       AND confidence >= $2
                       AND (project IS NULL OR project = $1)
@@ -180,7 +181,7 @@ async def _build_tool_strategy(project_id: Optional[str] = None) -> str:
             else:
                 rows = await conn.fetch(
                     """
-                    SELECT key, value FROM ai_observations
+                    SELECT id, key, value FROM ai_observations
                     WHERE category IN ('project_pattern', 'tool_strategy')
                       AND confidence >= $1
                     ORDER BY confidence DESC, updated_at DESC
@@ -189,13 +190,14 @@ async def _build_tool_strategy(project_id: Optional[str] = None) -> str:
                     _conf,
                 )
             if not rows:
-                return ""
+                return "", []
+            used_ids = [r["id"] for r in rows]
             lines = [f"- {r['value']}" for r in rows]
             text = "\n".join(lines)
-            return _truncate(text, _BUDGET["tool_strategy"])
+            return _truncate(text, _BUDGET["tool_strategy"]), used_ids
     except Exception as e:
         logger.warning("memory_recall_section_failed", section="tool_strategy", error=str(e))
-        return ""
+        return "", []
 
 
 async def _build_active_directives(project_id: Optional[str] = None) -> str:
@@ -243,7 +245,7 @@ async def _build_active_directives(project_id: Optional[str] = None) -> str:
         return ""
 
 
-async def _build_discoveries(project_id: Optional[str] = None) -> str:
+async def _build_discoveries(project_id: Optional[str] = None) -> tuple[str, list[int]]:
     """섹션 5: 이전 작업 발견 사항 — 해당 프로젝트 + 공통(project IS NULL)."""
     try:
         _conf = _CONFIDENCE.get("discovery", 0.4)
@@ -252,7 +254,7 @@ async def _build_discoveries(project_id: Optional[str] = None) -> str:
             if project_id:
                 rows = await conn.fetch(
                     """
-                    SELECT key, value FROM ai_observations
+                    SELECT id, key, value FROM ai_observations
                     WHERE category IN ('learning', 'recurring_issue', 'discovery')
                       AND confidence >= $2
                       AND (project IS NULL OR project = $1)
@@ -266,7 +268,7 @@ async def _build_discoveries(project_id: Optional[str] = None) -> str:
             else:
                 rows = await conn.fetch(
                     """
-                    SELECT key, value FROM ai_observations
+                    SELECT id, key, value FROM ai_observations
                     WHERE category IN ('learning', 'recurring_issue', 'discovery')
                       AND confidence >= $1
                     ORDER BY updated_at DESC, confidence DESC
@@ -275,13 +277,14 @@ async def _build_discoveries(project_id: Optional[str] = None) -> str:
                     _conf,
                 )
             if not rows:
-                return ""
+                return "", []
+            used_ids = [r["id"] for r in rows]
             lines = [f"- {r['value']}" for r in rows]
             text = "\n".join(lines)
-            return _truncate(text, _BUDGET["discoveries"])
+            return _truncate(text, _BUDGET["discoveries"]), used_ids
     except Exception as e:
         logger.warning("memory_recall_section_failed", section="discoveries", error=str(e))
-        return ""
+        return "", []
 
 
 async def _build_correction_directives() -> str:
@@ -358,6 +361,22 @@ async def _build_learned_memory(project_id: Optional[str] = None) -> str:
         return ""
 
 
+# ── 메모리 사용 로깅 ──────────────────────────────────────────────────────────
+
+async def _log_memory_usage(session_id: str, observation_ids: list[int]):
+    """메모리 사용 이력 기록 (비차단). ai_observations의 usage_count 증가."""
+    try:
+        async with _get_pool().acquire() as conn:
+            await conn.execute("""
+                UPDATE ai_observations
+                SET usage_count = COALESCE(usage_count, 0) + 1,
+                    last_used_at = NOW()
+                WHERE id = ANY($1::int[])
+            """, observation_ids)
+    except Exception as e:
+        logger.warning("memory_usage_log_failed", error=str(e))
+
+
 # ── 메인 빌더 ────────────────────────────────────────────────────────────────
 
 async def build_memory_context(
@@ -374,7 +393,7 @@ async def build_memory_context(
     blocks: List[str] = []
 
     # 7개 섹션 병렬 조회 (AADS-CRITICAL-FIX #30 + 섹션6 ai_meta_memory + 섹션7 correction_directive)
-    notes, prefs, tools, dirs, disc, learned, corrections = await asyncio.gather(
+    notes, prefs_result, tools_result, dirs, disc_result, learned, corrections = await asyncio.gather(
         _build_session_notes(session_id, project_id),
         _build_preferences(),
         _build_tool_strategy(project_id),
@@ -383,6 +402,16 @@ async def build_memory_context(
         _build_learned_memory(project_id),
         _build_correction_directives(),
     )
+
+    # tuple unpacking: (text, used_ids)
+    prefs, prefs_ids = prefs_result
+    tools, tools_ids = tools_result
+    disc, disc_ids = disc_result
+
+    # 메모리 사용 이력 기록 (비차단)
+    used_ids = prefs_ids + tools_ids + disc_ids
+    if used_ids and session_id:
+        asyncio.create_task(_log_memory_usage(session_id, used_ids))
 
     # P2-FIX: correction_directive → 세션 노트(Layer2) 상단 강제 주입
     # 반성 지시사항이 세션 맥락과 함께 전달되어 행동 변화 유도력 향상
