@@ -1972,6 +1972,16 @@ async def send_message_stream(
             user_intent = "system_trigger" if intent_override else None
             await _save_message(conn, sid, "user", content, model_used=model_override, intent=user_intent, attachments=attachments or [], reply_to_id=_reply_to_uuid)
 
+        # CEO 채팅 학습 트리거 (백그라운드, 비차단)
+        if not intent_override:
+            import asyncio as _asyncio_learn
+            _learn_project = _mentioned_projects[0] if _mentioned_projects else None
+            _asyncio_learn.create_task(_detect_and_save_learning(
+                session_id=session_id,
+                user_msg=content,
+                project=_learn_project,
+            ))
+
         # 2. 워크스페이스 정보 조회
         sp_row = await conn.fetchrow(
             """
@@ -2797,6 +2807,65 @@ async def send_message_stream(
         set_streaming(session_id, False)
         if conn is not None:
             await get_pool().release(conn)
+
+
+# ── CEO 채팅 학습 트리거 ────────────────────────────────────────────
+_LEARNING_TRIGGERS = {
+    "correction": ["아니", "틀렸", "그게 아니라", "다시 해", "잘못", "아닌데"],
+    "preference": ["항상", "앞으로", "기억해", "절대", "반드시", "무조건", "금지"],
+    "positive": ["잘했", "좋아", "이대로", "완벽", "훌륭", "정확"],
+}
+
+
+async def _detect_and_save_learning(
+    session_id: str,
+    user_msg: str,
+    project: str = None,
+) -> bool:
+    """CEO 메시지에서 학습 신호 감지 → observation 자동 저장.
+
+    Returns: True if learning was saved
+    """
+    detected_category = None
+    for category, triggers in _LEARNING_TRIGGERS.items():
+        if any(t in user_msg for t in triggers):
+            detected_category = category
+            break
+
+    if not detected_category:
+        return False
+
+    import hashlib
+    key = f"chat_learning_{hashlib.md5(user_msg[:50].encode()).hexdigest()[:8]}"
+
+    if detected_category == "correction":
+        content = f"CEO 교정: '{user_msg[:100]}' → AI 응답 수정 필요"
+        confidence = 0.7
+        save_category = "ceo_correction"
+    elif detected_category == "preference":
+        content = f"CEO 선호: {user_msg[:200]}"
+        confidence = 0.8
+        save_category = "ceo_preference"
+    else:  # positive
+        content = f"CEO 긍정 피드백: {user_msg[:100]}"
+        confidence = 0.6
+        save_category = "ceo_preference"
+
+    try:
+        from app.core.memory_recall import save_observation
+        await save_observation(
+            category=save_category,
+            key=key,
+            content=content,
+            source="chat_learning",
+            confidence=confidence,
+            project=project,
+        )
+        logger.info(f"chat_learning_saved: category={save_category} key={key} session={session_id[:8]}")
+        return True
+    except Exception as e:
+        logger.warning(f"chat_learning_save_failed: {e}")
+        return False
 
 
 async def _auto_save_session_note(session_id: str, messages: List[Dict[str, Any]]) -> None:

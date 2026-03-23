@@ -474,6 +474,83 @@ async def save_observation(
             return False
 
 
+# ── 메모리 중복 제거 ────────────────────────────────────────────────────────────
+
+
+async def deduplicate_observations() -> dict:
+    """ai_observations 테이블의 중복 항목 정리.
+
+    같은 category + key + COALESCE(project, '') 그룹에서:
+    1. confidence 최대값을 해당 그룹 대표 행(최신)에 반영
+    2. 나머지 중복 행은 memory_archive에 백업 후 삭제
+    결과: {"removed": int, "kept": int} 반환
+    """
+    try:
+        async with _get_pool().acquire() as conn:
+            # 트랜잭션 내에서 백업 → 삭제 → 업데이트 원자적 실행
+            async with conn.transaction():
+                # 1) 중복 행 식별 (ROW_NUMBER > 1 = 삭제 대상)
+                dup_rows = await conn.fetch("""
+                    WITH ranked AS (
+                        SELECT id, category, key, value, confidence, project, created_at,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY category, key, COALESCE(project, '')
+                                ORDER BY confidence DESC, updated_at DESC NULLS LAST
+                            ) AS rn
+                        FROM ai_observations
+                    )
+                    SELECT id, category, key, value, confidence, project, created_at
+                    FROM ranked WHERE rn > 1
+                """)
+
+                if not dup_rows:
+                    kept = await conn.fetchval("SELECT COUNT(*) FROM ai_observations")
+                    return {"removed": 0, "kept": kept}
+
+                dup_ids = [r["id"] for r in dup_rows]
+
+                # 2) memory_archive에 백업
+                await conn.executemany("""
+                    INSERT INTO memory_archive
+                        (source_table, source_id, category, key, value, confidence, project, original_created_at)
+                    VALUES ('ai_observations', $1, $2, $3, $4, $5, $6, $7)
+                """, [
+                    (r["id"], r["category"], r["key"], str(r["value"] or ""),
+                     float(r["confidence"]) if r["confidence"] is not None else None,
+                     r["project"], r["created_at"])
+                    for r in dup_rows
+                ])
+
+                # 3) 중복 행 삭제
+                await conn.execute("""
+                    DELETE FROM ai_observations WHERE id = ANY($1::int[])
+                """, dup_ids)
+
+                # 4) 남은 행의 confidence를 그룹 내 최대값으로 업데이트
+                await conn.execute("""
+                    UPDATE ai_observations ao SET confidence = sub.max_conf
+                    FROM (
+                        SELECT category, key, COALESCE(project, '') AS proj,
+                               MAX(confidence) AS max_conf
+                        FROM ai_observations
+                        GROUP BY category, key, COALESCE(project, '')
+                    ) sub
+                    WHERE ao.category = sub.category
+                      AND ao.key = sub.key
+                      AND COALESCE(ao.project, '') = sub.proj
+                      AND ao.confidence < sub.max_conf
+                """)
+
+                kept = await conn.fetchval("SELECT COUNT(*) FROM ai_observations")
+
+            removed = len(dup_ids)
+            logger.info("deduplicate_observations_done", removed=removed, kept=kept)
+            return {"removed": removed, "kept": kept}
+    except Exception as e:
+        logger.error("deduplicate_observations_failed", error=str(e))
+        return {"removed": 0, "kept": 0, "error": str(e)}
+
+
 # ── 진화 프로세스 수치 조회 ────────────────────────────────────────────────────
 
 async def get_evolution_stats(db) -> dict:

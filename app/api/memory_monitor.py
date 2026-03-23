@@ -231,6 +231,19 @@ async def get_memory_entries(
     }
 
 
+@router.post("/ops/memory/deduplicate")
+async def deduplicate_memory():
+    """메모리 중복 제거 실행 (CEO 수동 트리거용).
+
+    같은 category+key+project 그룹에서 confidence 최대값만 유지,
+    나머지는 memory_archive에 백업 후 삭제.
+    """
+    from app.core.memory_recall import deduplicate_observations
+    result = await deduplicate_observations()
+    logger.info("memory_deduplicate_triggered", result=result)
+    return result
+
+
 @router.delete("/ops/memory/entries/{source}/{entry_id}")
 async def delete_memory_entry(source: str, entry_id: int):
     """메모리 항목 삭제 (삭제 전 memory_archive에 백업)."""
