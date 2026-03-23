@@ -1764,6 +1764,7 @@ async def send_message_stream(
         from app.core.interrupt_queue import set_streaming, has_pending_interrupts, pop_pending_interrupts
         set_streaming(session_id, True)
         sid = uuid.UUID(session_id)
+        sid_short = session_id[:8]  # 로깅용 축약 (str 보장 — sid[:8] 직접 사용 금지)
 
         # SSE 재연결 프로토콜: 고유 stream_id 발행
         import time as _stream_time
@@ -2441,7 +2442,7 @@ async def send_message_stream(
             "바로 수정", "세션에서 해", "세션에서 수정", "직접 처리",
         )
         if intent in _RUNNER_DELEGATION_INTENTS and any(t in content for t in _DIRECT_EXECUTION_TRIGGERS):
-            logger.info(f"[DIRECT_EXECUTION] session={str(sid)[:8]} intent={intent} trigger_matched=True")
+            logger.info(f"[DIRECT_EXECUTION] session={sid_short} intent={intent} trigger_matched=True")
             # resume 지원: Phase A에서 프리페치한 세션 설정 사용 (#19)
             sdk_session_id: Optional[str] = _session_settings.get("sdk_session_id")
 
@@ -2514,7 +2515,7 @@ async def send_message_stream(
 
         # 8.5b. execute/code_modify 인텐트 중 직접 실행 조건 미충족 → Runner 위임
         if intent in _RUNNER_DELEGATION_INTENTS and not any(t in content for t in _DIRECT_EXECUTION_TRIGGERS):
-            logger.info(f"[RUNNER_DELEGATION] session={str(sid)[:8]} intent={intent} → pipeline_runner")
+            logger.info(f"[RUNNER_DELEGATION] session={sid_short} intent={intent} → pipeline_runner")
             intent = "pipeline_runner"
 
         # 8.5. 복잡 인텐트 → AutonomousExecutor (max_iterations=25) (AADS-186E-3)
