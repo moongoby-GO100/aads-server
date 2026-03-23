@@ -742,6 +742,7 @@ def get_streaming_status(session_id: str) -> Optional[Dict[str, Any]]:
             "content_length": len(s.get("content", "")),
             "tool_count": s.get("tool_count", 0),
             "last_tool": s.get("last_tool", ""),
+            "partial_content": s.get("content", ""),
         }
         # P1-FIX: just_completed=True 반환 후 즉시 state 제거 (one-shot)
         # → 프론트의 반복 reload 방지 (기존: 90초간 매 폴링마다 중복 reload)

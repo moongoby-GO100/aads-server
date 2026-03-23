@@ -249,12 +249,12 @@ async def get_streaming_status(session_id: UUID):
         from app.core.db_pool import get_pool
         pool = get_pool()
         async with pool.acquire() as conn:
-            cnt = await conn.fetchval(
-                "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at > NOW() - interval '5 minutes'",
+            row = await conn.fetchrow(
+                "SELECT content FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at > NOW() - interval '5 minutes' ORDER BY created_at DESC LIMIT 1",
                 session_id,
             )
-            if cnt and cnt > 0:
-                return {"is_streaming": True, "just_completed": False, "content_length": 0, "tool_count": 0, "last_tool": ""}
+            if row:
+                return {"is_streaming": True, "just_completed": False, "content_length": len(row["content"] or ""), "tool_count": 0, "last_tool": "", "partial_content": row["content"] or ""}
             # 5분 초과 stale placeholder 자동 정리
             await conn.execute(
                 "UPDATE chat_messages SET intent = 'interrupted' WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at <= NOW() - interval '5 minutes'",
