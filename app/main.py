@@ -413,16 +413,22 @@ async def lifespan(app: FastAPI):
         logger.error("db_pool_init_failed", error=str(e))
         app_state["db_pool"] = None
 
-    # 서버 시작 시 stale placeholder 즉시 삭제 (bg_partial 전환 아님 — 프론트 혼란 방지)
+    # 서버 시작 시 stale placeholder → 내용 있으면 보존(promote), 없으면 삭제
     try:
         async with db_pool.acquire() as _c:
+            # 내용이 있는 placeholder는 recovered로 전환 (응답 소실 방지)
+            _promoted = await _c.fetchval(
+                "WITH p AS (UPDATE chat_messages SET intent = NULL, model_used = 'recovered' "
+                "WHERE intent = 'streaming_placeholder' AND content IS NOT NULL AND length(trim(content)) > 0 "
+                "RETURNING id) SELECT COUNT(*) FROM p"
+            )
+            # 내용이 없는 placeholder만 삭제
             _cleaned = await _c.fetchval(
                 "WITH d AS (DELETE FROM chat_messages "
                 "WHERE intent = 'streaming_placeholder' RETURNING id) SELECT COUNT(*) FROM d"
             )
-            if _cleaned and _cleaned > 0:
-                logger.info(f"startup_placeholder_cleanup: {_cleaned} stale placeholder(s) DELETED")
-                # message_count 재동기화
+            if (_promoted and _promoted > 0) or (_cleaned and _cleaned > 0):
+                logger.info(f"startup_placeholder_cleanup: promoted={_promoted or 0} deleted={_cleaned or 0}")
                 await _c.execute(
                     "UPDATE chat_sessions s SET message_count = "
                     "(SELECT count(*) FROM chat_messages m WHERE m.session_id = s.id)"
@@ -430,22 +436,42 @@ async def lifespan(app: FastAPI):
     except Exception as _e:
         logger.warning(f"startup_placeholder_cleanup_failed: {_e}")
 
-    # 주기적 stale placeholder 자동 삭제 (1분마다, 2분 초과분)
+    # 주기적 stale placeholder 처리 (1분마다, 5분 초과분 — 내용 보존)
     async def _periodic_placeholder_cleanup():
         import asyncio as _pc_asyncio
         while True:
             await _pc_asyncio.sleep(60)  # 1분
             try:
                 from app.core.db_pool import get_pool as _gp_pc
+                from app.services.chat_service import _streaming_state
                 _pool = _gp_pc()
                 async with _pool.acquire() as _c:
-                    _n = await _c.fetchval(
-                        "WITH d AS (DELETE FROM chat_messages "
-                        "WHERE intent = 'streaming_placeholder' AND created_at < NOW() - interval '2 minutes' "
-                        "RETURNING id) SELECT COUNT(*) FROM d"
+                    # 현재 스트리밍 중인 세션은 제외
+                    _active_sids = [k for k, v in _streaming_state.items() if not v.get("completed")]
+                    # 5분 초과 + 스트리밍 아닌 placeholder만 대상 (2분→5분으로 여유 확보)
+                    _stale = await _c.fetch(
+                        "SELECT id, session_id, content FROM chat_messages "
+                        "WHERE intent = 'streaming_placeholder' AND created_at < NOW() - interval '5 minutes'"
                     )
-                    if _n and _n > 0:
-                        logger.info(f"periodic_placeholder_cleanup: {_n} stale placeholder(s) DELETED")
+                    _promoted = 0
+                    _deleted = 0
+                    for row in _stale:
+                        _sid_str = str(row["session_id"])
+                        if _sid_str in _active_sids:
+                            continue  # 아직 스트리밍 중 → 건드리지 않음
+                        content = row["content"] or ""
+                        if content.strip():
+                            # 내용 있음 → 응답으로 전환 (소실 방지)
+                            await _c.execute(
+                                "UPDATE chat_messages SET intent = NULL, model_used = 'recovered' WHERE id = $1",
+                                row["id"],
+                            )
+                            _promoted += 1
+                        else:
+                            await _c.execute("DELETE FROM chat_messages WHERE id = $1", row["id"])
+                            _deleted += 1
+                    if _promoted or _deleted:
+                        logger.info(f"periodic_placeholder_cleanup: promoted={_promoted} deleted={_deleted}")
                         await _c.execute(
                             "UPDATE chat_sessions s SET message_count = "
                             "(SELECT count(*) FROM chat_messages m WHERE m.session_id = s.id)"
@@ -510,7 +536,7 @@ async def lifespan(app: FastAPI):
                         import httpx
                         async with httpx.AsyncClient(timeout=10) as client:
                             resp = await client.post(
-                                "http://localhost:8000/api/v1/chat/send",
+                                "http://localhost:8080/api/v1/chat/messages/send",
                                 json={
                                     "session_id": sid,
                                     "content": user_content,
