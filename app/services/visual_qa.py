@@ -35,7 +35,7 @@ def _check_playwright_available() -> bool:
         return _playwright_available
     try:
         result = subprocess.run(
-            ["python3.11", "-c", "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); p.stop()"],
+            ["python3", "-c", "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); p.stop()"],
             capture_output=True,
             timeout=15,
         )
@@ -143,7 +143,7 @@ async def _run_script_direct(script: str, arg: dict) -> str:
         script_path = f.name
     try:
         proc = await asyncio.create_subprocess_exec(
-            "python3.11", script_path, json.dumps(arg),
+            "python3", script_path, json.dumps(arg),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -203,7 +203,7 @@ async def _run_pillow_compare(current_path: str, baseline_path: str) -> str:
         script_path = f.name
     try:
         proc = await asyncio.create_subprocess_exec(
-            "python3.11", script_path,
+            "python3", script_path,
             json.dumps({"current_path": current_path, "baseline_path": baseline_path}),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
