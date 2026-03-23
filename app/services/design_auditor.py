@@ -295,33 +295,39 @@ async def _call_gemini_vision(image_b64: str, prompt: str, project_context: str)
 
 
 async def _call_claude_vision(image_b64: str, prompt: str, project_context: str) -> str:
-    """Claude Sonnet Vision API 폴백 호출 (중앙 클라이언트 사용, R-AUTH 준수)."""
-    from app.core.anthropic_client import get_client as _get_da_client
-    client = _get_da_client()
+    """Claude Vision 폴백 — LiteLLM 프록시 경유 (채팅창과 동일 방식, R-AUTH 준수)."""
+    import httpx
+
+    litellm_url = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
+    litellm_key = os.getenv("LITELLM_MASTER_KEY", "")
 
     full_prompt = f"{prompt}\n\n[프로젝트 컨텍스트]\n{project_context}" if project_context else prompt
 
-    message = await client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=2048,
-        messages=[
+    payload = {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 4096,
+        "messages": [
             {
                 "role": "user",
                 "content": [
                     {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/png",
-                            "data": image_b64,
-                        },
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{image_b64}"},
                     },
                     {"type": "text", "text": full_prompt},
                 ],
             }
         ],
-    )
-    return message.content[0].text
+    }
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            f"{litellm_url}/v1/chat/completions",
+            json=payload,
+            headers={"Authorization": f"Bearer {litellm_key}"},
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
 
 
 # ---------------------------------------------------------------------------
