@@ -3303,8 +3303,8 @@ def _row_to_dict(row: asyncpg.Record) -> Dict[str, Any]:
 async def get_memory_context_info(session_id: str) -> Dict[str, Any]:
     """세션의 주입 메모리 + 맥락 상태 + 이전 세션 요약 조회."""
     pool = get_pool()
-    conn = await pool.acquire()
-    try:
+    async with pool.acquire() as conn:
+      try:
         # 1) 세션 + 워크스페이스 기본 정보
         session_row = await conn.fetchrow(
             """
@@ -3555,11 +3555,9 @@ async def get_memory_context_info(session_id: str) -> Dict[str, Any]:
             },
             "session_history": session_history,
         }
-    except Exception as e:
+      except Exception as e:
         logger.error(f"get_memory_context_info failed: {e}")
         return {"error": str(e)}
-    finally:
-        await pool.release(conn)
 
 
 # ─── Chat Files (파일 첨부 시스템 Phase 1) ──────────────────────────────────
