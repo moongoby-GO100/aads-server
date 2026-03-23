@@ -56,6 +56,26 @@ _active_jobs: Dict[str, "PipelineCJob"] = {}
 # 프로젝트별 동시 실행 방지 락
 _project_locks: Dict[str, asyncio.Lock] = {}
 
+# AADS 재시작 디바운스 — 연속 배포 시 마지막 1회만 재시작
+_aads_restart_scheduled: float = 0.0  # 예약된 재시작 시각 (time.time)
+_AADS_RESTART_DEBOUNCE = 30  # 30초 내 추가 배포 있으면 재시작 연기
+
+
+async def _debounced_aads_restart(job: "PipelineCJob"):
+    """AADS 재시작을 30초 디바운스하여 연속 배포 시 한 번만 재시작."""
+    global _aads_restart_scheduled
+    now = time.time()
+    _aads_restart_scheduled = now + _AADS_RESTART_DEBOUNCE
+    job._log("aads_restart_debounce", f"재시작 {_AADS_RESTART_DEBOUNCE}초 후 예약 (연속 배포 병합)")
+    await asyncio.sleep(_AADS_RESTART_DEBOUNCE)
+    # 디바운스: 대기 후에도 내가 마지막 예약자인지 확인
+    if abs(_aads_restart_scheduled - (now + _AADS_RESTART_DEBOUNCE)) > 1:
+        job._log("aads_restart_skipped", "후속 배포가 재시작을 인계받음 — 스킵")
+        return False
+    job._log("aads_restart_exec", "디바운스 완료 — 재시작 실행")
+    await job._ssh_command("supervisorctl restart aads-api")
+    return True
+
 # H-11: job_id별 approve/reject 동시 호출 방지 락
 _job_approve_locks: Dict[str, asyncio.Lock] = {}
 
@@ -435,8 +455,8 @@ class PipelineCJob:
                     f"AADS 서비스를 재시작합니다. 잠시 연결이 끊길 수 있습니다.\n"
                     f"재시작 후 자동으로 검증을 진행합니다."
                 )
-                # 재시작 실행 (이후 이 프로세스도 재시작됨)
-                await self._ssh_command(restart_cmd)
+                # 재시작 실행 — 디바운스로 연속 배포 시 한 번만 재시작
+                await _debounced_aads_restart(self)
                 # M4: 재시작 후 health polling (sleep 대신)
                 for _poll in range(15):  # 최대 30초 (2초 × 15)
                     await asyncio.sleep(2)
