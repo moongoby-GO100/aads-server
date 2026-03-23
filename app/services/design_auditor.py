@@ -242,31 +242,39 @@ def _calc_verdict(total: int) -> str:
 # ---------------------------------------------------------------------------
 
 async def _call_gemini_vision(image_b64: str, prompt: str, project_context: str) -> str:
-    """Gemini 2.5 Flash Vision API 호출 (google-generativeai)."""
-    import google.generativeai as genai
+    """Gemini Vision API 호출 (LiteLLM 프록시 경유, R-AUTH 준수)."""
+    import httpx
 
-    api_key = os.getenv("GOOGLE_API_KEY", "")
-    if not api_key:
-        raise ValueError("GOOGLE_API_KEY not set")
-
-    genai.configure(api_key=api_key)
-
-    # gemini-2.5-flash → 실제 API ID (llm/client.py MODEL_ALIASES 참조)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    litellm_url = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
+    litellm_key = os.getenv("LITELLM_MASTER_KEY", "")
 
     full_prompt = f"{prompt}\n\n[프로젝트 컨텍스트]\n{project_context}" if project_context else prompt
 
-    import PIL.Image
-    import io
-    image_bytes = base64.b64decode(image_b64)
-    pil_image = PIL.Image.open(io.BytesIO(image_bytes))
+    payload = {
+        "model": "gemini-2.5-flash",
+        "max_tokens": 2048,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                    },
+                    {"type": "text", "text": full_prompt},
+                ],
+            }
+        ],
+    }
 
-    loop = asyncio.get_event_loop()
-    response = await loop.run_in_executor(
-        None,
-        lambda: model.generate_content([full_prompt, pil_image]),
-    )
-    return response.text
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            f"{litellm_url}/v1/chat/completions",
+            json=payload,
+            headers={"Authorization": f"Bearer {litellm_key}"},
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
 
 
 async def _call_claude_vision(image_b64: str, prompt: str, project_context: str) -> str:
