@@ -248,7 +248,8 @@ async def with_background_completion(
                         return  # producer 종료 → finally에서 cleanup
         except BaseException as e:
             # BaseException: CancelledError, GeneratorExit 등 모두 잡음
-            logger.warning(f"bg_producer_error session={session_id}: {type(e).__name__}: {e}")
+            import traceback as _tb
+            logger.warning(f"bg_producer_error session={session_id}: {type(e).__name__}: {e}\n{''.join(_tb.format_exception(type(e), e, e.__traceback__))}")
         finally:
             # heartbeat 태스크 정지 신호 (producer 완료 시 heartbeat 불필요)
             _hb_stop.set()
@@ -278,7 +279,7 @@ async def with_background_completion(
                 async def _delayed_cleanup(sid: str):
                     await _heartbeat_asyncio.sleep(300)  # 90s→300s: 장시간 도구 실행 후 just_completed 감지 여유
                     _streaming_state.pop(sid, None)
-                    logger.debug(f"streaming_state_cleaned session={sid[:8]}")
+                    logger.debug(f"streaming_state_cleaned session={str(sid)[:8]}")
 
                 _heartbeat_asyncio.create_task(_delayed_cleanup(session_id))
             logger.info(f"bg_producer_done session={session_id}")
@@ -508,7 +509,7 @@ async def resume_interrupted_streams() -> int:
                 # user 메시지 없으면 placeholder만 삭제
                 async with pool.acquire() as c:
                     await c.execute("DELETE FROM chat_messages WHERE id = $1", placeholder_id)
-                logger.info(f"resume_skip: session={sid[:8]} no user message, placeholder removed")
+                logger.info(f"resume_skip: session={str(sid)[:8]} no user message, placeholder removed")
                 continue
 
             # 중간 결과에서 ⏳ 마커 제거
@@ -523,9 +524,9 @@ async def resume_interrupted_streams() -> int:
                     _resume_single_stream(sid, placeholder_id, clean_partial, last_user, workspace)
                 )
                 resumed += 1
-                logger.info(f"resume_launched: session={sid[:8]} partial_len={len(clean_partial)}")
+                logger.info(f"resume_launched: session={str(sid)[:8]} partial_len={len(clean_partial)}")
             except Exception as e:
-                logger.warning(f"resume_launch_failed: session={sid[:8]} error={e}")
+                logger.warning(f"resume_launch_failed: session={str(sid)[:8]} error={e}")
                 # 실패 시 placeholder를 중단 메시지로 교체
                 async with pool.acquire() as c:
                     final = clean_partial + "\n\n⚠️ _서버 재시작으로 응답이 중단되었습니다. 다시 질문해주세요._" if clean_partial else "⚠️ _서버 재시작으로 응답이 중단되었습니다. 다시 질문해주세요._"
@@ -1397,9 +1398,9 @@ async def _consume_next_reaction(sid: str, msg: str) -> None:
                     uuid.UUID(sid),
                 )
         except Exception as _mc_err:
-            logger.warning(f"_consume_next_reaction: message_count update failed session={sid[:8]}: {_mc_err}")
+            logger.warning(f"_consume_next_reaction: message_count update failed session={str(sid)[:8]}: {_mc_err}")
     except Exception as e:
-        logger.warning(f"trigger_ai_reaction_queue error session={sid[:8]}: {e}")
+        logger.warning(f"trigger_ai_reaction_queue error session={str(sid)[:8]}: {e}")
     finally:
         _ai_reaction_active.pop(sid, None)
         # 큐에 대기 중인 트리거가 있으면 다음 것 처리
@@ -2440,7 +2441,7 @@ async def send_message_stream(
             "바로 수정", "세션에서 해", "세션에서 수정", "직접 처리",
         )
         if intent in _RUNNER_DELEGATION_INTENTS and any(t in content for t in _DIRECT_EXECUTION_TRIGGERS):
-            logger.info(f"[DIRECT_EXECUTION] session={sid[:8]} intent={intent} trigger_matched=True")
+            logger.info(f"[DIRECT_EXECUTION] session={str(sid)[:8]} intent={intent} trigger_matched=True")
             # resume 지원: Phase A에서 프리페치한 세션 설정 사용 (#19)
             sdk_session_id: Optional[str] = _session_settings.get("sdk_session_id")
 
@@ -2513,7 +2514,7 @@ async def send_message_stream(
 
         # 8.5b. execute/code_modify 인텐트 중 직접 실행 조건 미충족 → Runner 위임
         if intent in _RUNNER_DELEGATION_INTENTS and not any(t in content for t in _DIRECT_EXECUTION_TRIGGERS):
-            logger.info(f"[RUNNER_DELEGATION] session={sid[:8]} intent={intent} → pipeline_runner")
+            logger.info(f"[RUNNER_DELEGATION] session={str(sid)[:8]} intent={intent} → pipeline_runner")
             intent = "pipeline_runner"
 
         # 8.5. 복잡 인텐트 → AutonomousExecutor (max_iterations=25) (AADS-186E-3)
