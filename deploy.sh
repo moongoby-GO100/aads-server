@@ -50,6 +50,40 @@ docker exec aads-postgres psql -U aads -d aads -q -c "
   UPDATE chat_messages SET intent = NULL WHERE intent IN ('bg_partial', 'interrupted');
 " 2>/dev/null || echo "[deploy.sh] WARN: pre-deploy cleanup skipped"
 
+# ── Phase 0.5: 코드 검증 (구문 + import) — 실패 시 배포 차단 ──
+echo "[deploy.sh] Phase 0.5: Python syntax + import validation..."
+VALIDATION_RESULT=$(docker exec aads-server python3 -c "
+import sys
+errors = []
+# 핵심 모듈 구문 검사
+for f in ['app/main.py', 'app/services/chat_service.py', 'app/services/model_selector.py', 'app/routers/chat.py', 'app/api/ceo_chat_tools.py', 'app/services/autonomous_executor.py', 'app/services/tool_executor.py']:
+    try:
+        import py_compile
+        py_compile.compile(f, doraise=True)
+    except py_compile.PyCompileError as e:
+        errors.append(f'SYNTAX: {f} — {e}')
+# import 검증
+try:
+    from app.main import app
+except Exception as e:
+    errors.append(f'IMPORT: app.main — {e}')
+if errors:
+    print('FAIL')
+    for e in errors:
+        print(e)
+    sys.exit(1)
+else:
+    print('PASS')
+" 2>&1)
+
+if echo "$VALIDATION_RESULT" | head -1 | grep -q "FAIL"; then
+    echo "[deploy.sh] ❌ Phase 0.5: 코드 검증 실패 — 배포 차단"
+    echo "$VALIDATION_RESULT"
+    notify "❌ 배포 차단: 코드 검증 실패\n${VALIDATION_RESULT}"
+    exit 1
+fi
+echo "[deploy.sh] Phase 0.5: ✅ 코드 검증 통과"
+
 # ── Phase 1: 배포 실행 ──
 case "$MODE" in
     code)
