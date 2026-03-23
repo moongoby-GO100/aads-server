@@ -41,7 +41,7 @@ AUDIT_PROMPT = """
 4. 브랜드 일관성 (Brand Coherence): 색상 톤, 폰트, 전체 무드 (10점)
 5. 완성도 (Polish): 빈 공간, 깨진 요소, 로딩 상태, 에러 처리 (10점)
 
-[출력 형식 - 반드시 JSON]
+[출력 형식 - 순수 JSON만 출력. ```json 마크다운 펜스 절대 금지. { 로 시작하고 } 로 끝나야 함]
 {
   "scores": {
     "visual_consistency": {"score": 8, "issues": ["..."], "fixes": ["..."]},
@@ -269,7 +269,7 @@ async def _call_gemini_vision(image_b64: str, prompt: str, project_context: str)
 
     payload = {
         "model": "gemini-2.5-flash",
-        "max_tokens": 2048,
+        "max_tokens": 4096,
         "messages": [
             {
                 "role": "user",
