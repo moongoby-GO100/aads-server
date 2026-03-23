@@ -40,7 +40,7 @@ export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LANGUAGE=en_US:en MANPATH=
 declare -A PROJECT_WORKDIR=(
     ["AADS"]="/root/aads/aads-server"
     ["KIS"]="/root/webapp"
-    ["GO100"]="/root/go100"
+    ["GO100"]="/root/kis-autotrade-v4"
     ["SF"]="/data/shortflow"
     ["NTV2"]="/srv/newtalk-v2"
 )

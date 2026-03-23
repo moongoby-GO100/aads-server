@@ -199,7 +199,8 @@ async def send_message(request: Request):
                     try:
                         text_content = data.decode("utf-8", errors="replace")
                         attachments.append({"type": "text", "name": fname, "content": text_content})
-                    except Exception:
+                    except Exception as e:
+                        logger.debug("첨부파일 텍스트 디코딩 실패", filename=fname, error=str(e))
                         attachments.append({"type": "file", "name": fname})
     else:
         body = await request.json()
@@ -260,8 +261,8 @@ async def get_streaming_status(session_id: UUID):
                 "UPDATE chat_messages SET intent = 'interrupted' WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at <= NOW() - interval '5 minutes'",
                 session_id,
             )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("streaming-status DB 조회 실패", error=str(e), session_id=str(session_id))
     return status or {"is_streaming": False}
 
 
