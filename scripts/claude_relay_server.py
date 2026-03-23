@@ -133,11 +133,15 @@ async def handle_stream(request):
 
     system_prompt = body.get("system_prompt", "")
     messages_text = body.get("messages_text", "")
+    content_blocks = body.get("content_blocks")  # 이미지 포함 content block 배열
     model = body.get("model", "claude-opus")
     aads_session_id = body.get("session_id", "")
 
-    if not messages_text:
-        return web.json_response({"error": "messages_text required"}, status=400)
+    if not messages_text and not content_blocks:
+        return web.json_response({"error": "messages_text or content_blocks required"}, status=400)
+
+    # 이미지 포함 여부 → stream-json 입력 모드 결정
+    use_stream_json_input = bool(content_blocks)
 
     cli_model = _MODEL_MAP.get(model, "claude-opus-4-6")
     mcp_config_path = _build_mcp_config(aads_session_id)
@@ -160,14 +164,30 @@ async def handle_stream(request):
             await response.prepare(request)
 
             # 프롬프트 구성
-            if is_resume:
-                # 이어가기: 사용자 메시지만 전달 (시스템 프롬프트는 세션에 보존됨)
-                prompt = messages_text
+            if use_stream_json_input:
+                # 이미지 포함: stream-json 입력 모드 → JSON content blocks 전달
+                if is_resume:
+                    stdin_payload = json.dumps(content_blocks)
+                else:
+                    # 새 세션: 시스템 프롬프트를 텍스트 블록으로 앞에 삽입
+                    blocks = list(content_blocks)
+                    if system_prompt:
+                        blocks.insert(0, {
+                            "type": "text",
+                            "text": "[SYSTEM PROMPT]\n" + system_prompt + "\n\n[CONVERSATION]\n",
+                        })
+                    stdin_payload = json.dumps(blocks)
+                prompt = None  # stdin_payload 사용
             else:
-                # 새 세션: 시스템 프롬프트 포함
-                prompt = messages_text
-                if system_prompt:
-                    prompt = "[SYSTEM PROMPT]\n" + system_prompt + "\n\n[CONVERSATION]\n" + messages_text
+                stdin_payload = None
+                if is_resume:
+                    # 이어가기: 사용자 메시지만 전달 (시스템 프롬프트는 세션에 보존됨)
+                    prompt = messages_text
+                else:
+                    # 새 세션: 시스템 프롬프트 포함
+                    prompt = messages_text
+                    if system_prompt:
+                        prompt = "[SYSTEM PROMPT]\n" + system_prompt + "\n\n[CONVERSATION]\n" + messages_text
 
             # Agent 팀 정의 (Agent SDK와 동일)
             agents_json = json.dumps({
@@ -217,16 +237,22 @@ async def handle_stream(request):
                 "--agents", agents_json,
             ]
 
+            # 이미지 포함 시 stream-json 입력 모드
+            if use_stream_json_input:
+                cmd.extend(["--input-format", "stream-json"])
+
             # 세션 이어가기
             if is_resume:
                 cmd.extend(["--resume", cli_session_id])
 
-            logger.info("CLI: model=%s aads=%s cli=%s resume=%s prompt_len=%d",
+            _stdin_data = stdin_payload if use_stream_json_input else prompt
+            logger.info("CLI: model=%s aads=%s cli=%s resume=%s stream_json_input=%s prompt_len=%d",
                         cli_model,
                         aads_session_id[:8] if aads_session_id else "none",
                         cli_session_id[:8] if cli_session_id else "new",
                         is_resume,
-                        len(prompt))
+                        use_stream_json_input,
+                        len(_stdin_data) if _stdin_data else 0)
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -236,8 +262,8 @@ async def handle_stream(request):
                 env=dict(os.environ, CLAUDE_CODE_MAX_OUTPUT_TOKENS="16384"),
             )
 
-            # stdin으로 프롬프트 전달
-            proc.stdin.write(prompt.encode("utf-8"))
+            # stdin으로 프롬프트/content blocks 전달
+            proc.stdin.write(_stdin_data.encode("utf-8"))
             await proc.stdin.drain()
             proc.stdin.close()
 

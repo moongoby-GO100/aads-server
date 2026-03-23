@@ -11,7 +11,7 @@ import json
 import logging
 import os
 from decimal import Decimal
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 import time as _time_mod
 
@@ -631,14 +631,20 @@ async def _stream_cli_relay(
 
     # 세션 이어가기 여부
     _has_resume = bool(_cli_session_map.get(session_id)) if session_id else False
-    messages_text = _format_messages_as_text(messages, has_resume=_has_resume)
+    formatted = _format_messages_for_llm(messages, has_resume=_has_resume)
 
-    req_body = {
+    req_body: Dict[str, Any] = {
         "model": model,
         "system_prompt": system_prompt,
-        "messages_text": messages_text,
         "session_id": session_id or "",
     }
+
+    if isinstance(formatted, list):
+        # 이미지 포함: content block 배열로 전달 → relay가 --input-format stream-json 사용
+        req_body["content_blocks"] = formatted
+        req_body["messages_text"] = ""  # 하위 호환
+    else:
+        req_body["messages_text"] = formatted
 
     yield {"type": "model_info", "model": sdk_model}
 
@@ -764,9 +770,9 @@ async def _stream_agent_sdk(
     """
     sdk_model = _ANTHROPIC_MODEL_ID.get(model, model)
 
-    # 세션 이어가기 여부에 따라 메시지 포맷 결정
+    # 세션 이어가기 여부에 따라 메시지 포맷 결정 (이미지 블록 보존)
     _has_resume = bool(_cli_session_map.get(session_id)) if session_id else False
-    user_message = _format_messages_as_text(messages, has_resume=_has_resume)
+    user_message: Union[str, List[Dict[str, Any]]] = _format_messages_for_llm(messages, has_resume=_has_resume)
 
     # Agent SDK는 CLI의 자체 OAuth 인증을 사용 (~/.claude/.credentials_account*.json)
     # API 키를 env로 전달하지 않음 — CLI가 OAuth 토큰을 자동 관리
@@ -817,10 +823,13 @@ async def _run_agent_sdk_with_key(
     api_key: str,
     sdk_model: str,
     system_prompt: str,
-    user_message: str,
+    user_message: Union[str, List[Dict[str, Any]]],
     session_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    """단일 API 키로 Agent SDK 실행. 세션 이어가기(--resume) 지원."""
+    """단일 API 키로 Agent SDK 실행. 세션 이어가기(--resume) 지원.
+
+    user_message가 list이면 content block 배열 (이미지 포함) → SDK prompt에 그대로 전달.
+    """
     from claude_agent_sdk import query as sdk_query, ClaudeAgentOptions
 
     # MCP config: 컨테이너 내부에서 직접 브릿지 실행
@@ -1059,6 +1068,81 @@ def _format_messages_as_text(messages: List[Dict[str, Any]], has_resume: bool = 
         role_label = "CEO" if role == "user" else "AI"
         parts.append("[%s]\n%s" % (role_label, content))
     return "\n\n".join(parts)
+
+
+def _format_messages_for_llm(
+    messages: List[Dict[str, Any]], has_resume: bool = False
+) -> Union[str, List[Dict[str, Any]]]:
+    """메시지 배열 → 텍스트 또는 content block 배열 변환 (이미지 블록 보존).
+
+    이미지가 없으면 str 반환 (기존 동작 유지),
+    이미지가 있으면 Anthropic content block 리스트 반환.
+    """
+    # 최신 user 메시지에서 이미지 블록 존재 여부 확인
+    latest_user_msg = None
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            latest_user_msg = msg
+            break
+
+    if not latest_user_msg:
+        return _format_messages_as_text(messages, has_resume)
+
+    content = latest_user_msg.get("content", "")
+    has_images = (
+        isinstance(content, list)
+        and any(
+            isinstance(b, dict) and b.get("type") == "image"
+            for b in content
+        )
+    )
+
+    if not has_images:
+        return _format_messages_as_text(messages, has_resume)
+
+    # --- 이미지 포함: content block 배열 구성 ---
+    def _content_to_blocks(c) -> List[Dict[str, Any]]:
+        """content → text/image 블록 리스트 (도구 결과는 텍스트 축약)."""
+        if isinstance(c, str):
+            return [{"type": "text", "text": c}]
+        if not isinstance(c, list):
+            return [{"type": "text", "text": str(c)}]
+        blocks: List[Dict[str, Any]] = []
+        for b in c:
+            if isinstance(b, dict):
+                if b.get("type") in ("text", "image"):
+                    blocks.append(b)
+                elif b.get("type") == "tool_result":
+                    tc = b.get("content", "")
+                    if isinstance(tc, str):
+                        blocks.append({"type": "text", "text": "[도구결과] %s" % tc[:500]})
+                    elif isinstance(tc, list):
+                        for tb in tc:
+                            if isinstance(tb, dict) and tb.get("type") == "text":
+                                blocks.append({"type": "text", "text": "[도구결과] %s" % tb.get("text", "")[:500]})
+                elif b.get("type") == "tool_use":
+                    blocks.append({"type": "text", "text": "[도구호출: %s]" % b.get("name", "")})
+            elif isinstance(b, str):
+                blocks.append({"type": "text", "text": b})
+        return blocks
+
+    # has_resume=True: 최신 user 메시지만 (이미지 포함)
+    if has_resume:
+        return _content_to_blocks(content)
+
+    # has_resume=False: 대화 이력(텍스트) + 최신 메시지(이미지 포함)
+    blocks: List[Dict[str, Any]] = []
+
+    # 이전 대화를 텍스트로 축약 (최신 user 제외)
+    history_msgs = [m for m in messages if m is not latest_user_msg]
+    if history_msgs:
+        history_text = _format_messages_as_text(history_msgs, has_resume=False)
+        if history_text.strip():
+            blocks.append({"type": "text", "text": history_text + "\n\n[CEO]"})
+
+    # 최신 user 메시지의 content blocks (이미지 보존)
+    blocks.extend(_content_to_blocks(content))
+    return blocks
 
 
 def _map_cli_event(event: dict) -> Optional[List[Dict[str, Any]]]:
