@@ -6,6 +6,7 @@ from . import input_control, window_control, screen_utils, system_extra, screen_
 from . import macro, browser_auto
 from . import file_transfer, scheduler
 from . import security, process_monitor
+from . import kakao_auto
 
 # command_type → handler 함수 매핑
 COMMAND_HANDLERS = {
@@ -84,6 +85,13 @@ COMMAND_HANDLERS = {
     "monitor_add": process_monitor.monitor_add,
     "monitor_remove": process_monitor.monitor_remove,
     "monitor_list": process_monitor.monitor_list,
+    # P6: 카카오톡 자동 응답
+    "kakao_auto_start": kakao_auto.kakao_auto_start,
+    "kakao_auto_stop": kakao_auto.kakao_auto_stop,
+    "kakao_auto_status": kakao_auto.kakao_auto_status,
+    "kakao_auto_config": kakao_auto.kakao_auto_config,
+    "kakao_auto_rooms": kakao_auto.kakao_auto_rooms,
+    "kakao_auto_history": kakao_auto.kakao_auto_history,
 }
 
 __all__ = [
@@ -91,5 +99,5 @@ __all__ = [
     "kakao", "updater", "input_control", "window_control",
     "screen_utils", "system_extra", "screen_stream",
     "macro", "browser_auto", "file_transfer", "scheduler",
-    "security", "process_monitor", "COMMAND_HANDLERS",
+    "security", "process_monitor", "kakao_auto", "COMMAND_HANDLERS",
 ]
