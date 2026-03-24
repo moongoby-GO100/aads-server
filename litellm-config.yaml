@@ -123,92 +123,117 @@ model_list:
     litellm_params:
       model: anthropic/claude-sonnet-4-6-20250610
       api_key: os.environ/ANTHROPIC_API_KEY_1
+      order: 1
   - model_name: claude-sonnet
     litellm_params:
       model: anthropic/claude-sonnet-4-6-20250610
       api_key: os.environ/ANTHROPIC_API_KEY_2
+      order: 2
 
   - model_name: claude-opus
     litellm_params:
       model: anthropic/claude-opus-4-6
       api_key: os.environ/ANTHROPIC_API_KEY_1
+      order: 1
   - model_name: claude-opus
     litellm_params:
       model: anthropic/claude-opus-4-6
       api_key: os.environ/ANTHROPIC_API_KEY_2
+      order: 2
 
   - model_name: claude-haiku
     litellm_params:
       model: anthropic/claude-haiku-4-5
       api_key: os.environ/ANTHROPIC_API_KEY_1
+      order: 1
   - model_name: claude-haiku
     litellm_params:
       model: anthropic/claude-haiku-4-5
       api_key: os.environ/ANTHROPIC_API_KEY_2
+      order: 2
 
   # Claude CLI 호환 — 토큰 2개 폴백
   - model_name: claude-opus-4-6
     litellm_params:
       model: anthropic/claude-opus-4-6
       api_key: os.environ/ANTHROPIC_API_KEY_1
+      order: 1
   - model_name: claude-opus-4-6
     litellm_params:
       model: anthropic/claude-opus-4-6
       api_key: os.environ/ANTHROPIC_API_KEY_2
+      order: 2
 
   - model_name: claude-sonnet-4-6
     litellm_params:
       model: anthropic/claude-sonnet-4-6-20250610
       api_key: os.environ/ANTHROPIC_API_KEY_1
+      order: 1
   - model_name: claude-sonnet-4-6
     litellm_params:
       model: anthropic/claude-sonnet-4-6-20250610
       api_key: os.environ/ANTHROPIC_API_KEY_2
+      order: 2
 
   - model_name: claude-haiku-4-5
     litellm_params:
       model: anthropic/claude-haiku-4-5
       api_key: os.environ/ANTHROPIC_API_KEY_1
+      order: 1
   - model_name: claude-haiku-4-5
     litellm_params:
       model: anthropic/claude-haiku-4-5
       api_key: os.environ/ANTHROPIC_API_KEY_2
+      order: 2
 
   - model_name: claude-sonnet-4-5-20250514
     litellm_params:
       model: anthropic/claude-sonnet-4-5-20250514
       api_key: os.environ/ANTHROPIC_API_KEY_1
+      order: 1
   - model_name: claude-sonnet-4-5-20250514
     litellm_params:
       model: anthropic/claude-sonnet-4-5-20250514
       api_key: os.environ/ANTHROPIC_API_KEY_2
+      order: 2
 
   - model_name: claude-haiku-4-5-20251001
     litellm_params:
       model: anthropic/claude-haiku-4-5-20251001
       api_key: os.environ/ANTHROPIC_API_KEY_1
+      order: 1
   - model_name: claude-haiku-4-5-20251001
     litellm_params:
       model: anthropic/claude-haiku-4-5-20251001
       api_key: os.environ/ANTHROPIC_API_KEY_2
+      order: 2
 
   - model_name: claude-opus-4-6-20250610
     litellm_params:
       model: anthropic/claude-opus-4-6-20250610
       api_key: os.environ/ANTHROPIC_API_KEY_1
+      order: 1
   - model_name: claude-opus-4-6-20250610
     litellm_params:
       model: anthropic/claude-opus-4-6-20250610
       api_key: os.environ/ANTHROPIC_API_KEY_2
+      order: 2
 
   - model_name: claude-sonnet-4-6-20250610
     litellm_params:
       model: anthropic/claude-sonnet-4-6-20250610
       api_key: os.environ/ANTHROPIC_API_KEY_1
+      order: 1
   - model_name: claude-sonnet-4-6-20250610
     litellm_params:
       model: anthropic/claude-sonnet-4-6-20250610
       api_key: os.environ/ANTHROPIC_API_KEY_2
+      order: 2
+
+# Gmail(order=1) 우선, Naver 리밋/장애 시 order=2로 폴백
+router_settings:
+  enable_pre_call_checks: true
+  num_retries: 3
 
 litellm_settings:
   drop_params: true

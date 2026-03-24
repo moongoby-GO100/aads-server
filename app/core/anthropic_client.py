@@ -50,8 +50,8 @@ async def call_llm_with_fallback(
 ) -> Optional[str]:
     """Claude 호출 + 실패 시 Gemini 폴백. 백그라운드 평가/추출용.
 
-    1순위: Claude Naver 토큰
-    2순위: Claude Gmail 토큰
+    1순위: Claude Gmail OAuth (docker-compose의 fallback 슬롯)
+    2순위: Claude Naver OAuth (docker-compose의 primary 슬롯)
     3순위: Gemini 3.1 Flash Preview (LiteLLM 경유)
 
     Returns: 응답 텍스트 또는 None (전부 실패 시)

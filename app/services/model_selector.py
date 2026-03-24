@@ -762,11 +762,11 @@ async def _stream_agent_sdk(
     tools: Optional[List[Dict[str, Any]]] = None,
     session_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    """Claude Agent SDK를 통한 스트리밍 (토큰 자동 교대).
+    """Claude Agent SDK → 번들 CLI (컨테이너 내 단일 OAuth 자격).
 
-    Agent SDK → 번들 CLI → Anthropic API (OAuth 직접 인증).
-    Naver 토큰 우선 → 실패 시 Gmail 토큰 폴백.
-    MCP 브릿지로 55개 도구 사용. 세션 자동 관리.
+    컨테이너의 Anthropic env 주입값과 무관 — 번들 CLI가 마운트된 .credentials만 사용.
+    429 등은 동일 자격으로 최대 3회 재시도만 하며 Gmail/Naver 자동 교대는 없음.
+    듀얼 계정 폴백은 LiteLLM(2단계) 또는 anthropic_client 직접 호출 경로를 사용.
     """
     sdk_model = _ANTHROPIC_MODEL_ID.get(model, model)
 
