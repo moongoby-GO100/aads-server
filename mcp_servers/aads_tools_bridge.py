@@ -61,24 +61,48 @@ def _get_tool_definitions():
     return _tool_definitions
 
 
+# MCP 도구 이름 → ToolExecutor dispatch 이름 매핑
+TOOL_NAME_MAP: dict[str, str] = {
+    "read_github": "read_github_file",
+    "query_db": "query_database",
+    "search_naver": "web_search_naver",
+    "search_naver_multi": "web_search_naver",
+    "search_kakao": "web_search_kakao",
+    "execute_sandbox": "code_sandbox",
+    "gemini_grounding_search": "gemini_search",
+    "visual_qa_test": "visual_qa",
+    "evaluate_alerts": "alert_evaluate",
+    "send_alert_message": "alert_send",
+}
+
+
 async def _call_tool(name: str, params: dict) -> str:
     """도구 실행 래퍼 — ToolExecutor 우선, execute_tool 폴백.
 
-    ToolExecutor에 51개 전체 도구가 등록되어 있음.
-    execute_tool에는 32개만 등록 (19개 누락).
+    TOOL_NAME_MAP으로 MCP 이름 → ToolExecutor dispatch 이름 변환 후 실행.
+    ToolExecutor가 unknown_tool 반환 시 execute_tool 폴백.
     """
     await _ensure_db()
 
-    # 1순위: ToolExecutor (전체 51개 도구)
+    # MCP 이름 → ToolExecutor dispatch 이름 변환
+    dispatch_name = TOOL_NAME_MAP.get(name, name)
+
+    # 1순위: ToolExecutor (dispatch 이름으로 실행)
     try:
         from app.services.tool_executor import ToolExecutor
         executor = ToolExecutor()
-        result = await executor.execute(name, params)
-        return result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
-    except Exception as e1:
-        logger.debug(f"ToolExecutor fallback for {name}: {e1}")
+        result = await executor.execute(dispatch_name, params)
+        result_str = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
 
-    # 2순위: execute_tool (레거시 폴백)
+        # unknown_tool 반환 시 execute_tool 폴백으로 전환
+        if "unknown_tool" in result_str:
+            logger.info(f"ToolExecutor unknown_tool: {dispatch_name} (mcp: {name}), trying execute_tool fallback")
+        else:
+            return result_str
+    except Exception as e1:
+        logger.debug(f"ToolExecutor error for {dispatch_name} (mcp: {name}): {e1}")
+
+    # 2순위: execute_tool (레거시 폴백 — 원래 MCP 이름으로 실행)
     try:
         from app.api.ceo_chat_tools import execute_tool
         session_id = os.getenv("AADS_SESSION_ID", "")
