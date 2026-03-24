@@ -28,18 +28,17 @@ def resolve_model_id(model_id: str) -> str:
 
 
 def create_anthropic_llm(model_id: str, max_tokens: int = 4096, temperature: float = 0.1) -> Any:
-    """Anthropic ChatAnthropic LLM 인스턴스 생성 (R-AUTH: OAuth 2계정 순차)."""
+    """Anthropic ChatAnthropic LLM 인스턴스 생성 (R-AUTH: auth_provider 경유)."""
     from langchain_anthropic import ChatAnthropic
-    # R-AUTH: 1순위 AUTH_TOKEN → 2순위 AUTH_TOKEN_2
-    api_key = os.getenv("ANTHROPIC_AUTH_TOKEN", "").strip()
+    from app.core.auth_provider import get_primary_token, get_base_url
+    api_key = get_primary_token()
     if not api_key:
-        api_key = os.getenv("ANTHROPIC_AUTH_TOKEN_2", "").strip()
-    if not api_key:
-        raise ValueError("ANTHROPIC_AUTH_TOKEN / AUTH_TOKEN_2 not set (OAuth sk-ant-oat01)")
+        raise ValueError("auth_provider: OAuth 토큰 없음 (sk-ant-oat01)")
     real_model = resolve_model_id(model_id)
     return ChatAnthropic(
         model=real_model,
         api_key=api_key,
+        anthropic_api_url=get_base_url(),
         max_tokens=max_tokens,
         temperature=temperature,
     )

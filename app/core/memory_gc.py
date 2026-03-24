@@ -522,9 +522,9 @@ async def _generate_project_insights(conn, project: str) -> int:
 - 마크다운 코드블록 없이 JSON만 반환"""
 
     try:
-        import os as _os
-        if not _os.getenv("ANTHROPIC_AUTH_TOKEN", "").strip():
-            logger.warning("sleep_agent_no_api_key", project=project, hint="ANTHROPIC_AUTH_TOKEN not set")
+        from app.core.auth_provider import has_valid_token
+        if not has_valid_token():
+            logger.warning("sleep_agent_no_api_key", project=project, hint="no valid OAuth token")
             return 0
 
         from app.core.anthropic_client import call_llm_messages_with_fallback
@@ -662,8 +662,8 @@ async def _analyze_quality_and_optimize(conn) -> int:
 교정 지시만 반환하세요 (설명 불필요)."""
 
         try:
-            import os as _os
-            if not _os.getenv("ANTHROPIC_AUTH_TOKEN", "").strip():
+            from app.core.auth_provider import has_valid_token
+            if not has_valid_token():
                 logger.warning("sleep_agent_c2_no_api_key", workspace=workspace)
                 continue
 
