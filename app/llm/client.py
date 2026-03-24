@@ -28,15 +28,17 @@ def resolve_model_id(model_id: str) -> str:
 
 
 def create_anthropic_llm(model_id: str, max_tokens: int = 4096, temperature: float = 0.1) -> Any:
-    """Anthropic ChatAnthropic LLM 인스턴스 생성."""
+    """Anthropic ChatAnthropic LLM 인스턴스 생성 (auth_provider 경유)."""
     from langchain_anthropic import ChatAnthropic
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    from app.core.auth_provider import get_primary_token, get_base_url
+    api_key = get_primary_token()
     if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY not set")
+        raise ValueError("No valid auth token (R-AUTH)")
     real_model = resolve_model_id(model_id)
     return ChatAnthropic(
         model=real_model,
         api_key=api_key,
+        anthropic_api_url=get_base_url(),
         max_tokens=max_tokens,
         temperature=temperature,
     )

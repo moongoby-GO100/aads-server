@@ -60,40 +60,22 @@ LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
 _CLAUDE_RELAY_URL = os.getenv("CLAUDE_RELAY_URL", "http://host.docker.internal:8199")
 _CLAUDE_CLI_ENABLED = os.getenv("CLAUDE_CLI_ENABLED", "true").lower() == "true"
 
-# Agent SDK OAuth 토큰 자동 교대
-_KEY_NAVER = os.getenv("ANTHROPIC_API_KEY", "")
-_KEY_GMAIL = os.getenv("ANTHROPIC_API_KEY_FALLBACK", "")
-_KEY_LABELS = {}  # {key_prefix: label}
-if _KEY_NAVER:
-    _KEY_LABELS[_KEY_NAVER[:20]] = "Naver"
-if _KEY_GMAIL:
-    _KEY_LABELS[_KEY_GMAIL[:20]] = "Gmail"
-
-# 키 순서 (런타임 변경 가능)
-_ANTHROPIC_KEYS = [k for k in [_KEY_NAVER, _KEY_GMAIL] if k]
+# Agent SDK OAuth 토큰 — auth_provider 경유 (R-AUTH)
+from app.core.auth_provider import (
+    get_oauth_tokens as _ap_get_tokens,
+    get_token_labels as _ap_get_labels,
+    set_token_order as _ap_set_order,
+)
 
 
 def get_key_order() -> List[Dict[str, str]]:
-    """현재 키 순서 반환 (프론트 표시용)."""
-    result = []
-    for k in _ANTHROPIC_KEYS:
-        label = _KEY_LABELS.get(k[:20], "Unknown")
-        result.append({"label": label, "prefix": k[:12] + "..."})
-    return result
+    """현재 키 순서 반환 (프론트 표시용). auth_provider 위임."""
+    return _ap_get_labels()
 
 
 def set_key_order(primary: str) -> bool:
-    """키 순서 변경. primary='naver' 또는 'gmail'."""
-    global _ANTHROPIC_KEYS
-    if primary.lower() == "naver" and _KEY_NAVER:
-        _ANTHROPIC_KEYS = [k for k in [_KEY_NAVER, _KEY_GMAIL] if k]
-        logger.info(f"key_order_changed: Naver first")
-        return True
-    elif primary.lower() == "gmail" and _KEY_GMAIL:
-        _ANTHROPIC_KEYS = [k for k in [_KEY_GMAIL, _KEY_NAVER] if k]
-        logger.info(f"key_order_changed: Gmail first")
-        return True
-    return False
+    """키 순서 변경. auth_provider 위임."""
+    return _ap_set_order(primary)
 
 # AADS session_id → CLI session_id 매핑 (대화 이어가기용)
 _cli_session_map: Dict[str, str] = {}  # {aads_session_id: cli_session_id}
