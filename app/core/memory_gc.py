@@ -527,10 +527,9 @@ async def _generate_project_insights(conn, project: str) -> int:
             logger.warning("sleep_agent_no_api_key", project=project, hint="ANTHROPIC_AUTH_TOKEN not set")
             return 0
 
-        from app.core.anthropic_client import get_client
-        client = get_client()
+        from app.core.anthropic_client import call_llm_messages_with_fallback
 
-        response = await client.messages.create(
+        response = await call_llm_messages_with_fallback(
             model=_HAIKU_MODEL,
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
@@ -668,10 +667,9 @@ async def _analyze_quality_and_optimize(conn) -> int:
                 logger.warning("sleep_agent_c2_no_api_key", workspace=workspace)
                 continue
 
-            from app.core.anthropic_client import get_client
-            client = get_client()
+            from app.core.anthropic_client import call_llm_messages_with_fallback
 
-            response = await client.messages.create(
+            response = await call_llm_messages_with_fallback(
                 model=_HAIKU_MODEL,
                 max_tokens=256,
                 messages=[{"role": "user", "content": prompt}],

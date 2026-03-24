@@ -146,13 +146,7 @@ async def _call_gemini_vision_frames(frames_b64: List[str], prompt: str) -> str:
 
 async def _call_claude_vision_frames(frames_b64: List[str], prompt: str) -> str:
     """Claude Sonnet Vision 폴백 (첫 번째 프레임만)."""
-    import anthropic
-
-    if not os.getenv("ANTHROPIC_AUTH_TOKEN", "").strip():
-        raise ValueError("ANTHROPIC_AUTH_TOKEN not set")
-
-    from app.core.anthropic_client import get_client as _get_bs_client
-    client = _get_bs_client()
+    from app.core.anthropic_client import call_llm_messages_with_fallback
 
     content_blocks: List[dict] = []
     for b64 in frames_b64[:3]:  # 최대 3프레임
@@ -166,7 +160,7 @@ async def _call_claude_vision_frames(frames_b64: List[str], prompt: str) -> str:
         })
     content_blocks.append({"type": "text", "text": prompt})
 
-    message = await client.messages.create(
+    message = await call_llm_messages_with_fallback(
         model="claude-sonnet-4-5",
         max_tokens=2048,
         messages=[{"role": "user", "content": content_blocks}],
