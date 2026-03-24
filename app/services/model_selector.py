@@ -863,21 +863,10 @@ async def _run_agent_sdk_with_key(
         ),
     }
 
-    # cli_path: 컨테이너 내 번들 CLI 사용 (Debian 13 = GLIBC 2.40+, 실행 가능 확인됨)
-    # 호스트(CentOS 7)에서는 GLIBC 부족으로 번들 CLI 실행 불가 — 컨테이너 전용
-    _cli_path = os.getenv(
-        "CLAUDE_CLI_PATH",
-        "/usr/local/lib/python3.12/site-packages/claude_agent_sdk/_bundled/claude",
-    )
-
-    # Agent SDK env: LiteLLM 경유 + 호스트 settings.json 충돌 방지
-    # 번들 CLI는 OAuth 토큰을 환경변수로 전달 불가 (x-api-key 헤더 → 401)
-    # HOME=/app 으로 /app/.claude/settings.json 참조 (호스트 /root/.claude와 분리)
-    _sdk_env: Dict[str, str] = {
-        "ANTHROPIC_API_KEY": os.getenv("LITELLM_MASTER_KEY", "sk-litellm"),  # R-AUTH: LiteLLM 마스터키 (OAuth 아님)
-        "ANTHROPIC_BASE_URL": os.getenv("LITELLM_BASE_URL", "http://litellm:4000"),
-        "HOME": "/app",
-    }
+    # cli_path: OAuth 래퍼 스크립트 — 충돌 env unset + CLAUDE_CODE_OAUTH_TOKEN 설정
+    # 래퍼가 번들 CLI를 실행하면서 충돌 env를 unset하고  # R-AUTH: 래퍼 설명
+    # ANTHROPIC_AUTH_TOKEN을 CLAUDE_CODE_OAUTH_TOKEN으로 전달 + HOME 격리
+    _cli_path = os.getenv("CLAUDE_CLI_PATH", "/app/scripts/claude-oauth-wrapper.sh")
 
     opts = ClaudeAgentOptions(
         model=sdk_model,
@@ -891,7 +880,6 @@ async def _run_agent_sdk_with_key(
         allowed_tools=["Agent", "mcp__aads-tools__*"],
         disallowed_tools=["Bash", "Read", "Edit", "Write", "Glob", "Grep",
                           "WebFetch", "WebSearch", "NotebookEdit"],
-        env=_sdk_env,
     )
     # --resume: 이전 대화가 있으면 이어가기
     if cli_session_id:

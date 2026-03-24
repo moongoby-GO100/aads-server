@@ -108,7 +108,7 @@ services:
       - /root/aads/aads-server/scripts:/app/scripts:rw
       - /root/aads/aads-server/supervisord.conf:/app/supervisord.conf:ro
       - /root/.ssh:/root/.ssh:rw
-      - /root/.claude:/root/.claude:ro
+      - /root/.claude:/root/.claude:rw
       - /root/.genspark/directives:/root/.genspark/directives:ro
       - /root/project-docs:/root/project-docs:ro
       - /root/aads/aads-docs/reports/ceo-documents:/root/aads/aads-docs/reports/ceo-documents:rw
