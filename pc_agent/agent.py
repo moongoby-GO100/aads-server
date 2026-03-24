@@ -16,7 +16,7 @@ from typing import Any, Dict
 import websockets
 
 # 명령 모듈 임포트
-from commands import shell, screenshot, file_ops, process, system_info, kakao
+from commands import shell, screenshot, file_ops, process, system_info, kakao, input_control
 
 logging.basicConfig(
     level=logging.INFO,
@@ -139,6 +139,13 @@ class PCAgent:
             "system_info": system_info.execute,
             "kakao_send": kakao.kakao_send,
             "kakao_read": kakao.kakao_read,
+            "mouse_click": input_control.mouse_click,
+            "mouse_move": input_control.mouse_move,
+            "mouse_scroll": input_control.mouse_scroll,
+            "mouse_drag": input_control.mouse_drag,
+            "keyboard_type": input_control.keyboard_type,
+            "keyboard_hotkey": input_control.keyboard_hotkey,
+            "keyboard_press": input_control.keyboard_press,
         }
 
         handler = dispatch.get(command_type)
