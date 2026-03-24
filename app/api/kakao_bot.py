@@ -1,4 +1,4 @@
-"""카카오톡 자동 응답용 AI 엔드포인트 (C안 Phase 1) + PC Agent 배포 API + 메신저봇R 연동 (B안)."""
+"""카카오톡 자동 응답용 AI 엔드포인트 (C안 Phase 1) + PC Agent 배포 API + 메신저봇R 연동 (B안) + 알리고 연동 (A안)."""
 from __future__ import annotations
 
 import hashlib
@@ -555,3 +555,274 @@ async def msgbot_token_generate(user_label: str = Query(default="default")):
     except Exception as e:
         logger.error("msgbot 토큰 생성 실패: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 알리고 연동 (A안) ──────────────────────────────────────────────────
+
+_ALIGO_TABLES_CREATED = False
+
+_ALIGO_DDL = """
+CREATE TABLE IF NOT EXISTS aligo_send_logs (
+    id SERIAL PRIMARY KEY,
+    msg_type VARCHAR(20) NOT NULL,
+    receiver VARCHAR(20) NOT NULL,
+    message TEXT,
+    template_code VARCHAR(50),
+    result_code INTEGER,
+    msg_id VARCHAR(50),
+    success_cnt INTEGER DEFAULT 0,
+    error_cnt INTEGER DEFAULT 0,
+    cost_point DECIMAL(10,2) DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_aligo_logs_created ON aligo_send_logs(created_at DESC);
+"""
+
+
+async def _ensure_aligo_tables() -> None:
+    """알리고 발송 로그 테이블 자동 생성 (최초 1회)."""
+    global _ALIGO_TABLES_CREATED
+    if _ALIGO_TABLES_CREATED:
+        return
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        if pool is None:
+            logger.warning("aligo: DB pool 미초기화 — 테이블 생성 스킵")
+            return
+        async with pool.acquire() as conn:
+            await conn.execute(_ALIGO_DDL)
+        _ALIGO_TABLES_CREATED = True
+        logger.info("aligo: 테이블 생성/확인 완료")
+    except Exception as e:
+        logger.error("aligo: 테이블 생성 실패: %s", e)
+
+
+async def _log_aligo_send(
+    msg_type: str,
+    receiver: str,
+    message: str,
+    template_code: str,
+    result_code: int,
+    msg_id: str,
+    success_cnt: int,
+    error_cnt: int,
+) -> None:
+    """알리고 발송 결과 DB 저장."""
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        if pool is None:
+            return
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO aligo_send_logs
+                   (msg_type, receiver, message, template_code, result_code, msg_id, success_cnt, error_cnt)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+                msg_type, receiver, message, template_code, result_code, msg_id, success_cnt, error_cnt,
+            )
+    except Exception as e:
+        logger.error("aligo: 발송 로그 저장 실패: %s", e)
+
+
+# ── 알리고 Request/Response 모델 ───────────────────────────────────────
+
+
+class AligoSmsRequest(BaseModel):
+    """SMS 발송 요청."""
+    receiver: str = Field(..., description="수신번호 (010XXXXXXXX)")
+    message: str = Field(..., description="메시지 내용")
+    sender: Optional[str] = Field(default=None, description="발신번호 (미지정 시 환경변수)")
+    title: Optional[str] = Field(default=None, description="LMS 제목")
+    rdate: Optional[str] = Field(default=None, description="예약일 YYYYMMDD")
+    rtime: Optional[str] = Field(default=None, description="예약시간 HHMM")
+
+
+class AligoAlimtalkRequest(BaseModel):
+    """알림톡 발송 요청."""
+    receiver: str = Field(..., description="수신번호")
+    template_code: str = Field(..., description="알림톡 템플릿 코드")
+    message: str = Field(..., description="메시지 내용 (치환 완료된 텍스트)")
+    subject: Optional[str] = Field(default=None, description="제목")
+    emtitle: Optional[str] = Field(default=None, description="강조표기 제목")
+    button: Optional[str] = Field(default=None, description="버튼 JSON")
+    failover_sms: bool = Field(default=True, description="알림톡 실패 시 SMS 폴백")
+    failover_subject: Optional[str] = Field(default=None, description="SMS 폴백 제목")
+    failover_message: Optional[str] = Field(default=None, description="SMS 폴백 메시지")
+
+
+class AligoCancelRequest(BaseModel):
+    """예약 취소 요청."""
+    mid: str = Field(..., description="발송 메시지 ID")
+
+
+class AligoAiReplyRequest(BaseModel):
+    """AI 응답 생성 → SMS 발송 요청."""
+    receiver: str = Field(..., description="수신번호")
+    incoming_message: str = Field(..., description="수신된 메시지 (AI가 응답 생성할 원문)")
+    sender_name: str = Field(default="", description="발신자 이름")
+    tone: str = Field(default="friendly", description="톤앤매너")
+    max_length: int = Field(default=200, ge=10, le=500)
+
+
+# ── 알리고 엔드포인트 ──────────────────────────────────────────────────
+
+
+@router.post("/aligo/send-sms")
+async def aligo_send_sms(req: AligoSmsRequest, background_tasks: BackgroundTasks):
+    """알리고 SMS 발송."""
+    await _ensure_aligo_tables()
+
+    from app.services.aligo_client import send_sms, is_available
+    if not is_available():
+        raise HTTPException(status_code=503, detail="알리고 미설정 (ALIGO_API_KEY/ALIGO_USER_ID 필요)")
+
+    result = await send_sms(
+        receiver=req.receiver,
+        msg=req.message,
+        sender=req.sender,
+        title=req.title,
+        rdate=req.rdate,
+        rtime=req.rtime,
+    )
+
+    result_code = int(result.get("result_code", -999))
+    msg_type = result.get("msg_type", "SMS")
+    msg_id = result.get("msg_id", "")
+    success_cnt = int(result.get("success_cnt", 0))
+    error_cnt = int(result.get("error_cnt", 0))
+
+    background_tasks.add_task(
+        _log_aligo_send,
+        msg_type, req.receiver, req.message, "", result_code, msg_id, success_cnt, error_cnt,
+    )
+
+    return result
+
+
+@router.post("/aligo/send-alimtalk")
+async def aligo_send_alimtalk(req: AligoAlimtalkRequest, background_tasks: BackgroundTasks):
+    """카카오 알림톡 발송."""
+    await _ensure_aligo_tables()
+
+    from app.services.aligo_client import send_alimtalk, is_available
+    if not is_available():
+        raise HTTPException(status_code=503, detail="알리고 미설정")
+
+    result = await send_alimtalk(
+        receiver=req.receiver,
+        template_code=req.template_code,
+        message=req.message,
+        subject=req.subject,
+        emtitle=req.emtitle,
+        button=req.button,
+        failover_sms=req.failover_sms,
+        failover_subject=req.failover_subject,
+        failover_message=req.failover_message,
+    )
+
+    result_code = int(result.get("code", -999))
+    info = result.get("info", {})
+    msg_id = str(info.get("mid", "")) if isinstance(info, dict) else ""
+    success_cnt = int(info.get("scnt", 0)) if isinstance(info, dict) else 0
+    error_cnt = int(info.get("fcnt", 0)) if isinstance(info, dict) else 0
+
+    background_tasks.add_task(
+        _log_aligo_send,
+        "alimtalk", req.receiver, req.message, req.template_code,
+        result_code, msg_id, success_cnt, error_cnt,
+    )
+
+    return result
+
+
+@router.get("/aligo/remain")
+async def aligo_remain():
+    """알리고 잔여건수 조회."""
+    from app.services.aligo_client import get_remain, is_available
+    if not is_available():
+        raise HTTPException(status_code=503, detail="알리고 미설정")
+
+    return await get_remain()
+
+
+@router.get("/aligo/history")
+async def aligo_history(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=30, ge=1, le=100),
+    start_date: Optional[str] = Query(default=None, description="YYYYMMDD"),
+    limit_day: Optional[int] = Query(default=None, ge=1),
+):
+    """알리고 발송내역 조회."""
+    from app.services.aligo_client import get_send_list, is_available
+    if not is_available():
+        raise HTTPException(status_code=503, detail="알리고 미설정")
+
+    return await get_send_list(page=page, page_size=page_size, start_date=start_date, limit_day=limit_day)
+
+
+@router.post("/aligo/cancel")
+async def aligo_cancel(req: AligoCancelRequest):
+    """알리고 예약 발송 취소."""
+    from app.services.aligo_client import cancel_reservation, is_available
+    if not is_available():
+        raise HTTPException(status_code=503, detail="알리고 미설정")
+
+    return await cancel_reservation(mid=req.mid)
+
+
+@router.post("/aligo/ai-reply-sms")
+async def aligo_ai_reply_sms(req: AligoAiReplyRequest, background_tasks: BackgroundTasks):
+    """AI가 응답 생성 → 알리고 SMS로 발송."""
+    await _ensure_aligo_tables()
+
+    from app.services.aligo_client import send_sms, is_available
+    if not is_available():
+        raise HTTPException(status_code=503, detail="알리고 미설정")
+
+    # AI 응답 생성 (기존 C안 로직 재활용)
+    tone_desc = _TONE_PROMPTS.get(req.tone, _TONE_PROMPTS["friendly"])
+
+    system_prompt = (
+        f"너는 SMS로 답장하는 사람이야.\n"
+        f"{tone_desc} 답변해.\n"
+        f"- 답변은 {req.max_length}자 이내로 짧게\n"
+        f"- AI라는 티를 내지 마\n"
+        f"- 자연스러운 한국어 사용"
+    )
+
+    user_msg = f"[{req.sender_name}] {req.incoming_message}" if req.sender_name else req.incoming_message
+
+    try:
+        ai_reply = await call_llm_with_fallback(
+            prompt=user_msg,
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=system_prompt,
+        )
+    except Exception as e:
+        logger.error("aligo AI 응답 생성 실패: %s", e)
+        raise HTTPException(status_code=500, detail=f"AI 응답 생성 실패: {e}")
+
+    if ai_reply is None:
+        raise HTTPException(status_code=503, detail="AI 응답 생성 실패 (모든 LLM 폴백 소진)")
+
+    # SMS 발송
+    result = await send_sms(receiver=req.receiver, msg=ai_reply)
+
+    result_code = int(result.get("result_code", -999))
+    msg_type = result.get("msg_type", "SMS")
+    msg_id = result.get("msg_id", "")
+    success_cnt = int(result.get("success_cnt", 0))
+    error_cnt = int(result.get("error_cnt", 0))
+
+    background_tasks.add_task(
+        _log_aligo_send,
+        msg_type, req.receiver, ai_reply, "", result_code, msg_id, success_cnt, error_cnt,
+    )
+
+    return {
+        "ai_reply": ai_reply,
+        "sms_result": result,
+    }
