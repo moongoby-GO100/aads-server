@@ -38,7 +38,7 @@ def _restart_agent() -> None:
     """현재 프로세스를 새 Python 프로세스로 교체 (os.execv)."""
     logger.info("에이전트 재시작 중...")
     python = sys.executable
-    script = os.path.join(PROJECT_ROOT, "pc_agent", "agent.py")
+    script = os.path.join(PROJECT_ROOT, "agent.py")
     os.execv(python, [python, script])
 
 
