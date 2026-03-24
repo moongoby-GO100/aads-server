@@ -5,6 +5,7 @@ from . import shell, screenshot, file_ops, process, system_info, kakao, updater
 from . import input_control, window_control, screen_utils, system_extra, screen_stream
 from . import macro, browser_auto
 from . import file_transfer, scheduler
+from . import security, process_monitor
 
 # command_type → handler 함수 매핑
 COMMAND_HANDLERS = {
@@ -74,11 +75,21 @@ COMMAND_HANDLERS = {
     "schedule_add": scheduler.schedule_add,
     "schedule_remove": scheduler.schedule_remove,
     "schedule_list": scheduler.schedule_list,
+    # P5: 보안 잠금 + 감사 로그
+    "security_lock": security.security_lock,
+    "security_unlock": security.security_unlock,
+    "security_locked_list": security.security_locked_list,
+    "security_audit": security.security_audit,
+    # P5: 프로세스 감시
+    "monitor_add": process_monitor.monitor_add,
+    "monitor_remove": process_monitor.monitor_remove,
+    "monitor_list": process_monitor.monitor_list,
 }
 
 __all__ = [
     "shell", "screenshot", "file_ops", "process", "system_info",
     "kakao", "updater", "input_control", "window_control",
     "screen_utils", "system_extra", "screen_stream",
-    "macro", "browser_auto", "file_transfer", "scheduler", "COMMAND_HANDLERS",
+    "macro", "browser_auto", "file_transfer", "scheduler",
+    "security", "process_monitor", "COMMAND_HANDLERS",
 ]
