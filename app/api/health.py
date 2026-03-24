@@ -124,7 +124,6 @@ async def deep_health_check():
     checks["ssh_binary"] = shutil.which("ssh") is not None
 
     # 2. SSH 키 접근
-    import os
     checks["ssh_keys"] = os.path.exists("/root/.ssh/id_ed25519")
 
     # 3. SSH 서버 연결 (211, 114)

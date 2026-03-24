@@ -203,7 +203,7 @@ async def with_background_completion(
     _hb_stop = _heartbeat_asyncio.Event()
 
     # 스트리밍 상태 초기화
-    state: Dict[str, Any] = {"content": "", "tool_count": 0, "last_tool": "", "last_save": _bg_time.monotonic()}
+    state: Dict[str, Any] = {"content": "", "tool_count": 0, "last_tool": "", "last_save": _bg_time.monotonic(), "started_at": _bg_time.monotonic()}
     _streaming_state[session_id] = state
 
     _client_gone_since: float = 0  # 클라이언트 이탈 시각 (monotonic)
@@ -733,24 +733,48 @@ def get_streaming_status(session_id: str) -> Optional[Dict[str, Any]]:
         tool_count: 도구 호출 횟수
         last_tool: 마지막 호출 도구 이름
     """
+    _STREAMING_MAX_AGE_SEC = 600  # 10분 이상 된 streaming state 자동 만료
+
     if session_id in _streaming_state:
         s = _streaming_state[session_id]
         is_completed = s.get("completed", False)
+
+        # STUCK 방지: 에러 content 감지 → 즉시 완료 처리
+        _content = s.get("content", "")
+        if not is_completed and "API Error:" in _content and "no_db_connection" in _content:
+            logger.warning(f"streaming_state_error_detected session={session_id[:8]} — force completing")
+            is_completed = True
+            s["completed"] = True
+
+        # STUCK 방지: 10분 이상 된 미완료 state 자동 만료
+        if not is_completed:
+            _started = s.get("started_at", 0)
+            if _started and (_bg_time.monotonic() - _started) > _STREAMING_MAX_AGE_SEC:
+                logger.warning(f"streaming_state_expired session={session_id[:8]} age={_bg_time.monotonic() - _started:.0f}s")
+                is_completed = True
+                s["completed"] = True
+
         result = {
             "is_streaming": not is_completed,
             "just_completed": is_completed,
-            "content_length": len(s.get("content", "")),
+            "content_length": len(_content),
             "tool_count": s.get("tool_count", 0),
             "last_tool": s.get("last_tool", ""),
-            "partial_content": s.get("content", ""),
+            "partial_content": _content,
         }
         # P1-FIX: just_completed=True 반환 후 즉시 state 제거 (one-shot)
-        # → 프론트의 반복 reload 방지 (기존: 90초간 매 폴링마다 중복 reload)
         if is_completed:
             _streaming_state.pop(session_id, None)
         return result
-    if session_id in _active_bg_tasks and not _active_bg_tasks[session_id].done():
-        return {"is_streaming": True, "just_completed": False, "content_length": 0, "tool_count": 0, "last_tool": ""}
+
+    if session_id in _active_bg_tasks:
+        task = _active_bg_tasks[session_id]
+        if task.done():
+            # 완료된 태스크 정리
+            _active_bg_tasks.pop(session_id, None)
+        else:
+            return {"is_streaming": True, "just_completed": False, "content_length": 0, "tool_count": 0, "last_tool": ""}
+
     # 스트리밍 없음: 명시적 False 반환 → 프론트 폴링 즉시 중단
     return {"is_streaming": False, "just_completed": False, "content_length": 0, "tool_count": 0, "last_tool": ""}
 
