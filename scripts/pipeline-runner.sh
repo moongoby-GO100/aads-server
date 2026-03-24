@@ -334,11 +334,17 @@ run_job() {
                started_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
     post_to_chat "$session_id" "🔧 [Pipeline Runner] 작업 시작: ${instruction:0:200}"
 
-    # H5: 재시도 루프
+    # H5: 모델 폴백 순환 재시도 (소넷→오퍼스→하이쿠→소넷, 2~3회)
+    local MODEL_CYCLE=("claude-sonnet" "claude-opus" "claude-haiku")
+    local MAX_MODEL_CYCLES=3  # 전체 순환 횟수
+    local total_attempts=$(( ${#MODEL_CYCLE[@]} * MAX_MODEL_CYCLES ))  # 9회
     local attempt=0 exit_code=0
-    while [[ $attempt -le $MAX_RETRIES ]]; do
+    while [[ $attempt -lt $total_attempts ]]; do
         exit_code=0
         cd "$workdir"
+        local model_idx=$(( attempt % ${#MODEL_CYCLE[@]} ))
+        local current_model="${MODEL_CYCLE[$model_idx]}"
+        local cycle_num=$(( attempt / ${#MODEL_CYCLE[@]} + 1 ))
 
         # H6: instruction 크기 제한 (50KB)
         local safe_instruction="${instruction:0:50000}"
@@ -364,7 +370,8 @@ run_job() {
 
 ${safe_instruction}"
 
-        timeout "$MAX_RUNTIME" claude -p --output-format text "$safe_instruction" \
+        log "  MODEL_FALLBACK job=$job_id model=$current_model cycle=$cycle_num attempt=$((attempt+1))/$total_attempts"
+        timeout "$MAX_RUNTIME" claude --model "$current_model" -p --output-format text "$safe_instruction" \
             > "$output_file" 2> "$err_file" &
         local claude_pid=$!
 
@@ -378,9 +385,11 @@ ${safe_instruction}"
         fi
 
         attempt=$((attempt + 1))
-        if [[ $attempt -le $MAX_RETRIES ]]; then
-            local wait_sec=$((2 ** attempt))
-            log "  RETRY job=$job_id attempt=$attempt/$MAX_RETRIES wait=${wait_sec}s exit=$exit_code"
+        if [[ $attempt -lt $total_attempts ]]; then
+            local next_model_idx=$(( attempt % ${#MODEL_CYCLE[@]} ))
+            local next_model="${MODEL_CYCLE[$next_model_idx]}"
+            local wait_sec=$(( 3 + attempt ))  # 3초~12초 점진 증가
+            log "  RETRY job=$job_id attempt=$((attempt+1))/$total_attempts next_model=$next_model wait=${wait_sec}s exit=$exit_code"
             sleep "$wait_sec"
         fi
     done
