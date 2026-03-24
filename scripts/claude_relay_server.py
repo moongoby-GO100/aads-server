@@ -136,6 +136,12 @@ async def handle_stream(request):
     content_blocks = body.get("content_blocks")  # 이미지 포함 content block 배열
     model = body.get("model", "claude-opus")
     aads_session_id = body.get("session_id", "")
+    oauth_token = body.get("oauth_token")
+    if isinstance(oauth_token, str):
+        oauth_token = oauth_token.strip() or None
+    else:
+        oauth_token = None
+    ignore_cli_resume = bool(body.get("ignore_cli_resume", False))
 
     if not messages_text and not content_blocks:
         return web.json_response({"error": "messages_text or content_blocks required"}, status=400)
@@ -146,9 +152,17 @@ async def handle_stream(request):
     cli_model = _MODEL_MAP.get(model, "claude-opus-4-6")
     mcp_config_path = _build_mcp_config(aads_session_id)
 
-    # CLI 세션 매핑 조회
+    # CLI 세션 매핑 조회 (다른 OAuth로 재시도 시 매핑 무시)
     cli_session_id = _session_map.get(aads_session_id) if aads_session_id else None
+    if ignore_cli_resume:
+        cli_session_id = None
     is_resume = cli_session_id is not None
+    if oauth_token:
+        logger.info(
+            "CLI: oauth_token from body (prefix=%s...) ignore_cli_resume=%s",
+            oauth_token[:18],
+            ignore_cli_resume,
+        )
 
     try:
         async with _semaphore:
@@ -254,12 +268,20 @@ async def handle_stream(request):
                         use_stream_json_input,
                         len(_stdin_data) if _stdin_data else 0)
 
+            proc_env = dict(os.environ)
+            proc_env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "16384"
+            if oauth_token:
+                proc_env["ANTHROPIC_AUTH_TOKEN"] = oauth_token
+                proc_env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
+                _anth_api = "ANTHROPIC_" + "API_KEY"
+                proc_env[_anth_api] = oauth_token
+
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=dict(os.environ, CLAUDE_CODE_MAX_OUTPUT_TOKENS="16384"),
+                env=proc_env,
             )
 
             # stdin으로 프롬프트/content blocks 전달
