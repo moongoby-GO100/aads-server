@@ -22,11 +22,18 @@
 
 `.env.litellm`의 `ANTHROPIC_API_KEY_1`이 Gmail, `order: 1` 유지(기존 설정).
 
+## 백업
+
+- **코드**: Git 커밋·푸시로 보관 (`4341bc9`, `fix(auth): Gmail-first OAuth env in compose; R-AUTH safe getenv`).
+- **DB/볼륨 전체 덤프**: 이번 작업 범위에서는 별도 실행하지 않음. 운영 정책상 필요 시 `pg_dump` 등 선행.
+
 ## 배포
 
 ```bash
 cd /root/aads/aads-server && docker compose up -d --no-deps aads-server
 ```
+
+(적용 완료: 2026-03-24 컨테이너 Recreate)
 
 ## 검증
 
