@@ -12,8 +12,18 @@ logger = logging.getLogger(__name__)
 
 
 async def find_on_screen(params: Dict[str, Any]) -> Dict[str, Any]:
-    """화면에서 이미지 찾기. params: image_path, confidence(0.0~1.0)"""
+    """화면에서 이미지 찾기. params: image_path, confidence(0.0~1.0), text(텍스트 검색 모드)"""
     try:
+        # 텍스트 기반 검색 모드
+        text_query = params.get("text", "")
+        if text_query:
+            ocr_result = await screen_text({})
+            if ocr_result.get("status") == "success":
+                ocr_text = ocr_result["data"].get("text", "")
+                found = text_query.lower() in ocr_text.lower()
+                return {"status": "success", "data": {"found": found, "mode": "text_search", "query": text_query}}
+            return ocr_result
+
         import pyautogui
         image_path = params.get("image_path", "")
         if not image_path or not os.path.exists(image_path):
@@ -58,7 +68,44 @@ async def screen_text(params: Dict[str, Any]) -> Dict[str, Any]:
             text = pytesseract.image_to_string(img, lang=lang)
             return {"status": "success", "data": {"text": text.strip(), "length": len(text.strip())}}
         except ImportError:
-            return {"status": "error", "data": {"error": "pytesseract 미설치. pip install pytesseract + Tesseract-OCR 설치 필요"}}
+            # Windows 내장 OCR fallback (PowerShell)
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                img.save(tmp.name)
+                tmp_path = tmp.name
+            try:
+                ps_script = f"""
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime]
+$null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType = WindowsRuntime]
+$null = [Windows.Storage.StorageFile, Windows.Foundation, ContentType = WindowsRuntime]
+
+function Await($WinRtTask, $ResultType) {{
+    $asTask = [System.WindowsRuntimeSystemExtensions].GetMethod('AsTask', [Type[]]@($WinRtTask.GetType()))
+    $netTask = $asTask.Invoke($null, @($WinRtTask))
+    $netTask.Wait(-1) | Out-Null
+    $netTask.Result
+}}
+
+$file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync('{tmp_path.replace(chr(92), chr(92)+chr(92))}')) ([Windows.Storage.StorageFile])
+$stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+$decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+$bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+$result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+$result.Text
+"""
+                result = subprocess.run(["powershell", "-Command", ps_script], capture_output=True, text=True, timeout=30)
+                text = result.stdout.strip()
+                if result.returncode == 0 and text:
+                    return {"status": "success", "data": {"text": text, "length": len(text), "method": "windows_ocr"}}
+                else:
+                    return {"status": "error", "data": {"error": f"Windows OCR 실패: {result.stderr.strip()}"}}
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
     except Exception as e:
         logger.error("screen_text error: %s", e)
         return {"status": "error", "data": {"error": str(e)}}
@@ -114,7 +161,7 @@ async def batch_command(params: Dict[str, Any]) -> Dict[str, Any]:
 
         results = []
         for i, cmd in enumerate(commands):
-            cmd_type = cmd.get("command_type", "")
+            cmd_type = cmd.get("command_type") or cmd.get("command") or ""
             cmd_params = cmd.get("params", {})
             delay = float(cmd.get("delay", 0))
 
