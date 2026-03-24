@@ -229,10 +229,10 @@ async def with_background_completion(
                     except Exception:
                         pass
 
-                # 클라이언트 연결 중 10초마다 중간 저장 (BUG-5 FIX: 1초→10초, DB 부하 감소)
+                # 클라이언트 연결 중 3초마다 중간 저장 (Invisible Recovery: 10s→3s, 끊김 후 partial_content 실시간성)
                 if not _client_gone:
                     _now_rt = _bg_time.monotonic()
-                    if _now_rt - state["last_save"] > 10:
+                    if _now_rt - state["last_save"] > 3:
                         state["last_save"] = _now_rt
                         await _interim_save_streaming(session_id, state)
 
@@ -758,6 +758,7 @@ def get_streaming_status(session_id: str) -> Optional[Dict[str, Any]]:
             "is_streaming": not is_completed,
             "just_completed": is_completed,
             "content_length": len(_content),
+            "token_count": len(_content) // 4,  # 근사 토큰 수 (프론트 진행도 판단용)
             "tool_count": s.get("tool_count", 0),
             "last_tool": s.get("last_tool", ""),
             "partial_content": _content,
@@ -773,10 +774,10 @@ def get_streaming_status(session_id: str) -> Optional[Dict[str, Any]]:
             # 완료된 태스크 정리
             _active_bg_tasks.pop(session_id, None)
         else:
-            return {"is_streaming": True, "just_completed": False, "content_length": 0, "tool_count": 0, "last_tool": ""}
+            return {"is_streaming": True, "just_completed": False, "content_length": 0, "token_count": 0, "tool_count": 0, "last_tool": ""}
 
     # 스트리밍 없음: 명시적 False 반환 → 프론트 폴링 즉시 중단
-    return {"is_streaming": False, "just_completed": False, "content_length": 0, "tool_count": 0, "last_tool": ""}
+    return {"is_streaming": False, "just_completed": False, "content_length": 0, "token_count": 0, "tool_count": 0, "last_tool": ""}
 
 
 # AADS-186C: Langfuse 트레이스 (optional — graceful degradation)
