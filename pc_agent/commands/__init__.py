@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from . import shell, screenshot, file_ops, process, system_info, kakao, updater
 from . import input_control, window_control, screen_utils, system_extra, screen_stream
+from . import macro, browser_auto
 
 # command_type → handler 함수 매핑
 COMMAND_HANDLERS = {
@@ -48,10 +49,27 @@ COMMAND_HANDLERS = {
     # 스트리밍 (stream_start는 agent.py에서 직접 처리, 여기는 폴백)
     "stream_start": screen_stream.stream_start,
     "stream_stop": screen_stream.stream_stop,
+    # P3: 매크로 녹화/재생
+    "macro_record_start": macro.record_start,
+    "macro_record_stop": macro.record_stop,
+    "macro_save": macro.save_macro_cmd,
+    "macro_play": macro.play_macro_cmd,
+    "macro_list": macro.list_macros_cmd,
+    "macro_delete": macro.delete_macro_cmd,
+    # P3: CDP 브라우저 자동화
+    "browser_navigate": browser_auto.browser_navigate,
+    "browser_click": browser_auto.browser_click,
+    "browser_fill": browser_auto.browser_fill,
+    "browser_screenshot": browser_auto.browser_screenshot,
+    "browser_get_text": browser_auto.browser_get_text,
+    "browser_eval": browser_auto.browser_eval,
+    "browser_tabs": browser_auto.browser_tabs,
+    "browser_launch": browser_auto.browser_launch,
 }
 
 __all__ = [
     "shell", "screenshot", "file_ops", "process", "system_info",
     "kakao", "updater", "input_control", "window_control",
-    "screen_utils", "system_extra", "screen_stream", "COMMAND_HANDLERS",
+    "screen_utils", "system_extra", "screen_stream",
+    "macro", "browser_auto", "COMMAND_HANDLERS",
 ]
