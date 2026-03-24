@@ -10,11 +10,10 @@ import os
 import uuid
 from typing import Any, Dict, List, Optional
 
-from app.core.anthropic_client import get_client
+from app.core.anthropic_client import call_llm_messages_with_fallback
 
 logger = logging.getLogger(__name__)
 
-_anthropic = get_client()
 
 COMPACTION_TRIGGER_TOKENS = int(os.getenv("COMPACTION_TRIGGER_TOKENS", "80000"))
 COMPACTION_KEEP_RECENT = int(os.getenv("COMPACTION_KEEP_RECENT", "20"))
@@ -304,7 +303,7 @@ async def _summarize(messages: List[Dict[str, Any]]) -> str:
 위 대화를 템플릿 형식에 맞춰 요약하세요 (7개 섹션 빠짐없이):"""
 
     try:
-        msg = await _anthropic.messages.create(
+        msg = await call_llm_messages_with_fallback(
             model="claude-haiku-4-5-20251001",
             max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
@@ -361,7 +360,7 @@ async def _merge_summaries(existing_summary: str, new_summary: str) -> str:
 병합된 구조화 요약 (7개 섹션 모두 포함):"""
 
     try:
-        msg = await _anthropic.messages.create(
+        msg = await call_llm_messages_with_fallback(
             model="claude-haiku-4-5-20251001",
             max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
