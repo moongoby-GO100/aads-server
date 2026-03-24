@@ -16,6 +16,7 @@ from typing import Any, Dict
 import websockets
 
 # 명령 모듈 임포트
+from commands import COMMAND_HANDLERS
 from commands import shell, screenshot, file_ops, process, system_info, kakao
 from commands import updater
 
@@ -152,21 +153,7 @@ class PCAgent:
 
     async def _execute_command(self, command_type: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """명령 타입에 따른 실행 디스패치."""
-        dispatch = {
-            "shell": shell.execute,
-            "screenshot": screenshot.execute,
-            "file_list": file_ops.file_list,
-            "file_read": file_ops.file_read,
-            "file_write": file_ops.file_write,
-            "process_list": process.execute,
-            "process_kill": process.process_kill,
-            "system_info": system_info.execute,
-            "kakao_send": kakao.kakao_send,
-            "kakao_read": kakao.kakao_read,
-            "self_update": updater.execute,
-        }
-
-        handler = dispatch.get(command_type)
+        handler = COMMAND_HANDLERS.get(command_type)
         if handler is None:
             return {"status": "error", "data": {"error": f"지원하지 않는 명령: {command_type}"}}
 
