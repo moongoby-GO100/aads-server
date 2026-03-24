@@ -294,10 +294,10 @@ async def stream_resume(session_id: UUID, offset: int = 0):
                         if row and row["content"]:
                             remaining = row["content"][prev_len:]
                             if remaining:
-                                yield f"data: {json.dumps({'content': remaining})}\n\n"
+                                yield f"data: {json.dumps({'type': 'delta', 'content': remaining})}\n\n"
                 except Exception:
                     pass
-                yield "data: [DONE]\n\n"
+                yield f"data: {json.dumps({'type': 'resume_done'})}\n\n"
                 return
 
             content = state.get("content", "")
@@ -306,12 +306,13 @@ async def stream_resume(session_id: UUID, offset: int = 0):
             if len(content) > prev_len:
                 delta = content[prev_len:]
                 prev_len = len(content)
-                yield f"data: {json.dumps({'content': delta})}\n\n"
+                yield f"data: {json.dumps({'type': 'delta', 'content': delta})}\n\n"
 
             if is_done:
-                yield "data: [DONE]\n\n"
+                yield f"data: {json.dumps({'type': 'resume_done'})}\n\n"
                 return
 
+            yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
             await asyncio.sleep(0.5)
 
     return StreamingResponse(
