@@ -18,10 +18,14 @@ from anthropic import AsyncAnthropic
 
 logger = logging.getLogger(__name__)
 
-# OAuth 토큰 직접 사용 (Agent SDK 채팅 AI와 동일 경로)
-_API_KEY = os.getenv("ANTHROPIC_API_KEY", "") or os.getenv("ANTHROPIC_AUTH_TOKEN", "")
-_API_KEY_FALLBACK = os.getenv("ANTHROPIC_API_KEY_FALLBACK", "")
+# OAuth 토큰 직접 사용 — docker-compose: ANTHROPIC_API_KEY=Naver, *_FALLBACK=Gmail
+_API_KEY_NAVER = os.getenv("ANTHROPIC_API_KEY", "") or os.getenv("ANTHROPIC_AUTH_TOKEN", "")
+_API_KEY_GMAIL = os.getenv("ANTHROPIC_API_KEY_FALLBACK", "")
 _BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+
+# 레거시 이름 호환 (다른 모듈이 import 하지 않음 — 로컬만 사용)
+_API_KEY = _API_KEY_NAVER
+_API_KEY_FALLBACK = _API_KEY_GMAIL
 
 # Gemini 폴백 — LiteLLM 프록시 경유 (직접 API 키 만료 대비)
 _LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
@@ -30,9 +34,10 @@ _GEMINI_FALLBACK_MODEL = "gemini-3.1-flash-lite-preview"
 
 
 def get_client(model_hint: str = "claude-haiku") -> AsyncAnthropic:
-    """Anthropic API 직접 클라이언트 반환 (OAuth 토큰 인증)."""
+    """Anthropic API 직접 클라이언트 반환 (OAuth). 기본 1순위 Gmail 토큰."""
+    _key = _API_KEY_GMAIL or _API_KEY_NAVER
     return AsyncAnthropic(
-        api_key=_API_KEY,
+        api_key=_key,
         base_url=_BASE_URL,
     )
 
@@ -51,9 +56,9 @@ async def call_llm_with_fallback(
 
     Returns: 응답 텍스트 또는 None (전부 실패 시)
     """
-    # 1순위/2순위: Claude (Naver → Gmail) + 일시적 에러 재시도
+    # 1순위/2순위: Claude (Gmail → Naver) + 일시적 에러 재시도
     _MAX_RETRIES = 2
-    keys_to_try = [k for k in [_API_KEY, _API_KEY_FALLBACK] if k]
+    keys_to_try = [k for k in [_API_KEY_GMAIL, _API_KEY_NAVER] if k]
     for key in keys_to_try:
         for _attempt in range(_MAX_RETRIES + 1):
             try:
@@ -108,7 +113,7 @@ async def call_llm_messages_with_fallback(**kwargs) -> object:
         Exception: 모든 키에서 실패 시 마지막 예외를 raise
     """
     _MAX_RETRIES = 2
-    keys_to_try = [k for k in [_API_KEY, _API_KEY_FALLBACK] if k]
+    keys_to_try = [k for k in [_API_KEY_GMAIL, _API_KEY_NAVER] if k]
     last_error: Optional[Exception] = None
 
     for key in keys_to_try:

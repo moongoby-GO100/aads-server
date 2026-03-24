@@ -69,8 +69,8 @@ if _KEY_NAVER:
 if _KEY_GMAIL:
     _KEY_LABELS[_KEY_GMAIL[:20]] = "Gmail"
 
-# 키 순서 (런타임 변경 가능)
-_ANTHROPIC_KEYS = [k for k in [_KEY_NAVER, _KEY_GMAIL] if k]
+# 키 순서 (런타임 변경 가능) — 기본 Gmail(1순위) → Naver 폴백
+_ANTHROPIC_KEYS = [k for k in [_KEY_GMAIL, _KEY_NAVER] if k]
 
 
 def get_key_order() -> List[Dict[str, str]]:
