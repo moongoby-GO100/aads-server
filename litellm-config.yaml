@@ -231,9 +231,17 @@ model_list:
       order: 2
 
 # Gmail(order=1) 우선, Naver 리밋/장애 시 order=2로 폴백
+# 모델별 사용량 한도가 별도이므로 소넷 리밋 → 오퍼스 → 하이쿠 폴백
 router_settings:
   enable_pre_call_checks: true
   num_retries: 3
+  model_group_fallbacks:
+    - claude-sonnet-4-6: ["claude-opus-4-6", "claude-haiku-4-5"]
+    - claude-sonnet: ["claude-opus", "claude-haiku"]
+    - claude-opus-4-6: ["claude-sonnet-4-6", "claude-haiku-4-5"]
+    - claude-opus: ["claude-sonnet", "claude-haiku"]
+    - claude-haiku-4-5: ["claude-sonnet-4-6", "claude-opus-4-6"]
+    - claude-haiku: ["claude-sonnet", "claude-opus"]
 
 litellm_settings:
   drop_params: true
