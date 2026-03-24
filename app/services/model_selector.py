@@ -183,8 +183,8 @@ async def call_stream(
         if not _had_error:
             return
 
-        # 3단계: Gemini (최종 안전망) — error_log 기록
-        yield {"type": "delta", "content": "[Claude 장애 → Gemini 전환]\n\n"}
+        # 3단계: Gemini (최종 안전망) — error_log 기록, 사용자에게는 조용히 전환
+        logger.warning(f"claude_all_tiers_failed: {model} — falling back to Gemini")
         try:
             from app.core.db_pool import get_pool
             pool = get_pool()
