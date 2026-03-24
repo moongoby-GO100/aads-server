@@ -1,13 +1,17 @@
-"""카카오톡 자동 응답용 AI 엔드포인트 (C안 Phase 1) + PC Agent 배포 API."""
+"""카카오톡 자동 응답용 AI 엔드포인트 (C안 Phase 1) + PC Agent 배포 API + 메신저봇R 연동 (B안)."""
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 import os
+import time
 import zipfile
 from pathlib import Path
+from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+import asyncpg
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -190,3 +194,364 @@ async def agent_register(req: AgentRegisterRequest):
         "websocket_url": "wss://aads.newtalk.kr/api/v1/pc-agent/ws",
         "message": "등록 완료. WebSocket으로 연결하세요.",
     }
+
+
+# ── 메신저봇R 연동 (B안) ─────────────────────────────────────────────────
+
+
+_MSGBOT_TABLES_CREATED = False
+
+_MSGBOT_DDL = """
+CREATE TABLE IF NOT EXISTS kakao_msgbot_config (
+    id SERIAL PRIMARY KEY,
+    bot_token VARCHAR(64) UNIQUE NOT NULL,
+    user_label VARCHAR(100),
+    enabled_rooms JSONB DEFAULT '["*"]',
+    blocked_rooms JSONB DEFAULT '[]',
+    tone VARCHAR(20) DEFAULT 'friendly',
+    model VARCHAR(20) DEFAULT 'haiku',
+    auto_reply BOOLEAN DEFAULT true,
+    reply_delay_sec INTEGER DEFAULT 2,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS kakao_msgbot_logs (
+    id SERIAL PRIMARY KEY,
+    bot_token VARCHAR(64) NOT NULL,
+    room VARCHAR(200),
+    sender VARCHAR(100),
+    message TEXT,
+    reply TEXT,
+    model_used VARCHAR(20),
+    latency_ms INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_msgbot_logs_token
+    ON kakao_msgbot_logs(bot_token, created_at DESC);
+"""
+
+# 톤앤매너 매핑 (기존 C안 로직 재활용)
+_TONE_PROMPTS = {
+    "friendly": "친근하고 따뜻하게",
+    "formal": "정중하고 격식있게",
+    "casual": "편하고 자연스럽게 반말로",
+    "witty": "재치있고 유머러스하게",
+}
+
+# 모델 매핑
+_MODEL_MAP = {
+    "haiku": "claude-haiku-4-5-20251001",
+    "sonnet": "claude-sonnet-4-6-20260320",
+    "opus": "claude-opus-4-6-20260320",
+}
+
+
+async def _ensure_msgbot_tables() -> None:
+    """메신저봇 테이블 자동 생성 (최초 1회)."""
+    global _MSGBOT_TABLES_CREATED
+    if _MSGBOT_TABLES_CREATED:
+        return
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        if pool is None:
+            logger.warning("msgbot: DB pool 미초기화 — 테이블 생성 스킵")
+            return
+        async with pool.acquire() as conn:
+            await conn.execute(_MSGBOT_DDL)
+        _MSGBOT_TABLES_CREATED = True
+        logger.info("msgbot: 테이블 생성/확인 완료")
+    except Exception as e:
+        logger.error("msgbot: 테이블 생성 실패: %s", e)
+
+
+async def _get_msgbot_config(bot_token: str) -> Optional[asyncpg.Record]:
+    """bot_token으로 설정 조회. 없으면 None."""
+    from app.core.db_pool import get_pool
+    pool = get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT * FROM kakao_msgbot_config WHERE bot_token = $1",
+            bot_token,
+        )
+
+
+async def _save_msgbot_log(
+    bot_token: str,
+    room: str,
+    sender: str,
+    message: str,
+    reply: str,
+    model_used: str,
+    latency_ms: int,
+) -> None:
+    """응답 로그 비동기 저장."""
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        if pool is None:
+            return
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO kakao_msgbot_logs
+                   (bot_token, room, sender, message, reply, model_used, latency_ms)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7)""",
+                bot_token, room, sender, message, reply, model_used, latency_ms,
+            )
+    except Exception as e:
+        logger.error("msgbot: 로그 저장 실패: %s", e)
+
+
+# ── Request/Response 모델 ────────────────────────────────────────────────
+
+
+class MsgbotWebhookRequest(BaseModel):
+    """메신저봇R 웹훅 요청."""
+    room: str = Field(..., description="채팅방 이름")
+    sender: str = Field(..., description="보낸 사람")
+    message: str = Field(..., description="메시지 내용")
+    isGroupChat: bool = Field(default=False, description="그룹 채팅 여부")
+    bot_token: str = Field(..., description="사용자 인증 토큰")
+
+
+class MsgbotWebhookResponse(BaseModel):
+    """메신저봇R 웹훅 응답."""
+    reply: str = Field(default="")
+    should_reply: bool = Field(default=False)
+
+
+class MsgbotConfigPayload(BaseModel):
+    """메신저봇R 설정."""
+    enabled_rooms: List[str] = Field(default=["*"])
+    blocked_rooms: List[str] = Field(default=[])
+    tone: str = Field(default="friendly")
+    model: str = Field(default="haiku")
+    auto_reply: bool = Field(default=True)
+    reply_delay_sec: int = Field(default=2, ge=0, le=30)
+
+
+class MsgbotConfigRequest(BaseModel):
+    """설정 저장 요청."""
+    bot_token: str
+    user_label: str = Field(default="")
+    config: MsgbotConfigPayload
+
+
+# ── 엔드포인트 ───────────────────────────────────────────────────────────
+
+
+@router.post("/msgbot/webhook", response_model=MsgbotWebhookResponse)
+async def msgbot_webhook(req: MsgbotWebhookRequest, background_tasks: BackgroundTasks):
+    """메신저봇R에서 호출하는 웹훅 — AI 응답 생성."""
+    await _ensure_msgbot_tables()
+
+    # 토큰 인증
+    cfg = await _get_msgbot_config(req.bot_token)
+    if cfg is None:
+        raise HTTPException(status_code=403, detail="유효하지 않은 bot_token")
+
+    # 자동 응답 비활성화 체크
+    if not cfg["auto_reply"]:
+        return MsgbotWebhookResponse(reply="", should_reply=False)
+
+    # 채팅방 필터링
+    import json as _json
+    enabled = _json.loads(cfg["enabled_rooms"]) if isinstance(cfg["enabled_rooms"], str) else cfg["enabled_rooms"]
+    blocked = _json.loads(cfg["blocked_rooms"]) if isinstance(cfg["blocked_rooms"], str) else cfg["blocked_rooms"]
+
+    # 블랙리스트 체크
+    if req.room in blocked:
+        return MsgbotWebhookResponse(reply="", should_reply=False)
+
+    # 화이트리스트 체크 ("*"이면 모든 방 허용)
+    if enabled != ["*"] and req.room not in enabled:
+        return MsgbotWebhookResponse(reply="", should_reply=False)
+
+    # 톤앤매너 + 시스템 프롬프트 (기존 C안 _build_system_prompt 로직 재활용)
+    tone = cfg["tone"] or "friendly"
+    tone_desc = _TONE_PROMPTS.get(tone, _TONE_PROMPTS["friendly"])
+    max_length = 200
+
+    system_prompt = (
+        f"너는 카카오톡에서 대화하는 사람이야.\n"
+        f"{tone_desc} 답변해.\n"
+        f"- 답변은 {max_length}자 이내로 짧게\n"
+        f"- 이모티콘/이모지 적절히 사용\n"
+        f"- AI라는 티를 내지 마\n"
+        f"- 자연스러운 한국어 구어체 사용\n"
+        f"- 질문에는 구체적으로 답하고, 안부에는 따뜻하게 반응"
+    )
+
+    if req.isGroupChat:
+        system_prompt += "\n- 그룹 채팅이야. 여러 사람이 대화 중이니 맥락을 고려해."
+
+    user_msg = f"[{req.sender}] {req.message}" if req.sender else req.message
+
+    # AI 응답 생성 (기존 _call_ai 재활용)
+    model_key = cfg["model"] or "haiku"
+    model_id = _MODEL_MAP.get(model_key, _MODEL_MAP["haiku"])
+    start_ms = time.monotonic()
+
+    try:
+        result = await call_llm_with_fallback(
+            prompt=user_msg,
+            model=model_id,
+            max_tokens=300,
+            system=system_prompt,
+        )
+    except Exception as e:
+        logger.error("msgbot AI 응답 실패: %s", e)
+        return MsgbotWebhookResponse(reply="", should_reply=False)
+
+    if result is None:
+        return MsgbotWebhookResponse(reply="", should_reply=False)
+
+    latency_ms = int((time.monotonic() - start_ms) * 1000)
+
+    # 로그 비동기 저장
+    background_tasks.add_task(
+        _save_msgbot_log,
+        req.bot_token, req.room, req.sender, req.message,
+        result, model_key, latency_ms,
+    )
+
+    return MsgbotWebhookResponse(reply=result, should_reply=True)
+
+
+@router.post("/msgbot/config")
+async def msgbot_config_save(req: MsgbotConfigRequest):
+    """메신저봇R 사용자 설정 저장 (UPSERT)."""
+    await _ensure_msgbot_tables()
+
+    import json as _json
+    from app.core.db_pool import get_pool
+    pool = get_pool()
+    if pool is None:
+        raise HTTPException(status_code=503, detail="DB 미연결")
+
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO kakao_msgbot_config
+                   (bot_token, user_label, enabled_rooms, blocked_rooms, tone, model, auto_reply, reply_delay_sec, updated_at)
+                   VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6, $7, $8, NOW())
+                   ON CONFLICT (bot_token) DO UPDATE SET
+                       user_label = EXCLUDED.user_label,
+                       enabled_rooms = EXCLUDED.enabled_rooms,
+                       blocked_rooms = EXCLUDED.blocked_rooms,
+                       tone = EXCLUDED.tone,
+                       model = EXCLUDED.model,
+                       auto_reply = EXCLUDED.auto_reply,
+                       reply_delay_sec = EXCLUDED.reply_delay_sec,
+                       updated_at = NOW()""",
+                req.bot_token,
+                req.user_label,
+                _json.dumps(req.config.enabled_rooms, ensure_ascii=False),
+                _json.dumps(req.config.blocked_rooms, ensure_ascii=False),
+                req.config.tone,
+                req.config.model,
+                req.config.auto_reply,
+                req.config.reply_delay_sec,
+            )
+        return {"status": "ok", "bot_token": req.bot_token}
+    except Exception as e:
+        logger.error("msgbot config 저장 실패: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/msgbot/config")
+async def msgbot_config_get(bot_token: str = Query(...)):
+    """메신저봇R 사용자 설정 조회."""
+    await _ensure_msgbot_tables()
+
+    cfg = await _get_msgbot_config(bot_token)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="설정을 찾을 수 없습니다")
+
+    return {
+        "bot_token": cfg["bot_token"],
+        "user_label": cfg["user_label"],
+        "enabled_rooms": cfg["enabled_rooms"],
+        "blocked_rooms": cfg["blocked_rooms"],
+        "tone": cfg["tone"],
+        "model": cfg["model"],
+        "auto_reply": cfg["auto_reply"],
+        "reply_delay_sec": cfg["reply_delay_sec"],
+        "created_at": str(cfg["created_at"]),
+        "updated_at": str(cfg["updated_at"]),
+    }
+
+
+@router.get("/msgbot/logs")
+async def msgbot_logs(bot_token: str = Query(...), limit: int = Query(default=50, ge=1, le=500)):
+    """메신저봇R 응답 로그 조회."""
+    await _ensure_msgbot_tables()
+
+    # 토큰 존재 확인
+    cfg = await _get_msgbot_config(bot_token)
+    if cfg is None:
+        raise HTTPException(status_code=403, detail="유효하지 않은 bot_token")
+
+    from app.core.db_pool import get_pool
+    pool = get_pool()
+    if pool is None:
+        raise HTTPException(status_code=503, detail="DB 미연결")
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT room, sender, message, reply, model_used, latency_ms, created_at
+               FROM kakao_msgbot_logs
+               WHERE bot_token = $1
+               ORDER BY created_at DESC
+               LIMIT $2""",
+            bot_token, limit,
+        )
+
+    return {
+        "count": len(rows),
+        "logs": [
+            {
+                "room": r["room"],
+                "sender": r["sender"],
+                "message": r["message"],
+                "reply": r["reply"],
+                "model_used": r["model_used"],
+                "latency_ms": r["latency_ms"],
+                "created_at": str(r["created_at"]),
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.post("/msgbot/token/generate")
+async def msgbot_token_generate(user_label: str = Query(default="default")):
+    """새 bot_token 생성 + 기본 설정 등록."""
+    await _ensure_msgbot_tables()
+
+    # SHA256 기반 고유 토큰 생성
+    raw = f"{user_label}-{time.time()}-{os.urandom(16).hex()}"
+    bot_token = hashlib.sha256(raw.encode()).hexdigest()[:48]
+
+    import json as _json
+    from app.core.db_pool import get_pool
+    pool = get_pool()
+    if pool is None:
+        raise HTTPException(status_code=503, detail="DB 미연결")
+
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO kakao_msgbot_config
+                   (bot_token, user_label, enabled_rooms, blocked_rooms, tone, model, auto_reply, reply_delay_sec)
+                   VALUES ($1, $2, '["*"]'::jsonb, '[]'::jsonb, 'friendly', 'haiku', true, 2)""",
+                bot_token, user_label,
+            )
+        return {"bot_token": bot_token, "user_label": user_label}
+    except Exception as e:
+        logger.error("msgbot 토큰 생성 실패: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
