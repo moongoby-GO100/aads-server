@@ -267,11 +267,12 @@ async def get_streaming_status(session_id: UUID):
 
 
 @router.get("/chat/sessions/{session_id}/stream-resume", tags=["chat-session"])
-async def stream_resume(session_id: UUID, offset: int = 0):
+async def stream_resume(session_id: UUID, offset: int = 0, message_id: Optional[str] = None):
     """SSE 재연결: 끊긴 지점(offset)부터 이어서 스트리밍.
 
     프론트가 SSE 끊김 시 자동 호출. _streaming_state에서 content를
     offset 이후 부분만 SSE event로 전송, 완료 시 [DONE] 전송.
+    message_id가 있으면 DB fallback 시 해당 메시지만 반환 (이전 답변 혼입 방지).
     """
     import asyncio, json
 
@@ -287,11 +288,26 @@ async def stream_resume(session_id: UUID, offset: int = 0):
                 try:
                     pool = get_pool()
                     async with pool.acquire() as conn:
+                        # 먼저 streaming_placeholder 확인 — 아직 생성 중이면 이전 답변 전송 방지
+                        ph_row = await conn.fetchrow(
+                            "SELECT content FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at > NOW() - interval '5 minutes' ORDER BY created_at DESC LIMIT 1",
+                            session_id,
+                        )
+                        if ph_row:
+                            # 아직 생성 중 — placeholder 상태 알림 (이전 답변 전송 안 함)
+                            yield f"data: {json.dumps({'type': 'resume_generating'})}\n\n"
+                            return
+
                         row = await conn.fetchrow(
-                            "SELECT content FROM chat_messages WHERE session_id = $1 AND role = 'assistant' AND intent IS DISTINCT FROM 'streaming_placeholder' ORDER BY created_at DESC LIMIT 1",
+                            "SELECT id, content FROM chat_messages WHERE session_id = $1 AND role = 'assistant' AND intent IS DISTINCT FROM 'streaming_placeholder' ORDER BY created_at DESC LIMIT 1",
                             session_id,
                         )
                         if row and row["content"]:
+                            # message_id 검증: 프론트가 보낸 message_id와 DB 메시지 id가 불일치하면
+                            # 이전 질문의 답변이므로 전송하지 않음
+                            if message_id and str(row["id"]) != message_id:
+                                yield f"data: {json.dumps({'type': 'resume_generating'})}\n\n"
+                                return
                             remaining = row["content"][prev_len:]
                             if remaining:
                                 yield f"data: {json.dumps({'type': 'delta', 'content': remaining})}\n\n"
@@ -332,6 +348,14 @@ async def get_last_response(session_id: UUID):
     from app.core.db_pool import get_pool
     pool = get_pool()
     async with pool.acquire() as conn:
+        # streaming_placeholder가 존재하면 아직 생성 중 — 이전 답변 반환 방지
+        has_placeholder = await conn.fetchval(
+            "SELECT 1 FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at > NOW() - interval '5 minutes' LIMIT 1",
+            session_id,
+        )
+        if has_placeholder:
+            return {"found": False, "generating": True}
+
         row = await conn.fetchrow(
             """
             SELECT id::text, content, model_used, created_at::text, intent

@@ -1328,16 +1328,50 @@ async def _save_and_update_session(
     thinking_summary: Optional[str] = None,
     auto_save_check: bool = False,
 ) -> None:
-    """#19: Phase C — 별도 커넥션으로 응답 저장 + 세션 비용 업데이트."""
+    """#19: Phase C — 별도 커넥션으로 응답 저장 + 세션 비용 업데이트.
+    BUG-FIX: placeholder가 있으면 UPDATE로 전환 (DELETE+INSERT gap 제거).
+    """
     async with get_pool().acquire() as conn:
         async with conn.transaction():
-            await _save_message(
-                conn, sid, "assistant", content,
-                model_used=model_used, intent=intent, cost=cost,
-                tokens_in=tokens_in, tokens_out=tokens_out,
-                sources=sources or [], tools_called=tools_called or [],
-                thinking_summary=thinking_summary,
+            # streaming_placeholder가 있으면 UPDATE로 최종 응답 전환 (gap 제거)
+            placeholder_id = await conn.fetchval(
+                "SELECT id FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' ORDER BY created_at DESC LIMIT 1",
+                sid,
             )
+            if placeholder_id:
+                # placeholder → 최종 응답으로 전환 (같은 row, atomic)
+                # content 정리 (XML 태그, placeholder 마커 제거)
+                clean_content = content
+                if clean_content:
+                    for tag in ("function_calls", "function_response", "function_results", "tool_results", "tool_call", "tool_response"):
+                        clean_content = re.sub(rf'<{tag}>.*?</{tag}>', '', clean_content, flags=re.DOTALL)
+                        clean_content = re.sub(rf'<{tag}>.*', '', clean_content, flags=re.DOTALL)
+                    clean_content = re.sub(r'<invoke\s+name=[^>]*>.*?</invoke>', '', clean_content, flags=re.DOTALL)
+                    clean_content = re.sub(r'<invoke\s+name=[^>]*>.*', '', clean_content, flags=re.DOTALL)
+                    clean_content = re.sub(r'\n\n⏳ _.*?_', '', clean_content, flags=re.DOTALL)
+                    clean_content = re.sub(r'^⏳ _[^\n]*_\s*', '', clean_content)
+                    clean_content = clean_content.strip()
+                await conn.execute(
+                    """UPDATE chat_messages
+                       SET content = $1, intent = $2, model_used = $3,
+                           cost = $4, tokens_in = $5, tokens_out = $6,
+                           sources = $7::jsonb, tools_called = $8::jsonb,
+                           thinking_summary = $9, edited_at = NOW()
+                       WHERE id = $10""",
+                    clean_content, intent or None, model_used,
+                    cost, tokens_in, tokens_out,
+                    json.dumps(sources or []), json.dumps(tools_called or []),
+                    thinking_summary, placeholder_id,
+                )
+                logger.info(f"placeholder_promoted_to_final session={str(sid)[:8]} placeholder_id={placeholder_id}")
+            else:
+                await _save_message(
+                    conn, sid, "assistant", content,
+                    model_used=model_used, intent=intent, cost=cost,
+                    tokens_in=tokens_in, tokens_out=tokens_out,
+                    sources=sources or [], tools_called=tools_called or [],
+                    thinking_summary=thinking_summary,
+                )
             await conn.execute(
                 "UPDATE chat_sessions SET cost_total = cost_total + $1, updated_at = NOW() WHERE id = $2",
                 cost, sid,
