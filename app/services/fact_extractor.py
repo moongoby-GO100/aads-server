@@ -68,8 +68,7 @@ async def extract_facts(
         return []
 
     try:
-        from app.core.anthropic_client import get_client
-        client = get_client()
+        from app.core.anthropic_client import call_llm_messages_with_fallback
 
         prompt = _EXTRACTION_PROMPT.format(
             max_facts=_MAX_FACTS_PER_TURN,
@@ -77,7 +76,7 @@ async def extract_facts(
             ai_msg=ai_response[:2000],
         )
 
-        response = await client.messages.create(
+        response = await call_llm_messages_with_fallback(
             model=_HAIKU_MODEL,
             max_tokens=1024,
             messages=[{"role": "user", "content": prompt}],

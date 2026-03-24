@@ -36,6 +36,8 @@ from app.api.fact_check import router as fact_check_router
 from app.api.pipeline_runner import router as pipeline_runner_router
 from app.api.code_review import router as code_review_router
 from app.api.quality import router as quality_router
+from app.api.memory_monitor import router as memory_monitor_router
+from app.api.pc_agent import router as pc_agent_router
 from app.routers.chat import router as chat_v2_router
 from app.config import settings
 from app.graph.builder import compile_graph
@@ -336,6 +338,19 @@ async def lifespan(app: FastAPI):
                 logger.warning(f"auto_fix_error: {e}")
         scheduler.add_job(_run_auto_fix, 'interval', minutes=5, id='auto_fix_dispatcher')
 
+        # Learning Health Monitor: 3시간마다 대화 vs 학습 비율 체크 → 학습 없으면 자동 재스캔
+        async def _run_learning_health_check():
+            try:
+                from app.core.memory_recall import check_learning_health, rescan_recent_conversations
+                health = await check_learning_health(hours=6)
+                if health.get("action_needed") == "rescan":
+                    logger.info("learning_health_rescan_triggered", messages=health["messages"], learnings=health["learnings"])
+                    result = await rescan_recent_conversations(hours=6)
+                    logger.info("learning_health_rescan_done", scanned=result["scanned"], extracted=result["extracted"])
+            except Exception as e:
+                logger.warning(f"learning_health_check_error: {e}")
+        scheduler.add_job(_run_learning_health_check, 'interval', hours=3, id='learning_health_check')
+
         scheduler.start()
         app.state.scheduler = scheduler  # fallback: MCP 도구 경로에서 참조 가능
         await healer_init()
@@ -356,70 +371,203 @@ async def lifespan(app: FastAPI):
         from app.core.db_pool import init_pool
         db_pool = await init_pool()
         app_state["db_pool"] = db_pool
-        # B3: tool_results_archive is_error 컬럼 마이그레이션
+        # ── 스키마 자동 검증 + 자동 마이그레이션 ──
         try:
             async with db_pool.acquire() as conn:
-                await conn.execute(
-                    "ALTER TABLE tool_results_archive ADD COLUMN IF NOT EXISTS is_error BOOLEAN DEFAULT FALSE"
+                # chat_messages 필수 컬럼 자동 생성
+                _auto_columns = [
+                    ("chat_messages", "branch_id", "UUID DEFAULT NULL"),
+                    ("chat_messages", "intent", "TEXT DEFAULT NULL"),
+                    ("tool_results_archive", "is_error", "BOOLEAN DEFAULT FALSE"),
+                ]
+                for _tbl, _col, _type in _auto_columns:
+                    await conn.execute(
+                        f"ALTER TABLE {_tbl} ADD COLUMN IF NOT EXISTS {_col} {_type}"
+                    )
+                # INSERT 기능 테스트
+                _test_ok = await conn.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name='chat_messages' AND column_name='content')"
                 )
-            logger.info("b3_is_error_column_ensured")
+                if not _test_ok:
+                    logger.error("startup_schema_validation_FAILED: chat_messages.content missing")
+                else:
+                    logger.info("startup_schema_validation_ok")
         except Exception as e:
-            logger.warning("b3_is_error_column_migration_failed", error=str(e))
+            logger.error("startup_schema_migration_failed", error=str(e))
+
+        # ── 필수 환경변수 검증 ──
+        _env_warnings = []
+        _budget = float(os.environ.get("AGENT_SDK_MAX_BUDGET_USD", "10"))
+        if _budget <= 0:
+            _env_warnings.append(f"AGENT_SDK_MAX_BUDGET_USD={_budget} (must be >0, defaulting to 10)")
+            os.environ["AGENT_SDK_MAX_BUDGET_USD"] = "10"
+        if not os.environ.get("JWT_SECRET_KEY"):
+            _env_warnings.append("JWT_SECRET_KEY not set")
+        if not os.environ.get("DATABASE_URL"):
+            _env_warnings.append("DATABASE_URL not set")
+        if _env_warnings:
+            logger.warning("startup_env_warnings", warnings=_env_warnings)
+        else:
+            logger.info("startup_env_validation_ok")
     except Exception as e:
         logger.error("db_pool_init_failed", error=str(e))
         app_state["db_pool"] = None
 
-    # 서버 시작 시 stale placeholder 선정리 → 토스트 무한반복 방지
+    # 서버 시작 시 stale placeholder → 내용 있으면 보존(promote), 없으면 삭제
     try:
         async with db_pool.acquire() as _c:
-            _cleaned = await _c.fetchval(
-                "WITH d AS (UPDATE chat_messages SET intent = 'interrupted' WHERE intent = 'streaming_placeholder' RETURNING id) SELECT COUNT(*) FROM d"
+            # 내용이 있는 placeholder는 recovered로 전환 (응답 소실 방지)
+            _promoted = await _c.fetchval(
+                "WITH p AS (UPDATE chat_messages SET intent = NULL, model_used = 'recovered' "
+                "WHERE intent = 'streaming_placeholder' AND content IS NOT NULL AND length(trim(content)) > 0 "
+                "RETURNING id) SELECT COUNT(*) FROM p"
             )
-            if _cleaned and _cleaned > 0:
-                logger.info(f"startup_placeholder_cleanup: {_cleaned} stale placeholder(s) → interrupted")
+            # 내용이 없는 placeholder만 삭제
+            _cleaned = await _c.fetchval(
+                "WITH d AS (DELETE FROM chat_messages "
+                "WHERE intent = 'streaming_placeholder' RETURNING id) SELECT COUNT(*) FROM d"
+            )
+            if (_promoted and _promoted > 0) or (_cleaned and _cleaned > 0):
+                logger.info(f"startup_placeholder_cleanup: promoted={_promoted or 0} deleted={_cleaned or 0}")
+                await _c.execute(
+                    "UPDATE chat_sessions s SET message_count = "
+                    "(SELECT count(*) FROM chat_messages m WHERE m.session_id = s.id)"
+                )
     except Exception as _e:
         logger.warning(f"startup_placeholder_cleanup_failed: {_e}")
 
-    # 중단된 스트리밍 자동 이어서 생성 (DB 풀 초기화 이후)
-    try:
-        from app.services.chat_service import resume_interrupted_streams
-        _resumed = await resume_interrupted_streams()
-        if _resumed:
-            logger.info(f"startup_resume: {_resumed} interrupted stream(s) resumed")
-        else:
-            logger.info("startup_resume: no interrupted streams found")
-    except Exception as _e:
-        logger.warning(f"startup_resume_failed: {_e}")
-        # 폴백: resume 실패 시 placeholder 정리
-        try:
-            async with db_pool.acquire() as _c:
-                _del = await _c.fetchval(
-                    "WITH d AS (DELETE FROM chat_messages WHERE intent='streaming_placeholder' RETURNING id) SELECT COUNT(*) FROM d"
-                )
-                if _del:
-                    logger.info(f"startup_cleanup_fallback: {_del} orphan placeholder(s) removed")
-        except Exception:
-            pass
-
-    # 주기적 stale placeholder 자동 정리 (10분마다, 5분 초과분)
+    # 주기적 stale placeholder 처리 (1분마다, 5분 초과분 — 내용 보존)
     async def _periodic_placeholder_cleanup():
         import asyncio as _pc_asyncio
         while True:
-            await _pc_asyncio.sleep(600)  # 10분
+            await _pc_asyncio.sleep(60)  # 1분
             try:
                 from app.core.db_pool import get_pool as _gp_pc
+                from app.services.chat_service import _streaming_state
                 _pool = _gp_pc()
                 async with _pool.acquire() as _c:
-                    _n = await _c.fetchval(
-                        "WITH d AS (UPDATE chat_messages SET intent = 'interrupted' WHERE intent = 'streaming_placeholder' AND created_at < NOW() - interval '5 minutes' RETURNING id) SELECT COUNT(*) FROM d"
+                    # 현재 스트리밍 중인 세션은 제외
+                    _active_sids = [k for k, v in _streaming_state.items() if not v.get("completed")]
+                    # 5분 초과 + 스트리밍 아닌 placeholder만 대상 (2분→5분으로 여유 확보)
+                    _stale = await _c.fetch(
+                        "SELECT id, session_id, content FROM chat_messages "
+                        "WHERE intent = 'streaming_placeholder' AND created_at < NOW() - interval '5 minutes'"
                     )
-                    if _n and _n > 0:
-                        logger.info(f"periodic_placeholder_cleanup: {_n} stale placeholder(s) → interrupted")
+                    _promoted = 0
+                    _deleted = 0
+                    for row in _stale:
+                        _sid_str = str(row["session_id"])
+                        if _sid_str in _active_sids:
+                            continue  # 아직 스트리밍 중 → 건드리지 않음
+                        content = row["content"] or ""
+                        if content.strip():
+                            # 내용 있음 → 응답으로 전환 (소실 방지)
+                            await _c.execute(
+                                "UPDATE chat_messages SET intent = NULL, model_used = 'recovered' WHERE id = $1",
+                                row["id"],
+                            )
+                            _promoted += 1
+                        else:
+                            await _c.execute("DELETE FROM chat_messages WHERE id = $1", row["id"])
+                            _deleted += 1
+                    if _promoted or _deleted:
+                        logger.info(f"periodic_placeholder_cleanup: promoted={_promoted} deleted={_deleted}")
+                        await _c.execute(
+                            "UPDATE chat_sessions s SET message_count = "
+                            "(SELECT count(*) FROM chat_messages m WHERE m.session_id = s.id)"
+                        )
             except Exception:
                 pass
 
     import asyncio as _startup_asyncio
     _startup_asyncio.create_task(_periodic_placeholder_cleanup())
+
+    # 서버 재시작 후 미완료 대화 자동 재실행
+    async def _resume_incomplete_conversations():
+        """서버 재시작 시 마지막 메시지가 user인 최근 세션을 감지하여 자동 재실행.
+
+        조건:
+        1. 최근 10분 이내 사용자 메시지가 마지막인 세션
+        2. 배포 목적 재시작 구분: /tmp/aads_deploy_restart 플래그 파일이 있으면 스킵
+        """
+        import asyncio as _resume_asyncio
+        await _resume_asyncio.sleep(5)  # 서버 완전 기동 대기
+
+        _deploy_flag = "/tmp/aads_deploy_restart"
+        if os.path.exists(_deploy_flag):
+            os.remove(_deploy_flag)
+            logger.info("resume_incomplete: skipped (deploy restart detected)")
+            return
+
+        try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                # 최근 10분 이내, 미완료 세션 찾기:
+                # 1) 마지막 메시지가 user인 세션 (응답 없음)
+                # 2) 마지막 assistant가 recovered인 세션 (중단된 부분 응답)
+                incomplete = await conn.fetch("""
+                    WITH last_msgs AS (
+                        SELECT DISTINCT ON (session_id)
+                            session_id, role, content, created_at,
+                            intent, model_used
+                        FROM chat_messages
+                        WHERE created_at > NOW() - INTERVAL '10 minutes'
+                          AND intent IS DISTINCT FROM 'system_trigger'
+                          AND intent IS DISTINCT FROM 'streaming_placeholder'
+                        ORDER BY session_id, created_at DESC
+                    )
+                    SELECT lm.session_id::text,
+                           COALESCE(
+                               (SELECT content FROM chat_messages
+                                WHERE session_id = lm.session_id AND role = 'user'
+                                ORDER BY created_at DESC LIMIT 1),
+                               lm.content
+                           ) AS content,
+                           lm.created_at
+                    FROM last_msgs lm
+                    WHERE (lm.role = 'user' OR lm.model_used = 'recovered')
+                      AND lm.content IS NOT NULL
+                      AND length(lm.content) > 0
+                    LIMIT 3
+                """)
+
+                if not incomplete:
+                    logger.info("resume_incomplete: no incomplete conversations found")
+                    return
+
+                logger.info(f"resume_incomplete: found {len(incomplete)} incomplete conversation(s)")
+
+                for row in incomplete:
+                    sid = row["session_id"]
+                    user_content = row["content"]
+                    try:
+                        # HTTP 대신 서비스 함수 직접 호출 (인증 우회)
+                        from app.services.chat_service import send_message_stream, with_background_completion
+                        import asyncio as _ri_asyncio
+
+                        async def _resume_session(_sid, _content):
+                            try:
+                                stream = send_message_stream(
+                                    session_id=_sid,
+                                    content=_content,
+                                )
+                                bg = with_background_completion(stream, session_id=_sid)
+                                async for _ in bg:
+                                    pass  # 백그라운드에서 완료까지 소비
+                                logger.info(f"resume_incomplete: session={_sid[:8]} completed")
+                            except Exception as _e:
+                                logger.warning(f"resume_incomplete: session={_sid[:8]} stream_error={_e}")
+
+                        _ri_asyncio.create_task(_resume_session(sid, user_content))
+                        logger.info(f"resume_incomplete: session={sid[:8]} re-triggered (direct)")
+                    except Exception as e:
+                        logger.warning(f"resume_incomplete: session={sid[:8]} error={e}")
+        except Exception as e:
+            logger.warning(f"resume_incomplete_failed: {e}")
+
+    _startup_asyncio.create_task(_resume_incomplete_conversations())
 
     # Pipeline Runner: 재시작 복구 + Watchdog 시작 (DB 풀 초기화 이후)
     try:
@@ -658,6 +806,8 @@ app.include_router(fact_check_router, prefix="/api/v1/fact-check", tags=["fact-c
 app.include_router(pipeline_runner_router, prefix="/api/v1", tags=["pipeline-runner"])
 app.include_router(code_review_router)
 app.include_router(quality_router, prefix="/api/v1", tags=["quality"])
+app.include_router(memory_monitor_router, prefix="/api/v1", tags=["memory-monitor"])
+app.include_router(pc_agent_router, prefix="/api/v1", tags=["pc-agent"])
 # 정적 파일 서빙
 import pathlib as _pathlib
 _static_dir = _pathlib.Path(__file__).resolve().parent / "static"

@@ -710,6 +710,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/openapi.json",
     "/redoc",
     "/mcp",
+    "/api/v1/pc-agent",
 )
 # 내부 모니터링 (verify_monitor_key로 별도 인증)
 _MONITOR_KEY_PATHS = (
