@@ -1394,7 +1394,7 @@ async def delete_template(template_id: int):
 
 @router.post("/templates/seed")
 async def seed_templates(user_id: str = Query(default="system")):
-    """기본 20개 시드 템플릿 삽입."""
+    """기본 30개 시드 템플릿 삽입."""
     await _ensure_saas_tables()
     pool = _pool()
 
@@ -1419,6 +1419,18 @@ async def seed_templates(user_id: str = Query(default="system")):
         ("graduation", "졸업 축하", "{name}님, 졸업을 축하드려요! 🎓 새로운 시작을 응원합니다. 멋진 미래가 펼쳐질 거예요! ✨", "friendly"),
         ("business", "거래처 안부", "{name}님, 안녕하세요. 항상 좋은 협력 관계에 감사드립니다. 번창하시길 기원합니다.", "formal"),
         ("christmas", "크리스마스", "{name}님, 메리 크리스마스! 🎄 따뜻하고 행복한 성탄절 보내세요 🎅✨", "friendly"),
+        # 마케팅
+        ("marketing", "신규 오픈 안내", "{name}님, 새로운 매장이 오픈했습니다! 🎉 오픈 기념 특별 혜택을 놓치지 마세요 ✨", "friendly"),
+        ("marketing", "할인 이벤트", "{name}님, 특별 할인 이벤트 안내드립니다! 🛍️ 지금 방문하시면 최대 50% 할인 혜택을 드려요!", "friendly"),
+        ("marketing", "재방문 유도", "{name}님, 오랜만이에요! 😊 {name}님을 위한 특별 쿠폰을 준비했습니다. 다시 만나뵙고 싶어요!", "friendly"),
+        ("marketing", "신제품 출시", "{name}님, 새로운 제품이 출시되었습니다! 🆕 {name}님의 취향에 딱 맞을 거예요. 지금 확인해보세요!", "friendly"),
+        ("marketing", "시즌 프로모션", "{name}님, 시즌 한정 프로모션 안내드립니다! 🌟 이번 기회를 놓치지 마세요!", "friendly"),
+        # 안부
+        ("greeting", "계절 인사", "{name}님, 날씨가 많이 변했네요 🌿 건강 잘 챙기시고 좋은 하루 보내세요 😊", "friendly"),
+        ("greeting", "오랜만의 연락", "{name}님, 오랜만에 인사드려요! 요즘 어떻게 지내세요? 😊 조만간 한번 뵙고 싶네요!", "friendly"),
+        ("greeting", "건강 안부", "{name}님, 건강은 잘 챙기고 계시죠? 💪 요즘 바쁘시더라도 컨디션 관리 잘 하세요!", "friendly"),
+        ("greeting", "주말 인사", "{name}님, 즐거운 주말 보내세요! ☀️ 푹 쉬시고 재충전하는 시간 되시길 바랍니다 😊", "friendly"),
+        ("greeting", "일반 안부", "{name}님, 안녕하세요 😊 항상 응원하고 있어요. 좋은 일만 가득하시길!", "friendly"),
     ]
 
     async with pool.acquire() as conn:
@@ -1426,7 +1438,7 @@ async def seed_templates(user_id: str = Query(default="system")):
         existing = await conn.fetchval(
             "SELECT COUNT(*) FROM kakaobot_templates WHERE is_system = TRUE",
         )
-        if existing and existing >= 20:
+        if existing and existing >= 30:
             return {"status": "already_seeded", "count": existing}
 
         count = 0
