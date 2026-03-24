@@ -33,6 +33,11 @@ logger = logging.getLogger("claude_relay")
 
 PORT = int(os.getenv("CLAUDE_RELAY_PORT", "8199"))
 CLAUDE_BIN = os.getenv("CLAUDE_BIN", "claude")
+# oauth_token 바디 주입 시 subprocess에 강제: 호스트 ANTHROPIC_BASE_URL이 LiteLLM이면 400 no_db_connection
+ANTHROPIC_DIRECT_BASE = (
+    (os.getenv("ANTHROPIC_API_DIRECT_URL") or "https://api.anthropic.com").strip()
+    or "https://api.anthropic.com"
+)
 MCP_TEMPLATE = Path(os.getenv(
     "MCP_CONFIG_TEMPLATE",
     "/root/aads/aads-server/scripts/mcp_config_template.json",
@@ -275,6 +280,8 @@ async def handle_stream(request):
                 proc_env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
                 _anth_api = "ANTHROPIC_" + "API_KEY"
                 proc_env[_anth_api] = oauth_token
+                proc_env["ANTHROPIC_BASE_URL"] = ANTHROPIC_DIRECT_BASE
+                logger.info("CLI: ANTHROPIC_BASE_URL forced to %s (oauth from body)", ANTHROPIC_DIRECT_BASE)
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
