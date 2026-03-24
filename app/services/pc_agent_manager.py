@@ -8,11 +8,11 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Set
 
 from fastapi import WebSocket
 
-from app.models.pc_agent import AgentInfo, CommandResult, WSMessage
+from app.models.pc_agent import AgentInfo, CommandResult, StreamConfig, WSMessage
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,7 @@ class PCAgentManager:
         self._agents: Dict[str, _AgentConnection] = {}
         self._pending_commands: Dict[str, asyncio.Event] = {}
         self._results: Dict[str, CommandResult] = {}
+        self._streaming_subscribers: Dict[str, Set[WebSocket]] = {}  # agent_id → 대시보드 WS
 
     # ── 에이전트 등록/해제 ──────────────────────────────────────────
 
@@ -135,6 +136,80 @@ class PCAgentManager:
         conn = self._agents.get(agent_id)
         if conn:
             conn.info.last_heartbeat = datetime.utcnow()
+
+    # ── 스트리밍 ──────────────────────────────────────────────────
+
+    def add_stream_subscriber(self, agent_id: str, ws: WebSocket) -> None:
+        """스트리밍 구독자 등록."""
+        if agent_id not in self._streaming_subscribers:
+            self._streaming_subscribers[agent_id] = set()
+        self._streaming_subscribers[agent_id].add(ws)
+        logger.info("stream_subscriber_added agent_id=%s total=%d", agent_id, len(self._streaming_subscribers[agent_id]))
+
+    def remove_stream_subscriber(self, agent_id: str, ws: WebSocket) -> int:
+        """스트리밍 구독자 해제. 남은 구독자 수 반환."""
+        subs = self._streaming_subscribers.get(agent_id)
+        if subs:
+            subs.discard(ws)
+            remaining = len(subs)
+            if remaining == 0:
+                del self._streaming_subscribers[agent_id]
+            logger.info("stream_subscriber_removed agent_id=%s remaining=%d", agent_id, remaining)
+            return remaining
+        return 0
+
+    async def start_stream(self, agent_id: str, config: StreamConfig) -> str:
+        """에이전트에 스트리밍 시작 명령 전송."""
+        conn = self._agents.get(agent_id)
+        if conn is None:
+            raise ValueError(f"에이전트 '{agent_id}'가 연결되어 있지 않습니다.")
+
+        command_id = str(uuid.uuid4())
+        msg = WSMessage(
+            type="command",
+            id=command_id,
+            payload={"command_type": "stream_start", "params": config.model_dump()},
+        )
+        await conn.websocket.send_json(msg.model_dump(mode="json"))
+        logger.info("stream_start_sent agent_id=%s config=%s", agent_id, config.model_dump())
+        return command_id
+
+    async def stop_stream(self, agent_id: str) -> str:
+        """에이전트에 스트리밍 중지 명령 전송."""
+        conn = self._agents.get(agent_id)
+        if conn is None:
+            raise ValueError(f"에이전트 '{agent_id}'가 연결되어 있지 않습니다.")
+
+        command_id = str(uuid.uuid4())
+        msg = WSMessage(
+            type="command",
+            id=command_id,
+            payload={"command_type": "stream_stop", "params": {}},
+        )
+        await conn.websocket.send_json(msg.model_dump(mode="json"))
+        logger.info("stream_stop_sent agent_id=%s", agent_id)
+        return command_id
+
+    async def broadcast_frame(self, agent_id: str, frame_data: str) -> None:
+        """모든 구독자에게 스트리밍 프레임 전송."""
+        subs = self._streaming_subscribers.get(agent_id)
+        if not subs:
+            return
+
+        msg = {"type": "stream_frame", "frame": frame_data}
+        dead: list[WebSocket] = []
+        for ws in subs:
+            try:
+                await ws.send_json(msg)
+            except Exception:
+                dead.append(ws)
+
+        for ws in dead:
+            subs.discard(ws)
+        if dead:
+            logger.debug("stream_dead_subscribers agent_id=%s removed=%d", agent_id, len(dead))
+            if not subs:
+                del self._streaming_subscribers[agent_id]
 
     # ── 조회 ──────────────────────────────────────────────────────
 

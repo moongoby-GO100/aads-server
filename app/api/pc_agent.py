@@ -10,7 +10,7 @@ import os
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
-from app.models.pc_agent import CommandRequest, WSMessage
+from app.models.pc_agent import CommandRequest, StreamConfig, WSMessage
 from app.services.pc_agent_manager import pc_agent_manager
 
 logger = logging.getLogger(__name__)
@@ -65,6 +65,12 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
             elif msg.type == "result":
                 pc_agent_manager.receive_result(msg.id, msg.payload)
 
+            elif msg.type == "stream_frame":
+                # 에이전트가 보낸 스트리밍 프레임 → 대시보드 구독자에게 브로드캐스트
+                frame = msg.payload.get("frame", "")
+                if frame:
+                    await pc_agent_manager.broadcast_frame(agent_id, frame)
+
             else:
                 logger.warning(
                     "pc_agent_ws_unknown_type agent_id=%s type=%s", agent_id, msg.type
@@ -113,3 +119,82 @@ async def get_result(command_id: str, timeout: float = Query(30.0, ge=1.0, le=12
         raise HTTPException(status_code=404, detail=str(exc))
 
     return result.model_dump(mode="json")
+
+
+# ── 스트리밍 ──────────────────────────────────────────────────────────
+
+@router.websocket("/pc-agent/stream/{agent_id}")
+async def ws_stream(websocket: WebSocket, agent_id: str):
+    """대시보드 → 스트리밍 수신용 WebSocket."""
+    agent = pc_agent_manager.get_agent(agent_id)
+    if agent is None:
+        await websocket.close(code=4004, reason=f"agent '{agent_id}' not connected")
+        return
+
+    await websocket.accept()
+
+    # 구독자 등록
+    pc_agent_manager.add_stream_subscriber(agent_id, websocket)
+
+    try:
+        # 첫 메시지로 StreamConfig JSON 수신 → 스트리밍 시작
+        raw = await asyncio.wait_for(websocket.receive_json(), timeout=10.0)
+        config = StreamConfig.model_validate(raw)
+        await pc_agent_manager.start_stream(agent_id, config)
+        logger.info("stream_ws_started agent_id=%s", agent_id)
+
+        # 연결 유지 — 클라이언트가 닫을 때까지 대기
+        while True:
+            try:
+                data = await websocket.receive_json()
+                # config 업데이트 지원
+                if data.get("type") == "update_config":
+                    config = StreamConfig.model_validate(data.get("config", {}))
+                    await pc_agent_manager.start_stream(agent_id, config)
+            except (WebSocketDisconnect, Exception):
+                break
+
+    except (asyncio.TimeoutError, WebSocketDisconnect, Exception) as exc:
+        logger.info("stream_ws_closed agent_id=%s reason=%s", agent_id, exc)
+    finally:
+        remaining = pc_agent_manager.remove_stream_subscriber(agent_id, websocket)
+        if remaining == 0:
+            # 마지막 구독자 해제 시 스트리밍 중지
+            try:
+                await pc_agent_manager.stop_stream(agent_id)
+            except Exception:
+                pass
+            logger.info("stream_stopped_no_subscribers agent_id=%s", agent_id)
+
+
+@router.post("/pc-agent/stream/{agent_id}/start")
+async def stream_start(agent_id: str, config: StreamConfig | None = None):
+    """스트리밍 시작 (REST 폴백)."""
+    agent = pc_agent_manager.get_agent(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"에이전트 '{agent_id}'가 연결되어 있지 않습니다.")
+
+    if config is None:
+        config = StreamConfig()
+
+    try:
+        command_id = await pc_agent_manager.start_stream(agent_id, config)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return {"command_id": command_id, "status": "streaming", "config": config.model_dump()}
+
+
+@router.post("/pc-agent/stream/{agent_id}/stop")
+async def stream_stop(agent_id: str):
+    """스트리밍 중지."""
+    agent = pc_agent_manager.get_agent(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"에이전트 '{agent_id}'가 연결되어 있지 않습니다.")
+
+    try:
+        command_id = await pc_agent_manager.stop_stream(agent_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return {"command_id": command_id, "status": "stopped"}

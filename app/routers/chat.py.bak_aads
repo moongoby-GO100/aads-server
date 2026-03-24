@@ -199,7 +199,8 @@ async def send_message(request: Request):
                     try:
                         text_content = data.decode("utf-8", errors="replace")
                         attachments.append({"type": "text", "name": fname, "content": text_content})
-                    except Exception:
+                    except Exception as e:
+                        logger.debug("첨부파일 텍스트 디코딩 실패", filename=fname, error=str(e))
                         attachments.append({"type": "file", "name": fname})
     else:
         body = await request.json()

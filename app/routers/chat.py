@@ -266,6 +266,61 @@ async def get_streaming_status(session_id: UUID):
     return status or {"is_streaming": False}
 
 
+@router.get("/chat/sessions/{session_id}/stream-resume", tags=["chat-session"])
+async def stream_resume(session_id: UUID, offset: int = 0):
+    """SSE 재연결: 끊긴 지점(offset)부터 이어서 스트리밍.
+
+    프론트가 SSE 끊김 시 자동 호출. _streaming_state에서 content를
+    offset 이후 부분만 SSE event로 전송, 완료 시 [DONE] 전송.
+    """
+    import asyncio, json
+
+    sid = str(session_id)
+
+    async def _generate():
+        prev_len = offset
+        while True:
+            state = svc._streaming_state.get(sid)
+            if not state:
+                # 이미 완료되어 state 제거됨 — DB에서 최종 응답 전송
+                from app.core.db_pool import get_pool
+                try:
+                    pool = get_pool()
+                    async with pool.acquire() as conn:
+                        row = await conn.fetchrow(
+                            "SELECT content FROM chat_messages WHERE session_id = $1 AND role = 'assistant' AND intent IS DISTINCT FROM 'streaming_placeholder' ORDER BY created_at DESC LIMIT 1",
+                            session_id,
+                        )
+                        if row and row["content"]:
+                            remaining = row["content"][prev_len:]
+                            if remaining:
+                                yield f"data: {json.dumps({'content': remaining})}\n\n"
+                except Exception:
+                    pass
+                yield "data: [DONE]\n\n"
+                return
+
+            content = state.get("content", "")
+            is_done = state.get("completed", False)
+
+            if len(content) > prev_len:
+                delta = content[prev_len:]
+                prev_len = len(content)
+                yield f"data: {json.dumps({'content': delta})}\n\n"
+
+            if is_done:
+                yield "data: [DONE]\n\n"
+                return
+
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.get("/chat/sessions/{session_id}/last-response", tags=["chat-session"])
 async def get_last_response(session_id: UUID):
     """SSE 끊김 시 마지막 AI 응답 복구용.

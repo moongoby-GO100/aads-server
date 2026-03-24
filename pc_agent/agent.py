@@ -19,6 +19,7 @@ import websockets
 from commands import COMMAND_HANDLERS
 from commands import shell, screenshot, file_ops, process, system_info, kakao
 from commands import updater
+from commands.screen_stream import get_streamer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -137,11 +138,29 @@ class PCAgent:
 
         logger.info("명령 수신 command_id=%s type=%s", command_id, command_type)
 
-        try:
-            result = await self._execute_command(command_type, params)
-        except Exception as e:
-            logger.error("명령 실행 오류 command_id=%s: %s", command_id, e)
-            result = {"status": "error", "data": {"error": str(e)}}
+        # 스트리밍 명령은 WebSocket 참조가 필요하므로 직접 처리
+        if command_type == "stream_start":
+            try:
+                streamer = get_streamer()
+                await streamer.start(ws, params)
+                result = {"status": "success", "data": {"message": "스트리밍 시작됨"}}
+            except Exception as e:
+                logger.error("스트리밍 시작 오류: %s", e)
+                result = {"status": "error", "data": {"error": str(e)}}
+        elif command_type == "stream_stop":
+            try:
+                streamer = get_streamer()
+                await streamer.stop()
+                result = {"status": "success", "data": {"message": "스트리밍 중지됨"}}
+            except Exception as e:
+                logger.error("스트리밍 중지 오류: %s", e)
+                result = {"status": "error", "data": {"error": str(e)}}
+        else:
+            try:
+                result = await self._execute_command(command_type, params)
+            except Exception as e:
+                logger.error("명령 실행 오류 command_id=%s: %s", command_id, e)
+                result = {"status": "error", "data": {"error": str(e)}}
 
         # 결과 전송
         await ws.send(json.dumps({

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from . import shell, screenshot, file_ops, process, system_info, kakao, updater
-from . import input_control, window_control, screen_utils, system_extra
+from . import input_control, window_control, screen_utils, system_extra, screen_stream
 
 # command_type → handler 함수 매핑
 COMMAND_HANDLERS = {
@@ -45,10 +45,13 @@ COMMAND_HANDLERS = {
     "installed_apps": system_extra.installed_apps,
     "notification": system_extra.notification,
     "file_search": system_extra.file_search,
+    # 스트리밍 (stream_start는 agent.py에서 직접 처리, 여기는 폴백)
+    "stream_start": screen_stream.stream_start,
+    "stream_stop": screen_stream.stream_stop,
 }
 
 __all__ = [
     "shell", "screenshot", "file_ops", "process", "system_info",
     "kakao", "updater", "input_control", "window_control",
-    "screen_utils", "system_extra", "COMMAND_HANDLERS",
+    "screen_utils", "system_extra", "screen_stream", "COMMAND_HANDLERS",
 ]
