@@ -1,0 +1,90 @@
+# SearXNG 설정 — AADS 메타검색엔진 (내부 전용)
+# 컨테이너: aads-searxng, 포트: 8080 (내부) → 8888 (호스트)
+
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "AADS SearXNG"
+  default_lang: "ko-KR"
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "ko-KR"
+  formats:
+    - html
+    - json
+
+server:
+  secret_key: "06870573951a75183d2c78546c281be5a043dc8b7313c51471fdfe1b0414e843"
+  limiter: false
+  image_proxy: false
+  method: "GET"
+
+outgoing:
+  request_timeout: 5.0
+  max_request_timeout: 10.0
+  useragent_suffix: ""
+  pool_connections: 100
+  pool_maxsize: 20
+
+engines:
+  # 활성화할 엔진
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+
+  - name: bing
+    engine: bing
+    shortcut: b
+    disabled: false
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+
+  - name: brave
+    engine: brave
+    shortcut: br
+    disabled: false
+
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    disabled: false
+
+  - name: github
+    engine: github
+    shortcut: gh
+    disabled: false
+
+  # 뉴스 엔진
+  - name: google news
+    engine: google_news
+    shortcut: gn
+    disabled: false
+
+  - name: bing news
+    engine: bing_news
+    shortcut: bn
+    disabled: false
+
+  # 비활성화할 엔진 (토렌트, 성인 등)
+  - name: piratebay
+    engine: piratebay
+    disabled: true
+
+  - name: kickass
+    engine: kickass
+    disabled: true
+
+  - name: 1337x
+    engine: 1337x
+    disabled: true
+
+  - name: nyaa
+    engine: nyaa
+    disabled: true

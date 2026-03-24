@@ -98,6 +98,7 @@ class ToolExecutor:
             "cost_report":            self._cost_report,
             "web_search_brave":       self._web_search,
             "web_search":             self._web_search,
+            "search_searxng":         self._search_searxng,
             "web_search_naver":       self._web_search_naver,
             "web_search_kakao":       self._web_search_kakao,
             "web_search_google":      self._web_search_google,
@@ -563,6 +564,18 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e), "engine": engine}
         return {"error": f"알 수 없는 엔진: {engine}"}
+
+    async def _search_searxng(self, inp: Dict[str, Any]) -> Any:
+        """SearXNG 메타검색 — 70개+ 엔진 동시 검색."""
+        from app.services.searxng_search_service import search_searxng
+        return await search_searxng(
+            query=inp.get("query", ""),
+            categories=inp.get("categories", "general"),
+            language=inp.get("language", "ko-KR"),
+            time_range=inp.get("time_range"),
+            engines=inp.get("engines"),
+            count=inp.get("count", 10),
+        )
 
     async def _web_search_all(self, query: str, count: int = 5) -> Any:
         """3개 검색 엔진 병렬 실행 → 통합 결과."""

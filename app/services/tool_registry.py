@@ -98,6 +98,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "search_naver": False,            # 핵심 — 한국어 뉴스/블로그
     "search_naver_multi": True,       # 온디맨드
     "search_kakao": True,             # 온디맨드
+    "search_searxng": False,           # 핵심 — SearXNG 메타검색 (무료, 무제한)
     "gemini_grounding_search": False, # 핵심 — 실시간 팩트 검색
     "search_chat_history": False,     # 핵심 — 이전 대화 검색
     "fetch_url": True,                # 온디맨드
@@ -861,6 +862,41 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             },
             "required": ["query"],
         },
+    },
+    # ── SearXNG 메타검색 ─────────────────────────────────────────────────────
+    "search_searxng": {
+        "name": "search_searxng",
+        "description": "SearXNG 메타검색 — Google/Bing/DuckDuckGo/Brave 등 70개+ 엔진 동시 검색 (무료, 무제한, API 키 불필요). 일반/뉴스/이미지/IT/과학 카테고리 지원.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "검색 쿼리"},
+                "categories": {
+                    "type": "string",
+                    "enum": ["general", "images", "news", "videos", "it", "science", "files", "music"],
+                    "description": "검색 카테고리 (기본: general)",
+                },
+                "language": {
+                    "type": "string",
+                    "description": "검색 언어 (기본: ko-KR)",
+                },
+                "time_range": {
+                    "type": "string",
+                    "enum": ["day", "week", "month", "year"],
+                    "description": "시간 범위 필터 (선택)",
+                },
+                "engines": {
+                    "type": "string",
+                    "description": "특정 엔진 지정, 콤마 구분 (선택. 예: google,bing,duckduckgo)",
+                },
+            },
+            "required": ["query"],
+        },
+        "input_examples": [
+            {"query": "FastAPI 비동기 처리 가이드"},
+            {"query": "AI agent framework 2026", "categories": "it"},
+            {"query": "삼성전자 실적 발표", "categories": "news", "time_range": "week"},
+        ],
     },
     # ── workflow 그룹 (신규) ──────────────────────────────────────────────────
     "inspect_service": {
@@ -1945,7 +1981,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
     "action": ["directive_create", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file"],
-    "search": ["web_search"],
+    "search": ["web_search", "search_searxng"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
     "browser": ["read_remote_file", "list_remote_dir", "browser_navigate", "browser_snapshot", "browser_screenshot", "capture_screenshot", "browser_click", "browser_fill", "browser_tab_list"],
