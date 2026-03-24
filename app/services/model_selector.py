@@ -870,6 +870,15 @@ async def _run_agent_sdk_with_key(
         "/usr/local/lib/python3.12/site-packages/claude_agent_sdk/_bundled/claude",
     )
 
+    # Agent SDK env: LiteLLM 경유 + 호스트 settings.json 충돌 방지
+    # 번들 CLI는 OAuth 토큰을 환경변수로 전달 불가 (x-api-key 헤더 → 401)
+    # HOME=/app 으로 /app/.claude/settings.json 참조 (호스트 /root/.claude와 분리)
+    _sdk_env: Dict[str, str] = {
+        "ANTHROPIC_API_KEY": os.getenv("LITELLM_MASTER_KEY", "sk-litellm"),  # R-AUTH: LiteLLM 마스터키 (OAuth 아님)
+        "ANTHROPIC_BASE_URL": os.getenv("LITELLM_BASE_URL", "http://litellm:4000"),
+        "HOME": "/app",
+    }
+
     opts = ClaudeAgentOptions(
         model=sdk_model,
         max_turns=200,
@@ -882,6 +891,7 @@ async def _run_agent_sdk_with_key(
         allowed_tools=["Agent", "mcp__aads-tools__*"],
         disallowed_tools=["Bash", "Read", "Edit", "Write", "Glob", "Grep",
                           "WebFetch", "WebSearch", "NotebookEdit"],
+        env=_sdk_env,
     )
     # --resume: 이전 대화가 있으면 이어가기
     if cli_session_id:
