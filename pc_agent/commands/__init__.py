@@ -4,6 +4,7 @@ from __future__ import annotations
 from . import shell, screenshot, file_ops, process, system_info, kakao, updater
 from . import input_control, window_control, screen_utils, system_extra, screen_stream
 from . import macro, browser_auto
+from . import file_transfer, scheduler
 
 # command_type → handler 함수 매핑
 COMMAND_HANDLERS = {
@@ -65,11 +66,19 @@ COMMAND_HANDLERS = {
     "browser_eval": browser_auto.browser_eval,
     "browser_tabs": browser_auto.browser_tabs,
     "browser_launch": browser_auto.browser_launch,
+    # P4: 파일 전송 (서버↔PC)
+    "file_upload": file_transfer.file_upload,
+    "file_download": file_transfer.file_download,
+    "file_sync_status": file_transfer.file_sync_status,
+    # P4: 작업 스케줄러
+    "schedule_add": scheduler.schedule_add,
+    "schedule_remove": scheduler.schedule_remove,
+    "schedule_list": scheduler.schedule_list,
 }
 
 __all__ = [
     "shell", "screenshot", "file_ops", "process", "system_info",
     "kakao", "updater", "input_control", "window_control",
     "screen_utils", "system_extra", "screen_stream",
-    "macro", "browser_auto", "COMMAND_HANDLERS",
+    "macro", "browser_auto", "file_transfer", "scheduler", "COMMAND_HANDLERS",
 ]
