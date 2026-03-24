@@ -439,10 +439,9 @@ class MemoryManager:
         )
 
         try:
-            from app.core.anthropic_client import get_client
-            client = get_client()
+            from app.core.anthropic_client import call_llm_messages_with_fallback
 
-            resp = await client.messages.create(
+            resp = await call_llm_messages_with_fallback(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=500,
                 system=(
