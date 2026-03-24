@@ -26,7 +26,7 @@ HEARTBEAT_INTERVAL = 30  # 초
 async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query("")):
     """PC 에이전트 WebSocket 연결."""
     # 인증
-    if not PC_AGENT_SECRET or token != PC_AGENT_SECRET:
+    if PC_AGENT_SECRET and token != PC_AGENT_SECRET:
         await websocket.close(code=4001, reason="unauthorized")
         logger.warning("pc_agent_ws_auth_failed agent_id=%s", agent_id)
         return

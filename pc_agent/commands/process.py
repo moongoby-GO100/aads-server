@@ -5,6 +5,8 @@ import logging
 import subprocess
 from typing import Any, Dict
 
+import psutil
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,4 +44,27 @@ async def execute(params: Dict[str, Any]) -> Dict[str, Any]:
             return {"status": "error", "data": {"error": "프로세스 목록 조회 실패"}}
     except Exception as e:
         logger.error("process_list_error: %s", e)
+        return {"status": "error", "data": {"error": str(e)}}
+
+
+async def process_kill(params: Dict[str, Any]) -> Dict[str, Any]:
+    """PID로 프로세스 종료."""
+    pid = params.get("pid")
+    if pid is None:
+        return {"status": "error", "data": {"error": "pid 파라미터 필수"}}
+
+    try:
+        pid = int(pid)
+        proc = psutil.Process(pid)
+        proc_name = proc.name()
+        proc.kill()
+        proc.wait(timeout=5)
+        logger.info("process_killed pid=%d name=%s", pid, proc_name)
+        return {"status": "success", "data": {"pid": pid, "name": proc_name}}
+    except psutil.NoSuchProcess:
+        return {"status": "error", "data": {"error": f"프로세스 없음: pid={pid}"}}
+    except psutil.AccessDenied:
+        return {"status": "error", "data": {"error": f"권한 없음: pid={pid}"}}
+    except Exception as e:
+        logger.error("process_kill_error pid=%s: %s", pid, e)
         return {"status": "error", "data": {"error": str(e)}}

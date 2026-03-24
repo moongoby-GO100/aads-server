@@ -135,6 +135,7 @@ class PCAgent:
             "file_read": file_ops.file_read,
             "file_write": file_ops.file_write,
             "process_list": process.execute,
+            "process_kill": process.process_kill,
             "system_info": system_info.execute,
             "kakao_send": kakao.kakao_send,
             "kakao_read": kakao.kakao_read,
