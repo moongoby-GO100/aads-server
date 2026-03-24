@@ -626,6 +626,14 @@ async def lifespan(app: FastAPI):
 
     _startup_asyncio.create_task(_check_missed_sleep_time())
 
+    # KakaoBot SaaS 스케줄러 시작
+    try:
+        from app.services.kakaobot_scheduler import start_scheduler_tasks
+        start_scheduler_tasks()
+        logger.info("kakaobot_scheduler_started")
+    except Exception as e:
+        logger.warning(f"kakaobot_scheduler_start_failed: {e}")
+
     # Memory Store 초기화 (T-011)
     try:
         await memory_store.initialize()

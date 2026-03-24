@@ -826,3 +826,699 @@ async def aligo_ai_reply_sms(req: AligoAiReplyRequest, background_tasks: Backgro
         "ai_reply": ai_reply,
         "sms_result": result,
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# KakaoBot SaaS Phase 1 — 연락처, 기념일, AI 문구, 템플릿, 예약 발송
+# ══════════════════════════════════════════════════════════════════════════
+
+import json as _json_mod
+from datetime import date, datetime
+
+
+# ── 공통 헬퍼 ──────────────────────────────────────────────────────────
+
+_SAAS_TABLES_CREATED = False
+
+_SAAS_DDL = """
+CREATE TABLE IF NOT EXISTS kakaobot_contacts (
+    id SERIAL PRIMARY KEY,
+    user_id VARCHAR(100) NOT NULL DEFAULT 'default',
+    name VARCHAR(100) NOT NULL,
+    phone VARCHAR(20) NOT NULL,
+    group_name VARCHAR(100) DEFAULT '',
+    relationship VARCHAR(50) DEFAULT '',
+    memo TEXT DEFAULT '',
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS kakaobot_anniversaries (
+    id SERIAL PRIMARY KEY,
+    contact_id INTEGER NOT NULL REFERENCES kakaobot_contacts(id) ON DELETE CASCADE,
+    user_id VARCHAR(100) NOT NULL DEFAULT 'default',
+    title VARCHAR(200) NOT NULL,
+    date DATE NOT NULL,
+    is_lunar BOOLEAN DEFAULT FALSE,
+    recurrence VARCHAR(20) DEFAULT 'yearly',
+    remind_days_before INTEGER DEFAULT 1,
+    auto_send BOOLEAN DEFAULT FALSE,
+    template_id INTEGER DEFAULT NULL,
+    custom_message TEXT DEFAULT '',
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS kakaobot_templates (
+    id SERIAL PRIMARY KEY,
+    user_id VARCHAR(100) NOT NULL DEFAULT 'system',
+    category VARCHAR(50) NOT NULL,
+    title VARCHAR(200) NOT NULL,
+    content TEXT NOT NULL,
+    tone VARCHAR(20) DEFAULT 'friendly',
+    tags JSONB DEFAULT '[]',
+    use_count INTEGER DEFAULT 0,
+    is_system BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS kakaobot_scheduled (
+    id SERIAL PRIMARY KEY,
+    user_id VARCHAR(100) NOT NULL DEFAULT 'default',
+    contact_id INTEGER NOT NULL REFERENCES kakaobot_contacts(id) ON DELETE CASCADE,
+    anniversary_id INTEGER DEFAULT NULL REFERENCES kakaobot_anniversaries(id) ON DELETE SET NULL,
+    template_id INTEGER DEFAULT NULL REFERENCES kakaobot_templates(id) ON DELETE SET NULL,
+    message TEXT NOT NULL,
+    scheduled_at TIMESTAMPTZ NOT NULL,
+    status VARCHAR(20) DEFAULT 'pending',
+    sent_at TIMESTAMPTZ DEFAULT NULL,
+    send_result JSONB DEFAULT '{}',
+    retry_count INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+"""
+
+
+async def _ensure_saas_tables() -> None:
+    """SaaS 테이블 자동 생성 (최초 1회)."""
+    global _SAAS_TABLES_CREATED
+    if _SAAS_TABLES_CREATED:
+        return
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        if pool is None:
+            return
+        async with pool.acquire() as conn:
+            await conn.execute(_SAAS_DDL)
+        _SAAS_TABLES_CREATED = True
+        logger.info("kakaobot_saas: 테이블 생성/확인 완료")
+    except Exception as e:
+        logger.error("kakaobot_saas: 테이블 생성 실패: %s", e)
+
+
+def _pool():
+    from app.core.db_pool import get_pool
+    pool = get_pool()
+    if pool is None:
+        raise HTTPException(status_code=503, detail="DB 미연결")
+    return pool
+
+
+# ── Pydantic 모델 ──────────────────────────────────────────────────────
+
+
+class ContactCreate(BaseModel):
+    """연락처 생성."""
+    name: str = Field(..., min_length=1)
+    phone: str = Field(..., min_length=8)
+    user_id: str = Field(default="default")
+    group_name: str = Field(default="")
+    relationship: str = Field(default="")
+    memo: str = Field(default="")
+
+
+class ContactUpdate(BaseModel):
+    """연락처 수정."""
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    group_name: Optional[str] = None
+    relationship: Optional[str] = None
+    memo: Optional[str] = None
+
+
+class AnniversaryCreate(BaseModel):
+    """기념일 생성."""
+    contact_id: int
+    title: str = Field(..., min_length=1)
+    date: str = Field(..., description="YYYY-MM-DD")
+    user_id: str = Field(default="default")
+    is_lunar: bool = Field(default=False)
+    recurrence: str = Field(default="yearly")
+    remind_days_before: int = Field(default=1, ge=0, le=30)
+    auto_send: bool = Field(default=False)
+    template_id: Optional[int] = None
+    custom_message: str = Field(default="")
+
+
+class AnniversaryUpdate(BaseModel):
+    """기념일 수정."""
+    title: Optional[str] = None
+    date: Optional[str] = None
+    is_lunar: Optional[bool] = None
+    recurrence: Optional[str] = None
+    remind_days_before: Optional[int] = None
+    auto_send: Optional[bool] = None
+    template_id: Optional[int] = None
+    custom_message: Optional[str] = None
+
+
+class AiGenerateRequest(BaseModel):
+    """AI 문구 생성 요청."""
+    occasion: str = Field(..., description="기념일/상황")
+    recipient_name: str = Field(..., description="수신자 이름")
+    relationship: str = Field(default="")
+    tone: str = Field(default="friendly")
+    extra_context: str = Field(default="")
+    count: int = Field(default=3, ge=1, le=5)
+
+
+class AiImproveRequest(BaseModel):
+    """AI 문구 개선 요청."""
+    original: str = Field(..., description="원본 메시지")
+    instruction: str = Field(default="", description="수정 지시")
+    tone: str = Field(default="friendly")
+
+
+class TemplateCreate(BaseModel):
+    """템플릿 생성."""
+    category: str = Field(...)
+    title: str = Field(...)
+    content: str = Field(...)
+    user_id: str = Field(default="default")
+    tone: str = Field(default="friendly")
+    tags: List[str] = Field(default=[])
+
+
+class TemplateUpdate(BaseModel):
+    """템플릿 수정."""
+    category: Optional[str] = None
+    title: Optional[str] = None
+    content: Optional[str] = None
+    tone: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+
+class ScheduledCreate(BaseModel):
+    """예약 발송 생성."""
+    user_id: str = Field(default="default")
+    contact_id: int
+    message: str = Field(...)
+    scheduled_at: str = Field(..., description="ISO datetime")
+    anniversary_id: Optional[int] = None
+    template_id: Optional[int] = None
+
+
+# ── 연락처 CRUD ────────────────────────────────────────────────────────
+
+
+@router.post("/contacts")
+async def create_contact(req: ContactCreate):
+    """연락처 생성."""
+    await _ensure_saas_tables()
+    pool = _pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """INSERT INTO kakaobot_contacts (user_id, name, phone, group_name, relationship, memo)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               RETURNING id, user_id, name, phone, group_name, relationship, memo, created_at""",
+            req.user_id, req.name, req.phone, req.group_name, req.relationship, req.memo,
+        )
+    return dict(row)
+
+
+@router.get("/contacts")
+async def list_contacts(
+    user_id: str = Query(default="default"),
+    group_name: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    """연락처 목록 조회."""
+    await _ensure_saas_tables()
+    pool = _pool()
+    async with pool.acquire() as conn:
+        if group_name:
+            rows = await conn.fetch(
+                """SELECT id, name, phone, group_name, relationship, memo, created_at, updated_at
+                   FROM kakaobot_contacts
+                   WHERE user_id = $1 AND group_name = $2
+                   ORDER BY name ASC LIMIT $3 OFFSET $4""",
+                user_id, group_name, limit, offset,
+            )
+        else:
+            rows = await conn.fetch(
+                """SELECT id, name, phone, group_name, relationship, memo, created_at, updated_at
+                   FROM kakaobot_contacts
+                   WHERE user_id = $1
+                   ORDER BY name ASC LIMIT $2 OFFSET $3""",
+                user_id, limit, offset,
+            )
+    return {"count": len(rows), "contacts": [dict(r) for r in rows]}
+
+
+@router.put("/contacts/{contact_id}")
+async def update_contact(contact_id: int, req: ContactUpdate):
+    """연락처 수정."""
+    await _ensure_saas_tables()
+    pool = _pool()
+    sets = []
+    vals = []
+    idx = 1
+    for field in ("name", "phone", "group_name", "relationship", "memo"):
+        v = getattr(req, field, None)
+        if v is not None:
+            sets.append(f"{field} = ${idx}")
+            vals.append(v)
+            idx += 1
+    if not sets:
+        raise HTTPException(status_code=400, detail="수정할 필드 없음")
+    sets.append(f"updated_at = NOW()")
+    vals.append(contact_id)
+    query = f"UPDATE kakaobot_contacts SET {', '.join(sets)} WHERE id = ${idx} RETURNING *"
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(query, *vals)
+    if row is None:
+        raise HTTPException(status_code=404, detail="연락처를 찾을 수 없습니다")
+    return dict(row)
+
+
+@router.delete("/contacts/{contact_id}")
+async def delete_contact(contact_id: int):
+    """연락처 삭제 (연관 기념일도 CASCADE 삭제)."""
+    await _ensure_saas_tables()
+    pool = _pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM kakaobot_contacts WHERE id = $1", contact_id,
+        )
+    if result == "DELETE 0":
+        raise HTTPException(status_code=404, detail="연락처를 찾을 수 없습니다")
+    return {"status": "deleted", "id": contact_id}
+
+
+# ── 기념일 CRUD ────────────────────────────────────────────────────────
+
+
+@router.post("/anniversaries")
+async def create_anniversary(req: AnniversaryCreate):
+    """기념일 생성."""
+    await _ensure_saas_tables()
+    pool = _pool()
+    try:
+        anniv_date = date.fromisoformat(req.date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="날짜 형식이 잘못되었습니다 (YYYY-MM-DD)")
+    async with pool.acquire() as conn:
+        # contact 존재 확인
+        exists = await conn.fetchval(
+            "SELECT 1 FROM kakaobot_contacts WHERE id = $1", req.contact_id,
+        )
+        if not exists:
+            raise HTTPException(status_code=404, detail="연락처를 찾을 수 없습니다")
+        row = await conn.fetchrow(
+            """INSERT INTO kakaobot_anniversaries
+               (contact_id, user_id, title, date, is_lunar, recurrence,
+                remind_days_before, auto_send, template_id, custom_message)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+               RETURNING *""",
+            req.contact_id, req.user_id, req.title, anniv_date,
+            req.is_lunar, req.recurrence, req.remind_days_before,
+            req.auto_send, req.template_id, req.custom_message,
+        )
+    return dict(row)
+
+
+@router.get("/anniversaries")
+async def list_anniversaries(
+    user_id: str = Query(default="default"),
+    contact_id: Optional[int] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """기념일 목록 조회."""
+    await _ensure_saas_tables()
+    pool = _pool()
+    async with pool.acquire() as conn:
+        if contact_id is not None:
+            rows = await conn.fetch(
+                """SELECT a.*, c.name AS contact_name, c.phone AS contact_phone
+                   FROM kakaobot_anniversaries a
+                   JOIN kakaobot_contacts c ON c.id = a.contact_id
+                   WHERE a.user_id = $1 AND a.contact_id = $2
+                   ORDER BY a.date ASC LIMIT $3""",
+                user_id, contact_id, limit,
+            )
+        else:
+            rows = await conn.fetch(
+                """SELECT a.*, c.name AS contact_name, c.phone AS contact_phone
+                   FROM kakaobot_anniversaries a
+                   JOIN kakaobot_contacts c ON c.id = a.contact_id
+                   WHERE a.user_id = $1
+                   ORDER BY a.date ASC LIMIT $2""",
+                user_id, limit,
+            )
+    return {"count": len(rows), "anniversaries": [dict(r) for r in rows]}
+
+
+@router.get("/anniversaries/upcoming")
+async def upcoming_anniversaries(
+    user_id: str = Query(default="default"),
+    days: int = Query(default=30, ge=1, le=365),
+):
+    """다가오는 기념일 조회 (N일 이내)."""
+    await _ensure_saas_tables()
+    pool = _pool()
+    today = date.today()
+    async with pool.acquire() as conn:
+        # 올해/내년 기념일 중 N일 이내 것
+        rows = await conn.fetch(
+            """SELECT a.*, c.name AS contact_name, c.phone AS contact_phone
+               FROM kakaobot_anniversaries a
+               JOIN kakaobot_contacts c ON c.id = a.contact_id
+               WHERE a.user_id = $1
+               ORDER BY a.date ASC""",
+            user_id,
+        )
+    # 올해 날짜로 변환하여 N일 이내 필터
+    upcoming = []
+    for r in rows:
+        d = dict(r)
+        try:
+            this_year = r["date"].replace(year=today.year)
+        except ValueError:
+            continue
+        diff = (this_year - today).days
+        if diff < 0:
+            # 올해 지났으면 내년
+            try:
+                this_year = r["date"].replace(year=today.year + 1)
+            except ValueError:
+                continue
+            diff = (this_year - today).days
+        if 0 <= diff <= days:
+            d["days_until"] = diff
+            d["next_date"] = str(this_year)
+            upcoming.append(d)
+
+    upcoming.sort(key=lambda x: x["days_until"])
+    return {"count": len(upcoming), "upcoming": upcoming}
+
+
+@router.put("/anniversaries/{anniversary_id}")
+async def update_anniversary(anniversary_id: int, req: AnniversaryUpdate):
+    """기념일 수정."""
+    await _ensure_saas_tables()
+    pool = _pool()
+    sets = []
+    vals = []
+    idx = 1
+    for field in ("title", "is_lunar", "recurrence", "remind_days_before",
+                   "auto_send", "template_id", "custom_message"):
+        v = getattr(req, field, None)
+        if v is not None:
+            sets.append(f"{field} = ${idx}")
+            vals.append(v)
+            idx += 1
+    if req.date is not None:
+        try:
+            anniv_date = date.fromisoformat(req.date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="날짜 형식 오류")
+        sets.append(f"date = ${idx}")
+        vals.append(anniv_date)
+        idx += 1
+    if not sets:
+        raise HTTPException(status_code=400, detail="수정할 필드 없음")
+    sets.append("updated_at = NOW()")
+    vals.append(anniversary_id)
+    query = f"UPDATE kakaobot_anniversaries SET {', '.join(sets)} WHERE id = ${idx} RETURNING *"
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(query, *vals)
+    if row is None:
+        raise HTTPException(status_code=404, detail="기념일을 찾을 수 없습니다")
+    return dict(row)
+
+
+@router.delete("/anniversaries/{anniversary_id}")
+async def delete_anniversary(anniversary_id: int):
+    """기념일 삭제."""
+    await _ensure_saas_tables()
+    pool = _pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM kakaobot_anniversaries WHERE id = $1", anniversary_id,
+        )
+    if result == "DELETE 0":
+        raise HTTPException(status_code=404, detail="기념일을 찾을 수 없습니다")
+    return {"status": "deleted", "id": anniversary_id}
+
+
+# ── AI 문구 생성 ───────────────────────────────────────────────────────
+
+
+@router.post("/ai/generate")
+async def ai_generate(req: AiGenerateRequest):
+    """AI 메시지 후보 생성 (3개 기본)."""
+    from app.services.kakaobot_ai import generate_messages
+
+    candidates = await generate_messages(
+        occasion=req.occasion,
+        recipient_name=req.recipient_name,
+        relationship=req.relationship,
+        tone=req.tone,
+        extra_context=req.extra_context,
+        count=req.count,
+    )
+    return {"count": len(candidates), "candidates": candidates}
+
+
+@router.post("/ai/improve")
+async def ai_improve(req: AiImproveRequest):
+    """기존 메시지 개선."""
+    from app.services.kakaobot_ai import improve_message
+
+    improved = await improve_message(
+        original=req.original,
+        instruction=req.instruction,
+        tone=req.tone,
+    )
+    return {"original": req.original, "improved": improved}
+
+
+# ── 문구 템플릿 CRUD ──────────────────────────────────────────────────
+
+
+@router.post("/templates")
+async def create_template(req: TemplateCreate):
+    """템플릿 생성."""
+    await _ensure_saas_tables()
+    pool = _pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """INSERT INTO kakaobot_templates
+               (user_id, category, title, content, tone, tags)
+               VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+               RETURNING *""",
+            req.user_id, req.category, req.title, req.content,
+            req.tone, _json_mod.dumps(req.tags, ensure_ascii=False),
+        )
+    return dict(row)
+
+
+@router.get("/templates")
+async def list_templates(
+    user_id: Optional[str] = Query(default=None),
+    category: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """템플릿 목록 조회."""
+    await _ensure_saas_tables()
+    pool = _pool()
+    conditions = []
+    vals = []
+    idx = 1
+
+    if user_id is not None:
+        conditions.append(f"(user_id = ${idx} OR is_system = TRUE)")
+        vals.append(user_id)
+        idx += 1
+    if category is not None:
+        conditions.append(f"category = ${idx}")
+        vals.append(category)
+        idx += 1
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    vals.append(limit)
+    query = f"""SELECT * FROM kakaobot_templates {where}
+                ORDER BY is_system DESC, use_count DESC, created_at DESC LIMIT ${idx}"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(query, *vals)
+    return {"count": len(rows), "templates": [dict(r) for r in rows]}
+
+
+@router.put("/templates/{template_id}")
+async def update_template(template_id: int, req: TemplateUpdate):
+    """템플릿 수정."""
+    await _ensure_saas_tables()
+    pool = _pool()
+    sets = []
+    vals = []
+    idx = 1
+    for field in ("category", "title", "content", "tone"):
+        v = getattr(req, field, None)
+        if v is not None:
+            sets.append(f"{field} = ${idx}")
+            vals.append(v)
+            idx += 1
+    if req.tags is not None:
+        sets.append(f"tags = ${idx}::jsonb")
+        vals.append(_json_mod.dumps(req.tags, ensure_ascii=False))
+        idx += 1
+    if not sets:
+        raise HTTPException(status_code=400, detail="수정할 필드 없음")
+    sets.append("updated_at = NOW()")
+    vals.append(template_id)
+    query = f"UPDATE kakaobot_templates SET {', '.join(sets)} WHERE id = ${idx} RETURNING *"
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(query, *vals)
+    if row is None:
+        raise HTTPException(status_code=404, detail="템플릿을 찾을 수 없습니다")
+    return dict(row)
+
+
+@router.delete("/templates/{template_id}")
+async def delete_template(template_id: int):
+    """템플릿 삭제."""
+    await _ensure_saas_tables()
+    pool = _pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM kakaobot_templates WHERE id = $1 AND is_system = FALSE",
+            template_id,
+        )
+    if result == "DELETE 0":
+        raise HTTPException(status_code=404, detail="템플릿을 찾을 수 없거나 시스템 템플릿입니다")
+    return {"status": "deleted", "id": template_id}
+
+
+@router.post("/templates/seed")
+async def seed_templates(user_id: str = Query(default="system")):
+    """기본 20개 시드 템플릿 삽입."""
+    await _ensure_saas_tables()
+    pool = _pool()
+
+    _SEED_TEMPLATES = [
+        ("birthday", "생일 축하 - 따뜻한", "{name}님, 생일 축하드려요! 🎂 올 한 해도 건강하고 행복한 일만 가득하시길 바랍니다 ✨", "friendly"),
+        ("birthday", "생일 축하 - 격식", "{name}님, 생신을 진심으로 축하드립니다. 뜻깊은 하루 보내시길 바랍니다.", "formal"),
+        ("birthday", "생일 축하 - 유머", "{name}님! 생일 축하해요 🎉 나이는 숫자일 뿐! (근데 그 숫자가 좀... ㅎㅎ) 행복한 하루 보내세요! 🎈", "witty"),
+        ("wedding_anniversary", "결혼기념일", "{name}님, 결혼기념일을 축하드립니다! 💕 변함없는 사랑으로 더 행복한 날들 만들어가시길 바랍니다.", "friendly"),
+        ("wedding_anniversary", "결혼기념일 - 격식", "{name}님, 결혼기념일을 진심으로 축하드립니다. 두 분의 앞날에 건강과 행복이 함께하시기를 기원합니다.", "formal"),
+        ("new_year", "새해 인사 - 따뜻한", "{name}님, 새해 복 많이 받으세요! 🎊 올해도 좋은 일만 가득하시길 바랍니다 😊", "friendly"),
+        ("new_year", "새해 인사 - 격식", "{name}님, 새해를 맞이하여 건강과 행복이 가득하시길 기원합니다. 올 한 해도 잘 부탁드립니다.", "formal"),
+        ("chuseok", "추석 인사", "{name}님, 풍요로운 한가위 보내세요! 🌕 가족과 함께 따뜻한 명절 되시길 바랍니다 🍂", "friendly"),
+        ("chuseok", "추석 인사 - 격식", "{name}님, 추석 명절을 맞이하여 가정에 건강과 행복이 깃드시길 기원합니다.", "formal"),
+        ("seollal", "설날 인사", "{name}님, 설날 새해 복 많이 받으세요! 🧧 올해도 건강하고 좋은 일만 가득하시길! 😊", "friendly"),
+        ("thank_you", "감사 인사", "{name}님, 항상 감사드립니다 🙏 덕분에 큰 힘이 됩니다. 좋은 하루 보내세요! 😊", "friendly"),
+        ("thank_you", "감사 인사 - 격식", "{name}님, 평소 베풀어주시는 은혜에 깊이 감사드립니다. 건강하시고 늘 좋은 일만 함께하시기를 바랍니다.", "formal"),
+        ("congratulation", "축하 메시지", "{name}님, 축하드려요! 🎉 정말 기쁜 소식이네요. 앞으로도 좋은 일만 가득하시길! ✨", "friendly"),
+        ("get_well", "쾌유 기원", "{name}님, 빨리 나으시길 바랍니다 🍀 푹 쉬시고 건강 회복하세요. 응원합니다! 💪", "friendly"),
+        ("condolence", "위로 메시지", "{name}님, 힘든 시간을 보내고 계실 텐데 진심으로 위로를 전합니다. 곁에서 응원하겠습니다.", "formal"),
+        ("housewarming", "집들이 축하", "{name}님, 새 보금자리를 축하드려요! 🏠 새 집에서 행복한 추억 많이 만드세요! 🎊", "friendly"),
+        ("promotion", "승진 축하", "{name}님, 승진을 진심으로 축하드립니다! 🎊 그동안의 노력이 빛을 발한 거예요. 앞으로도 승승장구하세요! 🚀", "friendly"),
+        ("graduation", "졸업 축하", "{name}님, 졸업을 축하드려요! 🎓 새로운 시작을 응원합니다. 멋진 미래가 펼쳐질 거예요! ✨", "friendly"),
+        ("business", "거래처 안부", "{name}님, 안녕하세요. 항상 좋은 협력 관계에 감사드립니다. 번창하시길 기원합니다.", "formal"),
+        ("christmas", "크리스마스", "{name}님, 메리 크리스마스! 🎄 따뜻하고 행복한 성탄절 보내세요 🎅✨", "friendly"),
+    ]
+
+    async with pool.acquire() as conn:
+        # 이미 시드된 경우 스킵
+        existing = await conn.fetchval(
+            "SELECT COUNT(*) FROM kakaobot_templates WHERE is_system = TRUE",
+        )
+        if existing and existing >= 20:
+            return {"status": "already_seeded", "count": existing}
+
+        count = 0
+        for cat, title, content, tone in _SEED_TEMPLATES:
+            try:
+                await conn.execute(
+                    """INSERT INTO kakaobot_templates
+                       (user_id, category, title, content, tone, is_system)
+                       VALUES ($1, $2, $3, $4, $5, TRUE)
+                       ON CONFLICT DO NOTHING""",
+                    user_id, cat, title, content, tone,
+                )
+                count += 1
+            except Exception as e:
+                logger.warning("seed template skip: %s", e)
+
+    return {"status": "seeded", "count": count}
+
+
+# ── 예약 발송 API ─────────────────────────────────────────────────────
+
+
+@router.post("/scheduled")
+async def create_scheduled(req: ScheduledCreate):
+    """예약 발송 생성."""
+    await _ensure_saas_tables()
+    pool = _pool()
+    try:
+        sched_dt = datetime.fromisoformat(req.scheduled_at)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="scheduled_at 형식 오류 (ISO datetime)")
+    async with pool.acquire() as conn:
+        exists = await conn.fetchval(
+            "SELECT 1 FROM kakaobot_contacts WHERE id = $1", req.contact_id,
+        )
+        if not exists:
+            raise HTTPException(status_code=404, detail="연락처를 찾을 수 없습니다")
+        row = await conn.fetchrow(
+            """INSERT INTO kakaobot_scheduled
+               (user_id, contact_id, anniversary_id, template_id, message, scheduled_at, status)
+               VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+               RETURNING *""",
+            req.user_id, req.contact_id, req.anniversary_id,
+            req.template_id, req.message, sched_dt,
+        )
+    return dict(row)
+
+
+@router.get("/scheduled")
+async def list_scheduled(
+    user_id: str = Query(default="default"),
+    status: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+):
+    """예약 발송 목록 조회."""
+    await _ensure_saas_tables()
+    pool = _pool()
+    async with pool.acquire() as conn:
+        if status:
+            rows = await conn.fetch(
+                """SELECT s.*, c.name AS contact_name, c.phone AS contact_phone
+                   FROM kakaobot_scheduled s
+                   JOIN kakaobot_contacts c ON c.id = s.contact_id
+                   WHERE s.user_id = $1 AND s.status = $2
+                   ORDER BY s.scheduled_at ASC LIMIT $3""",
+                user_id, status, limit,
+            )
+        else:
+            rows = await conn.fetch(
+                """SELECT s.*, c.name AS contact_name, c.phone AS contact_phone
+                   FROM kakaobot_scheduled s
+                   JOIN kakaobot_contacts c ON c.id = s.contact_id
+                   WHERE s.user_id = $1
+                   ORDER BY s.scheduled_at DESC LIMIT $2""",
+                user_id, limit,
+            )
+    return {"count": len(rows), "scheduled": [dict(r) for r in rows]}
+
+
+@router.delete("/scheduled/{scheduled_id}")
+async def cancel_scheduled(scheduled_id: int):
+    """예약 발송 취소."""
+    await _ensure_saas_tables()
+    pool = _pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """UPDATE kakaobot_scheduled
+               SET status = 'cancelled', updated_at = NOW()
+               WHERE id = $1 AND status = 'pending'
+               RETURNING id, status""",
+            scheduled_id,
+        )
+    if row is None:
+        raise HTTPException(status_code=404, detail="예약을 찾을 수 없거나 이미 처리됨")
+    return {"status": "cancelled", "id": scheduled_id}
