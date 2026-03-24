@@ -16,7 +16,8 @@ from typing import Any, Dict
 import websockets
 
 # 명령 모듈 임포트
-from commands import shell, screenshot, file_ops, process, system_info, kakao, input_control
+from commands import shell, screenshot, file_ops, process, system_info, kakao
+from commands import updater
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,6 +31,7 @@ SERVER_URL = os.getenv("AADS_SERVER_URL", "wss://aads.newtalk.kr/api/v1/pc-agent
 AGENT_SECRET = os.getenv("PC_AGENT_SECRET", "")
 HEARTBEAT_INTERVAL = 25  # 초
 RECONNECT_DELAY = 5  # 초
+AUTO_UPDATE_INTERVAL = 60  # 초 — 1분마다 git 변경 확인
 
 
 class PCAgent:
@@ -73,8 +75,9 @@ class PCAgent:
                 },
             }))
 
-            # 하트비트 태스크 시작
+            # 하트비트 + 자동 업데이트 태스크 시작
             heartbeat_task = asyncio.create_task(self._heartbeat(ws))
+            update_task = asyncio.create_task(self._auto_update_loop(ws))
 
             try:
                 async for raw in ws:
@@ -89,6 +92,7 @@ class PCAgent:
                         logger.debug("알 수 없는 메시지: %s", msg_type)
             finally:
                 heartbeat_task.cancel()
+                update_task.cancel()
 
     async def _heartbeat(self, ws: Any) -> None:
         """주기적 하트비트 전송."""
@@ -102,6 +106,26 @@ class PCAgent:
                 await asyncio.sleep(HEARTBEAT_INTERVAL)
             except Exception:
                 break
+
+    async def _auto_update_loop(self, ws: Any) -> None:
+        """1분마다 git 변경 확인 → 변경 있으면 자동 pull + 재시작."""
+        await asyncio.sleep(30)  # 시작 후 30초 대기
+        while True:
+            try:
+                has_update = await updater.check_for_updates()
+                if has_update:
+                    logger.info("자동 업데이트 감지! git pull + 재시작 진행")
+                    # 서버에 업데이트 알림
+                    await ws.send(json.dumps({
+                        "type": "status",
+                        "id": str(uuid.uuid4()),
+                        "payload": {"message": "자동 업데이트 감지, 재시작 중..."},
+                    }))
+                    await updater.execute({"force": True})
+                    return  # 재시작되므로 여기까지 도달 안 함
+            except Exception as e:
+                logger.debug("자동 업데이트 확인 실패: %s", e)
+            await asyncio.sleep(AUTO_UPDATE_INTERVAL)
 
     async def _handle_command(self, ws: Any, msg: Dict[str, Any]) -> None:
         """명령 실행 및 결과 반환."""
@@ -139,13 +163,7 @@ class PCAgent:
             "system_info": system_info.execute,
             "kakao_send": kakao.kakao_send,
             "kakao_read": kakao.kakao_read,
-            "mouse_click": input_control.mouse_click,
-            "mouse_move": input_control.mouse_move,
-            "mouse_scroll": input_control.mouse_scroll,
-            "mouse_drag": input_control.mouse_drag,
-            "keyboard_type": input_control.keyboard_type,
-            "keyboard_hotkey": input_control.keyboard_hotkey,
-            "keyboard_press": input_control.keyboard_press,
+            "self_update": updater.execute,
         }
 
         handler = dispatch.get(command_type)

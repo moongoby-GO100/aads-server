@@ -691,8 +691,9 @@ async def _run_video_qa_llm(frames_b64: List[str], prompt: str) -> str:
     # Fallback: Claude
     try:
         import anthropic
-        if not _os2.getenv("ANTHROPIC_AUTH_TOKEN", "").strip():
-            raise ValueError("ANTHROPIC_AUTH_TOKEN not set")
+        api_key = _os2.getenv("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY not set")
         from app.core.anthropic_client import get_client as _get_vqa_client
         client = _get_vqa_client()
 

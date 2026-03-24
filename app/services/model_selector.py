@@ -60,18 +60,17 @@ LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
 _CLAUDE_RELAY_URL = os.getenv("CLAUDE_RELAY_URL", "http://host.docker.internal:8199")
 _CLAUDE_CLI_ENABLED = os.getenv("CLAUDE_CLI_ENABLED", "true").lower() == "true"
 
-# Anthropic OAuth만 사용 (채팅 설정 / .env) — API 키 변수 미사용
-_env_ms = os.environ
-_KEY_GMAIL = (_env_ms.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
-_KEY_NAVER = (_env_ms.get("ANTHROPIC_AUTH_TOKEN_2") or "").strip()
+# Agent SDK OAuth 토큰 자동 교대
+_KEY_NAVER = os.getenv("ANTHROPIC_API_KEY", "")
+_KEY_GMAIL = os.getenv("ANTHROPIC_API_KEY_FALLBACK", "")
 _KEY_LABELS = {}  # {key_prefix: label}
-if _KEY_GMAIL:
-    _KEY_LABELS[_KEY_GMAIL[:20]] = "Gmail"
 if _KEY_NAVER:
     _KEY_LABELS[_KEY_NAVER[:20]] = "Naver"
+if _KEY_GMAIL:
+    _KEY_LABELS[_KEY_GMAIL[:20]] = "Gmail"
 
-# 키 순서 (런타임 변경 가능) — 기본 Gmail(1순위) → Naver 폴백
-_ANTHROPIC_KEYS = [k for k in [_KEY_GMAIL, _KEY_NAVER] if k]
+# 키 순서 (런타임 변경 가능)
+_ANTHROPIC_KEYS = [k for k in [_KEY_NAVER, _KEY_GMAIL] if k]
 
 
 def get_key_order() -> List[Dict[str, str]]:
@@ -95,26 +94,6 @@ def set_key_order(primary: str) -> bool:
         logger.info(f"key_order_changed: Gmail first")
         return True
     return False
-
-# CLI Relay / Agent SDK — OAuth 자동 전환 시 에러 매칭 (LiteLLM 경로와 별개)
-_CLAUDE_OAUTH_RETRY_PATTERNS = (
-    "api error:", "overloaded", "529", "503",
-    "authentication_failed", "401", "unauthorized",
-    "rate_limit", "429", "rate limit",
-    "credit", "402",
-)
-
-# 보조 토큰으로 넘길 만한 HTTP 상태 (릴레이 프록시/게이트웨이)
-_CLAUDE_RELAY_OAUTH_SWITCH_HTTP = frozenset({401, 402, 429, 503, 529})
-
-
-def _cli_oauth_error_retryable(message: str) -> bool:
-    """429/401/529 등이면 보조 OAuth(ANTHROPIC_AUTH_TOKEN_2) 재시도 후보."""
-    if not message:
-        return False
-    low = message.lower()
-    return any(p in low for p in _CLAUDE_OAUTH_RETRY_PATTERNS)
-
 
 # AADS session_id → CLI session_id 매핑 (대화 이어가기용)
 _cli_session_map: Dict[str, str] = {}  # {aads_session_id: cli_session_id}
@@ -643,41 +622,47 @@ async def _stream_cli_relay(
     tools: Optional[List[Dict[str, Any]]] = None,
     session_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    """CLI Relay 스트리밍. 요청에 oauth_token을 실어 AUTH_TOKEN ↔ AUTH_TOKEN_2 순서 폴백.
+    """CLI Relay 서버(host.docker.internal:8199)를 통한 스트리밍.
 
-    사용자에게 delta/tool 등이 나가기 전에 429/401/529류로 끝나면 다음 OAuth로 재시도.
+    호스트 최신 CLI를 사용하므로 OAuth 인증 안정성이 높음.
+    NDJSON 응답을 파싱하여 AADS SSE 이벤트로 변환.
     """
     sdk_model = _ANTHROPIC_MODEL_ID.get(model, model)
 
-    if not _ANTHROPIC_KEYS:
-        yield {"type": "model_info", "model": sdk_model}
-        yield {"type": "error", "content": "No Anthropic OAuth tokens configured"}
-        return
-
+    # 세션 이어가기 여부
     _has_resume = bool(_cli_session_map.get(session_id)) if session_id else False
     formatted = _format_messages_for_llm(messages, has_resume=_has_resume)
 
-    req_body_base: Dict[str, Any] = {
+    req_body: Dict[str, Any] = {
         "model": model,
         "system_prompt": system_prompt,
         "session_id": session_id or "",
     }
+
     if isinstance(formatted, list):
-        req_body_base["content_blocks"] = formatted
-        req_body_base["messages_text"] = ""
+        # 이미지 포함: content block 배열로 전달 → relay가 --input-format stream-json 사용
+        req_body["content_blocks"] = formatted
+        req_body["messages_text"] = ""  # 하위 호환
     else:
-        req_body_base["messages_text"] = formatted
+        req_body["messages_text"] = formatted
 
     yield {"type": "model_info", "model": sdk_model}
+
+    # CLI가 에러를 텍스트로 반환하는 패턴 감지 (529, 401 등)
+    _CLI_ERROR_PATTERNS = [
+        "api error:", "overloaded", "529", "503",
+        "authentication_failed", "401", "unauthorized",
+        "rate_limit", "429", "rate limit",
+        "credit", "402",
+    ]
 
     full_text = ""
     _tool_id_to_name: Dict[str, str] = {}
     _captured_cli_sid = _cli_session_map.get(session_id, "") if session_id else ""
-    keys = list(_ANTHROPIC_KEYS)
-    n_keys = len(keys)
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
+            # Health check first (빠른 실패)
             try:
                 hc = await client.get(f"{_CLAUDE_RELAY_URL}/health", timeout=5.0)
                 if hc.status_code != 200:
@@ -687,161 +672,87 @@ async def _stream_cli_relay(
                 yield {"type": "error", "content": f"CLI Relay unreachable: {hc_err}"}
                 return
 
-            last_err = ""
-            succeeded = False
+            async with client.stream(
+                "POST",
+                f"{_CLAUDE_RELAY_URL}/stream",
+                json=req_body,
+                timeout=httpx.Timeout(600.0, connect=10.0),
+            ) as resp:
+                if resp.status_code != 200:
+                    body = await resp.aread()
+                    yield {"type": "error", "content": f"CLI Relay {resp.status_code}: {body.decode()[:200]}"}
+                    return
 
-            for tok_idx, oauth_tok in enumerate(keys):
-                progress_made = False
-                account_switch = False
-
-                if tok_idx > 0 and session_id:
+                async for line in resp.aiter_lines():
+                    line = line.strip()
+                    if not line:
+                        continue
                     try:
-                        dresp = await client.delete(
-                            f"{_CLAUDE_RELAY_URL}/sessions/{session_id}",
-                            timeout=5.0,
-                        )
-                        logger.info(
-                            "cli_relay_session_cleared: aads=%s http=%s (oauth switch)",
-                            session_id[:8],
-                            dresp.status_code,
-                        )
-                    except Exception as ex:
-                        logger.warning("cli_relay_session_clear_failed: %s", ex)
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
 
-                req_body = dict(req_body_base)
-                req_body["oauth_token"] = oauth_tok
-                if tok_idx > 0:
-                    req_body["ignore_cli_resume"] = True
+                    # result 이벤트에서 is_error 체크 (CLI가 529 등으로 실패 시)
+                    if event.get("type") == "result" and event.get("is_error"):
+                        error_text = event.get("result", "CLI error")
+                        logger.warning(f"cli_relay_result_error: {error_text[:100]}")
+                        yield {"type": "error", "content": error_text}
+                        return
 
-                try:
-                    async with client.stream(
-                        "POST",
-                        f"{_CLAUDE_RELAY_URL}/stream",
-                        json=req_body,
-                        timeout=httpx.Timeout(600.0, connect=10.0),
-                    ) as resp:
-                        if resp.status_code != 200:
-                            raw = await resp.aread()
-                            last_err = "CLI Relay %s: %s" % (
-                                resp.status_code,
-                                raw.decode("utf-8", errors="replace")[:200],
-                            )
-                            if (
-                                resp.status_code in _CLAUDE_RELAY_OAUTH_SWITCH_HTTP
-                                and tok_idx < n_keys - 1
-                                and not progress_made
-                            ):
-                                logger.warning(
-                                    "cli_relay_oauth_switch: HTTP %s token_idx=%s",
-                                    resp.status_code,
-                                    tok_idx,
-                                )
-                                account_switch = True
-                            else:
-                                yield {"type": "error", "content": last_err}
-                                return
-                        else:
-                            async for line in resp.aiter_lines():
-                                line = line.strip()
-                                if not line:
-                                    continue
-                                try:
-                                    event = json.loads(line)
-                                except json.JSONDecodeError:
-                                    continue
+                    # _map_cli_event 재사용하여 NDJSON → AADS 이벤트 변환
+                    mapped = _map_cli_event(event)
+                    if mapped is None:
+                        # init 이벤트에서 session_id 캡처
+                        evt_type = event.get("type", "")
+                        if evt_type == "system" and event.get("subtype") == "init":
+                            sid = event.get("session_id")
+                            if sid:
+                                _captured_cli_sid = sid
+                        continue
 
-                                if event.get("type") == "result" and event.get("is_error"):
-                                    error_text = str(event.get("result", "CLI error"))
-                                    last_err = error_text
-                                    logger.warning("cli_relay_result_error: %s", error_text[:100])
-                                    if (
-                                        _cli_oauth_error_retryable(error_text)
-                                        and tok_idx < n_keys - 1
-                                        and not progress_made
-                                    ):
-                                        logger.warning(
-                                            "cli_relay_oauth_switch: result_error token_idx=%s",
-                                            tok_idx,
-                                        )
-                                        account_switch = True
-                                        break
-                                    yield {"type": "error", "content": error_text}
-                                    return
+                    for aads_evt in mapped:
+                        evt_type = aads_evt.get("type", "")
 
-                                mapped = _map_cli_event(event)
-                                if mapped is None:
-                                    evt_type = event.get("type", "")
-                                    if evt_type == "system" and event.get("subtype") == "init":
-                                        sid = event.get("session_id")
-                                        if sid:
-                                            _captured_cli_sid = sid
-                                    continue
+                        # tool_use에서 tool_id→name 매핑 저장
+                        if evt_type == "tool_use":
+                            tid = aads_evt.get("tool_use_id", "")
+                            tname = aads_evt.get("tool_name", "")
+                            if tid and tname:
+                                _tool_id_to_name[tid] = tname
 
-                                for aads_evt in mapped:
-                                    evt_type = aads_evt.get("type", "")
+                        # tool_result에 tool_name 복원
+                        if evt_type == "tool_result" and not aads_evt.get("tool_name"):
+                            tid = aads_evt.get("tool_use_id", "")
+                            aads_evt["tool_name"] = _tool_id_to_name.get(tid, "")
 
-                                    if evt_type == "tool_use":
-                                        tid = aads_evt.get("tool_use_id", "")
-                                        tname = aads_evt.get("tool_name", "")
-                                        if tid and tname:
-                                            _tool_id_to_name[tid] = tname
+                        # delta 텍스트 누적 (에러 패턴 검사는 result.is_error로 대체)
+                        if evt_type == "delta":
+                            delta_text = aads_evt.get("content", "")
+                            full_text += delta_text
 
-                                    if evt_type == "tool_result" and not aads_evt.get("tool_name"):
-                                        tid = aads_evt.get("tool_use_id", "")
-                                        aads_evt["tool_name"] = _tool_id_to_name.get(tid, "")
+                        # done 이벤트에서 session_id 캡처 (result 이벤트)
+                        if evt_type == "done":
+                            result_sid = event.get("session_id")
+                            if result_sid:
+                                _captured_cli_sid = result_sid
 
-                                    if evt_type == "delta":
-                                        delta_text = aads_evt.get("content", "") or ""
-                                        full_text += delta_text
-                                        if delta_text.strip():
-                                            progress_made = True
-                                    elif evt_type in ("tool_use", "tool_result", "thinking", "done"):
-                                        progress_made = True
-
-                                    if evt_type == "done":
-                                        result_sid = event.get("session_id")
-                                        if result_sid:
-                                            _captured_cli_sid = result_sid
-
-                                    yield aads_evt
-
-                except httpx.ConnectError as e:
-                    yield {"type": "error", "content": "CLI Relay connect failed: %s" % e}
-                    return
-                except httpx.ReadTimeout:
-                    yield {"type": "error", "content": "CLI Relay timeout (600s)"}
-                    return
-
-                if account_switch:
-                    continue
-                succeeded = True
-                break
-
-            if not succeeded:
-                yield {
-                    "type": "error",
-                    "content": last_err or "CLI Relay failed for all OAuth tokens",
-                }
-                return
+                        yield aads_evt
 
     except httpx.ConnectError as e:
-        yield {"type": "error", "content": "CLI Relay connect failed: %s" % e}
+        yield {"type": "error", "content": f"CLI Relay connect failed: {e}"}
         return
     except httpx.ReadTimeout:
         yield {"type": "error", "content": "CLI Relay timeout (600s)"}
         return
     except Exception as e:
-        logger.error("cli_relay_error: %s", e)
+        logger.error(f"cli_relay_error: {e}")
         yield {"type": "error", "content": str(e)}
         return
 
+    # 세션 매핑 저장
     if session_id and _captured_cli_sid:
         _cli_session_map[session_id] = _captured_cli_sid
-        logger.info(
-            "cli_relay_session_map: aads=%s -> cli=%s",
-            session_id[:8],
-            _captured_cli_sid[:8],
-        )
+        logger.info(f"cli_relay_session_map: aads={session_id[:8]} -> cli={_captured_cli_sid[:8]}")
 
 
 async def _stream_agent_sdk(
@@ -851,20 +762,20 @@ async def _stream_agent_sdk(
     tools: Optional[List[Dict[str, Any]]] = None,
     session_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    """Claude Agent SDK → 번들 CLI. ClaudeAgentOptions.env로 AUTH_TOKEN / AUTH_TOKEN_2 순서 폴백.
+    """Claude Agent SDK를 통한 스트리밍 (토큰 자동 교대).
 
-    토큰당 최대 3회 재시도 후 다음 OAuth로 전환. 두 번째 토큰은 --resume 비활성(계정 불일치 방지).
+    Agent SDK → 번들 CLI → Anthropic API (OAuth 직접 인증).
+    Naver 토큰 우선 → 실패 시 Gmail 토큰 폴백.
+    MCP 브릿지로 55개 도구 사용. 세션 자동 관리.
     """
     sdk_model = _ANTHROPIC_MODEL_ID.get(model, model)
 
-    if not _ANTHROPIC_KEYS:
-        yield {"type": "model_info", "model": sdk_model}
-        yield {"type": "error", "content": "No Anthropic OAuth tokens configured"}
-        return
-
+    # 세션 이어가기 여부에 따라 메시지 포맷 결정 (이미지 블록 보존)
     _has_resume = bool(_cli_session_map.get(session_id)) if session_id else False
     user_message: Union[str, List[Dict[str, Any]]] = _format_messages_for_llm(messages, has_resume=_has_resume)
 
+    # Agent SDK는 CLI의 자체 OAuth 인증을 사용 (~/.claude/.credentials_account*.json)
+    # API 키를 env로 전달하지 않음 — CLI가 OAuth 토큰을 자동 관리
     _RETRYABLE_PATTERNS = [
         "rate_limit", "429", "rate limit",
         "overloaded", "529", "503",
@@ -876,82 +787,46 @@ async def _stream_agent_sdk(
 
     yield {"type": "model_info", "model": sdk_model}
 
-    keys = list(_ANTHROPIC_KEYS)
-    n_keys = len(keys)
     _MAX_RETRIES = 3
     _last_error = ""
+    for _attempt in range(_MAX_RETRIES):
+        error_msg = ""
+        async for evt in _run_agent_sdk_with_key(
+            "", sdk_model, system_prompt, user_message, session_id,
+        ):
+            if evt.get("type") == "error":
+                error_msg = evt.get("content", "")
+                break
+            yield evt
 
-    for tok_idx, oauth_tok in enumerate(keys):
-        use_cli_resume = tok_idx == 0
-        for _attempt in range(_MAX_RETRIES):
-            error_msg = ""
-            async for evt in _run_agent_sdk_with_key(
-                oauth_tok,
-                sdk_model,
-                system_prompt,
-                user_message,
-                session_id,
-                use_cli_resume=use_cli_resume,
-            ):
-                if evt.get("type") == "error":
-                    error_msg = evt.get("content", "")
-                    break
-                yield evt
+        if not error_msg:
+            return  # 성공
 
-            if not error_msg:
-                return
+        _last_error = error_msg
+        is_retryable = any(p in error_msg.lower() for p in _RETRYABLE_PATTERNS)
 
-            _last_error = error_msg
-            is_retryable = any(p in error_msg.lower() for p in _RETRYABLE_PATTERNS)
+        if not is_retryable:
+            logger.error(f"agent_sdk_fatal: attempt={_attempt+1} error={error_msg[:100]}")
+            yield {"type": "error", "content": error_msg}
+            return
 
-            if not is_retryable:
-                logger.error(
-                    "agent_sdk_fatal: token_idx=%s attempt=%s err=%s",
-                    tok_idx,
-                    _attempt + 1,
-                    error_msg[:100],
-                )
-                yield {"type": "error", "content": error_msg}
-                return
+        logger.warning(f"agent_sdk_retry: attempt={_attempt+1}/{_MAX_RETRIES} error={error_msg[:80]}")
+        yield {"type": "heartbeat"}
 
-            logger.warning(
-                "agent_sdk_retry: token_idx=%s attempt=%s/%s err=%s",
-                tok_idx,
-                _attempt + 1,
-                _MAX_RETRIES,
-                error_msg[:80],
-            )
-            yield {"type": "heartbeat"}
+        if _attempt < _MAX_RETRIES - 1:
+            await asyncio.sleep(min(2 ** _attempt, 4))
 
-            if _attempt < _MAX_RETRIES - 1:
-                await asyncio.sleep(min(2 ** _attempt, 4))
-
-        if tok_idx < n_keys - 1:
-            logger.warning(
-                "agent_sdk_oauth_switch: token_idx=%s exhausted %s attempts -> next OAuth",
-                tok_idx,
-                _MAX_RETRIES,
-            )
-            yield {"type": "heartbeat"}
-            continue
-
-        yield {
-            "type": "error",
-            "content": "Agent SDK failed after %s attempts (last token): %s"
-            % (_MAX_RETRIES, _last_error[:200]),
-        }
-        return
+    yield {"type": "error", "content": f"Agent SDK failed after {_MAX_RETRIES} attempts: {_last_error[:100]}"}
 
 
 async def _run_agent_sdk_with_key(
-    oauth_token: str,
+    api_key: str,
     sdk_model: str,
     system_prompt: str,
     user_message: Union[str, List[Dict[str, Any]]],
     session_id: Optional[str] = None,
-    use_cli_resume: bool = True,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    """OAuth 토큰 1개로 Agent SDK 실행. env에 토큰 주입(R-AUTH: 레거시 이름은 문자열 분리).
+    """단일 API 키로 Agent SDK 실행. 세션 이어가기(--resume) 지원.
 
     user_message가 list이면 content block 배열 (이미지 포함) → SDK prompt에 그대로 전달.
     """
@@ -969,16 +844,8 @@ async def _run_agent_sdk_with_key(
         }
     })
 
-    cli_session_id = None
-    if use_cli_resume and session_id:
-        cli_session_id = _cli_session_map.get(session_id)
-
-    _sdk_env: Dict[str, str] = {}
-    if oauth_token:
-        _sdk_env["ANTHROPIC_AUTH_TOKEN"] = oauth_token
-        _sdk_env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
-        _anth_leg = "ANTHROPIC_" + "API_KEY"
-        _sdk_env[_anth_leg] = oauth_token
+    # 세션 이어가기: AADS session_id → CLI session_id 매핑
+    cli_session_id = _cli_session_map.get(session_id) if session_id else None
 
     # Agent 팀 정의: 조사/개발/QA 서브에이전트
     from claude_agent_sdk import AgentDefinition
@@ -1033,7 +900,6 @@ async def _run_agent_sdk_with_key(
         allowed_tools=["Agent", "mcp__aads-tools__*"],
         disallowed_tools=["Bash", "Read", "Edit", "Write", "Glob", "Grep",
                           "WebFetch", "WebSearch", "NotebookEdit"],
-        env=_sdk_env,
     )
     # --resume: 이전 대화가 있으면 이어가기
     if cli_session_id:

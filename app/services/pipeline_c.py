@@ -695,14 +695,12 @@ class PipelineCJob:
 
         escaped = shlex.quote(instruction)
 
-        # locale + OAuth 주입 (locale 미설정 시 Claude CLI 경고→exit=137 방지)
-        _sh_legacy = "ANTHROPIC_" + "API_KEY"
+        # locale + API 키 주입 (locale 미설정 시 Claude CLI 경고→exit=137 방지)
         api_key_setup = (
             "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; export LANGUAGE=en_US:en; "
             "export MANPATH=; "  # manpath locale 경고 억제
             "source ~/.claude/api_keys.env 2>/dev/null; "
-            "export ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-${API_KEY_1}}; "
-            + f"export {_sh_legacy}=$ANTHROPIC_AUTH_TOKEN; "
+            "export ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-$API_KEY_1}; "
         )
 
         # 고유 출력 파일 경로
@@ -838,13 +836,11 @@ class PipelineCJob:
             f"{escaped}"
         )
 
-        _sh_legacy_d = "ANTHROPIC_" + "API_KEY"
         api_key_setup_direct = (
             "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; export LANGUAGE=en_US:en; "
             "export MANPATH=; "
             "source ~/.claude/api_keys.env 2>/dev/null; "
-            "export ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-${API_KEY_1}}; "
-            + f"export {_sh_legacy_d}=$ANTHROPIC_AUTH_TOKEN; "
+            "export ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-$API_KEY_1}; "
         )
         full_cmd = f"{api_key_setup_direct}cd {shlex.quote(self.workdir)} && {claude_cmd}"
 

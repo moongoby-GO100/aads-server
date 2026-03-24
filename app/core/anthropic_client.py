@@ -8,6 +8,7 @@ Claude 실패 시 Gemini 3.1 Flash Preview (LiteLLM 경유)로 자동 폴백.
 from __future__ import annotations
 
 import asyncio
+import os
 import json
 import logging
 from typing import Optional
@@ -15,18 +16,25 @@ from typing import Optional
 import httpx
 from anthropic import AsyncAnthropic
 
-from app.core.auth_provider import (
-    get_oauth_tokens, get_base_url, get_litellm_config, create_anthropic_client,
-)
-
 logger = logging.getLogger(__name__)
 
+# OAuth 토큰 직접 사용 (Agent SDK 채팅 AI와 동일 경로)
+_API_KEY = os.getenv("ANTHROPIC_API_KEY", "") or os.getenv("ANTHROPIC_AUTH_TOKEN", "")
+_API_KEY_FALLBACK = os.getenv("ANTHROPIC_API_KEY_FALLBACK", "")
+_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+
+# Gemini 폴백 — LiteLLM 프록시 경유 (직접 API 키 만료 대비)
+_LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
+_LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "")
 _GEMINI_FALLBACK_MODEL = "gemini-3.1-flash-lite-preview"
 
 
 def get_client(model_hint: str = "claude-haiku") -> AsyncAnthropic:
-    """Anthropic API 직접 클라이언트 반환 (auth_provider 경유)."""
-    return create_anthropic_client()
+    """Anthropic API 직접 클라이언트 반환 (OAuth 토큰 인증)."""
+    return AsyncAnthropic(
+        api_key=_API_KEY,
+        base_url=_BASE_URL,
+    )
 
 
 async def call_llm_with_fallback(
@@ -37,20 +45,19 @@ async def call_llm_with_fallback(
 ) -> Optional[str]:
     """Claude 호출 + 실패 시 Gemini 폴백. 백그라운드 평가/추출용.
 
-    1순위: ANTHROPIC_AUTH_TOKEN (OAuth)
-    2순위: ANTHROPIC_AUTH_TOKEN_2 (OAuth)
+    1순위: Claude Naver 토큰
+    2순위: Claude Gmail 토큰
     3순위: Gemini 3.1 Flash Preview (LiteLLM 경유)
 
     Returns: 응답 텍스트 또는 None (전부 실패 시)
     """
-    # 1순위/2순위: Claude (Gmail → Naver) + 일시적 에러 재시도
+    # 1순위/2순위: Claude (Naver → Gmail) + 일시적 에러 재시도
     _MAX_RETRIES = 2
-    keys_to_try = get_oauth_tokens()
-    _base_url = get_base_url()
+    keys_to_try = [k for k in [_API_KEY, _API_KEY_FALLBACK] if k]
     for key in keys_to_try:
         for _attempt in range(_MAX_RETRIES + 1):
             try:
-                client = AsyncAnthropic(api_key=key, base_url=_base_url)
+                client = AsyncAnthropic(api_key=key, base_url=_BASE_URL)
                 msgs = [{"role": "user", "content": prompt}]
                 kwargs = {"model": model, "max_tokens": max_tokens, "messages": msgs}
                 if system:
@@ -74,7 +81,7 @@ async def call_llm_with_fallback(
                 break  # 이 키로는 더 이상 시도하지 않고 다음 키로
 
     # 3순위: Gemini 2.5 Flash (LiteLLM 경유)
-    if get_litellm_config()["key"]:
+    if _LITELLM_MASTER_KEY:
         try:
             return await _call_gemini(prompt, max_tokens, system)
         except Exception as e:
@@ -101,14 +108,13 @@ async def call_llm_messages_with_fallback(**kwargs) -> object:
         Exception: 모든 키에서 실패 시 마지막 예외를 raise
     """
     _MAX_RETRIES = 2
-    keys_to_try = get_oauth_tokens()
-    _base_url = get_base_url()
+    keys_to_try = [k for k in [_API_KEY, _API_KEY_FALLBACK] if k]
     last_error: Optional[Exception] = None
 
     for key in keys_to_try:
         for _attempt in range(_MAX_RETRIES + 1):
             try:
-                client = AsyncAnthropic(api_key=key, base_url=_base_url)
+                client = AsyncAnthropic(api_key=key, base_url=_BASE_URL)
                 return await client.messages.create(**kwargs)
             except Exception as e:
                 last_error = e
@@ -136,8 +142,7 @@ async def _call_gemini(
     system: Optional[str] = None,
 ) -> str:
     """Gemini 2.5 Flash — LiteLLM 프록시 경유 (OpenAI 호환 API)."""
-    _lc = get_litellm_config()
-    url = f"{_lc['url']}/v1/chat/completions"
+    url = f"{_LITELLM_BASE_URL}/v1/chat/completions"
 
     messages = []
     if system:
@@ -154,7 +159,7 @@ async def _call_gemini(
         resp = await client.post(
             url,
             json=body,
-            headers={"Authorization": f"Bearer {_lc['key']}"},
+            headers={"Authorization": f"Bearer {_LITELLM_MASTER_KEY}"},
         )
         resp.raise_for_status()
         data = resp.json()

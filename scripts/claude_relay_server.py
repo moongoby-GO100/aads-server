@@ -33,11 +33,6 @@ logger = logging.getLogger("claude_relay")
 
 PORT = int(os.getenv("CLAUDE_RELAY_PORT", "8199"))
 CLAUDE_BIN = os.getenv("CLAUDE_BIN", "claude")
-# oauth_token 바디 주입 시 subprocess에 강제: 호스트 ANTHROPIC_BASE_URL이 LiteLLM이면 400 no_db_connection
-ANTHROPIC_DIRECT_BASE = (
-    (os.getenv("ANTHROPIC_API_DIRECT_URL") or "https://api.anthropic.com").strip()
-    or "https://api.anthropic.com"
-)
 MCP_TEMPLATE = Path(os.getenv(
     "MCP_CONFIG_TEMPLATE",
     "/root/aads/aads-server/scripts/mcp_config_template.json",
@@ -141,12 +136,6 @@ async def handle_stream(request):
     content_blocks = body.get("content_blocks")  # 이미지 포함 content block 배열
     model = body.get("model", "claude-opus")
     aads_session_id = body.get("session_id", "")
-    oauth_token = body.get("oauth_token")
-    if isinstance(oauth_token, str):
-        oauth_token = oauth_token.strip() or None
-    else:
-        oauth_token = None
-    ignore_cli_resume = bool(body.get("ignore_cli_resume", False))
 
     if not messages_text and not content_blocks:
         return web.json_response({"error": "messages_text or content_blocks required"}, status=400)
@@ -157,17 +146,9 @@ async def handle_stream(request):
     cli_model = _MODEL_MAP.get(model, "claude-opus-4-6")
     mcp_config_path = _build_mcp_config(aads_session_id)
 
-    # CLI 세션 매핑 조회 (다른 OAuth로 재시도 시 매핑 무시)
+    # CLI 세션 매핑 조회
     cli_session_id = _session_map.get(aads_session_id) if aads_session_id else None
-    if ignore_cli_resume:
-        cli_session_id = None
     is_resume = cli_session_id is not None
-    if oauth_token:
-        logger.info(
-            "CLI: oauth_token from body (prefix=%s...) ignore_cli_resume=%s",
-            oauth_token[:18],
-            ignore_cli_resume,
-        )
 
     try:
         async with _semaphore:
@@ -273,22 +254,12 @@ async def handle_stream(request):
                         use_stream_json_input,
                         len(_stdin_data) if _stdin_data else 0)
 
-            proc_env = dict(os.environ)
-            proc_env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "16384"
-            if oauth_token:
-                proc_env["ANTHROPIC_AUTH_TOKEN"] = oauth_token
-                proc_env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
-                _anth_api = "ANTHROPIC_" + "API_KEY"
-                proc_env[_anth_api] = oauth_token
-                proc_env["ANTHROPIC_BASE_URL"] = ANTHROPIC_DIRECT_BASE
-                logger.info("CLI: ANTHROPIC_BASE_URL forced to %s (oauth from body)", ANTHROPIC_DIRECT_BASE)
-
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=proc_env,
+                env=dict(os.environ, CLAUDE_CODE_MAX_OUTPUT_TOKENS="16384"),
             )
 
             # stdin으로 프롬프트/content blocks 전달

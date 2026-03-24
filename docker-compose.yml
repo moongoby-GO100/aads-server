@@ -87,7 +87,9 @@ services:
       # Claude CLI Relay (호스트 실행, MCP 도구 브릿지 경유)
       - CLAUDE_RELAY_URL=${CLAUDE_RELAY_URL:-http://host.docker.internal:8199}
       - CLAUDE_CLI_ENABLED=${CLAUDE_CLI_ENABLED:-true}
-      # Anthropic Claude: sk-ant-oat01 OAuth만 (.env의 ANTHROPIC_AUTH_TOKEN, ANTHROPIC_AUTH_TOKEN_2) — API 키(sk-ant-api03) 금지
+      # Agent SDK 번들 CLI 인증 (OAuth 토큰 직접 사용, Naver 우선 → Gmail 폴백)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_AUTH_TOKEN_2}
+      - ANTHROPIC_API_KEY_FALLBACK=${ANTHROPIC_AUTH_TOKEN}
       - ANTHROPIC_BASE_URL=https://api.anthropic.com
       # AADS-186C: Langfuse Observability (optional)
       - LANGFUSE_HOST=${LANGFUSE_HOST:-}

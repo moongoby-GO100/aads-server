@@ -522,14 +522,16 @@ async def _generate_project_insights(conn, project: str) -> int:
 - 마크다운 코드블록 없이 JSON만 반환"""
 
     try:
-        from app.core.auth_provider import has_valid_token
-        if not has_valid_token():
-            logger.warning("sleep_agent_no_api_key", project=project, hint="no valid OAuth token")
+        import os as _os
+        api_key = _os.getenv("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            logger.warning("sleep_agent_no_api_key", project=project, hint="ANTHROPIC_API_KEY not set")
             return 0
 
-        from app.core.anthropic_client import call_llm_messages_with_fallback
+        from app.core.anthropic_client import get_client
+        client = get_client()
 
-        response = await call_llm_messages_with_fallback(
+        response = await client.messages.create(
             model=_HAIKU_MODEL,
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
@@ -662,14 +664,15 @@ async def _analyze_quality_and_optimize(conn) -> int:
 교정 지시만 반환하세요 (설명 불필요)."""
 
         try:
-            from app.core.auth_provider import has_valid_token
-            if not has_valid_token():
+            import os as _os
+            if not _os.getenv("ANTHROPIC_API_KEY", ""):
                 logger.warning("sleep_agent_c2_no_api_key", workspace=workspace)
                 continue
 
-            from app.core.anthropic_client import call_llm_messages_with_fallback
+            from app.core.anthropic_client import get_client
+            client = get_client()
 
-            response = await call_llm_messages_with_fallback(
+            response = await client.messages.create(
                 model=_HAIKU_MODEL,
                 max_tokens=256,
                 messages=[{"role": "user", "content": prompt}],
