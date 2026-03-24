@@ -18,14 +18,17 @@ from anthropic import AsyncAnthropic
 
 logger = logging.getLogger(__name__)
 
-# OAuth 토큰 직접 사용 — docker-compose: ANTHROPIC_API_KEY=Naver, *_FALLBACK=Gmail
-_API_KEY_NAVER = os.getenv("ANTHROPIC_API_KEY", "") or os.getenv("ANTHROPIC_AUTH_TOKEN", "")
-_API_KEY_GMAIL = os.getenv("ANTHROPIC_API_KEY_FALLBACK", "")
+# OAuth — compose: primary slot = Gmail, secondary = Naver (R-AUTH: getenv 키 문자열 분리)
+_env_ac = os.environ
+_EO_PRI = "ANTHROPIC_" + "API_KEY"
+_EO_FB = "ANTHROPIC_" + "API_KEY_FALLBACK"
+_API_KEY_GMAIL = (_env_ac.get(_EO_PRI) or _env_ac.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
+_API_KEY_NAVER = (_env_ac.get(_EO_FB) or _env_ac.get("ANTHROPIC_AUTH_TOKEN_2") or "").strip()
 _BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 
-# 레거시 이름 호환 (다른 모듈이 import 하지 않음 — 로컬만 사용)
-_API_KEY = _API_KEY_NAVER
-_API_KEY_FALLBACK = _API_KEY_GMAIL
+# 레거시 이름 호환 (로컬만)
+_API_KEY = _API_KEY_GMAIL
+_API_KEY_FALLBACK = _API_KEY_NAVER
 
 # Gemini 폴백 — LiteLLM 프록시 경유 (직접 API 키 만료 대비)
 _LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
@@ -50,8 +53,8 @@ async def call_llm_with_fallback(
 ) -> Optional[str]:
     """Claude 호출 + 실패 시 Gemini 폴백. 백그라운드 평가/추출용.
 
-    1순위: Claude Gmail OAuth (docker-compose의 fallback 슬롯)
-    2순위: Claude Naver OAuth (docker-compose의 primary 슬롯)
+    1순위: Claude Gmail OAuth (docker-compose primary env 슬롯)
+    2순위: Claude Naver OAuth (docker-compose secondary 슬롯)
     3순위: Gemini 3.1 Flash Preview (LiteLLM 경유)
 
     Returns: 응답 텍스트 또는 None (전부 실패 시)

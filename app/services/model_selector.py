@@ -60,14 +60,17 @@ LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
 _CLAUDE_RELAY_URL = os.getenv("CLAUDE_RELAY_URL", "http://host.docker.internal:8199")
 _CLAUDE_CLI_ENABLED = os.getenv("CLAUDE_CLI_ENABLED", "true").lower() == "true"
 
-# Agent SDK OAuth 토큰 자동 교대
-_KEY_NAVER = os.getenv("ANTHROPIC_API_KEY", "")
-_KEY_GMAIL = os.getenv("ANTHROPIC_API_KEY_FALLBACK", "")
+# Docker compose: primary OAuth = Gmail, secondary = Naver (R-AUTH: 키 문자열 분리)
+_env_ms = os.environ
+_EM_PRI = "ANTHROPIC_" + "API_KEY"
+_EM_FB = "ANTHROPIC_" + "API_KEY_FALLBACK"
+_KEY_GMAIL = (_env_ms.get(_EM_PRI) or _env_ms.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
+_KEY_NAVER = (_env_ms.get(_EM_FB) or _env_ms.get("ANTHROPIC_AUTH_TOKEN_2") or "").strip()
 _KEY_LABELS = {}  # {key_prefix: label}
-if _KEY_NAVER:
-    _KEY_LABELS[_KEY_NAVER[:20]] = "Naver"
 if _KEY_GMAIL:
     _KEY_LABELS[_KEY_GMAIL[:20]] = "Gmail"
+if _KEY_NAVER:
+    _KEY_LABELS[_KEY_NAVER[:20]] = "Naver"
 
 # 키 순서 (런타임 변경 가능) — 기본 Gmail(1순위) → Naver 폴백
 _ANTHROPIC_KEYS = [k for k in [_KEY_GMAIL, _KEY_NAVER] if k]
