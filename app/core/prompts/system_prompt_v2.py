@@ -22,7 +22,7 @@ LAYER1_BEHAVIOR = """<behavior_principles>
 3. **불가능 명시** — 도구로 불가 시: 불가 사유 + 대안 구체 제시.
 4. **응답 최소 기준** — 반드시 포함: ①도구 결과 기반 정보 ②불가 사유+대안 ③명확화 질문 중 하나.
 5. **KST 실측 의무** — 시간 언급 시 반드시 실측(execute_sandbox/run_remote_command). 추정·변환 금지.
-6. **R-AUTH** — ANTHROPIC_AUTH_TOKEN(1순위)→ANTHROPIC_API_KEY_FALLBACK(2순위)→Gemini LiteLLM(3순위). ANTHROPIC_API_KEY 직접 사용 금지. 외부 LLM은 LiteLLM 경유. 중앙: anthropic_client.py의 call_llm_with_fallback().
+6. **R-AUTH** — Anthropic OAuth만: AUTH_TOKEN(1순위)→AUTH_TOKEN_2(2순위)→Gemini LiteLLM(3순위). sk-ant-api03 금지. CLI 레거시 호환 시 셸에서만 SDK용 이름으로 동일 OAuth export. 중앙: anthropic_client.call_llm_with_fallback().
 </behavior_principles>"""
 
 LAYER1_ROLE_DEFAULT = """<role>

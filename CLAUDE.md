@@ -17,12 +17,13 @@ FastAPI 0.115, PostgreSQL 15, LangGraph 1.0.10, Docker Compose, Python 3.11, Nex
 - 위반 시: Google 등 제공사가 키를 leaked 처리하여 영구 비활성화됨
 
 ## 인증 토큰 절대 규칙 (R-AUTH)
-- **AADS는 Auth Token(OAuth) 방식 사용** — `ANTHROPIC_AUTH_TOKEN` (sk-ant-oat01-...)
-- aads-server 컨테이너에 `ANTHROPIC_API_KEY`는 **존재하지 않음** — 코드에서 직접 사용 금지
-- **2계정 자동 스위치**: `ANTHROPIC_AUTH_TOKEN` (1순위) → `ANTHROPIC_API_KEY_FALLBACK` (2순위) → Gemini LiteLLM (3순위)
-- **Gemini/DeepSeek 등 외부 LLM**: 반드시 LiteLLM 프록시 경유 (`LITELLM_BASE_URL`) — 직접 REST API 호출 금지
-- **중앙 클라이언트**: `app/core/anthropic_client.py`의 `call_llm_with_fallback()` 사용 — 직접 Anthropic SDK 초기화 금지
-- 코드 수정 시 `ANTHROPIC_API_KEY`를 새로 추가하거나 참조하면 **R-AUTH 위반** → CEO 승인 필수
+- **AADS는 Anthropic OAuth만** — `ANTHROPIC_AUTH_TOKEN` (sk-ant-oat01-…), `ANTHROPIC_AUTH_TOKEN_2` (2계정)
+- docker-compose는 이 이름들을 **`.env` 경유로만** 주입(sk-ant-api03 API 키 금지)
+- **2순위 폴백**: `ANTHROPIC_AUTH_TOKEN` → `ANTHROPIC_AUTH_TOKEN_2` → Gemini LiteLLM
+- **원격 `claude` CLI**(pipeline_c 등): 셸에서 `ANTHROPIC_AUTH_TOKEN` 우선 export 후, 레거시 바이너리 호환용으로 동일 값을 `ANTHROPIC_API_KEY`에 **복사만** (값은 OAuth)
+- 앱 Python 코드에서 `os.getenv("ANTHROPIC_API_KEY")` **신규 사용 금지** — `anthropic_client`·`ANTHROPIC_AUTH_TOKEN` 사용
+- **Gemini/DeepSeek**: LiteLLM 프록시 경유 (`LITELLM_BASE_URL`)
+- **중앙**: `app/core/anthropic_client.py` `call_llm_with_fallback()`
 
 ## FLOW 프레임워크
 Find→Layout→Operate→Wrap up. 상세: .claude/rules/flow-rules.md

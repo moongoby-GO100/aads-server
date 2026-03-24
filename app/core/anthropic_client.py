@@ -18,17 +18,17 @@ from anthropic import AsyncAnthropic
 
 logger = logging.getLogger(__name__)
 
-# OAuth — compose: primary slot = Gmail, secondary = Naver (R-AUTH: getenv 키 문자열 분리)
+# OAuth 토큰만 (ANTHROPIC_AUTH_TOKEN=1순위 Gmail 등, ANTHROPIC_AUTH_TOKEN_2=2순위) — API 키 환경변수 미사용
 _env_ac = os.environ
-_EO_PRI = "ANTHROPIC_" + "API_KEY"
-_EO_FB = "ANTHROPIC_" + "API_KEY_FALLBACK"
-_API_KEY_GMAIL = (_env_ac.get(_EO_PRI) or _env_ac.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
-_API_KEY_NAVER = (_env_ac.get(_EO_FB) or _env_ac.get("ANTHROPIC_AUTH_TOKEN_2") or "").strip()
+_OAUTH_PRIMARY = (_env_ac.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
+_OAUTH_SECONDARY = (_env_ac.get("ANTHROPIC_AUTH_TOKEN_2") or "").strip()
 _BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 
-# 레거시 이름 호환 (로컬만)
-_API_KEY = _API_KEY_GMAIL
-_API_KEY_FALLBACK = _API_KEY_NAVER
+# AsyncAnthropic 인자명 api_key — 값은 OAuth(sk-ant-oat01)
+_API_KEY_GMAIL = _OAUTH_PRIMARY
+_API_KEY_NAVER = _OAUTH_SECONDARY
+_API_KEY = _OAUTH_PRIMARY
+_API_KEY_FALLBACK = _OAUTH_SECONDARY
 
 # Gemini 폴백 — LiteLLM 프록시 경유 (직접 API 키 만료 대비)
 _LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
@@ -37,8 +37,8 @@ _GEMINI_FALLBACK_MODEL = "gemini-3.1-flash-lite-preview"
 
 
 def get_client(model_hint: str = "claude-haiku") -> AsyncAnthropic:
-    """Anthropic API 직접 클라이언트 반환 (OAuth). 기본 1순위 Gmail 토큰."""
-    _key = _API_KEY_GMAIL or _API_KEY_NAVER
+    """Anthropic Messages — ANTHROPIC_AUTH_TOKEN(OAuth) 우선."""
+    _key = _OAUTH_PRIMARY or _OAUTH_SECONDARY
     return AsyncAnthropic(
         api_key=_key,
         base_url=_BASE_URL,
@@ -53,8 +53,8 @@ async def call_llm_with_fallback(
 ) -> Optional[str]:
     """Claude 호출 + 실패 시 Gemini 폴백. 백그라운드 평가/추출용.
 
-    1순위: Claude Gmail OAuth (docker-compose primary env 슬롯)
-    2순위: Claude Naver OAuth (docker-compose secondary 슬롯)
+    1순위: ANTHROPIC_AUTH_TOKEN (OAuth)
+    2순위: ANTHROPIC_AUTH_TOKEN_2 (OAuth)
     3순위: Gemini 3.1 Flash Preview (LiteLLM 경유)
 
     Returns: 응답 텍스트 또는 None (전부 실패 시)

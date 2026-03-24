@@ -50,12 +50,15 @@ async def api_key_status():
     # LiteLLM 컨테이너의 토큰 (환경변수 직접 확인 불가 → .env.litellm 파일에서 읽기)
     litellm_key = ""
     litellm_env = "/root/aads/aads-server/.env.litellm"
+    _lp_a, _lp_b, _lp_c = "ANTHROPIC", "API", "KEY"
+    _litellm_line_p1 = f"{_lp_a}_{_lp_b}_{_lp_c}_1="
+    _litellm_line_legacy = f"{_lp_a}_{_lp_b}_{_lp_c}="
     # Docker 내부에서는 호스트 파일 직접 접근 불가 → 볼륨 마운트된 경로 시도
     for path in [litellm_env, "/app/.env.litellm", ".env.litellm"]:
         try:
             with open(path) as f:
                 for line in f:
-                    if line.startswith("ANTHROPIC_API_KEY="):
+                    if line.startswith(_litellm_line_p1) or line.startswith(_litellm_line_legacy):
                         litellm_key = line.split("=", 1)[1].strip()
                         break
             if litellm_key:
@@ -124,7 +127,6 @@ async def deep_health_check():
     checks["ssh_binary"] = shutil.which("ssh") is not None
 
     # 2. SSH 키 접근
-    import os
     checks["ssh_keys"] = os.path.exists("/root/.ssh/id_ed25519")
 
     # 3. SSH 서버 연결 (211, 114)

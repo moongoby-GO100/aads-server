@@ -60,12 +60,10 @@ LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
 _CLAUDE_RELAY_URL = os.getenv("CLAUDE_RELAY_URL", "http://host.docker.internal:8199")
 _CLAUDE_CLI_ENABLED = os.getenv("CLAUDE_CLI_ENABLED", "true").lower() == "true"
 
-# Docker compose: primary OAuth = Gmail, secondary = Naver (R-AUTH: 키 문자열 분리)
+# Anthropic OAuth만 사용 (채팅 설정 / .env) — API 키 변수 미사용
 _env_ms = os.environ
-_EM_PRI = "ANTHROPIC_" + "API_KEY"
-_EM_FB = "ANTHROPIC_" + "API_KEY_FALLBACK"
-_KEY_GMAIL = (_env_ms.get(_EM_PRI) or _env_ms.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
-_KEY_NAVER = (_env_ms.get(_EM_FB) or _env_ms.get("ANTHROPIC_AUTH_TOKEN_2") or "").strip()
+_KEY_GMAIL = (_env_ms.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
+_KEY_NAVER = (_env_ms.get("ANTHROPIC_AUTH_TOKEN_2") or "").strip()
 _KEY_LABELS = {}  # {key_prefix: label}
 if _KEY_GMAIL:
     _KEY_LABELS[_KEY_GMAIL[:20]] = "Gmail"

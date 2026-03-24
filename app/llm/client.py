@@ -30,9 +30,9 @@ def resolve_model_id(model_id: str) -> str:
 def create_anthropic_llm(model_id: str, max_tokens: int = 4096, temperature: float = 0.1) -> Any:
     """Anthropic ChatAnthropic LLM 인스턴스 생성."""
     from langchain_anthropic import ChatAnthropic
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    api_key = os.getenv("ANTHROPIC_AUTH_TOKEN", "").strip()
     if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY not set")
+        raise ValueError("ANTHROPIC_AUTH_TOKEN not set (OAuth sk-ant-oat01)")
     real_model = resolve_model_id(model_id)
     return ChatAnthropic(
         model=real_model,

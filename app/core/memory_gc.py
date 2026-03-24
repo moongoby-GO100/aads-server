@@ -523,9 +523,8 @@ async def _generate_project_insights(conn, project: str) -> int:
 
     try:
         import os as _os
-        api_key = _os.getenv("ANTHROPIC_API_KEY", "")
-        if not api_key:
-            logger.warning("sleep_agent_no_api_key", project=project, hint="ANTHROPIC_API_KEY not set")
+        if not _os.getenv("ANTHROPIC_AUTH_TOKEN", "").strip():
+            logger.warning("sleep_agent_no_api_key", project=project, hint="ANTHROPIC_AUTH_TOKEN not set")
             return 0
 
         from app.core.anthropic_client import get_client
@@ -665,7 +664,7 @@ async def _analyze_quality_and_optimize(conn) -> int:
 
         try:
             import os as _os
-            if not _os.getenv("ANTHROPIC_API_KEY", ""):
+            if not _os.getenv("ANTHROPIC_AUTH_TOKEN", "").strip():
                 logger.warning("sleep_agent_c2_no_api_key", workspace=workspace)
                 continue
 

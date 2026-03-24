@@ -13,7 +13,8 @@ jobs:
     timeout-minutes: 15
 
     env:
-      # 더미 값 — 실제 키 없이 단위 테스트 실행
+      # 더미 값 — 실제 키 없이 단위 테스트 실행 (Anthropic은 OAuth 변수명)
+      ANTHROPIC_AUTH_TOKEN: dummy_oauth_token_for_ci
       ANTHROPIC_API_KEY: dummy_anthropic_key_for_ci
       OPENAI_API_KEY: dummy_openai_key_for_ci
       GOOGLE_API_KEY: dummy_google_key_for_ci

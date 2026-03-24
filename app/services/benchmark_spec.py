@@ -148,9 +148,8 @@ async def _call_claude_vision_frames(frames_b64: List[str], prompt: str) -> str:
     """Claude Sonnet Vision 폴백 (첫 번째 프레임만)."""
     import anthropic
 
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY not set")
+    if not os.getenv("ANTHROPIC_AUTH_TOKEN", "").strip():
+        raise ValueError("ANTHROPIC_AUTH_TOKEN not set")
 
     from app.core.anthropic_client import get_client as _get_bs_client
     client = _get_bs_client()
