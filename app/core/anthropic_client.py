@@ -91,6 +91,51 @@ async def call_llm_with_fallback(
     return None
 
 
+async def call_llm_messages_with_fallback(**kwargs) -> object:
+    """Anthropic Messages API 직접 호출 + 2계정 폴백 (서브에이전트/tool-use용).
+
+    get_client() 대신 이 함수를 사용하면 OAuth 2계정 순차 시도 + 429/529 재시도 체인이 적용됨.
+    call_llm_with_fallback()와 달리 raw Response 객체를 그대로 반환.
+
+    Args:
+        **kwargs: AsyncAnthropic.messages.create()에 전달할 전체 파라미터
+                  (model, messages, system, max_tokens, tools, tool_choice 등)
+
+    Returns:
+        Anthropic Message 응답 객체 (원본 그대로)
+
+    Raises:
+        Exception: 모든 키에서 실패 시 마지막 예외를 raise
+    """
+    _MAX_RETRIES = 2
+    keys_to_try = [k for k in [_API_KEY, _API_KEY_FALLBACK] if k]
+    last_error: Optional[Exception] = None
+
+    for key in keys_to_try:
+        for _attempt in range(_MAX_RETRIES + 1):
+            try:
+                client = AsyncAnthropic(api_key=key, base_url=_BASE_URL)
+                return await client.messages.create(**kwargs)
+            except Exception as e:
+                last_error = e
+                _err_str = str(e).lower()
+                _retryable = any(k in _err_str for k in (
+                    "timeout", "overloaded", "529", "rate_limit", "429", "500", "502", "503",
+                ))
+                if _retryable and _attempt < _MAX_RETRIES:
+                    _wait = 3 * (2 ** _attempt)
+                    logger.warning(
+                        "claude_msg_retry: key=%s attempt=%d/%d wait=%ds error=%s",
+                        key[:12], _attempt + 1, _MAX_RETRIES, _wait, str(e)[:80],
+                    )
+                    await asyncio.sleep(_wait)
+                    continue
+                logger.warning("claude_msg_error: key=%s error=%s", key[:12], str(e)[:80])
+                break
+
+    raise last_error or RuntimeError("no API keys configured")
+
+
 async def _call_gemini(
     prompt: str,
     max_tokens: int = 256,

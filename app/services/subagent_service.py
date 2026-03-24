@@ -18,11 +18,9 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from app.core.anthropic_client import get_client
+from app.core.anthropic_client import call_llm_messages_with_fallback
 
 logger = logging.getLogger(__name__)
-
-_anthropic = get_client()
 
 # 서브에이전트 모델 매핑
 _MODEL_MAP = {
@@ -184,7 +182,7 @@ async def spawn_subagent(
                 api_kwargs["tool_choice"] = {"type": "auto"}
 
             response = await asyncio.wait_for(
-                _anthropic.messages.create(**api_kwargs),
+                call_llm_messages_with_fallback(**api_kwargs),
                 timeout=_SUBAGENT_TIMEOUT,
             )
 
