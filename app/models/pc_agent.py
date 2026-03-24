@@ -22,11 +22,7 @@ class AgentInfo(BaseModel):
 class CommandRequest(BaseModel):
     """명령 실행 요청."""
     agent_id: str
-    command_type: Literal[
-        "shell", "screenshot", "file_list",
-        "process_list", "file_read", "file_write",
-        "kakao_send", "kakao_read", "system_info",
-    ]
+    command_type: str  # PC Agent COMMAND_HANDLERS에 등록된 모든 명령 허용
     params: Dict[str, Any] = Field(default_factory=dict)
 
 
