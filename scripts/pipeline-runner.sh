@@ -457,12 +457,16 @@ $out_tail")
             --arg files "$changed_files" \
             '{job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}')
 
-        review_response=$(curl -4 -sf -X POST "${AADS_API_URL}/api/v1/review/code-diff" \
+        local review_http_code=""
+        review_response=$(curl -4 -s -w "\n%{http_code}" -X POST "${AADS_API_URL}/api/v1/review/code-diff" \
             -H "Content-Type: application/json" \
             -d "$review_body" \
             --max-time 30 2>/dev/null) || true
 
-        if [[ -n "$review_response" ]]; then
+        review_http_code=$(echo "$review_response" | tail -1)
+        review_response=$(echo "$review_response" | sed '$d')
+
+        if [[ "$review_http_code" == "200" ]] && [[ -n "$review_response" ]]; then
             review_verdict=$(echo "$review_response" | jq -r '.verdict // "APPROVE"')
             review_score=$(echo "$review_response" | jq -r '.score // "1.0"')
             log "  AI_REVIEW_RESULT job=$job_id verdict=$review_verdict score=$review_score"
@@ -472,10 +476,9 @@ $out_tail")
                 review_issues=$(echo "$review_response" | jq -r '.issues | join("; ")' 2>/dev/null || echo "")
                 log "  AI_REVIEW_REQUEST_CHANGES job=$job_id issues=$review_issues"
                 post_to_chat "$session_id" "🔍 [AI Reviewer] 코드 수정 요청 (score=${review_score}): ${review_issues:0:500}"
-                # REQUEST_CHANGES는 CEO에게 알리되 경고 표시
             fi
         else
-            log "  AI_REVIEW_SKIP job=$job_id (API 응답 없음)"
+            log "  AI_REVIEW_SKIP job=$job_id (HTTP ${review_http_code:-timeout})"
         fi
     fi
 
