@@ -39,7 +39,7 @@ MCP_TEMPLATE = Path(os.getenv(
 ))
 
 _MAX_CONCURRENT = int(os.getenv("CLAUDE_RELAY_MAX_CONCURRENT", "3"))
-_semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
+_semaphore = None  # 앱 시작 시 실제 이벤트 루프에서 생성 (Python 3.6 different loop 방지)
 
 # --- Direct OAuth ---
 _DIRECT_OAUTH_ENABLED = os.getenv("AADS_CLAUDE_DIRECT_OAUTH", "0") == "1"
@@ -382,8 +382,16 @@ async def handle_reset_session(request):
     return web.json_response({"error": "not found"}, status=404)
 
 
+async def _on_startup(app):
+    """앱 시작 시 실제 이벤트 루프에서 Semaphore 생성 (Python 3.6 호환)."""
+    global _semaphore
+    _semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
+    logger.info("Semaphore created: max_concurrent=%d", _MAX_CONCURRENT)
+
+
 def create_app():
     app = web.Application()
+    app.on_startup.append(_on_startup)
     app.router.add_post("/stream", handle_stream)
     app.router.add_get("/health", handle_health)
     app.router.add_post("/oauth/switch", handle_oauth_switch)
