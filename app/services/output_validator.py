@@ -160,10 +160,16 @@ def validate_response(
         )
 
     # ── UNVERIFIED_COUNT: 도구 호출 없이 수치/건수 보고 (차단) ──────────────
-    _warn = check_unverified_counts(stripped, tools_called)
-    if _warn:
-        logger.warning(f"[OutputValidator] {_warn.message}")
-        return _warn  # 이제 차단 (is_valid=False)
+    # 설명형 인텐트는 예시 숫자 사용이 자연스러우므로 예외 처리
+    _EXPLAIN_INTENTS = {
+        "deep_research", "cto_strategy", "architect", "general_knowledge",
+        "explain", "education", "concept", "strategy", "analysis",
+    }
+    if intent not in _EXPLAIN_INTENTS:
+        _warn = check_unverified_counts(stripped, tools_called)
+        if _warn:
+            logger.warning(f"[OutputValidator] {_warn.message}")
+            return _warn  # 이제 차단 (is_valid=False)
 
     return _OK
 
