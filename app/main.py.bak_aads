@@ -38,6 +38,7 @@ from app.api.code_review import router as code_review_router
 from app.api.quality import router as quality_router
 from app.api.memory_monitor import router as memory_monitor_router
 from app.api.pc_agent import router as pc_agent_router
+from app.api.kakao_bot import router as kakao_bot_router
 from app.routers.chat import router as chat_v2_router
 from app.config import settings
 from app.graph.builder import compile_graph
@@ -417,17 +418,51 @@ async def lifespan(app: FastAPI):
     # 서버 시작 시 stale placeholder → 내용 있으면 보존(promote), 없으면 삭제
     try:
         async with db_pool.acquire() as _c:
-            # 내용이 있는 placeholder는 recovered로 전환 (응답 소실 방지)
-            _promoted = await _c.fetchval(
-                "WITH p AS (UPDATE chat_messages SET intent = NULL, model_used = 'recovered' "
-                "WHERE intent = 'streaming_placeholder' AND content IS NOT NULL AND length(trim(content)) > 0 "
-                "RETURNING id) SELECT COUNT(*) FROM p"
+            # ── startup placeholder cleanup (중복 버블 방지 강화) ──
+            _placeholders = await _c.fetch(
+                "SELECT id, session_id, content FROM chat_messages WHERE intent = 'streaming_placeholder'"
             )
-            # 내용이 없는 placeholder만 삭제
-            _cleaned = await _c.fetchval(
-                "WITH d AS (DELETE FROM chat_messages "
-                "WHERE intent = 'streaming_placeholder' RETURNING id) SELECT COUNT(*) FROM d"
-            )
+            _promoted = 0
+            _cleaned = 0
+            for _ph in _placeholders:
+                _ph_content = (_ph["content"] or "").strip()
+                if _ph_content:
+                    # 동일 세션에 placeholder 이후 최종 응답이 이미 있으면 삭제 (중복 방지)
+                    _has_final = await _c.fetchval(
+                        "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND role = 'assistant' "
+                        "AND intent IS DISTINCT FROM 'streaming_placeholder' "
+                        "AND created_at >= (SELECT created_at FROM chat_messages WHERE id = $2)",
+                        _ph["session_id"], _ph["id"],
+                    )
+                    if _has_final and _has_final > 0:
+                        await _c.execute("DELETE FROM chat_messages WHERE id = $1", _ph["id"])
+                        _cleaned += 1
+                    else:
+                        import re as _re
+                        _clean_content = _re.sub(r'\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\s*$', '', _ph_content).rstrip()
+                        if _clean_content:
+                            # Stage 2: promote 전 동일 내용 recovered 중복 검사 (앞 50자 비교)
+                            _prefix = _clean_content[:50]
+                            _dup_recovered = await _c.fetchval(
+                                "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND role = 'assistant' "
+                                "AND model_used = 'recovered' AND LEFT(content, 50) = $2 AND id != $3",
+                                _ph["session_id"], _prefix, _ph["id"],
+                            )
+                            if _dup_recovered and _dup_recovered > 0:
+                                await _c.execute("DELETE FROM chat_messages WHERE id = $1", _ph["id"])
+                                _cleaned += 1
+                            else:
+                                await _c.execute(
+                                    "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'recovered' WHERE id = $1",
+                                    _ph["id"], _clean_content,
+                                )
+                                _promoted += 1
+                        else:
+                            await _c.execute("DELETE FROM chat_messages WHERE id = $1", _ph["id"])
+                            _cleaned += 1
+                else:
+                    await _c.execute("DELETE FROM chat_messages WHERE id = $1", _ph["id"])
+                    _cleaned += 1
             if (_promoted and _promoted > 0) or (_cleaned and _cleaned > 0):
                 logger.info(f"startup_placeholder_cleanup: promoted={_promoted or 0} deleted={_cleaned or 0}")
                 await _c.execute(
@@ -437,11 +472,11 @@ async def lifespan(app: FastAPI):
     except Exception as _e:
         logger.warning(f"startup_placeholder_cleanup_failed: {_e}")
 
-    # 주기적 stale placeholder 처리 (1분마다, 5분 초과분 — 내용 보존)
+    # 주기적 stale placeholder 처리 (15초마다, 2분 초과분 — 중복 버블 방지 강화)
     async def _periodic_placeholder_cleanup():
         import asyncio as _pc_asyncio
         while True:
-            await _pc_asyncio.sleep(60)  # 1분
+            await _pc_asyncio.sleep(15)  # 15초
             try:
                 from app.core.db_pool import get_pool as _gp_pc
                 from app.services.chat_service import _streaming_state
@@ -449,10 +484,10 @@ async def lifespan(app: FastAPI):
                 async with _pool.acquire() as _c:
                     # 현재 스트리밍 중인 세션은 제외
                     _active_sids = [k for k, v in _streaming_state.items() if not v.get("completed")]
-                    # 5분 초과 + 스트리밍 아닌 placeholder만 대상 (2분→5분으로 여유 확보)
+                    # 2분 초과 + 스트리밍 아닌 placeholder만 대상
                     _stale = await _c.fetch(
                         "SELECT id, session_id, content FROM chat_messages "
-                        "WHERE intent = 'streaming_placeholder' AND created_at < NOW() - interval '5 minutes'"
+                        "WHERE intent = 'streaming_placeholder' AND created_at < NOW() - interval '2 minutes'"
                     )
                     _promoted = 0
                     _deleted = 0
@@ -462,12 +497,28 @@ async def lifespan(app: FastAPI):
                             continue  # 아직 스트리밍 중 → 건드리지 않음
                         content = row["content"] or ""
                         if content.strip():
-                            # 내용 있음 → 응답으로 전환 (소실 방지)
-                            await _c.execute(
-                                "UPDATE chat_messages SET intent = NULL, model_used = 'recovered' WHERE id = $1",
-                                row["id"],
+                            # 최종 응답이 이미 있으면 중복 방지를 위해 삭제
+                            _has_final = await _c.fetchval(
+                                "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND role = 'assistant' "
+                                "AND intent IS DISTINCT FROM 'streaming_placeholder' "
+                                "AND created_at >= (SELECT created_at FROM chat_messages WHERE id = $2)",
+                                row["session_id"], row["id"],
                             )
-                            _promoted += 1
+                            if _has_final and _has_final > 0:
+                                await _c.execute("DELETE FROM chat_messages WHERE id = $1", row["id"])
+                                _deleted += 1
+                            else:
+                                import re as _re
+                                _clean = _re.sub(r'\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\s*$', '', content).rstrip()
+                                if _clean:
+                                    await _c.execute(
+                                        "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'recovered' WHERE id = $1",
+                                        row["id"], _clean,
+                                    )
+                                    _promoted += 1
+                                else:
+                                    await _c.execute("DELETE FROM chat_messages WHERE id = $1", row["id"])
+                                    _deleted += 1
                         else:
                             await _c.execute("DELETE FROM chat_messages WHERE id = $1", row["id"])
                             _deleted += 1
@@ -625,6 +676,14 @@ async def lifespan(app: FastAPI):
 
     _startup_asyncio.create_task(_check_missed_sleep_time())
 
+    # KakaoBot SaaS 스케줄러 시작
+    try:
+        from app.services.kakaobot_scheduler import start_scheduler_tasks
+        start_scheduler_tasks()
+        logger.info("kakaobot_scheduler_started")
+    except Exception as e:
+        logger.warning(f"kakaobot_scheduler_start_failed: {e}")
+
     # Memory Store 초기화 (T-011)
     try:
         await memory_store.initialize()
@@ -692,7 +751,7 @@ app = FastAPI(
 # H-07: CORS middleware — restrict to AADS dashboard origin
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://aads.newtalk.kr"],
+    allow_origins=["https://aads.newtalk.kr", "https://kakaobot.newtalk.kr"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -705,11 +764,17 @@ import app.auth as _auth_mod
 _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/health",
     "/api/v1/auth/login",
+    "/api/v1/auth/register",
     "/api/v1/auth/me",
     "/docs",
     "/openapi.json",
     "/redoc",
     "/mcp",
+    "/api/v1/pc-agent",
+    "/api/v1/review",
+    "/api/v1/kakao-bot/msgbot/webhook",
+    "/api/v1/kakao-bot/respond",
+    "/api/v1/kakao-bot/agent",
 )
 # 내부 모니터링 (verify_monitor_key로 별도 인증)
 _MONITOR_KEY_PATHS = (
@@ -808,6 +873,7 @@ app.include_router(code_review_router)
 app.include_router(quality_router, prefix="/api/v1", tags=["quality"])
 app.include_router(memory_monitor_router, prefix="/api/v1", tags=["memory-monitor"])
 app.include_router(pc_agent_router, prefix="/api/v1", tags=["pc-agent"])
+app.include_router(kakao_bot_router, prefix="/api/v1", tags=["kakao-bot"])
 # 정적 파일 서빙
 import pathlib as _pathlib
 _static_dir = _pathlib.Path(__file__).resolve().parent / "static"

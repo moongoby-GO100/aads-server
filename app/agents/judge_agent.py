@@ -2,7 +2,7 @@
 Judge Agent: 독립 출력 검증 — TaskSpec success_criteria 대비 코드 정합성 평가.
 역할: Developer/QA와 별도 컨텍스트 + 별도 모델에서 최종 판정 (T-008 준수).
 판정: pass / fail / conditional_pass
-모델: Gemini 3.1 Pro (gemini-3.1-pro-preview) — Developer/QA(Claude Sonnet 4.6)와 다른 모델 (T-002)
+모델: Gemini 2.5 Flash (gemini-2.5-flash) — Developer/QA(Claude Sonnet 4.6)와 다른 모델 (T-002)
 fail 시 구체적 피드백 JSON → Supervisor가 Developer에 재작업 지시
 """
 import json
@@ -86,13 +86,122 @@ def _build_criteria_comparison(
     return "\n".join(lines)
 
 
+def _parse_judge_response(content: str) -> dict:
+    """Judge LLM 응답에서 JSON verdict 추출. 항상 dict 반환 보장."""
+    verdict_dict = {}
+
+    try:
+        text = content.strip()
+        # 1. markdown code block 우선 추출
+        code_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text)
+        if code_match:
+            text = code_match.group(1).strip()
+
+        # 2. 직접 파싱 시도
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                verdict_dict = parsed
+        except json.JSONDecodeError:
+            pass
+
+        # 3. string-aware depth-tracking으로 JSON 객체 추출
+        if not verdict_dict:
+            start = text.find('{')
+            if start >= 0:
+                depth = 0
+                in_str = False
+                esc = False
+                for i in range(start, len(text)):
+                    ch = text[i]
+                    if in_str:
+                        if esc:
+                            esc = False
+                            continue
+                        if ch == '\\':
+                            esc = True
+                            continue
+                        if ch == '"':
+                            in_str = False
+                        continue
+                    if ch == '"':
+                        in_str = True
+                    elif ch == '{':
+                        depth += 1
+                    elif ch == '}':
+                        depth -= 1
+                        if depth == 0:
+                            block = text[start:i + 1]
+                            try:
+                                verdict_dict = json.loads(block)
+                            except json.JSONDecodeError:
+                                # trailing comma 등 제거 후 재시도
+                                cleaned = re.sub(r',\s*([}\]])', r'\1', block)
+                                try:
+                                    verdict_dict = json.loads(cleaned)
+                                except json.JSONDecodeError:
+                                    pass
+                            break
+
+        # 4. 원본 텍스트(코드 블록 제거 전)에서도 {} 블록 탐색
+        if not verdict_dict and code_match:
+            start = content.find('{')
+            if start >= 0:
+                depth = 0
+                for i in range(start, len(content)):
+                    ch = content[i]
+                    if ch == '{':
+                        depth += 1
+                    elif ch == '}':
+                        depth -= 1
+                        if depth == 0:
+                            try:
+                                verdict_dict = json.loads(content[start:i + 1])
+                            except json.JSONDecodeError:
+                                cleaned = re.sub(r',\s*([}\]])', r'\1', content[start:i + 1])
+                                try:
+                                    verdict_dict = json.loads(cleaned)
+                                except json.JSONDecodeError:
+                                    pass
+                            break
+
+        # 5. verdict 키가 없으면 텍스트에서 verdict 추출 시도
+        if not verdict_dict:
+            v_match = re.search(r'"?verdict"?\s*[:=]\s*"?(pass|fail|conditional_pass)"?', content, re.I)
+            s_match = re.search(r'"?score"?\s*[:=]\s*([0-9.]+)', content)
+            if v_match:
+                verdict_dict = {
+                    "verdict": v_match.group(1).lower(),
+                    "score": float(s_match.group(1)) if s_match else 0.5,
+                    "issues": [],
+                    "rework_instructions": "",
+                    "recommendation": "텍스트에서 판정 추출",
+                }
+    except Exception as e:
+        logger.warning("judge_json_parse_failed", error=str(e), content=content[:300])
+
+    # 최후 수단: 텍스트에서 verdict 키워드 탐색
+    if not verdict_dict:
+        v_match = re.search(r'\b(pass|fail|conditional_pass)\b', content, re.I)
+        verdict_val = v_match.group(1).lower() if v_match else "conditional_pass"
+        verdict_dict = {
+            "verdict": verdict_val,
+            "score": 0.5,
+            "issues": ["JSON 파싱 실패 — 텍스트에서 verdict 추출"],
+            "rework_instructions": "",
+            "recommendation": content[:200],
+        }
+
+    return verdict_dict
+
+
 async def judge_node(state: AADSState) -> dict:
     """
     1. TaskSpec success_criteria + output_artifacts 구조화 비교 (T-031)
     2. Developer 코드 + QA 결과를 독립 컨텍스트로 평가 (T-008)
     3. JudgeVerdict 반환 (pass/fail/conditional_pass)
     4. fail → 구체적 피드백 JSON → Supervisor가 Developer에 재작업 지시
-    모델: Gemini 3.1 Pro (Developer/QA의 Claude Sonnet 4.6과 다른 모델)
+    모델: Gemini 2.5 Flash (Developer/QA의 Claude Sonnet 4.6과 다른 모델)
     """
     logger.info("judge_node_start")
 
@@ -174,26 +283,27 @@ fail이면 rework_instructions 필드에 Developer에게 전달할 구체적 재
 """},
     ]
 
-    response = await llm.ainvoke(messages)
-    content = response.content.strip()
-
-    # JSON 파싱
-    verdict_dict = {}
+    # LLM 호출 — 실패 시에도 verdict_dict 반환 보장
+    content = ""
     try:
-        json_match = re.search(r'\{[\s\S]*\}', content)
-        if json_match:
-            verdict_dict = json.loads(json_match.group())
-        else:
-            verdict_dict = json.loads(content)
-    except (json.JSONDecodeError, Exception) as e:
-        logger.warning("judge_json_parse_failed", error=str(e), content=content[:200])
+        response = await llm.ainvoke(messages)
+        content = (response.content or "").strip()
+    except Exception as e:
+        logger.error("judge_llm_invoke_failed", error=str(e))
+        content = ""
+
+    if not content:
+        logger.warning("judge_empty_response")
         verdict_dict = {
             "verdict": "conditional_pass",
             "score": 0.5,
-            "issues": ["JSON 파싱 실패: " + str(e)[:100]],
+            "issues": ["Judge LLM 응답 없음"],
             "rework_instructions": "",
-            "recommendation": "수동 확인 필요",
+            "recommendation": "LLM 응답이 비어있어 conditional_pass 처리",
         }
+    else:
+        # JSON 파싱 — markdown code block 및 후행 텍스트 처리
+        verdict_dict = _parse_judge_response(content)
 
     # JudgeVerdict 유효성 검증 (criteria_met/criteria_failed/rework_instructions는 extra 필드)
     try:

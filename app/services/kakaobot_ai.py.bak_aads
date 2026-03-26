@@ -127,7 +127,7 @@ def _parse_numbered_messages(text: str, expected: int) -> List[str]:
 
     for line in lines:
         stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+        if not stripped:
             continue
         # 번호 시작 감지 (1. 2. 3. 등)
         if len(stripped) > 2 and stripped[0].isdigit() and stripped[1] in ".)" and current:

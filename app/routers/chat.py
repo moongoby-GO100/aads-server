@@ -166,6 +166,7 @@ async def send_message(request: Request):
         content = str(form.get("content", ""))
         model_override = form.get("model") or form.get("model_override") or None
         reply_to_id = str(form.get("reply_to_id")) if form.get("reply_to_id") else None
+        idempotency_key = str(form.get("idempotency_key")) if form.get("idempotency_key") else None
         attachments = []
         for f in form.getlist("files"):
             if hasattr(f, "read"):
@@ -211,6 +212,7 @@ async def send_message(request: Request):
         model_override = req.model_override
         attachments = req.attachments
         reply_to_id = str(req.reply_to_id) if req.reply_to_id else None
+        idempotency_key = req.idempotency_key if hasattr(req, 'idempotency_key') else None
 
     # ★ ContextVar를 HTTP 핸들러에서 조기 설정
     # with_background_completion 내부의 producer Task가 올바른 session_id를 상속받도록
@@ -225,13 +227,20 @@ async def send_message(request: Request):
         attachments=attachments,
         model_override=model_override,
         reply_to_id=reply_to_id,
+        idempotency_key=idempotency_key,
     )
     # 클라이언트 연결 종료 시 백그라운드에서 LLM 생성 완료 → DB 저장 보장
     bg_stream = svc.with_background_completion(raw_stream, session_id=session_id_str)
     return StreamingResponse(
         bg_stream,
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+            "Transfer-Encoding": "chunked",
+            "X-Stream-Session": session_id_str,
+        },
     )
 
 
@@ -548,7 +557,13 @@ async def regenerate_message(message_id: UUID, request: Request):
     return StreamingResponse(
         bg_stream,
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+            "Transfer-Encoding": "chunked",
+            "X-Stream-Session": session_id_str,
+        },
     )
 
 

@@ -100,26 +100,21 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any]) -> Non
         display_content = (content + streaming_note) if content else f"⏳ _AI가 응답을 생성 중입니다... (도구 {tool_count}회 호출 중)_"
 
         pool = get_pool()
+        _sid = uuid.UUID(session_id)
         async with pool.acquire() as conn:
-            # streaming placeholder 메시지가 있으면 UPDATE, 없으면 INSERT
-            existing = await conn.fetchval(
-                "SELECT id FROM chat_messages WHERE session_id = $1 AND role = 'assistant' AND intent = 'streaming_placeholder' ORDER BY created_at DESC LIMIT 1",
-                uuid.UUID(session_id),
+            # DB partial unique index (idx_one_placeholder_per_session) 활용 — 세션당 1개만 보장
+            _inserted = await conn.fetchval(
+                """INSERT INTO chat_messages (session_id, role, content, intent, model_used)
+                   VALUES ($1, 'assistant', $2, 'streaming_placeholder', 'streaming')
+                   ON CONFLICT (session_id) WHERE intent = 'streaming_placeholder'
+                   DO UPDATE SET content = EXCLUDED.content, edited_at = NOW()
+                   RETURNING (xmax = 0) AS is_new""",
+                _sid, display_content,
             )
-            if existing:
-                await conn.execute(
-                    "UPDATE chat_messages SET content = $1, edited_at = NOW() WHERE id = $2",
-                    display_content, existing,
-                )
-            else:
-                await conn.execute(
-                    """INSERT INTO chat_messages (session_id, role, content, intent, model_used)
-                       VALUES ($1, 'assistant', $2, 'streaming_placeholder', 'streaming')""",
-                    uuid.UUID(session_id), display_content,
-                )
+            if _inserted:  # 신규 INSERT일 때만 카운트 증가
                 await conn.execute(
                     "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
-                    uuid.UUID(session_id),
+                    _sid,
                 )
         logger.info(f"interim_save session={session_id[:8]} tools={tool_count} content_len={len(content)}")
     except Exception as e:
@@ -1370,7 +1365,8 @@ async def _save_message(
     tools_called: Optional[List[str]] = None,
     thinking_summary: Optional[str] = None,
     reply_to_id: Optional[uuid.UUID] = None,
-) -> Dict[str, Any]:
+    idempotency_key: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     # Strip raw XML tool-call / tool-response / fabricated-result blocks from assistant messages
     # 닫힌 태그 + 닫히지 않은 태그(이후 전부) 모두 제거
     if role == "assistant" and content:
@@ -1389,30 +1385,38 @@ async def _save_message(
     _branch_uuid = uuid.UUID(_branch_id_str) if _branch_id_str else None
 
     # AADS-CRITICAL-FIX #2: INSERT + UPDATE를 트랜잭션으로 감싸 message_count 정합성 보장
+    # Stage 3: idempotency_key가 있으면 ON CONFLICT DO NOTHING으로 중복 방지
     async with conn.transaction():
-        row = await conn.fetchrow(
-            """
-            INSERT INTO chat_messages
-                (session_id, role, content, model_used, intent, cost, tokens_in, tokens_out,
-                 attachments, sources, tools_called, thinking_summary, reply_to_id, branch_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14)
-            RETURNING *
-            """,
-            session_id,
-            role,
-            content,
-            model_used,
-            intent,
-            cost,
-            tokens_in,
-            tokens_out,
-            json.dumps(attachments or []),
-            json.dumps(sources or []),
-            json.dumps(tools_called or []),
-            thinking_summary,
-            reply_to_id,
-            _branch_uuid,
-        )
+        if idempotency_key:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO chat_messages
+                    (session_id, role, content, model_used, intent, cost, tokens_in, tokens_out,
+                     attachments, sources, tools_called, thinking_summary, reply_to_id, branch_id, idempotency_key)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14, $15)
+                ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
+                RETURNING *
+                """,
+                session_id, role, content, model_used, intent, cost, tokens_in, tokens_out,
+                json.dumps(attachments or []), json.dumps(sources or []), json.dumps(tools_called or []),
+                thinking_summary, reply_to_id, _branch_uuid, idempotency_key,
+            )
+            if row is None:
+                logger.info(f"idempotency_dedup session={str(session_id)[:8]} key={idempotency_key[:8]}")
+                return None  # 중복 — 저장 스킵
+        else:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO chat_messages
+                    (session_id, role, content, model_used, intent, cost, tokens_in, tokens_out,
+                     attachments, sources, tools_called, thinking_summary, reply_to_id, branch_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14)
+                RETURNING *
+                """,
+                session_id, role, content, model_used, intent, cost, tokens_in, tokens_out,
+                json.dumps(attachments or []), json.dumps(sources or []), json.dumps(tools_called or []),
+                thinking_summary, reply_to_id, _branch_uuid,
+            )
         # Update session message count (atomic with INSERT)
         await conn.execute(
             "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
@@ -1888,6 +1892,7 @@ async def send_message_stream(
     reply_to_id: Optional[str] = None,
     branch_id: Optional[str] = None,
     branch_point_msg_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """
     AADS-185: 3계층 Context Engineering + IntentRouter + ModelSelector + Tool Use 루프.
@@ -2142,7 +2147,9 @@ async def send_message_stream(
                 if existing_dup:
                     logger.info(f"user_msg_dedup session={session_id[:8]} — duplicate skipped")
                 else:
-                    await _save_message(conn, sid, "user", content, model_used=model_override, intent=user_intent, attachments=attachments or [], reply_to_id=_reply_to_uuid)
+                    _save_result = await _save_message(conn, sid, "user", content, model_used=model_override, intent=user_intent, attachments=attachments or [], reply_to_id=_reply_to_uuid, idempotency_key=idempotency_key)
+                    if _save_result is None and idempotency_key:
+                        logger.info(f"idempotency_key_dedup session={session_id[:8]} key={idempotency_key[:8]}")
 
             # CEO 채팅 학습 트리거 (백그라운드, 비차단)
             if not intent_override:

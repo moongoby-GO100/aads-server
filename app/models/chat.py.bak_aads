@@ -80,7 +80,6 @@ class MessageSendRequest(BaseModel):
     attachments: List[Any] = Field(default_factory=list)
     model_override: Optional[str] = None
     reply_to_id: Optional[uuid.UUID] = None
-    idempotency_key: Optional[str] = Field(None, max_length=64)
 
 
 class MessageUpdateRequest(BaseModel):

@@ -441,11 +441,22 @@ async def lifespan(app: FastAPI):
                         import re as _re
                         _clean_content = _re.sub(r'\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\s*$', '', _ph_content).rstrip()
                         if _clean_content:
-                            await _c.execute(
-                                "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'recovered' WHERE id = $1",
-                                _ph["id"], _clean_content,
+                            # Stage 2: promote 전 동일 내용 recovered 중복 검사 (앞 50자 비교)
+                            _prefix = _clean_content[:50]
+                            _dup_recovered = await _c.fetchval(
+                                "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND role = 'assistant' "
+                                "AND model_used = 'recovered' AND LEFT(content, 50) = $2 AND id != $3",
+                                _ph["session_id"], _prefix, _ph["id"],
                             )
-                            _promoted += 1
+                            if _dup_recovered and _dup_recovered > 0:
+                                await _c.execute("DELETE FROM chat_messages WHERE id = $1", _ph["id"])
+                                _cleaned += 1
+                            else:
+                                await _c.execute(
+                                    "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'recovered' WHERE id = $1",
+                                    _ph["id"], _clean_content,
+                                )
+                                _promoted += 1
                         else:
                             await _c.execute("DELETE FROM chat_messages WHERE id = $1", _ph["id"])
                             _cleaned += 1
@@ -500,11 +511,22 @@ async def lifespan(app: FastAPI):
                                 import re as _re
                                 _clean = _re.sub(r'\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\s*$', '', content).rstrip()
                                 if _clean:
-                                    await _c.execute(
-                                        "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'recovered' WHERE id = $1",
-                                        row["id"], _clean,
+                                    # Stage 2: promote 전 동일 내용 recovered 중복 검사
+                                    _prefix = _clean[:50]
+                                    _dup_rec = await _c.fetchval(
+                                        "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND role = 'assistant' "
+                                        "AND model_used = 'recovered' AND LEFT(content, 50) = $2 AND id != $3",
+                                        row["session_id"], _prefix, row["id"],
                                     )
-                                    _promoted += 1
+                                    if _dup_rec and _dup_rec > 0:
+                                        await _c.execute("DELETE FROM chat_messages WHERE id = $1", row["id"])
+                                        _deleted += 1
+                                    else:
+                                        await _c.execute(
+                                            "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'recovered' WHERE id = $1",
+                                            row["id"], _clean,
+                                        )
+                                        _promoted += 1
                                 else:
                                     await _c.execute("DELETE FROM chat_messages WHERE id = $1", row["id"])
                                     _deleted += 1

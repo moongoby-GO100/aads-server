@@ -34,7 +34,7 @@ import asyncio as _heartbeat_asyncio
 
 async def with_heartbeat(
     gen: AsyncGenerator[str, None],
-    interval: float = 8.0,
+    interval: float = 5.0,
 ) -> AsyncGenerator[str, None]:
     """Wrap an SSE async generator to interleave heartbeat events.
 
@@ -63,7 +63,7 @@ async def with_heartbeat(
         except Exception as exc:
             logger.warning(f"with_heartbeat inner generator error: {type(exc).__name__}: {exc}", exc_info=True)
             # 에러도 SSE로 전달 후 종료 (조용히 삼키지 않음)
-            yield f'data: {json.dumps({"type": "error", "content": f"Stream error: {type(exc).__name__}"})}\n\n'
+            yield f'data: {json.dumps({"type": "error", "content": f"Stream error: {type(exc).__name__}", "recoverable": True})}\n\n'
             break
 
 # ── Background completion wrapper (Queue 기반) ────────────────────
@@ -100,26 +100,21 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any]) -> Non
         display_content = (content + streaming_note) if content else f"⏳ _AI가 응답을 생성 중입니다... (도구 {tool_count}회 호출 중)_"
 
         pool = get_pool()
+        _sid = uuid.UUID(session_id)
         async with pool.acquire() as conn:
-            # streaming placeholder 메시지가 있으면 UPDATE, 없으면 INSERT
-            existing = await conn.fetchval(
-                "SELECT id FROM chat_messages WHERE session_id = $1 AND role = 'assistant' AND intent = 'streaming_placeholder' ORDER BY created_at DESC LIMIT 1",
-                uuid.UUID(session_id),
+            # DB partial unique index (idx_one_placeholder_per_session) 활용 — 세션당 1개만 보장
+            _inserted = await conn.fetchval(
+                """INSERT INTO chat_messages (session_id, role, content, intent, model_used)
+                   VALUES ($1, 'assistant', $2, 'streaming_placeholder', 'streaming')
+                   ON CONFLICT (session_id) WHERE intent = 'streaming_placeholder'
+                   DO UPDATE SET content = EXCLUDED.content, edited_at = NOW()
+                   RETURNING (xmax = 0) AS is_new""",
+                _sid, display_content,
             )
-            if existing:
-                await conn.execute(
-                    "UPDATE chat_messages SET content = $1, edited_at = NOW() WHERE id = $2",
-                    display_content, existing,
-                )
-            else:
-                await conn.execute(
-                    """INSERT INTO chat_messages (session_id, role, content, intent, model_used)
-                       VALUES ($1, 'assistant', $2, 'streaming_placeholder', 'streaming')""",
-                    uuid.UUID(session_id), display_content,
-                )
+            if _inserted:  # 신규 INSERT일 때만 카운트 증가
                 await conn.execute(
                     "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
-                    uuid.UUID(session_id),
+                    _sid,
                 )
         logger.info(f"interim_save session={session_id[:8]} tools={tool_count} content_len={len(content)}")
     except Exception as e:
@@ -197,13 +192,13 @@ async def with_background_completion(
     4. 클라이언트 disconnect → consumer만 중단, producer는 계속 실행 → DB 저장 완료
     5. 클라이언트 disconnect 후 10초마다 중간 결과를 DB에 저장 (세션 돌아왔을 때 보임)
     """
-    queue: _heartbeat_asyncio.Queue = _heartbeat_asyncio.Queue(maxsize=0)
+    queue: _heartbeat_asyncio.Queue = _heartbeat_asyncio.Queue(maxsize=500)
     _client_gone = False
     # heartbeat 정지 신호 — producer 완료 또는 client disconnect 시 set
     _hb_stop = _heartbeat_asyncio.Event()
 
     # 스트리밍 상태 초기화
-    state: Dict[str, Any] = {"content": "", "tool_count": 0, "last_tool": "", "last_save": _bg_time.monotonic()}
+    state: Dict[str, Any] = {"content": "", "tool_count": 0, "last_tool": "", "last_save": _bg_time.monotonic(), "started_at": _bg_time.monotonic()}
     _streaming_state[session_id] = state
 
     _client_gone_since: float = 0  # 클라이언트 이탈 시각 (monotonic)
@@ -229,10 +224,10 @@ async def with_background_completion(
                     except Exception:
                         pass
 
-                # 클라이언트 연결 중 10초마다 중간 저장 (BUG-5 FIX: 1초→10초, DB 부하 감소)
+                # 클라이언트 연결 중 3초마다 중간 저장 (Invisible Recovery: 10s→3s, 끊김 후 partial_content 실시간성)
                 if not _client_gone:
                     _now_rt = _bg_time.monotonic()
-                    if _now_rt - state["last_save"] > 10:
+                    if _now_rt - state["last_save"] > 3:
                         state["last_save"] = _now_rt
                         await _interim_save_streaming(session_id, state)
 
@@ -321,22 +316,25 @@ async def with_background_completion(
     # producer/도구 블로킹과 완전 분리된 asyncio.Task에서 5초마다 heartbeat 전송.
     # 3중 안전장치: (1) heartbeat_pump → queue, (2) consumer timeout → 직접 yield,
     # (3) pump 비정상 종료 시 자동 재시작.
-    _HB_INTERVAL = 8.0  # P0-FIX: 도구 실행 heartbeat와 동일 간격 (8초)
+    _HB_INTERVAL = 5.0  # 기본 5초: Cloudflare 100s/nginx 600s 대비 충분한 여유
+    _HB_INTERVAL_TOOL = 2.0  # 도구 실행 중 2초: 긴 도구 실행 시 연결 안정성 강화
     _HB_LINE = f'data: {json.dumps({"type": "heartbeat"})}\n\n'
 
     async def _heartbeat_pump():
-        """독립 heartbeat — producer/도구 블로킹과 무관하게 5초마다 queue에 heartbeat 삽입.
+        """Adaptive heartbeat — 도구 실행 중 2초, 평시 5초 간격으로 queue에 heartbeat 삽입.
         도구 실행 중에는 tool_count/last_tool 포함 → 프론트 timeout 리셋 + 진행상황 표시."""
         while not _hb_stop.is_set():
             try:
-                await _heartbeat_asyncio.wait_for(_hb_stop.wait(), timeout=_HB_INTERVAL)
+                # Adaptive: 도구 실행 중이면 2초, 아니면 5초
+                _tc = state.get("tool_count", 0)
+                _lt = state.get("last_tool", "")
+                _interval = _HB_INTERVAL_TOOL if (_tc > 0 and _lt) else _HB_INTERVAL
+                await _heartbeat_asyncio.wait_for(_hb_stop.wait(), timeout=_interval)
                 break  # stop 신호 수신 → 정상 종료
             except _heartbeat_asyncio.TimeoutError:
-                # 5초 경과, stop 미수신 → heartbeat 전송
                 if _client_gone:
                     break  # 클라이언트 이탈 시 heartbeat 불필요
                 try:
-                    # P0-FIX: 도구 실행 중이면 tool 정보 포함 → 프론트 timeout 리셋 유도
                     _tc = state.get("tool_count", 0)
                     _lt = state.get("last_tool", "")
                     if _tc > 0 and _lt:
@@ -347,13 +345,14 @@ async def with_background_completion(
                 except Exception:
                     pass
             except Exception as _hb_exc:
-                # P0-FIX: 예상치 못한 예외로 pump 죽지 않도록 방어
                 logger.warning(f"heartbeat_pump_error session={session_id[:8]}: {_hb_exc}")
-                await _heartbeat_asyncio.sleep(1)  # 짧은 대기 후 재시도
+                await _heartbeat_asyncio.sleep(1)
         logger.debug(f"heartbeat_pump_done session={session_id[:8]}")
 
     hb_task = _heartbeat_asyncio.create_task(_heartbeat_pump())
 
+    # SSE retry 헤더: 클라이언트 자동 재연결 간격 3초 (EventSource 표준)
+    yield f"retry: 3000\n\n"
     # P0-FIX: 초기 heartbeat 즉시 전송 — 연결 수립 직후 SSE 채널 활성화 확인
     yield _HB_LINE
 
@@ -366,7 +365,11 @@ async def with_background_completion(
                 logger.warning(f"heartbeat_pump_died session={session_id[:8]}, restarting")
                 hb_task = _heartbeat_asyncio.create_task(_heartbeat_pump())
             try:
-                item = await _heartbeat_asyncio.wait_for(queue.get(), timeout=_HB_INTERVAL)
+                # Adaptive consumer timeout: 도구 실행 중 2초, 평시 5초 (pump과 동기)
+                _c_tc = state.get("tool_count", 0)
+                _c_lt = state.get("last_tool", "")
+                _c_interval = _HB_INTERVAL_TOOL if (_c_tc > 0 and _c_lt) else _HB_INTERVAL
+                item = await _heartbeat_asyncio.wait_for(queue.get(), timeout=_c_interval)
             except _heartbeat_asyncio.TimeoutError:
                 # heartbeat_pump이 큐에 넣지 못한 경우 → consumer에서 직접 heartbeat yield
                 yield _HB_LINE
@@ -733,26 +736,51 @@ def get_streaming_status(session_id: str) -> Optional[Dict[str, Any]]:
         tool_count: 도구 호출 횟수
         last_tool: 마지막 호출 도구 이름
     """
+    _STREAMING_MAX_AGE_SEC = 600  # 10분 이상 된 streaming state 자동 만료
+
     if session_id in _streaming_state:
         s = _streaming_state[session_id]
         is_completed = s.get("completed", False)
+
+        # STUCK 방지: 에러 content 감지 → 즉시 완료 처리
+        _content = s.get("content", "")
+        if not is_completed and "API Error:" in _content and "no_db_connection" in _content:
+            logger.warning(f"streaming_state_error_detected session={session_id[:8]} — force completing")
+            is_completed = True
+            s["completed"] = True
+
+        # STUCK 방지: 10분 이상 된 미완료 state 자동 만료
+        if not is_completed:
+            _started = s.get("started_at", 0)
+            if _started and (_bg_time.monotonic() - _started) > _STREAMING_MAX_AGE_SEC:
+                logger.warning(f"streaming_state_expired session={session_id[:8]} age={_bg_time.monotonic() - _started:.0f}s")
+                is_completed = True
+                s["completed"] = True
+
         result = {
             "is_streaming": not is_completed,
             "just_completed": is_completed,
-            "content_length": len(s.get("content", "")),
+            "content_length": len(_content),
+            "token_count": len(_content) // 4,  # 근사 토큰 수 (프론트 진행도 판단용)
             "tool_count": s.get("tool_count", 0),
             "last_tool": s.get("last_tool", ""),
-            "partial_content": s.get("content", ""),
+            "partial_content": _content,
         }
         # P1-FIX: just_completed=True 반환 후 즉시 state 제거 (one-shot)
-        # → 프론트의 반복 reload 방지 (기존: 90초간 매 폴링마다 중복 reload)
         if is_completed:
             _streaming_state.pop(session_id, None)
         return result
-    if session_id in _active_bg_tasks and not _active_bg_tasks[session_id].done():
-        return {"is_streaming": True, "just_completed": False, "content_length": 0, "tool_count": 0, "last_tool": ""}
+
+    if session_id in _active_bg_tasks:
+        task = _active_bg_tasks[session_id]
+        if task.done():
+            # 완료된 태스크 정리
+            _active_bg_tasks.pop(session_id, None)
+        else:
+            return {"is_streaming": True, "just_completed": False, "content_length": 0, "token_count": 0, "tool_count": 0, "last_tool": ""}
+
     # 스트리밍 없음: 명시적 False 반환 → 프론트 폴링 즉시 중단
-    return {"is_streaming": False, "just_completed": False, "content_length": 0, "tool_count": 0, "last_tool": ""}
+    return {"is_streaming": False, "just_completed": False, "content_length": 0, "token_count": 0, "tool_count": 0, "last_tool": ""}
 
 
 # AADS-186C: Langfuse 트레이스 (optional — graceful degradation)
@@ -986,13 +1014,70 @@ async def delete_session(session_id: str) -> bool:
 async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort: str = "asc") -> List[Dict[str, Any]]:
     async with get_pool().acquire() as conn:
         order = "DESC" if sort == "desc" else "ASC"
+        # 활성 여부 판별 (스트리밍 중이면 placeholder 그대로 표시)
+        _is_active = session_id in _streaming_state and not _streaming_state[session_id].get("completed", False)
+        _intent_filter = "AND intent IS DISTINCT FROM '_deleted_duplicate'"
         rows = await conn.fetch(
-            f"SELECT * FROM chat_messages WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate' ORDER BY created_at {order} LIMIT $2 OFFSET $3",
+            f"SELECT * FROM chat_messages WHERE session_id = $1 {_intent_filter} ORDER BY created_at {order} LIMIT $2 OFFSET $3",
             uuid.UUID(session_id),
             limit,
             offset,
         )
-        return [_row_to_dict(r) for r in rows]
+        results = [_row_to_dict(r) for r in rows]
+        # 비활성 세션의 streaming_placeholder → 내용 있으면 recovered 전환, 없으면 제외
+        if not _is_active:
+            _promote_ids = []
+            _remove_ids = []
+            for msg in results:
+                if msg.get("intent") == "streaming_placeholder":
+                    content = (msg.get("content") or "").strip()
+                    if content and len(content) > 10:
+                        _promote_ids.append(msg["id"])
+                        msg["intent"] = None
+                        msg["model_used"] = "recovered"
+                    else:
+                        _remove_ids.append(msg["id"])
+            if _promote_ids:
+                for _pid in _promote_ids:
+                    try:
+                        await conn.execute(
+                            "UPDATE chat_messages SET intent = NULL, model_used = 'recovered', "
+                            "content = regexp_replace(content, E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$', '') "
+                            "WHERE id = $1",
+                            _pid if isinstance(_pid, __import__('uuid').UUID) else __import__('uuid').UUID(str(_pid)),
+                        )
+                    except Exception as _pe:
+                        logger.warning(f"list_messages_promote_failed: {_pe}")
+                logger.info(f"list_messages_auto_promoted session={session_id[:8]} count={len(_promote_ids)}")
+            _remove_set = set(str(x) for x in _remove_ids)
+            results = [m for m in results if str(m["id"]) not in _remove_set]
+        # 연속 중복 assistant 메시지 제거 (같은 내용의 recovered 중복 방지)
+        if len(results) > 1:
+            _deduped = [results[0]]
+            for i in range(1, len(results)):
+                cur = results[i]
+                prev = _deduped[-1]
+                if (cur.get("role") == "assistant" and prev.get("role") == "assistant"
+                        and cur.get("model_used") in ("recovered", "stopped", None)
+                        and prev.get("model_used") in ("recovered", "stopped", None)
+                        and (cur.get("content") or "")[:50] == (prev.get("content") or "")[:50]):
+                    # 짧은 것 제거, 긴 것 유지
+                    if len(cur.get("content") or "") > len(prev.get("content") or ""):
+                        _deduped[-1] = cur
+                    _shorter = prev if len(cur.get("content") or "") > len(prev.get("content") or "") else cur
+                    try:
+                        import uuid as _uuid_mod
+                        _sid = _shorter["id"]
+                        await conn.execute(
+                            "UPDATE chat_messages SET intent = '_deleted_duplicate' WHERE id = $1",
+                            _sid if isinstance(_sid, _uuid_mod.UUID) else _uuid_mod.UUID(str(_sid)),
+                        )
+                    except Exception:
+                        pass
+                else:
+                    _deduped.append(cur)
+            results = _deduped
+        return results
 
 
 async def list_messages_cursor(
@@ -1004,6 +1089,8 @@ async def list_messages_cursor(
     async with get_pool().acquire() as conn:
         sid = uuid.UUID(session_id)
         fetch_limit = limit + 1  # has_more 판별용 1건 추가
+        # 활성 여부 판별 (스트리밍 중이면 placeholder 그대로 표시)
+        _is_active = session_id in _streaming_state and not _streaming_state[session_id].get("completed", False)
         if cursor:
             from datetime import datetime as _dt
             cursor_dt = _dt.fromisoformat(cursor)
@@ -1026,7 +1113,59 @@ async def list_messages_cursor(
                 sid, fetch_limit,
             )
         messages = [_row_to_dict(r) for r in rows]
-        has_more = len(messages) > limit
+        has_more = len(messages) > limit  # has_more는 필터링 전 원본 건수로 판별
+        # 비활성 세션의 streaming_placeholder → 내용 있으면 recovered 전환, 없으면 제외
+        if not _is_active:
+            _promote_ids = []
+            _remove_ids = []
+            for msg in messages:
+                if msg.get("intent") == "streaming_placeholder":
+                    content = (msg.get("content") or "").strip()
+                    if content and len(content) > 10:
+                        _promote_ids.append(msg["id"])
+                        msg["intent"] = None
+                        msg["model_used"] = "recovered"
+                    else:
+                        _remove_ids.append(msg["id"])
+            if _promote_ids:
+                for _pid in _promote_ids:
+                    try:
+                        await conn.execute(
+                            "UPDATE chat_messages SET intent = NULL, model_used = 'recovered', "
+                            "content = regexp_replace(content, E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$', '') "
+                            "WHERE id = $1",
+                            _pid if isinstance(_pid, __import__('uuid').UUID) else __import__('uuid').UUID(str(_pid)),
+                        )
+                    except Exception as _pe:
+                        logger.warning(f"list_messages_cursor_promote_failed: {_pe}")
+                logger.info(f"list_messages_cursor_auto_promoted session={session_id[:8]} count={len(_promote_ids)}")
+            _remove_set = set(str(x) for x in _remove_ids)
+            messages = [m for m in messages if str(m["id"]) not in _remove_set]
+        # 연속 중복 assistant 메시지 제거 (같은 내용의 recovered 중복 방지)
+        if len(messages) > 1:
+            _deduped = [messages[0]]
+            for i in range(1, len(messages)):
+                cur = messages[i]
+                prev = _deduped[-1]
+                if (cur.get("role") == "assistant" and prev.get("role") == "assistant"
+                        and cur.get("model_used") in ("recovered", "stopped", None)
+                        and prev.get("model_used") in ("recovered", "stopped", None)
+                        and (cur.get("content") or "")[:50] == (prev.get("content") or "")[:50]):
+                    if len(cur.get("content") or "") > len(prev.get("content") or ""):
+                        _deduped[-1] = cur
+                    _shorter = prev if len(cur.get("content") or "") > len(prev.get("content") or "") else cur
+                    try:
+                        import uuid as _uuid_mod
+                        _sid = _shorter["id"]
+                        await conn.execute(
+                            "UPDATE chat_messages SET intent = '_deleted_duplicate' WHERE id = $1",
+                            _sid if isinstance(_sid, _uuid_mod.UUID) else _uuid_mod.UUID(str(_sid)),
+                        )
+                    except Exception:
+                        pass
+                else:
+                    _deduped.append(cur)
+            messages = _deduped
         if has_more:
             messages = messages[1:]  # 가장 오래된 1건 제거 (초과분)
         next_cursor = messages[0]["created_at"].isoformat() if has_more and messages else None
@@ -1226,7 +1365,8 @@ async def _save_message(
     tools_called: Optional[List[str]] = None,
     thinking_summary: Optional[str] = None,
     reply_to_id: Optional[uuid.UUID] = None,
-) -> Dict[str, Any]:
+    idempotency_key: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     # Strip raw XML tool-call / tool-response / fabricated-result blocks from assistant messages
     # 닫힌 태그 + 닫히지 않은 태그(이후 전부) 모두 제거
     if role == "assistant" and content:
@@ -1245,30 +1385,38 @@ async def _save_message(
     _branch_uuid = uuid.UUID(_branch_id_str) if _branch_id_str else None
 
     # AADS-CRITICAL-FIX #2: INSERT + UPDATE를 트랜잭션으로 감싸 message_count 정합성 보장
+    # Stage 3: idempotency_key가 있으면 ON CONFLICT DO NOTHING으로 중복 방지
     async with conn.transaction():
-        row = await conn.fetchrow(
-            """
-            INSERT INTO chat_messages
-                (session_id, role, content, model_used, intent, cost, tokens_in, tokens_out,
-                 attachments, sources, tools_called, thinking_summary, reply_to_id, branch_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14)
-            RETURNING *
-            """,
-            session_id,
-            role,
-            content,
-            model_used,
-            intent,
-            cost,
-            tokens_in,
-            tokens_out,
-            json.dumps(attachments or []),
-            json.dumps(sources or []),
-            json.dumps(tools_called or []),
-            thinking_summary,
-            reply_to_id,
-            _branch_uuid,
-        )
+        if idempotency_key:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO chat_messages
+                    (session_id, role, content, model_used, intent, cost, tokens_in, tokens_out,
+                     attachments, sources, tools_called, thinking_summary, reply_to_id, branch_id, idempotency_key)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14, $15)
+                ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
+                RETURNING *
+                """,
+                session_id, role, content, model_used, intent, cost, tokens_in, tokens_out,
+                json.dumps(attachments or []), json.dumps(sources or []), json.dumps(tools_called or []),
+                thinking_summary, reply_to_id, _branch_uuid, idempotency_key,
+            )
+            if row is None:
+                logger.info(f"idempotency_dedup session={str(session_id)[:8]} key={idempotency_key[:8]}")
+                return None  # 중복 — 저장 스킵
+        else:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO chat_messages
+                    (session_id, role, content, model_used, intent, cost, tokens_in, tokens_out,
+                     attachments, sources, tools_called, thinking_summary, reply_to_id, branch_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14)
+                RETURNING *
+                """,
+                session_id, role, content, model_used, intent, cost, tokens_in, tokens_out,
+                json.dumps(attachments or []), json.dumps(sources or []), json.dumps(tools_called or []),
+                thinking_summary, reply_to_id, _branch_uuid,
+            )
         # Update session message count (atomic with INSERT)
         await conn.execute(
             "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
@@ -1303,16 +1451,50 @@ async def _save_and_update_session(
     thinking_summary: Optional[str] = None,
     auto_save_check: bool = False,
 ) -> None:
-    """#19: Phase C — 별도 커넥션으로 응답 저장 + 세션 비용 업데이트."""
+    """#19: Phase C — 별도 커넥션으로 응답 저장 + 세션 비용 업데이트.
+    BUG-FIX: placeholder가 있으면 UPDATE로 전환 (DELETE+INSERT gap 제거).
+    """
     async with get_pool().acquire() as conn:
         async with conn.transaction():
-            await _save_message(
-                conn, sid, "assistant", content,
-                model_used=model_used, intent=intent, cost=cost,
-                tokens_in=tokens_in, tokens_out=tokens_out,
-                sources=sources or [], tools_called=tools_called or [],
-                thinking_summary=thinking_summary,
+            # streaming_placeholder가 있으면 UPDATE로 최종 응답 전환 (gap 제거)
+            placeholder_id = await conn.fetchval(
+                "SELECT id FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' ORDER BY created_at DESC LIMIT 1",
+                sid,
             )
+            if placeholder_id:
+                # placeholder → 최종 응답으로 전환 (같은 row, atomic)
+                # content 정리 (XML 태그, placeholder 마커 제거)
+                clean_content = content
+                if clean_content:
+                    for tag in ("function_calls", "function_response", "function_results", "tool_results", "tool_call", "tool_response"):
+                        clean_content = re.sub(rf'<{tag}>.*?</{tag}>', '', clean_content, flags=re.DOTALL)
+                        clean_content = re.sub(rf'<{tag}>.*', '', clean_content, flags=re.DOTALL)
+                    clean_content = re.sub(r'<invoke\s+name=[^>]*>.*?</invoke>', '', clean_content, flags=re.DOTALL)
+                    clean_content = re.sub(r'<invoke\s+name=[^>]*>.*', '', clean_content, flags=re.DOTALL)
+                    clean_content = re.sub(r'\n\n⏳ _.*?_', '', clean_content, flags=re.DOTALL)
+                    clean_content = re.sub(r'^⏳ _[^\n]*_\s*', '', clean_content)
+                    clean_content = clean_content.strip()
+                await conn.execute(
+                    """UPDATE chat_messages
+                       SET content = $1, intent = $2, model_used = $3,
+                           cost = $4, tokens_in = $5, tokens_out = $6,
+                           sources = $7::jsonb, tools_called = $8::jsonb,
+                           thinking_summary = $9, edited_at = NOW()
+                       WHERE id = $10""",
+                    clean_content, intent or None, model_used,
+                    cost, tokens_in, tokens_out,
+                    json.dumps(sources or []), json.dumps(tools_called or []),
+                    thinking_summary, placeholder_id,
+                )
+                logger.info(f"placeholder_promoted_to_final session={str(sid)[:8]} placeholder_id={placeholder_id}")
+            else:
+                await _save_message(
+                    conn, sid, "assistant", content,
+                    model_used=model_used, intent=intent, cost=cost,
+                    tokens_in=tokens_in, tokens_out=tokens_out,
+                    sources=sources or [], tools_called=tools_called or [],
+                    thinking_summary=thinking_summary,
+                )
             await conn.execute(
                 "UPDATE chat_sessions SET cost_total = cost_total + $1, updated_at = NOW() WHERE id = $2",
                 cost, sid,
@@ -1710,6 +1892,7 @@ async def send_message_stream(
     reply_to_id: Optional[str] = None,
     branch_id: Optional[str] = None,
     branch_point_msg_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """
     AADS-185: 3계층 Context Engineering + IntentRouter + ModelSelector + Tool Use 루프.
@@ -1953,7 +2136,18 @@ async def send_message_stream(
             # P2-2: branch 모드에서는 라우터에서 이미 저장했으므로 skip
             if not branch_point_msg_id:
                 user_intent = "system_trigger" if intent_override else None
-                await _save_message(conn, sid, "user", content, model_used=model_override, intent=user_intent, attachments=attachments or [], reply_to_id=_reply_to_uuid)
+                # 중복 사용자 메시지 방지 (502/503 재시도 시)
+                existing_dup = await conn.fetchrow(
+                    "SELECT id, content, created_at FROM chat_messages "
+                    "WHERE session_id = $1 AND role = 'user' AND content = $2 "
+                    "AND created_at > NOW() - interval '30 seconds' "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    sid, content,
+                )
+                if existing_dup:
+                    logger.info(f"user_msg_dedup session={session_id[:8]} — duplicate skipped")
+                else:
+                    await _save_message(conn, sid, "user", content, model_used=model_override, intent=user_intent, attachments=attachments or [], reply_to_id=_reply_to_uuid)
 
             # CEO 채팅 학습 트리거 (백그라운드, 비차단)
             if not intent_override:
@@ -2045,7 +2239,7 @@ async def send_message_stream(
             if _mentioned_projects:
                 _mention_desc = {
                     "KIS": "KIS AI 자동매매 시스템 (서버62, /root/kis/)",
-                    "GO100": "GO100 백억이 투자 교육 플랫폼 (서버62, /root/go100/)",
+                    "GO100": "GO100 백억이 투자분석 플랫폼 (서버211, /root/kis-autotrade-v4/)",
                     "AADS": "AADS 자율 AI 개발 시스템 (서버68, /root/aads/)",
                     "SF": "SmartFarm 스마트팜 시스템 (서버65, /root/sf/)",
                     "NTV2": "NTV2 뉴톡 v2 서비스 (서버65, /root/ntv2/)",
