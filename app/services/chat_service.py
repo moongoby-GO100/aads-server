@@ -1030,9 +1030,12 @@ async def delete_session(session_id: str) -> bool:
 async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort: str = "asc") -> List[Dict[str, Any]]:
     async with get_pool().acquire() as conn:
         order = "DESC" if sort == "desc" else "ASC"
-        # 활성 여부 판별 (스트리밍 중이면 placeholder 그대로 표시)
+        # 활성 여부 판별 (스트리밍 중이면 placeholder API 응답에서 제외 — SSE가 실시간 제공)
         _is_active = session_id in _streaming_state and not _streaming_state[session_id].get("completed", False)
         _intent_filter = "AND intent IS DISTINCT FROM '_deleted_duplicate'"
+        if _is_active:
+            # 활성 스트리밍 중 → placeholder 제외 (프론트 SSE 버블과 중복 방지)
+            _intent_filter += " AND intent IS DISTINCT FROM 'streaming_placeholder'"
         rows = await conn.fetch(
             f"SELECT * FROM chat_messages WHERE session_id = $1 {_intent_filter} ORDER BY created_at {order} LIMIT $2 OFFSET $3",
             uuid.UUID(session_id),
@@ -1116,8 +1119,11 @@ async def list_messages_cursor(
     async with get_pool().acquire() as conn:
         sid = uuid.UUID(session_id)
         fetch_limit = limit + 1  # has_more 판별용 1건 추가
-        # 활성 여부 판별 (스트리밍 중이면 placeholder 그대로 표시)
+        # 활성 여부 판별 (스트리밍 중이면 placeholder API 응답에서 제외 — SSE가 실시간 제공)
         _is_active = session_id in _streaming_state and not _streaming_state[session_id].get("completed", False)
+        _extra_filter = ""
+        if _is_active:
+            _extra_filter = " AND intent IS DISTINCT FROM 'streaming_placeholder'"
         if cursor:
             from datetime import datetime as _dt
             cursor_dt = _dt.fromisoformat(cursor)
@@ -1125,6 +1131,7 @@ async def list_messages_cursor(
                 "SELECT * FROM ("
                 "  SELECT * FROM chat_messages"
                 "  WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate'"
+                f"    {_extra_filter}"
                 "    AND created_at < $2"
                 "  ORDER BY created_at DESC LIMIT $3"
                 ") sub ORDER BY created_at ASC",
@@ -1135,6 +1142,7 @@ async def list_messages_cursor(
                 "SELECT * FROM ("
                 "  SELECT * FROM chat_messages"
                 "  WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate'"
+                f"    {_extra_filter}"
                 "  ORDER BY created_at DESC LIMIT $2"
                 ") sub ORDER BY created_at ASC",
                 sid, fetch_limit,

@@ -1030,9 +1030,12 @@ async def delete_session(session_id: str) -> bool:
 async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort: str = "asc") -> List[Dict[str, Any]]:
     async with get_pool().acquire() as conn:
         order = "DESC" if sort == "desc" else "ASC"
-        # 활성 여부 판별 (스트리밍 중이면 placeholder 그대로 표시)
+        # 활성 여부 판별 (스트리밍 중이면 placeholder API 응답에서 제외 — SSE가 실시간 제공)
         _is_active = session_id in _streaming_state and not _streaming_state[session_id].get("completed", False)
         _intent_filter = "AND intent IS DISTINCT FROM '_deleted_duplicate'"
+        if _is_active:
+            # 활성 스트리밍 중 → placeholder 제외 (프론트 SSE 버블과 중복 방지)
+            _intent_filter += " AND intent IS DISTINCT FROM 'streaming_placeholder'"
         rows = await conn.fetch(
             f"SELECT * FROM chat_messages WHERE session_id = $1 {_intent_filter} ORDER BY created_at {order} LIMIT $2 OFFSET $3",
             uuid.UUID(session_id),
@@ -1056,12 +1059,23 @@ async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort
             if _promote_ids:
                 for _pid in _promote_ids:
                     try:
-                        await conn.execute(
-                            "UPDATE chat_messages SET intent = NULL, model_used = 'recovered', "
-                            "content = regexp_replace(content, E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$', '') "
-                            "WHERE id = $1",
-                            _pid if isinstance(_pid, __import__('uuid').UUID) else __import__('uuid').UUID(str(_pid)),
+                        _uid = _pid if isinstance(_pid, __import__('uuid').UUID) else __import__('uuid').UUID(str(_pid))
+                        # promote 전 동일 내용 recovered 중복 검사
+                        _ph_content = await conn.fetchval("SELECT LEFT(content, 50) FROM chat_messages WHERE id = $1", _uid)
+                        _dup_cnt = await conn.fetchval(
+                            "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND role = 'assistant' "
+                            "AND model_used = 'recovered' AND LEFT(content, 50) = $2 AND id != $3",
+                            uuid.UUID(session_id), _ph_content, _uid,
                         )
+                        if _dup_cnt and _dup_cnt > 0:
+                            await conn.execute("DELETE FROM chat_messages WHERE id = $1", _uid)
+                        else:
+                            await conn.execute(
+                                "UPDATE chat_messages SET intent = NULL, model_used = 'recovered', "
+                                "content = regexp_replace(content, E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$', '') "
+                                "WHERE id = $1",
+                                _uid,
+                            )
                     except Exception as _pe:
                         logger.warning(f"list_messages_promote_failed: {_pe}")
                 logger.info(f"list_messages_auto_promoted session={session_id[:8]} count={len(_promote_ids)}")
