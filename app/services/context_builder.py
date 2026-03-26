@@ -306,6 +306,14 @@ def _build_layer3_messages(
                     content
                 )
 
+            # 패턴 3: Deep Compression — 2×윈도우 이전 메시지 초강력 압축
+            # 매우 오래된 대화는 핵심만 보존 (user: 첫 100자, assistant: 첫 200자)
+            if i < len(messages) - _OBSERVATION_WINDOW * 2:
+                if role == "user" and len(content) > 100:
+                    content = content[:100] + "…[이전 질문 축소]"
+                elif role == "assistant" and len(content) > 200:
+                    content = content[:200] + "…[이전 응답 축소]"
+
         result.append({"role": role, "content": content})
 
     # 토큰 추정 및 추가 압축 (80K 초과 시)
@@ -346,16 +354,32 @@ async def build_messages_context(
     base_system_prompt: str = "",
     db_conn=None,
     document_context: str = "",
+    intent: str = "",
 ) -> tuple[List[Dict[str, Any]], str]:
     """
     3+D 계층 컨텍스트 구성 → (messages, system_prompt) 반환.
     system_prompt: Layer 1 + Layer 2 + (Layer D: 임시 문서 컨텍스트)
     messages: Layer 3 대화 히스토리
+    intent: 인텐트명 (Prompt Compression — 단순 인텐트 시 경량 프롬프트)
     """
     ws_key = _normalize_workspace(workspace_name)
 
-    # Layer 1 (동기 — system_prompt_v2 기반 XML 섹션)
-    layer1 = build_layer1(ws_key, base_system_prompt)
+    # Prompt Compression: intent가 없으면 마지막 user 메시지로 간이 판별
+    _effective_intent = intent
+    if not _effective_intent and raw_messages:
+        _last_msg = ""
+        for _rm in reversed(raw_messages):
+            if _rm.get("role") == "user":
+                _last_msg = (_rm.get("content", "") or "")
+                if isinstance(_last_msg, list):
+                    _last_msg = " ".join(b.get("text", "") for b in _last_msg if isinstance(b, dict))
+                break
+        _SIMPLE_PATTERNS = ("안녕", "ㅎㅇ", "하이", "hi", "hello", "뭐해", "고마워", "감사", "ㅋㅋ", "ㄳ", "ㅇㅇ", "ok", "ㅎ", "네", "응")
+        if _last_msg and len(_last_msg) < 20 and any(p in _last_msg.lower() for p in _SIMPLE_PATTERNS):
+            _effective_intent = "greeting"
+
+    # Layer 1 (동기 — system_prompt_v2 기반 XML 섹션, Prompt Compression 적용)
+    layer1 = build_layer1(ws_key, base_system_prompt, intent=_effective_intent)
 
     # Layer 2 + 메모리 주입 + Auto-RAG(F1/F3) + Workspace Preload(F6) 병렬 실행
     _project = _normalize_workspace(workspace_name)
@@ -447,16 +471,18 @@ async def build(
     workspace_id: str = "",
     base_system_prompt: str = "",
     last_user_message: str = "",
+    intent: str = "",
 ) -> ContextResult:
     """
     AADS-185-A1: 비동기 3계층 컨텍스트 빌드 → ContextResult 반환.
     system_blocks: Anthropic Tool Use API용 (cache_control 포함)
     system_text: LiteLLM/Gemini용 플랫 문자열
+    intent: 인텐트명 (Prompt Compression — 단순 인텐트 시 경량 프롬프트)
     """
     ws_key = _normalize_workspace(workspace_name)
 
     # Layer 1 (정적 — 캐싱 대상, system_prompt_v2 기반 XML 섹션 + 도구 안내)
-    layer1_base = build_layer1(ws_key, base_system_prompt)
+    layer1_base = build_layer1(ws_key, base_system_prompt, intent=intent)
     tool_guide = _build_tool_guide_layer()  # AADS-186D: 도구 카테고리 안내
     layer1 = layer1_base + tool_guide
 

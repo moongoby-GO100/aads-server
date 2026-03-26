@@ -338,11 +338,36 @@ LAYER4_SELF_AWARENESS_TEMPLATE = """
 WS_LAYER1: Dict[str, str] = {k: "" for k in WS_ROLES}
 
 
-def build_layer1(workspace_key: str = "CEO", base_system_prompt: str = "") -> str:
+def build_layer1_lite(workspace_key: str = "CEO") -> str:
+    """
+    Prompt Compression — 단순 인텐트용 경량 시스템 프롬프트.
+    행동 원칙 + 역할만 포함. 도구/규칙/가이드/진화 섹션 제거.
+    Full 대비 ~60% 토큰 절감 (~1400→~500 토큰).
+    """
+    role = WS_ROLES.get(workspace_key, LAYER1_ROLE_DEFAULT)
+    return LAYER1_BEHAVIOR + "\n\n" + role
+
+
+# 단순 인텐트 — build_layer1_lite() 사용 대상
+_LITE_PROMPT_INTENTS = {
+    "greeting", "casual", "status_check", "health_check",
+    "all_service_status", "cost_report", "task_history", "dashboard",
+}
+
+
+def build_layer1(workspace_key: str = "CEO", base_system_prompt: str = "", intent: str = "") -> str:
     """
     Layer 1 정적 컨텍스트 조합.
     순서: 행동 원칙 → 역할(워크스페이스별) → CEO 화법 → 능력 → 도구 → 규칙 → 응답 가이드
+    intent가 단순 인텐트이면 경량 프롬프트 반환 (Prompt Compression).
     """
+    # Prompt Compression: 단순 인텐트 → 경량 프롬프트
+    if intent and intent in _LITE_PROMPT_INTENTS:
+        lite = build_layer1_lite(workspace_key)
+        if base_system_prompt:
+            lite += f"\n\n## 워크스페이스 추가 지시\n{base_system_prompt}"
+        return lite
+
     # 워크스페이스별 역할 + capabilities 선택 (미등록은 기본값)
     role = WS_ROLES.get(workspace_key, LAYER1_ROLE_DEFAULT)
     capabilities = WS_CAPABILITIES.get(workspace_key, _CAPABILITIES_FULL)
