@@ -236,18 +236,32 @@ check_duplicate() {
         return 1
     fi
 
-    # 최근 30분 내 동일 instruction_hash의 done 작업이 있으면 경고 (실행은 계속)
+    # 중복 제출 방지: 10분 내 done이면 차단, 30분 내면 경고
     local dup_job
     dup_job=$(db_exec "SELECT job_id FROM pipeline_jobs
                        WHERE project='${project}'
                          AND instruction_hash='${inst_hash}'
-                         AND status='done'
-                         AND updated_at > NOW() - INTERVAL '30 minutes'
                          AND job_id != '${job_id}'
+                         AND (
+                           status NOT IN ('done','error','rejected_done')
+                           OR (status = 'done' AND updated_at > NOW() - INTERVAL '10 minutes')
+                         )
                        LIMIT 1;" 2>/dev/null) || true
     if [[ -n "$dup_job" ]]; then
         dup_job="${dup_job// /}"
-        log "  DEDUP_WARN: 30분 내 동일 작업 존재: $dup_job (계속 실행)"
+        # 10분 내 done이거나 아직 진행 중이면 차단
+        local dup_status
+        dup_status=$(db_exec "SELECT status FROM pipeline_jobs WHERE job_id='${dup_job}';" 2>/dev/null) || true
+        dup_status="${dup_status// /}"
+        if [[ "$dup_status" != "done" ]]; then
+            log "  DEDUP_BLOCK: 동일 작업 진행 중: $dup_job ($dup_status) — $job_id 차단"
+            db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+                       error_detail='duplicate_blocked',
+                       review_feedback=E'[중복 차단] 동일 작업 진행 중: ${dup_job} (${dup_status})',
+                       updated_at=NOW() WHERE job_id='${job_id}';"
+            return 1
+        fi
+        log "  DEDUP_WARN: 10분 내 동일 작업 완료: $dup_job (계속 실행하되 경고)"
         db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[DEDUP 경고] 유사 작업: ${dup_job}',
                    updated_at=NOW() WHERE job_id='${job_id}';"
     fi
@@ -836,6 +850,67 @@ deploy_job() {
         done
     fi
 
+    # ═══ 자동 롤백: health-check FAIL 시 이전 커밋으로 복구 ═══
+    if [[ "$health_ok" == "FAIL" ]]; then
+        log "  ROLLBACK_START job=$job_id project=$project — health-check 실패"
+        post_to_chat "$session_id" "🔴 [Pipeline Runner] health-check 실패 — 자동 롤백 시작: $job_id"
+
+        cd "$main_workdir" 2>/dev/null || cd "${PROJECT_WORKDIR[$project]:-}"
+        if git revert --no-edit HEAD 2>/dev/null; then
+            git push 2>/dev/null || true
+            log "  ROLLBACK_REVERT: git revert HEAD 성공"
+
+            case "$project" in
+                AADS)
+                    docker exec aads-server supervisorctl restart aads-api 2>/dev/null || true
+                    ;;
+                KIS)
+                    systemctl restart kis-v41-api 2>/dev/null || true
+                    ;;
+                GO100)
+                    systemctl restart go100 2>/dev/null || true
+                    ;;
+                SF)
+                    docker restart shortflow-worker 2>/dev/null || true
+                    ;;
+                NTV2)
+                    docker exec newtalk-v2-app php artisan optimize 2>/dev/null || true
+                    ;;
+            esac
+
+            sleep 10
+            local rollback_health="FAIL"
+            if [[ -n "$health_url" ]]; then
+                if curl -sf -o /dev/null "$health_url" 2>/dev/null; then
+                    rollback_health="OK"
+                fi
+            fi
+
+            post_to_chat "$session_id" "↩️ [Pipeline Runner] 자동 롤백 완료 (롤백 후 health=${rollback_health}): $job_id"
+            log "  ROLLBACK_DONE job=$job_id rollback_health=$rollback_health"
+
+            if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
+                curl -s -m 10 -X POST \
+                    "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                    -d "chat_id=${TELEGRAM_CHAT_ID}" \
+                    -d "text=🔴 [Runner] 자동 롤백 실행: ${job_id} (${project}) — health=${rollback_health}" \
+                    -d "parse_mode=HTML" 2>/dev/null || true
+            fi
+
+            db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+                       error_detail='health_check_fail_rollback',
+                       review_feedback=COALESCE(review_feedback,'') || E'\n[자동롤백] health-check 실패 → git revert → rollback_health=${rollback_health}',
+                       updated_at=NOW() WHERE job_id='${job_id}';"
+            post_to_chat "$session_id" "🔴 [Pipeline Runner] 자동 롤백으로 에러 처리: $job_id"
+            _notify_ai "$job_id"
+            promote_next_queued "$project"
+            return 1
+        else
+            log "  ROLLBACK_REVERT_FAIL: git revert 실패 — 수동 복구 필요"
+            post_to_chat "$session_id" "🔴 [Pipeline Runner] 자동 롤백 실패 (git revert 불가) — 수동 복구 필요: $job_id"
+        fi
+    fi
+
     db_update "UPDATE pipeline_jobs SET status='done', phase='done',
                review_feedback=COALESCE(review_feedback,'') || E'\n[v2.1][배포완료] health=${health_ok} by=${RUNNER_HOSTNAME}',
                updated_at=NOW() WHERE job_id='${job_id}';"
@@ -865,9 +940,21 @@ reject_job() {
     log "▶ REJECT job=$job_id project=$project"
     cd "$workdir"
 
-    # v2.1: uncommitted 변경사항 제거 (커밋 전이므로 reset 불필요)
-    git checkout -- . 2>/dev/null || true
-    git clean -fd 2>/dev/null || true
+    # v2.2: 해당 Runner의 변경사항만 선택적 원복 (다른 Runner의 배포된 변경 보호)
+    local worktree_dir="/tmp/aads-wt-${job_id}"
+    if [[ -d "$worktree_dir" ]]; then
+        cd "${PROJECT_WORKDIR[$project]:-/tmp}"
+        git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
+        log "  REJECT_WORKTREE_CLEANUP: $worktree_dir"
+    else
+        local stash_msg="reject-${job_id}-$(date +%s)"
+        git stash push -m "$stash_msg" 2>/dev/null || {
+            log "  REJECT_STASH_FAIL: $job_id — git checkout fallback"
+            git checkout -- . 2>/dev/null || true
+            git clean -fd 2>/dev/null || true
+        }
+        log "  REJECT_STASH: $stash_msg (git stash list로 복구 가능)"
+    fi
 
     db_update "UPDATE pipeline_jobs SET status='rejected_done', phase='rejected_done', updated_at=NOW() WHERE job_id='${job_id}';"
     post_to_chat "$session_id" "↩️ [Pipeline Runner] 거부된 작업 코드 원복 완료: $job_id"
