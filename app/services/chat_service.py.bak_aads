@@ -101,15 +101,16 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any]) -> Non
 
         pool = get_pool()
         _sid = uuid.UUID(session_id)
+        _tool_events_json = json.dumps(state.get("tool_events", []))
         async with pool.acquire() as conn:
             # DB partial unique index (idx_one_placeholder_per_session) 활용 — 세션당 1개만 보장
             _inserted = await conn.fetchval(
-                """INSERT INTO chat_messages (session_id, role, content, intent, model_used)
-                   VALUES ($1, 'assistant', $2, 'streaming_placeholder', 'streaming')
+                """INSERT INTO chat_messages (session_id, role, content, intent, model_used, tools_called)
+                   VALUES ($1, 'assistant', $2, 'streaming_placeholder', 'streaming', $3::jsonb)
                    ON CONFLICT (session_id) WHERE intent = 'streaming_placeholder'
-                   DO UPDATE SET content = EXCLUDED.content, edited_at = NOW()
+                   DO UPDATE SET content = EXCLUDED.content, tools_called = $3::jsonb, edited_at = NOW()
                    RETURNING (xmax = 0) AS is_new""",
-                _sid, display_content,
+                _sid, display_content, _tool_events_json,
             )
             if _inserted:  # 신규 INSERT일 때만 카운트 증가
                 await conn.execute(
@@ -123,27 +124,51 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any]) -> Non
 
 async def _delete_streaming_placeholder(session_id: str) -> None:
     """스트리밍 완료 후 placeholder 메시지 삭제 (최종 응답이 별도로 저장되므로).
-    안전장치: 최종 응답이 없으면 placeholder를 최종 응답으로 전환."""
+    안전장치: 최종 응답이 없으면 placeholder를 최종 응답으로 전환.
+    Race condition 완화: placeholder 생성 이전 user 메시지 이후 정상 응답이 있으면 promote 안 함."""
     try:
         pool = get_pool()
         async with pool.acquire() as conn:
             # placeholder 조회
             placeholder = await conn.fetchrow(
-                "SELECT id, content FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' ORDER BY created_at DESC LIMIT 1",
+                "SELECT id, content, created_at FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' ORDER BY created_at DESC LIMIT 1",
                 uuid.UUID(session_id),
             )
             if not placeholder:
                 return
 
-            # 최종 응답이 이미 저장되었는지 확인 (placeholder 제외한 모든 assistant 메시지)
-            final_exists = await conn.fetchval(
-                """SELECT count(*) FROM chat_messages
-                    WHERE session_id = $1 AND role = 'assistant'
-                    AND intent IS DISTINCT FROM 'streaming_placeholder'
-                    AND id != $2
-                    AND created_at >= (SELECT created_at FROM chat_messages WHERE id = $2)""",
-                uuid.UUID(session_id), placeholder['id'],
+            # 최종 응답이 이미 저장되었는지 확인
+            # 1순위: placeholder보다 이전 user 메시지 이후에 정상 assistant 응답이 있는지 (race condition 완화)
+            # "정상 응답" = model_used가 실제 모델명(streaming/recovered/stopped/interrupted 제외)
+            _last_user_before = await conn.fetchval(
+                """SELECT created_at FROM chat_messages
+                   WHERE session_id = $1 AND role = 'user'
+                     AND created_at < $2
+                   ORDER BY created_at DESC LIMIT 1""",
+                uuid.UUID(session_id), placeholder['created_at'],
             )
+            if _last_user_before:
+                # 해당 user 메시지 이후에 정상 저장된 assistant 응답이 있는지 확인
+                final_exists = await conn.fetchval(
+                    """SELECT count(*) FROM chat_messages
+                       WHERE session_id = $1 AND role = 'assistant'
+                       AND intent IS DISTINCT FROM 'streaming_placeholder'
+                       AND id != $2
+                       AND created_at > $3
+                       AND model_used IS NOT NULL
+                       AND model_used NOT IN ('streaming', 'recovered', 'stopped', 'interrupted', 'semantic_cache')""",
+                    uuid.UUID(session_id), placeholder['id'], _last_user_before,
+                )
+            else:
+                # user 메시지가 없으면 기존 방식으로 폴백 (placeholder 이후 assistant 응답 확인)
+                final_exists = await conn.fetchval(
+                    """SELECT count(*) FROM chat_messages
+                        WHERE session_id = $1 AND role = 'assistant'
+                        AND intent IS DISTINCT FROM 'streaming_placeholder'
+                        AND id != $2
+                        AND created_at >= $3""",
+                    uuid.UUID(session_id), placeholder['id'], placeholder['created_at'],
+                )
 
             if final_exists and final_exists > 0:
                 # 최종 응답 있음 → placeholder 안전하게 삭제
@@ -214,7 +239,7 @@ async def with_background_completion(
     _hb_stop = _heartbeat_asyncio.Event()
 
     # 스트리밍 상태 초기화
-    state: Dict[str, Any] = {"content": "", "tool_count": 0, "last_tool": "", "last_save": _bg_time.monotonic(), "started_at": _bg_time.monotonic()}
+    state: Dict[str, Any] = {"content": "", "tool_count": 0, "last_tool": "", "last_save": _bg_time.monotonic(), "started_at": _bg_time.monotonic(), "tool_events": []}
     _streaming_state[session_id] = state
 
     _client_gone_since: float = 0  # 클라이언트 이탈 시각 (monotonic)
@@ -235,8 +260,12 @@ async def with_background_completion(
                         elif _t == "tool_use":
                             state["tool_count"] += 1
                             state["last_tool"] = _d.get("tool_name", "")
+                            state["tool_events"].append({"type": "tool_use", "tool_name": _d.get("tool_name", ""), "tool_use_id": _d.get("tool_use_id", ""), "tool_input": _d.get("tool_input", {})})
                         elif _t == "tool_result":
                             state["last_tool"] = _d.get("tool_name", "")
+                            state["tool_events"].append({"type": "tool_result", "tool_name": _d.get("tool_name", ""), "content": str(_d.get("content", ""))[:500]})
+                        elif _t == "thinking":
+                            state["tool_events"].append({"type": "thinking", "content": str(_d.get("content", _d.get("thinking", "")))[:300]})
                     except Exception:
                         pass
 
@@ -1060,8 +1089,31 @@ async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort
                 for _pid in _promote_ids:
                     try:
                         _uid = _pid if isinstance(_pid, __import__('uuid').UUID) else __import__('uuid').UUID(str(_pid))
-                        # promote 전 동일 내용 recovered 중복 검사
+                        # promote 전 검사 1: 정상 저장된 메시지(model_used가 실제 모델명)가 이미 있는지 확인
                         _ph_content = await conn.fetchval("SELECT LEFT(content, 50) FROM chat_messages WHERE id = $1", _uid)
+                        _ph_created = await conn.fetchval("SELECT created_at FROM chat_messages WHERE id = $1", _uid)
+                        # 정상 assistant 응답 = model_used가 streaming/recovered/stopped/interrupted/None이 아닌 것
+                        _real_exists = await conn.fetchval(
+                            """SELECT count(*) FROM chat_messages
+                               WHERE session_id = $1 AND role = 'assistant'
+                               AND id != $2
+                               AND model_used IS NOT NULL
+                               AND model_used NOT IN ('streaming', 'recovered', 'stopped', 'interrupted', 'semantic_cache')
+                               AND intent IS DISTINCT FROM 'streaming_placeholder'""",
+                            uuid.UUID(session_id), _uid,
+                        )
+                        if _real_exists and _real_exists > 0:
+                            # 정상 응답이 이미 있음 → placeholder만 삭제 (promote 불필요)
+                            await conn.execute("DELETE FROM chat_messages WHERE id = $1", _uid)
+                            await conn.execute(
+                                "UPDATE chat_sessions SET message_count = GREATEST(message_count - 1, 0), updated_at = NOW() WHERE id = $1",
+                                uuid.UUID(session_id),
+                            )
+                            # 결과 목록에서도 제거
+                            _remove_ids.append(_pid)
+                            logger.info(f"list_messages_promote_skipped: real response exists, placeholder deleted session={session_id[:8]}")
+                            continue
+                        # promote 전 검사 2: 동일 내용 recovered 중복 검사
                         _dup_cnt = await conn.fetchval(
                             "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND role = 'assistant' "
                             "AND model_used = 'recovered' AND LEFT(content, 50) = $2 AND id != $3",
@@ -1069,6 +1121,11 @@ async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort
                         )
                         if _dup_cnt and _dup_cnt > 0:
                             await conn.execute("DELETE FROM chat_messages WHERE id = $1", _uid)
+                            await conn.execute(
+                                "UPDATE chat_sessions SET message_count = GREATEST(message_count - 1, 0), updated_at = NOW() WHERE id = $1",
+                                uuid.UUID(session_id),
+                            )
+                            _remove_ids.append(_pid)
                         else:
                             await conn.execute(
                                 "UPDATE chat_messages SET intent = NULL, model_used = 'recovered', "
@@ -1082,6 +1139,7 @@ async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort
             _remove_set = set(str(x) for x in _remove_ids)
             results = [m for m in results if str(m["id"]) not in _remove_set]
         # 연속 중복 assistant 메시지 제거 (같은 내용의 recovered 중복 방지)
+        # 읽기 전용 API — DB 쓰기 없이 메모리에서만 필터링
         if len(results) > 1:
             _deduped = [results[0]]
             for i in range(1, len(results)):
@@ -1091,19 +1149,10 @@ async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort
                         and cur.get("model_used") in ("recovered", "stopped", None)
                         and prev.get("model_used") in ("recovered", "stopped", None)
                         and (cur.get("content") or "")[:50] == (prev.get("content") or "")[:50]):
-                    # 짧은 것 제거, 긴 것 유지
+                    # 짧은 것은 반환 목록에서 제외, 긴 것 유지 — DB는 건드리지 않음
                     if len(cur.get("content") or "") > len(prev.get("content") or ""):
                         _deduped[-1] = cur
-                    _shorter = prev if len(cur.get("content") or "") > len(prev.get("content") or "") else cur
-                    try:
-                        import uuid as _uuid_mod
-                        _sid = _shorter["id"]
-                        await conn.execute(
-                            "UPDATE chat_messages SET intent = '_deleted_duplicate' WHERE id = $1",
-                            _sid if isinstance(_sid, _uuid_mod.UUID) else _uuid_mod.UUID(str(_sid)),
-                        )
-                    except Exception:
-                        pass
+                    # DB UPDATE/DELETE 없음 (읽기 전용)
                 else:
                     _deduped.append(cur)
             results = _deduped
@@ -1119,8 +1168,11 @@ async def list_messages_cursor(
     async with get_pool().acquire() as conn:
         sid = uuid.UUID(session_id)
         fetch_limit = limit + 1  # has_more 판별용 1건 추가
-        # 활성 여부 판별 (스트리밍 중이면 placeholder 그대로 표시)
+        # 활성 여부 판별 (스트리밍 중이면 placeholder API 응답에서 제외 — SSE가 실시간 제공)
         _is_active = session_id in _streaming_state and not _streaming_state[session_id].get("completed", False)
+        _extra_filter = ""
+        if _is_active:
+            _extra_filter = " AND intent IS DISTINCT FROM 'streaming_placeholder'"
         if cursor:
             from datetime import datetime as _dt
             cursor_dt = _dt.fromisoformat(cursor)
@@ -1128,6 +1180,7 @@ async def list_messages_cursor(
                 "SELECT * FROM ("
                 "  SELECT * FROM chat_messages"
                 "  WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate'"
+                f"    {_extra_filter}"
                 "    AND created_at < $2"
                 "  ORDER BY created_at DESC LIMIT $3"
                 ") sub ORDER BY created_at ASC",
@@ -1138,6 +1191,7 @@ async def list_messages_cursor(
                 "SELECT * FROM ("
                 "  SELECT * FROM chat_messages"
                 "  WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate'"
+                f"    {_extra_filter}"
                 "  ORDER BY created_at DESC LIMIT $2"
                 ") sub ORDER BY created_at ASC",
                 sid, fetch_limit,
@@ -1160,18 +1214,55 @@ async def list_messages_cursor(
             if _promote_ids:
                 for _pid in _promote_ids:
                     try:
-                        await conn.execute(
-                            "UPDATE chat_messages SET intent = NULL, model_used = 'recovered', "
-                            "content = regexp_replace(content, E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$', '') "
-                            "WHERE id = $1",
-                            _pid if isinstance(_pid, __import__('uuid').UUID) else __import__('uuid').UUID(str(_pid)),
+                        _uid = _pid if isinstance(_pid, __import__('uuid').UUID) else __import__('uuid').UUID(str(_pid))
+                        # promote 전 검사 1: 정상 저장된 메시지가 이미 있는지 확인
+                        _real_exists = await conn.fetchval(
+                            """SELECT count(*) FROM chat_messages
+                               WHERE session_id = $1 AND role = 'assistant'
+                               AND id != $2
+                               AND model_used IS NOT NULL
+                               AND model_used NOT IN ('streaming', 'recovered', 'stopped', 'interrupted', 'semantic_cache')
+                               AND intent IS DISTINCT FROM 'streaming_placeholder'""",
+                            uuid.UUID(session_id), _uid,
                         )
+                        if _real_exists and _real_exists > 0:
+                            # 정상 응답이 이미 있음 → placeholder만 삭제 (promote 불필요)
+                            await conn.execute("DELETE FROM chat_messages WHERE id = $1", _uid)
+                            await conn.execute(
+                                "UPDATE chat_sessions SET message_count = GREATEST(message_count - 1, 0), updated_at = NOW() WHERE id = $1",
+                                uuid.UUID(session_id),
+                            )
+                            _remove_ids.append(_pid)
+                            logger.info(f"list_messages_cursor_promote_skipped: real response exists, placeholder deleted session={session_id[:8]}")
+                            continue
+                        # promote 전 검사 2: 동일 내용 recovered 중복 검사
+                        _ph_content = await conn.fetchval("SELECT LEFT(content, 50) FROM chat_messages WHERE id = $1", _uid)
+                        _dup_cnt = await conn.fetchval(
+                            "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND role = 'assistant' "
+                            "AND model_used = 'recovered' AND LEFT(content, 50) = $2 AND id != $3",
+                            uuid.UUID(session_id), _ph_content, _uid,
+                        )
+                        if _dup_cnt and _dup_cnt > 0:
+                            await conn.execute("DELETE FROM chat_messages WHERE id = $1", _uid)
+                            await conn.execute(
+                                "UPDATE chat_sessions SET message_count = GREATEST(message_count - 1, 0), updated_at = NOW() WHERE id = $1",
+                                uuid.UUID(session_id),
+                            )
+                            _remove_ids.append(_pid)
+                        else:
+                            await conn.execute(
+                                "UPDATE chat_messages SET intent = NULL, model_used = 'recovered', "
+                                "content = regexp_replace(content, E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$', '') "
+                                "WHERE id = $1",
+                                _uid,
+                            )
                     except Exception as _pe:
                         logger.warning(f"list_messages_cursor_promote_failed: {_pe}")
                 logger.info(f"list_messages_cursor_auto_promoted session={session_id[:8]} count={len(_promote_ids)}")
             _remove_set = set(str(x) for x in _remove_ids)
             messages = [m for m in messages if str(m["id"]) not in _remove_set]
         # 연속 중복 assistant 메시지 제거 (같은 내용의 recovered 중복 방지)
+        # 읽기 전용 API — DB 쓰기 없이 메모리에서만 필터링
         if len(messages) > 1:
             _deduped = [messages[0]]
             for i in range(1, len(messages)):
@@ -1181,18 +1272,10 @@ async def list_messages_cursor(
                         and cur.get("model_used") in ("recovered", "stopped", None)
                         and prev.get("model_used") in ("recovered", "stopped", None)
                         and (cur.get("content") or "")[:50] == (prev.get("content") or "")[:50]):
+                    # 짧은 것은 반환 목록에서 제외, 긴 것 유지 — DB는 건드리지 않음
                     if len(cur.get("content") or "") > len(prev.get("content") or ""):
                         _deduped[-1] = cur
-                    _shorter = prev if len(cur.get("content") or "") > len(prev.get("content") or "") else cur
-                    try:
-                        import uuid as _uuid_mod
-                        _sid = _shorter["id"]
-                        await conn.execute(
-                            "UPDATE chat_messages SET intent = '_deleted_duplicate' WHERE id = $1",
-                            _sid if isinstance(_sid, _uuid_mod.UUID) else _uuid_mod.UUID(str(_sid)),
-                        )
-                    except Exception:
-                        pass
+                    # DB UPDATE/DELETE 없음 (읽기 전용)
                 else:
                     _deduped.append(cur)
             messages = _deduped
@@ -2798,7 +2881,7 @@ async def send_message_stream(
         cost_usd = Decimal("0")
         input_tokens = 0
         output_tokens = 0
-        tools_called: list = []
+        tools_called: list = []  # 구조화된 tool_events 리스트 (프론트 UI 복원용)
 
         async for event in call_stream(
             intent_result=intent_result,
@@ -2823,9 +2906,10 @@ async def send_message_stream(
                 thinking_summary += event.get("thinking", "")
                 yield f"data: {json.dumps({'type': 'thinking', 'thinking': event['thinking']})}\n\n"
             elif etype == "tool_use":
-                tools_called.append(event["tool_name"])
-                yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event['tool_use_id'], 'tool_input': event.get('tool_input', {})})}\n\n"
+                tools_called.append({"type": "tool_use", "tool_name": event["tool_name"], "tool_use_id": event.get("tool_use_id", ""), "tool_input": event.get("tool_input", {})})
+                yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event.get('tool_use_id', ''), 'tool_input': event.get('tool_input', {})})}\n\n"
             elif etype == "tool_result":
+                tools_called.append({"type": "tool_result", "tool_name": event["tool_name"], "content": str(event.get("content", ""))[:500]})
                 yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': event['tool_name'], 'content': str(event.get('content', ''))[:300]})}\n\n"
             elif etype == "yellow_limit":
                 yield f"data: {json.dumps({'type': 'yellow_limit', 'content': event.get('content', ''), 'tool_name': event.get('tool_name', ''), 'consecutive_count': event.get('consecutive_count', 0)})}\n\n"
@@ -2835,7 +2919,7 @@ async def send_message_stream(
                 input_tokens = event.get("input_tokens", 0) or 0
                 output_tokens = event.get("output_tokens", 0) or 0
                 thinking_summary = event.get("thinking_summary") or thinking_summary
-                tools_called = event.get("tools_called", tools_called)
+                # tools_called는 스트리밍 중 직접 누적한 구조화 이벤트 유지 (done 이벤트로 덮어쓰지 않음)
             elif etype == "error":
                 _err_content = event.get('content', '오류')
                 yield f"data: {json.dumps({'type': 'error', 'content': _err_content})}\n\n"
