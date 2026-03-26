@@ -152,9 +152,6 @@ def _build_agent_zip() -> bytes:
             # 제외 확장자 체크
             if file_path.suffix in _ZIP_EXCLUDE_EXTS:
                 continue
-            # .bak_aads 백업 파일 제외 (접미사 체크)
-            if any(file_path.name.endswith(s) for s in _ZIP_EXCLUDE_SUFFIXES):
-                continue
             # RESULT_ 리포트 파일 제외
             if file_path.name.startswith("RESULT_"):
                 continue

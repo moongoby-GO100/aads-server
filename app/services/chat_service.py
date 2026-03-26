@@ -162,11 +162,27 @@ async def _delete_streaming_placeholder(session_id: str) -> None:
                 # 마커 텍스트 제거 (⏳ 생성 중... 잔류 방지)
                 content = re.sub(r'\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\s*$', '', content).rstrip()
                 if content.strip():
-                    await conn.execute(
-                        "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'recovered' WHERE id = $1",
-                        placeholder['id'], content,
+                    # 동일 내용 recovered 중복 방지 (앞 50자 비교)
+                    _prefix = content[:50]
+                    _dup_exists = await conn.fetchval(
+                        "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND role = 'assistant' "
+                        "AND model_used = 'recovered' AND LEFT(content, 50) = $2 AND id != $3",
+                        uuid.UUID(session_id), _prefix, placeholder['id'],
                     )
-                    logger.warning(f"placeholder_promoted session={session_id[:8]} — final save missing, placeholder promoted to response")
+                    if _dup_exists and _dup_exists > 0:
+                        # 중복 → 삭제
+                        await conn.execute("DELETE FROM chat_messages WHERE id = $1", placeholder['id'])
+                        await conn.execute(
+                            "UPDATE chat_sessions SET message_count = GREATEST(message_count - 1, 0), updated_at = NOW() WHERE id = $1",
+                            uuid.UUID(session_id),
+                        )
+                        logger.info(f"placeholder_dedup_deleted session={session_id[:8]} — same recovered already exists")
+                    else:
+                        await conn.execute(
+                            "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'recovered' WHERE id = $1",
+                            placeholder['id'], content,
+                        )
+                        logger.warning(f"placeholder_promoted session={session_id[:8]} — final save missing, placeholder promoted to response")
                 else:
                     # 내용도 없으면 삭제
                     await conn.execute("DELETE FROM chat_messages WHERE id = $1", placeholder['id'])
@@ -1040,12 +1056,23 @@ async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort
             if _promote_ids:
                 for _pid in _promote_ids:
                     try:
-                        await conn.execute(
-                            "UPDATE chat_messages SET intent = NULL, model_used = 'recovered', "
-                            "content = regexp_replace(content, E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$', '') "
-                            "WHERE id = $1",
-                            _pid if isinstance(_pid, __import__('uuid').UUID) else __import__('uuid').UUID(str(_pid)),
+                        _uid = _pid if isinstance(_pid, __import__('uuid').UUID) else __import__('uuid').UUID(str(_pid))
+                        # promote 전 동일 내용 recovered 중복 검사
+                        _ph_content = await conn.fetchval("SELECT LEFT(content, 50) FROM chat_messages WHERE id = $1", _uid)
+                        _dup_cnt = await conn.fetchval(
+                            "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND role = 'assistant' "
+                            "AND model_used = 'recovered' AND LEFT(content, 50) = $2 AND id != $3",
+                            uuid.UUID(session_id), _ph_content, _uid,
                         )
+                        if _dup_cnt and _dup_cnt > 0:
+                            await conn.execute("DELETE FROM chat_messages WHERE id = $1", _uid)
+                        else:
+                            await conn.execute(
+                                "UPDATE chat_messages SET intent = NULL, model_used = 'recovered', "
+                                "content = regexp_replace(content, E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$', '') "
+                                "WHERE id = $1",
+                                _uid,
+                            )
                     except Exception as _pe:
                         logger.warning(f"list_messages_promote_failed: {_pe}")
                 logger.info(f"list_messages_auto_promoted session={session_id[:8]} count={len(_promote_ids)}")
@@ -2807,7 +2834,25 @@ async def send_message_stream(
                 thinking_summary = event.get("thinking_summary") or thinking_summary
                 tools_called = event.get("tools_called", tools_called)
             elif etype == "error":
-                yield f"data: {json.dumps({'type': 'error', 'content': event.get('content', '오류')})}\n\n"
+                _err_content = event.get('content', '오류')
+                yield f"data: {json.dumps({'type': 'error', 'content': _err_content})}\n\n"
+                # 에러 시에도 partial response가 있으면 저장 (recovered 중복 방지)
+                if full_response.strip():
+                    try:
+                        await _save_and_update_session(
+                            sid, full_response,
+                            session_id_str=session_id,
+                            raw_messages=raw_messages,
+                            model_used=model_used or "error_partial",
+                            intent=intent,
+                            cost=cost_usd,
+                            tokens_in=input_tokens,
+                            tokens_out=output_tokens,
+                            tools_called=tools_called,
+                        )
+                        logger.info(f"error_partial_saved session={session_id[:8]} len={len(full_response)}")
+                    except Exception as _eps:
+                        logger.warning(f"error_partial_save_failed session={session_id[:8]}: {_eps}")
                 return
 
         # 9.5 Layer ④: Output Validator — 빈 약속 응답 감지 및 재시도 (AADS-188C Phase 3)

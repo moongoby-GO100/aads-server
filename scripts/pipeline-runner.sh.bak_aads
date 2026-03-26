@@ -26,6 +26,7 @@ POLL_INTERVAL="${POLL_INTERVAL:-5}"
 AADS_API_URL="${AADS_API_URL:-http://127.0.0.1:8100}"
 MAX_RUNTIME="${MAX_RUNTIME:-7200}"
 MAX_RETRIES="${MAX_RETRIES:-2}"               # H5: Claude 실패 시 재시도 횟수
+MAX_CONCURRENT_PER_PROJECT="${MAX_CONCURRENT_PER_PROJECT:-2}"  # 프로젝트당 동시 실행 수
 APPROVAL_TIMEOUT_HOURS="${APPROVAL_TIMEOUT_HOURS:-24}"  # H4: 승인 대기 타임아웃
 ARTIFACT_MAX_AGE_HOURS="${ARTIFACT_MAX_AGE_HOURS:-24}"  # H3: 임시파일 보존 시간
 LOG_DIR="/var/log/aads-pipeline"
@@ -40,7 +41,7 @@ export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LANGUAGE=en_US:en MANPATH=
 declare -A PROJECT_WORKDIR=(
     ["AADS"]="/root/aads/aads-server"
     ["KIS"]="/root/webapp"
-    ["GO100"]="/root/go100"
+    ["GO100"]="/root/kis-autotrade-v4"
     ["SF"]="/data/shortflow"
     ["NTV2"]="/srv/newtalk-v2"
 )
@@ -56,6 +57,16 @@ mkdir -p "$LOG_DIR" "$ARTIFACT_DIR"
 
 # ── 유틸리티 ──────────────────────────────────────────────────────────
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_DIR/runner.log"; }
+
+# Redis 잠금 해제 헬퍼 (graceful — 실패해도 진행)
+_release_work_lock() {
+    local project="$1" job_id="$2"
+    curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/work/release?project=${project}&session_id=${job_id}" 2>/dev/null || true
+}
+_release_deploy_lock() {
+    local project="$1" job_id="$2"
+    curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/deploy/release?project=${project}&session_id=${job_id}" 2>/dev/null || true
+}
 
 # DB 접속 방식
 DB_MODE="${DB_MODE:-auto}"
@@ -173,6 +184,45 @@ _fail_job() {
     _notify_ai "$job_id"
 }
 
+# ── 프로젝트 Lock 체크 (동시실행 방지) ──────────────────────────────────
+# 같은 프로젝트에서 running/claimed 작업이 있으면 1(locked) 반환
+check_project_lock() {
+    local project="$1" exclude_job_id="$2"
+    local running_count
+    running_count=$(db_exec "SELECT count(*) FROM pipeline_jobs
+                             WHERE project='${project}' AND status IN ('running','claimed')
+                             AND job_id != '${exclude_job_id}';" 2>/dev/null)
+    running_count="${running_count// /}"
+    if [[ -n "$running_count" && "$running_count" -ge "${MAX_CONCURRENT_PER_PROJECT}" ]]; then
+        echo "$running_count"
+        return 1
+    fi
+    return 0
+}
+
+# 작업 완료/에러 후 같은 프로젝트의 다음 queued 작업을 자동 시작 대기열로 승격
+promote_next_queued() {
+    local project="$1"
+    # running/claimed 작업이 아직 있으면 승격하지 않음
+    local still_running
+    still_running=$(db_exec "SELECT count(*) FROM pipeline_jobs
+                             WHERE project='${project}' AND status IN ('running','claimed');" 2>/dev/null)
+    still_running="${still_running// /}"
+    if [[ -n "$still_running" && "$still_running" -ge "${MAX_CONCURRENT_PER_PROJECT}" ]]; then
+        return 0
+    fi
+
+    # 가장 오래된 queued 작업을 찾아 로그만 남김 (실제 claim은 메인루프의 claim_queued_job이 처리)
+    local next_job
+    next_job=$(db_exec "SELECT job_id FROM pipeline_jobs
+                        WHERE project='${project}' AND status='queued' AND phase='queued'
+                        ORDER BY created_at ASC LIMIT 1;" 2>/dev/null) || true
+    next_job="${next_job// /}"
+    if [[ -n "$next_job" ]]; then
+        log "  PROMOTE_READY: 프로젝트 $project 의 다음 대기 작업 $next_job — 메인루프에서 곧 클레임"
+    fi
+}
+
 # ── 중복 작업 확인 ─────────────────────────────────────────────────────
 compute_instruction_hash() {
     echo -n "$1" | sha256sum | cut -d' ' -f1 | head -c 16
@@ -188,28 +238,40 @@ check_duplicate() {
 
     # 같은 프로젝트에서 running 상태 작업이 이미 있으면 → queued로 되돌림 (동시 실행 방지)
     local running_count
-    running_count=$(db_exec "SELECT count(*) FROM pipeline_jobs
-                             WHERE project='${project}' AND status IN ('running','claimed')
-                             AND job_id != '${job_id}';" 2>/dev/null)
-    running_count="${running_count// /}"
-    if [[ -n "$running_count" && "$running_count" -gt 0 ]]; then
-        log "  DEDUP: 프로젝트 $project 에 running 작업 ${running_count}개 — $job_id 를 queued로 되돌림"
+    if running_count=$(check_project_lock "$project" "$job_id"); then
+        : # lock 없음 — 계속 진행
+    else
+        log "  LOCK: 프로젝트 $project 에 running 작업 ${running_count}개 — $job_id 를 queued로 되돌림"
         db_update "UPDATE pipeline_jobs SET status='queued', phase='queued', updated_at=NOW() WHERE job_id='${job_id}';"
         return 1
     fi
 
-    # 최근 30분 내 동일 instruction_hash의 done 작업이 있으면 경고 (실행은 계속)
+    # 중복 제출 방지: 10분 내 done이면 차단, 30분 내면 경고
     local dup_job
     dup_job=$(db_exec "SELECT job_id FROM pipeline_jobs
                        WHERE project='${project}'
                          AND instruction_hash='${inst_hash}'
-                         AND status='done'
-                         AND updated_at > NOW() - INTERVAL '30 minutes'
                          AND job_id != '${job_id}'
+                         AND (
+                           status NOT IN ('done','error','rejected_done')
+                           OR (status = 'done' AND updated_at > NOW() - INTERVAL '10 minutes')
+                         )
                        LIMIT 1;" 2>/dev/null) || true
     if [[ -n "$dup_job" ]]; then
         dup_job="${dup_job// /}"
-        log "  DEDUP_WARN: 30분 내 동일 작업 존재: $dup_job (계속 실행)"
+        # 10분 내 done이거나 아직 진행 중이면 차단
+        local dup_status
+        dup_status=$(db_exec "SELECT status FROM pipeline_jobs WHERE job_id='${dup_job}';" 2>/dev/null) || true
+        dup_status="${dup_status// /}"
+        if [[ "$dup_status" != "done" ]]; then
+            log "  DEDUP_BLOCK: 동일 작업 진행 중: $dup_job ($dup_status) — $job_id 차단"
+            db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+                       error_detail='duplicate_blocked',
+                       review_feedback=E'[중복 차단] 동일 작업 진행 중: ${dup_job} (${dup_status})',
+                       updated_at=NOW() WHERE job_id='${job_id}';"
+            return 1
+        fi
+        log "  DEDUP_WARN: 10분 내 동일 작업 완료: $dup_job (계속 실행하되 경고)"
         db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[DEDUP 경고] 유사 작업: ${dup_job}',
                    updated_at=NOW() WHERE job_id='${job_id}';"
     fi
@@ -274,14 +336,21 @@ post_to_chat() {
 }
 
 # C4: 원자적 Job 클레임 — UPDATE ... RETURNING으로 동시 실행 방지
+# 프로젝트별 동시실행 Lock: 같은 프로젝트에 running/claimed 작업이 있으면 claim하지 않음
 claim_queued_job() {
     local filter="$1"
     # instruction의 줄바꿈을 \\n으로 치환하여 단일행 RETURNING 보장
     db_exec "UPDATE pipeline_jobs SET status='claimed', updated_at=NOW()
              WHERE job_id = (
-                SELECT job_id FROM pipeline_jobs
-                WHERE status='queued' AND phase='queued' $filter
-                ORDER BY created_at ASC LIMIT 1
+                SELECT p.job_id FROM pipeline_jobs p
+                WHERE p.status='queued' AND p.phase='queued' $filter
+                  AND NOT EXISTS (
+                    SELECT 1 FROM pipeline_jobs r
+                    WHERE r.project = p.project
+                      AND r.status IN ('running', 'claimed')
+                      AND r.job_id != p.job_id
+                  )
+                ORDER BY p.created_at ASC LIMIT 1
                 FOR UPDATE SKIP LOCKED
              )
              RETURNING job_id, project, replace(replace(instruction, E'\\n', ' '), '|', ' '), chat_session_id, max_cycles;"
@@ -322,23 +391,62 @@ run_job() {
         return 1
     fi
 
+    # ── Redis 잠금 (1단계: 작업 잠금) ──
+    local lock_result
+    lock_result=$(curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/work/acquire?project=${project}&session_id=${job_id}" 2>/dev/null) || true
+    if echo "$lock_result" | grep -q '"acquired":false'; then
+        local holder
+        holder=$(echo "$lock_result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('holder','unknown'))" 2>/dev/null) || holder="unknown"
+        log "  REDIS_LOCK: $project 작업 중 (holder=$holder) — $job_id queued로 되돌림"
+        db_update "UPDATE pipeline_jobs SET status='queued', phase='queued', updated_at=NOW() WHERE job_id='${job_id}';"
+        return 0
+    fi
+
     # ── 사전 검증 (Pre-validation) ──
-    pre_validate "$job_id" "$project" "$session_id" || return 1
+    pre_validate "$job_id" "$project" "$session_id" || { _release_work_lock "$project" "$job_id"; return 1; }
 
     # ── 중복 작업 확인 ──
-    check_duplicate "$job_id" "$project" "$instruction" || return 0
+    check_duplicate "$job_id" "$project" "$instruction" || { _release_work_lock "$project" "$job_id"; return 0; }
 
     local workdir="${PROJECT_WORKDIR[$project]:-}"
+    local use_worktree=false
+    local worktree_dir=""
+
+    # MAX_CONCURRENT_PER_PROJECT > 1이면 worktree 사용
+    if [[ "${MAX_CONCURRENT_PER_PROJECT}" -gt 1 ]]; then
+        worktree_dir="/tmp/aads-wt-${job_id}"
+        local avail_gb
+        avail_gb=$(df --output=avail -BG /tmp 2>/dev/null | tail -1 | tr -d ' G') || avail_gb=999
+        if [[ "$avail_gb" -ge 5 ]]; then
+            cd "$workdir"
+            if git worktree add "$worktree_dir" HEAD 2>/dev/null; then
+                workdir="$worktree_dir"
+                use_worktree=true
+                log "  WORKTREE: $worktree_dir 생성 (avail=${avail_gb}GB)"
+            else
+                log "  WORKTREE_FAIL: fallback to main workdir"
+            fi
+        else
+            log "  WORKTREE_SKIP: 디스크 부족 ${avail_gb}GB < 5GB"
+        fi
+    fi
+
     log "▶ START job=$job_id project=$project workdir=$workdir"
     db_update "UPDATE pipeline_jobs SET status='running', phase='claude_code_work',
                started_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
     post_to_chat "$session_id" "🔧 [Pipeline Runner] 작업 시작: ${instruction:0:200}"
 
-    # H5: 재시도 루프
+    # H5: 모델 폴백 순환 재시도 (소넷→오퍼스→하이쿠→소넷, 2~3회)
+    local MODEL_CYCLE=("claude-sonnet" "claude-opus" "claude-haiku")
+    local MAX_MODEL_CYCLES=3  # 전체 순환 횟수
+    local total_attempts=$(( ${#MODEL_CYCLE[@]} * MAX_MODEL_CYCLES ))  # 9회
     local attempt=0 exit_code=0
-    while [[ $attempt -le $MAX_RETRIES ]]; do
+    while [[ $attempt -lt $total_attempts ]]; do
         exit_code=0
         cd "$workdir"
+        local model_idx=$(( attempt % ${#MODEL_CYCLE[@]} ))
+        local current_model="${MODEL_CYCLE[$model_idx]}"
+        local cycle_num=$(( attempt / ${#MODEL_CYCLE[@]} + 1 ))
 
         # H6: instruction 크기 제한 (50KB)
         local safe_instruction="${instruction:0:50000}"
@@ -364,7 +472,8 @@ run_job() {
 
 ${safe_instruction}"
 
-        timeout "$MAX_RUNTIME" claude -p --output-format text "$safe_instruction" \
+        log "  MODEL_FALLBACK job=$job_id model=$current_model cycle=$cycle_num attempt=$((attempt+1))/$total_attempts"
+        timeout "$MAX_RUNTIME" claude --model "$current_model" -p --output-format text "$safe_instruction" \
             > "$output_file" 2> "$err_file" &
         local claude_pid=$!
 
@@ -378,9 +487,11 @@ ${safe_instruction}"
         fi
 
         attempt=$((attempt + 1))
-        if [[ $attempt -le $MAX_RETRIES ]]; then
-            local wait_sec=$((2 ** attempt))
-            log "  RETRY job=$job_id attempt=$attempt/$MAX_RETRIES wait=${wait_sec}s exit=$exit_code"
+        if [[ $attempt -lt $total_attempts ]]; then
+            local next_model_idx=$(( attempt % ${#MODEL_CYCLE[@]} ))
+            local next_model="${MODEL_CYCLE[$next_model_idx]}"
+            local wait_sec=$(( 3 + attempt ))  # 3초~12초 점진 증가
+            log "  RETRY job=$job_id attempt=$((attempt+1))/$total_attempts next_model=$next_model wait=${wait_sec}s exit=$exit_code"
             sleep "$wait_sec"
         fi
     done
@@ -416,8 +527,16 @@ $out_tail")
                    review_feedback=COALESCE(review_feedback,'') || E'\n' || ${safe_feedback},
                    updated_at=NOW() WHERE job_id='${job_id}';"
         post_to_chat "$session_id" "❌ [Pipeline Runner] 작업 실패 (${error_type}, exit=$exit_code, ${attempt}회 시도): ${err_content:0:500}"
+        _release_work_lock "$project" "$job_id"
         _cleanup_artifacts "$job_id"
+        # worktree 정리
+        if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
+            cd "${PROJECT_WORKDIR[$project]:-/tmp}"
+            git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
+            log "  WORKTREE_CLEANUP: /tmp/aads-wt-${job_id}"
+        fi
         _notify_ai "$job_id"
+        promote_next_queued "$project"
         return 1
     fi
 
@@ -448,12 +567,16 @@ $out_tail")
             --arg files "$changed_files" \
             '{job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}')
 
-        review_response=$(curl -4 -sf -X POST "${AADS_API_URL}/api/v1/review/code-diff" \
+        local review_http_code=""
+        review_response=$(curl -4 -s -w "\n%{http_code}" -X POST "${AADS_API_URL}/api/v1/review/code-diff" \
             -H "Content-Type: application/json" \
             -d "$review_body" \
             --max-time 30 2>/dev/null) || true
 
-        if [[ -n "$review_response" ]]; then
+        review_http_code=$(echo "$review_response" | tail -1)
+        review_response=$(echo "$review_response" | sed '$d')
+
+        if [[ "$review_http_code" == "200" ]] && [[ -n "$review_response" ]]; then
             review_verdict=$(echo "$review_response" | jq -r '.verdict // "APPROVE"')
             review_score=$(echo "$review_response" | jq -r '.score // "1.0"')
             log "  AI_REVIEW_RESULT job=$job_id verdict=$review_verdict score=$review_score"
@@ -463,10 +586,9 @@ $out_tail")
                 review_issues=$(echo "$review_response" | jq -r '.issues | join("; ")' 2>/dev/null || echo "")
                 log "  AI_REVIEW_REQUEST_CHANGES job=$job_id issues=$review_issues"
                 post_to_chat "$session_id" "🔍 [AI Reviewer] 코드 수정 요청 (score=${review_score}): ${review_issues:0:500}"
-                # REQUEST_CHANGES는 CEO에게 알리되 경고 표시
             fi
         else
-            log "  AI_REVIEW_SKIP job=$job_id (API 응답 없음)"
+            log "  AI_REVIEW_SKIP job=$job_id (HTTP ${review_http_code:-timeout})"
         fi
     fi
 
@@ -497,10 +619,14 @@ ${diff_summary}
 승인: pipeline_runner_approve(job_id='${job_id}', action='approve')"
 
     log "  AWAITING_APPROVAL job=$job_id"
+    _release_work_lock "$project" "$job_id"
     _cleanup_artifacts "$job_id"
 
     # 채팅AI 자동 반응 트리거 — AI가 결과 확인 후 CEO에게 보고
     _notify_ai "$job_id"
+
+    # awaiting_approval은 running이 아니므로 다음 queued 작업 승격 가능
+    promote_next_queued "$project"
 }
 
 # 채팅AI 자동 반응 트리거 — 작업 완료/실패 시 AI가 결과를 확인·검수·조치
@@ -526,14 +652,60 @@ deploy_job() {
     [[ -z "$workdir" || ! -d "$workdir" ]] && return 1
 
     log "▶ DEPLOY job=$job_id project=$project"
+
+    # Redis deploy lock 획득 (동시 배포 방지)
+    local deploy_lock_result=""
+    deploy_lock_result=$(curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/deploy/acquire?project=${project}&session_id=${job_id}" 2>/dev/null) || true
+    if echo "$deploy_lock_result" | grep -q '"acquired":false'; then
+        log "  DEPLOY_LOCK_WAIT job=$job_id project=$project — 다른 배포 진행 중, 30초 후 재시도"
+        sleep 30
+        deploy_lock_result=$(curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/deploy/acquire?project=${project}&session_id=${job_id}" 2>/dev/null) || true
+        if echo "$deploy_lock_result" | grep -q '"acquired":false'; then
+            log "  DEPLOY_LOCK_FAIL job=$job_id — 배포 스킵"
+            post_to_chat "$session_id" "⚠️ [Pipeline Runner] 배포 락 획득 실패 (다른 배포 진행 중): $job_id"
+            return 1
+        fi
+    fi
+
     post_to_chat "$session_id" "🚀 [Pipeline Runner] 배포 시작: $job_id"
 
-    cd "$workdir"
+    local main_workdir="${PROJECT_WORKDIR[$project]:-}"
+    local worktree_dir="/tmp/aads-wt-${job_id}"
 
-    # v2.1: 승인 후 커밋 → 푸시
-    git add -A 2>/dev/null || true
-    git commit -m "Pipeline-Runner: ${job_id}" 2>/dev/null || log "  WARN: git commit skipped (no changes or hook failure)"
-    git push 2>/dev/null || true
+    # flock으로 같은 프로젝트 동시 배포 방지
+    local lock_file="/tmp/pipeline-deploy-${project}.lock"
+    (
+        flock -w 300 200 || { log "  DEPLOY_LOCK_TIMEOUT: $project"; return 1; }
+
+        if [[ -d "$worktree_dir" ]]; then
+            cd "$worktree_dir"
+            git add -A 2>/dev/null || true
+            local diff_content
+            diff_content=$(git diff --cached HEAD 2>/dev/null) || true
+            if [[ -n "$diff_content" ]]; then
+                cd "$main_workdir"
+                echo "$diff_content" | git apply --3way 2>/dev/null || {
+                    log "  WORKTREE_MERGE_CONFLICT: $job_id"
+                    cd "$worktree_dir"
+                    git diff --cached --name-only HEAD 2>/dev/null | while read -r f; do
+                        [[ -f "$worktree_dir/$f" ]] && cp "$worktree_dir/$f" "$main_workdir/$f" 2>/dev/null || true
+                    done
+                    cd "$main_workdir"
+                }
+                git add -A 2>/dev/null || true
+            fi
+            cd "$main_workdir"
+        else
+            cd "$main_workdir"
+            git add -A 2>/dev/null || true
+        fi
+
+        git commit -m "Pipeline-Runner: ${job_id}" 2>/dev/null || log "  WARN: git commit skipped (no changes or hook failure)"
+        git push 2>/dev/null || true
+
+    ) 200>"$lock_file"
+
+    cd "$main_workdir"
 
     # ═══ 무중단 배포 v3.0 — build→swap→healthcheck→rollback ═══
     # 원칙: 빌드 중 기존 서비스 유지, 빌드 성공 후에만 교체, 실패 시 롤백
@@ -564,6 +736,45 @@ deploy_job() {
                     # Step 2: 빌드 성공 → 컨테이너 교체
                     docker compose -f "$_compose_file" up -d --no-build aads-dashboard 2>/dev/null || true
                     log "  aads-dashboard zero-downtime swap complete"
+
+                    # ── QA 자동 실행: 대시보드 배포 후 프론트엔드 검증 ──
+                    log "  QA: 30초 대기 후 Visual QA 실행..."
+                    sleep 30
+                    local _qa_response=""
+                    _qa_response=$(curl -s -m 60 -X POST \
+                        -H "Content-Type: application/json" \
+                        -d '{"pages": ["/", "/chat", "/ops"]}' \
+                        "http://127.0.0.1:8100/api/v1/visual-qa/full-qa" 2>/dev/null) || true
+
+                    if [ -z "$_qa_response" ]; then
+                        log "  QA: WARN — QA API 호출 실패 (응답 없음), 배포는 계속 진행"
+                        post_to_chat "$session_id" "⚠️ [Runner] QA API 호출 실패 — 배포는 정상 완료, QA 수동 확인 필요"
+                    else
+                        local _qa_verdict=""
+                        _qa_verdict=$(echo "$_qa_response" | jq -r '.verdict // empty' 2>/dev/null) || true
+
+                        if [ "$_qa_verdict" = "FAIL" ]; then
+                            local _qa_summary=""
+                            _qa_summary=$(echo "$_qa_response" | jq -r '.summary // "상세 정보 없음"' 2>/dev/null) || true
+                            log "  QA: FAIL — $_qa_summary"
+                            post_to_chat "$session_id" "🔴 [Runner] 프론트엔드 QA FAIL: $_qa_summary (롤백 없음, 수동 확인 필요)"
+
+                            # 텔레그램 긴급 알림
+                            if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
+                                curl -s -m 10 -X POST \
+                                    "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                                    -d "chat_id=${TELEGRAM_CHAT_ID}" \
+                                    -d "text=🔴 [AADS Runner] 프론트엔드 QA FAIL: ${_qa_summary}" \
+                                    -d "parse_mode=HTML" 2>/dev/null || true
+                            fi
+                        elif [ "$_qa_verdict" = "PASS" ]; then
+                            log "  QA: PASS ✅"
+                            post_to_chat "$session_id" "✅ [Runner] 프론트엔드 QA PASS — 대시보드 배포 검증 완료"
+                        else
+                            log "  QA: WARN — verdict 파싱 불가 ($_qa_verdict), 배포는 계속 진행"
+                            post_to_chat "$session_id" "⚠️ [Runner] QA 결과 파싱 실패 — 배포는 정상 완료, QA 수동 확인 필요"
+                        fi
+                    fi
                 else
                     log "  WARN: aads-dashboard build failed — 기존 서비스 유지"
                     post_to_chat "$session_id" "⚠️ [Runner] 대시보드 빌드 실패 — 기존 버전 유지"
@@ -677,14 +888,90 @@ deploy_job() {
         done
     fi
 
+    # ═══ 자동 롤백: health-check FAIL 시 이전 커밋으로 복구 ═══
+    if [[ "$health_ok" == "FAIL" ]]; then
+        log "  ROLLBACK_START job=$job_id project=$project — health-check 실패"
+        post_to_chat "$session_id" "🔴 [Pipeline Runner] health-check 실패 — 자동 롤백 시작: $job_id"
+
+        cd "$main_workdir" 2>/dev/null || cd "${PROJECT_WORKDIR[$project]:-}"
+        if git revert --no-edit HEAD 2>/dev/null; then
+            git push 2>/dev/null || true
+            log "  ROLLBACK_REVERT: git revert HEAD 성공"
+
+            case "$project" in
+                AADS)
+                    docker exec aads-server supervisorctl restart aads-api 2>/dev/null || true
+                    ;;
+                KIS)
+                    systemctl restart kis-v41-api 2>/dev/null || true
+                    ;;
+                GO100)
+                    systemctl restart go100 2>/dev/null || true
+                    ;;
+                SF)
+                    docker restart shortflow-worker 2>/dev/null || true
+                    ;;
+                NTV2)
+                    docker exec newtalk-v2-app php artisan optimize 2>/dev/null || true
+                    ;;
+            esac
+
+            sleep 10
+            local rollback_health="FAIL"
+            if [[ -n "$health_url" ]]; then
+                if curl -sf -o /dev/null "$health_url" 2>/dev/null; then
+                    rollback_health="OK"
+                fi
+            fi
+
+            post_to_chat "$session_id" "↩️ [Pipeline Runner] 자동 롤백 완료 (롤백 후 health=${rollback_health}): $job_id"
+            log "  ROLLBACK_DONE job=$job_id rollback_health=$rollback_health"
+
+            if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
+                curl -s -m 10 -X POST \
+                    "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                    -d "chat_id=${TELEGRAM_CHAT_ID}" \
+                    -d "text=🔴 [Runner] 자동 롤백 실행: ${job_id} (${project}) — health=${rollback_health}" \
+                    -d "parse_mode=HTML" 2>/dev/null || true
+            fi
+
+            db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+                       error_detail='health_check_fail_rollback',
+                       review_feedback=COALESCE(review_feedback,'') || E'\n[자동롤백] health-check 실패 → git revert → rollback_health=${rollback_health}',
+                       updated_at=NOW() WHERE job_id='${job_id}';"
+            post_to_chat "$session_id" "🔴 [Pipeline Runner] 자동 롤백으로 에러 처리: $job_id"
+            _release_deploy_lock "$project" "$job_id"
+            _notify_ai "$job_id"
+            promote_next_queued "$project"
+            return 1
+        else
+            log "  ROLLBACK_REVERT_FAIL: git revert 실패 — 수동 복구 필요"
+            _release_deploy_lock "$project" "$job_id"
+            post_to_chat "$session_id" "🔴 [Pipeline Runner] 자동 롤백 실패 (git revert 불가) — 수동 복구 필요: $job_id"
+        fi
+    fi
+
     db_update "UPDATE pipeline_jobs SET status='done', phase='done',
                review_feedback=COALESCE(review_feedback,'') || E'\n[v2.1][배포완료] health=${health_ok} by=${RUNNER_HOSTNAME}',
                updated_at=NOW() WHERE job_id='${job_id}';"
     post_to_chat "$session_id" "✅ [Pipeline Runner] 배포 완료 (health=${health_ok})"
     log "  DEPLOYED job=$job_id health=$health_ok"
 
+    # Redis deploy lock 해제
+    _release_deploy_lock "$project" "$job_id"
+
     # 채팅AI 자동 반응 트리거
     _notify_ai "$job_id"
+
+    # worktree 정리
+    if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
+        cd "${PROJECT_WORKDIR[$project]:-/tmp}"
+        git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
+        log "  WORKTREE_CLEANUP: /tmp/aads-wt-${job_id}"
+    fi
+
+    # 배포 완료 후 다음 queued 작업 승격
+    promote_next_queued "$project"
 }
 
 # ── 거부된 작업 원복 ──────────────────────────────────────────────────
@@ -696,13 +983,35 @@ reject_job() {
     log "▶ REJECT job=$job_id project=$project"
     cd "$workdir"
 
-    # v2.1: uncommitted 변경사항 제거 (커밋 전이므로 reset 불필요)
-    git checkout -- . 2>/dev/null || true
-    git clean -fd 2>/dev/null || true
+    # v2.2: 해당 Runner의 변경사항만 선택적 원복 (다른 Runner의 배포된 변경 보호)
+    local worktree_dir="/tmp/aads-wt-${job_id}"
+    if [[ -d "$worktree_dir" ]]; then
+        cd "${PROJECT_WORKDIR[$project]:-/tmp}"
+        git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
+        log "  REJECT_WORKTREE_CLEANUP: $worktree_dir"
+    else
+        local stash_msg="reject-${job_id}-$(date +%s)"
+        git stash push -m "$stash_msg" 2>/dev/null || {
+            log "  REJECT_STASH_FAIL: $job_id — git checkout fallback"
+            git checkout -- . 2>/dev/null || true
+            git clean -fd 2>/dev/null || true
+        }
+        log "  REJECT_STASH: $stash_msg (git stash list로 복구 가능)"
+    fi
 
     db_update "UPDATE pipeline_jobs SET status='rejected_done', phase='rejected_done', updated_at=NOW() WHERE job_id='${job_id}';"
     post_to_chat "$session_id" "↩️ [Pipeline Runner] 거부된 작업 코드 원복 완료: $job_id"
     log "  REJECTED job=$job_id"
+
+    # worktree 정리
+    if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
+        cd "${PROJECT_WORKDIR[$project]:-/tmp}"
+        git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
+        log "  WORKTREE_CLEANUP: /tmp/aads-wt-${job_id}"
+    fi
+
+    # 거부 후 다음 queued 작업 승격
+    promote_next_queued "$project"
 }
 
 # C3: 크래시 복구 — 시작 시 stuck 작업 정리
@@ -720,6 +1029,15 @@ _recover_stuck_jobs() {
                      RETURNING job_id;" 2>/dev/null) || true
     if [[ -n "$stuck" ]]; then
         log "  RECOVERED stuck jobs: $stuck"
+        # 복구된 작업의 프로젝트별로 다음 queued 승격
+        while IFS= read -r _recovered_id; do
+            _recovered_id="${_recovered_id// /}"
+            [[ -z "$_recovered_id" ]] && continue
+            local _rec_project
+            _rec_project=$(db_exec "SELECT project FROM pipeline_jobs WHERE job_id='${_recovered_id}';" 2>/dev/null) || true
+            _rec_project="${_rec_project// /}"
+            [[ -n "$_rec_project" ]] && promote_next_queued "$_rec_project"
+        done <<< "$stuck"
     fi
 
     # H4: 승인 대기 타임아웃

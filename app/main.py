@@ -472,7 +472,7 @@ async def lifespan(app: FastAPI):
     except Exception as _e:
         logger.warning(f"startup_placeholder_cleanup_failed: {_e}")
 
-    # 주기적 stale placeholder 처리 (15초마다, 2분 초과분 — 중복 버블 방지 강화)
+    # 주기적 stale placeholder 처리 (15초마다, 1분 초과분 — 중복 버블 방지 강화)
     async def _periodic_placeholder_cleanup():
         import asyncio as _pc_asyncio
         while True:
@@ -484,10 +484,10 @@ async def lifespan(app: FastAPI):
                 async with _pool.acquire() as _c:
                     # 현재 스트리밍 중인 세션은 제외
                     _active_sids = [k for k, v in _streaming_state.items() if not v.get("completed")]
-                    # 2분 초과 + 스트리밍 아닌 placeholder만 대상
+                    # 1분 초과 + 스트리밍 아닌 placeholder만 대상 (2분→1분 단축: 고아 placeholder 빠른 정리)
                     _stale = await _c.fetch(
                         "SELECT id, session_id, content FROM chat_messages "
-                        "WHERE intent = 'streaming_placeholder' AND created_at < NOW() - interval '2 minutes'"
+                        "WHERE intent = 'streaming_placeholder' AND created_at < NOW() - interval '1 minute'"
                     )
                     _promoted = 0
                     _deleted = 0
@@ -589,9 +589,10 @@ async def lifespan(app: FastAPI):
                            ) AS content,
                            lm.created_at
                     FROM last_msgs lm
-                    WHERE (lm.role = 'user' OR lm.model_used = 'recovered')
+                    WHERE lm.role = 'user'
                       AND lm.content IS NOT NULL
                       AND length(lm.content) > 0
+                      -- recovered 제외: 부분 응답은 이미 보존됨, 재실행하면 ghost 중복 발생
                     LIMIT 3
                 """)
 

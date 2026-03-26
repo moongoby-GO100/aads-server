@@ -27,66 +27,7 @@ _BUILD_HASH = hashlib.md5(f"{os.getpid()}-{_time.time()}".encode()).hexdigest()[
 @router.get("/version")
 async def get_version():
     """배포 버전 해시 반환 — 프론트엔드 자동 새로고침용"""
-    import subprocess as _sp_ver
-    try:
-        _git_sha = _sp_ver.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd="/app", stderr=_sp_ver.DEVNULL
-        ).decode().strip()
-    except Exception:
-        _git_sha = "unknown"
-    return {"build_hash": _BUILD_HASH, "git_sha": _git_sha, "timestamp": _time.time()}
-
-
-# ─── 3단계 잠금 시스템 API ──────────────────────────────────────
-
-@router.get("/ops/locks")
-async def get_lock_status():
-    """전체 프로젝트 잠금 상태 조회 — CEO 대시보드용."""
-    from app.services.deploy_lock import get_all_lock_status
-    return get_all_lock_status()
-
-
-@router.post("/ops/locks/work/acquire")
-async def api_acquire_work_lock(project: str, session_id: str):
-    """프로젝트 작업 잠금 획득."""
-    from app.services.deploy_lock import acquire_work_lock
-    return acquire_work_lock(project, session_id)
-
-
-@router.post("/ops/locks/work/release")
-async def api_release_work_lock(project: str, session_id: str):
-    """프로젝트 작업 잠금 해제."""
-    from app.services.deploy_lock import release_work_lock
-    return {"released": release_work_lock(project, session_id)}
-
-
-@router.post("/ops/locks/file/acquire")
-async def api_acquire_file_lock(project: str, file_path: str, session_id: str):
-    """파일 잠금 획득."""
-    from app.services.deploy_lock import acquire_file_lock
-    return acquire_file_lock(project, file_path, session_id)
-
-
-@router.post("/ops/locks/file/release")
-async def api_release_file_lock(project: str, file_path: str, session_id: str):
-    """파일 잠금 해제."""
-    from app.services.deploy_lock import release_file_lock
-    return {"released": release_file_lock(project, file_path, session_id)}
-
-
-@router.post("/ops/locks/deploy/acquire")
-async def api_acquire_deploy_lock(project: str, session_id: str):
-    """배포 잠금 획득."""
-    from app.services.deploy_lock import acquire_deploy_lock
-    return acquire_deploy_lock(project, session_id)
-
-
-@router.post("/ops/locks/deploy/release")
-async def api_release_deploy_lock(project: str, session_id: str):
-    """배포 잠금 해제."""
-    from app.services.deploy_lock import release_deploy_lock
-    return {"released": release_deploy_lock(project, session_id)}
+    return {"build_hash": _BUILD_HASH, "timestamp": _time.time()}
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",

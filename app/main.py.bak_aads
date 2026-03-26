@@ -472,7 +472,7 @@ async def lifespan(app: FastAPI):
     except Exception as _e:
         logger.warning(f"startup_placeholder_cleanup_failed: {_e}")
 
-    # 주기적 stale placeholder 처리 (15초마다, 2분 초과분 — 중복 버블 방지 강화)
+    # 주기적 stale placeholder 처리 (15초마다, 1분 초과분 — 중복 버블 방지 강화)
     async def _periodic_placeholder_cleanup():
         import asyncio as _pc_asyncio
         while True:
@@ -511,11 +511,22 @@ async def lifespan(app: FastAPI):
                                 import re as _re
                                 _clean = _re.sub(r'\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\s*$', '', content).rstrip()
                                 if _clean:
-                                    await _c.execute(
-                                        "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'recovered' WHERE id = $1",
-                                        row["id"], _clean,
+                                    # Stage 2: promote 전 동일 내용 recovered 중복 검사
+                                    _prefix = _clean[:50]
+                                    _dup_rec = await _c.fetchval(
+                                        "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND role = 'assistant' "
+                                        "AND model_used = 'recovered' AND LEFT(content, 50) = $2 AND id != $3",
+                                        row["session_id"], _prefix, row["id"],
                                     )
-                                    _promoted += 1
+                                    if _dup_rec and _dup_rec > 0:
+                                        await _c.execute("DELETE FROM chat_messages WHERE id = $1", row["id"])
+                                        _deleted += 1
+                                    else:
+                                        await _c.execute(
+                                            "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'recovered' WHERE id = $1",
+                                            row["id"], _clean,
+                                        )
+                                        _promoted += 1
                                 else:
                                     await _c.execute("DELETE FROM chat_messages WHERE id = $1", row["id"])
                                     _deleted += 1
@@ -578,9 +589,10 @@ async def lifespan(app: FastAPI):
                            ) AS content,
                            lm.created_at
                     FROM last_msgs lm
-                    WHERE (lm.role = 'user' OR lm.model_used = 'recovered')
+                    WHERE lm.role = 'user'
                       AND lm.content IS NOT NULL
                       AND length(lm.content) > 0
+                      -- recovered 제외: 부분 응답은 이미 보존됨, 재실행하면 ghost 중복 발생
                     LIMIT 3
                 """)
 

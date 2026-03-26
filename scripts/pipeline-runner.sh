@@ -26,7 +26,7 @@ POLL_INTERVAL="${POLL_INTERVAL:-5}"
 AADS_API_URL="${AADS_API_URL:-http://127.0.0.1:8100}"
 MAX_RUNTIME="${MAX_RUNTIME:-7200}"
 MAX_RETRIES="${MAX_RETRIES:-2}"               # H5: Claude 실패 시 재시도 횟수
-MAX_CONCURRENT_PER_PROJECT="${MAX_CONCURRENT_PER_PROJECT:-1}"  # 프로젝트당 동시 실행 수
+MAX_CONCURRENT_PER_PROJECT="${MAX_CONCURRENT_PER_PROJECT:-2}"  # 프로젝트당 동시 실행 수
 APPROVAL_TIMEOUT_HOURS="${APPROVAL_TIMEOUT_HOURS:-24}"  # H4: 승인 대기 타임아웃
 ARTIFACT_MAX_AGE_HOURS="${ARTIFACT_MAX_AGE_HOURS:-24}"  # H3: 임시파일 보존 시간
 LOG_DIR="/var/log/aads-pipeline"
@@ -57,6 +57,16 @@ mkdir -p "$LOG_DIR" "$ARTIFACT_DIR"
 
 # ── 유틸리티 ──────────────────────────────────────────────────────────
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_DIR/runner.log"; }
+
+# Redis 잠금 해제 헬퍼 (graceful — 실패해도 진행)
+_release_work_lock() {
+    local project="$1" job_id="$2"
+    curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/work/release?project=${project}&session_id=${job_id}" 2>/dev/null || true
+}
+_release_deploy_lock() {
+    local project="$1" job_id="$2"
+    curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/deploy/release?project=${project}&session_id=${job_id}" 2>/dev/null || true
+}
 
 # DB 접속 방식
 DB_MODE="${DB_MODE:-auto}"
@@ -381,11 +391,22 @@ run_job() {
         return 1
     fi
 
+    # ── Redis 잠금 (1단계: 작업 잠금) ──
+    local lock_result
+    lock_result=$(curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/work/acquire?project=${project}&session_id=${job_id}" 2>/dev/null) || true
+    if echo "$lock_result" | grep -q '"acquired":false'; then
+        local holder
+        holder=$(echo "$lock_result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('holder','unknown'))" 2>/dev/null) || holder="unknown"
+        log "  REDIS_LOCK: $project 작업 중 (holder=$holder) — $job_id queued로 되돌림"
+        db_update "UPDATE pipeline_jobs SET status='queued', phase='queued', updated_at=NOW() WHERE job_id='${job_id}';"
+        return 0
+    fi
+
     # ── 사전 검증 (Pre-validation) ──
-    pre_validate "$job_id" "$project" "$session_id" || return 1
+    pre_validate "$job_id" "$project" "$session_id" || { _release_work_lock "$project" "$job_id"; return 1; }
 
     # ── 중복 작업 확인 ──
-    check_duplicate "$job_id" "$project" "$instruction" || return 0
+    check_duplicate "$job_id" "$project" "$instruction" || { _release_work_lock "$project" "$job_id"; return 0; }
 
     local workdir="${PROJECT_WORKDIR[$project]:-}"
     local use_worktree=false
@@ -506,6 +527,7 @@ $out_tail")
                    review_feedback=COALESCE(review_feedback,'') || E'\n' || ${safe_feedback},
                    updated_at=NOW() WHERE job_id='${job_id}';"
         post_to_chat "$session_id" "❌ [Pipeline Runner] 작업 실패 (${error_type}, exit=$exit_code, ${attempt}회 시도): ${err_content:0:500}"
+        _release_work_lock "$project" "$job_id"
         _cleanup_artifacts "$job_id"
         # worktree 정리
         if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
@@ -597,6 +619,7 @@ ${diff_summary}
 승인: pipeline_runner_approve(job_id='${job_id}', action='approve')"
 
     log "  AWAITING_APPROVAL job=$job_id"
+    _release_work_lock "$project" "$job_id"
     _cleanup_artifacts "$job_id"
 
     # 채팅AI 자동 반응 트리거 — AI가 결과 확인 후 CEO에게 보고
@@ -629,6 +652,21 @@ deploy_job() {
     [[ -z "$workdir" || ! -d "$workdir" ]] && return 1
 
     log "▶ DEPLOY job=$job_id project=$project"
+
+    # Redis deploy lock 획득 (동시 배포 방지)
+    local deploy_lock_result=""
+    deploy_lock_result=$(curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/deploy/acquire?project=${project}&session_id=${job_id}" 2>/dev/null) || true
+    if echo "$deploy_lock_result" | grep -q '"acquired":false'; then
+        log "  DEPLOY_LOCK_WAIT job=$job_id project=$project — 다른 배포 진행 중, 30초 후 재시도"
+        sleep 30
+        deploy_lock_result=$(curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/deploy/acquire?project=${project}&session_id=${job_id}" 2>/dev/null) || true
+        if echo "$deploy_lock_result" | grep -q '"acquired":false'; then
+            log "  DEPLOY_LOCK_FAIL job=$job_id — 배포 스킵"
+            post_to_chat "$session_id" "⚠️ [Pipeline Runner] 배포 락 획득 실패 (다른 배포 진행 중): $job_id"
+            return 1
+        fi
+    fi
+
     post_to_chat "$session_id" "🚀 [Pipeline Runner] 배포 시작: $job_id"
 
     local main_workdir="${PROJECT_WORKDIR[$project]:-}"
@@ -902,11 +940,13 @@ deploy_job() {
                        review_feedback=COALESCE(review_feedback,'') || E'\n[자동롤백] health-check 실패 → git revert → rollback_health=${rollback_health}',
                        updated_at=NOW() WHERE job_id='${job_id}';"
             post_to_chat "$session_id" "🔴 [Pipeline Runner] 자동 롤백으로 에러 처리: $job_id"
+            _release_deploy_lock "$project" "$job_id"
             _notify_ai "$job_id"
             promote_next_queued "$project"
             return 1
         else
             log "  ROLLBACK_REVERT_FAIL: git revert 실패 — 수동 복구 필요"
+            _release_deploy_lock "$project" "$job_id"
             post_to_chat "$session_id" "🔴 [Pipeline Runner] 자동 롤백 실패 (git revert 불가) — 수동 복구 필요: $job_id"
         fi
     fi
@@ -916,6 +956,9 @@ deploy_job() {
                updated_at=NOW() WHERE job_id='${job_id}';"
     post_to_chat "$session_id" "✅ [Pipeline Runner] 배포 완료 (health=${health_ok})"
     log "  DEPLOYED job=$job_id health=$health_ok"
+
+    # Redis deploy lock 해제
+    _release_deploy_lock "$project" "$job_id"
 
     # 채팅AI 자동 반응 트리거
     _notify_ai "$job_id"
@@ -957,6 +1000,8 @@ reject_job() {
     fi
 
     db_update "UPDATE pipeline_jobs SET status='rejected_done', phase='rejected_done', updated_at=NOW() WHERE job_id='${job_id}';"
+    _release_work_lock "$project" "$job_id"
+    _release_deploy_lock "$project" "$job_id"
     post_to_chat "$session_id" "↩️ [Pipeline Runner] 거부된 작업 코드 원복 완료: $job_id"
     log "  REJECTED job=$job_id"
 
