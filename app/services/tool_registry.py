@@ -224,7 +224,7 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
     "directive_gen":      ["generate_directive"],
     "cto_directive":      ["generate_directive"],
     # Tier 4: 외부 검색
-    "search":             ["web_search"],
+    "search":             ["web_search", "search_searxng"],
     "url_read":           ["jina_read"],
     # Tier 6: 브라우저 — 명시적 요청 시만
     "browser":            ["browser_navigate"],

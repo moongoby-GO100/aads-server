@@ -387,7 +387,12 @@ def _keyword_fallback(message: str) -> IntentResult:
         return _make_result("encyclopedia_search")
     if any(w in msg for w in ("지식인", "지식in", "q&a")):
         return _make_result("knowledge_search")
-    if any(w in msg for w in ("검색", "찾아봐", "최신")):
+    # 기술/라이브러리 관련 키워드가 함께 있으면 code_task 우선 (SearXNG 허용)
+    _tech_keywords = ("라이브러리", "프레임워크", "패키지", "버전", "api ", "sdk", "공식문서", "최신 버전",
+                      "설치", "import", "pip ", "npm ", "yarn ", "모듈", "의존성", "changelog")
+    if any(w in msg for w in ("최신", "검색", "찾아봐")):
+        if any(tw in msg for tw in _tech_keywords) or any(w in msg for w in ("코드", "버그", "개발", "구현", "함수")):
+            return _make_result("code_task")
         return _make_result("search")
     if any(w in msg for w in ("지시서", "directive_start", ">>>directive")):
         return _make_result("directive_gen")

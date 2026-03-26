@@ -40,3 +40,4 @@ logs/
 .DS_Store
 Thumbs.db
 .env.litellm
+backup/direct_oauth_20260326/

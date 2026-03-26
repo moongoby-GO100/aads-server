@@ -503,7 +503,31 @@ class ToolExecutor:
         if engine in ("google", "naver", "kakao"):
             return await self._web_search_single(inp, engine)
 
-        # auto: 스마트 듀얼 — 한국어면 Google+Naver 동시, 영어면 Google만
+        # ── SearXNG 1순위 (무료, 무제한, 70개+ 메타검색) ──
+        try:
+            searxng_result = await self._search_searxng(inp)
+            if isinstance(searxng_result, dict) and not searxng_result.get("error"):
+                results = searxng_result.get("results", [])
+                if results:
+                    text_parts = []
+                    citations = []
+                    for r in results[:count]:
+                        title = r.get("title", "")
+                        content = r.get("content", "")
+                        url = r.get("url", "")
+                        text_parts.append(f"**{title}**\n{content}")
+                        if url:
+                            citations.append({"title": title, "url": url})
+                    return {
+                        "text": "\n\n".join(text_parts),
+                        "citations": citations,
+                        "engines_used": ["searxng"],
+                        "source": "searxng",
+                    }
+        except Exception as e:
+            logger.warning(f"SearXNG 검색 실패, 기존 엔진 폴백: {e}")
+
+        # ── SearXNG 실패 시 기존 폴백 로직 ──
         if self._is_korean(query):
             # 한국어: Google + Naver 동시 검색
             results = await asyncio.gather(

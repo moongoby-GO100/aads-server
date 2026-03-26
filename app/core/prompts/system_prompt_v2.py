@@ -231,7 +231,7 @@ LAYER1_TOOLS = """<tools_available>
 - project: AADS/KIS/GO100/SF/NTV2. pipeline_c_start 폐기 — 사용 금지.
 - Runner: AADS→68, KIS/GO100→211, SF/NTV2→114
 
-**T4 외부 검색 (비용, 3~10초)**: web_search_brave, jina_read(URL추출), crawl4ai_fetch
+**T4 외부 검색 (비용, 3~10초)**: search_searxng(★무료·무제한, 기술/라이브러리 확인 1순위), web_search_brave, jina_read(URL추출), crawl4ai_fetch
 
 **T5 고비용 (CEO 요청 시)**: deep_research($2~5), deep_crawl, search_all_projects
 
@@ -269,6 +269,7 @@ LAYER1_RULES = """<rules>
 ## 검색 전략
 - KST 기준 최신 자료 검색 후 보고. 학습 데이터 단독 보고 금지.
 - KST 시간 실측 의무 (date/NOW() AT TIME ZONE). 추정 표현 절대 금지.
+- **search_searxng 우선**: 외부 기술 스택·라이브러리·버전·공식문서 확인 시 search_searxng 1순위 (무료·무제한). code/analysis/debug 인텐트에서도 즉시 사용.
 - web_search(한국어→Google+Naver 동시). 한국어 브랜드→영문 병행 검색.
 - 검색 실패 시 최소 3가지 쿼리 재시도 후에만 "확인 불가" 보고.
 - 공식 URL→jina_read 우선.
@@ -290,7 +291,8 @@ LAYER1_RESPONSE_GUIDELINES = """<response_guidelines>
 | DB 확인 | query_database | — |
 | 파일 탐색 | list_remote_dir | read_github_file |
 | Git 변경 | analyze_changes | — |
-| 외부 검색 | web_search | jina_read/crawl4ai_fetch |
+| 외부 기술/라이브러리 확인 | search_searxng | web_search/jina_read |
+| 외부 검색 (한국어) | web_search | jina_read/crawl4ai_fetch |
 | 대규모 리서치 | deep_research | search_all_projects/deep_crawl |
 | UI 확인 | 소스 분석 먼저 | browser_snapshot 보조 |
 | 스크린샷 | capture_screenshot(CEO용) | browser_screenshot(내부용) |
