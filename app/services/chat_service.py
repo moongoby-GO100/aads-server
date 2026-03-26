@@ -1019,20 +1019,44 @@ async def delete_session(session_id: str) -> bool:
 async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort: str = "asc") -> List[Dict[str, Any]]:
     async with get_pool().acquire() as conn:
         order = "DESC" if sort == "desc" else "ASC"
-        # 활성 스트리밍 중이 아니면 placeholder 제외 (중복 버블 방지)
+        # 활성 여부 판별 (스트리밍 중이면 placeholder 그대로 표시)
         _is_active = session_id in _streaming_state and not _streaming_state[session_id].get("completed", False)
-        _intent_filter = (
-            "AND intent IS DISTINCT FROM '_deleted_duplicate'"
-            if _is_active
-            else "AND intent IS DISTINCT FROM '_deleted_duplicate' AND intent IS DISTINCT FROM 'streaming_placeholder'"
-        )
+        _intent_filter = "AND intent IS DISTINCT FROM '_deleted_duplicate'"
         rows = await conn.fetch(
             f"SELECT * FROM chat_messages WHERE session_id = $1 {_intent_filter} ORDER BY created_at {order} LIMIT $2 OFFSET $3",
             uuid.UUID(session_id),
             limit,
             offset,
         )
-        return [_row_to_dict(r) for r in rows]
+        results = [_row_to_dict(r) for r in rows]
+        # 비활성 세션의 streaming_placeholder → 내용 있으면 recovered 전환, 없으면 제외
+        if not _is_active:
+            _promote_ids = []
+            _remove_ids = []
+            for msg in results:
+                if msg.get("intent") == "streaming_placeholder":
+                    content = (msg.get("content") or "").strip()
+                    if content and len(content) > 10:
+                        _promote_ids.append(msg["id"])
+                        msg["intent"] = None
+                        msg["model_used"] = "recovered"
+                    else:
+                        _remove_ids.append(msg["id"])
+            if _promote_ids:
+                for _pid in _promote_ids:
+                    try:
+                        await conn.execute(
+                            "UPDATE chat_messages SET intent = NULL, model_used = 'recovered', "
+                            "content = regexp_replace(content, E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$', '') "
+                            "WHERE id = $1",
+                            _pid if isinstance(_pid, __import__('uuid').UUID) else __import__('uuid').UUID(str(_pid)),
+                        )
+                    except Exception as _pe:
+                        logger.warning(f"list_messages_promote_failed: {_pe}")
+                logger.info(f"list_messages_auto_promoted session={session_id[:8]} count={len(_promote_ids)}")
+            _remove_set = set(str(x) for x in _remove_ids)
+            results = [m for m in results if str(m["id"]) not in _remove_set]
+        return results
 
 
 async def list_messages_cursor(
@@ -1044,16 +1068,15 @@ async def list_messages_cursor(
     async with get_pool().acquire() as conn:
         sid = uuid.UUID(session_id)
         fetch_limit = limit + 1  # has_more 판별용 1건 추가
-        # 활성 스트리밍 중이 아니면 placeholder 제외 (중복 버블 방지)
+        # 활성 여부 판별 (스트리밍 중이면 placeholder 그대로 표시)
         _is_active = session_id in _streaming_state and not _streaming_state[session_id].get("completed", False)
-        _placeholder_filter = "" if _is_active else "AND intent IS DISTINCT FROM 'streaming_placeholder'"
         if cursor:
             from datetime import datetime as _dt
             cursor_dt = _dt.fromisoformat(cursor)
             rows = await conn.fetch(
                 "SELECT * FROM ("
                 "  SELECT * FROM chat_messages"
-                f"  WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate' {_placeholder_filter}"
+                "  WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate'"
                 "    AND created_at < $2"
                 "  ORDER BY created_at DESC LIMIT $3"
                 ") sub ORDER BY created_at ASC",
@@ -1063,13 +1086,40 @@ async def list_messages_cursor(
             rows = await conn.fetch(
                 "SELECT * FROM ("
                 "  SELECT * FROM chat_messages"
-                f"  WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate' {_placeholder_filter}"
+                "  WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate'"
                 "  ORDER BY created_at DESC LIMIT $2"
                 ") sub ORDER BY created_at ASC",
                 sid, fetch_limit,
             )
         messages = [_row_to_dict(r) for r in rows]
-        has_more = len(messages) > limit
+        has_more = len(messages) > limit  # has_more는 필터링 전 원본 건수로 판별
+        # 비활성 세션의 streaming_placeholder → 내용 있으면 recovered 전환, 없으면 제외
+        if not _is_active:
+            _promote_ids = []
+            _remove_ids = []
+            for msg in messages:
+                if msg.get("intent") == "streaming_placeholder":
+                    content = (msg.get("content") or "").strip()
+                    if content and len(content) > 10:
+                        _promote_ids.append(msg["id"])
+                        msg["intent"] = None
+                        msg["model_used"] = "recovered"
+                    else:
+                        _remove_ids.append(msg["id"])
+            if _promote_ids:
+                for _pid in _promote_ids:
+                    try:
+                        await conn.execute(
+                            "UPDATE chat_messages SET intent = NULL, model_used = 'recovered', "
+                            "content = regexp_replace(content, E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$', '') "
+                            "WHERE id = $1",
+                            _pid if isinstance(_pid, __import__('uuid').UUID) else __import__('uuid').UUID(str(_pid)),
+                        )
+                    except Exception as _pe:
+                        logger.warning(f"list_messages_cursor_promote_failed: {_pe}")
+                logger.info(f"list_messages_cursor_auto_promoted session={session_id[:8]} count={len(_promote_ids)}")
+            _remove_set = set(str(x) for x in _remove_ids)
+            messages = [m for m in messages if str(m["id"]) not in _remove_set]
         if has_more:
             messages = messages[1:]  # 가장 오래된 1건 제거 (초과분)
         next_cursor = messages[0]["created_at"].isoformat() if has_more and messages else None
