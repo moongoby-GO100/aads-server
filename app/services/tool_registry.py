@@ -114,6 +114,13 @@ _DEFER_LOADING: Dict[str, bool] = {
     "send_alert_message": True,       # 온디맨드
     # ── QA ────────────────────────────────────────────────────────────
     "visual_qa_test": True,           # 온디맨드
+    # ── CEO 아젠다 관리 ────────────────────────────────────────────────
+    "add_agenda": False,              # 핵심 — CEO/CTO 아젠다 등록
+    "list_agendas": False,            # 핵심 — 아젠다 목록 조회
+    "get_agenda": False,              # 핵심 — 아젠다 단건 조회
+    "update_agenda": False,           # 핵심 — 아젠다 상태 변경
+    "decide_agenda": False,           # 핵심 — CEO 결정 기록
+    "search_agendas": True,           # 온디맨드 — 키워드 검색
 }
 
 # 도구 카테고리 안내 (시스템 프롬프트 주입용 — context_builder.py에서 사용)
@@ -228,6 +235,10 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
     "url_read":           ["jina_read"],
     # Tier 6: 브라우저 — 명시적 요청 시만
     "browser":            ["browser_navigate"],
+    # CEO 아젠다 관리
+    "agenda":             ["add_agenda", "list_agendas", "get_agenda", "update_agenda", "decide_agenda", "search_agendas"],
+    "agenda_manage":      ["add_agenda", "list_agendas", "update_agenda"],
+    "agenda_decide":      ["decide_agenda", "list_agendas"],
 }
 
 # ─── 도구 스키마 정의 (Anthropic Tool Use 포맷) ──────────────────────────────
@@ -1973,6 +1984,119 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "description": "UI 비주얼 테스트 (Playwright 기반). 현재 capture_screenshot + 분석 조합 권장.",
         "input_schema": {"type": "object", "properties": {"url": {"type": "string"}, "checks": {"type": "array", "items": {"type": "string"}}}, "required": ["url"]},
     },
+    # ── CEO 아젠다 관리 (AADS-CEO-AGENDA) ────────────────────────────────────
+    "add_agenda": {
+        "name": "add_agenda",
+        "description": (
+            "CEO/CTO 아젠다 등록. 전략 논의·미결정 사항을 저장해 나중에 재개할 수 있도록 함. "
+            "CTO는 자기 프로젝트만 등록 가능. CEO는 전체 프로젝트 등록 가능."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "description": "프로젝트 코드", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2", "NAS"]},
+                "title": {"type": "string", "description": "아젠다 제목 (200자 이하)"},
+                "summary": {"type": "string", "description": "핵심 논점 + 옵션 + 미결정 사항 (마크다운)"},
+                "priority": {"type": "string", "description": "우선순위", "enum": ["P0", "P1", "P2", "P3"], "default": "P2"},
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "검색용 태그"},
+                "created_by": {"type": "string", "description": "CEO 또는 프로젝트명(CTO)", "default": "CEO"},
+                "source_session_id": {"type": "string", "description": "논의가 발생한 세션 ID"},
+            },
+            "required": ["project", "title", "summary"],
+        },
+        "input_examples": [
+            {"project": "KIS", "title": "RSI 전략 임계값 재설정", "summary": "현재 70/30 → 65/35 또는 68/32 옵션 논의중. 백테스트 필요.", "priority": "P1", "tags": ["RSI", "전략", "임계값"], "created_by": "KIS"},
+            {"project": "AADS", "title": "멀티모달 입력 지원 여부", "summary": "이미지 분석 기능 추가 검토. 비용 vs 효과 분석 필요.", "priority": "P2", "created_by": "CEO"},
+        ],
+    },
+    "list_agendas": {
+        "name": "list_agendas",
+        "description": (
+            "아젠다 목록 조회. project=None이면 전체(CEO용), project 지정 시 해당 프로젝트만(CTO용). "
+            "우선순위 순 정렬. status/priority 필터 지원."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "description": "프로젝트 필터 (없으면 전체)", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2", "NAS"]},
+                "status": {"type": "string", "description": "상태 필터", "enum": ["논의중", "보류", "결정", "진행중", "완료"]},
+                "priority": {"type": "string", "description": "우선순위 필터", "enum": ["P0", "P1", "P2", "P3"]},
+            },
+        },
+        "input_examples": [
+            {"project": "KIS"},
+            {"status": "논의중"},
+            {"priority": "P0"},
+        ],
+    },
+    "get_agenda": {
+        "name": "get_agenda",
+        "description": "아젠다 단건 상세 조회. summary, decision 등 전체 내용 반환.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "agenda_id": {"type": "integer", "description": "아젠다 ID"},
+            },
+            "required": ["agenda_id"],
+        },
+        "input_examples": [{"agenda_id": 1}],
+    },
+    "update_agenda": {
+        "name": "update_agenda",
+        "description": (
+            "아젠다 상태/내용 업데이트. CTO는 논의중↔보류만 변경 가능. "
+            "CEO는 모든 상태 변경 가능."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "agenda_id": {"type": "integer", "description": "아젠다 ID"},
+                "title": {"type": "string", "description": "새 제목"},
+                "summary": {"type": "string", "description": "새 요약 내용"},
+                "status": {"type": "string", "description": "새 상태", "enum": ["논의중", "보류", "결정", "진행중", "완료"]},
+                "priority": {"type": "string", "description": "새 우선순위", "enum": ["P0", "P1", "P2", "P3"]},
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "새 태그 목록"},
+            },
+            "required": ["agenda_id"],
+        },
+        "input_examples": [
+            {"agenda_id": 1, "status": "보류"},
+            {"agenda_id": 2, "priority": "P1", "tags": ["긴급", "리뷰필요"]},
+        ],
+    },
+    "decide_agenda": {
+        "name": "decide_agenda",
+        "description": (
+            "CEO 결정 기록 — status를 '결정'으로 변경하고 결정 내용을 저장. "
+            "CEO 세션에서만 사용 가능."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "agenda_id": {"type": "integer", "description": "아젠다 ID"},
+                "decision": {"type": "string", "description": "CEO 결정 내용"},
+            },
+            "required": ["agenda_id", "decision"],
+        },
+        "input_examples": [
+            {"agenda_id": 1, "decision": "RSI 임계값 68/32로 결정. 다음 스프린트에 백테스트 후 반영."},
+        ],
+    },
+    "search_agendas": {
+        "name": "search_agendas",
+        "description": "아젠다 키워드 검색 — title, summary, tags 대상 ILIKE 검색.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "keyword": {"type": "string", "description": "검색 키워드"},
+            },
+            "required": ["keyword"],
+        },
+        "input_examples": [
+            {"keyword": "RSI"},
+            {"keyword": "비용"},
+        ],
+    },
 }
 
 
@@ -1993,6 +2117,8 @@ _GROUPS: Dict[str, List[str]] = {
     "memory": ["save_note", "recall_notes", "delete_note", "learn_pattern", "observe", "query_timeline", "recall_tool_result", "query_decision_graph"],
     # AADS-186E-3 / AADS-188B: 딥리서치 + 코드탐색 + 시맨틱 검색 도구 그룹
     "research": ["deep_research", "code_explorer", "analyze_changes", "search_all_projects", "semantic_code_search"],
+    # CEO 아젠다 관리 도구 그룹
+    "agenda": ["add_agenda", "list_agendas", "get_agenda", "update_agenda", "decide_agenda", "search_agendas"],
     "all": list(_TOOLS.keys()),
 }
 
