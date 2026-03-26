@@ -26,6 +26,7 @@ POLL_INTERVAL="${POLL_INTERVAL:-5}"
 AADS_API_URL="${AADS_API_URL:-http://127.0.0.1:8100}"
 MAX_RUNTIME="${MAX_RUNTIME:-7200}"
 MAX_RETRIES="${MAX_RETRIES:-2}"               # H5: Claude 실패 시 재시도 횟수
+MAX_CONCURRENT_PER_PROJECT="${MAX_CONCURRENT_PER_PROJECT:-1}"  # 프로젝트당 동시 실행 수
 APPROVAL_TIMEOUT_HOURS="${APPROVAL_TIMEOUT_HOURS:-24}"  # H4: 승인 대기 타임아웃
 ARTIFACT_MAX_AGE_HOURS="${ARTIFACT_MAX_AGE_HOURS:-24}"  # H3: 임시파일 보존 시간
 LOG_DIR="/var/log/aads-pipeline"
@@ -182,7 +183,7 @@ check_project_lock() {
                              WHERE project='${project}' AND status IN ('running','claimed')
                              AND job_id != '${exclude_job_id}';" 2>/dev/null)
     running_count="${running_count// /}"
-    if [[ -n "$running_count" && "$running_count" -gt 0 ]]; then
+    if [[ -n "$running_count" && "$running_count" -ge "${MAX_CONCURRENT_PER_PROJECT}" ]]; then
         echo "$running_count"
         return 1
     fi
@@ -197,7 +198,7 @@ promote_next_queued() {
     still_running=$(db_exec "SELECT count(*) FROM pipeline_jobs
                              WHERE project='${project}' AND status IN ('running','claimed');" 2>/dev/null)
     still_running="${still_running// /}"
-    if [[ -n "$still_running" && "$still_running" -gt 0 ]]; then
+    if [[ -n "$still_running" && "$still_running" -ge "${MAX_CONCURRENT_PER_PROJECT}" ]]; then
         return 0
     fi
 
@@ -373,6 +374,28 @@ run_job() {
     check_duplicate "$job_id" "$project" "$instruction" || return 0
 
     local workdir="${PROJECT_WORKDIR[$project]:-}"
+    local use_worktree=false
+    local worktree_dir=""
+
+    # MAX_CONCURRENT_PER_PROJECT > 1이면 worktree 사용
+    if [[ "${MAX_CONCURRENT_PER_PROJECT}" -gt 1 ]]; then
+        worktree_dir="/tmp/aads-wt-${job_id}"
+        local avail_gb
+        avail_gb=$(df --output=avail -BG /tmp 2>/dev/null | tail -1 | tr -d ' G') || avail_gb=999
+        if [[ "$avail_gb" -ge 5 ]]; then
+            cd "$workdir"
+            if git worktree add "$worktree_dir" HEAD 2>/dev/null; then
+                workdir="$worktree_dir"
+                use_worktree=true
+                log "  WORKTREE: $worktree_dir 생성 (avail=${avail_gb}GB)"
+            else
+                log "  WORKTREE_FAIL: fallback to main workdir"
+            fi
+        else
+            log "  WORKTREE_SKIP: 디스크 부족 ${avail_gb}GB < 5GB"
+        fi
+    fi
+
     log "▶ START job=$job_id project=$project workdir=$workdir"
     db_update "UPDATE pipeline_jobs SET status='running', phase='claude_code_work',
                started_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
@@ -470,6 +493,12 @@ $out_tail")
                    updated_at=NOW() WHERE job_id='${job_id}';"
         post_to_chat "$session_id" "❌ [Pipeline Runner] 작업 실패 (${error_type}, exit=$exit_code, ${attempt}회 시도): ${err_content:0:500}"
         _cleanup_artifacts "$job_id"
+        # worktree 정리
+        if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
+            cd "${PROJECT_WORKDIR[$project]:-/tmp}"
+            git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
+            log "  WORKTREE_CLEANUP: /tmp/aads-wt-${job_id}"
+        fi
         _notify_ai "$job_id"
         promote_next_queued "$project"
         return 1
@@ -588,12 +617,43 @@ deploy_job() {
     log "▶ DEPLOY job=$job_id project=$project"
     post_to_chat "$session_id" "🚀 [Pipeline Runner] 배포 시작: $job_id"
 
-    cd "$workdir"
+    local main_workdir="${PROJECT_WORKDIR[$project]:-}"
+    local worktree_dir="/tmp/aads-wt-${job_id}"
 
-    # v2.1: 승인 후 커밋 → 푸시
-    git add -A 2>/dev/null || true
-    git commit -m "Pipeline-Runner: ${job_id}" 2>/dev/null || log "  WARN: git commit skipped (no changes or hook failure)"
-    git push 2>/dev/null || true
+    # flock으로 같은 프로젝트 동시 배포 방지
+    local lock_file="/tmp/pipeline-deploy-${project}.lock"
+    (
+        flock -w 300 200 || { log "  DEPLOY_LOCK_TIMEOUT: $project"; return 1; }
+
+        if [[ -d "$worktree_dir" ]]; then
+            cd "$worktree_dir"
+            git add -A 2>/dev/null || true
+            local diff_content
+            diff_content=$(git diff --cached HEAD 2>/dev/null) || true
+            if [[ -n "$diff_content" ]]; then
+                cd "$main_workdir"
+                echo "$diff_content" | git apply --3way 2>/dev/null || {
+                    log "  WORKTREE_MERGE_CONFLICT: $job_id"
+                    cd "$worktree_dir"
+                    git diff --cached --name-only HEAD 2>/dev/null | while read -r f; do
+                        [[ -f "$worktree_dir/$f" ]] && cp "$worktree_dir/$f" "$main_workdir/$f" 2>/dev/null || true
+                    done
+                    cd "$main_workdir"
+                }
+                git add -A 2>/dev/null || true
+            fi
+            cd "$main_workdir"
+        else
+            cd "$main_workdir"
+            git add -A 2>/dev/null || true
+        fi
+
+        git commit -m "Pipeline-Runner: ${job_id}" 2>/dev/null || log "  WARN: git commit skipped (no changes or hook failure)"
+        git push 2>/dev/null || true
+
+    ) 200>"$lock_file"
+
+    cd "$main_workdir"
 
     # ═══ 무중단 배포 v3.0 — build→swap→healthcheck→rollback ═══
     # 원칙: 빌드 중 기존 서비스 유지, 빌드 성공 후에만 교체, 실패 시 롤백
@@ -785,6 +845,13 @@ deploy_job() {
     # 채팅AI 자동 반응 트리거
     _notify_ai "$job_id"
 
+    # worktree 정리
+    if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
+        cd "${PROJECT_WORKDIR[$project]:-/tmp}"
+        git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
+        log "  WORKTREE_CLEANUP: /tmp/aads-wt-${job_id}"
+    fi
+
     # 배포 완료 후 다음 queued 작업 승격
     promote_next_queued "$project"
 }
@@ -805,6 +872,13 @@ reject_job() {
     db_update "UPDATE pipeline_jobs SET status='rejected_done', phase='rejected_done', updated_at=NOW() WHERE job_id='${job_id}';"
     post_to_chat "$session_id" "↩️ [Pipeline Runner] 거부된 작업 코드 원복 완료: $job_id"
     log "  REJECTED job=$job_id"
+
+    # worktree 정리
+    if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
+        cd "${PROJECT_WORKDIR[$project]:-/tmp}"
+        git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
+        log "  WORKTREE_CLEANUP: /tmp/aads-wt-${job_id}"
+    fi
 
     # 거부 후 다음 queued 작업 승격
     promote_next_queued "$project"
