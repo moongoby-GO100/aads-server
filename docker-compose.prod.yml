@@ -39,9 +39,11 @@ services:
     image: redis:7-alpine
     container_name: aads-redis
     restart: always
-    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru --appendonly yes --appendfsync everysec
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru --appendonly yes --appendfsync everysec --appendonly yes --appendfsync everysec
     environment:
       - TZ=Asia/Seoul
+    volumes:
+      - aads_redis_data:/data
     volumes:
       - aads_redis_data:/data
     networks:
@@ -120,6 +122,8 @@ services:
       - aads_network
     depends_on:
       aads-postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -227,6 +231,7 @@ services:
 
 volumes:
   aads_postgres_data:
+  aads_redis_data:
   aads_redis_data:
 
 networks:
