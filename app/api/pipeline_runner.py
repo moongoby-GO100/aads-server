@@ -61,9 +61,41 @@ class JobApproveRequest(BaseModel):
         return v
 
 
+async def check_project_lock(conn, project: str, exclude_job_id: str | None = None) -> bool:
+    """프로젝트에 실행 중인(running/claimed) 작업이 있는지 확인. True면 잠김."""
+    if exclude_job_id:
+        row = await conn.fetchrow(
+            "SELECT count(*) as cnt FROM pipeline_jobs "
+            "WHERE project = $1 AND status IN ('running', 'claimed') AND job_id != $2",
+            project, exclude_job_id,
+        )
+    else:
+        row = await conn.fetchrow(
+            "SELECT count(*) as cnt FROM pipeline_jobs "
+            "WHERE project = $1 AND status IN ('running', 'claimed')",
+            project,
+        )
+    return (row["cnt"] or 0) > 0
+
+
+async def promote_next_queued(conn, project: str) -> str | None:
+    """프로젝트 Lock 해제 후 다음 queued 작업 확인. Shell runner가 polling으로 자동 claim하므로 상태는 변경하지 않음."""
+    row = await conn.fetchrow(
+        "SELECT job_id FROM pipeline_jobs "
+        "WHERE project = $1 AND status = 'queued' "
+        "ORDER BY created_at ASC LIMIT 1",
+        project,
+    )
+    if row:
+        logger.info("pipeline_runner.lock_released_next_ready",
+                     next_job_id=row["job_id"], project=project)
+        return row["job_id"]
+    return None
+
+
 @router.post("/pipeline/jobs", response_model=JobSubmitResponse, tags=["pipeline-runner"])
 async def submit_job(req: JobSubmitRequest):
-    """작업 제출 — DB에 queued 상태로 저장, Runner가 폴링하여 실행."""
+    """작업 제출 — 같은 프로젝트에 running 작업이 있으면 queued 대기, 없으면 즉시 running."""
     from app.core.db_pool import get_pool
     pool = get_pool()
 
@@ -72,24 +104,30 @@ async def submit_job(req: JobSubmitRequest):
 
     try:
         async with pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO pipeline_jobs
-                  (job_id, project, instruction, chat_session_id, status, phase, max_cycles, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, 'queued', 'queued', $5, NOW(), NOW())
-                """,
-                job_id, req.project, req.instruction, session_id, req.max_cycles,
-            )
+            # 트랜잭션으로 lock 체크 + INSERT 원자성 보장
+            async with conn.transaction():
+                locked = await check_project_lock(conn, req.project)
+                await conn.execute(
+                    """
+                    INSERT INTO pipeline_jobs
+                      (job_id, project, instruction, chat_session_id, status, phase,
+                       max_cycles, created_at, updated_at)
+                    VALUES ($1, $2, $3, $4, 'queued', 'queued', $5, NOW(), NOW())
+                    """,
+                    job_id, req.project, req.instruction, session_id, req.max_cycles,
+                )
     except Exception as e:
         logger.error("pipeline_runner.submit_fail", error=str(e))
         raise HTTPException(status_code=500, detail="작업 저장 실패")
 
-    logger.info("pipeline_runner.job_submitted", job_id=job_id, project=req.project)
-    return JobSubmitResponse(
-        job_id=job_id,
-        status="queued",
-        message="작업이 대기열에 추가되었습니다. Runner가 곧 실행합니다.",
-    )
+    if locked:
+        logger.info("pipeline_runner.job_queued_locked", job_id=job_id, project=req.project)
+        msg = "프로젝트에 실행 중인 작업이 있어 대기열에 추가되었습니다. 현재 작업 완료 후 자동 실행됩니다."
+    else:
+        logger.info("pipeline_runner.job_submitted", job_id=job_id, project=req.project)
+        msg = "작업이 대기열에 추가되었습니다. Runner가 곧 실행합니다."
+
+    return JobSubmitResponse(job_id=job_id, status="queued", message=msg)
 
 
 @router.get("/pipeline/jobs", tags=["pipeline-runner"])
@@ -203,13 +241,21 @@ async def notify_completion(job_id: str):
     if not row:
         raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다")
 
-    session_id = row["chat_session_id"]
-    if not session_id or not _UUID_RE.match(session_id):
-        return {"status": "skipped", "reason": "session_id 없음"}
-
-    # 채팅AI 자동 반응 트리거
     status = row["status"]
     project = row["project"]
+
+    # 작업 완료/에러 시 같은 프로젝트의 다음 queued 작업을 자동 승격
+    promoted_job_id = None
+    if status in ("done", "error", "rejected"):
+        try:
+            async with pool.acquire() as conn:
+                promoted_job_id = await promote_next_queued(conn, project)
+        except Exception as e:
+            logger.warning("pipeline_runner.promote_fail", project=project, error=str(e))
+
+    session_id = row["chat_session_id"]
+    if not session_id or not _UUID_RE.match(session_id):
+        return {"status": "skipped", "reason": "session_id 없음", "promoted_job_id": promoted_job_id}
     instruction = row["instruction_preview"] or ""
     output = row["output_preview"] or ""
 
@@ -244,10 +290,10 @@ async def notify_completion(job_id: str):
         import asyncio
         logger.info("pipeline_runner.trigger_sent", job_id=job_id, session_id=session_id, status=status)
         asyncio.create_task(trigger_ai_reaction(session_id, msg))
-        return {"status": "triggered", "session_id": session_id}
+        return {"status": "triggered", "session_id": session_id, "promoted_job_id": promoted_job_id}
     except Exception as e:
         logger.warning(f"notify_trigger_failed: {e}")
-        return {"status": "error", "detail": str(e)}
+        return {"status": "error", "detail": str(e), "promoted_job_id": promoted_job_id}
 
 
 @router.post("/pipeline/jobs/{job_id}/approve", tags=["pipeline-runner"])
@@ -280,3 +326,27 @@ async def approve_or_reject(job_id: str, req: JobApproveRequest):
     action_kr = "승인됨" if req.action == "approve" else "거부됨"
     logger.info("pipeline_runner.job_action", job_id=job_id, action=req.action)
     return {"job_id": job_id, "action": req.action, "message": f"작업이 {action_kr}"}
+
+
+@router.get("/pipeline/lock-status", tags=["pipeline-runner"])
+async def lock_status(project: str = Query(..., max_length=10)):
+    """프로젝트별 동시실행 Lock 상태 조회. Shell runner가 claim 전 호출."""
+    if project not in _VALID_PROJECTS:
+        raise HTTPException(status_code=400, detail="유효하지 않은 프로젝트")
+
+    from app.core.db_pool import get_pool
+    pool = get_pool()
+
+    async with pool.acquire() as conn:
+        locked = await check_project_lock(conn, project)
+        queued_row = await conn.fetchrow(
+            "SELECT count(*) as cnt FROM pipeline_jobs "
+            "WHERE project = $1 AND status = 'queued'",
+            project,
+        )
+
+    return {
+        "project": project,
+        "locked": locked,
+        "queued_count": queued_row["cnt"] if queued_row else 0,
+    }

@@ -173,6 +173,45 @@ _fail_job() {
     _notify_ai "$job_id"
 }
 
+# ── 프로젝트 Lock 체크 (동시실행 방지) ──────────────────────────────────
+# 같은 프로젝트에서 running/claimed 작업이 있으면 1(locked) 반환
+check_project_lock() {
+    local project="$1" exclude_job_id="$2"
+    local running_count
+    running_count=$(db_exec "SELECT count(*) FROM pipeline_jobs
+                             WHERE project='${project}' AND status IN ('running','claimed')
+                             AND job_id != '${exclude_job_id}';" 2>/dev/null)
+    running_count="${running_count// /}"
+    if [[ -n "$running_count" && "$running_count" -gt 0 ]]; then
+        echo "$running_count"
+        return 1
+    fi
+    return 0
+}
+
+# 작업 완료/에러 후 같은 프로젝트의 다음 queued 작업을 자동 시작 대기열로 승격
+promote_next_queued() {
+    local project="$1"
+    # running/claimed 작업이 아직 있으면 승격하지 않음
+    local still_running
+    still_running=$(db_exec "SELECT count(*) FROM pipeline_jobs
+                             WHERE project='${project}' AND status IN ('running','claimed');" 2>/dev/null)
+    still_running="${still_running// /}"
+    if [[ -n "$still_running" && "$still_running" -gt 0 ]]; then
+        return 0
+    fi
+
+    # 가장 오래된 queued 작업을 찾아 로그만 남김 (실제 claim은 메인루프의 claim_queued_job이 처리)
+    local next_job
+    next_job=$(db_exec "SELECT job_id FROM pipeline_jobs
+                        WHERE project='${project}' AND status='queued' AND phase='queued'
+                        ORDER BY created_at ASC LIMIT 1;" 2>/dev/null) || true
+    next_job="${next_job// /}"
+    if [[ -n "$next_job" ]]; then
+        log "  PROMOTE_READY: 프로젝트 $project 의 다음 대기 작업 $next_job — 메인루프에서 곧 클레임"
+    fi
+}
+
 # ── 중복 작업 확인 ─────────────────────────────────────────────────────
 compute_instruction_hash() {
     echo -n "$1" | sha256sum | cut -d' ' -f1 | head -c 16
@@ -188,12 +227,10 @@ check_duplicate() {
 
     # 같은 프로젝트에서 running 상태 작업이 이미 있으면 → queued로 되돌림 (동시 실행 방지)
     local running_count
-    running_count=$(db_exec "SELECT count(*) FROM pipeline_jobs
-                             WHERE project='${project}' AND status IN ('running','claimed')
-                             AND job_id != '${job_id}';" 2>/dev/null)
-    running_count="${running_count// /}"
-    if [[ -n "$running_count" && "$running_count" -gt 0 ]]; then
-        log "  DEDUP: 프로젝트 $project 에 running 작업 ${running_count}개 — $job_id 를 queued로 되돌림"
+    if running_count=$(check_project_lock "$project" "$job_id"); then
+        : # lock 없음 — 계속 진행
+    else
+        log "  LOCK: 프로젝트 $project 에 running 작업 ${running_count}개 — $job_id 를 queued로 되돌림"
         db_update "UPDATE pipeline_jobs SET status='queued', phase='queued', updated_at=NOW() WHERE job_id='${job_id}';"
         return 1
     fi
@@ -274,14 +311,21 @@ post_to_chat() {
 }
 
 # C4: 원자적 Job 클레임 — UPDATE ... RETURNING으로 동시 실행 방지
+# 프로젝트별 동시실행 Lock: 같은 프로젝트에 running/claimed 작업이 있으면 claim하지 않음
 claim_queued_job() {
     local filter="$1"
     # instruction의 줄바꿈을 \\n으로 치환하여 단일행 RETURNING 보장
     db_exec "UPDATE pipeline_jobs SET status='claimed', updated_at=NOW()
              WHERE job_id = (
-                SELECT job_id FROM pipeline_jobs
-                WHERE status='queued' AND phase='queued' $filter
-                ORDER BY created_at ASC LIMIT 1
+                SELECT p.job_id FROM pipeline_jobs p
+                WHERE p.status='queued' AND p.phase='queued' $filter
+                  AND NOT EXISTS (
+                    SELECT 1 FROM pipeline_jobs r
+                    WHERE r.project = p.project
+                      AND r.status IN ('running', 'claimed')
+                      AND r.job_id != p.job_id
+                  )
+                ORDER BY p.created_at ASC LIMIT 1
                 FOR UPDATE SKIP LOCKED
              )
              RETURNING job_id, project, replace(replace(instruction, E'\\n', ' '), '|', ' '), chat_session_id, max_cycles;"
@@ -427,6 +471,7 @@ $out_tail")
         post_to_chat "$session_id" "❌ [Pipeline Runner] 작업 실패 (${error_type}, exit=$exit_code, ${attempt}회 시도): ${err_content:0:500}"
         _cleanup_artifacts "$job_id"
         _notify_ai "$job_id"
+        promote_next_queued "$project"
         return 1
     fi
 
@@ -513,6 +558,9 @@ ${diff_summary}
 
     # 채팅AI 자동 반응 트리거 — AI가 결과 확인 후 CEO에게 보고
     _notify_ai "$job_id"
+
+    # awaiting_approval은 running이 아니므로 다음 queued 작업 승격 가능
+    promote_next_queued "$project"
 }
 
 # 채팅AI 자동 반응 트리거 — 작업 완료/실패 시 AI가 결과를 확인·검수·조치
@@ -736,6 +784,9 @@ deploy_job() {
 
     # 채팅AI 자동 반응 트리거
     _notify_ai "$job_id"
+
+    # 배포 완료 후 다음 queued 작업 승격
+    promote_next_queued "$project"
 }
 
 # ── 거부된 작업 원복 ──────────────────────────────────────────────────
@@ -754,6 +805,9 @@ reject_job() {
     db_update "UPDATE pipeline_jobs SET status='rejected_done', phase='rejected_done', updated_at=NOW() WHERE job_id='${job_id}';"
     post_to_chat "$session_id" "↩️ [Pipeline Runner] 거부된 작업 코드 원복 완료: $job_id"
     log "  REJECTED job=$job_id"
+
+    # 거부 후 다음 queued 작업 승격
+    promote_next_queued "$project"
 }
 
 # C3: 크래시 복구 — 시작 시 stuck 작업 정리
@@ -771,6 +825,15 @@ _recover_stuck_jobs() {
                      RETURNING job_id;" 2>/dev/null) || true
     if [[ -n "$stuck" ]]; then
         log "  RECOVERED stuck jobs: $stuck"
+        # 복구된 작업의 프로젝트별로 다음 queued 승격
+        while IFS= read -r _recovered_id; do
+            _recovered_id="${_recovered_id// /}"
+            [[ -z "$_recovered_id" ]] && continue
+            local _rec_project
+            _rec_project=$(db_exec "SELECT project FROM pipeline_jobs WHERE job_id='${_recovered_id}';" 2>/dev/null) || true
+            _rec_project="${_rec_project// /}"
+            [[ -n "$_rec_project" ]] && promote_next_queued "$_rec_project"
+        done <<< "$stuck"
     fi
 
     # H4: 승인 대기 타임아웃

@@ -5,6 +5,7 @@ import logging
 from typing import Optional
 
 import structlog
+from fastapi import Header
 
 log = structlog.get_logger()
 
@@ -16,11 +17,12 @@ except ImportError:
     log.warning('pyjwt_not_installed', detail='auth endpoints will return 503')
 
 try:
-    from passlib.hash import bcrypt as passlib_bcrypt
+    import bcrypt as _bcrypt_mod
     BCRYPT_AVAILABLE = True
 except ImportError:
     BCRYPT_AVAILABLE = False
-    log.warning('passlib_not_installed', detail='SaaS registration will be unavailable')
+    _bcrypt_mod = None
+    log.warning('bcrypt_not_installed', detail='SaaS registration will be unavailable')
 
 SECRET_KEY = os.getenv('JWT_SECRET_KEY', '')
 ALGORITHM = 'HS256'
@@ -42,8 +44,9 @@ if not ADMIN_PASSWORD:
 def create_token(user_id: str, email: str, *, is_admin: bool = False) -> str:
     if not JWT_AVAILABLE:
         raise RuntimeError('PyJWT not installed')
+    # PyJWT requires sub to be a string (not int from DB)
     payload = {
-        'sub': user_id,
+        'sub': str(user_id),
         'email': email,
         'is_admin': is_admin,
         'iat': int(time.time()),
@@ -104,10 +107,10 @@ async def ensure_saas_users_table():
 
 async def create_saas_user(email: str, password: str, name: Optional[str] = None) -> Optional[dict]:
     if not BCRYPT_AVAILABLE:
-        log.error('bcrypt_unavailable', detail='passlib[bcrypt] not installed')
+        log.error('bcrypt_unavailable', detail='bcrypt not installed')
         return None
     try:
-        password_hash = passlib_bcrypt.hash(password)
+        password_hash = _bcrypt_mod.hashpw(password.encode('utf-8'), _bcrypt_mod.gensalt()).decode('utf-8')
         pool = await _ensure_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -134,7 +137,7 @@ async def authenticate_saas_user(email: str, password: str) -> Optional[dict]:
             )
             if not row:
                 return None
-            if passlib_bcrypt.verify(password, row['password_hash']):
+            if _bcrypt_mod.checkpw(password.encode('utf-8'), row['password_hash'].encode('utf-8')):
                 return {'id': row['id'], 'email': row['email'], 'name': row['name']}
             return None
     except Exception as e:
@@ -154,3 +157,24 @@ async def get_saas_user_by_email(email: str) -> Optional[dict]:
     except Exception as e:
         log.error('get_saas_user_failed', error=str(e))
         return None
+
+
+# ── FastAPI Dependency: JWT에서 현재 사용자 추출 ─────────────────────
+async def get_current_user(authorization: str = Header(None)) -> dict:
+    """Bearer 토큰에서 사용자 정보 추출. Depends()로 사용."""
+    if not JWT_AVAILABLE:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail='JWT not available')
+    if not authorization or not authorization.startswith('Bearer '):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail='Authorization header missing')
+    token = authorization[7:]
+    payload = verify_token(token)
+    if not payload:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail='Invalid token')
+    return {
+        'user_id': payload.get('sub'),
+        'email': payload.get('email', ''),
+        'is_admin': payload.get('is_admin', False),
+    }

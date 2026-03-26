@@ -1,6 +1,4 @@
 """JWT 인증 API 라우터 — SaaS 회원가입 + 로그인"""
-from __future__ import annotations
-
 from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel, field_validator
 from typing import Optional
@@ -62,11 +60,12 @@ async def register(req: RegisterRequest):
     if not user:
         raise HTTPException(status_code=500, detail="회원가입 처리 중 오류가 발생했습니다")
 
-    token = auth_module.create_token(user["id"], user["email"])
+    uid = str(user["id"])  # DB returns int, JWT/response need str
+    token = auth_module.create_token(uid, user["email"])
     logger.info("SaaS 회원가입 완료: %s", req.email)
     return AuthResponse(
         token=token,
-        user_id=user["id"],
+        user_id=uid,
         email=user["email"],
         name=user.get("name"),
         is_admin=False,
@@ -82,10 +81,11 @@ async def login(req: LoginRequest):
     await auth_module.ensure_saas_users_table()
     saas_user = await auth_module.authenticate_saas_user(req.email, req.password)
     if saas_user:
-        token = auth_module.create_token(saas_user["id"], saas_user["email"])
+        uid = str(saas_user["id"])  # DB returns int, JWT/response need str
+        token = auth_module.create_token(uid, saas_user["email"])
         return AuthResponse(
             token=token,
-            user_id=saas_user["id"],
+            user_id=uid,
             email=saas_user["email"],
             name=saas_user.get("name"),
             is_admin=False,

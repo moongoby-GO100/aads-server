@@ -11,10 +11,11 @@ from pathlib import Path
 from typing import List, Optional
 
 import asyncpg
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from app.auth import get_current_user
 from app.core.anthropic_client import call_llm_with_fallback
 
 logger = logging.getLogger(__name__)
@@ -933,7 +934,6 @@ class ContactCreate(BaseModel):
     """연락처 생성."""
     name: str = Field(..., min_length=1)
     phone: str = Field(..., min_length=8)
-    user_id: str = Field(default="default")
     group_name: str = Field(default="")
     relationship: str = Field(default="")
     memo: str = Field(default="")
@@ -953,7 +953,6 @@ class AnniversaryCreate(BaseModel):
     contact_id: int
     title: str = Field(..., min_length=1)
     date: str = Field(..., description="YYYY-MM-DD")
-    user_id: str = Field(default="default")
     is_lunar: bool = Field(default=False)
     recurrence: str = Field(default="yearly")
     remind_days_before: int = Field(default=1, ge=0, le=30)
@@ -996,7 +995,6 @@ class TemplateCreate(BaseModel):
     category: str = Field(...)
     title: str = Field(...)
     content: str = Field(...)
-    user_id: str = Field(default="default")
     tone: str = Field(default="friendly")
     tags: List[str] = Field(default=[])
 
@@ -1012,7 +1010,6 @@ class TemplateUpdate(BaseModel):
 
 class ScheduledCreate(BaseModel):
     """예약 발송 생성."""
-    user_id: str = Field(default="default")
     contact_id: int
     message: str = Field(...)
     scheduled_at: str = Field(..., description="ISO datetime")
@@ -1024,23 +1021,24 @@ class ScheduledCreate(BaseModel):
 
 
 @router.post("/contacts")
-async def create_contact(req: ContactCreate):
+async def create_contact(req: ContactCreate, current_user: dict = Depends(get_current_user)):
     """연락처 생성."""
     await _ensure_saas_tables()
     pool = _pool()
+    user_id = str(current_user["user_id"])
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """INSERT INTO kakaobot_contacts (user_id, name, phone, group_name, relationship, memo)
                VALUES ($1, $2, $3, $4, $5, $6)
                RETURNING id, user_id, name, phone, group_name, relationship, memo, created_at""",
-            req.user_id, req.name, req.phone, req.group_name, req.relationship, req.memo,
+            str(current_user["user_id"]), req.name, req.phone, req.group_name, req.relationship, req.memo,
         )
     return dict(row)
 
 
 @router.get("/contacts")
 async def list_contacts(
-    user_id: str = Query(default="default"),
+    current_user: dict = Depends(get_current_user),
     group_name: Optional[str] = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
@@ -1048,6 +1046,7 @@ async def list_contacts(
     """연락처 목록 조회."""
     await _ensure_saas_tables()
     pool = _pool()
+    user_id = str(current_user["user_id"])
     async with pool.acquire() as conn:
         if group_name:
             rows = await conn.fetch(
@@ -1069,7 +1068,7 @@ async def list_contacts(
 
 
 @router.put("/contacts/{contact_id}")
-async def update_contact(contact_id: int, req: ContactUpdate):
+async def update_contact(contact_id: int, req: ContactUpdate, current_user: dict = Depends(get_current_user)):
     """연락처 수정."""
     await _ensure_saas_tables()
     pool = _pool()
@@ -1095,7 +1094,7 @@ async def update_contact(contact_id: int, req: ContactUpdate):
 
 
 @router.delete("/contacts/{contact_id}")
-async def delete_contact(contact_id: int):
+async def delete_contact(contact_id: int, current_user: dict = Depends(get_current_user)):
     """연락처 삭제 (연관 기념일도 CASCADE 삭제)."""
     await _ensure_saas_tables()
     pool = _pool()
@@ -1112,7 +1111,7 @@ async def delete_contact(contact_id: int):
 
 
 @router.post("/anniversaries")
-async def create_anniversary(req: AnniversaryCreate):
+async def create_anniversary(req: AnniversaryCreate, current_user: dict = Depends(get_current_user)):
     """기념일 생성."""
     await _ensure_saas_tables()
     pool = _pool()
@@ -1133,7 +1132,7 @@ async def create_anniversary(req: AnniversaryCreate):
                 remind_days_before, auto_send, template_id, custom_message)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                RETURNING *""",
-            req.contact_id, req.user_id, req.title, anniv_date,
+            req.contact_id, str(current_user["user_id"]), req.title, anniv_date,
             req.is_lunar, req.recurrence, req.remind_days_before,
             req.auto_send, req.template_id, req.custom_message,
         )
@@ -1142,13 +1141,14 @@ async def create_anniversary(req: AnniversaryCreate):
 
 @router.get("/anniversaries")
 async def list_anniversaries(
-    user_id: str = Query(default="default"),
+    current_user: dict = Depends(get_current_user),
     contact_id: Optional[int] = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
 ):
     """기념일 목록 조회."""
     await _ensure_saas_tables()
     pool = _pool()
+    user_id = str(current_user["user_id"])
     async with pool.acquire() as conn:
         if contact_id is not None:
             rows = await conn.fetch(
@@ -1173,12 +1173,13 @@ async def list_anniversaries(
 
 @router.get("/anniversaries/upcoming")
 async def upcoming_anniversaries(
-    user_id: str = Query(default="default"),
+    current_user: dict = Depends(get_current_user),
     days: int = Query(default=30, ge=1, le=365),
 ):
     """다가오는 기념일 조회 (N일 이내)."""
     await _ensure_saas_tables()
     pool = _pool()
+    user_id = str(current_user["user_id"])
     today = date.today()
     async with pool.acquire() as conn:
         # 올해/내년 기념일 중 N일 이내 것
@@ -1216,7 +1217,7 @@ async def upcoming_anniversaries(
 
 
 @router.put("/anniversaries/{anniversary_id}")
-async def update_anniversary(anniversary_id: int, req: AnniversaryUpdate):
+async def update_anniversary(anniversary_id: int, req: AnniversaryUpdate, current_user: dict = Depends(get_current_user)):
     """기념일 수정."""
     await _ensure_saas_tables()
     pool = _pool()
@@ -1251,7 +1252,7 @@ async def update_anniversary(anniversary_id: int, req: AnniversaryUpdate):
 
 
 @router.delete("/anniversaries/{anniversary_id}")
-async def delete_anniversary(anniversary_id: int):
+async def delete_anniversary(anniversary_id: int, current_user: dict = Depends(get_current_user)):
     """기념일 삭제."""
     await _ensure_saas_tables()
     pool = _pool()
@@ -1268,7 +1269,7 @@ async def delete_anniversary(anniversary_id: int):
 
 
 @router.post("/ai/generate")
-async def ai_generate(req: AiGenerateRequest):
+async def ai_generate(req: AiGenerateRequest, current_user: dict = Depends(get_current_user)):
     """AI 메시지 후보 생성 (3개 기본)."""
     from app.services.kakaobot_ai import generate_messages
 
@@ -1284,7 +1285,7 @@ async def ai_generate(req: AiGenerateRequest):
 
 
 @router.post("/ai/improve")
-async def ai_improve(req: AiImproveRequest):
+async def ai_improve(req: AiImproveRequest, current_user: dict = Depends(get_current_user)):
     """기존 메시지 개선."""
     from app.services.kakaobot_ai import improve_message
 
@@ -1300,7 +1301,7 @@ async def ai_improve(req: AiImproveRequest):
 
 
 @router.post("/templates")
-async def create_template(req: TemplateCreate):
+async def create_template(req: TemplateCreate, current_user: dict = Depends(get_current_user)):
     """템플릿 생성."""
     await _ensure_saas_tables()
     pool = _pool()
@@ -1310,7 +1311,7 @@ async def create_template(req: TemplateCreate):
                (user_id, category, title, content, tone, tags)
                VALUES ($1, $2, $3, $4, $5, $6::jsonb)
                RETURNING *""",
-            req.user_id, req.category, req.title, req.content,
+            str(current_user["user_id"]), req.category, req.title, req.content,
             req.tone, _json_mod.dumps(req.tags, ensure_ascii=False),
         )
     return dict(row)
@@ -1318,21 +1319,21 @@ async def create_template(req: TemplateCreate):
 
 @router.get("/templates")
 async def list_templates(
-    user_id: Optional[str] = Query(default=None),
+    current_user: dict = Depends(get_current_user),
     category: Optional[str] = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
 ):
     """템플릿 목록 조회."""
     await _ensure_saas_tables()
     pool = _pool()
+    user_id = str(current_user["user_id"])
     conditions = []
     vals = []
     idx = 1
 
-    if user_id is not None:
-        conditions.append(f"(user_id = ${idx} OR is_system = TRUE)")
-        vals.append(user_id)
-        idx += 1
+    conditions.append(f"(user_id = ${idx} OR is_system = TRUE)")
+    vals.append(user_id)
+    idx += 1
     if category is not None:
         conditions.append(f"category = ${idx}")
         vals.append(category)
@@ -1348,7 +1349,7 @@ async def list_templates(
 
 
 @router.put("/templates/{template_id}")
-async def update_template(template_id: int, req: TemplateUpdate):
+async def update_template(template_id: int, req: TemplateUpdate, current_user: dict = Depends(get_current_user)):
     """템플릿 수정."""
     await _ensure_saas_tables()
     pool = _pool()
@@ -1378,7 +1379,7 @@ async def update_template(template_id: int, req: TemplateUpdate):
 
 
 @router.delete("/templates/{template_id}")
-async def delete_template(template_id: int):
+async def delete_template(template_id: int, current_user: dict = Depends(get_current_user)):
     """템플릿 삭제."""
     await _ensure_saas_tables()
     pool = _pool()
@@ -1393,7 +1394,7 @@ async def delete_template(template_id: int):
 
 
 @router.post("/templates/seed")
-async def seed_templates(user_id: str = Query(default="system")):
+async def seed_templates(current_user: dict = Depends(get_current_user)):
     """기본 30개 시드 템플릿 삽입."""
     await _ensure_saas_tables()
     pool = _pool()
@@ -1449,7 +1450,7 @@ async def seed_templates(user_id: str = Query(default="system")):
                        (user_id, category, title, content, tone, is_system)
                        VALUES ($1, $2, $3, $4, $5, TRUE)
                        ON CONFLICT DO NOTHING""",
-                    user_id, cat, title, content, tone,
+                    str(current_user["user_id"]), cat, title, content, tone,
                 )
                 count += 1
             except Exception as e:
@@ -1462,7 +1463,7 @@ async def seed_templates(user_id: str = Query(default="system")):
 
 
 @router.post("/scheduled")
-async def create_scheduled(req: ScheduledCreate):
+async def create_scheduled(req: ScheduledCreate, current_user: dict = Depends(get_current_user)):
     """예약 발송 생성."""
     await _ensure_saas_tables()
     pool = _pool()
@@ -1481,7 +1482,7 @@ async def create_scheduled(req: ScheduledCreate):
                (user_id, contact_id, anniversary_id, template_id, message, scheduled_at, status)
                VALUES ($1, $2, $3, $4, $5, $6, 'pending')
                RETURNING *""",
-            req.user_id, req.contact_id, req.anniversary_id,
+            str(current_user["user_id"]), req.contact_id, req.anniversary_id,
             req.template_id, req.message, sched_dt,
         )
     return dict(row)
@@ -1489,13 +1490,14 @@ async def create_scheduled(req: ScheduledCreate):
 
 @router.get("/scheduled")
 async def list_scheduled(
-    user_id: str = Query(default="default"),
+    current_user: dict = Depends(get_current_user),
     status: Optional[str] = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
 ):
     """예약 발송 목록 조회."""
     await _ensure_saas_tables()
     pool = _pool()
+    user_id = str(current_user["user_id"])
     async with pool.acquire() as conn:
         if status:
             rows = await conn.fetch(
@@ -1519,7 +1521,7 @@ async def list_scheduled(
 
 
 @router.delete("/scheduled/{scheduled_id}")
-async def cancel_scheduled(scheduled_id: int):
+async def cancel_scheduled(scheduled_id: int, current_user: dict = Depends(get_current_user)):
     """예약 발송 취소."""
     await _ensure_saas_tables()
     pool = _pool()
