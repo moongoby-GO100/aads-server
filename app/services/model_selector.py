@@ -179,33 +179,53 @@ async def call_stream(
             logger.info(f"cascade_downgrade: {_intent} → claude-sonnet (medium intent)")
             model = "claude-sonnet"
 
-    # Claude 모델 → 3단계 폴백: CLI Relay → Agent SDK → Gemini
+    # Claude 모델 → 계정 교차 폴백 (rate limit은 계정별)
+    # Opus(계정1) → Opus(계정2) → Sonnet(계정1) → Sonnet(계정2) → Gemini
+    # 같은 모델 다른 계정 우선 시도 = 품질 저하 최소화, $200×2 풀 활용
+    _ACCOUNT_SLOTS = ["1", "2"]  # gmail, naver
+    _MODEL_DOWNGRADE = {
+        "claude-opus": ["claude-opus", "claude-sonnet"],
+        "claude-sonnet": ["claude-sonnet"],
+        "claude-haiku": ["claude-haiku"],
+    }
     if model not in _GEMINI_MODELS and model in _ANTHROPIC_MODEL_ID:
+        _downgrade = _MODEL_DOWNGRADE.get(model, [model])
+        _fb_seq = []  # [(model, slot), ...]
+        for _dg in _downgrade:
+            for _sl in _ACCOUNT_SLOTS:
+                _fb_seq.append((_dg, _sl))
 
-        # 1단계: CLI Relay (호스트 최신 CLI, OAuth 안정)
-        _had_error = False
-        async for event in _stream_cli_relay(model, system_prompt, messages, tools=tools, session_id=session_id):
-            if event.get("type") == "error":
-                _had_error = True
-                logger.warning(f"cli_relay_error: {model} failed, trying Agent SDK — {event.get('content', '')[:100]}")
-                break
-            yield event
-        if not _had_error:
-            return
+        for _fi, (_fm, _fs) in enumerate(_fb_seq):
+            if _fi > 0:
+                logger.info(f"fallback[{_fi}/{len(_fb_seq)}]: {_fm} slot={_fs}")
 
-        # 2단계: Agent SDK (OAuth 호환, CLI subprocess 기반)
-        _had_error = False
-        logger.info(f"cli_relay_failed: trying Agent SDK for {model}")
-        async for event in _stream_agent_sdk(model, system_prompt, messages, session_id=session_id):
-            if event.get("type") == "error":
-                _had_error = True
-                logger.warning(f"agent_sdk_error: {model} failed, trying Gemini — {event.get('content', '')[:100]}")
-                break
-            yield event
-        if not _had_error:
-            return
+            # Tier1: CLI Relay (oauth_slot으로 계정 지정)
+            _err = False
+            async for event in _stream_cli_relay(_fm, system_prompt, messages, tools=tools, session_id=session_id, oauth_slot=_fs):
+                if event.get("type") == "error":
+                    _err = True
+                    logger.warning(f"relay_err: {_fm}/slot{_fs}[{_fi}] — {event.get('content', '')[:80]}")
+                    break
+                yield event
+            if not _err:
+                return
 
-        # 3단계: Gemini (최종 안전망) — error_log 기록
+            # Tier2: Agent SDK (첫 계정에서만 — 컨테이너 고정 토큰)
+            if _fs == _ACCOUNT_SLOTS[0]:
+                _err = False
+                logger.info(f"relay_failed: SDK for {_fm}[{_fi}]")
+                async for event in _stream_agent_sdk(_fm, system_prompt, messages, session_id=session_id):
+                    if event.get("type") == "error":
+                        _err = True
+                        logger.warning(f"sdk_err: {_fm}[{_fi}] — {event.get('content', '')[:80]}")
+                        break
+                    yield event
+                if not _err:
+                    return
+
+            logger.warning(f"tier_exhausted: {_fm}/slot{_fs}[{_fi}]")
+
+        # 모든 Claude 모델×계정 실패 → Gemini (최종 안전망)
         yield {"type": "delta", "content": "[Claude 장애 → Gemini 전환]\n\n"}
         try:
             from app.core.db_pool import get_pool
@@ -214,7 +234,7 @@ async def call_stream(
                 await conn.execute(
                     "INSERT INTO error_log (error_type, source, server, message, stack_trace, created_at) VALUES ($1, $2, $3, $4, $5, NOW())",
                     "claude_api_fallback", "model_selector.cli_relay_path", "aads-server",
-                    f"Claude {model} → Gemini 전환 (CLI Relay + LiteLLM Anthropic 모두 실패)",
+                    f"Claude {model} → Gemini 전환 (계정 교차 {' → '.join(f'{m}/s{s}' for m,s in _fb_seq)} 모두 실패)",
                     "",
                 )
         except Exception as _log_err:
@@ -625,6 +645,7 @@ async def _stream_cli_relay(
     messages: List[Dict[str, Any]],
     tools: Optional[List[Dict[str, Any]]] = None,
     session_id: Optional[str] = None,
+    oauth_slot: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """CLI Relay 서버(host.docker.internal:8199)를 통한 스트리밍.
 
@@ -642,6 +663,8 @@ async def _stream_cli_relay(
         "system_prompt": system_prompt,
         "session_id": session_id or "",
     }
+    if oauth_slot:
+        req_body["oauth_slot"] = oauth_slot
 
     if isinstance(formatted, list):
         # 이미지 포함: content block 배열로 전달 → relay가 --input-format stream-json 사용
