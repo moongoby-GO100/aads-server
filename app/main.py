@@ -701,7 +701,7 @@ app = FastAPI(
 # H-07: CORS middleware — restrict to AADS dashboard origin
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://aads.newtalk.kr"],
+    allow_origins=["https://aads.newtalk.kr", "https://kakaobot.newtalk.kr"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -714,6 +714,7 @@ import app.auth as _auth_mod
 _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/health",
     "/api/v1/auth/login",
+    "/api/v1/auth/register",
     "/api/v1/auth/me",
     "/docs",
     "/openapi.json",
@@ -721,6 +722,9 @@ _AUTH_EXEMPT_PREFIXES = (
     "/mcp",
     "/api/v1/pc-agent",
     "/api/v1/review",
+    "/api/v1/kakao-bot/msgbot/webhook",
+    "/api/v1/kakao-bot/respond",
+    "/api/v1/kakao-bot/agent",
 )
 # 내부 모니터링 (verify_monitor_key로 별도 인증)
 _MONITOR_KEY_PATHS = (
