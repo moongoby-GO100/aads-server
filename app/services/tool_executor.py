@@ -505,6 +505,7 @@ class ToolExecutor:
 
         # ── SearXNG 1순위 (무료, 무제한, 70개+ 메타검색) ──
         try:
+            # 쿼리 리라이팅은 _search_searxng 내부에서 자동 적용됨
             searxng_result = await self._search_searxng(inp)
             if isinstance(searxng_result, dict) and not searxng_result.get("error"):
                 results = searxng_result.get("results", [])
@@ -589,11 +590,52 @@ class ToolExecutor:
             return {"error": str(e), "engine": engine}
         return {"error": f"알 수 없는 엔진: {engine}"}
 
+    async def _rewrite_query(self, query: str) -> str:
+        """검색 쿼리 리라이팅 — Haiku로 구어체→검색 키워드 변환."""
+        if not os.getenv("QUERY_REWRITE_ENABLED", "true").lower() == "true":
+            return query
+        # 짧은 쿼리나 이미 키워드형이면 스킵
+        if len(query.strip()) < 10 or " " not in query.strip():
+            return query
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as c:
+                resp = await c.post(
+                    f"{LITELLM_BASE_URL}/chat/completions",
+                    headers={"Authorization": f"Bearer {LITELLM_API_KEY}"},
+                    json={
+                        "model": "claude-haiku-4-5",
+                        "max_tokens": 100,
+                        "temperature": 0,
+                        "messages": [
+                            {"role": "user", "content": (
+                                "사용자 질문을 웹 검색에 최적화된 키워드 쿼리로 변환하세요.\n"
+                                "- 핵심 키워드만 추출 (조사/어미 제거)\n"
+                                "- 영문 기술용어는 영문 유지\n"
+                                "- 최신 정보 필요시 연도 추가\n"
+                                "- 결과: 검색 쿼리만 출력 (설명 없이)\n\n"
+                                f"사용자 질문: {query}\n검색 쿼리:"
+                            )}
+                        ],
+                    },
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    rewritten = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                    if rewritten and 3 < len(rewritten) < 200:
+                        logger.info(f"query_rewritten: '{query[:50]}' -> '{rewritten[:50]}'")
+                        return rewritten
+        except Exception as e:
+            logger.debug(f"query_rewrite_skipped: {e}")
+        return query
+
     async def _search_searxng(self, inp: Dict[str, Any]) -> Any:
         """SearXNG 메타검색 — 70개+ 엔진 동시 검색."""
         from app.services.searxng_search_service import search_searxng
+        # 쿼리 리라이팅 적용
+        original_query = inp.get("query", "")
+        rewritten_query = await self._rewrite_query(original_query)
         return await search_searxng(
-            query=inp.get("query", ""),
+            query=rewritten_query,
             categories=inp.get("categories", "general"),
             language=inp.get("language", "ko-KR"),
             time_range=inp.get("time_range"),
