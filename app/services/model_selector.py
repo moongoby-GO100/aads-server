@@ -157,6 +157,28 @@ async def call_stream(
         logger.warning(f"unknown_model_fallback: '{model}' → 'claude-sonnet'")
         model = "claude-sonnet"
 
+    # ── Dynamic Model Cascading (비용 최적화) ──────────────────────────
+    # model_override 없으면 인텐트 복잡도에 따라 최저 비용 모델 자동 선택
+    # 단순 인텐트는 Haiku로 다운그레이드 → Sonnet 대비 ~80% 비용 절감
+    _HAIKU_INTENTS = {
+        "greeting", "casual", "status_check", "health_check",
+        "all_service_status", "cost_report", "task_history",
+        "dashboard",
+    }
+    _SONNET_INTENTS = {
+        "search", "url_read", "browser", "task_query",
+        "service_inspection", "code_explorer", "analyze_changes",
+    }
+    # Opus 유지: cto_*, code_task, code_modify, execute, directive_gen 등 복잡 인텐트
+    _intent = getattr(intent_result, "intent", "")
+    if not model_override:
+        if _intent in _HAIKU_INTENTS and model in ("claude-sonnet", "claude-opus"):
+            logger.info(f"cascade_downgrade: {_intent} → claude-haiku (simple intent)")
+            model = "claude-haiku"
+        elif _intent in _SONNET_INTENTS and model == "claude-opus":
+            logger.info(f"cascade_downgrade: {_intent} → claude-sonnet (medium intent)")
+            model = "claude-sonnet"
+
     # Claude 모델 → 3단계 폴백: CLI Relay → Agent SDK → Gemini
     if model not in _GEMINI_MODELS and model in _ANTHROPIC_MODEL_ID:
 
