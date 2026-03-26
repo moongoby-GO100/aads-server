@@ -34,7 +34,7 @@ import asyncio as _heartbeat_asyncio
 
 async def with_heartbeat(
     gen: AsyncGenerator[str, None],
-    interval: float = 8.0,
+    interval: float = 5.0,
 ) -> AsyncGenerator[str, None]:
     """Wrap an SSE async generator to interleave heartbeat events.
 
@@ -63,7 +63,7 @@ async def with_heartbeat(
         except Exception as exc:
             logger.warning(f"with_heartbeat inner generator error: {type(exc).__name__}: {exc}", exc_info=True)
             # 에러도 SSE로 전달 후 종료 (조용히 삼키지 않음)
-            yield f'data: {json.dumps({"type": "error", "content": f"Stream error: {type(exc).__name__}"})}\n\n'
+            yield f'data: {json.dumps({"type": "error", "content": f"Stream error: {type(exc).__name__}", "recoverable": True})}\n\n'
             break
 
 # ── Background completion wrapper (Queue 기반) ────────────────────
@@ -197,7 +197,7 @@ async def with_background_completion(
     4. 클라이언트 disconnect → consumer만 중단, producer는 계속 실행 → DB 저장 완료
     5. 클라이언트 disconnect 후 10초마다 중간 결과를 DB에 저장 (세션 돌아왔을 때 보임)
     """
-    queue: _heartbeat_asyncio.Queue = _heartbeat_asyncio.Queue(maxsize=0)
+    queue: _heartbeat_asyncio.Queue = _heartbeat_asyncio.Queue(maxsize=500)
     _client_gone = False
     # heartbeat 정지 신호 — producer 완료 또는 client disconnect 시 set
     _hb_stop = _heartbeat_asyncio.Event()
@@ -321,22 +321,25 @@ async def with_background_completion(
     # producer/도구 블로킹과 완전 분리된 asyncio.Task에서 5초마다 heartbeat 전송.
     # 3중 안전장치: (1) heartbeat_pump → queue, (2) consumer timeout → 직접 yield,
     # (3) pump 비정상 종료 시 자동 재시작.
-    _HB_INTERVAL = 8.0  # P0-FIX: 도구 실행 heartbeat와 동일 간격 (8초)
+    _HB_INTERVAL = 5.0  # 기본 5초: Cloudflare 100s/nginx 600s 대비 충분한 여유
+    _HB_INTERVAL_TOOL = 2.0  # 도구 실행 중 2초: 긴 도구 실행 시 연결 안정성 강화
     _HB_LINE = f'data: {json.dumps({"type": "heartbeat"})}\n\n'
 
     async def _heartbeat_pump():
-        """독립 heartbeat — producer/도구 블로킹과 무관하게 5초마다 queue에 heartbeat 삽입.
+        """Adaptive heartbeat — 도구 실행 중 2초, 평시 5초 간격으로 queue에 heartbeat 삽입.
         도구 실행 중에는 tool_count/last_tool 포함 → 프론트 timeout 리셋 + 진행상황 표시."""
         while not _hb_stop.is_set():
             try:
-                await _heartbeat_asyncio.wait_for(_hb_stop.wait(), timeout=_HB_INTERVAL)
+                # Adaptive: 도구 실행 중이면 2초, 아니면 5초
+                _tc = state.get("tool_count", 0)
+                _lt = state.get("last_tool", "")
+                _interval = _HB_INTERVAL_TOOL if (_tc > 0 and _lt) else _HB_INTERVAL
+                await _heartbeat_asyncio.wait_for(_hb_stop.wait(), timeout=_interval)
                 break  # stop 신호 수신 → 정상 종료
             except _heartbeat_asyncio.TimeoutError:
-                # 5초 경과, stop 미수신 → heartbeat 전송
                 if _client_gone:
                     break  # 클라이언트 이탈 시 heartbeat 불필요
                 try:
-                    # P0-FIX: 도구 실행 중이면 tool 정보 포함 → 프론트 timeout 리셋 유도
                     _tc = state.get("tool_count", 0)
                     _lt = state.get("last_tool", "")
                     if _tc > 0 and _lt:
@@ -347,13 +350,14 @@ async def with_background_completion(
                 except Exception:
                     pass
             except Exception as _hb_exc:
-                # P0-FIX: 예상치 못한 예외로 pump 죽지 않도록 방어
                 logger.warning(f"heartbeat_pump_error session={session_id[:8]}: {_hb_exc}")
-                await _heartbeat_asyncio.sleep(1)  # 짧은 대기 후 재시도
+                await _heartbeat_asyncio.sleep(1)
         logger.debug(f"heartbeat_pump_done session={session_id[:8]}")
 
     hb_task = _heartbeat_asyncio.create_task(_heartbeat_pump())
 
+    # SSE retry 헤더: 클라이언트 자동 재연결 간격 3초 (EventSource 표준)
+    yield f"retry: 3000\n\n"
     # P0-FIX: 초기 heartbeat 즉시 전송 — 연결 수립 직후 SSE 채널 활성화 확인
     yield _HB_LINE
 
@@ -366,7 +370,11 @@ async def with_background_completion(
                 logger.warning(f"heartbeat_pump_died session={session_id[:8]}, restarting")
                 hb_task = _heartbeat_asyncio.create_task(_heartbeat_pump())
             try:
-                item = await _heartbeat_asyncio.wait_for(queue.get(), timeout=_HB_INTERVAL)
+                # Adaptive consumer timeout: 도구 실행 중 2초, 평시 5초 (pump과 동기)
+                _c_tc = state.get("tool_count", 0)
+                _c_lt = state.get("last_tool", "")
+                _c_interval = _HB_INTERVAL_TOOL if (_c_tc > 0 and _c_lt) else _HB_INTERVAL
+                item = await _heartbeat_asyncio.wait_for(queue.get(), timeout=_c_interval)
             except _heartbeat_asyncio.TimeoutError:
                 # heartbeat_pump이 큐에 넣지 못한 경우 → consumer에서 직접 heartbeat yield
                 yield _HB_LINE
@@ -1011,8 +1019,15 @@ async def delete_session(session_id: str) -> bool:
 async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort: str = "asc") -> List[Dict[str, Any]]:
     async with get_pool().acquire() as conn:
         order = "DESC" if sort == "desc" else "ASC"
+        # 활성 스트리밍 중이 아니면 placeholder 제외 (중복 버블 방지)
+        _is_active = session_id in _streaming_state and not _streaming_state[session_id].get("completed", False)
+        _intent_filter = (
+            "AND intent IS DISTINCT FROM '_deleted_duplicate'"
+            if _is_active
+            else "AND intent IS DISTINCT FROM '_deleted_duplicate' AND intent IS DISTINCT FROM 'streaming_placeholder'"
+        )
         rows = await conn.fetch(
-            f"SELECT * FROM chat_messages WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate' ORDER BY created_at {order} LIMIT $2 OFFSET $3",
+            f"SELECT * FROM chat_messages WHERE session_id = $1 {_intent_filter} ORDER BY created_at {order} LIMIT $2 OFFSET $3",
             uuid.UUID(session_id),
             limit,
             offset,
@@ -1029,13 +1044,16 @@ async def list_messages_cursor(
     async with get_pool().acquire() as conn:
         sid = uuid.UUID(session_id)
         fetch_limit = limit + 1  # has_more 판별용 1건 추가
+        # 활성 스트리밍 중이 아니면 placeholder 제외 (중복 버블 방지)
+        _is_active = session_id in _streaming_state and not _streaming_state[session_id].get("completed", False)
+        _placeholder_filter = "" if _is_active else "AND intent IS DISTINCT FROM 'streaming_placeholder'"
         if cursor:
             from datetime import datetime as _dt
             cursor_dt = _dt.fromisoformat(cursor)
             rows = await conn.fetch(
                 "SELECT * FROM ("
                 "  SELECT * FROM chat_messages"
-                "  WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate'"
+                f"  WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate' {_placeholder_filter}"
                 "    AND created_at < $2"
                 "  ORDER BY created_at DESC LIMIT $3"
                 ") sub ORDER BY created_at ASC",
@@ -1045,7 +1063,7 @@ async def list_messages_cursor(
             rows = await conn.fetch(
                 "SELECT * FROM ("
                 "  SELECT * FROM chat_messages"
-                "  WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate'"
+                f"  WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate' {_placeholder_filter}"
                 "  ORDER BY created_at DESC LIMIT $2"
                 ") sub ORDER BY created_at ASC",
                 sid, fetch_limit,

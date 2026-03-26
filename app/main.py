@@ -418,17 +418,40 @@ async def lifespan(app: FastAPI):
     # 서버 시작 시 stale placeholder → 내용 있으면 보존(promote), 없으면 삭제
     try:
         async with db_pool.acquire() as _c:
-            # 내용이 있는 placeholder는 recovered로 전환 (응답 소실 방지)
-            _promoted = await _c.fetchval(
-                "WITH p AS (UPDATE chat_messages SET intent = NULL, model_used = 'recovered' "
-                "WHERE intent = 'streaming_placeholder' AND content IS NOT NULL AND length(trim(content)) > 0 "
-                "RETURNING id) SELECT COUNT(*) FROM p"
+            # ── startup placeholder cleanup (중복 버블 방지 강화) ──
+            _placeholders = await _c.fetch(
+                "SELECT id, session_id, content FROM chat_messages WHERE intent = 'streaming_placeholder'"
             )
-            # 내용이 없는 placeholder만 삭제
-            _cleaned = await _c.fetchval(
-                "WITH d AS (DELETE FROM chat_messages "
-                "WHERE intent = 'streaming_placeholder' RETURNING id) SELECT COUNT(*) FROM d"
-            )
+            _promoted = 0
+            _cleaned = 0
+            for _ph in _placeholders:
+                _ph_content = (_ph["content"] or "").strip()
+                if _ph_content:
+                    # 동일 세션에 placeholder 이후 최종 응답이 이미 있으면 삭제 (중복 방지)
+                    _has_final = await _c.fetchval(
+                        "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND role = 'assistant' "
+                        "AND intent IS DISTINCT FROM 'streaming_placeholder' "
+                        "AND created_at >= (SELECT created_at FROM chat_messages WHERE id = $2)",
+                        _ph["session_id"], _ph["id"],
+                    )
+                    if _has_final and _has_final > 0:
+                        await _c.execute("DELETE FROM chat_messages WHERE id = $1", _ph["id"])
+                        _cleaned += 1
+                    else:
+                        import re as _re
+                        _clean_content = _re.sub(r'\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\s*$', '', _ph_content).rstrip()
+                        if _clean_content:
+                            await _c.execute(
+                                "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'recovered' WHERE id = $1",
+                                _ph["id"], _clean_content,
+                            )
+                            _promoted += 1
+                        else:
+                            await _c.execute("DELETE FROM chat_messages WHERE id = $1", _ph["id"])
+                            _cleaned += 1
+                else:
+                    await _c.execute("DELETE FROM chat_messages WHERE id = $1", _ph["id"])
+                    _cleaned += 1
             if (_promoted and _promoted > 0) or (_cleaned and _cleaned > 0):
                 logger.info(f"startup_placeholder_cleanup: promoted={_promoted or 0} deleted={_cleaned or 0}")
                 await _c.execute(
@@ -438,11 +461,11 @@ async def lifespan(app: FastAPI):
     except Exception as _e:
         logger.warning(f"startup_placeholder_cleanup_failed: {_e}")
 
-    # 주기적 stale placeholder 처리 (1분마다, 5분 초과분 — 내용 보존)
+    # 주기적 stale placeholder 처리 (15초마다, 2분 초과분 — 중복 버블 방지 강화)
     async def _periodic_placeholder_cleanup():
         import asyncio as _pc_asyncio
         while True:
-            await _pc_asyncio.sleep(60)  # 1분
+            await _pc_asyncio.sleep(15)  # 15초
             try:
                 from app.core.db_pool import get_pool as _gp_pc
                 from app.services.chat_service import _streaming_state
@@ -450,10 +473,10 @@ async def lifespan(app: FastAPI):
                 async with _pool.acquire() as _c:
                     # 현재 스트리밍 중인 세션은 제외
                     _active_sids = [k for k, v in _streaming_state.items() if not v.get("completed")]
-                    # 5분 초과 + 스트리밍 아닌 placeholder만 대상 (2분→5분으로 여유 확보)
+                    # 2분 초과 + 스트리밍 아닌 placeholder만 대상
                     _stale = await _c.fetch(
                         "SELECT id, session_id, content FROM chat_messages "
-                        "WHERE intent = 'streaming_placeholder' AND created_at < NOW() - interval '5 minutes'"
+                        "WHERE intent = 'streaming_placeholder' AND created_at < NOW() - interval '2 minutes'"
                     )
                     _promoted = 0
                     _deleted = 0
@@ -463,12 +486,28 @@ async def lifespan(app: FastAPI):
                             continue  # 아직 스트리밍 중 → 건드리지 않음
                         content = row["content"] or ""
                         if content.strip():
-                            # 내용 있음 → 응답으로 전환 (소실 방지)
-                            await _c.execute(
-                                "UPDATE chat_messages SET intent = NULL, model_used = 'recovered' WHERE id = $1",
-                                row["id"],
+                            # 최종 응답이 이미 있으면 중복 방지를 위해 삭제
+                            _has_final = await _c.fetchval(
+                                "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND role = 'assistant' "
+                                "AND intent IS DISTINCT FROM 'streaming_placeholder' "
+                                "AND created_at >= (SELECT created_at FROM chat_messages WHERE id = $2)",
+                                row["session_id"], row["id"],
                             )
-                            _promoted += 1
+                            if _has_final and _has_final > 0:
+                                await _c.execute("DELETE FROM chat_messages WHERE id = $1", row["id"])
+                                _deleted += 1
+                            else:
+                                import re as _re
+                                _clean = _re.sub(r'\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\s*$', '', content).rstrip()
+                                if _clean:
+                                    await _c.execute(
+                                        "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'recovered' WHERE id = $1",
+                                        row["id"], _clean,
+                                    )
+                                    _promoted += 1
+                                else:
+                                    await _c.execute("DELETE FROM chat_messages WHERE id = $1", row["id"])
+                                    _deleted += 1
                         else:
                             await _c.execute("DELETE FROM chat_messages WHERE id = $1", row["id"])
                             _deleted += 1
