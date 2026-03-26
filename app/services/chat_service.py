@@ -1056,6 +1056,32 @@ async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort
                 logger.info(f"list_messages_auto_promoted session={session_id[:8]} count={len(_promote_ids)}")
             _remove_set = set(str(x) for x in _remove_ids)
             results = [m for m in results if str(m["id"]) not in _remove_set]
+        # 연속 중복 assistant 메시지 제거 (같은 내용의 recovered 중복 방지)
+        if len(results) > 1:
+            _deduped = [results[0]]
+            for i in range(1, len(results)):
+                cur = results[i]
+                prev = _deduped[-1]
+                if (cur.get("role") == "assistant" and prev.get("role") == "assistant"
+                        and cur.get("model_used") in ("recovered", "stopped", None)
+                        and prev.get("model_used") in ("recovered", "stopped", None)
+                        and (cur.get("content") or "")[:50] == (prev.get("content") or "")[:50]):
+                    # 짧은 것 제거, 긴 것 유지
+                    if len(cur.get("content") or "") > len(prev.get("content") or ""):
+                        _deduped[-1] = cur
+                    _shorter = prev if len(cur.get("content") or "") > len(prev.get("content") or "") else cur
+                    try:
+                        import uuid as _uuid_mod
+                        _sid = _shorter["id"]
+                        await conn.execute(
+                            "UPDATE chat_messages SET intent = '_deleted_duplicate' WHERE id = $1",
+                            _sid if isinstance(_sid, _uuid_mod.UUID) else _uuid_mod.UUID(str(_sid)),
+                        )
+                    except Exception:
+                        pass
+                else:
+                    _deduped.append(cur)
+            results = _deduped
         return results
 
 
@@ -1120,6 +1146,31 @@ async def list_messages_cursor(
                 logger.info(f"list_messages_cursor_auto_promoted session={session_id[:8]} count={len(_promote_ids)}")
             _remove_set = set(str(x) for x in _remove_ids)
             messages = [m for m in messages if str(m["id"]) not in _remove_set]
+        # 연속 중복 assistant 메시지 제거 (같은 내용의 recovered 중복 방지)
+        if len(messages) > 1:
+            _deduped = [messages[0]]
+            for i in range(1, len(messages)):
+                cur = messages[i]
+                prev = _deduped[-1]
+                if (cur.get("role") == "assistant" and prev.get("role") == "assistant"
+                        and cur.get("model_used") in ("recovered", "stopped", None)
+                        and prev.get("model_used") in ("recovered", "stopped", None)
+                        and (cur.get("content") or "")[:50] == (prev.get("content") or "")[:50]):
+                    if len(cur.get("content") or "") > len(prev.get("content") or ""):
+                        _deduped[-1] = cur
+                    _shorter = prev if len(cur.get("content") or "") > len(prev.get("content") or "") else cur
+                    try:
+                        import uuid as _uuid_mod
+                        _sid = _shorter["id"]
+                        await conn.execute(
+                            "UPDATE chat_messages SET intent = '_deleted_duplicate' WHERE id = $1",
+                            _sid if isinstance(_sid, _uuid_mod.UUID) else _uuid_mod.UUID(str(_sid)),
+                        )
+                    except Exception:
+                        pass
+                else:
+                    _deduped.append(cur)
+            messages = _deduped
         if has_more:
             messages = messages[1:]  # 가장 오래된 1건 제거 (초과분)
         next_cursor = messages[0]["created_at"].isoformat() if has_more and messages else None
@@ -2080,7 +2131,18 @@ async def send_message_stream(
             # P2-2: branch 모드에서는 라우터에서 이미 저장했으므로 skip
             if not branch_point_msg_id:
                 user_intent = "system_trigger" if intent_override else None
-                await _save_message(conn, sid, "user", content, model_used=model_override, intent=user_intent, attachments=attachments or [], reply_to_id=_reply_to_uuid)
+                # 중복 사용자 메시지 방지 (502/503 재시도 시)
+                existing_dup = await conn.fetchrow(
+                    "SELECT id, content, created_at FROM chat_messages "
+                    "WHERE session_id = $1 AND role = 'user' AND content = $2 "
+                    "AND created_at > NOW() - interval '30 seconds' "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    sid, content,
+                )
+                if existing_dup:
+                    logger.info(f"user_msg_dedup session={session_id[:8]} — duplicate skipped")
+                else:
+                    await _save_message(conn, sid, "user", content, model_used=model_override, intent=user_intent, attachments=attachments or [], reply_to_id=_reply_to_uuid)
 
             # CEO 채팅 학습 트리거 (백그라운드, 비차단)
             if not intent_override:
