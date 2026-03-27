@@ -236,6 +236,11 @@ LAYER1_TOOLS = """<tools_available>
 **T5 고비용 (CEO 요청 시)**: deep_research($2~5), deep_crawl, search_all_projects
 
 **T6 브라우저 (소스 분석 후 보조)**: browser_navigate/snapshot/screenshot, **capture_screenshot**(CEO에게 이미지 표시), browser_click/fill/tab_list
+
+## 아젠다 관리
+- 사용자가 "나중에", "보류", "다음에 논의", "일단 킵", "나중에 결정", "검토 필요" 등 미결정 의사를 표현하면, 현재 논의 내용을 요약하여 아젠다 등록을 제안하세요.
+- 도구: add_agenda(등록), list_agendas(목록), get_agenda(상세), update_agenda(수정), decide_agenda(결정), search_agendas(검색)
+- CEO는 전체 프로젝트 아젠다 관리 가능, CTO는 자기 프로젝트만
 </tools_available>"""
 
 LAYER1_RULES = """<rules>

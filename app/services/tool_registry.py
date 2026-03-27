@@ -242,6 +242,7 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
     "agenda":             ["add_agenda", "list_agendas", "get_agenda", "update_agenda", "decide_agenda", "search_agendas"],
     "agenda_manage":      ["add_agenda", "list_agendas", "update_agenda"],
     "agenda_decide":      ["decide_agenda", "list_agendas"],
+    "agenda_auto_detect": ["add_agenda", "list_agendas"],
 }
 
 # ─── 도구 스키마 정의 (Anthropic Tool Use 포맷) ──────────────────────────────

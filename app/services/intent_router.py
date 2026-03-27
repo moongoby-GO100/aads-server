@@ -96,6 +96,10 @@ INTENT_MAP: dict[str, dict] = {
     # AADS-186E-1 크롤링 인텐트
     "url_read":           {"model": "claude-opus",               "tools": True,  "group": "all"},
     "deep_crawl":         {"model": "claude-opus",               "tools": True,  "group": "all"},
+    # 아젠다 관리 인텐트
+    "agenda_manage":      {"model": "claude-sonnet",              "tools": True,  "group": "all"},
+    "agenda_decide":      {"model": "claude-sonnet",              "tools": True,  "group": "all"},
+    "agenda_auto_detect": {"model": "claude-sonnet",              "tools": True,  "group": "all"},
     # AADS-186E-3 딥리서치 + 코드탐색 인텐트
     "code_explorer":      {"model": "claude-opus",               "tools": True,  "group": "all"},
     "analyze_changes":    {"model": "claude-opus",               "tools": True,  "group": "all"},
@@ -133,7 +137,8 @@ url_read, deep_crawl,
 code_explorer, analyze_changes, search_all_projects,
 execute, code_modify, task_query, status_check, pipeline_runner, file_read,
 news_search, blog_search, shop_search, local_search, book_search, image_search, encyclopedia_search, knowledge_search,
-pc_control, pc_screenshot, pc_file, pc_kakao
+pc_control, pc_screenshot, pc_file, pc_kakao,
+agenda_manage, agenda_decide, agenda_auto_detect
 
 규칙:
 - "다른 친구에게 시킨거 진행 확인", "걔 작업 됐나", "작업 현황", "시킨거 확인", "진행 상태 확인해줘" → task_query
@@ -196,6 +201,9 @@ pc_control, pc_screenshot, pc_file, pc_kakao
 - 검증, 확인해, 작업 결과 점검, 커밋 확인 → cto_verify
 - 영향 분석, 이거 바꾸면, 사전 분석 → cto_impact
 - 기술 부채, TODO 정리, 정리 필요한 것 → cto_tech_debt
+- "아젠다 등록해", "아젠다 추가", "아젠다 보여줘", "아젠다 목록", "아젠다 수정", "아젠다 보류" → agenda_manage
+- "아젠다 결정", "아젠다 진행", "아젠다 승인", "이 아젠다 처리" → agenda_decide
+- "나중에", "나중에 결정", "나중에 논의", "다음에 논의", "다음에 다시", "보류해", "일단 킵", "일단 보류", "검토 필요", "나중에 하자", "다음에 하자", "잠깐 미뤄", "미뤄두자" → agenda_auto_detect
 
 중요 규칙 — CEO 명령형 메시지:
 - "확인하고 보고하라", "확인해봐", "보고해", "점검하라", "진단하라", "체크해" → status_check (casual이 절대 아님)
