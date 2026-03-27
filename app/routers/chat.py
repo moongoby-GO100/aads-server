@@ -250,6 +250,8 @@ async def get_streaming_status(session_id: UUID):
 
     메모리에 상태가 없을 때 DB에서 streaming_placeholder 존재 여부도 확인
     (서버 재시작으로 메모리 유실된 경우 대비).
+    서버 재시작 후 recovered 메시지가 있으면 just_completed+recovered=True 반환
+    (클라이언트가 메시지를 다시 로드하도록 트리거).
     """
     status = svc.get_streaming_status(str(session_id))
     if status and (status.get("is_streaming") or status.get("just_completed")):
@@ -270,6 +272,29 @@ async def get_streaming_status(session_id: UUID):
                 "UPDATE chat_messages SET intent = 'interrupted' WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at <= NOW() - interval '5 minutes'",
                 session_id,
             )
+            # 서버 재시작 후 recovered 메시지 감지: 5분 이내 model_used='recovered' 메시지 존재 시
+            # just_completed=True, recovered=True 반환 → 클라이언트가 메시지 리로드 수행
+            recovered_row = await conn.fetchrow(
+                "SELECT id FROM chat_messages"
+                " WHERE session_id = $1 AND model_used = 'recovered'"
+                "   AND created_at > NOW() - interval '5 minutes'"
+                " ORDER BY created_at DESC LIMIT 1",
+                session_id,
+            )
+            if recovered_row:
+                logger.info(
+                    "streaming_status_recovered_detected session=%s",
+                    str(session_id)[:8],
+                )
+                return {
+                    "is_streaming": False,
+                    "just_completed": True,
+                    "recovered": True,
+                    "content_length": 0,
+                    "token_count": 0,
+                    "tool_count": 0,
+                    "last_tool": "",
+                }
     except Exception as e:
         logger.debug("streaming-status DB 조회 실패", error=str(e), session_id=str(session_id))
     return status or {"is_streaming": False}

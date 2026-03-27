@@ -3120,7 +3120,21 @@ async def send_message_stream(
         _session_cost += float(cost_usd)
         _session_turns += 2  # user + assistant
 
-        yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns})}\n\n"
+        # confidence_label: DB/도구 사용 여부로 신뢰도 레이블 산출
+        _DB_TOOLS = {"query_database", "query_project_database", "read_remote_file",
+                     "list_remote_dir", "run_remote_command", "get_all_service_status",
+                     "health_check", "check_task_status", "read_task_logs"}
+        _used_tool_names = {t.get("tool_name", "") for t in tools_called if isinstance(t, dict) and t.get("type") == "tool_use"}
+        _has_db = bool(_used_tool_names & _DB_TOOLS)
+        if not tools_called:
+            _confidence_label = "ai_inference"
+        elif _has_db and len(_used_tool_names - _DB_TOOLS) == 0:
+            _confidence_label = "db_realtime"
+        elif _has_db:
+            _confidence_label = "mixed"
+        else:
+            _confidence_label = None  # 도구 사용했지만 DB 아닌 경우 (웹검색 등) — 레이블 미표시
+        yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns, 'confidence_label': _confidence_label})}\n\n"
 
     finally:
         set_streaming(session_id, False)
