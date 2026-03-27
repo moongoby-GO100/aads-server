@@ -176,12 +176,62 @@ def main():
         return 0
 
 
+def _find_class_last_method_end(content: str, class_name: str) -> int:
+    """클래스의 마지막 메서드 끝 위치를 찾는다 (stub 삽입 위치)."""
+    lines = content.split('\n')
+    class_start = -1
+    last_method_end = -1
+    in_class = False
+    class_indent = 0
+
+    for i, line in enumerate(lines):
+        # 클래스 시작 찾기
+        if f'class {class_name}' in line and ':' in line:
+            class_start = i
+            class_indent = len(line) - len(line.lstrip())
+            in_class = True
+            continue
+
+        if in_class:
+            stripped = line.strip()
+            if not stripped:  # 빈 줄
+                continue
+            line_indent = len(line) - len(line.lstrip())
+
+            # 클래스와 같은 레벨이거나 더 바깥 = 클래스 끝
+            if line_indent <= class_indent and stripped and not stripped.startswith('#'):
+                break
+
+            # 메서드 정의
+            if (stripped.startswith('def ') or stripped.startswith('async def ')) and line_indent == class_indent + 4:
+                last_method_end = i  # 메서드 시작 위치 기록
+
+    # 마지막 메서드 본문 끝 찾기
+    if last_method_end >= 0:
+        for i in range(last_method_end + 1, len(lines)):
+            stripped = lines[i].strip()
+            if not stripped:
+                continue
+            line_indent = len(lines[i]) - len(lines[i].lstrip())
+            # 같은 레벨 또는 바깥 = 이전 메서드 끝
+            if line_indent <= class_indent + 4 and stripped:
+                # 이 줄이 다음 메서드/클래스면 그 바로 앞이 삽입 위치
+                return sum(len(l) + 1 for l in lines[:i])
+        # 파일 끝이 클래스 끝
+        return len(content)
+
+    return len(content)
+
+
 def _auto_fix(registry_tools, executor_tools, ceo_tools_defs,
               registry_file, executor_file, tools_file) -> int:
-    """누락된 도구를 자동으로 추가."""
+    """누락된 도구를 자동으로 추가.
+
+    주의: 이 함수는 코드를 자동 생성하므로 반드시 수정 후
+    ast.parse + pytest 검증을 거쳐야 한다.
+    """
     fixed = 0
 
-    # 1) tool_executor에 누락된 도구 → stub 메서드 + dispatch 항목 추가
     _CEO_ONLY = {
         'generate_image', 'fact_check', 'fact_check_multiple',
         'gemini_grounding_search', 'execute_sandbox', 'send_telegram',
@@ -196,34 +246,55 @@ def _auto_fix(registry_tools, executor_tools, ceo_tools_defs,
     if missing_in_executor:
         content = executor_file.read_text()
 
-        # dispatch dict에 추가
+        # 1) dispatch dict에 항목 추가 — 정확한 들여쓰기 (12칸)
         dispatch_insert_point = content.find("# 첨부파일 재읽기")
         if dispatch_insert_point == -1:
             dispatch_insert_point = content.find("# 작업 모니터")
         if dispatch_insert_point > 0:
-            new_entries = ""
+            new_entries = "# 자동 추가 (check_tool_consistency --fix)\n"
             for tool_name in sorted(missing_in_executor):
                 new_entries += f'            "{tool_name}": self._{tool_name},\n'
-            content = content[:dispatch_insert_point] + \
-                f"# 자동 추가 (check_tool_consistency --fix)\n            {new_entries}" + \
-                content[dispatch_insert_point:]
+            new_entries += "            "
+            content = content[:dispatch_insert_point] + new_entries + content[dispatch_insert_point:]
 
-        # stub 메서드 추가 (파일 끝)
+        # 2) stub 메서드를 ToolExecutor 클래스 내부 끝에 삽입 (파일 끝 아님!)
+        insert_pos = _find_class_last_method_end(content, "ToolExecutor")
         stubs = "\n"
         for tool_name in sorted(missing_in_executor):
-            stubs += f'''
-    async def _{tool_name}(self, inp: Dict[str, Any]) -> Any:
-        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
-        from app.api.ceo_chat_tools import execute_tool
-        return await execute_tool("{tool_name}", inp, "", "")
-'''
-        content += stubs
+            stubs += (
+                f"    async def _{tool_name}(self, inp: Dict[str, Any]) -> Any:\n"
+                f'        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""\n'
+                f"        from app.api.ceo_chat_tools import execute_tool\n"
+                f'        return await execute_tool("{tool_name}", inp, "", "")\n'
+                f"\n"
+            )
+        content = content[:insert_pos] + stubs + content[insert_pos:]
+
+        # 3) 생성된 코드 구문 검증
+        try:
+            ast.parse(content)
+        except SyntaxError as e:
+            print(f"  ❌ 자동 생성 코드 구문 오류! 수정하지 않음: {e}")
+            return 0
+
+        # 4) 클래스 소속 검증 — 생성된 메서드가 ToolExecutor 안에 있는지
+        tree = ast.parse(content)
+        class_methods = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == "ToolExecutor":
+                for item in ast.walk(node):
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        class_methods.add(item.name)
+        missing_methods = [f"_{t}" for t in missing_in_executor if f"_{t}" not in class_methods]
+        if missing_methods:
+            print(f"  ❌ 메서드가 클래스 밖에 생성됨! 수정하지 않음: {missing_methods}")
+            return 0
 
         executor_file.write_text(content)
         fixed += len(missing_in_executor)
-        print(f"  tool_executor.py: {sorted(missing_in_executor)} 추가됨")
+        print(f"  tool_executor.py: {sorted(missing_in_executor)} 추가됨 (클래스 내부 확인 완료)")
 
-    # 2) tool_registry._DEFER_LOADING에 누락된 도구 → True(온디맨드)로 추가
+    # 2) tool_registry._DEFER_LOADING에 누락된 도구
     defer_keys = extract_defer_loading_keys(registry_file)
     missing_in_defer = registry_tools - defer_keys - _SPECIAL
     if missing_in_defer:

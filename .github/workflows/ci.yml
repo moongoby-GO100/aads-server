@@ -8,12 +8,11 @@ on:
 
 jobs:
   test:
-    name: Unit Tests (Python 3.11)
+    name: Unit Tests + Tool Integrity
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     env:
-      # 더미 값 — 실제 키 없이 단위 테스트 실행 (Anthropic은 OAuth 변수명)
       ANTHROPIC_AUTH_TOKEN: dummy_oauth_token_for_ci
       ANTHROPIC_API_KEY: dummy_anthropic_key_for_ci
       OPENAI_API_KEY: dummy_openai_key_for_ci
@@ -26,7 +25,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -37,22 +36,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
+      - name: Tool consistency check (no --fix)
+        run: |
+          python scripts/check_tool_consistency.py
+        continue-on-error: false
+
       - name: Run unit tests
         run: |
           pytest tests/unit/ -v --tb=short --timeout=60
         continue-on-error: false
 
-      - name: Run E2E pipeline tests (E2B SKIP)
+      - name: Run E2E pipeline tests (optional)
         run: |
           pytest tests/e2e/test_real_pipeline.py -v --tb=short --timeout=30
         continue-on-error: true
-
-      - name: Upload coverage report
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: test-results
-          path: .pytest_cache/
 
   lint:
     name: Lint (ruff)
@@ -64,5 +61,9 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install ruff
-      - run: ruff check app/ tests/ --ignore E501,F401
+      - name: Ruff critical checks (undefined names)
+        run: ruff check app/ --select F821,F811 --no-fix
+        continue-on-error: false
+      - name: Ruff full (advisory)
+        run: ruff check app/ tests/ --ignore E501,F401
         continue-on-error: true
