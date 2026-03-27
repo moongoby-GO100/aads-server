@@ -47,6 +47,39 @@ _SYSTEM_INFO_PATTERNS = [
     r"하드웨어\s*정보", r"system\s*info",
 ]
 
+_BROWSER_LAUNCH_PATTERNS = [
+    r"브라우저\s*열어", r"크롬\s*열어", r"브라우저\s*실행",
+    r"chrome\s*열어", r"chrome\s*실행",
+]
+
+_BROWSER_NAVIGATE_PATTERNS = [
+    r"접속해", r"이동해", r"페이지\s*열어", r"사이트\s*열어", r"url\s*열어",
+]
+
+_BROWSER_CLICK_PATTERNS = [
+    r"클릭해", r"버튼\s*눌러", r"요소\s*클릭", r"\bclick\b",
+]
+
+_BROWSER_FILL_PATTERNS = [
+    r"입력해", r"텍스트\s*입력", r"값\s*넣어", r"작성해", r"\bfill\b", r"타이핑",
+]
+
+_BROWSER_SCREENSHOT_PATTERNS = [
+    r"브라우저\s*캡처", r"페이지\s*스크린샷", r"웹\s*캡처", r"브라우저\s*스크린샷",
+]
+
+_BROWSER_TEXT_PATTERNS = [
+    r"텍스트\s*가져와", r"내용\s*읽어", r"페이지\s*텍스트", r"get\s*text",
+]
+
+_BROWSER_EVAL_PATTERNS = [
+    r"자바스크립트\s*실행", r"js\s*실행", r"\beval\b",
+]
+
+_BROWSER_TABS_PATTERNS = [
+    r"탭\s*목록", r"열린\s*탭", r"browser\s*tabs",
+]
+
 
 def build_command(message: str) -> Optional[Dict[str, Any]]:
     """
@@ -86,7 +119,45 @@ def build_command(message: str) -> Optional[Dict[str, Any]]:
         path = _extract_path(msg)
         return {"type": "file_list", "path": path or "C:\\"}
 
-    # 8. 셸 명령 (프로그램 실행 등)
+    # 8. 브라우저 스크린샷 (일반 스크린샷 앞에 위치하지 않도록 별도 분기)
+    if _match_any(msg_lower, _BROWSER_SCREENSHOT_PATTERNS):
+        return {"type": "browser_screenshot"}
+
+    # 9. 브라우저 실행
+    if _match_any(msg_lower, _BROWSER_LAUNCH_PATTERNS):
+        return {"type": "browser_launch"}
+
+    # 10. 브라우저 내비게이션
+    if _match_any(msg_lower, _BROWSER_NAVIGATE_PATTERNS):
+        url = _extract_url(msg)
+        return {"type": "browser_navigate", "url": url or ""}
+
+    # 11. 브라우저 클릭
+    if _match_any(msg_lower, _BROWSER_CLICK_PATTERNS):
+        selector = _extract_quoted(msg)
+        return {"type": "browser_click", "selector": selector or ""}
+
+    # 12. 브라우저 텍스트 입력
+    if _match_any(msg_lower, _BROWSER_FILL_PATTERNS):
+        selector = _extract_quoted(msg, index=0)
+        value = _extract_quoted(msg, index=1)
+        return {"type": "browser_fill", "selector": selector or "", "value": value or ""}
+
+    # 13. 브라우저 텍스트 추출
+    if _match_any(msg_lower, _BROWSER_TEXT_PATTERNS):
+        selector = _extract_quoted(msg)
+        return {"type": "browser_get_text", "selector": selector or "body"}
+
+    # 14. 브라우저 JS 실행
+    if _match_any(msg_lower, _BROWSER_EVAL_PATTERNS):
+        script = _extract_quoted(msg)
+        return {"type": "browser_eval", "script": script or ""}
+
+    # 15. 브라우저 탭 목록
+    if _match_any(msg_lower, _BROWSER_TABS_PATTERNS):
+        return {"type": "browser_tabs"}
+
+    # 16. 셸 명령 (프로그램 실행 등)
     shell_cmd = _parse_shell_command(msg_lower, msg)
     if shell_cmd:
         return shell_cmd
@@ -111,6 +182,31 @@ def build_command_for_intent(intent: str, message: str) -> Optional[Dict[str, An
             return {"type": "file_read", "path": path or ""}
         path = _extract_path(message)
         return {"type": "file_list", "path": path or "C:\\"}
+    if intent == "pc_browser":
+        msg_lower = message.lower()
+        if _match_any(msg_lower, _BROWSER_SCREENSHOT_PATTERNS):
+            return {"type": "browser_screenshot"}
+        if _match_any(msg_lower, _BROWSER_LAUNCH_PATTERNS):
+            return {"type": "browser_launch"}
+        if _match_any(msg_lower, _BROWSER_NAVIGATE_PATTERNS):
+            url = _extract_url(message)
+            return {"type": "browser_navigate", "url": url or ""}
+        if _match_any(msg_lower, _BROWSER_CLICK_PATTERNS):
+            selector = _extract_quoted(message)
+            return {"type": "browser_click", "selector": selector or ""}
+        if _match_any(msg_lower, _BROWSER_FILL_PATTERNS):
+            selector = _extract_quoted(message, index=0)
+            value = _extract_quoted(message, index=1)
+            return {"type": "browser_fill", "selector": selector or "", "value": value or ""}
+        if _match_any(msg_lower, _BROWSER_TEXT_PATTERNS):
+            selector = _extract_quoted(message)
+            return {"type": "browser_get_text", "selector": selector or "body"}
+        if _match_any(msg_lower, _BROWSER_EVAL_PATTERNS):
+            script = _extract_quoted(message)
+            return {"type": "browser_eval", "script": script or ""}
+        if _match_any(msg_lower, _BROWSER_TABS_PATTERNS):
+            return {"type": "browser_tabs"}
+        return build_command(message)
     if intent == "pc_control":
         # 일반 PC 제어 — 셸 명령 파싱 시도, 실패 시 자연어 그대로 전달
         cmd = build_command(message)
@@ -164,6 +260,42 @@ def format_result(command_type: str, result: Dict[str, Any] | None) -> str:
             if isinstance(items, list):
                 lines = [f"- {item}" if isinstance(item, str) else f"- {item}" for item in items[:50]]
                 return "\n".join(lines) if lines else "(항목 없음)"
+        return str(data)
+
+    if command_type == "browser_screenshot":
+        if isinstance(data, dict) and data.get("image"):
+            return f"![브라우저 스크린샷](data:image/png;base64,{data['image']})"
+        return "브라우저 스크린샷 캡처 완료 (이미지 데이터 없음)"
+
+    if command_type == "browser_launch":
+        return "브라우저가 실행되었습니다."
+
+    if command_type == "browser_navigate":
+        url = data.get("url", "") if isinstance(data, dict) else str(data)
+        return f"페이지 이동 완료: {url}"
+
+    if command_type == "browser_click":
+        selector = data.get("selector", "") if isinstance(data, dict) else str(data)
+        return f"클릭 완료: `{selector}`"
+
+    if command_type == "browser_fill":
+        selector = data.get("selector", "") if isinstance(data, dict) else ""
+        return f"텍스트 입력 완료: `{selector}`"
+
+    if command_type == "browser_get_text":
+        text = data.get("text", "") if isinstance(data, dict) else str(data)
+        return f"페이지 텍스트:\n```\n{text}\n```"
+
+    if command_type == "browser_eval":
+        result_val = data.get("result", "") if isinstance(data, dict) else str(data)
+        return f"JS 실행 결과:\n```\n{result_val}\n```"
+
+    if command_type == "browser_tabs":
+        if isinstance(data, dict):
+            tabs = data.get("tabs", [])
+            if isinstance(tabs, list):
+                lines = [f"- [{t.get('index', i)}] {t.get('title', '?')} ({t.get('url', '')})" for i, t in enumerate(tabs)]
+                return "열린 탭 목록:\n" + "\n".join(lines) if lines else "(탭 없음)"
         return str(data)
 
     # 기본: JSON 또는 문자열 그대로
@@ -224,6 +356,26 @@ def _extract_path(message: str) -> Optional[str]:
     if unix_match:
         return unix_match.group()
 
+    return None
+
+
+def _extract_url(message: str) -> Optional[str]:
+    """메시지에서 URL 추출."""
+    url_match = re.search(r"https?://[^\s'\"]+", message)
+    if url_match:
+        return url_match.group()
+    # www로 시작하는 도메인도 처리
+    www_match = re.search(r"www\.[^\s'\"]+", message)
+    if www_match:
+        return "https://" + www_match.group()
+    return None
+
+
+def _extract_quoted(message: str, index: int = 0) -> Optional[str]:
+    """따옴표로 감싼 문자열 중 index번째 추출."""
+    matches = re.findall(r"['\"](.+?)['\"]", message)
+    if matches and index < len(matches):
+        return matches[index]
     return None
 
 
