@@ -31,12 +31,8 @@ _DIRECTIVE_KEYWORDS = re.compile(
 async def detect_contradictions(
     user_message: str,
     project: Optional[str] = None,
-    pre_computed_embedding: Optional[list] = None,
 ) -> str:
     """사용자 메시지에서 이전 결정과의 모순을 감지.
-
-    Args:
-        pre_computed_embedding: 이미 계산된 임베딩 벡터 (있으면 embed_texts 호출 스킵).
 
     Returns:
         Contradiction warning XML block or empty string.
@@ -49,16 +45,14 @@ async def detect_contradictions(
         return ""
 
     try:
+        from app.services.chat_embedding_service import embed_texts
         from app.core.db_pool import get_pool
 
-        if pre_computed_embedding is not None:
-            query_emb = pre_computed_embedding
-        else:
-            from app.services.chat_embedding_service import embed_texts
-            embeddings = await embed_texts([user_message[:500]])
-            if not embeddings or not embeddings[0]:
-                return ""
-            query_emb = embeddings[0]
+        embeddings = await embed_texts([user_message[:500]])
+        if not embeddings or not embeddings[0]:
+            return ""
+
+        query_emb = embeddings[0]
         pool = get_pool()
 
         async with pool.acquire() as conn:

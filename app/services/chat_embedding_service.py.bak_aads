@@ -8,8 +8,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
-import time
-from collections import OrderedDict
 from typing import Any, List, Optional
 
 import structlog
@@ -19,90 +17,41 @@ logger = structlog.get_logger(__name__)
 _EMBED_BATCH_SIZE = 50
 _EMBED_DIM = 768
 
-# ── 인메모리 임베딩 캐시 (TTL 300초, 최대 500항목) ──
-_EMBED_CACHE_TTL = int(os.getenv("EMBED_CACHE_TTL", "300"))
-_EMBED_CACHE_MAX = int(os.getenv("EMBED_CACHE_MAX", "500"))
-
-class _EmbedCache:
-    """TTL + LRU 인메모리 임베딩 캐시."""
-    def __init__(self, ttl: int, maxsize: int):
-        self._ttl = ttl
-        self._maxsize = maxsize
-        self._cache: OrderedDict[str, tuple[float, List[float]]] = OrderedDict()
-
-    def _key(self, text: str) -> str:
-        return hashlib.sha256(text.encode()).hexdigest()
-
-    def get(self, text: str) -> List[float] | None:
-        k = self._key(text)
-        if k not in self._cache:
-            return None
-        ts, vec = self._cache[k]
-        if time.monotonic() - ts > self._ttl:
-            del self._cache[k]
-            return None
-        self._cache.move_to_end(k)
-        return vec
-
-    def set(self, text: str, vec: List[float]) -> None:
-        k = self._key(text)
-        self._cache[k] = (time.monotonic(), vec)
-        self._cache.move_to_end(k)
-        if len(self._cache) > self._maxsize:
-            self._cache.popitem(last=False)
-
-_embed_cache = _EmbedCache(ttl=_EMBED_CACHE_TTL, maxsize=_EMBED_CACHE_MAX)
-
 
 async def embed_texts(texts: List[str]) -> List[List[float]]:
     """
     Google Gemini gemini-embedding-001 로 텍스트 임베딩.
-    인메모리 캐시(TTL 300초, 최대 500항목) 적용 — 동일 텍스트 반복 호출 최소화.
     API 키 없으면 hash 기반 dummy 반환.
     """
-    # 캐시 적중 여부 확인 — 캐시 HIT 항목은 API 호출 스킵
-    results: List[List[float] | None] = [_embed_cache.get(t) for t in texts]
-    uncached_indices = [i for i, r in enumerate(results) if r is None]
-
-    if not uncached_indices:
-        return [r for r in results]  # type: ignore[return-value]
-
-    uncached_texts = [texts[i] for i in uncached_indices]
-
     api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
     if not api_key:
         logger.warning("[ChatEmbed] GEMINI_API_KEY 없음 — 시맨틱 검색 비활성화 (dummy 임베딩)")
-        fetched: List[List[float]] = [_dummy_embedding(t) for t in uncached_texts]
-    else:
-        try:
-            from google import genai as google_genai  # type: ignore
-            client = google_genai.Client(api_key=api_key)
-            loop = asyncio.get_running_loop()
-            fetched = []
+        return [_dummy_embedding(t) for t in texts]
 
-            for i in range(0, len(uncached_texts), _EMBED_BATCH_SIZE):
-                batch = uncached_texts[i: i + _EMBED_BATCH_SIZE]
+    try:
+        from google import genai as google_genai  # type: ignore
+        client = google_genai.Client(api_key=api_key)
+        loop = asyncio.get_running_loop()
+        all_embeddings: List[List[float]] = []
 
-                def _call(b: List[str] = batch) -> Any:
-                    return client.models.embed_content(
-                        model="models/gemini-embedding-001",
-                        contents=b,
-                        config={"output_dimensionality": _EMBED_DIM},
-                    )
+        for i in range(0, len(texts), _EMBED_BATCH_SIZE):
+            batch = texts[i: i + _EMBED_BATCH_SIZE]
 
-                result = await loop.run_in_executor(None, _call)
-                for emb in result.embeddings:
-                    fetched.append(list(emb.values))
-        except Exception as e:
-            logger.warning(f"[ChatEmbed] Gemini 임베딩 실패: {e} — dummy 사용")
-            fetched = [_dummy_embedding(t) for t in uncached_texts]
+            def _call(b: List[str] = batch) -> Any:
+                return client.models.embed_content(
+                    model="models/gemini-embedding-001",
+                    contents=b,
+                    config={"output_dimensionality": _EMBED_DIM},
+                )
 
-    # 캐시에 저장 + 결과 병합
-    for idx, vec in zip(uncached_indices, fetched):
-        _embed_cache.set(texts[idx], vec)
-        results[idx] = vec
+            result = await loop.run_in_executor(None, _call)
+            for emb in result.embeddings:
+                all_embeddings.append(list(emb.values))
 
-    return [r for r in results]  # type: ignore[return-value]
+        return all_embeddings
+    except Exception as e:
+        logger.warning(f"[ChatEmbed] Gemini 임베딩 실패: {e} — dummy 사용")
+        return [_dummy_embedding(t) for t in texts]
 
 
 def _dummy_embedding(text: str, dim: int = _EMBED_DIM) -> List[float]:

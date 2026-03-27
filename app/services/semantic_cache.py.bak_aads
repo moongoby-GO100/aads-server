@@ -60,14 +60,10 @@ class SemanticCache:
         self._distance_threshold = 1.0 - self.similarity_threshold
 
     async def lookup(
-        self, query: str, workspace_id: str | None = None,
-        pre_computed_embedding: List[float] | None = None,
+        self, query: str, workspace_id: str | None = None
     ) -> Optional[Dict]:
         """
         캐시 조회 — pgvector <=> 연산자로 유사 쿼리 서버사이드 검색.
-
-        Args:
-            pre_computed_embedding: 이미 계산된 임베딩 벡터 (있으면 embed_texts 호출 스킵).
 
         Returns:
             {"cached_response": str, "original_query": str,
@@ -76,19 +72,16 @@ class SemanticCache:
         if not query or len(query.strip()) < 5:
             return None
 
-        if pre_computed_embedding is not None:
-            query_emb = pre_computed_embedding
-        else:
-            try:
-                embeddings = await embed_texts([query[:2000]])
-                if not embeddings:
-                    self._misses += 1
-                    return None
-                query_emb = embeddings[0]
-            except Exception as e:
-                logger.warning("semantic_cache.lookup.embed_fail", error=str(e))
+        try:
+            embeddings = await embed_texts([query[:2000]])
+            if not embeddings:
                 self._misses += 1
                 return None
+            query_emb = embeddings[0]
+        except Exception as e:
+            logger.warning("semantic_cache.lookup.embed_fail", error=str(e))
+            self._misses += 1
+            return None
 
         try:
             async with self.pool.acquire() as conn:
@@ -381,13 +374,11 @@ def _get_singleton(pool: Any) -> SemanticCache:
 
 
 async def get_or_none(
-    pool: Any, query: str, workspace_id: str | None = None,
-    pre_computed_embedding: List[float] | None = None,
+    pool: Any, query: str, workspace_id: str | None = None
 ) -> Optional[str]:
     """Quick lookup — returns cached response text or None."""
     cache = _get_singleton(pool)
-    result = await cache.lookup(query, workspace_id=workspace_id,
-                                pre_computed_embedding=pre_computed_embedding)
+    result = await cache.lookup(query, workspace_id=workspace_id)
     if result:
         return result["cached_response"]
     return None

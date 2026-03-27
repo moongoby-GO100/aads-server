@@ -2429,45 +2429,86 @@ async def send_message_stream(
             "deploy", "fix", "error", "health", "지시서", "파이프라인",
         )
         _skip_cache = any(kw in content for kw in _CACHE_BYPASS_KEYWORDS)
-        _semantic_cache_hit = None
-        if _skip_cache:
-            logger.debug(f"semantic_cache_bypassed: operational query detected, session={session_id[:8]}")
-        else:
+
+        # ── 임베딩 1회 공통 생성 (semantic_cache + contradiction_detector 공유) ──
+        # skip_cache이고 CHANGE_KEYWORDS도 없으면 임베딩 불필요 → None 유지
+        import re as _re_cd
+        from app.services.contradiction_detector import _CHANGE_KEYWORDS as _CD_CHANGE_KW
+        _need_embedding = (not _skip_cache) or bool(_CD_CHANGE_KW.search(content))
+        _shared_embedding: list | None = None
+        if _need_embedding:
             try:
-                from app.services.semantic_cache import SemanticCache
-                _sem_cache = SemanticCache(pool=get_pool())
-                _ws_id = sp_row["workspace_id"] if sp_row and sp_row.get("workspace_id") else None
-                _semantic_cache_hit = await _sem_cache.lookup(content, workspace_id=_ws_id)
-                if _semantic_cache_hit:
-                    _cached_resp = _semantic_cache_hit.get("cached_response", "")
-                    _cached_sim = _semantic_cache_hit.get("similarity", 0)
-                    logger.info("semantic_cache_hit", similarity=f"{_cached_sim:.3f}", session=session_id[:8])
-                    # 캐시 응답을 SSE 형식으로 직접 반환
-                    yield f'data: {json.dumps({"type": "delta", "content": _cached_resp})}\n\n'
-                    yield f'data: {json.dumps({"type": "message_stop", "cached": True})}\n\n'
-                    # Phase C: 캐시 응답도 DB에 저장
-                    await _save_and_update_session(
-                        sid, _cached_resp,
-                        session_id_str=session_id,
-                        raw_messages=raw_messages,
-                        model_used="semantic_cache",
-                        intent=intent_override or "cache_hit",
-                        cost=0.0, tokens_in=0, tokens_out=0,
-                        tools_called=[], thinking_summary=None,
-                    )
-                    return
+                from app.services.chat_embedding_service import embed_texts as _embed_texts
+                _emb_results = await _embed_texts([content[:2000]])
+                if _emb_results:
+                    _shared_embedding = _emb_results[0]
+                    logger.debug(f"shared_embedding_computed session={session_id[:8]}")
+            except Exception as _emb_err:
+                logger.debug(f"shared_embedding_failed: {_emb_err}")
+
+        # ── 인텐트 분류 + 시맨틱 캐시 + 모순 감지 병렬 실행 ──
+        import asyncio as _asyncio_parallel
+        from app.services.intent_router import classify as _classify_fn, get_model_for_override
+        from app.services.contradiction_detector import detect_contradictions as _detect_contradictions
+        from app.services.semantic_cache import SemanticCache as _SemanticCache
+
+        _ws_id = sp_row["workspace_id"] if sp_row and sp_row.get("workspace_id") else None
+
+        async def _run_semantic_cache() -> dict | None:
+            if _skip_cache:
+                logger.debug(f"semantic_cache_bypassed: operational query detected, session={session_id[:8]}")
+                return None
+            try:
+                _sem_cache = _SemanticCache(pool=get_pool())
+                return await _sem_cache.lookup(
+                    content, workspace_id=_ws_id,
+                    pre_computed_embedding=_shared_embedding,
+                )
             except Exception as _sc_err:
                 logger.debug(f"semantic_cache_lookup_skipped: {_sc_err}")
+                return None
 
-        # 4.5-pre. F10: Contradiction Detection (모순 감지)
-        try:
-            from app.services.contradiction_detector import detect_contradictions
-            _contradiction_warning = await detect_contradictions(content, project=_normalized_project)
-            if _contradiction_warning:
-                system_prompt = system_prompt + "\n\n" + _contradiction_warning
-                logger.info("contradiction_warning_injected", session=session_id[:8])
-        except Exception as _cd_err:
-            logger.debug(f"contradiction_detection_skipped: {_cd_err}")
+        async def _run_contradiction() -> str:
+            try:
+                return await _detect_contradictions(
+                    content, project=_normalized_project,
+                    pre_computed_embedding=_shared_embedding,
+                )
+            except Exception as _cd_err:
+                logger.debug(f"contradiction_detection_skipped: {_cd_err}")
+                return ""
+
+        # 인텐트 분류 + 시맨틱 캐시 + 모순 감지 동시 실행
+        _semantic_cache_hit, _contradiction_warning, intent_result = await _asyncio_parallel.gather(
+            _run_semantic_cache(),
+            _run_contradiction(),
+            _classify_fn(content, workspace_name, recent_messages=messages),
+        )
+
+        # 시맨틱 캐시 HIT → 즉시 응답 후 종료
+        if _semantic_cache_hit:
+            _cached_resp = _semantic_cache_hit.get("cached_response", "")
+            _cached_sim = _semantic_cache_hit.get("similarity", 0)
+            logger.info("semantic_cache_hit", similarity=f"{_cached_sim:.3f}", session=session_id[:8])
+            yield f'data: {json.dumps({"type": "delta", "content": _cached_resp})}\n\n'
+            yield f'data: {json.dumps({"type": "message_stop", "cached": True})}\n\n'
+            await _save_and_update_session(
+                sid, _cached_resp,
+                session_id_str=session_id,
+                raw_messages=raw_messages,
+                model_used="semantic_cache",
+                intent=intent_override or "cache_hit",
+                cost=0.0, tokens_in=0, tokens_out=0,
+                tools_called=[], thinking_summary=None,
+            )
+            return
+
+        # 모순 감지 경고 주입
+        if _contradiction_warning:
+            system_prompt = system_prompt + "\n\n" + _contradiction_warning
+            logger.info("contradiction_warning_injected", session=session_id[:8])
+
+        intent = intent_override if intent_override else intent_result.intent
 
         # 4.5. AADS-188E: 시맨틱 코드 검색 컨텍스트 주입 (code_search 관련 키워드 감지)
         _CODE_SEARCH_KEYWORDS = (
@@ -2492,9 +2533,7 @@ async def send_message_stream(
                                 _ctx_lines.append(f"    {_r['code_snippet'][:150]}")
                         _ctx_lines.append("</codebase_knowledge_inline>")
                         _inline_ctx = "\n".join(_ctx_lines)
-                        # 시스템 프롬프트 마지막에 삽입
                         system_prompt = system_prompt + "\n\n" + _inline_ctx
-                        # #20: 시맨틱 코드 검색 감사 로그
                         logger.info("semantic_code_search_injected",
                                     query=content[:100], results=len(_search_results),
                                     files=[r.get('file','?') for r in _search_results[:3]],
@@ -2505,10 +2544,7 @@ async def send_message_stream(
         # 5. 자동 압축은 context_builder.build_messages_context() 내에서 토큰 기반으로 트리거됨
         # (80K 토큰 초과 시 compaction_service.check_and_compact 자동 호출)
 
-        # 6. 인텐트 분류 + 모델/도구 결정
-        from app.services.intent_router import classify, get_model_for_override
-        intent_result = await classify(content, workspace_name, recent_messages=messages)
-        intent = intent_override if intent_override else intent_result.intent
+        # 6. 인텐트 분류 결과 처리 (classify는 4.4 gather에서 이미 완료)
         # Langfuse: intent_classification span
         if _lf_trace is not None:
             try:

@@ -1,0 +1,512 @@
+"""
+AADS-190: 프로젝트별 원격 DB 쿼리 도구.
+CEO 채팅에서 KIS/GO100/SF/NTV2 등 외부 프로젝트 DB에 SELECT 쿼리 실행.
+
+DB 매핑:
+- KIS: PostgreSQL 16 (211서버, host.docker.internal:5432, kisautotrade)
+- GO100: KIS와 동일 DB (kisautotrade)
+- SF: MariaDB (114서버, SSH 터널 → localhost:3306, autoda)
+- NTV2: MySQL 8.0 Docker (114서버, SSH 터널 → localhost:3307, newtalk_v2)
+
+보안:
+- SELECT/WITH/EXPLAIN만 허용 (DML/DDL 전면 차단)
+- 세미콜론 다중 쿼리 차단
+- 민감 컬럼(password, token, secret, api_key) 마스킹
+- 결과 LIMIT 1000, 기본 100
+- 쿼리 타임아웃 30초
+- 연결 풀링 (PostgreSQL: asyncpg pool, MySQL: SSH 터널 + pymysql)
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import re
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+# ─── 프로젝트별 DB 설정 ──────────────────────────────────────────────────────
+
+_SUPPORTED_PROJECTS = ("AADS", "KIS", "GO100", "SF", "NTV2")
+
+# GO100은 KIS와 동일 DB — 별칭 매핑
+_PROJECT_ALIAS = {"GO100": "KIS"}
+
+# DB 엔진 타입 (환경변수 {PROJECT}_DB_TYPE으로 오버라이드 가능)
+_DEFAULT_DB_TYPE: Dict[str, str] = {
+    "AADS": "postgresql",  # 내부 DB (Docker postgres)
+    "KIS": "postgresql",
+    "GO100": "postgresql",  # KIS 별칭
+    "SF": "mysql",
+    "NTV2": "mysql",
+}
+
+# SSH 터널 필요 프로젝트 (MySQL on 114서버)
+_SSH_TUNNEL_PROJECTS: Dict[str, Dict[str, Any]] = {
+    "SF": {
+        "ssh_host": "116.120.58.155",
+        "ssh_user": "root",
+        "ssh_key": "/root/.ssh/id_ed25519_newtalk",
+        "remote_host": "127.0.0.1",
+        "remote_port": 3306,
+    },
+    "NTV2": {
+        "ssh_host": "116.120.58.155",
+        "ssh_user": "root",
+        "ssh_key": "/root/.ssh/id_ed25519_newtalk",
+        "remote_host": "127.0.0.1",
+        "remote_port": 3307,
+    },
+}
+
+_SENSITIVE_COLUMNS = re.compile(
+    r"(password|passwd|pwd|secret|token|api_key|apikey|private_key|"
+    r"access_key|refresh_token|session_key|auth_code|credentials)",
+    re.IGNORECASE,
+)
+
+_FORBIDDEN_SQL = re.compile(
+    r"^\s*(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|"
+    r"EXECUTE|EXEC|MERGE|REPLACE|CALL|SET|LOCK|UNLOCK|VACUUM|REINDEX|"
+    r"COPY|LOAD|IMPORT)",
+    re.IGNORECASE,
+)
+
+_ALLOWED_SQL_START = re.compile(
+    r"^\s*(SELECT|WITH|EXPLAIN)\b",
+    re.IGNORECASE,
+)
+
+_INJECTION_PATTERNS = [
+    re.compile(r";\s*(SELECT|INSERT|UPDATE|DELETE|DROP)", re.IGNORECASE),
+    re.compile(r"--\s*$", re.MULTILINE),
+]
+
+# C1: WITH CTE에서 DML 사용 차단
+_DML_IN_CTE = re.compile(
+    r'\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE)\b',
+    re.IGNORECASE,
+)
+
+# ─── 연결 캐시 ───────────────────────────────────────────────────────────────
+
+_pg_pools: Dict[str, Any] = {}       # asyncpg 풀
+_ssh_tunnels: Dict[str, Any] = {}    # sshtunnel 인스턴스
+_MAX_POOL_SIZE = 3
+_pool_lock = asyncio.Lock()          # H2: pool/tunnel 생성 경쟁 방지
+
+
+# ─── 환경변수에서 DB 설정 조회 ────────────────────────────────────────────────
+
+def _get_project_db_config(project: str) -> Optional[Dict[str, str]]:
+    """환경변수에서 프로젝트 DB 접속 정보 조회. 별칭 자동 해석."""
+    resolved = _PROJECT_ALIAS.get(project, project)
+    prefix = resolved.upper()
+    host = os.getenv(f"{prefix}_DB_HOST", "")
+    if not host:
+        return None
+    db_type = os.getenv(f"{prefix}_DB_TYPE", _DEFAULT_DB_TYPE.get(resolved, "postgresql"))
+    return {
+        "host": host,
+        "port": os.getenv(f"{prefix}_DB_PORT", "5432" if db_type == "postgresql" else "3306"),
+        "database": os.getenv(f"{prefix}_DB_NAME", ""),
+        "user": os.getenv(f"{prefix}_DB_USER", ""),
+        "password": os.getenv(f"{prefix}_DB_PASSWORD", ""),
+        "type": db_type,
+    }
+
+
+# ─── SQL 검증 ────────────────────────────────────────────────────────────────
+
+def validate_query(query: str) -> Optional[str]:
+    """SQL 쿼리 검증. 문제 시 에러 메시지, 통과 시 None."""
+    q = query.strip()
+    if not q:
+        return "쿼리가 비어있습니다"
+    if len(q) > 10000:
+        return "쿼리가 10000자를 초과합니다"
+    if not _ALLOWED_SQL_START.match(q):
+        return "SELECT, WITH, EXPLAIN 쿼리만 허용됩니다"
+    if _FORBIDDEN_SQL.match(q):
+        return "INSERT/UPDATE/DELETE/DROP 등 변경 쿼리는 차단됩니다"
+
+    cleaned = re.sub(r"'[^']*'", "", q)
+    cleaned = re.sub(r'"[^"]*"', "", cleaned)
+    if cleaned.count(";") > 1:
+        return "다중 쿼리(세미콜론 2개 이상)는 차단됩니다"
+    if ";" in cleaned:
+        after = cleaned.split(";", 1)[1].strip()
+        if after:
+            return "세미콜론 뒤에 추가 쿼리가 감지되었습니다"
+
+    for pattern in _INJECTION_PATTERNS:
+        if pattern.search(q):
+            return "잠재적 SQL 인젝션 패턴이 감지되었습니다"
+
+    # C1: string literals 제거 후 DML 키워드 검사 (WITH CTE 악용 차단)
+    stripped_for_dml = re.sub(r"'[^']*'", "", cleaned)
+    if _DML_IN_CTE.search(stripped_for_dml):
+        return "쿼리에 금지된 DML 키워드가 포함되어 있습니다"
+
+    # ── 대량 스캔 방지: self-join / CROSS JOIN / 테이블 2회 이상 참조 차단 ──
+    q_upper = cleaned.upper()
+    # self-join 감지: 같은 테이블을 다른 alias로 2회 참조
+    _table_refs = re.findall(r'\bFROM\s+(\w+)|\bJOIN\s+(\w+)', q_upper)
+    _tables = [t[0] or t[1] for t in _table_refs if t[0] or t[1]]
+    if len(_tables) != len(set(_tables)):
+        return "같은 테이블을 여러 번 참조하는 self-join은 서비스 장애 위험이 있어 차단됩니다. LIMIT과 WHERE 조건을 추가하거나 쿼리를 분리하세요."
+    # CROSS JOIN 차단
+    if "CROSS JOIN" in q_upper:
+        return "CROSS JOIN은 대량 스캔 위험으로 차단됩니다."
+    # LIMIT 없이 큰 테이블 전체 스캔 방지 (WHERE 없는 SELECT)
+    if "WHERE" not in q_upper and "LIMIT" not in q_upper:
+        return "WHERE 또는 LIMIT 절 없는 전체 스캔 쿼리는 차단됩니다."
+
+    return None
+
+
+# ─── 공통 유틸 ────────────────────────────────────────────────────────────────
+
+def _mask_sensitive_values(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """민감 컬럼 값 마스킹."""
+    masked = []
+    for row in rows:
+        new_row = {}
+        for k, v in row.items():
+            if _SENSITIVE_COLUMNS.search(k) and v is not None:
+                new_row[k] = "****MASKED****"
+            else:
+                new_row[k] = v
+        masked.append(new_row)
+    return masked
+
+
+def _serialize_value(v: Any) -> Any:
+    """JSON 직렬화 불가 타입 변환."""
+    if v is None:
+        return None
+    if hasattr(v, "isoformat"):
+        return v.isoformat()
+    if isinstance(v, (bytes, bytearray)):
+        return f"<binary {len(v)} bytes>"
+    if isinstance(v, (int, float, str, bool)):
+        return v
+    try:
+        json.dumps(v)
+        return v
+    except (TypeError, ValueError):
+        return str(v)
+
+
+# ─── PostgreSQL 연결 (asyncpg) ────────────────────────────────────────────────
+
+async def _get_pg_pool(project: str):
+    """PostgreSQL asyncpg 풀 반환 (캐싱). H2: Lock으로 경쟁 방지."""
+    import asyncpg
+
+    resolved = _PROJECT_ALIAS.get(project, project)
+
+    async with _pool_lock:
+        if resolved in _pg_pools:
+            pool = _pg_pools[resolved]
+            if not pool._closed:
+                return pool
+            del _pg_pools[resolved]
+
+        config = _get_project_db_config(project)
+        if not config or not config["database"]:
+            raise ValueError(f"프로젝트 {project} DB 설정 없음")
+
+        try:
+            dsn = (
+                f"postgresql://{config['user']}:{config['password']}"
+                f"@{config['host']}:{config['port']}/{config['database']}"
+            )
+            pool = await asyncpg.create_pool(
+                dsn, min_size=1, max_size=_MAX_POOL_SIZE,
+                command_timeout=30, timeout=10,
+            )
+        except Exception:
+            # H3: DSN에 credentials 포함 — 상세 에러 로그만 남기고 안전한 메시지 반환
+            logger.exception(f"query_project_database: PG 풀 생성 실패 | {project}({resolved})")
+            raise ConnectionError(f"프로젝트 {resolved} PostgreSQL 연결 실패") from None
+
+        _pg_pools[resolved] = pool
+        logger.info(f"query_project_database: PG 풀 생성 | {project}({resolved})")
+        return pool
+
+
+async def _query_postgresql(project: str, q: str) -> List[Dict[str, Any]]:
+    """PostgreSQL 쿼리 실행. C2: read-only 트랜잭션으로 안전하게 실행."""
+    pool = await _get_pg_pool(project)
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SET LOCAL default_transaction_read_only = on")
+            rows = await conn.fetch(q)
+        return [{k: _serialize_value(v) for k, v in dict(r).items()} for r in rows]
+
+
+# ─── MySQL 연결 (SSH 터널 subprocess + pymysql) ──────────────────────────────
+
+import socket
+import subprocess
+import time
+
+_tunnel_procs: Dict[str, Dict[str, Any]] = {}  # project → {"proc": Popen, "local_port": int}
+
+
+def _find_free_port() -> int:
+    """빈 TCP 포트 찾기."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _ensure_ssh_tunnel(project: str) -> int:
+    """SSH 터널 subprocess 시작/재사용. 로컬 포트 반환."""
+    # 기존 터널 확인
+    if project in _tunnel_procs:
+        info = _tunnel_procs[project]
+        proc = info["proc"]
+        if proc.poll() is None:  # 아직 실행 중
+            return info["local_port"]
+        # 종료됨 → 재생성
+        del _tunnel_procs[project]
+
+    tunnel_config = _SSH_TUNNEL_PROJECTS.get(project)
+    if not tunnel_config:
+        raise ValueError(f"프로젝트 {project}의 SSH 터널 설정 없음")
+
+    # SSH 키 찾기
+    ssh_key = tunnel_config["ssh_key"]
+    if not os.path.exists(ssh_key):
+        for alt_key in ["/root/.ssh/id_ed25519", "/root/.ssh/id_rsa"]:
+            if os.path.exists(alt_key):
+                ssh_key = alt_key
+                break
+
+    local_port = _find_free_port()
+    remote_host = tunnel_config["remote_host"]
+    remote_port = tunnel_config["remote_port"]
+    ssh_host = tunnel_config["ssh_host"]
+    ssh_user = tunnel_config["ssh_user"]
+
+    cmd = [
+        "ssh", "-N", "-L",
+        f"{local_port}:{remote_host}:{remote_port}",
+        f"{ssh_user}@{ssh_host}",
+        "-i", ssh_key,
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "ServerAliveInterval=30",
+        "-o", "ConnectTimeout=10",
+    ]
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    # 터널 연결 대기
+    for _ in range(20):
+        time.sleep(0.3)
+        try:
+            s = socket.create_connection(("127.0.0.1", local_port), timeout=1)
+            s.close()
+            break
+        except (ConnectionRefusedError, OSError):
+            if proc.poll() is not None:
+                stderr = proc.stderr.read().decode()[:200] if proc.stderr else ""
+                raise RuntimeError(f"SSH 터널 시작 실패: {stderr}")
+    else:
+        proc.kill()
+        raise RuntimeError(f"SSH 터널 연결 타임아웃 (6초)")
+
+    _tunnel_procs[project] = {"proc": proc, "local_port": local_port}
+    logger.info(
+        f"query_project_database: SSH 터널 생성 | {project} "
+        f"local:{local_port} → {ssh_host}:{remote_port}"
+    )
+    return local_port
+
+
+def _query_mysql_sync(project: str, q: str, config: Dict[str, str]) -> List[Dict[str, Any]]:
+    """MySQL 쿼리 실행 (동기, SSH 터널 경유)."""
+    import pymysql
+
+    local_port = _ensure_ssh_tunnel(project)
+
+    conn = pymysql.connect(
+        host="127.0.0.1",
+        port=local_port,
+        user=config["user"],
+        password=config["password"],
+        database=config["database"],
+        charset="utf8mb4",
+        connect_timeout=10,
+        read_timeout=30,
+        cursorclass=pymysql.cursors.DictCursor,
+    )
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(q)
+            rows = cursor.fetchall()
+            return [{k: _serialize_value(v) for k, v in row.items()} for row in rows]
+    finally:
+        conn.close()
+
+
+async def _query_mysql(project: str, q: str, db_name: Optional[str] = None) -> List[Dict[str, Any]]:
+    """MySQL 쿼리 실행 (async wrapper). db_name으로 DB 오버라이드 가능."""
+    # NTV2에서 autoda(V1 DB) 접근 시 → SF 터널(port 3306, 호스트 MariaDB) 경유
+    tunnel_project = project
+    if project == "NTV2" and db_name and db_name.lower() == "autoda":
+        tunnel_project = "SF"
+        config = _get_project_db_config("SF")
+        if config:
+            config = dict(config)
+            config["database"] = db_name
+        else:
+            raise ValueError("SF DB 설정 없음 (NTV2 V1 autoda 접근용)")
+    else:
+        config = _get_project_db_config(project)
+        if not config or not config["database"]:
+            raise ValueError(f"프로젝트 {project} DB 설정 없음")
+        if db_name:
+            config = dict(config)
+            config["database"] = db_name
+
+    return await asyncio.to_thread(_query_mysql_sync, tunnel_project, q, config)
+
+
+# ─── H1: 셧다운 시 SSH 터널/PG 풀 정리 ────────────────────────────────────────
+
+async def close_all_project_connections():
+    """서버 종료 시 모든 프로젝트 DB 연결 및 SSH 터널 정리."""
+    for key, pool in list(_pg_pools.items()):
+        try:
+            await pool.close()
+        except Exception:
+            pass
+    _pg_pools.clear()
+
+    for key, info in list(_tunnel_procs.items()):
+        try:
+            info["proc"].kill()
+        except Exception:
+            pass
+    _tunnel_procs.clear()
+
+    logger.info("close_all_project_connections: 모든 프로젝트 DB 연결 정리 완료")
+
+
+# ─── 메인 쿼리 함수 ──────────────────────────────────────────────────────────
+
+async def query_project_database(
+    project: str,
+    query: str,
+    limit: int = 100,
+    db_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    프로젝트별 원격 DB에 SELECT 쿼리 실행.
+
+    Args:
+        project: KIS, GO100, SF, NTV2
+        query: SELECT SQL 쿼리
+        limit: 반환 행 수 (기본 100, 최대 1000)
+        db_name: DB 이름 (미지정 시 프로젝트 메인 DB)
+
+    Returns:
+        {"project": str, "rows": list, "row_count": int, "columns": list}
+    """
+    project = project.upper().strip()
+    if project not in _SUPPORTED_PROJECTS:
+        return {"error": f"지원 프로젝트: {', '.join(_SUPPORTED_PROJECTS)}"}
+
+    error = validate_query(query)
+    if error:
+        return {"error": error}
+
+    limit = max(1, min(limit, 1000))
+    q = query.strip().rstrip(";")
+    if "LIMIT" not in q.upper():
+        q += f" LIMIT {limit}"
+
+    try:
+        resolved = _PROJECT_ALIAS.get(project, project)
+        db_type = _DEFAULT_DB_TYPE.get(resolved, "postgresql")
+
+        if db_type == "postgresql":
+            result_rows = await _query_postgresql(project, q)
+        else:
+            result_rows = await _query_mysql(resolved, q, db_name=db_name)
+
+        result_rows = _mask_sensitive_values(result_rows)
+        columns = list(result_rows[0].keys()) if result_rows else []
+
+        logger.info(
+            f"query_project_database: OK | project={project} "
+            f"db_type={db_type} rows={len(result_rows)} query={q[:80]}"
+        )
+
+        return {
+            "project": project,
+            "db_type": db_type,
+            "rows": result_rows,
+            "row_count": len(result_rows),
+            "columns": columns,
+            "query": q,
+        }
+
+    except Exception as e:
+        # H3: credentials가 포함될 수 있는 에러 메시지는 로그에만 기록
+        logger.error(f"query_project_database: FAIL | project={project} error={e}")
+        safe_msg = str(e)
+        # DSN/credentials 패턴 제거
+        if any(kw in safe_msg.lower() for kw in ("password", "postgresql://", "mysql://", "credentials")):
+            safe_msg = "연결 오류가 발생했습니다 (상세 내용은 서버 로그 참조)"
+        return {"error": f"DB 쿼리 실패 ({project}): {safe_msg}"}
+
+
+# ─── DB 목록 조회 ─────────────────────────────────────────────────────────────
+
+async def list_project_databases() -> Dict[str, Any]:
+    """설정된 프로젝트 DB 목록 및 연결 상태 조회."""
+    result = {}
+    for project in _SUPPORTED_PROJECTS:
+        config = _get_project_db_config(project)
+        alias = _PROJECT_ALIAS.get(project)
+        db_type = _DEFAULT_DB_TYPE.get(_PROJECT_ALIAS.get(project, project), "postgresql")
+
+        if not config or not config["host"]:
+            result[project] = {"status": "not_configured"}
+            continue
+
+        info = {
+            "host": config["host"],
+            "port": config["port"],
+            "database": config["database"],
+            "db_type": db_type,
+        }
+        if alias:
+            info["alias_of"] = alias
+
+        try:
+            if db_type == "postgresql":
+                pool = await _get_pg_pool(project)
+                async with pool.acquire() as conn:
+                    version = await conn.fetchval("SELECT version()")
+                info["status"] = "connected"
+                info["version"] = version[:60] if version else "unknown"
+            else:
+                # MySQL: 간단한 연결 테스트
+                rows = await _query_mysql(
+                    _PROJECT_ALIAS.get(project, project),
+                    "SELECT version() as v"
+                )
+                info["status"] = "connected"
+                info["version"] = rows[0]["v"][:60] if rows else "unknown"
+        except Exception as e:
+            info["status"] = "error"
+            info["error"] = str(e)[:150]
+
+        result[project] = info
+    return result
