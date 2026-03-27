@@ -163,7 +163,7 @@ async def call_stream(
     _HAIKU_INTENTS = {
         "greeting", "casual", "status_check", "health_check",
         "all_service_status", "cost_report", "task_history",
-        "dashboard",
+        "dashboard", "file_read", "log_check", "session_list",
     }
     _SONNET_INTENTS = {
         "search", "url_read", "browser", "task_query",
