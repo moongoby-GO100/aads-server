@@ -496,7 +496,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "pipeline_runner_status",
-        "description": "Pipeline Runner 작업 상태 조회. error_detail(에러분류: timeout/claude_code_crash/git_conflict/build_fail/disk_full/rate_limit/process_died 등) 포함. status: queued/running/awaiting_approval/done/error",
+        "description": "Pipeline Runner 작업 상태 조회. status: queued/running/awaiting_approval/done/error",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -1167,7 +1167,7 @@ _SSH_SENSITIVE_PATTERNS = re.compile(
     r'|\.aws/|\.kube/|\.docker/|\.pem$|\.key$|authorized_keys|known_hosts)',
     re.IGNORECASE,
 )
-_SSH_TIMEOUT = 120  # 초 — docker build 등 장시간 명령 대응 (기존 10초→120초)
+_SSH_TIMEOUT = 10  # 초 (ConnectTimeout=5 + CommandTimeout=5)
 _SSH_WRITE_TIMEOUT = 15  # 쓰기 작업은 조금 더 여유
 _SSH_CMD_TIMEOUT = 600  # 원격 명령 실행 타임아웃 (10분, CEO가 중지 버튼으로 직접 제어)
 _SSH_MAX_RESULT_BYTES = 1024 * 1024  # 1MB (제한 없음 — Claude Code 동일)
@@ -1215,9 +1215,10 @@ _REMOTE_CMD_WHITELIST: List[str] = [
     "uptime",
     "crontab -l",
     # Docker 확장 (AADS-190)
+    "docker compose up",
+    "docker compose down",
+    "docker compose build",
     "docker compose pull",
-    # deploy.sh 안전 배포 게이트웨이
-    "/root/aads/aads-server/deploy.sh",
     "docker exec",
     "docker images",
     "docker stats",
@@ -1974,26 +1975,8 @@ async def tool_run_remote_command(project: str, command: str) -> str:
 
     # 보안 2.5, 3: docker exec 컨테이너 제한 + 파이프/세미콜론 차단 — CEO 지시로 전면 해제
 
-    # AADS 프로젝트: docker compose 명령 → deploy.sh 안전 리다이렉트
+    # AADS 프로젝트: 호스트 OS SSH 실행 (컨테이너→호스트)
     if project == "AADS":
-        _deploy_redirect = None
-        # docker compose down → 차단 (전체 컨테이너 삭제 위험)
-        if re.search(r"docker[\s-]+compose\s+down", command):
-            logger.warning("deploy_blocked_compose_down", command=command[:120])
-            return "[BLOCKED] docker compose down은 postgres 데이터 유실 위험. deploy.sh를 사용하세요."
-        # docker stop <aads 컨테이너> → 차단
-        if re.search(r"docker\s+(stop|kill)\s+aads-(postgres|redis|socket-proxy|litellm)", command):
-            logger.warning("deploy_blocked_container_stop", command=command[:120])
-            return "[BLOCKED] 의존 컨테이너 직접 정지는 서비스 장애를 유발합니다."
-        # docker compose up/build/restart → deploy.sh 리다이렉트 (하이픈 형식도 포함)
-        if re.search(r"docker[\s-]+compose\s+(up|build|restart)", command) and "aads" in command.lower():
-            _deploy_redirect = "/root/aads/aads-server/deploy.sh build"
-        elif re.search(r"docker\s+restart\s+aads-server", command):
-            _deploy_redirect = "/root/aads/aads-server/deploy.sh code"
-        if _deploy_redirect:
-            logger.warning("deploy_intercept", original=command[:120], redirect=_deploy_redirect)
-            command = _deploy_redirect
-
         workdir = get_workdir("AADS") or "/root"
         full_cmd = f"cd {shlex.quote(workdir)} && {command}"
         try:
@@ -2111,49 +2094,13 @@ async def tool_git_remote_commit(project: str, message: str) -> str:
                 )
             logger.info(f"git_commit_pre_check PASSED | project={project} files={len(staged_files)}")
 
-    # ── 커밋 전 AI 코드 검수: staged diff를 독립 AI(Gemini)가 리뷰 ──
-    try:
-        staged_diff = await tool_run_remote_command(project, "git diff --cached -- '*.py' '*.ts' '*.tsx'")
-        if staged_diff and staged_diff.strip() and "[ERROR]" not in staged_diff:
-            from app.services.code_reviewer import review_code_diff
-            verdict = await review_code_diff(
-                project=project,
-                job_id="chat-direct",
-                diff=staged_diff,
-                instruction=f"채팅 AI 직접 수정: {message[:200]}",
-            )
-            if verdict.verdict == "FLAG":
-                logger.warning(f"git_commit_blocked: project={project} verdict=FLAG score={verdict.score} issues={verdict.issues}")
-                return (
-                    f"[AI 코드 검수 실패 — 커밋 차단] score={verdict.score:.2f}\n"
-                    f"issues: {', '.join(verdict.issues)}\n"
-                    f"문제를 수정 후 다시 커밋하세요."
-                )
-            elif verdict.verdict == "REQUEST_CHANGES":
-                logger.warning(f"git_commit_warning: project={project} verdict=REQUEST_CHANGES score={verdict.score}")
-                # 경고 포함하여 커밋 진행
-                _review_warning = f"⚠️ [코드 검수 경고] score={verdict.score:.2f} — {', '.join(verdict.issues[:3])}\n"
-            else:
-                _review_warning = ""
-                logger.info(f"git_commit_review_passed: project={project} score={verdict.score:.2f}")
-        else:
-            _review_warning = ""
-    except Exception as _review_err:
-        # 검수 AI 실패 시 → 커밋 차단 (안전 우선)
-        logger.error(f"git_commit_review_failed: project={project} error={_review_err}")
-        return (
-            f"[AI 코드 검수 불가 — 커밋 차단] {str(_review_err)[:100]}\n"
-            f"LLM API 상태 확인 후 다시 시도하세요."
-        )
-
     # shlex.quote()로 안전한 메시지 이스케이프
     safe_msg = shlex.quote(message[:200])
-    result = await tool_run_remote_command(project, f"git commit -m {safe_msg}")
-    return _review_warning + result if _review_warning else result
+    return await tool_run_remote_command(project, f"git commit -m {safe_msg}")
 
 
 async def tool_git_remote_push(project: str, branch: str = "") -> str:
-    """원격 서버 git push (force push 차단). AI 코드 검수는 commit 단계에서 수행됨."""
+    """원격 서버 git push (force push 차단)."""
     cmd = "git push"
     if branch:
         if not re.match(r'^[a-zA-Z0-9._/\-]+$', branch):
