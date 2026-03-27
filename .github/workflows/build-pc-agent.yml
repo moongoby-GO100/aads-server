@@ -28,6 +28,8 @@ jobs:
           pip install -r pc_agent/requirements.txt
 
       - name: Build EXE with PyInstaller
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           cd pc_agent
           python build_exe.py
