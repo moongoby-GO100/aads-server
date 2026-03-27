@@ -139,28 +139,63 @@ def register_startup() -> None:
 # ---------------------------------------------------------------------------
 # 에이전트 실행
 # ---------------------------------------------------------------------------
-def run_agent(cfg: dict) -> subprocess.Popen | None:
-    """에이전트 프로세스 시작."""
+def run_agent(cfg: dict):
+    """에이전트 실행.
+
+    PyInstaller EXE 환경: sys.executable이 EXE 자신이라 subprocess로 .py 실행 불가.
+    → importlib로 agent.py를 직접 로드하여 데몬 스레드로 실행.
+    개발 환경: 기존 subprocess 방식 유지.
+    """
     agent_main = AGENT_DIR / "agent.py"
     if not agent_main.exists():
         logger.error("에이전트 코드 없음: %s", agent_main)
         return None
 
-    env = os.environ.copy()
-    env["AADS_SERVER_URL"] = cfg.get("server_url", DEFAULT_SERVER_URL)
-    env["AADS_AGENT_TOKEN"] = cfg.get("agent_token", "")
-    env["KAKAOBOT_INSTALL_DIR"] = str(INSTALL_DIR)
+    os.environ["AADS_SERVER_URL"] = cfg.get("server_url", DEFAULT_SERVER_URL)
+    os.environ["AADS_AGENT_TOKEN"] = cfg.get("agent_token", "")
+    os.environ["KAKAOBOT_INSTALL_DIR"] = str(INSTALL_DIR)
 
-    python = sys.executable
-    proc = subprocess.Popen(
-        [python, str(agent_main)],
-        cwd=str(AGENT_DIR),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    logger.info("에이전트 시작 (PID %d)", proc.pid)
-    return proc
+    if getattr(sys, "frozen", False):
+        # PyInstaller frozen EXE: importlib로 직접 로드 후 스레드 실행
+        import importlib.util
+
+        agent_dir_str = str(AGENT_DIR)
+        if agent_dir_str not in sys.path:
+            sys.path.insert(0, agent_dir_str)
+
+        spec = importlib.util.spec_from_file_location("agent_module", agent_main)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        class _FakeProc:
+            """Thread를 Popen 인터페이스처럼 래핑."""
+            def __init__(self, t: threading.Thread) -> None:
+                self._t = t
+
+            def poll(self) -> int | None:
+                return None if self._t.is_alive() else 0
+
+            def terminate(self) -> None:
+                pass  # 데몬 스레드는 메인 종료 시 자동 종료
+
+            def wait(self, timeout: float | None = None) -> None:
+                self._t.join(timeout=timeout)
+
+        t = threading.Thread(target=mod.main, daemon=True, name="KakaoBotAgent")
+        t.start()
+        logger.info("에이전트 스레드 시작 (thread=%s)", t.name)
+        return _FakeProc(t)
+    else:
+        # 개발 환경: 시스템 Python으로 subprocess 실행
+        proc = subprocess.Popen(
+            [sys.executable, str(agent_main)],
+            cwd=str(AGENT_DIR),
+            env=os.environ.copy(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        logger.info("에이전트 시작 (PID %d)", proc.pid)
+        return proc
 
 
 # ---------------------------------------------------------------------------
