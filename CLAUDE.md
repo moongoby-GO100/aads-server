@@ -49,6 +49,19 @@ docs/knowledge/AADS-KNOWLEDGE.md — 아키텍처, 파이프라인, 교차검증
   - 서브에이전트: 독립 LLM 호출, 읽기 도구 7종, asyncio.gather 병렬 실행
 - **리포트**: `reports/20260310_AADS190_phase0_phase1_phase2_report.md`
 
+## 커밋 절대 규칙 (R-COMMIT)
+- **`--no-verify` 절대 금지** — pre-commit hook은 API 키 유출·코드 품질을 보호한다. 우회하면 보안 사고.
+- **hook 차단 시 원인을 수정**한 후 재커밋. 우회 방법을 찾지 마라.
+- **인증 핵심 파일** (`auth_provider.py`, `model_selector.py`, `claude_relay_server.py`, `docker-compose.yml`) 수정 시: `ALLOW_AUTH_COMMIT=1 git commit -m "..."`
+- **테스트 실패 시 테스트를 삭제하지 말고 수정**. 코드 변경으로 기존 테스트가 깨지면, 코드 + 테스트를 같이 수정하여 커밋.
+- **커밋 전 반드시 확인**: `git log -1`로 커밋 성공 확인. "완료" 보고는 커밋+푸시 후에만.
+
+## 코드 품질 규칙 (R-QUALITY)
+- **자동 생성 코드(`check_tool_consistency --fix` 등) 실행 후 반드시 테스트** — 자동 생성이 들여쓰기, 클래스 소속을 잘못 만들 수 있음.
+- **테스트 추가 시 반드시 실행 확인**: `docker exec aads-server python3 -m pytest tests/unit/test_tools_and_pipeline.py -v` — 전체 PASS 확인 후 커밋.
+- **기존 테스트가 실패하면 방치하지 말고 즉시 수정** — 실패하는 테스트가 쌓이면 테스트 시스템 전체가 무력화됨.
+- **pre-commit hook 5단계**: ①API 키 탐지 ②구문 검사 ③ruff 정적 분석 ④Docker import 검증 ⑤단위 테스트 — 모두 통과해야 커밋 가능.
+
 ## 현재 상태
 - Phase: Phase 2 운영
 - 최근: AADS-190(원격 쓰기+서브에이전트), AADS-186E(메모리 자동 주입), AADS-188C(도구 우선순위)
