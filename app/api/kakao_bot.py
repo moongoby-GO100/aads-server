@@ -24,6 +24,7 @@ router = APIRouter(prefix="/kakao-bot", tags=["kakao-bot"])
 # PC Agent 배포 관련 상수
 PC_AGENT_DIR = Path(__file__).resolve().parent.parent.parent / "pc_agent"
 PC_AGENT_VERSION_FILE = PC_AGENT_DIR / "VERSION"
+PC_AGENT_EXE_FILE = PC_AGENT_DIR / "dist" / "kakaobot-setup.exe"
 # zip 제외 패턴
 _ZIP_EXCLUDE_DIRS = {"__pycache__", ".git", "build_tmp", "dist", ".mypy_cache", ".pytest_cache"}
 _ZIP_EXCLUDE_EXTS = {".pyc", ".pyo", ".exe", ".spec"}
@@ -126,12 +127,22 @@ async def agent_version():
     if changelog_file.exists():
         changelog = changelog_file.read_text(encoding="utf-8").strip()
 
+    # EXE 빌드 유무 확인
+    exe_available = PC_AGENT_EXE_FILE.exists()
+    exe_size = ""
+    if exe_available:
+        size_mb = PC_AGENT_EXE_FILE.stat().st_size / (1024 * 1024)
+        exe_size = f"{size_mb:.1f} MB"
+
     return {
         "version": version,
         "download_url": "/api/v1/kakao-bot/agent/download",
         "force_update": force_update,
         "min_version": min_version,
         "changelog": changelog,
+        "exe_available": exe_available,
+        "file_size": exe_size if exe_available else "ZIP",
+        "release_date": "2026-03-27",
     }
 
 
@@ -164,22 +175,32 @@ def _build_agent_zip() -> bytes:
 
 @router.get("/agent/download")
 async def agent_download():
-    """PC Agent 코드를 zip으로 다운로드.
-
-    pc_agent/ 디렉토리를 압축하여 스트리밍 응답.
-    """
+    """PC Agent 다운로드. EXE 우선, 없으면 ZIP fallback."""
     if not PC_AGENT_DIR.exists():
         raise HTTPException(status_code=404, detail="pc_agent 디렉토리가 없습니다")
 
+    version = "unknown"
+    if PC_AGENT_VERSION_FILE.exists():
+        version = PC_AGENT_VERSION_FILE.read_text(encoding="utf-8").strip()
+
+    # EXE가 있으면 EXE 직접 제공 (Python 설치 불필요)
+    if PC_AGENT_EXE_FILE.exists():
+        exe_bytes = PC_AGENT_EXE_FILE.read_bytes()
+        return StreamingResponse(
+            io.BytesIO(exe_bytes),
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="kakaobot-setup-{version}.exe"',
+                "Content-Length": str(len(exe_bytes)),
+            },
+        )
+
+    # EXE 미빌드 시 ZIP fallback
     try:
         zip_bytes = _build_agent_zip()
     except Exception as e:
         logger.error("agent_download zip 생성 실패: %s", e)
         raise HTTPException(status_code=500, detail="zip 생성 실패")
-
-    version = "unknown"
-    if PC_AGENT_VERSION_FILE.exists():
-        version = PC_AGENT_VERSION_FILE.read_text(encoding="utf-8").strip()
 
     return StreamingResponse(
         io.BytesIO(zip_bytes),
@@ -187,6 +208,40 @@ async def agent_download():
         headers={
             "Content-Disposition": f'attachment; filename="kakaobot-agent-{version}.zip"',
             "Content-Length": str(len(zip_bytes)),
+        },
+    )
+
+
+@router.get("/agent/download-exe")
+async def agent_download_exe():
+    """PC Agent 설치 EXE 다운로드.
+
+    PyInstaller로 빌드된 kakaobot-setup.exe를 스트리밍 응답.
+    """
+    exe_path = PC_AGENT_DIR / "dist" / "kakaobot-setup.exe"
+    if not exe_path.exists():
+        raise HTTPException(status_code=404, detail="EXE 파일이 아직 빌드되지 않았습니다")
+
+    version = "unknown"
+    if PC_AGENT_VERSION_FILE.exists():
+        version = PC_AGENT_VERSION_FILE.read_text(encoding="utf-8").strip()
+
+    file_size = exe_path.stat().st_size
+
+    def iter_file():
+        with open(exe_path, "rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+
+    return StreamingResponse(
+        iter_file(),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="AADS-PC-Agent-Setup-{version}.exe"',
+            "Content-Length": str(file_size),
         },
     )
 
