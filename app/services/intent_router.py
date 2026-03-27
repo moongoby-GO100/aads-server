@@ -5,14 +5,34 @@ Gemini 2.5 Flash-Lite로 인텐트 분류 (LiteLLM 경유, ~200ms 목표)
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import json as _json
 import re as _re
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Optional
 
 import httpx
+
+_intent_redis = None
+
+
+async def _get_intent_redis():
+    """인텐트 캐시용 Redis 연결 (실패해도 무시)"""
+    global _intent_redis
+    if _intent_redis is None:
+        try:
+            import redis.asyncio as aioredis
+            _intent_redis = await aioredis.from_url(
+                "redis://aads-redis:6379/1",
+                decode_responses=True,
+                socket_connect_timeout=1,
+            )
+        except Exception:
+            return None
+    return _intent_redis
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +244,20 @@ async def classify(
     Gemini Flash-Lite로 인텐트 분류.
     recent_messages: 최근 대화 히스토리 (컨텍스트 인식 분류용).
     실패 시 키워드 기반 폴백.
+    Redis 캐싱: 메시지 앞 100자 SHA256 해시 키(앞 16자), TTL 60초.
     """
+    # ─── Redis 인텐트 캐시 조회 ──────────────────────────────────────────────
+    _cache_key = f"intent:{hashlib.sha256(message[:100].encode()).hexdigest()[:16]}"
+    try:
+        _r = await _get_intent_redis()
+        if _r:
+            _cached = await _r.get(_cache_key)
+            if _cached:
+                logger.info(f"intent_cache_hit: {_cache_key}")
+                return IntentResult(**_json.loads(_cached))
+    except Exception:
+        pass
+
     # ─── 컨텍스트 인식: 이전 대화에서 도구 사용 중이면 짧은 후속 지시는 casual 아님 ───
     _prev_used_tools = False
     _prev_intent = ""
@@ -285,7 +318,15 @@ async def classify(
                         if _prev_used_tools and len(message) <= 30:
                             logger.info(f"intent_context_override: {intent} → status_check (prev used tools) for '{message[:40]}'")
                             return _make_result("status_check")
-                    return _make_result(intent)
+                    result = _make_result(intent)
+                    # Redis 캐시 저장 (TTL 60초 — 컨텍스트 의존 오분류 방지를 위해 짧게)
+                    try:
+                        _r = await _get_intent_redis()
+                        if _r:
+                            await _r.setex(_cache_key, 60, _json.dumps(asdict(result)))
+                    except Exception:
+                        pass
+                    return result
     except Exception as e:
         logger.debug(f"intent_router classify error: {e}")
 
