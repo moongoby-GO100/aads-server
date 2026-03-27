@@ -50,19 +50,53 @@ _SQL_BLOCKED = re.compile(
 _MAX_DB_ROWS = 50
 _MAX_TOOL_CONTENT_CHARS = 6000  # 도구 결과 최대 문자 수 (~2000 토큰)
 
-# fetch_url 화이트리스트 도메인 (보안: LLM 우회 불가)
-_FETCH_ALLOWED_DOMAINS = frozenset([
-    "aads.newtalk.kr",
-    "github.com",
-    "raw.githubusercontent.com",
-    "api.github.com",
-    "brave.com",
-    "go100.newtalk.kr",
-    "shotflow.newtalk.kr",
-    "localhost",
-    "127.0.0.1",
+# fetch_url 블랙리스트 보안 (AADS-159→블랙리스트 전환, LLM 우회 불가)
+import ipaddress as _ipaddress
+from urllib.parse import urlparse as _urlparse
+
+_FETCH_BLOCKED_HOSTS = frozenset([
+    "metadata.google.internal",
+    "metadata.google.internal.",
+    "169.254.169.254",
 ])
-_FETCH_ALLOWED_SUFFIX = ".newtalk.kr"
+_FETCH_BLOCKED_PORTS = frozenset([5432, 6379, 3306, 27017, 9200, 2379, 8500])
+_FETCH_SAFE_HOSTS = frozenset(["localhost", "127.0.0.1", "::1"])
+_FETCH_PRIVATE_NETWORKS = [
+    _ipaddress.ip_network("10.0.0.0/8"),
+    _ipaddress.ip_network("172.16.0.0/12"),
+    _ipaddress.ip_network("192.168.0.0/16"),
+    _ipaddress.ip_network("169.254.0.0/16"),
+    _ipaddress.ip_network("fc00::/7"),
+]
+
+
+def _fetch_url_blocked(url: str) -> Optional[str]:
+    """블랙리스트 보안 검사. 차단이면 에러 문자열, 통과이면 None."""
+    try:
+        parsed = _urlparse(url)
+        hostname = (parsed.hostname or "").lower()
+        scheme = (parsed.scheme or "").lower()
+        port = parsed.port
+    except Exception:
+        return "[접근 차단] URL 파싱 실패"
+    if not hostname:
+        return "[접근 차단] 호스트명이 없습니다"
+    if scheme not in ("http", "https", ""):
+        return f"[접근 차단] 허용되지 않은 프로토콜: {scheme}"
+    if port and port in _FETCH_BLOCKED_PORTS:
+        return f"[접근 차단] 민감 포트 접근 불가: {port}"
+    if hostname in _FETCH_SAFE_HOSTS:
+        return None
+    if hostname in _FETCH_BLOCKED_HOSTS:
+        return f"[접근 차단] 보안 차단 호스트: {hostname}"
+    try:
+        addr = _ipaddress.ip_address(hostname)
+        for net in _FETCH_PRIVATE_NETWORKS:
+            if addr in net:
+                return f"[접근 차단] 내부 네트워크 접근 불가: {hostname}"
+    except ValueError:
+        pass
+    return None
 
 
 # ─── 도구 1: health_check ──────────────────────────────────────────────────────
@@ -404,22 +438,10 @@ async def fetch_url(message: str, workspace_id: str) -> Dict[str, Any]:
 
     url = url_match.group(0).rstrip(".,;:)")
 
-    # 도메인 화이트리스트 검사
-    try:
-        from urllib.parse import urlparse
-        hostname = (urlparse(url).hostname or "").lower()
-    except Exception:
-        return {"error": "URL 파싱 실패"}
-
-    allowed = (
-        hostname in _FETCH_ALLOWED_DOMAINS
-        or hostname.endswith(_FETCH_ALLOWED_SUFFIX)
-    )
-    if not allowed:
-        # 일반 외부 URL도 허용 (뉴스, 기술 문서 등) — 단 로컬 네트워크 차단
-        private_prefixes = ("192.168.", "10.", "172.", "localhost", "127.")
-        if any(hostname.startswith(p) for p in private_prefixes):
-            return {"error": f"접근 차단: 내부 네트워크 주소 ({hostname})"}
+    # 블랙리스트 보안 검사
+    _blocked = _fetch_url_blocked(url)
+    if _blocked:
+        return {"error": _blocked}
 
     try:
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:

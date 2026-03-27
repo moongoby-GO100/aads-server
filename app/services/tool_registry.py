@@ -121,6 +121,9 @@ _DEFER_LOADING: Dict[str, bool] = {
     "update_agenda": False,           # 핵심 — 아젠다 상태 변경
     "decide_agenda": False,           # 핵심 — CEO 결정 기록
     "search_agendas": True,           # 온디맨드 — 키워드 검색
+    "crawl4ai_fetch": True,  # 자동 추가
+    "query_timeline": True,  # 자동 추가
+    "recall_tool_result": True,  # 자동 추가
 }
 
 # 도구 카테고리 안내 (시스템 프롬프트 주입용 — context_builder.py에서 사용)
