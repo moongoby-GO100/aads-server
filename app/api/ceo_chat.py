@@ -300,6 +300,11 @@ async def call_llm(model: str, system_prompt: str, messages: List[Dict]) -> Tupl
     return await _call_anthropic(model, system_prompt, messages)
 
 
+def _to_cached_system_blocks(system_prompt: str) -> list:
+    """시스템 프롬프트를 캐시 가능한 블록 배열로 변환"""
+    return [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]
+
+
 async def _call_anthropic(model: str, system_prompt: str, messages: List[Dict]) -> Tuple[str, int, int]:
     """Anthropic API 호출. 402(credit_balance_too_low) 시 2차 키로 자동 전환."""
     clients = [c for c in [anthropic_client, anthropic_client_2] if c is not None]
@@ -309,7 +314,7 @@ async def _call_anthropic(model: str, system_prompt: str, messages: List[Dict]) 
             resp = await client.messages.create(
                 model=model,
                 max_tokens=2000,
-                system=system_prompt,
+                system=_to_cached_system_blocks(system_prompt),
                 messages=messages,
             )
             text = resp.content[0].text
@@ -376,7 +381,7 @@ async def _call_anthropic_with_tools(
                 resp = await client.messages.create(
                     model=model,
                     max_tokens=4096,
-                    system=system_prompt,
+                    system=_to_cached_system_blocks(system_prompt),
                     messages=current_messages,
                     tools=TOOL_DEFINITIONS,
                 )
