@@ -56,6 +56,13 @@ docs/knowledge/AADS-KNOWLEDGE.md — 아키텍처, 파이프라인, 교차검증
 - **테스트 실패 시 테스트를 삭제하지 말고 수정**. 코드 변경으로 기존 테스트가 깨지면, 코드 + 테스트를 같이 수정하여 커밋.
 - **커밋 전 반드시 확인**: `git log -1`로 커밋 성공 확인. "완료" 보고는 커밋+푸시 후에만.
 
+## Docker 절대 규칙 (R-DOCKER)
+- **`docker compose up -d` 전체 실행 절대 금지** — postgres/litellm/aads-server가 동시 재생성되어 채팅 시스템 전체가 중단됨.
+- **단일 서비스만 재시작**: `docker compose up -d --no-deps <서비스명>` 또는 `docker compose restart <서비스명>`
+- **대시보드 빌드/배포**: `docker compose -f /root/aads/aads-dashboard/docker-compose.yml build aads-dashboard && docker compose -f /root/aads/aads-dashboard/docker-compose.yml up -d aads-dashboard` — aads-server compose 파일 사용 금지.
+- **aads-server 재시작 필요 시**: `docker exec aads-server supervisorctl restart aads-api` (컨테이너 재생성 아닌 프로세스 재시작)
+- **docker-compose.yml 환경변수 수정 후**: 즉시 `docker compose up -d`하지 말고 CEO 승인 후 점검 창구에서 실행.
+
 ## 코드 품질 규칙 (R-QUALITY)
 - **자동 생성 코드(`check_tool_consistency --fix` 등) 실행 후 반드시 테스트** — 자동 생성이 들여쓰기, 클래스 소속을 잘못 만들 수 있음.
 - **테스트 추가 시 반드시 실행 확인**: `docker exec aads-server python3 -m pytest tests/unit/test_tools_and_pipeline.py -v` — 전체 PASS 확인 후 커밋.
