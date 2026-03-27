@@ -1277,16 +1277,16 @@ _REMOTE_CMD_BLOCKED = re.compile(
 )
 
 # ─── 보안 상수 ─────────────────────────────────────────────────────────────────
-_FILE_WHITELIST = "/root/aads/"
-_FILE_BLACKLIST = ["/etc", "/proc", "/root/.ssh", "/root/.genspark/directives"]
+# CEO 지시: 경로 제한 해제 — 민감 파일만 블랙리스트
+_FILE_BLACKLIST = ["/root/.ssh", "/root/.env", "/etc/shadow", "/etc/gshadow"]
 # SQL 차단 — CEO 지시로 SELECT 외 쓰기도 허용 (DROP/TRUNCATE만 유지)
 _SQL_BLOCKED = re.compile(
     r"\b(DROP\s+(TABLE|DATABASE)|TRUNCATE)\b",
     re.IGNORECASE,
 )
-_MAX_LOG_BYTES = 10 * 1024   # 10 KB
-_MAX_URL_BYTES = 20 * 1024   # 20 KB
-_MAX_DB_ROWS = 50
+_MAX_LOG_BYTES = 50 * 1024   # 50 KB (CEO 지시: 제한 완화)
+_MAX_URL_BYTES = 100 * 1024  # 100 KB (CEO 지시: 제한 완화)
+_MAX_DB_ROWS = 500           # CEO 지시: 50→500 확대
 
 # ─── Browser 보안 상수 (AADS-159→블랙리스트 전환, CEO 지시, LLM 우회 불가) ───
 import ipaddress as _ipaddress
@@ -1317,17 +1317,15 @@ _pw_init_lock: Optional[asyncio.Lock] = None
 # ─── 도구 실행 함수들 ──────────────────────────────────────────────────────────
 
 async def tool_read_file(path: str) -> str:
-    """로컬 파일 읽기 (화이트리스트 검사)."""
+    """로컬 파일 읽기 (블랙리스트 기반 — CEO 지시로 경로 제한 해제)."""
     try:
         resolved = str(Path(path).resolve())
     except Exception as e:
         return f"[ERROR] 경로 처리 실패: {e}"
 
-    if not resolved.startswith(_FILE_WHITELIST):
-        return f"[ERROR] 접근 거부: /root/aads/ 하위 경로만 허용됩니다. (요청: {resolved})"
     for blocked in _FILE_BLACKLIST:
         if resolved.startswith(blocked):
-            return f"[ERROR] 접근 거부: {blocked} 경로는 차단되어 있습니다."
+            return f"[ERROR] 접근 거부: {blocked} 경로는 보안상 차단되어 있습니다."
 
     try:
         p = Path(resolved)
@@ -1363,16 +1361,15 @@ async def tool_read_github(
 
 
 async def tool_search_logs(source: str, keyword: Optional[str] = None) -> str:
-    """Docker logs 또는 journalctl 검색 (최근 100줄, 최대 10KB)."""
-    _ALLOWED_LOG_SOURCES = {"aads-server", "aads-dashboard", "aads-postgres", "aads-redis", "aads-litellm", "aads-core", "journalctl"}
+    """Docker logs 또는 journalctl 검색 (최근 200줄, 최대 50KB). CEO 지시로 컨테이너 제한 해제."""
     try:
         if source.lower() == "journalctl":
-            cmd = ["journalctl", "--no-pager", "-n", "100"]
+            cmd = ["journalctl", "--no-pager", "-n", "200"]
         else:
-            # 컨테이너 이름 검증 (인젝션 방지)
-            if source not in _ALLOWED_LOG_SOURCES:
-                return f"[ERROR] 허용되지 않는 로그 소스: {source}. 허용 목록: {', '.join(sorted(_ALLOWED_LOG_SOURCES))}"
-            cmd = ["docker", "logs", "--tail", "100", source]
+            # 컨테이너 이름 형식 검증만 (인젝션 방지, 화이트리스트 제거)
+            if not re.match(r'^[a-zA-Z0-9._-]+$', source):
+                return f"[ERROR] 잘못된 컨테이너 이름 형식: {source}"
+            cmd = ["docker", "logs", "--tail", "200", source]
 
         result = subprocess.run(
             cmd,
@@ -1477,7 +1474,7 @@ async def tool_fetch_url(url: str) -> str:
             encoded = content.encode("utf-8", errors="replace")
             if len(encoded) > _MAX_URL_BYTES:
                 content = encoded[:_MAX_URL_BYTES].decode("utf-8", errors="replace")
-                content += "\n...(20KB 초과, 잘림)"
+                content += "\n...(100KB 초과, 잘림)"
             return content
     except Exception as e:
         return f"[ERROR] URL 조회 실패: {e}"

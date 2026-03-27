@@ -125,8 +125,8 @@ def validate_query(query: str) -> Optional[str]:
     q = query.strip()
     if not q:
         return "쿼리가 비어있습니다"
-    if len(q) > 2000:
-        return "쿼리가 2000자를 초과합니다"
+    if len(q) > 10000:
+        return "쿼리가 10000자를 초과합니다"
     if not _ALLOWED_SQL_START.match(q):
         return "SELECT, WITH, EXPLAIN 쿼리만 허용됩니다"
     if _FORBIDDEN_SQL.match(q):
@@ -150,19 +150,8 @@ def validate_query(query: str) -> Optional[str]:
     if _DML_IN_CTE.search(stripped_for_dml):
         return "쿼리에 금지된 DML 키워드가 포함되어 있습니다"
 
-    # ── 대량 스캔 방지: self-join / CROSS JOIN / 테이블 2회 이상 참조 차단 ──
-    q_upper = cleaned.upper()
-    # self-join 감지: 같은 테이블을 다른 alias로 2회 참조
-    _table_refs = re.findall(r'\bFROM\s+(\w+)|\bJOIN\s+(\w+)', q_upper)
-    _tables = [t[0] or t[1] for t in _table_refs if t[0] or t[1]]
-    if len(_tables) != len(set(_tables)):
-        return "같은 테이블을 여러 번 참조하는 self-join은 서비스 장애 위험이 있어 차단됩니다. LIMIT과 WHERE 조건을 추가하거나 쿼리를 분리하세요."
-    # CROSS JOIN 차단
-    if "CROSS JOIN" in q_upper:
-        return "CROSS JOIN은 대량 스캔 위험으로 차단됩니다."
-    # LIMIT 없이 큰 테이블 전체 스캔 방지 (WHERE 없는 SELECT)
-    if "WHERE" not in q_upper and "LIMIT" not in q_upper:
-        return "WHERE 또는 LIMIT 절 없는 전체 스캔 쿼리는 차단됩니다."
+    # CEO 지시: self-join / CROSS JOIN / WHERE 강제 제거 — 자유로운 분석 쿼리 허용
+    # 안전장치: auto LIMIT은 유지 (쿼리에 없으면 자동 추가)
 
     return None
 
