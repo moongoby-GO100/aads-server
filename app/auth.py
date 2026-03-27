@@ -26,7 +26,7 @@ except ImportError:
 
 SECRET_KEY = os.getenv('JWT_SECRET_KEY', '')
 ALGORITHM = 'HS256'
-TOKEN_EXPIRE_HOURS = 24
+TOKEN_EXPIRE_HOURS = 24 * 7  # 7일
 
 ADMIN_EMAIL = os.getenv('AADS_ADMIN_EMAIL', 'admin@aads.dev')
 ADMIN_PASSWORD = os.getenv('AADS_ADMIN_PASSWORD', '')
