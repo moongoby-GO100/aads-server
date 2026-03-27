@@ -656,6 +656,83 @@ async def lifespan(app: FastAPI):
 
     _startup_asyncio.create_task(_resume_incomplete_conversations())
 
+    # ── 주기적 recovered 세션 자동이어쓰기 스캐너 (30초 주기) ──
+    _recovered_resume_attempts: dict[str, int] = {}  # sid → 재시도 횟수
+
+    async def _periodic_recovered_scanner():
+        """서버 재시작 없이도 recovered 세션을 감지하여 자동 이어쓰기."""
+        import asyncio as _prs_asyncio
+        await _prs_asyncio.sleep(15)  # 초기 대기
+        while True:
+            try:
+                await _prs_asyncio.sleep(30)
+                from app.core.db_pool import get_pool as _gp_prs
+                from app.services.chat_service import _streaming_state
+                _pool = _gp_prs()
+                async with _pool.acquire() as conn:
+                    rows = await conn.fetch("""
+                        WITH last_msgs AS (
+                            SELECT DISTINCT ON (session_id)
+                                session_id, role, model_used, created_at
+                            FROM chat_messages
+                            WHERE created_at > NOW() - INTERVAL '10 minutes'
+                              AND intent IS DISTINCT FROM 'system_trigger'
+                              AND intent IS DISTINCT FROM 'streaming_placeholder'
+                            ORDER BY session_id, created_at DESC
+                        )
+                        SELECT lm.session_id::text
+                        FROM last_msgs lm
+                        WHERE lm.role = 'assistant' AND lm.model_used = 'recovered'
+                        LIMIT 5
+                    """)
+                    if not rows:
+                        continue
+
+                    for row in rows:
+                        sid = row["session_id"]
+                        # 이미 스트리밍 중이면 스킵
+                        if sid in _streaming_state and not _streaming_state[sid].get("completed"):
+                            continue
+                        # 재시도 횟수 초과(최대 2회) 스킵
+                        if _recovered_resume_attempts.get(sid, 0) >= 2:
+                            continue
+                        _recovered_resume_attempts[sid] = _recovered_resume_attempts.get(sid, 0) + 1
+
+                        # 마지막 user 메시지 조회
+                        _last_user = await conn.fetchval(
+                            "SELECT content FROM chat_messages "
+                            "WHERE session_id = $1::uuid AND role = 'user' "
+                            "ORDER BY created_at DESC LIMIT 1",
+                            sid,
+                        )
+                        if not _last_user:
+                            continue
+
+                        user_content = (
+                            f"{_last_user}\n\n"
+                            "[시스템] 이전 응답이 중단되었습니다. "
+                            "이전 응답 내용을 참고하여 이어서 완성해 주세요."
+                        )
+
+                        from app.services.chat_service import send_message_stream, with_background_completion
+
+                        async def _resume_recovered(_sid, _content):
+                            try:
+                                stream = send_message_stream(session_id=_sid, content=_content)
+                                bg = with_background_completion(stream, session_id=_sid)
+                                async for _ in bg:
+                                    pass
+                                logger.info(f"recovered_scanner: session={_sid[:8]} resumed OK")
+                            except Exception as _e:
+                                logger.warning(f"recovered_scanner: session={_sid[:8]} error={_e}")
+
+                        _prs_asyncio.create_task(_resume_recovered(sid, user_content))
+                        logger.info(f"recovered_scanner: session={sid[:8]} auto-resume triggered (attempt {_recovered_resume_attempts[sid]})")
+            except Exception as _e:
+                logger.warning(f"recovered_scanner_error: {_e}")
+
+    _startup_asyncio.create_task(_periodic_recovered_scanner())
+
     # Pipeline Runner: 재시작 복구 + Watchdog 시작 (DB 풀 초기화 이후)
     try:
         from app.services.pipeline_c import recover_interrupted_jobs, start_watchdog
