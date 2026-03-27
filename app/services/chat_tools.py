@@ -15,13 +15,12 @@ AADS-184: 채팅 도구 연동 구현 — 인텐트→도구 호출→결과 주
 
 보안 규칙:
   - query_database: SELECT만 허용, INSERT/UPDATE/DELETE/DROP 차단
-  - fetch_url: 블랙리스트 적용 (내부 IP/메타데이터/민감 포트만 차단, 나머지 허용)
+  - fetch_url: 도메인 화이트리스트 적용 (*.newtalk.kr, github.com, 허용 외부 도메인)
   - read_remote_file: 기존 ceo_chat_tools.py SSH 보안 규칙 재사용
 """
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import json
 import logging
 import os
@@ -29,7 +28,6 @@ import re
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
 
 import asyncpg
 import httpx
@@ -52,59 +50,19 @@ _SQL_BLOCKED = re.compile(
 _MAX_DB_ROWS = 50
 _MAX_TOOL_CONTENT_CHARS = 6000  # 도구 결과 최대 문자 수 (~2000 토큰)
 
-# ─── fetch_url 블랙리스트 보안 상수 (LLM 우회 불가) ──────────────────────────
-_FETCH_BLOCKED_HOSTS = frozenset([
-    "metadata.google.internal",
-    "metadata.google.internal.",
-    "169.254.169.254",            # AWS/GCP 링크-로컬 메타데이터
+# fetch_url 화이트리스트 도메인 (보안: LLM 우회 불가)
+_FETCH_ALLOWED_DOMAINS = frozenset([
+    "aads.newtalk.kr",
+    "github.com",
+    "raw.githubusercontent.com",
+    "api.github.com",
+    "brave.com",
+    "go100.newtalk.kr",
+    "shotflow.newtalk.kr",
+    "localhost",
+    "127.0.0.1",
 ])
-_FETCH_BLOCKED_PORTS = frozenset([5432, 6379, 3306, 27017, 9200, 2379, 8500])
-_FETCH_PRIVATE_NETWORKS = [
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("fd00::/8"),
-    ipaddress.ip_network("fc00::/7"),
-]
-# localhost/127.x는 허용 (내부 서비스 접근용)
-_FETCH_SAFE_HOSTS = frozenset(["localhost", "127.0.0.1", "::1"])
-
-
-def _fetch_url_blocked(url: str) -> Optional[str]:
-    """블랙리스트 보안 검사. 차단이면 에러 문자열, 통과이면 None."""
-    try:
-        parsed = urlparse(url)
-        hostname = (parsed.hostname or "").lower()
-        scheme = (parsed.scheme or "").lower()
-        port = parsed.port
-    except Exception:
-        return "URL 파싱 실패"
-    if not hostname:
-        return "호스트명이 없습니다"
-    # 1. HTTP/HTTPS만 허용
-    if scheme not in ("http", "https", ""):
-        return f"허용되지 않은 프로토콜: {scheme}"
-    # 2. 민감 포트 차단
-    if port and port in _FETCH_BLOCKED_PORTS:
-        return f"민감 포트 접근 불가: {port}"
-    # 3. localhost/127.x 허용
-    if hostname in _FETCH_SAFE_HOSTS:
-        return None
-    # 4. 클라우드 메타데이터 호스트명 차단
-    if hostname in _FETCH_BLOCKED_HOSTS:
-        return f"보안 차단 호스트: {hostname}"
-    # 5. 내부 네트워크 IP 차단 (ipaddress 모듈로 정확히 검사)
-    try:
-        ip = ipaddress.ip_address(hostname)
-        if ip.is_loopback or ip.is_link_local or ip.is_reserved:
-            return f"내부 네트워크 접근 불가: {hostname}"
-        for net in _FETCH_PRIVATE_NETWORKS:
-            if ip in net:
-                return f"내부 네트워크 접근 불가: {hostname}"
-    except ValueError:
-        pass  # 도메인명은 IP 파싱 불필요 — 통과
-    return None
+_FETCH_ALLOWED_SUFFIX = ".newtalk.kr"
 
 
 # ─── 도구 1: health_check ──────────────────────────────────────────────────────
@@ -446,10 +404,22 @@ async def fetch_url(message: str, workspace_id: str) -> Dict[str, Any]:
 
     url = url_match.group(0).rstrip(".,;:)")
 
-    # 블랙리스트 보안 검사
-    block_reason = _fetch_url_blocked(url)
-    if block_reason:
-        return {"error": f"접근 차단: {block_reason}"}
+    # 도메인 화이트리스트 검사
+    try:
+        from urllib.parse import urlparse
+        hostname = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return {"error": "URL 파싱 실패"}
+
+    allowed = (
+        hostname in _FETCH_ALLOWED_DOMAINS
+        or hostname.endswith(_FETCH_ALLOWED_SUFFIX)
+    )
+    if not allowed:
+        # 일반 외부 URL도 허용 (뉴스, 기술 문서 등) — 단 로컬 네트워크 차단
+        private_prefixes = ("192.168.", "10.", "172.", "localhost", "127.")
+        if any(hostname.startswith(p) for p in private_prefixes):
+            return {"error": f"접근 차단: 내부 네트워크 주소 ({hostname})"}
 
     try:
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
