@@ -558,18 +558,20 @@ async def lifespan(app: FastAPI):
         await _resume_asyncio.sleep(5)  # 서버 완전 기동 대기
 
         _deploy_flag = "/tmp/aads_deploy_restart"
+        _is_deploy_restart = False
         if os.path.exists(_deploy_flag):
             os.remove(_deploy_flag)
-            logger.info("resume_incomplete: skipped (deploy restart detected)")
-            return
+            _is_deploy_restart = True
+            logger.info("resume_incomplete: deploy restart detected — recovered 세션만 이어쓰기")
 
         try:
             from app.core.db_pool import get_pool
             pool = get_pool()
             async with pool.acquire() as conn:
                 # 최근 10분 이내, 미완료 세션 찾기:
-                # 1) 마지막 메시지가 user인 세션 (응답 없음)
-                # 2) 마지막 assistant가 recovered인 세션 (중단된 부분 응답)
+                # 1) 마지막 메시지가 user인 세션 (응답 없음) — 배포 재시작 시 스킵
+                # 2) 마지막 assistant가 recovered인 세션 (중단된 부분 응답) — 항상 이어쓰기
+                _case1 = "" if not _is_deploy_restart else "FALSE AND"
                 incomplete = await conn.fetch("""
                     WITH last_msgs AS (
                         SELECT DISTINCT ON (session_id)
@@ -592,14 +594,12 @@ async def lifespan(app: FastAPI):
                            lm.model_used
                     FROM last_msgs lm
                     WHERE (
-                        -- Case 1: 마지막 메시지가 user (응답 없음)
-                        (lm.role = 'user' AND lm.content IS NOT NULL AND length(lm.content) > 0)
+                        ({case1} lm.role = 'user' AND lm.content IS NOT NULL AND length(lm.content) > 0)
                         OR
-                        -- Case 2: 마지막 assistant가 recovered (끊긴 부분 응답 → 이어쓰기)
                         (lm.role = 'assistant' AND lm.model_used = 'recovered')
                     )
                     LIMIT 3
-                """)
+                """.format(case1=_case1))
 
                 if not incomplete:
                     logger.info("resume_incomplete: no incomplete conversations found")
