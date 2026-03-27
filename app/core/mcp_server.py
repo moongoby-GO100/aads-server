@@ -28,6 +28,13 @@ _EXPOSED_OPERATIONS = [
     "get_project_docs",
     "post_submit_directive",
     "get_list_workspaces",
+    # CEO 아젠다 관리
+    "add_agenda",
+    "list_agendas",
+    "get_agenda",
+    "update_agenda",
+    "decide_agenda",
+    "search_agendas",
 ]
 
 # 제외 대상 경로 패턴 (보안)
