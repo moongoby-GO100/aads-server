@@ -44,7 +44,8 @@ async def with_heartbeat(
 
     interval=3s → Cloudflare 100s 유휴 타임아웃 대비 충분한 여유 (P0-FIX: 5s→3s).
     """
-    HEARTBEAT = f'data: {json.dumps({"type": "heartbeat"})}\n\n'
+    _hb_pad = ":" + " " * 256 + "\n"
+    HEARTBEAT = f'data: {json.dumps({"type": "heartbeat"})}\n{_hb_pad}\n'
     ait = gen.__aiter__()
     pending: _heartbeat_asyncio.Task | None = None
     while True:
@@ -363,7 +364,9 @@ async def with_background_completion(
     # (3) pump 비정상 종료 시 자동 재시작.
     _HB_INTERVAL = 3.0  # 기본 3초: Cloudflare 100s/nginx 600s 대비 충분한 여유 (P0-FIX: 5s→3s)
     _HB_INTERVAL_TOOL = 2.0  # 도구 실행 중 2초: 긴 도구 실행 시 연결 안정성 강화
-    _HB_LINE = f'data: {json.dumps({"type": "heartbeat"})}\n\n'
+    # Cloudflare 즉시 flush 유도: 256byte+ 패딩 (SSE comment는 클라이언트가 무시)
+    _HB_PAD = ":" + " " * 256 + "\n"
+    _HB_LINE = f'data: {json.dumps({"type": "heartbeat"})}\n{_HB_PAD}\n'
 
     async def _heartbeat_pump():
         """Adaptive heartbeat — 도구 실행 중 2초, 평시 5초 간격으로 queue에 heartbeat 삽입.
