@@ -588,16 +588,12 @@ async def lifespan(app: FastAPI):
                                 ORDER BY created_at DESC LIMIT 1),
                                lm.content
                            ) AS content,
-                           lm.created_at,
-                           lm.model_used
+                           lm.created_at
                     FROM last_msgs lm
-                    WHERE (
-                        -- Case 1: 마지막 메시지가 user (응답 없음)
-                        (lm.role = 'user' AND lm.content IS NOT NULL AND length(lm.content) > 0)
-                        OR
-                        -- Case 2: 마지막 assistant가 recovered (끊긴 부분 응답 → 이어쓰기)
-                        (lm.role = 'assistant' AND lm.model_used = 'recovered')
-                    )
+                    WHERE lm.role = 'user'
+                      AND lm.content IS NOT NULL
+                      AND length(lm.content) > 0
+                      -- recovered 제외: 부분 응답은 이미 보존됨, 재실행하면 ghost 중복 발생
                     LIMIT 3
                 """)
 
@@ -610,28 +606,10 @@ async def lifespan(app: FastAPI):
                 for row in incomplete:
                     sid = row["session_id"]
                     user_content = row["content"]
-                    is_recovered = row.get("model_used") == "recovered"
                     try:
+                        # HTTP 대신 서비스 함수 직접 호출 (인증 우회)
                         from app.services.chat_service import send_message_stream, with_background_completion
                         import asyncio as _ri_asyncio
-
-                        # recovered 세션: 마지막 user 메시지 + 이어쓰기 지시
-                        if is_recovered:
-                            _last_user = await conn.fetchval(
-                                "SELECT content FROM chat_messages "
-                                "WHERE session_id = $1::uuid AND role = 'user' "
-                                "ORDER BY created_at DESC LIMIT 1",
-                                sid,
-                            )
-                            if _last_user:
-                                user_content = (
-                                    f"{_last_user}\n\n"
-                                    "[시스템] 이전 응답이 서버 재시작으로 중단되었습니다. "
-                                    "이전 응답 내용을 참고하여 이어서 완성해 주세요."
-                                )
-                            else:
-                                logger.info(f"resume_incomplete: session={sid[:8]} recovered but no user msg, skip")
-                                continue
 
                         async def _resume_session(_sid, _content):
                             try:
@@ -641,14 +619,13 @@ async def lifespan(app: FastAPI):
                                 )
                                 bg = with_background_completion(stream, session_id=_sid)
                                 async for _ in bg:
-                                    pass
+                                    pass  # 백그라운드에서 완료까지 소비
                                 logger.info(f"resume_incomplete: session={_sid[:8]} completed")
                             except Exception as _e:
                                 logger.warning(f"resume_incomplete: session={_sid[:8]} stream_error={_e}")
 
                         _ri_asyncio.create_task(_resume_session(sid, user_content))
-                        _mode = "recovered-resume" if is_recovered else "direct"
-                        logger.info(f"resume_incomplete: session={sid[:8]} re-triggered ({_mode})")
+                        logger.info(f"resume_incomplete: session={sid[:8]} re-triggered (direct)")
                     except Exception as e:
                         logger.warning(f"resume_incomplete: session={sid[:8]} error={e}")
         except Exception as e:
