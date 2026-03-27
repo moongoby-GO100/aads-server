@@ -34,7 +34,7 @@ import asyncio as _heartbeat_asyncio
 
 async def with_heartbeat(
     gen: AsyncGenerator[str, None],
-    interval: float = 5.0,
+    interval: float = 3.0,
 ) -> AsyncGenerator[str, None]:
     """Wrap an SSE async generator to interleave heartbeat events.
 
@@ -42,7 +42,7 @@ async def with_heartbeat(
     a lightweight ``{"type": "heartbeat"}`` SSE line is emitted so that
     Cloudflare(100s)/Nginx/frontend can keep the connection alive.
 
-    interval=5s → Cloudflare 100s 유휴 타임아웃 대비 충분한 여유 (P0-FIX: 8s→5s).
+    interval=3s → Cloudflare 100s 유휴 타임아웃 대비 충분한 여유 (P0-FIX: 5s→3s).
     """
     HEARTBEAT = f'data: {json.dumps({"type": "heartbeat"})}\n\n'
     ait = gen.__aiter__()
@@ -361,7 +361,7 @@ async def with_background_completion(
     # producer/도구 블로킹과 완전 분리된 asyncio.Task에서 5초마다 heartbeat 전송.
     # 3중 안전장치: (1) heartbeat_pump → queue, (2) consumer timeout → 직접 yield,
     # (3) pump 비정상 종료 시 자동 재시작.
-    _HB_INTERVAL = 5.0  # 기본 5초: Cloudflare 100s/nginx 600s 대비 충분한 여유
+    _HB_INTERVAL = 3.0  # 기본 3초: Cloudflare 100s/nginx 600s 대비 충분한 여유 (P0-FIX: 5s→3s)
     _HB_INTERVAL_TOOL = 2.0  # 도구 실행 중 2초: 긴 도구 실행 시 연결 안정성 강화
     _HB_LINE = f'data: {json.dumps({"type": "heartbeat"})}\n\n'
 
