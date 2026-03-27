@@ -155,6 +155,13 @@ class ToolExecutor:
             "pipeline_c_start":       self._pipeline_runner_submit,  # 자동 전환
             "pipeline_c_status":      self._pipeline_c_status,
             "pipeline_c_approve":     self._pipeline_c_approve,
+            # 자동 추가 (check_tool_consistency --fix)
+            "add_agenda": self._add_agenda,
+            "decide_agenda": self._decide_agenda,
+            "get_agenda": self._get_agenda,
+            "list_agendas": self._list_agendas,
+            "search_agendas": self._search_agendas,
+            "update_agenda": self._update_agenda,
             # 첨부파일 재읽기
             "read_uploaded_file":     self._read_uploaded_file,
             # 작업 모니터
@@ -2122,6 +2129,37 @@ class ToolExecutor:
         return {"status": "list", "files": file_list, "total": len(file_list),
                 "hint": "특정 파일을 읽으려면 filename에 정확한 이름을 지정하세요."}
 
+
+
+    async def _add_agenda(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("add_agenda", inp, "", "")
+
+    async def _decide_agenda(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("decide_agenda", inp, "", "")
+
+    async def _get_agenda(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("get_agenda", inp, "", "")
+
+    async def _list_agendas(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("list_agendas", inp, "", "")
+
+    async def _search_agendas(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("search_agendas", inp, "", "")
+
+    async def _update_agenda(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("update_agenda", inp, "", "")
 
 # ─── 하위 호환성 ─────────────────────────────────────────────────────────────
 

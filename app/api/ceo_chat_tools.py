@@ -1288,16 +1288,22 @@ _MAX_LOG_BYTES = 10 * 1024   # 10 KB
 _MAX_URL_BYTES = 20 * 1024   # 20 KB
 _MAX_DB_ROWS = 50
 
-# ─── Browser 보안 상수 (AADS-159, 하드코딩 — LLM 우회 불가) ──────────────
-_BROWSER_ALLOWED_DOMAINS = frozenset([
-    "newtalk.kr",
-    "aads.newtalk.kr",
-    "github.com",
-    "raw.githubusercontent.com",
-    "localhost",
-    "127.0.0.1",
+# ─── Browser 보안 상수 (AADS-159→블랙리스트 전환, CEO 지시, LLM 우회 불가) ───
+import ipaddress as _ipaddress
+
+_BROWSER_BLOCKED_HOSTS = frozenset([
+    "metadata.google.internal", "metadata.google.internal.",
+    "169.254.169.254",
 ])
-_BROWSER_ALLOWED_SUFFIX = ".newtalk.kr"
+_BROWSER_BLOCKED_PORTS = frozenset([5432, 6379, 3306, 27017, 9200, 2379, 8500])
+_BROWSER_SAFE_HOSTS = frozenset(["localhost", "127.0.0.1", "::1"])
+_BROWSER_PRIVATE_NETWORKS = [
+    _ipaddress.ip_network("10.0.0.0/8"),
+    _ipaddress.ip_network("172.16.0.0/12"),
+    _ipaddress.ip_network("192.168.0.0/16"),
+    _ipaddress.ip_network("169.254.0.0/16"),
+    _ipaddress.ip_network("fc00::/7"),
+]
 _BROWSER_TIMEOUT_MS = 60_000   # 60초 세션 타임아웃
 _BROWSER_MAX_TABS = 3          # 최대 3탭
 
@@ -2318,16 +2324,32 @@ async def tool_pipeline_c_retry(job_id: str) -> str:
 # ─── Browser 도구 함수 (AADS-159) ──────────────────────────────────────────────
 
 def _browser_domain_ok(url: str) -> Optional[str]:
-    """도메인 화이트리스트 검사. 차단이면 에러 문자열, 통과이면 None."""
+    """블랙리스트 보안 검사. 차단이면 에러 문자열, 통과이면 None."""
     try:
-        hostname = (urlparse(url).hostname or "").lower()
+        parsed = urlparse(url)
+        hostname = (parsed.hostname or "").lower()
+        scheme = (parsed.scheme or "").lower()
+        port = parsed.port
     except Exception:
         return "[접근 차단] URL 파싱 실패"
-    if hostname in _BROWSER_ALLOWED_DOMAINS:
+    if not hostname:
+        return "[접근 차단] 호스트명이 없습니다"
+    if scheme not in ("http", "https", ""):
+        return f"[접근 차단] 허용되지 않은 프로토콜: {scheme}"
+    if port and port in _BROWSER_BLOCKED_PORTS:
+        return f"[접근 차단] 민감 포트 접근 불가: {port}"
+    if hostname in _BROWSER_SAFE_HOSTS:
         return None
-    if hostname.endswith(_BROWSER_ALLOWED_SUFFIX):
-        return None
-    return f"[접근 차단] 허용되지 않은 도메인입니다: {hostname}"
+    if hostname in _BROWSER_BLOCKED_HOSTS:
+        return f"[접근 차단] 보안 차단 호스트: {hostname}"
+    try:
+        addr = _ipaddress.ip_address(hostname)
+        for net in _BROWSER_PRIVATE_NETWORKS:
+            if addr in net:
+                return f"[접근 차단] 내부 네트워크 접근 불가: {hostname}"
+    except ValueError:
+        pass
+    return None
 
 
 async def _acquire_pw_context() -> Tuple[Any, Optional[str]]:
