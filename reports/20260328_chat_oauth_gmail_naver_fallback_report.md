@@ -16,11 +16,14 @@
 
 ## 검증
 
-- `python3 -m py_compile app/services/model_selector.py` 통과.
+- 로컬: pre-commit(ruff) + 단위 테스트 + LLM smoke (커밋 시)
+- 배포 게이트: `deploy.sh code` — Phase 0.5 컨테이너 내 `py_compile` + `app.main` import 통과
 
 ## 배포
 
-- Docker 기반 `aads-server` 이미지 재빌드/재기동 후 반영 필요 (본 환경에서 미실행 시 **미배포**).
+- **완료** (2026-03-28 KST): `bash /root/aads/aads-server/deploy.sh code`
+  - `app` 볼륨 마운트(`/root/aads/aads-server/app:/app/app`)로 코드 즉시 반영, `supervisorctl` graceful 재시작
+  - Health `http://localhost:8100/api/v1/health` OK (~12초), DB 스키마·채팅 테이블·LLM 상태 검증 통과
 
 ## 후속 권장
 
