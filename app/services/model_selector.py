@@ -24,9 +24,11 @@ logger = logging.getLogger(__name__)
 
 settings = Settings()
 
-# LiteLLM 경유: OAuth 토큰은 LiteLLM이 관리 (sync_litellm_oauth.sh)
+# LiteLLM 경유: 베이스 URL 단일화( _anthropic base_url == httpx URL ). 빈 env 문자열 방지.
 _LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
-_LITELLM_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
+_LITELLM_BASE_RESOLVED = (os.getenv("LITELLM_BASE_URL") or "").strip() or "http://aads-litellm:4000"
+_LITELLM_URL = _LITELLM_BASE_RESOLVED
+LITELLM_BASE_URL = _LITELLM_BASE_RESOLVED
 
 class _StripAuthTransport(httpx.AsyncBaseTransport):
     """SDK 자동 Authorization 헤더 제거 — LiteLLM x-api-key만 사용."""
@@ -61,7 +63,7 @@ def _quota_class_http_error(status: int, exc: BaseException) -> bool:
 
 
 def _switch_oat_token():
-    """OAuth 순서 교환 후 Anthropic 직접 클라이언트로 전환(한도 회피). 실패 시 LiteLLM 유지."""
+    """OAuth 순서 교환 후 Anthropic 직접 클라이언트로 전환(한도 회피). 직접 클라이언트 실패 시 순서 롤백."""
     global _anthropic
     from app.core.auth_provider import create_anthropic_client, rotate_oauth_primary_fallback
 
@@ -73,15 +75,15 @@ def _switch_oat_token():
         logger.warning("oat_token_switch: direct Anthropic client bound to new primary OAuth")
         return True
     except Exception as ex:
-        logger.warning("oat_token_switch: direct client failed %s — LiteLLM client restored", ex)
+        logger.warning("oat_token_switch: direct client failed %s — rolling back token order", ex)
+        rotate_oauth_primary_fallback()
         _anthropic = _get_anthropic_client()
-        return True
+        return False
 
 
 _anthropic = _get_anthropic_client()
 
-LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://aads-litellm:4000")
-LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
+LITELLM_API_KEY = _LITELLM_API_KEY
 
 # Claude CLI Relay (호스트에서 실행, Docker → host.docker.internal)
 _CLAUDE_RELAY_URL = os.getenv("CLAUDE_RELAY_URL", "http://host.docker.internal:8199")
@@ -1615,7 +1617,7 @@ async def _stream_anthropic(
 
         # 재시도 로직: 일시적 에러(400/429/529/503/네트워크)는 최대 10회 재시도
         # 400: Anthropic API 간헐적 invalid_request_error (2026-03 발생, ~50% 실패율)
-        _RETRYABLE_STATUS = {400, 429, 503, 529}
+        _RETRYABLE_STATUS = {400, 403, 429, 503, 529}
         _MAX_RETRIES = 10
         _retry_attempt = 0
         _last_error = None
