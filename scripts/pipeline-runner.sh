@@ -412,6 +412,8 @@ run_job() {
     _current_session_id="$session_id"
     # 서브셸 전파용 파일 기록 — 부모 셸 또는 재시작된 러너가 읽어 잔여 작업 정리
     echo "$job_id" > /tmp/.pipeline_current_job
+    # 서브셸 전파용 파일 기록 — 부모 셸 또는 재시작된 러너가 읽어 잔여 작업 정리
+    echo "$job_id" > /tmp/.pipeline_current_job
 
     # M4: 프로젝트 화이트리스트 검증
     if [[ ! " $VALID_PROJECTS " =~ " $project " ]]; then
@@ -1135,6 +1137,20 @@ main() {
         done
         project_filter="AND project IN ($_pf)"
         log "프로젝트 필터: $RUNNER_PROJECTS"
+    fi
+
+    # 파일 기반 잔여 job 정리 — 서브셸 전파 불가 문제 보완
+    # 러너가 재시작될 때, 이전 실행에서 running 상태로 남은 작업을 즉시 error로 마킹
+    if [ -f /tmp/.pipeline_current_job ]; then
+        prev_job=$(cat /tmp/.pipeline_current_job)
+        if [ -n "$prev_job" ]; then
+            db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+                       error_detail='runner_restarted',
+                       review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 재시작으로 중단]',
+                       updated_at=NOW() WHERE job_id='${prev_job}' AND status='running';" || true
+            log "WARN: 이전 running 작업 $prev_job 을 error로 정리 (러너 재시작)"
+        fi
+        rm -f /tmp/.pipeline_current_job
     fi
 
     # 파일 기반 잔여 job 정리 — 서브셸 전파 불가 문제 보완
