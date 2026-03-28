@@ -138,8 +138,99 @@ case "$MODE" in
             echo "[deploy.sh] ⚠️ CRITICAL: postgres 컨테이너 ID가 변경됨!"
         fi
         ;;
+    bluegreen)
+        echo "[deploy.sh] Phase 1: Blue-Green 무중단 배포"
+        BLUE_PORT=8100
+        GREEN_PORT=8102
+        BLUE_CONTAINER="aads-server"
+        GREEN_CONTAINER="aads-server-green"
+        NGINX_CONF="/etc/nginx/conf.d/aads.conf"
+
+        COMPOSE_FILE="-f ${COMPOSE_DIR}/docker-compose.prod.yml"
+
+        # 현재 활성 포트 감지 (/api/v1/ 블록의 proxy_pass만)
+        CURRENT_PORT=$(grep -A2 'location /api/v1/' "$NGINX_CONF" | grep -oP 'proxy_pass http://127\.0\.0\.1:\K[0-9]+' | head -1)
+        CURRENT_PORT=${CURRENT_PORT:-$BLUE_PORT}
+        if [[ "$CURRENT_PORT" == "$GREEN_PORT" ]]; then
+            NEW_PORT=$BLUE_PORT
+            NEW_CONTAINER=$BLUE_CONTAINER
+            OLD_CONTAINER=$GREEN_CONTAINER
+            PROFILE_CMD=""
+        else
+            NEW_PORT=$GREEN_PORT
+            NEW_CONTAINER=$GREEN_CONTAINER
+            OLD_CONTAINER=$BLUE_CONTAINER
+            PROFILE_CMD="--profile green"
+        fi
+        echo "[deploy.sh] 현재: :${CURRENT_PORT} → 전환 대상: :${NEW_PORT} (${NEW_CONTAINER})"
+
+        # ① 새 컨테이너 빌드 + 시작
+        cd "$COMPOSE_DIR"
+        echo "[deploy.sh] ① ${NEW_CONTAINER} 빌드 + 시작..."
+        docker compose $COMPOSE_FILE $PROFILE_CMD up -d --build --no-deps "$NEW_CONTAINER"
+
+        # ② 새 컨테이너 헬스체크 (최대 90초)
+        echo "[deploy.sh] ② ${NEW_CONTAINER} 헬스체크 (최대 90초)..."
+        BG_ELAPSED=0
+        BG_OK=false
+        while [[ $BG_ELAPSED -lt 90 ]]; do
+            sleep 3
+            BG_ELAPSED=$((BG_ELAPSED + 3))
+            if curl -sf "http://127.0.0.1:${NEW_PORT}/api/v1/health" >/dev/null 2>&1; then
+                echo "[deploy.sh] ② ✅ ${NEW_CONTAINER} 정상 (${BG_ELAPSED}초)"
+                BG_OK=true
+                break
+            fi
+            echo "[deploy.sh] 대기중... ${BG_ELAPSED}/90초"
+        done
+
+        if [[ "$BG_OK" != "true" ]]; then
+            echo "[deploy.sh] ❌ ${NEW_CONTAINER} 헬스체크 실패 — 롤백"
+            docker stop "$NEW_CONTAINER" 2>/dev/null || true
+            docker rm "$NEW_CONTAINER" 2>/dev/null || true
+            notify "❌ Blue-Green 실패: ${NEW_CONTAINER} 헬스체크 통과 못함"
+            exit 1
+        fi
+
+        # ③ nginx 전환 (/api/v1/ 메인 블록만 — conversations/memory 독립 포트 보호)
+        echo "[deploy.sh] ③ nginx 전환: :${CURRENT_PORT} → :${NEW_PORT}"
+        # conversations(8102), memory(18085) 포트를 건드리지 않도록
+        # /api/v1/; (세미콜론+끝) 패턴만 치환 — /api/v1/conversations, /api/v1/memory 제외
+        sed -i "s|proxy_pass http://127\.0\.0\.1:${CURRENT_PORT}/api/v1/;|proxy_pass http://127.0.0.1:${NEW_PORT}/api/v1/;|g" "$NGINX_CONF"
+        if ! nginx -t 2>/dev/null; then
+            echo "[deploy.sh] ❌ nginx 설정 오류 — 롤백"
+            sed -i "s|proxy_pass http://127\.0\.0\.1:${NEW_PORT}/api/v1/;|proxy_pass http://127.0.0.1:${CURRENT_PORT}/api/v1/;|g" "$NGINX_CONF"
+            docker stop "$NEW_CONTAINER" 2>/dev/null || true
+            notify "❌ Blue-Green 실패: nginx 설정 오류"
+            exit 1
+        fi
+        systemctl reload nginx
+
+        # ④ 전환 후 검증
+        sleep 2
+        if curl -sf "http://127.0.0.1:${NEW_PORT}/api/v1/health" >/dev/null 2>&1; then
+            echo "[deploy.sh] ④ ✅ 전환 검증 성공"
+        else
+            echo "[deploy.sh] ⚠️ 전환 후 검증 실패 — 이전 서버로 복원"
+            sed -i "s|proxy_pass http://127\.0\.0\.1:${NEW_PORT}/api/v1/;|proxy_pass http://127.0.0.1:${CURRENT_PORT}/api/v1/;|g" "$NGINX_CONF"
+            systemctl reload nginx
+            docker stop "$NEW_CONTAINER" 2>/dev/null || true
+            notify "❌ Blue-Green 실패: 전환 검증 실패 — 복원 완료"
+            exit 1
+        fi
+
+        # ⑤ 이전 컨테이너 graceful 종료
+        echo "[deploy.sh] ⑤ ${OLD_CONTAINER} graceful 종료..."
+        docker stop --time 30 "$OLD_CONTAINER" 2>/dev/null || true
+        if [[ "$OLD_CONTAINER" == "$GREEN_CONTAINER" ]]; then
+            docker rm "$OLD_CONTAINER" 2>/dev/null || true
+        fi
+
+        echo "[deploy.sh] ✅ Blue-Green 완료: :${NEW_PORT} 활성"
+        notify "✅ Blue-Green 배포 완료: :${CURRENT_PORT} → :${NEW_PORT} (중단 0초)"
+        ;;
     *)
-        echo "[deploy.sh] ERROR: 알 수 없는 모드 '$MODE'. code 또는 build 사용"
+        echo "[deploy.sh] ERROR: 알 수 없는 모드 '$MODE'. code|reload|build|bluegreen 사용"
         exit 1
         ;;
 esac

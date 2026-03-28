@@ -141,6 +141,66 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ★ Blue-Green: green 인스턴스 (profiles로 수동 시작만 가능)
+  aads-server-green:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aads-server-green
+    restart: "no"
+    stop_grace_period: 30s
+    ports:
+      - "8102:8080"
+    env_file:
+      - .env
+    environment:
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      - DATABASE_URL=postgresql://aads:aads_dev_local@aads-postgres:5432/aads
+      - TZ=Asia/Seoul
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - BRAVE_API_KEY=${BRAVE_API_KEY}
+      - DOCKER_HOST=tcp://aads-socket-proxy:2375
+    volumes:
+      - /root/aads/aads-server/app:/app/app:rw
+      - /root/aads/aads-server/mcp_servers:/app/mcp_servers:rw
+      - /root/aads/aads-server/migrations:/app/migrations:rw
+      - /root/aads/aads-server/scripts:/app/scripts:rw
+      - /root/aads/aads-server/supervisord.conf:/app/supervisord.conf:ro
+      - /root/.ssh:/root/.ssh:rw
+      - /root/.claude:/root/.claude:rw
+      - /root/.genspark/directives:/root/.genspark/directives:ro
+      - /root/project-docs:/root/project-docs:ro
+      - /root/aads/aads-docs/reports/ceo-documents:/root/aads/aads-docs/reports/ceo-documents:rw
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - aads_network
+    depends_on:
+      aads-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      docker-socket-proxy:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    profiles:
+      - green
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   aads-litellm:
     image: ghcr.io/berriai/litellm:main-latest
     container_name: aads-litellm
