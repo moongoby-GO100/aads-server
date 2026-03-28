@@ -1,10 +1,12 @@
 #!/bin/bash
 # AADS 안전 배포 게이트웨이
-# 사용법: deploy.sh [code|build]
-#   code  (기본) — supervisorctl restart (볼륨마운트로 코드 이미 반영)
-#   build        — docker compose up -d --build --no-deps aads-server (postgres 절대 건드리지 않음)
+# 사용법: deploy.sh [code|reload|build|bluegreen]
+#   code      (기본) — SIGTERM + 60초 대기 + supervisorctl start (graceful)
+#   reload           — supervisorctl restart (빠른 재기동, ~10초)
+#   build            — docker compose up -d --build --no-deps aads-server (1~3분 중단)
+#   bluegreen        — Blue↔Green 무중단 전환 (중단 0초, 자동 롤백, swing-back)
 #
-# 검증 3단계: Health Check → DB 스키마 검증 → 채팅 기능 테스트
+# 검증 6단계: 의존성→코드검증→배포→Health→DB스키마→채팅→LLM→프론트QA
 
 set -euo pipefail
 
@@ -205,6 +207,8 @@ case "$MODE" in
             exit 1
         fi
         systemctl reload nginx
+        # nginx 소스 동기화 (라이브→소스, 다음 배포 시 불일치 방지)
+        cp "$NGINX_CONF" "${COMPOSE_DIR}/nginx-aads.conf"
 
         # ④ 전환 후 검증
         sleep 2
@@ -226,9 +230,58 @@ case "$MODE" in
             docker rm "$OLD_CONTAINER" 2>/dev/null || true
         fi
 
-        HEALTH_URL="http://localhost:${NEW_PORT}/api/v1/health"
-        echo "[deploy.sh] ✅ Blue-Green 완료: :${NEW_PORT} 활성"
-        notify "✅ Blue-Green 배포 완료: :${CURRENT_PORT} → :${NEW_PORT} (중단 0초)"
+        # ⑥ Swing-back: Green→Blue 복귀 (daemon-restart 안전)
+        # Green에 배포한 경우 Blue를 재기동 후 nginx를 Blue로 되돌려 항상 Blue가 상시 활성이 되게 한다.
+        # 이렇게 하면 Docker daemon 재시작 시 restart:always 인 Blue만 살아나고 502가 발생하지 않는다.
+        if [[ "$NEW_PORT" == "$GREEN_PORT" ]]; then
+            echo "[deploy.sh] ⑥ Swing-back: green→blue 복귀 (daemon-restart 안전)"
+
+            # Blue 재기동 (코드는 볼륨 마운트로 이미 최신)
+            cd "$COMPOSE_DIR"
+            docker compose $COMPOSE_FILE up -d --no-deps "$BLUE_CONTAINER"
+
+            # Blue 헬스체크 (최대 90초)
+            SWING_OK=false
+            for i in $(seq 1 30); do
+                sleep 3
+                if curl -sf "http://127.0.0.1:${BLUE_PORT}/api/v1/health" >/dev/null 2>&1; then
+                    SWING_OK=true
+                    echo "[deploy.sh] ⑥ ✅ Blue 복귀 정상 ($((i*3))초)"
+                    break
+                fi
+                echo "[deploy.sh] ⑥ Blue 헬스체크 대기... $((i*3))/90초"
+            done
+
+            if [[ "$SWING_OK" == "true" ]]; then
+                # nginx를 Blue로 전환
+                sed -i "s|proxy_pass http://127\.0\.0\.1:${GREEN_PORT}/api/v1/;|proxy_pass http://127.0.0.1:${BLUE_PORT}/api/v1/;|g" "$NGINX_CONF"
+                if nginx -t 2>/dev/null; then
+                    systemctl reload nginx
+                    cp "$NGINX_CONF" "${COMPOSE_DIR}/nginx-aads.conf"
+
+                    # Green 정리
+                    docker stop --time 10 "$GREEN_CONTAINER" 2>/dev/null || true
+                    docker rm "$GREEN_CONTAINER" 2>/dev/null || true
+
+                    HEALTH_URL="http://localhost:${BLUE_PORT}/api/v1/health"
+                    echo "[deploy.sh] ⑥ ✅ Blue 복귀 완료 — daemon-restart 안전"
+                    notify "✅ Blue-Green 배포 완료 (swing-back): Blue(:${BLUE_PORT}) 활성 (중단 0초)"
+                else
+                    echo "[deploy.sh] ⑥ ⚠️ nginx 설정 오류 — Green 유지"
+                    HEALTH_URL="http://localhost:${GREEN_PORT}/api/v1/health"
+                    notify "⚠️ Swing-back nginx 오류 — Green(:${GREEN_PORT}) 유지 중"
+                fi
+            else
+                echo "[deploy.sh] ⑥ ⚠️ Blue 복귀 실패 — Green 유지"
+                HEALTH_URL="http://localhost:${GREEN_PORT}/api/v1/health"
+                notify "⚠️ Swing-back 실패 — Green(:${GREEN_PORT}) 유지 중 (daemon-restart 시 수동 복구 필요)"
+            fi
+        else
+            # Green→Blue 전환 완료 (swing-back 불필요)
+            HEALTH_URL="http://localhost:${NEW_PORT}/api/v1/health"
+            echo "[deploy.sh] ✅ Blue-Green 완료: :${NEW_PORT} 활성"
+            notify "✅ Blue-Green 배포 완료: :${CURRENT_PORT} → :${NEW_PORT} (중단 0초)"
+        fi
         ;;
     *)
         echo "[deploy.sh] ERROR: 알 수 없는 모드 '$MODE'. code|reload|build|bluegreen 사용"
