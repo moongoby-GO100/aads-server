@@ -44,7 +44,17 @@
   - `app` 볼륨 마운트(`/root/aads/aads-server/app:/app/app`)로 코드 즉시 반영, `supervisorctl` graceful 재시작
   - Health `http://localhost:8100/api/v1/health` OK (~12초), DB 스키마·채팅 테이블·LLM 상태 검증 통과
 
+## 채팅창 직접 재검증 (2026-03-28 ~09:32 KST)
+
+- **URL**: `https://aads.newtalk.kr/chat`
+- **세션**: `[AADS] 프로젝트 매니저` → `AADS-007` (`#1a281a16-8fef-4ed4-8f26-65c6eb808d9d`)
+- **모델**: `Gemini 3.1 Flash-Lite Preview` (LiteLLM·API 경로; 입력창 옆 **Naver** 표시)
+- **전송 문구**: `[Gemini검증] 연결 OK면 한글 한 단어로 답해줘`
+- **결과**: 어시스턴트 응답 **「정상」**, 메타 `[gemini-3.1-flash-lite-preview]` · 시각 09:31:58, 상단 토스트 **응답이 완료되었습니다**.
+- **참고**: 같은 스레드에 이전 Opus 한도 안내(`You've hit your limit · resets Mar 31…`) 버블이 남아 있으나, **이번 Gemini 요청은 스트리밍 완료까지 정상**.
+
 ## 후속 권장
 
 - (선택) `_cli_session_map`을 `session_id`만이 아니라 `session_id + oauth_slot` 단위로 관리하면, 한 세션에서 슬롯 전환 없이 다시 슬롯1을 쓸 때 resume 일관성을 더 엄밀히 맞출 수 있음.
 - (선택) UI 토글과 Relay `CURRENT_OAUTH`를 연동하려면 Relay `POST /oauth/switch` 또는 동일 의미의 백엔드 API가 필요함 (현재는 분리됨).
+- **남은 과제**: Opus CLI 릴레이 슬롯1 한도 후 슬롯2까지 **UI·로그 완주** 시 `bg_producer_error` / `CancelledError` 가능성 — `chat_service` SSE 생산자 취소 범위 별도 점검.
