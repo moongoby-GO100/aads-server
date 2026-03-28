@@ -321,7 +321,8 @@ async def handle_stream(request):
                     _save_session_map()
                     logger.info("Cleared stale session: aads=%s", aads_session_id[:8])
 
-            if aads_session_id and captured_cli_session_id:
+            # 실패(exit!=0) 시 세션 저장 금지 — OAuth 슬롯 폴백 시 잘못된 --resume 방지
+            if proc.returncode == 0 and aads_session_id and captured_cli_session_id:
                 old_cli = _session_map.get(aads_session_id)
                 if old_cli != captured_cli_session_id:
                     _session_map[aads_session_id] = captured_cli_session_id

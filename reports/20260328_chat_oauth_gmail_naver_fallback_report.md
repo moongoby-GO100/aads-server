@@ -8,11 +8,30 @@
 
 ## 코드 조치
 
-- 파일: `app/services/model_selector.py`
-- 내용: `_stream_cli_relay`가 `error`로 끝난 뒤 다음 폴백(다른 OAuth 슬롯 또는 SDK)으로 넘어가기 전에
+### 1) `app/services/model_selector.py`
+
+- `_stream_cli_relay`가 `error`로 끝난 뒤 다음 폴백(다른 OAuth 슬롯 또는 SDK)으로 넘어가기 전에
   - 메모리 `_cli_session_map`에서 해당 `session_id` 제거
   - `DELETE {CLAUDE_RELAY_URL}/sessions/{session_id}` 호출로 릴레이 쪽 매핑 제거
-- 효과: Gmail 실패 직후 Naver 재시도는 **새 CLI 대화**로 진행(요청 본문의 메시지 히스토리는 그대로 전달).
+- 효과: 폴백 시 서버 쪽 CLI 매핑을 비우도록 시도.
+
+### 2) `scripts/claude_relay_server.py` (E2E 중 추가)
+
+- **문제**: `CLI exited 1`(한도/오류)인데도 `Session mapped`로 `/tmp/claude_relay_sessions.json`에 기록됨 → 슬롯2가 Gmail CLI 세션으로 `--resume`하는 문제가 **재발**.
+- **조치**: `proc.returncode == 0`일 때만 세션 매핑 저장.
+- **호스트 배포**: `systemctl restart claude-relay` (8199 health 확인).
+
+## 채팅창 E2E (2026-03-28 KST)
+
+- **URL**: `https://aads.newtalk.kr/chat`
+- **절차**: 워크스페이스 `[AADS] 프로젝트 매니저` → 새 세션 `AADS-006` (`#27df9383-dbb8-422e-a951-c2e25723e5a2`) → 모델 Opus → 메시지 `[배포검증] 한 단어로만 답하세요: OK` 전송.
+- **서버 로그 (`app.services.model_selector`)**:
+  - `relay_err: claude-opus/slot1[0] — You've hit your limit · resets Mar 31...`
+  - `DELETE /sessions/27df9383-...` 호출 시점에 릴레이는 아직 매핑 없음 → **HTTP 404** (타이밍).
+  - `fallback[1/4]: claude-opus slot=2` 까지 진행 확인.
+- **릴레이 로그 (수정 전)**: 슬롯1 실패 후에도 `Session mapped: aads=27df9383 -> cli=e1a6e1a1` 기록 → 위 2)번 수정 필요성 입증.
+- **UI**: 한도 문구가 스트림에 노출(중복 표시), 장시간 스트리밍 표시 — 슬롯2/후속 폴백 대기 또는 교착 가능성. 사용자 **중지**로 종료.
+- **결론**: “슬롯1 실패 → 슬롯2 시도”는 로그로 확인. 완전한 Naver 응답까지는 당시 **Gmail 한도 + 잘못된 세션 저장** 영향으로 UI에서 성공 확인 불가. 릴레이 `returncode==0` 조건 추가 후 동일 시나리오 재검증 권장.
 
 ## 검증
 
