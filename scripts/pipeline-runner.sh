@@ -295,6 +295,19 @@ _watchdog_check() {
                          RETURNING job_id;" 2>/dev/null) || true
     if [[ -n "$timed_out" ]]; then
         log "  WATCHDOG_TIMEOUT: $timed_out"
+        # 타임아웃된 작업의 session_id 조회 → 채팅 알림 + AI 자동 반응
+        for t_job in $timed_out; do
+            t_job="${t_job// /}"
+            [[ -z "$t_job" ]] && continue
+            local t_session
+            t_session=$(db_exec "SELECT chat_session_id FROM pipeline_jobs WHERE job_id='${t_job}';" 2>/dev/null) || true
+            t_session="${t_session// /}"
+            post_to_chat "$t_session" "⏰ [Pipeline Runner] 작업 타임아웃 (${MAX_JOB_RUNTIME}초 초과): $t_job — 자동 종료됨"
+            _notify_ai "$t_job"
+            local t_project
+            t_project=$(db_exec "SELECT project FROM pipeline_jobs WHERE job_id='${t_job}';" 2>/dev/null) || true
+            promote_next_queued "${t_project// /}"
+        done
     fi
 
     # running 상태이면서 runner_pid가 설정된 작업 — 프로세스 생존 확인
@@ -315,6 +328,15 @@ _watchdog_check() {
                            error_detail='process_died',
                            review_feedback=COALESCE(review_feedback,'') || E'\n[Watchdog] Claude Code 프로세스(PID=${s_pid}) 죽음 감지',
                            updated_at=NOW() WHERE job_id='${s_job_id}' AND status='running';"
+                # 채팅 알림 + AI 자동 반응 트리거
+                local d_session
+                d_session=$(db_exec "SELECT chat_session_id FROM pipeline_jobs WHERE job_id='${s_job_id}';" 2>/dev/null) || true
+                d_session="${d_session// /}"
+                post_to_chat "$d_session" "💀 [Pipeline Runner] 프로세스 사망 감지 (PID=${s_pid}): $s_job_id — 자동 에러 처리됨"
+                _notify_ai "$s_job_id"
+                local d_project
+                d_project=$(db_exec "SELECT project FROM pipeline_jobs WHERE job_id='${s_job_id}';" 2>/dev/null) || true
+                promote_next_queued "${d_project// /}"
             fi
         done <<< "$stale_rows"
     fi
@@ -384,6 +406,12 @@ claim_rejected_job() {
 run_job() {
     local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5"
     local output_file="$ARTIFACT_DIR/${job_id}.out" err_file="$ARTIFACT_DIR/${job_id}.err"
+
+    # 전역 변수 설정 — cleanup()에서 러너 종료 시 현재 작업을 에러로 마킹하기 위함
+    _current_job_id="$job_id"
+    _current_session_id="$session_id"
+    # 서브셸 전파용 파일 기록 — 부모 셸 또는 재시작된 러너가 읽어 잔여 작업 정리
+    echo "$job_id" > /tmp/.pipeline_current_job
 
     # M4: 프로젝트 화이트리스트 검증
     if [[ ! " $VALID_PROJECTS " =~ " $project " ]]; then
@@ -537,6 +565,9 @@ $out_tail")
         fi
         _notify_ai "$job_id"
         promote_next_queued "$project"
+        _current_job_id=""
+        _current_session_id=""
+        rm -f /tmp/.pipeline_current_job
         return 1
     fi
 
@@ -627,16 +658,24 @@ ${diff_summary}
 
     # awaiting_approval은 running이 아니므로 다음 queued 작업 승격 가능
     promote_next_queued "$project"
+
+    # 전역 변수 클리어 — 작업 완료/대기 전환
+    _current_job_id=""
+    _current_session_id=""
+    rm -f /tmp/.pipeline_current_job
 }
 
 # 채팅AI 자동 반응 트리거 — 작업 완료/실패 시 AI가 결과를 확인·검수·조치
 _notify_ai() {
     local job_id="$1"
     # aads-server의 notify API 호출 (백그라운드, 실패해도 무시)
-    curl -4 -sf -X POST "${AADS_API_URL}/api/v1/pipeline/jobs/${job_id}/notify" \
+    # 동기 호출 (최대 10초) — 결과를 로그에 기록
+    local notify_http_code
+    notify_http_code=$(curl -4 -s -o /dev/null -w "%{http_code}" \
+         -X POST "${AADS_API_URL}/api/v1/pipeline/jobs/${job_id}/notify" \
          -H "x-monitor-key: internal" \
-         --max-time 10 >/dev/null 2>&1 &
-    log "  NOTIFY_AI job=$job_id"
+         --max-time 10 2>/dev/null) || notify_http_code="fail"
+    log "  NOTIFY_AI job=$job_id http=$notify_http_code"
 }
 
 # H3: 임시파일 정리
@@ -948,6 +987,8 @@ deploy_job() {
             log "  ROLLBACK_REVERT_FAIL: git revert 실패 — 수동 복구 필요"
             _release_deploy_lock "$project" "$job_id"
             post_to_chat "$session_id" "🔴 [Pipeline Runner] 자동 롤백 실패 (git revert 불가) — 수동 복구 필요: $job_id"
+            _notify_ai "$job_id"
+            promote_next_queued "$project"
         fi
     fi
 
@@ -1031,13 +1072,17 @@ _recover_stuck_jobs() {
                      RETURNING job_id;" 2>/dev/null) || true
     if [[ -n "$stuck" ]]; then
         log "  RECOVERED stuck jobs: $stuck"
-        # 복구된 작업의 프로젝트별로 다음 queued 승격
+        # 복구된 작업의 프로젝트별로 다음 queued 승격 + 채팅 알림
         while IFS= read -r _recovered_id; do
             _recovered_id="${_recovered_id// /}"
             [[ -z "$_recovered_id" ]] && continue
-            local _rec_project
+            local _rec_project _rec_session
             _rec_project=$(db_exec "SELECT project FROM pipeline_jobs WHERE job_id='${_recovered_id}';" 2>/dev/null) || true
             _rec_project="${_rec_project// /}"
+            _rec_session=$(db_exec "SELECT chat_session_id FROM pipeline_jobs WHERE job_id='${_recovered_id}';" 2>/dev/null) || true
+            _rec_session="${_rec_session// /}"
+            post_to_chat "$_rec_session" "🔄 [Pipeline Runner] 장기 중단 작업 복구: $_recovered_id — 에러 처리됨"
+            _notify_ai "$_recovered_id"
             [[ -n "$_rec_project" ]] && promote_next_queued "$_rec_project"
         done <<< "$stuck"
     fi
@@ -1054,6 +1099,18 @@ _recover_stuck_jobs() {
                        RETURNING job_id;" 2>/dev/null) || true
     if [[ -n "$expired" ]]; then
         log "  EXPIRED approval-timeout jobs: $expired"
+        while IFS= read -r _exp_id; do
+            _exp_id="${_exp_id// /}"
+            [[ -z "$_exp_id" ]] && continue
+            local _exp_session _exp_project
+            _exp_session=$(db_exec "SELECT chat_session_id FROM pipeline_jobs WHERE job_id='${_exp_id}';" 2>/dev/null) || true
+            _exp_session="${_exp_session// /}"
+            _exp_project=$(db_exec "SELECT project FROM pipeline_jobs WHERE job_id='${_exp_id}';" 2>/dev/null) || true
+            _exp_project="${_exp_project// /}"
+            post_to_chat "$_exp_session" "⏰ [Pipeline Runner] 승인 타임아웃 (${APPROVAL_TIMEOUT_HOURS}시간 초과): $_exp_id — 자동 에러 처리됨"
+            _notify_ai "$_exp_id"
+            [[ -n "$_exp_project" ]] && promote_next_queued "$_exp_project"
+        done <<< "$expired"
     fi
 }
 
@@ -1078,6 +1135,20 @@ main() {
         done
         project_filter="AND project IN ($_pf)"
         log "프로젝트 필터: $RUNNER_PROJECTS"
+    fi
+
+    # 파일 기반 잔여 job 정리 — 서브셸 전파 불가 문제 보완
+    # 러너가 재시작될 때, 이전 실행에서 running 상태로 남은 작업을 즉시 error로 마킹
+    if [ -f /tmp/.pipeline_current_job ]; then
+        prev_job=$(cat /tmp/.pipeline_current_job)
+        if [ -n "$prev_job" ]; then
+            db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+                       error_detail='runner_restarted',
+                       review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 재시작으로 중단]',
+                       updated_at=NOW() WHERE job_id='${prev_job}' AND status='running';" || true
+            log "WARN: 이전 running 작업 $prev_job 을 error로 정리 (러너 재시작)"
+        fi
+        rm -f /tmp/.pipeline_current_job
     fi
 
     # C3: 시작 시 stuck 작업 복구
@@ -1149,14 +1220,19 @@ main() {
 
 # ── 시그널 핸들링 ────────────────────────────────────────────────────
 _current_job_id=""
+_current_session_id=""
 cleanup() {
     log "═══ Pipeline Runner v2.1 종료 ═══"
     # 현재 실행 중인 작업이 있으면 error로 마킹
     if [[ -n "$_current_job_id" ]]; then
         db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+                   error_detail='runner_shutdown',
                    review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 종료로 중단]',
                    updated_at=NOW() WHERE job_id='${_current_job_id}' AND status='running';" || true
         log "  Marked $_current_job_id as error (runner shutdown)"
+        # 채팅 알림
+        post_to_chat "$_current_session_id" "🔴 [Pipeline Runner] 러너 종료로 작업 중단: $_current_job_id"
+        _notify_ai "$_current_job_id"
     fi
     exit 0
 }
