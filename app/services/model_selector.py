@@ -81,6 +81,26 @@ def set_key_order(primary: str) -> bool:
 _cli_session_map: Dict[str, str] = {}  # {aads_session_id: cli_session_id}
 
 
+async def _relay_clear_aads_session_for_oauth_fallback(session_id: Optional[str]) -> None:
+    """OAuth 슬롯 전환(Gmail→Naver) 전에 호출.
+
+    Relay는 session_id당 CLI session_id를 하나만 저장한다. 슬롯1에서 만든 CLI 세션으로
+    슬롯2 토큰이 --resume 하면 인증/계정 불일치로 실패한다. 폴백 전 매핑 제거 필수.
+    """
+    if not session_id:
+        return
+    _cli_session_map.pop(session_id, None)
+    if not _CLAUDE_CLI_ENABLED:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0)) as client:
+            resp = await client.delete("{}/sessions/{}".format(_CLAUDE_RELAY_URL, session_id))
+            if resp.status_code not in (200, 404):
+                logger.warning("relay_session_clear: HTTP %s", resp.status_code)
+    except Exception as ex:
+        logger.warning("relay_session_clear_failed: %s", ex)
+
+
 # AADS-186E-2: Extended Thinking 전역 스위치 (기본 활성화)
 _EXTENDED_THINKING_ENABLED = os.getenv("EXTENDED_THINKING_ENABLED", "true").lower() == "true"
 
@@ -209,6 +229,8 @@ async def call_stream(
                 yield event
             if not _err:
                 return
+
+            await _relay_clear_aads_session_for_oauth_fallback(session_id)
 
             # Tier2: Agent SDK (첫 계정에서만 — 컨테이너 고정 토큰)
             if _fs == _ACCOUNT_SLOTS[0]:
