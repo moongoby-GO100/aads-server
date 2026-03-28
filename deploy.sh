@@ -149,7 +149,7 @@ case "$MODE" in
         COMPOSE_FILE="-f ${COMPOSE_DIR}/docker-compose.prod.yml"
 
         # 현재 활성 포트 감지 (/api/v1/ 블록의 proxy_pass만)
-        CURRENT_PORT=$(grep -A2 'location /api/v1/' "$NGINX_CONF" | grep -oP 'proxy_pass http://127\.0\.0\.1:\K[0-9]+' | head -1)
+        CURRENT_PORT=$(grep -A5 'location /api/v1/ {' "$NGINX_CONF" | grep -oP 'proxy_pass http://127\.0\.0\.1:\K[0-9]+' | head -1)
         CURRENT_PORT=${CURRENT_PORT:-$BLUE_PORT}
         if [[ "$CURRENT_PORT" == "$GREEN_PORT" ]]; then
             NEW_PORT=$BLUE_PORT
