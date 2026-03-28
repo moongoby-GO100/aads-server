@@ -234,7 +234,7 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
     "directive_gen":      ["generate_directive"],
     "cto_directive":      ["generate_directive"],
     # Tier 4: 외부 검색
-    "search":             ["web_search", "search_searxng"],
+    "search":             ["search_searxng", "web_search"],
     "url_read":           ["jina_read"],
     # Tier 6: 브라우저 — 명시적 요청 시만
     "browser":            ["browser_navigate"],
@@ -2109,7 +2109,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
     "action": ["directive_create", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file"],
-    "search": ["web_search", "search_searxng"],
+    "search": ["search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
     "browser": ["read_remote_file", "list_remote_dir", "browser_navigate", "browser_snapshot", "browser_screenshot", "capture_screenshot", "browser_click", "browser_fill", "browser_tab_list"],

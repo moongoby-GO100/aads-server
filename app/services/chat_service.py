@@ -2623,6 +2623,37 @@ async def send_message_stream(
         # 7. Gemini Direct (Grounding / Deep Research)
         if intent_result.use_gemini_direct:
             if intent_result.gemini_mode == "grounding":
+                # A안: SearXNG 우선 실행 (무료, 무제한, <3초)
+                _searxng_ok = False
+                try:
+                    from app.services.searxng_search_service import search_searxng
+                    from app.services.gemini_search_service import SearchResult as _SxngResult
+                    _sxng = await search_searxng(content, categories="general", count=10)
+                    if not _sxng.get("error") and _sxng.get("results"):
+                        _items = [it for it in _sxng["results"][:10] if it.get("content")]
+                        if _items:
+                            _text = "\n\n".join(
+                                f"**{it.get('title', '')}**\n{it.get('content', '')}"
+                                for it in _items
+                            )
+                            _cites = [{"title": it.get("title", ""), "url": it.get("url", "")}
+                                      for it in _items if it.get("url")]
+                            result = _SxngResult(text=_text, citations=_cites)
+                            yield f"data: {json.dumps({'type': 'delta', 'content': result.text})}\n\n"
+                            if result.citations:
+                                yield f"data: {json.dumps({'type': 'sources', 'sources': result.citations})}\n\n"
+                            await _save_and_update_session(
+                                sid, result.text, model_used="searxng", intent=intent,
+                                cost=Decimal("0"), sources=result.citations)
+                            yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': 'searxng', 'cost': '0'})}\n\n"
+                            _searxng_ok = True
+                except Exception as _sxng_err:
+                    logger.warning(f"searxng_grounding_prefetch_failed: {_sxng_err}")
+
+                if _searxng_ok:
+                    return
+
+                # SearXNG 실패 시 기존 Gemini+Naver 폴백 체인
                 import asyncio as _search_asyncio
                 from app.services.gemini_search_service import GeminiSearchService
                 from app.services.naver_search_service import NaverSearchService
