@@ -226,6 +226,7 @@ case "$MODE" in
             docker rm "$OLD_CONTAINER" 2>/dev/null || true
         fi
 
+        HEALTH_URL="http://localhost:${NEW_PORT}/api/v1/health"
         echo "[deploy.sh] ✅ Blue-Green 완료: :${NEW_PORT} 활성"
         notify "✅ Blue-Green 배포 완료: :${CURRENT_PORT} → :${NEW_PORT} (중단 0초)"
         ;;
