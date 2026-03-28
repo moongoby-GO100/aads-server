@@ -40,6 +40,7 @@ _TOTAL_CHAR_LIMIT = 4000  # ~2700 토큰 (correction_directive 이중 배치 + �
 _CONFIDENCE = {
     "ceo_preference": float(os.getenv("CONFIDENCE_CEO_PREF", "0.2")),
     "decision": float(os.getenv("CONFIDENCE_CEO_PREF", "0.2")),
+    "ceo_correction": float(os.getenv("CONFIDENCE_CEO_PREF", "0.2")),
     "tool_strategy": float(os.getenv("CONFIDENCE_TOOL_STRATEGY", "0.3")),
     "project_pattern": float(os.getenv("CONFIDENCE_TOOL_STRATEGY", "0.3")),
     "discovery": float(os.getenv("CONFIDENCE_DISCOVERY", "0.40")),  # P5: 0.55→0.40 (실평균 0.41 반영, 대부분 필터링 문제 해결)
@@ -140,9 +141,9 @@ async def _build_preferences() -> tuple[str, list[int]]:
             rows = await conn.fetch(
                 """
                 SELECT id, key, value FROM ai_observations
-                WHERE category IN ('ceo_preference', 'decision')
+                WHERE category IN ('ceo_preference', 'decision', 'ceo_correction')
                   AND confidence >= $1
-                ORDER BY confidence DESC, updated_at DESC
+                ORDER BY (confidence * EXP(-0.1 * EXTRACT(EPOCH FROM (NOW() - COALESCE(updated_at, created_at))) / 86400)) DESC
                 LIMIT 15
                 """,
                 _conf,
@@ -173,7 +174,7 @@ async def _build_tool_strategy(project_id: Optional[str] = None) -> tuple[str, l
                       AND (project IS NULL OR project = $1)
                     ORDER BY
                         CASE WHEN project = $1 THEN 0 ELSE 1 END,
-                        confidence DESC, updated_at DESC
+                        (confidence * EXP(-0.1 * EXTRACT(EPOCH FROM (NOW() - COALESCE(updated_at, created_at))) / 86400)) DESC
                     LIMIT 10
                     """,
                     project_id, _conf,
