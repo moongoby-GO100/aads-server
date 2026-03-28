@@ -43,7 +43,7 @@ async def _get_cached_or_build(key: str, builder_coro) -> str:
 from app.core.prompts.system_prompt_v2 import build_layer1 as _build_layer1_raw, WS_LAYER1 as _WS_LAYER1
 
 
-def build_layer1(ws_key: str, base_system_prompt: str = "") -> str:
+def build_layer1(ws_key: str, base_system_prompt: str = "", **_kwargs) -> str:
     """#34: 캐시된 Layer 1 빌더. ws_key + base_prompt 조합으로 캐시."""
     cache_key = f"{ws_key}::{hashlib.sha256(base_system_prompt.encode()).hexdigest()[:16]}"
     if cache_key not in _layer1_cache:

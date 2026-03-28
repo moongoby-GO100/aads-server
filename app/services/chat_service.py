@@ -2489,7 +2489,7 @@ async def send_message_stream(
         if _semantic_cache_hit:
             _cached_resp = _semantic_cache_hit.get("cached_response", "")
             _cached_sim = _semantic_cache_hit.get("similarity", 0)
-            logger.info("semantic_cache_hit", similarity=f"{_cached_sim:.3f}", session=session_id[:8])
+            logger.info(f"semantic_cache_hit similarity={_cached_sim:.3f} session={session_id[:8]}")
             yield f'data: {json.dumps({"type": "delta", "content": _cached_resp})}\n\n'
             yield f'data: {json.dumps({"type": "message_stop", "cached": True})}\n\n'
             await _save_and_update_session(
@@ -2506,7 +2506,7 @@ async def send_message_stream(
         # 모순 감지 경고 주입
         if _contradiction_warning:
             system_prompt = system_prompt + "\n\n" + _contradiction_warning
-            logger.info("contradiction_warning_injected", session=session_id[:8])
+            logger.info(f"contradiction_warning_injected session={session_id[:8]}")
 
         intent = intent_override if intent_override else intent_result.intent
 
