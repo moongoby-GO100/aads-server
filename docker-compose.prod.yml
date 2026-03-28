@@ -102,8 +102,6 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - BRAVE_API_KEY=${BRAVE_API_KEY}
       - DOCKER_HOST=tcp://aads-socket-proxy:2375
-      - LITELLM_BASE_URL=${LITELLM_BASE_URL:-http://aads-litellm:4000}
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-litellm}
     volumes:
       # ★ 소스 볼륨 마운트: 호스트 수정 → 컨테이너 즉시 반영
       - /root/aads/aads-server/app:/app/app:rw
@@ -130,7 +128,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1.5G
+          memory: 2G
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
       interval: 15s

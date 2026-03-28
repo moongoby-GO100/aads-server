@@ -13,6 +13,22 @@ COMPOSE_DIR="/root/aads/aads-server"
 HEALTH_URL="http://localhost:8100/api/v1/health"
 MAX_WAIT=30
 INTERVAL=2
+
+# ── 배포 중복 호출 방지 (lockfile) ──
+LOCKFILE="/tmp/aads-deploy.lock"
+if [ -f "$LOCKFILE" ]; then
+    LOCK_PID=$(cat "$LOCKFILE" 2>/dev/null || echo "")
+    if [ -n "$LOCK_PID" ] && kill -0 "$LOCK_PID" 2>/dev/null; then
+        echo "[deploy.sh] ❌ 배포 이미 진행 중 (PID=$LOCK_PID). 중복 호출 차단."
+        exit 1
+    else
+        echo "[deploy.sh] ⚠️ stale lockfile 제거 (PID=$LOCK_PID 종료됨)"
+        rm -f "$LOCKFILE"
+    fi
+fi
+echo $$ > "$LOCKFILE"
+trap "rm -f $LOCKFILE" EXIT
+
 # 텔레그램 알림 (환경변수 있으면 발송)
 notify() {
     local msg="$1"
@@ -86,6 +102,14 @@ echo "[deploy.sh] Phase 0.5: ✅ 코드 검증 통과"
 
 # ── Phase 1: 배포 실행 ──
 case "$MODE" in
+    reload)
+        echo "[deploy.sh] Phase 1: fast reload aads-api (supervisorctl restart)"
+        # 배포 플래그
+        docker exec aads-server touch /tmp/aads_deploy_restart 2>/dev/null || true
+        # restart = SIGTERM + 자동 start (supervisord가 처리, 대기 루프 불필요)
+        docker exec aads-server supervisorctl restart aads-api
+        echo "[deploy.sh] Phase 1: supervisorctl restart 완료 — health check 대기..."
+        ;;
     code)
         echo "[deploy.sh] Phase 1: graceful restart aads-api (SIGTERM + 60s wait)"
         # 배포 플래그 파일 생성 → 서버 startup 시 미완료 대화 자동 재실행 스킵
