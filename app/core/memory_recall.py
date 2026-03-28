@@ -26,13 +26,15 @@ logger = structlog.get_logger(__name__)
 
 # 토큰 예산 (한국어 1토큰 ≈ 1.5자 → 자수 상한)
 _BUDGET = {
-    "session_notes": 750,       # ~500 토큰
-    "preferences": 450,         # ~300 토큰
-    "tool_strategy": 600,       # ~400 토큰
-    "directives": 600,          # ~400 토큰
-    "discoveries": 600,         # ~400 토큰
-    "learned_memory": 450,      # ~300 토큰 (ai_meta_memory)
-    "correction_directives": 300,  # ~200 토큰 (Reflexion B1 반성 지시, 최근 3건)
+    "session_notes": 750,           # ~500 토큰
+    "preferences": 450,             # ~300 토큰
+    "tool_strategy": 600,           # ~400 토큰
+    "directives": 600,              # ~400 토큰
+    "discoveries": 600,             # ~400 토큰
+    "learned_memory": 450,          # ~300 토큰 (ai_meta_memory)
+    "correction_directives": 300,   # ~200 토큰 (Reflexion B1 반성 지시, 최근 3건)
+    "experience_lessons": 450,      # ~300 토큰 (AADS-P1-1 실시간 교훈, 최근 5건)
+    "visual_memories": 450,         # ~300 토큰 (이미지 분석 메모리, 최근 3건)
 }
 _TOTAL_CHAR_LIMIT = 4000  # ~2700 토큰 (correction_directive 이중 배치 + 세션노트 통합분 반영)
 
@@ -289,17 +291,18 @@ async def _build_discoveries(project_id: Optional[str] = None) -> tuple[str, lis
 
 
 async def _build_correction_directives() -> str:
-    """Reflexion(B1) correction_directive → 다음 턴 시스템 프롬프트 강제 주입.
-    ai_meta_memory에서 최근 3건만 조회하여 토큰 절약.
+    """Reflexion(B1/auto_reflexion_loop) correction_directive + strategy_update →
+    다음 턴 시스템 프롬프트 강제 주입.
+    ai_meta_memory에서 correction_directive 최근 3건 + strategy_update 최근 3건 조회.
     P2-FIX: COALESCE(updated_at, created_at)로 NULL 안전 정렬, 즉시 반영 보장."""
     try:
         async with _get_pool().acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT key, value FROM ai_meta_memory
-                WHERE category = 'correction_directive'
+                SELECT key, value, category FROM ai_meta_memory
+                WHERE category IN ('correction_directive', 'strategy_update')
                 ORDER BY COALESCE(updated_at, created_at) DESC NULLS LAST
-                LIMIT 3
+                LIMIT 6
                 """,
             )
             if not rows:
@@ -314,14 +317,75 @@ async def _build_correction_directives() -> str:
                     except Exception:
                         pass
                 if isinstance(val, dict):
-                    val_str = val.get("directive") or val.get("summary") or val.get("description") or _json.dumps(val, ensure_ascii=False)
+                    # strategy_update: strategy 필드 우선, escalation 표시
+                    if r["category"] == "strategy_update":
+                        val_str = val.get("strategy") or val.get("directive") or val.get("summary") or _json.dumps(val, ensure_ascii=False)
+                        escalation = val.get("escalation_needed", False)
+                        prefix = "[전략변경⚠]" if escalation else "[전략변경]"
+                    else:
+                        val_str = val.get("directive") or val.get("summary") or val.get("description") or _json.dumps(val, ensure_ascii=False)
+                        prefix = "[반성지시]"
                 else:
                     val_str = str(val)
-                lines.append(f"- [반성지시] {r['key']}: {val_str[:150]}")
+                    prefix = "[반성지시]" if r["category"] == "correction_directive" else "[전략변경]"
+                lines.append(f"- {prefix} {r['key']}: {val_str[:150]}")
             text = "\n".join(lines)
             return _truncate(text, _BUDGET["correction_directives"])
     except Exception as e:
         logger.warning("memory_recall_section_failed", section="correction_directives", error=str(e))
+        return ""
+
+
+async def _build_strategy_updates(project_id: Optional[str] = None) -> str:
+    """## 전략 수정 내역 섹션 — ai_meta_memory strategy_update 최근 3건.
+    auto_reflexion_loop가 3회 연속 실패 감지 시 생성한 전략 갱신 지시를 별도 섹션으로 주입.
+    escalation_needed=true 항목은 강조 표시."""
+    try:
+        async with _get_pool().acquire() as conn:
+            if project_id:
+                rows = await conn.fetch(
+                    """
+                    SELECT key, value FROM ai_meta_memory
+                    WHERE category = 'strategy_update'
+                      AND (project IS NULL OR project = $1)
+                    ORDER BY COALESCE(updated_at, created_at) DESC NULLS LAST
+                    LIMIT 3
+                    """,
+                    project_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT key, value FROM ai_meta_memory
+                    WHERE category = 'strategy_update'
+                    ORDER BY COALESCE(updated_at, created_at) DESC NULLS LAST
+                    LIMIT 3
+                    """,
+                )
+            if not rows:
+                return ""
+            import json as _json
+            lines = []
+            for r in rows:
+                val = r["value"]
+                if isinstance(val, str):
+                    try:
+                        val = _json.loads(val)
+                    except Exception:
+                        pass
+                if isinstance(val, dict):
+                    strategy_str = val.get("strategy") or val.get("directive") or _json.dumps(val, ensure_ascii=False)
+                    escalation = val.get("escalation_needed", False)
+                    count = val.get("trigger_count", "")
+                    suffix = f" (실패 {count}회, 즉시대응필요)" if escalation and count else ""
+                else:
+                    strategy_str = str(val)
+                    suffix = ""
+                lines.append(f"- {strategy_str[:200]}{suffix}")
+            text = "## 전략 수정 내역\n" + "\n".join(lines)
+            return _truncate(text, 500)
+    except Exception as e:
+        logger.warning("memory_recall_section_failed", section="strategy_updates", error=str(e))
         return ""
 
 
@@ -362,6 +426,84 @@ async def _build_learned_memory(project_id: Optional[str] = None) -> str:
         return ""
 
 
+async def _build_experience_lessons(project_id: Optional[str] = None) -> str:
+    """섹션 8 (AADS-P1-1): 대화 중 실시간 추출 교훈.
+    category='experience_lesson' 최근 5건.
+    해당 프로젝트 우선, 없으면 전역 공통 순으로 조회."""
+    try:
+        async with _get_pool().acquire() as conn:
+            if project_id:
+                rows = await conn.fetch(
+                    """
+                    SELECT key, value FROM ai_observations
+                    WHERE category = 'experience_lesson'
+                      AND (project IS NULL OR project = $1)
+                    ORDER BY
+                        CASE WHEN project = $1 THEN 0 ELSE 1 END,
+                        COALESCE(updated_at, created_at) DESC NULLS LAST
+                    LIMIT 5
+                    """,
+                    project_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT key, value FROM ai_observations
+                    WHERE category = 'experience_lesson'
+                    ORDER BY COALESCE(updated_at, created_at) DESC NULLS LAST
+                    LIMIT 5
+                    """,
+                )
+            if not rows:
+                return ""
+            lines = [f"- {r['value']}" for r in rows]
+            text = "\n".join(lines)
+            return _truncate(text, _BUDGET["experience_lessons"])
+    except Exception as e:
+        logger.warning("memory_recall_section_failed", section="experience_lessons", error=str(e))
+        return ""
+
+
+async def _build_visual_memories(project_id: Optional[str] = None) -> str:
+    """섹션 9: 시각 메모리 — CEO가 공유한 이미지 분석 결과 최근 3건.
+
+    category='visual_memory'로 저장된 ai_observations을 조회.
+    프로젝트 필터 적용 (해당 프로젝트 우선, 없으면 전역 공통 포함).
+    """
+    try:
+        async with _get_pool().acquire() as conn:
+            if project_id:
+                rows = await conn.fetch(
+                    """
+                    SELECT key, value FROM ai_observations
+                    WHERE category = 'visual_memory'
+                      AND (project IS NULL OR project = $1)
+                    ORDER BY
+                        CASE WHEN project = $1 THEN 0 ELSE 1 END,
+                        COALESCE(updated_at, created_at) DESC NULLS LAST
+                    LIMIT 3
+                    """,
+                    project_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT key, value FROM ai_observations
+                    WHERE category = 'visual_memory'
+                    ORDER BY COALESCE(updated_at, created_at) DESC NULLS LAST
+                    LIMIT 3
+                    """,
+                )
+            if not rows:
+                return ""
+            lines = [f"- {r['value']}" for r in rows]
+            text = "\n".join(lines)
+            return _truncate(text, _BUDGET["visual_memories"])
+    except Exception as e:
+        logger.warning("memory_recall_section_failed", section="visual_memories", error=str(e))
+        return ""
+
+
 # ── 메모리 사용 로깅 ──────────────────────────────────────────────────────────
 
 async def _log_memory_usage(session_id: str, observation_ids: list[int]):
@@ -393,8 +535,11 @@ async def build_memory_context(
     project_id = _normalize_project(project_id)
     blocks: List[str] = []
 
-    # 7개 섹션 병렬 조회 (AADS-CRITICAL-FIX #30 + 섹션6 ai_meta_memory + 섹션7 correction_directive)
-    notes, prefs_result, tools_result, dirs, disc_result, learned, corrections = await asyncio.gather(
+    # 10개 섹션 병렬 조회 (P2-1: visual_memories + strategy_updates 섹션 추가)
+    (
+        notes, prefs_result, tools_result, dirs,
+        disc_result, learned, corrections, exp_lessons, visual_mems, strategy,
+    ) = await asyncio.gather(
         _build_session_notes(session_id, project_id),
         _build_preferences(),
         _build_tool_strategy(project_id),
@@ -402,6 +547,9 @@ async def build_memory_context(
         _build_discoveries(project_id),
         _build_learned_memory(project_id),
         _build_correction_directives(),
+        _build_experience_lessons(project_id),
+        _build_visual_memories(project_id),
+        _build_strategy_updates(project_id),
     )
 
     # tuple unpacking: (text, used_ids)
@@ -438,6 +586,12 @@ async def build_memory_context(
         blocks.append(f"<discoveries>\n{disc}\n</discoveries>")
     if learned:
         blocks.append(f"<learned>\n{learned}\n</learned>")
+    if exp_lessons:
+        blocks.append(f"<experience_lessons>\n## 최근 학습 교훈\n{exp_lessons}\n</experience_lessons>")
+    if visual_mems:
+        blocks.append(f"<visual_memories>\n## 시각 메모리\n{visual_mems}\n</visual_memories>")
+    if strategy:
+        blocks.append(f"<strategy_updates>\n{strategy}\n</strategy_updates>")
 
     result = "\n\n".join(blocks).strip() if blocks else ""
 

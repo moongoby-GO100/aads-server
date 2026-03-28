@@ -1632,6 +1632,7 @@ async def _save_and_update_session(
                     import asyncio as _asyncio
                     _asyncio.create_task(_auto_save_session_note(session_id_str, raw_messages or []))
                     _asyncio.create_task(_auto_observe_session(raw_messages or []))
+                    _asyncio.create_task(_auto_extract_mid_conversation_lessons(raw_messages or []))
             except Exception:
                 pass
 
@@ -2130,6 +2131,30 @@ async def send_message_stream(
                         "error": None,
                     })
                 logger.info(f"[VISION-PRE] {len(_image_for_preprocess)} image(s) pre-analyzed via Gemini for CLI Relay")
+
+                # 멀티모달 메모리: Gemini 분석 결과를 ai_observations에 비동기 저장
+                # asyncio.create_task()로 백그라운드 실행 — 메인 흐름에 영향 없음
+                # _mentioned_projects / workspace_name은 이 시점 미확정이므로
+                # locals()를 통해 안전하게 참조하고, 없으면 "AADS" 폴백 사용
+                try:
+                    import asyncio as _mm_asyncio
+                    from app.memory.multimodal_store import store_visual_memory as _store_vm
+                    _loc = locals()
+                    _mp = _loc.get("_mentioned_projects") or []
+                    _wn = _loc.get("workspace_name") or ""
+                    _mm_project = _mp[0] if _mp else (_wn.upper() if _wn else "AADS")
+                    for _it_mem, _img_mem in zip(_image_texts, _image_for_preprocess):
+                        _img_url_key = _img_mem.get("path") or _img_mem.get("name", "unknown")
+                        _mm_asyncio.create_task(
+                            _store_vm(
+                                image_url=_img_url_key,
+                                analysis_text=_it_mem["analysis"],
+                                project=_mm_project,
+                            )
+                        )
+                    logger.info(f"[VISUAL-MEM] {len(_image_texts)} image(s) queued for memory storage project={_mm_project}")
+                except Exception as _mm_err:
+                    logger.warning(f"[VISUAL-MEM] 멀티모달 메모리 저장 큐잉 실패: {_mm_err}")
 
             # Layer D: 현재 턴에만 주입될 전문 컨텍스트 (텍스트 파일만)
             _ephemeral_doc_context = build_ephemeral_document_layer(_file_contents)
@@ -3139,6 +3164,20 @@ async def send_message_stream(
                 )
         except Exception as _bg_err:
             logger.debug("bg_self_eval_launch_error", error=str(_bg_err))
+        # F11-R: auto_reflexion_loop — Reflexion 완전 자동 루프 (백그라운드)
+        # score < 0.5 시 correction_directive 저장, 3회 연속 실패 시 strategy_update 저장
+        try:
+            from app.services.self_evaluator import auto_reflexion_loop
+            _bg_asyncio.create_task(
+                auto_reflexion_loop(
+                    query=content,
+                    response=full_response,
+                    project=_normalized_project or workspace_name,
+                    session_id=session_id,
+                )
+            )
+        except Exception as _bg_err:
+            logger.debug("bg_auto_reflexion_launch_error", error=str(_bg_err))
 
         # 시맨틱 캐시 저장 (도구 사용 + quality >= 0.7인 응답만)
         if tools_called and len(full_response) > 200:
@@ -3255,6 +3294,22 @@ async def _auto_observe_session(messages: List[Dict[str, Any]]) -> None:
         logger.info("auto_observe_session: 완료")
     except Exception as e:
         logger.warning(f"auto_observe_session error: {e}")
+
+
+async def _auto_extract_mid_conversation_lessons(messages: List[Dict[str, Any]]) -> None:
+    """20턴마다 대화 중 실시간 교훈 추출 (백그라운드 태스크, AADS-P1-1).
+    experience_extractor의 extract_mid_conversation_lessons()를 호출하여
+    ai_observations에 experience_lesson 카테고리로 저장.
+    """
+    try:
+        from app.memory.experience_extractor import extract_mid_conversation_lessons
+        saved = await extract_mid_conversation_lessons(
+            messages=messages,
+            project="AADS",
+        )
+        logger.info(f"auto_extract_mid_conversation_lessons: saved={saved}")
+    except Exception as e:
+        logger.warning(f"auto_extract_mid_conversation_lessons error: {e}")
 
 
 async def toggle_bookmark(message_id: str) -> Optional[Dict[str, Any]]:
