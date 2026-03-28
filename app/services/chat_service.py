@@ -1632,7 +1632,7 @@ async def _save_and_update_session(
                     import asyncio as _asyncio
                     _asyncio.create_task(_auto_save_session_note(session_id_str, raw_messages or []))
                     _asyncio.create_task(_auto_observe_session(raw_messages or []))
-                    _asyncio.create_task(_auto_extract_mid_conversation_lessons(raw_messages or []))
+                    _asyncio.create_task(_auto_extract_mid_conversation_lessons(session_id_str, raw_messages or []))
             except Exception:
                 pass
 
@@ -3296,18 +3296,42 @@ async def _auto_observe_session(messages: List[Dict[str, Any]]) -> None:
         logger.warning(f"auto_observe_session error: {e}")
 
 
-async def _auto_extract_mid_conversation_lessons(messages: List[Dict[str, Any]]) -> None:
+async def _auto_extract_mid_conversation_lessons(
+    session_id: str,
+    messages: List[Dict[str, Any]],
+) -> None:
     """20턴마다 대화 중 실시간 교훈 추출 (백그라운드 태스크, AADS-P1-1).
+    세션 ID로 워크스페이스 이름을 조회하여 프로젝트를 결정하고
     experience_extractor의 extract_mid_conversation_lessons()를 호출하여
     ai_observations에 experience_lesson 카테고리로 저장.
     """
     try:
+        # 세션의 워크스페이스 이름에서 프로젝트 코드 추출
+        project = "AADS"
+        try:
+            pool = get_pool()
+            async with pool.acquire() as _conn:
+                ws_name = await _conn.fetchval(
+                    """
+                    SELECT w.name FROM chat_workspaces w
+                    JOIN chat_sessions s ON s.workspace_id = w.id
+                    WHERE s.id = $1
+                    """,
+                    uuid.UUID(session_id),
+                )
+            if ws_name:
+                import re as _re
+                _m = _re.match(r"\[([A-Z0-9]{2,10})\]", ws_name.strip())
+                project = _m.group(1) if _m else ws_name.strip().upper()[:10]
+        except Exception as _proj_err:
+            logger.debug(f"_auto_extract_mid_conversation_lessons: project 조회 실패 {_proj_err}")
+
         from app.memory.experience_extractor import extract_mid_conversation_lessons
         saved = await extract_mid_conversation_lessons(
             messages=messages,
-            project="AADS",
+            project=project,
         )
-        logger.info(f"auto_extract_mid_conversation_lessons: saved={saved}")
+        logger.info(f"auto_extract_mid_conversation_lessons: project={project} saved={saved}")
     except Exception as e:
         logger.warning(f"auto_extract_mid_conversation_lessons error: {e}")
 

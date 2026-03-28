@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Dict, List, Optional, Any
 from app.memory.store import memory_store
 
@@ -140,85 +141,147 @@ def _calculate_effectiveness(result: Dict) -> float:
 
 # ── 대화 중 실시간 교훈 추출 (AADS-P1-1) ────────────────────────────────────────
 
+# 교훈 추출 키워드 패턴
+_LESSON_KEYWORDS: list[tuple[str, str]] = [
+    # (패턴, 교훈 유형)
+    ("이렇게 하면 안", "failure_pattern"),
+    ("하지 마", "failure_pattern"),
+    ("실패", "failure_pattern"),
+    ("오류", "failure_pattern"),
+    ("에러", "failure_pattern"),
+    ("이건 좋았어", "success_pattern"),
+    ("잘 됐어", "success_pattern"),
+    ("성공", "success_pattern"),
+    ("효과적", "success_pattern"),
+    ("다음부터", "future_rule"),
+    ("앞으로", "future_rule"),
+    ("항상", "future_rule"),
+    ("절대", "future_rule"),
+    ("기억해", "future_rule"),
+    ("주의", "caution"),
+    ("조심", "caution"),
+    ("확인해", "caution"),
+]
+
+# 도구 이름 패턴 (연속 사용 감지)
+_TOOL_PATTERN = re.compile(
+    r"\b(patch_remote_file|write_remote_file|read_remote_file|run_remote_command"
+    r"|git_remote_commit|git_remote_push|query_db|search_logs)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_lessons_from_messages(
+    messages: List[Dict[str, Any]],
+) -> List[tuple[str, str]]:
+    """
+    키워드/패턴 기반으로 교훈 후보를 추출한다.
+    Returns: [(lesson_text, lesson_type), ...]
+    """
+    lessons: List[tuple[str, str]] = []
+    tool_usage: List[str] = []  # 연속 도구 사용 추적
+
+    for i, msg in enumerate(messages):
+        role = msg.get("role", "")
+        content = str(msg.get("content", ""))
+
+        # ── 도구 연속 사용 패턴 ──────────────────────────────
+        found_tools = _TOOL_PATTERN.findall(content)
+        tool_usage.extend(t.lower() for t in found_tools)
+
+        # ── 키워드 기반 교훈 추출 ─────────────────────────────
+        # user 메시지에서만 교훈 키워드 탐색 (CEO 지시/피드백 우선)
+        if role == "user":
+            for keyword, lesson_type in _LESSON_KEYWORDS:
+                if keyword in content:
+                    # 해당 키워드가 포함된 문장 추출 (최대 150자)
+                    sentences = re.split(r"[.。\n]", content)
+                    for sentence in sentences:
+                        if keyword in sentence:
+                            text = sentence.strip()[:150]
+                            if text and len(text) > 10:
+                                lessons.append((text, lesson_type))
+                                break
+
+        # ── 에러 후 성공 패턴 탐색 ───────────────────────────
+        if role == "assistant" and i > 0:
+            prev_content = str(messages[i - 1].get("content", ""))
+            has_error = any(w in prev_content for w in ("에러", "오류", "실패", "error", "Error"))
+            has_success = any(w in content for w in ("성공", "완료", "해결", "수정했", "처리했"))
+            if has_error and has_success:
+                # 앞 user 메시지에서 문제 맥락 추출
+                ctx = prev_content.strip()[:100]
+                lesson_text = f"에러 후 성공 패턴: '{ctx}' → 해결됨"
+                lessons.append((lesson_text, "recovery_pattern"))
+
+    # ── 도구 반복 사용 패턴 ──────────────────────────────────
+    if len(tool_usage) >= 3:
+        from collections import Counter
+        tool_counts = Counter(tool_usage)
+        for tool, cnt in tool_counts.most_common(2):
+            if cnt >= 3:
+                lessons.append(
+                    (f"도구 선호 패턴: {tool}를 {cnt}회 사용 (이 대화)", "tool_preference")
+                )
+
+    # 중복 제거 (동일 텍스트)
+    seen: set[str] = set()
+    unique: List[tuple[str, str]] = []
+    for text, ltype in lessons:
+        if text not in seen:
+            seen.add(text)
+            unique.append((text, ltype))
+
+    return unique[:5]  # 최대 5개
+
+
 async def extract_mid_conversation_lessons(
     messages: List[Dict[str, Any]],
     project: str,
+    pool=None,
 ) -> int:
     """
-    대화 중 실시간 교훈 추출 — 최근 20턴 메시지를 LLM으로 분석하여
-    반복 패턴, 성공/실패 전략, 새로운 발견을 추출하고
+    대화 중 실시간 교훈 추출 (매 20턴마다 호출).
+    LLM 호출 없이 키워드/패턴 기반으로 교훈을 추출하여
     ai_observations 테이블에 category='experience_lesson', confidence=0.6으로 저장.
 
     Args:
         messages: 최근 대화 메시지 리스트 (role/content dict 형태)
-        project: 프로젝트명 (예: 'AADS', 'KIS', 'GO100')
+        project:  프로젝트명 (예: 'AADS', 'KIS', 'GO100')
+        pool:     asyncpg 커넥션 풀 (None이면 중앙 풀 사용)
 
     Returns:
         저장된 교훈 건수 (실패 시 0)
     """
-    from app.core.anthropic_client import call_llm_with_fallback
-    from app.core.memory_recall import save_observation
     import hashlib
-    import re as _re
+    from app.core.memory_recall import save_observation
 
     if not messages:
         return 0
 
-    # 최근 20턴만 사용
+    # 최근 20턴만 분석
     recent = messages[-20:]
+    project_upper = (project or "AADS").upper().strip()
 
-    # 프롬프트 조립 — 역할별 텍스트 포맷
-    convo_text = "\n".join(
-        f"[{m.get('role', 'unknown').upper()}] {str(m.get('content', ''))[:300]}"
-        for m in recent
+    # 키워드/패턴 기반 교훈 추출 (LLM 호출 없음)
+    candidates = _extract_lessons_from_messages(recent)
+    if not candidates:
+        logger.debug(f"extract_mid_conversation_lessons: 교훈 없음 project={project_upper}")
+        return 0
+
+    # 중복 방지용 해시 — 최근 메시지 앞 100자 기반
+    convo_sample = "".join(
+        str(m.get("content", ""))[:50] for m in recent[:4]
     )
-
-    prompt = (
-        "다음 대화에서 반복되는 패턴, 효과적/비효과적 전략, 새로운 발견을 "
-        "한국어 bullet point로 추출하세요. "
-        "각 항목은 '- ' 으로 시작하고 1~2문장으로 간결하게 작성하세요. "
-        "최대 5개 항목만 추출하세요.\n\n"
-        f"대화:\n{convo_text}"
-    )
-
-    try:
-        response = await call_llm_with_fallback(
-            prompt=prompt,
-            model="claude-haiku-4-5-20251001",
-            max_tokens=512,
-            system="당신은 AI 대화 분석 전문가입니다. 대화에서 학습 가능한 교훈만 간결하게 추출합니다.",
-        )
-    except Exception as e:
-        logger.warning(f"extract_mid_conversation_lessons LLM 호출 실패: {e}")
-        return 0
-
-    if not response:
-        return 0
-
-    # bullet point 파싱
-    lines = [
-        line.strip()
-        for line in response.splitlines()
-        if line.strip().startswith("-")
-    ]
-    if not lines:
-        return 0
-
-    # 대화 해시 — 중복 저장 방지용 키 접두사
-    convo_hash = hashlib.md5(convo_text[:100].encode("utf-8", errors="ignore")).hexdigest()[:8]
-    project_upper = project.upper().strip() if project else "AADS"
+    convo_hash = hashlib.md5(convo_sample.encode("utf-8", errors="ignore")).hexdigest()[:8]
 
     saved = 0
-    for idx, lesson in enumerate(lines[:5]):
-        key = f"mid_conv_{convo_hash}_{idx}"
-        # '- ' 접두사 제거 후 저장
-        value = _re.sub(r"^-\s*", "", lesson).strip()
-        if not value:
-            continue
+    for idx, (lesson_text, lesson_type) in enumerate(candidates):
+        key = f"mid_conv_{convo_hash}_{lesson_type}_{idx}"
         ok = await save_observation(
             category="experience_lesson",
             key=key,
-            content=value,
+            content=lesson_text,
             source="mid_conversation",
             confidence=0.6,
             project=project_upper,
