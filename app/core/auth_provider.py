@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # ── 토큰 로딩 (모듈 초기화 시 1회) ──────────────────────────────────
 _TOKEN_PRIMARY = os.getenv("ANTHROPIC_API_KEY", "") or os.getenv("ANTHROPIC_AUTH_TOKEN", "")
-_TOKEN_FALLBACK = os.getenv("ANTHROPIC_API_KEY_FALLBACK", "")
+_TOKEN_FALLBACK = os.getenv("ANTHROPIC_API_KEY_FALLBACK", "") or os.getenv("ANTHROPIC_AUTH_TOKEN_2", "")
 _BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 _LITELLM_URL = os.getenv("LITELLM_BASE_URL", "http://aads-litellm:4000")
 _LITELLM_KEY = os.getenv("LITELLM_MASTER_KEY", "")
@@ -31,9 +31,9 @@ _LITELLM_KEY = os.getenv("LITELLM_MASTER_KEY", "")
 # 라벨 매핑 (토큰 prefix 20자 기준)
 _KEY_LABELS: Dict[str, str] = {}
 if _TOKEN_PRIMARY:
-    _KEY_LABELS[_TOKEN_PRIMARY[:20]] = "Naver"
+    _KEY_LABELS[_TOKEN_PRIMARY[:20]] = "Gmail"
 if _TOKEN_FALLBACK:
-    _KEY_LABELS[_TOKEN_FALLBACK[:20]] = "Gmail"
+    _KEY_LABELS[_TOKEN_FALLBACK[:20]] = "Naver"
 
 # 런타임 순서 변경 가능한 리스트
 _ordered_tokens: List[str] = [k for k in [_TOKEN_PRIMARY, _TOKEN_FALLBACK] if k]
