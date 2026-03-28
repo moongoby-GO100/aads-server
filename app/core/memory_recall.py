@@ -185,7 +185,7 @@ async def _build_tool_strategy(project_id: Optional[str] = None) -> tuple[str, l
                     SELECT id, key, value FROM ai_observations
                     WHERE category IN ('project_pattern', 'tool_strategy')
                       AND confidence >= $1
-                    ORDER BY confidence DESC, updated_at DESC
+                    ORDER BY (confidence * EXP(-0.1 * EXTRACT(EPOCH FROM (NOW() - COALESCE(updated_at, created_at))) / 86400)) DESC
                     LIMIT 10
                     """,
                     _conf,
@@ -261,7 +261,7 @@ async def _build_discoveries(project_id: Optional[str] = None) -> tuple[str, lis
                       AND (project IS NULL OR project = $1)
                     ORDER BY
                         CASE WHEN project = $1 THEN 0 ELSE 1 END,
-                        updated_at DESC, confidence DESC
+                        (confidence * EXP(-0.1 * EXTRACT(EPOCH FROM (NOW() - COALESCE(updated_at, created_at))) / 86400)) DESC
                     LIMIT 10
                     """,
                     project_id, _conf,
@@ -272,7 +272,7 @@ async def _build_discoveries(project_id: Optional[str] = None) -> tuple[str, lis
                     SELECT id, key, value FROM ai_observations
                     WHERE category IN ('learning', 'recurring_issue', 'discovery')
                       AND confidence >= $1
-                    ORDER BY updated_at DESC, confidence DESC
+                    ORDER BY (confidence * EXP(-0.1 * EXTRACT(EPOCH FROM (NOW() - COALESCE(updated_at, created_at))) / 86400)) DESC
                     LIMIT 10
                     """,
                     _conf,
