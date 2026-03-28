@@ -35,14 +35,30 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from anthropic import APIStatusError
 from app.config import Settings
-from app.core.anthropic_client import get_client
+from app.core.auth_provider import create_anthropic_client, get_oauth_tokens
 
 logger = logging.getLogger(__name__)
 settings = Settings()
 
-# ─── Anthropic 클라이언트 (LiteLLM 프록시 경유) ──────────────────────────────
-anthropic_client = get_client()
-anthropic_client_2 = get_client()  # 2차 키도 동일 LiteLLM 경유
+
+def _anthropic_error_try_next_oauth_key(exc: APIStatusError) -> bool:
+    """402/429/403 또는 응답에 limit(한도) 안내가 있으면 다음 OAuth 토큰으로 재시도."""
+    code = getattr(exc, "status_code", 0) or 0
+    if code in (402, 429, 403):
+        return True
+    parts = [str(exc)]
+    body = getattr(exc, "body", None)
+    if body is not None:
+        try:
+            parts.append(json.dumps(body) if isinstance(body, (dict, list)) else str(body))
+        except Exception:
+            parts.append(str(body))
+    return "limit" in " ".join(parts).lower()
+
+
+def _ceo_oauth_anthropic_clients():
+    """ANTHROPIC_API_KEY / FALLBACK(auth_provider 순서)별 AsyncAnthropic 인스턴스."""
+    return [create_anthropic_client(token=t) for t in get_oauth_tokens() if t]
 
 # ─── OpenAI 클라이언트 (옵션) ─────────────────────────────────────────────
 openai_client = None
@@ -306,10 +322,10 @@ def _to_cached_system_blocks(system_prompt: str) -> list:
 
 
 async def _call_anthropic(model: str, system_prompt: str, messages: List[Dict]) -> Tuple[str, int, int]:
-    """Anthropic API 호출. 402(credit_balance_too_low) 시 2차 키로 자동 전환."""
-    clients = [c for c in [anthropic_client, anthropic_client_2] if c is not None]
+    """Anthropic API 직접 호출. 402/429/403·한도 메시지 시 다음 OAuth 토큰으로 자동 전환."""
+    clients = _ceo_oauth_anthropic_clients()
     last_exc: Optional[Exception] = None
-    for client in clients:
+    for idx, client in enumerate(clients):
         try:
             resp = await client.messages.create(
                 model=model,
@@ -320,12 +336,14 @@ async def _call_anthropic(model: str, system_prompt: str, messages: List[Dict]) 
             text = resp.content[0].text
             return text, resp.usage.input_tokens, resp.usage.output_tokens
         except APIStatusError as e:
-            if e.status_code == 402:
+            if _anthropic_error_try_next_oauth_key(e):
                 logger.warning(
-                    "anthropic_credit_exhausted_402",
+                    "anthropic_oauth_try_next",
                     model=model,
-                    key_index=clients.index(client) + 1,
-                    trying_next=(client is not clients[-1]),
+                    status=e.status_code,
+                    key_index=idx + 1,
+                    trying_next=(idx < len(clients) - 1),
+                    detail=str(e)[:120],
                 )
                 last_exc = e
                 continue
@@ -365,7 +383,7 @@ async def _call_anthropic_with_tools(
     """
     from app.api.ceo_chat_tools import TOOL_DEFINITIONS, execute_tool
 
-    clients = [c for c in [anthropic_client, anthropic_client_2] if c is not None]
+    clients = _ceo_oauth_anthropic_clients()
     if not clients:
         raise RuntimeError("Anthropic API 클라이언트 없음")
 
@@ -387,7 +405,7 @@ async def _call_anthropic_with_tools(
                 )
                 break
             except APIStatusError as e:
-                if e.status_code == 402:
+                if _anthropic_error_try_next_oauth_key(e):
                     last_exc = e
                     continue
                 raise
@@ -884,7 +902,7 @@ async def _handle_execute_intent(
 
     # Anthropic 모델로 지시서 JSON 생성
     tool_model = model if model.startswith("claude") else "claude-sonnet-4-6"
-    clients = [c for c in [anthropic_client, anthropic_client_2] if c is not None]
+    clients = _ceo_oauth_anthropic_clients()
 
     resp_text = ""
     total_input = 0
@@ -902,7 +920,7 @@ async def _handle_execute_intent(
             total_output = resp.usage.output_tokens
             break
         except APIStatusError as e:
-            if e.status_code == 402:
+            if _anthropic_error_try_next_oauth_key(e):
                 continue
             raise
 
@@ -1147,20 +1165,40 @@ async def _handle_cross_project_qa(
     ]
 
     analysis_model = model if model.startswith("claude") else "claude-sonnet-4-6"
-    try:
-        response = await anthropic_client.messages.create(
-            model=analysis_model,
-            max_tokens=4096,
-            system=_CODE_REVIEW_SYSTEM_PROMPT,
-            messages=analysis_messages,
-        )
-        analysis_text = response.content[0].text if response.content else "(분석 결과 없음)"
-        input_tokens = response.usage.input_tokens
-        output_tokens = response.usage.output_tokens
-    except Exception as e:
-        logger.error(f"cross_project_qa_llm_failed: {e}")
-        analysis_text = f"LLM 분석 실패: {str(e)[:300]}"
-        input_tokens, output_tokens = 0, 0
+    analysis_text = ""
+    input_tokens, output_tokens = 0, 0
+    last_exc: Optional[Exception] = None
+    _clients = _ceo_oauth_anthropic_clients()
+    if not _clients:
+        analysis_text = "LLM 클라이언트 없음 (OAuth 토큰 미설정)"
+    for client in _clients:
+        try:
+            response = await client.messages.create(
+                model=analysis_model,
+                max_tokens=4096,
+                system=_CODE_REVIEW_SYSTEM_PROMPT,
+                messages=analysis_messages,
+            )
+            analysis_text = response.content[0].text if response.content else "(분석 결과 없음)"
+            input_tokens = response.usage.input_tokens
+            output_tokens = response.usage.output_tokens
+            last_exc = None
+            break
+        except APIStatusError as e:
+            last_exc = e
+            if _anthropic_error_try_next_oauth_key(e):
+                logger.warning("cross_project_qa_try_next_oauth", status=e.status_code)
+                continue
+            logger.error(f"cross_project_qa_llm_failed: {e}")
+            analysis_text = f"LLM 분석 실패: {str(e)[:300]}"
+            break
+        except Exception as e:
+            logger.error(f"cross_project_qa_llm_failed: {e}")
+            analysis_text = f"LLM 분석 실패: {str(e)[:300]}"
+            last_exc = e
+            break
+    if last_exc is not None and not analysis_text:
+        analysis_text = f"LLM 분석 실패: {str(last_exc)[:300]}"
 
     duration_ms = int((time.time() - start) * 1000)
     cost = calc_cost(analysis_model, input_tokens, output_tokens)

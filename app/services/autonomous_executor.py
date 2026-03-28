@@ -475,7 +475,7 @@ async def generate_weekly_briefing() -> str:
 
     try:
         import httpx
-        litellm_url = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
+        litellm_url = os.getenv("LITELLM_BASE_URL", "http://aads-litellm:4000")
         litellm_key = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
         async with httpx.AsyncClient(timeout=30.0) as c:
             resp = await c.post(

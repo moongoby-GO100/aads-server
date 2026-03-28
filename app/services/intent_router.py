@@ -36,7 +36,7 @@ async def _get_intent_redis():
 
 logger = logging.getLogger(__name__)
 
-LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
+LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://aads-litellm:4000")
 LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
 
 # ─── 인텐트 → 모델/도구 매핑 ──────────────────────────────────────────────────

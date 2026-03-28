@@ -12,7 +12,7 @@ T-002 프로덕션 매핑:
   fallback 체인: primary → alternative → error
 
 LiteLLM Proxy 라우팅 (인텐트 기반):
-  LITELLM_BASE_URL: http://litellm:4000/v1  (Docker 내부 네트워크)
+  LITELLM_BASE_URL: http://aads-litellm:4000/v1  (Docker 내부 네트워크)
   일 $5 초과 시 Opus 호출 차단 → Sonnet 자동 다운그레이드
   월 $150 초과 시 비용 경고 로그
 """
@@ -25,7 +25,7 @@ logger = structlog.get_logger(__name__)
 _budget_logger = structlog.get_logger("aads.budget")
 
 # LiteLLM Proxy 기본 URL (Docker 내부 네트워크)
-LITELLM_BASE_URL = os.environ.get("LITELLM_BASE_URL", "http://litellm:4000/v1")
+LITELLM_BASE_URL = os.environ.get("LITELLM_BASE_URL", "http://aads-litellm:4000/v1")
 
 # 인텐트 → LiteLLM 모델명 매핑 (AADS-171)
 INTENT_MODEL_MAP: dict[str, str | None] = {

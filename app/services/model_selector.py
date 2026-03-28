@@ -46,19 +46,48 @@ def _get_anthropic_client() -> AsyncAnthropic:
         max_retries=5,
     )
 
+def _quota_class_http_error(status: int, exc: BaseException) -> bool:
+    """402/429/403 또는 본문·메시지에 limit(한도) 포함 시 OAuth 교대 대상."""
+    if status in (402, 429, 403):
+        return True
+    parts = [str(exc).lower()]
+    body = getattr(exc, "body", None)
+    if body is not None:
+        try:
+            parts.append(json.dumps(body).lower() if isinstance(body, (dict, list)) else str(body).lower())
+        except Exception:
+            parts.append(str(body).lower())
+    return "limit" in " ".join(parts)
+
+
 def _switch_oat_token():
-    """LiteLLM 경유이므로 토큰 스위치는 sync_litellm_oauth.sh가 처리. 여기선 no-op."""
-    logger.warning("oat_token_switch: LiteLLM managed — run sync_litellm_oauth.sh")
-    return False
+    """OAuth 순서 교환 후 Anthropic 직접 클라이언트로 전환(한도 회피). 실패 시 LiteLLM 유지."""
+    global _anthropic
+    from app.core.auth_provider import create_anthropic_client, rotate_oauth_primary_fallback
+
+    if not rotate_oauth_primary_fallback():
+        logger.warning("oat_token_switch: no second OAuth token — cannot rotate")
+        return False
+    try:
+        _anthropic = create_anthropic_client()
+        logger.warning("oat_token_switch: direct Anthropic client bound to new primary OAuth")
+        return True
+    except Exception as ex:
+        logger.warning("oat_token_switch: direct client failed %s — LiteLLM client restored", ex)
+        _anthropic = _get_anthropic_client()
+        return True
+
 
 _anthropic = _get_anthropic_client()
 
-LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
+LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://aads-litellm:4000")
 LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
 
 # Claude CLI Relay (호스트에서 실행, Docker → host.docker.internal)
 _CLAUDE_RELAY_URL = os.getenv("CLAUDE_RELAY_URL", "http://host.docker.internal:8199")
 _CLAUDE_CLI_ENABLED = os.getenv("CLAUDE_CLI_ENABLED", "true").lower() == "true"
+# 릴레이 oauth_slot: 1=Gmail, 2=Naver. 기본은 Naver 먼저 (false 로 Gmail 우선 복귀)
+_CLAUDE_RELAY_NAVER_FIRST = os.getenv("CLAUDE_RELAY_NAVER_FIRST", "true").lower() in ("1", "true", "yes")
 
 # Agent SDK OAuth 토큰 — auth_provider 경유 (R-AUTH)
 from app.core.auth_provider import (
@@ -200,9 +229,8 @@ async def call_stream(
             model = "claude-sonnet"
 
     # Claude 모델 → 계정 교차 폴백 (rate limit은 계정별)
-    # Opus(계정1) → Opus(계정2) → Sonnet(계정1) → Sonnet(계정2) → Gemini
-    # 같은 모델 다른 계정 우선 시도 = 품질 저하 최소화, $200×2 풀 활용
-    _ACCOUNT_SLOTS = ["1", "2"]  # gmail, naver
+    # Opus(Naver)→Opus(Gmail)→Sonnet(Naver)→… (기본) / CLAUDE_RELAY_NAVER_FIRST=false 시 Gmail 먼저
+    _ACCOUNT_SLOTS = ["2", "1"] if _CLAUDE_RELAY_NAVER_FIRST else ["1", "2"]  # 2=Naver, 1=Gmail
     _MODEL_DOWNGRADE = {
         "claude-opus": ["claude-opus", "claude-sonnet"],
         "claude-sonnet": ["claude-sonnet"],
@@ -1618,11 +1646,9 @@ async def _stream_anthropic(
                 _retry_attempt += 1
                 _last_error = e
                 _status = getattr(e, 'status_code', 0)
-                # 429: 토큰 자동 스위치 시도
-                if _status == 429 and _switch_oat_token():
-                    _anthropic = _get_anthropic_client()
+                if _quota_class_http_error(_status, e) and _switch_oat_token():
                     api_kwargs["_client_refreshed"] = True
-                    logger.warning(f"oat_switch_on_429: switched token, retrying")
+                    logger.warning("oat_switch_on_rate_limit: rotated OAuth / direct client, retrying")
                     _retry_attempt -= 1  # 스위치 후 재시도 카운트 차감
                 if _retry_attempt <= _MAX_RETRIES:
                     _wait = min(2 ** _retry_attempt, 10)
@@ -1638,10 +1664,8 @@ async def _stream_anthropic(
                 _retry_attempt += 1
                 _last_error = e
                 _status = getattr(e, 'status_code', 0)
-                # 402(크레딧 소진): 토큰 자동 스위치
-                if _status == 402 and _switch_oat_token():
-                    _anthropic = _get_anthropic_client()
-                    logger.warning(f"oat_switch_on_402: credit exhausted, switched token")
+                if _quota_class_http_error(_status, e) and _switch_oat_token():
+                    logger.warning("oat_switch_on_quota_class: status=%s, rotated OAuth / direct client", _status)
                     _retry_attempt -= 1
                 if _status in _RETRYABLE_STATUS and _retry_attempt <= _MAX_RETRIES:
                     # 400: 간헐적 에러 → 짧은 대기, 429/503: rate limit → 지수 백오프
@@ -1649,10 +1673,9 @@ async def _stream_anthropic(
                     logger.warning(f"claude_retry: attempt {_retry_attempt}/{_MAX_RETRIES}, status={_status}, wait={_wait}s")
                     yield {"type": "heartbeat"}
                     await asyncio.sleep(_wait)
-                elif _status == 402:
-                    # 402는 재시도 대상에 추가
+                elif _status in (402, 403) or _quota_class_http_error(_status, e):
                     _wait = 2
-                    logger.warning(f"claude_retry_402: attempt {_retry_attempt}, switching token and retrying")
+                    logger.warning(f"claude_retry_quota: attempt {_retry_attempt}, status={_status}, wait={_wait}s")
                     yield {"type": "heartbeat"}
                     await asyncio.sleep(_wait)
                 else:

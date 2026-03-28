@@ -18,7 +18,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
+LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://aads-litellm:4000")
 LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
 BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
 _BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"

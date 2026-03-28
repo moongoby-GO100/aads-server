@@ -211,7 +211,7 @@ async def get_chat_cost_summary():
     import os
     from datetime import date
 
-    litellm_base = os.environ.get("LITELLM_BASE_URL", "http://litellm:4000/v1").replace("/v1", "")
+    litellm_base = os.environ.get("LITELLM_BASE_URL", "http://aads-litellm:4000/v1").replace("/v1", "")
     master_key = os.environ.get("LITELLM_MASTER_KEY", "")
     headers = {"Authorization": f"Bearer {master_key}"}
 
@@ -275,7 +275,7 @@ async def get_intent_model_map():
     return {
         "status": "ok",
         "intent_model_map": INTENT_MODEL_MAP,
-        "litellm_base_url": os.environ.get("LITELLM_BASE_URL", "http://litellm:4000/v1"),
+        "litellm_base_url": os.environ.get("LITELLM_BASE_URL", "http://aads-litellm:4000/v1"),
     }
 
 

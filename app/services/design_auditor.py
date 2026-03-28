@@ -262,7 +262,7 @@ async def _call_gemini_vision(image_b64: str, prompt: str, project_context: str)
     """Gemini Vision API 호출 (LiteLLM 프록시 경유, R-AUTH 준수)."""
     import httpx
 
-    litellm_url = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
+    litellm_url = os.getenv("LITELLM_BASE_URL", "http://aads-litellm:4000")
     litellm_key = os.getenv("LITELLM_MASTER_KEY", "")
 
     full_prompt = f"{prompt}\n\n[프로젝트 컨텍스트]\n{project_context}" if project_context else prompt
@@ -298,7 +298,7 @@ async def _call_claude_vision(image_b64: str, prompt: str, project_context: str)
     """Claude Vision 폴백 — LiteLLM 프록시 경유 (채팅창과 동일 방식, R-AUTH 준수)."""
     import httpx
 
-    litellm_url = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
+    litellm_url = os.getenv("LITELLM_BASE_URL", "http://aads-litellm:4000")
     litellm_key = os.getenv("LITELLM_MASTER_KEY", "")
 
     full_prompt = f"{prompt}\n\n[프로젝트 컨텍스트]\n{project_context}" if project_context else prompt

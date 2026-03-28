@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 _TOKEN_PRIMARY = os.getenv("ANTHROPIC_API_KEY", "") or os.getenv("ANTHROPIC_AUTH_TOKEN", "")
 _TOKEN_FALLBACK = os.getenv("ANTHROPIC_API_KEY_FALLBACK", "")
 _BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
-_LITELLM_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
+_LITELLM_URL = os.getenv("LITELLM_BASE_URL", "http://aads-litellm:4000")
 _LITELLM_KEY = os.getenv("LITELLM_MASTER_KEY", "")
 
 # 라벨 매핑 (토큰 prefix 20자 기준)
@@ -90,6 +90,16 @@ def set_token_order(primary: str) -> bool:
         logger.info("auth_provider: token order set to Gmail-first")
         return True
     return False
+
+
+def rotate_oauth_primary_fallback() -> bool:
+    """한도·크레딧류 API 오류 시 1순위↔2순위 OAuth 토큰 순서 교환 (런타임)."""
+    global _ordered_tokens
+    if len(_ordered_tokens) < 2:
+        return False
+    _ordered_tokens = [_ordered_tokens[1], _ordered_tokens[0]]
+    logger.warning("auth_provider: primary/fallback rotated (quota or limit-class error)")
+    return True
 
 
 def create_anthropic_client(token: Optional[str] = None) -> AsyncAnthropic:
