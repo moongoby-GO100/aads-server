@@ -2,6 +2,10 @@
 F11: Self-Evaluation — AI 응답 후 Haiku로 정확도/완성도/관련성 평가.
 chat_messages.quality_score + quality_details 저장.
 비용: ~$0.0003/턴 (200자 이상 응답만).
+
+auto_reflexion_loop: 완전 자동 Reflexion 루프 (LLM 호출 없이 키워드/패턴 기반).
+- score < 0.5 → 실패 유형 분류(정보_부족/도구_오류/형식_부적합/지시_위반) → correction_directive 저장
+- 연속 3회 실패 (DB 카운터) → 사전 정의 strategy_update 저장 + escalation_needed=true
 """
 from __future__ import annotations
 
@@ -400,6 +404,299 @@ async def _check_repeated_errors(
                     )
     except Exception as e:
         logger.debug("check_repeated_errors_error", error=str(e))
+
+
+# ── 키워드/패턴 기반 품질 평가 헬퍼 상수 ─────────────────────────────────────────
+
+# 응답 품질 저하 신호 패턴
+_NEGATIVE_PATTERNS = [
+    "죄송합니다",
+    "알 수 없습니다",
+    "확인이 필요합니다",
+    "오류가 발생",
+    "에러가 발생",
+    "실패했습니다",
+    "처리할 수 없",
+    "이해하지 못",
+    "잘 모르겠",
+    "정보가 없",
+    "제공할 수 없",
+]
+
+# 실패 유형별 교정 지시 (LLM 없이 사전 정의)
+_FAILURE_DIRECTIVES: dict[str, str] = {
+    "정보_부족": "응답 전 반드시 관련 도구/DB를 조회하여 구체적 정보를 확보하라.",
+    "도구_오류": "도구 호출 실패 시 즉시 대안 도구를 시도하고, 실패 원인을 명시하라.",
+    "형식_부적합": "CEO 요청 형식(표/코드/목록 등)을 정확히 파악하고 그 형식으로만 응답하라.",
+    "지시_위반": "CEO의 명시적 지시(절대/반드시/금지 등)를 최우선으로 준수하라.",
+}
+
+# 실패 유형 분류 키워드 (우선순위 순: 지시_위반 > 도구_오류 > 형식_부적합 > 정보_부족)
+_FAILURE_KEYWORDS: dict[str, list[str]] = {
+    "지시_위반": ["절대", "반드시", "금지", "하지 마", "하지마", "안돼", "안 돼", "말했잖", "지시했"],
+    "도구_오류": ["오류", "에러", "error", "실패", "timeout", "타임아웃", "연결 실패", "접근 불가", "tool"],
+    "형식_부적합": ["표로", "코드로", "목록으로", "형식으로", "json으로", "markdown", "마크다운", "번호로"],
+    "정보_부족": ["구체적", "자세히", "더 알려", "정확히", "수치", "통계", "데이터", "근거", "출처"],
+}
+
+
+def _calc_keyword_score(query: str, response: str) -> float:
+    """
+    키워드/패턴 기반 품질 점수 계산 (LLM 호출 없음).
+
+    평가 기준:
+    - 부정 패턴 수: 패턴당 -0.15 감점 (최대 -0.60)
+    - 응답 길이: 50자 미만이면 -0.20, 200자 이상이면 +0.05 보너스
+    - 질문 키워드 포함 여부: 주요 명사 미포함 시 -0.10
+
+    Returns: 0.0 ~ 1.0 점수
+    """
+    base = 0.70
+
+    # 부정 패턴 감점
+    neg_count = sum(1 for pat in _NEGATIVE_PATTERNS if pat in response)
+    base -= min(neg_count * 0.15, 0.60)
+
+    # 응답 길이 평가
+    resp_len = len(response.strip())
+    if resp_len < 50:
+        base -= 0.20
+    elif resp_len >= 200:
+        base += 0.05
+
+    # 질문 핵심 키워드 포함 여부 (간단 명사 추출: 2자 이상 단어)
+    query_words = [w for w in query.split() if len(w) >= 2]
+    if query_words:
+        matched = sum(1 for w in query_words[:5] if w in response)
+        if matched == 0:
+            base -= 0.10
+
+    return round(min(1.0, max(0.0, base)), 3)
+
+
+def _classify_failure_type(query: str, response: str) -> str:
+    """
+    쿼리와 응답 텍스트에서 실패 유형을 분류한다.
+    매칭 우선순위: 지시_위반 > 도구_오류 > 형식_부적합 > 정보_부족
+
+    Returns: "정보_부족" | "도구_오류" | "형식_부적합" | "지시_위반"
+    """
+    combined = query + " " + response
+    for failure_type in ["지시_위반", "도구_오류", "형식_부적합", "정보_부족"]:
+        keywords = _FAILURE_KEYWORDS[failure_type]
+        if any(kw in combined for kw in keywords):
+            return failure_type
+    return "정보_부족"  # 기본값
+
+
+async def auto_reflexion_loop(
+    query: str,
+    response: str,
+    project: str,
+    pool=None,
+    session_id: Optional[str] = None,
+) -> Optional[dict]:
+    """
+    자동 반성 루프 — 응답 품질 자동 평가 + 전략 수정.
+    LLM 호출 없이 키워드/패턴 기반으로 실패 원인을 분석하여 비용 효율을 극대화한다.
+
+    흐름:
+    1. 키워드/패턴 기반 품질 점수 계산 (기존 evaluate_response 로직과 독립)
+    2. score < 0.5 시:
+       - 실패 유형 분류: "정보_부족" | "도구_오류" | "형식_부적합" | "지시_위반"
+       - correction_directive 생성 → ai_meta_memory에 저장
+    3. 연속 실패 카운터 관리 (DB 조회 기반):
+       - 같은 프로젝트 최근 7일 내 correction_directive 3회 이상 시
+         ai_meta_memory(category='strategy_update') 저장 + escalation_needed=true
+
+    Args:
+        query: 사용자 질문
+        response: AI 응답 텍스트
+        project: 프로젝트 코드 (예: AADS, KIS)
+        pool: asyncpg 커넥션 풀 (None이면 내부에서 get_pool() 사용)
+        session_id: 세션 ID (선택)
+
+    Returns:
+        {"score": float, "failure_type": str, "saved": bool} 또는 None
+    """
+    if not _ENABLED or not project:
+        return None
+
+    try:
+        import json as _json
+        import time
+        from app.core.db_pool import get_pool as _get_pool
+
+        if pool is None:
+            pool = _get_pool()
+
+        normalized_project = _normalize_project(project)
+        if not normalized_project:
+            return None
+
+        # ── Step 1: 키워드/패턴 기반 품질 점수 계산 (LLM 호출 없음) ─────────
+        score = _calc_keyword_score(query, response)
+
+        logger.info(
+            "auto_reflexion_loop_score",
+            score=round(score, 3),
+            project=normalized_project,
+        )
+
+        # score >= 0.5 이면 이후 단계 불필요
+        if score >= 0.5:
+            return {"score": score, "failure_type": None, "saved": False}
+
+        # ── Step 2: 실패 유형 분류 + correction_directive 저장 ───────────────
+        failure_type = _classify_failure_type(query, response)
+        directive_text = _FAILURE_DIRECTIVES.get(failure_type, "응답 품질을 전반적으로 개선하라.")
+        directive_key = f"reflexion:{normalized_project}:{int(time.time())}"
+        directive_value = _json.dumps({
+            "directive": directive_text,
+            "failure_type": failure_type,
+            "score": round(score, 3),
+            "project": normalized_project,
+        })
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO ai_meta_memory (project, category, key, value, updated_at)
+                   VALUES ($1, 'correction_directive', $2, $3::jsonb, NOW())
+                   ON CONFLICT (project, category, key)
+                   DO UPDATE SET value = $3::jsonb, updated_at = NOW()""",
+                normalized_project,
+                directive_key,
+                directive_value,
+            )
+        logger.info(
+            "auto_reflexion_correction_saved",
+            project=normalized_project,
+            failure_type=failure_type,
+            score=round(score, 3),
+            key=directive_key,
+        )
+
+        # ── Step 3: 연속 실패 카운터 확인 → strategy_update 저장 ─────────────
+        await _check_strategy_update(
+            pool=pool,
+            project=normalized_project,
+            failure_type=failure_type,
+            score=score,
+        )
+
+        return {"score": score, "failure_type": failure_type, "saved": True}
+
+    except Exception as e:
+        logger.debug("auto_reflexion_loop_error", error=str(e))
+        return None
+
+
+async def _check_strategy_update(
+    pool,
+    project: str,
+    failure_type: str,
+    score: float,
+) -> None:
+    """
+    연속 실패 카운터 관리 — DB 조회 기반, LLM 호출 없음.
+
+    최근 7일 내 같은 프로젝트 correction_directive 3회 이상이면
+    ai_meta_memory(category='strategy_update')에 전략 갱신 지시 저장.
+    - escalation_needed=true 메타데이터 포함
+    - 24시간 내 중복 생성 방지
+    - 실패 유형별 사전 정의 전략 텍스트 사용 (LLM 호출 없음)
+    """
+    # 실패 유형별 전략 수정 지시 (사전 정의, LLM 호출 불필요)
+    _STRATEGY_TEMPLATES: dict[str, str] = {
+        "정보_부족": (
+            "응답 전 반드시 관련 도구/DB를 먼저 조회하여 실측 데이터를 확보하라. "
+            "추측이나 일반론 대신 구체적 수치와 근거를 제시하는 전략으로 전환하라."
+        ),
+        "도구_오류": (
+            "도구 호출 시 예외 처리를 강화하고, 1차 도구 실패 즉시 대안 도구를 시도하라. "
+            "오류 원인을 CEO에게 명확히 보고하고 우회 방법을 제시하는 전략으로 전환하라."
+        ),
+        "형식_부적합": (
+            "응답 생성 전 CEO의 요청 형식(표/코드/목록/JSON 등)을 먼저 파악하고 해당 형식으로만 응답하라. "
+            "형식 불명확 시 즉시 확인 질문을 먼저 하는 전략으로 전환하라."
+        ),
+        "지시_위반": (
+            "CEO의 절대 지시(절대/반드시/금지/하지마 포함)를 최우선으로 확인한 후 응답하라. "
+            "지시 목록을 매 응답 전 내부 검토하는 전략으로 전환하라."
+        ),
+    }
+
+    try:
+        import json as _json
+        import time
+
+        async with pool.acquire() as conn:
+            # 최근 7일 내 같은 프로젝트 correction_directive 수 확인
+            recent_count = await conn.fetchval(
+                """SELECT COUNT(*) FROM ai_meta_memory
+                   WHERE project = $1
+                     AND category = 'correction_directive'
+                     AND updated_at > NOW() - interval '7 days'""",
+                project,
+            )
+            count = int(recent_count or 0)
+
+            if count < 3:
+                logger.debug(
+                    "strategy_update_below_threshold",
+                    project=project,
+                    count=count,
+                )
+                return
+
+            # 최근 24시간 내 strategy_update 중복 생성 방지
+            existing_update = await conn.fetchval(
+                """SELECT COUNT(*) FROM ai_meta_memory
+                   WHERE project = $1
+                     AND category = 'strategy_update'
+                     AND updated_at > NOW() - interval '24 hours'""",
+                project,
+            )
+            if int(existing_update or 0) > 0:
+                logger.debug(
+                    "strategy_update_skip_recent_exists",
+                    project=project,
+                    count=count,
+                )
+                return
+
+            # 실패 유형별 사전 정의 전략 텍스트 선택 (LLM 호출 없음)
+            strategy_text = _STRATEGY_TEMPLATES.get(
+                failure_type,
+                "응답 품질 전반을 개선하라. 매 응답 전 6-criteria 체크리스트를 내부 검토하는 전략으로 전환하라.",
+            )
+
+            strategy_key = f"strategy:{project}:{int(time.time())}"
+            strategy_value = _json.dumps({
+                "strategy": strategy_text,
+                "failure_type": failure_type,
+                "trigger_count": count,
+                "project": project,
+                "escalation_needed": True,
+            })
+            await conn.execute(
+                """INSERT INTO ai_meta_memory (project, category, key, value, updated_at)
+                   VALUES ($1, 'strategy_update', $2, $3::jsonb, NOW())
+                   ON CONFLICT (project, category, key)
+                   DO UPDATE SET value = $3::jsonb, updated_at = NOW()""",
+                project,
+                strategy_key,
+                strategy_value,
+            )
+        logger.warning(
+            "strategy_update_created",
+            project=project,
+            failure_type=failure_type,
+            trigger_count=count,
+            escalation_needed=True,
+            key=strategy_key,
+        )
+    except Exception as e:
+        logger.debug("check_strategy_update_error", error=str(e))
 
 
 def should_stop_generation(quality_scores: list) -> tuple[bool, str]:
