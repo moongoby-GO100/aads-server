@@ -97,6 +97,16 @@ async def gc_observations(pool) -> dict:
         logger.info("memory_gc_complete", **result)
     except Exception as e:
         logger.error("memory_gc_error", error=str(e))
+
+    # P2-2: GC 완료 후 메모리 효과성 평가 + 자동 튜닝 연쇄 실행
+    try:
+        from app.memory.meta_evaluator import evaluate_memory_effectiveness, auto_tune_memory
+        eval_result = await evaluate_memory_effectiveness()
+        logger.info(f"메모리 효과성 평가: {eval_result}")
+        await auto_tune_memory()
+    except Exception as e_meta:
+        logger.warning("memory_meta_eval_error", error=str(e_meta))
+
     return result
 
 
