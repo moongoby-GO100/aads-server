@@ -116,29 +116,30 @@ classify_error() {
     [[ -f "$stderr_file" ]] && err_content=$(tail -c 4000 "$stderr_file" 2>/dev/null)
     local out_tail=""
     [[ -f "$stdout_file" ]] && out_tail=$(tail -100 "$stdout_file" 2>/dev/null)
+    local combined="${err_content}${out_tail}"
 
-    if [[ $exit_code -eq 124 ]]; then
+    if [[ $exit_code -eq 124 ]] || echo "$combined" | grep -qi "timed out\|operation timed out"; then
         echo "timeout"
-    elif echo "$err_content" | grep -qi "merge conflict\|CONFLICT"; then
+    elif echo "$combined" | grep -qi "merge conflict\|CONFLICT\|git conflict"; then
         echo "git_conflict"
-    elif echo "$err_content" | grep -qi "build fail\|compilation error\|SyntaxError\|ModuleNotFoundError"; then
-        echo "build_fail"
-    elif echo "$err_content" | grep -qi "permission denied\|EACCES"; then
-        echo "permission_denied"
-    elif echo "$err_content" | grep -qi "No space left\|ENOSPC"; then
-        echo "disk_full"
-    elif echo "$err_content" | grep -qi "rate limit\|429\|quota exceeded"; then
-        echo "rate_limit"
-    elif echo "$err_content" | grep -qi "network\|connection refused\|ETIMEDOUT\|ECONNRESET"; then
-        echo "network_error"
-    elif [[ $exit_code -eq 137 ]]; then
+    elif echo "$combined" | grep -qi "SIGKILL\|kill -9\|Killed"; then
         echo "oom_killed"
-    elif [[ $exit_code -eq 139 ]]; then
-        echo "claude_code_crash"
-    elif [[ $exit_code -eq 2 ]]; then
+    elif echo "$combined" | grep -qi "authentication\|unauthorized\| 401 "; then
         echo "auth_error"
-    elif [[ $exit_code -ne 0 ]]; then
-        echo "claude_code_error_${exit_code}"
+    elif echo "$combined" | grep -qi "rate limit\|429\|quota exceeded"; then
+        echo "rate_limit"
+    elif echo "$combined" | grep -qi "No space left\|ENOSPC\|disk full"; then
+        echo "disk_full"
+    elif echo "$combined" | grep -qi "SyntaxError\|syntax error"; then
+        echo "code_syntax_error"
+    elif echo "$combined" | grep -qi "build fail\|compilation error\|ModuleNotFoundError"; then
+        echo "build_fail"
+    elif echo "$combined" | grep -qi "permission denied\|EACCES"; then
+        echo "permission_denied"
+    elif echo "$combined" | grep -qi "network\|connection refused\|ETIMEDOUT\|ECONNRESET"; then
+        echo "network_error"
+    elif [[ $exit_code -eq 137 || $exit_code -eq 139 ]]; then
+        echo "oom_killed"
     else
         echo "unknown"
     fi
@@ -478,7 +479,6 @@ run_job() {
     local TOKEN_2="${ANTHROPIC_AUTH_TOKEN_2:-}"
     local total_attempts=${#MODEL_CYCLE[@]}  # 6회
     local attempt=0 exit_code=0
-    local _auth_error_limit=false
     while [[ $attempt -lt $total_attempts ]]; do
         exit_code=0
         cd "$workdir"
@@ -531,30 +531,6 @@ ${safe_instruction}"
 
         if [[ $exit_code -eq 0 ]]; then
             break
-        fi
-
-        # BUG-2: exit code별 분기 처리
-        if [[ $exit_code -eq 124 ]]; then
-            # timeout → 재시도 없이 즉시 에러 처리
-            log "  TIMEOUT job=$job_id exit=124 → 재시도 없이 즉시 에러 처리"
-            break
-        elif [[ $exit_code -eq 137 ]]; then
-            # OOM kill → 재시도 없이 즉시 에러 처리
-            log "  OOM_KILLED job=$job_id exit=137 → 재시도 없이 즉시 에러 처리"
-            break
-        elif [[ $exit_code -eq 2 ]]; then
-            # 인증 에러 → 다음 계정으로만 한 번 재시도
-            local _next_attempt=$(( attempt + 1 ))
-            if [[ "$_auth_error_limit" == "false" && $_next_attempt -lt $total_attempts && "${TOKEN_CYCLE[$_next_attempt]}" != "$token_slot" ]]; then
-                _auth_error_limit=true
-                attempt=$_next_attempt
-                log "  AUTH_ERROR job=$job_id → 다음 계정으로만 재시도 attempt=$((attempt+1))/$total_attempts"
-                sleep 2
-                continue
-            else
-                log "  AUTH_ERROR job=$job_id → 시도 가능한 계정 없음, 즉시 에러 처리"
-                break
-            fi
         fi
 
         attempt=$((attempt + 1))
@@ -626,9 +602,6 @@ $out_tail")
     # ═══ AI Reviewer 단계 — CEO 승인 전 독립 AI 리뷰 ═══
     local review_verdict="APPROVE"
     local review_score="1.0"
-    # BUG-3: 동일 피드백 무한 반복 방지 — 이전 리뷰 해시 로드
-    local prev_review_hash=""
-    [[ -f "/tmp/.review_hash_${job_id}" ]] && prev_review_hash=$(cat "/tmp/.review_hash_${job_id}" 2>/dev/null) || true
     if [[ -n "$git_diff" && ${#git_diff} -gt 10 ]]; then
         log "  AI_REVIEW job=$job_id"
         local review_response=""
@@ -664,44 +637,6 @@ $out_tail")
                 local review_issues=""
                 review_issues=$(echo "$review_response" | jq -r '.issues | join("; ")' 2>/dev/null || echo "")
                 log "  AI_REVIEW_REQUEST_CHANGES job=$job_id issues=$review_issues"
-
-                # BUG-3: 동일 피드백 반복 감지
-                local current_review_hash=""
-                current_review_hash=$(printf '%s' "$review_issues" | md5sum | cut -d' ' -f1)
-                if [[ -n "$prev_review_hash" && "$prev_review_hash" == "$current_review_hash" ]]; then
-                    log "  REVIEW_LOOP_DETECTED job=$job_id hash=$current_review_hash"
-                    local safe_loop_detail
-                    safe_loop_detail=$(sql_escape "동일 리뷰 피드백 2회 반복 (hash=${current_review_hash}): ${review_issues:0:500}")
-                    db_update "UPDATE pipeline_jobs SET status='error', phase='error',
-                               error_detail='review_loop_detected',
-                               review_feedback=COALESCE(review_feedback,'') || E'\n[review_loop_detected] hash=${current_review_hash}\n' || ${safe_loop_detail},
-                               updated_at=NOW() WHERE job_id='${job_id}';"
-                    post_to_chat "$session_id" "🔁 [AI Reviewer] 동일 리뷰 반복으로 중단됨 (hash=${current_review_hash}): ${review_issues:0:300}"
-                    if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
-                        curl -s -m 10 -X POST \
-                            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-                            -d "chat_id=${TELEGRAM_CHAT_ID}" \
-                            -d "text=🔁 [Runner] 동일 리뷰 반복으로 중단됨: ${job_id} (${project}) — ${review_issues:0:200}" \
-                            -d "parse_mode=HTML" 2>/dev/null || true
-                    fi
-                    rm -f "/tmp/.review_hash_${job_id}" 2>/dev/null || true
-                    _release_work_lock "$project" "$job_id"
-                    _cleanup_artifacts "$job_id"
-                    if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
-                        cd "${PROJECT_WORKDIR[$project]:-/tmp}"
-                        git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
-                        log "  WORKTREE_CLEANUP: /tmp/aads-wt-${job_id}"
-                    fi
-                    _notify_ai "$job_id"
-                    promote_next_queued "$project"
-                    _current_job_id=""
-                    _current_session_id=""
-                    rm -f /tmp/.pipeline_current_job
-                    return 1
-                else
-                    printf '%s' "$current_review_hash" > "/tmp/.review_hash_${job_id}" 2>/dev/null || true
-                fi
-
                 post_to_chat "$session_id" "🔍 [AI Reviewer] 코드 수정 요청 (score=${review_score}): ${review_issues:0:500}"
             fi
         else
