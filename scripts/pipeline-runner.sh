@@ -466,17 +466,29 @@ run_job() {
                started_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
     post_to_chat "$session_id" "🔧 [Pipeline Runner] 작업 시작: ${instruction:0:200}"
 
-    # H5: 모델 폴백 순환 재시도 (소넷→오퍼스→하이쿠→소넷, 2~3회)
-    local MODEL_CYCLE=("claude-sonnet" "claude-opus" "claude-haiku")
-    local MAX_MODEL_CYCLES=3  # 전체 순환 횟수
-    local total_attempts=$(( ${#MODEL_CYCLE[@]} * MAX_MODEL_CYCLES ))  # 9회
+    # H5: 모델+계정 폴백 (같은 모델 2계정 시도 후 다음 모델)
+    # 흐름: Sonnet(계정1)→Sonnet(계정2)→Opus(계정1)→Opus(계정2)→Haiku(계정1)→Haiku(계정2)
+    local MODEL_CYCLE=("claude-sonnet-4-6" "claude-sonnet-4-6" "claude-opus-4-6" "claude-opus-4-6" "claude-haiku-4-5-20251001" "claude-haiku-4-5-20251001")
+    local TOKEN_CYCLE=("1" "2" "1" "2" "1" "2")  # 1=Naver, 2=Gmail
+    local TOKEN_1="${ANTHROPIC_AUTH_TOKEN:-}"
+    local TOKEN_2="${ANTHROPIC_AUTH_TOKEN_2:-}"
+    local total_attempts=${#MODEL_CYCLE[@]}  # 6회
     local attempt=0 exit_code=0
     while [[ $attempt -lt $total_attempts ]]; do
         exit_code=0
         cd "$workdir"
-        local model_idx=$(( attempt % ${#MODEL_CYCLE[@]} ))
-        local current_model="${MODEL_CYCLE[$model_idx]}"
-        local cycle_num=$(( attempt / ${#MODEL_CYCLE[@]} + 1 ))
+        local current_model="${MODEL_CYCLE[$attempt]}"
+        local token_slot="${TOKEN_CYCLE[$attempt]}"
+        local cycle_num=$(( attempt / 2 + 1 ))
+
+        # 계정 스위치: 토큰 교체
+        if [[ "$token_slot" == "2" && -n "$TOKEN_2" ]]; then
+            export ANTHROPIC_API_KEY="$TOKEN_2"
+            log "  TOKEN_SWITCH job=$job_id → 계정2(Gmail)"
+        else
+            export ANTHROPIC_API_KEY="$TOKEN_1"
+            [[ "$token_slot" == "2" ]] && log "  TOKEN_SWITCH job=$job_id → 계정2 없음, 계정1 유지"
+        fi
 
         # H6: instruction 크기 제한 (50KB)
         local safe_instruction="${instruction:0:50000}"
@@ -518,10 +530,12 @@ ${safe_instruction}"
 
         attempt=$((attempt + 1))
         if [[ $attempt -lt $total_attempts ]]; then
-            local next_model_idx=$(( attempt % ${#MODEL_CYCLE[@]} ))
-            local next_model="${MODEL_CYCLE[$next_model_idx]}"
-            local wait_sec=$(( 3 + attempt ))  # 3초~12초 점진 증가
-            log "  RETRY job=$job_id attempt=$((attempt+1))/$total_attempts next_model=$next_model wait=${wait_sec}s exit=$exit_code"
+            local next_model="${MODEL_CYCLE[$attempt]}"
+            local next_token="${TOKEN_CYCLE[$attempt]}"
+            local acct_label="계정1(Naver)"
+            [[ "$next_token" == "2" ]] && acct_label="계정2(Gmail)"
+            local wait_sec=$(( 3 + attempt * 2 ))  # 5초~15초 점진 증가
+            log "  RETRY job=$job_id attempt=$((attempt+1))/$total_attempts next=$next_model($acct_label) wait=${wait_sec}s exit=$exit_code"
             sleep "$wait_sec"
         fi
     done
@@ -1078,6 +1092,7 @@ _recover_stuck_jobs() {
         while IFS= read -r _recovered_id; do
             _recovered_id="${_recovered_id// /}"
             [[ -z "$_recovered_id" ]] && continue
+            [[ ! "$_recovered_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && continue
             local _rec_project _rec_session
             _rec_project=$(db_exec "SELECT project FROM pipeline_jobs WHERE job_id='${_recovered_id}';" 2>/dev/null) || true
             _rec_project="${_rec_project// /}"
@@ -1104,6 +1119,7 @@ _recover_stuck_jobs() {
         while IFS= read -r _exp_id; do
             _exp_id="${_exp_id// /}"
             [[ -z "$_exp_id" ]] && continue
+            [[ ! "$_exp_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && continue
             local _exp_session _exp_project
             _exp_session=$(db_exec "SELECT chat_session_id FROM pipeline_jobs WHERE job_id='${_exp_id}';" 2>/dev/null) || true
             _exp_session="${_exp_session// /}"

@@ -3126,39 +3126,19 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
                 timeout=10,
             )
             return resp.text
-    # ── Pipeline Runner 자동 리다이렉트 (구 pipeline_c_start 호환) ──────
+    # ── pipeline_c_* 레거시 호환 → pipeline_runner_* 로 리다이렉트 ──────
     elif name == "pipeline_c_start":
-        # 구 Pipeline C는 폐기됨 — Pipeline Runner로 자동 전환
-        logger.warning(f"pipeline_c_start called but redirecting to Runner: project={params.get('project')}")
-        from app.services.tool_executor import current_chat_session_id
-        _sid = chat_session_id or current_chat_session_id.get("")
-        import httpx
-        _internal_h = {"x-monitor-key": "internal-pipeline-call"}
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                "http://localhost:8080/api/v1/pipeline/jobs",
-                headers=_internal_h,
-                json={
-                    "project": params.get("project", "AADS"),
-                    "instruction": params.get("instruction", ""),
-                    "session_id": _sid,
-                    "max_cycles": int(params.get("max_cycles", 3)),
-                },
-                timeout=10,
-            )
-            return f"[자동전환] pipeline_c_start → Pipeline Runner로 전환됨.\n{resp.text}"
+        logger.info(f"pipeline_c_start → pipeline_runner_submit 리다이렉트")
+        params.setdefault("project", "AADS")
+        return await execute_tool("pipeline_runner_submit", params, dsn=dsn, chat_session_id=chat_session_id)
     elif name == "pipeline_c_status":
-        return await tool_pipeline_c_status(params.get("job_id", ""))
+        return await execute_tool("pipeline_runner_status", params, dsn=dsn, chat_session_id=chat_session_id)
     elif name == "pipeline_c_approve":
-        return await tool_pipeline_c_approve(
-            params.get("job_id", ""),
-            params.get("approved", True),
-            params.get("reason", ""),
-        )
+        return await execute_tool("pipeline_runner_approve", params, dsn=dsn, chat_session_id=chat_session_id)
     elif name == "pipeline_c_cancel":
-        return await tool_pipeline_c_cancel(params.get("job_id", ""))
+        return await execute_tool("pipeline_runner_approve", {**params, "action": "reject"}, dsn=dsn, chat_session_id=chat_session_id)
     elif name == "pipeline_c_retry":
-        return await tool_pipeline_c_retry(params.get("job_id", ""))
+        return await execute_tool("pipeline_runner_submit", params, dsn=dsn, chat_session_id=chat_session_id)
     # ── 대화 히스토리 검색 ─────────────────────────────────────────────
     elif name == "search_chat_history":
         return await tool_search_chat_history(
