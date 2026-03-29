@@ -32,6 +32,35 @@ _ZIP_EXCLUDE_SUFFIXES = {".bak_aads"}  # 자동 백업 파일 제외
 # 에이전트 토큰 (환경변수에서 로드, 실제로는 DB 기반으로 확장 가능)
 PC_AGENT_SECRET = os.environ.get("PC_AGENT_SECRET", "")
 
+# PC Agent 토큰 DB 관리
+_PC_AGENT_TOKEN_DDL = """
+CREATE TABLE IF NOT EXISTS kakao_pc_agent_tokens (
+    id SERIAL PRIMARY KEY,
+    token VARCHAR(64) UNIQUE NOT NULL,
+    label VARCHAR(100) DEFAULT '',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    last_used_at TIMESTAMPTZ
+);
+"""
+_PC_AGENT_TABLES_CREATED = False
+
+
+async def _ensure_pc_agent_tables() -> None:
+    """PC Agent 토큰 테이블 자동 생성 (최초 1회)."""
+    global _PC_AGENT_TABLES_CREATED
+    if _PC_AGENT_TABLES_CREATED:
+        return
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        if pool is None:
+            return
+        async with pool.acquire() as conn:
+            await conn.execute(_PC_AGENT_TOKEN_DDL)
+        _PC_AGENT_TABLES_CREATED = True
+    except Exception as e:
+        logger.error("pc_agent 토큰 테이블 생성 실패: %s", e)
+
 
 class KakaoBotRequest(BaseModel):
     room: str = Field(..., description="채팅방 이름")
@@ -142,7 +171,7 @@ async def agent_version():
         "changelog": changelog,
         "exe_available": exe_available,
         "file_size": exe_size if exe_available else "ZIP",
-        "release_date": "2026-03-27",
+        "release_date": time.strftime("%Y-%m-%d"),
     }
 
 
@@ -259,11 +288,36 @@ async def agent_register(req: AgentRegisterRequest):
 
     토큰이 유효하면 에이전트 정보를 등록하고 WebSocket URL 반환.
     """
+    await _ensure_pc_agent_tables()
     # 토큰 검증
     if not req.agent_token:
         raise HTTPException(status_code=400, detail="토큰이 비어있습니다")
 
-    if PC_AGENT_SECRET and req.agent_token != PC_AGENT_SECRET:
+    # DB 기반 토큰 검증 (우선) + 환경변수 fallback
+    token_valid = False
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT id FROM kakao_pc_agent_tokens WHERE token = $1",
+                    req.agent_token,
+                )
+                if row:
+                    token_valid = True
+                    await conn.execute(
+                        "UPDATE kakao_pc_agent_tokens SET last_used_at = NOW() WHERE token = $1",
+                        req.agent_token,
+                    )
+    except Exception as e:
+        logger.warning("pc_agent 토큰 DB 검증 실패: %s", e)
+
+    # 환경변수 fallback
+    if not token_valid and PC_AGENT_SECRET:
+        token_valid = (req.agent_token == PC_AGENT_SECRET)
+
+    if not token_valid:
         raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다")
 
     logger.info(
@@ -612,9 +666,21 @@ async def msgbot_logs(bot_token: str = Query(...), limit: int = Query(default=50
 
 @router.post("/agent/token")
 async def agent_token_generate():
-    """PC Agent 전용 토큰 발급. 대시보드 '토큰 발급하기' 버튼에서 호출."""
+    """PC Agent 전용 토큰 발급 + DB 저장. 대시보드 '토큰 발급하기' 버튼에서 호출."""
+    await _ensure_pc_agent_tables()
     raw = f"pc-agent-{time.time()}-{os.urandom(16).hex()}"
     token = hashlib.sha256(raw.encode()).hexdigest()[:48]
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO kakao_pc_agent_tokens (token) VALUES ($1) ON CONFLICT (token) DO NOTHING",
+                    token,
+                )
+    except Exception as e:
+        logger.error("pc_agent 토큰 DB 저장 실패: %s", e)
     return {
         "token": token,
         "message": "토큰이 발급되었습니다. PC Agent EXE 실행 시 이 토큰을 입력하세요.",

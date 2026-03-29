@@ -27,7 +27,7 @@ AGENT_DIR = INSTALL_DIR / "agent"
 LOG_DIR = INSTALL_DIR / "logs"
 VERSION_FILE = AGENT_DIR / "VERSION"
 
-DEFAULT_SERVER_URL = "wss://aads.newtalk.kr"
+DEFAULT_SERVER_URL = "wss://aads.newtalk.kr/api/v1/pc-agent/ws"
 HTTP_BASE = "https://aads.newtalk.kr"
 
 # ---------------------------------------------------------------------------
@@ -167,24 +167,35 @@ def run_agent(cfg: dict):
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
 
+        agent_instance = mod.PCAgent()
+
         class _FakeProc:
             """Thread를 Popen 인터페이스처럼 래핑."""
-            def __init__(self, t: threading.Thread) -> None:
+            def __init__(self, t: threading.Thread, agent_obj) -> None:
                 self._t = t
+                self._agent = agent_obj
 
             def poll(self) -> int | None:
                 return None if self._t.is_alive() else 0
 
             def terminate(self) -> None:
-                pass  # 데몬 스레드는 메인 종료 시 자동 종료
+                if self._agent:
+                    self._agent.stop()
 
             def wait(self, timeout: float | None = None) -> None:
                 self._t.join(timeout=timeout)
 
-        t = threading.Thread(target=mod.main, daemon=True, name="KakaoBotAgent")
+        def _run_agent():
+            import asyncio as _asyncio
+            try:
+                _asyncio.run(agent_instance.run())
+            except Exception as e:
+                logger.error("에이전트 스레드 오류: %s", e)
+
+        t = threading.Thread(target=_run_agent, daemon=True, name="KakaoBotAgent")
         t.start()
         logger.info("에이전트 스레드 시작 (thread=%s)", t.name)
-        return _FakeProc(t)
+        return _FakeProc(t, agent_instance)
     else:
         # 개발 환경: 시스템 Python으로 subprocess 실행
         proc = subprocess.Popen(
