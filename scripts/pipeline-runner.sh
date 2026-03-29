@@ -626,6 +626,9 @@ $out_tail")
     # ═══ AI Reviewer 단계 — CEO 승인 전 독립 AI 리뷰 ═══
     local review_verdict="APPROVE"
     local review_score="1.0"
+    # BUG-3: 동일 피드백 무한 반복 방지 — 이전 리뷰 해시 로드
+    local prev_review_hash=""
+    [[ -f "/tmp/.review_hash_${job_id}" ]] && prev_review_hash=$(cat "/tmp/.review_hash_${job_id}" 2>/dev/null) || true
     if [[ -n "$git_diff" && ${#git_diff} -gt 10 ]]; then
         log "  AI_REVIEW job=$job_id"
         local review_response=""
@@ -661,6 +664,44 @@ $out_tail")
                 local review_issues=""
                 review_issues=$(echo "$review_response" | jq -r '.issues | join("; ")' 2>/dev/null || echo "")
                 log "  AI_REVIEW_REQUEST_CHANGES job=$job_id issues=$review_issues"
+
+                # BUG-3: 동일 피드백 반복 감지
+                local current_review_hash=""
+                current_review_hash=$(printf '%s' "$review_issues" | md5sum | cut -d' ' -f1)
+                if [[ -n "$prev_review_hash" && "$prev_review_hash" == "$current_review_hash" ]]; then
+                    log "  REVIEW_LOOP_DETECTED job=$job_id hash=$current_review_hash"
+                    local safe_loop_detail
+                    safe_loop_detail=$(sql_escape "동일 리뷰 피드백 2회 반복 (hash=${current_review_hash}): ${review_issues:0:500}")
+                    db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+                               error_detail='review_loop_detected',
+                               review_feedback=COALESCE(review_feedback,'') || E'\n[review_loop_detected] hash=${current_review_hash}\n' || ${safe_loop_detail},
+                               updated_at=NOW() WHERE job_id='${job_id}';"
+                    post_to_chat "$session_id" "🔁 [AI Reviewer] 동일 리뷰 반복으로 중단됨 (hash=${current_review_hash}): ${review_issues:0:300}"
+                    if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
+                        curl -s -m 10 -X POST \
+                            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                            -d "chat_id=${TELEGRAM_CHAT_ID}" \
+                            -d "text=🔁 [Runner] 동일 리뷰 반복으로 중단됨: ${job_id} (${project}) — ${review_issues:0:200}" \
+                            -d "parse_mode=HTML" 2>/dev/null || true
+                    fi
+                    rm -f "/tmp/.review_hash_${job_id}" 2>/dev/null || true
+                    _release_work_lock "$project" "$job_id"
+                    _cleanup_artifacts "$job_id"
+                    if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
+                        cd "${PROJECT_WORKDIR[$project]:-/tmp}"
+                        git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
+                        log "  WORKTREE_CLEANUP: /tmp/aads-wt-${job_id}"
+                    fi
+                    _notify_ai "$job_id"
+                    promote_next_queued "$project"
+                    _current_job_id=""
+                    _current_session_id=""
+                    rm -f /tmp/.pipeline_current_job
+                    return 1
+                else
+                    printf '%s' "$current_review_hash" > "/tmp/.review_hash_${job_id}" 2>/dev/null || true
+                fi
+
                 post_to_chat "$session_id" "🔍 [AI Reviewer] 코드 수정 요청 (score=${review_score}): ${review_issues:0:500}"
             fi
         else
