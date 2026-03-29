@@ -174,8 +174,8 @@ def _build_agent_zip() -> bytes:
 
 
 @router.get("/agent/download")
-async def agent_download():
-    """PC Agent 다운로드. EXE 우선, 없으면 ZIP fallback."""
+async def agent_download(format: str = Query(default=None)):
+    """PC Agent 다운로드. EXE 우선, 없으면 ZIP fallback. format=zip 이면 항상 ZIP 반환."""
     if not PC_AGENT_DIR.exists():
         raise HTTPException(status_code=404, detail="pc_agent 디렉토리가 없습니다")
 
@@ -183,8 +183,8 @@ async def agent_download():
     if PC_AGENT_VERSION_FILE.exists():
         version = PC_AGENT_VERSION_FILE.read_text(encoding="utf-8").strip()
 
-    # EXE가 있으면 EXE 직접 제공 (Python 설치 불필요)
-    if PC_AGENT_EXE_FILE.exists():
+    # EXE가 있으면 EXE 직접 제공 (Python 설치 불필요) — format=zip 이면 건너뜀
+    if PC_AGENT_EXE_FILE.exists() and format != "zip":
         exe_bytes = PC_AGENT_EXE_FILE.read_bytes()
         return StreamingResponse(
             io.BytesIO(exe_bytes),

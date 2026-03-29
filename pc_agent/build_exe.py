@@ -36,6 +36,13 @@ def build() -> None:
         "--hidden-import", "PIL",
         "--hidden-import", "PIL.Image",
         "--hidden-import", "PIL.ImageDraw",
+        "--hidden-import", "websockets",
+        "--hidden-import", "websockets.legacy",
+        "--hidden-import", "websockets.legacy.client",
+        "--hidden-import", "asyncio",
+        "--hidden-import", "json",
+        "--hidden-import", "hashlib",
+        "--hidden-import", "logging",
     ]
 
     if ICON_FILE.exists():

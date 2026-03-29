@@ -70,7 +70,11 @@ def download_update(cfg: dict, version: str) -> None:
     token = cfg.get("agent_token", "")
     logger.info("에이전트 v%s 다운로드 시작", version)
 
-    zip_data = _api_get("/api/v1/kakao-bot/agent/download", token)
+    zip_data = _api_get("/api/v1/kakao-bot/agent/download?format=zip", token)
+
+    # 안전장치: ZIP 시그니처 확인
+    if zip_data[:2] != b"PK":
+        raise ValueError("ZIP이 아닌 응답 (서버가 EXE를 반환했을 수 있음)")
 
     # 임시 폴더에 해제
     tmp_dir = Path(tempfile.mkdtemp(prefix="kakaobot_update_"))
