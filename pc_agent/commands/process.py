@@ -5,7 +5,10 @@ import logging
 import subprocess
 from typing import Any, Dict
 
-import psutil
+try:
+    import psutil
+except ImportError:
+    psutil = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 

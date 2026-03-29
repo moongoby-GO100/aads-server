@@ -43,6 +43,15 @@ def build() -> None:
         "--hidden-import", "json",
         "--hidden-import", "hashlib",
         "--hidden-import", "logging",
+        # agent.py + commands 의존성
+        "--hidden-import", "pyautogui",
+        "--hidden-import", "pyperclip",
+        "--hidden-import", "psutil",
+        "--hidden-import", "PIL.ImageGrab",
+        "--hidden-import", "pyscreeze",
+        "--hidden-import", "pygetwindow",
+        "--collect-all", "pyautogui",
+        "--collect-all", "psutil",
     ]
 
     if ICON_FILE.exists():
