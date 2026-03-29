@@ -131,8 +131,12 @@ classify_error() {
         echo "rate_limit"
     elif echo "$err_content" | grep -qi "network\|connection refused\|ETIMEDOUT\|ECONNRESET"; then
         echo "network_error"
-    elif [[ $exit_code -eq 137 || $exit_code -eq 139 ]]; then
+    elif [[ $exit_code -eq 137 ]]; then
+        echo "oom_killed"
+    elif [[ $exit_code -eq 139 ]]; then
         echo "claude_code_crash"
+    elif [[ $exit_code -eq 2 ]]; then
+        echo "auth_error"
     elif [[ $exit_code -ne 0 ]]; then
         echo "claude_code_error_${exit_code}"
     else
@@ -474,6 +478,7 @@ run_job() {
     local TOKEN_2="${ANTHROPIC_AUTH_TOKEN_2:-}"
     local total_attempts=${#MODEL_CYCLE[@]}  # 6회
     local attempt=0 exit_code=0
+    local _auth_error_limit=false
     while [[ $attempt -lt $total_attempts ]]; do
         exit_code=0
         cd "$workdir"
@@ -526,6 +531,30 @@ ${safe_instruction}"
 
         if [[ $exit_code -eq 0 ]]; then
             break
+        fi
+
+        # BUG-2: exit code별 분기 처리
+        if [[ $exit_code -eq 124 ]]; then
+            # timeout → 재시도 없이 즉시 에러 처리
+            log "  TIMEOUT job=$job_id exit=124 → 재시도 없이 즉시 에러 처리"
+            break
+        elif [[ $exit_code -eq 137 ]]; then
+            # OOM kill → 재시도 없이 즉시 에러 처리
+            log "  OOM_KILLED job=$job_id exit=137 → 재시도 없이 즉시 에러 처리"
+            break
+        elif [[ $exit_code -eq 2 ]]; then
+            # 인증 에러 → 다음 계정으로만 한 번 재시도
+            local _next_attempt=$(( attempt + 1 ))
+            if [[ "$_auth_error_limit" == "false" && $_next_attempt -lt $total_attempts && "${TOKEN_CYCLE[$_next_attempt]}" != "$token_slot" ]]; then
+                _auth_error_limit=true
+                attempt=$_next_attempt
+                log "  AUTH_ERROR job=$job_id → 다음 계정으로만 재시도 attempt=$((attempt+1))/$total_attempts"
+                sleep 2
+                continue
+            else
+                log "  AUTH_ERROR job=$job_id → 시도 가능한 계정 없음, 즉시 에러 처리"
+                break
+            fi
         fi
 
         attempt=$((attempt + 1))
