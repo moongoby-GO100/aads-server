@@ -384,18 +384,29 @@ async def _stream_litellm_anthropic(
 
     yield {"type": "model_info", "model": _display_model}
 
+    # Prompt Caching: system_prompt -> cache_control 블록 변환
+    try:
+        _cached_system = _build_system_with_cache(system_prompt)
+    except Exception:
+        _cached_system = system_prompt
+    try:
+        from app.core.cache_config import build_cached_tools as _bct
+        _cached_tools = _bct(tools) if tools else tools
+    except Exception:
+        _cached_tools = tools
+
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
             for _turn in range(_MAX_TOOL_TURNS):
                 req_body: Dict[str, Any] = {
                     "model": litellm_model,
-                    "system": system_prompt,
+                    "system": _cached_system,
                     "messages": current_msgs,
                     "max_tokens": 16384,
                     "stream": True,
                 }
-                if tools:
-                    req_body["tools"] = tools
+                if _cached_tools:
+                    req_body["tools"] = _cached_tools
 
                 # 재시도 루프
                 resp_ctx = None
