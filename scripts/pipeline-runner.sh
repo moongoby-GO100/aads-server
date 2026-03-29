@@ -939,13 +939,13 @@ deploy_job() {
 
     if [[ -n "$health_url" ]]; then
         health_ok="FAIL"
-        for _retry in 1 2 3 4 5 6 7 8 9 10 11 12; do
-            sleep 5
-            if curl -sf -o /dev/null "$health_url"; then
+        for _retry in 1 2 3; do
+            sleep 10
+            if curl -sf -m 10 -o /dev/null "$health_url"; then
                 health_ok="OK"
                 break
             fi
-            log "  HEALTH_RETRY job=$job_id attempt=$_retry"
+            log "  헬스체크 재시도 ${_retry}/3 job=$job_id"
         done
     fi
 
