@@ -703,6 +703,7 @@ _notify_ai() {
 _cleanup_artifacts() {
     local job_id="$1"
     rm -f "$ARTIFACT_DIR/${job_id}.out" "$ARTIFACT_DIR/${job_id}.err" 2>/dev/null || true
+    rm -f "/tmp/runner_alert_${job_id}_60" "/tmp/runner_alert_${job_id}_120" 2>/dev/null || true
 }
 
 # ── 승인된 작업 배포 ──────────────────────────────────────────────────
@@ -1142,6 +1143,59 @@ _cleanup_old_artifacts() {
     find "$ARTIFACT_DIR" -type f -mmin +$((ARTIFACT_MAX_AGE_HOURS * 60)) -delete 2>/dev/null || true
 }
 
+# BUG-5: 소요시간 이상치 알림 — running 작업 60분/120분 초과 시 텔레그램 알림 (중복 방지 플래그)
+_check_runtime_alerts() {
+    local filter="$1"
+    local running_rows
+    running_rows=$(db_exec "SELECT job_id, chat_session_id, project,
+                            FLOOR(EXTRACT(EPOCH FROM (NOW() - started_at))/60)::int
+                            FROM pipeline_jobs
+                            WHERE status='running'
+                              AND started_at IS NOT NULL
+                              $filter;" 2>/dev/null) || true
+    [[ -z "$running_rows" ]] && return 0
+
+    while IFS=$'\x1e' read -r r_job_id r_session r_project r_elapsed; do
+        r_job_id="${r_job_id// /}"
+        r_elapsed="${r_elapsed// /}"
+        [[ -z "$r_job_id" || -z "$r_elapsed" ]] && continue
+        [[ ! "$r_job_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && continue
+        [[ ! "$r_elapsed" =~ ^[0-9]+$ ]] && continue
+
+        if [[ "$r_elapsed" -ge 120 ]]; then
+            # 2차 경고 (120분 초과)
+            local flag_120="/tmp/runner_alert_${r_job_id}_120"
+            if [[ ! -f "$flag_120" ]]; then
+                touch "$flag_120"
+                log "  RUNTIME_ALERT_120 job=$r_job_id elapsed=${r_elapsed}m"
+                post_to_chat "$r_session" "🚨 [Pipeline Runner] 2차 경고 — 작업 120분 초과 (${r_elapsed}분 경과): $r_job_id"
+                if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
+                    curl -s -m 10 -X POST \
+                        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                        -d "chat_id=${TELEGRAM_CHAT_ID}" \
+                        -d "text=🚨 [Runner] 2차 경고 — 작업 120분 초과: ${r_job_id} (${r_project}, ${r_elapsed}분 경과)" \
+                        -d "parse_mode=HTML" 2>/dev/null || true
+                fi
+            fi
+        elif [[ "$r_elapsed" -ge 60 ]]; then
+            # 1차 알림 (60분 초과)
+            local flag_60="/tmp/runner_alert_${r_job_id}_60"
+            if [[ ! -f "$flag_60" ]]; then
+                touch "$flag_60"
+                log "  RUNTIME_ALERT_60 job=$r_job_id elapsed=${r_elapsed}m"
+                post_to_chat "$r_session" "⚠️ [Pipeline Runner] 소요시간 이상 — 작업 60분 초과 (${r_elapsed}분 경과): $r_job_id"
+                if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
+                    curl -s -m 10 -X POST \
+                        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                        -d "chat_id=${TELEGRAM_CHAT_ID}" \
+                        -d "text=⚠️ [Runner] 작업 60분 초과: ${r_job_id} (${r_project}, ${r_elapsed}분 경과)" \
+                        -d "parse_mode=HTML" 2>/dev/null || true
+                fi
+            fi
+        fi
+    done <<< "$running_rows"
+}
+
 # ── 메인 루프 ─────────────────────────────────────────────────────────
 main() {
     _init_db_mode
@@ -1249,6 +1303,7 @@ main() {
             _recover_stuck_jobs "$project_filter"
             _watchdog_check "$project_filter"
             _cleanup_old_artifacts
+            _check_runtime_alerts "$project_filter"
         fi
 
         sleep "$POLL_INTERVAL"
