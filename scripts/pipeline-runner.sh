@@ -51,6 +51,7 @@ VALID_PROJECTS="AADS KIS GO100 SF NTV2"
 
 MAX_JOB_RUNTIME="${MAX_JOB_RUNTIME:-3600}"      # 단일 작업 최대 60분 (stale 방지)
 WATCHDOG_INTERVAL="${WATCHDOG_INTERVAL:-300}"    # 5분마다 프로세스 생존 확인
+STUCK_CHECK_INTERVAL="${STUCK_CHECK_INTERVAL:-300}"  # 좀비/stuck 감지 주기 (초, 기본 5분)
 MIN_DISK_GB="${MIN_DISK_GB:-1}"                  # 최소 디스크 공간 (GB)
 
 mkdir -p "$LOG_DIR" "$ARTIFACT_DIR"
@@ -1082,14 +1083,83 @@ reject_job() {
 # C3: 크래시 복구 — 시작 시 stuck 작업 정리
 _recover_stuck_jobs() {
     local filter="$1"
-    # running/claimed 상태가 30분 이상 된 작업 → error로 전환
+
+    # BUG-7: 좀비 작업 강제 kill — running 상태 + MAX_RUNTIME(7200초) 초과 + runner_pid 존재
+    local zombie_rows
+    zombie_rows=$(db_exec "SELECT job_id, runner_pid, chat_session_id, project
+                           FROM pipeline_jobs
+                           WHERE status='running'
+                             AND runner_pid IS NOT NULL
+                             AND started_at IS NOT NULL
+                             AND started_at < NOW() - INTERVAL '${MAX_RUNTIME} seconds'
+                             $filter;" 2>/dev/null) || true
+    if [[ -n "$zombie_rows" ]]; then
+        while IFS=$'\x1e' read -r z_job z_pid z_session z_project; do
+            z_job="${z_job// /}"
+            z_pid="${z_pid// /}"
+            z_session="${z_session// /}"
+            z_project="${z_project// /}"
+            [[ -z "$z_job" || -z "$z_pid" ]] && continue
+            log "  ZOMBIE_KILL: job=$z_job pid=$z_pid — SIGTERM 전송"
+            kill -15 "$z_pid" 2>/dev/null || true
+            sleep 5
+            if kill -0 "$z_pid" 2>/dev/null; then
+                log "  ZOMBIE_KILL: job=$z_job pid=$z_pid — SIGTERM 무시, SIGKILL 전송"
+                kill -9 "$z_pid" 2>/dev/null || true
+            fi
+            db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+                       error_detail='zombie_killed',
+                       runner_pid=NULL,
+                       review_feedback=COALESCE(review_feedback,'') || E'\n[Zombie Kill] PID=${z_pid} SIGTERM→SIGKILL, MAX_RUNTIME=${MAX_RUNTIME}s 초과',
+                       updated_at=NOW() WHERE job_id='${z_job}';"
+            post_to_chat "$z_session" "💀 [Pipeline Runner] 좀비 작업 강제 종료 (PID=${z_pid}, ${MAX_RUNTIME}s 초과): $z_job"
+            _notify_ai "$z_job"
+            if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
+                curl -s -m 10 -X POST \
+                    "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                    -d "chat_id=${TELEGRAM_CHAT_ID}" \
+                    -d "text=💀 [Runner] 좀비 작업 강제 종료: ${z_job} (PID=${z_pid}, ${MAX_RUNTIME}s 초과)" \
+                    -d "parse_mode=HTML" 2>/dev/null || true
+            fi
+            [[ -n "$z_project" ]] && promote_next_queued "$z_project"
+        done <<< "$zombie_rows"
+    fi
+
+    # BUG-7: deploying 상태 10분 초과 → error 전환
+    local deploy_timed_out
+    deploy_timed_out=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='error',
+                                error_detail='deploy_timeout',
+                                review_feedback=COALESCE(review_feedback,'') || E'\n[Deploy Timeout] deploying 상태 10분 초과',
+                                updated_at=NOW()
+                                WHERE status='deploying'
+                                  AND updated_at < NOW() - INTERVAL '10 minutes'
+                                  $filter
+                                RETURNING job_id;" 2>/dev/null) || true
+    if [[ -n "$deploy_timed_out" ]]; then
+        log "  DEPLOY_TIMEOUT: $deploy_timed_out"
+        while IFS= read -r _dt_id; do
+            _dt_id="${_dt_id// /}"
+            [[ -z "$_dt_id" ]] && continue
+            [[ ! "$_dt_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && continue
+            local _dt_session _dt_project
+            _dt_session=$(db_exec "SELECT chat_session_id FROM pipeline_jobs WHERE job_id='${_dt_id}';" 2>/dev/null) || true
+            _dt_session="${_dt_session// /}"
+            _dt_project=$(db_exec "SELECT project FROM pipeline_jobs WHERE job_id='${_dt_id}';" 2>/dev/null) || true
+            _dt_project="${_dt_project// /}"
+            post_to_chat "$_dt_session" "⏰ [Pipeline Runner] 배포 타임아웃 (10분 초과): $_dt_id — 자동 에러 처리됨"
+            _notify_ai "$_dt_id"
+            [[ -n "$_dt_project" ]] && promote_next_queued "$_dt_project"
+        done <<< "$deploy_timed_out"
+    fi
+
+    # running/claimed 상태가 5분 이상 된 작업 → error로 전환 (BUG-7: 30분→5분 단축)
     local stuck
     stuck=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='error',
                      error_detail='stale_recovered',
                      review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 크래시 복구] ${RUNNER_HOSTNAME}',
                      updated_at=NOW()
                      WHERE status IN ('running','claimed')
-                       AND updated_at < NOW() - INTERVAL '30 minutes'
+                       AND updated_at < NOW() - INTERVAL '5 minutes'
                        $filter
                      RETURNING job_id;" 2>/dev/null) || true
     if [[ -n "$stuck" ]]; then
@@ -1246,6 +1316,11 @@ main() {
     _recover_stuck_jobs "$project_filter"
 
     local _cycle=0
+    # BUG-7: STUCK_CHECK_INTERVAL(기본 300초/5분) 기반 동적 cycle 계산
+    local _stuck_check_cycles
+    _stuck_check_cycles=$(( STUCK_CHECK_INTERVAL / POLL_INTERVAL ))
+    [[ "$_stuck_check_cycles" -lt 1 ]] && _stuck_check_cycles=1
+    log "STUCK_CHECK_INTERVAL=${STUCK_CHECK_INTERVAL}s → 매 ${_stuck_check_cycles} cycle마다 감지"
     while true; do
         # 글로벌 동시 작업 상한 체크 (전 서버 합산, rate limit 예방)
         local _running_count
@@ -1297,9 +1372,9 @@ main() {
             fi
         fi
 
-        # 주기적 정리 (60 cycle = ~5분마다)
+        # 주기적 정리 (STUCK_CHECK_INTERVAL 초마다 — BUG-7: 동적 주기)
         _cycle=$((_cycle + 1))
-        if (( _cycle % 60 == 0 )); then
+        if (( _cycle % _stuck_check_cycles == 0 )); then
             _recover_stuck_jobs "$project_filter"
             _watchdog_check "$project_filter"
             _cleanup_old_artifacts
