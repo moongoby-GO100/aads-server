@@ -15,11 +15,20 @@ from typing import Any, Dict
 
 import websockets
 
-# 명령 모듈 임포트
+# 명령 모듈 임포트 — COMMAND_HANDLERS만 사용 (개별 임포트 금지: _safe_import 방어 무력화)
 from commands import COMMAND_HANDLERS
-from commands import shell, screenshot, file_ops, process, system_info, kakao
-from commands import updater
-from commands.screen_stream import get_streamer
+
+# updater는 자동업데이트 루프에서 직접 참조 필요 (방어적)
+try:
+    from commands import updater
+except ImportError:
+    updater = None  # type: ignore[assignment]
+
+# screen_stream은 WebSocket 참조가 필요하므로 별도 임포트 (방어적)
+try:
+    from commands.screen_stream import get_streamer
+except ImportError:
+    get_streamer = None  # type: ignore[assignment]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -110,7 +119,10 @@ class PCAgent:
                 break
 
     async def _auto_update_loop(self, ws: Any) -> None:
-        """1분마다 git 변경 확인 → 변경 있으면 자동 pull + 재시작."""
+        """1분마다 서버 업데이트 확인 → 변경 있으면 재다운로드 + 재시작."""
+        if updater is None:
+            logger.warning("updater 모듈 미로드 — 자동 업데이트 비활성화")
+            return
         await asyncio.sleep(30)  # 시작 후 30초 대기
         while True:
             try:
@@ -139,7 +151,9 @@ class PCAgent:
         logger.info("명령 수신 command_id=%s type=%s", command_id, command_type)
 
         # 스트리밍 명령은 WebSocket 참조가 필요하므로 직접 처리
-        if command_type == "stream_start":
+        if command_type in ("stream_start", "stream_stop") and get_streamer is None:
+            result = {"status": "error", "data": {"error": "screen_stream 모듈 미설치"}}
+        elif command_type == "stream_start":
             try:
                 streamer = get_streamer()
                 await streamer.start(ws, params)

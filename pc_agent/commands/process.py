@@ -56,6 +56,9 @@ async def process_kill(params: Dict[str, Any]) -> Dict[str, Any]:
     if pid is None:
         return {"status": "error", "data": {"error": "pid 파라미터 필수"}}
 
+    if psutil is None:
+        return {"status": "error", "data": {"error": "psutil 미설치 — process_kill 사용 불가"}}
+
     try:
         pid = int(pid)
         proc = psutil.Process(pid)

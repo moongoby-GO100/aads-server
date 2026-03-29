@@ -29,6 +29,8 @@ VERSION_FILE = AGENT_DIR / "VERSION"
 
 DEFAULT_SERVER_URL = "wss://aads.newtalk.kr/api/v1/pc-agent/ws"
 HTTP_BASE = "https://aads.newtalk.kr"
+CRASH_COUNT_FILE = INSTALL_DIR / ".crash_count"
+MAX_CRASHES_BEFORE_REDOWNLOAD = 3
 
 # ---------------------------------------------------------------------------
 # 로깅 설정
@@ -116,6 +118,32 @@ def ask_token_gui() -> str | None:
 # ---------------------------------------------------------------------------
 # 시작프로그램 등록 (Windows 레지스트리)
 # ---------------------------------------------------------------------------
+def _get_crash_count() -> int:
+    """크래시 카운터 읽기."""
+    try:
+        return int(CRASH_COUNT_FILE.read_text(encoding="utf-8").strip())
+    except Exception:
+        return 0
+
+
+def _set_crash_count(n: int) -> None:
+    """크래시 카운터 저장."""
+    try:
+        CRASH_COUNT_FILE.write_text(str(n), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _force_redownload() -> None:
+    """VERSION을 0.0.0으로 리셋하여 다음 업데이트 체크 시 강제 재다운로드."""
+    vf = AGENT_DIR / "VERSION"
+    try:
+        vf.write_text("0.0.0", encoding="utf-8")
+        logger.info("강제 재다운로드 예약 (VERSION → 0.0.0)")
+    except Exception:
+        pass
+
+
 def register_startup() -> None:
     """HKCU Run에 런처 등록."""
     if sys.platform != "win32":
@@ -290,12 +318,27 @@ def main() -> None:
     # 4) 에이전트 프로세스 감시 + 주기적 업데이트 확인
     UPDATE_INTERVAL = 3600  # 1시간마다 업데이트 확인
     last_update_check = time.time()
+    _set_crash_count(0)  # 정상 시작 시 크래시 카운터 리셋
 
     try:
         while True:
             ret = proc.poll()
             if ret is not None:
-                logger.warning("에이전트 종료 (코드 %s) — 5초 후 재시작", ret)
+                crash_n = _get_crash_count() + 1
+                _set_crash_count(crash_n)
+                logger.warning("에이전트 종료 (코드 %s) — 크래시 %d회", ret, crash_n)
+
+                if crash_n >= MAX_CRASHES_BEFORE_REDOWNLOAD:
+                    logger.warning("크래시 %d회 → 에이전트 코드 강제 재다운로드", crash_n)
+                    _force_redownload()
+                    _set_crash_count(0)
+                    try:
+                        need, remote_ver = check_update(cfg)
+                        if need:
+                            download_update(cfg, remote_ver)
+                    except Exception as e:
+                        logger.error("강제 재다운로드 실패: %s", e)
+
                 time.sleep(5)
                 proc = run_agent(cfg)
                 if proc is None:
