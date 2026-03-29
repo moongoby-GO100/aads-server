@@ -192,7 +192,7 @@ async def evaluate_response(
                 logger.debug("a1_fact_confidence_error", error=str(e_a1))
 
         # B1: Reflexion — auto-reflect on poor quality responses
-        if overall < 0.5 and session_id:
+        if overall < 0.4 and session_id:
             try:
                 reflection_prompt = (
                     f"이 AI 응답의 품질이 낮습니다 (점수: {overall:.1f}).\n"
@@ -543,8 +543,8 @@ async def auto_reflexion_loop(
             project=normalized_project,
         )
 
-        # score >= 0.5 이면 이후 단계 불필요
-        if score >= 0.5:
+        # score >= 0.65 이면 이후 단계 불필요
+        if score >= 0.65:
             return {"score": score, "failure_type": None, "saved": False}
 
         # ── Step 2: 실패 유형 분류 + correction_directive 저장 ───────────────
@@ -653,7 +653,7 @@ async def _check_strategy_update(
                 """SELECT COUNT(*) FROM ai_meta_memory
                    WHERE project = $1
                      AND category = 'strategy_update'
-                     AND updated_at > NOW() - interval '24 hours'""",
+                     AND updated_at > NOW() - interval '6 hours'""",
                 project,
             )
             if int(existing_update or 0) > 0:

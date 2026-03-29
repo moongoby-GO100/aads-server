@@ -272,32 +272,32 @@ async def auto_tune_memory(project: Optional[str] = None) -> dict:
                             re_correction_count=evaluation["re_correction_count"],
                         )
 
-            # ── 규칙 3: 평가 결과 ai_meta_memory 저장 ────────────────────────
-            meta_key = f"meta_eval_{project.lower() if project else 'global'}"
-            meta_value = json.dumps(
-                {
-                    "project": project,
-                    "utilization_rate": evaluation["utilization_rate"],
-                    "re_correction_count": evaluation["re_correction_count"],
-                    "total_memories": evaluation["total_memories"],
-                    "active_memories": evaluation["active_memories"],
-                    "tuned_down": tune_result["tuned_down"],
-                    "tuned_up": tune_result["tuned_up"],
-                },
-                ensure_ascii=False,
-            )
+                # ── 규칙 3: 평가 결과 ai_meta_memory 저장 ────────────────────────
+                meta_key = f"meta_eval_{project.lower() if project else 'global'}"
+                meta_value = json.dumps(
+                    {
+                        "project": project,
+                        "utilization_rate": evaluation["utilization_rate"],
+                        "re_correction_count": evaluation["re_correction_count"],
+                        "total_memories": evaluation["total_memories"],
+                        "active_memories": evaluation["active_memories"],
+                        "tuned_down": tune_result["tuned_down"],
+                        "tuned_up": tune_result["tuned_up"],
+                    },
+                    ensure_ascii=False,
+                )
 
-            await conn.execute(
-                """
-                INSERT INTO ai_meta_memory (category, key, value, confidence, updated_at)
-                VALUES ('meta_evaluation', $1, $2, 0.8, NOW())
-                ON CONFLICT (key) DO UPDATE
-                    SET value      = EXCLUDED.value,
-                        updated_at = NOW()
-                """,
-                meta_key,
-                meta_value,
-            )
+                await conn.execute(
+                    """
+                    INSERT INTO ai_meta_memory (category, key, value, confidence, updated_at)
+                    VALUES ('meta_evaluation', $1, $2, 0.8, NOW())
+                    ON CONFLICT (key) DO UPDATE
+                        SET value      = EXCLUDED.value,
+                            updated_at = NOW()
+                    """,
+                    meta_key,
+                    meta_value,
+                )
 
         logger.info(
             "memory_auto_tune_complete",
