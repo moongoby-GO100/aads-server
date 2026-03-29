@@ -381,6 +381,21 @@ async def build_messages_context(
     # Layer 1 (동기 — system_prompt_v2 기반 XML 섹션, Prompt Compression 적용)
     layer1 = build_layer1(ws_key, base_system_prompt, intent=_effective_intent)
 
+    # B: Layer 4 실시간 수치 주입 — "(로딩중)" 플레이스홀더를 실측값으로 교체
+    if db_conn and "(로딩중)" in layer1:
+        try:
+            from app.core.memory_recall import get_evolution_stats
+            _evo = await get_evolution_stats(db_conn)
+            _ph = "기억: (로딩중)건 | 관찰: (로딩중)건 | 품질: (로딩중)%((로딩중)건) | 에러패턴: (로딩중)건"
+            _rt = (
+                f"기억: {_evo['fact_count']}건 | 관찰: {_evo['obs_count']}건"
+                f" | 품질: {_evo['avg_quality']}({_evo['quality_count']}건)"
+                f" | 에러패턴: {_evo['error_pattern_count']}건"
+            )
+            layer1 = layer1.replace(_ph, _rt)
+        except Exception:
+            pass
+
     # Layer 2 + 메모리 주입 + Auto-RAG(F1/F3) + Workspace Preload(F6) 병렬 실행
     _project = _normalize_workspace(workspace_name)
     # 마지막 user 메시지 추출 (Auto-RAG용)

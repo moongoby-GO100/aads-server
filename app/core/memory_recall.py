@@ -143,10 +143,12 @@ async def _build_preferences() -> tuple[str, list[int]]:
             rows = await conn.fetch(
                 """
                 SELECT id, key, value FROM ai_observations
-                WHERE category IN ('ceo_preference', 'decision', 'ceo_correction')
+                WHERE category IN ('ceo_preference', 'decision', 'ceo_correction', 'compaction_directive', 'ceo_directive')
                   AND confidence >= $1
-                ORDER BY (confidence * EXP(-0.1 * EXTRACT(EPOCH FROM (NOW() - COALESCE(updated_at, created_at))) / 86400)) DESC
-                LIMIT 15
+                ORDER BY
+                    CASE WHEN category IN ('compaction_directive','ceo_directive') THEN 0 ELSE 1 END,
+                    (confidence * EXP(-0.1 * EXTRACT(EPOCH FROM (NOW() - COALESCE(updated_at, created_at))) / 86400)) DESC
+                LIMIT 20
                 """,
                 _conf,
             )
@@ -194,8 +196,16 @@ async def _build_tool_strategy(project_id: Optional[str] = None) -> tuple[str, l
                 )
             if not rows:
                 return "", []
-            used_ids = [r["id"] for r in rows]
-            lines = [f"- {r['value']}" for r in rows]
+            # C: value 앞 50자 기준 중복 제거 (동일 내용 다중 프로젝트 저장 방지)
+            _seen_vals: set = set()
+            _deduped = []
+            for r in rows:
+                _vkey = (r["value"] or "")[:50]
+                if _vkey not in _seen_vals:
+                    _seen_vals.add(_vkey)
+                    _deduped.append(r)
+            used_ids = [r["id"] for r in _deduped]
+            lines = [f"- {r['value']}" for r in _deduped]
             text = "\n".join(lines)
             return _truncate(text, _BUDGET["tool_strategy"]), used_ids
     except Exception as e:

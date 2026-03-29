@@ -292,6 +292,52 @@ async def evaluate_response(
             except Exception as e_p3:
                 logger.debug("p3_reflexion_verify_error", error=str(e_p3))
 
+        # D: 세션 품질 알림 — 최근 10건 평균 0.5 이하 시 텔레그램 경고 (1시간 1회 제한)
+        if overall < 0.5 and session_id:
+            try:
+                async with pool.acquire() as conn_alert:
+                    avg_row = await conn_alert.fetchrow(
+                        """SELECT AVG(quality_score) as avg_q, COUNT(*) as cnt
+                           FROM (SELECT quality_score FROM chat_messages
+                                 WHERE session_id = $1::uuid AND quality_score IS NOT NULL
+                                 ORDER BY created_at DESC LIMIT 10) sub""",
+                        uuid.UUID(session_id),
+                    )
+                    if avg_row and avg_row["cnt"] >= 5 and avg_row["avg_q"] is not None and float(avg_row["avg_q"]) < 0.5:
+                        # 1시간 중복 방지
+                        _alert_key = f"quality_alert:{session_id[:8]}"
+                        _recent = await conn_alert.fetchval(
+                            """SELECT COUNT(*) FROM ai_meta_memory
+                               WHERE key = $1 AND created_at > NOW() - INTERVAL '1 hour'""",
+                            _alert_key,
+                        )
+                        if (_recent or 0) == 0:
+                            await conn_alert.execute(
+                                """INSERT INTO ai_meta_memory (category, key, value, confidence)
+                                   VALUES ('quality_alert', $1, $2::jsonb, 0.9)""",
+                                _alert_key,
+                                json.dumps({"session_id": session_id, "avg_quality": float(avg_row["avg_q"]), "count": avg_row["cnt"]}, ensure_ascii=False),
+                            )
+                            # 텔레그램 알림
+                            try:
+                                from app.services.telegram_bot import init_telegram_bot
+                                _bot = init_telegram_bot()
+                                if _bot:
+                                    _title_row = await conn_alert.fetchval(
+                                        "SELECT title FROM chat_sessions WHERE id = $1::uuid",
+                                        uuid.UUID(session_id),
+                                    )
+                                    await _bot.send_message(
+                                        f"⚠️ [품질 경고] 세션 '{_title_row or session_id[:8]}'\n"
+                                        f"최근 10건 평균: {float(avg_row['avg_q']):.2f} (임계값 0.5)\n"
+                                        f"현재 점수: {overall:.2f}"
+                                    )
+                            except Exception:
+                                pass
+                            logger.warning("session_quality_alert", session=session_id[:8], avg=float(avg_row["avg_q"]))
+            except Exception as e_alert:
+                logger.debug("quality_alert_error", error=str(e_alert))
+
         return overall
 
     except Exception as e:
