@@ -30,7 +30,7 @@ logger = logging.getLogger("pc-agent")
 # ── 설정 ─────────────────────────────────────────────────────────────────
 
 SERVER_URL = os.getenv("AADS_SERVER_URL", "wss://aads.newtalk.kr/api/v1/pc-agent/ws")
-AGENT_SECRET = os.getenv("PC_AGENT_SECRET", "")
+AGENT_SECRET = os.getenv("AADS_AGENT_TOKEN", os.getenv("PC_AGENT_SECRET", ""))
 HEARTBEAT_INTERVAL = 25  # 초
 RECONNECT_DELAY = 5  # 초
 AUTO_UPDATE_INTERVAL = 60  # 초 — 1분마다 git 변경 확인

@@ -610,6 +610,17 @@ async def msgbot_logs(bot_token: str = Query(...), limit: int = Query(default=50
     }
 
 
+@router.post("/agent/token")
+async def agent_token_generate():
+    """PC Agent 전용 토큰 발급. 대시보드 '토큰 발급하기' 버튼에서 호출."""
+    raw = f"pc-agent-{time.time()}-{os.urandom(16).hex()}"
+    token = hashlib.sha256(raw.encode()).hexdigest()[:48]
+    return {
+        "token": token,
+        "message": "토큰이 발급되었습니다. PC Agent EXE 실행 시 이 토큰을 입력하세요.",
+    }
+
+
 @router.post("/msgbot/token/generate")
 async def msgbot_token_generate(user_label: str = Query(default="default")):
     """새 bot_token 생성 + 기본 설정 등록."""
