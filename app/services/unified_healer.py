@@ -77,7 +77,7 @@ ERROR_RECOVERY_MAP = {
 
 _circuit_breaker: dict[str, dict] = {}
 CIRCUIT_BREAKER_MAX_FAILURES = 3
-CIRCUIT_BREAKER_COOLDOWN_SEC = 300  # 5분
+CIRCUIT_BREAKER_COOLDOWN_SEC = 600  # 10분
 
 # ── DB 헬퍼 ──────────────────────────────────────────────────────────────────
 
@@ -553,6 +553,11 @@ async def _phase2_error_scan(conn):
         FROM error_log
         WHERE resolution_type = 'pending'
           AND last_seen > NOW() - INTERVAL '1 hour'
+          AND NOT EXISTS (
+              SELECT 1 FROM recovery_log rl
+              WHERE rl.error_log_id = error_log.id
+                AND rl.created_at > NOW() - INTERVAL '10 minutes'
+          )
         ORDER BY occurrence_count DESC
         LIMIT 20
     """)
@@ -588,6 +593,21 @@ async def _execute_error_recovery(conn, err: dict, command: str, server: str):
     error_key = f"error:{err['id']}"
 
     if _circuit_open(error_key):
+        return
+
+    # 최대 복구 시도 횟수 제한 (5회 초과 시 manual_required로 전환)
+    attempt_count = await conn.fetchval(
+        "SELECT COUNT(*) FROM recovery_log WHERE error_log_id = $1",
+        err["id"],
+    )
+    if attempt_count >= 5:
+        await conn.execute("""
+            UPDATE error_log
+            SET resolution_type='manual_required',
+                resolution='Auto-recovery failed after 5 attempts'
+            WHERE id=$1 AND resolution_type='pending'
+        """, err["id"])
+        logger.warning("error_max_retries_exceeded", error_id=err["id"], attempts=attempt_count)
         return
 
     if _is_safe_command(command):
