@@ -295,7 +295,28 @@ def main() -> None:
     proc = run_agent(cfg)
     if proc is None:
         logger.error("에이전트 실행 실패 — 코드를 먼저 다운로드하세요")
+        try:
+            import tkinter as _tk
+            from tkinter import messagebox as _mb
+            _r = _tk.Tk(); _r.withdraw()
+            _mb.showerror("KakaoBot", "에이전트 실행 실패.\n에이전트 코드를 다운로드할 수 없습니다.")
+            _r.destroy()
+        except Exception:
+            pass
         sys.exit(1)
+
+    # 설치/실행 성공 알림 — 최초 1회만
+    if not cfg.get("setup_shown"):
+        try:
+            import tkinter as _tk2
+            from tkinter import messagebox as _mb2
+            _r2 = _tk2.Tk(); _r2.withdraw()
+            _mb2.showinfo("KakaoBot", "설치 완료! 에이전트가 실행 중입니다.\n시스템 트레이에서 상태를 확인하세요.")
+            _r2.destroy()
+        except Exception:
+            pass
+        cfg["setup_shown"] = True
+        save_config(cfg)
 
     # 트레이를 별도 스레드에서 실행 (메인 스레드에서 프로세스 감시)
     try:

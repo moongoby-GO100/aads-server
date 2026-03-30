@@ -42,7 +42,7 @@ SERVER_URL = os.getenv("AADS_SERVER_URL", "wss://aads.newtalk.kr/api/v1/pc-agent
 AGENT_SECRET = os.getenv("AADS_AGENT_TOKEN", os.getenv("PC_AGENT_SECRET", ""))
 HEARTBEAT_INTERVAL = 25  # 초
 RECONNECT_DELAY = 5  # 초
-AUTO_UPDATE_INTERVAL = 60  # 초 — 1분마다 git 변경 확인
+AUTO_UPDATE_INTERVAL = 300  # 초 — 5분마다 서버 버전 확인 (HTTP 기반)
 
 
 class PCAgent:

@@ -20,13 +20,36 @@ PC_AGENT_SECRET = os.environ.get("PC_AGENT_SECRET", "")
 HEARTBEAT_INTERVAL = 30  # 초
 
 
+async def _verify_token_db(token: str) -> bool:
+    """DB에서 토큰 유효성 검증 (kakao_pc_agent_tokens 테이블)."""
+    try:
+        from app.core.database import get_pool
+        pool = await get_pool()
+        row = await pool.fetchrow(
+            "SELECT 1 FROM kakao_pc_agent_tokens WHERE token = $1 AND is_active = true",
+            token,
+        )
+        return row is not None
+    except Exception as exc:
+        logger.warning("pc_agent_token_db_check_failed: %s", exc)
+        return False
+
+
 # ── WebSocket ──────────────────────────────────────────────────────────
 
 @router.websocket("/pc-agent/ws/{agent_id}")
 async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query("")):
     """PC 에이전트 WebSocket 연결."""
-    # 인증
-    if PC_AGENT_SECRET and token != PC_AGENT_SECRET:
+    # 인증: DB 토큰 → 환경변수 폴백
+    token_valid = False
+    if token:
+        token_valid = await _verify_token_db(token)
+        if not token_valid and PC_AGENT_SECRET and token == PC_AGENT_SECRET:
+            token_valid = True
+    if not token_valid and not PC_AGENT_SECRET:
+        # 환경변수 미설정 + DB에 토큰 없으면 허용 (개발 모드)
+        token_valid = True
+    if not token_valid:
         await websocket.close(code=4001, reason="unauthorized")
         logger.warning("pc_agent_ws_auth_failed agent_id=%s", agent_id)
         return
