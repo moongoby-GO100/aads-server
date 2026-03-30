@@ -148,6 +148,24 @@ _COST_MAP = {
     "gemini-3.1-pro-preview": (2.0,  12.0),
     "gemini-2.5-flash":       (0.15,  0.6),   # thinking 별도 $3.50 (여기선 non-thinking만)
     "gemini-2.5-flash-lite":  (0.04,  0.1),
+    # Groq (무료 — 비용 0)
+    "groq-qwen3-32b":        (0.0,   0.0),
+    "groq-kimi-k2":          (0.0,   0.0),
+
+    "groq-llama4-scout":     (0.0,   0.0),
+    "groq-llama-70b":        (0.0,   0.0),
+    "groq-llama-8b":         (0.0,   0.0),
+    "groq-gpt-oss-120b":     (0.0,   0.0),
+    "groq-compound":         (0.0,   0.0),
+    # DeepSeek
+    "deepseek-chat":         (0.28,  0.42),
+    "deepseek-reasoner":     (0.55,  2.19),
+    # OpenRouter
+    "openrouter-grok-4-fast":    (0.20,  0.20),   # Grok 4.1 Fast, 2M ctx
+    "openrouter-deepseek-v3":    (0.26,  0.26),   # DeepSeek V3.2
+    "openrouter-mistral-small":  (0.15,  0.15),   # Mistral Small
+    "openrouter-nemotron-free":  (0.0,   0.0),    # Nemotron 3 Super (무료)
+    "openrouter-minimax-m2":     (0.30,  0.30),   # MiniMax M2.7
 }
 
 # LiteLLM alias → Anthropic model ID
@@ -162,6 +180,24 @@ _GEMINI_MODELS = {"gemini-flash", "gemini-flash-lite", "gemini-pro", "gemini-3-f
 
 # Gemini Thinking 모델 — reasoning_effort=low + 높은 max_tokens 필요
 _GEMINI_THINKING_MODELS = {"gemini-pro", "gemini-flash", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview", "gemini-3.1-pro-preview", "gemini-2.5-flash"}
+
+# Groq 모델 (LiteLLM 경유, 무료)
+_GROQ_MODELS = {"groq-qwen3-32b", "groq-kimi-k2", "groq-llama4-scout", "groq-llama-70b", "groq-llama-8b", "groq-gpt-oss-120b", "groq-compound"}
+
+# DeepSeek 모델 (LiteLLM 경유)
+_DEEPSEEK_MODELS = {"deepseek-chat", "deepseek-reasoner"}
+
+# OpenRouter 모델 (LiteLLM 경유, openrouter/ prefix)
+_OPENROUTER_MODELS = {
+    "openrouter-grok-4-fast",
+    "openrouter-deepseek-v3",
+    "openrouter-mistral-small",
+    "openrouter-nemotron-free",
+    "openrouter-minimax-m2",
+}
+
+# LiteLLM OpenAI 호환 모델 (Gemini + Groq + DeepSeek + OpenRouter)
+_LITELLM_OPENAI_MODELS = _GEMINI_MODELS | _GROQ_MODELS | _DEEPSEEK_MODELS | _OPENROUTER_MODELS
 
 
 def _estimate_cost(model: str, in_tokens: int, out_tokens: int) -> Decimal:
@@ -204,7 +240,7 @@ async def call_stream(
     if model in _OVERRIDE_TO_ALIAS:
         model = _OVERRIDE_TO_ALIAS[model]
     # 안전망: 알 수 없는 모델명이 CLI relay를 우회하지 않도록 기본값 적용
-    if model not in _GEMINI_MODELS and model not in _ANTHROPIC_MODEL_ID:
+    if model not in _LITELLM_OPENAI_MODELS and model not in _ANTHROPIC_MODEL_ID:
         logger.warning(f"unknown_model_fallback: '{model}' → 'claude-sonnet'")
         model = "claude-sonnet"
 
@@ -317,6 +353,45 @@ async def call_stream(
                 yield event
         return
 
+    # Groq / DeepSeek 모델 → LiteLLM 경유 (OpenAI 호환, 실패 시 Gemini Flash 폴백)
+    if model in _GROQ_MODELS or model in _DEEPSEEK_MODELS:
+        _had_error = False
+        async for event in _stream_litellm(model, system_prompt, messages, tools=tools):
+            if event.get("type") == "error":
+                _had_error = True
+                logger.warning(f"litellm_fallback: {model} failed, falling back to gemini-2.5-flash")
+                break
+            yield event
+        if _had_error:
+            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
+                yield event
+        return
+
+    # OpenRouter 모델 → LiteLLM 경유 (openrouter/ prefix 붙여서 전달, 실패 시 Gemini Flash 폴백)
+    if model in _OPENROUTER_MODELS:
+        # AADS 내부 키 → LiteLLM에 등록된 openrouter/<model> 이름 변환
+        _OPENROUTER_MODEL_MAP = {
+            "openrouter-grok-4-fast":   "openrouter/x-ai/grok-4",
+            "openrouter-deepseek-v3":   "openrouter/deepseek/deepseek-chat-v3-0324",
+            "openrouter-mistral-small": "openrouter/mistralai/mistral-small-3.2-24b-instruct",
+            "openrouter-nemotron-free": "openrouter/nvidia/llama-3.3-nemotron-super-49b-v1:free",
+            "openrouter-minimax-m2":    "openrouter/minimax/minimax-m1",
+        }
+        _or_model = _OPENROUTER_MODEL_MAP.get(model, model)
+        _had_error = False
+        async for event in _stream_litellm_openai(_or_model, system_prompt, messages, tools=tools):
+            if event.get("type") == "error":
+                _had_error = True
+                logger.warning(f"openrouter_fallback: {model} ({_or_model}) failed, falling back to gemini-2.5-flash")
+                break
+            # done 이벤트의 model 필드를 사람이 읽기 좋은 이름으로 교체
+            if event.get("type") == "done":
+                event = {**event, "model": model}
+            yield event
+        if _had_error:
+            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
+                yield event
+        return
 
 
 def _convert_content_for_openai(content: Any) -> Any:

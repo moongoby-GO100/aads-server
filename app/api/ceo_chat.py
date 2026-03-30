@@ -123,6 +123,12 @@ SUPPORTED_MODELS: List[Dict[str, Any]] = [
     {"id": "gemini-2.0-flash",           "provider": "google",    "name": "Gemini 2.0 Flash",           "input_$/M": 0.075, "output_$/M": 0.30},
     {"id": "gemini-1.5-pro",             "provider": "google",    "name": "Gemini 1.5 Pro",             "input_$/M": 3.50,  "output_$/M": 10.50},
     {"id": "gemini-1.5-flash",           "provider": "google",    "name": "Gemini 1.5 Flash",           "input_$/M": 0.075, "output_$/M": 0.30},
+    # OpenRouter
+    {"id": "openrouter-nemotron-free",   "provider": "openrouter", "name": "Nemotron 3 Super (무료)",   "input_$/M": 0.0,   "output_$/M": 0.0},
+    {"id": "openrouter-grok-4-fast",     "provider": "openrouter", "name": "Grok 4.1 Fast (2M ctx, $0.20)", "input_$/M": 0.20, "output_$/M": 0.20},
+    {"id": "openrouter-deepseek-v3",     "provider": "openrouter", "name": "DeepSeek V3.2 ($0.26)",     "input_$/M": 0.26,  "output_$/M": 0.26},
+    {"id": "openrouter-mistral-small",   "provider": "openrouter", "name": "Mistral Small ($0.15)",      "input_$/M": 0.15,  "output_$/M": 0.15},
+    {"id": "openrouter-minimax-m2",      "provider": "openrouter", "name": "MiniMax M2.7 ($0.30)",       "input_$/M": 0.30,  "output_$/M": 0.30},
 ]
 
 # 빠른 조회용 dict
@@ -1778,9 +1784,10 @@ async def get_supported_models():
         "models": SUPPORTED_MODELS,
         "total": len(SUPPORTED_MODELS),
         "by_provider": {
-            "anthropic": [m for m in SUPPORTED_MODELS if m["provider"] == "anthropic"],
-            "openai":    [m for m in SUPPORTED_MODELS if m["provider"] == "openai"],
-            "google":    [m for m in SUPPORTED_MODELS if m["provider"] == "google"],
+            "anthropic":   [m for m in SUPPORTED_MODELS if m["provider"] == "anthropic"],
+            "openai":      [m for m in SUPPORTED_MODELS if m["provider"] == "openai"],
+            "google":      [m for m in SUPPORTED_MODELS if m["provider"] == "google"],
+            "openrouter":  [m for m in SUPPORTED_MODELS if m["provider"] == "openrouter"],
         },
     }
 
