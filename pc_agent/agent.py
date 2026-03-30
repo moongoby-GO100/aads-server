@@ -1,7 +1,7 @@
 """
 AADS-195: PC 제어 에이전트 — Windows 클라이언트.
 WebSocket으로 AADS 서버에 연결, 명령 수신/실행/결과 반환.
-v1.0.9: agent_id 영속화 강화 + Windows 뮤텍스 잠금 + 에러 리질리언스.
+v1.0.10: PCAgent.__init__ 뮤텍스 이동 — launcher 직접 호출 시에도 단일 인스턴스 보장.
 """
 from __future__ import annotations
 
@@ -130,6 +130,9 @@ class PCAgent:
     """PC 제어 에이전트 클라이언트."""
 
     def __init__(self) -> None:
+        # 단일 인스턴스 — main() 우회 시(launcher가 직접 PCAgent().run() 호출)에도 동작
+        if not _acquire_single_instance():
+            raise SystemExit(0)
         self.agent_id = _get_persistent_agent_id()
         self.hostname = platform.node()
         self.os_info = f"{platform.system()} {platform.release()} {platform.version()}"
@@ -296,10 +299,7 @@ class PCAgent:
 
 def main() -> None:
     """엔트리포인트."""
-    # 단일 인스턴스 보장 (Windows 뮤텍스 — 파일잠금보다 안정적)
-    if not _acquire_single_instance():
-        return
-
+    # 뮤텍스는 PCAgent.__init__에서 처리 (launcher 직접 호출 시에도 동작)
     agent = PCAgent()
     try:
         asyncio.run(agent.run())
