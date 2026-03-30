@@ -44,9 +44,33 @@ STATUS=$(docker inspect aads-server --format '{{.State.Status}}' 2>/dev/null)
 
 case "$STATUS" in
     running)
-        # Layer 1: API Health
-        if ! curl -sf --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
-            notify "⚠️ running but unhealthy — supervisorctl restart aads-api"
+        # Layer 1: API Health (3x retry, 30s timeout, 5min cooldown)
+        COOLDOWN_FILE="/tmp/aads-watchdog-restart.lock"
+        HEALTH_OK=false
+        for i in 1 2 3; do
+            if curl -sf --max-time 30 "$HEALTH_URL" >/dev/null 2>&1; then
+                HEALTH_OK=true
+                break
+            fi
+            [ "$i" -lt 3 ] && sleep 5
+        done
+
+        if [ "$HEALTH_OK" = false ]; then
+            if [ -f "$COOLDOWN_FILE" ]; then
+                LAST=$(stat -c %Y "$COOLDOWN_FILE" 2>/dev/null || echo 0)
+                NOW=$(date +%s)
+                if [ $((NOW - LAST)) -lt 300 ]; then
+                    logger "aads-watchdog: cooldown active -- skip"
+                    exit 0
+                fi
+            fi
+            API_STATE=$(docker exec aads-server supervisorctl status aads-api 2>/dev/null | awk '{print $2}')
+            if [ "$API_STATE" = "STARTING" ] || [ "$API_STATE" = "STOPPING" ]; then
+                logger "aads-watchdog: aads-api state=$API_STATE -- skip restart"
+                exit 0
+            fi
+            touch "$COOLDOWN_FILE"
+            notify "unhealthy 3x -- supervisorctl restart aads-api"
             docker exec aads-server supervisorctl restart aads-api
             exit 0
         fi
@@ -86,7 +110,7 @@ case "$STATUS" in
         docker start aads-server
         sleep 8
         # V2: 복구 후 health + 채팅 INSERT 테스트
-        if curl -sf --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
+        if curl -sf --max-time 30 "$HEALTH_URL" >/dev/null 2>&1; then
             INSERT_TEST=$(docker exec aads-postgres psql -U aads -d aads -t -A -c "
               WITH ins AS (INSERT INTO chat_messages (session_id, role, content) SELECT id, 'user', '_watchdog_test_' FROM chat_sessions LIMIT 1 RETURNING id),
               del AS (DELETE FROM chat_messages WHERE id IN (SELECT id FROM ins))
@@ -106,7 +130,7 @@ case "$STATUS" in
         cd "$COMPOSE_DIR" && docker compose up -d --no-deps aads-server
         sleep 12
         # V2: 복구 후 health + 채팅 INSERT 테스트
-        if curl -sf --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
+        if curl -sf --max-time 30 "$HEALTH_URL" >/dev/null 2>&1; then
             INSERT_TEST=$(docker exec aads-postgres psql -U aads -d aads -t -A -c "
               WITH ins AS (INSERT INTO chat_messages (session_id, role, content) SELECT id, 'user', '_watchdog_test_' FROM chat_sessions LIMIT 1 RETURNING id),
               del AS (DELETE FROM chat_messages WHERE id IN (SELECT id FROM ins))
