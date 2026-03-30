@@ -11,6 +11,7 @@ import os
 import platform
 import sys
 import uuid
+from pathlib import Path
 from typing import Any, Dict
 
 import websockets
@@ -30,15 +31,20 @@ try:
 except ImportError:
     get_streamer = None  # type: ignore[assignment]
 
+# ── 경로/로깅 ──────────────────────────────────────────────────────────
+INSTALL_DIR = Path(os.environ.get(
+    "KAKAOBOT_INSTALL_DIR",
+    os.path.join(
+        os.environ.get("LOCALAPPDATA", os.path.join(os.path.expanduser("~"), "AppData", "Local")),
+        "KakaoBot",
+    ),
+))
+CONFIG_PATH = INSTALL_DIR / "config.json"
+LOCK_FILE = INSTALL_DIR / ".agent.lock"
+
 # PyInstaller --windowed 환경: sys.stderr=None → StreamHandler 사용 불가
 # FileHandler만 사용하여 깜박임 방지
-_log_dir = os.path.join(
-    os.environ.get("KAKAOBOT_INSTALL_DIR", os.path.join(
-        os.environ.get("LOCALAPPDATA", os.path.join(os.path.expanduser("~"), "AppData", "Local")),
-        "KakaoBot"
-    )),
-    "logs",
-)
+_log_dir = str(INSTALL_DIR / "logs")
 os.makedirs(_log_dir, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
@@ -56,12 +62,108 @@ RECONNECT_DELAY = 5  # 초
 AUTO_UPDATE_INTERVAL = 300  # 초 — 5분마다 서버 버전 확인 (HTTP 기반)
 
 
+# ── 유틸리티 ──────────────────────────────────────────────────────────────
+
+def _get_persistent_agent_id() -> str:
+    """config.json에서 영속 agent_id를 읽거나, 없으면 생성하여 저장.
+
+    구버전 launcher가 AADS_AGENT_ID 환경변수를 설정하지 않아도
+    agent.py 자체적으로 안정된 ID를 유지한다.
+    """
+    # 1) 환경변수 우선 (신버전 launcher가 설정)
+    env_id = os.environ.get("AADS_AGENT_ID")
+    if env_id:
+        return env_id
+
+    # 2) config.json에서 읽기
+    try:
+        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        if cfg.get("agent_id"):
+            return cfg["agent_id"]
+    except Exception:
+        pass
+
+    # 3) 새 ID 생성 + config.json에 저장
+    new_id = str(uuid.uuid4())[:12]
+    try:
+        cfg = {}
+        if CONFIG_PATH.exists():
+            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        cfg["agent_id"] = new_id
+        CONFIG_PATH.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+        logger.info("새 agent_id 생성+저장: %s", new_id)
+    except Exception as e:
+        logger.warning("agent_id 저장 실패: %s", e)
+    return new_id
+
+
+def _acquire_lock() -> bool:
+    """파일 기반 단일 인스턴스 잠금. 구버전 launcher에 뮤텍스가 없어도 중복 실행 방지.
+
+    Returns: True면 잠금 획득 성공, False면 이미 다른 인스턴스 실행 중.
+    """
+    import time
+
+    if LOCK_FILE.exists():
+        try:
+            data = json.loads(LOCK_FILE.read_text(encoding="utf-8"))
+            lock_pid = data.get("pid", 0)
+            lock_time = data.get("time", 0)
+            # 같은 PID면 자기 자신 (재시작)
+            if lock_pid == os.getpid():
+                return True
+            # 60초 이내 다른 PID가 잠금 보유 → 중복 인스턴스
+            if time.time() - lock_time < 60:
+                # 해당 PID가 실제 살아있는지 확인
+                try:
+                    os.kill(lock_pid, 0)  # signal 0 = 존재 확인만
+                    logger.warning("이미 실행 중인 에이전트 PID=%d — 이 인스턴스 종료", lock_pid)
+                    return False
+                except (OSError, PermissionError):
+                    pass  # 프로세스 없음 → stale lock
+        except Exception:
+            pass  # 파일 손상 → 새로 생성
+
+    # 잠금 획득
+    try:
+        import time as _t
+        LOCK_FILE.write_text(
+            json.dumps({"pid": os.getpid(), "time": _t.time()}),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+    return True
+
+
+def _refresh_lock():
+    """잠금 파일 타임스탬프 갱신 (30초마다 호출)."""
+    import time
+    try:
+        LOCK_FILE.write_text(
+            json.dumps({"pid": os.getpid(), "time": time.time()}),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _release_lock():
+    """잠금 해제."""
+    try:
+        if LOCK_FILE.exists():
+            data = json.loads(LOCK_FILE.read_text(encoding="utf-8"))
+            if data.get("pid") == os.getpid():
+                LOCK_FILE.unlink()
+    except Exception:
+        pass
+
+
 class PCAgent:
     """PC 제어 에이전트 클라이언트."""
 
     def __init__(self) -> None:
-        # launcher가 config.json에 저장한 영속 ID 사용 (재시작마다 새 UUID 방지)
-        self.agent_id = os.getenv("AADS_AGENT_ID", str(uuid.uuid4())[:12])
+        self.agent_id = _get_persistent_agent_id()
         self.hostname = platform.node()
         self.os_info = f"{platform.system()} {platform.release()} {platform.version()}"
         self._running = True
@@ -73,8 +175,12 @@ class PCAgent:
         while self._running:
             try:
                 await self._connect()
+            except asyncio.CancelledError:
+                break
             except Exception as e:
                 logger.error("연결 오류: %s — %d초 후 재연결", e, RECONNECT_DELAY)
+            # 잠금 갱신
+            _refresh_lock()
             await asyncio.sleep(RECONNECT_DELAY)
 
     async def _connect(self) -> None:
@@ -85,7 +191,12 @@ class PCAgent:
 
         logger.info("서버 연결 중: %s", url)
 
-        async with websockets.connect(url) as ws:
+        async with websockets.connect(
+            url,
+            ping_interval=20,
+            ping_timeout=20,
+            close_timeout=10,
+        ) as ws:
             logger.info("서버 연결 성공")
 
             # 등록 메시지 전송
@@ -98,13 +209,19 @@ class PCAgent:
                 },
             }))
 
-            # 하트비트 + 자동 업데이트 태스크 시작
+            # 하트비트 + 자동 업데이트 + 잠금 갱신 태스크 시작
             heartbeat_task = asyncio.create_task(self._heartbeat(ws))
             update_task = asyncio.create_task(self._auto_update_loop(ws))
+            lock_task = asyncio.create_task(self._lock_refresh_loop())
 
             try:
                 async for raw in ws:
-                    msg = json.loads(raw)
+                    try:
+                        msg = json.loads(raw)
+                    except json.JSONDecodeError:
+                        logger.warning("잘못된 JSON 수신: %s", raw[:100])
+                        continue
+
                     msg_type = msg.get("type", "")
 
                     if msg_type == "command":
@@ -116,6 +233,7 @@ class PCAgent:
             finally:
                 heartbeat_task.cancel()
                 update_task.cancel()
+                lock_task.cancel()
 
     async def _heartbeat(self, ws: Any) -> None:
         """주기적 하트비트 전송."""
@@ -130,8 +248,14 @@ class PCAgent:
             except Exception:
                 break
 
+    async def _lock_refresh_loop(self) -> None:
+        """30초마다 잠금 파일 갱신."""
+        while True:
+            await asyncio.sleep(30)
+            _refresh_lock()
+
     async def _auto_update_loop(self, ws: Any) -> None:
-        """1분마다 서버 업데이트 확인 → 변경 있으면 재다운로드 + 재시작."""
+        """5분마다 서버 업데이트 확인 → 변경 있으면 재다운로드 + 재시작."""
         if updater is None:
             logger.warning("updater 모듈 미로드 — 자동 업데이트 비활성화")
             return
@@ -189,12 +313,15 @@ class PCAgent:
                 result = {"status": "error", "data": {"error": str(e)}}
 
         # 결과 전송
-        await ws.send(json.dumps({
-            "type": "result",
-            "id": command_id,
-            "payload": result,
-        }))
-        logger.info("결과 전송 command_id=%s status=%s", command_id, result.get("status"))
+        try:
+            await ws.send(json.dumps({
+                "type": "result",
+                "id": command_id,
+                "payload": result,
+            }))
+            logger.info("결과 전송 command_id=%s status=%s", command_id, result.get("status"))
+        except Exception as e:
+            logger.error("결과 전송 실패 command_id=%s: %s", command_id, e)
 
     async def _execute_command(self, command_type: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """명령 타입에 따른 실행 디스패치."""
@@ -212,12 +339,21 @@ class PCAgent:
 
 def main() -> None:
     """엔트리포인트."""
+    # 단일 인스턴스 잠금 (구버전 launcher에 뮤텍스 없어도 중복 실행 방지)
+    if not _acquire_lock():
+        logger.warning("이미 실행 중 — 종료")
+        return
+
     agent = PCAgent()
     try:
         asyncio.run(agent.run())
     except KeyboardInterrupt:
         agent.stop()
         logger.info("PC Agent 종료")
+    except Exception as e:
+        logger.error("PC Agent 치명적 오류: %s", e, exc_info=True)
+    finally:
+        _release_lock()
 
 
 if __name__ == "__main__":
