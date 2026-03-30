@@ -41,7 +41,6 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.FileHandler(LOG_DIR / "launcher.log", encoding="utf-8"),
-        logging.StreamHandler(),
     ],
 )
 logger = logging.getLogger("launcher")
@@ -226,12 +225,16 @@ def run_agent(cfg: dict):
         return _FakeProc(t, agent_instance)
     else:
         # 개발 환경: 시스템 Python으로 subprocess 실행
+        kwargs = {}
+        if hasattr(subprocess, "CREATE_NO_WINDOW"):
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
         proc = subprocess.Popen(
             [sys.executable, str(agent_main)],
             cwd=str(AGENT_DIR),
             env=os.environ.copy(),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            **kwargs,
         )
         logger.info("에이전트 시작 (PID %d)", proc.pid)
         return proc

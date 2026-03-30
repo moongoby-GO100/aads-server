@@ -30,9 +30,20 @@ try:
 except ImportError:
     get_streamer = None  # type: ignore[assignment]
 
+# PyInstaller --windowed 환경: sys.stderr=None → StreamHandler 사용 불가
+# FileHandler만 사용하여 깜박임 방지
+_log_dir = os.path.join(
+    os.environ.get("KAKAOBOT_INSTALL_DIR", os.path.join(
+        os.environ.get("LOCALAPPDATA", os.path.join(os.path.expanduser("~"), "AppData", "Local")),
+        "KakaoBot"
+    )),
+    "logs",
+)
+os.makedirs(_log_dir, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.FileHandler(os.path.join(_log_dir, "agent.log"), encoding="utf-8")],
 )
 logger = logging.getLogger("pc-agent")
 

@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 async def execute(params: Dict[str, Any]) -> Dict[str, Any]:
     """실행 중인 프로세스 목록 반환."""
     try:
+        kwargs = {}
+        if hasattr(subprocess, "CREATE_NO_WINDOW"):
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
         result = subprocess.run(
             ["tasklist", "/fo", "csv", "/nh"],
             capture_output=True,
@@ -23,6 +26,7 @@ async def execute(params: Dict[str, Any]) -> Dict[str, Any]:
             timeout=10,
             encoding="utf-8",
             errors="replace",
+            **kwargs,
         )
         processes = []
         for line in result.stdout.strip().split("\n"):

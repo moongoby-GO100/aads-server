@@ -27,6 +27,11 @@ async def execute(params: Dict[str, Any]) -> Dict[str, Any]:
             return {"status": "error", "data": {"error": f"차단된 명령: {blocked}"}}
 
     try:
+        # Windows: CREATE_NO_WINDOW로 cmd.exe 콘솔 깜박임 방지
+        kwargs = {}
+        if hasattr(subprocess, "CREATE_NO_WINDOW"):
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
         result = subprocess.run(
             command,
             shell=True,
@@ -35,6 +40,7 @@ async def execute(params: Dict[str, Any]) -> Dict[str, Any]:
             timeout=30,
             encoding="utf-8",
             errors="replace",
+            **kwargs,
         )
         return {
             "status": "success",
