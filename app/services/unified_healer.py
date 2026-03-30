@@ -64,11 +64,11 @@ ERROR_RECOVERY_MAP = {
     "service_down_http_health": "docker restart {service}",
     "container_exit": "docker restart {service}",
     "docker_crash": "docker restart {service}",
-    "api_unreachable": "/root/aads/aads-server/deploy.sh code",
+    "api_unreachable": "/root/aads/aads-server/deploy.sh bluegreen",
     "nginx_down": "systemctl restart nginx",
     "nginx_error": "systemctl reload nginx",
     "disk_space_critical": "docker system prune -f",
-    "high_memory": "/root/aads/aads-server/deploy.sh code",
+    "high_memory": "/root/aads/aads-server/deploy.sh bluegreen",
     "db_connection_error": "docker restart aads-postgres",
     "redis_connection_error": "docker restart aads-redis",
 }
