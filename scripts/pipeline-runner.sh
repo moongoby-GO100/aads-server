@@ -773,8 +773,14 @@ deploy_job() {
     # 원칙: 빌드 중 기존 서비스 유지, 빌드 성공 후에만 교체, 실패 시 롤백
     case "$project" in
         AADS)
-            # 1) aads-server: 볼륨마운트 → supervisorctl restart (~2초)
-            docker exec aads-server supervisorctl restart aads-api 2>/dev/null || true
+            # 1) aads-server: Blue-Green 무중단 배포 (deploy.sh bluegreen)
+            log "  BLUEGREEN aads-server 무중단 배포 시작"
+            if bash /root/aads/aads-server/deploy.sh bluegreen 2>&1 | tail -20; then
+                log "  BLUEGREEN aads-server 완료"
+            else
+                log "  WARN: bluegreen 실패 — supervisorctl restart 폴백"
+                docker exec aads-server supervisorctl restart aads-api 2>/dev/null || true
+            fi
 
             # 2) aads-dashboard: Docker 이미지 빌드 서비스 → build→swap
             if [ -n "$(git -C /root/aads/aads-dashboard status --porcelain 2>/dev/null)" ]; then

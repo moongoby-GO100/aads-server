@@ -199,9 +199,12 @@ case "$MODE" in
         # conversations(8102), memory(18085) 포트를 건드리지 않도록
         # /api/v1/; (세미콜론+끝) 패턴만 치환 — /api/v1/conversations, /api/v1/memory 제외
         sed -i "s|proxy_pass http://127\.0\.0\.1:${CURRENT_PORT}/api/v1/;|proxy_pass http://127.0.0.1:${NEW_PORT}/api/v1/;|g" "$NGINX_CONF"
+        # pc-agent WebSocket 포트도 전환
+        sed -i "s|proxy_pass http://127\.0\.0\.1:${CURRENT_PORT}/api/v1/pc-agent/ws/;|proxy_pass http://127.0.0.1:${NEW_PORT}/api/v1/pc-agent/ws/;|g" "$NGINX_CONF"
         if ! nginx -t 2>/dev/null; then
             echo "[deploy.sh] ❌ nginx 설정 오류 — 롤백"
             sed -i "s|proxy_pass http://127\.0\.0\.1:${NEW_PORT}/api/v1/;|proxy_pass http://127.0.0.1:${CURRENT_PORT}/api/v1/;|g" "$NGINX_CONF"
+            sed -i "s|proxy_pass http://127\.0\.0\.1:${NEW_PORT}/api/v1/pc-agent/ws/;|proxy_pass http://127.0.0.1:${CURRENT_PORT}/api/v1/pc-agent/ws/;|g" "$NGINX_CONF"
             docker stop "$NEW_CONTAINER" 2>/dev/null || true
             notify "❌ Blue-Green 실패: nginx 설정 오류"
             exit 1
@@ -217,6 +220,7 @@ case "$MODE" in
         else
             echo "[deploy.sh] ⚠️ 전환 후 검증 실패 — 이전 서버로 복원"
             sed -i "s|proxy_pass http://127\.0\.0\.1:${NEW_PORT}/api/v1/;|proxy_pass http://127.0.0.1:${CURRENT_PORT}/api/v1/;|g" "$NGINX_CONF"
+            sed -i "s|proxy_pass http://127\.0\.0\.1:${NEW_PORT}/api/v1/pc-agent/ws/;|proxy_pass http://127.0.0.1:${CURRENT_PORT}/api/v1/pc-agent/ws/;|g" "$NGINX_CONF"
             systemctl reload nginx
             docker stop "$NEW_CONTAINER" 2>/dev/null || true
             notify "❌ Blue-Green 실패: 전환 검증 실패 — 복원 완료"
@@ -225,7 +229,7 @@ case "$MODE" in
 
         # ⑤ 이전 컨테이너 graceful 종료
         echo "[deploy.sh] ⑤ ${OLD_CONTAINER} graceful 종료..."
-        docker stop --time 30 "$OLD_CONTAINER" 2>/dev/null || true
+        docker stop --time 120 "$OLD_CONTAINER" 2>/dev/null || true
         if [[ "$OLD_CONTAINER" == "$GREEN_CONTAINER" ]]; then
             docker rm "$OLD_CONTAINER" 2>/dev/null || true
         fi
