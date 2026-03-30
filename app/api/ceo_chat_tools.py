@@ -1990,9 +1990,9 @@ async def tool_run_remote_command(project: str, command: str) -> str:
             return "[BLOCKED] 의존 컨테이너 직접 정지는 서비스 장애를 유발합니다."
         # docker compose up/build/restart → deploy.sh 리다이렉트 (하이픈 형식도 포함)
         if re.search(r"docker[\s-]+compose\s+(up|build|restart)", command) and "aads" in command.lower():
-            _deploy_redirect = "/root/aads/aads-server/deploy.sh build"
+            _deploy_redirect = "/root/aads/aads-server/deploy.sh bluegreen"
         elif re.search(r"docker\s+restart\s+aads-server", command):
-            _deploy_redirect = "/root/aads/aads-server/deploy.sh code"
+            _deploy_redirect = "/root/aads/aads-server/deploy.sh bluegreen"
         if _deploy_redirect:
             logger.warning("deploy_intercept", original=command[:120], redirect=_deploy_redirect)
             command = _deploy_redirect

@@ -47,7 +47,7 @@ _RESTART_CMD: Dict[str, str] = {
     "GO100": "supervisorctl restart go100",
     "SF":    "cd /data/shortflow && docker compose restart worker",
     "NTV2":  "",  # PHP: 파일 수정 즉시 반영
-    "AADS":  "bash /root/aads/aads-server/deploy.sh code",  # deploy.sh 경유 (5단계 검증)
+    "AADS":  "bash /root/aads/aads-server/deploy.sh bluegreen",  # Blue-Green 무중단 배포
 }
 
 # 활성 작업 저장 (메모리)
@@ -73,7 +73,7 @@ async def _debounced_aads_restart(job: "PipelineCJob"):
         job._log("aads_restart_skipped", "후속 배포가 재시작을 인계받음 — 스킵")
         return False
     job._log("aads_restart_exec", "디바운스 완료 — 재시작 실행")
-    await job._ssh_command("bash /root/aads/aads-server/deploy.sh code")
+    await job._ssh_command("bash /root/aads/aads-server/deploy.sh bluegreen")
     return True
 
 # H-11: job_id별 approve/reject 동시 호출 방지 락

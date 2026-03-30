@@ -36,6 +36,7 @@ SAFE_COMMANDS = {
     "docker system prune -f",
     "/root/aads/aads-server/deploy.sh code",
     "/root/aads/aads-server/deploy.sh build",
+    "/root/aads/aads-server/deploy.sh bluegreen",
 }
 
 SAFE_PREFIXES = [
