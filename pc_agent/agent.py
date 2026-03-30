@@ -1,7 +1,7 @@
 """
 AADS-195: PC 제어 에이전트 — Windows 클라이언트.
 WebSocket으로 AADS 서버에 연결, 명령 수신/실행/결과 반환.
-v1.0.10: PCAgent.__init__ 뮤텍스 이동 — launcher 직접 호출 시에도 단일 인스턴스 보장.
+v1.0.12: 4010 수신 시 프로세스 종료 — 중복 인스턴스 ping-pong 해소.
 """
 from __future__ import annotations
 
@@ -69,19 +69,23 @@ _win_mutex = None  # 전역 참조 유지 (GC 방지)
 def _acquire_single_instance() -> bool:
     """Windows named mutex로 단일 인스턴스 보장.
 
-    구버전 launcher에 뮤텍스가 없어도 agent.py 자체에서 중복 실행 차단.
+    이미 이 프로세스에서 뮤텍스를 획득했으면 True 반환 (launcher 재시작 루프 대응).
     파일잠금보다 안정적: race condition 없음, 프로세스 종료 시 자동 해제.
     """
     global _win_mutex
     if sys.platform != "win32":
+        return True
+    if _win_mutex is not None:
+        # 이 프로세스에서 이미 획득됨 — launcher가 에이전트 스레드를 재시작하는 경우
+        logger.debug("뮤텍스 이미 획득됨 (재시작) — 통과")
         return True
     try:
         import ctypes
         kernel32 = ctypes.windll.kernel32
         _win_mutex = kernel32.CreateMutexW(None, True, "KakaoBotAgent_SingleInstance_v2")
         last_err = kernel32.GetLastError()
-        if last_err == 183:  # ERROR_ALREADY_EXISTS
-            logger.warning("이미 실행 중인 에이전트 — 이 인스턴스 종료")
+        if last_err == 183:  # ERROR_ALREADY_EXISTS = 다른 프로세스가 이미 실행 중
+            logger.warning("이미 실행 중인 에이전트 (다른 프로세스) — 이 인스턴스 종료")
             kernel32.CloseHandle(_win_mutex)
             _win_mutex = None
             return False
@@ -94,18 +98,12 @@ def _acquire_single_instance() -> bool:
 # ── 유틸리티 ──────────────────────────────────────────────────────────────
 
 def _get_persistent_agent_id() -> str:
-    """config.json에서 영속 agent_id를 읽거나, 없으면 생성하여 저장.
-
-    ** 중요: config.json을 env var보다 우선한다. **
-    구버전 launcher가 AADS_AGENT_ID를 매번 새 UUID로 설정하는 버그가 있으므로
-    env var를 무조건 신뢰하면 안 된다.
-    """
+    """config.json에서 영속 agent_id를 읽거나, 없으면 생성하여 저장."""
     # 1) config.json에서 읽기 (최우선)
     try:
         cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
         if cfg.get("agent_id"):
             agent_id = cfg["agent_id"]
-            # env var도 동기화 (하위 호환)
             os.environ["AADS_AGENT_ID"] = agent_id
             return agent_id
     except Exception:
@@ -149,7 +147,8 @@ class PCAgent:
                 break
             except Exception as e:
                 logger.error("연결 오류: %s — %d초 후 재연결", e, RECONNECT_DELAY)
-            await asyncio.sleep(RECONNECT_DELAY)
+            if self._running:
+                await asyncio.sleep(RECONNECT_DELAY)
 
     async def _connect(self) -> None:
         """WebSocket 서버 연결."""
@@ -159,47 +158,59 @@ class PCAgent:
 
         logger.info("서버 연결 중: %s", url)
 
-        async with websockets.connect(
-            url,
-            ping_interval=20,
-            ping_timeout=20,
-            close_timeout=10,
-        ) as ws:
-            logger.info("서버 연결 성공")
+        try:
+            async with websockets.connect(
+                url,
+                ping_interval=20,
+                ping_timeout=20,
+                close_timeout=10,
+            ) as ws:
+                logger.info("서버 연결 성공")
 
-            # 등록 메시지 전송
-            await ws.send(json.dumps({
-                "type": "register",
-                "id": str(uuid.uuid4()),
-                "payload": {
-                    "hostname": self.hostname,
-                    "os_info": self.os_info,
-                },
-            }))
+                # 등록 메시지 전송
+                await ws.send(json.dumps({
+                    "type": "register",
+                    "id": str(uuid.uuid4()),
+                    "payload": {
+                        "hostname": self.hostname,
+                        "os_info": self.os_info,
+                    },
+                }))
 
-            # 하트비트 + 자동 업데이트 태스크 시작
-            heartbeat_task = asyncio.create_task(self._heartbeat(ws))
-            update_task = asyncio.create_task(self._auto_update_loop(ws))
+                # 하트비트 + 자동 업데이트 태스크 시작
+                heartbeat_task = asyncio.create_task(self._heartbeat(ws))
+                update_task = asyncio.create_task(self._auto_update_loop(ws))
 
-            try:
-                async for raw in ws:
-                    try:
-                        msg = json.loads(raw)
-                    except json.JSONDecodeError:
-                        logger.warning("잘못된 JSON 수신: %s", raw[:100])
-                        continue
+                try:
+                    async for raw in ws:
+                        try:
+                            msg = json.loads(raw)
+                        except json.JSONDecodeError:
+                            logger.warning("잘못된 JSON 수신: %s", raw[:100])
+                            continue
 
-                    msg_type = msg.get("type", "")
+                        msg_type = msg.get("type", "")
 
-                    if msg_type == "command":
-                        asyncio.create_task(self._handle_command(ws, msg))
-                    elif msg_type == "heartbeat":
-                        pass  # 서버 ACK
-                    else:
-                        logger.debug("알 수 없는 메시지: %s", msg_type)
-            finally:
-                heartbeat_task.cancel()
-                update_task.cancel()
+                        if msg_type == "command":
+                            asyncio.create_task(self._handle_command(ws, msg))
+                        elif msg_type == "heartbeat":
+                            pass  # 서버 ACK
+                        else:
+                            logger.debug("알 수 없는 메시지: %s", msg_type)
+                finally:
+                    heartbeat_task.cancel()
+                    update_task.cancel()
+
+        except websockets.ConnectionClosedError as e:
+            if e.code == 4010:
+                # 서버가 "다른 인스턴스가 이미 활성" 통보 → 이 프로세스 종료
+                logger.warning(
+                    "서버가 중복 연결 거부 (4010: %s) — 이 인스턴스 종료",
+                    e.reason,
+                )
+                self._running = False
+                return
+            raise
 
     async def _heartbeat(self, ws: Any) -> None:
         """주기적 하트비트 전송."""
@@ -299,7 +310,6 @@ class PCAgent:
 
 def main() -> None:
     """엔트리포인트."""
-    # 뮤텍스는 PCAgent.__init__에서 처리 (launcher 직접 호출 시에도 동작)
     agent = PCAgent()
     try:
         asyncio.run(agent.run())
