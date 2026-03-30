@@ -250,14 +250,21 @@ async def call_stream(
       input_tokens: int
       output_tokens: int
     """
-    model = model_override or intent_result.model
+    # mixture/auto 는 chat_service 와 동일하게 "사용자 지정 모델 없음"으로 취급해야 함.
+    # 그렇지 않으면 model_override or intent 가 "mixture" 문자열이 되어 unknown → claude-sonnet 고정 등 오동작.
+    _effective_override = (
+        model_override
+        if model_override and str(model_override).strip() not in ("mixture", "auto", "")
+        else None
+    )
+    model = _effective_override or intent_result.model
 
     # model_override가 구체적 모델명(claude-sonnet-4-6 등)이면 LiteLLM alias로 변환
     _OVERRIDE_TO_ALIAS = {
         "claude-sonnet-4-6": "claude-sonnet", "claude-sonnet-4-5": "claude-sonnet",
         "claude-opus-4-6": "claude-opus", "claude-opus-4-5": "claude-opus",
         "claude-haiku-4-5": "claude-haiku",
-        "auto": "claude-sonnet",    # 프론트엔드 자동 라우팅 (채팅 UI)
+        "auto": "claude-sonnet",    # 레거시: 실제 auto 는 _effective_override None 으로 처리됨
     }
     if model in _OVERRIDE_TO_ALIAS:
         model = _OVERRIDE_TO_ALIAS[model]
@@ -280,13 +287,25 @@ async def call_stream(
     }
     # Opus 유지: cto_*, code_task, code_modify, execute, directive_gen 등 복잡 인텐트
     _intent = getattr(intent_result, "intent", "")
-    if not model_override:
+    if not _effective_override:
         if _intent in _HAIKU_INTENTS and model in ("claude-sonnet", "claude-opus"):
             logger.info(f"cascade_downgrade: {_intent} → claude-haiku (simple intent)")
             model = "claude-haiku"
         elif _intent in _SONNET_INTENTS and model == "claude-opus":
             logger.info(f"cascade_downgrade: {_intent} → claude-sonnet (medium intent)")
             model = "claude-sonnet"
+
+    # 자기 모델 질문 오답 방지: 실제 라우트 id 를 시스템 프롬프트에 명시
+    system_prompt = (
+        system_prompt
+        + "\n\n<aads_model_identity>\n"
+        + "이 대화 턴 응답 생성에 사용 중인 **백엔드 라우트 모델 id**는 `"
+        + model
+        + "` 입니다.\n"
+        + "사용자가 어떤 LLM/모델인지 물으면 위 id(및 이에 대응하는 공식 제품명)로만 답하고, "
+        + "임의로 다른 모델명(예: 설정과 다른 Gemini/Claude)으로 말하지 마세요.\n"
+        + "</aads_model_identity>"
+    )
 
     # Claude 모델 → 계정 교차 폴백 (rate limit은 계정별)
     # Opus(Naver)→Opus(Gmail)→Sonnet(Naver)→… (기본) / CLAUDE_RELAY_NAVER_FIRST=false 시 Gmail 먼저
