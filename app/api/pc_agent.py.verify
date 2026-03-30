@@ -1,0 +1,240 @@
+"""
+AADS-195: PC 제어 에이전트 API.
+WebSocket 엔드포인트 + REST API.
+v1.1.0: 근본 수정 — agent_id 기반 추적, 신규 연결이 항상 승리 (ping-pong 완전 해소).
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+
+from app.models.pc_agent import CommandRequest, StreamConfig, WSMessage
+from app.services.pc_agent_manager import pc_agent_manager
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+PC_AGENT_SECRET = os.environ.get("PC_AGENT_SECRET", "")
+
+# agent_id별 활성 WebSocket 참조 — 서버 재시작 시 자동 초기화 (정상)
+_agent_connections: dict[str, WebSocket] = {}
+
+HEARTBEAT_INTERVAL = 30  # 초
+
+
+async def _verify_token_db(token: str) -> bool:
+    """DB에서 토큰 유효성 검증 (kakao_pc_agent_tokens 테이블)."""
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        row = await pool.fetchrow(
+            "SELECT 1 FROM kakao_pc_agent_tokens WHERE token = $1",
+            token,
+        )
+        return row is not None
+    except Exception as exc:
+        logger.warning("pc_agent_token_db_check_failed: %s", exc)
+        return False
+
+
+# ── WebSocket ──────────────────────────────────────────────────────────
+
+@router.websocket("/pc-agent/ws/{agent_id}")
+async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query("")):
+    """PC 에이전트 WebSocket 연결.
+
+    v1.1.0: 신규 연결이 항상 승리.
+    - 같은 agent_id로 새 연결이 오면 → 기존 연결을 조용히 닫고 새 연결 수락
+    - 4010 거부 없음 → ping-pong 루프 불가능
+    - 서버 재시작 후에도 클라이언트가 자연스럽게 재연결
+    """
+    # ── 인증 ──
+    token_valid = False
+    if token:
+        token_valid = await _verify_token_db(token)
+        if not token_valid and PC_AGENT_SECRET and token == PC_AGENT_SECRET:
+            token_valid = True
+    if not token_valid and not PC_AGENT_SECRET:
+        token_valid = True  # 개발 모드
+    if not token_valid:
+        await websocket.close(code=4001, reason="unauthorized")
+        logger.warning("pc_agent_ws_auth_failed agent_id=%s", agent_id)
+        return
+
+    # ── 기존 연결 교체 (신규가 항상 승리) ──
+    old_ws = _agent_connections.pop(agent_id, None)
+    if old_ws is not None:
+        try:
+            await old_ws.close(code=4010, reason="replaced_by_new")
+        except Exception:
+            pass
+        logger.info("pc_agent_ws_replaced agent_id=%s", agent_id)
+
+    # ── 연결 수락 ──
+    await websocket.accept()
+    _agent_connections[agent_id] = websocket
+    logger.info("pc_agent_ws_connected agent_id=%s", agent_id)
+
+    # ── 등록 메시지 대기 (첫 메시지) ──
+    try:
+        raw = await asyncio.wait_for(websocket.receive_json(), timeout=10.0)
+        msg = WSMessage.model_validate(raw)
+        if msg.type != "register":
+            await websocket.close(code=4002, reason="first message must be register")
+            return
+        pc_agent_manager.register_agent(agent_id, websocket, msg.payload)
+    except (asyncio.TimeoutError, Exception) as exc:
+        logger.error("pc_agent_ws_register_failed agent_id=%s err=%s", agent_id, exc)
+        await websocket.close(code=4003, reason="register failed")
+        return
+
+    # ── 메시지 수신 루프 ──
+    try:
+        while True:
+            raw = await asyncio.wait_for(
+                websocket.receive_json(), timeout=HEARTBEAT_INTERVAL * 2
+            )
+            msg = WSMessage.model_validate(raw)
+
+            if msg.type == "heartbeat":
+                pc_agent_manager.update_heartbeat(agent_id)
+                await websocket.send_json(
+                    {"type": "heartbeat", "id": msg.id, "payload": {}}
+                )
+
+            elif msg.type == "result":
+                pc_agent_manager.receive_result(msg.id, msg.payload)
+
+            elif msg.type == "stream_frame":
+                frame = msg.payload.get("frame", "")
+                if frame:
+                    await pc_agent_manager.broadcast_frame(agent_id, frame)
+
+            else:
+                logger.warning(
+                    "pc_agent_ws_unknown_type agent_id=%s type=%s", agent_id, msg.type
+                )
+
+    except (WebSocketDisconnect, asyncio.TimeoutError):
+        logger.info("pc_agent_ws_disconnected agent_id=%s", agent_id)
+    except Exception as exc:
+        logger.error("pc_agent_ws_error agent_id=%s err=%s", agent_id, exc)
+    finally:
+        pc_agent_manager.unregister_agent(agent_id)
+        # 현재 websocket이 아직 등록된 것일 때만 제거 (교체된 경우 새 ws가 이미 등록됨)
+        if _agent_connections.get(agent_id) is websocket:
+            _agent_connections.pop(agent_id, None)
+
+
+# ── REST API ──────────────────────────────────────────────────────────
+
+@router.get("/pc-agent/agents")
+async def list_agents():
+    """연결된 에이전트 목록 조회."""
+    agents = pc_agent_manager.list_agents()
+    return {"agents": [a.model_dump(mode="json") for a in agents]}
+
+
+@router.post("/pc-agent/execute")
+async def execute_command(req: CommandRequest):
+    """에이전트에 명령 실행 요청."""
+    agent = pc_agent_manager.get_agent(req.agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"에이전트 '{req.agent_id}'가 연결되어 있지 않습니다.")
+
+    try:
+        command_id = await pc_agent_manager.send_command(
+            req.agent_id, req.command_type, req.params
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return {"command_id": command_id, "status": "pending"}
+
+
+@router.get("/pc-agent/result/{command_id}")
+async def get_result(command_id: str, timeout: float = Query(30.0, ge=1.0, le=120.0)):
+    """명령 실행 결과 조회 (대기)."""
+    try:
+        result = await pc_agent_manager.get_result(command_id, timeout=timeout)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    return result.model_dump(mode="json")
+
+
+# ── 스트리밍 ──────────────────────────────────────────────────────────
+
+@router.websocket("/pc-agent/stream/{agent_id}")
+async def ws_stream(websocket: WebSocket, agent_id: str):
+    """대시보드 → 스트리밍 수신용 WebSocket."""
+    agent = pc_agent_manager.get_agent(agent_id)
+    if agent is None:
+        await websocket.close(code=4004, reason=f"agent '{agent_id}' not connected")
+        return
+
+    await websocket.accept()
+
+    pc_agent_manager.add_stream_subscriber(agent_id, websocket)
+
+    try:
+        raw = await asyncio.wait_for(websocket.receive_json(), timeout=10.0)
+        config = StreamConfig.model_validate(raw)
+        await pc_agent_manager.start_stream(agent_id, config)
+        logger.info("stream_ws_started agent_id=%s", agent_id)
+
+        while True:
+            try:
+                data = await websocket.receive_json()
+                if data.get("type") == "update_config":
+                    config = StreamConfig.model_validate(data.get("config", {}))
+                    await pc_agent_manager.start_stream(agent_id, config)
+            except (WebSocketDisconnect, Exception):
+                break
+
+    except (asyncio.TimeoutError, WebSocketDisconnect, Exception) as exc:
+        logger.info("stream_ws_closed agent_id=%s reason=%s", agent_id, exc)
+    finally:
+        remaining = pc_agent_manager.remove_stream_subscriber(agent_id, websocket)
+        if remaining == 0:
+            try:
+                await pc_agent_manager.stop_stream(agent_id)
+            except Exception:
+                pass
+            logger.info("stream_stopped_no_subscribers agent_id=%s", agent_id)
+
+
+@router.post("/pc-agent/stream/{agent_id}/start")
+async def stream_start(agent_id: str, config: StreamConfig | None = None):
+    """스트리밍 시작 (REST 폴백)."""
+    agent = pc_agent_manager.get_agent(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"에이전트 '{agent_id}'가 연결되어 있지 않습니다.")
+
+    if config is None:
+        config = StreamConfig()
+
+    try:
+        command_id = await pc_agent_manager.start_stream(agent_id, config)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return {"command_id": command_id, "status": "streaming", "config": config.model_dump()}
+
+
+@router.post("/pc-agent/stream/{agent_id}/stop")
+async def stream_stop(agent_id: str):
+    """스트리밍 중지."""
+    agent = pc_agent_manager.get_agent(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"에이전트 '{agent_id}'가 연결되어 있지 않습니다.")
+
+    try:
+        command_id = await pc_agent_manager.stop_stream(agent_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return {"command_id": command_id, "status": "stopped"}

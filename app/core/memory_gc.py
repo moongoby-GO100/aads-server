@@ -9,6 +9,7 @@ C3: Adaptive forgetting curves — 카테고리별 차별 감쇠율 적용.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import uuid
@@ -462,14 +463,26 @@ async def sleep_time_consolidation(pool) -> dict:
             )
 
         # ── C1: 프로젝트별 인사이트 생성 (별도 커넥션으로 LLM 호출) ──
-        for p_row in projects:
+        for idx, p_row in enumerate(projects):
             project = p_row["project"]
             try:
                 async with pool.acquire() as conn_insight:
                     insights_count = await _generate_project_insights(conn_insight, project)
+                    if insights_count == -1:
+                        # 429 rate limit — 전체 루프 즉시 중단
+                        logger.warning(
+                            "sleep_agent_rate_limited",
+                            project=project,
+                            remaining=len(projects) - idx - 1,
+                        )
+                        break
                     result["insights"] += insights_count
             except Exception as e:
                 logger.debug("sleep_agent_insight_error", project=project, error=str(e))
+            else:
+                # 첫 번째 프로젝트 이후부터 5초 대기 (rate limit 방지)
+                if idx < len(projects) - 1:
+                    await asyncio.sleep(5)
 
         # ── C2: 프롬프트 자동 최적화 (별도 커넥션) ──
         try:
@@ -596,7 +609,12 @@ async def _generate_project_insights(conn, project: str) -> int:
         logger.warning("sleep_agent_json_parse_error", project=project, error=str(e_json))
         return 0
     except Exception as e:
-        logger.warning("sleep_agent_haiku_error", project=project, error=str(e))
+        # 429 Rate Limit 감지 → -1 반환으로 호출부에서 전체 루프 중단
+        err_str = str(e)
+        if "429" in err_str or "rate_limit" in err_str.lower() or "RateLimitError" in type(e).__name__:
+            logger.warning("sleep_agent_429_detected", project=project, error=err_str[:120])
+            return -1
+        logger.warning("sleep_agent_haiku_error", project=project, error=err_str)
         return 0
 
 
