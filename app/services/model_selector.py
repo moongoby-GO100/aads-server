@@ -153,6 +153,7 @@ _COST_MAP = {
     "groq-kimi-k2":          (0.0,   0.0),
 
     "groq-llama4-scout":     (0.0,   0.0),
+    "groq-llama4-maverick":  (0.0,   0.0),
     "groq-llama-70b":        (0.0,   0.0),
     "groq-llama-8b":         (0.0,   0.0),
     "groq-gpt-oss-120b":     (0.0,   0.0),
@@ -175,11 +176,32 @@ _ANTHROPIC_MODEL_ID = {
     "claude-haiku":  "claude-haiku-4-5-20251001",
 }
 
-# Gemini 모델 (LiteLLM 경유)
-_GEMINI_MODELS = {"gemini-flash", "gemini-flash-lite", "gemini-pro", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview", "gemini-3.1-pro-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"}
+# Gemini 모델 (LiteLLM 경유) — 대시보드 ModelSelector id와 동기화 필수 (누락 시 Claude로 폴백됨)
+_GEMINI_MODELS = {
+    "gemini-flash",
+    "gemini-flash-lite",
+    "gemini-pro",
+    "gemini-3-flash-preview",
+    "gemini-3-pro-preview",
+    "gemini-3.1-flash-lite-preview",
+    "gemini-3.1-pro-preview",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash-image",
+}
 
 # Gemini Thinking 모델 — reasoning_effort=low + 높은 max_tokens 필요
-_GEMINI_THINKING_MODELS = {"gemini-pro", "gemini-flash", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview", "gemini-3.1-pro-preview", "gemini-2.5-flash"}
+_GEMINI_THINKING_MODELS = {
+    "gemini-pro",
+    "gemini-flash",
+    "gemini-3-flash-preview",
+    "gemini-3-pro-preview",
+    "gemini-3.1-flash-lite-preview",
+    "gemini-3.1-pro-preview",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+}
 
 # Groq 모델 (LiteLLM 경유, 무료)
 _GROQ_MODELS = {"groq-qwen3-32b", "groq-kimi-k2", "groq-llama4-scout", "groq-llama-70b", "groq-llama-8b", "groq-gpt-oss-120b", "groq-compound"}
@@ -369,15 +391,8 @@ async def call_stream(
 
     # OpenRouter 모델 → LiteLLM 경유 (openrouter/ prefix 붙여서 전달, 실패 시 Gemini Flash 폴백)
     if model in _OPENROUTER_MODELS:
-        # AADS 내부 키 → LiteLLM에 등록된 openrouter/<model> 이름 변환
-        _OPENROUTER_MODEL_MAP = {
-            "openrouter-grok-4-fast":   "openrouter/x-ai/grok-4",
-            "openrouter-deepseek-v3":   "openrouter/deepseek/deepseek-chat-v3-0324",
-            "openrouter-mistral-small": "openrouter/mistralai/mistral-small-3.2-24b-instruct",
-            "openrouter-nemotron-free": "openrouter/nvidia/llama-3.3-nemotron-super-49b-v1:free",
-            "openrouter-minimax-m2":    "openrouter/minimax/minimax-m1",
-        }
-        _or_model = _OPENROUTER_MODEL_MAP.get(model, model)
+        # LiteLLM config의 model_name을 그대로 전달 (별칭 기반 라우팅)
+        _or_model = model
         _had_error = False
         async for event in _stream_litellm_openai(_or_model, system_prompt, messages, tools=tools):
             if event.get("type") == "error":
