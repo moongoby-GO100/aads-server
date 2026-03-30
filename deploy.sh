@@ -240,9 +240,9 @@ case "$MODE" in
         if [[ "$NEW_PORT" == "$GREEN_PORT" ]]; then
             echo "[deploy.sh] ⑥ Swing-back: green→blue 복귀 (daemon-restart 안전)"
 
-            # Blue 재기동 (코드는 볼륨 마운트로 이미 최신)
+            # Blue 재빌드+기동 (supervisord.conf 등 이미지 내 파일도 최신화)
             cd "$COMPOSE_DIR"
-            docker compose $COMPOSE_FILE up -d --no-deps "$BLUE_CONTAINER"
+            docker compose $COMPOSE_FILE up -d --build --no-deps "$BLUE_CONTAINER"
 
             # Blue 헬스체크 (최대 90초)
             SWING_OK=false
