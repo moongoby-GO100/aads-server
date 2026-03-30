@@ -182,6 +182,13 @@ def run_agent(cfg: dict):
     os.environ["AADS_AGENT_TOKEN"] = cfg.get("agent_token", "")
     os.environ["KAKAOBOT_INSTALL_DIR"] = str(INSTALL_DIR)
 
+    # agent_id 영속화 — 재시작마다 새 UUID 생성하면 서버에 좀비 연결 누적
+    import uuid as _uuid
+    if not cfg.get("agent_id"):
+        cfg["agent_id"] = str(_uuid.uuid4())[:12]
+        save_config(cfg)
+    os.environ["AADS_AGENT_ID"] = cfg["agent_id"]
+
     if getattr(sys, "frozen", False):
         # PyInstaller frozen EXE: importlib로 직접 로드 후 스레드 실행
         import importlib.util
@@ -190,9 +197,19 @@ def run_agent(cfg: dict):
         if agent_dir_str not in sys.path:
             sys.path.insert(0, agent_dir_str)
 
+        # 이전 로드로 캐시된 모듈 제거 (재시작 시 stale 모듈 방지)
+        stale = [k for k in sys.modules if k.startswith("commands") or k == "agent_module"]
+        for k in stale:
+            del sys.modules[k]
+
         spec = importlib.util.spec_from_file_location("agent_module", agent_main)
         mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        try:
+            spec.loader.exec_module(mod)
+        except ImportError as imp_err:
+            logger.error("에이전트 임포트 실패 (코드 손상): %s — 강제 재다운로드 예약", imp_err)
+            _force_redownload()
+            return None
 
         agent_instance = mod.PCAgent()
 
@@ -248,6 +265,17 @@ def main() -> None:
     logger.info("=== KakaoBot 런처 시작 ===")
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
 
+    # 단일 인스턴스 보장 — Windows named mutex
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            _mutex = ctypes.windll.kernel32.CreateMutexW(None, True, "KakaoBotSaaS_SingleInstance_v1")
+            if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+                logger.warning("이미 실행 중인 KakaoBot이 있습니다 — 종료")
+                sys.exit(0)
+        except Exception as _mx_err:
+            logger.debug("뮤텍스 생성 실패 (무시): %s", _mx_err)
+
     # 1) 설정 로드 / 첫 실행 시 토큰 입력
     cfg = load_config()
     if cfg is None or not cfg.get("agent_token"):
@@ -297,16 +325,25 @@ def main() -> None:
     # 3) 트레이 아이콘 + 에이전트 실행
     proc = run_agent(cfg)
     if proc is None:
-        logger.error("에이전트 실행 실패 — 코드를 먼저 다운로드하세요")
+        # ImportError 등으로 코드 손상 → 강제 재다운로드 후 1회 재시도
+        logger.warning("에이전트 실행 실패 — 강제 재다운로드 후 재시도")
         try:
-            import tkinter as _tk
-            from tkinter import messagebox as _mb
-            _r = _tk.Tk(); _r.withdraw()
-            _mb.showerror("KakaoBot", "에이전트 실행 실패.\n에이전트 코드를 다운로드할 수 없습니다.")
-            _r.destroy()
-        except Exception:
-            pass
-        sys.exit(1)
+            need, remote_ver = check_update(cfg)
+            if need:
+                download_update(cfg, remote_ver)
+                proc = run_agent(cfg)
+        except Exception as _dl_err:
+            logger.error("강제 재다운로드 실패: %s", _dl_err)
+        if proc is None:
+            try:
+                import tkinter as _tk
+                from tkinter import messagebox as _mb
+                _r = _tk.Tk(); _r.withdraw()
+                _mb.showerror("KakaoBot", "에이전트 실행 실패.\n에이전트 코드를 다운로드할 수 없습니다.")
+                _r.destroy()
+            except Exception:
+                pass
+            sys.exit(1)
 
     # 설치/실행 성공 알림 — 최초 1회만
     if not cfg.get("setup_shown"):

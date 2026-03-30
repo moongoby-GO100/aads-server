@@ -60,7 +60,8 @@ class PCAgent:
     """PC 제어 에이전트 클라이언트."""
 
     def __init__(self) -> None:
-        self.agent_id = str(uuid.uuid4())[:12]
+        # launcher가 config.json에 저장한 영속 ID 사용 (재시작마다 새 UUID 방지)
+        self.agent_id = os.getenv("AADS_AGENT_ID", str(uuid.uuid4())[:12])
         self.hostname = platform.node()
         self.os_info = f"{platform.system()} {platform.release()} {platform.version()}"
         self._running = True
