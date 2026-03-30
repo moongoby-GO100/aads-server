@@ -17,34 +17,31 @@ _KAKAO_CLASS_NAME = "EVA_Window_Dblclk"
 
 
 def _find_kakao_window() -> Optional[int]:
-    """카카오톡 메인 창 핸들 찾기."""
+    """카카오톡 메인 창 핸들 찾기 (ctypes — pywin32 불필요)."""
     try:
-        import win32gui
-        hwnd = win32gui.FindWindow(None, _KAKAO_WINDOW_TITLE)
+        import ctypes
+        user32 = ctypes.windll.user32
+        hwnd = user32.FindWindowW(None, _KAKAO_WINDOW_TITLE)
         if hwnd == 0:
-            # 클래스명으로 재시도
-            hwnd = win32gui.FindWindow(_KAKAO_CLASS_NAME, None)
+            hwnd = user32.FindWindowW(_KAKAO_CLASS_NAME, None)
         return hwnd if hwnd != 0 else None
-    except ImportError:
-        logger.error("win32gui 미설치 — pip install pywin32")
-        return None
     except Exception as e:
         logger.error("find_kakao_window_error: %s", e)
         return None
 
 
 def _activate_window(hwnd: int) -> bool:
-    """창 활성화 (최소화 복원 포함)."""
+    """창 활성화 (최소화 복원 포함, ctypes — pywin32 불필요)."""
     try:
-        import win32gui
-        import win32con
+        import ctypes
+        user32 = ctypes.windll.user32
+        SW_RESTORE = 9
 
-        # 최소화 상태면 복원
-        if win32gui.IsIconic(hwnd):
-            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, SW_RESTORE)
             time.sleep(0.3)
 
-        win32gui.SetForegroundWindow(hwnd)
+        user32.SetForegroundWindow(hwnd)
         time.sleep(0.3)
         return True
     except Exception as e:
