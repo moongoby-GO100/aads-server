@@ -1976,24 +1976,42 @@ async def _stream_anthropic(
 
 def _build_system_with_cache(system_prompt: str) -> List[Dict[str, Any]]:
     """
-    시스템 프롬프트를 정적/동적 파트로 분리하고 정적 파트에 cache_control 적용.
+    시스템 프롬프트를 3-breakpoint로 분리하여 cache_control 적용.
+    BP1: 정적 (role/rules) — 매 턴 동일, 캐시 효과 최대
+    BP2: 준동적 (session/corrections) — 세션 내 안정적
+    BP3: 동적 (preload/rag) — 매 턴 변경, 캐시 없음
     """
-    # "## 현재 상태" 구분자로 Layer 1 / Layer 2 분리
-    sep = "\n\n## 현재 상태"
-    if sep in system_prompt:
-        idx = system_prompt.index(sep)
-        static_part = system_prompt[:idx]
-        dynamic_part = system_prompt[idx:]
-        return [
-            {
-                "type": "text",
-                "text": static_part,
-                "cache_control": {"type": "ephemeral"},
-            },
-            {
-                "type": "text",
-                "text": dynamic_part,
-            },
-        ]
-    # 분리 불가 시 단일 블록
-    return [{"type": "text", "text": system_prompt}]
+    _CC = {"type": "ephemeral"}
+    blocks = []
+
+    # BP1: 정적 파트 분리
+    sep1 = "\n\n## 현재 상태"
+    sep1_alt = "\n\n## 워크스페이스 추가 지시"
+    idx1 = -1
+    for sep in (sep1, sep1_alt):
+        if sep in system_prompt:
+            idx1 = system_prompt.index(sep)
+            break
+
+    if idx1 < 0:
+        # 분리 불가 — 단일 블록
+        return [{"type": "text", "text": system_prompt}]
+
+    static_part = system_prompt[:idx1]
+    rest = system_prompt[idx1:]
+
+    blocks.append({"type": "text", "text": static_part, "cache_control": _CC})
+
+    # BP2: 준동적 파트 분리 (<workspace_preload> 이전)
+    sep2 = "<workspace_preload>"
+    if sep2 in rest:
+        idx2 = rest.index(sep2)
+        semi_dynamic = rest[:idx2]
+        dynamic = rest[idx2:]
+        blocks.append({"type": "text", "text": semi_dynamic, "cache_control": _CC})
+        blocks.append({"type": "text", "text": dynamic})
+    else:
+        # workspace_preload 없으면 2블록으로
+        blocks.append({"type": "text", "text": rest})
+
+    return blocks
