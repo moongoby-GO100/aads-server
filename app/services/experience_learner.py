@@ -261,37 +261,67 @@ async def process_completed_jobs(pool) -> dict:
     """최근 완료 작업 중 경험 미추출 건을 일괄 처리.
 
     매일 07:30 UTC에 research_agent 이후 실행.
+    done 상태 작업 → 템플릿 기반 요약 → ai_observations 저장 (LLM 호출 없음).
     """
-    result = {"processed": 0, "success": 0, "failure": 0}
+    result = {"processed": 0}
 
     try:
         async with pool.acquire() as conn:
-            # 최근 3일 done/error 작업 중 경험 미추출 건
+            # 최근 3일 done 작업 중 경험 미기록 건
             jobs = await conn.fetch("""
-                SELECT j.job_id, j.status
+                SELECT j.job_id, j.project, j.instruction, j.status,
+                       j.result_output, j.review_feedback, j.created_at
                 FROM pipeline_jobs j
-                WHERE j.status IN ('done', 'error')
+                WHERE j.status = 'done'
                   AND j.created_at >= NOW() - interval '3 days'
                   AND NOT EXISTS (
-                      SELECT 1 FROM memory_facts mf
-                      WHERE mf.detail::text LIKE '%' || j.job_id || '%'
-                        AND mf.category IN ('experience_success', 'experience_failure')
+                      SELECT 1 FROM ai_observations ao
+                      WHERE ao.key = j.job_id
+                        AND ao.category = 'experience'
                   )
                 ORDER BY j.created_at DESC
                 LIMIT 10
             """)
 
-        for job_row in jobs:
-            exp = await extract_experience_from_job(pool, job_row["job_id"])
-            if exp:
-                result["processed"] += 1
-                if exp.outcome == "success":
-                    result["success"] += 1
-                else:
-                    result["failure"] += 1
+            for job in jobs:
+                try:
+                    # 템플릿 기반 요약 생성 (LLM 호출 없음)
+                    instruction_preview = (job['instruction'] or '')[:100]
+                    result_preview = (job['result_output'] or '')[:100]
+                    review = (job['review_feedback'] or '')[:80]
 
-        if result["processed"] > 0:
-            logger.info("experience_batch_complete", extra=result)
+                    summary = (
+                        f"[{job['project']}] 완료 작업: {instruction_preview}... "
+                        f"결과: {result_preview}... "
+                        + ("리뷰: " + review if review else "")
+                    )
+
+                    # ai_observations 테이블에 INSERT (중복 시 UPDATE)
+                    await conn.execute(
+                        """INSERT INTO ai_observations
+                           (category, key, value, confidence, project)
+                           VALUES ($1, $2, $3, $4, $5)
+                           ON CONFLICT (category, key, COALESCE(project, ''))
+                           DO UPDATE SET value = $3, updated_at = NOW(),
+                                         usage_count = usage_count + 1""",
+                        'experience',                    # category
+                        job['job_id'],                   # key
+                        summary,                         # value
+                        0.8,                             # confidence
+                        job['project'],                  # project
+                    )
+
+                    result["processed"] += 1
+
+                except Exception as e:
+                    logger.warning(
+                        "experience_store_error",
+                        extra={"job_id": job['job_id'], "error": str(e)}
+                    )
+                    continue
+
+            if result["processed"] > 0:
+                logger.info("experience_batch_complete", extra=result)
 
     except Exception as e:
         logger.warning("experience_batch_error", extra={"error": str(e)})
