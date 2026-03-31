@@ -416,6 +416,17 @@ async def lifespan(app: FastAPI):
         logger.error("db_pool_init_failed", error=str(e))
         app_state["db_pool"] = None
 
+    # Autonomy Gate 스키마 초기화 (T-009)
+    try:
+        from app.services.autonomy_gate import init_autonomy_schema
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await init_autonomy_schema(conn)
+        logger.info("autonomy_gate_schema_initialized")
+    except Exception as e:
+        logger.warning(f"autonomy_gate_init_failed: {e}")
+
     # 서버 시작 시 stale placeholder → 내용 있으면 보존(promote), 없으면 삭제
     try:
         async with db_pool.acquire() as _c:
