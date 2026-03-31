@@ -20,7 +20,7 @@ _생성: 2026-03-30 | 갱신: 2026-03-31 | Phase 1 시스템 완전 파악 + Pip
 ## LLM 라우팅 체계
 
 ```
-메시지 → intent_router.py(Gemini Flash-Lite, 36인텐트)
+메시지 → intent_router.py(Gemini Flash-Lite, 65인텐트)
   → model_selector.py(2126줄)
     ├─ Claude 인텐트 → Anthropic OAuth 직접
     │   5단계 폴백: Opus(Gmail)→Opus(Naver)→Sonnet(Gmail)→Sonnet(Naver)→Gemini
@@ -80,11 +80,11 @@ Pipeline Runner가 완전 대체. 향후 참조/롤백 용도로 유지.
 
 ## 도구 시스템
 
-`app/services/tool_registry.py` (2,202줄) — 50+개 도구, Anthropic Tool Use API 포맷.
+`app/services/tool_registry.py` (2,202줄) — 87개 도구, Anthropic Tool Use API 포맷.
 `app/api/ceo_chat_tools.py` (3,247줄) — 실행 엔진 (read_file, query_db, browser 6종, 원격 DB, 검색 등).
 `app/api/ceo_chat_tools_db.py` (501줄) — 프로젝트별 원격 DB (KIS=PostgreSQL, SF/NTV2=MySQL+SSH터널).
 
-Tier 분류: 상시로드(~20), 온디맨드(~30). defer_loading 메타데이터로 관리.
+Tier 분류: 상시로드(~25), 온디맨드(~62). defer_loading 메타데이터로 관리. ToolExecutor dispatch: 82개.
 
 ## 메모리/진화 시스템
 
