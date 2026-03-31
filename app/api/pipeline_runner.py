@@ -325,6 +325,39 @@ async def approve_or_reject(job_id: str, req: JobApproveRequest):
 
     action_kr = "승인됨" if req.action == "approve" else "거부됨"
     logger.info("pipeline_runner.job_action", job_id=job_id, action=req.action)
+
+    # autonomy_stats 기록 (자율성 데이터 축적)
+    try:
+        from app.services.autonomy_gate import record_task_result
+        async with pool.acquire() as conn:
+            job_row = await conn.fetchrow(
+                "SELECT project FROM pipeline_jobs WHERE job_id = $1", job_id
+            )
+            if job_row:
+                if req.action == "approve":
+                    await record_task_result(
+                        conn,
+                        task_type="pipeline_runner",
+                        task_id=job_id,
+                        judge_verdict="pass",
+                        user_modified=False,
+                        project_id=job_row["project"],
+                    )
+                else:
+                    await record_task_result(
+                        conn,
+                        task_type="pipeline_runner",
+                        task_id=job_id,
+                        judge_verdict="fail",
+                        user_modified=True,
+                        project_id=job_row["project"],
+                    )
+    except Exception as e:
+        if req.action == "approve":
+            logger.warning(f"autonomy_record_on_approve_failed: {e}")
+        else:
+            logger.warning(f"autonomy_record_on_reject_failed: {e}")
+
     return {"job_id": job_id, "action": req.action, "message": f"작업이 {action_kr}"}
 
 
