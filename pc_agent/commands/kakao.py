@@ -1,6 +1,6 @@
 """
 AADS-195 Phase 3: 카카오톡 GUI 자동 조작.
-PyAutoGUI + Win32 API 기반 카카오톡 메시지 전송/읽기.
+ctypes 전용 — pyautogui/pyperclip/pywin32 의존성 제거.
 Windows 전용 — 서버가 아닌 PC Agent 클라이언트에서 실행.
 """
 from __future__ import annotations
@@ -50,56 +50,42 @@ def _activate_window(hwnd: int) -> bool:
 
 
 def _search_chat_room(recipient: str) -> bool:
-    """카카오톡 대화방 검색 및 진입."""
+    """카카오톡 대화방 검색 및 진입 (ctypes 전용)."""
     try:
-        import pyautogui
-        pyautogui.PAUSE = 0.1
+        from commands.win_input import hotkey, press_key, type_text_via_clipboard
 
         # Ctrl+F로 검색창 열기 (카카오톡 검색 단축키)
-        pyautogui.hotkey("ctrl", "f")
+        hotkey("ctrl", "f")
         time.sleep(0.5)
 
-        # 검색어 입력
-        pyautogui.typewrite(recipient, interval=0.05) if recipient.isascii() else None
-        if not recipient.isascii():
-            # 한글 입력은 클립보드 방식
-            import pyperclip
-            pyperclip.copy(recipient)
-            pyautogui.hotkey("ctrl", "v")
-        time.sleep(0.5)
+        # 검색어 입력 (클립보드 방식 — 한글 지원)
+        type_text_via_clipboard(recipient)
+        time.sleep(0.8)
 
         # Enter로 대화방 진입
-        pyautogui.press("enter")
+        press_key("enter")
         time.sleep(0.5)
 
         return True
-    except ImportError as e:
-        logger.error("pyautogui/pyperclip 미설치: %s", e)
-        return False
     except Exception as e:
         logger.error("search_chat_room_error: %s", e)
         return False
 
 
 def _send_message_to_chat(message: str) -> bool:
-    """현재 활성 대화방에 메시지 전송."""
+    """현재 활성 대화방에 메시지 전송 (ctypes 전용)."""
     try:
-        import pyautogui
-        import pyperclip
+        from commands.win_input import press_key, type_text_via_clipboard
 
         # 메시지 입력 (클립보드 방식 — 한글 지원)
-        pyperclip.copy(message)
-        pyautogui.hotkey("ctrl", "v")
+        type_text_via_clipboard(message)
         time.sleep(0.2)
 
         # Enter로 전송
-        pyautogui.press("enter")
+        press_key("enter")
         time.sleep(0.3)
 
         return True
-    except ImportError as e:
-        logger.error("pyautogui/pyperclip 미설치: %s", e)
-        return False
     except Exception as e:
         logger.error("send_message_error: %s", e)
         return False
@@ -135,6 +121,13 @@ async def kakao_send(params: Dict[str, Any]) -> Dict[str, Any]:
     if not _send_message_to_chat(message):
         return {"status": "error", "data": {"error": "메시지 전송 실패"}}
 
+    # 5. ESC로 검색 닫기 (원래 상태 복원)
+    try:
+        from commands.win_input import press_key
+        press_key("escape")
+    except Exception:
+        pass
+
     logger.info("kakao_send_success recipient=%s", recipient)
     return {
         "status": "success",
@@ -149,7 +142,7 @@ async def kakao_send(params: Dict[str, Any]) -> Dict[str, Any]:
 async def kakao_read(params: Dict[str, Any]) -> Dict[str, Any]:
     """
     카카오톡 현재 대화방 최근 메시지 읽기.
-    Win32 API로 대화 목록 텍스트 추출.
+    클립보드 방식: Ctrl+A → Ctrl+C → 텍스트 파싱.
     """
     hwnd = _find_kakao_window()
     if hwnd is None:
@@ -159,20 +152,18 @@ async def kakao_read(params: Dict[str, Any]) -> Dict[str, Any]:
         return {"status": "error", "data": {"error": "카카오톡 창 활성화 실패"}}
 
     try:
-        import pyautogui
+        from commands.win_input import hotkey, press_key, clipboard_get
 
-        # 대화 영역 스크린샷으로 읽기 시도 (OCR 필요 시 별도 처리)
-        # 현재는 클립보드 복사 방식: Ctrl+A → Ctrl+C
-        pyautogui.hotkey("ctrl", "a")
+        # 대화 영역 전체 선택 → 복사
+        hotkey("ctrl", "a")
         time.sleep(0.2)
-        pyautogui.hotkey("ctrl", "c")
+        hotkey("ctrl", "c")
         time.sleep(0.2)
 
-        import pyperclip
-        text = pyperclip.paste()
+        text = clipboard_get() or ""
 
         # 선택 해제
-        pyautogui.press("escape")
+        press_key("escape")
 
         if not text:
             return {"status": "success", "data": {"messages": [], "note": "대화 내용을 읽지 못했습니다."}}
@@ -186,8 +177,6 @@ async def kakao_read(params: Dict[str, Any]) -> Dict[str, Any]:
                 messages.append({"text": line})
 
         return {"status": "success", "data": {"messages": messages}}
-    except ImportError as e:
-        return {"status": "error", "data": {"error": f"필수 라이브러리 미설치: {e}"}}
     except Exception as e:
         logger.error("kakao_read_error: %s", e)
         return {"status": "error", "data": {"error": str(e)}}
