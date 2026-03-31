@@ -585,3 +585,37 @@ AADS 시스템 프롬프트는 **Anthropic Context Engineering 기준 상위 10%
 
 *작성: AADS CTO AI | 코드 실측 + 2024~2025 최신 연구 기반*  
 *참고: Anthropic, AWS, ETH Zurich AgentDojo, Samsung SDS, PyTorch KR, OWASP*
+
+
+---
+
+## v2.1 추가 분석 (2026-03-31 소스 직접 확인)
+
+### 실측 확인 사항
+
+파일 규모 (run_remote_command 실측):
+- system_prompt_v2.py: 401줄
+- context_builder.py: 552줄
+- memory_recall.py: _TOTAL_CHAR_LIMIT=4000 (~2700토큰 상한)
+- auto_rag.py: _RAG_TOKEN_BUDGET=2000, _RAG_TOP_K=5
+- cache_config.py: MIN_CACHE_TOKENS=1024, 3-breakpoint 캐싱
+
+볼륨 마운트 확인 (docker inspect 실측):
+- /app/docs: 호스트 볼륨 마운트 없음 (컨테이너 레이어, 재시작 시 초기화)
+- /app/app: /root/aads/aads-server/app 마운트됨
+
+### 신규 발견 개선 기회
+
+1. /app/docs 볼륨 마운트 부재: 컨테이너 재시작 시 보고서 등 손실 위험.
+   docker-compose.prod.yml에 docs 볼륨 마운트 추가 권장.
+
+2. CKP 조건부 로딩: 단순 인텐트에서 최대 1,500토큰 절감 가능.
+   context_builder.py build() 함수에 _CKP_KEYWORDS 체크 추가.
+
+3. Emergency Truncation 환경변수화: 현재 _EMERGENCY_KEEP=30 하드코딩.
+   EMERGENCY_KEEP_MESSAGES 환경변수 추가하여 운영 중 조정 가능하게.
+
+4. Cross-Session Auto-RAG 가중치: _CROSS_SESSION_WEIGHT=0.85 현재값.
+   CEO 프로젝트 전환 패턴에서 0.7로 낮추는 것 검토 (실측 후 결정).
+
+*v2.1 보완 작성: AADS CTO AI, 2026-03-31*
