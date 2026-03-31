@@ -16,6 +16,14 @@ logger = logging.getLogger(__name__)
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
+# ── 64-bit 안전: argtypes/restype 명시 ───────────────────────────────
+user32.SetClipboardData.argtypes = [ctypes.wintypes.UINT, ctypes.c_void_p]
+user32.SetClipboardData.restype = ctypes.c_void_p
+kernel32.GlobalAlloc.restype = ctypes.c_void_p
+kernel32.GlobalLock.restype = ctypes.c_void_p
+kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+
 # ── 상수 ──────────────────────────────────────────────────────────────
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004

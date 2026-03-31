@@ -62,6 +62,8 @@ _RAW_HANDLERS = {
     "system_info": _handler(system_info, "execute"),
     "kakao_send": _handler(kakao, "kakao_send"),
     "kakao_read": _handler(kakao, "kakao_read"),
+    "kakao_send_to_me": _handler(kakao, "kakao_send_to_me"),
+    "kakao_detect_my_name": _handler(kakao, "kakao_detect_my_name"),
     "self_update": _handler(updater, "execute"),
     # P0: 마우스/키보드
     "mouse_click": _handler(input_control, "mouse_click"),
