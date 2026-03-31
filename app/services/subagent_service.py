@@ -63,12 +63,26 @@ _SUBAGENT_TOOLS = [
 
 def _build_tool_schemas() -> List[Dict[str, Any]]:
     """서브에이전트용 Anthropic Tool Use 스키마 — ToolRegistry에서 허용 도구만 동적 로드."""
+    # ToolRegistry 이름 → ToolExecutor dispatch 이름 매핑 (불일치 보정)
+    _REGISTRY_TO_DISPATCH = {
+        "search_naver": "web_search_naver",
+        "search_kakao": "web_search_kakao",
+    }
     try:
         from app.services.tool_registry import ToolRegistry
         registry = ToolRegistry()
         all_tools = registry.get_tools("all")
         # _SUBAGENT_TOOLS에 포함된 도구 스키마만 필터링
-        return [t for t in all_tools if t.get("name") in _SUBAGENT_TOOLS]
+        # ToolRegistry 이름이 dispatch 이름과 다른 경우 변환
+        result = []
+        for t in all_tools:
+            name = t.get("name")
+            dispatch_name = _REGISTRY_TO_DISPATCH.get(name, name)
+            if dispatch_name in _SUBAGENT_TOOLS:
+                t_copy = dict(t)
+                t_copy["name"] = dispatch_name
+                result.append(t_copy)
+        return result
     except Exception as e:
         logger.error(f"subagent_tool_schema_fallback_ERROR: {e} — 폴백 모드 활성화 (48개 도구 풀세트)")
         # 폴백: ToolRegistry 실패 시에도 48개 도구 모두 제공 (원격 도구 차단 방지)
@@ -77,7 +91,7 @@ def _build_tool_schemas() -> List[Dict[str, Any]]:
             # 원격 읽기/조회 (24개 중 주요 도구)
             {"name": "read_remote_file", "description": "원격 파일 읽기", "input_schema": {"type": "object", "properties": {"project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]}, "file_path": {"type": "string"}}, "required": ["project", "file_path"]}},
             {"name": "list_remote_dir", "description": "원격 디렉토리 탐색", "input_schema": {"type": "object", "properties": {"project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]}, "path": {"type": "string"}}, "required": ["project"]}},
-            {"name": "query_database", "description": "AADS DB SELECT", "input_schema": {"type": "object", "properties": {"sql": {"type": "string"}}, "required": ["sql"]}},
+            {"name": "query_database", "description": "AADS DB SELECT", "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
             {"name": "query_project_database", "description": "프로젝트 DB SELECT", "input_schema": {"type": "object", "properties": {"project": {"type": "string", "enum": ["KIS", "GO100", "SF", "NTV2"]}, "query": {"type": "string"}}, "required": ["project", "query"]}},
             {"name": "list_project_databases", "description": "프로젝트 DB 목록", "input_schema": {"type": "object", "properties": {}, "required": []}},
             {"name": "read_github_file", "description": "GitHub 파일 읽기", "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
