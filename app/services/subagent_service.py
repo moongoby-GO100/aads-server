@@ -53,7 +53,6 @@ _SUBAGENT_TOOLS = [
     "git_remote_create_branch",
     "web_search", "web_search_brave", "web_search_naver", "web_search_kakao",
     "search_searxng",
-    "search_searxng",
     "deep_research", "deep_crawl",
     "save_note", "delete_note", "learn_pattern", "observe",
     "export_data",
