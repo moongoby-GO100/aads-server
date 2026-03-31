@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 _KAKAO_WINDOW_TITLE = "카카오톡"
 _KAKAO_CLASS_NAME = "EVA_Window_Dblclk"
 
+# "나에게 보내기" 수신자 키워드
+_SELF_RECIPIENTS = {"나", "나에게", "나에게 보내기", "me", "자신"}
+
 
 def _find_kakao_window() -> Optional[int]:
     """카카오톡 메인 창 핸들 찾기 (ctypes — pywin32 불필요)."""
@@ -91,6 +94,37 @@ def _send_message_to_chat(message: str) -> bool:
         return False
 
 
+def _open_my_chat(hwnd: int) -> bool:
+    """내 프로필 나와의 채팅 열기 (키보드 전용, 좌표 불필요)."""
+    try:
+        from commands.win_input import hotkey, press_key
+
+        # 1) 기존 팝업/검색 닫기
+        press_key("escape")
+        time.sleep(0.3)
+
+        # 2) 친구 탭으로 이동 (Ctrl+1)
+        hotkey("ctrl", "1")
+        time.sleep(0.5)
+
+        # 3) 최상단 이동 - 내 프로필이 항상 최상단
+        press_key("home")
+        time.sleep(0.3)
+
+        # 4) 내 프로필 선택 (Enter 프로필 팝업)
+        press_key("enter")
+        time.sleep(0.8)
+
+        # 5) 프로필 팝업에서 1:1 채팅 실행 (Enter 기본 동작)
+        press_key("enter")
+        time.sleep(0.8)
+
+        return True
+    except Exception as e:
+        logger.error("open_my_chat_error: %s", e)
+        return False
+
+
 async def kakao_send(params: Dict[str, Any]) -> Dict[str, Any]:
     """
     카카오톡 메시지 전송.
@@ -113,9 +147,13 @@ async def kakao_send(params: Dict[str, Any]) -> Dict[str, Any]:
     if not _activate_window(hwnd):
         return {"status": "error", "data": {"error": "카카오톡 창 활성화 실패"}}
 
-    # 3. 대화방 검색
-    if not _search_chat_room(recipient):
-        return {"status": "error", "data": {"error": f"대화방 '{recipient}' 검색 실패"}}
+    # 3. 대화방 검색 또는 나와의 채팅
+    if recipient.strip().lower() in {s.lower() for s in _SELF_RECIPIENTS}:
+        if not _open_my_chat(hwnd):
+            return {"status": "error", "data": {"error": "나와의 채팅 열기 실패"}}
+    else:
+        if not _search_chat_room(recipient):
+            return {"status": "error", "data": {"error": f"대화방 '{recipient}' 검색 실패"}}
 
     # 4. 메시지 전송
     if not _send_message_to_chat(message):
