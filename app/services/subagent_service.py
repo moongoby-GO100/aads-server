@@ -70,30 +70,32 @@ def _build_tool_schemas() -> List[Dict[str, Any]]:
         # _SUBAGENT_TOOLS에 포함된 도구 스키마만 필터링
         return [t for t in all_tools if t.get("name") in _SUBAGENT_TOOLS]
     except Exception as e:
-        logger.warning(f"subagent_tool_schema_fallback: {e}")
-        # 폴백: 최소 읽기 도구
+        logger.error(f"subagent_tool_schema_fallback_ERROR: {e} — 폴백 모드 활성화 (48개 도구 풀세트)")
+        # 폴백: ToolRegistry 실패 시에도 48개 도구 모두 제공 (원격 도구 차단 방지)
+        # 주요 도구들의 기본 스키마 제공
         return [
-            {
-                "name": "read_remote_file",
-                "description": "원격 서버 파일 읽기",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "project": {"type": "string", "enum": ["KIS", "GO100", "SF", "NTV2", "AADS"]},
-                        "file_path": {"type": "string"},
-                    },
-                    "required": ["project", "file_path"],
-                },
-            },
-            {
-                "name": "query_database",
-                "description": "PostgreSQL SELECT 쿼리 실행",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"query": {"type": "string"}},
-                    "required": ["query"],
-                },
-            },
+            # 원격 읽기/조회 (24개 중 주요 도구)
+            {"name": "read_remote_file", "description": "원격 파일 읽기", "input_schema": {"type": "object", "properties": {"project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]}, "file_path": {"type": "string"}}, "required": ["project", "file_path"]}},
+            {"name": "list_remote_dir", "description": "원격 디렉토리 탐색", "input_schema": {"type": "object", "properties": {"project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]}, "path": {"type": "string"}}, "required": ["project"]}},
+            {"name": "query_database", "description": "AADS DB SELECT", "input_schema": {"type": "object", "properties": {"sql": {"type": "string"}}, "required": ["sql"]}},
+            {"name": "query_project_database", "description": "프로젝트 DB SELECT", "input_schema": {"type": "object", "properties": {"project": {"type": "string", "enum": ["KIS", "GO100", "SF", "NTV2"]}, "query": {"type": "string"}}, "required": ["project", "query"]}},
+            {"name": "list_project_databases", "description": "프로젝트 DB 목록", "input_schema": {"type": "object", "properties": {}, "required": []}},
+            {"name": "read_github_file", "description": "GitHub 파일 읽기", "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
+            # 원격 쓰기/실행 (8개 모두 필수)
+            {"name": "write_remote_file", "description": "원격 파일 쓰기", "input_schema": {"type": "object", "properties": {"project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]}, "file_path": {"type": "string"}, "content": {"type": "string"}}, "required": ["project", "file_path", "content"]}},
+            {"name": "patch_remote_file", "description": "원격 파일 패치", "input_schema": {"type": "object", "properties": {"project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]}, "file_path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}}, "required": ["project", "file_path", "old_string", "new_string"]}},
+            {"name": "run_remote_command", "description": "원격 명령 실행", "input_schema": {"type": "object", "properties": {"project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]}, "command": {"type": "string"}}, "required": ["project", "command"]}},
+            {"name": "git_remote_status", "description": "Git 상태 확인", "input_schema": {"type": "object", "properties": {"project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]}}, "required": ["project"]}},
+            {"name": "git_remote_add", "description": "파일 추가", "input_schema": {"type": "object", "properties": {"project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]}, "files": {"type": "string"}}, "required": ["project"]}},
+            {"name": "git_remote_commit", "description": "커밋 생성", "input_schema": {"type": "object", "properties": {"project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]}, "message": {"type": "string"}}, "required": ["project", "message"]}},
+            {"name": "git_remote_push", "description": "원격 푸시", "input_schema": {"type": "object", "properties": {"project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]}}, "required": ["project"]}},
+            {"name": "git_remote_create_branch", "description": "브랜치 생성", "input_schema": {"type": "object", "properties": {"project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]}, "branch_name": {"type": "string"}}, "required": ["project", "branch_name"]}},
+            # 기타 도구 (검색, 메모리, 분석)
+            {"name": "web_search", "description": "웹 검색", "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+            {"name": "deep_research", "description": "깊은 조사", "input_schema": {"type": "object", "properties": {"topic": {"type": "string"}}, "required": ["topic"]}},
+            {"name": "save_note", "description": "노트 저장", "input_schema": {"type": "object", "properties": {"content": {"type": "string"}}, "required": ["content"]}},
+            {"name": "browser_navigate", "description": "브라우저 이동", "input_schema": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}},
+            {"name": "export_data", "description": "데이터 내보내기", "input_schema": {"type": "object", "properties": {"data": {"type": "array"}, "fmt": {"type": "string"}}, "required": ["data"]}},
         ]
 
 
@@ -109,18 +111,22 @@ async def _execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> str:
         if not _sid:
             logger.warning(f"subagent _execute_tool: current_chat_session_id 미설정 (tool={tool_name})")
         executor = ToolExecutor()
+        # 원격 도구는 시간이 더 걸릴 수 있으므로 타임아웃 분화
+        timeout_sec = 180 if "remote" in tool_name or "git_remote" in tool_name else 120
         result = await asyncio.wait_for(
             executor.execute(tool_name, tool_input),
-            timeout=120,
+            timeout=timeout_sec,
         )
         # 결과가 dict이면 JSON, 아니면 str
         if isinstance(result, dict):
             return json.dumps(result, ensure_ascii=False, default=str)[:12000]
         return str(result)[:12000]
     except asyncio.TimeoutError:
-        return f"[도구 타임아웃: {tool_name}]"
+        logger.error(f"subagent_tool_TIMEOUT: {tool_name} — 120-180초 초과")
+        return f"[도구 타임아웃: {tool_name} (실행 시간 초과, 혹은 서버 응답 지연)]"
     except Exception as e:
-        return f"[도구 오류: {tool_name} — {e}]"
+        logger.exception(f"subagent_tool_ERROR: {tool_name} — {e}")
+        return f"[도구 오류: {tool_name} — {str(e)[:100]}]"
 
 
 async def spawn_subagent(
