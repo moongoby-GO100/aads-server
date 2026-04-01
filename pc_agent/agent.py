@@ -189,6 +189,7 @@ class PCAgent:
                                 "mac_address": _net["mac"],
                                 "ip_address": _net["ip"],
                                 "interface_name": _net["name"],
+                                "hostname": self.hostname,
                             }
                         }))
                         logger.info("WoL 네트워크 정보 전송: MAC=%s IP=%s", _net["mac"], _net["ip"])

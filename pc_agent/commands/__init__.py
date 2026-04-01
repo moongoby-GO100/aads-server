@@ -139,6 +139,7 @@ _RAW_HANDLERS = {
     # P7: 네트워크 정보 (WoL용)
     "network_info": _handler(network, "network_info"),
     "wol_register": _handler(network, "wol_register"),
+    "wol_send": _handler(network, "wol_send"),
 }
 
 # None 핸들러 제거 — 사용 가능한 명령만 등록

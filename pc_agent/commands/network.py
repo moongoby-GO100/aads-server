@@ -115,6 +115,41 @@ async def network_info(params: Dict[str, Any]) -> Dict[str, Any]:
         return {"status": "error", "data": {"error": str(e)}}
 
 
+async def wol_send(params: Dict[str, Any]) -> Dict[str, Any]:
+    """같은 LAN 내 다른 PC를 Wake-on-LAN으로 부팅 (PC Agent → PC)."""
+    mac = params.get("mac", "")
+    if not mac:
+        return {"status": "error", "data": {"error": "mac 파라미터 필수 (예: AA:BB:CC:DD:EE:FF)"}}
+    broadcast_ip = params.get("broadcast_ip", "255.255.255.255")
+    port = int(params.get("port", 9))
+    try:
+        # 매직 패킷 생성: 0xFF*6 + MAC*16
+        mac_clean = mac.replace(":", "").replace("-", "").replace(".", "").upper()
+        if len(mac_clean) != 12:
+            return {"status": "error", "data": {"error": f"유효하지 않은 MAC 주소: {mac}"}}
+        mac_bytes = bytes.fromhex(mac_clean)
+        packet = b'\xff' * 6 + mac_bytes * 16
+
+        import socket as _sock
+        with _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM) as s:
+            s.setsockopt(_sock.SOL_SOCKET, _sock.SO_BROADCAST, 1)
+            s.sendto(packet, (broadcast_ip, port))
+
+        logger.info("WoL 매직 패킷 전송: MAC=%s broadcast=%s:%d", mac, broadcast_ip, port)
+        return {
+            "status": "success",
+            "data": {
+                "mac": mac,
+                "broadcast_ip": broadcast_ip,
+                "port": port,
+                "message": f"매직 패킷 전송 완료 ({mac}). PC 부팅까지 30초~2분 소요.",
+            }
+        }
+    except Exception as e:
+        logger.error("wol_send error: %s", e)
+        return {"status": "error", "data": {"error": str(e)}}
+
+
 async def wol_register(params: Dict[str, Any]) -> Dict[str, Any]:
     """WoL용 MAC 주소 수동 등록 요청."""
     try:
