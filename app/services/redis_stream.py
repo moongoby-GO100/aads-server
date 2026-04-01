@@ -152,6 +152,35 @@ async def delete_stream(session_id: str) -> None:
         pass
 
 
+async def xread_blocking(
+    session_id: str,
+    last_id: str = "0",
+    timeout_ms: int = 1000,
+) -> list:
+    """Redis Stream에서 XREAD blocking으로 새 엔트리 읽기 (deliver_sse용).
+
+    Args:
+        session_id: 채팅 세션 ID
+        last_id: 마지막으로 읽은 entry ID
+        timeout_ms: 블로킹 타임아웃 (밀리초)
+
+    Returns:
+        [(entry_id, {field: value}), ...] 또는 빈 리스트
+    """
+    try:
+        r = await _get_redis()
+        key = _stream_key(session_id)
+        # XREAD block: 새 엔트리가 올 때까지 최대 timeout_ms 대기
+        result = await r.xread({key: last_id}, count=50, block=timeout_ms)
+        if not result:
+            return []
+        # result: [(stream_name, [(entry_id, fields), ...])]
+        return result[0][1] if result else []
+    except Exception as e:
+        logger.warning(f"redis_xread_blocking_failed session={session_id[:8]}: {e}")
+        return []
+
+
 async def health_check() -> bool:
     """Redis Stream 기능 헬스체크."""
     try:

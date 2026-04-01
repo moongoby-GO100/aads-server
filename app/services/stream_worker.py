@@ -1,113 +1,100 @@
 """
 AADS-191 Phase4: 워커 분리 — Redis Stream 기반 SSE 전송 분리.
 
+핵심 역할:
+- deliver_sse(): Redis Stream에서 XREAD blocking으로 토큰을 읽어 SSE 이벤트로 전달
+- stream-resume 엔드포인트에서 Last-Event-ID 기반 재연결 시 사용
+- 서버 재시작 후에도 Redis Stream에 보존된 토큰을 클라이언트에 전달
+
 아키텍처:
-  send_message_stream() → Producer Task → Redis Stream → SSE Delivery → Client
-
-Primary 경로 (첫 연결):
-  with_background_completion → Queue + Redis Stream 병행 → yield (저지연)
-
-Reconnect 경로 (재연결):
-  deliver_sse → Redis XREAD blocking → yield (Last-Event-ID 기반 이어읽기)
-
-모든 SSE data 이벤트는 Redis Stream에 저장되므로,
-재연결 시 놓친 토큰을 Redis Stream에서 복구하여 끊김 없이 전달.
+  LLM API → _producer (chat_service) → Redis Stream + Queue
+  Redis Stream → deliver_sse (이 모듈) → SSE to client (재연결 시)
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 from app.services import redis_stream as _rs
 
 logger = logging.getLogger(__name__)
 
-# Cloudflare flush 유도 패딩 (256byte+)
-_PAD = ":" + " " * 256 + "\n"
-_HB_LINE = f'data: {json.dumps({"type": "heartbeat"})}\n{_PAD}\n'
-
 
 async def deliver_sse(
     session_id: str,
     last_event_id: str = "0",
+    timeout_sec: float = 300.0,
 ) -> AsyncGenerator[str, None]:
-    """Redis Stream에서 XREAD blocking으로 토큰을 읽어 SSE yield.
-
-    SSE 재연결 시 Last-Event-ID로 끊긴 지점부터 이어서 전송.
-    워커(producer)와 완전 분리 — 워커가 다른 프로세스여도 동작.
+    """Redis Stream에서 XREAD blocking으로 토큰을 읽어 SSE 이벤트로 전달.
 
     Args:
         session_id: 채팅 세션 ID
-        last_event_id: 마지막 수신한 Redis Stream entry ID ("0"이면 처음부터)
+        last_event_id: 마지막으로 수신한 Redis Stream entry ID ("0"이면 처음부터)
+        timeout_sec: 전체 타임아웃 (기본 300초 = 5분)
+
+    Yields:
+        SSE 포맷 문자열 (id:{entry_id}\ndata: {...}\n\n)
     """
+    import time
+    _start = time.monotonic()
+    current_id = last_event_id if last_event_id and last_event_id != "0" else "0"
+    _empty_count = 0  # 연속 빈 응답 횟수
+
+    # 초기: 이미 저장된 토큰을 즉시 전달 (catch-up)
     try:
-        r = await _rs._get_redis()
+        cached = await _rs.read_tokens_after(session_id, current_id)
+        for entry in cached:
+            if entry.get("done"):
+                yield f'data: {json.dumps({"type": "resume_done"})}\n\n'
+                return
+            data = entry.get("data", "")
+            eid = entry.get("id", "")
+            if data:
+                yield f"id:{eid}\n{data}" if not data.endswith("\n\n") else f"id:{eid}\n{data}"
+                current_id = eid
+                _empty_count = 0
     except Exception as e:
-        logger.warning(f"deliver_sse_redis_fail session={session_id[:8]}: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'message': 'Redis 연결 실패'})}\n\n"
-        return
+        logger.warning(f"deliver_sse_catchup_failed session={session_id[:8]}: {e}")
 
-    key = _rs._stream_key(session_id)
-    current_id = last_event_id
-
-    # SSE 재연결 간격 2초
-    yield "retry: 2000\n\n"
-    # 초기 heartbeat — 연결 수립 확인
-    yield _HB_LINE
-
-    _idle_rounds = 0
-    _MAX_IDLE = 150  # 150 × 2초 = 5분 timeout
-
-    while True:
+    # 실시간: XREAD blocking으로 새 토큰 대기
+    while (time.monotonic() - _start) < timeout_sec:
         try:
-            # XREAD: 새 이벤트 대기 (최대 2초 블로킹)
-            entries = await r.xread({key: current_id}, count=20, block=2000)
+            entries = await _rs.xread_blocking(session_id, current_id, timeout_ms=1000)
 
             if not entries:
-                _idle_rounds += 1
+                _empty_count += 1
+                # 5초 이상 빈 응답 → 스트림 완료 여부 확인
+                if _empty_count >= 5:
+                    info = await _rs.get_stream_info(session_id)
+                    if info is None:
+                        # Stream 자체가 없음 → 종료
+                        yield f'data: {json.dumps({"type": "resume_done"})}\n\n'
+                        return
+                    if info.get("is_done"):
+                        # 완료 마커 있음 → 종료
+                        yield f'data: {json.dumps({"type": "resume_done"})}\n\n'
+                        return
+                    _empty_count = 0  # 리셋 후 계속 대기
 
-                # 5분 timeout
-                if _idle_rounds >= _MAX_IDLE:
-                    yield f"data: {json.dumps({'type': 'error', 'message': '응답 시간 초과'})}\n\n"
-                    return
-
-                # Stream done 체크 (워커 완료 여부)
-                info = await _rs.get_stream_info(session_id)
-                if info and info.get("is_done"):
-                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
-                    return
-                if not info and _idle_rounds > 5:
-                    # Stream 자체가 없고 10초 경과 — 생성 시작 전이거나 만료됨
-                    yield f"data: {json.dumps({'type': 'error', 'message': '스트림 없음'})}\n\n"
-                    return
-
-                # 연결 유지 heartbeat
-                yield _HB_LINE
+                # heartbeat 전송 (연결 유지)
+                yield f'data: {json.dumps({"type": "heartbeat"})}\n\n'
                 continue
 
-            _idle_rounds = 0
+            _empty_count = 0
+            for eid, fields in entries:
+                current_id = eid
+                if fields.get("done") == "true":
+                    yield f'data: {json.dumps({"type": "resume_done"})}\n\n'
+                    return
+                data = fields.get("data", "")
+                if data:
+                    yield f"id:{eid}\n{data}" if not data.endswith("\n\n") else f"id:{eid}\n{data}"
 
-            for _stream_name, messages in entries:
-                for msg_id, fields in messages:
-                    current_id = msg_id
-
-                    # 완료 마커
-                    if fields.get("done") == "true":
-                        yield f"id:{msg_id}\ndata: {json.dumps({'type': 'done'})}\n\n"
-                        return
-
-                    # 토큰 데이터 전송 (id: 포함 → 클라이언트 Last-Event-ID 갱신)
-                    data = fields.get("data", "")
-                    if data:
-                        yield f"id:{msg_id}\n{data}"
-
-        except asyncio.CancelledError:
-            logger.info(f"deliver_sse_cancelled session={session_id[:8]}")
-            return
         except Exception as e:
-            logger.warning(f"deliver_sse_error session={session_id[:8]}: {e}")
-            yield _HB_LINE
+            logger.warning(f"deliver_sse_xread_error session={session_id[:8]}: {e}")
             await asyncio.sleep(1)
-            _idle_rounds += 1
+
+    # 타임아웃
+    yield f'data: {json.dumps({"type": "resume_done", "reason": "timeout"})}\n\n'
