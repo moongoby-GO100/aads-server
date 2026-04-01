@@ -886,7 +886,9 @@ import app.auth as _auth_mod
 
 # 인증 불필요 경로 (prefix match)
 _AUTH_EXEMPT_PREFIXES = (
+    "/health",
     "/api/v1/health",
+    "/api/v1/ops/health-check",  # 운영 헬스체크 (정정: -check 포함)
     "/api/v1/auth/login",
     "/api/v1/auth/register",
     "/api/v1/auth/me",
@@ -999,6 +1001,24 @@ app.include_router(memory_monitor_router, prefix="/api/v1", tags=["memory-monito
 app.include_router(pc_agent_router, prefix="/api/v1", tags=["pc-agent"])
 app.include_router(kakao_bot_router, prefix="/api/v1", tags=["kakao-bot"])
 app.include_router(agenda_router, prefix="/api/v1/agenda", tags=["agenda"])
+
+# 루트 /health — 모니터링 도구 호환 (인증 면제)
+from fastapi.responses import JSONResponse as _JSONResponse
+
+@app.get("/health", tags=["health"], include_in_schema=False)
+async def root_health_check():
+    """루트 /health — /api/v1/health 와 동일한 응답. 인증 불필요."""
+    from app.main import app_state
+    from app.services.sandbox import check_sandbox_health
+    graph_ready = app_state.get("graph") is not None
+    sandbox_health = await check_sandbox_health()
+    return _JSONResponse({
+        "status": "ok" if graph_ready else "initializing",
+        "graph_ready": graph_ready,
+        "version": "0.1.0",
+        "sandbox": sandbox_health,
+    })
+
 # 정적 파일 서빙
 import pathlib as _pathlib
 _static_dir = _pathlib.Path(__file__).resolve().parent / "static"
