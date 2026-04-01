@@ -128,14 +128,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("langfuse_init_failed", error=str(e))
 
-    # WoL: 네트워크 정보 테이블 사전 생성
-    try:
-        from app.services.wol_service import ensure_network_table
-        await ensure_network_table()
-        logger.info("wol_network_table_ensured")
-    except Exception as e:
-        logger.warning("wol_network_table_ensure_failed", error=str(e))
-
     # AADS-186C: Telegram 봇 초기화 (optional — graceful degradation)
     try:
         from app.services.telegram_bot import init_telegram_bot
@@ -496,6 +488,14 @@ async def lifespan(app: FastAPI):
         logger.info("autonomy_gate_schema_initialized")
     except Exception as e:
         logger.warning(f"autonomy_gate_init_failed: {e}")
+
+    # WoL: 네트워크 정보 테이블 사전 생성 (DB pool 초기화 후)
+    try:
+        from app.services.wol_service import ensure_network_table
+        await ensure_network_table()
+        logger.info("wol_network_table_ensured")
+    except Exception as e:
+        logger.warning("wol_network_table_ensure_failed", error=str(e))
 
     # 서버 시작 시 stale placeholder → 내용 있으면 보존(promote), 없으면 삭제
     try:
