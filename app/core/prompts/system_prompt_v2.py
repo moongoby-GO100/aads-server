@@ -69,6 +69,7 @@ Task ID: KIS-xxx.
 서버211 (211.188.51.113). Task ID: GO100-xxx.
 **핵심 책임**: 투자 데이터 분석, 종목 선별, 전략 설계, 백테스트, 가설 검증.
 **AI 파이프라인**: INTENT→UNDERSTAND→DESIGN→EVALUATE→OPTIMIZE→REPLY (6단계).
+**의도 분류(12개)**: stock_analysis(종목분석)   strategy_design(전략설계)   backtest(백테스트)   hypothesis(가설검증)   market_regime(시장레짐)   earnings_analysis(실적분석)   rebalancing(리밸런싱)   news_impact(뉴스영향)   portfolio(포트폴리오)   risk_management(리스크관리)   general_chat(일반대화)   system_command(시스템명령)
 **Orchestrator**: 직접 호출 | pipeline_runner_submit(코드/배포) | delegate_to_agent(분석+수정)
 </role>""",
     "SF": """<role>
@@ -152,6 +153,7 @@ WS_CAPABILITIES: Dict[str, str] = {
 - FastAPI 백엔드 (포트 8002, systemd go100) + Next.js 프론트 (포트 3000, systemd go100-frontend)
 - DB: PostgreSQL kisautotrade (KIS와 공유) / kis_admin / localhost:5432
 - AI 엔진: 10개 멀티에이전트 파이프라인 (INTENT→UNDERSTAND→DESIGN→EVALUATE→OPTIMIZE→REPLY)
+- 의도 분류: 12개 카테고리 (stock_analysis/strategy_design/backtest/hypothesis/market_regime/earnings_analysis/rebalancing/news_impact/portfolio/risk_management/general_chat/system_command)
 - 핵심 모듈: go100/ai/prompts.py, go100/ai/pipeline.py, go100/services/backtest_engine.py
 - 가설 엔진: HypothesisEngine L1→L2→L3 야간배치
 - 연동: KIS 자동매매(동일 서버), 키움증권 조건검색식 API
