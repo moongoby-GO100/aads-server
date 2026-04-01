@@ -354,6 +354,58 @@ async def lifespan(app: FastAPI):
                 logger.warning(f"learning_health_check_error: {e}")
         scheduler.add_job(_run_learning_health_check, 'interval', hours=3, id='learning_health_check')
 
+        # ──────────────────────────────────────────────
+        # AUTH-001: 일일 인증 상태 체크 (매일 09:05 KST)
+        # ──────────────────────────────────────────────
+        async def _auth_daily_check():
+            """인증 토큰 유효성 일일 자동 점검 + 텔레그램 보고"""
+            import os, httpx, asyncio
+            from datetime import datetime
+            import pytz
+            kst = pytz.timezone("Asia/Seoul")
+            now_kst = datetime.now(kst).strftime("%Y-%m-%d %H:%M KST")
+            results = []
+
+            # 1) 토큰 환경변수 존재 확인
+            token1 = os.environ.get("ANTHROPIC_AUTH_TOKEN", "")
+            token2 = os.environ.get("ANTHROPIC_AUTH_TOKEN_2", "")
+            token_status = []
+            if token1:
+                token_status.append(f"TOKEN_1: {'✅' if 'sk-ant-oat01-' in token1 else '⚠️형식이상'}")
+            else:
+                token_status.append("TOKEN_1: ❌없음")
+            if token2:
+                token_status.append(f"TOKEN_2: {'✅' if 'sk-ant-oat01-' in token2 else '⚠️형식이상'}")
+            else:
+                token_status.append("TOKEN_2: ❌없음")
+            results.extend(token_status)
+
+            # 2) LiteLLM 연결 확인
+            litellm_url = os.environ.get("LITELLM_BASE_URL", "http://litellm:4000")
+            try:
+                async with httpx.AsyncClient(timeout=5) as c:
+                    r = await c.get(f"{litellm_url}/health")
+                    results.append(f"LiteLLM: {'✅OK' if r.status_code == 200 else f'⚠️{r.status_code}'}")
+            except Exception as e:
+                results.append(f"LiteLLM: ❌{str(e)[:30]}")
+
+            # 3) 텔레그램 보고
+            bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+            chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+            msg = f"🔐 [AADS 일일 인증 체크] {now_kst}\n" + "\n".join(f"  {r}" for r in results)
+            logger.info(f"auth_daily_check: {results}")
+            if bot_token and chat_id:
+                try:
+                    async with httpx.AsyncClient(timeout=10) as c:
+                        await c.post(
+                            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                            json={"chat_id": chat_id, "text": msg}
+                        )
+                except Exception as e:
+                    logger.warning(f"auth_daily_check telegram failed: {e}")
+
+        scheduler.add_job(_auth_daily_check, "cron", hour=9, minute=5, timezone="Asia/Seoul", id="auth_daily_check", replace_existing=True)
+
         scheduler.start()
         app.state.scheduler = scheduler  # fallback: MCP 도구 경로에서 참조 가능
         await healer_init()
