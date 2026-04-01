@@ -1249,7 +1249,7 @@ _recover_stuck_jobs() {
             _exp_session=$(db_exec "SELECT chat_session_id FROM pipeline_jobs WHERE job_id='${_exp_id}';" 2>/dev/null) || true
             _exp_session="${_exp_session// /}"
             _exp_project=$(db_exec "SELECT project FROM pipeline_jobs WHERE job_id='${_exp_id}';" 2>/dev/null) || true
-            _exp_project="${_exp_project// /}"
+            _exp_project="${_exp_project///}"
             post_to_chat "$_exp_session" "⏰ [Pipeline Runner] 승인 타임아웃 (${APPROVAL_TIMEOUT_HOURS}시간 초과): $_exp_id — 자동 에러 처리됨"
             _notify_ai "$_exp_id"
             [[ -n "$_exp_project" ]] && promote_next_queued "$_exp_project"
