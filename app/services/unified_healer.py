@@ -472,16 +472,44 @@ async def _phase1_service_check(conn):
                 consecutive=new_failures,
             )
 
-            # 3회 연속 실패 시 자동복구 시도
-            if new_failures >= 3 and svc["auto_recovery_command"]:
+            # 5회 연속 실패 시 자동복구 시도 (3→5: CEO 채팅 끊김 방지)
+            if new_failures >= 5 and svc["auto_recovery_command"]:
                 await _try_service_recovery(
                     conn, svc, service_key, new_failures
                 )
 
 
 async def _try_service_recovery(conn, svc, service_key: str, failures: int):
-    """서비스 복구 시도. 서킷브레이커 + 안전성 검사."""
+    """서비스 복구 시도. 서킷브레이커 + 스트리밍 가드 + 안전성 검사."""
     command = svc["auto_recovery_command"]
+
+    # ── HARD BLOCK: docker restart aads-server 절대 금지 ──
+    # 전체 컨테이너 재시작은 모든 SSE/MCP 연결을 죽임 → supervisorctl로 대체
+    if command and "docker restart aads-server" in command:
+        logger.warning(
+            "recovery_command_overridden",
+            original=command,
+            replacement="supervisorctl restart aads-api",
+            reason="container restart kills all SSE streams",
+        )
+        command = "supervisorctl restart aads-api"
+
+    # ── STREAMING GUARD: aads-api 재시작 시 활성 스트리밍 세션 확인 ──
+    # CEO 채팅 응답이 끊기는 것을 방지
+    if command and ("aads-api" in command or "aads-server" in command):
+        try:
+            from app.services.chat_service import _streaming_state
+            active_count = len(_streaming_state) if _streaming_state else 0
+            if active_count > 0:
+                logger.warning(
+                    "recovery_blocked_active_streaming",
+                    service=service_key,
+                    command=command,
+                    active_sessions=active_count,
+                )
+                return  # 스트리밍 중에는 재시작 차단
+        except Exception:
+            pass  # import 실패 시 기존 동작 유지
 
     # 서킷브레이커 체크
     if _circuit_open(service_key):
