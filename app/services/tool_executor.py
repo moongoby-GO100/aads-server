@@ -43,6 +43,24 @@ _TOOL_TIMEOUT = 20.0  # 일반 도구 타임아웃
 _LONG_TOOL_TIMEOUT = 120.0  # 서브에이전트/딥리서치 등 장시간 도구
 _LONG_TOOLS = frozenset({"spawn_subagent", "spawn_parallel_subagents", "run_agent_team", "run_debate", "deep_research", "delegate_to_agent", "delegate_to_research", "capture_screenshot", "run_remote_command", "write_remote_file", "patch_remote_file", "pc_execute"})
 
+# ── 파일별 동시 수정 방지 잠금 ─────────────────────────────────────────────
+# 파일 경로(project:file_path)를 키로 하는 asyncio.Lock 딕셔너리.
+# 같은 파일에 대한 동시 write/patch 요청이 오면 순차 처리하고,
+# 다른 파일은 독립적으로 병렬 처리된다.
+_file_locks: dict[str, asyncio.Lock] = {}
+_file_locks_meta_lock = asyncio.Lock()  # _file_locks 딕셔너리 자체를 보호하는 메타 잠금
+
+_FILE_LOCK_TIMEOUT = 30.0  # 파일 잠금 최대 대기 시간 (초) — 무한 대기 방지
+
+
+async def _get_file_lock(lock_key: str) -> asyncio.Lock:
+    """파일 경로 키에 대한 asyncio.Lock을 반환한다. 없으면 생성."""
+    # 메타 잠금으로 딕셔너리 동시 생성 경쟁 방지
+    async with _file_locks_meta_lock:
+        if lock_key not in _file_locks:
+            _file_locks[lock_key] = asyncio.Lock()
+        return _file_locks[lock_key]
+
 
 class ToolExecutor:
     """단일 도구 실행 + 타임아웃 + 결과 제한."""
@@ -518,7 +536,11 @@ class ToolExecutor:
             logger.warning(f"ai_review_warning_db_skip: {_dbe}")
 
     async def _write_remote_file(self, inp: Dict[str, Any]) -> Any:
-        """원격 서버 파일 쓰기 (SSH, 자동 백업). Yellow 등급."""
+        """원격 서버 파일 쓰기 (SSH, 자동 백업). Yellow 등급.
+
+        동일 파일에 대한 동시 요청은 파일별 asyncio.Lock으로 순차 처리.
+        30초 내 잠금 획득 실패 시 timeout 에러 반환.
+        """
         project = (inp.get("project") or "").upper()
         file_path = inp.get("file_path") or inp.get("path") or ""
         content = inp.get("content") or ""
@@ -529,10 +551,20 @@ class ToolExecutor:
             return {"error": "file_path 필수"}
         if not content:
             return {"error": "content 필수"}
+
+        # 파일 경로 기반 잠금 키 (프로젝트+경로 조합으로 충돌 방지)
+        lock_key = f"{project}:{file_path}"
+        lock = await _get_file_lock(lock_key)
+        try:
+            # 30초 타임아웃으로 잠금 획득 시도 — 무한 대기 방지
+            await asyncio.wait_for(lock.acquire(), timeout=_FILE_LOCK_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning(f"write_remote_file_lock_timeout: {lock_key}")
+            return {"error": f"파일 잠금 획득 실패(30초 초과): {file_path} — 다른 세션이 수정 중일 수 있습니다"}
         try:
             from app.api.ceo_chat_tools import tool_write_remote_file
             result = await tool_write_remote_file(project, file_path, content, backup)
-            # 자동 후처리: hot-reload + git commit + push + CHANGELOG
+            # 자동 후처리: hot-reload + git commit + push + CHANGELOG (잠금 범위 내 포함)
             try:
                 await self._post_file_modify_hook(project, file_path, f"write: {file_path}")
             except Exception as _phe:
@@ -540,9 +572,16 @@ class ToolExecutor:
             return result
         except Exception as e:
             return {"error": str(e)}
+        finally:
+            # 에러 발생 여부와 무관하게 반드시 잠금 해제
+            lock.release()
 
     async def _patch_remote_file(self, inp: Dict[str, Any]) -> Any:
-        """원격 서버 파일 부분 수정 (old→new 교체). Yellow 등급."""
+        """원격 서버 파일 부분 수정 (old→new 교체). Yellow 등급.
+
+        동일 파일에 대한 동시 요청은 파일별 asyncio.Lock으로 순차 처리.
+        30초 내 잠금 획득 실패 시 timeout 에러 반환.
+        """
         project = (inp.get("project") or "").upper()
         file_path = inp.get("file_path") or inp.get("path") or ""
         old_string = inp.get("old_string") or ""
@@ -553,10 +592,20 @@ class ToolExecutor:
             return {"error": "file_path 필수"}
         if not old_string:
             return {"error": "old_string 필수"}
+
+        # 파일 경로 기반 잠금 키 (write_remote_file과 동일 키 공유 — 교차 충돌도 방지)
+        lock_key = f"{project}:{file_path}"
+        lock = await _get_file_lock(lock_key)
+        try:
+            # 30초 타임아웃으로 잠금 획득 시도 — 무한 대기 방지
+            await asyncio.wait_for(lock.acquire(), timeout=_FILE_LOCK_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning(f"patch_remote_file_lock_timeout: {lock_key}")
+            return {"error": f"파일 잠금 획득 실패(30초 초과): {file_path} — 다른 세션이 수정 중일 수 있습니다"}
         try:
             from app.api.ceo_chat_tools import tool_patch_remote_file
             result = await tool_patch_remote_file(project, file_path, old_string, new_string)
-            # 자동 후처리: hot-reload + git commit + push + CHANGELOG
+            # 자동 후처리: hot-reload + git commit + push + CHANGELOG (잠금 범위 내 포함)
             try:
                 summary = f"patch: {str(old_string)[:40]}→{str(new_string)[:40]}"
                 await self._post_file_modify_hook(project, file_path, summary)
@@ -565,6 +614,9 @@ class ToolExecutor:
             return result
         except Exception as e:
             return {"error": str(e)}
+        finally:
+            # 에러 발생 여부와 무관하게 반드시 잠금 해제
+            lock.release()
 
     async def _run_remote_command(self, inp: Dict[str, Any]) -> Any:
         """원격 서버 명령 실행 (화이트리스트 기반). Yellow 등급."""
