@@ -21,6 +21,24 @@ export LC_ALL=en_US.UTF-8
 export LANGUAGE=en_US.UTF-8
 # =====================================================================
 
+# === OAuth 토큰 주입 (TOKEN_1=Gmail 1순위, TOKEN_2=Naver 2순위) ===
+# pipeline-runner.sh와 동일한 방식: CLAUDE_CODE_OAUTH_TOKEN으로 주입
+# ANTHROPIC_API_KEY는 oat 토큰과 충돌하므로 unset
+_TOKEN_1="${ANTHROPIC_AUTH_TOKEN:-}"
+_TOKEN_2="${ANTHROPIC_AUTH_TOKEN_2:-}"
+if [ -n "$_TOKEN_1" ]; then
+    export CLAUDE_CODE_OAUTH_TOKEN="$_TOKEN_1"
+    unset ANTHROPIC_API_KEY 2>/dev/null || true
+    echo "[AUTH] CLAUDE_CODE_OAUTH_TOKEN → TOKEN_1(Gmail) 주입"
+elif [ -n "$_TOKEN_2" ]; then
+    export CLAUDE_CODE_OAUTH_TOKEN="$_TOKEN_2"
+    unset ANTHROPIC_API_KEY 2>/dev/null || true
+    echo "[AUTH] CLAUDE_CODE_OAUTH_TOKEN → TOKEN_2(Naver) 폴백 주입"
+else
+    echo "[AUTH] WARNING: ANTHROPIC_AUTH_TOKEN/ANTHROPIC_AUTH_TOKEN_2 모두 미설정"
+fi
+# =====================================================================
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=memory_helper.sh
 source "${SCRIPT_DIR}/memory_helper.sh"
