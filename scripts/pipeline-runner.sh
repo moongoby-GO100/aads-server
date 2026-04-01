@@ -766,12 +766,28 @@ deploy_job() {
             git add -A 2>/dev/null || true
         fi
 
+        # .py 파일 변경 여부 감지 (커밋 전 staged 변경 기준)
+        local _py_changed="false"
+        if git diff --cached --name-only HEAD 2>/dev/null | grep -q '\.py$'; then
+            _py_changed="true"
+        fi
+
         git commit -m "Pipeline-Runner: ${job_id}" 2>/dev/null || log "  WARN: git commit skipped (no changes or hook failure)"
         git push 2>/dev/null || true
+
+        # _py_changed를 서브셸 밖으로 전달 (파일 경유)
+        echo "$_py_changed" > "/tmp/pipeline-py-changed-${job_id}"
 
     ) 200>"$lock_file"
 
     cd "$main_workdir"
+
+    # 서브셸에서 감지한 .py 변경 여부 읽기
+    local _py_changed="false"
+    if [[ -f "/tmp/pipeline-py-changed-${job_id}" ]]; then
+        _py_changed=$(cat "/tmp/pipeline-py-changed-${job_id}" 2>/dev/null) || _py_changed="false"
+        rm -f "/tmp/pipeline-py-changed-${job_id}" 2>/dev/null || true
+    fi
 
     # ═══ 무중단 배포 v3.0 — build→swap→healthcheck→rollback ═══
     # 원칙: 빌드 중 기존 서비스 유지, 빌드 성공 후에만 교체, 실패 시 롤백
@@ -781,6 +797,24 @@ deploy_job() {
             log "  BLUEGREEN aads-server 무중단 배포 시작"
             if bash /root/aads/aads-server/deploy.sh bluegreen 2>&1 | tail -20; then
                 log "  BLUEGREEN aads-server 완료"
+
+                # Hot Module Reload — .py 파일 변경이 있을 때만 실행 (재시작 없이 즉시 반영)
+                if [[ "$_py_changed" == "true" ]]; then
+                    log "  HOT-RELOAD: .py 변경 감지 — 서비스 모듈 자동 리로드 시작"
+                    local _hr_resp=""
+                    _hr_resp=$(curl -s -m 10 -X POST \
+                        -H "Content-Type: application/json" \
+                        "http://127.0.0.1:8100/api/v1/ops/hot-reload" 2>/dev/null) || true
+                    if [[ -n "$_hr_resp" ]]; then
+                        local _hr_ok=""
+                        _hr_ok=$(echo "$_hr_resp" | jq -r '.success // 0' 2>/dev/null) || true
+                        log "  HOT-RELOAD: ${_hr_ok:-0}개 모듈 리로드 완료"
+                    else
+                        log "  HOT-RELOAD: WARN — 호출 실패 (서비스 정상 운영, 다음 요청 시 반영)"
+                    fi
+                else
+                    log "  HOT-RELOAD: SKIP — .py 변경 없음 (yml/md 등 비Python 변경)"
+                fi
             else
                 log "  WARN: bluegreen 실패 — 기존 서비스 유지 (SSE 스트림 보호)"
                 # supervisorctl restart 제거: 채팅 중 SSE 스트림 끊김 방지
@@ -1419,5 +1453,3 @@ cleanup() {
     exit 0
 }
 trap cleanup SIGTERM SIGINT
-
-main "$@"
