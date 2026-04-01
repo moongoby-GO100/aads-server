@@ -32,7 +32,7 @@ SAFE_COMMANDS = {
     "docker restart aads-litellm",
     "systemctl restart nginx",
     "systemctl reload nginx",
-    "supervisorctl restart aads-api",
+    "docker stop -t 30 aads-server",
     "docker system prune -f",
     "/root/aads/aads-server/deploy.sh code",
     "/root/aads/aads-server/deploy.sh build",
@@ -41,10 +41,10 @@ SAFE_COMMANDS = {
 
 SAFE_PREFIXES = [
     "docker restart ",
+    "docker stop -t ",
     "docker compose restart ",
     "systemctl restart ",
     "systemctl reload ",
-    "supervisorctl restart ",
     "supervisorctl reload ",
 ]
 
@@ -76,8 +76,8 @@ ERROR_RECOVERY_MAP = {
 # ── 서킷브레이커: 동일 서비스 연속 복구 실패 추적 ─────────────────────────────
 
 _circuit_breaker: dict[str, dict] = {}
-CIRCUIT_BREAKER_MAX_FAILURES = 3
-CIRCUIT_BREAKER_COOLDOWN_SEC = 600  # 10분
+CIRCUIT_BREAKER_MAX_FAILURES = 1  # 1회 실패로 즉시 차단 (무한 루프 방지)
+CIRCUIT_BREAKER_COOLDOWN_SEC = 1800  # 30분 쿨다운 (재시도 방지)
 
 # ── DB 헬퍼 ──────────────────────────────────────────────────────────────────
 
