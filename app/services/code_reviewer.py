@@ -102,7 +102,7 @@ async def review_code_diff(
         )
 
         if not result_text:
-            logger.warning("code_reviewer_no_response", job_id=job_id)
+            logger.warning(f"code_reviewer_no_response: job_id={job_id}")
             return ReviewVerdict(
                 verdict="FLAG",
                 score=0.5,
@@ -159,13 +159,12 @@ async def review_code_diff(
                     0.01,  # 예상 비용
                 )
         except Exception as db_err:
-            logger.warning("code_reviewer_db_save_error", error=str(db_err))
+            logger.warning(f"code_reviewer_db_save_error: error={db_err}")
 
         duration_ms = int((time.time() - start) * 1000)
         logger.info(
-            "code_review_complete",
-            job_id=job_id, verdict=verdict, score=round(score, 3),
-            duration_ms=duration_ms,
+            f"code_review_complete: job_id={job_id} verdict={verdict} "
+            f"score={round(score, 3)} duration_ms={duration_ms}"
         )
 
         return ReviewVerdict(
@@ -176,7 +175,7 @@ async def review_code_diff(
         )
 
     except Exception as e:
-        logger.error("code_reviewer_error", error=str(e), job_id=job_id)
+        logger.error(f"code_reviewer_error: job_id={job_id} error={e}")
         return ReviewVerdict(
             verdict="FLAG",
             score=0.5,

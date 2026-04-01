@@ -351,7 +351,7 @@ class ToolExecutor:
             return {"error": str(e)}
 
     async def _post_file_modify_hook(self, project: str, file_path: str, change_summary: str) -> None:
-        """파일 수정 후 자동 후처리: hot-reload + git commit + push + CHANGELOG."""
+        """파일 수정 후 자동 후처리: hot-reload + git commit + push + CHANGELOG + AI 코드 리뷰."""
         import datetime, os
         now_kst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
         now_str = now_kst.strftime("%Y-%m-%d %H:%M KST")
@@ -397,6 +397,125 @@ class ToolExecutor:
                     _f.write(new_cl)
             except Exception as _cle:
                 logger.warning(f"post_hook_changelog_skip: {_cle}")
+
+        # 4) AI 코드 리뷰 (commit 완료 후, 실패해도 서비스에 영향 없음)
+        if project == "AADS":
+            try:
+                await self._run_ai_code_review_after_commit(
+                    project=project,
+                    file_path=file_path,
+                    change_summary=change_summary,
+                    now_str_full=now_str_full,
+                )
+            except Exception as _re:
+                logger.warning(f"post_hook_ai_review_skip: {_re}")
+
+    async def _run_ai_code_review_after_commit(
+        self,
+        project: str,
+        file_path: str,
+        change_summary: str,
+        now_str_full: str,
+    ) -> None:
+        """commit 완료 후 AI 코드 리뷰 실행 및 결과를 채팅 세션에 저장.
+
+        APPROVE → 로그만 기록.
+        REQUEST_CHANGES / FLAG → 채팅 세션에 경고 메시지 저장.
+        리뷰 실패 시 조용히 종료 (기존 파이프라인 영향 없음).
+        """
+        import uuid as _uuid
+
+        # git diff HEAD~1 HEAD -- <file> 로 변경 내용 획득
+        try:
+            from app.api.ceo_chat_tools import tool_run_remote_command
+            diff_result = await tool_run_remote_command(
+                project,
+                f"git diff HEAD~1 HEAD -- {file_path}",
+            )
+            diff_text = diff_result if isinstance(diff_result, str) else str(diff_result)
+        except Exception as _de:
+            logger.warning(f"ai_review_git_diff_skip: {_de}")
+            return
+
+        if not diff_text or not diff_text.strip():
+            logger.info(f"ai_review_skip: no diff for {file_path}")
+            return
+
+        # code_reviewer 서비스로 리뷰
+        from app.services.code_reviewer import review_code_diff as do_review
+        job_id = f"chat-direct-{_uuid.uuid4().hex[:8]}"
+        verdict_obj = await do_review(
+            project=project,
+            job_id=job_id,
+            diff=diff_text,
+            instruction=change_summary,
+            files_changed=[file_path],
+        )
+
+        verdict = verdict_obj.verdict
+        score = verdict_obj.score
+        issues = verdict_obj.issues
+        summary = verdict_obj.feedback.get("summary", "")
+
+        logger.info(
+            f"post_hook_ai_review: job_id={job_id} file={file_path} "
+            f"verdict={verdict} score={score:.3f}"
+        )
+
+        # APPROVE면 종료
+        if verdict == "APPROVE":
+            return
+
+        # REQUEST_CHANGES / FLAG → 채팅 세션에 경고 저장
+        session_id = current_chat_session_id.get("")
+        if not session_id:
+            try:
+                from app.services.pipeline_c import _find_recent_session
+                session_id = await _find_recent_session(project)
+            except Exception:
+                pass
+
+        if not session_id:
+            logger.warning(
+                f"ai_review_warn_no_session: verdict={verdict} file={file_path}"
+            )
+            return
+
+        icon = "🚨" if verdict == "FLAG" else "⚠️"
+        issues_text = "\n".join(f"- {i}" for i in issues[:5]) if issues else "- (상세 없음)"
+        warning_msg = (
+            f"{icon} **[AI 코드 리뷰 경고] {verdict}** — `{file_path}`\n"
+            f"점수: {score:.2f} / 1.00  |  시각: {now_str_full}\n\n"
+            f"**요약:** {summary}\n\n"
+            f"**발견된 이슈:**\n{issues_text}\n\n"
+            f"> 이미 commit/push는 완료되었습니다. 필요 시 수동으로 수정하세요."
+        )
+
+        try:
+            from app.core.db_pool import get_pool
+            _pool = get_pool()
+            async with _pool.acquire() as _conn:
+                async with _conn.transaction():
+                    await _conn.execute(
+                        """
+                        INSERT INTO chat_messages
+                            (session_id, role, content, intent, cost,
+                             tokens_in, tokens_out, attachments, sources, tools_called)
+                        VALUES ($1::uuid, 'assistant', $2, 'ai_review_warning', 0,
+                                0, 0, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)
+                        """,
+                        session_id,
+                        warning_msg,
+                    )
+                    await _conn.execute(
+                        "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1::uuid",
+                        session_id,
+                    )
+            logger.info(
+                f"ai_review_warning_saved: session={session_id[:8]} verdict={verdict} file={file_path}"
+            )
+        except Exception as _dbe:
+            logger.warning(f"ai_review_warning_db_skip: {_dbe}")
 
     async def _write_remote_file(self, inp: Dict[str, Any]) -> Any:
         """원격 서버 파일 쓰기 (SSH, 자동 백업). Yellow 등급."""
