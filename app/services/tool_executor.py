@@ -355,6 +355,7 @@ class ToolExecutor:
         import datetime, os
         now_kst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
         now_str = now_kst.strftime("%Y-%m-%d %H:%M KST")
+        now_str_full = now_kst.strftime("%Y-%m-%d %H:%M:%S KST")
 
         # 1) AADS .py 파일이면 hot reload
         if project == "AADS" and file_path.endswith(".py"):
@@ -364,30 +365,34 @@ class ToolExecutor:
             except Exception as _hre:
                 logger.warning(f"hot_reload_trigger_skip: {_hre}")
 
-        # 2) git add + commit + push
-        try:
-            from app.api.ceo_chat_tools import tool_git_remote_add, tool_git_remote_commit, tool_git_remote_push
-            commit_msg = f"Chat-Session: {file_path} — {change_summary[:80]}"
-            await tool_git_remote_add(project, file_path)
-            commit_result = await tool_git_remote_commit(project, commit_msg)
-            logger.info(f"post_hook_commit: {commit_result}")
-            push_result = await tool_git_remote_push(project, "main")
-            logger.info(f"post_hook_push: {push_result}")
-        except Exception as _ge:
-            logger.warning(f"post_hook_git_skip: {_ge}")
-
-        # 3) CHANGELOG 기록 (AADS만, docs/CHANGELOG.md)
+        # 2) git add + commit + push (AADS 프로젝트만)
         if project == "AADS":
             try:
-                cl_full = "/root/aads/aads-server/docs/CHANGELOG.md"
+                from app.api.ceo_chat_tools import tool_git_remote_add, tool_git_remote_commit, tool_git_remote_push
+                commit_msg = f"Chat-Direct: {file_path} 수정"
+                await tool_git_remote_add(project, "-A")
+                commit_result = await tool_git_remote_commit(project, commit_msg)
+                logger.info(f"post_hook_commit: {commit_result}")
+                # main 브랜치 push 시도, 실패 시 master fallback
+                push_result = await tool_git_remote_push(project, "main")
+                if "[ERROR]" in str(push_result) or "error" in str(push_result).lower():
+                    push_result = await tool_git_remote_push(project, "master")
+                logger.info(f"post_hook_push: {push_result}")
+            except Exception as _ge:
+                logger.warning(f"post_hook_git_skip: {_ge}")
+
+        # 3) CHANGELOG 기록 (AADS만, docs/CHANGELOG-direct-edit.md)
+        if project == "AADS":
+            try:
+                cl_full = "/root/aads/aads-server/docs/CHANGELOG-direct-edit.md"
                 os.makedirs(os.path.dirname(cl_full), exist_ok=True)
-                entry = f"\n## [{now_str}] {file_path}\n- {change_summary}\n"
+                entry = f"\n## [{now_str_full}] {file_path}\n- Chat-Direct 수정: {change_summary}\n"
                 try:
                     with open(cl_full, "r", encoding="utf-8") as _f:
                         existing = _f.read()
                     new_cl = existing + entry
                 except Exception:
-                    new_cl = f"# AADS Changelog\n{entry}"
+                    new_cl = f"# AADS Chat-Direct Edit Changelog\n{entry}"
                 with open(cl_full, "w", encoding="utf-8") as _f:
                     _f.write(new_cl)
             except Exception as _cle:
