@@ -177,6 +177,24 @@ class PCAgent:
                     },
                 }))
 
+                # WoL용 네트워크 정보 자동 전송
+                try:
+                    from commands.network import get_primary_mac
+                    _net = get_primary_mac()
+                    if _net:
+                        await ws.send(json.dumps({
+                            "type": "network_info",
+                            "id": str(uuid.uuid4()),
+                            "payload": {
+                                "mac_address": _net["mac"],
+                                "ip_address": _net["ip"],
+                                "interface_name": _net["name"],
+                            }
+                        }))
+                        logger.info("WoL 네트워크 정보 전송: MAC=%s IP=%s", _net["mac"], _net["ip"])
+                except Exception as e:
+                    logger.warning("네트워크 정보 전송 실패 (무시): %s", e)
+
                 # 하트비트 + 자동 업데이트 태스크 시작
                 heartbeat_task = asyncio.create_task(self._heartbeat(ws))
                 update_task = asyncio.create_task(self._auto_update_loop(ws))

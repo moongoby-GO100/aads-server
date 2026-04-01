@@ -40,6 +40,7 @@ scheduler = _safe_import("scheduler")
 security = _safe_import("security")
 process_monitor = _safe_import("process_monitor")
 kakao_auto = _safe_import("kakao_auto")
+network = _safe_import("network")
 
 
 def _handler(mod, attr: str):
@@ -135,6 +136,9 @@ _RAW_HANDLERS = {
     "kakao_auto_config": _handler(kakao_auto, "kakao_auto_config"),
     "kakao_auto_rooms": _handler(kakao_auto, "kakao_auto_rooms"),
     "kakao_auto_history": _handler(kakao_auto, "kakao_auto_history"),
+    # P7: 네트워크 정보 (WoL용)
+    "network_info": _handler(network, "network_info"),
+    "wol_register": _handler(network, "wol_register"),
 }
 
 # None 핸들러 제거 — 사용 가능한 명령만 등록
@@ -149,5 +153,5 @@ __all__ = [
     "kakao", "updater", "input_control", "window_control",
     "screen_utils", "system_extra", "screen_stream",
     "macro", "browser_auto", "file_transfer", "scheduler",
-    "security", "process_monitor", "kakao_auto", "COMMAND_HANDLERS",
+    "security", "process_monitor", "kakao_auto", "network", "COMMAND_HANDLERS",
 ]
