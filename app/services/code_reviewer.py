@@ -97,7 +97,7 @@ async def review_code_diff(
         result_text = await call_llm_with_fallback(
             prompt=prompt,
             model="claude-haiku-4-5-20251001",
-            max_tokens=512,
+            max_tokens=1024,
             system=_REVIEW_SYSTEM_PROMPT,
         )
 

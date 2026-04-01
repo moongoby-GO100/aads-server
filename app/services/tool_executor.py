@@ -444,11 +444,17 @@ class ToolExecutor:
         import uuid as _uuid
 
         # git diff HEAD~1 HEAD -- <file> 로 변경 내용 획득
+        # file_path를 git 레포 루트 기준 상대경로로 정규화 (절대경로 전달 시 대비)
+        _rel_path = file_path
+        for _prefix in ("/root/aads/aads-server/", "/app/app/", "/app/"):
+            if _rel_path.startswith(_prefix):
+                _rel_path = _rel_path[len(_prefix):]
+                break
         try:
             from app.api.ceo_chat_tools import tool_run_remote_command
             diff_result = await tool_run_remote_command(
                 project,
-                f"git diff HEAD~1 HEAD -- {file_path}",
+                f"git diff HEAD~1 HEAD -- {_rel_path}",
             )
             diff_text = diff_result if isinstance(diff_result, str) else str(diff_result)
         except Exception as _de:
