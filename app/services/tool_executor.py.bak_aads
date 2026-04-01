@@ -43,6 +43,24 @@ _TOOL_TIMEOUT = 20.0  # 일반 도구 타임아웃
 _LONG_TOOL_TIMEOUT = 120.0  # 서브에이전트/딥리서치 등 장시간 도구
 _LONG_TOOLS = frozenset({"spawn_subagent", "spawn_parallel_subagents", "run_agent_team", "run_debate", "deep_research", "delegate_to_agent", "delegate_to_research", "capture_screenshot", "run_remote_command", "write_remote_file", "patch_remote_file", "pc_execute"})
 
+# ── 파일별 동시 수정 방지 잠금 ─────────────────────────────────────────────
+# 파일 경로(project:file_path)를 키로 하는 asyncio.Lock 딕셔너리.
+# 같은 파일에 대한 동시 write/patch 요청이 오면 순차 처리하고,
+# 다른 파일은 독립적으로 병렬 처리된다.
+_file_locks: dict[str, asyncio.Lock] = {}
+_file_locks_meta_lock = asyncio.Lock()  # _file_locks 딕셔너리 자체를 보호하는 메타 잠금
+
+_FILE_LOCK_TIMEOUT = 30.0  # 파일 잠금 최대 대기 시간 (초) — 무한 대기 방지
+
+
+async def _get_file_lock(lock_key: str) -> asyncio.Lock:
+    """파일 경로 키에 대한 asyncio.Lock을 반환한다. 없으면 생성."""
+    # 메타 잠금으로 딕셔너리 동시 생성 경쟁 방지
+    async with _file_locks_meta_lock:
+        if lock_key not in _file_locks:
+            _file_locks[lock_key] = asyncio.Lock()
+        return _file_locks[lock_key]
+
 
 class ToolExecutor:
     """단일 도구 실행 + 타임아웃 + 결과 제한."""
@@ -350,54 +368,179 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e)}
 
-    async def _post_modify_hook(self, project: str, file_path: str, action: str = "modify"):
-        """파일 수정 후 자동 후처리: git commit + push + CHANGELOG + hot-reload.
-        채팅 세션에서 직접 수정 시에도 Pipeline Runner와 동일한 추적성 보장."""
-        results = {"git_commit": None, "git_push": None, "changelog": None, "hot_reload": None}
-        short_path = file_path.split("/")[-1] if "/" in file_path else file_path
-        try:
-            # 1) git add
-            from app.api.ceo_chat_tools import tool_git_remote_add
-            await tool_git_remote_add(project, file_path)
-            # 2) git commit
-            from app.api.ceo_chat_tools import tool_git_remote_commit
-            commit_msg = f"Chat-Direct: {action} {short_path}"
-            cr = await tool_git_remote_commit(project, commit_msg)
-            results["git_commit"] = "ok" if cr and "error" not in str(cr).lower() else str(cr)
-            # 3) git push
-            from app.api.ceo_chat_tools import tool_git_remote_push
-            pr = await tool_git_remote_push(project, "")
-            results["git_push"] = "ok" if pr and "error" not in str(pr).lower() else str(pr)
-        except Exception as ge:
-            logger.warning(f"post_modify_hook git skip: {ge}")
-            results["git_commit"] = f"skip: {ge}"
-        try:
-            # 4) CHANGELOG 자동 기록
-            from datetime import datetime as _dt
-            ts = _dt.now().strftime("%Y-%m-%d %H:%M KST")
-            entry = f"- [{ts}] Chat-Direct {action}: {file_path}\n"
-            from app.api.ceo_chat_tools import tool_run_remote_command as _rrc
-            await _rrc(project, f"printf '%s' '{entry}' >> CHANGELOG_AUTO.md")
-            results["changelog"] = "ok"
-        except Exception as ce:
-            logger.warning(f"post_modify_hook changelog skip: {ce}")
-            results["changelog"] = f"skip: {ce}"
-        try:
-            # 5) hot-reload (AADS .py만)
-            if project == "AADS" and file_path.endswith(".py"):
+    async def _post_file_modify_hook(self, project: str, file_path: str, change_summary: str) -> None:
+        """파일 수정 후 자동 후처리: hot-reload + git commit + push + CHANGELOG + AI 코드 리뷰."""
+        import datetime, os
+        now_kst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
+        now_str = now_kst.strftime("%Y-%m-%d %H:%M KST")
+        now_str_full = now_kst.strftime("%Y-%m-%d %H:%M:%S KST")
+
+        # 1) AADS .py 파일이면 hot reload
+        if project == "AADS" and file_path.endswith(".py"):
+            try:
                 from app.core.hot_reload_trigger import trigger_hot_reload_for_file
                 await trigger_hot_reload_for_file(project, file_path)
-                results["hot_reload"] = "ok"
-            else:
-                results["hot_reload"] = "skip (non-AADS or non-.py)"
-        except Exception as hre:
-            logger.warning(f"post_modify_hook hot_reload skip: {hre}")
-            results["hot_reload"] = f"skip: {hre}"
-        logger.info(f"post_modify_hook done: {project}/{file_path} → {results}")
-        return results
+            except Exception as _hre:
+                logger.warning(f"hot_reload_trigger_skip: {_hre}")
+
+        # 2) git add + commit + push (AADS 프로젝트만)
+        if project == "AADS":
+            try:
+                from app.api.ceo_chat_tools import tool_git_remote_add, tool_git_remote_commit, tool_git_remote_push
+                commit_msg = f"Chat-Direct: {file_path} 수정"
+                await tool_git_remote_add(project, file_path)
+                commit_result = await tool_git_remote_commit(project, commit_msg)
+                logger.info(f"post_hook_commit: {commit_result}")
+                # main 브랜치 push 시도, 실패 시 master fallback
+                push_result = await tool_git_remote_push(project, "main")
+                if "[ERROR]" in str(push_result) or "error" in str(push_result).lower():
+                    push_result = await tool_git_remote_push(project, "master")
+                logger.info(f"post_hook_push: {push_result}")
+            except Exception as _ge:
+                logger.warning(f"post_hook_git_skip: {_ge}")
+
+        # 3) CHANGELOG 기록 (AADS만, docs/CHANGELOG-direct-edit.md)
+        if project == "AADS":
+            try:
+                cl_full = "/app/docs/CHANGELOG-direct-edit.md"
+                os.makedirs(os.path.dirname(cl_full), exist_ok=True)
+                entry = f"\n## [{now_str_full}] {file_path}\n- Chat-Direct 수정: {change_summary}\n"
+                try:
+                    with open(cl_full, "r", encoding="utf-8") as _f:
+                        existing = _f.read()
+                    new_cl = existing + entry
+                except Exception:
+                    new_cl = f"# AADS Chat-Direct Edit Changelog\n{entry}"
+                with open(cl_full, "w", encoding="utf-8") as _f:
+                    _f.write(new_cl)
+            except Exception as _cle:
+                logger.warning(f"post_hook_changelog_skip: {_cle}")
+
+        # 4) AI 코드 리뷰 (commit 완료 후, 실패해도 서비스에 영향 없음)
+        if project == "AADS":
+            try:
+                await self._run_ai_code_review_after_commit(
+                    project=project,
+                    file_path=file_path,
+                    change_summary=change_summary,
+                    now_str_full=now_str_full,
+                )
+            except Exception as _re:
+                logger.warning(f"post_hook_ai_review_skip: {_re}")
+
+    async def _run_ai_code_review_after_commit(
+        self,
+        project: str,
+        file_path: str,
+        change_summary: str,
+        now_str_full: str,
+    ) -> None:
+        """commit 완료 후 AI 코드 리뷰 실행 및 결과를 채팅 세션에 저장.
+
+        APPROVE → 로그만 기록.
+        REQUEST_CHANGES / FLAG → 채팅 세션에 경고 메시지 저장.
+        리뷰 실패 시 조용히 종료 (기존 파이프라인 영향 없음).
+        """
+        import uuid as _uuid
+
+        # git diff HEAD~1 HEAD -- <file> 로 변경 내용 획득
+        try:
+            from app.api.ceo_chat_tools import tool_run_remote_command
+            diff_result = await tool_run_remote_command(
+                project,
+                f"git -C /root/aads/aads-server diff HEAD~1 HEAD -- {file_path}",
+            )
+            diff_text = diff_result if isinstance(diff_result, str) else str(diff_result)
+        except Exception as _de:
+            logger.warning(f"ai_review_git_diff_skip: {_de}")
+            return
+
+        if not diff_text or not diff_text.strip():
+            logger.info(f"ai_review_skip: no diff for {file_path}")
+            return
+
+        # code_reviewer 서비스로 리뷰
+        from app.services.code_reviewer import review_code_diff as do_review
+        job_id = f"chat-direct-{_uuid.uuid4().hex[:8]}"
+        verdict_obj = await do_review(
+            project=project,
+            job_id=job_id,
+            diff=diff_text,
+            instruction=change_summary,
+            files_changed=[file_path],
+        )
+
+        verdict = verdict_obj.verdict
+        score = verdict_obj.score
+        issues = verdict_obj.issues
+        summary = verdict_obj.feedback.get("summary", "")
+
+        logger.info(
+            f"post_hook_ai_review: job_id={job_id} file={file_path} "
+            f"verdict={verdict} score={score:.3f}"
+        )
+
+        # APPROVE면 종료
+        if verdict == "APPROVE":
+            return
+
+        # REQUEST_CHANGES / FLAG → 채팅 세션에 경고 저장
+        session_id = current_chat_session_id.get("")
+        if not session_id:
+            try:
+                from app.services.pipeline_c import _find_recent_session
+                session_id = await _find_recent_session(project)
+            except Exception:
+                pass
+
+        if not session_id:
+            logger.warning(
+                f"ai_review_warn_no_session: verdict={verdict} file={file_path}"
+            )
+            return
+
+        icon = "🚨" if verdict == "FLAG" else "⚠️"
+        issues_text = "\n".join(f"- {i}" for i in issues[:5]) if issues else "- (상세 없음)"
+        warning_msg = (
+            f"{icon} **[AI 코드 리뷰 경고] {verdict}** — `{file_path}`\n"
+            f"점수: {score:.2f} / 1.00  |  시각: {now_str_full}\n\n"
+            f"**요약:** {summary}\n\n"
+            f"**발견된 이슈:**\n{issues_text}\n\n"
+            f"> 이미 commit/push는 완료되었습니다. 필요 시 수동으로 수정하세요."
+        )
+
+        try:
+            from app.core.db_pool import get_pool
+            _pool = get_pool()
+            async with _pool.acquire() as _conn:
+                async with _conn.transaction():
+                    await _conn.execute(
+                        """
+                        INSERT INTO chat_messages
+                            (session_id, role, content, intent, cost,
+                             tokens_in, tokens_out, attachments, sources, tools_called)
+                        VALUES ($1::uuid, 'assistant', $2, 'ai_review_warning', 0,
+                                0, 0, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)
+                        """,
+                        session_id,
+                        warning_msg,
+                    )
+                    await _conn.execute(
+                        "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1::uuid",
+                        session_id,
+                    )
+            logger.info(
+                f"ai_review_warning_saved: session={session_id[:8]} verdict={verdict} file={file_path}"
+            )
+        except Exception as _dbe:
+            logger.warning(f"ai_review_warning_db_skip: {_dbe}")
 
     async def _write_remote_file(self, inp: Dict[str, Any]) -> Any:
-        """원격 서버 파일 쓰기 (SSH, 자동 백업). Yellow 등급."""
+        """원격 서버 파일 쓰기 (SSH, 자동 백업). Yellow 등급.
+
+        동일 파일에 대한 동시 요청은 파일별 asyncio.Lock으로 순차 처리.
+        30초 내 잠금 획득 실패 시 timeout 에러 반환.
+        """
         project = (inp.get("project") or "").upper()
         file_path = inp.get("file_path") or inp.get("path") or ""
         content = inp.get("content") or ""
@@ -408,22 +551,37 @@ class ToolExecutor:
             return {"error": "file_path 필수"}
         if not content:
             return {"error": "content 필수"}
+
+        # 파일 경로 기반 잠금 키 (프로젝트+경로 조합으로 충돌 방지)
+        lock_key = f"{project}:{file_path}"
+        lock = await _get_file_lock(lock_key)
+        try:
+            # 30초 타임아웃으로 잠금 획득 시도 — 무한 대기 방지
+            await asyncio.wait_for(lock.acquire(), timeout=_FILE_LOCK_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning(f"write_remote_file_lock_timeout: {lock_key}")
+            return {"error": f"파일 잠금 획득 실패(30초 초과): {file_path} — 다른 세션이 수정 중일 수 있습니다"}
         try:
             from app.api.ceo_chat_tools import tool_write_remote_file
             result = await tool_write_remote_file(project, file_path, content, backup)
-            # 자동 후처리: git commit + push + CHANGELOG + hot-reload
+            # 자동 후처리: hot-reload + git commit + push + CHANGELOG (잠금 범위 내 포함)
             try:
-                hook_result = await self._post_modify_hook(project, file_path, "write")
-                if isinstance(result, dict):
-                    result["post_hook"] = hook_result
+                await self._post_file_modify_hook(project, file_path, f"write: {file_path}")
             except Exception as _phe:
-                logger.warning(f"post_modify_hook_skip(write): {_phe}")
+                logger.warning(f"post_file_modify_hook_skip: {_phe}")
             return result
         except Exception as e:
             return {"error": str(e)}
+        finally:
+            # 에러 발생 여부와 무관하게 반드시 잠금 해제
+            lock.release()
 
     async def _patch_remote_file(self, inp: Dict[str, Any]) -> Any:
-        """원격 서버 파일 부분 수정 (old→new 교체). Yellow 등급."""
+        """원격 서버 파일 부분 수정 (old→new 교체). Yellow 등급.
+
+        동일 파일에 대한 동시 요청은 파일별 asyncio.Lock으로 순차 처리.
+        30초 내 잠금 획득 실패 시 timeout 에러 반환.
+        """
         project = (inp.get("project") or "").upper()
         file_path = inp.get("file_path") or inp.get("path") or ""
         old_string = inp.get("old_string") or ""
@@ -434,19 +592,31 @@ class ToolExecutor:
             return {"error": "file_path 필수"}
         if not old_string:
             return {"error": "old_string 필수"}
+
+        # 파일 경로 기반 잠금 키 (write_remote_file과 동일 키 공유 — 교차 충돌도 방지)
+        lock_key = f"{project}:{file_path}"
+        lock = await _get_file_lock(lock_key)
+        try:
+            # 30초 타임아웃으로 잠금 획득 시도 — 무한 대기 방지
+            await asyncio.wait_for(lock.acquire(), timeout=_FILE_LOCK_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning(f"patch_remote_file_lock_timeout: {lock_key}")
+            return {"error": f"파일 잠금 획득 실패(30초 초과): {file_path} — 다른 세션이 수정 중일 수 있습니다"}
         try:
             from app.api.ceo_chat_tools import tool_patch_remote_file
             result = await tool_patch_remote_file(project, file_path, old_string, new_string)
-            # AADS .py 파일 수정 시 자동 hot reload 트리거
-            if project == "AADS" and file_path.endswith(".py"):
-                try:
-                    from app.core.hot_reload_trigger import trigger_hot_reload_for_file
-                    await trigger_hot_reload_for_file(project, file_path)
-                except Exception as _hre:
-                    logger.warning(f"hot_reload_trigger_skip: {_hre}")
+            # 자동 후처리: hot-reload + git commit + push + CHANGELOG (잠금 범위 내 포함)
+            try:
+                summary = f"patch: {str(old_string)[:40]}→{str(new_string)[:40]}"
+                await self._post_file_modify_hook(project, file_path, summary)
+            except Exception as _phe:
+                logger.warning(f"post_file_modify_hook_skip: {_phe}")
             return result
         except Exception as e:
             return {"error": str(e)}
+        finally:
+            # 에러 발생 여부와 무관하게 반드시 잠금 해제
+            lock.release()
 
     async def _run_remote_command(self, inp: Dict[str, Any]) -> Any:
         """원격 서버 명령 실행 (화이트리스트 기반). Yellow 등급."""

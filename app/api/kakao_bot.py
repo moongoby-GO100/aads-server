@@ -1694,3 +1694,38 @@ async def cancel_scheduled(scheduled_id: int, current_user: dict = Depends(get_c
     if row is None:
         raise HTTPException(status_code=404, detail="예약을 찾을 수 없거나 이미 처리됨")
     return {"status": "cancelled", "id": scheduled_id}
+
+
+# ──────────────────── Wake-on-LAN ────────────────────
+
+@router.post("/agent/wake/{agent_id}")
+async def wake_pc_agent(agent_id: str, user=Depends(get_current_user)):
+    """PC Agent를 Wake-on-LAN으로 원격 부팅."""
+    from app.services.wol_service import wake_agent
+    result = await wake_agent(agent_id)
+    if result["status"] == "error":
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@router.get("/agent/network")
+async def list_agent_network(user=Depends(get_current_user)):
+    """등록된 모든 에이전트의 네트워크 정보 조회."""
+    from app.services.wol_service import list_agents_network
+    return await list_agents_network()
+
+
+@router.post("/agent/wake-all")
+async def wake_all_agents(user=Depends(get_current_user)):
+    """등록된 모든 에이전트를 Wake-on-LAN으로 부팅."""
+    from app.services.wol_service import list_agents_network, send_wol
+    agents_data = await list_agents_network()
+    if agents_data["status"] != "success":
+        raise HTTPException(status_code=500, detail="에이전트 목록 조회 실패")
+    results = []
+    for agent in agents_data.get("agents", []):
+        r = send_wol(agent["mac_address"], agent.get("broadcast_ip", "255.255.255.255"))
+        r["agent_id"] = agent["agent_id"]
+        r["label"] = agent["label"]
+        results.append(r)
+    return {"status": "success", "results": results, "count": len(results)}

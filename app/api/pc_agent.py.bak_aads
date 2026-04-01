@@ -1,14 +1,12 @@
 """
 AADS-195: PC 제어 에이전트 API.
 WebSocket 엔드포인트 + REST API.
-v1.0.12: is_active 컬럼 버그 수정 + 중복 연결 시 기존 유지/신규 거부로 ping-pong 해소.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
-import time
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
@@ -19,23 +17,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 PC_AGENT_SECRET = os.environ.get("PC_AGENT_SECRET", "")
-
-# 토큰별 활성 WebSocket + 마지막 활동 시간
-_token_connections: dict[str, WebSocket] = {}
-_token_last_activity: dict[str, float] = {}
-
 HEARTBEAT_INTERVAL = 30  # 초
-# 이 시간 내에 활동이 있었으면 기존 연결이 살아있다고 판단 → 신규 거부
-ACTIVE_CONNECTION_TTL = 45  # 초
 
 
 async def _verify_token_db(token: str) -> bool:
     """DB에서 토큰 유효성 검증 (kakao_pc_agent_tokens 테이블)."""
     try:
-        from app.core.db_pool import get_pool
-        pool = get_pool()
+        from app.core.database import get_pool
+        pool = await get_pool()
         row = await pool.fetchrow(
-            "SELECT 1 FROM kakao_pc_agent_tokens WHERE token = $1",
+            "SELECT 1 FROM kakao_pc_agent_tokens WHERE token = $1 AND is_active = true",
             token,
         )
         return row is not None
@@ -48,65 +39,25 @@ async def _verify_token_db(token: str) -> bool:
 
 @router.websocket("/pc-agent/ws/{agent_id}")
 async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query("")):
-    """PC 에이전트 WebSocket 연결.
-
-    v1.0.12: 중복 연결 시 기존 연결 유지 + 신규 거부 (4010).
-    - 기존 연결의 마지막 활동이 45초 이내면 → 신규를 accept 후 즉시 close(4010)
-    - 기존 연결이 stale(45초 초과)이면 → 기존을 교체
-    - 클라이언트가 4010을 받으면 프로세스 종료하도록 업데이트 (v1.0.12 agent.py)
-    """
-    # ── 인증 ──
+    """PC 에이전트 WebSocket 연결."""
+    # 인증: DB 토큰 → 환경변수 폴백
     token_valid = False
     if token:
         token_valid = await _verify_token_db(token)
         if not token_valid and PC_AGENT_SECRET and token == PC_AGENT_SECRET:
             token_valid = True
     if not token_valid and not PC_AGENT_SECRET:
-        token_valid = True  # 개발 모드
+        # 환경변수 미설정 + DB에 토큰 없으면 허용 (개발 모드)
+        token_valid = True
     if not token_valid:
         await websocket.close(code=4001, reason="unauthorized")
         logger.warning("pc_agent_ws_auth_failed agent_id=%s", agent_id)
         return
 
-    # ── 중복 연결 처리 ──
-    if token and token in _token_connections:
-        last_activity = _token_last_activity.get(token, 0)
-        elapsed = time.time() - last_activity
-
-        if elapsed < ACTIVE_CONNECTION_TTL:
-            # 기존 연결이 살아있음 → 신규를 거부
-            await websocket.accept()
-            await websocket.close(
-                code=4010,
-                reason="another_instance_active",
-            )
-            logger.info(
-                "pc_agent_ws_duplicate_rejected agent_id=%s elapsed=%.1fs",
-                agent_id, elapsed,
-            )
-            return
-        else:
-            # 기존 연결이 stale → 교체
-            old_ws = _token_connections.pop(token)
-            _token_last_activity.pop(token, None)
-            try:
-                await old_ws.close(code=4010, reason="stale_replaced")
-            except Exception:
-                pass
-            logger.info(
-                "pc_agent_ws_stale_replaced agent_id=%s elapsed=%.1fs",
-                agent_id, elapsed,
-            )
-
-    # ── 연결 수락 ──
     await websocket.accept()
-    now = time.time()
-    if token:
-        _token_connections[token] = websocket
-        _token_last_activity[token] = now
     logger.info("pc_agent_ws_connected agent_id=%s", agent_id)
 
-    # ── 등록 메시지 대기 (첫 메시지) ──
+    # 등록 메시지 대기 (첫 메시지)
     try:
         raw = await asyncio.wait_for(websocket.receive_json(), timeout=10.0)
         msg = WSMessage.model_validate(raw)
@@ -119,7 +70,7 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
         await websocket.close(code=4003, reason="register failed")
         return
 
-    # ── 메시지 수신 루프 ──
+    # 메시지 수신 루프
     try:
         while True:
             raw = await asyncio.wait_for(
@@ -129,8 +80,7 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
 
             if msg.type == "heartbeat":
                 pc_agent_manager.update_heartbeat(agent_id)
-                if token:
-                    _token_last_activity[token] = time.time()
+                # pong 응답
                 await websocket.send_json(
                     {"type": "heartbeat", "id": msg.id, "payload": {}}
                 )
@@ -139,6 +89,7 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
                 pc_agent_manager.receive_result(msg.id, msg.payload)
 
             elif msg.type == "stream_frame":
+                # 에이전트가 보낸 스트리밍 프레임 → 대시보드 구독자에게 브로드캐스트
                 frame = msg.payload.get("frame", "")
                 if frame:
                     await pc_agent_manager.broadcast_frame(agent_id, frame)
@@ -154,9 +105,6 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
         logger.error("pc_agent_ws_error agent_id=%s err=%s", agent_id, exc)
     finally:
         pc_agent_manager.unregister_agent(agent_id)
-        if token and _token_connections.get(token) is websocket:
-            _token_connections.pop(token, None)
-            _token_last_activity.pop(token, None)
 
 
 # ── REST API ──────────────────────────────────────────────────────────
@@ -208,17 +156,21 @@ async def ws_stream(websocket: WebSocket, agent_id: str):
 
     await websocket.accept()
 
+    # 구독자 등록
     pc_agent_manager.add_stream_subscriber(agent_id, websocket)
 
     try:
+        # 첫 메시지로 StreamConfig JSON 수신 → 스트리밍 시작
         raw = await asyncio.wait_for(websocket.receive_json(), timeout=10.0)
         config = StreamConfig.model_validate(raw)
         await pc_agent_manager.start_stream(agent_id, config)
         logger.info("stream_ws_started agent_id=%s", agent_id)
 
+        # 연결 유지 — 클라이언트가 닫을 때까지 대기
         while True:
             try:
                 data = await websocket.receive_json()
+                # config 업데이트 지원
                 if data.get("type") == "update_config":
                     config = StreamConfig.model_validate(data.get("config", {}))
                     await pc_agent_manager.start_stream(agent_id, config)
@@ -230,6 +182,7 @@ async def ws_stream(websocket: WebSocket, agent_id: str):
     finally:
         remaining = pc_agent_manager.remove_stream_subscriber(agent_id, websocket)
         if remaining == 0:
+            # 마지막 구독자 해제 시 스트리밍 중지
             try:
                 await pc_agent_manager.stop_stream(agent_id)
             except Exception:

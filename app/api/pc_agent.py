@@ -94,6 +94,20 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
                 if frame:
                     await pc_agent_manager.broadcast_frame(agent_id, frame)
 
+            elif msg.type == "network_info":
+                # WoL용 네트워크 정보 자동 등록
+                try:
+                    from app.services.wol_service import register_agent_network
+                    payload = msg.payload
+                    await register_agent_network(
+                        agent_id=agent_id,
+                        mac_address=payload.get("mac_address", ""),
+                        ip_address=payload.get("ip_address", ""),
+                        label=payload.get("hostname", ""),
+                    )
+                except Exception as e:
+                    logger.warning("WoL 네트워크 등록 실패: %s", e)
+
             else:
                 logger.warning(
                     "pc_agent_ws_unknown_type agent_id=%s type=%s", agent_id, msg.type

@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 from contextvars import ContextVar as _ContextVar
 _current_branch_id: _ContextVar[Optional[str]] = _ContextVar("_current_branch_id", default=None)
 
+# AADS-191 Phase1: Redis Stream 토큰 버퍼링 (서버 재시작 시 스트리밍 복구)
+from app.services import redis_stream as _redis_stream
+
 
 # ── SSE heartbeat wrapper ─────────────────────────────────────────
 import asyncio as _heartbeat_asyncio
@@ -34,7 +37,7 @@ import asyncio as _heartbeat_asyncio
 
 async def with_heartbeat(
     gen: AsyncGenerator[str, None],
-    interval: float = 5.0,
+    interval: float = 3.0,
 ) -> AsyncGenerator[str, None]:
     """Wrap an SSE async generator to interleave heartbeat events.
 
@@ -42,9 +45,10 @@ async def with_heartbeat(
     a lightweight ``{"type": "heartbeat"}`` SSE line is emitted so that
     Cloudflare(100s)/Nginx/frontend can keep the connection alive.
 
-    interval=5s → Cloudflare 100s 유휴 타임아웃 대비 충분한 여유 (P0-FIX: 8s→5s).
+    interval=3s → Cloudflare 100s 유휴 타임아웃 대비 충분한 여유 (P0-FIX: 5s→3s).
     """
-    HEARTBEAT = f'data: {json.dumps({"type": "heartbeat"})}\n\n'
+    _hb_pad = ":" + " " * 256 + "\n"
+    HEARTBEAT = f'data: {json.dumps({"type": "heartbeat"})}\n{_hb_pad}\n'
     ait = gen.__aiter__()
     pending: _heartbeat_asyncio.Task | None = None
     while True:
@@ -244,12 +248,21 @@ async def with_background_completion(
 
     _client_gone_since: float = 0  # 클라이언트 이탈 시각 (monotonic)
 
+    _token_idx = 0  # Redis Stream 토큰 인덱스
+
     async def _producer():
-        nonlocal _client_gone, _client_gone_since
+        nonlocal _client_gone, _client_gone_since, _token_idx
         _my_task = _heartbeat_asyncio.current_task()
         try:
             async for chunk in gen:
                 await queue.put(chunk)
+                # Redis Stream 병행 저장 (fire-and-forget, 실패해도 기존 동작 영향 없음)
+                if 'data: {' in chunk:
+                    try:
+                        await _redis_stream.publish_token(session_id, chunk, _token_idx)
+                        _token_idx += 1
+                    except Exception:
+                        pass
                 # SSE 이벤트 파싱하여 상태 추적
                 if 'data: {' in chunk:
                     try:
@@ -361,9 +374,11 @@ async def with_background_completion(
     # producer/도구 블로킹과 완전 분리된 asyncio.Task에서 5초마다 heartbeat 전송.
     # 3중 안전장치: (1) heartbeat_pump → queue, (2) consumer timeout → 직접 yield,
     # (3) pump 비정상 종료 시 자동 재시작.
-    _HB_INTERVAL = 5.0  # 기본 5초: Cloudflare 100s/nginx 600s 대비 충분한 여유
+    _HB_INTERVAL = 3.0  # 기본 3초: Cloudflare 100s/nginx 600s 대비 충분한 여유 (P0-FIX: 5s→3s)
     _HB_INTERVAL_TOOL = 2.0  # 도구 실행 중 2초: 긴 도구 실행 시 연결 안정성 강화
-    _HB_LINE = f'data: {json.dumps({"type": "heartbeat"})}\n\n'
+    # Cloudflare 즉시 flush 유도: 256byte+ 패딩 (SSE comment는 클라이언트가 무시)
+    _HB_PAD = ":" + " " * 256 + "\n"
+    _HB_LINE = f'data: {json.dumps({"type": "heartbeat"})}\n{_HB_PAD}\n'
 
     async def _heartbeat_pump():
         """Adaptive heartbeat — 도구 실행 중 2초, 평시 5초 간격으로 queue에 heartbeat 삽입.
@@ -1629,6 +1644,7 @@ async def _save_and_update_session(
                     import asyncio as _asyncio
                     _asyncio.create_task(_auto_save_session_note(session_id_str, raw_messages or []))
                     _asyncio.create_task(_auto_observe_session(raw_messages or []))
+                    _asyncio.create_task(_auto_extract_mid_conversation_lessons(session_id_str, raw_messages or []))
             except Exception:
                 pass
 
@@ -2128,6 +2144,30 @@ async def send_message_stream(
                     })
                 logger.info(f"[VISION-PRE] {len(_image_for_preprocess)} image(s) pre-analyzed via Gemini for CLI Relay")
 
+                # 멀티모달 메모리: Gemini 분석 결과를 ai_observations에 비동기 저장
+                # asyncio.create_task()로 백그라운드 실행 — 메인 흐름에 영향 없음
+                # _mentioned_projects / workspace_name은 이 시점 미확정이므로
+                # locals()를 통해 안전하게 참조하고, 없으면 "AADS" 폴백 사용
+                try:
+                    import asyncio as _mm_asyncio
+                    from app.memory.multimodal_store import store_visual_memory as _store_vm
+                    _loc = locals()
+                    _mp = _loc.get("_mentioned_projects") or []
+                    _wn = _loc.get("workspace_name") or ""
+                    _mm_project = _mp[0] if _mp else (_wn.upper() if _wn else "AADS")
+                    for _it_mem, _img_mem in zip(_image_texts, _image_for_preprocess):
+                        _img_url_key = _img_mem.get("path") or _img_mem.get("name", "unknown")
+                        _mm_asyncio.create_task(
+                            _store_vm(
+                                image_url=_img_url_key,
+                                analysis_text=_it_mem["analysis"],
+                                project=_mm_project,
+                            )
+                        )
+                    logger.info(f"[VISUAL-MEM] {len(_image_texts)} image(s) queued for memory storage project={_mm_project}")
+                except Exception as _mm_err:
+                    logger.warning(f"[VISUAL-MEM] 멀티모달 메모리 저장 큐잉 실패: {_mm_err}")
+
             # Layer D: 현재 턴에만 주입될 전문 컨텍스트 (텍스트 파일만)
             _ephemeral_doc_context = build_ephemeral_document_layer(_file_contents)
 
@@ -2426,45 +2466,86 @@ async def send_message_stream(
             "deploy", "fix", "error", "health", "지시서", "파이프라인",
         )
         _skip_cache = any(kw in content for kw in _CACHE_BYPASS_KEYWORDS)
-        _semantic_cache_hit = None
-        if _skip_cache:
-            logger.debug(f"semantic_cache_bypassed: operational query detected, session={session_id[:8]}")
-        else:
+
+        # ── 임베딩 1회 공통 생성 (semantic_cache + contradiction_detector 공유) ──
+        # skip_cache이고 CHANGE_KEYWORDS도 없으면 임베딩 불필요 → None 유지
+        import re as _re_cd
+        from app.services.contradiction_detector import _CHANGE_KEYWORDS as _CD_CHANGE_KW
+        _need_embedding = (not _skip_cache) or bool(_CD_CHANGE_KW.search(content))
+        _shared_embedding: list | None = None
+        if _need_embedding:
             try:
-                from app.services.semantic_cache import SemanticCache
-                _sem_cache = SemanticCache(pool=get_pool())
-                _ws_id = sp_row["workspace_id"] if sp_row and sp_row.get("workspace_id") else None
-                _semantic_cache_hit = await _sem_cache.lookup(content, workspace_id=_ws_id)
-                if _semantic_cache_hit:
-                    _cached_resp = _semantic_cache_hit.get("cached_response", "")
-                    _cached_sim = _semantic_cache_hit.get("similarity", 0)
-                    logger.info("semantic_cache_hit", similarity=f"{_cached_sim:.3f}", session=session_id[:8])
-                    # 캐시 응답을 SSE 형식으로 직접 반환
-                    yield f'data: {json.dumps({"type": "delta", "content": _cached_resp})}\n\n'
-                    yield f'data: {json.dumps({"type": "message_stop", "cached": True})}\n\n'
-                    # Phase C: 캐시 응답도 DB에 저장
-                    await _save_and_update_session(
-                        sid, _cached_resp,
-                        session_id_str=session_id,
-                        raw_messages=raw_messages,
-                        model_used="semantic_cache",
-                        intent=intent_override or "cache_hit",
-                        cost=0.0, tokens_in=0, tokens_out=0,
-                        tools_called=[], thinking_summary=None,
-                    )
-                    return
+                from app.services.chat_embedding_service import embed_texts as _embed_texts
+                _emb_results = await _embed_texts([content[:2000]])
+                if _emb_results:
+                    _shared_embedding = _emb_results[0]
+                    logger.debug(f"shared_embedding_computed session={session_id[:8]}")
+            except Exception as _emb_err:
+                logger.debug(f"shared_embedding_failed: {_emb_err}")
+
+        # ── 인텐트 분류 + 시맨틱 캐시 + 모순 감지 병렬 실행 ──
+        import asyncio as _asyncio_parallel
+        from app.services.intent_router import classify as _classify_fn, get_model_for_override
+        from app.services.contradiction_detector import detect_contradictions as _detect_contradictions
+        from app.services.semantic_cache import SemanticCache as _SemanticCache
+
+        _ws_id = sp_row["workspace_id"] if sp_row and sp_row.get("workspace_id") else None
+
+        async def _run_semantic_cache() -> dict | None:
+            if _skip_cache:
+                logger.debug(f"semantic_cache_bypassed: operational query detected, session={session_id[:8]}")
+                return None
+            try:
+                _sem_cache = _SemanticCache(pool=get_pool())
+                return await _sem_cache.lookup(
+                    content, workspace_id=_ws_id,
+                    pre_computed_embedding=_shared_embedding,
+                )
             except Exception as _sc_err:
                 logger.debug(f"semantic_cache_lookup_skipped: {_sc_err}")
+                return None
 
-        # 4.5-pre. F10: Contradiction Detection (모순 감지)
-        try:
-            from app.services.contradiction_detector import detect_contradictions
-            _contradiction_warning = await detect_contradictions(content, project=_normalized_project)
-            if _contradiction_warning:
-                system_prompt = system_prompt + "\n\n" + _contradiction_warning
-                logger.info("contradiction_warning_injected", session=session_id[:8])
-        except Exception as _cd_err:
-            logger.debug(f"contradiction_detection_skipped: {_cd_err}")
+        async def _run_contradiction() -> str:
+            try:
+                return await _detect_contradictions(
+                    content, project=_normalized_project,
+                    pre_computed_embedding=_shared_embedding,
+                )
+            except Exception as _cd_err:
+                logger.debug(f"contradiction_detection_skipped: {_cd_err}")
+                return ""
+
+        # 인텐트 분류 + 시맨틱 캐시 + 모순 감지 동시 실행
+        _semantic_cache_hit, _contradiction_warning, intent_result = await _asyncio_parallel.gather(
+            _run_semantic_cache(),
+            _run_contradiction(),
+            _classify_fn(content, workspace_name, recent_messages=messages),
+        )
+
+        # 시맨틱 캐시 HIT → 즉시 응답 후 종료
+        if _semantic_cache_hit:
+            _cached_resp = _semantic_cache_hit.get("cached_response", "")
+            _cached_sim = _semantic_cache_hit.get("similarity", 0)
+            logger.info(f"semantic_cache_hit similarity={_cached_sim:.3f} session={session_id[:8]}")
+            yield f'data: {json.dumps({"type": "delta", "content": _cached_resp})}\n\n'
+            yield f'data: {json.dumps({"type": "message_stop", "cached": True})}\n\n'
+            await _save_and_update_session(
+                sid, _cached_resp,
+                session_id_str=session_id,
+                raw_messages=raw_messages,
+                model_used="semantic_cache",
+                intent=intent_override or "cache_hit",
+                cost=0.0, tokens_in=0, tokens_out=0,
+                tools_called=[], thinking_summary=None,
+            )
+            return
+
+        # 모순 감지 경고 주입
+        if _contradiction_warning:
+            system_prompt = system_prompt + "\n\n" + _contradiction_warning
+            logger.info(f"contradiction_warning_injected session={session_id[:8]}")
+
+        intent = intent_override if intent_override else intent_result.intent
 
         # 4.5. AADS-188E: 시맨틱 코드 검색 컨텍스트 주입 (code_search 관련 키워드 감지)
         _CODE_SEARCH_KEYWORDS = (
@@ -2489,9 +2570,7 @@ async def send_message_stream(
                                 _ctx_lines.append(f"    {_r['code_snippet'][:150]}")
                         _ctx_lines.append("</codebase_knowledge_inline>")
                         _inline_ctx = "\n".join(_ctx_lines)
-                        # 시스템 프롬프트 마지막에 삽입
                         system_prompt = system_prompt + "\n\n" + _inline_ctx
-                        # #20: 시맨틱 코드 검색 감사 로그
                         logger.info("semantic_code_search_injected",
                                     query=content[:100], results=len(_search_results),
                                     files=[r.get('file','?') for r in _search_results[:3]],
@@ -2502,10 +2581,7 @@ async def send_message_stream(
         # 5. 자동 압축은 context_builder.build_messages_context() 내에서 토큰 기반으로 트리거됨
         # (80K 토큰 초과 시 compaction_service.check_and_compact 자동 호출)
 
-        # 6. 인텐트 분류 + 모델/도구 결정
-        from app.services.intent_router import classify, get_model_for_override
-        intent_result = await classify(content, workspace_name, recent_messages=messages)
-        intent = intent_override if intent_override else intent_result.intent
+        # 6. 인텐트 분류 결과 처리 (classify는 4.4 gather에서 이미 완료)
         # Langfuse: intent_classification span
         if _lf_trace is not None:
             try:
@@ -2559,6 +2635,37 @@ async def send_message_stream(
         # 7. Gemini Direct (Grounding / Deep Research)
         if intent_result.use_gemini_direct:
             if intent_result.gemini_mode == "grounding":
+                # A안: SearXNG 우선 실행 (무료, 무제한, <3초)
+                _searxng_ok = False
+                try:
+                    from app.services.searxng_search_service import search_searxng
+                    from app.services.gemini_search_service import SearchResult as _SxngResult
+                    _sxng = await search_searxng(content, categories="general", count=10)
+                    if not _sxng.get("error") and _sxng.get("results"):
+                        _items = [it for it in _sxng["results"][:10] if it.get("content")]
+                        if _items:
+                            _text = "\n\n".join(
+                                f"**{it.get('title', '')}**\n{it.get('content', '')}"
+                                for it in _items
+                            )
+                            _cites = [{"title": it.get("title", ""), "url": it.get("url", "")}
+                                      for it in _items if it.get("url")]
+                            result = _SxngResult(text=_text, citations=_cites)
+                            yield f"data: {json.dumps({'type': 'delta', 'content': result.text})}\n\n"
+                            if result.citations:
+                                yield f"data: {json.dumps({'type': 'sources', 'sources': result.citations})}\n\n"
+                            await _save_and_update_session(
+                                sid, result.text, model_used="searxng", intent=intent,
+                                cost=Decimal("0"), sources=result.citations)
+                            yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': 'searxng', 'cost': '0'})}\n\n"
+                            _searxng_ok = True
+                except Exception as _sxng_err:
+                    logger.warning(f"searxng_grounding_prefetch_failed: {_sxng_err}")
+
+                if _searxng_ok:
+                    return
+
+                # SearXNG 실패 시 기존 Gemini+Naver 폴백 체인
                 import asyncio as _search_asyncio
                 from app.services.gemini_search_service import GeminiSearchService
                 from app.services.naver_search_service import NaverSearchService
@@ -2983,16 +3090,17 @@ async def send_message_stream(
                 elif etype == "thinking":
                     yield f"data: {json.dumps({'type': 'thinking', 'thinking': event['thinking']})}\n\n"
                 elif etype == "tool_use":
-                    tools_called.append(event["tool_name"])
-                    yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event['tool_use_id'], 'tool_input': event.get('tool_input', {})})}\n\n"
+                    tools_called.append({"type": "tool_use", "tool_name": event["tool_name"], "tool_use_id": event.get("tool_use_id", ""), "tool_input": event.get("tool_input", {})})
+                    yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event.get('tool_use_id', ''), 'tool_input': event.get('tool_input', {})})}\n\n"
                 elif etype == "tool_result":
+                    tools_called.append({"type": "tool_result", "tool_name": event["tool_name"], "content": str(event.get("content", ""))[:500]})
                     yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': event['tool_name'], 'content': str(event.get('content', ''))[:300]})}\n\n"
                 elif etype == "done":
                     model_used = event.get("model", intent_result.model)
                     cost_usd += Decimal(str(event.get("cost", "0")))
                     input_tokens = event.get("input_tokens", 0) or 0
                     output_tokens = event.get("output_tokens", 0) or 0
-                    tools_called = event.get("tools_called", tools_called)
+                    # tools_called는 스트리밍 중 직접 누적한 구조화 이벤트 유지 (done 이벤트로 덮어쓰지 않음)
                 elif etype == "error":
                     yield f"data: {json.dumps({'type': 'error', 'content': event.get('content', '오류')})}\n\n"
                     return
@@ -3099,6 +3207,20 @@ async def send_message_stream(
                 )
         except Exception as _bg_err:
             logger.debug("bg_self_eval_launch_error", error=str(_bg_err))
+        # F11-R: auto_reflexion_loop — Reflexion 완전 자동 루프 (백그라운드)
+        # score < 0.5 시 correction_directive 저장, 3회 연속 실패 시 strategy_update 저장
+        try:
+            from app.services.self_evaluator import auto_reflexion_loop
+            _bg_asyncio.create_task(
+                auto_reflexion_loop(
+                    query=content,
+                    response=full_response,
+                    project=_normalized_project or workspace_name,
+                    session_id=session_id,
+                )
+            )
+        except Exception as _bg_err:
+            logger.debug("bg_auto_reflexion_launch_error", error=str(_bg_err))
 
         # 시맨틱 캐시 저장 (도구 사용 + quality >= 0.7인 응답만)
         if tools_called and len(full_response) > 200:
@@ -3116,7 +3238,21 @@ async def send_message_stream(
         _session_cost += float(cost_usd)
         _session_turns += 2  # user + assistant
 
-        yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns})}\n\n"
+        # confidence_label: DB/도구 사용 여부로 신뢰도 레이블 산출
+        _DB_TOOLS = {"query_database", "query_project_database", "read_remote_file",
+                     "list_remote_dir", "run_remote_command", "get_all_service_status",
+                     "health_check", "check_task_status", "read_task_logs"}
+        _used_tool_names = {t.get("tool_name", "") for t in tools_called if isinstance(t, dict) and t.get("type") == "tool_use"}
+        _has_db = bool(_used_tool_names & _DB_TOOLS)
+        if not tools_called:
+            _confidence_label = "ai_inference"
+        elif _has_db and len(_used_tool_names - _DB_TOOLS) == 0:
+            _confidence_label = "db_realtime"
+        elif _has_db:
+            _confidence_label = "mixed"
+        else:
+            _confidence_label = None  # 도구 사용했지만 DB 아닌 경우 (웹검색 등) — 레이블 미표시
+        yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns, 'confidence_label': _confidence_label})}\n\n"
 
     finally:
         set_streaming(session_id, False)
@@ -3201,6 +3337,46 @@ async def _auto_observe_session(messages: List[Dict[str, Any]]) -> None:
         logger.info("auto_observe_session: 완료")
     except Exception as e:
         logger.warning(f"auto_observe_session error: {e}")
+
+
+async def _auto_extract_mid_conversation_lessons(
+    session_id: str,
+    messages: List[Dict[str, Any]],
+) -> None:
+    """20턴마다 대화 중 실시간 교훈 추출 (백그라운드 태스크, AADS-P1-1).
+    세션 ID로 워크스페이스 이름을 조회하여 프로젝트를 결정하고
+    experience_extractor의 extract_mid_conversation_lessons()를 호출하여
+    ai_observations에 experience_lesson 카테고리로 저장.
+    """
+    try:
+        # 세션의 워크스페이스 이름에서 프로젝트 코드 추출
+        project = "AADS"
+        try:
+            pool = get_pool()
+            async with pool.acquire() as _conn:
+                ws_name = await _conn.fetchval(
+                    """
+                    SELECT w.name FROM chat_workspaces w
+                    JOIN chat_sessions s ON s.workspace_id = w.id
+                    WHERE s.id = $1
+                    """,
+                    uuid.UUID(session_id),
+                )
+            if ws_name:
+                import re as _re
+                _m = _re.match(r"\[([A-Z0-9]{2,10})\]", ws_name.strip())
+                project = _m.group(1) if _m else ws_name.strip().upper()[:10]
+        except Exception as _proj_err:
+            logger.debug(f"_auto_extract_mid_conversation_lessons: project 조회 실패 {_proj_err}")
+
+        from app.memory.experience_extractor import extract_mid_conversation_lessons
+        saved = await extract_mid_conversation_lessons(
+            messages=messages,
+            project=project,
+        )
+        logger.info(f"auto_extract_mid_conversation_lessons: project={project} saved={saved}")
+    except Exception as e:
+        logger.warning(f"auto_extract_mid_conversation_lessons error: {e}")
 
 
 async def toggle_bookmark(message_id: str) -> Optional[Dict[str, Any]]:

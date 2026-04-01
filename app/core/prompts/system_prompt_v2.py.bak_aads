@@ -67,7 +67,9 @@ Task ID: KIS-xxx.
 **GO100(빡억이) 투자분석 프로젝트 전담 PM/CTO AI** — CEO moongoby의 기술 파트너.
 빡억이 투자분석 시스템을 총괄한다.
 서버211 (211.188.51.113). Task ID: GO100-xxx.
-**핵심 책임**: 투자 데이터 분석, 종목 선별, 전략 연구.
+**핵심 책임**: 투자 데이터 분석, 종목 선별, 전략 설계, 백테스트, 가설 검증.
+**AI 파이프라인**: INTENT→UNDERSTAND→DESIGN→EVALUATE→OPTIMIZE→REPLY (6단계).
+**의도 분류(12개)**: stock_analysis(종목분석)   strategy_design(전략설계)   backtest(백테스트)   hypothesis(가설검증)   market_regime(시장레짐)   earnings_analysis(실적분석)   rebalancing(리밸런싱)   news_impact(뉴스영향)   portfolio(포트폴리오)   risk_management(리스크관리)   general_chat(일반대화)   system_command(시스템명령)
 **Orchestrator**: 직접 호출 | pipeline_runner_submit(코드/배포) | delegate_to_agent(분석+수정)
 </role>""",
     "SF": """<role>
@@ -147,8 +149,14 @@ WS_CAPABILITIES: Dict[str, str] = {
 </capabilities>""",
     "GO100": """<capabilities>
 ## 현재 프로젝트: GO100 빡억이 투자분석
-- 서버211 (211.188.51.113). KIS와 동일 서버.
-- 투자 데이터 분석, 종목 선별, 전략 연구
+- 서버211 (211.188.51.113). WORKDIR: /root/kis-autotrade-v4
+- FastAPI 백엔드 (포트 8002, systemd go100) + Next.js 프론트 (포트 3000, systemd go100-frontend)
+- DB: PostgreSQL kisautotrade (KIS와 공유) / kis_admin / localhost:5432
+- AI 엔진: 10개 멀티에이전트 파이프라인 (INTENT→UNDERSTAND→DESIGN→EVALUATE→OPTIMIZE→REPLY)
+- 의도 분류: 12개 카테고리 (stock_analysis/strategy_design/backtest/hypothesis/market_regime/earnings_analysis/rebalancing/news_impact/portfolio/risk_management/general_chat/system_command)
+- 핵심 모듈: go100/ai/prompts.py, go100/ai/pipeline.py, go100/services/backtest_engine.py
+- 가설 엔진: HypothesisEngine L1→L2→L3 야간배치
+- 연동: KIS 자동매매(동일 서버), 키움증권 조건검색식 API
 
 ## 타 프로젝트 (참조용)
 | 프로젝트 | 서버 | Task ID |
@@ -236,6 +244,11 @@ LAYER1_TOOLS = """<tools_available>
 **T5 고비용 (CEO 요청 시)**: deep_research($2~5), deep_crawl, search_all_projects
 
 **T6 브라우저 (소스 분석 후 보조)**: browser_navigate/snapshot/screenshot, **capture_screenshot**(CEO에게 이미지 표시), browser_click/fill/tab_list
+
+## 아젠다 관리
+- 사용자가 "나중에", "보류", "다음에 논의", "일단 킵", "나중에 결정", "검토 필요" 등 미결정 의사를 표현하면, 현재 논의 내용을 요약하여 아젠다 등록을 제안하세요.
+- 도구: add_agenda(등록), list_agendas(목록), get_agenda(상세), update_agenda(수정), decide_agenda(결정), search_agendas(검색)
+- CEO는 전체 프로젝트 아젠다 관리 가능, CTO는 자기 프로젝트만
 </tools_available>"""
 
 LAYER1_RULES = """<rules>
@@ -247,11 +260,8 @@ LAYER1_RULES = """<rules>
 - D-027: parallel_group→Worktree 분기 | D-028: subagents 에이전트 활성화
 - R-001: HANDOVER.md 미갱신 완료 금지 | R-008: GitHub 브라우저 경로 보고
 
-## 수치 정확성 (환각 방지)
-- DB 수치는 반드시 query_database 조회 결과만 사용. 추정/기억 의존 금지.
-- 시간 경과 시 재조회 필수.
-
-## 도구 결과 날조 금지 (R-CRITICAL-002)
+## 데이터 정확성 · 날조 금지 (R-CRITICAL-002)
+- DB 수치는 반드시 query_database 조회 결과만 사용. 추정/기억 의존 금지. 시간 경과 시 재조회 필수.
 - XML 태그(function_results/invoke/function_calls 등) 직접 작성 절대 금지 → tool_use로만 호출.
 - 존재하지 않는 job_id/task_id 보고 = 거짓 보고. ID는 시스템이 runner-{hash}로 자동 부여.
 - 도구 미호출 시 결과 있는 척 금지. 오류 진단은 도구 확인 후 보고. 추측은 "~일 수 있음"으로 구분.
@@ -338,11 +348,36 @@ LAYER4_SELF_AWARENESS_TEMPLATE = """
 WS_LAYER1: Dict[str, str] = {k: "" for k in WS_ROLES}
 
 
-def build_layer1(workspace_key: str = "CEO", base_system_prompt: str = "") -> str:
+def build_layer1_lite(workspace_key: str = "CEO") -> str:
+    """
+    Prompt Compression — 단순 인텐트용 경량 시스템 프롬프트.
+    행동 원칙 + 역할만 포함. 도구/규칙/가이드/진화 섹션 제거.
+    Full 대비 ~60% 토큰 절감 (~1400→~500 토큰).
+    """
+    role = WS_ROLES.get(workspace_key, LAYER1_ROLE_DEFAULT)
+    return LAYER1_BEHAVIOR + "\n\n" + role
+
+
+# 단순 인텐트 — build_layer1_lite() 사용 대상
+_LITE_PROMPT_INTENTS = {
+    "greeting", "casual", "status_check", "health_check",
+    "all_service_status", "cost_report", "task_history", "dashboard",
+}
+
+
+def build_layer1(workspace_key: str = "CEO", base_system_prompt: str = "", intent: str = "") -> str:
     """
     Layer 1 정적 컨텍스트 조합.
     순서: 행동 원칙 → 역할(워크스페이스별) → CEO 화법 → 능력 → 도구 → 규칙 → 응답 가이드
+    intent가 단순 인텐트이면 경량 프롬프트 반환 (Prompt Compression).
     """
+    # Prompt Compression: 단순 인텐트 → 경량 프롬프트
+    if intent and intent in _LITE_PROMPT_INTENTS:
+        lite = build_layer1_lite(workspace_key)
+        if base_system_prompt:
+            lite += f"\n\n## 워크스페이스 추가 지시\n{base_system_prompt}"
+        return lite
+
     # 워크스페이스별 역할 + capabilities 선택 (미등록은 기본값)
     role = WS_ROLES.get(workspace_key, LAYER1_ROLE_DEFAULT)
     capabilities = WS_CAPABILITIES.get(workspace_key, _CAPABILITIES_FULL)

@@ -24,12 +24,42 @@ router = APIRouter(prefix="/kakao-bot", tags=["kakao-bot"])
 # PC Agent 배포 관련 상수
 PC_AGENT_DIR = Path(__file__).resolve().parent.parent.parent / "pc_agent"
 PC_AGENT_VERSION_FILE = PC_AGENT_DIR / "VERSION"
+PC_AGENT_EXE_FILE = PC_AGENT_DIR / "dist" / "kakaobot-setup.exe"
 # zip 제외 패턴
 _ZIP_EXCLUDE_DIRS = {"__pycache__", ".git", "build_tmp", "dist", ".mypy_cache", ".pytest_cache"}
 _ZIP_EXCLUDE_EXTS = {".pyc", ".pyo", ".exe", ".spec"}
 _ZIP_EXCLUDE_SUFFIXES = {".bak_aads"}  # 자동 백업 파일 제외
 # 에이전트 토큰 (환경변수에서 로드, 실제로는 DB 기반으로 확장 가능)
 PC_AGENT_SECRET = os.environ.get("PC_AGENT_SECRET", "")
+
+# PC Agent 토큰 DB 관리
+_PC_AGENT_TOKEN_DDL = """
+CREATE TABLE IF NOT EXISTS kakao_pc_agent_tokens (
+    id SERIAL PRIMARY KEY,
+    token VARCHAR(64) UNIQUE NOT NULL,
+    label VARCHAR(100) DEFAULT '',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    last_used_at TIMESTAMPTZ
+);
+"""
+_PC_AGENT_TABLES_CREATED = False
+
+
+async def _ensure_pc_agent_tables() -> None:
+    """PC Agent 토큰 테이블 자동 생성 (최초 1회)."""
+    global _PC_AGENT_TABLES_CREATED
+    if _PC_AGENT_TABLES_CREATED:
+        return
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        if pool is None:
+            return
+        async with pool.acquire() as conn:
+            await conn.execute(_PC_AGENT_TOKEN_DDL)
+        _PC_AGENT_TABLES_CREATED = True
+    except Exception as e:
+        logger.error("pc_agent 토큰 테이블 생성 실패: %s", e)
 
 
 class KakaoBotRequest(BaseModel):
@@ -126,12 +156,22 @@ async def agent_version():
     if changelog_file.exists():
         changelog = changelog_file.read_text(encoding="utf-8").strip()
 
+    # EXE 빌드 유무 확인
+    exe_available = PC_AGENT_EXE_FILE.exists()
+    exe_size = ""
+    if exe_available:
+        size_mb = PC_AGENT_EXE_FILE.stat().st_size / (1024 * 1024)
+        exe_size = f"{size_mb:.1f} MB"
+
     return {
         "version": version,
         "download_url": "/api/v1/kakao-bot/agent/download",
         "force_update": force_update,
         "min_version": min_version,
         "changelog": changelog,
+        "exe_available": exe_available,
+        "file_size": exe_size if exe_available else "ZIP",
+        "release_date": time.strftime("%Y-%m-%d"),
     }
 
 
@@ -152,6 +192,9 @@ def _build_agent_zip() -> bytes:
             # 제외 확장자 체크
             if file_path.suffix in _ZIP_EXCLUDE_EXTS:
                 continue
+            # .bak_aads 백업 파일 제외 (접미사 체크)
+            if any(file_path.name.endswith(s) for s in _ZIP_EXCLUDE_SUFFIXES):
+                continue
             # RESULT_ 리포트 파일 제외
             if file_path.name.startswith("RESULT_"):
                 continue
@@ -160,23 +203,33 @@ def _build_agent_zip() -> bytes:
 
 
 @router.get("/agent/download")
-async def agent_download():
-    """PC Agent 코드를 zip으로 다운로드.
-
-    pc_agent/ 디렉토리를 압축하여 스트리밍 응답.
-    """
+async def agent_download(format: str = Query(default=None)):
+    """PC Agent 다운로드. EXE 우선, 없으면 ZIP fallback. format=zip 이면 항상 ZIP 반환."""
     if not PC_AGENT_DIR.exists():
         raise HTTPException(status_code=404, detail="pc_agent 디렉토리가 없습니다")
 
+    version = "unknown"
+    if PC_AGENT_VERSION_FILE.exists():
+        version = PC_AGENT_VERSION_FILE.read_text(encoding="utf-8").strip()
+
+    # EXE가 있으면 EXE 직접 제공 (Python 설치 불필요) — format=zip 이면 건너뜀
+    if PC_AGENT_EXE_FILE.exists() and format != "zip":
+        exe_bytes = PC_AGENT_EXE_FILE.read_bytes()
+        return StreamingResponse(
+            io.BytesIO(exe_bytes),
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="kakaobot-setup-{version}.exe"',
+                "Content-Length": str(len(exe_bytes)),
+            },
+        )
+
+    # EXE 미빌드 시 ZIP fallback
     try:
         zip_bytes = _build_agent_zip()
     except Exception as e:
         logger.error("agent_download zip 생성 실패: %s", e)
         raise HTTPException(status_code=500, detail="zip 생성 실패")
-
-    version = "unknown"
-    if PC_AGENT_VERSION_FILE.exists():
-        version = PC_AGENT_VERSION_FILE.read_text(encoding="utf-8").strip()
 
     return StreamingResponse(
         io.BytesIO(zip_bytes),
@@ -184,6 +237,40 @@ async def agent_download():
         headers={
             "Content-Disposition": f'attachment; filename="kakaobot-agent-{version}.zip"',
             "Content-Length": str(len(zip_bytes)),
+        },
+    )
+
+
+@router.get("/agent/download-exe")
+async def agent_download_exe():
+    """PC Agent 설치 EXE 다운로드.
+
+    PyInstaller로 빌드된 kakaobot-setup.exe를 스트리밍 응답.
+    """
+    exe_path = PC_AGENT_DIR / "dist" / "kakaobot-setup.exe"
+    if not exe_path.exists():
+        raise HTTPException(status_code=404, detail="EXE 파일이 아직 빌드되지 않았습니다")
+
+    version = "unknown"
+    if PC_AGENT_VERSION_FILE.exists():
+        version = PC_AGENT_VERSION_FILE.read_text(encoding="utf-8").strip()
+
+    file_size = exe_path.stat().st_size
+
+    def iter_file():
+        with open(exe_path, "rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+
+    return StreamingResponse(
+        iter_file(),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="AADS-PC-Agent-Setup-{version}.exe"',
+            "Content-Length": str(file_size),
         },
     )
 
@@ -201,11 +288,36 @@ async def agent_register(req: AgentRegisterRequest):
 
     토큰이 유효하면 에이전트 정보를 등록하고 WebSocket URL 반환.
     """
+    await _ensure_pc_agent_tables()
     # 토큰 검증
     if not req.agent_token:
         raise HTTPException(status_code=400, detail="토큰이 비어있습니다")
 
-    if PC_AGENT_SECRET and req.agent_token != PC_AGENT_SECRET:
+    # DB 기반 토큰 검증 (우선) + 환경변수 fallback
+    token_valid = False
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT id FROM kakao_pc_agent_tokens WHERE token = $1",
+                    req.agent_token,
+                )
+                if row:
+                    token_valid = True
+                    await conn.execute(
+                        "UPDATE kakao_pc_agent_tokens SET last_used_at = NOW() WHERE token = $1",
+                        req.agent_token,
+                    )
+    except Exception as e:
+        logger.warning("pc_agent 토큰 DB 검증 실패: %s", e)
+
+    # 환경변수 fallback
+    if not token_valid and PC_AGENT_SECRET:
+        token_valid = (req.agent_token == PC_AGENT_SECRET)
+
+    if not token_valid:
         raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다")
 
     logger.info(
@@ -549,6 +661,29 @@ async def msgbot_logs(bot_token: str = Query(...), limit: int = Query(default=50
             }
             for r in rows
         ],
+    }
+
+
+@router.post("/agent/token")
+async def agent_token_generate():
+    """PC Agent 전용 토큰 발급 + DB 저장. 대시보드 '토큰 발급하기' 버튼에서 호출."""
+    await _ensure_pc_agent_tables()
+    raw = f"pc-agent-{time.time()}-{os.urandom(16).hex()}"
+    token = hashlib.sha256(raw.encode()).hexdigest()[:48]
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO kakao_pc_agent_tokens (token) VALUES ($1) ON CONFLICT (token) DO NOTHING",
+                    token,
+                )
+    except Exception as e:
+        logger.error("pc_agent 토큰 DB 저장 실패: %s", e)
+    return {
+        "token": token,
+        "message": "토큰이 발급되었습니다. PC Agent EXE 실행 시 이 토큰을 입력하세요.",
     }
 
 

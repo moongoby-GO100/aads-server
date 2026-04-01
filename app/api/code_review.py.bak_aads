@@ -50,5 +50,5 @@ async def review_code_diff(req: CodeReviewRequest):
             issues=result.issues,
         )
     except Exception as e:
-        logger.error("code_review_api_error", error=str(e))
+        logger.error("code_review_api_error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
