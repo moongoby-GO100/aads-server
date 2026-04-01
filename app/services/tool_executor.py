@@ -350,6 +350,49 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e)}
 
+    async def _post_file_modify_hook(self, project: str, file_path: str, change_summary: str) -> None:
+        """파일 수정 후 자동 후처리: hot-reload + git commit + push + CHANGELOG."""
+        import datetime, os
+        now_kst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
+        now_str = now_kst.strftime("%Y-%m-%d %H:%M KST")
+
+        # 1) AADS .py 파일이면 hot reload
+        if project == "AADS" and file_path.endswith(".py"):
+            try:
+                from app.core.hot_reload_trigger import trigger_hot_reload_for_file
+                await trigger_hot_reload_for_file(project, file_path)
+            except Exception as _hre:
+                logger.warning(f"hot_reload_trigger_skip: {_hre}")
+
+        # 2) git add + commit + push
+        try:
+            from app.api.ceo_chat_tools import tool_git_remote_add, tool_git_remote_commit, tool_git_remote_push
+            commit_msg = f"Chat-Session: {file_path} — {change_summary[:80]}"
+            await tool_git_remote_add(project, file_path)
+            commit_result = await tool_git_remote_commit(project, commit_msg)
+            logger.info(f"post_hook_commit: {commit_result}")
+            push_result = await tool_git_remote_push(project, "main")
+            logger.info(f"post_hook_push: {push_result}")
+        except Exception as _ge:
+            logger.warning(f"post_hook_git_skip: {_ge}")
+
+        # 3) CHANGELOG 기록 (AADS만, docs/CHANGELOG.md)
+        if project == "AADS":
+            try:
+                cl_full = "/root/aads/aads-server/docs/CHANGELOG.md"
+                os.makedirs(os.path.dirname(cl_full), exist_ok=True)
+                entry = f"\n## [{now_str}] {file_path}\n- {change_summary}\n"
+                try:
+                    with open(cl_full, "r", encoding="utf-8") as _f:
+                        existing = _f.read()
+                    new_cl = existing + entry
+                except Exception:
+                    new_cl = f"# AADS Changelog\n{entry}"
+                with open(cl_full, "w", encoding="utf-8") as _f:
+                    _f.write(new_cl)
+            except Exception as _cle:
+                logger.warning(f"post_hook_changelog_skip: {_cle}")
+
     async def _write_remote_file(self, inp: Dict[str, Any]) -> Any:
         """원격 서버 파일 쓰기 (SSH, 자동 백업). Yellow 등급."""
         project = (inp.get("project") or "").upper()
@@ -365,13 +408,11 @@ class ToolExecutor:
         try:
             from app.api.ceo_chat_tools import tool_write_remote_file
             result = await tool_write_remote_file(project, file_path, content, backup)
-            # AADS .py 파일 수정 시 자동 hot reload 트리거
-            if project == "AADS" and file_path.endswith(".py"):
-                try:
-                    from app.core.hot_reload_trigger import trigger_hot_reload_for_file
-                    await trigger_hot_reload_for_file(project, file_path)
-                except Exception as _hre:
-                    logger.warning(f"hot_reload_trigger_skip: {_hre}")
+            # 자동 후처리: hot-reload + git commit + push + CHANGELOG
+            try:
+                await self._post_file_modify_hook(project, file_path, f"write: {file_path}")
+            except Exception as _phe:
+                logger.warning(f"post_file_modify_hook_skip: {_phe}")
             return result
         except Exception as e:
             return {"error": str(e)}
@@ -391,13 +432,12 @@ class ToolExecutor:
         try:
             from app.api.ceo_chat_tools import tool_patch_remote_file
             result = await tool_patch_remote_file(project, file_path, old_string, new_string)
-            # AADS .py 파일 수정 시 자동 hot reload 트리거
-            if project == "AADS" and file_path.endswith(".py"):
-                try:
-                    from app.core.hot_reload_trigger import trigger_hot_reload_for_file
-                    await trigger_hot_reload_for_file(project, file_path)
-                except Exception as _hre:
-                    logger.warning(f"hot_reload_trigger_skip: {_hre}")
+            # 자동 후처리: hot-reload + git commit + push + CHANGELOG
+            try:
+                summary = f"patch: {str(old_string)[:40]}→{str(new_string)[:40]}"
+                await self._post_file_modify_hook(project, file_path, summary)
+            except Exception as _phe:
+                logger.warning(f"post_file_modify_hook_skip: {_phe}")
             return result
         except Exception as e:
             return {"error": str(e)}
