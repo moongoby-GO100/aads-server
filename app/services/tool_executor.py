@@ -370,7 +370,7 @@ class ToolExecutor:
             try:
                 from app.api.ceo_chat_tools import tool_git_remote_add, tool_git_remote_commit, tool_git_remote_push
                 commit_msg = f"Chat-Direct: {file_path} 수정"
-                await tool_git_remote_add(project, "-A")
+                await tool_git_remote_add(project, file_path)
                 commit_result = await tool_git_remote_commit(project, commit_msg)
                 logger.info(f"post_hook_commit: {commit_result}")
                 # main 브랜치 push 시도, 실패 시 master fallback
@@ -384,7 +384,7 @@ class ToolExecutor:
         # 3) CHANGELOG 기록 (AADS만, docs/CHANGELOG-direct-edit.md)
         if project == "AADS":
             try:
-                cl_full = "/root/aads/aads-server/docs/CHANGELOG-direct-edit.md"
+                cl_full = "/app/docs/CHANGELOG-direct-edit.md"
                 os.makedirs(os.path.dirname(cl_full), exist_ok=True)
                 entry = f"\n## [{now_str_full}] {file_path}\n- Chat-Direct 수정: {change_summary}\n"
                 try:
