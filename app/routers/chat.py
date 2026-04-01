@@ -320,52 +320,61 @@ async def get_streaming_status(session_id: UUID):
 
 
 @router.get("/chat/sessions/{session_id}/stream-resume", tags=["chat-session"])
-async def stream_resume(session_id: UUID, offset: int = 0, message_id: Optional[str] = None):
-    """SSE 재연결: 끊긴 지점(offset)부터 이어서 스트리밍.
+async def stream_resume(
+    session_id: UUID,
+    offset: int = 0,
+    message_id: Optional[str] = None,
+    last_event_id: Optional[str] = None,
+    request: Request = None,
+):
+    """SSE 재연결: Last-Event-ID 또는 offset 기반으로 끊긴 지점부터 이어서 스트리밍.
 
-    프론트가 SSE 끊김 시 자동 호출. _streaming_state에서 content를
-    offset 이후 부분만 SSE event로 전송, 완료 시 [DONE] 전송.
-    message_id가 있으면 DB fallback 시 해당 메시지만 반환 (이전 답변 혼입 방지).
+    Phase4 워커분리: Redis Stream XREAD blocking으로 실시간 토큰 전달.
+    Last-Event-ID가 있으면 Redis Stream에서 해당 지점 이후부터 XREAD.
+    없으면 기존 offset 기반 fallback.
     """
     import asyncio, json
 
     sid = str(session_id)
 
+    # Last-Event-ID 우선: 쿼리 파라미터 → HTTP 헤더
+    _last_id = last_event_id
+    if not _last_id and request:
+        _last_id = request.headers.get("Last-Event-ID")
+
+    # Phase4: Last-Event-ID가 있으면 Redis Stream XREAD 기반 전송
+    if _last_id and _last_id != "0":
+        from app.services.stream_worker import deliver_sse
+        return StreamingResponse(
+            deliver_sse(sid, last_event_id=_last_id),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+        )
+
+    # Fallback: offset 기반 (레거시 호환 + Redis Stream 없는 경우)
     async def _generate():
         prev_len = offset
         while True:
             state = svc._streaming_state.get(sid)
             if not state:
-                # Phase1: Redis Stream에서 토큰 복구 시도 (서버 재시작 후에도 토큰 보존)
+                # Phase4: Redis Stream XREAD로 실시간 복구 시도
                 try:
-                    from app.services.redis_stream import read_tokens_after
-                    _last_redis_id = "0"
-                    _tokens = await read_tokens_after(sid, _last_redis_id)
-                    if _tokens:
-                        for _t in _tokens:
-                            if _t.get("done"):
-                                yield f"data: {json.dumps({'type': 'resume_done'})}\n\n"
-                                return
-                            _data = _t.get("data", "")
-                            if _data:
-                                yield _data
-                        # 토큰이 있었지만 done이 없으면 — 아직 생성 중
-                        yield f"data: {json.dumps({'type': 'resume_generating'})}\n\n"
-                        return
+                    from app.services.stream_worker import deliver_sse
+                    async for event in deliver_sse(sid, last_event_id="0"):
+                        yield event
+                    return
                 except Exception:
                     pass
-                # Redis Stream에도 없으면 DB fallback
+                # Redis 실패 시 DB fallback
                 from app.core.db_pool import get_pool
                 try:
                     pool = get_pool()
                     async with pool.acquire() as conn:
-                        # 먼저 streaming_placeholder 확인 — 아직 생성 중이면 이전 답변 전송 방지
                         ph_row = await conn.fetchrow(
                             "SELECT content FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at > NOW() - interval '5 minutes' ORDER BY created_at DESC LIMIT 1",
                             session_id,
                         )
                         if ph_row:
-                            # 아직 생성 중 — placeholder 상태 알림 (이전 답변 전송 안 함)
                             yield f"data: {json.dumps({'type': 'resume_generating'})}\n\n"
                             return
 
@@ -374,8 +383,6 @@ async def stream_resume(session_id: UUID, offset: int = 0, message_id: Optional[
                             session_id,
                         )
                         if row and row["content"]:
-                            # message_id 검증: 프론트가 보낸 message_id와 DB 메시지 id가 불일치하면
-                            # 이전 질문의 답변이므로 전송하지 않음
                             if message_id and str(row["id"]) != message_id:
                                 yield f"data: {json.dumps({'type': 'resume_generating'})}\n\n"
                                 return
@@ -405,7 +412,7 @@ async def stream_resume(session_id: UUID, offset: int = 0, message_id: Optional[
     return StreamingResponse(
         _generate(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
     )
 
 

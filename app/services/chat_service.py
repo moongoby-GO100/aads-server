@@ -255,14 +255,15 @@ async def with_background_completion(
         _my_task = _heartbeat_asyncio.current_task()
         try:
             async for chunk in gen:
-                await queue.put(chunk)
-                # Redis Stream 병행 저장 (fire-and-forget, 실패해도 기존 동작 영향 없음)
+                # Redis Stream 병행 저장 — entry_id를 SSE id: 필드로 사용 (Phase4 워커분리)
+                _entry_id = None
                 if 'data: {' in chunk:
                     try:
-                        await _redis_stream.publish_token(session_id, chunk, _token_idx)
+                        _entry_id = await _redis_stream.publish_token(session_id, chunk, _token_idx)
                         _token_idx += 1
                     except Exception:
                         pass
+                await queue.put((chunk, _entry_id))
                 # SSE 이벤트 파싱하여 상태 추적
                 if 'data: {' in chunk:
                     try:
@@ -406,7 +407,7 @@ async def with_background_completion(
                         _hb_data = f'data: {json.dumps({"type": "heartbeat", "tool_count": _tc, "last_tool": _lt})}\n\n'
                     else:
                         _hb_data = _HB_LINE
-                    queue.put_nowait(_hb_data)
+                    queue.put_nowait((_hb_data, None))
                 except Exception:
                     pass
             except Exception as _hb_exc:
@@ -441,7 +442,15 @@ async def with_background_completion(
                 continue
             if item is _SENTINEL:
                 break
-            yield item
+            # Phase4: tuple (chunk, redis_entry_id) → id: 필드 추가
+            if isinstance(item, tuple):
+                _chunk, _eid = item
+                if _eid:
+                    yield f"id:{_eid}\n{_chunk}"
+                else:
+                    yield _chunk
+            else:
+                yield item
     except (GeneratorExit, _heartbeat_asyncio.CancelledError):
         _client_gone = True
         _client_gone_since = _bg_time.monotonic()
