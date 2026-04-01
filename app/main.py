@@ -954,6 +954,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/kakao-bot/msgbot/webhook",
     "/api/v1/kakao-bot/respond",
     "/api/v1/kakao-bot/agent",
+    "/api/v1/ops/hot-reload",  # 내부 hot-reload (127.0.0.1 전용)
 )
 # 내부 모니터링 (verify_monitor_key로 별도 인증)
 _MONITOR_KEY_PATHS = (
