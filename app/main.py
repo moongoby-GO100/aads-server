@@ -406,6 +406,15 @@ async def lifespan(app: FastAPI):
 
         scheduler.add_job(_auth_daily_check, "cron", hour=9, minute=5, timezone="Asia/Seoul", id="auth_daily_check", replace_existing=True)
 
+        # AADS-191: Pipeline Jobs 자동 정리 (1시간 주기)
+        async def _run_pipeline_cleanup():
+            try:
+                from app.services.pipeline_cleanup import run_pipeline_cleanup
+                await run_pipeline_cleanup()
+            except Exception as e:
+                logger.warning(f"pipeline_cleanup failed: {e}")
+        scheduler.add_job(_run_pipeline_cleanup, "interval", hours=1, id="pipeline_cleanup", replace_existing=True)
+
         scheduler.start()
         app.state.scheduler = scheduler  # fallback: MCP 도구 경로에서 참조 가능
         await healer_init()

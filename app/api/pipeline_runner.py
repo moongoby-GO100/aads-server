@@ -5,6 +5,7 @@ Pipeline Runner API v2 — DB 기반 작업 제출/승인/조회.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import uuid
 from typing import Optional
@@ -101,20 +102,40 @@ async def submit_job(req: JobSubmitRequest):
 
     job_id = f"runner-{uuid.uuid4().hex[:8]}"
     session_id = req.session_id  # 필수 필드 — validator에서 이미 검증됨
+    instruction_hash = hashlib.sha256(
+        f"{req.project}:{req.instruction}".encode()
+    ).hexdigest()[:16]
 
     try:
         async with pool.acquire() as conn:
             # 트랜잭션으로 lock 체크 + INSERT 원자성 보장
             async with conn.transaction():
+                # 중복 차단: 동일 hash + 활성 상태이면 409 반환
+                existing = await conn.fetchrow(
+                    """
+                    SELECT job_id FROM pipeline_jobs
+                    WHERE instruction_hash = $1
+                      AND status IN ('queued','running','claimed','awaiting_approval','approved')
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    instruction_hash,
+                )
+                if existing:
+                    return JobSubmitResponse(
+                        job_id=existing["job_id"],
+                        status="duplicate",
+                        message=f"동일 작업이 이미 활성 상태입니다: {existing['job_id']}",
+                    )
                 locked = await check_project_lock(conn, req.project)
                 await conn.execute(
                     """
                     INSERT INTO pipeline_jobs
-                      (job_id, project, instruction, chat_session_id, status, phase,
-                       max_cycles, created_at, updated_at)
-                    VALUES ($1, $2, $3, $4, 'queued', 'queued', $5, NOW(), NOW())
+                      (job_id, project, instruction, instruction_hash, chat_session_id,
+                       status, phase, max_cycles, created_at, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, NOW(), NOW())
                     """,
-                    job_id, req.project, req.instruction, session_id, req.max_cycles,
+                    job_id, req.project, req.instruction, instruction_hash,
+                    session_id, req.max_cycles,
                 )
     except Exception as e:
         logger.error("pipeline_runner.submit_fail", error=str(e))

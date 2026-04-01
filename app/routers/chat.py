@@ -297,7 +297,26 @@ async def get_streaming_status(session_id: UUID):
                 }
     except Exception as e:
         logger.debug("streaming-status DB 조회 실패", error=str(e), session_id=str(session_id))
-    return status or {"is_streaming": False}
+    # 폴링 최적화: 마지막 메시지 ID 추가 — 변경 없으면 /messages 페치 스킵
+    _last_msg_id = None
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            lm_row = await conn.fetchrow(
+                "SELECT id::text FROM chat_messages"
+                " WHERE session_id = $1"
+                "   AND intent IS DISTINCT FROM 'streaming_placeholder'"
+                " ORDER BY created_at DESC LIMIT 1",
+                session_id,
+            )
+            if lm_row:
+                _last_msg_id = lm_row["id"]
+    except Exception:
+        pass
+    result = status or {"is_streaming": False}
+    result["last_message_id"] = _last_msg_id
+    return result
 
 
 @router.get("/chat/sessions/{session_id}/stream-resume", tags=["chat-session"])
