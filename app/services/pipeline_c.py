@@ -728,7 +728,8 @@ class PipelineCJob:
             "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; export LANGUAGE=en_US:en; "
             "export MANPATH=; "  # manpath locale 경고 억제
             "source ~/.claude/api_keys.env 2>/dev/null; "
-            "export ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-$API_KEY_1}; "
+            "export CLAUDE_CODE_OAUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-$API_KEY_1}; "
+            "unset ANTHROPIC_API_KEY 2>/dev/null; "
         )
 
         # 고유 출력 파일 경로
@@ -868,7 +869,8 @@ class PipelineCJob:
             "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; export LANGUAGE=en_US:en; "
             "export MANPATH=; "
             "source ~/.claude/api_keys.env 2>/dev/null; "
-            "export ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-$API_KEY_1}; "
+            "export CLAUDE_CODE_OAUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-$API_KEY_1}; "
+            "unset ANTHROPIC_API_KEY 2>/dev/null; "
         )
         full_cmd = f"{api_key_setup_direct}cd {shlex.quote(self.workdir)} && {claude_cmd}"
 

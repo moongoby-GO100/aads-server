@@ -691,9 +691,10 @@ async def _run_video_qa_llm(frames_b64: List[str], prompt: str) -> str:
     # Fallback: Claude
     try:
         import anthropic
-        api_key = _os2.getenv("ANTHROPIC_API_KEY", "")
-        if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY not set")
+        # R-AUTH: auth_provider 경유 (os.getenv 직접 사용 금지)
+        from app.core.auth_provider import get_primary_token as _vqa_get_token
+        if not _vqa_get_token():
+            raise ValueError("No valid OAuth token (auth_provider)")
         from app.core.anthropic_client import get_client as _get_vqa_client
         client = _get_vqa_client()
 

@@ -41,3 +41,4 @@ logs/
 Thumbs.db
 .env.litellm
 backup/direct_oauth_20260326/
+*.bak_aads

@@ -487,12 +487,16 @@ run_job() {
         local token_slot="${TOKEN_CYCLE[$attempt]}"
         local cycle_num=$(( attempt / 2 + 1 ))
 
-        # 계정 스위치: 토큰 교체
+        # 계정 스위치: 토큰 교체 (OAuth 채널 사용 — R-AUTH)
+        # CLI는 CLAUDE_CODE_OAUTH_TOKEN으로 oat 토큰을 받아야 함
+        # ANTHROPIC_API_KEY에 oat 토큰을 넣으면 401 OAuth 거부됨
         if [[ "$token_slot" == "2" && -n "$TOKEN_2" ]]; then
-            export ANTHROPIC_API_KEY="$TOKEN_2"
-            log "  TOKEN_SWITCH job=$job_id → 계정2(Gmail)"
+            export CLAUDE_CODE_OAUTH_TOKEN="$TOKEN_2"
+            unset ANTHROPIC_API_KEY 2>/dev/null || true
+            log "  TOKEN_SWITCH job=$job_id → 계정2(Naver) via OAUTH_TOKEN"
         else
-            export ANTHROPIC_API_KEY="$TOKEN_1"
+            export CLAUDE_CODE_OAUTH_TOKEN="$TOKEN_1"
+            unset ANTHROPIC_API_KEY 2>/dev/null || true
             [[ "$token_slot" == "2" ]] && log "  TOKEN_SWITCH job=$job_id → 계정2 없음, 계정1 유지"
         fi
 
@@ -778,8 +782,8 @@ deploy_job() {
             if bash /root/aads/aads-server/deploy.sh bluegreen 2>&1 | tail -20; then
                 log "  BLUEGREEN aads-server 완료"
             else
-                log "  WARN: bluegreen 실패 — supervisorctl restart 폴백"
-                docker exec aads-server supervisorctl restart aads-api 2>/dev/null || true
+                log "  WARN: bluegreen 실패 — 기존 서비스 유지 (SSE 스트림 보호)"
+                # supervisorctl restart 제거: 채팅 중 SSE 스트림 끊김 방지
             fi
 
             # 2) aads-dashboard: Docker 이미지 빌드 서비스 → build→swap
@@ -968,7 +972,12 @@ deploy_job() {
 
             case "$project" in
                 AADS)
-                    docker exec aads-server supervisorctl restart aads-api 2>/dev/null || true
+                    # 롤백도 무중단 배포 사용 (SSE 스트림 보호)
+                    if bash /root/aads/aads-server/deploy.sh bluegreen 2>&1 | tail -10; then
+                        log "  ROLLBACK_DEPLOY: bluegreen 성공"
+                    else
+                        log "  ROLLBACK_DEPLOY: bluegreen 실패 — 기존 서비스 유지"
+                    fi
                     ;;
                 KIS)
                     systemctl restart kis-v41-api 2>/dev/null || true

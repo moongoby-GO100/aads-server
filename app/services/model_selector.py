@@ -91,6 +91,23 @@ _CLAUDE_CLI_ENABLED = os.getenv("CLAUDE_CLI_ENABLED", "true").lower() == "true"
 # 릴레이 oauth_slot: 1=Gmail, 2=Naver. 기본은 Naver 먼저 (false 로 Gmail 우선 복귀)
 _CLAUDE_RELAY_NAVER_FIRST = os.getenv("CLAUDE_RELAY_NAVER_FIRST", "true").lower() in ("1", "true", "yes")
 
+# 슬롯 쿨다운 (429/한도 오류 시 해당 슬롯 일시 건너뜀)
+_SLOT_COOLDOWN: Dict[str, float] = {}  # {slot: expire_timestamp}
+_COOLDOWN_SECS = 300  # 5분
+
+def _mark_slot_cooldown(slot: str) -> None:
+    """429/한도 오류 시 슬롯을 5분간 쿨다운 등록."""
+    _SLOT_COOLDOWN[slot] = _time_mod.time() + _COOLDOWN_SECS
+    logger.info(f"slot_cooldown_set: slot={slot}, duration={_COOLDOWN_SECS}s")
+
+def _is_slot_available(slot: str) -> bool:
+    """슬롯이 쿨다운 중이 아닌지 확인. 만료 시 자동 해제."""
+    expire = _SLOT_COOLDOWN.get(slot, 0)
+    if _time_mod.time() >= expire:
+        _SLOT_COOLDOWN.pop(slot, None)
+        return True
+    return False
+
 # Agent SDK OAuth 토큰 — auth_provider 경유 (R-AUTH)
 from app.core.auth_provider import (
     get_oauth_tokens as _ap_get_tokens,
@@ -318,8 +335,12 @@ async def call_stream(
     if model not in _GEMINI_MODELS and model in _ANTHROPIC_MODEL_ID:
         _downgrade = _MODEL_DOWNGRADE.get(model, [model])
         _fb_seq = []  # [(model, slot), ...]
+        # 쿨다운 스마트 정렬: 사용 가능 슬롯 먼저, 쿨다운 슬롯 뒤로
+        _avail = [s for s in _ACCOUNT_SLOTS if _is_slot_available(s)]
+        _cooled = [s for s in _ACCOUNT_SLOTS if not _is_slot_available(s)]
+        _smart_slots = _avail + _cooled  # 쿨다운 슬롯도 마지막 기회로 시도
         for _dg in _downgrade:
-            for _sl in _ACCOUNT_SLOTS:
+            for _sl in _smart_slots:
                 _fb_seq.append((_dg, _sl))
 
         for _fi, (_fm, _fs) in enumerate(_fb_seq):
@@ -331,7 +352,11 @@ async def call_stream(
             async for event in _stream_cli_relay(_fm, system_prompt, messages, tools=tools, session_id=session_id, oauth_slot=_fs):
                 if event.get("type") == "error":
                     _err = True
-                    logger.warning(f"relay_err: {_fm}/slot{_fs}[{_fi}] — {event.get('content', '')[:80]}")
+                    _err_msg = event.get("content", "")
+                    logger.warning(f"relay_err: {_fm}/slot{_fs}[{_fi}] — {_err_msg[:80]}")
+                    # 429/한도/크레딧 오류 → 슬롯 쿨다운 등록
+                    if any(k in _err_msg.lower() for k in ("429", "rate", "limit", "overloaded", "quota")):
+                        _mark_slot_cooldown(_fs)
                     break
                 yield event
             if not _err:
