@@ -1453,3 +1453,5 @@ cleanup() {
     exit 0
 }
 trap cleanup SIGTERM SIGINT
+
+main "$@"

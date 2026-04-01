@@ -70,8 +70,8 @@ case "$STATUS" in
                 exit 0
             fi
             touch "$COOLDOWN_FILE"
-            notify "unhealthy 3x -- supervisorctl restart aads-api"
-            docker exec aads-server supervisorctl restart aads-api
+            # [2026-04-02] 자동 재시작 제거 — 상호 감시 충돌 방지
+            notify "🚨 unhealthy 3x — CEO 확인 필요 (자동 재시작 비활성화)"
             exit 0
         fi
 
