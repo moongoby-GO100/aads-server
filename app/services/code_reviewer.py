@@ -14,7 +14,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_REVIEW_MODEL = "gemini-3.1-pro-preview"
+_REVIEW_MODEL = "claude-haiku-4-5-20251001"
 
 
 @dataclass
@@ -64,7 +64,7 @@ async def review_code_diff(
     instruction: str,
     files_changed: Optional[list] = None,
 ) -> ReviewVerdict:
-    """코드 diff를 독립 AI로 리뷰. Gemini 3.1 Pro 사용."""
+    """코드 diff를 독립 AI로 리뷰. Claude Haiku 사용."""
     start = time.time()
 
     if not diff or not diff.strip():
@@ -96,7 +96,7 @@ async def review_code_diff(
         from app.core.anthropic_client import call_llm_with_fallback
         result_text = await call_llm_with_fallback(
             prompt=prompt,
-            model="claude-haiku-4-5-20251001",
+            model=_REVIEW_MODEL,
             max_tokens=1024,
             system=_REVIEW_SYSTEM_PROMPT,
         )
