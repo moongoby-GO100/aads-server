@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 from contextvars import ContextVar as _ContextVar
 _current_branch_id: _ContextVar[Optional[str]] = _ContextVar("_current_branch_id", default=None)
 
+# AADS-191 Phase1: Redis Stream 토큰 버퍼링 (서버 재시작 시 스트리밍 복구)
+from app.services import redis_stream as _redis_stream
+
 
 # ── SSE heartbeat wrapper ─────────────────────────────────────────
 import asyncio as _heartbeat_asyncio
@@ -245,12 +248,21 @@ async def with_background_completion(
 
     _client_gone_since: float = 0  # 클라이언트 이탈 시각 (monotonic)
 
+    _token_idx = 0  # Redis Stream 토큰 인덱스
+
     async def _producer():
-        nonlocal _client_gone, _client_gone_since
+        nonlocal _client_gone, _client_gone_since, _token_idx
         _my_task = _heartbeat_asyncio.current_task()
         try:
             async for chunk in gen:
                 await queue.put(chunk)
+                # Redis Stream 병행 저장 (fire-and-forget, 실패해도 기존 동작 영향 없음)
+                if 'data: {' in chunk:
+                    try:
+                        await _redis_stream.publish_token(session_id, chunk, _token_idx)
+                        _token_idx += 1
+                    except Exception:
+                        pass
                 # SSE 이벤트 파싱하여 상태 추적
                 if 'data: {' in chunk:
                     try:
@@ -309,6 +321,11 @@ async def with_background_completion(
                     del _ai_reaction_queue[session_id]
                 _ai_reaction_active[session_id] = _time.time()
                 _heartbeat_asyncio.create_task(_consume_next_reaction(session_id, _next_msg))
+            # Redis Stream 완료 마커
+            try:
+                await _redis_stream.mark_stream_done(session_id)
+            except Exception:
+                pass
             # 스트리밍 완료 → placeholder 삭제 (최종 응답이 generator 내부에서 저장됨)
             try:
                 await _delete_streaming_placeholder(session_id)

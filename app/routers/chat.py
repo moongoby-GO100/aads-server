@@ -336,7 +336,25 @@ async def stream_resume(session_id: UUID, offset: int = 0, message_id: Optional[
         while True:
             state = svc._streaming_state.get(sid)
             if not state:
-                # 이미 완료되어 state 제거됨 — DB에서 최종 응답 전송
+                # Phase1: Redis Stream에서 토큰 복구 시도 (서버 재시작 후에도 토큰 보존)
+                try:
+                    from app.services.redis_stream import read_tokens_after
+                    _last_redis_id = "0"
+                    _tokens = await read_tokens_after(sid, _last_redis_id)
+                    if _tokens:
+                        for _t in _tokens:
+                            if _t.get("done"):
+                                yield f"data: {json.dumps({'type': 'resume_done'})}\n\n"
+                                return
+                            _data = _t.get("data", "")
+                            if _data:
+                                yield _data
+                        # 토큰이 있었지만 done이 없으면 — 아직 생성 중
+                        yield f"data: {json.dumps({'type': 'resume_generating'})}\n\n"
+                        return
+                except Exception:
+                    pass
+                # Redis Stream에도 없으면 DB fallback
                 from app.core.db_pool import get_pool
                 try:
                     pool = get_pool()
