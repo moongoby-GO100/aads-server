@@ -41,7 +41,7 @@ _AADS_API_BASE = os.getenv("AADS_API_BASE", "http://localhost:8080")
 _MAX_RESULT_CHARS = 25000  # ~8000 토큰 (지시서 기준 25,000 허용)
 _TOOL_TIMEOUT = 20.0  # 일반 도구 타임아웃
 _LONG_TOOL_TIMEOUT = 120.0  # 서브에이전트/딥리서치 등 장시간 도구
-_LONG_TOOLS = frozenset({"spawn_subagent", "spawn_parallel_subagents", "run_agent_team", "run_debate", "deep_research", "delegate_to_agent", "delegate_to_research", "capture_screenshot"})
+_LONG_TOOLS = frozenset({"spawn_subagent", "spawn_parallel_subagents", "run_agent_team", "run_debate", "deep_research", "delegate_to_agent", "delegate_to_research", "capture_screenshot", "run_remote_command", "write_remote_file", "patch_remote_file", "pc_execute"})
 
 
 class ToolExecutor:
@@ -98,6 +98,7 @@ class ToolExecutor:
             "cost_report":            self._cost_report,
             "web_search_brave":       self._web_search,
             "web_search":             self._web_search,
+            "search_searxng":         self._search_searxng,
             "web_search_naver":       self._web_search_naver,
             "web_search_kakao":       self._web_search_kakao,
             "web_search_google":      self._web_search_google,
@@ -154,6 +155,13 @@ class ToolExecutor:
             "pipeline_c_start":       self._pipeline_runner_submit,  # 자동 전환
             "pipeline_c_status":      self._pipeline_c_status,
             "pipeline_c_approve":     self._pipeline_c_approve,
+            # 자동 추가 (check_tool_consistency --fix)
+            "add_agenda": self._add_agenda,
+            "decide_agenda": self._decide_agenda,
+            "get_agenda": self._get_agenda,
+            "list_agendas": self._list_agendas,
+            "search_agendas": self._search_agendas,
+            "update_agenda": self._update_agenda,
             # 첨부파일 재읽기
             "read_uploaded_file":     self._read_uploaded_file,
             # 작업 모니터
@@ -165,6 +173,9 @@ class ToolExecutor:
             "query_timeline":         self._query_timeline,
             "recall_tool_result":     self._recall_tool_result,
             "query_decision_graph":   self._query_decision_graph,
+            # AADS-195 Phase 3: PC Agent 도구
+            "pc_execute":             self._pc_execute,
+            "pc_list_agents":         self._pc_list_agents,
         }
         fn = dispatch.get(tool_name)
         if fn is None:
@@ -339,6 +350,52 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e)}
 
+    async def _post_modify_hook(self, project: str, file_path: str, action: str = "modify"):
+        """파일 수정 후 자동 후처리: git commit + push + CHANGELOG + hot-reload.
+        채팅 세션에서 직접 수정 시에도 Pipeline Runner와 동일한 추적성 보장."""
+        results = {"git_commit": None, "git_push": None, "changelog": None, "hot_reload": None}
+        short_path = file_path.split("/")[-1] if "/" in file_path else file_path
+        try:
+            # 1) git add
+            from app.api.ceo_chat_tools import tool_git_remote_add
+            await tool_git_remote_add(project, file_path)
+            # 2) git commit
+            from app.api.ceo_chat_tools import tool_git_remote_commit
+            commit_msg = f"Chat-Direct: {action} {short_path}"
+            cr = await tool_git_remote_commit(project, commit_msg)
+            results["git_commit"] = "ok" if cr and "error" not in str(cr).lower() else str(cr)
+            # 3) git push
+            from app.api.ceo_chat_tools import tool_git_remote_push
+            pr = await tool_git_remote_push(project, "")
+            results["git_push"] = "ok" if pr and "error" not in str(pr).lower() else str(pr)
+        except Exception as ge:
+            logger.warning(f"post_modify_hook git skip: {ge}")
+            results["git_commit"] = f"skip: {ge}"
+        try:
+            # 4) CHANGELOG 자동 기록
+            from datetime import datetime as _dt
+            ts = _dt.now().strftime("%Y-%m-%d %H:%M KST")
+            entry = f"- [{ts}] Chat-Direct {action}: {file_path}\n"
+            from app.api.ceo_chat_tools import tool_run_remote_command as _rrc
+            await _rrc(project, f"printf '%s' '{entry}' >> CHANGELOG_AUTO.md")
+            results["changelog"] = "ok"
+        except Exception as ce:
+            logger.warning(f"post_modify_hook changelog skip: {ce}")
+            results["changelog"] = f"skip: {ce}"
+        try:
+            # 5) hot-reload (AADS .py만)
+            if project == "AADS" and file_path.endswith(".py"):
+                from app.core.hot_reload_trigger import trigger_hot_reload_for_file
+                await trigger_hot_reload_for_file(project, file_path)
+                results["hot_reload"] = "ok"
+            else:
+                results["hot_reload"] = "skip (non-AADS or non-.py)"
+        except Exception as hre:
+            logger.warning(f"post_modify_hook hot_reload skip: {hre}")
+            results["hot_reload"] = f"skip: {hre}"
+        logger.info(f"post_modify_hook done: {project}/{file_path} → {results}")
+        return results
+
     async def _write_remote_file(self, inp: Dict[str, Any]) -> Any:
         """원격 서버 파일 쓰기 (SSH, 자동 백업). Yellow 등급."""
         project = (inp.get("project") or "").upper()
@@ -353,7 +410,15 @@ class ToolExecutor:
             return {"error": "content 필수"}
         try:
             from app.api.ceo_chat_tools import tool_write_remote_file
-            return await tool_write_remote_file(project, file_path, content, backup)
+            result = await tool_write_remote_file(project, file_path, content, backup)
+            # 자동 후처리: git commit + push + CHANGELOG + hot-reload
+            try:
+                hook_result = await self._post_modify_hook(project, file_path, "write")
+                if isinstance(result, dict):
+                    result["post_hook"] = hook_result
+            except Exception as _phe:
+                logger.warning(f"post_modify_hook_skip(write): {_phe}")
+            return result
         except Exception as e:
             return {"error": str(e)}
 
@@ -371,7 +436,15 @@ class ToolExecutor:
             return {"error": "old_string 필수"}
         try:
             from app.api.ceo_chat_tools import tool_patch_remote_file
-            return await tool_patch_remote_file(project, file_path, old_string, new_string)
+            result = await tool_patch_remote_file(project, file_path, old_string, new_string)
+            # AADS .py 파일 수정 시 자동 hot reload 트리거
+            if project == "AADS" and file_path.endswith(".py"):
+                try:
+                    from app.core.hot_reload_trigger import trigger_hot_reload_for_file
+                    await trigger_hot_reload_for_file(project, file_path)
+                except Exception as _hre:
+                    logger.warning(f"hot_reload_trigger_skip: {_hre}")
+            return result
         except Exception as e:
             return {"error": str(e)}
 
@@ -499,7 +572,32 @@ class ToolExecutor:
         if engine in ("google", "naver", "kakao"):
             return await self._web_search_single(inp, engine)
 
-        # auto: 스마트 듀얼 — 한국어면 Google+Naver 동시, 영어면 Google만
+        # ── SearXNG 1순위 (무료, 무제한, 70개+ 메타검색) ──
+        try:
+            # 쿼리 리라이팅은 _search_searxng 내부에서 자동 적용됨
+            searxng_result = await self._search_searxng(inp)
+            if isinstance(searxng_result, dict) and not searxng_result.get("error"):
+                results = searxng_result.get("results", [])
+                if results:
+                    text_parts = []
+                    citations = []
+                    for r in results[:count]:
+                        title = r.get("title", "")
+                        content = r.get("content", "")
+                        url = r.get("url", "")
+                        text_parts.append(f"**{title}**\n{content}")
+                        if url:
+                            citations.append({"title": title, "url": url})
+                    return {
+                        "text": "\n\n".join(text_parts),
+                        "citations": citations,
+                        "engines_used": ["searxng"],
+                        "source": "searxng",
+                    }
+        except Exception as e:
+            logger.warning(f"SearXNG 검색 실패, 기존 엔진 폴백: {e}")
+
+        # ── SearXNG 실패 시 기존 폴백 로직 ──
         if self._is_korean(query):
             # 한국어: Google + Naver 동시 검색
             results = await asyncio.gather(
@@ -560,6 +658,59 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e), "engine": engine}
         return {"error": f"알 수 없는 엔진: {engine}"}
+
+    async def _rewrite_query(self, query: str) -> str:
+        """검색 쿼리 리라이팅 — Haiku로 구어체→검색 키워드 변환."""
+        if not os.getenv("QUERY_REWRITE_ENABLED", "true").lower() == "true":
+            return query
+        # 짧은 쿼리나 이미 키워드형이면 스킵
+        if len(query.strip()) < 10 or " " not in query.strip():
+            return query
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as c:
+                resp = await c.post(
+                    f"{LITELLM_BASE_URL}/chat/completions",
+                    headers={"Authorization": f"Bearer {LITELLM_API_KEY}"},
+                    json={
+                        "model": "claude-haiku-4-5",
+                        "max_tokens": 100,
+                        "temperature": 0,
+                        "messages": [
+                            {"role": "user", "content": (
+                                "사용자 질문을 웹 검색에 최적화된 키워드 쿼리로 변환하세요.\n"
+                                "- 핵심 키워드만 추출 (조사/어미 제거)\n"
+                                "- 영문 기술용어는 영문 유지\n"
+                                "- 최신 정보 필요시 연도 추가\n"
+                                "- 결과: 검색 쿼리만 출력 (설명 없이)\n\n"
+                                f"사용자 질문: {query}\n검색 쿼리:"
+                            )}
+                        ],
+                    },
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    rewritten = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                    if rewritten and 3 < len(rewritten) < 200:
+                        logger.info(f"query_rewritten: '{query[:50]}' -> '{rewritten[:50]}'")
+                        return rewritten
+        except Exception as e:
+            logger.debug(f"query_rewrite_skipped: {e}")
+        return query
+
+    async def _search_searxng(self, inp: Dict[str, Any]) -> Any:
+        """SearXNG 메타검색 — 70개+ 엔진 동시 검색."""
+        from app.services.searxng_search_service import search_searxng
+        # 쿼리 리라이팅 적용
+        original_query = inp.get("query", "")
+        rewritten_query = await self._rewrite_query(original_query)
+        return await search_searxng(
+            query=rewritten_query,
+            categories=inp.get("categories", "general"),
+            language=inp.get("language", "ko-KR"),
+            time_range=inp.get("time_range"),
+            engines=inp.get("engines"),
+            count=inp.get("count", 10),
+        )
 
     async def _web_search_all(self, query: str, count: int = 5) -> Any:
         """3개 검색 엔진 병렬 실행 → 통합 결과."""
@@ -1312,6 +1463,54 @@ class ToolExecutor:
             max_depth=min(int(inp.get("max_depth", 3) or 3), 3),
         )
 
+    # ── AADS-195 Phase 3: PC Agent 도구 ──────────────────────────────────
+
+    async def _pc_execute(self, inp: Dict[str, Any]) -> Any:
+        """PC Agent에 명령 전송 및 결과 수신."""
+        from app.services.pc_agent_manager import pc_agent_manager
+
+        agent_id = inp.get("agent_id", "")
+        command_type = inp.get("command_type", "")
+        params = inp.get("params", {})
+
+        if not agent_id:
+            # 연결된 에이전트가 1개면 자동 선택
+            agents = pc_agent_manager.list_agents()
+            if len(agents) == 1:
+                agent_id = agents[0].agent_id
+            elif len(agents) == 0:
+                return {"error": "연결된 PC Agent가 없습니다. PC에서 에이전트를 실행해주세요."}
+            else:
+                return {
+                    "error": "agent_id를 지정해주세요.",
+                    "available_agents": [
+                        {"agent_id": a.agent_id, "hostname": a.hostname}
+                        for a in agents
+                    ],
+                }
+
+        if not command_type:
+            return {"error": "command_type 필수 (shell, screenshot, file_list, process_list, file_read, file_write, kakao_send, kakao_read, system_info)"}
+
+        try:
+            command_id = await pc_agent_manager.send_command(agent_id, command_type, params)
+            result = await pc_agent_manager.get_result(command_id, timeout=60.0)
+            return result.model_dump(mode="json")
+        except ValueError as e:
+            return {"error": str(e)}
+
+    async def _pc_list_agents(self, inp: Dict[str, Any]) -> Any:
+        """연결된 PC Agent 목록 조회."""
+        from app.services.pc_agent_manager import pc_agent_manager
+
+        agents = pc_agent_manager.list_agents()
+        if not agents:
+            return {"agents": [], "message": "연결된 PC Agent가 없습니다."}
+        return {
+            "agents": [a.model_dump(mode="json") for a in agents],
+            "count": len(agents),
+        }
+
     async def _delegate_to_agent(self, inp: Dict[str, Any]) -> Any:
         """
         복잡한 다단계 작업을 AutonomousExecutor에 위임.
@@ -1992,6 +2191,37 @@ class ToolExecutor:
         return {"status": "list", "files": file_list, "total": len(file_list),
                 "hint": "특정 파일을 읽으려면 filename에 정확한 이름을 지정하세요."}
 
+
+
+    async def _add_agenda(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("add_agenda", inp, "", "")
+
+    async def _decide_agenda(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("decide_agenda", inp, "", "")
+
+    async def _get_agenda(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("get_agenda", inp, "", "")
+
+    async def _list_agendas(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("list_agendas", inp, "", "")
+
+    async def _search_agendas(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("search_agendas", inp, "", "")
+
+    async def _update_agenda(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("update_agenda", inp, "", "")
 
 # ─── 하위 호환성 ─────────────────────────────────────────────────────────────
 

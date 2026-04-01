@@ -418,7 +418,9 @@ async def build_messages_context(
         _build_artifact_context_layer(session_id, db_conn=db_conn),
     )
 
-    system_prompt = layer1 + "\n\n" + layer2 + memory_layer + preload_layer + auto_rag_layer + artifact_layer
+    # KST 현재시각 최상단 주입 (매 턴 동적)
+    _kst_now = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST (%A)")
+    system_prompt = f"<currentTime>\n{_kst_now}\n</currentTime>\n\n" + layer1 + "\n\n" + layer2 + memory_layer + preload_layer + auto_rag_layer + artifact_layer
 
     # 토큰 절감 측정 로깅
     _sp_chars = len(system_prompt)
@@ -537,7 +539,12 @@ async def build(
             },
         ]
 
-    system_text = layer1 + "\n\n---\n\n" + layer2_full
+    # KST 현재시각 최상단 주입 (매 턴 동적)
+    _kst_now = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST (%A)")
+    _kst_header = f"<currentTime>\n{_kst_now}\n</currentTime>\n\n"
+    system_text = _kst_header + layer1 + "\n\n---\n\n" + layer2_full
+    # system_blocks 최상단에도 KST 시각 주입 (비캐시 블록)
+    system_blocks = [{"type": "text", "text": _kst_header.strip()}] + system_blocks
 
     # 토큰 절감 측정 로깅
     _sp_chars = len(system_text)
