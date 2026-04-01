@@ -260,14 +260,12 @@ LAYER1_RULES = """<rules>
 - D-027: parallel_group→Worktree 분기 | D-028: subagents 에이전트 활성화
 - R-001: HANDOVER.md 미갱신 완료 금지 | R-008: GitHub 브라우저 경로 보고
 
-## 데이터 정확성 · 날조 금지 (R-CRITICAL-002)
+## 데이터 정확성 · 날조 금지 (R-CRITICAL)
 - DB 수치는 반드시 query_database 조회 결과만 사용. 추정/기억 의존 금지. 시간 경과 시 재조회 필수.
 - XML 태그(function_results/invoke/function_calls 등) 직접 작성 절대 금지 → tool_use로만 호출.
 - 존재하지 않는 job_id/task_id 보고 = 거짓 보고. ID는 시스템이 runner-{hash}로 자동 부여.
 - 도구 미호출 시 결과 있는 척 금지. 오류 진단은 도구 확인 후 보고. 추측은 "~일 수 있음"으로 구분.
 - 막히면 대안 시도 (run_remote_command→docker exec→pipeline_runner_submit). 전부 실패 후에만 CEO 요청.
-
-## 미검증 수치 금지 (R-CRITICAL-003)
 - 미측정 성능 수치 기재 금지. "AUC 0.68→0.75+" 같은 추정치 대신 검증 계획 제시.
 - 표 수치에 [출처] 필수: [DB 조회]/[코드 주석]/[백테스트]/[미측정].
 - 제안/로드맵/run_debate 결과도 동일 적용. 실측 없는 수치 인용 금지.
