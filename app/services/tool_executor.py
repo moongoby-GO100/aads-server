@@ -364,7 +364,15 @@ class ToolExecutor:
             return {"error": "content 필수"}
         try:
             from app.api.ceo_chat_tools import tool_write_remote_file
-            return await tool_write_remote_file(project, file_path, content, backup)
+            result = await tool_write_remote_file(project, file_path, content, backup)
+            # AADS .py 파일 수정 시 자동 hot reload 트리거
+            if project == "AADS" and file_path.endswith(".py"):
+                try:
+                    from app.core.hot_reload_trigger import trigger_hot_reload_for_file
+                    await trigger_hot_reload_for_file(project, file_path)
+                except Exception as _hre:
+                    logger.warning(f"hot_reload_trigger_skip: {_hre}")
+            return result
         except Exception as e:
             return {"error": str(e)}
 
@@ -382,7 +390,15 @@ class ToolExecutor:
             return {"error": "old_string 필수"}
         try:
             from app.api.ceo_chat_tools import tool_patch_remote_file
-            return await tool_patch_remote_file(project, file_path, old_string, new_string)
+            result = await tool_patch_remote_file(project, file_path, old_string, new_string)
+            # AADS .py 파일 수정 시 자동 hot reload 트리거
+            if project == "AADS" and file_path.endswith(".py"):
+                try:
+                    from app.core.hot_reload_trigger import trigger_hot_reload_for_file
+                    await trigger_hot_reload_for_file(project, file_path)
+                except Exception as _hre:
+                    logger.warning(f"hot_reload_trigger_skip: {_hre}")
+            return result
         except Exception as e:
             return {"error": str(e)}
 
