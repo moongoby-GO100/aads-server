@@ -743,27 +743,54 @@ async def _resume_single_stream(
         from app.services.tool_registry import ToolRegistry
         tools_for_api = ToolRegistry().get_tools("all")
 
-        full_response = partial_content  # 기존 부분 응답에 이어붙임
-        cost_usd = Decimal("0")
-        tools_called = []
+        # 4-A. Redis Stream에 완성된 응답이 있는지 먼저 확인 (LLM 재호출 불필요할 수 있음)
+        redis_content, redis_complete = await _redis_stream.reconstruct_from_stream(session_id)
+        if redis_complete and redis_content and len(redis_content) > len(partial_content):
+            # Redis에 완성된 응답이 있음 → LLM 재호출 없이 즉시 저장
+            logger.info(
+                f"resume_from_redis: session={session_id[:8]} "
+                f"redis_len={len(redis_content)} partial_len={len(partial_content)}"
+            )
+            full_response = redis_content
+            cost_usd = Decimal("0")
+            _resume_model = "recovered_from_redis"
+        else:
+            # 4-B. Redis에 완성 응답 없음 → LLM 재호출 + Redis Stream에 토큰 발행
+            # Redis에 부분 내용이 DB보다 많으면 활용
+            if redis_content and len(redis_content) > len(partial_content):
+                partial_content = redis_content
+                logger.info(f"resume_redis_partial: session={session_id[:8]} upgraded partial to redis_len={len(redis_content)}")
 
-        async for event in call_stream(
-            intent_result=intent_result,
-            system_prompt=system_prompt,
-            messages=messages,
-            tools=tools_for_api,
-            model_override=_resume_model,
-            session_id=session_id,
-        ):
-            etype = event.get("type", "")
-            if etype == "delta":
-                full_response += event.get("content", "")
-            elif etype == "tool_use":
-                tools_called.append(event["tool_name"])
-            elif etype == "done":
-                cost_usd = Decimal(str(event.get("cost", "0")))
+            full_response = partial_content  # 기존 부분 응답에 이어붙임
+            cost_usd = Decimal("0")
+            tools_called = []
+            _token_idx = 0
 
-        # 5. placeholder를 최종 응답으로 교체
+            async for event in call_stream(
+                intent_result=intent_result,
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools_for_api,
+                model_override=_resume_model,
+                session_id=session_id,
+            ):
+                etype = event.get("type", "")
+                if etype == "delta":
+                    delta_content = event.get("content", "")
+                    full_response += delta_content
+                    # Redis Stream에 발행 → 프론트 stream-resume가 실시간 수신
+                    chunk = f'data: {json.dumps({"type": "delta", "content": delta_content})}\n\n'
+                    await _redis_stream.publish_token(session_id, chunk, _token_idx)
+                    _token_idx += 1
+                elif etype == "tool_use":
+                    tools_called.append(event["tool_name"])
+                elif etype == "done":
+                    cost_usd = Decimal(str(event.get("cost", "0")))
+
+            # 완료 마커 발행 → 프론트에서 resume_done 수신
+            await _redis_stream.mark_stream_done(session_id)
+
+        # 5. placeholder를 최종 응답으로 교체 (UPDATE — 새 버블 생성 금지)
         async with pool.acquire() as conn:
             await conn.execute(
                 """UPDATE chat_messages

@@ -83,8 +83,8 @@ async def mark_stream_done(session_id: str) -> None:
         r = await _get_redis()
         key = _stream_key(session_id)
         await r.xadd(key, {"data": "", "done": "true", "ts": str(time.time())})
-        # 완료 후 TTL 단축 (10분 — 복구 시간 충분)
-        await r.expire(key, 600)
+        # 완료 후 TTL 단축 (30분 — 서버 재시작 + resume 시간 충분)
+        await r.expire(key, 1800)
     except Exception as e:
         logger.warning(f"redis_stream_mark_done_failed session={session_id[:8]}: {e}")
 
@@ -179,6 +179,51 @@ async def xread_blocking(
     except Exception as e:
         logger.warning(f"redis_xread_blocking_failed session={session_id[:8]}: {e}")
         return []
+
+
+async def reconstruct_from_stream(session_id: str) -> tuple:
+    """Redis Stream에서 전체 텍스트 복원 (서버 재시작 후 복구용).
+
+    Returns:
+        (full_text: str, is_complete: bool)
+        - full_text: SSE delta 이벤트에서 추출한 전체 텍스트
+        - is_complete: done 마커가 있으면 True (완성된 응답)
+    """
+    try:
+        r = await _get_redis()
+        key = _stream_key(session_id)
+        if not await r.exists(key):
+            return "", False
+
+        entries = await r.xrange(key, "-", "+")
+        full_text = ""
+        is_done = False
+
+        for _entry_id, fields in entries:
+            if fields.get("done") == "true":
+                is_done = True
+                continue
+            data = fields.get("data", "")
+            if not data:
+                continue
+            # SSE 이벤트 파싱: "data: {json}\n\n"
+            for line in data.split("\n"):
+                line = line.strip()
+                if line.startswith("data: "):
+                    try:
+                        payload = json.loads(line[6:])
+                        ptype = payload.get("type", "")
+                        if ptype == "delta":
+                            full_text += payload.get("content", "")
+                        elif ptype == "tool_status":
+                            pass  # 도구 상태는 텍스트가 아님
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+
+        return full_text, is_done
+    except Exception as e:
+        logger.warning(f"reconstruct_from_stream_failed session={session_id[:8]}: {e}")
+        return "", False
 
 
 async def health_check() -> bool:
