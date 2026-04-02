@@ -460,13 +460,16 @@ class PipelineCJob:
         self.status = "running"
         try:
             # Phase 5: 푸시 (commit은 Runner가 작업 완료 시 이미 수행)
+            # cross-process flock으로 Chat-Direct git 작업과 충돌 방지
             self._log("deploying", "git push 진행 중...")
             await self._post_to_chat(
                 f"🚀 **[배포 시작]** `{self.job_id}`\n"
                 f"CEO 승인 완료. git push + 서비스 재시작 진행 중..."
             )
 
-            push_result = await self._ssh_command("git push")
+            from app.core.git_lock import git_project_lock
+            async with git_project_lock(self.project, timeout=60):
+                push_result = await self._ssh_command("git push")
             self._log("push_done", f"push 완료: {push_result[:200]}")
 
             # 서비스 재시작

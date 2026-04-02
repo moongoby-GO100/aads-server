@@ -3243,5 +3243,146 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             await bot.send_message(msg)
             return f"알림 발송 완료: {msg[:100]}"
         return "[ERROR] 텔레그램 봇 미설정"
+    # ── 원격 쓰기/실행 도구 (AADS-190 Phase 1) ─────────────────────────────
+    elif name == "write_remote_file":
+        return await tool_write_remote_file(
+            params.get("project", ""),
+            params.get("file_path", ""),
+            params.get("content", ""),
+            params.get("backup", True),
+        )
+    elif name == "patch_remote_file":
+        return await tool_patch_remote_file(
+            params.get("project", ""),
+            params.get("file_path", ""),
+            params.get("old_string", ""),
+            params.get("new_string", ""),
+        )
+    elif name == "run_remote_command":
+        return await tool_run_remote_command(
+            params.get("project", ""),
+            params.get("command", ""),
+        )
+    # ── Git 원격 도구 (AADS-190) ──────────────────────────────────────────
+    elif name == "git_remote_status":
+        return await tool_git_remote_status(params.get("project", ""))
+    elif name == "git_remote_add":
+        return await tool_git_remote_add(params.get("project", ""), params.get("files", "."))
+    elif name == "git_remote_commit":
+        return await tool_git_remote_commit(params.get("project", ""), params.get("message", ""))
+    elif name == "git_remote_push":
+        return await tool_git_remote_push(params.get("project", ""), params.get("branch", ""))
+    elif name == "git_remote_create_branch":
+        return await tool_git_remote_create_branch(params.get("project", ""), params.get("branch_name", ""))
+    # ── 스크린샷 (독립 캡처) ──────────────────────────────────────────────
+    elif name == "capture_screenshot":
+        return await tool_capture_screenshot(params.get("url", ""), params.get("full_page", False))
+    # ── 프로젝트 DB 도구 ─────────────────────────────────────────────────
+    elif name == "query_project_database":
+        from app.api.ceo_chat_tools_db import query_project_database
+        return json.dumps(await query_project_database(
+            project=params.get("project", ""),
+            query=params.get("query", ""),
+            db_name=params.get("db_name", ""),
+            limit=params.get("limit", 100),
+        ), ensure_ascii=False, default=str)
+    elif name == "list_project_databases":
+        from app.api.ceo_chat_tools_db import list_project_databases
+        return json.dumps(await list_project_databases(), ensure_ascii=False, default=str)
+    # ── 내보내기 도구 ─────────────────────────────────────────────────────
+    elif name == "export_data":
+        from app.api.ceo_chat_tools_export import export_data
+        result = await export_data(
+            data_source=params.get("data_source", ""),
+            format=params.get("format", "csv"),
+            query=params.get("query", ""),
+            filters=params.get("filters", {}),
+        )
+        return json.dumps(result, ensure_ascii=False, default=str)
+    # ── 스케줄러 도구 ─────────────────────────────────────────────────────
+    elif name == "schedule_task":
+        from app.api.ceo_chat_tools_scheduler import schedule_task
+        result = await schedule_task(
+            name=params.get("name", ""),
+            schedule=params.get("schedule", ""),
+            action_type=params.get("action_type", "tool_call"),
+            action_config=params.get("action_config", {}),
+            description=params.get("description", ""),
+        )
+        return json.dumps(result, ensure_ascii=False, default=str)
+    elif name == "unschedule_task":
+        from app.api.ceo_chat_tools_scheduler import unschedule_task
+        result = await unschedule_task(name=params.get("name", ""))
+        return json.dumps(result, ensure_ascii=False, default=str)
+    elif name == "list_scheduled_tasks":
+        from app.api.ceo_chat_tools_scheduler import list_scheduled_tasks
+        result = await list_scheduled_tasks()
+        return json.dumps(result, ensure_ascii=False, default=str)
+    # ── 작업 모니터링 도구 ────────────────────────────────────────────────
+    elif name == "check_task_status":
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            pc_rows = await conn.fetch(
+                "SELECT job_id AS task_id, project, instruction AS title, "
+                "'pipeline_c' AS pipeline, phase, status, created_at "
+                "FROM pipeline_jobs "
+                "WHERE status IN ('running','awaiting_approval','queued') "
+                "OR updated_at > NOW() - interval '1 hour' "
+                "ORDER BY created_at DESC LIMIT 10"
+            )
+        tasks = [{"task_id": r["task_id"], "project": r["project"] or "", "title": (r["title"] or "")[:150], "pipeline": r["pipeline"], "phase": r["phase"] or "", "status": r["status"] or ""} for r in pc_rows]
+        return json.dumps({"tasks": tasks, "count": len(tasks)}, ensure_ascii=False, default=str)
+    elif name == "read_task_logs":
+        task_id = params.get("task_id", "")
+        if not task_id:
+            return "[ERROR] task_id 필수"
+        last_n = min(int(params.get("last_n", 30) or 30), 100)
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT log_type, content, phase, created_at FROM task_logs "
+                "WHERE task_id = $1 ORDER BY created_at DESC LIMIT $2",
+                task_id, last_n,
+            )
+        logs = [{"type": r["log_type"], "content": r["content"], "phase": r["phase"] or "", "at": r["created_at"].isoformat()} for r in reversed(rows)]
+        return json.dumps({"task_id": task_id, "logs": logs, "count": len(logs)}, ensure_ascii=False, default=str)
+    elif name == "terminate_task":
+        task_id = params.get("task_id", "")
+        if not task_id:
+            return "[ERROR] task_id 필수"
+        reason = params.get("reason", "CEO 요청에 의한 강제 종료")
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT job_id, status FROM pipeline_jobs WHERE job_id = $1", task_id)
+            if row and row["status"] in ("running", "queued", "awaiting_approval"):
+                await conn.execute("UPDATE pipeline_jobs SET status = 'error', error_message = $2, updated_at = NOW() WHERE job_id = $1", task_id, reason)
+                return json.dumps({"terminated": task_id, "reason": reason}, ensure_ascii=False)
+            return json.dumps({"error": f"종료할 수 없는 상태: {row['status'] if row else '작업 없음'}"}, ensure_ascii=False)
+    # ── 멀티에이전트/토론 도구 ────────────────────────────────────────────
+    elif name == "run_agent_team":
+        from app.services.agent_orchestrator import run_agent_team
+        result = await run_agent_team(
+            name=params.get("name", "Agent Team"),
+            phases=params.get("phases", []),
+            max_concurrent=params.get("max_concurrent", 5),
+            cost_limit_usd=params.get("cost_limit_usd", 10.0),
+        )
+        return json.dumps(result, ensure_ascii=False, default=str) if isinstance(result, dict) else str(result)
+    elif name == "run_debate":
+        from app.services.debate_service import run_debate
+        result = await run_debate(
+            question=params.get("question", ""),
+            context=params.get("context", ""),
+            perspectives=params.get("perspectives"),
+            session_id=params.get("session_id"),
+        )
+        return json.dumps({
+            "question": result.question,
+            "perspectives": [{"name": p.name, "analysis": p.analysis, "key_points": p.key_points} for p in result.perspectives],
+            "synthesis": result.synthesis,
+        }, ensure_ascii=False, default=str)
     else:
         return f"[ERROR] 알 수 없는 도구: {name}"

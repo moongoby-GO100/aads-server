@@ -172,16 +172,20 @@ async def _send_telegram_approval(approval_id: int, req: ApprovalRequest) -> Opt
     }
     emoji = severity_emoji.get(req.severity, "⚪")
 
+    # HTML 파싱 사용 (Markdown 특수문자 충돌 방지)
+    def _esc(s: str) -> str:
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
     text = (
-        f"{emoji} *AADS Watchdog 승인 요청 #{approval_id}*\n\n"
-        f"*서버*: {req.target_server}\n"
-        f"*제목*: {req.title}\n"
-        f"*설명*: {req.description[:300]}\n\n"
-        f"*제안 조치*: {req.suggested_action[:300]}\n"
-        f"*실행 방식*: {req.action_type}\n"
+        f"{emoji} <b>AADS Watchdog 승인 요청 #{approval_id}</b>\n\n"
+        f"<b>서버</b>: {_esc(req.target_server)}\n"
+        f"<b>제목</b>: {_esc(req.title)}\n"
+        f"<b>설명</b>: {_esc(req.description[:300])}\n\n"
+        f"<b>제안 조치</b>: {_esc(req.suggested_action[:300])}\n"
+        f"<b>실행 방식</b>: {_esc(req.action_type)}\n"
     )
     if req.action_command:
-        text += f"*명령*: `{req.action_command[:200]}`\n"
+        text += f"<b>명령</b>: <code>{_esc(req.action_command[:200])}</code>\n"
 
     keyboard = {
         "inline_keyboard": [[
@@ -193,7 +197,7 @@ async def _send_telegram_approval(approval_id: int, req: ApprovalRequest) -> Opt
     payload = json.dumps({
         "chat_id": chat_id,
         "text": text,
-        "parse_mode": "Markdown",
+        "parse_mode": "HTML",
         "reply_markup": keyboard,
     }).encode()
 

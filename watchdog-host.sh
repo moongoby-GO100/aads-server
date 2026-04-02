@@ -70,8 +70,15 @@ case "$STATUS" in
                 exit 0
             fi
             touch "$COOLDOWN_FILE"
-            # [2026-04-02] 자동 재시작 제거 — 상호 감시 충돌 방지
-            notify "🚨 unhealthy 3x — CEO 확인 필요 (자동 재시작 비활성화)"
+            # [2026-04-02 v2] supervisorctl restart 1회 자동 시도 (컨테이너 재생성 아님)
+            notify "⚠️ unhealthy 3x (API state: ${API_STATE:-unknown}) — supervisorctl restart 1회 시도"
+            docker exec aads-server supervisorctl restart aads-api
+            sleep 10
+            if curl -sf --max-time 15 "$HEALTH_URL" >/dev/null 2>&1; then
+                notify "✅ supervisorctl restart 후 복구 성공"
+            else
+                notify "❌ supervisorctl restart 실패 — CEO 수동 조치 필요"
+            fi
             exit 0
         fi
 

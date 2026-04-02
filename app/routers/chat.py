@@ -138,8 +138,10 @@ async def get_messages(
 ):
     """메시지 목록 — cursor 기반 페이지네이션 (offset 레거시 호환 유지)."""
     # 레거시 offset 모드: offset이 명시적으로 전달된 경우
-    if offset is not None:
-        return await svc.list_messages(str(session_id), limit=limit, offset=offset, sort=sort)
+    # FIX: sort=desc 요청은 프론트엔드 폴링 핸들러에서 ChatMessage[] 배열을 기대함
+    # cursor 모드는 항상 ASC + {messages,...} 객체를 반환하므로 sort=desc일 때 offset 모드로 전환
+    if offset is not None or (sort == "desc" and cursor is None):
+        return await svc.list_messages(str(session_id), limit=limit, offset=offset or 0, sort=sort)
     # cursor 모드: PaginatedMessagesOut 반환
     return await svc.list_messages_cursor(str(session_id), limit=limit, cursor=cursor)
 

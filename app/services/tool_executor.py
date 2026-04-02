@@ -194,6 +194,19 @@ class ToolExecutor:
             # AADS-195 Phase 3: PC Agent 도구
             "pc_execute":             self._pc_execute,
             "pc_list_agents":         self._pc_list_agents,
+            # 유령 도구 해소 (Claude+Gemini 양쪽 경로 통일)
+            "generate_image":          self._generate_image,
+            "send_telegram":           self._send_telegram,
+            "fact_check":              self._fact_check,
+            "fact_check_multiple":     self._fact_check_multiple,
+            "execute_sandbox":         self._execute_sandbox,
+            "search_logs":             self._search_logs,
+            "send_alert_message":      self._send_alert_message,
+            "evaluate_alerts":         self._evaluate_alerts,
+            "visual_qa_test":          self._visual_qa_test,
+            "search_naver_multi":      self._search_naver_multi,
+            "gemini_grounding_search": self._gemini_grounding_search,
+            "search_chat_history":     self._search_chat_history,
         }
         fn = dispatch.get(tool_name)
         if fn is None:
@@ -383,19 +396,23 @@ class ToolExecutor:
             except Exception as _hre:
                 logger.warning(f"hot_reload_trigger_skip: {_hre}")
 
-        # 2) git add + commit + push (AADS 프로젝트만)
+        # 2) git add + commit + push (AADS 프로젝트만, cross-process flock 보호)
         if project == "AADS":
             try:
                 from app.api.ceo_chat_tools import tool_git_remote_add, tool_git_remote_commit, tool_git_remote_push
+                from app.core.git_lock import git_project_lock
                 commit_msg = f"Chat-Direct: {file_path} 수정"
-                await tool_git_remote_add(project, file_path)
-                commit_result = await tool_git_remote_commit(project, commit_msg)
-                logger.info(f"post_hook_commit: {commit_result}")
-                # main 브랜치 push 시도, 실패 시 master fallback
-                push_result = await tool_git_remote_push(project, "main")
-                if "[ERROR]" in str(push_result) or "error" in str(push_result).lower():
-                    push_result = await tool_git_remote_push(project, "master")
-                logger.info(f"post_hook_push: {push_result}")
+                async with git_project_lock(project, timeout=60):
+                    await tool_git_remote_add(project, file_path)
+                    commit_result = await tool_git_remote_commit(project, commit_msg)
+                    logger.info(f"post_hook_commit: {commit_result}")
+                    # main 브랜치 push 시도, 실패 시 master fallback
+                    push_result = await tool_git_remote_push(project, "main")
+                    if "[ERROR]" in str(push_result) or "error" in str(push_result).lower():
+                        push_result = await tool_git_remote_push(project, "master")
+                    logger.info(f"post_hook_push: {push_result}")
+            except TimeoutError as _te:
+                logger.warning(f"post_hook_git_lock_timeout: {_te}")
             except Exception as _ge:
                 logger.warning(f"post_hook_git_skip: {_ge}")
 
@@ -2398,6 +2415,121 @@ class ToolExecutor:
         """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
         from app.api.ceo_chat_tools import execute_tool
         return await execute_tool("update_agenda", inp, "", "")
+
+    # ── 유령 도구 해소: 12개 핸들러 (클래스 내부) ────────────────────────────
+
+    async def _generate_image(self, inp: Dict[str, Any]) -> Any:
+        """이미지 생성."""
+        from app.services.image_service import image_service
+        result = await image_service.generate(inp.get("prompt", ""), inp.get("size", "1024x1024"))
+        return result
+
+    async def _send_telegram(self, inp: Dict[str, Any]) -> Any:
+        """텔레그램 메시지 전송."""
+        from app.services.telegram_bot import get_telegram_bot
+        bot = get_telegram_bot()
+        if bot and bot.is_ready:
+            await bot.send_message(inp.get("message", ""))
+            return "텔레그램 전송 완료"
+        return {"error": "텔레그램 봇 미설정"}
+
+    async def _fact_check(self, inp: Dict[str, Any]) -> Any:
+        """단일 팩트체크."""
+        from app.services.fact_checker import FactChecker
+        checker = FactChecker()
+        result = await checker.check(inp.get("claim", ""))
+        return result.to_dict()
+
+    async def _fact_check_multiple(self, inp: Dict[str, Any]) -> Any:
+        """다중 팩트체크."""
+        from app.services.fact_checker import FactChecker
+        checker = FactChecker()
+        results = await checker.check_multiple(inp.get("claims", []))
+        return [r.to_dict() for r in results]
+
+    async def _execute_sandbox(self, inp: Dict[str, Any]) -> Any:
+        """샌드박스 코드 실행."""
+        from app.services.sandbox import execute_code
+        result = await execute_code(
+            inp.get("code", ""),
+            inp.get("language", "python"),
+            inp.get("timeout", 30),
+        )
+        return result
+
+    async def _search_logs(self, inp: Dict[str, Any]) -> Any:
+        """Docker 컨테이너 로그 검색."""
+        from app.api.ceo_chat_tools import tool_search_logs
+        return await tool_search_logs(inp.get("source", ""), inp.get("keyword"))
+
+    async def _send_alert_message(self, inp: Dict[str, Any]) -> Any:
+        """레벨 지정 알림 메시지 전송."""
+        from app.services.telegram_bot import get_telegram_bot
+        bot = get_telegram_bot()
+        level = inp.get("level", "info")
+        msg = f"[{level.upper()}] {inp.get('message', '')}"
+        if bot and bot.is_ready:
+            await bot.send_message(msg)
+            return f"알림 발송 완료: {msg[:100]}"
+        return {"error": "텔레그램 봇 미설정"}
+
+    async def _evaluate_alerts(self, inp: Dict[str, Any]) -> Any:
+        """알림 규칙 평가 및 발송."""
+        from app.services.alert_manager import get_alert_manager
+        mgr = get_alert_manager()
+        alerts = await mgr.evaluate_rules()
+        for alert in alerts:
+            await mgr.send_alert(alert)
+        return f"알림 평가 완료: {len(alerts)}건 발송"
+
+    async def _visual_qa_test(self, inp: Dict[str, Any]) -> Any:
+        """Visual QA 테스트 (현재 배치 모드만 지원)."""
+        return "[INFO] Visual QA는 현재 Playwright 기반 배치 모드만 지원. capture_screenshot + read_remote_file 조합 사용 권장."
+
+    async def _search_naver_multi(self, inp: Dict[str, Any]) -> Any:
+        """네이버 다중 유형 검색."""
+        from app.services.naver_search_service import NaverSearchService
+        svc = NaverSearchService()
+        if not svc.is_available():
+            return {"error": "NAVER API 키 미설정"}
+        results = await svc.multi_search(
+            inp.get("query", ""),
+            inp.get("types", ["webkr", "news", "blog"]),
+        )
+        return [
+            {
+                "type": r.sources[0]["type"] if r.sources else "unknown",
+                "answer": r.answer,
+                "sources": r.sources,
+            }
+            for r in results
+        ]
+
+    async def _gemini_grounding_search(self, inp: Dict[str, Any]) -> Any:
+        """Gemini Grounding 검색."""
+        from app.services.gemini_search_service import GeminiSearchService
+        svc = GeminiSearchService()
+        result = await svc.search_grounded(inp.get("query", ""), inp.get("context", ""))
+        return {
+            "answer": result.answer,
+            "sources": result.sources,
+            "grounding_score": result.grounding_score,
+        }
+
+    async def _search_chat_history(self, inp: Dict[str, Any]) -> Any:
+        """채팅 히스토리 검색."""
+        from app.api.ceo_chat_tools import tool_search_chat_history
+        import os
+        return await tool_search_chat_history(
+            query=inp.get("query", ""),
+            dsn=os.environ.get("DATABASE_URL", ""),
+            mode=inp.get("mode", "keyword"),
+            session_id=inp.get("session_id", ""),
+            date_from=inp.get("date_from", ""),
+            date_to=inp.get("date_to", ""),
+            role=inp.get("role", "all"),
+            limit=inp.get("limit", 10),
+        )
 
 # ─── 하위 호환성 ─────────────────────────────────────────────────────────────
 
