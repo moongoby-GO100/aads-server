@@ -487,16 +487,16 @@ run_job() {
         local token_slot="${TOKEN_CYCLE[$attempt]}"
         local cycle_num=$(( attempt / 2 + 1 ))
 
-        # 계정 스위치: 토큰 교체 (OAuth 채널 사용 — R-AUTH)
-        # CLI는 CLAUDE_CODE_OAUTH_TOKEN으로 oat 토큰을 받아야 함
-        # ANTHROPIC_API_KEY에 oat 토큰을 넣으면 401 OAuth 거부됨
+        # 계정 스위치: 토큰 교체 (R-AUTH)
+        # OAuth 토큰을 ANTHROPIC_API_KEY로 전달 → CLI가 x-api-key 헤더로 전송
+        # CLAUDE_CODE_OAUTH_TOKEN 사용 금지 → OAuth Bearer flow 트리거 → 401
         if [[ "$token_slot" == "2" && -n "$TOKEN_2" ]]; then
-            export CLAUDE_CODE_OAUTH_TOKEN="$TOKEN_2"
-            unset ANTHROPIC_API_KEY 2>/dev/null || true
-            log "  TOKEN_SWITCH job=$job_id → 계정2(Naver) via OAUTH_TOKEN"
+            export ANTHROPIC_API_KEY="$TOKEN_2"
+            unset CLAUDE_CODE_OAUTH_TOKEN 2>/dev/null || true
+            log "  TOKEN_SWITCH job=$job_id → 계정2(Naver) via API_KEY"
         else
-            export CLAUDE_CODE_OAUTH_TOKEN="$TOKEN_1"
-            unset ANTHROPIC_API_KEY 2>/dev/null || true
+            export ANTHROPIC_API_KEY="$TOKEN_1"
+            unset CLAUDE_CODE_OAUTH_TOKEN 2>/dev/null || true
             [[ "$token_slot" == "2" ]] && log "  TOKEN_SWITCH job=$job_id → 계정2 없음, 계정1 유지"
         fi
 
