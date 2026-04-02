@@ -20,7 +20,7 @@ if [ -f "$_AADS_ENV" ]; then
     if [ -n "$_GMAIL_TOKEN" ]; then
         export CLAUDE_CODE_OAUTH_TOKEN="$_GMAIL_TOKEN"
         # LiteLLM 라우팅 비활성화 (OAuth 토큰은 직접 api.anthropic.com으로)
-        unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL  # AUTH_TOKEN 전환 전 구버전 정리
+        unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL  # AUTH_TOKEN 전환 전 구버전 정리  # AUTH_TOKEN 전환 전 구버전 정리
     fi
     unset _GMAIL_TOKEN _AADS_ENV
 fi"""
