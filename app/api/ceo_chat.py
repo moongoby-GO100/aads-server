@@ -40,6 +40,10 @@ from app.core.auth_provider import create_anthropic_client, get_oauth_tokens
 logger = logging.getLogger(__name__)
 settings = Settings()
 
+import os as _os
+# 환경변수화: CEO 채팅 max_tokens 최고한도
+_MAX_TOKENS_CEO = int(_os.getenv("MAX_TOKENS_CEO_CHAT", "32768"))
+
 
 def _anthropic_error_try_next_oauth_key(exc: APIStatusError) -> bool:
     """402/429/403 또는 응답에 limit(한도) 안내가 있으면 다음 OAuth 토큰으로 재시도."""
@@ -335,7 +339,7 @@ async def _call_anthropic(model: str, system_prompt: str, messages: List[Dict]) 
         try:
             resp = await client.messages.create(
                 model=model,
-                max_tokens=2000,
+                max_tokens=_MAX_TOKENS_CEO,
                 system=_to_cached_system_blocks(system_prompt),
                 messages=messages,
             )
@@ -365,7 +369,7 @@ async def _call_openai(model: str, system_prompt: str, messages: List[Dict]) -> 
     all_messages = [{"role": "system", "content": system_prompt}] + messages
     resp = await openai_client.chat.completions.create(
         model=model,
-        max_tokens=2000,
+        max_tokens=_MAX_TOKENS_CEO,
         messages=all_messages,
     )
     text = resp.choices[0].message.content or ""
@@ -404,7 +408,7 @@ async def _call_anthropic_with_tools(
             try:
                 resp = await client.messages.create(
                     model=model,
-                    max_tokens=4096,
+                    max_tokens=_MAX_TOKENS_CEO,
                     system=_to_cached_system_blocks(system_prompt),
                     messages=current_messages,
                     tools=TOOL_DEFINITIONS,
@@ -485,7 +489,7 @@ async def _call_gemini(model: str, system_prompt: str, messages: List[Dict]) -> 
         llm = ChatGoogleGenerativeAI(
             model=model,
             google_api_key=api_key,
-            max_output_tokens=2000,
+            max_output_tokens=_MAX_TOKENS_CEO,
             temperature=0.1,
         )
         lc_msgs = [SystemMessage(content=system_prompt)]
@@ -917,7 +921,7 @@ async def _handle_execute_intent(
         try:
             resp = await client.messages.create(
                 model=tool_model,
-                max_tokens=1024,
+                max_tokens=_MAX_TOKENS_CEO,
                 system=directive_system,
                 messages=messages,
             )
@@ -1181,7 +1185,7 @@ async def _handle_cross_project_qa(
         try:
             response = await client.messages.create(
                 model=analysis_model,
-                max_tokens=4096,
+                max_tokens=_MAX_TOKENS_CEO,
                 system=_CODE_REVIEW_SYSTEM_PROMPT,
                 messages=analysis_messages,
             )

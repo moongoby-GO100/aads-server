@@ -30,6 +30,12 @@ _LITELLM_BASE_RESOLVED = (os.getenv("LITELLM_BASE_URL") or "").strip() or "http:
 _LITELLM_URL = _LITELLM_BASE_RESOLVED
 LITELLM_BASE_URL = _LITELLM_BASE_RESOLVED
 
+# 환경변수화: max_tokens 최고한도 (재배포 없이 .env로 조정 가능)
+_MAX_TOKENS_CLAUDE = int(os.getenv("MAX_TOKENS_CLAUDE", "32768"))
+_MAX_TOKENS_CLAUDE_THINKING = int(os.getenv("MAX_TOKENS_CLAUDE_THINKING", "128000"))
+_MAX_TOKENS_GEMINI = int(os.getenv("MAX_TOKENS_GEMINI", "65536"))
+_MAX_TOKENS_GEMINI_THINKING = int(os.getenv("MAX_TOKENS_GEMINI_THINKING", "65536"))
+
 class _StripAuthTransport(httpx.AsyncBaseTransport):
     """SDK 자동 Authorization 헤더 제거 — LiteLLM x-api-key만 사용."""
     def __init__(self):
@@ -536,7 +542,7 @@ async def _stream_litellm_anthropic(
                     "model": litellm_model,
                     "system": _cached_system,
                     "messages": current_msgs,
-                    "max_tokens": 16384,
+                    "max_tokens": _MAX_TOKENS_CLAUDE,
                     "stream": True,
                 }
                 if _cached_tools:
@@ -736,7 +742,7 @@ async def _stream_litellm_openai(
 
     # Thinking 모델: reasoning_effort=low로 사고 토큰 절감 + max_tokens 확대
     is_thinking = model in _GEMINI_THINKING_MODELS
-    max_tokens = 32768 if is_thinking else 16384
+    max_tokens = _MAX_TOKENS_GEMINI_THINKING if is_thinking else _MAX_TOKENS_GEMINI
     extra_params: Dict[str, Any] = {}
     if is_thinking:
         extra_params["reasoning_effort"] = "low"
@@ -1615,7 +1621,7 @@ async def _stream_anthropic(
         and intent_result.use_extended_thinking
         and model_alias in ("claude-opus", "claude-sonnet")
     )
-    max_tokens = 128000 if use_thinking else 16384
+    max_tokens = _MAX_TOKENS_CLAUDE_THINKING if use_thinking else _MAX_TOKENS_CLAUDE
 
     # 시스템 프롬프트 (Prompt Caching: Layer 1 정적 부분에 cache_control)
     system_blocks = _build_system_with_cache(system_prompt)

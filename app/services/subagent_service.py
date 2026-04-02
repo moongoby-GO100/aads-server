@@ -31,7 +31,7 @@ _MODEL_MAP = {
 
 # 서브에이전트 기본 설정
 _DEFAULT_MODEL = "sonnet"
-_MAX_TOKENS = 16384
+_MAX_TOKENS = int(__import__('os').getenv("MAX_TOKENS_SUBAGENT", "32768"))
 _MAX_TOOL_TURNS = 50  # 도구 루프 최대 반복
 _SUBAGENT_TIMEOUT = 600  # 초 (10분)
 
