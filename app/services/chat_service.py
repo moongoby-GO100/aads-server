@@ -306,6 +306,38 @@ async def with_background_completion(
             # BaseException: CancelledError, GeneratorExit 등 모두 잡음
             import traceback as _tb
             logger.warning(f"bg_producer_error session={session_id}: {type(e).__name__}: {e}\n{''.join(_tb.format_exception(type(e), e, e.__traceback__))}")
+            # Rate limit / quota 에러 감지: placeholder를 삭제하지 않고 rate_limited로 표시
+            _err_str = str(e).lower()
+            _is_rate_limit = (
+                "ratelimit" in type(e).__name__.lower()
+                or "429" in _err_str
+                or "rate" in _err_str
+                or "overloaded" in _err_str
+                or "529" in _err_str
+                or "quota" in _err_str
+            )
+            if _is_rate_limit:
+                try:
+                    _pool = get_pool()
+                    async with _pool.acquire() as _conn:
+                        # partial content에서 ⏳ 마커 제거 후 rate_limited intent로 보존
+                        _partial = state.get("content", "")
+                        _partial_clean = re.sub(r'\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\s*$', '', _partial).rstrip()
+                        _rate_content = (
+                            (_partial_clean + "\n\n⚠️ _API rate limit / 과부하로 응답이 일시 중단되었습니다. 잠시 후 자동으로 이어서 생성됩니다._")
+                            if _partial_clean
+                            else "⚠️ _API rate limit / 과부하로 응답 생성이 중단되었습니다. 잠시 후 자동으로 이어서 생성됩니다._"
+                        )
+                        _updated = await _conn.execute(
+                            "UPDATE chat_messages SET content = $1, intent = 'rate_limited', model_used = 'rate_limited' "
+                            "WHERE session_id = $2 AND intent = 'streaming_placeholder'",
+                            _rate_content, uuid.UUID(session_id),
+                        )
+                        logger.warning(f"rate_limit_placeholder_preserved session={session_id[:8]} partial_len={len(_partial_clean)} updated={_updated}")
+                        # _delete_streaming_placeholder 호출을 건너뛰기 위해 state에 플래그 설정
+                        state["_rate_limited"] = True
+                except Exception as _rl_err:
+                    logger.warning(f"rate_limit_preserve_failed session={session_id[:8]}: {_rl_err}")
         finally:
             # heartbeat 태스크 정지 신호 (producer 완료 시 heartbeat 불필요)
             _hb_stop.set()
@@ -328,10 +360,12 @@ async def with_background_completion(
             except Exception:
                 pass
             # 스트리밍 완료 → placeholder 삭제 (최종 응답이 generator 내부에서 저장됨)
-            try:
-                await _delete_streaming_placeholder(session_id)
-            except Exception as del_err:
-                logger.warning(f"bg_producer_placeholder_delete_err session={session_id}: {del_err}")
+            # rate_limited 에러 시에는 placeholder가 이미 rate_limited intent로 보존되어 있으므로 삭제 금지
+            if not state.get("_rate_limited", False):
+                try:
+                    await _delete_streaming_placeholder(session_id)
+                except Exception as del_err:
+                    logger.warning(f"bg_producer_placeholder_delete_err session={session_id}: {del_err}")
             # 상태를 즉시 삭제하지 않고 completed로 전환 (세션 복귀 시 감지용, 90초 후 자동 정리)
             if session_id in _streaming_state:
                 _streaming_state[session_id]["completed"] = True
@@ -555,12 +589,13 @@ async def resume_interrupted_streams() -> int:
     try:
         pool = get_pool()
         async with pool.acquire() as conn:
-            # streaming_placeholder가 남은 세션 + 마지막 user 메시지 조회
+            # streaming_placeholder 또는 rate_limited가 남은 세션 + 마지막 user 메시지 조회
             rows = await conn.fetch("""
                 SELECT DISTINCT ON (m.session_id)
                     m.session_id,
                     m.id AS placeholder_id,
                     m.content AS partial_content,
+                    m.intent AS placeholder_intent,
                     (SELECT content FROM chat_messages
                      WHERE session_id = m.session_id AND role = 'user'
                      ORDER BY created_at DESC LIMIT 1) AS last_user_msg,
@@ -568,7 +603,7 @@ async def resume_interrupted_streams() -> int:
                      JOIN chat_sessions s ON s.workspace_id = w.id
                      WHERE s.id = m.session_id) AS workspace_name
                 FROM chat_messages m
-                WHERE m.intent = 'streaming_placeholder'
+                WHERE m.intent IN ('streaming_placeholder', 'rate_limited')
                 ORDER BY m.session_id, m.created_at DESC
             """)
 
@@ -632,14 +667,14 @@ async def _resume_single_stream(
         pool = get_pool()
         sid = uuid.UUID(session_id)
 
-        # 1. 히스토리 로드 (placeholder 제외)
+        # 1. 히스토리 로드 (placeholder / rate_limited 제외)
         async with pool.acquire() as conn:
             hist_rows = await conn.fetch("""
                 SELECT role, content FROM (
                     SELECT role, content, created_at FROM chat_messages
                     WHERE session_id = $1
                       AND (is_compacted IS NULL OR is_compacted = false)
-                      AND intent != 'streaming_placeholder'
+                      AND intent NOT IN ('streaming_placeholder', 'rate_limited')
                     ORDER BY created_at DESC LIMIT 30
                 ) sub ORDER BY created_at ASC
             """, sid)
