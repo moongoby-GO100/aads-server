@@ -1,0 +1,21 @@
+[Unit]
+Description=AADS Telegram Approval Bot
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/aads/scripts
+ExecStart=/usr/bin/python3 /root/aads/scripts/tg_approval_bot.py
+Restart=always
+RestartSec=10
+Environment=TELEGRAM_BOT_TOKEN=8685636032:AAG4uePs1SW3FI9UGrTin1gG5GUrCv4-WaQ
+Environment=TELEGRAM_CHAT_ID=6817948795
+Environment=AADS_API_BASE=http://localhost:8100
+Environment=MONITOR_KEY=
+StandardOutput=append:/var/log/tg_approval_bot.log
+StandardError=append:/var/log/tg_approval_bot.log
+
+[Install]
+WantedBy=multi-user.target
