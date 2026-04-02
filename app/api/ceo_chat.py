@@ -36,6 +36,7 @@ from pydantic import BaseModel
 from anthropic import APIStatusError
 from app.config import Settings
 from app.core.auth_provider import create_anthropic_client, get_oauth_tokens
+from app.services.oauth_usage_tracker import log_usage as _log_oauth_usage
 
 logger = logging.getLogger(__name__)
 settings = Settings()
@@ -332,27 +333,53 @@ def _to_cached_system_blocks(system_prompt: str) -> list:
 
 
 async def _call_anthropic(model: str, system_prompt: str, messages: List[Dict]) -> Tuple[str, int, int]:
-    """Anthropic API 직접 호출. 402/429/403·한도 메시지 시 다음 OAuth 토큰으로 자동 전환."""
-    clients = _ceo_oauth_anthropic_clients()
+    """Anthropic API 직접 호출. 402/429/403·한도 메시지 시 다음 OAuth 토큰으로 자동 전환.
+    with_raw_response로 rate-limit 헤더 캡처 + oauth_usage_log DB 기록."""
+    import time as _t
+    tokens = get_oauth_tokens()
     last_exc: Optional[Exception] = None
-    for idx, client in enumerate(clients):
+    for idx, token in enumerate(tokens):
+        if not token:
+            continue
+        client = create_anthropic_client(token=token)
+        t0 = _t.monotonic()
         try:
-            resp = await client.messages.create(
+            raw = await client.messages.with_raw_response.create(
                 model=model,
                 max_tokens=_MAX_TOKENS_CEO,
                 system=_to_cached_system_blocks(system_prompt),
                 messages=messages,
             )
+            resp = raw.parse()
+            duration_ms = int((_t.monotonic() - t0) * 1000)
             text = resp.content[0].text
+            _log_oauth_usage(
+                token=token, model=model,
+                input_tokens=resp.usage.input_tokens,
+                output_tokens=resp.usage.output_tokens,
+                cache_creation_tokens=getattr(resp.usage, "cache_creation_input_tokens", 0) or 0,
+                cache_read_tokens=getattr(resp.usage, "cache_read_input_tokens", 0) or 0,
+                headers=raw.headers,
+                call_source="ceo_chat",
+                duration_ms=duration_ms,
+            )
             return text, resp.usage.input_tokens, resp.usage.output_tokens
         except APIStatusError as e:
+            duration_ms = int((_t.monotonic() - t0) * 1000)
+            _err_code = str(getattr(e, "status_code", "error"))
+            _log_oauth_usage(
+                token=token, model=model,
+                call_source="ceo_chat",
+                error_code=_err_code,
+                duration_ms=duration_ms,
+            )
             if _anthropic_error_try_next_oauth_key(e):
                 logger.warning(
                     "anthropic_oauth_try_next",
                     model=model,
                     status=e.status_code,
                     key_index=idx + 1,
-                    trying_next=(idx < len(clients) - 1),
+                    trying_next=(idx < len(tokens) - 1),
                     detail=str(e)[:120],
                 )
                 last_exc = e
@@ -391,10 +418,11 @@ async def _call_anthropic_with_tools(
     while 루프: stop_reason='tool_use' → 도구 실행 → 결과 재전달.
     stop_reason='end_turn' 또는 max_iterations 초과 시 종료.
     """
+    import time as _t
     from app.api.ceo_chat_tools import TOOL_DEFINITIONS, execute_tool
 
-    clients = _ceo_oauth_anthropic_clients()
-    if not clients:
+    tokens = get_oauth_tokens()
+    if not tokens:
         raise RuntimeError("Anthropic API 클라이언트 없음")
 
     total_input = 0
@@ -404,17 +432,43 @@ async def _call_anthropic_with_tools(
     for iteration in range(max_iterations):
         last_exc: Optional[Exception] = None
         resp = None
-        for client in clients:
+        _used_token = ""
+        for token in tokens:
+            if not token:
+                continue
+            client = create_anthropic_client(token=token)
+            t0 = _t.monotonic()
             try:
-                resp = await client.messages.create(
+                raw = await client.messages.with_raw_response.create(
                     model=model,
                     max_tokens=_MAX_TOKENS_CEO,
                     system=_to_cached_system_blocks(system_prompt),
                     messages=current_messages,
                     tools=TOOL_DEFINITIONS,
                 )
+                resp = raw.parse()
+                duration_ms = int((_t.monotonic() - t0) * 1000)
+                _used_token = token
+                _log_oauth_usage(
+                    token=token, model=model,
+                    input_tokens=resp.usage.input_tokens,
+                    output_tokens=resp.usage.output_tokens,
+                    cache_creation_tokens=getattr(resp.usage, "cache_creation_input_tokens", 0) or 0,
+                    cache_read_tokens=getattr(resp.usage, "cache_read_input_tokens", 0) or 0,
+                    headers=raw.headers,
+                    call_source="ceo_chat_tools",
+                    session_id=chat_session_id,
+                    duration_ms=duration_ms,
+                )
                 break
             except APIStatusError as e:
+                duration_ms = int((_t.monotonic() - t0) * 1000)
+                _log_oauth_usage(
+                    token=token, model=model,
+                    call_source="ceo_chat_tools",
+                    error_code=str(getattr(e, "status_code", "error")),
+                    duration_ms=duration_ms,
+                )
                 if _anthropic_error_try_next_oauth_key(e):
                     last_exc = e
                     continue

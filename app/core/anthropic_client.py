@@ -11,6 +11,7 @@ import asyncio
 import os
 import json
 import logging
+import time
 from typing import Optional
 
 import httpx
@@ -44,24 +45,53 @@ async def call_llm_with_fallback(
 
     Returns: 응답 텍스트 또는 None (전부 실패 시)
     """
-    # 1순위/2순위: Claude (Naver → Gmail) + 일시적 에러 재시도
+    from app.services.oauth_usage_tracker import log_usage
+
     _MAX_RETRIES = 2
     keys_to_try = get_oauth_tokens()
     for key in keys_to_try:
         for _attempt in range(_MAX_RETRIES + 1):
+            t0 = time.monotonic()
             try:
                 client = create_anthropic_client(token=key)
                 msgs = [{"role": "user", "content": prompt}]
                 kwargs = {"model": model, "max_tokens": max_tokens, "messages": msgs}
                 if system:
                     kwargs["system"] = system
-                resp = await client.messages.create(**kwargs)
+                raw = await client.messages.with_raw_response.create(**kwargs)
+                resp = raw.parse()
+                duration_ms = int((time.monotonic() - t0) * 1000)
+                # 사용량 기록 (헤더 포함)
+                log_usage(
+                    token=key,
+                    model=model,
+                    input_tokens=resp.usage.input_tokens,
+                    output_tokens=resp.usage.output_tokens,
+                    cache_creation_tokens=getattr(resp.usage, "cache_creation_input_tokens", 0) or 0,
+                    cache_read_tokens=getattr(resp.usage, "cache_read_input_tokens", 0) or 0,
+                    headers=raw.headers,
+                    call_source="anthropic_client",
+                    duration_ms=duration_ms,
+                )
                 return resp.content[0].text
             except Exception as e:
+                duration_ms = int((time.monotonic() - t0) * 1000)
                 _err_str = str(e).lower()
                 _retryable = any(k in _err_str for k in (
                     "timeout", "overloaded", "529", "rate_limit", "429", "500", "502", "503",
                 ))
+                # 에러도 기록
+                _err_code = None
+                for code in ("429", "402", "401", "403", "500", "502", "503", "529"):
+                    if code in _err_str:
+                        _err_code = code
+                        break
+                log_usage(
+                    token=key, model=model,
+                    call_source="anthropic_client",
+                    error_code=_err_code or "error",
+                    duration_ms=duration_ms,
+                )
                 if _retryable and _attempt < _MAX_RETRIES:
                     _wait = 3 * (2 ** _attempt)  # 3초, 6초
                     logger.warning(
@@ -101,21 +131,51 @@ async def call_llm_messages_with_fallback(**kwargs) -> object:
     Raises:
         Exception: 모든 키에서 실패 시 마지막 예외를 raise
     """
+    from app.services.oauth_usage_tracker import log_usage
+
     _MAX_RETRIES = 2
     keys_to_try = get_oauth_tokens()
     last_error: Optional[Exception] = None
+    _model = kwargs.get("model", "unknown")
 
     for key in keys_to_try:
         for _attempt in range(_MAX_RETRIES + 1):
+            t0 = time.monotonic()
             try:
                 client = create_anthropic_client(token=key)
-                return await client.messages.create(**kwargs)
+                raw = await client.messages.with_raw_response.create(**kwargs)
+                resp = raw.parse()
+                duration_ms = int((time.monotonic() - t0) * 1000)
+                log_usage(
+                    token=key,
+                    model=_model,
+                    input_tokens=resp.usage.input_tokens,
+                    output_tokens=resp.usage.output_tokens,
+                    cache_creation_tokens=getattr(resp.usage, "cache_creation_input_tokens", 0) or 0,
+                    cache_read_tokens=getattr(resp.usage, "cache_read_input_tokens", 0) or 0,
+                    headers=raw.headers,
+                    call_source="anthropic_client_msg",
+                    duration_ms=duration_ms,
+                )
+                return resp
             except Exception as e:
+                duration_ms = int((time.monotonic() - t0) * 1000)
                 last_error = e
                 _err_str = str(e).lower()
                 _retryable = any(k in _err_str for k in (
                     "timeout", "overloaded", "529", "rate_limit", "429", "500", "502", "503",
                 ))
+                _err_code = None
+                for code in ("429", "402", "401", "403", "500", "502", "503", "529"):
+                    if code in _err_str:
+                        _err_code = code
+                        break
+                log_usage(
+                    token=key, model=_model,
+                    call_source="anthropic_client_msg",
+                    error_code=_err_code or "error",
+                    duration_ms=duration_ms,
+                )
                 if _retryable and _attempt < _MAX_RETRIES:
                     _wait = 3 * (2 ** _attempt)
                     logger.warning(

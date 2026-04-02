@@ -1557,3 +1557,11 @@ async def bridge_restart(req: BridgeRestartRequest):
     except Exception as e:
         logger.error("bridge_restart_error", error=str(e))
         raise HTTPException(500, str(e))
+
+
+# ─── OAuth 사용량 추적 API (AADS-192) ────────────────────────────────────
+@router.get("/ops/usage-stats")
+async def get_oauth_usage_stats():
+    """OAuth 사용량 통계 — 5시간/1주일 롤링 윈도우 + rate-limit 상태."""
+    from app.services.oauth_usage_tracker import get_usage_stats
+    return await get_usage_stats()

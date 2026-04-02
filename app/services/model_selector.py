@@ -120,6 +120,7 @@ from app.core.auth_provider import (
     get_token_labels as _ap_get_labels,
     set_token_order as _ap_set_order,
 )
+from app.services.oauth_usage_tracker import log_usage as _log_oauth_usage
 
 
 def get_key_order() -> List[Dict[str, str]]:
@@ -1229,8 +1230,18 @@ async def _run_agent_sdk_with_key(
         _cli_session_map[session_id] = _captured_cli_sid
         logger.info(f"agent_sdk_session_map: aads={session_id[:8]} -> cli={_captured_cli_sid[:8]}")
 
-    # done 이벤트
+    # done 이벤트 + 사용량 DB 기록
     cost = total_cost if total_cost else float(_estimate_cost("claude-sonnet", in_tokens, out_tokens))
+    # Agent SDK 경로: 헤더 없지만 토큰 사용량은 기록
+    _sdk_tokens = _ap_get_tokens()
+    _sdk_token = _sdk_tokens[0] if _sdk_tokens else ""
+    _log_oauth_usage(
+        token=_sdk_token, model=sdk_model,
+        input_tokens=in_tokens, output_tokens=out_tokens,
+        cost_usd=cost,
+        call_source="model_selector_sdk",
+        session_id=session_id or "",
+    )
     yield {
         "type": "done",
         "model": sdk_model,
