@@ -859,26 +859,31 @@ deploy_job() {
                         local _qa_verdict=""
                         _qa_verdict=$(echo "$_qa_response" | jq -r '.verdict // empty' 2>/dev/null) || true
 
-                        if [ "$_qa_verdict" = "FAIL" ]; then
+                        if echo "$_qa_verdict" | grep -qi "FAIL"; then
                             local _qa_summary=""
                             _qa_summary=$(echo "$_qa_response" | jq -r '.summary // "상세 정보 없음"' 2>/dev/null) || true
-                            log "  QA: FAIL — $_qa_summary"
-                            post_to_chat "$session_id" "🔴 [Runner] 프론트엔드 QA FAIL: $_qa_summary (롤백 없음, 수동 확인 필요)"
+                            log "  QA: FAIL — $_qa_verdict: $_qa_summary"
+                            post_to_chat "$session_id" "🔴 [Runner] 프론트엔드 QA FAIL [$_qa_verdict]: $_qa_summary (롤백 없음, 수동 확인 필요)"
 
                             # 텔레그램 긴급 알림
                             if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
                                 curl -s -m 10 -X POST \
                                     "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
                                     -d "chat_id=${TELEGRAM_CHAT_ID}" \
-                                    -d "text=🔴 [AADS Runner] 프론트엔드 QA FAIL: ${_qa_summary}" \
+                                    -d "text=🔴 [AADS Runner] 프론트엔드 QA FAIL [$_qa_verdict]: ${_qa_summary}" \
                                     -d "parse_mode=HTML" 2>/dev/null || true
                             fi
-                        elif [ "$_qa_verdict" = "PASS" ]; then
-                            log "  QA: PASS ✅"
-                            post_to_chat "$session_id" "✅ [Runner] 프론트엔드 QA PASS — 대시보드 배포 검증 완료"
+                        elif echo "$_qa_verdict" | grep -qi "PASS"; then
+                            log "  QA: PASS ✅ [$_qa_verdict]"
+                            post_to_chat "$session_id" "✅ [Runner] 프론트엔드 QA PASS [$_qa_verdict] — 대시보드 배포 검증 완료"
+                        elif echo "$_qa_verdict" | grep -qi "CEO\|CONDITIONAL"; then
+                            local _qa_summary=""
+                            _qa_summary=$(echo "$_qa_response" | jq -r '.summary // "상세 정보 없음"' 2>/dev/null) || true
+                            log "  QA: CONDITIONAL — $_qa_verdict: $_qa_summary"
+                            post_to_chat "$session_id" "⚠️ [Runner] 프론트엔드 QA 조건부 [$_qa_verdict]: $_qa_summary — CEO 확인 필요"
                         else
                             log "  QA: WARN — verdict 파싱 불가 ($_qa_verdict), 배포는 계속 진행"
-                            post_to_chat "$session_id" "⚠️ [Runner] QA 결과 파싱 실패 — 배포는 정상 완료, QA 수동 확인 필요"
+                            post_to_chat "$session_id" "⚠️ [Runner] QA 결과 불명확 [$_qa_verdict] — 배포는 정상 완료, 수동 확인 필요"
                         fi
                     fi
                 else
