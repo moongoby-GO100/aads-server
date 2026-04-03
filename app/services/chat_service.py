@@ -2711,32 +2711,32 @@ async def send_message_stream(
         # 7. Gemini Direct (Grounding / Deep Research)
         if intent_result.use_gemini_direct:
             if intent_result.gemini_mode == "grounding":
-                # A안: SearXNG 우선 실행 (무료, 무제한, <3초)
+                # Smart Search: 복잡도 기반 동적 검색 + 원문 크롤링 (AADS-201)
                 _searxng_ok = False
                 try:
-                    from app.services.searxng_search_service import search_searxng
+                    from app.services.smart_search_service import smart_search as _smart_search
                     from app.services.gemini_search_service import SearchResult as _SxngResult
-                    _sxng = await search_searxng(content, categories="general", count=10)
-                    if not _sxng.get("error") and _sxng.get("results"):
-                        _items = [it for it in _sxng["results"][:10] if it.get("content")]
-                        if _items:
-                            _text = "\n\n".join(
-                                f"**{it.get('title', '')}**\n{it.get('content', '')}"
-                                for it in _items
-                            )
-                            _cites = [{"title": it.get("title", ""), "url": it.get("url", "")}
-                                      for it in _items if it.get("url")]
-                            result = _SxngResult(text=_text, citations=_cites)
-                            yield f"data: {json.dumps({'type': 'delta', 'content': result.text})}\n\n"
-                            if result.citations:
-                                yield f"data: {json.dumps({'type': 'sources', 'sources': result.citations})}\n\n"
-                            await _save_and_update_session(
-                                sid, result.text, model_used="searxng", intent=intent,
-                                cost=Decimal("0"), sources=result.citations)
-                            yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': 'searxng', 'cost': '0'})}\n\n"
-                            _searxng_ok = True
+                    _naver_type = getattr(intent_result, "naver_type", "")
+                    _smart_result = await _smart_search(content, naver_type=_naver_type)
+                    if not _smart_result.get("error") and _smart_result.get("formatted_text"):
+                        _text = _smart_result["formatted_text"]
+                        _cites = _smart_result.get("citations", [])
+                        _complexity = _smart_result.get("complexity", "SIMPLE")
+                        _crawl_count = _smart_result.get("crawl_count", 0)
+                        result = _SxngResult(text=_text, citations=_cites)
+                        yield f"data: {json.dumps({'type': 'delta', 'content': result.text})}\n\n"
+                        if result.citations:
+                            yield f"data: {json.dumps({'type': 'sources', 'sources': result.citations})}\n\n"
+                        _model_label = f"searxng-{_complexity.lower()}"
+                        if _crawl_count > 0:
+                            _model_label += f"+crawl{_crawl_count}"
+                        await _save_and_update_session(
+                            sid, result.text, model_used=_model_label, intent=intent,
+                            cost=Decimal("0"), sources=result.citations)
+                        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': _model_label, 'cost': '0'})}\n\n"
+                        _searxng_ok = True
                 except Exception as _sxng_err:
-                    logger.warning(f"searxng_grounding_prefetch_failed: {_sxng_err}")
+                    logger.warning(f"smart_search_grounding_failed: {_sxng_err}")
 
                 if _searxng_ok:
                     return
