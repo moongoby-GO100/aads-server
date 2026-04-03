@@ -728,14 +728,14 @@ async def _stream_litellm_openai(
     tools: Optional[List[Dict[str, Any]]] = None,
     session_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    """Gemini 등 비-Claude 모델 → LiteLLM /chat/completions (OpenAI 호환 포맷)."""
-    # messages에서 기존 system role 제거 후 새 system 프롬프트 추가
+    """Gemini 등 비-Claude 모델 → LiteLLM /chat/completions (OpenAI 호환).
+    멀티턴 Agentic Loop + 병렬 도구 실행 지원 (AADS-202).
+    """
     clean_msgs = [m for m in messages if m.get("role") != "system"]
-    # Anthropic content 블록 → OpenAI 포맷 변환 (이미지 포함 시)
     clean_msgs = [
         {**m, "content": _convert_content_for_openai(m["content"])} for m in clean_msgs
     ]
-    msgs = [{"role": "system", "content": system_prompt}] + clean_msgs
+    loop_msgs: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}] + clean_msgs
 
     full_text = ""
     input_tokens = 0
@@ -748,102 +748,166 @@ async def _stream_litellm_openai(
     if is_thinking:
         extra_params["reasoning_effort"] = "low"
 
-    try:
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            req_body: Dict[str, Any] = {
-                "model": model,
-                "messages": msgs,
-                "max_tokens": max_tokens,
-                "stream": True,
-                **extra_params,
-            }
-            # Gemini function calling — OpenAI 포맷 tools 전달
-            if tools:
-                _oai_tools = []
-                for t in tools:
-                    if t.get("input_schema"):
-                        _oai_tools.append({
-                            "type": "function",
-                            "function": {
-                                "name": t["name"],
-                                "description": t.get("description", ""),
-                                "parameters": t["input_schema"],
-                            }
-                        })
+    # OAI tools 변환 (한 번만)
+    _oai_tools: List[Dict[str, Any]] = []
+    if tools:
+        for t in tools:
+            if t.get("input_schema"):
+                _oai_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": t["name"],
+                        "description": t.get("description", ""),
+                        "parameters": t["input_schema"],
+                    }
+                })
+
+    MAX_TOOL_LOOPS = 5  # 무한 루프 방지
+
+    for _loop_iter in range(MAX_TOOL_LOOPS + 1):
+        # 이번 턴의 tool_calls 누적 (index → {id, name, args_buf})
+        _pending: Dict[int, Dict[str, str]] = {}
+        _assistant_text = ""
+        _finish_reason = ""
+
+        try:
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                req_body: Dict[str, Any] = {
+                    "model": model,
+                    "messages": loop_msgs,
+                    "max_tokens": max_tokens,
+                    "stream": True,
+                    **extra_params,
+                }
                 if _oai_tools:
                     req_body["tools"] = _oai_tools
-            async with client.stream(
-                "POST",
-                f"{LITELLM_BASE_URL}/chat/completions",
-                headers={"Authorization": f"Bearer {LITELLM_API_KEY}"},
-                json=req_body,
-            ) as resp:
-                if resp.status_code != 200:
-                    body = await resp.aread()
-                    if resp.status_code in (429, 401, 503):
-                        logger.warning(f"gemini_litellm_http_{resp.status_code}_fallback: model={model}")
-                        yield {"type": "delta", "content": f"\n\n[Gemini {resp.status_code} 오류 — Claude Sonnet으로 전환합니다]\n\n"}
-                        async for chunk in _stream_claude_sonnet_fallback(messages, system_prompt, tools, session_id):
-                            yield chunk
+
+                async with client.stream(
+                    "POST",
+                    f"{LITELLM_BASE_URL}/chat/completions",
+                    headers={"Authorization": f"Bearer {LITELLM_API_KEY}"},
+                    json=req_body,
+                ) as resp:
+                    if resp.status_code != 200:
+                        body = await resp.aread()
+                        if resp.status_code in (429, 401, 503):
+                            logger.warning(f"gemini_litellm_http_{resp.status_code}_fallback: model={model}")
+                            yield {"type": "delta", "content": f"\n\n[Gemini {resp.status_code} 오류 — Claude Sonnet으로 전환합니다]\n\n"}
+                            async for chunk in _stream_claude_sonnet_fallback(messages, system_prompt, tools, session_id):
+                                yield chunk
+                            return
+                        yield {"type": "error", "content": f"LiteLLM error {resp.status_code}: {body.decode()[:200]}"}
                         return
-                    yield {"type": "error", "content": f"LiteLLM error {resp.status_code}: {body.decode()[:200]}"}
-                    return
 
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    raw = line[6:]
-                    if raw.strip() == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(raw)
-                    except Exception:
-                        continue
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        raw = line[6:]
+                        if raw.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(raw)
+                        except Exception:
+                            continue
 
-                    choice = chunk.get("choices", [{}])[0]
-                    delta = choice.get("delta", {})
-                    finish_reason = choice.get("finish_reason", "")
+                        choice = chunk.get("choices", [{}])[0]
+                        delta = choice.get("delta", {})
+                        fr = choice.get("finish_reason")
+                        if fr:
+                            _finish_reason = fr
 
-                    text = delta.get("content", "")
-                    if text:
-                        full_text += text
-                        yield {"type": "delta", "content": text}
+                        # 텍스트 누적 + 스트리밍
+                        text = delta.get("content") or ""
+                        if text:
+                            _assistant_text += text
+                            full_text += text
+                            yield {"type": "delta", "content": text}
 
-                    # Gemini function call 응답 처리
-                    _tool_calls = delta.get("tool_calls", [])
-                    for _tc in _tool_calls:
-                        _fn = _tc.get("function", {})
-                        _fn_name = _fn.get("name", "")
-                        _fn_args = _fn.get("arguments", "{}")
-                        if _fn_name:
-                            try:
-                                import json as _j
-                                _args = _j.loads(_fn_args) if isinstance(_fn_args, str) else _fn_args
-                                # 실제 도구 실행
-                                from app.api.ceo_chat_tools import execute_tool as _exec_tool
-                                _tool_result = await _exec_tool(_fn_name, _args, "", session_id or "")
-                                yield {"type": "tool_use", "tool_name": _fn_name, "tool_use_id": _tc.get("id", ""), "tool_input": _args}
-                                yield {"type": "tool_result", "tool_name": _fn_name, "content": str(_tool_result)[:3000]}
-                            except Exception as _te:
-                                logger.warning(f"gemini_tool_call_error: {_fn_name}: {_te}")
-                                yield {"type": "delta", "content": f"\n[도구 {_fn_name} 실행 실패: {str(_te)[:100]}]\n"}
+                        # tool_calls 누적 (인덱스 기반, 청크 분할 대응)
+                        for _tc in delta.get("tool_calls", []):
+                            idx = _tc.get("index", 0)
+                            if idx not in _pending:
+                                _pending[idx] = {"id": "", "name": "", "args_buf": ""}
+                            if _tc.get("id"):
+                                _pending[idx]["id"] = _tc["id"]
+                            _fn = _tc.get("function", {})
+                            if _fn.get("name"):
+                                _pending[idx]["name"] = _fn["name"]
+                            if _fn.get("arguments"):
+                                _pending[idx]["args_buf"] += _fn["arguments"]
 
-                    # 토큰 집계 (usage 포함 시)
-                    usage = chunk.get("usage", {})
-                    if usage:
-                        input_tokens = usage.get("prompt_tokens", input_tokens)
-                        output_tokens = usage.get("completion_tokens", output_tokens)
+                        # 토큰 집계
+                        usage = chunk.get("usage", {})
+                        if usage:
+                            input_tokens = usage.get("prompt_tokens", input_tokens)
+                            output_tokens = usage.get("completion_tokens", output_tokens)
 
-    except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as e:
-        logger.warning(f"gemini_litellm_network_error_fallback: model={model} error={e}")
-        yield {"type": "delta", "content": "\n\n[Gemini 연결 오류 — Claude Sonnet으로 전환합니다]\n\n"}
-        async for chunk in _stream_claude_sonnet_fallback(messages, system_prompt, tools, session_id):
-            yield chunk
-        return
-    except Exception as e:
-        logger.error(f"model_selector litellm error: {e}")
-        yield {"type": "error", "content": str(e)}
-        return
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as e:
+            logger.warning(f"gemini_litellm_network_error_fallback: model={model} error={e}")
+            yield {"type": "delta", "content": "\n\n[Gemini 연결 오류 — Claude Sonnet으로 전환합니다]\n\n"}
+            async for chunk in _stream_claude_sonnet_fallback(messages, system_prompt, tools, session_id):
+                yield chunk
+            return
+        except Exception as e:
+            logger.error(f"model_selector litellm error: {e}")
+            yield {"type": "error", "content": str(e)}
+            return
+
+        # 도구 호출 없거나 finish_reason이 stop → 루프 종료
+        if _finish_reason != "tool_calls" or not _pending:
+            break
+
+        # ── Agentic Loop: 도구 실행 후 Gemini 재호출 ──
+        if _loop_iter >= MAX_TOOL_LOOPS:
+            logger.warning(f"gemini_tool_loop_max_reached: model={model} loops={_loop_iter}")
+            break
+
+        # assistant 메시지 (tool_calls 포함) 추가
+        _sorted_tcs = sorted(_pending.values(), key=lambda x: x["id"])
+        _assistant_msg: Dict[str, Any] = {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {"name": tc["name"], "arguments": tc["args_buf"]},
+                }
+                for tc in _sorted_tcs
+            ],
+        }
+        if _assistant_text:
+            _assistant_msg["content"] = _assistant_text
+        loop_msgs.append(_assistant_msg)
+
+        # 병렬 도구 실행
+        from app.api.ceo_chat_tools import execute_tool as _exec_tool  # noqa: PLC0415
+
+        async def _run_one(tc: Dict[str, str]) -> Dict[str, Any]:
+            try:
+                _args = json.loads(tc["args_buf"]) if isinstance(tc["args_buf"], str) else tc["args_buf"]
+            except Exception:
+                _args = {}
+            try:
+                _res = await _exec_tool(tc["name"], _args, "", session_id or "")
+                return {"id": tc["id"], "name": tc["name"], "args": _args, "result": str(_res)[:4000], "ok": True}
+            except Exception as _te:
+                logger.warning(f"gemini_parallel_tool_error: {tc['name']}: {_te}")
+                return {"id": tc["id"], "name": tc["name"], "args": _args, "result": f"도구 실행 오류: {str(_te)[:200]}", "ok": False}
+
+        _exec_results = await asyncio.gather(*[_run_one(tc) for tc in _sorted_tcs])
+
+        # 이벤트 yield + tool 메시지 추가
+        for _er in _exec_results:
+            yield {"type": "tool_use", "tool_name": _er["name"], "tool_use_id": _er["id"], "tool_input": _er["args"]}
+            yield {"type": "tool_result", "tool_name": _er["name"], "content": _er["result"]}
+            loop_msgs.append({
+                "role": "tool",
+                "tool_call_id": _er["id"],
+                "content": _er["result"],
+            })
+
+        logger.info(f"gemini_tool_loop: iter={_loop_iter+1} tools={[e['name'] for e in _exec_results]}")
+        # loop_iter 증가 후 재호출
 
     cost = _estimate_cost(model, input_tokens, output_tokens)
     yield {
