@@ -23,7 +23,7 @@ from app.core.auth_provider import (
 
 logger = logging.getLogger(__name__)
 
-_GEMINI_FALLBACK_MODEL = "gemini-3.1-flash-lite-preview"
+_GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
 
 
 def get_client(model_hint: str = "claude-haiku") -> AsyncAnthropic:
