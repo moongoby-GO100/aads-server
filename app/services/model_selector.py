@@ -404,25 +404,25 @@ async def call_stream(
             yield event
         return
 
-    # Gemini 모델 → LiteLLM 경유 (실패 시 Claude Haiku 폴백)
+    # Gemini 모델 → LiteLLM 경유 (실패 시 Claude Sonnet 폴백)
     if model in _GEMINI_MODELS:
         _had_error = False
         async for event in _stream_litellm(model, system_prompt, messages, tools=tools):
             if event.get("type") == "error":
                 _had_error = True
-                logger.warning(f"gemini_fallback: {model} failed, falling back to claude-haiku")
+                logger.warning(f"gemini_fallback: {model} failed, falling back to claude-sonnet")
                 break
             yield event
         if _had_error:
-            # Gemini 실패 → Claude Haiku로 폴백 (가장 저렴한 Claude)
+            # Gemini 실패 → Claude Sonnet으로 폴백 (LiteLLM 내부 처리 안 된 나머지 에러)
             _fallback_intent = IntentResult(
                 intent=intent_result.intent,
-                model="claude-haiku",
+                model="claude-sonnet",
                 use_tools=intent_result.use_tools,
                 tool_group=intent_result.tool_group,
             )
-            yield {"type": "delta", "content": ""}  # 스트림 리셋
-            async for event in _stream_anthropic(_fallback_intent, "claude-haiku", system_prompt, messages, tools, session_id=session_id):
+            yield {"type": "delta", "content": "\n\n[Gemini 오류 — Claude Sonnet으로 전환합니다]\n\n"}
+            async for event in _stream_anthropic(_fallback_intent, "claude-sonnet", system_prompt, messages, tools, session_id=session_id):
                 yield event
         return
 
@@ -780,6 +780,12 @@ async def _stream_litellm_openai(
             ) as resp:
                 if resp.status_code != 200:
                     body = await resp.aread()
+                    if resp.status_code in (429, 401, 503):
+                        logger.warning(f"gemini_litellm_http_{resp.status_code}_fallback: model={model}")
+                        yield {"type": "delta", "content": f"\n\n[Gemini {resp.status_code} 오류 — Claude Sonnet으로 전환합니다]\n\n"}
+                        async for chunk in _stream_claude_sonnet_fallback(messages, system_prompt, tools, session_id):
+                            yield chunk
+                        return
                     yield {"type": "error", "content": f"LiteLLM error {resp.status_code}: {body.decode()[:200]}"}
                     return
 
@@ -828,6 +834,12 @@ async def _stream_litellm_openai(
                         input_tokens = usage.get("prompt_tokens", input_tokens)
                         output_tokens = usage.get("completion_tokens", output_tokens)
 
+    except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as e:
+        logger.warning(f"gemini_litellm_network_error_fallback: model={model} error={e}")
+        yield {"type": "delta", "content": "\n\n[Gemini 연결 오류 — Claude Sonnet으로 전환합니다]\n\n"}
+        async for chunk in _stream_claude_sonnet_fallback(messages, system_prompt, tools, session_id):
+            yield chunk
+        return
     except Exception as e:
         logger.error(f"model_selector litellm error: {e}")
         yield {"type": "error", "content": str(e)}
@@ -841,6 +853,19 @@ async def _stream_litellm_openai(
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
     }
+
+
+async def _stream_claude_sonnet_fallback(
+    messages: List[Dict[str, Any]],
+    system_prompt: str,
+    tools: Optional[List[Dict[str, Any]]],
+    session_id: Optional[str],
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """Gemini/LiteLLM 실패 시 Claude Sonnet으로 폴백 스트리밍 (Tier1: CLI Relay)."""
+    async for event in _stream_cli_relay(
+        "claude-sonnet", system_prompt, messages, tools=tools, session_id=session_id
+    ):
+        yield event
 
 
 async def _stream_cli_relay(
