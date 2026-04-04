@@ -34,6 +34,12 @@ def _get_model_for_size(size: str) -> str:
     }.get((size or "M").upper(), "claude-sonnet-4-6")
 
 
+
+def _parse_size_from_instruction(instruction: str) -> str:
+    """instruction 텍스트에서 규모 파싱 (AADS-206B 폴백)."""
+    m = re.search(r'(?:규모|SIZE)[:\s=]*\s*(XL|XS|[SML])\b', instruction, re.IGNORECASE)
+    return m.group(1).upper() if m else "M"
+
 class JobSubmitRequest(BaseModel):
     project: str = Field(..., description="프로젝트 코드")
     instruction: str = Field(..., max_length=50000, description="Claude Code에 전달할 지시")
@@ -139,7 +145,11 @@ async def submit_job(req: JobSubmitRequest):
                         message=f"동일 작업이 이미 활성 상태입니다: {existing['job_id']}",
                     )
                 locked = await check_project_lock(conn, req.project)
-                model = _get_model_for_size(req.size)
+                # AADS-206B: size 명시 시 우선, 기본값이면 instruction 파싱
+                size = req.size
+                if size == "M":
+                    size = _parse_size_from_instruction(req.instruction)
+                model = _get_model_for_size(size)
                 await conn.execute(
                     """
                     INSERT INTO pipeline_jobs
