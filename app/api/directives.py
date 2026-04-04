@@ -28,13 +28,25 @@ router = APIRouter()
 _PENDING_DIR = "/root/.genspark/directives/pending"
 _TASK_ID_RE = re.compile(r"^[A-Z][A-Z0-9]*-\d+$")
 
+# AADS-205: size별 자동 모델 매핑
+def get_model_for_size(size: str) -> str:
+    """작업 크기에 따라 최적 모델 자동 선택."""
+    size_to_model = {
+        "XS": "claude-haiku-4-5-20251001",
+        "S":  "claude-haiku-4-5-20251001",
+        "M":  "claude-sonnet-4-6",
+        "L":  "claude-sonnet-4-6",
+        "XL": "claude-opus-4-6",
+    }
+    return size_to_model.get(size, "claude-sonnet-4-6")
+
 
 class DirectiveSubmitRequest(BaseModel):
     task_id: str
     project: str = "AADS"
     priority: str = "P2"
     size: str = "S"
-    model: str = "claude-sonnet-4-6"
+    model: str = "auto"  # "auto" → size 기반 자동 결정 (AADS-205)
     description: str
     success_criteria: Optional[str] = None
     files_owned: Optional[List[str]] = None
@@ -116,6 +128,10 @@ async def submit_directive(req: DirectiveSubmitRequest):
             detail=f"task_id 형식 오류: '{req.task_id}' (예: AADS-157, GO100-42)",
         )
 
+    # AADS-205: model이 "auto"이면 size 기반으로 자동 결정
+    if not req.model or req.model in ("auto", ""):
+        req.model = get_model_for_size(req.size)
+
     # 지시서 내용 생성
     content = build_directive_content(req)
 
@@ -150,6 +166,10 @@ def submit_directive_sync(req: DirectiveSubmitRequest) -> DirectiveSubmitRespons
     """내부 직접 호출용 동기 버전 (CEO Chat execute 핸들러에서 사용)."""
     if not _TASK_ID_RE.match(req.task_id):
         raise ValueError(f"task_id 형식 오류: '{req.task_id}'")
+
+    # AADS-205: model이 "auto"이면 size 기반으로 자동 결정
+    if not req.model or req.model in ("auto", ""):
+        req.model = get_model_for_size(req.size)
 
     content = build_directive_content(req)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
