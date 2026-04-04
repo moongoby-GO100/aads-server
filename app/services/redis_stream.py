@@ -231,5 +231,6 @@ async def health_check() -> bool:
     try:
         r = await _get_redis()
         return await r.ping()
-    except Exception:
+    except Exception as e:
+        logger.warning(f"redis_stream_health_check_failed: {e}")
         return False

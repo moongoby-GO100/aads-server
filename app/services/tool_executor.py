@@ -41,7 +41,13 @@ _AADS_API_BASE = os.getenv("AADS_API_BASE", "http://localhost:8080")
 _MAX_RESULT_CHARS = 25000  # ~8000 토큰 (지시서 기준 25,000 허용)
 _TOOL_TIMEOUT = 20.0  # 일반 도구 타임아웃
 _LONG_TOOL_TIMEOUT = 120.0  # 서브에이전트/딥리서치 등 장시간 도구
-_LONG_TOOLS = frozenset({"spawn_subagent", "spawn_parallel_subagents", "run_agent_team", "run_debate", "deep_research", "delegate_to_agent", "delegate_to_research", "capture_screenshot", "run_remote_command", "write_remote_file", "patch_remote_file", "pc_execute"})
+_LONG_TOOLS = frozenset({
+    "spawn_subagent", "spawn_parallel_subagents", "run_agent_team", "run_debate",
+    "deep_research", "delegate_to_agent", "delegate_to_research",
+    "capture_screenshot", "run_remote_command", "write_remote_file", "patch_remote_file",
+    "pc_execute", "execute_sandbox", "visual_qa_test", "fact_check_multiple",
+    "generate_image", "search_all_projects", "deep_crawl",
+})
 
 # ── 파일별 동시 수정 방지 잠금 ─────────────────────────────────────────────
 # 파일 경로(project:file_path)를 키로 하는 asyncio.Lock 딕셔너리.
