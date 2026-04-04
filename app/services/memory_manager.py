@@ -442,7 +442,7 @@ class MemoryManager:
             from app.core.anthropic_client import call_llm_messages_with_fallback
 
             resp = await call_llm_messages_with_fallback(
-                model="claude-haiku-4-5-20251001",
+                model="qwen-turbo",
                 max_tokens=500,
                 system=(
                     "대화를 분석하여 CEO의 선호도, 반복 패턴, 새로운 결정을 추출하라. "
@@ -612,7 +612,7 @@ class MemoryManager:
                 "각 목록은 최대 3개. 없으면 빈 배열."
             )
             raw_text = await call_llm_with_fallback(
-                f"대화:\n{dialog}", model="claude-haiku-4-5-20251001",
+                f"대화:\n{dialog}", model="qwen-turbo",
                 max_tokens=400, system=_system,
             )
             if not raw_text:

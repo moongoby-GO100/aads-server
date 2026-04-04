@@ -31,7 +31,7 @@ def _normalize_project(raw: str | None) -> str | None:
             return key
     return raw.upper()[:20] if raw else None
 
-_HAIKU_MODEL = os.getenv("FACT_EXTRACTOR_MODEL", "claude-haiku-4-5-20251001")
+_HAIKU_MODEL = os.getenv("FACT_EXTRACTOR_MODEL", "qwen-turbo")
 _MAX_FACTS_PER_TURN = int(os.getenv("FACT_EXTRACTOR_MAX_FACTS", "5"))
 
 _EXTRACTION_PROMPT = """다음 대화 턴에서 핵심 사실을 최대 {max_facts}건 추출하세요.

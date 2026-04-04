@@ -14,7 +14,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_REVIEW_MODEL = "claude-haiku-4-5-20251001"
+_REVIEW_MODEL = "qwen-turbo"
 
 
 @dataclass

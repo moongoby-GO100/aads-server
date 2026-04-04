@@ -71,7 +71,7 @@ async def _select_urls_by_llm(
         resp = await asyncio.wait_for(
             call_llm_with_fallback(
                 prompt=prompt,
-                model="claude-haiku-4-5-20251001",
+                model="qwen-turbo",
                 max_tokens=200,
             ),
             timeout=10,

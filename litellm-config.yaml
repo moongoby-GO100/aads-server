@@ -118,6 +118,19 @@ model_list:
       model: groq/groq/compound
       api_key: os.environ/GROQ_API_KEY
 
+  # ── Alibaba Cloud DashScope (Qwen) ──
+  - model_name: qwen-turbo
+    litellm_params:
+      model: openai_like/qwen-turbo
+      api_key: os.environ/ALIBABA_API_KEY
+      api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+
+  - model_name: qwen-plus
+    litellm_params:
+      model: openai_like/qwen-plus
+      api_key: os.environ/ALIBABA_API_KEY
+      api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+
   # ── Claude (Anthropic) — 토큰 2개 자동 폴백 (gmail/naver) ──
   - model_name: claude-sonnet
     litellm_params:
@@ -233,7 +246,7 @@ model_list:
 # Gmail(order=1) 우선, Naver 리밋/장애 시 order=2로 폴백
 # 모델별 사용량 한도가 별도이므로 소넷 리밋 → 오퍼스 → 하이쿠 폴백
 router_settings:
-  enable_pre_call_checks: true
+  enable_pre_call_checks: false
   num_retries: 3
   model_group_fallbacks:
     - claude-sonnet-4-6: ["claude-opus-4-6", "claude-haiku-4-5"]

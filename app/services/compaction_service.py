@@ -304,7 +304,7 @@ async def _summarize(messages: List[Dict[str, Any]]) -> str:
 
     try:
         msg = await call_llm_messages_with_fallback(
-            model="claude-haiku-4-5-20251001",
+            model="qwen-turbo",
             max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -361,7 +361,7 @@ async def _merge_summaries(existing_summary: str, new_summary: str) -> str:
 
     try:
         msg = await call_llm_messages_with_fallback(
-            model="claude-haiku-4-5-20251001",
+            model="qwen-turbo",
             max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
         )

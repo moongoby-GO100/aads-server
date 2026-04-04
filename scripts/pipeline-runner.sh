@@ -222,7 +222,7 @@ promote_next_queued() {
     local next_job
     next_job=$(db_exec "SELECT job_id FROM pipeline_jobs
                         WHERE project='${project}' AND status='queued' AND phase='queued'
-                        ORDER BY created_at ASC LIMIT 1;" 2>/dev/null) || true
+                        ORDER BY COALESCE(priority, 0) DESC, created_at ASC LIMIT 1;" 2>/dev/null) || true
     next_job="${next_job// /}"
     if [[ -n "$next_job" ]]; then
         log "  PROMOTE_READY: 프로젝트 $project 의 다음 대기 작업 $next_job — 메인루프에서 곧 클레임"
@@ -378,7 +378,7 @@ claim_queued_job() {
                       AND r.status IN ('running', 'claimed')
                       AND r.job_id != p.job_id
                   )
-                ORDER BY p.created_at ASC LIMIT 1
+                ORDER BY COALESCE(p.priority, 0) DESC, p.created_at ASC LIMIT 1
                 FOR UPDATE SKIP LOCKED
              )
              RETURNING job_id, project, replace(replace(instruction, E'\\n', ' '), '|', ' '), chat_session_id, max_cycles;"
@@ -1391,6 +1391,9 @@ main() {
             continue
         fi
 
+        # 방안A: 완료된 백그라운드 작업 정리
+        _reap_bg_jobs
+
         # 1) queued 작업 원자적 클레임 (C4)
         local pending
         pending=$(claim_queued_job "$project_filter" 2>/dev/null) || true
@@ -1399,7 +1402,10 @@ main() {
             # FIX: ASCII RS(0x1e) 구분자 사용 — instruction에 | 포함 시 파싱 깨짐 방지
             IFS=$'\x1e' read -r job_id project instruction session_id max_cycles <<< "$pending"
             if [[ -n "$job_id" && -n "$project" ]]; then
-                run_job "$job_id" "$project" "$instruction" "$session_id" "${max_cycles:-3}" || true
+                # 방안A: 백그라운드 병렬 실행 — 다른 프로젝트 작업이 블로킹하지 않음
+                run_job "$job_id" "$project" "$instruction" "$session_id" "${max_cycles:-3}" &
+                _bg_jobs[$!]="${job_id}|${session_id}"
+                log "  BG_START: job=$job_id pid=$! (parallel)"
             fi
         fi
 
@@ -1411,7 +1417,10 @@ main() {
             # FIX: ASCII RS(0x1e) 구분자 사용
             IFS=$'\x1e' read -r job_id project session_id <<< "$approved"
             if [[ -n "$job_id" && -n "$project" ]]; then
-                deploy_job "$job_id" "$project" "$session_id" || true
+                # 방안A: 백그라운드 병렬 실행
+                deploy_job "$job_id" "$project" "$session_id" &
+                _bg_jobs[$!]="${job_id}|${session_id}"
+                log "  BG_DEPLOY: job=$job_id pid=$! (parallel)"
             fi
         fi
 
@@ -1422,7 +1431,9 @@ main() {
         if [[ -n "$rejected" ]]; then
             IFS=$'\x1e' read -r job_id project session_id <<< "$rejected"
             if [[ -n "$job_id" && -n "$project" ]]; then
-                reject_job "$job_id" "$project" "$session_id" || true
+                reject_job "$job_id" "$project" "$session_id" &
+                _bg_jobs[$!]="${job_id}|${session_id}"
+                log "  BG_REJECT: job=$job_id pid=$! (parallel)"
             fi
         fi
 
@@ -1439,19 +1450,43 @@ main() {
     done
 }
 
+# ── 백그라운드 작업 추적 (방안A: 병렬 실행) ───────────────────────────
+declare -A _bg_jobs   # PID -> "job_id|session_id"
+
+_reap_bg_jobs() {
+    for _pid in "${!_bg_jobs[@]}"; do
+        if ! kill -0 "$_pid" 2>/dev/null; then
+            wait "$_pid" 2>/dev/null || true
+            unset '_bg_jobs[$_pid]'
+        fi
+    done
+}
+
 # ── 시그널 핸들링 ────────────────────────────────────────────────────
 _current_job_id=""
 _current_session_id=""
 cleanup() {
     log "═══ Pipeline Runner v2.1 종료 ═══"
-    # 현재 실행 중인 작업이 있으면 error로 마킹
-    if [[ -n "$_current_job_id" ]]; then
+    # 방안A: 모든 백그라운드 작업 정리
+    for _pid in "${!_bg_jobs[@]}"; do
+        IFS='|' read -r _jid _sid <<< "${_bg_jobs[$_pid]}"
+        kill "$_pid" 2>/dev/null || true
+        wait "$_pid" 2>/dev/null || true
+        db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+                   error_detail='runner_shutdown',
+                   review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 종료로 중단]',
+                   updated_at=NOW() WHERE job_id='${_jid}' AND status='running';" || true
+        log "  Marked $_jid as error (runner shutdown)"
+        post_to_chat "$_sid" "🔴 [Pipeline Runner] 러너 종료로 작업 중단: $_jid"
+        _notify_ai "$_jid"
+    done
+    # 레거시 호환: 단일 작업 추적
+    if [[ -n "$_current_job_id" ]] && ! printf '%s\n' "${_bg_jobs[@]}" | grep -q "$_current_job_id"; then
         db_update "UPDATE pipeline_jobs SET status='error', phase='error',
                    error_detail='runner_shutdown',
                    review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 종료로 중단]',
                    updated_at=NOW() WHERE job_id='${_current_job_id}' AND status='running';" || true
         log "  Marked $_current_job_id as error (runner shutdown)"
-        # 채팅 알림
         post_to_chat "$_current_session_id" "🔴 [Pipeline Runner] 러너 종료로 작업 중단: $_current_job_id"
         _notify_ai "$_current_job_id"
     fi

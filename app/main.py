@@ -1089,9 +1089,7 @@ async def root_health_check():
         "graph_ready": graph_ready,
         "version": "0.1.0",
         "sandbox": sandbox_health,
-    })
-
-# 정적 파일 서빙
+    })# 정적 파일 서빙
 import pathlib as _pathlib
 _static_dir = _pathlib.Path(__file__).resolve().parent / "static"
 if _static_dir.is_dir():

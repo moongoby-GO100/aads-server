@@ -55,8 +55,8 @@ class IntentResult:
 
 INTENT_MAP: dict[str, dict] = {
     # ─── 도구 불필요 인텐트 ───────────────────────────────────────────────────
-    "casual":           {"model": "gemini-flash-lite",           "tools": False, "group": ""},
-    "greeting":         {"model": "gemini-flash-lite",           "tools": False, "group": ""},
+    "casual":           {"model": "qwen-turbo",           "tools": False, "group": ""},
+    "greeting":         {"model": "qwen-turbo",           "tools": False, "group": ""},
     "deep_research":    {"model": "gemini-pro",                  "tools": False, "group": "",        "gemini_direct": "deep_research"},
     "strategy":         {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
     "planning":         {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
@@ -137,7 +137,7 @@ INTENT_MAP: dict[str, dict] = {
 
 _DEFAULT_INTENT = IntentResult(
     intent="casual",
-    model="gemini-flash-lite",
+    model="qwen-turbo",
     use_tools=False,
     tool_group="",
 )
@@ -290,7 +290,7 @@ async def classify(
                 f"{LITELLM_BASE_URL}/chat/completions",
                 headers={"Authorization": f"Bearer {LITELLM_API_KEY}"},
                 json={
-                    "model": "gemini-flash-lite",
+                    "model": "qwen-turbo",
                     "messages": [
                         {"role": "system", "content": _CLASSIFY_PROMPT},
                         {"role": "user", "content": f"워크스페이스: {workspace}\n메시지: {message}{_context_hint}"},
