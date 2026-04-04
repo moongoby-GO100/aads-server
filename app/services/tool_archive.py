@@ -72,6 +72,45 @@ async def archive_tool_result(
         return False
 
 
+async def get_tool_error_stats(hours: int = 24) -> list:
+    """최근 N시간 도구별 성공/실패 횟수, 오류율, 마지막 오류 메시지 반환."""
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    tool_name,
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN is_error THEN 1 ELSE 0 END) AS errors,
+                    (
+                        SELECT raw_output FROM tool_results_archive t2
+                        WHERE t2.tool_name = t.tool_name AND t2.is_error = TRUE
+                        ORDER BY t2.created_at DESC LIMIT 1
+                    ) AS last_error
+                FROM tool_results_archive t
+                WHERE created_at > NOW() - ($1 * INTERVAL '1 hour')
+                GROUP BY tool_name
+                ORDER BY errors DESC, total DESC
+                """,
+                hours,
+            )
+        return [
+            {
+                "tool_name": r["tool_name"],
+                "total": int(r["total"]),
+                "errors": int(r["errors"]),
+                "error_rate": round(float(r["errors"]) / float(r["total"]), 4) if r["total"] else 0.0,
+                "last_error": r["last_error"][:500] if r["last_error"] else None,
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.warning("tool_stats_error", error=str(e))
+        return []
+
+
 async def recall_tool_result(
     tool_name: Optional[str] = None,
     keyword: Optional[str] = None,

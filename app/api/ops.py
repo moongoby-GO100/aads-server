@@ -1565,3 +1565,19 @@ async def get_oauth_usage_stats():
     """OAuth 사용량 통계 — 5시간/1주일 롤링 윈도우 + rate-limit 상태."""
     from app.services.oauth_usage_tracker import get_usage_stats
     return await get_usage_stats()
+
+
+# ─── 도구 오류율 통계 API (AADS-206) ─────────────────────────────────────
+@router.get("/ops/tool-stats")
+async def get_tool_stats(hours: int = Query(24, ge=1, le=168)):
+    """도구별 성공/실패 통계 — 최근 N시간 (기본 24h, 최대 168h)."""
+    from app.services.tool_archive import get_tool_error_stats
+    stats = await get_tool_error_stats(hours)
+    total_calls = sum(s["total"] for s in stats)
+    total_errors = sum(s["errors"] for s in stats)
+    return {
+        "period_hours": hours,
+        "total_calls": total_calls,
+        "total_errors": total_errors,
+        "stats": stats,
+    }

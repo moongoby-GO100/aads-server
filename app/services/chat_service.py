@@ -2922,6 +2922,7 @@ async def send_message_stream(
                     async for sse_line in sdk_svc.execute_stream(
                         prompt=content,
                         session_id=sdk_session_id,
+                        chat_session_id=str(sid),
                     ):
                         yield sse_line
                         # 이벤트 파싱: session_id 캡처 + 텍스트 수집

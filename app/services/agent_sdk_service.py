@@ -127,6 +127,15 @@ def _build_aads_sdk_tools() -> list:
         @sdk_tool(name, description, schema)
         async def _handler(args: Dict[str, Any]) -> Dict[str, Any]:
             result = await _exec.execute(name, args)
+            # AADS-206: archive 재연결 — 비동기 백그라운드, 실패해도 메인 흐름 블로킹 없음
+            _sid = _active_chat_session_id
+            if _sid:
+                try:
+                    asyncio.create_task(
+                        _archive_sdk_tool_result(_sid, name, args, str(result))
+                    )
+                except Exception:
+                    pass
             return {"content": [{"type": "text", "text": result}]}
         _handler.__name__ = f"_sdk_{name}"
         return _handler
@@ -289,10 +298,12 @@ class AgentSDKService:
         self,
         prompt: str,
         session_id: Optional[str] = None,
+        chat_session_id: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Agent SDK 실행 — CEO Chat SSE 스트림.
         session_id 제공 시 이전 세션 resume.
+        chat_session_id: AADS 채팅 세션 UUID (archive용).
 
         SSE 이벤트:
           sdk_session   : 세션 ID 캡처
@@ -300,6 +311,9 @@ class AgentSDKService:
           sdk_complete  : 완료 (stop_reason 포함)
           error         : 오류
         """
+        global _active_chat_session_id
+        _active_chat_session_id = chat_session_id
+
         if not self.is_available():
             raise RuntimeError(
                 "Agent SDK 사용 불가 (미설치 또는 AGENT_SDK_ENABLED=false)"
@@ -365,6 +379,41 @@ class AgentSDKService:
             logger.exception(f"AgentSDKService: {msg}")
             yield f"data: {json.dumps({'type': 'error', 'content': msg})}\n\n"
             raise
+
+
+# ─── 현재 실행 컨텍스트 (archive용) ─────────────────────────────────────────
+
+_active_chat_session_id: Optional[str] = None
+
+
+async def _archive_sdk_tool_result(
+    chat_session_id: str,
+    tool_name: str,
+    input_params: dict,
+    raw_output: str,
+) -> None:
+    """Agent SDK 도구 실행 결과를 tool_results_archive에 비동기 저장 (실패해도 무시)."""
+    try:
+        import uuid as _uuid
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            message_id = await conn.fetchval(
+                "SELECT id FROM chat_messages WHERE session_id = $1::uuid AND role = 'user'"
+                " ORDER BY created_at DESC LIMIT 1",
+                chat_session_id,
+            )
+        if message_id:
+            from app.services.tool_archive import archive_tool_result
+            await archive_tool_result(
+                str(message_id),
+                str(_uuid.uuid4()),
+                tool_name,
+                input_params,
+                str(raw_output),
+            )
+    except Exception as e:
+        logger.debug("sdk_tool_archive_error", error=str(e), tool=tool_name)
 
 
 # ─── 싱글턴 ───────────────────────────────────────────────────────────────────
