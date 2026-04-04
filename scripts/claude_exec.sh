@@ -46,8 +46,9 @@ source "${SCRIPT_DIR}/memory_helper.sh"
 # === AADS-148: 프로세스 그룹 PGID 기록 (고아 프로세스 방지) ===
 PGID=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || echo $$)
 
-TASK_ID="${1:?사용법: $0 <task_id> [directive_file]}"
+TASK_ID="${1:?사용법: $0 <task_id> [directive_file] [model]}"
 DIRECTIVE_FILE="${2:-}"
+MODEL="${3:-claude-sonnet-4-6}"  # AADS-206: 3번째 인자로 모델 수신
 
 # === AADS-145: Tasks 시스템 통합 ===
 CLAUDEBOT_TASKS_DIR="/home/claudebot/.claude/tasks"
@@ -313,23 +314,23 @@ EXEC_EXIT=0
 if [ -n "$DIRECTIVE_FILE" ] && [ -f "$DIRECTIVE_FILE" ]; then
     echo "  지시서: ${DIRECTIVE_FILE}"
     FULL_PROMPT="${CONTEXT_HEADER}$(cat "$DIRECTIVE_FILE")"
-    # A-5: 하드 타임아웃 (안전망) 적용 + AADS-145 컨텍스트 캡처
-    timeout "$HARD_TIMEOUT" bash -c 'echo "$FULL_PROMPT" | claude --print 2>&1' | tee -a "$CTX_TMPLOG" || EXEC_EXIT=$?
+    # A-5: 하드 타임아웃 (안전망) 적용 + AADS-145 컨텍스트 캡처 + AADS-206: 모델 옵션 추가
+    timeout "$HARD_TIMEOUT" bash -c 'echo "$FULL_PROMPT" | claude --model '"\"$MODEL\"" --print 2>&1' | tee -a "$CTX_TMPLOG" || EXEC_EXIT=$?
     # Claude Code 서브프로세스 PID 기록 (A-4)
     pgrep -n -f "claude --print" > "/tmp/claude_session_${TASK_ID}.claude_pid" 2>/dev/null || true
 else
     echo "  지시서: 없음 (Task ID만으로 실행)"
     FULL_PROMPT="${CONTEXT_HEADER}Task ${TASK_ID}를 실행하라."
-    timeout "$HARD_TIMEOUT" bash -c 'echo "$FULL_PROMPT" | claude --print 2>&1' | tee -a "$CTX_TMPLOG" || EXEC_EXIT=$?
+    timeout "$HARD_TIMEOUT" bash -c 'echo "$FULL_PROMPT" | claude --model '"\"$MODEL\"" --print 2>&1' | tee -a "$CTX_TMPLOG" || EXEC_EXIT=$?
     pgrep -n -f "claude --print" > "/tmp/claude_session_${TASK_ID}.claude_pid" 2>/dev/null || true
 fi
 
-# AADS-145: 컨텍스트 90% 재시작 처리
+# AADS-145: 컨텍스트 90% 재시작 처리 + AADS-206: 모델 옵션 추가
 if [ -f "$CTX_SIGNAL" ] && [ $EXEC_EXIT -ne 0 ]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] [CTX-RESTART] 컨텍스트 한계 감지 — 요약 후 재시작" >&2
     _ctx_summary="[CTX-RESTART] 이전 세션 컨텍스트 한계 도달. 지금까지 진행한 내용을 이어서 완료하라. Task: ${TASK_ID}"
     if [ -n "$DIRECTIVE_FILE" ] && [ -f "$DIRECTIVE_FILE" ]; then
-        timeout "$HARD_TIMEOUT" bash -c 'echo "$_ctx_summary\n$(cat "$DIRECTIVE_FILE")" | claude --print 2>&1' | tee -a "$CTX_TMPLOG" || EXEC_EXIT=$?
+        timeout "$HARD_TIMEOUT" bash -c 'echo "$_ctx_summary\n$(cat "$DIRECTIVE_FILE")" | claude --model '"\"$MODEL\"" --print 2>&1' | tee -a "$CTX_TMPLOG" || EXEC_EXIT=$?
     fi
 fi
 

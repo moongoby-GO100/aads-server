@@ -195,12 +195,14 @@ _parallel_worktree() {
 
         echo "[WORKTREE] task=${task_id} worktree=${wt_path}"
 
-        # 백그라운드에서 claude_exec.sh 실행 (worktree 경로 주입)
+        # 백그라운드에서 claude_exec.sh 실행 (worktree 경로 주입) + AADS-206: model 파싱
         (
             export WORKTREE_PATH="$wt_path"
             export WORKTREE_BRANCH="$wt_branch"
             export WORKTREE_GROUP="$group_id"
-            "${SCRIPT_DIR}/claude_exec.sh" "$task_id" "$directive_file"
+            local _model
+            _model=$(_get_directive_model "$directive_file")
+            "${SCRIPT_DIR}/claude_exec.sh" "$task_id" "$directive_file" "$_model"
             echo $? > "${wt_path}.exit"
         ) &
         pids+=($!)
@@ -388,6 +390,16 @@ _best_by_score() {
         fi
     done
     echo "$best_file"
+}
+
+# ─── AADS-206: 지시서에서 model: 필드 파싱 ───────────────────
+# 사용: _get_directive_model <directive_file>
+# 반환: 지시서의 model: 필드값 또는 기본값 claude-sonnet-4-6
+_get_directive_model() {
+    local directive_file="$1"
+    local model
+    model=$(grep -m1 '^model:' "$directive_file" 2>/dev/null | awk '{print $2}' | tr -d ' ' || true)
+    echo "${model:-claude-sonnet-4-6}"
 }
 
 # ─── AADS-145: 투기적 실행 — final_commit 기반 다음작업 프리로드 ─
@@ -714,12 +726,14 @@ except Exception:
     # ─── AADS-113: running 상태 기록 ───
     record_lifecycle "$task_id" "running"
 
-    # ─── claude_exec.sh로 실행 ───
+    # ─── claude_exec.sh로 실행 + AADS-206: model 파싱 ───
     echo "  🚀 실행 시작..."
     local exec_exit=0
     local ts_exec_start
     ts_exec_start=$(date +%s%3N)
-    "${SCRIPT_DIR}/claude_exec.sh" "$task_id" "$directive_file" || exec_exit=$?
+    local directive_model
+    directive_model=$(_get_directive_model "$directive_file")
+    "${SCRIPT_DIR}/claude_exec.sh" "$task_id" "$directive_file" "$directive_model" || exec_exit=$?
     local ts_exec_end
     ts_exec_end=$(date +%s%3N)
     local exec_duration_ms=$(( ts_exec_end - ts_exec_start ))
