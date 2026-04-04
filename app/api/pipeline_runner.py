@@ -23,11 +23,23 @@ _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 _JOB_ID_RE = re.compile(r'^runner-[0-9a-zA-Z_-]+$')
 
 
+def _get_model_for_size(size: str) -> str:
+    """작업 규모 → 모델 자동 매핑 (AADS-206)"""
+    return {
+        "XS": "claude-haiku-4-5-20251001",
+        "S":  "claude-haiku-4-5-20251001",
+        "M":  "claude-sonnet-4-6",
+        "L":  "claude-sonnet-4-6",
+        "XL": "claude-opus-4-6",
+    }.get((size or "M").upper(), "claude-sonnet-4-6")
+
+
 class JobSubmitRequest(BaseModel):
     project: str = Field(..., description="프로젝트 코드")
     instruction: str = Field(..., max_length=50000, description="Claude Code에 전달할 지시")
     session_id: str = Field(..., description="채팅 세션 ID (필수 — 완료 보고 대상)")
     max_cycles: int = Field(3, ge=1, le=10, description="최대 검수 사이클")
+    size: str = Field("M", description="작업 규모 (XS/S/M/L/XL) — 모델 자동 선택")
 
     @field_validator('project')
     @classmethod
@@ -127,15 +139,16 @@ async def submit_job(req: JobSubmitRequest):
                         message=f"동일 작업이 이미 활성 상태입니다: {existing['job_id']}",
                     )
                 locked = await check_project_lock(conn, req.project)
+                model = _get_model_for_size(req.size)
                 await conn.execute(
                     """
                     INSERT INTO pipeline_jobs
                       (job_id, project, instruction, instruction_hash, chat_session_id,
-                       status, phase, max_cycles, created_at, updated_at)
-                    VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, NOW(), NOW())
+                       status, phase, max_cycles, model, created_at, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, $7, NOW(), NOW())
                     """,
                     job_id, req.project, req.instruction, instruction_hash,
-                    session_id, req.max_cycles,
+                    session_id, req.max_cycles, model,
                 )
     except Exception as e:
         logger.error("pipeline_runner.submit_fail", error=str(e))

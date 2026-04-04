@@ -1760,6 +1760,12 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "description": "최대 검수 반복 (기본: 3)",
                     "default": 3,
                 },
+                "size": {
+                    "type": "string",
+                    "description": "작업 규모 — XS/S→haiku(저비용), M/L→sonnet(기본), XL→opus(고성능). 기본값: M",
+                    "enum": ["XS", "S", "M", "L", "XL"],
+                    "default": "M",
+                },
             },
             "required": ["project", "instruction"],
         },

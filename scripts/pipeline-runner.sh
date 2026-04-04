@@ -47,7 +47,7 @@ declare -A PROJECT_WORKDIR=(
 )
 
 # 프로젝트별 허용 목록 (M4: 화이트리스트 검증)
-VALID_PROJECTS="AADS KIS GO100 SF NTV2"
+VALID_PROJECTS="AADS"
 
 MAX_JOB_RUNTIME="${MAX_JOB_RUNTIME:-3600}"      # 단일 작업 최대 60분 (stale 방지)
 WATCHDOG_INTERVAL="${WATCHDOG_INTERVAL:-300}"    # 5분마다 프로세스 생존 확인
@@ -379,7 +379,7 @@ claim_queued_job() {
                 ORDER BY COALESCE(p.priority, 0) DESC, p.created_at ASC LIMIT 1
                 FOR UPDATE SKIP LOCKED
              )
-             RETURNING job_id, project, replace(replace(instruction, E'\\n', ' '), '|', ' '), chat_session_id, max_cycles;"
+             RETURNING job_id, project, replace(replace(instruction, E'\\n', ' '), '|', ' '), chat_session_id, max_cycles, COALESCE(model, 'claude-sonnet-4-6');"
 }
 
 claim_approved_job() {
@@ -408,7 +408,7 @@ claim_rejected_job() {
 
 # ── 작업 실행 ─────────────────────────────────────────────────────────
 run_job() {
-    local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5"
+    local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5" job_model="${6:-claude-sonnet-4-6}"
     local output_file="$ARTIFACT_DIR/${job_id}.out" err_file="$ARTIFACT_DIR/${job_id}.err"
 
     # 전역 변수 설정 — cleanup()에서 러너 종료 시 현재 작업을 에러로 마킹하기 위함
@@ -471,8 +471,15 @@ run_job() {
     post_to_chat "$session_id" "🔧 [Pipeline Runner] 작업 시작: ${instruction:0:200}"
 
     # H5: 모델+계정 폴백 (같은 모델 2계정 시도 후 다음 모델)
-    # 흐름: Sonnet(계정1)→Sonnet(계정2)→Opus(계정1)→Opus(계정2)→Haiku(계정1)→Haiku(계정2)
-    local MODEL_CYCLE=("claude-sonnet-4-6" "claude-sonnet-4-6" "claude-opus-4-6" "claude-opus-4-6" "claude-haiku-4-5-20251001" "claude-haiku-4-5-20251001")
+    # AADS-206: job_model 기준 MODEL_CYCLE 구성 (지정 모델 우선, 폴백 유지)
+    local MODEL_CYCLE
+    if [[ "$job_model" == "claude-haiku-4-5-20251001" ]]; then
+        MODEL_CYCLE=("claude-haiku-4-5-20251001" "claude-haiku-4-5-20251001" "claude-sonnet-4-6" "claude-sonnet-4-6" "claude-opus-4-6" "claude-opus-4-6")
+    elif [[ "$job_model" == "claude-opus-4-6" ]]; then
+        MODEL_CYCLE=("claude-opus-4-6" "claude-opus-4-6" "claude-sonnet-4-6" "claude-sonnet-4-6" "claude-haiku-4-5-20251001" "claude-haiku-4-5-20251001")
+    else
+        MODEL_CYCLE=("claude-sonnet-4-6" "claude-sonnet-4-6" "claude-opus-4-6" "claude-opus-4-6" "claude-haiku-4-5-20251001" "claude-haiku-4-5-20251001")
+    fi
     local TOKEN_CYCLE=("1" "2" "1" "2" "1" "2")  # 1=Naver, 2=Gmail
     local TOKEN_1="${ANTHROPIC_AUTH_TOKEN:-}"
     local TOKEN_2="${ANTHROPIC_AUTH_TOKEN_2:-}"
@@ -1398,10 +1405,10 @@ main() {
 
         if [[ -n "$pending" ]]; then
             # FIX: ASCII RS(0x1e) 구분자 사용 — instruction에 | 포함 시 파싱 깨짐 방지
-            IFS=$'\x1e' read -r job_id project instruction session_id max_cycles <<< "$pending"
+            IFS=$'\x1e' read -r job_id project instruction session_id max_cycles job_model <<< "$pending"
             if [[ -n "$job_id" && -n "$project" ]]; then
                 # 방안A: 백그라운드 병렬 실행 — 다른 프로젝트 작업이 블로킹하지 않음
-                run_job "$job_id" "$project" "$instruction" "$session_id" "${max_cycles:-3}" &
+                run_job "$job_id" "$project" "$instruction" "$session_id" "${max_cycles:-3}" "${job_model:-claude-sonnet-4-6}" &
                 _bg_jobs[$!]="${job_id}|${session_id}"
                 log "  BG_START: job=$job_id pid=$! (parallel)"
             fi
