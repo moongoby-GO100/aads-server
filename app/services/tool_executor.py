@@ -2157,6 +2157,7 @@ class ToolExecutor:
                     "instruction": inp.get("instruction", ""),
                     "session_id": _session_id,
                     "max_cycles": int(inp.get("max_cycles", 3)),
+                    "size": inp.get("size", "M"),  # AADS-206B: size→model 자동라우팅
                 },
                 timeout=10,
             )
