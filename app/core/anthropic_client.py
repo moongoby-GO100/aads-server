@@ -1,8 +1,9 @@
 """
-중앙 Anthropic 클라이언트 팩토리 + Gemini 폴백.
+중앙 Anthropic 클라이언트 팩토리 + LiteLLM/DashScope 폴백.
 
 OAuth 토큰으로 Anthropic API 직접 호출.
-Claude 실패 시 Gemini 3.1 Flash Preview (LiteLLM 경유)로 자동 폴백.
+Claude 실패 시 Gemini 2.5 Flash (LiteLLM 경유)로 자동 폴백.
+비Claude 모델(qwen-turbo 등)은 DashScope API 직접 또는 LiteLLM 프록시로 라우팅.
 백그라운드 시스템(self_evaluator, fact_extractor, compaction 등)에서 사용.
 """
 from __future__ import annotations
@@ -24,7 +25,41 @@ from app.core.auth_provider import (
 logger = logging.getLogger(__name__)
 
 _GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
+_DASHSCOPE_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+_DASHSCOPE_API_KEY = os.getenv("ALIBABA_API_KEY", "")
 
+
+# ── LiteLLM 응답 래퍼 (Anthropic Message 호환) ──────────────────────
+
+class _LiteLLMTextBlock:
+    """Anthropic TextBlock 호환."""
+    def __init__(self, text: str):
+        self.text = text
+        self.type = "text"
+
+
+class _LiteLLMUsage:
+    """Anthropic Usage 호환."""
+    def __init__(self, input_tokens: int = 0, output_tokens: int = 0):
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.cache_creation_input_tokens = 0
+        self.cache_read_input_tokens = 0
+
+
+class _LiteLLMResponse:
+    """LiteLLM/DashScope 응답을 Anthropic Message 형태로 래핑."""
+    def __init__(self, text: str, model: str, usage_data: Optional[dict] = None):
+        self.content = [_LiteLLMTextBlock(text)]
+        self.model = model
+        self.usage = _LiteLLMUsage(
+            input_tokens=(usage_data or {}).get("prompt_tokens", 0),
+            output_tokens=(usage_data or {}).get("completion_tokens", 0),
+        )
+        self.stop_reason = "end_turn"
+
+
+# ── 공개 함수 ────────────────────────────────────────────────────────
 
 def get_client(model_hint: str = "claude-haiku") -> AsyncAnthropic:
     """Anthropic API 직접 클라이언트 반환 (auth_provider 경유)."""
@@ -39,12 +74,29 @@ async def call_llm_with_fallback(
 ) -> Optional[str]:
     """Claude 호출 + 실패 시 Gemini 폴백. 백그라운드 평가/추출용.
 
+    비Claude 모델(qwen-turbo 등) 지정 시 DashScope/LiteLLM으로 직접 라우팅.
+
     1순위: Claude Naver 토큰
     2순위: Claude Gmail 토큰
-    3순위: Gemini 3.1 Flash Preview (LiteLLM 경유)
+    3순위: Gemini 2.5 Flash (LiteLLM 경유)
 
     Returns: 응답 텍스트 또는 None (전부 실패 시)
     """
+    # 비Claude 모델 → DashScope/LiteLLM 직접
+    if not model.startswith("claude"):
+        try:
+            if model.startswith("qwen"):
+                return await _call_dashscope(prompt, model, max_tokens, system)
+            return await _call_litellm(prompt, model, max_tokens, system)
+        except Exception as e:
+            logger.warning("litellm_bg_error: model=%s error=%s", model, str(e)[:80])
+            # 실패 시 Gemini 폴백
+            try:
+                return await _call_litellm(prompt, _GEMINI_FALLBACK_MODEL, max_tokens, system)
+            except Exception as e2:
+                logger.warning("litellm_bg_gemini_fallback_error: %s", str(e2)[:80])
+            return None
+
     from app.services.oauth_usage_tracker import log_usage
 
     _MAX_RETRIES = 2
@@ -61,7 +113,6 @@ async def call_llm_with_fallback(
                 raw = await client.messages.with_raw_response.create(**kwargs)
                 resp = raw.parse()
                 duration_ms = int((time.monotonic() - t0) * 1000)
-                # 사용량 기록 (헤더 포함)
                 log_usage(
                     token=key,
                     model=model,
@@ -80,7 +131,6 @@ async def call_llm_with_fallback(
                 _retryable = any(k in _err_str for k in (
                     "timeout", "overloaded", "529", "rate_limit", "429", "500", "502", "503",
                 ))
-                # 에러도 기록
                 _err_code = None
                 for code in ("429", "402", "401", "403", "500", "502", "503", "529"):
                     if code in _err_str:
@@ -93,7 +143,7 @@ async def call_llm_with_fallback(
                     duration_ms=duration_ms,
                 )
                 if _retryable and _attempt < _MAX_RETRIES:
-                    _wait = 3 * (2 ** _attempt)  # 3초, 6초
+                    _wait = 3 * (2 ** _attempt)
                     logger.warning(
                         "claude_bg_retry: key=%s attempt=%d/%d wait=%ds error=%s",
                         key[:12], _attempt + 1, _MAX_RETRIES, _wait, str(e)[:80],
@@ -101,13 +151,13 @@ async def call_llm_with_fallback(
                     await asyncio.sleep(_wait)
                     continue
                 logger.warning("claude_bg_error: key=%s model=%s error=%s", key[:12], model, str(e)[:80])
-                break  # 이 키로는 더 이상 시도하지 않고 다음 키로
+                break
 
     # 3순위: Gemini 2.5 Flash (LiteLLM 경유)
     _lc = get_litellm_config()
     if _lc["key"]:
         try:
-            return await _call_gemini(prompt, max_tokens, system)
+            return await _call_litellm(prompt, _GEMINI_FALLBACK_MODEL, max_tokens, system)
         except Exception as e:
             logger.warning("gemini_bg_fallback_error: %s", str(e)[:80])
 
@@ -115,28 +165,73 @@ async def call_llm_with_fallback(
     return None
 
 
+async def call_background_llm(
+    prompt: str,
+    system: str = "",
+    max_tokens: int = 1000,
+) -> str:
+    """배경 서비스용 LLM 호출 — qwen-turbo(DashScope) 1순위, claude-haiku 폴백.
+
+    compaction, memory_manager, fact_extractor, experience_learner,
+    quality_feedback_loop, self_evaluator, smart_search, code_reviewer 등
+    OAuth 한도를 소비하지 않는 배경 작업에서 사용.
+    """
+    # 1순위: qwen-turbo (DashScope 직접)
+    try:
+        result = await _call_dashscope(prompt, "qwen-turbo", max_tokens, system or None)
+        if result:
+            return result
+    except Exception as e:
+        logger.warning("call_background_llm_qwen_failed: %s", str(e)[:80])
+
+    # 2순위: claude-haiku (OAuth 폴백)
+    fallback = await call_llm_with_fallback(
+        prompt=prompt,
+        system=system or None,
+        model="claude-haiku-4-5-20251001",
+        max_tokens=max_tokens,
+    )
+    return fallback or ""
+
+
 async def call_llm_messages_with_fallback(**kwargs) -> object:
     """Anthropic Messages API 직접 호출 + 2계정 폴백 (서브에이전트/tool-use용).
 
-    get_client() 대신 이 함수를 사용하면 OAuth 2계정 순차 시도 + 429/529 재시도 체인이 적용됨.
-    call_llm_with_fallback()와 달리 raw Response 객체를 그대로 반환.
+    비Claude 모델(qwen-turbo 등) 지정 시 DashScope/LiteLLM으로 직접 라우팅,
+    Anthropic Message 호환 객체로 래핑하여 반환.
 
     Args:
         **kwargs: AsyncAnthropic.messages.create()에 전달할 전체 파라미터
-                  (model, messages, system, max_tokens, tools, tool_choice 등)
 
     Returns:
-        Anthropic Message 응답 객체 (원본 그대로)
+        Anthropic Message 응답 객체 또는 _LiteLLMResponse (비Claude 경유 시)
 
     Raises:
         Exception: 모든 키에서 실패 시 마지막 예외를 raise
     """
+    _model = kwargs.get("model", "unknown")
+
+    # 비Claude 모델 → DashScope/LiteLLM 직접
+    if not _model.startswith("claude"):
+        if _model.startswith("qwen"):
+            return await _call_dashscope_messages(
+                model=_model,
+                messages=kwargs.get("messages", []),
+                max_tokens=kwargs.get("max_tokens", 256),
+                system=kwargs.get("system"),
+            )
+        return await _call_litellm_messages(
+            model=_model,
+            messages=kwargs.get("messages", []),
+            max_tokens=kwargs.get("max_tokens", 256),
+            system=kwargs.get("system"),
+        )
+
     from app.services.oauth_usage_tracker import log_usage
 
     _MAX_RETRIES = 2
     keys_to_try = get_oauth_tokens()
     last_error: Optional[Exception] = None
-    _model = kwargs.get("model", "unknown")
 
     for key in keys_to_try:
         for _attempt in range(_MAX_RETRIES + 1):
@@ -190,12 +285,91 @@ async def call_llm_messages_with_fallback(**kwargs) -> object:
     raise last_error or RuntimeError("no API keys configured")
 
 
-async def _call_gemini(
+# ── DashScope 직접 호출 (Alibaba Qwen 모델) ─────────────────────────
+
+async def _call_dashscope(
     prompt: str,
+    model: str,
     max_tokens: int = 256,
     system: Optional[str] = None,
 ) -> str:
-    """Gemini 2.5 Flash — LiteLLM 프록시 경유 (OpenAI 호환 API)."""
+    """DashScope API 직접 호출 (OpenAI 호환)."""
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    body = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max(max_tokens, 512),
+    }
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{_DASHSCOPE_BASE_URL}/chat/completions",
+            json=body,
+            headers={
+                "Authorization": f"Bearer {_DASHSCOPE_API_KEY}",
+                "Content-Type": "application/json",
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        content = data["choices"][0]["message"].get("content") or ""
+        if not content:
+            raise ValueError(f"DashScope returned empty content for model {model}")
+        logger.info("dashscope_bg_ok: model=%s tokens=%s", model, data.get("usage", {}))
+        return content
+
+
+async def _call_dashscope_messages(
+    model: str,
+    messages: list,
+    max_tokens: int = 256,
+    system: Optional[str] = None,
+) -> _LiteLLMResponse:
+    """DashScope API 직접 Messages 호출 — Anthropic Response 호환 래핑."""
+    oai_msgs = []
+    if system:
+        oai_msgs.append({"role": "system", "content": system})
+    for m in messages:
+        oai_msgs.append({"role": m.get("role", "user"), "content": m.get("content", "")})
+
+    body = {
+        "model": model,
+        "messages": oai_msgs,
+        "max_tokens": max(max_tokens, 512),
+    }
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{_DASHSCOPE_BASE_URL}/chat/completions",
+            json=body,
+            headers={
+                "Authorization": f"Bearer {_DASHSCOPE_API_KEY}",
+                "Content-Type": "application/json",
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        content = data["choices"][0]["message"].get("content") or ""
+        if not content:
+            raise ValueError(f"DashScope returned empty content for model {model}")
+        usage_data = data.get("usage", {})
+        logger.info("dashscope_msg_ok: model=%s tokens=%s", model, usage_data)
+        return _LiteLLMResponse(content, model, usage_data)
+
+
+# ── LiteLLM 프록시 호출 (Gemini 등) ─────────────────────────────────
+
+async def _call_litellm(
+    prompt: str,
+    model: str,
+    max_tokens: int = 256,
+    system: Optional[str] = None,
+) -> str:
+    """LiteLLM 프록시 경유 텍스트 생성 (OpenAI 호환 API)."""
     _lc = get_litellm_config()
     url = f"{_lc['url']}/v1/chat/completions"
 
@@ -205,7 +379,7 @@ async def _call_gemini(
     messages.append({"role": "user", "content": prompt})
 
     body = {
-        "model": _GEMINI_FALLBACK_MODEL,
+        "model": model,
         "messages": messages,
         "max_tokens": max(max_tokens, 512),
     }
@@ -218,4 +392,44 @@ async def _call_gemini(
         )
         resp.raise_for_status()
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        content = data["choices"][0]["message"].get("content") or ""
+        if not content:
+            raise ValueError(f"LiteLLM returned empty content for model {model}")
+        return content
+
+
+async def _call_litellm_messages(
+    model: str,
+    messages: list,
+    max_tokens: int = 256,
+    system: Optional[str] = None,
+) -> _LiteLLMResponse:
+    """LiteLLM 프록시 경유 Messages 호출 — Anthropic Response 호환 래핑."""
+    _lc = get_litellm_config()
+    url = f"{_lc['url']}/v1/chat/completions"
+
+    oai_msgs = []
+    if system:
+        oai_msgs.append({"role": "system", "content": system})
+    for m in messages:
+        oai_msgs.append({"role": m.get("role", "user"), "content": m.get("content", "")})
+
+    body = {
+        "model": model,
+        "messages": oai_msgs,
+        "max_tokens": max(max_tokens, 512),
+    }
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            url,
+            json=body,
+            headers={"Authorization": f"Bearer {_lc['key']}"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        content = data["choices"][0]["message"].get("content") or ""
+        if not content:
+            raise ValueError(f"LiteLLM returned empty content for model {model}")
+        usage_data = data.get("usage", {})
+        return _LiteLLMResponse(content, model, usage_data)
