@@ -26,7 +26,7 @@ POLL_INTERVAL="${POLL_INTERVAL:-5}"
 AADS_API_URL="${AADS_API_URL:-http://127.0.0.1:8100}"
 MAX_RUNTIME="${MAX_RUNTIME:-7200}"
 MAX_RETRIES="${MAX_RETRIES:-2}"               # H5: Claude 실패 시 재시도 횟수
-MAX_CONCURRENT_PER_PROJECT="${MAX_CONCURRENT_PER_PROJECT:-2}"  # 프로젝트당 동시 실행 수
+MAX_CONCURRENT_PER_PROJECT="${MAX_CONCURRENT_PER_PROJECT:-3}"  # 프로젝트당 동시 실행 수
 APPROVAL_TIMEOUT_HOURS="${APPROVAL_TIMEOUT_HOURS:-24}"  # H4: 승인 대기 타임아웃
 ARTIFACT_MAX_AGE_HOURS="${ARTIFACT_MAX_AGE_HOURS:-24}"  # H3: 임시파일 보존 시간
 LOG_DIR="/var/log/aads-pipeline"
@@ -372,12 +372,10 @@ claim_queued_job() {
              WHERE job_id = (
                 SELECT p.job_id FROM pipeline_jobs p
                 WHERE p.status='queued' AND p.phase='queued' $filter
-                  AND NOT EXISTS (
-                    SELECT 1 FROM pipeline_jobs r
-                    WHERE r.project = p.project
-                      AND r.status IN ('running', 'claimed')
-                      AND r.job_id != p.job_id
-                  )
+                  AND (SELECT COUNT(*) FROM pipeline_jobs r
+                       WHERE r.project = p.project
+                         AND r.status IN ('running', 'claimed')
+                         AND r.job_id != p.job_id) < ${MAX_CONCURRENT_PER_PROJECT:-3}
                 ORDER BY COALESCE(p.priority, 0) DESC, p.created_at ASC LIMIT 1
                 FOR UPDATE SKIP LOCKED
              )
