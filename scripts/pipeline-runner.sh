@@ -13,6 +13,13 @@
 # ═══════════════════════════════════════════════════════════════════════
 set -eo pipefail
 
+# 중복 실행 방지
+exec 9>/tmp/pipeline-runner.lock
+if ! flock -n 9; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 이미 실행 중인 러너가 있습니다. 종료." >&2
+    exit 0
+fi
+
 # ── 설정 ──────────────────────────────────────────────────────────────
 PGHOST="${PGHOST:-localhost}"
 PGPORT="${PGPORT:-5433}"
@@ -99,7 +106,49 @@ db_exec() {
 }
 
 db_update() {
+
+# DB 연결 실패 감지 및 알림
+_notify_db_failure() {
+    local err_msg="$1" bot="${TELEGRAM_BOT_TOKEN:-}" chat="${TELEGRAM_CHAT_ID:-}"
+    [[ -z "$bot" || -z "$chat" ]] && return 0
+    local COOLDOWN_FILE="/tmp/pipeline-db-fail.lock" now last=0
+    now=$(date +%s)
+    [[ -f "$COOLDOWN_FILE" ]] && last=$(cat "$COOLDOWN_FILE" 2>/dev/null || echo 0)
+    if (( now - last > 300 )); then
+        echo "$now" > "$COOLDOWN_FILE"
+        log "❌ DB 연결 실패: $err_msg"
+        curl -sf -X POST "https://api.telegram.org/bot${bot}/sendMessage" -d chat_id="$chat" -d text="🚨 [Pipeline Runner] DB 연결 실패 ($(hostname)): $err_msg" -d parse_mode=HTML >/dev/null 2>&1 || true
+    fi
+}
     _psql_cmd -c "$1" >/dev/null 2>&1
+
+# DB 연결 실패 감지 및 알림
+_notify_db_failure() {
+    local err_msg="$1" bot="${TELEGRAM_BOT_TOKEN:-}" chat="${TELEGRAM_CHAT_ID:-}"
+    [[ -z "$bot" || -z "$chat" ]] && return 0
+    local COOLDOWN_FILE="/tmp/pipeline-db-fail.lock" now last=0
+    now=$(date +%s)
+    [[ -f "$COOLDOWN_FILE" ]] && last=$(cat "$COOLDOWN_FILE" 2>/dev/null || echo 0)
+    if (( now - last > 300 )); then
+        echo "$now" > "$COOLDOWN_FILE"
+        log "❌ DB 연결 실패: $err_msg"
+        curl -sf -X POST "https://api.telegram.org/bot${bot}/sendMessage" -d chat_id="$chat" -d text="🚨 [Pipeline Runner] DB 연결 실패 ($(hostname)): $err_msg" -d parse_mode=HTML >/dev/null 2>&1 || true
+    fi
+}
+}
+
+# DB 연결 실패 감지 및 알림
+_notify_db_failure() {
+    local err_msg="$1" bot="${TELEGRAM_BOT_TOKEN:-}" chat="${TELEGRAM_CHAT_ID:-}"
+    [[ -z "$bot" || -z "$chat" ]] && return 0
+    local COOLDOWN_FILE="/tmp/pipeline-db-fail.lock" now last=0
+    now=$(date +%s)
+    [[ -f "$COOLDOWN_FILE" ]] && last=$(cat "$COOLDOWN_FILE" 2>/dev/null || echo 0)
+    if (( now - last > 300 )); then
+        echo "$now" > "$COOLDOWN_FILE"
+        log "❌ DB 연결 실패: $err_msg"
+        curl -sf -X POST "https://api.telegram.org/bot${bot}/sendMessage" -d chat_id="$chat" -d text="🚨 [Pipeline Runner] DB 연결 실패 ($(hostname)): $err_msg" -d parse_mode=HTML >/dev/null 2>&1 || true
+    fi
 }
 
 # C1: SQL 안전 — dollar-quoting (내부에 $esc$가 없는 한 안전)
