@@ -28,6 +28,8 @@ _GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
 _DASHSCOPE_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 _DASHSCOPE_API_KEY = os.getenv("ALIBABA_API_KEY", "")
 
+_bg_qwen_fail_streak: int = 0  # qwen-turbo 연속 실패 카운터 (AADS-204)
+
 
 # ── LiteLLM 응답 래퍼 (Anthropic Message 호환) ──────────────────────
 
@@ -176,13 +178,25 @@ async def call_background_llm(
     quality_feedback_loop, self_evaluator, smart_search, code_reviewer 등
     OAuth 한도를 소비하지 않는 배경 작업에서 사용.
     """
+    global _bg_qwen_fail_streak
+    t0 = time.time()
+
     # 1순위: qwen-turbo (DashScope 직접)
     try:
         result = await _call_dashscope(prompt, "qwen-turbo", max_tokens, system or None)
         if result:
+            _bg_qwen_fail_streak = 0
+            await _bg_llm_log(
+                "background", "qwen-turbo", True,
+                latency_ms=int((time.time() - t0) * 1000),
+            )
             return result
     except Exception as e:
         logger.warning("call_background_llm_qwen_failed: %s", str(e)[:80])
+        _bg_qwen_fail_streak += 1
+        await _bg_llm_log("background", "qwen-turbo", False, error_code="qwen_failed")
+        if _bg_qwen_fail_streak >= 3:  # qwen-turbo 조기 감지를 위해 3회로 낮춤 (AADS-204)
+            await _notify_bg_llm_alert(_bg_qwen_fail_streak)
 
     # 2순위: claude-haiku (OAuth 폴백)
     fallback = await call_llm_with_fallback(
@@ -192,6 +206,48 @@ async def call_background_llm(
         max_tokens=max_tokens,
     )
     return fallback or ""
+
+
+async def _bg_llm_log(
+    service_name: str,
+    model: str,
+    success: bool,
+    latency_ms: int = 0,
+    error_code: Optional[str] = None,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+) -> None:
+    """bg_llm_usage_log 테이블에 호출 결과 INSERT. DB 실패 시 예외 무시."""
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO bg_llm_usage_log
+                  (service_name, model, success, input_tokens, output_tokens, latency_ms, error_code)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                """,
+                service_name, model, success,
+                input_tokens, output_tokens, latency_ms, error_code,
+            )
+    except Exception as e:
+        logger.debug("bg_llm_log_failed: %s", str(e)[:80])
+
+
+async def _notify_bg_llm_alert(streak: int) -> None:
+    """qwen-turbo 연속 실패 시 텔레그램 긴급알림."""
+    try:
+        from app.services.telegram_bot import get_telegram_bot
+        bot = get_telegram_bot()
+        if bot and bot.is_ready:
+            await bot.send_message(
+                f"\U0001f6a8 *qwen-turbo 연속 실패 ({streak}회)*\n"
+                f"Background LLM이 {streak}회 연속 실패했습니다.\n"
+                f"claude-haiku 폴백 중. DashScope API 상태 확인 필요. (AADS-204)"
+            )
+    except Exception as e:
+        logger.debug("bg_llm_alert_failed: %s", str(e)[:80])
 
 
 async def call_llm_messages_with_fallback(**kwargs) -> object:
