@@ -13,7 +13,7 @@
 # ═══════════════════════════════════════════════════════════════════════
 set -eo pipefail
 
-# 중복 실행 방지
+# P1: 중복 실행 방지 — 이미 실행 중이면 즉시 종료
 exec 9>/tmp/pipeline-runner.lock
 if ! flock -n 9; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] 이미 실행 중인 러너가 있습니다. 종료." >&2
@@ -102,52 +102,33 @@ _psql_cmd() {
 db_exec() {
     # FIX: ASCII Record Separator(0x1E)를 필드 구분자로 사용
     # instruction에 | 문자가 포함되면 IFS='|' 파싱이 깨지는 버그 수정
-    _psql_cmd -t -A -F $'\x1e' -c "$1" 2>/dev/null
+    local out
+    out=$(_psql_cmd -t -A -F $'\x1e' -c "$1" 2>&1) || {
+        _notify_db_failure "$1"
+        return 1
+    }
+    echo "$out"
 }
 
 db_update() {
-
-# DB 연결 실패 감지 및 알림
-_notify_db_failure() {
-    local err_msg="$1" bot="${TELEGRAM_BOT_TOKEN:-}" chat="${TELEGRAM_CHAT_ID:-}"
-    [[ -z "$bot" || -z "$chat" ]] && return 0
-    local COOLDOWN_FILE="/tmp/pipeline-db-fail.lock" now last=0
-    now=$(date +%s)
-    [[ -f "$COOLDOWN_FILE" ]] && last=$(cat "$COOLDOWN_FILE" 2>/dev/null || echo 0)
-    if (( now - last > 300 )); then
-        echo "$now" > "$COOLDOWN_FILE"
-        log "❌ DB 연결 실패: $err_msg"
-        curl -sf -X POST "https://api.telegram.org/bot${bot}/sendMessage" -d chat_id="$chat" -d text="🚨 [Pipeline Runner] DB 연결 실패 ($(hostname)): $err_msg" -d parse_mode=HTML >/dev/null 2>&1 || true
-    fi
-}
     _psql_cmd -c "$1" >/dev/null 2>&1
-
-# DB 연결 실패 감지 및 알림
-_notify_db_failure() {
-    local err_msg="$1" bot="${TELEGRAM_BOT_TOKEN:-}" chat="${TELEGRAM_CHAT_ID:-}"
-    [[ -z "$bot" || -z "$chat" ]] && return 0
-    local COOLDOWN_FILE="/tmp/pipeline-db-fail.lock" now last=0
-    now=$(date +%s)
-    [[ -f "$COOLDOWN_FILE" ]] && last=$(cat "$COOLDOWN_FILE" 2>/dev/null || echo 0)
-    if (( now - last > 300 )); then
-        echo "$now" > "$COOLDOWN_FILE"
-        log "❌ DB 연결 실패: $err_msg"
-        curl -sf -X POST "https://api.telegram.org/bot${bot}/sendMessage" -d chat_id="$chat" -d text="🚨 [Pipeline Runner] DB 연결 실패 ($(hostname)): $err_msg" -d parse_mode=HTML >/dev/null 2>&1 || true
-    fi
-}
 }
 
-# DB 연결 실패 감지 및 알림
+# P1: DB 연결 실패 감지 및 텔레그램 알림
 _notify_db_failure() {
-    local err_msg="$1" bot="${TELEGRAM_BOT_TOKEN:-}" chat="${TELEGRAM_CHAT_ID:-}"
+    local err_msg="$1"
+    local bot="${TELEGRAM_BOT_TOKEN:-}" chat="${TELEGRAM_CHAT_ID:-}"
     [[ -z "$bot" || -z "$chat" ]] && return 0
-    local COOLDOWN_FILE="/tmp/pipeline-db-fail.lock" now last=0
+    local COOLDOWN="/tmp/pipeline-db-fail.lock" now last=0
     now=$(date +%s)
-    [[ -f "$COOLDOWN_FILE" ]] && last=$(cat "$COOLDOWN_FILE" 2>/dev/null || echo 0)
+    [[ -f "$COOLDOWN" ]] && last=$(cat "$COOLDOWN" 2>/dev/null || echo 0)
     if (( now - last > 300 )); then
-        echo "$now" > "$COOLDOWN_FILE"
+        echo "$now" > "$COOLDOWN"
         log "❌ DB 연결 실패: $err_msg"
-        curl -sf -X POST "https://api.telegram.org/bot${bot}/sendMessage" -d chat_id="$chat" -d text="🚨 [Pipeline Runner] DB 연결 실패 ($(hostname)): $err_msg" -d parse_mode=HTML >/dev/null 2>&1 || true
+        curl -sf -X POST "https://api.telegram.org/bot${bot}/sendMessage" \
+            -d chat_id="$chat" \
+            -d text="🚨 [Pipeline Runner] DB 연결 실패 ($(hostname)): $err_msg" \
+            -d parse_mode=HTML >/dev/null 2>&1 || true
     fi
 }
 
