@@ -84,6 +84,8 @@ services:
       # LiteLLM 프록시 (AADS-185)
       - LITELLM_BASE_URL=${LITELLM_BASE_URL:-http://aads-litellm:4000}
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-litellm}
+      # Alibaba Cloud DashScope (Qwen 모델 — AADS-204)
+      - ALIBABA_API_KEY=${ALIBABA_API_KEY:-}
       # Claude CLI Relay (호스트 실행, MCP 도구 브릿지 경유)
       - CLAUDE_RELAY_URL=${CLAUDE_RELAY_URL:-http://host.docker.internal:8199}
       - CLAUDE_CLI_ENABLED=${CLAUDE_CLI_ENABLED:-true}
