@@ -12,7 +12,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-from app.core.anthropic_client import call_llm_with_fallback
+from app.core.anthropic_client import call_background_llm
 
 logger = logging.getLogger(__name__)
 
@@ -69,9 +69,8 @@ async def _select_urls_by_llm(
 
     try:
         resp = await asyncio.wait_for(
-            call_llm_with_fallback(
+            call_background_llm(
                 prompt=prompt,
-                model="qwen-turbo",
                 max_tokens=200,
             ),
             timeout=10,

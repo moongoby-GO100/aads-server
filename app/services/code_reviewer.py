@@ -93,12 +93,11 @@ async def review_code_diff(
 위 기준에 따라 JSON으로 판정하세요."""
 
     try:
-        from app.core.anthropic_client import call_llm_with_fallback
-        result_text = await call_llm_with_fallback(
+        from app.core.anthropic_client import call_background_llm
+        result_text = await call_background_llm(
             prompt=prompt,
-            model=_REVIEW_MODEL,
-            max_tokens=1024,
             system=_REVIEW_SYSTEM_PROMPT,
+            max_tokens=1024,
         )
 
         if not result_text:

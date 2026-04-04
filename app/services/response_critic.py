@@ -16,7 +16,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 _ENABLED = os.getenv("CRITIC_AI_ENABLED", "true").lower() == "true"
-_HAIKU_MODEL = os.getenv("CRITIC_MODEL", "claude-haiku-4-5-20251001")
+_HAIKU_MODEL = os.getenv("CRITIC_MODEL", "qwen-turbo")
 _SCORE_THRESHOLD = float(os.getenv("CRITIC_THRESHOLD", "0.55"))
 
 # 스킵 대상 인텐트 (비용 절약)
@@ -83,7 +83,7 @@ async def critique_response(
     start = time.time()
 
     try:
-        from app.core.anthropic_client import call_llm_with_fallback
+        from app.core.anthropic_client import call_background_llm
 
         prompt = _CRITIC_PROMPT.format(
             user_msg=user_msg[:300],
@@ -92,9 +92,8 @@ async def critique_response(
             tool_used="예" if tools_called else "아니오",
         )
 
-        result_text = await call_llm_with_fallback(
+        result_text = await call_background_llm(
             prompt=prompt,
-            model=_HAIKU_MODEL,
             max_tokens=256,
         )
 

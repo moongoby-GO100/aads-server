@@ -59,7 +59,7 @@ async def generate_messages(
     try:
         result = await call_llm_with_fallback(
             prompt=user_prompt,
-            model="claude-haiku-4-5-20251001",
+            model="qwen-turbo",
             max_tokens=800,
             system=system_prompt,
         )
@@ -109,7 +109,7 @@ async def improve_message(
     try:
         result = await call_llm_with_fallback(
             prompt=user_prompt,
-            model="claude-haiku-4-5-20251001",
+            model="qwen-turbo",
             max_tokens=400,
             system=system_prompt,
         )

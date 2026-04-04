@@ -71,7 +71,7 @@ async def evaluate_response(
         return None
 
     try:
-        from app.core.anthropic_client import call_llm_with_fallback
+        from app.core.anthropic_client import call_background_llm
 
         # 이전 대화 맥락 구성 (최근 6개 메시지)
         prev_context = "없음 (첫 대화)"
@@ -95,8 +95,8 @@ async def evaluate_response(
             ai_msg=ai_response[:1000],
         )
 
-        raw_text = await call_llm_with_fallback(prompt, model=_HAIKU_MODEL, max_tokens=256)
-        if raw_text is None:
+        raw_text = await call_background_llm(prompt, max_tokens=256)
+        if not raw_text:
             logger.warning("self_eval_llm_all_failed", message=message_id[:8])
             return None
 
@@ -202,8 +202,8 @@ async def evaluate_response(
                     f"품질 세부: {json.dumps(details, ensure_ascii=False)}\n\n"
                     f"반성문만 작성하세요."
                 )
-                from app.core.anthropic_client import call_llm_with_fallback as _refl_llm
-                _refl_text = await _refl_llm(reflection_prompt, model=_HAIKU_MODEL, max_tokens=256)
+                from app.core.anthropic_client import call_background_llm as _refl_llm
+                _refl_text = await _refl_llm(reflection_prompt, max_tokens=256)
                 reflection = _refl_text.strip() if _refl_text else ""
                 if reflection:
                     # MEDIUM-6: 프로젝트명 정규화 (workspace_name → project code)
@@ -412,7 +412,7 @@ async def _check_repeated_errors(
                 similar_details = [r["detail"][:200] for r in similar_facts[:3] if r["detail"]]
 
                 # 영구 교정 지시 생성
-                from app.core.anthropic_client import call_llm_with_fallback as _corr_llm
+                from app.core.anthropic_client import call_background_llm as _corr_llm
                 _corr_prompt = (
                     f"다음 AI 오류가 {count}회 반복되고 있습니다.\n"
                     f"프로젝트: {project}\n\n"
@@ -424,7 +424,7 @@ async def _check_repeated_errors(
                     f"'항상 ~하라', '절대 ~하지 마라' 형태로 작성.\n"
                     f"지시문만 반환하세요."
                 )
-                _corr_text = await _corr_llm(_corr_prompt, model=_HAIKU_MODEL, max_tokens=256)
+                _corr_text = await _corr_llm(_corr_prompt, max_tokens=256)
                 directive = _corr_text.strip() if _corr_text else ""
                 if directive:
                     # 키에 타임스탬프를 포함하여 고유성 보장
