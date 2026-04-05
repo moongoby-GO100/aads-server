@@ -1224,8 +1224,9 @@ _PROJECT_SERVER_MAP: Dict[str, Dict[str, str]] = {
 _SSH_PATH_WHITELIST = re.compile(r'^[\w._/\- \u2010-\u2015\u00a0]+$', re.UNICODE)
 _SSH_KEYWORD_WHITELIST = re.compile(r'^[\w._\- \u2010-\u2015]+$', re.UNICODE)
 _SSH_SENSITIVE_PATTERNS = re.compile(
-    r'(\.env|\.ssh/|id_rsa|\.git/config|secrets|password|token'
-    r'|\.npmrc|\.pypirc|\.netrc|credentials|private_key|kubeconfig'
+    r'(\.env($|/)|\.ssh/|id_rsa|\.git/config'
+    r'|\bsecrets\b|\bpassword\b|\btoken\b'
+    r'|\.npmrc|\.pypirc|\.netrc|\bcredentials\b|private_key|kubeconfig'
     r'|\.aws/|\.kube/|\.docker/|\.pem$|\.key$|authorized_keys|known_hosts)',
     re.IGNORECASE,
 )
@@ -1544,6 +1545,8 @@ async def tool_fetch_url(url: str) -> str:
 
 # ─── SSH 원격 접근 도구 함수 (AADS-165) ──────────────────────────────────────────
 
+_SSH_BLOCKED_SYSTEM_DIRS = ("/etc/", "/proc/", "/sys/", "/dev/", "/boot/", "/sbin/", "/lib/", "/lib64/")
+
 def _validate_ssh_path(raw_path: str, workdir: str, extra_workdirs: Optional[List[str]] = None) -> Optional[str]:
     """SSH 경로 보안 검증. 위반 시 에러 문자열, 통과 시 None."""
     if not _SSH_PATH_WHITELIST.match(raw_path):
@@ -1556,6 +1559,10 @@ def _validate_ssh_path(raw_path: str, workdir: str, extra_workdirs: Optional[Lis
     resolved = normpath(pjoin(workdir, raw_path))
     if not any(resolved.startswith(d) for d in allowed_dirs):
         return f"[ERROR] 접근 거부: 허용 경로({', '.join(allowed_dirs)}) 바깥 접근 불가."
+    # workdir="/"인 경우 시스템 디렉토리 접근 차단 (SF/NTV2 보안 강화)
+    if workdir == "/":
+        if any(resolved.startswith(sd) for sd in _SSH_BLOCKED_SYSTEM_DIRS):
+            return f"[ERROR] 접근 거부: 시스템 디렉토리({resolved}) 접근 불가."
     return None
 
 
@@ -1937,10 +1944,13 @@ async def _read_raw_file(project: str, file_path: str) -> str:
     host = mapping["server"]
     port = str(mapping.get("port", 22))
     workdir = mapping["workdir"]
+    extra_workdirs = [mapping["workdir_v2"]] if "workdir_v2" in mapping else None
+    # 보안 검증: 민감 패턴 + 경로 탈출 + 시스템 디렉토리 차단
+    path_err = _validate_ssh_path(file_path, workdir, extra_workdirs)
+    if path_err:
+        return path_err
     from posixpath import normpath, join as pjoin
     resolved = normpath(pjoin(workdir, file_path))
-    if not resolved.startswith(workdir):
-        return f"[ERROR] 경로 탈출 차단: {resolved}"
     cmd = f"cat {shlex.quote(resolved)}"
     try:
         proc = await asyncio.create_subprocess_exec(
