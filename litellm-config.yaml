@@ -339,6 +339,26 @@ model_list:
     model: openai/deepseek-v3.2
     api_key: os.environ/ALIBABA_API_KEY
     api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: openrouter-grok-4-fast
+  litellm_params:
+    model: openrouter/x-ai/grok-4
+    api_key: os.environ/OPENROUTER_API_KEY
+- model_name: openrouter-deepseek-v3
+  litellm_params:
+    model: openrouter/deepseek/deepseek-chat-v3-0324
+    api_key: os.environ/OPENROUTER_API_KEY
+- model_name: openrouter-mistral-small
+  litellm_params:
+    model: openrouter/mistralai/mistral-small-3.2-24b-instruct
+    api_key: os.environ/OPENROUTER_API_KEY
+- model_name: openrouter-nemotron-free
+  litellm_params:
+    model: openrouter/nvidia/llama-3.1-nemotron-70b-instruct
+    api_key: os.environ/OPENROUTER_API_KEY
+- model_name: openrouter-minimax-m2
+  litellm_params:
+    model: openrouter/minimax/minimax-m1
+    api_key: os.environ/OPENROUTER_API_KEY
 router_settings:
   enable_pre_call_checks: false
   num_retries: 3
