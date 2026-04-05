@@ -1052,14 +1052,16 @@ async def create_session(data: Dict[str, Any]) -> Dict[str, Any]:
         if not title or title in ("새 대화", "New Chat", ""):
             title = await _generate_versioned_title(conn, ws_id)
 
+        current_model = data.get("current_model")
         row = await conn.fetchrow(
             """
-            INSERT INTO chat_sessions (workspace_id, title)
-            VALUES ($1, $2)
+            INSERT INTO chat_sessions (workspace_id, title, current_model)
+            VALUES ($1, $2, $3)
             RETURNING *
             """,
             ws_id,
             title,
+            current_model,
         )
         return _row_to_dict(row)
 
@@ -1112,7 +1114,7 @@ async def update_session(session_id: str, data: Dict[str, Any]) -> Optional[Dict
         sets = []
         vals: List[Any] = []
         idx = 1
-        for field in ("title", "summary"):
+        for field in ("title", "summary", "current_model"):
             if field in data and data[field] is not None:
                 sets.append(f"{field} = ${idx}")
                 vals.append(data[field])
