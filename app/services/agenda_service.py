@@ -95,6 +95,7 @@ class AgendaService:
         status: Optional[str] = None,
         priority: Optional[str] = None,
         created_by: Optional[str] = None,
+        source_session_id: Optional[str] = None,
         limit: int = 20,
         offset: int = 0,
     ) -> Dict[str, Any]:
@@ -105,6 +106,7 @@ class AgendaService:
             status: 상태 필터
             priority: 우선순위 필터
             created_by: 등록자 필터
+            source_session_id: 세션 ID 필터
             limit: 페이지 크기 (기본 20)
             offset: 시작 위치 (기본 0)
         """
@@ -123,6 +125,9 @@ class AgendaService:
         if created_by is not None:
             params.append(created_by)
             conditions.append(f"created_by = ${len(params)}")
+        if source_session_id is not None:
+            params.append(source_session_id)
+            conditions.append(f"source_session_id = ${len(params)}")
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         count_query = f"SELECT COUNT(*) FROM ceo_agenda {where_clause}"
@@ -277,6 +282,34 @@ class AgendaService:
             return None
         logger.info("agenda_decided", id=agenda_id, decided_by=decided_by)
         return _row_to_dict(row)
+
+    async def list_sessions(
+        self,
+        project: Optional[str] = None,
+    ) -> List[str]:
+        """아젠다에 연결된 고유 세션 ID 목록 반환."""
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            if project:
+                rows = await conn.fetch(
+                    """
+                    SELECT DISTINCT source_session_id
+                    FROM ceo_agenda
+                    WHERE source_session_id IS NOT NULL AND project = $1
+                    ORDER BY source_session_id
+                    """,
+                    project,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT DISTINCT source_session_id
+                    FROM ceo_agenda
+                    WHERE source_session_id IS NOT NULL
+                    ORDER BY source_session_id
+                    """
+                )
+        return [r["source_session_id"] for r in rows]
 
     async def search_agendas(
         self,

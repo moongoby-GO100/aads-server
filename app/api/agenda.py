@@ -87,12 +87,23 @@ async def search_agendas(
     return {"query": keyword, "count": len(items), "items": items}
 
 
+@router.get("/sessions", operation_id="list_agenda_sessions", summary="아젠다 세션 목록 조회")
+async def list_agenda_sessions(
+    project: Optional[str] = Query(None, description="프로젝트 필터 (없으면 전체)"),
+):
+    """아젠다에 연결된 고유 세션 ID 목록 반환."""
+    svc = get_agenda_service()
+    sessions = await svc.list_sessions(project=project)
+    return {"sessions": sessions}
+
+
 @router.get("/", operation_id="list_agendas", summary="아젠다 목록 조회")
 async def list_agendas(
     project: Optional[str] = Query(None, description="프로젝트 필터 (없으면 전체)"),
     status: Optional[str] = Query(None, description="상태 필터"),
     priority: Optional[str] = Query(None, description="우선순위 필터"),
     created_by: Optional[str] = Query(None, description="등록자 필터"),
+    source_session_id: Optional[str] = Query(None, description="세션 ID 필터"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ):
@@ -103,6 +114,7 @@ async def list_agendas(
         status=status,
         priority=priority,
         created_by=created_by,
+        source_session_id=source_session_id,
         limit=limit,
         offset=offset,
     )
