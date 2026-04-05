@@ -729,6 +729,8 @@ ${diff_summary}
 # 채팅AI 자동 반응 트리거 — 작업 완료/실패 시 AI가 결과를 확인·검수·조치
 _notify_ai() {
     local job_id="$1"
+    # job_id 유효성 검사 — runner-{hash} 패턴만 허용 (db_exec UPDATE 태그 오염 방어)
+    [[ ! "$job_id" =~ ^runner-[0-9a-zA-Z_-]+$ ]] && return 0
     # aads-server의 notify API 호출 (백그라운드, 실패해도 무시)
     # 동기 호출 (최대 10초) — 결과를 로그에 기록
     local notify_http_code
