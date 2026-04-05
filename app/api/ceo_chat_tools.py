@@ -1934,7 +1934,8 @@ async def _read_raw_file(project: str, file_path: str) -> str:
     mapping = _PROJECT_SERVER_MAP.get(project)
     if not mapping:
         return f"[ERROR] 알 수 없는 프로젝트: {project}"
-    server = mapping["server"]
+    host = mapping["server"]
+    port = str(mapping.get("port", 22))
     workdir = mapping["workdir"]
     from posixpath import normpath, join as pjoin
     resolved = normpath(pjoin(workdir, file_path))
@@ -1944,7 +1945,7 @@ async def _read_raw_file(project: str, file_path: str) -> str:
     try:
         proc = await asyncio.create_subprocess_exec(
             "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
-            f"{server['user']}@{server['host']}", "-p", str(server.get("port", 22)),
+            "-p", port, f"root@{host}",
             cmd,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
