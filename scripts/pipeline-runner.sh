@@ -248,10 +248,13 @@ promote_next_queued() {
         return 0
     fi
 
-    # 가장 오래된 queued 작업을 찾아 로그만 남김 (실제 claim은 메인루프의 claim_queued_job이 처리)
+    # AADS-211: depends_on 체크 — 의존 작업이 done이 아닌 queued 작업은 스킵
     local next_job
     next_job=$(db_exec "SELECT job_id FROM pipeline_jobs
                         WHERE project='${project}' AND status='queued' AND phase='queued'
+                          AND (depends_on IS NULL OR EXISTS (
+                               SELECT 1 FROM pipeline_jobs dep
+                               WHERE dep.job_id = pipeline_jobs.depends_on AND dep.status = 'done'))
                         ORDER BY COALESCE(priority, 0) DESC, created_at ASC LIMIT 1;" 2>/dev/null) || true
     next_job="${next_job// /}"
     if [[ -n "$next_job" ]]; then
@@ -398,10 +401,14 @@ post_to_chat() {
 claim_queued_job() {
     local filter="$1"
     # instruction의 줄바꿈을 \\n으로 치환하여 단일행 RETURNING 보장
+    # AADS-211: depends_on 체크 — 의존 작업이 done이 아니면 스킵
     db_exec "UPDATE pipeline_jobs SET status='claimed', updated_at=NOW()
              WHERE job_id = (
                 SELECT p.job_id FROM pipeline_jobs p
                 WHERE p.status='queued' AND p.phase='queued' $filter
+                  AND (p.depends_on IS NULL OR EXISTS (
+                       SELECT 1 FROM pipeline_jobs dep
+                       WHERE dep.job_id = p.depends_on AND dep.status = 'done'))
                   AND (SELECT COUNT(*) FROM pipeline_jobs r
                        WHERE r.project = p.project
                          AND r.status IN ('running', 'claimed')

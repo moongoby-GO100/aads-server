@@ -96,7 +96,9 @@ class PipelineCJob:
 
     def __init__(self, project: str, instruction: str,
                  chat_session_id: str, max_cycles: int = 3,
-                 dsn: str = "", model: str = ""):
+                 dsn: str = "", model: str = "",
+                 worker_model: str = "", parallel_group: str = "",
+                 depends_on: str = ""):
         self.job_id = f"runner-{uuid.uuid4().hex[:8]}"
         self.project = project.upper()
         self.instruction = instruction
@@ -113,6 +115,12 @@ class PipelineCJob:
         self.dsn = dsn
         # AI가 선택한 모델 (sonnet/opus/haiku, 빈 문자열이면 기본 sonnet)
         self.model = model if model in ("sonnet", "opus", "haiku") else ""
+        # AADS-211: 직접 모델 지정 (worker_model)
+        self.worker_model = worker_model
+        # AADS-211: 병렬 실행 그룹
+        self.parallel_group = parallel_group
+        # AADS-211: 의존 작업 job_id
+        self.depends_on = depends_on
         self.phase = "queued"
         self.cycle = 0
         self.status = "running"  # running | awaiting_approval | done | error
@@ -243,10 +251,16 @@ class PipelineCJob:
     # ─── 메인 실행 ──────────────────────────────────────────────────────────
 
     async def run(self):
-        """Phase 1~3 자율 실행 → Phase 4 승인 대기에서 멈춤. 매 단계 채팅방 기록."""
-        lock = _project_locks.setdefault(self.project, asyncio.Lock())
-        async with lock:
+        """Phase 1~3 자율 실행 → Phase 4 승인 대기에서 멈춤. 매 단계 채팅방 기록.
+        AADS-211: parallel_group이 설정된 작업은 프로젝트 락 없이 동시 실행."""
+        if self.parallel_group:
+            # 병렬 그룹 작업 → 프로젝트 락 없이 바로 실행
+            self._log("parallel_start", f"병렬 그룹 [{self.parallel_group}] — 동시 실행")
             await self._run_inner()
+        else:
+            lock = _project_locks.setdefault(self.project, asyncio.Lock())
+            async with lock:
+                await self._run_inner()
 
     async def _run_inner(self):
         """run()의 실제 본체 — 프로젝트 락 안에서 실행."""
@@ -1084,8 +1098,9 @@ class PipelineCJob:
                     INSERT INTO pipeline_jobs
                         (job_id, chat_session_id, project, instruction, claude_session_id,
                          phase, cycle, max_cycles, status, logs, result_output, git_diff,
-                         review_feedback, updated_at)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now())
+                         review_feedback, worker_model, parallel_group, depends_on,
+                         updated_at)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now())
                     ON CONFLICT (job_id) DO UPDATE SET
                         phase = EXCLUDED.phase,
                         cycle = EXCLUDED.cycle,
@@ -1103,6 +1118,9 @@ class PipelineCJob:
                     (self.result_output or "")[:10000],
                     (self.git_diff or "")[:10000],
                     self.review_feedback or "",
+                    self.worker_model or None,
+                    self.parallel_group or None,
+                    self.depends_on or None,
                 )
             # 작업 완료/실패 이벤트
             if self.status in ("done", "error"):
@@ -1188,9 +1206,14 @@ async def start_pipeline(
     max_cycles: int = 3,
     dsn: str = "",
     model: str = "",
+    worker_model: str = "",
+    parallel_group: str = "",
+    depends_on: str = "",
 ) -> dict:
-    """Pipeline Runner 시작 (asyncio.create_task로 백그라운드 실행)."""
-    logger.info(f"[DIAG] start_pipeline: chat_session_id='{chat_session_id}' project={project}")
+    """Pipeline Runner 시작 (asyncio.create_task로 백그라운드 실행).
+    AADS-211: worker_model(직접 모델 지정), parallel_group(병렬 실행), depends_on(의존성)."""
+    logger.info(f"[DIAG] start_pipeline: chat_session_id='{chat_session_id}' project={project}"
+                f" worker_model={worker_model} parallel_group={parallel_group} depends_on={depends_on}")
 
     # chat_session_id가 비어있으면 해당 프로젝트 워크스페이스의 최근 세션을 자동 조회
     if not chat_session_id:
@@ -1207,6 +1230,9 @@ async def start_pipeline(
         max_cycles=max_cycles,
         dsn=dsn,
         model=model,
+        worker_model=worker_model,
+        parallel_group=parallel_group,
+        depends_on=depends_on,
     )
     _active_jobs[job.job_id] = job
 

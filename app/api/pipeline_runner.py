@@ -46,6 +46,9 @@ class JobSubmitRequest(BaseModel):
     session_id: str = Field(..., description="채팅 세션 ID (필수 — 완료 보고 대상)")
     max_cycles: int = Field(3, ge=1, le=10, description="최대 검수 사이클")
     size: str = Field("M", description="작업 규모 (XS/S/M/L/XL) — 모델 자동 선택")
+    worker_model: str = Field("", description="직접 모델 지정 (빈 문자열이면 size 기반 자동 선택)")
+    parallel_group: str = Field("", description="병렬 실행 그룹 — 같은 그룹 내 작업은 동시 실행")
+    depends_on: str = Field("", description="의존 작업 job_id ��� 해당 작업 완료 후에만 실행")
 
     @field_validator('project')
     @classmethod
@@ -80,8 +83,18 @@ class JobApproveRequest(BaseModel):
         return v
 
 
-async def check_project_lock(conn, project: str, exclude_job_id: str | None = None) -> bool:
-    """프로젝트에 실행 중인(running/claimed) 작업이 있는지 확인. True면 잠김."""
+async def check_project_lock(conn, project: str, exclude_job_id: str | None = None, parallel_group: str = "") -> bool:
+    """프로젝트에 실행 중인(running/claimed) ���업이 있는지 확인. True면 잠김.
+    AADS-211: parallel_group이 지정되면 같은 그룹 내 작업은 동시 실행 허용."""
+    # parallel_group이 있으면 같은 그룹이 아닌 작업만 lock으로 간주
+    if parallel_group:
+        row = await conn.fetchrow(
+            "SELECT count(*) as cnt FROM pipeline_jobs "
+            "WHERE project = $1 AND status IN ('running', 'claimed') "
+            "AND (parallel_group IS NULL OR parallel_group != $2)",
+            project, parallel_group,
+        )
+        return (row["cnt"] or 0) > 0
     if exclude_job_id:
         row = await conn.fetchrow(
             "SELECT count(*) as cnt FROM pipeline_jobs "
@@ -98,14 +111,26 @@ async def check_project_lock(conn, project: str, exclude_job_id: str | None = No
 
 
 async def promote_next_queued(conn, project: str) -> str | None:
-    """프로젝트 Lock 해제 후 다음 queued 작업 확인. Shell runner가 polling으로 자동 claim하므로 상태는 변경하지 않음."""
-    row = await conn.fetchrow(
-        "SELECT job_id FROM pipeline_jobs "
+    """프로젝트 Lock 해제 후 다음 queued 작업 확인.
+    AADS-211: depends_on이 설정된 작업은 의존 작업이 done일 때만 승격."""
+    rows = await conn.fetch(
+        "SELECT job_id, depends_on, parallel_group FROM pipeline_jobs "
         "WHERE project = $1 AND status = 'queued' "
-        "ORDER BY created_at ASC LIMIT 1",
+        "ORDER BY created_at ASC LIMIT 10",
         project,
     )
-    if row:
+    for row in rows:
+        dep = row["depends_on"]
+        if dep:
+            # 의존 작업 상태 확인
+            dep_row = await conn.fetchrow(
+                "SELECT status FROM pipeline_jobs WHERE job_id = $1", dep,
+            )
+            if not dep_row or dep_row["status"] != "done":
+                logger.debug("pipeline_runner.dep_not_ready",
+                             job_id=row["job_id"], depends_on=dep,
+                             dep_status=dep_row["status"] if dep_row else "not_found")
+                continue  # 의존 작업 미완료 → 스킵
         logger.info("pipeline_runner.lock_released_next_ready",
                      next_job_id=row["job_id"], project=project)
         return row["job_id"]
@@ -144,21 +169,38 @@ async def submit_job(req: JobSubmitRequest):
                         status="duplicate",
                         message=f"동일 작업이 이미 활성 상태입니다: {existing['job_id']}",
                     )
-                locked = await check_project_lock(conn, req.project)
-                # AADS-206B: size 명시 시 우선, 기본값이면 instruction 파싱
-                size = req.size
-                if size == "M":
-                    size = _parse_size_from_instruction(req.instruction)
-                model = _get_model_for_size(size)
+                locked = await check_project_lock(conn, req.project, parallel_group=req.parallel_group)
+                # AADS-211: worker_model 직접 지정 시 size 무시
+                if req.worker_model:
+                    model = req.worker_model
+                else:
+                    # AADS-206B: size 명시 시 우선, 기본값이면 instruction 파���
+                    size = req.size
+                    if size == "M":
+                        size = _parse_size_from_instruction(req.instruction)
+                    model = _get_model_for_size(size)
+                # AADS-211: depends_on 유효성 검사
+                if req.depends_on:
+                    dep_row = await conn.fetchrow(
+                        "SELECT job_id, status FROM pipeline_jobs WHERE job_id = $1",
+                        req.depends_on,
+                    )
+                    if not dep_row:
+                        raise HTTPException(status_code=400, detail=f"의존 작업을 찾��� 수 없습니다: {req.depends_on}")
                 await conn.execute(
                     """
                     INSERT INTO pipeline_jobs
                       (job_id, project, instruction, instruction_hash, chat_session_id,
-                       status, phase, max_cycles, model, created_at, updated_at)
-                    VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, $7, NOW(), NOW())
+                       status, phase, max_cycles, model,
+                       worker_model, parallel_group, depends_on,
+                       created_at, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, $7,
+                            $8, $9, $10,
+                            NOW(), NOW())
                     """,
                     job_id, req.project, req.instruction, instruction_hash,
                     session_id, req.max_cycles, model,
+                    req.worker_model or None, req.parallel_group or None, req.depends_on or None,
                 )
     except Exception as e:
         logger.error("pipeline_runner.submit_fail", error=str(e))
@@ -403,6 +445,112 @@ async def approve_or_reject(job_id: str, req: JobApproveRequest):
             logger.warning(f"autonomy_record_on_reject_failed: {e}")
 
     return {"job_id": job_id, "action": req.action, "message": f"작업이 {action_kr}"}
+
+
+# ─── AADS-211: 배치 제출 — 복수 작업을 의존성 그래프로 한번에 제출 ────────────
+
+class BatchJobItem(BaseModel):
+    """배치 내 개별 작업 정의."""
+    key: str = Field(..., description="배치 내 작업 식별자 (예: 'A', 'B', 'C')")
+    instruction: str = Field(..., max_length=50000)
+    size: str = Field("M")
+    worker_model: str = Field("")
+    depends_on_key: str = Field("", description="이 배치 내 다른 작업의 key (자동으로 job_id 매핑)")
+
+
+class BatchSubmitRequest(BaseModel):
+    project: str = Field(...)
+    session_id: str = Field(...)
+    jobs: list[BatchJobItem] = Field(..., min_length=1, max_length=20)
+    parallel_group: str = Field("", description="전체 배치에 적용할 병렬 그룹")
+    max_cycles: int = Field(3, ge=1, le=10)
+
+    @field_validator('project')
+    @classmethod
+    def validate_project(cls, v):
+        if v not in _VALID_PROJECTS:
+            raise ValueError(f"허용 프로젝트: {', '.join(sorted(_VALID_PROJECTS))}")
+        return v
+
+    @field_validator('session_id')
+    @classmethod
+    def validate_session_id(cls, v):
+        if not v or not _UUID_RE.match(v):
+            raise ValueError("session_id는 필수이며 UUID 형식이어야 합니다")
+        return v
+
+
+@router.post("/pipeline/jobs/batch", tags=["pipeline-runner"])
+async def submit_batch(req: BatchSubmitRequest):
+    """복수 작업을 의존성 그래프로 한번에 제출.
+    AADS-211: 채팅 AI(오케스트레이터)가 작업을 쪼갠 뒤 호출."""
+    from app.core.db_pool import get_pool
+    pool = get_pool()
+
+    # 자동 parallel_group 생성 (미지정 시)
+    pg = req.parallel_group or f"batch-{uuid.uuid4().hex[:8]}"
+
+    # key → job_id 매핑 테이블
+    key_to_job_id: dict[str, str] = {}
+    for item in req.jobs:
+        key_to_job_id[item.key] = f"runner-{uuid.uuid4().hex[:8]}"
+
+    results = []
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                for item in req.jobs:
+                    job_id = key_to_job_id[item.key]
+                    depends_on = key_to_job_id.get(item.depends_on_key) if item.depends_on_key else None
+
+                    if item.worker_model:
+                        model = item.worker_model
+                    else:
+                        size = item.size
+                        if size == "M":
+                            size = _parse_size_from_instruction(item.instruction)
+                        model = _get_model_for_size(size)
+
+                    instruction_hash = hashlib.sha256(
+                        f"{req.project}:{item.instruction}".encode()
+                    ).hexdigest()[:16]
+
+                    await conn.execute(
+                        """
+                        INSERT INTO pipeline_jobs
+                          (job_id, project, instruction, instruction_hash, chat_session_id,
+                           status, phase, max_cycles, model,
+                           worker_model, parallel_group, depends_on,
+                           created_at, updated_at)
+                        VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, $7,
+                                $8, $9, $10, NOW(), NOW())
+                        """,
+                        job_id, req.project, item.instruction, instruction_hash,
+                        req.session_id, req.max_cycles, model,
+                        item.worker_model or None, pg, depends_on,
+                    )
+
+                    results.append({
+                        "key": item.key,
+                        "job_id": job_id,
+                        "model": model,
+                        "depends_on": depends_on,
+                    })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("pipeline_runner.batch_submit_fail", error=str(e))
+        raise HTTPException(status_code=500, detail="배치 저장 실패")
+
+    logger.info("pipeline_runner.batch_submitted",
+                 project=req.project, count=len(results), parallel_group=pg)
+
+    return {
+        "parallel_group": pg,
+        "jobs": results,
+        "message": f"{len(results)}개 작업이 제출되었습니다. 의존성에 따라 순차/병렬 실행됩니다.",
+    }
 
 
 @router.get("/pipeline/lock-status", tags=["pipeline-runner"])
