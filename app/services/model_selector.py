@@ -855,6 +855,9 @@ async def _stream_litellm_openai(
     extra_params: Dict[str, Any] = {}
     if is_thinking:
         extra_params["reasoning_effort"] = "low"
+    # Qwen3 계열: thinking 모드 비활성화 → 도구 호출 우선 (thinking 활성 시 도구 무시됨)
+    if "qwen3" in model.lower() and "thinking" not in model.lower():
+        extra_params["extra_body"] = {"enable_thinking": False}
 
     # OAI tools 변환 (한 번만)
     _oai_tools: List[Dict[str, Any]] = []
