@@ -221,9 +221,9 @@ LAYER1_CAPABILITIES = _CAPABILITIES_FULL
 LAYER1_TOOLS = """<tools_available>
 ## 도구 — 우선순위: 내부→외부→고비용
 
-**T1 즉시 읽기 (무료, <3초)**: read_remote_file(★코드1순위), list_remote_dir, read_github, read_file, query_db, search_chat_history, query_timeline, query_decision_graph, query_project_database, list_project_databases, recall_tool_result
+**T1 즉시 읽기 (무료, <3초)**: read_remote_file(★코드1순위), list_remote_dir, read_github_file, query_database, query_project_database, list_project_databases, search_chat_history, query_timeline, query_decision_graph, recall_tool_result
 
-**T2 분석/AI (3~15초)**: run_agent_team(멀티에이전트 분석), run_debate(다각도 토론), fact_check, fact_check_multiple, visual_qa_test
+**T2 분석/AI (3~15초)**: deep_research(심층리서치), code_explorer(코드탐색), semantic_code_search(벡터검색), analyze_changes(Git변경분석), search_all_projects(전프로젝트검색), run_agent_team, run_debate, fact_check, fact_check_multiple, visual_qa_test
 
 **T3 액션/실행**:
 - **pipeline_runner_submit**: 코드 수정/배포 (기본 권장, Runner 독립 실행)
@@ -241,7 +241,9 @@ LAYER1_TOOLS = """<tools_available>
 - project: AADS/KIS/GO100/SF/NTV2. pipeline_c_start 폐기 — 사용 금지.
 - Runner: AADS→68, KIS/GO100→211, SF/NTV2→114
 
-**T4 외부 검색 (3~10초)**: search_naver, search_naver_multi, search_kakao, gemini_grounding_search, fetch_url, search_logs
+**T4 외부 검색 (3~10초)**: search_naver(★한국어1순위), search_naver_multi, search_kakao, gemini_grounding_search(기술/영문), search_searxng, search_logs
+
+**T4 웹 크롤링**: fetch_url / jina_read(URL콘텐츠 추출, ★공식문서1순위), crawl4ai_fetch(동적페이지), deep_crawl(사이트전체)
 
 **T5 브라우저**: browser_navigate/browser_snapshot/browser_screenshot, **capture_screenshot**(CEO에게 이미지 표시), browser_click/browser_fill/browser_tab_list
 
