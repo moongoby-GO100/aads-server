@@ -2940,6 +2940,10 @@ async def send_message_stream(
                     logger.warning(f"agent_sdk_failed (fallback to bridge): {_sdk_err}")
                     # SDK 실패 → AutonomousExecutor fallback으로 계속 진행
 
+        # 🔧 B안: auto_reaction 트리거 AI 응답 → intent='runner_response' (로그탭 이동)
+        if intent_override == "auto_reaction":
+            intent = "runner_response"
+
         # 8.5b. execute/code_modify 인텐트 중 직접 실행 조건 미충족 → Runner 위임
         if intent in _RUNNER_DELEGATION_INTENTS and not any(t in content for t in _DIRECT_EXECUTION_TRIGGERS):
             logger.info(f"[RUNNER_DELEGATION] session={sid_short} intent={intent} → pipeline_runner")
