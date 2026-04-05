@@ -3140,7 +3140,13 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         # session_id 강제: 1순위 도구파라미터, 2순위 함수인자, 3순위 ContextVar
         _sid = params.get("session_id", "") or chat_session_id or current_chat_session_id.get("")
         if not _sid:
-            return "[ERROR] session_id가 필요합니다. pipeline_runner_submit 호출 시 session_id를 명시하세요."
+            try:
+                from app.services.pipeline_c import _find_recent_session
+                _sid = await _find_recent_session(params.get("project", "AADS"))
+            except Exception:
+                pass
+        if not _sid:
+            return "[ERROR] 활성 세션을 찾을 수 없습니다. session_id를 명시하세요."
         import httpx
         _internal_h = {"x-monitor-key": "internal-pipeline-call"}
         async with httpx.AsyncClient() as client:

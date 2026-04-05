@@ -2151,9 +2151,16 @@ class ToolExecutor:
         """Pipeline Runner로 작업 제출."""
         # 1순위: 도구 호출 시 명시적으로 전달된 session_id
         # 2순위: ContextVar (일반 대화에서는 정확함)
+        # 3순위: DB에서 최근 활성 세션 자동 탐지 (디폴트 동작)
         _session_id = inp.get("session_id", "") or current_chat_session_id.get("")
         if not _session_id:
-            return {"error": "session_id가 필요합니다. pipeline_runner_submit 호출 시 session_id를 명시하세요."}
+            try:
+                from app.services.pipeline_c import _find_recent_session
+                _session_id = await _find_recent_session(inp.get("project", "AADS"))
+            except Exception:
+                pass
+        if not _session_id:
+            return {"error": "활성 세션을 찾을 수 없습니다. session_id를 명시하세요."}
         import httpx
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -2177,7 +2184,13 @@ class ToolExecutor:
         """Pipeline Runner 배치 제출 — 여러 작업을 병렬 실행."""
         _session_id = inp.get("session_id", "") or current_chat_session_id.get("")
         if not _session_id:
-            return {"error": "session_id가 필요합니다."}
+            try:
+                from app.services.pipeline_c import _find_recent_session
+                _session_id = await _find_recent_session(inp.get("project", "AADS"))
+            except Exception:
+                pass
+        if not _session_id:
+            return {"error": "활성 세션을 찾을 수 없습니다. session_id를 명시하세요."}
         import httpx
         async with httpx.AsyncClient() as client:
             resp = await client.post(
