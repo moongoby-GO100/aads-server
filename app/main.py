@@ -777,8 +777,16 @@ async def lifespan(app: FastAPI):
                         # 재시도 횟수 초과(최대 2회) 스킵
                         if _recovered_resume_attempts.get(sid, 0) >= 2:
                             continue
+
+                        # 중복 방지: 이미 이 세션에 백그라운드 작업 진행 중이면 스킵
+                        from app.services.chat_service import _active_bg_tasks
+                        if sid in _active_bg_tasks and not _active_bg_tasks[sid].done():
+                            logger.info(f"recovered_scanner: session={sid[:8]} bg_task active, skip")
+                            continue
+
                         _recovered_resume_attempts[sid] = _recovered_resume_attempts.get(sid, 0) + 1
 
+                        # 마지막 user 메시지 조회
                         # 마지막 user 메시지 조회
                         _last_user = await conn.fetchval(
                             "SELECT content FROM chat_messages "
@@ -789,17 +797,23 @@ async def lifespan(app: FastAPI):
                         if not _last_user:
                             continue
 
-                        user_content = (
-                            f"{_last_user}\n\n"
-                            "[시스템] 이전 응답이 중단되었습니다. "
-                            "이전 응답 내용을 참고하여 이어서 완성해 주세요."
-                        )
+                        # P0-1: 이미 복구 메시지가 붙어있으면 루프 방지
+                        if "[시스템] 이전 응답이 중단되었습니다" in _last_user:
+                            logger.info(f"recovered_scanner: session={sid[:8]} already has recovery suffix, skip loop")
+                            continue
+
+                        _recovery_suffix = "[시스템] 이전 응답이 중단되었습니다. 이전 응답 내용을 참고하여 이어서 완성해 주세요."
+                        user_content = f"{_last_user}\n\n{_recovery_suffix}"
+
+                        # P0-2: idempotency_key로 중복 삽입 방지
+                        import hashlib as _hs
+                        _idem_key = "recovery_" + _hs.md5(f"{sid}:{_last_user[:100]}".encode()).hexdigest()
 
                         from app.services.chat_service import send_message_stream, with_background_completion
 
-                        async def _resume_recovered(_sid, _content):
+                        async def _resume_recovered(_sid, _content, _ikey=_idem_key):
                             try:
-                                stream = send_message_stream(session_id=_sid, content=_content)
+                                stream = send_message_stream(session_id=_sid, content=_content, idempotency_key=_ikey)
                                 bg = with_background_completion(stream, session_id=_sid)
                                 async for _ in bg:
                                     pass
