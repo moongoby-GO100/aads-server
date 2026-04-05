@@ -101,10 +101,27 @@ _CLAUDE_RELAY_NAVER_FIRST = os.getenv("CLAUDE_RELAY_NAVER_FIRST", "false").lower
 _SLOT_COOLDOWN: Dict[str, float] = {}  # {slot: expire_timestamp}
 _COOLDOWN_SECS = 300  # 5분
 
-def _mark_slot_cooldown(slot: str) -> None:
-    """429/한도 오류 시 슬롯을 5분간 쿨다운 등록."""
-    _SLOT_COOLDOWN[slot] = _time_mod.time() + _COOLDOWN_SECS
-    logger.info(f"slot_cooldown_set: slot={slot}, duration={_COOLDOWN_SECS}s")
+def _parse_rl_reset_ms(headers=None):
+    if not headers:
+        return None
+    ra = headers.get("retry-after") or headers.get("Retry-After")
+    if ra:
+        try: return _time_mod.time() + float(ra)
+        except: pass
+    rr = headers.get("x-ratelimit-reset") or headers.get("X-RateLimit-Reset")
+    if rr:
+        try: return float(rr)
+        except: pass
+    return None
+
+def _mark_slot_cooldown(slot: str, headers=None) -> None:
+    """429/한도 오류 시 슬롯 쿨다운. 헤더 기반 해제 시각, 없으면 5분."""
+    expire = _parse_rl_reset_ms(headers)
+    if expire is None:
+        expire = _time_mod.time() + _COOLDOWN_SECS
+    _SLOT_COOLDOWN[slot] = expire
+    until_str = _time_mod.strftime("%H:%M:%S", _time_mod.localtime(expire))
+    logger.info("slot_cooldown_set: slot=%s until=%s", slot, until_str)
 
 def _is_slot_available(slot: str) -> bool:
     """슬롯이 쿨다운 중이 아닌지 확인. 만료 시 자동 해제."""

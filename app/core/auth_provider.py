@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Dict, List, Optional
 
 from anthropic import AsyncAnthropic
@@ -22,8 +23,8 @@ from anthropic import AsyncAnthropic
 logger = logging.getLogger(__name__)
 
 # ── 토큰 로딩 (모듈 초기화 시 1회) ──────────────────────────────────
-_TOKEN_PRIMARY = os.getenv("ANTHROPIC_API_KEY", "") or os.getenv("ANTHROPIC_AUTH_TOKEN", "")
-_TOKEN_FALLBACK = os.getenv("ANTHROPIC_API_KEY_FALLBACK", "") or os.getenv("ANTHROPIC_AUTH_TOKEN_2", "")
+_TOKEN_PRIMARY = os.getenv("ANTHROPIC_AUTH_TOKEN", "") or os.getenv("ANTHROPIC_API_KEY", "")
+_TOKEN_FALLBACK = os.getenv("ANTHROPIC_AUTH_TOKEN_2", "") or os.getenv("ANTHROPIC_API_KEY_FALLBACK", "")
 _BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 _LITELLM_URL = os.getenv("LITELLM_BASE_URL", "http://aads-litellm:4000")
 _LITELLM_KEY = os.getenv("LITELLM_MASTER_KEY", "")
@@ -100,6 +101,45 @@ def rotate_oauth_primary_fallback() -> bool:
     _ordered_tokens = [_ordered_tokens[1], _ordered_tokens[0]]
     logger.warning("auth_provider: primary/fallback rotated (quota or limit-class error)")
     return True
+
+
+# -- Rate Limit Cooldown Tracking --
+_token_cooldowns = {}  # {token_prefix_20: expire_timestamp}
+
+def _parse_rl_reset(headers=None):
+    if not headers:
+        return None
+    ra = headers.get("retry-after") or headers.get("Retry-After")
+    if ra:
+        try: return time.time() + float(ra)
+        except: pass
+    rr = headers.get("x-ratelimit-reset") or headers.get("X-RateLimit-Reset")
+    if rr:
+        try: return float(rr)
+        except: pass
+    return None
+
+def mark_token_rate_limited(token, headers=None):
+    global _ordered_tokens
+    expire = _parse_rl_reset(headers) or (time.time() + 3600)
+    _token_cooldowns[token[:20]] = expire
+    logger.warning("token_rate_limited: prefix=%s until=%s", token[:12], time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(expire)))
+    if token in _ordered_tokens and len(_ordered_tokens) > 1:
+        _ordered_tokens = [t for t in _ordered_tokens if t != token] + [token]
+        logger.warning("token_order_rotated: rate-limited token moved to end")
+    return expire
+
+def is_token_rate_limited(token):
+    expire = _token_cooldowns.get(token[:20], 0)
+    if time.time() >= expire:
+        _token_cooldowns.pop(token[:20], None)
+        return False
+    return True
+
+def get_available_tokens():
+    available = [t for t in _ordered_tokens if not is_token_rate_limited(t)]
+    return available if available else list(_ordered_tokens)
+
 
 
 def create_anthropic_client(token: Optional[str] = None) -> AsyncAnthropic:

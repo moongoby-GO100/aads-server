@@ -19,7 +19,8 @@ import httpx
 from anthropic import AsyncAnthropic
 
 from app.core.auth_provider import (
-    get_oauth_tokens, get_base_url, get_litellm_config, create_anthropic_client,
+    get_oauth_tokens, get_available_tokens, get_base_url, get_litellm_config,
+    create_anthropic_client, mark_token_rate_limited,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,7 +103,7 @@ async def call_llm_with_fallback(
     from app.services.oauth_usage_tracker import log_usage
 
     _MAX_RETRIES = 2
-    keys_to_try = get_oauth_tokens()
+    keys_to_try = get_available_tokens()
     for key in keys_to_try:
         for _attempt in range(_MAX_RETRIES + 1):
             t0 = time.monotonic()
@@ -163,7 +164,13 @@ async def call_llm_with_fallback(
         except Exception as e:
             logger.warning("gemini_bg_fallback_error: %s", str(e)[:80])
 
-    logger.error("all_bg_llm_failed: claude+gemini exhausted")
+    # 4순위: qwen3-235b (DashScope)
+    if _DASHSCOPE_API_KEY:
+        try:
+            return await _call_dashscope(prompt, "qwen3-235b", max_tokens, system)
+        except Exception as e:
+            logger.warning("qwen3_235b_fallback_error: %s", str(e)[:80])
+    logger.error("all_bg_llm_failed: claude+gemini+qwen3 exhausted")
     return None
 
 
@@ -286,7 +293,7 @@ async def call_llm_messages_with_fallback(**kwargs) -> object:
     from app.services.oauth_usage_tracker import log_usage
 
     _MAX_RETRIES = 2
-    keys_to_try = get_oauth_tokens()
+    keys_to_try = get_available_tokens()
     last_error: Optional[Exception] = None
 
     for key in keys_to_try:
