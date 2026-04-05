@@ -10,7 +10,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # AADS 서버 내부 포트
-_AADS_INTERNAL_URL = "http://localhost:8100"
+_AADS_INTERNAL_URL = "http://localhost:8080"  # 컨테이너 내부 gunicorn 포트 (nginx 경유 불필요)
 
 
 def _file_path_to_module(file_path: str) -> str | None:

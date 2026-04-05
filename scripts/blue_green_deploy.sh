@@ -5,10 +5,10 @@
 #
 # 사용법: ./scripts/blue_green_deploy.sh [--build]
 #   --build: Dockerfile/dependencies 변경 시 이미지 리빌드
-#   (없으면 코드 변경만 — supervisorctl restart로 처리)
+#   (없으면 코드 변경만 — Hot-Reload 무중단 처리)
 #
 # 플로우:
-#   코드만 변경 → supervisorctl restart aads-api (다운타임 ~3초)
+#   코드만 변경 → Hot-Reload SIGHUP (다운타임 0초 무중단)
 #   컨테이너 리빌드 → green 시작 → HC 통과 → nginx 전환 → blue 정지
 
 set -euo pipefail
@@ -108,7 +108,7 @@ wait_health() {
 # ──────────────────────────────────────────────
 if [ "$BUILD_FLAG" != "--build" ]; then
     db_record_start "code_only" "${DEPLOY_TRIGGER:-script}"
-    notify "📦 코드 변경 배포 시작 (supervisorctl restart)"
+    notify "📦 코드 변경 배포 시작 (Hot-Reload — 0초 무중단)"
 
     # 문법 검증 (py_compile)
     SYNTAX_ERR=$(docker exec aads-server python3 -c "
@@ -134,8 +134,8 @@ else:
         exit 1
     fi
 
-    docker exec aads-server supervisorctl restart aads-api
-    sleep 5
+    bash /root/aads/aads-server/scripts/reload-api.sh
+    sleep 2
 
     if wait_health "$HEALTH_BLUE" 30 "blue(restart)"; then
         notify "✅ 코드 배포 완료 — 정상 가동"
