@@ -1,26 +1,37 @@
 #!/bin/bash
-# AADS Hot-Reload — gunicorn master에 SIGHUP 전송 (0ms 다운타임)
-# [2026-04-05] 생성 — 코드 변경 시 무중단 재시작 표준 방법
+# AADS Hot-Reload — API 기반 무중단 재시작 (0ms 다운타임)
+# [2026-04-05] 생성 — 코드 변경 시 무중단 모듈 재로드 표준 방법
 # 사용: bash /root/aads/aads-server/scripts/reload-api.sh
 # 또는 컨테이너 내부: bash /app/scripts/reload-api.sh
+
+set -e
 
 LOG="/var/log/blue_green_deploy.log"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] $1" | tee -a "$LOG"; }
 
-PID_FILE="/tmp/gunicorn.pid"
-
-if [ -f "$PID_FILE" ]; then
-    # 컨테이너 내부 실행
-    MASTER_PID=$(cat "$PID_FILE")
-    if ! kill -0 "$MASTER_PID" 2>/dev/null; then
-        log "[ERROR] gunicorn 마스터 PID $MASTER_PID 없음"
-        exit 1
-    fi
-    kill -HUP "$MASTER_PID"
-    sleep 2
-    WORKER_COUNT=$(pgrep -P "$MASTER_PID" 2>/dev/null | wc -l)
-    log "[OK] Hot-Reload 완료 — 마스터=$MASTER_PID, 워커=${WORKER_COUNT}개"
-else
-    # 호스트에서 실행 — 컨테이너 내부로 위임
-    docker exec aads-server bash /app/scripts/reload-api.sh
+# 호스트에서 실행 시 localhost:8100, 컨테이너 내에서는 localhost:8080
+INTERNAL_URL="http://localhost:8080"
+if [ ! -f "/tmp/gunicorn.pid" ]; then
+    # 컨테이너 외부 호스트에서 실행 중
+    INTERNAL_URL="http://127.0.0.1:8100"
 fi
+
+log "[START] Hot-Reload 시작 — POST $INTERNAL_URL/api/v1/ops/hot-reload"
+
+# Hot-Reload API 호출 (모든 Python 모듈 재로드)
+RESPONSE=$(curl -sf -X POST \
+    "$INTERNAL_URL/api/v1/ops/hot-reload" \
+    -H "Content-Type: application/json" \
+    -d '{}' \
+    2>/dev/null || echo '{"error":"api_unreachable"}')
+
+# 응답 파싱
+SUCCESS=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('success', 0))" 2>/dev/null || echo 0)
+FAILED=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('failed', 0))" 2>/dev/null || echo 0)
+
+if [ "$FAILED" -gt 0 ]; then
+    log "[ERROR] Hot-Reload 실패 (재로드 실패: $FAILED개)"
+    exit 1
+fi
+
+log "[OK] Hot-Reload 완료 — 재로드=$SUCCESS개"
