@@ -354,7 +354,7 @@ def build_layer1_lite(workspace_key: str = "CEO") -> str:
 
 # 단순 인텐트 — build_layer1_lite() 사용 대상
 _LITE_PROMPT_INTENTS = {
-    "greeting", "casual", "status_check",
+    "greeting", "casual",
 }
 
 
