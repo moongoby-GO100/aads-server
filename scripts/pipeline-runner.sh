@@ -510,7 +510,10 @@ run_job() {
     # H5: 모델+계정 폴백 (같은 모델 2계정 시도 후 다음 모델)
     # AADS-206: job_model 기준 MODEL_CYCLE 구성 (지정 모델 우선, 폴백 유지)
     local MODEL_CYCLE
-    if [[ "$job_model" == "claude-haiku-4-5-20251001" ]]; then
+    if [[ "$job_model" == litellm:* ]]; then
+        # LiteLLM Runner: 1회만 시도 (모델 폴백 없음)
+        MODEL_CYCLE=("$job_model")
+    elif [[ "$job_model" == "claude-haiku-4-5-20251001" ]]; then
         MODEL_CYCLE=("claude-haiku-4-5-20251001" "claude-haiku-4-5-20251001" "claude-sonnet-4-6" "claude-sonnet-4-6" "claude-opus-4-6" "claude-opus-4-6")
     elif [[ "$job_model" == "claude-opus-4-6" ]]; then
         MODEL_CYCLE=("claude-opus-4-6" "claude-opus-4-6" "claude-sonnet-4-6" "claude-sonnet-4-6" "claude-haiku-4-5-20251001" "claude-haiku-4-5-20251001")
@@ -567,9 +570,21 @@ run_job() {
 ${safe_instruction}"
 
         log "  MODEL_FALLBACK job=$job_id model=$current_model cycle=$cycle_num attempt=$((attempt+1))/$total_attempts"
-        timeout "$MAX_RUNTIME" claude --model "$current_model" -p --output-format text "$safe_instruction" \
-            > "$output_file" 2> "$err_file" &
-        local claude_pid=$!
+        # LiteLLM Runner 분기 (litellm: 접두사)
+        if [[ "$current_model" == litellm:* ]]; then
+            local llm_model_name="${current_model#litellm:}"
+            log "  LITELLM_RUNNER job=$job_id model=$llm_model_name"
+            timeout "$MAX_RUNTIME" python3 /app/scripts/litellm_runner.py \
+                --model "$llm_model_name" \
+                --instruction "$safe_instruction" \
+                --workdir "$workdir" \
+                > "$output_file" 2> "$err_file" &
+            local claude_pid=$!
+        else
+            timeout "$MAX_RUNTIME" claude --model "$current_model" -p --output-format text "$safe_instruction" \
+                > "$output_file" 2> "$err_file" &
+            local claude_pid=$!
+        fi
 
         # runner_pid 기록 (watchdog 프로세스 생존 확인용)
         db_update "UPDATE pipeline_jobs SET runner_pid=${claude_pid}, updated_at=NOW() WHERE job_id='${job_id}';"

@@ -498,7 +498,7 @@ TOOL_DEFINITIONS: List[Dict] = [
                 },
                 "worker_model": {
                     "type": "string",
-                    "description": "Claude 모델 직접 지정 (예: claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5). 지정 시 size 무시.",
+                    "description": "모델 직접 지정 (지정 시 size 무시).\n\nClaude Runner (기존):\n  claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5\n\nLiteLLM Runner (신규, litellm: 접두사 — MCP 24개 도구 사용 가능):\n  litellm:gemini-2.5-flash ($0.15/task, SWE-bench 78.8%)\n  litellm:deepseek-chat ($0.02/task, SWE-bench 70%)\n  litellm:qwen3-235b ($0.03/task, 한국어 강점)",
                 },
                 "parallel_group": {
                     "type": "string",
