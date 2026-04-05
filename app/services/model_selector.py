@@ -411,15 +411,21 @@ async def call_stream(
             logger.info(f"cascade_downgrade: {_intent} → claude-sonnet (medium intent)")
             model = "claude-sonnet"
 
-    # 자기 모델 질문 오답 방지: 실제 라우트 id 를 시스템 프롬프트에 명시
+    # 자기 모델 질문 오답 방지: 실제 라우트 id + 제조사를 시스템 프롬프트에 명시
+    _maker = "Alibaba (알리바바)" if any(q in model.lower() for q in ("qwen", "deepseek-v3")) and model in _ALIBABA_MODELS else \
+             "Google (구글)" if "gemini" in model.lower() else \
+             "Anthropic (앤트로픽)" if "claude" in model.lower() else \
+             "Meta" if "llama" in model.lower() else ""
+    _maker_line = f"이 모델의 **제조사**는 {_maker} 입니다. 제조사를 정확히 안내하세요.\n" if _maker else ""
     system_prompt = (
         system_prompt
         + "\n\n<aads_model_identity>\n"
         + "이 대화 턴 응답 생성에 사용 중인 **백엔드 라우트 모델 id**는 `"
         + model
         + "` 입니다.\n"
-        + "사용자가 어떤 LLM/모델인지 물으면 위 id(및 이에 대응하는 공식 제품명)로만 답하고, "
-        + "임의로 다른 모델명(예: 설정과 다른 Gemini/Claude)으로 말하지 마세요.\n"
+        + _maker_line
+        + "사용자가 어떤 LLM/모델인지 물으면 위 id(및 이에 대응하는 공식 제품명, 제조사)로만 답하고, "
+        + "임의로 다른 모델명이나 제조사(예: 설정과 다른 Gemini/Claude/Google)로 말하지 마세요.\n"
         + "</aads_model_identity>"
     )
 
@@ -529,6 +535,8 @@ async def call_stream(
             yield event
         if _had_error:
             async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
+                if event.get("type") == "done":
+                    event = {**event, "model": model}  # 폴백해도 원래 선택 모델명 유지
                 yield event
         return
 
@@ -548,6 +556,8 @@ async def call_stream(
             yield event
         if _had_error:
             async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
+                if event.get("type") == "done":
+                    event = {**event, "model": model}  # 폴백해도 원래 선택 모델명 유지
                 yield event
         return
 
@@ -564,6 +574,8 @@ async def call_stream(
             yield event
         if _had_error:
             async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
+                if event.get("type") == "done":
+                    event = {**event, "model": model}  # 폴백해도 원래 선택 모델명 유지
                 yield event
         return
 
