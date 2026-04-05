@@ -1,22 +1,25 @@
 #!/bin/bash
 # AADS Hot-Reload — API 기반 무중단 재시작 (0ms 다운타임)
 # [2026-04-05] 생성 — 코드 변경 시 무중단 모듈 재로드 표준 방법
-# 사용: bash /root/aads/aads-server/scripts/reload-api.sh
-# 또는 컨테이너 내부: bash /app/scripts/reload-api.sh
+# 사용: bash /root/aads/aads-server/scripts/reload-api.sh  (호스트)
+# 또는: docker exec aads-server bash /app/scripts/reload-api.sh  (컨테이너)
 
 set -e
 
 LOG="/var/log/blue_green_deploy.log"
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] $1" | tee -a "$LOG"; }
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] $1" | tee -a "$LOG" 2>/dev/null || echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] $1"; }
 
-# 호스트에서 실행 시 localhost:8100, 컨테이너 내에서는 localhost:8080
-INTERNAL_URL="http://localhost:8080"
-if [ ! -f "/tmp/gunicorn.pid" ]; then
-    # 컨테이너 외부 호스트에서 실행 중
-    INTERNAL_URL="http://127.0.0.1:8100"
+# ── 실행 환경 감지: /.dockerenv 존재 = 컨테이너 내부 ──────────────
+if [ -f "/.dockerenv" ]; then
+    # 컨테이너 내부: uvicorn 직접 포트 사용
+    INTERNAL_URL="http://localhost:8080"
+    log "[START] Hot-Reload 시작 (컨테이너 내부) — POST $INTERNAL_URL/api/v1/ops/hot-reload"
+else
+    # 호스트: docker exec으로 위임 (포트 불확실성 완전 회피)
+    # blue-green 전환 후 nginx가 8102를 가리켜도 항상 정확한 컨테이너에 접근
+    log "[INFO] 호스트 실행 → docker exec aads-server 위임"
+    exec docker exec aads-server bash /app/scripts/reload-api.sh
 fi
-
-log "[START] Hot-Reload 시작 — POST $INTERNAL_URL/api/v1/ops/hot-reload"
 
 # Hot-Reload API 호출 (모든 Python 모듈 재로드)
 RESPONSE=$(curl -sf -X POST \
