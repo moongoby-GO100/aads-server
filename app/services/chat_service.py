@@ -1949,7 +1949,9 @@ async def _analyze_images_with_gemini(
     user_prompt: str,
 ) -> list:
     """이미지 파일 목록을 Gemini Flash API로 분석하여 텍스트 설명 반환.
-    CLI Relay가 이미지를 직접 전달할 수 없으므로 Gemini Vision으로 전처리."""
+    NOTE: 채팅 API 경로에서는 더 이상 호출되지 않음 (AADS-214).
+    CLI Relay는 content_blocks + --input-format stream-json으로 이미지 직접 전달 가능.
+    현재 이 함수는 외부에서 직접 이미지 분석이 필요한 경우를 위해 보존."""
     import os
     import base64 as _b64
 
@@ -2204,45 +2206,8 @@ async def send_message_stream(
                     })
                 logger.info(f"[VIDEO] {len(_video_attachments)} video(s) analyzed via Gemini API")
 
-            # Vision 이미지도 Gemini로 전처리 (CLI Relay용 텍스트 변환)
-            _image_for_preprocess = [f for f in _file_contents if f.get("is_image") and f.get("base64_data")]
-            if _image_for_preprocess:
-                _image_texts = await _analyze_images_with_gemini(_image_for_preprocess, content)
-                for _it in _image_texts:
-                    _file_contents.append({
-                        "name": _it["name"],
-                        "path": "",
-                        "ext": "",
-                        "content": _it["analysis"],
-                        "tokens": len(_it["analysis"]) // 4,
-                        "readable": True,
-                        "error": None,
-                    })
-                logger.info(f"[VISION-PRE] {len(_image_for_preprocess)} image(s) pre-analyzed via Gemini for CLI Relay")
-
-                # 멀티모달 메모리: Gemini 분석 결과를 ai_observations에 비동기 저장
-                # asyncio.create_task()로 백그라운드 실행 — 메인 흐름에 영향 없음
-                # _mentioned_projects / workspace_name은 이 시점 미확정이므로
-                # locals()를 통해 안전하게 참조하고, 없으면 "AADS" 폴백 사용
-                try:
-                    import asyncio as _mm_asyncio
-                    from app.memory.multimodal_store import store_visual_memory as _store_vm
-                    _loc = locals()
-                    _mp = _loc.get("_mentioned_projects") or []
-                    _wn = _loc.get("workspace_name") or ""
-                    _mm_project = _mp[0] if _mp else (_wn.upper() if _wn else "AADS")
-                    for _it_mem, _img_mem in zip(_image_texts, _image_for_preprocess):
-                        _img_url_key = _img_mem.get("path") or _img_mem.get("name", "unknown")
-                        _mm_asyncio.create_task(
-                            _store_vm(
-                                image_url=_img_url_key,
-                                analysis_text=_it_mem["analysis"],
-                                project=_mm_project,
-                            )
-                        )
-                    logger.info(f"[VISUAL-MEM] {len(_image_texts)} image(s) queued for memory storage project={_mm_project}")
-                except Exception as _mm_err:
-                    logger.warning(f"[VISUAL-MEM] 멀티모달 메모리 저장 큐잉 실패: {_mm_err}")
+            # 이미지는 Claude Vision(content_blocks → --input-format stream-json)으로 직접 전달됨.
+            # Gemini 전처리 불필요 — 제거 (AADS-214, 2026-04-05)
 
             # Layer D: 현재 턴에만 주입될 전문 컨텍스트 (텍스트 파일만)
             _ephemeral_doc_context = build_ephemeral_document_layer(_file_contents)
