@@ -95,7 +95,7 @@ LITELLM_API_KEY = _LITELLM_API_KEY
 _CLAUDE_RELAY_URL = os.getenv("CLAUDE_RELAY_URL", "http://host.docker.internal:8199")
 _CLAUDE_CLI_ENABLED = os.getenv("CLAUDE_CLI_ENABLED", "true").lower() == "true"
 # 릴레이 oauth_slot: 1=Gmail, 2=Naver. 기본은 Naver 먼저 (false 로 Gmail 우선 복귀)
-_CLAUDE_RELAY_NAVER_FIRST = os.getenv("CLAUDE_RELAY_NAVER_FIRST", "true").lower() in ("1", "true", "yes")
+_CLAUDE_RELAY_NAVER_FIRST = os.getenv("CLAUDE_RELAY_NAVER_FIRST", "false").lower() in ("1", "true", "yes")
 
 # 슬롯 쿨다운 (429/한도 오류 시 해당 슬롯 일시 건너뜀)
 _SLOT_COOLDOWN: Dict[str, float] = {}  # {slot: expire_timestamp}
