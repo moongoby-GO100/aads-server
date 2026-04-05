@@ -220,6 +220,7 @@ async def submit_job(req: JobSubmitRequest):
 async def list_jobs(
     status: Optional[str] = Query(None, max_length=30),
     project: Optional[str] = Query(None, max_length=10),
+    session_id: Optional[str] = Query(None, max_length=36),
     limit: int = Query(20, ge=1, le=100),
 ):
     """작업 목록 조회."""
@@ -240,6 +241,10 @@ async def list_jobs(
         conditions.append(f"project = ${idx}")
         params.append(project)
         idx += 1
+    if session_id:
+        conditions.append(f"chat_session_id = ${idx}")
+        params.append(session_id)
+        idx += 1
 
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
 
@@ -247,7 +252,8 @@ async def list_jobs(
         rows = await conn.fetch(
             f"""
             SELECT job_id, project, instruction, status, phase, cycle,
-                   error_detail, created_at, updated_at
+                   error_detail, created_at, updated_at,
+                   started_at, depends_on, chat_session_id
             FROM pipeline_jobs
             {where}
             ORDER BY created_at DESC
@@ -267,6 +273,8 @@ async def list_jobs(
             "error_detail": r.get("error_detail"),
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
             "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+            "started_at": r["started_at"].isoformat() if r.get("started_at") else None,
+            "depends_on": r.get("depends_on"),
         }
         for r in rows
     ]
