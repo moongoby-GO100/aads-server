@@ -853,7 +853,7 @@ async def _stream_litellm_openai(
                     }
                 })
 
-    MAX_TOOL_LOOPS = 50  # Claude와 동일
+    MAX_TOOL_LOOPS = 200  # 제한 없이 (CEO 지시)
 
     for _loop_iter in range(MAX_TOOL_LOOPS + 1):
         # 이번 턴의 tool_calls 누적 (index → {id, name, args_buf})
