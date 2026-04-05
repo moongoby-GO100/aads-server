@@ -191,6 +191,39 @@ _COST_MAP = {
     "openrouter-mistral-small":  (0.15,  0.15),   # Mistral Small
     "openrouter-nemotron-free":  (0.0,   0.0),    # Nemotron 3 Super (무료)
     "openrouter-minimax-m2":     (0.30,  0.30),   # MiniMax M2.7
+    # Alibaba/Qwen (DashScope via LiteLLM)
+    "qwen3-235b":              (0.60,  2.40),
+    "qwen3-235b-instruct":     (0.60,  2.40),
+    "qwen3-235b-thinking":     (0.60,  2.40),
+    "qwen3-next-80b":          (0.30,  1.20),
+    "qwen3-max":               (0.40,  1.20),
+    "qwen3-32b":               (0.08,  0.32),
+    "qwen3-30b-a3b":           (0.07,  0.28),
+    "qwen3-14b":               (0.04,  0.16),
+    "qwen3-8b":                (0.02,  0.08),
+    "qwen3-coder-plus":        (0.35,  1.40),
+    "qwen3-coder-flash":       (0.07,  0.28),
+    "qwen3-coder-480b":        (1.20,  4.80),
+    "qwen3.5-plus":            (0.40,  1.20),
+    "qwen3.5-flash":           (0.07,  0.28),
+    "qwen-max":                (0.40,  1.20),
+    "qwen-max-latest":         (0.40,  1.20),
+    "qwen-plus":               (0.08,  0.32),
+    "qwen-plus-latest":        (0.08,  0.32),
+    "qwen-turbo":              (0.02,  0.06),
+    "qwen-turbo-latest":       (0.02,  0.06),
+    "qwen-flash":              (0.01,  0.03),
+    "qwen-coder-plus":         (0.35,  1.40),
+    "qwen2.5-72b-instruct":    (0.30,  0.90),
+    "qwq-plus":                (0.60,  2.40),
+    # Alibaba/Qwen 멀티모달 (Vision/Omni)
+    "qwen-vl-max":             (0.40,  1.20),
+    "qwen-vl-plus":            (0.08,  0.32),
+    "qwen3-vl-plus":           (0.35,  1.40),
+    "qwen3-vl-235b":           (0.60,  2.40),
+    "qwen-omni-turbo":         (0.02,  0.06),
+    # DashScope DeepSeek (Alibaba 호스팅)
+    "dashscope-deepseek-v3.2": (0.28,  0.42),
 }
 
 # LiteLLM alias → Anthropic model ID
@@ -228,7 +261,7 @@ _GEMINI_THINKING_MODELS = {
 }
 
 # Groq 모델 (LiteLLM 경유, 무료)
-_GROQ_MODELS = {"groq-qwen3-32b", "groq-kimi-k2", "groq-llama4-scout", "groq-llama-70b", "groq-llama-8b", "groq-gpt-oss-120b", "groq-compound"}
+_GROQ_MODELS = {"groq-qwen3-32b", "groq-kimi-k2", "groq-llama4-scout", "groq-llama4-maverick", "groq-llama-70b", "groq-llama-8b", "groq-gpt-oss-120b", "groq-compound"}
 
 # DeepSeek 모델 (LiteLLM 경유)
 _DEEPSEEK_MODELS = {"deepseek-chat", "deepseek-reasoner"}
@@ -242,8 +275,50 @@ _OPENROUTER_MODELS = {
     "openrouter-minimax-m2",
 }
 
-# LiteLLM OpenAI 호환 모델 (Gemini + Groq + DeepSeek + OpenRouter)
-_LITELLM_OPENAI_MODELS = _GEMINI_MODELS | _GROQ_MODELS | _DEEPSEEK_MODELS | _OPENROUTER_MODELS
+# Alibaba/Qwen 모델 (LiteLLM 경유, DashScope)
+_ALIBABA_MODELS = {
+    # Qwen3 플래그십
+    "qwen3-235b",
+    "qwen3-235b-instruct",
+    "qwen3-235b-thinking",
+    "qwen3-next-80b",
+    "qwen3-max",
+    "qwen3-32b",
+    "qwen3-30b-a3b",
+    "qwen3-14b",
+    "qwen3-8b",
+    # Qwen3 코더
+    "qwen3-coder-plus",
+    "qwen3-coder-flash",
+    "qwen3-coder-480b",
+    # Qwen3.5
+    "qwen3.5-plus",
+    "qwen3.5-flash",
+    # Qwen (안정 릴리스)
+    "qwen-max",
+    "qwen-max-latest",
+    "qwen-plus",
+    "qwen-plus-latest",
+    "qwen-turbo",
+    "qwen-turbo-latest",
+    "qwen-flash",
+    "qwen-coder-plus",
+    # Qwen2.5
+    "qwen2.5-72b-instruct",
+    # 추론
+    "qwq-plus",
+    # 멀티모달 (Vision/Omni)
+    "qwen-vl-max",
+    "qwen-vl-plus",
+    "qwen3-vl-plus",
+    "qwen3-vl-235b",
+    "qwen-omni-turbo",
+    # DashScope DeepSeek (Alibaba 호스팅)
+    "dashscope-deepseek-v3.2",
+}
+
+# LiteLLM OpenAI 호환 모델 (Gemini + Groq + DeepSeek + OpenRouter + Alibaba)
+_LITELLM_OPENAI_MODELS = _GEMINI_MODELS | _GROQ_MODELS | _DEEPSEEK_MODELS | _OPENROUTER_MODELS | _ALIBABA_MODELS
 
 
 def _estimate_cost(model: str, in_tokens: int, out_tokens: int) -> Decimal:
@@ -451,6 +526,22 @@ async def call_stream(
                 logger.warning(f"openrouter_fallback: {model} ({_or_model}) failed, falling back to gemini-2.5-flash")
                 break
             # done 이벤트의 model 필드를 사람이 읽기 좋은 이름으로 교체
+            if event.get("type") == "done":
+                event = {**event, "model": model}
+            yield event
+        if _had_error:
+            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
+                yield event
+        return
+
+    # Alibaba/Qwen 모델 → LiteLLM 경유 (DashScope, 실패 시 Gemini Flash 폴백)
+    if model in _ALIBABA_MODELS:
+        _had_error = False
+        async for event in _stream_litellm_openai(model, system_prompt, messages, tools=tools):
+            if event.get("type") == "error":
+                _had_error = True
+                logger.warning(f"alibaba_fallback: {model} failed, falling back to gemini-2.5-flash")
+                break
             if event.get("type") == "done":
                 event = {**event, "model": model}
             yield event
@@ -762,7 +853,7 @@ async def _stream_litellm_openai(
                     }
                 })
 
-    MAX_TOOL_LOOPS = 5  # 무한 루프 방지
+    MAX_TOOL_LOOPS = 50  # Claude와 동일
 
     for _loop_iter in range(MAX_TOOL_LOOPS + 1):
         # 이번 턴의 tool_calls 누적 (index → {id, name, args_buf})
