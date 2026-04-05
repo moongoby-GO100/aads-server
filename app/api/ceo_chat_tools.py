@@ -490,8 +490,70 @@ TOOL_DEFINITIONS: List[Dict] = [
                     "type": "string",
                     "description": "작업 완료보고를 받을 세션 ID. 생략 시 현재 세션 자동 감지.",
                 },
+                "size": {
+                    "type": "string",
+                    "description": "작업 규모 — 모델 자동 선택 (XS/S→Haiku, M/L→Sonnet, XL→Opus). worker_model 지정 시 무시됨.",
+                    "enum": ["XS", "S", "M", "L", "XL"],
+                    "default": "M",
+                },
+                "worker_model": {
+                    "type": "string",
+                    "description": "Claude 모델 직접 지정 (예: claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5). 지정 시 size 무시.",
+                },
+                "parallel_group": {
+                    "type": "string",
+                    "description": "병렬 실행 그룹명. 같은 그룹 내 작업은 프로젝트 Lock 없이 동시 실행.",
+                },
+                "depends_on": {
+                    "type": "string",
+                    "description": "의존 작업 job_id. 해당 작업 완료(done) 후에만 실행.",
+                },
             },
             "required": ["project", "instruction"],
+        },
+    },
+    # ── Pipeline Runner 배치 도구 (AADS-211: 병렬 오케스트레이션) ──────────
+    {
+        "name": "pipeline_runner_submit_batch",
+        "description": "여러 작업을 한 번에 제출하여 병렬 실행.\n같은 배치 내 작업은 자동 parallel_group 할당. depends_on_key로 순서 제어 가능.\n예: pipeline_runner_submit_batch(project='AADS', jobs=[{key:'A', instruction:'...', worker_model:'claude-opus-4-6'}, {key:'B', instruction:'...', depends_on_key:'A'}])",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "대상 프로젝트",
+                    "enum": ["KIS", "GO100", "SF", "NTV2", "AADS"],
+                },
+                "jobs": {
+                    "type": "array",
+                    "description": "작업 목록 (1~20개)",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "key": {"type": "string", "description": "배치 내 식별자 (예: 'A', 'B')"},
+                            "instruction": {"type": "string", "description": "작업 지시"},
+                            "size": {"type": "string", "default": "M"},
+                            "worker_model": {"type": "string", "description": "모델 직접 지정"},
+                            "depends_on_key": {"type": "string", "description": "선행 작업의 key (완료 후 실행)"},
+                        },
+                        "required": ["key", "instruction"],
+                    },
+                },
+                "parallel_group": {
+                    "type": "string",
+                    "description": "병렬 그룹명 (미지정 시 batch-{uuid} 자동 생성)",
+                },
+                "max_cycles": {
+                    "type": "integer",
+                    "description": "최대 검수 반복 (기본: 3)",
+                    "default": 3,
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "작업 완료보고를 받을 세션 ID. 생략 시 현재 세션.",
+                },
+            },
+            "required": ["project", "jobs"],
         },
     },
     {

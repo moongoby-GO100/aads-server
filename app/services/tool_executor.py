@@ -173,6 +173,7 @@ class ToolExecutor:
             "list_scheduled_tasks":   self._list_scheduled_tasks,
             # Pipeline Runner (호스트 독립 실행)
             "pipeline_runner_submit":  self._pipeline_runner_submit,
+            "pipeline_runner_submit_batch": self._pipeline_runner_submit_batch,
             "pipeline_runner_status":  self._pipeline_runner_status,
             "pipeline_runner_approve": self._pipeline_runner_approve,
             # Pipeline Runner: 레거시 → Runner 자동 리다이렉트
@@ -2163,9 +2164,33 @@ class ToolExecutor:
                     "instruction": inp.get("instruction", ""),
                     "session_id": _session_id,
                     "max_cycles": int(inp.get("max_cycles", 3)),
-                    "size": inp.get("size", "M"),  # AADS-206B: size→model 자동라우팅
+                    "size": inp.get("size", "M"),
+                    **({"worker_model": inp["worker_model"]} if inp.get("worker_model") else {}),
+                    **({"parallel_group": inp["parallel_group"]} if inp.get("parallel_group") else {}),
+                    **({"depends_on": inp["depends_on"]} if inp.get("depends_on") else {}),
                 },
                 timeout=10,
+            )
+            return resp.json()
+
+    async def _pipeline_runner_submit_batch(self, inp: Dict[str, Any]) -> Any:
+        """Pipeline Runner 배치 제출 — 여러 작업을 병렬 실행."""
+        _session_id = inp.get("session_id", "") or current_chat_session_id.get("")
+        if not _session_id:
+            return {"error": "session_id가 필요합니다."}
+        import httpx
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "http://localhost:8080/api/v1/pipeline/jobs/batch",
+                headers=self._INTERNAL_HEADERS,
+                json={
+                    "project": inp.get("project", "AADS"),
+                    "session_id": _session_id,
+                    "jobs": inp.get("jobs", []),
+                    "parallel_group": inp.get("parallel_group", ""),
+                    "max_cycles": int(inp.get("max_cycles", 3)),
+                },
+                timeout=15,
             )
             return resp.json()
 
