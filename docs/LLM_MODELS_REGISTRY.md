@@ -1,153 +1,118 @@
 # AADS LLM 모델 레지스트리
 
-**마지막 업데이트:** 2026-04-05 KST | **작성자:** CEO 지시 실행 (AADS-012)
+**마지막 업데이트:** 2026-04-05 13:30 KST | **버전:** v2.0 | **작성:** AADS-012
 
 ---
 
-## 🎯 목적
+## 목적
 
 AADS 채팅창에 등록된 모든 LLM 모델을 문서화하고 버전관리합니다.
-- 현재 활성 모델 목록
-- 인증 경로 및 설정
-- 성능 특성 (비용/속도/품질)
-- 사용 가이드라인
+- 총 **62개 모델** 등록 (실측 확인)
+- 5개 제공자: Anthropic, Google, DeepSeek, Groq, Alibaba DashScope
 
 ---
 
-## 📊 모델 아키텍처
+## 아키텍처
 
-```
-AADS LLM 라우팅 구조
-
-┌─────────────────────────────────────────────────────────────┐
-│  [채팅 AI / Pipeline Runner]                               │
-│  call_llm_with_fallback()                                   │
-└────────────┬────────────────────────────────────────────────┘
-             │
-      ┌──────┴──────────────────────────────────────┐
-      │                                             │
-   ┌──▼──────────────────┐           ┌─────────────▼────────┐
-   │ [A] Anthropic OAuth │           │ [B] LiteLLM Proxy    │
-   │ (채팅 AI 메인)      │           │ (http://localhost:4000)
-   └─┬────────────────────┘           └──┬──────────────────┘
-     │ ANTHROPIC_AUTH_TOKEN            │ /chat/completions
-     │ (1순위)                         │
-     │ ANTHROPIC_AUTH_TOKEN_2          ├─ Gemini (Google)
-     │ (2순위 폴백)                    ├─ DeepSeek
-     │                                 ├─ Groq (무료)
-     ├─ claude-opus-4-6                ├─ Alibaba DashScope
-     ├─ claude-sonnet-4-6              │   (Qwen, 추론 모델)
-     └─ claude-haiku-4-5               └─ Claude (2개 키 폴백)
-```
+AADS LLM 라우팅: 채팅AI call_llm_with_fallback()
+- [A] Anthropic OAuth (채팅 메인): AUTH_TOKEN 1->2 폴백
+- [B] LiteLLM Proxy (localhost:4000): Gemini 12 + DeepSeek 2 + Groq 8 + Alibaba 30 + Claude 10
 
 ---
 
-## 🔐 인증 경로별 모델 목록
+## 전체 모델 목록 (62개, 실측 2026-04-05)
 
 ### [A] Anthropic OAuth 직접 (채팅 AI 메인)
 
-**설정:** `anthropic_client.py` → `call_llm_with_fallback()`
-
-| 모델명 | 토큰 | 상태 | 용도 |
+| 모델명 | 폴백 | 상태 | 용도 |
 |--------|------|:---:|------|
-| **claude-opus-4-6** | Token 1→2 폴백 | ⚠️ 429 빈번 | 초고난도 분석 |
-| **claude-sonnet-4-6** | Token 1→2 폴백 | ✅ 정상 | 중상급 작업 |
-| **claude-haiku-4-5** | Token 1→2 폴백 | ✅ 정상 | 범용 (기본) |
+| claude-opus-4-6 | Token 1->2 | 429빈번 | 초고난도 |
+| claude-sonnet-4-6 | Token 1->2 | 정상 | 중상급 |
+| claude-haiku-4-5 | Token 1->2 | 정상 | 범용 기본 |
 
-**현재 상태:**
-- Token 1: 월 쿼터 초과 → 429 에러 발생
-- Token 2: 대체 토큰으로 폴백 작동
+### [B] Gemini (12개)
 
----
+gemini-2.5-flash, gemini-2.5-flash-lite, gemini-2.5-pro, gemini-2.5-flash-image,
+gemini-3-pro-preview, gemini-3-flash-preview, gemini-3.1-pro-preview, gemini-3.1-flash-lite-preview,
+gemma-3-27b-it, gemini-flash-lite(alias), gemini-flash(alias), gemini-pro(alias)
 
-### [B] LiteLLM Proxy (다중 제공자)
+### [B] DeepSeek (2개)
 
-**위치:** `http://aads-litellm:4000` (Docker 컨테이너)
+deepseek-chat, deepseek-reasoner
 
-#### ✅ Gemini (Google)
-- gemini-2.5-flash, gemini-2.5-pro, gemini-2.5-flash-lite
-- gemini-3-pro-preview, gemini-3.1-flash-lite-preview
-- 비용: 저~중, 속도: 우수
+### [B] Groq (8개, 무료)
 
-#### ✅ DeepSeek
-- deepseek-chat, deepseek-reasoner
-- 비용: 초저, 크레딧: 402 유닛 보유
+groq-llama-70b, groq-llama-8b, groq-llama4-maverick, groq-llama4-scout,
+groq-qwen3-32b, groq-kimi-k2, groq-gpt-oss-120b, groq-compound
 
-#### ✅ Groq (무료)
-- llama-70b, llama-8b, qwen3-32b, kimi-k2
-- 비용: 무료, 속도: 초고속 (100ms~500ms)
+### [B] Alibaba DashScope (30개) - NEW v2.0
 
-#### ✅ Alibaba DashScope (Qwen) — 139개 모델
+**범용 텍스트 (7):** qwen-turbo, qwen-turbo-latest, qwen-plus, qwen-plus-latest, qwen-max, qwen-max-latest, qwen-flash
 
-**범용 모델:**
-- qwen3-max, qwen3.5-plus, qwen3.6-plus
-- qwen-turbo, qwen-plus, qwen-max
+**코딩 전용 (4):** qwen-coder-plus, qwen3-coder-plus(A/B 7.38점), qwen3-coder-flash, qwen3-coder-480b
 
-**코딩 전문:**
-- qwen3-coder-plus ⭐ (A/B: 7.38점, 안정적)
-- qwen3-coder-next, qwen3-coder-flash
+**Qwen3 시리즈 (9):** qwen3-8b, qwen3-14b, qwen3-32b, qwen3-30b-a3b, qwen3-max, qwen3-235b, qwen3-235b-instruct, qwen3-235b-thinking, qwen3-next-80b
 
-**추론:**
-- qwq-plus, deepseek-v3.2
+**Qwen3.5 (2):** qwen3.5-plus, qwen3.5-flash
 
-**특징:** 무료(DashScope) 또는 월 $50 Coding Plan Pro
+**Qwen2.5 (1):** qwen2.5-72b-instruct
 
----
+**추론 (1):** qwq-plus (reasoning_content 파싱 필요)
 
-## 💰 비용 최적화
+**Vision/멀티모달 (5):** qwen-vl-max, qwen-vl-plus, qwen3-vl-plus, qwen3-vl-235b, qwen-omni-turbo
 
-### 현재
-- Claude Max 2계정: $400/월 (429 에러 + 과다 비용)
+**DashScope 호스팅 (1):** dashscope-deepseek-v3.2
 
-### 개선안 (총 $270/월, -32.5%)
-| 항목 | 비용 | 역할 |
-|------|------|------|
-| Claude Max 1계정 | $200 | 고품질 (메인) |
-| Alibaba Coding Plan | $50 | 코딩 특화 |
-| Groq 무료 | $0 | 백업 |
-| DeepSeek 크레딧 | ~$20 | 초저가 백업 |
-| **합계** | **$270** | **절감: -$130** |
+### [B] Claude via LiteLLM (10개, 2키 폴백)
+
+claude-sonnet, claude-opus, claude-haiku, claude-opus-4-6, claude-sonnet-4-6,
+claude-haiku-4-5, claude-sonnet-4-5-20250514, claude-haiku-4-5-20251001,
+claude-opus-4-6-20250610, claude-sonnet-4-6-20250610
 
 ---
 
-## 🎯 모델 선택 가이드
+## 폴백 체인
 
-### A/B 테스트 결과 (125회, Blind Judge 채점)
+- Claude: sonnet -> opus -> haiku (양방향)
+- Qwen: max -> plus -> turbo
+- Coder: qwen3-coder-plus -> qwen3-coder-flash -> qwen-coder-plus
+
+---
+
+## DashScope 주의사항
+
+1. Qwen3 계열: enable_thinking: false 필요 (비스트리밍)
+2. qwq-plus: reasoning_content 필드에만 결과 반환
+3. qwen-omni-turbo: max_tokens 최소 10
+4. qwen3-235b-thinking: thinking 모드 기본, 토큰 소비 높음
+
+---
+
+## A/B 테스트 결과 (125회)
 
 | 모델 | 평균 | 편차 | 추천 |
 |------|:---:|:---:|:---:|
-| **claude-haiku** | **7.74** | 0.89 | ⭐⭐⭐ 우수 |
-| qwen3-coder-plus | 7.38 | 1.01 | ⭐⭐ 양호 |
-| deepseek-v3.2 | 6.79 | 1.79 | ⭐ 저비용 |
-
-**결론:** Claude-Haiku가 종합 1위. 코딩은 Haiku 또는 Qwen3-Coder-Plus.
+| claude-haiku | 7.74 | 0.89 | 우수 |
+| qwen3-coder-plus | 7.38 | 1.01 | 양호 |
+| deepseek-v3.2 | 6.79 | 1.79 | 저비용 |
 
 ---
 
-## 🔧 설정 정보
+## 비용 최적화
 
-**파일:** `/app/litellm-config.yaml` (331줄, 60+ 모델)
-**커맨드:** `litellm --config /app/config.yaml --port 4000`
-
-**환경 변수:** .env.litellm
-```
-ANTHROPIC_API_KEY_1, ANTHROPIC_API_KEY_2
-GEMINI_API_KEY, DEEPSEEK_API_KEY
-GROQ_API_KEY, ALIBABA_API_KEY
-LITELLM_MASTER_KEY=sk-litellm
-```
+현재 00/월 -> 개선안 50/월 (-37.5%)
+- Claude Max 1계정 00 + Alibaba 0 + Groq bash + DeepSeek bash
 
 ---
 
-## ✅ 실행 체크리스트
+## 설정
 
-- [x] Alibaba DashScope 139개 모델 등록 확인
-- [x] LiteLLM 컨테이너 재시작 (설정 적용)
-- [x] LLM 문서 작성 (버전관리)
-- [ ] Alibaba Coding Plan Pro 가입 ($50/월)
-- [ ] Claude Max 2계정 → 1계정 축소
-- [ ] 월말 비용 보고
+- Config: /root/aads/aads-server/litellm-config.yaml -> /app/config.yaml
+- 환경변수: ANTHROPIC_API_KEY_1/2, GEMINI_API_KEY, DEEPSEEK_API_KEY, GROQ_API_KEY, ALIBABA_API_KEY
 
----
+## 변경 이력
 
-**버전:** v1.0 | **관리자:** AADS PM | **라이선스:** Internal Use Only
+| 날짜 | 버전 | 변경 |
+|------|------|------|
+| 2026-04-05 | v2.0 | Alibaba DashScope 30개 모델 추가 (총 62개) |
+| 2026-04-05 | v1.0 | 초기 문서 작성 (32개) |

@@ -1,267 +1,378 @@
 model_list:
-  # ── Gemini 2.5 ──
-  - model_name: gemini-2.5-flash
-    litellm_params:
-      model: gemini/gemini-2.5-flash
-      api_key: os.environ/GEMINI_API_KEY
-
-  - model_name: gemini-2.5-flash-lite
-    litellm_params:
-      model: gemini/gemini-2.5-flash-lite
-      api_key: os.environ/GEMINI_API_KEY
-
-  - model_name: gemini-2.5-pro
-    litellm_params:
-      model: gemini/gemini-2.5-pro
-      api_key: os.environ/GEMINI_API_KEY
-
-  - model_name: gemini-2.5-flash-image
-    litellm_params:
-      model: gemini/gemini-2.5-flash-image
-      api_key: os.environ/GEMINI_API_KEY
-
-  # ── Gemini 3.0 ──
-  - model_name: gemini-3-pro-preview
-    litellm_params:
-      model: gemini/gemini-3-pro-preview
-      api_key: os.environ/GEMINI_API_KEY
-
-  - model_name: gemini-3-flash-preview
-    litellm_params:
-      model: gemini/gemini-3-flash-preview
-      api_key: os.environ/GEMINI_API_KEY
-
-  # ── Gemini 3.1 ──
-  - model_name: gemini-3.1-pro-preview
-    litellm_params:
-      model: gemini/gemini-3.1-pro-preview
-      api_key: os.environ/GEMINI_API_KEY
-
-  - model_name: gemini-3.1-flash-lite-preview
-    litellm_params:
-      model: gemini/gemini-3.1-flash-lite-preview
-      api_key: os.environ/GEMINI_API_KEY
-
-  # ── Gemma 3 (오픈소스) ──
-  - model_name: gemma-3-27b-it
-    litellm_params:
-      model: gemini/gemma-3-27b-it
-      api_key: os.environ/GEMINI_API_KEY
-
-  # ── 기존 alias (하위 호환) ──
-  - model_name: gemini-flash-lite
-    litellm_params:
-      model: gemini/gemini-2.5-flash-lite
-      api_key: os.environ/GEMINI_API_KEY
-
-  - model_name: gemini-flash
-    litellm_params:
-      model: gemini/gemini-2.5-flash
-      api_key: os.environ/GEMINI_API_KEY
-
-  - model_name: gemini-pro
-    litellm_params:
-      model: gemini/gemini-2.5-pro
-      api_key: os.environ/GEMINI_API_KEY
-
-  # ── DeepSeek ──
-  - model_name: deepseek-chat
-    litellm_params:
-      model: deepseek/deepseek-chat
-      api_key: os.environ/DEEPSEEK_API_KEY
-      api_base: https://api.deepseek.com
-
-  - model_name: deepseek-reasoner
-    litellm_params:
-      model: deepseek/deepseek-reasoner
-      api_key: os.environ/DEEPSEEK_API_KEY
-      api_base: https://api.deepseek.com
-
-  # ── Groq (초고속 추론) ──
-  - model_name: groq-llama-70b
-    litellm_params:
-      model: groq/llama-3.3-70b-versatile
-      api_key: os.environ/GROQ_API_KEY
-
-  - model_name: groq-llama-8b
-    litellm_params:
-      model: groq/llama-3.1-8b-instant
-      api_key: os.environ/GROQ_API_KEY
-
-  - model_name: groq-llama4-maverick
-    litellm_params:
-      model: groq/meta-llama/llama-4-maverick-17b-128e-instruct
-      api_key: os.environ/GROQ_API_KEY
-
-  - model_name: groq-llama4-scout
-    litellm_params:
-      model: groq/meta-llama/llama-4-scout-17b-16e-instruct
-      api_key: os.environ/GROQ_API_KEY
-
-  - model_name: groq-qwen3-32b
-    litellm_params:
-      model: groq/qwen/qwen3-32b
-      api_key: os.environ/GROQ_API_KEY
-
-  - model_name: groq-kimi-k2
-    litellm_params:
-      model: groq/moonshotai/kimi-k2-instruct
-      api_key: os.environ/GROQ_API_KEY
-
-  - model_name: groq-gpt-oss-120b
-    litellm_params:
-      model: groq/openai/gpt-oss-120b
-      api_key: os.environ/GROQ_API_KEY
-
-  - model_name: groq-compound
-    litellm_params:
-      model: groq/groq/compound
-      api_key: os.environ/GROQ_API_KEY
-
-  # ── Alibaba Cloud DashScope (Qwen) ──
-  - model_name: qwen-turbo
-    litellm_params:
-      model: openai_like/qwen-turbo
-      api_key: os.environ/ALIBABA_API_KEY
-      api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
-
-  - model_name: qwen-plus
-    litellm_params:
-      model: openai_like/qwen-plus
-      api_key: os.environ/ALIBABA_API_KEY
-      api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
-
-  # ── Claude (Anthropic) — 토큰 2개 자동 폴백 (gmail/naver) ──
-  - model_name: claude-sonnet
-    litellm_params:
-      model: anthropic/claude-sonnet-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY_1
-      order: 1
-  - model_name: claude-sonnet
-    litellm_params:
-      model: anthropic/claude-sonnet-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY_2
-      order: 2
-
-  - model_name: claude-opus
-    litellm_params:
-      model: anthropic/claude-opus-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY_1
-      order: 1
-  - model_name: claude-opus
-    litellm_params:
-      model: anthropic/claude-opus-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY_2
-      order: 2
-
-  - model_name: claude-haiku
-    litellm_params:
-      model: anthropic/claude-haiku-4-5
-      api_key: os.environ/ANTHROPIC_API_KEY_1
-      order: 1
-  - model_name: claude-haiku
-    litellm_params:
-      model: anthropic/claude-haiku-4-5
-      api_key: os.environ/ANTHROPIC_API_KEY_2
-      order: 2
-
-  # Claude CLI 호환 — 토큰 2개 폴백
-  - model_name: claude-opus-4-6
-    litellm_params:
-      model: anthropic/claude-opus-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY_1
-      order: 1
-  - model_name: claude-opus-4-6
-    litellm_params:
-      model: anthropic/claude-opus-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY_2
-      order: 2
-
-  - model_name: claude-sonnet-4-6
-    litellm_params:
-      model: anthropic/claude-sonnet-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY_1
-      order: 1
-  - model_name: claude-sonnet-4-6
-    litellm_params:
-      model: anthropic/claude-sonnet-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY_2
-      order: 2
-
-  - model_name: claude-haiku-4-5
-    litellm_params:
-      model: anthropic/claude-haiku-4-5
-      api_key: os.environ/ANTHROPIC_API_KEY_1
-      order: 1
-  - model_name: claude-haiku-4-5
-    litellm_params:
-      model: anthropic/claude-haiku-4-5
-      api_key: os.environ/ANTHROPIC_API_KEY_2
-      order: 2
-
-  - model_name: claude-sonnet-4-5-20250514
-    litellm_params:
-      model: anthropic/claude-sonnet-4-5-20250514
-      api_key: os.environ/ANTHROPIC_API_KEY_1
-      order: 1
-  - model_name: claude-sonnet-4-5-20250514
-    litellm_params:
-      model: anthropic/claude-sonnet-4-5-20250514
-      api_key: os.environ/ANTHROPIC_API_KEY_2
-      order: 2
-
-  - model_name: claude-haiku-4-5-20251001
-    litellm_params:
-      model: anthropic/claude-haiku-4-5-20251001
-      api_key: os.environ/ANTHROPIC_API_KEY_1
-      order: 1
-  - model_name: claude-haiku-4-5-20251001
-    litellm_params:
-      model: anthropic/claude-haiku-4-5-20251001
-      api_key: os.environ/ANTHROPIC_API_KEY_2
-      order: 2
-
-  - model_name: claude-opus-4-6-20250610
-    litellm_params:
-      model: anthropic/claude-opus-4-6-20250610
-      api_key: os.environ/ANTHROPIC_API_KEY_1
-      order: 1
-  - model_name: claude-opus-4-6-20250610
-    litellm_params:
-      model: anthropic/claude-opus-4-6-20250610
-      api_key: os.environ/ANTHROPIC_API_KEY_2
-      order: 2
-
-  - model_name: claude-sonnet-4-6-20250610
-    litellm_params:
-      model: anthropic/claude-sonnet-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY_1
-      order: 1
-  - model_name: claude-sonnet-4-6-20250610
-    litellm_params:
-      model: anthropic/claude-sonnet-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY_2
-      order: 2
-
-# Gmail(order=1) 우선, Naver 리밋/장애 시 order=2로 폴백
-# 모델별 사용량 한도가 별도이므로 소넷 리밋 → 오퍼스 → 하이쿠 폴백
+- model_name: gemini-2.5-flash
+  litellm_params:
+    model: gemini/gemini-2.5-flash
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemini-2.5-flash-lite
+  litellm_params:
+    model: gemini/gemini-2.5-flash-lite
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemini-2.5-pro
+  litellm_params:
+    model: gemini/gemini-2.5-pro
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemini-2.5-flash-image
+  litellm_params:
+    model: gemini/gemini-2.5-flash-image
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemini-3-pro-preview
+  litellm_params:
+    model: gemini/gemini-3-pro-preview
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemini-3-flash-preview
+  litellm_params:
+    model: gemini/gemini-3-flash-preview
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemini-3.1-pro-preview
+  litellm_params:
+    model: gemini/gemini-3.1-pro-preview
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemini-3.1-flash-lite-preview
+  litellm_params:
+    model: gemini/gemini-3.1-flash-lite-preview
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemma-3-27b-it
+  litellm_params:
+    model: gemini/gemma-3-27b-it
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemini-flash-lite
+  litellm_params:
+    model: gemini/gemini-2.5-flash-lite
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemini-flash
+  litellm_params:
+    model: gemini/gemini-2.5-flash
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemini-pro
+  litellm_params:
+    model: gemini/gemini-2.5-pro
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: deepseek-chat
+  litellm_params:
+    model: deepseek/deepseek-chat
+    api_key: os.environ/DEEPSEEK_API_KEY
+    api_base: https://api.deepseek.com
+- model_name: deepseek-reasoner
+  litellm_params:
+    model: deepseek/deepseek-reasoner
+    api_key: os.environ/DEEPSEEK_API_KEY
+    api_base: https://api.deepseek.com
+- model_name: groq-llama-70b
+  litellm_params:
+    model: groq/llama-3.3-70b-versatile
+    api_key: os.environ/GROQ_API_KEY
+- model_name: groq-llama-8b
+  litellm_params:
+    model: groq/llama-3.1-8b-instant
+    api_key: os.environ/GROQ_API_KEY
+- model_name: groq-llama4-maverick
+  litellm_params:
+    model: groq/meta-llama/llama-4-maverick-17b-128e-instruct
+    api_key: os.environ/GROQ_API_KEY
+- model_name: groq-llama4-scout
+  litellm_params:
+    model: groq/meta-llama/llama-4-scout-17b-16e-instruct
+    api_key: os.environ/GROQ_API_KEY
+- model_name: groq-qwen3-32b
+  litellm_params:
+    model: groq/qwen/qwen3-32b
+    api_key: os.environ/GROQ_API_KEY
+- model_name: groq-kimi-k2
+  litellm_params:
+    model: groq/moonshotai/kimi-k2-instruct
+    api_key: os.environ/GROQ_API_KEY
+- model_name: groq-gpt-oss-120b
+  litellm_params:
+    model: groq/openai/gpt-oss-120b
+    api_key: os.environ/GROQ_API_KEY
+- model_name: groq-compound
+  litellm_params:
+    model: groq/groq/compound
+    api_key: os.environ/GROQ_API_KEY
+- model_name: claude-sonnet
+  litellm_params:
+    model: anthropic/claude-sonnet-4-6
+    api_key: os.environ/ANTHROPIC_API_KEY_1
+    order: 1
+- model_name: claude-sonnet
+  litellm_params:
+    model: anthropic/claude-sonnet-4-6
+    api_key: os.environ/ANTHROPIC_API_KEY_2
+    order: 2
+- model_name: claude-opus
+  litellm_params:
+    model: anthropic/claude-opus-4-6
+    api_key: os.environ/ANTHROPIC_API_KEY_1
+    order: 1
+- model_name: claude-opus
+  litellm_params:
+    model: anthropic/claude-opus-4-6
+    api_key: os.environ/ANTHROPIC_API_KEY_2
+    order: 2
+- model_name: claude-haiku
+  litellm_params:
+    model: anthropic/claude-haiku-4-5
+    api_key: os.environ/ANTHROPIC_API_KEY_1
+    order: 1
+- model_name: claude-haiku
+  litellm_params:
+    model: anthropic/claude-haiku-4-5
+    api_key: os.environ/ANTHROPIC_API_KEY_2
+    order: 2
+- model_name: claude-opus-4-6
+  litellm_params:
+    model: anthropic/claude-opus-4-6
+    api_key: os.environ/ANTHROPIC_API_KEY_1
+    order: 1
+- model_name: claude-opus-4-6
+  litellm_params:
+    model: anthropic/claude-opus-4-6
+    api_key: os.environ/ANTHROPIC_API_KEY_2
+    order: 2
+- model_name: claude-sonnet-4-6
+  litellm_params:
+    model: anthropic/claude-sonnet-4-6
+    api_key: os.environ/ANTHROPIC_API_KEY_1
+    order: 1
+- model_name: claude-sonnet-4-6
+  litellm_params:
+    model: anthropic/claude-sonnet-4-6
+    api_key: os.environ/ANTHROPIC_API_KEY_2
+    order: 2
+- model_name: claude-haiku-4-5
+  litellm_params:
+    model: anthropic/claude-haiku-4-5
+    api_key: os.environ/ANTHROPIC_API_KEY_1
+    order: 1
+- model_name: claude-haiku-4-5
+  litellm_params:
+    model: anthropic/claude-haiku-4-5
+    api_key: os.environ/ANTHROPIC_API_KEY_2
+    order: 2
+- model_name: claude-sonnet-4-5-20250514
+  litellm_params:
+    model: anthropic/claude-sonnet-4-5-20250514
+    api_key: os.environ/ANTHROPIC_API_KEY_1
+    order: 1
+- model_name: claude-sonnet-4-5-20250514
+  litellm_params:
+    model: anthropic/claude-sonnet-4-5-20250514
+    api_key: os.environ/ANTHROPIC_API_KEY_2
+    order: 2
+- model_name: claude-haiku-4-5-20251001
+  litellm_params:
+    model: anthropic/claude-haiku-4-5-20251001
+    api_key: os.environ/ANTHROPIC_API_KEY_1
+    order: 1
+- model_name: claude-haiku-4-5-20251001
+  litellm_params:
+    model: anthropic/claude-haiku-4-5-20251001
+    api_key: os.environ/ANTHROPIC_API_KEY_2
+    order: 2
+- model_name: claude-opus-4-6-20250610
+  litellm_params:
+    model: anthropic/claude-opus-4-6-20250610
+    api_key: os.environ/ANTHROPIC_API_KEY_1
+    order: 1
+- model_name: claude-opus-4-6-20250610
+  litellm_params:
+    model: anthropic/claude-opus-4-6-20250610
+    api_key: os.environ/ANTHROPIC_API_KEY_2
+    order: 2
+- model_name: claude-sonnet-4-6-20250610
+  litellm_params:
+    model: anthropic/claude-sonnet-4-6
+    api_key: os.environ/ANTHROPIC_API_KEY_1
+    order: 1
+- model_name: claude-sonnet-4-6-20250610
+  litellm_params:
+    model: anthropic/claude-sonnet-4-6
+    api_key: os.environ/ANTHROPIC_API_KEY_2
+    order: 2
+- model_name: qwen-turbo
+  litellm_params:
+    model: openai/qwen-turbo
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen-turbo-latest
+  litellm_params:
+    model: openai/qwen-turbo-latest
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen-plus
+  litellm_params:
+    model: openai/qwen-plus
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen-plus-latest
+  litellm_params:
+    model: openai/qwen-plus-latest
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen-max
+  litellm_params:
+    model: openai/qwen-max
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen-max-latest
+  litellm_params:
+    model: openai/qwen-max-latest
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen-flash
+  litellm_params:
+    model: openai/qwen-flash
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen-coder-plus
+  litellm_params:
+    model: openai/qwen-coder-plus
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-coder-plus
+  litellm_params:
+    model: openai/qwen3-coder-plus
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-coder-flash
+  litellm_params:
+    model: openai/qwen3-coder-flash
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-coder-480b
+  litellm_params:
+    model: openai/qwen3-coder-480b-a35b-instruct
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-8b
+  litellm_params:
+    model: openai/qwen3-8b
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-14b
+  litellm_params:
+    model: openai/qwen3-14b
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-32b
+  litellm_params:
+    model: openai/qwen3-32b
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-30b-a3b
+  litellm_params:
+    model: openai/qwen3-30b-a3b
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-max
+  litellm_params:
+    model: openai/qwen3-max
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-235b
+  litellm_params:
+    model: openai/qwen3-235b-a22b
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-235b-instruct
+  litellm_params:
+    model: openai/qwen3-235b-a22b-instruct-2507
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-235b-thinking
+  litellm_params:
+    model: openai/qwen3-235b-a22b-thinking-2507
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-next-80b
+  litellm_params:
+    model: openai/qwen3-next-80b-a3b-instruct
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3.5-plus
+  litellm_params:
+    model: openai/qwen3.5-plus
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3.5-flash
+  litellm_params:
+    model: openai/qwen3.5-flash
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen2.5-72b-instruct
+  litellm_params:
+    model: openai/qwen2.5-72b-instruct
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwq-plus
+  litellm_params:
+    model: openai/qwq-plus
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen-vl-max
+  litellm_params:
+    model: openai/qwen-vl-max
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen-vl-plus
+  litellm_params:
+    model: openai/qwen-vl-plus
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-vl-plus
+  litellm_params:
+    model: openai/qwen3-vl-plus
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-vl-235b
+  litellm_params:
+    model: openai/qwen3-vl-235b-a22b-instruct
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen-omni-turbo
+  litellm_params:
+    model: openai/qwen-omni-turbo
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: dashscope-deepseek-v3.2
+  litellm_params:
+    model: openai/deepseek-v3.2
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
 router_settings:
   enable_pre_call_checks: false
   num_retries: 3
   model_group_fallbacks:
-    - claude-sonnet-4-6: ["claude-opus-4-6", "claude-haiku-4-5"]
-    - claude-sonnet: ["claude-opus", "claude-haiku"]
-    - claude-opus-4-6: ["claude-sonnet-4-6", "claude-haiku-4-5"]
-    - claude-opus: ["claude-sonnet", "claude-haiku"]
-    - claude-haiku-4-5: ["claude-sonnet-4-6", "claude-opus-4-6"]
-    - claude-haiku: ["claude-sonnet", "claude-opus"]
-
+  - claude-sonnet-4-6:
+    - claude-opus-4-6
+    - claude-haiku-4-5
+  - claude-sonnet:
+    - claude-opus
+    - claude-haiku
+  - claude-opus-4-6:
+    - claude-sonnet-4-6
+    - claude-haiku-4-5
+  - claude-opus:
+    - claude-sonnet
+    - claude-haiku
+  - claude-haiku-4-5:
+    - claude-sonnet-4-6
+    - claude-opus-4-6
+  - claude-haiku:
+    - claude-sonnet
+    - claude-opus
+  - qwen-max:
+    - qwen-plus
+    - qwen-turbo
+  - qwen-plus:
+    - qwen-max
+    - qwen-turbo
+  - qwen3-coder-plus:
+    - qwen3-coder-flash
+    - qwen-coder-plus
 litellm_settings:
   drop_params: true
   set_verbose: true
-  # max_budget: 10.0  # 일 $10 상한 — 임시 비활성화 (AADS 차단 원인 의심)
-  # budget_duration: 1d
-
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   store_model_in_db: false
