@@ -3254,7 +3254,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         from app.services.gemini_search_service import GeminiSearchService
         svc = GeminiSearchService()
         result = await svc.search_grounded(params.get("query", ""), params.get("context", ""))
-        return json.dumps({"answer": result.answer, "sources": result.sources, "grounding_score": result.grounding_score}, ensure_ascii=False, default=str)
+        return json.dumps({"text": result.text, "citations": result.citations}, ensure_ascii=False, default=str)
     elif name == "execute_sandbox":
         from app.services.sandbox import execute_code
         result = await execute_code(params.get("code", ""), params.get("language", "python"), params.get("timeout", 30))
@@ -3271,22 +3271,22 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         svc = KakaoSearchService()
         if not svc.is_available():
             return "[ERROR] 카카오 API 키 미설정"
-        result = await svc.search(params.get("query", ""), params.get("search_type", "web"))
-        return json.dumps({"answer": result.answer, "sources": result.sources}, ensure_ascii=False, default=str)
+        result = await svc.search(params.get("query", ""))
+        return json.dumps({"text": result.text, "citations": result.citations}, ensure_ascii=False, default=str)
     elif name == "search_naver":
         from app.services.naver_search_service import NaverSearchService
         svc = NaverSearchService()
         if not svc.is_available():
             return "[ERROR] 네이버 API 키 미설정"
         result = await svc.search(params.get("query", ""), params.get("search_type", "webkr"))
-        return json.dumps({"answer": result.answer, "sources": result.sources}, ensure_ascii=False, default=str)
+        return json.dumps({"text": result.text, "citations": result.citations}, ensure_ascii=False, default=str)
     elif name == "search_naver_multi":
         from app.services.naver_search_service import NaverSearchService
         svc = NaverSearchService()
         if not svc.is_available():
             return "[ERROR] 네이버 API 키 미설정"
         results = await svc.multi_search(params.get("query", ""), params.get("types", ["webkr", "news", "blog"]))
-        return json.dumps([{"type": r.sources[0]["type"] if r.sources else "unknown", "answer": r.answer, "sources": r.sources} for r in results], ensure_ascii=False, default=str)
+        return json.dumps([{"type": r.citations[0].get("type", "unknown") if r.citations else "unknown", "text": r.text, "citations": r.citations} for r in results], ensure_ascii=False, default=str)
     elif name == "visual_qa_test":
         return "[INFO] Visual QA는 현재 Playwright 기반 배치 모드만 지원. capture_screenshot + read_remote_file 조합 사용 권장."
     elif name == "evaluate_alerts":
@@ -3446,5 +3446,23 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             "perspectives": [{"name": p.name, "analysis": p.analysis, "key_points": p.key_points} for p in result.perspectives],
             "synthesis": result.synthesis,
         }, ensure_ascii=False, default=str)
+    # ── tool_executor 위임: 기본/조회/분석/메모리/에이전트 도구 ─────────────
+    elif name in (
+        "health_check", "dashboard_query", "task_history", "server_status",
+        "directive_create", "read_github_file", "query_database", "cost_report",
+        "web_search_brave", "web_search", "search_searxng",
+        "inspect_service", "get_all_service_status", "generate_directive",
+        "jina_read", "crawl4ai_fetch", "deep_crawl",
+        "save_note", "recall_notes", "delete_note", "learn_pattern", "observe",
+        "deep_research", "code_explorer", "analyze_changes", "search_all_projects",
+        "check_directive_status", "delegate_to_agent", "delegate_to_research",
+        "spawn_subagent", "spawn_parallel_subagents",
+        "semantic_code_search", "read_uploaded_file",
+        "add_agenda", "list_agendas", "get_agenda", "update_agenda",
+        "decide_agenda", "search_agendas",
+    ):
+        from app.services.tool_executor import ToolExecutor
+        _executor = ToolExecutor()
+        return await _executor.execute(name, params)
     else:
         return f"[ERROR] 알 수 없는 도구: {name}"
