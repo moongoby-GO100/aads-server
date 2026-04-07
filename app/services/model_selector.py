@@ -886,6 +886,7 @@ async def _stream_litellm_openai(
                 })
 
     MAX_TOOL_LOOPS = 200  # 제한 없이 (CEO 지시)
+    _consecutive_fail = 0  # 연속 도구 실패 카운터 (AADS-225-D)
 
     for _loop_iter in range(MAX_TOOL_LOOPS + 1):
         # 이번 턴의 tool_calls 누적 (index → {id, name, args_buf})
@@ -1028,6 +1029,17 @@ async def _stream_litellm_openai(
                 "tool_call_id": _er["id"],
                 "content": _er["result"],
             })
+
+        # 연속 실패 감지 (AADS-225-D): 배치 내 전부 실패 → 카운터++, 하나라도 성공 → 리셋
+        if all(not _er["ok"] for _er in _exec_results):
+            _consecutive_fail += 1
+            logger.warning(f"gemini_tool_all_failed: iter={_loop_iter+1} consecutive={_consecutive_fail}")
+            if _consecutive_fail >= 3:
+                logger.error(f"gemini_tool_loop_break: 3회 연속 도구 전체 실패 — 루프 중단 model={model}")
+                yield {"type": "delta", "content": "\n\n[도구 3회 연속 실패 — 루프를 중단합니다]\n"}
+                break
+        else:
+            _consecutive_fail = 0
 
         logger.info(f"gemini_tool_loop: iter={_loop_iter+1} tools={[e['name'] for e in _exec_results]}")
         # loop_iter 증가 후 재호출

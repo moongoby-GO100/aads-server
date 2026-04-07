@@ -939,7 +939,7 @@ class PipelineCJob:
 
     async def _ai_review(self) -> dict:
         """AADS AI가 Claude Code 작업 결과를 자동 검수."""
-        from app.api.ceo_chat import call_llm
+        from app.core.anthropic_client import call_background_llm
 
         diff_text = self.git_diff[:3000] if self.git_diff else "(변경사항 없음)"
         output_text = self.result_output[:2000] if self.result_output else "(출력 없음)"
@@ -965,10 +965,10 @@ class PipelineCJob:
 
         response_text = ""
         try:
-            response_text, _, _ = await call_llm(
-                _REVIEW_MODEL,
-                "코드 리뷰어. JSON으로만 응답.",
-                [{"role": "user", "content": review_prompt}],
+            response_text = await call_background_llm(
+                prompt=review_prompt,
+                system="코드 리뷰어. JSON으로만 응답.",
+                max_tokens=1024,
             )
             # JSON 추출 (5단계 폴백 파싱)
             text = response_text.strip()

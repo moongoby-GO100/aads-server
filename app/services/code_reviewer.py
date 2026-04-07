@@ -69,9 +69,9 @@ async def review_code_diff(
 
     if not diff or not diff.strip():
         return ReviewVerdict(
-            verdict="APPROVE",
-            score=1.0,
-            feedback={"summary": "변경사항 없음"},
+            verdict="SKIP",
+            score=0.0,
+            feedback={"summary": "변경사항 없음 — 검수 생략"},
             issues=[],
         )
 
