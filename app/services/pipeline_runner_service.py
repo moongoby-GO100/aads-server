@@ -664,8 +664,7 @@ class PipelineCJob:
             return {"error": f"거부 불가 상태: {self.status}"}
 
         self._log("rejected", f"CEO 거부: {reason}")
-        # 커밋 취소 + 변경사항 완전 제거 (commit은 Runner가 작업 완료 시 이미 수행됨)
-        await self._ssh_command("git reset HEAD~1 --mixed")
+        # 변경사항 완전 제거 (Shell Runner는 approve 후에만 커밋하므로 reset 불필요)
         await self._ssh_command("git checkout .")
         await self._ssh_command("git clean -fd")
         self.status = "done"

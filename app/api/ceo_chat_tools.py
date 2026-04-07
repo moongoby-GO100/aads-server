@@ -3169,6 +3169,10 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
                     "instruction": params.get("instruction", ""),
                     "session_id": _sid,
                     "max_cycles": int(params.get("max_cycles", 3)),
+                    "size": params.get("size", "M"),
+                    "worker_model": params.get("worker_model", ""),
+                    "parallel_group": params.get("parallel_group", ""),
+                    "depends_on": params.get("depends_on", ""),
                 },
                 timeout=10,
             )
