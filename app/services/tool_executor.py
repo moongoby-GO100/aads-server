@@ -518,7 +518,7 @@ class ToolExecutor:
         session_id = current_chat_session_id.get("")
         if not session_id:
             try:
-                from app.services.pipeline_c import _find_recent_session
+                from app.services.pipeline_runner_service import _find_recent_session
                 session_id = await _find_recent_session(project)
             except Exception:
                 pass
@@ -1754,7 +1754,7 @@ class ToolExecutor:
         if not _captured_session_id:
             # Pipeline Runner와 동일한 폴백: 프로젝트 워크스페이스의 최근 세션 조회
             try:
-                from app.services.pipeline_c import _find_recent_session
+                from app.services.pipeline_runner_service import _find_recent_session
                 _captured_session_id = await _find_recent_session(project)
                 logger.warning(
                     f"pipeline_b_session_fallback: project={project} "
@@ -1773,7 +1773,7 @@ class ToolExecutor:
             # 내부 폴백: 외부 캡처가 실패했을 경우 백그라운드 task 내에서 재시도
             if not session_id:
                 try:
-                    from app.services.pipeline_c import _find_recent_session
+                    from app.services.pipeline_runner_service import _find_recent_session
                     session_id = await _find_recent_session(project)
                     logger.warning(
                         f"delegate_to_agent_inner_fallback: project={project} "
@@ -2155,7 +2155,7 @@ class ToolExecutor:
         _session_id = inp.get("session_id", "") or current_chat_session_id.get("")
         if not _session_id:
             try:
-                from app.services.pipeline_c import _find_recent_session
+                from app.services.pipeline_runner_service import _find_recent_session
                 _session_id = await _find_recent_session(inp.get("project", "AADS"))
             except Exception:
                 pass
@@ -2185,7 +2185,7 @@ class ToolExecutor:
         _session_id = inp.get("session_id", "") or current_chat_session_id.get("")
         if not _session_id:
             try:
-                from app.services.pipeline_c import _find_recent_session
+                from app.services.pipeline_runner_service import _find_recent_session
                 _session_id = await _find_recent_session(inp.get("project", "AADS"))
             except Exception:
                 pass

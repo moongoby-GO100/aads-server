@@ -2261,7 +2261,7 @@ async def tool_pipeline_c_start(project: str, instruction: str, max_cycles: int,
         return "[ERROR] instruction 필수 (최소 10자 이상의 구체적 지시 필요)"
 
     try:
-        from app.services.pipeline_c import start_pipeline
+        from app.services.pipeline_runner_service import start_pipeline
         result = await start_pipeline(
             project=project.upper(),
             instruction=instruction,
@@ -2288,7 +2288,7 @@ async def tool_pipeline_c_start(project: str, instruction: str, max_cycles: int,
 
 async def tool_pipeline_c_status(job_id: str) -> str:
     """Pipeline Runner 상태 조회."""
-    from app.services.pipeline_c import get_pipeline_status, list_pipelines
+    from app.services.pipeline_runner_service import get_pipeline_status, list_pipelines
 
     if not job_id:
         # 전체 목록
@@ -2337,7 +2337,7 @@ async def tool_pipeline_c_approve(job_id: str, approved: bool, reason: str) -> s
     if not job_id:
         return "[ERROR] job_id 필수"
 
-    from app.services.pipeline_c import approve_pipeline, reject_pipeline
+    from app.services.pipeline_runner_service import approve_pipeline, reject_pipeline
 
     if approved:
         result = await approve_pipeline(job_id)
@@ -2361,7 +2361,7 @@ async def tool_pipeline_c_cancel(job_id: str) -> str:
     """Pipeline Runner 강제 취소."""
     if not job_id:
         return "[ERROR] job_id 필수"
-    from app.services.pipeline_c import cancel_pipeline
+    from app.services.pipeline_runner_service import cancel_pipeline
     result = await cancel_pipeline(job_id)
     if "error" in result:
         return f"[ERROR] {result['error']}"
@@ -2377,7 +2377,7 @@ async def tool_pipeline_c_retry(job_id: str) -> str:
     """에러/취소된 Pipeline Runner 재실행."""
     if not job_id:
         return "[ERROR] job_id 필수"
-    from app.services.pipeline_c import retry_pipeline
+    from app.services.pipeline_runner_service import retry_pipeline
     result = await retry_pipeline(job_id)
     if "error" in result:
         return f"[ERROR] {result['error']}"
@@ -3152,7 +3152,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         _sid = params.get("session_id", "") or chat_session_id or current_chat_session_id.get("")
         if not _sid:
             try:
-                from app.services.pipeline_c import _find_recent_session
+                from app.services.pipeline_runner_service import _find_recent_session
                 _sid = await _find_recent_session(params.get("project", "AADS"))
             except Exception:
                 pass

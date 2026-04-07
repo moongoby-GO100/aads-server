@@ -830,7 +830,7 @@ async def lifespan(app: FastAPI):
 
     # Pipeline Runner: 재시작 복구 + Watchdog 시작 (DB 풀 초기화 이후)
     try:
-        from app.services.pipeline_c import recover_interrupted_jobs, start_watchdog
+        from app.services.pipeline_runner_service import recover_interrupted_jobs, start_watchdog
         await recover_interrupted_jobs()
         await start_watchdog(interval=120)
     except Exception as e:
