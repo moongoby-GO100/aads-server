@@ -2543,9 +2543,9 @@ class ToolExecutor:
         )
         return [
             {
-                "type": r.sources[0]["type"] if r.sources else "unknown",
-                "answer": r.answer,
-                "sources": r.sources,
+                "type": r.citations[0].get("type", "unknown") if r.citations else "unknown",
+                "text": r.text,
+                "citations": r.citations,
             }
             for r in results
         ]
@@ -2556,8 +2556,8 @@ class ToolExecutor:
         svc = GeminiSearchService()
         result = await svc.search_grounded(inp.get("query", ""), inp.get("context", ""))
         return {
-            "answer": result.answer,
-            "sources": result.sources,
+            "text": result.text,
+            "citations": result.citations,
             "grounding_score": result.grounding_score,
         }
 
