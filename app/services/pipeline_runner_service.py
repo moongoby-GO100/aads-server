@@ -33,6 +33,21 @@ logger = logging.getLogger(__name__)
 _CLAUDE_TIMEOUT = 3600      # Claude Code 직접 대기 타임아웃 (60분, 폴링 모드 폴백용)
 _CLAUDE_POLL_INTERVAL = 30  # 분리 실행 폴링 주기 (초)
 _CLAUDE_MAX_WAIT = 7200     # 분리 실행 최대 대기 (2시간)
+
+# P1-1: 작업 규모별 동적 타임아웃 (AADS-229)
+_TIMEOUT_BY_SIZE = {
+    "XS": 600,   # 10분
+    "S": 1200,   # 20분
+    "M": 3600,   # 60분
+    "L": 5400,   # 90분
+    "XL": 7200,  # 120분
+}
+
+
+def _get_timeout_for_job(job: "PipelineCJob") -> int:
+    """작업 규모(size)에 따른 타임아웃(초) 반환."""
+    size = getattr(job, "size", "M") or "M"
+    return _TIMEOUT_BY_SIZE.get(size.upper(), _CLAUDE_MAX_WAIT)
 _MAX_OUTPUT_CHARS = 6000    # 결과 최대 문자수
 _MAX_DIFF_CHARS = 50000     # git diff 최대 문자수 (L3)
 _REVIEW_MODEL = "claude-sonnet-4-6"
@@ -98,7 +113,7 @@ class PipelineCJob:
                  chat_session_id: str, max_cycles: int = 3,
                  dsn: str = "", model: str = "",
                  worker_model: str = "", parallel_group: str = "",
-                 depends_on: str = ""):
+                 depends_on: str = "", size: str = "M"):
         self.job_id = f"runner-{uuid.uuid4().hex[:8]}"
         self.project = project.upper()
         self.instruction = instruction
@@ -121,6 +136,8 @@ class PipelineCJob:
         self.parallel_group = parallel_group
         # AADS-211: 의존 작업 job_id
         self.depends_on = depends_on
+        # P1-1: 작업 규모 (동적 타임아웃용)
+        self.size = (size or "M").upper()
         self.phase = "queued"
         self.cycle = 0
         self.status = "running"  # running | awaiting_approval | done | error
@@ -290,6 +307,7 @@ class PipelineCJob:
                 self._log("error", f"Claude Code 실행 오류: {work_result['error']}")
                 self.status = "error"
                 self.error_msg = work_result["error"]
+                self.review_feedback = f"ERROR: Claude Code 실행 실패 — {work_result['error'][:300]}"
                 await self._post_to_chat(
                     f"❌ **[Pipeline Runner 오류]** `{self.job_id}`\n"
                     f"Claude Code 실행 실패: {work_result['error'][:500]}"
@@ -389,6 +407,7 @@ class PipelineCJob:
                     self._log("error", f"재작업 오류: {work_result['error']}")
                     self.status = "error"
                     self.error_msg = work_result["error"]
+                    self.review_feedback = f"ERROR: 재작업 실패 (cycle={self.cycle}) — {work_result['error'][:300]}"
                     await self._post_to_chat(
                         f"❌ **[재작업 오류]** `{self.job_id}`\n"
                         f"Claude Code 재실행 실패: {work_result['error'][:500]}"
@@ -446,6 +465,7 @@ class PipelineCJob:
             self._log("error", str(e))
             self.status = "error"
             self.error_msg = str(e)
+            self.review_feedback = f"ERROR: 예외 발생 — {str(e)[:300]}"
             await self._post_to_chat(
                 f"❌ **[Pipeline Runner 예외]** `{self.job_id}`\n{str(e)[:500]}"
             )
@@ -600,6 +620,7 @@ class PipelineCJob:
             self._log("error", f"배포 중 오류: {e}")
             self.status = "error"
             self.error_msg = str(e)
+            self.review_feedback = f"ERROR: 배포 중 예외 — {str(e)[:300]}"
             await self._post_to_chat(
                 f"❌ **[배포 오류]** `{self.job_id}`\n{str(e)[:500]}"
             )
@@ -811,13 +832,14 @@ class PipelineCJob:
             await self._post_to_chat(
                 f"⏳ **[작업 실행 중]** `{self.job_id}`\n"
                 f"Claude Code가 원격 서버에서 실행 중입니다 (PID={remote_pid}).\n"
-                f"최대 2시간까지 대기하며, 30초마다 상태를 확인합니다."
+                f"최대 {_get_timeout_for_job(self) // 60}분까지 대기하며, 30초마다 상태를 확인합니다."
             )
 
-            # Step 2: 폴링으로 완료 대기
+            # Step 2: 폴링으로 완료 대기 (P1-1: 동적 타임아웃)
+            _job_timeout = _get_timeout_for_job(self)
             elapsed = 0
             last_report = 0
-            while elapsed < _CLAUDE_MAX_WAIT:
+            while elapsed < _job_timeout:
                 await asyncio.sleep(_CLAUDE_POLL_INTERVAL)
                 elapsed += _CLAUDE_POLL_INTERVAL
 
@@ -866,7 +888,7 @@ class PipelineCJob:
 
             # 최대 대기 시간 초과
             await self._ssh_command(f"kill {remote_pid} 2>/dev/null; rm -f {out_file} {err_file} {pid_file} {done_file}", timeout=5)
-            return {"error": f"Claude Code 최대 대기시간 초과 ({_CLAUDE_MAX_WAIT // 60}분)", "output": ""}
+            return {"error": f"Claude Code 최대 대기시간 초과 ({_job_timeout // 60}분, size={self.size})", "output": ""}
 
         except Exception as e:
             return {"error": str(e), "output": ""}
@@ -1361,6 +1383,7 @@ async def cancel_pipeline(job_id: str) -> dict:
         job.status = "error"
         job.phase = "cancelled"
         job.error_msg = "CEO/AI에 의해 강제 취소됨"
+        job.review_feedback = "CANCELLED: CEO/AI에 의해 강제 취소됨"
         await job._save_to_db()
         if job_id in _active_jobs:
             del _active_jobs[job_id]

@@ -1514,7 +1514,12 @@ main() {
             _check_runtime_alerts "$project_filter"
         fi
 
-        sleep "$POLL_INTERVAL"
+        # P2-2: 적응형 폴링 — 작업 발견 시 즉시 재폴링, 유휴 시에만 대기
+        if [[ -n "$pending" || -n "$approved" || -n "$rejected" ]]; then
+            sleep 1  # 작업 발견 — 1초 후 즉시 재폴링 (기존 5초 → 80% 지연 감소)
+        else
+            sleep "$POLL_INTERVAL"
+        fi
     done
 }
 

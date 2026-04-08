@@ -202,6 +202,8 @@ async def submit_job(req: JobSubmitRequest):
                     session_id, req.max_cycles, model,
                     req.worker_model or None, req.parallel_group or None, req.depends_on or None,
                 )
+                # P2-2: LISTEN/NOTIFY — 이벤트 드리븐 (asyncpg 소비자용)
+                await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", job_id)
     except Exception as e:
         logger.error("pipeline_runner.submit_fail", error=str(e))
         raise HTTPException(status_code=500, detail="작업 저장 실패")
@@ -537,6 +539,8 @@ async def submit_batch(req: BatchSubmitRequest):
                         req.session_id, req.max_cycles, model,
                         item.worker_model or None, pg, depends_on,
                     )
+                    # P2-2: LISTEN/NOTIFY
+                    await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", job_id)
 
                     results.append({
                         "key": item.key,
