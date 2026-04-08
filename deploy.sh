@@ -4,7 +4,7 @@
 #   code      (기본) — SIGTERM + 60초 대기 + supervisorctl start (graceful)
 #   reload           — supervisorctl restart (빠른 재기동, ~10초)
 #   build            — docker compose up -d --build --no-deps aads-server (1~3분 중단)
-#   bluegreen        — Blue↔Green 무중단 전환 (중단 0초, 자동 롤백, swing-back)
+#   bluegreen        — Blue↔Green 무중단 전환 (중단 0초, 자동 롤백, SSE drain 2분)
 #
 # 검증 6단계: 의존성→코드검증→배포→Health→DB스키마→채팅→LLM→프론트QA
 
