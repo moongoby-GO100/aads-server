@@ -38,7 +38,28 @@ def _get_model_for_size(size: str) -> str:
 def _parse_size_from_instruction(instruction: str) -> str:
     """instruction 텍스트에서 규모 파싱 (AADS-206B 폴백)."""
     m = re.search(r'(?:규모|SIZE)[:\s=]*\s*(XL|XS|[SML])\b', instruction, re.IGNORECASE)
-    return m.group(1).upper() if m else "M"
+    return m.group(1).upper() if m else ""
+
+
+def _estimate_size(instruction: str) -> str:
+    """instruction 복잡도 자동 추정 (P1-2 AADS-229)."""
+    text = instruction.lower()
+    length = len(instruction)
+    complex_kw = ["리팩토링", "마이그레이션", "아키텍처", "전체", "모든 파일",
+                  "refactor", "migration", "architecture", "all files",
+                  "다중 서버", "multi-server", "전수", "대규모"]
+    simple_kw = ["오타", "typo", "주석", "comment", "버전", "version",
+                 "설정 변경", "config", "로그", "log level", "1줄", "한 줄"]
+    cx = sum(1 for kw in complex_kw if kw in text)
+    sx = sum(1 for kw in simple_kw if kw in text)
+    fr = len(__import__("re").findall(r'[\w/]+\.(?:py|ts|tsx|js|sh|sql|yml|yaml)', text))
+    if sx >= 2 or (length < 200 and cx == 0 and fr <= 1):
+        return "S"
+    if cx >= 3 or fr >= 10 or length > 5000:
+        return "XL"
+    if cx >= 2 or fr >= 5 or length > 3000:
+        return "L"
+    return "M"
 
 class JobSubmitRequest(BaseModel):
     project: str = Field(..., description="프로젝트 코드")
@@ -177,7 +198,8 @@ async def submit_job(req: JobSubmitRequest):
                     # AADS-206B: size 명시 시 우선, 기본값이면 instruction 파���
                     size = req.size
                     if size == "M":
-                        size = _parse_size_from_instruction(req.instruction)
+                        parsed = _parse_size_from_instruction(req.instruction)
+                        size = parsed or _estimate_size(req.instruction)
                     model = _get_model_for_size(size)
                 # AADS-211: depends_on 유효성 검사
                 if req.depends_on:
@@ -518,7 +540,8 @@ async def submit_batch(req: BatchSubmitRequest):
                     else:
                         size = item.size
                         if size == "M":
-                            size = _parse_size_from_instruction(item.instruction)
+                            parsed = _parse_size_from_instruction(item.instruction)
+                            size = parsed or _estimate_size(item.instruction)
                         model = _get_model_for_size(size)
 
                     instruction_hash = hashlib.sha256(
