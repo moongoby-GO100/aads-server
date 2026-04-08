@@ -68,8 +68,9 @@ CEO 채팅 → pipeline_runner_submit(project, instruction)
 |------|------|
 | API | `app/api/pipeline_runner.py` — `/api/v1/pipeline/jobs` |
 | 실행기 | `scripts/pipeline-runner.sh` (호스트 systemd 독립 프로세스) |
-| 6단계 폴백 | Sonnet(Gmail)→Sonnet(Naver)→Opus(Gmail)→Opus(Naver)→Haiku(Gmail)→Haiku(Naver) |
-| 프로젝트별 배포 | AADS→`deploy.sh bluegreen`, KIS/GO100→supervisorctl, SF→docker restart |
+| 6단계 폴백 | Sonnet(Naver)→Sonnet(Gmail)→Opus(Naver)→Opus(Gmail)→Haiku(Naver)→Haiku(Gmail) |
+| 프로젝트별 배포 | AADS→`deploy.sh bluegreen`, KIS→`systemctl restart kis-v41-api`, GO100→`systemctl restart go100`, SF→docker restart |
+| **상세 문서** | `docs/pipeline-runner/PIPELINE-RUNNER-ARCHITECTURE.md`, `docs/pipeline-runner/PIPELINE-RUNNER-API-REFERENCE.md` |
 | 서버 재시작 영향 | 없음 (호스트 프로세스) |
 | 중복 방지 | DB UNIQUE(project+status='running') |
 
