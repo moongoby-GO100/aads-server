@@ -228,7 +228,6 @@ case "$MODE" in
         fi
 
         # ⑤ 이전 컨테이너 지연 종료 (SSE drain: 2분 후 종료)
-        # AADS-230: swing-back 제거 — 구 컨테이너를 즉시 죽이지 않고 2분간 SSE 연결 완료 대기
         echo "[deploy.sh] ⑤ ${OLD_CONTAINER} 지연 종료 (120초 후 SSE drain)"
         echo "$NEW_PORT" > /root/aads/aads-server/.active_port
         echo "$NEW_CONTAINER" > /root/aads/aads-server/.active_container
