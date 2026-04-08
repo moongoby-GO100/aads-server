@@ -131,9 +131,35 @@ async def check_project_lock(conn, project: str, exclude_job_id: str | None = No
     return (row["cnt"] or 0) > 0
 
 
+async def cascade_cleanup_orphans(conn, failed_job_id: str) -> int:
+    """실패한 작업에 의존하는 모든 queued 작업을 재귀적으로 error 처리.
+    P1-A: 고아 방지 — 의존 트리 전체를 한 번에 정리."""
+    total = 0
+    to_process = [failed_job_id]
+    while to_process:
+        current_id = to_process.pop(0)
+        result = await conn.fetch(
+            "UPDATE pipeline_jobs SET status = 'error', "
+            "error_detail = $2, updated_at = NOW() "
+            "WHERE depends_on = $1 AND status = 'queued' "
+            "RETURNING job_id",
+            current_id,
+            f"orphaned_dependency: parent {current_id} failed",
+        )
+        for r in result:
+            total += 1
+            to_process.append(r["job_id"])
+            logger.info("pipeline_runner.orphan_cascade_cleaned",
+                        orphan_job_id=r["job_id"], parent=current_id)
+    if total:
+        logger.info("pipeline_runner.orphan_cascade_total", count=total, root=failed_job_id)
+    return total
+
+
 async def promote_next_queued(conn, project: str) -> str | None:
     """프로젝트 Lock 해제 후 다음 queued 작업 확인.
-    AADS-211: depends_on이 설정된 작업은 의존 작업이 done일 때만 승격."""
+    AADS-211: depends_on이 설정된 작업은 의존 작업이 done일 때만 승격.
+    P1-A: 의존 작업 실패 시 자동 고아 처리."""
     rows = await conn.fetch(
         "SELECT job_id, depends_on, parallel_group FROM pipeline_jobs "
         "WHERE project = $1 AND status = 'queued' "
@@ -147,6 +173,18 @@ async def promote_next_queued(conn, project: str) -> str | None:
             dep_row = await conn.fetchrow(
                 "SELECT status FROM pipeline_jobs WHERE job_id = $1", dep,
             )
+            if dep_row and dep_row["status"] in ("error", "rejected", "rejected_done"):
+                # P1-A: 의존 작업 실패 → 자동 고아 처리
+                await conn.execute(
+                    "UPDATE pipeline_jobs SET status = 'error', "
+                    "error_detail = $2, updated_at = NOW() "
+                    "WHERE job_id = $1 AND status = 'queued'",
+                    row["job_id"],
+                    f"orphaned_dependency: parent {dep} was {dep_row['status']}",
+                )
+                logger.info("pipeline_runner.orphan_auto_cleaned",
+                            job_id=row["job_id"], parent=dep, parent_status=dep_row["status"])
+                continue
             if not dep_row or dep_row["status"] != "done":
                 logger.debug("pipeline_runner.dep_not_ready",
                              job_id=row["job_id"], depends_on=dep,
@@ -208,7 +246,10 @@ async def submit_job(req: JobSubmitRequest):
                         req.depends_on,
                     )
                     if not dep_row:
-                        raise HTTPException(status_code=400, detail=f"의존 작업을 찾��� 수 없습니다: {req.depends_on}")
+                        raise HTTPException(status_code=400, detail=f"의존 작업을 찾을 수 없습니다: {req.depends_on}")
+                    # P1-B: 의존 작업이 이미 실패 상태이면 즉시 거부
+                    if dep_row["status"] in ("error", "rejected", "rejected_done"):
+                        raise HTTPException(status_code=400, detail=f"의존 작업이 이미 실패 상태입니다: {req.depends_on} ({dep_row['status']})")
                 await conn.execute(
                     """
                     INSERT INTO pipeline_jobs
@@ -364,9 +405,12 @@ async def notify_completion(job_id: str):
 
     # 작업 완료/에러 시 같은 프로젝트의 다음 queued 작업을 자동 승격
     promoted_job_id = None
-    if status in ("done", "error", "rejected"):
+    if status in ("done", "error", "rejected", "rejected_done"):
         try:
             async with pool.acquire() as conn:
+                # P1-A: 실패 시 재귀 고아 정리 후 승격
+                if status in ("error", "rejected", "rejected_done"):
+                    await cascade_cleanup_orphans(conn, job_id)
                 promoted_job_id = await promote_next_queued(conn, project)
         except Exception as e:
             logger.warning("pipeline_runner.promote_fail", project=project, error=str(e))
