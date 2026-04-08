@@ -482,9 +482,17 @@ class PipelineCJob:
             )
 
             from app.core.git_lock import git_project_lock
-            async with git_project_lock(self.project, timeout=60):
-                push_result = await self._ssh_command("git push")
-            self._log("push_done", f"push 완료: {push_result[:200]}")
+            try:
+                async with git_project_lock(self.project, timeout=60):
+                    push_result = await self._ssh_command("git push")
+                self._log("push_done", f"push 완료: {push_result[:200]}")
+            except Exception as _push_err:
+                # C-3: Python approve 실패 시 DB를 'approved'로 설정 → Shell Runner가 배포 이어받음
+                logger.error(f"approve_push_failed: job={self.job_id} err={_push_err} → Shell Runner 폴백")
+                self.status = "approved"
+                await self._save_to_db()
+                await self._post_to_chat(f"⚠️ **[배포 폴백]** `{self.job_id}`\ngit push 실패 — Shell Runner에 배포를 위임합니다.")
+                return {"status": "approved_fallback", "error": str(_push_err)}
 
             # 서비스 재시작
             restart_cmd = _RESTART_CMD.get(self.project, "")
@@ -1660,6 +1668,31 @@ async def recover_interrupted_jobs():
                         """,
                         _djob_id, f" | 복구 실패: {str(_derr)[:200]}",
                     )
+
+            # ── Phase 0b: 장기 방치 awaiting_approval 감지 → CEO 텔레그램 알림 (I-1) ──
+            stale_approval_rows = await conn.fetch(
+                """
+                SELECT job_id, project, substring(instruction from 1 for 100) as instr
+                FROM pipeline_jobs
+                WHERE status = 'awaiting_approval'
+                  AND updated_at < NOW() - INTERVAL '30 minutes'
+                """
+            )
+            for srow in stale_approval_rows:
+                _sjob = srow["job_id"]
+                _sproj = srow.get("project", "?")
+                _sinstr = srow.get("instr", "")
+                try:
+                    from app.services.notification_service import send_telegram
+                    await send_telegram(
+                        f"⏰ [승인 대기 30분 초과] job={_sjob}\n"
+                        f"프로젝트: {_sproj}\n"
+                        f"작업: {_sinstr[:80]}\n\n"
+                        f"pipeline_runner_approve(job_id='{_sjob}', action='approve' 또는 'reject')로 처리해주세요."
+                    )
+                    logger.info(f"pipeline_c_stale_approval_alert: {_sjob}")
+                except Exception as _stale_err:
+                    logger.warning(f"pipeline_c_stale_approval_alert_error: {_sjob}: {_stale_err}")
 
             # ── Phase 0a: 서버 재시작으로 중단된 작업 자동 재실행 ──
             # 최근 30분 내 중단 작업 → 원본 instruction 추출 → 최대 2회 재실행

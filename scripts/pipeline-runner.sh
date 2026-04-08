@@ -54,7 +54,7 @@ declare -A PROJECT_WORKDIR=(
 )
 
 # 프로젝트별 허용 목록 (M4: 화이트리스트 검증)
-VALID_PROJECTS="AADS"
+VALID_PROJECTS="AADS KIS GO100 SF NTV2"
 
 MAX_JOB_RUNTIME="${MAX_JOB_RUNTIME:-3600}"      # 단일 작업 최대 60분 (stale 방지)
 WATCHDOG_INTERVAL="${WATCHDOG_INTERVAL:-300}"    # 5분마다 프로세스 생존 확인
@@ -523,6 +523,15 @@ run_job() {
     local TOKEN_CYCLE=("1" "2" "1" "2" "1" "2")  # 1=Naver, 2=Gmail
     local TOKEN_1="${ANTHROPIC_AUTH_TOKEN:-}"
     local TOKEN_2="${ANTHROPIC_AUTH_TOKEN_2:-}"
+    # C-4: 빈 토큰 가드 — 둘 다 비어있으면 즉시 실패 처리
+    if [[ -z "$TOKEN_1" && -z "$TOKEN_2" ]]; then
+        log "FATAL: ANTHROPIC_AUTH_TOKEN / _2 모두 비어있음 — job=$job_id 실패 처리"
+        db_exec "UPDATE pipeline_jobs SET status='error', phase='token_missing', updated_at=NOW() WHERE job_id='$job_id'" 2>/dev/null || true
+        send_message "$session_id" "🔴 [러너 토큰 없음] ANTHROPIC_AUTH_TOKEN 확인 필요 — job=$job_id" 2>/dev/null || true
+        return 1
+    fi
+    # TOKEN_1이 비면 TOKEN_2로 대체
+    [[ -z "$TOKEN_1" ]] && TOKEN_1="$TOKEN_2" && log "  WARN: TOKEN_1 비어있음 → TOKEN_2로 대체"
     local total_attempts=${#MODEL_CYCLE[@]}  # 6회
     local attempt=0 exit_code=0
     while [[ $attempt -lt $total_attempts ]]; do
@@ -1272,7 +1281,7 @@ _recover_stuck_jobs() {
                      review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 크래시 복구] ${RUNNER_HOSTNAME}',
                      updated_at=NOW()
                      WHERE status IN ('running','claimed')
-                       AND updated_at < NOW() - INTERVAL '5 minutes'
+                       AND updated_at < NOW() - INTERVAL '60 minutes'
                        $filter
                      RETURNING job_id;" 2>/dev/null) || true
     if [[ -n "$stuck" ]]; then
