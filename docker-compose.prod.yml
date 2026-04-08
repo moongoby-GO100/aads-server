@@ -147,7 +147,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: aads-server-green
-    restart: "no"
+    restart: unless-stopped
     stop_grace_period: 30s
     ports:
       - "8102:8080"

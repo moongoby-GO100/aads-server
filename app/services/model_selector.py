@@ -490,9 +490,11 @@ async def call_stream(
             from app.core.db_pool import get_pool
             pool = get_pool()
             async with pool.acquire() as conn:
+                import hashlib as _hl
+                _eh = _hl.sha256(f"claude_api_fallback:model_selector:{model}".encode()).hexdigest()[:64]
                 await conn.execute(
-                    "INSERT INTO error_log (error_type, source, server, message, stack_trace, created_at) VALUES ($1, $2, $3, $4, $5, NOW())",
-                    "claude_api_fallback", "model_selector.cli_relay_path", "aads-server",
+                    "INSERT INTO error_log (error_hash, error_type, source, server, message, stack_trace, created_at) VALUES ($1, $2, $3, $4, $5, $6, NOW()) ON CONFLICT (error_hash) DO UPDATE SET occurrence_count = error_log.occurrence_count + 1, last_seen = NOW()",
+                    _eh, "claude_api_fallback", "model_selector.cli_relay_path", "aads-server",
                     f"Claude {model} → Gemini 전환 (계정 교차 {' → '.join(f'{m}/s{s}' for m,s in _fb_seq)} 모두 실패)",
                     "",
                 )

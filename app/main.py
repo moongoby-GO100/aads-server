@@ -361,8 +361,8 @@ async def lifespan(app: FastAPI):
             """인증 토큰 유효성 일일 자동 점검 + 텔레그램 보고"""
             import os, httpx, asyncio
             from datetime import datetime
-            import pytz
-            kst = pytz.timezone("Asia/Seoul")
+            from zoneinfo import ZoneInfo
+            kst = ZoneInfo("Asia/Seoul")
             now_kst = datetime.now(kst).strftime("%Y-%m-%d %H:%M KST")
             results = []
 
