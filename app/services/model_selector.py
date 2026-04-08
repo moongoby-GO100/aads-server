@@ -263,6 +263,7 @@ _GEMINI_MODELS = {
     "gemini-2.5-flash-lite",
     "gemini-2.5-pro",
     "gemini-2.5-flash-image",
+    "gemma-3-27b-it",
 }
 
 # Gemini Thinking 모델 — reasoning_effort=low + 높은 max_tokens 필요
@@ -380,6 +381,15 @@ async def call_stream(
         "claude-sonnet-4-6": "claude-sonnet", "claude-sonnet-4-5": "claude-sonnet",
         "claude-opus-4-6": "claude-opus", "claude-opus-4-5": "claude-opus",
         "claude-haiku-4-5": "claude-haiku",
+        "claude-haiku-4-5-20251001": "claude-haiku",
+        "claude-3-5-sonnet-20241022": "claude-sonnet",
+        "claude-3-5-haiku-20241022":  "claude-haiku",
+        "claude-3-opus-20240229":     "claude-opus",
+        "claude-3-sonnet-20240229":   "claude-sonnet",
+        "claude-3-haiku-20240307":    "claude-haiku",
+        "claude-2.1":                 "claude-sonnet",
+        "claude-opus-4-5":            "claude-opus",
+        "claude-sonnet-4-5":          "claude-sonnet",
         "auto": "claude-sonnet",    # 레거시: 실제 auto 는 _effective_override None 으로 처리됨
     }
     if model in _OVERRIDE_TO_ALIAS:

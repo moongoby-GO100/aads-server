@@ -511,6 +511,7 @@ def get_model_for_override(model_override: str) -> str:
         "claude-sonnet-4-6": "claude-sonnet",
         "claude-opus-4-6":   "claude-opus",
         "claude-haiku-4-5":  "claude-haiku",
+        "claude-haiku-4-5-20251001": "claude-haiku",
         "claude-sonnet":     "claude-sonnet",
         "claude-opus":       "claude-opus",
         "claude-haiku":      "claude-haiku",
@@ -536,5 +537,13 @@ def get_model_for_override(model_override: str) -> str:
         "groq-kimi-k2":     "groq-kimi-k2",
         "groq-gpt-oss-120b":"groq-gpt-oss-120b",
         "groq-compound":    "groq-compound",
+        "claude-3-5-sonnet-20241022": "claude-sonnet",
+        "claude-3-5-haiku-20241022":  "claude-haiku",
+        "claude-3-opus-20240229":     "claude-opus",
+        "claude-3-sonnet-20240229":   "claude-sonnet",
+        "claude-3-haiku-20240307":    "claude-haiku",
+        "claude-2.1":                 "claude-sonnet",
+        "claude-opus-4-5":            "claude-opus",
+        "claude-sonnet-4-5":          "claude-sonnet",
     }
     return mapping.get(model_override, model_override)
