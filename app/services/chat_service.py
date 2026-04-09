@@ -3154,6 +3154,10 @@ async def send_message_stream(
                     return
 
             # 재시도 응답도 검증 (날조 방지 — 재시도에서도 가짜 결과 차단)
+            if not _retry_response.strip():
+                # 재시도도 빈 응답이면 안내 메시지로 대체 (AADS-236)
+                logger.error(f"retry_also_empty_response: session={session_id[:8] if session_id else 'unknown'}")
+                _retry_response = "⚠️ 응답을 생성하지 못했습니다. 잠시 후 다시 시도해주세요."
             if _retry_response.strip():
                 _retry_validation = validate_response(
                     response_text=_retry_response,

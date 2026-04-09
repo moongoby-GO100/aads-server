@@ -989,6 +989,12 @@ async def _stream_litellm_openai(
             yield {"type": "error", "content": str(e)}
             return
 
+        # ── Gemini 빈응답 감지: 텍스트도 tool_calls도 없으면 에러 yield (AADS-236) ──
+        if not full_text.strip() and not _pending:
+            logger.warning(f"litellm_empty_response: model={model} — no text delta received")
+            yield {"type": "error", "content": "empty_response"}
+            return
+
         # 도구 호출 없거나 finish_reason이 stop → 루프 종료
         if _finish_reason != "tool_calls" or not _pending:
             break
