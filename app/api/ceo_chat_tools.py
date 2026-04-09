@@ -3162,7 +3162,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         _internal_h = {"x-monitor-key": "internal-pipeline-call"}
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                "http://localhost:8080/api/v1/pipeline/jobs",
+                "http://localhost:8100/api/v1/pipeline/jobs",
                 headers=_internal_h,
                 json={
                     "project": params.get("project", "AADS"),
@@ -3183,10 +3183,10 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         _internal_h = {"x-monitor-key": "internal-pipeline-call"}
         job_id = params.get("job_id", "")
         if job_id:
-            url = f"http://localhost:8080/api/v1/pipeline/jobs/{quote(job_id, safe='')}"
+            url = f"http://localhost:8100/api/v1/pipeline/jobs/{quote(job_id, safe='')}"
         else:
             status_val = params.get("status", "")
-            url = f"http://localhost:8080/api/v1/pipeline/jobs"
+            url = f"http://localhost:8100/api/v1/pipeline/jobs"
             _qp = {"limit": "10"}
             if status_val:
                 _qp["status"] = status_val
@@ -3203,7 +3203,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         job_id = params.get("job_id", "")
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                f"http://localhost:8080/api/v1/pipeline/jobs/{quote(job_id, safe='')}/approve",
+                f"http://localhost:8100/api/v1/pipeline/jobs/{quote(job_id, safe='')}/approve",
                 headers=_internal_h,
                 json={"action": params.get("action", "approve"), "feedback": params.get("feedback", "")},
                 timeout=10,
