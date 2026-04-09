@@ -1521,6 +1521,19 @@ async def _extract_artifacts(session_id: uuid.UUID, content: str, workspace_id: 
     for fname, furl in file_pattern:
         artifacts.append(("file", fname, furl, {"url": furl, "filename": fname}))
 
+    # 10) 전체 응답 저장 (full_response) — 300자 이상 구조화된 응답
+    if len(content) >= 300:
+        _fr_title = "대화응답"
+        _h2 = _re.search(r'^#{1,2}\s+(.+)', content, _re.MULTILINE)
+        if _h2:
+            _fr_title = _h2.group(1).strip()[:100]
+        else:
+            _first = content.strip().split('\n')[0].strip()
+            _first = _re.sub(r'^[#*>\-\s]+', '', _first)
+            if _first:
+                _fr_title = _first[:100]
+        artifacts.append(("full_response", _fr_title, content, {"char_count": len(content)}))
+
     if not artifacts:
         return
 
@@ -1534,10 +1547,10 @@ async def _extract_artifacts(session_id: uuid.UUID, content: str, workspace_id: 
         except Exception:
             pass
 
-    # 최대 5개 저장 (기존 3개 → 확장)
+    # 최대 7개 저장 (full_response 포함 확장)
     import json as _json
     async with get_pool().acquire() as conn:
-        for art_type, title, art_content, metadata in artifacts[:5]:
+        for art_type, title, art_content, metadata in artifacts[:7]:
             # 중복 방지: 같은 session_id + type + title 조합이 이미 존재하면 스킵
             existing = await conn.fetchval(
                 "SELECT 1 FROM chat_artifacts WHERE session_id = $1 AND type = $2 AND title = $3 LIMIT 1",
