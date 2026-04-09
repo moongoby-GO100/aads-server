@@ -220,7 +220,7 @@ async def submit_job(req: JobSubmitRequest):
                     WHERE instruction_hash = $1
                       AND status IN ('queued','running','claimed','awaiting_approval','approved')
                     ORDER BY created_at DESC LIMIT 1
-                    FOR UPDATE SKIP LOCKED
+
                     """,
                     instruction_hash,
                 )

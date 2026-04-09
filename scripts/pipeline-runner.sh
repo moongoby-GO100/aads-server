@@ -212,7 +212,7 @@ _fail_job() {
     log "  FAIL_FAST job=$job_id type=$error_type: $detail"
     local safe_detail
     safe_detail=$(sql_escape "$detail")
-    db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+    db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
                error_detail='${error_type}',
                result_output=${safe_detail},
                updated_at=NOW() WHERE job_id='${job_id}';"
@@ -264,13 +264,13 @@ promote_next_queued() {
 
 # ── 중복 작업 확인 ─────────────────────────────────────────────────────
 compute_instruction_hash() {
-    echo -n "$1" | sha256sum | cut -d' ' -f1 | head -c 16
+    echo -n "${2}:${1}" | sha256sum | cut -d' ' -f1 | head -c 16
 }
 
 check_duplicate() {
     local job_id="$1" project="$2" instruction="$3"
     local inst_hash
-    inst_hash=$(compute_instruction_hash "$instruction")
+    inst_hash=$(compute_instruction_hash "$instruction" "$project")
 
     # instruction_hash 저장
     db_update "UPDATE pipeline_jobs SET instruction_hash='${inst_hash}' WHERE job_id='${job_id}';"
@@ -304,8 +304,8 @@ check_duplicate() {
         dup_status="${dup_status// /}"
         if [[ "$dup_status" != "done" ]]; then
             log "  DEDUP_BLOCK: 동일 작업 진행 중: $dup_job ($dup_status) — $job_id 차단"
-            db_update "UPDATE pipeline_jobs SET status='error', phase='error',
-                       error_detail='duplicate_blocked',
+            db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
+                       error_detail='superseded: 기존 작업 ${dup_job} 계속 진행',
                        review_feedback=E'[중복 차단] 동일 작업 진행 중: ${dup_job} (${dup_status})',
                        updated_at=NOW() WHERE job_id='${job_id}';"
             return 1
@@ -363,7 +363,7 @@ _watchdog_check() {
             # 프로세스가 죽었는지 확인
             if ! kill -0 "$s_pid" 2>/dev/null; then
                 log "  WATCHDOG_DEAD_PROCESS: job=$s_job_id pid=$s_pid — error로 전환"
-                db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+                db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
                            error_detail='process_died',
                            review_feedback=COALESCE(review_feedback,'') || E'\n[Watchdog] Claude Code 프로세스(PID=${s_pid}) 죽음 감지',
                            updated_at=NOW() WHERE job_id='${s_job_id}' AND status='running';"
@@ -641,7 +641,7 @@ $err_content
 --- stdout (마지막 100줄) ---
 $out_tail")
 
-        db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+        db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
                    error_detail='${error_type}',
                    result_output=${safe_output},
                    review_feedback=COALESCE(review_feedback,'') || E'\n' || ${safe_feedback},
@@ -1119,7 +1119,7 @@ deploy_job() {
                     -d "parse_mode=HTML" 2>/dev/null || true
             fi
 
-            db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+            db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
                        error_detail='health_check_fail_rollback',
                        review_feedback=COALESCE(review_feedback,'') || E'\n[자동롤백] health-check 실패 → git revert → rollback_health=${rollback_health}',
                        updated_at=NOW() WHERE job_id='${job_id}';"
@@ -1229,7 +1229,7 @@ _recover_stuck_jobs() {
                 log "  ZOMBIE_KILL: job=$z_job pid=$z_pid — SIGTERM 무시, SIGKILL 전송"
                 kill -9 "$z_pid" 2>/dev/null || true
             fi
-            db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+            db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
                        error_detail='zombie_killed',
                        runner_pid=NULL,
                        review_feedback=COALESCE(review_feedback,'') || E'\n[Zombie Kill] PID=${z_pid} SIGTERM→SIGKILL, MAX_RUNTIME=${MAX_RUNTIME}s 초과',
@@ -1411,7 +1411,7 @@ main() {
     if [ -f /tmp/.pipeline_current_job ]; then
         prev_job=$(cat /tmp/.pipeline_current_job)
         if [ -n "$prev_job" ]; then
-            db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+            db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
                        error_detail='runner_restarted',
                        review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 재시작으로 중단]',
                        updated_at=NOW() WHERE job_id='${prev_job}' AND status='running';" || true
@@ -1425,7 +1425,7 @@ main() {
     if [ -f /tmp/.pipeline_current_job ]; then
         prev_job=$(cat /tmp/.pipeline_current_job)
         if [ -n "$prev_job" ]; then
-            db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+            db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
                        error_detail='runner_restarted',
                        review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 재시작으로 중단]',
                        updated_at=NOW() WHERE job_id='${prev_job}' AND status='running';" || true
@@ -1545,7 +1545,7 @@ cleanup() {
         IFS='|' read -r _jid _sid <<< "${_bg_jobs[$_pid]}"
         kill "$_pid" 2>/dev/null || true
         wait "$_pid" 2>/dev/null || true
-        db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+        db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
                    error_detail='runner_shutdown',
                    review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 종료로 중단]',
                    updated_at=NOW() WHERE job_id='${_jid}' AND status='running';" || true
@@ -1555,7 +1555,7 @@ cleanup() {
     done
     # 레거시 호환: 단일 작업 추적
     if [[ -n "$_current_job_id" ]] && ! printf '%s\n' "${_bg_jobs[@]}" | grep -q "$_current_job_id"; then
-        db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+        db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
                    error_detail='runner_shutdown',
                    review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 종료로 중단]',
                    updated_at=NOW() WHERE job_id='${_current_job_id}' AND status='running';" || true
