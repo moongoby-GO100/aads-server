@@ -212,21 +212,48 @@ async def submit_job(req: JobSubmitRequest):
         async with pool.acquire() as conn:
             # 트랜잭션으로 lock 체크 + INSERT 원자성 보장
             async with conn.transaction():
-                # 중복 차단: 동일 hash + 활성 상태이면 409 반환
+                # AADS-239: 중복 재사용 — 기존 작업 활용 (죽이기 → 재사용)
+                # Step 1: 동일 hash + 활성 상태 → 기존 작업 정보 반환
                 existing = await conn.fetchrow(
                     """
-                    SELECT job_id FROM pipeline_jobs
+                    SELECT job_id, status, phase FROM pipeline_jobs
                     WHERE instruction_hash = $1
                       AND status IN ('queued','running','claimed','awaiting_approval','approved')
                     ORDER BY created_at DESC LIMIT 1
+                    FOR UPDATE SKIP LOCKED
                     """,
                     instruction_hash,
                 )
                 if existing:
                     return JobSubmitResponse(
                         job_id=existing["job_id"],
-                        status="duplicate",
-                        message=f"동일 작업이 이미 활성 상태입니다: {existing['job_id']}",
+                        status="active_exists",
+                        message=f"이미 진행 중인 작업이 있습니다: {existing['job_id']} (현재 {existing['phase']}). 해당 작업을 계속 진행합니다.",
+                    )
+                # Step 2: 동일 hash + error + 2시간 내 → 기존 작업 queued로 리셋하여 재시도
+                failed = await conn.fetchrow(
+                    """
+                    SELECT job_id FROM pipeline_jobs
+                    WHERE instruction_hash = $1
+                      AND status = 'error'
+                      AND created_at > NOW() - INTERVAL '2 hours'
+                    ORDER BY created_at DESC LIMIT 1
+                    FOR UPDATE
+                    """,
+                    instruction_hash,
+                )
+                if failed:
+                    await conn.execute(
+                        "UPDATE pipeline_jobs SET status = 'queued', phase = 'queued', "
+                        "error_detail = NULL, runner_pid = NULL, updated_at = NOW() "
+                        "WHERE job_id = $1",
+                        failed["job_id"],
+                    )
+                    await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", failed["job_id"])
+                    return JobSubmitResponse(
+                        job_id=failed["job_id"],
+                        status="retrying",
+                        message=f"이전 실패 작업을 재시도합니다: {failed['job_id']}",
                     )
                 locked = await check_project_lock(conn, req.project, parallel_group=req.parallel_group)
                 # AADS-211: worker_model 직접 지정 시 size 무시
