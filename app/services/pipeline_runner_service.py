@@ -1242,40 +1242,59 @@ class PipelineCJob:
 
 async def _find_recent_session(project: str) -> str:
     """프로젝트의 워크스페이스에서 가장 최근 활성 세션 ID를 찾는다.
-    워크스페이스 이름이 [KIS], [NTV2] 형태이므로 `[PROJECT]` 패턴으로 검색."""
+    워크스페이스 이름이 [KIS], [NTV2] 형태이므로 `[PROJECT]` 패턴으로 검색.
+    MCP / 독립 프로세스 경로에서 pool 미초기화 시 asyncpg 직접 연결로 폴백."""
+
+    async def _query(conn, proj: str) -> str:
+        ws_pattern = f"\\[{proj.upper()}\\]%"
+        row = await conn.fetchrow(
+            """
+            SELECT cs.id
+            FROM chat_sessions cs
+            JOIN chat_workspaces cw ON cs.workspace_id = cw.id
+            WHERE cw.name LIKE $1
+            ORDER BY cs.updated_at DESC
+            LIMIT 1
+            """,
+            ws_pattern,
+        )
+        if row:
+            return str(row["id"])
+        # 폴백: CEO 통합지시 세션 (프로젝트별 워크스페이스 없을 때)
+        row = await conn.fetchrow(
+            """
+            SELECT cs.id
+            FROM chat_sessions cs
+            JOIN chat_workspaces cw ON cs.workspace_id = cw.id
+            WHERE cw.name LIKE '\\[CEO\\]%'
+            ORDER BY cs.updated_at DESC
+            LIMIT 1
+            """,
+        )
+        return str(row["id"]) if row else ""
+
     try:
         from app.core.db_pool import get_pool
-        pool = get_pool()
-        # 워크스페이스 이름 패턴: "[KIS] 자동매매", "[NTV2] NewTalk V2" 등
-        ws_pattern = f"\\[{project.upper()}\\]%"  # escape for LIKE
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT cs.id
-                FROM chat_sessions cs
-                JOIN chat_workspaces cw ON cs.workspace_id = cw.id
-                WHERE cw.name LIKE $1
-                ORDER BY cs.updated_at DESC
-                LIMIT 1
-                """,
-                ws_pattern,
-            )
-            if row:
-                return str(row["id"])
-            # 폴백: CEO 통합지시 세션 (프로젝트별 워크스페이스 없을 때)
-            row = await conn.fetchrow(
-                """
-                SELECT cs.id
-                FROM chat_sessions cs
-                JOIN chat_workspaces cw ON cs.workspace_id = cw.id
-                WHERE cw.name LIKE '\\[CEO\\]%'
-                ORDER BY cs.updated_at DESC
-                LIMIT 1
-                """,
-            )
-            return str(row["id"]) if row else ""
+        try:
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                return await _query(conn, project)
+        except RuntimeError:
+            # pool 미초기화 (MCP / 독립 프로세스 경로) → 직접 연결
+            import asyncpg as _asyncpg
+            import os as _os
+            db_url = _os.getenv("DATABASE_URL", "")
+            if not db_url:
+                logger.warning(f"_find_recent_session: pool 없음 + DATABASE_URL 미설정, project={project}")
+                return ""
+            logger.info(f"_find_recent_session: pool 미초기화, 직접 연결 시도 project={project}")
+            _conn = await _asyncpg.connect(db_url)
+            try:
+                return await _query(_conn, project)
+            finally:
+                await _conn.close()
     except Exception as e:
-        logger.warning(f"_find_recent_session error for {project}: {e}")
+        logger.warning(f"_find_recent_session error for {project}: {e}", exc_info=True)
         return ""
 
 
