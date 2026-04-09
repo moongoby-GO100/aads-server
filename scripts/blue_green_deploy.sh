@@ -2,6 +2,7 @@
 # AADS Blue-Green 무중단 배포 스크립트
 # [2026-04-02] 신규 작성 — CEO 지시: 무중단 배포 체계 구축
 # [2026-04-02] P2: 배포 이력 DB 자동 기록 추가
+# [2026-04-09] upstream 방식으로 전환 (aads-upstream.conf backup 키워드 조작)
 #
 # 사용법: ./scripts/blue_green_deploy.sh [--build]
 #   --build: Dockerfile/dependencies 변경 시 이미지 리빌드
@@ -9,7 +10,7 @@
 #
 # 플로우:
 #   코드만 변경 → Hot-Reload SIGHUP (다운타임 0초 무중단)
-#   컨테이너 리빌드 → green 시작 → HC 통과 → nginx 전환 → blue 정지
+#   컨테이너 리빌드 → green 시작 → HC 통과 → upstream 전환 → blue 정지
 
 set -euo pipefail
 
@@ -182,16 +183,17 @@ if ! wait_health "$HEALTH_GREEN" 90 "green"; then
     exit 1
 fi
 
-# Step 4: nginx upstream을 green(8102)으로 전환
-log "Step 4: nginx → green(8102) 전환..."
-cp "$NGINX_CONF" "${NGINX_CONF}.pre_deploy"
-sed -i 's|http://127.0.0.1:8100/api/v1/|http://127.0.0.1:8102/api/v1/|g' "$NGINX_CONF"
-sed -i 's|http://127.0.0.1:8100/api/v1/pc-agent/ws/|http://127.0.0.1:8102/api/v1/pc-agent/ws/|g' "$NGINX_CONF"
+# Step 4: upstream을 green(8102)으로 전환
+log "Step 4: upstream → green(8102) 전환..."
+cp "$NGINX_UPSTREAM" "${NGINX_UPSTREAM}.pre_deploy"
+# Green에서 backup 제거, Blue에 backup 추가
+sed -i 's/server 127.0.0.1:8102 max_fails=3 fail_timeout=30s backup;/server 127.0.0.1:8102 max_fails=3 fail_timeout=30s;/g' "$NGINX_UPSTREAM"
+sed -i 's/server 127.0.0.1:8100 max_fails=3 fail_timeout=30s;/server 127.0.0.1:8100 max_fails=3 fail_timeout=30s backup;/g' "$NGINX_UPSTREAM"
 
 # nginx 설정 검증
 if ! nginx -t 2>/dev/null; then
     notify "❌ nginx 설정 오류 — 롤백"
-    cp "${NGINX_CONF}.pre_deploy" "$NGINX_CONF"
+    cp "${NGINX_UPSTREAM}.pre_deploy" "$NGINX_UPSTREAM"
     docker compose -f "$COMPOSE_FILE" --profile green stop aads-server-green
     db_record_finish "rolled_back" "nginx config error"
     exit 1
@@ -202,10 +204,10 @@ sleep 2
 
 # Step 5: 외부 health 확인
 if ! wait_health "$HEALTH_EXTERNAL" 15 "external(green 경유)"; then
-    notify "❌ 외부 접근 실패 — nginx 롤백"
-    cp "${NGINX_CONF}.pre_deploy" "$NGINX_CONF"
+    notify "❌ 외부 접근 실패 — upstream 롤백"
+    cp "${NGINX_UPSTREAM}.pre_deploy" "$NGINX_UPSTREAM"
     nginx -t && systemctl reload nginx
-    db_record_finish "rolled_back" "external health failed after nginx switch"
+    db_record_finish "rolled_back" "external health failed after upstream switch"
     exit 1
 fi
 
@@ -215,6 +217,6 @@ docker compose -f "$COMPOSE_FILE" stop aads-server
 
 # Step 7: 완료
 notify "✅ Blue-Green 배포 완료 — green(8102) 서비스 중"
-log "⚠️ 현재 nginx가 8102를 가리킴. 다음 배포 시 역전환 또는 blue 재시작 필요."
-log "   복원: cp ${NGINX_CONF}.pre_deploy ${NGINX_CONF} && nginx -t && systemctl reload nginx"
+log "⚠️ 현재 upstream이 8102를 가리킴. 다음 배포 시 역전환 또는 blue 재시작 필요."
+log "   복원: cp ${NGINX_UPSTREAM}.pre_deploy ${NGINX_UPSTREAM} && nginx -t && systemctl reload nginx"
 db_record_finish "success"

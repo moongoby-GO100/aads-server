@@ -4,7 +4,7 @@
 #   code      (기본) — SIGTERM + 60초 대기 + supervisorctl start (graceful)
 #   reload           — supervisorctl restart (빠른 재기동, ~10초)
 #   build            — docker compose up -d --build --no-deps aads-server (1~3분 중단)
-#   bluegreen        — Blue↔Green 무중단 전환 (중단 0초, 자동 롤백, SSE drain 2분)
+#   bluegreen        — Blue↔Green 무중단 전환 (중단 0초, 자동 롤백, upstream 전환)
 #
 # 검증 6단계: 의존성→코드검증→배포→Health→DB스키마→채팅→LLM→프론트QA
 
@@ -146,12 +146,12 @@ case "$MODE" in
         GREEN_PORT=8102
         BLUE_CONTAINER="aads-server"
         GREEN_CONTAINER="aads-server-green"
-        NGINX_CONF="/etc/nginx/conf.d/aads.conf"
+        UPSTREAM_CONF="/etc/nginx/conf.d/aads-upstream.conf"
 
         COMPOSE_FILE="-f ${COMPOSE_DIR}/docker-compose.prod.yml"
 
-        # 현재 활성 포트 감지 (/api/v1/ 블록의 proxy_pass만)
-        CURRENT_PORT=$(grep -A5 'location /api/v1/ {' "$NGINX_CONF" | grep -oP 'proxy_pass http://127\.0\.0\.1:\K[0-9]+' | head -1)
+        # 현재 활성 포트 감지 (upstream에서 backup이 아닌 첫 번째 서버)
+        CURRENT_PORT=$(grep "server 127.0.0.1:" "$UPSTREAM_CONF" | grep -v backup | head -1 | grep -oP '127\.0\.0\.1:\K[0-9]+')
         CURRENT_PORT=${CURRENT_PORT:-$BLUE_PORT}
         if [[ "$CURRENT_PORT" == "$GREEN_PORT" ]]; then
             NEW_PORT=$BLUE_PORT
@@ -194,24 +194,20 @@ case "$MODE" in
             exit 1
         fi
 
-        # ③ nginx 전환 (/api/v1/ 메인 블록만 — conversations/memory 독립 포트 보호)
-        echo "[deploy.sh] ③ nginx 전환: :${CURRENT_PORT} → :${NEW_PORT}"
-        # conversations(8102), memory(18085) 포트를 건드리지 않도록
-        # /api/v1/; (세미콜론+끝) 패턴만 치환 — /api/v1/conversations, /api/v1/memory 제외
-        sed -i "s|proxy_pass http://127\.0\.0\.1:${CURRENT_PORT}/api/v1/;|proxy_pass http://127.0.0.1:${NEW_PORT}/api/v1/;|g" "$NGINX_CONF"
-        # pc-agent WebSocket 포트도 전환
-        sed -i "s|proxy_pass http://127\.0\.0\.1:${CURRENT_PORT}/api/v1/pc-agent/ws/;|proxy_pass http://127.0.0.1:${NEW_PORT}/api/v1/pc-agent/ws/;|g" "$NGINX_CONF"
+        # ③ upstream 전환 (aads-upstream.conf에서 backup 키워드 조작)
+        echo "[deploy.sh] ③ upstream 전환: :${CURRENT_PORT} → :${NEW_PORT}"
+        cp "$UPSTREAM_CONF" "${UPSTREAM_CONF}.pre_deploy"
+        # 새 포트에서 backup 제거, 기존 포트에 backup 추가
+        sed -i "s/server 127.0.0.1:${NEW_PORT} max_fails=3 fail_timeout=30s backup;/server 127.0.0.1:${NEW_PORT} max_fails=3 fail_timeout=30s;/g" "$UPSTREAM_CONF"
+        sed -i "s/server 127.0.0.1:${CURRENT_PORT} max_fails=3 fail_timeout=30s;/server 127.0.0.1:${CURRENT_PORT} max_fails=3 fail_timeout=30s backup;/g" "$UPSTREAM_CONF"
         if ! nginx -t 2>/dev/null; then
             echo "[deploy.sh] ❌ nginx 설정 오류 — 롤백"
-            sed -i "s|proxy_pass http://127\.0\.0\.1:${NEW_PORT}/api/v1/;|proxy_pass http://127.0.0.1:${CURRENT_PORT}/api/v1/;|g" "$NGINX_CONF"
-            sed -i "s|proxy_pass http://127\.0\.0\.1:${NEW_PORT}/api/v1/pc-agent/ws/;|proxy_pass http://127.0.0.1:${CURRENT_PORT}/api/v1/pc-agent/ws/;|g" "$NGINX_CONF"
+            cp "${UPSTREAM_CONF}.pre_deploy" "$UPSTREAM_CONF"
             docker stop "$NEW_CONTAINER" 2>/dev/null || true
             notify "❌ Blue-Green 실패: nginx 설정 오류"
             exit 1
         fi
         systemctl reload nginx
-        # nginx 소스 동기화 (라이브→소스, 다음 배포 시 불일치 방지)
-        cp "$NGINX_CONF" "${COMPOSE_DIR}/nginx-aads.conf"
 
         # ④ 전환 후 검증
         sleep 2
@@ -219,8 +215,7 @@ case "$MODE" in
             echo "[deploy.sh] ④ ✅ 전환 검증 성공"
         else
             echo "[deploy.sh] ⚠️ 전환 후 검증 실패 — 이전 서버로 복원"
-            sed -i "s|proxy_pass http://127\.0\.0\.1:${NEW_PORT}/api/v1/;|proxy_pass http://127.0.0.1:${CURRENT_PORT}/api/v1/;|g" "$NGINX_CONF"
-            sed -i "s|proxy_pass http://127\.0\.0\.1:${NEW_PORT}/api/v1/pc-agent/ws/;|proxy_pass http://127.0.0.1:${CURRENT_PORT}/api/v1/pc-agent/ws/;|g" "$NGINX_CONF"
+            cp "${UPSTREAM_CONF}.pre_deploy" "$UPSTREAM_CONF"
             systemctl reload nginx
             docker stop "$NEW_CONTAINER" 2>/dev/null || true
             notify "❌ Blue-Green 실패: 전환 검증 실패 — 복원 완료"
@@ -228,6 +223,7 @@ case "$MODE" in
         fi
 
         # ⑤ 이전 컨테이너 지연 종료 (SSE drain: 2분 후 종료)
+        # AADS-230: swing-back 제거 — 구 컨테이너를 즉시 죽이지 않고 2분간 SSE 연결 완료 대기
         echo "[deploy.sh] ⑤ ${OLD_CONTAINER} 지연 종료 (120초 후 SSE drain)"
         echo "$NEW_PORT" > /root/aads/aads-server/.active_port
         echo "$NEW_CONTAINER" > /root/aads/aads-server/.active_container
