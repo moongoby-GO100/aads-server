@@ -1056,6 +1056,12 @@ async def _stream_litellm_openai(
         logger.info(f"gemini_tool_loop: iter={_loop_iter+1} tools={[e['name'] for e in _exec_results]}")
         # loop_iter 증가 후 재호출
 
+    # 루프 종료 후 빈 응답 체크 — Gemini가 텍스트 없이 [DONE]만 전송한 경우
+    if not full_text.strip() and not _pending:
+        logger.warning(f"litellm_empty_response: model={model} — no text delta received")
+        yield {"type": "error", "content": "empty_response"}
+        return
+
     cost = _estimate_cost(model, input_tokens, output_tokens)
     yield {
         "type": "done",

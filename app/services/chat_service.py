@@ -3172,6 +3172,10 @@ async def send_message_stream(
                     )
                 # F8: stream_reset했으므로 재시도 응답만 저장 (이전 실패 응답 제외)
                 full_response = _retry_response
+            else:
+                # 재시도도 빈 응답이면 안내 메시지로 대체
+                logger.error(f"retry_also_empty_response: session={session_id[:8]}")
+                full_response = "⚠️ Gemini 응답이 비어 있습니다. 잠시 후 다시 시도해주세요."
 
         # ═══ #19: Phase C — 응답 저장 (별도 커넥션) ═══
         _thinking_truncated = (thinking_summary or "")[:2000] or None
