@@ -32,9 +32,9 @@ _LITELLM_KEY = os.getenv("LITELLM_MASTER_KEY", "")
 # 라벨 매핑 (토큰 prefix 20자 기준)
 _KEY_LABELS: Dict[str, str] = {}
 if _TOKEN_PRIMARY:
-    _KEY_LABELS[_TOKEN_PRIMARY[:20]] = "Gmail"
+    _KEY_LABELS[_TOKEN_PRIMARY[:20]] = "moong76@gmail"
 if _TOKEN_FALLBACK:
-    _KEY_LABELS[_TOKEN_FALLBACK[:20]] = "Naver"
+    _KEY_LABELS[_TOKEN_FALLBACK[:20]] = "moongoby@gmail"
 
 # 런타임 순서 변경 가능한 리스트
 _ordered_tokens: List[str] = [k for k in [_TOKEN_PRIMARY, _TOKEN_FALLBACK] if k]
@@ -68,7 +68,7 @@ def get_litellm_config() -> Dict[str, str]:
 
 
 def get_token_labels() -> List[Dict[str, str]]:
-    """프론트 표시용 토큰 정보. [{'label': 'Naver', 'prefix': 'sk-ant-oat01-5ZED...'}]"""
+    """프론트 표시용 토큰 정보. [{'label': 'moong76@gmail', 'prefix': 'sk-ant-oat01-3BC...'}]"""
     result = []
     for token in _ordered_tokens:
         label = _KEY_LABELS.get(token[:20], "Unknown")
@@ -77,18 +77,19 @@ def get_token_labels() -> List[Dict[str, str]]:
 
 
 def set_token_order(primary: str) -> bool:
-    """토큰 순서 변경. primary='naver' 또는 'gmail'.
+    """토큰 순서 변경. primary='naver' → TOKEN_PRIMARY(moong76@gmail)을 1순위로 설정
+    primary='gmail' → TOKEN_FALLBACK(moongoby@gmail)을 1순위로 설정 (순환 스위치).
 
     Returns: True if changed, False if invalid.
     """
     global _ordered_tokens
     if primary.lower() == "naver" and _TOKEN_PRIMARY:
         _ordered_tokens = [k for k in [_TOKEN_PRIMARY, _TOKEN_FALLBACK] if k]
-        logger.info("auth_provider: token order set to Naver-first")
+        logger.info("auth_provider: token order set to moong76@gmail-first (slot:naver)")
         return True
     elif primary.lower() == "gmail" and _TOKEN_FALLBACK:
         _ordered_tokens = [k for k in [_TOKEN_FALLBACK, _TOKEN_PRIMARY] if k]
-        logger.info("auth_provider: token order set to Gmail-first")
+        logger.info("auth_provider: token order set to moongoby@gmail-first (slot:gmail)")
         return True
     return False
 
