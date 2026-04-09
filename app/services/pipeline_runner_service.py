@@ -67,8 +67,8 @@ _SSH_RETRY_BASE_DELAY = 2   # 초 (지수 백오프: 2, 4, 8)
 
 # 프로젝트별 서비스 재시작 명령
 _RESTART_CMD: Dict[str, str] = {
-    "KIS":   "supervisorctl restart webapp",
-    "GO100": "supervisorctl restart go100",
+    "KIS":   "kill -HUP $(cat /run/gunicorn-kis-v41.pid)",       # gunicorn graceful reload (무중단)
+    "GO100": "kill -HUP $(cat /run/gunicorn-go100.pid)",         # gunicorn graceful reload (무중단)
     "SF":    "cd /data/shortflow && docker compose restart worker",
     "NTV2":  "",  # PHP: 파일 수정 즉시 반영
     "AADS":  "bash /root/aads/aads-server/deploy.sh bluegreen",  # Blue-Green 무중단 배포
