@@ -41,6 +41,7 @@ from app.api.pc_agent import router as pc_agent_router
 from app.api.kakao_bot import router as kakao_bot_router
 from app.api.agenda import router as agenda_router
 from app.api.hot_reload import router as hot_reload_router
+from app.api.credential_vault import router as credential_vault_router
 from app.routers.chat import router as chat_v2_router
 from app.config import settings
 from app.graph.builder import compile_graph
@@ -1087,6 +1088,7 @@ app.include_router(pc_agent_router, prefix="/api/v1", tags=["pc-agent"])
 app.include_router(kakao_bot_router, prefix="/api/v1", tags=["kakao-bot"])
 app.include_router(agenda_router, prefix="/api/v1/agenda", tags=["agenda"])
 app.include_router(hot_reload_router, prefix="/api/v1", tags=["hot-reload"])
+app.include_router(credential_vault_router, prefix="/api/v1", tags=["credential-vault"])
 
 # 루트 /health — 모니터링 도구 호환 (인증 면제)
 from fastapi.responses import JSONResponse as _JSONResponse
