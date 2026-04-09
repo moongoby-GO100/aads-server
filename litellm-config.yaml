@@ -362,25 +362,36 @@ model_list:
 router_settings:
   enable_pre_call_checks: false
   num_retries: 3
+  # AADS-234: 크로스 프로바이더 폴백 — 품질우선 → 비용우선 순서
   model_group_fallbacks:
-  - claude-sonnet-4-6:
-    - claude-opus-4-6
-    - claude-haiku-4-5
-  - claude-sonnet:
-    - claude-opus
-    - claude-haiku
   - claude-opus-4-6:
     - claude-sonnet-4-6
-    - claude-haiku-4-5
+    - gemini-3.1-pro-preview
+    - qwen3-coder-plus
+    - deepseek-chat
   - claude-opus:
     - claude-sonnet
-    - claude-haiku
-  - claude-haiku-4-5:
-    - claude-sonnet-4-6
+    - gemini-3.1-pro-preview
+    - qwen3-coder-plus
+    - deepseek-chat
+  - claude-sonnet-4-6:
+    - gemini-2.5-flash
+    - qwen3-coder-plus
+    - deepseek-chat
     - claude-opus-4-6
-  - claude-haiku:
-    - claude-sonnet
+  - claude-sonnet:
+    - gemini-2.5-flash
+    - qwen3-coder-plus
+    - deepseek-chat
     - claude-opus
+  - claude-haiku-4-5:
+    - qwen3-coder-flash
+    - gemini-2.5-flash-lite
+    - dashscope-deepseek-v3.2
+  - claude-haiku:
+    - qwen3-coder-flash
+    - gemini-2.5-flash-lite
+    - dashscope-deepseek-v3.2
   - qwen-max:
     - qwen-plus
     - qwen-turbo
@@ -389,7 +400,15 @@ router_settings:
     - qwen-turbo
   - qwen3-coder-plus:
     - qwen3-coder-flash
-    - qwen-coder-plus
+    - gemini-2.5-flash
+    - deepseek-chat
+  - gemini-3.1-pro-preview:
+    - gemini-2.5-pro
+    - qwen3-coder-plus
+    - deepseek-chat
+  - deepseek-chat:
+    - qwen3-coder-plus
+    - gemini-2.5-flash
 litellm_settings:
   drop_params: true
   set_verbose: true

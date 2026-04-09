@@ -24,10 +24,10 @@ _JOB_ID_RE = re.compile(r'^runner-[0-9a-zA-Z_-]+$')
 
 
 def _get_model_for_size(size: str) -> str:
-    """작업 규모 → 모델 자동 매핑 (AADS-206)"""
+    """작업 규모 → 모델 자동 매핑 (AADS-234: XS/S 무료 쿼터 활용)"""
     return {
-        "XS": "claude-haiku-4-5-20251001",
-        "S":  "claude-haiku-4-5-20251001",
+        "XS": "qwen3-coder-plus",
+        "S":  "qwen3-coder-plus",
         "M":  "claude-sonnet-4-6",
         "L":  "claude-sonnet-4-6",
         "XL": "claude-opus-4-6",

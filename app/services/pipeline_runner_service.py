@@ -52,6 +52,15 @@ _MAX_OUTPUT_CHARS = 6000    # 결과 최대 문자수
 _MAX_DIFF_CHARS = 50000     # git diff 최대 문자수 (L3)
 _REVIEW_MODEL = "claude-sonnet-4-6"
 
+# AADS-234: LiteLLM Runner 폴백 모델 — size 기반, 무료 쿼터 우선
+_LITELLM_FALLBACK_MODELS = {
+    "XS": "qwen3-coder-plus",
+    "S":  "qwen3-coder-plus",
+    "M":  "qwen3-coder-plus",
+    "L":  "gemini-3.1-pro-preview",
+    "XL": "gemini-3.1-pro-preview",
+}
+
 # M1: SSH/LLM 재시도 설정
 _SSH_MAX_RETRIES = 3
 _SSH_RETRY_BASE_DELAY = 2   # 초 (지수 백오프: 2, 4, 8)
@@ -303,8 +312,13 @@ class PipelineCJob:
             enriched_instruction = _append_verification_checklist(self.instruction, self.project)
             work_result = await self._run_claude_code(enriched_instruction, continue_session=False)
 
+            # AADS-234: Claude Code 실패 시 LiteLLM Runner 폴백 (AADS 프로젝트)
+            if work_result.get("error") and self.project == "AADS":
+                self._log("litellm_fallback_attempt", f"Claude Code 실패 → LiteLLM 폴백: {work_result['error'][:100]}")
+                work_result = await self._run_litellm_fallback(enriched_instruction)
+
             if work_result.get("error"):
-                self._log("error", f"Claude Code 실행 오류: {work_result['error']}")
+                self._log("error", f"실행 오류: {work_result['error']}")
                 self.status = "error"
                 self.error_msg = work_result["error"]
                 self.review_feedback = f"ERROR: Claude Code 실행 실패 — {work_result['error'][:300]}"
@@ -399,10 +413,16 @@ class PipelineCJob:
                 # QA FAIL 후 재지시: 이전 프로세스 완전 종료 확인 + 추가 대기
                 await asyncio.sleep(5)
 
+                revision_instruction = f"이전 작업에 대한 검수 피드백입니다. 수정해주세요:\n{review['feedback']}"
                 work_result = await self._run_claude_code(
-                    f"이전 작업에 대한 검수 피드백입니다. 수정해주세요:\n{review['feedback']}",
+                    revision_instruction,
                     continue_session=True,
                 )
+                # AADS-234: 재작업 실패 시 LiteLLM 폴백
+                if work_result.get("error") and self.project == "AADS":
+                    self._log("litellm_fallback_attempt", f"재작업 실패 → LiteLLM 폴백: {work_result['error'][:100]}")
+                    work_result = await self._run_litellm_fallback(revision_instruction)
+
                 if work_result.get("error"):
                     self._log("error", f"재작업 오류: {work_result['error']}")
                     self.status = "error"
@@ -963,6 +983,62 @@ class PipelineCJob:
             return {"error": f"Claude Code 타임아웃 ({_CLAUDE_TIMEOUT}초)", "output": ""}
         except Exception as e:
             return {"error": str(e), "output": ""}
+
+    # ─── AADS-234: LiteLLM Runner 폴백 ─────────────────────────────────────
+
+    async def _run_litellm_fallback(self, instruction: str) -> dict:
+        """Claude Code CLI 실패 시 LiteLLM Runner(LangGraph ReAct)로 폴백 실행.
+        컨테이너 내부에서 실행하므로 AADS 프로젝트만 지원."""
+        model = _LITELLM_FALLBACK_MODELS.get(self.size, "qwen3-coder-plus")
+
+        self._log("litellm_fallback", f"LiteLLM Runner 폴백 시작 (model={model}, size={self.size})")
+        await self._post_to_chat(
+            f"🔄 **[LiteLLM 폴백]** `{self.job_id}`\n"
+            f"Claude Code 실패 → LiteLLM Runner 전환 (모델: **{model}**, 무료 쿼터 활용)"
+        )
+
+        escaped_instruction = shlex.quote(instruction)
+        escaped_workdir = shlex.quote(self.workdir)
+        cmd = (
+            f"python3 /app/scripts/litellm_runner.py "
+            f"--model {model} "
+            f"-i {escaped_instruction} "
+            f"-w {escaped_workdir}"
+        )
+
+        proc = None
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            timeout = _get_timeout_for_job(self)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            output = stdout.decode("utf-8", errors="replace")
+            err = stderr.decode("utf-8", errors="replace")
+
+            if proc.returncode != 0 and not output.strip():
+                return {"error": f"LiteLLM fallback exit={proc.returncode}: {err[:500]}", "output": ""}
+
+            self._log("litellm_fallback_done", f"LiteLLM 폴백 완료 ({len(output)}자, model={model})")
+            return {
+                "output": output[-_MAX_OUTPUT_CHARS:],
+                "exit_code": proc.returncode,
+                "error": None,
+            }
+
+        except asyncio.TimeoutError:
+            if proc and proc.returncode is None:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
+            return {"error": f"LiteLLM fallback 타임아웃 ({_get_timeout_for_job(self) // 60}분)", "output": ""}
+        except Exception as e:
+            return {"error": f"LiteLLM fallback 오류: {str(e)}", "output": ""}
 
     # ─── AI 검수 ────────────────────────────────────────────────────────────
 
