@@ -345,7 +345,7 @@ async def list_jobs(
             f"""
             SELECT job_id, project, instruction, status, phase, cycle,
                    error_detail, created_at, updated_at,
-                   started_at, depends_on, chat_session_id
+                   started_at, depends_on, chat_session_id, worker_model
             FROM pipeline_jobs
             {where}
             ORDER BY created_at DESC
@@ -367,6 +367,7 @@ async def list_jobs(
             "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
             "started_at": r["started_at"].isoformat() if r.get("started_at") else None,
             "depends_on": r.get("depends_on"),
+            "worker_model": r.get("worker_model") or "",
         }
         for r in rows
     ]
