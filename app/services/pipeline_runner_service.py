@@ -54,11 +54,11 @@ _REVIEW_MODEL = "claude-sonnet-4-6"
 
 # AADS-234: LiteLLM Runner 폴백 모델 — size 기반, 무료 쿼터 우선
 _LITELLM_FALLBACK_MODELS = {
-    "XS": "qwen3-coder-plus",
-    "S":  "qwen3-coder-plus",
-    "M":  "qwen3-coder-plus",
-    "L":  "gemini-3.1-pro-preview",
-    "XL": "gemini-3.1-pro-preview",
+    "XS": "kimi-k2.5",
+    "S":  "kimi-k2.5",
+    "M":  "kimi-k2.5",
+    "L":  "minimax-m2.7",
+    "XL": "minimax-m2.7",
 }
 
 
@@ -324,8 +324,8 @@ class PipelineCJob:
             # CEO 명시 지정: worker_model="litellm" 또는 "litellm:모델명" → LiteLLM Runner 직접 실행
             _wm = self.worker_model or ""
             if _wm == "litellm" or _wm.startswith("litellm:"):
-                # "litellm:gemini-2.5-flash" → gemini-2.5-flash 추출
-                _direct_model = _wm.split(":", 1)[1] if ":" in _wm else _LITELLM_FALLBACK_MODELS.get(self.size, "qwen3-coder-plus")
+                # CEO 명시 지정: 해당 모델 직행
+                _direct_model = _wm.split(":", 1)[1] if ":" in _wm else _LITELLM_FALLBACK_MODELS.get(self.size, "kimi-k2.5")
                 self._log("litellm_direct", f"LiteLLM Runner 직접 실행 (CEO 명시 지정, model={_direct_model})")
                 await self._post_to_chat(
                     f"🤖 **[LiteLLM Runner 시작]** `{self.job_id}`\n"
@@ -333,13 +333,15 @@ class PipelineCJob:
                     f"지시: {self.instruction[:300]}"
                 )
                 work_result = await self._run_litellm_fallback(enriched_instruction, override_model=_direct_model)
-            else:
+            elif _wm == "claude":
+                # Claude 명시 지정: Claude 직행
                 work_result = await self._run_claude_code(enriched_instruction, continue_session=False)
-
-                # AADS-234: Claude Code 실패 시 LiteLLM Runner 폴백 (AADS 프로젝트)
-                if work_result.get("error") and self.project == "AADS":
-                    self._log("litellm_fallback_attempt", f"Claude Code 실패 → LiteLLM 폴백: {work_result['error'][:100]}")
-                    work_result = await self._run_litellm_fallback(enriched_instruction)
+            else:
+                # 기본: LiteLLM 우선 실행 → 실패 시 Claude 폴백 (전 프로젝트)
+                work_result = await self._run_litellm_fallback(enriched_instruction)
+                if work_result.get("error"):
+                    self._log("claude_fallback_attempt", f"LiteLLM 실패 → Claude 폴백: {work_result['error'][:100]}")
+                    work_result = await self._run_claude_code(enriched_instruction, continue_session=False)
 
             if work_result.get("error"):
                 self._log("error", f"실행 오류: {work_result['error']}")
