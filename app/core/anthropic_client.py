@@ -79,8 +79,8 @@ async def call_llm_with_fallback(
 
     비Claude 모델(qwen-turbo 등) 지정 시 DashScope/LiteLLM으로 직접 라우팅.
 
-    1순위: Claude Naver 토큰
-    2순위: Claude Gmail 토큰
+    1순위: Claude moong76@gmail (slot:naver, PRIMARY)
+    2순위: Claude moongoby@gmail (slot:gmail, FALLBACK)
     3순위: Gemini 2.5 Flash (LiteLLM 경유)
 
     Returns: 응답 텍스트 또는 None (전부 실패 시)
