@@ -1020,59 +1020,72 @@ class PipelineCJob:
     # ─── AADS-234: LiteLLM Runner 폴백 ─────────────────────────────────────
 
     async def _run_litellm_fallback(self, instruction: str, override_model: str = "") -> dict:
-        """Claude Code CLI 실패 시 LiteLLM Runner(LangGraph ReAct)로 폴백 실행.
-        컨테이너 내부에서 실행하므로 AADS 프로젝트만 지원.
+        """LiteLLM Runner 실행. AADS: 로컬 | GO100/KIS/SF/NTV2: SSH 원격 실행.
         override_model: CEO가 직접 지정한 모델명 (비어있으면 size 기반 자동 선택)."""
         model = override_model or _LITELLM_FALLBACK_MODELS.get(self.size, "qwen3-coder-plus")
+        is_remote = self.server not in ("localhost", "host.docker.internal")
 
-        self._log("litellm_fallback", f"LiteLLM Runner 폴백 시작 (model={model}, size={self.size})")
+        self._log("litellm_fallback", f"LiteLLM Runner 시작 (project={self.project}, model={model}, remote={is_remote})")
         await self._post_to_chat(
-            f"🔄 **[LiteLLM 폴백]** `{self.job_id}`\n"
-            f"Claude Code 실패 → LiteLLM Runner 전환 (모델: **{model}**, 무료 쿼터 활용)"
+            f"🔄 **[LiteLLM Runner]** `{self.job_id}`\n"
+            f"프로젝트: **{self.project}** | 모델: **{model}**"
         )
 
         escaped_instruction = shlex.quote(instruction)
         escaped_workdir = shlex.quote(self.workdir)
-        cmd = (
-            f"python3 /app/scripts/litellm_runner.py "
-            f"--model {model} "
-            f"-i {escaped_instruction} "
-            f"-w {escaped_workdir}"
-        )
 
-        proc = None
-        try:
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+        if is_remote:
+            # GO100/KIS/SF/NTV2: SSH 원격 실행
+            runner_path = _LITELLM_RUNNER_PATH.get(self.project)
+            if not runner_path:
+                return {"error": f"LiteLLM Runner 미지원 프로젝트: {self.project}", "output": ""}
+            litellm_key = os.getenv("LITELLM_MASTER_KEY", "")
+            cmd_on_remote = (
+                f"LITELLM_MASTER_KEY={shlex.quote(litellm_key)} "
+                f"/root/litellm-venv/bin/python3 {runner_path} "
+                f"--model {model} "
+                f"-i {escaped_instruction} "
+                f"-w {escaped_workdir}"
             )
-
-            timeout = _get_timeout_for_job(self)
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            output = stdout.decode("utf-8", errors="replace")
-            err = stderr.decode("utf-8", errors="replace")
-
-            if proc.returncode != 0 and not output.strip():
-                return {"error": f"LiteLLM fallback exit={proc.returncode}: {err[:500]}", "output": ""}
-
-            self._log("litellm_fallback_done", f"LiteLLM 폴백 완료 ({len(output)}자, model={model})")
-            return {
-                "output": output[-_MAX_OUTPUT_CHARS:],
-                "exit_code": proc.returncode,
-                "error": None,
-            }
-
-        except asyncio.TimeoutError:
-            if proc and proc.returncode is None:
-                try:
-                    proc.kill()
-                    await proc.wait()
-                except Exception:
-                    pass
-            return {"error": f"LiteLLM fallback 타임아웃 ({_get_timeout_for_job(self) // 60}분)", "output": ""}
-        except Exception as e:
-            return {"error": f"LiteLLM fallback 오류: {str(e)}", "output": ""}
+            try:
+                output = await self._ssh_command(cmd_on_remote, timeout=_get_timeout_for_job(self))
+                self._log("litellm_fallback_done", f"LiteLLM 완료 ({len(output)}자, model={model}, SSH)")
+                return {"output": output[-_MAX_OUTPUT_CHARS:], "exit_code": 0, "error": None}
+            except asyncio.TimeoutError:
+                return {"error": f"LiteLLM SSH 타임아웃 ({_get_timeout_for_job(self) // 60}분)", "output": ""}
+            except Exception as e:
+                return {"error": f"LiteLLM SSH 오류: {e}", "output": ""}
+        else:
+            # AADS: 로컬 컨테이너 내부 실행
+            cmd = (
+                f"python3 /app/scripts/litellm_runner.py "
+                f"--model {model} "
+                f"-i {escaped_instruction} "
+                f"-w {escaped_workdir}"
+            )
+            proc = None
+            try:
+                proc = await asyncio.create_subprocess_shell(
+                    cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                )
+                timeout = _get_timeout_for_job(self)
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                output = stdout.decode("utf-8", errors="replace")
+                err = stderr.decode("utf-8", errors="replace")
+                if proc.returncode != 0 and not output.strip():
+                    return {"error": f"LiteLLM exit={proc.returncode}: {err[:500]}", "output": ""}
+                self._log("litellm_fallback_done", f"LiteLLM 완료 ({len(output)}자, model={model})")
+                return {"output": output[-_MAX_OUTPUT_CHARS:], "exit_code": proc.returncode, "error": None}
+            except asyncio.TimeoutError:
+                if proc and proc.returncode is None:
+                    try:
+                        proc.kill()
+                        await proc.wait()
+                    except Exception:
+                        pass
+                return {"error": f"LiteLLM 타임아웃 ({_get_timeout_for_job(self) // 60}분)", "output": ""}
+            except Exception as e:
+                return {"error": f"LiteLLM 오류: {e}", "output": ""}
 
     # ─── AI 검수 ────────────────────────────────────────────────────────────
 

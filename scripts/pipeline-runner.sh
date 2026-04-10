@@ -583,7 +583,7 @@ ${safe_instruction}"
         if [[ "$current_model" == litellm:* ]]; then
             local llm_model_name="${current_model#litellm:}"
             log "  LITELLM_RUNNER job=$job_id model=$llm_model_name"
-            timeout "$MAX_RUNTIME" python3 /app/scripts/litellm_runner.py \
+            timeout "$MAX_RUNTIME" docker exec aads-server python3 /app/scripts/litellm_runner.py \
                 --model "$llm_model_name" \
                 --instruction "$safe_instruction" \
                 --workdir "$workdir" \
