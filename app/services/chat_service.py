@@ -1266,6 +1266,13 @@ async def list_messages_cursor(
         _extra_filter = ""
         if _is_active:
             _extra_filter = " AND intent IS DISTINCT FROM 'streaming_placeholder'"
+        # 자동 메시지 필터 — pipeline_c/runner_response/system_trigger는 UI에서 접혀있어
+        # 자동 메시지 비율이 높은 세션에서 실제 대화가 안 보이는 문제 방지
+        _auto_exclude = (
+            " AND intent IS DISTINCT FROM 'pipeline_c'"
+            " AND intent IS DISTINCT FROM 'runner_response'"
+            " AND NOT (role = 'user' AND intent = 'system_trigger')"
+        )
         if cursor:
             from datetime import datetime as _dt
             cursor_dt = _dt.fromisoformat(cursor)
@@ -1273,7 +1280,7 @@ async def list_messages_cursor(
                 "SELECT * FROM ("
                 "  SELECT * FROM chat_messages"
                 "  WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate'"
-                f"    {_extra_filter}"
+                f"    {_extra_filter}{_auto_exclude}"
                 "    AND created_at < $2"
                 "  ORDER BY created_at DESC LIMIT $3"
                 ") sub ORDER BY created_at ASC",
@@ -1284,7 +1291,7 @@ async def list_messages_cursor(
                 "SELECT * FROM ("
                 "  SELECT * FROM chat_messages"
                 "  WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate'"
-                f"    {_extra_filter}"
+                f"    {_extra_filter}{_auto_exclude}"
                 "  ORDER BY created_at DESC LIMIT $2"
                 ") sub ORDER BY created_at ASC",
                 sid, fetch_limit,
