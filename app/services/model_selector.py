@@ -241,6 +241,15 @@ _COST_MAP = {
     "qwen-omni-turbo":         (0.02,  0.06),
     # DashScope DeepSeek (Alibaba 호스팅)
     "dashscope-deepseek-v3.2": (0.28,  0.42),
+    # Kimi (Moonshot AI, LiteLLM 경유)
+    "kimi-k2.5":               (0.60,  2.40),
+    "kimi-k2":                 (0.60,  2.40),
+    "kimi-latest":             (0.02,  0.06),
+    "kimi-128k":               (0.06,  0.24),
+    "kimi-8k":                 (0.02,  0.06),
+    # MiniMax (TokenPlan, LiteLLM 경유)
+    "minimax-m2.7":            (0.50,  2.00),
+    "minimax-m2.5":            (0.30,  1.20),
 }
 
 # LiteLLM alias → Anthropic model ID
@@ -293,6 +302,12 @@ _OPENROUTER_MODELS = {
     "openrouter-minimax-m2",
 }
 
+# Kimi 모델 (Moonshot AI, LiteLLM 경유)
+_KIMI_MODELS = {"kimi-k2.5", "kimi-k2", "kimi-latest", "kimi-128k", "kimi-8k"}
+
+# MiniMax 모델 (LiteLLM 경유)
+_MINIMAX_MODELS = {"minimax-m2.7", "minimax-m2.5"}
+
 # Alibaba/Qwen 모델 (LiteLLM 경유, DashScope)
 _ALIBABA_MODELS = {
     # Qwen3 플래그십
@@ -336,7 +351,7 @@ _ALIBABA_MODELS = {
 }
 
 # LiteLLM OpenAI 호환 모델 (Gemini + Groq + DeepSeek + OpenRouter + Alibaba)
-_LITELLM_OPENAI_MODELS = _GEMINI_MODELS | _GROQ_MODELS | _DEEPSEEK_MODELS | _OPENROUTER_MODELS | _ALIBABA_MODELS
+_LITELLM_OPENAI_MODELS = _GEMINI_MODELS | _GROQ_MODELS | _DEEPSEEK_MODELS | _OPENROUTER_MODELS | _ALIBABA_MODELS | _KIMI_MODELS | _MINIMAX_MODELS
 
 
 def _estimate_cost(model: str, in_tokens: int, out_tokens: int) -> Decimal:
@@ -424,6 +439,8 @@ async def call_stream(
     # 자기 모델 질문 오답 방지: 실제 라우트 id + 제조사를 시스템 프롬프트에 명시
     _maker = "Alibaba (알리바바)" if any(q in model.lower() for q in ("qwen", "deepseek-v3")) and model in _ALIBABA_MODELS else \
              "Google (구글)" if "gemini" in model.lower() else \
+             "Moonshot AI (문샷)" if "kimi" in model.lower() else \
+             "MiniMax (미니맥스)" if "minimax" in model.lower() else \
              "Anthropic (앤트로픽)" if "claude" in model.lower() else \
              "Meta" if "llama" in model.lower() else ""
     _maker_line = f"이 모델의 **제조사**는 {_maker} 입니다. 제조사를 정확히 안내하세요.\n" if _maker else ""
@@ -588,6 +605,25 @@ async def call_stream(
             async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
                 if event.get("type") == "done":
                     event = {**event, "model": model}  # 폴백해도 원래 선택 모델명 유지
+                yield event
+        return
+
+
+    # Kimi / MiniMax 모델 → LiteLLM 경유 (실패 시 Gemini Flash 폴백)
+    if model in _KIMI_MODELS or model in _MINIMAX_MODELS:
+        _had_error = False
+        async for event in _stream_litellm_openai(model, system_prompt, messages, tools=tools):
+            if event.get("type") == "error":
+                _had_error = True
+                logger.warning(f"kimi_minimax_fallback: {model} failed, falling back to gemini-2.5-flash")
+                break
+            if event.get("type") == "done":
+                event = {**event, "model": model}
+            yield event
+        if _had_error:
+            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
+                if event.get("type") == "done":
+                    event = {**event, "model": model}
                 yield event
         return
 
