@@ -449,10 +449,16 @@ async def notify_completion(job_id: str):
     output = row["output_preview"] or ""
 
     if status == "awaiting_approval":
-        msg = (f"[시스템] Pipeline Runner 작업 완료 — AI 검수 중\n\n"
+        msg = (f"[시스템] Pipeline Runner 작업 AI 검수 요청\n\n"
                f"**Job**: {job_id}\n**프로젝트**: {project}\n"
                f"**작업**: {instruction}\n**결과 미리보기**:\n{output[:300]}\n\n"
-               f"코드를 검수하고 승인/거부를 판단하세요. 승인: pipeline_runner_approve(job_id='{job_id}', action='approve')")
+               f"**검수 지시 (반드시 도구 호출로 완료):**\n"
+               f"1. read_remote_file로 수정된 파일을 직접 확인하세요.\n"
+               f"2. 검수 완료 후 반드시 아래 중 하나를 실행하세요:\n"
+               f"   - 이상 없음: pipeline_runner_approve(job_id='{job_id}', action='approve') 호출\n"
+               f"   - 문제 있음: pipeline_runner_approve(job_id='{job_id}', action='reject', feedback='구체적 사유') 호출\n"
+               f"   - 수정 재지시: reject 후 pipeline_runner_submit으로 수정 지시 제출\n"
+               f"도구 호출 없이 보고 금지. 반드시 승인 또는 거부 도구를 실행하세요.")
     elif status == "done":
         msg = (f"[시스템] Pipeline Runner 작업 배포 완료\n\n"
                f"**Job**: {job_id}\n**프로젝트**: {project}\n"

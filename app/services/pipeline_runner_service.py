@@ -473,11 +473,18 @@ class PipelineCJob:
                 f"거부하려면: \"거부해\" 또는 \"reject\""
             )
 
-            # ★ AI 자동 반응 트리거: 승인 요청을 AI가 확인하고 CEO에게 요약 보고
+            # ★ AI 자동 반응 트리거: AI가 코드 검수 후 직접 승인/거부 도구 호출
             await self._trigger_ai_reaction(
-                f"[시스템] Pipeline Runner 작업 `{self.job_id}` (프로젝트: {self.project})이 "
-                f"승인 대기 상태입니다. 위 변경사항을 확인하고 CEO에게 간단히 요약해주세요. "
-                f"승인/거부 판단에 필요한 핵심 정보를 알려주세요."
+                f"[시스템] Pipeline Runner 작업 `{self.job_id}` (프로젝트: {self.project}) AI 검수 요청.\n\n"
+                f"**검수 지시 (반드시 도구 호출로 완료):**\n"
+                f"1. 위 변경사항(git diff)을 꼼꼼히 검토하세요.\n"
+                f"2. 필요 시 read_remote_file로 수정된 파일 전체를 확인하세요.\n"
+                f"3. 검수 완료 후 반드시 아래 중 하나를 실행하세요:\n"
+                f"   - 이상 없음: `pipeline_runner_approve(job_id='{self.job_id}', action='approve')` 호출\n"
+                f"   - 문제 있음: `pipeline_runner_approve(job_id='{self.job_id}', action='reject', feedback='구체적 사유')` 호출\n"
+                f"   - 수정 재지시: reject 후 pipeline_runner_submit으로 수정 지시 제출\n\n"
+                f"**검수 기준**: 코드 품질, 보안(API 키 하드코딩 금지), 기존 기능 훼손 없음, 테스트 통과.\n"
+                f"도구 호출 없이 '검수 완료' 보고 금지. 반드시 승인 또는 거부 도구를 실행하세요."
             )
 
         except Exception as e:
