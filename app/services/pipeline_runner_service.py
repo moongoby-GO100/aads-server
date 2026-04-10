@@ -1794,10 +1794,10 @@ async def recover_interrupted_jobs():
                         _djob_id, f" | 복구 실패: {str(_derr)[:200]}",
                     )
 
-            # ── Phase 0b: 장기 방치 awaiting_approval 감지 → CEO 텔레그램 알림 (I-1) ──
+            # ── Phase 0b: 장기 방치 awaiting_approval → 채팅 AI 재트리거 (텔레그램 제거) ──
             stale_approval_rows = await conn.fetch(
                 """
-                SELECT job_id, project, substring(instruction from 1 for 100) as instr
+                SELECT job_id, project, chat_session_id, substring(instruction from 1 for 100) as instr
                 FROM pipeline_jobs
                 WHERE status = 'awaiting_approval'
                   AND updated_at < NOW() - INTERVAL '30 minutes'
@@ -1807,17 +1807,19 @@ async def recover_interrupted_jobs():
                 _sjob = srow["job_id"]
                 _sproj = srow.get("project", "?")
                 _sinstr = srow.get("instr", "")
+                _ssid = srow.get("chat_session_id") or ""
                 try:
-                    from app.services.notification_service import send_telegram
-                    await send_telegram(
-                        f"⏰ [승인 대기 30분 초과] job={_sjob}\n"
-                        f"프로젝트: {_sproj}\n"
-                        f"작업: {_sinstr[:80]}\n\n"
-                        f"pipeline_runner_approve(job_id='{_sjob}', action='approve' 또는 'reject')로 처리해주세요."
-                    )
-                    logger.info(f"pipeline_c_stale_approval_alert: {_sjob}")
+                    if _ssid:
+                        from app.services.chat_service import trigger_ai_reaction
+                        await trigger_ai_reaction(
+                            _ssid,
+                            f"[시스템] 승인 대기 30분 초과 — `{_sjob}` ({_sproj}) 재검수 요청.\n"
+                            f"작업: {_sinstr[:80]}\n\n"
+                            f"pipeline_runner_approve(job_id='{_sjob}', action='approve' 또는 'reject')로 즉시 처리하세요."
+                        )
+                    logger.info(f"pipeline_c_stale_approval_retrigger: {_sjob}")
                 except Exception as _stale_err:
-                    logger.warning(f"pipeline_c_stale_approval_alert_error: {_sjob}: {_stale_err}")
+                    logger.warning(f"pipeline_c_stale_approval_retrigger_error: {_sjob}: {_stale_err}")
 
             # ── Phase 0a: 서버 재시작으로 중단된 작업 자동 재실행 ──
             # 최근 30분 내 중단 작업 → 원본 instruction 추출 → 최대 2회 재실행
