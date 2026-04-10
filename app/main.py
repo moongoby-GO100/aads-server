@@ -416,6 +416,35 @@ async def lifespan(app: FastAPI):
                 logger.warning(f"pipeline_cleanup failed: {e}")
         scheduler.add_job(_run_pipeline_cleanup, "interval", hours=1, id="pipeline_cleanup", replace_existing=True)
 
+        # AADS-241: awaiting_approval 자동 notify 폴러 (60초 주기)
+        # 211서버 러너의 NOTIFY_AI http=fail 보정 — 채팅 AI가 반드시 검수 트리거되도록
+        async def _trigger_pending_approvals():
+            try:
+                pool = app_state.get("db_pool")
+                if not pool:
+                    return
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        "SELECT job_id FROM pipeline_jobs "
+                        "WHERE status='awaiting_approval' "
+                        "AND chat_session_id IS NOT NULL "
+                        "AND updated_at < NOW() - INTERVAL '90 seconds' "
+                        "ORDER BY updated_at ASC LIMIT 5"
+                    )
+                for row in rows:
+                    try:
+                        import httpx
+                        async with httpx.AsyncClient(timeout=10) as client:
+                            await client.post(
+                                f"http://localhost:8080/api/v1/pipeline/jobs/{row['job_id']}/notify",
+                                headers={"x-monitor-key": "internal-pipeline-call"},
+                            )
+                    except Exception as _ne:
+                        logger.debug(f"pending_approval_notify_skip job={row['job_id']}: {_ne}")
+            except Exception as e:
+                logger.warning(f"pending_approval_trigger_failed: {e}")
+        scheduler.add_job(_trigger_pending_approvals, "interval", seconds=60, id="pending_approval_trigger", replace_existing=True)
+
         scheduler.start()
         app.state.scheduler = scheduler  # fallback: MCP 도구 경로에서 참조 가능
         await healer_init()
