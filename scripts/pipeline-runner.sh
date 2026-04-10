@@ -181,26 +181,38 @@ pre_validate() {
     local job_id="$1" project="$2" session_id="$3"
     local workdir="${PROJECT_WORKDIR[$project]:-}"
 
-    # 1) WORKDIR 존재 여부
-    if [[ -z "$workdir" || ! -d "$workdir" ]]; then
-        _fail_job "$job_id" "$session_id" "workdir_missing" "WORKDIR 없음: ${workdir:-undefined}"
-        return 1
+    # 방안 A: 원격 프로젝트 판별 — workdir이 서버68에 없으므로 로컬 체크 스킵
+    local is_remote=false
+    case "$project" in GO100|KIS|SF|NTV2) is_remote=true ;; esac
+
+    # 1) WORKDIR 존재 여부 (로컬 프로젝트만 체크)
+    if [[ "$is_remote" == "false" ]]; then
+        if [[ -z "$workdir" || ! -d "$workdir" ]]; then
+            _fail_job "$job_id" "$session_id" "workdir_missing" "WORKDIR 없음: ${workdir:-undefined}"
+            return 1
+        fi
+    else
+        log "  PRE_VALIDATE: 원격 프로젝트 $project — workdir 로컬 체크 스킵"
     fi
 
-    # 2) 디스크 공간 확인 (최소 MIN_DISK_GB)
-    local avail_kb
-    avail_kb=$(df -k "$workdir" 2>/dev/null | tail -1 | awk '{print $4}')
-    local min_kb=$((MIN_DISK_GB * 1024 * 1024))
-    if [[ -n "$avail_kb" && "$avail_kb" -lt "$min_kb" ]]; then
-        _fail_job "$job_id" "$session_id" "disk_full" "디스크 부족: ${avail_kb}KB < ${min_kb}KB (최소 ${MIN_DISK_GB}GB)"
-        return 1
+    # 2) 디스크 공간 확인 (최소 MIN_DISK_GB) — 로컬만
+    if [[ "$is_remote" == "false" ]]; then
+        local avail_kb
+        avail_kb=$(df -k "$workdir" 2>/dev/null | tail -1 | awk '{print $4}')
+        local min_kb=$((MIN_DISK_GB * 1024 * 1024))
+        if [[ -n "$avail_kb" && "$avail_kb" -lt "$min_kb" ]]; then
+            _fail_job "$job_id" "$session_id" "disk_full" "디스크 부족: ${avail_kb}KB < ${min_kb}KB (최소 ${MIN_DISK_GB}GB)"
+            return 1
+        fi
     fi
 
-    # 3) git dirty 상태 → stash 후 진행
-    cd "$workdir"
-    if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
-        log "  PRE_VALIDATE: git dirty → stash (job=$job_id)"
-        git stash push -m "pipeline-runner-auto-stash-${job_id}" 2>/dev/null || true
+    # 3) git dirty 상태 → stash 후 진행 (로컬만)
+    if [[ "$is_remote" == "false" ]]; then
+        cd "$workdir"
+        if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+            log "  PRE_VALIDATE: git dirty → stash (job=$job_id)"
+            git stash push -m "pipeline-runner-auto-stash-${job_id}" 2>/dev/null || true
+        fi
     fi
 
     return 0
@@ -402,6 +414,7 @@ claim_queued_job() {
     local filter="$1"
     # instruction의 줄바꿈을 \\n으로 치환하여 단일행 RETURNING 보장
     # AADS-211: depends_on 체크 — 의존 작업이 done이 아니면 스킵
+    # 방안 B: litellm:* 모델 + 원격 프로젝트 → bash runner가 claim하지 않음 (litellm-runner가 처리)
     db_exec "UPDATE pipeline_jobs SET status='claimed', updated_at=NOW()
              WHERE job_id = (
                 SELECT p.job_id FROM pipeline_jobs p
@@ -413,6 +426,7 @@ claim_queued_job() {
                        WHERE r.project = p.project
                          AND r.status IN ('running', 'claimed')
                          AND r.job_id != p.job_id) < ${MAX_CONCURRENT_PER_PROJECT:-3}
+                  AND NOT (COALESCE(p.worker_model, '') LIKE 'litellm:%' AND p.project IN ('GO100','KIS','SF','NTV2'))
                 ORDER BY COALESCE(p.priority, 0) DESC, p.created_at ASC LIMIT 1
                 FOR UPDATE SKIP LOCKED
              )
@@ -861,31 +875,33 @@ deploy_job() {
     # 원칙: 빌드 중 기존 서비스 유지, 빌드 성공 후에만 교체, 실패 시 롤백
     case "$project" in
         AADS)
-            # 1) aads-server: Blue-Green 무중단 배포 (deploy.sh bluegreen)
-            log "  BLUEGREEN aads-server 무중단 배포 시작"
-            if bash /root/aads/aads-server/deploy.sh bluegreen 2>&1 | tail -20; then
-                log "  BLUEGREEN aads-server 완료"
+            # 1) aads-server: 배포 방식 자동 선택 (Hot-Reload 우선)
+            local _needs_build="false"
+            if git -C /root/aads/aads-server diff HEAD~1 --name-only 2>/dev/null | grep -qE '(Dockerfile|requirements|docker-compose)'; then
+                _needs_build="true"
+            fi
 
-                # Hot Module Reload — .py 파일 변경이 있을 때만 실행 (재시작 없이 즉시 반영)
-                if [[ "$_py_changed" == "true" ]]; then
-                    log "  HOT-RELOAD: .py 변경 감지 — 서비스 모듈 자동 리로드 시작"
-                    local _hr_resp=""
-                    _hr_resp=$(curl -s -m 10 -X POST \
-                        -H "Content-Type: application/json" \
-                        "http://127.0.0.1:8100/api/v1/ops/hot-reload" 2>/dev/null) || true
-                    if [[ -n "$_hr_resp" ]]; then
-                        local _hr_ok=""
-                        _hr_ok=$(echo "$_hr_resp" | jq -r '.success // 0' 2>/dev/null) || true
-                        log "  HOT-RELOAD: ${_hr_ok:-0}개 모듈 리로드 완료"
-                    else
-                        log "  HOT-RELOAD: WARN — 호출 실패 (서비스 정상 운영, 다음 요청 시 반영)"
-                    fi
+            if [[ "$_needs_build" == "true" ]]; then
+                # Dockerfile/requirements/docker-compose 변경 → Blue-Green 무중단 배포
+                log "  BLUEGREEN aads-server 무중단 배포 시작 (빌드 파일 변경 감지)"
+                if bash /root/aads/aads-server/deploy.sh bluegreen 2>&1 | tail -20; then
+                    log "  BLUEGREEN aads-server 완료"
                 else
-                    log "  HOT-RELOAD: SKIP — .py 변경 없음 (yml/md 등 비Python 변경)"
+                    log "  WARN: bluegreen 실패 — 기존 서비스 유지 (SSE 스트림 보호)"
+                fi
+            elif [[ "$_py_changed" == "true" ]]; then
+                # Python 코드만 변경 → Hot-Reload (0초 무중단)
+                log "  HOT-RELOAD: .py 변경 감지 — reload-api.sh 실행 (0초 무중단)"
+                if bash /root/aads/aads-server/scripts/reload-api.sh 2>&1 | tail -5; then
+                    log "  HOT-RELOAD: 완료 (무중단)"
+                else
+                    log "  HOT-RELOAD: 실패 — fallback: deploy.sh code"
+                    bash /root/aads/aads-server/deploy.sh code 2>&1 | tail -10 || true
                 fi
             else
-                log "  WARN: bluegreen 실패 — 기존 서비스 유지 (SSE 스트림 보호)"
-                # supervisorctl restart 제거: 채팅 중 SSE 스트림 끊김 방지
+                # 비Python 변경 (yml/md 등) → deploy.sh code (graceful restart)
+                log "  DEPLOY: 비Python 변경 — deploy.sh code 실행"
+                bash /root/aads/aads-server/deploy.sh code 2>&1 | tail -10 || true
             fi
 
             # 2) aads-dashboard: Docker 이미지 빌드 서비스 → build→swap
