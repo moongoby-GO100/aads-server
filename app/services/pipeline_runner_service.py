@@ -61,6 +61,16 @@ _LITELLM_FALLBACK_MODELS = {
     "XL": "gemini-3.1-pro-preview",
 }
 
+
+# AADS-290: 프로젝트별 litellm_runner.py 경로 매핑
+_LITELLM_RUNNER_PATH: Dict[str, str] = {
+    "AADS":  "/app/scripts/litellm_runner.py",            # 컨테이너 내부
+    "GO100": "/root/kis-autotrade-v4/litellm_runner.py",  # 211 서버
+    "KIS":   "/root/kis-autotrade-v4/litellm_runner.py",  # 211 서버
+    "SF":    "/root/scripts/litellm_runner.py",           # 114 서버
+    "NTV2":  "/root/scripts/litellm_runner.py",           # 114 서버
+}
+
 # M1: SSH/LLM 재시도 설정
 _SSH_MAX_RETRIES = 3
 _SSH_RETRY_BASE_DELAY = 2   # 초 (지수 백오프: 2, 4, 8)
