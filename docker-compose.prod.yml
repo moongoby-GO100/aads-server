@@ -18,7 +18,7 @@ services:
     command: >
       postgres
       -c shared_buffers=256MB
-      -c max_connections=50
+      -c max_connections=200
     volumes:
       - aads_postgres_data:/var/lib/postgresql/data
       - ./scripts/init_memory_schema.sql:/docker-entrypoint-initdb.d/init_memory_schema.sql:ro
