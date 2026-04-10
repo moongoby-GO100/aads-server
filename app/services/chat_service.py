@@ -1158,6 +1158,23 @@ async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort
         if _is_active:
             # 활성 스트리밍 중 → placeholder 제외 (프론트 SSE 버블과 중복 방지)
             _intent_filter += " AND intent IS DISTINCT FROM 'streaming_placeholder'"
+        # Pipeline Runner 자동 알림 메시지 제외 (intent=NULL이라도 콘텐츠 패턴으로 필터)
+        _intent_filter += (
+            " AND intent IS DISTINCT FROM 'pipeline_c'"
+            " AND intent IS DISTINCT FROM 'runner_response'"
+            " AND NOT (role = 'user' AND intent = 'system_trigger')"
+            " AND NOT content LIKE '🔧 [Pipeline Runner]%'"
+            " AND NOT content LIKE '🔔 [Pipeline Runner]%'"
+            " AND NOT content LIKE '✅ [Pipeline Runner]%'"
+            " AND NOT content LIKE '🚀 [Pipeline Runner]%'"
+            " AND NOT content LIKE '⚠️ [Pipeline Runner]%'"
+            " AND NOT content LIKE '↩️ [Pipeline Runner]%'"
+            " AND NOT content LIKE '❌ [Pipeline Runner]%'"
+            " AND NOT content LIKE '📋 [Pipeline Runner]%'"
+            " AND NOT content LIKE '🔴 [Pipeline Runner]%'"
+            " AND NOT content LIKE '🟡 [Pipeline Runner]%'"
+            " AND NOT content LIKE '🟢 [Pipeline Runner]%'"
+        )
         rows = await conn.fetch(
             f"SELECT * FROM chat_messages WHERE session_id = $1 {_intent_filter} ORDER BY created_at {order} LIMIT $2 OFFSET $3",
             uuid.UUID(session_id),
@@ -1268,10 +1285,22 @@ async def list_messages_cursor(
             _extra_filter = " AND intent IS DISTINCT FROM 'streaming_placeholder'"
         # 자동 메시지 필터 — pipeline_c/runner_response/system_trigger는 UI에서 접혀있어
         # 자동 메시지 비율이 높은 세션에서 실제 대화가 안 보이는 문제 방지
+        # intent=NULL인 Pipeline Runner 알림 메시지도 콘텐츠 패턴으로 추가 제외
         _auto_exclude = (
             " AND intent IS DISTINCT FROM 'pipeline_c'"
             " AND intent IS DISTINCT FROM 'runner_response'"
             " AND NOT (role = 'user' AND intent = 'system_trigger')"
+            " AND NOT content LIKE '🔧 [Pipeline Runner]%'"
+            " AND NOT content LIKE '🔔 [Pipeline Runner]%'"
+            " AND NOT content LIKE '✅ [Pipeline Runner]%'"
+            " AND NOT content LIKE '🚀 [Pipeline Runner]%'"
+            " AND NOT content LIKE '⚠️ [Pipeline Runner]%'"
+            " AND NOT content LIKE '↩️ [Pipeline Runner]%'"
+            " AND NOT content LIKE '❌ [Pipeline Runner]%'"
+            " AND NOT content LIKE '📋 [Pipeline Runner]%'"
+            " AND NOT content LIKE '🔴 [Pipeline Runner]%'"
+            " AND NOT content LIKE '🟡 [Pipeline Runner]%'"
+            " AND NOT content LIKE '🟢 [Pipeline Runner]%'"
         )
         if cursor:
             from datetime import datetime as _dt
