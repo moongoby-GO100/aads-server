@@ -1766,6 +1766,12 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "enum": ["XS", "S", "M", "L", "XL"],
                     "default": "M",
                 },
+                "worker_model": {
+                    "type": "string",
+                    "description": "실행 엔진 선택: 'litellm' 지정 시 Claude Code 없이 LiteLLM Runner(qwen3-coder-plus 등) 직접 실행. 기본값: 비어있으면 Claude Code 우선(실패 시 LiteLLM 폴백). CEO가 'litellm으로', 'qwen으로' 등 명시 시 사용.",
+                    "enum": ["", "litellm"],
+                    "default": "",
+                },
             },
             "required": ["project", "instruction"],
         },

@@ -310,12 +310,23 @@ class PipelineCJob:
 
             # AADS-1864: 검증 체크리스트 자동 삽입
             enriched_instruction = _append_verification_checklist(self.instruction, self.project)
-            work_result = await self._run_claude_code(enriched_instruction, continue_session=False)
 
-            # AADS-234: Claude Code 실패 시 LiteLLM Runner 폴백 (AADS 프로젝트)
-            if work_result.get("error") and self.project == "AADS":
-                self._log("litellm_fallback_attempt", f"Claude Code 실패 → LiteLLM 폴백: {work_result['error'][:100]}")
+            # CEO 명시 지정: worker_model="litellm" → LiteLLM Runner 직접 실행 (Claude Code 건너뜀)
+            if self.worker_model == "litellm":
+                self._log("litellm_direct", f"LiteLLM Runner 직접 실행 (CEO 명시 지정, size={self.size})")
+                await self._post_to_chat(
+                    f"🤖 **[LiteLLM Runner 시작]** `{self.job_id}`\n"
+                    f"프로젝트: **{self.project}** | 모델: **{_LITELLM_FALLBACK_MODELS.get(self.size, 'qwen3-coder-plus')}**\n"
+                    f"지시: {self.instruction[:300]}"
+                )
                 work_result = await self._run_litellm_fallback(enriched_instruction)
+            else:
+                work_result = await self._run_claude_code(enriched_instruction, continue_session=False)
+
+                # AADS-234: Claude Code 실패 시 LiteLLM Runner 폴백 (AADS 프로젝트)
+                if work_result.get("error") and self.project == "AADS":
+                    self._log("litellm_fallback_attempt", f"Claude Code 실패 → LiteLLM 폴백: {work_result['error'][:100]}")
+                    work_result = await self._run_litellm_fallback(enriched_instruction)
 
             if work_result.get("error"):
                 self._log("error", f"실행 오류: {work_result['error']}")
@@ -802,6 +813,7 @@ class PipelineCJob:
             "source ~/.claude/api_keys.env 2>/dev/null; "
             "export CLAUDE_CODE_OAUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-$API_KEY_1}; "
             "unset ANTHROPIC_API_KEY 2>/dev/null; "
+            "unset ANTHROPIC_BASE_URL 2>/dev/null; "  # LiteLLM proxy로 라우팅 방지 → 직접 Anthropic API 사용
         )
 
         # 고유 출력 파일 경로
@@ -944,6 +956,7 @@ class PipelineCJob:
             "source ~/.claude/api_keys.env 2>/dev/null; "
             "export CLAUDE_CODE_OAUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-$API_KEY_1}; "
             "unset ANTHROPIC_API_KEY 2>/dev/null; "
+            "unset ANTHROPIC_BASE_URL 2>/dev/null; "  # LiteLLM proxy로 라우팅 방지
         )
         full_cmd = f"{api_key_setup_direct}cd {shlex.quote(self.workdir)} && {claude_cmd}"
 
