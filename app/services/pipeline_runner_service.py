@@ -311,15 +311,18 @@ class PipelineCJob:
             # AADS-1864: 검증 체크리스트 자동 삽입
             enriched_instruction = _append_verification_checklist(self.instruction, self.project)
 
-            # CEO 명시 지정: worker_model="litellm" → LiteLLM Runner 직접 실행 (Claude Code 건너뜀)
-            if self.worker_model == "litellm":
-                self._log("litellm_direct", f"LiteLLM Runner 직접 실행 (CEO 명시 지정, size={self.size})")
+            # CEO 명시 지정: worker_model="litellm" 또는 "litellm:모델명" → LiteLLM Runner 직접 실행
+            _wm = self.worker_model or ""
+            if _wm == "litellm" or _wm.startswith("litellm:"):
+                # "litellm:gemini-2.5-flash" → gemini-2.5-flash 추출
+                _direct_model = _wm.split(":", 1)[1] if ":" in _wm else _LITELLM_FALLBACK_MODELS.get(self.size, "qwen3-coder-plus")
+                self._log("litellm_direct", f"LiteLLM Runner 직접 실행 (CEO 명시 지정, model={_direct_model})")
                 await self._post_to_chat(
                     f"🤖 **[LiteLLM Runner 시작]** `{self.job_id}`\n"
-                    f"프로젝트: **{self.project}** | 모델: **{_LITELLM_FALLBACK_MODELS.get(self.size, 'qwen3-coder-plus')}**\n"
+                    f"프로젝트: **{self.project}** | 모델: **{_direct_model}**\n"
                     f"지시: {self.instruction[:300]}"
                 )
-                work_result = await self._run_litellm_fallback(enriched_instruction)
+                work_result = await self._run_litellm_fallback(enriched_instruction, override_model=_direct_model)
             else:
                 work_result = await self._run_claude_code(enriched_instruction, continue_session=False)
 
@@ -1006,10 +1009,11 @@ class PipelineCJob:
 
     # ─── AADS-234: LiteLLM Runner 폴백 ─────────────────────────────────────
 
-    async def _run_litellm_fallback(self, instruction: str) -> dict:
+    async def _run_litellm_fallback(self, instruction: str, override_model: str = "") -> dict:
         """Claude Code CLI 실패 시 LiteLLM Runner(LangGraph ReAct)로 폴백 실행.
-        컨테이너 내부에서 실행하므로 AADS 프로젝트만 지원."""
-        model = _LITELLM_FALLBACK_MODELS.get(self.size, "qwen3-coder-plus")
+        컨테이너 내부에서 실행하므로 AADS 프로젝트만 지원.
+        override_model: CEO가 직접 지정한 모델명 (비어있으면 size 기반 자동 선택)."""
+        model = override_model or _LITELLM_FALLBACK_MODELS.get(self.size, "qwen3-coder-plus")
 
         self._log("litellm_fallback", f"LiteLLM Runner 폴백 시작 (model={model}, size={self.size})")
         await self._post_to_chat(
