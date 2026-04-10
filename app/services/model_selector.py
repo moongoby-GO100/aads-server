@@ -63,7 +63,8 @@ def _quota_class_http_error(status: int, exc: BaseException) -> bool:
     if body is not None:
         try:
             parts.append(json.dumps(body).lower() if isinstance(body, (dict, list)) else str(body).lower())
-        except Exception:
+        except Exception as e:
+            logger.debug("json_dumps_failed_in_quota_check: %s", e)
             parts.append(str(body).lower())
     return "limit" in " ".join(parts)
 
@@ -107,11 +108,11 @@ def _parse_rl_reset_ms(headers=None):
     ra = headers.get("retry-after") or headers.get("Retry-After")
     if ra:
         try: return _time_mod.time() + float(ra)
-        except: pass
+        except (ValueError, TypeError): pass
     rr = headers.get("x-ratelimit-reset") or headers.get("X-RateLimit-Reset")
     if rr:
         try: return float(rr)
-        except: pass
+        except (ValueError, TypeError): pass
     return None
 
 def _mark_slot_cooldown(slot: str, headers=None) -> None:
@@ -403,8 +404,6 @@ async def call_stream(
         "claude-3-sonnet-20240229":   "claude-sonnet",
         "claude-3-haiku-20240307":    "claude-haiku",
         "claude-2.1":                 "claude-sonnet",
-        "claude-opus-4-5":            "claude-opus",
-        "claude-sonnet-4-5":          "claude-sonnet",
         "auto": "claude-sonnet",    # 레거시: 실제 auto 는 _effective_override None 으로 처리됨
     }
     if model in _OVERRIDE_TO_ALIAS:
