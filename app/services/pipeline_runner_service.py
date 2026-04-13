@@ -157,6 +157,7 @@ class PipelineCJob:
         self.depends_on = depends_on
         # P1-1: 작업 규모 (동적 타임아웃용)
         self.size = (size or "M").upper()
+        self.actual_model = ""  # 실제 실행된 모델명 (litellm:kimi-k2.5, claude:sonnet 등)
         self.phase = "queued"
         self.cycle = 0
         self.status = "running"  # running | awaiting_approval | done | error
@@ -186,6 +187,7 @@ class PipelineCJob:
             "logs": self.logs[-10:],  # 최근 10개
             "git_diff": self.git_diff[:2000] if self.git_diff else "",
             "review_feedback": self.review_feedback,
+            "actual_model": self.actual_model or "",
             "created_at": self.created_at.isoformat(),
             "elapsed_sec": int((datetime.now() - self.created_at).total_seconds()),
         }
@@ -335,12 +337,14 @@ class PipelineCJob:
                 work_result = await self._run_litellm_fallback(enriched_instruction, override_model=_direct_model)
             elif _wm == "claude":
                 # Claude 명시 지정: Claude 직행
+                self.actual_model = f"claude:{self.model or 'sonnet'}"
                 work_result = await self._run_claude_code(enriched_instruction, continue_session=False)
             else:
                 # 기본: LiteLLM 우선 실행 → 실패 시 Claude 폴백 (전 프로젝트)
                 work_result = await self._run_litellm_fallback(enriched_instruction)
                 if work_result.get("error"):
                     self._log("claude_fallback_attempt", f"LiteLLM 실패 → Claude 폴백: {work_result['error'][:100]}")
+                    self.actual_model = f"claude:{self.model or 'sonnet'}"
                     work_result = await self._run_claude_code(enriched_instruction, continue_session=False)
 
             if work_result.get("error"):
@@ -1051,6 +1055,7 @@ class PipelineCJob:
             )
             try:
                 output = await self._ssh_command(cmd_on_remote, timeout=_get_timeout_for_job(self))
+                self.actual_model = f"litellm:{model}"
                 self._log("litellm_fallback_done", f"LiteLLM 완료 ({len(output)}자, model={model}, SSH)")
                 return {"output": output[-_MAX_OUTPUT_CHARS:], "exit_code": 0, "error": None}
             except asyncio.TimeoutError:
@@ -1076,6 +1081,7 @@ class PipelineCJob:
                 err = stderr.decode("utf-8", errors="replace")
                 if proc.returncode != 0 and not output.strip():
                     return {"error": f"LiteLLM exit={proc.returncode}: {err[:500]}", "output": ""}
+                self.actual_model = f"litellm:{model}"
                 self._log("litellm_fallback_done", f"LiteLLM 완료 ({len(output)}자, model={model})")
                 return {"output": output[-_MAX_OUTPUT_CHARS:], "exit_code": proc.returncode, "error": None}
             except asyncio.TimeoutError:
@@ -1253,8 +1259,8 @@ class PipelineCJob:
                         (job_id, chat_session_id, project, instruction, claude_session_id,
                          phase, cycle, max_cycles, status, logs, result_output, git_diff,
                          review_feedback, worker_model, parallel_group, depends_on,
-                         updated_at)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now())
+                         actual_model, updated_at)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now())
                     ON CONFLICT (job_id) DO UPDATE SET
                         phase = EXCLUDED.phase,
                         cycle = EXCLUDED.cycle,
@@ -1263,6 +1269,7 @@ class PipelineCJob:
                         result_output = EXCLUDED.result_output,
                         git_diff = EXCLUDED.git_diff,
                         review_feedback = EXCLUDED.review_feedback,
+                        actual_model = EXCLUDED.actual_model,
                         updated_at = now()
                 """,
                     self.job_id, self.chat_session_id, self.project,
@@ -1275,6 +1282,7 @@ class PipelineCJob:
                     self.worker_model or None,
                     self.parallel_group or None,
                     self.depends_on or None,
+                    self.actual_model or None,
                 )
             # 작업 완료/실패 이벤트
             if self.status in ("done", "error"):
