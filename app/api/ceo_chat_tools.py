@@ -1292,11 +1292,11 @@ _REMOTE_CMD_WHITELIST: List[str] = [
     "nginx -s reload",
     "nginx -s stop",
     "cat /etc/nginx",
-    # Supervisord (AADS-190)
+    # Supervisord (AADS-190) — status만 허용, restart/start/stop은 deploy.sh 경유 필수
     "supervisorctl status",
-    "supervisorctl restart",
-    "supervisorctl start",
-    "supervisorctl stop",
+    # "supervisorctl restart" 제거 — SSE 끊김 유발. deploy.sh 또는 reload-api.sh 사용
+    # "supervisorctl start" 제거
+    # "supervisorctl stop" 제거
     # 추가 시스템 도구
     "journalctl",
     "netstat -tlnp",

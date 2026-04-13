@@ -60,7 +60,10 @@ docs/knowledge/AADS-KNOWLEDGE.md — 아키텍처, 파이프라인, 교차검증
 - **`docker compose up -d` 전체 실행 절대 금지** — postgres/litellm/aads-server가 동시 재생성되어 채팅 시스템 전체가 중단됨.
 - **단일 서비스만 재시작**: `docker compose up -d --no-deps <서비스명>` 또는 `docker compose restart <서비스명>`
 - **대시보드 빌드/배포**: `docker compose -f /root/aads/aads-dashboard/docker-compose.yml build aads-dashboard && docker compose -f /root/aads/aads-dashboard/docker-compose.yml up -d aads-dashboard` — aads-server compose 파일 사용 금지.
-- **aads-server 재시작 필요 시**: `docker exec aads-server supervisorctl restart aads-api` (컨테이너 재생성 아닌 프로세스 재시작)
+- **aads-server 재시작 필요 시 (무중단 배포 필수)**:
+  - Python 코드만 변경: `docker exec aads-server bash /app/scripts/reload-api.sh` (0ms 다운타임)
+  - 이미지 리빌드 필요: `bash /root/aads/aads-server/deploy.sh bluegreen` (0초 무중단)
+  - **`supervisorctl restart aads-api` 직접 실행 절대 금지** — 활성 SSE 스트림이 전부 끊김
 - **docker-compose.yml 환경변수 수정 후**: 즉시 `docker compose up -d`하지 말고 CEO 승인 후 점검 창구에서 실행.
 
 ## 코드 품질 규칙 (R-QUALITY)
