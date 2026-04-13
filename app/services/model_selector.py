@@ -195,7 +195,14 @@ _COST_MAP = {
     "groq-kimi-k2":          (0.0,   0.0),
 
     "groq-llama4-scout":     (0.0,   0.0),
-    "groq-llama4-maverick":  (0.0,   0.0),
+    # OpenAI (LiteLLM 경유)
+    "gpt-4o":                (2.50,  10.0),
+    "gpt-4o-mini":           (0.15,   0.6),
+    "gpt-5":                 (5.0,   15.0),
+    "gpt-5-mini":            (0.50,   2.0),
+    "o3":                    (2.0,    8.0),
+    "o3-mini":               (1.10,   4.40),
+    "o3-pro":                (20.0,  80.0),
     "groq-llama-70b":        (0.0,   0.0),
     "groq-llama-8b":         (0.0,   0.0),
     "groq-gpt-oss-120b":     (0.0,   0.0),
@@ -289,7 +296,9 @@ _GEMINI_THINKING_MODELS = {
 }
 
 # Groq 모델 (LiteLLM 경유, 무료)
-_GROQ_MODELS = {"groq-qwen3-32b", "groq-kimi-k2", "groq-llama4-scout", "groq-llama4-maverick", "groq-llama-70b", "groq-llama-8b", "groq-gpt-oss-120b", "groq-compound"}
+_GROQ_MODELS = {"groq-qwen3-32b", "groq-kimi-k2", "groq-llama4-scout", "groq-llama-70b", "groq-llama-8b", "groq-gpt-oss-120b", "groq-compound"}
+# OpenAI 모델 (LiteLLM 경유)
+_OPENAI_MODELS = {"gpt-4o", "gpt-4o-mini", "gpt-5", "gpt-5-mini", "o3", "o3-mini", "o3-pro"}
 
 # DeepSeek 모델 (LiteLLM 경유)
 _DEEPSEEK_MODELS = {"deepseek-chat", "deepseek-reasoner"}
@@ -352,7 +361,7 @@ _ALIBABA_MODELS = {
 }
 
 # LiteLLM OpenAI 호환 모델 (Gemini + Groq + DeepSeek + OpenRouter + Alibaba)
-_LITELLM_OPENAI_MODELS = _GEMINI_MODELS | _GROQ_MODELS | _DEEPSEEK_MODELS | _OPENROUTER_MODELS | _ALIBABA_MODELS | _KIMI_MODELS | _MINIMAX_MODELS
+_LITELLM_OPENAI_MODELS = _GEMINI_MODELS | _GROQ_MODELS | _DEEPSEEK_MODELS | _OPENROUTER_MODELS | _ALIBABA_MODELS | _KIMI_MODELS | _MINIMAX_MODELS | _OPENAI_MODELS
 
 
 def _estimate_cost(model: str, in_tokens: int, out_tokens: int) -> Decimal:
@@ -562,15 +571,15 @@ async def call_stream(
                 break
             yield event
         if _had_error:
+            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Gemini Flash 전환]\n\n"}
             async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
-                if event.get("type") == "done":
-                    event = {**event, "model": model}  # 폴백해도 원래 선택 모델명 유지
+                if event.get("type") in ("done", "model_info"):
+                    event = {**event, "model": model}
                 yield event
         return
 
     # OpenRouter 모델 → LiteLLM 경유 (openrouter/ prefix 붙여서 전달, 실패 시 Gemini Flash 폴백)
     if model in _OPENROUTER_MODELS:
-        # LiteLLM config의 model_name을 그대로 전달 (별칭 기반 라우팅)
         _or_model = model
         _had_error = False
         async for event in _stream_litellm_openai(_or_model, system_prompt, messages, tools=tools):
@@ -578,14 +587,14 @@ async def call_stream(
                 _had_error = True
                 logger.warning(f"openrouter_fallback: {model} ({_or_model}) failed, falling back to gemini-2.5-flash")
                 break
-            # done 이벤트의 model 필드를 사람이 읽기 좋은 이름으로 교체
-            if event.get("type") == "done":
+            if event.get("type") in ("done", "model_info"):
                 event = {**event, "model": model}
             yield event
         if _had_error:
+            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Gemini Flash 전환]\n\n"}
             async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
-                if event.get("type") == "done":
-                    event = {**event, "model": model}  # 폴백해도 원래 선택 모델명 유지
+                if event.get("type") in ("done", "model_info"):
+                    event = {**event, "model": model}
                 yield event
         return
 
@@ -597,13 +606,14 @@ async def call_stream(
                 _had_error = True
                 logger.warning(f"alibaba_fallback: {model} failed, falling back to gemini-2.5-flash")
                 break
-            if event.get("type") == "done":
+            if event.get("type") in ("done", "model_info"):
                 event = {**event, "model": model}
             yield event
         if _had_error:
+            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Gemini Flash 전환]\n\n"}
             async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
-                if event.get("type") == "done":
-                    event = {**event, "model": model}  # 폴백해도 원래 선택 모델명 유지
+                if event.get("type") in ("done", "model_info"):
+                    event = {**event, "model": model}
                 yield event
         return
 
@@ -611,17 +621,37 @@ async def call_stream(
     # Kimi / MiniMax 모델 → LiteLLM 경유 (실패 시 Gemini Flash 폴백)
     if model in _KIMI_MODELS or model in _MINIMAX_MODELS:
         _had_error = False
-        async for event in _stream_litellm_openai(model, system_prompt, messages, tools=tools):
+        async for event in _stream_litellm_openai(model, system_prompt, messages, tools=None):
             if event.get("type") == "error":
                 _had_error = True
                 logger.warning(f"kimi_minimax_fallback: {model} failed, falling back to gemini-2.5-flash")
                 break
-            if event.get("type") == "done":
+            if event.get("type") in ("done", "model_info"):
                 event = {**event, "model": model}
             yield event
         if _had_error:
+            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Gemini Flash 전환]\n\n"}
             async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
-                if event.get("type") == "done":
+                if event.get("type") in ("done", "model_info"):
+                    event = {**event, "model": model}
+                yield event
+        return
+
+    # OpenAI 모델 → LiteLLM 경유 (실패 시 Gemini Flash 폴백)
+    if model in _OPENAI_MODELS:
+        _had_error = False
+        async for event in _stream_litellm_openai(model, system_prompt, messages, tools=tools):
+            if event.get("type") == "error":
+                _had_error = True
+                logger.warning(f"openai_fallback: {model} failed, falling back to gemini-2.5-flash")
+                break
+            if event.get("type") in ("done", "model_info"):
+                event = {**event, "model": model}
+            yield event
+        if _had_error:
+            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Gemini Flash 전환]\n\n"}
+            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
+                if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
                 yield event
         return
@@ -910,7 +940,18 @@ async def _stream_litellm_openai(
 
     # Thinking 모델: reasoning_effort=low로 사고 토큰 절감 + max_tokens 확대
     is_thinking = model in _GEMINI_THINKING_MODELS
-    max_tokens = _MAX_TOKENS_GEMINI_THINKING if is_thinking else _MAX_TOKENS_GEMINI
+    # 모델별 max_tokens 제한 (제공사 한도 초과 방지)
+    _MODEL_MAX_TOKENS = {
+        "deepseek-chat": 8192, "deepseek-reasoner": 8192,
+        "groq-kimi-k2": 32768, "groq-llama-70b": 8192, "groq-llama-8b": 8192,
+        "groq-llama4-scout": 16384, "groq-qwen3-32b": 32768,
+        "groq-gpt-oss-120b": 16384, "groq-compound": 32768,
+        "kimi-k2": 8192, "kimi-k2.5": 8192, "kimi-latest": 8192,
+        "kimi-128k": 8192, "kimi-8k": 8192,
+        "minimax-m2.7": 16384, "minimax-m2.5": 16384,
+    }
+    _default_max = _MAX_TOKENS_GEMINI_THINKING if is_thinking else _MAX_TOKENS_GEMINI
+    max_tokens = _MODEL_MAX_TOKENS.get(model, _default_max)
     extra_params: Dict[str, Any] = {}
     if is_thinking:
         extra_params["reasoning_effort"] = "low"
@@ -961,13 +1002,8 @@ async def _stream_litellm_openai(
                 ) as resp:
                     if resp.status_code != 200:
                         body = await resp.aread()
-                        if resp.status_code in (429, 401, 503):
-                            logger.warning(f"gemini_litellm_http_{resp.status_code}_fallback: model={model}")
-                            yield {"type": "delta", "content": f"\n\n[Gemini {resp.status_code} 오류 — Claude Sonnet으로 전환합니다]\n\n"}
-                            async for chunk in _stream_claude_sonnet_fallback(messages, system_prompt, tools, session_id):
-                                yield chunk
-                            return
-                        yield {"type": "error", "content": f"LiteLLM error {resp.status_code}: {body.decode()[:200]}"}
+                        logger.warning(f"litellm_http_{resp.status_code}: model={model} body={body.decode()[:120]}")
+                        yield {"type": "error", "content": f"LiteLLM {model} HTTP {resp.status_code}: {body.decode()[:200]}"}
                         return
 
                     async for line in resp.aiter_lines():
@@ -987,8 +1023,8 @@ async def _stream_litellm_openai(
                         if fr:
                             _finish_reason = fr
 
-                        # 텍스트 누적 + 스트리밍
-                        text = delta.get("content") or ""
+                        # 텍스트 누적 + 스트리밍 (kimi reasoning_content fallback)
+                        text = delta.get("content") or delta.get("reasoning_content") or ""
                         if text:
                             _assistant_text += text
                             full_text += text
@@ -1014,10 +1050,8 @@ async def _stream_litellm_openai(
                             output_tokens = usage.get("completion_tokens", output_tokens)
 
         except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as e:
-            logger.warning(f"gemini_litellm_network_error_fallback: model={model} error={e}")
-            yield {"type": "delta", "content": "\n\n[Gemini 연결 오류 — Claude Sonnet으로 전환합니다]\n\n"}
-            async for chunk in _stream_claude_sonnet_fallback(messages, system_prompt, tools, session_id):
-                yield chunk
+            logger.warning(f"litellm_network_error: model={model} error={e}")
+            yield {"type": "error", "content": f"LiteLLM {model} network error: {str(e)[:200]}"}
             return
         except Exception as e:
             logger.error(f"model_selector litellm error: {e}")

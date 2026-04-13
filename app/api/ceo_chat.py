@@ -320,10 +320,17 @@ def _model_display_name(model: str) -> str:
 # ─── LLM 호출 ─────────────────────────────────────────────────────────────
 async def call_llm(model: str, system_prompt: str, messages: List[Dict]) -> Tuple[str, int, int]:
     """모델에 따라 적합한 API 호출 → (응답텍스트, input_tokens, output_tokens)"""
-    if model.startswith('gemini'):
+    if model.startswith('gemini') or model.startswith('gemma'):
         return await _call_gemini(model, system_prompt, messages)
     if model.startswith('gpt') or model.startswith('o1') or model.startswith('o3'):
-        return await _call_openai(model, system_prompt, messages)
+        # 직접 OpenAI 클라이언트 우선, 없으면 LiteLLM 경유
+        if openai_client is not None:
+            return await _call_openai(model, system_prompt, messages)
+        return await _call_litellm_openai(model, system_prompt, messages)
+    # LiteLLM 경유 모델 (Groq/DeepSeek/OpenRouter/Qwen/Kimi/MiniMax)
+    _LITELLM_PREFIXES = ('groq-', 'deepseek-', 'openrouter-', 'qwen', 'kimi-', 'minimax-', 'dashscope-', 'qwq-')
+    if any(model.startswith(p) for p in _LITELLM_PREFIXES):
+        return await _call_litellm_openai(model, system_prompt, messages)
     return await _call_anthropic(model, system_prompt, messages)
 
 
@@ -403,6 +410,43 @@ async def _call_openai(model: str, system_prompt: str, messages: List[Dict]) -> 
     input_tokens = resp.usage.prompt_tokens
     output_tokens = resp.usage.completion_tokens
     return text, input_tokens, output_tokens
+
+
+async def _call_litellm_openai(model: str, system_prompt: str, messages: List[Dict]) -> Tuple[str, int, int]:
+    """LiteLLM 프록시 경유 OpenAI 호환 호출 (Groq/DeepSeek/OpenRouter/Qwen/Kimi/MiniMax)."""
+    litellm_base = (_os.getenv("LITELLM_BASE_URL") or "").strip() or "http://aads-litellm:4000"
+    litellm_key = _os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
+    all_messages = [{"role": "system", "content": system_prompt}]
+    for m in messages:
+        content = m.get("content", "")
+        if isinstance(content, list):
+            content = "\n".join(
+                b.get("text", "") for b in content
+                if isinstance(b, dict) and b.get("type") == "text"
+            ) or str(content)
+        all_messages.append({"role": m["role"], "content": content})
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                f"{litellm_base}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {litellm_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": all_messages,
+                    "max_tokens": _MAX_TOKENS_CEO,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        text = data["choices"][0]["message"]["content"] or ""
+        usage = data.get("usage", {})
+        return text, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
+    except Exception as e:
+        logger.warning(f"LiteLLM call failed for {model}, fallback to gemini-2.5-flash: {e}")
+        return await _call_gemini("gemini-2.5-flash", system_prompt, messages)
 
 
 async def _call_anthropic_with_tools(
