@@ -723,43 +723,55 @@ async def lifespan(app: FastAPI):
                     user_content = row["content"]
                     is_recovered = row.get("model_used") == "recovered"
                     try:
-                        from app.services.chat_service import send_message_stream, with_background_completion
+                        from app.services.chat_service import _resume_single_stream as _rss, _active_bg_tasks as _abt
                         import asyncio as _ri_asyncio
+                        import uuid as _uuid_ri
 
-                        # recovered 세션: 마지막 user 메시지 + 이어쓰기 지시
+                        # Guard: 이미 active bg task가 있으면 skip
+                        if sid in _abt and not _abt[sid].done():
+                            logger.info(f"resume_incomplete: session={sid[:8]} already active bg_task, skip")
+                            continue
+
+                        # workspace_name 조회
+                        _ws_name = await conn.fetchval("""
+                            SELECT w.name FROM chat_workspaces w
+                            JOIN chat_sessions s ON s.workspace_id = w.id
+                            WHERE s.id = $1::uuid
+                        """, sid) or "CEO"
+
                         if is_recovered:
+                            # recovered 케이스: 기존 recovered 메시지가 placeholder (새 버블 생성 금지)
+                            _ph_row = await conn.fetchrow(
+                                "SELECT id, content FROM chat_messages "
+                                "WHERE session_id = $1::uuid AND role = 'assistant' AND model_used = 'recovered' "
+                                "ORDER BY created_at DESC LIMIT 1",
+                                sid,
+                            )
+                            if not _ph_row:
+                                logger.info(f"resume_incomplete: session={sid[:8]} recovered but no placeholder, skip")
+                                continue
+                            _ph_id = _ph_row["id"]
+                            _partial = _ph_row["content"] or ""
                             _last_user = await conn.fetchval(
                                 "SELECT content FROM chat_messages "
                                 "WHERE session_id = $1::uuid AND role = 'user' "
                                 "ORDER BY created_at DESC LIMIT 1",
                                 sid,
+                            ) or ""
+                            _ri_asyncio.create_task(_rss(sid, _ph_id, _partial, _last_user, _ws_name))
+                            logger.info(f"resume_incomplete: session={sid[:8]} recovered-resume via _resume_single_stream")
+                        else:
+                            # non-recovered 케이스: placeholder INSERT 후 이어쓰기 (중복 user 메시지 생성 금지)
+                            _ph_id = await conn.fetchval(
+                                """INSERT INTO chat_messages (session_id, role, content, intent, model_used, tools_called)
+                                   VALUES ($1::uuid, 'assistant', '', 'streaming_placeholder', 'streaming', '[]'::jsonb)
+                                   ON CONFLICT (session_id) WHERE intent = 'streaming_placeholder'
+                                   DO UPDATE SET content = EXCLUDED.content, edited_at = NOW()
+                                   RETURNING id""",
+                                sid,
                             )
-                            if _last_user:
-                                user_content = (
-                                    f"{_last_user}\n\n"
-                                    "[시스템] 이전 응답이 서버 재시작으로 중단되었습니다. "
-                                    "이전 응답 내용을 참고하여 이어서 완성해 주세요."
-                                )
-                            else:
-                                logger.info(f"resume_incomplete: session={sid[:8]} recovered but no user msg, skip")
-                                continue
-
-                        async def _resume_session(_sid, _content):
-                            try:
-                                stream = send_message_stream(
-                                    session_id=_sid,
-                                    content=_content,
-                                )
-                                bg = with_background_completion(stream, session_id=_sid)
-                                async for _ in bg:
-                                    pass
-                                logger.info(f"resume_incomplete: session={_sid[:8]} completed")
-                            except Exception as _e:
-                                logger.warning(f"resume_incomplete: session={_sid[:8]} stream_error={_e}")
-
-                        _ri_asyncio.create_task(_resume_session(sid, user_content))
-                        _mode = "recovered-resume" if is_recovered else "direct"
-                        logger.info(f"resume_incomplete: session={sid[:8]} re-triggered ({_mode})")
+                            _ri_asyncio.create_task(_rss(sid, _ph_id, "", user_content, _ws_name))
+                            logger.info(f"resume_incomplete: session={sid[:8]} direct via _resume_single_stream")
                     except Exception as e:
                         logger.warning(f"resume_incomplete: session={sid[:8]} error={e}")
         except Exception as e:
@@ -827,31 +839,34 @@ async def lifespan(app: FastAPI):
                         if not _last_user:
                             continue
 
-                        # P0-1: 이미 복구 메시지가 붙어있으면 루프 방지
-                        if "[시스템] 이전 응답이 중단되었습니다" in _last_user:
-                            logger.info(f"recovered_scanner: session={sid[:8]} already has recovery suffix, skip loop")
+                        # recovered 메시지(= placeholder) 조회 — _resume_single_stream으로 직접 UPDATE (새 버블 생성 금지)
+                        _ph_row = await conn.fetchrow(
+                            "SELECT id, content FROM chat_messages "
+                            "WHERE session_id = $1::uuid AND role = 'assistant' AND model_used = 'recovered' "
+                            "ORDER BY created_at DESC LIMIT 1",
+                            sid,
+                        )
+                        if not _ph_row:
+                            logger.info(f"recovered_scanner: session={sid[:8]} no recovered placeholder, skip")
                             continue
+                        _ph_id = _ph_row["id"]
+                        _partial = _ph_row["content"] or ""
+                        _ws_name = await conn.fetchval("""
+                            SELECT w.name FROM chat_workspaces w
+                            JOIN chat_sessions s ON s.workspace_id = w.id
+                            WHERE s.id = $1::uuid
+                        """, sid) or "CEO"
 
-                        _recovery_suffix = "[시스템] 이전 응답이 중단되었습니다. 이전 응답 내용을 참고하여 이어서 완성해 주세요."
-                        user_content = f"{_last_user}\n\n{_recovery_suffix}"
+                        from app.services.chat_service import _resume_single_stream as _rss_prs
 
-                        # P0-2: idempotency_key로 중복 삽입 방지
-                        import hashlib as _hs
-                        _idem_key = "recovery_" + _hs.md5(f"{sid}:{_last_user[:100]}".encode()).hexdigest()
-
-                        from app.services.chat_service import send_message_stream, with_background_completion
-
-                        async def _resume_recovered(_sid, _content, _ikey=_idem_key):
+                        async def _do_resume_recovered(_sid, _ph=_ph_id, _pc=_partial, _lu=_last_user, _wn=_ws_name):
                             try:
-                                stream = send_message_stream(session_id=_sid, content=_content, idempotency_key=_ikey)
-                                bg = with_background_completion(stream, session_id=_sid)
-                                async for _ in bg:
-                                    pass
+                                await _rss_prs(_sid, _ph, _pc, _lu, _wn)
                                 logger.info(f"recovered_scanner: session={_sid[:8]} resumed OK")
                             except Exception as _e:
                                 logger.warning(f"recovered_scanner: session={_sid[:8]} error={_e}")
 
-                        _prs_asyncio.create_task(_resume_recovered(sid, user_content))
+                        _prs_asyncio.create_task(_do_resume_recovered(sid))
                         logger.info(f"recovered_scanner: session={sid[:8]} auto-resume triggered (attempt {_recovered_resume_attempts[sid]})")
             except Exception as _e:
                 logger.warning(f"recovered_scanner_error: {_e}")
