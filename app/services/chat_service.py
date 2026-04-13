@@ -1162,7 +1162,6 @@ async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort
         _intent_filter += (
             " AND intent IS DISTINCT FROM 'pipeline_c'"
             " AND intent IS DISTINCT FROM 'runner_response'"
-            " AND NOT (role = 'user' AND intent = 'system_trigger')"
             " AND NOT content LIKE '🔧 [Pipeline Runner]%'"
             " AND NOT content LIKE '🔔 [Pipeline Runner]%'"
             " AND NOT content LIKE '✅ [Pipeline Runner]%'"
@@ -1289,7 +1288,6 @@ async def list_messages_cursor(
         _auto_exclude = (
             " AND intent IS DISTINCT FROM 'pipeline_c'"
             " AND intent IS DISTINCT FROM 'runner_response'"
-            " AND NOT (role = 'user' AND intent = 'system_trigger')"
             " AND NOT content LIKE '🔧 [Pipeline Runner]%'"
             " AND NOT content LIKE '🔔 [Pipeline Runner]%'"
             " AND NOT content LIKE '✅ [Pipeline Runner]%'"
@@ -1327,6 +1325,8 @@ async def list_messages_cursor(
             )
         messages = [_row_to_dict(r) for r in rows]
         has_more = len(messages) > limit  # has_more는 필터링 전 원본 건수로 판별
+        if has_more:
+            messages = messages[1:]  # 가장 오래된 1건(초과분) 제거 — dedup 전에 수행
         # 비활성 세션의 streaming_placeholder → 내용 있으면 recovered 전환, 없으면 제외
         if not _is_active:
             _promote_ids = []
@@ -1408,8 +1408,6 @@ async def list_messages_cursor(
                 else:
                     _deduped.append(cur)
             messages = _deduped
-        if has_more:
-            messages = messages[1:]  # 가장 오래된 1건 제거 (초과분)
         next_cursor = messages[0]["created_at"].isoformat() if has_more and messages else None
         return {
             "messages": messages,
