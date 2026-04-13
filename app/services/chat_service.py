@@ -1162,6 +1162,9 @@ async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort
         _intent_filter += (
             " AND intent IS DISTINCT FROM 'pipeline_c'"
             " AND intent IS DISTINCT FROM 'runner_response'"
+            " AND intent IS DISTINCT FROM 'ai_review_warning'"
+            " AND intent IS DISTINCT FROM 'system_trigger'"
+            " AND intent IS DISTINCT FROM 'auto_reaction'"
             " AND NOT content LIKE '🔧 [Pipeline Runner]%'"
             " AND NOT content LIKE '🔔 [Pipeline Runner]%'"
             " AND NOT content LIKE '✅ [Pipeline Runner]%'"
@@ -1288,6 +1291,9 @@ async def list_messages_cursor(
         _auto_exclude = (
             " AND intent IS DISTINCT FROM 'pipeline_c'"
             " AND intent IS DISTINCT FROM 'runner_response'"
+            " AND intent IS DISTINCT FROM 'ai_review_warning'"
+            " AND intent IS DISTINCT FROM 'system_trigger'"
+            " AND intent IS DISTINCT FROM 'auto_reaction'"
             " AND NOT content LIKE '🔧 [Pipeline Runner]%'"
             " AND NOT content LIKE '🔔 [Pipeline Runner]%'"
             " AND NOT content LIKE '✅ [Pipeline Runner]%'"
