@@ -3126,7 +3126,7 @@ async def send_message_stream(
                 # tools_called는 스트리밍 중 직접 누적한 구조화 이벤트 유지 (done 이벤트로 덮어쓰지 않음)
             elif etype == "error":
                 _err_content = event.get('content', '오류')
-                yield f"data: {json.dumps({'type': 'error', 'content': _err_content})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'content': _err_content, 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
                 # 에러 시에도 partial response가 있으면 저장 (recovered 중복 방지)
                 if full_response.strip():
                     try:
@@ -3199,7 +3199,7 @@ async def send_message_stream(
                     output_tokens = event.get("output_tokens", 0) or 0
                     # tools_called는 스트리밍 중 직접 누적한 구조화 이벤트 유지 (done 이벤트로 덮어쓰지 않음)
                 elif etype == "error":
-                    yield f"data: {json.dumps({'type': 'error', 'content': event.get('content', '오류')})}\n\n"
+                    yield f"data: {json.dumps({'type': 'error', 'content': event.get('content', '오류'), 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
                     return
 
             # 재시도 응답도 검증 (날조 방지 — 재시도에서도 가짜 결과 차단)
