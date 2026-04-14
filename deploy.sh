@@ -15,6 +15,48 @@ COMPOSE_DIR="/root/aads/aads-server"
 HEALTH_URL="http://localhost:8100/api/v1/health"
 MAX_WAIT=30
 INTERVAL=2
+UPSTREAM_CONF="/etc/nginx/conf.d/aads-upstream.conf"
+ACTIVE_CONTAINER_FILE="${COMPOSE_DIR}/.active_container"
+ACTIVE_PORT_FILE="${COMPOSE_DIR}/.active_port"
+
+get_active_port() {
+    local port=""
+    if [[ -f "$ACTIVE_PORT_FILE" ]]; then
+        port=$(tr -d '[:space:]' < "$ACTIVE_PORT_FILE" 2>/dev/null || true)
+    fi
+    if [[ -z "$port" && -f "$UPSTREAM_CONF" ]]; then
+        port=$(grep "server 127.0.0.1:" "$UPSTREAM_CONF" | grep -v backup | head -1 | grep -oP '127\.0\.0\.1:\K[0-9]+' || true)
+    fi
+    if [[ "$port" != "8100" && "$port" != "8102" ]]; then
+        port="8100"
+    fi
+    echo "$port"
+}
+
+get_active_container() {
+    local container=""
+    if [[ -f "$ACTIVE_CONTAINER_FILE" ]]; then
+        container=$(tr -d '[:space:]' < "$ACTIVE_CONTAINER_FILE" 2>/dev/null || true)
+    fi
+    # 파일 값이 실제로 실행 중인지 검증 — 정지된 컨테이너 참조 방지
+    if [[ -n "$container" ]] && docker inspect "$container" --format '{{.State.Running}}' 2>/dev/null | grep -q true; then
+        echo "$container"
+        return 0
+    fi
+    # 실행 중인 컨테이너 자동 탐색 + 상태 파일 동기화
+    for c in aads-server aads-server-green; do
+        if docker inspect "$c" --format '{{.State.Running}}' 2>/dev/null | grep -q true; then
+            echo "$c" > "$ACTIVE_CONTAINER_FILE" 2>/dev/null || true
+            echo "$c"
+            return 0
+        fi
+    done
+    echo "aads-server"
+}
+
+ACTIVE_PORT="$(get_active_port)"
+ACTIVE_CONTAINER="$(get_active_container)"
+HEALTH_URL="http://localhost:${ACTIVE_PORT}/api/v1/health"
 
 # ── 배포 중복 호출 방지 (lockfile) ──
 LOCKFILE="/tmp/aads-deploy.lock"
@@ -70,7 +112,7 @@ docker exec aads-postgres psql -U aads -d aads -q -c "
 
 # ── Phase 0.5: 코드 검증 (구문 + import) — 실패 시 배포 차단 ──
 echo "[deploy.sh] Phase 0.5: Python syntax + import validation..."
-VALIDATION_RESULT=$(docker exec aads-server python3 -c "
+VALIDATION_RESULT=$(docker exec "$ACTIVE_CONTAINER" python3 -c "
 import sys
 errors = []
 # 핵심 모듈 구문 검사
@@ -107,27 +149,27 @@ case "$MODE" in
     reload)
         echo "[deploy.sh] Phase 1: fast reload aads-api (supervisorctl restart)"
         # 배포 플래그
-        docker exec aads-server touch /tmp/aads_deploy_restart 2>/dev/null || true
+        docker exec "$ACTIVE_CONTAINER" touch /tmp/aads_deploy_restart 2>/dev/null || true
         # restart = SIGTERM + 자동 start (supervisord가 처리, 대기 루프 불필요)
-        docker exec aads-server supervisorctl restart aads-api
+        docker exec "$ACTIVE_CONTAINER" supervisorctl restart aads-api
         echo "[deploy.sh] Phase 1: supervisorctl restart 완료 — health check 대기..."
         ;;
     code)
         echo "[deploy.sh] Phase 1: graceful restart aads-api (SIGTERM + 60s wait)"
         # 배포 플래그 파일 생성 → 서버 startup 시 미완료 대화 자동 재실행 스킵
-        docker exec aads-server touch /tmp/aads_deploy_restart 2>/dev/null || true
+        docker exec "$ACTIVE_CONTAINER" touch /tmp/aads_deploy_restart 2>/dev/null || true
         # graceful: SIGTERM → 60초 대기 → 강제종료 방지 (supervisord stopwaitsecs 무시 회피)
-        docker exec aads-server supervisorctl signal SIGTERM aads-api 2>/dev/null || true
+        docker exec "$ACTIVE_CONTAINER" supervisorctl signal SIGTERM aads-api 2>/dev/null || true
         echo "[deploy.sh] SIGTERM 전송 완료 — 진행중인 응답 완료 대기 (최대 60초)..."
         for i in $(seq 1 30); do
             sleep 2
-            STATUS=$(docker exec aads-server supervisorctl status aads-api 2>/dev/null | awk '{print $2}')
+            STATUS=$(docker exec "$ACTIVE_CONTAINER" supervisorctl status aads-api 2>/dev/null | awk '{print $2}')
             if [ "$STATUS" != "RUNNING" ]; then
                 echo "[deploy.sh] aads-api 종료 확인 (${i}x2=$((i*2))초)"
                 break
             fi
         done
-        docker exec aads-server supervisorctl start aads-api || true
+        docker exec "$ACTIVE_CONTAINER" supervisorctl start aads-api || true
         ;;
     build)
         echo "[deploy.sh] Phase 1: docker compose up -d --build --no-deps aads-server"
@@ -146,8 +188,6 @@ case "$MODE" in
         GREEN_PORT=8102
         BLUE_CONTAINER="aads-server"
         GREEN_CONTAINER="aads-server-green"
-        UPSTREAM_CONF="/etc/nginx/conf.d/aads-upstream.conf"
-
         COMPOSE_FILE="-f ${COMPOSE_DIR}/docker-compose.prod.yml"
 
         # 현재 활성 포트 감지 (upstream에서 backup이 아닌 첫 번째 서버)
@@ -264,7 +304,7 @@ done
 if [[ "$HEALTH_OK" != "true" ]]; then
     echo "[deploy.sh] ❌ Phase 2 실패 — 롤백 시도..."
     if [[ "$MODE" == "code" ]]; then
-        docker exec aads-server supervisorctl restart aads-api || true
+        docker exec "$ACTIVE_CONTAINER" supervisorctl restart aads-api || true
         sleep 10
     fi
     notify "❌ 배포 실패 + 롤백 시도 (mode=${MODE})"
@@ -327,7 +367,7 @@ else
     echo "[deploy.sh] ❌ Phase 4 실패 — 롤백 시도..."
     echo "[deploy.sh] 에러: ${CHAT_TEST}"
     if [[ "$MODE" == "code" ]]; then
-        docker exec aads-server supervisorctl restart aads-api || true
+        docker exec "$ACTIVE_CONTAINER" supervisorctl restart aads-api || true
         sleep 10
     fi
     notify "❌ 채팅 기능 테스트 실패 + 롤백 (mode=${MODE}): ${CHAT_TEST:0:200}"
