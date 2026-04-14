@@ -1068,7 +1068,7 @@ class PipelineCJob:
             )
             try:
                 output = await self._ssh_command(cmd_on_remote, timeout=_get_timeout_for_job(self))
-                self.actual_model = f"litellm:{model}"
+                self.actual_model = model  # litellm: 접두사 없이 정식명 저장
                 self._log("litellm_fallback_done", f"LiteLLM 완료 ({len(output)}자, model={model}, SSH)")
                 return {"output": output[-_MAX_OUTPUT_CHARS:], "exit_code": 0, "error": None}
             except asyncio.TimeoutError:
@@ -1094,7 +1094,7 @@ class PipelineCJob:
                 err = stderr.decode("utf-8", errors="replace")
                 if proc.returncode != 0 and not output.strip():
                     return {"error": f"LiteLLM exit={proc.returncode}: {err[:500]}", "output": ""}
-                self.actual_model = f"litellm:{model}"
+                self.actual_model = model  # litellm: 접두사 없이 정식명 저장
                 self._log("litellm_fallback_done", f"LiteLLM 완료 ({len(output)}자, model={model})")
                 return {"output": output[-_MAX_OUTPUT_CHARS:], "exit_code": proc.returncode, "error": None}
             except asyncio.TimeoutError:
