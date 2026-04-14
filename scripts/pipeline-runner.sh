@@ -919,13 +919,13 @@ deploy_job() {
                 if bash /root/aads/aads-server/scripts/reload-api.sh 2>&1 | tail -5; then
                     log "  HOT-RELOAD: 완료 (무중단)"
                 else
-                    log "  HOT-RELOAD: 실패 — fallback: deploy.sh code"
-                    bash /root/aads/aads-server/deploy.sh code 2>&1 | tail -10 || true
+                    log "  HOT-RELOAD: 실패 — fallback: deploy.sh bluegreen (무중단)"
+                    bash /root/aads/aads-server/deploy.sh bluegreen 2>&1 | tail -10 || true
                 fi
             else
-                # 비Python 변경 (yml/md 등) → deploy.sh code (graceful restart)
-                log "  DEPLOY: 비Python 변경 — deploy.sh code 실행"
-                bash /root/aads/aads-server/deploy.sh code 2>&1 | tail -10 || true
+                # 비Python 변경 (yml/md/yaml/sh/bak 등) → 서버 재시작 불필요
+                # SIGTERM 방지: deploy.sh code는 SIGTERM을 보내 SSE 스트림을 끊으므로 사용 금지
+                log "  SKIP-DEPLOY: 비Python 변경 — aads-server 재시작 불필요 (yml/md/yaml/sh 등)"
             fi
 
             # 2) aads-dashboard: Docker 이미지 빌드 서비스 → build→swap
