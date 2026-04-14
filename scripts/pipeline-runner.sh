@@ -676,6 +676,13 @@ ${safe_instruction}"
                 log "  CODEX_CONTENT_FAIL job=$job_id: output contains failure marker"
             fi
         fi
+        # 방어: Codex 출력 실패 감지
+        if [[ $exit_code -eq 0 && "$current_model" == codex:* ]]; then
+            if grep -qE "^(FAILED|ERROR):" "$output_file" 2>/dev/null; then
+                exit_code=1
+                log "  CODEX_CONTENT_FAIL job=$job_id: output contains failure marker"
+            fi
+        fi
         # 방어: LiteLLM 출력에 FAILED:/ERROR: 포함 시 강제 실패 처리
         if [[ $exit_code -eq 0 && "$current_model" == litellm:* ]]; then
             if grep -qE "^(FAILED|ERROR):" "$output_file" 2>/dev/null; then
