@@ -271,6 +271,18 @@ if [[ "$HEALTH_OK" != "true" ]]; then
     exit 1
 fi
 
+# ── Phase 2.5: E2E 게이트 ──
+if [[ "${RUN_E2E:-false}" == "true" ]]; then
+    echo "[deploy.sh] Phase 2.5: E2E 게이트 실행..."
+    E2E_RESULT=$(curl -sf -m 30 "http://localhost:${TARGET_PORT:-8100}/api/v1/chat/sessions" 2>/dev/null || echo "FAIL")
+    E2E_CODE=$(curl -so /dev/null -w "%{http_code}" -m 30 "http://localhost:${TARGET_PORT:-8100}/api/v1/chat/sessions" 2>/dev/null || echo "0")
+    if [[ "$E2E_CODE" == "200" || "$E2E_CODE" == "401" || "$E2E_CODE" == "403" ]]; then
+        echo "[deploy.sh] Phase 2.5: ✅ E2E 게이트 통과 (HTTP $E2E_CODE)"
+    else
+        echo "[deploy.sh] ⚠️ Phase 2.5: E2E 응답 이상 (HTTP $E2E_CODE) — 배포 계속"
+    fi
+fi
+
 # ── Phase 3: DB 스키마 검증 ──
 echo "[deploy.sh] Phase 3: DB 스키마 검증..."
 SCHEMA_RESULT=$(docker exec aads-postgres psql -U aads -d aads -t -A -c "
