@@ -70,6 +70,9 @@ _LITELLM_FALLBACK_MODELS = {
     "XL": "minimax-m2.7",
 }
 
+# Codex CLI 가용 모델 (ChatGPT Plus 계정, 2026-04-14 실측)
+_CODEX_AVAILABLE_MODELS = {"default", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}
+
 
 # AADS-290: 프로젝트별 litellm_runner.py 경로 매핑
 _LITELLM_RUNNER_PATH: Dict[str, str] = {
@@ -159,6 +162,12 @@ class PipelineCJob:
         # AI가 선택한 모델 (sonnet/opus/haiku, 빈 문자열이면 기본 sonnet)
         self.model = model if model in ("sonnet", "opus", "haiku") else ""
         # AADS-211: 직접 모델 지정 (worker_model)
+        # Codex 모델 유효성 검증 — 미지원 모델은 gpt-5.4로 폴백
+        if worker_model and worker_model.startswith("codex:"):
+            codex_name = worker_model.split(":", 1)[1]
+            if codex_name not in _CODEX_AVAILABLE_MODELS:
+                logger.warning(f"Codex model '{codex_name}' not available, fallback to gpt-5.4")
+                worker_model = "codex:gpt-5.4"
         self.worker_model = worker_model
         # AADS-211: 병렬 실행 그룹
         self.parallel_group = parallel_group
