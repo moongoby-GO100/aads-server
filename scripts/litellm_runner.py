@@ -181,6 +181,8 @@ def main() -> None:
                         help="LiteLLM 모델명 (예: gemini-2.5-flash, deepseek-chat, qwen3-235b)")
     parser.add_argument("--instruction", "-i", default="",
                         help="실행할 작업 지시문")
+    parser.add_argument("--instruction-file", "-f", default="",
+                        help="파일에서 지시문 읽기 (긴 instruction용, docker exec arg 깨짐 방지)")
     parser.add_argument("--workdir", "-w",
                         default="/app",
                         help="작업 디렉토리")
@@ -192,8 +194,13 @@ def main() -> None:
         asyncio.run(list_tools())
         return
 
+    # --instruction-file 우선: 파일에서 읽어 args.instruction 덮어쓰기
+    if args.instruction_file:
+        with open(args.instruction_file, "r", encoding="utf-8") as f:
+            args.instruction = f.read().strip()
+
     if not args.instruction:
-        parser.error("--instruction 필수")
+        parser.error("--instruction 또는 --instruction-file 필수")
 
     if not _MASTER_KEY:
         logger.error("LITELLM_MASTER_KEY 환경변수가 설정되지 않았습니다.")

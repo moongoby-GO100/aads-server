@@ -1272,8 +1272,8 @@ class PipelineCJob:
                         (job_id, chat_session_id, project, instruction, claude_session_id,
                          phase, cycle, max_cycles, status, logs, result_output, git_diff,
                          review_feedback, worker_model, parallel_group, depends_on,
-                         actual_model, updated_at)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now())
+                         actual_model, size, updated_at)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now())
                     ON CONFLICT (job_id) DO UPDATE SET
                         phase = EXCLUDED.phase,
                         cycle = EXCLUDED.cycle,
@@ -1283,6 +1283,7 @@ class PipelineCJob:
                         git_diff = EXCLUDED.git_diff,
                         review_feedback = EXCLUDED.review_feedback,
                         actual_model = EXCLUDED.actual_model,
+                        size = EXCLUDED.size,
                         updated_at = now()
                 """,
                     self.job_id, self.chat_session_id, self.project,
@@ -1296,6 +1297,7 @@ class PipelineCJob:
                     self.parallel_group or None,
                     self.depends_on or None,
                     self.actual_model or None,
+                    getattr(self, "size", "M"),
                 )
             # 작업 완료/실패 이벤트
             if self.status in ("done", "error"):
