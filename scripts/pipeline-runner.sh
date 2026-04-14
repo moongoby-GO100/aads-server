@@ -636,8 +636,11 @@ ${safe_instruction}"
         if [[ "$current_model" == codex:* ]]; then
             local codex_model_name="${current_model#codex:}"
             log "  CODEX_RUNNER job=$job_id model=$codex_model_name"
-            timeout "$MAX_RUNTIME" codex exec --full-auto -m "$codex_model_name" -C "$workdir" "$safe_instruction" \
-                > "$output_file" 2> "$err_file" &
+            local codex_args=(exec --full-auto --ephemeral -C "$workdir")
+            # codex:default → 모델 미지정(기본 gpt-5.4), 그 외 → -m 지정
+            [[ "$codex_model_name" != "default" ]] && codex_args+=(-m "$codex_model_name")
+            timeout "$MAX_RUNTIME" codex "${codex_args[@]}" "$safe_instruction" \
+                < /dev/null > "$output_file" 2> "$err_file" &
             local claude_pid=$!
         # LiteLLM Runner 분기 (litellm: 접두사)
         elif [[ "$current_model" == litellm:* ]]; then
