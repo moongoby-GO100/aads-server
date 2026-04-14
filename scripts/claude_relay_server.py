@@ -33,6 +33,7 @@ logger = logging.getLogger("claude_relay")
 
 PORT = int(os.getenv("CLAUDE_RELAY_PORT", "8199"))
 CLAUDE_BIN = os.getenv("CLAUDE_BIN", "claude")
+CODEX_BIN = os.getenv("CODEX_BIN", "codex")
 MCP_TEMPLATE = Path(os.getenv(
     "MCP_CONFIG_TEMPLATE",
     "/root/aads/aads-server/scripts/mcp_config_template.json",
@@ -337,6 +338,102 @@ async def handle_stream(request):
             pass
 
 
+_CODEX_MODEL_MAP = {
+    "gpt-5": "gpt-5.4", "gpt-5-mini": "gpt-5.4-mini",
+    "gpt-5.4": "gpt-5.4", "gpt-5.4-mini": "gpt-5.4-mini",
+    "gpt-5.3-codex": "gpt-5.3-codex",
+}
+
+
+async def handle_codex_stream(request):
+    """Codex CLI subprocess -> NDJSON pseudo-streaming. ChatGPT Plus OAuth."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid JSON"}, status=400)
+    system_prompt = body.get("system_prompt", "")
+    messages_text = body.get("messages_text", "")
+    model = body.get("model", "gpt-5.4")
+    if not messages_text:
+        return web.json_response({"error": "messages_text required"}, status=400)
+    codex_model = _CODEX_MODEL_MAP.get(model, "gpt-5.4")
+    prompt = messages_text
+    if system_prompt:
+        prompt = "[SYSTEM]\n" + system_prompt + "\n\n[USER]\n" + messages_text
+    try:
+        async with _semaphore:
+            response = web.StreamResponse(status=200, reason="OK", headers={
+                "Content-Type": "application/x-ndjson",
+                "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+            await response.prepare(request)
+            cmd = [CODEX_BIN, "exec", "--json", "--ephemeral",
+                   "--skip-git-repo-check", "-C", "/root/aads/aads-server"]
+            if codex_model:
+                cmd.extend(["-m", codex_model])
+            cmd.append(prompt)
+            logger.info("Codex: model=%s prompt_len=%d", codex_model, len(prompt))
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE, env=dict(os.environ))
+            proc.stdin.close()
+            full_text = ""
+            input_tokens = output_tokens = 0
+            try:
+                while True:
+                    line = await asyncio.wait_for(proc.stdout.readline(), timeout=300)
+                    if not line:
+                        break
+                    line_str = line.decode("utf-8", errors="replace").strip()
+                    if not line_str:
+                        continue
+                    try:
+                        event = json.loads(line_str)
+                    except json.JSONDecodeError:
+                        continue
+                    evt_type = event.get("type", "")
+                    if evt_type == "item.completed":
+                        text = event.get("item", {}).get("text", "")
+                        if text:
+                            for i in range(0, len(text), 40):
+                                chunk = text[i:i + 40]
+                                await response.write(
+                                    json.dumps({"type": "assistant", "subtype": "text", "text": chunk}).encode() + b"\n")
+                                await asyncio.sleep(0.015)
+                            full_text += text
+                    elif evt_type == "turn.completed":
+                        usage = event.get("usage", {})
+                        input_tokens += usage.get("input_tokens", 0)
+                        output_tokens += usage.get("output_tokens", 0)
+            except asyncio.TimeoutError:
+                logger.error("Codex timeout (300s): model=%s", codex_model)
+                await response.write(json.dumps({"type": "error", "content": "Codex CLI timeout"}).encode() + b"\n")
+                proc.kill()
+            except Exception as e:
+                logger.error("Codex stream error: %s", e)
+                await response.write(json.dumps({"type": "error", "content": str(e)}).encode() + b"\n")
+            finally:
+                if proc.returncode is None:
+                    try:
+                        proc.terminate()
+                        await asyncio.wait_for(proc.wait(), timeout=5)
+                    except (asyncio.TimeoutError, ProcessLookupError):
+                        proc.kill()
+                if proc.stderr:
+                    stderr_bytes = await proc.stderr.read()
+                    if stderr_bytes:
+                        logger.debug("Codex stderr: %s", stderr_bytes.decode("utf-8", errors="replace")[:500])
+            await response.write(json.dumps({
+                "type": "result", "result": full_text,
+                "input_tokens": input_tokens, "output_tokens": output_tokens, "model": model,
+            }).encode() + b"\n")
+            await response.write_eof()
+            return response
+    except Exception as e:
+        logger.error("Codex handler error: %s", e)
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def handle_health(request):
     health = {"status": "ok", "port": PORT, "sessions": len(_session_map),
               "auth_mode": "direct_oauth" if _DIRECT_OAUTH_ENABLED else "litellm_proxy"}
@@ -394,6 +491,7 @@ def create_app():
     app = web.Application()
     app.on_startup.append(_on_startup)
     app.router.add_post("/stream", handle_stream)
+    app.router.add_post("/codex-stream", handle_codex_stream)
     app.router.add_get("/health", handle_health)
     app.router.add_post("/oauth/switch", handle_oauth_switch)
     app.router.add_get("/sessions", handle_sessions)

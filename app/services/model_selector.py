@@ -300,6 +300,10 @@ _GROQ_MODELS = {"groq-qwen3-32b", "groq-kimi-k2", "groq-llama4-scout", "groq-lla
 # OpenAI 모델 (LiteLLM 경유)
 _OPENAI_MODELS = {"gpt-4o", "gpt-4o-mini", "gpt-5", "gpt-5-mini", "o3", "o3-mini", "o3-pro"}
 
+# Codex CLI 모델 (ChatGPT Plus OAuth, relay /codex-stream 경유)
+_CODEX_MODELS = {"gpt-5", "gpt-5-mini"}
+_CODEX_MODEL_DISPLAY = {"gpt-5": "gpt-5.4", "gpt-5-mini": "gpt-5.4-mini"}
+
 # DeepSeek 모델 (LiteLLM 경유)
 _DEEPSEEK_MODELS = {"deepseek-chat", "deepseek-reasoner"}
 
@@ -636,6 +640,23 @@ async def call_stream(
             yield event
         if _had_error:
             yield {"type": "delta", "content": f"\n\n[{model} 오류 → Gemini Flash 전환]\n\n"}
+            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
+                if event.get("type") in ("done", "model_info"):
+                    event = {**event, "model": model}
+                yield event
+        return
+
+    # Codex CLI 모델 → Relay /codex-stream 경유 (ChatGPT Plus OAuth, 실패 시 Gemini Flash 폴백)
+    if model in _CODEX_MODELS:
+        _had_error = False
+        async for event in _stream_codex_relay(model, system_prompt, messages, session_id=session_id):
+            if event.get("type") == "error":
+                _had_error = True
+                logger.warning(f"codex_fallback: {model} failed, falling back to gemini-2.5-flash")
+                break
+            yield event
+        if _had_error:
+            yield {"type": "delta", "content": f"\n\n[{model} (Codex) 오류 → Gemini Flash 전환]\n\n"}
             async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
@@ -1306,6 +1327,66 @@ async def _stream_cli_relay(
     if session_id and _captured_cli_sid:
         _cli_session_map[session_id] = _captured_cli_sid
         logger.info(f"cli_relay_session_map: aads={session_id[:8]} -> cli={_captured_cli_sid[:8]}")
+
+
+async def _stream_codex_relay(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    session_id: Optional[str] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """Codex CLI Relay (/codex-stream) 경유 GPT 스트리밍. ChatGPT Plus OAuth."""
+    formatted = _format_messages_for_llm(messages, has_resume=False)
+    if isinstance(formatted, list):
+        formatted = "\n".join(b.get("text", "") for b in formatted if isinstance(b, dict))
+    req_body = {"model": model, "system_prompt": system_prompt, "messages_text": formatted}
+    display_model = _CODEX_MODEL_DISPLAY.get(model, model)
+    yield {"type": "model_info", "model": display_model}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
+            try:
+                hc = await client.get(f"{_CLAUDE_RELAY_URL}/health", timeout=5.0)
+                if hc.status_code != 200:
+                    yield {"type": "error", "content": f"Codex Relay not healthy: {hc.status_code}"}
+                    return
+            except Exception as hc_err:
+                yield {"type": "error", "content": f"Codex Relay unreachable: {hc_err}"}
+                return
+            async with client.stream(
+                "POST", f"{_CLAUDE_RELAY_URL}/codex-stream",
+                json=req_body, timeout=httpx.Timeout(300.0, connect=10.0),
+            ) as resp:
+                if resp.status_code != 200:
+                    body = await resp.aread()
+                    yield {"type": "error", "content": f"Codex Relay {resp.status_code}: {body.decode()[:200]}"}
+                    return
+                async for line in resp.aiter_lines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    evt_type = event.get("type", "")
+                    if evt_type == "assistant" and event.get("subtype") == "text":
+                        yield {"type": "delta", "content": event.get("text", "")}
+                    elif evt_type == "error":
+                        yield {"type": "error", "content": event.get("content", "Codex error")}
+                        return
+                    elif evt_type == "result":
+                        in_tok = event.get("input_tokens", 0)
+                        out_tok = event.get("output_tokens", 0)
+                        cost = _estimate_cost(model, in_tok, out_tok)
+                        yield {"type": "done", "model": display_model, "cost": str(cost),
+                               "input_tokens": in_tok, "output_tokens": out_tok}
+    except httpx.ConnectError as e:
+        yield {"type": "error", "content": f"Codex Relay connect failed: {e}"}
+    except httpx.ReadTimeout:
+        yield {"type": "error", "content": "Codex Relay timeout (300s)"}
+    except Exception as e:
+        logger.error(f"codex_relay_error: {e}")
+        yield {"type": "error", "content": str(e)}
 
 
 async def _stream_agent_sdk(
