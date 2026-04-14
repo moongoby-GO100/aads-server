@@ -561,6 +561,9 @@ run_job() {
 
     # H5: 모델+계정 폴백 (같은 모델 2계정 시도 후 다음 모델)
     # AADS-211: DB runner_model_config 기반 모델 선택 (CEO 대시보드 연동)
+    # FIX-4: 빈 모델명 가드
+    [[ "$job_model" == "litellm:" || -z "$job_model" ]] && { log "  EMPTY_MODEL job=$job_id — fallback to auto"; job_model="auto"; }
+
     local MODEL_CYCLE
     if [[ "$job_model" == "auto" ]]; then
         # worker_model 미지정 → DB에서 size별 모델 우선순위 조회
@@ -991,14 +994,23 @@ deploy_job() {
         # FIX-1: HOOK_VERIFIED 파일 생성 (pre-push hook 통과용)
         touch "$(git -C "$main_workdir" rev-parse --git-dir)/HOOK_VERIFIED" 2>/dev/null || true
 
-        # FIX-6: 커밋 메시지에 작업 제목 포함 (DB에서 조회)
-        local _job_title
-        _job_title=$(db_exec "SELECT LEFT(instruction, 80) FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null) || _job_title=""
-        _job_title="${_job_title//[$'\n\r']/}"  # 개행 제거
-        _job_title="${_job_title## }"            # 앞공백 제거
+        # FIX-6: 커밋 메시지 보존 — worktree 커밋 > DB 제목 > 기본값
         local _commit_msg="Pipeline-Runner: ${job_id}"
-        if [[ -n "$_job_title" ]]; then
-            _commit_msg="Pipeline-Runner: ${job_id} — ${_job_title:0:80}"
+        if [[ -d "$worktree_dir" ]]; then
+            local _wt_msg
+            _wt_msg=$(git -C "$worktree_dir" log -1 --format="%s" HEAD 2>/dev/null) || true
+            local _main_msg
+            _main_msg=$(git -C "$main_workdir" log -1 --format="%s" HEAD 2>/dev/null) || true
+            if [[ -n "$_wt_msg" && "$_wt_msg" != "$_main_msg" ]]; then
+                _commit_msg="$_wt_msg"
+            fi
+        fi
+        if [[ "$_commit_msg" == "Pipeline-Runner: ${job_id}" ]]; then
+            local _job_title
+            _job_title=$(db_exec "SELECT LEFT(instruction, 80) FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null) || _job_title=""
+            _job_title="${_job_title//[$'\n\r']/}"
+            _job_title="${_job_title## }"
+            [[ -n "$_job_title" ]] && _commit_msg="Pipeline-Runner: ${job_id} — ${_job_title:0:80}"
         fi
         local _commit_result="ok"
 
