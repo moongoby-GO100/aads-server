@@ -130,20 +130,31 @@ async def list_tools() -> list[types.Tool]:
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
-    """도구 호출 → execute_tool 실행 → 결과 반환."""
+    """도구 호출 → execute_tool 실행 → 결과 반환. 모든 예외를 잡아 MCP 연결 보호."""
     logger.info(f"call_tool: {name} args={json.dumps(arguments, ensure_ascii=False)[:200]}")
-    result = await _call_tool(name, arguments)
+    try:
+        result = await _call_tool(name, arguments)
+    except asyncio.CancelledError:
+        logger.warning(f"call_tool CANCELLED: {name}")
+        result = json.dumps({"error": "cancelled", "tool": name}, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"call_tool UNHANDLED: {name} error={e}")
+        result = json.dumps({"error": str(e), "tool": name}, ensure_ascii=False)
     return [types.TextContent(type="text", text=result)]
 
 
 async def main():
-    """stdio 모드로 MCP 서버 실행."""
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            server.create_initialization_options(),
-        )
+    """stdio 모드로 MCP 서버 실행. 예외 시에도 프로세스 유지."""
+    try:
+        async with stdio_server() as (read_stream, write_stream):
+            await server.run(
+                read_stream,
+                write_stream,
+                server.create_initialization_options(),
+            )
+    except Exception as e:
+        logger.error(f"MCP server fatal: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

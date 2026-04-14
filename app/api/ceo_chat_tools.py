@@ -1232,7 +1232,7 @@ _SSH_SENSITIVE_PATTERNS = re.compile(
 )
 _SSH_TIMEOUT = 120  # 초 — docker build 등 장시간 명령 대응 (기존 10초→120초)
 _SSH_WRITE_TIMEOUT = 15  # 쓰기 작업은 조금 더 여유
-_SSH_CMD_TIMEOUT = 600  # 원격 명령 실행 타임아웃 (10분, CEO가 중지 버튼으로 직접 제어)
+_SSH_CMD_TIMEOUT = 50  # 원격 명령 실행 타임아웃 (MCP bridge 55s 이내 응답 보장)
 _SSH_MAX_RESULT_BYTES = 1024 * 1024  # 1MB (제한 없음 — Claude Code 동일)
 _SSH_MAX_WRITE_BYTES = 1024 * 1024  # 1MB 쓰기 제한
 _SSH_MAX_FILES = 100
@@ -2092,7 +2092,21 @@ async def tool_run_remote_command(project: str, command: str) -> str:
             logger.info(f"run_remote_command OK | project=AADS cmd={command[:80]} exit={proc.returncode}")
             return "\n".join(result_parts)
         except asyncio.TimeoutError:
+            # 좀비 SSH 프로세스 방지 — 타임아웃 시 즉시 kill
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
             return f"[ERROR] AADS 호스트 명령 타임아웃 ({_SSH_CMD_TIMEOUT}초)"
+        except asyncio.CancelledError:
+            # MCP 브릿지 타임아웃으로 취소된 경우에도 프로세스 정리
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+            raise
         except Exception as e:
             return f"[ERROR] AADS 호스트 명령 실행 실패: {e}"
 
@@ -2135,7 +2149,19 @@ async def tool_run_remote_command(project: str, command: str) -> str:
         return "\n".join(result_parts)
 
     except asyncio.TimeoutError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
         return f"[ERROR] SSH 명령 타임아웃 ({_SSH_CMD_TIMEOUT}초): {server}"
+    except asyncio.CancelledError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
+        raise
     except Exception as e:
         return f"[ERROR] SSH 명령 실행 실패: {e}"
 
