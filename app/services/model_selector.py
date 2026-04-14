@@ -203,6 +203,10 @@ _COST_MAP = {
     "o3":                    (2.0,    8.0),
     "o3-mini":               (1.10,   4.40),
     "o3-pro":                (20.0,  80.0),
+    # Codex CLI (ChatGPT Plus OAuth)
+    "gpt-5.4":               (2.50,  15.0),
+    "gpt-5.4-mini":          (0.75,   4.50),
+    "gpt-5.3-codex":         (1.75,  14.0),
     "groq-llama-70b":        (0.0,   0.0),
     "groq-llama-8b":         (0.0,   0.0),
     "groq-gpt-oss-120b":     (0.0,   0.0),
@@ -301,8 +305,8 @@ _GROQ_MODELS = {"groq-qwen3-32b", "groq-kimi-k2", "groq-llama4-scout", "groq-lla
 _OPENAI_MODELS = {"gpt-4o", "gpt-4o-mini", "gpt-5", "gpt-5-mini", "o3", "o3-mini", "o3-pro"}
 
 # Codex CLI 모델 (ChatGPT Plus OAuth, relay /codex-stream 경유)
-_CODEX_MODELS = {"gpt-5", "gpt-5-mini"}
-_CODEX_MODEL_DISPLAY = {"gpt-5": "gpt-5.4", "gpt-5-mini": "gpt-5.4-mini"}
+_CODEX_MODELS = {"gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}
+_CODEX_MODEL_DISPLAY = {"gpt-5.4": "GPT-5.4 (Codex CLI)", "gpt-5.4-mini": "GPT-5.4 Mini (Codex CLI)", "gpt-5.3-codex": "GPT-5.3 Codex (Codex CLI)"}
 
 # DeepSeek 모델 (LiteLLM 경유)
 _DEEPSEEK_MODELS = {"deepseek-chat", "deepseek-reasoner"}
@@ -365,7 +369,7 @@ _ALIBABA_MODELS = {
 }
 
 # LiteLLM OpenAI 호환 모델 (Gemini + Groq + DeepSeek + OpenRouter + Alibaba)
-_LITELLM_OPENAI_MODELS = _GEMINI_MODELS | _GROQ_MODELS | _DEEPSEEK_MODELS | _OPENROUTER_MODELS | _ALIBABA_MODELS | _KIMI_MODELS | _MINIMAX_MODELS | _OPENAI_MODELS
+_LITELLM_OPENAI_MODELS = _GEMINI_MODELS | _GROQ_MODELS | _DEEPSEEK_MODELS | _OPENROUTER_MODELS | _ALIBABA_MODELS | _KIMI_MODELS | _MINIMAX_MODELS | _OPENAI_MODELS | _CODEX_MODELS
 
 
 def _estimate_cost(model: str, in_tokens: int, out_tokens: int) -> Decimal:
