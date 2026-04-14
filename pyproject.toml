@@ -9,7 +9,7 @@ description = "AADS — Autonomous AI Development System Server"
 requires-python = ">=3.11"
 dependencies = [
     # LangGraph (T-001)
-    "langgraph==1.0.10",
+    "langgraph>=1.1.6",
     "langgraph-checkpoint==4.0.1",
     "langgraph-checkpoint-postgres==3.0.4",
     # FastAPI
