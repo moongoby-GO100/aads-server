@@ -1,0 +1,370 @@
+model_list:
+- model_name: gemini-2.5-flash
+  litellm_params:
+    model: gemini/gemini-2.5-flash
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemini-2.5-flash-lite
+  litellm_params:
+    model: gemini/gemini-2.5-flash-lite
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemini-2.5-pro
+  litellm_params:
+    model: gemini/gemini-2.5-pro
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemini-2.5-flash-image
+  litellm_params:
+    model: gemini/gemini-2.5-flash-image
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemini-3-pro-preview
+  litellm_params:
+    model: gemini/gemini-3-pro-preview
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemini-3-flash-preview
+  litellm_params:
+    model: gemini/gemini-3-flash-preview
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemini-3.1-pro-preview
+  litellm_params:
+    model: gemini/gemini-3.1-pro-preview
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemini-3.1-flash-lite-preview
+  litellm_params:
+    model: gemini/gemini-3.1-flash-lite-preview
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemma-3-27b-it
+  litellm_params:
+    model: gemini/gemma-3-27b-it
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemini-flash-lite
+  litellm_params:
+    model: gemini/gemini-2.5-flash-lite
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemini-flash
+  litellm_params:
+    model: gemini/gemini-2.5-flash
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: gemini-pro
+  litellm_params:
+    model: gemini/gemini-2.5-pro
+    api_key: os.environ/GEMINI_API_KEY
+- model_name: deepseek-chat
+  litellm_params:
+    model: deepseek/deepseek-chat
+    api_key: os.environ/DEEPSEEK_API_KEY
+    api_base: https://api.deepseek.com
+- model_name: deepseek-reasoner
+  litellm_params:
+    model: deepseek/deepseek-reasoner
+    api_key: os.environ/DEEPSEEK_API_KEY
+    api_base: https://api.deepseek.com
+- model_name: groq-llama-70b
+  litellm_params:
+    model: groq/llama-3.3-70b-versatile
+    api_key: os.environ/GROQ_API_KEY
+- model_name: groq-llama-8b
+  litellm_params:
+    model: groq/llama-3.1-8b-instant
+    api_key: os.environ/GROQ_API_KEY
+# P3: groq-llama4-maverick 제거 (Groq에서 모델 제공 중단)
+- model_name: groq-llama4-scout
+  litellm_params:
+    model: groq/meta-llama/llama-4-scout-17b-16e-instruct
+    api_key: os.environ/GROQ_API_KEY
+- model_name: groq-qwen3-32b
+  litellm_params:
+    model: groq/qwen/qwen3-32b
+    api_key: os.environ/GROQ_API_KEY
+- model_name: groq-kimi-k2
+  litellm_params:
+    model: groq/moonshotai/kimi-k2-instruct
+    api_key: os.environ/GROQ_API_KEY
+- model_name: groq-gpt-oss-120b
+  litellm_params:
+    model: groq/openai/gpt-oss-120b
+    api_key: os.environ/GROQ_API_KEY
+- model_name: groq-compound
+  litellm_params:
+    model: groq/groq/compound
+    api_key: os.environ/GROQ_API_KEY
+# P1: Claude Sonnet/Opus 제거 (OAuth 미지원) — Haiku만 유지
+- model_name: claude-haiku
+  litellm_params:
+    model: anthropic/claude-haiku-4-5
+    api_key: os.environ/ANTHROPIC_API_KEY_1
+    order: 1
+- model_name: claude-haiku
+  litellm_params:
+    model: anthropic/claude-haiku-4-5
+    api_key: os.environ/ANTHROPIC_API_KEY_2
+    order: 2
+- model_name: claude-haiku-4-5
+  litellm_params:
+    model: anthropic/claude-haiku-4-5
+    api_key: os.environ/ANTHROPIC_API_KEY_1
+    order: 1
+- model_name: claude-haiku-4-5
+  litellm_params:
+    model: anthropic/claude-haiku-4-5
+    api_key: os.environ/ANTHROPIC_API_KEY_2
+    order: 2
+- model_name: claude-haiku-4-5-20251001
+  litellm_params:
+    model: anthropic/claude-haiku-4-5-20251001
+    api_key: os.environ/ANTHROPIC_API_KEY_1
+    order: 1
+- model_name: claude-haiku-4-5-20251001
+  litellm_params:
+    model: anthropic/claude-haiku-4-5-20251001
+    api_key: os.environ/ANTHROPIC_API_KEY_2
+    order: 2
+- model_name: qwen-turbo
+  litellm_params:
+    model: openai/qwen-turbo
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen-turbo-latest
+  litellm_params:
+    model: openai/qwen-turbo-latest
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen-plus
+  litellm_params:
+    model: openai/qwen-plus
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen-plus-latest
+  litellm_params:
+    model: openai/qwen-plus-latest
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen-max
+  litellm_params:
+    model: openai/qwen-max
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen-max-latest
+  litellm_params:
+    model: openai/qwen-max-latest
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen-flash
+  litellm_params:
+    model: openai/qwen-flash
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen-coder-plus
+  litellm_params:
+    model: openai/qwen-coder-plus
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-coder-plus
+  litellm_params:
+    model: openai/qwen3-coder-plus
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-coder-flash
+  litellm_params:
+    model: openai/qwen3-coder-flash
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-coder-480b
+  litellm_params:
+    model: openai/qwen3-coder-480b-a35b-instruct
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-8b
+  litellm_params:
+    model: openai/qwen3-8b
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-14b
+  litellm_params:
+    model: openai/qwen3-14b
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-32b
+  litellm_params:
+    model: openai/qwen3-32b
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-30b-a3b
+  litellm_params:
+    model: openai/qwen3-30b-a3b
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-max
+  litellm_params:
+    model: openai/qwen3-max
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+# P0: qwen3-235b — thinking 비활성화 + instruct 버전 (non-streaming 오류 방지)
+- model_name: qwen3-235b
+  litellm_params:
+    model: openai/qwen3-235b-a22b-instruct-2507
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+    extra_body:
+      enable_thinking: false
+- model_name: qwen3-235b-instruct
+  litellm_params:
+    model: openai/qwen3-235b-a22b-instruct-2507
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-235b-thinking
+  litellm_params:
+    model: openai/qwen3-235b-a22b-thinking-2507
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-next-80b
+  litellm_params:
+    model: openai/qwen3-next-80b-a3b-instruct
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3.5-plus
+  litellm_params:
+    model: openai/qwen3.5-plus
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3.5-flash
+  litellm_params:
+    model: openai/qwen3.5-flash
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen2.5-72b-instruct
+  litellm_params:
+    model: openai/qwen2.5-72b-instruct
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwq-plus
+  litellm_params:
+    model: openai/qwq-plus
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen-vl-max
+  litellm_params:
+    model: openai/qwen-vl-max
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen-vl-plus
+  litellm_params:
+    model: openai/qwen-vl-plus
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-vl-plus
+  litellm_params:
+    model: openai/qwen3-vl-plus
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen3-vl-235b
+  litellm_params:
+    model: openai/qwen3-vl-235b-a22b-instruct
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: qwen-omni-turbo
+  litellm_params:
+    model: openai/qwen-omni-turbo
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+- model_name: dashscope-deepseek-v3.2
+  litellm_params:
+    model: openai/deepseek-v3.2
+    api_key: os.environ/ALIBABA_API_KEY
+    api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+# P2: OpenRouter 전체 제거 (크레딧 소진)
+# P0: kimi-k2.5 moonshot 프로바이더로 통일 (openai/ 경유 시 인증 에러)
+- model_name: kimi-k2.5
+  litellm_params:
+    model: moonshot/kimi-k2.5
+    api_key: os.environ/KIMI_API_KEY
+- model_name: kimi-k2
+  litellm_params:
+    model: moonshot/kimi-k2-0711-preview
+    api_key: os.environ/KIMI_API_KEY
+- model_name: kimi-latest
+  litellm_params:
+    model: moonshot/moonshot-v1-auto
+    api_key: os.environ/KIMI_API_KEY
+- model_name: kimi-128k
+  litellm_params:
+    model: moonshot/moonshot-v1-128k
+    api_key: os.environ/KIMI_API_KEY
+- model_name: kimi-8k
+  litellm_params:
+    model: moonshot/moonshot-v1-8k
+    api_key: os.environ/KIMI_API_KEY
+- model_name: minimax-m2.7
+  litellm_params:
+    model: openai/MiniMax-M2.7
+    api_key: os.environ/MINIMAX_API_KEY
+    api_base: https://api.minimaxi.chat/v1
+- model_name: minimax-m2.5
+  litellm_params:
+    model: openai/MiniMax-M2.5
+    api_key: os.environ/MINIMAX_API_KEY
+    api_base: https://api.minimaxi.chat/v1
+# OpenAI 모델 (OPENAI_API_KEY 필요)
+- model_name: gpt-4o
+  litellm_params:
+    model: openai/gpt-4o
+    api_key: os.environ/OPENAI_API_KEY
+- model_name: gpt-4o-mini
+  litellm_params:
+    model: openai/gpt-4o-mini
+    api_key: os.environ/OPENAI_API_KEY
+- model_name: gpt-5
+  litellm_params:
+    model: openai/gpt-5
+    api_key: os.environ/OPENAI_API_KEY
+- model_name: gpt-5-mini
+  litellm_params:
+    model: openai/gpt-5-mini
+    api_key: os.environ/OPENAI_API_KEY
+- model_name: o3
+  litellm_params:
+    model: openai/o3
+    api_key: os.environ/OPENAI_API_KEY
+- model_name: o3-mini
+  litellm_params:
+    model: openai/o3-mini
+    api_key: os.environ/OPENAI_API_KEY
+- model_name: o3-pro
+  litellm_params:
+    model: openai/o3-pro
+    api_key: os.environ/OPENAI_API_KEY
+router_settings:
+  enable_pre_call_checks: false
+  num_retries: 3
+  # AADS-234: 크로스 프로바이더 폴백 — Claude Sonnet/Opus 제거, Haiku + 외부 모델만
+  model_group_fallbacks:
+  - claude-haiku-4-5:
+    - qwen3-coder-flash
+    - gemini-2.5-flash-lite
+    - dashscope-deepseek-v3.2
+  - claude-haiku:
+    - qwen3-coder-flash
+    - gemini-2.5-flash-lite
+    - dashscope-deepseek-v3.2
+  - qwen-max:
+    - qwen-plus
+    - qwen-turbo
+  - qwen-plus:
+    - qwen-max
+    - qwen-turbo
+  - qwen3-coder-plus:
+    - qwen3-coder-flash
+    - gemini-2.5-flash
+    - deepseek-chat
+  - gemini-3.1-pro-preview:
+    - gemini-2.5-pro
+    - qwen3-coder-plus
+    - deepseek-chat
+  - deepseek-chat:
+    - qwen3-coder-plus
+    - gemini-2.5-flash
+litellm_settings:
+  drop_params: true
+  set_verbose: true
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  store_model_in_db: false
+  disable_spend_logs: true
