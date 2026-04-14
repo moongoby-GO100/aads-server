@@ -23,15 +23,22 @@ _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 _JOB_ID_RE = re.compile(r'^runner-[0-9a-zA-Z_-]+$')
 
 
-def _get_model_for_size(size: str) -> str:
-    """작업 규모 → 모델 자동 매핑 (AADS-234: XS/S 무료 쿼터 활용)"""
-    return {
-        "XS": "qwen3-coder-plus",
-        "S":  "qwen3-coder-plus",
-        "M":  "claude-sonnet-4-6",
-        "L":  "claude-sonnet-4-6",
-        "XL": "claude-opus-4-6",
-    }.get((size or "M").upper(), "claude-sonnet-4-6")
+async def _get_model_for_size(conn, size: str) -> str:
+    """작업 규모 → DB(runner_model_config)에서 1순위 모델 조회."""
+    import json as _json_model
+    _size = (size or "M").upper()
+    row = await conn.fetchrow(
+        "SELECT models FROM runner_model_config WHERE size = $1", _size
+    )
+    if row and row["models"]:
+        raw = row["models"]
+        models = _json_model.loads(raw) if isinstance(raw, str) else raw
+        if models:
+            return models[0]
+    # DB 조회 실패 시 안전망
+    return {"XS": "claude-haiku-4-5-20251001", "S": "claude-haiku-4-5-20251001",
+            "M": "claude-sonnet-4-6", "L": "claude-opus-4-6",
+            "XL": "claude-opus-4-6"}.get(_size, "claude-sonnet-4-6")
 
 
 
@@ -266,7 +273,7 @@ async def submit_job(req: JobSubmitRequest):
                     if size == "M":
                         parsed = _parse_size_from_instruction(req.instruction)
                         size = parsed or _estimate_size(req.instruction)
-                    model = _get_model_for_size(size)
+                    model = await _get_model_for_size(conn, size)
                 # AADS-211: depends_on 유효성 검사
                 if req.depends_on:
                     dep_row = await conn.fetchrow(
@@ -635,7 +642,7 @@ async def submit_batch(req: BatchSubmitRequest):
                         if size == "M":
                             parsed = _parse_size_from_instruction(item.instruction)
                             size = parsed or _estimate_size(item.instruction)
-                        model = _get_model_for_size(size)
+                        model = await _get_model_for_size(conn, size)
 
                     instruction_hash = hashlib.sha256(
                         f"{req.project}:{item.instruction}".encode()
