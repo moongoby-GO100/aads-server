@@ -3097,64 +3097,110 @@ async def send_message_stream(
         output_tokens = 0
         tools_called: list = []  # 구조화된 tool_events 리스트 (프론트 UI 복원용)
 
-        async for event in call_stream(
-            intent_result=intent_result,
-            system_prompt=system_prompt,
-            messages=messages,
-            tools=tools_for_api,
-            model_override=model_override,
-            session_id=session_id,
-        ):
-            etype = event.get("type", "")
-            if etype == "heartbeat":
-                yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
-            elif etype == "model_info":
-                model_used = event.get("model", model_used)
-                yield f"data: {json.dumps({'type': 'model_info', 'model': model_used})}\n\n"
-            elif etype == "interrupt_applied":
-                yield f"event: interrupt_applied\ndata: {json.dumps({'type': 'interrupt_applied', 'content': event.get('content', '')})}\n\n"
-            elif etype == "delta":
-                full_response += event.get("content", "")
-                yield f"data: {json.dumps({'type': 'delta', 'content': event['content']})}\n\n"
-            elif etype == "thinking":
-                thinking_summary += event.get("thinking", "")
-                yield f"data: {json.dumps({'type': 'thinking', 'thinking': event['thinking']})}\n\n"
-            elif etype == "tool_use":
-                tools_called.append({"type": "tool_use", "tool_name": event["tool_name"], "tool_use_id": event.get("tool_use_id", ""), "tool_input": event.get("tool_input", {})})
-                yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event.get('tool_use_id', ''), 'tool_input': event.get('tool_input', {})})}\n\n"
-            elif etype == "tool_result":
-                tools_called.append({"type": "tool_result", "tool_name": event["tool_name"], "content": str(event.get("content", ""))[:500]})
-                yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': event['tool_name'], 'content': str(event.get('content', ''))[:300]})}\n\n"
-            elif etype == "yellow_limit":
-                yield f"data: {json.dumps({'type': 'yellow_limit', 'content': event.get('content', ''), 'tool_name': event.get('tool_name', ''), 'consecutive_count': event.get('consecutive_count', 0)})}\n\n"
-            elif etype == "done":
-                model_used = event.get("model", intent_result.model)
-                cost_usd = Decimal(str(event.get("cost", "0")))
-                input_tokens = event.get("input_tokens", 0) or 0
-                output_tokens = event.get("output_tokens", 0) or 0
-                thinking_summary = event.get("thinking_summary") or thinking_summary
-                # tools_called는 스트리밍 중 직접 누적한 구조화 이벤트 유지 (done 이벤트로 덮어쓰지 않음)
-            elif etype == "error":
-                _err_content = event.get('content', '오류')
-                yield f"data: {json.dumps({'type': 'error', 'content': _err_content, 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
-                # 에러 시에도 partial response가 있으면 저장 (recovered 중복 방지)
-                if full_response.strip():
-                    try:
-                        await _save_and_update_session(
-                            sid, full_response,
-                            session_id_str=session_id,
-                            raw_messages=raw_messages,
-                            model_used=model_used or "error_partial",
-                            intent=intent,
-                            cost=cost_usd,
-                            tokens_in=input_tokens,
-                            tokens_out=output_tokens,
-                            tools_called=tools_called,
-                        )
-                        logger.info(f"error_partial_saved session={session_id[:8]} len={len(full_response)}")
-                    except Exception as _eps:
-                        logger.warning(f"error_partial_save_failed session={session_id[:8]}: {_eps}")
-                return
+        # ── LLM 스트림 호출 + 즉시 재시도 (AADS-003: 최대 3회, 에러 유형별 백오프) ──
+        for _stream_attempt in range(3):
+            _stream_error = False
+            try:
+                async for event in call_stream(
+                    intent_result=intent_result,
+                    system_prompt=system_prompt,
+                    messages=messages,
+                    tools=tools_for_api,
+                    model_override=model_override,
+                    session_id=session_id,
+                ):
+                    etype = event.get("type", "")
+                    if etype == "heartbeat":
+                        yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                    elif etype == "model_info":
+                        model_used = event.get("model", model_used)
+                        yield f"data: {json.dumps({'type': 'model_info', 'model': model_used})}\n\n"
+                    elif etype == "interrupt_applied":
+                        yield f"event: interrupt_applied\ndata: {json.dumps({'type': 'interrupt_applied', 'content': event.get('content', '')})}\n\n"
+                    elif etype == "delta":
+                        full_response += event.get("content", "")
+                        yield f"data: {json.dumps({'type': 'delta', 'content': event['content']})}\n\n"
+                    elif etype == "thinking":
+                        thinking_summary += event.get("thinking", "")
+                        yield f"data: {json.dumps({'type': 'thinking', 'thinking': event['thinking']})}\n\n"
+                    elif etype == "tool_use":
+                        tools_called.append({"type": "tool_use", "tool_name": event["tool_name"], "tool_use_id": event.get("tool_use_id", ""), "tool_input": event.get("tool_input", {})})
+                        yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event.get('tool_use_id', ''), 'tool_input': event.get('tool_input', {})})}\n\n"
+                    elif etype == "tool_result":
+                        tools_called.append({"type": "tool_result", "tool_name": event["tool_name"], "content": str(event.get("content", ""))[:500]})
+                        yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': event['tool_name'], 'content': str(event.get('content', ''))[:300]})}\n\n"
+                    elif etype == "yellow_limit":
+                        yield f"data: {json.dumps({'type': 'yellow_limit', 'content': event.get('content', ''), 'tool_name': event.get('tool_name', ''), 'consecutive_count': event.get('consecutive_count', 0)})}\n\n"
+                    elif etype == "done":
+                        model_used = event.get("model", intent_result.model)
+                        cost_usd = Decimal(str(event.get("cost", "0")))
+                        input_tokens = event.get("input_tokens", 0) or 0
+                        output_tokens = event.get("output_tokens", 0) or 0
+                        thinking_summary = event.get("thinking_summary") or thinking_summary
+                        # tools_called는 스트리밍 중 직접 누적한 구조화 이벤트 유지 (done 이벤트로 덮어쓰지 않음)
+                    elif etype == "error":
+                        _err_content = event.get('content', '오류')
+                        _err_lower = _err_content.lower()
+                        _is_auth_err = any(k in _err_lower for k in ("401", "403", "unauthorized", "forbidden"))
+
+                        if _stream_attempt < 2 and not _is_auth_err:
+                            # ── 재시도 가능: 에러 유형별 백오프 ──
+                            if any(k in _err_lower for k in ("529", "overloaded", "overload")):
+                                _backoff = 2 * (2 ** _stream_attempt)  # 2s, 4s
+                            elif any(k in _err_lower for k in ("429", "rate", "limit")):
+                                _backoff = 5 * (2 ** _stream_attempt)  # 5s, 10s
+                            else:  # ConnectionError, timeout, 기타
+                                _backoff = 0.5 * (2 ** _stream_attempt)  # 0.5s, 1s
+                            logger.warning(f"stream_retry: session={session_id[:8]} attempt={_stream_attempt+1}/3 error={_err_content[:80]} partial_len={len(full_response)} backoff={_backoff}s")
+                            if full_response:
+                                yield f"data: {json.dumps({'type': 'stream_reset', 'reason': 'llm_retry'})}\n\n"
+                                full_response = ""
+                                thinking_summary = ""
+                                tools_called = []
+                            yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                            await _heartbeat_asyncio.sleep(_backoff)
+                            _stream_error = True
+                            break  # async for 탈출 → 다음 시도
+                        # ── 마지막 시도 또는 인증 에러: 기존 로직 ──
+                        if _stream_attempt > 0:
+                            logger.error(f"stream_retry_exhausted: session={session_id[:8]} attempts=3 error={_err_content[:80]}")
+                        yield f"data: {json.dumps({'type': 'error', 'content': _err_content, 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
+                        # 에러 시에도 partial response가 있으면 저장 (recovered 중복 방지)
+                        if full_response.strip():
+                            try:
+                                await _save_and_update_session(
+                                    sid, full_response,
+                                    session_id_str=session_id,
+                                    raw_messages=raw_messages,
+                                    model_used=model_used or "error_partial",
+                                    intent=intent,
+                                    cost=cost_usd,
+                                    tokens_in=input_tokens,
+                                    tokens_out=output_tokens,
+                                    tools_called=tools_called,
+                                )
+                                logger.info(f"error_partial_saved session={session_id[:8]} len={len(full_response)}")
+                            except Exception as _eps:
+                                logger.warning(f"error_partial_save_failed session={session_id[:8]}: {_eps}")
+                        return
+                else:
+                    # async for 정상 완료 (break 없이) → 성공
+                    break  # retry 루프 탈출
+            except Exception as _stream_exc:
+                # call_stream 자체 예외 (ConnectionError, TimeoutError 등)
+                if _stream_attempt < 2:
+                    _backoff = 0.5 * (2 ** _stream_attempt)
+                    logger.warning(f"stream_exception_retry: session={session_id[:8]} attempt={_stream_attempt+1}/3 exc={type(_stream_exc).__name__}: {str(_stream_exc)[:80]} backoff={_backoff}s")
+                    if full_response:
+                        yield f"data: {json.dumps({'type': 'stream_reset', 'reason': 'llm_retry'})}\n\n"
+                        full_response = ""
+                        thinking_summary = ""
+                        tools_called = []
+                    yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                    await _heartbeat_asyncio.sleep(_backoff)
+                    _stream_error = True
+                    continue  # 다음 시도
+                raise  # 마지막 시도 실패 → 상위 try/except로 전파
 
         # 9.5 Layer ④: Output Validator — 빈 약속 응답 감지 및 재시도 (AADS-188C Phase 3)
         from app.services.output_validator import validate_response
