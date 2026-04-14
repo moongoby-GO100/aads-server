@@ -40,7 +40,7 @@ async def _get_cached_or_build(key: str, builder_coro) -> str:
 
 # ─── Layer 1: system_prompt_v2.py 에서 로드 ──────────────────────────────────
 
-from app.core.prompts.system_prompt_v2 import build_layer1 as _build_layer1_raw, WS_LAYER1 as _WS_LAYER1
+from app.core.prompts.system_prompt_v2 import build_layer1 as _build_layer1_raw, build_layer4 as _build_layer4, WS_LAYER1 as _WS_LAYER1
 
 
 def build_layer1(ws_key: str, base_system_prompt: str = "", intent: str = "", **_kwargs) -> str:
@@ -381,20 +381,16 @@ async def build_messages_context(
     # Layer 1 (동기 — system_prompt_v2 기반 XML 섹션, Prompt Compression 적용)
     layer1 = build_layer1(ws_key, base_system_prompt, intent=_effective_intent)
 
-    # B: Layer 4 실시간 수치 주입 — "(로딩중)" 플레이스홀더를 실측값으로 교체
-    if db_conn and "(로딩중)" in layer1:
+    # Phase 3: LAYER4 독립 빌드 — Layer1에서 분리하여 Prompt Cache 적중률 극대화
+    if db_conn:
         try:
             from app.core.memory_recall import get_evolution_stats
             _evo = await get_evolution_stats(db_conn)
-            _ph = "기억: (로딩중)건 | 관찰: (로딩중)건 | 품질: (로딩중)%((로딩중)건) | 에러패턴: (로딩중)건"
-            _rt = (
-                f"기억: {_evo['fact_count']}건 | 관찰: {_evo['obs_count']}건"
-                f" | 품질: {_evo['avg_quality']}({_evo['quality_count']}건)"
-                f" | 에러패턴: {_evo['error_pattern_count']}건"
-            )
-            layer1 = layer1.replace(_ph, _rt)
+            _layer4 = _build_layer4(_evo)
         except Exception:
-            pass
+            _layer4 = _build_layer4()
+    else:
+        _layer4 = _build_layer4()
 
     # Layer 2 + 메모리 주입 + Auto-RAG(F1/F3) + Workspace Preload(F6) 병렬 실행
     _project = _normalize_workspace(workspace_name)
@@ -420,7 +416,7 @@ async def build_messages_context(
 
     # KST 현재시각 최상단 주입 (매 턴 동적)
     _kst_now = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST (%A)")
-    system_prompt = f"<currentTime>\n{_kst_now}\n</currentTime>\n\n" + layer1 + "\n\n" + layer2 + memory_layer + preload_layer + auto_rag_layer + artifact_layer
+    system_prompt = f"<currentTime>\n{_kst_now}\n</currentTime>\n\n" + layer1 + "\n\n" + layer2 + memory_layer + preload_layer + auto_rag_layer + artifact_layer + "\n\n" + _layer4
 
     # 토큰 절감 측정 로깅
     _sp_chars = len(system_prompt)
@@ -503,6 +499,17 @@ async def build(
     tool_guide = _build_tool_guide_layer()  # AADS-186D: 도구 카테고리 안내
     layer1 = layer1_base + tool_guide
 
+    # Phase 3: LAYER4 독립 빌드 — Layer1에서 분리
+    if db_conn:
+        try:
+            from app.core.memory_recall import get_evolution_stats
+            _evo = await get_evolution_stats(db_conn)
+            _layer4 = _build_layer4(_evo)
+        except Exception:
+            _layer4 = _build_layer4()
+    else:
+        _layer4 = _build_layer4()
+
     # Layer 2 (동적) + CKP + 메모리 + Workspace Preload(F6) + Auto-RAG(F1/F3) — 병렬 실행
     # Layer 2와 메모리는 TTL 캐시 적용 (60초, TTFT 단축)
     _project = _normalize_workspace(workspace_name)
@@ -542,7 +549,7 @@ async def build(
     # KST 현재시각 최상단 주입 (매 턴 동적)
     _kst_now = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST (%A)")
     _kst_header = f"<currentTime>\n{_kst_now}\n</currentTime>\n\n"
-    system_text = _kst_header + layer1 + "\n\n---\n\n" + layer2_full
+    system_text = _kst_header + layer1 + "\n\n---\n\n" + layer2_full + "\n\n" + _layer4
     # system_blocks 최상단에도 KST 시각 주입 (비캐시 블록)
     system_blocks = [{"type": "text", "text": _kst_header.strip()}] + system_blocks
 

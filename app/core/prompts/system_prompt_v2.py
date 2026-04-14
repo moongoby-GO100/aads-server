@@ -404,12 +404,62 @@ _NO_TOOLS_INTENTS = {
     "image_analyze", "video_analyze", "cto_strategy", "deep_research",
 }
 
+# Phase 2: 인텐트 그룹별 skip 섹션 (Adaptive Prompt)
+_INTENT_SECTIONS = {
+    "search": {
+        "intents": {"search", "news_search", "blog_search", "shop_search", "local_search",
+                     "book_search", "image_search", "encyclopedia_search", "knowledge_search"},
+        "skip": {"CEO_GUIDE", "CAPABILITIES", "LAYER4"},
+    },
+    "code": {
+        "intents": {"code_task", "code_modify", "code_exec", "code_explorer", "analyze_changes",
+                     "architect", "cto_code_analysis", "cto_tech_debt"},
+        "skip": {"CEO_GUIDE"},
+    },
+    "ceo_command": {
+        "intents": {"directive", "directive_gen", "execute", "pipeline_runner", "task_query",
+                     "status_check", "all_service_status", "health_check", "service_inspection"},
+        "skip": set(),
+    },
+    "thinking": {
+        "intents": {"strategy", "planning", "decision", "design", "design_fix",
+                     "cto_strategy", "deep_research", "complex_analysis"},
+        "skip": {"TOOLS", "CEO_GUIDE", "LAYER4"},
+    },
+    "query": {
+        "intents": {"system_status", "dashboard", "task_history", "memory_recall", "cost_report",
+                     "file_read", "server_file", "url_read", "url_analyze"},
+        "skip": {"CEO_GUIDE", "CAPABILITIES", "LAYER4"},
+    },
+}
+
+
+def _get_sections_for_intent(intent: str) -> set:
+    """인텐트의 skip 섹션 집합 반환. 미등록 인텐트는 빈 set (전체 포함)."""
+    for group in _INTENT_SECTIONS.values():
+        if intent in group["intents"]:
+            return group["skip"]
+    return set()
+
+
+def build_layer4(db_stats: dict | None = None) -> str:
+    """Phase 3: LAYER4 진화 상태를 독립 빌드. context_builder에서 별도 주입."""
+    if db_stats:
+        return LAYER4_SELF_AWARENESS_TEMPLATE.format(**db_stats)
+    return LAYER4_SELF_AWARENESS_TEMPLATE.format(
+        fact_count="(로딩중)",
+        obs_count="(로딩중)",
+        avg_quality="(로딩중)",
+        quality_count="(로딩중)",
+        error_pattern_count="(로딩중)",
+    )
+
 
 def build_layer1(workspace_key: str = "CEO", base_system_prompt: str = "", intent: str = "") -> str:
     """
     Layer 1 정적 컨텍스트 조합.
-    순서: 행동 원칙 → 역할(워크스페이스별) → CEO 화법 → 능력 → 도구 → 규칙 → 응답 가이드
-    intent가 단순 인텐트이면 경량 프롬프트 반환 (Prompt Compression).
+    Phase 2: 인텐트별 skip 섹션으로 동적 최적화 (Adaptive Prompt).
+    Phase 3: LAYER4는 build_layer4()로 분리 — context_builder에서 독립 주입.
     """
     # Prompt Compression: 단순 인텐트 → 경량 프롬프트
     if intent and intent in _LITE_PROMPT_INTENTS:
@@ -418,32 +468,26 @@ def build_layer1(workspace_key: str = "CEO", base_system_prompt: str = "", inten
             lite += f"\n\n## 워크스페이스 추가 지시\n{base_system_prompt}"
         return lite
 
+    # Phase 2: 인텐트별 skip 섹션 결정
+    skip = _get_sections_for_intent(intent)
+
     # 워크스페이스별 역할 + capabilities 선택 (미등록은 기본값)
     role = WS_ROLES.get(workspace_key, LAYER1_ROLE_DEFAULT)
     capabilities = WS_CAPABILITIES.get(workspace_key, _CAPABILITIES_FULL)
 
-    # LAYER4 진화 프로세스 자기인식 (기본값으로 주입, 실시간 수치는 context_builder에서 갱신)
-    layer4 = LAYER4_SELF_AWARENESS_TEMPLATE.format(
-        fact_count="(로딩중)",
-        obs_count="(로딩중)",
-        avg_quality="(로딩중)",
-        quality_count="(로딩중)",
-        error_pattern_count="(로딩중)",
-    )
-
     parts = [
-        LAYER1_BEHAVIOR,       # 행동 원칙 최상단
-        role,                  # 워크스페이스별 역할
-        LAYER1_CEO_GUIDE,      # CEO 화법 해석
-        capabilities,          # 워크스페이스별 프로젝트 정보
+        LAYER1_BEHAVIOR,       # 행동 원칙 (항상 포함)
+        role,                  # 역할 (항상 포함)
     ]
-    if not (intent and intent in _NO_TOOLS_INTENTS):
+    if "CEO_GUIDE" not in skip:
+        parts.append(LAYER1_CEO_GUIDE)
+    if "CAPABILITIES" not in skip:
+        parts.append(capabilities)
+    if "TOOLS" not in skip and not (intent and intent in _NO_TOOLS_INTENTS):
         parts.append(LAYER1_TOOLS)
-    parts += [
-        LAYER1_RULES,
-        LAYER1_RESPONSE_GUIDELINES,
-        layer4,                # AI 자기인식 (진화 프로세스)
-    ]
+    parts.append(LAYER1_RULES)
+    parts.append(LAYER1_RESPONSE_GUIDELINES)
+    # Phase 3: LAYER4는 여기서 주입하지 않음 — build_layer4()로 분리됨
     if base_system_prompt:
         parts.append(f"\n## 워크스페이스 추가 지시\n{base_system_prompt}")
     return "\n\n".join(parts)

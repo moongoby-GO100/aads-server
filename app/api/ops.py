@@ -1582,3 +1582,13 @@ async def get_tool_stats(hours: int = Query(24, ge=1, le=168)):
         "total_errors": total_errors,
         "stats": stats,
     }
+
+
+@router.get("/ops/prompt-profile")
+async def get_prompt_profile():
+    """시스템 프롬프트 섹션별 토큰 프로파일 조회."""
+    from app.core.prompts.token_profiler import profile_sections, profile_all_workspaces
+    return {
+        "sections": profile_sections(),
+        "workspaces": profile_all_workspaces(),
+    }
