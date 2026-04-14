@@ -239,7 +239,6 @@ async def _run_command(command: str, target_server: str) -> dict:
     SAFE_PREFIXES = [
         "docker restart", "docker compose",
         "systemctl reload", "systemctl restart",
-        "supervisorctl restart",
         "curl",
         "sudo systemctl restart",
         "sudo systemctl reload",

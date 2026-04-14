@@ -34,8 +34,6 @@ SAFE_COMMANDS = {
     "systemctl reload nginx",
     "docker stop -t 30 aads-server",
     "docker system prune -f",
-    "/root/aads/aads-server/deploy.sh code",
-    "/root/aads/aads-server/deploy.sh build",
     "/root/aads/aads-server/deploy.sh bluegreen",
 }
 

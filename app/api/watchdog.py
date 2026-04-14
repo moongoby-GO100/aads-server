@@ -294,7 +294,6 @@ async def _attempt_recovery(error_id: int, command: str) -> bool:
         "docker compose",
         "systemctl reload nginx",
         "systemctl restart",
-        "supervisorctl restart",
         "curl",
     ]
 

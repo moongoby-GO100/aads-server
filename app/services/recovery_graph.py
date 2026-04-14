@@ -258,7 +258,7 @@ async def _run_action_command(action: str, issue: dict) -> tuple[bool, str]:
     SAFE_PREFIXES = [
         "docker restart", "docker compose", "docker exec",
         "systemctl restart", "systemctl reload",
-        "supervisorctl restart", "kill -15", "kill -HUP",
+        "kill -15", "kill -HUP",
     ]
     if not any(cmd.startswith(p) for p in SAFE_PREFIXES):
         logger.warning("recovery_action_blocked", cmd=cmd)
