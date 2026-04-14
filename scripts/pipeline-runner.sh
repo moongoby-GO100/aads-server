@@ -66,6 +66,35 @@ mkdir -p "$LOG_DIR" "$ARTIFACT_DIR"
 # ── 유틸리티 ──────────────────────────────────────────────────────────
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_DIR/runner.log"; }
 
+# WRAP 파일 자동 생성 (P0/P1 완료 시)
+_generate_wrap() {
+    local job_id="$1"
+    local project="$2"
+    local priority="${3:-P2}"
+    local title="${4:-작업완료}"
+
+    if [[ "$priority" != "P0" && "$priority" != "P1" ]]; then
+        return 0
+    fi
+
+    local wrap_dir="/root/aads/aads-server/docs/wrap"
+    local timestamp
+    timestamp=$(date +%Y%m%d_%H%M%S)
+    local wrap_file="${wrap_dir}/${project}-WRAP-${timestamp}_${job_id}.md"
+
+    mkdir -p "$wrap_dir"
+    cat > "$wrap_file" << EOF
+# ${project} WRAP — ${title}
+
+- Job ID: ${job_id}
+- Priority: ${priority}
+- Completed: $(date '+%Y-%m-%d %H:%M:%S KST')
+- Status: done
+EOF
+
+    log "WRAP 파일 생성: $wrap_file"
+}
+
 # Redis 잠금 해제 헬퍼 (graceful — 실패해도 진행)
 _release_work_lock() {
     local project="$1" job_id="$2"
@@ -1180,6 +1209,7 @@ deploy_job() {
     db_update "UPDATE pipeline_jobs SET status='done', phase='done',
                review_feedback=COALESCE(review_feedback,'') || E'\n[v2.1][배포완료] health=${health_ok} by=${RUNNER_HOSTNAME}',
                updated_at=NOW() WHERE job_id='${job_id}';"
+    _generate_wrap "$job_id" "$project" "${priority:-P2}" "${title:-$job_id}"
     post_to_chat "$session_id" "✅ [Pipeline Runner] 배포 완료 (health=${health_ok})"
     log "  DEPLOYED job=$job_id health=$health_ok"
 
