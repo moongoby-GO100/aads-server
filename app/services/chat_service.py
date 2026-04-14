@@ -850,14 +850,15 @@ async def _resume_single_stream(
 
     except Exception as e:
         logger.error(f"resume_single_stream_error: session={session_id[:8]} error={e}")
-        # 실패 시 중단 메시지로 교체
+        # 버그2 수정: 실패 시 interrupted 대신 recovered 유지 → _periodic_recovered_scanner가 재시도
         try:
             async with get_pool().acquire() as c:
                 final = partial_content + "\n\n⚠️ _서버 재시작 후 이어서 생성에 실패했습니다. 다시 질문해주세요._" if partial_content else "⚠️ _서버 재시작 후 응답 생성에 실패했습니다. 다시 질문해주세요._"
                 await c.execute(
-                    "UPDATE chat_messages SET content = $1, intent = NULL, model_used = 'interrupted' WHERE id = $2",
+                    "UPDATE chat_messages SET content = $1, intent = NULL, model_used = 'recovered' WHERE id = $2",
                     final, placeholder_id,
                 )
+                logger.warning(f"resume_failed_kept_recovered: session={session_id[:8]} bubble={placeholder_id} kept as recovered for retry")
         except Exception:
             pass
 

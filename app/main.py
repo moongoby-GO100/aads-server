@@ -761,6 +761,42 @@ async def lifespan(app: FastAPI):
                             _ri_asyncio.create_task(_rss(sid, _ph_id, _partial, _last_user, _ws_name))
                             logger.info(f"resume_incomplete: session={sid[:8]} recovered-resume via _resume_single_stream")
                         else:
+                            # 버그1 수정: 해당 세션에 이미 recovered 버블이 있으면 recovered 경로로 전환
+                            _has_recovered = await conn.fetchval(
+                                "SELECT id FROM chat_messages WHERE session_id=$1::uuid AND role='assistant' AND model_used='recovered' ORDER BY created_at DESC LIMIT 1",
+                                sid,
+                            )
+                            if _has_recovered:
+                                logger.info(f"resume_incomplete: session={sid[:8]} has recovered bubble, switching to recovered path")
+                                _ph_row2 = await conn.fetchrow(
+                                    "SELECT id, content FROM chat_messages "
+                                    "WHERE session_id = $1::uuid AND role = 'assistant' AND model_used = 'recovered' "
+                                    "ORDER BY created_at DESC LIMIT 1",
+                                    sid,
+                                )
+                                if _ph_row2:
+                                    _last_user2 = await conn.fetchval(
+                                        "SELECT content FROM chat_messages "
+                                        "WHERE session_id = $1::uuid AND role = 'user' "
+                                        "ORDER BY created_at DESC LIMIT 1",
+                                        sid,
+                                    ) or ""
+                                    _ri_asyncio.create_task(_rss(sid, _ph_row2["id"], _ph_row2["content"] or "", _last_user2, _ws_name))
+                                    logger.info(f"resume_incomplete: session={sid[:8]} switched to recovered-resume via _resume_single_stream")
+                                continue
+
+                            # 버그3 수정: 세션별 idempotency — 최근 10분 내 streaming_placeholder가 있으면 skip
+                            _recent_resume = await conn.fetchval(
+                                """SELECT 1 FROM chat_messages
+                                   WHERE session_id=$1::uuid AND role='assistant'
+                                   AND intent = 'streaming_placeholder'
+                                   AND created_at > NOW() - INTERVAL '10 minutes' LIMIT 1""",
+                                sid,
+                            )
+                            if _recent_resume:
+                                logger.info(f"resume_incomplete: session={sid[:8]} already resumed recently (placeholder exists), skip")
+                                continue
+
                             # non-recovered 케이스: placeholder INSERT 후 이어쓰기 (중복 user 메시지 생성 금지)
                             _ph_id = await conn.fetchval(
                                 """INSERT INTO chat_messages (session_id, role, content, intent, model_used, tools_called)
