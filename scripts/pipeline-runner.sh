@@ -430,7 +430,7 @@ claim_queued_job() {
                 ORDER BY COALESCE(p.priority, 0) DESC, p.created_at ASC LIMIT 1
                 FOR UPDATE SKIP LOCKED
              )
-             RETURNING job_id, project, replace(replace(instruction, E'\\n', ' '), '|', ' '), chat_session_id, max_cycles, COALESCE(worker_model, CASE WHEN COALESCE(size,'M') IN ('XL','L') THEN 'litellm:minimax-m2.7' ELSE 'litellm:kimi-k2.5' END), COALESCE(size,'M');"
+             RETURNING job_id, project, replace(replace(instruction, E'\\n', ' '), '|', ' '), chat_session_id, max_cycles, COALESCE(worker_model, 'litellm:minimax-m2.7'), COALESCE(size,'M');"
 }
 
 claim_approved_job() {
@@ -459,7 +459,7 @@ claim_rejected_job() {
 
 # ── 작업 실행 ─────────────────────────────────────────────────────────
 run_job() {
-    local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5" job_model="${6:-litellm:kimi-k2.5}" job_size="${7:-M}"
+    local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5" job_model="${6:-litellm:minimax-m2.7}" job_size="${7:-M}"
     local output_file="$ARTIFACT_DIR/${job_id}.out" err_file="$ARTIFACT_DIR/${job_id}.err"
 
     # 전역 변수 설정 — cleanup()에서 러너 종료 시 현재 작업을 에러로 마킹하기 위함
@@ -1511,7 +1511,7 @@ main() {
             IFS=$'\x1e' read -r job_id project instruction session_id max_cycles job_model job_size <<< "$pending"
             if [[ -n "$job_id" && -n "$project" ]]; then
                 # 방안A: 백그라운드 병렬 실행 — 다른 프로젝트 작업이 블로킹하지 않음
-                run_job "$job_id" "$project" "$instruction" "$session_id" "${max_cycles:-3}" "${job_model:-litellm:kimi-k2.5}" "${job_size:-M}" &
+                run_job "$job_id" "$project" "$instruction" "$session_id" "${max_cycles:-3}" "${job_model:-litellm:minimax-m2.7}" "${job_size:-M}" &
                 _bg_jobs[$!]="${job_id}|${session_id}"
                 log "  BG_START: job=$job_id pid=$! (parallel)"
             fi

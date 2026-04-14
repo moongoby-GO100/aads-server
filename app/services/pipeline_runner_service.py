@@ -63,9 +63,9 @@ _CLAUDE_MODEL_BY_SIZE = {
 }
 
 _LITELLM_FALLBACK_MODELS = {
-    "XS": "kimi-k2.5",
-    "S":  "kimi-k2.5",
-    "M":  "kimi-k2.5",
+    "XS": "minimax-m2.7",
+    "S":  "minimax-m2.7",
+    "M":  "minimax-m2.7",
     "L":  "minimax-m2.7",
     "XL": "minimax-m2.7",
 }
@@ -1041,7 +1041,7 @@ class PipelineCJob:
     async def _run_litellm_fallback(self, instruction: str, override_model: str = "") -> dict:
         """LiteLLM Runner 실행. AADS: 로컬 | GO100/KIS/SF/NTV2: SSH 원격 실행.
         override_model: CEO가 직접 지정한 모델명 (비어있으면 size 기반 자동 선택)."""
-        model = override_model or _LITELLM_FALLBACK_MODELS.get(self.size, "qwen3-coder-plus")
+        model = override_model or _LITELLM_FALLBACK_MODELS.get(self.size, "minimax-m2.7")
         is_remote = self.server not in ("localhost", "host.docker.internal")
 
         self._log("litellm_fallback", f"LiteLLM Runner 시작 (project={self.project}, model={model}, remote={is_remote})")
