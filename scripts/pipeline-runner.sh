@@ -711,16 +711,45 @@ ${safe_instruction}"
 
         wait $claude_pid || exit_code=$?
 
+        # AADS-241: Codex 연결 재시도 (5초 x 12회 = 60초, 에러/리밋 즉시 폴백)
+        if [[ $exit_code -ne 0 && "$current_model" == codex:* ]]; then
+            local _codex_retry=0
+            while [[ $exit_code -ne 0 && $_codex_retry -lt 12 ]]; do
+                # 에러/리밋 메시지 → 즉시 다음 모델로 폴백 (재시도 안함)
+                if grep -qiE "rate.?limit|quota|exceeded|billing|limit.reached|You've hit your limit|too many|capacity" "$err_file" 2>/dev/null; then
+                    local _limit_msg
+                    _limit_msg=$(head -3 "$err_file" | tr '\n' ' ' | head -c 100)
+                    log "  CODEX_LIMIT_SKIP job=$job_id reason='${_limit_msg}' → immediate fallback"
+                    db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[Codex] ${current_model} 즉시폴백: rate-limit/quota 초과' WHERE job_id='${job_id}';"
+                    break
+                fi
+                if grep -qiE "FAILED:|ERROR:|unauthorized|forbidden|invalid.?key|auth" "$err_file" 2>/dev/null; then
+                    local _err_msg
+                    _err_msg=$(head -3 "$err_file" | tr '\n' ' ' | head -c 100)
+                    log "  CODEX_ERROR_SKIP job=$job_id reason='${_err_msg}' → immediate fallback"
+                    db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[Codex] ${current_model} 즉시폴백: ${_err_msg:0:60}' WHERE job_id='${job_id}';"
+                    break
+                fi
+                # 연결 끊김/타임아웃 → 재시도
+                _codex_retry=$((_codex_retry + 1))
+                log "  CODEX_CONN_RETRY job=$job_id retry=$_codex_retry/12 wait=5s"
+                sleep 5
+                exit_code=0
+                timeout "$MAX_RUNTIME" codex "${codex_args[@]}" "$safe_instruction" \
+                    < /dev/null > "$output_file" 2> "$err_file" &
+                claude_pid=$!
+                db_update "UPDATE pipeline_jobs SET runner_pid=${claude_pid}, updated_at=NOW() WHERE job_id='${job_id}';"
+                wait $claude_pid || exit_code=$?
+            done
+            if [[ $_codex_retry -ge 12 && $exit_code -ne 0 ]]; then
+                log "  CODEX_CONN_EXHAUSTED job=$job_id retries=12(60s) → next model"
+                db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[Codex] ${current_model} 연결실패 12회(60초) → 다음 모델 폴백' WHERE job_id='${job_id}';"
+            fi
+        fi
+
         # LiteLLM instruction temp file 정리
         [[ -f "/root/aads/aads-server/scripts/.litellm_instr_${job_id}.txt" ]] && rm -f "/root/aads/aads-server/scripts/.litellm_instr_${job_id}.txt"
 
-        # 방어: Codex 출력 실패 감지
-        if [[ $exit_code -eq 0 && "$current_model" == codex:* ]]; then
-            if grep -qE "^(FAILED|ERROR):" "$output_file" 2>/dev/null; then
-                exit_code=1
-                log "  CODEX_CONTENT_FAIL job=$job_id: output contains failure marker"
-            fi
-        fi
         # 방어: Codex 출력 실패 감지
         if [[ $exit_code -eq 0 && "$current_model" == codex:* ]]; then
             if grep -qE "^(FAILED|ERROR):" "$output_file" 2>/dev/null; then
