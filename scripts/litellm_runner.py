@@ -62,6 +62,8 @@ _SYSTEM_PROMPT = """당신은 AADS 자율 코딩 에이전트입니다.
 3. git 도구로 변경사항을 확인하되, 커밋은 하지 마세요 (Runner가 처리).
 4. 작업이 완료되면 "작업 완료: [요약]" 형태로 마무리하세요.
 5. --no-verify 절대 금지, .env 파일 절대 수정 금지.
+6. MCP filesystem 경로는 반드시 상대경로 사용. 예: read_file("app/api/health.py") (O), read_file("/app/api/health.py") (X).
+7. 도구 호출 에러 시 경로를 수정하여 재시도하세요.
 """
 
 
@@ -108,9 +110,12 @@ async def run_agent(model: str, instruction: str, workdir: str) -> str:
             tools=tools,
             prompt=_SYSTEM_PROMPT,
         )
+        # Tool 에러를 LLM에 전달하여 재시도 가능하게 함
+        agent.nodes['tools'].handle_tool_errors = True
 
         # 작업 컨텍스트 구성
-        full_instruction = f"""작업 디렉토리: {workdir}
+        full_instruction = f"""MCP filesystem 루트 = 프로젝트 루트.
+파일 경로는 상대경로로 지정하세요 (예: app/api/health.py, scripts/deploy.sh).
 
 지시사항:
 {instruction}
