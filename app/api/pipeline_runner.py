@@ -259,6 +259,7 @@ async def submit_job(req: JobSubmitRequest):
                 # AADS-211: worker_model 직접 지정 시 size 무시
                 if req.worker_model:
                     model = req.worker_model
+                    size = req.size  # worker_model 지정 시에도 size 초기화
                 else:
                     # AADS-206B: size 명시 시 우선, 기본값이면 instruction 파���
                     size = req.size
