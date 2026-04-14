@@ -65,10 +65,7 @@ model_list:
   litellm_params:
     model: groq/llama-3.1-8b-instant
     api_key: os.environ/GROQ_API_KEY
-- model_name: groq-llama4-maverick
-  litellm_params:
-    model: groq/meta-llama/llama-4-maverick-17b-128e-instruct
-    api_key: os.environ/GROQ_API_KEY
+# P3: groq-llama4-maverick 제거 (Groq에서 모델 제공 중단)
 - model_name: groq-llama4-scout
   litellm_params:
     model: groq/meta-llama/llama-4-scout-17b-16e-instruct
@@ -89,26 +86,7 @@ model_list:
   litellm_params:
     model: groq/groq/compound
     api_key: os.environ/GROQ_API_KEY
-- model_name: claude-sonnet
-  litellm_params:
-    model: anthropic/claude-sonnet-4-6
-    api_key: os.environ/ANTHROPIC_API_KEY_1
-    order: 1
-- model_name: claude-sonnet
-  litellm_params:
-    model: anthropic/claude-sonnet-4-6
-    api_key: os.environ/ANTHROPIC_API_KEY_2
-    order: 2
-- model_name: claude-opus
-  litellm_params:
-    model: anthropic/claude-opus-4-6
-    api_key: os.environ/ANTHROPIC_API_KEY_1
-    order: 1
-- model_name: claude-opus
-  litellm_params:
-    model: anthropic/claude-opus-4-6
-    api_key: os.environ/ANTHROPIC_API_KEY_2
-    order: 2
+# P1: Claude Sonnet/Opus 제거 (OAuth 미지원) — Haiku만 유지
 - model_name: claude-haiku
   litellm_params:
     model: anthropic/claude-haiku-4-5
@@ -117,26 +95,6 @@ model_list:
 - model_name: claude-haiku
   litellm_params:
     model: anthropic/claude-haiku-4-5
-    api_key: os.environ/ANTHROPIC_API_KEY_2
-    order: 2
-- model_name: claude-opus-4-6
-  litellm_params:
-    model: anthropic/claude-opus-4-6
-    api_key: os.environ/ANTHROPIC_API_KEY_1
-    order: 1
-- model_name: claude-opus-4-6
-  litellm_params:
-    model: anthropic/claude-opus-4-6
-    api_key: os.environ/ANTHROPIC_API_KEY_2
-    order: 2
-- model_name: claude-sonnet-4-6
-  litellm_params:
-    model: anthropic/claude-sonnet-4-6
-    api_key: os.environ/ANTHROPIC_API_KEY_1
-    order: 1
-- model_name: claude-sonnet-4-6
-  litellm_params:
-    model: anthropic/claude-sonnet-4-6
     api_key: os.environ/ANTHROPIC_API_KEY_2
     order: 2
 - model_name: claude-haiku-4-5
@@ -149,16 +107,6 @@ model_list:
     model: anthropic/claude-haiku-4-5
     api_key: os.environ/ANTHROPIC_API_KEY_2
     order: 2
-- model_name: claude-sonnet-4-5-20250514
-  litellm_params:
-    model: anthropic/claude-sonnet-4-5-20250514
-    api_key: os.environ/ANTHROPIC_API_KEY_1
-    order: 1
-- model_name: claude-sonnet-4-5-20250514
-  litellm_params:
-    model: anthropic/claude-sonnet-4-5-20250514
-    api_key: os.environ/ANTHROPIC_API_KEY_2
-    order: 2
 - model_name: claude-haiku-4-5-20251001
   litellm_params:
     model: anthropic/claude-haiku-4-5-20251001
@@ -167,26 +115,6 @@ model_list:
 - model_name: claude-haiku-4-5-20251001
   litellm_params:
     model: anthropic/claude-haiku-4-5-20251001
-    api_key: os.environ/ANTHROPIC_API_KEY_2
-    order: 2
-- model_name: claude-opus-4-6-20250610
-  litellm_params:
-    model: anthropic/claude-opus-4-6-20250610
-    api_key: os.environ/ANTHROPIC_API_KEY_1
-    order: 1
-- model_name: claude-opus-4-6-20250610
-  litellm_params:
-    model: anthropic/claude-opus-4-6-20250610
-    api_key: os.environ/ANTHROPIC_API_KEY_2
-    order: 2
-- model_name: claude-sonnet-4-6-20250610
-  litellm_params:
-    model: anthropic/claude-sonnet-4-6
-    api_key: os.environ/ANTHROPIC_API_KEY_1
-    order: 1
-- model_name: claude-sonnet-4-6-20250610
-  litellm_params:
-    model: anthropic/claude-sonnet-4-6
     api_key: os.environ/ANTHROPIC_API_KEY_2
     order: 2
 - model_name: qwen-turbo
@@ -269,11 +197,14 @@ model_list:
     model: openai/qwen3-max
     api_key: os.environ/ALIBABA_API_KEY
     api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+# P0: qwen3-235b — thinking 비활성화 + instruct 버전 (non-streaming 오류 방지)
 - model_name: qwen3-235b
   litellm_params:
-    model: openai/qwen3-235b-a22b
+    model: openai/qwen3-235b-a22b-instruct-2507
     api_key: os.environ/ALIBABA_API_KEY
     api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+    extra_body:
+      enable_thinking: false
 - model_name: qwen3-235b-instruct
   litellm_params:
     model: openai/qwen3-235b-a22b-instruct-2507
@@ -339,31 +270,12 @@ model_list:
     model: openai/deepseek-v3.2
     api_key: os.environ/ALIBABA_API_KEY
     api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
-- model_name: openrouter-grok-4-fast
-  litellm_params:
-    model: openrouter/x-ai/grok-4
-    api_key: os.environ/OPENROUTER_API_KEY
-- model_name: openrouter-deepseek-v3
-  litellm_params:
-    model: openrouter/deepseek/deepseek-chat-v3-0324
-    api_key: os.environ/OPENROUTER_API_KEY
-- model_name: openrouter-mistral-small
-  litellm_params:
-    model: openrouter/mistralai/mistral-small-3.2-24b-instruct
-    api_key: os.environ/OPENROUTER_API_KEY
-- model_name: openrouter-nemotron-free
-  litellm_params:
-    model: openrouter/nvidia/llama-3.1-nemotron-70b-instruct
-    api_key: os.environ/OPENROUTER_API_KEY
-- model_name: openrouter-minimax-m2
-  litellm_params:
-    model: openrouter/minimax/minimax-m1
-    api_key: os.environ/OPENROUTER_API_KEY
+# P2: OpenRouter 전체 제거 (크레딧 소진)
+# P0: kimi-k2.5 moonshot 프로바이더로 통일 (openai/ 경유 시 인증 에러)
 - model_name: kimi-k2.5
   litellm_params:
-    model: openai/kimi-k2.5
+    model: moonshot/kimi-k2.5
     api_key: os.environ/KIMI_API_KEY
-    api_base: https://api.moonshot.cn/v1
 - model_name: kimi-k2
   litellm_params:
     model: moonshot/kimi-k2-0711-preview
@@ -422,28 +334,8 @@ model_list:
 router_settings:
   enable_pre_call_checks: false
   num_retries: 3
-  # AADS-234: 크로스 프로바이더 폴백 — 품질우선 → 비용우선 순서
+  # AADS-234: 크로스 프로바이더 폴백 — Claude Sonnet/Opus 제거, Haiku + 외부 모델만
   model_group_fallbacks:
-  - claude-opus-4-6:
-    - claude-sonnet-4-6
-    - gemini-3.1-pro-preview
-    - qwen3-coder-plus
-    - deepseek-chat
-  - claude-opus:
-    - claude-sonnet
-    - gemini-3.1-pro-preview
-    - qwen3-coder-plus
-    - deepseek-chat
-  - claude-sonnet-4-6:
-    - gemini-2.5-flash
-    - qwen3-coder-plus
-    - deepseek-chat
-    - claude-opus-4-6
-  - claude-sonnet:
-    - gemini-2.5-flash
-    - qwen3-coder-plus
-    - deepseek-chat
-    - claude-opus
   - claude-haiku-4-5:
     - qwen3-coder-flash
     - gemini-2.5-flash-lite
