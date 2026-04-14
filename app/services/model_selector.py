@@ -401,6 +401,11 @@ async def call_stream(
     )
     model = _effective_override or intent_result.model
 
+    # FIX-4: 빈 모델명 가드 — model이 None/빈문자열이면 기본값 적용
+    if not model or not str(model).strip():
+        logger.warning("empty_model_fallback: model is empty/None → 'claude-sonnet'")
+        model = "claude-sonnet"
+
     # model_override가 구체적 모델명(claude-sonnet-4-6 등)이면 LiteLLM alias로 변환
     _OVERRIDE_TO_ALIAS = {
         "claude-sonnet-4-6": "claude-sonnet", "claude-sonnet-4-5": "claude-sonnet",

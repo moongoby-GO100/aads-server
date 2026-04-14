@@ -991,8 +991,15 @@ deploy_job() {
         # FIX-1: HOOK_VERIFIED 파일 생성 (pre-push hook 통과용)
         touch "$(git -C "$main_workdir" rev-parse --git-dir)/HOOK_VERIFIED" 2>/dev/null || true
 
-        # FIX-1: git commit 결과 감지 및 에러 파일 생성
+        # FIX-6: 커밋 메시지에 작업 제목 포함 (DB에서 조회)
+        local _job_title
+        _job_title=$(db_exec "SELECT LEFT(instruction, 80) FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null) || _job_title=""
+        _job_title="${_job_title//[$'\n\r']/}"  # 개행 제거
+        _job_title="${_job_title## }"            # 앞공백 제거
         local _commit_msg="Pipeline-Runner: ${job_id}"
+        if [[ -n "$_job_title" ]]; then
+            _commit_msg="Pipeline-Runner: ${job_id} — ${_job_title:0:80}"
+        fi
         local _commit_result="ok"
 
         if ! git commit -m "$_commit_msg" 2>/dev/null; then
@@ -1528,6 +1535,20 @@ _recover_stuck_jobs() {
 # H3: 오래된 임시파일 정리
 _cleanup_old_artifacts() {
     find "$ARTIFACT_DIR" -type f -mmin +$((ARTIFACT_MAX_AGE_HOURS * 60)) -delete 2>/dev/null || true
+
+    # FIX-5: 스테일 워크트리 정리 — 24시간 이상 된 워크트리 자동 삭제
+    local _wt_dir
+    for _wt_dir in /tmp/aads-wt-runner-*; do
+        [[ ! -d "$_wt_dir" ]] && continue
+        local _wt_age_min
+        _wt_age_min=$(find "$_wt_dir" -maxdepth 0 -mmin +$((ARTIFACT_MAX_AGE_HOURS * 60)) 2>/dev/null | head -1)
+        if [[ -n "$_wt_age_min" ]]; then
+            local _wt_name
+            _wt_name=$(basename "$_wt_dir")
+            log "  STALE_WORKTREE_CLEANUP: $_wt_name (${ARTIFACT_MAX_AGE_HOURS}h+ old)"
+            git worktree remove "$_wt_dir" --force 2>/dev/null || rm -rf "$_wt_dir" 2>/dev/null || true
+        fi
+    done
 }
 
 # BUG-5: 소요시간 이상치 알림 — running 작업 60분/120분 초과 시 텔레그램 알림 (중복 방지 플래그)
