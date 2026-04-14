@@ -1768,7 +1768,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 },
                 "worker_model": {
                     "type": "string",
-                    "description": "실행 엔진 선택. 비어있으면 Claude Code 우선(실패 시 LiteLLM 폴백).\n'litellm' → LiteLLM Runner 직접 실행 (기본모델: qwen3-coder-plus)\n'litellm:모델명' → 특정 모델 직접 지정. 예: litellm:gemini-2.5-flash, litellm:qwen3-coder-plus, litellm:deepseek-chat\nCEO가 'litellm으로', 'gemini로', 'qwen으로' 등 명시 시 사용.",
+                    "description": "실행 엔진 선택. 비어있으면 Claude Code 우선(실패 시 LiteLLM 폴백).\n'codex:모델명' → Codex CLI 실행 (ChatGPT Plus OAuth). 예: codex:o3, codex:gpt-5\n'litellm' → LiteLLM Runner 직접 실행 (기본모델: qwen3-coder-plus)\n'litellm:모델명' → 특정 모델 직접 지정. 예: litellm:gemini-2.5-flash, litellm:qwen3-coder-plus, litellm:deepseek-chat\nCEO가 'codex로', 'gpt로', 'litellm으로', 'gemini로' 등 명시 시 사용.",
                     "default": "",
                 },
             },

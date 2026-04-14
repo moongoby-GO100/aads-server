@@ -560,7 +560,10 @@ run_job() {
         L|M)     claude_primary="claude-sonnet-4-6";         claude_secondary="claude-opus-4-6" ;;
         S|XS|*)  claude_primary="claude-haiku-4-5-20251001"; claude_secondary="claude-sonnet-4-6" ;;
     esac
-    if [[ "$job_model" == litellm:* ]]; then
+    if [[ "$job_model" == codex:* ]]; then
+        # Codex CLI 우선 → Claude 폴백 (서버68 전용, ChatGPT Plus OAuth)
+        MODEL_CYCLE=("$job_model" "$claude_primary" "$claude_primary" "$claude_secondary" "$claude_secondary")
+    elif [[ "$job_model" == litellm:* ]]; then
         # LiteLLM 우선 → 크기별 Claude 폴백
         MODEL_CYCLE=("$job_model" "$claude_primary" "$claude_primary" "$claude_secondary" "$claude_secondary")
     elif [[ "$job_model" == "claude-"* ]]; then
@@ -629,8 +632,15 @@ run_job() {
 ${safe_instruction}"
 
         log "  MODEL_FALLBACK job=$job_id model=$current_model cycle=$cycle_num attempt=$((attempt+1))/$total_attempts"
+        # Codex CLI Runner 분기 (codex: 접두사, ChatGPT Plus OAuth)
+        if [[ "$current_model" == codex:* ]]; then
+            local codex_model_name="${current_model#codex:}"
+            log "  CODEX_RUNNER job=$job_id model=$codex_model_name"
+            timeout "$MAX_RUNTIME" codex exec --full-auto -m "$codex_model_name" -C "$workdir" "$safe_instruction" \
+                > "$output_file" 2> "$err_file" &
+            local claude_pid=$!
         # LiteLLM Runner 분기 (litellm: 접두사)
-        if [[ "$current_model" == litellm:* ]]; then
+        elif [[ "$current_model" == litellm:* ]]; then
             local llm_model_name="${current_model#litellm:}"
             log "  LITELLM_RUNNER job=$job_id model=$llm_model_name"
             # instruction을 temp file로 전달 (docker exec arg에 멀티라인/대용량 문자열 깨짐 방지)
@@ -656,6 +666,13 @@ ${safe_instruction}"
         # LiteLLM instruction temp file 정리
         [[ -f "/root/aads/aads-server/scripts/.litellm_instr_${job_id}.txt" ]] && rm -f "/root/aads/aads-server/scripts/.litellm_instr_${job_id}.txt"
 
+        # 방어: Codex 출력 실패 감지
+        if [[ $exit_code -eq 0 && "$current_model" == codex:* ]]; then
+            if grep -qE "^(FAILED|ERROR):" "$output_file" 2>/dev/null; then
+                exit_code=1
+                log "  CODEX_CONTENT_FAIL job=$job_id: output contains failure marker"
+            fi
+        fi
         # 방어: LiteLLM 출력에 FAILED:/ERROR: 포함 시 강제 실패 처리
         if [[ $exit_code -eq 0 && "$current_model" == litellm:* ]]; then
             if grep -qE "^(FAILED|ERROR):" "$output_file" 2>/dev/null; then
