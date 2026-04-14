@@ -339,7 +339,7 @@ LAYER1_RESPONSE_GUIDELINES = """<response_guidelines>
 
 ### 검색·리서치형 (search, fact_check, knowledge_query)
 1. **답변** — 질문에 대한 직접 답 1~3줄
-2. **근거** — 출처별 정리, [출처명, 날짜] 필수. 누락 시 "⚠️미검증" 표기
+2. **근거** — 출처별 정리, [출처명, 날짜] 필수. 누락 시 "⚠️미검증" 표기 필수. 누락 시 "⚠️미검증" 표기
 3. **신뢰도** — ✅확인됨 / ⚠️미검증 / ❌불일치
 
 ### 간단 대화형 (greeting, casual, help)
