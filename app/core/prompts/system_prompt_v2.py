@@ -357,6 +357,12 @@ _LITE_PROMPT_INTENTS = {
     "greeting", "casual",
 }
 
+# 도구 불필요 인텐트 — LAYER1_TOOLS 주입 제외 (Tool Search A안)
+_NO_TOOLS_INTENTS = {
+    "strategy", "planning", "decision", "design", "design_fix",
+    "image_analyze", "video_analyze", "cto_strategy", "deep_research",
+}
+
 
 def build_layer1(workspace_key: str = "CEO", base_system_prompt: str = "", intent: str = "") -> str:
     """
@@ -389,7 +395,10 @@ def build_layer1(workspace_key: str = "CEO", base_system_prompt: str = "", inten
         role,                  # 워크스페이스별 역할
         LAYER1_CEO_GUIDE,      # CEO 화법 해석
         capabilities,          # 워크스페이스별 프로젝트 정보
-        LAYER1_TOOLS,
+    ]
+    if not (intent and intent in _NO_TOOLS_INTENTS):
+        parts.append(LAYER1_TOOLS)
+    parts += [
         LAYER1_RULES,
         LAYER1_RESPONSE_GUIDELINES,
         layer4,                # AI 자기인식 (진화 프로세스)
