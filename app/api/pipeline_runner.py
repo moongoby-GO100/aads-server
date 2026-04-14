@@ -630,6 +630,59 @@ async def submit_batch(req: BatchSubmitRequest):
                         f"{req.project}:{item.instruction}".encode()
                     ).hexdigest()[:16]
 
+                    # AADS-239: 멱등성 체크 (submit_job과 동일 로직)
+                    # Step 1: 동일 hash + 활성 상태 → 기존 작업 재사용
+                    existing = await conn.fetchrow(
+                        """
+                        SELECT job_id, status, phase FROM pipeline_jobs
+                        WHERE instruction_hash = $1
+                          AND status IN ('queued','running','claimed','awaiting_approval','approved')
+                        ORDER BY created_at DESC LIMIT 1
+                        """,
+                        instruction_hash,
+                    )
+                    if existing:
+                        key_to_job_id[item.key] = existing["job_id"]
+                        results.append({
+                            "key": item.key,
+                            "job_id": existing["job_id"],
+                            "model": model,
+                            "depends_on": depends_on,
+                            "skipped": True,
+                            "reason": f"활성 작업 재사용: {existing['phase']}",
+                        })
+                        continue
+
+                    # Step 2: 동일 hash + error + 2시간 내 → queued 리셋 후 재시도
+                    failed = await conn.fetchrow(
+                        """
+                        SELECT job_id FROM pipeline_jobs
+                        WHERE instruction_hash = $1
+                          AND status = 'error'
+                          AND created_at > NOW() - INTERVAL '2 hours'
+                        ORDER BY created_at DESC LIMIT 1
+                        FOR UPDATE
+                        """,
+                        instruction_hash,
+                    )
+                    if failed:
+                        await conn.execute(
+                            "UPDATE pipeline_jobs SET status = 'queued', phase = 'queued', "
+                            "error_detail = NULL, runner_pid = NULL, updated_at = NOW() "
+                            "WHERE job_id = $1",
+                            failed["job_id"],
+                        )
+                        key_to_job_id[item.key] = failed["job_id"]
+                        await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", failed["job_id"])
+                        results.append({
+                            "key": item.key,
+                            "job_id": failed["job_id"],
+                            "model": model,
+                            "depends_on": depends_on,
+                            "retrying": True,
+                        })
+                        continue
+
                     await conn.execute(
                         """
                         INSERT INTO pipeline_jobs
