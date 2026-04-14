@@ -418,8 +418,19 @@ async def notify_completion(job_id: str):
     if not _JOB_ID_RE.match(job_id) and not job_id.startswith("pc-"):
         raise HTTPException(status_code=400, detail="유효하지 않은 job_id")
 
+    # FIX-3: 터미널 상태 체크 — 이미 완료된 작업은 중복 처리 방지
     from app.core.db_pool import get_pool
     pool = get_pool()
+
+    async with pool.acquire() as conn:
+        terminal_row = await conn.fetchrow(
+            "SELECT status FROM pipeline_jobs WHERE job_id = $1", job_id
+        )
+    if not terminal_row or terminal_row["status"] in ("done", "rejected_done", "error", "cancelled"):
+        return {
+            "status": "skipped",
+            "reason": terminal_row["status"] if terminal_row else "not_found",
+        }
 
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
