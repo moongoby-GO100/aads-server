@@ -756,3 +756,60 @@ async def lock_status(project: str = Query(..., max_length=10)):
         "locked": locked,
         "queued_count": queued_row["cnt"] if queued_row else 0,
     }
+
+
+# ── Runner Model Config (AADS-241) ──────────────────────────────────
+
+class _RunnerModelItem(BaseModel):
+    """size별 모델 우선순위."""
+    size: str = Field(..., pattern=r"^(XS|S|M|L|XL)$")
+    models: list[str] = Field(..., min_length=1)
+
+
+class _RunnerModelConfigUpdate(BaseModel):
+    """CEO 대시보드에서 러너 모델 설정 업데이트."""
+    configs: list[_RunnerModelItem]
+
+
+@router.get("/settings/runner-models")
+async def get_runner_model_config():
+    """size별 러너 모델 우선순위 조회."""
+    from app.core.db_pool import get_pool
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT size, models, updated_at, updated_by "
+            "FROM runner_model_config ORDER BY size"
+        )
+    return {
+        "configs": [
+            {
+                "size": r["size"],
+                "models": [m for m in r["models"]],
+                "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+                "updated_by": r["updated_by"],
+            }
+            for r in rows
+        ]
+    }
+
+
+@router.put("/settings/runner-models")
+async def update_runner_model_config(req: _RunnerModelConfigUpdate):
+    """size별 러너 모델 우선순위 업데이트. CEO 대시보드에서 호출."""
+    import json as _json
+    from app.core.db_pool import get_pool
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            for item in req.configs:
+                await conn.execute(
+                    "INSERT INTO runner_model_config (size, models, updated_at, updated_by) "
+                    "VALUES ($1, $2::jsonb, NOW(), 'CEO') "
+                    "ON CONFLICT (size) DO UPDATE "
+                    "SET models = EXCLUDED.models, updated_at = NOW(), updated_by = 'CEO'",
+                    item.size.upper(),
+                    _json.dumps(item.models),
+                )
+    logger.info("runner_model_config_updated", count=len(req.configs))
+    return {"status": "ok", "message": f"{len(req.configs)}개 size 모델 설정 업데이트 완료"}

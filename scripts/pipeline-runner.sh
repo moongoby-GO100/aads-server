@@ -143,6 +143,15 @@ db_update() {
     _psql_cmd -c "$1" >/dev/null 2>&1
 }
 
+# DB에서 size별 모델 우선순위 조회 (CEO 대시보드 runner_model_config 연동)
+get_db_model_cycle() {
+    local size="$1"
+    local result
+    result=$(db_exec "SELECT m.value FROM runner_model_config c, jsonb_array_elements_text(c.models) WITH ORDINALITY m(value, ord) WHERE c.size='${size}' ORDER BY m.ord;" 2>/dev/null) || return 1
+    [[ -z "$result" ]] && return 1
+    echo "$result"
+}
+
 # P1: DB 연결 실패 감지 및 텔레그램 알림
 _notify_db_failure() {
     local err_msg="$1"
@@ -459,7 +468,7 @@ claim_queued_job() {
                 ORDER BY COALESCE(p.priority, 0) DESC, p.created_at ASC LIMIT 1
                 FOR UPDATE SKIP LOCKED
              )
-             RETURNING job_id, project, replace(replace(instruction, E'\\n', ' '), '|', ' '), chat_session_id, max_cycles, COALESCE(worker_model, 'litellm:minimax-m2.7'), COALESCE(size,'M');"
+             RETURNING job_id, project, replace(replace(instruction, E'\\n', ' '), '|', ' '), chat_session_id, max_cycles, COALESCE(worker_model, 'auto'), COALESCE(size,'M');"
 }
 
 claim_approved_job() {
@@ -488,7 +497,7 @@ claim_rejected_job() {
 
 # ── 작업 실행 ─────────────────────────────────────────────────────────
 run_job() {
-    local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5" job_model="${6:-litellm:minimax-m2.7}" job_size="${7:-M}"
+    local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5" job_model="${6:-auto}" job_size="${7:-M}"
     local output_file="$ARTIFACT_DIR/${job_id}.out" err_file="$ARTIFACT_DIR/${job_id}.err"
 
     # 전역 변수 설정 — cleanup()에서 러너 종료 시 현재 작업을 에러로 마킹하기 위함
@@ -551,29 +560,52 @@ run_job() {
     post_to_chat "$session_id" "🔧 [Pipeline Runner] 작업 시작: ${instruction:0:200}"
 
     # H5: 모델+계정 폴백 (같은 모델 2계정 시도 후 다음 모델)
-    # AADS-206: job_model 기준 MODEL_CYCLE 구성 (지정 모델 우선, 폴백 유지)
+    # AADS-211: DB runner_model_config 기반 모델 선택 (CEO 대시보드 연동)
     local MODEL_CYCLE
-    # CEO 지시: 크기별 Claude 모델 분기 — XL=Opus, L/M=Sonnet, S/XS=Haiku (2026-04-14)
-    local claude_primary claude_secondary
-    case "$job_size" in
-        XL)      claude_primary="claude-opus-4-6";           claude_secondary="claude-sonnet-4-6" ;;
-        L|M)     claude_primary="claude-sonnet-4-6";         claude_secondary="claude-opus-4-6" ;;
-        S|XS|*)  claude_primary="claude-haiku-4-5-20251001"; claude_secondary="claude-sonnet-4-6" ;;
-    esac
-    if [[ "$job_model" == codex:* ]]; then
-        # Codex CLI 우선 → Claude 폴백 (서버68 전용, ChatGPT Plus OAuth)
-        MODEL_CYCLE=("$job_model" "$claude_primary" "$claude_primary" "$claude_secondary" "$claude_secondary")
-    elif [[ "$job_model" == litellm:* ]]; then
-        # LiteLLM 우선 → 크기별 Claude 폴백
-        MODEL_CYCLE=("$job_model" "$claude_primary" "$claude_primary" "$claude_secondary" "$claude_secondary")
-    elif [[ "$job_model" == "claude-"* ]]; then
-        # Claude 직접 지정 시 — 지정 모델 우선, 폴백
-        MODEL_CYCLE=("$job_model" "$job_model" "$claude_secondary" "$claude_secondary" "$claude_primary" "$claude_primary")
+    if [[ "$job_model" == "auto" ]]; then
+        # worker_model 미지정 → DB에서 size별 모델 우선순위 조회
+        local db_models
+        db_models=$(get_db_model_cycle "$job_size") || db_models=""
+        if [[ -n "$db_models" ]]; then
+            MODEL_CYCLE=()
+            while IFS= read -r m; do
+                [[ -n "$m" ]] && MODEL_CYCLE+=("$m" "$m")
+            done <<< "$db_models"
+            log "  DB_MODEL_CONFIG job=$job_id size=$job_size models=${MODEL_CYCLE[*]}"
+        else
+            # DB 조회 실패 → 하드코딩 폴백
+            log "  DB_MODEL_CONFIG_FAIL job=$job_id → fallback to hardcoded"
+            local claude_fb
+            case "$job_size" in
+                XL)     claude_fb="claude-opus-4-6" ;;
+                L|M)    claude_fb="claude-sonnet-4-6" ;;
+                S|XS|*) claude_fb="claude-haiku-4-5-20251001" ;;
+            esac
+            MODEL_CYCLE=("litellm:minimax-m2.7" "litellm:minimax-m2.7" "$claude_fb" "$claude_fb")
+        fi
     else
-        # 기타 — 크기별 Claude 기본
-        MODEL_CYCLE=("$claude_primary" "$claude_primary" "$claude_secondary" "$claude_secondary")
+        # worker_model 명시 지정 → 지정 모델 우선, 크기별 Claude 폴백
+        local claude_primary claude_secondary
+        case "$job_size" in
+            XL)      claude_primary="claude-opus-4-6";           claude_secondary="claude-sonnet-4-6" ;;
+            L|M)     claude_primary="claude-sonnet-4-6";         claude_secondary="claude-opus-4-6" ;;
+            S|XS|*)  claude_primary="claude-haiku-4-5-20251001"; claude_secondary="claude-sonnet-4-6" ;;
+        esac
+        if [[ "$job_model" == codex:* ]]; then
+            MODEL_CYCLE=("$job_model" "$claude_primary" "$claude_primary" "$claude_secondary" "$claude_secondary")
+        elif [[ "$job_model" == litellm:* ]]; then
+            MODEL_CYCLE=("$job_model" "$claude_primary" "$claude_primary" "$claude_secondary" "$claude_secondary")
+        elif [[ "$job_model" == "claude-"* ]]; then
+            MODEL_CYCLE=("$job_model" "$job_model" "$claude_secondary" "$claude_secondary" "$claude_primary" "$claude_primary")
+        else
+            MODEL_CYCLE=("$claude_primary" "$claude_primary" "$claude_secondary" "$claude_secondary")
+        fi
     fi
-    local TOKEN_CYCLE=("1" "2" "1" "2" "1" "2")  # 1=Naver, 2=Gmail
+    # TOKEN_CYCLE 동적 생성 (MODEL_CYCLE 길이에 맞춤)
+    local TOKEN_CYCLE=()
+    for ((i=0; i<${#MODEL_CYCLE[@]}; i++)); do
+        TOKEN_CYCLE+=($((i % 2 + 1)))
+    done
     local TOKEN_1="${ANTHROPIC_AUTH_TOKEN:-}"
     local TOKEN_2="${ANTHROPIC_AUTH_TOKEN_2:-}"
     # C-4: 빈 토큰 가드 — 둘 다 비어있으면 즉시 실패 처리
@@ -866,6 +898,16 @@ _notify_ai() {
     local job_id="$1"
     # job_id 유효성 검사 — runner-{hash} 패턴만 허용 (db_exec UPDATE 태그 오염 방어)
     [[ ! "$job_id" =~ ^runner-[0-9a-zA-Z_-]+$ ]] && return 0
+
+    # FIX-2: 중복 알림 방지 (최대 2회)
+    local _nf="/tmp/pipeline-notify-count-${job_id}"
+    local _nc=0; [[ -f "$_nf" ]] && _nc=$(cat "$_nf" 2>/dev/null || echo 0)
+    if [[ "$_nc" -ge 2 ]]; then
+        log "  NOTIFY_SKIP job=$job_id (${_nc}회 초과)"
+        return 0
+    fi
+    echo $(( _nc + 1 )) > "$_nf"
+
     # aads-server의 notify API 호출 (백그라운드, 실패해도 무시)
     # 동기 호출 (최대 10초) — 결과를 로그에 기록
     local notify_http_code
@@ -881,6 +923,8 @@ _cleanup_artifacts() {
     local job_id="$1"
     rm -f "$ARTIFACT_DIR/${job_id}.out" "$ARTIFACT_DIR/${job_id}.err" 2>/dev/null || true
     rm -f "/tmp/runner_alert_${job_id}_60" "/tmp/runner_alert_${job_id}_120" 2>/dev/null || true
+    # FIX-2: _notify_ai 중복 카운트 파일 정리
+    rm -f "/tmp/pipeline-notify-count-${job_id}" 2>/dev/null || true
 }
 
 # ── 승인된 작업 배포 ──────────────────────────────────────────────────
@@ -978,7 +1022,7 @@ deploy_job() {
 
     cd "$main_workdir"
 
-    # FIX-1: git push 결과 읽고 실패 시 에러 처리 (flock 서브셸 바깥에서)
+    # FIX-1: git push 결과 읽고 에러 처리 (flock 서브셸 바깥에서)
     local _push_result="ok"
     if [[ -f "/tmp/pipeline-push-result-${job_id}" ]]; then
         _push_result=$(cat "/tmp/pipeline-push-result-${job_id}" 2>/dev/null) || _push_result="unknown"
