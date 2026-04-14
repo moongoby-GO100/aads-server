@@ -112,6 +112,8 @@ async def run_agent(model: str, instruction: str, workdir: str) -> str:
         )
         # Tool 에러를 LLM에 전달하여 재시도 가능하게 함
         agent.nodes['tools'].handle_tool_errors = True
+        # Tool 에러를 LLM에 전달하여 재시도 가능하게 함
+        agent.nodes['tools'].handle_tool_errors = True
 
         # 작업 컨텍스트 구성
         full_instruction = f"""MCP filesystem 루트 = 프로젝트 루트.
