@@ -172,10 +172,11 @@ queued → claimed → running → awaiting_approval → approved → deploying 
 
 #### 4단계: AI_REVIEW (AI 검수)
 
-- **Shell Runner**: `git diff HEAD` → `POST /api/v1/review/code-diff` (30초 타임아웃)
-- **Python Orchestrator**: `call_background_llm` (sonnet-4-6), 5단계 JSON 파싱 폴백
-- **판정값**: `APPROVE` / `REQUEST_CHANGES` / `FLAG` / `DELEGATED`
-- **DELEGATED**: 파싱 실패 시 채팅 AI에 위임
+- **Shell Runner**: `git diff HEAD` 생성 후 git diff 형식 사전검사, 유효 시 `POST /api/v1/review/code-diff` (30초 타임아웃)
+- **Reviewer 모델**: `runner_model_config.size='AI_REVIEW'` 우선순위 조회, 미설정 시 `qwen-turbo`
+- **사전분류**: 인증 실패, 실행 오류, `git diff` 수집 실패, 비정상 입력을 LLM 호출 전 `FLAG` 카테고리로 분리
+- **판정값**: `APPROVE` / `REQUEST_CHANGES` / `FLAG` / `SKIP`
+- **FLAG 메타데이터**: `flag_category`, `failure_stage`, `needs_retry`
 
 #### 5단계: AWAITING_APPROVAL (CEO 승인 대기)
 

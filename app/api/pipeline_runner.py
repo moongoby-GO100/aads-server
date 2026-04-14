@@ -769,7 +769,7 @@ async def lock_status(project: str = Query(..., max_length=10)):
 
 class _RunnerModelItem(BaseModel):
     """size별 모델 우선순위."""
-    size: str = Field(..., pattern=r"^(XS|S|M|L|XL)$")
+    size: str = Field(..., pattern=r"^(XS|S|M|L|XL|AI_REVIEW)$")
     models: list[str] = Field(..., min_length=1)
 
 

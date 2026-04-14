@@ -30,13 +30,15 @@ _생성: AADS-191 | 2026-04-01_
 ### AI 코드 리뷰 (경로 A)
 - ✅ git diff HEAD~1 HEAD로 실제 변경분 추출
 - ✅ diff 크기 제한 10KB (초과 시 자동 절단)
+- ✅ 리뷰 입력 사전검사 (git diff 형식 / runner 오류 텍스트 분류)
 - ✅ 5항목 가중 평균 점수 산출 (correctness/security/scope/preservation/quality)
 - ✅ 판정 3단계: APPROVE / REQUEST_CHANGES / FLAG
+- ✅ FLAG 원인 저장 (`flag_category`, `failure_stage`, `needs_retry`)
 - ✅ APPROVE 시 채팅 노이즈 없음 (로그만)
 - ✅ REQUEST_CHANGES / FLAG 시 채팅 세션에 경고 메시지 INSERT
 - ✅ DB `code_reviews` 테이블 저장
 - ✅ 리뷰 실패 시 서비스 영향 없음 (try/except 격리)
-- ⚠️ 리뷰 모델: `claude-haiku-4-5-20251001` (코드에 `_REVIEW_MODEL = "gemini-3.1-pro-preview"` 명시되어 있으나 실제 호출은 `call_llm_with_fallback`의 haiku 사용)
+- ✅ 리뷰 모델 우선순위: `runner_model_config.size='AI_REVIEW'`, 미설정 시 `qwen-turbo` 폴백
 
 ---
 

@@ -29,6 +29,10 @@ class CodeReviewResponse(BaseModel):
     score: float
     feedback: dict
     issues: list
+    flag_category: str | None = None
+    failure_stage: str | None = None
+    needs_retry: bool = False
+    model_used: str | None = None
 
 
 @router.post("/code-diff", response_model=CodeReviewResponse)
@@ -48,6 +52,10 @@ async def review_code_diff(req: CodeReviewRequest):
             score=result.score,
             feedback=result.feedback,
             issues=result.issues,
+            flag_category=result.flag_category,
+            failure_stage=result.failure_stage,
+            needs_retry=result.needs_retry,
+            model_used=result.model_used,
         )
     except Exception as e:
         logger.error(f"code_review_api_error: {e}")

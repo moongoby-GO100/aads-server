@@ -131,8 +131,8 @@ def test_service_model_config_qwen():
     assert el._HAIKU_MODEL == "qwen-turbo", (
         f"experience_learner._HAIKU_MODEL={el._HAIKU_MODEL!r} (expected 'qwen-turbo')"
     )
-    assert cr._REVIEW_MODEL == "qwen-turbo", (
-        f"code_reviewer._REVIEW_MODEL={cr._REVIEW_MODEL!r} (expected 'qwen-turbo')"
+    assert cr._REVIEW_MODEL_FALLBACK == "qwen-turbo", (
+        f"code_reviewer._REVIEW_MODEL_FALLBACK={cr._REVIEW_MODEL_FALLBACK!r} (expected 'qwen-turbo')"
     )
     assert fe._HAIKU_MODEL == "qwen-turbo", (
         f"fact_extractor._HAIKU_MODEL={fe._HAIKU_MODEL!r} (expected 'qwen-turbo')"

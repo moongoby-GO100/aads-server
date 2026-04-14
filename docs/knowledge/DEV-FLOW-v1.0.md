@@ -56,7 +56,8 @@ ToolExecutor._write_remote_file / _patch_remote_file
             ├─ 3-3. CHANGELOG 기록 (docs/CHANGELOG-direct-edit.md)
             └─ 3-4. AI 코드 리뷰 (_run_ai_code_review_after_commit)
                         ├─ git diff HEAD~1 HEAD -- {file}
-                        ├─ code_reviewer.review_code_diff (Claude Haiku)
+                        ├─ code_reviewer.review_code_diff (AI_REVIEW 모델 우선순위)
+                        │     precheck: invalid diff / runner 오류 텍스트 선분류
                         │     APPROVE (score ≥ 0.7) → 로그만
                         │     REQUEST_CHANGES (0.4~0.69) → 채팅방 경고 저장
                         │     FLAG (< 0.4) → 채팅방 긴급 경고 저장
@@ -122,15 +123,17 @@ pipeline_c.start_pipeline → PipelineCJob.run()
 ### A-3. AI 코드 리뷰 (경로 A)
 
 - 실행 시점: commit + push 완료 후 (실패해도 서비스에 영향 없음)
-- 리뷰 모델: `claude-haiku-4-5-20251001` (`call_llm_with_fallback` 경유)
+- 리뷰 모델: `runner_model_config.size='AI_REVIEW'` 우선순위 사용, 미설정 시 `qwen-turbo` 폴백
 - diff 크기 제한: 10KB (초과 시 자동 절단)
+- 입력 사전검사: git diff 형식 검증, 러너 인증 실패/실행 오류/`git diff` 수집 실패를 `FLAG` 타입으로 선분류
 - 평가 기준 5항목 + 가중 평균:
   - correctness 30%, security 25%, scope_compliance 20%, preservation 15%, quality 10%
 - 판정:
   - APPROVE (≥ 0.7): 로그만 기록
   - REQUEST_CHANGES (0.4 ~ 0.69): 채팅 세션에 경고 메시지 INSERT
   - FLAG (< 0.4): 채팅 세션에 긴급 경고 메시지 INSERT
-- DB 저장: `code_reviews` 테이블 (job_id, project, verdict, score, feedback, diff_size, model_used, cost)
+- FLAG 세분화: `RUNNER_AUTH_FAILURE`, `RUNNER_EXECUTION_FAILURE`, `GIT_DIFF_FAILURE`, `INVALID_REVIEW_INPUT`, `CODE_QUALITY`, `REVIEW_MODEL_NO_RESPONSE`, `REVIEW_SYSTEM_FAILURE`
+- DB 저장: `code_reviews` 테이블 (job_id, project, verdict, score, feedback, diff_size, model_used, cost, flag_category, failure_stage, needs_retry)
 
 ### B-1. 검증 체크리스트 자동 삽입
 

@@ -178,6 +178,23 @@ sql_escape() {
     echo "\$esc\$${val}\$esc\$"
 }
 
+looks_like_git_diff() {
+    local content="$1"
+    [[ -z "${content//[[:space:]]/}" ]] && return 1
+
+    if printf '%s\n' "$content" | grep -q '^diff --git a/.* b/.*$'; then
+        return 0
+    fi
+
+    if printf '%s\n' "$content" | grep -q '^--- ' \
+        && printf '%s\n' "$content" | grep -q '^+++ ' \
+        && printf '%s\n' "$content" | grep -q '^@@ '; then
+        return 0
+    fi
+
+    return 1
+}
+
 # ── 에러 분류 ─────────────────────────────────────────────────────────
 classify_error() {
     local exit_code="$1" stderr_file="$2" stdout_file="$3"
@@ -841,45 +858,59 @@ $out_tail")
     # ═══ AI Reviewer 단계 — CEO 승인 전 독립 AI 리뷰 ═══
     local review_verdict="APPROVE"
     local review_score="1.0"
+    local review_flag_category=""
+    local review_needs_retry="false"
     if [[ -n "$git_diff" && ${#git_diff} -gt 10 ]]; then
-        log "  AI_REVIEW job=$job_id"
-        local review_response=""
-        # diff에서 변경 파일 목록 추출
-        local changed_files=""
-        changed_files=$(echo "$git_diff" | grep '^diff --git' | sed 's/diff --git a\///' | sed 's/ b\/.*//' | tr '\n' ',' | sed 's/,$//')
+        if looks_like_git_diff "$git_diff"; then
+            log "  AI_REVIEW job=$job_id"
+            local review_response=""
+            # diff에서 변경 파일 목록 추출
+            local changed_files=""
+            changed_files=$(echo "$git_diff" | grep '^diff --git' | sed 's/diff --git a\///' | sed 's/ b\/.*//' | tr '\n' ',' | sed 's/,$//')
 
-        # JSON body 생성 (jq 사용)
-        local review_body=""
-        review_body=$(jq -n \
-            --arg jid "$job_id" \
-            --arg proj "$project" \
-            --arg diff "$git_diff" \
-            --arg inst "$instruction" \
-            --arg files "$changed_files" \
-            '{job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}')
+            # JSON body 생성 (jq 사용)
+            local review_body=""
+            review_body=$(jq -n \
+                --arg jid "$job_id" \
+                --arg proj "$project" \
+                --arg diff "$git_diff" \
+                --arg inst "$instruction" \
+                --arg files "$changed_files" \
+                '{job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}')
 
-        local review_http_code=""
-        review_response=$(curl -4 -s -w "\n%{http_code}" -X POST "${AADS_API_URL}/api/v1/review/code-diff" \
-            -H "Content-Type: application/json" \
-            -d "$review_body" \
-            --max-time 30 2>/dev/null) || true
+            local review_http_code=""
+            review_response=$(curl -4 -s -w "\n%{http_code}" -X POST "${AADS_API_URL}/api/v1/review/code-diff" \
+                -H "Content-Type: application/json" \
+                -d "$review_body" \
+                --max-time 30 2>/dev/null) || true
 
-        review_http_code=$(echo "$review_response" | tail -1)
-        review_response=$(echo "$review_response" | sed '$d')
+            review_http_code=$(echo "$review_response" | tail -1)
+            review_response=$(echo "$review_response" | sed '$d')
 
-        if [[ "$review_http_code" == "200" ]] && [[ -n "$review_response" ]]; then
-            review_verdict=$(echo "$review_response" | jq -r '.verdict // "APPROVE"')
-            review_score=$(echo "$review_response" | jq -r '.score // "1.0"')
-            log "  AI_REVIEW_RESULT job=$job_id verdict=$review_verdict score=$review_score"
+            if [[ "$review_http_code" == "200" ]] && [[ -n "$review_response" ]]; then
+                review_verdict=$(echo "$review_response" | jq -r '.verdict // "APPROVE"')
+                review_score=$(echo "$review_response" | jq -r '.score // "1.0"')
+                review_flag_category=$(echo "$review_response" | jq -r '.flag_category // empty')
+                review_needs_retry=$(echo "$review_response" | jq -r '.needs_retry // false')
+                log "  AI_REVIEW_RESULT job=$job_id verdict=$review_verdict score=$review_score flag_category=${review_flag_category:-none} needs_retry=$review_needs_retry"
 
-            if [[ "$review_verdict" == "REQUEST_CHANGES" ]]; then
-                local review_issues=""
-                review_issues=$(echo "$review_response" | jq -r '.issues | join("; ")' 2>/dev/null || echo "")
-                log "  AI_REVIEW_REQUEST_CHANGES job=$job_id issues=$review_issues"
-                post_to_chat "$session_id" "🔍 [AI Reviewer] 코드 수정 요청 (score=${review_score}): ${review_issues:0:500}"
+                if [[ "$review_verdict" == "REQUEST_CHANGES" ]]; then
+                    local review_issues=""
+                    review_issues=$(echo "$review_response" | jq -r '.issues | join("; ")' 2>/dev/null || echo "")
+                    log "  AI_REVIEW_REQUEST_CHANGES job=$job_id issues=$review_issues"
+                    post_to_chat "$session_id" "🔍 [AI Reviewer] 코드 수정 요청 (score=${review_score}): ${review_issues:0:500}"
+                elif [[ "$review_verdict" == "FLAG" && -n "$review_flag_category" ]]; then
+                    log "  AI_REVIEW_FLAG job=$job_id category=$review_flag_category"
+                fi
+            else
+                log "  AI_REVIEW_SKIP job=$job_id (HTTP ${review_http_code:-timeout})"
             fi
         else
-            log "  AI_REVIEW_SKIP job=$job_id (HTTP ${review_http_code:-timeout})"
+            review_verdict="FLAG"
+            review_score="0.1"
+            review_flag_category="INVALID_GIT_DIFF"
+            review_needs_retry="true"
+            log "  AI_REVIEW_PRECHECK_FAIL job=$job_id category=$review_flag_category"
         fi
     fi
 
@@ -896,7 +927,14 @@ $out_tail")
     elif [[ "$review_verdict" == "REQUEST_CHANGES" ]]; then
         review_badge="⚠️ AI 리뷰 수정 권고 (score=${review_score})"
     elif [[ "$review_verdict" == "FLAG" ]]; then
-        review_badge="🔴 AI 리뷰 경고 (score=${review_score})"
+        review_badge="🔴 AI 리뷰 경고"
+        if [[ -n "$review_flag_category" ]]; then
+            review_badge="${review_badge} [${review_flag_category}]"
+        fi
+        review_badge="${review_badge} (score=${review_score})"
+        if [[ "$review_needs_retry" == "true" ]]; then
+            review_badge="${review_badge} / 재시도 권장"
+        fi
     fi
 
     post_to_chat "$session_id" "🔔 [Pipeline Runner] 작업 완료 — ${review_badge}
