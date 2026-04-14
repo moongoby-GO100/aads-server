@@ -223,19 +223,20 @@ async def list_lifecycle(
     params: list = []
     idx = 1
     if project:
-        conditions.append(f"project = ${idx}")
+        conditions.append(f"dl.project = ${idx}")
         params.append(project); idx += 1
     if status:
-        conditions.append(f"status = ${idx}")
+        conditions.append(f"dl.status = ${idx}")
         params.append(status); idx += 1
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     sql = f"""
-        SELECT id, task_id, project, title, server, priority, status,
-               queued_at, started_at, completed_at, duration_seconds,
-               wait_seconds, error_detail
-        FROM directive_lifecycle
+        SELECT dl.id, dl.task_id, dl.project, dl.title, dl.server, dl.priority, dl.status,
+               dl.queued_at, dl.started_at, dl.completed_at, dl.duration_seconds,
+               dl.wait_seconds, dl.error_detail, pj.actual_model
+        FROM directive_lifecycle dl
+        LEFT JOIN pipeline_jobs pj ON pj.job_id = dl.task_id
         {where}
-        ORDER BY COALESCE(completed_at, started_at, queued_at, created_at) DESC
+        ORDER BY COALESCE(dl.completed_at, dl.started_at, dl.queued_at, dl.created_at) DESC
         LIMIT ${idx}
     """
     params.append(limit)

@@ -430,7 +430,7 @@ claim_queued_job() {
                 ORDER BY COALESCE(p.priority, 0) DESC, p.created_at ASC LIMIT 1
                 FOR UPDATE SKIP LOCKED
              )
-             RETURNING job_id, project, replace(replace(instruction, E'\\n', ' '), '|', ' '), chat_session_id, max_cycles, COALESCE(worker_model, 'claude-sonnet-4-6');"
+             RETURNING job_id, project, replace(replace(instruction, E'\\n', ' '), '|', ' '), chat_session_id, max_cycles, COALESCE(worker_model, CASE WHEN COALESCE(size,'M') IN ('XL','L') THEN 'litellm:minimax-m2.7' ELSE 'litellm:kimi-k2.5' END);"
 }
 
 claim_approved_job() {
@@ -459,7 +459,7 @@ claim_rejected_job() {
 
 # ── 작업 실행 ─────────────────────────────────────────────────────────
 run_job() {
-    local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5" job_model="${6:-claude-sonnet-4-6}"
+    local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5" job_model="${6:-litellm:kimi-k2.5}"
     local output_file="$ARTIFACT_DIR/${job_id}.out" err_file="$ARTIFACT_DIR/${job_id}.err"
 
     # 전역 변수 설정 — cleanup()에서 러너 종료 시 현재 작업을 에러로 마킹하기 위함
@@ -525,8 +525,8 @@ run_job() {
     # AADS-206: job_model 기준 MODEL_CYCLE 구성 (지정 모델 우선, 폴백 유지)
     local MODEL_CYCLE
     if [[ "$job_model" == litellm:* ]]; then
-        # LiteLLM Runner: 1회만 시도 (모델 폴백 없음)
-        MODEL_CYCLE=("$job_model")
+        # LiteLLM Runner 우선 → 실패 시 Claude 폴백 (CEO 지시 2026-04-14)
+        MODEL_CYCLE=("$job_model" "claude-sonnet-4-6" "claude-sonnet-4-6" "claude-opus-4-6" "claude-opus-4-6")
     elif [[ "$job_model" == "claude-haiku-4-5-20251001" ]]; then
         MODEL_CYCLE=("claude-haiku-4-5-20251001" "claude-haiku-4-5-20251001" "claude-sonnet-4-6" "claude-sonnet-4-6" "claude-opus-4-6" "claude-opus-4-6")
     elif [[ "$job_model" == "claude-opus-4-6" ]]; then
@@ -615,6 +615,9 @@ ${safe_instruction}"
         wait $claude_pid || exit_code=$?
 
         if [[ $exit_code -eq 0 ]]; then
+            # actual_model 기록 — CEO가 어떤 모델이 실행했는지 추적 (2026-04-14)
+            db_update "UPDATE pipeline_jobs SET actual_model='${current_model}', updated_at=NOW() WHERE job_id='${job_id}';"
+            log "  ACTUAL_MODEL job=$job_id model=$current_model"
             break
         fi
 
@@ -1278,7 +1281,7 @@ _recover_stuck_jobs() {
         while IFS= read -r _dt_id; do
             _dt_id="${_dt_id// /}"
             [[ -z "$_dt_id" ]] && continue
-            [[ ! "$_dt_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && continue
+            [[ ! "$_dt_id" =~ ^(runner-[0-9a-f]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$ ]] && continue
             local _dt_session _dt_project
             _dt_session=$(db_exec "SELECT chat_session_id FROM pipeline_jobs WHERE job_id='${_dt_id}';" 2>/dev/null) || true
             _dt_session="${_dt_session// /}"
@@ -1306,7 +1309,7 @@ _recover_stuck_jobs() {
         while IFS= read -r _recovered_id; do
             _recovered_id="${_recovered_id// /}"
             [[ -z "$_recovered_id" ]] && continue
-            [[ ! "$_recovered_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && continue
+            [[ ! "$_recovered_id" =~ ^(runner-[0-9a-f]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$ ]] && continue
             local _rec_project _rec_session
             _rec_project=$(db_exec "SELECT project FROM pipeline_jobs WHERE job_id='${_recovered_id}';" 2>/dev/null) || true
             _rec_project="${_rec_project// /}"
@@ -1333,7 +1336,7 @@ _recover_stuck_jobs() {
         while IFS= read -r _exp_id; do
             _exp_id="${_exp_id// /}"
             [[ -z "$_exp_id" ]] && continue
-            [[ ! "$_exp_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && continue
+            [[ ! "$_exp_id" =~ ^(runner-[0-9a-f]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$ ]] && continue
             local _exp_session _exp_project
             _exp_session=$(db_exec "SELECT chat_session_id FROM pipeline_jobs WHERE job_id='${_exp_id}';" 2>/dev/null) || true
             _exp_session="${_exp_session// /}"
@@ -1367,7 +1370,7 @@ _check_runtime_alerts() {
         r_job_id="${r_job_id// /}"
         r_elapsed="${r_elapsed// /}"
         [[ -z "$r_job_id" || -z "$r_elapsed" ]] && continue
-        [[ ! "$r_job_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && continue
+        [[ ! "$r_job_id" =~ ^(runner-[0-9a-f]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$ ]] && continue
         [[ ! "$r_elapsed" =~ ^[0-9]+$ ]] && continue
 
         if [[ "$r_elapsed" -ge 120 ]]; then
