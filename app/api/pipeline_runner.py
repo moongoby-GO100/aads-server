@@ -281,15 +281,15 @@ async def submit_job(req: JobSubmitRequest):
                     """
                     INSERT INTO pipeline_jobs
                       (job_id, project, instruction, instruction_hash, chat_session_id,
-                       status, phase, max_cycles, model,
+                       status, phase, max_cycles, model, size,
                        worker_model, parallel_group, depends_on,
                        created_at, updated_at)
-                    VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, $7,
-                            $8, $9, $10,
+                    VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, $7, $8,
+                            $9, $10, $11,
                             NOW(), NOW())
                     """,
                     job_id, req.project, req.instruction, instruction_hash,
-                    session_id, req.max_cycles, model,
+                    session_id, req.max_cycles, model, size,
                     req.worker_model or None, req.parallel_group or None, req.depends_on or None,
                 )
                 # P2-2: LISTEN/NOTIFY — 이벤트 드리븐 (asyncpg 소비자용)
@@ -631,14 +631,14 @@ async def submit_batch(req: BatchSubmitRequest):
                         """
                         INSERT INTO pipeline_jobs
                           (job_id, project, instruction, instruction_hash, chat_session_id,
-                           status, phase, max_cycles, model,
+                           status, phase, max_cycles, model, size,
                            worker_model, parallel_group, depends_on,
                            created_at, updated_at)
-                        VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, $7,
-                                $8, $9, $10, NOW(), NOW())
+                        VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, $7, $8,
+                                $9, $10, $11, NOW(), NOW())
                         """,
                         job_id, req.project, item.instruction, instruction_hash,
-                        req.session_id, req.max_cycles, model,
+                        req.session_id, req.max_cycles, model, size,
                         item.worker_model or None, pg, depends_on,
                     )
                     # P2-2: LISTEN/NOTIFY
