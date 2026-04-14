@@ -79,7 +79,7 @@ async def run_agent(model: str, instruction: str, workdir: str) -> str:
         model=model,
         base_url=f"{_DEFAULT_BASE_URL}/v1",
         api_key=_MASTER_KEY,
-        temperature=0,
+        temperature=1 if "kimi" in model.lower() else 0,
     )
 
     # MCP 서버 연결 설정 (SSE transport)
@@ -146,7 +146,7 @@ async def run_agent(model: str, instruction: str, workdir: str) -> str:
     except Exception as e:
         logger.error("Agent error: %s", e, exc_info=True)
         print(f"ERROR: {e}", flush=True)
-        return f"FAILED: {e}"
+        sys.exit(1)  # Shell Runner 실패 감지 -> Claude 폴백
 
     elapsed = time.time() - start_time
     logger.info("Runner completed in %.1fs, iterations=%d", elapsed, iteration)
@@ -199,11 +199,15 @@ def main() -> None:
         logger.error("LITELLM_MASTER_KEY 환경변수가 설정되지 않았습니다.")
         sys.exit(1)
 
-    asyncio.run(run_agent(
+    result = asyncio.run(run_agent(
         model=args.model,
         instruction=args.instruction,
         workdir=args.workdir,
     ))
+    # 에이전트 실패 시 exit(1) — Shell Runner가 Claude 폴백으로 전환하도록
+    if isinstance(result, str) and result.startswith("FAILED:"):
+        logger.error("Runner failed: %s", result[:200])
+        sys.exit(1)
 
 
 if __name__ == "__main__":

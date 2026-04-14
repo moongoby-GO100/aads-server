@@ -621,6 +621,14 @@ ${safe_instruction}"
 
         wait $claude_pid || exit_code=$?
 
+        # 방어: LiteLLM 출력에 FAILED:/ERROR: 포함 시 강제 실패 처리
+        if [[ $exit_code -eq 0 && "$current_model" == litellm:* ]]; then
+            if grep -qE "^(FAILED|ERROR):" "$output_file" 2>/dev/null; then
+                exit_code=1
+                log "  LITELLM_CONTENT_FAIL job=$job_id: output contains failure marker"
+            fi
+        fi
+
         if [[ $exit_code -eq 0 ]]; then
             # actual_model 기록 — CEO가 어떤 모델이 실행했는지 추적 (2026-04-14)
             db_update "UPDATE pipeline_jobs SET actual_model='${current_model}', updated_at=NOW() WHERE job_id='${job_id}';"
