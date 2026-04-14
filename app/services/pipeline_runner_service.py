@@ -53,6 +53,15 @@ _MAX_DIFF_CHARS = 50000     # git diff 최대 문자수 (L3)
 _REVIEW_MODEL = "claude-sonnet-4-6"
 
 # AADS-234: LiteLLM Runner 폴백 모델 — size 기반, 무료 쿼터 우선
+# CEO 지시: 크기별 Claude 모델 분기 — XL=Opus, L/M=Sonnet, S/XS=Haiku (2026-04-14)
+_CLAUDE_MODEL_BY_SIZE = {
+    "XS": "claude-haiku-4-5-20251001",
+    "S":  "claude-haiku-4-5-20251001",
+    "M":  "claude-sonnet-4-6",
+    "L":  "claude-sonnet-4-6",
+    "XL": "claude-opus-4-6",
+}
+
 _LITELLM_FALLBACK_MODELS = {
     "XS": "kimi-k2.5",
     "S":  "kimi-k2.5",
@@ -336,15 +345,19 @@ class PipelineCJob:
                 )
                 work_result = await self._run_litellm_fallback(enriched_instruction, override_model=_direct_model)
             elif _wm == "claude":
-                # Claude 명시 지정: Claude 직행
-                self.actual_model = f"claude:{self.model or 'sonnet'}"
+                # Claude 명시 지정: Claude 직행 (크기별 모델 분기)
+                _claude_model = _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-4-6")
+                self.actual_model = f"claude:{_claude_model.split('-')[1] if '-' in _claude_model else 'sonnet'}"
+                self.model = _claude_model.split('-')[1] if self.size in ("XL",) else ("haiku" if self.size in ("S", "XS") else "sonnet")
                 work_result = await self._run_claude_code(enriched_instruction, continue_session=False)
             else:
-                # 기본: LiteLLM 우선 실행 → 실패 시 Claude 폴백 (전 프로젝트)
+                # 기본: LiteLLM 우선 실행 → 실패 시 Claude 폴백 (크기별 모델 분기)
                 work_result = await self._run_litellm_fallback(enriched_instruction)
                 if work_result.get("error"):
-                    self._log("claude_fallback_attempt", f"LiteLLM 실패 → Claude 폴백: {work_result['error'][:100]}")
-                    self.actual_model = f"claude:{self.model or 'sonnet'}"
+                    _claude_model = _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-4-6")
+                    self._log("claude_fallback_attempt", f"LiteLLM 실패 → Claude 폴백 (size={self.size}, model={_claude_model}): {work_result['error'][:100]}")
+                    self.actual_model = f"claude:{_claude_model.split('-')[1] if '-' in _claude_model else 'sonnet'}"
+                    self.model = _claude_model.split('-')[1] if self.size in ("XL",) else ("haiku" if self.size in ("S", "XS") else "sonnet")
                     work_result = await self._run_claude_code(enriched_instruction, continue_session=False)
 
             if work_result.get("error"):
