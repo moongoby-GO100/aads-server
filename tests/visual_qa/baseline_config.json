@@ -1,0 +1,9 @@
+{
+  "pages": [
+    {"name": "chat", "url": "/chat", "required_elements": ["채팅 입력창", "세션 목록"]},
+    {"name": "ops", "url": "/ops", "required_elements": ["시스템 상태", "서비스 목록"]},
+    {"name": "managers", "url": "/managers", "required_elements": ["워크스페이스"]}
+  ],
+  "diff_threshold_percent": 5.0,
+  "base_url": "https://aads.newtalk.kr"
+}
