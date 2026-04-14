@@ -272,10 +272,14 @@ model_list:
     api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
 # P2: OpenRouter 전체 제거 (크레딧 소진)
 # P0: kimi-k2.5 moonshot 프로바이더로 통일 (openai/ 경유 시 인증 에러)
+# P1: thinking 비활성화 — tool call 시 reasoning_content 누락 에러 방지
 - model_name: kimi-k2.5
   litellm_params:
     model: moonshot/kimi-k2.5
     api_key: os.environ/KIMI_API_KEY
+    extra_body:
+      thinking:
+        type: disabled
 - model_name: kimi-k2
   litellm_params:
     model: moonshot/kimi-k2-0711-preview

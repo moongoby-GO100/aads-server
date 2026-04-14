@@ -81,7 +81,7 @@ async def run_agent(model: str, instruction: str, workdir: str) -> str:
         model=model,
         base_url=f"{_DEFAULT_BASE_URL}/v1",
         api_key=_MASTER_KEY,
-        temperature=1 if "kimi" in model.lower() else 0,
+        temperature=0.6 if "kimi" in model.lower() else 0,
     )
 
     # MCP 서버 연결 설정 (SSE transport)
