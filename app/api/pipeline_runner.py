@@ -774,6 +774,7 @@ class _RunnerModelConfigUpdate(BaseModel):
 @router.get("/settings/runner-models")
 async def get_runner_model_config():
     """size별 러너 모델 우선순위 조회."""
+    import json as _json_get
     from app.core.db_pool import get_pool
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -781,17 +782,23 @@ async def get_runner_model_config():
             "SELECT size, models, updated_at, updated_by "
             "FROM runner_model_config ORDER BY size"
         )
-    return {
-        "configs": [
-            {
-                "size": r["size"],
-                "models": [m for m in r["models"]],
-                "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
-                "updated_by": r["updated_by"],
-            }
-            for r in rows
-        ]
-    }
+    configs = []
+    for r in rows:
+        # asyncpg JSONB → str일 수 있으므로 안전하게 파싱
+        raw = r["models"]
+        if isinstance(raw, str):
+            models = _json_get.loads(raw)
+        elif isinstance(raw, list):
+            models = raw
+        else:
+            models = list(raw) if raw else []
+        configs.append({
+            "size": r["size"],
+            "models": models,
+            "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+            "updated_by": r["updated_by"],
+        })
+    return {"configs": configs}
 
 
 @router.put("/settings/runner-models")
