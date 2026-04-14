@@ -24,6 +24,7 @@ from app.api.approval import router as approval_router
 from app.api.briefing import router as briefing_router
 from app.api.documents import router as documents_router
 from app.api.ops import router as ops_router
+from app.api.admin import router as admin_router
 from app.api.lessons import router as lessons_router
 from app.api.strategy import router as strategy_router
 from app.api.plans import router as plans_router
@@ -1187,6 +1188,7 @@ app.include_router(pc_agent_router, prefix="/api/v1", tags=["pc-agent"])
 app.include_router(kakao_bot_router, prefix="/api/v1", tags=["kakao-bot"])
 app.include_router(agenda_router, prefix="/api/v1/agenda", tags=["agenda"])
 app.include_router(hot_reload_router, prefix="/api/v1", tags=["hot-reload"])
+app.include_router(admin_router, prefix="/api/v1", tags=["admin"])
 app.include_router(credential_vault_router, prefix="/api/v1", tags=["credential-vault"])
 
 # 루트 /health — 모니터링 도구 호환 (인증 면제)
