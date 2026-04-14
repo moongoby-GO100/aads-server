@@ -11,6 +11,8 @@ Phase 1~3 개선 (2026-03-09):
 """
 from __future__ import annotations
 
+from __future__ import annotations
+
 from typing import Dict
 
 # ─── Layer 1 정적 컨텍스트 ────────────────────────────────────────────────────
