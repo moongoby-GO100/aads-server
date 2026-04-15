@@ -1,9 +1,9 @@
 # Pipeline Runner 아키텍처 문서
 
-**버전**: v1.0  
-**최종 수정일**: 2026-04-09  
+**버전**: v2.0  
+**최종 수정일**: 2026-04-15  
 **작성자**: AADS AI (소스코드 실측 기반)  
-**관련 소스**: 10개 파일, 8,000+ 줄
+**관련 소스**: `app/api/pipeline_runner.py`, `app/services/pipeline_runner_service.py`, `app/services/code_reviewer.py`, `scripts/pipeline-runner.sh`, `app/services/model_selector.py`
 
 ---
 
@@ -11,7 +11,7 @@
 
 1. [시스템 개요](#1-시스템-개요)
 2. [전체 아키텍처 다이어그램](#2-전체-아키텍처-다이어그램)
-3. [실행 흐름 (7단계 상세)](#3-실행-흐름)
+3. [실행 흐름 (7단계 상세)](#3-실행-흐름-7단계-상세)
 4. [컴포넌트별 상세](#4-컴포넌트별-상세)
 5. [병렬 실행](#5-병렬-실행)
 6. [모델 라우팅](#6-모델-라우팅)
@@ -28,228 +28,193 @@
 
 ### 목적
 
-Pipeline Runner는 **CEO/채팅 AI가 제출한 코드 수정 작업을 자율적으로 실행·검수·배포하는 CI/CD 파이프라인**이다. Claude Code CLI를 원격 SSH로 호출하여 코드를 수정하고, AI가 자동 검수한 뒤, CEO 승인 후 push + 배포까지 완전 자동화한다.
+Pipeline Runner는 CEO/채팅 AI가 제출한 코드 수정 작업을 DB 큐 기반으로 실행하고, AI 리뷰와 CEO 승인을 거쳐 후속 배포 단계로 넘기는 파이프라인이다. 현재 주 실행기는 `scripts/pipeline-runner.sh`이며, FastAPI 레이어는 제출·조회·승인·설정 변경을 담당한다.
 
 ### 설계 원칙
 
-- **코드 수정만 → 승인 → 커밋 → 푸시 → 빌드 → 배포** — Claude Code CLI는 코드 수정만 수행, 커밋/푸시/빌드/배포는 CEO 승인 후 Runner가 처리 (H7 가드)
-- **6단계 모델+계정 폴백** — 실패 시 모델과 OAuth 계정을 번갈아 재시도
-- **원자적 Job 클레임** — `FOR UPDATE SKIP LOCKED` (C4)으로 동시 러너 간 중복 방지
-- **크래시 복구** — 시작 시 stuck 작업 자동 정리 (C3)
-- **SQL 인젝션 방지** — dollar-quoting + UUID 포맷 검증 (C1)
+- **코드 수정만 실행**: 러너 프롬프트에 H7 가드를 주입해 빌드/배포/프로세스 종료를 금지한다.
+- **DB 중심 모델 선택**: 사이즈별 실행 모델과 AI 리뷰 모델을 `runner_model_config`에서 읽는다.
+- **멀티 엔진 실행**: Claude CLI, Codex CLI, LiteLLM Runner를 `worker_model` 접두사로 분기한다.
+- **원자적 Job 클레임**: `FOR UPDATE SKIP LOCKED` 기반으로 중복 실행을 방지한다.
+- **실패 복구**: stuck 작업 정리, 의존 작업 고아 정리, 모델/토큰 폴백을 기본 내장한다.
+- **R-AUTH 준수**: AADS 계열 LLM 호출은 OAuth 토큰 우선이며 외부 LLM은 LiteLLM 프록시를 사용한다.
 
 ### 2계층 구조
 
 | 계층 | 파일 | 역할 |
 |------|------|------|
-| **Python API** (DB 기반) | `pipeline_runner.py`, `pipeline_runner_service.py` | REST API, 오케스트레이터, 상태 관리 |
-| **Shell Runner** (파일시스템 기반) | `pipeline-runner.sh` (systemd) | DB 폴링, Claude CLI 실행, git 조작, 배포 |
+| Python API | `app/api/pipeline_runner.py` | 작업 제출/조회/승인, 모델 설정 API, DB 모델 조회 |
+| Shell Runner | `scripts/pipeline-runner.sh` | DB 폴링, 모델 사이클 구성, Claude/Codex/LiteLLM 실행, AI 리뷰 요청 |
 
-두 계층이 **동일한 `pipeline_jobs` DB 테이블**을 공유하며, 현재는 Shell Runner가 주된 실행기로 동작한다.
+`pipeline_jobs`와 `runner_model_config`를 두 계층이 함께 사용한다.
 
 ---
 
 ## 2. 전체 아키텍처 다이어그램
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      CEO / 채팅 AI                                      │
-│              pipeline_runner_submit()                                    │
-│              pipeline_runner_submit_batch()                              │
-└──────────────────┬──────────────────────────────────────────────────────┘
-                   │ HTTP POST /api/v1/pipeline/jobs
-                   ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  API Layer — app/api/pipeline_runner.py (612줄)                          │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌────────────────┐  │
-│  │ submit_job   │ │ list_jobs    │ │ approve_or_  │ │ submit_batch   │  │
-│  │ POST /jobs   │ │ GET /jobs    │ │ reject       │ │ POST /jobs/    │  │
-│  │              │ │              │ │ POST /jobs/  │ │ batch          │  │
-│  │ 중복검사     │ │ 필터/페이징  │ │ {id}/approve │ │ 의존성그래프   │  │
-│  │ 크기추정     │ │              │ │              │ │ auto parallel  │  │
-│  │ pg_notify    │ │              │ │ autonomy_gate│ │                │  │
-│  └──────┬───────┘ └──────────────┘ └──────────────┘ └────────────────┘  │
-│         │ INSERT pipeline_jobs (status=queued)                           │
-│         │ SELECT pg_notify('pipeline_new_job', $job_id)                  │
-└─────────┼───────────────────────────────────────────────────────────────┘
-          │
-          ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  Orchestrator — app/services/pipeline_runner_service.py (2,216줄)        │
-│  ┌─────────────────────────────────────────────────────────────────┐     │
-│  │ PipelineCJob 클래스                                             │     │
-│  │  _run_inner()  → Claude Code SSH 실행                           │     │
-│  │  _ai_review()  → 독립 LLM 검수 (sonnet-4-6)                    │     │
-│  │  approve()     → git push + restart + verify                    │     │
-│  │  reject()      → git checkout 원복                              │     │
-│  └─────────────────────────────────────────────────────────────────┘     │
-│  Watchdog: 120초 주기, stall 30분 감지, awaiting_approval 24시간 만료   │
-└─────────┬───────────────────────────────────────────────────────────────┘
-          │ (Python API 경로) 또는
-          ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  Shell Runner — scripts/pipeline-runner.sh (1,570줄)                     │
-│  systemd: aads-pipeline-runner.service (Restart=always, RestartSec=10)   │
-│  ┌─────────────────────────────────────────────────────────────────┐     │
-│  │ main() 루프                                                     │     │
-│  │  1. DB 폴링 (5초) — queued/approved/rejected 감지               │     │
-│  │  2. claim_queued_job() — FOR UPDATE SKIP LOCKED                  │     │
-│  │  3. run_job() — 6단계 모델+계정 폴백, H7 가드 주입              │     │
-│  │  4. AI Review — POST /api/v1/review/code-diff                   │     │
-│  │  5. deploy_job() — flock, worktree 머지, push, 재시작           │     │
-│  │  6. reject_job() — worktree 삭제 / git stash                    │     │
-│  └──────────────────────────────────────┬──────────────────────────┘     │
-│  Lock: flock /tmp/pipeline-runner.lock  │                                │
-│  Log: /var/log/aads-pipeline/runner.log │                                │
-└─────────────────────────────────────────┼───────────────────────────────┘
-                                          │ SSH + claude CLI
-                                          ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  Claude Code CLI                                                         │
-│  claude --model {model} -p --output-format text "{instruction}"          │
-│  또는 LiteLLM: python3 scripts/litellm_runner.py --model {model} ...    │
-│  출력: /tmp/aads_pipeline_artifacts/{job_id}.out/.err                    │
-└──────────────────────────────────────────────────────────────────────────┘
-          │ 완료
-          ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  AI Code Review → Telegram 승인 → CEO 승인/거부                         │
-│  POST /api/v1/review/code-diff (30초 타임아웃)                           │
-│  tg_approval_bot.py — 인라인 버튼으로 승인/거부                         │
-└──────────────────────────────────────────────────────────────────────────┘
-          │ 승인
-          ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  Deploy                                                                  │
-│  AADS: deploy.sh bluegreen + hot-reload                                  │
-│  KIS:  systemctl restart kis-v41-api                                     │
-│  GO100: systemctl restart go100 + frontend build/swap                    │
-│  SF:   docker restart shortflow-worker/dashboard                         │
-│  NTV2: php artisan optimize + frontend build + docker restart reverb     │
-│  Health check: 10초 간격, 3회 재시도, 실패 시 git revert 자동 롤백       │
-└──────────────────────────────────────────────────────────────────────────┘
+```text
+CEO / 채팅 AI
+   │
+   │ POST /api/v1/pipeline/jobs
+   │ POST /api/v1/pipeline/jobs/batch
+   ▼
+app/api/pipeline_runner.py
+   ├─ 입력 검증 (project / session_id / size)
+   ├─ size 추정 + _get_model_for_size(conn, size)
+   ├─ pipeline_jobs INSERT / 중복 재사용 / pg_notify
+   ├─ GET/PUT /pipeline/settings/runner-models
+   └─ POST /pipeline/jobs/{job_id}/approve
+   │
+   ▼
+PostgreSQL
+   ├─ pipeline_jobs
+   ├─ runner_model_config
+   └─ code_reviews
+   │
+   ▼
+scripts/pipeline-runner.sh (1865줄)
+   ├─ claim_queued_job()
+   ├─ get_db_model_cycle(size)
+   ├─ MODEL_CYCLE + TOKEN_CYCLE 구성
+   ├─ Claude CLI / Codex CLI / LiteLLM Runner 실행
+   ├─ git diff HEAD 수집
+   ├─ POST /api/v1/review/code-diff
+   └─ awaiting_approval 전환 + notify
+   │
+   ▼
+app/services/code_reviewer.py
+   ├─ _get_review_models() → runner_model_config(size='AI_REVIEW')
+   ├─ 입력 사전검사 (diff 형식, 러너 에러 텍스트 차단)
+   └─ call_llm_with_fallback() 기반 리뷰
 ```
 
 ---
 
-## 3. 실행 흐름
+## 3. 실행 흐름 (7단계 상세)
 
 ### 상태 전이도
 
-```
+```text
 queued → claimed → running → awaiting_approval → approved → deploying → done
-                           ↘ error                        ↘ rejected → rolling_back → rejected_done
+                           ↘ cancelled / error        ↘ rejected → rolling_back → rejected_done
 ```
 
-### 7단계 상세
+### 1단계: SUBMIT (queued)
 
-#### 1단계: SUBMIT (queued)
+- 엔드포인트: `POST /api/v1/pipeline/jobs`, `POST /api/v1/pipeline/jobs/batch`
+- 입력 검증: 프로젝트 화이트리스트, UUID 세션 ID, size 패턴 검사
+- 중복 처리:
+  - 동일 `instruction_hash` + 활성 상태면 기존 job 재사용
+  - 동일 `instruction_hash` + 최근 2시간 내 `error`면 `queued`로 리셋 후 재시도
+- 모델 결정:
+  - `worker_model`이 있으면 그대로 사용
+  - 없으면 `_parse_size_from_instruction()` 또는 `_estimate_size()` 후 `_get_model_for_size()` 호출
+- DB 저장 후 `pg_notify('pipeline_new_job', job_id)` 전송
 
-- **트리거**: `POST /api/v1/pipeline/jobs` 또는 `POST /api/v1/pipeline/jobs/batch`
-- **중복 검사**: `SHA-256("{project}:{instruction}")` 앞 16자 해시 → 10분 내 done이면 차단, 30분 내면 경고
-- **크기 추정** (`_estimate_size`): 키워드·파일참조·길이 휴리스틱으로 XS/S/M/L/XL 자동 분류
-- **DB 저장**: `pipeline_jobs` INSERT (status=queued)
-- **알림**: `SELECT pg_notify('pipeline_new_job', $job_id)`
+### 2단계: CLAIM (claimed → running)
 
-#### 2단계: CLAIM (claimed → running)
+- `claim_queued_job()`가 `FOR UPDATE SKIP LOCKED`로 1건 클레임
+- `depends_on`이 `done`이 아니면 클레임 대상에서 제외
+- 원격 프로젝트의 `litellm:` 작업은 bash 러너가 직접 클레임하지 않도록 필터링
+- `pre_validate()`에서 workdir, 디스크, git dirty 상태를 검사한다
 
-- **Shell Runner**: `claim_queued_job()` — `UPDATE ... SET status='claimed' ... FOR UPDATE SKIP LOCKED ... RETURNING`
-- **프로젝트 Lock 확인**: `parallel_group` 없으면 프로젝트당 최대 1개 동시 실행
-- **의존성 확인**: `depends_on` 잡이 `done`이 아니면 스킵
-- **사전 검증** (`pre_validate`): workdir 존재, 디스크 공간 ≥ 1GB, git dirty → stash
+### 3단계: RUNNING (실행 엔진 분기)
 
-#### 3단계: RUNNING (Claude Code 실행)
+- H7 프롬프트 가드 삽입
+- `worker_model` 접두사로 실행 엔진 분기:
+  - `codex:*` → Codex CLI
+  - `litellm:*` → LiteLLM Runner
+  - 그 외 → Claude CLI
+- 실행 전 `MODEL_CYCLE`, `TOKEN_CYCLE`을 만들어 모델/계정 폴백 순서를 확정한다
+- 러너 PID를 `pipeline_jobs.runner_pid`에 기록해 watchdog이 생존 여부를 추적한다
 
-- **H7 가드 주입**: instruction 앞에 빌드/배포 금지 규칙 삽입
-- **Claude CLI 호출**:
-  ```bash
-  timeout $MAX_RUNTIME claude --model $model -p --output-format text "$instruction"
-  ```
-- **LiteLLM 모델 시**: `python3 scripts/litellm_runner.py --model $model ...`
-- **6단계 폴백**: Sonnet(계정1) → Sonnet(계정2) → Opus(계정1) → Opus(계정2) → Haiku(계정1) → Haiku(계정2)
-- **타임아웃**: 기본 7,200초 (2시간), 사이즈별 XS=600s ~ XL=7,200s
-- **PID 추적**: `pipeline_jobs.runner_pid`에 기록 → watchdog이 프로세스 생존 확인
+### 4단계: AI_REVIEW
 
-#### 4단계: AI_REVIEW (AI 검수)
+- 실행 성공 후 `git diff HEAD`를 최대 50,000자까지 수집한다
+- diff가 실제 git diff 형식이면 `POST /api/v1/review/code-diff`를 30초 타임아웃으로 호출한다
+- 리뷰 응답 verdict:
+  - `APPROVE`
+  - `REQUEST_CHANGES`
+  - `FLAG`
+  - `SKIP`
+- 리뷰 입력이 diff가 아니면 LLM 호출 전 `FLAG` 또는 `SKIP`으로 차단한다
 
-- **Shell Runner**: `git diff HEAD` 생성 후 git diff 형식 사전검사, 유효 시 `POST /api/v1/review/code-diff` (30초 타임아웃)
-- **Reviewer 모델**: `runner_model_config.size='AI_REVIEW'` 우선순위 조회, 미설정 시 `qwen-turbo`
-- **사전분류**: 인증 실패, 실행 오류, `git diff` 수집 실패, 비정상 입력을 LLM 호출 전 `FLAG` 카테고리로 분리
-- **판정값**: `APPROVE` / `REQUEST_CHANGES` / `FLAG` / `SKIP`
-- **FLAG 메타데이터**: `flag_category`, `failure_stage`, `needs_retry`
+### 5단계: AWAITING_APPROVAL
 
-#### 5단계: AWAITING_APPROVAL (CEO 승인 대기)
+- `pipeline_jobs.status/phase`를 `awaiting_approval`로 전환
+- 채팅방에 diff 요약과 승인 도구 호출 지시를 게시
+- `notify_completion()`이 CEO 검수 메시지와 후속 작업 승격을 담당한다
 
-- diff 전문을 채팅방에 게시
-- Telegram 인라인 버튼으로 승인 요청
-- **타임아웃**: 24시간 후 자동 만료 (error 처리)
-- 채팅 도구: `pipeline_runner_approve(job_id, action='approve'|'reject')`
+### 6단계: APPROVE / DEPLOYING
 
-#### 6단계: DEPLOYING (승인 후 배포)
+- `POST /pipeline/jobs/{job_id}/approve`에서 `approved` 또는 `rejected`로 상태 전환
+- 승인 시 `autonomy_gate.record_task_result(... judge_verdict='pass')`
+- 거부 시 `judge_verdict='fail'`
+- 실제 배포/롤백 단계는 러너 및 프로젝트별 후속 처리로 이어진다
 
-- **Shell Runner**: `claim_approved_job()` → flock 배포 잠금 → worktree 머지 → git add/commit/push
-- **프로젝트별 재시작** (상세: [10. 서버 매핑](#10-서버-매핑))
-- **Health check**: 10초 간격, 최대 3회 재시도
-- **실패 시**: `git revert HEAD` 자동 롤백 후 재배포
-- **자율 평가**: `autonomy_gate.record_task_result` — 승인=pass, 거부=fail
+### 7단계: DONE / REJECTED / ERROR
 
-#### 7단계: DONE / REJECTED
-
-- **DONE**: 채팅방에 5단계 검증 체크리스트 게시, 임시파일 정리
-- **REJECTED**: git checkout 원복, worktree 삭제, 피드백과 함께 채팅방 알림
-- **rejected_done**: 롤백 완료 최종 상태
+- `done`: 작업 종료 및 다음 queued 작업 승격
+- `rejected_done`: 거부 후 롤백 완료 상태
+- `cancelled`/`error`: 타임아웃, 인증 실패, 프로세스 사망, 중복 supersede 등 비정상 종료
 
 ---
 
 ## 4. 컴포넌트별 상세
 
-### 4.1 API Layer — `app/api/pipeline_runner.py` (612줄)
+### 4.1 API Layer — `app/api/pipeline_runner.py` (829줄)
+
+주요 역할:
+
+- 작업 제출/배치 제출/조회/승인
+- 프로젝트 Lock 상태 조회
+- `runner_model_config` 조회/UPSERT API 제공
+- `_get_model_for_size(conn, size)`를 통한 DB 기반 1순위 모델 선택
+
+주요 엔드포인트:
 
 | 엔드포인트 | 메서드 | 설명 |
 |-----------|--------|------|
 | `/pipeline/jobs` | POST | 단건 작업 제출 |
-| `/pipeline/jobs` | GET | 작업 목록 (status/project/session_id 필터, limit 1~100) |
-| `/pipeline/jobs/{job_id}` | GET | 단건 상세 조회 |
-| `/pipeline/jobs/{job_id}/notify` | POST | 러너 완료 시 AI 반응 트리거 |
-| `/pipeline/jobs/{job_id}/approve` | POST | 승인 또는 거부 |
-| `/pipeline/jobs/batch` | POST | 배치 작업 제출 (1~20건, 의존성 그래프) |
-| `/pipeline/lock-status` | GET | 프로젝트 동시실행 Lock 현황 |
+| `/pipeline/jobs` | GET | 작업 목록 조회 |
+| `/pipeline/jobs/{job_id}` | GET | 작업 상세 조회 |
+| `/pipeline/jobs/{job_id}/notify` | POST | 채팅 AI 후속 반응 트리거 |
+| `/pipeline/jobs/{job_id}/approve` | POST | 승인/거부 |
+| `/pipeline/jobs/batch` | POST | 의존성 그래프 기반 배치 제출 |
+| `/pipeline/lock-status` | GET | 프로젝트 Lock 상태 |
+| `/pipeline/settings/runner-models` | GET/PUT | 사이즈별 모델 설정 조회/업데이트 |
 
-### 4.2 Orchestrator — `app/services/pipeline_runner_service.py` (2,216줄)
+### 4.2 Orchestrator — `app/services/pipeline_runner_service.py`
 
-- **PipelineCJob 클래스**: 작업 생명주기 전체를 관리하는 메인 클래스
-- **in-memory 상태**: `_active_jobs` dict, `_project_locks`, `_job_approve_locks`
-- **Watchdog**: 120초 주기 백그라운드 태스크
-  - stall 감지: 30분 무 로그 → 채팅 알림 (최대 3회) → auto-kill
-  - `awaiting_approval` 24시간 만료
-  - orphan 결과 수집: `.done` 파일 확인 → 채팅에 결과 게시
-- **AADS 자기수정 특수처리**: 30초 debounce, pre-restart DB 저장, 30초 health 폴링
+- 인메모리 기반 대안 실행기
+- Codex 가용 모델 검증: `default`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`
+- size별 타임아웃 계산과 SSH 재시도 백오프를 가진다
+- 문서 기준 주 실행기는 Shell Runner지만, 일부 모델/원격 경로 로직의 기준 구현이 이 서비스에도 남아 있다
 
-### 4.3 Shell Runner — `scripts/pipeline-runner.sh` (1,570줄)
+### 4.3 Shell Runner — `scripts/pipeline-runner.sh` (1865줄)
 
-- **systemd 서비스**: `Restart=always`, `RestartSec=10`, `WorkingDirectory=/root/aads/aads-server`
-- **메인 루프**: DB 폴링 (POLL_INTERVAL=5초) → queued/approved/rejected 순차 처리
-- **적응형 폴링**: 작업 발견 시 1초 대기, 유휴 시 5초 대기
-- **함수 42개**: claim, run, deploy, reject, watchdog, cleanup 등
+핵심 기능:
 
-### 4.4 Telegram 봇 — `scripts/tg_approval_bot.py` (293줄)
+- DB 폴링 + 원자적 클레임
+- `get_db_model_cycle()`로 DB 모델 우선순위 조회
+- `codex:`, `litellm:` 접두사 기반 실행기 분기
+- `MODEL_CYCLE` / `TOKEN_CYCLE` 조합으로 모델+계정 폴백
+- git diff 수집 및 리뷰 API 호출
+- artifact/worktree/lock 정리
 
-- Long polling 방식 (30초 timeout)
-- 인라인 버튼: approve/ignore
-- `ALLOWED_CHAT_ID`로 CEO만 응답 가능
-- `/status`, `/test_alert` 명령어
+### 4.4 AI Reviewer — `app/services/code_reviewer.py` (431줄)
 
-### 4.5 Auto Trigger — `scripts/auto_trigger.sh` (961줄)
+핵심 기능:
 
-- **레거시 파일시스템 기반** 지시서(.md) 감지 → `claude_exec.sh` 실행
-- **5단계 우선순위**: P0 파일명 → P0 내용 → P1 파일명 → P1 내용 → P2 (impact/effort 정렬)
-- Pipeline Runner의 DB 기반 방식과 병행 운영
+- `_get_review_models()`로 `runner_model_config(size='AI_REVIEW')` 모델 리스트 조회
+- diff 형식 사전검사
+- `call_llm_with_fallback()`로 리뷰 모델 호출
+- `code_reviews` 테이블 저장
 
-### 4.6 Task Monitor — `app/api/task_monitor.py` (169줄)
+### 4.5 모델 레지스트리 — `app/services/model_selector.py`
 
-- **SSE 스트리밍**: `GET /tasks/{task_id}/stream` (20초 keepalive)
-- **로그 조회**: `GET /tasks/{task_id}/logs` (last_n, since, log_type 필터)
-- **활성 작업**: pipeline_jobs + directive_lifecycle 통합 조회
+- Codex CLI, Groq, DeepSeek, OpenRouter, Kimi, MiniMax, Qwen, Gemini 계열 식별자 정의
+- 대시보드와 운영 UI가 사용할 수 있는 모델 ID 집합의 기준 역할을 한다
 
 ---
 
@@ -257,82 +222,101 @@ queued → claimed → running → awaiting_approval → approved → deploying 
 
 ### parallel_group
 
-- **같은 `parallel_group`** 내 작업 = 프로젝트 Lock 우회, 동시 실행
-- **다른 그룹** 또는 그룹 없음 = 기존 프로젝트 Lock으로 직렬화
-- **최대 동시 실행**: 프로젝트당 `MAX_CONCURRENT_PER_PROJECT=3`, 전역 `MAX_CONCURRENT_GLOBAL=10`
+- 같은 `parallel_group`이면 동일 프로젝트 내에서도 동시 실행 허용
+- 다른 그룹 또는 그룹 없음이면 프로젝트 단위 동시 실행 제한 적용
+- 현재 프로젝트당 동시 실행 상한: `MAX_CONCURRENT_PER_PROJECT=3`
 
-### depends_on (의존성 체이닝)
+### depends_on
 
-```
-작업 A (runner-001) ──done──→ 작업 B (depends_on=runner-001) ──done──→ 작업 C (depends_on=runner-002)
-```
+- `depends_on`이 설정된 작업은 선행 job이 `done`일 때만 실행 가능
+- 선행 job이 `error`, `rejected`, `rejected_done`이면 후속 queued 작업은 자동 고아 정리된다
 
-- `depends_on` 잡이 `done`이 아니면 `claim_queued_job`에서 스킵
-- 선행 작업 완료 시 `promote_next_queued()`가 후속 작업 승격
+### Git Worktree
 
-### 배치 API
-
-- `POST /api/v1/pipeline/jobs/batch` — 1~20개 작업 동시 제출
-- 자동 `parallel_group`: 미지정 시 `batch-{uuid[:8]}` 생성
-- 작업 간 `depends_on_key` → 실제 `job_id`로 자동 변환
-- 채팅 도구: `pipeline_runner_submit_batch`
-
-### Git Worktree (병렬 실행 시)
-
-- 조건: `MAX_CONCURRENT_PER_PROJECT > 1` 이고 `/tmp` 여유 5GB 이상
+- 조건: `MAX_CONCURRENT_PER_PROJECT > 1` 및 `/tmp` 여유 5GB 이상
 - 경로: `/tmp/aads-wt-{job_id}`
-- 브랜치: `worktree/{group_id}/{task_id}_{PID}`
-- 배포 시: 3-way merge로 main workdir에 통합 후 삭제
+- 실패 시 메인 workdir로 폴백
 
 ---
 
 ## 6. 모델 라우팅
 
-### 사이즈→모델 자동 매핑
+### API 모델 선택: `_get_model_for_size(conn, size)`
 
-| Size | Model | 타임아웃 |
-|------|-------|---------|
-| XS | `claude-haiku-4-5-20251001` | 600초 (10분) |
-| S | `claude-haiku-4-5-20251001` | 1,200초 (20분) |
-| M | `claude-sonnet-4-6` | 3,600초 (60분) |
-| L | `claude-sonnet-4-6` | 5,400초 (90분) |
-| XL | `claude-opus-4-6` | 7,200초 (120분) |
+현재 API 계층은 하드코딩 딕셔너리 대신 `runner_model_config`를 우선 조회한다.
 
-### 모델 선택 우선순위
-
-1. `worker_model` 직접 지정 (최우선)
-2. 명시적 `size` 파라미터
-3. instruction 텍스트에서 `_parse_size_from_instruction` 파싱
-4. `_estimate_size` 휴리스틱 자동 분류
-
-### 6단계 모델+계정 폴백 (Shell Runner)
-
-```
-시도1: claude-sonnet-4-6 + 계정1(Naver)
-시도2: claude-sonnet-4-6 + 계정2(Gmail)
-시도3: claude-opus-4-6   + 계정1(Naver)
-시도4: claude-opus-4-6   + 계정2(Gmail)
-시도5: claude-haiku-4-5  + 계정1(Naver)
-시도6: claude-haiku-4-5  + 계정2(Gmail)
+```sql
+SELECT models FROM runner_model_config WHERE size = $1
 ```
 
-재시도 대기: `3 + attempt × 2`초 (최대 ~15초)
+- `models`가 JSON 배열이면 첫 번째 항목을 1순위 실행 모델로 사용
+- DB 조회 실패 또는 빈 값이면 하드코딩 폴백:
 
-### LiteLLM Runner
+| Size | API 폴백 모델 |
+|------|---------------|
+| XS | `claude-haiku-4-5-20251001` |
+| S | `claude-haiku-4-5-20251001` |
+| M | `claude-sonnet-4-6` |
+| L | `claude-opus-4-6` |
+| XL | `claude-opus-4-6` |
 
-`worker_model`이 `litellm:` 접두사인 경우:
-- `python3 scripts/litellm_runner.py --model {model_name} --instruction {instruction} --workdir {workdir}`
-- 폴백 없이 1회만 시도
+### Shell Runner 모델 사이클
 
-### _estimate_size 휴리스틱 (AADS-229)
+Shell Runner는 `get_db_model_cycle(size)`로 DB의 `models` 배열을 순서대로 꺼낸 뒤 각 모델을 2회씩 확장한다.
 
-- **S**: simple 키워드 2개+ 또는 (길이 < 200 + complex 키워드 0 + 파일참조 ≤ 1)
-- **XL**: complex 키워드 3개+ 또는 파일참조 10개+ 또는 길이 > 5,000
-- **L**: complex 키워드 2개+ 또는 파일참조 5개+ 또는 길이 > 3,000
-- **M**: 나머지
+예시:
 
-Complex 키워드: 리팩토링, 마이그레이션, 아키텍처, 전체, refactor, migration, architecture, all files, 전수, 대규모  
-Simple 키워드: 오타, typo, 주석, comment, 버전, version, 설정 변경, config, 로그, 1줄, 한 줄
+```text
+DB models = [claude-sonnet-4-6, codex:gpt-5.4]
+MODEL_CYCLE = [claude-sonnet-4-6, claude-sonnet-4-6, codex:gpt-5.4, codex:gpt-5.4]
+TOKEN_CYCLE = [1, 2, 1, 2]
+```
+
+DB 조회 실패 시 Shell Runner 폴백:
+
+- `XS`/`S` → `claude-haiku-4-5-20251001`
+- `M`/`L` → `claude-sonnet-4-6`
+- `XL` → `claude-opus-4-6`
+- 앞단에는 `litellm:minimax-m2.7` 2회를 먼저 배치
+
+### `worker_model` 우선순위
+
+1. `worker_model` 직접 지정
+2. 요청 `size`
+3. instruction 내 `SIZE`/`규모` 힌트
+4. `_estimate_size()` 휴리스틱
+
+### Codex CLI 지원
+
+`worker_model`이 `codex:` 접두사면 Codex CLI 경로로 실행한다.
+
+지원 모델:
+
+- `codex:default`
+- `codex:gpt-5.4`
+- `codex:gpt-5.4-mini`
+- `codex:gpt-5.3-codex`
+
+동작 규칙:
+
+- 미지원 Codex 모델명은 `gpt-5.4`로 보정
+- 연결 오류는 5초 간격 최대 12회 재시도
+- rate limit, quota, auth 오류는 재시도 없이 즉시 다음 모델로 폴백
+- Codex 실패 후 폴백 대상은 size별 Claude primary/secondary 모델 조합이다
+
+### LiteLLM Runner 지원
+
+`worker_model`이 `litellm:` 접두사면 Docker 내부 `litellm_runner.py`를 실행한다.
+
+- instruction은 임시 파일로 전달
+- 모델명은 접두사 제거 후 `--model`로 전달
+- 외부 LLM 직접 REST 호출은 사용하지 않고 LiteLLM 프록시 경로만 사용한다
+
+### `_estimate_size()` 휴리스틱
+
+- 단순 작업은 `S`
+- 복잡 키워드/파일 참조 수/본문 길이가 증가할수록 `L` 또는 `XL`
+- 기본값은 `M`
 
 ---
 
@@ -340,30 +324,33 @@ Simple 키워드: 오타, typo, 주석, comment, 버전, version, 설정 변경,
 
 ### 3단계 Lock
 
-| 레벨 | 방식 | 대상 | 파일/키 |
-|------|------|------|---------|
-| **프로세스** | flock | 러너 중복 실행 방지 | `/tmp/pipeline-runner.lock` |
-| **작업** | Redis HTTP API | 프로젝트 단위 작업 잠금 | `POST /api/v1/ops/locks/work/acquire?project=&session_id=` |
-| **배포** | flock + Redis | 동일 프로젝트 동시 배포 방지 | `/tmp/pipeline-deploy-{project}.lock` (300초 대기) |
+| 레벨 | 방식 | 대상 |
+|------|------|------|
+| 프로세스 | `flock` | 러너 중복 실행 방지 (`/tmp/pipeline-runner.lock`) |
+| 작업 | Redis HTTP API | 프로젝트별 work lock |
+| 배포 | `flock` + Redis | 프로젝트별 deploy lock |
 
-### DB 원자적 클레임 (C4)
+### DB 원자적 클레임
 
 ```sql
 UPDATE pipeline_jobs
-SET status = 'claimed', started_at = NOW()
+SET status='claimed', updated_at=NOW()
 WHERE job_id = (
-    SELECT job_id FROM pipeline_jobs
-    WHERE status = 'queued'
-    FOR UPDATE SKIP LOCKED
-    LIMIT 1
-) RETURNING job_id, project, instruction, ...
+  SELECT p.job_id
+  FROM pipeline_jobs p
+  WHERE p.status='queued'
+  FOR UPDATE SKIP LOCKED
+  LIMIT 1
+)
+RETURNING ...
 ```
 
 ### Lock 해제 조건
 
-- 작업 완료 (done/error) → 자동 해제
-- `promote_next_queued()` → 다음 queued 작업 승격
-- stuck 복구: running 60분, deploying 10분, awaiting_approval 24시간 초과 시 강제 해제
+- 성공 종료
+- 실패/취소
+- 승인 대기 전환 후 work lock 해제
+- watchdog에 의한 dead process 정리
 
 ---
 
@@ -371,26 +358,28 @@ WHERE job_id = (
 
 ### Shell Runner 검수 흐름
 
-1. Claude Code 성공 후 `git diff HEAD` 캡처 (최대 50,000자)
-2. `POST /api/v1/review/code-diff` 전송 (30초 타임아웃)
-3. 응답 verdict: `APPROVE` / `REQUEST_CHANGES` / `FLAG`
+1. `git diff HEAD` 수집
+2. 변경 파일 목록 추출
+3. `/api/v1/review/code-diff` 호출
+4. verdict에 따라 채팅방 메시지 보강
 
-### Python Orchestrator 검수 흐름
+### Reviewer 모델 선택
 
-1. `call_background_llm` (model: `claude-sonnet-4-6`)
-2. **5단계 JSON 파싱 폴백**:
-   1. 코드 펜스 제거
-   2. 직접 `json.loads`
-   3. Regex `{...}` 블록 추출
-   4. 줄별 JSON 스캔
-   5. 키워드 기반 verdict 추출 (PASS/통과/정상 → PASS)
-3. 파싱 실패 시 → `DELEGATED` (채팅 AI에 위임)
+`app/services/code_reviewer.py`는 다음 순서로 모델을 결정한다.
 
-### 검수 기준
+1. `runner_model_config WHERE size = 'AI_REVIEW'`
+2. DB 실패 시 `_REVIEW_MODEL_FALLBACK = 'qwen-turbo'`
+3. 실제 호출은 `call_llm_with_fallback()`가 수행하므로 중앙 토큰/프록시 정책을 따른다
 
-- 코드 변경이 instruction과 일치하는지
-- 보안 취약점 여부
-- git diff가 비어있지 않은지
+### 사전 검수 차단
+
+다음 입력은 LLM 리뷰 전에 차단된다.
+
+- 빈 diff → `SKIP`
+- 러너 인증 실패 텍스트 → `FLAG(RUNNER_AUTH_FAILURE)`
+- 실행 오류 텍스트 → `FLAG(RUNNER_EXECUTION_FAILURE)`
+- `git diff` 수집 실패 텍스트 → `FLAG(GIT_DIFF_FAILURE)`
+- 그 외 비정상 입력 → `FLAG(INVALID_REVIEW_INPUT)`
 
 ---
 
@@ -398,89 +387,73 @@ WHERE job_id = (
 
 ### Pipeline Runner 승인
 
-1. AI 검수 완료 → `awaiting_approval` 전환
-2. diff 요약 + 전문을 채팅방에 게시
-3. Telegram 인라인 버튼 전송 (tg_approval_bot.py)
-4. CEO 응답:
-   - **승인** (`pipeline_runner_approve(job_id, action='approve')`) → 배포 시작
-   - **거부** (`pipeline_runner_approve(job_id, action='reject', feedback='...')`) → 원복
+1. AI 리뷰 후 `awaiting_approval`
+2. CEO/채팅 AI가 `pipeline_runner_approve()` 또는 REST API 호출
+3. API가 `approved` 또는 `rejected`로 상태 전환
+4. 결과를 `review_feedback`와 autonomy 통계에 반영
 
-### 승인 경합 방지 (H-11)
+### 승인 경합 방지
 
-- `_job_approve_locks`: 작업별 asyncio.Lock
-- 동일 job_id에 대한 동시 approve/reject 호출 직렬화
-
-### Watchdog 승인
-
-- `approval_queue` 테이블 기반 (별도 시스템)
-- 장애 감지 → Telegram 버튼 → CEO 클릭 → 복구 명령 실행
-- Safe prefixes: `docker restart`, `systemctl restart`, `supervisorctl restart`, `curl`, `npm run build`, `pm2 restart`
+- API는 DB의 `WHERE status='awaiting_approval'` 조건으로 한 번만 상태 전환한다
+- 메모리 기반 오케스트레이터는 `_job_approve_locks`를 별도로 사용한다
 
 ---
 
 ## 10. 서버 매핑
 
-### 프로젝트→서버 매핑
+### 프로젝트 → workdir
 
-| 프로젝트 | 서버 | IP | workdir |
-|----------|------|-----|---------|
-| AADS | 서버68 | 68.183.183.11 | `/root/aads/aads-server` |
-| KIS | 서버211 | 211.188.51.113 | `/root/webapp` |
-| GO100 | 서버211 | 211.188.51.113 | `/root/kis-autotrade-v4` |
-| SF | 서버114 | 116.120.58.155 | `/data/shortflow` |
-| NTV2 | 서버114 | 116.120.58.155 | `/srv/newtalk-v2` |
+| 프로젝트 | 서버 | workdir |
+|----------|------|---------|
+| AADS | 68 | `/root/aads/aads-server` |
+| KIS | 211 | `/root/webapp` |
+| GO100 | 211 | `/root/kis-autotrade-v4` |
+| SF | 114 | `/data/shortflow` |
+| NTV2 | 114 | `/srv/newtalk-v2` |
 
-### 프로젝트별 배포 방식 및 Health Check
+### LiteLLM Runner 경로
 
-| 프로젝트 | 배포 명령 | Health URL | 롤백 |
-|----------|----------|------------|------|
-| AADS | `bash deploy.sh bluegreen` + hot-reload API | `http://localhost:8100/api/v1/health` | git revert + 재배포 |
-| AADS dashboard | `docker compose build/up aads-dashboard` + Visual QA | — | — |
-| KIS | `systemctl restart kis-v41-api` (+ webapp 변경 시 `kis-webapp-api`) | `http://localhost:8003/health` | git revert + 재배포 |
-| GO100 | `systemctl restart go100` + frontend npm build/swap | `http://localhost:8002/health` | git revert + 재배포 |
-| SF | `docker restart shortflow-worker shortflow-dashboard` + saas-dashboard build/swap | `http://localhost:8000/health` | git revert + 재배포 |
-| NTV2 | `php artisan optimize` + frontend build/swap + `docker restart newtalk-v2-reverb` | `http://localhost:8080` | git revert + 재배포 |
-
-Health check: **10초 간격, 최대 3회 재시도**. 실패 시 `git revert HEAD` 자동 롤백 후 재배포.
+| 프로젝트 | runner 경로 |
+|----------|-------------|
+| AADS | `/app/scripts/litellm_runner.py` |
+| KIS | `/root/kis-autotrade-v4/litellm_runner.py` |
+| GO100 | `/root/kis-autotrade-v4/litellm_runner.py` |
+| SF | `/root/scripts/litellm_runner.py` |
+| NTV2 | `/root/scripts/litellm_runner.py` |
 
 ---
 
 ## 11. 에러 처리 및 재시도
 
-### 에러 분류 (`classify_error`)
+### `classify_error()` 분류
 
-| 에러 유형 | 조건 |
-|----------|------|
-| `timeout` | exit_code=124 또는 MAX_RUNTIME 초과 |
-| `git_conflict` | stderr에 merge conflict 패턴 |
-| `oom_killed` | exit_code=137 또는 Killed 패턴 |
-| `auth_error` | 인증 관련 에러 메시지 |
-| `rate_limit` | Rate limit / 429 패턴 |
-| `disk_full` | No space left on device |
-| `code_syntax_error` | SyntaxError / IndentationError |
-| `build_fail` | Build failed / compile error |
-| `permission_denied` | Permission denied |
-| `network_error` | Connection refused / timeout |
+| error_detail | 조건 예시 |
+|-------------|-----------|
+| `timeout` | exit 124, timed out |
+| `git_conflict` | merge conflict |
+| `oom_killed` | exit 137/139, Killed |
+| `auth_error` | authentication, unauthorized |
+| `rate_limit` | 429, quota exceeded |
+| `disk_full` | ENOSPC, disk full |
+| `code_syntax_error` | SyntaxError |
+| `build_fail` | compilation error, ModuleNotFoundError |
+| `permission_denied` | EACCES |
+| `network_error` | connection refused, ETIMEDOUT |
 | `unknown` | 기타 |
 
 ### 재시도 전략
 
-- Shell Runner: `MAX_RETRIES=2` + 6단계 모델/계정 폴백 = 최대 6회 시도
-- Python Orchestrator: SSH 최대 3회 재시도 (exponential backoff: 2s, 4s, 8s)
-- 재시도 대기: `3 + attempt × 2`초
+- Claude/LiteLLM/Codex는 `MODEL_CYCLE` 기준으로 순차 폴백
+- `TOKEN_CYCLE`로 계정 1/2를 번갈아 사용
+- Codex 연결 계열 오류는 추가 12회 재시도
+- 의존 작업 실패 시 후속 queued 작업은 자동 정리
 
-### Stuck 작업 복구 (`_recover_stuck_jobs`)
+### Watchdog/복구
 
-| 상태 | 타임아웃 | 조치 |
-|------|---------|------|
-| running/claimed | 60분 (MAX_JOB_RUNTIME=3,600초) | error 전환 + zombie kill |
-| deploying | 10분 | error 전환 |
-| awaiting_approval | 24시간 | error 전환 (타임아웃) |
-
-### 실행 시간 알림
-
-- 60분 초과: 텔레그램 경고 (중복 방지: `/tmp/runner_alert_{job_id}_60`)
-- 120분 초과: 텔레그램 긴급 경고 (중복 방지: `/tmp/runner_alert_{job_id}_120`)
+- `MAX_JOB_RUNTIME=3600`
+- `WATCHDOG_INTERVAL=300`
+- dead PID 감지 시 `cancelled`
+- 승인 대기 타임아웃: `APPROVAL_TIMEOUT_HOURS=24`
 
 ---
 
@@ -490,49 +463,35 @@ Health check: **10초 간격, 최대 3회 재시도**. 실패 시 `git revert HE
 
 | 로그 | 경로 |
 |------|------|
-| 메인 러너 로그 | `/var/log/aads-pipeline/runner.log` |
-| 작업 stdout | `/tmp/aads_pipeline_artifacts/{job_id}.out` |
-| 작업 stderr | `/tmp/aads_pipeline_artifacts/{job_id}.err` |
-| auto_trigger 우선순위 | `/var/log/aads/auto_trigger_priority.log` |
-| 투입 결정 | `/var/log/aads/trigger_decisions.log` |
-| systemd 저널 | `journalctl -u aads-pipeline-runner` |
+| 메인 로그 | `/var/log/aads-pipeline/runner.log` |
+| stdout | `/tmp/aads_pipeline_artifacts/{job_id}.out` |
+| stderr | `/tmp/aads_pipeline_artifacts/{job_id}.err` |
 
-### SSE 모니터링
+### 핵심 운영 API
 
-- 실시간 로그: `GET /api/v1/tasks/{task_id}/stream`
-- 활성 작업 목록: `GET /api/v1/tasks/active?session_id={id}`
+- `GET /api/v1/pipeline/jobs`
+- `GET /api/v1/pipeline/jobs/{job_id}`
+- `GET /api/v1/pipeline/lock-status?project=AADS`
+- `GET /api/v1/pipeline/settings/runner-models`
 
-### DB 쿼리 (운영 확인용)
+### 설정 대시보드 반영 포인트
 
-```sql
--- 전체 작업 현황
-SELECT status, COUNT(*) FROM pipeline_jobs GROUP BY status;
-
--- 실행 중 작업
-SELECT job_id, project, phase, started_at FROM pipeline_jobs WHERE status = 'running';
-
--- 최근 에러
-SELECT job_id, project, error_detail, updated_at FROM pipeline_jobs
-WHERE status = 'error' ORDER BY updated_at DESC LIMIT 10;
-
--- 승인 대기
-SELECT job_id, project, created_at FROM pipeline_jobs WHERE status = 'awaiting_approval';
-```
+- 대시보드는 `runner_model_config`를 통해 XS/S/M/L/XL/AI_REVIEW 6개 카테고리를 관리한다
+- 운영 UI는 모델 우선순위 카드를 2열로 배치하는 구성을 전제로 한다
+- 모델 선택군은 운영상 다음 그룹을 사용한다: Claude, Codex, MiniMax, Groq, Gemini, Qwen, DeepSeek, Kimi, OpenRouter
 
 ### 핵심 상수 요약
 
 | 상수 | 값 | 출처 |
 |------|-----|------|
-| `POLL_INTERVAL` | 5초 | pipeline-runner.sh |
-| `MAX_RUNTIME` | 7,200초 (2시간) | pipeline-runner.sh |
-| `MAX_JOB_RUNTIME` | 3,600초 (1시간) | pipeline-runner.sh |
-| `MAX_CONCURRENT_PER_PROJECT` | 3 | pipeline-runner.sh |
-| `MAX_CONCURRENT_GLOBAL` | 10 | pipeline-runner.sh |
-| `APPROVAL_TIMEOUT_HOURS` | 24 | pipeline-runner.sh |
-| `_STALL_THRESHOLD_SEC` | 1,800초 (30분) | pipeline_runner_service.py |
-| `_REVIEW_MODEL` | claude-sonnet-4-6 | pipeline_runner_service.py |
-| `WATCHDOG_INTERVAL` | 300초 (5분) | pipeline-runner.sh |
-| Watchdog loop | 120초 | pipeline_runner_service.py |
+| `POLL_INTERVAL` | 5초 | `pipeline-runner.sh` |
+| `MAX_RUNTIME` | 7200초 | `pipeline-runner.sh` |
+| `MAX_JOB_RUNTIME` | 3600초 | `pipeline-runner.sh` |
+| `MAX_CONCURRENT_PER_PROJECT` | 3 | `pipeline-runner.sh` |
+| `APPROVAL_TIMEOUT_HOURS` | 24 | `pipeline-runner.sh` |
+| `WATCHDOG_INTERVAL` | 300초 | `pipeline-runner.sh` |
+| `_SSH_MAX_RETRIES` | 3 | `pipeline_runner_service.py` |
+| `_SSH_RETRY_BASE_DELAY` | 2초 | `pipeline_runner_service.py` |
 
 ---
 
@@ -540,13 +499,8 @@ SELECT job_id, project, created_at FROM pipeline_jobs WHERE status = 'awaiting_a
 
 | 파일 | 줄 수 | 역할 |
 |------|------|------|
-| `app/api/pipeline_runner.py` | 612 | REST API |
-| `app/services/pipeline_runner_service.py` | 2,216 | 오케스트레이터 |
-| `scripts/pipeline-runner.sh` | 1,570 | Shell 실행기 |
-| `scripts/auto_trigger.sh` | 961 | 레거시 자동 트리거 |
-| `app/api/approval.py` | 325 | Watchdog 승인 큐 |
-| `scripts/tg_approval_bot.py` | 293 | 텔레그램 봇 |
-| `app/api/task_monitor.py` | 169 | SSE 모니터 |
-| `app/api/ceo_chat_tools.py` | 3,489 | 채팅 도구 정의 |
-| `app/services/tool_executor.py` | 2,644 | 도구 실행기 |
-| `scripts/aads-pipeline-runner.service` | 31 | systemd 서비스 |
+| `app/api/pipeline_runner.py` | 829 | Pipeline Runner API + 설정 API |
+| `app/services/code_reviewer.py` | 431 | AI 리뷰 모델 조회/판정/저장 |
+| `scripts/pipeline-runner.sh` | 1865 | 주 실행기 |
+| `app/services/pipeline_runner_service.py` | 2430+ | 대안 오케스트레이터/SSH 실행 |
+| `app/services/model_selector.py` | 1300+ | 모델 식별자/라우팅 기준 |
