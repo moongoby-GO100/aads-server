@@ -1029,6 +1029,11 @@ deploy_job() {
     (
         flock -w 300 200 || { log "  DEPLOY_LOCK_TIMEOUT: $project"; return 1; }
 
+        # FIX (P0-A): 커밋 전 HEAD SHA 캡처 — 커밋 후 frontend/ 변경 감지용 (git diff HEAD는 커밋 후 항상 빈값)
+        local _pre_sha=""
+        _pre_sha=$(git -C "$main_workdir" rev-parse HEAD 2>/dev/null) || _pre_sha=""
+        echo "$_pre_sha" > "/tmp/pipeline-pre-sha-${job_id}"
+
         if [[ -d "$worktree_dir" ]]; then
             cd "$worktree_dir"
             git add -A 2>/dev/null || true
@@ -1113,6 +1118,13 @@ deploy_job() {
     if [[ -f "/tmp/pipeline-push-result-${job_id}" ]]; then
         _push_result=$(cat "/tmp/pipeline-push-result-${job_id}" 2>/dev/null) || _push_result="unknown"
         rm -f "/tmp/pipeline-push-result-${job_id}" 2>/dev/null || true
+    fi
+
+    # FIX (P0-A): 커밋 전 SHA 복원 — GO100/SF/NTV2 frontend 변경 감지용
+    local _pre_sha=""
+    if [[ -f "/tmp/pipeline-pre-sha-${job_id}" ]]; then
+        _pre_sha=$(cat "/tmp/pipeline-pre-sha-${job_id}" 2>/dev/null) || _pre_sha=""
+        rm -f "/tmp/pipeline-pre-sha-${job_id}" 2>/dev/null || true
     fi
 
     if [[ "$_push_result" != "ok" ]]; then
@@ -1263,22 +1275,38 @@ deploy_job() {
             # GO100 Frontend: npm build → restart (빌드 중 기존 서비스 유지)
             local _fe_dir="/root/kis-autotrade-v4/frontend"
             if [ -d "$_fe_dir" ]; then
+                # FIX (P0-A): 커밋 전 SHA 기준으로 frontend 변경 감지 (git diff HEAD는 커밋 후 항상 빈값)
                 local _fe_changed=""
-                _fe_changed=$(git -C /root/kis-autotrade-v4 diff HEAD --name-only -- frontend/ 2>/dev/null) || true
+                if [[ -n "$_pre_sha" ]]; then
+                    _fe_changed=$(git -C /root/kis-autotrade-v4 diff "$_pre_sha" HEAD --name-only -- frontend/ 2>/dev/null) || true
+                else
+                    # FALLBACK: _pre_sha 비었을 때 HEAD~1..HEAD로 비교 (원 버그 재발 방지)
+                    _fe_changed=$(git -C /root/kis-autotrade-v4 diff HEAD~1 HEAD --name-only -- frontend/ 2>/dev/null) || true
+                fi
                 if [ -n "$_fe_changed" ]; then
-                    log "  ZERO-DOWNTIME go100-frontend build start"
+                    log "  ZERO-DOWNTIME go100-frontend build start (changed: $(echo "$_fe_changed" | wc -l) files)"
                     cd "$_fe_dir"
+                    # P1: build 전 BUILD_ID 캡처 (빌드 반영 검증용)
+                    local _old_build_id=""
+                    [ -f "$_fe_dir/.next/BUILD_ID" ] && _old_build_id=$(cat "$_fe_dir/.next/BUILD_ID" 2>/dev/null) || true
                     # Step 1: 빌드 (기존 next start 프로세스 유지)
                     if npx next build 2>&1 | tail -5; then
+                        # P1: build 후 BUILD_ID 검증 — 변경 없으면 빌드 미반영 경고
+                        local _new_build_id=""
+                        [ -f "$_fe_dir/.next/BUILD_ID" ] && _new_build_id=$(cat "$_fe_dir/.next/BUILD_ID" 2>/dev/null) || true
+                        if [[ -n "$_old_build_id" && "$_old_build_id" == "$_new_build_id" ]]; then
+                            log "  WARN: go100-frontend BUILD_ID unchanged ($_new_build_id) — 빌드 반영 안 됨"
+                            post_to_chat "$session_id" "⚠️ [Runner] GO100 프론트엔드 BUILD_ID 변경 없음 — 빌드 미반영 의심"
+                        fi
                         # Step 2: 빌드 성공 → restart (새 .next/ 반영)
                         systemctl restart go100-frontend 2>/dev/null || true
-                        log "  go100-frontend zero-downtime restart complete"
+                        log "  go100-frontend zero-downtime restart complete (BUILD_ID=${_new_build_id:0:8})"
                     else
                         log "  WARN: go100-frontend build failed — 기존 서비스 유지"
                         post_to_chat "$session_id" "⚠️ [Runner] GO100 프론트엔드 빌드 실패 — 기존 버전 유지"
                     fi
                 else
-                    log "  SKIP go100-frontend (no frontend changes)"
+                    log "  SKIP go100-frontend (no frontend changes since $_pre_sha)"
                 fi
             fi
             ;;
@@ -1289,8 +1317,14 @@ deploy_job() {
             docker restart shortflow-dashboard 2>/dev/null || true
             log "  RESTART shortflow-worker, shortflow-dashboard"
             # saas-dashboard: Docker 이미지 빌드 → build→swap
+            # FIX (P0-A): 커밋 전 SHA 기준으로 변경 감지
             local _saas_changed=""
-            _saas_changed=$(git -C /data/shortflow diff HEAD --name-only -- saas-dashboard/ 2>/dev/null) || true
+            if [[ -n "$_pre_sha" ]]; then
+                _saas_changed=$(git -C /data/shortflow diff "$_pre_sha" HEAD --name-only -- saas-dashboard/ 2>/dev/null) || true
+            else
+                # FALLBACK: _pre_sha 비었을 때 HEAD~1..HEAD로 비교
+                _saas_changed=$(git -C /data/shortflow diff HEAD~1 HEAD --name-only -- saas-dashboard/ 2>/dev/null) || true
+            fi
             if [ -n "$_saas_changed" ]; then
                 log "  ZERO-DOWNTIME shortflow-saas-dashboard"
                 if docker compose -f "$_sf_compose" build saas-dashboard 2>&1 | tail -5; then
@@ -1307,8 +1341,14 @@ deploy_job() {
             docker exec newtalk-v2-app php artisan optimize 2>/dev/null || true
             log "  OPTIMIZE newtalk-v2-app (OPcache clear)"
             # NTV2 Frontend: Docker 이미지 빌드 → build→swap
+            # FIX (P0-A): 커밋 전 SHA 기준으로 변경 감지 (GO100/SF와 동일 패턴)
             local _ntv2_fe_changed=""
-            _ntv2_fe_changed=$(git -C /srv/newtalk-v2 diff HEAD --name-only -- frontend/ 2>/dev/null) || true
+            if [[ -n "$_pre_sha" ]]; then
+                _ntv2_fe_changed=$(git -C /srv/newtalk-v2 diff "$_pre_sha" HEAD --name-only -- frontend/ 2>/dev/null) || true
+            else
+                # FALLBACK: _pre_sha 비었을 때 HEAD~1..HEAD로 비교
+                _ntv2_fe_changed=$(git -C /srv/newtalk-v2 diff HEAD~1 HEAD --name-only -- frontend/ 2>/dev/null) || true
+            fi
             if [ -n "$_ntv2_fe_changed" ]; then
                 log "  ZERO-DOWNTIME newtalk-v2-frontend"
                 if docker compose -f "$_ntv2_compose" build frontend 2>&1 | tail -5; then
