@@ -244,6 +244,18 @@ def _build_codex_home(session_id):
     codex_dir = home / ".codex"
     codex_dir.mkdir(parents=True, exist_ok=True)
 
+    # auth.json을 기본 Codex HOME(/root/.codex)에서 세션 HOME으로 심볼릭 링크
+    # → HOME 분리로 인한 401 Unauthorized 방지 (ChatGPT Plus OAuth 공유)
+    default_auth = Path("/root/.codex/auth.json")
+    session_auth = codex_dir / "auth.json"
+    if default_auth.exists():
+        try:
+            if session_auth.is_symlink() or session_auth.exists():
+                session_auth.unlink()
+            session_auth.symlink_to(default_auth)
+        except Exception as exc:
+            logger.warning("Codex auth.json symlink 실패 session=%s err=%s", session_id, exc)
+
     mcp_cfg = _load_mcp_template(session_id)
     server_cfg = (mcp_cfg.get("mcpServers", {}) or {}).get("aads-tools", {})
     command = server_cfg.get("command", "docker")
