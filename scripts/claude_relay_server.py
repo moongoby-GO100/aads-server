@@ -261,14 +261,27 @@ def _build_codex_home(session_id):
     command = server_cfg.get("command", "docker")
     args = server_cfg.get("args", [])
 
+    # TOML 구조: 최상위(globals) → [projects."..."] → [mcp_servers.aads-tools]
+    # 참고: https://developers.openai.com/codex/mcp
     cfg_lines = [
+        # --- globals (공식 스펙: approval_policy, sandbox_mode, model_reasoning_effort) ---
+        'approval_policy = "never"',
+        'sandbox_mode = "workspace-write"',
+        'model_reasoning_effort = "high"',
+        "",
+        # --- [projects."/root/aads/aads-server"] ---
         '[projects."/root/aads/aads-server"]',
         'trust_level = "trusted"',
         "",
+        # --- [mcp_servers.aads-tools] ---
         "[mcp_servers.aads-tools]",
         "command = " + _toml_basic_string(command),
         "args = [" + ", ".join(_toml_basic_string(arg) for arg in args) + "]",
+        # --- 공식 스펙: startup_timeout_sec, tool_timeout_sec ---
+        "startup_timeout_sec = 30",
+        "tool_timeout_sec = 120",
     ]
+
     cwd = server_cfg.get("cwd")
     if cwd:
         cfg_lines.append("cwd = " + _toml_basic_string(cwd))
