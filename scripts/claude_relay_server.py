@@ -46,6 +46,7 @@ _semaphore = None  # 앱 시작 시 실제 이벤트 루프에서 생성 (Python
 _DIRECT_OAUTH_ENABLED = os.getenv("AADS_CLAUDE_DIRECT_OAUTH", "0") == "1"
 _ENV_OAUTH_FILE = Path(os.getenv("ENV_OAUTH_FILE", "/root/.genspark/.env.oauth"))
 _RELAY_HOME = Path("/tmp/.claude-relay")
+_CODEX_HOME_ROOT = Path(os.getenv("CODEX_HOME_ROOT", "/root/.codex-relay"))
 _last_429_slot = 0
 
 _session_map = {}  # type: dict
@@ -147,6 +148,14 @@ def _save_session_map():
 
 
 def _build_mcp_config(session_id):
+    template = _load_mcp_template(session_id)
+    fd, path = tempfile.mkstemp(prefix="mcp_", suffix=".json")
+    with os.fdopen(fd, "w") as f:
+        json.dump(template, f)
+    return path
+
+
+def _load_mcp_template(session_id):
     if MCP_TEMPLATE.exists():
         template = json.loads(MCP_TEMPLATE.read_text())
     else:
@@ -173,10 +182,96 @@ def _build_mcp_config(session_id):
             new_args.insert(2, "-e")
             new_args.insert(3, "AADS_SESSION_ID=" + (session_id or ""))
         cfg["args"] = new_args
-    fd, path = tempfile.mkstemp(prefix="mcp_", suffix=".json")
-    with os.fdopen(fd, "w") as f:
-        json.dump(template, f)
-    return path
+    return template
+
+
+def _toml_basic_string(value):
+    return json.dumps(value)
+
+
+def _extract_text_from_content(content):
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") in ("output_text", "text"):
+            parts.append(block.get("text", ""))
+    return "".join(parts)
+
+
+def _parse_codex_tool_event(event):
+    evt_type = event.get("type", "")
+
+    if evt_type == "item.completed":
+        item = event.get("item", {}) or {}
+        item_type = item.get("type", "")
+        if item_type == "function_call":
+            return {
+                "type": "tool_use",
+                "tool_name": item.get("name", ""),
+                "tool_use_id": item.get("call_id", "") or item.get("id", ""),
+                "tool_input": item.get("arguments", {}),
+            }
+        if item_type == "function_call_output":
+            output = item.get("output")
+            if not isinstance(output, str):
+                output = json.dumps(output, ensure_ascii=False) if output is not None else ""
+            return {
+                "type": "tool_result",
+                "tool_name": item.get("name", ""),
+                "tool_use_id": item.get("call_id", "") or item.get("id", ""),
+                "content": output,
+            }
+
+    if evt_type == "function_call_output":
+        output = event.get("output")
+        if not isinstance(output, str):
+            output = json.dumps(output, ensure_ascii=False) if output is not None else ""
+        return {
+            "type": "tool_result",
+            "tool_name": event.get("name", ""),
+            "tool_use_id": event.get("call_id", "") or event.get("id", ""),
+            "content": output,
+        }
+
+    return None
+
+
+def _build_codex_home(session_id):
+    _CODEX_HOME_ROOT.mkdir(parents=True, exist_ok=True)
+    safe_session = re.sub(r"[^A-Za-z0-9_.-]+", "_", session_id or "default")
+    home = _CODEX_HOME_ROOT / safe_session
+    codex_dir = home / ".codex"
+    codex_dir.mkdir(parents=True, exist_ok=True)
+
+    mcp_cfg = _load_mcp_template(session_id)
+    server_cfg = (mcp_cfg.get("mcpServers", {}) or {}).get("aads-tools", {})
+    command = server_cfg.get("command", "docker")
+    args = server_cfg.get("args", [])
+
+    cfg_lines = [
+        '[projects."/root/aads/aads-server"]',
+        'trust_level = "trusted"',
+        "",
+        "[mcp_servers.aads-tools]",
+        "command = " + _toml_basic_string(command),
+        "args = [" + ", ".join(_toml_basic_string(arg) for arg in args) + "]",
+    ]
+    cwd = server_cfg.get("cwd")
+    if cwd:
+        cfg_lines.append("cwd = " + _toml_basic_string(cwd))
+
+    env_map = server_cfg.get("env", {}) or {}
+    if env_map:
+        cfg_lines.extend([
+            "",
+            "[mcp_servers.aads-tools.env]",
+        ])
+        for key, value in env_map.items():
+            cfg_lines.append("{0} = {1}".format(key, _toml_basic_string(value)))
+
+    (codex_dir / "config.toml").write_text("\n".join(cfg_lines) + "\n")
+    return str(home)
 
 
 async def handle_stream(request):
@@ -353,6 +448,7 @@ async def handle_codex_stream(request):
         return web.json_response({"error": "invalid JSON"}, status=400)
     system_prompt = body.get("system_prompt", "")
     messages_text = body.get("messages_text", "")
+    tool_names = body.get("tool_names", [])
     model = body.get("model", "gpt-5.4")
     session_id = body.get("session_id", "")
     if not messages_text:
@@ -361,20 +457,25 @@ async def handle_codex_stream(request):
     prompt = messages_text
     if system_prompt:
         prompt = "[SYSTEM]\n" + system_prompt + "\n\n[USER]\n" + messages_text
+    if tool_names:
+        prompt = "[AVAILABLE_AADS_MCP_TOOLS]\n" + ", ".join(tool_names) + "\n\n" + prompt
     try:
         async with _semaphore:
             response = web.StreamResponse(status=200, reason="OK", headers={
                 "Content-Type": "application/x-ndjson",
                 "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
             await response.prepare(request)
+            codex_home = _build_codex_home(session_id)
             cmd = [CODEX_BIN, "exec", "--json", "--full-auto",
                    "--skip-git-repo-check", "-C", "/root/aads/aads-server"]
             if codex_model:
                 cmd.extend(["-m", codex_model])
             cmd.append(prompt)
-            logger.info("Codex: model=%s prompt_len=%d", codex_model, len(prompt))
+            logger.info("Codex: model=%s prompt_len=%d tools=%d", codex_model, len(prompt), len(tool_names))
             proc_env = dict(os.environ)
             proc_env["AADS_SESSION_ID"] = session_id
+            proc_env["HOME"] = codex_home
+            proc_env.setdefault("TMPDIR", "/tmp")
             proc = await asyncio.create_subprocess_exec(
                 *cmd, stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
@@ -395,43 +496,29 @@ async def handle_codex_stream(request):
                     except json.JSONDecodeError:
                         continue
                     evt_type = event.get("type", "")
+                    tool_evt = _parse_codex_tool_event(event)
+                    if tool_evt:
+                        await response.write(json.dumps(tool_evt).encode() + b"\n")
+                        continue
                     text = ""
                     if evt_type == "item.completed":
                         item = event.get("item", {})
                         text = item.get("text", "")
                         if not text:
-                            content = item.get("content")
-                            if isinstance(content, list):
-                                text = "".join(
-                                    block.get("text", "")
-                                    for block in content
-                                    if isinstance(block, dict) and block.get("type") == "output_text"
-                                )
+                            text = _extract_text_from_content(item.get("content"))
                     elif evt_type in {"message.delta", "message.completed"}:
                         delta = event.get("delta", {})
                         if isinstance(delta, dict):
                             text = delta.get("text", "")
                             if not text:
-                                content = delta.get("content")
-                                if isinstance(content, list):
-                                    text = "".join(
-                                        block.get("text", "")
-                                        for block in content
-                                        if isinstance(block, dict) and block.get("type") in {"output_text", "text"}
-                                    )
+                                text = _extract_text_from_content(delta.get("content"))
                         elif isinstance(delta, str):
                             text = delta
                         if not text:
                             message = event.get("message", {})
                             if isinstance(message, dict):
-                                content = message.get("content")
-                                if isinstance(content, list):
-                                    text = "".join(
-                                        block.get("text", "")
-                                        for block in content
-                                        if isinstance(block, dict) and block.get("type") in {"output_text", "text"}
-                                    )
-                    elif evt_type in {"function_call_output", "tool.completed", "item.created", "item.streaming"}:
+                                text = _extract_text_from_content(message.get("content"))
+                    elif evt_type in {"tool.completed", "item.created", "item.streaming"}:
                         text = ""
                     if text:
                         if full_text and text and full_text.endswith(text):

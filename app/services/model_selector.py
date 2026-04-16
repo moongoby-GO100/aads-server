@@ -653,7 +653,7 @@ async def call_stream(
     # Codex CLI 모델 → Relay /codex-stream 경유 (ChatGPT Plus OAuth, 실패 시 Gemini Flash 폴백)
     if model in _CODEX_MODELS:
         _had_error = False
-        async for event in _stream_codex_relay(model, system_prompt, messages, session_id=session_id):
+        async for event in _stream_codex_relay(model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
                 logger.warning(f"codex_fallback: {model} failed, falling back to gemini-2.5-flash")
@@ -1337,13 +1337,20 @@ async def _stream_codex_relay(
     model: str,
     system_prompt: str,
     messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
     session_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Codex CLI Relay (/codex-stream) 경유 GPT 스트리밍. ChatGPT Plus OAuth."""
     formatted = _format_messages_for_llm(messages, has_resume=False)
     if isinstance(formatted, list):
         formatted = "\n".join(b.get("text", "") for b in formatted if isinstance(b, dict))
-    req_body = {"model": model, "system_prompt": system_prompt, "messages_text": formatted, "session_id": session_id or ""}
+    req_body = {
+        "model": model,
+        "system_prompt": system_prompt,
+        "messages_text": formatted,
+        "session_id": session_id or "",
+        "tool_names": [t.get("name", "") for t in (tools or []) if t.get("name")],
+    }
     display_model = _CODEX_MODEL_DISPLAY.get(model, model)
     yield {"type": "model_info", "model": display_model}
     try:
@@ -1375,6 +1382,20 @@ async def _stream_codex_relay(
                     evt_type = event.get("type", "")
                     if evt_type == "assistant" and event.get("subtype") == "text":
                         yield {"type": "delta", "content": event.get("text", "")}
+                    elif evt_type == "tool_use":
+                        yield {
+                            "type": "tool_use",
+                            "tool_name": event.get("tool_name", ""),
+                            "tool_use_id": event.get("tool_use_id", ""),
+                            "tool_input": event.get("tool_input", {}),
+                        }
+                    elif evt_type == "tool_result":
+                        yield {
+                            "type": "tool_result",
+                            "tool_name": event.get("tool_name", ""),
+                            "tool_use_id": event.get("tool_use_id", ""),
+                            "content": event.get("content", ""),
+                        }
                     elif evt_type == "error":
                         yield {"type": "error", "content": event.get("content", "Codex error")}
                         return
