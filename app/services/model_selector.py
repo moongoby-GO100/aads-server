@@ -634,7 +634,7 @@ async def call_stream(
     # Kimi / MiniMax 모델 → LiteLLM 경유 (실패 시 Gemini Flash 폴백)
     if model in _KIMI_MODELS or model in _MINIMAX_MODELS:
         _had_error = False
-        async for event in _stream_litellm_openai(model, system_prompt, messages, tools=None):
+        async for event in _stream_litellm_openai(model, system_prompt, messages, tools=tools):
             if event.get("type") == "error":
                 _had_error = True
                 logger.warning(f"kimi_minimax_fallback: {model} failed, falling back to gemini-2.5-flash")
@@ -1343,7 +1343,7 @@ async def _stream_codex_relay(
     formatted = _format_messages_for_llm(messages, has_resume=False)
     if isinstance(formatted, list):
         formatted = "\n".join(b.get("text", "") for b in formatted if isinstance(b, dict))
-    req_body = {"model": model, "system_prompt": system_prompt, "messages_text": formatted}
+    req_body = {"model": model, "system_prompt": system_prompt, "messages_text": formatted, "session_id": session_id or ""}
     display_model = _CODEX_MODEL_DISPLAY.get(model, model)
     yield {"type": "model_info", "model": display_model}
     try:

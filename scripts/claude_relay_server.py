@@ -354,6 +354,7 @@ async def handle_codex_stream(request):
     system_prompt = body.get("system_prompt", "")
     messages_text = body.get("messages_text", "")
     model = body.get("model", "gpt-5.4")
+    session_id = body.get("session_id", "")
     if not messages_text:
         return web.json_response({"error": "messages_text required"}, status=400)
     codex_model = _CODEX_MODEL_MAP.get(model, "gpt-5.4")
@@ -366,16 +367,18 @@ async def handle_codex_stream(request):
                 "Content-Type": "application/x-ndjson",
                 "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
             await response.prepare(request)
-            cmd = [CODEX_BIN, "exec", "--json", "--ephemeral",
+            cmd = [CODEX_BIN, "exec", "--json", "--full-auto",
                    "--skip-git-repo-check", "-C", "/root/aads/aads-server"]
             if codex_model:
                 cmd.extend(["-m", codex_model])
             cmd.append(prompt)
             logger.info("Codex: model=%s prompt_len=%d", codex_model, len(prompt))
+            proc_env = dict(os.environ)
+            proc_env["AADS_SESSION_ID"] = session_id
             proc = await asyncio.create_subprocess_exec(
                 *cmd, stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE, env=dict(os.environ))
+                stderr=asyncio.subprocess.PIPE, env=proc_env)
             proc.stdin.close()
             full_text = ""
             input_tokens = output_tokens = 0
@@ -392,15 +395,54 @@ async def handle_codex_stream(request):
                     except json.JSONDecodeError:
                         continue
                     evt_type = event.get("type", "")
+                    text = ""
                     if evt_type == "item.completed":
-                        text = event.get("item", {}).get("text", "")
-                        if text:
-                            for i in range(0, len(text), 40):
-                                chunk = text[i:i + 40]
-                                await response.write(
-                                    json.dumps({"type": "assistant", "subtype": "text", "text": chunk}).encode() + b"\n")
-                                await asyncio.sleep(0.015)
-                            full_text += text
+                        item = event.get("item", {})
+                        text = item.get("text", "")
+                        if not text:
+                            content = item.get("content")
+                            if isinstance(content, list):
+                                text = "".join(
+                                    block.get("text", "")
+                                    for block in content
+                                    if isinstance(block, dict) and block.get("type") == "output_text"
+                                )
+                    elif evt_type in {"message.delta", "message.completed"}:
+                        delta = event.get("delta", {})
+                        if isinstance(delta, dict):
+                            text = delta.get("text", "")
+                            if not text:
+                                content = delta.get("content")
+                                if isinstance(content, list):
+                                    text = "".join(
+                                        block.get("text", "")
+                                        for block in content
+                                        if isinstance(block, dict) and block.get("type") in {"output_text", "text"}
+                                    )
+                        elif isinstance(delta, str):
+                            text = delta
+                        if not text:
+                            message = event.get("message", {})
+                            if isinstance(message, dict):
+                                content = message.get("content")
+                                if isinstance(content, list):
+                                    text = "".join(
+                                        block.get("text", "")
+                                        for block in content
+                                        if isinstance(block, dict) and block.get("type") in {"output_text", "text"}
+                                    )
+                    elif evt_type in {"function_call_output", "tool.completed", "item.created", "item.streaming"}:
+                        text = ""
+                    if text:
+                        if full_text and text and full_text.endswith(text):
+                            text = ""
+                    if text:
+                        for i in range(0, len(text), 40):
+                            chunk = text[i:i + 40]
+                            await response.write(
+                                json.dumps({"type": "assistant", "subtype": "text", "text": chunk}).encode() + b"\n")
+                            await asyncio.sleep(0.015)
+                        full_text += text
                     elif evt_type == "turn.completed":
                         usage = event.get("usage", {})
                         input_tokens += usage.get("input_tokens", 0)
