@@ -13,6 +13,7 @@ AADS Docker -> (httpx) -> 이 릴레이 -> claude CLI subprocess
 호환: Python 3.6+ (호스트 CentOS 7)
 """
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -356,7 +357,24 @@ def _build_codex_home(session_id):
         for key, value in env_map.items():
             cfg_lines.append("{0} = {1}".format(key, _toml_basic_string(value)))
 
-    (codex_dir / "config.toml").write_text("\n".join(cfg_lines) + "\n")
+    config_path = codex_dir / "config.toml"
+    next_config_text = "\n".join(cfg_lines) + "\n"
+
+    current_config_text = ""
+    if config_path.exists():
+        try:
+            current_config_text = config_path.read_text()
+        except Exception as exc:
+            logger.warning("Codex config.toml read 실패 session=%s err=%s", session_id, exc)
+
+    current_hash = hashlib.sha256(current_config_text.encode("utf-8")).hexdigest()
+    next_hash = hashlib.sha256(next_config_text.encode("utf-8")).hexdigest()
+    if current_hash != next_hash:
+        config_path.write_text(next_config_text)
+        logger.info(f"[codex] config.toml refreshed for session={session_id or 'default'}")
+    else:
+        logger.debug(f"[codex] config.toml unchanged for session={session_id or 'default'}")
+
     return str(home)
 
 
