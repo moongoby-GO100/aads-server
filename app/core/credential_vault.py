@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 _VAULT_KEY: bytes | None = None
 
 
-_VAULT_KEY_FILE = "/app/data/vault.key"
+_VAULT_KEY_FILE = "/app/app/.vault.key"
 
 
 def _get_fernet() -> Fernet:

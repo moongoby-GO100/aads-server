@@ -1060,7 +1060,7 @@ app = FastAPI(
 # H-07: CORS middleware — restrict to AADS dashboard origin
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://aads.newtalk.kr", "https://kakaobot.newtalk.kr"],
+    allow_origins=["https://aads.newtalk.kr", "https://kakaobot.newtalk.kr", "http://localhost:3000", "http://localhost:3001"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
