@@ -156,11 +156,13 @@ def _build_mcp_config(session_id):
 
 
 def _load_mcp_template(session_id):
+    # session_id 빈값 방지: MCP bridge가 세션 컨텍스트를 잃지 않도록 'default' 기본값 주입
+    safe_sid = session_id or "default"
     if MCP_TEMPLATE.exists():
         template = json.loads(MCP_TEMPLATE.read_text())
     else:
         template = {"mcpServers": {"aads-tools": {"command": "docker", "args": [
-            "exec", "-i", "-e", "AADS_SESSION_ID=" + (session_id or ""),
+            "exec", "-i", "-e", "AADS_SESSION_ID=" + safe_sid,
             "aads-server", "python", "-m", "mcp_servers.aads_tools_bridge"]}}}
     servers = template.get("mcpServers", {})
     for name, cfg in servers.items():
@@ -173,14 +175,14 @@ def _load_mcp_template(session_id):
                 skip_next = False
                 continue
             if arg == "-e" and i + 1 < len(args) and args[i + 1].startswith("AADS_SESSION_ID="):
-                new_args.extend(["-e", "AADS_SESSION_ID=" + (session_id or "")])
+                new_args.extend(["-e", "AADS_SESSION_ID=" + safe_sid])
                 skip_next = True
                 found_session = True
             else:
                 new_args.append(arg)
         if not found_session:
             new_args.insert(2, "-e")
-            new_args.insert(3, "AADS_SESSION_ID=" + (session_id or ""))
+            new_args.insert(3, "AADS_SESSION_ID=" + safe_sid)
         cfg["args"] = new_args
     return template
 
@@ -200,28 +202,87 @@ def _extract_text_from_content(content):
 
 
 def _parse_codex_tool_event(event):
-    evt_type = event.get("type", "")
+    """Codex --json 이벤트 → 표준 tool_use/tool_result 변환.
 
-    if evt_type == "item.completed":
-        item = event.get("item", {}) or {}
-        item_type = item.get("type", "")
-        if item_type == "function_call":
-            return {
-                "type": "tool_use",
-                "tool_name": item.get("name", ""),
-                "tool_use_id": item.get("call_id", "") or item.get("id", ""),
-                "tool_input": item.get("arguments", {}),
-            }
-        if item_type == "function_call_output":
-            output = item.get("output")
-            if not isinstance(output, str):
-                output = json.dumps(output, ensure_ascii=False) if output is not None else ""
-            return {
-                "type": "tool_result",
-                "tool_name": item.get("name", ""),
-                "tool_use_id": item.get("call_id", "") or item.get("id", ""),
-                "content": output,
-            }
+    Codex 실제 스키마 (2026-04-17 실측):
+      - item.started  + item.type=='mcp_tool_call'         → tool_use
+      - item.completed + item.type=='mcp_tool_call'        → tool_result
+      - item.completed + item.type=='command_execution'    → tool_result (bash)
+      - item.completed + item.type=='function_call'        → tool_use (구버전 호환)
+      - item.completed + item.type=='function_call_output' → tool_result (구버전 호환)
+    """
+    evt_type = event.get("type", "")
+    item = event.get("item", {}) or {}
+    item_type = item.get("type", "")
+
+    # --- MCP 도구 호출 시작 ---
+    if evt_type == "item.started" and item_type == "mcp_tool_call":
+        args = item.get("arguments", {})
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except Exception:
+                pass
+        return {
+            "type": "tool_use",
+            "tool_name": item.get("tool", "") or item.get("name", ""),
+            "tool_use_id": item.get("id", "") or item.get("call_id", ""),
+            "tool_input": args,
+            "server": item.get("server", ""),
+        }
+
+    # --- MCP 도구 호출 완료 ---
+    if evt_type == "item.completed" and item_type == "mcp_tool_call":
+        result = item.get("result") or {}
+        error = item.get("error")
+        if error:
+            content = error if isinstance(error, str) else json.dumps(error, ensure_ascii=False)
+            is_error = True
+        else:
+            content_blocks = result.get("content") if isinstance(result, dict) else None
+            if isinstance(content_blocks, list):
+                content = _extract_text_from_content(content_blocks)
+            elif isinstance(result, str):
+                content = result
+            else:
+                content = json.dumps(result, ensure_ascii=False) if result else ""
+            is_error = False
+        return {
+            "type": "tool_result",
+            "tool_name": item.get("tool", "") or item.get("name", ""),
+            "tool_use_id": item.get("id", "") or item.get("call_id", ""),
+            "content": content,
+            "is_error": is_error,
+        }
+
+    # --- bash/shell 실행 (command_execution) ---
+    if evt_type == "item.completed" and item_type == "command_execution":
+        return {
+            "type": "tool_result",
+            "tool_name": "bash",
+            "tool_use_id": item.get("id", ""),
+            "content": item.get("aggregated_output", "") or "",
+            "is_error": bool(item.get("exit_code", 0)),
+        }
+
+    # --- 구버전 호환 (function_call / function_call_output) ---
+    if evt_type == "item.completed" and item_type == "function_call":
+        return {
+            "type": "tool_use",
+            "tool_name": item.get("name", ""),
+            "tool_use_id": item.get("call_id", "") or item.get("id", ""),
+            "tool_input": item.get("arguments", {}),
+        }
+    if evt_type == "item.completed" and item_type == "function_call_output":
+        output = item.get("output")
+        if not isinstance(output, str):
+            output = json.dumps(output, ensure_ascii=False) if output is not None else ""
+        return {
+            "type": "tool_result",
+            "tool_name": item.get("name", ""),
+            "tool_use_id": item.get("call_id", "") or item.get("id", ""),
+            "content": output,
+        }
 
     if evt_type == "function_call_output":
         output = event.get("output")
@@ -498,7 +559,10 @@ async def handle_codex_stream(request):
             cmd.append(prompt)
             logger.info("Codex: model=%s prompt_len=%d tools=%d", codex_model, len(prompt), len(tool_names))
             proc_env = dict(os.environ)
-            proc_env["AADS_SESSION_ID"] = session_id
+            # Genspark 프록시 리다이렉트 차단 — ChatGPT Plus OAuth(auth.json) 직접 사용
+            proc_env.pop("OPENAI_BASE_URL", None)
+            proc_env.pop("OPENAI_API_KEY", None)
+            proc_env["AADS_SESSION_ID"] = session_id or "default"
             proc_env["HOME"] = codex_home
             proc_env.setdefault("TMPDIR", "/tmp")
             proc = await asyncio.create_subprocess_exec(
@@ -527,10 +591,18 @@ async def handle_codex_stream(request):
                         continue
                     text = ""
                     if evt_type == "item.completed":
-                        item = event.get("item", {})
-                        text = item.get("text", "")
-                        if not text:
-                            text = _extract_text_from_content(item.get("content"))
+                        item = event.get("item", {}) or {}
+                        # agent_message 타입만 최종 텍스트로 추출
+                        # (mcp_tool_call / command_execution 등은 _parse_codex_tool_event에서 이미 tool_evt로 처리됨)
+                        if item.get("type") == "agent_message":
+                            text = item.get("text", "")
+                            if not text:
+                                text = _extract_text_from_content(item.get("content"))
+                    elif evt_type == "item.streaming":
+                        # Codex가 실시간 델타를 보내는 경우(긴 응답) 즉시 전달
+                        item = event.get("item", {}) or {}
+                        if item.get("type") == "agent_message":
+                            text = item.get("delta", "") or item.get("text", "")
                     elif evt_type in {"message.delta", "message.completed"}:
                         delta = event.get("delta", {})
                         if isinstance(delta, dict):
@@ -543,7 +615,7 @@ async def handle_codex_stream(request):
                             message = event.get("message", {})
                             if isinstance(message, dict):
                                 text = _extract_text_from_content(message.get("content"))
-                    elif evt_type in {"tool.completed", "item.created", "item.streaming"}:
+                    elif evt_type in {"tool.completed", "item.created", "thread.started", "turn.started"}:
                         text = ""
                     if text:
                         if full_text and text and full_text.endswith(text):
@@ -576,7 +648,11 @@ async def handle_codex_stream(request):
                 if proc.stderr:
                     stderr_bytes = await proc.stderr.read()
                     if stderr_bytes:
-                        logger.debug("Codex stderr: %s", stderr_bytes.decode("utf-8", errors="replace")[:500])
+                        stderr_text = stderr_bytes.decode("utf-8", errors="replace")
+                        if "ERROR" in stderr_text or "Forbidden" in stderr_text or "Unauthorized" in stderr_text:
+                            logger.warning("Codex stderr: %s", stderr_text[:800])
+                        else:
+                            logger.info("Codex stderr: %s", stderr_text[:500])
             await response.write(json.dumps({
                 "type": "result", "result": full_text,
                 "input_tokens": input_tokens, "output_tokens": output_tokens, "model": model,
