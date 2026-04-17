@@ -2938,6 +2938,26 @@ async def send_message_stream(
                     tools=len(_codex_tools),
                 )
 
+        # AADS-190 P1: Codex CLI 모델은 intent 분류 결과와 무관하게 전체 MCP 도구 강제 주입
+        # 배경: pipeline_runner 등 use_tools=False 인텐트로 분류되면 Codex에 tool_names=[]로 전달 →
+        #       릴레이 로그 "tools=0" + DB tools_called=0 누적. UI엔 도구 결과가 섞여 들어오나
+        #       구조화 기록 누락으로 재사용/평가/회고 경로가 전부 공백이 됨.
+        _effective_model_for_tools = (model_override or intent_result.model or "").lower()
+        if (
+            _effective_model_for_tools.startswith(("gpt-5.4", "gpt-5.3-codex"))
+            and not tools_for_api
+        ):
+            _codex_tools = _registry.get_eager_tools() or _registry.get_tools("all") or []
+            if _codex_tools:
+                tools_for_api = _codex_tools
+                logger.info(
+                    "codex_tools_enforced",
+                    session_id=session_id,
+                    model=_effective_model_for_tools,
+                    intent=intent,
+                    tools=len(_codex_tools),
+                )
+
         # 8.5a. AADS-188C: Agent SDK 실시간 자율 실행 (execute/code_modify 인텐트)
         # CEO 명시적 직접 실행 지시 시에만 Agent SDK, 그 외는 Runner 위임
         # Runner 위임 대상: 코드 작업 + CTO 분석 + 서비스 점검 (모든 자율 실행 인텐트)
