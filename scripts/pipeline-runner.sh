@@ -1149,6 +1149,8 @@ deploy_job() {
 
     # ═══ 무중단 배포 v3.0 — build→swap→healthcheck→rollback ═══
     # 원칙: 빌드 중 기존 서비스 유지, 빌드 성공 후에만 교체, 실패 시 롤백
+    local _build_fail=""
+
     case "$project" in
         AADS)
             # 1) aads-server: 배포 방식 자동 선택 (Hot-Reload 우선)
@@ -1297,13 +1299,15 @@ deploy_job() {
                         if [[ -n "$_old_build_id" && "$_old_build_id" == "$_new_build_id" ]]; then
                             log "  WARN: go100-frontend BUILD_ID unchanged ($_new_build_id) — 빌드 반영 안 됨"
                             post_to_chat "$session_id" "⚠️ [Runner] GO100 프론트엔드 BUILD_ID 변경 없음 — 빌드 미반영 의심"
+                            _build_fail="go100-frontend:BUILD_ID_unchanged"
                         fi
                         # Step 2: 빌드 성공 → restart (새 .next/ 반영)
                         systemctl restart go100-frontend 2>/dev/null || true
                         log "  go100-frontend zero-downtime restart complete (BUILD_ID=${_new_build_id:0:8})"
                     else
-                        log "  WARN: go100-frontend build failed — 기존 서비스 유지"
-                        post_to_chat "$session_id" "⚠️ [Runner] GO100 프론트엔드 빌드 실패 — 기존 버전 유지"
+                        log "  ERROR: go100-frontend build failed"
+                        post_to_chat "$session_id" "🔴 [Runner] GO100 프론트엔드 빌드 실패"
+                        _build_fail="go100-frontend:build_failed"
                     fi
                 else
                     log "  SKIP go100-frontend (no frontend changes since $_pre_sha)"
@@ -1331,7 +1335,9 @@ deploy_job() {
                     docker compose -f "$_sf_compose" up -d --no-build saas-dashboard 2>/dev/null || true
                     log "  saas-dashboard zero-downtime swap complete"
                 else
-                    log "  WARN: saas-dashboard build failed — 기존 서비스 유지"
+                    log "  ERROR: saas-dashboard build failed"
+                    post_to_chat "$session_id" "🔴 [Runner] SF saas-dashboard 빌드 실패"
+                    _build_fail="sf-saas:build_failed"
                 fi
             fi
             ;;
@@ -1355,7 +1361,9 @@ deploy_job() {
                     docker compose -f "$_ntv2_compose" up -d --no-build frontend 2>/dev/null || true
                     log "  newtalk-v2-frontend zero-downtime swap complete"
                 else
-                    log "  WARN: newtalk-v2-frontend build failed — 기존 서비스 유지"
+                    log "  ERROR: newtalk-v2-frontend build failed"
+                    post_to_chat "$session_id" "🔴 [Runner] NTV2 frontend 빌드 실패"
+                    _build_fail="ntv2-frontend:build_failed"
                 fi
             fi
             # Reverb: 볼륨마운트 → restart
@@ -1387,10 +1395,39 @@ deploy_job() {
         done
     fi
 
+    # ═══ 프론트엔드 헬스체크 (GO100/SF/NTV2) ═══
+    local frontend_health_ok="N/A"
+    local frontend_health_url=""
+    case "$project" in
+        GO100)  frontend_health_url="http://localhost:3002" ;;
+        SF)     frontend_health_url="http://localhost:3000" ;;
+        NTV2)   frontend_health_url="http://localhost:3000" ;;
+    esac
+
+    if [[ -n "$frontend_health_url" ]]; then
+        frontend_health_ok="FAIL"
+        for _fe_retry in 1 2 3; do
+            sleep 5
+            # 프론트 2xx/3xx 모두 OK (로그인 리다이렉트 대응)
+            if curl -sf -o /dev/null -w "%{http_code}" -m 10 "$frontend_health_url" 2>/dev/null | grep -qE "^[23]"; then
+                frontend_health_ok="OK"
+                break
+            fi
+            local _fe_code=""
+            _fe_code=$(curl -s -o /dev/null -w "%{http_code}" -m 10 "$frontend_health_url" 2>/dev/null)
+            _fe_code=${_fe_code:-000}
+            if [[ "$_fe_code" =~ ^[23] ]]; then
+                frontend_health_ok="OK"
+                break
+            fi
+            log "  프론트엔드 헬스체크 재시도 ${_fe_retry}/3 code=$_fe_code url=$frontend_health_url"
+        done
+    fi
+
     # ═══ 자동 롤백: health-check FAIL 시 이전 커밋으로 복구 ═══
-    if [[ "$health_ok" == "FAIL" ]]; then
-        log "  ROLLBACK_START job=$job_id project=$project — health-check 실패"
-        post_to_chat "$session_id" "🔴 [Pipeline Runner] health-check 실패 — 자동 롤백 시작: $job_id"
+    if [[ "$health_ok" == "FAIL" || "$frontend_health_ok" == "FAIL" ]]; then
+        log "  ROLLBACK_START job=$job_id project=$project — health-check 실패 (backend=$health_ok frontend=$frontend_health_ok)"
+        post_to_chat "$session_id" "🔴 [Pipeline Runner] health-check 실패 (backend=$health_ok frontend=$frontend_health_ok) — 자동 롤백 시작: $job_id"
 
         cd "$main_workdir" 2>/dev/null || cd "${PROJECT_WORKDIR[$project]:-}"
         if git revert --no-edit HEAD 2>/dev/null; then
@@ -1457,12 +1494,22 @@ deploy_job() {
         fi
     fi
 
-    db_update "UPDATE pipeline_jobs SET status='done', phase='done',
-               review_feedback=COALESCE(review_feedback,'') || E'\n[v2.1][배포완료] health=${health_ok} by=${RUNNER_HOSTNAME}',
-               updated_at=NOW() WHERE job_id='${job_id}';"
-    _generate_wrap "$job_id" "$project" "${priority:-P2}" "${title:-$job_id}"
-    post_to_chat "$session_id" "✅ [Pipeline Runner] 배포 완료 (health=${health_ok})"
-    log "  DEPLOYED job=$job_id health=$health_ok"
+    # 최종 판정: 빌드 실패 플래그가 있으면 성공 처리 금지
+    if [[ -n "$_build_fail" ]]; then
+        db_update "UPDATE pipeline_jobs SET status='error', phase='build_fail',
+                   error_detail='${_build_fail}',
+                   review_feedback=COALESCE(review_feedback,'') || E'\n[v2.1][배포실패] backend_health=${health_ok} frontend_health=${frontend_health_ok} build_fail=${_build_fail}',
+                   updated_at=NOW() WHERE job_id='${job_id}';"
+        post_to_chat "$session_id" "🔴 [Pipeline Runner] 배포 부분 실패 — 빌드 실패 감지: ${_build_fail} (backend=${health_ok} frontend=${frontend_health_ok}): $job_id"
+        log "  DEPLOYED_PARTIAL_FAIL job=$job_id build_fail=$_build_fail"
+    else
+        db_update "UPDATE pipeline_jobs SET status='done', phase='done',
+                   review_feedback=COALESCE(review_feedback,'') || E'\n[v2.1][배포완료] backend_health=${health_ok} frontend_health=${frontend_health_ok} by=${RUNNER_HOSTNAME}',
+                   updated_at=NOW() WHERE job_id='${job_id}';"
+        _generate_wrap "$job_id" "$project" "${priority:-P2}" "${title:-$job_id}"
+        post_to_chat "$session_id" "✅ [Pipeline Runner] 배포 완료 (backend=${health_ok} frontend=${frontend_health_ok})"
+        log "  DEPLOYED job=$job_id backend_health=$health_ok frontend_health=$frontend_health_ok"
+    fi
 
     # Redis deploy lock 해제
     _release_deploy_lock "$project" "$job_id"
