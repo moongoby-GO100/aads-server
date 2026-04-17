@@ -1215,61 +1215,58 @@ deploy_job() {
             CURRENT_TIME=$(date +%s)
             DIFF_SECONDS=$((CURRENT_TIME - DASHBOARD_LAST_COMMIT))
             if [ "$DASHBOARD_CHANGED" = true ] || [ "$DIFF_SECONDS" -lt 600 ]; then
-                log "  ZERO-DOWNTIME aads-dashboard (${DIFF_SECONDS}s ago)"
+                log "  ZERO-DOWNTIME aads-dashboard — deploy.sh 호출 (헬스체크+롤백)"
                 local _compose_file="/root/aads/aads-server/docker-compose.prod.yml"
-                # Step 1: 이미지만 빌드 (기존 컨테이너 유지)
-                if docker compose -f "$_compose_file" build aads-dashboard 2>&1 | tail -5; then
-                    # Step 2: 빌드 성공 → 컨테이너 교체
-                    docker compose -f "$_compose_file" up -d --no-build aads-dashboard 2>/dev/null || true
-                    log "  aads-dashboard zero-downtime swap complete"
-
-                    # ── QA 자동 실행: 대시보드 배포 후 프론트엔드 검증 ──
-                    log "  QA: 30초 대기 후 Visual QA 실행..."
-                    sleep 30
-                    local _qa_response=""
-                    _qa_response=$(curl -s -m 60 -X POST \
-                        -H "Content-Type: application/json" \
-                        -d '{"pages": ["/", "/chat", "/ops"]}' \
-                        "http://127.0.0.1:8100/api/v1/visual-qa/full-qa" 2>/dev/null) || true
-
-                    if [ -z "$_qa_response" ]; then
-                        log "  QA: WARN — QA API 호출 실패 (응답 없음), 배포는 계속 진행"
-                        post_to_chat "$session_id" "⚠️ [Runner] QA API 호출 실패 — 배포는 정상 완료, QA 수동 확인 필요"
-                    else
-                        local _qa_verdict=""
-                        _qa_verdict=$(echo "$_qa_response" | jq -r '.verdict // empty' 2>/dev/null) || true
-
-                        if echo "$_qa_verdict" | grep -qi "FAIL"; then
-                            local _qa_summary=""
-                            _qa_summary=$(echo "$_qa_response" | jq -r '.summary // "상세 정보 없음"' 2>/dev/null) || true
-                            log "  QA: FAIL — $_qa_verdict: $_qa_summary"
-                            post_to_chat "$session_id" "🔴 [Runner] 프론트엔드 QA FAIL [$_qa_verdict]: $_qa_summary (롤백 없음, 수동 확인 필요)"
-
-                            # 텔레그램 긴급 알림
-                            if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
-                                curl -s -m 10 -X POST \
-                                    "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-                                    -d "chat_id=${TELEGRAM_CHAT_ID}" \
-                                    -d "text=🔴 [AADS Runner] 프론트엔드 QA FAIL [$_qa_verdict]: ${_qa_summary}" \
-                                    -d "parse_mode=HTML" 2>/dev/null || true
-                            fi
-                        elif echo "$_qa_verdict" | grep -qi "PASS"; then
-                            log "  QA: PASS ✅ [$_qa_verdict]"
-                            post_to_chat "$session_id" "✅ [Runner] 프론트엔드 QA PASS [$_qa_verdict] — 대시보드 배포 검증 완료"
-                        elif echo "$_qa_verdict" | grep -qi "CEO\|CONDITIONAL"; then
-                            local _qa_summary=""
-                            _qa_summary=$(echo "$_qa_response" | jq -r '.summary // "상세 정보 없음"' 2>/dev/null) || true
-                            log "  QA: CONDITIONAL — $_qa_verdict: $_qa_summary"
-                            post_to_chat "$session_id" "⚠️ [Runner] 프론트엔드 QA 조건부 [$_qa_verdict]: $_qa_summary — CEO 확인 필요"
-                        else
-                            log "  QA: WARN — verdict 파싱 불가 ($_qa_verdict), 배포는 계속 진행"
-                            post_to_chat "$session_id" "⚠️ [Runner] QA 결과 불명확 [$_qa_verdict] — 배포는 정상 완료, 수동 확인 필요"
-                        fi
-                    fi
+                if bash /root/aads/aads-dashboard/deploy.sh 2>&1 | tail -10; then
+                    log "  DASHBOARD DEPLOY: 완료 (무중단, 헬스체크+롤백 포함)"
                 else
-                    log "  ERROR: aads-dashboard build failed — 배포 error 처리"
-                    post_to_chat "$session_id" "⚠️ [Runner] 대시보드 빌드 실패 — 기존 버전 유지"
-                    _build_fail="aads-dashboard:build_failed"
+                    log "  DASHBOARD DEPLOY: deploy.sh 실패 — fallback: 인라인 docker 교체"
+                    docker compose -f "$_compose_file" build aads-dashboard 2>&1 | tail -5
+                    docker compose -f "$_compose_file" up -d --no-build --no-deps aads-dashboard 2>&1 | tail -5
+                fi
+
+                # ── QA 자동 실행: 대시보드 배포 후 프론트엔드 검증 ──
+                log "  QA: 30초 대기 후 Visual QA 실행..."
+                sleep 30
+                local _qa_response=""
+                _qa_response=$(curl -s -m 60 -X POST \
+                    -H "Content-Type: application/json" \
+                    -d '{"pages": ["/", "/chat", "/ops"]}' \
+                    "http://127.0.0.1:8100/api/v1/visual-qa/full-qa" 2>/dev/null) || true
+
+                if [ -z "$_qa_response" ]; then
+                    log "  QA: WARN — QA API 호출 실패 (응답 없음), 배포는 계속 진행"
+                    post_to_chat "$session_id" "⚠️ [Runner] QA API 호출 실패 — 배포는 정상 완료, QA 수동 확인 필요"
+                else
+                    local _qa_verdict=""
+                    _qa_verdict=$(echo "$_qa_response" | jq -r '.verdict // empty' 2>/dev/null) || true
+
+                    if echo "$_qa_verdict" | grep -qi "FAIL"; then
+                        local _qa_summary=""
+                        _qa_summary=$(echo "$_qa_response" | jq -r '.summary // "상세 정보 없음"' 2>/dev/null) || true
+                        log "  QA: FAIL — $_qa_verdict: $_qa_summary"
+                        post_to_chat "$session_id" "🔴 [Runner] 프론트엔드 QA FAIL [$_qa_verdict]: $_qa_summary (롤백 없음, 수동 확인 필요)"
+
+                        # 텔레그램 긴급 알림
+                        if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
+                            curl -s -m 10 -X POST \
+                                "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                                -d "chat_id=${TELEGRAM_CHAT_ID}" \
+                                -d "text=🔴 [AADS Runner] 프론트엔드 QA FAIL [$_qa_verdict]: ${_qa_summary}" \
+                                -d "parse_mode=HTML" 2>/dev/null || true
+                        fi
+                    elif echo "$_qa_verdict" | grep -qi "PASS"; then
+                        log "  QA: PASS ✅ [$_qa_verdict]"
+                        post_to_chat "$session_id" "✅ [Runner] 프론트엔드 QA PASS [$_qa_verdict] — 대시보드 배포 검증 완료"
+                    elif echo "$_qa_verdict" | grep -qi "CEO\|CONDITIONAL"; then
+                        local _qa_summary=""
+                        _qa_summary=$(echo "$_qa_response" | jq -r '.summary // "상세 정보 없음"' 2>/dev/null) || true
+                        log "  QA: CONDITIONAL — $_qa_verdict: $_qa_summary"
+                        post_to_chat "$session_id" "⚠️ [Runner] 프론트엔드 QA 조건부 [$_qa_verdict]: $_qa_summary — CEO 확인 필요"
+                    else
+                        log "  QA: WARN — verdict 파싱 불가 ($_qa_verdict), 배포는 계속 진행"
+                        post_to_chat "$session_id" "⚠️ [Runner] QA 결과 불명확 [$_qa_verdict] — 배포는 정상 완료, 수동 확인 필요"
+                    fi
                 fi
             else
                 log "  SKIP aads-dashboard rebuild (no recent commits, last: ${DIFF_SECONDS}s ago)"
