@@ -143,6 +143,14 @@ db_update() {
     _psql_cmd -c "$1" >/dev/null 2>&1
 }
 
+get_job_status() {
+    local _job_id="$1"
+    [[ -z "$_job_id" ]] && { echo ""; return 0; }
+    local _status=""
+    _status=$(db_exec "SELECT status FROM pipeline_jobs WHERE job_id='${_job_id}' LIMIT 1;" 2>/dev/null | head -n1 | tr -d '[:space:]') || _status=""
+    echo "$_status"
+}
+
 # DB에서 size별 모델 우선순위 조회 (CEO 대시보드 runner_model_config 연동)
 get_db_model_cycle() {
     local size="$1"
@@ -451,6 +459,15 @@ _watchdog_check() {
 # C1: 채팅방 메시지 — session_id는 UUID 포맷 검증
 post_to_chat() {
     local session_id="$1" content="$2"
+    # anomaly 가드: 이미 error로 마킹된 job에 성공 메시지 차단
+    if [[ -n "${job_id:-}" && "$content" == *"✅"* && "$content" == *"배포 완료"* ]]; then
+        local _cur_status=""
+        _cur_status=$(get_job_status "$job_id" 2>/dev/null || echo "")
+        if [[ "$_cur_status" == "error" ]]; then
+            log "ANOMALY BLOCKED: error 상태 job에 성공 메시지 차단 ($job_id): $content"
+            return 0
+        fi
+    fi
     # UUID 포맷 검증 (C1: SQL 인젝션 방지)
     if [[ ! "$session_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
         log "  WARN: invalid session_id, skip chat post"
@@ -1003,6 +1020,7 @@ deploy_job() {
     local workdir="${PROJECT_WORKDIR[$project]:-}"
     [[ -z "$workdir" || ! -d "$workdir" ]] && return 1
 
+    log "[deploy_job] start job_id=$job_id project=$project"
     log "▶ DEPLOY job=$job_id project=$project"
 
     # Redis deploy lock 획득 (동시 배포 방지)
@@ -1249,8 +1267,9 @@ deploy_job() {
                         fi
                     fi
                 else
-                    log "  WARN: aads-dashboard build failed — 기존 서비스 유지"
+                    log "  ERROR: aads-dashboard build failed — 배포 error 처리"
                     post_to_chat "$session_id" "⚠️ [Runner] 대시보드 빌드 실패 — 기존 버전 유지"
+                    _build_fail="aads-dashboard:build_failed"
                 fi
             else
                 log "  SKIP aads-dashboard rebuild (no recent commits, last: ${DIFF_SECONDS}s ago)"
@@ -1305,7 +1324,7 @@ deploy_job() {
                         systemctl restart go100-frontend 2>/dev/null || true
                         log "  go100-frontend zero-downtime restart complete (BUILD_ID=${_new_build_id:0:8})"
                     else
-                        log "  ERROR: go100-frontend build failed"
+                        log "  ERROR: go100-frontend build failed — 배포 error 처리"
                         post_to_chat "$session_id" "🔴 [Runner] GO100 프론트엔드 빌드 실패"
                         _build_fail="go100-frontend:build_failed"
                     fi
@@ -1335,7 +1354,7 @@ deploy_job() {
                     docker compose -f "$_sf_compose" up -d --no-build saas-dashboard 2>/dev/null || true
                     log "  saas-dashboard zero-downtime swap complete"
                 else
-                    log "  ERROR: saas-dashboard build failed"
+                    log "  ERROR: saas-dashboard build failed — 배포 error 처리"
                     post_to_chat "$session_id" "🔴 [Runner] SF saas-dashboard 빌드 실패"
                     _build_fail="sf-saas:build_failed"
                 fi
@@ -1361,7 +1380,7 @@ deploy_job() {
                     docker compose -f "$_ntv2_compose" up -d --no-build frontend 2>/dev/null || true
                     log "  newtalk-v2-frontend zero-downtime swap complete"
                 else
-                    log "  ERROR: newtalk-v2-frontend build failed"
+                    log "  ERROR: newtalk-v2-frontend build failed — 배포 error 처리"
                     post_to_chat "$session_id" "🔴 [Runner] NTV2 frontend 빌드 실패"
                     _build_fail="ntv2-frontend:build_failed"
                 fi
