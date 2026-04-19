@@ -267,7 +267,7 @@ _COST_MAP = {
 # LiteLLM alias → Anthropic model ID
 _ANTHROPIC_MODEL_ID = {
     "claude-sonnet": "claude-sonnet-4-6",
-    "claude-opus":   "claude-opus-4-6",
+    "claude-opus":   "claude-opus-4-7",
     "claude-haiku":  "claude-haiku-4-5-20251001",
 }
 
@@ -417,6 +417,7 @@ async def call_stream(
     # model_override가 구체적 모델명(claude-sonnet-4-6 등)이면 LiteLLM alias로 변환
     _OVERRIDE_TO_ALIAS = {
         "claude-sonnet-4-6": "claude-sonnet", "claude-sonnet-4-5": "claude-sonnet",
+        "claude-opus-4-7": "claude-opus",
         "claude-opus-4-6": "claude-opus", "claude-opus-4-5": "claude-opus",
         "claude-haiku-4-5": "claude-haiku",
         "claude-haiku-4-5-20251001": "claude-haiku",
