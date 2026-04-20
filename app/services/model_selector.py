@@ -2066,12 +2066,12 @@ async def _stream_anthropic(
     # 시스템 프롬프트 (Prompt Caching: Layer 1 정적 부분에 cache_control)
     system_blocks = _build_system_with_cache(system_prompt)
 
-    # Adaptive Thinking (4.6 모델 권장) — 모델이 자동으로 사고 깊이 결정
+    # Adaptive Thinking (4.7 호환) — 모델이 자동으로 사고 깊이 결정
     thinking_config = None
     _output_config = None
     if use_thinking:
-        thinking_config = {"type": "adaptive"}
-        _output_config = {"effort": "high"}  # low/medium/high/max
+        thinking_config = {"type": "adaptive", "display": "summarized"}
+        _output_config = {"effort": "high"}  # low/medium/high/xhigh/max
 
     full_text = ""
     thinking_text = ""
