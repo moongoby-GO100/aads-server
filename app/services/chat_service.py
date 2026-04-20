@@ -1880,12 +1880,15 @@ async def _extract_artifacts(session_id: uuid.UUID, content: str, workspace_id: 
     async with get_pool().acquire() as conn:
         for art_type, title, art_content, metadata in artifacts[:7]:
             # 중복 방지: 같은 session_id + type + title 조합이 이미 존재하면 스킵
-            existing = await conn.fetchval(
-                "SELECT 1 FROM chat_artifacts WHERE session_id = $1 AND type = $2 AND title = $3 LIMIT 1",
-                session_id, art_type, title[:200],
-            )
-            if existing:
-                continue
+            # html_preview + edit_intent=True 는 수정본이므로 중복 체크 제외 (항상 새로 저장)
+            is_html_edit = art_type == "html_preview" and metadata.get("edit_intent")
+            if not is_html_edit:
+                existing = await conn.fetchval(
+                    "SELECT 1 FROM chat_artifacts WHERE session_id = $1 AND type = $2 AND title = $3 LIMIT 1",
+                    session_id, art_type, title[:200],
+                )
+                if existing:
+                    continue
             await conn.execute(
                 """
                 INSERT INTO chat_artifacts (session_id, workspace_id, type, title, content, metadata)
