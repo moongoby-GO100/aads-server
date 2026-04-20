@@ -467,6 +467,15 @@ async def env_history(server: str, limit: int = Query(20, le=100)):
 
 # ─── Health Check ─────────────────────────────────────────────────────────────
 
+@router.get("/ops/active-streams")
+async def active_streams():
+    """현재 활성 SSE 스트리밍 세션 수 반환."""
+    from app.services.chat_service import _active_bg_tasks
+
+    active = [sid for sid, task in _active_bg_tasks.items() if task and not task.done()]
+    return {"count": len(active), "sessions": [str(s)[:8] for s in active]}
+
+
 @router.get("/ops/health-check")
 async def health_check():
     """전체 파이프라인 건전성 확인."""

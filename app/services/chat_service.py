@@ -262,6 +262,53 @@ async def with_background_completion(
 
     _token_idx = 0  # Redis Stream 토큰 인덱스
 
+    async def _regenerate_stream(session_id: str, partial_content: str) -> AsyncGenerator[str, None]:
+        """에러 후 재시도: 마지막 user 메시지를 기반으로 스트리밍 재생성."""
+        pool = get_pool()
+        _sid = uuid.UUID(session_id)
+        async with pool.acquire() as conn:
+            last_user = await conn.fetchval(
+                "SELECT content FROM chat_messages WHERE session_id = $1 AND role = 'user' ORDER BY created_at DESC LIMIT 1",
+                _sid,
+            )
+            workspace = await conn.fetchval(
+                "SELECT w.name FROM chat_workspaces w JOIN chat_sessions s ON s.workspace_id = w.id WHERE s.id = $1",
+                _sid,
+            )
+
+        if not last_user:
+            return
+
+        from app.services.intent_router import IntentResult
+        from app.services.model_selector import call_stream
+        from app.services.tool_registry import ToolRegistry
+
+        _continue_prompt = ""
+        if partial_content:
+            _continue_prompt = (
+                "\n\n[이전 응답이 중단되었습니다. 아래 부분까지 생성되었으니 이어서 작성해주세요]\n"
+                f"{partial_content[-500:]}\n"
+                "[여기서부터 이어서 생성]"
+            )
+
+        async for event in call_stream(
+            intent_result=IntentResult(
+                intent="strategy",
+                model="claude-sonnet",
+                use_tools=True,
+                tool_group="all",
+            ),
+            model_override="claude-sonnet",
+            messages=[{"role": "user", "content": last_user + _continue_prompt}],
+            tools=ToolRegistry().get_tools("all"),
+            system_prompt=f"워크스페이스: {workspace or 'CEO'}. 이전 응답이 중단되어 이어서 생성합니다.",
+            session_id=session_id,
+        ):
+            if isinstance(event, dict):
+                yield f"data: {json.dumps(event)}\n\n"
+            elif isinstance(event, str):
+                yield event
+
     async def _producer():
         nonlocal _client_gone, _client_gone_since, _token_idx
         _my_task = _heartbeat_asyncio.current_task()
@@ -318,38 +365,120 @@ async def with_background_completion(
             # BaseException: CancelledError, GeneratorExit 등 모두 잡음
             import traceback as _tb
             logger.warning(f"bg_producer_error session={session_id}: {type(e).__name__}: {e}\n{''.join(_tb.format_exception(type(e), e, e.__traceback__))}")
-            # Rate limit / quota 에러 감지: placeholder를 삭제하지 않고 rate_limited로 표시
             _err_str = str(e).lower()
-            _is_rate_limit = (
-                "ratelimit" in type(e).__name__.lower()
-                or "429" in _err_str
-                or "rate" in _err_str
-                or "overloaded" in _err_str
-                or "529" in _err_str
-                or "quota" in _err_str
+            _is_retryable = (
+                not isinstance(e, (_heartbeat_asyncio.CancelledError, GeneratorExit, KeyboardInterrupt, SystemExit))
+                and (
+                    "ratelimit" in type(e).__name__.lower()
+                    or any(k in _err_str for k in ("429", "rate", "overloaded", "529", "quota", "timeout", "502", "503"))
+                )
             )
-            if _is_rate_limit:
-                try:
-                    _pool = get_pool()
-                    async with _pool.acquire() as _conn:
-                        # partial content에서 ⏳ 마커 제거 후 rate_limited intent로 보존
-                        _partial = state.get("content", "")
-                        _partial_clean = re.sub(r'\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\s*$', '', _partial).rstrip()
-                        _rate_content = (
-                            (_partial_clean + "\n\n⚠️ _API rate limit / 과부하로 응답이 일시 중단되었습니다. 잠시 후 자동으로 이어서 생성됩니다._")
-                            if _partial_clean
-                            else "⚠️ _API rate limit / 과부하로 응답 생성이 중단되었습니다. 잠시 후 자동으로 이어서 생성됩니다._"
+            if _is_retryable:
+                _max_retries = 3
+                _retry_delays = [30, 60, 90]
+                _retried = False
+
+                for _retry_idx in range(_max_retries):
+                    _delay = _retry_delays[min(_retry_idx, len(_retry_delays) - 1)]
+                    logger.info(f"stream_retry session={session_id[:8]} attempt={_retry_idx+1}/{_max_retries} delay={_delay}s")
+
+                    try:
+                        _retry_msg = json.dumps({
+                            "type": "delta",
+                            "content": f"\n\n⏳ _API 일시 중단 — {_delay}초 후 자동 재시도 ({_retry_idx+1}/{_max_retries})..._\n\n",
+                        })
+                        await queue.put((f"data: {_retry_msg}\n\n", None))
+                    except Exception:
+                        pass
+
+                    await _heartbeat_asyncio.sleep(_delay)
+
+                    try:
+                        _partial = state.get("content", "").strip()
+                        _retry_completed = False
+                        _retry_model = "claude-sonnet"
+                        _retry_cost = Decimal("0")
+                        _retry_tokens_in = 0
+                        _retry_tokens_out = 0
+                        _retry_error: Optional[str] = None
+                        async for chunk in _regenerate_stream(session_id, _partial):
+                            _entry_id = None
+                            if 'data: {' in chunk:
+                                try:
+                                    _entry_id = await _redis_stream.publish_token(session_id, chunk, _token_idx)
+                                    _token_idx += 1
+                                except Exception:
+                                    pass
+                            await queue.put((chunk, _entry_id))
+                            if 'data: {' in chunk:
+                                try:
+                                    _d = json.loads(chunk[chunk.index('{'):chunk.rstrip().rindex('}') + 1])
+                                    _t = _d.get("type", "")
+                                    if _t == "delta":
+                                        state["content"] += _d.get("content", "")
+                                    elif _t == "tool_use":
+                                        state["tool_count"] += 1
+                                        state["last_tool"] = _d.get("tool_name", "")
+                                        state["tool_events"].append({"type": "tool_use", "tool_name": _d.get("tool_name", ""), "tool_use_id": _d.get("tool_use_id", ""), "tool_input": _d.get("tool_input", {})})
+                                    elif _t == "tool_result":
+                                        state["last_tool"] = _d.get("tool_name", "")
+                                        state["tool_events"].append({"type": "tool_result", "tool_name": _d.get("tool_name", ""), "content": str(_d.get("content", ""))[:500]})
+                                    elif _t == "thinking":
+                                        state["tool_events"].append({"type": "thinking", "content": str(_d.get("content", _d.get("thinking", "")))[:300]})
+                                    elif _t == "done":
+                                        _retry_completed = True
+                                        _retry_model = _d.get("model", _retry_model) or _retry_model
+                                        _retry_cost = Decimal(str(_d.get("cost", "0")))
+                                        _retry_tokens_in = _d.get("input_tokens", 0) or 0
+                                        _retry_tokens_out = _d.get("output_tokens", 0) or 0
+                                    elif _t == "error":
+                                        _retry_error = _d.get("content", "retry stream error")
+                                except Exception:
+                                    pass
+
+                        if _retry_error:
+                            raise RuntimeError(_retry_error)
+                        if not _retry_completed:
+                            raise RuntimeError("retry stream ended without done event")
+
+                        await _save_and_update_session(
+                            uuid.UUID(session_id),
+                            state.get("content", "").strip(),
+                            session_id_str=session_id,
+                            model_used=_retry_model,
+                            cost=_retry_cost,
+                            tokens_in=_retry_tokens_in,
+                            tokens_out=_retry_tokens_out,
+                            tools_called=state.get("tool_events", []),
                         )
-                        _updated = await _conn.execute(
-                            "UPDATE chat_messages SET content = $1, intent = 'rate_limited', model_used = 'rate_limited' "
-                            "WHERE session_id = $2 AND intent = 'streaming_placeholder'",
-                            _rate_content, uuid.UUID(session_id),
-                        )
-                        logger.warning(f"rate_limit_placeholder_preserved session={session_id[:8]} partial_len={len(_partial_clean)} updated={_updated}")
-                        # _delete_streaming_placeholder 호출을 건너뛰기 위해 state에 플래그 설정
-                        state["_rate_limited"] = True
-                except Exception as _rl_err:
-                    logger.warning(f"rate_limit_preserve_failed session={session_id[:8]}: {_rl_err}")
+                        if state.get("content", "").strip():
+                            _retried = True
+                            logger.info(f"stream_retry_success session={session_id[:8]} attempt={_retry_idx+1}")
+                            break
+                    except Exception as retry_err:
+                        logger.warning(f"stream_retry_failed session={session_id[:8]} attempt={_retry_idx+1}: {retry_err}")
+
+                if not _retried:
+                    try:
+                        _pool = get_pool()
+                        async with _pool.acquire() as _conn:
+                            # partial content에서 ⏳ 마커 제거 후 rate_limited intent로 보존
+                            _partial = state.get("content", "")
+                            _partial_clean = re.sub(r'\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\s*$', '', _partial).rstrip()
+                            _rate_content = (
+                                (_partial_clean + "\n\n⚠️ _API rate limit / 과부하로 응답이 일시 중단되었습니다. 잠시 후 자동으로 이어서 생성됩니다._")
+                                if _partial_clean
+                                else "⚠️ _API rate limit / 과부하로 응답 생성이 중단되었습니다. 잠시 후 자동으로 이어서 생성됩니다._"
+                            )
+                            _updated = await _conn.execute(
+                                "UPDATE chat_messages SET content = $1, intent = 'rate_limited', model_used = 'rate_limited' "
+                                "WHERE session_id = $2 AND intent = 'streaming_placeholder'",
+                                _rate_content, uuid.UUID(session_id),
+                            )
+                            logger.warning(f"rate_limit_placeholder_preserved session={session_id[:8]} partial_len={len(_partial_clean)} updated={_updated}")
+                            state["_rate_limited"] = True
+                    except Exception as _rl_err:
+                        logger.warning(f"rate_limit_preserve_failed session={session_id[:8]}: {_rl_err}")
         finally:
             # heartbeat 태스크 정지 신호 (producer 완료 시 heartbeat 불필요)
             _hb_stop.set()

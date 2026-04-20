@@ -280,6 +280,7 @@ _GEMINI_MODELS = {
     "gemini-3-pro-preview",
     "gemini-3.1-flash-lite-preview",
     "gemini-3.1-pro-preview",
+    "gemini-2.0-flash",
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
     "gemini-2.5-pro",
@@ -486,7 +487,18 @@ async def call_stream(
         "claude-sonnet": ["claude-sonnet"],
         "claude-haiku": ["claude-haiku"],
     }
+    _SAMEGRADE_FALLBACK = {
+        "claude-opus": ["gpt-5", "gemini-2.5-pro"],
+        "claude-sonnet": ["gpt-5-mini", "gemini-2.5-flash"],
+        "claude-haiku": ["gemini-2.0-flash", "gpt-4o-mini"],
+    }
+    _GEMINI_SAMEGRADE = {
+        "gemini-2.5-pro": "claude-opus",
+        "gemini-2.5-flash": "claude-sonnet",
+        "gemini-2.0-flash": "claude-haiku",
+    }
     if model not in _GEMINI_MODELS and model in _ANTHROPIC_MODEL_ID:
+        _original_model = model
         _downgrade = _MODEL_DOWNGRADE.get(model, [model])
         _fb_seq = []  # [(model, slot), ...]
         # 쿨다운 스마트 정렬: 사용 가능 슬롯 먼저, 쿨다운 슬롯 뒤로
@@ -533,8 +545,7 @@ async def call_stream(
 
             logger.warning(f"tier_exhausted: {_fm}/slot{_fs}[{_fi}]")
 
-        # 모든 Claude 모델×계정 실패 → Gemini (최종 안전망)
-        yield {"type": "delta", "content": "[Claude 장애 → Gemini 전환]\n\n"}
+        # 모든 Claude 모델×계정 실패 → 동급 외부 모델 순차 시도
         try:
             from app.core.db_pool import get_pool
             pool = get_pool()
@@ -544,34 +555,55 @@ async def call_stream(
                 await conn.execute(
                     "INSERT INTO error_log (error_hash, error_type, source, server, message, stack_trace, created_at) VALUES ($1, $2, $3, $4, $5, $6, NOW()) ON CONFLICT (error_hash) DO UPDATE SET occurrence_count = error_log.occurrence_count + 1, last_seen = NOW()",
                     _eh, "claude_api_fallback", "model_selector.cli_relay_path", "aads-server",
-                    f"Claude {model} → Gemini 전환 (계정 교차 {' → '.join(f'{m}/s{s}' for m,s in _fb_seq)} 모두 실패)",
+                    f"Claude {model} → samegrade fallback 전환 (계정 교차 {' → '.join(f'{m}/s{s}' for m,s in _fb_seq)} 모두 실패)",
                     "",
                 )
         except Exception as _log_err:
             logger.warning(f"error_log insert failed: {_log_err}")
-        async for event in _stream_litellm("gemini-3.1-flash-lite-preview", system_prompt, messages, tools=tools):
-            yield event
+
+        _samegrade_list = _SAMEGRADE_FALLBACK.get(_original_model, ["gemini-2.5-flash"])
+        _sg_success = False
+        for _sg_model in _samegrade_list:
+            try:
+                yield {"type": "delta", "content": f"\n\n⚠️ _Claude 일시 장애 — {_sg_model}로 전환하여 계속합니다._\n\n"}
+                _sg_had_error = False
+                async for event in _stream_litellm(_sg_model, system_prompt, messages, tools=tools):
+                    if isinstance(event, dict) and event.get("type") == "error":
+                        _sg_had_error = True
+                        logger.warning(f"samegrade_fallback_failed: {_original_model} -> {_sg_model}: {event.get('content', '')[:120]}")
+                        break
+                    yield event
+                if not _sg_had_error:
+                    _sg_success = True
+                    break
+            except Exception as _sg_err:
+                logger.warning(f"samegrade_fallback_failed model={_sg_model}: {_sg_err}")
+                continue
+
+        if not _sg_success:
+            yield {"type": "delta", "content": "\n\n⚠️ _전체 LLM 장애 — 잠시 후 다시 시도해주세요._\n\n"}
+            yield {"type": "error", "content": "All LLM providers failed"}
         return
 
-    # Gemini 모델 → LiteLLM 경유 (실패 시 Claude Sonnet 폴백)
+    # Gemini 모델 → LiteLLM 경유 (실패 시 동급 Claude 우선 폴백)
     if model in _GEMINI_MODELS:
         _had_error = False
         async for event in _stream_litellm(model, system_prompt, messages, tools=tools):
             if event.get("type") == "error":
                 _had_error = True
-                logger.warning(f"gemini_fallback: {model} failed, falling back to claude-sonnet")
+                logger.warning(f"gemini_fallback: {model} failed, falling back to same-grade model")
                 break
             yield event
         if _had_error:
-            # Gemini 실패 → Claude Sonnet으로 폴백 (LiteLLM 내부 처리 안 된 나머지 에러)
+            _fallback_model = _GEMINI_SAMEGRADE.get(model, "claude-sonnet")
             _fallback_intent = IntentResult(
                 intent=intent_result.intent,
-                model="claude-sonnet",
+                model=_fallback_model,
                 use_tools=intent_result.use_tools,
                 tool_group=intent_result.tool_group,
             )
-            yield {"type": "delta", "content": "\n\n[Gemini 오류 — Claude Sonnet으로 전환합니다]\n\n"}
-            async for event in _stream_anthropic(_fallback_intent, "claude-sonnet", system_prompt, messages, tools, session_id=session_id):
+            yield {"type": "delta", "content": f"\n\n⚠️ _{model} 장애 — {_fallback_model}로 전환하여 계속합니다._\n\n"}
+            async for event in _stream_anthropic(_fallback_intent, _fallback_model, system_prompt, messages, tools, session_id=session_id):
                 yield event
         return
 

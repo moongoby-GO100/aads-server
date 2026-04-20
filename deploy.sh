@@ -190,9 +190,10 @@ case "$MODE" in
         GREEN_CONTAINER="aads-server-green"
         COMPOSE_FILE="-f ${COMPOSE_DIR}/docker-compose.prod.yml"
 
-        # 현재 활성 포트 감지 (upstream에서 backup이 아닌 첫 번째 서버)
-        CURRENT_PORT=$(grep "server 127.0.0.1:" "$UPSTREAM_CONF" | grep -v backup | head -1 | grep -oP '127\.0\.0\.1:\K[0-9]+')
+        # 현재 활성 포트는 상태 파일/upstream 기준값 사용
+        CURRENT_PORT="${ACTIVE_PORT}"
         CURRENT_PORT=${CURRENT_PORT:-$BLUE_PORT}
+        OLD_PORT="${CURRENT_PORT}"
         if [[ "$CURRENT_PORT" == "$GREEN_PORT" ]]; then
             NEW_PORT=$BLUE_PORT
             NEW_CONTAINER=$BLUE_CONTAINER
@@ -247,7 +248,34 @@ case "$MODE" in
             notify "❌ Blue-Green 실패: nginx 설정 오류"
             exit 1
         fi
+
+        echo "[deploy.sh] [5/6] 활성 스트림 drain 대기..."
+        _DRAIN_MAX=300
+        _DRAIN_ELAPSED=0
+        _DRAIN_INTERVAL=10
+        while [ "$_DRAIN_ELAPSED" -lt "$_DRAIN_MAX" ]; do
+            _ACTIVE=$(
+                (
+                    curl -s -m 5 "http://127.0.0.1:${ACTIVE_PORT}/api/v1/ops/active-streams" 2>/dev/null \
+                    | python3 -c "import sys,json; print(json.load(sys.stdin).get('count', 0))" 2>/dev/null
+                ) || echo "0"
+            )
+
+            if [ "$_ACTIVE" = "0" ] || [ -z "$_ACTIVE" ]; then
+                echo "[deploy.sh]   활성 스트림 0건 — drain 완료"
+                break
+            fi
+
+            echo "[deploy.sh]   활성 스트림 ${_ACTIVE}건 — ${_DRAIN_INTERVAL}초 대기 (${_DRAIN_ELAPSED}/${_DRAIN_MAX}s)"
+            sleep "$_DRAIN_INTERVAL"
+            _DRAIN_ELAPSED=$((_DRAIN_ELAPSED + _DRAIN_INTERVAL))
+        done
+        if [ "$_DRAIN_ELAPSED" -ge "$_DRAIN_MAX" ]; then
+            echo "[deploy.sh]   WARN: drain 타임아웃 (${_DRAIN_MAX}s) — 강제 전환"
+        fi
+
         systemctl reload nginx
+        echo "[deploy.sh]   nginx upstream 전환 완료"
 
         # ④ 전환 후 검증
         sleep 2
@@ -262,23 +290,41 @@ case "$MODE" in
             exit 1
         fi
 
-        # ⑤ 이전 컨테이너 지연 종료 (SSE drain: 2분 후 종료)
-        # AADS-230: swing-back 제거 — 구 컨테이너를 즉시 죽이지 않고 2분간 SSE 연결 완료 대기
-        echo "[deploy.sh] ⑤ ${OLD_CONTAINER} 지연 종료 (120초 후 SSE drain)"
+        # ⑤ 이전 컨테이너 지연 종료 (활성 스트림 drain 후 종료)
+        echo "[deploy.sh] ⑤ ${OLD_CONTAINER} 지연 종료 시작"
         echo "$NEW_PORT" > /root/aads/aads-server/.active_port
         echo "$NEW_CONTAINER" > /root/aads/aads-server/.active_container
 
-        # 백그라운드에서 2분 후 이전 컨테이너 종료
         (
-            sleep 120
+            _OLD_DRAIN_MAX=600
+            _OLD_DRAIN_ELAPSED=0
+
+            while [ "$_OLD_DRAIN_ELAPSED" -lt "$_OLD_DRAIN_MAX" ]; do
+                _OLD_ACTIVE=$(
+                    (
+                        curl -s -m 5 "http://127.0.0.1:${OLD_PORT}/api/v1/ops/active-streams" 2>/dev/null \
+                        | python3 -c "import sys,json; print(json.load(sys.stdin).get('count', 0))" 2>/dev/null
+                    ) || echo "0"
+                )
+
+                if [ "$_OLD_ACTIVE" = "0" ] || [ -z "$_OLD_ACTIVE" ]; then
+                    echo "[deploy.sh]   구 컨테이너 활성 스트림 0건 — 안전 종료"
+                    break
+                fi
+
+                echo "[deploy.sh]   구 컨테이너 활성 스트림 ${_OLD_ACTIVE}건 — 30초 대기"
+                sleep 30
+                _OLD_DRAIN_ELAPSED=$((_OLD_DRAIN_ELAPSED + 30))
+            done
+
             docker stop --time 30 "$OLD_CONTAINER" 2>/dev/null || true
-            echo "[deploy.sh] ⑤ ✅ ${OLD_CONTAINER} 종료 완료 (SSE drain 후)"
+            echo "[deploy.sh] ⑤ ✅ ${OLD_CONTAINER} 종료 완료"
         ) &
         disown
 
         HEALTH_URL="http://localhost:${NEW_PORT}/api/v1/health"
         echo "[deploy.sh] ✅ Blue-Green 완전 무중단 배포 완료: :${NEW_PORT} 활성"
-        notify "✅ Blue-Green 완전 무중단 배포: :${CURRENT_PORT} → :${NEW_PORT} (SSE drain 120초 후 구 컨테이너 종료)"
+        notify "✅ Blue-Green 완전 무중단 배포: :${CURRENT_PORT} → :${NEW_PORT}"
         ;;
     *)
         echo "[deploy.sh] ERROR: 알 수 없는 모드 '$MODE'. code|reload|build|bluegreen 사용"
