@@ -1465,6 +1465,22 @@ async def _extract_artifacts(session_id: uuid.UUID, content: str, workspace_id: 
             title = first_line.strip()[:80]
         artifacts.append(("code", title, code.strip(), {"language": lang}))
 
+    # HTML Preview 전용 추출 — ```html 블록을 html_preview 타입으로 저장
+    html_blocks = [(lang, code) for lang, code in code_blocks if lang.lower() in ('html', 'htm')]
+    for lang, html_code in html_blocks:
+        if len(html_code.strip()) < 50:  # 너무 짧은 HTML 스니펫은 제외
+            continue
+        # 제목 추출: <title> 태그 또는 첫 번째 <h1>
+        title = "HTML 미리보기"
+        title_match = _re.search(r'<title>(.*?)</title>', html_code, _re.IGNORECASE | _re.DOTALL)
+        if title_match:
+            title = title_match.group(1)[:100]
+        else:
+            h1_match = _re.search(r'<h1[^>]*>(.*?)</h1>', html_code, _re.IGNORECASE | _re.DOTALL)
+            if h1_match:
+                title = _re.sub(r'<[^>]+>', '', h1_match.group(1)).strip()[:100]
+        artifacts.append(("html_preview", title, html_code.strip(), {"language": "html"}))
+
     # 2) 보고서/기획서/분석 추출 (# 또는 이모지 제목으로 시작하는 구조화된 문서)
     # 2a) 마크다운 헤더 (# / ##) 시작
     report_match = _re.search(
