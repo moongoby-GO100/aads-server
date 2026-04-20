@@ -488,9 +488,9 @@ async def call_stream(
         "claude-haiku": ["claude-haiku"],
     }
     _SAMEGRADE_FALLBACK = {
-        "claude-opus": ["gemini-2.5-pro", "gemini-3.1-pro-preview"],
-        "claude-sonnet": ["gemini-2.5-flash", "gemini-3-flash-preview"],
-        "claude-haiku": ["gemini-2.5-flash-lite", "gemini-3.1-flash-lite-preview"],
+        "claude-opus": ["gpt-5.4", "gemini-3.1-pro-preview"],
+        "claude-sonnet": ["gpt-5.4", "gemini-3-flash-preview"],
+        "claude-haiku": ["gpt-5.4-mini", "gemini-3.1-flash-lite-preview"],
     }
     _GEMINI_SAMEGRADE = {
         "gemini-2.5-pro": "claude-opus",
@@ -567,7 +567,11 @@ async def call_stream(
             try:
                 yield {"type": "delta", "content": f"\n\n⚠️ _Claude 일시 장애 — {_sg_model}로 전환하여 계속합니다._\n\n"}
                 _sg_had_error = False
-                async for event in _stream_litellm(_sg_model, system_prompt, messages, tools=tools):
+                if _sg_model in _CODEX_MODELS:
+                    _sg_stream = _stream_codex_relay(_sg_model, system_prompt, messages, tools=tools, session_id=session_id)
+                else:
+                    _sg_stream = _stream_litellm(_sg_model, system_prompt, messages, tools=tools)
+                async for event in _sg_stream:
                     if isinstance(event, dict) and event.get("type") == "error":
                         _sg_had_error = True
                         logger.warning(f"samegrade_fallback_failed: {_original_model} -> {_sg_model}: {event.get('content', '')[:120]}")
