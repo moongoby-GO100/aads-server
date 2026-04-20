@@ -84,7 +84,7 @@ _streaming_state: Dict[str, Dict[str, Any]] = {}
 _BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "300"))  # 5분
 
 _SENTINEL = object()  # Queue 종료 신호
-_RESUME_SEMAPHORE = _heartbeat_asyncio.Semaphore(1)
+_RESUME_SEMAPHORE = _heartbeat_asyncio.Semaphore(3)  # 동시 resume 최대 3개 (CEO 지시)
 
 _HTML_EDIT_KEYWORDS = (
     "바꿔", "수정해", "변경", "추가", "빼", "키워", "줄여", "색", "로고", "버튼",
