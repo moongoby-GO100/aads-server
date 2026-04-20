@@ -219,6 +219,7 @@ async def send_message(request: Request):
     # with_background_completion 내부의 producer Task가 올바른 session_id를 상속받도록
     from app.services.tool_executor import current_chat_session_id
     current_chat_session_id.set(session_id_str)
+    html_context_state = await svc.get_html_edit_context_state(session_id_str, content)
 
     # with_background_completion이 독립 heartbeat task(_heartbeat_pump)를 운영하므로
     # with_heartbeat 이중 래핑 불필요 — 도구 30s+ 블로킹 시에도 heartbeat 보장
@@ -241,6 +242,7 @@ async def send_message(request: Request):
             "Connection": "keep-alive",
             "Transfer-Encoding": "chunked",
             "X-Stream-Session": session_id_str,
+            "X-HTML-Context-Used": "true" if html_context_state.get("html_context_used") else "false",
         },
     )
 

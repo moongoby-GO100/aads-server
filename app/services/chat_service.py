@@ -10,7 +10,7 @@ import logging
 import os
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional
@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 # P2-2: 분기 모드에서 AI 응답에 branch_id를 자동 부여하기 위한 ContextVar
 from contextvars import ContextVar as _ContextVar
 _current_branch_id: _ContextVar[Optional[str]] = _ContextVar("_current_branch_id", default=None)
+_artifact_extraction_context: _ContextVar[Optional[Dict[str, Any]]] = _ContextVar(
+    "_artifact_extraction_context", default=None,
+)
 
 # AADS-191 Phase1: Redis Stream 토큰 버퍼링 (서버 재시작 시 스트리밍 복구)
 from app.services import redis_stream as _redis_stream
@@ -81,6 +84,15 @@ _streaming_state: Dict[str, Dict[str, Any]] = {}
 _BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "300"))  # 5분
 
 _SENTINEL = object()  # Queue 종료 신호
+
+_HTML_EDIT_KEYWORDS = (
+    "바꿔", "수정해", "변경", "추가", "빼", "키워", "줄여", "색", "로고", "버튼",
+    "레이아웃", "change", "modify", "add", "remove", "bigger", "smaller",
+)
+_HTML_CONTEXT_MAX_LEN = 10_000
+_HTML_CONTEXT_HEAD_LEN = 5_000
+_HTML_CONTEXT_TAIL_LEN = 3_000
+_HTML_CONTEXT_MAX_AGE = timedelta(hours=24)
 
 import time as _bg_time
 
@@ -1429,6 +1441,124 @@ async def list_messages_cursor(
         }
 
 
+def _is_html_edit_intent(content: str) -> bool:
+    """HTML 미리보기 수정 요청으로 볼 수 있는지 보수적으로 판단."""
+    if not content:
+        return False
+    lowered = content.lower()
+    return any(keyword in lowered for keyword in _HTML_EDIT_KEYWORDS)
+
+
+def _truncate_html_context(content: str) -> str:
+    """토큰 폭주 방지를 위해 HTML 컨텍스트를 축약."""
+    if len(content) <= _HTML_CONTEXT_MAX_LEN:
+        return content
+    head = content[:_HTML_CONTEXT_HEAD_LEN]
+    tail = content[-_HTML_CONTEXT_TAIL_LEN:]
+    return f"{head}\n...(중략)...\n{tail}"
+
+
+async def _get_last_html_artifact(session_id: str) -> Optional[Dict[str, Any]]:
+    """세션의 가장 최근 html_preview 아티팩트 1건 조회."""
+    sid = uuid.UUID(session_id)
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT
+                a.id,
+                a.title,
+                a.content,
+                a.created_at,
+                COALESCE(
+                    (
+                        SELECT m.id
+                        FROM chat_messages m
+                        WHERE m.artifact_id = a.id
+                        ORDER BY m.created_at DESC
+                        LIMIT 1
+                    ),
+                    (
+                        SELECT m.id
+                        FROM chat_messages m
+                        WHERE m.session_id = a.session_id
+                          AND m.role = 'assistant'
+                          AND m.created_at <= a.created_at
+                        ORDER BY m.created_at DESC
+                        LIMIT 1
+                    )
+                ) AS message_id
+            FROM chat_artifacts a
+            WHERE a.session_id = $1
+              AND a.type = 'html_preview'
+            ORDER BY a.created_at DESC
+            LIMIT 1
+            """,
+            sid,
+        )
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "title": row["title"] or "HTML 미리보기",
+        "content": row["content"] or "",
+        "message_id": row["message_id"],
+        "created_at": row["created_at"],
+    }
+
+
+def _build_html_edit_prompt_context(
+    user_content: str,
+    artifact: Optional[Dict[str, Any]],
+    *,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """HTML 수정 요청 컨텍스트를 system prompt에 주입할지 계산."""
+    edit_intent = _is_html_edit_intent(user_content)
+    if not artifact:
+        return {
+            "edit_intent": edit_intent,
+            "html_context_used": False,
+            "parent_artifact_id": None,
+            "system_block": "",
+        }
+
+    current_time = now or datetime.now(timezone.utc)
+    created_at = artifact.get("created_at")
+    is_recent = bool(created_at and current_time - created_at <= _HTML_CONTEXT_MAX_AGE)
+    if not (edit_intent and is_recent):
+        return {
+            "edit_intent": edit_intent,
+            "html_context_used": False,
+            "parent_artifact_id": artifact.get("id"),
+            "system_block": "",
+        }
+
+    html_content = _truncate_html_context(artifact.get("content") or "")
+    title = artifact.get("title") or "HTML 미리보기"
+    created_text = created_at.isoformat() if created_at else ""
+    system_block = (
+        f"\n\n[현재 작업 중인 HTML 아티팩트 — 제목: {title}, 생성: {created_text}]\n"
+        f"```html\n{html_content}\n```\n"
+        "사용자가 수정을 요청한 경우, 위 HTML을 기준으로 수정된 전체 HTML을 "
+        "```html 블록으로 다시 출력하세요. 변경하지 않는 부분도 포함한 완전한 HTML이어야 합니다."
+    )
+    return {
+        "edit_intent": True,
+        "html_context_used": True,
+        "parent_artifact_id": artifact.get("id"),
+        "system_block": system_block,
+    }
+
+
+async def get_html_edit_context_state(session_id: str, user_content: str) -> Dict[str, Any]:
+    """라우터와 서비스에서 공유하는 HTML 수정 컨텍스트 계산."""
+    artifact = await _get_last_html_artifact(session_id)
+    state = _build_html_edit_prompt_context(user_content, artifact)
+    if artifact:
+        state["artifact"] = artifact
+    return state
+
+
 async def _extract_artifacts(session_id: uuid.UUID, content: str, workspace_id: uuid.UUID = None) -> None:
     """AI 응답에서 아티팩트 자동 추출 → chat_artifacts 저장.
     감지 유형: 코드, 보고서, 기획서, 계획서, 분석, 지시서, 체크리스트, 테이블, 이미지, 차트, 파일
@@ -1439,6 +1569,7 @@ async def _extract_artifacts(session_id: uuid.UUID, content: str, workspace_id: 
     import re as _re
 
     artifacts = []
+    extraction_ctx = _artifact_extraction_context.get() or {}
 
     # 1) 코드 블록 추출 (```language ... ```)
     code_blocks = _re.findall(
@@ -1479,7 +1610,12 @@ async def _extract_artifacts(session_id: uuid.UUID, content: str, workspace_id: 
             h1_match = _re.search(r'<h1[^>]*>(.*?)</h1>', html_code, _re.IGNORECASE | _re.DOTALL)
             if h1_match:
                 title = _re.sub(r'<[^>]+>', '', h1_match.group(1)).strip()[:100]
-        artifacts.append(("html_preview", title, html_code.strip(), {"language": "html"}))
+        html_metadata = {"language": "html"}
+        if extraction_ctx.get("edit_intent"):
+            html_metadata["edit_intent"] = True
+            if extraction_ctx.get("parent_artifact_id"):
+                html_metadata["parent_artifact_id"] = str(extraction_ctx["parent_artifact_id"])
+        artifacts.append(("html_preview", title, html_code.strip(), html_metadata))
 
     # 2) 보고서/기획서/분석 추출 (# 또는 이모지 제목으로 시작하는 구조화된 문서)
     # 2a) 마크다운 헤더 (# / ##) 시작
@@ -1732,6 +1868,8 @@ async def _save_and_update_session(
     tools_called: Optional[list] = None,
     thinking_summary: Optional[str] = None,
     auto_save_check: bool = False,
+    parent_artifact_id: Optional[uuid.UUID] = None,
+    edit_intent: bool = False,
 ) -> None:
     """#19: Phase C — 별도 커넥션으로 응답 저장 + 세션 비용 업데이트.
     BUG-FIX: placeholder가 있으면 UPDATE로 전환 (DELETE+INSERT gap 제거).
@@ -1783,7 +1921,14 @@ async def _save_and_update_session(
             )
         # 아티팩트 자동 추출 (코드 블록, 보고서, 테이블, 이미지, 차트, 파일)
         try:
-            await _extract_artifacts(sid, content)
+            _ctx_token = _artifact_extraction_context.set({
+                "parent_artifact_id": parent_artifact_id,
+                "edit_intent": edit_intent,
+            })
+            try:
+                await _extract_artifacts(sid, content)
+            finally:
+                _artifact_extraction_context.reset(_ctx_token)
         except Exception as _art_err:
             logger.debug(f"artifact_extract_error: {_art_err}")
 
@@ -2202,11 +2347,16 @@ async def send_message_stream(
         set_streaming(session_id, True)
         sid = uuid.UUID(session_id)
         sid_short = session_id[:8]  # 로깅용 축약 (str 보장 — sid[:8] 직접 사용 금지)
+        _html_context_state = await get_html_edit_context_state(session_id, content)
+        _artifact_chain_kwargs = {
+            "parent_artifact_id": _html_context_state.get("parent_artifact_id"),
+            "edit_intent": _html_context_state.get("edit_intent", False),
+        }
 
         # SSE 재연결 프로토콜: 고유 stream_id 발행
         import time as _stream_time
         _stream_id = str(uuid.uuid4())[:8]
-        yield f"data: {json.dumps({'type': 'stream_start', 'stream_id': _stream_id})}\n\n"
+        yield f"data: {json.dumps({'type': 'stream_start', 'stream_id': _stream_id, 'html_context_used': _html_context_state.get('html_context_used', False)})}\n\n"
 
         # AADS-FIX: 이전 턴에서 미소비된 인터럽트를 현재 user 메시지 앞에 주입
         if has_pending_interrupts(session_id):
@@ -2656,6 +2806,7 @@ async def send_message_stream(
                 intent=intent_override or "cache_hit",
                 cost=0.0, tokens_in=0, tokens_out=0,
                 tools_called=[], thinking_summary=None,
+                **_artifact_chain_kwargs,
             )
             return
 
@@ -2696,6 +2847,10 @@ async def send_message_stream(
                                     tokens_est=len(_inline_ctx.encode('utf-8')) // 3)
             except Exception as _sce:
                 logger.debug(f"[188E] 시맨틱 코드 검색 컨텍스트 주입 실패 (무시): {_sce}")
+
+        if _html_context_state.get("html_context_used"):
+            system_prompt = system_prompt + _html_context_state.get("system_block", "")
+            logger.info(f"html_context_used session={session_id[:8]} parent={_html_context_state.get('parent_artifact_id')}")
 
         # 5. 자동 압축은 context_builder.build_messages_context() 내에서 토큰 기반으로 트리거됨
         # (80K 토큰 초과 시 compaction_service.check_and_compact 자동 호출)
@@ -2775,7 +2930,8 @@ async def send_message_stream(
                             _model_label += f"+crawl{_crawl_count}"
                         await _save_and_update_session(
                             sid, result.text, model_used=_model_label, intent=intent,
-                            cost=Decimal("0"), sources=result.citations)
+                            cost=Decimal("0"), sources=result.citations,
+                            **_artifact_chain_kwargs)
                         yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': _model_label, 'cost': '0'})}\n\n"
                         _searxng_ok = True
                 except Exception as _sxng_err:
@@ -2847,7 +3003,8 @@ async def send_message_stream(
                     _search_cost = Decimal(str(round(_in_tok * 0.075 / 1_000_000 + _out_tok * 0.3 / 1_000_000, 6)))
                 await _save_and_update_session(
                     sid, result.text, model_used="gemini-flash", intent=intent,
-                    cost=_search_cost, sources=result.citations)
+                    cost=_search_cost, sources=result.citations,
+                    **_artifact_chain_kwargs)
                 yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': 'gemini-flash', 'cost': str(_search_cost)})}\n\n"
                 return
 
@@ -2913,7 +3070,8 @@ async def send_message_stream(
 
                         await _save_and_update_session(
                             sid, report_text, model_used="gemini-deep-research", intent=intent,
-                            cost=Decimal(str(cost_usd)), sources=final_citations)
+                            cost=Decimal(str(cost_usd)), sources=final_citations,
+                            **_artifact_chain_kwargs)
                         yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': 'gemini-deep-research', 'cost': str(cost_usd)})}\n\n"
                         return
                     except Exception as e:
@@ -3050,7 +3208,8 @@ async def send_message_stream(
                             full_response = re.sub(r'<invoke\s+name=[^>]*>.*', '', full_response, flags=re.DOTALL)
                         await _save_and_update_session(
                             sid, full_response, model_used=model_used, intent=intent,
-                            cost=cost_usd, tools_called=tools_called)
+                            cost=cost_usd, tools_called=tools_called,
+                            **_artifact_chain_kwargs)
                         yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'agent_sdk': True})}\n\n"
                         return
 
@@ -3131,7 +3290,8 @@ async def send_message_stream(
                 full_response = re.sub(r'<invoke\s+name=[^>]*>.*', '', full_response, flags=re.DOTALL)
             await _save_and_update_session(
                 sid, full_response, model_used=model_used, intent=intent,
-                cost=cost_usd, tools_called=tools_called)
+                cost=cost_usd, tools_called=tools_called,
+                **_artifact_chain_kwargs)
             yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': 0, 'output_tokens': 0, 'autonomous': True})}\n\n"
             return
 
@@ -3235,6 +3395,7 @@ async def send_message_stream(
                                     tokens_in=input_tokens,
                                     tokens_out=output_tokens,
                                     tools_called=tools_called,
+                                    **_artifact_chain_kwargs,
                                 )
                                 logger.info(f"error_partial_saved session={session_id[:8]} len={len(full_response)}")
                             except Exception as _eps:
@@ -3359,6 +3520,7 @@ async def send_message_stream(
             tools_called=tools_called,
             thinking_summary=_thinking_truncated,
             auto_save_check=True,
+            **_artifact_chain_kwargs,
         )
 
         # ═══ Phase C-1.5: Output Validator violation → quality_details 기록 ═══
