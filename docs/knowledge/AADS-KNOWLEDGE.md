@@ -6,6 +6,8 @@
 - MCP 상시 4개(Filesystem, Git, Memory, PostgreSQL) + 온디맨드 3개(GitHub, Brave, Fetch)
 - Backend: FastAPI 0.115 + Uvicorn, PostgreSQL 15, Upstash Redis, Docker Compose
 - Frontend: Next.js 16 + React 19 + Tailwind CSS 4
+- 인증/LLM 키는 DB `llm_api_keys`에 Fernet 암호화 저장, 런타임은 DB 우선 후 `.env` 폴백
+- `app/core/llm_key_provider.py`가 provider별 키 조회, 우선순위 정렬, 300초 캐시 및 폴백 체인을 담당
 
 ## 지시서 자동화 파이프라인 (TECH-002)
 8단계: CEO지시 → Bridge감지 → 사전검증 → 우선순위전송 → Claude실행 → 결과보고 → DB기록 → 교차검증
@@ -26,6 +28,11 @@
 - 글로벌 ≤4세션 (3서버 합산), 서버별 동적 1~3슬롯
 - 211=Hub(SSH 집계, 캐시 생성 TTL 40s), 68/114=Client(캐시 읽기)
 - 계정 2개(gmail/naver) MAX-200, 전환 쿨다운 5분
+
+## 인증/키 관리
+- Anthropic은 OAuth 토큰만 사용하며 `call_llm_with_fallback()` 경유가 원칙
+- 외부 LLM(Gemini/DeepSeek)은 LiteLLM 프록시 경유, 직접 REST API 호출 금지
+- Gemini 키는 `newtalk`/`aads` 2계정을 로드밸런싱하며 DB `llm_api_keys`에서 중앙 관리
 
 ## 함정 (과거 실패)
 - Supavisor 경유 → AsyncPipeline 충돌 → 직접 연결만 사용 (R-011)

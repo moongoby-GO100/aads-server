@@ -22,13 +22,15 @@ _생성: 2026-03-30 | 갱신: 2026-03-31 | Phase 1 시스템 완전 파악 + Pip
 ```
 메시지 → intent_router.py(Gemini Flash-Lite, 65인텐트)
   → model_selector.py(2126줄)
+    ├─ 키 조회 → DB llm_api_keys(Fernet 암호화) → 복호화 후 provider 키 반환, DB 장애 시 .env 폴백
     ├─ Claude 인텐트 → Anthropic OAuth 직접
-    │   5단계 폴백: Opus(Gmail)→Opus(Naver)→Sonnet(Gmail)→Sonnet(Naver)→Gemini
-    ├─ Gemini 인텐트 → LiteLLM 프록시
+    │   5단계 폴백: Opus 4.7(Gmail)→Opus 4.7(Naver)→Sonnet(Gmail)→Sonnet(Naver)→Gemini
+    ├─ Gemini 인텐트 → LiteLLM 프록시 (newtalk/aads 2개 키 로드밸런싱)
     └─ Gemini Direct (grounding/deep_research) → Google API
 ```
 
 인증 중앙: `app/core/auth_provider.py` — Gmail/Naver OAuth 교대, `rotate_oauth_primary_fallback()`.
+키 저장: DB `llm_api_keys` (Fernet 암호화, `.env` 폴백)로 중앙 관리.
 배경 작업: `app/core/anthropic_client.py` — `call_llm_with_fallback()` (Claude → Gemini).
 
 LiteLLM 모델 (litellm-config.yaml):
@@ -36,7 +38,7 @@ LiteLLM 모델 (litellm-config.yaml):
 - DeepSeek: chat, reasoner
 - Groq: llama-70b/8b, llama4-scout, qwen3-32b
 - OpenRouter: grok-4-fast, deepseek-v3, mistral-small, nemotron-free, minimax-m2
-- Claude: sonnet-4-6 (LiteLLM 경유)
+- Claude: sonnet-4-6, opus-4-7 (LiteLLM 경유)
 
 ## 채팅 시스템 (핵심)
 
