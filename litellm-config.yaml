@@ -47,6 +47,55 @@ model_list:
   litellm_params:
     model: gemini/gemini-2.5-pro
     api_key: os.environ/GEMINI_API_KEY
+# ── GEMINI_API_KEY_2 로드밸런싱 (aads 계정) ──
+- model_name: gemini-2.5-flash
+  litellm_params:
+    model: gemini/gemini-2.5-flash
+    api_key: os.environ/GEMINI_API_KEY_2
+- model_name: gemini-2.5-flash-lite
+  litellm_params:
+    model: gemini/gemini-2.5-flash-lite
+    api_key: os.environ/GEMINI_API_KEY_2
+- model_name: gemini-2.5-pro
+  litellm_params:
+    model: gemini/gemini-2.5-pro
+    api_key: os.environ/GEMINI_API_KEY_2
+- model_name: gemini-2.5-flash-image
+  litellm_params:
+    model: gemini/gemini-2.5-flash-image
+    api_key: os.environ/GEMINI_API_KEY_2
+- model_name: gemini-3-pro-preview
+  litellm_params:
+    model: gemini/gemini-3-pro-preview
+    api_key: os.environ/GEMINI_API_KEY_2
+- model_name: gemini-3-flash-preview
+  litellm_params:
+    model: gemini/gemini-3-flash-preview
+    api_key: os.environ/GEMINI_API_KEY_2
+- model_name: gemini-3.1-pro-preview
+  litellm_params:
+    model: gemini/gemini-3.1-pro-preview
+    api_key: os.environ/GEMINI_API_KEY_2
+- model_name: gemini-3.1-flash-lite-preview
+  litellm_params:
+    model: gemini/gemini-3.1-flash-lite-preview
+    api_key: os.environ/GEMINI_API_KEY_2
+- model_name: gemma-3-27b-it
+  litellm_params:
+    model: gemini/gemma-3-27b-it
+    api_key: os.environ/GEMINI_API_KEY_2
+- model_name: gemini-flash-lite
+  litellm_params:
+    model: gemini/gemini-2.5-flash-lite
+    api_key: os.environ/GEMINI_API_KEY_2
+- model_name: gemini-flash
+  litellm_params:
+    model: gemini/gemini-2.5-flash
+    api_key: os.environ/GEMINI_API_KEY_2
+- model_name: gemini-pro
+  litellm_params:
+    model: gemini/gemini-2.5-pro
+    api_key: os.environ/GEMINI_API_KEY_2
 - model_name: deepseek-chat
   litellm_params:
     model: deepseek/deepseek-chat
