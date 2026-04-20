@@ -35,13 +35,16 @@ def create_anthropic_llm(model_id: str, max_tokens: int = 4096, temperature: flo
     if not api_key:
         raise ValueError("No valid auth token (R-AUTH)")
     real_model = resolve_model_id(model_id)
-    return ChatAnthropic(
+    kwargs: dict[str, Any] = dict(
         model=real_model,
         api_key=api_key,
         anthropic_api_url=get_base_url(),
         max_tokens=max_tokens,
-        temperature=temperature,
     )
+    # Opus 4.7: temperature/top_p/top_k 미지원 (400 에러) — 제거
+    if "opus-4-7" not in real_model:
+        kwargs["temperature"] = temperature
+    return ChatAnthropic(**kwargs)
 
 
 def create_openai_llm(model_id: str, max_tokens: int = 4096, temperature: float = 0.1) -> Any:

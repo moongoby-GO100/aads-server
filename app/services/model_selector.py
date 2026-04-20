@@ -2071,7 +2071,7 @@ async def _stream_anthropic(
     _output_config = None
     if use_thinking:
         thinking_config = {"type": "adaptive", "display": "summarized"}
-        _output_config = {"effort": "high"}  # low/medium/high/xhigh/max
+        _output_config = {"effort": "xhigh"}  # low/medium/high/xhigh/max
 
     full_text = ""
     thinking_text = ""
