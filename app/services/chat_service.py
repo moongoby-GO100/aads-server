@@ -84,6 +84,7 @@ _streaming_state: Dict[str, Dict[str, Any]] = {}
 _BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "300"))  # 5분
 
 _SENTINEL = object()  # Queue 종료 신호
+_RESUME_SEMAPHORE = _heartbeat_asyncio.Semaphore(1)
 
 _HTML_EDIT_KEYWORDS = (
     "바꿔", "수정해", "변경", "추가", "빼", "키워", "줄여", "색", "로고", "버튼",
@@ -95,6 +96,44 @@ _HTML_CONTEXT_TAIL_LEN = 3_000
 _HTML_CONTEXT_MAX_AGE = timedelta(hours=24)
 
 import time as _bg_time
+
+
+def _is_resume_retryable(error: BaseException) -> bool:
+    """resume 경로에서 재시도 가능한 일시 오류인지 판별."""
+    if isinstance(error, (_heartbeat_asyncio.CancelledError, GeneratorExit, KeyboardInterrupt, SystemExit)):
+        return False
+
+    err_text = str(error).lower()
+    if isinstance(error, APIStatusError):
+        if getattr(error, "status_code", None) in (408, 409, 429, 500, 502, 503, 504, 529):
+            return True
+
+    return (
+        "ratelimit" in type(error).__name__.lower()
+        or any(token in err_text for token in ("429", "rate", "overloaded", "529", "quota", "timeout", "502", "503", "504"))
+    )
+
+
+async def _wait_for_resume_slot_cooldown() -> None:
+    """resume 직전 모든 OAuth 슬롯이 쿨다운이면 가장 먼저 풀리는 슬롯까지 대기."""
+    from app.services.model_selector import _SLOT_COOLDOWN
+
+    now = _bg_time.time()
+    slots = ("1", "2")
+    remaining = []
+    for slot in slots:
+        expire = _SLOT_COOLDOWN.get(slot, 0)
+        if expire > now:
+            remaining.append((slot, expire - now))
+
+    if len(remaining) == len(slots):
+        next_slot, wait_seconds = min(remaining, key=lambda item: item[1])
+        logger.info(
+            "resume_slot_cooldown_wait: all slots cooling down, waiting %.1fs for slot=%s",
+            wait_seconds,
+            next_slot,
+        )
+        await _heartbeat_asyncio.sleep(wait_seconds)
 
 
 async def _interim_save_streaming(session_id: str, state: Dict[str, Any]) -> None:
@@ -728,6 +767,9 @@ async def resume_interrupted_streams() -> int:
     """
     resumed = 0
     try:
+        logger.info("resume_startup_delay: waiting 30s for system stabilization")
+        await _heartbeat_asyncio.sleep(30)
+
         pool = get_pool()
         async with pool.acquire() as conn:
             # streaming_placeholder 또는 rate_limited가 남은 세션 + 마지막 user 메시지 조회
@@ -805,193 +847,227 @@ async def _resume_single_stream(
 ) -> None:
     """단일 세션의 중단된 스트리밍을 이어서 생성."""
     try:
-        pool = get_pool()
-        sid = uuid.UUID(session_id)
+        async with _RESUME_SEMAPHORE:
+            await _heartbeat_asyncio.sleep(0.5)
 
-        # 1. 히스토리 로드 (placeholder / rate_limited 제외)
-        async with pool.acquire() as conn:
-            hist_rows = await conn.fetch("""
-                SELECT role, content FROM (
-                    SELECT role, content, created_at FROM chat_messages
-                    WHERE session_id = $1
-                      AND (is_compacted IS NULL OR is_compacted = false)
-                      AND intent NOT IN ('streaming_placeholder', 'rate_limited')
-                    ORDER BY created_at DESC LIMIT 30
-                ) sub ORDER BY created_at ASC
-            """, sid)
+            pool = get_pool()
+            sid = uuid.UUID(session_id)
+            await _wait_for_resume_slot_cooldown()
 
-        raw_messages = [{"role": r["role"], "content": r["content"]} for r in hist_rows]
-
-        # 2. 이어서 생성 프롬프트 구성
-        resume_instruction = (
-            "[시스템: 서버 재시작으로 이전 응답이 중단되었습니다. "
-            "아래는 중단 전까지 생성된 부분 응답입니다. "
-            "이어서 완성해주세요. 이미 작성된 내용을 반복하지 말고, 끊긴 지점부터 자연스럽게 이어 작성하세요.]\n\n"
-            f"--- 중단된 부분 응답 ---\n{partial_content}\n--- 여기서 이어서 작성 ---"
-        ) if partial_content else (
-            "[시스템: 서버 재시작으로 이전 응답 생성이 시작되지 못했습니다. 처음부터 응답해주세요.]"
-        )
-        raw_messages.append({"role": "user", "content": resume_instruction})
-
-        # 3. 컨텍스트 빌드
-        from app.services.context_builder import build_messages_context
-        # workspace에서 base_prompt 조회
-        async with pool.acquire() as conn:
-            sp_row = await conn.fetchrow("""
-                SELECT w.system_prompt FROM chat_workspaces w
-                JOIN chat_sessions s ON s.workspace_id = w.id
-                WHERE s.id = $1
-            """, sid)
-        base_prompt = (sp_row["system_prompt"] if sp_row and sp_row["system_prompt"] else "")
-
-        try:
-            messages, system_prompt = await build_messages_context(
-                workspace_name=workspace_name,
-                session_id=session_id,
-                raw_messages=raw_messages,
-                base_system_prompt=base_prompt,
-            )
-        except Exception:
-            system_prompt = base_prompt or "You are a helpful AI assistant."
-            messages = raw_messages[-20:]
-
-        # 4. LLM 호출 (도구 포함)
-        from app.services.model_selector import call_stream
-        from app.services.intent_router import IntentResult
-
-        # BUG-4 FIX v3: 세션의 마지막 사용 모델로 이어서 생성 (CEO 선택 모델 유지)
-        # 우선순위: 1) user 메시지의 model_override → 2) assistant model_used → 3) 워크스페이스 기본 모델
-        _resume_model: Optional[str] = None
-        try:
+            # 1. 히스토리 로드 (placeholder / rate_limited 제외)
             async with pool.acquire() as conn:
-                # 1순위: 마지막 user 메시지의 model_used (CEO가 선택한 model_override)
-                _user_model = await conn.fetchval("""
-                    SELECT model_used FROM chat_messages
-                    WHERE session_id = $1
-                      AND role = 'user'
-                      AND model_used IS NOT NULL
-                      AND model_used != ''
-                    ORDER BY created_at DESC LIMIT 1
+                hist_rows = await conn.fetch("""
+                    SELECT role, content FROM (
+                        SELECT role, content, created_at FROM chat_messages
+                        WHERE session_id = $1
+                          AND (is_compacted IS NULL OR is_compacted = false)
+                          AND intent NOT IN ('streaming_placeholder', 'rate_limited')
+                        ORDER BY created_at DESC LIMIT 30
+                    ) sub ORDER BY created_at ASC
                 """, sid)
-                if _user_model:
-                    from app.services.intent_router import get_model_for_override
-                    _resume_model = get_model_for_override(_user_model)
-                    logger.info(f"resume_model_from_user_override session={session_id[:8]} model={_resume_model}")
-                else:
-                    # 2순위: 마지막 assistant 메시지의 실제 사용 모델
-                    _asst_model = await conn.fetchval("""
+
+            raw_messages = [{"role": r["role"], "content": r["content"]} for r in hist_rows]
+
+            # 2. 이어서 생성 프롬프트 구성
+            resume_instruction = (
+                "[시스템: 서버 재시작으로 이전 응답이 중단되었습니다. "
+                "아래는 중단 전까지 생성된 부분 응답입니다. "
+                "이어서 완성해주세요. 이미 작성된 내용을 반복하지 말고, 끊긴 지점부터 자연스럽게 이어 작성하세요.]\n\n"
+                f"--- 중단된 부분 응답 ---\n{partial_content}\n--- 여기서 이어서 작성 ---"
+            ) if partial_content else (
+                "[시스템: 서버 재시작으로 이전 응답 생성이 시작되지 못했습니다. 처음부터 응답해주세요.]"
+            )
+            raw_messages.append({"role": "user", "content": resume_instruction})
+
+            # 3. 컨텍스트 빌드
+            from app.services.context_builder import build_messages_context
+            # workspace에서 base_prompt 조회
+            async with pool.acquire() as conn:
+                sp_row = await conn.fetchrow("""
+                    SELECT w.system_prompt FROM chat_workspaces w
+                    JOIN chat_sessions s ON s.workspace_id = w.id
+                    WHERE s.id = $1
+                """, sid)
+            base_prompt = (sp_row["system_prompt"] if sp_row and sp_row["system_prompt"] else "")
+
+            try:
+                messages, system_prompt = await build_messages_context(
+                    workspace_name=workspace_name,
+                    session_id=session_id,
+                    raw_messages=raw_messages,
+                    base_system_prompt=base_prompt,
+                )
+            except Exception:
+                system_prompt = base_prompt or "You are a helpful AI assistant."
+                messages = raw_messages[-20:]
+
+            # 4. LLM 호출 (도구 포함)
+            from app.services.model_selector import call_stream
+            from app.services.intent_router import IntentResult
+
+            # BUG-4 FIX v3: 세션의 마지막 사용 모델로 이어서 생성 (CEO 선택 모델 유지)
+            # 우선순위: 1) user 메시지의 model_override → 2) assistant model_used → 3) 워크스페이스 기본 모델
+            _resume_model: Optional[str] = None
+            try:
+                async with pool.acquire() as conn:
+                    # 1순위: 마지막 user 메시지의 model_used (CEO가 선택한 model_override)
+                    _user_model = await conn.fetchval("""
                         SELECT model_used FROM chat_messages
                         WHERE session_id = $1
-                          AND role = 'assistant'
+                          AND role = 'user'
                           AND model_used IS NOT NULL
-                          AND model_used NOT IN ('stopped', 'interrupted', 'semantic_cache', 'streaming')
+                          AND model_used != ''
                         ORDER BY created_at DESC LIMIT 1
                     """, sid)
-                    if _asst_model:
-                        _resume_model = _asst_model
-                        logger.info(f"resume_model_from_assistant session={session_id[:8]} model={_resume_model}")
+                    if _user_model:
+                        from app.services.intent_router import get_model_for_override
+                        _resume_model = get_model_for_override(_user_model)
+                        logger.info(f"resume_model_from_user_override session={session_id[:8]} model={_resume_model}")
+                    else:
+                        # 2순위: 마지막 assistant 메시지의 실제 사용 모델
+                        _asst_model = await conn.fetchval("""
+                            SELECT model_used FROM chat_messages
+                            WHERE session_id = $1
+                              AND role = 'assistant'
+                              AND model_used IS NOT NULL
+                              AND model_used NOT IN ('stopped', 'interrupted', 'semantic_cache', 'streaming')
+                            ORDER BY created_at DESC LIMIT 1
+                        """, sid)
+                        if _asst_model:
+                            _resume_model = _asst_model
+                            logger.info(f"resume_model_from_assistant session={session_id[:8]} model={_resume_model}")
 
-                # 3순위: 워크스페이스 settings에서 기본 모델 조회
-                if not _resume_model:
-                    _ws_settings = await conn.fetchval("""
-                        SELECT w.settings FROM chat_workspaces w
-                        JOIN chat_sessions s ON s.workspace_id = w.id
-                        WHERE s.id = $1
-                    """, sid)
-                    if _ws_settings and isinstance(_ws_settings, dict):
-                        _resume_model = _ws_settings.get("default_model")
-                    if _resume_model:
-                        logger.info(f"resume_model_from_workspace session={session_id[:8]} model={_resume_model}")
-        except Exception as _model_err:
-            logger.warning(f"resume_model_lookup_failed session={session_id[:8]}: {_model_err}")
+                    # 3순위: 워크스페이스 settings에서 기본 모델 조회
+                    if not _resume_model:
+                        _ws_settings = await conn.fetchval("""
+                            SELECT w.settings FROM chat_workspaces w
+                            JOIN chat_sessions s ON s.workspace_id = w.id
+                            WHERE s.id = $1
+                        """, sid)
+                        if _ws_settings and isinstance(_ws_settings, dict):
+                            _resume_model = _ws_settings.get("default_model")
+                        if _resume_model:
+                            logger.info(f"resume_model_from_workspace session={session_id[:8]} model={_resume_model}")
+            except Exception as _model_err:
+                logger.warning(f"resume_model_lookup_failed session={session_id[:8]}: {_model_err}")
 
-        if not _resume_model:
-            _resume_model = "claude-sonnet"
-            logger.info(f"resume_model_fallback session={session_id[:8]} model={_resume_model}")
+            if not _resume_model:
+                _resume_model = "claude-sonnet"
+                logger.info(f"resume_model_fallback session={session_id[:8]} model={_resume_model}")
 
-        intent_result = IntentResult(
-            intent="status_check",
-            model=_resume_model,
-            use_tools=True,
-            tool_group="all",
-        )
+            intent_result = IntentResult(
+                intent="status_check",
+                model=_resume_model,
+                use_tools=True,
+                tool_group="all",
+            )
 
-        from app.services.tool_registry import ToolRegistry
-        tools_for_api = ToolRegistry().get_tools("all")
+            from app.services.tool_registry import ToolRegistry
+            tools_for_api = ToolRegistry().get_tools("all")
 
-        # 4-A. Redis Stream에 완성된 응답이 있는지 먼저 확인 (LLM 재호출 불필요할 수 있음)
-        redis_content, redis_complete = await _redis_stream.reconstruct_from_stream(session_id)
-        if redis_complete and redis_content and len(redis_content) > len(partial_content):
-            # Redis에 완성된 응답이 있음 → LLM 재호출 없이 즉시 저장
+            # 4-A. Redis Stream에 완성된 응답이 있는지 먼저 확인 (LLM 재호출 불필요할 수 있음)
+            redis_content, redis_complete = await _redis_stream.reconstruct_from_stream(session_id)
+            if redis_complete and redis_content and len(redis_content) > len(partial_content):
+                # Redis에 완성된 응답이 있음 → LLM 재호출 없이 즉시 저장
+                logger.info(
+                    f"resume_from_redis: session={session_id[:8]} "
+                    f"redis_len={len(redis_content)} partial_len={len(partial_content)}"
+                )
+                full_response = redis_content
+                cost_usd = Decimal("0")
+                _resume_model = "recovered_from_redis"
+                tools_called = []
+            else:
+                # 4-B. Redis에 완성 응답 없음 → LLM 재호출 + Redis Stream에 토큰 발행
+                # Redis에 부분 내용이 DB보다 많으면 활용
+                if redis_content and len(redis_content) > len(partial_content):
+                    partial_content = redis_content
+                    logger.info(f"resume_redis_partial: session={session_id[:8]} upgraded partial to redis_len={len(redis_content)}")
+
+                retry_delays = [30, 60, 120]
+                last_error: Optional[BaseException] = None
+                full_response = partial_content  # 기존 부분 응답에 이어붙임
+                cost_usd = Decimal("0")
+                tools_called = []
+
+                for attempt in range(len(retry_delays) + 1):
+                    _token_idx = 0
+                    full_response = partial_content
+                    tools_called = []
+                    cost_usd = Decimal("0")
+
+                    try:
+                        async for event in call_stream(
+                            intent_result=intent_result,
+                            system_prompt=system_prompt,
+                            messages=messages,
+                            tools=tools_for_api,
+                            model_override=_resume_model,
+                            session_id=session_id,
+                        ):
+                            etype = event.get("type", "")
+                            if etype == "delta":
+                                delta_content = event.get("content", "")
+                                full_response += delta_content
+                                # Redis Stream에 발행 → 프론트 stream-resume가 실시간 수신
+                                chunk = f'data: {json.dumps({"type": "delta", "content": delta_content})}\n\n'
+                                await _redis_stream.publish_token(session_id, chunk, _token_idx)
+                                _token_idx += 1
+                            elif etype == "tool_use":
+                                tools_called.append(event["tool_name"])
+                            elif etype == "done":
+                                cost_usd = Decimal(str(event.get("cost", "0")))
+
+                        last_error = None
+                        break
+                    except Exception as stream_error:
+                        last_error = stream_error
+                        if attempt >= len(retry_delays) or not _is_resume_retryable(stream_error):
+                            raise
+
+                        delay = retry_delays[attempt]
+                        logger.warning(
+                            "resume_retry: session=%s attempt=%s/%s delay=%ss error=%s",
+                            session_id[:8],
+                            attempt + 1,
+                            len(retry_delays),
+                            delay,
+                            stream_error,
+                        )
+                        await _heartbeat_asyncio.sleep(delay)
+                        await _wait_for_resume_slot_cooldown()
+
+                if last_error is not None:
+                    raise last_error
+
+                # 완료 마커 발행 → 프론트에서 resume_done 수신
+                await _redis_stream.mark_stream_done(session_id)
+
+            # 5. placeholder를 최종 응답으로 교체 (UPDATE — 새 버블 생성 금지)
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """UPDATE chat_messages
+                       SET content = $1, intent = NULL, model_used = $4,
+                           cost = $2, edited_at = NOW()
+                       WHERE id = $3""",
+                    full_response,
+                    cost_usd,
+                    placeholder_id,
+                    _resume_model,
+                )
+                await conn.execute(
+                    "UPDATE chat_sessions SET cost_total = cost_total + $1, updated_at = NOW() WHERE id = $2",
+                    cost_usd, sid,
+                )
+
             logger.info(
-                f"resume_from_redis: session={session_id[:8]} "
-                f"redis_len={len(redis_content)} partial_len={len(partial_content)}"
+                f"resume_completed: session={session_id[:8]} "
+                f"partial={len(partial_content)} final={len(full_response)} "
+                f"tools={len(tools_called)} cost=${cost_usd}"
             )
-            full_response = redis_content
-            cost_usd = Decimal("0")
-            _resume_model = "recovered_from_redis"
-        else:
-            # 4-B. Redis에 완성 응답 없음 → LLM 재호출 + Redis Stream에 토큰 발행
-            # Redis에 부분 내용이 DB보다 많으면 활용
-            if redis_content and len(redis_content) > len(partial_content):
-                partial_content = redis_content
-                logger.info(f"resume_redis_partial: session={session_id[:8]} upgraded partial to redis_len={len(redis_content)}")
-
-            full_response = partial_content  # 기존 부분 응답에 이어붙임
-            cost_usd = Decimal("0")
-            tools_called = []
-            _token_idx = 0
-
-            async for event in call_stream(
-                intent_result=intent_result,
-                system_prompt=system_prompt,
-                messages=messages,
-                tools=tools_for_api,
-                model_override=_resume_model,
-                session_id=session_id,
-            ):
-                etype = event.get("type", "")
-                if etype == "delta":
-                    delta_content = event.get("content", "")
-                    full_response += delta_content
-                    # Redis Stream에 발행 → 프론트 stream-resume가 실시간 수신
-                    chunk = f'data: {json.dumps({"type": "delta", "content": delta_content})}\n\n'
-                    await _redis_stream.publish_token(session_id, chunk, _token_idx)
-                    _token_idx += 1
-                elif etype == "tool_use":
-                    tools_called.append(event["tool_name"])
-                elif etype == "done":
-                    cost_usd = Decimal(str(event.get("cost", "0")))
-
-            # 완료 마커 발행 → 프론트에서 resume_done 수신
-            await _redis_stream.mark_stream_done(session_id)
-
-        # 5. placeholder를 최종 응답으로 교체 (UPDATE — 새 버블 생성 금지)
-        async with pool.acquire() as conn:
-            await conn.execute(
-                """UPDATE chat_messages
-                   SET content = $1, intent = NULL, model_used = $4,
-                       cost = $2, edited_at = NOW()
-                   WHERE id = $3""",
-                full_response,
-                cost_usd,
-                placeholder_id,
-                _resume_model,
-            )
-            await conn.execute(
-                "UPDATE chat_sessions SET cost_total = cost_total + $1, updated_at = NOW() WHERE id = $2",
-                cost_usd, sid,
-            )
-
-        logger.info(
-            f"resume_completed: session={session_id[:8]} "
-            f"partial={len(partial_content)} final={len(full_response)} "
-            f"tools={len(tools_called)} cost=${cost_usd}"
-        )
 
     except Exception as e:
         logger.error(f"resume_single_stream_error: session={session_id[:8]} error={e}")
-        # 버그2 수정: 실패 시 interrupted 대신 recovered 유지 → _periodic_recovered_scanner가 재시도
         try:
             async with get_pool().acquire() as c:
                 final = partial_content + "\n\n⚠️ _서버 재시작 후 이어서 생성에 실패했습니다. 다시 질문해주세요._" if partial_content else "⚠️ _서버 재시작 후 응답 생성에 실패했습니다. 다시 질문해주세요._"
