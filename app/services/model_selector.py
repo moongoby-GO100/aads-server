@@ -115,11 +115,14 @@ def _parse_rl_reset_ms(headers=None):
         except (ValueError, TypeError): pass
     return None
 
-def _mark_slot_cooldown(slot: str, headers=None) -> None:
+def _mark_slot_cooldown(slot: str, headers=None, duration_override: int = None) -> None:
     """429/한도 오류 시 슬롯 쿨다운. 헤더 기반 해제 시각, 없으면 5분."""
-    expire = _parse_rl_reset_ms(headers)
-    if expire is None:
-        expire = _time_mod.time() + _COOLDOWN_SECS
+    if duration_override:
+        expire = _time_mod.time() + duration_override
+    else:
+        expire = _parse_rl_reset_ms(headers)
+        if expire is None:
+            expire = _time_mod.time() + _COOLDOWN_SECS
     _SLOT_COOLDOWN[slot] = expire
     until_str = _time_mod.strftime("%H:%M:%S", _time_mod.localtime(expire))
     logger.info("slot_cooldown_set: slot=%s until=%s", slot, until_str)
@@ -483,7 +486,7 @@ async def call_stream(
     # Opus(Naver)→Opus(Gmail)→Sonnet(Naver)→… (기본) / CLAUDE_RELAY_NAVER_FIRST=false 시 Gmail 먼저
     _ACCOUNT_SLOTS = ["2", "1"] if _CLAUDE_RELAY_NAVER_FIRST else ["1", "2"]  # 2=Naver, 1=Gmail
     _MODEL_DOWNGRADE = {
-        "claude-opus": ["claude-opus", "claude-sonnet"],
+        "claude-opus": ["claude-opus"],
         "claude-sonnet": ["claude-sonnet"],
         "claude-haiku": ["claude-haiku"],
     }
@@ -505,6 +508,43 @@ async def call_stream(
         _avail = [s for s in _ACCOUNT_SLOTS if _is_slot_available(s)]
         _cooled = [s for s in _ACCOUNT_SLOTS if not _is_slot_available(s)]
         _smart_slots = _avail + _cooled  # 쿨다운 슬롯도 마지막 기회로 시도
+
+        async def _stream_with_slots(_target_model: str) -> AsyncGenerator[Dict[str, Any], None]:
+            for _si, _slot in enumerate(_smart_slots):
+                if _si > 0:
+                    logger.info(f"fallback[{_si}/{len(_smart_slots)}]: {_target_model} slot={_slot}")
+
+                _err = False
+                async for event in _stream_cli_relay(_target_model, system_prompt, messages, tools=tools, session_id=session_id, oauth_slot=_slot):
+                    if event.get("type") == "error":
+                        _err = True
+                        _err_msg = event.get("content", "")
+                        logger.warning(f"relay_err: {_target_model}/slot{_slot}[{_si}] — {_err_msg[:80]}")
+                        if any(k in _err_msg.lower() for k in ("429", "rate", "limit", "overloaded", "quota")):
+                            _mark_slot_cooldown(_slot)
+                        break
+                    yield event
+                if not _err:
+                    return
+
+                await _relay_clear_aads_session_for_oauth_fallback(session_id)
+
+                if _slot == _ACCOUNT_SLOTS[0]:
+                    _err = False
+                    logger.info(f"relay_failed: SDK for {_target_model}[{_si}]")
+                    async for event in _stream_agent_sdk(_target_model, system_prompt, messages, session_id=session_id):
+                        if event.get("type") == "error":
+                            _err = True
+                            logger.warning(f"sdk_err: {_target_model}[{_si}] — {event.get('content', '')[:80]}")
+                            break
+                        yield event
+                    if not _err:
+                        return
+
+                logger.warning(f"tier_exhausted: {_target_model}/slot{_slot}[{_si}]")
+
+            raise RuntimeError(f"all_slots_failed: {_target_model}")
+
         for _dg in _downgrade:
             for _sl in _smart_slots:
                 _fb_seq.append((_dg, _sl))
@@ -520,9 +560,13 @@ async def call_stream(
                     _err = True
                     _err_msg = event.get("content", "")
                     logger.warning(f"relay_err: {_fm}/slot{_fs}[{_fi}] — {_err_msg[:80]}")
-                    # 429/한도/크레딧 오류 → 슬롯 쿨다운 등록
-                    if any(k in _err_msg.lower() for k in ("429", "rate", "limit", "overloaded", "quota")):
+                    _err_lower = _err_msg.lower()
+                    # 429/한도/크레딧 오류 → 기존 쿨다운 등록
+                    if any(k in _err_lower for k in ("429", "rate", "limit", "overloaded", "quota")):
                         _mark_slot_cooldown(_fs)
+                    # CLI exit 반복 실패는 짧은 고정 쿨다운 적용
+                    elif any(k in _err_lower for k in ("cli exited", "exit code", "exited with code")):
+                        _mark_slot_cooldown(_fs, duration_override=60)
                     break
                 yield event
             if not _err:
@@ -562,7 +606,7 @@ async def call_stream(
             logger.warning(f"error_log insert failed: {_log_err}")
 
         _samegrade_list = _SAMEGRADE_FALLBACK.get(_original_model, ["gemini-2.5-flash"])
-        _sg_success = False
+        _samegrade_success = False
         for _sg_model in _samegrade_list:
             try:
                 yield {"type": "delta", "content": f"\n\n⚠️ _Claude 일시 장애 — {_sg_model}로 전환하여 계속합니다._\n\n"}
@@ -578,13 +622,22 @@ async def call_stream(
                         break
                     yield event
                 if not _sg_had_error:
-                    _sg_success = True
+                    _samegrade_success = True
                     break
             except Exception as _sg_err:
                 logger.warning(f"samegrade_fallback_failed model={_sg_model}: {_sg_err}")
                 continue
 
-        if not _sg_success:
+        if _original_model in ("claude-opus",) and not _samegrade_success:
+            logger.warning(f"all_samegrade_failed: {_original_model} → last_resort claude-sonnet")
+            try:
+                async for event in _stream_with_slots("claude-sonnet"):
+                    yield event
+                return
+            except Exception as e:
+                logger.error(f"last_resort_sonnet_failed: {e}")
+
+        if not _samegrade_success:
             yield {"type": "delta", "content": "\n\n⚠️ _전체 LLM 장애 — 잠시 후 다시 시도해주세요._\n\n"}
             yield {"type": "error", "content": "All LLM providers failed"}
         return
