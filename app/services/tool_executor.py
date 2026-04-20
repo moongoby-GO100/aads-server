@@ -2236,22 +2236,6 @@ class ToolExecutor:
 
     # ── Pipeline Runner: 레거시 (Runner로 자동 전환) ──────────────────────────────
 
-    async def _pipeline_c_start(self, inp: Dict[str, Any]) -> Any:
-        """Pipeline Runner 시작 — Claude Code 자율 작업."""
-        from app.api.ceo_chat_tools import tool_pipeline_c_start
-        # 현재 채팅 세션 ID를 컨텍스트에서 가져와서 전달
-        _session_id = current_chat_session_id.get("")
-        logger.info(f"[DIAG] _pipeline_c_start: ContextVar session_id='{_session_id}'")
-        if not _session_id:
-            logger.warning("_pipeline_c_start: chat_session_id 없음 — 채팅방 보고가 비활성됩니다")
-        return await tool_pipeline_c_start(
-            project=inp.get("project", ""),
-            instruction=inp.get("instruction", ""),
-            max_cycles=inp.get("max_cycles", 3),
-            dsn="",
-            chat_session_id=_session_id,
-        )
-
     async def _pipeline_c_status(self, inp: Dict[str, Any]) -> Any:
         """Pipeline Runner 상태 조회."""
         from app.api.ceo_chat_tools import tool_pipeline_c_status

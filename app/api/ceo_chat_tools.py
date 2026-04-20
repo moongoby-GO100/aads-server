@@ -2279,39 +2279,6 @@ async def tool_git_remote_create_branch(project: str, branch_name: str) -> str:
 # ─── Pipeline Runner 도구 함수 ────────────────────────────────────────────────
 
 
-async def tool_pipeline_c_start(project: str, instruction: str, max_cycles: int, dsn: str, chat_session_id: str = "", model: str = "") -> str:
-    """Pipeline Runner 시작."""
-    if not project:
-        return "[ERROR] project 필수"
-    if not instruction or len(instruction.strip()) < 10:
-        return "[ERROR] instruction 필수 (최소 10자 이상의 구체적 지시 필요)"
-
-    try:
-        from app.services.pipeline_runner_service import start_pipeline
-        result = await start_pipeline(
-            project=project.upper(),
-            instruction=instruction,
-            chat_session_id=chat_session_id or "",  # 빈 문자열이면 _post_to_chat 비활성
-            max_cycles=min(max_cycles, 5),
-            dsn=dsn,
-            model=model or "",
-        )
-        return (
-            f"[Pipeline Runner 시작]\n"
-            f"Job ID: {result['job_id']}\n"
-            f"프로젝트: {result['project']}\n"
-            f"상태: {result['status']}\n\n"
-            f"{result['message']}\n\n"
-            f"진행 확인: pipeline_c_status(job_id=\"{result['job_id']}\")\n"
-            f"작업이 완료되면 승인 요청이 표시됩니다."
-        )
-    except ValueError as e:
-        return f"[ERROR] {e}"
-    except Exception as e:
-        logger.error(f"pipeline_c_start_error: {e}")
-        return f"[ERROR] Pipeline Runner 시작 실패: {e}"
-
-
 async def tool_pipeline_c_status(job_id: str) -> str:
     """Pipeline Runner 상태 조회."""
     from app.services.pipeline_runner_service import get_pipeline_status, list_pipelines
