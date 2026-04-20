@@ -610,6 +610,7 @@ class PipelineCJob:
             # Phase 5: 푸시 (commit은 Runner가 작업 완료 시 이미 수행)
             # cross-process flock으로 Chat-Direct git 작업과 충돌 방지
             self._log("deploying", "git push 진행 중...")
+            await self._save_to_db()
             await self._post_to_chat(
                 f"🚀 **[배포 시작]** `{self.job_id}`\n"
                 f"CEO 승인 완료. git push + 서비스 재시작 진행 중..."
@@ -621,12 +622,11 @@ class PipelineCJob:
                     push_result = await self._ssh_command("git push")
                 self._log("push_done", f"push 완료: {push_result[:200]}")
             except Exception as _push_err:
-                # C-3: Python approve 실패 시 DB를 'approved'로 설정 → Shell Runner가 배포 이어받음
-                logger.error(f"approve_push_failed: job={self.job_id} err={_push_err} → Shell Runner 폴백")
-                self.status = "approved"
+                logger.error(f"approve_push_failed: job={self.job_id} err={_push_err}")
+                self.status = "error"
                 await self._save_to_db()
-                await self._post_to_chat(f"⚠️ **[배포 폴백]** `{self.job_id}`\ngit push 실패 — Shell Runner에 배포를 위임합니다.")
-                return {"status": "approved_fallback", "error": str(_push_err)}
+                await self._post_to_chat(f"❌ **[배포 실패]** `{self.job_id}`\ngit push 실패: {_push_err}")
+                return {"status": "error", "error": str(_push_err)}
 
             # 서비스 재시작
             restart_cmd = _RESTART_CMD.get(self.project, "")
@@ -2146,7 +2146,7 @@ async def recover_interrupted_jobs():
                 """
                 SELECT job_id, chat_session_id, project, instruction, phase, status
                 FROM pipeline_jobs
-                WHERE status = 'running' AND phase = 'restarting'
+                WHERE status = 'running' AND phase IN ('restarting', 'deploying', 'push_done', 'verifying', 'rolling_back')
                 ORDER BY updated_at DESC LIMIT 5
                 """
             )
