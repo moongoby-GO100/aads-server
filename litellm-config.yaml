@@ -355,35 +355,35 @@ model_list:
     model: openai/MiniMax-M2.5
     api_key: os.environ/MINIMAX_API_KEY
     api_base: https://api.minimaxi.chat/v1
-# OpenAI 모델 (OPENAI_API_KEY 필요)
-- model_name: gpt-4o
-  litellm_params:
-    model: openai/gpt-4o
-    api_key: os.environ/OPENAI_API_KEY
-- model_name: gpt-4o-mini
-  litellm_params:
-    model: openai/gpt-4o-mini
-    api_key: os.environ/OPENAI_API_KEY
-- model_name: gpt-5
-  litellm_params:
-    model: openai/gpt-5
-    api_key: os.environ/OPENAI_API_KEY
-- model_name: gpt-5-mini
-  litellm_params:
-    model: openai/gpt-5-mini
-    api_key: os.environ/OPENAI_API_KEY
-- model_name: o3
-  litellm_params:
-    model: openai/o3
-    api_key: os.environ/OPENAI_API_KEY
-- model_name: o3-mini
-  litellm_params:
-    model: openai/o3-mini
-    api_key: os.environ/OPENAI_API_KEY
-- model_name: o3-pro
-  litellm_params:
-    model: openai/o3-pro
-    api_key: os.environ/OPENAI_API_KEY
+# OpenAI 모델 — 사용 안 함 (GPT는 Codex CLI 전용, LiteLLM 미경유)
+# - model_name: gpt-4o
+#   litellm_params:
+#     model: openai/gpt-4o
+#     api_key: os.environ/OPENAI_API_KEY
+# - model_name: gpt-4o-mini
+#   litellm_params:
+#     model: openai/gpt-4o-mini
+#     api_key: os.environ/OPENAI_API_KEY
+# - model_name: gpt-5
+#   litellm_params:
+#     model: openai/gpt-5
+#     api_key: os.environ/OPENAI_API_KEY
+# - model_name: gpt-5-mini
+#   litellm_params:
+#     model: openai/gpt-5-mini
+#     api_key: os.environ/OPENAI_API_KEY
+# - model_name: o3
+#   litellm_params:
+#     model: openai/o3
+#     api_key: os.environ/OPENAI_API_KEY
+# - model_name: o3-mini
+#   litellm_params:
+#     model: openai/o3-mini
+#     api_key: os.environ/OPENAI_API_KEY
+# - model_name: o3-pro
+#   litellm_params:
+#     model: openai/o3-pro
+#     api_key: os.environ/OPENAI_API_KEY
 router_settings:
   enable_pre_call_checks: false
   num_retries: 3
