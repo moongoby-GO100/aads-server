@@ -34,15 +34,18 @@ SERVER_CONFIG = {
         "host": "server-211",
         "paths": [
             {"base": "/root/kis-autotrade-v4/docs", "label": "문서",
-             "exclude": ["kis-api-portal"]},
+             "exclude": ["kis-api-portal", "GO100", "go100"]},
         ],
     },
     "GO100": {
         "host": "server-211",
         "paths": [
             {"base": "/root/kis-autotrade-v4/report", "label": "리포트"},
+            {"base": "/root/kis-autotrade-v4/reports", "label": "리포트"},
             {"base": "/root/kis-autotrade-v4/docs/go100", "label": "문서"},
             {"base": "/root/kis-autotrade-v4/docs/technical", "label": "기술문서"},
+            {"base": "/root/kis-autotrade-v4/docs", "label": "문서",
+             "include": ["GO100", "go100"], "exclude": ["go100/", "technical/"]},
         ],
     },
     "SF": {
@@ -79,7 +82,7 @@ async def _run_cmd(cmd: list[str], timeout: float = 10) -> str:
         return ""
 
 
-async def _scan_local(base: str, exclude: list[str] | None = None) -> list[dict]:
+async def _scan_local(base: str, exclude: list[str] | None = None, include: list[str] | None = None) -> list[dict]:
     """로컬 파일시스템 스캔."""
     results = []
     base_path = Path(base)
@@ -93,6 +96,8 @@ async def _scan_local(base: str, exclude: list[str] | None = None) -> list[dict]
         rel = str(p.relative_to(base_path))
         if exclude and any(ex in rel for ex in exclude):
             continue
+        if include and not any(inc in p.name for inc in include):
+            continue
         stat = p.stat()
         results.append({
             "name": p.name,
@@ -104,7 +109,7 @@ async def _scan_local(base: str, exclude: list[str] | None = None) -> list[dict]
     return results
 
 
-async def _scan_remote(host: str, base: str, exclude: list[str] | None = None) -> list[dict]:
+async def _scan_remote(host: str, base: str, exclude: list[str] | None = None, include: list[str] | None = None) -> list[dict]:
     """SSH로 원격 서버 스캔."""
     ext_pattern = " -o ".join(f'-name "*.{ext.lstrip(".")}"' for ext in EXTENSIONS)
     find_cmd = f'find {base} -type f \\( {ext_pattern} \\) -printf "%P\\t%s\\t%T@\\n" 2>/dev/null'
@@ -120,6 +125,8 @@ async def _scan_remote(host: str, base: str, exclude: list[str] | None = None) -
         if exclude and any(ex in rel_path for ex in exclude):
             continue
         name = rel_path.rsplit("/", 1)[-1] if "/" in rel_path else rel_path
+        if include and not any(inc in name for inc in include):
+            continue
         results.append({
             "name": name,
             "path": rel_path,
@@ -156,11 +163,12 @@ async def _scan_project(project: str, config: dict) -> dict:
     for path_cfg in config["paths"]:
         base = path_cfg["base"]
         exclude = path_cfg.get("exclude")
+        include = path_cfg.get("include")
         label = path_cfg["label"]
         if host is None:
-            docs = await _scan_local(base, exclude)
+            docs = await _scan_local(base, exclude, include)
         else:
-            docs = await _scan_remote(host, base, exclude)
+            docs = await _scan_remote(host, base, exclude, include)
         for d in docs:
             d["base_path"] = base
             d["label"] = label
