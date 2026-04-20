@@ -59,7 +59,7 @@ _CLAUDE_MODEL_BY_SIZE = {
     "S":  "claude-haiku-4-5-20251001",
     "M":  "claude-sonnet-4-6",
     "L":  "claude-sonnet-4-6",
-    "XL": "claude-opus-4-6",
+    "XL": "claude-opus-4-7",
 }
 
 _LITELLM_FALLBACK_MODELS = {
@@ -135,6 +135,27 @@ def list_jobs(chat_session_id: str = None) -> list:
     if chat_session_id:
         jobs = [j for j in jobs if j.chat_session_id == chat_session_id]
     return [j.to_dict() for j in jobs]
+
+
+async def _get_db_model_config(size: str) -> list[str]:
+    """DB runner_model_config에서 size별 모델 우선순위 조회. 실패 시 빈 리스트 반환."""
+    query = """
+        SELECT m.model
+        FROM runner_model_config c,
+             jsonb_array_elements_text(c.models) WITH ORDINALITY AS m(model, priority)
+        WHERE c.size = $1
+        ORDER BY m.priority
+    """
+    try:
+        from app.core.db_pool import get_pool
+
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(query, (size or "M").upper())
+        return [row["model"] for row in rows if row and row["model"]]
+    except Exception as e:
+        logger.warning("pipeline_c_model_config_db_lookup_failed size=%s error=%s", size, str(e)[:120])
+        return []
 
 
 class PipelineCJob:
@@ -353,6 +374,15 @@ class PipelineCJob:
                     f"지시: {self.instruction[:300]}"
                 )
                 work_result = await self._run_litellm_fallback(enriched_instruction, override_model=_direct_model)
+            elif _wm.startswith("codex:"):
+                _codex_model = _wm.split(":", 1)[1] or "gpt-5.4"
+                self._log("codex_direct", f"Codex CLI 직접 실행 (CEO 명시 지정, model={_codex_model})")
+                await self._post_to_chat(
+                    f"🤖 **[Codex Runner 시작]** `{self.job_id}`\n"
+                    f"프로젝트: **{self.project}** | 모델: **{_codex_model}**\n"
+                    f"지시: {self.instruction[:300]}"
+                )
+                work_result = await self._run_codex_cli(enriched_instruction, override_model=_codex_model)
             elif _wm == "claude":
                 # Claude 명시 지정: Claude 직행 (크기별 모델 분기)
                 _claude_model = _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-4-6")
@@ -360,14 +390,19 @@ class PipelineCJob:
                 self.model = _claude_model.split('-')[1] if self.size in ("XL",) else ("haiku" if self.size in ("S", "XS") else "sonnet")
                 work_result = await self._run_claude_code(enriched_instruction, continue_session=False)
             else:
-                # 기본: LiteLLM 우선 실행 → 실패 시 Claude 폴백 (크기별 모델 분기)
-                work_result = await self._run_litellm_fallback(enriched_instruction)
-                if work_result.get("error"):
-                    _claude_model = _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-4-6")
-                    self._log("claude_fallback_attempt", f"LiteLLM 실패 → Claude 폴백 (size={self.size}, model={_claude_model}): {work_result['error'][:100]}")
-                    self.actual_model = f"claude:{_claude_model.split('-')[1] if '-' in _claude_model else 'sonnet'}"
-                    self.model = _claude_model.split('-')[1] if self.size in ("XL",) else ("haiku" if self.size in ("S", "XS") else "sonnet")
-                    work_result = await self._run_claude_code(enriched_instruction, continue_session=False)
+                # 기본: DB runner_model_config 우선순위 순회 → DB 미구성/실패 시 기존 폴백 유지
+                db_models = await _get_db_model_config(self.size)
+                model_cycle = db_models or [
+                    f"litellm:{_LITELLM_FALLBACK_MODELS.get(self.size, 'minimax-m2.7')}",
+                    _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-4-6"),
+                ]
+                self._log("model_cycle", f"모델 우선순위: {', '.join(model_cycle)}")
+
+                work_result = {"error": "실행 모델 후보 없음", "output": ""}
+                for model_spec in model_cycle:
+                    work_result = await self._run_model_candidate(enriched_instruction, model_spec)
+                    if not work_result.get("error"):
+                        break
 
             if work_result.get("error"):
                 self._log("error", f"실행 오류: {work_result['error']}")
@@ -1045,6 +1080,74 @@ class PipelineCJob:
         except Exception as e:
             return {"error": str(e), "output": ""}
 
+    async def _run_codex_cli(self, instruction: str, override_model: str = "") -> dict:
+        """Codex CLI 실행. ChatGPT Plus OAuth 기반."""
+        codex_model = override_model or "gpt-5.4"
+        if codex_model not in _CODEX_AVAILABLE_MODELS:
+            logger.warning("pipeline_c_codex_invalid_model job=%s model=%s → gpt-5.4", self.job_id, codex_model)
+            codex_model = "gpt-5.4"
+
+        self.actual_model = f"codex:{codex_model}"
+        self._log("codex_runner", f"Codex CLI 시작 (project={self.project}, model={codex_model})")
+
+        cmd_parts = [
+            "codex",
+            "exec",
+            "--full-auto",
+            "--ephemeral",
+            "-C",
+            self.workdir,
+        ]
+        if codex_model != "default":
+            cmd_parts.extend(["-m", codex_model])
+        cmd_parts.append(instruction)
+
+        proc = None
+        try:
+            if self.server in ("localhost", "host.docker.internal"):
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd_parts,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            else:
+                remote_cmd = "cd {workdir} && {cmd}".format(
+                    workdir=shlex.quote(self.workdir),
+                    cmd=" ".join(shlex.quote(part) for part in cmd_parts),
+                )
+                proc = await asyncio.create_subprocess_exec(
+                    "ssh", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=no",
+                    "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
+                    "-p", self.ssh_port,
+                    f"root@{self.server}", remote_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+
+            timeout = _get_timeout_for_job(self)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            output = stdout.decode("utf-8", errors="replace")
+            err = stderr.decode("utf-8", errors="replace")
+
+            if proc.returncode != 0:
+                return {"error": f"Codex exit={proc.returncode}: {(err or output)[:500]}", "output": output[-_MAX_OUTPUT_CHARS:]}
+
+            if output.lstrip().startswith(("FAILED:", "ERROR:")):
+                return {"error": output[:500], "output": output[-_MAX_OUTPUT_CHARS:]}
+
+            self._log("codex_runner_done", f"Codex 완료 ({len(output)}자, model={codex_model})")
+            return {"output": output[-_MAX_OUTPUT_CHARS:], "exit_code": proc.returncode, "error": None}
+        except asyncio.TimeoutError:
+            if proc and proc.returncode is None:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
+            return {"error": f"Codex 타임아웃 ({_get_timeout_for_job(self) // 60}분)", "output": ""}
+        except Exception as e:
+            return {"error": f"Codex 오류: {e}", "output": ""}
+
     # ─── AADS-234: LiteLLM Runner 폴백 ─────────────────────────────────────
 
     async def _run_litellm_fallback(self, instruction: str, override_model: str = "") -> dict:
@@ -1116,6 +1219,32 @@ class PipelineCJob:
                 return {"error": f"LiteLLM 타임아웃 ({_get_timeout_for_job(self) // 60}분)", "output": ""}
             except Exception as e:
                 return {"error": f"LiteLLM 오류: {e}", "output": ""}
+
+    async def _run_model_candidate(self, instruction: str, model_spec: str) -> dict:
+        """모델 스펙 접두사에 따라 실행기 선택."""
+        spec = (model_spec or "").strip()
+        if not spec:
+            return {"error": "빈 모델 스펙", "output": ""}
+
+        if spec == "litellm":
+            spec = f"litellm:{_LITELLM_FALLBACK_MODELS.get(self.size, 'minimax-m2.7')}"
+
+        if spec == "claude":
+            spec = _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-4-6")
+
+        if spec.startswith("codex:"):
+            self._log("model_attempt", f"DB 모델 시도: {spec}")
+            return await self._run_codex_cli(instruction, override_model=spec.split(":", 1)[1] or "gpt-5.4")
+
+        if spec.startswith("litellm:"):
+            self._log("model_attempt", f"DB 모델 시도: {spec}")
+            return await self._run_litellm_fallback(instruction, override_model=spec.split(":", 1)[1] or _LITELLM_FALLBACK_MODELS.get(self.size, "minimax-m2.7"))
+
+        self._log("model_attempt", f"DB 모델 시도: {spec}")
+        family = "opus" if "opus" in spec else ("haiku" if "haiku" in spec else "sonnet")
+        self.actual_model = f"claude:{family}"
+        self.model = family
+        return await self._run_claude_code(instruction, continue_session=False)
 
     # ─── AI 검수 ────────────────────────────────────────────────────────────
 
