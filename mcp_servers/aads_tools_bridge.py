@@ -52,6 +52,20 @@ async def _ensure_db():
         _db_initialized = True
 
 
+async def _heartbeat(interval: float = 30.0):
+    """stderr에 주기적으로 heartbeat 출력 — 파이프 단절 조기 감지."""
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            sys.stderr.write("")
+            sys.stderr.flush()
+        except (BrokenPipeError, OSError):
+            logger.warning("Heartbeat: pipe broken detected")
+            raise BrokenPipeError("heartbeat detected broken pipe")
+        except asyncio.CancelledError:
+            break
+
+
 def _get_tool_definitions():
     """TOOL_DEFINITIONS 로드 (지연)."""
     global _tool_definitions
@@ -144,17 +158,53 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
 
 
 async def main():
-    """stdio 모드로 MCP 서버 실행. 예외 시에도 프로세스 유지."""
-    try:
-        async with stdio_server() as (read_stream, write_stream):
-            await server.run(
-                read_stream,
-                write_stream,
-                server.create_initialization_options(),
-            )
-    except Exception as e:
-        logger.error(f"MCP server fatal: {e}")
-        sys.exit(1)
+    """stdio 모드로 MCP 서버 실행. 끊김 시 자동 재시작 (최대 5회)."""
+    global _db_initialized
+
+    max_retries = 5
+    retry_delay = 1.0
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            logger.warning(f"MCP server starting (attempt {attempt}/{max_retries})")
+            async with stdio_server() as (read_stream, write_stream):
+                await _ensure_db()
+                heartbeat_task = asyncio.create_task(_heartbeat(30.0))
+                try:
+                    await server.run(
+                        read_stream,
+                        write_stream,
+                        server.create_initialization_options(),
+                    )
+                finally:
+                    heartbeat_task.cancel()
+                    try:
+                        await heartbeat_task
+                    except asyncio.CancelledError:
+                        pass
+            logger.warning("MCP server: clean shutdown")
+            break
+        except (BrokenPipeError, ConnectionResetError, EOFError) as e:
+            logger.warning(f"MCP server pipe broken (attempt {attempt}): {e}")
+            if attempt < max_retries:
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, 10.0)
+                _db_initialized = False
+                continue
+            logger.error("MCP server: max retries exceeded, exiting")
+            sys.exit(1)
+        except asyncio.CancelledError:
+            logger.warning("MCP server: cancelled, shutting down gracefully")
+            break
+        except Exception as e:
+            logger.error(f"MCP server unexpected error (attempt {attempt}): {e}")
+            if attempt < max_retries:
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, 10.0)
+                _db_initialized = False
+                continue
+            logger.error("MCP server: max retries exceeded, exiting")
+            sys.exit(1)
 
 
 if __name__ == "__main__":
