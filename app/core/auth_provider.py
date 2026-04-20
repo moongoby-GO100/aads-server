@@ -47,6 +47,19 @@ def get_oauth_tokens() -> List[str]:
     return list(_ordered_tokens)
 
 
+async def get_oauth_tokens_async() -> List[str]:
+    """DB 우선, .env 폴백으로 Anthropic OAuth 토큰 반환."""
+    try:
+        from app.core.llm_key_provider import get_provider_keys
+
+        db_keys = await get_provider_keys("anthropic")
+        if db_keys:
+            return db_keys
+    except Exception:
+        pass
+    return list(_ordered_tokens)
+
+
 def get_primary_token() -> str:
     """1순위 토큰 반환. 없으면 빈 문자열."""
     return _ordered_tokens[0] if _ordered_tokens else ""
