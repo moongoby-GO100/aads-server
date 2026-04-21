@@ -498,6 +498,86 @@ class ToolExecutor:
             except Exception as _re:
                 logger.warning(f"post_hook_ai_review_skip: {_re}")
 
+        # ── GO100 프로젝트 (서버211, /root/kis-autotrade-v4 원격 레포) ──
+        # AADS와 KIS는 동일 레포를 공유하므로 파일 단위 git add로 스코프 제한.
+        # 순서: git add(특정 파일만) → commit → push → systemctl restart go100 → CHANGELOG → AI 리뷰
+        if project == "GO100":
+            try:
+                import shlex as _shlex
+                from app.api.ceo_chat_tools import tool_run_remote_command
+                from app.core.git_lock import git_project_lock
+
+                commit_msg = f"Chat-Direct[GO100]: {file_path} 수정"
+                _safe_path = _shlex.quote(file_path)
+                _safe_msg = _shlex.quote(commit_msg)
+
+                # 4-1) git add/commit/push (프로젝트 락으로 KIS와 경합 방지)
+                push_ok = False
+                async with git_project_lock("GO100:kis-autotrade-v4", timeout=60):
+                    await tool_run_remote_command(
+                        "GO100", f"git add {_safe_path}"
+                    )
+                    commit_result = await tool_run_remote_command(
+                        "GO100", f"git commit -m {_safe_msg}"
+                    )
+                    logger.info(f"post_hook_commit: project=GO100 {str(commit_result)[:200]}")
+                    push_result = await tool_run_remote_command(
+                        "GO100", "git push origin main"
+                    )
+                    _push_txt = str(push_result)
+                    if "[ERROR]" in _push_txt or "error" in _push_txt.lower() or "rejected" in _push_txt.lower():
+                        # master 폴백
+                        push_result = await tool_run_remote_command(
+                            "GO100", "git push origin master"
+                        )
+                        _push_txt = str(push_result)
+                    if "[ERROR]" not in _push_txt and "rejected" not in _push_txt.lower():
+                        push_ok = True
+                    logger.info(f"post_hook_push: project=GO100 ok={push_ok} {_push_txt[:200]}")
+
+                # 4-2) systemctl restart go100 (push 성공 시에만 재기동)
+                if push_ok:
+                    try:
+                        restart_result = await tool_run_remote_command(
+                            "GO100", "systemctl restart go100"
+                        )
+                        logger.info(f"post_hook_restart: project=GO100 {str(restart_result)[:200]}")
+                    except Exception as _re:
+                        logger.warning(f"post_hook_restart_skip: project=GO100 {_re}")
+                else:
+                    logger.warning("post_hook_restart_skip: project=GO100 push_failed")
+
+                # 4-3) CHANGELOG (AADS 컨테이너 로컬에 프로젝트별 분리 저장)
+                try:
+                    cl_full = "/app/docs/CHANGELOG-go100-direct.md"
+                    os.makedirs(os.path.dirname(cl_full), exist_ok=True)
+                    entry = f"\n## [{now_str_full}] [GO100] {file_path}\n- Chat-Direct 수정: {change_summary}\n- restart: {'ok' if push_ok else 'skipped(push_failed)'}\n"
+                    try:
+                        with open(cl_full, "r", encoding="utf-8") as _f:
+                            existing = _f.read()
+                        new_cl = existing + entry
+                    except Exception:
+                        new_cl = f"# GO100 Chat-Direct Edit Changelog\n{entry}"
+                    with open(cl_full, "w", encoding="utf-8") as _f:
+                        _f.write(new_cl)
+                except Exception as _cle:
+                    logger.warning(f"post_hook_changelog_skip: project=GO100 {_cle}")
+
+                # 4-4) AI 코드 리뷰 (push 성공 시에만, GO100 원격 diff)
+                if push_ok:
+                    try:
+                        await self._run_ai_code_review_go100(
+                            file_path=file_path,
+                            change_summary=change_summary,
+                            now_str_full=now_str_full,
+                        )
+                    except Exception as _re:
+                        logger.warning(f"post_hook_ai_review_skip: project=GO100 {_re}")
+            except TimeoutError as _te:
+                logger.warning(f"post_hook_git_lock_timeout: project=GO100 {_te}")
+            except Exception as _ge:
+                logger.warning(f"post_hook_git_skip: project=GO100 {_ge}")
+
     async def _run_ai_code_review_after_commit(
         self,
         project: str,
@@ -610,6 +690,104 @@ class ToolExecutor:
             )
         except Exception as _dbe:
             logger.warning(f"ai_review_warning_db_skip: {_dbe}")
+
+    async def _run_ai_code_review_go100(
+        self,
+        file_path: str,
+        change_summary: str,
+        now_str_full: str,
+    ) -> None:
+        """GO100 원격 레포(/root/kis-autotrade-v4) commit 완료 후 AI 코드 리뷰.
+
+        run_remote_command(project='GO100')은 이미 해당 워크디렉터리에서 실행되므로
+        파일 경로는 상대경로 그대로 사용한다.
+        """
+        import uuid as _uuid
+        try:
+            from app.api.ceo_chat_tools import tool_run_remote_command
+            diff_result = await tool_run_remote_command(
+                "GO100",
+                f"git diff HEAD~1 HEAD -- {file_path}",
+            )
+            diff_text = diff_result if isinstance(diff_result, str) else str(diff_result)
+        except Exception as _de:
+            logger.warning(f"ai_review_git_diff_skip: project=GO100 {_de}")
+            return
+
+        if not diff_text or not diff_text.strip():
+            logger.info(f"ai_review_skip: no diff for GO100:{file_path}")
+            return
+
+        from app.services.code_reviewer import review_code_diff as do_review
+        job_id = f"chat-direct-go100-{_uuid.uuid4().hex[:8]}"
+        try:
+            verdict_obj = await do_review(
+                project="GO100",
+                job_id=job_id,
+                diff=diff_text,
+                instruction=change_summary,
+                files_changed=[file_path],
+            )
+        except Exception as _re:
+            logger.warning(f"ai_review_run_skip: project=GO100 {_re}")
+            return
+
+        verdict = verdict_obj.verdict
+        score = verdict_obj.score
+        issues = verdict_obj.issues
+        summary = verdict_obj.feedback.get("summary", "")
+        logger.info(
+            f"post_hook_ai_review: project=GO100 job_id={job_id} file={file_path} "
+            f"verdict={verdict} score={score:.3f}"
+        )
+        if verdict == "APPROVE":
+            return
+
+        # REQUEST_CHANGES / FLAG → 현재 채팅 세션에 경고 저장 (AADS와 동일 포맷)
+        session_id = current_chat_session_id.get("")
+        if not session_id:
+            try:
+                from app.services.pipeline_runner_service import _find_recent_session
+                session_id = await _find_recent_session("GO100")
+            except Exception:
+                pass
+        if not session_id:
+            logger.warning(
+                f"ai_review_warn_no_session: project=GO100 verdict={verdict} file={file_path}"
+            )
+            return
+
+        icon = "🚨" if verdict == "FLAG" else "⚠️"
+        issues_text = "\n".join(f"- {i}" for i in issues[:5]) if issues else "- (상세 없음)"
+        warning_msg = (
+            f"{icon} **[AI 코드 리뷰 경고] {verdict}** — `{file_path}` (GO100)\n"
+            f"점수: {score:.2f} / 1.00  |  시각: {now_str_full}\n\n"
+            f"**요약:** {summary or '(요약 없음)'}\n\n"
+            f"**발견된 이슈:**\n{issues_text}\n\n"
+            f"> 이미 commit/push/restart는 완료되었습니다. 필요 시 수동으로 수정하세요."
+        )
+        try:
+            from app.services.db import get_db_pool
+            pool = await get_db_pool()
+            async with pool.acquire() as _conn:
+                async with _conn.transaction():
+                    await _conn.execute(
+                        """
+                        INSERT INTO chat_messages (session_id, role, content, tokens, created_at)
+                        VALUES ($1::uuid, 'assistant', $2, 0, NOW())
+                        """,
+                        session_id,
+                        warning_msg,
+                    )
+                    await _conn.execute(
+                        "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1::uuid",
+                        session_id,
+                    )
+            logger.info(
+                f"ai_review_warning_saved: project=GO100 session={session_id[:8]} verdict={verdict} file={file_path}"
+            )
+        except Exception as _dbe:
+            logger.warning(f"ai_review_warning_db_skip: project=GO100 {_dbe}")
 
     async def _write_remote_file(self, inp: Dict[str, Any]) -> Any:
         """원격 서버 파일 쓰기 (SSH, 자동 백업). Yellow 등급.
@@ -740,6 +918,39 @@ class ToolExecutor:
         """aads-dashboard(Next.js) 레포 스냅샷."""
         return await self._git_status_snapshot("/root/aads/aads-dashboard")
 
+    async def _git_status_snapshot_go100(self) -> set[str]:
+        """GO100 원격 레포(/root/kis-autotrade-v4 on 211) 스냅샷.
+
+        AADS 로컬과 달리 SSH 경유(`project=GO100`)로 실행되며,
+        run_remote_command가 자동으로 WORKDIR로 cd하므로 cd를 생략한다.
+        실패 시 빈 집합 반환.
+        """
+        try:
+            from app.api.ceo_chat_tools import tool_run_remote_command
+            r1 = await tool_run_remote_command(
+                "GO100", "git diff --name-only HEAD"
+            )
+            r2 = await tool_run_remote_command(
+                "GO100", "git ls-files --others --exclude-standard"
+            )
+            files: set[str] = set()
+            for text in (str(r1), str(r2)):
+                for line in text.splitlines():
+                    _ls = line.strip()
+                    if not _ls:
+                        continue
+                    if _ls.startswith("[") or _ls.startswith("$ ") or _ls.startswith("[STDERR]"):
+                        continue
+                    if _ls.startswith("fatal:") or _ls.startswith("error:"):
+                        continue
+                    if _ls.startswith('"') and _ls.endswith('"'):
+                        _ls = _ls[1:-1]
+                    files.add(_ls)
+            return files
+        except Exception as _e:
+            logger.warning(f"git_status_snapshot_skip: project=GO100 err={_e}")
+            return set()
+
     async def _trigger_dashboard_build_async(self) -> None:
         """대시보드 재빌드를 백그라운드로 트리거.
 
@@ -778,17 +989,24 @@ class ToolExecutor:
             return {"error": "command 필수"}
 
         # git diff 기반 Hook 활성화 조건:
-        # - AADS 프로젝트만 (다른 프로젝트는 Hook 미지원)
+        # - AADS: aads-server / aads-dashboard 레포 자동 감시
+        # - GO100: /root/kis-autotrade-v4 원격 레포 감시 (서버211)
         # - git 명령 자체는 제외 (Hook이 내부에서 git add/commit/push 수행 → 자기참조 방지)
+        # - systemctl restart go100 도 제외 (Hook이 내부에서 재기동 → 자기참조 방지)
         _cmd_stripped = command.strip()
         _is_git_cmd = _cmd_stripped.startswith("git ") or _cmd_stripped == "git"
-        _enable_hook = (project == "AADS") and (not _is_git_cmd)
+        _is_restart_cmd = "systemctl restart go100" in _cmd_stripped
+        _enable_hook_aads = (project == "AADS") and (not _is_git_cmd)
+        _enable_hook_go100 = (project == "GO100") and (not _is_git_cmd) and (not _is_restart_cmd)
 
         before_server: set[str] = set()
         before_dashboard: set[str] = set()
-        if _enable_hook:
+        before_go100: set[str] = set()
+        if _enable_hook_aads:
             before_server = await self._git_status_snapshot_aads()
             before_dashboard = await self._git_status_snapshot_dashboard()
+        if _enable_hook_go100:
+            before_go100 = await self._git_status_snapshot_go100()
 
         try:
             from app.api.ceo_chat_tools import tool_run_remote_command
@@ -797,38 +1015,48 @@ class ToolExecutor:
             return {"error": str(e)}
 
         # 실행 후 변경된 파일 감지 → Hook 호출 (Hook 실패는 원래 결과에 영향 없음)
-        # aads-server / aads-dashboard 두 레포 모두 감시 → sed/tee/리다이렉트 우회 차단
-        if _enable_hook:
+        # 노이즈 필터: 민감/빌드 산출물/백업 제외 (공통)
+        _skip_prefixes = (".git/", "node_modules/", ".next/", "__pycache__/", ".venv/", "venv/", "dist/", "build/")
+        _skip_suffixes = (".bak_aads", ".pyc", ".pyo", ".log", ".lock")
+
+        def _filter(paths: set[str]) -> list[str]:
+            out: list[str] = []
+            for p in sorted(paths):
+                if any(p.startswith(pre) for pre in _skip_prefixes):
+                    continue
+                if p.endswith(_skip_suffixes):
+                    continue
+                out.append(p)
+            return out
+
+        # AADS 프로젝트: aads-server / aads-dashboard 두 레포 감시 → sed/tee/리다이렉트 우회 차단
+        if _enable_hook_aads:
             try:
                 after_server = await self._git_status_snapshot_aads()
                 after_dashboard = await self._git_status_snapshot_dashboard()
-                # 노이즈 필터: 민감/빌드 산출물/백업 제외
-                _skip_prefixes = (".git/", "node_modules/", ".next/", "__pycache__/", ".venv/", "dist/", "build/")
-                _skip_suffixes = (".bak_aads", ".pyc", ".pyo", ".log", ".lock")
 
-                def _filter(paths: set[str]) -> list[str]:
-                    out: list[str] = []
-                    for p in sorted(paths):
-                        if any(p.startswith(pre) for pre in _skip_prefixes):
-                            continue
-                        if p.endswith(_skip_suffixes):
-                            continue
-                        out.append(p)
-                    return out
-
-                # aads-server 레포 변경
                 for file_path in _filter(after_server - before_server):
                     summary = f"run_remote_command: {_cmd_stripped[:80]}"
                     logger.info(f"run_cmd_hook_fire: repo=server file={file_path} cmd={_cmd_stripped[:60]}")
                     await self._post_file_modify_hook(project, file_path, summary, repo="aads-server")
 
-                # aads-dashboard 레포 변경
                 for file_path in _filter(after_dashboard - before_dashboard):
                     summary = f"run_remote_command: {_cmd_stripped[:80]}"
                     logger.info(f"run_cmd_hook_fire: repo=dashboard file={file_path} cmd={_cmd_stripped[:60]}")
                     await self._post_file_modify_hook(project, file_path, summary, repo="aads-dashboard")
             except Exception as _he:
-                logger.warning(f"run_cmd_hook_skip: {_he}")
+                logger.warning(f"run_cmd_hook_skip: project=AADS {_he}")
+
+        # GO100 프로젝트: /root/kis-autotrade-v4 원격 레포 감시 → 원격 sed/tee/리다이렉트 우회 차단
+        if _enable_hook_go100:
+            try:
+                after_go100 = await self._git_status_snapshot_go100()
+                for file_path in _filter(after_go100 - before_go100):
+                    summary = f"run_remote_command: {_cmd_stripped[:80]}"
+                    logger.info(f"run_cmd_hook_fire: project=GO100 file={file_path} cmd={_cmd_stripped[:60]}")
+                    await self._post_file_modify_hook("GO100", file_path, summary, repo="kis-autotrade-v4")
+            except Exception as _he:
+                logger.warning(f"run_cmd_hook_skip: project=GO100 {_he}")
 
         return result
 
