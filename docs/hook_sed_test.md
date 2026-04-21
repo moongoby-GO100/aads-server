@@ -1,1 +1,1 @@
-# Hook 테스트 파일 (NEW_BY_HOOK)
+# Hook 테스트 파일 (OLD)
