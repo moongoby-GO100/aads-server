@@ -388,40 +388,73 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e)}
 
-    async def _post_file_modify_hook(self, project: str, file_path: str, change_summary: str) -> None:
-        """파일 수정 후 자동 후처리: hot-reload + git commit + push + CHANGELOG + AI 코드 리뷰."""
+    async def _post_file_modify_hook(
+        self,
+        project: str,
+        file_path: str,
+        change_summary: str,
+        repo: str = "aads-server",
+    ) -> None:
+        """파일 수정 후 자동 후처리: hot-reload/빌드 + git commit + push + CHANGELOG + AI 리뷰.
+
+        repo:
+          - "aads-server"    — Python 백엔드 레포. Hot-Reload + AI 리뷰.
+          - "aads-dashboard" — Next.js 대시보드 레포. 무중단 빌드 트리거 (필요 시).
+        """
         import datetime, os
         now_kst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
-        now_str = now_kst.strftime("%Y-%m-%d %H:%M KST")
         now_str_full = now_kst.strftime("%Y-%m-%d %H:%M:%S KST")
 
-        # 1) AADS .py 파일이면 hot reload
-        if project == "AADS" and file_path.endswith(".py"):
+        _repo_dir_map = {
+            "aads-server": "/root/aads/aads-server",
+            "aads-dashboard": "/root/aads/aads-dashboard",
+        }
+        _repo_dir = _repo_dir_map.get(repo, "/root/aads/aads-server")
+
+        # 1-a) aads-server .py → Hot-Reload
+        if project == "AADS" and repo == "aads-server" and file_path.endswith(".py"):
             try:
                 from app.core.hot_reload_trigger import trigger_hot_reload_for_file
                 await trigger_hot_reload_for_file(project, file_path)
             except Exception as _hre:
                 logger.warning(f"hot_reload_trigger_skip: {_hre}")
 
-        # 2) git add + commit + push (AADS 프로젝트만, cross-process flock 보호)
-        # ⚠️ AADS workdir=/root 이므로 git 명령은 반드시 aads-server 경로를 명시해 cd 해야 한다.
+        # 1-b) aads-dashboard 빌드 필요 파일 → 무중단 빌드 트리거 (비동기)
+        if project == "AADS" and repo == "aads-dashboard":
+            _build_suffixes = (".ts", ".tsx", ".jsx", ".js", ".mjs", ".cjs",
+                               ".css", ".scss", ".sass", ".html")
+            _force_build_names = ("package.json", "package-lock.json", "pnpm-lock.yaml",
+                                  "next.config.js", "next.config.ts", "next.config.mjs",
+                                  "tsconfig.json", "tailwind.config.js", "tailwind.config.ts",
+                                  "postcss.config.js")
+            _basename = file_path.rsplit("/", 1)[-1]
+            _needs_build = file_path.endswith(_build_suffixes) or _basename in _force_build_names
+            if _needs_build:
+                try:
+                    await self._trigger_dashboard_build_async()
+                except Exception as _be:
+                    logger.warning(f"dashboard_build_hook_skip: {_be}")
+            else:
+                logger.info(f"dashboard_hook_no_build: file={file_path} (commit-only)")
+
+        # 2) git add + commit + push (AADS 프로젝트 두 레포, cross-process flock 보호)
+        # ⚠️ AADS workdir=/root 이므로 git 명령은 각 repo 경로로 cd 필수
         if project == "AADS":
             try:
                 import shlex as _shlex
                 from app.api.ceo_chat_tools import tool_run_remote_command
                 from app.core.git_lock import git_project_lock
-                _repo_dir = "/root/aads/aads-server"
-                commit_msg = f"Chat-Direct: {file_path} 수정"
+                commit_msg = f"Chat-Direct[{repo}]: {file_path} 수정"
                 _safe_path = _shlex.quote(file_path)
                 _safe_msg = _shlex.quote(commit_msg)
-                async with git_project_lock(project, timeout=60):
+                async with git_project_lock(f"{project}:{repo}", timeout=60):
                     await tool_run_remote_command(
                         project, f"cd {_repo_dir} && git add {_safe_path}"
                     )
                     commit_result = await tool_run_remote_command(
                         project, f"cd {_repo_dir} && git commit -m {_safe_msg}"
                     )
-                    logger.info(f"post_hook_commit: {str(commit_result)[:200]}")
+                    logger.info(f"post_hook_commit: repo={repo} {str(commit_result)[:200]}")
                     push_result = await tool_run_remote_command(
                         project, f"cd {_repo_dir} && git push origin main"
                     )
@@ -429,31 +462,32 @@ class ToolExecutor:
                         push_result = await tool_run_remote_command(
                             project, f"cd {_repo_dir} && git push origin master"
                         )
-                    logger.info(f"post_hook_push: {str(push_result)[:200]}")
+                    logger.info(f"post_hook_push: repo={repo} {str(push_result)[:200]}")
             except TimeoutError as _te:
-                logger.warning(f"post_hook_git_lock_timeout: {_te}")
+                logger.warning(f"post_hook_git_lock_timeout: repo={repo} {_te}")
             except Exception as _ge:
-                logger.warning(f"post_hook_git_skip: {_ge}")
+                logger.warning(f"post_hook_git_skip: repo={repo} {_ge}")
 
-        # 3) CHANGELOG 기록 (AADS만, docs/CHANGELOG-direct-edit.md)
+        # 3) CHANGELOG 기록 (레포별로 분리된 파일)
         if project == "AADS":
             try:
-                cl_full = "/app/docs/CHANGELOG-direct-edit.md"
+                _cl_name = "CHANGELOG-direct-edit.md" if repo == "aads-server" else "CHANGELOG-dashboard-direct.md"
+                cl_full = f"/app/docs/{_cl_name}"
                 os.makedirs(os.path.dirname(cl_full), exist_ok=True)
-                entry = f"\n## [{now_str_full}] {file_path}\n- Chat-Direct 수정: {change_summary}\n"
+                entry = f"\n## [{now_str_full}] [{repo}] {file_path}\n- Chat-Direct 수정: {change_summary}\n"
                 try:
                     with open(cl_full, "r", encoding="utf-8") as _f:
                         existing = _f.read()
                     new_cl = existing + entry
                 except Exception:
-                    new_cl = f"# AADS Chat-Direct Edit Changelog\n{entry}"
+                    new_cl = f"# AADS Chat-Direct Edit Changelog ({repo})\n{entry}"
                 with open(cl_full, "w", encoding="utf-8") as _f:
                     _f.write(new_cl)
             except Exception as _cle:
-                logger.warning(f"post_hook_changelog_skip: {_cle}")
+                logger.warning(f"post_hook_changelog_skip: repo={repo} {_cle}")
 
-        # 4) AI 코드 리뷰 (commit 완료 후, 실패해도 서비스에 영향 없음)
-        if project == "AADS":
+        # 4) AI 코드 리뷰 — aads-server만 (dashboard는 빌드로 자동 검증)
+        if project == "AADS" and repo == "aads-server":
             try:
                 await self._run_ai_code_review_after_commit(
                     project=project,
@@ -660,37 +694,74 @@ class ToolExecutor:
             # 에러 발생 여부와 무관하게 반드시 잠금 해제
             lock.release()
 
-    async def _git_status_snapshot_aads(self) -> set[str]:
-        """AADS 저장소의 git status --porcelain 결과에서 파일 경로 집합을 반환.
+    async def _git_status_snapshot(self, repo_dir: str) -> set[str]:
+        """지정 레포의 변경·신규 파일 경로 집합을 반환.
+
+        `git diff --name-only HEAD` (tracked 변경) + `git ls-files --others --exclude-standard`
+        (신규 untracked) 두 명령을 조합 — 파일명만 줄당 1개로 출력되므로
+        XY 상태코드 파싱(`git status --porcelain`) 과정에서 생기던 첫 글자 누락
+        버그를 원천 차단한다.
 
         실패 시 빈 집합 반환 (Hook을 무력화시키지 않도록 best-effort).
-        반환 형식: 상대경로 문자열 집합 (예: {'app/foo.py', 'docs/bar.md'}).
         """
+        try:
+            from app.api.ceo_chat_tools import tool_run_remote_command
+            r1 = await tool_run_remote_command(
+                "AADS", f"cd {repo_dir} && git diff --name-only HEAD"
+            )
+            r2 = await tool_run_remote_command(
+                "AADS", f"cd {repo_dir} && git ls-files --others --exclude-standard"
+            )
+            files: set[str] = set()
+            for text in (str(r1), str(r2)):
+                for line in text.splitlines():
+                    _ls = line.strip()
+                    if not _ls:
+                        continue
+                    # tool wrapper 헤더/에코/에러 라인 스킵
+                    if _ls.startswith("[") or _ls.startswith("$ ") or _ls.startswith("[STDERR]"):
+                        continue
+                    if _ls.startswith("fatal:") or _ls.startswith("error:"):
+                        continue
+                    # 따옴표로 감싼 경로 처리 (공백/유니코드 파일명)
+                    if _ls.startswith('"') and _ls.endswith('"'):
+                        _ls = _ls[1:-1]
+                    files.add(_ls)
+            return files
+        except Exception as _e:
+            logger.warning(f"git_status_snapshot_skip: repo={repo_dir} err={_e}")
+            return set()
+
+    async def _git_status_snapshot_aads(self) -> set[str]:
+        """[하위호환] aads-server 레포 스냅샷."""
+        return await self._git_status_snapshot("/root/aads/aads-server")
+
+    async def _git_status_snapshot_dashboard(self) -> set[str]:
+        """aads-dashboard(Next.js) 레포 스냅샷."""
+        return await self._git_status_snapshot("/root/aads/aads-dashboard")
+
+    async def _trigger_dashboard_build_async(self) -> None:
+        """대시보드 재빌드를 백그라운드로 트리거.
+
+        - 래퍼 스크립트(`scripts/trigger-dashboard-build.sh`)가 nohup + 중복체크 + 쿨다운 처리
+        - 호출자는 즉시 반환(10초 타임아웃 회피)
+        """
+        import time
+        now = time.monotonic()
+        last = getattr(self, "_last_dashboard_build_ts", 0.0)
+        if now - last < 30:
+            logger.info(f"dashboard_build_cooldown_inproc: skipped ({int(now-last)}s ago)")
+            return
+        self._last_dashboard_build_ts = now
         try:
             from app.api.ceo_chat_tools import tool_run_remote_command
             result = await tool_run_remote_command(
                 "AADS",
-                "cd /root/aads/aads-server && git status --porcelain"
+                "bash /root/aads/aads-server/scripts/trigger-dashboard-build.sh"
             )
-            text = result if isinstance(result, str) else str(result)
-            files: set[str] = set()
-            for line in text.splitlines():
-                if not line or line.startswith("[") or line.startswith("$ ") or line.startswith("[STDERR]"):
-                    continue
-                if len(line) < 4:
-                    continue
-                rest = line[3:].strip()
-                # rename 케이스: "R  old -> new"
-                if "->" in rest:
-                    rest = rest.split("->", 1)[1].strip()
-                if rest.startswith('"') and rest.endswith('"'):
-                    rest = rest[1:-1]
-                if rest:
-                    files.add(rest)
-            return files
+            logger.info(f"dashboard_build_trigger: {str(result)[:300]}")
         except Exception as _e:
-            logger.warning(f"git_status_snapshot_skip: {_e}")
-            return set()
+            logger.warning(f"dashboard_build_trigger_err: {_e}")
 
     async def _run_remote_command(self, inp: Dict[str, Any]) -> Any:
         """원격 서버 명령 실행 (화이트리스트 기반). Yellow 등급.
@@ -713,9 +784,11 @@ class ToolExecutor:
         _is_git_cmd = _cmd_stripped.startswith("git ") or _cmd_stripped == "git"
         _enable_hook = (project == "AADS") and (not _is_git_cmd)
 
-        before_files: set[str] = set()
+        before_server: set[str] = set()
+        before_dashboard: set[str] = set()
         if _enable_hook:
-            before_files = await self._git_status_snapshot_aads()
+            before_server = await self._git_status_snapshot_aads()
+            before_dashboard = await self._git_status_snapshot_dashboard()
 
         try:
             from app.api.ceo_chat_tools import tool_run_remote_command
@@ -724,21 +797,36 @@ class ToolExecutor:
             return {"error": str(e)}
 
         # 실행 후 변경된 파일 감지 → Hook 호출 (Hook 실패는 원래 결과에 영향 없음)
+        # aads-server / aads-dashboard 두 레포 모두 감시 → sed/tee/리다이렉트 우회 차단
         if _enable_hook:
             try:
-                after_files = await self._git_status_snapshot_aads()
-                new_or_changed = after_files - before_files
+                after_server = await self._git_status_snapshot_aads()
+                after_dashboard = await self._git_status_snapshot_dashboard()
                 # 노이즈 필터: 민감/빌드 산출물/백업 제외
                 _skip_prefixes = (".git/", "node_modules/", ".next/", "__pycache__/", ".venv/", "dist/", "build/")
                 _skip_suffixes = (".bak_aads", ".pyc", ".pyo", ".log", ".lock")
-                for file_path in sorted(new_or_changed):
-                    if any(file_path.startswith(p) for p in _skip_prefixes):
-                        continue
-                    if file_path.endswith(_skip_suffixes):
-                        continue
+
+                def _filter(paths: set[str]) -> list[str]:
+                    out: list[str] = []
+                    for p in sorted(paths):
+                        if any(p.startswith(pre) for pre in _skip_prefixes):
+                            continue
+                        if p.endswith(_skip_suffixes):
+                            continue
+                        out.append(p)
+                    return out
+
+                # aads-server 레포 변경
+                for file_path in _filter(after_server - before_server):
                     summary = f"run_remote_command: {_cmd_stripped[:80]}"
-                    logger.info(f"run_cmd_hook_fire: file={file_path} cmd={_cmd_stripped[:60]}")
-                    await self._post_file_modify_hook(project, file_path, summary)
+                    logger.info(f"run_cmd_hook_fire: repo=server file={file_path} cmd={_cmd_stripped[:60]}")
+                    await self._post_file_modify_hook(project, file_path, summary, repo="aads-server")
+
+                # aads-dashboard 레포 변경
+                for file_path in _filter(after_dashboard - before_dashboard):
+                    summary = f"run_remote_command: {_cmd_stripped[:80]}"
+                    logger.info(f"run_cmd_hook_fire: repo=dashboard file={file_path} cmd={_cmd_stripped[:60]}")
+                    await self._post_file_modify_hook(project, file_path, summary, repo="aads-dashboard")
             except Exception as _he:
                 logger.warning(f"run_cmd_hook_skip: {_he}")
 
