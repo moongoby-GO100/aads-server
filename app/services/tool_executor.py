@@ -404,20 +404,32 @@ class ToolExecutor:
                 logger.warning(f"hot_reload_trigger_skip: {_hre}")
 
         # 2) git add + commit + push (AADS 프로젝트만, cross-process flock 보호)
+        # ⚠️ AADS workdir=/root 이므로 git 명령은 반드시 aads-server 경로를 명시해 cd 해야 한다.
         if project == "AADS":
             try:
-                from app.api.ceo_chat_tools import tool_git_remote_add, tool_git_remote_commit, tool_git_remote_push
+                import shlex as _shlex
+                from app.api.ceo_chat_tools import tool_run_remote_command
                 from app.core.git_lock import git_project_lock
+                _repo_dir = "/root/aads/aads-server"
                 commit_msg = f"Chat-Direct: {file_path} 수정"
+                _safe_path = _shlex.quote(file_path)
+                _safe_msg = _shlex.quote(commit_msg)
                 async with git_project_lock(project, timeout=60):
-                    await tool_git_remote_add(project, file_path)
-                    commit_result = await tool_git_remote_commit(project, commit_msg)
-                    logger.info(f"post_hook_commit: {commit_result}")
-                    # main 브랜치 push 시도, 실패 시 master fallback
-                    push_result = await tool_git_remote_push(project, "main")
+                    await tool_run_remote_command(
+                        project, f"cd {_repo_dir} && git add {_safe_path}"
+                    )
+                    commit_result = await tool_run_remote_command(
+                        project, f"cd {_repo_dir} && git commit -m {_safe_msg}"
+                    )
+                    logger.info(f"post_hook_commit: {str(commit_result)[:200]}")
+                    push_result = await tool_run_remote_command(
+                        project, f"cd {_repo_dir} && git push origin main"
+                    )
                     if "[ERROR]" in str(push_result) or "error" in str(push_result).lower():
-                        push_result = await tool_git_remote_push(project, "master")
-                    logger.info(f"post_hook_push: {push_result}")
+                        push_result = await tool_run_remote_command(
+                            project, f"cd {_repo_dir} && git push origin master"
+                        )
+                    logger.info(f"post_hook_push: {str(push_result)[:200]}")
             except TimeoutError as _te:
                 logger.warning(f"post_hook_git_lock_timeout: {_te}")
             except Exception as _ge:
@@ -478,7 +490,7 @@ class ToolExecutor:
             from app.api.ceo_chat_tools import tool_run_remote_command
             diff_result = await tool_run_remote_command(
                 project,
-                f"git diff HEAD~1 HEAD -- {_rel_path}",
+                f"cd /root/aads/aads-server && git diff HEAD~1 HEAD -- {_rel_path}",
             )
             diff_text = diff_result if isinstance(diff_result, str) else str(diff_result)
         except Exception as _de:
@@ -656,7 +668,10 @@ class ToolExecutor:
         """
         try:
             from app.api.ceo_chat_tools import tool_run_remote_command
-            result = await tool_run_remote_command("AADS", "git status --porcelain")
+            result = await tool_run_remote_command(
+                "AADS",
+                "cd /root/aads/aads-server && git status --porcelain"
+            )
             text = result if isinstance(result, str) else str(result)
             files: set[str] = set()
             for line in text.splitlines():
