@@ -648,19 +648,86 @@ class ToolExecutor:
             # 에러 발생 여부와 무관하게 반드시 잠금 해제
             lock.release()
 
+    async def _git_status_snapshot_aads(self) -> set[str]:
+        """AADS 저장소의 git status --porcelain 결과에서 파일 경로 집합을 반환.
+
+        실패 시 빈 집합 반환 (Hook을 무력화시키지 않도록 best-effort).
+        반환 형식: 상대경로 문자열 집합 (예: {'app/foo.py', 'docs/bar.md'}).
+        """
+        try:
+            from app.api.ceo_chat_tools import tool_run_remote_command
+            result = await tool_run_remote_command("AADS", "git status --porcelain")
+            text = result if isinstance(result, str) else str(result)
+            files: set[str] = set()
+            for line in text.splitlines():
+                if not line or line.startswith("[") or line.startswith("$ ") or line.startswith("[STDERR]"):
+                    continue
+                if len(line) < 4:
+                    continue
+                rest = line[3:].strip()
+                # rename 케이스: "R  old -> new"
+                if "->" in rest:
+                    rest = rest.split("->", 1)[1].strip()
+                if rest.startswith('"') and rest.endswith('"'):
+                    rest = rest[1:-1]
+                if rest:
+                    files.add(rest)
+            return files
+        except Exception as _e:
+            logger.warning(f"git_status_snapshot_skip: {_e}")
+            return set()
+
     async def _run_remote_command(self, inp: Dict[str, Any]) -> Any:
-        """원격 서버 명령 실행 (화이트리스트 기반). Yellow 등급."""
+        """원격 서버 명령 실행 (화이트리스트 기반). Yellow 등급.
+
+        AADS 프로젝트 + 비-git 명령인 경우, 실행 전후 `git status --porcelain`으로
+        파일 수정을 자동 감지하여 _post_file_modify_hook을 호출한다.
+        → sed/tee/리다이렉트/cp/mv 등 모든 수정 경로가 Hook을 우회할 수 없다.
+        """
         project = (inp.get("project") or "").upper()
         command = inp.get("command") or ""
         if not project or project not in ("AADS", "KIS", "GO100", "SF", "NTV2"):
             return {"error": "project 필수: AADS, KIS, GO100, SF, NTV2 중 하나"}
         if not command:
             return {"error": "command 필수"}
+
+        # git diff 기반 Hook 활성화 조건:
+        # - AADS 프로젝트만 (다른 프로젝트는 Hook 미지원)
+        # - git 명령 자체는 제외 (Hook이 내부에서 git add/commit/push 수행 → 자기참조 방지)
+        _cmd_stripped = command.strip()
+        _is_git_cmd = _cmd_stripped.startswith("git ") or _cmd_stripped == "git"
+        _enable_hook = (project == "AADS") and (not _is_git_cmd)
+
+        before_files: set[str] = set()
+        if _enable_hook:
+            before_files = await self._git_status_snapshot_aads()
+
         try:
             from app.api.ceo_chat_tools import tool_run_remote_command
-            return await tool_run_remote_command(project, command)
+            result = await tool_run_remote_command(project, command)
         except Exception as e:
             return {"error": str(e)}
+
+        # 실행 후 변경된 파일 감지 → Hook 호출 (Hook 실패는 원래 결과에 영향 없음)
+        if _enable_hook:
+            try:
+                after_files = await self._git_status_snapshot_aads()
+                new_or_changed = after_files - before_files
+                # 노이즈 필터: 민감/빌드 산출물/백업 제외
+                _skip_prefixes = (".git/", "node_modules/", ".next/", "__pycache__/", ".venv/", "dist/", "build/")
+                _skip_suffixes = (".bak_aads", ".pyc", ".pyo", ".log", ".lock")
+                for file_path in sorted(new_or_changed):
+                    if any(file_path.startswith(p) for p in _skip_prefixes):
+                        continue
+                    if file_path.endswith(_skip_suffixes):
+                        continue
+                    summary = f"run_remote_command: {_cmd_stripped[:80]}"
+                    logger.info(f"run_cmd_hook_fire: file={file_path} cmd={_cmd_stripped[:60]}")
+                    await self._post_file_modify_hook(project, file_path, summary)
+            except Exception as _he:
+                logger.warning(f"run_cmd_hook_skip: {_he}")
+
+        return result
 
     async def _git_remote_add(self, inp: Dict[str, Any]) -> Any:
         """원격 서버 git add."""
