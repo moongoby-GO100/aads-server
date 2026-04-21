@@ -23,7 +23,7 @@ if os.path.exists(_env_file):
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://aads:aads_dev_local@127.0.0.1:5433/aads"
+    "postgresql://aads:aads2026secure@127.0.0.1:5433/aads"
 )
 # Normalize: container hostname → host IP
 DATABASE_URL = DATABASE_URL.replace(

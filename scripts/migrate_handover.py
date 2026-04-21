@@ -10,7 +10,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 def get_db_url() -> str:
     """Docker Postgres(5433)에 연결. DATABASE_URL의 내부 호스트명을 localhost:5433으로 변환."""
-    url = os.getenv("DATABASE_URL", "postgresql://aads:aads_dev_local@localhost:5433/aads")
+    url = os.getenv("DATABASE_URL", "postgresql://aads:aads2026secure@localhost:5433/aads")
     # 컨테이너 내부 호스트명(postgres / aads-postgres)을 호스트에서 접근 가능한 주소로 변환
     url = re.sub(r'@[^:/]+:5432/', '@localhost:5433/', url)
     return url

@@ -16,7 +16,7 @@ logger = structlog.get_logger()
 KST = timezone(timedelta(hours=9))
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://aads:aads_dev_local@aads-postgres:5432/aads"
+    "postgresql://aads:aads2026secure@aads-postgres:5432/aads"
 )
 
 DIRECTIVE_BASE = "/root/.genspark/directives"

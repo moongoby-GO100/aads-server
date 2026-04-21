@@ -23,7 +23,7 @@ PENDING_DIR = "/root/.genspark/directives/pending"
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://aads:aads_dev_local@aads-postgres:5432/aads"
+    "postgresql://aads:aads2026secure@aads-postgres:5432/aads"
 )
 
 

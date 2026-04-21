@@ -182,7 +182,8 @@ _EXTENDED_THINKING_ENABLED = os.getenv("EXTENDED_THINKING_ENABLED", "true").lowe
 
 # 모델별 비용 (per 1M tokens, USD)
 _COST_MAP = {
-    "claude-opus":            (5.0,  25.0),   # Opus 4.6 실제 가격
+    "claude-opus":            (5.0,  25.0),   # Opus 4.7 실제 가격
+    "claude-opus-46":         (5.0,  25.0),   # Opus 4.6 실제 가격
     "claude-sonnet":          (3.0,  15.0),
     "claude-haiku":           (1.0,   5.0),   # Haiku 4.5 실제 가격
     "gemini-flash":           (0.075, 0.3),
@@ -271,6 +272,7 @@ _COST_MAP = {
 _ANTHROPIC_MODEL_ID = {
     "claude-sonnet": "claude-sonnet-4-6",
     "claude-opus":   "claude-opus-4-7",
+    "claude-opus-46": "claude-opus-4-6",
     "claude-haiku":  "claude-haiku-4-5-20251001",
 }
 
@@ -422,7 +424,7 @@ async def call_stream(
     _OVERRIDE_TO_ALIAS = {
         "claude-sonnet-4-6": "claude-sonnet", "claude-sonnet-4-5": "claude-sonnet",
         "claude-opus-4-7": "claude-opus",
-        "claude-opus-4-6": "claude-opus", "claude-opus-4-5": "claude-opus",
+        "claude-opus-4-6": "claude-opus-46", "claude-opus-4-5": "claude-opus",
         "claude-haiku-4-5": "claude-haiku",
         "claude-haiku-4-5-20251001": "claude-haiku",
         "claude-3-5-sonnet-20241022": "claude-sonnet",

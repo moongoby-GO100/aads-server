@@ -12,7 +12,7 @@ services:
       - "5433:5432"
     environment:
       - POSTGRES_USER=aads
-      - POSTGRES_PASSWORD=aads_dev_local
+      - POSTGRES_PASSWORD=aads2026secure
       - POSTGRES_DB=aads
       - TZ=Asia/Seoul
     command: >
@@ -97,7 +97,7 @@ services:
     environment:
       - ENVIRONMENT=production
       - LOG_LEVEL=INFO
-      - DATABASE_URL=postgresql://aads:aads_dev_local@aads-postgres:5432/aads
+      - DATABASE_URL=postgresql://aads:aads2026secure@aads-postgres:5432/aads
       - TZ=Asia/Seoul
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - BRAVE_API_KEY=${BRAVE_API_KEY}
@@ -156,7 +156,7 @@ services:
     environment:
       - ENVIRONMENT=production
       - LOG_LEVEL=INFO
-      - DATABASE_URL=postgresql://aads:aads_dev_local@aads-postgres:5432/aads
+      - DATABASE_URL=postgresql://aads:aads2026secure@aads-postgres:5432/aads
       - TZ=Asia/Seoul
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - BRAVE_API_KEY=${BRAVE_API_KEY}

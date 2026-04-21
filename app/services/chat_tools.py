@@ -38,7 +38,7 @@ KST = timezone(timedelta(hours=9))
 DIRECTIVE_BASE = "/root/.genspark/directives"
 
 # ─── 환경 변수 ─────────────────────────────────────────────────────────────────
-_DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://aads:aads_dev_local@aads-postgres:5432/aads")
+_DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://aads:aads2026secure@aads-postgres:5432/aads")
 _BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
 _GITHUB_PAT = os.getenv("GITHUB_PAT", os.getenv("GITHUB_TOKEN", ""))
 
