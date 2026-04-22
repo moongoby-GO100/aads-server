@@ -43,6 +43,7 @@ from app.api.kakao_bot import router as kakao_bot_router
 from app.api.agenda import router as agenda_router
 from app.api.hot_reload import router as hot_reload_router
 from app.api.credential_vault import router as credential_vault_router
+from app.api.llm_keys import router as llm_keys_router
 from app.api.braming import router as braming_router
 from app.api.project_docs import router as project_docs_router
 from app.routers.chat import router as chat_v2_router
