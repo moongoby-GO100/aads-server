@@ -1,5 +1,10 @@
 # AADS HANDOVER
-최종 업데이트: 2026-04-22
+최종 업데이트: 2026-04-23
+
+## AADS-188
+- `app/api/llm_keys.py` 추가로 `llm_api_keys` 조회·추가·수정·비활성화 API 제공.
+- `app/main.py`에 `/api/v1/llm-keys` 라우터 등록.
+- 대시보드 Settings 탭에서 LLM API 키 관리 UI를 연동하도록 백엔드 계약 추가.
 
 ## AADS-187
 - `scripts/update_claude_all_servers.sh` 전면 재작성.
