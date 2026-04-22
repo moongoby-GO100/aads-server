@@ -18,6 +18,7 @@ import time as _time_mod
 import httpx
 from anthropic import AsyncAnthropic, APIStatusError, APIConnectionError, RateLimitError
 from app.config import Settings
+from app.core.llm_key_provider import get_api_key as _get_db_key
 from app.services.intent_router import IntentResult
 
 logger = logging.getLogger(__name__)
@@ -406,6 +407,14 @@ async def call_stream(
       input_tokens: int
       output_tokens: int
     """
+    global _anthropic, _LITELLM_API_KEY, LITELLM_API_KEY
+
+    _db_litellm_key = await _get_db_key("LITELLM_MASTER_KEY", "LITELLM_MASTER_KEY")
+    if _db_litellm_key and _db_litellm_key != _LITELLM_API_KEY:
+        _LITELLM_API_KEY = _db_litellm_key
+        LITELLM_API_KEY = _db_litellm_key
+        _anthropic = _get_anthropic_client()
+
     # mixture/auto 는 chat_service 와 동일하게 "사용자 지정 모델 없음"으로 취급해야 함.
     # 그렇지 않으면 model_override or intent 가 "mixture" 문자열이 되어 unknown → claude-sonnet 고정 등 오동작.
     _effective_override = (

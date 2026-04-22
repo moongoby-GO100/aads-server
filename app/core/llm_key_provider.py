@@ -30,6 +30,10 @@ def _set_cached_value(key_name: str, value: str) -> None:
 
 async def get_api_key(key_name: str, fallback_env: str = "") -> str:
     """DB에서 key_name으로 조회 → 복호화 반환. DB 실패 시 env 폴백."""
+    cached = _get_cached_value(key_name)
+    if cached:
+        return cached
+
     try:
         pool = get_pool()
         row = await pool.fetchrow(
