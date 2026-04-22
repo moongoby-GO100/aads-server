@@ -181,7 +181,7 @@ _cli_session_map: {aads_session_id: cli_session_id}  # 메모리, 재시작 시 
 | `mcp_servers/aads_tools_bridge.py` | MCP stdio 브릿지, ToolExecutor 경유 51개 도구 |
 | `scripts/claude_relay_server.py` | CLI relay (Phase 1 백업, 비활성) |
 | `scripts/mcp_config_template.json` | MCP config 템플릿 |
-| `scripts/update_claude_all_servers.sh` | 전 서버 CLI+SDK 자동 업데이트 크론 |
+| `scripts/update_claude_all_servers.sh` | 전 서버 Claude Code CLI + Codex CLI + SDK 자동 업데이트 크론 |
 | `docker-compose.yml` | ANTHROPIC_API_KEY, BASE_URL, FALLBACK, CLI_ENABLED |
 | `frontend: page.tsx` | 키 토글 버튼 (🟢Naver/🔵Gmail) |
 | `frontend: chatApi.ts` | authKeyApi 추가 |
@@ -195,7 +195,7 @@ _cli_session_map: {aads_session_id: cli_session_id}  # 메모리, 재시작 시 
 | 211 | 2.1.77 | 0.1.48 | 3.11 | KIS/GO100 |
 | 114 | 2.1.77 | 0.1.48 | 3.11 | SF/NTV2 |
 
-자동 업데이트: 매주 월요일 05:00 KST (`/root/aads/aads-server/scripts/update_claude_all_servers.sh`)
+자동 업데이트: 매일 04:00 KST (`/root/aads/aads-server/scripts/update_claude_all_servers.sh`)
 
 ## 12. 폴백 체인
 
