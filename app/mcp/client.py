@@ -61,24 +61,44 @@ class MCPClientManager:
         always_on_connections = get_always_on_connections()
         available = {}
 
-        # 병렬 ping으로 빠른 응답 확인
-        async def _check(server_name: str, conn_config: dict) -> tuple[str, dict | None]:
+        # 병렬 ping으로 빠른 응답 확인 (서버별 3회 재시도, 지수 백오프)
+        async def _check_with_retry(server_name: str, conn_config: dict) -> tuple[str, dict | None]:
             url = conn_config.get("url", "")
             if not url:
                 logger.warning("mcp_server_no_url", server=server_name)
                 return server_name, None
-            reachable = await _ping_mcp_server(url)
-            if reachable:
-                logger.info("mcp_server_reachable", server=server_name, url=url)
-                return server_name, conn_config
-            else:
-                logger.warning("mcp_server_unreachable", server=server_name, url=url)
-                return server_name, None
+            for attempt in range(3):
+                reachable = await _ping_mcp_server(url)
+                if reachable:
+                    logger.info("mcp_server_reachable", server=server_name, url=url, attempt=attempt)
+                    return server_name, conn_config
+                if attempt < 2:
+                    await asyncio.sleep(2 ** attempt)
+            logger.warning("mcp_server_unreachable", server=server_name, url=url)
+            return server_name, None
 
-        results = await asyncio.gather(
-            *[_check(name, cfg) for name, cfg in always_on_connections.items()],
-            return_exceptions=True,
-        )
+        # 전체 ping 실패 시 최대 3회 전체 재시도 (5초 간격)
+        available = {}
+        for global_attempt in range(3):
+            results = await asyncio.gather(
+                *[_check_with_retry(name, cfg) for name, cfg in always_on_connections.items()],
+                return_exceptions=True,
+            )
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.warning("mcp_ping_exception", error=str(result))
+                    continue
+                server_name, conn_config = result
+                if conn_config is not None:
+                    available[server_name] = conn_config
+            if available:
+                break
+            if global_attempt < 2:
+                logger.warning("mcp_all_servers_unreachable_retrying", attempt=global_attempt)
+                await asyncio.sleep(5)
+
+        # 아래 for loop는 위에서 available이 이미 채워짐 — 기존 코드 호환용 dummy
+        results = []
         for result in results:
             if isinstance(result, Exception):
                 logger.warning("mcp_ping_exception", error=str(result))

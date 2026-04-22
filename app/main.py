@@ -448,6 +448,32 @@ async def lifespan(app: FastAPI):
                 logger.warning(f"pending_approval_trigger_failed: {e}")
         scheduler.add_job(_trigger_pending_approvals, "interval", seconds=60, id="pending_approval_trigger", replace_existing=True)
 
+        async def _mcp_health_check_job():
+            """1분마다 MCP 서버 상태 확인 + 끊긴 서버 자동 복구."""
+            try:
+                from app.mcp.client import get_mcp_manager, _ping_mcp_server
+                from app.mcp.config import get_always_on_connections
+                mcp_manager = get_mcp_manager()
+                if not mcp_manager:
+                    return
+                all_connections = get_always_on_connections()
+                if not all_connections:
+                    return
+                failed = [
+                    name for name, cfg in all_connections.items()
+                    if cfg.get("url") and not await _ping_mcp_server(cfg["url"], timeout=3.0)
+                ]
+                if failed:
+                    logger.warning("mcp_health_check_failed", servers=failed)
+                    try:
+                        await mcp_manager.initialize()
+                        logger.info("mcp_health_check_recovered", available=len(mcp_manager.available_servers))
+                    except Exception as e:
+                        logger.error("mcp_health_check_recovery_failed", error=str(e))
+            except Exception as e:
+                logger.warning("mcp_health_check_error", error=str(e))
+        scheduler.add_job(_mcp_health_check_job, "interval", minutes=1, id="mcp_health_check", max_instances=1, coalesce=True)
+
         scheduler.start()
         app.state.scheduler = scheduler  # fallback: MCP 도구 경로에서 참조 가능
         await healer_init()
