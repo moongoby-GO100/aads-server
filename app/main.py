@@ -1220,6 +1220,7 @@ app.include_router(agenda_router, prefix="/api/v1/agenda", tags=["agenda"])
 app.include_router(hot_reload_router, prefix="/api/v1", tags=["hot-reload"])
 app.include_router(admin_router, prefix="/api/v1", tags=["admin"])
 app.include_router(credential_vault_router, prefix="/api/v1", tags=["credential-vault"])
+app.include_router(llm_keys_router, prefix="/api/v1", tags=["llm-keys"])
 app.include_router(braming_router)
 app.include_router(project_docs_router, prefix="/api/v1", tags=["project-docs"])
 
