@@ -3105,6 +3105,7 @@ async def send_message_stream(
 
         if model_override and model_override not in ("mixture", "auto"):
             intent_result.model = get_model_for_override(model_override)
+            intent_result.model_locked = True
             intent_result.use_gemini_direct = False
             # Claude 모델 선택 시 도구 항상 활성화 (시스템프롬프트에 도구 설명이 있으므로
             # tools 없이 호출하면 <tool_call> XML 할루시네이션 발생)

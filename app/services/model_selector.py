@@ -526,13 +526,17 @@ async def call_stream(
     }
     # Opus 유지: cto_*, code_task, code_modify, execute, directive_gen 등 복잡 인텐트
     _intent = getattr(intent_result, "intent", "")
-    if not _effective_override:
+    _model_locked = getattr(intent_result, "model_locked", False)
+    if not _effective_override and not _model_locked:
         if _intent in _HAIKU_INTENTS and model in ("claude-sonnet", "claude-opus"):
             logger.info(f"cascade_downgrade: {_intent} → claude-haiku (simple intent)")
             model = "claude-haiku"
         elif _intent in _SONNET_INTENTS and model == "claude-opus":
             logger.info(f"cascade_downgrade: {_intent} → claude-sonnet (medium intent)")
             model = "claude-sonnet"
+    else:
+        if _model_locked:
+            logger.info(f"cascade_skip: user explicitly selected '{model}', intent='{_intent}' — respecting user choice")
 
     runtime_available_models = await get_available_model_ids()
     if runtime_available_models and model not in runtime_available_models:
