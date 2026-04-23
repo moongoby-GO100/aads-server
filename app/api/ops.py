@@ -1577,6 +1577,15 @@ async def get_oauth_usage_stats():
     return await get_usage_stats()
 
 
+# ─── 계정별 LLM 사용량 현황 API (AADS-190C) ──────────────────────────────
+@router.get("/ops/account-usage")
+async def get_llm_account_usage():
+    """계정별 LLM 키 상태 + exact/observed usage 집계."""
+    from app.services.llm_account_usage import get_account_usage_snapshot
+
+    return await get_account_usage_snapshot()
+
+
 # ─── 도구 오류율 통계 API (AADS-206) ─────────────────────────────────────
 @router.get("/ops/tool-stats")
 async def get_tool_stats(hours: int = Query(24, ge=1, le=168)):
