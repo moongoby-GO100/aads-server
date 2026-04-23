@@ -728,9 +728,24 @@ async def get_project_detail(project_id: str):
 
 DIRECTIVES_RUNNING_DIR = Path("/root/.genspark/directives/running")
 DIRECTIVES_DONE_DIR = Path("/root/.genspark/directives/done")
-REPORTS_LOCAL_DIR = Path("/root/project-docs/aads/reports")
+REPORTS_LOCAL_DIRS = (
+    Path("/root/project-docs/aads/reports"),
+    Path("/root/aads/aads-server/reports"),
+)
 
 GITHUB_REPORTS_BASE = "https://github.com/moongoby/project-docs/blob/main/aads/reports"
+
+
+def _existing_report_dirs() -> List[Path]:
+    return [path for path in REPORTS_LOCAL_DIRS if path.exists()]
+
+
+def _find_report_file(filename: str) -> Optional[Path]:
+    for report_dir in _existing_report_dirs():
+        candidate = report_dir / filename
+        if candidate.exists():
+            return candidate
+    return None
 
 
 VALID_PROJECT_NAMES = frozenset({
@@ -1075,7 +1090,7 @@ def _parse_report_file(filepath: Path) -> Dict:
     if project == "AADS":
         project = _classify_project(filename, head)
 
-    github_url = f"{GITHUB_REPORTS_BASE}/{filename}" if REPORTS_LOCAL_DIR.exists() else ""
+    github_url = f"{GITHUB_REPORTS_BASE}/{filename}" if REPORTS_LOCAL_DIRS[0].exists() else ""
 
     return {
         "task_id": task_id,
@@ -1277,9 +1292,11 @@ async def get_reports(project: Optional[str] = None):
     reports: List[Dict] = []
 
     # 로컬 reports 디렉터리
-    if REPORTS_LOCAL_DIR.exists():
-        for f in sorted(REPORTS_LOCAL_DIR.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True):
-            reports.append(_parse_report_file(f))
+    report_dirs = _existing_report_dirs()
+    if report_dirs:
+        for report_dir in report_dirs:
+            for f in sorted(report_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True):
+                reports.append(_parse_report_file(f))
     else:
         # fallback: done 디렉터리에서 RESULT 파일만
         if DIRECTIVES_DONE_DIR.exists():
@@ -1434,8 +1451,8 @@ async def get_report_detail(filename: str):
     # 로컬 파일 검색
     if "/" in filename:
         raise HTTPException(400, "Invalid filename")
-    candidate = REPORTS_LOCAL_DIR / filename
-    if not candidate.exists():
+    candidate = _find_report_file(filename)
+    if not candidate or not candidate.exists():
         candidate = DIRECTIVES_DONE_DIR / filename
     if not candidate.exists():
         # Archived 검색
