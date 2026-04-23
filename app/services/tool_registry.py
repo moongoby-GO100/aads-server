@@ -2137,6 +2137,51 @@ _GROUPS: Dict[str, List[str]] = {
     "all": list(_TOOLS.keys()),
 }
 
+# Phase A: 인텐트별 도구 필터링 — 코어 도구 + 인텐트별 그룹 조합
+_CORE_TOOLS = [
+    "read_remote_file", "query_database", "query_project_database",
+    "list_remote_dir", "run_remote_command", "capture_screenshot",
+    "pipeline_runner_submit", "pipeline_runner_status", "pipeline_runner_approve",
+    "check_task_status", "read_task_logs",
+]
+
+_INTENT_TOOL_MAP: Dict[str, List[str]] = {
+    "search": ["search", "crawl"], "news_search": ["search", "crawl"],
+    "blog_search": ["search", "crawl"], "shop_search": ["search", "crawl"],
+    "local_search": ["search", "crawl"], "book_search": ["search", "crawl"],
+    "image_search": ["search", "crawl"], "encyclopedia_search": ["search", "crawl"],
+    "knowledge_search": ["search", "crawl"],
+    "code_task": ["action", "research", "meta"], "code_modify": ["action", "research", "meta"],
+    "code_exec": ["action", "research"], "code_explorer": ["action", "research"],
+    "analyze_changes": ["action", "research"], "architect": ["action", "research", "meta"],
+    "cto_code_analysis": ["action", "research"], "cto_tech_debt": ["action", "research"],
+    "directive": ["system", "meta", "workflow", "action"],
+    "directive_gen": ["system", "meta", "workflow", "action"],
+    "execute": ["system", "meta", "workflow", "action"],
+    "pipeline_runner": ["system", "meta", "action"],
+    "task_query": ["system", "meta"], "status_check": ["system", "meta", "workflow"],
+    "all_service_status": ["system", "workflow"], "health_check": ["system", "workflow"],
+    "service_inspection": ["system", "workflow", "action"],
+    "cto_directive": ["system", "meta", "workflow", "action"],
+    "cto_verify": ["system", "meta", "workflow", "action"],
+    "cto_impact": ["system", "meta", "workflow", "action"],
+    "system_status": ["system", "action"], "dashboard": ["system", "action"],
+    "task_history": ["system", "meta"], "memory_recall": ["memory"],
+    "cost_report": ["system", "action"], "file_read": ["action"],
+    "server_file": ["action"], "url_read": ["action", "crawl"],
+    "url_analyze": ["action", "crawl"], "deep_crawl": ["crawl"],
+    "browser": ["browser"], "pc_control": ["browser"],
+    "pc_screenshot": ["browser"], "pc_file": ["browser", "action"],
+    "pc_kakao": ["browser"],
+    "agenda_manage": ["agenda"], "agenda_decide": ["agenda"],
+    "agenda_auto_detect": ["agenda"],
+    "qa": ["system", "action", "meta"], "execution_verify": ["system", "action", "meta"],
+    "workspace_switch": ["system", "meta"], "auto_reaction": ["system", "action", "meta"],
+    "diagnosis": ["system", "action", "meta", "workflow"],
+    "complex_analysis": ["system", "action", "meta", "research"],
+    "search_all_projects": ["action", "research"],
+}
+
 
 class ToolRegistry:
     """Anthropic Tool Use API 포맷으로 도구 목록 반환."""
@@ -2168,6 +2213,31 @@ class ToolRegistry:
             _EXCLUDE_KEYS = {"input_examples", "defer_loading", "allowed_callers"}
             tool = {k: v for k, v in _TOOLS[name].items() if k not in _EXCLUDE_KEYS}
             result.append(tool)
+        return result
+
+    def get_tools_for_intent(self, intent: str) -> List[Dict[str, Any]]:
+        """인텐트별 필요한 도구만 반환. 미등록 인텐트는 eager_tools 폴백."""
+        groups = _INTENT_TOOL_MAP.get(intent)
+        if not groups:
+            return self.get_eager_tools()
+        seen: set = set()
+        result: list = []
+        _EXCLUDE = {"input_examples", "defer_loading", "allowed_callers"}
+        for name in _CORE_TOOLS:
+            if name in _TOOLS and name not in seen:
+                _t = _TOOLS[name].get("type", "")
+                if _t and _t not in ("", "tool"):
+                    continue
+                seen.add(name)
+                result.append({k: v for k, v in _TOOLS[name].items() if k not in _EXCLUDE})
+        for group in groups:
+            for name in _GROUPS.get(group, []):
+                if name in _TOOLS and name not in seen:
+                    _t = _TOOLS[name].get("type", "")
+                    if _t and _t not in ("", "tool"):
+                        continue
+                    seen.add(name)
+                    result.append({k: v for k, v in _TOOLS[name].items() if k not in _EXCLUDE})
         return result
 
     def get_tool(self, name: str) -> Dict[str, Any]:

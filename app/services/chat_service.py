@@ -3292,7 +3292,7 @@ async def send_message_stream(
         from app.services.tool_registry import ToolRegistry
         _registry = ToolRegistry()
         if intent_result.use_tools:
-            tools_for_api = _registry.get_tools(intent_result.tool_group)
+            tools_for_api = _registry.get_tools_for_intent(intent)
         else:
             # Gemini 직접 호출 모델은 도구 미지원 → 제외
             if not intent_result.use_gemini_direct:
