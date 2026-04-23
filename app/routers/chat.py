@@ -1049,8 +1049,21 @@ async def report_frontend_error(req: ErrorReportRequest, request: Request):
 @router.get("/settings/auth-keys")
 async def get_auth_key_order():
     """현재 인증 키 순서 조회."""
-    from app.services.model_selector import get_key_order
-    return {"keys": get_key_order()}
+    from app.core.auth_provider import get_oauth_key_records_async
+
+    records = await get_oauth_key_records_async(include_rate_limited=True)
+    keys = [
+        {
+            "label": record.get("label", ""),
+            "prefix": record.get("prefix", ""),
+            "key_name": record.get("key_name", ""),
+            "priority": record.get("priority", 0),
+            "slot": record.get("slot", ""),
+            "rate_limited_until": record.get("rate_limited_until").isoformat() if record.get("rate_limited_until") else None,
+        }
+        for record in records
+    ]
+    return {"keys": keys}
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -1177,14 +1190,27 @@ async def use_template(template_id: UUID):
 
 
 class KeyOrderRequest(BaseModel):
-    primary: str = Field(..., description="우선 사용할 키: 'naver' 또는 'gmail'")
+    primary: str = Field(..., description="우선 사용할 키 label/key_name/slot")
 
 
 @router.post("/settings/auth-keys")
 async def set_auth_key_order(req: KeyOrderRequest):
     """인증 키 순서 변경."""
-    from app.services.model_selector import set_key_order, get_key_order
-    ok = set_key_order(req.primary)
+    from app.core.auth_provider import get_oauth_key_records_async, set_token_order_async
+
+    ok = await set_token_order_async(req.primary)
     if not ok:
         raise HTTPException(status_code=400, detail=f"Unknown key: {req.primary}")
-    return {"ok": True, "keys": get_key_order()}
+    records = await get_oauth_key_records_async(include_rate_limited=True)
+    keys = [
+        {
+            "label": record.get("label", ""),
+            "prefix": record.get("prefix", ""),
+            "key_name": record.get("key_name", ""),
+            "priority": record.get("priority", 0),
+            "slot": record.get("slot", ""),
+            "rate_limited_until": record.get("rate_limited_until").isoformat() if record.get("rate_limited_until") else None,
+        }
+        for record in records
+    ]
+    return {"ok": True, "keys": keys}

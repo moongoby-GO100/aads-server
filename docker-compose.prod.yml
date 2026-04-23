@@ -109,6 +109,12 @@ services:
       - /root/aads/aads-server/migrations:/app/migrations:rw
       - /root/aads/aads-server/scripts:/app/scripts:rw
       - /root/aads/aads-server/supervisord.conf:/app/supervisord.conf:ro
+      - /root/aads/aads-docs/docs:/root/aads/aads-docs/docs:ro
+      - /root/aads/aads-docs/reports:/root/aads/aads-docs/reports:ro
+      - /root/aads/aads-dashboard/docs:/root/aads/aads-dashboard/docs:ro
+      - /root/aads/aads-dashboard/reports:/root/aads/aads-dashboard/reports:ro
+      - /root/aads/aads-core/docs:/root/aads/aads-core/docs:ro
+      - /root/aads/aads-core/reports:/root/aads/aads-core/reports:ro
       - /root/.ssh:/root/.ssh:rw
       - /root/.claude:/root/.claude:rw
       - /root/.genspark/directives:/root/.genspark/directives:ro
@@ -167,6 +173,12 @@ services:
       - /root/aads/aads-server/migrations:/app/migrations:rw
       - /root/aads/aads-server/scripts:/app/scripts:rw
       - /root/aads/aads-server/supervisord.conf:/app/supervisord.conf:ro
+      - /root/aads/aads-docs/docs:/root/aads/aads-docs/docs:ro
+      - /root/aads/aads-docs/reports:/root/aads/aads-docs/reports:ro
+      - /root/aads/aads-dashboard/docs:/root/aads/aads-dashboard/docs:ro
+      - /root/aads/aads-dashboard/reports:/root/aads/aads-dashboard/reports:ro
+      - /root/aads/aads-core/docs:/root/aads/aads-core/docs:ro
+      - /root/aads/aads-core/reports:/root/aads/aads-core/reports:ro
       - /root/.ssh:/root/.ssh:rw
       - /root/.claude:/root/.claude:rw
       - /root/.genspark/directives:/root/.genspark/directives:ro

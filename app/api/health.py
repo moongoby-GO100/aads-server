@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+import httpx
 
 from fastapi import APIRouter
 from app.services.sandbox import check_sandbox_health
@@ -42,6 +43,7 @@ async def health_check():
 async def api_key_status():
     """현재 사용 중인 API 키 상태 조회 (마스킹)."""
     from app.config import settings as s
+    from app.core.auth_provider import get_oauth_key_records_async
 
     # AADS 서버 자체 토큰
     auth1 = s.ANTHROPIC_AUTH_TOKEN.get_secret_value() if s.ANTHROPIC_AUTH_TOKEN else ""
@@ -63,51 +65,49 @@ async def api_key_status():
         except FileNotFoundError:
             continue
 
-    # Claude Code CLI 토큰 (.env.oauth)
-    cli_token = ""
-    cli_account = ""
-    # 계정별 토큰 + 라벨
-    oauth_tokens: dict[str, str] = {}  # {"1": "sk-ant-oat01-...", "2": "sk-ant-oat01-..."}
-    oauth_labels: dict[str, str] = {}  # {"1": "gmail", "2": "naver"}
-    for oauth_path in ["/root/.genspark/.env.oauth", "/app/.env.oauth"]:
-        try:
-            with open(oauth_path) as f:
-                lines = f.read()
-            for line in lines.splitlines():
-                if line.startswith("CURRENT_OAUTH="):
-                    cli_account = line.split("=", 1)[1].strip()
-                # 토큰 값 수집
-                for n in ("1", "2"):
-                    if line.startswith(f"OAUTH_TOKEN_{n}="):
-                        oauth_tokens[n] = line.split("=", 1)[1].strip()
-                # 주석에서 라벨 추출 (예: "# token1: gmail")
-                if line.strip().startswith("#") and "token" in line.lower():
-                    for n in ("1", "2"):
-                        if f"token{n}:" in line.lower():
-                            label = line.split(":", 1)[1].strip().split("(")[0].strip()
-                            oauth_labels[n] = label
-            cur = cli_account or "1"
-            cli_token = oauth_tokens.get(cur, "")
-            break
-        except FileNotFoundError:
-            continue
+    oauth_records = await get_oauth_key_records_async(include_rate_limited=True)
+    primary = oauth_records[0] if oauth_records else {}
+    primary_slot = primary.get("slot", "")
+    primary_label = primary.get("label", "")
+    primary_prefix = primary.get("prefix", "")
+    relay_cli = {}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=1.0)) as client:
+            relay = await client.get("http://host.docker.internal:8199/health")
+            if relay.status_code == 200:
+                relay_cli = relay.json()
+    except Exception:
+        relay_cli = {}
 
     # LiteLLM 토큰이 어느 계정인지 매칭
     litellm_label = ""
-    for n, tok in oauth_tokens.items():
-        if tok and litellm_key and tok == litellm_key:
-            litellm_label = oauth_labels.get(n, f"token{n}")
+    for record in oauth_records:
+        if record.get("value") and litellm_key and record["value"] == litellm_key:
+            litellm_label = record.get("label", "")
             break
-
-    # CLI 토큰 라벨
-    cli_label = oauth_labels.get(cli_account, f"token{cli_account}") if cli_account else ""
 
     return {
         "anthropic": {
             "aads_token_1": {"prefix": _mask_key(auth1), "type": _detect_key_type(auth1), "active": bool(auth1)},
             "aads_token_2": {"prefix": _mask_key(auth2), "type": _detect_key_type(auth2), "active": bool(auth2)},
             "litellm": {"prefix": _mask_key(litellm_key), "type": _detect_key_type(litellm_key), "active": bool(litellm_key), "label": litellm_label},
-            "cli": {"prefix": _mask_key(cli_token), "type": _detect_key_type(cli_token), "account": cli_account, "active": bool(cli_token), "label": cli_label},
+            "cli": {
+                "prefix": primary_prefix,
+                "type": _detect_key_type(primary.get("value", "")),
+                "account": relay_cli.get("oauth_slot", primary_slot),
+                "active": bool(primary.get("value")),
+                "label": relay_cli.get("oauth_label", primary_label),
+            },
+            "db_keys": [
+                {
+                    "label": record.get("label", ""),
+                    "prefix": record.get("prefix", ""),
+                    "priority": record.get("priority", 0),
+                    "slot": record.get("slot", ""),
+                    "rate_limited_until": record.get("rate_limited_until").isoformat() if record.get("rate_limited_until") else None,
+                }
+                for record in oauth_records
+            ],
         },
         "google": {"active": bool(s.GOOGLE_API_KEY.get_secret_value() if s.GOOGLE_API_KEY else "")},
         "openai": {"active": bool(s.OPENAI_API_KEY.get_secret_value() if s.OPENAI_API_KEY else "")},

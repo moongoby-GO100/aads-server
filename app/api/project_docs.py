@@ -26,8 +26,14 @@ SERVER_CONFIG = {
     "AADS": {
         "host": None,  # 로컬
         "paths": [
-            {"base": "/app/docs", "label": "문서"},
-            {"base": "/app/reports", "label": "리포트"},
+            {"base": "/app/docs", "label": "서버 문서"},
+            {"base": "/app/reports", "label": "서버 리포트"},
+            {"base": "/root/aads/aads-docs/docs", "label": "공용 문서"},
+            {"base": "/root/aads/aads-docs/reports", "label": "공용 리포트", "exclude": ["ceo-documents/_index.json"]},
+            {"base": "/root/aads/aads-dashboard/docs", "label": "대시보드 문서"},
+            {"base": "/root/aads/aads-dashboard/reports", "label": "대시보드 리포트"},
+            {"base": "/root/aads/aads-core/docs", "label": "코어 문서"},
+            {"base": "/root/aads/aads-core/reports", "label": "코어 리포트"},
         ],
     },
     "KIS": {
@@ -51,15 +57,13 @@ SERVER_CONFIG = {
     "SF": {
         "host": "server-114",
         "paths": [
-            {"base": "/root/shortflow/docs", "label": "문서"},
-            {"base": "/root/aads-hub/project-docs/shortflow", "label": "프로젝트 문서"},
+            {"base": "/data/shortflow/docs", "label": "서비스 문서"},
         ],
     },
     "NTV2": {
         "host": "server-114",
         "paths": [
-            {"base": "/root/newtalk-v2/docs", "label": "문서"},
-            {"base": "/root/aads-hub/project-docs/newtalk-v2-api", "label": "프로젝트 문서"},
+            {"base": "/srv/newtalk-v2/docs", "label": "서비스 문서"},
         ],
     },
 }
@@ -141,18 +145,48 @@ def _classify(name: str, path: str) -> str:
     """문서 유형 분류."""
     nl = name.lower()
     pl = path.lower()
-    if "report" in pl or "report" in nl:
+
+    if any(key in pl for key in ("ceo-documents", "directive", "directives", "policy", "rule")) or \
+            any(key in nl for key in ("directive", "directives", "policy", "rules")):
+        return "directive"
+    if "handover" in nl or "handover" in pl:
+        return "handover"
+    if any(key in pl for key in ("changelog", "release-note", "release_note", "history")) or \
+            any(key in nl for key in ("changelog", "release-note", "release_note", "history")):
+        return "changelog"
+    if any(key in pl for key in ("report", "result", "retrospective", "postmortem")) or \
+            any(key in nl for key in ("report", "result", "retrospective", "postmortem")):
         return "report"
-    if "spec" in nl or "architecture" in nl or "tech" in pl:
-        return "tech"
-    if "plan" in nl or "roadmap" in nl or "layout" in pl:
+    if any(key in pl for key in ("qa", "test", "verification", "benchmark")) or \
+            any(key in nl for key in ("qa", "test", "verification", "benchmark")):
+        return "qa"
+    if any(key in pl for key in ("api", "openapi", "swagger")) or \
+            any(key in nl for key in ("api", "openapi", "swagger")):
+        return "api"
+    if any(key in pl for key in ("architecture", "system-design", "design", "technical", "tech")) or \
+            any(key in nl for key in ("architecture", "design", "technical", "tech")):
+        return "architecture"
+    if any(key in pl for key in ("runbook", "deploy", "deployment", "operation", "ops", "playbook", "troubleshoot")) or \
+            any(key in nl for key in ("runbook", "deploy", "deployment", "operation", "ops", "playbook", "troubleshoot")):
+        return "runbook"
+    if any(key in pl for key in ("plan", "roadmap", "proposal", "spec", "prd", "layout")) or \
+            any(key in nl for key in ("plan", "roadmap", "proposal", "spec", "prd")):
         return "plan"
-    if "handover" in nl or "changelog" in nl:
+    if any(key in pl for key in ("status", "incident", "issue", "summary")) or \
+            any(key in nl for key in ("status", "incident", "issue", "summary")):
         return "status"
-    if "lesson" in pl or "knowledge" in pl:
+    if any(key in pl for key in ("lesson", "knowledge", "guide", "manual", "faq", "tutorial")) or \
+            any(key in nl for key in ("lesson", "knowledge", "guide", "manual", "faq", "tutorial")):
         return "knowledge"
-    if nl.endswith((".py", ".sh", ".sql")):
-        return "code"
+    if nl.endswith(".sql") or any(key in pl for key in ("schema", "migration", "erd", "ddl")) or \
+            any(key in nl for key in ("schema", "migration", "erd", "ddl")):
+        return "schema"
+    if nl.endswith((".py", ".sh")):
+        return "script"
+    if nl.endswith((".json", ".yaml", ".yml")) or \
+            any(key in pl for key in ("config", "settings", "compose", "env")) or \
+            any(key in nl for key in ("config", "settings", "compose", "env")):
+        return "config"
     return "doc"
 
 
@@ -172,12 +206,23 @@ async def _scan_project(project: str, config: dict) -> dict:
         for d in docs:
             d["base_path"] = base
             d["label"] = label
+            d["full_path"] = f"{base.rstrip('/')}/{d['path']}"
         all_docs.extend(docs)
+
+    # 같은 실파일이 여러 base_path에서 중복 노출되지 않도록 정규화 dedupe
+    deduped = []
+    seen = set()
+    for d in all_docs:
+        key = (d.get("base_path", ""), d.get("path", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(d)
     return {
         "project": project,
         "host": host or "localhost",
-        "total": len(all_docs),
-        "files": all_docs,
+        "total": len(deduped),
+        "files": deduped,
     }
 
 
@@ -249,6 +294,7 @@ async def get_doc_content(
     return {
         "project": project,
         "file_path": file_path,
+        "full_path": full_path,
         "content": content,
         "size": len(content),
     }

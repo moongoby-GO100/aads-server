@@ -18,9 +18,11 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from aiohttp import web
@@ -40,7 +42,9 @@ MCP_TEMPLATE = Path(os.getenv(
     "/root/aads/aads-server/scripts/mcp_config_template.json",
 ))
 
-_MAX_CONCURRENT = int(os.getenv("CLAUDE_RELAY_MAX_CONCURRENT", "3"))
+# 2GB급 호스트에서 Claude/Codex 동시 실행 3개는 메모리 압박으로 137(OOM성 종료)을 유발할 수 있다.
+# 운영자가 명시적으로 override하지 않으면 보수적으로 1개만 허용한다.
+_MAX_CONCURRENT = int(os.getenv("CLAUDE_RELAY_MAX_CONCURRENT", "1"))
 _semaphore = None  # 앱 시작 시 실제 이벤트 루프에서 생성 (Python 3.6 different loop 방지)
 
 # --- Direct OAuth ---
@@ -48,6 +52,8 @@ _DIRECT_OAUTH_ENABLED = os.getenv("AADS_CLAUDE_DIRECT_OAUTH", "0") == "1"
 _ENV_OAUTH_FILE = Path(os.getenv("ENV_OAUTH_FILE", "/root/.genspark/.env.oauth"))
 _RELAY_HOME = Path("/tmp/.claude-relay")
 _CODEX_HOME_ROOT = Path(os.getenv("CODEX_HOME_ROOT", "/root/.codex-relay"))
+_DB_OAUTH_CACHE_TTL = int(os.getenv("CLAUDE_RELAY_DB_OAUTH_CACHE_TTL", "30"))
+_DB_OAUTH_CACHE = {"rows": None, "ts": 0}
 _last_429_slot = 0
 
 _session_map = {}  # type: dict
@@ -63,14 +69,111 @@ _MODEL_MAP = {
 }
 
 
+def _read_db_oauth_rows():
+    now = time.time()
+    cached_rows = _DB_OAUTH_CACHE.get("rows")
+    cached_ts = _DB_OAUTH_CACHE.get("ts", 0)
+    if cached_rows is not None and (now - cached_ts) < _DB_OAUTH_CACHE_TTL:
+        return cached_rows
+
+    cmd = [
+        "docker", "exec", "aads-server", "sh", "-lc",
+        "python - <<'PY'\n"
+        "import asyncio, json\n"
+        "from app.core.db_pool import init_pool, close_pool\n"
+        "from app.core.auth_provider import get_oauth_key_records_async\n"
+        "async def main():\n"
+        "    await init_pool()\n"
+        "    rows = await get_oauth_key_records_async(include_rate_limited=True)\n"
+        "    payload = []\n"
+        "    for row in rows:\n"
+        "        payload.append({\n"
+        "            'label': row.get('label'),\n"
+        "            'key_name': row.get('key_name'),\n"
+        "            'priority': row.get('priority'),\n"
+        "            'slot': row.get('slot'),\n"
+        "            'value': row.get('value'),\n"
+        "            'rate_limited_until': row.get('rate_limited_until').isoformat() if row.get('rate_limited_until') else None,\n"
+        "        })\n"
+        "    print(json.dumps(payload, ensure_ascii=False))\n"
+        "    await close_pool()\n"
+        "asyncio.run(main())\n"
+        "PY",
+    ]
+    try:
+        output = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
+        text = output.decode("utf-8", errors="replace").strip()
+        payload = text
+        if "\n" in text:
+            candidates = [line.strip() for line in text.splitlines() if line.strip()]
+            payload = next(
+                (
+                    line
+                    for line in candidates
+                    if (line.startswith("[") and line.endswith("]"))
+                    or (line.startswith("{") and line.endswith("}"))
+                ),
+                candidates[-1] if candidates else "",
+            )
+        rows = json.loads(payload or "[]")
+        if isinstance(rows, list):
+            _DB_OAUTH_CACHE["rows"] = rows
+            _DB_OAUTH_CACHE["ts"] = now
+            return rows
+    except Exception as e:
+        logger.warning("DB OAuth read failed, using env fallback: %s", e)
+    return None
+
+
+def _is_rate_limited_row(row):
+    until = (row or {}).get("rate_limited_until")
+    if not until:
+        return False
+    try:
+        target = datetime.fromisoformat(until.replace("Z", "+00:00"))
+        if target.tzinfo is None:
+            target = target.replace(tzinfo=timezone.utc)
+        return target > datetime.now(timezone.utc)
+    except Exception:
+        return False
+
+
 def _read_oauth_tokens():
     token1 = token2 = ""
     current = "1"
+    label1 = "slot1"
+    label2 = "slot2"
+    db_rows = _read_db_oauth_rows()
+    if db_rows:
+        for row in db_rows:
+            slot = str(row.get("slot", "") or "")
+            if slot == "1":
+                token1 = row.get("value", "") or token1
+                label1 = row.get("label", "") or label1
+            elif slot == "2":
+                token2 = row.get("value", "") or token2
+                label2 = row.get("label", "") or label2
+        ordered = [row for row in db_rows if row.get("value")]
+        ordered.sort(key=lambda row: int(row.get("priority", 9999) or 9999))
+        preferred = [row for row in ordered if not _is_rate_limited_row(row)]
+        if preferred:
+            current = str(preferred[0].get("slot", "") or current)
+        elif ordered:
+            current = str(ordered[0].get("slot", "") or current)
+        if token1 or token2:
+            return token1, token2, current, label1, label2
     try:
         text = _ENV_OAUTH_FILE.read_text()
         for line in text.splitlines():
             line = line.strip()
-            if line.startswith("#") or "=" not in line:
+            if line.startswith("#"):
+                lower = line.lower()
+                if "token1:" in lower:
+                    label1 = line.split(":", 1)[1].strip().split("(")[0].strip() or label1
+                elif "token2:" in lower:
+                    label2 = line.split(":", 1)[1].strip().split("(")[0].strip() or label2
+                continue
+            if "=" not in line:
                 continue
             k, v = line.split("=", 1)
             k, v = k.strip(), v.strip()
@@ -82,12 +185,12 @@ def _read_oauth_tokens():
                 current = v
     except Exception as e:
         logger.error("Failed to read %s: %s", _ENV_OAUTH_FILE, e)
-    return token1, token2, current
+    return token1, token2, current, label1, label2
 
 
 def _pick_token(preferred_slot=None):
     global _last_429_slot
-    token1, token2, current = _read_oauth_tokens()
+    token1, token2, current, label1, label2 = _read_oauth_tokens()
     if preferred_slot:
         slot = preferred_slot
     elif _last_429_slot:
@@ -95,13 +198,13 @@ def _pick_token(preferred_slot=None):
     else:
         slot = current
     if slot == "1" and token1:
-        return token1, "1", "gmail"
+        return token1, "1", label1
     elif slot == "2" and token2:
-        return token2, "2", "naver"
+        return token2, "2", label2
     elif token1:
-        return token1, "1", "gmail"
+        return token1, "1", label1
     elif token2:
-        return token2, "2", "naver"
+        return token2, "2", label2
     return "", "0", "none"
 
 
@@ -200,6 +303,36 @@ def _extract_text_from_content(content):
         if isinstance(block, dict) and block.get("type") in ("output_text", "text"):
             parts.append(block.get("text", ""))
     return "".join(parts)
+
+
+async def _iter_ndjson_lines(stream, timeout_sec, chunk_size=16384, max_line_size=4 * 1024 * 1024):
+    """StreamReader에서 NDJSON 라인을 안전하게 복원한다.
+
+    subprocess stdout에 매우 긴 단일 JSON line이 오면 readline()은 내부 limit(약 64KiB)에 걸려
+    `Separator is not found, and chunk exceed the limit`를 발생시킬 수 있다.
+    청크 기반으로 읽고 newline을 직접 복원해 Codex/Claude 모두 동일하게 처리한다.
+    """
+    buffer = bytearray()
+    while True:
+        chunk = await asyncio.wait_for(stream.read(chunk_size), timeout=timeout_sec)
+        if not chunk:
+            break
+        buffer.extend(chunk)
+        if len(buffer) > max_line_size:
+            raise RuntimeError("NDJSON line exceeds max size (%d bytes)" % max_line_size)
+
+        while True:
+            newline_idx = buffer.find(b"\n")
+            if newline_idx < 0:
+                break
+            raw = bytes(buffer[:newline_idx]).strip()
+            del buffer[:newline_idx + 1]
+            if raw:
+                yield raw
+
+    tail = bytes(buffer).strip()
+    if tail:
+        yield tail
 
 
 def _parse_codex_tool_event(event):
@@ -468,15 +601,10 @@ async def handle_stream(request):
             captured_cli_session_id = None
 
             try:
-                while True:
-                    line = await asyncio.wait_for(proc.stdout.readline(), timeout=600)
-                    if not line:
-                        break
-                    line_str = line.decode("utf-8", errors="replace").strip()
-                    if not line_str:
-                        continue
+                async for raw_line in _iter_ndjson_lines(proc.stdout, timeout_sec=600):
+                    line_to_write = raw_line
                     try:
-                        event = json.loads(line_str)
+                        event = json.loads(raw_line.decode("utf-8", errors="replace"))
                     except json.JSONDecodeError:
                         continue
                     evt_type = event.get("type", "")
@@ -485,7 +613,7 @@ async def handle_stream(request):
                         if _DIRECT_OAUTH_ENABLED:
                             event["claude_auth_mode"] = "direct"
                             event["oauth_slot"] = slot
-                            line = json.dumps(event).encode("utf-8")
+                            line_to_write = json.dumps(event).encode("utf-8")
                     elif evt_type == "result":
                         if not captured_cli_session_id:
                             captured_cli_session_id = event.get("session_id")
@@ -494,14 +622,22 @@ async def handle_stream(request):
                             if re.search(r"429|rate.limit|overloaded|credit", result_text, re.IGNORECASE):
                                 _last_429_slot = int(slot) if slot.isdigit() else 0
                                 logger.warning("429/rate_limit on slot=%s", slot)
-                    await response.write(line.strip() + b"\n")
+                    await response.write(line_to_write + b"\n")
+            except ConnectionResetError:
+                logger.info("CLI relay client disconnected: aads=%s resume=%s", aads_session_id[:8], is_resume)
             except asyncio.TimeoutError:
                 logger.error("CLI timeout (600s): aads=%s", aads_session_id[:8])
-                await response.write(json.dumps({"type": "error", "content": "CLI timeout (600s)"}).encode() + b"\n")
+                try:
+                    await response.write(json.dumps({"type": "error", "content": "CLI timeout (600s)"}).encode() + b"\n")
+                except ConnectionResetError:
+                    logger.info("CLI timeout write skipped: client already closed aads=%s", aads_session_id[:8])
                 proc.kill()
             except Exception as e:
                 logger.error("Stream error: %s", e)
-                await response.write(json.dumps({"type": "error", "content": str(e)}).encode() + b"\n")
+                try:
+                    await response.write(json.dumps({"type": "error", "content": str(e)}).encode() + b"\n")
+                except ConnectionResetError:
+                    logger.info("CLI stream error write skipped: client already closed aads=%s", aads_session_id[:8])
             finally:
                 if proc.returncode is None:
                     try:
@@ -512,7 +648,11 @@ async def handle_stream(request):
                 if proc.stderr:
                     stderr_bytes = await proc.stderr.read()
                     if stderr_bytes:
-                        logger.debug("CLI stderr: %s", stderr_bytes.decode("utf-8", errors="replace")[:500])
+                        stderr_text = stderr_bytes.decode("utf-8", errors="replace")
+                        if proc.returncode not in (None, 0):
+                            logger.warning("CLI stderr(exit=%s): %s", proc.returncode, stderr_text[:1200])
+                        else:
+                            logger.info("CLI stderr: %s", stderr_text[:500])
 
             if proc.returncode != 0:
                 logger.warning("CLI exited %s (slot=%s, resume=%s)", proc.returncode, slot, is_resume)
@@ -528,7 +668,10 @@ async def handle_stream(request):
                     _session_map[aads_session_id] = captured_cli_session_id
                     _save_session_map()
                     logger.info("Session mapped: aads=%s -> cli=%s", aads_session_id[:8], captured_cli_session_id[:8])
-            await response.write_eof()
+            try:
+                await response.write_eof()
+            except ConnectionResetError:
+                logger.info("CLI write_eof skipped: client already closed aads=%s", aads_session_id[:8])
             return response
     finally:
         try:
@@ -591,15 +734,9 @@ async def handle_codex_stream(request):
             full_text = ""
             input_tokens = output_tokens = 0
             try:
-                while True:
-                    line = await asyncio.wait_for(proc.stdout.readline(), timeout=300)
-                    if not line:
-                        break
-                    line_str = line.decode("utf-8", errors="replace").strip()
-                    if not line_str:
-                        continue
+                async for raw_line in _iter_ndjson_lines(proc.stdout, timeout_sec=300):
                     try:
-                        event = json.loads(line_str)
+                        event = json.loads(raw_line.decode("utf-8", errors="replace"))
                     except json.JSONDecodeError:
                         continue
                     evt_type = event.get("type", "")
@@ -649,13 +786,21 @@ async def handle_codex_stream(request):
                         usage = event.get("usage", {})
                         input_tokens += usage.get("input_tokens", 0)
                         output_tokens += usage.get("output_tokens", 0)
+            except ConnectionResetError:
+                logger.info("Codex relay client disconnected: session=%s", (session_id or "default")[:8])
             except asyncio.TimeoutError:
                 logger.error("Codex timeout (300s): model=%s", codex_model)
-                await response.write(json.dumps({"type": "error", "content": "Codex CLI timeout"}).encode() + b"\n")
+                try:
+                    await response.write(json.dumps({"type": "error", "content": "Codex CLI timeout"}).encode() + b"\n")
+                except ConnectionResetError:
+                    logger.info("Codex timeout write skipped: client already closed session=%s", (session_id or "default")[:8])
                 proc.kill()
             except Exception as e:
                 logger.error("Codex stream error: %s", e)
-                await response.write(json.dumps({"type": "error", "content": str(e)}).encode() + b"\n")
+                try:
+                    await response.write(json.dumps({"type": "error", "content": str(e)}).encode() + b"\n")
+                except ConnectionResetError:
+                    logger.info("Codex stream error write skipped: client already closed session=%s", (session_id or "default")[:8])
             finally:
                 if proc.returncode is None:
                     try:
@@ -671,11 +816,17 @@ async def handle_codex_stream(request):
                             logger.warning("Codex stderr: %s", stderr_text[:800])
                         else:
                             logger.info("Codex stderr: %s", stderr_text[:500])
-            await response.write(json.dumps({
-                "type": "result", "result": full_text,
-                "input_tokens": input_tokens, "output_tokens": output_tokens, "model": model,
-            }).encode() + b"\n")
-            await response.write_eof()
+            try:
+                await response.write(json.dumps({
+                    "type": "result", "result": full_text,
+                    "input_tokens": input_tokens, "output_tokens": output_tokens, "model": model,
+                }).encode() + b"\n")
+            except ConnectionResetError:
+                logger.info("Codex result write skipped: client already closed session=%s", (session_id or "default")[:8])
+            try:
+                await response.write_eof()
+            except ConnectionResetError:
+                logger.info("Codex write_eof skipped: client already closed session=%s", (session_id or "default")[:8])
             return response
     except Exception as e:
         logger.error("Codex handler error: %s", e)
@@ -711,6 +862,8 @@ async def handle_oauth_switch(request):
         return web.json_response({"error": str(e)}, status=500)
     global _last_429_slot
     _last_429_slot = 0
+    _DB_OAUTH_CACHE["rows"] = None
+    _DB_OAUTH_CACHE["ts"] = 0
     token, cur_slot, label = _pick_token()
     return web.json_response({"ok": True, "slot": cur_slot, "label": label, "token_available": bool(token)})
 

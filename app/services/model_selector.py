@@ -14,6 +14,7 @@ from decimal import Decimal
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 import time as _time_mod
+from datetime import datetime, timezone
 
 import httpx
 from anthropic import AsyncAnthropic, APIStatusError, APIConnectionError, RateLimitError
@@ -141,9 +142,11 @@ def _is_slot_available(slot: str) -> bool:
 # Agent SDK OAuth 토큰 — auth_provider 경유 (R-AUTH)
 from app.core.auth_provider import (
     get_oauth_tokens as _ap_get_tokens,
+    get_oauth_key_records_async as _ap_get_key_records_async,
     get_token_labels as _ap_get_labels,
     set_token_order as _ap_set_order,
 )
+from app.core.llm_key_provider import mark_key_rate_limited as _mark_key_rate_limited
 from app.services.oauth_usage_tracker import log_usage as _log_oauth_usage
 
 
@@ -155,6 +158,39 @@ def get_key_order() -> List[Dict[str, str]]:
 def set_key_order(primary: str) -> bool:
     """키 순서 변경. auth_provider 위임."""
     return _ap_set_order(primary)
+
+
+async def _get_claude_slot_records() -> Dict[str, Dict[str, Any]]:
+    """Anthropic DB priority를 relay slot 기준으로 재구성."""
+    try:
+        records = await _ap_get_key_records_async(include_rate_limited=True)
+    except Exception as e:
+        logger.warning("oauth_slot_records_failed: %s", e)
+        records = []
+    slot_records: Dict[str, Dict[str, Any]] = {}
+    for record in records:
+        slot = str(record.get("slot", "") or "")
+        if slot in ("1", "2") and slot not in slot_records:
+            slot_records[slot] = record
+    return slot_records
+
+
+def _is_db_slot_rate_limited(record: Optional[Dict[str, Any]]) -> bool:
+    if not record:
+        return False
+    until = record.get("rate_limited_until")
+    if not until:
+        return False
+    if isinstance(until, datetime):
+        target = until
+    else:
+        try:
+            target = datetime.fromisoformat(str(until).replace("Z", "+00:00"))
+        except Exception:
+            return False
+    if target.tzinfo is None:
+        target = target.replace(tzinfo=timezone.utc)
+    return target > datetime.now(timezone.utc)
 
 # AADS session_id → CLI session_id 매핑 (대화 이어가기용)
 _cli_session_map: Dict[str, str] = {}  # {aads_session_id: cli_session_id}
@@ -524,9 +560,14 @@ async def call_stream(
         + "</aads_model_identity>"
     )
 
-    # Claude 모델 → 계정 교차 폴백 (rate limit은 계정별)
-    # Opus(Naver)→Opus(Gmail)→Sonnet(Naver)→… (기본) / CLAUDE_RELAY_NAVER_FIRST=false 시 Gmail 먼저
-    _ACCOUNT_SLOTS = ["2", "1"] if _CLAUDE_RELAY_NAVER_FIRST else ["1", "2"]  # 2=Naver, 1=Gmail
+    # Claude 모델 → DB priority 기반 계정 교차 폴백 (rate limit은 계정별)
+    _slot_records = await _get_claude_slot_records()
+    _ACCOUNT_SLOTS = [slot for slot, _record in sorted(
+        _slot_records.items(),
+        key=lambda item: (int(item[1].get("priority", 9999)), item[0]),
+    )]
+    if not _ACCOUNT_SLOTS:
+        _ACCOUNT_SLOTS = ["2", "1"] if _CLAUDE_RELAY_NAVER_FIRST else ["1", "2"]
     _MODEL_DOWNGRADE = {
         "claude-opus": ["claude-opus"],
         "claude-sonnet": ["claude-sonnet"],
@@ -547,9 +588,16 @@ async def call_stream(
         _downgrade = _MODEL_DOWNGRADE.get(model, [model])
         _fb_seq = []  # [(model, slot), ...]
         # 쿨다운 스마트 정렬: 사용 가능 슬롯 먼저, 쿨다운 슬롯 뒤로
-        _avail = [s for s in _ACCOUNT_SLOTS if _is_slot_available(s)]
+        _avail = [
+            s for s in _ACCOUNT_SLOTS
+            if _is_slot_available(s) and not _is_db_slot_rate_limited(_slot_records.get(s))
+        ]
+        _db_limited = [
+            s for s in _ACCOUNT_SLOTS
+            if _is_slot_available(s) and _is_db_slot_rate_limited(_slot_records.get(s))
+        ]
         _cooled = [s for s in _ACCOUNT_SLOTS if not _is_slot_available(s)]
-        _smart_slots = _avail + _cooled  # 쿨다운 슬롯도 마지막 기회로 시도
+        _smart_slots = _avail + _db_limited + _cooled
 
         async def _stream_with_slots(_target_model: str) -> AsyncGenerator[Dict[str, Any], None]:
             for _si, _slot in enumerate(_smart_slots):
@@ -564,6 +612,9 @@ async def call_stream(
                         logger.warning(f"relay_err: {_target_model}/slot{_slot}[{_si}] — {_err_msg[:80]}")
                         if any(k in _err_msg.lower() for k in ("429", "rate", "limit", "overloaded", "quota")):
                             _mark_slot_cooldown(_slot)
+                            _slot_key = _slot_records.get(_slot, {}).get("key_name")
+                            if _slot_key:
+                                await _mark_key_rate_limited(_slot_key, seconds=_COOLDOWN_SECS)
                         break
                     yield event
                 if not _err:
@@ -606,6 +657,9 @@ async def call_stream(
                     # 429/한도/크레딧 오류 → 기존 쿨다운 등록
                     if any(k in _err_lower for k in ("429", "rate", "limit", "overloaded", "quota")):
                         _mark_slot_cooldown(_fs)
+                        _slot_key = _slot_records.get(_fs, {}).get("key_name")
+                        if _slot_key:
+                            await _mark_key_rate_limited(_slot_key, seconds=_COOLDOWN_SECS)
                     # CLI exit 반복 실패는 짧은 고정 쿨다운 적용
                     elif any(k in _err_lower for k in ("cli exited", "exit code", "exited with code")):
                         _mark_slot_cooldown(_fs, duration_override=60)

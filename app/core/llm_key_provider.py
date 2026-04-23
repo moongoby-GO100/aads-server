@@ -118,6 +118,62 @@ async def get_provider_keys(provider: str) -> list[str]:
     return values
 
 
+async def get_provider_key_records(provider: str, *, include_rate_limited: bool = True) -> list[dict]:
+    """provider별 활성 키 메타데이터 목록 (priority 순)."""
+    provider = normalize_provider(provider)
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, provider, key_name, encrypted_value, label, priority, is_active,
+                       rate_limited_until, last_used_at, last_verified_at, notes
+                FROM llm_api_keys
+                WHERE provider = $1
+                  AND is_active = TRUE
+                  AND (
+                    $2::boolean = TRUE
+                    OR rate_limited_until IS NULL
+                    OR rate_limited_until <= NOW()
+                  )
+                ORDER BY priority ASC, id ASC
+                """,
+                provider,
+                include_rate_limited,
+            )
+    except Exception:
+        logger.exception("llm_key_provider.get_provider_key_records.db_failed", extra={"provider": provider})
+        return []
+
+    records: list[dict] = []
+    for row in rows:
+        try:
+            value = decrypt_value(row["encrypted_value"])
+        except Exception:
+            logger.exception(
+                "llm_key_provider.get_provider_key_records.decrypt_failed",
+                extra={"provider": provider, "key_name": row["key_name"]},
+            )
+            continue
+        _set_cached_value(row["key_name"], value)
+        records.append(
+            {
+                "id": row["id"],
+                "provider": normalize_provider(row["provider"]),
+                "key_name": row["key_name"],
+                "label": row["label"] or row["key_name"],
+                "priority": row["priority"],
+                "value": value,
+                "prefix": value[:12] + "..." if value else "",
+                "rate_limited_until": row["rate_limited_until"],
+                "last_used_at": row["last_used_at"],
+                "last_verified_at": row["last_verified_at"],
+                "notes": row["notes"] or "",
+            }
+        )
+    return records
+
+
 async def mark_key_rate_limited(key_name: str, seconds: int = 300):
     """rate_limited_until = NOW() + seconds 업데이트."""
     pool = get_pool()
