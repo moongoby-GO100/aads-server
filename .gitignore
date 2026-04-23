@@ -43,3 +43,4 @@ Thumbs.db
 backup/direct_oauth_20260326/
 *.bak_aads
 .vault.key
+scripts/claude_relay_secret.txt

@@ -297,6 +297,35 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  aads-dashboard-green:
+    build:
+      context: ../aads-dashboard
+      dockerfile: Dockerfile
+    container_name: aads-dashboard-green
+    restart: "no"
+    ports:
+      - "3101:3101"
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=https://aads.newtalk.kr/api/v1
+      - PORT=3101
+      - TZ=Asia/Seoul
+    networks:
+      - aads_network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://$(hostname -i | awk '{print $1}'):3101/login || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    profiles:
+      - green
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   aads_postgres_data:
   aads_redis_data:

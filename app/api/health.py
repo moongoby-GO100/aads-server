@@ -1,12 +1,57 @@
 import os
+import secrets
 import shutil
 import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
 import httpx
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Request
 from app.services.sandbox import check_sandbox_health
 
 router = APIRouter()
+_RELAY_SECRET_PATHS = (
+    Path(os.getenv("CLAUDE_RELAY_SHARED_SECRET_FILE", "/app/scripts/claude_relay_secret.txt")),
+    Path("/root/aads/aads-server/scripts/claude_relay_secret.txt"),
+)
+
+
+def _load_relay_secret() -> str:
+    secret = (os.getenv("CLAUDE_RELAY_SHARED_SECRET") or "").strip()
+    if secret:
+        return secret
+    for path in _RELAY_SECRET_PATHS:
+        try:
+            value = path.read_text(encoding="utf-8").strip()
+        except Exception:
+            continue
+        if value:
+            return value
+    return ""
+
+
+def _is_rate_limited(until) -> bool:
+    if not until:
+        return False
+    if isinstance(until, datetime):
+        target = until
+    else:
+        try:
+            target = datetime.fromisoformat(str(until).replace("Z", "+00:00"))
+        except Exception:
+            return False
+    if target.tzinfo is None:
+        target = target.replace(tzinfo=timezone.utc)
+    return target > datetime.now(timezone.utc)
+
+
+def _require_relay_secret(request: Request) -> None:
+    expected = _load_relay_secret()
+    presented = (request.headers.get("x-claude-relay-secret") or "").strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="relay secret not configured")
+    if not presented or not secrets.compare_digest(presented, expected):
+        raise HTTPException(status_code=403, detail="invalid relay secret")
 
 
 def _mask_key(val: str) -> str:
@@ -97,20 +142,51 @@ async def api_key_status():
                 "account": relay_cli.get("oauth_slot", primary_slot),
                 "active": bool(primary.get("value")),
                 "label": relay_cli.get("oauth_label", primary_label),
+                "status": relay_cli.get("status", "unknown"),
+                "auth_mode": relay_cli.get("auth_mode", ""),
+                "token_available": relay_cli.get("token_available", bool(primary.get("value"))),
             },
             "db_keys": [
                 {
                     "label": record.get("label", ""),
+                    "key_name": record.get("key_name", ""),
                     "prefix": record.get("prefix", ""),
                     "priority": record.get("priority", 0),
                     "slot": record.get("slot", ""),
                     "rate_limited_until": record.get("rate_limited_until").isoformat() if record.get("rate_limited_until") else None,
+                    "is_rate_limited": _is_rate_limited(record.get("rate_limited_until")),
+                    "last_used_at": record.get("last_used_at").isoformat() if record.get("last_used_at") else None,
+                    "last_verified_at": record.get("last_verified_at").isoformat() if record.get("last_verified_at") else None,
+                    "notes": record.get("notes", ""),
+                    "is_current": str(record.get("slot", "")) == str(relay_cli.get("oauth_slot", primary_slot)),
                 }
                 for record in oauth_records
             ],
         },
         "google": {"active": bool(s.GOOGLE_API_KEY.get_secret_value() if s.GOOGLE_API_KEY else "")},
         "openai": {"active": bool(s.OPENAI_API_KEY.get_secret_value() if s.OPENAI_API_KEY else "")},
+    }
+
+
+@router.get("/health/claude-relay/oauth-state")
+async def claude_relay_oauth_state(request: Request):
+    """Claude relay 전용 OAuth 상태 조회. raw token 포함 — shared secret 필수."""
+    _require_relay_secret(request)
+    from app.core.auth_provider import get_oauth_key_records_async
+
+    records = await get_oauth_key_records_async(include_rate_limited=True)
+    return {
+        "keys": [
+            {
+                "label": record.get("label", ""),
+                "key_name": record.get("key_name", ""),
+                "priority": record.get("priority", 0),
+                "slot": record.get("slot", ""),
+                "value": record.get("value", ""),
+                "rate_limited_until": record.get("rate_limited_until").isoformat() if record.get("rate_limited_until") else None,
+            }
+            for record in records
+        ]
     }
 
 

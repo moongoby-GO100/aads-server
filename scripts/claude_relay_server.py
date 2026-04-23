@@ -18,12 +18,13 @@ import json
 import logging
 import os
 import re
-import subprocess
 import sys
 import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from aiohttp import web
 
@@ -52,6 +53,14 @@ _DIRECT_OAUTH_ENABLED = os.getenv("AADS_CLAUDE_DIRECT_OAUTH", "0") == "1"
 _ENV_OAUTH_FILE = Path(os.getenv("ENV_OAUTH_FILE", "/root/.genspark/.env.oauth"))
 _RELAY_HOME = Path("/tmp/.claude-relay")
 _CODEX_HOME_ROOT = Path(os.getenv("CODEX_HOME_ROOT", "/root/.codex-relay"))
+_AADS_API_OAUTH_STATE_URL = os.getenv(
+    "CLAUDE_RELAY_OAUTH_STATE_URL",
+    "http://127.0.0.1:8100/api/v1/health/claude-relay/oauth-state",
+)
+_RELAY_SECRET_FILE = Path(os.getenv(
+    "CLAUDE_RELAY_SHARED_SECRET_FILE",
+    "/root/aads/aads-server/scripts/claude_relay_secret.txt",
+))
 _DB_OAUTH_CACHE_TTL = int(os.getenv("CLAUDE_RELAY_DB_OAUTH_CACHE_TTL", "30"))
 _DB_OAUTH_CACHE = {"rows": None, "ts": 0}
 _last_429_slot = 0
@@ -69,6 +78,16 @@ _MODEL_MAP = {
 }
 
 
+def _load_relay_secret():
+    secret = (os.getenv("CLAUDE_RELAY_SHARED_SECRET") or "").strip()
+    if secret:
+        return secret
+    try:
+        return _RELAY_SECRET_FILE.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+
 def _read_db_oauth_rows():
     now = time.time()
     cached_rows = _DB_OAUTH_CACHE.get("rows")
@@ -76,51 +95,20 @@ def _read_db_oauth_rows():
     if cached_rows is not None and (now - cached_ts) < _DB_OAUTH_CACHE_TTL:
         return cached_rows
 
-    cmd = [
-        "docker", "exec", "aads-server", "sh", "-lc",
-        "python - <<'PY'\n"
-        "import asyncio, json\n"
-        "from app.core.db_pool import init_pool, close_pool\n"
-        "from app.core.auth_provider import get_oauth_key_records_async\n"
-        "async def main():\n"
-        "    await init_pool()\n"
-        "    rows = await get_oauth_key_records_async(include_rate_limited=True)\n"
-        "    payload = []\n"
-        "    for row in rows:\n"
-        "        payload.append({\n"
-        "            'label': row.get('label'),\n"
-        "            'key_name': row.get('key_name'),\n"
-        "            'priority': row.get('priority'),\n"
-        "            'slot': row.get('slot'),\n"
-        "            'value': row.get('value'),\n"
-        "            'rate_limited_until': row.get('rate_limited_until').isoformat() if row.get('rate_limited_until') else None,\n"
-        "        })\n"
-        "    print(json.dumps(payload, ensure_ascii=False))\n"
-        "    await close_pool()\n"
-        "asyncio.run(main())\n"
-        "PY",
-    ]
+    headers = {}
+    secret = _load_relay_secret()
+    if secret:
+        headers["X-Claude-Relay-Secret"] = secret
+    req = urllib_request.Request(_AADS_API_OAUTH_STATE_URL, headers=headers)
     try:
-        output = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
-        text = output.decode("utf-8", errors="replace").strip()
-        payload = text
-        if "\n" in text:
-            candidates = [line.strip() for line in text.splitlines() if line.strip()]
-            payload = next(
-                (
-                    line
-                    for line in candidates
-                    if (line.startswith("[") and line.endswith("]"))
-                    or (line.startswith("{") and line.endswith("}"))
-                ),
-                candidates[-1] if candidates else "",
-            )
-        rows = json.loads(payload or "[]")
+        with urllib_request.urlopen(req, timeout=3) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        rows = payload.get("keys", []) if isinstance(payload, dict) else []
         if isinstance(rows, list):
             _DB_OAUTH_CACHE["rows"] = rows
             _DB_OAUTH_CACHE["ts"] = now
             return rows
-    except Exception as e:
+    except (urllib_error.URLError, urllib_error.HTTPError, ValueError, json.JSONDecodeError) as e:
         logger.warning("DB OAuth read failed, using env fallback: %s", e)
     return None
 
