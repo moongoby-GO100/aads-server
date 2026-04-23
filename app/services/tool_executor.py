@@ -394,22 +394,17 @@ class ToolExecutor:
         file_path: str,
         change_summary: str,
         repo: str = "aads-server",
+        source_tool: str = "direct_edit",
     ) -> None:
-        """파일 수정 후 자동 후처리: hot-reload/빌드 + git commit + push + CHANGELOG + AI 리뷰.
+        """파일 수정 후 후처리: ledger 기록 + hot-reload + CHANGELOG + AI 리뷰.
 
-        repo:
-          - "aads-server"    — Python 백엔드 레포. Hot-Reload + AI 리뷰.
-          - "aads-dashboard" — Next.js 대시보드 레포. 무중단 빌드 트리거 (필요 시).
+        commit/push/deploy는 여기서 하지 않는다.
+        배포 전 preflight 또는 명시적 finalize 시점에만 반영한다.
         """
         import datetime, os
         now_kst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
         now_str_full = now_kst.strftime("%Y-%m-%d %H:%M:%S KST")
-
-        _repo_dir_map = {
-            "aads-server": "/root/aads/aads-server",
-            "aads-dashboard": "/root/aads/aads-dashboard",
-        }
-        _repo_dir = _repo_dir_map.get(repo, "/root/aads/aads-server")
+        session_id = await self._resolve_change_session_id(project)
 
         # 1-a) aads-server .py → Hot-Reload
         if project == "AADS" and repo == "aads-server" and file_path.endswith(".py"):
@@ -419,56 +414,24 @@ class ToolExecutor:
             except Exception as _hre:
                 logger.warning(f"hot_reload_trigger_skip: {_hre}")
 
-        # 1-b) aads-dashboard 빌드 필요 파일 → 무중단 빌드 트리거 (비동기)
-        if project == "AADS" and repo == "aads-dashboard":
-            _build_suffixes = (".ts", ".tsx", ".jsx", ".js", ".mjs", ".cjs",
-                               ".css", ".scss", ".sass", ".html")
-            _force_build_names = ("package.json", "package-lock.json", "pnpm-lock.yaml",
-                                  "next.config.js", "next.config.ts", "next.config.mjs",
-                                  "tsconfig.json", "tailwind.config.js", "tailwind.config.ts",
-                                  "postcss.config.js")
-            _basename = file_path.rsplit("/", 1)[-1]
-            _needs_build = file_path.endswith(_build_suffixes) or _basename in _force_build_names
-            if _needs_build:
-                try:
-                    await self._trigger_dashboard_build_async()
-                except Exception as _be:
-                    logger.warning(f"dashboard_build_hook_skip: {_be}")
-            else:
-                logger.info(f"dashboard_hook_no_build: file={file_path} (commit-only)")
-
-        # 2) git add + commit + push (AADS 프로젝트 두 레포, cross-process flock 보호)
-        # ⚠️ AADS workdir=/root 이므로 git 명령은 각 repo 경로로 cd 필수
-        if project == "AADS":
+        # 1-b) 세션별 변경 ledger 기록
+        if session_id:
             try:
-                import shlex as _shlex
-                from app.api.ceo_chat_tools import tool_run_remote_command
-                from app.core.git_lock import git_project_lock
-                commit_msg = f"Chat-Direct[{repo}]: {file_path} 수정"
-                _safe_path = _shlex.quote(file_path)
-                _safe_msg = _shlex.quote(commit_msg)
-                async with git_project_lock(f"{project}:{repo}", timeout=60):
-                    await tool_run_remote_command(
-                        project, f"cd {_repo_dir} && git add {_safe_path}"
-                    )
-                    commit_result = await tool_run_remote_command(
-                        project, f"cd {_repo_dir} && git commit -m {_safe_msg}"
-                    )
-                    logger.info(f"post_hook_commit: repo={repo} {str(commit_result)[:200]}")
-                    push_result = await tool_run_remote_command(
-                        project, f"cd {_repo_dir} && git push origin main"
-                    )
-                    if "[ERROR]" in str(push_result) or "error" in str(push_result).lower():
-                        push_result = await tool_run_remote_command(
-                            project, f"cd {_repo_dir} && git push origin master"
-                        )
-                    logger.info(f"post_hook_push: repo={repo} {str(push_result)[:200]}")
-            except TimeoutError as _te:
-                logger.warning(f"post_hook_git_lock_timeout: repo={repo} {_te}")
-            except Exception as _ge:
-                logger.warning(f"post_hook_git_skip: repo={repo} {_ge}")
+                from app.services.workspace_change_tracker import record_change
+                await record_change(
+                    session_id=session_id,
+                    project=project,
+                    repo=repo,
+                    file_path=file_path,
+                    change_summary=change_summary,
+                    source_tool=source_tool,
+                )
+            except Exception as _lre:
+                logger.warning(f"post_hook_ledger_skip: project={project} repo={repo} err={_lre}")
+        else:
+            logger.warning(f"post_hook_ledger_no_session: project={project} repo={repo} file={file_path}")
 
-        # 3) CHANGELOG 기록 (레포별로 분리된 파일)
+        # 2) CHANGELOG 기록 (레포별로 분리된 파일)
         if project == "AADS":
             try:
                 _cl_name = "CHANGELOG-direct-edit.md" if repo == "aads-server" else "CHANGELOG-dashboard-direct.md"
@@ -486,7 +449,7 @@ class ToolExecutor:
             except Exception as _cle:
                 logger.warning(f"post_hook_changelog_skip: repo={repo} {_cle}")
 
-        # 4) AI 코드 리뷰 — aads-server만 (dashboard는 빌드로 자동 검증)
+        # 3) AI 코드 리뷰 — aads-server만 (dashboard는 finalize/deploy에서 검증)
         if project == "AADS" and repo == "aads-server":
             try:
                 await self._run_ai_code_review_after_commit(
@@ -499,59 +462,14 @@ class ToolExecutor:
                 logger.warning(f"post_hook_ai_review_skip: {_re}")
 
         # ── GO100 프로젝트 (서버211, /root/kis-autotrade-v4 원격 레포) ──
-        # AADS와 KIS는 동일 레포를 공유하므로 파일 단위 git add로 스코프 제한.
-        # 순서: git add(특정 파일만) → commit → push → systemctl restart go100 → CHANGELOG → AI 리뷰
+        # GO100은 ledger만 기록하고, commit/push/restart는 finalize/preflight에서만 수행
         if project == "GO100":
             try:
-                import shlex as _shlex
-                from app.api.ceo_chat_tools import tool_run_remote_command
-                from app.core.git_lock import git_project_lock
-
-                commit_msg = f"Chat-Direct[GO100]: {file_path} 수정"
-                _safe_path = _shlex.quote(file_path)
-                _safe_msg = _shlex.quote(commit_msg)
-
-                # 4-1) git add/commit/push (프로젝트 락으로 KIS와 경합 방지)
-                push_ok = False
-                async with git_project_lock("GO100:kis-autotrade-v4", timeout=60):
-                    await tool_run_remote_command(
-                        "GO100", f"git add {_safe_path}"
-                    )
-                    commit_result = await tool_run_remote_command(
-                        "GO100", f"git commit -m {_safe_msg}"
-                    )
-                    logger.info(f"post_hook_commit: project=GO100 {str(commit_result)[:200]}")
-                    push_result = await tool_run_remote_command(
-                        "GO100", "git push origin main"
-                    )
-                    _push_txt = str(push_result)
-                    if "[ERROR]" in _push_txt or "error" in _push_txt.lower() or "rejected" in _push_txt.lower():
-                        # master 폴백
-                        push_result = await tool_run_remote_command(
-                            "GO100", "git push origin master"
-                        )
-                        _push_txt = str(push_result)
-                    if "[ERROR]" not in _push_txt and "rejected" not in _push_txt.lower():
-                        push_ok = True
-                    logger.info(f"post_hook_push: project=GO100 ok={push_ok} {_push_txt[:200]}")
-
-                # 4-2) systemctl restart go100 (push 성공 시에만 재기동)
-                if push_ok:
-                    try:
-                        restart_result = await tool_run_remote_command(
-                            "GO100", "systemctl restart go100"
-                        )
-                        logger.info(f"post_hook_restart: project=GO100 {str(restart_result)[:200]}")
-                    except Exception as _re:
-                        logger.warning(f"post_hook_restart_skip: project=GO100 {_re}")
-                else:
-                    logger.warning("post_hook_restart_skip: project=GO100 push_failed")
-
-                # 4-3) CHANGELOG (AADS 컨테이너 로컬에 프로젝트별 분리 저장)
+                # 3-1) CHANGELOG (AADS 컨테이너 로컬에 프로젝트별 분리 저장)
                 try:
                     cl_full = "/app/docs/CHANGELOG-go100-direct.md"
                     os.makedirs(os.path.dirname(cl_full), exist_ok=True)
-                    entry = f"\n## [{now_str_full}] [GO100] {file_path}\n- Chat-Direct 수정: {change_summary}\n- restart: {'ok' if push_ok else 'skipped(push_failed)'}\n"
+                    entry = f"\n## [{now_str_full}] [GO100] {file_path}\n- Chat-Direct 수정: {change_summary}\n- finalize: pending\n"
                     try:
                         with open(cl_full, "r", encoding="utf-8") as _f:
                             existing = _f.read()
@@ -563,20 +481,17 @@ class ToolExecutor:
                 except Exception as _cle:
                     logger.warning(f"post_hook_changelog_skip: project=GO100 {_cle}")
 
-                # 4-4) AI 코드 리뷰 (push 성공 시에만, GO100 원격 diff)
-                if push_ok:
-                    try:
-                        await self._run_ai_code_review_go100(
-                            file_path=file_path,
-                            change_summary=change_summary,
-                            now_str_full=now_str_full,
-                        )
-                    except Exception as _re:
-                        logger.warning(f"post_hook_ai_review_skip: project=GO100 {_re}")
-            except TimeoutError as _te:
-                logger.warning(f"post_hook_git_lock_timeout: project=GO100 {_te}")
+                # 3-2) AI 코드 리뷰 (working tree diff 기준)
+                try:
+                    await self._run_ai_code_review_go100(
+                        file_path=file_path,
+                        change_summary=change_summary,
+                        now_str_full=now_str_full,
+                    )
+                except Exception as _re:
+                    logger.warning(f"post_hook_ai_review_skip: project=GO100 {_re}")
             except Exception as _ge:
-                logger.warning(f"post_hook_git_skip: project=GO100 {_ge}")
+                logger.warning(f"post_hook_go100_skip: project=GO100 {_ge}")
 
     async def _run_ai_code_review_after_commit(
         self,
@@ -585,7 +500,7 @@ class ToolExecutor:
         change_summary: str,
         now_str_full: str,
     ) -> None:
-        """commit 완료 후 AI 코드 리뷰 실행 및 결과를 채팅 세션에 저장.
+        """working tree diff 기준 AI 코드 리뷰 실행 및 결과를 채팅 세션에 저장.
 
         APPROVE → 로그만 기록.
         REQUEST_CHANGES / FLAG → 채팅 세션에 경고 메시지 저장.
@@ -593,7 +508,7 @@ class ToolExecutor:
         """
         import uuid as _uuid
 
-        # git diff HEAD~1 HEAD -- <file> 로 변경 내용 획득
+        # git diff -- <file> 로 working tree 변경 내용 획득
         # file_path를 git 레포 루트 기준 상대경로로 정규화 (절대경로 전달 시 대비)
         _rel_path = file_path
         for _prefix in ("/root/aads/aads-server/", "/app/app/", "/app/"):
@@ -604,7 +519,7 @@ class ToolExecutor:
             from app.api.ceo_chat_tools import tool_run_remote_command
             diff_result = await tool_run_remote_command(
                 project,
-                f"cd /root/aads/aads-server && git diff HEAD~1 HEAD -- {_rel_path}",
+                f"cd /root/aads/aads-server && git diff -- {_rel_path}",
             )
             diff_text = diff_result if isinstance(diff_result, str) else str(diff_result)
         except Exception as _de:
@@ -662,7 +577,7 @@ class ToolExecutor:
             f"점수: {score:.2f} / 1.00  |  시각: {now_str_full}\n\n"
             f"**요약:** {summary}\n\n"
             f"**발견된 이슈:**\n{issues_text}\n\n"
-            f"> 이미 commit/push는 완료되었습니다. 필요 시 수동으로 수정하세요."
+            f"> 아직 finalize(commit/push) 전 상태입니다. 필요 시 수정 후 배포 전에 finalize가 수행됩니다."
         )
 
         try:
@@ -697,7 +612,7 @@ class ToolExecutor:
         change_summary: str,
         now_str_full: str,
     ) -> None:
-        """GO100 원격 레포(/root/kis-autotrade-v4) commit 완료 후 AI 코드 리뷰.
+        """GO100 원격 레포 working tree diff 기준 AI 코드 리뷰.
 
         run_remote_command(project='GO100')은 이미 해당 워크디렉터리에서 실행되므로
         파일 경로는 상대경로 그대로 사용한다.
@@ -707,7 +622,7 @@ class ToolExecutor:
             from app.api.ceo_chat_tools import tool_run_remote_command
             diff_result = await tool_run_remote_command(
                 "GO100",
-                f"git diff HEAD~1 HEAD -- {file_path}",
+                f"git diff -- {file_path}",
             )
             diff_text = diff_result if isinstance(diff_result, str) else str(diff_result)
         except Exception as _de:
@@ -764,7 +679,7 @@ class ToolExecutor:
             f"점수: {score:.2f} / 1.00  |  시각: {now_str_full}\n\n"
             f"**요약:** {summary or '(요약 없음)'}\n\n"
             f"**발견된 이슈:**\n{issues_text}\n\n"
-            f"> 이미 commit/push/restart는 완료되었습니다. 필요 시 수동으로 수정하세요."
+            f"> 아직 finalize(commit/push/restart) 전 상태입니다. 필요 시 수정 후 배포 전에 finalize가 수행됩니다."
         )
         try:
             from app.services.db import get_db_pool
@@ -818,9 +733,16 @@ class ToolExecutor:
         try:
             from app.api.ceo_chat_tools import tool_write_remote_file
             result = await tool_write_remote_file(project, file_path, content, backup)
-            # 자동 후처리: hot-reload + git commit + push + CHANGELOG (잠금 범위 내 포함)
+            # 자동 후처리: ledger 기록 + hot-reload + CHANGELOG (잠금 범위 내 포함)
             try:
-                await self._post_file_modify_hook(project, file_path, f"write: {file_path}")
+                repo = self._default_repo_for_project(project, file_path)
+                await self._post_file_modify_hook(
+                    project,
+                    file_path,
+                    f"write: {file_path}",
+                    repo=repo,
+                    source_tool="write_remote_file",
+                )
             except Exception as _phe:
                 logger.warning(f"post_file_modify_hook_skip: {_phe}")
             return result
@@ -859,10 +781,17 @@ class ToolExecutor:
         try:
             from app.api.ceo_chat_tools import tool_patch_remote_file
             result = await tool_patch_remote_file(project, file_path, old_string, new_string)
-            # 자동 후처리: hot-reload + git commit + push + CHANGELOG (잠금 범위 내 포함)
+            # 자동 후처리: ledger 기록 + hot-reload + CHANGELOG (잠금 범위 내 포함)
             try:
                 summary = f"patch: {str(old_string)[:40]}→{str(new_string)[:40]}"
-                await self._post_file_modify_hook(project, file_path, summary)
+                repo = self._default_repo_for_project(project, file_path)
+                await self._post_file_modify_hook(
+                    project,
+                    file_path,
+                    summary,
+                    repo=repo,
+                    source_tool="patch_remote_file",
+                )
             except Exception as _phe:
                 logger.warning(f"post_file_modify_hook_skip: {_phe}")
             return result
@@ -951,28 +880,120 @@ class ToolExecutor:
             logger.warning(f"git_status_snapshot_skip: project=GO100 err={_e}")
             return set()
 
-    async def _trigger_dashboard_build_async(self) -> None:
-        """대시보드 재빌드를 백그라운드로 트리거.
+    def _infer_aads_repo(self, file_path: str, repo_hint: str = "") -> str:
+        """파일 경로에서 AADS 레포 추정."""
+        if repo_hint in {"aads-server", "aads-dashboard"}:
+            return repo_hint
+        path = (file_path or "").strip()
+        if path.startswith("src/") or path.startswith("public/"):
+            return "aads-dashboard"
+        dashboard_markers = (
+            "/root/aads/aads-dashboard/",
+            "/aads-dashboard/",
+            "next.config.",
+            "tailwind.config.",
+            "postcss.config.",
+            "package.json",
+            "package-lock.json",
+            "pnpm-lock.yaml",
+            "tsconfig.json",
+        )
+        if any(marker in path for marker in dashboard_markers):
+            return "aads-dashboard"
+        return "aads-server"
 
-        - 래퍼 스크립트(`scripts/trigger-dashboard-build.sh`)가 nohup + 중복체크 + 쿨다운 처리
-        - 호출자는 즉시 반환(10초 타임아웃 회피)
-        """
-        import time
-        now = time.monotonic()
-        last = getattr(self, "_last_dashboard_build_ts", 0.0)
-        if now - last < 30:
-            logger.info(f"dashboard_build_cooldown_inproc: skipped ({int(now-last)}s ago)")
-            return
-        self._last_dashboard_build_ts = now
+    def _default_repo_for_project(self, project: str, file_path: str = "", repo_hint: str = "") -> str:
+        if project == "AADS":
+            return self._infer_aads_repo(file_path, repo_hint=repo_hint)
+        if project in {"GO100", "KIS"}:
+            return "kis-autotrade-v4"
+        if project == "SF":
+            return "shortflow"
+        if project == "NTV2":
+            return "newtalk-v2"
+        return (repo_hint or project.lower() or "default")
+
+    async def _resolve_change_session_id(self, project: str) -> str:
+        """변경 ledger 기록용 채팅 세션 ID 확보."""
+        session_id = current_chat_session_id.get("")
+        if session_id:
+            return session_id
         try:
-            from app.api.ceo_chat_tools import tool_run_remote_command
-            result = await tool_run_remote_command(
-                "AADS",
-                "bash /root/aads/aads-server/scripts/trigger-dashboard-build.sh"
+            from app.services.pipeline_runner_service import _find_recent_session
+            return await _find_recent_session(project) or ""
+        except Exception:
+            return ""
+
+    def _looks_like_deploy_command(self, project: str, command: str) -> bool:
+        """배포/재기동 전 finalize가 필요한 명령 판별."""
+        cmd = (command or "").strip().lower()
+        deploy_markers = (
+            "deploy.sh",
+            "docker compose up",
+            "docker-compose up",
+            "docker build",
+            "kubectl rollout",
+            "helm upgrade",
+        )
+        if any(marker in cmd for marker in deploy_markers):
+            return True
+        if project == "GO100" and (
+            "systemctl restart go100" in cmd
+            or "systemctl restart go100-frontend" in cmd
+        ):
+            return True
+        if project == "KIS" and (
+            "systemctl restart kis-v41-api" in cmd
+            or "systemctl restart kis-webapp-api" in cmd
+        ):
+            return True
+        return False
+
+    async def _preflight_finalize_for_command(self, project: str, command: str) -> dict[str, Any]:
+        """배포/재기동 전에 현재 세션의 pending 변경을 finalize."""
+        session_id = current_chat_session_id.get("")
+        if not session_id or not self._looks_like_deploy_command(project, command):
+            return {"triggered": False, "session_id": session_id}
+        try:
+            from app.services.workspace_change_tracker import has_pending_changes, finalize_session_changes
+
+            if not await has_pending_changes(session_id=session_id, project=project):
+                return {"triggered": False, "session_id": session_id, "pending": 0}
+
+            result = await finalize_session_changes(
+                session_id=session_id,
+                project=project,
+                reason=f"preflight:{command[:120]}",
             )
-            logger.info(f"dashboard_build_trigger: {str(result)[:300]}")
-        except Exception as _e:
-            logger.warning(f"dashboard_build_trigger_err: {_e}")
+            result["triggered"] = True
+            return result
+        except Exception as exc:
+            return {
+                "triggered": True,
+                "ok": False,
+                "session_id": session_id,
+                "error": str(exc),
+                "groups": [],
+            }
+
+    def _remote_command_succeeded(self, result: Any) -> bool:
+        """원격 명령 결과의 명백한 실패 문자열을 best-effort로 판별."""
+        if isinstance(result, dict):
+            return not bool(result.get("error"))
+        text = str(result or "").strip()
+        if not text:
+            return True
+        lowered = text.lower()
+        failure_markers = (
+            "fatal:",
+            "error:",
+            "permission denied",
+            "command not found",
+            "no such file or directory",
+            "traceback (most recent call last)",
+            "[stderr] error:",
+        )
+        return not any(marker in lowered for marker in failure_markers)
 
     async def _run_remote_command(self, inp: Dict[str, Any]) -> Any:
         """원격 서버 명령 실행 (화이트리스트 기반). Yellow 등급.
@@ -991,13 +1012,23 @@ class ToolExecutor:
         # git diff 기반 Hook 활성화 조건:
         # - AADS: aads-server / aads-dashboard 레포 자동 감시
         # - GO100: /root/kis-autotrade-v4 원격 레포 감시 (서버211)
-        # - git 명령 자체는 제외 (Hook이 내부에서 git add/commit/push 수행 → 자기참조 방지)
-        # - systemctl restart go100 도 제외 (Hook이 내부에서 재기동 → 자기참조 방지)
+        # - git 명령 자체는 제외 (사용자 수동 git 경로는 그대로 유지)
+        # - systemctl restart go100 도 제외 (변경 감지 noise 방지)
         _cmd_stripped = command.strip()
         _is_git_cmd = _cmd_stripped.startswith("git ") or _cmd_stripped == "git"
         _is_restart_cmd = "systemctl restart go100" in _cmd_stripped
         _enable_hook_aads = (project == "AADS") and (not _is_git_cmd)
         _enable_hook_go100 = (project == "GO100") and (not _is_git_cmd) and (not _is_restart_cmd)
+
+        preflight = await self._preflight_finalize_for_command(project, _cmd_stripped)
+        if preflight.get("triggered") and not preflight.get("ok", True):
+            logger.warning(f"run_cmd_preflight_finalize_failed: project={project} detail={str(preflight)[:500]}")
+            return {
+                "error": "preflight_finalize_failed",
+                "detail": preflight,
+            }
+        if preflight.get("triggered") and preflight.get("ok", False):
+            logger.info(f"run_cmd_preflight_finalize_ok: project={project} groups={len(preflight.get('groups', []))}")
 
         before_server: set[str] = set()
         before_dashboard: set[str] = set()
@@ -1038,12 +1069,24 @@ class ToolExecutor:
                 for file_path in _filter(after_server - before_server):
                     summary = f"run_remote_command: {_cmd_stripped[:80]}"
                     logger.info(f"run_cmd_hook_fire: repo=server file={file_path} cmd={_cmd_stripped[:60]}")
-                    await self._post_file_modify_hook(project, file_path, summary, repo="aads-server")
+                    await self._post_file_modify_hook(
+                        project,
+                        file_path,
+                        summary,
+                        repo="aads-server",
+                        source_tool="run_remote_command",
+                    )
 
                 for file_path in _filter(after_dashboard - before_dashboard):
                     summary = f"run_remote_command: {_cmd_stripped[:80]}"
                     logger.info(f"run_cmd_hook_fire: repo=dashboard file={file_path} cmd={_cmd_stripped[:60]}")
-                    await self._post_file_modify_hook(project, file_path, summary, repo="aads-dashboard")
+                    await self._post_file_modify_hook(
+                        project,
+                        file_path,
+                        summary,
+                        repo="aads-dashboard",
+                        source_tool="run_remote_command",
+                    )
             except Exception as _he:
                 logger.warning(f"run_cmd_hook_skip: project=AADS {_he}")
 
@@ -1054,9 +1097,34 @@ class ToolExecutor:
                 for file_path in _filter(after_go100 - before_go100):
                     summary = f"run_remote_command: {_cmd_stripped[:80]}"
                     logger.info(f"run_cmd_hook_fire: project=GO100 file={file_path} cmd={_cmd_stripped[:60]}")
-                    await self._post_file_modify_hook("GO100", file_path, summary, repo="kis-autotrade-v4")
+                    await self._post_file_modify_hook(
+                        "GO100",
+                        file_path,
+                        summary,
+                        repo="kis-autotrade-v4",
+                        source_tool="run_remote_command",
+                    )
             except Exception as _he:
                 logger.warning(f"run_cmd_hook_skip: project=GO100 {_he}")
+
+        if preflight.get("triggered") and preflight.get("ok", False) and self._remote_command_succeeded(result):
+            try:
+                from app.services.workspace_change_tracker import mark_session_changes_deployed
+
+                deploy_mark = await mark_session_changes_deployed(
+                    session_id=preflight.get("session_id") or "",
+                    project=project,
+                    deploy_summary=_cmd_stripped[:120],
+                )
+                if deploy_mark.get("updated"):
+                    logger.info(
+                        "run_cmd_mark_deployed_ok: project=%s session=%s updated=%s",
+                        project,
+                        preflight.get("session_id"),
+                        deploy_mark.get("updated"),
+                    )
+            except Exception as _de:
+                logger.warning(f"run_cmd_mark_deployed_skip: project={project} err={_de}")
 
         return result
 

@@ -157,6 +157,13 @@ class BridgeLogRecord(BaseModel):
     raw_length: int = 0
 
 
+class WorkspaceChangeFinalizeRequest(BaseModel):
+    session_id: str
+    project: Optional[str] = None
+    repo: Optional[str] = None
+    reason: str = "manual"
+
+
 # ─── Directive Lifecycle ──────────────────────────────────────────────────────
 
 @router.post("/ops/directive-lifecycle")
@@ -391,6 +398,45 @@ async def list_commits(
         finally:
             await conn.close()
         return {"items": [dict(r) for r in rows], "count": len(rows)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/ops/workspace-changes")
+async def list_workspace_changes(
+    session_id: str,
+    project: Optional[str] = None,
+    repo: Optional[str] = None,
+    status: Optional[str] = None,
+):
+    """세션별 workspace 변경 ledger 조회."""
+    try:
+        from app.services.workspace_change_tracker import list_changes
+
+        statuses = [status] if status else None
+        items = await list_changes(
+            session_id=session_id,
+            project=project,
+            repo=repo,
+            statuses=statuses,
+        )
+        return {"items": items, "count": len(items)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/ops/workspace-changes/finalize")
+async def finalize_workspace_changes(req: WorkspaceChangeFinalizeRequest):
+    """세션의 pending 변경을 finalize(commit/push)."""
+    try:
+        from app.services.workspace_change_tracker import finalize_session_changes
+
+        return await finalize_session_changes(
+            session_id=req.session_id,
+            project=req.project,
+            repo=req.repo,
+            reason=req.reason,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

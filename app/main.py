@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.logging_config import configure_logging
 
-from app.api import health, projects, checkpoints, stream, auth, context, chat, visual_qa, mobile_qa, memory
+from app.api import health, projects, checkpoints, stream, auth, context, chat, visual_qa, mobile_qa, memory, terminal
 from app.api.channels import router as channels_router
 from app.api.managers import router as managers_router
 from app.api.conversations import router as conversations_router
@@ -557,6 +557,39 @@ async def lifespan(app: FastAPI):
         logger.info("wol_network_table_ensured")
     except Exception as e:
         logger.warning("wol_network_table_ensure_failed", error=str(e))
+
+    # Workspace change ledger 테이블 사전 생성
+    try:
+        from app.services.workspace_change_tracker import ensure_workspace_change_table
+        await ensure_workspace_change_table()
+        logger.info("workspace_change_ledger_ensured")
+    except Exception as e:
+        logger.warning("workspace_change_ledger_ensure_failed", error=str(e))
+
+    # AADS-189B: 서버 시작 시 레지스트리 정합성 보정 + 모델 자동반영 재동기화
+    try:
+        from app.services.model_registry import sync_model_registry
+
+        registry_sync = await sync_model_registry(triggered_by="startup", reason="startup_bootstrap")
+        if registry_sync.get("ok"):
+            logger.info(
+                "model_registry_startup_synced",
+                models_synced=registry_sync.get("models_synced", 0),
+                normalized_providers=registry_sync.get("normalized_providers", {}),
+                review_required_providers=registry_sync.get("review_required_providers", []),
+            )
+            if registry_sync.get("review_required_providers"):
+                logger.warning(
+                    "model_registry_review_required",
+                    providers=registry_sync.get("review_required_providers", []),
+                )
+        else:
+            logger.warning(
+                "model_registry_startup_sync_failed",
+                error=registry_sync.get("error", "unknown"),
+            )
+    except Exception as e:
+        logger.warning("model_registry_startup_sync_failed", error=str(e))
 
     # 서버 시작 시 stale placeholder → 내용 있으면 보존(promote), 없으면 삭제
     try:
@@ -1225,6 +1258,7 @@ app.include_router(llm_keys_router, prefix="/api/v1", tags=["llm-keys"])
 app.include_router(llm_models_router, prefix="/api/v1", tags=["llm-models"])
 app.include_router(braming_router)
 app.include_router(project_docs_router, prefix="/api/v1", tags=["project-docs"])
+app.include_router(terminal.router, prefix="/api/v1", tags=["terminal"])
 
 # 루트 /health — 모니터링 도구 호환 (인증 면제)
 from fastapi.responses import JSONResponse as _JSONResponse
