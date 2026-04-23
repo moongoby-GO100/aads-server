@@ -2,7 +2,9 @@
 AADS Tools MCP Bridge — stdio transport (low-level MCP Server).
 Claude Code CLI에서 MCP 서버로 실행되어 AADS의 55개 도구를 Claude에게 노출.
 
-실행: docker exec -i aads-server python -m mcp_servers.aads_tools_bridge
+실행:
+  - docker exec -i aads-server python3 -m mcp_servers.aads_tools_bridge
+  - python3.11 -m mcp_servers.aads_tools_bridge
 
 환경변수:
   AADS_SESSION_ID: 현재 채팅 세션 ID (도구 실행 시 전달)
@@ -15,6 +17,7 @@ import json
 import logging
 import os
 import sys
+from pathlib import Path
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -23,9 +26,12 @@ import mcp.types as types
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 logger = logging.getLogger("aads_tools_bridge")
 
-# sys.path에 /app 추가 (컨테이너 내 app 모듈 접근)
-if "/app" not in sys.path:
-    sys.path.insert(0, "/app")
+# 컨테이너(`/app`)와 호스트 직접 실행(`python3.11 -m ...`)을 모두 지원한다.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+for _candidate in (Path("/app"), _REPO_ROOT):
+    _candidate_str = str(_candidate)
+    if _candidate.exists() and _candidate_str not in sys.path:
+        sys.path.insert(0, _candidate_str)
 
 server = Server("aads-tools")
 

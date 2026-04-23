@@ -6,7 +6,7 @@
         "exec", "-i",
         "-e", "AADS_SESSION_ID=",
         "aads-server",
-        "python", "-m", "mcp_servers.aads_tools_bridge"
+        "python3", "-m", "mcp_servers.aads_tools_bridge"
       ]
     }
   }

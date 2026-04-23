@@ -2560,10 +2560,14 @@ class ToolExecutor:
         if not _session_id:
             return {"error": "활성 세션을 찾을 수 없습니다. session_id를 명시하세요."}
         import httpx
+        from app.services.pipeline_runner_client import (
+            INTERNAL_PIPELINE_HEADERS,
+            get_pipeline_runner_api_url,
+        )
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                "http://localhost:8080/api/v1/pipeline/jobs",
-                headers=self._INTERNAL_HEADERS,
+                get_pipeline_runner_api_url("jobs"),
+                headers=INTERNAL_PIPELINE_HEADERS,
                 json={
                     "project": inp.get("project", "AADS"),
                     "instruction": inp.get("instruction", ""),
@@ -2590,10 +2594,14 @@ class ToolExecutor:
         if not _session_id:
             return {"error": "활성 세션을 찾을 수 없습니다. session_id를 명시하세요."}
         import httpx
+        from app.services.pipeline_runner_client import (
+            INTERNAL_PIPELINE_HEADERS,
+            get_pipeline_runner_api_url,
+        )
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                "http://localhost:8080/api/v1/pipeline/jobs/batch",
-                headers=self._INTERNAL_HEADERS,
+                get_pipeline_runner_api_url("jobs/batch"),
+                headers=INTERNAL_PIPELINE_HEADERS,
                 json={
                     "project": inp.get("project", "AADS"),
                     "session_id": _session_id,
@@ -2608,25 +2616,42 @@ class ToolExecutor:
     async def _pipeline_runner_status(self, inp: Dict[str, Any]) -> Any:
         """Pipeline Runner 작업 상태 조회."""
         import httpx
+        from app.services.pipeline_runner_client import (
+            INTERNAL_PIPELINE_HEADERS,
+            get_pipeline_runner_api_url,
+        )
         job_id = inp.get("job_id", "")
         async with httpx.AsyncClient() as client:
             if job_id:
-                resp = await client.get(f"http://localhost:8080/api/v1/pipeline/jobs/{job_id}", headers=self._INTERNAL_HEADERS, timeout=10)
+                resp = await client.get(
+                    get_pipeline_runner_api_url(f"jobs/{job_id}"),
+                    headers=INTERNAL_PIPELINE_HEADERS,
+                    timeout=10,
+                )
             else:
                 params = {"limit": "10"}
                 if inp.get("status"):
                     params["status"] = inp["status"]
-                resp = await client.get("http://localhost:8080/api/v1/pipeline/jobs", headers=self._INTERNAL_HEADERS, params=params, timeout=10)
+                resp = await client.get(
+                    get_pipeline_runner_api_url("jobs"),
+                    headers=INTERNAL_PIPELINE_HEADERS,
+                    params=params,
+                    timeout=10,
+                )
             return resp.json()
 
     async def _pipeline_runner_approve(self, inp: Dict[str, Any]) -> Any:
         """Pipeline Runner 작업 승인/거부."""
         import httpx
+        from app.services.pipeline_runner_client import (
+            INTERNAL_PIPELINE_HEADERS,
+            get_pipeline_runner_api_url,
+        )
         job_id = inp.get("job_id", "")
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                f"http://localhost:8080/api/v1/pipeline/jobs/{job_id}/approve",
-                headers=self._INTERNAL_HEADERS,
+                get_pipeline_runner_api_url(f"jobs/{job_id}/approve"),
+                headers=INTERNAL_PIPELINE_HEADERS,
                 json={"action": inp.get("action", "approve"), "feedback": inp.get("feedback", "")},
                 timeout=10,
             )

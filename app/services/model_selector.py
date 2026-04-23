@@ -1468,7 +1468,7 @@ async def _stream_cli_relay(
                         return
 
                     # _map_cli_event 재사용하여 NDJSON → AADS 이벤트 변환
-                    mapped = _map_cli_event(event)
+                    mapped = _map_cli_event(event, session_id=session_id)
                     if mapped is None:
                         # init 이벤트에서 session_id 캡처
                         evt_type = event.get("type", "")
@@ -1492,6 +1492,14 @@ async def _stream_cli_relay(
                         if evt_type == "tool_result" and not aads_evt.get("tool_name"):
                             tid = aads_evt.get("tool_use_id", "")
                             aads_evt["tool_name"] = _tool_id_to_name.get(tid, "")
+                        if evt_type == "tool_result" and aads_evt.get("is_error"):
+                            logger.warning(
+                                "cli_relay_tool_error: session=%s tool=%s error_type=%s content=%s",
+                                (session_id or "default")[:8],
+                                aads_evt.get("tool_name", ""),
+                                aads_evt.get("error_type", "tool_error"),
+                                str(aads_evt.get("raw_error") or aads_evt.get("content", ""))[:240],
+                            )
 
                         # delta 텍스트 누적 (에러 패턴 검사는 result.is_error로 대체)
                         if evt_type == "delta":
@@ -1580,12 +1588,33 @@ async def _stream_codex_relay(
                             "tool_input": event.get("tool_input", {}),
                         }
                     elif evt_type == "tool_result":
-                        yield {
+                        tool_event = {
                             "type": "tool_result",
                             "tool_name": event.get("tool_name", ""),
                             "tool_use_id": event.get("tool_use_id", ""),
                             "content": event.get("content", ""),
+                            "is_error": bool(event.get("is_error")),
+                            "error_type": event.get("error_type", ""),
+                            "cancel_scope": event.get("cancel_scope", ""),
+                            "raw_error": event.get("raw_error", "")[:500],
                         }
+                        if not tool_event.get("error_type"):
+                            tool_event.update(_classify_relay_tool_result(
+                                tool_event.get("content", ""),
+                                session_id=session_id,
+                                relay_name="codex",
+                                tool_name=tool_event.get("tool_name", ""),
+                                raw_error=tool_event.get("raw_error", ""),
+                            ))
+                        if tool_event.get("is_error"):
+                            logger.warning(
+                                "codex_relay_tool_error: session=%s tool=%s error_type=%s content=%s",
+                                (session_id or "default")[:8],
+                                tool_event.get("tool_name", ""),
+                                tool_event.get("error_type", "tool_error"),
+                                str(tool_event.get("raw_error") or tool_event.get("content", ""))[:240],
+                            )
+                        yield tool_event
                     elif evt_type == "error":
                         yield {"type": "error", "content": event.get("content", "Codex error")}
                         return
@@ -2002,7 +2031,35 @@ def _format_messages_for_llm(
     return blocks
 
 
-def _map_cli_event(event: dict) -> Optional[List[Dict[str, Any]]]:
+def _classify_relay_tool_result(
+    content: Any,
+    session_id: Optional[str] = None,
+    relay_name: str = "claude",
+    tool_name: str = "",
+    raw_error: str = "",
+) -> Dict[str, Any]:
+    text = str(raw_error or content or "").strip()
+    lowered = text.lower()
+    if (
+        "session cancelled mcp tool call" in lowered
+        or "user cancelled mcp tool call" in lowered
+        or "user canceled mcp tool call" in lowered
+        or ('"error"' in lowered and '"cancelled"' in lowered)
+    ):
+        return {
+            "is_error": True,
+            "error_type": "session_cancelled_mcp_tool_call",
+            "cancel_scope": "session",
+            "raw_error": text[:500],
+            "content": (
+                "session cancelled MCP tool call "
+                f"(relay={relay_name}, session={(session_id or 'default')[:8]}, tool={tool_name or 'unknown'})"
+            ),
+        }
+    return {}
+
+
+def _map_cli_event(event: dict, session_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
     """Claude CLI NDJSON 이벤트 → AADS SSE 이벤트 리스트로 변환.
 
     Returns None if event should be skipped, otherwise a list of AADS events.
@@ -2056,12 +2113,23 @@ def _map_cli_event(event: dict) -> Optional[List[Dict[str, Any]]]:
                         if isinstance(b, dict) and b.get("type") == "text"
                     )
                 tool_use_id = block.get("tool_use_id", "")
-                events.append({
+                tool_event = {
                     "type": "tool_result",
                     "tool_name": "",  # _stream_claude_cli에서 복원
                     "tool_use_id": tool_use_id,
                     "content": str(result_content)[:3000],
-                })
+                    "is_error": bool(block.get("is_error")),
+                    "error_type": block.get("aads_error_type", ""),
+                    "cancel_scope": block.get("aads_cancel_scope", ""),
+                    "raw_error": block.get("aads_raw_error", "")[:500],
+                }
+                if not tool_event.get("error_type"):
+                    tool_event.update(_classify_relay_tool_result(
+                        tool_event.get("content", ""),
+                        session_id=session_id,
+                        relay_name="claude",
+                    ))
+                events.append(tool_event)
         return events if events else None
 
     # tool_result 이벤트 (직접 형식 — 폴백)
@@ -2072,11 +2140,25 @@ def _map_cli_event(event: dict) -> Optional[List[Dict[str, Any]]]:
             content = "\n".join(
                 b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
             )
-        return [{
+        payload = {
             "type": "tool_result",
             "tool_name": tool_name,
+            "tool_use_id": event.get("tool_use_id", ""),
             "content": str(content)[:3000],
-        }]
+            "is_error": bool(event.get("is_error")),
+            "error_type": event.get("error_type", ""),
+            "cancel_scope": event.get("cancel_scope", ""),
+            "raw_error": event.get("raw_error", "")[:500],
+        }
+        if not payload.get("error_type"):
+            payload.update(_classify_relay_tool_result(
+                payload.get("content", ""),
+                session_id=session_id,
+                relay_name="claude",
+                tool_name=tool_name,
+                raw_error=payload.get("raw_error", ""),
+            ))
+        return [payload]
 
     # result 이벤트 — 최종 완료
     if evt_type == "result":

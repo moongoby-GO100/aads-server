@@ -136,6 +136,25 @@ async def _wait_for_resume_slot_cooldown() -> None:
         await _heartbeat_asyncio.sleep(wait_seconds)
 
 
+def _tool_result_event_snapshot(event: Dict[str, Any], content_limit: int = 500) -> Dict[str, Any]:
+    """tool_result 구조화 이벤트를 저장/전달용으로 정규화."""
+    payload = {
+        "type": "tool_result",
+        "tool_name": event.get("tool_name", ""),
+        "tool_use_id": event.get("tool_use_id", ""),
+        "content": str(event.get("content", ""))[:content_limit],
+    }
+    if event.get("is_error"):
+        payload["is_error"] = True
+    if event.get("error_type"):
+        payload["error_type"] = event.get("error_type", "")
+    if event.get("cancel_scope"):
+        payload["cancel_scope"] = event.get("cancel_scope", "")
+    if event.get("raw_error"):
+        payload["raw_error"] = str(event.get("raw_error", ""))[:content_limit]
+    return payload
+
+
 async def _interim_save_streaming(session_id: str, state: Dict[str, Any]) -> None:
     """백그라운드 생성 중 중간 상태를 DB에 저장 (세션 이동 후 돌아왔을 때 보이도록).
     변경이 없으면 스킵 (1초 간격 호출 시 불필요한 DB write 방지).
@@ -375,7 +394,7 @@ async def with_background_completion(
                             state["tool_events"].append({"type": "tool_use", "tool_name": _d.get("tool_name", ""), "tool_use_id": _d.get("tool_use_id", ""), "tool_input": _d.get("tool_input", {})})
                         elif _t == "tool_result":
                             state["last_tool"] = _d.get("tool_name", "")
-                            state["tool_events"].append({"type": "tool_result", "tool_name": _d.get("tool_name", ""), "content": str(_d.get("content", ""))[:500]})
+                            state["tool_events"].append(_tool_result_event_snapshot(_d))
                         elif _t == "thinking":
                             state["tool_events"].append({"type": "thinking", "content": str(_d.get("content", _d.get("thinking", "")))[:300]})
                     except Exception:
@@ -461,7 +480,7 @@ async def with_background_completion(
                                         state["tool_events"].append({"type": "tool_use", "tool_name": _d.get("tool_name", ""), "tool_use_id": _d.get("tool_use_id", ""), "tool_input": _d.get("tool_input", {})})
                                     elif _t == "tool_result":
                                         state["last_tool"] = _d.get("tool_name", "")
-                                        state["tool_events"].append({"type": "tool_result", "tool_name": _d.get("tool_name", ""), "content": str(_d.get("content", ""))[:500]})
+                                        state["tool_events"].append(_tool_result_event_snapshot(_d))
                                     elif _t == "thinking":
                                         state["tool_events"].append({"type": "thinking", "content": str(_d.get("content", _d.get("thinking", "")))[:300]})
                                     elif _t == "done":
@@ -3553,8 +3572,16 @@ async def send_message_stream(
                         tools_called.append({"type": "tool_use", "tool_name": event["tool_name"], "tool_use_id": event.get("tool_use_id", ""), "tool_input": event.get("tool_input", {})})
                         yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event.get('tool_use_id', ''), 'tool_input': event.get('tool_input', {})})}\n\n"
                     elif etype == "tool_result":
-                        tools_called.append({"type": "tool_result", "tool_name": event["tool_name"], "content": str(event.get("content", ""))[:500]})
-                        yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': event['tool_name'], 'content': str(event.get('content', ''))[:300]})}\n\n"
+                        tool_result_payload = _tool_result_event_snapshot(event)
+                        tools_called.append(tool_result_payload)
+                        if tool_result_payload.get("is_error"):
+                            logger.warning(
+                                "stream_tool_result_error: session=%s tool=%s error_type=%s",
+                                session_id[:8],
+                                tool_result_payload.get("tool_name", ""),
+                                tool_result_payload.get("error_type", "tool_error"),
+                            )
+                        yield f"data: {json.dumps(_tool_result_event_snapshot(event, content_limit=300))}\n\n"
                     elif etype == "yellow_limit":
                         yield f"data: {json.dumps({'type': 'yellow_limit', 'content': event.get('content', ''), 'tool_name': event.get('tool_name', ''), 'consecutive_count': event.get('consecutive_count', 0)})}\n\n"
                     elif etype == "done":
@@ -3673,8 +3700,16 @@ async def send_message_stream(
                     tools_called.append({"type": "tool_use", "tool_name": event["tool_name"], "tool_use_id": event.get("tool_use_id", ""), "tool_input": event.get("tool_input", {})})
                     yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event.get('tool_use_id', ''), 'tool_input': event.get('tool_input', {})})}\n\n"
                 elif etype == "tool_result":
-                    tools_called.append({"type": "tool_result", "tool_name": event["tool_name"], "content": str(event.get("content", ""))[:500]})
-                    yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': event['tool_name'], 'content': str(event.get('content', ''))[:300]})}\n\n"
+                    tool_result_payload = _tool_result_event_snapshot(event)
+                    tools_called.append(tool_result_payload)
+                    if tool_result_payload.get("is_error"):
+                        logger.warning(
+                            "stream_retry_tool_result_error: session=%s tool=%s error_type=%s",
+                            session_id[:8],
+                            tool_result_payload.get("tool_name", ""),
+                            tool_result_payload.get("error_type", "tool_error"),
+                        )
+                    yield f"data: {json.dumps(_tool_result_event_snapshot(event, content_limit=300))}\n\n"
                 elif etype == "done":
                     model_used = event.get("model", intent_result.model)
                     cost_usd += Decimal(str(event.get("cost", "0")))

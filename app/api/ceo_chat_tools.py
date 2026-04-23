@@ -3141,6 +3141,10 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
     # ── Pipeline Runner 도구 (호스트 독립 실행) ─────────────────────────────
     elif name == "pipeline_runner_submit":
         from app.services.tool_executor import current_chat_session_id
+        from app.services.pipeline_runner_client import (
+            INTERNAL_PIPELINE_HEADERS,
+            get_pipeline_runner_api_url,
+        )
         # session_id 강제: 1순위 도구파라미터, 2순위 함수인자, 3순위 ContextVar
         _sid = params.get("session_id", "") or chat_session_id or current_chat_session_id.get("")
         if not _sid:
@@ -3152,11 +3156,10 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         if not _sid:
             return "[ERROR] 활성 세션을 찾을 수 없습니다. session_id를 명시하세요."
         import httpx
-        _internal_h = {"x-monitor-key": "internal-pipeline-call"}
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                "http://localhost:8100/api/v1/pipeline/jobs",
-                headers=_internal_h,
+                get_pipeline_runner_api_url("jobs"),
+                headers=INTERNAL_PIPELINE_HEADERS,
                 json={
                     "project": params.get("project", "AADS"),
                     "instruction": params.get("instruction", ""),
@@ -3173,31 +3176,37 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
     elif name == "pipeline_runner_status":
         import httpx
         from urllib.parse import quote
-        _internal_h = {"x-monitor-key": "internal-pipeline-call"}
+        from app.services.pipeline_runner_client import (
+            INTERNAL_PIPELINE_HEADERS,
+            get_pipeline_runner_api_url,
+        )
         job_id = params.get("job_id", "")
         if job_id:
-            url = f"http://localhost:8100/api/v1/pipeline/jobs/{quote(job_id, safe='')}"
+            url = get_pipeline_runner_api_url(f"jobs/{quote(job_id, safe='')}")
         else:
             status_val = params.get("status", "")
-            url = f"http://localhost:8100/api/v1/pipeline/jobs"
+            url = get_pipeline_runner_api_url("jobs")
             _qp = {"limit": "10"}
             if status_val:
                 _qp["status"] = status_val
         async with httpx.AsyncClient() as client:
             if job_id:
-                resp = await client.get(url, headers=_internal_h, timeout=10)
+                resp = await client.get(url, headers=INTERNAL_PIPELINE_HEADERS, timeout=10)
             else:
-                resp = await client.get(url, params=_qp, headers=_internal_h, timeout=10)
+                resp = await client.get(url, params=_qp, headers=INTERNAL_PIPELINE_HEADERS, timeout=10)
             return resp.text
     elif name == "pipeline_runner_approve":
         import httpx
         from urllib.parse import quote
-        _internal_h = {"x-monitor-key": "internal-pipeline-call"}
+        from app.services.pipeline_runner_client import (
+            INTERNAL_PIPELINE_HEADERS,
+            get_pipeline_runner_api_url,
+        )
         job_id = params.get("job_id", "")
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                f"http://localhost:8100/api/v1/pipeline/jobs/{quote(job_id, safe='')}/approve",
-                headers=_internal_h,
+                get_pipeline_runner_api_url(f"jobs/{quote(job_id, safe='')}/approve"),
+                headers=INTERNAL_PIPELINE_HEADERS,
                 json={"action": params.get("action", "approve"), "feedback": params.get("feedback", "")},
                 timeout=10,
             )

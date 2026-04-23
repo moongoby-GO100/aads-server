@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sys
 import tempfile
 import time
@@ -38,10 +39,20 @@ logger = logging.getLogger("claude_relay")
 PORT = int(os.getenv("CLAUDE_RELAY_PORT", "8199"))
 CLAUDE_BIN = os.getenv("CLAUDE_BIN", "claude")
 CODEX_BIN = os.getenv("CODEX_BIN", "codex")
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_CLAUDE_WRAPPER = Path(os.getenv(
+    "CLAUDE_NONINTERACTIVE_WRAPPER",
+    str(_REPO_ROOT / "scripts" / "claude-docker-wrapper.sh"),
+))
 MCP_TEMPLATE = Path(os.getenv(
     "MCP_CONFIG_TEMPLATE",
     "/root/aads/aads-server/scripts/mcp_config_template.json",
 ))
+_MCP_BRIDGE_MODE = (os.getenv("AADS_MCP_BRIDGE_MODE", "auto") or "auto").strip().lower()
+_MCP_BRIDGE_PYTHON = (os.getenv("AADS_MCP_BRIDGE_PYTHON", "python3.11") or "python3.11").strip()
+_MCP_PREFLIGHT_TIMEOUT_SEC = float(os.getenv("AADS_MCP_PREFLIGHT_TIMEOUT_SEC", "1.5"))
+_MCP_PREFLIGHT_CACHE_TTL = float(os.getenv("AADS_MCP_PREFLIGHT_CACHE_TTL", "15"))
+_MCP_PREFLIGHT_CACHE = {}
 
 # 2GB급 호스트에서 Claude/Codex 동시 실행 3개는 메모리 압박으로 137(OOM성 종료)을 유발할 수 있다.
 # 운영자가 명시적으로 override하지 않으면 보수적으로 1개만 허용한다.
@@ -239,8 +250,381 @@ def _save_session_map():
         logger.warning("Failed to save session map: %s", e)
 
 
-def _build_mcp_config(session_id):
-    template = _load_mcp_template(session_id)
+def _short_session(session_id):
+    return (session_id or "default")[:8]
+
+
+def _resolve_cli_command(kind):
+    configured = (CLAUDE_BIN if kind == "claude" else CODEX_BIN).strip()
+    if kind == "claude" and configured in ("", "claude") and _CLAUDE_WRAPPER.exists():
+        return {
+            "kind": kind,
+            "mode": "docker_wrapper",
+            "argv": [str(_CLAUDE_WRAPPER)],
+            "resolved": str(_CLAUDE_WRAPPER),
+        }
+
+    target = configured or ("claude" if kind == "claude" else "codex")
+    if os.path.sep in target or target.startswith("."):
+        expanded = str(Path(target).expanduser())
+        return {
+            "kind": kind,
+            "mode": "explicit_path",
+            "argv": [expanded],
+            "resolved": expanded,
+        }
+
+    resolved = shutil.which(target)
+    return {
+        "kind": kind,
+        "mode": "path_lookup",
+        "argv": [resolved or target],
+        "resolved": resolved or target,
+    }
+
+
+def _preflight_cli_command(meta):
+    cmd = (meta or {}).get("resolved") or ""
+    if not cmd:
+        return {"ok": False, "error_type": "missing_binary", "detail": "empty command"}
+
+    cmd_path = Path(cmd)
+    if os.path.isabs(cmd) or cmd.startswith("."):
+        if not cmd_path.exists():
+            return {"ok": False, "error_type": "missing_binary", "detail": cmd}
+        if not os.access(cmd, os.X_OK):
+            return {"ok": False, "error_type": "not_executable", "detail": cmd}
+        return {"ok": True, "detail": cmd}
+
+    resolved = shutil.which(cmd)
+    if not resolved:
+        return {"ok": False, "error_type": "missing_binary", "detail": cmd}
+    return {"ok": True, "detail": resolved}
+
+
+def _copy_server_cfg(cfg):
+    return {
+        "command": (cfg or {}).get("command", ""),
+        "args": list((cfg or {}).get("args", []) or []),
+        "cwd": (cfg or {}).get("cwd"),
+        "env": dict((cfg or {}).get("env", {}) or {}),
+    }
+
+
+def _inject_session_into_cfg(cfg, session_id):
+    safe_sid = session_id or "default"
+    updated = _copy_server_cfg(cfg)
+    env_map = dict(updated.get("env", {}) or {})
+    env_map["AADS_SESSION_ID"] = safe_sid
+    updated["env"] = env_map
+
+    if Path(str(updated.get("command", ""))).name == "docker":
+        args = list(updated.get("args", []) or [])
+        new_args = []
+        skip_next = False
+        found_session = False
+        for i, arg in enumerate(args):
+            if skip_next:
+                skip_next = False
+                continue
+            if arg == "-e" and i + 1 < len(args) and str(args[i + 1]).startswith("AADS_SESSION_ID="):
+                new_args.extend(["-e", "AADS_SESSION_ID=" + safe_sid])
+                skip_next = True
+                found_session = True
+            else:
+                new_args.append(arg)
+        if not found_session:
+            insert_at = 1
+            if new_args[:2] == ["exec", "-i"]:
+                insert_at = 2
+            elif new_args[:1] == ["exec"]:
+                insert_at = 1
+            new_args[insert_at:insert_at] = ["-e", "AADS_SESSION_ID=" + safe_sid]
+        updated["args"] = new_args
+    return updated
+
+
+def _build_docker_bridge_cfg(session_id, base_cfg=None):
+    safe_sid = session_id or "default"
+    cfg = {
+        "command": shutil.which("docker") or "docker",
+        "args": [
+            "exec", "-i", "-e", "AADS_SESSION_ID=" + safe_sid,
+            "aads-server", "python3", "-m", "mcp_servers.aads_tools_bridge",
+        ],
+        "cwd": None,
+        "env": dict((base_cfg or {}).get("env", {}) or {}),
+        "_path_mode": "docker_exec",
+    }
+    cfg["env"]["AADS_SESSION_ID"] = safe_sid
+    return cfg
+
+
+def _build_python_bridge_cfg(session_id, base_cfg=None):
+    safe_sid = session_id or "default"
+    env_map = dict((base_cfg or {}).get("env", {}) or {})
+    existing_pythonpath = env_map.get("PYTHONPATH") or os.environ.get("PYTHONPATH", "")
+    path_parts = [str(_REPO_ROOT)]
+    if existing_pythonpath:
+        path_parts.append(existing_pythonpath)
+    env_map["PYTHONPATH"] = os.pathsep.join(
+        [part for idx, part in enumerate(path_parts) if part and part not in path_parts[:idx]]
+    )
+    env_map["AADS_SESSION_ID"] = safe_sid
+    return {
+        "command": shutil.which(_MCP_BRIDGE_PYTHON) or _MCP_BRIDGE_PYTHON,
+        "args": ["-m", "mcp_servers.aads_tools_bridge"],
+        "cwd": str(_REPO_ROOT),
+        "env": env_map,
+        "_path_mode": "python3.11_direct",
+    }
+
+
+def _candidate_signature(cfg):
+    args = []
+    for arg in list((cfg or {}).get("args", []) or []):
+        text = str(arg)
+        if text.startswith("AADS_SESSION_ID="):
+            text = "AADS_SESSION_ID=*"
+        args.append(text)
+    env_items = []
+    for key, value in sorted(dict((cfg or {}).get("env", {}) or {}).items()):
+        text = str(value)
+        if key == "AADS_SESSION_ID":
+            text = "*"
+        env_items.append((str(key), text))
+    return (
+        (cfg or {}).get("command", ""),
+        tuple(args),
+        (cfg or {}).get("cwd") or "",
+        tuple(env_items),
+    )
+
+
+def _candidate_mcp_cfgs(session_id, base_cfg=None):
+    candidates = []
+    if base_cfg and base_cfg.get("command"):
+        template_cfg = _inject_session_into_cfg(base_cfg, session_id)
+        template_cfg["_path_mode"] = "template"
+        candidates.append(template_cfg)
+
+    if _MCP_BRIDGE_MODE in ("auto", "docker", "docker_exec"):
+        candidates.append(_build_docker_bridge_cfg(session_id, base_cfg))
+    if _MCP_BRIDGE_MODE in ("auto", "direct", "python", "python3.11_direct", "python311_direct"):
+        if (_REPO_ROOT / "mcp_servers" / "aads_tools_bridge.py").exists():
+            candidates.append(_build_python_bridge_cfg(session_id, base_cfg))
+
+    deduped = []
+    seen = set()
+    for candidate in candidates:
+        signature = _candidate_signature(candidate)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        deduped.append(candidate)
+    return deduped
+
+
+def _classify_preflight_detail(detail):
+    lowered = (detail or "").lower()
+    if "no such container" in lowered:
+        return "docker_container_missing"
+    if "cannot connect to the docker daemon" in lowered:
+        return "docker_daemon_unavailable"
+    if "no module named" in lowered or "modulenotfounderror" in lowered:
+        return "python_module_missing"
+    if "permission denied" in lowered:
+        return "permission_denied"
+    if "no such file or directory" in lowered:
+        return "missing_binary"
+    return "preflight_failed"
+
+
+async def _preflight_mcp_server(name, cfg):
+    signature = _candidate_signature(cfg)
+    cached = _MCP_PREFLIGHT_CACHE.get(signature)
+    now = time.time()
+    if cached and (now - cached.get("ts", 0)) < _MCP_PREFLIGHT_CACHE_TTL:
+        diag = dict(cached.get("diag", {}))
+        diag["cached"] = True
+        return diag
+
+    diag = {
+        "server": name,
+        "path_mode": (cfg or {}).get("_path_mode", "unknown"),
+        "command": (cfg or {}).get("command", ""),
+        "cwd": (cfg or {}).get("cwd"),
+        "ok": False,
+        "cached": False,
+        "error_type": "",
+        "detail": "",
+    }
+    proc = None
+    try:
+        env = dict(os.environ)
+        env.update(dict((cfg or {}).get("env", {}) or {}))
+        proc = await asyncio.create_subprocess_exec(
+            cfg.get("command", ""),
+            *list(cfg.get("args", []) or []),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=cfg.get("cwd") or None,
+            env=env,
+        )
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=_MCP_PREFLIGHT_TIMEOUT_SEC)
+            stdout = (await proc.stdout.read()).decode("utf-8", errors="replace")[:500]
+            stderr = (await proc.stderr.read()).decode("utf-8", errors="replace")[:500]
+            detail = (stderr or stdout or ("exit=%s" % proc.returncode)).strip()
+            diag.update({
+                "ok": False,
+                "returncode": proc.returncode,
+                "stdout": stdout,
+                "stderr": stderr,
+                "detail": detail,
+                "error_type": _classify_preflight_detail(detail),
+            })
+        except asyncio.TimeoutError:
+            diag["ok"] = True
+    except Exception as exc:
+        detail = str(exc)
+        diag.update({
+            "ok": False,
+            "detail": detail,
+            "error_type": _classify_preflight_detail(detail),
+        })
+    finally:
+        if proc and proc.returncode is None:
+            try:
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=1)
+            except (asyncio.TimeoutError, ProcessLookupError):
+                proc.kill()
+
+    _MCP_PREFLIGHT_CACHE[signature] = {"ts": time.time(), "diag": dict(diag)}
+    return diag
+
+
+async def _resolve_aads_tools_cfg(session_id, relay_name, base_cfg=None):
+    failures = []
+    for candidate in _candidate_mcp_cfgs(session_id, base_cfg):
+        diag = await _preflight_mcp_server("aads-tools", candidate)
+        if diag.get("ok"):
+            logger.info(
+                "%s_relay_preflight_ok: session=%s mcp_mode=%s command=%s",
+                relay_name,
+                _short_session(session_id),
+                diag.get("path_mode", "unknown"),
+                candidate.get("command", ""),
+            )
+            cleaned = {k: v for k, v in candidate.items() if not str(k).startswith("_")}
+            return cleaned, diag, failures
+        failures.append(diag)
+        logger.warning(
+            "%s_relay_preflight_fail: session=%s mcp_mode=%s error_type=%s detail=%s",
+            relay_name,
+            _short_session(session_id),
+            diag.get("path_mode", "unknown"),
+            diag.get("error_type", "preflight_failed"),
+            (diag.get("detail", "") or "")[:240],
+        )
+    return None, None, failures
+
+
+def _format_preflight_failures(failures):
+    return ", ".join(
+        "{0}[{1}]".format(item.get("path_mode", "unknown"), item.get("error_type", "preflight_failed"))
+        for item in (failures or [])
+    ) or "no candidate"
+
+
+def _classify_tool_error(raw_content, session_id="", relay_name="", tool_name="", server_name=""):
+    text = str(raw_content or "").strip()
+    lowered = text.lower()
+    if (
+        "user cancelled mcp tool call" in lowered
+        or "user canceled mcp tool call" in lowered
+        or ('"error"' in lowered and '"cancelled"' in lowered)
+    ):
+        return {
+            "is_error": True,
+            "error_type": "session_cancelled_mcp_tool_call",
+            "cancel_scope": "session",
+            "raw_error": text,
+            "content": "session cancelled MCP tool call "
+            "(relay={0}, session={1}, server={2}, tool={3})".format(
+                relay_name or "unknown",
+                _short_session(session_id),
+                server_name or "aads-tools",
+                tool_name or "unknown",
+            ),
+        }
+    return None
+
+
+def _extract_tool_result_text(content):
+    if isinstance(content, list):
+        return "\n".join(
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") in ("text", "output_text")
+        ).strip()
+    return str(content or "").strip()
+
+
+def _replace_tool_result_content(content, next_text):
+    if isinstance(content, list):
+        replaced = False
+        blocks = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") in ("text", "output_text") and not replaced:
+                next_block = dict(block)
+                next_block["text"] = next_text
+                blocks.append(next_block)
+                replaced = True
+            else:
+                blocks.append(block)
+        if replaced:
+            return blocks
+        return [{"type": "text", "text": next_text}]
+    return next_text
+
+
+def _annotate_claude_event(event, session_id):
+    evt_type = event.get("type", "")
+    if evt_type != "user":
+        return event
+    msg = event.get("message", {}) or {}
+    blocks = msg.get("content", [])
+    changed = False
+    for block in blocks:
+        if not isinstance(block, dict) or block.get("type") != "tool_result":
+            continue
+        classification = _classify_tool_error(
+            _extract_tool_result_text(block.get("content")),
+            session_id=session_id,
+            relay_name="claude",
+            server_name=block.get("server", ""),
+        )
+        if not classification:
+            continue
+        block["is_error"] = True
+        block["aads_error_type"] = classification["error_type"]
+        block["aads_cancel_scope"] = classification["cancel_scope"]
+        block["aads_raw_error"] = classification["raw_error"][:500]
+        block["content"] = _replace_tool_result_content(block.get("content"), classification["content"])
+        changed = True
+        logger.warning(
+            "claude_relay_tool_cancel: session=%s error_type=%s raw=%s",
+            _short_session(session_id),
+            classification["error_type"],
+            classification["raw_error"][:240],
+        )
+    return event if not changed else event
+
+
+def _build_mcp_config(session_id, template=None):
+    template = template if template is not None else _load_mcp_template(session_id)
     fd, path = tempfile.mkstemp(prefix="mcp_", suffix=".json")
     with os.fdopen(fd, "w") as f:
         json.dump(template, f)
@@ -255,27 +639,12 @@ def _load_mcp_template(session_id):
     else:
         template = {"mcpServers": {"aads-tools": {"command": "docker", "args": [
             "exec", "-i", "-e", "AADS_SESSION_ID=" + safe_sid,
-            "aads-server", "python", "-m", "mcp_servers.aads_tools_bridge"]}}}
+            "aads-server", "python3", "-m", "mcp_servers.aads_tools_bridge"]}}}
     servers = template.get("mcpServers", {})
     for name, cfg in servers.items():
-        args = cfg.get("args", [])
-        new_args = []
-        skip_next = False
-        found_session = False
-        for i, arg in enumerate(args):
-            if skip_next:
-                skip_next = False
-                continue
-            if arg == "-e" and i + 1 < len(args) and args[i + 1].startswith("AADS_SESSION_ID="):
-                new_args.extend(["-e", "AADS_SESSION_ID=" + safe_sid])
-                skip_next = True
-                found_session = True
-            else:
-                new_args.append(arg)
-        if not found_session:
-            new_args.insert(2, "-e")
-            new_args.insert(3, "AADS_SESSION_ID=" + safe_sid)
-        cfg["args"] = new_args
+        injected = _inject_session_into_cfg(cfg, safe_sid)
+        cfg["args"] = injected.get("args", [])
+        cfg["env"] = injected.get("env", {})
     return template
 
 
@@ -323,7 +692,7 @@ async def _iter_ndjson_lines(stream, timeout_sec, chunk_size=16384, max_line_siz
         yield tail
 
 
-def _parse_codex_tool_event(event):
+def _parse_codex_tool_event(event, session_id=""):
     """Codex --json 이벤트 → 표준 tool_use/tool_result 변환.
 
     Codex 실제 스키마 (2026-04-17 실측):
@@ -360,6 +729,15 @@ def _parse_codex_tool_event(event):
         if error:
             content = error if isinstance(error, str) else json.dumps(error, ensure_ascii=False)
             is_error = True
+            classification = _classify_tool_error(
+                content,
+                session_id=session_id,
+                relay_name="codex",
+                tool_name=item.get("tool", "") or item.get("name", ""),
+                server_name=item.get("server", ""),
+            )
+            if classification:
+                content = classification["content"]
         else:
             content_blocks = result.get("content") if isinstance(result, dict) else None
             if isinstance(content_blocks, list):
@@ -369,13 +747,25 @@ def _parse_codex_tool_event(event):
             else:
                 content = json.dumps(result, ensure_ascii=False) if result else ""
             is_error = False
-        return {
+            classification = None
+        payload = {
             "type": "tool_result",
             "tool_name": item.get("tool", "") or item.get("name", ""),
             "tool_use_id": item.get("id", "") or item.get("call_id", ""),
             "content": content,
             "is_error": is_error,
         }
+        if classification:
+            payload["error_type"] = classification["error_type"]
+            payload["cancel_scope"] = classification["cancel_scope"]
+            payload["raw_error"] = classification["raw_error"][:500]
+            logger.warning(
+                "codex_relay_tool_cancel: session=%s tool=%s raw=%s",
+                _short_session(session_id),
+                payload.get("tool_name", ""),
+                classification["raw_error"][:240],
+            )
+        return payload
 
     # --- bash/shell 실행 (command_execution) ---
     if evt_type == "item.completed" and item_type == "command_execution":
@@ -420,7 +810,7 @@ def _parse_codex_tool_event(event):
     return None
 
 
-def _build_codex_home(session_id):
+def _build_codex_home(session_id, mcp_cfg=None):
     _CODEX_HOME_ROOT.mkdir(parents=True, exist_ok=True)
     safe_session = re.sub(r"[^A-Za-z0-9_.-]+", "_", session_id or "default")
     home = _CODEX_HOME_ROOT / safe_session
@@ -439,7 +829,7 @@ def _build_codex_home(session_id):
         except Exception as exc:
             logger.warning("Codex auth.json symlink 실패 session=%s err=%s", session_id, exc)
 
-    mcp_cfg = _load_mcp_template(session_id)
+    mcp_cfg = mcp_cfg if mcp_cfg is not None else _load_mcp_template(session_id)
     server_cfg = (mcp_cfg.get("mcpServers", {}) or {}).get("aads-tools", {})
     command = server_cfg.get("command", "docker")
     args = server_cfg.get("args", [])
@@ -516,7 +906,6 @@ async def handle_stream(request):
 
     use_stream_json_input = bool(content_blocks)
     cli_model = _MODEL_MAP.get(model, "claude-opus-4-6")
-    mcp_config_path = _build_mcp_config(aads_session_id)
     cli_session_id = _session_map.get(aads_session_id) if aads_session_id else None
     is_resume = cli_session_id is not None
 
@@ -529,8 +918,46 @@ async def handle_stream(request):
     else:
         token, slot, label = "", "0", "proxy"
 
+    mcp_config_path = None
     try:
         async with _semaphore:
+            claude_meta = _resolve_cli_command("claude")
+            claude_preflight = _preflight_cli_command(claude_meta)
+            if not claude_preflight.get("ok"):
+                logger.error(
+                    "claude_relay_preflight_failed: session=%s error_type=%s detail=%s",
+                    _short_session(aads_session_id),
+                    claude_preflight.get("error_type", "preflight_failed"),
+                    claude_preflight.get("detail", ""),
+                )
+                return web.json_response({
+                    "error": "claude_relay_preflight_failed",
+                    "error_type": claude_preflight.get("error_type", "preflight_failed"),
+                    "detail": claude_preflight.get("detail", ""),
+                }, status=503)
+
+            mcp_template = _load_mcp_template(aads_session_id)
+            servers = mcp_template.setdefault("mcpServers", {})
+            selected_cfg, mcp_diag, mcp_failures = await _resolve_aads_tools_cfg(
+                aads_session_id,
+                "claude",
+                (servers.get("aads-tools", {}) or {}),
+            )
+            if not selected_cfg:
+                failure_text = _format_preflight_failures(mcp_failures)
+                logger.error(
+                    "claude_relay_mcp_preflight_failed: session=%s failures=%s",
+                    _short_session(aads_session_id),
+                    failure_text,
+                )
+                return web.json_response({
+                    "error": "relay_mcp_preflight_failed",
+                    "error_type": "relay_mcp_preflight_failed",
+                    "detail": failure_text,
+                }, status=503)
+            servers["aads-tools"] = selected_cfg
+            mcp_config_path = _build_mcp_config(aads_session_id, template=mcp_template)
+
             response = web.StreamResponse(status=200, reason="OK", headers={
                 "Content-Type": "application/x-ndjson",
                 "Cache-Control": "no-cache",
@@ -562,7 +989,7 @@ async def handle_stream(request):
                 "qa": {"description": "테스트 실행, 변경사항 검증, 서비스 헬스체크 등 품질 검증이 필요할 때 사용.", "prompt": "당신은 QA 엔지니어입니다. MCP 도구를 사용하여 시스템 상태를 검증하세요.", "model": "sonnet"},
             })
 
-            cmd = [CLAUDE_BIN, "-p", "--output-format", "stream-json", "--verbose",
+            cmd = list(claude_meta.get("argv", []) or []) + ["-p", "--output-format", "stream-json", "--verbose",
                    "--model", cli_model, "--mcp-config", mcp_config_path, "--strict-mcp-config",
                    "--allowedTools", "Agent,mcp__aads-tools__*",
                    "--disallowedTools", "Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,NotebookEdit",
@@ -573,10 +1000,12 @@ async def handle_stream(request):
                 cmd.extend(["--resume", cli_session_id])
 
             _stdin_data = stdin_payload if use_stream_json_input else prompt
-            logger.info("CLI: model=%s aads=%s cli=%s resume=%s prompt_len=%d",
+            logger.info("CLI: model=%s aads=%s cli=%s resume=%s prompt_len=%d cmd_mode=%s mcp_mode=%s",
                         cli_model, aads_session_id[:8] if aads_session_id else "none",
                         cli_session_id[:8] if cli_session_id else "new", is_resume,
-                        len(_stdin_data) if _stdin_data else 0)
+                        len(_stdin_data) if _stdin_data else 0,
+                        claude_meta.get("mode", "unknown"),
+                        (mcp_diag or {}).get("path_mode", "unknown"))
 
             cli_env = _build_claude_env(token)
             proc = await asyncio.create_subprocess_exec(
@@ -601,7 +1030,8 @@ async def handle_stream(request):
                         if _DIRECT_OAUTH_ENABLED:
                             event["claude_auth_mode"] = "direct"
                             event["oauth_slot"] = slot
-                            line_to_write = json.dumps(event).encode("utf-8")
+                        event = _annotate_claude_event(event, aads_session_id)
+                        line_to_write = json.dumps(event).encode("utf-8")
                     elif evt_type == "result":
                         if not captured_cli_session_id:
                             captured_cli_session_id = event.get("session_id")
@@ -610,6 +1040,11 @@ async def handle_stream(request):
                             if re.search(r"429|rate.limit|overloaded|credit", result_text, re.IGNORECASE):
                                 _last_429_slot = int(slot) if slot.isdigit() else 0
                                 logger.warning("429/rate_limit on slot=%s", slot)
+                        event = _annotate_claude_event(event, aads_session_id)
+                        line_to_write = json.dumps(event).encode("utf-8")
+                    elif evt_type == "user":
+                        event = _annotate_claude_event(event, aads_session_id)
+                        line_to_write = json.dumps(event).encode("utf-8")
                     await response.write(line_to_write + b"\n")
             except ConnectionResetError:
                 logger.info("CLI relay client disconnected: aads=%s resume=%s", aads_session_id[:8], is_resume)
@@ -662,10 +1097,11 @@ async def handle_stream(request):
                 logger.info("CLI write_eof skipped: client already closed aads=%s", aads_session_id[:8])
             return response
     finally:
-        try:
-            os.unlink(mcp_config_path)
-        except OSError:
-            pass
+        if mcp_config_path:
+            try:
+                os.unlink(mcp_config_path)
+            except OSError:
+                pass
 
 
 _CODEX_MODEL_MAP = {
@@ -696,17 +1132,60 @@ async def handle_codex_stream(request):
         prompt = "[AVAILABLE_AADS_MCP_TOOLS]\n" + ", ".join(tool_names) + "\n\n" + prompt
     try:
         async with _semaphore:
+            codex_meta = _resolve_cli_command("codex")
+            codex_preflight = _preflight_cli_command(codex_meta)
+            if not codex_preflight.get("ok"):
+                logger.error(
+                    "codex_relay_preflight_failed: session=%s error_type=%s detail=%s",
+                    _short_session(session_id),
+                    codex_preflight.get("error_type", "preflight_failed"),
+                    codex_preflight.get("detail", ""),
+                )
+                return web.json_response({
+                    "error": "codex_relay_preflight_failed",
+                    "error_type": codex_preflight.get("error_type", "preflight_failed"),
+                    "detail": codex_preflight.get("detail", ""),
+                }, status=503)
+
+            mcp_template = _load_mcp_template(session_id)
+            servers = mcp_template.setdefault("mcpServers", {})
+            selected_cfg, mcp_diag, mcp_failures = await _resolve_aads_tools_cfg(
+                session_id,
+                "codex",
+                (servers.get("aads-tools", {}) or {}),
+            )
+            if not selected_cfg:
+                failure_text = _format_preflight_failures(mcp_failures)
+                logger.error(
+                    "codex_relay_mcp_preflight_failed: session=%s failures=%s",
+                    _short_session(session_id),
+                    failure_text,
+                )
+                return web.json_response({
+                    "error": "relay_mcp_preflight_failed",
+                    "error_type": "relay_mcp_preflight_failed",
+                    "detail": failure_text,
+                }, status=503)
+            servers["aads-tools"] = selected_cfg
+
             response = web.StreamResponse(status=200, reason="OK", headers={
                 "Content-Type": "application/x-ndjson",
                 "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
             await response.prepare(request)
-            codex_home = _build_codex_home(session_id)
-            cmd = [CODEX_BIN, "exec", "--json", "--full-auto",
+            codex_home = _build_codex_home(session_id, mcp_cfg=mcp_template)
+            cmd = list(codex_meta.get("argv", []) or []) + ["exec", "--json", "--full-auto",
                    "--skip-git-repo-check", "-C", "/root/aads/aads-server"]
             if codex_model:
                 cmd.extend(["-m", codex_model])
             cmd.append(prompt)
-            logger.info("Codex: model=%s prompt_len=%d tools=%d", codex_model, len(prompt), len(tool_names))
+            logger.info(
+                "Codex: model=%s prompt_len=%d tools=%d cmd_mode=%s mcp_mode=%s",
+                codex_model,
+                len(prompt),
+                len(tool_names),
+                codex_meta.get("mode", "unknown"),
+                (mcp_diag or {}).get("path_mode", "unknown"),
+            )
             proc_env = dict(os.environ)
             # Genspark 프록시 리다이렉트 차단 — ChatGPT Plus OAuth(auth.json) 직접 사용
             proc_env.pop("OPENAI_BASE_URL", None)
@@ -728,7 +1207,7 @@ async def handle_codex_stream(request):
                     except json.JSONDecodeError:
                         continue
                     evt_type = event.get("type", "")
-                    tool_evt = _parse_codex_tool_event(event)
+                    tool_evt = _parse_codex_tool_event(event, session_id=session_id)
                     if tool_evt:
                         await response.write(json.dumps(tool_evt).encode() + b"\n")
                         continue
@@ -823,7 +1302,10 @@ async def handle_codex_stream(request):
 
 async def handle_health(request):
     health = {"status": "ok", "port": PORT, "sessions": len(_session_map),
-              "auth_mode": "direct_oauth" if _DIRECT_OAUTH_ENABLED else "litellm_proxy"}
+              "auth_mode": "direct_oauth" if _DIRECT_OAUTH_ENABLED else "litellm_proxy",
+              "claude_cmd_mode": _resolve_cli_command("claude").get("mode", "unknown"),
+              "codex_cmd_mode": _resolve_cli_command("codex").get("mode", "unknown"),
+              "mcp_bridge_mode": _MCP_BRIDGE_MODE}
     if _DIRECT_OAUTH_ENABLED:
         token, slot, label = _pick_token()
         health.update({"oauth_slot": slot, "oauth_label": label, "token_available": bool(token)})
