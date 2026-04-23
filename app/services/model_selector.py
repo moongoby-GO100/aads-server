@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 import httpx
 from anthropic import AsyncAnthropic, APIStatusError, APIConnectionError, RateLimitError
 from app.config import Settings
-from app.core.llm_key_provider import get_api_key as _get_db_key
+from app.core.llm_key_provider import get_api_key as _get_db_key, get_provider_keys as _get_provider_keys
 from app.services.model_registry import get_executable_model_ids as _get_registry_executable_model_ids
 from app.services.model_registry import list_registered_models as _list_registered_models
 from app.services.intent_router import IntentResult
@@ -416,6 +416,26 @@ _ALIBABA_MODELS = {
 # LiteLLM OpenAI 호환 모델 (Gemini + Groq + DeepSeek + OpenRouter + Alibaba)
 _LITELLM_OPENAI_MODELS = _GEMINI_MODELS | _GROQ_MODELS | _DEEPSEEK_MODELS | _OPENROUTER_MODELS | _ALIBABA_MODELS | _KIMI_MODELS | _MINIMAX_MODELS | _OPENAI_MODELS | _CODEX_MODELS
 
+_OPENAI_COMPATIBLE_DIRECT_PROVIDERS = {"openai", "groq", "deepseek", "openrouter", "qwen", "kimi", "minimax"}
+_DIRECT_PROVIDER_BASE_URLS = {
+    "openai": "https://api.openai.com/v1",
+    "groq": "https://api.groq.com/openai/v1",
+    "deepseek": "https://api.deepseek.com/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "qwen": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "kimi": "https://api.moonshot.ai/v1",
+    "minimax": "https://api.minimax.chat/v1",
+}
+_DIRECT_PROVIDER_ENV_KEYS = {
+    "openai": "OPENAI_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "qwen": "ALIBABA_API_KEY",
+    "kimi": "MOONSHOT_API_KEY",
+    "minimax": "MINIMAX_API_KEY",
+}
+
 
 async def get_available_model_ids() -> set[str]:
     executable = await _get_registry_executable_model_ids()
@@ -424,6 +444,59 @@ async def get_available_model_ids() -> set[str]:
 
 async def get_display_models(active_only: bool = True) -> list[dict[str, Any]]:
     return await _list_registered_models(active_only=active_only)
+
+
+async def _get_registered_model_row(model_id: str) -> Optional[Dict[str, Any]]:
+    rows = await _list_registered_models(active_only=False)
+    for row in rows:
+        if row.get("model_id") == model_id:
+            return row
+    return None
+
+
+def _route_metadata(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    metadata = dict((row or {}).get("metadata") or {})
+    backend = str(metadata.get("execution_backend") or "").strip()
+    if backend == "openai_compatible_direct":
+        return metadata
+    return {}
+
+
+async def _get_direct_provider_api_key(provider: str) -> str:
+    keys = await _get_provider_keys(provider)
+    if keys:
+        return keys[0]
+    env_name = _DIRECT_PROVIDER_ENV_KEYS.get(provider, "")
+    return os.getenv(env_name, "") if env_name else ""
+
+
+async def _stream_direct_openai_provider(
+    display_model: str,
+    provider: str,
+    metadata: Dict[str, Any],
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    session_id: Optional[str] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    request_model = str(metadata.get("execution_model_id") or display_model).strip() or display_model
+    base_url = str(metadata.get("execution_base_url") or _DIRECT_PROVIDER_BASE_URLS.get(provider, "")).rstrip("/")
+    api_key = await _get_direct_provider_api_key(provider)
+    if not base_url or not api_key:
+        yield {"type": "error", "content": f"direct provider route unavailable: provider={provider}"}
+        return
+    async for event in _stream_litellm_openai(
+        request_model,
+        system_prompt,
+        messages,
+        tools,
+        session_id=session_id,
+        base_url=base_url,
+        api_key=api_key,
+        display_model=display_model,
+        cost_model=display_model,
+    ):
+        yield event
 
 
 def _fallback_for_unavailable_model(model: str, available_models: set[str]) -> str:
@@ -507,10 +580,6 @@ async def call_stream(
     }
     if model in _OVERRIDE_TO_ALIAS:
         model = _OVERRIDE_TO_ALIAS[model]
-    # 안전망: 알 수 없는 모델명이 CLI relay를 우회하지 않도록 기본값 적용
-    if model not in _LITELLM_OPENAI_MODELS and model not in _ANTHROPIC_MODEL_ID:
-        logger.warning(f"unknown_model_fallback: '{model}' → 'claude-sonnet'")
-        model = "claude-sonnet"
 
     # ── Dynamic Model Cascading (비용 최적화) ──────────────────────────
     # model_override 없으면 인텐트 복잡도에 따라 최저 비용 모델 자동 선택
@@ -544,6 +613,14 @@ async def call_stream(
         logger.warning("registry_model_unavailable: '%s' -> '%s'", model, fallback_model)
         model = fallback_model
 
+    registered_row = await _get_registered_model_row(model)
+    route_metadata = _route_metadata(registered_row)
+    if model not in _LITELLM_OPENAI_MODELS and model not in _ANTHROPIC_MODEL_ID and not route_metadata:
+        logger.warning(f"unknown_model_fallback: '{model}' → 'claude-sonnet'")
+        model = "claude-sonnet"
+        registered_row = await _get_registered_model_row(model)
+        route_metadata = _route_metadata(registered_row)
+
     # 자기 모델 질문 오답 방지: 실제 라우트 id + 제조사를 시스템 프롬프트에 명시
     _maker = "Alibaba (알리바바)" if any(q in model.lower() for q in ("qwen", "deepseek-v3")) and model in _ALIBABA_MODELS else \
              "Google (구글)" if "gemini" in model.lower() else \
@@ -563,6 +640,20 @@ async def call_stream(
         + "임의로 다른 모델명이나 제조사(예: 설정과 다른 Gemini/Claude/Google)로 말하지 마세요.\n"
         + "</aads_model_identity>"
     )
+
+    if route_metadata:
+        provider = str((registered_row or {}).get("provider") or "")
+        async for event in _stream_direct_openai_provider(
+            model,
+            provider,
+            route_metadata,
+            system_prompt,
+            messages,
+            tools=tools,
+            session_id=session_id,
+        ):
+            yield event
+        return
 
     # Claude 모델 → DB priority 기반 계정 교차 폴백 (rate limit은 계정별)
     _slot_records = await _get_claude_slot_records()
@@ -1144,10 +1235,20 @@ async def _stream_litellm_openai(
     messages: List[Dict[str, Any]],
     tools: Optional[List[Dict[str, Any]]] = None,
     session_id: Optional[str] = None,
+    *,
+    base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    display_model: Optional[str] = None,
+    cost_model: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Gemini 등 비-Claude 모델 → LiteLLM /chat/completions (OpenAI 호환).
     멀티턴 Agentic Loop + 병렬 도구 실행 지원 (AADS-202).
     """
+    route_base_url = (base_url or LITELLM_BASE_URL).rstrip("/")
+    route_api_key = api_key or LITELLM_API_KEY
+    route_display_model = display_model or model
+    route_cost_model = cost_model or route_display_model
+
     clean_msgs = [m for m in messages if m.get("role") != "system"]
     clean_msgs = [
         {**m, "content": _convert_content_for_openai(m["content"])} for m in clean_msgs
@@ -1216,14 +1317,14 @@ async def _stream_litellm_openai(
 
                 async with client.stream(
                     "POST",
-                    f"{LITELLM_BASE_URL}/chat/completions",
-                    headers={"Authorization": f"Bearer {LITELLM_API_KEY}"},
+                    f"{route_base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {route_api_key}"},
                     json=req_body,
                 ) as resp:
                     if resp.status_code != 200:
                         body = await resp.aread()
-                        logger.warning(f"litellm_http_{resp.status_code}: model={model} body={body.decode()[:120]}")
-                        yield {"type": "error", "content": f"LiteLLM {model} HTTP {resp.status_code}: {body.decode()[:200]}"}
+                        logger.warning(f"litellm_http_{resp.status_code}: model={route_display_model} body={body.decode()[:120]}")
+                        yield {"type": "error", "content": f"LiteLLM {route_display_model} HTTP {resp.status_code}: {body.decode()[:200]}"}
                         return
 
                     async for line in resp.aiter_lines():
@@ -1270,8 +1371,8 @@ async def _stream_litellm_openai(
                             output_tokens = usage.get("completion_tokens", output_tokens)
 
         except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as e:
-            logger.warning(f"litellm_network_error: model={model} error={e}")
-            yield {"type": "error", "content": f"LiteLLM {model} network error: {str(e)[:200]}"}
+            logger.warning(f"litellm_network_error: model={route_display_model} error={e}")
+            yield {"type": "error", "content": f"LiteLLM {route_display_model} network error: {str(e)[:200]}"}
             return
         except Exception as e:
             logger.error(f"model_selector litellm error: {e}")
@@ -1357,10 +1458,10 @@ async def _stream_litellm_openai(
         yield {"type": "error", "content": "empty_response"}
         return
 
-    cost = _estimate_cost(model, input_tokens, output_tokens)
+    cost = _estimate_cost(route_cost_model, input_tokens, output_tokens)
     yield {
         "type": "done",
-        "model": model,
+        "model": route_display_model,
         "cost": str(cost),
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,

@@ -51,6 +51,9 @@ class ModelTemplate:
     supports_coding: bool
     input_cost: Decimal | None
     output_cost: Decimal | None
+    execution_backend: str | None
+    execution_model_id: str | None
+    execution_base_url: str | None
 
 
 def normalize_provider(provider: str) -> str:
@@ -309,6 +312,16 @@ _PROVIDER_META = {
     "minimax": {"display_name": "MiniMax", "manual_review": False},
 }
 
+_DIRECT_PROVIDER_BASE_URLS = {
+    "openai": "https://api.openai.com/v1",
+    "groq": "https://api.groq.com/openai/v1",
+    "deepseek": "https://api.deepseek.com/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "qwen": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "kimi": "https://api.moonshot.ai/v1",
+    "minimax": "https://api.minimax.chat/v1",
+}
+
 
 def _titleize(token: str) -> str:
     special = {
@@ -365,6 +378,18 @@ def _supports_tools_for(provider: str) -> bool:
 def _build_template(provider: str, model_id: str) -> ModelTemplate:
     costs = _MODEL_COSTS.get(model_id, (None, None))
     category = _category_for(model_id)
+    execution_backend = None
+    execution_base_url = None
+    execution_model_id = model_id
+    if provider in _DIRECT_PROVIDER_BASE_URLS:
+        execution_backend = "openai_compatible_direct"
+        execution_base_url = _DIRECT_PROVIDER_BASE_URLS[provider]
+    elif provider == "codex":
+        execution_backend = "codex_cli"
+    elif provider == "anthropic":
+        execution_backend = "claude_cli_relay"
+    elif provider == "gemini":
+        execution_backend = "litellm_proxy"
     return ModelTemplate(
         provider=provider,
         model_id=model_id,
@@ -377,6 +402,9 @@ def _build_template(provider: str, model_id: str) -> ModelTemplate:
         supports_coding=model_id in _CODING_MODELS or category == "coding" or provider in {"anthropic", "codex"},
         input_cost=costs[0],
         output_cost=costs[1],
+        execution_backend=execution_backend,
+        execution_model_id=execution_model_id,
+        execution_base_url=execution_base_url,
     )
 
 
@@ -485,6 +513,9 @@ def build_registry_snapshots(key_rows: Iterable[dict[str, Any]]) -> tuple[list[d
                 "last_used_at": _iso(state.get("last_used_at")),
                 "last_verified_at": _iso(state.get("last_verified_at")),
                 "requires_admin_review": False,
+                "execution_backend": template.execution_backend,
+                "execution_model_id": template.execution_model_id,
+                "execution_base_url": template.execution_base_url,
             }
             model_rows.append(
                 {

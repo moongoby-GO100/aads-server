@@ -1,14 +1,35 @@
 # AADS LLM 모델 레지스트리
 
-**마지막 업데이트:** 2026-04-20 00:00 KST | **버전:** v3.0 | **작성:** AADS-012
+**마지막 업데이트:** 2026-04-23 18:25 KST | **버전:** v4.0 | **작성:** AADS-189B
 
 ---
 
 ## 목적
 
-AADS 채팅창에 등록된 모든 LLM 모델을 문서화하고 버전관리합니다.
-- 총 **62개 모델** 등록 (실측 확인)
-- 5개 제공자: Anthropic, Google, DeepSeek, Groq, Alibaba DashScope
+AADS 채팅창에 노출되는 모델 집합과 실제 실행 경로를 문서화합니다.
+- 모델 목록의 기준은 `llm_models` 레지스트리와 `/api/v1/llm-models/providers/summary` 응답입니다.
+- `llm_api_keys` 상태와 레지스트리 metadata를 함께 보고 실행 가능 모델과 실제 routing backend를 판단합니다.
+- 본문의 과거 수기 모델 표는 역사적 참고 자료이며, 현재 authoritative source는 레지스트리 row입니다.
+
+## 2026-04-23 레지스트리 기반 실행 경로 메타데이터
+
+- 레지스트리 저장 방식
+  - `llm_models.metadata.execution_backend`
+  - `llm_models.metadata.execution_model_id`
+  - `llm_models.metadata.execution_base_url`
+  - 위 3개를 저장해 selector가 DB row를 보고 실제 실행 provider와 base URL을 결정한다.
+- 기본 backend 분류
+  - `openai_compatible_direct`: OpenAI, Groq, DeepSeek, OpenRouter, Qwen, Kimi, MiniMax
+  - `claude_cli_relay`: Anthropic
+  - `codex_cli`: Codex
+  - `litellm_proxy`: Gemini
+- 채팅 실행 경로
+  - `app/services/model_selector.py`는 레지스트리 metadata를 보고 `openai_compatible_direct` 모델을 provider 직통 OpenAI-compatible endpoint로 우선 호출한다.
+  - 정적 allowlist에 없는 모델도 `llm_models`에 active row와 direct metadata가 있으면 실행할 수 있다.
+  - direct provider API 키는 DB의 provider 활성 키를 우선 사용하고, 없으면 환경변수로 폴백한다.
+- 현재 범위
+  - 이 단계는 “레지스트리 row가 있으면 실행 가능”까지다.
+  - 공급사 catalog를 자동 수집해 `llm_models` row를 생성하는 단계는 아직 별도 작업이다.
 
 ## 2026-04-23 백엔드 레지스트리 1단계
 
@@ -34,6 +55,12 @@ AADS LLM 라우팅: 채팅AI `call_llm_with_fallback()`
 - [A] DB `llm_api_keys` 조회 -> Fernet 복호화 -> provider 키 반환
 - [B] Anthropic OAuth (채팅 메인): AUTH_TOKEN 1->2 폴백
 - [C] LiteLLM Proxy (localhost:4000): Gemini 12 + DeepSeek 2 + Groq 8 + Alibaba 30 + Claude 10
+
+## 현재 운영 기준
+
+- 채팅창에 어떤 모델이 보이는지는 `llm_models`와 `/api/v1/llm-models/providers/summary` 응답이 기준이다.
+- Settings의 `LLM 키 및 모델 레지스트리`는 위 레지스트리를 그대로 소비한다.
+- 아래의 상세 모델 표와 과거 실측 수치는 역사적 참고 자료이며, 현재 authoritative source는 아니다.
 
 ---
 
