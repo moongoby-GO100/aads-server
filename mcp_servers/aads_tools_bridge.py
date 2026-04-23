@@ -44,7 +44,8 @@ async def _ensure_db():
         from app.core.db_pool import init_pool
         dsn = os.getenv("DATABASE_URL", "")
         if dsn:
-            await init_pool(dsn)
+            # init_pool() reads DATABASE_URL from the environment.
+            await init_pool()
             _db_initialized = True
             logger.info("DB pool initialized")
     except Exception as e:
