@@ -59,6 +59,7 @@ async def _get_review_models() -> list[str]:
     try:
         from app.core.db_pool import get_pool
         import json as _j
+        from app.services.model_registry import filter_executable_models
         pool = get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -67,10 +68,10 @@ async def _get_review_models() -> list[str]:
         if row:
             raw = row["models"]
             if isinstance(raw, str):
-                return _j.loads(raw)
+                return await filter_executable_models(_j.loads(raw))
             elif isinstance(raw, list):
-                return raw
-            return list(raw) if raw else [_REVIEW_MODEL_FALLBACK]
+                return await filter_executable_models(raw)
+            return await filter_executable_models(list(raw) if raw else [_REVIEW_MODEL_FALLBACK])
         return [_REVIEW_MODEL_FALLBACK]
     except Exception as e:
         logger.warning("review_model_db_lookup_failed: %s", str(e)[:80])

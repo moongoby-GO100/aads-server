@@ -26,6 +26,8 @@ _JOB_ID_RE = re.compile(r'^runner-[0-9a-zA-Z_-]+$')
 async def _get_model_for_size(conn, size: str) -> str:
     """작업 규모 → DB(runner_model_config)에서 1순위 모델 조회."""
     import json as _json_model
+    from app.services.model_registry import filter_executable_models
+
     _size = (size or "M").upper()
     row = await conn.fetchrow(
         "SELECT models FROM runner_model_config WHERE size = $1", _size
@@ -34,7 +36,9 @@ async def _get_model_for_size(conn, size: str) -> str:
         raw = row["models"]
         models = _json_model.loads(raw) if isinstance(raw, str) else raw
         if models:
-            return models[0]
+            executable = await filter_executable_models(models)
+            if executable:
+                return executable[0]
     # DB 조회 실패 시 안전망
     return {"XS": "claude-haiku-4-5-20251001", "S": "claude-haiku-4-5-20251001",
             "M": "claude-sonnet-4-6", "L": "claude-opus-4-6",

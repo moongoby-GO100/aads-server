@@ -44,6 +44,7 @@ from app.api.agenda import router as agenda_router
 from app.api.hot_reload import router as hot_reload_router
 from app.api.credential_vault import router as credential_vault_router
 from app.api.llm_keys import router as llm_keys_router
+from app.api.llm_models import router as llm_models_router
 from app.api.braming import router as braming_router
 from app.api.project_docs import router as project_docs_router
 from app.routers.chat import router as chat_v2_router
@@ -1221,6 +1222,7 @@ app.include_router(hot_reload_router, prefix="/api/v1", tags=["hot-reload"])
 app.include_router(admin_router, prefix="/api/v1", tags=["admin"])
 app.include_router(credential_vault_router, prefix="/api/v1", tags=["credential-vault"])
 app.include_router(llm_keys_router, prefix="/api/v1", tags=["llm-keys"])
+app.include_router(llm_models_router, prefix="/api/v1", tags=["llm-models"])
 app.include_router(braming_router)
 app.include_router(project_docs_router, prefix="/api/v1", tags=["project-docs"])
 

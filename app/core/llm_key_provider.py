@@ -6,6 +6,7 @@ import time
 
 from app.core.credential_vault import decrypt_value, encrypt_value
 from app.core.db_pool import get_pool
+from app.services.model_registry import normalize_provider
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,13 @@ def _set_cached_value(key_name: str, value: str) -> None:
     _cache[key_name] = (value, time.time() + _CACHE_TTL_SECONDS)
 
 
+def invalidate_key_cache(key_name: str | None = None) -> None:
+    if key_name:
+        _cache.pop(key_name, None)
+        return
+    _cache.clear()
+
+
 async def get_api_key(key_name: str, fallback_env: str = "") -> str:
     """DB에서 key_name으로 조회 → 복호화 반환. DB 실패 시 env 폴백."""
     cached = _get_cached_value(key_name)
@@ -36,32 +44,33 @@ async def get_api_key(key_name: str, fallback_env: str = "") -> str:
 
     try:
         pool = get_pool()
-        row = await pool.fetchrow(
-            """
-            SELECT encrypted_value
-            FROM llm_api_keys
-            WHERE key_name = $1
-              AND is_active = TRUE
-            LIMIT 1
-            """,
-            key_name,
-        )
-        if row and row["encrypted_value"]:
-            value = decrypt_value(row["encrypted_value"])
-            _set_cached_value(key_name, value)
-            try:
-                await pool.execute(
-                    """
-                    UPDATE llm_api_keys
-                    SET last_used_at = NOW(),
-                        updated_at = NOW()
-                    WHERE key_name = $1
-                    """,
-                    key_name,
-                )
-            except Exception:
-                logger.exception("llm_key_provider.get_api_key.touch_failed", extra={"key_name": key_name})
-            return value
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT encrypted_value
+                FROM llm_api_keys
+                WHERE key_name = $1
+                  AND is_active = TRUE
+                LIMIT 1
+                """,
+                key_name,
+            )
+            if row and row["encrypted_value"]:
+                value = decrypt_value(row["encrypted_value"])
+                _set_cached_value(key_name, value)
+                try:
+                    await conn.execute(
+                        """
+                        UPDATE llm_api_keys
+                        SET last_used_at = NOW(),
+                            updated_at = NOW()
+                        WHERE key_name = $1
+                        """,
+                        key_name,
+                    )
+                except Exception:
+                    logger.exception("llm_key_provider.get_api_key.touch_failed", extra={"key_name": key_name})
+                return value
     except Exception:
         cached = _get_cached_value(key_name, allow_stale=True)
         if cached:
@@ -75,19 +84,21 @@ async def get_api_key(key_name: str, fallback_env: str = "") -> str:
 
 async def get_provider_keys(provider: str) -> list[str]:
     """provider별 활성 키 목록 (priority 순). rate_limited_until 지난 것만."""
+    provider = normalize_provider(provider)
     try:
         pool = get_pool()
-        rows = await pool.fetch(
-            """
-            SELECT key_name, encrypted_value
-            FROM llm_api_keys
-            WHERE provider = $1
-              AND is_active = TRUE
-              AND (rate_limited_until IS NULL OR rate_limited_until <= NOW())
-            ORDER BY priority ASC, id ASC
-            """,
-            provider,
-        )
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT key_name, encrypted_value
+                FROM llm_api_keys
+                WHERE provider = $1
+                  AND is_active = TRUE
+                  AND (rate_limited_until IS NULL OR rate_limited_until <= NOW())
+                ORDER BY priority ASC, id ASC
+                """,
+                provider,
+            )
     except Exception:
         logger.exception("llm_key_provider.get_provider_keys.db_failed", extra={"provider": provider})
         return []
@@ -110,16 +121,25 @@ async def get_provider_keys(provider: str) -> list[str]:
 async def mark_key_rate_limited(key_name: str, seconds: int = 300):
     """rate_limited_until = NOW() + seconds 업데이트."""
     pool = get_pool()
-    await pool.execute(
-        """
-        UPDATE llm_api_keys
-        SET rate_limited_until = NOW() + ($2::int * INTERVAL '1 second'),
-            updated_at = NOW()
-        WHERE key_name = $1
-        """,
-        key_name,
-        max(1, seconds),
-    )
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE llm_api_keys
+            SET rate_limited_until = NOW() + ($2::int * INTERVAL '1 second'),
+                updated_at = NOW()
+            WHERE key_name = $1
+            """,
+            key_name,
+            max(1, seconds),
+        )
+    invalidate_key_cache(key_name)
+    try:
+        from app.services.model_registry import invalidate_registry_cache, sync_model_registry
+
+        invalidate_registry_cache()
+        await sync_model_registry(triggered_by="llm_key_provider", reason=f"rate_limited:{key_name}")
+    except Exception:
+        logger.exception("llm_key_provider.mark_key_rate_limited.registry_sync_failed", extra={"key_name": key_name})
 
 
 async def store_api_key(
@@ -131,36 +151,45 @@ async def store_api_key(
 ):
     """키 암호화 저장 (UPSERT)."""
     encrypted_value = encrypt_value(plaintext_value)
+    provider = normalize_provider(provider)
     pool = get_pool()
-    await pool.execute(
-        """
-        INSERT INTO llm_api_keys (
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO llm_api_keys (
+                provider,
+                key_name,
+                encrypted_value,
+                label,
+                priority,
+                is_active,
+                rate_limited_until,
+                last_verified_at,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, TRUE, NULL, NOW(), NOW())
+            ON CONFLICT (key_name)
+            DO UPDATE SET
+                provider = EXCLUDED.provider,
+                encrypted_value = EXCLUDED.encrypted_value,
+                label = EXCLUDED.label,
+                priority = EXCLUDED.priority,
+                is_active = TRUE,
+                rate_limited_until = NULL,
+                last_verified_at = NOW(),
+                updated_at = NOW()
+            """,
             provider,
             key_name,
             encrypted_value,
             label,
             priority,
-            is_active,
-            rate_limited_until,
-            last_verified_at,
-            updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, TRUE, NULL, NOW(), NOW())
-        ON CONFLICT (key_name)
-        DO UPDATE SET
-            provider = EXCLUDED.provider,
-            encrypted_value = EXCLUDED.encrypted_value,
-            label = EXCLUDED.label,
-            priority = EXCLUDED.priority,
-            is_active = TRUE,
-            rate_limited_until = NULL,
-            last_verified_at = NOW(),
-            updated_at = NOW()
-        """,
-        provider,
-        key_name,
-        encrypted_value,
-        label,
-        priority,
-    )
     _set_cached_value(key_name, plaintext_value)
+    try:
+        from app.services.model_registry import invalidate_registry_cache, sync_model_registry
+
+        invalidate_registry_cache()
+        await sync_model_registry(triggered_by="llm_key_provider", reason=f"store:{key_name}")
+    except Exception:
+        logger.exception("llm_key_provider.store_api_key.registry_sync_failed", extra={"key_name": key_name})

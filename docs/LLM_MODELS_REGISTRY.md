@@ -10,6 +10,22 @@ AADS 채팅창에 등록된 모든 LLM 모델을 문서화하고 버전관리합
 - 총 **62개 모델** 등록 (실측 확인)
 - 5개 제공자: Anthropic, Google, DeepSeek, Groq, Alibaba DashScope
 
+## 2026-04-23 백엔드 레지스트리 1단계
+
+- 모델 메타데이터 저장소: `llm_models`
+- 키 변경 감사 로그: `llm_key_audit_logs`
+- 계산 규칙:
+  - `llm_api_keys`의 활성/우선순위/rate-limit 상태를 읽어 provider별 실행 가능 모델 집합 계산
+  - 템플릿이 있는 provider만 자동 활성화
+  - 템플릿이 없는 provider는 provider summary에서 `requires_admin_review=true`로 남기고 모델 자동 노출 금지
+- 런타임 연결:
+  - `app/services/model_selector.py`가 레지스트리 기반 실행 가능 모델을 우선 적용
+  - 활성 모델 집합이 비어 있거나 레지스트리 조회에 실패하면 기존 하드코딩 세트로 폴백
+- 운영 API:
+  - `GET /api/v1/llm-models`
+  - `GET /api/v1/llm-models/providers/summary`
+  - `POST /api/v1/llm-models/sync`
+
 ---
 
 ## 아키텍처

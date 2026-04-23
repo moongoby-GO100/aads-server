@@ -148,11 +148,13 @@ async def _get_db_model_config(size: str) -> list[str]:
     """
     try:
         from app.core.db_pool import get_pool
+        from app.services.model_registry import filter_executable_models
 
         pool = get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(query, (size or "M").upper())
-        return [row["model"] for row in rows if row and row["model"]]
+        models = [row["model"] for row in rows if row and row["model"]]
+        return await filter_executable_models(models)
     except Exception as e:
         logger.warning("pipeline_c_model_config_db_lookup_failed size=%s error=%s", size, str(e)[:120])
         return []

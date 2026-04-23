@@ -19,6 +19,8 @@ import httpx
 from anthropic import AsyncAnthropic, APIStatusError, APIConnectionError, RateLimitError
 from app.config import Settings
 from app.core.llm_key_provider import get_api_key as _get_db_key
+from app.services.model_registry import get_executable_model_ids as _get_registry_executable_model_ids
+from app.services.model_registry import list_registered_models as _list_registered_models
 from app.services.intent_router import IntentResult
 
 logger = logging.getLogger(__name__)
@@ -379,6 +381,29 @@ _ALIBABA_MODELS = {
 _LITELLM_OPENAI_MODELS = _GEMINI_MODELS | _GROQ_MODELS | _DEEPSEEK_MODELS | _OPENROUTER_MODELS | _ALIBABA_MODELS | _KIMI_MODELS | _MINIMAX_MODELS | _OPENAI_MODELS | _CODEX_MODELS
 
 
+async def get_available_model_ids() -> set[str]:
+    executable = await _get_registry_executable_model_ids()
+    return executable or (_LITELLM_OPENAI_MODELS | set(_ANTHROPIC_MODEL_ID.keys()))
+
+
+async def get_display_models(active_only: bool = True) -> list[dict[str, Any]]:
+    return await _list_registered_models(active_only=active_only)
+
+
+def _fallback_for_unavailable_model(model: str, available_models: set[str]) -> str:
+    groups = [
+        [candidate for candidate in ("claude-sonnet", "claude-haiku", "claude-opus", "claude-opus-46") if candidate in available_models],
+        [candidate for candidate in ("gemini-2.5-flash", "gemini-flash", "gemini-3-flash-preview", "gemini-2.5-pro") if candidate in available_models],
+        [candidate for candidate in ("gpt-4o-mini", "gpt-4o", "gpt-5-mini", "gpt-5") if candidate in available_models],
+        [candidate for candidate in ("qwen-turbo", "qwen-flash", "qwen-plus", "qwen-max") if candidate in available_models],
+        [candidate for candidate in ("deepseek-chat", "groq-compound", "minimax-m2.7", "kimi-latest") if candidate in available_models],
+    ]
+    for candidates in groups:
+        if candidates:
+            return candidates[0]
+    return next(iter(sorted(available_models))) if available_models else model
+
+
 def _estimate_cost(model: str, in_tokens: int, out_tokens: int) -> Decimal:
     in_rate, out_rate = _COST_MAP.get(model, (3.0, 15.0))
     return Decimal(str(round(in_tokens * in_rate / 1_000_000 + out_tokens * out_rate / 1_000_000, 6)))
@@ -472,6 +497,12 @@ async def call_stream(
         elif _intent in _SONNET_INTENTS and model == "claude-opus":
             logger.info(f"cascade_downgrade: {_intent} → claude-sonnet (medium intent)")
             model = "claude-sonnet"
+
+    runtime_available_models = await get_available_model_ids()
+    if runtime_available_models and model not in runtime_available_models:
+        fallback_model = _fallback_for_unavailable_model(model, runtime_available_models)
+        logger.warning("registry_model_unavailable: '%s' -> '%s'", model, fallback_model)
+        model = fallback_model
 
     # 자기 모델 질문 오답 방지: 실제 라우트 id + 제조사를 시스템 프롬프트에 명시
     _maker = "Alibaba (알리바바)" if any(q in model.lower() for q in ("qwen", "deepseek-v3")) and model in _ALIBABA_MODELS else \
