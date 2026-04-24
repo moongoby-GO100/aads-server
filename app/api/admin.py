@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -218,6 +218,313 @@ async def get_token_profile():
     return {
         "sections": profile_sections(),
         "workspaces": profile_all_workspaces(),
+    }
+
+
+def _load_model_parity_intent_map() -> tuple[str, dict[str, dict]]:
+    source = "app.services.model_selector"
+    try:
+        from app.services.model_selector import INTENT_MAP as raw_intent_map
+    except Exception:
+        from app.services.intent_router import INTENT_MAP as raw_intent_map
+        source = "app.services.intent_router"
+
+    intent_map: dict[str, dict] = {}
+    for intent, cfg in (raw_intent_map or {}).items():
+        normalized = dict(cfg or {})
+        normalized["model"] = str((cfg or {}).get("model") or "unknown")
+        normalized["tools"] = bool((cfg or {}).get("tools"))
+        normalized["group"] = str((cfg or {}).get("group") or "")
+        normalized["thinking"] = bool((cfg or {}).get("thinking"))
+        normalized["gemini_direct"] = str((cfg or {}).get("gemini_direct") or "")
+        intent_map[intent] = normalized
+
+    return source, intent_map
+
+
+def _build_model_parity_routing() -> dict:
+    source, intent_map = _load_model_parity_intent_map()
+
+    route_buckets: dict[tuple[str, bool, str, bool, str], dict] = {}
+    model_buckets: dict[str, dict] = {}
+
+    tool_enabled = 0
+    thinking_enabled = 0
+    gemini_direct_enabled = 0
+
+    for intent, cfg in sorted(intent_map.items()):
+        model = str(cfg.get("model") or "unknown")
+        tools = bool(cfg.get("tools"))
+        group = str(cfg.get("group") or "")
+        thinking = bool(cfg.get("thinking"))
+        gemini_direct = str(cfg.get("gemini_direct") or "")
+
+        if tools:
+            tool_enabled += 1
+        if thinking:
+            thinking_enabled += 1
+        if gemini_direct:
+            gemini_direct_enabled += 1
+
+        route_key = (model, tools, group, thinking, gemini_direct)
+        route_bucket = route_buckets.setdefault(
+            route_key,
+            {
+                "model": model,
+                "tools": tools,
+                "group": group,
+                "thinking": thinking,
+                "gemini_direct": gemini_direct,
+                "count": 0,
+                "intents": [],
+            },
+        )
+        route_bucket["count"] += 1
+        route_bucket["intents"].append(intent)
+
+        model_bucket = model_buckets.setdefault(
+            model,
+            {
+                "model": model,
+                "count": 0,
+                "tool_enabled": 0,
+                "thinking_enabled": 0,
+                "gemini_direct_enabled": 0,
+                "intents": [],
+            },
+        )
+        model_bucket["count"] += 1
+        model_bucket["tool_enabled"] += 1 if tools else 0
+        model_bucket["thinking_enabled"] += 1 if thinking else 0
+        model_bucket["gemini_direct_enabled"] += 1 if gemini_direct else 0
+        model_bucket["intents"].append(intent)
+
+    by_route = sorted(
+        route_buckets.values(),
+        key=lambda item: (-item["count"], item["model"], item["group"], item["gemini_direct"]),
+    )
+    by_model = sorted(
+        model_buckets.values(),
+        key=lambda item: (-item["count"], item["model"]),
+    )
+
+    return {
+        "source": source,
+        "total_intents": len(intent_map),
+        "tool_enabled_intents": tool_enabled,
+        "thinking_enabled_intents": thinking_enabled,
+        "gemini_direct_intents": gemini_direct_enabled,
+        "by_model": by_model,
+        "by_route": by_route,
+    }
+
+
+async def _admin_column_exists(conn, table_name: str, column_name: str) -> bool:
+    try:
+        exists = await conn.fetchval(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = $1
+              AND column_name = $2
+            LIMIT 1
+            """,
+            table_name,
+            column_name,
+        )
+        return bool(exists)
+    except Exception:
+        return False
+
+
+@router.get("/admin/model-parity")
+async def get_model_parity_dashboard():
+    """최근 7일 모델 라우팅/사용량 패리티 대시보드."""
+    routing = _build_model_parity_routing()
+    now = datetime.now(ZoneInfo("Asia/Seoul"))
+    window_start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=6)
+    day_labels = [
+        (window_start + timedelta(days=offset)).date().isoformat()
+        for offset in range(7)
+    ]
+
+    response = {
+        "summary": {
+            "window_days": 7,
+            "window_start": window_start.isoformat(),
+            "window_end": now.isoformat(),
+            "tracked_models": 0,
+            "tracked_intents": routing["total_intents"],
+            "tracked_messages": 0,
+            "total_calls": 0,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_tokens": 0,
+        },
+        "routing": routing,
+        "models": [],
+        "daily": [],
+    }
+
+    try:
+        pool = _get_governance_pool()
+        async with pool.acquire() as conn:
+            if not await _governance_table_exists(conn, "chat_messages"):
+                return response
+
+            required_columns = ("created_at", "model_used", "tokens_in", "tokens_out")
+            for column_name in required_columns:
+                if not await _admin_column_exists(conn, "chat_messages", column_name):
+                    return response
+
+            has_role = await _admin_column_exists(conn, "chat_messages", "role")
+            has_intent = await _admin_column_exists(conn, "chat_messages", "intent")
+            role_filter = " AND role = 'assistant'" if has_role else ""
+            intent_expr = "COUNT(DISTINCT NULLIF(intent, ''))::int" if has_intent else "0::int"
+
+            tracked_messages_where = (
+                f"WHERE created_at >= TIMESTAMPTZ '{window_start.isoformat()}'{role_filter}"
+            )
+            tracked_messages = await _governance_safe_count(conn, "chat_messages", tracked_messages_where)
+
+            model_rows = await conn.fetch(
+                f"""
+                SELECT
+                    COALESCE(NULLIF(model_used, ''), 'unknown') AS model,
+                    COUNT(*)::int AS calls,
+                    COALESCE(SUM(tokens_in), 0)::bigint AS input_tokens,
+                    COALESCE(SUM(tokens_out), 0)::bigint AS output_tokens,
+                    COALESCE(SUM(tokens_in + tokens_out), 0)::bigint AS total_tokens,
+                    {intent_expr} AS distinct_intents
+                FROM chat_messages
+                WHERE created_at >= $1
+                  AND COALESCE(NULLIF(model_used, ''), '') <> ''
+                  {role_filter}
+                GROUP BY 1
+                ORDER BY calls DESC, total_tokens DESC, model ASC
+                """,
+                window_start,
+            )
+
+            daily_rows = await conn.fetch(
+                f"""
+                SELECT
+                    TO_CHAR(DATE(created_at AT TIME ZONE 'Asia/Seoul'), 'YYYY-MM-DD') AS day,
+                    COALESCE(NULLIF(model_used, ''), 'unknown') AS model,
+                    COUNT(*)::int AS calls,
+                    COALESCE(SUM(tokens_in), 0)::bigint AS input_tokens,
+                    COALESCE(SUM(tokens_out), 0)::bigint AS output_tokens,
+                    COALESCE(SUM(tokens_in + tokens_out), 0)::bigint AS total_tokens
+                FROM chat_messages
+                WHERE created_at >= $1
+                  AND COALESCE(NULLIF(model_used, ''), '') <> ''
+                  {role_filter}
+                GROUP BY 1, 2
+                ORDER BY 1 ASC, 2 ASC
+                """,
+                window_start,
+            )
+    except Exception:
+        return response
+
+    routing_model_counts = {
+        item["model"]: int(item["count"] or 0)
+        for item in routing["by_model"]
+    }
+
+    models = []
+    total_calls = 0
+    total_input_tokens = 0
+    total_output_tokens = 0
+    total_tokens = 0
+
+    for row in model_rows:
+        calls = int(row["calls"] or 0)
+        input_tokens = int(row["input_tokens"] or 0)
+        output_tokens = int(row["output_tokens"] or 0)
+        total_row_tokens = int(row["total_tokens"] or 0)
+
+        total_calls += calls
+        total_input_tokens += input_tokens
+        total_output_tokens += output_tokens
+        total_tokens += total_row_tokens
+
+        models.append(
+            {
+                "model": row["model"],
+                "calls": calls,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": total_row_tokens,
+                "avg_tokens_per_call": round(total_row_tokens / calls, 2) if calls else 0,
+                "distinct_intents": int(row["distinct_intents"] or 0),
+                "configured_intents": routing_model_counts.get(row["model"], 0),
+            }
+        )
+
+    daily_lookup = {
+        day: {
+            "date": day,
+            "calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "models": [],
+        }
+        for day in day_labels
+    }
+
+    for row in daily_rows:
+        day = row["day"]
+        bucket = daily_lookup.get(day)
+        if not bucket:
+            continue
+        calls = int(row["calls"] or 0)
+        input_tokens = int(row["input_tokens"] or 0)
+        output_tokens = int(row["output_tokens"] or 0)
+        total_row_tokens = int(row["total_tokens"] or 0)
+
+        bucket["calls"] += calls
+        bucket["input_tokens"] += input_tokens
+        bucket["output_tokens"] += output_tokens
+        bucket["total_tokens"] += total_row_tokens
+        bucket["models"].append(
+            {
+                "model": row["model"],
+                "calls": calls,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": total_row_tokens,
+            }
+        )
+
+    response["summary"] = {
+        "window_days": 7,
+        "window_start": window_start.isoformat(),
+        "window_end": now.isoformat(),
+        "tracked_models": len(models),
+        "tracked_intents": routing["total_intents"],
+        "tracked_messages": tracked_messages,
+        "total_calls": total_calls,
+        "total_input_tokens": total_input_tokens,
+        "total_output_tokens": total_output_tokens,
+        "total_tokens": total_tokens,
+    }
+    response["models"] = models
+    response["daily"] = list(daily_lookup.values())
+
+    return response
+
+
+@router.get("/admin/model-parity/intent-map")
+async def get_model_parity_intent_map():
+    """모델 라우팅용 INTENT_MAP 전체 덤프."""
+    source, intent_map = _load_model_parity_intent_map()
+    return {
+        "source": source,
+        "count": len(intent_map),
+        "intent_map": dict(sorted(intent_map.items())),
     }
 
 
