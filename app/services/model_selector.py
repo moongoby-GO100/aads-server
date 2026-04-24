@@ -1448,11 +1448,18 @@ async def _stream_litellm_openai(
                 logger.warning(f"gemini_parallel_tool_error: {tc['name']}: {_te}")
                 return {"id": tc["id"], "name": tc["name"], "args": _args, "result": f"도구 실행 오류: {str(_te)[:200]}", "ok": False}
 
+        # 도구 실행 전 tool_use 이벤트를 먼저 전송해 프론트가 즉시 표시할 수 있게 한다.
+        for tc in _sorted_tcs:
+            try:
+                _args = json.loads(tc["args_buf"]) if isinstance(tc["args_buf"], str) else tc["args_buf"]
+            except Exception:
+                _args = {}
+            yield {"type": "tool_use", "tool_name": tc["name"], "tool_use_id": tc["id"], "tool_input": _args}
+
         _exec_results = await asyncio.gather(*[_run_one(tc) for tc in _sorted_tcs])
 
-        # 이벤트 yield + tool 메시지 추가
+        # 실행 결과만 yield + tool 메시지 추가
         for _er in _exec_results:
-            yield {"type": "tool_use", "tool_name": _er["name"], "tool_use_id": _er["id"], "tool_input": _er["args"]}
             yield {"type": "tool_result", "tool_name": _er["name"], "content": _er["result"]}
             loop_msgs.append({
                 "role": "tool",
