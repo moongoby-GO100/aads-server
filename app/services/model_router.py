@@ -13,7 +13,7 @@ T-002 프로덕션 매핑:
 
 LiteLLM Proxy 라우팅 (인텐트 기반):
   LITELLM_BASE_URL: http://aads-litellm:4000/v1  (Docker 내부 네트워크)
-  일 $5 초과 시 Opus 호출 차단 → Sonnet 자동 다운그레이드
+  일 $5 초과 시 Opus 비용 이상치 경고 로그만 기록 (v2.1 Q-COST)
   월 $150 초과 시 비용 경고 로그
 """
 from dataclasses import dataclass
@@ -56,8 +56,7 @@ INTENT_MODEL_MAP: dict[str, str | None] = {
     "health_check":      "gemini-flash-lite",
 }
 
-# 일 $5 초과 시 Opus 차단 — 다운그레이드 대상
-_OPUS_DOWNGRADE_TO = "claude-sonnet"
+# 일 $5 초과 시 Opus 비용 이상치만 감지 (v2.1 Q-COST: 강제 차단 없음)
 _DAILY_BUDGET_USD = float(os.environ.get("LITELLM_DAILY_BUDGET_USD", "5.0"))
 _MONTHLY_BUDGET_WARN_USD = float(os.environ.get("LITELLM_MONTHLY_BUDGET_WARN_USD", "150.0"))
 
@@ -84,7 +83,7 @@ async def get_litellm_daily_spend() -> float:
 async def resolve_intent_model(intent: str) -> str | None:
     """
     인텐트를 LiteLLM 모델명으로 변환.
-    일 $5 초과 시 Opus → Sonnet 자동 다운그레이드.
+    일 $5 초과 시 경고 로그만 기록 (v2.1 Q-COST: 강제 차단 폐지).
     월 $150 초과 시 경고 로그.
     workspace_switch 등 모델 불필요 인텐트는 None 반환.
     """
@@ -97,22 +96,20 @@ async def resolve_intent_model(intent: str) -> str | None:
     if model == "claude-opus":
         daily_spend = await get_litellm_daily_spend()
         if daily_spend >= _DAILY_BUDGET_USD:
-            _budget_logger.warning(
-                "daily_budget_exceeded_opus_downgraded",
+            _budget_logger.info(
+                "daily_budget_exceeded_opus_warning",
                 daily_spend=daily_spend,
                 limit=_DAILY_BUDGET_USD,
                 intent=intent,
-                original_model=model,
-                downgraded_to=_OPUS_DOWNGRADE_TO,
+                model=model,
             )
             logger.warning(
-                "opus_budget_block",
+                "opus_budget_warning",
                 intent=intent,
                 spend=daily_spend,
                 limit=_DAILY_BUDGET_USD,
-                fallback=_OPUS_DOWNGRADE_TO,
+                model=model,
             )
-            model = _OPUS_DOWNGRADE_TO
 
     return model
 

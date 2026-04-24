@@ -1118,6 +1118,14 @@ _CODEX_CWD_MAP = {
     "NTV2": "/root/newtalk-v2",
 }
 
+_CODEX_CWD_MAP = {
+    "AADS": "/root/aads/aads-server",
+    "KIS": "/root/aads/kis-server",
+    "GO100": "/root/aads/go100",
+    "SF": "/root/shortflow",
+    "NTV2": "/root/newtalk-v2",
+}
+
 
 async def handle_codex_stream(request):
     """Codex CLI subprocess -> NDJSON pseudo-streaming. ChatGPT Plus OAuth."""

@@ -119,3 +119,81 @@ class TestGetLlmForAgent:
         assert llm is mock_llm
         assert config == AGENT_MODELS["pm"]["fallback"]
         assert call_count[0] == 2  # primary 1회 + fallback 1회
+
+
+class TestResolveIntentModel:
+    @pytest.mark.asyncio
+    async def test_opus_intent_keeps_opus_when_daily_budget_exceeded(self, monkeypatch):
+        from app.services import model_router
+
+        async def _fake_daily_spend():
+            return model_router._DAILY_BUDGET_USD
+
+        budget_logs = []
+        app_logs = []
+
+        monkeypatch.setattr(model_router, "get_litellm_daily_spend", _fake_daily_spend)
+        monkeypatch.setattr(
+            model_router._budget_logger,
+            "info",
+            lambda event, **kwargs: budget_logs.append((event, kwargs)),
+        )
+        monkeypatch.setattr(
+            model_router.logger,
+            "warning",
+            lambda event, **kwargs: app_logs.append((event, kwargs)),
+        )
+
+        model = await model_router.resolve_intent_model("decision")
+
+        assert model == "claude-opus"
+        assert budget_logs == [
+            (
+                "daily_budget_exceeded_opus_warning",
+                {
+                    "daily_spend": model_router._DAILY_BUDGET_USD,
+                    "limit": model_router._DAILY_BUDGET_USD,
+                    "intent": "decision",
+                    "model": "claude-opus",
+                },
+            )
+        ]
+        assert app_logs == [
+            (
+                "opus_budget_warning",
+                {
+                    "intent": "decision",
+                    "spend": model_router._DAILY_BUDGET_USD,
+                    "limit": model_router._DAILY_BUDGET_USD,
+                    "model": "claude-opus",
+                },
+            )
+        ]
+
+    @pytest.mark.asyncio
+    async def test_opus_intent_without_budget_pressure_has_no_warning(self, monkeypatch):
+        from app.services import model_router
+
+        async def _fake_daily_spend():
+            return model_router._DAILY_BUDGET_USD - 0.01
+
+        budget_logs = []
+        app_logs = []
+
+        monkeypatch.setattr(model_router, "get_litellm_daily_spend", _fake_daily_spend)
+        monkeypatch.setattr(
+            model_router._budget_logger,
+            "info",
+            lambda event, **kwargs: budget_logs.append((event, kwargs)),
+        )
+        monkeypatch.setattr(
+            model_router.logger,
+            "warning",
+            lambda event, **kwargs: app_logs.append((event, kwargs)),
+        )
+
+        model = await model_router.resolve_intent_model("decision")
+
+        assert model == "claude-opus"
+        assert budget_logs == []
+        assert app_logs == []

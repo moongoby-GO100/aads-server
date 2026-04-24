@@ -603,13 +603,11 @@ async def call_stream(
     if model in _OVERRIDE_TO_ALIAS:
         model = _OVERRIDE_TO_ALIAS[model]
 
-    # ── Dynamic Model Cascading (비용 최적화) ──────────────────────────
-    # model_override 없으면 인텐트 복잡도에 따라 최저 비용 모델 자동 선택
-    # 단순 인텐트는 Haiku로 다운그레이드 → Sonnet 대비 ~80% 비용 절감
+    # ── Dynamic Model Cascading (단순 비도구 인텐트만 축소) ───────────────
+    # model_override 없으면 인텐트 복잡도에 따라 최소한의 다운그레이드만 적용
+    # Haiku는 실제 단순 대화 인텐트에만 사용
     _HAIKU_INTENTS = {
-        "greeting", "casual", "status_check", "health_check",
-        "all_service_status", "cost_report", "task_history",
-        "dashboard", "file_read", "log_check", "session_list",
+        "greeting", "casual",
     }
     _SONNET_INTENTS = {
         "search", "url_read", "browser", "task_query",
@@ -1688,6 +1686,7 @@ async def _stream_codex_relay(
         "system_prompt": system_prompt,
         "messages_text": formatted,
         "session_id": session_id or "",
+        "project": "AADS",
         "project": "AADS",
         "tool_names": [t.get("name", "") for t in (tools or []) if t.get("name")],
         "tool_schemas": [

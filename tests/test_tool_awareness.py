@@ -55,6 +55,13 @@ def test_system_prompt_role_section():
     assert "6개 서비스" in src, "<role>에 6개 서비스 언급 없음"
 
 
+def test_system_prompt_quality_cost_rule_updated():
+    """v2.1 비용 규칙 문구가 품질 우선 정책으로 갱신되었는지 확인."""
+    src = _read("app/core/prompts/system_prompt_v2.py")
+    assert "## 비용: 품질 최우선, 효율 라우팅 유지. CEO 명시 선택은 절대 우선. 비용 이상치만 감지 (R-QUALITY-COST)" in src
+    assert "## 비용: 일 $5, 월 $150 초과 → CEO 알림. 라우팅: XS→haiku, S/M→sonnet, L/XL→opus" not in src
+
+
 # ─── 2. context_builder.py — system_prompt_v2 연동 확인 ──────────────────────
 
 def test_context_builder_imports_system_prompt_v2():

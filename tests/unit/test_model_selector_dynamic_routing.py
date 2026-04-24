@@ -8,6 +8,45 @@ from app.services import model_selector
 from app.services.intent_router import IntentResult
 
 
+async def _collect_claude_route(monkeypatch, *, intent: str, model: str, use_tools: bool, tool_group: str):
+    routed_models = []
+
+    async def _fake_get_db_key(*_args, **_kwargs):
+        return ""
+
+    async def _fake_available_models():
+        return {"claude-haiku", "claude-sonnet", "claude-opus"}
+
+    async def _fake_registry_row(_model_id: str):
+        return None
+
+    async def _fake_claude_slots():
+        return {}
+
+    async def _fake_cli_stream(target_model, system_prompt, messages, tools=None, session_id=None, oauth_slot=None):
+        routed_models.append(target_model)
+        assert system_prompt
+        assert messages[-1]["role"] == "user"
+        yield {"type": "done", "model": target_model, "cost": "0", "input_tokens": 1, "output_tokens": 1}
+
+    monkeypatch.setattr(model_selector, "_get_db_key", _fake_get_db_key)
+    monkeypatch.setattr(model_selector, "get_available_model_ids", _fake_available_models)
+    monkeypatch.setattr(model_selector, "_get_registered_model_row", _fake_registry_row)
+    monkeypatch.setattr(model_selector, "_get_claude_slot_records", _fake_claude_slots)
+    monkeypatch.setattr(model_selector, "_stream_cli_relay", _fake_cli_stream)
+
+    events = [
+        event
+        async for event in model_selector.call_stream(
+            IntentResult(intent=intent, model=model, use_tools=use_tools, tool_group=tool_group),
+            "system prompt",
+            [{"role": "user", "content": "라우팅 확인"}],
+        )
+    ]
+
+    return routed_models, events
+
+
 @pytest.mark.asyncio
 async def test_call_stream_routes_dynamic_qwen_model_to_direct_provider(monkeypatch):
     calls: list[tuple[str, str, str]] = []
@@ -65,6 +104,34 @@ async def test_call_stream_routes_dynamic_qwen_model_to_direct_provider(monkeypa
     assert calls == [("qwen3.6-plus", "qwen", "qwen3.6-plus")]
     assert events[-1]["type"] == "done"
     assert events[-1]["model"] == "qwen3.6-plus"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_intent_no_longer_downgrades_to_haiku(monkeypatch):
+    routed_models, events = await _collect_claude_route(
+        monkeypatch,
+        intent="dashboard",
+        model="claude-sonnet",
+        use_tools=True,
+        tool_group="all",
+    )
+
+    assert routed_models == ["claude-sonnet"]
+    assert events[-1]["model"] == "claude-sonnet"
+
+
+@pytest.mark.asyncio
+async def test_casual_intent_still_downgrades_to_haiku(monkeypatch):
+    routed_models, events = await _collect_claude_route(
+        monkeypatch,
+        intent="casual",
+        model="claude-sonnet",
+        use_tools=False,
+        tool_group="",
+    )
+
+    assert routed_models == ["claude-haiku"]
+    assert events[-1]["model"] == "claude-haiku"
 
 
 def test_route_metadata_accepts_json_string():
