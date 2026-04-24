@@ -1165,6 +1165,8 @@ deploy_job() {
                 echo "ok" > "/tmp/pipeline-push-result-${job_id}"
                 # HEARTBEAT: push 성공 후 updated_at 갱신 (deploy_timeout 10분 방지)
                 db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
+                # HEARTBEAT: push 성공 후 updated_at 갱신 (deploy_timeout 10분 방지)
+                db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
             fi
         fi
 
@@ -1433,6 +1435,9 @@ deploy_job() {
             log "  RESTART newtalk-v2-reverb"
             ;;
     esac
+
+    # HEARTBEAT: 서비스 배포 완료, 헬스체크 시작 전 갱신
+    db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
 
     # HEARTBEAT: 서비스 배포 완료, 헬스체크 시작 전 갱신
     db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
