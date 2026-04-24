@@ -359,6 +359,15 @@ export const api = {
   getTokenProfile: () => request<any>("/admin/prompts/token-profile"),
   getGovernance: () => request<any>("/admin/governance"),
   getGovernanceLayers: () => request<any>("/admin/governance/layers"),
+  getAdminTasks: (params?: { status?: string; page?: number; page_size?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.status) q.set("status", params.status);
+    if (params?.page) q.set("page", String(params.page));
+    if (params?.page_size) q.set("page_size", String(params.page_size));
+    return request<any>(`/admin/tasks${q.size ? `?${q.toString()}` : ""}`);
+  },
+  getAdminTask: (jobId: string) => request<any>(`/admin/tasks/${encodeURIComponent(jobId)}`),
+  getAdminTaskStats: () => request<any>("/admin/tasks/stats"),
 
   // LLM API 키 관리 (AADS-188)
   getLlmKeys: () => request<any[]>("/llm-keys"),

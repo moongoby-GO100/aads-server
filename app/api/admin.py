@@ -1,9 +1,10 @@
 """어드민 API — 시스템 프롬프트 관리 (Phase 2/3 기획안 구현)."""
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
@@ -11,6 +12,17 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+_TASK_BOARD_STATUSES = {"queued", "running", "awaiting_approval", "done", "error"}
+_TASK_BOARD_STATUS_SQL = (
+    "CASE "
+    "WHEN status = 'queued' THEN 'queued' "
+    "WHEN status IN ('running', 'claimed') THEN 'running' "
+    "WHEN status = 'awaiting_approval' THEN 'awaiting_approval' "
+    "WHEN status IN ('done', 'approved') THEN 'done' "
+    "ELSE 'error' "
+    "END"
+)
 
 
 # ─── Pydantic Models ──────────────────────────────────────────────────────────
@@ -934,4 +946,239 @@ async def get_governance_layers():
     return {
         "layers": layers,
         "count": len(layers),
+    }
+
+
+def _admin_task_status(status: Optional[str]) -> Optional[str]:
+    normalized = (status or "").strip()
+    if not normalized:
+        return None
+    if normalized not in _TASK_BOARD_STATUSES:
+        raise HTTPException(400, f"Unknown status: {normalized}")
+    return normalized
+
+
+def _admin_iso(value: Any) -> Optional[str]:
+    return value.isoformat() if value else None
+
+
+def _admin_parse_json(value: Any) -> Any:
+    if value in (None, ""):
+        return []
+    if isinstance(value, (list, dict)):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
+def _admin_format_task_log(row: Any) -> dict[str, Any]:
+    metadata = row["metadata"]
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except json.JSONDecodeError:
+            metadata = {"raw": metadata}
+
+    return {
+        "id": row["id"],
+        "log_type": row["log_type"] or "",
+        "content": row["content"] or "",
+        "phase": row["phase"] or "",
+        "metadata": metadata or {},
+        "created_at": _admin_iso(row["created_at"]),
+    }
+
+
+@router.get("/admin/tasks")
+async def list_admin_tasks(
+    status: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=200),
+):
+    """Pipeline Runner 작업 목록 조회 — Task Board용."""
+    from app.core.db_pool import get_pool
+
+    normalized_status = _admin_task_status(status)
+    offset = (page - 1) * page_size
+    pool = get_pool()
+
+    jobs_cte = f"""
+        WITH jobs AS (
+            SELECT
+                job_id,
+                project,
+                {_TASK_BOARD_STATUS_SQL} AS board_status,
+                phase,
+                substring(COALESCE(instruction, '') from 1 for 100) AS instruction,
+                model,
+                worker_model,
+                created_at,
+                updated_at,
+                error_detail
+            FROM pipeline_jobs
+        )
+    """
+
+    async with pool.acquire() as conn:
+        total = await conn.fetchval(
+            jobs_cte + "SELECT COUNT(*) FROM jobs WHERE ($1::text IS NULL OR board_status = $1)",
+            normalized_status,
+        )
+        rows = await conn.fetch(
+            jobs_cte
+            + """
+            SELECT
+                job_id,
+                project,
+                board_status,
+                phase,
+                instruction,
+                model,
+                worker_model,
+                created_at,
+                updated_at,
+                error_detail
+            FROM jobs
+            WHERE ($1::text IS NULL OR board_status = $1)
+            ORDER BY created_at DESC NULLS LAST, updated_at DESC NULLS LAST
+            LIMIT $2 OFFSET $3
+            """,
+            normalized_status,
+            page_size,
+            offset,
+        )
+
+    return {
+        "tasks": [
+            {
+                "job_id": row["job_id"],
+                "project": row["project"] or "",
+                "status": row["board_status"],
+                "phase": row["phase"] or "",
+                "instruction": row["instruction"] or "",
+                "model": row["model"] or "",
+                "worker_model": row["worker_model"] or "",
+                "created_at": _admin_iso(row["created_at"]),
+                "updated_at": _admin_iso(row["updated_at"]),
+                "error_detail": row["error_detail"] or "",
+            }
+            for row in rows
+        ],
+        "total": total or 0,
+        "page": page,
+    }
+
+
+@router.get("/admin/tasks/stats")
+async def get_admin_task_stats():
+    """Task Board용 상태별 집계."""
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"""
+            WITH jobs AS (
+                SELECT {_TASK_BOARD_STATUS_SQL} AS board_status
+                FROM pipeline_jobs
+            )
+            SELECT
+                COUNT(*) FILTER (WHERE board_status = 'queued') AS queued,
+                COUNT(*) FILTER (WHERE board_status = 'running') AS running,
+                COUNT(*) FILTER (WHERE board_status = 'awaiting_approval') AS awaiting_approval,
+                COUNT(*) FILTER (WHERE board_status = 'done') AS done,
+                COUNT(*) FILTER (WHERE board_status = 'error') AS error,
+                COUNT(*) AS total
+            FROM jobs
+            """
+        )
+
+    return {
+        "queued": row["queued"] or 0,
+        "running": row["running"] or 0,
+        "awaiting_approval": row["awaiting_approval"] or 0,
+        "done": row["done"] or 0,
+        "error": row["error"] or 0,
+        "total": row["total"] or 0,
+    }
+
+
+@router.get("/admin/tasks/{job_id}")
+async def get_admin_task(job_id: str):
+    """Task Board용 작업 상세 조회."""
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        has_logs_column = await _admin_column_exists(conn, "pipeline_jobs", "logs")
+        row = await conn.fetchrow(
+            f"""
+            SELECT
+                job_id,
+                project,
+                instruction,
+                status AS raw_status,
+                {_TASK_BOARD_STATUS_SQL} AS board_status,
+                phase,
+                cycle,
+                max_cycles,
+                model,
+                worker_model,
+                actual_model,
+                size,
+                {"logs AS log_snapshot," if has_logs_column else "NULL::text AS log_snapshot,"}
+                result_output,
+                git_diff,
+                review_feedback,
+                error_detail,
+                started_at,
+                created_at,
+                updated_at
+            FROM pipeline_jobs
+            WHERE job_id = $1
+            """,
+            job_id,
+        )
+        if not row:
+            raise HTTPException(404, "Task not found")
+
+        log_rows = await conn.fetch(
+            """
+            SELECT id, log_type, content, phase, metadata, created_at
+            FROM task_logs
+            WHERE task_id = $1
+            ORDER BY created_at DESC
+            LIMIT 200
+            """,
+            job_id,
+        )
+
+    logs = [_admin_format_task_log(log_row) for log_row in reversed(log_rows)]
+
+    return {
+        "job_id": row["job_id"],
+        "project": row["project"] or "",
+        "status": row["board_status"],
+        "raw_status": row["raw_status"] or "",
+        "phase": row["phase"] or "",
+        "cycle": row["cycle"] or 0,
+        "max_cycles": row["max_cycles"] or 0,
+        "instruction": row["instruction"] or "",
+        "model": row["model"] or "",
+        "worker_model": row["worker_model"] or "",
+        "actual_model": row["actual_model"] or "",
+        "size": row["size"] or "",
+        "logs": logs,
+        "log_snapshot": _admin_parse_json(row["log_snapshot"]),
+        "result_output": row["result_output"] or "",
+        "git_diff": row["git_diff"] or "",
+        "review_feedback": row["review_feedback"] or "",
+        "error_detail": row["error_detail"] or "",
+        "started_at": _admin_iso(row["started_at"]),
+        "created_at": _admin_iso(row["created_at"]),
+        "updated_at": _admin_iso(row["updated_at"]),
     }
