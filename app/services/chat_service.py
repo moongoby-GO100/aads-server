@@ -312,8 +312,9 @@ async def with_background_completion(
     # heartbeat 정지 신호 — producer 완료 또는 client disconnect 시 set
     _hb_stop = _heartbeat_asyncio.Event()
 
-    # 스트리밍 상태 초기화
-    state: Dict[str, Any] = {"content": "", "tool_count": 0, "last_tool": "", "last_save": _bg_time.monotonic(), "started_at": _bg_time.monotonic(), "tool_events": []}
+    # 스트리밍 상태 초기화 — monotonic 한 번만 호출하여 started_at/last_save 일관성 보장
+    _state_start = _bg_time.monotonic()
+    state: Dict[str, Any] = {"content": "", "tool_count": 0, "last_tool": "", "last_save": _state_start, "started_at": _state_start, "tool_events": []}
     _streaming_state[session_id] = state
 
     _client_gone_since: float = 0  # 클라이언트 이탈 시각 (monotonic)
@@ -544,7 +545,7 @@ async def with_background_completion(
                 await queue.put(_SENTINEL)
             except Exception:
                 pass
-            if _active_bg_tasks.get(session_id) is _my_task:
+            if _my_task is not None and _active_bg_tasks.get(session_id) is _my_task:
                 _active_bg_tasks.pop(session_id, None)
             # 🆕 bg_task 완료 후 대기 중인 trigger_ai_reaction 큐 소비
             if session_id in _ai_reaction_queue and _ai_reaction_queue[session_id]:
@@ -871,9 +872,11 @@ async def _resume_single_stream(
         "content": partial_content,
         "tool_count": 0,
         "last_tool": "",
+        "last_save": _started_at,
         "updated_at": _started_at,
         "started_at": _started_at,
         "completed": False,
+        "tool_events": [],
     }
     if _resume_task is not None:
         _active_bg_tasks[session_id] = _resume_task
