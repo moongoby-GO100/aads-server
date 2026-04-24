@@ -195,6 +195,121 @@ def _is_db_slot_rate_limited(record: Optional[Dict[str, Any]]) -> bool:
 # AADS session_id → CLI session_id 매핑 (대화 이어가기용)
 _cli_session_map: Dict[str, str] = {}  # {aads_session_id: cli_session_id}
 
+_INTENT_POLICY_CACHE_TTL_SECONDS = 300
+_INTENT_POLICY_CACHE: Dict[str, Any] = {"expires_at": 0.0, "policies": {}}
+_INTENT_POLICY_MODEL_ALIASES = {
+    "claude-sonnet-4-6": "claude-sonnet",
+    "claude-sonnet-4-5": "claude-sonnet",
+    "claude-haiku-4-5": "claude-haiku",
+    "claude-haiku-4-5-20251001": "claude-haiku",
+    "claude-opus-4-7": "claude-opus",
+    "claude-opus-4-6": "claude-opus",
+    "claude-opus-4-5": "claude-opus",
+    "claude-opus-46": "claude-opus",
+}
+_INTENT_POLICY_CLAUDE_RANK = {"claude-haiku": 0, "claude-sonnet": 1, "claude-opus": 2}
+
+
+def _normalize_intent_policy_model(model: Any) -> str:
+    model_name = str(model or "").strip()
+    return _INTENT_POLICY_MODEL_ALIASES.get(model_name, model_name)
+
+
+async def _load_intent_policies() -> Dict[str, Dict[str, Any]]:
+    now = _time_mod.monotonic()
+    cached_policies = _INTENT_POLICY_CACHE.get("policies")
+    cached_expires_at = float(_INTENT_POLICY_CACHE.get("expires_at") or 0.0)
+    if isinstance(cached_policies, dict) and cached_expires_at > now:
+        return cached_policies
+
+    try:
+        try:
+            from app.db import get_pool  # type: ignore
+        except ImportError:
+            from app.core.db_pool import get_pool
+
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT intent, default_model, cascade_downgrade, allowed_models FROM intent_policies"
+            )
+    except Exception as exc:
+        logger.warning("intent_policies_load_failed: %s", exc)
+        _INTENT_POLICY_CACHE["policies"] = {}
+        _INTENT_POLICY_CACHE["expires_at"] = now + _INTENT_POLICY_CACHE_TTL_SECONDS
+        return {}
+
+    policies: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        record = dict(row)
+        intent = str(record.get("intent") or "").strip()
+        if not intent:
+            continue
+
+        allowed_models: List[str] = []
+        for allowed_model in record.get("allowed_models") or []:
+            normalized_model = _normalize_intent_policy_model(allowed_model)
+            if normalized_model and normalized_model not in allowed_models:
+                allowed_models.append(normalized_model)
+
+        policies[intent] = {
+            "default_model": _normalize_intent_policy_model(record.get("default_model")),
+            "cascade_downgrade": bool(record.get("cascade_downgrade")),
+            "allowed_models": allowed_models,
+        }
+
+    _INTENT_POLICY_CACHE["policies"] = policies
+    _INTENT_POLICY_CACHE["expires_at"] = now + _INTENT_POLICY_CACHE_TTL_SECONDS
+    return policies
+
+
+def _resolve_intent_policy_cascade_model(current_model: str, policy: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not policy:
+        return None
+
+    current_policy_model = _normalize_intent_policy_model(current_model)
+    current_rank = _INTENT_POLICY_CLAUDE_RANK.get(current_policy_model)
+    if current_rank is None:
+        return None
+
+    allowed_models = [
+        _normalize_intent_policy_model(model)
+        for model in (policy.get("allowed_models") or [])
+    ]
+    allowed_claude_ranks = sorted(
+        {
+            _INTENT_POLICY_CLAUDE_RANK[model]
+            for model in allowed_models
+            if model in _INTENT_POLICY_CLAUDE_RANK
+        }
+    )
+    if not allowed_claude_ranks:
+        default_model = _normalize_intent_policy_model(policy.get("default_model"))
+        default_rank = _INTENT_POLICY_CLAUDE_RANK.get(default_model)
+        if default_rank is not None:
+            allowed_claude_ranks = [default_rank]
+
+    if not allowed_claude_ranks:
+        return None
+
+    target_rank: Optional[int] = None
+    if bool(policy.get("cascade_downgrade")):
+        candidate_ranks = [rank for rank in allowed_claude_ranks if rank <= current_rank]
+        if candidate_ranks:
+            target_rank = min(candidate_ranks)
+    elif current_rank not in allowed_claude_ranks:
+        candidate_ranks = [rank for rank in allowed_claude_ranks if rank <= current_rank]
+        if candidate_ranks:
+            target_rank = max(candidate_ranks)
+
+    if target_rank is None or target_rank >= current_rank:
+        return None
+    if target_rank == _INTENT_POLICY_CLAUDE_RANK["claude-haiku"]:
+        return "claude-haiku"
+    if target_rank == _INTENT_POLICY_CLAUDE_RANK["claude-sonnet"]:
+        return "claude-sonnet"
+    return None
+
 
 async def _relay_clear_aads_session_for_oauth_fallback(session_id: Optional[str]) -> None:
     """OAuth 슬롯 전환(Gmail→Naver) 전에 호출.
@@ -606,7 +721,7 @@ async def call_stream(
     # ── Dynamic Model Cascading (단순 비도구 인텐트만 축소) ───────────────
     # model_override 없으면 인텐트 복잡도에 따라 최소한의 다운그레이드만 적용
     # Haiku는 실제 단순 대화 인텐트에만 사용
-    _HAIKU_INTENTS = {
+    _HAIKU_FALLBACK_INTENTS = {
         "greeting", "casual",
     }
     _SONNET_INTENTS = {
@@ -617,12 +732,24 @@ async def call_stream(
     _intent = getattr(intent_result, "intent", "")
     _model_locked = getattr(intent_result, "model_locked", False)
     if not _effective_override and not _model_locked:
-        if _intent in _HAIKU_INTENTS and model in ("claude-sonnet", "claude-opus"):
-            logger.info(f"cascade_downgrade: {_intent} → claude-haiku (simple intent)")
-            model = "claude-haiku"
-        elif _intent in _SONNET_INTENTS and model == "claude-opus":
-            logger.info(f"cascade_downgrade: {_intent} → claude-sonnet (medium intent)")
-            model = "claude-sonnet"
+        _intent_policies = await _load_intent_policies()
+        _intent_policy = _intent_policies.get(_intent)
+        _policy_model = _resolve_intent_policy_cascade_model(model, _intent_policy)
+        if _policy_model:
+            _policy_reason = (
+                "db policy cascade"
+                if bool((_intent_policy or {}).get("cascade_downgrade"))
+                else "db policy allowed_models"
+            )
+            logger.info(f"cascade_downgrade: {_intent} → {_policy_model} ({_policy_reason})")
+            model = _policy_model
+        elif not _intent_policy:
+            if _intent in _HAIKU_FALLBACK_INTENTS and model in ("claude-sonnet", "claude-opus"):
+                logger.info(f"cascade_downgrade: {_intent} → claude-haiku (fallback simple intent)")
+                model = "claude-haiku"
+            elif _intent in _SONNET_INTENTS and model == "claude-opus":
+                logger.info(f"cascade_downgrade: {_intent} → claude-sonnet (fallback medium intent)")
+                model = "claude-sonnet"
     else:
         if _model_locked:
             logger.info(f"cascade_skip: user explicitly selected '{model}', intent='{_intent}' — respecting user choice")
