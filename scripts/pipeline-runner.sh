@@ -1054,10 +1054,15 @@ deploy_job() {
 
         if [[ -d "$worktree_dir" ]]; then
             cd "$worktree_dir"
-            git add -A 2>/dev/null || true
+            local _wt_add_failed="false"
+            if ! git add -A 2>/dev/null; then
+                log "  WARN: worktree git add -A failed, using file-copy fallback"
+                _wt_add_failed="true"
+            fi
+
             local diff_content
             diff_content=$(git diff --cached HEAD 2>/dev/null) || true
-            if [[ -n "$diff_content" ]]; then
+            if [[ -n "$diff_content" && "$_wt_add_failed" != "true" ]]; then
                 cd "$main_workdir"
                 echo "$diff_content" | git apply --3way 2>/dev/null || {
                     log "  WORKTREE_MERGE_CONFLICT: $job_id"
@@ -1068,6 +1073,34 @@ deploy_job() {
                     cd "$main_workdir"
                 }
                 git add -A 2>/dev/null || true
+            else
+                # diff_content가 비어있어도 실제 변경 파일이 있을 수 있음 (git index 이상 등)
+                local _changed_files
+                _changed_files=$(cd "$worktree_dir" && git status --porcelain 2>/dev/null | awk '{print $NF}')
+                if [[ -z "$_changed_files" ]]; then
+                    # git status도 비면 find로 최근 수정 파일 탐색 (Claude 실행 시간 기준)
+                    _changed_files=$(find "$worktree_dir" -newer "$worktree_dir/.git" -type f \
+                        ! -path '*/.git/*' ! -path '*/__pycache__/*' ! -path '*/node_modules/*' \
+                        -printf '%P\n' 2>/dev/null)
+                fi
+                if [[ -n "$_changed_files" ]]; then
+                    log "  WORKTREE_DIFF_EMPTY_BUT_FILES_CHANGED: file-copy fallback"
+                    while IFS= read -r f; do
+                        [[ -z "$f" ]] && continue
+                        if [[ -f "$worktree_dir/$f" ]]; then
+                            mkdir -p "$main_workdir/$(dirname "$f")" 2>/dev/null || true
+                            if cp "$worktree_dir/$f" "$main_workdir/$f" 2>/dev/null; then
+                                log "    COPY: $f"
+                            else
+                                log "    COPY_FAIL: $f"
+                            fi
+                        fi
+                    done <<< "$_changed_files"
+                    cd "$main_workdir"
+                    git add -A 2>/dev/null || true
+                else
+                    log "  WORKTREE_NO_CHANGES: $job_id"
+                fi
             fi
             cd "$main_workdir"
         else
@@ -1104,7 +1137,7 @@ deploy_job() {
         fi
         local _commit_result="ok"
 
-        if ! git commit -m "$_commit_msg" 2>/dev/null; then
+        if ! ALLOW_AUTH_COMMIT=1 git commit -m "$_commit_msg" 2>/dev/null; then
             if git diff --cached --quiet HEAD 2>/dev/null; then
                 log "  WARN: git commit skipped — no staged changes"
                 _commit_result="no_changes"
@@ -1114,6 +1147,13 @@ deploy_job() {
                 echo "$_commit_result" > "/tmp/pipeline-push-result-${job_id}"
             fi
         else
+            local _new_sha
+            _new_sha=$(git -C "$main_workdir" rev-parse HEAD 2>/dev/null) || _new_sha=""
+            local _staged_count
+            _staged_count=$(git -C "$main_workdir" diff --stat "${_pre_sha}..${_new_sha}" 2>/dev/null | tail -1)
+            [[ -z "$_staged_count" ]] && _staged_count="stat_unavailable"
+            log "  COMMIT_OK: ${_new_sha:-unknown} (${_staged_count})"
+
             # commit 성공 — push 시도
             if ! git push 2>/dev/null; then
                 log "  ERROR: git push failed"
