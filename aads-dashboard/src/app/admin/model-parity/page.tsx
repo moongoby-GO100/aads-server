@@ -18,6 +18,7 @@ interface SummaryData {
   total_input_tokens: number;
   total_output_tokens: number;
   total_tokens: number;
+  total_estimated_cost_usd?: number | null;
 }
 
 interface RoutingModelBucket {
@@ -48,6 +49,7 @@ interface ModelMetric {
   avg_tokens_per_call: number;
   distinct_intents: number;
   configured_intents: number;
+  estimated_cost_usd?: number | null;
 }
 
 interface DailyMetric {
@@ -56,10 +58,12 @@ interface DailyMetric {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  estimated_cost_usd?: number | null;
   models: Array<{
     model: string;
     calls: number;
     total_tokens: number;
+    estimated_cost_usd?: number | null;
   }>;
 }
 
@@ -109,6 +113,16 @@ function formatDateTime(value?: string): string {
   });
 }
 
+function formatCurrency(value?: number | null): string {
+  if (value == null) return "-";
+  return new Intl.NumberFormat("ko-KR", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  }).format(value);
+}
+
 function barWidth(value: number, total: number): string {
   if (!total) return "0%";
   return `${Math.max(6, Math.round((value / total) * 100))}%`;
@@ -151,6 +165,22 @@ export default function ModelParityPage() {
     return Math.max(...(data?.daily.map((item) => item.calls) || [0]));
   }, [data]);
 
+  const hasEstimatedCost = useMemo(() => {
+    if (!data) return false;
+    if (data.summary.total_estimated_cost_usd != null) return true;
+    return data.models.some((item) => item.estimated_cost_usd != null);
+  }, [data]);
+
+  const totalEstimatedCost = useMemo(() => {
+    if (!data) return null;
+    if (data.summary.total_estimated_cost_usd != null) {
+      return data.summary.total_estimated_cost_usd;
+    }
+    const modelsWithCost = data.models.filter((item) => item.estimated_cost_usd != null);
+    if (modelsWithCost.length === 0) return null;
+    return modelsWithCost.reduce((sum, item) => sum + Number(item.estimated_cost_usd || 0), 0);
+  }, [data]);
+
   const cardStyle = {
     background: "var(--bg-card)",
     border: "1px solid var(--border)",
@@ -165,12 +195,12 @@ export default function ModelParityPage() {
   ];
 
   const summaryCards = data ? [
-    { label: "Tracked Models", value: data.summary.tracked_models },
-    { label: "Tracked Intents", value: data.summary.tracked_intents },
-    { label: "Tracked Messages", value: data.summary.tracked_messages },
-    { label: "Total Calls", value: data.summary.total_calls },
-    { label: "Input Tokens", value: data.summary.total_input_tokens },
-    { label: "Output Tokens", value: data.summary.total_output_tokens },
+    { label: "Tracked Models", value: formatNumber(data.summary.tracked_models) },
+    { label: "Tracked Intents", value: formatNumber(data.summary.tracked_intents) },
+    { label: "Tracked Messages", value: formatNumber(data.summary.tracked_messages) },
+    { label: "Total Calls", value: formatNumber(data.summary.total_calls) },
+    { label: "Total Tokens", value: formatNumber(data.summary.total_tokens) },
+    { label: "Est. Cost", value: hasEstimatedCost ? formatCurrency(totalEstimatedCost) : "-" },
   ] : [];
 
   return (
@@ -266,16 +296,16 @@ export default function ModelParityPage() {
           ) : (
             <>
               <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-                {summaryCards.map((item) => (
-                  <div key={item.label} style={{ ...cardStyle, padding: "14px" }}>
-                    <div style={{ color: "var(--text-secondary)", fontSize: "11px", marginBottom: "4px" }}>
-                      {item.label}
+                  {summaryCards.map((item) => (
+                    <div key={item.label} style={{ ...cardStyle, padding: "14px" }}>
+                      <div style={{ color: "var(--text-secondary)", fontSize: "11px", marginBottom: "4px" }}>
+                        {item.label}
+                      </div>
+                      <div style={{ color: "var(--text-primary)", fontSize: "24px", fontWeight: 700 }}>
+                        {item.value}
+                      </div>
                     </div>
-                    <div style={{ color: "var(--text-primary)", fontSize: "24px", fontWeight: 700 }}>
-                      {formatNumber(item.value)}
-                    </div>
-                  </div>
-                ))}
+                  ))}
               </div>
 
               {tab === "models" ? (
@@ -283,10 +313,10 @@ export default function ModelParityPage() {
                   <section style={cardStyle}>
                     <div className="flex items-center justify-between gap-2 mb-4">
                       <div style={{ color: "var(--text-primary)", fontSize: "16px", fontWeight: 700 }}>
-                        실제 모델 사용량
+                        실제 모델 사용량 / 비용
                       </div>
                       <div style={{ color: "var(--text-secondary)", fontSize: "12px" }}>
-                        calls / tokens / intents
+                        calls / tokens / cost
                       </div>
                     </div>
                     <div className="grid gap-3">
@@ -328,6 +358,7 @@ export default function ModelParityPage() {
                               ["Input", formatNumber(item.input_tokens)],
                               ["Output", formatNumber(item.output_tokens)],
                               ["Total", formatNumber(item.total_tokens)],
+                              ["Cost", formatCurrency(item.estimated_cost_usd)],
                               ["Avg/Call", formatNumber(item.avg_tokens_per_call)],
                             ].map(([label, value]) => (
                               <div key={String(label)} style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "8px", padding: "8px 10px" }}>
@@ -476,6 +507,7 @@ export default function ModelParityPage() {
                             <div style={{ color: "var(--text-primary)", fontWeight: 700 }}>{day.date}</div>
                             <div style={{ color: "var(--text-secondary)", fontSize: "12px", marginTop: "2px" }}>
                               calls {formatNumber(day.calls)} · total tokens {formatNumber(day.total_tokens)}
+                              {day.estimated_cost_usd != null ? ` · cost ${formatCurrency(day.estimated_cost_usd)}` : ""}
                             </div>
                           </div>
                           <div style={{ color: "var(--text-primary)", fontWeight: 700 }}>

@@ -1,6 +1,5 @@
 #!/bin/bash
-echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] Dashboard rebuild START"
 cd /root/aads/aads-dashboard
-docker compose build --no-cache aads-dashboard
-docker compose up -d aads-dashboard
-echo "[$(date '+%Y-%m-%d %H:%M:%S KST')] Dashboard rebuild DONE"
+docker compose build aads-dashboard >> /tmp/dashboard-rebuild.log 2>&1
+docker compose up -d aads-dashboard >> /tmp/dashboard-rebuild.log 2>&1
+echo "DONE: $(date)" >> /tmp/dashboard-rebuild.log

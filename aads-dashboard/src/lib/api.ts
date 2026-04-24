@@ -35,89 +35,6 @@ export interface AdminDeployStatusResponse {
   servers: AdminDeployServerStatus[];
 }
 
-export interface GovernanceIntentPolicy {
-  id?: number;
-  intent: string;
-  default_model: string;
-  allowed_models: string[];
-  temperature?: number | null;
-  cascade_downgrade: boolean;
-  tool_allowlist?: string[] | null;
-  description?: string | null;
-  updated_by?: string | null;
-  updated_at?: string | null;
-}
-
-export interface GovernanceIntentPoliciesResponse {
-  policies: GovernanceIntentPolicy[];
-  total: number;
-}
-
-export interface GovernanceFeatureFlag {
-  flag_key?: string;
-  key?: string;
-  name?: string;
-  enabled: boolean;
-  changed_by?: string | null;
-  changed_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface GovernanceFeatureFlagsResponse {
-  flags: GovernanceFeatureFlag[];
-  total: number;
-}
-
-export interface GovernanceRoleProfile {
-  role?: string;
-  name?: string;
-  default_model?: string;
-  base_model?: string;
-  allowed_models?: string[];
-  allowed_intents?: string[];
-  temperature?: number | null;
-  cascade_downgrade?: boolean;
-  updated_at?: string | null;
-  [key: string]: unknown;
-}
-
-export interface GovernanceRoleProfilesResponse {
-  profiles?: GovernanceRoleProfile[];
-  roles?: GovernanceRoleProfile[];
-  items?: GovernanceRoleProfile[];
-  total: number;
-}
-
-export interface GovernanceAuditLogItem {
-  id: number;
-  at: string | null;
-  event: string;
-  mode: string;
-  legacy_result?: string | null;
-  db_result?: string | null;
-  diff_summary?: string | null;
-  trace_id?: string | null;
-  [key: string]: unknown;
-}
-
-export interface GovernanceAuditLogResponse {
-  items: GovernanceAuditLogItem[];
-  total: number;
-}
-
-export interface AdminSessionItem {
-  session_id: string;
-  workspace: string;
-  created_at: string | null;
-  message_count: number;
-  [key: string]: unknown;
-}
-
-export interface AdminSessionsResponse {
-  sessions: AdminSessionItem[];
-  total: number;
-}
-
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://aads.newtalk.kr/api/v1";
 
 function getAuthHeaders(): Record<string, string> {
@@ -458,22 +375,24 @@ export const api = {
     request<any>(`/admin/prompts/versions${section ? "?section=" + encodeURIComponent(section) : ""}`),
   getPromptVersion: (id: number) => request<any>(`/admin/prompts/versions/${id}`),
   getTokenProfile: () => request<any>("/admin/prompts/token-profile"),
-  getGovernance: () => request<any>("/admin/governance"),
-  getGovernanceLayers: () => request<any>("/admin/governance/layers"),
-  getGovernanceIntentPolicies: () => request<GovernanceIntentPoliciesResponse>("/governance/intent-policies"),
-  getGovernanceFeatureFlags: () => request<GovernanceFeatureFlagsResponse>("/governance/feature-flags"),
+  getGovernanceIntentPolicies: () => request<any>("/governance/intent-policies"),
+  getGovernanceFeatureFlags: () => request<any>("/governance/feature-flags"),
   updateGovernanceFeatureFlag: (flagKey: string, enabled: boolean, changedBy = "admin_dashboard") =>
-    request<GovernanceFeatureFlag>(`/governance/feature-flags/${encodeURIComponent(flagKey)}`, {
+    request<any>(`/governance/feature-flags/${encodeURIComponent(flagKey)}`, {
       method: "POST",
       body: JSON.stringify({ enabled, changed_by: changedBy }),
     }),
-  getGovernanceRoleProfiles: () => request<GovernanceRoleProfilesResponse>("/governance/role-profiles"),
-  getGovernanceAuditLog: (limit = 30) =>
-    request<GovernanceAuditLogResponse>(`/governance/audit-log?limit=${limit}`),
+  getGovernanceAuditLog: (limit = 100) =>
+    request<any>(`/governance/audit-log?limit=${limit}`),
+  getGovernance: () => request<any>("/admin/governance"),
+  getGovernanceLayers: () => request<any>("/admin/governance/layers"),
+  getModelParity: () => request<any>("/admin/model-parity"),
+  getModelParityIntentMap: () => request<any>("/admin/model-parity/intent-map"),
   getAdminAgents: () => request<any>("/admin/agents"),
   getAdminAgent: (role: string) => request<any>(`/admin/agents/${encodeURIComponent(role)}`),
   getAdminAgentStats: () => request<any>("/admin/agents/stats"),
-  getAdminSessions: () => request<AdminSessionsResponse>("/admin/sessions"),
+  getAdminSessions: () => request<any>("/admin/sessions"),
+  getAdminSessionReplay: (jobId: string) => request<any>(`/admin/sessions/${encodeURIComponent(jobId)}`),
   getAdminTasks: (params?: { status?: string; page?: number; page_size?: number }) => {
     const q = new URLSearchParams();
     if (params?.status) q.set("status", params.status);
