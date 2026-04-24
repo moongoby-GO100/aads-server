@@ -371,6 +371,8 @@ export const api = {
   },
   getAdminTask: (jobId: string) => request<any>(`/admin/tasks/${encodeURIComponent(jobId)}`),
   getAdminTaskStats: () => request<any>("/admin/tasks/stats"),
+  getAdminSessions: () => request<any>("/admin/sessions"),
+  getAdminSessionReplay: (jobId: string) => request<any>(`/admin/sessions/${encodeURIComponent(jobId)}`),
 
   // LLM API 키 관리 (AADS-188)
   getLlmKeys: () => request<any[]>("/llm-keys"),

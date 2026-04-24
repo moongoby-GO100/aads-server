@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from datetime import datetime, timedelta
 from typing import Any, Optional, Sequence
 from zoneinfo import ZoneInfo
@@ -1079,6 +1080,283 @@ def _admin_format_task_log(row: Any) -> dict[str, Any]:
         "phase": row["phase"] or "",
         "metadata": metadata or {},
         "created_at": _admin_iso(row["created_at"]),
+    }
+
+
+def _admin_short_text(value: Any, limit: int = 220) -> str:
+    if value in (None, ""):
+        return ""
+    text = str(value).replace("\r", " ").replace("\n", " ")
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)] + "..."
+
+
+def _admin_error_category(detail: Any) -> str:
+    text = _admin_short_text(detail, 300).lower()
+    if not text:
+        return "unknown"
+    if any(token in text for token in ("unauthorized", "forbidden", "auth", "token", "api key", "api_key")):
+        return "auth"
+    if any(token in text for token in ("timeout", "timed out", "deadline", "slow")):
+        return "timeout"
+    if any(token in text for token in ("network", "connection", "dns", "unreachable", "refused", "socket")):
+        return "network"
+    if any(token in text for token in ("not found", "no such file", "missing", "does not exist")):
+        return "not_found"
+    if any(token in text for token in ("invalid", "validation", "schema", "bad request")):
+        return "validation"
+    if any(token in text for token in ("permission denied", "forbidden", "readonly")):
+        return "permission"
+    return "runtime"
+
+
+def _admin_tool_input_summary(input_params: Any) -> str:
+    parsed = _admin_parse_json(input_params)
+    if not isinstance(parsed, dict):
+        return ""
+
+    parts: list[str] = []
+    for key, value in list(parsed.items())[:3]:
+        if isinstance(value, (dict, list)):
+            compact = _admin_short_text(json.dumps(value, ensure_ascii=False), 36)
+        else:
+            compact = _admin_short_text(value, 36)
+        parts.append(f"{key}={compact}" if compact else str(key))
+    return ", ".join(parts)
+
+
+def _admin_timeline_sort_key(value: Any) -> float:
+    if value is None:
+        return 0.0
+    try:
+        return float(value.timestamp())
+    except Exception:
+        return 0.0
+
+
+@router.get("/admin/sessions")
+async def list_admin_sessions():
+    """세션 리플레이용 최근 완료/오류 작업 50건."""
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            WITH jobs AS (
+                SELECT
+                    job_id,
+                    project,
+                    {_TASK_BOARD_STATUS_SQL} AS board_status,
+                    substring(COALESCE(instruction, '') from 1 for 100) AS instruction,
+                    created_at,
+                    updated_at,
+                    error_detail
+                FROM pipeline_jobs
+            )
+            SELECT
+                job_id,
+                project,
+                board_status,
+                instruction,
+                created_at,
+                updated_at,
+                error_detail
+            FROM jobs
+            WHERE board_status IN ('done', 'error')
+            ORDER BY COALESCE(updated_at, created_at) DESC NULLS LAST
+            LIMIT 50
+            """
+        )
+
+    sessions = [
+        {
+            "job_id": row["job_id"],
+            "project": row["project"] or "",
+            "instruction": row["instruction"] or "",
+            "status": row["board_status"] or "",
+            "created_at": _admin_iso(row["created_at"]),
+            "updated_at": _admin_iso(row["updated_at"]),
+            "error_detail": row["error_detail"] or "",
+        }
+        for row in rows
+    ]
+    return {
+        "sessions": sessions,
+        "total": len(sessions),
+    }
+
+
+@router.get("/admin/sessions/{job_id}")
+async def get_admin_session_replay(job_id: str):
+    """세션 리플레이 상세 + 타임라인 이벤트."""
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        has_chat_session_id = await _admin_column_exists(conn, "pipeline_jobs", "chat_session_id")
+
+        row = await conn.fetchrow(
+            f"""
+            SELECT
+                job_id,
+                project,
+                instruction,
+                status AS raw_status,
+                {_TASK_BOARD_STATUS_SQL} AS board_status,
+                phase,
+                result_output,
+                error_detail,
+                started_at,
+                created_at,
+                updated_at,
+                {"chat_session_id," if has_chat_session_id else "NULL::text AS chat_session_id,"}
+                COALESCE(
+                    EXTRACT(EPOCH FROM (COALESCE(updated_at, NOW()) - COALESCE(started_at, created_at))),
+                    0
+                )::bigint AS duration_seconds
+            FROM pipeline_jobs
+            WHERE job_id = $1
+            """,
+            job_id,
+        )
+        if not row:
+            raise HTTPException(404, "Session not found")
+
+        timeline_rows: list[tuple[Any, dict[str, Any]]] = []
+        job_started_at = row["started_at"] or row["created_at"]
+        job_ended_at = row["updated_at"] or row["created_at"] or row["started_at"]
+
+        has_archive = await _admin_table_exists(conn, "tool_results_archive")
+        has_chat_messages = await _admin_table_exists(conn, "chat_messages")
+        has_archive_error_flag = (
+            await _admin_column_exists(conn, "tool_results_archive", "is_error")
+            if has_archive
+            else False
+        )
+
+        raw_session_id = row["chat_session_id"]
+        session_id = str(raw_session_id).strip() if raw_session_id else ""
+        session_uuid: Optional[str] = None
+        if session_id:
+            try:
+                session_uuid = str(uuid.UUID(session_id))
+            except ValueError:
+                session_uuid = None
+
+        if has_archive and has_chat_messages and session_uuid:
+            tool_rows = await conn.fetch(
+                f"""
+                SELECT
+                    tra.created_at,
+                    tra.tool_name,
+                    tra.input_params,
+                    tra.raw_output,
+                    {"COALESCE(tra.is_error, FALSE)" if has_archive_error_flag else "FALSE"} AS is_error
+                FROM tool_results_archive tra
+                JOIN chat_messages cm ON cm.id = tra.message_id
+                WHERE cm.session_id = $1::uuid
+                  AND ($2::timestamptz IS NULL OR tra.created_at >= $2::timestamptz - INTERVAL '5 minutes')
+                  AND ($3::timestamptz IS NULL OR tra.created_at <= $3::timestamptz + INTERVAL '10 minutes')
+                ORDER BY tra.created_at ASC
+                LIMIT 300
+                """,
+                session_uuid,
+                job_started_at,
+                job_ended_at,
+            )
+
+            for tool_row in tool_rows:
+                tool_name = _admin_short_text(tool_row["tool_name"] or "tool", 48)
+                input_summary = _admin_tool_input_summary(tool_row["input_params"])
+                output_summary = _admin_short_text(tool_row["raw_output"], 220)
+
+                if input_summary and output_summary:
+                    tool_summary = f"{tool_name} | {input_summary} | {output_summary}"
+                elif input_summary:
+                    tool_summary = f"{tool_name} | {input_summary}"
+                elif output_summary:
+                    tool_summary = f"{tool_name} | {output_summary}"
+                else:
+                    tool_summary = tool_name
+
+                tool_ts = tool_row["created_at"]
+                timeline_rows.append(
+                    (
+                        tool_ts,
+                        {
+                            "timestamp": _admin_iso(tool_ts),
+                            "type": "tool_call",
+                            "summary": tool_summary,
+                        },
+                    )
+                )
+
+                if bool(tool_row["is_error"]):
+                    tool_error = _admin_short_text(tool_row["raw_output"], 280) or "Tool execution failed"
+                    timeline_rows.append(
+                        (
+                            tool_ts,
+                            {
+                                "timestamp": _admin_iso(tool_ts),
+                                "type": "error",
+                                "summary": f"{tool_name} | {tool_error}",
+                                "error_category": _admin_error_category(tool_error),
+                            },
+                        )
+                    )
+
+    llm_preview = _admin_short_text(row["result_output"], 320)
+    if llm_preview:
+        llm_ts = row["updated_at"] or row["created_at"] or row["started_at"]
+        timeline_rows.append(
+            (
+                llm_ts,
+                {
+                    "timestamp": _admin_iso(llm_ts),
+                    "type": "llm_response",
+                    "summary": llm_preview,
+                },
+            )
+        )
+
+    error_preview = _admin_short_text(row["error_detail"], 320)
+    if row["board_status"] == "error" or error_preview:
+        error_ts = row["updated_at"] or row["created_at"] or row["started_at"]
+        timeline_rows.append(
+            (
+                error_ts,
+                {
+                    "timestamp": _admin_iso(error_ts),
+                    "type": "error",
+                    "summary": error_preview or "Session completed with error status.",
+                    "error_category": _admin_error_category(error_preview),
+                },
+            )
+        )
+
+    timeline_rows.sort(key=lambda item: _admin_timeline_sort_key(item[0]))
+    timeline = [entry for _, entry in timeline_rows]
+
+    return {
+        "session": {
+            "job_id": row["job_id"],
+            "project": row["project"] or "",
+            "status": row["board_status"] or "",
+            "raw_status": row["raw_status"] or "",
+            "phase": row["phase"] or "",
+            "instruction": row["instruction"] or "",
+            "error_detail": row["error_detail"] or "",
+            "result_preview": llm_preview,
+            "duration_seconds": int(row["duration_seconds"] or 0),
+            "started_at": _admin_iso(row["started_at"]),
+            "created_at": _admin_iso(row["created_at"]),
+            "updated_at": _admin_iso(row["updated_at"]),
+        },
+        "timeline": timeline,
+        "timeline_count": len(timeline),
     }
 
 
