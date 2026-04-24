@@ -23,6 +23,7 @@ from app.api.watchdog import router as watchdog_router
 from app.api.approval import router as approval_router
 from app.api.briefing import router as briefing_router
 from app.api.documents import router as documents_router
+from app.api.governance import router as governance_router
 from app.api.ops import router as ops_router
 from app.api.admin import router as admin_router
 from app.api.lessons import router as lessons_router
@@ -1239,6 +1240,7 @@ app.include_router(plans_router, prefix="/api/v1", tags=["plans"])
 app.include_router(debate_logs_router, prefix="/api/v1", tags=["debate-logs"])
 app.include_router(artifacts_router, prefix="/api/v1", tags=["artifacts"])
 app.include_router(briefing_router, prefix="/api/v1", tags=["briefing"])
+app.include_router(governance_router, prefix="/api/v1", tags=["governance"])
 app.include_router(task_monitor_router, prefix="/api/v1", tags=["task-monitor"])
 app.include_router(qa_router, prefix="/api/v1", tags=["qa"])
 app.include_router(chat_v2_router, prefix="/api/v1", tags=["chat-v2"])

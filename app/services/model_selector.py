@@ -16,6 +16,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 import time as _time_mod
 from datetime import datetime, timezone
 
+import asyncpg
 import httpx
 from anthropic import AsyncAnthropic, APIStatusError, APIConnectionError, RateLimitError
 from app.config import Settings
@@ -208,11 +209,21 @@ _INTENT_POLICY_MODEL_ALIASES = {
     "claude-opus-46": "claude-opus",
 }
 _INTENT_POLICY_CLAUDE_RANK = {"claude-haiku": 0, "claude-sonnet": 1, "claude-opus": 2}
+_HAIKU_FALLBACK_INTENTS = {"greeting", "casual"}
+_SONNET_INTENTS = {
+    "search", "url_read", "browser", "task_query",
+    "service_inspection", "code_explorer", "analyze_changes",
+}
 
 
 def _normalize_intent_policy_model(model: Any) -> str:
     model_name = str(model or "").strip()
     return _INTENT_POLICY_MODEL_ALIASES.get(model_name, model_name)
+
+
+def invalidate_intent_policy_cache() -> None:
+    _INTENT_POLICY_CACHE["policies"] = {}
+    _INTENT_POLICY_CACHE["expires_at"] = 0.0
 
 
 async def _load_intent_policies() -> Dict[str, Dict[str, Any]]:
@@ -309,6 +320,159 @@ def _resolve_intent_policy_cascade_model(current_model: str, policy: Optional[Di
     if target_rank == _INTENT_POLICY_CLAUDE_RANK["claude-sonnet"]:
         return "claude-sonnet"
     return None
+
+
+def _resolve_legacy_intent_cascade_model(current_model: str, intent: str) -> Optional[str]:
+    if intent in _HAIKU_FALLBACK_INTENTS and current_model in ("claude-sonnet", "claude-opus"):
+        return "claude-haiku"
+    if intent in _SONNET_INTENTS and current_model == "claude-opus":
+        return "claude-sonnet"
+    return None
+
+
+def _build_intent_resolution_result(
+    *,
+    intent: str,
+    input_model: str,
+    resolved_model: Optional[str],
+    applied: bool,
+    reason: str,
+    source: str,
+) -> Dict[str, Any]:
+    return {
+        "intent": intent,
+        "input_model": input_model,
+        "selected_model": resolved_model or input_model,
+        "applied": bool(applied),
+        "reason": reason,
+        "source": source,
+    }
+
+
+def _summarize_intent_resolution_diff(
+    legacy_result: Dict[str, Any],
+    db_result: Dict[str, Any],
+) -> Optional[str]:
+    differences: List[str] = []
+    if legacy_result.get("selected_model") != db_result.get("selected_model"):
+        differences.append(
+            "selected_model: "
+            f"{legacy_result.get('selected_model')} -> {db_result.get('selected_model')}"
+        )
+    if bool(legacy_result.get("applied")) != bool(db_result.get("applied")):
+        differences.append(
+            "applied: "
+            f"{legacy_result.get('applied')} -> {db_result.get('applied')}"
+        )
+    if not differences:
+        return None
+    return "; ".join(differences)
+
+
+async def _append_governance_audit_log(
+    *,
+    event: str,
+    mode: str,
+    legacy_result: Dict[str, Any],
+    db_result: Dict[str, Any],
+    diff_summary: str,
+    trace_id: Optional[str] = None,
+) -> None:
+    try:
+        try:
+            from app.db import get_pool  # type: ignore
+        except ImportError:
+            from app.core.db_pool import get_pool
+
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO governance_audit_log (
+                    event, mode, legacy_result, db_result, diff_summary, trace_id
+                )
+                VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6)
+                """,
+                event,
+                mode,
+                json.dumps(legacy_result),
+                json.dumps(db_result),
+                diff_summary,
+                (trace_id or "")[:64] or None,
+            )
+    except asyncpg.UndefinedTableError:
+        logger.debug("governance_audit_log_table_missing")
+    except Exception as exc:
+        logger.warning("governance_audit_log_write_failed: %s", exc)
+
+
+async def _resolve_governed_intent_model(
+    *,
+    intent: str,
+    current_model: str,
+    session_id: Optional[str] = None,
+) -> tuple[Optional[str], Optional[str]]:
+    from app.core.feature_flags import get_flag
+
+    db_primary = await get_flag("intent_policies_db_primary", default=False)
+    intent_policies = await _load_intent_policies()
+    intent_policy = intent_policies.get(intent)
+
+    legacy_model = _resolve_legacy_intent_cascade_model(current_model, intent)
+    db_model = _resolve_intent_policy_cascade_model(current_model, intent_policy)
+
+    legacy_reason = "legacy no change"
+    if legacy_model == "claude-haiku":
+        legacy_reason = "fallback simple intent"
+    elif legacy_model == "claude-sonnet":
+        legacy_reason = "fallback medium intent"
+
+    db_reason = "db policy missing"
+    if db_model:
+        db_reason = (
+            "db policy cascade"
+            if bool((intent_policy or {}).get("cascade_downgrade"))
+            else "db policy allowed_models"
+        )
+    elif intent_policy:
+        db_reason = "db policy no change"
+
+    legacy_result = _build_intent_resolution_result(
+        intent=intent,
+        input_model=current_model,
+        resolved_model=legacy_model,
+        applied=bool(legacy_model),
+        reason=legacy_reason,
+        source="legacy",
+    )
+    db_result = _build_intent_resolution_result(
+        intent=intent,
+        input_model=current_model,
+        resolved_model=db_model,
+        applied=bool(db_model),
+        reason=db_reason,
+        source="db",
+    )
+
+    if db_primary:
+        if db_model:
+            return db_model, db_reason
+        return legacy_model, legacy_reason if legacy_model else None
+
+    diff_summary = _summarize_intent_resolution_diff(legacy_result, db_result)
+    if diff_summary:
+        await _append_governance_audit_log(
+            event="intent_resolve",
+            mode="shadow",
+            legacy_result=legacy_result,
+            db_result=db_result,
+            diff_summary=diff_summary,
+            trace_id=session_id,
+        )
+
+    if legacy_model:
+        return legacy_model, legacy_reason
+    return None, None
 
 
 async def _relay_clear_aads_session_for_oauth_fallback(session_id: Optional[str]) -> None:
@@ -718,38 +882,18 @@ async def call_stream(
     if model in _OVERRIDE_TO_ALIAS:
         model = _OVERRIDE_TO_ALIAS[model]
 
-    # ── Dynamic Model Cascading (단순 비도구 인텐트만 축소) ───────────────
-    # model_override 없으면 인텐트 복잡도에 따라 최소한의 다운그레이드만 적용
-    # Haiku는 실제 단순 대화 인텐트에만 사용
-    _HAIKU_FALLBACK_INTENTS = {
-        "greeting", "casual",
-    }
-    _SONNET_INTENTS = {
-        "search", "url_read", "browser", "task_query",
-        "service_inspection", "code_explorer", "analyze_changes",
-    }
-    # Opus 유지: cto_*, code_task, code_modify, execute, directive_gen 등 복잡 인텐트
+    # ── Dynamic Model Cascading (shadow/primary governance routing) ─────────
     _intent = getattr(intent_result, "intent", "")
     _model_locked = getattr(intent_result, "model_locked", False)
     if not _effective_override and not _model_locked:
-        _intent_policies = await _load_intent_policies()
-        _intent_policy = _intent_policies.get(_intent)
-        _policy_model = _resolve_intent_policy_cascade_model(model, _intent_policy)
+        _policy_model, _policy_reason = await _resolve_governed_intent_model(
+            intent=_intent,
+            current_model=model,
+            session_id=session_id,
+        )
         if _policy_model:
-            _policy_reason = (
-                "db policy cascade"
-                if bool((_intent_policy or {}).get("cascade_downgrade"))
-                else "db policy allowed_models"
-            )
             logger.info(f"cascade_downgrade: {_intent} → {_policy_model} ({_policy_reason})")
             model = _policy_model
-        elif not _intent_policy:
-            if _intent in _HAIKU_FALLBACK_INTENTS and model in ("claude-sonnet", "claude-opus"):
-                logger.info(f"cascade_downgrade: {_intent} → claude-haiku (fallback simple intent)")
-                model = "claude-haiku"
-            elif _intent in _SONNET_INTENTS and model == "claude-opus":
-                logger.info(f"cascade_downgrade: {_intent} → claude-sonnet (fallback medium intent)")
-                model = "claude-sonnet"
     else:
         if _model_locked:
             logger.info(f"cascade_skip: user explicitly selected '{model}', intent='{_intent}' — respecting user choice")
