@@ -1445,7 +1445,11 @@ async def _stream_litellm_openai(
                 _res = await _exec_tool(tc["name"], _args, "", session_id or "")
                 return {"id": tc["id"], "name": tc["name"], "args": _args, "result": str(_res)[:4000], "ok": True}
             except Exception as _te:
-                logger.warning(f"gemini_parallel_tool_error: {tc['name']}: {_te}")
+                logger.warning(
+                    "gemini_tool_error: session=%s tool=%s error_type=%s error=%s args=%s",
+                    (session_id or "")[:8], tc["name"], type(_te).__name__,
+                    str(_te)[:200], str(_args)[:100],
+                )
                 return {"id": tc["id"], "name": tc["name"], "args": _args, "result": f"도구 실행 오류: {str(_te)[:200]}", "ok": False}
 
         # 도구 실행 전 tool_use 이벤트를 먼저 전송해 프론트가 즉시 표시할 수 있게 한다.
@@ -1470,9 +1474,16 @@ async def _stream_litellm_openai(
         # 연속 실패 감지 (AADS-225-D): 배치 내 전부 실패 → 카운터++, 하나라도 성공 → 리셋
         if all(not _er["ok"] for _er in _exec_results):
             _consecutive_fail += 1
-            logger.warning(f"gemini_tool_all_failed: iter={_loop_iter+1} consecutive={_consecutive_fail}")
+            logger.warning(
+                "gemini_tool_all_failed: session=%s iter=%d consecutive=%d tools=%s",
+                (session_id or "")[:8], _loop_iter + 1, _consecutive_fail,
+                [e["name"] for e in _exec_results],
+            )
             if _consecutive_fail >= 3:
-                logger.error(f"gemini_tool_loop_break: 3회 연속 도구 전체 실패 — 루프 중단 model={model}")
+                logger.error(
+                    "gemini_tool_loop_break: session=%s model=%s consecutive=3",
+                    (session_id or "")[:8], model,
+                )
                 yield {"type": "delta", "content": "\n\n[도구 3회 연속 실패 — 루프를 중단합니다]\n"}
                 break
         else:
@@ -1677,6 +1688,7 @@ async def _stream_codex_relay(
         "system_prompt": system_prompt,
         "messages_text": formatted,
         "session_id": session_id or "",
+        "project": "AADS",
         "tool_names": [t.get("name", "") for t in (tools or []) if t.get("name")],
         "tool_schemas": [
             {

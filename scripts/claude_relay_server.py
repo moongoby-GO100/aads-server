@@ -1110,6 +1110,14 @@ _CODEX_MODEL_MAP = {
     "gpt-5.3-codex": "gpt-5.3-codex",
 }
 
+_CODEX_CWD_MAP = {
+    "AADS": "/root/aads/aads-server",
+    "KIS": "/root/aads/kis-server",
+    "GO100": "/root/aads/go100",
+    "SF": "/root/shortflow",
+    "NTV2": "/root/newtalk-v2",
+}
+
 
 async def handle_codex_stream(request):
     """Codex CLI subprocess -> NDJSON pseudo-streaming. ChatGPT Plus OAuth."""
@@ -1190,8 +1198,9 @@ async def handle_codex_stream(request):
                 "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
             await response.prepare(request)
             codex_home = _build_codex_home(session_id, mcp_cfg=mcp_template)
+            _codex_cwd = _CODEX_CWD_MAP.get(body.get("project", "AADS"), "/root/aads/aads-server")
             cmd = list(codex_meta.get("argv", []) or []) + ["exec", "--json", "--full-auto",
-                   "--skip-git-repo-check", "-C", "/root/aads/aads-server"]
+                   "--skip-git-repo-check", "-C", _codex_cwd]
             if codex_model:
                 cmd.extend(["-m", codex_model])
             cmd.append(prompt)
