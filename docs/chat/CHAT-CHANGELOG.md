@@ -4,6 +4,12 @@ _v1.0 | 2026-04-02 | 최초 작성_
 
 ## 변경 이력 (최신순)
 
+### 2026-04-24
+
+- 운영 조치: `claude-relay` 전역 동시성은 Pipeline Runner와 별개로 관리하며, live systemd override 기준 `max_concurrent=5`로 고정했다.
+- 운영 조치: relay wrapper는 `.active_container`를 읽어 blue-green 활성 API 컨테이너를 따라가도록 보강했다. 배포 직후 inactive 컨테이너를 참조하며 MCP preflight가 실패하던 리스크를 낮췄다.
+- 운영 조치: active stream 계측을 `executing / visible / recovery_pending / recent_placeholders`로 재정리했고, 실제 무중단 배포 drain에서 `2 → 1 → 0` 집계를 확인했다.
+
 ### 2026-04-02
 
 | 커밋 | 변경 | 구분 |
