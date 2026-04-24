@@ -218,50 +218,41 @@ def _compute_layout(nodes: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
     for node in nodes:
         children[node["parent_id"]].append(node["id"])
 
-    for parent_id, child_ids in children.items():
-        child_ids.sort(key=lambda node_id: node_map[node_id]["created_at"] or "")
+    for child_ids in children.values():
+        child_ids.sort(key=lambda nid: node_map[nid].get("created_at") or "")
 
-    root_id = next((node["id"] for node in nodes if node["node_type"] == "topic"), None)
+    root_id = next((n["id"] for n in nodes if n["node_type"] == "topic"), None)
     if not root_id:
         return {}
 
-    positions: dict[str, dict[str, float]] = {
-        root_id: {"x": _ROOT_X, "y": _ROOT_Y},
-    }
+    subtree_width: dict[str, float] = {}
 
-    levels: dict[int, list[str]] = defaultdict(list)
-    queue: list[tuple[str, int]] = [(root_id, 0)]
-    seen: set[str] = set()
-    while queue:
-        current_id, depth = queue.pop(0)
-        if current_id in seen:
-            continue
-        seen.add(current_id)
-        levels[depth].append(current_id)
-        for child_id in children.get(current_id, []):
-            queue.append((child_id, depth + 1))
+    def calc_width(nid: str) -> float:
+        kids = children.get(nid, [])
+        if not kids:
+            subtree_width[nid] = _MIN_HORIZONTAL_GAP
+            return _MIN_HORIZONTAL_GAP
+        total = sum(calc_width(c) for c in kids)
+        subtree_width[nid] = max(total, _MIN_HORIZONTAL_GAP)
+        return subtree_width[nid]
 
-    for depth, level_ids in levels.items():
-        if depth == 0:
-            continue
-        count = len(level_ids)
-        total_width = max((count - 1) * _MIN_HORIZONTAL_GAP, 0)
-        start_x = _ROOT_X - (total_width / 2)
-        y = _ROOT_Y + (depth * _LEVEL_GAP_Y)
-        for index, node_id in enumerate(level_ids):
-            positions[node_id] = {"x": start_x + (index * _MIN_HORIZONTAL_GAP), "y": y}
+    calc_width(root_id)
 
-    for parent_id, child_ids in children.items():
-        if not parent_id or len(child_ids) <= 1:
-            continue
-        parent_position = positions.get(parent_id)
-        if not parent_position:
-            continue
-        sibling_width = (len(child_ids) - 1) * _MIN_HORIZONTAL_GAP
-        start_x = parent_position["x"] - (sibling_width / 2)
-        child_y = parent_position["y"] + _LEVEL_GAP_Y
-        for index, child_id in enumerate(child_ids):
-            positions[child_id] = {"x": start_x + (index * _MIN_HORIZONTAL_GAP), "y": child_y}
+    positions: dict[str, dict[str, float]] = {}
+
+    def assign(nid: str, x: float, depth: int) -> None:
+        positions[nid] = {"x": x, "y": _ROOT_Y + depth * _LEVEL_GAP_Y}
+        kids = children.get(nid, [])
+        if not kids:
+            return
+        total_w = sum(subtree_width[c] for c in kids)
+        cursor = x - total_w / 2
+        for c in kids:
+            w = subtree_width[c]
+            assign(c, cursor + w / 2, depth + 1)
+            cursor += w
+
+    assign(root_id, _ROOT_X, 0)
 
     return positions
 
