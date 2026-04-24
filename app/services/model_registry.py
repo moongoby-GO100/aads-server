@@ -752,6 +752,7 @@ async def filter_executable_models(model_ids: Sequence[str]) -> list[str]:
         if any(
             normalized_model_id == executable_id
             or normalized_model_id.startswith(executable_id)
+            or executable_id.startswith(normalized_model_id)
             for executable_id in normalized_executable_ids
         ):
             filtered.append(model_id)

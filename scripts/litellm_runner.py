@@ -49,7 +49,7 @@ _MCP_SERVERS = {
 }
 
 # 가드레일
-_MAX_ITERATIONS = 15
+_MAX_ITERATIONS = 100
 _MAX_WALL_SECONDS = 3600  # 1시간
 
 # 시스템 프롬프트
