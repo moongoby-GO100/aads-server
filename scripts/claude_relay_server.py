@@ -1120,6 +1120,7 @@ async def handle_codex_stream(request):
     system_prompt = body.get("system_prompt", "")
     messages_text = body.get("messages_text", "")
     tool_names = body.get("tool_names", [])
+    tool_schemas = body.get("tool_schemas", [])
     model = body.get("model", "gpt-5.4")
     session_id = body.get("session_id", "")
     if not messages_text:
@@ -1128,7 +1129,23 @@ async def handle_codex_stream(request):
     prompt = messages_text
     if system_prompt:
         prompt = "[SYSTEM]\n" + system_prompt + "\n\n[USER]\n" + messages_text
-    if tool_names:
+    if tool_schemas:
+        tool_lines = []
+        for tool in tool_schemas:
+            name = str(tool.get("name", "")).strip()
+            if not name:
+                continue
+            description = str(tool.get("description", "")).strip() or "(no description)"
+            params = tool.get("params", [])
+            if isinstance(params, dict):
+                params = list(params.keys())
+            elif not isinstance(params, list):
+                params = [str(params)] if params else []
+            params_text = ", ".join(str(param).strip() for param in params if str(param).strip()) or "(none)"
+            tool_lines.append(f"- {name}: {description}\n  params: {params_text}")
+        if tool_lines:
+            prompt = "[AVAILABLE_AADS_MCP_TOOLS]\n" + "\n".join(tool_lines) + "\n\n" + prompt
+    elif tool_names:
         prompt = "[AVAILABLE_AADS_MCP_TOOLS]\n" + ", ".join(tool_names) + "\n\n" + prompt
     try:
         async with _semaphore:

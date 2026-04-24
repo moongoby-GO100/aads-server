@@ -1316,7 +1316,7 @@ async def _stream_litellm_openai(
                     }
                 })
 
-    MAX_TOOL_LOOPS = 200  # 제한 없이 (CEO 지시)
+    MAX_TOOL_LOOPS = 500  # Claude 동일 수준 (CEO 지시)
     _consecutive_fail = 0  # 연속 도구 실패 카운터 (AADS-225-D)
 
     for _loop_iter in range(MAX_TOOL_LOOPS + 1):
@@ -1678,6 +1678,15 @@ async def _stream_codex_relay(
         "messages_text": formatted,
         "session_id": session_id or "",
         "tool_names": [t.get("name", "") for t in (tools or []) if t.get("name")],
+        "tool_schemas": [
+            {
+                "name": t.get("name", ""),
+                "description": t.get("description", ""),
+                "params": list((t.get("input_schema", {}).get("properties", {})).keys()),
+            }
+            for t in (tools or [])
+            if t.get("name")
+        ],
     }
     display_model = _CODEX_MODEL_DISPLAY.get(model, model)
     yield {"type": "model_info", "model": display_model}
