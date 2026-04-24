@@ -953,8 +953,15 @@ async def _resume_single_stream(
                             ORDER BY created_at DESC LIMIT 1
                         """, sid)
                         if _asst_model:
-                            _resume_model = _asst_model
-                            logger.info(f"resume_model_from_assistant session={session_id[:8]} model={_resume_model}")
+                            from app.services.intent_router import get_model_for_override
+                            _normalized_asst = get_model_for_override(_asst_model)
+                            # 자동 라우팅 전용 모델은 resume 대상에서 제외 (CEO가 직접 선택하지 않는 모델)
+                            _AUTO_ROUTED_MODELS = {"claude-haiku", "qwen-turbo", "gemini-flash-lite"}
+                            if _normalized_asst not in _AUTO_ROUTED_MODELS:
+                                _resume_model = _normalized_asst
+                                logger.info(f"resume_model_from_assistant session={session_id[:8]} model={_resume_model}")
+                            else:
+                                logger.info(f"resume_model_skip_auto_routed session={session_id[:8]} skipped={_normalized_asst}")
 
                     # 3순위: 워크스페이스 settings에서 기본 모델 조회
                     if not _resume_model:
