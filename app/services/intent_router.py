@@ -142,6 +142,114 @@ _DEFAULT_INTENT = IntentResult(
     tool_group="",
 )
 
+# ─── 인텐트 Temperature 매핑 (v2.1 Q17: W1-C2 선행 완료 후 활성화) ─────────────
+# governance_enabled가 false이면 이 맵을 직접 사용 (DB 조회 없음)
+INTENT_TEMPERATURE_MAP: dict[str, float] = {
+    "casual":             0.2,
+    "greeting":           0.1,
+    "deep_research":      0.3,
+    "strategy":          0.15,
+    "planning":          0.2,
+    "decision":          0.2,
+    "design":            0.25,
+    "design_fix":        0.2,
+    "image_analyze":     0.2,
+    "video_analyze":     0.2,
+    "cto_strategy":      0.1,
+    "system_status":     0.1,
+    "health_check":      0.1,
+    "dashboard":         0.15,
+    "diagnosis":         0.15,
+    "task_history":      0.1,
+    "search":            0.2,
+    "url_analyze":       0.2,
+    "code_task":         0.15,
+    "directive":         0.15,
+    "directive_gen":     0.15,
+    "complex_analysis":  0.15,
+    "architect":         0.2,
+    "code_exec":         0.1,
+    "memory_recall":     0.2,
+    "qa":                0.1,
+    "execution_verify":  0.1,
+    "workspace_switch":  0.1,
+    "cost_report":       0.1,
+    "browser":           0.2,
+    "server_file":       0.2,
+    "cto_code_analysis": 0.1,
+    "cto_directive":     0.1,
+    "cto_verify":        0.1,
+    "cto_impact":        0.15,
+    "cto_tech_debt":     0.15,
+    "execute":           0.1,
+    "code_modify":       0.1,
+    "pipeline_runner":   0.1,
+    "auto_reaction":     0.2,
+    "file_read":         0.1,
+    "task_query":        0.1,
+    "status_check":      0.1,
+    "service_inspection":0.15,
+    "all_service_status":0.1,
+    "pc_control":        0.15,
+    "pc_screenshot":     0.1,
+    "pc_file":           0.15,
+    "pc_kakao":          0.1,
+    "url_read":          0.2,
+    "deep_crawl":        0.25,
+    "agenda_manage":     0.15,
+    "agenda_decide":     0.1,
+    "agenda_auto_detect":0.2,
+    "code_explorer":     0.2,
+    "analyze_changes":   0.15,
+    "search_all_projects":0.2,
+    "news_search":       0.2,
+    "blog_search":       0.2,
+    "shop_search":       0.2,
+    "local_search":      0.2,
+    "book_search":       0.2,
+    "image_search":      0.2,
+    "encyclopedia_search":0.2,
+    "knowledge_search":  0.2,
+}
+
+_DEFAULT_TEMPERATURE = 0.2
+
+
+async def resolve_intent_temperature(intent: str) -> float:
+    """
+    v2.1 Q17: W1-C2 선행 완료 후 활성화될 인텐트별 temperature 해결.
+    governance_enabled=false → DB 조회 skip, INTENT_TEMPERATURE_MAP 폴백 직행.
+    governance_enabled=true → DB에서 커스텀 temperature 조회.
+    """
+    from app.core.feature_flags import governance_enabled
+
+    if not await governance_enabled():
+        # governance off: DB 조회 없이 하드코딩 맵으로 폴백
+        return INTENT_TEMPERATURE_MAP.get(intent, _DEFAULT_TEMPERATURE)
+
+    # governance on: DB에서 커스텀 temperature 조회 (future W1-C2 slot)
+    try:
+        pool = None
+        try:
+            from app.db import get_pool
+            pool = get_pool()
+        except ImportError:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+
+        async with pool.acquire() as conn:
+            temp = await conn.fetchval(
+                "SELECT temperature FROM intent_temperatures WHERE intent = $1",
+                intent,
+            )
+        if temp is not None:
+            return float(temp)
+    except Exception:
+        pass  # DB 조회 실패 시 하드코딩 맵으로 폴백
+
+    return INTENT_TEMPERATURE_MAP.get(intent, _DEFAULT_TEMPERATURE)
+
+
 # ─── 분류 프롬프트 ──────────────────────────────────────────────────────────
 
 _CLASSIFY_PROMPT = """당신은 인텐트 분류기입니다. 사용자 메시지를 분석하여 정확히 하나의 인텐트를 반환하세요.

@@ -25,6 +25,57 @@ router = APIRouter()
 _BUILD_HASH = hashlib.md5(f"{os.getpid()}-{_time.time()}".encode()).hexdigest()[:12]
 
 
+def _short_session_id(session_id: Any) -> str:
+    return str(session_id)[:8]
+
+
+async def _get_stream_activity_snapshot(recent_minutes: int = 5) -> Dict[str, Any]:
+    from app.services.chat_service import get_active_bg_tasks
+
+    active_map = get_active_bg_tasks()
+    executing_session_ids = [str(sid) for sid, active in active_map.items() if active]
+    executing_sessions = [_short_session_id(sid) for sid in executing_session_ids]
+    placeholder_session_ids: List[str] = []
+    placeholder_sessions: List[str] = []
+
+    try:
+        from app.core.db_pool import get_pool as _gp
+
+        async with _gp().acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (session_id)
+                       session_id::text AS session_id
+                FROM chat_messages
+                WHERE intent = 'streaming_placeholder'
+                  AND created_at > NOW() - make_interval(mins => $1)
+                ORDER BY session_id, created_at DESC
+                """,
+                recent_minutes,
+            )
+        placeholder_session_ids = [row["session_id"] for row in rows]
+        placeholder_sessions = [_short_session_id(row["session_id"]) for row in rows]
+    except Exception as e:
+        logger.warning("stream_activity_snapshot_failed", error=str(e))
+
+    executing_set = set(executing_session_ids)
+    placeholder_set = set(placeholder_session_ids)
+    recovery_pending_ids = [sid for sid in placeholder_session_ids if sid not in executing_set]
+    visible_ids = list(executing_set | placeholder_set)
+
+    return {
+        "executing_count": len(executing_session_ids),
+        "executing_sessions": executing_sessions,
+        "placeholder_recent_count": len(placeholder_session_ids),
+        "placeholder_recent_sessions": placeholder_sessions,
+        "recovery_pending_count": len(recovery_pending_ids),
+        "recovery_pending_sessions": [_short_session_id(sid) for sid in recovery_pending_ids],
+        "visible_count": len(visible_ids),
+        "visible_sessions": [_short_session_id(sid) for sid in visible_ids],
+        "window_minutes": recent_minutes,
+    }
+
+
 @router.get("/version")
 async def get_version():
     """배포 버전 해시 반환 — 프론트엔드 자동 새로고침용"""
@@ -554,10 +605,12 @@ async def env_history(server: str, limit: int = Query(20, le=100)):
 @router.get("/ops/active-streams")
 async def active_streams():
     """현재 활성 SSE 스트리밍 세션 수 반환."""
-    from app.services.chat_service import _active_bg_tasks
-
-    active = [sid for sid, task in _active_bg_tasks.items() if task and not task.done()]
-    return {"count": len(active), "sessions": [str(s)[:8] for s in active]}
+    snapshot = await _get_stream_activity_snapshot()
+    return {
+        "count": snapshot["executing_count"],
+        "sessions": snapshot["executing_sessions"],
+        **snapshot,
+    }
 
 
 @router.get("/ops/health-check")
@@ -709,6 +762,18 @@ async def health_check():
                 )
         except Exception:
             infra["stale_placeholders"] = None
+
+        try:
+            _stream_snapshot = await _get_stream_activity_snapshot()
+            infra["active_streams_executing"] = _stream_snapshot["executing_count"]
+            infra["active_streams_visible"] = _stream_snapshot["visible_count"]
+            infra["recovery_pending_streams"] = _stream_snapshot["recovery_pending_count"]
+            infra["recent_placeholders"] = _stream_snapshot["placeholder_recent_count"]
+        except Exception:
+            infra["active_streams_executing"] = None
+            infra["active_streams_visible"] = None
+            infra["recovery_pending_streams"] = None
+            infra["recent_placeholders"] = None
 
         all_containers_ok = all(v == "running" for k, v in infra.items()
                                 if k in ("aads-server", "aads-postgres", "aads-redis", "aads-socket-proxy", "aads-litellm", "aads-dashboard"))

@@ -865,6 +865,18 @@ async def _resume_single_stream(
     workspace_name: str,
 ) -> None:
     """단일 세션의 중단된 스트리밍을 이어서 생성."""
+    _resume_task = _heartbeat_asyncio.current_task()
+    _started_at = _bg_time.monotonic()
+    _streaming_state[session_id] = {
+        "content": partial_content,
+        "tool_count": 0,
+        "last_tool": "",
+        "updated_at": _started_at,
+        "started_at": _started_at,
+        "completed": False,
+    }
+    if _resume_task is not None:
+        _active_bg_tasks[session_id] = _resume_task
     try:
         async with _RESUME_SEMAPHORE:
             await _heartbeat_asyncio.sleep(0.5)
@@ -1035,12 +1047,27 @@ async def _resume_single_stream(
                             if etype == "delta":
                                 delta_content = event.get("content", "")
                                 full_response += delta_content
+                                _streaming_state[session_id] = {
+                                    **_streaming_state.get(session_id, {}),
+                                    "content": full_response,
+                                    "updated_at": _bg_time.monotonic(),
+                                    "started_at": _started_at,
+                                    "completed": False,
+                                }
                                 # Redis Stream에 발행 → 프론트 stream-resume가 실시간 수신
                                 chunk = f'data: {json.dumps({"type": "delta", "content": delta_content})}\n\n'
                                 await _redis_stream.publish_token(session_id, chunk, _token_idx)
                                 _token_idx += 1
                             elif etype == "tool_use":
                                 tools_called.append(event["tool_name"])
+                                _streaming_state[session_id] = {
+                                    **_streaming_state.get(session_id, {}),
+                                    "tool_count": len(tools_called),
+                                    "last_tool": event["tool_name"],
+                                    "updated_at": _bg_time.monotonic(),
+                                    "started_at": _started_at,
+                                    "completed": False,
+                                }
                             elif etype == "done":
                                 cost_usd = Decimal(str(event.get("cost", "0")))
 
@@ -1091,6 +1118,15 @@ async def _resume_single_stream(
                 f"partial={len(partial_content)} final={len(full_response)} "
                 f"tools={len(tools_called)} cost=${cost_usd}"
             )
+            _streaming_state[session_id] = {
+                **_streaming_state.get(session_id, {}),
+                "content": full_response,
+                "tool_count": len(tools_called),
+                "last_tool": tools_called[-1] if tools_called else "",
+                "updated_at": _bg_time.monotonic(),
+                "started_at": _started_at,
+                "completed": True,
+            }
 
     except Exception as e:
         logger.error(f"resume_single_stream_error: session={session_id[:8]} error={e}")
@@ -1102,8 +1138,18 @@ async def _resume_single_stream(
                     final, placeholder_id,
                 )
                 logger.warning(f"resume_failed_kept_recovered: session={session_id[:8]} bubble={placeholder_id} kept as recovered for retry")
+                _streaming_state[session_id] = {
+                    **_streaming_state.get(session_id, {}),
+                    "content": final,
+                    "updated_at": _bg_time.monotonic(),
+                    "started_at": _started_at,
+                    "completed": True,
+                }
         except Exception:
             pass
+    finally:
+        if _resume_task is not None and _active_bg_tasks.get(session_id) is _resume_task:
+            _active_bg_tasks.pop(session_id, None)
 
 
 def get_streaming_status(session_id: str) -> Optional[Dict[str, Any]]:
