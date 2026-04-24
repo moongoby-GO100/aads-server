@@ -91,6 +91,10 @@ async def set_flag(flag_key: str, enabled: bool, changed_by: str = "system") -> 
     return dict(row)
 
 
+async def governance_enabled(default: bool = True) -> bool:
+    return await get_flag("governance_enabled", default=default)
+
+
 async def list_flags() -> list[dict[str, Any]]:
     try:
         pool = get_pool()
