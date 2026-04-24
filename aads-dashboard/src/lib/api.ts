@@ -35,6 +35,12 @@ export interface AdminDeployStatusResponse {
   servers: AdminDeployServerStatus[];
 }
 
+export interface AdminSessionItem {
+  session_id: string;
+  workspace: string;
+  created_at: string | null;
+  message_count: number;
+}
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://aads.newtalk.kr/api/v1";
 
 function getAuthHeaders(): Record<string, string> {
@@ -411,4 +417,20 @@ export const api = {
   updateLlmKey: (id: number, data: Partial<{ value: string; label: string; priority: number; is_active: boolean; notes: string }>) =>
     request<any>(`/llm-keys/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteLlmKey: (id: number) => request<any>(`/llm-keys/${id}`, { method: "DELETE" }),
+
+  // LLM Models Registry
+  getLlmModels: (params?: { provider?: string; active_only?: boolean }) => {
+    const q = new URLSearchParams();
+    if (params?.provider) q.set("provider", params.provider);
+    if (params?.active_only) q.set("active_only", "true");
+    const qs = q.toString();
+    return request<any>(`/llm-models${qs ? "?" + qs : ""}`);
+  },
+  getLlmProviderTimeline: (provider: string, limit = 20) =>
+    request<any>(`/llm-models/providers/${encodeURIComponent(provider)}/timeline?limit=${limit}`),
+  getLlmModelSummary: () => request<any>("/llm-models/providers/summary"),
+  getChatModelPreferences: () => request<any>("/llm-models/chat-preferences"),
+  updateChatModelPreferences: (items: { model_id: string; display_order: number; is_hidden: boolean; is_favorite: boolean; is_pinned: boolean }[]) =>
+    request<any>("/llm-models/chat-preferences", { method: "PUT", body: JSON.stringify(items) }),
+  syncLlmModelRegistry: () => request<any>("/llm-models/sync", { method: "POST" }),
 };
