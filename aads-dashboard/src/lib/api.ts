@@ -369,10 +369,9 @@ export const api = {
     if (params?.page_size) q.set("page_size", String(params.page_size));
     return request<any>(`/admin/tasks${q.size ? `?${q.toString()}` : ""}`);
   },
+  getAdminDeployStatus: () => request<any>("/admin/deploy/status"),
   getAdminTask: (jobId: string) => request<any>(`/admin/tasks/${encodeURIComponent(jobId)}`),
   getAdminTaskStats: () => request<any>("/admin/tasks/stats"),
-  getAdminSessions: () => request<any>("/admin/sessions"),
-  getAdminSessionReplay: (jobId: string) => request<any>(`/admin/sessions/${encodeURIComponent(jobId)}`),
 
   // LLM API 키 관리 (AADS-188)
   getLlmKeys: () => request<any[]>("/llm-keys"),

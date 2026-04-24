@@ -28,7 +28,7 @@ const navItems = [
   { href: "/settings", label: "Settings", icon: "⚙️" },
   { href: "/admin/prompts", label: "Prompts", icon: "📝" },
   { href: "/admin/tasks", label: "Task Board", icon: "🗂️" },
-  { href: "/admin/sessions", label: "Sessions", icon: "🔄" },
+  { href: "/admin/deploy", label: "Deploy", icon: "🚀" },
   { href: "/admin/agents", label: "Agent Registry", icon: "🧩" },
   { href: "/server-status", label: "Server Status", icon: "🖥️" },
 ];

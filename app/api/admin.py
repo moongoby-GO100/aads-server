@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
+import re
 from datetime import datetime, timedelta
 from typing import Any, Optional, Sequence
 from zoneinfo import ZoneInfo
@@ -32,6 +32,12 @@ _ADMIN_AGENT_ROLE_COLUMN_CANDIDATES = (
     "assignee_role",
     "profile_role",
     "agent",
+)
+_DEPLOY_COMMIT_RE = re.compile(r"(?:commit|커밋)\s*[:：]\s*([0-9a-f]{7,40})\b", re.IGNORECASE)
+_DEPLOY_SERVER_GROUPS = (
+    {"id": "68", "name": "서버68", "ip": "68.183.183.11", "projects": ("AADS",)},
+    {"id": "211", "name": "서버211", "ip": "211.188.51.113", "projects": ("KIS", "GO100")},
+    {"id": "114", "name": "서버114", "ip": "116.120.58.155", "projects": ("SF", "NTV2")},
 )
 
 
@@ -1083,281 +1089,118 @@ def _admin_format_task_log(row: Any) -> dict[str, Any]:
     }
 
 
-def _admin_short_text(value: Any, limit: int = 220) -> str:
+def _admin_extract_commit_from_text(value: Any) -> Optional[str]:
     if value in (None, ""):
-        return ""
-    text = str(value).replace("\r", " ").replace("\n", " ")
-    text = " ".join(text.split())
-    if len(text) <= limit:
-        return text
-    return text[: max(0, limit - 3)] + "..."
-
-
-def _admin_error_category(detail: Any) -> str:
-    text = _admin_short_text(detail, 300).lower()
+        return None
+    text = str(value).strip()
     if not text:
-        return "unknown"
-    if any(token in text for token in ("unauthorized", "forbidden", "auth", "token", "api key", "api_key")):
-        return "auth"
-    if any(token in text for token in ("timeout", "timed out", "deadline", "slow")):
-        return "timeout"
-    if any(token in text for token in ("network", "connection", "dns", "unreachable", "refused", "socket")):
-        return "network"
-    if any(token in text for token in ("not found", "no such file", "missing", "does not exist")):
-        return "not_found"
-    if any(token in text for token in ("invalid", "validation", "schema", "bad request")):
-        return "validation"
-    if any(token in text for token in ("permission denied", "forbidden", "readonly")):
-        return "permission"
-    return "runtime"
+        return None
+
+    match = _DEPLOY_COMMIT_RE.search(text)
+    if match:
+        return match.group(1)
+
+    match = re.match(r"^([0-9a-f]{7,40})\b", text, re.IGNORECASE)
+    if match:
+        return match.group(1)
+
+    return None
 
 
-def _admin_tool_input_summary(input_params: Any) -> str:
-    parsed = _admin_parse_json(input_params)
-    if not isinstance(parsed, dict):
-        return ""
-
-    parts: list[str] = []
-    for key, value in list(parsed.items())[:3]:
-        if isinstance(value, (dict, list)):
-            compact = _admin_short_text(json.dumps(value, ensure_ascii=False), 36)
-        else:
-            compact = _admin_short_text(value, 36)
-        parts.append(f"{key}={compact}" if compact else str(key))
-    return ", ".join(parts)
-
-
-def _admin_timeline_sort_key(value: Any) -> float:
-    if value is None:
-        return 0.0
-    try:
-        return float(value.timestamp())
-    except Exception:
-        return 0.0
-
-
-@router.get("/admin/sessions")
-async def list_admin_sessions():
-    """세션 리플레이용 최근 완료/오류 작업 50건."""
-    from app.core.db_pool import get_pool
-
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            f"""
-            WITH jobs AS (
-                SELECT
-                    job_id,
-                    project,
-                    {_TASK_BOARD_STATUS_SQL} AS board_status,
-                    substring(COALESCE(instruction, '') from 1 for 100) AS instruction,
-                    created_at,
-                    updated_at,
-                    error_detail
-                FROM pipeline_jobs
-            )
-            SELECT
-                job_id,
-                project,
-                board_status,
-                instruction,
-                created_at,
-                updated_at,
-                error_detail
-            FROM jobs
-            WHERE board_status IN ('done', 'error')
-            ORDER BY COALESCE(updated_at, created_at) DESC NULLS LAST
-            LIMIT 50
-            """
-        )
-
-    sessions = [
-        {
-            "job_id": row["job_id"],
-            "project": row["project"] or "",
-            "instruction": row["instruction"] or "",
-            "status": row["board_status"] or "",
-            "created_at": _admin_iso(row["created_at"]),
-            "updated_at": _admin_iso(row["updated_at"]),
-            "error_detail": row["error_detail"] or "",
-        }
-        for row in rows
-    ]
-    return {
-        "sessions": sessions,
-        "total": len(sessions),
-    }
-
-
-@router.get("/admin/sessions/{job_id}")
-async def get_admin_session_replay(job_id: str):
-    """세션 리플레이 상세 + 타임라인 이벤트."""
-    from app.core.db_pool import get_pool
-
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        has_chat_session_id = await _admin_column_exists(conn, "pipeline_jobs", "chat_session_id")
-
-        row = await conn.fetchrow(
-            f"""
-            SELECT
-                job_id,
-                project,
-                instruction,
-                status AS raw_status,
-                {_TASK_BOARD_STATUS_SQL} AS board_status,
-                phase,
-                result_output,
-                error_detail,
-                started_at,
-                created_at,
-                updated_at,
-                {"chat_session_id," if has_chat_session_id else "NULL::text AS chat_session_id,"}
-                COALESCE(
-                    EXTRACT(EPOCH FROM (COALESCE(updated_at, NOW()) - COALESCE(started_at, created_at))),
-                    0
-                )::bigint AS duration_seconds
-            FROM pipeline_jobs
-            WHERE job_id = $1
-            """,
-            job_id,
-        )
-        if not row:
-            raise HTTPException(404, "Session not found")
-
-        timeline_rows: list[tuple[Any, dict[str, Any]]] = []
-        job_started_at = row["started_at"] or row["created_at"]
-        job_ended_at = row["updated_at"] or row["created_at"] or row["started_at"]
-
-        has_archive = await _admin_table_exists(conn, "tool_results_archive")
-        has_chat_messages = await _admin_table_exists(conn, "chat_messages")
-        has_archive_error_flag = (
-            await _admin_column_exists(conn, "tool_results_archive", "is_error")
-            if has_archive
-            else False
-        )
-
-        raw_session_id = row["chat_session_id"]
-        session_id = str(raw_session_id).strip() if raw_session_id else ""
-        session_uuid: Optional[str] = None
-        if session_id:
-            try:
-                session_uuid = str(uuid.UUID(session_id))
-            except ValueError:
-                session_uuid = None
-
-        if has_archive and has_chat_messages and session_uuid:
-            tool_rows = await conn.fetch(
-                f"""
-                SELECT
-                    tra.created_at,
-                    tra.tool_name,
-                    tra.input_params,
-                    tra.raw_output,
-                    {"COALESCE(tra.is_error, FALSE)" if has_archive_error_flag else "FALSE"} AS is_error
-                FROM tool_results_archive tra
-                JOIN chat_messages cm ON cm.id = tra.message_id
-                WHERE cm.session_id = $1::uuid
-                  AND ($2::timestamptz IS NULL OR tra.created_at >= $2::timestamptz - INTERVAL '5 minutes')
-                  AND ($3::timestamptz IS NULL OR tra.created_at <= $3::timestamptz + INTERVAL '10 minutes')
-                ORDER BY tra.created_at ASC
-                LIMIT 300
-                """,
-                session_uuid,
-                job_started_at,
-                job_ended_at,
-            )
-
-            for tool_row in tool_rows:
-                tool_name = _admin_short_text(tool_row["tool_name"] or "tool", 48)
-                input_summary = _admin_tool_input_summary(tool_row["input_params"])
-                output_summary = _admin_short_text(tool_row["raw_output"], 220)
-
-                if input_summary and output_summary:
-                    tool_summary = f"{tool_name} | {input_summary} | {output_summary}"
-                elif input_summary:
-                    tool_summary = f"{tool_name} | {input_summary}"
-                elif output_summary:
-                    tool_summary = f"{tool_name} | {output_summary}"
+def _admin_extract_last_commit(*values: Any) -> Optional[str]:
+    for value in values:
+        parsed = _admin_parse_json(value)
+        if isinstance(parsed, list):
+            for entry in reversed(parsed):
+                if isinstance(entry, dict):
+                    for key in ("message", "content", "text", "summary"):
+                        commit = _admin_extract_commit_from_text(entry.get(key))
+                        if commit:
+                            return commit
                 else:
-                    tool_summary = tool_name
+                    commit = _admin_extract_commit_from_text(entry)
+                    if commit:
+                        return commit
+        elif isinstance(parsed, dict):
+            for key in ("message", "content", "text", "summary"):
+                commit = _admin_extract_commit_from_text(parsed.get(key))
+                if commit:
+                    return commit
+        else:
+            commit = _admin_extract_commit_from_text(parsed)
+            if commit:
+                return commit
+    return None
 
-                tool_ts = tool_row["created_at"]
-                timeline_rows.append(
-                    (
-                        tool_ts,
-                        {
-                            "timestamp": _admin_iso(tool_ts),
-                            "type": "tool_call",
-                            "summary": tool_summary,
-                        },
-                    )
+
+@router.get("/admin/deploy/status")
+async def get_admin_deploy_status():
+    """서버별 마지막 배포 상태 조회."""
+    from app.core.db_pool import get_pool
+
+    projects = [project for server in _DEPLOY_SERVER_GROUPS for project in server["projects"]]
+    project_rows: dict[str, Any] = {}
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        has_pipeline_jobs = await _admin_table_exists(conn, "pipeline_jobs")
+        if has_pipeline_jobs:
+            has_logs_column = await _admin_column_exists(conn, "pipeline_jobs", "logs")
+            has_review_feedback_column = await _admin_column_exists(conn, "pipeline_jobs", "review_feedback")
+            has_result_output_column = await _admin_column_exists(conn, "pipeline_jobs", "result_output")
+            logs_expr = "logs" if has_logs_column else "NULL::jsonb AS logs"
+            review_feedback_expr = "review_feedback" if has_review_feedback_column else "NULL::text AS review_feedback"
+            result_output_expr = "result_output" if has_result_output_column else "NULL::text AS result_output"
+
+            rows = await conn.fetch(
+                f"""
+                WITH latest_done AS (
+                    SELECT DISTINCT ON (upper(project))
+                        upper(project) AS project,
+                        COALESCE(updated_at, created_at) AS last_deploy_at,
+                        {logs_expr},
+                        {review_feedback_expr},
+                        {result_output_expr}
+                    FROM pipeline_jobs
+                    WHERE upper(project) = ANY($1::text[])
+                      AND status = 'done'
+                    ORDER BY upper(project), COALESCE(updated_at, created_at) DESC NULLS LAST, created_at DESC NULLS LAST
                 )
-
-                if bool(tool_row["is_error"]):
-                    tool_error = _admin_short_text(tool_row["raw_output"], 280) or "Tool execution failed"
-                    timeline_rows.append(
-                        (
-                            tool_ts,
-                            {
-                                "timestamp": _admin_iso(tool_ts),
-                                "type": "error",
-                                "summary": f"{tool_name} | {tool_error}",
-                                "error_category": _admin_error_category(tool_error),
-                            },
-                        )
-                    )
-
-    llm_preview = _admin_short_text(row["result_output"], 320)
-    if llm_preview:
-        llm_ts = row["updated_at"] or row["created_at"] or row["started_at"]
-        timeline_rows.append(
-            (
-                llm_ts,
-                {
-                    "timestamp": _admin_iso(llm_ts),
-                    "type": "llm_response",
-                    "summary": llm_preview,
-                },
+                SELECT project, last_deploy_at, logs, review_feedback, result_output
+                FROM latest_done
+                """,
+                projects,
             )
-        )
+            project_rows = {str(row["project"]).upper(): row for row in rows}
 
-    error_preview = _admin_short_text(row["error_detail"], 320)
-    if row["board_status"] == "error" or error_preview:
-        error_ts = row["updated_at"] or row["created_at"] or row["started_at"]
-        timeline_rows.append(
-            (
-                error_ts,
-                {
-                    "timestamp": _admin_iso(error_ts),
-                    "type": "error",
-                    "summary": error_preview or "Session completed with error status.",
-                    "error_category": _admin_error_category(error_preview),
-                },
-            )
-        )
+    servers = []
+    for server in _DEPLOY_SERVER_GROUPS:
+        server_projects = []
+        for project in server["projects"]:
+            row = project_rows.get(project)
+            if row:
+                server_projects.append({
+                    "name": project,
+                    "status": "done",
+                    "last_commit": _admin_extract_last_commit(row["logs"], row["review_feedback"], row["result_output"]),
+                    "last_deploy_at": _admin_iso(row["last_deploy_at"]),
+                })
+            else:
+                server_projects.append({
+                    "name": project,
+                    "status": "missing",
+                    "last_commit": None,
+                    "last_deploy_at": None,
+                })
 
-    timeline_rows.sort(key=lambda item: _admin_timeline_sort_key(item[0]))
-    timeline = [entry for _, entry in timeline_rows]
+        servers.append({
+            "id": server["id"],
+            "name": server["name"],
+            "ip": server["ip"],
+            "projects": server_projects,
+        })
 
-    return {
-        "session": {
-            "job_id": row["job_id"],
-            "project": row["project"] or "",
-            "status": row["board_status"] or "",
-            "raw_status": row["raw_status"] or "",
-            "phase": row["phase"] or "",
-            "instruction": row["instruction"] or "",
-            "error_detail": row["error_detail"] or "",
-            "result_preview": llm_preview,
-            "duration_seconds": int(row["duration_seconds"] or 0),
-            "started_at": _admin_iso(row["started_at"]),
-            "created_at": _admin_iso(row["created_at"]),
-            "updated_at": _admin_iso(row["updated_at"]),
-        },
-        "timeline": timeline,
-        "timeline_count": len(timeline),
-    }
+    return {"servers": servers}
 
 
 @router.get("/admin/agents")
