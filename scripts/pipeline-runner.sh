@@ -735,7 +735,9 @@ ${safe_instruction}"
                 > "$output_file" 2> "$err_file" &
             local claude_pid=$!
         else
-            timeout "$MAX_RUNTIME" claude --model "$current_model" -p --output-format text "$safe_instruction" \
+            # AADS-242: --dangerously-skip-permissions 추가 (비대화형 -p 모드에서 Write/Bash 권한 prompt 차단 방지)
+            # 원인: 권한 prompt 모드로 실행되면 Write/Bash가 모두 차단되어 result_output에 "권한 필요" 메시지만 남음
+            timeout "$MAX_RUNTIME" claude --model "$current_model" --dangerously-skip-permissions -p --output-format text "$safe_instruction" \
                 > "$output_file" 2> "$err_file" &
             local claude_pid=$!
         fi
