@@ -213,14 +213,47 @@ def _build_tree_text(nodes: list[dict[str, Any]]) -> str:
 
 
 def _compute_layout(nodes: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
-    # 프론트엔드 dagre가 시각화 레이아웃을 담당한다.
-    # 백엔드는 DB 저장용 기본 좌표만 반환한다.
+    """재귀 서브트리 폭 기반 트리 레이아웃 (노드 겹침 방지)."""
+    node_map = {node["id"]: node for node in nodes}
+    children: dict[Optional[str], list[str]] = defaultdict(list)
+    for node in nodes:
+        children[node["parent_id"]].append(node["id"])
+
+    for child_ids in children.values():
+        child_ids.sort(key=lambda nid: node_map[nid].get("created_at") or "")
+
+    root_id = next((n["id"] for n in nodes if n["node_type"] == "topic"), None)
+    if not root_id:
+        return {}
+
+    subtree_width: dict[str, float] = {}
+
+    def calc_width(nid: str) -> float:
+        kids = children.get(nid, [])
+        if not kids:
+            subtree_width[nid] = _MIN_HORIZONTAL_GAP
+            return _MIN_HORIZONTAL_GAP
+        total = sum(calc_width(c) for c in kids)
+        subtree_width[nid] = max(total, _MIN_HORIZONTAL_GAP)
+        return subtree_width[nid]
+
+    calc_width(root_id)
+
     positions: dict[str, dict[str, float]] = {}
-    for index, node in enumerate(nodes):
-        positions[node["id"]] = {
-            "x": node.get("position_x") or _ROOT_X,
-            "y": node.get("position_y") or (_ROOT_Y + index * 50),
-        }
+
+    def assign(nid: str, x: float, depth: int) -> None:
+        positions[nid] = {"x": x, "y": _ROOT_Y + depth * _LEVEL_GAP_Y}
+        kids = children.get(nid, [])
+        if not kids:
+            return
+        total_w = sum(subtree_width[c] for c in kids)
+        cursor = x - total_w / 2
+        for c in kids:
+            w = subtree_width[c]
+            assign(c, cursor + w / 2, depth + 1)
+            cursor += w
+
+    assign(root_id, _ROOT_X, 0)
     return positions
 
 
