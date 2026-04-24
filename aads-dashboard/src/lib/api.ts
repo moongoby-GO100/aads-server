@@ -357,6 +357,8 @@ export const api = {
     request<any>(`/admin/prompts/versions${section ? "?section=" + encodeURIComponent(section) : ""}`),
   getPromptVersion: (id: number) => request<any>(`/admin/prompts/versions/${id}`),
   getTokenProfile: () => request<any>("/admin/prompts/token-profile"),
+  getGovernance: () => request<any>("/admin/governance"),
+  getGovernanceLayers: () => request<any>("/admin/governance/layers"),
 
   // LLM API 키 관리 (AADS-188)
   getLlmKeys: () => request<any[]>("/llm-keys"),
