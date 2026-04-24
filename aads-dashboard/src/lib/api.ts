@@ -359,6 +359,9 @@ export const api = {
   getTokenProfile: () => request<any>("/admin/prompts/token-profile"),
   getGovernance: () => request<any>("/admin/governance"),
   getGovernanceLayers: () => request<any>("/admin/governance/layers"),
+  getAdminAgents: () => request<any>("/admin/agents"),
+  getAdminAgent: (role: string) => request<any>(`/admin/agents/${encodeURIComponent(role)}`),
+  getAdminAgentStats: () => request<any>("/admin/agents/stats"),
   getAdminTasks: (params?: { status?: string; page?: number; page_size?: number }) => {
     const q = new URLSearchParams();
     if (params?.status) q.set("status", params.status);

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
@@ -22,6 +22,15 @@ _TASK_BOARD_STATUS_SQL = (
     "WHEN status IN ('done', 'approved') THEN 'done' "
     "ELSE 'error' "
     "END"
+)
+_ADMIN_AGENT_ROLE_COLUMN_CANDIDATES = (
+    "agent_role",
+    "role",
+    "owner_role",
+    "worker_role",
+    "assignee_role",
+    "profile_role",
+    "agent",
 )
 
 
@@ -348,6 +357,86 @@ async def _admin_column_exists(conn, table_name: str, column_name: str) -> bool:
         return bool(exists)
     except Exception:
         return False
+
+
+async def _admin_table_exists(conn, table_name: str) -> bool:
+    try:
+        exists = await conn.fetchval(
+            """
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_name = $1
+            LIMIT 1
+            """,
+            table_name,
+        )
+        return bool(exists)
+    except Exception:
+        return False
+
+
+async def _admin_table_columns(conn, table_name: str) -> set[str]:
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = $1
+            """,
+            table_name,
+        )
+        return {str(row["column_name"]) for row in rows if row and row["column_name"]}
+    except Exception:
+        return set()
+
+
+def _admin_pick_column(columns: set[str], candidates: Sequence[str]) -> Optional[str]:
+    for candidate in candidates:
+        if candidate in columns:
+            return candidate
+    return None
+
+
+def _admin_colref(alias: str, column_name: str) -> str:
+    escaped = column_name.replace('"', '""')
+    return f'{alias}."{escaped}"'
+
+
+def _admin_column_expr(
+    alias: str,
+    columns: set[str],
+    candidates: Sequence[str],
+    fallback_sql: str,
+) -> str:
+    picked = _admin_pick_column(columns, candidates)
+    if not picked:
+        return fallback_sql
+    return _admin_colref(alias, picked)
+
+
+def _admin_to_string_list(value: Any) -> list[str]:
+    parsed = _admin_parse_json(value)
+    if parsed in (None, ""):
+        return []
+    if isinstance(parsed, (list, tuple, set)):
+        items = []
+        for item in parsed:
+            text = str(item or "").strip()
+            if text:
+                items.append(text)
+        return items
+    if isinstance(parsed, str):
+        text = parsed.strip()
+        if not text:
+            return []
+        if text.startswith("{") and text.endswith("}") and "," in text:
+            # PostgreSQL text[]가 문자열로 내려온 경우 대비
+            raw_items = [chunk.strip().strip('"') for chunk in text[1:-1].split(",")]
+            return [chunk for chunk in raw_items if chunk]
+        return [text]
+    return [str(parsed)]
 
 
 @router.get("/admin/model-parity")
@@ -990,6 +1079,385 @@ def _admin_format_task_log(row: Any) -> dict[str, Any]:
         "phase": row["phase"] or "",
         "metadata": metadata or {},
         "created_at": _admin_iso(row["created_at"]),
+    }
+
+
+@router.get("/admin/agents")
+async def list_admin_agents():
+    """Agent Registry 목록 + 최근 작업 통계."""
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        if not await _admin_table_exists(conn, "role_profiles"):
+            return {"agents": [], "total": 0}
+
+        role_columns = await _admin_table_columns(conn, "role_profiles")
+        role_column = _admin_pick_column(role_columns, ("role",))
+        if not role_column:
+            return {"agents": [], "total": 0}
+
+        has_pipeline_jobs = await _admin_table_exists(conn, "pipeline_jobs")
+        pipeline_columns = await _admin_table_columns(conn, "pipeline_jobs") if has_pipeline_jobs else set()
+        pipeline_role_column = _admin_pick_column(pipeline_columns, _ADMIN_AGENT_ROLE_COLUMN_CANDIDATES)
+
+        role_expr = _admin_colref("rp", role_column)
+        display_name_expr = _admin_column_expr("rp", role_columns, ("display_name", "name"), role_expr)
+        base_model_expr = _admin_column_expr(
+            "rp",
+            role_columns,
+            ("base_model", "default_model", "model"),
+            "NULL::text",
+        )
+        allowed_intents_expr = _admin_column_expr(
+            "rp",
+            role_columns,
+            ("allowed_intents", "intent_allowlist"),
+            "NULL",
+        )
+        max_tokens_expr = _admin_column_expr(
+            "rp",
+            role_columns,
+            ("max_tokens", "token_limit", "max_output_tokens"),
+            "NULL::bigint",
+        )
+        created_at_expr = _admin_column_expr(
+            "rp",
+            role_columns,
+            ("created_at", "updated_at"),
+            "NULL::timestamptz",
+        )
+
+        if has_pipeline_jobs and pipeline_role_column:
+            job_role_expr = f"NULLIF(TRIM({_admin_colref('pj', pipeline_role_column)}::text), '')"
+            rows = await conn.fetch(
+                f"""
+                WITH role_jobs AS (
+                    SELECT
+                        {job_role_expr} AS job_role,
+                        COUNT(*) FILTER (WHERE COALESCE(pj.updated_at, pj.created_at, pj.started_at) >= NOW() - INTERVAL '30 days') AS recent_tasks_count,
+                        MAX(COALESCE(pj.updated_at, pj.created_at, pj.started_at)) AS last_active_at
+                    FROM pipeline_jobs pj
+                    WHERE {job_role_expr} IS NOT NULL
+                    GROUP BY {job_role_expr}
+                )
+                SELECT
+                    {role_expr} AS role,
+                    {display_name_expr} AS display_name,
+                    {base_model_expr} AS base_model,
+                    {allowed_intents_expr} AS allowed_intents,
+                    {max_tokens_expr} AS max_tokens,
+                    {created_at_expr} AS created_at,
+                    COALESCE(rj.recent_tasks_count, 0) AS recent_tasks_count,
+                    rj.last_active_at AS last_active_at
+                FROM role_profiles rp
+                LEFT JOIN role_jobs rj
+                  ON lower(rj.job_role) = lower({role_expr}::text)
+                ORDER BY lower(COALESCE({display_name_expr}::text, {role_expr}::text))
+                """
+            )
+        else:
+            rows = await conn.fetch(
+                f"""
+                SELECT
+                    {role_expr} AS role,
+                    {display_name_expr} AS display_name,
+                    {base_model_expr} AS base_model,
+                    {allowed_intents_expr} AS allowed_intents,
+                    {max_tokens_expr} AS max_tokens,
+                    {created_at_expr} AS created_at,
+                    0::bigint AS recent_tasks_count,
+                    NULL::timestamptz AS last_active_at
+                FROM role_profiles rp
+                ORDER BY lower(COALESCE({display_name_expr}::text, {role_expr}::text))
+                """
+            )
+
+    agents = [
+        {
+            "role": row["role"] or "",
+            "display_name": row["display_name"] or row["role"] or "",
+            "base_model": row["base_model"] or "",
+            "allowed_intents": _admin_to_string_list(row["allowed_intents"]),
+            "max_tokens": int(row["max_tokens"]) if row["max_tokens"] is not None else None,
+            "created_at": _admin_iso(row["created_at"]),
+            "recent_tasks_count": int(row["recent_tasks_count"] or 0),
+            "last_active_at": _admin_iso(row["last_active_at"]),
+        }
+        for row in rows
+    ]
+
+    return {
+        "agents": agents,
+        "total": len(agents),
+    }
+
+
+@router.get("/admin/agents/stats")
+async def get_admin_agent_stats():
+    """에이전트별 작업 완료/에러 비율."""
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        if not await _admin_table_exists(conn, "role_profiles"):
+            return {"agents": [], "total": 0}
+
+        role_columns = await _admin_table_columns(conn, "role_profiles")
+        role_column = _admin_pick_column(role_columns, ("role",))
+        if not role_column:
+            return {"agents": [], "total": 0}
+
+        role_expr = _admin_colref("rp", role_column)
+        display_name_expr = _admin_column_expr("rp", role_columns, ("display_name", "name"), role_expr)
+
+        has_pipeline_jobs = await _admin_table_exists(conn, "pipeline_jobs")
+        pipeline_columns = await _admin_table_columns(conn, "pipeline_jobs") if has_pipeline_jobs else set()
+        pipeline_role_column = _admin_pick_column(pipeline_columns, _ADMIN_AGENT_ROLE_COLUMN_CANDIDATES)
+
+        if not (has_pipeline_jobs and pipeline_role_column):
+            rows = await conn.fetch(
+                f"""
+                SELECT
+                    {role_expr} AS role,
+                    {display_name_expr} AS display_name,
+                    0::bigint AS total_tasks,
+                    0::bigint AS completed_tasks,
+                    0::bigint AS error_tasks,
+                    NULL::timestamptz AS last_active_at
+                FROM role_profiles rp
+                ORDER BY lower(COALESCE({display_name_expr}::text, {role_expr}::text))
+                """
+            )
+        else:
+            job_role_expr = f"NULLIF(TRIM({_admin_colref('pj', pipeline_role_column)}::text), '')"
+            job_status_expr = (
+                "CASE "
+                "WHEN pj.status = 'queued' THEN 'queued' "
+                "WHEN pj.status IN ('running', 'claimed') THEN 'running' "
+                "WHEN pj.status = 'awaiting_approval' THEN 'awaiting_approval' "
+                "WHEN pj.status IN ('done', 'approved') THEN 'done' "
+                "ELSE 'error' "
+                "END"
+            )
+            rows = await conn.fetch(
+                f"""
+                WITH role_jobs AS (
+                    SELECT
+                        {job_role_expr} AS job_role,
+                        COUNT(*) AS total_tasks,
+                        COUNT(*) FILTER (WHERE {job_status_expr} = 'done') AS completed_tasks,
+                        COUNT(*) FILTER (WHERE {job_status_expr} = 'error') AS error_tasks,
+                        MAX(COALESCE(pj.updated_at, pj.created_at, pj.started_at)) AS last_active_at
+                    FROM pipeline_jobs pj
+                    WHERE {job_role_expr} IS NOT NULL
+                    GROUP BY {job_role_expr}
+                )
+                SELECT
+                    {role_expr} AS role,
+                    {display_name_expr} AS display_name,
+                    COALESCE(rj.total_tasks, 0) AS total_tasks,
+                    COALESCE(rj.completed_tasks, 0) AS completed_tasks,
+                    COALESCE(rj.error_tasks, 0) AS error_tasks,
+                    rj.last_active_at AS last_active_at
+                FROM role_profiles rp
+                LEFT JOIN role_jobs rj
+                  ON lower(rj.job_role) = lower({role_expr}::text)
+                ORDER BY lower(COALESCE({display_name_expr}::text, {role_expr}::text))
+                """
+            )
+
+    agents = []
+    for row in rows:
+        total_tasks = int(row["total_tasks"] or 0)
+        completed_tasks = int(row["completed_tasks"] or 0)
+        error_tasks = int(row["error_tasks"] or 0)
+        completed_ratio = (completed_tasks / total_tasks) if total_tasks else 0.0
+        error_ratio = (error_tasks / total_tasks) if total_tasks else 0.0
+        agents.append(
+            {
+                "role": row["role"] or "",
+                "display_name": row["display_name"] or row["role"] or "",
+                "total_tasks": total_tasks,
+                "completed_tasks": completed_tasks,
+                "error_tasks": error_tasks,
+                "completed_ratio": round(completed_ratio, 4),
+                "error_ratio": round(error_ratio, 4),
+                "last_active_at": _admin_iso(row["last_active_at"]),
+            }
+        )
+
+    return {
+        "agents": agents,
+        "total": len(agents),
+    }
+
+
+@router.get("/admin/agents/{role}")
+async def get_admin_agent(role: str):
+    """Agent Registry 상세 + 최근 작업 10건."""
+    from app.core.db_pool import get_pool
+
+    role_key = (role or "").strip()
+    if not role_key:
+        raise HTTPException(400, "Role is required")
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        if not await _admin_table_exists(conn, "role_profiles"):
+            raise HTTPException(404, "Agent registry not found")
+
+        role_columns = await _admin_table_columns(conn, "role_profiles")
+        role_column = _admin_pick_column(role_columns, ("role",))
+        if not role_column:
+            raise HTTPException(404, "Agent registry not found")
+
+        role_expr = _admin_colref("rp", role_column)
+        display_name_expr = _admin_column_expr("rp", role_columns, ("display_name", "name"), role_expr)
+        base_model_expr = _admin_column_expr(
+            "rp",
+            role_columns,
+            ("base_model", "default_model", "model"),
+            "NULL::text",
+        )
+        allowed_intents_expr = _admin_column_expr(
+            "rp",
+            role_columns,
+            ("allowed_intents", "intent_allowlist"),
+            "NULL",
+        )
+        max_tokens_expr = _admin_column_expr(
+            "rp",
+            role_columns,
+            ("max_tokens", "token_limit", "max_output_tokens"),
+            "NULL::bigint",
+        )
+        created_at_expr = _admin_column_expr(
+            "rp",
+            role_columns,
+            ("created_at", "updated_at"),
+            "NULL::timestamptz",
+        )
+
+        profile_row = await conn.fetchrow(
+            f"""
+            SELECT
+                {role_expr} AS role,
+                {display_name_expr} AS display_name,
+                {base_model_expr} AS base_model,
+                {allowed_intents_expr} AS allowed_intents,
+                {max_tokens_expr} AS max_tokens,
+                {created_at_expr} AS created_at
+            FROM role_profiles rp
+            WHERE lower({role_expr}::text) = lower($1)
+            LIMIT 1
+            """,
+            role_key,
+        )
+        if not profile_row:
+            raise HTTPException(404, "Agent not found")
+
+        has_pipeline_jobs = await _admin_table_exists(conn, "pipeline_jobs")
+        pipeline_columns = await _admin_table_columns(conn, "pipeline_jobs") if has_pipeline_jobs else set()
+        pipeline_role_column = _admin_pick_column(pipeline_columns, _ADMIN_AGENT_ROLE_COLUMN_CANDIDATES)
+
+        recent_tasks: list[dict[str, Any]] = []
+        total_tasks = 0
+        completed_tasks = 0
+        error_tasks = 0
+        last_active_at = None
+
+        if has_pipeline_jobs and pipeline_role_column:
+            job_role_expr = f"NULLIF(TRIM({_admin_colref('pj', pipeline_role_column)}::text), '')"
+            job_status_expr = (
+                "CASE "
+                "WHEN pj.status = 'queued' THEN 'queued' "
+                "WHEN pj.status IN ('running', 'claimed') THEN 'running' "
+                "WHEN pj.status = 'awaiting_approval' THEN 'awaiting_approval' "
+                "WHEN pj.status IN ('done', 'approved') THEN 'done' "
+                "ELSE 'error' "
+                "END"
+            )
+
+            task_rows = await conn.fetch(
+                f"""
+                SELECT
+                    pj.job_id,
+                    pj.project,
+                    {job_status_expr} AS status,
+                    pj.phase,
+                    substring(COALESCE(pj.instruction, '') from 1 for 160) AS instruction,
+                    pj.model,
+                    pj.worker_model,
+                    pj.actual_model,
+                    pj.error_detail,
+                    pj.started_at,
+                    pj.created_at,
+                    pj.updated_at
+                FROM pipeline_jobs pj
+                WHERE lower({job_role_expr}) = lower($1)
+                ORDER BY COALESCE(pj.updated_at, pj.created_at, pj.started_at) DESC NULLS LAST
+                LIMIT 10
+                """,
+                profile_row["role"] or role_key,
+            )
+
+            recent_tasks = [
+                {
+                    "job_id": task_row["job_id"],
+                    "project": task_row["project"] or "",
+                    "status": task_row["status"] or "",
+                    "phase": task_row["phase"] or "",
+                    "instruction": task_row["instruction"] or "",
+                    "model": task_row["model"] or "",
+                    "worker_model": task_row["worker_model"] or "",
+                    "actual_model": task_row["actual_model"] or "",
+                    "error_detail": task_row["error_detail"] or "",
+                    "started_at": _admin_iso(task_row["started_at"]),
+                    "created_at": _admin_iso(task_row["created_at"]),
+                    "updated_at": _admin_iso(task_row["updated_at"]),
+                }
+                for task_row in task_rows
+            ]
+
+            stat_row = await conn.fetchrow(
+                f"""
+                SELECT
+                    COUNT(*) AS total_tasks,
+                    COUNT(*) FILTER (WHERE {job_status_expr} = 'done') AS completed_tasks,
+                    COUNT(*) FILTER (WHERE {job_status_expr} = 'error') AS error_tasks,
+                    MAX(COALESCE(pj.updated_at, pj.created_at, pj.started_at)) AS last_active_at
+                FROM pipeline_jobs pj
+                WHERE lower({job_role_expr}) = lower($1)
+                """,
+                profile_row["role"] or role_key,
+            )
+            if stat_row:
+                total_tasks = int(stat_row["total_tasks"] or 0)
+                completed_tasks = int(stat_row["completed_tasks"] or 0)
+                error_tasks = int(stat_row["error_tasks"] or 0)
+                last_active_at = stat_row["last_active_at"]
+
+    completed_ratio = (completed_tasks / total_tasks) if total_tasks else 0.0
+    error_ratio = (error_tasks / total_tasks) if total_tasks else 0.0
+
+    return {
+        "agent": {
+            "role": profile_row["role"] or role_key,
+            "display_name": profile_row["display_name"] or profile_row["role"] or role_key,
+            "base_model": profile_row["base_model"] or "",
+            "allowed_intents": _admin_to_string_list(profile_row["allowed_intents"]),
+            "max_tokens": int(profile_row["max_tokens"]) if profile_row["max_tokens"] is not None else None,
+            "created_at": _admin_iso(profile_row["created_at"]),
+            "recent_tasks_count": total_tasks,
+            "last_active_at": _admin_iso(last_active_at),
+            "total_tasks": total_tasks,
+            "completed_tasks": completed_tasks,
+            "error_tasks": error_tasks,
+            "completed_ratio": round(completed_ratio, 4),
+            "error_ratio": round(error_ratio, 4),
+        },
+        "recent_tasks": recent_tasks,
     }
 
 
