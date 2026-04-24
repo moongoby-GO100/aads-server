@@ -1163,6 +1163,8 @@ deploy_job() {
             else
                 log "  GIT_PUSH_OK job=$job_id"
                 echo "ok" > "/tmp/pipeline-push-result-${job_id}"
+                # HEARTBEAT: push 성공 후 updated_at 갱신 (deploy_timeout 10분 방지)
+                db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
             fi
         fi
 
@@ -1241,6 +1243,8 @@ deploy_job() {
                 # SIGTERM 방지: deploy.sh code는 SIGTERM을 보내 SSE 스트림을 끊으므로 사용 금지
                 log "  SKIP-DEPLOY: 비Python 변경 — aads-server 재시작 불필요 (yml/md/yaml/sh 등)"
             fi
+            # HEARTBEAT: aads-server 배포 완료 후 갱신 (dashboard 빌드 전)
+            db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
 
             # 2) aads-dashboard: Docker 이미지 빌드 서비스 → build→swap
             if [ -n "$(git -C /root/aads/aads-dashboard status --porcelain 2>/dev/null)" ]; then
@@ -1429,6 +1433,9 @@ deploy_job() {
             log "  RESTART newtalk-v2-reverb"
             ;;
     esac
+
+    # HEARTBEAT: 서비스 배포 완료, 헬스체크 시작 전 갱신
+    db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
 
     # ═══ 헬스체크 (retry 루프 — 최대 60초, 5초 간격) ═══
     local health_ok="unknown"
