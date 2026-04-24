@@ -1749,3 +1749,63 @@ async def get_admin_task(job_id: str):
         "created_at": _admin_iso(row["created_at"]),
         "updated_at": _admin_iso(row["updated_at"]),
     }
+
+
+# ─── Emergency Kill-Switch (Q17) ────────────────────────────────────────────
+
+
+class EmergencyActionRequest(BaseModel):
+    action: str  # "kill" or "restore"
+    reason: str = ""
+
+
+@router.get("/admin/emergency")
+async def get_emergency_status():
+    from app.core.feature_flags import get_flag
+    pool = _get_governance_pool()
+    gov_enabled = await get_flag("governance_enabled", default=True)
+    recent_actions: list[dict] = []
+    try:
+        async with pool.acquire() as conn:
+            if await _governance_table_exists(conn, "governance_emergency_actions"):
+                rows = await conn.fetch(
+                    "SELECT action_type, triggered_by, reason, affected_scope, created_at, resolved_at, status "
+                    "FROM governance_emergency_actions ORDER BY created_at DESC LIMIT 20"
+                )
+                recent_actions = [
+                    {
+                        "action_type": r["action_type"],
+                        "triggered_by": r["triggered_by"],
+                        "reason": r["reason"] or "",
+                        "affected_scope": r["affected_scope"] or "",
+                        "created_at": _admin_iso(r["created_at"]),
+                        "resolved_at": _admin_iso(r["resolved_at"]),
+                        "status": r["status"] or "",
+                    }
+                    for r in rows
+                ]
+    except Exception as exc:
+        logger.warning("emergency_status_load_failed: %s", exc)
+    return {"governance_enabled": gov_enabled, "recent_actions": recent_actions}
+
+
+@router.post("/admin/emergency")
+async def post_emergency_action(req: EmergencyActionRequest):
+    from app.core.feature_flags import set_flag
+    action = req.action.strip().lower()
+    if action not in ("kill", "restore"):
+        raise HTTPException(status_code=400, detail="action must be 'kill' or 'restore'")
+    new_enabled = action == "restore"
+    result = await set_flag("governance_enabled", new_enabled, changed_by="ceo_emergency")
+    pool = _get_governance_pool()
+    try:
+        async with pool.acquire() as conn:
+            if await _governance_table_exists(conn, "governance_emergency_actions"):
+                await conn.execute(
+                    "INSERT INTO governance_emergency_actions (action_type, triggered_by, reason, affected_scope, status) "
+                    "VALUES ($1, $2, $3, $4, $5)",
+                    action, "ceo", req.reason or "", "governance_global", "active",
+                )
+    except Exception as exc:
+        logger.warning("emergency_action_log_failed: %s", exc)
+    return {"ok": True, "action": action, "governance_enabled": new_enabled, "flag_result": result}

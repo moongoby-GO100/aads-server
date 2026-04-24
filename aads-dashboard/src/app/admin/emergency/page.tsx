@@ -3,127 +3,102 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import Header from "@/components/Header";
-import { api } from "@/lib/api";
-
-interface FeatureFlag {
-  flag_key: string;
-  enabled: boolean;
-  scope?: string | null;
-  last_changed_by?: string | null;
-  last_changed_at?: string | null;
-  notes?: string | null;
-}
-
-interface FeatureFlagResponse {
-  flags: FeatureFlag[];
-  total: number;
-}
-
-interface AuditLogItem {
-  id: number;
-  at: string | null;
-  event: string;
-  mode: string;
-  diff_summary?: string | null;
-  trace_id?: string | null;
-}
-
-interface AuditLogResponse {
-  items: AuditLogItem[];
-  total: number;
-}
-
-interface RoleProfile {
-  role: string;
-  system_prompt_ref?: string | null;
-  tool_allowlist?: string[] | null;
-  max_turns?: number | null;
-  budget_usd?: number | null;
-  escalation_rules?: Record<string, unknown> | null;
-  project_scope?: string[] | null;
-  updated_at?: string | null;
-}
-
-interface RoleProfileResponse {
-  profiles: RoleProfile[];
-  total: number;
-}
+import { api, type GovernanceFeatureFlag } from "@/lib/api";
 
 function formatDateTime(value?: string | null): string {
   if (!value) return "-";
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleString("ko-KR", {
-    timeZone: "Asia/Seoul",
     month: "short",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
   });
 }
 
-function formatCurrency(value?: number | null): string {
-  if (value == null) return "-";
-  return new Intl.NumberFormat("ko-KR", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 2,
-  }).format(value);
+function flagKey(flag: GovernanceFeatureFlag): string {
+  return String(flag.flag_key || flag.key || flag.name || "").trim();
+}
+
+function findGovernanceFlag(flags: GovernanceFeatureFlag[]): GovernanceFeatureFlag | null {
+  return flags.find((item) => flagKey(item) === "governance_enabled") || null;
 }
 
 export default function AdminEmergencyPage() {
-  const [flags, setFlags] = useState<FeatureFlag[]>([]);
-  const [auditLog, setAuditLog] = useState<AuditLogItem[]>([]);
-  const [profiles, setProfiles] = useState<RoleProfile[]>([]);
+  const [governanceFlag, setGovernanceFlag] = useState<GovernanceFeatureFlag | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [updating, setUpdating] = useState(false);
   const [error, setError] = useState("");
-  const [busyFlagKey, setBusyFlagKey] = useState("");
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    setError("");
+  const loadFlag = useCallback(async (silent = false) => {
+    if (silent) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+
     try {
-      const [flagsRes, auditRes, profilesRes] = await Promise.all([
-        api.getGovernanceFeatureFlags(),
-        api.getGovernanceAuditLog(40),
-        api.getGovernanceRoleProfiles(),
-      ]);
-      setFlags((flagsRes as FeatureFlagResponse).flags || []);
-      setAuditLog((auditRes as AuditLogResponse).items || []);
-      setProfiles((profilesRes as RoleProfileResponse).profiles || []);
+      const response = await api.getGovernanceFeatureFlags();
+      const current = findGovernanceFlag(response?.flags || []);
+      setGovernanceFlag(current);
+      setError("");
+      setLastRefreshedAt(new Date());
     } catch (err) {
-      console.error("emergency governance load failed", err);
-      setError(err instanceof Error ? err.message : "운영 데이터를 불러오지 못했습니다.");
+      console.error("emergency flag load failed", err);
+      setError(err instanceof Error ? err.message : "governance_enabled 상태를 불러오지 못했습니다.");
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    loadFlag();
+  }, [loadFlag]);
 
-  const governanceEnabled = useMemo(
-    () => flags.find((item) => item.flag_key === "governance_enabled"),
-    [flags],
-  );
-
-  const handleToggle = useCallback(
-    async (flagKey: string, nextEnabled: boolean) => {
-      setBusyFlagKey(flagKey);
+  const setGovernanceEnabled = useCallback(async (enabled: boolean) => {
+    setUpdating(true);
+    try {
+      const updated = await api.updateGovernanceFeatureFlag("governance_enabled", enabled);
+      setGovernanceFlag({
+        ...(governanceFlag || {}),
+        ...updated,
+        flag_key: "governance_enabled",
+        enabled: Boolean(updated.enabled),
+      });
       setError("");
-      try {
-        await api.updateGovernanceFeatureFlag(flagKey, nextEnabled);
-        await loadData();
-      } catch (err) {
-        console.error("feature flag toggle failed", err);
-        setError(err instanceof Error ? err.message : "플래그 변경에 실패했습니다.");
-      } finally {
-        setBusyFlagKey("");
-      }
-    },
-    [loadData],
-  );
+    } catch (err) {
+      console.error("governance flag update failed", err);
+      setError(err instanceof Error ? err.message : "kill-switch 상태를 변경하지 못했습니다.");
+    } finally {
+      setUpdating(false);
+      setConfirmOpen(false);
+    }
+  }, [governanceFlag]);
+
+  const isEnabled = Boolean(governanceFlag?.enabled);
+
+  const statusTone = useMemo(() => {
+    if (isEnabled) {
+      return {
+        label: "ENABLED",
+        background: "rgba(34,197,94,0.14)",
+        color: "#4ade80",
+        border: "1px solid rgba(34,197,94,0.24)",
+      };
+    }
+    return {
+      label: "DISABLED",
+      background: "rgba(239,68,68,0.14)",
+      color: "#f87171",
+      border: "1px solid rgba(239,68,68,0.24)",
+    };
+  }, [isEnabled]);
 
   const cardStyle = {
     background: "var(--bg-card)",
@@ -132,202 +107,188 @@ export default function AdminEmergencyPage() {
     padding: "16px",
   };
 
-  const governanceOn = governanceEnabled?.enabled !== false;
-
   return (
     <div className="flex flex-col h-full" style={{ background: "var(--bg-primary)" }}>
-      <Header title="Emergency Control" />
+      <Header title="Emergency" />
       <div className="flex-1 p-3 md:p-6 overflow-auto">
-        <div className="grid gap-4">
-          <section
-            className="rounded-2xl p-4 md:p-5"
-            style={{
-              background: governanceOn
-                ? "linear-gradient(135deg, rgba(15,118,110,0.24), rgba(15,23,42,0.96))"
-                : "linear-gradient(135deg, rgba(185,28,28,0.24), rgba(15,23,42,0.96))",
-              border: governanceOn
-                ? "1px solid rgba(45,212,191,0.22)"
-                : "1px solid rgba(248,113,113,0.24)",
-              boxShadow: governanceOn
-                ? "0 18px 48px rgba(13,148,136,0.18)"
-                : "0 18px 48px rgba(220,38,38,0.18)",
-            }}
-          >
-            <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+        <div className="grid gap-4 max-w-4xl">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <div style={{ color: "var(--text-primary)", fontSize: "22px", fontWeight: 700 }}>
+                Governance Emergency Kill-Switch
+              </div>
+              <div style={{ color: "var(--text-secondary)", fontSize: "13px", marginTop: "4px" }}>
+                `governance_enabled` 플래그를 즉시 제어합니다.
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => loadFlag(true)}
+              disabled={refreshing}
+              style={{
+                padding: "8px 14px",
+                borderRadius: "8px",
+                border: "none",
+                background: "var(--accent)",
+                color: "#fff",
+                cursor: refreshing ? "wait" : "pointer",
+                fontWeight: 600,
+                opacity: refreshing ? 0.75 : 1,
+              }}
+            >
+              {refreshing ? "새로고침 중..." : "새로고침"}
+            </button>
+          </div>
+
+          {error ? <div style={{ ...cardStyle, color: "var(--danger)" }}>{error}</div> : null}
+
+          <section style={cardStyle}>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
               <div>
-                <div className="text-xs uppercase tracking-[0.24em]" style={{ color: "rgba(226,232,240,0.72)" }}>
-                  Governance Kill Switch
+                <div style={{ color: "var(--text-secondary)", fontSize: "12px" }}>Current Status</div>
+                <div style={{ marginTop: "8px" }}>
+                  <span
+                    style={{
+                      padding: "6px 12px",
+                      borderRadius: "999px",
+                      background: statusTone.background,
+                      color: statusTone.color,
+                      border: statusTone.border,
+                      fontSize: "12px",
+                      fontWeight: 700,
+                    }}
+                  >
+                    {loading ? "LOADING" : statusTone.label}
+                  </span>
                 </div>
-                <h1 className="mt-2 text-2xl md:text-3xl font-bold" style={{ color: "var(--text-primary)" }}>
-                  {governanceOn ? "거버넌스 경로 활성" : "레거시 폴백 모드"}
-                </h1>
-                <p className="mt-2 text-sm max-w-3xl" style={{ color: "rgba(226,232,240,0.72)" }}>
-                  `governance_enabled` 플래그를 직접 제어해 DB 정책 경로와 레거시 코드 경로를 즉시 전환합니다.
-                </p>
-                <div className="mt-3 text-xs" style={{ color: "rgba(226,232,240,0.72)" }}>
-                  마지막 변경: {formatDateTime(governanceEnabled?.last_changed_at)} / {governanceEnabled?.last_changed_by || "-"}
+                <div style={{ color: "var(--text-secondary)", fontSize: "12px", marginTop: "10px" }}>
+                  changed by {governanceFlag?.changed_by || "-"} · {formatDateTime(governanceFlag?.changed_at || governanceFlag?.updated_at || null)}
+                </div>
+                <div style={{ color: "var(--text-secondary)", fontSize: "12px", marginTop: "4px" }}>
+                  last refreshed {lastRefreshedAt ? formatDateTime(lastRefreshedAt.toISOString()) : "-"}
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => handleToggle("governance_enabled", !governanceOn)}
-                disabled={busyFlagKey === "governance_enabled"}
-                className="self-start px-4 py-2 rounded-lg text-sm font-semibold"
-                style={{
-                  background: governanceOn ? "rgba(127,29,29,0.88)" : "rgba(15,118,110,0.88)",
-                  color: "#fff",
-                  border: "1px solid rgba(255,255,255,0.14)",
-                  opacity: busyFlagKey === "governance_enabled" ? 0.7 : 1,
-                }}
-              >
-                {busyFlagKey === "governance_enabled"
-                  ? "변경 중..."
-                  : governanceOn
-                    ? "레거시 폴백으로 전환"
-                    : "거버넌스 다시 활성화"}
-              </button>
+
+              <div className="flex items-center gap-2">
+                {isEnabled ? (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmOpen(true)}
+                    disabled={loading || updating || !governanceFlag}
+                    style={{
+                      padding: "10px 14px",
+                      borderRadius: "8px",
+                      border: "1px solid rgba(239,68,68,0.32)",
+                      background: "rgba(239,68,68,0.18)",
+                      color: "#fca5a5",
+                      fontWeight: 700,
+                      cursor: loading || updating || !governanceFlag ? "not-allowed" : "pointer",
+                      opacity: loading || updating || !governanceFlag ? 0.6 : 1,
+                    }}
+                  >
+                    Governance 비활성화
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setGovernanceEnabled(true)}
+                    disabled={loading || updating}
+                    style={{
+                      padding: "10px 14px",
+                      borderRadius: "8px",
+                      border: "1px solid rgba(34,197,94,0.32)",
+                      background: "rgba(34,197,94,0.18)",
+                      color: "#86efac",
+                      fontWeight: 700,
+                      cursor: loading || updating ? "not-allowed" : "pointer",
+                      opacity: loading || updating ? 0.6 : 1,
+                    }}
+                  >
+                    Governance 활성화
+                  </button>
+                )}
+              </div>
             </div>
           </section>
 
-          {error ? (
-            <div style={{ ...cardStyle, color: "var(--danger)" }}>{error}</div>
-          ) : null}
-
-          {loading ? (
-            <div style={{ ...cardStyle, color: "var(--text-secondary)", textAlign: "center" }}>
-              운영 데이터를 불러오는 중...
-            </div>
-          ) : (
-            <>
-              <section className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                <div style={cardStyle}>
-                  <div className="flex items-center justify-between gap-3 mb-3">
-                    <h2 style={{ color: "var(--text-primary)", fontWeight: 700 }}>Feature Flags</h2>
-                    <button
-                      type="button"
-                      onClick={loadData}
-                      className="px-3 py-2 rounded-lg text-sm font-semibold"
-                      style={{
-                        background: "var(--bg-hover)",
-                        color: "var(--text-primary)",
-                        border: "1px solid var(--border)",
-                      }}
-                    >
-                      새로고침
-                    </button>
-                  </div>
-                  <div className="grid gap-3">
-                    {flags.map((flag) => (
-                      <div
-                        key={flag.flag_key}
-                        className="rounded-xl p-3"
-                        style={{
-                          border: "1px solid var(--border)",
-                          background: flag.enabled ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
-                        }}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div style={{ color: "var(--text-primary)", fontWeight: 600 }}>{flag.flag_key}</div>
-                            <div className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>
-                              scope: {flag.scope || "global"} · 변경: {formatDateTime(flag.last_changed_at)}
-                            </div>
-                            {flag.notes ? (
-                              <div className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>
-                                {flag.notes}
-                              </div>
-                            ) : null}
-                          </div>
-                          <button
-                            type="button"
-                            disabled={busyFlagKey === flag.flag_key}
-                            onClick={() => handleToggle(flag.flag_key, !flag.enabled)}
-                            className="px-3 py-2 rounded-lg text-xs font-semibold"
-                            style={{
-                              background: flag.enabled ? "rgba(127,29,29,0.9)" : "rgba(15,118,110,0.9)",
-                              color: "#fff",
-                              border: "1px solid rgba(255,255,255,0.12)",
-                              opacity: busyFlagKey === flag.flag_key ? 0.7 : 1,
-                            }}
-                          >
-                            {flag.enabled ? "비활성화" : "활성화"}
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div style={cardStyle}>
-                  <h2 style={{ color: "var(--text-primary)", fontWeight: 700, marginBottom: "12px" }}>
-                    Role Profiles
-                  </h2>
-                  <div className="grid gap-3">
-                    {profiles.map((profile) => (
-                      <div
-                        key={profile.role}
-                        className="rounded-xl p-3"
-                        style={{ border: "1px solid var(--border)", background: "rgba(15,23,42,0.28)" }}
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div style={{ color: "var(--text-primary)", fontWeight: 600 }}>{profile.role}</div>
-                          <div className="text-xs" style={{ color: "var(--text-secondary)" }}>
-                            {formatCurrency(profile.budget_usd)} / {profile.max_turns ?? "-"} turns
-                          </div>
-                        </div>
-                        <div className="mt-2 text-xs" style={{ color: "var(--text-secondary)" }}>
-                          scope: {profile.project_scope && profile.project_scope.length > 0
-                            ? profile.project_scope.join(", ")
-                            : "ALL"}
-                        </div>
-                        <div className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>
-                          tools: {profile.tool_allowlist && profile.tool_allowlist.length > 0
-                            ? profile.tool_allowlist.join(", ")
-                            : "제한 없음"}
-                        </div>
-                        <div className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>
-                          prompt: {profile.system_prompt_ref || "-"}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </section>
-
-              <section style={cardStyle}>
-                <h2 style={{ color: "var(--text-primary)", fontWeight: 700, marginBottom: "12px" }}>
-                  Governance Audit Log
-                </h2>
-                <div className="grid gap-3">
-                  {auditLog.length === 0 ? (
-                    <div style={{ color: "var(--text-secondary)" }}>감사 로그가 없습니다.</div>
-                  ) : (
-                    auditLog.map((item) => (
-                      <div
-                        key={item.id}
-                        className="rounded-xl p-3"
-                        style={{ border: "1px solid var(--border)", background: "rgba(15,23,42,0.28)" }}
-                      >
-                        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                          <div style={{ color: "var(--text-primary)", fontWeight: 600 }}>
-                            {item.event} · {item.mode}
-                          </div>
-                          <div className="text-xs" style={{ color: "var(--text-secondary)" }}>
-                            {formatDateTime(item.at)} {item.trace_id ? `· ${item.trace_id}` : ""}
-                          </div>
-                        </div>
-                        <div className="mt-2 text-sm" style={{ color: "var(--text-secondary)" }}>
-                          {item.diff_summary || "diff 없음"}
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </section>
-            </>
-          )}
+          <section style={{ ...cardStyle, border: "1px solid rgba(239,68,68,0.32)", background: "rgba(127,29,29,0.18)" }}>
+            <h2 style={{ color: "#fca5a5", fontSize: "16px", fontWeight: 700, marginBottom: "8px" }}>주의</h2>
+            <p style={{ color: "#fecaca", fontSize: "13px", lineHeight: "1.6", margin: 0 }}>
+              비활성화 시 intent policy 기반 라우팅/제약이 우회되어 시스템 동작이 기본 폴백 정책으로 전환됩니다.
+            </p>
+          </section>
         </div>
       </div>
+
+      {confirmOpen ? (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.6)",
+            zIndex: 1000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "16px",
+          }}
+          onClick={() => setConfirmOpen(false)}
+        >
+          <div
+            style={{
+              width: "min(460px, 100%)",
+              background: "var(--bg-card)",
+              border: "1px solid var(--border)",
+              borderRadius: "12px",
+              padding: "20px",
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div style={{ color: "var(--text-primary)", fontSize: "18px", fontWeight: 700 }}>
+              Governance 비활성화 확인
+            </div>
+            <p style={{ color: "var(--text-secondary)", fontSize: "13px", marginTop: "10px", lineHeight: "1.6" }}>
+              `governance_enabled`를 `false`로 변경합니다. 계속 진행하시겠습니까?
+            </p>
+
+            <div className="flex items-center justify-end gap-2" style={{ marginTop: "18px" }}>
+              <button
+                type="button"
+                onClick={() => setConfirmOpen(false)}
+                disabled={updating}
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: "8px",
+                  border: "1px solid var(--border)",
+                  background: "transparent",
+                  color: "var(--text-primary)",
+                  cursor: updating ? "not-allowed" : "pointer",
+                }}
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={() => setGovernanceEnabled(false)}
+                disabled={updating}
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: "8px",
+                  border: "none",
+                  background: "#ef4444",
+                  color: "#fff",
+                  fontWeight: 700,
+                  cursor: updating ? "wait" : "pointer",
+                  opacity: updating ? 0.7 : 1,
+                }}
+              >
+                {updating ? "처리 중..." : "비활성화"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

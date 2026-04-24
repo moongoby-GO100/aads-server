@@ -28,12 +28,11 @@ const navItems = [
   { href: "/settings", label: "Settings", icon: "⚙️" },
   { href: "/admin/prompts", label: "Prompts", icon: "📝" },
   { href: "/admin/tasks", label: "Task Board", icon: "🗂️" },
+  { href: "/admin/governance", label: "Governance", icon: "🛡️" },
   { href: "/admin/deploy", label: "Deploy", icon: "🚀" },
   { href: "/admin/sessions", label: "Sessions", icon: "🔁" },
-  { href: "/admin/agents", label: "Agent Registry", icon: "🧩" },
-  { href: "/admin/governance", label: "Governance", icon: "🛡️" },
-  { href: "/admin/model-parity", label: "Model Parity", icon: "⚖️" },
   { href: "/admin/emergency", label: "Emergency", icon: "🚨" },
+  { href: "/admin/agents", label: "Agent Registry", icon: "🧩" },
   { href: "/server-status", label: "Server Status", icon: "🖥️" },
 ];
 
