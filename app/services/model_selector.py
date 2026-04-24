@@ -1941,7 +1941,65 @@ async def _stream_cli_relay(
         logger.info(f"cli_relay_session_map: aads={session_id[:8]} -> cli={_captured_cli_sid[:8]}")
 
 
-async def _stream_codex_relay(
+_CODEX_RETRY_DELAYS = (2.0, 5.0)
+_CODEX_RETRYABLE_ERROR_MARKERS = (
+    "timeout",
+    "temporarily unavailable",
+    "temporary failure",
+    "temporarily overloaded",
+    "relay unreachable",
+    "not healthy: 5",
+    "relay 500",
+    "relay 502",
+    "relay 503",
+    "relay 504",
+    "connect failed",
+    "connection reset",
+    "connection aborted",
+    "broken pipe",
+    "econnreset",
+    "network is unreachable",
+)
+_CODEX_NON_RETRYABLE_ERROR_MARKERS = (
+    "401",
+    "403",
+    "404",
+    "unauthorized",
+    "forbidden",
+    "invalid api key",
+    "authentication",
+    "permission denied",
+)
+
+
+def _is_codex_retryable_error(error_content: str) -> bool:
+    lowered = str(error_content or "").lower()
+    if not lowered:
+        return False
+    if any(marker in lowered for marker in _CODEX_NON_RETRYABLE_ERROR_MARKERS):
+        return False
+    return any(marker in lowered for marker in _CODEX_RETRYABLE_ERROR_MARKERS)
+
+
+def _build_codex_retry_messages(messages: List[Dict[str, Any]], partial_content: str) -> List[Dict[str, Any]]:
+    retry_messages = [dict(message) for message in messages]
+    partial_tail = (partial_content or "").strip()[-1500:]
+    if not partial_tail:
+        return retry_messages
+    retry_messages.append(
+        {
+            "role": "user",
+            "content": (
+                "직전 Codex 응답이 연결 문제로 중단되었습니다. "
+                "아래 마지막 생성 부분을 반복하지 말고 바로 이어서 계속해주세요.\n\n"
+                f"{partial_tail}"
+            ),
+        }
+    )
+    return retry_messages
+
+
+async def _stream_codex_relay_once(
     model: str,
     system_prompt: str,
     messages: List[Dict[str, Any]],
@@ -1958,7 +2016,6 @@ async def _stream_codex_relay(
         "messages_text": formatted,
         "session_id": session_id or "",
         "project": "AADS",
-        "project": "AADS",
         "tool_names": [t.get("name", "") for t in (tools or []) if t.get("name")],
         "tool_schemas": [
             {
@@ -1971,7 +2028,6 @@ async def _stream_codex_relay(
         ],
     }
     display_model = _CODEX_MODEL_DISPLAY.get(model, model)
-    yield {"type": "model_info", "model": display_model}
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
             try:
@@ -2052,6 +2108,68 @@ async def _stream_codex_relay(
     except Exception as e:
         logger.error(f"codex_relay_error: {e}")
         yield {"type": "error", "content": str(e)}
+
+
+async def _stream_codex_relay(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    session_id: Optional[str] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    display_model = _CODEX_MODEL_DISPLAY.get(model, model)
+    retry_messages = messages
+    partial_content = ""
+
+    yield {"type": "model_info", "model": display_model}
+
+    for attempt_idx in range(len(_CODEX_RETRY_DELAYS) + 1):
+        last_error: Optional[str] = None
+        async for event in _stream_codex_relay_once(
+            model,
+            system_prompt,
+            retry_messages,
+            tools=tools,
+            session_id=session_id,
+        ):
+            event_type = event.get("type")
+            if event_type == "delta":
+                partial_content += event.get("content", "")
+                yield event
+                continue
+            if event_type == "error":
+                last_error = str(event.get("content", "Codex error"))
+                break
+            yield event
+            if event_type == "done":
+                return
+
+        if not last_error:
+            return
+
+        if attempt_idx >= len(_CODEX_RETRY_DELAYS) or not _is_codex_retryable_error(last_error):
+            yield {"type": "error", "content": last_error}
+            return
+
+        retry_delay = _CODEX_RETRY_DELAYS[attempt_idx]
+        logger.warning(
+            "codex_retry_same_model: model=%s session=%s attempt=%s/%s error=%s",
+            model,
+            (session_id or "default")[:8],
+            attempt_idx + 1,
+            len(_CODEX_RETRY_DELAYS),
+            last_error[:200],
+        )
+        yield {
+            "type": "delta",
+            "content": (
+                f"\n\n⚠️ _{display_model} 연결이 일시 중단되어 "
+                f"{retry_delay:.0f}초 후 동일 모델로 다시 이어갑니다 ({attempt_idx + 1}/{len(_CODEX_RETRY_DELAYS)})._"
+                "\n\n"
+            ),
+        }
+        await asyncio.sleep(retry_delay)
+        retry_messages = _build_codex_retry_messages(messages, partial_content)
 
 
 async def _stream_agent_sdk(

@@ -79,7 +79,7 @@ async def health_check():
     return {
         "status": "ok" if graph_ready else "initializing",
         "graph_ready": graph_ready,
-        "version": "0.1.0",
+        "version": "0.2.1",
         "sandbox": sandbox_health,
     }
 

@@ -42,16 +42,16 @@ async def _get_redis() -> aioredis.Redis:
     return _redis_client
 
 
-def _stream_key(session_id: str) -> str:
-    """세션별 Redis Stream 키."""
-    return f"{_STREAM_PREFIX}{session_id}"
+def _stream_key(stream_id: str) -> str:
+    """execution/session 식별자별 Redis Stream 키."""
+    return f"{_STREAM_PREFIX}{stream_id}"
 
 
-async def publish_token(session_id: str, event_data: str, token_index: int) -> Optional[str]:
+async def publish_token(stream_id: str, event_data: str, token_index: int) -> Optional[str]:
     """토큰을 Redis Stream에 추가. 실패 시 None 반환 (기존 동작 영향 없음).
 
     Args:
-        session_id: 채팅 세션 ID
+        stream_id: execution 또는 세션 ID
         event_data: SSE 이벤트 문자열 (data: {...}\n\n)
         token_index: 토큰 순서 번호
 
@@ -60,7 +60,7 @@ async def publish_token(session_id: str, event_data: str, token_index: int) -> O
     """
     try:
         r = await _get_redis()
-        key = _stream_key(session_id)
+        key = _stream_key(stream_id)
         entry_id = await r.xadd(
             key,
             {"data": event_data, "idx": str(token_index), "ts": str(time.time())},
@@ -73,27 +73,27 @@ async def publish_token(session_id: str, event_data: str, token_index: int) -> O
     except Exception as e:
         # Redis 장애 시 경고만 — 기존 Queue 경로에 영향 없음
         if token_index == 0:  # 첫 토큰일 때만 로그 (스팸 방지)
-            logger.warning(f"redis_stream_publish_failed session={session_id[:8]}: {e}")
+            logger.warning(f"redis_stream_publish_failed stream={stream_id[:8]}: {e}")
         return None
 
 
-async def mark_stream_done(session_id: str) -> None:
+async def mark_stream_done(stream_id: str) -> None:
     """스트리밍 완료 마커를 Redis Stream에 추가."""
     try:
         r = await _get_redis()
-        key = _stream_key(session_id)
+        key = _stream_key(stream_id)
         await r.xadd(key, {"data": "", "done": "true", "ts": str(time.time())})
         # 완료 후 TTL 단축 (30분 — 서버 재시작 + resume 시간 충분)
         await r.expire(key, 1800)
     except Exception as e:
-        logger.warning(f"redis_stream_mark_done_failed session={session_id[:8]}: {e}")
+        logger.warning(f"redis_stream_mark_done_failed stream={stream_id[:8]}: {e}")
 
 
-async def read_tokens_after(session_id: str, last_id: str = "0") -> List[Dict[str, Any]]:
+async def read_tokens_after(stream_id: str, last_id: str = "0") -> List[Dict[str, Any]]:
     """Redis Stream에서 last_id 이후 토큰 읽기 (stream-resume용).
 
     Args:
-        session_id: 채팅 세션 ID
+        stream_id: execution 또는 세션 ID
         last_id: 마지막으로 수신한 entry ID ("0"이면 처음부터)
 
     Returns:
@@ -101,7 +101,7 @@ async def read_tokens_after(session_id: str, last_id: str = "0") -> List[Dict[st
     """
     try:
         r = await _get_redis()
-        key = _stream_key(session_id)
+        key = _stream_key(stream_id)
         entries = await r.xrange(key, min=f"({last_id}" if last_id != "0" else "-", max="+")
         result = []
         for entry_id, fields in entries:
@@ -113,15 +113,15 @@ async def read_tokens_after(session_id: str, last_id: str = "0") -> List[Dict[st
             })
         return result
     except Exception as e:
-        logger.warning(f"redis_stream_read_failed session={session_id[:8]}: {e}")
+        logger.warning(f"redis_stream_read_failed stream={stream_id[:8]}: {e}")
         return []
 
 
-async def get_stream_info(session_id: str) -> Optional[Dict[str, Any]]:
+async def get_stream_info(stream_id: str) -> Optional[Dict[str, Any]]:
     """Redis Stream 상태 조회 (디버그/상태 체크용)."""
     try:
         r = await _get_redis()
-        key = _stream_key(session_id)
+        key = _stream_key(stream_id)
         exists = await r.exists(key)
         if not exists:
             return None
@@ -139,28 +139,28 @@ async def get_stream_info(session_id: str) -> Optional[Dict[str, Any]]:
             "stream_key": key,
         }
     except Exception as e:
-        logger.warning(f"redis_stream_info_failed session={session_id[:8]}: {e}")
+        logger.warning(f"redis_stream_info_failed stream={stream_id[:8]}: {e}")
         return None
 
 
-async def delete_stream(session_id: str) -> None:
+async def delete_stream(stream_id: str) -> None:
     """Redis Stream 삭제 (세션 종료/정리용)."""
     try:
         r = await _get_redis()
-        await r.delete(_stream_key(session_id))
+        await r.delete(_stream_key(stream_id))
     except Exception:
         pass
 
 
 async def xread_blocking(
-    session_id: str,
+    stream_id: str,
     last_id: str = "0",
     timeout_ms: int = 1000,
 ) -> list:
     """Redis Stream에서 XREAD blocking으로 새 엔트리 읽기 (deliver_sse용).
 
     Args:
-        session_id: 채팅 세션 ID
+        stream_id: execution 또는 세션 ID
         last_id: 마지막으로 읽은 entry ID
         timeout_ms: 블로킹 타임아웃 (밀리초)
 
@@ -169,7 +169,7 @@ async def xread_blocking(
     """
     try:
         r = await _get_redis()
-        key = _stream_key(session_id)
+        key = _stream_key(stream_id)
         # XREAD block: 새 엔트리가 올 때까지 최대 timeout_ms 대기
         result = await r.xread({key: last_id}, count=50, block=timeout_ms)
         if not result:
@@ -177,11 +177,11 @@ async def xread_blocking(
         # result: [(stream_name, [(entry_id, fields), ...])]
         return result[0][1] if result else []
     except Exception as e:
-        logger.warning(f"redis_xread_blocking_failed session={session_id[:8]}: {e}")
+        logger.warning(f"redis_xread_blocking_failed stream={stream_id[:8]}: {e}")
         return []
 
 
-async def reconstruct_from_stream(session_id: str) -> tuple:
+async def reconstruct_from_stream(stream_id: str) -> tuple:
     """Redis Stream에서 전체 텍스트 복원 (서버 재시작 후 복구용).
 
     Returns:
@@ -191,7 +191,7 @@ async def reconstruct_from_stream(session_id: str) -> tuple:
     """
     try:
         r = await _get_redis()
-        key = _stream_key(session_id)
+        key = _stream_key(stream_id)
         if not await r.exists(key):
             return "", False
 
@@ -222,7 +222,7 @@ async def reconstruct_from_stream(session_id: str) -> tuple:
 
         return full_text, is_done
     except Exception as e:
-        logger.warning(f"reconstruct_from_stream_failed session={session_id[:8]}: {e}")
+        logger.warning(f"reconstruct_from_stream_failed stream={stream_id[:8]}: {e}")
         return "", False
 
 

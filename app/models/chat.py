@@ -71,6 +71,7 @@ class SessionOut(BaseModel):
     pinned: bool
     tags: List[str] = Field(default_factory=list)
     current_model: Optional[str] = None
+    current_execution_id: Optional[uuid.UUID] = None
     created_at: datetime
     updated_at: datetime
 
@@ -100,6 +101,7 @@ class BranchCreateRequest(BaseModel):
 class MessageOut(BaseModel):
     id: uuid.UUID
     session_id: uuid.UUID
+    execution_id: Optional[uuid.UUID] = None
     role: str
     content: str
     model_used: Optional[str]
@@ -121,6 +123,23 @@ class MessageOut(BaseModel):
 class MessageSearchOut(BaseModel):
     messages: List[MessageOut]
     total: int
+
+
+class ExecutionOut(BaseModel):
+    id: uuid.UUID
+    session_id: uuid.UUID
+    user_message_id: Optional[uuid.UUID] = None
+    assistant_message_id: Optional[uuid.UUID] = None
+    requested_model: Optional[str] = None
+    actual_model: Optional[str] = None
+    status: str
+    retry_count: int = 0
+    last_event_id: Optional[str] = None
+    error_message: Optional[str] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
 
 
 # ─── AADS-188D: Diff 승인 ────────────────────────────────────────────────────

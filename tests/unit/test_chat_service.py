@@ -68,6 +68,20 @@ def test_edit_intent_detection():
     assert not chat_service._is_html_edit_intent("")
 
 
+def test_dedupe_recovery_like_messages_keeps_longest_recovery_message():
+    shared_prefix = "partial prefix answer " * 3
+    messages = [
+        {"id": "u1", "role": "user", "content": "질문", "model_used": None},
+        {"id": "a1", "role": "assistant", "content": f"{shared_prefix}A", "model_used": "recovered"},
+        {"id": "a2", "role": "assistant", "content": f"{shared_prefix}A with more detail", "model_used": "recovered_from_redis"},
+        {"id": "a3", "role": "assistant", "content": "최종 정상 응답", "model_used": "gpt-5.4"},
+    ]
+
+    deduped = chat_service._dedupe_recovery_like_messages(messages)
+
+    assert [message["id"] for message in deduped] == ["u1", "a2", "a3"]
+
+
 @pytest.mark.asyncio
 async def test_html_context_injection():
     captured = {}
@@ -76,15 +90,25 @@ async def test_html_context_injection():
     now = datetime.now(timezone.utc)
 
     conn = AsyncMock()
-    conn.fetchrow = AsyncMock(side_effect=[
-        {
-            "workspace_id": uuid.uuid4(),
-            "workspace_name": "AADS",
-            "system_prompt": "BASE_SYSTEM",
-        },
-        {"cost_total": 0, "message_count": 0},
-        {"settings": {}},
-    ])
+
+    async def _mock_fetchrow(query, *args):
+        if "FROM chat_messages WHERE idempotency_key" in query:
+            return None
+        if "WHERE session_id = $1 AND role = 'user' AND content = $2" in query:
+            return None
+        if "FROM chat_workspaces w" in query:
+            return {
+                "workspace_id": uuid.uuid4(),
+                "workspace_name": "AADS",
+                "system_prompt": "BASE_SYSTEM",
+            }
+        if "FROM chat_session_stats" in query:
+            return {"cost_total": 0, "message_count": 0}
+        if "SELECT settings FROM chat_users" in query:
+            return {"settings": {}}
+        return None
+
+    conn.fetchrow = AsyncMock(side_effect=_mock_fetchrow)
     conn.fetch = AsyncMock(return_value=[])
 
     async def _mock_call_stream(*, system_prompt, **kwargs):
@@ -129,6 +153,14 @@ async def test_html_context_injection():
         ),
         patch(
             "app.services.semantic_cache.SemanticCache.lookup",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "app.services.chat_service._save_message",
+            new=AsyncMock(return_value={"id": uuid.uuid4()}),
+        ),
+        patch(
+            "app.services.chat_service._save_and_update_session",
             new=AsyncMock(return_value=None),
         ),
         patch(

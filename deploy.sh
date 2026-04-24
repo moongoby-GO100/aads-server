@@ -13,7 +13,7 @@ set -euo pipefail
 MODE="${1:-code}"
 COMPOSE_DIR="/root/aads/aads-server"
 HEALTH_URL="http://localhost:8100/api/v1/health"
-MAX_WAIT=30
+MAX_WAIT="${AADS_DEPLOY_MAX_WAIT:-30}"
 INTERVAL=2
 UPSTREAM_CONF="/etc/nginx/conf.d/aads-upstream.conf"
 ACTIVE_CONTAINER_FILE="${COMPOSE_DIR}/.active_container"
@@ -91,6 +91,10 @@ if [[ -f "${COMPOSE_DIR}/.env" ]]; then
 fi
 
 echo "[deploy.sh] mode=${MODE} at $(date '+%Y-%m-%d %H:%M:%S')"
+
+if [[ "$MODE" == "code" ]]; then
+    MAX_WAIT="${AADS_DEPLOY_MAX_WAIT:-60}"
+fi
 
 # ── Phase 0: 의존 컨테이너 상태 확인 + 복구 ──
 echo "[deploy.sh] Phase 0: dependency check..."

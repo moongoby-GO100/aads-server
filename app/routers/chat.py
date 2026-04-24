@@ -21,6 +21,7 @@ from app.models.chat import (
     ArtifactUpdate,
     BranchCreateRequest,
     DriveFileOut,
+    ExecutionOut,
     MessageOut,
     MessageSendRequest,
     MessageUpdateRequest,
@@ -91,6 +92,24 @@ async def get_session(session_id: UUID):
     result = await svc.get_session(str(session_id))
     if not result:
         raise _NOT_FOUND("session")
+    return result
+
+
+@router.get("/chat/sessions/{session_id}/execution", response_model=ExecutionOut, tags=["chat-session"])
+async def get_session_execution(session_id: UUID):
+    """현재 세션의 최신 실행 조회."""
+    result = await svc.get_current_execution(str(session_id))
+    if not result:
+        raise _NOT_FOUND("execution")
+    return result
+
+
+@router.get("/chat/executions/{execution_id}", response_model=ExecutionOut, tags=["chat-session"])
+async def get_execution(execution_id: UUID):
+    """단일 실행 조회."""
+    result = await svc.get_execution(str(execution_id))
+    if not result:
+        raise _NOT_FOUND("execution")
     return result
 
 
@@ -264,12 +283,67 @@ async def get_streaming_status(session_id: UUID):
         from app.core.db_pool import get_pool
         pool = get_pool()
         async with pool.acquire() as conn:
+            execution_row = await conn.fetchrow(
+                """
+                SELECT te.id::text AS execution_id,
+                       te.status,
+                       te.last_event_id,
+                       te.updated_at,
+                       (te.updated_at > NOW() - interval '5 minutes') AS updated_recently,
+                       te.completed_at,
+                       COALESCE(am.content, pm.content) AS partial_content
+                FROM chat_sessions s
+                LEFT JOIN chat_turn_executions te
+                  ON te.id = s.current_execution_id
+                LEFT JOIN chat_messages am
+                  ON am.id = te.assistant_message_id
+                LEFT JOIN LATERAL (
+                    SELECT content
+                    FROM chat_messages
+                    WHERE execution_id = te.id
+                      AND intent = 'streaming_placeholder'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                ) pm ON TRUE
+                WHERE s.id = $1
+                """,
+                session_id,
+            )
+            if execution_row and execution_row["execution_id"]:
+                if execution_row["status"] in ("running", "retrying"):
+                    _partial = execution_row["partial_content"] or ""
+                    return {
+                        "is_streaming": True,
+                        "just_completed": False,
+                        "content_length": len(_partial),
+                        "tool_count": 0,
+                        "last_tool": "",
+                        "partial_content": _partial,
+                        "execution_id": execution_row["execution_id"],
+                        "last_event_id": execution_row["last_event_id"],
+                    }
+                _finished_recently = (
+                    execution_row["status"] == "completed"
+                    and execution_row["updated_recently"]
+                )
+                if _finished_recently:
+                    return {
+                        "is_streaming": False,
+                        "just_completed": True,
+                        "content_length": len(execution_row["partial_content"] or ""),
+                        "token_count": 0,
+                        "tool_count": 0,
+                        "last_tool": "",
+                        "execution_id": execution_row["execution_id"],
+                        "last_event_id": execution_row["last_event_id"],
+                    }
+
             row = await conn.fetchrow(
                 "SELECT content FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at > NOW() - interval '5 minutes' ORDER BY created_at DESC LIMIT 1",
                 session_id,
             )
             if row:
-                return {"is_streaming": True, "just_completed": False, "content_length": len(row["content"] or ""), "tool_count": 0, "last_tool": "", "partial_content": row["content"] or ""}
+                return {"is_streaming": True, "just_completed": False, "content_length": len(row["content"] or ""), "tool_count": 0, "last_tool": "", "partial_content": row["content"] or "", "execution_id": None, "last_event_id": None}
             # 5분 초과 stale placeholder 자동 정리
             await conn.execute(
                 "UPDATE chat_messages SET intent = 'interrupted' WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at <= NOW() - interval '5 minutes'",
@@ -279,7 +353,7 @@ async def get_streaming_status(session_id: UUID):
             # just_completed=True, recovered=True 반환 → 클라이언트가 메시지 리로드 수행
             recovered_row = await conn.fetchrow(
                 "SELECT id FROM chat_messages"
-                " WHERE session_id = $1 AND model_used = 'recovered'"
+                " WHERE session_id = $1 AND model_used IN ('recovered', 'recovered_from_redis')"
                 "   AND created_at > NOW() - interval '5 minutes'"
                 " ORDER BY created_at DESC LIMIT 1",
                 session_id,
@@ -297,6 +371,8 @@ async def get_streaming_status(session_id: UUID):
                     "token_count": 0,
                     "tool_count": 0,
                     "last_tool": "",
+                    "execution_id": None,
+                    "last_event_id": None,
                 }
     except Exception as e:
         logger.debug("streaming-status DB 조회 실패", error=str(e), session_id=str(session_id))
@@ -322,12 +398,32 @@ async def get_streaming_status(session_id: UUID):
     return result
 
 
+@router.get("/chat/executions/{execution_id}/events", tags=["chat-session"])
+async def execution_events(
+    execution_id: UUID,
+    last_event_id: Optional[str] = None,
+    request: Request = None,
+):
+    """execution 단위 SSE attach/replay."""
+    _last_id = last_event_id
+    if not _last_id and request:
+        _last_id = request.headers.get("Last-Event-ID")
+
+    from app.services.stream_worker import deliver_sse
+    return StreamingResponse(
+        deliver_sse(str(execution_id), last_event_id=_last_id or "0"),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
+
+
 @router.get("/chat/sessions/{session_id}/stream-resume", tags=["chat-session"])
 async def stream_resume(
     session_id: UUID,
     offset: int = 0,
     message_id: Optional[str] = None,
     last_event_id: Optional[str] = None,
+    execution_id: Optional[UUID] = None,
     request: Request = None,
 ):
     """SSE 재연결: Last-Event-ID 또는 offset 기반으로 끊긴 지점부터 이어서 스트리밍.
@@ -339,6 +435,15 @@ async def stream_resume(
     import asyncio, json
 
     sid = str(session_id)
+    active_execution = str(execution_id) if execution_id else None
+    if not active_execution:
+        try:
+            current_execution = await svc.get_current_execution(sid)
+            if current_execution and current_execution.get("status") in ("running", "retrying"):
+                active_execution = str(current_execution["id"])
+        except Exception:
+            active_execution = None
+    stream_id = active_execution or sid
 
     # Last-Event-ID 우선: 쿼리 파라미터 → HTTP 헤더
     _last_id = last_event_id
@@ -349,7 +454,7 @@ async def stream_resume(
     if _last_id and _last_id != "0":
         from app.services.stream_worker import deliver_sse
         return StreamingResponse(
-            deliver_sse(sid, last_event_id=_last_id),
+            deliver_sse(stream_id, last_event_id=_last_id),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
         )
@@ -363,7 +468,7 @@ async def stream_resume(
                 # Phase4: Redis Stream XREAD로 실시간 복구 시도
                 try:
                     from app.services.stream_worker import deliver_sse
-                    async for event in deliver_sse(sid, last_event_id="0"):
+                    async for event in deliver_sse(stream_id, last_event_id="0"):
                         yield event
                     return
                 except Exception:
@@ -547,18 +652,54 @@ async def resume_interrupted(session_id: UUID):
     from app.core.db_pool import get_pool
     pool = get_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow("""
-            SELECT m.id AS placeholder_id, m.content AS partial_content,
-                   (SELECT content FROM chat_messages
-                    WHERE session_id = m.session_id AND role = 'user'
-                    ORDER BY created_at DESC LIMIT 1) AS last_user_msg,
-                   (SELECT name FROM chat_workspaces w
-                    JOIN chat_sessions s ON s.workspace_id = w.id
-                    WHERE s.id = m.session_id) AS workspace_name
-            FROM chat_messages m
-            WHERE m.session_id = $1 AND m.intent = 'streaming_placeholder'
-            ORDER BY m.created_at DESC LIMIT 1
-        """, session_id)
+        row = await conn.fetchrow(
+            """
+            SELECT te.id::text AS execution_id,
+                   te.requested_model,
+                   COALESCE(te.assistant_message_id, ph.id) AS placeholder_id,
+                   COALESCE(ph.content, am.content, '') AS partial_content,
+                   COALESCE(um.content, (
+                       SELECT content FROM chat_messages
+                       WHERE session_id = s.id AND role = 'user'
+                       ORDER BY created_at DESC LIMIT 1
+                   )) AS last_user_msg,
+                   w.name AS workspace_name
+            FROM chat_sessions s
+            JOIN chat_workspaces w
+              ON w.id = s.workspace_id
+            LEFT JOIN chat_turn_executions te
+              ON te.id = s.current_execution_id
+            LEFT JOIN chat_messages am
+              ON am.id = te.assistant_message_id
+            LEFT JOIN chat_messages um
+              ON um.id = te.user_message_id
+            LEFT JOIN LATERAL (
+                SELECT id, content
+                FROM chat_messages
+                WHERE execution_id = te.id
+                  AND intent = 'streaming_placeholder'
+                ORDER BY created_at DESC LIMIT 1
+            ) ph ON TRUE
+            WHERE s.id = $1
+              AND te.status IN ('running', 'retrying')
+            LIMIT 1
+            """,
+            session_id,
+        )
+        if not row:
+            row = await conn.fetchrow("""
+                SELECT NULL::text AS execution_id, NULL::text AS requested_model,
+                       m.id AS placeholder_id, m.content AS partial_content,
+                       (SELECT content FROM chat_messages
+                        WHERE session_id = m.session_id AND role = 'user'
+                        ORDER BY created_at DESC LIMIT 1) AS last_user_msg,
+                       (SELECT name FROM chat_workspaces w
+                        JOIN chat_sessions s ON s.workspace_id = w.id
+                        WHERE s.id = m.session_id) AS workspace_name
+                FROM chat_messages m
+                WHERE m.session_id = $1 AND m.intent = 'streaming_placeholder'
+                ORDER BY m.created_at DESC LIMIT 1
+            """, session_id)
 
     if not row:
         return {"resumed": False, "message": "중단된 응답이 없습니다."}
@@ -571,6 +712,8 @@ async def resume_interrupted(session_id: UUID):
         _resume_single_stream(
             sid, row["placeholder_id"], clean_partial,
             row["last_user_msg"] or "", row["workspace_name"] or "CEO",
+            execution_id=row["execution_id"],
+            requested_model=row["requested_model"],
         )
     )
     return {"resumed": True, "message": "이어서 생성을 시작합니다. 잠시 후 채팅창을 확인하세요."}

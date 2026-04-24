@@ -149,3 +149,43 @@ def test_route_metadata_accepts_json_string():
 
     assert metadata["execution_backend"] == "openai_compatible_direct"
     assert metadata["execution_model_id"] == "qwen3.6-plus"
+
+
+def test_is_codex_retryable_error_distinguishes_transient_and_auth_errors():
+    assert model_selector._is_codex_retryable_error("Codex Relay timeout (300s)")
+    assert model_selector._is_codex_retryable_error("Codex Relay not healthy: 503")
+    assert not model_selector._is_codex_retryable_error("Codex Relay 401: unauthorized")
+
+
+@pytest.mark.asyncio
+async def test_stream_codex_relay_retries_same_model_before_returning_done(monkeypatch):
+    attempts = []
+
+    async def _fake_stream_once(model, system_prompt, messages, tools=None, session_id=None):
+        attempts.append(messages)
+        if len(attempts) == 1:
+            yield {"type": "delta", "content": "초안 일부"}
+            yield {"type": "error", "content": "Codex Relay timeout (300s)"}
+            return
+        yield {"type": "delta", "content": " 이어서 마무리"}
+        yield {"type": "done", "model": "GPT-5.4 (Codex CLI)", "cost": "0", "input_tokens": 1, "output_tokens": 1}
+
+    monkeypatch.setattr(model_selector, "_stream_codex_relay_once", _fake_stream_once)
+    monkeypatch.setattr(model_selector, "_CODEX_RETRY_DELAYS", (0.0,))
+
+    events = [
+        event
+        async for event in model_selector._stream_codex_relay(
+            "gpt-5.4",
+            "system prompt",
+            [{"role": "user", "content": "계속 진행해"}],
+            session_id="session-1",
+        )
+    ]
+
+    assert events[0]["type"] == "model_info"
+    assert any("동일 모델로 다시 이어갑니다" in event.get("content", "") for event in events if event.get("type") == "delta")
+    assert events[-1]["type"] == "done"
+    assert len(attempts) == 2
+    assert attempts[1][-1]["role"] == "user"
+    assert "직전 Codex 응답이 연결 문제로 중단되었습니다" in attempts[1][-1]["content"]
