@@ -721,11 +721,41 @@ async def get_executable_model_ids() -> set[str] | None:
     return _cache_set("executable_ids", executable)
 
 
+def _normalize_model_id(model_id: str) -> str:
+    """접두사(codex:, litellm:, claude:) 제거 후 비교용 정규화."""
+    normalized = str(model_id or "").strip()
+    for prefix in ("codex:", "litellm:", "claude:"):
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix):]
+            break
+    return normalized
+
+
 async def filter_executable_models(model_ids: Sequence[str]) -> list[str]:
     executable_ids = await get_executable_model_ids()
     if executable_ids is None or len(executable_ids) == 0:
         return list(model_ids)
-    return [model_id for model_id in model_ids if model_id in executable_ids]
+
+    normalized_executable_ids: list[str] = []
+    for executable_id in executable_ids:
+        normalized_executable_id = _normalize_model_id(executable_id)
+        if normalized_executable_id:
+            normalized_executable_ids.append(normalized_executable_id)
+    if len(normalized_executable_ids) == 0:
+        return list(model_ids)
+
+    filtered: list[str] = []
+    for model_id in model_ids:
+        normalized_model_id = _normalize_model_id(model_id)
+        if not normalized_model_id:
+            continue
+        if any(
+            normalized_model_id == executable_id
+            or normalized_model_id.startswith(executable_id)
+            for executable_id in normalized_executable_ids
+        ):
+            filtered.append(model_id)
+    return filtered
 
 
 async def sync_model_registry(*, triggered_by: str = "system", reason: str = "") -> dict[str, Any]:

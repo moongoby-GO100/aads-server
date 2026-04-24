@@ -68,6 +68,27 @@ async def test_filter_executable_models_respects_registry(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_filter_executable_models_normalizes_prefixed_ids_and_version_suffixes(monkeypatch):
+    async def _executable_ids():
+        return {"gpt-5.3-codex", "claude-sonnet", "gemini-2.5-flash"}
+
+    monkeypatch.setattr(model_registry, "get_executable_model_ids", _executable_ids)
+    models = await model_registry.filter_executable_models(
+        [
+            "codex:gpt-5.3-codex",
+            "claude:claude-sonnet-4-6",
+            "litellm:gemini-2.5-flash",
+            "deepseek-chat",
+        ]
+    )
+    assert models == [
+        "codex:gpt-5.3-codex",
+        "claude:claude-sonnet-4-6",
+        "litellm:gemini-2.5-flash",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_filter_executable_models_keeps_original_when_registry_empty(monkeypatch):
     async def _executable_ids():
         return set()
