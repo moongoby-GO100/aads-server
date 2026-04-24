@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from app.services import model_selector
@@ -63,3 +65,20 @@ async def test_call_stream_routes_dynamic_qwen_model_to_direct_provider(monkeypa
     assert calls == [("qwen3.6-plus", "qwen", "qwen3.6-plus")]
     assert events[-1]["type"] == "done"
     assert events[-1]["model"] == "qwen3.6-plus"
+
+
+def test_route_metadata_accepts_json_string():
+    metadata = model_selector._route_metadata(
+        {
+            "metadata": json.dumps(
+                {
+                    "execution_backend": "openai_compatible_direct",
+                    "execution_model_id": "qwen3.6-plus",
+                    "execution_base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                }
+            )
+        }
+    )
+
+    assert metadata["execution_backend"] == "openai_compatible_direct"
+    assert metadata["execution_model_id"] == "qwen3.6-plus"

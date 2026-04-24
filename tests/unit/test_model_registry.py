@@ -75,3 +75,12 @@ async def test_filter_executable_models_keeps_original_when_registry_empty(monke
     monkeypatch.setattr(model_registry, "get_executable_model_ids", _executable_ids)
     models = await model_registry.filter_executable_models(["claude-sonnet", "deepseek-chat"])
     assert models == ["claude-sonnet", "deepseek-chat"]
+
+
+def test_coerce_json_object_accepts_json_string():
+    metadata = model_registry._coerce_json_object('{"execution_backend":"openai_compatible_direct","flag":true}')
+
+    assert metadata == {
+        "execution_backend": "openai_compatible_direct",
+        "flag": True,
+    }

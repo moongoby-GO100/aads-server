@@ -454,8 +454,30 @@ async def _get_registered_model_row(model_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _coerce_metadata(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            logger.warning("registered_model_metadata_invalid_json")
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    if value is None:
+        return {}
+    try:
+        return dict(value)
+    except (TypeError, ValueError):
+        logger.warning("registered_model_metadata_invalid_type: %s", type(value).__name__)
+        return {}
+
+
 def _route_metadata(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    metadata = dict((row or {}).get("metadata") or {})
+    metadata = _coerce_metadata((row or {}).get("metadata"))
     backend = str(metadata.get("execution_backend") or "").strip()
     if backend == "openai_compatible_direct":
         return metadata

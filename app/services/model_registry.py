@@ -80,6 +80,28 @@ def _cache_set(key: str, value: Any) -> Any:
     return value
 
 
+def _coerce_json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            logger.warning("model_registry.invalid_metadata_json")
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    if value is None:
+        return {}
+    try:
+        return dict(value)
+    except (TypeError, ValueError):
+        logger.warning("model_registry.invalid_metadata_type: %s", type(value).__name__)
+        return {}
+
+
 def _decimal(value: float | str | None) -> Decimal | None:
     if value is None:
         return None
@@ -668,7 +690,9 @@ async def list_registered_models(*, provider: str | None = None, active_only: bo
             continue
         if active_only and not row["is_active"]:
             continue
-        filtered.append(row)
+        normalized_row = dict(row)
+        normalized_row["metadata"] = _coerce_json_object(normalized_row.get("metadata"))
+        filtered.append(normalized_row)
     return _cache_set(cache_key, filtered)
 
 
@@ -714,7 +738,7 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
         try:
             async with conn.transaction():
                 for row in model_rows:
-                    metadata = dict(row["metadata"])
+                    metadata = _coerce_json_object(row.get("metadata"))
                     metadata["sync_token"] = sync_token
                     await conn.execute(
                         """
