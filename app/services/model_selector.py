@@ -14,7 +14,10 @@ from decimal import Decimal
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 import time as _time_mod
+import contextvars
 from datetime import datetime, timezone
+
+_ctx_temperature: contextvars.ContextVar[float] = contextvars.ContextVar('_ctx_temperature', default=0.2)
 
 import asyncpg
 import httpx
@@ -898,6 +901,9 @@ async def call_stream(
         if _model_locked:
             logger.info(f"cascade_skip: user explicitly selected '{model}', intent='{_intent}' — respecting user choice")
 
+    from app.services.intent_router import resolve_intent_temperature as _rit
+    _ctx_temperature.set(await _rit(_intent))
+
     runtime_available_models = await get_available_model_ids()
     if runtime_available_models and model not in runtime_available_models:
         fallback_model = _fallback_for_unavailable_model(model, runtime_available_models)
@@ -1344,6 +1350,7 @@ async def _stream_litellm_anthropic(
                     "messages": current_msgs,
                     "max_tokens": _MAX_TOKENS_CLAUDE,
                     "stream": True,
+                    "temperature": _ctx_temperature.get(0.2),
                 }
                 if _cached_tools:
                     req_body["tools"] = _cached_tools
@@ -1601,6 +1608,7 @@ async def _stream_litellm_openai(
                     "messages": loop_msgs,
                     "max_tokens": max_tokens,
                     "stream": True,
+                    "temperature": _ctx_temperature.get(0.2),
                     **extra_params,
                 }
                 if _oai_tools:
@@ -1813,6 +1821,7 @@ async def _stream_cli_relay(
         "model": model,
         "system_prompt": system_prompt,
         "session_id": session_id or "",
+        "temperature": _ctx_temperature.get(0.2),
     }
     if oauth_slot:
         req_body["oauth_slot"] = oauth_slot
