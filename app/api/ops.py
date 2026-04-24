@@ -13,9 +13,10 @@ from typing import Optional, List, Any, Dict
 import structlog
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 import asyncpg
+from app.core.claude_md_merger import build_merged_claude_md, get_merged_claude_md_sha256
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -36,6 +37,43 @@ async def get_version():
     except Exception:
         _git_sha = "unknown"
     return {"build_hash": _BUILD_HASH, "git_sha": _git_sha, "timestamp": _time.time()}
+
+
+def _normalize_etag(value: str) -> str:
+    normalized = (value or "").strip()
+    if normalized.startswith("W/"):
+        normalized = normalized[2:].strip()
+    return normalized.strip('"')
+
+
+def _etag_matches(if_none_match: Optional[str], etag: str) -> bool:
+    if not if_none_match:
+        return False
+    current = _normalize_etag(etag)
+    for candidate in if_none_match.split(","):
+        candidate = candidate.strip()
+        if candidate == "*":
+            return True
+        if _normalize_etag(candidate) == current:
+            return True
+    return False
+
+
+@router.get("/ops/claude-md")
+async def get_merged_claude_md(request: Request, project: str = Query("AADS")):
+    """분산 규칙 문서를 합쳐 text/markdown으로 반환."""
+    content = await build_merged_claude_md(project=project)
+    sha256 = get_merged_claude_md_sha256(project=project) or hashlib.sha256(content.encode("utf-8")).hexdigest()
+    etag = f'"{sha256[:16]}"'
+
+    if _etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers={"ETag": etag})
+
+    return Response(
+        content=content,
+        media_type="text/markdown",
+        headers={"ETag": etag},
+    )
 
 
 # ─── 3단계 잠금 시스템 API ──────────────────────────────────────
