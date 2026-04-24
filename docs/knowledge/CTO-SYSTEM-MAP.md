@@ -1,5 +1,5 @@
 # CTO-SYSTEM-MAP: AADS 시스템 전체 아키텍처 지도
-_생성: 2026-03-30 | 갱신: 2026-03-31 | Phase 1 시스템 완전 파악 + Pipeline Runner 반영_
+_생성: 2026-03-30 | 갱신: 2026-04-24 | Phase 2 운영 — LLM DB화(AADS-188/189/190) 반영_
 
 ## 인프라 (서버68, Docker Compose)
 
@@ -21,16 +21,20 @@ _생성: 2026-03-30 | 갱신: 2026-03-31 | Phase 1 시스템 완전 파악 + Pip
 
 ```
 메시지 → intent_router.py(Gemini Flash-Lite, 65인텐트)
-  → model_selector.py(2126줄)
-    ├─ 키 조회 → DB llm_api_keys(Fernet 암호화) → 복호화 후 provider 키 반환, DB 장애 시 .env 폴백
-    ├─ Claude 인텐트 → Anthropic OAuth 직접
-    │   5단계 폴백: Opus 4.7(Gmail)→Opus 4.7(Naver)→Sonnet(Gmail)→Sonnet(Naver)→Gemini
-    ├─ Gemini 인텐트 → LiteLLM 프록시 (newtalk/aads 2개 키 로드밸런싱)
-    └─ Gemini Direct (grounding/deep_research) → Google API
+  → model_selector.py
+    ├─ 키 조회 → model_registry.py → DB llm_api_keys(Fernet 암호화) → 복호화/provider 키 반환, DB 장애 시 .env 폴백
+    ├─ model_registry.sync_model_registry() → llm_models.is_active + linked_key_name 자동 갱신
+    ├─ execution_backend 라우팅:
+    │   anthropic → claude_cli_relay (OAuth)
+    │   gemini    → litellm_proxy
+    │   openai/groq/deepseek/openrouter/qwen/kimi/minimax → openai_compatible_direct
+    │   codex     → codex_cli
+    └─ 폴백: 활성 모델 없으면 하드코딩 경로
 ```
 
-인증 중앙: `app/core/auth_provider.py` — Gmail/Naver OAuth 교대, `rotate_oauth_primary_fallback()`.
+인증 중앙: `app/core/auth_provider.py` — DB priority 기반 OAuth 교대, `rotate_oauth_primary_fallback()`.
 키 저장: DB `llm_api_keys` (Fernet 암호화, `.env` 폴백)로 중앙 관리.
+모델 레지스트리: `app/services/model_registry.py` — provider 템플릿 기반, `sync_model_registry()` 자동 갱신.
 배경 작업: `app/core/anthropic_client.py` — `call_llm_with_fallback()` (Claude → Gemini).
 
 LiteLLM 모델 (litellm-config.yaml):
@@ -124,6 +128,7 @@ DB 테이블: ai_observations(328건+), ai_meta_memory, memory_facts, session_no
 - **채팅**: chat_workspaces, chat_sessions, chat_messages, chat_artifacts, chat_files, chat_drive_files
 - **메모리**: ai_observations, ai_meta_memory, memory_facts, session_notes, experience_memory
 - **파이프라인**: pipeline_jobs, task_logs, commit_log, approval_queue
+- **LLM 관리**: llm_api_keys, llm_models, llm_key_audit_logs, runner_model_config, chat_model_preferences, bg_llm_usage_log
 - **프로젝트**: projects, project_tasks, project_plans, project_artifacts, project_memory
 - **모니터링**: error_log, alert_history, system_metrics, monitored_services, circuit_breaker_state
 - **CEO**: ceo_chat_messages/sessions, ceo_decision_log, ceo_facts, ceo_interaction_patterns, ceo_agenda
@@ -133,7 +138,7 @@ DB 테이블: ai_observations(328건+), ai_meta_memory, memory_facts, session_no
 - **카카오봇**: kakao_msgbot_config/logs, kakaobot_contacts/scheduled/templates/anniversaries, kakao_pc_agent_tokens
 - **LiteLLM**: LiteLLM_CronJob, LiteLLM_ManagedFileTable
 
-마이그레이션: 011~040 (30개 SQL, `migrations/` 디렉토리).
+마이그레이션: 011~055 (45개 SQL, `migrations/` 디렉토리).
 
 ## 추가 시스템
 
@@ -163,7 +168,7 @@ CEO Chat 구성: ChatInput.tsx, ChatSidebar.tsx, ChatArtifactPanel.tsx, Markdown
 | app/models/ | 12개 | chat.py(대형) |
 | app/graph/ | 3개 | — |
 | app/routers/ | 1개 | chat.py(1157) |
-| migrations/ | 30개 | 011~040 |
+| migrations/ | 45개 | 011~055 |
 
 ## 운영 참조
 
@@ -171,7 +176,7 @@ CEO Chat 구성: ChatInput.tsx, ChatSidebar.tsx, ChatArtifactPanel.tsx, Markdown
 - 헬스체크: `curl -s https://aads.newtalk.kr/api/v1/health`
 - 배포: `docker compose -f docker-compose.prod.yml up -d --build aads-server`
 - 테스트: `docker exec aads-server python3 -m pytest tests/ -v`
-- 긴급: GitHub PAT 2026-05-27 만료(~58일), 서버114 디스크 79%
+- 긴급: GitHub PAT 2026-05-27 만료(~33일), 서버114 디스크 79%
 
 ## 관련 문서
 

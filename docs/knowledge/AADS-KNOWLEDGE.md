@@ -8,6 +8,8 @@
 - Frontend: Next.js 16 + React 19 + Tailwind CSS 4
 - 인증/LLM 키는 DB `llm_api_keys`에 Fernet 암호화 저장, 런타임은 DB 우선 후 `.env` 폴백
 - `app/core/llm_key_provider.py`가 provider별 키 조회, 우선순위 정렬, 300초 캐시 및 폴백 체인을 담당
+- `app/services/model_registry.py`가 provider 템플릿 기반 `llm_models` 테이블 sync 및 execution_backend 라우팅 메타데이터 관리 (AADS-189A/B)
+- `chat_model_preferences` 테이블로 채팅 모델 표시 순서·즐겨찾기·핀 관리 (migration 055)
 
 ## 지시서 자동화 파이프라인 (TECH-002)
 8단계: CEO지시 → Bridge감지 → 사전검증 → 우선순위전송 → Claude실행 → 결과보고 → DB기록 → 교차검증
@@ -33,6 +35,7 @@
 - Anthropic은 OAuth 토큰만 사용하며 `call_llm_with_fallback()` 경유가 원칙
 - 외부 LLM(Gemini/DeepSeek)은 LiteLLM 프록시 경유, 직접 REST API 호출 금지
 - Gemini 키는 `newtalk`/`aads` 2계정을 로드밸런싱하며 DB `llm_api_keys`에서 중앙 관리
+- `model_selector.py`는 `model_registry.py`의 execution_backend 메타데이터를 읽어 신규 provider 동적 라우팅 지원 (static allowlist 불필요)
 
 ## 함정 (과거 실패)
 - Supavisor 경유 → AsyncPipeline 충돌 → 직접 연결만 사용 (R-011)
