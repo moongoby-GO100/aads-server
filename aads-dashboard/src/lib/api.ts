@@ -17,6 +17,24 @@ import type {
   MemoryInboxResponse,
 } from "@/types";
 
+export interface AdminDeployProjectStatus {
+  name: string;
+  status: "ok" | "error" | "unknown";
+  last_commit: string | null;
+  last_deploy_at: string | null;
+}
+
+export interface AdminDeployServerStatus {
+  id: string;
+  name: string;
+  ip: string;
+  projects: AdminDeployProjectStatus[];
+}
+
+export interface AdminDeployStatusResponse {
+  servers: AdminDeployServerStatus[];
+}
+
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://aads.newtalk.kr/api/v1";
 
 function getAuthHeaders(): Record<string, string> {
@@ -369,7 +387,7 @@ export const api = {
     if (params?.page_size) q.set("page_size", String(params.page_size));
     return request<any>(`/admin/tasks${q.size ? `?${q.toString()}` : ""}`);
   },
-  getAdminDeployStatus: () => request<any>("/admin/deploy/status"),
+  getAdminDeployStatus: () => request<AdminDeployStatusResponse>("/admin/deploy/status"),
   getAdminTask: (jobId: string) => request<any>(`/admin/tasks/${encodeURIComponent(jobId)}`),
   getAdminTaskStats: () => request<any>("/admin/tasks/stats"),
 

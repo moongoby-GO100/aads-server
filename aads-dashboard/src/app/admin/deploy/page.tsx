@@ -4,24 +4,11 @@ import { useCallback, useEffect, useState } from "react";
 
 import Header from "@/components/Header";
 import { api } from "@/lib/api";
+import type { AdminDeployStatusResponse } from "@/lib/api";
 
-type DeployProjectStatus = {
-  name: string;
-  status: string;
-  last_commit: string | null;
-  last_deploy_at: string | null;
-};
-
-type DeployServerStatus = {
-  id: string;
-  name: string;
-  ip: string;
-  projects: DeployProjectStatus[];
-};
-
-type DeployStatusResponse = {
-  servers: DeployServerStatus[];
-};
+type DeployServerStatus = AdminDeployStatusResponse["servers"][number];
+type DeployProjectStatus = DeployServerStatus["projects"][number];
+type DeployStatus = DeployProjectStatus["status"];
 
 const SERVER_ACCENTS: Record<string, { accent: string; glow: string; muted: string }> = {
   "68": {
@@ -41,6 +28,30 @@ const SERVER_ACCENTS: Record<string, { accent: string; glow: string; muted: stri
   },
 };
 
+const STATUS_META: Record<DeployStatus, { icon: string; label: string; background: string; color: string; border: string }> = {
+  ok: {
+    icon: "🟢",
+    label: "정상",
+    background: "rgba(34,197,94,0.14)",
+    color: "#4ade80",
+    border: "1px solid rgba(34,197,94,0.24)",
+  },
+  error: {
+    icon: "🔴",
+    label: "이상",
+    background: "rgba(239,68,68,0.14)",
+    color: "#f87171",
+    border: "1px solid rgba(239,68,68,0.24)",
+  },
+  unknown: {
+    icon: "⚪",
+    label: "미확인",
+    background: "rgba(148,163,184,0.14)",
+    color: "#cbd5e1",
+    border: "1px solid rgba(148,163,184,0.24)",
+  },
+};
+
 function formatDeployTime(value: string | null): string {
   if (!value) return "-";
   const parsed = new Date(value);
@@ -54,23 +65,19 @@ function formatDeployTime(value: string | null): string {
   });
 }
 
-function statusTone(status: string): { background: string; color: string; border: string } {
-  if (status === "done") {
-    return {
-      background: "rgba(34,197,94,0.14)",
-      color: "#4ade80",
-      border: "1px solid rgba(34,197,94,0.24)",
-    };
+function normalizeDeployStatus(status: string): DeployStatus {
+  if (status === "ok" || status === "error" || status === "unknown") {
+    return status;
   }
-  return {
-    background: "rgba(239,68,68,0.14)",
-    color: "#f87171",
-    border: "1px solid rgba(239,68,68,0.24)",
-  };
+  return "unknown";
+}
+
+function statusTone(status: string): { background: string; color: string; border: string; icon: string; label: string } {
+  return STATUS_META[normalizeDeployStatus(status)];
 }
 
 export default function AdminDeployPage() {
-  const [data, setData] = useState<DeployStatusResponse | null>(null);
+  const [data, setData] = useState<AdminDeployStatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -81,7 +88,7 @@ export default function AdminDeployPage() {
     setError("");
     try {
       const response = await api.getAdminDeployStatus();
-      setData(response as DeployStatusResponse);
+      setData(response);
       setLastRefreshedAt(new Date());
     } catch (err) {
       console.error("deploy status load failed", err);
@@ -105,10 +112,12 @@ export default function AdminDeployPage() {
 
   const servers = data?.servers ?? [];
   const totalServices = servers.reduce((sum, server) => sum + server.projects.length, 0);
-  const healthyServices = servers.reduce(
-    (sum, server) => sum + server.projects.filter((project) => project.status === "done").length,
+  const okServices = servers.reduce(
+    (sum, server) => sum + server.projects.filter((project) => project.status === "ok").length,
     0
   );
+  const abnormalServices = totalServices - okServices;
+  const abnormalCountColor = abnormalServices > 0 ? "var(--danger)" : "var(--success)";
 
   return (
     <div className="flex flex-col h-full" style={{ background: "var(--bg-primary)" }}>
@@ -134,11 +143,11 @@ export default function AdminDeployPage() {
                 서버별 배포 현황
               </h1>
               <p className="mt-2 text-sm max-w-2xl" style={{ color: "rgba(226,232,240,0.72)" }}>
-                `pipeline_jobs`의 마지막 `done` 작업을 기준으로 각 프로젝트의 최근 배포 시각과 커밋 해시를 보여줍니다.
+                `pipeline_jobs`의 마지막 `done` 작업과 최신 상태를 기준으로 각 프로젝트의 최근 배포 시각과 커밋 해시를 보여줍니다.
               </p>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 w-full lg:w-auto">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full lg:w-auto">
               <div
                 className="rounded-xl p-3 md:p-4"
                 style={{ background: "rgba(15,23,42,0.45)", border: "1px solid rgba(148,163,184,0.18)" }}
@@ -157,11 +166,19 @@ export default function AdminDeployPage() {
                 <div className="text-[11px] uppercase tracking-[0.16em]" style={{ color: "var(--text-secondary)" }}>
                   정상
                 </div>
-                <div
-                  className="mt-1 text-2xl font-bold"
-                  style={{ color: healthyServices === totalServices && totalServices > 0 ? "var(--success)" : "#fbbf24" }}
-                >
-                  {loading ? "..." : healthyServices}
+                <div className="mt-1 text-2xl font-bold" style={{ color: "var(--success)" }}>
+                  {loading ? "..." : okServices}
+                </div>
+              </div>
+              <div
+                className="rounded-xl p-3 md:p-4"
+                style={{ background: "rgba(15,23,42,0.45)", border: "1px solid rgba(148,163,184,0.18)" }}
+              >
+                <div className="text-[11px] uppercase tracking-[0.16em]" style={{ color: "var(--text-secondary)" }}>
+                  이상
+                </div>
+                <div className="mt-1 text-2xl font-bold" style={{ color: abnormalCountColor }}>
+                  {loading ? "..." : abnormalServices}
                 </div>
               </div>
             </div>
@@ -255,7 +272,13 @@ export default function AdminDeployPage() {
 
                   <div className="mt-4 space-y-3">
                     {server.projects.map((project) => {
-                      const healthy = project.status === "done";
+                      const status = normalizeDeployStatus(project.status);
+                      const meta = statusTone(status);
+                      const badgeStyle = {
+                        background: meta.background,
+                        color: meta.color,
+                        border: meta.border,
+                      };
                       return (
                         <div
                           key={project.name}
@@ -268,23 +291,23 @@ export default function AdminDeployPage() {
                           <div className="flex items-center justify-between gap-3">
                             <div className="flex items-center gap-2 min-w-0">
                               <span className="text-base" aria-hidden="true">
-                                {healthy ? "🟢" : "🔴"}
+                                {meta.icon}
                               </span>
                               <div className="min-w-0">
                                 <div className="font-semibold" style={{ color: "var(--text-primary)" }}>
                                   {project.name}
                                 </div>
-                                <div className="text-[11px]" style={{ color: "var(--text-secondary)" }}>
-                                  {healthy ? "최근 배포 완료" : "배포 기록 없음"}
+                                <div className="text-[11px]" style={{ color: meta.color }}>
+                                  {meta.label}
                                 </div>
                               </div>
                             </div>
 
                             <span
                               className="px-2 py-1 rounded-full text-[11px] font-semibold flex-shrink-0"
-                              style={statusTone(project.status)}
+                              style={badgeStyle}
                             >
-                              {healthy ? "정상" : "미배포"}
+                              {meta.label}
                             </span>
                           </div>
 

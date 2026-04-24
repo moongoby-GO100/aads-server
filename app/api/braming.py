@@ -1,19 +1,24 @@
 """브레인스토밍 시각화 API."""
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.auth import get_current_user, verify_token
 from app.services.braming_service import (
     create_braming_session,
     expand_node,
     generate_counter,
     generate_ideas,
     generate_perspectives,
+    get_node_detail,
     get_session_graph,
     list_sessions,
+    save_node_ceo_opinion,
+    set_node_pick,
+    set_node_vote,
     synthesize_session,
 )
 
@@ -41,6 +46,35 @@ class ExpandNodeRequest(BaseModel):
     node_id: str = Field(..., description="확장 대상 노드 ID")
 
 
+class NodeOpinionRequest(BaseModel):
+    comment: Optional[str] = Field(default=None, description="CEO 의견. 빈 값이면 삭제")
+
+
+class NodeVoteRequest(BaseModel):
+    vote: Optional[Literal["up", "down"]] = Field(default=None, description="찬성(up), 반대(down), 해제(null)")
+
+
+class NodePickRequest(BaseModel):
+    picked: bool = Field(..., description="Pick 여부")
+
+
+def _optional_user_id(authorization: Optional[str]) -> Optional[str]:
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    payload = verify_token(authorization[7:])
+    if not payload:
+        return None
+    user_id = str(payload.get("sub") or "").strip()
+    return user_id or None
+
+
+def _required_user_id(current_user: dict) -> str:
+    user_id = str(current_user.get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid user context")
+    return user_id
+
+
 @router.post("/sessions")
 async def create_session(req: BramingSessionCreateRequest):
     try:
@@ -60,9 +94,32 @@ async def get_sessions(limit: int = Query(20, ge=1, le=100)):
 
 
 @router.get("/sessions/{session_id}")
-async def get_graph(session_id: str):
+async def get_graph(session_id: str, authorization: Optional[str] = Header(default=None)):
     try:
-        return await get_session_graph(session_id)
+        return await get_session_graph(
+            session_id,
+            current_user_id=_optional_user_id(authorization),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/sessions/{session_id}/nodes/{node_id}")
+async def get_node(
+    session_id: str,
+    node_id: str,
+    authorization: Optional[str] = Header(default=None),
+):
+    try:
+        return {
+            "node": await get_node_detail(
+                session_id,
+                node_id,
+                current_user_id=_optional_user_id(authorization),
+            ),
+        }
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -119,5 +176,71 @@ async def synthesize(session_id: str):
         return await synthesize_session(session_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/sessions/{session_id}/nodes/{node_id}/opinion")
+async def update_node_opinion(
+    session_id: str,
+    node_id: str,
+    req: NodeOpinionRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        return {
+            "node": await save_node_ceo_opinion(
+                session_id,
+                node_id,
+                req.comment,
+                current_user_id=_required_user_id(current_user),
+            ),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/sessions/{session_id}/nodes/{node_id}/vote")
+async def update_node_vote(
+    session_id: str,
+    node_id: str,
+    req: NodeVoteRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        return {
+            "node": await set_node_vote(
+                session_id,
+                node_id,
+                _required_user_id(current_user),
+                req.vote,
+            ),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/sessions/{session_id}/nodes/{node_id}/pick")
+async def update_node_pick(
+    session_id: str,
+    node_id: str,
+    req: NodePickRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        return {
+            "node": await set_node_pick(
+                session_id,
+                node_id,
+                picked=req.picked,
+                current_user_id=_required_user_id(current_user),
+            ),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -16,6 +16,11 @@ _ROOT_X = 400.0
 _ROOT_Y = 50.0
 _LEVEL_GAP_Y = 150.0
 _MIN_HORIZONTAL_GAP = 260.0
+_NODE_SELECT_FIELDS = """
+id, session_id, parent_id, node_type, label, content, agent_role,
+position_x, position_y, metadata, cost, created_at,
+ceo_opinion, ceo_opinion_updated_at, picked, picked_at, picked_by
+"""
 
 
 def _normalize_json_text(text: str) -> str:
@@ -54,10 +59,36 @@ def _extract_json_object(text: str, default: Any) -> Any:
     return default
 
 
-def _to_plain_dict(row: Any) -> dict[str, Any]:
+def _isoformat(value: Any) -> Optional[str]:
+    return value.isoformat() if value else None
+
+
+def _empty_vote_summary() -> dict[str, int]:
+    return {"up": 0, "down": 0, "total": 0, "score": 0}
+
+
+def _to_vote_summary(row: Any) -> dict[str, int]:
     item = dict(row)
+    up_votes = int(item.get("up_votes") or 0)
+    down_votes = int(item.get("down_votes") or 0)
     return {
-        "id": str(item["id"]),
+        "up": up_votes,
+        "down": down_votes,
+        "total": up_votes + down_votes,
+        "score": up_votes - down_votes,
+    }
+
+
+def _to_plain_dict(
+    row: Any,
+    *,
+    vote_summaries: Optional[dict[str, dict[str, int]]] = None,
+    my_votes: Optional[dict[str, str]] = None,
+) -> dict[str, Any]:
+    item = dict(row)
+    node_id = str(item["id"])
+    return {
+        "id": node_id,
         "session_id": str(item["session_id"]) if item.get("session_id") else None,
         "parent_id": str(item["parent_id"]) if item.get("parent_id") else None,
         "node_type": item.get("node_type"),
@@ -68,7 +99,40 @@ def _to_plain_dict(row: Any) -> dict[str, Any]:
         "position_y": float(item.get("position_y") or 0),
         "metadata": item.get("metadata") or {},
         "cost": float(item.get("cost") or 0),
-        "created_at": item.get("created_at").isoformat() if item.get("created_at") else None,
+        "created_at": _isoformat(item.get("created_at")),
+        "ceo_opinion": item.get("ceo_opinion"),
+        "ceo_opinion_updated_at": _isoformat(item.get("ceo_opinion_updated_at")),
+        "vote_summary": (vote_summaries or {}).get(node_id, _empty_vote_summary()),
+        "my_vote": (my_votes or {}).get(node_id),
+        "picked": bool(item.get("picked")),
+        "picked_at": _isoformat(item.get("picked_at")),
+        "picked_by": item.get("picked_by"),
+    }
+
+
+def _to_public_node(node: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": node["id"],
+        "sessionId": node.get("session_id"),
+        "parentId": node.get("parent_id"),
+        "nodeType": node.get("node_type"),
+        "label": node.get("label"),
+        "content": node.get("content"),
+        "agentRole": node.get("agent_role"),
+        "position": {
+            "x": float(node.get("position_x") or 0),
+            "y": float(node.get("position_y") or 0),
+        },
+        "metadata": node.get("metadata") or {},
+        "cost": float(node.get("cost") or 0),
+        "createdAt": node.get("created_at"),
+        "ceoOpinion": node.get("ceo_opinion"),
+        "ceoOpinionUpdatedAt": node.get("ceo_opinion_updated_at"),
+        "voteSummary": node.get("vote_summary") or _empty_vote_summary(),
+        "myVote": node.get("my_vote"),
+        "picked": bool(node.get("picked")),
+        "pickedAt": node.get("picked_at"),
+        "pickedBy": node.get("picked_by"),
     }
 
 
@@ -87,6 +151,57 @@ def _to_session_dict(row: Any) -> dict[str, Any]:
     }
 
 
+async def _load_vote_maps(
+    conn,
+    session_id: str,
+    current_user_id: Optional[str] = None,
+) -> tuple[dict[str, dict[str, int]], dict[str, str]]:
+    summary_rows = await conn.fetch(
+        """
+        SELECT node_id::text AS node_id,
+               COUNT(*) FILTER (WHERE vote = 'up')::int AS up_votes,
+               COUNT(*) FILTER (WHERE vote = 'down')::int AS down_votes
+        FROM braming_node_votes
+        WHERE session_id = $1::uuid
+        GROUP BY node_id
+        """,
+        session_id,
+    )
+    vote_summaries = {
+        str(row["node_id"]): _to_vote_summary(row)
+        for row in summary_rows
+    }
+
+    my_votes: dict[str, str] = {}
+    if current_user_id:
+        my_vote_rows = await conn.fetch(
+            """
+            SELECT node_id::text AS node_id, vote
+            FROM braming_node_votes
+            WHERE session_id = $1::uuid AND user_id = $2
+            """,
+            session_id,
+            current_user_id,
+        )
+        my_votes = {
+            str(row["node_id"]): str(row["vote"])
+            for row in my_vote_rows
+        }
+    return vote_summaries, my_votes
+
+
+async def _build_node_detail(
+    conn,
+    session_id: str,
+    node_id: str,
+    *,
+    current_user_id: Optional[str] = None,
+) -> dict[str, Any]:
+    row = await _fetch_node(conn, session_id, node_id)
+    vote_summaries, my_votes = await _load_vote_maps(conn, session_id, current_user_id)
+    return _to_plain_dict(row, vote_summaries=vote_summaries, my_votes=my_votes)
+
+
 async def _fetch_session(conn, session_id: str):
     row = await conn.fetchrow(
         """
@@ -103,9 +218,8 @@ async def _fetch_session(conn, session_id: str):
 
 async def _fetch_node(conn, session_id: str, node_id: str):
     row = await conn.fetchrow(
-        """
-        SELECT id, session_id, parent_id, node_type, label, content, agent_role,
-               position_x, position_y, metadata, cost, created_at
+        f"""
+        SELECT {_NODE_SELECT_FIELDS}
         FROM braming_nodes
         WHERE session_id = $1::uuid AND id = $2::uuid
         """,
@@ -119,9 +233,8 @@ async def _fetch_node(conn, session_id: str, node_id: str):
 
 async def _fetch_root_node(conn, session_id: str):
     row = await conn.fetchrow(
-        """
-        SELECT id, session_id, parent_id, node_type, label, content, agent_role,
-               position_x, position_y, metadata, cost, created_at
+        f"""
+        SELECT {_NODE_SELECT_FIELDS}
         FROM braming_nodes
         WHERE session_id = $1::uuid AND node_type = 'topic'
         ORDER BY created_at ASC
@@ -149,7 +262,7 @@ async def _insert_node(
     cost: float = 0,
 ):
     return await conn.fetchrow(
-        """
+        f"""
         INSERT INTO braming_nodes (
             session_id, parent_id, node_type, label, content, agent_role,
             position_x, position_y, metadata, cost
@@ -158,8 +271,7 @@ async def _insert_node(
             $1::uuid, $2::uuid, $3, $4, $5, $6,
             $7, $8, $9::jsonb, $10
         )
-        RETURNING id, session_id, parent_id, node_type, label, content, agent_role,
-                  position_x, position_y, metadata, cost, created_at
+        RETURNING {_NODE_SELECT_FIELDS}
         """,
         session_id,
         parent_id,
@@ -298,9 +410,8 @@ async def generate_perspectives(session_id: str, topic: str) -> list[dict[str, A
         session = await _fetch_session(conn, session_id)
         root_node = await _fetch_root_node(conn, session_id)
         existing_rows = await conn.fetch(
-            """
-            SELECT id, session_id, parent_id, node_type, label, content, agent_role,
-                   position_x, position_y, metadata, cost, created_at
+            f"""
+            SELECT {_NODE_SELECT_FIELDS}
             FROM braming_nodes
             WHERE session_id = $1::uuid AND node_type = 'perspective'
             ORDER BY created_at ASC
@@ -389,9 +500,8 @@ async def generate_ideas(session_id: str, perspective_node_id: str) -> list[dict
         if perspective["node_type"] != "perspective":
             raise ValueError("idea 생성 대상은 perspective 노드여야 합니다.")
         existing_rows = await conn.fetch(
-            """
-            SELECT id, session_id, parent_id, node_type, label, content, agent_role,
-                   position_x, position_y, metadata, cost, created_at
+            f"""
+            SELECT {_NODE_SELECT_FIELDS}
             FROM braming_nodes
             WHERE session_id = $1::uuid AND parent_id = $2::uuid AND node_type = 'idea'
             ORDER BY created_at ASC
@@ -536,17 +646,8 @@ async def expand_node(session_id: str, node_id: str) -> list[dict[str, Any]]:
     pool = get_pool()
     async with pool.acquire() as conn:
         node = await _fetch_node(conn, session_id, node_id)
-        await conn.execute(
-            """
-            UPDATE braming_nodes
-            SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
-            WHERE id = $1::uuid
-            """,
-            node_id,
-            json.dumps({"picked": True}, ensure_ascii=False),
-        )
 
-    prompt = f"""다음 선택 노드를 더 깊게 확장하세요.
+    prompt = f"""다음 노드를 더 깊게 확장하세요.
 
 노드 유형: {node['node_type']}
 제목: {node['label']}
@@ -617,9 +718,8 @@ async def synthesize_session(session_id: str) -> dict[str, Any]:
     async with pool.acquire() as conn:
         session = await _fetch_session(conn, session_id)
         node_rows = await conn.fetch(
-            """
-            SELECT id, session_id, parent_id, node_type, label, content, agent_role,
-                   position_x, position_y, metadata, cost, created_at
+            f"""
+            SELECT {_NODE_SELECT_FIELDS}
             FROM braming_nodes
             WHERE session_id = $1::uuid
             ORDER BY created_at ASC
@@ -680,23 +780,225 @@ async def synthesize_session(session_id: str) -> dict[str, Any]:
     return {"session_id": session_id, "summary": summary or content[:1000], "node": _to_plain_dict(row)}
 
 
-async def get_session_graph(session_id: str) -> dict[str, Any]:
+async def _touch_session(conn, session_id: str) -> None:
+    await conn.execute(
+        """
+        UPDATE braming_sessions
+        SET updated_at = NOW()
+        WHERE id = $1::uuid
+        """,
+        session_id,
+    )
+
+
+async def get_node_detail(
+    session_id: str,
+    node_id: str,
+    current_user_id: Optional[str] = None,
+) -> dict[str, Any]:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await _fetch_session(conn, session_id)
+        node = await _build_node_detail(
+            conn,
+            session_id,
+            node_id,
+            current_user_id=current_user_id,
+        )
+    return _to_public_node(node)
+
+
+async def save_node_ceo_opinion(
+    session_id: str,
+    node_id: str,
+    comment: Optional[str],
+    *,
+    current_user_id: Optional[str] = None,
+) -> dict[str, Any]:
+    pool = get_pool()
+    normalized_comment = (comment or "").strip()
+    async with pool.acquire() as conn:
+        await _fetch_node(conn, session_id, node_id)
+        if normalized_comment:
+            await conn.execute(
+                """
+                UPDATE braming_nodes
+                SET ceo_opinion = $3,
+                    ceo_opinion_updated_at = NOW()
+                WHERE session_id = $1::uuid AND id = $2::uuid
+                """,
+                session_id,
+                node_id,
+                normalized_comment[:5000],
+            )
+        else:
+            await conn.execute(
+                """
+                UPDATE braming_nodes
+                SET ceo_opinion = NULL,
+                    ceo_opinion_updated_at = NULL
+                WHERE session_id = $1::uuid AND id = $2::uuid
+                """,
+                session_id,
+                node_id,
+            )
+        await _touch_session(conn, session_id)
+        node = await _build_node_detail(
+            conn,
+            session_id,
+            node_id,
+            current_user_id=current_user_id,
+        )
+    return _to_public_node(node)
+
+
+async def set_node_vote(
+    session_id: str,
+    node_id: str,
+    user_id: str,
+    vote: Optional[str],
+) -> dict[str, Any]:
+    normalized_vote = (vote or "").strip().lower() or None
+    if normalized_vote not in {None, "up", "down"}:
+        raise ValueError("vote는 up, down 또는 null 이어야 합니다.")
+    if not user_id.strip():
+        raise ValueError("유효한 user_id가 필요합니다.")
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await _fetch_node(conn, session_id, node_id)
+        if normalized_vote:
+            current_row = await conn.fetchrow(
+                """
+                SELECT vote
+                FROM braming_node_votes
+                WHERE session_id = $1::uuid
+                  AND node_id = $2::uuid
+                  AND user_id = $3
+                """,
+                session_id,
+                node_id,
+                user_id,
+            )
+            if current_row and str(current_row["vote"]) == normalized_vote:
+                await conn.execute(
+                    """
+                    DELETE FROM braming_node_votes
+                    WHERE session_id = $1::uuid
+                      AND node_id = $2::uuid
+                      AND user_id = $3
+                    """,
+                    session_id,
+                    node_id,
+                    user_id,
+                )
+            else:
+                await conn.execute(
+                    """
+                    INSERT INTO braming_node_votes (session_id, node_id, user_id, vote)
+                    VALUES ($1::uuid, $2::uuid, $3, $4)
+                    ON CONFLICT (node_id, user_id)
+                    DO UPDATE SET vote = EXCLUDED.vote,
+                                  session_id = EXCLUDED.session_id,
+                                  updated_at = NOW()
+                    """,
+                    session_id,
+                    node_id,
+                    user_id,
+                    normalized_vote,
+                )
+        else:
+            await conn.execute(
+                """
+                DELETE FROM braming_node_votes
+                WHERE session_id = $1::uuid
+                  AND node_id = $2::uuid
+                  AND user_id = $3
+                """,
+                session_id,
+                node_id,
+                user_id,
+            )
+        await _touch_session(conn, session_id)
+        node = await _build_node_detail(
+            conn,
+            session_id,
+            node_id,
+            current_user_id=user_id,
+        )
+    return _to_public_node(node)
+
+
+async def set_node_pick(
+    session_id: str,
+    node_id: str,
+    *,
+    picked: bool,
+    current_user_id: Optional[str] = None,
+) -> dict[str, Any]:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await _fetch_node(conn, session_id, node_id)
+        if picked:
+            await conn.execute(
+                """
+                UPDATE braming_nodes
+                SET picked = TRUE,
+                    picked_at = NOW(),
+                    picked_by = $3,
+                    metadata = COALESCE(metadata, '{}'::jsonb) || '{"picked": true}'::jsonb
+                WHERE session_id = $1::uuid AND id = $2::uuid
+                """,
+                session_id,
+                node_id,
+                current_user_id,
+            )
+        else:
+            await conn.execute(
+                """
+                UPDATE braming_nodes
+                SET picked = FALSE,
+                    picked_at = NULL,
+                    picked_by = NULL,
+                    metadata = COALESCE(metadata, '{}'::jsonb) - 'picked'
+                WHERE session_id = $1::uuid AND id = $2::uuid
+                """,
+                session_id,
+                node_id,
+            )
+        await _touch_session(conn, session_id)
+        node = await _build_node_detail(
+            conn,
+            session_id,
+            node_id,
+            current_user_id=current_user_id,
+        )
+    return _to_public_node(node)
+
+
+async def get_session_graph(
+    session_id: str,
+    current_user_id: Optional[str] = None,
+) -> dict[str, Any]:
     """React Flow 호환 그래프 반환."""
     pool = get_pool()
     async with pool.acquire() as conn:
         session_row = await _fetch_session(conn, session_id)
         node_rows = await conn.fetch(
-            """
-            SELECT id, session_id, parent_id, node_type, label, content, agent_role,
-                   position_x, position_y, metadata, cost, created_at
+            f"""
+            SELECT {_NODE_SELECT_FIELDS}
             FROM braming_nodes
             WHERE session_id = $1::uuid
             ORDER BY created_at ASC
             """,
             session_id,
         )
+        vote_summaries, my_votes = await _load_vote_maps(conn, session_id, current_user_id)
 
-    raw_nodes = [_to_plain_dict(row) for row in node_rows]
+    raw_nodes = [
+        _to_plain_dict(row, vote_summaries=vote_summaries, my_votes=my_votes)
+        for row in node_rows
+    ]
     positions = _compute_layout(raw_nodes)
     child_counts: dict[str, int] = defaultdict(int)
     for node in raw_nodes:
@@ -721,6 +1023,13 @@ async def get_session_graph(session_id: str) -> dict[str, Any]:
                 "metadata": node["metadata"] or {},
                 "cost": node["cost"],
                 "createdAt": node["created_at"],
+                "ceoOpinion": node["ceo_opinion"],
+                "ceoOpinionUpdatedAt": node["ceo_opinion_updated_at"],
+                "voteSummary": node["vote_summary"],
+                "myVote": node["my_vote"],
+                "picked": node["picked"],
+                "pickedAt": node["picked_at"],
+                "pickedBy": node["picked_by"],
                 "childCount": child_counts.get(node["id"], 0),
                 "nodeId": node["id"],
             },

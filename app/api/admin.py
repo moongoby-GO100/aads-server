@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from datetime import datetime, timedelta
 from typing import Any, Optional, Sequence
 from zoneinfo import ZoneInfo
@@ -33,12 +32,13 @@ _ADMIN_AGENT_ROLE_COLUMN_CANDIDATES = (
     "profile_role",
     "agent",
 )
-_DEPLOY_COMMIT_RE = re.compile(r"(?:commit|커밋)\s*[:：]\s*([0-9a-f]{7,40})\b", re.IGNORECASE)
 _DEPLOY_SERVER_GROUPS = (
     {"id": "68", "name": "서버68", "ip": "68.183.183.11", "projects": ("AADS",)},
     {"id": "211", "name": "서버211", "ip": "211.188.51.113", "projects": ("KIS", "GO100")},
     {"id": "114", "name": "서버114", "ip": "116.120.58.155", "projects": ("SF", "NTV2")},
 )
+_DEPLOY_STATUS_OK = {"done"}
+_DEPLOY_STATUS_ERROR = {"error", "failed", "rejected", "cancelled", "canceled"}
 
 
 # ─── Pydantic Models ──────────────────────────────────────────────────────────
@@ -1089,48 +1089,23 @@ def _admin_format_task_log(row: Any) -> dict[str, Any]:
     }
 
 
-def _admin_extract_commit_from_text(value: Any) -> Optional[str]:
-    if value in (None, ""):
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-
-    match = _DEPLOY_COMMIT_RE.search(text)
-    if match:
-        return match.group(1)
-
-    match = re.match(r"^([0-9a-f]{7,40})\b", text, re.IGNORECASE)
-    if match:
-        return match.group(1)
-
+def _admin_short_commit(value: Any, fallback_job_id: Any = None) -> Optional[str]:
+    for candidate in (value, fallback_job_id):
+        if candidate in (None, ""):
+            continue
+        text = str(candidate).strip()
+        if text:
+            return text[:7]
     return None
 
 
-def _admin_extract_last_commit(*values: Any) -> Optional[str]:
-    for value in values:
-        parsed = _admin_parse_json(value)
-        if isinstance(parsed, list):
-            for entry in reversed(parsed):
-                if isinstance(entry, dict):
-                    for key in ("message", "content", "text", "summary"):
-                        commit = _admin_extract_commit_from_text(entry.get(key))
-                        if commit:
-                            return commit
-                else:
-                    commit = _admin_extract_commit_from_text(entry)
-                    if commit:
-                        return commit
-        elif isinstance(parsed, dict):
-            for key in ("message", "content", "text", "summary"):
-                commit = _admin_extract_commit_from_text(parsed.get(key))
-                if commit:
-                    return commit
-        else:
-            commit = _admin_extract_commit_from_text(parsed)
-            if commit:
-                return commit
-    return None
+def _admin_deploy_status(status: Any) -> str:
+    normalized = str(status or "").strip().lower()
+    if normalized in _DEPLOY_STATUS_OK:
+        return "ok"
+    if normalized in _DEPLOY_STATUS_ERROR:
+        return "error"
+    return "unknown"
 
 
 @router.get("/admin/deploy/status")
@@ -1139,59 +1114,62 @@ async def get_admin_deploy_status():
     from app.core.db_pool import get_pool
 
     projects = [project for server in _DEPLOY_SERVER_GROUPS for project in server["projects"]]
-    project_rows: dict[str, Any] = {}
+    latest_done_rows: dict[str, Any] = {}
+    latest_rows: dict[str, Any] = {}
 
     pool = get_pool()
     async with pool.acquire() as conn:
         has_pipeline_jobs = await _admin_table_exists(conn, "pipeline_jobs")
         if has_pipeline_jobs:
-            has_logs_column = await _admin_column_exists(conn, "pipeline_jobs", "logs")
-            has_review_feedback_column = await _admin_column_exists(conn, "pipeline_jobs", "review_feedback")
-            has_result_output_column = await _admin_column_exists(conn, "pipeline_jobs", "result_output")
-            logs_expr = "logs" if has_logs_column else "NULL::jsonb AS logs"
-            review_feedback_expr = "review_feedback" if has_review_feedback_column else "NULL::text AS review_feedback"
-            result_output_expr = "result_output" if has_result_output_column else "NULL::text AS result_output"
+            has_commit_hash_column = await _admin_column_exists(conn, "pipeline_jobs", "commit_hash")
+            commit_expr = "NULLIF(TRIM(commit_hash::text), '') AS commit_hash" if has_commit_hash_column else "NULL::text AS commit_hash"
 
-            rows = await conn.fetch(
+            done_rows = await conn.fetch(
                 f"""
                 WITH latest_done AS (
                     SELECT DISTINCT ON (upper(project))
                         upper(project) AS project,
+                        job_id,
+                        status,
                         COALESCE(updated_at, created_at) AS last_deploy_at,
-                        {logs_expr},
-                        {review_feedback_expr},
-                        {result_output_expr}
+                        {commit_expr}
                     FROM pipeline_jobs
                     WHERE upper(project) = ANY($1::text[])
                       AND status = 'done'
                     ORDER BY upper(project), COALESCE(updated_at, created_at) DESC NULLS LAST, created_at DESC NULLS LAST
                 )
-                SELECT project, last_deploy_at, logs, review_feedback, result_output
+                SELECT project, job_id, status, last_deploy_at, commit_hash
                 FROM latest_done
                 """,
                 projects,
             )
-            project_rows = {str(row["project"]).upper(): row for row in rows}
+            status_rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (upper(project))
+                    upper(project) AS project,
+                    job_id,
+                    status
+                FROM pipeline_jobs
+                WHERE upper(project) = ANY($1::text[])
+                ORDER BY upper(project), COALESCE(updated_at, created_at) DESC NULLS LAST, created_at DESC NULLS LAST
+                """,
+                projects,
+            )
+            latest_done_rows = {str(row["project"]).upper(): row for row in done_rows}
+            latest_rows = {str(row["project"]).upper(): row for row in status_rows}
 
     servers = []
     for server in _DEPLOY_SERVER_GROUPS:
         server_projects = []
         for project in server["projects"]:
-            row = project_rows.get(project)
-            if row:
-                server_projects.append({
-                    "name": project,
-                    "status": "done",
-                    "last_commit": _admin_extract_last_commit(row["logs"], row["review_feedback"], row["result_output"]),
-                    "last_deploy_at": _admin_iso(row["last_deploy_at"]),
-                })
-            else:
-                server_projects.append({
-                    "name": project,
-                    "status": "missing",
-                    "last_commit": None,
-                    "last_deploy_at": None,
-                })
+            done_row = latest_done_rows.get(project)
+            latest_row = latest_rows.get(project)
+            server_projects.append({
+                "name": project,
+                "status": _admin_deploy_status(latest_row["status"] if latest_row else None),
+                "last_commit": _admin_short_commit(done_row["commit_hash"] if done_row else None, done_row["job_id"] if done_row else None),
+                "last_deploy_at": _admin_iso(done_row["last_deploy_at"]) if done_row else None,
+            })
 
         servers.append({
             "id": server["id"],
