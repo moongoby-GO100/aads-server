@@ -41,6 +41,7 @@ async def _get_cached_or_build(key: str, builder_coro) -> str:
 # ─── Layer 1: system_prompt_v2.py 에서 로드 ──────────────────────────────────
 
 from app.core.prompts.system_prompt_v2 import build_layer1 as _build_layer1_raw, build_layer4 as _build_layer4, WS_LAYER1 as _WS_LAYER1
+from app.services.prompt_compiler import PromptCompiler
 
 
 def build_layer1(ws_key: str, base_system_prompt: str = "", intent: str = "", **_kwargs) -> str:
@@ -380,6 +381,20 @@ async def build_messages_context(
 
     # Layer 1 (동기 — system_prompt_v2 기반 XML 섹션, Prompt Compression 적용)
     layer1 = build_layer1(ws_key, base_system_prompt, intent=_effective_intent)
+    # 5-Layer prompt asset 적용 (AADS-PROMPT-INFRA)
+    try:
+        compiler = PromptCompiler()
+        compiled = await compiler.compile(
+            workspace_name=workspace_name,
+            intent=intent,
+            model="",
+            session_id=session_id,
+            role="",
+            base_system_prompt=layer1,
+        )
+        layer1 = compiled.system_prompt
+    except Exception as exc:
+        logger.warning(f"PromptCompiler fallback: {exc}")
 
     # Phase 3: LAYER4 독립 빌드 — Layer1에서 분리하여 Prompt Cache 적중률 극대화
     if db_conn:
