@@ -3872,25 +3872,36 @@ async def send_message_stream(
         try:
             from app.services.prompt_compiler import PromptCompiler, record_prompt_provenance
 
+            logger.info(f"[PROMPT_COMPILER] enter sid={str(session_id)[:8]} intent={intent} ws={_normalized_project or workspace_name!r}")
             _compiled_prompt = await PromptCompiler().compile(
                 workspace_name=_normalized_project or workspace_name,
                 intent=intent,
                 model=model_override or intent_result.model,
-                session_id=session_id,
+                session_id=str(session_id),
                 role=_normalized_project or "",
                 base_system_prompt=system_prompt,
             )
             system_prompt = _compiled_prompt.system_prompt
-            await record_prompt_provenance(
-                conn=conn,
-                session_id=session_id,
-                execution_id=_execution_id_str,
-                intent=intent,
-                model=model_override or intent_result.model,
-                compiled_prompt=_compiled_prompt,
+            _prov = _compiled_prompt.provenance
+            logger.info(
+                f"[PROMPT_COMPILER] compiled assets={len(_prov.get('applied_assets') or [])} "
+                f"layers={_prov.get('layers_applied')} chars={_prov.get('system_prompt_chars')} "
+                f"governance={_prov.get('governance_enabled')} fallback={_prov.get('fallback_used')}"
             )
+            try:
+                await record_prompt_provenance(
+                    conn=conn,
+                    session_id=str(session_id),
+                    execution_id=_execution_id_str,
+                    intent=intent,
+                    model=model_override or intent_result.model,
+                    compiled_prompt=_compiled_prompt,
+                )
+                logger.info(f"[PROMPT_COMPILER] provenance recorded sid={str(session_id)[:8]} exec={(_execution_id_str or '-')[:8]}")
+            except Exception as _prov_err:
+                logger.warning(f"[PROMPT_COMPILER] provenance_insert_failed: {_prov_err}")
         except Exception as _prompt_compile_err:
-            logger.warning(f"prompt_compiler_failed: {_prompt_compile_err}")
+            logger.warning(f"[PROMPT_COMPILER] failed: {_prompt_compile_err}")
 
         # 8.5. 복잡 인텐트 → AutonomousExecutor (max_iterations=25) (AADS-186E-3)
         _AUTONOMOUS_INTENTS = frozenset({
