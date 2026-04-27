@@ -2994,11 +2994,24 @@ async def _stream_anthropic(
                     api_kwargs["tool_choice"] = {"type": "auto"}
         # Beta features — extra_headers로 전달 (SDK 0.84+에서 betas 직접 파라미터 미지원)
         _betas = []
+        _requires_extended_cache_ttl = any(
+            isinstance(block, dict)
+            and isinstance(block.get("cache_control"), dict)
+            and block["cache_control"].get("ttl") == "1h"
+            for block in (api_kwargs.get("system") or [])
+        ) or any(
+            isinstance(tool, dict)
+            and isinstance(tool.get("cache_control"), dict)
+            and tool["cache_control"].get("ttl") == "1h"
+            for tool in (api_kwargs.get("tools") or [])
+        )
         if thinking_config:
             api_kwargs["thinking"] = thinking_config
             if _output_config:
                 api_kwargs["output_config"] = _output_config
             _betas.append("interleaved-thinking-2025-05-14")
+        if _requires_extended_cache_ttl:
+            _betas.append("extended-cache-ttl-2025-04-11")
         if _betas:
             api_kwargs["extra_headers"] = {
                 **(api_kwargs.get("extra_headers") or {}),

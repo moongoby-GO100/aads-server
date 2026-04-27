@@ -10,16 +10,16 @@ from __future__ import annotations
 
 import asyncio
 import os
-import json
 import logging
 import time
 from typing import Optional
 
+import anthropic
 import httpx
 from anthropic import AsyncAnthropic
 
 from app.core.auth_provider import (
-    get_oauth_tokens, get_available_tokens, get_base_url, get_litellm_config,
+    get_available_tokens, get_litellm_config,
     create_anthropic_client, mark_token_rate_limited,
 )
 
@@ -28,6 +28,9 @@ logger = logging.getLogger(__name__)
 _GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
 _DASHSCOPE_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 _DASHSCOPE_API_KEY = os.getenv("ALIBABA_API_KEY", "")
+_CLAUDE_RETRY_DELAY_SEC = 5.0
+_CLAUDE_MAX_RETRIES = 60
+_CLAUDE_RETRY_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504, 529}
 
 _bg_qwen_fail_streak: int = 0  # qwen-turbo 연속 실패 카운터 (AADS-204)
 
@@ -69,6 +72,49 @@ def get_client(model_hint: str = "claude-haiku") -> AsyncAnthropic:
     return create_anthropic_client()
 
 
+def _extract_status_code(exc: Exception) -> Optional[int]:
+    """SDK/httpx 예외에서 HTTP 상태 코드를 최대한 보수적으로 추출."""
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        return status_code
+
+    response = getattr(exc, "response", None)
+    response_status = getattr(response, "status_code", None)
+    if isinstance(response_status, int):
+        return response_status
+
+    err_str = str(exc)
+    for code in sorted(_CLAUDE_RETRY_STATUS_CODES):
+        if str(code) in err_str:
+            return code
+    return None
+
+
+def _is_timeout_error(exc: Exception) -> bool:
+    return isinstance(
+        exc,
+        (
+            asyncio.TimeoutError,
+            httpx.ReadTimeout,
+            httpx.TimeoutException,
+            anthropic.APITimeoutError,
+        ),
+    ) or "timeout" in str(exc).lower()
+
+
+def _is_retryable_error(exc: Exception) -> tuple[bool, Optional[int]]:
+    status_code = _extract_status_code(exc)
+    if _is_timeout_error(exc):
+        return True, status_code
+    return status_code in _CLAUDE_RETRY_STATUS_CODES, status_code
+
+
+def _get_error_headers(exc: Exception) -> Optional[dict]:
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    return dict(headers) if headers else None
+
+
 async def call_llm_with_fallback(
     prompt: str,
     model: str = "claude-haiku-4-5-20251001",
@@ -102,10 +148,10 @@ async def call_llm_with_fallback(
 
     from app.services.oauth_usage_tracker import log_usage
 
-    _MAX_RETRIES = 2
     keys_to_try = get_available_tokens()
     for key in keys_to_try:
-        for _attempt in range(_MAX_RETRIES + 1):
+        last_error: Optional[Exception] = None
+        for retry_count in range(_CLAUDE_MAX_RETRIES + 1):
             t0 = time.monotonic()
             try:
                 client = create_anthropic_client(token=key)
@@ -128,33 +174,78 @@ async def call_llm_with_fallback(
                     duration_ms=duration_ms,
                 )
                 return resp.content[0].text
-            except Exception as e:
+            except (httpx.ReadTimeout, anthropic.APITimeoutError) as e:
                 duration_ms = int((time.monotonic() - t0) * 1000)
-                _err_str = str(e).lower()
-                _retryable = any(k in _err_str for k in (
-                    "timeout", "overloaded", "529", "rate_limit", "429", "500", "502", "503",
-                ))
-                _err_code = None
-                for code in ("429", "402", "401", "403", "500", "502", "503", "529"):
-                    if code in _err_str:
-                        _err_code = code
-                        break
+                last_error = e
                 log_usage(
-                    token=key, model=model,
+                    token=key,
+                    model=model,
                     call_source="anthropic_client",
-                    error_code=_err_code or "error",
+                    error_code="timeout",
                     duration_ms=duration_ms,
                 )
-                if _retryable and _attempt < _MAX_RETRIES:
-                    _wait = 3 * (2 ** _attempt)
+                if retry_count < _CLAUDE_MAX_RETRIES:
                     logger.warning(
-                        "claude_bg_retry: key=%s attempt=%d/%d wait=%ds error=%s",
-                        key[:12], _attempt + 1, _MAX_RETRIES, _wait, str(e)[:80],
+                        "claude_bg_retry_timeout: key=%s retry_count=%d/%d wait=%.1fs last_error=%s",
+                        key[:12],
+                        retry_count + 1,
+                        _CLAUDE_MAX_RETRIES,
+                        _CLAUDE_RETRY_DELAY_SEC,
+                        str(e)[:160],
                     )
-                    await asyncio.sleep(_wait)
+                    await asyncio.sleep(_CLAUDE_RETRY_DELAY_SEC)
                     continue
-                logger.warning("claude_bg_error: key=%s model=%s error=%s", key[:12], model, str(e)[:80])
+                logger.warning(
+                    "claude_bg_timeout_exhausted: key=%s model=%s retry_count=%d last_error=%s",
+                    key[:12],
+                    model,
+                    retry_count,
+                    str(e)[:160],
+                )
                 break
+            except Exception as e:
+                duration_ms = int((time.monotonic() - t0) * 1000)
+                last_error = e
+                retryable, status_code = _is_retryable_error(e)
+                error_code = str(status_code) if status_code else "error"
+                log_usage(
+                    token=key,
+                    model=model,
+                    call_source="anthropic_client",
+                    error_code=error_code,
+                    duration_ms=duration_ms,
+                )
+                if retryable and retry_count < _CLAUDE_MAX_RETRIES:
+                    logger.warning(
+                        "claude_bg_retry: key=%s retry_count=%d/%d status=%s wait=%.1fs last_error=%s",
+                        key[:12],
+                        retry_count + 1,
+                        _CLAUDE_MAX_RETRIES,
+                        status_code or "timeout",
+                        _CLAUDE_RETRY_DELAY_SEC,
+                        str(e)[:160],
+                    )
+                    await asyncio.sleep(_CLAUDE_RETRY_DELAY_SEC)
+                    continue
+                if status_code == 429:
+                    mark_token_rate_limited(key, _get_error_headers(e))
+                logger.warning(
+                    "claude_bg_error: key=%s model=%s retry_count=%d status=%s last_error=%s",
+                    key[:12],
+                    model,
+                    retry_count,
+                    status_code or "n/a",
+                    str(e)[:160],
+                )
+                break
+        if last_error is not None:
+            logger.warning(
+                "claude_bg_token_failed: key=%s model=%s max_retries=%d last_error=%s",
+                key[:12],
+                model,
+                _CLAUDE_MAX_RETRIES,
+                str(last_error)[:160],
+            )
 
     # 3순위: Gemini 2.5 Flash (LiteLLM 경유)
     _lc = get_litellm_config()
@@ -292,12 +383,11 @@ async def call_llm_messages_with_fallback(**kwargs) -> object:
 
     from app.services.oauth_usage_tracker import log_usage
 
-    _MAX_RETRIES = 2
     keys_to_try = get_available_tokens()
     last_error: Optional[Exception] = None
 
     for key in keys_to_try:
-        for _attempt in range(_MAX_RETRIES + 1):
+        for retry_count in range(_CLAUDE_MAX_RETRIES + 1):
             t0 = time.monotonic()
             try:
                 client = create_anthropic_client(token=key)
@@ -316,33 +406,69 @@ async def call_llm_messages_with_fallback(**kwargs) -> object:
                     duration_ms=duration_ms,
                 )
                 return resp
+            except (httpx.ReadTimeout, anthropic.APITimeoutError) as e:
+                duration_ms = int((time.monotonic() - t0) * 1000)
+                last_error = e
+                log_usage(
+                    token=key,
+                    model=_model,
+                    call_source="anthropic_client_msg",
+                    error_code="timeout",
+                    duration_ms=duration_ms,
+                )
+                if retry_count < _CLAUDE_MAX_RETRIES:
+                    logger.warning(
+                        "claude_msg_retry_timeout: key=%s retry_count=%d/%d wait=%.1fs last_error=%s",
+                        key[:12],
+                        retry_count + 1,
+                        _CLAUDE_MAX_RETRIES,
+                        _CLAUDE_RETRY_DELAY_SEC,
+                        str(e)[:160],
+                    )
+                    await asyncio.sleep(_CLAUDE_RETRY_DELAY_SEC)
+                    continue
+                logger.warning(
+                    "claude_msg_timeout_exhausted: key=%s model=%s retry_count=%d last_error=%s",
+                    key[:12],
+                    _model,
+                    retry_count,
+                    str(e)[:160],
+                )
+                break
             except Exception as e:
                 duration_ms = int((time.monotonic() - t0) * 1000)
                 last_error = e
-                _err_str = str(e).lower()
-                _retryable = any(k in _err_str for k in (
-                    "timeout", "overloaded", "529", "rate_limit", "429", "500", "502", "503",
-                ))
-                _err_code = None
-                for code in ("429", "402", "401", "403", "500", "502", "503", "529"):
-                    if code in _err_str:
-                        _err_code = code
-                        break
+                retryable, status_code = _is_retryable_error(e)
+                error_code = str(status_code) if status_code else "error"
                 log_usage(
-                    token=key, model=_model,
+                    token=key,
+                    model=_model,
                     call_source="anthropic_client_msg",
-                    error_code=_err_code or "error",
+                    error_code=error_code,
                     duration_ms=duration_ms,
                 )
-                if _retryable and _attempt < _MAX_RETRIES:
-                    _wait = 3 * (2 ** _attempt)
+                if retryable and retry_count < _CLAUDE_MAX_RETRIES:
                     logger.warning(
-                        "claude_msg_retry: key=%s attempt=%d/%d wait=%ds error=%s",
-                        key[:12], _attempt + 1, _MAX_RETRIES, _wait, str(e)[:80],
+                        "claude_msg_retry: key=%s retry_count=%d/%d status=%s wait=%.1fs last_error=%s",
+                        key[:12],
+                        retry_count + 1,
+                        _CLAUDE_MAX_RETRIES,
+                        status_code or "timeout",
+                        _CLAUDE_RETRY_DELAY_SEC,
+                        str(e)[:160],
                     )
-                    await asyncio.sleep(_wait)
+                    await asyncio.sleep(_CLAUDE_RETRY_DELAY_SEC)
                     continue
-                logger.warning("claude_msg_error: key=%s error=%s", key[:12], str(e)[:80])
+                if status_code == 429:
+                    mark_token_rate_limited(key, _get_error_headers(e))
+                logger.warning(
+                    "claude_msg_error: key=%s model=%s retry_count=%d status=%s last_error=%s",
+                    key[:12],
+                    _model,
+                    retry_count,
+                    status_code or "n/a",
+                    str(e)[:160],
+                )
                 break
 
     raise last_error or RuntimeError("no API keys configured")

@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import hashlib
 import json
 import logging
 import os
 import uuid
+from collections import OrderedDict
 from datetime import date, datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import httpx
 
@@ -57,6 +59,16 @@ _file_locks: dict[str, asyncio.Lock] = {}
 _file_locks_meta_lock = asyncio.Lock()  # _file_locks 딕셔너리 자체를 보호하는 메타 잠금
 
 _FILE_LOCK_TIMEOUT = 30.0  # 파일 잠금 최대 대기 시간 (초) — 무한 대기 방지
+_EXECUTION_CACHE_MAX_ITEMS = 100
+_EXECUTION_CACHEABLE_TOOLS = frozenset({
+    "read_remote_file",
+    "list_remote_dir",
+    "query_database",
+    "query_db",
+    "query_project_database",
+    "recall_tool_result",
+})
+_TOOL_CACHE_META_PREFIX = "[tool_cache_meta cache_hit=True source=execution_scope_cache"
 
 
 async def _get_file_lock(lock_key: str) -> asyncio.Lock:
@@ -71,12 +83,127 @@ async def _get_file_lock(lock_key: str) -> asyncio.Lock:
 class ToolExecutor:
     """단일 도구 실행 + 타임아웃 + 결과 제한."""
 
+    def __init__(self) -> None:
+        # execution_id별 읽기 도구 결과 캐시 (executor 생명주기 = execution 생명주기)
+        self._execution_cache: dict[str, OrderedDict[str, str]] = {}
+        self._session_execution_ids: dict[str, str] = {}
+
+    async def _resolve_execution_id(self, tool_input: Dict[str, Any]) -> str:
+        execution_id = str(tool_input.get("execution_id", "") or "").strip()
+        if execution_id:
+            return execution_id
+
+        session_id = str(tool_input.get("session_id", "") or current_chat_session_id.get("")).strip()
+        if not session_id:
+            return ""
+
+        cached_execution_id = self._session_execution_ids.get(session_id, "")
+        if cached_execution_id:
+            return cached_execution_id
+
+        try:
+            from app.core.db_pool import get_pool
+
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                current_execution_id = await conn.fetchval(
+                    "SELECT current_execution_id::text FROM chat_sessions WHERE id = $1::uuid",
+                    session_id,
+                )
+        except Exception as e:
+            logger.debug(
+                "tool_execution_cache_scope_resolve_failed: session=%s error=%s",
+                session_id[:8],
+                str(e)[:160],
+            )
+            return ""
+
+        resolved_execution_id = str(current_execution_id) if current_execution_id else ""
+        previous_execution_id = self._session_execution_ids.get(session_id, "")
+        if previous_execution_id and resolved_execution_id and previous_execution_id != resolved_execution_id:
+            self.clear_execution_cache(previous_execution_id)
+        if resolved_execution_id:
+            self._session_execution_ids[session_id] = resolved_execution_id
+        return resolved_execution_id
+
+    def _build_execution_cache_key(
+        self,
+        execution_id: str,
+        tool_name: str,
+        tool_input: Dict[str, Any],
+    ) -> str:
+        serialized_args = json.dumps(
+            tool_input,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=_json_default,
+        )
+        payload = f"{execution_id}:{tool_name}:{serialized_args}"
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _get_cached_tool_result(self, execution_id: str, cache_key: str) -> Optional[str]:
+        cache = self._execution_cache.get(execution_id)
+        if not cache or cache_key not in cache:
+            return None
+        cache.move_to_end(cache_key)
+        return cache[cache_key]
+
+    def _store_cached_tool_result(self, execution_id: str, cache_key: str, result_str: str) -> None:
+        cache = self._execution_cache.setdefault(execution_id, OrderedDict())
+        if cache_key in cache:
+            cache.move_to_end(cache_key)
+        cache[cache_key] = result_str
+        while len(cache) > _EXECUTION_CACHE_MAX_ITEMS:
+            cache.popitem(last=False)
+
+    def _should_cache_result(self, result_str: str) -> bool:
+        if not result_str:
+            return False
+        if result_str.lstrip().startswith("[ERROR]"):
+            return False
+        try:
+            parsed = json.loads(result_str)
+        except Exception:
+            return True
+        return not (isinstance(parsed, dict) and parsed.get("error"))
+
+    def _decorate_cached_result(self, execution_id: str, tool_name: str, result_str: str) -> str:
+        return (
+            f"{_TOOL_CACHE_META_PREFIX} tool={tool_name} execution_id={execution_id[:8]}]\n"
+            f"{result_str}"
+        )
+
+    def clear_execution_cache(self, execution_id: str) -> None:
+        self._execution_cache.pop(execution_id, None)
+
     async def execute(self, tool_name: str, tool_input: Dict[str, Any]) -> str:
         """
         도구 실행. 10초 타임아웃, 결과 6000자 제한.
         실패 시 JSON error 반환.
         """
         try:
+            execution_id = ""
+            cache_key = ""
+            if tool_name in _EXECUTION_CACHEABLE_TOOLS:
+                execution_id = await self._resolve_execution_id(tool_input)
+                if execution_id:
+                    cache_key = self._build_execution_cache_key(execution_id, tool_name, tool_input)
+                    cached_result = self._get_cached_tool_result(execution_id, cache_key)
+                    if cached_result is not None:
+                        logger.info(
+                            "tool_execution_cache_hit: execution_id=%s tool=%s",
+                            execution_id[:8],
+                            tool_name,
+                        )
+                        decorated_result = self._decorate_cached_result(
+                            execution_id,
+                            tool_name,
+                            cached_result,
+                        )
+                        if len(decorated_result) > _MAX_RESULT_CHARS:
+                            decorated_result = decorated_result[:_MAX_RESULT_CHARS] + "\n...[결과 일부 생략]"
+                        return decorated_result
+
             _timeout = _LONG_TOOL_TIMEOUT if tool_name in _LONG_TOOLS else _TOOL_TIMEOUT
             result = await asyncio.wait_for(
                 self._dispatch(tool_name, tool_input),
@@ -89,6 +216,14 @@ class ToolExecutor:
             )
             if len(result_str) > _MAX_RESULT_CHARS:
                 result_str = result_str[:_MAX_RESULT_CHARS] + "\n...[결과 일부 생략]"
+            if cache_key and execution_id and self._should_cache_result(result_str):
+                self._store_cached_tool_result(execution_id, cache_key, result_str)
+                logger.info(
+                    "tool_execution_cache_store: execution_id=%s tool=%s cache_entries=%d",
+                    execution_id[:8],
+                    tool_name,
+                    len(self._execution_cache.get(execution_id, {})),
+                )
             return result_str
         except asyncio.TimeoutError:
             logger.warning(f"tool_executor timeout: tool={tool_name}")
@@ -401,7 +536,8 @@ class ToolExecutor:
         commit/push/deploy는 여기서 하지 않는다.
         배포 전 preflight 또는 명시적 finalize 시점에만 반영한다.
         """
-        import datetime, os
+        import datetime
+        import os
         now_kst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
         now_str_full = now_kst.strftime("%Y-%m-%d %H:%M:%S KST")
         session_id = await self._resolve_change_session_id(project)
@@ -1463,10 +1599,9 @@ class ToolExecutor:
         results: Dict[str, Any] = {"project": project, "checks_performed": []}
 
         try:
-            from app.api.ceo_chat_tools import tool_list_remote_dir, tool_read_remote_file
+            from app.api.ceo_chat_tools import tool_list_remote_dir
         except ImportError:
             tool_list_remote_dir = None
-            tool_read_remote_file = None
 
         if do_process and tool_list_remote_dir:
             try:
@@ -2184,7 +2319,6 @@ class ToolExecutor:
         """
         import asyncio
         import uuid
-        from datetime import datetime
 
         task = inp.get("task", "")
         project = inp.get("project", "AADS")

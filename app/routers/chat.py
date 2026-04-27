@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel, Field
 
+from app.core.interrupt_queue import is_streaming, push_interrupt
 from app.models.chat import (
     ApproveDiffOut,
     ApproveDiffRequest,
@@ -23,7 +24,6 @@ from app.models.chat import (
     DriveFileOut,
     ExecutionOut,
     MessageOut,
-    MessageSendRequest,
     MessageUpdateRequest,
     ResearchOut,
     SessionCreate,
@@ -40,7 +40,9 @@ from app.services import chat_service as svc
 router = APIRouter()
 logger = structlog.get_logger(__name__)
 
-_NOT_FOUND = lambda name: HTTPException(status_code=404, detail=f"{name} not found")
+
+def _NOT_FOUND(name: str) -> HTTPException:
+    return HTTPException(status_code=404, detail=f"{name} not found")
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -233,6 +235,19 @@ async def send_message(request: Request):
         attachments = req.attachments
         reply_to_id = str(req.reply_to_id) if req.reply_to_id else None
         idempotency_key = req.idempotency_key if hasattr(req, 'idempotency_key') else None
+
+    if session_id_str and is_streaming(session_id_str):
+        push_interrupt(
+            session_id_str,
+            message=content,
+            attachments=attachments if isinstance(attachments, list) else None,
+        )
+        logger.info(
+            "send_message_interrupt_queued",
+            session_id=session_id_str,
+            attachment_count=len(attachments or []),
+        )
+        return {"status": "interrupt_queued", "session_id": session_id_str}
 
     # ★ ContextVar를 HTTP 핸들러에서 조기 설정
     # with_background_completion 내부의 producer Task가 올바른 session_id를 상속받도록
@@ -432,7 +447,8 @@ async def stream_resume(
     Last-Event-ID가 있으면 Redis Stream에서 해당 지점 이후부터 XREAD.
     없으면 기존 offset 기반 fallback.
     """
-    import asyncio, json
+    import asyncio
+    import json
 
     sid = str(session_id)
     active_execution = str(execution_id) if execution_id else None
@@ -530,7 +546,6 @@ async def get_last_response(session_id: UUID):
 
     클라이언트가 네트워크 끊김 후 서버에서 완성된 응답이 있는지 확인.
     """
-    import uuid as _uuid
     from app.core.db_pool import get_pool
     pool = get_pool()
     async with pool.acquire() as conn:

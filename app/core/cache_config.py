@@ -15,11 +15,17 @@ logger = logging.getLogger(__name__)
 # 캐시 적용 최소 토큰 수 (Anthropic 권장 1,024)
 MIN_CACHE_TOKENS = 1_024
 
-# cache_control 블록 타입 (현재 "ephemeral"만 지원 — 5분 TTL)
+# 기본 cache_control 블록 타입 (ephemeral, 기본 TTL)
 _CACHE_CONTROL = {"type": "ephemeral"}
+# Memory Layer 3만 extended-cache beta 1시간 TTL 적용
+_MEMORY_CACHE_CONTROL = {"type": "ephemeral", "ttl": "1h"}
 
 
-def make_cacheable_block(text: str, force: bool = False) -> Dict[str, Any]:
+def make_cacheable_block(
+    text: str,
+    force: bool = False,
+    cache_control: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """텍스트를 Anthropic cache_control 시스템 블록으로 래핑.
 
     Args:
@@ -32,7 +38,7 @@ def make_cacheable_block(text: str, force: bool = False) -> Dict[str, Any]:
     estimated_tokens = _est_tokens(text)
     block: Dict[str, Any] = {"type": "text", "text": text}
     if force or estimated_tokens >= MIN_CACHE_TOKENS:
-        block["cache_control"] = _CACHE_CONTROL
+        block["cache_control"] = dict(cache_control or _CACHE_CONTROL)
     return block
 
 
@@ -69,9 +75,15 @@ def build_cached_system_blocks(
         layer2_combined += "\n" + ckp_text
     blocks.append(make_cacheable_block(layer2_combined, force=True))
 
-    # Breakpoint 3: 메모리 블록 — 세션 내 안정적 (60초 TTL 캐시)
+    # Breakpoint 3: 메모리 블록 — extended-cache beta 1시간 TTL
     if memory_text:
-        blocks.append(make_cacheable_block(memory_text, force=True))
+        blocks.append(
+            make_cacheable_block(
+                memory_text,
+                force=True,
+                cache_control=_MEMORY_CACHE_CONTROL,
+            )
+        )
 
     return blocks
 
