@@ -28,12 +28,13 @@ const navItems = [
   { href: "/settings", label: "Settings", icon: "⚙️" },
   { href: "/admin/prompts", label: "Prompts", icon: "📝" },
   { href: "/admin/tasks", label: "Task Board", icon: "🗂️" },
-  { href: "/admin/governance", label: "Governance", icon: "🛡️" },
-  { href: "/admin/model-parity", label: "Model Parity", icon: "⚖️" },
-  { href: "/admin/deploy", label: "Deploy", icon: "🚀" },
-  { href: "/admin/sessions", label: "Sessions", icon: "🔁" },
-  { href: "/admin/emergency", label: "Emergency", icon: "🚨" },
   { href: "/admin/agents", label: "Agent Registry", icon: "🧩" },
+  { href: "/admin/governance", label: "Governance", icon: "🏛️" },
+  { href: "/admin/model-parity", label: "모델 패리티", icon: "⚖️" },
+  { href: "/admin/deploy", label: "배포 현황", icon: "🚀" },
+  { href: "/admin/sessions", label: "세션 리플레이", icon: "📹" },
+  { href: "/admin/emergency", label: "Emergency", icon: "🚨" },
+  { href: "/admin/model-parity", label: "Model Parity", icon: "⚖️" },
   { href: "/server-status", label: "Server Status", icon: "🖥️" },
 ];
 
@@ -92,7 +93,7 @@ export default function Sidebar({ isOpen, onOpen, onClose }: SidebarProps) {
             ✕
           </button>
         </div>
-        <nav className="flex-1 p-3 space-y-1">
+        <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
           {navItems.map((item) => {
             const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
             return (
@@ -126,11 +127,8 @@ export default function Sidebar({ isOpen, onOpen, onClose }: SidebarProps) {
             onMouseLeave={e => ((e.currentTarget as HTMLElement).style.background = "var(--accent)")}
           >
             <span>💬</span>
-            <span>AI Chat</span>
+            새 채팅 열기
           </a>
-          <div className="mt-2 text-xs text-center" style={{ color: "var(--text-secondary)" }}>
-            v0.5.1 · Server Status
-          </div>
         </div>
       </aside>
     </>

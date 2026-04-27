@@ -9,6 +9,8 @@ from app.core.db_pool import get_pool
 from app.core.feature_flags import governance_enabled
 from app.core.prompts.system_prompt_v2 import build_layer1, build_layer4
 
+LAYER_NAMES = {1: "global", 2: "project", 3: "role", 4: "intent", 5: "model"}
+
 
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -52,11 +54,13 @@ class PromptCompiler:
         intent: str,
         model: str,
         session_id: str,
+        role: str = "",
         base_system_prompt: str = "",
     ) -> CompiledPrompt:
         workspace_key = (workspace_name or "CEO").strip() or "CEO"
         intent_key = (intent or "").strip()
         model_key = (model or "").strip()
+        role_key = (role or "").strip()
         compiled = (base_system_prompt or "").strip()
         if not compiled:
             compiled = build_layer1(workspace_key, "", intent=intent_key)
@@ -66,10 +70,12 @@ class PromptCompiler:
             "workspace": workspace_key,
             "intent": intent_key,
             "model": model_key,
+            "role": role_key,
             "session_id": session_id,
             "governance_enabled": False,
             "base_prompt_chars": len(compiled),
             "applied_assets": [],
+            "layers_applied": {},
             "blueprint": None,
             "fallback_used": True,
         }
@@ -86,6 +92,7 @@ class PromptCompiler:
                 blueprints_exist = await _table_exists(conn, "session_blueprints")
 
                 applied_assets: list[dict[str, Any]] = []
+                layers_applied: dict[str, int] = {}
                 if assets_exist:
                     rows = await conn.fetch(
                         """
@@ -95,11 +102,13 @@ class PromptCompiler:
                           AND (workspace_scope IS NULL OR array_length(workspace_scope, 1) IS NULL OR $1 = ANY(workspace_scope) OR '*' = ANY(workspace_scope))
                           AND (intent_scope IS NULL OR array_length(intent_scope, 1) IS NULL OR $2 = ANY(intent_scope) OR '*' = ANY(intent_scope))
                           AND (target_models IS NULL OR array_length(target_models, 1) IS NULL OR $3 = ANY(target_models) OR '*' = ANY(target_models))
+                          AND (role_scope IS NULL OR array_length(role_scope, 1) IS NULL OR $4 = ANY(role_scope) OR '*' = ANY(role_scope))
                         ORDER BY layer_id ASC, priority ASC, slug ASC
                         """,
                         workspace_key,
                         intent_key,
                         model_key,
+                        role_key,
                     )
                     extras: list[str] = []
                     for row in rows:
@@ -121,10 +130,14 @@ class PromptCompiler:
                         if not text:
                             continue
                         extras.append(text)
+                        lid = row["layer_id"] or 0
+                        layer_name = LAYER_NAMES.get(lid, f"L{lid}")
+                        layers_applied[layer_name] = layers_applied.get(layer_name, 0) + 1
                         applied_assets.append(
                             {
                                 "slug": row["slug"],
-                                "layer_id": row["layer_id"],
+                                "layer_id": lid,
+                                "layer_name": layer_name,
                                 "priority": row["priority"],
                                 "chars": len(text),
                             }
@@ -160,6 +173,7 @@ class PromptCompiler:
                     {
                         "governance_enabled": True,
                         "applied_assets": applied_assets,
+                        "layers_applied": layers_applied,
                         "blueprint": blueprint,
                         "fallback_used": not bool(applied_assets or blueprint),
                     }

@@ -1809,3 +1809,538 @@ async def post_emergency_action(req: EmergencyActionRequest):
     except Exception as exc:
         logger.warning("emergency_action_log_failed: %s", exc)
     return {"ok": True, "action": action, "governance_enabled": new_enabled, "flag_result": result}
+
+
+# ─────────────────────────────────────────────
+# Prompt Assets CRUD
+# ─────────────────────────────────────────────
+
+class PromptAssetCreate(BaseModel):
+    slug: str
+    title: str
+    layer_id: int  # 1=global,2=project,3=role,4=intent,5=model
+    content: str
+    model_variants: Optional[dict] = None
+    workspace_scope: Optional[list[str]] = None
+    intent_scope: Optional[list[str]] = None
+    target_models: Optional[list[str]] = None
+    role_scope: Optional[list[str]] = None
+    priority: int = 0
+    enabled: bool = True
+    created_by: Optional[str] = None
+
+
+class PromptAssetUpdate(BaseModel):
+    slug: Optional[str] = None
+    title: Optional[str] = None
+    layer_id: Optional[int] = None
+    content: Optional[str] = None
+    model_variants: Optional[dict] = None
+    workspace_scope: Optional[list[str]] = None
+    intent_scope: Optional[list[str]] = None
+    target_models: Optional[list[str]] = None
+    role_scope: Optional[list[str]] = None
+    priority: Optional[int] = None
+    enabled: Optional[bool] = None
+
+
+class CompilePreviewRequest(BaseModel):
+    workspace: Optional[str] = None
+    intent: Optional[str] = None
+    model: Optional[str] = None
+    role: Optional[str] = None
+
+
+@router.get("/admin/prompt-assets")
+async def list_prompt_assets(layer: Optional[int] = None):
+    """prompt_assets 목록 조회. layer 파라미터로 필터 가능."""
+    pool = await _get_governance_pool()
+    async with pool.acquire() as conn:
+        if not await _governance_table_exists(conn, "prompt_assets"):
+            return {"items": [], "error": "prompt_assets table not found"}
+        if layer is not None:
+            rows = await conn.fetch(
+                "SELECT * FROM prompt_assets WHERE layer_id = $1 ORDER BY priority DESC, id ASC",
+                layer,
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT * FROM prompt_assets ORDER BY priority DESC, id ASC"
+            )
+    return {"items": [dict(r) for r in rows]}
+
+
+@router.post("/admin/prompt-assets")
+async def create_prompt_asset(body: PromptAssetCreate):
+    """prompt_asset 신규 생성."""
+    import json as _json
+
+    pool = await _get_governance_pool()
+    async with pool.acquire() as conn:
+        if not await _governance_table_exists(conn, "prompt_assets"):
+            raise HTTPException(status_code=503, detail="prompt_assets table not found")
+        row = await conn.fetchrow(
+            """
+            INSERT INTO prompt_assets
+                (slug, title, layer_id, content, model_variants,
+                 workspace_scope, intent_scope, target_models, role_scope,
+                 priority, enabled, created_by)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+            RETURNING *
+            """,
+            body.slug,
+            body.title,
+            body.layer_id,
+            body.content,
+            _json.dumps(body.model_variants) if body.model_variants is not None else None,
+            body.workspace_scope,
+            body.intent_scope,
+            body.target_models,
+            body.role_scope,
+            body.priority,
+            body.enabled,
+            body.created_by,
+        )
+    return {"ok": True, "item": dict(row)}
+
+
+@router.put("/admin/prompt-assets/{asset_id}")
+async def update_prompt_asset(asset_id: int, body: PromptAssetUpdate):
+    """prompt_asset 수정. 전달된 필드만 업데이트."""
+    import json as _json
+
+    pool = await _get_governance_pool()
+    async with pool.acquire() as conn:
+        if not await _governance_table_exists(conn, "prompt_assets"):
+            raise HTTPException(status_code=503, detail="prompt_assets table not found")
+
+        fields = body.dict(exclude_none=True)
+        if not fields:
+            raise HTTPException(status_code=400, detail="No fields to update")
+
+        set_parts = []
+        values = []
+        idx = 1
+        for key, val in fields.items():
+            if key == "model_variants" and val is not None:
+                val = _json.dumps(val)
+            set_parts.append(f"{key} = ${idx}")
+            values.append(val)
+            idx += 1
+
+        set_parts.append(f"updated_at = NOW()")
+        values.append(asset_id)
+
+        query = f"UPDATE prompt_assets SET {', '.join(set_parts)} WHERE id = ${idx} RETURNING *"
+        row = await conn.fetchrow(query, *values)
+
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"prompt_asset {asset_id} not found")
+    return {"ok": True, "item": dict(row)}
+
+
+@router.delete("/admin/prompt-assets/{asset_id}")
+async def delete_prompt_asset(asset_id: int):
+    """Soft delete: enabled=false로 설정."""
+    pool = await _get_governance_pool()
+    async with pool.acquire() as conn:
+        if not await _governance_table_exists(conn, "prompt_assets"):
+            raise HTTPException(status_code=503, detail="prompt_assets table not found")
+        row = await conn.fetchrow(
+            "UPDATE prompt_assets SET enabled=false, updated_at=NOW() WHERE id=$1 RETURNING id, slug",
+            asset_id,
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"prompt_asset {asset_id} not found")
+    return {"ok": True, "disabled": dict(row)}
+
+
+@router.post("/admin/prompt-assets/compile-preview")
+async def compile_preview(body: CompilePreviewRequest):
+    """주어진 context(workspace/intent/model/role)로 컴파일된 프롬프트 미리보기."""
+    from app.services.prompt_compiler import PromptCompiler
+
+    pool = await _get_governance_pool()
+    async with pool.acquire() as conn:
+        if not await _governance_table_exists(conn, "prompt_assets"):
+            raise HTTPException(status_code=503, detail="prompt_assets table not found")
+
+    compiler = PromptCompiler(pool)
+    result = await compiler.compile(
+        workspace=body.workspace,
+        intent=body.intent,
+        model=body.model,
+        role=body.role,
+    )
+    return {"ok": True, "compiled": result}
+
+
+# ─────────────────────────────────────────────
+# Prompt Assets CRUD
+# ─────────────────────────────────────────────
+
+class PromptAssetCreate(BaseModel):
+    slug: str
+    title: str
+    layer_id: int  # 1=global,2=project,3=role,4=intent,5=model
+    content: str
+    model_variants: Optional[dict] = None
+    workspace_scope: Optional[list[str]] = None
+    intent_scope: Optional[list[str]] = None
+    target_models: Optional[list[str]] = None
+    role_scope: Optional[list[str]] = None
+    priority: int = 0
+    enabled: bool = True
+    created_by: Optional[str] = None
+
+
+class PromptAssetUpdate(BaseModel):
+    slug: Optional[str] = None
+    title: Optional[str] = None
+    layer_id: Optional[int] = None
+    content: Optional[str] = None
+    model_variants: Optional[dict] = None
+    workspace_scope: Optional[list[str]] = None
+    intent_scope: Optional[list[str]] = None
+    target_models: Optional[list[str]] = None
+    role_scope: Optional[list[str]] = None
+    priority: Optional[int] = None
+    enabled: Optional[bool] = None
+
+
+class CompilePreviewRequest(BaseModel):
+    workspace: Optional[str] = None
+    intent: Optional[str] = None
+    model: Optional[str] = None
+    role: Optional[str] = None
+
+
+@router.get("/admin/prompt-assets")
+async def list_prompt_assets(layer: Optional[int] = None):
+    """prompt_assets 목록 조회. layer 파라미터로 필터 가능."""
+    pool = await _get_governance_pool()
+    async with pool.acquire() as conn:
+        if not await _governance_table_exists(conn, "prompt_assets"):
+            return {"items": [], "error": "prompt_assets table not found"}
+        if layer is not None:
+            rows = await conn.fetch(
+                "SELECT * FROM prompt_assets WHERE layer_id = $1 ORDER BY priority DESC, id ASC",
+                layer,
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT * FROM prompt_assets ORDER BY priority DESC, id ASC"
+            )
+    return {"items": [dict(r) for r in rows]}
+
+
+@router.post("/admin/prompt-assets")
+async def create_prompt_asset(body: PromptAssetCreate):
+    """prompt_asset 신규 생성."""
+    import json as _json
+
+    pool = await _get_governance_pool()
+    async with pool.acquire() as conn:
+        if not await _governance_table_exists(conn, "prompt_assets"):
+            raise HTTPException(status_code=503, detail="prompt_assets table not found")
+        row = await conn.fetchrow(
+            """
+            INSERT INTO prompt_assets
+                (slug, title, layer_id, content, model_variants,
+                 workspace_scope, intent_scope, target_models, role_scope,
+                 priority, enabled, created_by)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+            RETURNING *
+            """,
+            body.slug,
+            body.title,
+            body.layer_id,
+            body.content,
+            _json.dumps(body.model_variants) if body.model_variants is not None else None,
+            body.workspace_scope,
+            body.intent_scope,
+            body.target_models,
+            body.role_scope,
+            body.priority,
+            body.enabled,
+            body.created_by,
+        )
+    return {"ok": True, "item": dict(row)}
+
+
+@router.put("/admin/prompt-assets/{asset_id}")
+async def update_prompt_asset(asset_id: int, body: PromptAssetUpdate):
+    """prompt_asset 수정. 전달된 필드만 업데이트."""
+    import json as _json
+
+    pool = await _get_governance_pool()
+    async with pool.acquire() as conn:
+        if not await _governance_table_exists(conn, "prompt_assets"):
+            raise HTTPException(status_code=503, detail="prompt_assets table not found")
+
+        # 동적으로 SET 절 구성
+        fields = body.dict(exclude_none=True)
+        if not fields:
+            raise HTTPException(status_code=400, detail="No fields to update")
+
+        set_parts = []
+        values = []
+        idx = 1
+        for key, val in fields.items():
+            if key == "model_variants" and val is not None:
+                val = _json.dumps(val)
+            set_parts.append(f"{key} = ${idx}")
+            values.append(val)
+            idx += 1
+
+        set_parts.append(f"updated_at = NOW()")
+        values.append(asset_id)
+
+        query = f"UPDATE prompt_assets SET {', '.join(set_parts)} WHERE id = ${idx} RETURNING *"
+        row = await conn.fetchrow(query, *values)
+
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"prompt_asset {asset_id} not found")
+    return {"ok": True, "item": dict(row)}
+
+
+@router.delete("/admin/prompt-assets/{asset_id}")
+async def delete_prompt_asset(asset_id: int):
+    """Soft delete: enabled=false로 설정."""
+    pool = await _get_governance_pool()
+    async with pool.acquire() as conn:
+        if not await _governance_table_exists(conn, "prompt_assets"):
+            raise HTTPException(status_code=503, detail="prompt_assets table not found")
+        row = await conn.fetchrow(
+            "UPDATE prompt_assets SET enabled=false, updated_at=NOW() WHERE id=$1 RETURNING id, slug",
+            asset_id,
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"prompt_asset {asset_id} not found")
+    return {"ok": True, "disabled": dict(row)}
+
+
+@router.post("/admin/prompt-assets/compile-preview")
+async def compile_preview(body: CompilePreviewRequest):
+    """주어진 context(workspace/intent/model/role)로 컴파일된 프롬프트 미리보기."""
+    from app.services.prompt_compiler import PromptCompiler
+
+    pool = await _get_governance_pool()
+    async with pool.acquire() as conn:
+        if not await _governance_table_exists(conn, "prompt_assets"):
+            raise HTTPException(status_code=503, detail="prompt_assets table not found")
+
+    compiler = PromptCompiler(pool)
+    result = await compiler.compile(
+        workspace=body.workspace,
+        intent=body.intent,
+        model=body.model,
+        role=body.role,
+    )
+    return {"ok": True, "compiled": result}
+
+
+# ─── Prompt Assets CRUD (5-Layer Architecture) ──────────────────────────────
+
+class PromptAssetCreate(BaseModel):
+    slug: str
+    title: str
+    layer_id: int
+    content: str
+    workspace_scope: list[str] = ["*"]
+    intent_scope: list[str] = ["*"]
+    target_models: list[str] = ["*"]
+    role_scope: list[str] = ["*"]
+    priority: int = 10
+    model_variants: Optional[dict] = None
+
+class PromptAssetUpdate(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+    layer_id: Optional[int] = None
+    workspace_scope: Optional[list[str]] = None
+    intent_scope: Optional[list[str]] = None
+    target_models: Optional[list[str]] = None
+    role_scope: Optional[list[str]] = None
+    priority: Optional[int] = None
+    model_variants: Optional[dict] = None
+    enabled: Optional[bool] = None
+
+
+@router.get("/admin/prompt-assets")
+async def list_prompt_assets(layer: Optional[int] = Query(None)):
+    """5-Layer prompt_assets 전체 목록. layer 필터 가능."""
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        if not await _admin_table_exists(conn, "prompt_assets"):
+            return {"assets": [], "count": 0, "layer_names": {}}
+        if layer:
+            rows = await conn.fetch(
+                "SELECT * FROM prompt_assets WHERE layer_id = $1 ORDER BY layer_id, priority, slug", layer
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT * FROM prompt_assets ORDER BY layer_id, priority, slug"
+            )
+    layer_names = {1: "Global", 2: "Project", 3: "Role", 4: "Intent", 5: "AI Model"}
+    assets = []
+    for r in rows:
+        assets.append({
+            "id": r["id"],
+            "slug": r["slug"],
+            "title": r["title"],
+            "layer_id": r["layer_id"],
+            "layer_name": layer_names.get(r["layer_id"], f"L{r['layer_id']}"),
+            "content": r["content"] or "",
+            "chars": len(r["content"] or ""),
+            "model_variants": r["model_variants"],
+            "workspace_scope": r["workspace_scope"] or [],
+            "intent_scope": r["intent_scope"] or [],
+            "target_models": r["target_models"] or [],
+            "role_scope": r["role_scope"] or [],
+            "priority": r["priority"],
+            "enabled": r["enabled"],
+            "created_by": r["created_by"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+        })
+    return {"assets": assets, "count": len(assets), "layer_names": layer_names}
+
+
+@router.post("/admin/prompt-assets")
+async def create_prompt_asset(req: PromptAssetCreate):
+    """새 prompt_asset 생성."""
+    from app.core.db_pool import get_pool
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    if req.layer_id not in (1, 2, 3, 4, 5):
+        raise HTTPException(400, "layer_id must be 1-5")
+
+    pool = get_pool()
+    now = datetime.now(ZoneInfo("Asia/Seoul"))
+    async with pool.acquire() as conn:
+        existing = await conn.fetchval("SELECT 1 FROM prompt_assets WHERE slug = $1", req.slug)
+        if existing:
+            raise HTTPException(409, f"slug '{req.slug}' already exists")
+        await conn.execute(
+            """INSERT INTO prompt_assets (slug, title, layer_id, content, model_variants,
+               workspace_scope, intent_scope, target_models, role_scope, priority, enabled, created_by, created_at, updated_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,'CEO',$11,$11)""",
+            req.slug, req.title, req.layer_id, req.content,
+            json.dumps(req.model_variants) if req.model_variants else None,
+            req.workspace_scope, req.intent_scope, req.target_models, req.role_scope,
+            req.priority, now, now,
+        )
+    logger.info("admin.prompt_asset_created slug=%s layer=%d", req.slug, req.layer_id)
+    return {"ok": True, "slug": req.slug}
+
+
+@router.put("/admin/prompt-assets/{slug}")
+async def update_prompt_asset(slug: str, req: PromptAssetUpdate):
+    """prompt_asset 수정 + 버전 백업."""
+    from app.core.db_pool import get_pool
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    pool = get_pool()
+    now = datetime.now(ZoneInfo("Asia/Seoul"))
+    async with pool.acquire() as conn:
+        old = await conn.fetchrow("SELECT * FROM prompt_assets WHERE slug = $1", slug)
+        if not old:
+            raise HTTPException(404, f"Asset '{slug}' not found")
+
+        # Version backup
+        if await _admin_table_exists(conn, "prompt_versions"):
+            await conn.execute(
+                "INSERT INTO prompt_versions (section_name, content, changed_by) VALUES ($1, $2, $3)",
+                f"asset_{slug}", old["content"] or "", "CEO",
+            )
+
+        updates = []
+        params = []
+        idx = 1
+        for field in ("title", "content", "layer_id", "workspace_scope", "intent_scope",
+                       "target_models", "role_scope", "priority", "enabled"):
+            val = getattr(req, field, None)
+            if val is not None:
+                updates.append(f"{field} = ${idx}")
+                params.append(val)
+                idx += 1
+        if req.model_variants is not None:
+            updates.append(f"model_variants = ${idx}")
+            params.append(json.dumps(req.model_variants))
+            idx += 1
+
+        if not updates:
+            return {"ok": True, "slug": slug, "changed": False}
+
+        updates.append(f"updated_at = ${idx}")
+        params.append(now)
+        idx += 1
+        params.append(slug)
+
+        await conn.execute(
+            f"UPDATE prompt_assets SET {', '.join(updates)} WHERE slug = ${idx}",
+            *params,
+        )
+
+    from app.services.context_builder import _layer1_cache
+    _layer1_cache.clear()
+    logger.info("admin.prompt_asset_updated slug=%s", slug)
+    return {"ok": True, "slug": slug, "changed": True}
+
+
+@router.patch("/admin/prompt-assets/{slug}/toggle")
+async def toggle_prompt_asset(slug: str):
+    """prompt_asset enabled 토글."""
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "UPDATE prompt_assets SET enabled = NOT enabled, updated_at = now() WHERE slug = $1 RETURNING enabled",
+            slug,
+        )
+        if not row:
+            raise HTTPException(404, f"Asset '{slug}' not found")
+    logger.info("admin.prompt_asset_toggled slug=%s enabled=%s", slug, row["enabled"])
+    return {"ok": True, "slug": slug, "enabled": row["enabled"]}
+
+
+@router.delete("/admin/prompt-assets/{slug}")
+async def delete_prompt_asset(slug: str):
+    """prompt_asset 삭제."""
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute("DELETE FROM prompt_assets WHERE slug = $1", slug)
+        if result == "DELETE 0":
+            raise HTTPException(404, f"Asset '{slug}' not found")
+    logger.info("admin.prompt_asset_deleted slug=%s", slug)
+    return {"ok": True, "slug": slug}
+
+
+@router.post("/admin/prompt-assets/preview")
+async def preview_compiled_prompt(req: PromptPreviewRequest):
+    """워크스페이스+인텐트 조합으로 5-Layer 컴파일된 최종 프롬프트 미리보기."""
+    from app.services.prompt_compiler import PromptCompiler
+    from app.core.prompts.token_profiler import estimate_tokens
+
+    compiled = await PromptCompiler().compile(
+        workspace_name=req.workspace_key,
+        intent=req.intent,
+        model="",
+        session_id="preview",
+        role=req.workspace_key,
+        base_system_prompt=req.base_system_prompt,
+    )
+    return {
+        "prompt": compiled.system_prompt,
+        "total_chars": len(compiled.system_prompt),
+        "total_tokens": estimate_tokens(compiled.system_prompt),
+        "provenance": compiled.provenance,
+    }

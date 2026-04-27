@@ -3337,7 +3337,7 @@ async def send_message_stream(
         _current_branch_id.set(branch_id if branch_id else None)
 
         # 프로젝트명 정규화 (workspace_name → project code)
-        _PROJECT_KEYS = ("KIS", "AADS", "GO100", "SF", "NTV2", "NAS", "CEO")
+        _PROJECT_KEYS = ("KIS", "AADS", "GO100", "SF", "NTV2", "NAS", "CEO", "KAKAOBOT")
         _normalized_project = None
         if workspace_name:
             _ws_upper = workspace_name.upper()
@@ -3873,10 +3873,11 @@ async def send_message_stream(
             from app.services.prompt_compiler import PromptCompiler, record_prompt_provenance
 
             _compiled_prompt = await PromptCompiler().compile(
-                workspace_name=workspace_name,
+                workspace_name=_normalized_project or workspace_name,
                 intent=intent,
                 model=model_override or intent_result.model,
                 session_id=session_id,
+                role=_normalized_project or "",
                 base_system_prompt=system_prompt,
             )
             system_prompt = _compiled_prompt.system_prompt

@@ -17,30 +17,6 @@ import type {
   MemoryInboxResponse,
 } from "@/types";
 
-export interface AdminDeployProjectStatus {
-  name: string;
-  status: "ok" | "error" | "unknown";
-  last_commit: string | null;
-  last_deploy_at: string | null;
-}
-
-export interface AdminDeployServerStatus {
-  id: string;
-  name: string;
-  ip: string;
-  projects: AdminDeployProjectStatus[];
-}
-
-export interface AdminDeployStatusResponse {
-  servers: AdminDeployServerStatus[];
-}
-
-export interface AdminSessionItem {
-  session_id: string;
-  workspace: string;
-  created_at: string | null;
-  message_count: number;
-}
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://aads.newtalk.kr/api/v1";
 
 function getAuthHeaders(): Record<string, string> {
@@ -381,24 +357,17 @@ export const api = {
     request<any>(`/admin/prompts/versions${section ? "?section=" + encodeURIComponent(section) : ""}`),
   getPromptVersion: (id: number) => request<any>(`/admin/prompts/versions/${id}`),
   getTokenProfile: () => request<any>("/admin/prompts/token-profile"),
-  getGovernanceIntentPolicies: () => request<any>("/governance/intent-policies"),
-  getGovernanceFeatureFlags: () => request<any>("/governance/feature-flags"),
-  updateGovernanceFeatureFlag: (flagKey: string, enabled: boolean, changedBy = "admin_dashboard") =>
-    request<any>(`/governance/feature-flags/${encodeURIComponent(flagKey)}`, {
-      method: "POST",
-      body: JSON.stringify({ enabled, changed_by: changedBy }),
-    }),
-  getGovernanceAuditLog: (limit = 100) =>
-    request<any>(`/governance/audit-log?limit=${limit}`),
   getGovernance: () => request<any>("/admin/governance"),
   getGovernanceLayers: () => request<any>("/admin/governance/layers"),
   getModelParity: () => request<any>("/admin/model-parity"),
   getModelParityIntentMap: () => request<any>("/admin/model-parity/intent-map"),
+  getDeployStatus: () => request<any>("/admin/deploy/status"),
+  getEmergencyStatus: () => request<any>("/admin/emergency"),
+  postEmergencyAction: (action: string, reason: string) =>
+    request<any>("/admin/emergency", { method: "POST", body: JSON.stringify({ action, reason }) }),
   getAdminAgents: () => request<any>("/admin/agents"),
   getAdminAgent: (role: string) => request<any>(`/admin/agents/${encodeURIComponent(role)}`),
   getAdminAgentStats: () => request<any>("/admin/agents/stats"),
-  getAdminSessions: () => request<any>("/admin/sessions"),
-  getAdminSessionReplay: (jobId: string) => request<any>(`/admin/sessions/${encodeURIComponent(jobId)}`),
   getAdminTasks: (params?: { status?: string; page?: number; page_size?: number }) => {
     const q = new URLSearchParams();
     if (params?.status) q.set("status", params.status);
@@ -406,7 +375,6 @@ export const api = {
     if (params?.page_size) q.set("page_size", String(params.page_size));
     return request<any>(`/admin/tasks${q.size ? `?${q.toString()}` : ""}`);
   },
-  getAdminDeployStatus: () => request<AdminDeployStatusResponse>("/admin/deploy/status"),
   getAdminTask: (jobId: string) => request<any>(`/admin/tasks/${encodeURIComponent(jobId)}`),
   getAdminTaskStats: () => request<any>("/admin/tasks/stats"),
 
@@ -428,9 +396,16 @@ export const api = {
   },
   getLlmProviderTimeline: (provider: string, limit = 20) =>
     request<any>(`/llm-models/providers/${encodeURIComponent(provider)}/timeline?limit=${limit}`),
-  getLlmModelSummary: () => request<any>("/llm-models/providers/summary"),
-  getChatModelPreferences: () => request<any>("/llm-models/chat-preferences"),
-  updateChatModelPreferences: (items: { model_id: string; display_order: number; is_hidden: boolean; is_favorite: boolean; is_pinned: boolean }[]) =>
-    request<any>("/llm-models/chat-preferences", { method: "PUT", body: JSON.stringify(items) }),
-  syncLlmModelRegistry: () => request<any>("/llm-models/sync", { method: "POST" }),
+
+  // Prompt Assets (5-Layer System)
+  getPromptAssets: (layer?: number) =>
+    request<any>(layer ? `/admin/prompt-assets?layer=${layer}` : "/admin/prompt-assets"),
+  createPromptAsset: (data: Record<string, unknown>) =>
+    request<any>("/admin/prompt-assets", { method: "POST", body: JSON.stringify(data) }),
+  updatePromptAsset: (slug: string, data: Record<string, unknown>) =>
+    request<any>(`/admin/prompt-assets/${encodeURIComponent(slug)}`, { method: "PUT", body: JSON.stringify(data) }),
+  deletePromptAsset: (slug: string) =>
+    request<any>(`/admin/prompt-assets/${encodeURIComponent(slug)}`, { method: "DELETE" }),
+  previewPromptCompile: (data: { workspace: string; intent: string; model: string; role: string }) =>
+    request<any>("/admin/prompt-assets/preview", { method: "POST", body: JSON.stringify({ workspace_key: data.workspace, intent: data.intent, base_system_prompt: "" }) }),
 };
