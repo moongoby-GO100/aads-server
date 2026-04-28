@@ -356,6 +356,7 @@ async def build_messages_context(
     db_conn=None,
     document_context: str = "",
     intent: str = "",
+    apply_prompt_assets: bool = True,
 ) -> tuple[List[Dict[str, Any]], str]:
     """
     3+D 계층 컨텍스트 구성 → (messages, system_prompt) 반환.
@@ -381,20 +382,22 @@ async def build_messages_context(
 
     # Layer 1 (동기 — system_prompt_v2 기반 XML 섹션, Prompt Compression 적용)
     layer1 = build_layer1(ws_key, base_system_prompt, intent=_effective_intent)
-    # 5-Layer prompt asset 적용 (AADS-PROMPT-INFRA)
-    try:
-        compiler = PromptCompiler()
-        compiled = await compiler.compile(
-            workspace_name=workspace_name,
-            intent=intent,
-            model="",
-            session_id=session_id,
-            role="",
-            base_system_prompt=layer1,
-        )
-        layer1 = compiled.system_prompt
-    except Exception as exc:
-        logger.warning(f"PromptCompiler fallback: {exc}")
+    # 5-Layer prompt asset 적용 (AADS-PROMPT-INFRA).
+    # 일반 채팅 경로는 모델/역할 확정 후 chat_service에서 한 번만 compile한다.
+    if apply_prompt_assets:
+        try:
+            compiler = PromptCompiler()
+            compiled = await compiler.compile(
+                workspace_name=workspace_name,
+                intent=intent,
+                model="",
+                session_id=session_id,
+                role="",
+                base_system_prompt=layer1,
+            )
+            layer1 = compiled.system_prompt
+        except Exception as exc:
+            logger.warning(f"PromptCompiler fallback: {exc}")
 
     # Phase 3: LAYER4 독립 빌드 — Layer1에서 분리하여 Prompt Cache 적중률 극대화
     if db_conn:

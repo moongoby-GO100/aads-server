@@ -501,6 +501,7 @@ async def with_background_completion(
         "tool_events": [],
         "execution_id": None,
         "last_event_id": None,
+        "saw_done_event": False,
     }
     _streaming_state[session_id] = state
 
@@ -580,6 +581,8 @@ async def with_background_completion(
                             state["tool_events"].append(_tool_result_event_snapshot(_d))
                         elif _t == "thinking":
                             state["tool_events"].append({"type": "thinking", "content": str(_d.get("content", _d.get("thinking", "")))[:300]})
+                        elif _t == "done":
+                            state["saw_done_event"] = True
                     except Exception:
                         pass
                 # Redis Stream 병행 저장 — execution_id가 잡히면 execution 단위 stream 사용
@@ -611,11 +614,13 @@ async def with_background_completion(
                     if _client_gone_since and (now - _client_gone_since) > _BG_AUTO_CANCEL_SEC:
                         logger.warning(f"bg_auto_cancel: session={session_id[:8]} client gone for {now - _client_gone_since:.0f}s, auto-stopping")
                         await _interim_save_streaming(session_id, state)
+                        state["_producer_incomplete_exit"] = True
                         return  # producer 종료 → finally에서 cleanup
         except BaseException as e:
             # BaseException: CancelledError, GeneratorExit 등 모두 잡음
             import traceback as _tb
             logger.warning(f"bg_producer_error session={session_id}: {type(e).__name__}: {e}\n{''.join(_tb.format_exception(type(e), e, e.__traceback__))}")
+            state["_producer_exception_type"] = type(e).__name__
             _err_str = str(e).lower()
             _is_retryable = (
                 not isinstance(e, (_heartbeat_asyncio.CancelledError, GeneratorExit, KeyboardInterrupt, SystemExit))
@@ -705,6 +710,7 @@ async def with_background_completion(
                             tools_called=state.get("tool_events", []),
                         )
                         if state.get("content", "").strip():
+                            state["saw_done_event"] = True
                             _retried = True
                             logger.info(f"stream_retry_success session={session_id[:8]} attempt={_retry_idx+1}")
                             break
@@ -748,14 +754,25 @@ async def with_background_completion(
                     del _ai_reaction_queue[session_id]
                 _ai_reaction_active[session_id] = _time.time()
                 _heartbeat_asyncio.create_task(_consume_next_reaction(session_id, _next_msg))
-            # Redis Stream 완료 마커
-            try:
-                await _redis_stream.mark_stream_done(_stream_id_for_state(session_id, state))
-            except Exception:
-                pass
+            # Redis 완료 마커/placeholder 삭제는 실제 done 이벤트를 본 경우에만 수행한다.
+            # 서버 SIGTERM/CancelledError 중 finally가 실행되면 중간 응답을 완료로 오인할 수 있다.
+            _completed_ok = bool(state.get("saw_done_event"))
+            if _completed_ok:
+                try:
+                    await _redis_stream.mark_stream_done(_stream_id_for_state(session_id, state))
+                except Exception:
+                    pass
+            else:
+                logger.warning(
+                    "bg_producer_incomplete_exit session=%s execution=%s exception=%s rate_limited=%s",
+                    session_id[:8],
+                    str(state.get("execution_id") or "")[:8],
+                    state.get("_producer_exception_type") or state.get("_producer_incomplete_exit") or "",
+                    state.get("_rate_limited", False),
+                )
             # 스트리밍 완료 → placeholder 삭제 (최종 응답이 generator 내부에서 저장됨)
-            # rate_limited 에러 시에는 placeholder가 이미 rate_limited intent로 보존되어 있으므로 삭제 금지
-            if not state.get("_rate_limited", False):
+            # rate_limited/미완료 종료 시에는 placeholder를 보존하여 재시작 복구 대상에 남긴다.
+            if _completed_ok and not state.get("_rate_limited", False):
                 try:
                     await _delete_streaming_placeholder(session_id, execution_id=state.get("execution_id"))
                 except Exception as del_err:
@@ -1248,7 +1265,36 @@ async def _resume_single_stream(
 
             # 4-A. Redis Stream에 완성된 응답이 있는지 먼저 확인 (LLM 재호출 불필요할 수 있음)
             redis_content, redis_complete = await _redis_stream.reconstruct_from_stream(_stream_id)
-            if redis_complete and redis_content and len(redis_content) > len(partial_content):
+            _db_execution_completed = False
+            if redis_complete and _execution_uuid:
+                try:
+                    async with pool.acquire() as conn:
+                        _db_execution_completed = (
+                            await conn.fetchval(
+                                "SELECT status = 'completed' FROM chat_turn_executions WHERE id = $1",
+                                _execution_uuid,
+                            )
+                            is True
+                        )
+                except Exception as _resume_status_err:
+                    logger.warning(
+                        "resume_execution_status_check_failed session=%s execution=%s error=%s",
+                        session_id[:8],
+                        str(_execution_uuid)[:8],
+                        _resume_status_err,
+                    )
+            elif redis_complete and not _execution_uuid:
+                _db_execution_completed = True
+
+            if redis_complete and not _db_execution_completed:
+                logger.warning(
+                    "resume_redis_done_ignored: session=%s execution=%s redis_len=%s db_status_not_completed",
+                    session_id[:8],
+                    str(_execution_uuid or "")[:8],
+                    len(redis_content or ""),
+                )
+
+            if redis_complete and _db_execution_completed and redis_content and len(redis_content) > len(partial_content):
                 # Redis에 완성된 응답이 있음 → LLM 재호출 없이 즉시 저장
                 logger.info(
                     f"resume_from_redis: session={session_id[:8]} "
@@ -1621,15 +1667,17 @@ async def create_session(data: Dict[str, Any]) -> Dict[str, Any]:
             title = await _generate_versioned_title(conn, ws_id)
 
         current_model = data.get("current_model")
+        role_key = (data.get("role_key") or "").strip() or None
         row = await conn.fetchrow(
             """
-            INSERT INTO chat_sessions (workspace_id, title, current_model)
-            VALUES ($1, $2, $3)
+            INSERT INTO chat_sessions (workspace_id, title, current_model, role_key)
+            VALUES ($1, $2, $3, $4)
             RETURNING *
             """,
             ws_id,
             title,
             current_model,
+            role_key,
         )
         return _row_to_dict(row)
 
@@ -1682,10 +1730,10 @@ async def update_session(session_id: str, data: Dict[str, Any]) -> Optional[Dict
         sets = []
         vals: List[Any] = []
         idx = 1
-        for field in ("title", "summary", "current_model"):
+        for field in ("title", "summary", "current_model", "role_key"):
             if field in data and data[field] is not None:
                 sets.append(f"{field} = ${idx}")
-                vals.append(data[field])
+                vals.append(str(data[field]).strip() if field == "role_key" else data[field])
                 idx += 1
         if "pinned" in data and data["pinned"] is not None:
             sets.append(f"pinned = ${idx}")
@@ -3210,7 +3258,8 @@ async def send_message_stream(
             # 2. 워크스페이스 정보 조회
             sp_row = await conn.fetchrow(
                 """
-                SELECT w.id::text AS workspace_id, w.system_prompt, w.name AS workspace_name
+                SELECT w.id::text AS workspace_id, w.system_prompt, w.name AS workspace_name,
+                       s.role_key, s.settings AS session_settings
                 FROM chat_workspaces w
                 JOIN chat_sessions s ON s.workspace_id = w.id
                 WHERE s.id = $1
@@ -3219,6 +3268,8 @@ async def send_message_stream(
             )
             base_prompt = (sp_row["system_prompt"] if sp_row and sp_row["system_prompt"] else "")
             workspace_name = (sp_row["workspace_name"] if sp_row and sp_row["workspace_name"] else "CEO")
+            _session_role_key = (sp_row["role_key"] if sp_row and sp_row["role_key"] else "")
+            _session_settings_prefetched = _row_to_dict(sp_row).get("session_settings") if sp_row else {}
 
             # 3. 세션 히스토리 조회 (#16: 서브쿼리로 ASC 정렬, Python reverse 제거)
             # P2-2: branch 모드일 때는 branch_point 메시지 이전(포함)까지만 히스토리 사용
@@ -3277,6 +3328,7 @@ async def send_message_stream(
                     base_system_prompt=base_prompt,
                     db_conn=conn,
                     document_context=_ephemeral_doc_context,
+                    apply_prompt_assets=False,
                 )
             except Exception as _ctx_err:
                 logger.error(f"context_builder failed, using raw fallback: {_ctx_err}")
@@ -3323,6 +3375,10 @@ async def send_message_stream(
                     _session_settings = _row_to_dict(_ss_row).get("settings") or {}
             except Exception:
                 pass
+            if not _session_settings and isinstance(_session_settings_prefetched, dict):
+                _session_settings = _session_settings_prefetched
+            if not _session_role_key:
+                _session_role_key = str((_session_settings or {}).get("role_key") or "").strip()
 
         yield f"data: {json.dumps({'type': 'stream_start', 'stream_id': _stream_id, 'execution_id': _execution_id_str, 'html_context_used': _html_context_state.get('html_context_used', False)})}\n\n"
 
@@ -3802,11 +3858,39 @@ async def send_message_stream(
                     model_used = "claude-opus-4-6"
                     cost_usd = Decimal("0")
                     tools_called: list = []
+                    _sdk_system_prompt = system_prompt
+                    try:
+                        from app.services.prompt_compiler import PromptCompiler
+
+                        _selected_model_id = (
+                            model_override
+                            if model_override and str(model_override).strip() not in ("mixture", "auto", "")
+                            else ""
+                        )
+                        _compiled_sdk_prompt = await PromptCompiler().compile(
+                            workspace_name=_normalized_project or workspace_name,
+                            intent=intent,
+                            model=_selected_model_id or "claude-opus-4-6",
+                            session_id=str(session_id),
+                            role=_session_role_key or "",
+                            selected_model_id=_selected_model_id or (model_override or ""),
+                            execution_model_id="claude-opus-4-6",
+                            base_system_prompt=system_prompt,
+                        )
+                        _sdk_system_prompt = _compiled_sdk_prompt.system_prompt
+                        _sdk_prov = _compiled_sdk_prompt.provenance
+                        logger.info(
+                            f"[PROMPT_COMPILER_SDK] compiled assets={len(_sdk_prov.get('applied_assets') or [])} "
+                            f"layers={_sdk_prov.get('layers_applied')} chars={_sdk_prov.get('system_prompt_chars')}"
+                        )
+                    except Exception as _sdk_prompt_err:
+                        logger.warning(f"prompt_compiler_sdk_failed: {_sdk_prompt_err}")
 
                     async for sse_line in sdk_svc.execute_stream(
                         prompt=content,
                         session_id=sdk_session_id,
                         chat_session_id=str(sid),
+                        system_prompt=_sdk_system_prompt,
                     ):
                         yield sse_line
                         # 이벤트 파싱: session_id 캡처 + 텍스트 수집
@@ -3873,12 +3957,21 @@ async def send_message_stream(
             from app.services.prompt_compiler import PromptCompiler, record_prompt_provenance
 
             logger.info(f"[PROMPT_COMPILER] enter sid={str(session_id)[:8]} intent={intent} ws={_normalized_project or workspace_name!r}")
+            _selected_model_id = (
+                model_override
+                if model_override and str(model_override).strip() not in ("mixture", "auto", "")
+                else ""
+            )
+            _execution_model_id = intent_result.model or ""
+            _prompt_model_id = _selected_model_id or _execution_model_id
             _compiled_prompt = await PromptCompiler().compile(
                 workspace_name=_normalized_project or workspace_name,
                 intent=intent,
-                model=model_override or intent_result.model,
+                model=_prompt_model_id,
                 session_id=str(session_id),
-                role=_normalized_project or "",
+                role=_session_role_key or "",
+                selected_model_id=_selected_model_id or (model_override or ""),
+                execution_model_id=_execution_model_id,
                 base_system_prompt=system_prompt,
             )
             system_prompt = _compiled_prompt.system_prompt
@@ -3889,14 +3982,15 @@ async def send_message_stream(
                 f"governance={_prov.get('governance_enabled')} fallback={_prov.get('fallback_used')}"
             )
             try:
-                await record_prompt_provenance(
-                    conn=conn,
-                    session_id=str(session_id),
-                    execution_id=_execution_id_str,
-                    intent=intent,
-                    model=model_override or intent_result.model,
-                    compiled_prompt=_compiled_prompt,
-                )
+                async with get_pool().acquire() as _prov_conn:
+                    await record_prompt_provenance(
+                        conn=_prov_conn,
+                        session_id=str(session_id),
+                        execution_id=_execution_id_str,
+                        intent=intent,
+                        model=_prompt_model_id,
+                        compiled_prompt=_compiled_prompt,
+                    )
                 logger.info(f"[PROMPT_COMPILER] provenance recorded sid={str(session_id)[:8]} exec={(_execution_id_str or '-')[:8]}")
             except Exception as _prov_err:
                 logger.warning(f"[PROMPT_COMPILER] provenance_insert_failed: {_prov_err}")

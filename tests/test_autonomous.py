@@ -43,7 +43,7 @@ def _make_mock_call_stream(responses: List[str], use_tools: bool = False, tool_n
     """LLM call_stream mock 생성."""
     call_count = [0]
 
-    async def _mock_call_stream(intent_result, system_prompt, messages, tools=None, model_override=None):
+    async def _mock_call_stream(intent_result, system_prompt, messages, tools=None, model_override=None, session_id=None):
         idx = min(call_count[0], len(responses) - 1)
         text = responses[idx]
         call_count[0] += 1
@@ -70,11 +70,11 @@ class TestAutonomousExecutorBasic:
         assert a is b
 
     def test_executor_defaults(self):
-        """기본 MAX_ITERATIONS=25, COST_LIMIT=$2.0 확인."""
+        """기본 MAX_ITERATIONS=25, COST_LIMIT=$10.0 확인."""
         from app.services.autonomous_executor import AutonomousExecutor
         exec_ = AutonomousExecutor()
         assert exec_.max_iterations == 25
-        assert exec_.cost_limit == 2.0
+        assert exec_.cost_limit == 10.0
 
     def test_executor_custom_params(self):
         """커스텀 파라미터 지정 가능."""
@@ -111,16 +111,14 @@ class TestAutonomousExecutorLoop:
         exec_ = AutonomousExecutor(max_iterations=3)
 
         # 항상 도구를 사용하는 mock
-        async def _always_tool_stream(intent_result, system_prompt, messages, tools=None, model_override=None):
+        async def _always_tool_stream(intent_result, system_prompt, messages, tools=None, model_override=None, session_id=None):
             yield {"type": "tool_use", "tool_name": "health_check", "tool_use_id": "tu_1", "tool_input": {}}
             yield {"type": "done", "input_tokens": 50, "output_tokens": 30, "stop_reason": "tool_use"}
 
         _tools = [{"name": "health_check", "description": "헬스체크"}]
 
-        with (
-            patch("app.services.autonomous_executor.call_stream", new=_always_tool_stream),
-            patch("app.services.autonomous_executor.ToolExecutor") as mock_te,
-        ):
+        with patch("app.services.autonomous_executor.call_stream", new=_always_tool_stream), \
+                patch("app.services.autonomous_executor.ToolExecutor") as mock_te:
             mock_te.return_value.execute = AsyncMock(return_value='{"status": "ok"}')
             events = collect_events(exec_.execute_task(
                 task_description="헬스체크 반복",
@@ -143,10 +141,8 @@ class TestAutonomousExecutorLoop:
         mock_stream = _make_mock_call_stream(["완료"], use_tools=True, tool_name="health_check")
         _tools = [{"name": "health_check", "description": "헬스체크"}]
 
-        with (
-            patch("app.services.autonomous_executor.call_stream", new=mock_stream),
-            patch("app.services.autonomous_executor.ToolExecutor") as mock_te,
-        ):
+        with patch("app.services.autonomous_executor.call_stream", new=mock_stream), \
+                patch("app.services.autonomous_executor.ToolExecutor") as mock_te:
             mock_te.return_value.execute = AsyncMock(return_value='{"status": "ok"}')
             events = collect_events(exec_.execute_task(
                 task_description="",
@@ -157,6 +153,28 @@ class TestAutonomousExecutorLoop:
         event_types = [e.get("type") for e in events]
         assert "tool_use" in event_types
         assert "tool_result" in event_types
+
+    def test_session_id_is_forwarded_to_call_stream(self):
+        """채팅세션 프로젝트 컨텍스트가 Codex 경로까지 전달되도록 session_id를 유지."""
+        from app.services.autonomous_executor import AutonomousExecutor
+
+        exec_ = AutonomousExecutor(max_iterations=1)
+        captured: Dict[str, Any] = {}
+
+        async def _session_stream(intent_result, system_prompt, messages, tools=None, model_override=None, session_id=None):
+            captured["session_id"] = session_id
+            yield {"type": "delta", "content": "ok"}
+            yield {"type": "done", "input_tokens": 1, "output_tokens": 1, "stop_reason": "end_turn"}
+
+        with patch("app.services.autonomous_executor.call_stream", new=_session_stream):
+            collect_events(exec_.execute_task(
+                task_description="세션 전달 확인",
+                tools=[],
+                messages=[{"role": "user", "content": "확인"}],
+                session_id="session-forward-check",
+            ))
+
+        assert captured["session_id"] == "session-forward-check"
 
 
 class TestCostLimitEnforcement:
@@ -169,17 +187,15 @@ class TestCostLimitEnforcement:
         # 낮은 비용 상한 설정
         exec_ = AutonomousExecutor(max_iterations=25, cost_limit=0.000001)
 
-        async def _tool_stream(intent_result, system_prompt, messages, tools=None, model_override=None):
+        async def _tool_stream(intent_result, system_prompt, messages, tools=None, model_override=None, session_id=None):
             yield {"type": "tool_use", "tool_name": "health_check", "tool_use_id": "tu_x", "tool_input": {}}
             # 많은 토큰으로 비용 초과 유도
             yield {"type": "done", "input_tokens": 1000, "output_tokens": 500, "stop_reason": "tool_use"}
 
         _tools = [{"name": "health_check"}]
 
-        with (
-            patch("app.services.autonomous_executor.call_stream", new=_tool_stream),
-            patch("app.services.autonomous_executor.ToolExecutor") as mock_te,
-        ):
+        with patch("app.services.autonomous_executor.call_stream", new=_tool_stream), \
+                patch("app.services.autonomous_executor.ToolExecutor") as mock_te:
             mock_te.return_value.execute = AsyncMock(return_value='{}')
             events = collect_events(exec_.execute_task(
                 task_description="",
@@ -204,7 +220,7 @@ class TestDangerousToolBlocking:
 
         exec_ = AutonomousExecutor(max_iterations=3)
 
-        async def _directive_stream(intent_result, system_prompt, messages, tools=None, model_override=None):
+        async def _directive_stream(intent_result, system_prompt, messages, tools=None, model_override=None, session_id=None):
             yield {
                 "type": "tool_use",
                 "tool_name": "submit_directive",
@@ -217,10 +233,8 @@ class TestDangerousToolBlocking:
 
         real_executions = []
 
-        with (
-            patch("app.services.autonomous_executor.call_stream", new=_directive_stream),
-            patch("app.services.autonomous_executor.ToolExecutor") as mock_te,
-        ):
+        with patch("app.services.autonomous_executor.call_stream", new=_directive_stream), \
+                patch("app.services.autonomous_executor.ToolExecutor") as mock_te:
             async def _track_execute(name, inp):
                 real_executions.append(name)
                 return "{}"
@@ -244,7 +258,7 @@ class TestDangerousToolBlocking:
 
         exec_ = AutonomousExecutor(max_iterations=2)
 
-        async def _dangerous_stream(intent_result, system_prompt, messages, tools=None, model_override=None):
+        async def _dangerous_stream(intent_result, system_prompt, messages, tools=None, model_override=None, session_id=None):
             yield {
                 "type": "tool_use",
                 "tool_name": "directive_create",
@@ -255,10 +269,8 @@ class TestDangerousToolBlocking:
 
         _tools = [{"name": "directive_create"}]
 
-        with (
-            patch("app.services.autonomous_executor.call_stream", new=_dangerous_stream),
-            patch("app.services.autonomous_executor.ToolExecutor") as mock_te,
-        ):
+        with patch("app.services.autonomous_executor.call_stream", new=_dangerous_stream), \
+                patch("app.services.autonomous_executor.ToolExecutor") as mock_te:
             mock_te.return_value.execute = AsyncMock(return_value="{}")
             events = collect_events(exec_.execute_task(
                 task_description="",

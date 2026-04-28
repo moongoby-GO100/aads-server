@@ -134,7 +134,7 @@ TOOL_CATEGORY_GUIDE = """\
 - read_remote_file: 원격 서버 소스 코드/설정 읽기 (AADS/KIS/GO100/SF/NTV2) — 코드 분석 1순위
 - list_remote_dir: 원격 디렉터리 탐색/검색
 - query_database: PostgreSQL SELECT — 데이터 확인 2순위 (AADS 내부 DB)
-- query_project_database: 프로젝트별 원격 DB SELECT (KIS→PG, SF→MariaDB, NTV2→MySQL)
+- query_project_database: 프로젝트별 원격 DB SELECT (KIS/GO100→PG, SF→MariaDB, NTV2→MySQL)
 - list_project_databases: 프로젝트 DB 목록 및 연결 상태
 - health_check: 서버 헬스체크 (68/211/114)
 - get_all_service_status: 6개 서비스 상태 병렬 조회
@@ -581,7 +581,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "description": "프로젝트명 (서버 자동 매핑).",
                     "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
                 },
-                "path": {
+                "file_path": {
                     "type": "string",
                     "description": "WORKDIR 기준 상대 경로 (예: app/main.py, config.py)",
                 },
@@ -594,12 +594,12 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "description": "읽을 최대 줄 수 (기본 2000, 제한 없음).",
                 },
             },
-            "required": ["project", "path"],
+            "required": ["project", "file_path"],
         },
         "input_examples": [
-            {"project": "SF", "path": "/data/shortflow/app/main.py"},
-            {"project": "KIS", "path": "/root/webapp/backend/app/core/config.py", "response_format": "concise"},
-            {"project": "NTV2", "path": "/var/www/newtalk/app/Http/Controllers/AuthController.php", "response_format": "detailed"},
+            {"project": "GO100", "file_path": "backend/app/main.py"},
+            {"project": "KIS", "file_path": "backend/app/core/config.py", "response_format": "concise"},
+            {"project": "NTV2", "file_path": "srv/newtalk-v2/app/Http/Controllers/AuthController.php", "response_format": "detailed"},
         ],
         "allowed_callers": ["code_execution_20250825"],
     },
@@ -649,7 +649,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "description": (
             "원격 서버 파일 쓰기 (SSH). 기존 파일은 자동 백업(.bak_aads). "
             "민감 파일(.env, .ssh 등) 차단. 최대 1MB. "
-            "KIS=211서버, SF/NTV2=114서버. AADS는 로컬."
+            "KIS/GO100=211서버, SF/NTV2=114서버. AADS는 로컬."
         ),
         "input_schema": {
             "type": "object",
@@ -676,7 +676,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "required": ["project", "file_path", "content"],
         },
         "input_examples": [
-            {"project": "KIS", "file_path": "backend/app/test.py", "content": "print('hello')"},
+            {"project": "GO100", "file_path": "backend/app/test.py", "content": "print('hello')"},
         ],
     },
     "patch_remote_file": {

@@ -246,6 +246,7 @@ class AgentSDKService:
     def _build_options(
         self,
         resume_session_id: Optional[str] = None,
+        system_prompt: Optional[str] = None,
     ) -> Any:
         """ClaudeAgentOptions 구성."""
         from app.services.agent_hooks import pre_tool_use_hook, post_tool_use_hook
@@ -278,7 +279,7 @@ class AgentSDKService:
             mcp_servers=mcp_servers,
             hooks=hooks,
             allowed_tools=_BUILTIN_ALLOWED + _GREEN_TOOLS + _YELLOW_TOOLS,
-            system_prompt=(
+            system_prompt=system_prompt or (
                 "당신은 AADS 자율 실행 에이전트입니다. "
                 "CEO moongoby의 요청을 처리하며 /root/aads 코드베이스와 6개 서비스를 관리합니다. "
                 "파괴적 작업(rm -rf, DROP TABLE, shutdown)은 반드시 먼저 CEO에게 확인하세요."
@@ -299,6 +300,7 @@ class AgentSDKService:
         prompt: str,
         session_id: Optional[str] = None,
         chat_session_id: Optional[str] = None,
+        system_prompt: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Agent SDK 실행 — CEO Chat SSE 스트림.
@@ -321,7 +323,7 @@ class AgentSDKService:
 
         from claude_agent_sdk import query as sdk_query  # type: ignore[import]
 
-        options = self._build_options(resume_session_id=session_id)
+        options = self._build_options(resume_session_id=session_id, system_prompt=system_prompt)
         captured_session_id: Optional[str] = None
 
         try:

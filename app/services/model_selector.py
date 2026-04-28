@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import uuid
 from decimal import Decimal
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
@@ -31,6 +32,19 @@ from app.services.intent_router import IntentResult
 logger = logging.getLogger(__name__)
 
 settings = Settings()
+
+_CODEX_PROJECT_KEYS = ("AADS", "KIS", "GO100", "SF", "NTV2", "NAS", "KAKAOBOT")
+_CODEX_PROJECT_CACHE_TTL_SECONDS = 30.0
+_CODEX_PROJECT_CACHE: Dict[str, tuple[str, float]] = {}
+_PROJECT_RUNTIME_HINTS = {
+    "AADS": "local_workdir=/root/aads/aads-server; dashboard=/root/aads/aads-dashboard",
+    "KIS": "remote_server=server-211; remote_workdir=/root/kis-autotrade-v4",
+    "GO100": "remote_server=server-211; remote_workdir=/root/kis-autotrade-v4; separate GO100 impact from KIS impact",
+    "SF": "remote_server=server-114; use project=SF for remote tools",
+    "NTV2": "remote_server=server-114; use project=NTV2 for remote tools",
+    "NAS": "remote_server=server-114; use project=NAS or native SSH when remote tools do not expose NAS",
+    "KAKAOBOT": "use KAKAOBOT workspace context; do not silently fall back to AADS",
+}
 
 # LiteLLM 경유: 베이스 URL 단일화( _anthropic base_url == httpx URL ). 빈 env 문자열 방지.
 _LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
@@ -857,6 +871,90 @@ def _estimate_cost(model: str, in_tokens: int, out_tokens: int) -> Decimal:
     return Decimal(str(round(in_tokens * in_rate / 1_000_000 + out_tokens * out_rate / 1_000_000, 6)))
 
 
+def _coerce_json_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return {}
+    return {}
+
+
+def _normalize_codex_project(workspace_name: Any = "", settings_value: Any = None) -> str:
+    workspace_settings = _coerce_json_dict(settings_value)
+    configured_project = str(workspace_settings.get("project_key") or "").upper().strip()
+    if configured_project in _CODEX_PROJECT_KEYS:
+        return configured_project
+
+    ws = str(workspace_name or "").upper().strip()
+    if ws.startswith("["):
+        end_idx = ws.find("]")
+        if end_idx != -1:
+            bracket_project = ws[1:end_idx].strip()
+            if bracket_project in _CODEX_PROJECT_KEYS:
+                return bracket_project
+
+    for project_key in _CODEX_PROJECT_KEYS:
+        if project_key in ws:
+            return project_key
+    return "AADS"
+
+
+async def _resolve_codex_project(session_id: Optional[str]) -> str:
+    if not session_id:
+        return "AADS"
+
+    now = _time_mod.monotonic()
+    cached = _CODEX_PROJECT_CACHE.get(session_id)
+    if cached and cached[1] > now:
+        return cached[0]
+
+    try:
+        from app.core.db_pool import get_pool
+
+        sid = uuid.UUID(str(session_id))
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT w.name, w.settings
+                FROM chat_sessions s
+                JOIN chat_workspaces w ON w.id = s.workspace_id
+                WHERE s.id = $1
+                """,
+                sid,
+            )
+        project = _normalize_codex_project(
+            row["name"] if row else "",
+            row["settings"] if row else None,
+        )
+        _CODEX_PROJECT_CACHE[session_id] = (project, now + _CODEX_PROJECT_CACHE_TTL_SECONDS)
+        return project
+    except (ValueError, TypeError):
+        logger.debug("codex_project_resolve_invalid_session: session=%s", session_id)
+    except Exception as exc:
+        logger.warning("codex_project_resolve_failed: session=%s error=%s", session_id, exc)
+    return "AADS"
+
+
+def _build_active_project_context(project: str) -> str:
+    project_key = project if project in _CODEX_PROJECT_KEYS else "AADS"
+    hint = _PROJECT_RUNTIME_HINTS.get(project_key, "")
+    return (
+        "\n\n<aads_active_project>\n"
+        f"project={project_key}\n"
+        "ops_permission=commit_push_deploy_ssh_docker_allowed_when_user_requests\n"
+        "rule=Use this active project for code, git, deploy, SSH, DB, and tool calls. "
+        "Do not silently fall back to AADS unless project=AADS.\n"
+        + (f"hint={hint}\n" if hint else "")
+        + "</aads_active_project>"
+    )
+
+
 async def call_stream(
     intent_result: IntentResult,
     system_prompt: str,
@@ -976,6 +1074,7 @@ async def call_stream(
         + "임의로 다른 모델명이나 제조사(예: 설정과 다른 Gemini/Claude/Google)로 말하지 마세요.\n"
         + "</aads_model_identity>"
     )
+    system_prompt += _build_active_project_context(await _resolve_codex_project(session_id))
 
     if route_metadata:
         provider = str((registered_row or {}).get("provider") or "")
@@ -1155,7 +1254,7 @@ async def call_stream(
                 if _sg_model in _CODEX_MODELS:
                     _sg_stream = _stream_codex_relay(_sg_model, system_prompt, messages, tools=tools, session_id=session_id)
                 else:
-                    _sg_stream = _stream_litellm(_sg_model, system_prompt, messages, tools=tools)
+                    _sg_stream = _stream_litellm(_sg_model, system_prompt, messages, tools=tools, session_id=session_id)
                 async for event in _sg_stream:
                     if isinstance(event, dict) and event.get("type") == "error":
                         _sg_had_error = True
@@ -1186,7 +1285,7 @@ async def call_stream(
     # Gemini 모델 → LiteLLM 경유 (실패 시 동급 Claude 우선 폴백)
     if model in _GEMINI_MODELS:
         _had_error = False
-        async for event in _stream_litellm(model, system_prompt, messages, tools=tools):
+        async for event in _stream_litellm(model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
                 logger.warning(f"gemini_fallback: {model} failed, falling back to same-grade model")
@@ -1208,7 +1307,7 @@ async def call_stream(
     # Groq / DeepSeek 모델 → LiteLLM 경유 (OpenAI 호환, 실패 시 Gemini Flash 폴백)
     if model in _GROQ_MODELS or model in _DEEPSEEK_MODELS:
         _had_error = False
-        async for event in _stream_litellm(model, system_prompt, messages, tools=tools):
+        async for event in _stream_litellm(model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
                 logger.warning(f"litellm_fallback: {model} failed, falling back to gemini-2.5-flash")
@@ -1216,7 +1315,7 @@ async def call_stream(
             yield event
         if _had_error:
             yield {"type": "delta", "content": f"\n\n[{model} 오류 → Gemini Flash 전환]\n\n"}
-            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
+            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools, session_id=session_id):
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
                 yield event
@@ -1226,7 +1325,7 @@ async def call_stream(
     if model in _OPENROUTER_MODELS:
         _or_model = model
         _had_error = False
-        async for event in _stream_litellm_openai(_or_model, system_prompt, messages, tools=tools):
+        async for event in _stream_litellm_openai(_or_model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
                 logger.warning(f"openrouter_fallback: {model} ({_or_model}) failed, falling back to gemini-2.5-flash")
@@ -1236,7 +1335,7 @@ async def call_stream(
             yield event
         if _had_error:
             yield {"type": "delta", "content": f"\n\n[{model} 오류 → Gemini Flash 전환]\n\n"}
-            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
+            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools, session_id=session_id):
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
                 yield event
@@ -1245,7 +1344,7 @@ async def call_stream(
     # Alibaba/Qwen 모델 → LiteLLM 경유 (DashScope, 실패 시 Gemini Flash 폴백)
     if model in _ALIBABA_MODELS:
         _had_error = False
-        async for event in _stream_litellm_openai(model, system_prompt, messages, tools=tools):
+        async for event in _stream_litellm_openai(model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
                 logger.warning(f"alibaba_fallback: {model} failed, falling back to gemini-2.5-flash")
@@ -1255,7 +1354,7 @@ async def call_stream(
             yield event
         if _had_error:
             yield {"type": "delta", "content": f"\n\n[{model} 오류 → Gemini Flash 전환]\n\n"}
-            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
+            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools, session_id=session_id):
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
                 yield event
@@ -1265,7 +1364,7 @@ async def call_stream(
     # Kimi / MiniMax 모델 → LiteLLM 경유 (실패 시 Gemini Flash 폴백)
     if model in _KIMI_MODELS or model in _MINIMAX_MODELS:
         _had_error = False
-        async for event in _stream_litellm_openai(model, system_prompt, messages, tools=tools):
+        async for event in _stream_litellm_openai(model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
                 logger.warning(f"kimi_minimax_fallback: {model} failed, falling back to gemini-2.5-flash")
@@ -1275,7 +1374,7 @@ async def call_stream(
             yield event
         if _had_error:
             yield {"type": "delta", "content": f"\n\n[{model} 오류 → Gemini Flash 전환]\n\n"}
-            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
+            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools, session_id=session_id):
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
                 yield event
@@ -1292,7 +1391,7 @@ async def call_stream(
             yield event
         if _had_error:
             yield {"type": "delta", "content": f"\n\n[{model} (Codex) 오류 → Gemini Flash 전환]\n\n"}
-            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
+            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools, session_id=session_id):
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
                 yield event
@@ -1301,7 +1400,7 @@ async def call_stream(
     # OpenAI 모델 → LiteLLM 경유 (실패 시 Gemini Flash 폴백)
     if model in _OPENAI_MODELS:
         _had_error = False
-        async for event in _stream_litellm_openai(model, system_prompt, messages, tools=tools):
+        async for event in _stream_litellm_openai(model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
                 logger.warning(f"openai_fallback: {model} failed, falling back to gemini-2.5-flash")
@@ -1311,7 +1410,7 @@ async def call_stream(
             yield event
         if _had_error:
             yield {"type": "delta", "content": f"\n\n[{model} 오류 → Gemini Flash 전환]\n\n"}
-            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools):
+            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools, session_id=session_id):
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
                 yield event
@@ -1353,7 +1452,7 @@ async def _stream_litellm(
         async for event in _stream_litellm_anthropic(model, system_prompt, messages, tools, session_id=session_id):
             yield event
     else:
-        async for event in _stream_litellm_openai(model, system_prompt, messages, tools):
+        async for event in _stream_litellm_openai(model, system_prompt, messages, tools, session_id=session_id):
             yield event
 
 
@@ -2072,12 +2171,13 @@ async def _stream_codex_relay_once(
     formatted = _format_messages_for_llm(messages, has_resume=False)
     if isinstance(formatted, list):
         formatted = "\n".join(b.get("text", "") for b in formatted if isinstance(b, dict))
+    relay_project = await _resolve_codex_project(session_id)
     req_body = {
         "model": model,
         "system_prompt": system_prompt,
         "messages_text": formatted,
         "session_id": session_id or "",
-        "project": "AADS",
+        "project": relay_project,
         "tool_names": [t.get("name", "") for t in (tools or []) if t.get("name")],
         "tool_schemas": [
             {

@@ -51,6 +51,7 @@ class SessionCreate(BaseModel):
     workspace_id: uuid.UUID
     title: Optional[str] = Field(None, max_length=200)
     current_model: Optional[str] = Field(None, max_length=50)
+    role_key: Optional[str] = Field(None, max_length=40)
 
 
 class SessionUpdate(BaseModel):
@@ -59,6 +60,7 @@ class SessionUpdate(BaseModel):
     summary: Optional[str] = None
     tags: Optional[List[str]] = None
     current_model: Optional[str] = Field(None, max_length=50)
+    role_key: Optional[str] = Field(None, max_length=40)
 
 
 class SessionOut(BaseModel):
@@ -71,6 +73,7 @@ class SessionOut(BaseModel):
     pinned: bool
     tags: List[str] = Field(default_factory=list)
     current_model: Optional[str] = None
+    role_key: Optional[str] = None
     current_execution_id: Optional[uuid.UUID] = None
     created_at: datetime
     updated_at: datetime

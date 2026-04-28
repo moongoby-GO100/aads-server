@@ -69,6 +69,21 @@ _EXECUTION_CACHEABLE_TOOLS = frozenset({
     "recall_tool_result",
 })
 _TOOL_CACHE_META_PREFIX = "[tool_cache_meta cache_hit=True source=execution_scope_cache"
+_PROJECT_SCOPED_TOOLS = frozenset({
+    "query_project_database",
+    "read_remote_file",
+    "list_remote_dir",
+    "write_remote_file",
+    "patch_remote_file",
+    "run_remote_command",
+    "git_remote_add",
+    "git_remote_commit",
+    "git_remote_push",
+    "git_remote_status",
+    "git_remote_create_branch",
+    "pipeline_runner_submit",
+})
+_PROJECT_KEYS = ("GO100", "NTV2", "KIS", "SF", "NAS", "KAKAOBOT", "AADS")
 
 
 async def _get_file_lock(lock_key: str) -> asyncio.Lock:
@@ -78,6 +93,84 @@ async def _get_file_lock(lock_key: str) -> asyncio.Lock:
         if lock_key not in _file_locks:
             _file_locks[lock_key] = asyncio.Lock()
         return _file_locks[lock_key]
+
+
+def _json_object(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _project_from_settings(settings: Dict[str, Any]) -> str:
+    for key in ("project_key", "active_project", "project", "db_profile"):
+        value = str(settings.get(key) or "").upper().strip()
+        if value in _PROJECT_KEYS:
+            return value
+    return ""
+
+
+def _project_from_workspace_name(name: str) -> str:
+    upper = (name or "").upper()
+    aliases = {
+        "GO100": ("GO100", "백억", "빡억"),
+        "NTV2": ("NTV2", "NEWTALK V2", "뉴톡"),
+        "KIS": ("KIS", "자동매매"),
+        "SF": ("SF", "SHORTFLOW"),
+        "NAS": ("NAS", "IMAGE", "이미지"),
+        "KAKAOBOT": ("KAKAOBOT", "카카오", "KAKAO"),
+        "AADS": ("AADS",),
+    }
+    for project, tokens in aliases.items():
+        if any(token in upper or token in name for token in tokens):
+            return project
+    return ""
+
+
+async def _infer_project_from_session(session_id: str) -> str:
+    if not session_id:
+        return ""
+    try:
+        uuid.UUID(str(session_id))
+    except Exception:
+        return ""
+
+    try:
+        from app.core.db_pool import get_pool
+
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    w.name,
+                    COALESCE(w.settings, '{}'::jsonb) AS workspace_settings,
+                    COALESCE(s.settings, '{}'::jsonb) AS session_settings
+                FROM chat_sessions s
+                JOIN chat_workspaces w ON w.id = s.workspace_id
+                WHERE s.id = $1::uuid
+                """,
+                session_id,
+            )
+    except Exception as exc:
+        logger.debug("project_autofill_lookup_failed: session=%s error=%s", session_id[:8], exc)
+        return ""
+
+    if not row:
+        return ""
+
+    session_project = _project_from_settings(_json_object(row["session_settings"]))
+    if session_project:
+        return session_project
+    workspace_project = _project_from_settings(_json_object(row["workspace_settings"]))
+    if workspace_project:
+        return workspace_project
+    return _project_from_workspace_name(str(row["name"] or ""))
 
 
 class ToolExecutor:
@@ -182,6 +275,19 @@ class ToolExecutor:
         실패 시 JSON error 반환.
         """
         try:
+            tool_input = dict(tool_input or {})
+            if tool_name in _PROJECT_SCOPED_TOOLS and not str(tool_input.get("project") or "").strip():
+                session_id = str(tool_input.get("session_id", "") or current_chat_session_id.get("")).strip()
+                inferred_project = await _infer_project_from_session(session_id)
+                if inferred_project:
+                    tool_input["project"] = inferred_project
+                    logger.info(
+                        "tool_project_autofilled: tool=%s session=%s project=%s",
+                        tool_name,
+                        session_id[:8],
+                        inferred_project,
+                    )
+
             execution_id = ""
             cache_key = ""
             if tool_name in _EXECUTION_CACHEABLE_TOOLS:

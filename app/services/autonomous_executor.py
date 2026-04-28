@@ -171,6 +171,7 @@ class AutonomousExecutor:
                         messages=work_messages,
                         tools=tools or None,
                         model_override=None,
+                        session_id=session_id,
                     ):
                         etype = event.get("type", "")
                         if etype == "delta":

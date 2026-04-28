@@ -53,6 +53,22 @@ _MCP_BRIDGE_PYTHON = (os.getenv("AADS_MCP_BRIDGE_PYTHON", "python3.11") or "pyth
 _MCP_PREFLIGHT_TIMEOUT_SEC = float(os.getenv("AADS_MCP_PREFLIGHT_TIMEOUT_SEC", "1.5"))
 _MCP_PREFLIGHT_CACHE_TTL = float(os.getenv("AADS_MCP_PREFLIGHT_CACHE_TTL", "15"))
 _MCP_PREFLIGHT_CACHE = {}
+_CODEX_SANDBOX_MODE = (os.getenv("AADS_CODEX_SANDBOX_MODE", "danger-full-access") or "danger-full-access").strip()
+_CODEX_APPROVAL_POLICY = (os.getenv("AADS_CODEX_APPROVAL_POLICY", "never") or "never").strip()
+_CODEX_ADD_DIRS = tuple(
+    part.strip()
+    for part in (os.getenv("AADS_CODEX_ADD_DIRS", "/root/aads") or "").split(":")
+    if part.strip()
+)
+_CODEX_PROJECT_KEYS = ("AADS", "KIS", "GO100", "SF", "NTV2", "NAS", "KAKAOBOT")
+_CODEX_DEFAULT_CWD = (os.getenv("AADS_CODEX_DEFAULT_CWD", "/root/aads/aads-server") or "/root/aads/aads-server").strip()
+_CODEX_CWD_MAP = {
+    project_key: (
+        os.getenv("AADS_CODEX_CWD_" + project_key, _CODEX_DEFAULT_CWD)
+        or _CODEX_DEFAULT_CWD
+    ).strip()
+    for project_key in _CODEX_PROJECT_KEYS
+}
 
 # 2GB급 호스트에서 Claude/Codex 동시 실행 3개는 메모리 압박으로 137(OOM성 종료)을 유발할 수 있다.
 # 운영자가 명시적으로 override하지 않으면 보수적으로 1개만 허용한다.
@@ -838,14 +854,25 @@ def _build_codex_home(session_id, mcp_cfg=None):
     # 참고: https://developers.openai.com/codex/mcp
     cfg_lines = [
         # --- globals (공식 스펙: approval_policy, sandbox_mode, model_reasoning_effort) ---
-        'approval_policy = "never"',
-        'sandbox_mode = "workspace-write"',
+        'approval_policy = ' + _toml_basic_string(_CODEX_APPROVAL_POLICY),
+        'sandbox_mode = ' + _toml_basic_string(_CODEX_SANDBOX_MODE),
         'model_reasoning_effort = "high"',
         "",
-        # --- [projects."/root/aads/aads-server"] ---
-        '[projects."/root/aads/aads-server"]',
-        'trust_level = "trusted"',
-        "",
+    ]
+
+    trusted_paths = []
+    for candidate in ((_CODEX_DEFAULT_CWD,) + tuple(_CODEX_CWD_MAP.values()) + _CODEX_ADD_DIRS):
+        candidate = str(candidate or "").strip()
+        if candidate and candidate not in trusted_paths:
+            trusted_paths.append(candidate)
+    for trusted_path in trusted_paths:
+        cfg_lines.extend([
+            '[projects.' + _toml_basic_string(trusted_path) + ']',
+            'trust_level = "trusted"',
+            "",
+        ])
+
+    cfg_lines.extend([
         # --- [mcp_servers.aads-tools] ---
         "[mcp_servers.aads-tools]",
         "command = " + _toml_basic_string(command),
@@ -853,7 +880,7 @@ def _build_codex_home(session_id, mcp_cfg=None):
         # --- 공식 스펙: startup_timeout_sec, tool_timeout_sec ---
         "startup_timeout_sec = 30",
         "tool_timeout_sec = 120",
-    ]
+    ])
 
     cwd = server_cfg.get("cwd")
     if cwd:
@@ -1111,21 +1138,42 @@ _CODEX_MODEL_MAP = {
     "gpt-5.3-codex": "gpt-5.3-codex",
 }
 
-_CODEX_CWD_MAP = {
-    "AADS": "/root/aads/aads-server",
-    "KIS": "/root/aads/kis-server",
-    "GO100": "/root/aads/go100",
-    "SF": "/root/shortflow",
-    "NTV2": "/root/newtalk-v2",
+_CODEX_PROJECT_HINTS = {
+    "AADS": "local_workdir=/root/aads/aads-server; dashboard=/root/aads/aads-dashboard; deploy=bash /root/aads/aads-server/deploy.sh or dashboard deploy.sh as requested",
+    "KIS": "remote_server=server-211; remote_workdir=/root/kis-autotrade-v4; use SSH/MCP project=KIS for commit/push/deploy",
+    "GO100": "remote_server=server-211; remote_workdir=/root/kis-autotrade-v4; use SSH/MCP project=GO100 and separate GO100 impact from KIS impact",
+    "SF": "remote_server=server-114; use SSH/MCP project=SF for code, commit, push, deploy, and service checks",
+    "NTV2": "remote_server=server-114; use SSH/MCP project=NTV2 for code, commit, push, deploy, and service checks",
+    "NAS": "remote_server=server-114; use SSH/native shell for NAS code, commit, push, deploy, and service checks",
+    "KAKAOBOT": "use available local/remote project context; do not default to AADS when the workspace is KAKAOBOT",
 }
 
-_CODEX_CWD_MAP = {
-    "AADS": "/root/aads/aads-server",
-    "KIS": "/root/aads/kis-server",
-    "GO100": "/root/aads/go100",
-    "SF": "/root/shortflow",
-    "NTV2": "/root/newtalk-v2",
-}
+
+def _normalize_codex_project(project):
+    value = str(project or "AADS").strip().upper()
+    if value.startswith("["):
+        end_idx = value.find("]")
+        if end_idx != -1:
+            value = value[1:end_idx].strip()
+    for project_key in _CODEX_PROJECT_KEYS:
+        if project_key == value or project_key in value:
+            return project_key
+    return "AADS"
+
+
+def _resolve_codex_cwd(project):
+    project_key = _normalize_codex_project(project)
+    cwd = _CODEX_CWD_MAP.get(project_key) or _CODEX_DEFAULT_CWD
+    if cwd and os.path.isdir(cwd):
+        return cwd
+    fallback = _CODEX_DEFAULT_CWD if os.path.isdir(_CODEX_DEFAULT_CWD) else "/root"
+    logger.warning(
+        "codex_cwd_missing: project=%s cwd=%s fallback=%s",
+        project_key,
+        cwd,
+        fallback,
+    )
+    return fallback
 
 
 async def handle_codex_stream(request):
@@ -1143,6 +1191,7 @@ async def handle_codex_stream(request):
     if not messages_text:
         return web.json_response({"error": "messages_text required"}, status=400)
     codex_model = _CODEX_MODEL_MAP.get(model, "gpt-5.5")
+    codex_project = _normalize_codex_project(body.get("project", "AADS"))
     prompt = messages_text
     if system_prompt:
         prompt = "[SYSTEM]\n" + system_prompt + "\n\n[USER]\n" + messages_text
@@ -1164,6 +1213,16 @@ async def handle_codex_stream(request):
             prompt = "[AVAILABLE_AADS_MCP_TOOLS]\n" + "\n".join(tool_lines) + "\n\n" + prompt
     elif tool_names:
         prompt = "[AVAILABLE_AADS_MCP_TOOLS]\n" + ", ".join(tool_names) + "\n\n" + prompt
+    project_hint = _CODEX_PROJECT_HINTS.get(codex_project, "")
+    prompt = (
+        "[AADS_ACTIVE_PROJECT]\n"
+        "project=" + codex_project + "\n"
+        "ops_permission=commit_push_deploy_ssh_docker_allowed_when_user_requests\n"
+        "rule=Use the active project for code, git, deploy, SSH, and MCP calls. Do not silently fall back to AADS unless active project is AADS.\n"
+        + ("hint=" + project_hint + "\n" if project_hint else "")
+        + "\n"
+        + prompt
+    )
     try:
         async with _semaphore:
             codex_meta = _resolve_cli_command("codex")
@@ -1207,19 +1266,29 @@ async def handle_codex_stream(request):
                 "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
             await response.prepare(request)
             codex_home = _build_codex_home(session_id, mcp_cfg=mcp_template)
-            _codex_cwd = _CODEX_CWD_MAP.get(body.get("project", "AADS"), "/root/aads/aads-server")
-            cmd = list(codex_meta.get("argv", []) or []) + ["exec", "--json", "--full-auto",
-                   "--skip-git-repo-check", "-C", _codex_cwd]
+            _codex_cwd = _resolve_codex_cwd(codex_project)
+            cmd = list(codex_meta.get("argv", []) or []) + [
+                "exec", "--json",
+                "--sandbox", _CODEX_SANDBOX_MODE,
+                "--skip-git-repo-check", "-C", _codex_cwd,
+            ]
+            for add_dir in _CODEX_ADD_DIRS:
+                cmd.extend(["--add-dir", add_dir])
             if codex_model:
                 cmd.extend(["-m", codex_model])
             cmd.append(prompt)
             logger.info(
-                "Codex: model=%s prompt_len=%d tools=%d cmd_mode=%s mcp_mode=%s",
+                "Codex: project=%s cwd=%s model=%s prompt_len=%d tools=%d cmd_mode=%s mcp_mode=%s sandbox=%s approval=%s add_dirs=%s",
+                codex_project,
+                _codex_cwd,
                 codex_model,
                 len(prompt),
                 len(tool_names),
                 codex_meta.get("mode", "unknown"),
                 (mcp_diag or {}).get("path_mode", "unknown"),
+                _CODEX_SANDBOX_MODE,
+                _CODEX_APPROVAL_POLICY,
+                ",".join(_CODEX_ADD_DIRS) or "-",
             )
             proc_env = dict(os.environ)
             # Genspark 프록시 리다이렉트 차단 — ChatGPT Plus OAuth(auth.json) 직접 사용

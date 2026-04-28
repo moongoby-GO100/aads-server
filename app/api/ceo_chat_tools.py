@@ -3091,8 +3091,113 @@ async def tool_query_decision_graph(
 
 # ─── 디스패처 ──────────────────────────────────────────────────────────────────
 
+_PROJECT_SCOPED_TOOLS = frozenset({
+    "query_project_database",
+    "read_remote_file",
+    "list_remote_dir",
+    "write_remote_file",
+    "patch_remote_file",
+    "run_remote_command",
+    "git_remote_add",
+    "git_remote_commit",
+    "git_remote_push",
+    "git_remote_status",
+    "git_remote_create_branch",
+    "pipeline_runner_submit",
+})
+_PROJECT_KEYS = ("GO100", "NTV2", "KIS", "SF", "AADS")
+
+
+def _json_object(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _project_from_settings(settings: Dict[str, Any]) -> str:
+    for key in ("project_key", "active_project", "project", "db_profile"):
+        value = str(settings.get(key) or "").upper().strip()
+        if value in _PROJECT_KEYS:
+            return value
+    return ""
+
+
+def _project_from_workspace_name(name: str) -> str:
+    upper = (name or "").upper()
+    aliases = {
+        "GO100": ("GO100", "백억", "빡억"),
+        "NTV2": ("NTV2", "NEWTALK V2", "뉴톡"),
+        "KIS": ("KIS", "자동매매"),
+        "SF": ("SF", "SHORTFLOW"),
+        "AADS": ("AADS",),
+    }
+    for project, tokens in aliases.items():
+        if any(token in upper or token in name for token in tokens):
+            return project
+    return ""
+
+
+async def _infer_project_from_session(chat_session_id: str) -> str:
+    if not chat_session_id:
+        return ""
+    try:
+        uuid.UUID(str(chat_session_id))
+    except Exception:
+        return ""
+
+    try:
+        from app.core.db_pool import get_pool
+
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    w.name,
+                    COALESCE(w.settings, '{}'::jsonb) AS workspace_settings,
+                    COALESCE(s.settings, '{}'::jsonb) AS session_settings
+                FROM chat_sessions s
+                JOIN chat_workspaces w ON w.id = s.workspace_id
+                WHERE s.id = $1::uuid
+                """,
+                chat_session_id,
+            )
+    except Exception as exc:
+        logger.debug("tool_project_autofill_lookup_failed: session=%s error=%s", chat_session_id[:8], exc)
+        return ""
+
+    if not row:
+        return ""
+
+    session_project = _project_from_settings(_json_object(row["session_settings"]))
+    if session_project:
+        return session_project
+    workspace_project = _project_from_settings(_json_object(row["workspace_settings"]))
+    if workspace_project:
+        return workspace_project
+    return _project_from_workspace_name(str(row["name"] or ""))
+
+
 async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session_id: str = "") -> str:
     """도구 이름과 파라미터로 실제 실행."""
+    params = dict(params or {})
+    if name in _PROJECT_SCOPED_TOOLS and not str(params.get("project") or "").strip():
+        inferred_project = await _infer_project_from_session(chat_session_id)
+        if inferred_project:
+            params["project"] = inferred_project
+            logger.info(
+                "tool_project_autofilled: tool=%s session=%s project=%s",
+                name,
+                chat_session_id[:8],
+                inferred_project,
+            )
+
     if name == "read_file":
         return await tool_read_file(params.get("path", ""))
     elif name == "read_github":
@@ -3134,7 +3239,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
     elif name == "read_remote_file":
         return await tool_read_remote_file(
             params.get("project", ""),
-            params.get("file_path", ""),
+            params.get("file_path") or params.get("path", ""),
             offset=int(params.get("offset", 1) or 1),
             limit=int(params.get("limit", 2000) or 2000),
         )
@@ -3332,14 +3437,14 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
     elif name == "write_remote_file":
         return await tool_write_remote_file(
             params.get("project", ""),
-            params.get("file_path", ""),
+            params.get("file_path") or params.get("path", ""),
             params.get("content", ""),
             params.get("backup", True),
         )
     elif name == "patch_remote_file":
         return await tool_patch_remote_file(
             params.get("project", ""),
-            params.get("file_path", ""),
+            params.get("file_path") or params.get("path", ""),
             params.get("old_string", ""),
             params.get("new_string", ""),
         )
