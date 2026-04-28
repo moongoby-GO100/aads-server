@@ -17,7 +17,7 @@ async def _collect_claude_route(monkeypatch, *, intent: str, model: str, use_too
     async def _fake_available_models():
         return {"claude-haiku", "claude-sonnet", "claude-opus"}
 
-    async def _fake_registry_row(_model_id: str):
+    async def _fake_registry_row(_model_id: str, provider=None):
         return None
 
     async def _fake_claude_slots():
@@ -57,7 +57,7 @@ async def test_call_stream_routes_dynamic_qwen_model_to_direct_provider(monkeypa
     async def _fake_available_models():
         return {"qwen3.6-plus"}
 
-    async def _fake_registry_row(model_id: str):
+    async def _fake_registry_row(model_id: str, provider=None):
         assert model_id == "qwen3.6-plus"
         return {
             "provider": "qwen",
@@ -104,6 +104,53 @@ async def test_call_stream_routes_dynamic_qwen_model_to_direct_provider(monkeypa
     assert calls == [("qwen3.6-plus", "qwen", "qwen3.6-plus")]
     assert events[-1]["type"] == "done"
     assert events[-1]["model"] == "qwen3.6-plus"
+
+
+@pytest.mark.asyncio
+async def test_gemini_route_forwards_session_id_and_active_project(monkeypatch):
+    captured = {}
+
+    async def _fake_get_db_key(*_args, **_kwargs):
+        return ""
+
+    async def _fake_available_models():
+        return {"gemini-2.5-flash"}
+
+    async def _fake_registry_row(_model_id: str, provider=None):
+        return None
+
+    async def _fake_resolve_project(_session_id):
+        return "NTV2"
+
+    async def _fake_litellm(model, system_prompt, messages, tools=None, session_id=None):
+        captured["model"] = model
+        captured["system_prompt"] = system_prompt
+        captured["session_id"] = session_id
+        yield {"type": "done", "model": model, "cost": "0", "input_tokens": 1, "output_tokens": 1}
+
+    monkeypatch.setattr(model_selector, "_get_db_key", _fake_get_db_key)
+    monkeypatch.setattr(model_selector, "get_available_model_ids", _fake_available_models)
+    monkeypatch.setattr(model_selector, "_get_registered_model_row", _fake_registry_row)
+    monkeypatch.setattr(model_selector, "_resolve_codex_project", _fake_resolve_project)
+    monkeypatch.setattr(model_selector, "_stream_litellm", _fake_litellm)
+
+    events = [
+        event
+        async for event in model_selector.call_stream(
+            IntentResult(intent="code_modify", model="gemini-2.5-flash", use_tools=True, tool_group="all"),
+            "system prompt",
+            [{"role": "user", "content": "NTV2 배포 상태 확인"}],
+            tools=[{"name": "run_remote_command", "input_schema": {"type": "object", "properties": {}}}],
+            model_override="gemini-2.5-flash",
+            session_id="session-ntv2",
+        )
+    ]
+
+    assert captured["model"] == "gemini-2.5-flash"
+    assert captured["session_id"] == "session-ntv2"
+    assert "project=NTV2" in captured["system_prompt"]
+    assert "commit_push_deploy_ssh_docker_allowed_when_user_requests" in captured["system_prompt"]
+    assert events[-1]["type"] == "done"
 
 
 @pytest.mark.asyncio

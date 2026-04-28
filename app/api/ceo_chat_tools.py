@@ -3105,7 +3105,7 @@ _PROJECT_SCOPED_TOOLS = frozenset({
     "git_remote_create_branch",
     "pipeline_runner_submit",
 })
-_PROJECT_KEYS = ("GO100", "NTV2", "KIS", "SF", "AADS")
+_PROJECT_KEYS = ("GO100", "NTV2", "KIS", "SF", "AADS", "NAS", "KAKAOBOT")
 
 
 def _json_object(value: Any) -> Dict[str, Any]:

@@ -11,6 +11,7 @@ from app.services.pipeline_runner_client import (
     get_pipeline_runner_api_url,
     get_pipeline_runner_base_url,
 )
+from app.services.tool_executor import _project_from_settings, _project_from_workspace_name
 
 
 def _load_claude_relay_module():
@@ -82,6 +83,13 @@ def test_model_selector_resolves_codex_project_from_workspace_settings() -> None
     ) == "GO100"
     assert _normalize_model_selector_codex_project("[NAS] Image", {}) == "NAS"
     assert _normalize_model_selector_codex_project("unknown workspace", {}) == "AADS"
+
+
+def test_tool_executor_resolves_all_chat_projects() -> None:
+    assert _project_from_settings({"project_key": "NAS"}) == "NAS"
+    assert _project_from_settings({"active_project": "KAKAOBOT"}) == "KAKAOBOT"
+    assert _project_from_workspace_name("[NAS] Image") == "NAS"
+    assert _project_from_workspace_name("[KAKAOBOT] 카카오톡 메시지 자동화") == "KAKAOBOT"
 
 
 def test_codex_relay_cwd_falls_back_to_default(tmp_path, monkeypatch) -> None:

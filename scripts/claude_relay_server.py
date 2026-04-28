@@ -135,7 +135,7 @@ def _read_db_oauth_rows():
             _DB_OAUTH_CACHE["rows"] = rows
             _DB_OAUTH_CACHE["ts"] = now
             return rows
-    except (urllib_error.URLError, urllib_error.HTTPError, ValueError, json.JSONDecodeError) as e:
+    except (urllib_error.URLError, urllib_error.HTTPError, ValueError, json.JSONDecodeError, OSError) as e:
         logger.warning("DB OAuth read failed, using env fallback: %s", e)
     return None
 
