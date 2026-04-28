@@ -632,8 +632,13 @@ _GROQ_MODELS = {"groq-qwen3-32b", "groq-kimi-k2", "groq-llama4-scout", "groq-lla
 _OPENAI_MODELS = {"gpt-4o", "gpt-4o-mini", "gpt-5", "gpt-5-mini", "o3", "o3-mini", "o3-pro"}
 
 # Codex CLI 모델 (ChatGPT Plus OAuth, relay /codex-stream 경유)
-_CODEX_MODELS = {"gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}
-_CODEX_MODEL_DISPLAY = {"gpt-5.4": "GPT-5.4 (Codex CLI)", "gpt-5.4-mini": "GPT-5.4 Mini (Codex CLI)", "gpt-5.3-codex": "GPT-5.3 Codex (Codex CLI)"}
+_CODEX_MODELS = {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}
+_CODEX_MODEL_DISPLAY = {
+    "gpt-5.5": "GPT-5.5 (Codex CLI)",
+    "gpt-5.4": "GPT-5.4 (Codex CLI)",
+    "gpt-5.4-mini": "GPT-5.4 Mini (Codex CLI)",
+    "gpt-5.3-codex": "GPT-5.3 Codex (Codex CLI)",
+}
 
 # DeepSeek 모델 (LiteLLM 경유)
 _DEEPSEEK_MODELS = {"deepseek-chat", "deepseek-reasoner"}
@@ -728,8 +733,38 @@ async def get_display_models(active_only: bool = True) -> list[dict[str, Any]]:
     return await _list_registered_models(active_only=active_only)
 
 
-async def _get_registered_model_row(model_id: str) -> Optional[Dict[str, Any]]:
+def _split_provider_qualified_model(model_id: str) -> tuple[str | None, str]:
+    value = str(model_id or "").strip()
+    if ":" not in value:
+        return None, value
+    provider, raw_model = value.split(":", 1)
+    provider = provider.strip().lower()
+    raw_model = raw_model.strip()
+    known_providers = {
+        "anthropic",
+        "codex",
+        "deepseek",
+        "gemini",
+        "groq",
+        "kimi",
+        "litellm",
+        "minimax",
+        "openai",
+        "openrouter",
+        "qwen",
+    }
+    if provider in known_providers and raw_model:
+        return provider, raw_model
+    return None, value
+
+
+async def _get_registered_model_row(model_id: str, provider: str | None = None) -> Optional[Dict[str, Any]]:
     rows = await _list_registered_models(active_only=False)
+    normalized_provider = str(provider or "").strip().lower()
+    if normalized_provider:
+        for row in rows:
+            if row.get("provider") == normalized_provider and row.get("model_id") == model_id:
+                return row
     for row in rows:
         if row.get("model_id") == model_id:
             return row
@@ -761,7 +796,7 @@ def _coerce_metadata(value: Any) -> Dict[str, Any]:
 def _route_metadata(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     metadata = _coerce_metadata((row or {}).get("metadata"))
     backend = str(metadata.get("execution_backend") or "").strip()
-    if backend == "openai_compatible_direct":
+    if backend in {"openai_compatible_direct", "litellm_proxy"}:
         return metadata
     return {}
 
@@ -866,6 +901,9 @@ async def call_stream(
     if not model or not str(model).strip():
         logger.warning("empty_model_fallback: model is empty/None → 'claude-sonnet'")
         model = "claude-sonnet"
+    _qualified_provider, _qualified_model = _split_provider_qualified_model(str(model))
+    if _qualified_provider:
+        model = _qualified_model
 
     # model_override가 구체적 모델명(claude-sonnet-4-6 등)이면 LiteLLM alias로 변환
     _OVERRIDE_TO_ALIAS = {
@@ -909,8 +947,9 @@ async def call_stream(
         fallback_model = _fallback_for_unavailable_model(model, runtime_available_models)
         logger.warning("registry_model_unavailable: '%s' -> '%s'", model, fallback_model)
         model = fallback_model
+        _qualified_provider = None
 
-    registered_row = await _get_registered_model_row(model)
+    registered_row = await _get_registered_model_row(model, provider=_qualified_provider)
     route_metadata = _route_metadata(registered_row)
     if model not in _LITELLM_OPENAI_MODELS and model not in _ANTHROPIC_MODEL_ID and not route_metadata:
         logger.warning(f"unknown_model_fallback: '{model}' → 'claude-sonnet'")
@@ -940,16 +979,30 @@ async def call_stream(
 
     if route_metadata:
         provider = str((registered_row or {}).get("provider") or "")
-        async for event in _stream_direct_openai_provider(
-            model,
-            provider,
-            route_metadata,
-            system_prompt,
-            messages,
-            tools=tools,
-            session_id=session_id,
-        ):
-            yield event
+        backend = str(route_metadata.get("execution_backend") or "").strip()
+        if backend == "openai_compatible_direct":
+            async for event in _stream_direct_openai_provider(
+                model,
+                provider,
+                route_metadata,
+                system_prompt,
+                messages,
+                tools=tools,
+                session_id=session_id,
+            ):
+                yield event
+        elif backend == "litellm_proxy":
+            request_model = str(route_metadata.get("execution_model_id") or model).strip() or model
+            async for event in _stream_litellm_openai(
+                request_model,
+                system_prompt,
+                messages,
+                tools=tools,
+                session_id=session_id,
+                display_model=model,
+                cost_model=model,
+            ):
+                yield event
         return
 
     # Claude 모델 → DB priority 기반 계정 교차 폴백 (rate limit은 계정별)

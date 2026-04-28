@@ -120,7 +120,7 @@ def _classify_provider_from_model(model_name: str, provider_hint: str | None = N
         return "kimi"
     if raw.startswith("minimax"):
         return "minimax"
-    if raw in {"gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}:
+    if raw in {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}:
         return "codex"
     if raw.startswith("codex"):
         return "codex"

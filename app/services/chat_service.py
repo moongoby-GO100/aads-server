@@ -3741,7 +3741,7 @@ async def send_message_stream(
         #       구조화 기록 누락으로 재사용/평가/회고 경로가 전부 공백이 됨.
         _effective_model_for_tools = (model_override or intent_result.model or "").lower()
         if (
-            _effective_model_for_tools.startswith(("gpt-5.4", "gpt-5.3-codex"))
+            _effective_model_for_tools.startswith(("gpt-5.5", "gpt-5.4", "gpt-5.3-codex"))
             and not tools_for_api
         ):
             _codex_tools = _registry.get_eager_tools() or _registry.get_tools("all") or []
@@ -3761,7 +3761,7 @@ async def send_message_stream(
         #       구조화 기록 누락으로 재사용/평가/회고 경로가 전부 공백이 됨.
         _effective_model_for_tools = (model_override or intent_result.model or "").lower()
         if (
-            _effective_model_for_tools.startswith(("gpt-5.4", "gpt-5.3-codex"))
+            _effective_model_for_tools.startswith(("gpt-5.5", "gpt-5.4", "gpt-5.3-codex"))
             and not tools_for_api
         ):
             _codex_tools = _registry.get_eager_tools() or _registry.get_tools("all") or []

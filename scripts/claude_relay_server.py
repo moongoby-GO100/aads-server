@@ -1105,6 +1105,7 @@ async def handle_stream(request):
 
 
 _CODEX_MODEL_MAP = {
+    "gpt-5.5": "gpt-5.5",
     "gpt-5": "gpt-5.4", "gpt-5-mini": "gpt-5.4-mini",
     "gpt-5.4": "gpt-5.4", "gpt-5.4-mini": "gpt-5.4-mini",
     "gpt-5.3-codex": "gpt-5.3-codex",
@@ -1137,11 +1138,11 @@ async def handle_codex_stream(request):
     messages_text = body.get("messages_text", "")
     tool_names = body.get("tool_names", [])
     tool_schemas = body.get("tool_schemas", [])
-    model = body.get("model", "gpt-5.4")
+    model = body.get("model", "gpt-5.5")
     session_id = body.get("session_id", "")
     if not messages_text:
         return web.json_response({"error": "messages_text required"}, status=400)
-    codex_model = _CODEX_MODEL_MAP.get(model, "gpt-5.4")
+    codex_model = _CODEX_MODEL_MAP.get(model, "gpt-5.5")
     prompt = messages_text
     if system_prompt:
         prompt = "[SYSTEM]\n" + system_prompt + "\n\n[USER]\n" + messages_text

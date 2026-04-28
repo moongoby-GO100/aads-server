@@ -702,21 +702,21 @@ ${safe_instruction}"
 
         log "  MODEL_FALLBACK job=$job_id model=$current_model cycle=$cycle_num attempt=$((attempt+1))/$total_attempts"
         # Codex CLI Runner 분기 (codex: 접두사, ChatGPT Plus OAuth)
-        # 가용 모델: gpt-5.4, gpt-5.4-mini, gpt-5.3-codex (2026-04-14 실측)
+        # 가용 모델: gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex (2026-04-28 Codex catalog)
         # Pro 전용(gpt-5.4-pro, gpt-5.4-nano, gpt-5.3-codex-spark)은 ChatGPT Plus에서 미지원
         if [[ "$current_model" == codex:* ]]; then
             local codex_model_name="${current_model#codex:}"
             # 가용 모델 유효성 검증
             case "$codex_model_name" in
-                default|gpt-5.4|gpt-5.4-mini|gpt-5.3-codex) ;;
+                default|gpt-5.5|gpt-5.4|gpt-5.4-mini|gpt-5.3-codex) ;;
                 *)
-                    log "  CODEX_INVALID_MODEL job=$job_id model=$codex_model_name → fallback to gpt-5.4"
-                    codex_model_name="gpt-5.4"
+                    log "  CODEX_INVALID_MODEL job=$job_id model=$codex_model_name -> fallback to gpt-5.5"
+                    codex_model_name="gpt-5.5"
                     ;;
             esac
             log "  CODEX_RUNNER job=$job_id model=$codex_model_name"
             local codex_args=(exec --full-auto --ephemeral -C "$workdir")
-            # codex:default → 모델 미지정(기본 gpt-5.4), 그 외 → -m 지정
+            # codex:default -> 모델 미지정(Codex CLI 기본값), 그 외 -> -m 지정
             [[ "$codex_model_name" != "default" ]] && codex_args+=(-m "$codex_model_name")
             timeout "$MAX_RUNTIME" codex "${codex_args[@]}" "$safe_instruction" \
                 < /dev/null > "$output_file" 2> "$err_file" &

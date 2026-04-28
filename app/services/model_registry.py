@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass
@@ -10,12 +11,14 @@ from decimal import Decimal
 from typing import Any, Iterable, Sequence
 
 import asyncpg
+import httpx
 
 from app.core.db_pool import get_pool
 
 logger = logging.getLogger(__name__)
 
 _CACHE_TTL_SECONDS = 30
+_DISCOVERY_TIMEOUT_SECONDS = float(os.getenv("LLM_MODEL_DISCOVERY_TIMEOUT_SECONDS", "8"))
 _cache: dict[str, tuple[Any, float]] = {}
 
 _PROVIDER_ALIASES = {
@@ -106,6 +109,14 @@ def _decimal(value: float | str | None) -> Decimal | None:
     if value is None:
         return None
     return Decimal(str(value))
+
+
+def _json_default(value: Any) -> str:
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
 
 
 _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
@@ -222,6 +233,7 @@ _CODING_MODELS = {
     "gpt-5.4",
     "gpt-5.4-mini",
     "gpt-5.3-codex",
+    "gpt-5.5",
     "o3",
     "o3-mini",
     "o3-pro",
@@ -239,6 +251,7 @@ _DISPLAY_NAME_OVERRIDES = {
     "gpt-5.4": "GPT-5.4 (Codex CLI)",
     "gpt-5.4-mini": "GPT-5.4 Mini (Codex CLI)",
     "gpt-5.3-codex": "GPT-5.3 Codex (Codex CLI)",
+    "gpt-5.5": "GPT-5.5 (Codex CLI)",
     "openrouter-grok-4-fast": "OpenRouter Grok 4 Fast",
     "openrouter-deepseek-v3": "OpenRouter DeepSeek V3",
     "openrouter-mistral-small": "OpenRouter Mistral Small",
@@ -274,7 +287,7 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
         "groq-compound",
     ),
     "openai": ("gpt-4o", "gpt-4o-mini", "gpt-5", "gpt-5-mini", "o3", "o3-mini", "o3-pro"),
-    "codex": ("gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"),
+    "codex": ("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"),
     "deepseek": ("deepseek-chat", "deepseek-reasoner"),
     "openrouter": (
         "openrouter-grok-4-fast",
@@ -370,6 +383,16 @@ def _display_name_for(model_id: str) -> str:
     return " ".join(_titleize(part) for part in parts)
 
 
+def _display_name_for_provider(provider: str, model_id: str) -> str:
+    if provider == "codex":
+        override = _DISPLAY_NAME_OVERRIDES.get(model_id)
+        if override:
+            return override
+    if provider == "openai" and model_id.startswith("gpt-"):
+        return f"GPT-{model_id[4:].replace('-', ' ')}"
+    return _display_name_for(model_id)
+
+
 def _family_for(provider: str, model_id: str) -> str:
     if provider == "anthropic":
         return "claude"
@@ -415,7 +438,7 @@ def _build_template(provider: str, model_id: str) -> ModelTemplate:
     return ModelTemplate(
         provider=provider,
         model_id=model_id,
-        display_name=_display_name_for(model_id),
+        display_name=_display_name_for_provider(provider, model_id),
         family=_family_for(provider, model_id),
         category=category,
         supports_tools=_supports_tools_for(provider),
@@ -428,6 +451,27 @@ def _build_template(provider: str, model_id: str) -> ModelTemplate:
         execution_model_id=execution_model_id,
         execution_base_url=execution_base_url,
     )
+
+
+def _model_capabilities(provider: str, model_id: str, raw: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "tools": _supports_tools_for(provider),
+        "thinking": model_id in _THINKING_MODELS or _category_for(model_id) == "reasoning",
+        "vision": model_id in _VISION_MODELS or _category_for(model_id) == "vision",
+        "coding": model_id in _CODING_MODELS or _category_for(model_id) == "coding" or provider in {"anthropic", "codex"},
+        "raw_generation_methods": (raw or {}).get("supportedGenerationMethods", []),
+    }
+
+
+def _pricing_for(model_id: str) -> dict[str, str]:
+    costs = _MODEL_COSTS.get(model_id)
+    if not costs:
+        return {}
+    return {
+        "input_cost": str(costs[0]) if costs[0] is not None else "",
+        "output_cost": str(costs[1]) if costs[1] is not None else "",
+        "unit": "usd_per_1m_tokens",
+    }
 
 
 _PROVIDER_TEMPLATES: dict[str, tuple[ModelTemplate, ...]] = {
@@ -506,6 +550,256 @@ def _build_key_state(rows: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]
     return state
 
 
+def _is_auto_executable_discovered(provider: str, model_id: str, raw: dict[str, Any] | None = None) -> bool:
+    lowered = model_id.lower()
+    excluded = (
+        "audio",
+        "embedding",
+        "image",
+        "moderation",
+        "realtime",
+        "search",
+        "transcribe",
+        "tts",
+        "whisper",
+    )
+    if any(token in lowered for token in excluded):
+        return False
+    if provider == "openai":
+        return lowered.startswith(("gpt-", "o"))
+    if provider == "gemini":
+        methods = set((raw or {}).get("supportedGenerationMethods") or [])
+        return lowered.startswith("gemini-") and (not methods or "generateContent" in methods)
+    return False
+
+
+def _discovered_model_row(
+    *,
+    provider: str,
+    model_id: str,
+    display_name: str,
+    key_state: dict[str, dict[str, Any]],
+    raw: dict[str, Any] | None = None,
+    source: str,
+) -> dict[str, Any]:
+    provider_state = key_state.get(provider, {})
+    available_key_count = int(provider_state.get("available_key_count", 0))
+    active_key_count = int(provider_state.get("active_key_count", 0))
+    keyless = provider in _KEYLESS_PROVIDERS
+    has_runtime_models = keyless or available_key_count > 0
+    executable = has_runtime_models and _is_auto_executable_discovered(provider, model_id, raw)
+    template = _build_template(provider, model_id)
+    metadata = {
+        "template_provider": provider,
+        "discovered": True,
+        "discovery_source": source,
+        "raw_provider_aliases": sorted(provider_state.get("raw_providers", set())),
+        "active_key_count": active_key_count,
+        "available_key_count": available_key_count,
+        "requires_admin_review": not executable,
+        "execution_backend": template.execution_backend,
+        "execution_model_id": template.execution_model_id,
+        "execution_base_url": template.execution_base_url,
+        "raw": raw or {},
+    }
+    return {
+        "provider": provider,
+        "model_id": model_id,
+        "display_name": display_name or _display_name_for_provider(provider, model_id),
+        "family": _family_for(provider, model_id),
+        "category": _category_for(model_id),
+        "supports_tools": template.supports_tools,
+        "supports_thinking": template.supports_thinking,
+        "supports_vision": template.supports_vision,
+        "supports_coding": template.supports_coding,
+        "input_cost": template.input_cost,
+        "output_cost": template.output_cost,
+        "is_active": executable,
+        "activation_source": "db" if executable else "review_required" if active_key_count else "fallback",
+        "linked_key_name": None if keyless else _pick_linked_key(list(provider_state.get("keys", []))),
+        "metadata": metadata,
+        "execution_model_id": template.execution_model_id,
+        "discovery_source": source,
+        "verification_status": "discovered" if executable else "review_required",
+        "last_verified_at": provider_state.get("last_verified_at"),
+        "capabilities": _model_capabilities(provider, model_id, raw),
+        "pricing": _pricing_for(model_id),
+        "is_selectable": executable,
+        "is_executable": executable,
+    }
+
+
+async def _get_first_provider_key(
+    provider: str,
+    *,
+    excluded_key_name_prefixes: tuple[str, ...] = (),
+    required_value_prefixes: tuple[str, ...] = (),
+) -> str:
+    try:
+        from app.core.llm_key_provider import get_provider_key_records
+
+        key_records = await get_provider_key_records(provider, include_rate_limited=False)
+    except Exception:
+        logger.exception("model_registry.discovery_key_failed", extra={"provider": provider})
+        return ""
+    excluded_prefixes = tuple(prefix.upper() for prefix in excluded_key_name_prefixes)
+    for record in key_records:
+        key_name = str(record.get("key_name") or "").upper()
+        value = str(record.get("value") or "").strip()
+        if not value:
+            continue
+        if excluded_prefixes and key_name.startswith(excluded_prefixes):
+            continue
+        if required_value_prefixes and not value.startswith(required_value_prefixes):
+            continue
+        return value
+    return ""
+
+
+async def _fetch_openai_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    api_key = await _get_first_provider_key("openai")
+    if not api_key:
+        return [], {"status": "skipped", "error": "missing_key"}
+    async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT_SECONDS) as client:
+        response = await client.get(
+            "https://api.openai.com/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    rows = []
+    for item in payload.get("data", []):
+        model_id = str(item.get("id") or "").strip()
+        if model_id:
+            rows.append({"model_id": model_id, "display_name": _display_name_for_provider("openai", model_id), "raw": item})
+    return rows, {"status": "ok", "count": len(rows)}
+
+
+async def _fetch_anthropic_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    api_key = await _get_first_provider_key(
+        "anthropic",
+        excluded_key_name_prefixes=("ANTHROPIC_AUTH_TOKEN",),
+        required_value_prefixes=("sk-ant-api",),
+    )
+    if not api_key:
+        return [], {"status": "skipped", "error": "missing_anthropic_api_key"}
+    async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT_SECONDS) as client:
+        response = await client.get(
+            "https://api.anthropic.com/v1/models?limit=100",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    rows = []
+    for item in payload.get("data", []):
+        model_id = str(item.get("id") or "").strip()
+        if model_id:
+            rows.append({"model_id": model_id, "display_name": item.get("display_name") or _display_name_for(model_id), "raw": item})
+    return rows, {"status": "ok", "count": len(rows)}
+
+
+async def _fetch_gemini_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    api_key = await _get_first_provider_key("gemini")
+    if not api_key:
+        return [], {"status": "skipped", "error": "missing_key"}
+    async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT_SECONDS) as client:
+        response = await client.get("https://generativelanguage.googleapis.com/v1beta/models", params={"key": api_key})
+        response.raise_for_status()
+        payload = response.json()
+    rows = []
+    for item in payload.get("models", []):
+        raw_name = str(item.get("name") or "").strip()
+        model_id = raw_name.removeprefix("models/")
+        if model_id:
+            rows.append({"model_id": model_id, "display_name": item.get("displayName") or _display_name_for_provider("gemini", model_id), "raw": item})
+    return rows, {"status": "ok", "count": len(rows)}
+
+
+async def _fetch_litellm_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    api_key = await _get_first_provider_key("litellm")
+    if not api_key:
+        return [], {"status": "skipped", "error": "missing_key"}
+    base_url = (os.getenv("LITELLM_BASE_URL") or "http://aads-litellm:4000").rstrip("/")
+    async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT_SECONDS) as client:
+        response = await client.get(f"{base_url}/model/info", headers={"Authorization": f"Bearer {api_key}"})
+        response.raise_for_status()
+        payload = response.json()
+    source_rows = payload.get("data") if isinstance(payload, dict) else payload
+    rows = []
+    for item in source_rows or []:
+        model_id = str(item.get("model_name") or item.get("model_id") or item.get("id") or "").strip()
+        if model_id:
+            rows.append({"model_id": model_id, "display_name": _display_name_for_provider("litellm", model_id), "raw": item})
+    return rows, {"status": "ok", "count": len(rows)}
+
+
+async def discover_provider_model_rows(
+    key_rows: Iterable[dict[str, Any]],
+    *,
+    enabled: bool | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if enabled is None:
+        enabled = (os.getenv("LLM_MODEL_DISCOVERY_ENABLED", "1").strip().lower() not in {"0", "false", "no"})
+    if not enabled:
+        return [], [{"provider": "all", "status": "skipped", "error": "disabled", "count": 0}]
+
+    key_state = _build_key_state(key_rows)
+    fetchers = {
+        "openai": _fetch_openai_models,
+        "anthropic": _fetch_anthropic_models,
+        "gemini": _fetch_gemini_models,
+        "litellm": _fetch_litellm_models,
+    }
+    all_rows: list[dict[str, Any]] = []
+    run_results: list[dict[str, Any]] = []
+    for provider, fetcher in fetchers.items():
+        try:
+            raw_rows, result = await fetcher()
+            discovered = [
+                _discovered_model_row(
+                    provider=provider,
+                    model_id=item["model_id"],
+                    display_name=item.get("display_name") or item["model_id"],
+                    key_state=key_state,
+                    raw=item.get("raw") or {},
+                    source=f"{provider}_api",
+                )
+                for item in raw_rows
+            ]
+            all_rows.extend(discovered)
+            run_results.append({
+                "provider": provider,
+                "status": result.get("status", "ok"),
+                "count": len(discovered),
+                "active_count": sum(1 for row in discovered if row.get("is_active")),
+                "error": result.get("error", ""),
+            })
+        except Exception as exc:
+            logger.warning("model_registry.discovery_failed: %s: %s", provider, str(exc)[:200])
+            run_results.append({"provider": provider, "status": "failed", "count": 0, "active_count": 0, "error": str(exc)[:500]})
+    return all_rows, run_results
+
+
+def _merge_model_rows(template_rows: list[dict[str, Any]], discovered_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: dict[tuple[str, str], dict[str, Any]] = {(row["provider"], row["model_id"]): dict(row) for row in template_rows}
+    for row in discovered_rows:
+        key = (row["provider"], row["model_id"])
+        if key not in merged:
+            merged[key] = dict(row)
+            continue
+        existing = merged[key]
+        metadata = _coerce_json_object(existing.get("metadata"))
+        discovered_metadata = _coerce_json_object(row.get("metadata"))
+        metadata["discovered"] = True
+        metadata["discovery_source"] = discovered_metadata.get("discovery_source")
+        metadata["raw"] = discovered_metadata.get("raw", {})
+        existing["metadata"] = metadata
+        existing["last_verified_at"] = existing.get("last_verified_at") or row.get("last_verified_at")
+        existing["capabilities"] = row.get("capabilities") or existing.get("capabilities") or {}
+        existing["pricing"] = existing.get("pricing") or row.get("pricing") or {}
+    return sorted(merged.values(), key=lambda item: (item["provider"], item["family"], item["model_id"]))
+
+
 def build_registry_snapshots(key_rows: Iterable[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     key_state = _build_key_state(key_rows)
     model_rows: list[dict[str, Any]] = []
@@ -556,6 +850,14 @@ def build_registry_snapshots(key_rows: Iterable[dict[str, Any]]) -> tuple[list[d
                     "activation_source": activation_source,
                     "linked_key_name": linked_key_name,
                     "metadata": metadata,
+                    "execution_model_id": template.execution_model_id,
+                    "discovery_source": "template",
+                    "verification_status": "verified" if has_runtime_models else "unknown",
+                    "last_verified_at": state.get("last_verified_at"),
+                    "capabilities": _model_capabilities(provider, template.model_id),
+                    "pricing": _pricing_for(template.model_id),
+                    "is_selectable": has_runtime_models,
+                    "is_executable": has_runtime_models,
                 }
             )
 
@@ -660,7 +962,10 @@ async def _fetch_registry_rows(conn: asyncpg.Connection) -> list[dict[str, Any]]
             SELECT provider, model_id, display_name, family, category,
                    supports_tools, supports_thinking, supports_vision, supports_coding,
                    input_cost, output_cost, is_active, activation_source,
-                   linked_key_name, metadata, updated_at
+                   linked_key_name, metadata, updated_at,
+                   execution_model_id, discovery_source, first_seen_at, last_seen_at,
+                   retired_at, verification_status, last_verified_at, capabilities,
+                   pricing, is_selectable, is_executable
             FROM llm_models
             ORDER BY provider, family, model_id
             """
@@ -692,6 +997,8 @@ async def list_registered_models(*, provider: str | None = None, active_only: bo
             continue
         normalized_row = dict(row)
         normalized_row["metadata"] = _coerce_json_object(normalized_row.get("metadata"))
+        normalized_row["capabilities"] = _coerce_json_object(normalized_row.get("capabilities"))
+        normalized_row["pricing"] = _coerce_json_object(normalized_row.get("pricing"))
         filtered.append(normalized_row)
     return _cache_set(cache_key, filtered)
 
@@ -704,7 +1011,81 @@ async def list_provider_summaries() -> list[dict[str, Any]]:
     pool = get_pool()
     async with pool.acquire() as conn:
         key_rows = await _fetch_key_rows(conn)
+        registry_rows = await _fetch_registry_rows(conn)
     _, provider_rows = build_registry_snapshots(key_rows)
+    if not registry_rows:
+        return _cache_set("provider_summaries", provider_rows)
+
+    aggregates: dict[str, dict[str, Any]] = {}
+    for row in registry_rows:
+        provider = str(row.get("provider") or "").strip()
+        if not provider:
+            continue
+        metadata = _coerce_json_object(row.get("metadata"))
+        aggregate = aggregates.setdefault(
+            provider,
+            {
+                "total_model_count": 0,
+                "active_model_count": 0,
+                "selectable_model_count": 0,
+                "executable_model_count": 0,
+                "discovered_model_count": 0,
+                "review_required_model_count": 0,
+                "last_seen_at": None,
+            },
+        )
+        aggregate["total_model_count"] += 1
+        if row.get("is_active"):
+            aggregate["active_model_count"] += 1
+        if row.get("is_selectable"):
+            aggregate["selectable_model_count"] += 1
+        if row.get("is_executable"):
+            aggregate["executable_model_count"] += 1
+        if metadata.get("discovered") or row.get("discovery_source") not in {None, "", "template"}:
+            aggregate["discovered_model_count"] += 1
+        if row.get("verification_status") == "review_required":
+            aggregate["review_required_model_count"] += 1
+        row_last_seen = row.get("last_seen_at") or row.get("updated_at")
+        if row_last_seen and (aggregate["last_seen_at"] is None or row_last_seen > aggregate["last_seen_at"]):
+            aggregate["last_seen_at"] = row_last_seen
+
+    provider_map = {row["provider"]: dict(row) for row in provider_rows}
+    for provider, aggregate in aggregates.items():
+        summary = provider_map.setdefault(
+            provider,
+            {
+                "provider": provider,
+                "display_name": _PROVIDER_META.get(provider, {}).get("display_name", _display_name_for(provider)),
+                "template_available": False,
+                "requires_admin_review": True,
+                "active_key_count": 0,
+                "available_key_count": 0,
+                "rate_limited_key_count": 0,
+                "verified_key_count": 0,
+                "template_model_count": 0,
+                "last_used_at": None,
+                "last_verified_at": None,
+                "linked_key_name": None,
+                "status": "review_required",
+            },
+        )
+        summary.update(
+            {
+                "total_model_count": aggregate["total_model_count"],
+                "active_model_count": aggregate["active_model_count"],
+                "selectable_model_count": aggregate["selectable_model_count"],
+                "executable_model_count": aggregate["executable_model_count"],
+                "discovered_model_count": aggregate["discovered_model_count"],
+                "review_required_model_count": aggregate["review_required_model_count"],
+                "last_seen_at": aggregate["last_seen_at"].isoformat() if aggregate["last_seen_at"] else None,
+            }
+        )
+        if aggregate["active_model_count"] > 0 and summary.get("status") in {"inactive", "review_required"}:
+            summary["status"] = "active"
+        if aggregate["review_required_model_count"] > 0:
+            summary["requires_admin_review"] = True
+
+    provider_rows = sorted(provider_map.values(), key=lambda row: row["provider"])
     return _cache_set("provider_summaries", provider_rows)
 
 
@@ -764,26 +1145,35 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
     pool = get_pool()
     async with pool.acquire() as conn:
         key_rows = await _fetch_key_rows(conn)
-        model_rows, provider_rows = build_registry_snapshots(key_rows)
+    template_rows, provider_rows = build_registry_snapshots(key_rows)
+    discovered_rows, discovery_runs = await discover_provider_model_rows(key_rows)
+    model_rows = _merge_model_rows(template_rows, discovered_rows)
 
+    async with pool.acquire() as conn:
         try:
             async with conn.transaction():
                 for row in model_rows:
                     metadata = _coerce_json_object(row.get("metadata"))
                     metadata["sync_token"] = sync_token
+                    capabilities = _coerce_json_object(row.get("capabilities"))
+                    pricing = _coerce_json_object(row.get("pricing"))
                     await conn.execute(
                         """
                         INSERT INTO llm_models (
                             provider, model_id, display_name, family, category,
                             supports_tools, supports_thinking, supports_vision, supports_coding,
                             input_cost, output_cost, is_active, activation_source,
-                            linked_key_name, metadata, updated_at
+                            linked_key_name, metadata, execution_model_id, discovery_source,
+                            last_seen_at, retired_at, verification_status, last_verified_at,
+                            capabilities, pricing, is_selectable, is_executable, updated_at
                         )
                         VALUES (
                             $1, $2, $3, $4, $5,
                             $6, $7, $8, $9,
                             $10, $11, $12, $13,
-                            $14, $15::jsonb, NOW()
+                            $14, $15::jsonb, $16, $17,
+                            NOW(), NULL, $18, $19,
+                            $20::jsonb, $21::jsonb, $22, $23, NOW()
                         )
                         ON CONFLICT (provider, model_id)
                         DO UPDATE SET
@@ -800,6 +1190,16 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
                             activation_source = EXCLUDED.activation_source,
                             linked_key_name = EXCLUDED.linked_key_name,
                             metadata = EXCLUDED.metadata,
+                            execution_model_id = EXCLUDED.execution_model_id,
+                            discovery_source = EXCLUDED.discovery_source,
+                            last_seen_at = NOW(),
+                            retired_at = NULL,
+                            verification_status = EXCLUDED.verification_status,
+                            last_verified_at = EXCLUDED.last_verified_at,
+                            capabilities = EXCLUDED.capabilities,
+                            pricing = EXCLUDED.pricing,
+                            is_selectable = EXCLUDED.is_selectable,
+                            is_executable = EXCLUDED.is_executable,
                             updated_at = NOW()
                         """,
                         row["provider"],
@@ -816,18 +1216,29 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
                         row["is_active"],
                         row["activation_source"],
                         row["linked_key_name"],
-                        json.dumps(metadata),
+                        json.dumps(metadata, default=_json_default),
+                        row.get("execution_model_id") or metadata.get("execution_model_id") or row["model_id"],
+                        row.get("discovery_source") or metadata.get("discovery_source") or "template",
+                        row.get("verification_status") or "unknown",
+                        row.get("last_verified_at"),
+                        json.dumps(capabilities, default=_json_default),
+                        json.dumps(pricing, default=_json_default),
+                        bool(row.get("is_selectable", row.get("is_active", False))),
+                        bool(row.get("is_executable", row.get("is_active", False))),
                     )
 
                 await conn.execute(
                     """
                     UPDATE llm_models
                     SET is_active = FALSE,
+                        is_selectable = FALSE,
+                        is_executable = FALSE,
                         activation_source = CASE
                             WHEN activation_source = 'manual' THEN activation_source
                             ELSE 'fallback'
                         END,
                         metadata = COALESCE(metadata, '{}'::jsonb) || '{"retired": true}'::jsonb,
+                        retired_at = COALESCE(retired_at, NOW()),
                         updated_at = NOW()
                     WHERE activation_source <> 'manual'
                       AND COALESCE(metadata->>'sync_token', '') <> $1
@@ -846,11 +1257,29 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
                         "reason": reason,
                         "models_synced": len(model_rows),
                         "providers_seen": [row["provider"] for row in provider_rows],
+                        "discovery": discovery_runs,
                     },
                 )
+                for run in discovery_runs:
+                    await conn.execute(
+                        """
+                        INSERT INTO llm_model_discovery_runs (
+                            provider, status, discovered_count, active_count, error, details, triggered_by, reason
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+                        """,
+                        run.get("provider", "unknown"),
+                        run.get("status", "unknown"),
+                        int(run.get("count", 0) or 0),
+                        int(run.get("active_count", 0) or 0),
+                        run.get("error", ""),
+                        json.dumps(run, default=_json_default),
+                        triggered_by,
+                        reason,
+                    )
         except asyncpg.UndefinedTableError:
             logger.warning("model_registry.sync_missing_table")
             return {"ok": False, "error": "registry_tables_missing", "models_synced": 0, "providers": provider_rows}
 
     invalidate_registry_cache()
-    return {"ok": True, "models_synced": len(model_rows), "providers": provider_rows}
+    return {"ok": True, "models_synced": len(model_rows), "providers": provider_rows, "discovery": discovery_runs}
