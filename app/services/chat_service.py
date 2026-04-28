@@ -1668,6 +1668,14 @@ async def create_session(data: Dict[str, Any]) -> Dict[str, Any]:
 
         current_model = data.get("current_model")
         role_key = (data.get("role_key") or "").strip() or None
+        if not role_key:
+            ws_settings_row = await conn.fetchrow(
+                "SELECT settings FROM chat_workspaces WHERE id = $1",
+                ws_id,
+            )
+            ws_settings = _row_to_dict(ws_settings_row).get("settings") if ws_settings_row else {}
+            if isinstance(ws_settings, dict):
+                role_key = str(ws_settings.get("default_role_key") or "").strip() or None
         row = await conn.fetchrow(
             """
             INSERT INTO chat_sessions (workspace_id, title, current_model, role_key)
@@ -3259,6 +3267,7 @@ async def send_message_stream(
             sp_row = await conn.fetchrow(
                 """
                 SELECT w.id::text AS workspace_id, w.system_prompt, w.name AS workspace_name,
+                       w.settings AS workspace_settings,
                        s.role_key, s.settings AS session_settings
                 FROM chat_workspaces w
                 JOIN chat_sessions s ON s.workspace_id = w.id
@@ -3269,6 +3278,7 @@ async def send_message_stream(
             base_prompt = (sp_row["system_prompt"] if sp_row and sp_row["system_prompt"] else "")
             workspace_name = (sp_row["workspace_name"] if sp_row and sp_row["workspace_name"] else "CEO")
             _session_role_key = (sp_row["role_key"] if sp_row and sp_row["role_key"] else "")
+            _workspace_settings_prefetched = _row_to_dict(sp_row).get("workspace_settings") if sp_row else {}
             _session_settings_prefetched = _row_to_dict(sp_row).get("session_settings") if sp_row else {}
 
             # 3. 세션 히스토리 조회 (#16: 서브쿼리로 ASC 정렬, Python reverse 제거)
@@ -3379,6 +3389,8 @@ async def send_message_stream(
                 _session_settings = _session_settings_prefetched
             if not _session_role_key:
                 _session_role_key = str((_session_settings or {}).get("role_key") or "").strip()
+            if not _session_role_key and isinstance(_workspace_settings_prefetched, dict):
+                _session_role_key = str(_workspace_settings_prefetched.get("default_role_key") or "").strip()
 
         yield f"data: {json.dumps({'type': 'stream_start', 'stream_id': _stream_id, 'execution_id': _execution_id_str, 'html_context_used': _html_context_state.get('html_context_used', False)})}\n\n"
 
