@@ -1706,6 +1706,7 @@ async def _stream_litellm_openai(
     loop_msgs: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}] + clean_msgs
 
     full_text = ""
+    thinking_text = ""
     input_tokens = 0
     output_tokens = 0
 
@@ -1795,8 +1796,15 @@ async def _stream_litellm_openai(
                         if fr:
                             _finish_reason = fr
 
-                        # 텍스트 누적 + 스트리밍 (kimi reasoning_content fallback)
-                        text = delta.get("content") or delta.get("reasoning_content") or ""
+                        reasoning_text = delta.get("reasoning_content") or delta.get("reasoning") or ""
+                        if isinstance(reasoning_text, dict):
+                            reasoning_text = reasoning_text.get("content") or reasoning_text.get("text") or ""
+                        if reasoning_text:
+                            thinking_text += str(reasoning_text)
+                            yield {"type": "thinking", "thinking": str(reasoning_text)}
+
+                        # 텍스트 누적 + 스트리밍. reasoning_content는 사고 이벤트로 분리한다.
+                        text = delta.get("content") or ""
                         if text:
                             _assistant_text += text
                             full_text += text
@@ -1934,6 +1942,7 @@ async def _stream_litellm_openai(
         "cost": str(cost),
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
+        "thinking_summary": thinking_text[:2000] if thinking_text else None,
     }
 
 

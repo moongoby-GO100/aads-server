@@ -1,6 +1,11 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-04-28)
+- **채팅 싱킹박스 대화 버블 노출 패치 완료 (2026-04-28 18:00 KST)**:
+  - 원인: `/chat` 운영 화면은 `ChatStream.tsx`/`ThinkingIndicator.tsx`가 아니라 `src/app/chat/page.tsx`의 인라인 `MessageItem` 렌더러를 사용한다. 따라서 도구박스 하단에 별도 컴포넌트를 만들어도 실제 대화 버블에는 표시되지 않았다.
+  - 대시보드: `ChatMessage.thinking_summary` 타입을 추가하고, 최종 assistant 버블에서 `tools_called` 도구박스 바로 아래에 `thinking_summary/thought_summary` 접이식 사고 과정 박스를 렌더링한다. 저장된 `tools_called` 안의 thinking 이벤트도 `ev.thinking`/`ev.content` 양쪽을 표시한다.
+  - 백엔드: LiteLLM/OpenAI 호환 스트림의 `reasoning_content`를 답변 본문에 섞지 않고 `thinking` SSE 이벤트로 분리해 저장한다. Output Validator 재시도 경로도 thinking 누락 없이 `thinking_summary`에 누적한다.
+  - 검증: `docker exec aads-server python3 -m py_compile /app/app/services/model_selector.py /app/app/services/chat_service.py` 통과, `aads-dashboard npm run build` 통과.
 - **채팅 진행 중 버블 P0 안정화 패치 완료 (2026-04-28 17:47 KST)**:
   - `aads-dashboard/src/app/chat/page.tsx`에서 `streaming_placeholder` 메시지는 800자 초과 긴 메시지 자동 접힘 대상에서 제외했다.
   - `streaming-status.is_streaming=true` 상태에서는 프론트의 180초 타이머가 `waitingBgResponse`를 강제로 끄지 않도록 변경했다. 진행 표시 종료는 서버 `streaming-status`의 `is_streaming/just_completed` 상태 기준으로만 결정한다.

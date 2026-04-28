@@ -4259,6 +4259,7 @@ async def send_message_stream(
                     _retry_response += event.get("content", "")
                     yield f"data: {json.dumps({'type': 'delta', 'content': event['content']})}\n\n"
                 elif etype == "thinking":
+                    thinking_summary += event.get("thinking", "")
                     yield f"data: {json.dumps({'type': 'thinking', 'thinking': event['thinking']})}\n\n"
                 elif etype == "tool_use":
                     tools_called.append({"type": "tool_use", "tool_name": event["tool_name"], "tool_use_id": event.get("tool_use_id", ""), "tool_input": event.get("tool_input", {})})
