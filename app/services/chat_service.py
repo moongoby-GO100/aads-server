@@ -1566,6 +1566,95 @@ _anthropic = get_client()
 
 # ─── Workspace CRUD ───────────────────────────────────────────────────────────
 
+_CORE_ROLE_ORDER = ("CEO", "CTO", "PM", "Developer", "QA", "Ops")
+
+
+def _workspace_project_key(workspace_name: str) -> str:
+    """Extract the project key used by role_profiles.project_scope."""
+    name = (workspace_name or "").upper()
+    match = re.search(r"\[([A-Z0-9]+)\]", name)
+    if match:
+        key = match.group(1)
+    elif "GO100" in name:
+        key = "GO100"
+    elif "NTV2" in name or re.search(r"\bNT\b", name):
+        key = "NTV2"
+    elif "AADS" in name:
+        key = "AADS"
+    elif "KIS" in name:
+        key = "KIS"
+    elif "SF" in name:
+        key = "SF"
+    elif "NAS" in name:
+        key = "NAS"
+    elif "CEO" in name:
+        key = "CEO"
+    else:
+        key = name.strip()
+    return key or "CEO"
+
+
+async def list_workspace_roles(workspace_id: str) -> List[Dict[str, Any]]:
+    """Return DB-backed role options for the selected workspace/project."""
+    async with get_pool().acquire() as conn:
+        ws_row = await conn.fetchrow(
+            "SELECT name FROM chat_workspaces WHERE id = $1",
+            uuid.UUID(workspace_id),
+        )
+        if not ws_row:
+            return []
+
+        project_key = _workspace_project_key(ws_row["name"] or "")
+        table_exists = await conn.fetchval("SELECT to_regclass('public.role_profiles')")
+        if not table_exists:
+            return [{"value": role, "label": role, "display_name_ko": None} for role in _CORE_ROLE_ORDER]
+
+        rows = await conn.fetch(
+            """
+            SELECT
+                role,
+                NULLIF(TRIM(escalation_rules->>'display_name_ko'), '') AS display_name_ko,
+                project_scope,
+                CASE role
+                    WHEN 'CEO' THEN 1
+                    WHEN 'CTO' THEN 2
+                    WHEN 'PM' THEN 3
+                    WHEN 'Developer' THEN 4
+                    WHEN 'QA' THEN 5
+                    WHEN 'Ops' THEN 6
+                    ELSE 50
+                END AS sort_order
+            FROM role_profiles
+            WHERE role = ANY($2::text[])
+               OR project_scope IS NULL
+               OR $1 = ANY(project_scope)
+               OR ($1 = 'NTV2' AND 'NT' = ANY(project_scope))
+            ORDER BY sort_order, lower(role)
+            """,
+            project_key,
+            list(_CORE_ROLE_ORDER),
+        )
+
+    seen: set[str] = set()
+    roles: List[Dict[str, Any]] = []
+    for row in rows:
+        role = str(row["role"] or "").strip()
+        if not role or role in seen:
+            continue
+        seen.add(role)
+        display_name_ko = str(row["display_name_ko"] or "").strip() or None
+        roles.append(
+            {
+                "value": role,
+                "role": role,
+                "label": f"{role} / {display_name_ko}" if display_name_ko else role,
+                "display_name_ko": display_name_ko,
+                "project_scope": list(row["project_scope"] or []),
+            }
+        )
+    return roles
+
+
 async def list_workspaces() -> List[Dict[str, Any]]:
     async with get_pool().acquire() as conn:
         rows = await conn.fetch(

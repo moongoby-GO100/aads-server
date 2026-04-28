@@ -1,6 +1,12 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-04-28)
+- **좌측 채팅 세션 역할 지정 UX 배포 완료 (2026-04-28 18:49 KST)**:
+  - 백엔드: `GET /api/v1/chat/workspaces/{workspace_id}/roles` 추가. `role_profiles.project_scope` 기준으로 워크스페이스/프로젝트별 역할 목록을 반환하며, 한글 표시명은 `escalation_rules.display_name_ko`에서 읽는다.
+  - 프런트: `aads-dashboard/src/components/chat/Sidebar.tsx`의 각 세션 행에 역할 지정/변경 드롭다운을 추가했다. 저장은 기존 `PUT /chat/sessions/{session_id}`의 `role_key`로 수행된다.
+  - DB 실측: `role_profiles` 17건, 한글 표시명 포함. AADS 전용 `PromptContextHarnessEngineer / 프롬프트·컨텍스트·하네스엔지니어` 포함.
+  - 배포: `bash /root/aads/aads-dashboard/deploy.sh` blue-green 성공, 활성 슬롯 `green`, `aads-dashboard-green` healthy. 컨테이너 내부 `.next` 번들에서 `getChatWorkspaceRoles`/역할 지정 UI 문자열 확인.
+  - 검증: `python3.11 -m py_compile app/routers/chat.py app/services/chat_service.py` 통과, `npm run build` 통과, `npx eslint src/components/chat/Sidebar.tsx` 통과, `/health` 200. 전체 `npm run lint`는 기존 누적 오류 255건으로 실패 상태 유지.
 - **채팅 싱킹박스 대화 버블 노출 패치 완료 (2026-04-28 18:00 KST)**:
   - 원인: `/chat` 운영 화면은 `ChatStream.tsx`/`ThinkingIndicator.tsx`가 아니라 `src/app/chat/page.tsx`의 인라인 `MessageItem` 렌더러를 사용한다. 따라서 도구박스 하단에 별도 컴포넌트를 만들어도 실제 대화 버블에는 표시되지 않았다.
   - 대시보드: `ChatMessage.thinking_summary` 타입을 추가하고, 최종 assistant 버블에서 `tools_called` 도구박스 바로 아래에 `thinking_summary/thought_summary` 접이식 사고 과정 박스를 렌더링한다. 저장된 `tools_called` 안의 thinking 이벤트도 `ev.thinking`/`ev.content` 양쪽을 표시한다.

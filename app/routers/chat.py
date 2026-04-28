@@ -55,6 +55,15 @@ async def get_workspaces():
     return await svc.list_workspaces()
 
 
+@router.get("/chat/workspaces/{workspace_id}/roles", tags=["chat-workspace"])
+async def get_workspace_roles(workspace_id: UUID):
+    """워크스페이스/프로젝트 기준 DB 역할 목록."""
+    roles = await svc.list_workspace_roles(str(workspace_id))
+    if not roles:
+        raise _NOT_FOUND("workspace")
+    return {"roles": roles, "total": len(roles)}
+
+
 @router.post("/chat/workspaces", response_model=WorkspaceOut, status_code=201, tags=["chat-workspace"])
 async def create_workspace(req: WorkspaceCreate):
     """워크스페이스 생성."""
