@@ -156,14 +156,26 @@ async def get_messages(
     cursor: Optional[str] = Query(None, description="created_at ISO 문자열 (이전 메시지 로딩 시)"),
     offset: Optional[int] = Query(None, ge=0),
     sort: str = Query("asc", regex="^(asc|desc)$"),
+    include_streaming: bool = Query(False, description="진행 중 streaming_placeholder 포함 여부"),
 ):
     """메시지 목록 — cursor 기반 페이지네이션 (offset 레거시 호환 유지)."""
     # 레거시 offset 모드: offset이 명시적으로 전달되거나, sort=desc(배열 기대)인 경우
     # 프론트엔드 6곳에서 sort=desc + ChatMessage[] 배열을 기대하므로 반드시 배열 반환
     if offset is not None or (sort == "desc" and cursor is None):
-        return await svc.list_messages(str(session_id), limit=limit, offset=offset or 0, sort=sort)
+        return await svc.list_messages(
+            str(session_id),
+            limit=limit,
+            offset=offset or 0,
+            sort=sort,
+            include_streaming=include_streaming,
+        )
     # cursor 모드: PaginatedMessagesOut 반환 (항상 ASC)
-    return await svc.list_messages_cursor(str(session_id), limit=limit, cursor=cursor)
+    return await svc.list_messages_cursor(
+        str(session_id),
+        limit=limit,
+        cursor=cursor,
+        include_streaming=include_streaming,
+    )
 
 
 @router.post("/chat/messages/send", tags=["chat-message"])

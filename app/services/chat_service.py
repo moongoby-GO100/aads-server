@@ -1789,16 +1789,23 @@ async def _session_has_running_execution(conn: asyncpg.Connection, session_id: u
         )
     )
 
-async def list_messages(session_id: str, limit: int = 200, offset: int = 0, sort: str = "asc") -> List[Dict[str, Any]]:
+async def list_messages(
+    session_id: str,
+    limit: int = 200,
+    offset: int = 0,
+    sort: str = "asc",
+    include_streaming: bool = False,
+) -> List[Dict[str, Any]]:
     async with get_pool().acquire() as conn:
         order = "DESC" if sort == "desc" else "ASC"
-        # 활성 여부 판별 (스트리밍 중이면 placeholder API 응답에서 제외 — SSE가 실시간 제공)
+        # 활성 여부 판별. 기본은 SSE 중복 방지를 위해 placeholder를 숨기되,
+        # 재진입/복구 화면은 include_streaming=true로 DB의 진행 버블을 받을 수 있다.
         _sid = uuid.UUID(session_id)
         _is_active = (
             session_id in _streaming_state and not _streaming_state[session_id].get("completed", False)
         ) or await _session_has_running_execution(conn, _sid)
         _intent_filter = "AND intent IS DISTINCT FROM '_deleted_duplicate'"
-        if _is_active:
+        if _is_active and not include_streaming:
             # 활성 스트리밍 중 → placeholder 제외 (프론트 SSE 버블과 중복 방지)
             _intent_filter += " AND intent IS DISTINCT FROM 'streaming_placeholder'"
         # Pipeline Runner 자동 알림 메시지 제외 (intent=NULL이라도 콘텐츠 패턴으로 필터)
@@ -1904,17 +1911,19 @@ async def list_messages_cursor(
     session_id: str,
     limit: int = 50,
     cursor: Optional[str] = None,
+    include_streaming: bool = False,
 ) -> Dict[str, Any]:
     """Cursor 기반 메시지 조회 — 최근 N건 또는 cursor 이전 N건 (항상 ASC 반환)."""
     async with get_pool().acquire() as conn:
         sid = uuid.UUID(session_id)
         fetch_limit = limit + 1  # has_more 판별용 1건 추가
-        # 활성 여부 판별 (스트리밍 중이면 placeholder API 응답에서 제외 — SSE가 실시간 제공)
+        # 활성 여부 판별. 기본은 SSE 중복 방지를 위해 placeholder를 숨기되,
+        # 재진입/복구 화면은 include_streaming=true로 DB의 진행 버블을 받을 수 있다.
         _is_active = (
             session_id in _streaming_state and not _streaming_state[session_id].get("completed", False)
         ) or await _session_has_running_execution(conn, sid)
         _extra_filter = ""
-        if _is_active:
+        if _is_active and not include_streaming:
             _extra_filter = " AND intent IS DISTINCT FROM 'streaming_placeholder'"
         # 자동 메시지 필터 — pipeline_c/runner_response/system_trigger는 UI에서 접혀있어
         # 자동 메시지 비율이 높은 세션에서 실제 대화가 안 보이는 문제 방지
