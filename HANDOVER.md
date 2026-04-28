@@ -128,3 +128,8 @@
 - Backend: `app/api/project_docs.py`가 5분 메모리 캐시 외에 `/tmp/aads_project_docs_cache.json` 파일 캐시를 저장/복원하고, 강제 스캔 시 `delta.new/updated/removed/unchanged`를 계산한다.
 - Frontend: `aads-dashboard/src/app/docs/page.tsx`가 `localStorage(aads.docs.scanResult.v1)`의 기존 목록을 즉시 렌더링한 뒤 백그라운드로 최신 목록을 갱신한다.
 - 검증: `docker exec aads-server python3 -m py_compile /app/app/api/project_docs.py`, `npx eslint src/app/docs/page.tsx`, 컨테이너 직접 호출 기준 문서 1,431건 및 2회차 `cache_hit=True` 확인.
+
+## AADS-CHAT-STREAM-PLACEHOLDER (2026-04-28 17:26 KST)
+- 진행 중 버블 미표시 원인을 재확인했다. 백엔드는 `streaming_placeholder`와 Redis stream을 생성하지만, 프론트의 폴링 최신 메시지 조회가 `waitingBg=true`일 때도 `include_streaming=true` 없이 `/chat/messages`를 호출해 placeholder 복구 분기가 작동하지 않을 수 있었다.
+- Frontend: `aads-dashboard/src/app/chat/page.tsx`의 polling `rawLatest` 조회에 `_waitingBg ? "&include_streaming=true" : ""`를 추가했다. SSE attach가 늦거나 끊겨도 waiting background 상태에서는 DB placeholder를 받아 진행 버블을 유지한다.
+- 검증: 변경 diff는 단일 URL 옵션 추가. `npx eslint src/app/chat/page.tsx`와 `npx tsc --noEmit --pretty false`는 기존 누적 오류(admin API 타입 누락, page.tsx 기존 lint 오류)로 실패했고, 이번 수정 라인 신규 오류는 확인되지 않았다.
