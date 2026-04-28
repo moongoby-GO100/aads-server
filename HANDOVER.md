@@ -1,6 +1,10 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-04-28)
+- **채팅 진행 중 버블 P0 안정화 패치 완료 (2026-04-28 17:47 KST)**:
+  - `aads-dashboard/src/app/chat/page.tsx`에서 `streaming_placeholder` 메시지는 800자 초과 긴 메시지 자동 접힘 대상에서 제외했다.
+  - `streaming-status.is_streaming=true` 상태에서는 프론트의 180초 타이머가 `waitingBgResponse`를 강제로 끄지 않도록 변경했다. 진행 표시 종료는 서버 `streaming-status`의 `is_streaming/just_completed` 상태 기준으로만 결정한다.
+  - 검증: `git diff --check -- src/app/chat/page.tsx` 통과, `npm run build` 통과. `npx eslint src/app/chat/page.tsx`는 기존 누적 9 error/21 warning으로 실패 상태 유지.
 - **LLM 최신모델 자동 업데이트 및 GPT-5.5 반영 완료**:
   - `migrations/059_llm_model_discovery.sql`로 `llm_models`에 discovery/execution/verification/pricing/capabilities 컬럼을 추가하고 `llm_model_discovery_runs` 이력 테이블을 도입했다.
   - `app/services/model_registry.py`가 OpenAI/Gemini/LiteLLM catalog를 운영 컨테이너에서 조회해 DB 레지스트리에 병합한다. 최종 startup 기준 OpenAI 115개, Gemini 50개, LiteLLM 76개 발견. Anthropic은 현재 OAuth 토큰만 있어 `missing_anthropic_api_key` skip으로 기록한다.
