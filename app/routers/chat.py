@@ -306,14 +306,15 @@ async def get_streaming_status(session_id: UUID):
                        te.updated_at,
                        (te.updated_at > NOW() - interval '5 minutes') AS updated_recently,
                        te.completed_at,
-                       COALESCE(am.content, pm.content) AS partial_content
+                       COALESCE(am.content, pm.content) AS partial_content,
+                       COALESCE(am.tools_called, pm.tools_called) AS tools_called
                 FROM chat_sessions s
                 LEFT JOIN chat_turn_executions te
                   ON te.id = s.current_execution_id
                 LEFT JOIN chat_messages am
                   ON am.id = te.assistant_message_id
                 LEFT JOIN LATERAL (
-                    SELECT content
+                    SELECT content, tools_called
                     FROM chat_messages
                     WHERE execution_id = te.id
                       AND intent = 'streaming_placeholder'
@@ -324,15 +325,35 @@ async def get_streaming_status(session_id: UUID):
                 """,
                 session_id,
             )
+
+            def _extract_tool_progress(tools_called) -> tuple[int, str]:
+                """tools_called JSON에서 tool_count/last_tool 산출 (BUG #3).
+                asyncpg는 jsonb를 str로 반환할 수 있어 list/str 양쪽 처리."""
+                if not tools_called:
+                    return 0, ""
+                try:
+                    import json as _json
+                    arr = tools_called
+                    if isinstance(arr, (str, bytes)):
+                        arr = _json.loads(arr)
+                    if not isinstance(arr, list):
+                        return 0, ""
+                    tool_uses = [t for t in arr if isinstance(t, dict) and t.get("type") == "tool_use"]
+                    last_tool = tool_uses[-1].get("tool_name", "") if tool_uses else ""
+                    return len(tool_uses), last_tool
+                except Exception:
+                    return 0, ""
+
             if execution_row and execution_row["execution_id"]:
                 if execution_row["status"] in ("running", "retrying"):
                     _partial = execution_row["partial_content"] or ""
+                    _tc, _lt = _extract_tool_progress(execution_row["tools_called"])
                     return {
                         "is_streaming": True,
                         "just_completed": False,
                         "content_length": len(_partial),
-                        "tool_count": 0,
-                        "last_tool": "",
+                        "tool_count": _tc,
+                        "last_tool": _lt,
                         "partial_content": _partial,
                         "execution_id": execution_row["execution_id"],
                         "last_event_id": execution_row["last_event_id"],
@@ -342,23 +363,25 @@ async def get_streaming_status(session_id: UUID):
                     and execution_row["updated_recently"]
                 )
                 if _finished_recently:
+                    _tc, _lt = _extract_tool_progress(execution_row["tools_called"])
                     return {
                         "is_streaming": False,
                         "just_completed": True,
                         "content_length": len(execution_row["partial_content"] or ""),
                         "token_count": 0,
-                        "tool_count": 0,
-                        "last_tool": "",
+                        "tool_count": _tc,
+                        "last_tool": _lt,
                         "execution_id": execution_row["execution_id"],
                         "last_event_id": execution_row["last_event_id"],
                     }
 
             row = await conn.fetchrow(
-                "SELECT content FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at > NOW() - interval '5 minutes' ORDER BY created_at DESC LIMIT 1",
+                "SELECT content, tools_called FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at > NOW() - interval '5 minutes' ORDER BY created_at DESC LIMIT 1",
                 session_id,
             )
             if row:
-                return {"is_streaming": True, "just_completed": False, "content_length": len(row["content"] or ""), "tool_count": 0, "last_tool": "", "partial_content": row["content"] or "", "execution_id": None, "last_event_id": None}
+                _tc, _lt = _extract_tool_progress(row["tools_called"])
+                return {"is_streaming": True, "just_completed": False, "content_length": len(row["content"] or ""), "tool_count": _tc, "last_tool": _lt, "partial_content": row["content"] or "", "execution_id": None, "last_event_id": None}
             # 5분 초과 stale placeholder 자동 정리
             await conn.execute(
                 "UPDATE chat_messages SET intent = 'interrupted' WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at <= NOW() - interval '5 minutes'",
