@@ -124,6 +124,7 @@ services:
     volumes:
       # ★ 소스 볼륨 마운트: 호스트 수정 → 컨테이너 즉시 반영 (docker cp 불필요)
       - /root/aads/aads-server/app:/app/app:rw
+      - /root/aads/aads-server/docs:/app/docs:rw
       - /root/aads/aads-server/mcp_servers:/app/mcp_servers:rw
       - /root/aads/aads-server/migrations:/app/migrations:rw
       - /root/aads/aads-server/scripts:/app/scripts:rw
