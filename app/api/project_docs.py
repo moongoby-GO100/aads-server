@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from pathlib import Path
@@ -20,6 +21,7 @@ logger = structlog.get_logger()
 # ── 캐시 ──
 _cache: dict = {"data": None, "ts": 0}
 CACHE_TTL = 300  # 5분
+PERSISTENT_CACHE_FILE = Path(os.getenv("PROJECT_DOCS_CACHE_FILE", "/tmp/aads_project_docs_cache.json"))
 
 # ── 서버/프로젝트 경로 매핑 ──
 SERVER_CONFIG = {
@@ -69,6 +71,77 @@ SERVER_CONFIG = {
 }
 
 EXTENSIONS = {".md", ".txt", ".html", ".json", ".yaml", ".yml", ".py", ".sh", ".sql"}
+
+
+def _load_persistent_cache() -> Optional[dict]:
+    """프로세스 재시작 후에도 이전 문서 목록을 즉시 재사용한다."""
+    if _cache["data"]:
+        return _cache["data"]
+    try:
+        if not PERSISTENT_CACHE_FILE.exists():
+            return None
+        data = json.loads(PERSISTENT_CACHE_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or data.get("status") != "ok":
+            return None
+        _cache["data"] = data
+        _cache["ts"] = int(data.get("scanned_at") or 0)
+        return data
+    except Exception as e:
+        logger.warning("project_docs_cache_load_failed", path=str(PERSISTENT_CACHE_FILE), error=str(e))
+        return None
+
+
+def _save_persistent_cache(data: dict) -> None:
+    """스캔 결과를 파일 캐시에 저장한다. 실패해도 API 응답은 유지한다."""
+    try:
+        PERSISTENT_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        PERSISTENT_CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        logger.warning("project_docs_cache_save_failed", path=str(PERSISTENT_CACHE_FILE), error=str(e))
+
+
+def _file_key(doc: dict) -> tuple[str, str]:
+    return (doc.get("base_path", ""), doc.get("path", ""))
+
+
+def _file_signature(doc: dict) -> tuple[int, int]:
+    return (int(doc.get("size") or 0), int(doc.get("modified") or 0))
+
+
+def _previous_project(previous: Optional[dict], project: str) -> Optional[dict]:
+    if not previous:
+        return None
+    for item in previous.get("projects") or []:
+        if item.get("project") == project:
+            return item
+    return None
+
+
+def _attach_delta(current: dict, previous: Optional[dict]) -> dict:
+    """기존 목록과 비교해 이번 스캔에서 실제 변경된 파일 수를 표시한다."""
+    prev_files = previous.get("files", []) if previous else []
+    prev_map = {_file_key(doc): doc for doc in prev_files}
+    curr_map = {_file_key(doc): doc for doc in current.get("files", [])}
+
+    new_count = 0
+    updated_count = 0
+    unchanged_count = 0
+    for key, doc in curr_map.items():
+        prev_doc = prev_map.get(key)
+        if not prev_doc:
+            new_count += 1
+        elif _file_signature(prev_doc) != _file_signature(doc):
+            updated_count += 1
+        else:
+            unchanged_count += 1
+
+    current["delta"] = {
+        "new": new_count,
+        "updated": updated_count,
+        "removed": max(0, len(prev_map) - len(curr_map.keys() & prev_map.keys())),
+        "unchanged": unchanged_count,
+    }
+    return current
 
 
 async def _run_cmd(cmd: list[str], timeout: float = 10) -> str:
@@ -190,7 +263,7 @@ def _classify(name: str, path: str) -> str:
     return "doc"
 
 
-async def _scan_project(project: str, config: dict) -> dict:
+async def _scan_project(project: str, config: dict, previous: Optional[dict] = None) -> dict:
     """프로젝트 1개 스캔."""
     host = config["host"]
     all_docs = []
@@ -218,22 +291,31 @@ async def _scan_project(project: str, config: dict) -> dict:
             continue
         seen.add(key)
         deduped.append(d)
-    return {
+    return _attach_delta({
         "project": project,
         "host": host or "localhost",
         "total": len(deduped),
         "files": deduped,
-    }
+    }, previous)
 
 
 @router.get("/project-docs/scan")
 async def scan_all_docs(force: bool = Query(False, description="캐시 무시하고 재스캔")):
-    """전 서버 문서 스캔 (캐시 5분)."""
-    now = time.time()
-    if not force and _cache["data"] and (now - _cache["ts"]) < CACHE_TTL:
-        return _cache["data"]
+    """전 서버 문서 스캔.
 
-    tasks = [_scan_project(proj, cfg) for proj, cfg in SERVER_CONFIG.items()]
+    - 일반 호출: 5분 메모리 캐시 우선, 프로세스 재시작 후에는 파일 캐시 우선.
+    - 강제 호출: 기존 캐시와 비교해 new/updated/removed만 delta로 표시한다.
+    """
+    now = time.time()
+    previous = _load_persistent_cache()
+    if not force and previous and (now - _cache["ts"]) < CACHE_TTL:
+        resp = dict(previous)
+        resp["cache_hit"] = True
+        resp["cache_age_sec"] = int(now - _cache["ts"])
+        resp["cache_mode"] = "memory" if _cache["data"] is previous else "file"
+        return resp
+
+    tasks = [_scan_project(proj, cfg, _previous_project(previous, proj)) for proj, cfg in SERVER_CONFIG.items()]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     projects = []
@@ -250,9 +332,18 @@ async def scan_all_docs(force: bool = Query(False, description="캐시 무시하
         "total": total,
         "projects": projects,
         "scanned_at": int(now),
+        "cache_hit": False,
+        "cache_mode": "incremental" if previous else "full",
+        "delta": {
+            "new": sum((p.get("delta") or {}).get("new", 0) for p in projects),
+            "updated": sum((p.get("delta") or {}).get("updated", 0) for p in projects),
+            "removed": sum((p.get("delta") or {}).get("removed", 0) for p in projects),
+            "unchanged": sum((p.get("delta") or {}).get("unchanged", 0) for p in projects),
+        },
     }
     _cache["data"] = resp
     _cache["ts"] = now
+    _save_persistent_cache(resp)
     return resp
 
 
