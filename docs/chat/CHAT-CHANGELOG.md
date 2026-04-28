@@ -4,6 +4,22 @@ _v1.0 | 2026-04-02 | 최초 작성_
 
 ## 변경 이력 (최신순)
 
+### 2026-04-28
+
+| 커밋 | 변경 | 구분 |
+|------|------|------|
+| `b24b47f` | **BUG #3**: streaming-status DB fallback에서 tool_count/last_tool 산출 (tools_called JSON parse) | 🐛 Backend |
+| `56ed27c` (dashboard) | **Patch A+B**: URL 재진입 시 SSE 도구/사고/스트리밍 누락 해결. attachExecutionReplay 18종 SSE 핸들러 + partial_content 즉시 표시 | 🐛 Frontend |
+
+증상: `https://aads.newtalk.kr/chat#{session_id}` 같은 진행 중 세션 재진입 시 도구 카드/사고 블록/스트리밍이 보이지 않고 빈 버블만 표시되던 문제. 백엔드는 18종 SSE를 정상 발행 중이었으나 attachExecutionReplay가 1/4(delta/heartbeat/done)만 처리해 정보 드롭. 또 streaming-status가 in-memory state 없을 때 tool_count=0/last_tool=""을 하드코딩 반환해 진입 시점 도구 진행 상태도 미표시.
+
+해결:
+- Backend: tools_called JSON에서 tool_use 카운트와 마지막 도구명 산출 (running/just_completed/placeholder-only 3개 분기)
+- Frontend Patch A: status.partial_content를 즉시 setStreamBuf, status.tool_count/last_tool를 즉시 setToolStatus
+- Frontend Patch B: attachExecutionReplay에 stream_start/stream_reset/tool_use/tool_result/thinking/yellow_limit/model_info/sdk_*/error + done 핸들러 추가 (sendMessage 메인 루프와 동등)
+
+영향: 다른 워커/브라우저에서 진행 중 세션을 URL로 열 때 즉시 "🔧 X 실행 중..." + 도구 카드 + 사고 블록 + 스트리밍 텍스트 모두 정상 표시. SSE-STREAMING-ARCHITECTURE.md v2.1로 버전업.
+
 ### 2026-04-24
 
 - 운영 조치: `claude-relay` 전역 동시성은 Pipeline Runner와 별개로 관리하며, live systemd override 기준 `max_concurrent=5`로 고정했다.

@@ -1,6 +1,6 @@
 # SSE Streaming Architecture — AADS CEO Chat
 
-_v2.0 | 2026-03-27_
+_v2.1 | 2026-04-28_
 
 ## 프록시 체인
 CEO 브라우저 → Cloudflare(120s) → Nginx(600s) → FastAPI → Anthropic API
@@ -16,6 +16,43 @@ CEO 브라우저 → Cloudflare(120s) → Nginx(600s) → FastAPI → Anthropic 
 4. Server heartbeat_pump: 독립 asyncio.Task, 3s/2s
 5. Queue 기반 백그라운드: 클라이언트 끊김과 무관하게 응답 완료
 6. Invisible Recovery: stream-resume(5회,120s) → polling → waitingBg(30s)
+7. **Re-attach Full SSE Replay (v2.1)** — URL 재진입/세션 전환 시 attachExecutionReplay 가
+   18종 SSE 이벤트(delta/heartbeat/done + tool_use/tool_result/thinking/stream_start/
+   stream_reset/yellow_limit/model_info/sdk_*/error)를 모두 처리. 재진입 시 도구 카드/
+   사고 블록/스트리밍 텍스트가 sendMessage 메인 루프와 동등하게 보임.
+
+## SSE 이벤트 18종 (백엔드 → 프론트엔드)
+| Type | 의미 | Producer |
+|------|------|---------|
+| stream_start | 실행 시작 알림 + execution_id | chat_service.send_message_stream |
+| model_info | 모델명 | model_selector._stream_anthropic |
+| delta | 텍스트 토큰 | model_selector (Claude/LiteLLM) |
+| thinking | Extended Thinking 사고 토큰 | model_selector._stream_anthropic |
+| tool_use | 도구 호출 (이름+입력) | model_selector tool loop |
+| tool_result | 도구 실행 결과 | model_selector tool loop |
+| heartbeat | 연결 유지 (+ tool_count/last_tool 메타) | chat_service._heartbeat_pump |
+| stream_reset | 응답 재검증 → 텍스트 초기화 | chat_service contradiction guard |
+| yellow_limit | 쓰기 도구 연속 한도 경고 | model_selector |
+| interrupt_applied | CEO 인터럽트 LLM 반영됨 | model_selector |
+| sdk_session/sdk_complete | Agent SDK 진입/종료 | chat_service Agent SDK 경로 |
+| diff_preview | Yellow tool diff 승인 요청 | tool_executor |
+| message_done | legacy 종료 마커 | chat_service |
+| done | 정상 종료 + 비용/토큰 통계 | chat_service |
+| error | 에러 (recoverable 플래그) | 전 경로 |
+
+## 진입 경로별 SSE 핸들러
+| 경로 | 위치 | 처리 이벤트 |
+|------|------|------------|
+| 신규 메시지 전송 | aads-dashboard `sendMessage` (page.tsx:2700~) | 18종 전부 |
+| 진행중 세션 URL 재진입 | aads-dashboard `attachExecutionReplay` (page.tsx:1322~) | **v2.1부터 18종 전부** (이전엔 3종만) |
+| stream-resume (끊김 복구) | `/chat/sessions/{id}/stream-resume` → frontend resume 핸들러 (page.tsx:3100~) | 18종 |
+
+## streaming-status API (재진입 우선)
+재진입 시 `GET /chat/sessions/{id}/streaming-status` 응답:
+- `is_streaming` / `just_completed` / `recovered`
+- `partial_content` — 진행 중 텍스트 (즉시 streamBuf 주입, v2.1)
+- `tool_count` / `last_tool` — `tools_called` JSON에서 산출 (v2.1, 이전엔 0/"")
+- `execution_id` / `last_event_id` — re-attach용
 
 ## 타임아웃 정렬표
 | 구간 | 값 |
@@ -33,5 +70,8 @@ CEO 브라우저 → Cloudflare(120s) → Nginx(600s) → FastAPI → Anthropic 
 2. AI 에이전트 컨텍스트 초과 → SSE와 무관, 긴 세션에서 발생
 
 ## 버전 이력
+| 버전 | 일자 | 변경 |
+|------|------|------|
 | v1.0 | 2026-03-27 | 초기 생성 |
 | v2.0 | 2026-03-27 | 7건 추가 수정, heartbeat 패딩 |
+| **v2.1** | **2026-04-28** | **Layer 7 추가: Re-attach Full SSE Replay (Patch A+B+BUG#3)**.<br/>이전엔 attachExecutionReplay가 delta/heartbeat/done 3종만 처리해 URL 재진입 시 도구/사고/스트리밍 모두 누락. streaming-status도 tool_count/last_tool 하드코딩 0 반환. 모두 해소. |
