@@ -1063,6 +1063,10 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/kakao-bot/msgbot/webhook",
     "/api/v1/kakao-bot/respond",
     "/api/v1/kakao-bot/agent",
+    "/api/v1/devices/android/manifest",
+    "/api/v1/devices/android/install",
+    "/api/v1/devices/android/download",
+    "/api/v1/devices/android/source.zip",
     "/api/v1/ops/hot-reload",  # 내부 hot-reload (127.0.0.1 전용)
     "/api/v1/ops/active-streams",  # 내부 스트림 drain 감지 (deploy.sh 전용)
 )

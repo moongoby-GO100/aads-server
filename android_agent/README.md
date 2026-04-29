@@ -14,12 +14,31 @@ APK-oriented implementation under `android_agent/`.
 
 ## Pairing
 
+Server-side install helpers are exposed by AADS:
+
+- Install page: `https://aads.newtalk.kr/api/v1/devices/android/install`
+- APK download: `https://aads.newtalk.kr/api/v1/devices/android/download`
+- Source ZIP fallback: `https://aads.newtalk.kr/api/v1/devices/android/source.zip`
+- Manifest: `https://aads.newtalk.kr/api/v1/devices/android/manifest`
+
+Create a per-device pairing payload from an authenticated admin session:
+
+```bash
+curl -X POST https://aads.newtalk.kr/api/v1/devices/android/pairing \
+  -H "Authorization: Bearer $AADS_ADMIN_JWT" \
+  -H "Content-Type: application/json" \
+  -d '{"label":"CEO phone","expires_hours":24}'
+```
+
+The response contains a one-time-visible `pairing_payload` and `full_ws_url`.
+Paste either value into the app's QR/manual input hook.
+
 On first launch:
 
 1. Confirm or edit the server URL. Default:
    `wss://aads.newtalk.kr/api/v1/devices/ws`
-2. Use the generated `agent_id` or regenerate it.
-3. Enter the pairing token manually.
+2. Use the generated `agent_id` or paste the server-issued value.
+3. Enter the pairing token manually or paste the full pairing payload.
 4. Optionally paste a QR payload into the QR input hook.
 5. Save pairing and start the foreground service.
 
@@ -109,8 +128,14 @@ permits it.
 From this directory, the expected debug APK command is:
 
 ```bash
-./gradlew :app:assembleDebug
+./build_debug_apk.sh
 ```
 
 If no Gradle wrapper is available, use an installed Gradle compatible with
 Android Gradle Plugin 8.6.1.
+
+The build script copies the debug APK to:
+
+```text
+android_agent/dist/aads-agent-debug.apk
+```

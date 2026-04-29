@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Set
 
 from fastapi import WebSocket
@@ -129,7 +129,7 @@ class DeviceManager:
             return
         stored.status = result.get("status", "success")  # type: ignore[assignment]
         stored.data = result.get("data")
-        stored.completed_at = datetime.utcnow()
+        stored.completed_at = datetime.now(timezone.utc)
         event = self._pending_commands.get(command_id)
         if event:
             event.set()
@@ -137,7 +137,7 @@ class DeviceManager:
     def update_heartbeat(self, agent_id: str) -> None:
         conn = self._devices.get(agent_id)
         if conn:
-            conn.info.connected_at = datetime.utcnow()
+            conn.info.connected_at = datetime.now(timezone.utc)
 
     def add_stream_subscriber(self, agent_id: str, ws: WebSocket) -> None:
         if agent_id not in self._streaming_subscribers:
