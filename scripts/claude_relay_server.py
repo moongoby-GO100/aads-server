@@ -270,6 +270,50 @@ def _short_session(session_id):
     return (session_id or "default")[:8]
 
 
+_CLIENT_DISCONNECT_MARKERS = (
+    "cannot write to closing transport",
+    "connection reset by peer",
+    "broken pipe",
+    "transport is closing",
+    "connection lost",
+    "client disconnected",
+)
+
+
+def _is_client_disconnect_error(exc):
+    text = str(exc or "").lower()
+    if isinstance(exc, (ConnectionResetError, BrokenPipeError)):
+        return True
+    return any(marker in text for marker in _CLIENT_DISCONNECT_MARKERS)
+
+
+async def _stream_prepare(response, request):
+    try:
+        return await response.prepare(request)
+    except Exception as exc:
+        if _is_client_disconnect_error(exc):
+            raise ConnectionResetError(str(exc))
+        raise
+
+
+async def _stream_write(response, payload):
+    try:
+        return await response.write(payload)
+    except Exception as exc:
+        if _is_client_disconnect_error(exc):
+            raise ConnectionResetError(str(exc))
+        raise
+
+
+async def _stream_write_eof(response):
+    try:
+        return await response.write_eof()
+    except Exception as exc:
+        if _is_client_disconnect_error(exc):
+            raise ConnectionResetError(str(exc))
+        raise
+
+
 def _resolve_cli_command(kind):
     configured = (CLAUDE_BIN if kind == "claude" else CODEX_BIN).strip()
     if kind == "claude" and configured in ("", "claude") and _CLAUDE_WRAPPER.exists():
@@ -990,7 +1034,14 @@ async def handle_stream(request):
                 "Cache-Control": "no-cache",
                 "X-Accel-Buffering": "no",
             })
-            await response.prepare(request)
+            try:
+                await _stream_prepare(response, request)
+            except ConnectionResetError:
+                logger.info(
+                    "CLI response prepare skipped: client already closed aads=%s",
+                    aads_session_id[:8],
+                )
+                return response
 
             if use_stream_json_input:
                 if is_resume:
@@ -1072,20 +1123,20 @@ async def handle_stream(request):
                     elif evt_type == "user":
                         event = _annotate_claude_event(event, aads_session_id)
                         line_to_write = json.dumps(event).encode("utf-8")
-                    await response.write(line_to_write + b"\n")
+                    await _stream_write(response, line_to_write + b"\n")
             except ConnectionResetError:
                 logger.info("CLI relay client disconnected: aads=%s resume=%s", aads_session_id[:8], is_resume)
             except asyncio.TimeoutError:
                 logger.error("CLI timeout (600s): aads=%s", aads_session_id[:8])
                 try:
-                    await response.write(json.dumps({"type": "error", "content": "CLI timeout (600s)"}).encode() + b"\n")
+                    await _stream_write(response, json.dumps({"type": "error", "content": "CLI timeout (600s)"}).encode() + b"\n")
                 except ConnectionResetError:
                     logger.info("CLI timeout write skipped: client already closed aads=%s", aads_session_id[:8])
                 proc.kill()
             except Exception as e:
                 logger.error("Stream error: %s", e)
                 try:
-                    await response.write(json.dumps({"type": "error", "content": str(e)}).encode() + b"\n")
+                    await _stream_write(response, json.dumps({"type": "error", "content": str(e)}).encode() + b"\n")
                 except ConnectionResetError:
                     logger.info("CLI stream error write skipped: client already closed aads=%s", aads_session_id[:8])
             finally:
@@ -1119,7 +1170,7 @@ async def handle_stream(request):
                     _save_session_map()
                     logger.info("Session mapped: aads=%s -> cli=%s", aads_session_id[:8], captured_cli_session_id[:8])
             try:
-                await response.write_eof()
+                await _stream_write_eof(response)
             except ConnectionResetError:
                 logger.info("CLI write_eof skipped: client already closed aads=%s", aads_session_id[:8])
             return response
@@ -1264,7 +1315,14 @@ async def handle_codex_stream(request):
             response = web.StreamResponse(status=200, reason="OK", headers={
                 "Content-Type": "application/x-ndjson",
                 "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-            await response.prepare(request)
+            try:
+                await _stream_prepare(response, request)
+            except ConnectionResetError:
+                logger.info(
+                    "Codex response prepare skipped: client already closed session=%s",
+                    (session_id or "default")[:8],
+                )
+                return response
             codex_home = _build_codex_home(session_id, mcp_cfg=mcp_template)
             _codex_cwd = _resolve_codex_cwd(codex_project)
             cmd = list(codex_meta.get("argv", []) or []) + [
@@ -1313,7 +1371,7 @@ async def handle_codex_stream(request):
                     evt_type = event.get("type", "")
                     tool_evt = _parse_codex_tool_event(event, session_id=session_id)
                     if tool_evt:
-                        await response.write(json.dumps(tool_evt).encode() + b"\n")
+                        await _stream_write(response, json.dumps(tool_evt).encode() + b"\n")
                         continue
                     text = ""
                     if evt_type == "item.completed":
@@ -1349,8 +1407,10 @@ async def handle_codex_stream(request):
                     if text:
                         for i in range(0, len(text), 40):
                             chunk = text[i:i + 40]
-                            await response.write(
-                                json.dumps({"type": "assistant", "subtype": "text", "text": chunk}).encode() + b"\n")
+                            await _stream_write(
+                                response,
+                                json.dumps({"type": "assistant", "subtype": "text", "text": chunk}).encode() + b"\n",
+                            )
                             await asyncio.sleep(0.015)
                         full_text += text
                     elif evt_type == "turn.completed":
@@ -1362,14 +1422,14 @@ async def handle_codex_stream(request):
             except asyncio.TimeoutError:
                 logger.error("Codex timeout (300s): model=%s", codex_model)
                 try:
-                    await response.write(json.dumps({"type": "error", "content": "Codex CLI timeout"}).encode() + b"\n")
+                    await _stream_write(response, json.dumps({"type": "error", "content": "Codex CLI timeout"}).encode() + b"\n")
                 except ConnectionResetError:
                     logger.info("Codex timeout write skipped: client already closed session=%s", (session_id or "default")[:8])
                 proc.kill()
             except Exception as e:
                 logger.error("Codex stream error: %s", e)
                 try:
-                    await response.write(json.dumps({"type": "error", "content": str(e)}).encode() + b"\n")
+                    await _stream_write(response, json.dumps({"type": "error", "content": str(e)}).encode() + b"\n")
                 except ConnectionResetError:
                     logger.info("Codex stream error write skipped: client already closed session=%s", (session_id or "default")[:8])
             finally:
@@ -1388,18 +1448,21 @@ async def handle_codex_stream(request):
                         else:
                             logger.info("Codex stderr: %s", stderr_text[:500])
             try:
-                await response.write(json.dumps({
+                await _stream_write(response, json.dumps({
                     "type": "result", "result": full_text,
                     "input_tokens": input_tokens, "output_tokens": output_tokens, "model": model,
                 }).encode() + b"\n")
             except ConnectionResetError:
                 logger.info("Codex result write skipped: client already closed session=%s", (session_id or "default")[:8])
             try:
-                await response.write_eof()
+                await _stream_write_eof(response)
             except ConnectionResetError:
                 logger.info("Codex write_eof skipped: client already closed session=%s", (session_id or "default")[:8])
             return response
     except Exception as e:
+        if _is_client_disconnect_error(e):
+            logger.info("Codex handler client disconnected: session=%s", (session_id or "default")[:8])
+            return web.Response(status=499)
         logger.error("Codex handler error: %s", e)
         return web.json_response({"error": str(e)}, status=500)
 

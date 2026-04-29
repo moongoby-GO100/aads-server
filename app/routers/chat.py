@@ -5,6 +5,7 @@ AADS-170: CEO Chat-First 시스템 — 채팅 라우터
 """
 from __future__ import annotations
 
+import re
 import structlog
 from typing import List, Optional
 from uuid import UUID
@@ -43,6 +44,18 @@ logger = structlog.get_logger(__name__)
 
 def _NOT_FOUND(name: str) -> HTTPException:
     return HTTPException(status_code=404, detail=f"{name} not found")
+
+
+_CODEX_RECONNECT_NOTICE_RE = re.compile(
+    r"^\s*⚠️\s*_GPT-[^_\n]+\(Codex CLI\)\s+연결이\s+일시\s+중단되어\s+"
+    r"\d+초\s+후\s+동일\s+모델로\s+다시\s+이어갑니다\s+\(\d+/\d+\)\._\s*",
+    re.MULTILINE,
+)
+
+
+def _strip_codex_reconnect_notice(content: str) -> str:
+    """Codex transport notices are UI/system noise, not user intent."""
+    return _CODEX_RECONNECT_NOTICE_RE.sub("", content or "").strip()
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -206,7 +219,7 @@ async def send_message(request: Request):
     if "multipart/form-data" in content_type:
         form = await request.form()
         session_id_str = str(form.get("session_id", ""))
-        content = str(form.get("content", ""))
+        content = _strip_codex_reconnect_notice(str(form.get("content", "")))
         model_override = form.get("model") or form.get("model_override") or None
         reply_to_id = str(form.get("reply_to_id")) if form.get("reply_to_id") else None
         idempotency_key = str(form.get("idempotency_key")) if form.get("idempotency_key") else None
@@ -251,7 +264,7 @@ async def send_message(request: Request):
         from app.models.chat import MessageSendRequest
         req = MessageSendRequest(**body)
         session_id_str = str(req.session_id)
-        content = req.content
+        content = _strip_codex_reconnect_notice(req.content)
         model_override = req.model_override
         attachments = req.attachments
         reply_to_id = str(req.reply_to_id) if req.reply_to_id else None

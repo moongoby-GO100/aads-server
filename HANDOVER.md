@@ -1,6 +1,12 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-04-28)
+- **L3 Role 프롬프트 전문성 강화 DB 반영 완료 (2026-04-29 08:55 KST)**:
+  - 신규 마이그레이션: `migrations/065_strengthen_l3_role_prompts.sql` 추가 및 운영 DB 적용 완료.
+  - 적용 결과: `prompt_assets` L3 활성 40건 유지, 평균 본문 길이 283자 → 390자, 최대 820자. 핵심 역할 10개에는 판단 기준/필수 확인/작업 절차/산출물/검증/에스컬레이션 구조를 반영했다.
+  - 강화 대상: `CTO`, `PM`, `Developer`, `QA`, `SRE`, `SecurityPrivacyOfficer`, `RiskComplianceOfficer`, `DataEngineer`, `PromptContextHarnessEngineer`, `JudgeEvaluator` 및 AADS/GO100/NTV2 핵심 오버레이.
+  - `role_profiles.escalation_rules`에 `quality_rubric_version=l3-role-rubric-v1`, `requires_evidence=true`, `requires_verification_before_done=true`를 추가했다.
+  - 샘플 매칭 검증: AADS+CTO, AADS+PromptContextHarnessEngineer, GO100+RiskComplianceOfficer/DataEngineer, NTV2+SecurityPrivacyOfficer/UXProductDesigner 모두 공통 역할 + 프로젝트 오버레이 2단 매칭 확인.
 - **좌측 채팅 세션 역할 지정 UX 배포 완료 (2026-04-28 18:49 KST)**:
   - 백엔드: `GET /api/v1/chat/workspaces/{workspace_id}/roles` 추가. `role_profiles.project_scope` 기준으로 워크스페이스/프로젝트별 역할 목록을 반환하며, 한글 표시명은 `escalation_rules.display_name_ko`에서 읽는다.
   - 프런트: `aads-dashboard/src/components/chat/Sidebar.tsx`의 각 세션 행에 역할 지정/변경 드롭다운을 추가했다. 저장은 기존 `PUT /chat/sessions/{session_id}`의 `role_key`로 수행된다.
@@ -148,3 +154,99 @@
 - 진행 중 버블 미표시 원인을 재확인했다. 백엔드는 `streaming_placeholder`와 Redis stream을 생성하지만, 프론트의 폴링 최신 메시지 조회가 `waitingBg=true`일 때도 `include_streaming=true` 없이 `/chat/messages`를 호출해 placeholder 복구 분기가 작동하지 않을 수 있었다.
 - Frontend: `aads-dashboard/src/app/chat/page.tsx`의 polling `rawLatest` 조회에 `_waitingBg ? "&include_streaming=true" : ""`를 추가했다. SSE attach가 늦거나 끊겨도 waiting background 상태에서는 DB placeholder를 받아 진행 버블을 유지한다.
 - 검증: 변경 diff는 단일 URL 옵션 추가. `npx eslint src/app/chat/page.tsx`와 `npx tsc --noEmit --pretty false`는 기존 누적 오류(admin API 타입 누락, page.tsx 기존 lint 오류)로 실패했고, 이번 수정 라인 신규 오류는 확인되지 않았다.
+## 2026-04-29 09:03 KST - L1 Global prompt governance 강화
+
+- 추가: `migrations/066_strengthen_l1_global_prompts.sql`
+- 목적: L1 Global 4개 에셋을 운영 규칙 수준으로 확장하고 `global-layer-governance` 신규 추가
+- 운영 DB 적용: `prompt_assets.layer_id=1` 활성 5건, 평균 643자
+- 컴파일러 검증: CEO/task_query/gpt-5.5/PromptEngineer 샘플에서 L1 5건 모두 `applied_assets` 선택 확인
+- 주의: 실제 채팅 provenance row는 다음 채팅 실행부터 신규 L1 5건으로 기록됨
+
+## 2026-04-29 09:19 KST - CTO L3 role prompt scope 정리
+
+- 추가: `migrations/067_refine_cto_role_prompts.sql`
+- 목적: 공통 `role-cto-strategist`에서 6개 프로젝트 직접 열거를 제거하고, 프로젝트 전문성은 CTO 오버레이로 분리
+- 운영 DB 적용: 공통 CTO 1건 업데이트, `project-role-aads-cto` 갱신, `project-role-go100-cto`/`project-role-ntv2-cto` 신규 추가
+- 검증: 공통 CTO 본문에서 `6개 프로젝트|AADS, KIS, GO100, SF, NTV2, NAS` 패턴 0건, AADS/GO100/NTV2 샘플 매칭에서 각각 공통 CTO + 프로젝트 CTO 오버레이 선택 확인
+- 주의: 실제 채팅 provenance row는 CTO 역할이 지정된 다음 메시지부터 신규 CTO 에셋 조합으로 기록됨
+
+## 2026-04-29 09:34 KST - L2 Project prompt governance 강화
+
+- 추가: `migrations/068_strengthen_l2_project_prompts.sql`
+- 목적: CEO 통합지시 L2 신규 추가, 프로젝트별 서버/경로 계약 정정, AADS/GO100/KIS/NTV2/SF/NAS L2 완료 기준 강화
+- 운영 DB 적용: `prompt_assets.layer_id=2` 활성 8건, 평균 721자, 최소 596자, 최대 884자
+- 경로 보정: `/srv/newtalk-v2`, `/root/webapp` 구식 경로 패턴 0건 확인. KIS/GO100=`/root/kis-autotrade-v4`, SF=`/data/shortflow`, NTV2=`/var/www/newtalk`, AADS=`/root/aads/aads-server`/`/root/aads/aads-dashboard` 기준 반영
+- 컴파일러 매칭 검증: CEO는 `project-ceo-orchestration-context`, AADS는 `project-aads-context`, KIS/GO100/SF/NTV2/NAS는 각 프로젝트 L2 + `project-remote-access-contract` 매칭 확인
+- 주의: 실제 채팅 provenance row는 각 워크스페이스의 다음 메시지부터 신규 L2 에셋 조합으로 기록됨
+
+## 2026-04-29 09:52 KST - Project UX role overlays 보강
+
+- 추가: `migrations/069_seed_project_ux_role_overlays.sql`
+- 목적: 공통 `UXProductDesigner / UX·제품디자이너` 역할에 AADS/SF/KIS/NAS 전용 L3 프로젝트 오버레이를 추가하고, NAS에도 역할 드롭다운 노출 범위를 확장
+- 운영 DB 적용: 신규 UX 오버레이 4건 추가, `role_profiles.role='UXProductDesigner'` project_scope를 `{AADS,SF,NTV2,GO100,KIS,NAS}`로 보정
+- 검증: L3 활성 46건, UX 프로젝트 오버레이 6건. AADS/SF/KIS/NAS/GO100/NTV2 각각 `workspace + design_review + UXProductDesigner` 샘플에서 프로젝트별 UX 오버레이 1건씩 매칭 확인
+- 주의: 역할 API는 인증 필요로 무토큰 호출 시 401이 정상. 실제 채팅 provenance row는 UXProductDesigner 역할이 지정된 다음 메시지부터 신규 오버레이 조합으로 기록됨
+
+## 2026-04-29 10:02 KST - UXProductDesigner L3 전문 역할 정리
+
+- 추가: `migrations/070_refine_ux_designer_role_prompts.sql`
+- 목적: 공통 `role-ux-product-designer`에서 프로젝트별 문구를 제거하고, Product UX Architect / Interaction Designer / UI System Designer / UX Writer / Accessibility·Mobile / Design QA Auditor 하위 전문성을 명시
+- 운영 DB 적용: 공통 UX 프롬프트 1,635자로 확장, workspace_scope를 `{AADS,SF,NTV2,GO100,KIS,NAS}`로 정합화, 프로젝트별 UX 오버레이 6건 표준 구조로 재작성
+- GO100 분리: `project-role-go100-ux` 신규 추가, 기존 `project-role-go100-ux-growth`는 `GrowthContentStrategist` 전용으로 role_scope 분리
+- 검증: 공통 UX 본문에서 `AADS|GO100|NTV2|KIS|SF|NAS` 프로젝트명 패턴 0건. AADS/GO100/KIS/NAS/NTV2/SF 각각 `role-ux-product-designer + project-role-*-ux` 2건 매칭 확인. GO100 Growth는 `role-growth-content + project-role-go100-ux-growth`, GO100 UX는 `role-ux-product-designer + project-role-go100-ux`로 분리 확인
+- 주의: `chat_sessions.role_key='UXProductDesigner'` 세션은 현재 0건이므로 실제 provenance 기록은 세션 역할 지정 후 다음 메시지부터 생성됨. API 헬스체크 `http://localhost:8100/health` 200 확인
+
+## 2026-04-29 10:21 KST - PM L3 role prompt 전문성 보강
+
+- 추가: `migrations/071_refine_pm_role_prompts.sql`
+- 목적: `PM / 프로젝트매니저`를 `PM / 제품·프로젝트매니저`로 재정의하고, 공통 PM은 요구사항 구조화·우선순위·역할 배정·acceptance criteria·릴리즈 리스크 검수 책임으로 확장
+- 운영 DB 적용: PM 관련 L3 활성 에셋 7건(`role-pm-coordinator` + AADS/GO100/KIS/NAS/NTV2/SF PM 오버레이), 평균 596자, 최소 478자, 최대 1,110자
+- role profile 보정: `role_profiles.role='PM'`의 `display_name_ko`를 `제품·프로젝트매니저`로 변경하고 `quality_rubric_version='pm-product-project-manager-v1'`, acceptance criteria/역할 배정/릴리즈 리스크 체크 플래그 추가
+- 검증: AADS/GO100/KIS/NAS/NTV2/SF 각각 `role=PM`, `intent=status_check`, `model=gpt-5.5` 샘플에서 `role-pm-coordinator + project-role-*-pm` 2건 매칭 확인
+- 주의: 실제 채팅 provenance row는 PM 역할이 지정된 세션의 다음 메시지부터 신규 PM 에셋 조합으로 기록됨
+
+## 2026-04-29 11:09 KST - VibeCodingLead 역할 및 역할 활용 팁 반영
+
+- 추가: `migrations/072_seed_vibe_coding_lead_role.sql`
+- 목적: 비개발자 CEO/제품 오너의 자연어 지시를 제품 요구사항, 안전한 작업 지시서, 역할 배정, 검증 기준으로 변환하는 `VibeCodingLead / AI 제품구현 총괄·바이브코딩 리드` 역할 신설
+- 운영 DB 적용: L3 활성 에셋 8건(`role-vibe-coding-lead` + CEO/AADS/GO100/KIS/NAS/NTV2/SF 오버레이), 평균 536자
+- role profile 추가: `role_profiles.role='VibeCodingLead'`, `display_name_ko='AI 제품구현 총괄·바이브코딩 리드'`, `project_scope={AADS,KIS,GO100,SF,NTV2,NAS,CEO,VIBE}`, `when_to_use`/`how_to_instruct`/`instruction_template` 메타데이터 저장
+- API/UI 보강: `/chat/workspaces/{workspace_id}/roles` 응답에 역할 활용 팁 메타데이터를 포함하고, 좌측 세션 역할 셀렉터에서 선택된 역할 옆 `?` 툴팁으로 도움말 표시 가능하게 패치
+- 검증: CEO/AADS/GO100/KIS/NAS/NTV2/SF 각각 `role=VibeCodingLead`, `intent=product`, `model=gpt-5.5` 샘플에서 공통 역할 + 프로젝트 오버레이 2건 매칭 확인. VIBE 워크스페이스는 공통 역할 1건 매칭 확인. `docker exec aads-server python3 -m py_compile /app/app/services/chat_service.py`, `npx eslint src/components/chat/Sidebar.tsx` 통과
+- 주의: DB 역할은 즉시 사용 가능. API/UI 코드 변경은 실행 프로세스/대시보드 번들 반영이 필요하며, 실제 채팅 provenance row는 세션에 `VibeCodingLead` 역할 지정 후 다음 메시지부터 생성됨
+
+## 2026-04-29 12:19 KST - Ops L3 role prompt 전문성 보강
+
+- 추가: `migrations/073_refine_ops_developer_qa_judge_roles.sql`
+- 목적: `Ops / 운영담당자`를 `Ops / 배포·운영엔지니어`로 재정의하고, SRE와 역할 경계를 분리. Ops는 릴리즈 실행, runbook, 승인 조건, 롤백, 운영 보고를 책임지도록 보강
+- 운영 DB 적용: Ops 관련 L3 활성 에셋 7건(`role-ops-monitor` + AADS/GO100/KIS/NAS/NTV2/SF Ops 오버레이), 평균 579자, 최소 405자, 최대 1,202자
+- role profile 보정: `role_profiles.role='Ops'`의 `system_prompt_ref='prompt_assets:role-ops-monitor'`, `display_name_ko='배포·운영엔지니어'`, `quality_rubric_version='ops-release-operations-v1'`, health/active task/rollback/verification 플래그 추가
+- 검증: AADS/GO100/KIS/NAS/NTV2/SF 각각 `role=Ops`, `intent=deploy` 샘플에서 `role-ops-monitor + project-role-*-ops` 2건 매칭 확인. API 헬스체크 `http://localhost:8100/health` 200 확인
+- 주의: 현재 `chat_sessions.role_key='Ops'` 세션과 최근 24시간 Ops provenance는 0건이므로 실제 provenance 기록은 세션 역할 지정 후 다음 메시지부터 생성됨. 재시작은 불필요
+
+## 2026-04-29 12:36 KST - Developer/QA/JudgeEvaluator 역할 경계 및 프로젝트 오버레이 보강
+
+- 추가: `migrations/074_refine_developer_qa_judge_roles.sql`
+- 목적: `Developer`는 구현, `QA`는 재현 가능한 검증, `JudgeEvaluator`는 독립 승인/조건부 승인/반려 판정으로 역할 경계를 분리하고 6개 프로젝트 모두에 전용 L3 오버레이를 부여
+- 운영 DB 적용: 공통 L3 3건 갱신(`role-developer-implementer`, `role-qa-verifier`, `role-judge-evaluator`), 프로젝트 오버레이 18건 UPSERT, 기존 `project-role-ntv2-qa-judge` 혼합 오버레이 비활성화
+- role profile 보정: `Developer=구현 엔지니어`, `QA=품질검증 엔지니어`, `JudgeEvaluator=독립 평가·검수관`으로 표시명과 `when_to_use`/`how_to_instruct` 메타데이터 추가
+- 검증: AADS/GO100/KIS/NAS/NTV2/SF 각각 Developer/QA/JudgeEvaluator 샘플에서 공통 역할 + 프로젝트 오버레이 2건씩 매칭 확인. 관련 활성 L3 에셋 21건, 평균 381자. API 헬스체크 `http://localhost:8100/health` 200 확인
+- 주의: DB 에셋 변경이라 재시작은 불필요. 실제 provenance 기록은 해당 역할이 지정된 세션의 다음 메시지부터 생성됨
+
+## 2026-04-29 12:49 KST - CEO PromptContextHarnessEngineer L3 scope 핫픽스
+
+- 추가: `migrations/075_fix_ceo_prompt_context_harness_scope.sql`
+- 목적: CEO 통합지시 세션에서 `PromptContextHarnessEngineer` 역할을 선택했는데 L3가 빠지는 문제 수정
+- 원인: `role-prompt-context-harness-engineer`가 `workspace_scope={AADS}` 및 제한된 `intent_scope`만 갖고 있어 `workspace=CEO`/일부 intent에서 매칭되지 않음
+- 운영 DB 적용: 공통 `role-prompt-context-harness-engineer`에 `CEO` workspace와 `*` intent 추가, `project-role-ceo-prompt-context-harness` 신규 추가, `role_profiles.role='PromptContextHarnessEngineer'`에 `CEO` project_scope 및 provenance 검증 메타데이터 추가
+- 검증: CEO + `PromptContextHarnessEngineer` + `status_check` + `gpt-5.5` 샘플에서 L3 2건(`role-prompt-context-harness-engineer`, `project-role-ceo-prompt-context-harness`) 매칭 확인. `aa433b41-0ad2-421c-ae7c-bac4806035cc` 최신 provenance는 L1 5/L2 2/L3 2/L4 1/L5 2, `fallback_used=false`, compile_error 없음. API 헬스체크 `http://localhost:8100/health` 200 확인
+- 주의: 실제 CEO 현재 세션 provenance는 다음 메시지부터 신규 L3 조합으로 기록됨. 재시작은 불필요
+
+## 2026-04-29 12:57 KST - Prompt provenance 기반 상태 답변 규칙 보강
+
+- 추가: `migrations/076_enforce_prompt_provenance_status_answers.sql`
+- 목적: 시스템 프롬프트/역할 프롬프트 적용 여부 질문에서 모델이 워크스페이스 고정 정체성 문구나 이전 답변 본문으로 오판하지 않고 `compiled_prompt_provenance`를 최종 근거로 답하게 함
+- 운영 DB 적용: `global-layer-governance`에 시스템 프롬프트 적용 판정/충돌 처리 규칙 추가, `intent-status-check`에 프롬프트 적용 상태 조회 절차 추가
+- 지정 세션 확인: `ed08553d-a842-4967-8867-00e82ddd2eba` 최신 provenance는 `2026-04-29 12:32 KST`, workspace=`GO100`, role=`VibeCodingLead`, `system_prompt_chars=22873`, applied assets 11건, compile_error 없음
+- 검증: GO100 + `VibeCodingLead` + `status_check` + `claude-sonnet-4-6` 샘플 매칭에서 L1 5건(`global-layer-governance` 1,328자 포함), L2 2건, L3 2건, L4 1건(`intent-status-check` 862자), L5 1건 선택 확인. API 헬스체크 `http://localhost:8100/health` 200 확인
+- 주의: 기존 provenance 행은 컴파일 당시 스냅샷이라 과거 chars가 남는 것이 정상. 신규 보강 규칙은 다음 컴파일/다음 메시지부터 provenance에 반영됨. 재시작은 불필요

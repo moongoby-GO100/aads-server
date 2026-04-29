@@ -1614,6 +1614,7 @@ async def list_workspace_roles(workspace_id: str) -> List[Dict[str, Any]]:
             SELECT
                 role,
                 NULLIF(TRIM(escalation_rules->>'display_name_ko'), '') AS display_name_ko,
+                escalation_rules,
                 project_scope,
                 CASE role
                     WHEN 'CEO' THEN 1
@@ -1629,6 +1630,7 @@ async def list_workspace_roles(workspace_id: str) -> List[Dict[str, Any]]:
                OR project_scope IS NULL
                OR $1 = ANY(project_scope)
                OR ($1 = 'NTV2' AND 'NT' = ANY(project_scope))
+               OR $1 = 'CEO'
             ORDER BY sort_order, lower(role)
             """,
             project_key,
@@ -1643,6 +1645,12 @@ async def list_workspace_roles(workspace_id: str) -> List[Dict[str, Any]]:
             continue
         seen.add(role)
         display_name_ko = str(row["display_name_ko"] or "").strip() or None
+        escalation_rules = row["escalation_rules"] or {}
+        if isinstance(escalation_rules, str):
+            try:
+                escalation_rules = json.loads(escalation_rules)
+            except json.JSONDecodeError:
+                escalation_rules = {}
         roles.append(
             {
                 "value": role,
@@ -1650,6 +1658,9 @@ async def list_workspace_roles(workspace_id: str) -> List[Dict[str, Any]]:
                 "label": f"{role} / {display_name_ko}" if display_name_ko else role,
                 "display_name_ko": display_name_ko,
                 "project_scope": list(row["project_scope"] or []),
+                "when_to_use": escalation_rules.get("when_to_use"),
+                "how_to_instruct": escalation_rules.get("how_to_instruct"),
+                "instruction_template": escalation_rules.get("instruction_template"),
             }
         )
     return roles
