@@ -107,6 +107,61 @@ async def test_call_stream_routes_dynamic_qwen_model_to_direct_provider(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_call_stream_executes_deepseek_compatibility_alias_as_canonical(monkeypatch):
+    captured = {}
+
+    async def _fake_get_db_key(*_args, **_kwargs):
+        return ""
+
+    async def _fake_available_models():
+        return {"deepseek-v4-pro"}
+
+    async def _fake_registry_row(_model_id: str, provider=None):
+        return None
+
+    async def _fake_litellm_openai(
+        model,
+        system_prompt,
+        messages,
+        tools=None,
+        session_id=None,
+        *,
+        base_url=None,
+        api_key=None,
+        display_model=None,
+        cost_model=None,
+    ):
+        captured["request_model"] = model
+        captured["display_model"] = display_model
+        captured["cost_model"] = cost_model
+        assert system_prompt
+        assert messages[-1]["role"] == "user"
+        yield {"type": "done", "model": display_model, "cost": "0", "input_tokens": 1, "output_tokens": 1}
+
+    monkeypatch.setattr(model_selector, "_get_db_key", _fake_get_db_key)
+    monkeypatch.setattr(model_selector, "get_available_model_ids", _fake_available_models)
+    monkeypatch.setattr(model_selector, "_get_registered_model_row", _fake_registry_row)
+    monkeypatch.setattr(model_selector, "_stream_litellm_openai", _fake_litellm_openai)
+
+    events = [
+        event
+        async for event in model_selector.call_stream(
+            IntentResult(intent="research", model="deepseek-reasoner", use_tools=False, tool_group=""),
+            "system prompt",
+            [{"role": "user", "content": "DeepSeek alias routing"}],
+            model_override="deepseek-reasoner",
+        )
+    ]
+
+    assert captured == {
+        "request_model": "deepseek-v4-pro",
+        "display_model": "deepseek-reasoner",
+        "cost_model": "deepseek-reasoner",
+    }
+    assert events[-1]["model"] == "deepseek-reasoner"
+
+
+@pytest.mark.asyncio
 async def test_gemini_route_forwards_session_id_and_active_project(monkeypatch):
     captured = {}
 

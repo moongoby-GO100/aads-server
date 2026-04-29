@@ -635,6 +635,8 @@ def get_model_for_override(model_override: str) -> str:
         "gemini-3.1-pro-preview":  "gemini-3.1-pro-preview",
         "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite-preview",
         "gemma-3-27b-it":    "gemma-3-27b-it",
+        "deepseek-v4-flash": "deepseek-v4-flash",
+        "deepseek-v4-pro":   "deepseek-v4-pro",
         "deepseek-chat":     "deepseek-chat",
         "deepseek-reasoner": "deepseek-reasoner",
         "groq-llama-70b":    "groq-llama-70b",

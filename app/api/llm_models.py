@@ -146,6 +146,13 @@ async def get_provider_summary() -> dict[str, Any]:
         "providers": summaries,
         "total": len(summaries),
         "active_provider_count": sum(1 for row in summaries if row.get("active_model_count", 0) > 0),
+        "runtime_executable_provider_count": sum(1 for row in summaries if row.get("runtime_executable")),
+        "auto_discovery_supported_provider_count": sum(1 for row in summaries if row.get("auto_discovery_supported")),
+        "template_runtime_only_providers": [
+            row["provider"]
+            for row in summaries
+            if row.get("runtime_executable") and not row.get("auto_discovery_supported")
+        ],
         "rate_limited_provider_count": sum(1 for row in summaries if row.get("status") == "rate_limited"),
         "review_required_providers": [row["provider"] for row in summaries if row.get("requires_admin_review")],
         "last_sync_at": last_sync["created_at"] if last_sync else None,

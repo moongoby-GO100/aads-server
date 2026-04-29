@@ -551,6 +551,8 @@ _COST_MAP = {
     "groq-gpt-oss-120b":     (0.0,   0.0),
     "groq-compound":         (0.0,   0.0),
     # DeepSeek
+    "deepseek-v4-flash":     (0.28,  0.42),
+    "deepseek-v4-pro":       (0.55,  2.19),
     "deepseek-chat":         (0.28,  0.42),
     "deepseek-reasoner":     (0.55,  2.19),
     # OpenRouter
@@ -655,7 +657,15 @@ _CODEX_MODEL_DISPLAY = {
 }
 
 # DeepSeek 모델 (LiteLLM 경유)
-_DEEPSEEK_MODELS = {"deepseek-chat", "deepseek-reasoner"}
+_DEEPSEEK_COMPATIBILITY_ALIASES = {
+    "deepseek-chat": "deepseek-v4-flash",
+    "deepseek-reasoner": "deepseek-v4-pro",
+}
+_DEEPSEEK_MODELS = {"deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"}
+
+
+def _canonical_deepseek_model_id(model: str) -> str:
+    return _DEEPSEEK_COMPATIBILITY_ALIASES.get(model, model)
 
 # OpenRouter 모델 (LiteLLM 경유, openrouter/ prefix)
 _OPENROUTER_MODELS = {
@@ -717,11 +727,10 @@ _ALIBABA_MODELS = {
 # LiteLLM OpenAI 호환 모델 (Gemini + Groq + DeepSeek + OpenRouter + Alibaba)
 _LITELLM_OPENAI_MODELS = _GEMINI_MODELS | _GROQ_MODELS | _DEEPSEEK_MODELS | _OPENROUTER_MODELS | _ALIBABA_MODELS | _KIMI_MODELS | _MINIMAX_MODELS | _OPENAI_MODELS | _CODEX_MODELS
 
-_OPENAI_COMPATIBLE_DIRECT_PROVIDERS = {"openai", "groq", "deepseek", "openrouter", "qwen", "kimi", "minimax"}
+_OPENAI_COMPATIBLE_DIRECT_PROVIDERS = {"openai", "groq", "openrouter", "qwen", "kimi", "minimax"}
 _DIRECT_PROVIDER_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
     "groq": "https://api.groq.com/openai/v1",
-    "deepseek": "https://api.deepseek.com/v1",
     "openrouter": "https://openrouter.ai/api/v1",
     "qwen": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "kimi": "https://api.moonshot.ai/v1",
@@ -730,7 +739,6 @@ _DIRECT_PROVIDER_BASE_URLS = {
 _DIRECT_PROVIDER_ENV_KEYS = {
     "openai": "OPENAI_API_KEY",
     "groq": "GROQ_API_KEY",
-    "deepseek": "DEEPSEEK_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
     "qwen": "ALIBABA_API_KEY",
     "kimi": "MOONSHOT_API_KEY",
@@ -741,6 +749,15 @@ _DIRECT_PROVIDER_ENV_KEYS = {
 async def get_available_model_ids() -> set[str]:
     executable = await _get_registry_executable_model_ids()
     return executable or (_LITELLM_OPENAI_MODELS | set(_ANTHROPIC_MODEL_ID.keys()))
+
+
+def _is_model_runtime_available(model: str, available_models: set[str]) -> bool:
+    if model in available_models:
+        return True
+    canonical = _canonical_deepseek_model_id(model)
+    if canonical in available_models:
+        return True
+    return any(_canonical_deepseek_model_id(candidate) == canonical for candidate in available_models)
 
 
 async def get_display_models(active_only: bool = True) -> list[dict[str, Any]]:
@@ -858,7 +875,7 @@ def _fallback_for_unavailable_model(model: str, available_models: set[str]) -> s
         [candidate for candidate in ("gemini-2.5-flash", "gemini-flash", "gemini-3-flash-preview", "gemini-2.5-pro") if candidate in available_models],
         [candidate for candidate in ("gpt-4o-mini", "gpt-4o", "gpt-5-mini", "gpt-5") if candidate in available_models],
         [candidate for candidate in ("qwen-turbo", "qwen-flash", "qwen-plus", "qwen-max") if candidate in available_models],
-        [candidate for candidate in ("deepseek-chat", "groq-compound", "minimax-m2.7", "kimi-latest") if candidate in available_models],
+        [candidate for candidate in ("deepseek-v4-flash", "deepseek-chat", "groq-compound", "minimax-m2.7", "kimi-latest") if candidate in available_models],
     ]
     for candidates in groups:
         if candidates:
@@ -1041,7 +1058,7 @@ async def call_stream(
     _ctx_temperature.set(await _rit(_intent))
 
     runtime_available_models = await get_available_model_ids()
-    if runtime_available_models and model not in runtime_available_models:
+    if runtime_available_models and not _is_model_runtime_available(model, runtime_available_models):
         fallback_model = _fallback_for_unavailable_model(model, runtime_available_models)
         logger.warning("registry_model_unavailable: '%s' -> '%s'", model, fallback_model)
         model = fallback_model
@@ -1057,6 +1074,7 @@ async def call_stream(
 
     # 자기 모델 질문 오답 방지: 실제 라우트 id + 제조사를 시스템 프롬프트에 명시
     _maker = "Alibaba (알리바바)" if any(q in model.lower() for q in ("qwen", "deepseek-v3")) and model in _ALIBABA_MODELS else \
+             "DeepSeek (딥시크)" if model.startswith("deepseek-") else \
              "Google (구글)" if "gemini" in model.lower() else \
              "Moonshot AI (문샷)" if "kimi" in model.lower() else \
              "MiniMax (미니맥스)" if "minimax" in model.lower() else \
@@ -1079,6 +1097,14 @@ async def call_stream(
     if route_metadata:
         provider = str((registered_row or {}).get("provider") or "")
         backend = str(route_metadata.get("execution_backend") or "").strip()
+        if provider == "deepseek" and backend == "openai_compatible_direct":
+            backend = "litellm_proxy"
+            route_metadata = {
+                **route_metadata,
+                "execution_backend": backend,
+                "execution_model_id": _canonical_deepseek_model_id(model),
+                "execution_base_url": "",
+            }
         if backend == "openai_compatible_direct":
             async for event in _stream_direct_openai_provider(
                 model,
@@ -1307,7 +1333,16 @@ async def call_stream(
     # Groq / DeepSeek 모델 → LiteLLM 경유 (OpenAI 호환, 실패 시 Gemini Flash 폴백)
     if model in _GROQ_MODELS or model in _DEEPSEEK_MODELS:
         _had_error = False
-        async for event in _stream_litellm(model, system_prompt, messages, tools=tools, session_id=session_id):
+        _request_model = _canonical_deepseek_model_id(model) if model in _DEEPSEEK_MODELS else model
+        async for event in _stream_litellm_openai(
+            _request_model,
+            system_prompt,
+            messages,
+            tools=tools,
+            session_id=session_id,
+            display_model=model,
+            cost_model=model,
+        ):
             if event.get("type") == "error":
                 _had_error = True
                 logger.warning(f"litellm_fallback: {model} failed, falling back to gemini-2.5-flash")
@@ -1714,6 +1749,7 @@ async def _stream_litellm_openai(
     is_thinking = model in _GEMINI_THINKING_MODELS
     # 모델별 max_tokens 제한 (제공사 한도 초과 방지)
     _MODEL_MAX_TOKENS = {
+        "deepseek-v4-flash": 8192, "deepseek-v4-pro": 8192,
         "deepseek-chat": 8192, "deepseek-reasoner": 8192,
         "groq-kimi-k2": 32768, "groq-llama-70b": 8192, "groq-llama-8b": 8192,
         "groq-llama4-scout": 16384, "groq-qwen3-32b": 32768,

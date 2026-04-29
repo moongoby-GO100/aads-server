@@ -149,6 +149,8 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
     "gpt-5.4": (_decimal(2.5), _decimal(15.0)),
     "gpt-5.4-mini": (_decimal(0.75), _decimal(4.5)),
     "gpt-5.3-codex": (_decimal(1.75), _decimal(14.0)),
+    "deepseek-v4-flash": (_decimal(0.28), _decimal(0.42)),
+    "deepseek-v4-pro": (_decimal(0.55), _decimal(2.19)),
     "deepseek-chat": (_decimal(0.28), _decimal(0.42)),
     "deepseek-reasoner": (_decimal(0.55), _decimal(2.19)),
     "openrouter-grok-4-fast": (_decimal(0.2), _decimal(0.2)),
@@ -204,6 +206,7 @@ _THINKING_MODELS = {
     "gemini-3.1-pro-preview",
     "gemini-2.5-flash",
     "gemini-2.5-pro",
+    "deepseek-v4-pro",
     "deepseek-reasoner",
     "qwen3-235b-thinking",
     "qwq-plus",
@@ -252,6 +255,10 @@ _DISPLAY_NAME_OVERRIDES = {
     "gpt-5.4-mini": "GPT-5.4 Mini (Codex CLI)",
     "gpt-5.3-codex": "GPT-5.3 Codex (Codex CLI)",
     "gpt-5.5": "GPT-5.5 (Codex CLI)",
+    "deepseek-v4-flash": "DeepSeek V4 Flash",
+    "deepseek-v4-pro": "DeepSeek V4 Pro",
+    "deepseek-chat": "DeepSeek Chat (compat alias -> V4 Flash)",
+    "deepseek-reasoner": "DeepSeek Reasoner (compat alias -> V4 Pro)",
     "openrouter-grok-4-fast": "OpenRouter Grok 4 Fast",
     "openrouter-deepseek-v3": "OpenRouter DeepSeek V3",
     "openrouter-mistral-small": "OpenRouter Mistral Small",
@@ -288,7 +295,7 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
     ),
     "openai": ("gpt-4o", "gpt-4o-mini", "gpt-5", "gpt-5-mini", "o3", "o3-mini", "o3-pro"),
     "codex": ("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"),
-    "deepseek": ("deepseek-chat", "deepseek-reasoner"),
+    "deepseek": ("deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"),
     "openrouter": (
         "openrouter-grok-4-fast",
         "openrouter-deepseek-v3",
@@ -334,6 +341,19 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
 
 _KEYLESS_PROVIDERS = {"codex"}
 
+_DEEPSEEK_ALIAS_DEPRECATION_DATE = "2026-07-24"
+_DEEPSEEK_COMPATIBILITY_ALIASES = {
+    "deepseek-chat": "deepseek-v4-flash",
+    "deepseek-reasoner": "deepseek-v4-pro",
+}
+
+_DISCOVERY_REQUIREMENTS = {
+    "anthropic": "x-api-key required for Models API; OAuth auth token supports runtime only",
+    "openai": "Bearer provider key required",
+    "gemini": "Google Generative Language API key required",
+    "litellm": "LiteLLM master key and /model/info endpoint required",
+}
+
 _PROVIDER_META = {
     "anthropic": {"display_name": "Anthropic", "manual_review": False},
     "gemini": {"display_name": "Gemini", "manual_review": False},
@@ -350,7 +370,6 @@ _PROVIDER_META = {
 _DIRECT_PROVIDER_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
     "groq": "https://api.groq.com/openai/v1",
-    "deepseek": "https://api.deepseek.com/v1",
     "openrouter": "https://openrouter.ai/api/v1",
     "qwen": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "kimi": "https://api.moonshot.ai/v1",
@@ -393,6 +412,21 @@ def _display_name_for_provider(provider: str, model_id: str) -> str:
     return _display_name_for(model_id)
 
 
+def _canonical_model_id(model_id: str) -> str:
+    return _DEEPSEEK_COMPATIBILITY_ALIASES.get(model_id, model_id)
+
+
+def _compatibility_alias_metadata(model_id: str) -> dict[str, Any]:
+    canonical_model = _DEEPSEEK_COMPATIBILITY_ALIASES.get(model_id)
+    if not canonical_model:
+        return {}
+    return {
+        "canonical_model": canonical_model,
+        "deprecation_date": _DEEPSEEK_ALIAS_DEPRECATION_DATE,
+        "compatibility_alias": True,
+    }
+
+
 def _family_for(provider: str, model_id: str) -> str:
     if provider == "anthropic":
         return "claude"
@@ -425,8 +459,10 @@ def _build_template(provider: str, model_id: str) -> ModelTemplate:
     category = _category_for(model_id)
     execution_backend = None
     execution_base_url = None
-    execution_model_id = model_id
-    if provider in _DIRECT_PROVIDER_BASE_URLS:
+    execution_model_id = _canonical_model_id(model_id)
+    if provider == "deepseek":
+        execution_backend = "litellm_proxy"
+    elif provider in _DIRECT_PROVIDER_BASE_URLS:
         execution_backend = "openai_compatible_direct"
         execution_base_url = _DIRECT_PROVIDER_BASE_URLS[provider]
     elif provider == "codex":
@@ -472,6 +508,38 @@ def _pricing_for(model_id: str) -> dict[str, str]:
         "output_cost": str(costs[1]) if costs[1] is not None else "",
         "unit": "usd_per_1m_tokens",
     }
+
+
+def _anthropic_key_supports_models_api(key_name: str) -> bool:
+    return not str(key_name or "").upper().startswith("ANTHROPIC_AUTH_TOKEN")
+
+
+def _provider_auto_discovery_supported(provider: str, provider_state: dict[str, Any]) -> bool:
+    if provider == "anthropic":
+        return any(
+            key.get("is_available") and _anthropic_key_supports_models_api(str(key.get("key_name") or ""))
+            for key in provider_state.get("keys", [])
+        )
+    return provider in {"openai", "gemini", "litellm"} and int(provider_state.get("available_key_count", 0)) > 0
+
+
+def _provider_discovery_requirement(provider: str) -> str:
+    return _DISCOVERY_REQUIREMENTS.get(provider, "Provider catalog API key required")
+
+
+def _provider_discovery_mode(
+    provider: str,
+    *,
+    runtime_executable: bool,
+    auto_discovery_supported: bool,
+) -> str:
+    if provider not in _DISCOVERY_REQUIREMENTS:
+        return "template"
+    if auto_discovery_supported:
+        return "discovery"
+    if runtime_executable:
+        return "template_runtime_only"
+    return "template"
 
 
 _PROVIDER_TEMPLATES: dict[str, tuple[ModelTemplate, ...]] = {
@@ -587,12 +655,22 @@ def _discovered_model_row(
     active_key_count = int(provider_state.get("active_key_count", 0))
     keyless = provider in _KEYLESS_PROVIDERS
     has_runtime_models = keyless or available_key_count > 0
+    auto_discovery_supported = _provider_auto_discovery_supported(provider, provider_state)
     executable = has_runtime_models and _is_auto_executable_discovered(provider, model_id, raw)
     template = _build_template(provider, model_id)
     metadata = {
         "template_provider": provider,
+        "model_source": "discovery",
         "discovered": True,
         "discovery_source": source,
+        "runtime_executable": has_runtime_models,
+        "auto_discovery_supported": auto_discovery_supported,
+        "discovery_requirement": _provider_discovery_requirement(provider),
+        "discovery_mode": _provider_discovery_mode(
+            provider,
+            runtime_executable=has_runtime_models,
+            auto_discovery_supported=auto_discovery_supported,
+        ),
         "raw_provider_aliases": sorted(provider_state.get("raw_providers", set())),
         "active_key_count": active_key_count,
         "available_key_count": available_key_count,
@@ -602,6 +680,7 @@ def _discovered_model_row(
         "execution_base_url": template.execution_base_url,
         "raw": raw or {},
     }
+    metadata.update(_compatibility_alias_metadata(model_id))
     return {
         "provider": provider,
         "model_id": model_id,
@@ -656,6 +735,30 @@ async def _get_first_provider_key(
     return ""
 
 
+async def _get_anthropic_models_api_key_and_runtime_state() -> tuple[str, bool]:
+    try:
+        from app.core.llm_key_provider import get_provider_key_records
+
+        key_records = await get_provider_key_records("anthropic", include_rate_limited=False)
+    except Exception:
+        logger.exception("model_registry.discovery_key_failed", extra={"provider": "anthropic"})
+        return "", False
+
+    models_api_key = ""
+    oauth_runtime_executable = False
+    for record in key_records:
+        key_name = str(record.get("key_name") or "").upper()
+        value = str(record.get("value") or "").strip()
+        if not value:
+            continue
+        if key_name.startswith("ANTHROPIC_AUTH_TOKEN") or value.startswith("sk-ant-oat"):
+            oauth_runtime_executable = True
+            continue
+        if value.startswith("sk-ant-api") and not models_api_key:
+            models_api_key = value
+    return models_api_key, oauth_runtime_executable
+
+
 async def _fetch_openai_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     api_key = await _get_first_provider_key("openai")
     if not api_key:
@@ -676,13 +779,16 @@ async def _fetch_openai_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
 
 
 async def _fetch_anthropic_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    api_key = await _get_first_provider_key(
-        "anthropic",
-        excluded_key_name_prefixes=("ANTHROPIC_AUTH_TOKEN",),
-        required_value_prefixes=("sk-ant-api",),
-    )
+    api_key, oauth_runtime_executable = await _get_anthropic_models_api_key_and_runtime_state()
     if not api_key:
-        return [], {"status": "skipped", "error": "missing_anthropic_api_key"}
+        return [], {
+            "status": "skipped",
+            "error": "oauth_runtime_only_models_api_unavailable",
+            "runtime_executable": oauth_runtime_executable,
+            "auto_discovery_supported": False,
+            "discovery_requirement": _provider_discovery_requirement("anthropic"),
+            "model_source": "template",
+        }
     async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT_SECONDS) as client:
         response = await client.get(
             "https://api.anthropic.com/v1/models?limit=100",
@@ -695,7 +801,14 @@ async def _fetch_anthropic_models() -> tuple[list[dict[str, Any]], dict[str, Any
         model_id = str(item.get("id") or "").strip()
         if model_id:
             rows.append({"model_id": model_id, "display_name": item.get("display_name") or _display_name_for(model_id), "raw": item})
-    return rows, {"status": "ok", "count": len(rows)}
+    return rows, {
+        "status": "ok",
+        "count": len(rows),
+        "runtime_executable": True,
+        "auto_discovery_supported": True,
+        "discovery_requirement": _provider_discovery_requirement("anthropic"),
+        "model_source": "discovery",
+    }
 
 
 async def _fetch_gemini_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -755,6 +868,19 @@ async def discover_provider_model_rows(
     for provider, fetcher in fetchers.items():
         try:
             raw_rows, result = await fetcher()
+            provider_state = key_state.get(provider, {})
+            runtime_executable = bool(
+                result.get(
+                    "runtime_executable",
+                    provider in _KEYLESS_PROVIDERS or int(provider_state.get("available_key_count", 0)) > 0,
+                )
+            )
+            auto_discovery_supported = bool(
+                result.get(
+                    "auto_discovery_supported",
+                    _provider_auto_discovery_supported(provider, provider_state),
+                )
+            )
             discovered = [
                 _discovered_model_row(
                     provider=provider,
@@ -773,10 +899,29 @@ async def discover_provider_model_rows(
                 "count": len(discovered),
                 "active_count": sum(1 for row in discovered if row.get("is_active")),
                 "error": result.get("error", ""),
+                "runtime_executable": runtime_executable,
+                "auto_discovery_supported": auto_discovery_supported,
+                "discovery_requirement": result.get("discovery_requirement") or _provider_discovery_requirement(provider),
+                "template_model_count": len(_PROVIDER_TEMPLATES.get(provider, ())),
+                "discovered_model_count": len(discovered),
+                "model_source": result.get("model_source") or ("discovery" if discovered else "template"),
             })
         except Exception as exc:
             logger.warning("model_registry.discovery_failed: %s: %s", provider, str(exc)[:200])
-            run_results.append({"provider": provider, "status": "failed", "count": 0, "active_count": 0, "error": str(exc)[:500]})
+            provider_state = key_state.get(provider, {})
+            run_results.append({
+                "provider": provider,
+                "status": "failed",
+                "count": 0,
+                "active_count": 0,
+                "error": str(exc)[:500],
+                "runtime_executable": provider in _KEYLESS_PROVIDERS or int(provider_state.get("available_key_count", 0)) > 0,
+                "auto_discovery_supported": _provider_auto_discovery_supported(provider, provider_state),
+                "discovery_requirement": _provider_discovery_requirement(provider),
+                "template_model_count": len(_PROVIDER_TEMPLATES.get(provider, ())),
+                "discovered_model_count": 0,
+                "model_source": "template",
+            })
     return all_rows, run_results
 
 
@@ -791,7 +936,12 @@ def _merge_model_rows(template_rows: list[dict[str, Any]], discovered_rows: list
         metadata = _coerce_json_object(existing.get("metadata"))
         discovered_metadata = _coerce_json_object(row.get("metadata"))
         metadata["discovered"] = True
+        metadata["model_source"] = "template+discovery"
         metadata["discovery_source"] = discovered_metadata.get("discovery_source")
+        metadata["runtime_executable"] = discovered_metadata.get("runtime_executable", metadata.get("runtime_executable"))
+        metadata["auto_discovery_supported"] = discovered_metadata.get("auto_discovery_supported", metadata.get("auto_discovery_supported"))
+        metadata["discovery_requirement"] = discovered_metadata.get("discovery_requirement", metadata.get("discovery_requirement"))
+        metadata["discovery_mode"] = discovered_metadata.get("discovery_mode", metadata.get("discovery_mode"))
         metadata["raw"] = discovered_metadata.get("raw", {})
         existing["metadata"] = metadata
         existing["last_verified_at"] = existing.get("last_verified_at") or row.get("last_verified_at")
@@ -814,6 +964,13 @@ def build_registry_snapshots(key_rows: Iterable[dict[str, Any]]) -> tuple[list[d
         rate_limited_key_count = int(state.get("rate_limited_key_count", 0))
         verified_key_count = int(state.get("verified_key_count", 0))
         has_runtime_models = keyless or available_key_count > 0
+        auto_discovery_supported = _provider_auto_discovery_supported(provider, state)
+        discovery_requirement = _provider_discovery_requirement(provider)
+        discovery_mode = _provider_discovery_mode(
+            provider,
+            runtime_executable=has_runtime_models,
+            auto_discovery_supported=auto_discovery_supported,
+        )
         activation_source = "fallback" if keyless or active_key_count == 0 else "db"
         linked_key_name = None if keyless else _pick_linked_key(keys)
 
@@ -821,6 +978,7 @@ def build_registry_snapshots(key_rows: Iterable[dict[str, Any]]) -> tuple[list[d
         for template in templates:
             metadata = {
                 "template_provider": provider,
+                "model_source": "template",
                 "raw_provider_aliases": sorted(state.get("raw_providers", set())),
                 "active_key_count": active_key_count,
                 "available_key_count": available_key_count,
@@ -829,10 +987,15 @@ def build_registry_snapshots(key_rows: Iterable[dict[str, Any]]) -> tuple[list[d
                 "last_used_at": _iso(state.get("last_used_at")),
                 "last_verified_at": _iso(state.get("last_verified_at")),
                 "requires_admin_review": False,
+                "runtime_executable": has_runtime_models,
+                "auto_discovery_supported": auto_discovery_supported,
+                "discovery_requirement": discovery_requirement,
+                "discovery_mode": discovery_mode,
                 "execution_backend": template.execution_backend,
                 "execution_model_id": template.execution_model_id,
                 "execution_base_url": template.execution_base_url,
             }
+            metadata.update(_compatibility_alias_metadata(template.model_id))
             model_rows.append(
                 {
                     "provider": provider,
@@ -873,6 +1036,18 @@ def build_registry_snapshots(key_rows: Iterable[dict[str, Any]]) -> tuple[list[d
                 "verified_key_count": verified_key_count,
                 "active_model_count": sum(1 for row in model_rows if row["provider"] == provider and row["is_active"]),
                 "template_model_count": len(templates),
+                "discovered_model_count": 0,
+                "template_active_model_count": sum(
+                    1
+                    for row in model_rows
+                    if row["provider"] == provider and row["is_active"] and row.get("discovery_source") == "template"
+                ),
+                "discovery_active_model_count": 0,
+                "active_model_source": "template" if has_runtime_models and templates else "none",
+                "runtime_executable": has_runtime_models,
+                "auto_discovery_supported": auto_discovery_supported,
+                "discovery_requirement": discovery_requirement,
+                "discovery_mode": discovery_mode,
                 "last_used_at": _iso(state.get("last_used_at")),
                 "last_verified_at": _iso(state.get("last_verified_at")),
                 "linked_key_name": linked_key_name,
@@ -901,6 +1076,14 @@ def build_registry_snapshots(key_rows: Iterable[dict[str, Any]]) -> tuple[list[d
                 "verified_key_count": int(state.get("verified_key_count", 0)),
                 "active_model_count": 0,
                 "template_model_count": 0,
+                "discovered_model_count": 0,
+                "template_active_model_count": 0,
+                "discovery_active_model_count": 0,
+                "active_model_source": "none",
+                "runtime_executable": int(state.get("available_key_count", 0)) > 0,
+                "auto_discovery_supported": False,
+                "discovery_requirement": _provider_discovery_requirement(provider),
+                "discovery_mode": "manual_review",
                 "last_used_at": _iso(state.get("last_used_at")),
                 "last_verified_at": _iso(state.get("last_verified_at")),
                 "linked_key_name": _pick_linked_key(list(state.get("keys", []))),
@@ -1030,6 +1213,8 @@ async def list_provider_summaries() -> list[dict[str, Any]]:
                 "selectable_model_count": 0,
                 "executable_model_count": 0,
                 "discovered_model_count": 0,
+                "template_active_model_count": 0,
+                "discovery_active_model_count": 0,
                 "review_required_model_count": 0,
                 "last_seen_at": None,
             },
@@ -1043,6 +1228,10 @@ async def list_provider_summaries() -> list[dict[str, Any]]:
             aggregate["executable_model_count"] += 1
         if metadata.get("discovered") or row.get("discovery_source") not in {None, "", "template"}:
             aggregate["discovered_model_count"] += 1
+        if row.get("is_active") and row.get("discovery_source") == "template":
+            aggregate["template_active_model_count"] += 1
+        if row.get("is_active") and row.get("discovery_source") not in {None, "", "template"}:
+            aggregate["discovery_active_model_count"] += 1
         if row.get("verification_status") == "review_required":
             aggregate["review_required_model_count"] += 1
         row_last_seen = row.get("last_seen_at") or row.get("updated_at")
@@ -1063,6 +1252,14 @@ async def list_provider_summaries() -> list[dict[str, Any]]:
                 "rate_limited_key_count": 0,
                 "verified_key_count": 0,
                 "template_model_count": 0,
+                "discovered_model_count": 0,
+                "template_active_model_count": 0,
+                "discovery_active_model_count": 0,
+                "active_model_source": "none",
+                "runtime_executable": False,
+                "auto_discovery_supported": False,
+                "discovery_requirement": _provider_discovery_requirement(provider),
+                "discovery_mode": "manual_review",
                 "last_used_at": None,
                 "last_verified_at": None,
                 "linked_key_name": None,
@@ -1076,6 +1273,17 @@ async def list_provider_summaries() -> list[dict[str, Any]]:
                 "selectable_model_count": aggregate["selectable_model_count"],
                 "executable_model_count": aggregate["executable_model_count"],
                 "discovered_model_count": aggregate["discovered_model_count"],
+                "template_active_model_count": aggregate["template_active_model_count"],
+                "discovery_active_model_count": aggregate["discovery_active_model_count"],
+                "active_model_source": (
+                    "template+discovery"
+                    if aggregate["template_active_model_count"] and aggregate["discovery_active_model_count"]
+                    else "discovery"
+                    if aggregate["discovery_active_model_count"]
+                    else "template"
+                    if aggregate["template_active_model_count"]
+                    else "none"
+                ),
                 "review_required_model_count": aggregate["review_required_model_count"],
                 "last_seen_at": aggregate["last_seen_at"].isoformat() if aggregate["last_seen_at"] else None,
             }
@@ -1099,6 +1307,11 @@ async def get_executable_model_ids() -> set[str] | None:
         logger.exception("model_registry.executable_ids_failed")
         return None
     executable = {row["model_id"] for row in rows if row.get("is_active")}
+    for alias, canonical in _DEEPSEEK_COMPATIBILITY_ALIASES.items():
+        if canonical in executable:
+            executable.add(alias)
+        if alias in executable:
+            executable.add(canonical)
     return _cache_set("executable_ids", executable)
 
 
@@ -1130,8 +1343,10 @@ async def filter_executable_models(model_ids: Sequence[str]) -> list[str]:
         normalized_model_id = _normalize_model_id(model_id)
         if not normalized_model_id:
             continue
+        canonical_model_id = _canonical_model_id(normalized_model_id)
         if any(
             normalized_model_id == executable_id
+            or canonical_model_id == _canonical_model_id(executable_id)
             or normalized_model_id.startswith(executable_id)
             or executable_id.startswith(normalized_model_id)
             for executable_id in normalized_executable_ids
