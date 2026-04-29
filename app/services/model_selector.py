@@ -27,6 +27,7 @@ from app.config import Settings
 from app.core.llm_key_provider import get_api_key as _get_db_key, get_provider_keys as _get_provider_keys
 from app.services.model_registry import get_executable_model_ids as _get_registry_executable_model_ids
 from app.services.model_registry import list_registered_models as _list_registered_models
+from app.services.model_registry import normalize_provider as _normalize_registry_provider
 from app.services.intent_router import IntentResult
 
 logger = logging.getLogger(__name__)
@@ -792,12 +793,32 @@ def _split_provider_qualified_model(model_id: str) -> tuple[str | None, str]:
 async def _get_registered_model_row(model_id: str, provider: str | None = None) -> Optional[Dict[str, Any]]:
     rows = await _list_registered_models(active_only=False)
     normalized_provider = str(provider or "").strip().lower()
+
+    def _candidate_ids(row: Dict[str, Any]) -> set[str]:
+        metadata = _coerce_metadata(row.get("metadata"))
+        aliases = {
+            str(row.get("model_id") or "").strip(),
+            str(row.get("execution_model_id") or "").strip(),
+            str(metadata.get("execution_model_id") or "").strip(),
+            str(metadata.get("canonical_model") or "").strip(),
+        }
+        extra_aliases = metadata.get("aliases") or []
+        if isinstance(extra_aliases, list):
+            aliases.update(str(alias or "").strip() for alias in extra_aliases)
+        accepted_aliases = metadata.get("accepted_aliases") or []
+        if isinstance(accepted_aliases, list):
+            aliases.update(str(alias or "").strip() for alias in accepted_aliases)
+        aliases.discard("")
+        return aliases
+
     if normalized_provider:
         for row in rows:
-            if row.get("provider") == normalized_provider and row.get("model_id") == model_id:
+            if row.get("provider") != normalized_provider:
+                continue
+            if model_id in _candidate_ids(row):
                 return row
     for row in rows:
-        if row.get("model_id") == model_id:
+        if model_id in _candidate_ids(row):
             return row
     return None
 
@@ -827,9 +848,62 @@ def _coerce_metadata(value: Any) -> Dict[str, Any]:
 def _route_metadata(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     metadata = _coerce_metadata((row or {}).get("metadata"))
     backend = str(metadata.get("execution_backend") or "").strip()
-    if backend in {"openai_compatible_direct", "litellm_proxy"}:
+    execution_model_id = str(
+        (row or {}).get("execution_model_id")
+        or metadata.get("execution_model_id")
+        or metadata.get("canonical_model")
+        or (row or {}).get("model_id")
+        or ""
+    ).strip()
+    if execution_model_id:
+        metadata["execution_model_id"] = execution_model_id
+    if backend in {"openai_compatible_direct", "litellm_proxy", "codex_cli", "claude_cli_relay"}:
         return metadata
     return {}
+
+
+def _registered_model_aliases(row: Optional[Dict[str, Any]]) -> list[str]:
+    metadata = _coerce_metadata((row or {}).get("metadata"))
+    aliases: list[str] = []
+    for value in (
+        (row or {}).get("model_id"),
+        (row or {}).get("execution_model_id"),
+        metadata.get("execution_model_id"),
+        metadata.get("canonical_model"),
+    ):
+        alias = str(value or "").strip()
+        if alias and alias not in aliases:
+            aliases.append(alias)
+    for value in metadata.get("aliases") or []:
+        alias = str(value or "").strip()
+        if alias and alias not in aliases:
+            aliases.append(alias)
+    for value in metadata.get("accepted_aliases") or []:
+        alias = str(value or "").strip()
+        if alias and alias not in aliases:
+            aliases.append(alias)
+    return aliases
+
+
+async def _resolve_registered_model_alias(
+    model_id: str,
+    *,
+    provider: str | None = None,
+) -> tuple[str, Optional[Dict[str, Any]]]:
+    target_model = str(model_id or "").strip()
+    if not target_model:
+        return target_model, None
+
+    normalized_provider = _normalize_registry_provider(provider or "")
+    try:
+        row = await _get_registered_model_row(target_model, provider=normalized_provider)
+    except Exception as exc:
+        logger.debug("registered_model_alias_lookup_failed: model=%s error=%s", target_model, exc)
+        row = None
+    if row:
+        return str(row.get("model_id") or target_model), row
+
+    return target_model, None
 
 
 async def _get_direct_provider_api_key(provider: str) -> str:
@@ -869,7 +943,7 @@ async def _stream_direct_openai_provider(
         yield event
 
 
-def _fallback_for_unavailable_model(model: str, available_models: set[str]) -> str:
+def _fallback_for_unavailable_model_legacy(model: str, available_models: set[str]) -> str:
     groups = [
         [candidate for candidate in ("claude-sonnet", "claude-haiku", "claude-opus", "claude-opus-46") if candidate in available_models],
         [candidate for candidate in ("gemini-2.5-flash", "gemini-flash", "gemini-3-flash-preview", "gemini-2.5-pro") if candidate in available_models],
@@ -881,6 +955,69 @@ def _fallback_for_unavailable_model(model: str, available_models: set[str]) -> s
         if candidates:
             return candidates[0]
     return next(iter(sorted(available_models))) if available_models else model
+
+
+def _fallback_cost_distance(requested: Optional[Dict[str, Any]], candidate: Dict[str, Any]) -> float:
+    if not requested:
+        return 0.0
+
+    requested_input = requested.get("input_cost")
+    requested_output = requested.get("output_cost")
+    candidate_input = candidate.get("input_cost")
+    candidate_output = candidate.get("output_cost")
+    if requested_input is None or requested_output is None or candidate_input is None or candidate_output is None:
+        return 1_000_000.0
+    return float(abs(requested_input - candidate_input) + abs(requested_output - candidate_output))
+
+
+async def _fallback_for_unavailable_model(
+    model: str,
+    available_models: set[str],
+    *,
+    requested_row: Optional[Dict[str, Any]] = None,
+) -> str:
+    try:
+        active_rows = await _list_registered_models(active_only=True)
+    except Exception as exc:
+        logger.debug("registered_model_fallback_lookup_failed: model=%s error=%s", model, exc)
+        return _fallback_for_unavailable_model_legacy(model, available_models)
+    candidate_rows = [
+        row
+        for row in active_rows
+        if row.get("model_id") != model and _is_model_runtime_available(str(row.get("model_id") or ""), available_models)
+    ]
+    if not candidate_rows:
+        return _fallback_for_unavailable_model_legacy(model, available_models)
+
+    if requested_row is None:
+        _, requested_row = await _resolve_registered_model_alias(model)
+
+    def _candidate_rank(row: Dict[str, Any]) -> tuple[int, int, int, int, float, str]:
+        if requested_row:
+            provider_match = int(row.get("provider") == requested_row.get("provider"))
+            family_match = int(row.get("family") == requested_row.get("family"))
+            category_match = int(row.get("category") == requested_row.get("category"))
+            capability_match = sum(
+                int(row.get(key) == requested_row.get(key))
+                for key in ("supports_tools", "supports_thinking", "supports_vision", "supports_coding")
+            )
+            cost_distance = _fallback_cost_distance(requested_row, row)
+        else:
+            provider_match = 0
+            family_match = 0
+            category_match = 0
+            capability_match = 0
+            cost_distance = 1_000_000.0
+        return (
+            provider_match,
+            family_match,
+            category_match,
+            capability_match,
+            -cost_distance,
+            str(row.get("model_id") or ""),
+        )
+
+    return str(max(candidate_rows, key=_candidate_rank).get("model_id") or model)
 
 
 def _estimate_cost(model: str, in_tokens: int, out_tokens: int) -> Decimal:
@@ -1019,24 +1156,11 @@ async def call_stream(
     _qualified_provider, _qualified_model = _split_provider_qualified_model(str(model))
     if _qualified_provider:
         model = _qualified_model
-
-    # model_override가 구체적 모델명(claude-sonnet-4-6 등)이면 LiteLLM alias로 변환
-    _OVERRIDE_TO_ALIAS = {
-        "claude-sonnet-4-6": "claude-sonnet", "claude-sonnet-4-5": "claude-sonnet",
-        "claude-opus-4-7": "claude-opus",
-        "claude-opus-4-6": "claude-opus-46", "claude-opus-4-5": "claude-opus",
-        "claude-haiku-4-5": "claude-haiku",
-        "claude-haiku-4-5-20251001": "claude-haiku",
-        "claude-3-5-sonnet-20241022": "claude-sonnet",
-        "claude-3-5-haiku-20241022":  "claude-haiku",
-        "claude-3-opus-20240229":     "claude-opus",
-        "claude-3-sonnet-20240229":   "claude-sonnet",
-        "claude-3-haiku-20240307":    "claude-haiku",
-        "claude-2.1":                 "claude-sonnet",
-        "auto": "claude-sonnet",    # 레거시: 실제 auto 는 _effective_override None 으로 처리됨
-    }
-    if model in _OVERRIDE_TO_ALIAS:
-        model = _OVERRIDE_TO_ALIAS[model]
+    resolved_model, resolved_row = await _resolve_registered_model_alias(model, provider=_qualified_provider)
+    if resolved_model and resolved_model != model:
+        logger.info("registered_model_alias_resolved: '%s' -> '%s'", model, resolved_model)
+        model = resolved_model
+        _qualified_provider = str((resolved_row or {}).get("provider") or _qualified_provider or "").strip().lower() or None
 
     # ── Dynamic Model Cascading (shadow/primary governance routing) ─────────
     _intent = getattr(intent_result, "intent", "")
@@ -1050,6 +1174,11 @@ async def call_stream(
         if _policy_model:
             logger.info(f"cascade_downgrade: {_intent} → {_policy_model} ({_policy_reason})")
             model = _policy_model
+            resolved_model, resolved_row = await _resolve_registered_model_alias(model, provider=_qualified_provider)
+            if resolved_model and resolved_model != model:
+                logger.info("registered_model_alias_resolved_after_policy: '%s' -> '%s'", model, resolved_model)
+                model = resolved_model
+            _qualified_provider = str((resolved_row or {}).get("provider") or _qualified_provider or "").strip().lower() or None
     else:
         if _model_locked:
             logger.info(f"cascade_skip: user explicitly selected '{model}', intent='{_intent}' — respecting user choice")
@@ -1058,18 +1187,29 @@ async def call_stream(
     _ctx_temperature.set(await _rit(_intent))
 
     runtime_available_models = await get_available_model_ids()
+    registered_row = resolved_row or await _get_registered_model_row(model, provider=_qualified_provider)
     if runtime_available_models and not _is_model_runtime_available(model, runtime_available_models):
-        fallback_model = _fallback_for_unavailable_model(model, runtime_available_models)
+        fallback_model = await _fallback_for_unavailable_model(
+            model,
+            runtime_available_models,
+            requested_row=registered_row,
+        )
         logger.warning("registry_model_unavailable: '%s' -> '%s'", model, fallback_model)
         model = fallback_model
         _qualified_provider = None
-
-    registered_row = await _get_registered_model_row(model, provider=_qualified_provider)
+        resolved_model, resolved_row = await _resolve_registered_model_alias(model)
+        if resolved_model:
+            model = resolved_model
+        registered_row = resolved_row or await _get_registered_model_row(model)
     route_metadata = _route_metadata(registered_row)
-    if model not in _LITELLM_OPENAI_MODELS and model not in _ANTHROPIC_MODEL_ID and not route_metadata:
+    model_is_known_runtime = bool(runtime_available_models) and _is_model_runtime_available(model, runtime_available_models)
+    if not registered_row and not route_metadata and not model_is_known_runtime:
         logger.warning(f"unknown_model_fallback: '{model}' → 'claude-sonnet'")
         model = "claude-sonnet"
-        registered_row = await _get_registered_model_row(model)
+        resolved_model, resolved_row = await _resolve_registered_model_alias(model)
+        if resolved_model:
+            model = resolved_model
+        registered_row = resolved_row or await _get_registered_model_row(model)
         route_metadata = _route_metadata(registered_row)
 
     # 자기 모델 질문 오답 방지: 실제 라우트 id + 제조사를 시스템 프롬프트에 명시
@@ -1116,6 +1256,7 @@ async def call_stream(
                 session_id=session_id,
             ):
                 yield event
+            return
         elif backend == "litellm_proxy":
             request_model = str(route_metadata.get("execution_model_id") or model).strip() or model
             async for event in _stream_litellm_openai(
@@ -1128,7 +1269,19 @@ async def call_stream(
                 cost_model=model,
             ):
                 yield event
-        return
+            return
+        elif backend == "codex_cli":
+            async for event in _stream_codex_relay(
+                model,
+                system_prompt,
+                messages,
+                tools=tools,
+                session_id=session_id,
+            ):
+                yield event
+            return
+
+    route_backend = str(route_metadata.get("execution_backend") or "").strip()
 
     # Claude 모델 → DB priority 기반 계정 교차 폴백 (rate limit은 계정별)
     _slot_records = await _get_claude_slot_records()
@@ -1153,7 +1306,7 @@ async def call_stream(
         "gemini-2.5-flash": "claude-sonnet",
         "gemini-2.0-flash": "claude-haiku",
     }
-    if model not in _GEMINI_MODELS and model in _ANTHROPIC_MODEL_ID:
+    if route_backend == "claude_cli_relay" or (model not in _GEMINI_MODELS and model in _ANTHROPIC_MODEL_ID):
         _original_model = model
         _downgrade = _MODEL_DOWNGRADE.get(model, [model])
         _fb_seq = []  # [(model, slot), ...]
@@ -1416,7 +1569,7 @@ async def call_stream(
         return
 
     # Codex CLI 모델 → Relay /codex-stream 경유 (ChatGPT Plus OAuth, 실패 시 Gemini Flash 폴백)
-    if model in _CODEX_MODELS:
+    if route_backend == "codex_cli" or model in _CODEX_MODELS:
         _had_error = False
         async for event in _stream_codex_relay(model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":

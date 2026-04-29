@@ -158,7 +158,7 @@ async def get_provider_summary() -> dict[str, Any]:
         "last_sync_at": last_sync["created_at"] if last_sync else None,
         "last_sync_reason": (last_sync["details"].get("reason") if last_sync else None),
         "last_sync_actor": (last_sync["actor"] if last_sync else None),
-        "normalized_providers": {},
+        "normalized_providers": (last_sync["details"].get("normalized_providers") if last_sync else {}) or {},
     }
 
 

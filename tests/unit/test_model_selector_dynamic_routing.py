@@ -253,6 +253,223 @@ def test_route_metadata_accepts_json_string():
     assert metadata["execution_model_id"] == "qwen3.6-plus"
 
 
+@pytest.mark.asyncio
+async def test_resolve_registered_model_alias_uses_registry_metadata(monkeypatch):
+    async def _fake_registered_models(active_only=False):
+        assert active_only is False
+        return [
+            {
+                "provider": "anthropic",
+                "model_id": "claude-sonnet",
+                "metadata": {
+                    "accepted_aliases": [
+                        "claude-sonnet-4-6",
+                        "claude-3-5-sonnet-20241022",
+                    ]
+                },
+            }
+        ]
+
+    monkeypatch.setattr(model_selector, "_list_registered_models", _fake_registered_models)
+
+    resolved_model, resolved_row = await model_selector._resolve_registered_model_alias("claude-sonnet-4-6")
+
+    assert resolved_model == "claude-sonnet"
+    assert resolved_row["provider"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_resolve_registered_model_alias_uses_execution_model_id(monkeypatch):
+    async def _fake_registered_models(active_only=False):
+        assert active_only is False
+        return [
+            {
+                "provider": "anthropic",
+                "model_id": "claude-sonnet",
+                "execution_model_id": "claude-sonnet-4-6",
+                "metadata": {
+                    "execution_backend": "claude_cli_relay",
+                    "execution_model_id": "claude-sonnet-4-6",
+                },
+            }
+        ]
+
+    monkeypatch.setattr(model_selector, "_list_registered_models", _fake_registered_models)
+
+    resolved_model, resolved_row = await model_selector._resolve_registered_model_alias("claude-sonnet-4-6")
+
+    assert resolved_model == "claude-sonnet"
+    assert resolved_row["provider"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_registry_fallback_prefers_same_provider_and_family(monkeypatch):
+    rows = [
+        {
+            "provider": "anthropic",
+            "model_id": "claude-opus",
+            "family": "claude",
+            "category": "coding",
+            "supports_tools": True,
+            "supports_thinking": False,
+            "supports_vision": False,
+            "supports_coding": True,
+            "input_cost": 5,
+            "output_cost": 25,
+            "is_active": False,
+            "metadata": {},
+        },
+        {
+            "provider": "anthropic",
+            "model_id": "claude-sonnet",
+            "family": "claude",
+            "category": "coding",
+            "supports_tools": True,
+            "supports_thinking": False,
+            "supports_vision": False,
+            "supports_coding": True,
+            "input_cost": 3,
+            "output_cost": 15,
+            "is_active": True,
+            "metadata": {},
+        },
+        {
+            "provider": "openai",
+            "model_id": "gpt-5.4",
+            "family": "gpt",
+            "category": "coding",
+            "supports_tools": True,
+            "supports_thinking": False,
+            "supports_vision": False,
+            "supports_coding": True,
+            "input_cost": 2.5,
+            "output_cost": 15,
+            "is_active": True,
+            "metadata": {},
+        },
+    ]
+
+    async def _fake_registered_models(active_only=False):
+        return [row for row in rows if not active_only or row["is_active"]]
+
+    monkeypatch.setattr(model_selector, "_list_registered_models", _fake_registered_models)
+
+    fallback = await model_selector._fallback_for_unavailable_model(
+        "claude-opus",
+        {"claude-sonnet", "gpt-5.4"},
+        requested_row=rows[0],
+    )
+
+    assert fallback == "claude-sonnet"
+
+
+@pytest.mark.asyncio
+async def test_call_stream_routes_registry_codex_backend_without_static_allowlist(monkeypatch):
+    captured = {}
+
+    async def _fake_get_db_key(*_args, **_kwargs):
+        return ""
+
+    async def _fake_available_models():
+        return {"gpt-5.5-preview"}
+
+    async def _fake_registered_models(active_only=False):
+        return [
+            {
+                "provider": "codex",
+                "model_id": "gpt-5.5-preview",
+                "execution_model_id": "gpt-5.5-preview",
+                "is_active": True,
+                "metadata": {
+                    "execution_backend": "codex_cli",
+                    "execution_model_id": "gpt-5.5-preview",
+                },
+            }
+        ]
+
+    async def _fake_codex_stream(model, system_prompt, messages, tools=None, session_id=None):
+        captured["model"] = model
+        captured["system_prompt"] = system_prompt
+        captured["session_id"] = session_id
+        yield {"type": "done", "model": model, "cost": "0", "input_tokens": 1, "output_tokens": 1}
+
+    monkeypatch.setattr(model_selector, "_get_db_key", _fake_get_db_key)
+    monkeypatch.setattr(model_selector, "get_available_model_ids", _fake_available_models)
+    monkeypatch.setattr(model_selector, "_list_registered_models", _fake_registered_models)
+    monkeypatch.setattr(model_selector, "_stream_codex_relay", _fake_codex_stream)
+
+    events = [
+        event
+        async for event in model_selector.call_stream(
+            IntentResult(intent="code_modify", model="gpt-5.5-preview", use_tools=True, tool_group="all"),
+            "system prompt",
+            [{"role": "user", "content": "codex registry routing"}],
+            model_override="gpt-5.5-preview",
+            session_id="session-codex-registry",
+        )
+    ]
+
+    assert captured["model"] == "gpt-5.5-preview"
+    assert captured["session_id"] == "session-codex-registry"
+    assert events[-1]["type"] == "done"
+    assert events[-1]["model"] == "gpt-5.5-preview"
+
+
+@pytest.mark.asyncio
+async def test_call_stream_routes_registry_claude_backend_without_static_allowlist(monkeypatch):
+    captured = {}
+
+    async def _fake_get_db_key(*_args, **_kwargs):
+        return ""
+
+    async def _fake_available_models():
+        return {"claude-sonnet-next"}
+
+    async def _fake_registered_models(active_only=False):
+        return [
+            {
+                "provider": "anthropic",
+                "model_id": "claude-sonnet-next",
+                "execution_model_id": "claude-sonnet-next",
+                "is_active": True,
+                "metadata": {
+                    "execution_backend": "claude_cli_relay",
+                    "execution_model_id": "claude-sonnet-next",
+                },
+            }
+        ]
+
+    async def _fake_claude_slots():
+        return {}
+
+    async def _fake_cli_stream(target_model, system_prompt, messages, tools=None, session_id=None, oauth_slot=None):
+        captured["model"] = target_model
+        captured["session_id"] = session_id
+        yield {"type": "done", "model": target_model, "cost": "0", "input_tokens": 1, "output_tokens": 1}
+
+    monkeypatch.setattr(model_selector, "_get_db_key", _fake_get_db_key)
+    monkeypatch.setattr(model_selector, "get_available_model_ids", _fake_available_models)
+    monkeypatch.setattr(model_selector, "_list_registered_models", _fake_registered_models)
+    monkeypatch.setattr(model_selector, "_get_claude_slot_records", _fake_claude_slots)
+    monkeypatch.setattr(model_selector, "_stream_cli_relay", _fake_cli_stream)
+
+    events = [
+        event
+        async for event in model_selector.call_stream(
+            IntentResult(intent="code_modify", model="claude-sonnet-next", use_tools=True, tool_group="all"),
+            "system prompt",
+            [{"role": "user", "content": "claude registry routing"}],
+            model_override="claude-sonnet-next",
+            session_id="session-claude-registry",
+        )
+    ]
+
+    assert captured["model"] == "claude-sonnet-next"
+    assert captured["session_id"] == "session-claude-registry"
+    assert events[-1]["type"] == "done"
+    assert events[-1]["model"] == "claude-sonnet-next"
+
+
 def test_is_codex_retryable_error_distinguishes_transient_and_auth_errors():
     assert model_selector._is_codex_retryable_error("Codex Relay timeout (300s)")
     assert model_selector._is_codex_retryable_error("Codex Relay not healthy: 503")

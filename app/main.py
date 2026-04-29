@@ -201,11 +201,41 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("scheduler_healing_cycle_failed", error=str(e))
 
+        async def _run_periodic_model_registry_sync():
+            try:
+                from app.services.model_registry import sync_model_registry
+
+                result = await sync_model_registry(
+                    triggered_by="scheduler",
+                    reason="periodic_refresh",
+                )
+                if result.get("ok"):
+                    logger.info(
+                        "model_registry_periodic_sync_done",
+                        models_synced=result.get("models_synced", 0),
+                        normalized_providers=result.get("normalized_providers", {}),
+                        review_required_providers=result.get("review_required_providers", []),
+                    )
+                else:
+                    logger.warning(
+                        "model_registry_periodic_sync_failed",
+                        error=result.get("error", "unknown"),
+                    )
+            except Exception as e:
+                logger.warning("model_registry_periodic_sync_failed", error=str(e))
+
         scheduler = AsyncIOScheduler()
         # 2분마다 규칙 평가
         scheduler.add_job(_run_alert_evaluation, "interval", minutes=2, id="alert_eval")
         # 30초마다 자율복구 사이클
         scheduler.add_job(_run_healing_cycle, "interval", seconds=30, id="healing_cycle")
+        # 최신 LLM catalog 반영 — 기본 6시간 주기
+        scheduler.add_job(
+            _run_periodic_model_registry_sync,
+            "interval",
+            hours=max(1, int(os.getenv("LLM_MODEL_REGISTRY_SYNC_HOURS", "6"))),
+            id="llm_model_registry_sync",
+        )
         # 매일 09:00 KST (= UTC 00:00)
         scheduler.add_job(_run_daily_summary, CronTrigger(hour=0, minute=0, timezone="UTC"), id="daily_summary")
         # 매주 월요일 09:00 KST (= UTC 00:00, day_of_week=mon) — AADS-186D

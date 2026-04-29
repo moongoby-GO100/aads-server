@@ -33,6 +33,11 @@
   - DeepSeek 실행은 LiteLLM proxy 경로로 고정했다. 과거 DB metadata가 `openai_compatible_direct`로 남아 있어도 selector가 `litellm_proxy`로 보정하고 alias 요청은 canonical 실행 ID로 변환한다.
   - Provider summary는 `runtime_executable`, `auto_discovery_supported`, `discovery_requirement`, `active_model_source`, `template_active_model_count`, `discovery_active_model_count`를 노출한다. 확인 API: `/api/v1/llm-models/providers/summary`, `/api/v1/llm-models/discovery-runs?limit=8`.
   - 검증: `E2B_API_KEY=test python3.11 -m pytest tests/unit/test_model_registry.py tests/unit/test_model_selector_dynamic_routing.py tests/unit/test_llm_registry_sync_flow.py -q` 기준 24 passed.
+- **model_selector registry 의존성 보강 (2026-04-29)**:
+  - `app/services/model_registry.py`가 Anthropic 템플릿에 `accepted_aliases`와 실제 `execution_model_id`를 함께 기록한다. 예: `claude-sonnet` → `claude-sonnet-4-6`.
+  - `app/services/model_selector.py`는 입력 모델을 static alias 맵보다 registry row 기준으로 정규화하고, 모델 미가용 시 provider/family/category/capability/cost 유사도로 fallback 후보를 고른다.
+  - Codex는 static allowlist 밖 신규 모델도 registry row에 `execution_backend=codex_cli`가 있으면 relay 경로로 라우팅된다.
+  - 검증: `pytest -q tests/unit/test_model_registry.py tests/unit/test_model_selector_dynamic_routing.py tests/unit/test_llm_registry_sync_flow.py` 기준 28 passed.
 - **채팅 모델 상단고정 provider별 분리 완료**:
   - 원인: `chat_model_preferences`가 `model_id` 단일 PK라 `openai:gpt-5.5`와 `codex:gpt-5.5`가 `gpt-5.5`로 충돌했다.
   - `migrations/060_chat_model_preferences_provider_scope.sql`로 PK를 `preference_key`로 전환했다. 형식은 `provider:model_id`, 자동 라우팅은 `mixture`.

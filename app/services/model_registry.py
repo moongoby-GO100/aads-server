@@ -346,6 +346,33 @@ _DEEPSEEK_COMPATIBILITY_ALIASES = {
     "deepseek-chat": "deepseek-v4-flash",
     "deepseek-reasoner": "deepseek-v4-pro",
 }
+_ANTHROPIC_RUNTIME_MODEL_IDS = {
+    "claude-sonnet": "claude-sonnet-4-6",
+    "claude-opus": "claude-opus-4-7",
+    "claude-opus-46": "claude-opus-4-6",
+    "claude-haiku": "claude-haiku-4-5-20251001",
+}
+_MODEL_ACCEPTED_ALIASES: dict[str, tuple[str, ...]] = {
+    "claude-sonnet": (
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-5",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-sonnet-20240229",
+        "claude-2.1",
+    ),
+    "claude-opus": (
+        "claude-opus-4-7",
+        "claude-opus-4-5",
+        "claude-3-opus-20240229",
+    ),
+    "claude-opus-46": ("claude-opus-4-6",),
+    "claude-haiku": (
+        "claude-haiku-4-5",
+        "claude-haiku-4-5-20251001",
+        "claude-3-5-haiku-20241022",
+        "claude-3-haiku-20240307",
+    ),
+}
 
 _DISCOVERY_REQUIREMENTS = {
     "anthropic": "x-api-key required for Models API; OAuth auth token supports runtime only",
@@ -427,6 +454,15 @@ def _compatibility_alias_metadata(model_id: str) -> dict[str, Any]:
     }
 
 
+def _accepted_alias_metadata(provider: str, model_id: str) -> dict[str, Any]:
+    aliases: list[str] = []
+    if provider == "anthropic":
+        aliases.extend(_MODEL_ACCEPTED_ALIASES.get(model_id, ()))
+    if not aliases:
+        return {}
+    return {"accepted_aliases": aliases}
+
+
 def _family_for(provider: str, model_id: str) -> str:
     if provider == "anthropic":
         return "claude"
@@ -469,6 +505,7 @@ def _build_template(provider: str, model_id: str) -> ModelTemplate:
         execution_backend = "codex_cli"
     elif provider == "anthropic":
         execution_backend = "claude_cli_relay"
+        execution_model_id = _ANTHROPIC_RUNTIME_MODEL_IDS.get(model_id, execution_model_id)
     elif provider == "gemini":
         execution_backend = "litellm_proxy"
     return ModelTemplate(
@@ -618,6 +655,22 @@ def _build_key_state(rows: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]
     return state
 
 
+def _collect_provider_normalizations(key_state: dict[str, dict[str, Any]]) -> dict[str, int]:
+    """원본 provider 별칭이 정규화된 경우 최근 sync 메타데이터로 남긴다."""
+    normalized_counts: dict[str, int] = {}
+    for provider, state in key_state.items():
+        for raw_provider in state.get("raw_providers", set()):
+            raw = str(raw_provider or "").strip()
+            if not raw:
+                continue
+            normalized = normalize_provider(raw)
+            if not normalized or normalized == raw:
+                continue
+            rule = f"{raw}->{provider or normalized}"
+            normalized_counts[rule] = normalized_counts.get(rule, 0) + 1
+    return normalized_counts
+
+
 def _is_auto_executable_discovered(provider: str, model_id: str, raw: dict[str, Any] | None = None) -> bool:
     lowered = model_id.lower()
     excluded = (
@@ -681,6 +734,7 @@ def _discovered_model_row(
         "raw": raw or {},
     }
     metadata.update(_compatibility_alias_metadata(model_id))
+    metadata.update(_accepted_alias_metadata(provider, model_id))
     return {
         "provider": provider,
         "model_id": model_id,
@@ -996,6 +1050,7 @@ def build_registry_snapshots(key_rows: Iterable[dict[str, Any]]) -> tuple[list[d
                 "execution_base_url": template.execution_base_url,
             }
             metadata.update(_compatibility_alias_metadata(template.model_id))
+            metadata.update(_accepted_alias_metadata(provider, template.model_id))
             model_rows.append(
                 {
                     "provider": provider,
@@ -1361,8 +1416,22 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
     async with pool.acquire() as conn:
         key_rows = await _fetch_key_rows(conn)
     template_rows, provider_rows = build_registry_snapshots(key_rows)
+    key_state = _build_key_state(key_rows)
+    normalized_providers = _collect_provider_normalizations(key_state)
     discovered_rows, discovery_runs = await discover_provider_model_rows(key_rows)
     model_rows = _merge_model_rows(template_rows, discovered_rows)
+    review_required_providers = sorted(
+        {
+            row["provider"]
+            for row in provider_rows
+            if row.get("requires_admin_review")
+        }
+        | {
+            str(run.get("provider") or "").strip()
+            for run in discovery_runs
+            if run.get("status") in {"failed"}
+        }
+    )
 
     async with pool.acquire() as conn:
         try:
@@ -1472,6 +1541,8 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
                         "reason": reason,
                         "models_synced": len(model_rows),
                         "providers_seen": [row["provider"] for row in provider_rows],
+                        "normalized_providers": normalized_providers,
+                        "review_required_providers": review_required_providers,
                         "discovery": discovery_runs,
                     },
                 )
@@ -1494,7 +1565,21 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
                     )
         except asyncpg.UndefinedTableError:
             logger.warning("model_registry.sync_missing_table")
-            return {"ok": False, "error": "registry_tables_missing", "models_synced": 0, "providers": provider_rows}
+            return {
+                "ok": False,
+                "error": "registry_tables_missing",
+                "models_synced": 0,
+                "providers": provider_rows,
+                "normalized_providers": normalized_providers,
+                "review_required_providers": review_required_providers,
+            }
 
     invalidate_registry_cache()
-    return {"ok": True, "models_synced": len(model_rows), "providers": provider_rows, "discovery": discovery_runs}
+    return {
+        "ok": True,
+        "models_synced": len(model_rows),
+        "providers": provider_rows,
+        "discovery": discovery_runs,
+        "normalized_providers": normalized_providers,
+        "review_required_providers": review_required_providers,
+    }
