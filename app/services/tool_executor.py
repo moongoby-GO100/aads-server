@@ -563,7 +563,7 @@ class ToolExecutor:
             return {"repo": repo, "path": path, "branch": branch, "content": content}
 
     async def _query_database(self, inp: Dict[str, Any]) -> Any:
-        query = inp.get("query", "")
+        query = inp.get("sql", "") or inp.get("query", "")
         limit = min(inp.get("limit", 20), 100)
         # SQL 안전성 검증
         clean_query = query.strip().rstrip(";").strip()
