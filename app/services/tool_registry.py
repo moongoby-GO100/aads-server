@@ -92,6 +92,9 @@ _DEFER_LOADING: Dict[str, bool] = {
     "git_remote_push": True,
     "git_remote_status": True,
     "git_remote_create_branch": True,
+    # ── PC Agent 도구 (AADS-195) ──────────────────────────────────────
+    "pc_execute": False,              # 상시 로드 — 연결된 PC Agent 명령 실행
+    "pc_list_agents": False,          # 상시 로드 — 연결된 PC Agent 조회
     # ── 미디어/생성 도구 ──────────────────────────────────────────────
     "generate_image": False,          # 핵심 — CEO 이미지 요청 빈번
     # ── 검색 도구 (한국어 특화) ───────────────────────────────────────
@@ -741,6 +744,50 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"project": "SF", "command": "docker ps"},
             {"project": "KIS", "command": "supervisorctl status"},
         ],
+    },
+    # ── AADS-195 Phase 3: PC Agent 도구 ──────────────────────────────────
+    "pc_execute": {
+        "name": "pc_execute",
+        "description": (
+            "연결된 PC Agent에 명령을 전송하고 결과를 수신합니다. "
+            "지원 명령: shell, screenshot, file_list, file_read, file_write, process_list, "
+            "kakao_send, kakao_read, browser_auto, input_control, window_control, macro, "
+            "system_info, screen_stream"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "agent_id": {
+                    "type": "string",
+                    "description": "PC Agent ID (1대만 연결 시 자동 선택)",
+                },
+                "command_type": {
+                    "type": "string",
+                    "description": (
+                        "실행할 명령 유형 (shell, screenshot, file_list, file_read, file_write, "
+                        "process_list, kakao_send, kakao_read, browser_auto, input_control, "
+                        "window_control, macro, system_info 등)"
+                    ),
+                },
+                "params": {
+                    "type": "object",
+                    "description": (
+                        "명령별 파라미터 (예: shell→{\"command\":\"dir\"}, "
+                        "kakao_send→{\"target\":\"이름\",\"message\":\"내용\"})"
+                    ),
+                },
+            },
+            "required": ["command_type"],
+        },
+    },
+    "pc_list_agents": {
+        "name": "pc_list_agents",
+        "description": "현재 WebSocket으로 연결된 PC Agent 목록을 조회합니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
     },
     "git_remote_add": {
         "name": "git_remote_add",

@@ -313,3 +313,7 @@ async def list_
 ## [2026-04-29 12:26:12 KST] [GO100] backend/app/services/go100/ai/data_queries.py
 - Chat-Direct 수정: run_remote_command: grep -n "_ensure_uuid\|_log_llm_error\|_classify_llm_error" backend/app/routers/
 - finalize: pending
+
+## [2026-04-29 14:46:08 KST] [GO100] frontend/public/mockup/card-test.html
+- Chat-Direct 수정: write: frontend/public/mockup/card-test.html
+- finalize: pending
