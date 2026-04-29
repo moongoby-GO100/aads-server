@@ -18,3 +18,6 @@
 ## [2026-04-29 10:37:00 KST] [aads-server] app/logging_config.py
 - Chat-Direct 수정: patch: """structlog 표준화 설정 — 구조화 JSON 로깅."""
 im→"""structlog 표준화 설정 — 구조화 JSON 로깅 + File
+
+## [2026-04-29 19:45:38 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: ls /root/aads/aads-server/device_sdk/pc_agent/

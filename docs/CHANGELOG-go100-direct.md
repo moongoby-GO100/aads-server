@@ -317,3 +317,57 @@ async def list_
 ## [2026-04-29 14:46:08 KST] [GO100] frontend/public/mockup/card-test.html
 - Chat-Direct 수정: write: frontend/public/mockup/card-test.html
 - finalize: pending
+
+## [2026-04-29 19:45:35 KST] [GO100] backend/app/services/go100/ai/live_trading.py
+- Chat-Direct 수정: patch:         if not row:
+            return {→        if not row:
+            return {
+- finalize: pending
+
+## [2026-04-29 19:46:27 KST] [GO100] backend/app/services/go100/kis_order_gateway.py
+- Chat-Direct 수정: patch:         text("""
+            SELECT is_p→        text("""
+            SELECT is_p
+- finalize: pending
+
+## [2026-04-29 19:46:30 KST] [GO100] backend/app/services/go100/kis_order_gateway.py
+- Chat-Direct 수정: patch:         if not is_production:
+          →        if not is_production:
+          
+- finalize: pending
+
+## [2026-04-29 19:46:32 KST] [GO100] backend/app/services/go100/kis_order_gateway.py
+- Chat-Direct 수정: patch:         if not is_production:
+          →        if not is_production:
+          
+- finalize: pending
+
+## [2026-04-29 19:46:35 KST] [GO100] backend/app/services/go100/kis_order_gateway.py
+- Chat-Direct 수정: patch:         if not is_production:
+          →        if not is_production:
+          
+- finalize: pending
+
+## [2026-04-29 19:46:37 KST] [GO100] backend/app/services/go100/kis_order_gateway.py
+- Chat-Direct 수정: patch:         if not is_production:
+          →        if not is_production:
+          
+- finalize: pending
+
+## [2026-04-29 19:46:40 KST] [GO100] backend/app/services/go100/kis_order_gateway.py
+- Chat-Direct 수정: patch:         text("""
+            SELECT is_p→        text("""
+            SELECT is_p
+- finalize: pending
+
+## [2026-04-29 19:46:42 KST] [GO100] backend/app/services/go100/kis_order_gateway.py
+- Chat-Direct 수정: patch:             return {"success": True, "me→            return {"success": True, "me
+- finalize: pending
+
+## [2026-04-29 19:46:45 KST] [GO100] backend/app/services/go100/kis_order_gateway.py
+- Chat-Direct 수정: patch:             return {"success": True, "me→            return {"success": True, "me
+- finalize: pending
+
+## [2026-04-29 19:46:47 KST] [GO100] backend/app/services/go100/kis_order_gateway.py
+- Chat-Direct 수정: patch:             SELECT is_production FROM ki→            SELECT is_production, hts_id
+- finalize: pending
