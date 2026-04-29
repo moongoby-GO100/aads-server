@@ -2426,6 +2426,16 @@ async def _acquire_pw_context() -> Tuple[Any, Optional[str]]:
         except ImportError:
             return None, "[브라우저 도구 사용 불가] playwright 패키지가 설치되지 않았습니다."
         try:
+            import os
+
+            if not os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+                for p in ["/root/.cache/ms-playwright", "/root/.cache"]:
+                    if os.path.isdir(os.path.join(p, "chromium-1208")) or os.path.isdir(
+                        os.path.join(p, "chromium_headless_shell-1208")
+                    ):
+                        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = p
+                        break
+
             need_init = (
                 _pw_context is None
                 or _pw_browser is None
