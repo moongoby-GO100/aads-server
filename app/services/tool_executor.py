@@ -442,6 +442,9 @@ class ToolExecutor:
             # AADS-195 Phase 3: PC Agent 도구
             "pc_execute":             self._pc_execute,
             "pc_list_agents":         self._pc_list_agents,
+            # AADS-230: 통합 디바이스 도구
+            "device_execute":         self._device_execute,
+            "device_list":            self._device_list,
             # 유령 도구 해소 (Claude+Gemini 양쪽 경로 통일)
             "generate_image":          self._generate_image,
             "send_telegram":           self._send_telegram,
@@ -2417,6 +2420,36 @@ class ToolExecutor:
             "agents": [a.model_dump(mode="json") for a in agents],
             "count": len(agents),
         }
+
+    async def _device_execute(self, inp: Dict[str, Any]) -> Any:
+        """통합 디바이스(PC/Android/iOS) 명령 실행."""
+        from app.services.device_manager import device_manager
+
+        agent_id = inp.get("agent_id", "")
+        command_type = inp.get("command_type", "")
+        params = inp.get("params", {})
+        timeout = float(inp.get("timeout", 30))
+
+        if not command_type:
+            return {"error": "command_type 필수"}
+
+        try:
+            result = await device_manager.send_command(
+                agent_id, command_type, params, timeout=timeout
+            )
+            return result.model_dump(mode="json")
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _device_list(self, inp: Dict[str, Any]) -> Any:
+        """연결된 디바이스(PC/Android/iOS) 목록 조회."""
+        from app.services.device_manager import device_manager
+
+        device_type = inp.get("device_type")
+        devices = device_manager.get_devices(device_type)
+        if not devices:
+            return {"devices": [], "message": "연결된 디바이스가 없습니다."}
+        return {"devices": devices, "count": len(devices)}
 
     async def _delegate_to_agent(self, inp: Dict[str, Any]) -> Any:
         """

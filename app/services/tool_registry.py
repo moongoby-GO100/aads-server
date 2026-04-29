@@ -93,8 +93,11 @@ _DEFER_LOADING: Dict[str, bool] = {
     "git_remote_status": True,
     "git_remote_create_branch": True,
     # ── PC Agent 도구 (AADS-195) ──────────────────────────────────────
-    "pc_execute": False,              # 상시 로드 — 연결된 PC Agent 명령 실행
-    "pc_list_agents": False,          # 상시 로드 — 연결된 PC Agent 조회
+    "pc_execute": False,              # 상시 로드 — 연결된 PC Agent 명령 실행 (deprecated → device_execute)
+    "pc_list_agents": False,          # 상시 로드 — 연결된 PC Agent 조회 (deprecated → device_list)
+    # ── 통합 디바이스 도구 (AADS-230) ────────────────────────────────────
+    "device_execute": False,          # 상시 로드 — PC/Android/iOS 통합 디바이스 명령
+    "device_list": False,             # 상시 로드 — 연결된 디바이스 목록
     # ── 미디어/생성 도구 ──────────────────────────────────────────────
     "generate_image": False,          # 핵심 — CEO 이미지 요청 빈번
     # ── 검색 도구 (한국어 특화) ───────────────────────────────────────
@@ -782,10 +785,35 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     },
     "pc_list_agents": {
         "name": "pc_list_agents",
-        "description": "현재 WebSocket으로 연결된 PC Agent 목록을 조회합니다.",
+        "description": "[deprecated → device_list] 현재 WebSocket으로 연결된 PC Agent 목록을 조회합니다.",
         "input_schema": {
             "type": "object",
             "properties": {},
+            "required": [],
+        },
+    },
+    "device_execute": {
+        "name": "device_execute",
+        "description": "연결된 디바이스(PC/Android/iOS)에 명령을 실행합니다. 디바이스가 1대면 agent_id 생략 가능.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "agent_id": {"type": "string", "description": "대상 디바이스 ID (1대 연결 시 생략 가능)"},
+                "command_type": {"type": "string", "description": "실행할 명령 타입 (shell, screenshot, sms_send, location, camera_photo, battery, clipboard_get, adb_tap 등)"},
+                "params": {"type": "object", "description": "명령 파라미터", "default": {}},
+                "timeout": {"type": "number", "description": "응답 대기 시간(초)", "default": 30},
+            },
+            "required": ["command_type"],
+        },
+    },
+    "device_list": {
+        "name": "device_list",
+        "description": "현재 WebSocket으로 연결된 모든 디바이스(PC/Android/iOS) 목록을 조회합니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "device_type": {"type": "string", "enum": ["pc", "android", "ios"], "description": "디바이스 타입 필터 (생략 시 전체)"},
+            },
             "required": [],
         },
     },

@@ -40,6 +40,7 @@ from app.api.code_review import router as code_review_router
 from app.api.quality import router as quality_router
 from app.api.memory_monitor import router as memory_monitor_router
 from app.api.pc_agent import router as pc_agent_router
+from app.api.device import router as device_router
 from app.api.kakao_bot import router as kakao_bot_router
 from app.api.agenda import router as agenda_router
 from app.api.hot_reload import router as hot_reload_router
@@ -1163,6 +1164,7 @@ app.include_router(code_review_router)
 app.include_router(quality_router, prefix="/api/v1", tags=["quality"])
 app.include_router(memory_monitor_router, prefix="/api/v1", tags=["memory-monitor"])
 app.include_router(pc_agent_router, prefix="/api/v1", tags=["pc-agent"])
+app.include_router(device_router, prefix="/api/v1", tags=["device"])
 app.include_router(kakao_bot_router, prefix="/api/v1", tags=["kakao-bot"])
 app.include_router(agenda_router, prefix="/api/v1/agenda", tags=["agenda"])
 app.include_router(hot_reload_router, prefix="/api/v1", tags=["hot-reload"])
