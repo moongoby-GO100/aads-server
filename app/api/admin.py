@@ -446,6 +446,11 @@ def _admin_to_string_list(value: Any) -> list[str]:
     return [str(parsed)]
 
 
+def _admin_role_metadata(value: Any) -> dict[str, Any]:
+    parsed = _admin_parse_json(value)
+    return parsed if isinstance(parsed, dict) else {}
+
+
 @router.get("/admin/model-parity")
 async def get_model_parity_dashboard():
     """최근 7일 모델 라우팅/사용량 패리티 대시보드."""
@@ -1226,6 +1231,18 @@ async def list_admin_agents():
             ("created_at", "updated_at"),
             "NULL::timestamptz",
         )
+        escalation_rules_expr = _admin_column_expr(
+            "rp",
+            role_columns,
+            ("escalation_rules",),
+            "'{}'::jsonb",
+        )
+        project_scope_expr = _admin_column_expr(
+            "rp",
+            role_columns,
+            ("project_scope",),
+            "NULL",
+        )
 
         if has_pipeline_jobs and pipeline_role_column:
             job_role_expr = f"NULLIF(TRIM({_admin_colref('pj', pipeline_role_column)}::text), '')"
@@ -1247,6 +1264,8 @@ async def list_admin_agents():
                     {allowed_intents_expr} AS allowed_intents,
                     {max_tokens_expr} AS max_tokens,
                     {created_at_expr} AS created_at,
+                    {escalation_rules_expr} AS escalation_rules,
+                    {project_scope_expr} AS project_scope,
                     COALESCE(rj.recent_tasks_count, 0) AS recent_tasks_count,
                     rj.last_active_at AS last_active_at
                 FROM role_profiles rp
@@ -1265,6 +1284,8 @@ async def list_admin_agents():
                     {allowed_intents_expr} AS allowed_intents,
                     {max_tokens_expr} AS max_tokens,
                     {created_at_expr} AS created_at,
+                    {escalation_rules_expr} AS escalation_rules,
+                    {project_scope_expr} AS project_scope,
                     0::bigint AS recent_tasks_count,
                     NULL::timestamptz AS last_active_at
                 FROM role_profiles rp
@@ -1272,23 +1293,40 @@ async def list_admin_agents():
                 """
             )
 
-    agents = [
-        {
-            "role": row["role"] or "",
-            "display_name": row["display_name"] or row["role"] or "",
-            "base_model": row["base_model"] or "",
-            "allowed_intents": _admin_to_string_list(row["allowed_intents"]),
-            "max_tokens": int(row["max_tokens"]) if row["max_tokens"] is not None else None,
-            "created_at": _admin_iso(row["created_at"]),
-            "recent_tasks_count": int(row["recent_tasks_count"] or 0),
-            "last_active_at": _admin_iso(row["last_active_at"]),
-        }
-        for row in rows
-    ]
+    agents = []
+    category_counts: dict[str, int] = {}
+    for row in rows:
+        metadata = _admin_role_metadata(row["escalation_rules"])
+        category = str(metadata.get("role_category") or "uncategorized")
+        category_counts[category] = category_counts.get(category, 0) + 1
+        display_name_ko = str(metadata.get("display_name_ko") or "").strip()
+        agents.append(
+            {
+                "role": row["role"] or "",
+                "display_name": display_name_ko or row["display_name"] or row["role"] or "",
+                "display_name_ko": display_name_ko or None,
+                "base_model": row["base_model"] or "",
+                "allowed_intents": _admin_to_string_list(row["allowed_intents"]),
+                "max_tokens": int(row["max_tokens"]) if row["max_tokens"] is not None else None,
+                "created_at": _admin_iso(row["created_at"]),
+                "project_scope": _admin_to_string_list(row["project_scope"]),
+                "role_category": category,
+                "role_category_label_ko": metadata.get("role_category_label_ko") or "미분류",
+                "role_group_order": int(metadata.get("role_group_order") or 999),
+                "lifecycle_stage": metadata.get("lifecycle_stage") or "",
+                "category_description": metadata.get("category_description") or "",
+                "when_to_use": _admin_to_string_list(metadata.get("when_to_use")),
+                "how_to_instruct": _admin_to_string_list(metadata.get("how_to_instruct")),
+                "instruction_template": metadata.get("instruction_template") or "",
+                "recent_tasks_count": int(row["recent_tasks_count"] or 0),
+                "last_active_at": _admin_iso(row["last_active_at"]),
+            }
+        )
 
     return {
         "agents": agents,
         "total": len(agents),
+        "category_counts": category_counts,
     }
 
 
@@ -1437,6 +1475,18 @@ async def get_admin_agent(role: str):
             ("created_at", "updated_at"),
             "NULL::timestamptz",
         )
+        escalation_rules_expr = _admin_column_expr(
+            "rp",
+            role_columns,
+            ("escalation_rules",),
+            "'{}'::jsonb",
+        )
+        project_scope_expr = _admin_column_expr(
+            "rp",
+            role_columns,
+            ("project_scope",),
+            "NULL",
+        )
 
         profile_row = await conn.fetchrow(
             f"""
@@ -1446,7 +1496,9 @@ async def get_admin_agent(role: str):
                 {base_model_expr} AS base_model,
                 {allowed_intents_expr} AS allowed_intents,
                 {max_tokens_expr} AS max_tokens,
-                {created_at_expr} AS created_at
+                {created_at_expr} AS created_at,
+                {escalation_rules_expr} AS escalation_rules,
+                {project_scope_expr} AS project_scope
             FROM role_profiles rp
             WHERE lower({role_expr}::text) = lower($1)
             LIMIT 1
@@ -1539,15 +1591,27 @@ async def get_admin_agent(role: str):
 
     completed_ratio = (completed_tasks / total_tasks) if total_tasks else 0.0
     error_ratio = (error_tasks / total_tasks) if total_tasks else 0.0
+    metadata = _admin_role_metadata(profile_row["escalation_rules"])
+    display_name_ko = str(metadata.get("display_name_ko") or "").strip()
 
     return {
         "agent": {
             "role": profile_row["role"] or role_key,
-            "display_name": profile_row["display_name"] or profile_row["role"] or role_key,
+            "display_name": display_name_ko or profile_row["display_name"] or profile_row["role"] or role_key,
+            "display_name_ko": display_name_ko or None,
             "base_model": profile_row["base_model"] or "",
             "allowed_intents": _admin_to_string_list(profile_row["allowed_intents"]),
             "max_tokens": int(profile_row["max_tokens"]) if profile_row["max_tokens"] is not None else None,
             "created_at": _admin_iso(profile_row["created_at"]),
+            "project_scope": _admin_to_string_list(profile_row["project_scope"]),
+            "role_category": metadata.get("role_category") or "uncategorized",
+            "role_category_label_ko": metadata.get("role_category_label_ko") or "미분류",
+            "role_group_order": int(metadata.get("role_group_order") or 999),
+            "lifecycle_stage": metadata.get("lifecycle_stage") or "",
+            "category_description": metadata.get("category_description") or "",
+            "when_to_use": _admin_to_string_list(metadata.get("when_to_use")),
+            "how_to_instruct": _admin_to_string_list(metadata.get("how_to_instruct")),
+            "instruction_template": metadata.get("instruction_template") or "",
             "recent_tasks_count": total_tasks,
             "last_active_at": _admin_iso(last_active_at),
             "total_tasks": total_tasks,
@@ -1558,6 +1622,68 @@ async def get_admin_agent(role: str):
         },
         "recent_tasks": recent_tasks,
     }
+
+
+@router.get("/admin/sessions")
+async def list_admin_sessions(
+    limit: int = Query(200, ge=1, le=500),
+):
+    """Chat sessions summary for the admin session replay page."""
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        if not await _admin_table_exists(conn, "chat_sessions"):
+            return {"sessions": [], "total": 0}
+
+        has_workspaces = await _admin_table_exists(conn, "chat_workspaces")
+        has_messages = await _admin_table_exists(conn, "chat_messages")
+        workspace_join = (
+            "LEFT JOIN chat_workspaces cw ON cw.id = s.workspace_id"
+            if has_workspaces else ""
+        )
+        workspace_expr = (
+            "COALESCE(cw.name, s.workspace_id::text)"
+            if has_workspaces else "s.workspace_id::text"
+        )
+        message_count_expr = (
+            "(SELECT COUNT(*)::int FROM chat_messages m WHERE m.session_id = s.id)"
+            if has_messages else "0::int"
+        )
+
+        rows = await conn.fetch(
+            f"""
+            SELECT
+                s.id::text AS session_id,
+                {workspace_expr} AS workspace,
+                s.title,
+                s.role_key,
+                s.current_model,
+                s.created_at,
+                s.updated_at,
+                {message_count_expr} AS message_count
+            FROM chat_sessions s
+            {workspace_join}
+            ORDER BY COALESCE(s.updated_at, s.created_at) DESC NULLS LAST
+            LIMIT $1
+            """,
+            limit,
+        )
+
+    sessions = [
+        {
+            "session_id": row["session_id"],
+            "workspace": row["workspace"] or "-",
+            "title": row["title"] or "",
+            "role_key": row["role_key"] or "",
+            "current_model": row["current_model"] or "",
+            "created_at": _admin_iso(row["created_at"]),
+            "updated_at": _admin_iso(row["updated_at"]),
+            "message_count": int(row["message_count"] or 0),
+        }
+        for row in rows
+    ]
+    return {"sessions": sessions, "total": len(sessions)}
 
 
 @router.get("/admin/tasks")

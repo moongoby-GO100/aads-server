@@ -1,6 +1,18 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-04-28)
+- **역할 분류 체계 + 사업화 역할 + Agent Registry 관리 UI 반영 (2026-04-30 18:59 KST)**:
+  - DB: `migrations/077_role_taxonomy_and_business_roles.sql` 추가 및 운영 DB 적용 완료. 기존 `role_profiles` 26건에 분류 메타데이터를 반영하고, 사업화 역할 8건(`GTMStrategist`, `BrandMarketingLead`, `SalesPartnershipLead`, `PricingMonetizationStrategist`, `CustomerSuccessLead`, `RevenueOperationsAnalyst`, `FinanceFundraisingLead`, `LegalIPAdvisor`)과 L3 `prompt_assets` 8건을 추가/갱신했다.
+  - 분류 결과: 의사결정·전략 4건, 제품·사용자경험 3건, 개발·구현·검증 9건, 보안·리스크·거버넌스 2건, 사업화·매출·시장진입 8건.
+  - 백엔드: `GET /api/v1/admin/agents`와 상세 API가 `role_category`, `role_category_label_ko`, `role_group_order`, `lifecycle_stage`, `project_scope`, 활용 기준/지시 방법/템플릿을 반환한다. `/chat/workspaces/{workspace_id}/roles`도 role group order 기준 정렬과 카테고리 메타데이터를 포함한다.
+  - 대시보드: `/root/aads/aads-dashboard/src/app/admin/agents/page.tsx` 신규 추가. 분류 필터, 역할 검색, 프로젝트 범위, 활용 기준, 최근 작업 상세를 한 화면에서 확인할 수 있다.
+  - 검증: `python3 -m py_compile app/api/admin.py app/services/chat_service.py` 통과, `npx eslint src/app/admin/agents/page.tsx` 통과, `npm run build` 통과, `npx tsc --noEmit --pretty false` 통과, 운영 DB 적용 결과 `UPDATE 26`, `INSERT 0 8`, `INSERT 0 8`, `COMMIT` 확인. 2026-04-30 19:28 KST 기준 백엔드 reload 6단계 검증 통과, 대시보드 blue-green 배포 성공, `/admin/agents` 외부 URL은 인증 리다이렉트(`/login?redirect=%2Fadmin%2Fagents`) 정상.
+- **서버114 CROSS-MONITOR 알림 조치 완료 (2026-04-30 09:02 KST)**:
+  - 증상: `Exec(114) 심각 — 디스크100% HTTP-health실패` 텔레그램 알림.
+  - 실측: 서버114 `/` 디스크는 `875G 중 686G 사용, 181G 여유, 80%`로 100% 상태가 아니며 warning 임계 구간. ShortFlow/NewTalk V2 Docker 컨테이너는 모두 Up.
+  - 원인: AADS 헬스체커가 서버114 SSH 포트 `7916`을 HTTP health URL로 하드코딩하고 있었다. 실제 `116.120.58.155:7916`은 `sshd` 포트라 HTTP 요청이 connection refused 처리된다.
+  - 조치: `app/services/health_checker.py`, `app/services/server_registry.py`, `app/services/tool_executor.py`의 114/SF/NTV2 HTTP health URL을 `https://sf.newtalk.kr/`, `https://v2.newtalk.kr/`로 교체하고 `aads-api`를 supervisorctl로 재시작했다.
+  - 검증: `python3 -m py_compile app/services/health_checker.py app/services/server_registry.py app/services/tool_executor.py` 통과, `_check_http_health("114")`가 `ok=True` 반환, `https://aads.newtalk.kr/api/v1/health` 정상.
 - **L3 Role 프롬프트 전문성 강화 DB 반영 완료 (2026-04-29 08:55 KST)**:
   - 신규 마이그레이션: `migrations/065_strengthen_l3_role_prompts.sql` 추가 및 운영 DB 적용 완료.
   - 적용 결과: `prompt_assets` L3 활성 40건 유지, 평균 본문 길이 283자 → 390자, 최대 820자. 핵심 역할 10개에는 판단 기준/필수 확인/작업 절차/산출물/검증/에스컬레이션 구조를 반영했다.
@@ -260,3 +272,66 @@
 - 지정 세션 확인: `ed08553d-a842-4967-8867-00e82ddd2eba` 최신 provenance는 `2026-04-29 12:32 KST`, workspace=`GO100`, role=`VibeCodingLead`, `system_prompt_chars=22873`, applied assets 11건, compile_error 없음
 - 검증: GO100 + `VibeCodingLead` + `status_check` + `claude-sonnet-4-6` 샘플 매칭에서 L1 5건(`global-layer-governance` 1,328자 포함), L2 2건, L3 2건, L4 1건(`intent-status-check` 862자), L5 1건 선택 확인. API 헬스체크 `http://localhost:8100/health` 200 확인
 - 주의: 기존 provenance 행은 컴파일 당시 스냅샷이라 과거 chars가 남는 것이 정상. 신규 보강 규칙은 다음 컴파일/다음 메시지부터 provenance에 반영됨. 재시작은 불필요
+
+## 2026-04-30 06:12 KST - AADS 서버 + 대시보드 전체 blue-green 배포
+
+- 대상: `/root/aads/aads-server` `bash deploy.sh bluegreen`, `/root/aads/aads-dashboard` `bash deploy.sh` 순차 실행. 배포 후 nginx upstream은 서버 `127.0.0.1:8100` primary, `127.0.0.1:8102` backup이고 대시보드는 `127.0.0.1:3100` primary, `127.0.0.1:3101` backup 상태.
+- 반영 범위: 서버 저장소의 Android/device/tool_executor 변경과 대시보드 채팅 화면 `src/app/chat/page.tsx`, `src/app/chat/types.ts`, 설정 화면 `src/app/settings/page.tsx`, `src/components/settings/LlmRegistryWorkspacePanel.tsx` 변경이 배포 산출물에 포함됨.
+- 운영 확인: `docker ps` 기준 `aads-server`, `aads-server-green`, `aads-dashboard`, `aads-postgres`, `aads-litellm`, `aads-searxng`, `aads-redis`가 running/healthy. `curl http://localhost:8100/api/v1/health` 응답 `status=ok`, `graph_ready=true`, `sandbox.status=ok`.
+- 외부 확인: `curl https://aads.newtalk.kr/login` 200, `curl -L https://aads.newtalk.kr/chat` 200(`/login?redirect=%2Fchat`) 확인.
+- 배포 주의: 서버 blue-green drain 단계에서 활성 스트림 2건이 300초 타임아웃까지 남아 강제 전환됐으나, 전환 후 Health/DB 스키마/채팅 테이블/LLM 검증은 모두 통과. 대시보드 `next build` 성공, 내부/외부 헬스체크 통과, 프론트엔드 QA API는 `UNKNOWN` verdict로 통과 처리됨.
+- Git 상태 주의: 서버 저장소와 대시보드 저장소 모두 미커밋 변경이 남아 있음. 별도 지시 전까지 기존 변경은 되돌리지 않음.
+
+## 2026-04-30 07:32 KST - Playwright MCP STOPPED 복구
+
+- 원인: `supervisord.conf`의 `playwright-mcp`가 `npx @playwright/mcp`를 사용하지만 서버 이미지 `Dockerfile`에 `nodejs/npm`이 없어 supervisor 기동 시 `no such file`로 실패.
+- 조치: `Dockerfile`에 `nodejs npm` 설치를 추가하고, `supervisord.conf`에서 `playwright-mcp`를 `autostart=true`, `autorestart=true`, `startretries=3`으로 변경. 현재 실행 컨테이너에는 `apt-get install nodejs npm` 후 `supervisorctl reread/update`로 즉시 반영.
+- 검증: `supervisorctl status all` 기준 `mcp-servers:playwright-mcp RUNNING`, `/var/log/playwright-mcp.log`에 `Listening on http://localhost:8768` 확인. `curl http://localhost:8768/mcp`는 MCP HTTP 엔드포인트가 살아 있어 `Invalid request`를 반환. AADS 헬스체크 `https://aads.newtalk.kr/api/v1/health`는 `status=ok`.
+
+## 2026-04-30 14:49 KST - aads-redis 자동복구 성공 오알림 차단
+
+- 증상: Telegram에 `자동복구 성공 / 서비스: 68:aads-redis / 명령: docker restart aads-redis / 결과: Restart blocked for aads-redis (use external watchdog)` 알림이 반복됨.
+- 원인: `app/services/unified_healer.py`가 보호 컨테이너(`aads-server`, `aads-postgres`, `aads-redis`, `aads-litellm`)의 내부 restart 차단을 `success=True`로 반환해 실제 재시작이 없는데도 성공 알림을 발송할 수 있었음.
+- 즉시 조치: 운영 DB `monitored_services`의 `68:aads-redis` `auto_recovery_command`를 `NULL`로 변경해 현재 실행 중인 Healer가 Redis 내부 재시작을 더 이상 시도하지 않도록 차단. Redis 상태는 `PONG`, Docker health `healthy`, `consecutive_failures=0`.
+- 코드 조치: `unified_healer.py`에서 보호 컨테이너 restart/stop 차단 결과를 `success=False, blocked=True`로 반환하고, 서비스/error 복구 경로 모두 `blocked`는 성공/실패 텔레그램을 보내지 않고 `auto_recovery_blocked`/`error_recovery_blocked` 로그만 남기도록 패치.
+- 검증: `python3 -m py_compile app/services/unified_healer.py` 통과, `bash scripts/reload-api.sh` hot-reload 성공(53개 모듈 재로드), 30초 이상 모니터링 후 `68:aads-redis`는 `ok`, 최근 앱 로그에 `aads-redis|Restart blocked|auto_recovery_blocked` 재발 없음. API health는 blue/green 모두 `status=ok`.
+- 주의: 반복 알림 차단은 DB 변경으로 즉시 반영됐고, 코드 패치도 hot-reload로 런타임 반영 완료. Redis 실제 장애 복구는 호스트 cron `/root/aads/aads-server/watchdog-host.sh`의 Layer 0가 담당.
+
+## 2026-04-30 16:14 KST - aads-redis 오알림 재발 경로 추가 차단
+
+- 증상: 위 조치 후에도 CEO Telegram에 동일한 `68:aads-redis / docker restart aads-redis / Restart blocked` 자동복구 성공 알림이 계속 도착.
+- 원인 보강: AADS DB 기반 `unified_healer` 외에 호스트 cron/레거시 watchdog 경로가 별도로 존재. `/usr/local/bin/newtalk_claude_monitor.py`는 Claude 프롬프트와 허용 명령 목록에 `docker restart aads-redis`를 보유했고, `/root/aads/scripts/watchdog_daemon.py`는 `recovery_log` 기반 자동복구 성공 알림 경로를 보유.
+- 추가 조치: `unified_healer.py`의 `redis_connection_error -> docker restart aads-redis` 매핑 제거, `escalation_engine.py` Docker 자동재시작 allowlist에서 핵심 의존 컨테이너 제거, `newtalk_claude_monitor.py` 허용 명령/프롬프트에서 `aads-redis` 제거, `watchdog_daemon.py` recovery_log 자동실행 경로에서 보호 컨테이너 차단.
+- 검증: `python3 -m py_compile app/services/unified_healer.py app/services/escalation_engine.py /root/aads/scripts/watchdog_daemon.py /usr/local/bin/newtalk_claude_monitor.py` 통과. 운영 DB 기준 `monitored_services`의 `68:aads-redis` 자동복구 명령은 `NULL`, 최근 `alert_history/error_log/recovery_log`에 Redis 관련 신규 이력 없음.
+
+## 2026-04-30 16:24 KST - Telegram 반복 알림 추가 소음 차단
+
+- 증상: CEO가 Telegram 알림이 계속 온다고 재보고. Redis 컨테이너 자체는 `Up 9 days (healthy)`이고 DB `monitored_services`의 `68:aads-redis`는 `ok`, `consecutive_failures=0`, `auto_recovery_command=NULL`.
+- 확인: `alert_history`, `error_log`, `recovery_log`에는 최근 Redis 관련 신규 이력 0건. Docker `aads-server`/`aads-server-green` 런타임 모두 `unified_healer`의 보호 컨테이너 차단 패치와 `redis_connection_error` 매핑 제거가 반영됨.
+- 추가 원인: `/root/aads/aads-server`에서 2026-03-01부터 떠 있던 고아 `uvicorn app.main:app --port 18080` 프로세스가 발견됨. 이 프로세스는 nginx upstream에 연결되지 않았고, 현재 hot-reload/배포 관리 대상 밖이라 오래된 APScheduler 루프를 돌릴 가능성이 있었음.
+- 조치: 고아 PID `22500`을 `SIGTERM`으로 종료. `ss -ltnp` 기준 `:18080` 리스너 제거 확인. 또한 `watchdog-host.sh`의 `stale placeholder N건 자동 정리`는 CEO 조치가 필요 없는 루틴 정리라 Telegram `notify` 대신 syslog `logger`만 남기도록 낮춤.
+- 추가 소음 차단: `/usr/local/bin/newtalk_claude_monitor.py`의 디스크 경고 기준을 `>85%`에서 `>=90%`로 조정해 현재 `/` 87% 상태가 30분마다 Telegram 경고 후보가 되지 않도록 cross-monitor 기준과 맞춤.
+- 검증: `bash -n watchdog-host.sh` 통과, `python3 -m py_compile /usr/local/bin/newtalk_claude_monitor.py` 통과, `:8100/:8102` Docker API만 리스닝, Redis DB 상태 정상. 이후 동일 Redis 문구가 또 오면 68서버 내부 신규 발송이 아니라 Telegram 지연/외부 발송 경로 가능성이 높으므로 수신 시각 기준으로 추적 필요.
+
+## 2026-04-30 16:32 KST - Telegram 반복 알림 2차 차단
+
+- 추가 확인: Redis 관련 신규 이력은 없고, 반복 후보는 `newtalk_claude_monitor`의 `/` 디스크 87% 경고, AADS `alert_eval`의 `disk_full(86.7%, 임계값 80%)`, `meta_watchdog`의 레거시 114 프로세스명 감시로 좁혀짐.
+- 조치: `app/services/alert_manager.py`의 디스크 텔레그램 기준을 `>=90%`로 상향하고, `cost_exceed` 중복 억제 기간을 1시간에서 24시간으로 확장. `/root/aads/meta_watchdog.sh`의 `watchdog_114`/`auto_trigger_114` 레거시 재시작 감시는 중지하고 cross_monitor가 114 헬스를 담당하도록 정리.
+- 검증: `newtalk_claude_monitor.sh` 수동 실행 결과 현재 `/` 87%에서 `이상 없음 - 정상 종료`. `AlertManager.evaluate_rules()`는 디스크 알림 0건, 비용 조건만 1건이나 24시간 dedup 대상으로 확인. `bash -n /root/aads/meta_watchdog.sh`, `python3 -m py_compile app/services/alert_manager.py /usr/local/bin/newtalk_claude_monitor.py`, `python3 -m pytest tests/test_observability.py -q` 통과.
+- 런타임 반영: `bash scripts/reload-api.sh`로 active `aads-server` 57개 모듈, `docker exec aads-server-green bash /app/scripts/reload-api.sh`로 green 45개 모듈 hot-reload 성공. 16:29~16:32 KST 스케줄러 주기 이후 `alert_history` 신규 행 0건 확인.
+
+## 2026-04-30 17:01 KST - aads-socket-proxy Healer 승인요청 오알림 차단
+
+- 증상: Telegram에 `AADS Healer 승인 요청 #103 / 68:aads-socket-proxy 복구 실패 / 마지막 에러: restart aads-socket-proxy: ok` 문구가 수신됨. 실측 기준 운영 DB `approval_queue`의 최대 ID는 63이라 화면의 `#103`은 현재 컨테이너 DB 신규 레코드가 아니며, 별도 런타임/과거 발송 경로 가능성이 있음.
+- 원인: `aads-socket-proxy`는 AADS API가 Docker API에 접근하는 통로인데, `monitored_services`에 `docker restart aads-socket-proxy` 자동복구 명령이 남아 있었음. 내부 Healer가 Docker API 통로 자체를 재시작하려는 구조라 간헐 실패/성공 결과가 승인 요청으로 오분류될 수 있음.
+- 조치: 운영 DB에서 `68:aads-socket-proxy`의 `auto_recovery_command`를 `NULL`로 제거하고 `last_status=ok`, `consecutive_failures=0`으로 리셋. `app/services/unified_healer.py`의 `PROTECTED_LOCAL_CONTAINERS`에 `aads-socket-proxy`를 추가해 코드상 내부 restart/stop을 영구 차단. `_create_approval_request()`에 24시간 내 동일 `target_server + action_command + title` pending 요청 dedupe를 추가해 같은 승인요청 반복 발송을 막음.
+- 114/211 확인: 114는 SSH 가능, `/` 80%, `localhost:8000/health` 200, `https://v2.newtalk.kr/` 307. 211은 SSH 가능, `/` 63%, nginx/postgresql/redis active, `https://go100.newtalk.kr/health` 200. DB `monitored_services` 기준 114/211 전체 `ok`, `consecutive_failures=0`.
+- 검증: `python3 -m py_compile app/services/unified_healer.py` 통과. `bash scripts/reload-api.sh` active 47개 모듈, `docker exec aads-server-green bash /app/scripts/reload-api.sh` green 35개 모듈 hot-reload 성공. 17:01 KST Healer 주기 이후 `approval_queue` 신규 0건, `aads-redis`/`aads-socket-proxy` 자동복구 명령 모두 `NULL`, 상태 `ok`.
+
+## 2026-04-30 17:15 KST - Contabo standby Healer #103 오알림 원인 확정 및 차단
+
+- 재확인: 68 운영 DB는 `approval_queue.max_id=63`, `aads-socket-proxy` pending 0건, `aads-socket-proxy` 컨테이너는 `Up 9 days` 상태라 68 운영 서버 자체에서 `#103`이 생성된 것이 아님.
+- 원인 확정: Contabo 동기화 서버(`5.104.86.116`)에도 AADS Docker 스택이 실행 중이고, 해당 DB `approval_queue.max_id=103`에 `68:aads-socket-proxy 복구 실패 (1회)` pending 요청이 실제 존재했음. Contabo standby의 `monitored_services`에는 `68:aads-socket-proxy`/`68:aads-redis`가 enabled 상태로 남아 있고 자동복구 명령도 각각 `docker restart aads-socket-proxy`, `docker restart aads-redis`로 남아 있었음.
+- 조치: Contabo DB에서 두 감시 항목을 `enabled=false`, `auto_recovery_command=NULL`, `last_status=disabled`, `consecutive_failures=0`으로 변경. 기존 `docker restart aads-socket-proxy` pending 승인요청 42건(`#62`~`#103`)은 `rejected`로 일괄 정리.
+- 검증: Healer 주기 경과 후 Contabo DB 기준 `approval_queue.max_id=103`, `socket_pending=0`, `redis_pending=0`. Contabo `monitored_services`의 `aads-redis`/`aads-socket-proxy`는 disabled 유지. 68 운영 DB도 `socket_pending=0` 유지.
+- 주의: `/root/aads/aads-server/scripts/sync-to-contabo.sh`가 10분마다 코드/문서를 동기화하므로, standby가 운영 텔레그램 알림을 보내지 않도록 DB 감시 항목 또는 환경변수 분리를 유지해야 함.
