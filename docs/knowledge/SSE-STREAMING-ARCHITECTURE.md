@@ -1,6 +1,6 @@
 # SSE Streaming Architecture — AADS CEO Chat
 
-_v2.1 | 2026-04-28_
+_v2.2 | 2026-04-30_
 
 ## 프록시 체인
 CEO 브라우저 → Cloudflare(120s) → Nginx(600s) → FastAPI → Anthropic API
@@ -20,6 +20,11 @@ CEO 브라우저 → Cloudflare(120s) → Nginx(600s) → FastAPI → Anthropic 
    18종 SSE 이벤트(delta/heartbeat/done + tool_use/tool_result/thinking/stream_start/
    stream_reset/yellow_limit/model_info/sdk_*/error)를 모두 처리. 재진입 시 도구 카드/
    사고 블록/스트리밍 텍스트가 sendMessage 메인 루프와 동등하게 보임.
+8. **Deploy-safe Stream Ownership (v2.2)** — active API에 스트림이 있으면 `deploy.sh code`가
+   active를 재시작하지 않고 peer slot을 먼저 기동/검증한 뒤 nginx upstream과 resume owner를
+   전환한다. inactive 컨테이너는 DB running/retrying execution을 claim하지 않는다.
+   `stream_start` 직후 DB placeholder를 즉시 저장하고 heartbeat 중 10초 단위 interim save로
+   첫 토큰 지연/도구 대기 중에도 브라우저 재진입 상태를 보존한다.
 
 ## SSE 이벤트 18종 (백엔드 → 프론트엔드)
 | Type | 의미 | Producer |
@@ -62,6 +67,8 @@ CEO 브라우저 → Cloudflare(120s) → Nginx(600s) → FastAPI → Anthropic 
 | Frontend maxStreamTimeout | 3600s (1시간) |
 | Server heartbeat (평시) | 3s |
 | Server heartbeat (도구) | 2s |
+| DB interim save heartbeat | 10s |
+| First response grace | 150s |
 | stream-resume 타임아웃 | 120s |
 | waitingBg 안전장치 | 30s |
 
@@ -75,3 +82,4 @@ CEO 브라우저 → Cloudflare(120s) → Nginx(600s) → FastAPI → Anthropic 
 | v1.0 | 2026-03-27 | 초기 생성 |
 | v2.0 | 2026-03-27 | 7건 추가 수정, heartbeat 패딩 |
 | **v2.1** | **2026-04-28** | **Layer 7 추가: Re-attach Full SSE Replay (Patch A+B+BUG#3)**.<br/>이전엔 attachExecutionReplay가 delta/heartbeat/done 3종만 처리해 URL 재진입 시 도구/사고/스트리밍 모두 누락. streaming-status도 tool_count/last_tool 하드코딩 0 반환. 모두 해소. |
+| **v2.2** | **2026-04-30** | **Layer 8 추가: Deploy-safe Stream Ownership**.<br/>스트리밍 중 active API 재시작 방지, blue/green resume owner 분리, `stream_start` 즉시 DB placeholder 저장, heartbeat interim save, 강제 끊김 e2e 통과. |

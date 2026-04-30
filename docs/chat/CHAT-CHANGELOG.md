@@ -108,8 +108,8 @@ edc3a77 feat: tool UI 접기/펼치기
 | 문서 | 경로 | 내용 |
 |------|------|------|
 | CEO-019 SSE 개선 | `docs/reports/CEO-019-SSE-IMPROVEMENT-REPORT.md` | SSE 끊김방지 13건 수정 보고 |
-| SSE 아키텍처 | `docs/knowledge/SSE-STREAMING-ARCHITECTURE.md` | 6계층 방어 기술 문서 (v2.0) |
-| SSE 신뢰성 아젠다 | `docs/agenda/AADS-SSE-STREAMING-RELIABILITY.md` | SSE 안정화 아젠다 |
+| SSE 아키텍처 | `docs/knowledge/SSE-STREAMING-ARCHITECTURE.md` | 8계층 방어 기술 문서 (v2.2) |
+| SSE 신뢰성 아젠다 | `docs/agenda/AADS-SSE-STREAMING-RELIABILITY.md` | SSE 안정화 아젠다 (v2.2) |
 
 ## 이슈 태그 범례
 
@@ -126,4 +126,5 @@ edc3a77 feat: tool UI 접기/펼치기
 
 | 버전 | 날짜 | 변경 |
 |------|------|------|
+| v1.1 | 2026-04-30 | 스트리밍 중 배포 재시작 방지, blue/green resume owner 분리, DB placeholder 보존, e2e/브라우저 검증 기록 |
 | v1.0 | 2026-04-02 | 초기 작성 — 2026-03~04 변경 이력 통합 |
