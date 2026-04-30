@@ -21,3 +21,18 @@ im→"""structlog 표준화 설정 — 구조화 JSON 로깅 + File
 
 ## [2026-04-29 19:45:38 KST] [aads-server] docs/CHANGELOG-go100-direct.md
 - Chat-Direct 수정: run_remote_command: ls /root/aads/aads-server/device_sdk/pc_agent/
+
+## [2026-04-29 20:41:31 KST] [aads-server] scripts/sync-to-contabo.sh
+- Chat-Direct 수정: write: scripts/sync-to-contabo.sh
+
+## [2026-04-30 06:07:41 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:     allow_origins=["https://aads.newtalk→    allow_origins=["https://aads.newtalk
+
+## [2026-04-30 12:57:45 KST] [aads-server] docker-compose.yml
+- Chat-Direct 수정: patch:       # Agent SDK 번들 CLI 인증 (OAuth 토큰 직접→      # Agent SDK 번들 CLI 인증 (OAuth 토큰 직접
+
+## [2026-04-30 18:59:19 KST] [aads-server] migrations/077_role_taxonomy_and_business_roles.sql
+- Chat-Direct 수정: run_remote_command: grep -r "playwright" /root/aads/aads-server/supervisord.conf
+
+## [2026-04-30 19:58:00 KST] [aads-server] chat streaming reliability
+- Chat-Direct 수정: 스트리밍 중 active API 재시작 방지, blue/green resume owner 분리, placeholder 보존, 강제 끊김 e2e 및 브라우저 확인 기록.

@@ -796,13 +796,71 @@ async def lifespan(app: FastAPI):
     # execution_id 기반 미완료 응답 자동 재개
     _execution_resume_attempts: dict[str, int] = {}
 
+    def _is_execution_resume_owner() -> bool:
+        """Only the currently published API container should claim DB resume jobs.
+
+        Blue/green backup instances are healthy and can serve failover traffic, but
+        if they claim background stream recovery while nginx still points clients at
+        the active slot, the chat UI sees a DB-running stream owned by another
+        process. The active container marker is updated by deploy.sh.
+        """
+        expected_container = os.getenv("AADS_CONTAINER_NAME", "").strip()
+        expected_port = os.getenv("AADS_PUBLIC_PORT", "").strip()
+
+        active_container_file = os.getenv("AADS_ACTIVE_CONTAINER_FILE", "/app/.active_container")
+        active_port_file = os.getenv("AADS_ACTIVE_PORT_FILE", "/app/.active_port")
+        owner_flag_file = os.getenv("AADS_RESUME_OWNER_FILE", "/tmp/aads_execution_resume_owner")
+
+        try:
+            with open(owner_flag_file, "r", encoding="utf-8") as fh:
+                owner_flag = fh.read().strip().lower()
+            if owner_flag:
+                return owner_flag in {"1", "true", "yes", "on", "active"}
+        except Exception:
+            pass
+
+        if expected_container:
+            try:
+                with open(active_container_file, "r", encoding="utf-8") as fh:
+                    active_container = fh.read().strip()
+                if active_container:
+                    return active_container == expected_container
+            except Exception:
+                pass
+
+        if expected_port:
+            try:
+                with open(active_port_file, "r", encoding="utf-8") as fh:
+                    active_port = fh.read().strip()
+                if active_port:
+                    return active_port == expected_port
+            except Exception:
+                pass
+
+        override = os.getenv("AADS_ENABLE_EXECUTION_RESUME_SCANNER")
+        if override is not None:
+            return override.lower() in {"1", "true", "yes", "on"}
+
+        return True
+
     async def _resume_pending_executions_once(max_rows: int = 5):
         try:
+            if not _is_execution_resume_owner():
+                logger.info(
+                    "execution_resume_scan_skipped_inactive",
+                    container=os.getenv("AADS_CONTAINER_NAME", ""),
+                    port=os.getenv("AADS_PUBLIC_PORT", ""),
+                )
+                return
             from app.core.db_pool import get_pool as _gp_exec
             from app.services.chat_service import (
                 _resume_single_stream as _rss_exec,
                 _active_bg_tasks as _abt_exec,
                 _streaming_state as _ss_exec,
+                _interrupt_execution_if_newer_user as _ieu_exec,
+                _mark_execution_interrupted as _mei_exec,
+                _strip_streaming_progress_markers as _strip_streaming_progress_markers_exec,
+                _has_meaningful_partial_content as _has_meaningful_partial_content_exec,
             )
             _pool = _gp_exec()
             async with _pool.acquire() as conn:
@@ -812,6 +870,7 @@ async def lifespan(app: FastAPI):
                            te.session_id::text AS session_id,
                            te.requested_model,
                            te.assistant_message_id,
+                           EXTRACT(EPOCH FROM (NOW() - te.updated_at))::int AS stale_seconds,
                            COALESCE(am.content, ph.content, '') AS partial_content,
                            COALESCE(um.content, '') AS last_user_msg,
                            w.name AS workspace_name
@@ -835,6 +894,7 @@ async def lifespan(app: FastAPI):
                     ) ph ON TRUE
                     WHERE te.status IN ('running', 'retrying')
                       AND te.updated_at > NOW() - INTERVAL '30 minutes'
+                      AND te.updated_at < NOW() - INTERVAL '90 seconds'
                     ORDER BY te.updated_at DESC
                     LIMIT $1
                     """,
@@ -849,6 +909,57 @@ async def lifespan(app: FastAPI):
                     if sid in _ss_exec and not _ss_exec[sid].get("completed"):
                         continue
                     if _execution_resume_attempts.get(execution_id, 0) >= 2:
+                        await _mei_exec(
+                            conn,
+                            sid,
+                            execution_id,
+                            "execution_resume_attempt_limit_exceeded",
+                            partial_content=row["partial_content"] or "",
+                            placeholder_id=str(row["assistant_message_id"]) if row["assistant_message_id"] else None,
+                            delete_empty_placeholder=False,
+                        )
+                        continue
+
+                    if await _ieu_exec(
+                        conn,
+                        sid,
+                        execution_id,
+                        partial_content=row["partial_content"] or "",
+                        placeholder_id=str(row["assistant_message_id"]) if row["assistant_message_id"] else None,
+                    ):
+                        continue
+
+                    _clean_partial = _strip_streaming_progress_markers_exec(row["partial_content"] or "")
+                    if (
+                        int(row["stale_seconds"] or 0) > 300
+                        and not _has_meaningful_partial_content_exec(_clean_partial)
+                    ):
+                        await _mei_exec(
+                            conn,
+                            sid,
+                            execution_id,
+                            "stale empty execution skipped during startup resume",
+                            partial_content="",
+                            placeholder_id=str(row["assistant_message_id"]) if row["assistant_message_id"] else None,
+                            delete_empty_placeholder=True,
+                        )
+                        continue
+
+                    _claim_id = await conn.fetchval(
+                        """
+                        UPDATE chat_turn_executions
+                        SET status = 'retrying',
+                            updated_at = NOW(),
+                            error_message = $2
+                        WHERE id = $1::uuid
+                          AND status IN ('running', 'retrying')
+                          AND updated_at < NOW() - INTERVAL '90 seconds'
+                        RETURNING id::text
+                        """,
+                        execution_id,
+                        "resume_claimed_by:" + os.getenv("HOSTNAME", "unknown")[:80],
+                    )
+                    if not _claim_id:
                         continue
 
                     placeholder_id = row["assistant_message_id"]
@@ -1067,7 +1178,7 @@ app = FastAPI(
 # H-07: CORS middleware — restrict to AADS dashboard origin
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://aads.newtalk.kr", "https://kakaobot.newtalk.kr", "http://localhost:3000", "http://localhost:3001"],
+    allow_origins=["https://aads.newtalk.kr", "https://kakaobot.newtalk.kr", "http://localhost:3000", "http://localhost:3001", "http://5.104.86.116:3100", "http://5.104.86.116:8100"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -4,6 +4,26 @@ _v1.0 | 2026-04-02 | 최초 작성_
 
 ## 변경 이력 (최신순)
 
+### 2026-04-30
+
+| 커밋 | 변경 | 구분 |
+|------|------|------|
+| 2026-04-30 | 스트리밍 중 active API 재시작 방지: `deploy.sh code`가 active stream 감지 시 peer slot을 먼저 재시작하고 nginx/복구 오너를 전환하도록 변경 | 🐛 Deploy |
+| 2026-04-30 | blue/green 복구 오너 분리: inactive 컨테이너가 DB running/retrying 실행을 가로채지 않도록 active marker/env/owner flag 적용 | 🐛 Backend |
+| 2026-04-30 | 첫 토큰 지연 구간 보존: `stream_start` 직후 DB placeholder 저장, heartbeat 중 10초 주기 interim save | 🐛 Backend |
+| 2026-04-30 | 끊김 후 이전 응답 반환 방지: `last-response`를 현재 execution/message 기준으로 좁히고 system-trigger turn fallback 오판 수정 | 🐛 Backend |
+| 2026-04-30 | 프론트 메시지 병합 보강: streaming placeholder와 최종 assistant를 같은 render key로 병합해 사라짐/중복 버블을 줄임 | 🐛 Frontend |
+
+검증:
+- `python3 -m pytest tests/unit/test_chat_service.py -q` → 10 passed
+- `python3 /tmp/aads_stream_disconnect_e2e.py` → 강제 끊김 후 `resume_done`, assistant 1개, placeholder 0개, `current_execution_id=null`, 중복 replay 없음
+- 브라우저 직접 확인: `https://aads.newtalk.kr/chat#e62f3c19-5558-4f89-87bf-709c7dccd4af` 로딩, chat/session/message/streaming-status API 200, `current_execution_id=null`
+
+운영 조치:
+- 2026-04-30 19:51 KST, 진행 중이던 `deploy.sh code`가 active API를 `STOPPING` 상태로 만들며 응답 끊김을 재현했다.
+- 즉시 API upstream을 `8102(aads-server-green)`으로 failover하고 `.active_container/.active_port` 및 `/tmp/aads_execution_resume_owner`를 green 기준으로 전환했다.
+- `claude-relay` 재시작으로 relay semaphore timeout 패치를 런타임에 반영했다.
+
 ### 2026-04-28
 
 | 커밋 | 변경 | 구분 |

@@ -51,6 +51,7 @@ dependencies = [
     "structlog>=24.4.0",
     "tenacity>=9.0.0",
     "httpx>=0.28.0",
+    "aiohttp>=3.13.0",
     # Scheduler (AADS-186C: APScheduler for alert evaluation + daily summary)
     "apscheduler>=3.10.0",
     # Observability: Langfuse (AADS-186C, optional — graceful degradation)

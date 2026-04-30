@@ -58,6 +58,15 @@ ACTIVE_PORT="$(get_active_port)"
 ACTIVE_CONTAINER="$(get_active_container)"
 HEALTH_URL="http://localhost:${ACTIVE_PORT}/api/v1/health"
 
+# Blue/green 컨테이너가 현재 active 슬롯을 읽어 background recovery 소유권을 판단한다.
+# Docker bind mount 대상 파일은 컨테이너 생성 전에 반드시 존재해야 한다.
+if [[ ! -f "$ACTIVE_PORT_FILE" ]]; then
+    echo "$ACTIVE_PORT" > "$ACTIVE_PORT_FILE" 2>/dev/null || true
+fi
+if [[ ! -f "$ACTIVE_CONTAINER_FILE" ]]; then
+    echo "$ACTIVE_CONTAINER" > "$ACTIVE_CONTAINER_FILE" 2>/dev/null || true
+fi
+
 # ── 배포 중복 호출 방지 (lockfile) ──
 LOCKFILE="/tmp/aads-deploy.lock"
 if [ -f "$LOCKFILE" ]; then
@@ -84,6 +93,92 @@ notify() {
     fi
 }
 
+container_for_port() {
+    case "$1" in
+        8100) echo "aads-server" ;;
+        8102) echo "aads-server-green" ;;
+        *) echo "" ;;
+    esac
+}
+
+peer_port_for() {
+    case "$1" in
+        8100) echo "8102" ;;
+        8102) echo "8100" ;;
+        *) echo "" ;;
+    esac
+}
+
+stream_count_for_port() {
+    local port="$1"
+    (
+        curl -s -m 5 "http://127.0.0.1:${port}/api/v1/ops/active-streams" 2>/dev/null \
+        | python3 -c "import sys,json; print(json.load(sys.stdin).get('count', 0))" 2>/dev/null
+    ) || echo "0"
+}
+
+wait_port_health() {
+    local port="$1"
+    local max_wait="${2:-60}"
+    local elapsed=0
+    while [[ $elapsed -lt $max_wait ]]; do
+        if curl -sf "http://127.0.0.1:${port}/api/v1/health" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    return 1
+}
+
+switch_api_upstream() {
+    local new_port="$1"
+    local old_port="$2"
+    local new_container="$3"
+    local old_container="$4"
+
+    cp "$UPSTREAM_CONF" "${UPSTREAM_CONF}.pre_code_switch"
+    sed -i -E \
+        -e "s/server 127\.0\.0\.1:${new_port} [^;]*;/server 127.0.0.1:${new_port} max_fails=0;/g" \
+        -e "s/server 127\.0\.0\.1:${old_port} [^;]*;/server 127.0.0.1:${old_port} max_fails=3 fail_timeout=30s backup;/g" \
+        "$UPSTREAM_CONF"
+    if ! nginx -t >/dev/null 2>&1; then
+        cp "${UPSTREAM_CONF}.pre_code_switch" "$UPSTREAM_CONF"
+        echo "[deploy.sh] ❌ nginx 설정 오류 — upstream 전환 취소"
+        return 1
+    fi
+
+    echo "$new_port" > "$ACTIVE_PORT_FILE" 2>/dev/null || true
+    echo "$new_container" > "$ACTIVE_CONTAINER_FILE" 2>/dev/null || true
+    docker exec "$new_container" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
+    docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
+    systemctl reload nginx
+}
+
+restart_old_slot_after_drain() {
+    local old_container="$1"
+    local old_port="$2"
+
+    (
+        local drain_max=600
+        local elapsed=0
+        local active="0"
+        while [[ $elapsed -lt $drain_max ]]; do
+            active="$(stream_count_for_port "$old_port")"
+            if [[ "$active" == "0" || -z "$active" ]]; then
+                break
+            fi
+            echo "[deploy.sh] old slot ${old_container}:${old_port} active streams=${active}; wait 30s"
+            sleep 30
+            elapsed=$((elapsed + 30))
+        done
+        docker exec "$old_container" touch /tmp/aads_deploy_restart 2>/dev/null || true
+        docker exec "$old_container" supervisorctl restart aads-api >/dev/null 2>&1 || true
+        docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
+    ) &
+    disown
+}
+
 # .env에서 텔레그램 변수 로드
 if [[ -f "${COMPOSE_DIR}/.env" ]]; then
     export TELEGRAM_BOT_TOKEN=$(grep -oP '^TELEGRAM_BOT_TOKEN=\K.*' "${COMPOSE_DIR}/.env" 2>/dev/null || true)
@@ -108,11 +203,80 @@ for DEP in aads-postgres aads-redis aads-socket-proxy aads-litellm; do
     fi
 done
 
+echo "[deploy.sh] Phase 0: claude-relay dependency check..."
+if ! /usr/bin/python3 -c "import aiohttp" >/dev/null 2>&1; then
+    echo "[deploy.sh] ⚠️ host aiohttp missing — installing for claude-relay..."
+    /usr/bin/python3 -m pip install aiohttp >/dev/null
+fi
+
 echo "[deploy.sh] Phase 0: pre-deploy cleanup..."
-docker exec aads-postgres psql -U aads -d aads -q -c "
-  DELETE FROM chat_messages WHERE intent = 'streaming_placeholder';
-  UPDATE chat_messages SET intent = NULL WHERE intent IN ('bg_partial', 'interrupted');
-" 2>/dev/null || echo "[deploy.sh] WARN: pre-deploy cleanup skipped"
+docker exec -i aads-postgres psql -U aads -d aads -q <<'SQL' 2>/dev/null || echo "[deploy.sh] WARN: pre-deploy cleanup skipped"
+WITH candidates AS (
+    SELECT
+        m.id,
+        m.session_id,
+        m.execution_id,
+        m.content,
+        NULLIF(
+            btrim(regexp_replace(COALESCE(m.content, ''), E'\\n*⏳ _[^\\n]*_$', '', 'g')),
+            ''
+        ) AS clean_content
+    FROM chat_messages m
+    LEFT JOIN chat_sessions s ON s.current_execution_id = m.execution_id
+    LEFT JOIN chat_turn_executions te ON te.id = m.execution_id
+    WHERE m.intent = 'streaming_placeholder'
+      AND NOT (
+          s.current_execution_id = m.execution_id
+          AND te.status IN ('running', 'retrying')
+          AND te.updated_at > NOW() - INTERVAL '10 minutes'
+      )
+),
+promoted AS (
+    UPDATE chat_messages m
+    SET content = CASE
+            WHEN c.clean_content LIKE '%응답이 중단되어 여기까지 보존되었습니다.%'
+              OR c.clean_content LIKE '%최신 지시를 우선 처리%'
+            THEN c.clean_content
+            ELSE c.clean_content || E'\n\n_(응답이 중단되어 여기까지 보존되었습니다.)_'
+        END,
+        intent = NULL,
+        model_used = 'interrupted',
+        edited_at = NOW()
+    FROM candidates c
+    WHERE m.id = c.id
+      AND c.clean_content IS NOT NULL
+    RETURNING m.id
+),
+deleted AS (
+    DELETE FROM chat_messages m
+    USING candidates c
+    WHERE m.id = c.id
+      AND c.clean_content IS NULL
+    RETURNING m.session_id
+),
+affected_sessions AS (
+    SELECT session_id FROM deleted
+    UNION
+    SELECT session_id FROM candidates
+)
+UPDATE chat_sessions s
+SET message_count = sub.cnt,
+    updated_at = NOW()
+FROM (
+    SELECT s2.id, count(m2.id)::int AS cnt
+    FROM chat_sessions s2
+    LEFT JOIN chat_messages m2 ON m2.session_id = s2.id
+    WHERE s2.id IN (SELECT session_id FROM affected_sessions)
+    GROUP BY s2.id
+) sub
+WHERE s.id = sub.id;
+
+UPDATE chat_messages
+SET intent = NULL
+WHERE intent IN ('bg_partial', 'interrupted')
+  AND role = 'assistant'
+  AND execution_id IS NULL;
+SQL
 
 # ── Phase 0.5: 코드 검증 (구문 + import) — 실패 시 배포 차단 ──
 echo "[deploy.sh] Phase 0.5: Python syntax + import validation..."
@@ -159,21 +323,51 @@ case "$MODE" in
         echo "[deploy.sh] Phase 1: supervisorctl restart 완료 — health check 대기..."
         ;;
     code)
-        echo "[deploy.sh] Phase 1: graceful restart aads-api (SIGTERM + 60s wait)"
-        # 배포 플래그 파일 생성 → 서버 startup 시 미완료 대화 자동 재실행 스킵
-        docker exec "$ACTIVE_CONTAINER" touch /tmp/aads_deploy_restart 2>/dev/null || true
-        # graceful: SIGTERM → 60초 대기 → 강제종료 방지 (supervisord stopwaitsecs 무시 회피)
-        docker exec "$ACTIVE_CONTAINER" supervisorctl signal SIGTERM aads-api 2>/dev/null || true
-        echo "[deploy.sh] SIGTERM 전송 완료 — 진행중인 응답 완료 대기 (최대 60초)..."
-        for i in $(seq 1 30); do
-            sleep 2
-            STATUS=$(docker exec "$ACTIVE_CONTAINER" supervisorctl status aads-api 2>/dev/null | awk '{print $2}')
-            if [ "$STATUS" != "RUNNING" ]; then
-                echo "[deploy.sh] aads-api 종료 확인 (${i}x2=$((i*2))초)"
-                break
+        echo "[deploy.sh] Phase 1: code deploy with stream-safe slot switch"
+        ACTIVE_STREAMS="$(stream_count_for_port "$ACTIVE_PORT")"
+        PEER_PORT="$(peer_port_for "$ACTIVE_PORT")"
+        PEER_CONTAINER="$(container_for_port "$PEER_PORT")"
+
+        if [[ "${ACTIVE_STREAMS:-0}" != "0" && -n "$PEER_PORT" && -n "$PEER_CONTAINER" ]]; then
+            echo "[deploy.sh] 활성 스트림 ${ACTIVE_STREAMS}건 감지 — active 재시작 대신 peer slot으로 전환"
+            if ! curl -sf "http://127.0.0.1:${PEER_PORT}/api/v1/health" >/dev/null 2>&1; then
+                echo "[deploy.sh] ❌ peer slot ${PEER_CONTAINER}:${PEER_PORT} health 실패 — 스트림 보호를 위해 배포 중단"
+                notify "❌ code 배포 중단: active stream ${ACTIVE_STREAMS}건, peer unhealthy"
+                exit 1
             fi
-        done
-        docker exec "$ACTIVE_CONTAINER" supervisorctl start aads-api || true
+            docker exec "$PEER_CONTAINER" touch /tmp/aads_deploy_restart 2>/dev/null || true
+            docker exec "$PEER_CONTAINER" supervisorctl restart aads-api
+            if ! wait_port_health "$PEER_PORT" 90; then
+                echo "[deploy.sh] ❌ peer slot 재시작 후 health 실패 — 전환 중단"
+                notify "❌ code 배포 실패: peer slot health 실패"
+                exit 1
+            fi
+            switch_api_upstream "$PEER_PORT" "$ACTIVE_PORT" "$PEER_CONTAINER" "$ACTIVE_CONTAINER"
+            restart_old_slot_after_drain "$ACTIVE_CONTAINER" "$ACTIVE_PORT"
+            ACTIVE_PORT="$PEER_PORT"
+            ACTIVE_CONTAINER="$PEER_CONTAINER"
+            HEALTH_URL="http://localhost:${ACTIVE_PORT}/api/v1/health"
+            echo "[deploy.sh] Phase 1: ✅ active slot switched to ${ACTIVE_CONTAINER}:${ACTIVE_PORT}"
+        else
+            echo "[deploy.sh] 활성 스트림 0건 — active API graceful restart"
+            # 배포 플래그 파일 생성 → 서버 startup 시 미완료 대화 자동 재실행 스킵
+            docker exec "$ACTIVE_CONTAINER" touch /tmp/aads_deploy_restart 2>/dev/null || true
+            docker exec "$ACTIVE_CONTAINER" supervisorctl signal SIGTERM aads-api 2>/dev/null || true
+            echo "[deploy.sh] SIGTERM 전송 완료 — 종료 대기 (최대 60초)..."
+            for i in $(seq 1 30); do
+                sleep 2
+                STATUS=$(docker exec "$ACTIVE_CONTAINER" supervisorctl status aads-api 2>/dev/null | awk '{print $2}')
+                if [ "$STATUS" != "RUNNING" ]; then
+                    echo "[deploy.sh] aads-api 종료 확인 (${i}x2=$((i*2))초)"
+                    break
+                fi
+            done
+            docker exec "$ACTIVE_CONTAINER" supervisorctl start aads-api || true
+            docker exec "$ACTIVE_CONTAINER" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
+            if [[ -n "$PEER_CONTAINER" ]]; then
+                docker exec "$PEER_CONTAINER" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
+            fi
+        fi
         ;;
     build)
         echo "[deploy.sh] Phase 1: docker compose up -d --build --no-deps aads-server"

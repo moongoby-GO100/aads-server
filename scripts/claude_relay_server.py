@@ -73,6 +73,7 @@ _CODEX_CWD_MAP = {
 # 2GB급 호스트에서 Claude/Codex 동시 실행 3개는 메모리 압박으로 137(OOM성 종료)을 유발할 수 있다.
 # 운영자가 명시적으로 override하지 않으면 보수적으로 1개만 허용한다.
 _MAX_CONCURRENT = int(os.getenv("CLAUDE_RELAY_MAX_CONCURRENT", "1"))
+_SEMAPHORE_ACQUIRE_TIMEOUT_SEC = float(os.getenv("CLAUDE_RELAY_ACQUIRE_TIMEOUT_SEC", "20"))
 _semaphore = None  # 앱 시작 시 실제 이벤트 루프에서 생성 (Python 3.6 different loop 방지)
 
 # --- Direct OAuth ---
@@ -94,6 +95,41 @@ _last_429_slot = 0
 
 _session_map = {}  # type: dict
 _SESSION_MAP_FILE = Path("/tmp/claude_relay_sessions.json")
+
+
+class _SemaphoreLease:
+    """Acquire the global relay semaphore with a bounded wait.
+
+    Without this, a stale long-running CLI request can keep the single relay
+    slot occupied while every new chat request hangs before the CLI starts.
+    """
+
+    def __init__(self, semaphore, timeout_sec, relay_name, session_id):
+        self._semaphore = semaphore
+        self._timeout_sec = timeout_sec
+        self._relay_name = relay_name
+        self._session_id = session_id or ""
+        self._acquired = False
+
+    async def __aenter__(self):
+        try:
+            await asyncio.wait_for(self._semaphore.acquire(), timeout=self._timeout_sec)
+        except asyncio.TimeoutError:
+            logger.error(
+                "%s_relay_busy: session=%s acquire_timeout=%.1fs",
+                self._relay_name,
+                _short_session(self._session_id),
+                self._timeout_sec,
+            )
+            raise
+        self._acquired = True
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if self._acquired:
+            self._semaphore.release()
+            self._acquired = False
+        return False
 
 _MODEL_MAP = {
     "claude-opus": "claude-opus-4-6",
@@ -991,7 +1027,12 @@ async def handle_stream(request):
 
     mcp_config_path = None
     try:
-        async with _semaphore:
+        async with _SemaphoreLease(
+            _semaphore,
+            _SEMAPHORE_ACQUIRE_TIMEOUT_SEC,
+            "claude",
+            aads_session_id,
+        ):
             claude_meta = _resolve_cli_command("claude")
             claude_preflight = _preflight_cli_command(claude_meta)
             if not claude_preflight.get("ok"):
@@ -1174,6 +1215,12 @@ async def handle_stream(request):
             except ConnectionResetError:
                 logger.info("CLI write_eof skipped: client already closed aads=%s", aads_session_id[:8])
             return response
+    except asyncio.TimeoutError:
+        return web.json_response({
+            "error": "claude_relay_busy",
+            "error_type": "relay_semaphore_timeout",
+            "detail": "No Claude relay slot became available within %.1f seconds" % _SEMAPHORE_ACQUIRE_TIMEOUT_SEC,
+        }, status=503)
     finally:
         if mcp_config_path:
             try:
@@ -1275,7 +1322,12 @@ async def handle_codex_stream(request):
         + prompt
     )
     try:
-        async with _semaphore:
+        async with _SemaphoreLease(
+            _semaphore,
+            _SEMAPHORE_ACQUIRE_TIMEOUT_SEC,
+            "codex",
+            session_id,
+        ):
             codex_meta = _resolve_cli_command("codex")
             codex_preflight = _preflight_cli_command(codex_meta)
             if not codex_preflight.get("ok"):
@@ -1459,6 +1511,12 @@ async def handle_codex_stream(request):
             except ConnectionResetError:
                 logger.info("Codex write_eof skipped: client already closed session=%s", (session_id or "default")[:8])
             return response
+    except asyncio.TimeoutError:
+        return web.json_response({
+            "error": "codex_relay_busy",
+            "error_type": "relay_semaphore_timeout",
+            "detail": "No Codex relay slot became available within %.1f seconds" % _SEMAPHORE_ACQUIRE_TIMEOUT_SEC,
+        }, status=503)
     except Exception as e:
         if _is_client_disconnect_error(e):
             logger.info("Codex handler client disconnected: session=%s", (session_id or "default")[:8])

@@ -69,8 +69,9 @@ async def deliver_sse(
                 if _empty_count >= 5:
                     info = await _rs.get_stream_info(stream_id)
                     if info is None:
-                        # Stream 자체가 없음 → 종료
-                        yield f'data: {json.dumps({"type": "resume_done"})}\n\n'
+                        # Redis stream이 없다는 것은 완료가 아니라 복구 불가 상태다.
+                        # 완료로 보내면 클라이언트가 부분 응답을 최종 응답처럼 확정할 수 있다.
+                        yield f'data: {json.dumps({"type": "resume_unavailable", "reason": "stream_missing"})}\n\n'
                         return
                     if info.get("is_done"):
                         # 완료 마커 있음 → 종료
@@ -97,4 +98,4 @@ async def deliver_sse(
             await asyncio.sleep(1)
 
     # 타임아웃
-    yield f'data: {json.dumps({"type": "resume_done", "reason": "timeout"})}\n\n'
+    yield f'data: {json.dumps({"type": "resume_timeout", "reason": "timeout"})}\n\n'

@@ -102,9 +102,15 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - BRAVE_API_KEY=${BRAVE_API_KEY}
       - DOCKER_HOST=tcp://aads-socket-proxy:2375
+      - AADS_CONTAINER_NAME=aads-server
+      - AADS_PUBLIC_PORT=8100
+      - AADS_ACTIVE_CONTAINER_FILE=/app/.active_container
+      - AADS_ACTIVE_PORT_FILE=/app/.active_port
     volumes:
       # ★ 소스 볼륨 마운트: 호스트 수정 → 컨테이너 즉시 반영
       - /root/aads/aads-server/app:/app/app:rw
+      - /root/aads/aads-server/.active_container:/app/.active_container:ro
+      - /root/aads/aads-server/.active_port:/app/.active_port:ro
       - /root/aads/aads-server/docs:/app/docs:rw
       - /root/aads/aads-server/mcp_servers:/app/mcp_servers:rw
       - /root/aads/aads-server/migrations:/app/migrations:rw
@@ -168,8 +174,14 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - BRAVE_API_KEY=${BRAVE_API_KEY}
       - DOCKER_HOST=tcp://aads-socket-proxy:2375
+      - AADS_CONTAINER_NAME=aads-server-green
+      - AADS_PUBLIC_PORT=8102
+      - AADS_ACTIVE_CONTAINER_FILE=/app/.active_container
+      - AADS_ACTIVE_PORT_FILE=/app/.active_port
     volumes:
       - /root/aads/aads-server/app:/app/app:rw
+      - /root/aads/aads-server/.active_container:/app/.active_container:ro
+      - /root/aads/aads-server/.active_port:/app/.active_port:ro
       - /root/aads/aads-server/docs:/app/docs:rw
       - /root/aads/aads-server/mcp_servers:/app/mcp_servers:rw
       - /root/aads/aads-server/migrations:/app/migrations:rw

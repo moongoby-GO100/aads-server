@@ -83,6 +83,7 @@ _active_bg_tasks: Dict[str, _heartbeat_asyncio.Task] = {}
 _streaming_state: Dict[str, Dict[str, Any]] = {}
 # 클라이언트 이탈 후 자동 종료 시간 (초)
 _BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "300"))  # 5분
+_FIRST_RESPONSE_TIMEOUT_SEC = float(os.getenv("AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC", "120"))
 _RECOVERY_DEDUPE_MODEL_USED = {"recovered", "recovered_from_redis", "stopped", None}
 _RECOVERY_PREFIX_LEN = 50
 
@@ -179,6 +180,187 @@ def _tool_result_event_snapshot(event: Dict[str, Any], content_limit: int = 500)
     if event.get("raw_error"):
         payload["raw_error"] = str(event.get("raw_error", ""))[:content_limit]
     return payload
+
+
+async def _apply_deferred_interrupts_to_state(
+    *,
+    session_id: str,
+    state: Dict[str, Any],
+    messages: List[Dict[str, Any]],
+    system_prompt: str,
+    intent_result: Any,
+    tools_for_api: Any,
+    model_override: Optional[str],
+    fast_revision: bool = False,
+) -> AsyncGenerator[str, None]:
+    """Apply queued CEO interrupts before final save for streams that missed inline checks."""
+    from app.services.model_selector import call_stream
+
+    for interrupt_pass in range(2):
+        try:
+            from app.core.interrupt_queue import has_interrupt, pop_interrupts
+
+            if not session_id or not has_interrupt(session_id):
+                break
+            interrupts = pop_interrupts(session_id)
+        except Exception as intr_check_err:
+            logger.warning("deferred_interrupt_check_failed session=%s: %s", session_id[:8], intr_check_err)
+            break
+
+        if not interrupts:
+            break
+
+        interrupt_text = "\n".join(
+            str(item.get("content") or "").strip()
+            for item in interrupts
+            if str(item.get("content") or "").strip()
+        ).strip()
+        if not interrupt_text:
+            continue
+
+        attachment_lines: list[str] = []
+        for intr_item in interrupts:
+            for att in intr_item.get("attachments", []) or []:
+                att_name = att.get("name") or att.get("filename") or "attachment"
+                att_type = att.get("type") or att.get("media_type") or "file"
+                attachment_lines.append(f"- {att_name} ({att_type})")
+        attachment_note = (
+            "\n\n[추가 지시 첨부파일]\n" + "\n".join(attachment_lines)
+            if attachment_lines else ""
+        )
+
+        logger.info(
+            "deferred_interrupt_apply session=%s pass=%s count=%s",
+            session_id[:8],
+            interrupt_pass + 1,
+            len(interrupts),
+        )
+        for intr_item in interrupts:
+            yield (
+                "event: interrupt_applied\n"
+                f"data: {json.dumps({'type': 'interrupt_applied', 'content': str(intr_item.get('content') or '')[:100]})}\n\n"
+            )
+
+        previous_response = str(state.get("full_response") or "")
+        interrupt_messages = list(messages)
+        if previous_response.strip():
+            interrupt_messages.append({"role": "assistant", "content": previous_response.strip()})
+        interrupt_messages.append({
+            "role": "user",
+            "content": (
+                "[CEO 추가 지시]\n"
+                "방금 스트리밍 중 CEO가 아래 추가 지시를 보냈습니다. "
+                "이미 작성한 답변을 그대로 반복하지 말고, 추가 지시를 반영해 최종 답변을 다시 작성하세요. "
+                "추가 지시가 기존 답변과 충돌하면 CEO의 추가 지시를 우선합니다.\n\n"
+                f"{interrupt_text}{attachment_note}"
+            ),
+        })
+
+        if fast_revision:
+            fast_prompt = (
+                "[기존 AI 답변]\n"
+                f"{previous_response.strip() or '(아직 최종 답변 없음)'}\n\n"
+                "[CEO 추가 지시]\n"
+                f"{interrupt_text}{attachment_note}\n\n"
+                "CEO 추가 지시를 우선하여 최종 답변만 다시 작성하세요. "
+                "기존 답변과 충돌하는 내용은 제거하고, 추가 지시가 요구한 형식과 결론을 반드시 반영하세요."
+            )
+            revised_response = ""
+            try:
+                from app.core.anthropic_client import call_llm_with_fallback
+
+                revised_response = await _heartbeat_asyncio.wait_for(
+                    call_llm_with_fallback(
+                        fast_prompt,
+                        max_tokens=2048,
+                        system=system_prompt,
+                    ),
+                    timeout=75,
+                ) or ""
+            except Exception as fast_exc:
+                logger.warning(
+                    "deferred_interrupt_fast_revision_failed session=%s error=%s",
+                    session_id[:8],
+                    str(fast_exc)[:120],
+                )
+
+            if revised_response.strip():
+                state["full_response"] = revised_response
+                yield f"data: {json.dumps({'type': 'stream_reset', 'reason': 'interrupt_applied'})}\n\n"
+                for idx in range(0, len(revised_response), 600):
+                    yield f"data: {json.dumps({'type': 'delta', 'content': revised_response[idx:idx + 600]})}\n\n"
+            else:
+                state["full_response"] = previous_response
+            continue
+
+        interrupt_response = ""
+        reset_sent = False
+        try:
+            async for event in call_stream(
+                intent_result=intent_result,
+                system_prompt=system_prompt,
+                messages=interrupt_messages,
+                tools=tools_for_api,
+                model_override=model_override,
+                session_id=session_id,
+            ):
+                etype = event.get("type", "")
+                if etype == "heartbeat":
+                    yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                elif etype == "model_info":
+                    state["model_used"] = event.get("model", state.get("model_used"))
+                    yield f"data: {json.dumps({'type': 'model_info', 'model': state.get('model_used')})}\n\n"
+                elif etype == "interrupt_applied":
+                    yield f"event: interrupt_applied\ndata: {json.dumps({'type': 'interrupt_applied', 'content': event.get('content', '')})}\n\n"
+                elif etype == "delta":
+                    if not reset_sent:
+                        yield f"data: {json.dumps({'type': 'stream_reset', 'reason': 'interrupt_applied'})}\n\n"
+                        reset_sent = True
+                    interrupt_response += event.get("content", "")
+                    yield f"data: {json.dumps({'type': 'delta', 'content': event['content']})}\n\n"
+                elif etype == "thinking":
+                    state["thinking_summary"] = str(state.get("thinking_summary") or "") + event.get("thinking", "")
+                    yield f"data: {json.dumps({'type': 'thinking', 'thinking': event['thinking']})}\n\n"
+                elif etype == "tool_use":
+                    state.setdefault("tools_called", []).append({
+                        "type": "tool_use",
+                        "tool_name": event["tool_name"],
+                        "tool_use_id": event.get("tool_use_id", ""),
+                        "tool_input": event.get("tool_input", {}),
+                    })
+                    yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event.get('tool_use_id', ''), 'tool_input': event.get('tool_input', {})})}\n\n"
+                elif etype == "tool_result":
+                    tool_result_payload = _tool_result_event_snapshot(event)
+                    state.setdefault("tools_called", []).append(tool_result_payload)
+                    yield f"data: {json.dumps(_tool_result_event_snapshot(event, content_limit=300))}\n\n"
+                elif etype == "yellow_limit":
+                    yield f"data: {json.dumps({'type': 'yellow_limit', 'content': event.get('content', ''), 'tool_name': event.get('tool_name', ''), 'consecutive_count': event.get('consecutive_count', 0)})}\n\n"
+                elif etype in ("complete", "max_iterations", "cost_limit"):
+                    if event.get("content") and not interrupt_response:
+                        interrupt_response = event.get("content", "")
+                elif etype == "done":
+                    state["model_used"] = event.get("model", state.get("model_used"))
+                    state["cost_usd"] = Decimal(str(state.get("cost_usd", "0"))) + Decimal(str(event.get("cost", "0")))
+                    state["input_tokens"] = int(state.get("input_tokens") or 0) + int(event.get("input_tokens", 0) or 0)
+                    state["output_tokens"] = int(state.get("output_tokens") or 0) + int(event.get("output_tokens", 0) or 0)
+                    state["thinking_summary"] = event.get("thinking_summary") or state.get("thinking_summary", "")
+                elif etype == "error":
+                    logger.warning(
+                        "deferred_interrupt_stream_error session=%s partial_len=%s error=%s",
+                        session_id[:8],
+                        len(interrupt_response),
+                        str(event.get("content") or "")[:120],
+                    )
+                    break
+        except Exception as deferred_exc:
+            logger.warning(
+                "deferred_interrupt_stream_exception session=%s partial_len=%s error=%s",
+                session_id[:8],
+                len(interrupt_response),
+                str(deferred_exc)[:120],
+            )
+
+        state["full_response"] = interrupt_response.strip() and interrupt_response or previous_response
 
 
 def _stream_id_for_state(session_id: str, state: Dict[str, Any]) -> str:
@@ -283,6 +465,243 @@ async def get_current_execution(session_id: str) -> Optional[Dict[str, Any]]:
         return _row_to_dict(row) if row else None
 
 
+def _strip_streaming_progress_markers(content: str) -> str:
+    """사용자에게 의미 있는 응답 본문만 남기기 위해 진행/재시도 마커를 제거한다."""
+    if not content:
+        return ""
+
+    kept: list[str] = []
+    for line in str(content).splitlines():
+        stripped = line.strip()
+        if not stripped:
+            if kept and kept[-1] != "":
+                kept.append("")
+            continue
+        if stripped.startswith("⏳ _") and ("생성 중" in stripped or "응답을 생성" in stripped):
+            continue
+        if stripped.startswith("⚠️ _") and any(
+            token in stripped
+            for token in (
+                "연결이 일시 중단",
+                "자동 재시도",
+                "Codex Relay timeout",
+                "API rate limit",
+                "응답 생성이 중단",
+            )
+        ):
+            continue
+        kept.append(line)
+
+    return "\n".join(kept).strip()
+
+
+def _has_meaningful_partial_content(content: str) -> bool:
+    """복구할 가치가 있는 실제 응답 내용이 있는지 판정한다."""
+    return bool(_strip_streaming_progress_markers(content))
+
+
+def _looks_terminal_interrupt_content(content: str) -> bool:
+    """중단된 응답 버블이 메모리 상태에서 계속 streaming으로 노출되는 것을 막는다."""
+    content = str(content or "")
+    return (
+        "최신 지시를 우선 처리" in content
+        or "중단 처리되었습니다" in content
+        or "응답 생성이 중단" in content
+    )
+
+
+def _current_asyncio_task_or_none():
+    try:
+        return _heartbeat_asyncio.current_task()
+    except RuntimeError:
+        return None
+
+
+async def _execution_has_newer_user_message(conn, session_id: str, execution_id: str) -> bool:
+    """현재 execution 이후 같은 세션에 새 사용자 지시가 들어왔는지 확인한다."""
+    row = await conn.fetchrow(
+        """
+        SELECT te.user_message_id::text AS execution_user_id,
+               COALESCE(um.created_at, te.started_at, te.created_at) AS execution_user_created_at,
+               latest_user.id::text AS latest_user_id,
+               latest_user.created_at AS latest_user_created_at
+        FROM chat_turn_executions te
+        LEFT JOIN chat_messages um
+          ON um.id = te.user_message_id
+        LEFT JOIN LATERAL (
+            SELECT id, created_at
+            FROM chat_messages
+            WHERE session_id = te.session_id
+              AND role = 'user'
+              AND COALESCE(intent, '') NOT IN ('system_trigger')
+              AND content NOT LIKE '[시스템]%%'
+              AND content NOT LIKE '[추가 지시]%%'
+            ORDER BY created_at DESC
+            LIMIT 1
+        ) latest_user ON TRUE
+        WHERE te.id = $1::uuid
+          AND te.session_id = $2::uuid
+        """,
+        execution_id,
+        session_id,
+    )
+    if not row or not row["latest_user_id"]:
+        return False
+    if row["execution_user_id"] and row["latest_user_id"] == row["execution_user_id"]:
+        return False
+
+    latest_at = row["latest_user_created_at"]
+    execution_at = row["execution_user_created_at"]
+    if not latest_at:
+        return False
+    if not execution_at:
+        return True
+    return latest_at > execution_at
+
+
+async def _mark_execution_interrupted(
+    conn,
+    session_id: str,
+    execution_id: str,
+    reason: str,
+    *,
+    partial_content: str = "",
+    placeholder_id: Optional[str] = None,
+    delete_empty_placeholder: bool = False,
+) -> None:
+    """실패/취소된 실행을 terminal 상태로 닫아 자동 복구가 오작동하지 않게 한다."""
+    sid = uuid.UUID(str(session_id))
+    eid = uuid.UUID(str(execution_id))
+    pid = uuid.UUID(str(placeholder_id)) if placeholder_id else None
+
+    if pid is None:
+        pid = await conn.fetchval(
+            """
+            SELECT COALESCE(
+                assistant_message_id,
+                (
+                    SELECT id
+                    FROM chat_messages
+                    WHERE execution_id = $1
+                      AND intent = 'streaming_placeholder'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                )
+            )
+            FROM chat_turn_executions
+            WHERE id = $1
+            """,
+            eid,
+        )
+
+    clean_partial = _strip_streaming_progress_markers(partial_content)
+    assistant_message_id = pid
+    if pid:
+        if clean_partial:
+            marker = "\n\n_(이전 응답은 중단 처리되었습니다. 최신 지시를 우선 처리합니다.)_"
+            final_content = clean_partial if "최신 지시를 우선 처리" in clean_partial else clean_partial + marker
+            await conn.execute(
+                """
+                UPDATE chat_messages
+                SET content = $1,
+                    intent = NULL,
+                    model_used = 'interrupted',
+                    edited_at = NOW()
+                WHERE id = $2
+                """,
+                final_content,
+                pid,
+            )
+        elif delete_empty_placeholder:
+            await conn.execute("DELETE FROM chat_messages WHERE id = $1", pid)
+            assistant_message_id = None
+        else:
+            await conn.execute(
+                """
+                UPDATE chat_messages
+                SET content = $1,
+                    intent = NULL,
+                    model_used = 'interrupted',
+                    edited_at = NOW()
+                WHERE id = $2
+                """,
+                "⚠️ _응답 생성이 중단되었습니다. 최신 지시를 다시 처리할 수 있습니다._",
+                pid,
+            )
+
+    await conn.execute(
+        """
+        UPDATE chat_turn_executions
+        SET assistant_message_id = CASE
+                WHEN $4::boolean THEN $2
+                ELSE COALESCE($2, assistant_message_id)
+            END,
+            status = 'interrupted',
+            error_message = $3,
+            completed_at = COALESCE(completed_at, NOW()),
+            updated_at = NOW()
+        WHERE id = $1
+          AND status IN ('running', 'retrying')
+        """,
+        eid,
+        assistant_message_id,
+        reason[:1000],
+        bool(delete_empty_placeholder and assistant_message_id is None),
+    )
+    await conn.execute(
+        """
+        UPDATE chat_sessions
+        SET current_execution_id = NULL,
+            updated_at = NOW()
+        WHERE id = $1
+          AND current_execution_id = $2
+        """,
+        sid,
+        eid,
+    )
+
+    state = _streaming_state.get(str(session_id))
+    if state and (
+        not state.get("execution_id")
+        or str(state.get("execution_id")) == str(execution_id)
+    ):
+        if clean_partial:
+            state["content"] = final_content
+        state["completed"] = True
+        state["updated_at"] = _bg_time.monotonic()
+    task = _active_bg_tasks.get(str(session_id))
+    current_task = _current_asyncio_task_or_none()
+    if task is not None and task is not current_task and not task.done():
+        task.cancel()
+
+
+async def _interrupt_execution_if_newer_user(
+    conn,
+    session_id: str,
+    execution_id: str,
+    *,
+    partial_content: str = "",
+    placeholder_id: Optional[str] = None,
+) -> bool:
+    if not await _execution_has_newer_user_message(conn, session_id, execution_id):
+        return False
+    await _mark_execution_interrupted(
+        conn,
+        session_id,
+        execution_id,
+        "stale_superseded_by_newer_user_message",
+        partial_content=partial_content,
+        placeholder_id=placeholder_id,
+        delete_empty_placeholder=True,
+    )
+    logger.info(
+        "execution_interrupted_newer_user session=%s execution=%s",
+        str(session_id)[:8],
+        str(execution_id)[:8],
+    )
+    return True
+
+
 async def _interim_save_streaming(session_id: str, state: Dict[str, Any]) -> None:
     """백그라운드 생성 중 중간 상태를 DB에 저장 (세션 이동 후 돌아왔을 때 보이도록).
     변경이 없으면 스킵 (1초 간격 호출 시 불필요한 DB write 방지).
@@ -308,23 +727,81 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any]) -> Non
         _tool_events_json = json.dumps(state.get("tool_events", []))
         async with pool.acquire() as conn:
             if _eid:
+                _exec_row = await conn.fetchrow(
+                    "SELECT status, completed_at FROM chat_turn_executions WHERE id = $1",
+                    _eid,
+                )
+                if (
+                    not _exec_row
+                    or _exec_row["status"] not in ("running", "retrying")
+                    or _exec_row["completed_at"] is not None
+                ):
+                    logger.info(
+                        "interim_save_skipped_terminal session=%s execution=%s status=%s",
+                        session_id[:8],
+                        str(_eid)[:8],
+                        _exec_row["status"] if _exec_row else "missing",
+                    )
+                    return
                 _row = await conn.fetchrow(
                     """INSERT INTO chat_messages (session_id, execution_id, role, content, intent, model_used, tools_called)
-                       VALUES ($1, $2, 'assistant', $3, 'streaming_placeholder', 'streaming', $4::jsonb)
+                       SELECT $1, $2, 'assistant', $3, 'streaming_placeholder', 'streaming', $4::jsonb
+                       WHERE EXISTS (
+                         SELECT 1 FROM chat_turn_executions
+                         WHERE id = $2
+                           AND status IN ('running', 'retrying')
+                           AND completed_at IS NULL
+                       )
                        ON CONFLICT (execution_id) WHERE intent = 'streaming_placeholder' AND execution_id IS NOT NULL
                        DO UPDATE SET content = EXCLUDED.content, tools_called = $4::jsonb, edited_at = NOW()
+                       WHERE EXISTS (
+                         SELECT 1 FROM chat_turn_executions
+                         WHERE id = $2
+                           AND status IN ('running', 'retrying')
+                           AND completed_at IS NULL
+                       )
                        RETURNING id, (xmax = 0) AS is_new""",
                     _sid, _eid, display_content, _tool_events_json,
                 )
+                if not _row:
+                    logger.info(
+                        "interim_save_skipped_terminal_race session=%s execution=%s",
+                        session_id[:8],
+                        str(_eid)[:8],
+                    )
+                    return
                 if _row and _row["is_new"]:
                     await conn.execute(
-                        "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW(), current_execution_id = $2 WHERE id = $1",
+                        """
+                        UPDATE chat_sessions
+                        SET message_count = message_count + 1,
+                            updated_at = NOW(),
+                            current_execution_id = $2
+                        WHERE id = $1
+                          AND EXISTS (
+                            SELECT 1 FROM chat_turn_executions
+                            WHERE id = $2
+                              AND status IN ('running', 'retrying')
+                              AND completed_at IS NULL
+                          )
+                        """,
                         _sid,
                         _eid,
                     )
                 else:
                     await conn.execute(
-                        "UPDATE chat_sessions SET current_execution_id = $2, updated_at = NOW() WHERE id = $1",
+                        """
+                        UPDATE chat_sessions
+                        SET current_execution_id = $2,
+                            updated_at = NOW()
+                        WHERE id = $1
+                          AND EXISTS (
+                            SELECT 1 FROM chat_turn_executions
+                            WHERE id = $2
+                              AND status IN ('running', 'retrying')
+                              AND completed_at IS NULL
+                          )
+                        """,
                         _sid,
                         _eid,
                     )
@@ -332,10 +809,12 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any]) -> Non
                     """
                     UPDATE chat_turn_executions
                     SET assistant_message_id = COALESCE(assistant_message_id, $2),
-                        status = 'running',
+                        status = CASE WHEN completed_at IS NULL THEN 'running' ELSE status END,
                         last_event_id = COALESCE($3, last_event_id),
                         updated_at = NOW()
                     WHERE id = $1
+                      AND status IN ('running', 'retrying')
+                      AND completed_at IS NULL
                     """,
                     _eid,
                     _row["id"] if _row else None,
@@ -502,6 +981,9 @@ async def with_background_completion(
         "execution_id": None,
         "last_event_id": None,
         "saw_done_event": False,
+        "last_event_at": _state_start,
+        "first_response_at": None,
+        "last_idle_save": 0.0,
     }
     _streaming_state[session_id] = state
 
@@ -562,27 +1044,36 @@ async def with_background_completion(
         try:
             async for chunk in gen:
                 _entry_id = None
+                _event_type = None
                 if 'data: {' in chunk:
                     try:
                         _d = json.loads(chunk[chunk.index('{'):chunk.rstrip().rindex('}') + 1])
                         _t = _d.get("type", "")
+                        _event_type = _t
                         if _t == "stream_start":
                             _execution_id = _d.get("execution_id")
                             if _execution_id:
                                 state["execution_id"] = str(_execution_id)
                         elif _t == "delta":
                             state["content"] += _d.get("content", "")
+                            state["first_response_at"] = state.get("first_response_at") or _bg_time.monotonic()
                         elif _t == "tool_use":
                             state["tool_count"] += 1
                             state["last_tool"] = _d.get("tool_name", "")
                             state["tool_events"].append({"type": "tool_use", "tool_name": _d.get("tool_name", ""), "tool_use_id": _d.get("tool_use_id", ""), "tool_input": _d.get("tool_input", {})})
+                            state["first_response_at"] = state.get("first_response_at") or _bg_time.monotonic()
                         elif _t == "tool_result":
                             state["last_tool"] = _d.get("tool_name", "")
                             state["tool_events"].append(_tool_result_event_snapshot(_d))
+                            state["first_response_at"] = state.get("first_response_at") or _bg_time.monotonic()
                         elif _t == "thinking":
                             state["tool_events"].append({"type": "thinking", "content": str(_d.get("content", _d.get("thinking", "")))[:300]})
+                            state["first_response_at"] = state.get("first_response_at") or _bg_time.monotonic()
                         elif _t == "done":
                             state["saw_done_event"] = True
+                            state["first_response_at"] = state.get("first_response_at") or _bg_time.monotonic()
+                        if _t:
+                            state["last_event_at"] = _bg_time.monotonic()
                     except Exception:
                         pass
                 # Redis Stream 병행 저장 — execution_id가 잡히면 execution 단위 stream 사용
@@ -594,6 +1085,9 @@ async def with_background_completion(
                         _token_idx += 1
                     except Exception:
                         pass
+                if _event_type == "stream_start" and state.get("execution_id"):
+                    state["last_idle_save"] = _bg_time.monotonic()
+                    await _interim_save_streaming(session_id, state)
                 await queue.put((chunk, _entry_id))
 
                 # 클라이언트 연결 중 3초마다 중간 저장 (Invisible Recovery: 10s→3s, 끊김 후 partial_content 실시간성)
@@ -770,6 +1264,27 @@ async def with_background_completion(
                     state.get("_producer_exception_type") or state.get("_producer_incomplete_exit") or "",
                     state.get("_rate_limited", False),
                 )
+                if not state.get("_rate_limited", False) and state.get("execution_id"):
+                    try:
+                        _pool = get_pool()
+                        async with _pool.acquire() as _conn:
+                            await _mark_execution_interrupted(
+                                _conn,
+                                session_id,
+                                str(state.get("execution_id")),
+                                state.get("_producer_exception_type")
+                                or state.get("_producer_incomplete_exit")
+                                or "background_producer_incomplete_exit",
+                                partial_content=state.get("content", ""),
+                                delete_empty_placeholder=False,
+                            )
+                    except Exception as _interrupt_err:
+                        logger.warning(
+                            "bg_producer_interrupt_mark_failed session=%s execution=%s error=%s",
+                            session_id[:8],
+                            str(state.get("execution_id") or "")[:8],
+                            _interrupt_err,
+                        )
             # 스트리밍 완료 → placeholder 삭제 (최종 응답이 generator 내부에서 저장됨)
             # rate_limited/미완료 종료 시에는 placeholder를 보존하여 재시작 복구 대상에 남긴다.
             if _completed_ok and not state.get("_rate_limited", False):
@@ -796,25 +1311,86 @@ async def with_background_completion(
         old_task.cancel()
         logger.info(f"bg_task_replaced session={session_id}")
 
-    # BUG-SESSION-MIX FIX: 새 producer 시작 전 잔류 streaming_placeholder 즉시 삭제
-    # — old producer의 finally 정리보다 new producer 시작이 빠르면 이전 응답이 잔류
+    # BUG-SESSION-MIX FIX: 새 producer 시작 전 잔류 streaming_placeholder 정리.
+    # 의미 있는 부분 응답은 삭제하지 않고 interrupted assistant로 보존한다.
     try:
         _pool = get_pool()
         async with _pool.acquire() as _conn:
-            _del_count = await _conn.fetchval(
-                "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder'",
+            _stale_placeholders = await _conn.fetch(
+                """
+                SELECT id, execution_id, content
+                FROM chat_messages
+                WHERE session_id = $1
+                  AND intent = 'streaming_placeholder'
+                ORDER BY created_at ASC
+                """,
                 uuid.UUID(session_id),
             )
-            if _del_count and _del_count > 0:
-                await _conn.execute(
-                    "DELETE FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder'",
-                    uuid.UUID(session_id),
-                )
+            _deleted_count = 0
+            _preserved_count = 0
+            for _ph in _stale_placeholders:
+                _clean = _strip_streaming_progress_markers(_ph["content"] or "")
+                _ph_execution_id = _ph["execution_id"]
+                if _clean:
+                    _final = (
+                        _clean
+                        if "최신 지시를 우선 처리" in _clean or "응답 생성이 중단" in _clean
+                        else _clean + "\n\n_(응답이 중단되어 여기까지 보존되었습니다.)_"
+                    )
+                    await _conn.execute(
+                        """
+                        UPDATE chat_messages
+                        SET content = $1,
+                            intent = NULL,
+                            model_used = 'interrupted',
+                            edited_at = NOW()
+                        WHERE id = $2
+                        """,
+                        _final,
+                        _ph["id"],
+                    )
+                    if _ph_execution_id:
+                        await _conn.execute(
+                            """
+                            UPDATE chat_turn_executions
+                            SET status = 'interrupted',
+                                assistant_message_id = COALESCE(assistant_message_id, $2),
+                                completed_at = COALESCE(completed_at, NOW()),
+                                updated_at = NOW(),
+                                error_message = COALESCE(error_message, 'superseded while preserving partial response')
+                            WHERE id = $1
+                              AND status IN ('running', 'retrying')
+                            """,
+                            _ph_execution_id,
+                            _ph["id"],
+                        )
+                        await _conn.execute(
+                            """
+                            UPDATE chat_sessions
+                            SET current_execution_id = NULL,
+                                updated_at = NOW()
+                            WHERE id = $1
+                              AND current_execution_id = $2
+                            """,
+                            uuid.UUID(session_id),
+                            _ph_execution_id,
+                        )
+                    _preserved_count += 1
+                else:
+                    await _conn.execute("DELETE FROM chat_messages WHERE id = $1", _ph["id"])
+                    _deleted_count += 1
+            if _deleted_count:
                 await _conn.execute(
                     "UPDATE chat_sessions SET message_count = GREATEST(message_count - $1, 0), updated_at = NOW() WHERE id = $2",
-                    _del_count, uuid.UUID(session_id),
+                    _deleted_count, uuid.UUID(session_id),
                 )
-                logger.info(f"stale_placeholder_cleaned session={session_id[:8]} count={_del_count}")
+            if _stale_placeholders:
+                logger.info(
+                    "stale_placeholder_cleaned session=%s preserved=%s deleted=%s",
+                    session_id[:8],
+                    _preserved_count,
+                    _deleted_count,
+                )
     except Exception as _clean_err:
         logger.warning(f"stale_placeholder_clean_failed session={session_id[:8]}: {_clean_err}")
 
@@ -837,6 +1413,67 @@ async def with_background_completion(
     _HB_PAD = ":" + " " * 256 + "\n"
     _HB_LINE = f'data: {json.dumps({"type": "heartbeat"})}\n{_HB_PAD}\n'
 
+    async def _maybe_abort_first_response_timeout(source: str) -> bool:
+        """LLM/relay가 첫 실제 이벤트를 주지 못한 채 heartbeat만 유지되는 상태를 닫는다."""
+        if _FIRST_RESPONSE_TIMEOUT_SEC <= 0:
+            return False
+        if state.get("_first_response_timeout_triggered"):
+            return True
+        if state.get("first_response_at") or state.get("saw_done_event"):
+            return False
+        _execution_id = state.get("execution_id")
+        if not _execution_id:
+            return False
+        _last_event_at = float(state.get("last_event_at") or state.get("started_at") or _bg_time.monotonic())
+        _elapsed = _bg_time.monotonic() - _last_event_at
+        if _elapsed < _FIRST_RESPONSE_TIMEOUT_SEC:
+            return False
+
+        state["_first_response_timeout_triggered"] = True
+        state["_producer_incomplete_exit"] = "llm_first_response_timeout"
+        _reason = f"llm_first_response_timeout_after_{int(_elapsed)}s:{source}"
+        logger.error(
+            "llm_first_response_timeout session=%s execution=%s elapsed=%.1fs",
+            session_id[:8],
+            str(_execution_id)[:8],
+            _elapsed,
+        )
+        try:
+            _error_msg = {
+                "type": "error",
+                "content": "LLM 응답 시작이 지연되어 스트림을 중단했습니다. 현재 답변 버블은 중단 상태로 보존됩니다.",
+                "recoverable": True,
+            }
+            await queue.put((f"data: {json.dumps(_error_msg)}\n\n", None))
+        except Exception:
+            pass
+        try:
+            _pool = get_pool()
+            async with _pool.acquire() as _conn:
+                await _mark_execution_interrupted(
+                    _conn,
+                    session_id,
+                    str(_execution_id),
+                    _reason,
+                    partial_content=state.get("content", ""),
+                    delete_empty_placeholder=False,
+                )
+        except Exception as _timeout_mark_err:
+            logger.warning(
+                "first_response_timeout_mark_failed session=%s execution=%s error=%s",
+                session_id[:8],
+                str(_execution_id)[:8],
+                _timeout_mark_err,
+            )
+        try:
+            await queue.put(_SENTINEL)
+        except Exception:
+            pass
+        if not task.done():
+            task.cancel()
+        _hb_stop.set()
+        return True
+
     async def _heartbeat_pump():
         """Adaptive heartbeat — 도구 실행 중 2초, 평시 5초 간격으로 queue에 heartbeat 삽입.
         도구 실행 중에는 tool_count/last_tool 포함 → 프론트 timeout 리셋 + 진행상황 표시."""
@@ -851,7 +1488,17 @@ async def with_background_completion(
             except _heartbeat_asyncio.TimeoutError:
                 if _client_gone:
                     break  # 클라이언트 이탈 시 heartbeat 불필요
+                if await _maybe_abort_first_response_timeout("heartbeat"):
+                    break
                 try:
+                    _now = _bg_time.monotonic()
+                    if (
+                        state.get("execution_id")
+                        and not state.get("saw_done_event")
+                        and _now - float(state.get("last_idle_save") or 0) > 10
+                    ):
+                        state["last_idle_save"] = _now
+                        await _interim_save_streaming(session_id, state)
                     _tc = state.get("tool_count", 0)
                     _lt = state.get("last_tool", "")
                     if _tc > 0 and _lt:
@@ -889,6 +1536,8 @@ async def with_background_completion(
                 item = await _heartbeat_asyncio.wait_for(queue.get(), timeout=_c_interval)
             except _heartbeat_asyncio.TimeoutError:
                 # heartbeat_pump이 큐에 넣지 못한 경우 → consumer에서 직접 heartbeat yield
+                if await _maybe_abort_first_response_timeout("consumer"):
+                    continue
                 yield _HB_LINE
                 continue
             if item is _SENTINEL:
@@ -991,6 +1640,17 @@ async def stop_session_streaming(session_id: str) -> Dict[str, Any]:
                             _execution_uuid,
                             _assistant_message_id,
                         )
+                        await conn.execute(
+                            """
+                            UPDATE chat_sessions
+                            SET current_execution_id = NULL,
+                                updated_at = NOW()
+                            WHERE id = $1
+                              AND current_execution_id = $2
+                            """,
+                            sid,
+                            _execution_uuid,
+                        )
                 logger.info(f"stop_partial_saved session={session_id[:8]} len={len(partial_content)}")
             except Exception as save_err:
                 logger.warning(f"stop_partial_save_failed session={session_id[:8]}: {save_err}")
@@ -1040,6 +1700,7 @@ async def resume_interrupted_streams() -> int:
                 SELECT DISTINCT ON (m.session_id)
                     m.session_id,
                     m.id AS placeholder_id,
+                    m.execution_id::text AS execution_id,
                     m.content AS partial_content,
                     m.intent AS placeholder_intent,
                     (SELECT content FROM chat_messages
@@ -1061,6 +1722,7 @@ async def resume_interrupted_streams() -> int:
         for row in rows:
             sid = str(row["session_id"])
             placeholder_id = row["placeholder_id"]
+            execution_id = row["execution_id"]
             partial = row["partial_content"] or ""
             last_user = row["last_user_msg"] or ""
             workspace = row["workspace_name"] or "CEO"
@@ -1073,15 +1735,23 @@ async def resume_interrupted_streams() -> int:
                 continue
 
             # 중간 결과에서 ⏳ 마커 제거
-            clean_partial = re.sub(r'\n\n⏳ _.*?_', '', partial, flags=re.DOTALL)
-            clean_partial = re.sub(r'^⏳ _[^\n]*_\s*', '', clean_partial)
-            clean_partial = clean_partial.strip()
+            clean_partial = _strip_streaming_progress_markers(partial)
+            if execution_id:
+                async with pool.acquire() as c:
+                    if await _interrupt_execution_if_newer_user(
+                        c,
+                        sid,
+                        execution_id,
+                        partial_content=clean_partial,
+                        placeholder_id=str(placeholder_id),
+                    ):
+                        continue
 
             try:
                 # 이어서 생성
                 import asyncio as _resume_asyncio
                 _resume_asyncio.create_task(
-                    _resume_single_stream(sid, placeholder_id, clean_partial, last_user, workspace)
+                    _resume_single_stream(sid, placeholder_id, clean_partial, last_user, workspace, execution_id=execution_id)
                 )
                 resumed += 1
                 logger.info(f"resume_launched: session={str(sid)[:8]} partial_len={len(clean_partial)}")
@@ -1089,11 +1759,22 @@ async def resume_interrupted_streams() -> int:
                 logger.warning(f"resume_launch_failed: session={str(sid)[:8]} error={e}")
                 # 실패 시 placeholder를 중단 메시지로 교체
                 async with pool.acquire() as c:
-                    final = clean_partial + "\n\n⚠️ _서버 재시작으로 응답이 중단되었습니다. 다시 질문해주세요._" if clean_partial else "⚠️ _서버 재시작으로 응답이 중단되었습니다. 다시 질문해주세요._"
-                    await c.execute(
-                        "UPDATE chat_messages SET content = $1, intent = NULL, model_used = 'interrupted' WHERE id = $2",
-                        final, placeholder_id,
-                    )
+                    if execution_id:
+                        await _mark_execution_interrupted(
+                            c,
+                            str(sid),
+                            execution_id,
+                            f"resume_launch_failed: {str(e)[:400]}",
+                            partial_content=clean_partial,
+                            placeholder_id=str(placeholder_id),
+                            delete_empty_placeholder=False,
+                        )
+                    else:
+                        final = clean_partial + "\n\n⚠️ _서버 재시작으로 응답이 중단되었습니다. 다시 질문해주세요._" if clean_partial else "⚠️ _서버 재시작으로 응답이 중단되었습니다. 다시 질문해주세요._"
+                        await c.execute(
+                            "UPDATE chat_messages SET content = $1, intent = NULL, model_used = 'interrupted' WHERE id = $2",
+                            final, placeholder_id,
+                        )
 
     except Exception as e:
         logger.warning(f"resume_interrupted_streams_error: {e}")
@@ -1115,6 +1796,9 @@ async def _resume_single_stream(
     _started_at = _bg_time.monotonic()
     _execution_uuid = uuid.UUID(execution_id) if execution_id else None
     _stream_id = execution_id or session_id
+    partial_content = _strip_streaming_progress_markers(partial_content or "")
+    if partial_content and not _has_meaningful_partial_content(partial_content):
+        partial_content = ""
     _streaming_state[session_id] = {
         "content": partial_content,
         "tool_count": 0,
@@ -1138,30 +1822,59 @@ async def _resume_single_stream(
             sid = uuid.UUID(session_id)
             await _wait_for_resume_slot_cooldown()
 
-            # 1. 히스토리 로드 (placeholder / rate_limited 제외)
-            async with pool.acquire() as conn:
-                hist_rows = await conn.fetch("""
-                    SELECT role, content FROM (
-                        SELECT role, content, created_at FROM chat_messages
-                        WHERE session_id = $1
-                          AND (is_compacted IS NULL OR is_compacted = false)
-                          AND intent NOT IN ('streaming_placeholder', 'rate_limited')
-                        ORDER BY created_at DESC LIMIT 30
-                    ) sub ORDER BY created_at ASC
-                """, sid)
+            if _execution_uuid:
+                async with pool.acquire() as conn:
+                    if await _interrupt_execution_if_newer_user(
+                        conn,
+                        session_id,
+                        str(_execution_uuid),
+                        partial_content=partial_content,
+                        placeholder_id=str(placeholder_id) if placeholder_id else None,
+                    ):
+                        return
 
-            raw_messages = [{"role": r["role"], "content": r["content"]} for r in hist_rows]
+            # 1. 히스토리 로드. 실행 복구는 과거 assistant 맥락 오염을 막기 위해
+            # 해당 execution의 user 메시지를 중심으로 재생성한다.
+            if _execution_uuid:
+                target_user_msg = (last_user_msg or "").strip()
+                if not target_user_msg:
+                    async with pool.acquire() as conn:
+                        target_user_msg = (
+                            await conn.fetchval(
+                                """
+                                SELECT um.content
+                                FROM chat_turn_executions te
+                                JOIN chat_messages um ON um.id = te.user_message_id
+                                WHERE te.id = $1
+                                """,
+                                _execution_uuid,
+                            )
+                            or ""
+                        ).strip()
+                raw_messages = [{"role": "user", "content": target_user_msg}] if target_user_msg else []
+            else:
+                async with pool.acquire() as conn:
+                    hist_rows = await conn.fetch("""
+                        SELECT role, content FROM (
+                            SELECT role, content, created_at FROM chat_messages
+                            WHERE session_id = $1
+                              AND (is_compacted IS NULL OR is_compacted = false)
+                              AND intent NOT IN ('streaming_placeholder', 'rate_limited')
+                            ORDER BY created_at DESC LIMIT 30
+                        ) sub ORDER BY created_at ASC
+                    """, sid)
+                raw_messages = [{"role": r["role"], "content": r["content"]} for r in hist_rows]
 
-            # 2. 이어서 생성 프롬프트 구성
+            # 2. 이어서 생성 지침 구성: user 메시지로 추가하지 않아 최신 지시를 덮지 않는다.
             resume_instruction = (
-                "[시스템: 서버 재시작으로 이전 응답이 중단되었습니다. "
+                "[응답 복구 지침]\n"
+                "서버 재시작으로 이전 응답이 중단되었습니다. "
                 "아래는 중단 전까지 생성된 부분 응답입니다. "
-                "이어서 완성해주세요. 이미 작성된 내용을 반복하지 말고, 끊긴 지점부터 자연스럽게 이어 작성하세요.]\n\n"
+                "최신 사용자 지시가 있으면 최신 지시를 우선하고, 없을 때만 끊긴 지점부터 자연스럽게 이어 작성하세요.\n\n"
                 f"--- 중단된 부분 응답 ---\n{partial_content}\n--- 여기서 이어서 작성 ---"
             ) if partial_content else (
-                "[시스템: 서버 재시작으로 이전 응답 생성이 시작되지 못했습니다. 처음부터 응답해주세요.]"
+                "[응답 복구 지침]\n서버 재시작으로 이전 응답 생성이 시작되지 못했습니다. 원래 사용자 지시에 처음부터 응답하세요."
             )
-            raw_messages.append({"role": "user", "content": resume_instruction})
 
             # 3. 컨텍스트 빌드
             from app.services.context_builder import build_messages_context
@@ -1184,6 +1897,7 @@ async def _resume_single_stream(
             except Exception:
                 system_prompt = base_prompt or "You are a helpful AI assistant."
                 messages = raw_messages[-20:]
+            system_prompt = ((system_prompt or "") + "\n\n" + resume_instruction).strip()
 
             # 4. LLM 호출 (도구 포함)
             from app.services.model_selector import call_stream
@@ -1265,6 +1979,9 @@ async def _resume_single_stream(
 
             # 4-A. Redis Stream에 완성된 응답이 있는지 먼저 확인 (LLM 재호출 불필요할 수 있음)
             redis_content, redis_complete = await _redis_stream.reconstruct_from_stream(_stream_id)
+            redis_content = _strip_streaming_progress_markers(redis_content or "")
+            if redis_content and not _has_meaningful_partial_content(redis_content):
+                redis_content = ""
             _db_execution_completed = False
             if redis_complete and _execution_uuid:
                 try:
@@ -1293,6 +2010,7 @@ async def _resume_single_stream(
                     str(_execution_uuid or "")[:8],
                     len(redis_content or ""),
                 )
+                redis_content = ""
 
             if redis_complete and _db_execution_completed and redis_content and len(redis_content) > len(partial_content):
                 # Redis에 완성된 응답이 있음 → LLM 재호출 없이 즉시 저장
@@ -1307,9 +2025,24 @@ async def _resume_single_stream(
             else:
                 # 4-B. Redis에 완성 응답 없음 → LLM 재호출 + Redis Stream에 토큰 발행
                 # Redis에 부분 내용이 DB보다 많으면 활용
-                if redis_content and len(redis_content) > len(partial_content):
+                if (
+                    redis_content
+                    and partial_content
+                    and len(redis_content) > len(partial_content)
+                    and (
+                        redis_content.startswith(partial_content)
+                        or partial_content.startswith(redis_content)
+                    )
+                ):
                     partial_content = redis_content
                     logger.info(f"resume_redis_partial: session={session_id[:8]} upgraded partial to redis_len={len(redis_content)}")
+                elif redis_content and not partial_content:
+                    logger.warning(
+                        "resume_redis_partial_ignored_without_db_anchor: session=%s execution=%s redis_len=%s",
+                        session_id[:8],
+                        str(_execution_uuid or "")[:8],
+                        len(redis_content),
+                    )
 
                 retry_delays = [30, 60, 120]
                 last_error: Optional[BaseException] = None
@@ -1361,6 +2094,8 @@ async def _resume_single_stream(
                                 }
                             elif etype == "done":
                                 cost_usd = Decimal(str(event.get("cost", "0")))
+                            elif etype == "error":
+                                raise RuntimeError(str(event.get("content") or "resume_stream_error"))
 
                         last_error = None
                         break
@@ -1383,6 +2118,9 @@ async def _resume_single_stream(
 
                 if last_error is not None:
                     raise last_error
+
+                if not _has_meaningful_partial_content(full_response):
+                    raise RuntimeError("resume_no_meaningful_response")
 
                 # 완료 마커 발행 → 프론트에서 resume_done 수신
                 await _redis_stream.mark_stream_done(_stream_id)
@@ -1431,6 +2169,7 @@ async def _resume_single_stream(
                             actual_model = COALESCE(actual_model, 'recovered'),
                             status = 'interrupted',
                             error_message = $4,
+                            completed_at = COALESCE(completed_at, NOW()),
                             updated_at = NOW()
                         WHERE id = $1
                         """,
@@ -1485,6 +2224,14 @@ def get_streaming_status(session_id: str) -> Optional[Dict[str, Any]]:
                 logger.warning(f"streaming_state_expired session={session_id[:8]} age={_bg_time.monotonic() - _started:.0f}s")
                 is_completed = True
                 s["completed"] = True
+            elif _looks_terminal_interrupt_content(_content):
+                logger.info(f"streaming_state_terminal_interrupt_detected session={session_id[:8]}")
+                is_completed = True
+                s["completed"] = True
+                task = _active_bg_tasks.get(session_id)
+                current_task = _current_asyncio_task_or_none()
+                if task is not None and task is not current_task and not task.done():
+                    task.cancel()
 
         result = {
             "is_streaming": not is_completed,
@@ -1616,6 +2363,7 @@ async def list_workspace_roles(workspace_id: str) -> List[Dict[str, Any]]:
                 NULLIF(TRIM(escalation_rules->>'display_name_ko'), '') AS display_name_ko,
                 escalation_rules,
                 project_scope,
+                COALESCE((escalation_rules->>'role_group_order')::int, 999) AS role_group_order,
                 CASE role
                     WHEN 'CEO' THEN 1
                     WHEN 'CTO' THEN 2
@@ -1631,7 +2379,7 @@ async def list_workspace_roles(workspace_id: str) -> List[Dict[str, Any]]:
                OR $1 = ANY(project_scope)
                OR ($1 = 'NTV2' AND 'NT' = ANY(project_scope))
                OR $1 = 'CEO'
-            ORDER BY sort_order, lower(role)
+            ORDER BY role_group_order, sort_order, lower(role)
             """,
             project_key,
             list(_CORE_ROLE_ORDER),
@@ -1658,6 +2406,10 @@ async def list_workspace_roles(workspace_id: str) -> List[Dict[str, Any]]:
                 "label": f"{role} / {display_name_ko}" if display_name_ko else role,
                 "display_name_ko": display_name_ko,
                 "project_scope": list(row["project_scope"] or []),
+                "role_category": escalation_rules.get("role_category"),
+                "role_category_label_ko": escalation_rules.get("role_category_label_ko"),
+                "role_group_order": escalation_rules.get("role_group_order"),
+                "lifecycle_stage": escalation_rules.get("lifecycle_stage"),
                 "when_to_use": escalation_rules.get("when_to_use"),
                 "how_to_instruct": escalation_rules.get("how_to_instruct"),
                 "instruction_template": escalation_rules.get("instruction_template"),
@@ -2598,6 +3350,39 @@ async def _save_and_update_session(
         _execution_uuid = uuid.UUID(_execution_id_str) if _execution_id_str else None
     async with get_pool().acquire() as conn:
         async with conn.transaction():
+            if _execution_uuid:
+                _exec_row = await conn.fetchrow(
+                    """
+                    SELECT status, completed_at
+                    FROM chat_turn_executions
+                    WHERE id = $1
+                    FOR UPDATE
+                    """,
+                    _execution_uuid,
+                )
+                if (
+                    not _exec_row
+                    or _exec_row["status"] not in ("running", "retrying")
+                    or _exec_row["completed_at"] is not None
+                ):
+                    logger.info(
+                        "final_save_skipped_terminal session=%s execution=%s status=%s",
+                        str(sid)[:8],
+                        str(_execution_uuid)[:8],
+                        _exec_row["status"] if _exec_row else "missing",
+                    )
+                    return
+                if await _execution_has_newer_user_message(conn, str(sid), str(_execution_uuid)):
+                    await _mark_execution_interrupted(
+                        conn,
+                        str(sid),
+                        str(_execution_uuid),
+                        "final_save_superseded_by_newer_user_message",
+                        partial_content="",
+                        delete_empty_placeholder=True,
+                    )
+                    return
+
             # streaming_placeholder가 있으면 UPDATE로 최종 응답 전환 (gap 제거)
             if _execution_uuid:
                 placeholder_id = await conn.fetchval(
@@ -2663,6 +3448,8 @@ async def _save_and_update_session(
                         completed_at = NOW(),
                         updated_at = NOW()
                     WHERE id = $1
+                      AND status IN ('running', 'retrying')
+                      AND completed_at IS NULL
                     """,
                     _execution_uuid,
                     _assistant_msg_id,
@@ -2670,7 +3457,16 @@ async def _save_and_update_session(
                     model_used or None,
                 )
                 await conn.execute(
-                    "UPDATE chat_sessions SET cost_total = cost_total + $1, current_execution_id = $2, updated_at = NOW() WHERE id = $3",
+                    """
+                    UPDATE chat_sessions
+                    SET cost_total = cost_total + $1,
+                        current_execution_id = CASE
+                            WHEN current_execution_id = $2 THEN NULL
+                            ELSE current_execution_id
+                        END,
+                        updated_at = NOW()
+                    WHERE id = $3
+                    """,
                     cost, _execution_uuid, sid,
                 )
             else:
@@ -4040,6 +4836,31 @@ async def send_message_stream(
                             logger.debug(f"sdk_session_id 저장 실패: {_se}")
 
                     if sdk_success:
+                        _deferred_state = {
+                            "full_response": full_response,
+                            "model_used": model_used,
+                            "cost_usd": cost_usd,
+                            "input_tokens": 0,
+                            "output_tokens": 0,
+                            "thinking_summary": "",
+                            "tools_called": tools_called,
+                        }
+                        async for _sse_line in _apply_deferred_interrupts_to_state(
+                            session_id=session_id,
+                            state=_deferred_state,
+                            messages=messages,
+                            system_prompt=_sdk_system_prompt,
+                            intent_result=intent_result,
+                            tools_for_api=tools_for_api,
+                            model_override=model_override,
+                            fast_revision=True,
+                        ):
+                            yield _sse_line
+                        full_response = str(_deferred_state.get("full_response") or "")
+                        model_used = _deferred_state.get("model_used") or model_used
+                        cost_usd = Decimal(str(_deferred_state.get("cost_usd", cost_usd)))
+                        tools_called = _deferred_state.get("tools_called") or tools_called
+
                         # 날조 방지: SDK 경로도 검증
                         from app.services.output_validator import validate_response as _sdk_validate
                         _sdk_val = _sdk_validate(
@@ -4166,6 +4987,34 @@ async def send_message_stream(
                 except Exception:
                     pass
 
+            _deferred_state = {
+                "full_response": full_response,
+                "model_used": model_used,
+                "cost_usd": cost_usd,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "thinking_summary": thinking_summary,
+                "tools_called": tools_called,
+            }
+            async for _sse_line in _apply_deferred_interrupts_to_state(
+                session_id=session_id,
+                state=_deferred_state,
+                messages=messages,
+                system_prompt=_auto_system,
+                intent_result=intent_result,
+                tools_for_api=tools_for_api,
+                model_override=model_override,
+                fast_revision=True,
+            ):
+                yield _sse_line
+            full_response = str(_deferred_state.get("full_response") or "")
+            model_used = _deferred_state.get("model_used") or model_used
+            cost_usd = Decimal(str(_deferred_state.get("cost_usd", cost_usd)))
+            input_tokens = int(_deferred_state.get("input_tokens") or 0)
+            output_tokens = int(_deferred_state.get("output_tokens") or 0)
+            thinking_summary = str(_deferred_state.get("thinking_summary") or "")
+            tools_called = _deferred_state.get("tools_called") or tools_called
+
             # #19: 날조 방지 검증 후 응답 저장 (별도 커넥션)
             from app.services.output_validator import validate_response as _auto_validate
             _auto_val = _auto_validate(
@@ -4282,8 +5131,8 @@ async def send_message_stream(
                         if _stream_attempt > 0:
                             logger.error(f"stream_retry_exhausted: session={session_id[:8]} attempts=3 error={_err_content[:80]}")
                         yield f"data: {json.dumps({'type': 'error', 'content': _err_content, 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
-                        # 에러 시에도 partial response가 있으면 저장 (recovered 중복 방지)
-                        if full_response.strip():
+                        # 에러 시에도 의미 있는 partial response가 있으면 저장한다. 재시도/진행 마커만 있으면 terminal interrupted로 닫는다.
+                        if full_response.strip() and _has_meaningful_partial_content(full_response):
                             try:
                                 await _save_and_update_session(
                                     sid, full_response,
@@ -4300,6 +5149,24 @@ async def send_message_stream(
                                 logger.info(f"error_partial_saved session={session_id[:8]} len={len(full_response)}")
                             except Exception as _eps:
                                 logger.warning(f"error_partial_save_failed session={session_id[:8]}: {_eps}")
+                        elif _execution_id_str:
+                            try:
+                                async with get_pool().acquire() as _conn:
+                                    await _mark_execution_interrupted(
+                                        _conn,
+                                        session_id,
+                                        _execution_id_str,
+                                        _err_content or "stream_retry_exhausted",
+                                        partial_content=full_response,
+                                        delete_empty_placeholder=False,
+                                    )
+                            except Exception as _interrupt_err:
+                                logger.warning(
+                                    "stream_error_interrupt_mark_failed session=%s execution=%s error=%s",
+                                    session_id[:8],
+                                    _execution_id_str[:8],
+                                    _interrupt_err,
+                                )
                         return
                 else:
                     # async for 정상 완료 (break 없이) → 성공
@@ -4319,6 +5186,120 @@ async def send_message_stream(
                     _stream_error = True
                     continue  # 다음 시도
                 raise  # 마지막 시도 실패 → 상위 try/except로 전파
+
+        # 도구 루프가 없는 긴 텍스트 스트림에서는 model_selector 내부 인터럽트 체크 지점이 없다.
+        # 이 경우 최종 저장 전에 남은 CEO 추가 지시를 한 번 더 반영해 현재 버블을 교체한다.
+        for _deferred_interrupt_pass in range(2):
+            try:
+                from app.core.interrupt_queue import has_interrupt as _has_interrupt, pop_interrupts as _pop_interrupts
+                if not session_id or not _has_interrupt(session_id):
+                    break
+                _deferred_interrupts = _pop_interrupts(session_id)
+            except Exception as _intr_check_err:
+                logger.warning(f"deferred_interrupt_check_failed session={session_id[:8]}: {_intr_check_err}")
+                break
+            if not _deferred_interrupts:
+                break
+
+            _interrupt_text = "\n".join(
+                str(item.get("content") or "").strip()
+                for item in _deferred_interrupts
+                if str(item.get("content") or "").strip()
+            ).strip()
+            if not _interrupt_text:
+                continue
+
+            _attachment_lines: list[str] = []
+            for _intr_item in _deferred_interrupts:
+                for _att in _intr_item.get("attachments", []) or []:
+                    _att_name = _att.get("name") or _att.get("filename") or "attachment"
+                    _att_type = _att.get("type") or _att.get("media_type") or "file"
+                    _attachment_lines.append(f"- {_att_name} ({_att_type})")
+            _attachment_note = (
+                "\n\n[추가 지시 첨부파일]\n" + "\n".join(_attachment_lines)
+                if _attachment_lines else ""
+            )
+            logger.info(
+                "deferred_interrupt_apply session=%s pass=%s count=%s",
+                session_id[:8],
+                _deferred_interrupt_pass + 1,
+                len(_deferred_interrupts),
+            )
+            for _intr_item in _deferred_interrupts:
+                yield f"event: interrupt_applied\ndata: {json.dumps({'type': 'interrupt_applied', 'content': str(_intr_item.get('content') or '')[:100]})}\n\n"
+
+            _previous_response = full_response
+            _interrupt_messages = list(messages)
+            if _previous_response.strip():
+                _interrupt_messages.append({"role": "assistant", "content": _previous_response.strip()})
+            _interrupt_messages.append({
+                "role": "user",
+                "content": (
+                    "[CEO 추가 지시]\n"
+                    "방금 스트리밍 중 CEO가 아래 추가 지시를 보냈습니다. "
+                    "이미 작성한 답변을 그대로 반복하지 말고, 추가 지시를 반영해 최종 답변을 다시 작성하세요. "
+                    "추가 지시가 기존 답변과 충돌하면 CEO의 추가 지시를 우선합니다.\n\n"
+                    f"{_interrupt_text}{_attachment_note}"
+                ),
+            })
+
+            _interrupt_response = ""
+            _reset_sent = False
+            async for event in call_stream(
+                intent_result=intent_result,
+                system_prompt=system_prompt,
+                messages=_interrupt_messages,
+                tools=tools_for_api,
+                model_override=model_override,
+                session_id=session_id,
+            ):
+                etype = event.get("type", "")
+                if etype == "heartbeat":
+                    yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                elif etype == "model_info":
+                    model_used = event.get("model", model_used)
+                    yield f"data: {json.dumps({'type': 'model_info', 'model': model_used})}\n\n"
+                elif etype == "interrupt_applied":
+                    yield f"event: interrupt_applied\ndata: {json.dumps({'type': 'interrupt_applied', 'content': event.get('content', '')})}\n\n"
+                elif etype == "delta":
+                    if not _reset_sent:
+                        yield f"data: {json.dumps({'type': 'stream_reset', 'reason': 'interrupt_applied'})}\n\n"
+                        _reset_sent = True
+                    _interrupt_response += event.get("content", "")
+                    yield f"data: {json.dumps({'type': 'delta', 'content': event['content']})}\n\n"
+                elif etype == "thinking":
+                    thinking_summary += event.get("thinking", "")
+                    yield f"data: {json.dumps({'type': 'thinking', 'thinking': event['thinking']})}\n\n"
+                elif etype == "tool_use":
+                    tools_called.append({"type": "tool_use", "tool_name": event["tool_name"], "tool_use_id": event.get("tool_use_id", ""), "tool_input": event.get("tool_input", {})})
+                    yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event.get('tool_use_id', ''), 'tool_input': event.get('tool_input', {})})}\n\n"
+                elif etype == "tool_result":
+                    tool_result_payload = _tool_result_event_snapshot(event)
+                    tools_called.append(tool_result_payload)
+                    yield f"data: {json.dumps(_tool_result_event_snapshot(event, content_limit=300))}\n\n"
+                elif etype == "yellow_limit":
+                    yield f"data: {json.dumps({'type': 'yellow_limit', 'content': event.get('content', ''), 'tool_name': event.get('tool_name', ''), 'consecutive_count': event.get('consecutive_count', 0)})}\n\n"
+                elif etype == "done":
+                    model_used = event.get("model", model_used or intent_result.model)
+                    cost_usd += Decimal(str(event.get("cost", "0")))
+                    input_tokens += event.get("input_tokens", 0) or 0
+                    output_tokens += event.get("output_tokens", 0) or 0
+                    thinking_summary = event.get("thinking_summary") or thinking_summary
+                elif etype == "error":
+                    if _interrupt_response.strip():
+                        yield f"data: {json.dumps({'type': 'error', 'content': event.get('content', '오류'), 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
+                        return
+                    logger.warning(
+                        "deferred_interrupt_stream_error_without_delta session=%s error=%s",
+                        session_id[:8],
+                        str(event.get("content") or "")[:120],
+                    )
+                    break
+
+            if _interrupt_response.strip():
+                full_response = _interrupt_response
+            else:
+                full_response = _previous_response
 
         # 9.5 Layer ④: Output Validator — 빈 약속 응답 감지 및 재시도 (AADS-188C Phase 3)
         from app.services.output_validator import validate_response
