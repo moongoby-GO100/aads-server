@@ -509,7 +509,7 @@ SSE 스트림:
 | `AADS_API_URL` | `http://127.0.0.1:8100` | 내부 API |
 | `MAX_RUNTIME` | `7200` | 단일 CLI 최대 실행 시간 |
 | `MAX_RETRIES` | `2` | 모델 폴백 외 추가 재시도 제어값 |
-| `MAX_CONCURRENT_PER_PROJECT` | `3` | 프로젝트당 동시 작업 수 |
+| `MAX_CONCURRENT_PER_PROJECT` | `6` | 프로젝트당 동시 작업 수 |
 | `APPROVAL_TIMEOUT_HOURS` | `24` | 승인 대기 타임아웃 |
 | `ARTIFACT_MAX_AGE_HOURS` | `24` | artifact 보존 시간 |
 | `MAX_JOB_RUNTIME` | `3600` | watchdog 상한 |

@@ -831,7 +831,7 @@ async def get_last_response(session_id: UUID):
             WHERE m.session_id = $1
               AND m.role = 'assistant'
               AND m.intent IS DISTINCT FROM 'streaming_placeholder'
-              AND COALESCE(m.intent, '') NOT IN ('runner_response', 'auto_reaction', 'system_trigger')
+              AND COALESCE(m.intent, '') NOT IN ('auto_reaction', 'system_trigger')
               AND (
                 $2::uuid IS NULL
                 OR te.user_message_id = $2::uuid

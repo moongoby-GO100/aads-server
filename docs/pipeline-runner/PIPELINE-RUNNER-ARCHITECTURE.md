@@ -224,7 +224,7 @@ queued → claimed → running → awaiting_approval → approved → deploying 
 
 - 같은 `parallel_group`이면 동일 프로젝트 내에서도 동시 실행 허용
 - 다른 그룹 또는 그룹 없음이면 프로젝트 단위 동시 실행 제한 적용
-- 현재 프로젝트당 동시 실행 상한: `MAX_CONCURRENT_PER_PROJECT=3`
+- 현재 프로젝트당 동시 실행 상한: `MAX_CONCURRENT_PER_PROJECT=6`
 
 ### depends_on
 
@@ -487,7 +487,7 @@ RETURNING ...
 | `POLL_INTERVAL` | 5초 | `pipeline-runner.sh` |
 | `MAX_RUNTIME` | 7200초 | `pipeline-runner.sh` |
 | `MAX_JOB_RUNTIME` | 3600초 | `pipeline-runner.sh` |
-| `MAX_CONCURRENT_PER_PROJECT` | 3 | `pipeline-runner.sh` |
+| `MAX_CONCURRENT_PER_PROJECT` | 6 | `pipeline-runner.sh` |
 | `APPROVAL_TIMEOUT_HOURS` | 24 | `pipeline-runner.sh` |
 | `WATCHDOG_INTERVAL` | 300초 | `pipeline-runner.sh` |
 | `_SSH_MAX_RETRIES` | 3 | `pipeline_runner_service.py` |

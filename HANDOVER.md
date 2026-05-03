@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-04)
+- **Android Agent 전기능 구현 후속 안정화 + 채팅 응답 표시 복구 문서화/커밋 준비 (2026-05-04 08:20 KST)**:
+  - Android: `runner-4f922625` 산출물은 `05c7dc7`로 이미 커밋되어 있으며, `CommandDispatcher.java` 기준 57개 명령/alias가 등록되어 있다. 후속 패치로 `AndroidCommandHandlers.SensorSnapshot.toJson()`에서 `NaN`/`Infinity` 센서값을 JSON 배열에 넣다 실패하지 않도록 non-finite 값을 skip 처리했다.
+  - Chat: DB에 저장된 AI 검수/상태 보고(`intent=runner_response`)가 채팅 본문에서 사라지는 원인을 `app/services/chat_service.py`, `app/routers/chat.py`, 대시보드 `src/app/chat/page.tsx` 필터로 확인했다. 자동 트리거/시스템 로그는 계속 숨기되 `runner_response`는 사용자-visible assistant 응답으로 남기도록 조정했다.
+  - Runner: AADS Pipeline Runner per-project 동시 실행 상한을 `MAX_CONCURRENT_PER_PROJECT=6`으로 맞추고 `scripts/pipeline-runner.sh`, `scripts/aads-pipeline-runner.service`, `docs/pipeline-runner/*`, `docs/knowledge/CTO-SYSTEM-MAP.md`에 반영했다.
+  - 기술문서: `docs/reports/20260504_ANDROID_AGENT_CHAT_VISIBILITY_TECHNICAL.md` 추가. Android 구현 범위, runner_response 표시 복구, Runner timeout/review diff 신뢰도 주의사항, 추후 검증 명령을 기록했다.
+  - 주의: `runner-4f922625`는 코드 검수 승인 후 finalize/deploy 단계에서 timeout/error 이력이 있으므로, 배포 완료 보고는 반드시 APK 다운로드/컨테이너/health 실측 후에만 가능하다.
+
 ## 현재 진행 상태 (2026-04-28)
 - **역할 분류 체계 + 사업화 역할 + Agent Registry 관리 UI 반영 (2026-04-30 18:59 KST)**:
   - DB: `migrations/077_role_taxonomy_and_business_roles.sql` 추가 및 운영 DB 적용 완료. 기존 `role_profiles` 26건에 분류 메타데이터를 반영하고, 사업화 역할 8건(`GTMStrategist`, `BrandMarketingLead`, `SalesPartnershipLead`, `PricingMonetizationStrategist`, `CustomerSuccessLead`, `RevenueOperationsAnalyst`, `FinanceFundraisingLead`, `LegalIPAdvisor`)과 L3 `prompt_assets` 8건을 추가/갱신했다.

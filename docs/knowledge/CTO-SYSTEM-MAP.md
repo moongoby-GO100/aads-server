@@ -1,5 +1,5 @@
 # CTO-SYSTEM-MAP: AADS 시스템 전체 아키텍처 지도
-_생성: 2026-03-30 | 갱신: 2026-04-24 | Phase 2 운영 — LLM DB화(AADS-188/189/190) 반영_
+_생성: 2026-03-30 | 갱신: 2026-05-03 | Phase 2 운영 — LLM DB화(AADS-188/189/190), AADS Runner 동시 실행 6건 반영_
 
 ## 인프라 (서버68, Docker Compose)
 
@@ -79,6 +79,7 @@ CEO 채팅 → pipeline_runner_submit(project, instruction)
 | **상세 문서** | `docs/pipeline-runner/PIPELINE-RUNNER-ARCHITECTURE.md`, `docs/pipeline-runner/PIPELINE-RUNNER-API-REFERENCE.md` |
 | 서버 재시작 영향 | 없음 (호스트 프로세스) |
 | 중복 방지 | DB UNIQUE(project+status='running') |
+| AADS 동시 실행 상한 | `MAX_CONCURRENT_PER_PROJECT=6`, 글로벌 `MAX_CONCURRENT_GLOBAL=10` |
 
 ### Pipeline C (레거시 — 보존, 미사용)
 

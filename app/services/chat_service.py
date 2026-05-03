@@ -2660,10 +2660,10 @@ async def list_messages(
         if _is_active and not include_streaming:
             # 활성 스트리밍 중 → placeholder 제외 (프론트 SSE 버블과 중복 방지)
             _intent_filter += " AND intent IS DISTINCT FROM 'streaming_placeholder'"
-        # Pipeline Runner 자동 알림 메시지 제외 (intent=NULL이라도 콘텐츠 패턴으로 필터)
+        # Pipeline Runner 자동 알림 메시지 제외 (intent=NULL이라도 콘텐츠 패턴으로 필터).
+        # runner_response는 AI 검수/상태 보고 본문이므로 채팅창에 표시한다.
         _intent_filter += (
             " AND intent IS DISTINCT FROM 'pipeline_c'"
-            " AND intent IS DISTINCT FROM 'runner_response'"
             " AND intent IS DISTINCT FROM 'ai_review_warning'"
             " AND intent IS DISTINCT FROM 'system_trigger'"
             " AND intent IS DISTINCT FROM 'auto_reaction'"
@@ -2777,12 +2777,12 @@ async def list_messages_cursor(
         _extra_filter = ""
         if _is_active and not include_streaming:
             _extra_filter = " AND intent IS DISTINCT FROM 'streaming_placeholder'"
-        # 자동 메시지 필터 — pipeline_c/runner_response/system_trigger는 UI에서 접혀있어
+        # 자동 메시지 필터 — pipeline_c/system_trigger는 UI에서 접혀있어
         # 자동 메시지 비율이 높은 세션에서 실제 대화가 안 보이는 문제 방지
         # intent=NULL인 Pipeline Runner 알림 메시지도 콘텐츠 패턴으로 추가 제외
+        # runner_response는 AI 검수/상태 보고 본문이므로 채팅창에 표시한다.
         _auto_exclude = (
             " AND intent IS DISTINCT FROM 'pipeline_c'"
-            " AND intent IS DISTINCT FROM 'runner_response'"
             " AND intent IS DISTINCT FROM 'ai_review_warning'"
             " AND intent IS DISTINCT FROM 'system_trigger'"
             " AND intent IS DISTINCT FROM 'auto_reaction'"

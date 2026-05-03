@@ -1226,7 +1226,11 @@ final class AndroidCommandHandlers {
         private JSONObject toJson() {
             JSONArray jsonValues = new JSONArray();
             for (float value : values) {
-                jsonValues.put(value);
+                try {
+                    jsonValues.put(value);
+                } catch (org.json.JSONException ignored) {
+                    // Skip non-finite values (NaN/Infinity)
+                }
             }
             JSONObject data = new JSONObject();
             ResultJson.put(data, "type", sensor.getType());

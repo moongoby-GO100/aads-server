@@ -371,3 +371,7 @@ async def list_
 ## [2026-04-29 19:46:47 KST] [GO100] backend/app/services/go100/kis_order_gateway.py
 - Chat-Direct 수정: patch:             SELECT is_production FROM ki→            SELECT is_production, hts_id
 - finalize: pending
+
+## [2026-05-03 20:45:05 KST] [GO100] backend/app/services/go100/ai/tool_executors.py
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git diff --name-only HEAD
+- finalize: pending

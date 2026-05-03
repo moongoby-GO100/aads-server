@@ -36,3 +36,24 @@ im→"""structlog 표준화 설정 — 구조화 JSON 로깅 + File
 
 ## [2026-04-30 19:58:00 KST] [aads-server] chat streaming reliability
 - Chat-Direct 수정: 스트리밍 중 active API 재시작 방지, blue/green resume owner 분리, placeholder 보존, 강제 끊김 e2e 및 브라우저 확인 기록.
+
+## [2026-05-03 20:28:12 KST] [aads-server] android_agent/app/src/main/java/kr/newtalk/aads/agent/AndroidCommandHandlers.java
+- Chat-Direct 수정: patch:             JSONArray jsonValues = new J→            JSONArray jsonValues = new J
+
+## [2026-05-03 20:28:29 KST] [aads-server] /root/aads/aads-server/android_agent/app/src/main/java/kr/newtalk/aads/agent/AndroidCommandHandlers.java
+- Chat-Direct 수정: patch:             JSONArray jsonValues = new J→            JSONArray jsonValues = new J
+
+## [2026-05-03 20:28:35 KST] [aads-server] android_agent/app/src/main/java/kr/newtalk/aads/agent/AndroidCommandHandlers.java
+- Chat-Direct 수정: patch:             JSONArray jsonValues = new J→            JSONArray jsonValues = new J
+
+## [2026-05-03 20:29:12 KST] [aads-server] android_agent/app/src/main/java/kr/newtalk/aads/agent/AndroidCommandHandlers.java
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server/android_agent && cp app/src/main/java/kr/newtalk/aads/
+
+## [2026-05-03 20:53:30 KST] [aads-server/aads-dashboard] runner_response 채팅 표시 복구
+- Chat-Direct 수정: `app/services/chat_service.py`, `app/routers/chat.py`, `/root/aads/aads-dashboard/src/app/chat/page.tsx`
+- 내용: DB에 저장된 AI 검수/상태 보고(`intent=runner_response`)가 채팅 본문에 표시되도록 백엔드 조회 필터와 프론트 시스템 메시지 분류를 수정. 대시보드 blue-green 배포 완료.
+
+## [2026-05-04 08:20:33 KST] [aads-server/aads-dashboard] Android Agent + runner_response follow-up
+- Chat-Direct 수정: Android sensor JSON hardening, `runner_response` main chat visibility, Pipeline Runner concurrency docs/config.
+- 기술문서: `docs/reports/20260504_ANDROID_AGENT_CHAT_VISIBILITY_TECHNICAL.md`
+- HANDOVER: `HANDOVER.md` 2026-05-04 현재 진행 상태 추가.

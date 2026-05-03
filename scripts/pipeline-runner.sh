@@ -33,7 +33,7 @@ POLL_INTERVAL="${POLL_INTERVAL:-5}"
 AADS_API_URL="${AADS_API_URL:-http://127.0.0.1:8100}"
 MAX_RUNTIME="${MAX_RUNTIME:-7200}"
 MAX_RETRIES="${MAX_RETRIES:-2}"               # H5: Claude 실패 시 재시도 횟수
-MAX_CONCURRENT_PER_PROJECT="${MAX_CONCURRENT_PER_PROJECT:-3}"  # 프로젝트당 동시 실행 수
+MAX_CONCURRENT_PER_PROJECT="${MAX_CONCURRENT_PER_PROJECT:-6}"  # 프로젝트당 동시 실행 수
 APPROVAL_TIMEOUT_HOURS="${APPROVAL_TIMEOUT_HOURS:-24}"  # H4: 승인 대기 타임아웃
 ARTIFACT_MAX_AGE_HOURS="${ARTIFACT_MAX_AGE_HOURS:-24}"  # H3: 임시파일 보존 시간
 LOG_DIR="/var/log/aads-pipeline"
@@ -497,7 +497,7 @@ claim_queued_job() {
                   AND (SELECT COUNT(*) FROM pipeline_jobs r
                        WHERE r.project = p.project
                          AND r.status IN ('running', 'claimed')
-                         AND r.job_id != p.job_id) < ${MAX_CONCURRENT_PER_PROJECT:-3}
+                         AND r.job_id != p.job_id) < ${MAX_CONCURRENT_PER_PROJECT:-6}
                   AND NOT (COALESCE(p.worker_model, '') LIKE 'litellm:%' AND p.project IN ('GO100','KIS','SF','NTV2'))
                 ORDER BY COALESCE(p.priority, 0) DESC, p.created_at ASC LIMIT 1
                 FOR UPDATE SKIP LOCKED
