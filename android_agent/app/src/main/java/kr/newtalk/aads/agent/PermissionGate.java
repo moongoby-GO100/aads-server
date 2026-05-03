@@ -29,4 +29,16 @@ final class PermissionGate {
     static boolean hasNearbyWifi(Context context) {
         return Build.VERSION.SDK_INT < 33 || has(context, Manifest.permission.NEARBY_WIFI_DEVICES);
     }
+
+    static boolean hasImageRead(Context context) {
+        if (Build.VERSION.SDK_INT >= 33) {
+            return has(context, Manifest.permission.READ_MEDIA_IMAGES);
+        }
+        return has(context, Manifest.permission.READ_EXTERNAL_STORAGE);
+    }
+
+    static boolean hasBluetoothConnect(Context context) {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+                || has(context, Manifest.permission.BLUETOOTH_CONNECT);
+    }
 }

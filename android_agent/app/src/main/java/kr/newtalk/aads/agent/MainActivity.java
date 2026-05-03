@@ -2,6 +2,7 @@ package kr.newtalk.aads.agent;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.admin.DevicePolicyManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -33,6 +34,9 @@ public final class MainActivity extends Activity {
     private static final int REQ_CAMERA = 12;
     private static final int REQ_SMS = 13;
     private static final int REQ_WIFI = 14;
+    private static final int REQ_DATA = 15;
+    private static final int REQ_MIC = 16;
+    private static final int REQ_BLUETOOTH = 17;
 
     private EditText serverUrlEdit;
     private EditText tokenEdit;
@@ -123,6 +127,10 @@ public final class MainActivity extends Activity {
         root.addView(row(button("Notifications", v -> requestNotificationPermission()), button("Location", v -> requestLocationPermission())));
         root.addView(row(button("Camera", v -> requestPermission(REQ_CAMERA, Manifest.permission.CAMERA)), button("SMS", v -> requestPermission(REQ_SMS, Manifest.permission.SEND_SMS))));
         root.addView(row(button("Wi-Fi", v -> requestWifiPermission()), button("Battery Settings", this::openBatterySettings)));
+        root.addView(row(button("Data Access", v -> requestDataPermissions()), button("Microphone", v -> requestPermission(REQ_MIC, Manifest.permission.RECORD_AUDIO))));
+        root.addView(row(button("Bluetooth", v -> requestBluetoothPermission()), button("Write Settings", this::openWriteSettings)));
+        root.addView(row(button("Accessibility", this::openAccessibilitySettings), button("Notify Access", this::openNotificationAccessSettings)));
+        root.addView(row(button("Device Admin", this::openDeviceAdminSettings), button("System Settings", v -> startActivity(new Intent(Settings.ACTION_SETTINGS)))));
 
         return scrollView;
     }
@@ -206,6 +214,27 @@ public final class MainActivity extends Activity {
         requestPermissions(permissions.toArray(new String[0]), REQ_WIFI);
     }
 
+    private void requestDataPermissions() {
+        List<String> permissions = new ArrayList<>();
+        permissions.add(Manifest.permission.READ_CONTACTS);
+        permissions.add(Manifest.permission.READ_CALL_LOG);
+        permissions.add(Manifest.permission.READ_SMS);
+        if (Build.VERSION.SDK_INT >= 33) {
+            permissions.add(Manifest.permission.READ_MEDIA_IMAGES);
+        } else {
+            permissions.add(Manifest.permission.READ_EXTERNAL_STORAGE);
+        }
+        requestPermissions(permissions.toArray(new String[0]), REQ_DATA);
+    }
+
+    private void requestBluetoothPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            requestPermission(REQ_BLUETOOTH, Manifest.permission.BLUETOOTH_CONNECT);
+        } else {
+            toast("Bluetooth permission is already available on this Android version");
+        }
+    }
+
     private void requestPermission(int requestCode, String permission) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !PermissionGate.has(this, permission)) {
             requestPermissions(new String[]{permission}, requestCode);
@@ -228,6 +257,35 @@ public final class MainActivity extends Activity {
             startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
         } catch (Exception e) {
             startActivity(new Intent(Settings.ACTION_SETTINGS));
+        }
+    }
+
+    private void openWriteSettings(View view) {
+        try {
+            Intent intent = new Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS);
+            intent.setData(Uri.parse("package:" + getPackageName()));
+            startActivity(intent);
+        } catch (Exception e) {
+            startActivity(new Intent(Settings.ACTION_SETTINGS));
+        }
+    }
+
+    private void openAccessibilitySettings(View view) {
+        startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+    }
+
+    private void openNotificationAccessSettings(View view) {
+        startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
+    }
+
+    private void openDeviceAdminSettings(View view) {
+        try {
+            Intent intent = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
+            intent.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, AadsDeviceAdminReceiver.componentName(this));
+            intent.putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Enable AADS device lock and wipe control");
+            startActivity(intent);
+        } catch (Exception e) {
+            startActivity(new Intent(Settings.ACTION_SECURITY_SETTINGS));
         }
     }
 

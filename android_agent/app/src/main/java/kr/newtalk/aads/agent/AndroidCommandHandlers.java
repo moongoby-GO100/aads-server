@@ -4,11 +4,26 @@ import android.Manifest;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.admin.DevicePolicyManager;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothManager;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.ComponentName;
+import android.content.ContentResolver;
+import android.content.ContentUris;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.database.Cursor;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
@@ -23,6 +38,7 @@ import android.location.LocationManager;
 import android.media.AudioManager;
 import android.media.Image;
 import android.media.ImageReader;
+import android.media.MediaRecorder;
 import android.net.Uri;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiInfo;
@@ -34,16 +50,23 @@ import android.os.HandlerThread;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
+import android.provider.CallLog;
+import android.provider.ContactsContract;
+import android.provider.MediaStore;
+import android.provider.Settings;
+import android.provider.Telephony;
 import android.speech.tts.TextToSpeech;
 import android.telephony.SmsManager;
 import android.util.Base64;
 import android.util.Size;
-import android.view.Surface;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -51,8 +74,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -498,6 +525,731 @@ final class AndroidCommandHandlers {
         ResultJson.put(data, "number", number);
         ResultJson.put(data, "user_visible_state", "dialer_opened");
         return ResultJson.success(data);
+    }
+
+    static JSONObject contactsList(Context context, JSONObject params) {
+        if (!PermissionGate.has(context, Manifest.permission.READ_CONTACTS)) {
+            return ResultJson.permissionError(Manifest.permission.READ_CONTACTS, "contacts_list");
+        }
+        int limit = boundedInt(params, "limit", 100, 1, 1000);
+        int offset = Math.max(0, params.optInt("offset", 0));
+        JSONArray contacts = new JSONArray();
+        String[] projection = new String[]{
+                ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                ContactsContract.CommonDataKinds.Phone.NUMBER
+        };
+        try (Cursor cursor = context.getContentResolver().query(
+                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                projection,
+                null,
+                null,
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " COLLATE LOCALIZED ASC"
+        )) {
+            appendContacts(cursor, contacts, limit, offset);
+        } catch (SecurityException e) {
+            return ResultJson.permissionError(Manifest.permission.READ_CONTACTS, "contacts_list");
+        }
+        JSONObject data = new JSONObject();
+        ResultJson.put(data, "contacts", contacts);
+        ResultJson.put(data, "count", contacts.length());
+        ResultJson.put(data, "limit", limit);
+        ResultJson.put(data, "offset", offset);
+        return ResultJson.success(data);
+    }
+
+    static JSONObject contactsSearch(Context context, JSONObject params) {
+        if (!PermissionGate.has(context, Manifest.permission.READ_CONTACTS)) {
+            return ResultJson.permissionError(Manifest.permission.READ_CONTACTS, "contacts_search");
+        }
+        String name = params.optString("name", params.optString("query", "")).trim();
+        if (name.isEmpty()) {
+            return ResultJson.error("name required");
+        }
+        int limit = boundedInt(params, "limit", 100, 1, 1000);
+        JSONArray contacts = new JSONArray();
+        String[] projection = new String[]{
+                ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                ContactsContract.CommonDataKinds.Phone.NUMBER
+        };
+        String selection = ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " LIKE ?";
+        String[] selectionArgs = new String[]{"%" + name + "%"};
+        try (Cursor cursor = context.getContentResolver().query(
+                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                projection,
+                selection,
+                selectionArgs,
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " COLLATE LOCALIZED ASC"
+        )) {
+            appendContacts(cursor, contacts, limit, 0);
+        } catch (SecurityException e) {
+            return ResultJson.permissionError(Manifest.permission.READ_CONTACTS, "contacts_search");
+        }
+        JSONObject data = new JSONObject();
+        ResultJson.put(data, "contacts", contacts);
+        ResultJson.put(data, "count", contacts.length());
+        ResultJson.put(data, "query", name);
+        return ResultJson.success(data);
+    }
+
+    static JSONObject callLog(Context context, JSONObject params) {
+        if (!PermissionGate.has(context, Manifest.permission.READ_CALL_LOG)) {
+            return ResultJson.permissionError(Manifest.permission.READ_CALL_LOG, "call_log");
+        }
+        int limit = boundedInt(params, "limit", 50, 1, 500);
+        JSONArray calls = new JSONArray();
+        String[] projection = new String[]{
+                CallLog.Calls.NUMBER,
+                CallLog.Calls.TYPE,
+                CallLog.Calls.DATE,
+                CallLog.Calls.DURATION
+        };
+        try (Cursor cursor = context.getContentResolver().query(
+                CallLog.Calls.CONTENT_URI,
+                projection,
+                null,
+                null,
+                CallLog.Calls.DATE + " DESC"
+        )) {
+            if (cursor != null) {
+                while (cursor.moveToNext() && calls.length() < limit) {
+                    JSONObject item = new JSONObject();
+                    int type = cursor.getInt(cursor.getColumnIndexOrThrow(CallLog.Calls.TYPE));
+                    ResultJson.put(item, "number", cursor.getString(cursor.getColumnIndexOrThrow(CallLog.Calls.NUMBER)));
+                    ResultJson.put(item, "type", type);
+                    ResultJson.put(item, "type_name", callTypeName(type));
+                    ResultJson.put(item, "date", cursor.getLong(cursor.getColumnIndexOrThrow(CallLog.Calls.DATE)));
+                    ResultJson.put(item, "duration", cursor.getLong(cursor.getColumnIndexOrThrow(CallLog.Calls.DURATION)));
+                    calls.put(item);
+                }
+            }
+        } catch (SecurityException e) {
+            return ResultJson.permissionError(Manifest.permission.READ_CALL_LOG, "call_log");
+        }
+        JSONObject data = new JSONObject();
+        ResultJson.put(data, "calls", calls);
+        ResultJson.put(data, "count", calls.length());
+        ResultJson.put(data, "limit", limit);
+        return ResultJson.success(data);
+    }
+
+    static JSONObject smsInbox(Context context, JSONObject params) {
+        if (!PermissionGate.has(context, Manifest.permission.READ_SMS)) {
+            return ResultJson.permissionError(Manifest.permission.READ_SMS, "sms_inbox");
+        }
+        int limit = boundedInt(params, "limit", 50, 1, 500);
+        JSONArray messages = new JSONArray();
+        String[] projection = new String[]{
+                Telephony.Sms.Inbox.ADDRESS,
+                Telephony.Sms.Inbox.BODY,
+                Telephony.Sms.Inbox.DATE
+        };
+        try (Cursor cursor = context.getContentResolver().query(
+                Telephony.Sms.Inbox.CONTENT_URI,
+                projection,
+                null,
+                null,
+                Telephony.Sms.Inbox.DATE + " DESC"
+        )) {
+            if (cursor != null) {
+                while (cursor.moveToNext() && messages.length() < limit) {
+                    JSONObject item = new JSONObject();
+                    ResultJson.put(item, "address", cursor.getString(cursor.getColumnIndexOrThrow(Telephony.Sms.Inbox.ADDRESS)));
+                    ResultJson.put(item, "body", cursor.getString(cursor.getColumnIndexOrThrow(Telephony.Sms.Inbox.BODY)));
+                    ResultJson.put(item, "date", cursor.getLong(cursor.getColumnIndexOrThrow(Telephony.Sms.Inbox.DATE)));
+                    messages.put(item);
+                }
+            }
+        } catch (SecurityException e) {
+            return ResultJson.permissionError(Manifest.permission.READ_SMS, "sms_inbox");
+        }
+        JSONObject data = new JSONObject();
+        ResultJson.put(data, "messages", messages);
+        ResultJson.put(data, "count", messages.length());
+        ResultJson.put(data, "limit", limit);
+        return ResultJson.success(data);
+    }
+
+    static JSONObject photoGallery(Context context, JSONObject params) {
+        if (!PermissionGate.hasImageRead(context)) {
+            String permission = Build.VERSION.SDK_INT >= 33
+                    ? Manifest.permission.READ_MEDIA_IMAGES
+                    : Manifest.permission.READ_EXTERNAL_STORAGE;
+            return ResultJson.permissionError(permission, "photo_gallery");
+        }
+        int limit = boundedInt(params, "limit", 20, 1, 500);
+        JSONArray photos = new JSONArray();
+        String[] projection = new String[]{
+                MediaStore.Images.Media._ID,
+                MediaStore.Images.Media.DATA,
+                MediaStore.Images.Media.DATE_ADDED,
+                MediaStore.Images.Media.DATE_TAKEN,
+                MediaStore.Images.Media.SIZE
+        };
+        try (Cursor cursor = context.getContentResolver().query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                projection,
+                null,
+                null,
+                MediaStore.Images.Media.DATE_ADDED + " DESC"
+        )) {
+            if (cursor != null) {
+                while (cursor.moveToNext() && photos.length() < limit) {
+                    long id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID));
+                    String path = cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA));
+                    long dateTaken = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN));
+                    long dateAdded = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED));
+                    if (path == null || path.isEmpty()) {
+                        Uri uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id);
+                        path = uri.toString();
+                    }
+                    JSONObject item = new JSONObject();
+                    ResultJson.put(item, "id", id);
+                    ResultJson.put(item, "path", path);
+                    ResultJson.put(item, "date", dateTaken > 0 ? dateTaken : dateAdded * 1000L);
+                    ResultJson.put(item, "size", cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)));
+                    photos.put(item);
+                }
+            }
+        } catch (SecurityException e) {
+            String permission = Build.VERSION.SDK_INT >= 33
+                    ? Manifest.permission.READ_MEDIA_IMAGES
+                    : Manifest.permission.READ_EXTERNAL_STORAGE;
+            return ResultJson.permissionError(permission, "photo_gallery");
+        }
+        JSONObject data = new JSONObject();
+        ResultJson.put(data, "photos", photos);
+        ResultJson.put(data, "count", photos.length());
+        ResultJson.put(data, "limit", limit);
+        return ResultJson.success(data);
+    }
+
+    static JSONObject appList(Context context) {
+        PackageManager packageManager = context.getPackageManager();
+        JSONArray apps = new JSONArray();
+        List<ApplicationInfo> installed = packageManager.getInstalledApplications(PackageManager.GET_META_DATA);
+        Collections.sort(installed, Comparator.comparing(app -> app.packageName));
+        for (ApplicationInfo app : installed) {
+            JSONObject item = new JSONObject();
+            ResultJson.put(item, "package", app.packageName);
+            ResultJson.put(item, "label", String.valueOf(packageManager.getApplicationLabel(app)));
+            try {
+                PackageInfo info = packageManager.getPackageInfo(app.packageName, 0);
+                ResultJson.put(item, "version", info.versionName == null ? "" : info.versionName);
+                ResultJson.put(item, "version_code", Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                        ? info.getLongVersionCode()
+                        : info.versionCode);
+            } catch (PackageManager.NameNotFoundException ignored) {
+                ResultJson.put(item, "version", "");
+                ResultJson.put(item, "version_code", 0);
+            }
+            apps.put(item);
+        }
+        JSONObject data = new JSONObject();
+        ResultJson.put(data, "apps", apps);
+        ResultJson.put(data, "count", apps.length());
+        return ResultJson.success(data);
+    }
+
+    static JSONObject appLaunch(Context context, JSONObject params) {
+        String packageName = params.optString("package", params.optString("package_name", "")).trim();
+        if (packageName.isEmpty()) {
+            return ResultJson.error("package required");
+        }
+        Intent intent = context.getPackageManager().getLaunchIntentForPackage(packageName);
+        if (intent == null) {
+            return ResultJson.error("launch intent unavailable");
+        }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        context.startActivity(intent);
+        JSONObject data = new JSONObject();
+        ResultJson.put(data, "package", packageName);
+        ResultJson.put(data, "user_visible_state", "app_launched");
+        return ResultJson.success(data);
+    }
+
+    static JSONObject bluetoothStatus(Context context, JSONObject params) {
+        if (!PermissionGate.hasBluetoothConnect(context)) {
+            return ResultJson.permissionError(Manifest.permission.BLUETOOTH_CONNECT, "bluetooth_status");
+        }
+        BluetoothManager manager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
+        BluetoothAdapter adapter = manager == null ? BluetoothAdapter.getDefaultAdapter() : manager.getAdapter();
+        if (adapter == null) {
+            return ResultJson.error("bluetooth adapter unavailable");
+        }
+        JSONArray paired = new JSONArray();
+        try {
+            Set<BluetoothDevice> bondedDevices = adapter.getBondedDevices();
+            if (bondedDevices != null) {
+                for (BluetoothDevice device : bondedDevices) {
+                    JSONObject item = new JSONObject();
+                    ResultJson.put(item, "name", device.getName());
+                    ResultJson.put(item, "address", device.getAddress());
+                    ResultJson.put(item, "type", device.getType());
+                    ResultJson.put(item, "bond_state", device.getBondState());
+                    paired.put(item);
+                }
+            }
+            JSONObject data = new JSONObject();
+            ResultJson.put(data, "enabled", adapter.isEnabled());
+            ResultJson.put(data, "state", adapter.getState());
+            ResultJson.put(data, "state_name", bluetoothStateName(adapter.getState()));
+            ResultJson.put(data, "paired_devices", paired);
+            ResultJson.put(data, "paired_count", paired.length());
+            return ResultJson.success(data);
+        } catch (SecurityException e) {
+            return ResultJson.permissionError(Manifest.permission.BLUETOOTH_CONNECT, "bluetooth_status");
+        }
+    }
+
+    static JSONObject screenTap(JSONObject params) throws InterruptedException {
+        float x = (float) params.optDouble("x", -1);
+        float y = (float) params.optDouble("y", -1);
+        if (x < 0 || y < 0) {
+            return ResultJson.error("x and y required");
+        }
+        AadsAccessibilityService.GestureOutcome outcome = AadsAccessibilityService.tap(x, y);
+        return gestureResult(outcome, "tap");
+    }
+
+    static JSONObject screenSwipe(JSONObject params) throws InterruptedException {
+        float x1 = (float) params.optDouble("x1", -1);
+        float y1 = (float) params.optDouble("y1", -1);
+        float x2 = (float) params.optDouble("x2", -1);
+        float y2 = (float) params.optDouble("y2", -1);
+        if (x1 < 0 || y1 < 0 || x2 < 0 || y2 < 0) {
+            return ResultJson.error("x1, y1, x2 and y2 required");
+        }
+        long durationMs = Math.max(50, Math.min(params.optLong("duration", params.optLong("duration_ms", 400)), 10000));
+        AadsAccessibilityService.GestureOutcome outcome = AadsAccessibilityService.swipe(x1, y1, x2, y2, durationMs);
+        return gestureResult(outcome, "swipe");
+    }
+
+    static JSONObject screenLongPress(JSONObject params) throws InterruptedException {
+        float x = (float) params.optDouble("x", -1);
+        float y = (float) params.optDouble("y", -1);
+        if (x < 0 || y < 0) {
+            return ResultJson.error("x and y required");
+        }
+        long durationMs = Math.max(300, Math.min(params.optLong("duration_ms", 1000), 10000));
+        AadsAccessibilityService.GestureOutcome outcome = AadsAccessibilityService.longPress(x, y, durationMs);
+        return gestureResult(outcome, "long_press");
+    }
+
+    static JSONObject screenText(JSONObject params) {
+        AadsAccessibilityService.ScreenTextResult result = AadsAccessibilityService.getScreenText(
+                boundedInt(params, "max_nodes", 200, 1, 1000)
+        );
+        if (!result.available) {
+            return ResultJson.error(result.error);
+        }
+        JSONObject data = new JSONObject();
+        ResultJson.put(data, "text", result.text);
+        ResultJson.put(data, "nodes", result.nodes);
+        ResultJson.put(data, "count", result.nodes.length());
+        return ResultJson.success(data);
+    }
+
+    static JSONObject keyInput(JSONObject params) {
+        String text = params.optString("text", "");
+        if (text.isEmpty()) {
+            return ResultJson.error("text required");
+        }
+        AadsAccessibilityService.InputOutcome outcome = AadsAccessibilityService.inputText(text, params.optBoolean("append", true));
+        if (!outcome.available) {
+            return ResultJson.error(outcome.error);
+        }
+        JSONObject data = new JSONObject();
+        ResultJson.put(data, "inserted", outcome.completed);
+        ResultJson.put(data, "length", text.length());
+        return outcome.completed ? ResultJson.success(data) : ResultJson.error("input failed");
+    }
+
+    static JSONObject globalAction(JSONObject params) {
+        String action = params.optString("action", params.optString("name", "")).trim();
+        if (action.isEmpty()) {
+            return ResultJson.error("action required");
+        }
+        AadsAccessibilityService.GlobalActionOutcome outcome = AadsAccessibilityService.performGlobalAction(action);
+        if (!outcome.available) {
+            return ResultJson.error(outcome.error);
+        }
+        JSONObject data = new JSONObject();
+        ResultJson.put(data, "action", outcome.actionName);
+        ResultJson.put(data, "action_code", outcome.actionCode);
+        ResultJson.put(data, "performed", outcome.completed);
+        return outcome.completed ? ResultJson.success(data) : ResultJson.error("global action failed");
+    }
+
+    static JSONObject findAndClick(JSONObject params) {
+        String text = params.optString("text", "").trim();
+        String id = params.optString("id", params.optString("view_id", "")).trim();
+        if (text.isEmpty() && id.isEmpty()) {
+            return ResultJson.error("text or id required");
+        }
+        AadsAccessibilityService.ClickOutcome outcome = text.isEmpty()
+                ? AadsAccessibilityService.findAndClickByViewId(id)
+                : AadsAccessibilityService.findAndClickByText(text);
+        if (!outcome.available) {
+            return ResultJson.error(outcome.error);
+        }
+        JSONObject data = new JSONObject();
+        ResultJson.put(data, "clicked", outcome.completed);
+        ResultJson.put(data, "match_text", outcome.text);
+        ResultJson.put(data, "view_id", outcome.viewId);
+        return outcome.completed ? ResultJson.success(data) : ResultJson.error("click failed");
+    }
+
+    static JSONObject screenScroll(JSONObject params) throws InterruptedException {
+        String direction = params.optString("direction", "down").trim();
+        AadsAccessibilityService.ScrollOutcome outcome = AadsAccessibilityService.scroll(direction);
+        if (!outcome.available) {
+            return ResultJson.error(outcome.error);
+        }
+        JSONObject data = new JSONObject();
+        ResultJson.put(data, "direction", outcome.direction);
+        ResultJson.put(data, "performed", outcome.completed);
+        ResultJson.put(data, "method", outcome.method);
+        return outcome.completed ? ResultJson.success(data) : ResultJson.error("scroll failed");
+    }
+
+    static JSONObject sensorData(Context context) throws InterruptedException {
+        SensorManager manager = (SensorManager) context.getSystemService(Context.SENSOR_SERVICE);
+        if (manager == null) {
+            return ResultJson.error("sensor manager unavailable");
+        }
+        int timeoutMs = 1200;
+        int[] sensorTypes = new int[]{
+                Sensor.TYPE_ACCELEROMETER,
+                Sensor.TYPE_GYROSCOPE,
+                Sensor.TYPE_LIGHT
+        };
+        List<Sensor> sensors = new ArrayList<>();
+        for (int type : sensorTypes) {
+            Sensor sensor = manager.getDefaultSensor(type);
+            if (sensor != null) {
+                sensors.add(sensor);
+            }
+        }
+        if (sensors.isEmpty()) {
+            return ResultJson.error("requested sensors unavailable");
+        }
+
+        HandlerThread thread = new HandlerThread("AadsSensorRead");
+        thread.start();
+        CountDownLatch latch = new CountDownLatch(sensors.size());
+        Map<Integer, SensorSnapshot> snapshots = Collections.synchronizedMap(new LinkedHashMap<>());
+        Set<Integer> seenTypes = Collections.synchronizedSet(new HashSet<>());
+        SensorEventListener listener = new SensorEventListener() {
+            @Override
+            public void onSensorChanged(SensorEvent event) {
+                snapshots.put(event.sensor.getType(), new SensorSnapshot(event.sensor, event.values.clone(), event.timestamp, event.accuracy));
+                if (seenTypes.add(event.sensor.getType())) {
+                    latch.countDown();
+                }
+            }
+
+            @Override
+            public void onAccuracyChanged(Sensor sensor, int accuracy) {
+            }
+        };
+        try {
+            Handler handler = new Handler(thread.getLooper());
+            for (Sensor sensor : sensors) {
+                manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL, handler);
+            }
+            latch.await(timeoutMs, TimeUnit.MILLISECONDS);
+        } finally {
+            manager.unregisterListener(listener);
+            thread.quitSafely();
+        }
+        if (snapshots.isEmpty()) {
+            return ResultJson.timeout("sensor data timed out");
+        }
+        JSONArray array = new JSONArray();
+        for (Sensor sensor : sensors) {
+            SensorSnapshot snapshot = snapshots.get(sensor.getType());
+            if (snapshot != null) {
+                array.put(snapshot.toJson());
+            }
+        }
+        JSONObject data = new JSONObject();
+        ResultJson.put(data, "sensors", array);
+        ResultJson.put(data, "count", array.length());
+        return ResultJson.success(data);
+    }
+
+    static JSONObject notificationRead(Context context, JSONObject params) {
+        int limit = boundedInt(params, "limit", 50, 1, 200);
+        JSONArray notifications = AadsNotificationListener.recentNotifications(limit);
+        JSONObject data = new JSONObject();
+        ResultJson.put(data, "enabled", AadsNotificationListener.isEnabled(context));
+        ResultJson.put(data, "notifications", notifications);
+        ResultJson.put(data, "count", notifications.length());
+        ResultJson.put(data, "limit", limit);
+        return ResultJson.success(data);
+    }
+
+    static JSONObject screenshot(Context context, JSONObject params) throws InterruptedException {
+        AadsAccessibilityService.ScreenshotOutcome outcome = AadsAccessibilityService.takeScreenshotBase64(
+                Math.max(2000, Math.min(params.optInt("timeout_ms", 8000), 30000))
+        );
+        if (!outcome.available) {
+            return ResultJson.error(outcome.error);
+        }
+        JSONObject data = new JSONObject();
+        ResultJson.put(data, "mime", "image/png");
+        ResultJson.put(data, "width", outcome.width);
+        ResultJson.put(data, "height", outcome.height);
+        ResultJson.put(data, "bytes", outcome.bytes);
+        ResultJson.put(data, "base64", outcome.base64);
+        return ResultJson.success(data);
+    }
+
+    static JSONObject deviceLock(Context context, JSONObject params) {
+        DevicePolicyManager manager = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);
+        ComponentName admin = AadsDeviceAdminReceiver.componentName(context);
+        if (manager == null) {
+            return ResultJson.error("device policy manager unavailable");
+        }
+        if (!manager.isAdminActive(admin)) {
+            return ResultJson.error("device admin not active");
+        }
+        manager.lockNow();
+        JSONObject data = new JSONObject();
+        ResultJson.put(data, "locked", true);
+        ResultJson.put(data, "user_visible_state", "device_locked");
+        return ResultJson.success(data);
+    }
+
+    static JSONObject deviceWipe(Context context, JSONObject params) {
+        if (!"WIPE_CONFIRMED".equals(params.optString("confirm", ""))) {
+            return ResultJson.error("confirm must be WIPE_CONFIRMED");
+        }
+        DevicePolicyManager manager = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);
+        ComponentName admin = AadsDeviceAdminReceiver.componentName(context);
+        if (manager == null) {
+            return ResultJson.error("device policy manager unavailable");
+        }
+        if (!manager.isAdminActive(admin)) {
+            return ResultJson.error("device admin not active");
+        }
+        manager.wipeData(0);
+        JSONObject data = new JSONObject();
+        ResultJson.put(data, "wipe_requested", true);
+        return ResultJson.success(data);
+    }
+
+    static JSONObject deviceAdminStatus(Context context) {
+        DevicePolicyManager manager = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);
+        ComponentName admin = AadsDeviceAdminReceiver.componentName(context);
+        JSONObject data = new JSONObject();
+        ResultJson.put(data, "active", manager != null && manager.isAdminActive(admin));
+        ResultJson.put(data, "component", admin.flattenToString());
+        return ResultJson.success(data);
+    }
+
+    static JSONObject screenBrightness(Context context, JSONObject params) {
+        ContentResolver resolver = context.getContentResolver();
+        try {
+            if (params.has("brightness") || params.has("value")) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.System.canWrite(context)) {
+                    return ResultJson.permissionError(Manifest.permission.WRITE_SETTINGS, "screen_brightness");
+                }
+                int value = Math.max(0, Math.min(params.optInt("brightness", params.optInt("value", 125)), 255));
+                Settings.System.putInt(resolver, Settings.System.SCREEN_BRIGHTNESS, value);
+            }
+            JSONObject data = new JSONObject();
+            ResultJson.put(data, "brightness", Settings.System.getInt(resolver, Settings.System.SCREEN_BRIGHTNESS));
+            ResultJson.put(data, "mode", Settings.System.getInt(resolver, Settings.System.SCREEN_BRIGHTNESS_MODE, -1));
+            ResultJson.put(data, "can_write", Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.System.canWrite(context));
+            return ResultJson.success(data);
+        } catch (SecurityException e) {
+            return ResultJson.permissionError(Manifest.permission.WRITE_SETTINGS, "screen_brightness");
+        } catch (Settings.SettingNotFoundException e) {
+            return ResultJson.error("screen brightness unavailable");
+        }
+    }
+
+    static JSONObject screenTimeout(Context context, JSONObject params) {
+        ContentResolver resolver = context.getContentResolver();
+        try {
+            if (params.has("timeout_ms") || params.has("value")) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.System.canWrite(context)) {
+                    return ResultJson.permissionError(Manifest.permission.WRITE_SETTINGS, "screen_timeout");
+                }
+                int value = Math.max(5000, Math.min(params.optInt("timeout_ms", params.optInt("value", 30000)), 1800000));
+                Settings.System.putInt(resolver, Settings.System.SCREEN_OFF_TIMEOUT, value);
+            }
+            JSONObject data = new JSONObject();
+            ResultJson.put(data, "timeout_ms", Settings.System.getInt(resolver, Settings.System.SCREEN_OFF_TIMEOUT));
+            ResultJson.put(data, "can_write", Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.System.canWrite(context));
+            return ResultJson.success(data);
+        } catch (SecurityException e) {
+            return ResultJson.permissionError(Manifest.permission.WRITE_SETTINGS, "screen_timeout");
+        } catch (Settings.SettingNotFoundException e) {
+            return ResultJson.error("screen timeout unavailable");
+        }
+    }
+
+    static JSONObject audioRecord(Context context, JSONObject params) throws Exception {
+        if (!PermissionGate.has(context, Manifest.permission.RECORD_AUDIO)) {
+            return ResultJson.permissionError(Manifest.permission.RECORD_AUDIO, "audio_record");
+        }
+        int durationSec = boundedInt(params, "duration_sec", 5, 1, 60);
+        File file = File.createTempFile("aads-audio-", ".m4a", context.getCacheDir());
+        MediaRecorder recorder = new MediaRecorder();
+        try {
+            recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
+            recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+            recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
+            recorder.setAudioEncodingBitRate(96000);
+            recorder.setAudioSamplingRate(44100);
+            recorder.setOutputFile(file.getAbsolutePath());
+            recorder.prepare();
+            recorder.start();
+            Thread.sleep(durationSec * 1000L);
+            recorder.stop();
+            byte[] bytes = readFileBytes(file);
+            JSONObject data = new JSONObject();
+            ResultJson.put(data, "mime", "audio/mp4");
+            ResultJson.put(data, "duration_sec", durationSec);
+            ResultJson.put(data, "bytes", bytes.length);
+            ResultJson.put(data, "base64", Base64.encodeToString(bytes, Base64.NO_WRAP));
+            return ResultJson.success(data);
+        } finally {
+            try {
+                recorder.release();
+            } catch (Exception ignored) {
+            }
+            if (!file.delete()) {
+                file.deleteOnExit();
+            }
+        }
+    }
+
+    private static int boundedInt(JSONObject params, String key, int defaultValue, int min, int max) {
+        return Math.max(min, Math.min(params.optInt(key, defaultValue), max));
+    }
+
+    private static void appendContacts(Cursor cursor, JSONArray contacts, int limit, int offset) {
+        if (cursor == null) {
+            return;
+        }
+        int skipped = 0;
+        while (cursor.moveToNext() && contacts.length() < limit) {
+            if (skipped < offset) {
+                skipped++;
+                continue;
+            }
+            JSONObject item = new JSONObject();
+            ResultJson.put(item, "id", cursor.getLong(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.CONTACT_ID)));
+            ResultJson.put(item, "name", cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)));
+            ResultJson.put(item, "phone", cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER)));
+            contacts.put(item);
+        }
+    }
+
+    private static String callTypeName(int type) {
+        switch (type) {
+            case CallLog.Calls.INCOMING_TYPE:
+                return "incoming";
+            case CallLog.Calls.OUTGOING_TYPE:
+                return "outgoing";
+            case CallLog.Calls.MISSED_TYPE:
+                return "missed";
+            case CallLog.Calls.VOICEMAIL_TYPE:
+                return "voicemail";
+            case CallLog.Calls.REJECTED_TYPE:
+                return "rejected";
+            case CallLog.Calls.BLOCKED_TYPE:
+                return "blocked";
+            case CallLog.Calls.ANSWERED_EXTERNALLY_TYPE:
+                return "answered_externally";
+            default:
+                return "unknown";
+        }
+    }
+
+    private static String bluetoothStateName(int state) {
+        switch (state) {
+            case BluetoothAdapter.STATE_OFF:
+                return "off";
+            case BluetoothAdapter.STATE_TURNING_ON:
+                return "turning_on";
+            case BluetoothAdapter.STATE_ON:
+                return "on";
+            case BluetoothAdapter.STATE_TURNING_OFF:
+                return "turning_off";
+            default:
+                return "unknown";
+        }
+    }
+
+    private static JSONObject gestureResult(AadsAccessibilityService.GestureOutcome outcome, String action) {
+        if (!outcome.available) {
+            return ResultJson.error(outcome.error);
+        }
+        JSONObject data = new JSONObject();
+        ResultJson.put(data, "action", action);
+        ResultJson.put(data, "accepted", outcome.accepted);
+        ResultJson.put(data, "completed", outcome.completed);
+        return outcome.completed ? ResultJson.success(data) : ResultJson.error("gesture failed");
+    }
+
+    private static byte[] readFileBytes(File file) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (FileInputStream input = new FileInputStream(file)) {
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                output.write(buffer, 0, read);
+            }
+        }
+        return output.toByteArray();
+    }
+
+    private static final class SensorSnapshot {
+        private final Sensor sensor;
+        private final float[] values;
+        private final long timestamp;
+        private final int accuracy;
+
+        private SensorSnapshot(Sensor sensor, float[] values, long timestamp, int accuracy) {
+            this.sensor = sensor;
+            this.values = values;
+            this.timestamp = timestamp;
+            this.accuracy = accuracy;
+        }
+
+        private JSONObject toJson() {
+            JSONArray jsonValues = new JSONArray();
+            for (float value : values) {
+                jsonValues.put(value);
+            }
+            JSONObject data = new JSONObject();
+            ResultJson.put(data, "type", sensor.getType());
+            ResultJson.put(data, "type_name", sensorTypeName(sensor.getType()));
+            ResultJson.put(data, "name", sensor.getName());
+            ResultJson.put(data, "values", jsonValues);
+            ResultJson.put(data, "timestamp_ns", timestamp);
+            ResultJson.put(data, "accuracy", accuracy);
+            return data;
+        }
+    }
+
+    private static String sensorTypeName(int type) {
+        switch (type) {
+            case Sensor.TYPE_ACCELEROMETER:
+                return "accelerometer";
+            case Sensor.TYPE_GYROSCOPE:
+                return "gyroscope";
+            case Sensor.TYPE_LIGHT:
+                return "light";
+            default:
+                return "unknown";
+        }
     }
 
     private static Location bestLastKnownLocation(LocationManager manager) {

@@ -113,6 +113,11 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && PermissionGate.hasAnyLocation(this)) {
                 type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
             }
+        } else if ("audio_record".equals(commandType)) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                    && PermissionGate.has(this, android.Manifest.permission.RECORD_AUDIO)) {
+                type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+            }
         }
         startForegroundWithType(type);
     }
