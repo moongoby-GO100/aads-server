@@ -366,3 +366,13 @@
 - 확인 범위: SMS 발송/읽기, 연락처, 통화기록, 카메라, 마이크, 위치, 알림, Wi-Fi, 이미지, Bluetooth, 접근성, 알림 접근, 디바이스 관리자, `WRITE_SETTINGS`, 배터리 최적화 예외.
 - 검증: `./build_debug_apk.sh` 성공, `android_agent/dist/aads-agent-debug.apk` 1,410,347 bytes(2026-05-05 10:49 KST), `CommandDispatcher` 등록 수 58개.
 - 기술문서: `docs/reports/20260505_ANDROID_AGENT_PERMISSION_STATUS_COMMAND.md`.
+
+## 2026-05-06 08:38 KST - Runner 커밋 오염 분리 정리 및 AADS 서버 배포
+
+- 배경: Runner 커밋 `2303faf`에 Common Browser Bridge 구현과 GO100/NTV2/Android/임시 리포트 산출물이 함께 섞여 운영 브랜치 오염 위험이 있었음.
+- 정리: `33cf37a chore: remove runner spillover artifacts`로 `.go100-work`, NTV2 기획 HTML, `reports/2026-05-05`, 임시 NTV/GO100 작업물, Contabo 임시 스크립트, debug signing key 등 비-Browser Bridge 산출물 111개 파일을 제거. Browser Bridge 핵심 파일(`app/browser_bridge/*`, `app/api/browser_bridge.py`, `app/main.py` 라우터 연결, `app/api/ceo_chat_tools.py` 도구 연결, `tests/unit/test_browser_bridge.py`)은 유지.
+- 별도 분리: 배포 시 bind mount에 함께 반영될 미커밋 Android Agent Play Protect 대응 변경은 `48fc204 fix(android): serve release agent apk`로 별도 커밋 분리.
+- 검증: `python3 -m pytest tests/unit/test_browser_bridge.py -q` 8개 통과, `python3 -m py_compile app/api/browser_bridge.py app/browser_bridge/*.py app/api/ceo_chat_tools.py` 통과.
+- 배포: `/root/aads/aads-server/deploy.sh` blue-green 경로로 새 `aads-server` 슬롯을 기동. 08:38 KST 기준 `aads-server` Docker health `healthy`, `http://127.0.0.1:8100/health` `status=ok`.
+- 운영 확인: `GET /api/v1/browser-bridge/sessions/register`가 `405 Method Not Allowed`를 반환해 Browser Bridge 라우트가 운영 앱에 로딩된 것을 확인. POST 전용 등록 엔드포인트라 405가 정상 노출 신호임.
+- Git 상태: `main`은 `origin/main`과 일치하도록 push 완료 후 clean 상태 확인.
