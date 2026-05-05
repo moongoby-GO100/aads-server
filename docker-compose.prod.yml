@@ -8,6 +8,7 @@ services:
     image: pgvector/pgvector:pg15
     container_name: aads-postgres
     restart: always
+    shm_size: 256m
     ports:
       - "5433:5432"
     environment:
