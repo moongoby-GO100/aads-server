@@ -27,11 +27,10 @@ _HOST_PROJECT_ROOT = Path("/root/aads/aads-server")
 PROJECT_ROOT = _HOST_PROJECT_ROOT if (_HOST_PROJECT_ROOT / "android_agent").is_dir() else _LOCAL_PROJECT_ROOT
 ANDROID_AGENT_DIR = PROJECT_ROOT / "android_agent"
 ANDROID_DIST_DIR = ANDROID_AGENT_DIR / "dist"
-ANDROID_APK_NAME = "aads-agent-debug.apk"
-ANDROID_APK_CANDIDATES = (
-    ANDROID_DIST_DIR / ANDROID_APK_NAME,
-    ANDROID_AGENT_DIR / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk",
-)
+ANDROID_APK_NAME = "aads-agent-release.apk"
+ANDROID_STANDARD_APK_NAME = "aads-agent-release.apk"
+ANDROID_FRESH_APK_NAME = "aads-agent-fresh.apk"
+ANDROID_RELEASE_OUTPUT = ANDROID_AGENT_DIR / "app" / "build" / "outputs" / "apk" / "release" / "app-release.apk"
 
 _PAIRING_TABLE_READY = False
 
@@ -57,8 +56,13 @@ def _download_base_url() -> str:
     return public_base + "/api/v1/devices/android"
 
 
-def _find_android_apk() -> Path | None:
-    for candidate in ANDROID_APK_CANDIDATES:
+def _find_android_apk(apk_name: str = ANDROID_APK_NAME) -> Path | None:
+    candidates = (
+        ANDROID_DIST_DIR / apk_name,
+        ANDROID_DIST_DIR / ANDROID_APK_NAME,
+        ANDROID_RELEASE_OUTPUT,
+    )
+    for candidate in candidates:
         if candidate.exists() and candidate.is_file():
             return candidate
     return None
@@ -273,6 +277,7 @@ async def device_capabilities(agent_id: str):
 @router.get("/devices/android/manifest")
 async def android_agent_manifest():
     apk_path = _find_android_apk()
+    fresh_apk_path = _find_android_apk(ANDROID_FRESH_APK_NAME)
     apk_available = apk_path is not None
     source_count = 0
     if ANDROID_AGENT_DIR.exists():
@@ -280,17 +285,22 @@ async def android_agent_manifest():
     return {
         "name": "AADS Android Agent",
         "package": "kr.newtalk.aads.agent",
-        "version": "0.1.0",
+        "version": "0.1.1",
+        "version_code": 2,
         "device_type": "android",
         "server_ws_base_url": _public_ws_base_url(),
         "install_page_url": _download_base_url() + "/install",
-        "apk_download_url": _download_base_url() + "/download",
+        "apk_download_url": _download_base_url() + "/download-fresh",
+        "standard_apk_download_url": _download_base_url() + "/download-standard",
+        "fresh_apk_download_url": _download_base_url() + "/download-fresh",
         "source_zip_url": _download_base_url() + "/source.zip",
         "pairing_api": "/api/v1/devices/android/pairing",
         "apk_available": apk_available,
         "apk_size": apk_path.stat().st_size if apk_path else 0,
+        "fresh_apk_available": fresh_apk_path is not None,
+        "fresh_apk_size": fresh_apk_path.stat().st_size if fresh_apk_path else 0,
         "source_file_count": source_count,
-        "build_command": "cd android_agent && ./build_debug_apk.sh",
+        "build_command": "cd android_agent && ./build_release_apk.sh",
     }
 
 
@@ -375,12 +385,42 @@ async def download_android_apk():
     if apk_path is None:
         raise HTTPException(
             status_code=404,
-            detail="APK가 아직 빌드되지 않았습니다. 서버에서 `cd android_agent && ./build_debug_apk.sh` 실행 후 다시 다운로드하세요.",
+            detail="APK가 아직 빌드되지 않았습니다. 서버에서 `cd android_agent && ./build_release_apk.sh` 실행 후 다시 다운로드하세요.",
         )
     return FileResponse(
         apk_path,
         media_type="application/vnd.android.package-archive",
         filename=ANDROID_APK_NAME,
+    )
+
+
+@router.get("/devices/android/download-standard")
+async def download_android_standard_apk():
+    apk_path = _find_android_apk(ANDROID_STANDARD_APK_NAME)
+    if apk_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail="APK가 아직 빌드되지 않았습니다. 서버에서 `cd android_agent && ./build_release_apk.sh` 실행 후 다시 다운로드하세요.",
+        )
+    return FileResponse(
+        apk_path,
+        media_type="application/vnd.android.package-archive",
+        filename=ANDROID_STANDARD_APK_NAME,
+    )
+
+
+@router.get("/devices/android/download-fresh")
+async def download_android_fresh_apk():
+    apk_path = _find_android_apk(ANDROID_FRESH_APK_NAME)
+    if apk_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail="APK가 아직 빌드되지 않았습니다. 서버에서 `cd android_agent && ./build_release_apk.sh` 실행 후 다시 다운로드하세요.",
+        )
+    return FileResponse(
+        apk_path,
+        media_type="application/vnd.android.package-archive",
+        filename=ANDROID_FRESH_APK_NAME,
     )
 
 
@@ -416,7 +456,7 @@ async def android_install_page():
     apk_status = (
         f"APK ready ({apk_path.stat().st_size:,} bytes)"
         if apk_path
-        else "APK not built yet. Build command: cd android_agent && ./build_debug_apk.sh"
+        else "APK not built yet. Build command: cd android_agent && ./build_release_apk.sh"
     )
     html = f"""<!doctype html>
 <html lang="ko">

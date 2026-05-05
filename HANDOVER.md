@@ -1,6 +1,11 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-05)
+- **Android Agent Play Protect 차단 대응 (2026-05-05 15:09 KST)**:
+  - 원인: 운영 다운로드 APK가 debug 계열 파일명/후보로 제공되고, release APK도 SMS/통화기록/연락처/접근성/알림리스너/디바이스관리 등 고위험 권한을 포함해 Play Protect 차단 가능성이 높았다.
+  - 조치: release Manifest를 최소 권한(`INTERNET`, `ACCESS_NETWORK_STATE`, foreground data sync, notification, vibrate)으로 축소하고, 전체 권한 Manifest는 `app/src/debug/AndroidManifest.xml`로 분리했다. `build_release_apk.sh`를 추가하고 운영 APK 라우트 및 BG 빌드를 release 기준으로 전환했다.
+  - 즉시 반영: 재시작 없이 실행 중인 `aads-server`, `aads-server-green` 컨테이너의 `/app/android_agent/dist/{aads-agent-debug.apk,aads-agent-release.apk,aads-agent-fresh.apk}`를 새 release APK로 교체했다.
+  - 검증: `./build_release_apk.sh` 성공, `./build_debug_apk.sh` 성공, 공개 `/download`, `/download-fresh`, `/download-standard` 3개 URL 모두 sha256 `8aee20a21860d1d440fb81a5fc1809b07d8ee6ffd8c075df4fe04eb1d8f1613e` 확인. `aapt dump permissions` 기준 공개 APK 권한 6개, `apksigner verify` v2 서명 통과.
 - **Common Browser Bridge 모듈 스켈레톤 추가 (2026-05-05 KST)**:
   - 공통 계층: `app/browser_bridge/` 추가. `BrowserEndpointKind(cdp/websocket/local_agent/storage_state/headless)`, one-time pairing token, 세션 registry, storageState manager, Playwright context adapter, E2E config adapter를 AADS 채팅과 분리된 모듈로 구성했다.
   - 보안 경계: CDP/WebSocket endpoint는 기본적으로 `localhost`/loopback만 허용한다. pairing token은 원문 저장 없이 hash만 보관하고 1회 사용 후 재사용을 거부한다. storageState는 `.browser_bridge_state/` 하위에만 저장되며 `.gitignore`에 추가했다. `browser_fill` 결과는 입력값을 echo하지 않도록 바꿨다.
