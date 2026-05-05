@@ -47,6 +47,7 @@ import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.PowerManager;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
@@ -116,6 +117,45 @@ final class AndroidCommandHandlers {
         ResultJson.put(data, "health", battery.getIntExtra(BatteryManager.EXTRA_HEALTH, -1));
         ResultJson.put(data, "temperature_c", battery.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) / 10.0);
         ResultJson.put(data, "voltage_mv", battery.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1));
+        return ResultJson.success(data);
+    }
+
+    static JSONObject permissionStatus(Context context) {
+        JSONObject data = new JSONObject();
+        JSONArray runtime = new JSONArray();
+        addPermissionStatus(runtime, context, Manifest.permission.CAMERA, "camera", "camera");
+        addPermissionStatus(runtime, context, Manifest.permission.SEND_SMS, "send_sms", "sms_send");
+        addPermissionStatus(runtime, context, Manifest.permission.READ_SMS, "read_sms", "sms_inbox");
+        addPermissionStatus(runtime, context, Manifest.permission.READ_CONTACTS, "read_contacts", "contacts");
+        addPermissionStatus(runtime, context, Manifest.permission.READ_CALL_LOG, "read_call_log", "call_log");
+        addPermissionStatus(runtime, context, Manifest.permission.RECORD_AUDIO, "record_audio", "audio_record");
+        addPermissionStatus(runtime, context, Manifest.permission.ACCESS_FINE_LOCATION, "fine_location", "location");
+        addPermissionStatus(runtime, context, Manifest.permission.ACCESS_COARSE_LOCATION, "coarse_location", "location");
+        if (Build.VERSION.SDK_INT >= 33) {
+            addPermissionStatus(runtime, context, Manifest.permission.POST_NOTIFICATIONS, "post_notifications", "notification");
+            addPermissionStatus(runtime, context, Manifest.permission.NEARBY_WIFI_DEVICES, "nearby_wifi_devices", "wifi");
+            addPermissionStatus(runtime, context, Manifest.permission.READ_MEDIA_IMAGES, "read_media_images", "photo_gallery");
+        } else {
+            addPermissionStatus(runtime, context, Manifest.permission.READ_EXTERNAL_STORAGE, "read_external_storage", "photo_gallery");
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            addPermissionStatus(runtime, context, Manifest.permission.BLUETOOTH_CONNECT, "bluetooth_connect", "bluetooth_status");
+        }
+
+        JSONObject special = new JSONObject();
+        ResultJson.put(special, "accessibility_enabled", isAccessibilityEnabled(context));
+        ResultJson.put(special, "accessibility_service_running", AadsAccessibilityService.isReady());
+        ResultJson.put(special, "notification_listener_enabled", AadsNotificationListener.isEnabled(context));
+        ResultJson.put(special, "device_admin_active", AadsDeviceAdminReceiver.isAdminActive(context));
+        ResultJson.put(special, "write_settings_allowed", Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.System.canWrite(context));
+        ResultJson.put(special, "battery_optimization_ignored", isBatteryOptimizationIgnored(context));
+
+        ResultJson.put(data, "package", context.getPackageName());
+        ResultJson.put(data, "sdk_int", Build.VERSION.SDK_INT);
+        ResultJson.put(data, "runtime_permissions", runtime);
+        ResultJson.put(data, "special_permissions", special);
+        ResultJson.put(data, "all_runtime_granted", allRuntimeGranted(runtime));
+        ResultJson.put(data, "all_special_ready", allSpecialReady(special));
         return ResultJson.success(data);
     }
 
@@ -1131,6 +1171,51 @@ final class AndroidCommandHandlers {
 
     private static int boundedInt(JSONObject params, String key, int defaultValue, int min, int max) {
         return Math.max(min, Math.min(params.optInt(key, defaultValue), max));
+    }
+
+    private static void addPermissionStatus(JSONArray array, Context context, String permission, String label, String commandType) {
+        JSONObject item = new JSONObject();
+        ResultJson.put(item, "label", label);
+        ResultJson.put(item, "permission", permission);
+        ResultJson.put(item, "command_type", commandType);
+        ResultJson.put(item, "granted", PermissionGate.has(context, permission));
+        array.put(item);
+    }
+
+    private static boolean allRuntimeGranted(JSONArray runtime) {
+        for (int i = 0; i < runtime.length(); i++) {
+            JSONObject item = runtime.optJSONObject(i);
+            if (item != null && !item.optBoolean("granted", false)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean allSpecialReady(JSONObject special) {
+        return special.optBoolean("accessibility_enabled", false)
+                && special.optBoolean("accessibility_service_running", false)
+                && special.optBoolean("notification_listener_enabled", false)
+                && special.optBoolean("device_admin_active", false)
+                && special.optBoolean("write_settings_allowed", false)
+                && special.optBoolean("battery_optimization_ignored", false);
+    }
+
+    private static boolean isAccessibilityEnabled(Context context) {
+        String enabled = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+        if (enabled == null) {
+            return false;
+        }
+        String target = new ComponentName(context, AadsAccessibilityService.class).flattenToString().toLowerCase(Locale.US);
+        return enabled.toLowerCase(Locale.US).contains(target);
+    }
+
+    private static boolean isBatteryOptimizationIgnored(Context context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return true;
+        }
+        PowerManager manager = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+        return manager != null && manager.isIgnoringBatteryOptimizations(context.getPackageName());
     }
 
     private static void appendContacts(Cursor cursor, JSONArray contacts, int limit, int offset) {

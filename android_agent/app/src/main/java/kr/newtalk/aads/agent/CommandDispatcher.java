@@ -17,6 +17,8 @@ final class CommandDispatcher {
     static CommandDispatcher create(Context context) {
         CommandDispatcher dispatcher = new CommandDispatcher();
         dispatcher.register("battery", params -> AndroidCommandHandlers.battery(context));
+        dispatcher.register("permission_status", params -> AndroidCommandHandlers.permissionStatus(context));
+        dispatcher.register("permissions", params -> AndroidCommandHandlers.permissionStatus(context));
         dispatcher.register("location", params -> AndroidCommandHandlers.location(context, params));
         dispatcher.register("camera", params -> AndroidCommandHandlers.camera(context, params));
         dispatcher.register("camera_photo", params -> AndroidCommandHandlers.camera(context, params));

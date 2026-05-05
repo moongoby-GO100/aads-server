@@ -343,3 +343,11 @@
 - 조치: Contabo DB에서 두 감시 항목을 `enabled=false`, `auto_recovery_command=NULL`, `last_status=disabled`, `consecutive_failures=0`으로 변경. 기존 `docker restart aads-socket-proxy` pending 승인요청 42건(`#62`~`#103`)은 `rejected`로 일괄 정리.
 - 검증: Healer 주기 경과 후 Contabo DB 기준 `approval_queue.max_id=103`, `socket_pending=0`, `redis_pending=0`. Contabo `monitored_services`의 `aads-redis`/`aads-socket-proxy`는 disabled 유지. 68 운영 DB도 `socket_pending=0` 유지.
 - 주의: `/root/aads/aads-server/scripts/sync-to-contabo.sh`가 10분마다 코드/문서를 동기화하므로, standby가 운영 텔레그램 알림을 보내지 않도록 DB 감시 항목 또는 환경변수 분리를 유지해야 함.
+
+## 2026-05-05 10:46 KST - Android Agent 권한 상태 원격 확인 명령 추가
+
+- 배경: CEO가 Galaxy Z Fold6 앱 설치 후 승인한 권한이 현재도 유지되는지 원격 확인 가능 여부를 요청.
+- 조치: `CommandDispatcher`에 `permission_status`/`permissions` 명령을 추가하고, `AndroidCommandHandlers.permissionStatus()`에서 런타임 권한과 특수 권한 상태를 JSON으로 반환하도록 구현.
+- 확인 범위: SMS 발송/읽기, 연락처, 통화기록, 카메라, 마이크, 위치, 알림, Wi-Fi, 이미지, Bluetooth, 접근성, 알림 접근, 디바이스 관리자, `WRITE_SETTINGS`, 배터리 최적화 예외.
+- 검증: `./build_debug_apk.sh` 성공, `android_agent/dist/aads-agent-debug.apk` 1,410,347 bytes(2026-05-05 10:49 KST), `CommandDispatcher` 등록 수 58개.
+- 기술문서: `docs/reports/20260505_ANDROID_AGENT_PERMISSION_STATUS_COMMAND.md`.
