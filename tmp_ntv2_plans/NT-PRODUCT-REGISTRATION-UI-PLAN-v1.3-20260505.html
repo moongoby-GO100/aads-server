@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NTV2 상품등록 UI 기획 v1.3 - 상세이미지 통합관리</title>
+  <style>
+    :root {
+      --ink: #15171a;
+      --muted: #667085;
+      --line: #d7dde5;
+      --bg: #f7f8fb;
+      --panel: #fff;
+      --blue: #246bfe;
+      --green: #12805c;
+      --amber: #a15c00;
+      --red: #c0262d;
+      --chip: #eef3ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", Arial, sans-serif;
+      line-height: 1.55;
+      letter-spacing: 0;
+    }
+    header {
+      background: #102033;
+      color: #fff;
+      padding: 28px 34px 24px;
+      border-bottom: 4px solid var(--blue);
+    }
+    header h1 { margin: 0 0 8px; font-size: 28px; line-height: 1.25; }
+    header p { margin: 0; color: #d8e2ef; }
+    main { max-width: 1280px; margin: 0 auto; padding: 28px; }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 22px;
+      margin-bottom: 18px;
+    }
+    h2 { margin: 0 0 14px; font-size: 20px; }
+    h3 { margin: 22px 0 10px; font-size: 16px; }
+    .meta { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--chip);
+      color: #16468a;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .grid { display: grid; gap: 14px; }
+    .cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: #fff;
+    }
+    .box h3 { margin-top: 0; }
+    .ok { color: var(--green); font-weight: 700; }
+    .warn { color: var(--amber); font-weight: 700; }
+    .bad { color: var(--red); font-weight: 700; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+    th, td { border: 1px solid var(--line); padding: 9px 10px; vertical-align: top; }
+    th { background: #f0f3f8; text-align: left; }
+    code {
+      background: #f2f4f7;
+      border: 1px solid #e1e5eb;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+    }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(160px, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+    .step {
+      position: relative;
+      min-height: 150px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: #fff;
+    }
+    .step strong { display: block; margin-bottom: 7px; color: #0f2c4f; }
+    .step small { display: block; color: var(--muted); margin-top: 8px; }
+    .step:not(:last-child)::after {
+      content: ">";
+      position: absolute;
+      right: -11px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--blue);
+      font-weight: 700;
+      background: var(--bg);
+    }
+    .dependency {
+      display: grid;
+      grid-template-columns: 180px 1fr 1fr;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      margin-top: 10px;
+    }
+    .dependency > div { padding: 10px; border-bottom: 1px solid var(--line); }
+    .dependency > div:nth-child(3n+1) { background: #f7f9fc; font-weight: 700; }
+    .dependency > div:nth-last-child(-n+3) { border-bottom: 0; }
+    .decision {
+      border-left: 4px solid var(--blue);
+      background: #f5f8ff;
+      padding: 14px 16px;
+      border-radius: 6px;
+    }
+    ul { margin: 8px 0 0 20px; padding: 0; }
+    li { margin: 5px 0; }
+    .source { color: var(--muted); font-size: 13px; }
+    @media (max-width: 980px) {
+      main { padding: 18px; }
+      .cols-2, .cols-3, .flow { grid-template-columns: 1fr; }
+      .step::after { display: none; }
+      .dependency { grid-template-columns: 1fr; }
+      .dependency > div { border-bottom: 1px solid var(--line) !important; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>상품등록 UI 기획 v1.3 - V1 상세이미지 프로세스 통합관리</h1>
+    <p>V1 운영 상세이미지 등록, 정렬, HTML 생성, 외부몰/소매 엑셀 제공 흐름을 V2 상품등록에 반영하기 위한 기획서</p>
+    <div class="meta">
+      <span class="chip">작성: 2026-05-05 10:15 KST</span>
+      <span class="chip">대상: NTV2 관리자/도매/촬영팀/소매</span>
+      <span class="chip">파일: v1.3 신규 버전</span>
+      <span class="chip">기존 v1.2 보존</span>
+    </div>
+  </header>
+
+  <main>
+    <section>
+      <h2>1. 결론</h2>
+      <div class="decision">
+        <strong>상세이미지 등록은 상품등록의 필수 단계로 포함해야 한다.</strong>
+        V1에서는 원본 이미지 업로드, 상세 이미지 정렬, 스킨별 HTML 생성, 단하루 상품설명 저장, 소매 엑셀 제공이 하나의 상품 판매 가능 상태를 만드는 핵심 파이프라인이다. V2에서 단순 `product_images` 업로드로만 대체하면 V1 대체가 불가능하다.
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>판정</th>
+            <th>내용</th>
+            <th>근거</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="ok">필수 반영</td>
+            <td>원본 이미지 등록, 썸네일 생성, 상세 정렬, PC/MO 스킨, HTML 생성, CDN 전송, 엑셀 반영을 상품등록 워크플로우에 포함</td>
+            <td>V1 코드와 `bag513k64` 운영 데이터 실측</td>
+          </tr>
+          <tr>
+            <td class="warn">현재 V2 부족</td>
+            <td>V2는 `product_images.type = product_cut/model_cut/detail`과 `product_details.html_content`만 있어 V1의 정렬 슬롯, 생성 산출물, 스킨, 전송 이력, 엑셀 제공 상태가 없음</td>
+            <td>V2 마이그레이션/컨트롤러 확인</td>
+          </tr>
+          <tr>
+            <td class="ok">통합 방향</td>
+            <td>상품등록 화면 안에 `이미지 작업실` 탭을 만들고, 이미지 원본 저장소와 판매 상세 산출물을 분리 관리</td>
+            <td>V1의 `/products/goods_img`와 `/products/goods_img_sorting_test1` 분리 구조 계승</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>2. V1 상세이미지 운영 흐름 확인</h2>
+      <div class="flow">
+        <div class="step">
+          <strong>1. 상품코드 생성/상품 기본정보</strong>
+          샘플등록 또는 상품수정에서 `GoodsCode`, 상품명, 가격, 옵션, 소재, 원산지, 태그, 배송비를 저장한다.
+          <small>DB: `goods`, `goods_detail`</small>
+        </div>
+        <div class="step">
+          <strong>2. 원본 이미지 등록</strong>
+          `/products/goods_img/{GoodsCode}`에서 이미지 다건 업로드, 썸네일 생성, 압축, 파일 수 관리가 이루어진다.
+          <small>파일: `data/files/goods/goodscode/img/{GoodsCode}`</small>
+        </div>
+        <div class="step">
+          <strong>3. 상세 이미지 정렬</strong>
+          `/products/goods_img_sorting_test1/{GoodsCode}`에서 관리 이미지 중 인트로/상세/마무리 영역으로 드래그 정렬한다.
+          <small>DB: `GoodsSortImg1~3`</small>
+        </div>
+        <div class="step">
+          <strong>4. 상세페이지 이미지 저장</strong>
+          `shop.newtalk.kr/goods/detail_save`가 스킨을 적용해 이미지 섹션을 생성하고 `images_save_end`가 저장 완료 처리한다.
+          <small>산출물: `{code}_03.jpg` 등</small>
+        </div>
+        <div class="step">
+          <strong>5. 외부몰/소매 제공</strong>
+          생성된 HTML이 `DanharooDescription`에 저장되고, 뉴톡 엑셀의 단하루상품설명 컬럼으로 제공된다.
+          <small>엑셀: `goods_select_newtalk_make`</small>
+        </div>
+      </div>
+
+      <h3>V1 운영 데이터 실측</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>항목</th>
+            <th>값</th>
+            <th>출처</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>검증 상품코드</td>
+            <td><code>bag513k64</code></td>
+            <td>CEO 제공 URL 기준</td>
+          </tr>
+          <tr>
+            <td>원본/썸네일 포함 파일 수</td>
+            <td>152개</td>
+            <td><code>find /home/danharoo/www/data/files/goods/goodscode/img/bag513k64</code></td>
+          </tr>
+          <tr>
+            <td>상품 ID</td>
+            <td>684921</td>
+            <td>DB `goods.GoodsCode = bag513k64`</td>
+          </tr>
+          <tr>
+            <td>상세 저장 상태</td>
+            <td><code>GoodsDetailSave = Y</code>, 저장일 <code>2026-05-04</code></td>
+            <td>DB `goods`</td>
+          </tr>
+          <tr>
+            <td>스킨</td>
+            <td>PC <code>DeSkin = 8</code>, 모바일 <code>MoSkin = 1</code></td>
+            <td>DB `goods`</td>
+          </tr>
+          <tr>
+            <td>단하루상품설명 HTML 길이</td>
+            <td>2,226자</td>
+            <td>DB `goods_detail.DanharooDescription`</td>
+          </tr>
+          <tr>
+            <td>정렬 데이터 존재</td>
+            <td>`GoodsSortImg1/2/3/4` 모두 저장값 존재</td>
+            <td>DB `goods_detail`</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>3. V1 코드 근거</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>기능</th>
+            <th>운영 파일/함수</th>
+            <th>확인 내용</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>원본 이미지 등록</td>
+            <td><code>application/controllers/products.php::goods_img</code>, <code>goods_img_upload</code></td>
+            <td>상품코드별 디렉터리 생성, 권한 체크, 업로드 허용 확장자, 썸네일 생성, 기존 파일 덮어쓰기 처리</td>
+          </tr>
+          <tr>
+            <td>업로드 화면</td>
+            <td><code>application/views/products/goods_img.php</code></td>
+            <td>이미지등록, 전체취소, 전체삭제, 압축, 디지털오션 전송, 상세설명 HTML 적용 버튼 제공</td>
+          </tr>
+          <tr>
+            <td>상세 이미지 정렬</td>
+            <td><code>application/controllers/products.php::goods_img_sorting_test1</code></td>
+            <td>썸네일 목록을 읽고 `GoodsSortImg1`, `GoodsSortImg2`, `GoodsSortImg3`을 인트로/상세/마무리 정렬 슬롯으로 분리</td>
+          </tr>
+          <tr>
+            <td>정렬 UI</td>
+            <td><code>application/views/products/goods_img_sorting_test1.php</code></td>
+            <td>관리 이미지, 인트로 정렬, 상세 정렬, 마무리 정렬 4컬럼 드래그 UI와 PC 스킨 선택 제공</td>
+          </tr>
+          <tr>
+            <td>상세 HTML 생성</td>
+            <td><code>minimall/controllers/goods.php::detail_save</code></td>
+            <td>상품정보, 정렬 이미지, PC/MO 스킨을 로드해 <code>goods/detail_img_save</code> 뷰에서 상세 이미지를 생성</td>
+          </tr>
+          <tr>
+            <td>저장 완료</td>
+            <td><code>minimall/controllers/goods.php::images_save_end</code></td>
+            <td>`GoodsDetailSave = Y`, 저장일, 스킨 값을 저장하고 `DanharooDescription` HTML을 생성해 `goods_detail`에 반영</td>
+          </tr>
+          <tr>
+            <td>소매 엑셀 제공</td>
+            <td><code>application/controllers/products.php::goods_select_newtalk_make</code>, <code>goods_excel_newtalk_data</code></td>
+            <td>`goods + goods_detail + goods_image`를 조인하고 뉴톡 엑셀에 상품정보와 상세설명 데이터를 제공</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>4. V2 통합관리 설계</h2>
+      <div class="grid cols-3">
+        <div class="box">
+          <h3>상품 마스터</h3>
+          <ul>
+            <li>상품코드, 도매처, 등록 주체, 판매 목적</li>
+            <li>기본 상품정보, 가격, 옵션, 배송, 검색어</li>
+            <li>V1 원본 필드와 V2 표준 필드 매핑</li>
+          </ul>
+        </div>
+        <div class="box">
+          <h3>이미지 작업실</h3>
+          <ul>
+            <li>원본 이미지 업로드/압축/썸네일/파일검사</li>
+            <li>대표/목록/상세/참고/다운로드용 이미지 분류</li>
+            <li>누락, 404, CDN 전송 상태 표시</li>
+          </ul>
+        </div>
+        <div class="box">
+          <h3>상세페이지 빌더</h3>
+          <ul>
+            <li>PC/MO 스킨 선택</li>
+            <li>인트로/상세/마무리/MO 정렬</li>
+            <li>HTML 미리보기, 생성, 버전 보관</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>V2 화면 구조 제안</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>탭</th>
+            <th>목적</th>
+            <th>필수 상태</th>
+            <th>주 사용자</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1. 등록 목적</td>
+            <td>도매 직접등록, 뉴톡 대행등록, 촬영 후 등록, 뉴톡 직접판매 중 선택</td>
+            <td>등록 주체, 판매 채널, 정산 방식</td>
+            <td>뉴톡관리자, 도매</td>
+          </tr>
+          <tr>
+            <td>2. 상품 기본정보</td>
+            <td>V1 샘플등록/상품수정 필드 입력</td>
+            <td>상품코드, 상품명, 가격, 옵션, 소재, 원산지, 배송비</td>
+            <td>뉴톡관리자, 도매</td>
+          </tr>
+          <tr>
+            <td>3. 이미지 작업실</td>
+            <td>V1 `/products/goods_img` 대체</td>
+            <td>원본 이미지 수, 썸네일 수, 대표 이미지, 파일명 규칙, 압축 상태</td>
+            <td>촬영팀, 뉴톡관리자, 도매</td>
+          </tr>
+          <tr>
+            <td>4. 상세페이지 빌더</td>
+            <td>V1 `/products/goods_img_sorting_test1` + `detail_save` 대체</td>
+            <td>PC/MO 스킨, 정렬 슬롯, 생성 이미지, HTML 버전</td>
+            <td>촬영팀, 뉴톡관리자</td>
+          </tr>
+          <tr>
+            <td>5. 채널 제공</td>
+            <td>단하루상품설명, 소매 엑셀, 편집숍, 외부몰 HTML 제공</td>
+            <td>HTML 승인 상태, 엑셀 반영 여부, CDN 전송 상태</td>
+            <td>소매, 뉴톡관리자</td>
+          </tr>
+          <tr>
+            <td>6. 검수/승인</td>
+            <td>판매 가능 여부 최종 체크</td>
+            <td>필수 이미지, 상세 HTML, 옵션, 가격, 배송, 권한</td>
+            <td>뉴톡관리자</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>5. 역할별 의존성</h2>
+      <div class="dependency">
+        <div>도매</div>
+        <div>상품 기본정보, 원가, 옵션, 소재/원산지, 재고/배송 조건 제공</div>
+        <div>초기에는 등록을 안 할 가능성이 높으므로 뉴톡관리자 대행등록 흐름 필요</div>
+        <div>촬영팀</div>
+        <div>원본 이미지 업로드, 파일명 정리, 이미지 정렬, PC/MO 상세 산출물 생성</div>
+        <div>상품 기본정보와 상품코드가 선행되어야 이미지 디렉터리와 산출물 생성 가능</div>
+        <div>뉴톡관리자</div>
+        <div>대행등록, 촬영 결과 검수, 상세 HTML 승인, 외부몰/소매 제공 상태 관리</div>
+        <div>모든 상태를 한 화면에서 볼 수 있어야 V1을 대체 가능</div>
+        <div>소매</div>
+        <div>상품 탐색, 상세 이미지 다운로드, 엑셀 다운로드, 편집숍 등록</div>
+        <div>상세 HTML과 이미지 라이선스/구독 권한이 확정되어야 제공 가능</div>
+        <div>소비자</div>
+        <div>편집숍 또는 뉴톡 직접판매 상품 상세 열람/구매</div>
+        <div>승인된 PC/MO 상세페이지와 대표 이미지가 있어야 판매 전환 가능</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>6. DB/모델 확장 필요 항목</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>V1 개념</th>
+            <th>V1 저장 위치</th>
+            <th>V2 필요 구조</th>
+            <th>이유</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>상품코드별 이미지 저장소</td>
+            <td>파일시스템 <code>goodscode/img/{GoodsCode}</code>, <code>goods_code</code></td>
+            <td><code>product_image_assets</code> 또는 <code>product_images</code> 확장</td>
+            <td>원본, 썸네일, 압축본, CDN 경로, 파일검사 상태를 분리 저장</td>
+          </tr>
+          <tr>
+            <td>정렬 슬롯</td>
+            <td><code>goods_detail.GoodsSortImg1~4</code></td>
+            <td><code>product_detail_image_slots</code></td>
+            <td>인트로/상세/마무리/MO 정렬을 재생성 가능한 데이터로 보존</td>
+          </tr>
+          <tr>
+            <td>상세 스킨</td>
+            <td><code>goods.DeSkin</code>, <code>goods.MoSkin</code></td>
+            <td><code>product_detail_templates</code>, <code>product_detail_versions</code></td>
+            <td>스킨 변경, 미리보기, 버전 롤백, 승인 이력을 관리</td>
+          </tr>
+          <tr>
+            <td>생성 산출물</td>
+            <td><code>{code}_01.jpg</code>, <code>{code}_03.jpg</code> 등</td>
+            <td><code>product_detail_outputs</code></td>
+            <td>HTML 안에 들어가는 생성 이미지와 파일 존재/크기를 추적</td>
+          </tr>
+          <tr>
+            <td>단하루상품설명</td>
+            <td><code>goods_detail.DanharooDescription</code></td>
+            <td><code>product_details.html_content</code> + 채널별 HTML</td>
+            <td>소매 엑셀, 외부몰, 편집숍이 같은 승인본을 사용해야 함</td>
+          </tr>
+          <tr>
+            <td>전송/제공 이력</td>
+            <td>디지털오션 전송 로그, 다운로드 로그</td>
+            <td><code>product_asset_jobs</code>, <code>product_export_logs</code></td>
+            <td>누락 이미지, 404, 엑셀 반영 실패를 추적하고 재처리</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>7. 구현 우선순위</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>우선순위</th>
+            <th>작업</th>
+            <th>완료 기준</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>P0</td>
+            <td>V1 이미지/상세 HTML 읽기 전용 미러링 API</td>
+            <td>`bag513k64` 기준 원본 파일 수, 정렬 슬롯, HTML, 스킨, 생성 이미지 목록을 V2 관리자에서 조회</td>
+          </tr>
+          <tr>
+            <td>P0</td>
+            <td>V2 상품상세에 이미지 작업실 탭 추가</td>
+            <td>원본 이미지, 대표 이미지, 상세 이미지, 생성 산출물, CDN 상태가 한 화면에 표시</td>
+          </tr>
+          <tr>
+            <td>P1</td>
+            <td>상세페이지 빌더 데이터 모델 추가</td>
+            <td>정렬 슬롯과 PC/MO 스킨을 V2 DB에 저장하고 버전 관리</td>
+          </tr>
+          <tr>
+            <td>P1</td>
+            <td>HTML 생성/미리보기 워커</td>
+            <td>V1 `detail_save`와 동일한 결과물을 V2에서 생성하고 `html_content`에 저장</td>
+          </tr>
+          <tr>
+            <td>P2</td>
+            <td>소매 엑셀/외부몰 제공 통합</td>
+            <td>승인된 상세 HTML이 소매 엑셀과 편집숍에 동일하게 반영</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>8. 미결정 질문</h2>
+      <ul>
+        <li>V2에서 PC/MO 스킨은 V1 스킨 1~8을 그대로 유지할지, 초기에는 대표 스킨 1개로 통합할지 결정이 필요하다.</li>
+        <li>상세 HTML 생성은 V1처럼 이미지 합성 파일을 생성할지, V2에서는 HTML/CSS 기반 렌더링을 원본으로 두고 필요한 채널에만 이미지 합성을 할지 결정이 필요하다.</li>
+        <li>소매 엑셀 제공 시 이미지 사용 권한은 구독 등급별 제한을 적용할지, V1처럼 다운로드 로그 중심으로 관리할지 결정이 필요하다.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>9. 확인 출처</h2>
+      <p class="source">
+        서버114 `/home/danharoo/www/application/controllers/products.php`,
+        `/home/danharoo/www/application/views/products/goods_img.php`,
+        `/home/danharoo/www/application/views/products/goods_img_sorting_test1.php`,
+        `/home/danharoo/www/minimall/controllers/goods.php`,
+        `/home/danharoo/www/minimall/views/goods/detail_img_save.php`,
+        V1 DB `goods`, `goods_detail`,
+        V2 `/srv/newtalk-v2/src/app/Http/Controllers/Api/ProductImageController.php`,
+        V2 `product_images`, `product_details` migrations.
+      </p>
+    </section>
+  </main>
+</body>
+</html>

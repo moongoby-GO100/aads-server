@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NTV2 상품등록 UI 수정기획 v1.2</title>
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --paper: #fff;
+      --ink: #17202a;
+      --muted: #667085;
+      --line: #d8dee8;
+      --soft: #eef3f8;
+      --brand: #0f766e;
+      --admin: #155e75;
+      --wholesale: #6d28d9;
+      --shoot: #b45309;
+      --direct: #be123c;
+      --ok: #15803d;
+      --warn: #b45309;
+      --danger: #b91c1c;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", Arial, sans-serif; line-height: 1.55; }
+    a { color: #0f766e; text-decoration: none; font-weight: 700; }
+    a:hover { text-decoration: underline; }
+    .topbar { position: sticky; top: 0; z-index: 20; display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 13px 28px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.96); backdrop-filter: blur(10px); }
+    .topbar strong { font-size: 15px; }
+    .topbar nav { display: flex; flex-wrap: wrap; gap: 8px; font-size: 13px; }
+    .wrap { max-width: 1380px; margin: 0 auto; padding: 28px; }
+    .hero { display: grid; grid-template-columns: 1.12fr .88fr; gap: 18px; margin-bottom: 20px; }
+    .panel { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 22px; }
+    .hero .panel:first-child { background: linear-gradient(135deg, #fff 0%, #ecfeff 100%); border-color: #99f6e4; }
+    h1 { margin: 0 0 12px; font-size: 32px; line-height: 1.18; letter-spacing: 0; }
+    h2 { margin: 34px 0 14px; font-size: 23px; letter-spacing: 0; }
+    h3 { margin: 22px 0 10px; font-size: 17px; letter-spacing: 0; }
+    p { margin: 0 0 10px; }
+    .muted { color: var(--muted); }
+    .meta, .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .badge, .chip { display: inline-flex; align-items: center; min-height: 26px; padding: 4px 9px; border-radius: 999px; background: var(--soft); color: #334155; font-size: 12px; font-weight: 700; white-space: nowrap; }
+    .badge.ok { background: #dcfce7; color: #166534; }
+    .badge.warn { background: #fef3c7; color: #92400e; }
+    .badge.danger { background: #fee2e2; color: #991b1b; }
+    .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+    .grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+    .card { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 16px; }
+    .card h3 { margin-top: 0; }
+    .flow { display: grid; grid-template-columns: repeat(5, minmax(140px, 1fr)); gap: 10px; align-items: stretch; }
+    .step { position: relative; min-height: 96px; border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 13px; }
+    .step:after { content: "→"; position: absolute; right: -17px; top: 35%; color: #94a3b8; font-weight: 900; }
+    .step:last-child:after { display: none; }
+    .step strong { display: block; margin-bottom: 6px; }
+    .step.admin { border-color: #67e8f9; }
+    .step.wholesale { border-color: #c4b5fd; }
+    .step.shoot { border-color: #fcd34d; }
+    .step.direct { border-color: #fda4af; }
+    table { width: 100%; border-collapse: collapse; margin: 10px 0 18px; background: #fff; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    th, td { border-bottom: 1px solid var(--line); padding: 10px 11px; text-align: left; vertical-align: top; font-size: 13px; }
+    th { background: #f1f5f9; color: #334155; font-weight: 800; }
+    tr:last-child td { border-bottom: 0; }
+    code { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 6px; padding: 1px 5px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    .status-ok { color: var(--ok); font-weight: 800; }
+    .status-warn { color: var(--warn); font-weight: 800; }
+    .status-danger { color: var(--danger); font-weight: 800; }
+    .matrix td:nth-child(n+3), .matrix th:nth-child(n+3) { text-align: center; }
+    .note { border-left: 4px solid var(--brand); background: #ecfeff; padding: 13px 15px; border-radius: 8px; }
+    .warnbox { border-left: 4px solid var(--warn); background: #fffbeb; padding: 13px 15px; border-radius: 8px; }
+    .dangerbox { border-left: 4px solid var(--danger); background: #fef2f2; padding: 13px 15px; border-radius: 8px; }
+    .source { font-size: 12px; color: #475569; }
+    @media (max-width: 980px) {
+      .hero, .grid2, .grid3, .grid4 { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: 1fr; }
+      .step:after { content: "↓"; right: 16px; top: auto; bottom: -22px; }
+      .topbar { position: static; align-items: flex-start; flex-direction: column; }
+      .wrap { padding: 18px; }
+      table { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <strong>NTV2 상품등록 UI 수정기획 v1.2</strong>
+    <nav>
+      <a href="#purpose">목적</a>
+      <a href="#flow">흐름도</a>
+      <a href="#dependencies">의존성</a>
+      <a href="#v1-audit">V1 검수</a>
+      <a href="#v2-gap">V2 반영</a>
+      <a href="#fields">필드 매핑</a>
+    </nav>
+  </header>
+
+  <main class="wrap">
+    <section class="hero">
+      <div class="panel">
+        <h1>상품등록은 “도매 상품 DB 입력”이 아니라 뉴톡 판매·촬영·편집숍·직접판매를 연결하는 상품 마스터 생성 업무입니다.</h1>
+        <p>v1.2는 V1 운영중인 관리자 샘플등록/상품수정 페이지를 다시 검수하여, 상품등록의 목적과 역할별 흐름, 페이지별 의존성, V2에 필요한 DB/UI 항목을 재정리한 버전입니다.</p>
+        <div class="meta">
+          <span class="badge ok">신규 파일</span>
+          <span class="badge">기준 시각 2026-05-05 09:44 KST</span>
+          <span class="badge">V1 코드 검수: pick.newtalk.kr 관리자</span>
+          <span class="badge">V2 비교: Laravel + Next 관리자 상품상세</span>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>핵심 결론</h3>
+        <p><strong>V2 현재 관리자 상품상세는 V1 대체 불가입니다.</strong> V2는 상품명, 코드, 설명, 공급가, 소비자가, 상태 중심이고, V1 운영 필수인 촬영/샘플/웹작업/마켓별 상품명/이미지 URL/자동가격/상세스펙/매입처 검증이 빠져 있습니다.</p>
+        <p class="muted">V2 상품등록 UI는 “등록 출처 선택 → 목적별 워크플로우 → 필수 필드 점진 노출 → 촬영/판매/편집숍/직판 의존성 표시” 구조로 바꿔야 합니다.</p>
+      </div>
+    </section>
+
+    <section id="purpose">
+      <h2>1. 상품등록 목적 재정의</h2>
+      <div class="grid4">
+        <div class="card">
+          <h3>도매 원칙 등록</h3>
+          <p>정상 원칙은 도매가 상품 원천 정보를 등록하고 뉴톡은 촬영, 가공, 노출, 유통을 지원합니다.</p>
+          <span class="badge warn">초기 도매 미등록 예상</span>
+        </div>
+        <div class="card">
+          <h3>뉴톡 대행 등록</h3>
+          <p>초기에는 뉴톡관리자가 도매 대신 샘플 입고 후 상품코드, 매입처, 원가, 촬영 요청, 상세정보를 등록합니다.</p>
+          <span class="badge ok">Phase 1 필수</span>
+        </div>
+        <div class="card">
+          <h3>촬영서비스 연동</h3>
+          <p>샘플입고, 제품촬영, 모델촬영, 웹작업, 이미지컨펌, 샘플반납까지 상품 상태를 따라갑니다.</p>
+          <span class="badge ok">V1 핵심 흐름</span>
+        </div>
+        <div class="card">
+          <h3>뉴톡 직접판매</h3>
+          <p>뉴톡 자체 판매용 상품은 소비자 가격, 마켓별 상품명, 이미지 URL, 카페24/SNS/편집숍 노출까지 필요합니다.</p>
+          <span class="badge warn">별도 목적값 필요</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="flow">
+      <h2>2. 상품등록 통합 흐름도</h2>
+      <h3>A. 원칙: 도매 직접등록</h3>
+      <div class="flow">
+        <div class="step wholesale"><strong>도매 로그인</strong><span>도매 프로필, 매입처/브랜드 권한 확인</span></div>
+        <div class="step wholesale"><strong>상품 초안 등록</strong><span>카테고리, 상품명, 원가, 옵션, 이미지</span></div>
+        <div class="step shoot"><strong>촬영 요청 선택</strong><span>제품촬영/모델촬영/웹작업 의뢰</span></div>
+        <div class="step admin"><strong>뉴톡 검수</strong><span>상품코드 중복, 매입처, 이미지, 필수값</span></div>
+        <div class="step direct"><strong>노출/판매 전환</strong><span>편집숍, 이미지 다운로드, 직판 채널</span></div>
+      </div>
+
+      <h3>B. Phase 1 현실: 뉴톡관리자 대행등록</h3>
+      <div class="flow">
+        <div class="step admin"><strong>샘플 입고</strong><span>입고일, 매입처, 샘플상태, 담당자 기록</span></div>
+        <div class="step admin"><strong>관리자 상품등록</strong><span>V1 샘플등록 전체 필드 입력</span></div>
+        <div class="step shoot"><strong>촬영/웹작업 진행</strong><span>A1~J2 BizProgress 상태 전환</span></div>
+        <div class="step admin"><strong>상세/이미지 QA</strong><span>상세설명, 이미지 정렬, 컨펌</span></div>
+        <div class="step direct"><strong>도매/소매/소비자 노출</strong><span>상품 활성, 편집숍 자동등록, 직판</span></div>
+      </div>
+
+      <h3>C. 뉴톡 자체 소비자 직접판매</h3>
+      <div class="flow">
+        <div class="step direct"><strong>직판 목적 선택</strong><span>뉴톡 소유/위탁/촬영상품 구분</span></div>
+        <div class="step direct"><strong>가격정책 입력</strong><span>원가, TAG가, 단하루가, 스토어팜가</span></div>
+        <div class="step direct"><strong>판매 상세 구성</strong><span>모델컷, 상세이미지, SEO, 옵션/재고</span></div>
+        <div class="step admin"><strong>채널 송출</strong><span>카페24, SNS, 마켓별 상품명/이미지</span></div>
+        <div class="step direct"><strong>판매/발주/정산</strong><span>주문, 배송, 수수료, 샘플 회수</span></div>
+      </div>
+    </section>
+
+    <section id="dependencies">
+      <h2>3. 역할별 상품등록 흐름 의존성</h2>
+      <table class="matrix">
+        <thead>
+          <tr><th>페이지/단계</th><th>주요 의존성</th><th>뉴톡관리자</th><th>도매</th><th>촬영팀</th><th>웹작업자</th><th>소매</th><th>소비자</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>등록 목적 선택</td><td>상품 소유권, 등록 주체, 판매 목적</td><td>필수</td><td>필수</td><td>참조</td><td>참조</td><td>참조</td><td>-</td></tr>
+          <tr><td>기본정보</td><td>등록회원, 카테고리, 상품코드, 상품명, 매입처, 노출여부</td><td>등록/승인</td><td>등록</td><td>참조</td><td>참조</td><td>조회</td><td>조회</td></tr>
+          <tr><td>가격정책</td><td>원가, 판매가, TAG가, 채널별 판매가 자동계산</td><td>관리</td><td>입력</td><td>-</td><td>-</td><td>마크업</td><td>소비자가</td></tr>
+          <tr><td>옵션/스펙</td><td>색상, 사이즈, 상세사이즈, 원단, 제조국, 품질보증</td><td>검수</td><td>입력</td><td>촬영참조</td><td>상세작성</td><td>조회</td><td>구매판단</td></tr>
+          <tr><td>이미지 업로드</td><td>임시폴더, goods_image 15장, 상품코드 이미지 경로</td><td>등록/정렬</td><td>등록</td><td>촬영결과</td><td>보정/정렬</td><td>다운로드</td><td>상품상세</td></tr>
+          <tr><td>촬영 워크플로우</td><td>BizProgress, 촬영일, 촬영자, 샘플반납, 웹작업 담당</td><td>상태관리</td><td>상태조회</td><td>실행/완료</td><td>실행/완료</td><td>결과사용</td><td>-</td></tr>
+          <tr><td>마켓별 상품명/SEO</td><td>GoodsEtc24, 36~39 자동생성 및 수정</td><td>관리</td><td>제안</td><td>-</td><td>작성</td><td>편집숍명</td><td>검색/노출</td></tr>
+          <tr><td>상품 활성/노출</td><td>activated, mall_activated, 상태값, 권한</td><td>최종승인</td><td>요청</td><td>촬영완료 조건</td><td>상세완료 조건</td><td>판매등록</td><td>구매</td></tr>
+        </tbody>
+      </table>
+
+      <div class="warnbox">
+        <strong>의존성 설계 원칙:</strong> V2는 모든 필드를 한 화면에 평면 배치하지 말고, 목적/상태/역할에 따라 잠긴 섹션을 열어야 합니다. 예: 촬영 요청이 없는 도매 직접등록은 촬영 섹션을 접고, 뉴톡 대행등록은 샘플/촬영/BizProgress 섹션을 먼저 노출합니다.
+      </div>
+    </section>
+
+    <section id="v1-audit">
+      <h2>4. V1 운영 페이지 정밀 검수 결과</h2>
+      <table>
+        <thead><tr><th>검수 대상</th><th>실제 코드/URL 근거</th><th>확인 내용</th></tr></thead>
+        <tbody>
+          <tr><td>샘플등록/관리자 상품등록</td><td><code>/home/danharoo/www/application/views/admin/products/in_form.php</code><br><code>/admin/products/update</code></td><td>등록회원 선택, 카테고리, 이미지 최대 15장, 상품코드, 원가/판매가, 상품구분/시즌/상태, 상세스펙, 마켓별 상품명, 배송/세금, 이미지 URL 필드를 입력합니다.</td></tr>
+          <tr><td>상품수정</td><td><code>/home/danharoo/www/application/views/admin/products/edit_form.php</code><br><code>GoodsCmd=2</code></td><td>등록과 거의 동일한 필드를 수정하며, 기존 이미지 15장을 미리보기/삭제/재정렬합니다. `GoodsId`, `UserID`, `GoodsOptVal`를 숨김값으로 유지합니다.</td></tr>
+          <tr><td>저장 로직</td><td><code>/home/danharoo/www/application/controllers/admin/products.php</code> `update`, `update_master`, `update_process`</td><td>신규는 `goods_master` 생성 후 `goods`, `goods_detail`, `goods_image`, `goods_code`에 분산 저장합니다. 수정은 `goods`, `goods_detail`, `goods_image`를 갱신합니다.</td></tr>
+          <tr><td>운영 상태 흐름</td><td><code>/home/danharoo/www/application/views/products/goods_list.php</code></td><td>`BizProgress`가 A1 입고부터 J2 샘플반납완료까지 촬영/웹작업/컨펌/사방넷 등록 흐름을 관리합니다.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>V1 BizProgress 상태 흐름</h3>
+      <div class="flow">
+        <div class="step"><strong>A1 입고</strong><span>샘플 입고</span></div>
+        <div class="step"><strong>B1/B2 컨펌</strong><span>진행 컨펌 대기/완료</span></div>
+        <div class="step"><strong>C1/C2 정보등록</strong><span>뉴톡정보 등록중/완료</span></div>
+        <div class="step"><strong>D/E 촬영</strong><span>제품촬영, 모델촬영</span></div>
+        <div class="step"><strong>F/G/H/J 완료</strong><span>웹작업, 이미지컨펌, 사방넷, 샘플반납</span></div>
+      </div>
+    </section>
+
+    <section id="v2-gap">
+      <h2>5. V2 현재 상태와 필요 반영</h2>
+      <div class="grid2">
+        <div class="card">
+          <h3>V2 현재 관리자 상품상세</h3>
+          <p>확인 파일: <code>/srv/newtalk-v2/frontend/src/components/admin-product/AdminProductDetail.tsx</code></p>
+          <p>현재 편집 필드: 상품명, 상품코드, 설명, 공급가, 소비자가, 상태.</p>
+          <p class="status-danger">V1 대체율: 낮음. 운영 필수 필드 대부분 미반영.</p>
+        </div>
+        <div class="card">
+          <h3>V2 현재 DB 구조</h3>
+          <p>확인 마이그레이션: <code>products</code>, <code>product_images</code>, <code>product_options</code>, <code>product_details</code>.</p>
+          <p>V2는 상품/이미지/옵션/HTML 상세 기본 구조만 있고, V1의 촬영/샘플/마켓/상세스펙/상품코드 구성 요소가 부족합니다.</p>
+          <p class="status-warn">확장 테이블 또는 V1 스냅샷 테이블 필요.</p>
+        </div>
+      </div>
+
+      <table>
+        <thead><tr><th>반영 구역</th><th>V2 UI 제안</th><th>DB/서비스 제안</th><th>우선순위</th></tr></thead>
+        <tbody>
+          <tr><td>등록 목적</td><td>도매직접/뉴톡대행/촬영연동/직판 선택 카드</td><td><code>registration_source</code>, <code>sales_purpose</code>, <code>owner_type</code></td><td><span class="status-danger">P0</span></td></tr>
+          <tr><td>V1 기본정보</td><td>등록회원, 상품코드 분해/중복검사, 매입처 검증, 카테고리 3단</td><td>V1 매핑 필드 또는 <code>product_v1_attributes</code></td><td><span class="status-danger">P0</span></td></tr>
+          <tr><td>가격 자동계산</td><td>원가 입력 시 판매가/TAG가/채널가 자동 추천</td><td>계산 결과와 수동수정 여부 저장</td><td><span class="status-danger">P0</span></td></tr>
+          <tr><td>촬영/샘플</td><td>샘플입고, 촬영요청, 웹작업, 샘플반납 타임라인</td><td><code>product_workflow_tasks</code> 또는 <code>product_sample_flows</code></td><td><span class="status-danger">P0</span></td></tr>
+          <tr><td>마켓별 상품명</td><td>검색어 기반 자동생성 + 채널별 미리보기</td><td>GoodsEtc24/36/37/38/39 매핑</td><td><span class="status-warn">P1</span></td></tr>
+          <tr><td>이미지</td><td>15장 정렬, 대표/부가/마켓 URL 자동생성, 다운로드 상태</td><td><code>product_images</code> 확장 + V1 이미지 URL 필드 보존</td><td><span class="status-warn">P1</span></td></tr>
+          <tr><td>상세스펙</td><td>소재, 상세사이즈, 원단느낌, 세탁, 제조국, 품질보증 탭</td><td><code>product_details</code> 단일 HTML 외 구조화 필드 필요</td><td><span class="status-warn">P1</span></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="fields">
+      <h2>6. V1 필드·DB 매핑 및 V2 필요 항목</h2>
+      <table>
+        <thead>
+          <tr><th>그룹</th><th>V1 화면 필드</th><th>V1 DB</th><th>V2 현재</th><th>V2 반영 판단</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>등록 주체</td><td>등록회원</td><td><code>goods.user_id</code>, <code>goods_master.user_id</code></td><td><code>products.user_id</code></td><td><span class="status-ok">필수</span> 도매/뉴톡대행/직판 owner 분리 필요</td></tr>
+          <tr><td>분류</td><td>카테고리 대/중/소</td><td><code>Category1~3</code></td><td>별도 category migration 있음</td><td><span class="status-danger">필수</span> V1 코드 보존 필요</td></tr>
+          <tr><td>노출</td><td>상품노출여부</td><td><code>activated</code>, <code>mall_activated</code></td><td><code>status</code></td><td><span class="status-danger">필수</span> 관리자승인/몰노출 분리</td></tr>
+          <tr><td>이미지</td><td>상품이미지 15장</td><td><code>goods_image.img0~img14</code>, <code>GoodsImage</code></td><td><code>product_images</code></td><td><span class="status-ok">필수</span> 정렬/대표/다운로드 연동</td></tr>
+          <tr><td>상품코드</td><td>상품코드</td><td><code>GoodsCode</code>, <code>goods_code.gcode</code></td><td><code>product_code</code></td><td><span class="status-danger">필수</span> V1 중복검사/이미지경로 생성 반영</td></tr>
+          <tr><td>상품명</td><td>상품명, 영문상품명, 모델명(사입명), 매입처</td><td><code>GoodsName</code>, <code>GoodsEtc4~6</code></td><td><code>name</code>, <code>brand</code></td><td><span class="status-danger">필수</span> 표시명/사입명/매입처 분리</td></tr>
+          <tr><td>중국/소스</td><td>중국사이트 링크, 중국 상품 품번</td><td><code>GoodsEtc7</code>, <code>GoodsEtc8</code></td><td>없음</td><td><span class="status-warn">필요</span> 대행등록/사입 추적용</td></tr>
+          <tr><td>가격</td><td>원가, 원가2, 판매가, TAG가, 단하루가, 도매꾹가, 스토어팜가</td><td><code>GoodsEtc9</code>, <code>GoodsEtc10</code>, <code>GoodsPrice</code>, <code>GoodsEtc32~35</code></td><td><code>supply_price</code>, <code>retail_price</code>, <code>wholesale_price</code>, <code>purchase_price</code></td><td><span class="status-danger">필수</span> V1 자동계산식 반영</td></tr>
+          <tr><td>상태/시즌</td><td>상품구분, 시즌, 상품상태</td><td><code>GoodsEtc48</code>, <code>GoodsEtc51</code>, <code>GoodsEtc52</code></td><td><code>status</code> 일부</td><td><span class="status-danger">필수</span> 운영 상태와 판매 상태 분리</td></tr>
+          <tr><td>상세</td><td>상품설명, 검색어, 모델사이즈, 착용사이즈</td><td><code>goods_detail.Description</code>, <code>GoodsEtc24~26</code></td><td><code>description</code>, <code>html_content</code></td><td><span class="status-warn">필요</span> 구조화 필드 필요</td></tr>
+          <tr><td>옵션/스펙</td><td>색상, 사이즈, 소재, 상세사이즈, Fit, 원단느낌, 세탁, 무게</td><td><code>OptionColor</code>, <code>OptionSize</code>, <code>GoodsEtc13~18</code></td><td><code>product_options</code> 일부</td><td><span class="status-danger">필수</span> 옵션과 상세스펙 분리</td></tr>
+          <tr><td>제조/고시</td><td>제조사, 제조일, 제조국, 품질보증</td><td><code>MakerName</code>, <code>GoodsEtc20~22</code></td><td>없음</td><td><span class="status-danger">필수</span> 소비자 판매/마켓 송출 필수</td></tr>
+          <tr><td>상세 확장</td><td>추가상세 1~3, 기타, 신상마켓, 카카오스토리</td><td><code>GoodsEtc27~30</code>, <code>GoodsEtc58~59</code></td><td>HTML 하나</td><td><span class="status-warn">필요</span> 채널별 상세 분리</td></tr>
+          <tr><td>마켓명</td><td>쇼핑몰별 상품명1/2/3, 카페24 상품명</td><td><code>GoodsEtc36~39</code></td><td>Cafe24 mapping 일부</td><td><span class="status-danger">필수</span> 자동생성+수정 이력 필요</td></tr>
+          <tr><td>판매/재고</td><td>판매기간, 판매수량, 재고관리사용여부</td><td><code>SellingPeriod</code>, <code>GoodsCount</code>, <code>GoodsEtc56</code></td><td>옵션 stock 일부</td><td><span class="status-warn">필요</span> 상품 단위/옵션 단위 재고 분리</td></tr>
+          <tr><td>세금/배송</td><td>세금구분, 배송비구분, 배송비</td><td><code>GoodsEtc53~55</code></td><td>없음</td><td><span class="status-danger">필수</span> 주문/직판 전 필수</td></tr>
+          <tr><td>마켓 이미지 URL</td><td>대표이미지, 종합몰 jpg, 부가이미지 2/4/5/6/7/8/9/11/12/20/22</td><td><code>goods_detail.GoodsEtc60~72</code></td><td>없음</td><td><span class="status-warn">필요</span> 상품코드 기반 자동생성</td></tr>
+          <tr><td>촬영/샘플</td><td>입고, 제품촬영, 모델촬영, 샘플반납, 담당자</td><td><code>BizProgress</code>, <code>StockingDate</code>, <code>ProductShootingDate</code>, <code>ModelShootingDate</code>, <code>SampleReturnDate</code>, <code>Photographer</code>, <code>WebWorker</code></td><td>없음</td><td><span class="status-danger">필수</span> V1 대체의 핵심</td></tr>
+        </tbody>
+      </table>
+
+      <div class="dangerbox">
+        <strong>V2 구현 차단 이슈:</strong> 현재 V2 상품수정 API는 `name`, `product_code`, `description`, `supply_price`, `retail_price`, `status` 중심입니다. V1의 `goods_detail` 및 촬영/샘플 상태를 담을 구조 없이 V1을 대체하면 상품등록 이후 촬영관리, 마켓송출, 이미지다운로드, 직접판매가 끊깁니다.
+      </div>
+    </section>
+
+    <section>
+      <h2>7. 구현 권장 순서</h2>
+      <table>
+        <thead><tr><th>순서</th><th>작업</th><th>완료 기준</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>V2 상품등록 목적/주체/소유권 필드 추가</td><td>도매직접, 뉴톡대행, 촬영연동, 직판 시나리오가 DB에 구분 저장</td></tr>
+          <tr><td>2</td><td>V1 샘플등록 필드 스냅샷 테이블 또는 확장 테이블 생성</td><td>V1 `goods`, `goods_detail`, `goods_image`, `goods_code` 필드 손실 없이 저장</td></tr>
+          <tr><td>3</td><td>관리자 상품등록 UI를 탭/스텝형으로 재구성</td><td>기본정보, 가격, 옵션/스펙, 촬영/샘플, 이미지, 마켓/SNS 탭 제공</td></tr>
+          <tr><td>4</td><td>BizProgress 타임라인 구현</td><td>A1~J2 상태와 담당자/일자가 한 화면에서 변경/이력 확인</td></tr>
+          <tr><td>5</td><td>V1 운영 데이터 샘플 이관 검증</td><td>대표 상품 10건 이상에서 V1 화면과 V2 화면 필드 누락 0건 확인</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>8. 확인 출처</h2>
+      <p class="source">[코드 조회] <code>/home/danharoo/www/application/views/admin/products/in_form.php</code>, <code>/home/danharoo/www/application/views/admin/products/edit_form.php</code>, <code>/home/danharoo/www/application/controllers/admin/products.php</code>, <code>/home/danharoo/www/application/views/products/goods_list.php</code></p>
+      <p class="source">[DB 스키마 조회] V1 MySQL <code>goods</code>, <code>goods_master</code>, <code>goods_detail</code>, <code>goods_code</code> INFORMATION_SCHEMA 조회.</p>
+      <p class="source">[V2 코드 조회] <code>/srv/newtalk-v2/frontend/src/components/admin-product/AdminProductDetail.tsx</code>, <code>/srv/newtalk-v2/src/database/migrations/2026_02_21_100005_create_products_table.php</code>, <code>product_images</code>, <code>product_options</code>, <code>product_details</code>.</p>
+    </section>
+  </main>
+</body>
+</html>

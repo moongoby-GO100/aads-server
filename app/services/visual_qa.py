@@ -55,11 +55,26 @@ import sys, asyncio, json
 from pathlib import Path
 from playwright.async_api import async_playwright
 
-async def main(base_url, pages, out_dir, project_id):
+async def main(base_url, pages, out_dir, project_id, browser_bridge):
     out = []
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(viewport={"width": 1920, "height": 1080})
+        launched_browser = False
+        cdp_url = (browser_bridge or {}).get("cdp_url") or ""
+        ws_url = (browser_bridge or {}).get("ws_url") or ""
+        storage_state = (browser_bridge or {}).get("storage_state_path") or None
+        if cdp_url:
+            browser = await p.chromium.connect_over_cdp(cdp_url)
+            context = browser.contexts[0] if browser.contexts else await browser.new_context(viewport={"width": 1920, "height": 1080})
+        elif ws_url:
+            browser = await p.chromium.connect(ws_url)
+            context = await browser.new_context(viewport={"width": 1920, "height": 1080})
+        else:
+            browser = await p.chromium.launch(headless=True)
+            launched_browser = True
+            context_args = {"viewport": {"width": 1920, "height": 1080}}
+            if storage_state:
+                context_args["storage_state"] = storage_state
+            context = await browser.new_context(**context_args)
         page = await context.new_page()
         for path in pages:
             url = base_url.rstrip("/") + path
@@ -74,11 +89,12 @@ async def main(base_url, pages, out_dir, project_id):
                 out.append({"page": path, "page_name": page_name, "path": str(out_path), "success": True})
             except Exception as e:
                 out.append({"page": path, "page_name": page_name, "path": None, "success": False, "error": str(e)})
-        await browser.close()
+        if launched_browser:
+            await browser.close()
     print(json.dumps(out))
 
 data = json.loads(sys.argv[1])
-asyncio.run(main(data["base_url"], data["pages"], data["out_dir"], data["project_id"]))
+asyncio.run(main(data["base_url"], data["pages"], data["out_dir"], data["project_id"], data.get("browser_bridge")))
 """
 
 PLAYWRIGHT_COMPARE_SCRIPT = """
@@ -238,6 +254,12 @@ class VisualQAService:
             "out_dir": str(SCREENSHOTS_DIR),
             "project_id": project_id,
         }
+        try:
+            from app.browser_bridge.e2e_adapter import build_e2e_config
+
+            arg["browser_bridge"] = build_e2e_config()
+        except Exception as e:
+            logger.warning("browser_bridge_e2e_config_unavailable", error=str(e))
         logger.info("capture_screenshots_start", base_url=base_url, pages=pages, project_id=project_id)
 
         raw = await _run_playwright_script(PLAYWRIGHT_CAPTURE_SCRIPT, arg)

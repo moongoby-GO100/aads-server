@@ -395,6 +395,7 @@ class ToolExecutor:
             "delegate_to_agent":      self._delegate_to_agent,
             "delegate_to_research":   self._delegate_to_research,
             # AADS-159: 브라우저 도구 (Playwright 기반)
+            "browser_connect":        self._browser_connect,
             "browser_navigate":       self._browser_navigate,
             "browser_snapshot":       self._browser_snapshot,
             "browser_screenshot":     self._browser_screenshot,
@@ -3016,6 +3017,15 @@ class ToolExecutor:
 
     # ── AADS-159: 브라우저 도구 (Playwright — ceo_chat_tools 래퍼) ────────────
 
+    async def _browser_connect(self, inp: Dict[str, Any]) -> Any:
+        """Browser Bridge pairing/status/session selection."""
+        from app.api.ceo_chat_tools import tool_browser_connect
+        return await tool_browser_connect(
+            action=inp.get("action", "status"),
+            session_id=inp.get("session_id", ""),
+            label=inp.get("label", "CEO local Chrome"),
+        )
+
     async def _browser_navigate(self, inp: Dict[str, Any]) -> Any:
         """브라우저로 URL 이동."""
         url = inp.get("url", "")
@@ -3359,8 +3369,8 @@ _INTENT_TOOL_MAP: Dict[str, list] = {
     "task_query":             ["check_directive_status"],
     "status_check":           ["check_directive_status"],
     # AADS-159: 브라우저 인텐트
-    "browser":                ["browser_navigate", "browser_snapshot"],
-    "browser_action":         ["browser_navigate", "browser_snapshot", "browser_screenshot"],
+    "browser":                ["browser_connect", "browser_navigate", "browser_snapshot"],
+    "browser_action":         ["browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot"],
     # AADS-190: 원격 쓰기/패치/실행/Git 인텐트
     "code_modify":            ["read_remote_file", "write_remote_file", "patch_remote_file", "run_remote_command"],
     "code_fix":               ["read_remote_file", "patch_remote_file", "run_remote_command"],

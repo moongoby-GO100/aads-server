@@ -44,3 +44,10 @@ backup/direct_oauth_20260326/
 *.bak_aads
 .vault.key
 scripts/claude_relay_secret.txt
+
+# Browser Bridge local/authenticated runtime state
+.browser_bridge_state/
+browser-bridge-state/
+storageState*.json
+storage_state*.json
+playwright/.auth/

@@ -1,0 +1,2975 @@
+<!DOCTYPE html><html><head>
+		<title>회원관리</title>
+		<!--common head-->
+<!-- <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no"> -->
+<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+
+
+
+
+<!--js-->
+<!--Bootstrap v5.1.3 -->
+<script src="https://pick.newtalk.kr/views/static/js/bootstrap.bundle.min.js"></script>
+<!--jQuery v3.6.0-->
+<!--datetimepicker-->
+<link rel="stylesheet" href="//code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
+<!-- <script src="https://code.jquery.com/jquery-1.12.4.js"></script> -->
+<!-- <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.js"></script> -->
+
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://code.jquery.com/ui/1.12.1/jquery-ui.min.js"></script>
+
+<!--timepicker-->
+<link rel="stylesheet" href="https://pick.newtalk.kr/views/static/css/timepicki.css">
+<script src="https://pick.newtalk.kr/views/static/js/timepicki.js"></script>
+
+
+<script src="https://pick.newtalk.kr/views/static/js/jquery-paged-scroll.min.js"></script>
+
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/noty/3.1.4/noty.css">
+
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/noty/3.1.4/noty.min.js"></script>
+<script src="https://pick.newtalk.kr/views/static/js/helper.js"></script>
+<script src="https://pick.newtalk.kr/views/static/js/common.js"></script>
+<script src="https://pick.newtalk.kr/views/static/js/Sortable.js"></script>
+
+<link href="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/css/select2.min.css" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/js/select2.min.js"></script>
+
+<!--css-->
+<link rel="stylesheet" href="https://netdna.bootstrapcdn.com/font-awesome/3.2.1/css/font-awesome.css">
+<link rel="stylesheet" href="https://pick.newtalk.kr/views/static/css/style_admin.css">		
+</head><body class="bgTpA"><header class="header-admin">
+	<!--모바일
+	<a class="side_m_bar m-visible" data-bs-toggle="collapse" href="#collapseExample" role="button" aria-expanded="false" aria-controls="collapseExample">
+				<img src="https://pick.newtalk.kr/views/static/img/icon_menu_m.svg" alt="">
+	</a>
+	-->
+	<section class="header_top">
+		<div class="userinfo"> <span class="nicname">(주)뉴톡</span>  님 </div>
+		<a class="dropdown-item btn mid l-orange radius" href="/auth/logout"> 로그아웃</a>
+	</section>
+	<div class="container-fluid">
+		<div class="navbar-wrap">
+			<div class="nav-left">
+									<!-- <h1 class="h1">회원관리</h1> -->
+					<ul class="nav nav-tabs">
+						<li class="nav-item">
+							<a class="active" aria-current="page" href="/root/members">전체 회원</a>
+						</li>
+												<li class="nav-item">
+							<a href="/root/pigup_admin">픽업관리자</a>
+						</li>
+						<li class="nav-item">
+							<a href="/root/manager">직원</a>
+						</li>
+											</ul>
+								<!--
+				<ul class="nav nav-tabs">
+					<li class="nav-item">
+						<a class="active" aria-current="page" href="/root/members">전체 회원</a>
+					</li>
+					<li class="nav-item">
+						<a href="/root/wholesaler">도매 회원</a>
+					</li>
+					<li class="nav-item">
+						<a href="/root/retailer">소매 회원</a>
+					</li>
+					<li class="nav-item">
+						<a href="/root/pigup_admin">픽업관리자</a>
+					</li>
+				</ul>
+				-->
+			</div>
+			<!--
+			<div class="nav-right">
+				<a class="dropdown-toggle" type="button" id="dropdownMenuButton1" data-bs-toggle="dropdown" aria-expanded="false"></a>
+				<ul class="dropdown-menu" aria-labelledby="dropdownMenuButton1">
+					<li><a class="dropdown-item" href="#">관리자01 님</a></li>
+					<li><a class="dropdown-item" href="/root/admin_add">관리자 계정 추가</a></li>
+					<li><a class="dropdown-item" href="/root/admin_list">관리자 목록</a></li>
+					<li><a class="dropdown-item" href="/auth/logout">로그아웃</a></li>
+				</ul>
+			</div>
+			-->
+		</div>
+	</div>
+
+	<div id="loading-overlay" style="display: none;">
+        <div class="loading-content">
+            <img src="https://pick.newtalk.kr/views/assets/images/loading-4.webp" alt="Loading...">
+        </div>
+    </div>
+	
+</header>		<!-- Admin Sidebar -->
+<aside class="sidebar-admin">
+	<div class="side-menu-wrap">
+		<a class="btn-logo" role="button" href="/root/home"><img src="https://pick.newtalk.kr/views/static/img/logo.png"></a>
+		<ul class="side-menu">
+					<li><a class="ad_btn button" role="button" href="/root/home"><i class="admin_gnb1"></i><span class="m-hidden">대시보드</span></a></li>
+			<li><a class="ad_btn button on" role="button" href="/root/members"><i class="admin_gnb2"></i><span class="m-hidden">회원관리</span></a></li>
+					<li><a class="ad_btn button " role="button" href="/productSample/product_sample_mng"><i class="admin_gnb3"></i><span class="m-hidden">샘플관리</span></a></li>
+			<!-- <li><a class="ad_btn button " role="button" href="/productSample/product_business_sample_mng"><i class="admin_gnb3"></i><span class="m-hidden">미처리현황</span></a></li> -->
+			<li><a class="ad_btn button " role="button" href="/Product/product_mng"><i class="admin_gnb3"></i><span class="m-hidden">상품관리</span></a></li>
+					<li><a class="ad_btn button " role="button" href="/content/shooting_mng"><i class="admin_gnb3"></i><span class="m-hidden">콘텐츠관리</span></a></li>
+							<!-- <li>
+				<a class="ad_btn button " role="button" href="/root/settlement_shooting_expenses"><i class="admin_gnb3"></i><span class="m-hidden">촬영비용정산</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/ModelFreeplace/place_mng"><i class="admin_gnb3"></i><span class="m-hidden">모델/프리랜서/장소 관리</span></a>
+			</li> -->
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/wholesale_settlement_mng?date1=&amp;date2=&amp;status=1&amp;ncc="><i class="admin_gnb3"></i><span class="m-hidden">입점도매정산관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/retailpage_mng_main"><i class="admin_gnb3"></i><span class="m-hidden">소매페이지관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/settlement_mng"><i class="admin_gnb3"></i><span class="m-hidden">정산관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/product_order"><i class="admin_gnb8"></i><span class="m-hidden">주문관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/vendor_settlement"><i class="admin_gnb3"></i><span class="m-hidden">업체별정산관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/deposit"><i class="admin_gnb4"></i><span class="m-hidden">예치금관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/delivery"><i class="admin_gnb5"></i><span class="m-hidden">택배픽업관리</span></a>
+			</li>
+
+			<li><a class="ad_btn button " role="button" href="/root/message_template"><i class="admin_gnb6"></i><span class="m-hidden">메세지 관리</span></a></li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/notice_manage"><i class="admin_gnb8"></i><span class="m-hidden">앱관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/statistics"><i class="admin_gnb8"></i><span class="m-hidden">통계</span></a>
+			</li>
+
+
+			<li><a class="ad_btn button " role="button" href="/root/coupon"><i class="admin_gnb7"></i><span class="m-hidden">쿠폰관리</span></a></li>
+
+			<li><a class="ad_btn button " role="button" href="/root/center_setting"><i class="admin_gnb5"></i><span class="m-hidden">상가관리</span></a></li>
+
+			<li><a class="ad_btn button " role="button" href="/root/partners_apply"><i class="admin_gnb2"></i><span class="m-hidden">입점상담</span></a></li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/traffic"><i class="admin_gnb8"></i><span class="m-hidden">트래픽</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/admin_add"><i class="admin_gnb9"></i><span class="m-hidden">설정</span></a>
+			</li>
+				</ul>
+	</div>
+</aside>
+
+
+<!--모바일
+<div class="collapse sidebar-wrapper" id="collapseExample">
+	<div class="sidebar">
+		<div class="sidebar-header">
+			<button class="button close" data-bs-toggle="collapse" href="#collapseExample" role="button" aria-expanded="true" aria-controls="collapseExample"></button>
+		</div>
+		<ul class="sidebar-menu" id="collapseExample">
+			<li><a class="ad_btn button" role="button" href="/root/home">홈</a></li>
+			<li class="parent">
+				<a class="ad_btn button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#dropcollapse" aria-expanded="false" aria-controls="dropcollapse">회원 관리</a>
+				<ul class="sidebar-submenu collapse" id="dropcollapse">
+					<li><a href="/root/members">전체회원</li>
+					<li><a href="/root/pigup_admin">픽업관리자</li>
+				</ul>
+			</li>
+			<li><a class="ad_btn button" role="button" href="/root/product_order">상품 관리</a></li>
+			<li><a class="ad_btn button" role="button" href="/root/deposit">예치금 관리</a></li>
+			<li><a class="ad_btn button" role="button" href="/root/delivery"></i>택배 픽업</a></li>
+			<li><a class="ad_btn button" role="button" href="#none">메세지</a></li>
+			<li><a class="ad_btn button" role="button" href="#none">쿠폰</a></li>
+			<li><a class="ad_btn button" role="button" href="#none">게시판</a></li>
+			<li><a class="ad_btn button" role="button" href="/root/basedata">설정</a></li>
+		</ul>
+	</div>
+</div>
+-->		<script type="text/javascript" src="https://t1.daumcdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js"></script>
+	
+	
+		<main class="container_body members">
+			<div class="table-wrap">
+				<div class="pickset">
+					<div class="pickset-header">
+						<div class="tit-area">
+							<h2>전체 관리</h2>
+						</div>
+					</div>
+				</div>
+				<div class="row">
+					<div class="col-12">
+						<div class="layer-box">
+							<div class="layer-box-body">
+								<div class="table-top">
+									<table class="table">
+										<tbody><tr>
+											<th>검색</th>
+											<td colspan="3">
+												<div class="col-box">
+													<div class="col-2">
+														<select id="schKey" class="select">
+															<option value="" selected="">전체</option>
+															<option value="1">상호명</option>
+															<option value="7">사용자명</option>
+															<option value="2">아이디</option>
+															<option value="3">주소</option>
+															<option value="4">대표자명</option>
+															<option value="5">대표자 번호</option>
+															<option value="6">전화번호</option>
+														</select>
+													</div>
+													<div class="col-10">
+														<input id="searchVal" class="input search" value="" style="width: 100%">
+														<button id="schBtn" class="btn mid orange">검색
+															<!-- <img src="/static/img/search.svg"> -->
+														</button>
+													</div>
+												</div>
+												
+											</td>
+										</tr>
+										<tr>
+											<th>회원구분</th>
+											<td>
+												<div class="col-box">
+													<div class="btn-wrap tpA">
+														<button id="codeKey_0" name="codeKey" class="btn mid bor-gray btn mid active" value="">전체</button>
+														<button id="codeKey_1" name="codeKey" class="btn mid bor-gray " value="1">도매</button>
+														<button id="codeKey_2" name="codeKey" class="btn mid bor-gray " value="2">소매</button>
+<!-- 														<button id="btn_enter_store_yn" name="enter_store" class="btn mid bor-gray " value="">입점업체 -->
+<!-- 														</button> -->
+														<select id="btn_enter_store_yn" name="enter_store" class="select " style="width:150px;;">
+															<option value="" selected="">--입점여부 전체--</option>
+<!-- 															<option value="" selected>전체</option> -->
+															<option value="Y">입점</option>
+															<option value="N">미입점</option>
+														</select>
+														<select id="btn_deposit_yn" name="deposit_yn" class="select " style="width:150px;;">
+															<option value="" selected="">--예치금 전체--</option>
+															<option value="Y">잔액있음</option>
+															<option value="N">잔액금없음</option>
+														</select>
+													</div>
+													
+												</div>
+											</td>
+											<th>상가주소</th>
+											<td>
+												<select id="schCenter" class="select" style="width: 100%">
+													<option value="" selected="">전체</option>
+													<option value="30">디오트</option><option value="31">청평화</option><option value="32">동평화</option><option value="33">평화시장</option><option value="34">DDP패션몰 (유어스)</option><option value="35">뉴존</option><option value="36">스튜디오W</option><option value="37">DWP (동원프라자)</option><option value="38">남평화</option><option value="39">제일평화</option><option value="40">광희(퀸즈스퀘어)</option><option value="41">테크노</option><option value="42">신평화 A동</option><option value="43">신발상가 C동</option><option value="44">신발상가 A동</option><option value="45">신발상가 B동</option><option value="46">신발상가 D동</option><option value="47">APM</option><option value="48">벨포스트</option><option value="49">APM 럭스</option><option value="50">디자이너클럽</option><option value="51">팀204</option><option value="53">APM PLACE</option><option value="54">맥스타일</option><option value="55">신평화 B동</option><option value="56">신평화 C동</option><option value="58">아트프라자</option><option value="72">혜양엘리시움</option>												</select>
+											</td>
+										</tr>
+										<tr>
+											<th>최종접속일</th>
+											<td colspan="3">
+												<div class="col-box">
+													<div class="col-12">
+														<div class="col-box">
+															<div class="col">
+																<input id="datepicker1" class="input datepicker hasDatepicker" name="date" placeholder="날짜 선택" autocomplete="off">
+															</div>
+															<div class="ad-ect">~</div>
+															<div class="col">
+																<input id="datepicker2" class="input datepicker hasDatepicker" name="date" placeholder="날짜 선택" autocomplete="off">
+															</div>
+
+															<div class="col">
+																<div class="btn-wrap tpA">
+																	<button id="last_login_btn" class="btn mid orange " value="3">검색</button>
+																	<button id="last_login_0" name="last_login" class="btn mid bor-gray btn mid active" value="">전체</button>
+																	<button id="last_login_1" name="last_login" class="btn mid bor-gray " value="1">오늘</button>
+																	<button id="last_login_2" name="last_login" class="btn mid bor-gray " value="2">최근 1주일</button>
+																</div>
+															</div>
+														</div>
+													</div>
+			
+													<!-- <div class="col-6 datepic-block">
+														
+													</div> -->
+												</div>
+											</td>
+										</tr>
+										<tr>
+											
+											<th>회원가입일</th>
+											<td colspan="3">
+												<div class="col-box">
+													<div class="col-12">
+														<div class="col-box">
+															<div class="col">
+																<input id="datepicker3" class="input datepicker hasDatepicker" name="date" placeholder="날짜 선택" autocomplete="off">
+															</div>
+															<div class="ad-ect">~</div>
+															<div class="col">
+																<input id="datepicker4" class="input datepicker hasDatepicker" name="date" placeholder="날짜 선택" autocomplete="off">
+															</div>
+															<div class="col">
+																<div class="btn-wrap tpA">
+																	<button id="created_btn" class="btn mid orange " value="3">검색</button>
+																	<button id="created_0" name="created" class="btn mid bor-gray btn mid active" value="">전체</button>
+																	<button id="created_1" name="created" class="btn mid bor-gray " value="1">오늘</button>
+																	<button id="created_2" name="created" class="btn mid bor-gray " value="2">최근 1주일</button>
+																</div>
+															</div>
+														</div>
+													</div>
+												</div>
+											</td>
+										</tr>
+									</tbody></table>
+								</div>
+							</div>
+						</div>
+					</div>
+					
+				</div>
+				<div class="row">
+					<div class="col-12">
+						<div class="layer-box">
+							<div class="layer-box-header tpA">
+								<div class="total-cnt">
+									총 12,275건
+								</div>
+								<div class="btn-wrap tpA">
+																		<button class="button primary small outline" type="button" onclick="memberNewRegister();">신규 회원 등록</button>
+																		<button class="button primary small outline" type="button" onclick="memberExcelDown();">회원 엑셀 다운로드</button>
+									<button class="button primary small outline" type="button" onclick="searchExcelDownFrame();">검색 회원 엑셀 다운로드</button>
+								</div>
+							</div>
+							<div class="layer-box-body">
+								<div class="table-wrap">
+									<table class="table">
+										<thead>
+											<tr>
+												<th></th>
+												<th>상호명</th>
+												<th>사용자명</th>
+												<th>아이디</th>
+												<th>회원구분
+												</th><th>상가주소
+												</th><th>대표자명</th>
+												<th>대표자번호</th>
+												<th>인증전화번호</th>
+												<th>
+													<div class="flex-group sort">
+														<p>현재 예치금</p>
+														<button id="nowDepositBtn" name="tableSort" class="button tomini sort-primary" value="1"></button>
+													</div>
+												</th>
+												<th>
+													<div class="flex-group sort">
+														<p>충전 누적금액</p>
+														<button id="totDepositBtn" name="tableSort" class="button tomini sort-primary" value="2"></button>
+													</div>
+												</th>
+												<th>접속 IP</th>
+												<th>
+													<div class="flex-group sort">
+														<p>최종접속일</p>
+														<button id="lastLoginBtn" name="tableSort" class="button tomini sort-primary" value="3"></button>
+													</div>
+												</th>
+												<th>
+													<div class="flex-group sort">
+														<p>회원가입일</p>
+														<button id="joinBtn" name="tableSort" class="button tomini sort-primary" value="4"></button>
+													</div>
+												</th>
+												<th>수정</th>
+												<th>알림 on/off</th>
+												<th>로그인</th>
+											</tr>
+										</thead>
+										<tbody>
+																						<tr>
+												<td><input type="checkbox" name="memberId" value="155821"></td>
+												<td>모노스트릿</td>
+												<td>모노스트릿</td>
+												<td>
+													ai7935																										<a href="https://ai7935.newtalk.kr/" target="_blank"><img src="/www/data/files/etc/cart.jpg" width="20">
+																									</a></td>
+												<td>도매</td>
+												<td>														DWP (동원프라자)														1														104																									</td>
+												<td></td>
+												<td></td>
+												<td>01085553892</td>
+												<td>0원</td>
+												<td>0원</td>
+												<td>172.71.210.160</td>
+												<td>2026-05-03</td>
+												<td>2026-05-03</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="modify_info(155821)">수정</button>
+																									</td>
+												<td>
+																										<label class="switch">
+														<input type="checkbox" name="switch" checked="" hidden="" onchange="setting_pushEvent('155821', this)">
+														<span class="switch-style"></span>
+													</label>
+																									</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="login_admin('ai7935')">로그인</button>
+																									</td>
+											</tr>
+																						<tr>
+												<td><input type="checkbox" name="memberId" value="155819"></td>
+												<td>감온</td>
+												<td>감온</td>
+												<td>
+													knu1203@gmail.com																									</td>
+												<td>소매</td>
+												<td>														강원특별자치도 태백시 문화로1길 16																									</td>
+												<td>권민성</td>
+												<td>01079143377</td>
+												<td>01071804583</td>
+												<td>0원</td>
+												<td>0원</td>
+												<td>172.70.206.127</td>
+												<td>2026-04-27</td>
+												<td>2026-04-27</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="modify_info(155819)">수정</button>
+																									</td>
+												<td>
+																										<label class="switch">
+														<input type="checkbox" name="switch" checked="" hidden="" onchange="setting_pushEvent('155819', this)">
+														<span class="switch-style"></span>
+													</label>
+																									</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="login_admin('knu1203%40gmail.com')">로그인</button>
+																									</td>
+											</tr>
+																						<tr>
+												<td><input type="checkbox" name="memberId" value="155818"></td>
+												<td>라시에나</td>
+												<td>라시에나</td>
+												<td>
+													waniistyle@naver.com																									</td>
+												<td>소매</td>
+												<td>														인천 서구 청라라임로 85																									</td>
+												<td>박지완</td>
+												<td>01071004233</td>
+												<td>01071004233</td>
+												<td>0원</td>
+												<td>0원</td>
+												<td>162.158.90.97</td>
+												<td>2026-04-27</td>
+												<td>2026-04-27</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="modify_info(155818)">수정</button>
+																									</td>
+												<td>
+																										<label class="switch">
+														<input type="checkbox" name="switch" checked="" hidden="" onchange="setting_pushEvent('155818', this)">
+														<span class="switch-style"></span>
+													</label>
+																									</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="login_admin('waniistyle%40naver.com')">로그인</button>
+																									</td>
+											</tr>
+																						<tr>
+												<td><input type="checkbox" name="memberId" value="155817"></td>
+												<td>더모은</td>
+												<td>더모은</td>
+												<td>
+													bobonehouse@gmail.com																									</td>
+												<td>소매</td>
+												<td>														경기 의정부시 녹양로62번길 12																									</td>
+												<td>김보경</td>
+												<td>01077771317</td>
+												<td>01077771317</td>
+												<td>0원</td>
+												<td>0원</td>
+												<td>162.158.193.165</td>
+												<td>2026-04-26</td>
+												<td>2026-04-26</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="modify_info(155817)">수정</button>
+																									</td>
+												<td>
+																										<label class="switch">
+														<input type="checkbox" name="switch" checked="" hidden="" onchange="setting_pushEvent('155817', this)">
+														<span class="switch-style"></span>
+													</label>
+																									</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="login_admin('bobonehouse%40gmail.com')">로그인</button>
+																									</td>
+											</tr>
+																						<tr>
+												<td><input type="checkbox" name="memberId" value="155816"></td>
+												<td>PLAINO</td>
+												<td>PLAINO</td>
+												<td>
+													yeongubaeg@gmail.com																									</td>
+												<td>소매</td>
+												<td>														서울 관악구 난곡로 324																									</td>
+												<td>백영우</td>
+												<td>01066450139</td>
+												<td>01066450139</td>
+												<td>0원</td>
+												<td>0원</td>
+												<td>172.70.207.90</td>
+												<td>2026-04-26</td>
+												<td>2026-04-26</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="modify_info(155816)">수정</button>
+																									</td>
+												<td>
+																										<label class="switch">
+														<input type="checkbox" name="switch" checked="" hidden="" onchange="setting_pushEvent('155816', this)">
+														<span class="switch-style"></span>
+													</label>
+																									</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="login_admin('yeongubaeg%40gmail.com')">로그인</button>
+																									</td>
+											</tr>
+																						<tr>
+												<td><input type="checkbox" name="memberId" value="155815"></td>
+												<td>천구백구십팔</td>
+												<td>천구백구십팔</td>
+												<td>
+													qoqks98@naver.com																									</td>
+												<td>소매</td>
+												<td>														경기 부천시 소사구 소사본동 54-4																									</td>
+												<td>김재민</td>
+												<td>01062222831</td>
+												<td>01062222831</td>
+												<td>0원</td>
+												<td>0원</td>
+												<td>172.69.33.57</td>
+												<td>2026-04-27</td>
+												<td>2026-04-26</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="modify_info(155815)">수정</button>
+																									</td>
+												<td>
+																										<label class="switch">
+														<input type="checkbox" name="switch" checked="" hidden="" onchange="setting_pushEvent('155815', this)">
+														<span class="switch-style"></span>
+													</label>
+																									</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="login_admin('qoqks98%40naver.com')">로그인</button>
+																									</td>
+											</tr>
+																						<tr>
+												<td><input type="checkbox" name="memberId" value="155814"></td>
+												<td>시아서울</td>
+												<td>시아서울</td>
+												<td>
+													siaseoul1@gmail.com																									</td>
+												<td>소매</td>
+												<td>														경기 부천시 원미구 도약로 206																									</td>
+												<td>문성현</td>
+												<td>01058785238</td>
+												<td>01058785238</td>
+												<td>0원</td>
+												<td>0원</td>
+												<td>172.71.214.96</td>
+												<td>2026-04-27</td>
+												<td>2026-04-25</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="modify_info(155814)">수정</button>
+																									</td>
+												<td>
+																										<label class="switch">
+														<input type="checkbox" name="switch" checked="" hidden="" onchange="setting_pushEvent('155814', this)">
+														<span class="switch-style"></span>
+													</label>
+																									</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="login_admin('siaseoul1%40gmail.com')">로그인</button>
+																									</td>
+											</tr>
+																						<tr>
+												<td><input type="checkbox" name="memberId" value="155813"></td>
+												<td>도화지</td>
+												<td>도화지</td>
+												<td>
+													jdhh1028@naver.com																									</td>
+												<td>소매</td>
+												<td>														경기 가평군 조종면 연인산로 670-139																									</td>
+												<td>정다현</td>
+												<td>01024805517</td>
+												<td>01024805517</td>
+												<td>0원</td>
+												<td>0원</td>
+												<td>162.158.138.108</td>
+												<td>2026-04-25</td>
+												<td>2026-04-25</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="modify_info(155813)">수정</button>
+																									</td>
+												<td>
+																										<label class="switch">
+														<input type="checkbox" name="switch" checked="" hidden="" onchange="setting_pushEvent('155813', this)">
+														<span class="switch-style"></span>
+													</label>
+																									</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="login_admin('jdhh1028%40naver.com')">로그인</button>
+																									</td>
+											</tr>
+																						<tr>
+												<td><input type="checkbox" name="memberId" value="155812"></td>
+												<td>제이아이앤</td>
+												<td>제이아이앤</td>
+												<td>
+													dladuswls00@naver.com																									</td>
+												<td>소매</td>
+												<td>														경북 칠곡군 석적읍 북중리6길 14																									</td>
+												<td>임연진</td>
+												<td>01088647245</td>
+												<td>01088647245</td>
+												<td>0원</td>
+												<td>0원</td>
+												<td>104.23.251.149</td>
+												<td>2026-04-27</td>
+												<td>2026-04-25</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="modify_info(155812)">수정</button>
+																									</td>
+												<td>
+																										<label class="switch">
+														<input type="checkbox" name="switch" checked="" hidden="" onchange="setting_pushEvent('155812', this)">
+														<span class="switch-style"></span>
+													</label>
+																									</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="login_admin('dladuswls00%40naver.com')">로그인</button>
+																									</td>
+											</tr>
+																						<tr>
+												<td><input type="checkbox" name="memberId" value="155811"></td>
+												<td>윗스</td>
+												<td>윗스</td>
+												<td>
+													so8141@nate.com																									</td>
+												<td>소매</td>
+												<td>														경북 포항시 북구 흥해읍 죽천길 139																									</td>
+												<td>정성협</td>
+												<td>01045104700</td>
+												<td>01045104700</td>
+												<td>0원</td>
+												<td>0원</td>
+												<td>172.69.33.11</td>
+												<td>2026-04-24</td>
+												<td>2026-04-24</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="modify_info(155811)">수정</button>
+																									</td>
+												<td>
+																										<label class="switch">
+														<input type="checkbox" name="switch" checked="" hidden="" onchange="setting_pushEvent('155811', this)">
+														<span class="switch-style"></span>
+													</label>
+																									</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="login_admin('so8141%40nate.com')">로그인</button>
+																									</td>
+											</tr>
+																						<tr>
+												<td><input type="checkbox" name="memberId" value="155810"></td>
+												<td>주야</td>
+												<td>주야</td>
+												<td>
+													coord1321@naver.com																									</td>
+												<td>소매</td>
+												<td>														대구 북구 대천로 132																									</td>
+												<td>이현주</td>
+												<td>01041843806</td>
+												<td>01041843806</td>
+												<td>0원</td>
+												<td>0원</td>
+												<td>172.69.169.187</td>
+												<td>2026-04-23</td>
+												<td>2026-04-23</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="modify_info(155810)">수정</button>
+																									</td>
+												<td>
+																										<label class="switch">
+														<input type="checkbox" name="switch" checked="" hidden="" onchange="setting_pushEvent('155810', this)">
+														<span class="switch-style"></span>
+													</label>
+																									</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="login_admin('coord1321%40naver.com')">로그인</button>
+																									</td>
+											</tr>
+																						<tr>
+												<td><input type="checkbox" name="memberId" value="155809"></td>
+												<td>UEZ(유이지)</td>
+												<td>UEZ(유이지)</td>
+												<td>
+													uez0402@naver.com																									</td>
+												<td>소매</td>
+												<td>														경북 구미시 옥계2공단로 282																									</td>
+												<td>이정인</td>
+												<td>01030820406</td>
+												<td>01030820406</td>
+												<td>0원</td>
+												<td>55,000원</td>
+												<td>162.158.108.20</td>
+												<td>2026-05-03</td>
+												<td>2026-04-20</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="modify_info(155809)">수정</button>
+																									</td>
+												<td>
+																										<label class="switch">
+														<input type="checkbox" name="switch" checked="" hidden="" onchange="setting_pushEvent('155809', this)">
+														<span class="switch-style"></span>
+													</label>
+																									</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="login_admin('uez0402%40naver.com')">로그인</button>
+																									</td>
+											</tr>
+																						<tr>
+												<td><input type="checkbox" name="memberId" value="155808"></td>
+												<td>데이폼</td>
+												<td>데이폼</td>
+												<td>
+													7888fls@naver.com																									</td>
+												<td>소매</td>
+												<td>														경기 양주시 옥정동로1길 63																									</td>
+												<td>김혜린</td>
+												<td>01027760501</td>
+												<td>01027760501</td>
+												<td>0원</td>
+												<td>0원</td>
+												<td>172.70.206.127</td>
+												<td>2026-04-17</td>
+												<td>2026-04-17</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="modify_info(155808)">수정</button>
+																									</td>
+												<td>
+																										<label class="switch">
+														<input type="checkbox" name="switch" checked="" hidden="" onchange="setting_pushEvent('155808', this)">
+														<span class="switch-style"></span>
+													</label>
+																									</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="login_admin('7888fls%40naver.com')">로그인</button>
+																									</td>
+											</tr>
+																						<tr>
+												<td><input type="checkbox" name="memberId" value="155807"></td>
+												<td>스퀘어드</td>
+												<td>스퀘어드</td>
+												<td>
+													squared001@naver.com																									</td>
+												<td>소매</td>
+												<td>														광주 광산구 용아로 534-34																									</td>
+												<td>김현호</td>
+												<td>01034355833</td>
+												<td>01034355833</td>
+												<td>0원</td>
+												<td>0원</td>
+												<td>172.70.49.157</td>
+												<td>2026-04-27</td>
+												<td>2026-04-14</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="modify_info(155807)">수정</button>
+																									</td>
+												<td>
+																										<label class="switch">
+														<input type="checkbox" name="switch" checked="" hidden="" onchange="setting_pushEvent('155807', this)">
+														<span class="switch-style"></span>
+													</label>
+																									</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="login_admin('squared001%40naver.com')">로그인</button>
+																									</td>
+											</tr>
+																						<tr>
+												<td><input type="checkbox" name="memberId" value="155806"></td>
+												<td>투원</td>
+												<td>투원</td>
+												<td>
+													Twowon6799																										<a href="https://Twowon6799.newtalk.kr/" target="_blank"><img src="/www/data/files/etc/cart.jpg" width="20">
+																									</a></td>
+												<td>도매</td>
+												<td>														디오트														2														C21																									</td>
+												<td></td>
+												<td></td>
+												<td>01048176799</td>
+												<td>0원</td>
+												<td>0원</td>
+												<td>172.71.215.135</td>
+												<td>2026-04-13</td>
+												<td>2026-04-13</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="modify_info(155806)">수정</button>
+																									</td>
+												<td>
+																										<label class="switch">
+														<input type="checkbox" name="switch" checked="" hidden="" onchange="setting_pushEvent('155806', this)">
+														<span class="switch-style"></span>
+													</label>
+																									</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="login_admin('Twowon6799')">로그인</button>
+																									</td>
+											</tr>
+																						<tr>
+												<td><input type="checkbox" name="memberId" value="155805"></td>
+												<td>민프민</td>
+												<td>민프민</td>
+												<td>
+													aaaa88222@naver.com																									</td>
+												<td>소매</td>
+												<td>														서울 관악구 복은4길 26																									</td>
+												<td>최민경</td>
+												<td>01082993302</td>
+												<td>01082993302</td>
+												<td>0원</td>
+												<td>104,500원</td>
+												<td>141.101.84.27</td>
+												<td>2026-05-05</td>
+												<td>2026-04-10</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="modify_info(155805)">수정</button>
+																									</td>
+												<td>
+																										<label class="switch">
+														<input type="checkbox" name="switch" checked="" hidden="" onchange="setting_pushEvent('155805', this)">
+														<span class="switch-style"></span>
+													</label>
+																									</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="login_admin('aaaa88222%40naver.com')">로그인</button>
+																									</td>
+											</tr>
+																						<tr>
+												<td><input type="checkbox" name="memberId" value="155804"></td>
+												<td>인더에어</td>
+												<td>인더에어</td>
+												<td>
+													airme0207@gmail.com																									</td>
+												<td>소매</td>
+												<td>														서울 성북구 정릉동 674-5																									</td>
+												<td>김지혜</td>
+												<td>01048976166</td>
+												<td>01048976166</td>
+												<td>0원</td>
+												<td>0원</td>
+												<td>172.71.147.236</td>
+												<td>2026-04-10</td>
+												<td>2026-04-10</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="modify_info(155804)">수정</button>
+																									</td>
+												<td>
+																										<label class="switch">
+														<input type="checkbox" name="switch" checked="" hidden="" onchange="setting_pushEvent('155804', this)">
+														<span class="switch-style"></span>
+													</label>
+																									</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="login_admin('airme0207%40gmail.com')">로그인</button>
+																									</td>
+											</tr>
+																						<tr>
+												<td><input type="checkbox" name="memberId" value="155803"></td>
+												<td>룩테이크</td>
+												<td>룩테이크</td>
+												<td>
+													takeaura25@looktake.io																									</td>
+												<td>소매</td>
+												<td>														서울 서초구 강남대로51길 10																									</td>
+												<td>이태민</td>
+												<td>01091058907</td>
+												<td>01091058907</td>
+												<td>0원</td>
+												<td>198,000원</td>
+												<td>162.159.108.12</td>
+												<td>2026-04-27</td>
+												<td>2026-04-08</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="modify_info(155803)">수정</button>
+																									</td>
+												<td>
+																										<label class="switch">
+														<input type="checkbox" name="switch" checked="" hidden="" onchange="setting_pushEvent('155803', this)">
+														<span class="switch-style"></span>
+													</label>
+																									</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="login_admin('takeaura25%40looktake.io')">로그인</button>
+																									</td>
+											</tr>
+																						<tr>
+												<td><input type="checkbox" name="memberId" value="155802"></td>
+												<td>미닛</td>
+												<td>미닛</td>
+												<td>
+													CHICHEEYA@NAVER.COM																									</td>
+												<td>소매</td>
+												<td>														경남 거제시 장평로 37																									</td>
+												<td>윤자희</td>
+												<td>01099443430</td>
+												<td>01099443430</td>
+												<td>0원</td>
+												<td>0원</td>
+												<td>162.159.98.101</td>
+												<td>2026-04-24</td>
+												<td>2026-04-07</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="modify_info(155802)">수정</button>
+																									</td>
+												<td>
+																										<label class="switch">
+														<input type="checkbox" name="switch" checked="" hidden="" onchange="setting_pushEvent('155802', this)">
+														<span class="switch-style"></span>
+													</label>
+																									</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="login_admin('CHICHEEYA%40NAVER.COM')">로그인</button>
+																									</td>
+											</tr>
+																						<tr>
+												<td><input type="checkbox" name="memberId" value="155801"></td>
+												<td>디아렌</td>
+												<td>디아렌</td>
+												<td>
+													nyjuana@kakao.com																									</td>
+												<td>소매</td>
+												<td>														경기 화성시 병점구 병점노을4로 19																									</td>
+												<td>송나윤</td>
+												<td>01063381210</td>
+												<td>01098501037</td>
+												<td>0원</td>
+												<td>0원</td>
+												<td>162.159.110.29</td>
+												<td>2026-04-07</td>
+												<td>2026-04-07</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="modify_info(155801)">수정</button>
+																									</td>
+												<td>
+																										<label class="switch">
+														<input type="checkbox" name="switch" checked="" hidden="" onchange="setting_pushEvent('155801', this)">
+														<span class="switch-style"></span>
+													</label>
+																									</td>
+												<td>
+																										<button class="button primary small outline" type="button" onclick="login_admin('nyjuana%40kakao.com')">로그인</button>
+																									</td>
+											</tr>
+																					</tbody>
+									</table>
+								</div>
+							</div>
+						</div>
+					</div>
+					
+				</div>
+				
+			</div>
+
+			<div class="page pagination"><a href="/root/members?schKey=&amp;codeKey=&amp;schVal=&amp;sDate=&amp;eDate=&amp;last_login=&amp;created=&amp;sortKind=&amp;sortType=&amp;schCenter=&amp;enter_store=&amp;deposit_yn=&amp;page=1" class="btn_arrow" id="prev_paging" title="첫페이지"><img src="/views/assets/images/arrow_left2.png" alt="첫페이지"></a><a href="/root/members?schKey=&amp;codeKey=&amp;schVal=&amp;sDate=&amp;eDate=&amp;last_login=&amp;created=&amp;sortKind=&amp;sortType=&amp;schCenter=&amp;enter_store=&amp;deposit_yn=&amp;page=1" class="btn_arrow" id="prev_paging" title="이전페이지"><img src="/views/assets/images/arrow_left1.png" alt="이전페이지"></a><span class="num"><a href="/root/members?schKey=&amp;codeKey=&amp;schVal=&amp;sDate=&amp;eDate=&amp;last_login=&amp;created=&amp;sortKind=&amp;sortType=&amp;schCenter=&amp;enter_store=&amp;deposit_yn=&amp;page=1" class="on">1</a><a href="/root/members?schKey=&amp;codeKey=&amp;schVal=&amp;sDate=&amp;eDate=&amp;last_login=&amp;created=&amp;sortKind=&amp;sortType=&amp;schCenter=&amp;enter_store=&amp;deposit_yn=&amp;page=2">2</a><a href="/root/members?schKey=&amp;codeKey=&amp;schVal=&amp;sDate=&amp;eDate=&amp;last_login=&amp;created=&amp;sortKind=&amp;sortType=&amp;schCenter=&amp;enter_store=&amp;deposit_yn=&amp;page=3">3</a><a href="/root/members?schKey=&amp;codeKey=&amp;schVal=&amp;sDate=&amp;eDate=&amp;last_login=&amp;created=&amp;sortKind=&amp;sortType=&amp;schCenter=&amp;enter_store=&amp;deposit_yn=&amp;page=4">4</a><a href="/root/members?schKey=&amp;codeKey=&amp;schVal=&amp;sDate=&amp;eDate=&amp;last_login=&amp;created=&amp;sortKind=&amp;sortType=&amp;schCenter=&amp;enter_store=&amp;deposit_yn=&amp;page=5">5</a><a href="/root/members?schKey=&amp;codeKey=&amp;schVal=&amp;sDate=&amp;eDate=&amp;last_login=&amp;created=&amp;sortKind=&amp;sortType=&amp;schCenter=&amp;enter_store=&amp;deposit_yn=&amp;page=6">6</a><a href="/root/members?schKey=&amp;codeKey=&amp;schVal=&amp;sDate=&amp;eDate=&amp;last_login=&amp;created=&amp;sortKind=&amp;sortType=&amp;schCenter=&amp;enter_store=&amp;deposit_yn=&amp;page=7">7</a><a href="/root/members?schKey=&amp;codeKey=&amp;schVal=&amp;sDate=&amp;eDate=&amp;last_login=&amp;created=&amp;sortKind=&amp;sortType=&amp;schCenter=&amp;enter_store=&amp;deposit_yn=&amp;page=8">8</a><a href="/root/members?schKey=&amp;codeKey=&amp;schVal=&amp;sDate=&amp;eDate=&amp;last_login=&amp;created=&amp;sortKind=&amp;sortType=&amp;schCenter=&amp;enter_store=&amp;deposit_yn=&amp;page=9">9</a><a href="/root/members?schKey=&amp;codeKey=&amp;schVal=&amp;sDate=&amp;eDate=&amp;last_login=&amp;created=&amp;sortKind=&amp;sortType=&amp;schCenter=&amp;enter_store=&amp;deposit_yn=&amp;page=10">10</a></span><a href="/root/members?schKey=&amp;codeKey=&amp;schVal=&amp;sDate=&amp;eDate=&amp;last_login=&amp;created=&amp;sortKind=&amp;sortType=&amp;schCenter=&amp;enter_store=&amp;deposit_yn=&amp;page=2" class="btn_arrow" id="next_paging" title="다음페이지"><img src="/views/assets/images/arrow_right1.png" alt="다음페이지"></a><a href="/root/members?schKey=&amp;codeKey=&amp;schVal=&amp;sDate=&amp;eDate=&amp;last_login=&amp;created=&amp;sortKind=&amp;sortType=&amp;schCenter=&amp;enter_store=&amp;deposit_yn=&amp;page=614" class="btn_arrow" id="next_paging" title="마지막페이지"><img src="/views/assets/images/arrow_right2.png" alt="마지막페이지"></a></div>
+		</main>
+
+		<!-- 도매회원 Modal -->
+		<div class="modal fade modal-form" id="adminmodify_wholesaler" tabindex="-1" aria-labelledby="adminmodifyLabel1" aria-hidden="true">
+			<div class="modal-dialog modal-dialog-centered mt-4">
+				<div class="modal-content">
+					<div class="modal-head" style="padding: 20px 15px 0 15px;">
+						<h3 class="modal-head-title">개인정보수정</h3>
+						<button type="button" class="modal-close" data-bs-dismiss="modal" aria-label="Close"></button>
+					</div>
+					<div class="modal-body">
+						<div class="form-group">
+							<label class="label">아이디</label>
+							<input name="userid" type="text" class="input big" placeholder="">							
+						</div>
+						<div class="form-group">
+							<label class="label">비밀번호(변경시에만 입력)</label>
+							<input name="password" type="text" class="input big" placeholder="비밀번호 (6자리 이상의 영문+숫자 조합)">
+						</div>
+						<div class="form-group">
+							<label class="label">비밀번호 확인</label>
+							<input name="password_again" type="text" class="input big" placeholder="비밀번호 확인">
+						</div>
+						<div class="form-group">
+							<label class="label">이메일</label>
+							<input name="user_email" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">사용자명</label>
+<input name="username" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">매장명(도매사이트명)</label>
+							<input name="shop_name" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group flex-row">
+							<label class="label">상가</label>
+							<select id="" name="shopping_center" class="select big">
+							</select>
+						</div>
+						<div class="form-group">
+							<label class="label">층</label>
+							<select id="" name="shopping_center_floor" class="select big">
+								<option value="">층</option>
+							</select>
+						</div>
+						<div class="form-group">
+							<label class="label">호수</label>
+							<select id="" name="shopping_center_number" class="select big">
+								<option value="">호수</option>
+							</select>
+						</div>
+						<div class="form-group">
+							<label class="label">매장호수</label>
+							<input name="shop_num" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">상가 주소</label>
+							<div class="btn_absolute">
+								<input name="shop_zip1" type="text" class="input big" placeholder="우편번호" readonly="">
+								<button class="button dark small" onclick="execDaumPostcode('shop')">주소찾기</button>
+							</div>
+							<div id="shop_wrap" style="display:none;border:1px solid;width:100%;height:300px;margin:5px 0;position:relative">
+								<img src="//t1.daumcdn.net/postcode/resource/images/close.png" id="btnFoldWrap2" style="cursor:pointer;position:absolute;right:0px;top:-1px;z-index:1" onclick="foldDaumPostcode('shop')" alt="접기 버튼">
+							</div>
+							<input name="shop_addr1" type="text" class="input big my-1" placeholder="주소">
+							<input name="shop_addr2" type="text" class="input big" placeholder="상세주소">
+						</div>
+						<div class="form-group">
+							<label class="label">매장 휴대폰1(인증휴대폰)</label>
+							<input name="shop_staff_hp" type="text" class="input big" placeholder="하이픈(-)없이 숫자만 입력">
+						</div>
+<div class="form-group">
+							<label class="label">담당자명</label>
+							<input name="shop_staff_name" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">매장 휴대폰2</label>
+							<input name="shop_tel" type="text" class="input big" placeholder="하이픈(-)없이 숫자만 입력">
+						</div>
+						<div class="form-group">
+							<label class="label">노출 휴대폰</label>
+							<input name="shop_show_hp" type="text" class="input big" placeholder="노출 연락처를 입력하세요.">
+						</div>
+						<div class="form-group flex-row">
+							<label class="label">계좌번호</label>
+							<select id="" name="shop_bank" class="select big">
+								<option value="">은행명</option>
+								<option value="국민">국민</option>
+								<option value="기업">기업</option>
+								<option value="농협">농협</option>
+								<option value="신한(구조흥포함)">신한(구조흥포함)</option>
+								<option value="우체국">우체국</option>
+								<option value="SC(스탠다드차타드)">SC(스탠다드차타드)</option>
+								<option value="하나(구외환포함)">하나(구외환포함),</option>
+								<option value="한국씨티(구한미)">한국씨티(구한미)</option>
+								<option value="우리">우리</option>
+								<option value="경남">경남</option>
+								<option value="광주">광주</option>
+								<option value="대구">대구</option>
+								<option value="도이치">도이치</option>
+								<option value="부산">부산</option>
+								<option value="산업">산업</option>
+								<option value="수협">수협</option>
+								<option value="전북">전북</option>
+								<option value="제주">제주</option>
+								<option value="새마을금고">새마을금고</option>
+								<option value="신용협동조합">신용협동조합</option>
+								<option value="산림조합">산림조합</option>
+								<option value="홍콩상하이(HSBC)">홍콩상하이(HSBC)</option>
+								<option value="저축은행">저축은행</option>
+								<option value="뱅크오브아메리카">뱅크오브아메리카</option>
+								<option value="케이뱅크">케이뱅크</option>
+								<option value="카카오뱅크">카카오뱅크</option>
+								<option value="제이피모간체이스">제이피모간체이스</option>
+								<option value="비엔피파리바">비엔피파리바</option>
+								<option value="중국건설은행">중국건설은행</option>
+								<option value="중국공상">중국공상</option>
+								<option value="중국은행">중국은행</option>
+							</select>
+							<input name="shop_account" type="text" class="input big my-1" placeholder="하이픈(-)없이 숫자만 입력">
+							<input name="shop_account_name" type="text" class="input big" placeholder="예금자명">
+						</div>
+						<div class="form-group">
+							<label class="label">사업자명</label>
+							<input name="business_name" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">사업자등록번호</label>
+							<input name="shop_taxid" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">사업자등록증 사본</label>
+							<div class="btn_absolute">
+								<input name="shop_taxid_copy_old" type="text" class="input big" placeholder="" readonly="">
+								<button id="shop_taxid_copy_btn_w" class="button dark small" data-bs-toggle="collapse" data-bs-target="#collapseExample2" aria-expanded="false" aria-controls="collapseExample2">파일보기</button>
+								<div class="collapse" id="collapseExample2">
+									<div class="card card-body">
+										<img name="shop_taxid_copy_img" src="">
+									</div>
+								</div>
+							</div>
+							<div class="btn_absolute mt-1">
+								<input name="file_temp" type="text" class="input big" placeholder="5MB이하의 JPG, PNG, BMP, GIF">
+								<button class="button dark small" onclick="click_file('4')">파일선택</button>
+								<input type="file" name="shop_taxid_copy" style="display : none;">
+							</div>
+						</div>
+						<div class="form-group">
+							<label class="label">대표자명</label>
+							<input name="delegate_name" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">대표자 휴대폰</label>
+							<input name="delegate_hp" type="text" class="input big" placeholder="하이픈(-)없이 숫자만 입력">
+						</div>
+						<div class="form-group">
+							<label class="label">사무실 연락처</label>
+							<input name="office_tel" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">사무실 주소</label>
+							<div class="btn_absolute">
+								<input name="office_zip1" type="text" class="input big" placeholder="우편번호" readonly="">
+								<button class="button dark small" onclick="execDaumPostcode('office')">주소찾기</button>
+							</div>
+							<div id="office_wrap" style="display:none;border:1px solid;width:100%;height:300px;margin:5px 0;position:relative">
+								<img src="//t1.daumcdn.net/postcode/resource/images/close.png" id="btnFoldWrap2" style="cursor:pointer;position:absolute;right:0px;top:-1px;z-index:1" onclick="foldDaumPostcode('office')" alt="접기 버튼">
+							</div>
+							<input name="office_addr1" type="text" class="input big my-1" placeholder="주소">
+							<input name="office_addr2" type="text" class="input big" placeholder="상세주소">
+						</div>
+						<div class="form-group">
+							<label class="label">카카오톡 ID</label>
+							<input name="kakao_id" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">카카오톡 연결 URL</label>
+							<input name="kakao_link_url" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">WeChat ID</label>
+							<input name="shop_wechat_id" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">Instagram ID</label>
+							<input name="shop_instagram_id" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">카페24 ID</label>
+							<input name="danharooid" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">사방넷 매입처 ID</label>
+							<input name="sabangnet_id" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">브랜드 컨셉</label>
+							<div name="shop_concept_list" class="form_checkbox_group">
+							</div>
+						</div>
+						<div class="form-group">
+							<label class="label">타켓 성별</label>
+							<div name="target_sex_list" class="form_checkbox_group">
+							</div>
+						</div>
+						<div class="form-group">
+							<label class="label">타켓 연령</label>
+							<div name="target_age_list" class="form_checkbox_group">
+							</div>
+						</div>
+						<div class="form-group">
+							<label class="label">타이틀</label>
+							<input name="shop_title_meta" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">소유확인 네이버 HTML - content</label>
+							<input name="shop_naver_meta" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">소유확인 구글 HTML - content</label>
+							<input name="shop_google_meta" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">회사 소개</label>
+<!-- 							<input name="shop_description" type="text" class="input big" placeholder=""> -->
+							<textarea name="shop_description" class="textarea" placeholder=""></textarea>
+						</div>
+						<div class="form-group">
+							<label class="label">브랜드</label>
+							<select id="" name="brandEtc" class="select big">
+								<option value="">메인 선택</option>
+								<option value="린다샵">린다샵</option>
+								<option value="시크블랙">시크블랙</option>
+								<option value="리엘라">리엘라</option>
+								<option value="미미야">미미야</option>
+								<option value="무드인더">무드인더</option>
+								<option value="배러스윗">배러스윗</option>
+								<option value="단하루">단하루</option>
+							</select>
+							<select id="" name="brandEtcSub1" class="select big">
+								<option value="">서브1 선택</option>
+								<option value="린다샵">린다샵</option>
+								<option value="시크블랙">시크블랙</option>
+								<option value="리엘라">리엘라</option>
+								<option value="미미야">미미야</option>
+								<option value="무드인더">무드인더</option>
+								<option value="배러스윗">배러스윗</option>
+								<option value="단하루">단하루</option>
+							</select>
+							<select id="" name="brandEtcSub2" class="select big">
+								<option value="">서브2 선택</option>
+								<option value="린다샵">린다샵</option>
+								<option value="시크블랙">시크블랙</option>
+								<option value="리엘라">리엘라</option>
+								<option value="미미야">미미야</option>
+								<option value="무드인더">무드인더</option>
+								<option value="배러스윗">배러스윗</option>
+								<option value="단하루">단하루</option>
+							</select>							
+						</div>
+						<div class="form-group">
+							<label class="label">입점여부</label>
+							<select id="" name="enter_store_yn" class="select big">
+								<option value="N">N</option>
+								<option value="Y">Y</option>
+							</select>							
+						</div>
+						<div class="form-group">
+							<label class="label">미니몰 승인</label>
+							<label class="switch">
+								<input type="checkbox" name="activated" value="1" hidden="">
+								<span class="switch-style"></span>
+							</label>
+						</div>
+						<div class="form-group">
+							<label class="label">이미지 다운</label>
+							<label class="switch">
+								<input type="checkbox" name="down_level" value="1" hidden="">
+								<span class="switch-style"></span>
+							</label>
+						</div>
+						<div class="form-group">
+							<label class="label">로그인 사용 유무</label>
+							<label class="switch">
+								<input type="checkbox" name="mall_login_used" value="Y" hidden="">
+								<span class="switch-style"></span>
+							</label>
+						</div>
+						<div class="form-group">
+							<label class="">NEW ITEMS 보기 옵션 - PC</label>
+							<span style="float:right;display:inline;">
+								<input type="radio" name="shop_new_items_pc" value="2" id="shop_new_items_pc_2" checked="">
+								<label for="shop_new_items_pc_2" style="padding-right:20px;">2행</label>
+								<input type="radio" name="shop_new_items_pc" value="3" id="shop_new_items_pc_3">
+								<label for="shop_new_items_pc_3">3행</label>
+							</span>
+						</div>
+						<div class="form-group">
+							<label class="">BEST ITEMS 보기 옵션 - PC</label>
+							<span style="float:right;display:inline;">
+								<input type="radio" name="shop_best_items_pc" value="2" id="shop_best_items_pc_2" checked="">
+								<label for="shop_best_items_pc_2" style="padding-right:20px;">2행</label>
+								<input type="radio" name="shop_best_items_pc" value="3" id="shop_best_items_pc_3">
+								<label for="shop_best_items_pc_3">3행</label>
+							</span>
+						</div>
+						<div class="form-group">
+							<label class="">NEW ITEMS 보기 옵션 - APP</label>
+							<span style="float:right;display:inline;">
+								<input type="radio" name="shop_new_items_mobile" value="2" id="shop_new_items_mobile_2" checked="">
+								<label for="shop_new_items_mobile_2" style="padding-right:20px;">2행</label>
+								<input type="radio" name="shop_new_items_mobile" value="3" id="shop_new_items_mobile_3">
+								<label for="shop_new_items_mobile_3">3행</label>
+							</span>
+						</div>
+						<div class="form-group">
+							<label class="">BEST ITEMS 보기 옵션 - APP</label>
+							<span style="float:right;display:inline;">
+								<input type="radio" name="shop_best_items_mobile" value="1" id="shop_best_items_mobile_1" checked="">
+								<label for="shop_best_items_mobile_1" style="padding-right:20px;">1행</label>
+								<input type="radio" name="shop_best_items_mobile" value="2" id="shop_best_items_mobile_2">
+								<label for="shop_best_items_mobile_2">2행</label>
+							</span>
+						</div>
+						<!--div class="form-group">
+							<label class="label">신상 목록 옵션</label>
+							???
+						</div-->
+						<div class="form-group">
+							<label class="label"><a href="" id="qrCodeLink" target="_blank">QR 다운로드(새창)</a></label>
+						</div>
+					</div>
+					<div class="modal-bottom">
+						<div class="button-group">
+						<button class="button primary block round" onclick="userinfoUpdate('4')">저장하기</button>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- 소매회원 Modal -->
+		<div class="modal fade modal-form" id="adminmodify_retailer" tabindex="-1" aria-labelledby="adminmodifyLabel2" aria-hidden="true">
+			<div class="modal-dialog modal-dialog-centered mt-4">
+				<div class="modal-content">
+					<div class="modal-head" style="padding: 20px 15px 0 15px;">
+						<h3 class="modal-head-title">개인정보수정</h3>
+						<button type="button" class="modal-close" data-bs-dismiss="modal" aria-label="Close"></button>
+					</div>
+					<div class="modal-body">
+						<div class="form-group">
+							<label class="label">아이디</label>
+							<input name="userid" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">비밀번호(변경시에만 입력)</label>
+							<input name="password" type="text" class="input big" placeholder="비밀번호 (6자리 이상의 영문+숫자 조합)">
+						</div>
+						<div class="form-group">
+							<label class="label">비밀번호 확인</label>
+							<input name="password_again" type="text" class="input big" placeholder="비밀번호 확인">
+						</div>
+						<div class="form-group" style="display : none;">
+							<label class="label">이메일</label>
+							<input name="user_email" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">상호</label>
+							<input name="shop_name" type="text" class="input big" placeholder="">
+							<label class="label mt-2">매장주소</label>
+							<div class="btn_absolute">
+								<input name="shop_zip1" type="text" class="input big" placeholder="우편번호" readonly="">
+								<button class="button dark small" onclick="execDaumPostcode('shop')">주소찾기</button>
+							</div>
+							<div id="shop_wrap" style="display:none;border:1px solid;width:100%;height:300px;margin:5px 0;position:relative">
+								<img src="//t1.daumcdn.net/postcode/resource/images/close.png" id="btnFoldWrap1" style="cursor:pointer;position:absolute;right:0px;top:-1px;z-index:1" onclick="foldDaumPostcode('shop')" alt="접기 버튼">
+							</div>
+							<input name="shop_addr1" type="text" class="input big my-1" placeholder="주소">
+							<input name="shop_addr2" type="text" class="input big" placeholder="상세주소">
+							<input type="hidden" name="shop_addr3" value="">
+							<input type="hidden" name="shop_addr4" value="">
+						</div>
+						<div class="form-group">
+							<label class="label">매장 휴대폰1(인증휴대폰)</label>
+							<input name="shop_staff_hp" type="text" class="input big" placeholder="하이픈(-)없이 숫자만 입력">
+						</div>
+						<div class="form-group">
+							<label class="label">매장 휴대폰2</label>
+							<input name="shop_tel" type="text" class="input big" placeholder="하이픈(-)없이 숫자만 입력">
+						</div>
+						<div class="form-group flex-row">
+							<label class="label">계좌번호</label>
+							<select id="" name="shop_bank" class="select big">
+								<option value="">은행명</option>
+								<option value="국민">국민</option>
+								<option value="기업">기업</option>
+								<option value="농협">농협</option>
+								<option value="신한(구조흥포함)">신한(구조흥포함)</option>
+								<option value="우체국">우체국</option>
+								<option value="SC(스탠다드차타드)">SC(스탠다드차타드)</option>
+								<option value="하나(구외환포함)">하나(구외환포함),</option>
+								<option value="한국씨티(구한미)">한국씨티(구한미)</option>
+								<option value="우리">우리</option>
+								<option value="경남">경남</option>
+								<option value="광주">광주</option>
+								<option value="대구">대구</option>
+								<option value="도이치">도이치</option>
+								<option value="부산">부산</option>
+								<option value="산업">산업</option>
+								<option value="수협">수협</option>
+								<option value="전북">전북</option>
+								<option value="제주">제주</option>
+								<option value="새마을금고">새마을금고</option>
+								<option value="신용협동조합">신용협동조합</option>
+								<option value="산림조합">산림조합</option>
+								<option value="홍콩상하이(HSBC)">홍콩상하이(HSBC)</option>
+								<option value="저축은행">저축은행</option>
+								<option value="뱅크오브아메리카">뱅크오브아메리카</option>
+								<option value="케이뱅크">케이뱅크</option>
+								<option value="카카오뱅크">카카오뱅크</option>
+								<option value="제이피모간체이스">제이피모간체이스</option>
+								<option value="비엔피파리바">비엔피파리바</option>
+								<option value="중국건설은행">중국건설은행</option>
+								<option value="중국공상">중국공상</option>
+								<option value="중국은행">중국은행</option>
+							</select>
+							<input name="shop_account" type="text" class="input big my-1" placeholder="하이픈(-)없이 숫자만 입력">
+							<input name="shop_account_name" type="text" class="input big" placeholder="예금자명">
+						</div>
+						<div class="form-group">
+							<label class="label">사업자명</label>
+							<input name="business_name" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">사업자등록번호</label>
+							<input name="shop_taxid" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">사업자등록증 사본</label>
+							<div class="btn_absolute">
+								<input name="shop_taxid_copy_old" type="text" class="input big" placeholder="" readonly="">
+								<button id="shop_taxid_copy_btn_r" class="button dark small" data-bs-toggle="collapse" data-bs-target="#collapseExample1" aria-expanded="false" aria-controls="collapseExample1">파일보기</button>
+								<div class="collapse" id="collapseExample1">
+									<div class="card card-body">
+										<img name="shop_taxid_copy_img" src="">
+									</div>
+								</div>
+							</div>
+							<div class="btn_absolute mt-1">
+								<input name="file_temp" type="text" class="input big" placeholder="5MB이하의 JPG, PNG, BMP, GIF">
+								<button class="button dark small" onclick="click_file('3')">파일선택</button>
+								<input type="file" name="shop_taxid_copy" style="display : none;">
+							</div>
+						</div>
+						<div class="form-group">
+							<label class="label">대표자명</label>
+							<input name="delegate_name" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">대표자 휴대폰</label>
+							<input name="delegate_hp" type="text" class="input big" placeholder="하이픈(-)없이 숫자만 입력">
+						</div>
+						<div class="form-group">
+							<label class="label">카카오톡 ID</label>
+							<input name="kakao_id" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">카페24 ID</label>
+							<input name="danharooid" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">판매방식</label>
+							<div name="sale_gb_list" class="form_checkbox_group">
+							</div>
+						</div>
+						<div class="form-group">
+							<label class="label">판매형태</label>
+							<div name="sale_form_list" class="form_checkbox_group">
+							</div>
+						</div>
+						<div class="form-group">
+							<label class="label">스타일</label>
+							<div name="target_style_list" class="form_checkbox_group">
+							</div>
+						</div>
+						<div class="form-group">
+							<label class="label">타켓 연령</label>
+							<div name="target_age_list" class="form_checkbox_group">
+							</div>
+						</div>
+					</div>
+					<div class="modal-bottom">
+						<div class="button-group">
+							<button class="button primary block round" onclick="userinfoUpdate('3')">저장하기</button>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<form id="frmSearch" action="/root/members" method="post">
+			<input id="f_schKey" type="hidden" name="schKey" value="">
+			<input id="f_codeKey" type="hidden" name="codeKey" value="">
+			<input id="f_schVal" type="hidden" name="schVal" value="">
+			<input id="f_sDate" type="hidden" name="sDate" value="">
+			<input id="f_eDate" type="hidden" name="eDate" value="">
+			<input id="f_last_login" type="hidden" name="last_login" value="">
+			<input id="f_created" type="hidden" name="created" value="">
+			<input id="f_sortKind" type="hidden" name="sortKind" value="">
+			<input id="f_sortType" type="hidden" name="sortType" value="">
+			<input id="f_schCenter" type="hidden" name="schCenter" value="">
+			<input id="f_enter_store" type="hidden" name="enter_store" value="">
+			<input id="f_deposit" type="hidden" name="deposit_yn" value="">
+		</form>
+
+
+
+		<!-- 신규 회원 가입 -->
+		<div class="modal fade modal-form" id="memberNewRegister" tabindex="-1" aria-labelledby="adminmodifyLabel2" aria-hidden="true" style="align:center;">
+			<div class="modal-dialog modal-dialog-centered mt-4">
+				<div class="modal-content" style="border:1px solid #000000;width:30%;">
+					<div class="modal-head" style="padding: 20px 15px 0 15px;">
+						<h3 class="modal-head-title">신규회원 간편등록</h3>
+						<button type="button" class="modal-close" data-bs-dismiss="modal" aria-label="Close" onclick="$('#memberNewRegister').hide();"></button>
+					</div>
+					<div class="modal-body">
+						<div class="form-group">	
+							<input type="radio" name="auth_code" value="4" id="auth_code_4" checked="">
+							<label for="auth_code_4" style="padding-right:20px;">도매업체</label>
+							<input type="radio" name="auth_code" value="3" id="auth_code_3">
+							<label for="auth_code_3">소매업체</label>							
+						</div>
+						<div class="form-group">
+							<label class="label">아이디</label>
+							<input name="userid" type="text" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">비밀번호</label>
+							<input name="password" type="password" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">비밀번호 확인</label>
+							<input name="password_again" type="password" class="input big" placeholder="">
+						</div>
+						<div class="form-group">
+							<label class="label">사용자명</label>
+							<input name="username" type="text" class="input big" placeholder="">
+						</div>
+					</div>
+					<div class="modal-bottom">
+						<div class="button-group">
+							<button class="button primary block round" onclick="memberNewRegisterSend()">저장하기</button>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+<!-- 검색결과 엑셀 다운로드용 -->
+<form name="searchExcelDown" id="searchExcelDown" action="/root/memberExcelDown" method="post" target="searchExcelDownFrame">
+	<input type="hidden" name="mode" value="search">
+	<input type="hidden" name="schKey" value="">
+	<input type="hidden" name="codeKey" value="">
+	<input type="hidden" name="schVal" value="">
+	<input type="hidden" name="sDate" value="">
+	<input type="hidden" name="eDate" value="">
+	<input type="hidden" name="last_login" value="">
+	<input type="hidden" name="created" value="">
+	<input type="hidden" name="sortKind" value="">
+	<input type="hidden" name="sortType" value="">
+	<input type="hidden" name="schCenter" value="">
+	<input type="hidden" name="enter_store_yn" value="">
+	<input type="hidden" name="deposit_yn" value="">
+</form>
+
+<iframe id="searchExcelDownFrame" style="display:none;"></iframe>
+
+	<script defer="" src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon="{&quot;version&quot;:&quot;2024.11.0&quot;,&quot;token&quot;:&quot;049bbd65c1434f46b0cdf48a2f180d52&quot;,&quot;r&quot;:1,&quot;server_timing&quot;:{&quot;name&quot;:{&quot;cfCacheStatus&quot;:true,&quot;cfEdge&quot;:true,&quot;cfExtPri&quot;:true,&quot;cfL4&quot;:true,&quot;cfOrigin&quot;:true,&quot;cfSpeedBrain&quot;:true},&quot;location_startswith&quot;:null}}" crossorigin="anonymous"></script>
+
+
+	<script>
+		var today = new Date();
+		var user_id = 0;
+		var temp_user_info = "";
+		
+			$.datepicker.setDefaults({
+				dateFormat: 'yy-mm-dd',
+				prevText: '이전 달',
+				nextText: '다음 달',
+				monthNames: ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'],
+				monthNamesShort: ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'],
+				dayNames: ['일', '월', '화', '수', '목', '금', '토'],
+				dayNamesShort: ['일', '월', '화', '수', '목', '금', '토'],
+				dayNamesMin: ['일', '월', '화', '수', '목', '금', '토'],
+				showMonthAfterYear: true,
+				yearSuffix: '년'
+			});
+
+		function foldDaumPostcode(v) {
+			$('#' + v + '_wrap').hide();
+		}
+
+		function execDaumPostcode(v) {
+			var element_wrap = document.getElementById(v + '_wrap');
+			var currentScroll = Math.max(document.body.scrollTop, document.documentElement.scrollTop);
+			new daum.Postcode({
+				oncomplete: function(data) {
+					var addr = '';
+					var extraAddr = '';
+					
+					if (data.userSelectedType === 'R') addr = data.roadAddress;
+					else addr = data.jibunAddress;
+					
+					//if (data.userSelectedType === 'R'){
+						if (data.bname !== '' && /[동|로|가]$/g.test(data.bname)) extraAddr += data.bname;
+						if (data.buildingName !== '' && data.apartment === 'Y') extraAddr += (extraAddr !== '' ? ', ' + data.buildingName : data.buildingName);
+						if (extraAddr !== '') extraAddr = ' (' + extraAddr + ')';
+					//}
+					
+					$('input[name=' + v + '_zip1]').val(data.zonecode);
+					$('input[name=' + v + '_addr1]').val(data.address);
+					$('input[name=' + v + '_addr2]').focus();
+					element_wrap.style.display = 'none';
+					document.body.scrollTop = currentScroll;
+				},
+				onresize : function(size) {
+				element_wrap.style.height = size.height+'px';
+				},
+				width : '100%',
+				height : '100%'
+			}).embed(element_wrap);
+			element_wrap.style.display = 'block';
+		}
+
+			$( function() {
+			$( "#datepicker1, #datepicker2, #datepicker3, #datepicker4" ).datepicker();
+			
+			if('' == '' && '' == '') {
+				$( "#datepicker1, #datepicker2, #datepicker3, #datepicker4" ).val(getDateStr(today));
+			}else if('' == '') {
+				$( "#datepicker1, #datepicker2" ).val(getDateStr(today));
+				$("#datepicker3").val('');
+				$("#datepicker4").val('');
+			}else if('' == '') {
+				$( "#datepicker3, #datepicker4" ).val(getDateStr(today));
+				$("#datepicker1").val('');
+				$("#datepicker2").val('');
+			}
+
+			// 검색 > 검색 버튼 클릭
+			$("#schBtn").click(function() {
+				if($("#schKey").val() == '') {
+					alert("검색 조건을 선택해주세요");
+					return;
+				}
+				
+				searchMember();
+			});
+
+			// 검색 > ENTER
+			$("#searchVal").on("keyup", function(key) {
+				if(key.keyCode == 13) {
+					searchMember();
+				}
+			});
+
+			// 회원구분 > 전체 버튼 클릭
+			$("#codeKey_0").click(function() {
+				for(var i=0; i<$("button[name=codeKey]").length;i++) {
+					$("button[name=codeKey]")[i].className = "button small outline2 ";
+				}
+				$(this).addClass("active");
+
+				let active_created_btn = '';
+				let active_last_login_btn = '';
+
+				for(var i=0;i<$("button[name=created]").length; i++) {
+					if($("button[name=created]")[i].className.indexOf('active') > -1) {
+						active_created_btn = $("button[name=created]")[i];
+					}
+				}
+
+				for(var i=0;i<$("button[name=last_login]").length; i++) {
+					if($("button[name=last_login]")[i].className.indexOf('active') > -1) {
+						active_last_login_btn = $("button[name=last_login]")[i];
+					}
+				}
+
+				$("#f_created").val(active_created_btn.value);
+				if(active_created_btn.value != "") {
+					$("#f_sDate").val($("#datepicker3").val());
+					$("#f_eDate").val($("#datepicker4").val());
+				}
+
+				$("#f_last_login").val(active_last_login_btn.value);
+				if(active_last_login_btn.value != "") {
+					$("#f_sDate").val($("#datepicker1").val());
+					$("#f_eDate").val($("#datepicker2").val());
+				}
+
+				searchMember();
+			});
+
+			// 회원구분 > 도매 버튼 클릭
+			$("#codeKey_1").click(function() {
+				for(var i=0; i<$("button[name=codeKey]").length;i++) {
+					$("button[name=codeKey]")[i].className = "button small outline2 ";
+				}
+				$(this).addClass("active");
+
+				let active_created_btn = '';
+				let active_last_login_btn = '';
+
+				for(var i=0;i<$("button[name=created]").length; i++) {
+					if($("button[name=created]")[i].className.indexOf('active') > -1) {
+						active_created_btn = $("button[name=created]")[i];
+					}
+				}
+
+				for(var i=0;i<$("button[name=last_login]").length; i++) {
+					if($("button[name=last_login]")[i].className.indexOf('active') > -1) {
+						active_last_login_btn = $("button[name=last_login]")[i];
+					}
+				}
+
+				$("#f_created").val(active_created_btn.value);
+				if(active_created_btn.value != "") {
+					$("#f_sDate").val($("#datepicker3").val());
+					$("#f_eDate").val($("#datepicker4").val());
+				}
+
+				$("#f_last_login").val(active_last_login_btn.value);
+				if(active_last_login_btn.value != "") {
+					$("#f_sDate").val($("#datepicker1").val());
+					$("#f_eDate").val($("#datepicker2").val());
+				}
+
+				searchMember();
+			});
+
+			// 회원구분 > 소매 버튼 클릭
+			$("#codeKey_2").click(function() {
+				for(var i=0; i<$("button[name=codeKey]").length; i++) {
+					$("button[name=codeKey]")[i].className = "button small outline2 ";
+				}
+				$(this).addClass("active");
+
+				let active_created_btn = '';
+				let active_last_login_btn = '';
+				
+				for(var i=0;i<$("button[name=last_login]").length; i++) {
+					if($("button[name=last_login]")[i].className.indexOf('active') > -1) {
+						active_last_login_btn = $("button[name=last_login]")[i];
+					}
+				}
+
+				$("#f_created").val(active_created_btn.value);
+				if(active_created_btn.value != "") {
+					$("#f_sDate").val($("#datepicker3").val());
+					$("#f_eDate").val($("#datepicker4").val());
+				}
+
+				$("#f_last_login").val(active_last_login_btn.value);
+				if(active_last_login_btn.value != "") {
+					$("#f_sDate").val($("#datepicker1").val());
+					$("#f_eDate").val($("#datepicker2").val());
+				}
+				
+				searchMember();
+			});
+
+			//입점 여부 버튼 클릭
+			$("#btn_enter_store_yn").change(function(){
+				
+//				if($(this).hasClass("active")){
+//					$("#btn_enter_store_yn").removeClass("active");
+//					$("#btn_enter_store_yn").val("N");
+//				} else {
+//					$("#btn_enter_store_yn").removeClass("active");
+//					$(this).addClass("active");
+//					$("#btn_enter_store_yn").val("Y");
+//				}						
+
+				let active_created_btn = '';
+				let active_last_login_btn = '';				
+				for(var i=0;i<$("button[name=created]").length; i++) {
+					if($("button[name=created]")[i].className.indexOf('active') > -1) {
+						active_created_btn = $("button[name=created]")[i];
+					}
+				}
+
+				for(var i=0;i<$("button[name=last_login]").length; i++) {
+					if($("button[name=last_login]")[i].className.indexOf('active') > -1) {
+						active_last_login_btn = $("button[name=last_login]")[i];
+					}
+				}
+
+				$("#f_created").val(active_created_btn.value);
+				if(active_created_btn.value != "") {
+					$("#f_sDate").val($("#datepicker3").val());
+					$("#f_eDate").val($("#datepicker4").val());
+				}
+
+				$("#f_last_login").val(active_last_login_btn.value);
+				if(active_last_login_btn.value != "") {
+					$("#f_sDate").val($("#datepicker1").val());
+					$("#f_eDate").val($("#datepicker2").val());
+				}
+				
+				searchMember();
+			})
+			
+			//예치금 버튼 클릭
+			$("#btn_deposit_yn").change(function(){
+				let active_created_btn = '';
+				let active_last_login_btn = '';
+				for(var i=0;i<$("button[name=created]").length; i++) {
+					if($("button[name=created]")[i].className.indexOf('active') > -1) {
+						active_created_btn = $("button[name=created]")[i];
+					}
+				}
+
+				for(var i=0;i<$("button[name=last_login]").length; i++) {
+					if($("button[name=last_login]")[i].className.indexOf('active') > -1) {
+						active_last_login_btn = $("button[name=last_login]")[i];
+					}
+				}
+
+				$("#f_created").val(active_created_btn.value);
+				if(active_created_btn.value != "") {
+					$("#f_sDate").val($("#datepicker3").val());
+					$("#f_eDate").val($("#datepicker4").val());
+				}
+
+				$("#f_last_login").val(active_last_login_btn.value);
+				if(active_last_login_btn.value != "") {
+					$("#f_sDate").val($("#datepicker1").val());
+					$("#f_eDate").val($("#datepicker2").val());
+				}
+				
+				searchMember();
+			})
+
+			// 최종접속일 > 전체 버튼 클릭
+			$("#last_login_0").click(function() {
+				last_login_click($(this));
+
+				$("#datepicker1, #datepicker2").val(getDateStr(today));
+				searchMember();
+			});
+
+			// 최종접속일 > 오늘 버튼 클릭
+			$("#last_login_1").click(function() {
+				last_login_click($(this));
+
+				$("#datepicker1, #datepicker2").val(getDateStr(today));
+				$("#f_sDate").val($("#datepicker1").val());
+				$("#f_eDate").val($("#datepicker2").val());
+				searchMember();
+			});
+
+			// 최종접속일 > 최근 1주일 버튼 클릭
+			$("#last_login_2").click(function() {
+				last_login_click($(this));
+
+				var d = new Date();
+				var dayOfMonth = d.getDate();
+				d.setDate(dayOfMonth - 7);
+
+				$("#datepicker1").val(getDateStr(d));
+				$("#datepicker2").val(getDateStr(today));
+				$("#f_sDate").val($("#datepicker1").val());
+				$("#f_eDate").val($("#datepicker2").val());
+				searchMember();
+			});
+
+			// 최종접속일 > 검색
+			$("#last_login_btn").click(function() {
+				last_login_click($(this));
+
+				$("#f_sDate").val($("#datepicker1").val());
+				$("#f_eDate").val($("#datepicker2").val());
+				searchMember();
+			});
+
+			// 회원가입일 > 전체 버튼 클릭
+			$("#created_0").click(function() {
+				created_click($(this));
+
+				$("#datepicker3, #datepicker4").val(getDateStr(today));
+				searchMember();
+			});
+
+			// 회원가입일 > 오늘 버튼 클릭
+			$("#created_1").click(function() {
+				created_click($(this));
+
+				$("#datepicker3, #datepicker4").val(getDateStr(today));
+				$("#f_sDate").val($("#datepicker3").val());
+				$("#f_eDate").val($("#datepicker4").val());
+				searchMember();
+			});
+
+			// 회원가입일 > 최근 1주일 버튼 클릭
+			$("#created_2").click(function() {
+				created_click($(this));
+
+				var d = new Date();
+				var dayOfMonth = d.getDate();
+				d.setDate(dayOfMonth - 7);
+				$("#datepicker3").val(getDateStr(d));
+				$("#datepicker4").val(getDateStr(today));
+				$("#f_sDate").val($("#datepicker3").val());
+				$("#f_eDate").val($("#datepicker4").val());
+				searchMember();
+			});
+
+			// 회원가입일 > 검색
+			$("#created_btn").click(function() {
+				created_click($(this));
+
+				$("#f_sDate").val($("#datepicker3").val());
+				$("#f_eDate").val($("#datepicker4").val());
+				searchMember();
+			});
+
+			// 현재 예치금 클릭
+			$("#nowDepositBtn").click(function() {
+				orderByValues($(this));
+			});
+
+			// 충전 누적금액 클릭
+			$("#totDepositBtn").click(function() {
+				orderByValues($(this));
+			});
+
+			// 최종접속일 클릭
+			$("#lastLoginBtn").click(function() {
+				orderByValues($(this));
+			});
+
+			// 회원가입일 클릭
+			$("#joinBtn").click(function() {
+				orderByValues($(this));
+			});
+
+			// 소매회원 수정 modal이 닫기
+			$("#adminmodify_retailer").on("hidden.bs.modal", function() {
+				user_id = 0;
+				$("#shop_wrap").hide();
+			});
+
+			// 도매회원 수정 modal이 닫기
+			$("#adminmodify_wholesaler").on("hidden.bs.modal", function() {
+				user_id = 0;
+				$("#office_wrap").hide();
+			});
+
+			// 소매회원 파일선택
+			$("#adminmodify_retailer input[name='shop_taxid_copy']").change(function() {
+				$("#adminmodify_retailer input[name='file_temp']").val($(this).val());
+			});
+
+			// 도매회원 파일선택
+			$("#adminmodify_wholesaler input[name='shop_taxid_copy']").change(function() {
+				$("#adminmodify_wholesaler input[name='file_temp']").val($(this).val());
+			});
+
+			// 도매회원 파일보기 클릭
+			$("#shop_taxid_copy_btn_w").click(function() {
+				if($("#shop_taxid_copy_btn_w").attr("aria-expanded") == "true") {
+					$("#shop_taxid_copy_btn_w").text("파일닫기");
+				}else {
+					$("#shop_taxid_copy_btn_w").text("파일보기");
+				}
+			});
+
+			// 소매회원 파일보기 클릭
+			$("#shop_taxid_copy_btn_r").click(function() {
+				if($("#shop_taxid_copy_btn_r").attr("aria-expanded") == "true") {
+					$("#shop_taxid_copy_btn_r").text("파일닫기");
+				}else {
+					$("#shop_taxid_copy_btn_r").text("파일보기");
+				}
+			});
+
+			// 상가주소 변경
+			$("#schCenter").change(function() {
+				let active_created_btn = '';
+				let active_last_login_btn = '';
+				for(var i=0;i<$("button[name=created]").length; i++) {
+					if($("button[name=created]")[i].className.indexOf('active') > -1) {
+						active_created_btn = $("button[name=created]")[i];
+					}
+				}
+
+				for(var i=0;i<$("button[name=last_login]").length; i++) {
+					if($("button[name=last_login]")[i].className.indexOf('active') > -1) {
+						active_last_login_btn = $("button[name=last_login]")[i];
+					}
+				}
+
+				$("#f_created").val(active_created_btn.value);
+				if(active_created_btn.value != "") {
+					$("#f_sDate").val($("#datepicker3").val());
+					$("#f_eDate").val($("#datepicker4").val());
+				}
+
+				$("#f_last_login").val(active_last_login_btn.value);
+				if(active_last_login_btn.value != "") {
+					$("#f_sDate").val($("#datepicker1").val());
+					$("#f_eDate").val($("#datepicker2").val());
+				}
+
+				searchMember();
+			});
+
+			// 상가 종류 선택으로 인한 층수 변경
+			$("#adminmodify_wholesaler select[name=shopping_center]").change(function() {
+				let bi_id = $(this).val();
+				
+				if(bi_id == '') {
+					return;
+				}else {
+					let formData = new FormData();
+
+					formData.append("bi_id", bi_id);
+
+					$.ajax({
+						type: 'post',
+						url: '/root/get_building_floor_from_center',
+						data: formData,
+						processData: false,
+						contentType: false,
+						dataType: 'json',
+						success: function(data) {
+							if(data.info.success == 'true'){
+								append_select_floor(data.info.data);
+							}
+						},
+						error: function(error) {
+							console.log(error);
+						},
+						complete: function() {}
+					});
+				}
+			});
+
+			// 상가 층 선택으로 인한 호수 변경
+			$("#adminmodify_wholesaler select[name=shopping_center_floor]").change(function() {
+				let bi_id = $("#adminmodify_wholesaler select[name=shopping_center]").val();
+				let floor = $(this).val();
+
+				if(floor == '') {
+					return;
+				}else {
+					let formData = new FormData();
+
+					formData.append("bi_id", bi_id);
+					formData.append("floor", floor);
+
+					$.ajax({
+						type: 'post',
+						url: '/root/get_building_place_from_floor',
+						data: formData,
+						processData: false,
+						contentType: false,
+						dataType: 'json',
+						success: function(data) {
+							if(data.info.success == 'true'){
+								append_select_palce(data.info.data);
+							}
+						},
+						error: function(error) {
+							console.log(error);
+						},
+						complete: function() {}
+					});
+				}
+			});
+		});
+			
+		//	회원 검색 (검색, 회원구분)
+		function searchMember() {
+			if($("#schKey").val() == '' && $("#searchVal").val() != '') {
+				alert("검색 조건을 선택해주세요");
+				return;
+			}
+
+			var codeKey = ''; 
+			for(var i=0; i<$("button[name=codeKey]").length;i++) {
+				if($("button[name=codeKey]")[i].className.indexOf("active") > -1) {
+					codeKey = $("button[name=codeKey]")[i].value;
+				}
+			}
+			
+			$("#f_schKey").val($("#schKey").val());
+			$("#f_codeKey").val(codeKey);
+			$("#f_schVal").val($("#searchVal").val());
+			$("#f_schCenter").val($("#schCenter").val());
+			$("#f_enter_store").val($("#btn_enter_store_yn").val());
+			$("#f_deposit").val($("#btn_deposit_yn").val());
+
+			var form = document.getElementById("frmSearch");
+			form.submit();
+		}
+
+		// 날짜 데이터 문자형 날짜로 만들기 Y-m-d
+		function getDateStr(m_date) {
+			var m_year = m_date.getFullYear();
+			var m_month = (m_date.getMonth() + 1 < 10) ? "0" + (m_date.getMonth() + 1) : (m_date.getMonth() + 1);
+			var m_date = (m_date.getDate() < 10) ? "0" + m_date.getDate() : m_date.getDate();
+			return m_year + "-" + m_month + "-" + m_date;
+		}
+
+		// 최종접속일 클릭
+		function last_login_click(clickBtn) {
+			for(var i=0;i<$("button[name=last_login]").length; i++) {
+				$("button[name=last_login]")[i].className = "button small outline3 ";
+			}
+			clickBtn.addClass("active");
+
+			for(var i=0;i<$("button[name=created]").length; i++) {
+				$("button[name=created]")[i].className = "button small outline3 ";
+			}
+			$("#created_0").addClass("active");
+
+			$("#f_last_login").val(clickBtn.val());
+			$("#f_created").val('');
+		}
+
+		// 회원가입일 클릭
+		function created_click(clickBtn) {
+			for(var i=0;i<$("button[name=created]").length; i++) {
+				$("button[name=created]")[i].className = "button small outline3 ";
+			}
+			clickBtn.addClass("active");
+
+			for(var i=0;i<$("button[name=last_login]").length; i++) {
+				$("button[name=last_login]")[i].className = "button small outline3 ";
+			}
+			$("#last_login_0").addClass("active");
+
+			$("#f_created").val(clickBtn.val());
+			$("#f_last_login").val('');
+		}
+
+		// 테이블 정렬
+		function orderByValues(data) {
+			let buttons = $("button[name=tableSort]");
+			for(let i=0;i<buttons.length;i++) {
+				if(buttons[i].id == data.attr("id")) {
+					continue;
+				}
+				buttons[i].className = "button tomini sort-primary";
+			}
+			let sortType = '';
+			switch (data.val()) {
+				case '1':	// 현재 예치금 정렬
+					if(data.hasClass("sort-primary")) {
+						data.attr("class", "button tomini sort-high");
+						sortType = "high";
+					}else if(data.hasClass("sort-high")) {
+						data.attr("class", "button tomini sort-low");
+						sortType = "low";
+					}else if(data.hasClass("sort-low")) {
+						data.attr("class", "button tomini sort-primary");
+					}
+					break;
+				case '2':	// 충전 누적금액 정렬
+					if(data.hasClass("sort-primary")) {
+						data.attr("class", "button tomini sort-high");
+						sortType = "high";
+					}else if(data.hasClass("sort-high")) {
+						data.attr("class", "button tomini sort-low");
+						sortType = "low";
+					}else if(data.hasClass("sort-low")) {
+						data.attr("class", "button tomini sort-primary");
+					}
+					break;
+				case '3':	// 최종접속일
+					if(data.hasClass("sort-primary")) {
+						data.attr("class", "button tomini sort-high");
+						sortType = "high";
+					}else if(data.hasClass("sort-high")) {
+						data.attr("class", "button tomini sort-low");
+						sortType = "low";
+					}else if(data.hasClass("sort-low")) {
+						data.attr("class", "button tomini sort-primary");
+					}
+					break;
+				case '4':	// 회원가입일
+					if(data.hasClass("sort-primary")) {
+						data.attr("class", "button tomini sort-high");
+						sortType = "high";
+					}else if(data.hasClass("sort-high")) {
+						data.attr("class", "button tomini sort-low");
+						sortType = "low";
+					}else if(data.hasClass("sort-low")) {
+						data.attr("class", "button tomini sort-primary");
+					}
+					break;
+			}
+			$("#f_sortKind").val(data.val());
+			$("#f_sortType").val(sortType);
+			searchMember();
+		}
+
+		// 유저정보 수정
+		function modify_info(id) {
+			let formData = new FormData();
+			formData.append("id", id);
+
+			$.ajax({
+				type: 'post',
+				url: '/root/member_info',
+				data: formData,
+				processData: false,
+				contentType: false,
+				dataType: 'json',
+				success: function(data) {
+					if(data.info.success == 'true'){
+						modifyPage_custom(data.result.userinfo, data.result.setting, data.result.address);
+					}else{
+						alert(data.info.text);
+						window.location.reload();
+					}
+				},
+				error: function(error) {
+					console.log(error);
+				},
+				complete: function() {}
+			});
+		}
+
+		// 수정 페이지 custom
+		function modifyPage_custom(userinfo, setting, address) {
+			console.log(userinfo);
+			console.log(userinfo);
+			user_id = userinfo["u_id"];
+			temp_user_info = userinfo;			
+			let user_skin = '';
+			if(userinfo["auth_code"] == '3') {
+				user_skin = 'adminmodify_retailer';
+			}else if(userinfo["auth_code"] == '4') {
+				user_skin = 'adminmodify_wholesaler';
+			}
+
+			$("#" + user_skin + " input[name='file_temp']").val("");
+			$("#" + user_skin + " input[name='shop_taxid_copy']").val("");
+			userinfo["userid"] ? $("#" + user_skin + " input[name='userid']").val(userinfo["userid"]) : $("#" + user_skin + " input[name='userid']").val("");
+			userinfo["email"] ? $("#" + user_skin + " input[name='user_email']").val(userinfo["email"]) : $("#" + user_skin + " input[name='user_email']").val("");
+			userinfo["shop_name"] ? $("#" + user_skin + " input[name='shop_name']").val(userinfo["shop_name"]) : $("#" + user_skin + " input[name='shop_name']").val("");
+			userinfo["shop_tel"] ? $("#" + user_skin + " input[name='shop_tel']").val(userinfo["shop_tel"].replace("-", "")) : $("#" + user_skin + " input[name='shop_tel']").val("");
+			userinfo["shop_staff_hp"] ? $("#" + user_skin + " input[name='shop_staff_hp']").val(userinfo["shop_staff_hp"].replace("-", "")) : $("#" + user_skin + " input[name='shop_staff_hp']").val("");
+			userinfo["shop_bank"] ? $("#" + user_skin + " select[name='shop_bank']").val(userinfo["shop_bank"]) : $("#" + user_skin + " select[name='shop_bank']").val("");
+			userinfo["shop_account"] ? $("#" + user_skin + " input[name='shop_account']").val(userinfo["shop_account"]) : $("#" + user_skin + " input[name='shop_account']").val("");
+			userinfo["shop_account_name"] ? $("#" + user_skin + " input[name='shop_account_name']").val(userinfo["shop_account_name"]) : $("#" + user_skin + " input[name='shop_account_name']").val("");
+			userinfo["business_name"] ? $("#" + user_skin + " input[name='business_name']").val(userinfo["business_name"]) : $("#" + user_skin + " input[name='business_name']").val("");
+			userinfo["shop_taxid"] ? $("#" + user_skin + " input[name='shop_taxid']").val(userinfo["shop_taxid"]) : $("#" + user_skin + " input[name='shop_taxid']").val("");
+			userinfo["shop_taxid_copy"] ? $("#" + user_skin + " input[name='shop_taxid_copy_old']").val(userinfo["shop_taxid_copy"]) : $("#" + user_skin + " input[name='shop_taxid_copy_old']").val("");
+			userinfo["delegate_name"] ? $("#" + user_skin + " input[name='delegate_name']").val(userinfo["delegate_name"]) : $("#" + user_skin + " input[name='delegate_name']").val("");
+			userinfo["delegate_hp"] ? $("#" + user_skin + " input[name='delegate_hp']").val(userinfo["delegate_hp"]) : $("#" + user_skin + " input[name='delegate_hp']").val("");
+			userinfo["shop_staff_name"] ? $("#" + user_skin + " input[name='shop_staff_name']").val(userinfo["shop_staff_name"]) : $("#" + user_skin + " input[name='shop_staff_name']").val("");
+
+			$("#" + user_skin + " div[name='target_age_list']").children().remove();
+			for(const [key, value] of Object.entries(setting["setting4"])) {
+				let target_age = '';
+				if(userinfo['target_age']) {
+					target_age = '<div><input id="target_age' + value["GrpNo"] + '" class="checkbox" name="target_age[]" type="checkbox" value="' + value["GrpNo"] + '" ' + (userinfo["target_age"].split(",").indexOf(value["GrpNo"]) > -1 ? " checked": "" ) + '><label for="target_age' + value["GrpNo"] + '">' + value["GrpKindData"] + '</label></div>';
+				}else {
+					target_age = '<div><input id="target_age' + value["GrpNo"] + '" class="checkbox" name="target_age[]" type="checkbox" value="' + value["GrpNo"] + '"><label for="target_age' + value["GrpNo"] + '">' + value["GrpKindData"] + '</label></div>';
+				}
+				
+				$("#" + user_skin + " div[name='target_age_list']").append(target_age);
+			}
+			userinfo["shop_taxid_copy"] ? $("#" + user_skin + " img[name='shop_taxid_copy_img']").attr("src", "/www/data/files/member/"+userinfo["user_id"]+"/"+userinfo["shop_taxid_copy"]) : $("#" + user_skin + " img[name='shop_taxid_copy_img']").attr("src", "");
+			
+			$("#adminmodify_wholesaler [name='kakao_id']").val(userinfo['kakao_id']); // 카카오 ID Add 2023.11.13
+			$("#adminmodify_wholesaler [name='danharooid']").val(userinfo['danharooid']); // 카페24 ID Add 2023.11.13
+			$("#adminmodify_wholesaler [name='username']").val(userinfo['username']); // 사용자명 ID Add 2023.12.19
+			$("#adminmodify_wholesaler [name='shop_num']").val(userinfo['shop_num']); // 매장호수 Add 2023.12.19
+			$("#adminmodify_wholesaler [name='shop_zip1']").val(userinfo['shop_zip1']); // 사용자명 ID Add 2023.12.19
+			$("#adminmodify_wholesaler [name='shop_addr1']").val(userinfo['shop_addr1']); // 주소 Add 2023.12.19
+			$("#adminmodify_wholesaler [name='shop_addr2']").val(userinfo['shop_addr2']); // 주소2Add 2023.12.19
+			$("#adminmodify_wholesaler [name='shop_instagram_id']").val(userinfo['shop_instagram_id']); // 인스타그램 ID Add 2023.12.19
+			$("#adminmodify_wholesaler [name='sabangnet_id']").val(userinfo['sabangnet_id']); // 사방넷 ID Add 2023.12.19
+
+			if (userinfo["auth_code"] == "3") {	// 소매회원
+				userinfo["shop_zip1"] ? $("#adminmodify_retailer input[name='shop_zip1']").val(userinfo["shop_zip1"]) : $("#adminmodify_retailer input[name='shop_zip1']").val("");
+				userinfo["shop_addr1"] ? $("#adminmodify_retailer input[name='shop_addr1']").val(userinfo["shop_addr1"]) : $("#adminmodify_retailer input[name='shop_addr1']").val("");
+				userinfo["shop_addr2"] ? $("#adminmodify_retailer input[name='shop_addr2']").val(userinfo["shop_addr2"]) : $("#adminmodify_retailer input[name='shop_addr2']").val("");
+				userinfo["shop_addr3"] ? $("#adminmodify_retailer input[name='shop_addr3']").val(userinfo["shop_addr3"]) : $("#adminmodify_retailer input[name='shop_addr3']").val("");
+				userinfo["shop_addr4"] ? $("#adminmodify_retailer input[name='shop_addr4']").val(userinfo["shop_addr4"]) : $("#adminmodify_retailer input[name='shop_addr4']").val("");
+				$("#adminmodify_retailer div[name='sale_gb_list']").children().remove();
+				for(const [key, value] of Object.entries(setting["setting5"])) {
+					let sale_gb = '';
+					if(userinfo["sale_gb"]) {
+						sale_gb = '<div><input id="sale_gb' + value["GrpNo"] + '" class="checkbox" name="sale_gb[]" type="checkbox" value="' + value["GrpNo"] + '" ' + (userinfo["sale_gb"].split(",").indexOf(value["GrpNo"]) > -1 ? " checked": "") + '><label for="sale_gb' + value["GrpNo"] + '">' + value["GrpKindData"] + '</label></div>';
+					}else {
+						sale_gb = '<div><input id="sale_gb' + value["GrpNo"] + '" class="checkbox" name="sale_gb[]" type="checkbox" value="' + value["GrpNo"] + '"><label for="sale_gb' + value["GrpNo"] + '">' + value["GrpKindData"] + '</label></div>';
+					}
+					$("#adminmodify_retailer div[name='sale_gb_list']").append(sale_gb);
+				}
+				$("#adminmodify_retailer div[name='sale_form_list']").children().remove();
+				for(const [key, value] of Object.entries(setting["setting6"])) {
+					let sale_form = '';
+					if(userinfo["sale_form"]) {
+						sale_form = '<div><input id="sale_form' + value["GrpNo"] + '" class="checkbox" name="sale_form[]" type="checkbox" value="' + value["GrpNo"] + '" ' + (userinfo["sale_form"].split(",").indexOf(value["GrpNo"]) > -1 ? " checked": "") + '><label for="sale_form' + value["GrpNo"] + '">' + value["GrpKindData"] + '</label></div>';
+					}else {
+						sale_form = '<div><input id="sale_form' + value["GrpNo"] + '" class="checkbox" name="sale_form[]" type="checkbox" value="' + value["GrpNo"] + '"><label for="sale_form' + value["GrpNo"] + '">' + value["GrpKindData"] + '</label></div>';
+					}
+					$("#adminmodify_retailer div[name='sale_form_list']").append(sale_form);
+				}
+				$("#adminmodify_retailer div[name='target_style_list']").children().remove();
+				for(const [key, value] of Object.entries(setting["setting7"])) {
+					let target_style = '';
+					if(userinfo["target_style"]) {
+						target_style = '<div><input id="target_style' + value["GrpNo"] + '" class="checkbox" name="target_style[]" type="checkbox" value="' + value["GrpNo"] + '" ' + (userinfo["target_style"].split(",").indexOf(value["GrpNo"]) > -1 ? " checked": "") + '><label for="target_style' + value["GrpNo"] + '">' + value["GrpKindData"] + '</label></div>';
+					}else {
+						target_style = '<div><input id="target_style' + value["GrpNo"] + '" class="checkbox" name="target_style[]" type="checkbox" value="' + value["GrpNo"] + '"><label for="target_style' + value["GrpNo"] + '">' + value["GrpKindData"] + '</label></div>';
+					}
+					$("#adminmodify_retailer div[name='target_style_list']").append(target_style);
+				}
+				
+				$("#adminmodify_wholesaler").modal("hide");
+				$("#adminmodify_retailer").modal("show");
+			}else if(userinfo["auth_code"] == "4") {	//도매회원
+				$("#qrCodeLink").attr("href","//newtalk.kr/data/images/file/qrimage"+ userinfo["userid"] +".png");  // QR 코드 Add 2023.11.13
+				$("#adminmodify_wholesaler select[name='brandEtc']").val(userinfo['brandEtc']).prop('selected', true); // 브랜드 선택 Add 2023.11.13
+				$("#adminmodify_wholesaler select[name='brandEtcSub1']").val(userinfo['brandEtcSub1']).prop('selected', true); // 브랜드 서브1 선택 Add 2023.11.13
+				$("#adminmodify_wholesaler select[name='brandEtcSub2']").val(userinfo['brandEtcSub2']).prop('selected', true); // 브랜드 서브2 선택 Add 2023.11.13
+				
+				$("#adminmodify_wholesaler [name='kakao_link_url']").val(userinfo['kakao_link_url']); // 카카오 링크 Add 2023.11.13
+				$("#adminmodify_wholesaler [name='shop_google_meta']").val(userinfo['shop_google_meta']); // 구글 메타 Add 2023.11.13
+				$("#adminmodify_wholesaler [name='shop_title_meta']").val(userinfo['shop_title_meta']); // 메타 제목 Add 2023.11.13
+				$("#adminmodify_wholesaler [name='shop_naver_meta']").val(userinfo['shop_naver_meta']); // 네이버 메타 Add 2023.11.13
+				$("#adminmodify_wholesaler [name='shop_description']").val(userinfo['shop_description']); // 메타 설명 Add 2023.11.13
+				$("#adminmodify_wholesaler [name='shop_wechat_id']").val(userinfo['shop_wechat_id']); //  Add 2023.11.13
+				$("#adminmodify_wholesaler [name='shop_show_hp']").val(userinfo['shop_show_hp']); //  Add 2023.11.13
+				(userinfo['activated'] == '1') ? $("#adminmodify_wholesaler [name='activated']").prop("checked",true) : '';
+				(userinfo['down_level'] == '1') ? $("#adminmodify_wholesaler [name='down_level']").prop("checked",true) : '';
+				(userinfo['mall_login_used'] == 'Y') ? $("#adminmodify_wholesaler [name='mall_login_used']").prop("checked",true) : '';
+
+				$("#adminmodify_wholesaler [name='shop_new_items_pc']:input[value='"+ userinfo['shop_new_items_pc'] +"']").prop("checked",true);
+				$("#adminmodify_wholesaler [name='shop_new_items_mobile']:input[value='"+ userinfo['shop_new_items_mobile'] +"']").prop("checked",true);
+				$("#adminmodify_wholesaler [name='shop_best_items_pc']:input[value='"+ userinfo['shop_best_items_pc'] +"']").prop("checked",true);
+				$("#adminmodify_wholesaler [name='shop_best_items_mobile']:input[value='"+ userinfo['shop_best_items_mobile'] +"']").prop("checked",true);
+
+				$("input:radio[id ='testId']:input[value='AC']").attr("checked", true);
+
+
+				$("#adminmodify_wholesaler select[name='shopping_center']").val("");
+				/*for(let i=0;i<address.length;i++) {
+					let shopping_center = '<option value="' + address[i]["id"] + '"' + (userinfo["shopping_center"] == address[i]["id"] ? " selected" : "") + '>' + address[i]["name"] + '</option>';
+					$("#adminmodify_wholesaler select[name='shopping_center']").append(shopping_center);
+				}*/
+				// new_address
+				for(const [key, value] of Object.entries(address["center"])) {
+					let center_html = '<option value="' + key + '"' + (userinfo["shopping_center"] == key ? " selected" : "") + '>' + value + '</option>';
+					$("#adminmodify_wholesaler select[name='shopping_center']").append(center_html);
+				}
+				$("#adminmodify_wholesaler select[name='shopping_center_floor']").children().remove();
+				for(let i=0;i<address["floor"].length;i++) {
+					let floor_html = '<option value="' + address['floor'][i] + '"' + (userinfo["shopping_center_floor"] == address['floor'][i] ? " selected" : "") + '>' + address['floor'][i] + '층</option>';
+					$("#adminmodify_wholesaler select[name='shopping_center_floor']").append(floor_html);
+				}
+				$("#adminmodify_wholesaler select[name='shopping_center_number']").children().remove();
+				for(let i=0;i<address["place"].length;i++) {
+					let place_html = '<option value="' + address['place'][i] + '"' + (userinfo["shopping_center_number"] == address['place'][i] ? " selected" : "") + '>' + address['place'][i] + '호</option>';
+					$("#adminmodify_wholesaler select[name='shopping_center_number']").append(place_html);
+				}
+				
+				$("#adminmodify_wholesaler select[name='enter_store_yn']").val(userinfo['enter_store_yn']).prop('selected', true);
+				userinfo["office_tel"] ? $("#adminmodify_wholesaler input[name='office_tel']").val(userinfo["office_tel"].replace("-","")) : $("#adminmodify_wholesaler input[name='office_tel']").val("");
+				userinfo["office_zip"] ? $("#adminmodify_wholesaler input[name='office_zip1']").val(userinfo["office_zip"]) : $("#adminmodify_wholesaler input[name='office_zip1']").val("");
+				userinfo["office_addr1"] ? $("#adminmodify_wholesaler input[name='office_addr1']").val(userinfo["office_addr1"]) : $("#adminmodify_wholesaler input[name='office_addr1']").val("");
+				userinfo["office_addr2"] ? $("#adminmodify_wholesaler input[name='office_addr2']").val(userinfo["office_addr2"]) : $("#adminmodify_wholesaler input[name='office_addr2']").val("");
+				$("#adminmodify_wholesaler div[name='shop_concept_list']").children().remove();
+				for(const [key, value] of Object.entries(setting["setting7"])) {
+					let shop_concept = '';
+					if(userinfo["shop_concept"]) {
+						shop_concept = '<div><input id="shop_concept' + value["GrpNo"] + '" class="checkbox" name="shop_concept[]" type="checkbox" value="' + value["GrpNo"] + '" ' + (userinfo["shop_concept"].split(",").indexOf(value["GrpNo"]) > -1 ? " checked": "") + '><label for="shop_concept' + value["GrpNo"] + '">' + value["GrpKindData"] + '</label></div>';
+					}else {
+						shop_concept = '<div><input id="shop_concept' + value["GrpNo"] + '" class="checkbox" name="shop_concept[]" type="checkbox" value="' + value["GrpNo"] + '"><label for="shop_concept' + value["GrpNo"] + '">' + value["GrpKindData"] + '</label></div>';
+					}
+					$("#adminmodify_wholesaler div[name='shop_concept_list']").append(shop_concept);
+				}
+				$("#adminmodify_wholesaler div[name='target_sex_list']").children().remove();
+				for(const [key, value] of Object.entries(setting["setting3"])) {
+					let target_sex = '';
+					if(userinfo["target_sex"]) {
+						target_sex = '<div><input id="target_sex' + value["GrpNo"] + '" class="checkbox" name="target_sex[]" type="checkbox" value="' + value["GrpNo"] + '" ' + (userinfo["target_sex"].split(",").indexOf(value["GrpNo"]) > -1 ? " checked": "") + '><label for="target_sex' + value["GrpNo"] + '">' + value["GrpKindData"] + '</label></div>';
+					}else {
+						target_sex = '<div><input id="target_sex' + value["GrpNo"] + '" class="checkbox" name="target_sex[]" type="checkbox" value="' + value["GrpNo"] + '"><label for="target_sex' + value["GrpNo"] + '">' + value["GrpKindData"] + '</label></div>';
+					}
+					$("#adminmodify_wholesaler div[name='target_sex_list']").append(target_sex);
+				}
+				
+				$("#adminmodify_retailer").modal("hide");
+				$("#adminmodify_wholesaler").modal("show");
+			}
+		}
+
+		// 파일선택 클릭
+		function click_file(auth_code) {
+			if(auth_code == '3') {
+				$("#adminmodify_retailer input[name='shop_taxid_copy']").click();
+			}else if( auth_code == '4') {
+				$("#adminmodify_wholesaler input[name='shop_taxid_copy']").click();
+			}
+		}
+
+		// 회원정보 업데이트
+		function userinfoUpdate(auth_code) {
+
+			if(user_id == 0) return;
+			
+			let chk_flag = userinfo_check(auth_code);
+
+			if(!chk_flag) {
+				return;
+			}
+
+			let formData = new FormData();
+
+			let user_skin = '';
+			// 소매
+			if(auth_code == '3') {
+				user_skin = 'adminmodify_retailer';
+				formData.append("shop_zip1", $("#" + user_skin + " input[name='shop_zip1']").val());
+				formData.append("shop_addr1", $("#" + user_skin + " input[name='shop_addr1']").val());
+				formData.append("shop_addr2", $("#" + user_skin + " input[name='shop_addr2']").val());
+				formData.append("shop_addr3", $("#" + user_skin + " input[name='shop_addr3']").val());
+				formData.append("shop_addr4", $("#" + user_skin + " input[name='shop_addr4']").val());				
+				let sale_gb = [];
+				$("#" + user_skin + " input[name='sale_gb[]']:checked").each(function(i, checkbox) {
+					sale_gb.push(checkbox.value);
+				});
+				formData.append("sale_gb", sale_gb.toString());
+				let sale_form = [];
+				$("#" + user_skin + " input[name='sale_form[]']:checked").each(function(i, checkbox) {
+					sale_form.push(checkbox.value);
+				});
+				formData.append("sale_form", sale_form.toString());
+				let target_style = [];
+				$("#" + user_skin + " input[name='target_style[]']:checked").each(function(i, checkbox) {
+					target_style.push(checkbox.value);
+				});
+				formData.append("target_style", target_style.toString());
+			// 도매
+			}else if(auth_code == '4') {
+				user_skin = 'adminmodify_wholesaler';
+				formData.append("shopping_center", $("#" + user_skin + " select[name='shopping_center']").val());
+				formData.append("shopping_center_floor", $("#" + user_skin + " select[name='shopping_center_floor']").val());
+				formData.append("shopping_center_number", $("#" + user_skin + " select[name='shopping_center_number']").val());
+				formData.append("enter_store_yn", $("#" + user_skin + " select[name='enter_store_yn']").val());
+				formData.append("office_tel", $("#" + user_skin + " input[name='office_tel']").val());
+				formData.append("office_zip1", $("#" + user_skin + " input[name='office_zip1']").val());
+				formData.append("office_addr1", $("#" + user_skin + " input[name='office_addr1']").val());
+				formData.append("office_addr2", $("#" + user_skin + " input[name='office_addr2']").val());
+				let shop_concept = [];
+				$("#" + user_skin + " input[name='shop_concept[]']:checked").each(function(i, checkbox) {
+					shop_concept.push(checkbox.value);
+				});
+				formData.append("shop_concept", shop_concept.toString());
+				let target_sex = [];
+				$("#" + user_skin + " input[name='target_sex[]']:checked").each(function(i, checkbox) {
+					target_sex.push(checkbox.value);
+				});
+				formData.append("target_sex", target_sex.toString());
+
+				formData.append("shop_show_hp", $("#" + user_skin + " input[name='shop_show_hp']").val());  // 노출 휴대폰  Add  2023.11.13
+				formData.append("kakao_link_url", $("#" + user_skin + " input[name='kakao_link_url']").val());  // 카카오 연결 url Add  2023.11.13
+				formData.append("shop_wechat_id", $("#" + user_skin + " input[name='shop_wechat_id']").val());  // Wechat ID Add  2023.11.13
+				formData.append("shop_title_meta", $("#" + user_skin + " input[name='shop_title_meta']").val());  // 메타 관련 Add  2023.11.13
+				formData.append("shop_naver_meta", $("#" + user_skin + " input[name='shop_naver_meta']").val());  // 메타 관련 Add  2023.11.13
+				formData.append("shop_google_meta", $("#" + user_skin + " input[name='shop_google_meta']").val());  // 메타 관련 Add  2023.11.13
+				formData.append("shop_description", $("#" + user_skin + " [name='shop_description']").val());  // 메타 관련 Add  2023.11.13
+				var activated = ($("#adminmodify_wholesaler [name='activated']").is(":checked")) ? '1' : '0' ; // 미니몰 승인 체크 Add  2023.11.13
+				formData.append("activated",activated);
+				var down_level = ($("#adminmodify_wholesaler [name='down_level']").is(":checked")) ? '1' : '0' ; // 이미지 다운 Add  2023.11.13
+				formData.append("down_level",down_level);
+				var mall_login_used = ($("#adminmodify_wholesaler [name='mall_login_used']").is(":checked")) ? 'Y' : 'N' ; // 로그인 사용 유무 Add  2023.11.13
+				formData.append("mall_login_used",mall_login_used);
+
+				formData.append("brandEtc", $("#" + user_skin + " select[name='brandEtc']").val());
+				formData.append("brandEtcSub1", $("#" + user_skin + " select[name='brandEtcSub1']").val());
+				formData.append("brandEtcSub2", $("#" + user_skin + " select[name='brandEtcSub2']").val());
+				formData.append("shop_new_items_pc", $("#" + user_skin + " [name='shop_new_items_pc']:checked").val());
+				formData.append("shop_new_items_mobile", $("#" + user_skin + " [name='shop_new_items_mobile']:checked").val());
+				formData.append("shop_best_items_pc", $("#" + user_skin + " [name='shop_best_items_pc']:checked").val());
+				formData.append("shop_best_items_mobile", $("#" + user_skin + " [name='shop_best_items_mobile']:checked").val());
+
+				formData.append("username", $("#" + user_skin + " input[name='username']").val());  // 사용자명 Add  2023.12.18
+				formData.append("shop_num", $("#" + user_skin + " input[name='shop_num']").val());  // 매장호수 Add  2023.12.18
+				formData.append("shop_zip1", $("#" + user_skin + " input[name='shop_zip1']").val());  // 상가주소 Add  2023.12.18
+				formData.append("shop_addr1", $("#" + user_skin + " input[name='shop_addr1']").val());  // 상가주소 1 Add  2023.12.18
+				formData.append("shop_addr2", $("#" + user_skin + " input[name='shop_addr2']").val());  // 상가주소 2 Add  2023.12.18
+				formData.append("shop_instagram_id", $("#" + user_skin + " input[name='shop_instagram_id']").val());  // 인스타그램ID Add  2023.12.18
+				formData.append("sabangnet_id", $("#" + user_skin + " input[name='sabangnet_id']").val());  // 사방넷 매입처 ID Add  2023.12.18
+				formData.append("shop_staff_name", $("#" + user_skin + " input[name='shop_staff_name']").val());  // 담당자명 ID Add  2024.01.03
+
+
+			}
+
+			if(temp_user_id != $("#" + user_skin + " input[name='userid']").val()){
+			formData.append("userid", $("#" + user_skin + " input[name='userid']").val());
+			formData.append("old_user_id", temp_user_id);
+			}
+			
+			formData.append("user_id", user_id);
+			formData.append("auth_code", auth_code);
+			formData.append("password", $("#" + user_skin + " input[name='password']").val());
+			formData.append("user_email", $("#" + user_skin + " input[name='user_email']").val());
+			formData.append("shop_name", $("#" + user_skin + " input[name='shop_name']").val());
+			formData.append("shop_tel", $("#" + user_skin + " input[name='shop_tel']").val());
+			formData.append("shop_staff_hp", $("#" + user_skin + " input[name='shop_staff_hp']").val());
+			formData.append("shop_bank", $("#" + user_skin + " select[name='shop_bank']").val());
+			formData.append("shop_account", $("#" + user_skin + " input[name='shop_account']").val());
+			formData.append("shop_account_name", $("#" + user_skin + " input[name='userid']").val());
+			formData.append("business_name", $("#" + user_skin + " input[name='business_name']").val());
+			formData.append("shop_taxid", $("#" + user_skin + " input[name='shop_taxid']").val());
+			formData.append("delegate_name", $("#" + user_skin + " input[name='delegate_name']").val());
+			formData.append("delegate_hp", $("#" + user_skin + " input[name='delegate_hp']").val());
+			formData.append("kakao_id", $("#" + user_skin + " input[name='kakao_id']").val());  // 카카톡 ID  Add 2023.11.13
+			formData.append("danharooid", $("#" + user_skin + " input[name='danharooid']").val());  // 카페24 ID Add 2023.11.13
+			let target_age = [];
+			$("#" + user_skin + " input[name='target_age[]']:checked").each(function(i, checkbox) {
+				target_age.push(checkbox.value);
+			});
+			formData.append("target_age", target_age.toString());
+			formData.append("tmp_name", $("#" + user_skin + " input[name='tmp_name']").val());
+			if(typeof $("#" + user_skin + " input[name='shop_taxid_copy']")[0].files[0] != "undefined") {
+			formData.append("shop_taxid_copy", $("#" + user_skin + " input[name='shop_taxid_copy']")[0].files[0]);
+			}
+
+			$.ajax({
+				type: 'post',
+				url: '/root/member_modify',
+				data: formData,
+				processData: false,
+				contentType: false,
+				dataType: 'json',
+				success: function(data) {
+					if(data.info.success == 'true'){
+						alert(data.info.text);
+						window.location.reload();
+					} else {
+						alert(data.info.text);
+						$("input[name='userid']").focus();
+					}
+				},
+				error: function(error) {
+					console.log(error);
+				},
+				complete: function() {}
+			});
+
+		}
+
+		// 회원정보 필수 값 확인
+		function userinfo_check(auth_code) {
+			let user_skin = '';
+			if(auth_code == '3') {
+				user_skin = 'adminmodify_retailer';
+			}else if(auth_code == '4') {
+				user_skin = 'adminmodify_wholesaler';
+			}
+
+			new_user_id = $("#" + user_skin + " input[name='userid']").val();
+
+			if($("#" + user_skin + " input[name='userid']").val() == '') {
+				alert('아이디를 입력하세요.');
+				$("#" + user_skin + " input[name='userid']").focus();
+				return false;
+			}
+
+			temp_user_id = temp_user_info["userid"];			
+
+			let special_pattern = /[!?@#$%^&*():;+=~{}<>\[\]\|\\\"\'\,\.\/\`\\\-\s]/g;
+			let korean_pattern = /[ㄱ-ㅎㅏ-ㅣ가-힣]/g;
+			let email_pattern = /^([0-9a-zA-Z_\.-]+)@([0-9a-zA-Z_-]+)(\.[0-9a-zA-Z_-]+){1,2}$/;
+			
+			if(auth_code == '3') {
+				if(!email_pattern.test(new_user_id)){
+					alert("아이디는 이메일 형식으로만 가능합니다.");
+					$("#" + user_skin + " input[name='userid']").val("");
+					$("#" + user_skin + " input[name='userid']").focus();
+					return false;
+				}
+			}
+
+			if(auth_code == '4') {
+				if(special_pattern.test(new_user_id) || korean_pattern.test(new_user_id)){
+					alert('영문 소문자, 숫자와 특수기호(_)만 사용 가능합니다.');
+					$("#" + user_skin + " input[name='userid']").val("");
+					$("#" + user_skin + " input[name='userid']").focus();
+					return false;
+				}
+	
+				if(new_user_id.length > 20){
+					alert("아이디는 20자 이하로만 가능합니다.");
+					$("#" + user_skin + " input[name='userid']").val("");
+					$("#" + user_skin + " input[name='userid']").focus();
+					return false;
+				}
+			} 
+
+			if($("#" + user_skin + " input[name='password']").val() != '') {
+				if(!isValidPwd1($("#" + user_skin + " input[name='password']").val())) {
+					alert('비밀번호는 6자리 이상 영문과 숫자의 조합으로 입력하세요.');
+					$("#" + user_skin + " input[name='password']").focus();
+					return false;
+				}
+
+				if($("#" + user_skin + " input[name='password_again']").val() == '') {
+					alert('비밀번호 확인을 입력하세요.');
+					$("#" + user_skin + " input[name='password_again']").focus();
+					return false;
+				}
+
+				if($("#" + user_skin + " input[name='password']").val() != $("#" + user_skin + " input[name='password_again']").val()) {
+					alert('비밀번호가 서로 일치하지 않습니다.');
+					$("#" + user_skin + " input[name='password_again']").val('');
+					$("#" + user_skin + " input[name='password_again']").focus();
+					return false;
+				}
+			}
+			
+			/*
+			if ($("#" + user_skin + " input[name='shop_account']").val() == '') {
+				alert('계좌번호를 입력하세요.');
+				$("#" + user_skin + " input[name='shop_account']").focus();
+				return false;
+			}
+
+			if ($("#" + user_skin + " input[name='shop_account_name']").val() == '') {
+				alert('예금자명을 입력하세요.');
+				$("#" + user_skin + " input[name='shop_account_name']").focus();
+				return false;
+			}
+
+			if ($("#" + user_skin + " input[name='shop_tel']").val() == '') {
+				alert('매장 휴대폰2를 입력하세요.');
+				$("#" + user_skin + " input[name='shop_tel']").focus();
+				return false;
+			}
+
+			if ($("#" + user_skin + " input[name='shop_staff_hp']").val() == '') {
+				alert('매장 휴대폰1을 입력하세요.');
+				$("#" + user_skin + " input[name='shop_staff_hp']").focus();
+				return false;
+			}
+
+			if ($("#" + user_skin + " input[name='business_name']").val() == '') {
+				alert('사업자명을 입력하세요.');
+				$("#" + user_skin + " input[name='business_name']").focus();
+				return false;
+			}
+
+			if ($("#" + user_skin + " input[name='shop_taxid']").val() == '') {
+				alert('사업자등록번호를 입력하세요.');
+				$("#" + user_skin + " input[name='shop_taxid']").focus();
+				return false;
+			}
+
+			if ($("#" + user_skin + " input[name='shop_taxid']").val().length != 10) {
+				alert('사업자등록번호는 10자리 입니다.');
+				$("#" + user_skin + " input[name='shop_taxid']").focus();
+				return false;
+			}
+
+			if ($("#" + user_skin + " input[name='shop_taxid_copy_old']").val() == '' && $('input[name=shop_taxid_copy]').val() == '') {
+				alert('사업자등록증 사본을 등록하세요.');
+				$("#" + user_skin + " input[name='file_temp']").focus();
+				return false;
+			}
+
+			if ($("#" + user_skin + " input[name='delegate_name']").val() == '') {
+				alert('대표자명을 입력하세요.');
+				$("#" + user_skin + " input[name='delegate_name']").focus();
+				return false;
+			}
+
+			if ($("#" + user_skin + " input[name='delegate_hp']").val() == '') {
+				alert('대표자 휴대폰을 입력하세요.');
+				$("#" + user_skin + " input[name='delegate_hp']").focus();
+				return false;
+			}
+
+			if(auth_code == '3') {
+				if($("#" + user_skin + " input[name='shop_zip1']").val() == '') {
+					alert('주소찾기를 클릭하여 우편번호와 주소를 입력하세요.');
+					$("#btnFoldWrap1").click();
+					return false;
+				}
+
+				if($("#" + user_skin + " input[name='shop_addr1']").val() == '') {
+					alert('주소찾기를 클릭하여 우편번호와 주소를 입력하세요.');
+					$("#btnFoldWrap1").click();
+					return false;
+				}
+			}else if(auth_code == '4') {
+				if($("#" + user_skin + " input[name='user_email']").val() == '') {
+					alert('이메일을 입력하세요.');
+					$('input[name=user_email]').focus();
+					return false;
+				}
+			}*/
+			return true;
+		}
+
+
+		//비밀번호 유효성 체크, 6자 이상의 영문+숫자
+		function isValidPwd1(v) {
+			var reg = /^(?=.*?[a-zA-Z])(?=.*?[0-9]).{6,}$/;
+			return (reg.test(v));
+		}
+
+		// 단체 푸시 알림 세팅
+		function setting_pushEvent(id, element) {
+			let formData = new FormData();
+			formData.append('user_id', id);
+
+			if(element.checked) {	// on으로 설정할 때	
+				formData.append('setting', 'Y');
+			}else {
+				formData.append('setting', 'N');
+			}
+
+			$.ajax({
+				type: 'post',
+				url: '/root/setting_pushEvent',
+				data: formData,
+				processData: false,
+				contentType: false,
+				dataType: 'json',
+				success: function(data) {
+					if(data.info.success == 'false'){
+						alert(data.info.text);
+					}
+				},
+				error: function(error) {
+					console.log(error);
+				},
+				complete: function() {}
+			});
+		}
+
+		// 층 select 수정
+		function append_select_floor(data) {
+			$("#adminmodify_wholesaler select[name=shopping_center_floor]").children().remove();	
+
+			let bi_id = $("#adminmodify_wholesaler select[name=shopping_center]").val();
+			let floor = data[0];
+
+			if(floor == '') {
+				return;
+			}else {
+				let formData = new FormData();
+
+				formData.append("bi_id", bi_id);
+				formData.append("floor", floor);
+
+				$.ajax({
+					type: 'post',
+					url: '/root/get_building_place_from_floor',
+					data: formData,
+					processData: false,
+					contentType: false,
+					dataType: 'json',
+					success: function(data) {
+						if(data.info.success == 'true'){
+							append_select_palce(data.info.data);
+						}
+					},
+					error: function(error) {
+						console.log(error);
+					},
+					complete: function() {}
+				});
+			}
+
+			for(let i=0;i<data.length;i++) {
+				let html_text = '<option value="'+data[i]+'">'+data[i]+'층</option>';
+				$("#adminmodify_wholesaler select[name=shopping_center_floor]").append(html_text);
+			}
+		}
+
+		// 호수 select 수정
+		function append_select_palce(data) {
+			$("#adminmodify_wholesaler select[name=shopping_center_number]").children().remove();	
+
+			for(let i=0;i<data.length;i++) {
+				let html_text = '<option value="'+data[i]['place']+'">'+data[i]['place']+'호</option>';
+				$("#adminmodify_wholesaler select[name=shopping_center_number]").append(html_text);
+			}
+		}
+		
+		function login_admin(uid) {
+			window.open("/auth/login_admin/"+uid);
+		}
+
+		// 상가, 층, 호수 선택시 매장호수에 자동입력
+		$(document).ready(function(){
+			$("[name='shopping_center'], [name='shopping_center_floor'], [name='shopping_center_number']").on("change",function(){
+				var shop_num = $("[name='shopping_center'] option:checked").text() + " " + $("[name='shopping_center_floor']").val() + "층 " + $("[name='shopping_center_number']").val()+"호";
+				$("[name='shop_num']").val(shop_num);
+			});
+
+			// 신규 회원 등록 선택 관련 - 소매업체일 경우 사용자명 입력 불가처리
+			$("#memberNewRegister input[name='auth_code']").click(function(){
+				($(this).val() == "4") ? $("#memberNewRegister input[name='username']").attr("readonly",false) :  $("#memberNewRegister input[name='username']").attr("readonly",true).val('');;
+			});
+		});
+
+		// 신규 회원 modal view 
+		function memberNewRegister(){
+			$("#memberNewRegister").show();
+		}
+
+		// 신규 회원 등록
+		function memberNewRegisterSend(){
+		
+			let formData = new FormData();
+			let user_skin = 'memberNewRegister';				
+			let auth_code = $("#" + user_skin + " input[name='auth_code']:checked").val();
+
+			new_user_id = $("#" + user_skin + " input[name='userid']").val();
+
+			if($("#" + user_skin + " input[name='userid']").val() == '') {
+				alert('아이디를 입력하세요.');
+				$("#" + user_skin + " input[name='userid']").focus();
+				return false;
+			}
+
+			let special_pattern = /[!?@#$%^&*():;+=~{}<>\[\]\|\\\"\'\,\.\/\`\\\-\s]/g;
+			let korean_pattern = /[ㄱ-ㅎㅏ-ㅣ가-힣]/g;
+			let email_pattern = /^([0-9a-zA-Z_\.-]+)@([0-9a-zA-Z_-]+)(\.[0-9a-zA-Z_-]+){1,2}$/;
+
+			if(auth_code == '3') {
+				if(!email_pattern.test(new_user_id)){
+					alert("아이디는 이메일 형식으로만 가능합니다.");
+					$("#" + user_skin + " input[name='userid']").val("");
+					$("#" + user_skin + " input[name='userid']").focus();
+					return false;
+				}
+			}
+
+			if(auth_code == '4') {
+				if(special_pattern.test(new_user_id) || korean_pattern.test(new_user_id)){
+					alert('영문 소문자, 숫자와 특수기호(_)만 사용 가능합니다.');
+					$("#" + user_skin + " input[name='userid']").val("");
+					$("#" + user_skin + " input[name='userid']").focus();
+					return false;
+				}
+	
+				if(new_user_id.length > 20){
+					alert("아이디는 20자 이하로만 가능합니다.");
+					$("#" + user_skin + " input[name='userid']").val("");
+					$("#" + user_skin + " input[name='userid']").focus();
+					return false;
+				}
+			} 
+
+			if($("#" + user_skin + " input[name='password']").val() != '') {
+				if(!isValidPwd1($("#" + user_skin + " input[name='password']").val())) {
+					alert('비밀번호는 6자리 이상 영문과 숫자의 조합으로 입력하세요.');
+					$("#" + user_skin + " input[name='password']").focus();
+					return false;
+				}
+
+				if($("#" + user_skin + " input[name='password_again']").val() == '') {
+					alert('비밀번호 확인을 입력하세요.');
+					$("#" + user_skin + " input[name='password_again']").focus();
+					return false;
+				}
+
+				if($("#" + user_skin + " input[name='password']").val() != $("#" + user_skin + " input[name='password_again']").val()) {
+					alert('비밀번호가 서로 일치하지 않습니다.');
+					$("#" + user_skin + " input[name='password_again']").val('');
+					$("#" + user_skin + " input[name='password_again']").focus();
+					return false;
+				}
+			}else{
+				alert("비밀번호를 입력해주세요.");
+				$("#" + user_skin + " input[name='password']").focus();
+				return false;
+			}
+
+			if(auth_code == '4') {
+				if($("#" + user_skin + " input[name='username']").val() == ""){
+					alert("사용자명을 입력해주세요.");
+					$("#" + user_skin + " input[name='username']").focus();
+					return false;
+				}
+			}
+
+			formData.append("userid", $("#" + user_skin + " [name='userid']").val());
+			formData.append("username", $("#" + user_skin + " [name='username']").val());
+			formData.append("password", $("#" + user_skin + " [name='password']").val());
+			formData.append("auth_code", $("#" + user_skin + " [name='auth_code']:checked").val());
+
+
+			$.ajax({
+				type: 'post',
+				url: '/root/member_new_register',
+				data: formData,
+				processData: false,
+				contentType: false,
+				type: 'post',
+				success: function(data) {
+					var obj = JSON.parse(data);
+					alert(obj.msg);			
+					if(obj.status == "0"){
+						location.href = "/root/members";
+					}
+				},
+				error: function(error) {
+					console.log(error);
+				},
+				complete: function() {}
+			});
+
+		}
+
+		// 엑셀 다운로드 Add 2023.12.29
+		function searchExcelDownFrame(){
+			$("#searchExcelDown").submit();
+		}
+
+		function memberExcelDown(){
+			var i = 0;
+			var totalCnt = $("input:checkbox[name='memberId']:checked").length;
+			var memberIds = '';
+			$("input:checkbox[name='memberId']:checked").each(function(){
+				memberIds = memberIds + $(this).val();								
+				i = i + 1;
+				if(i < totalCnt){
+					memberIds = memberIds+',';
+				}
+			});
+			if(i == 0){
+				alert("엑셀 다운로드 위한 회원을 선택하세요.");
+			}else{
+				location.href="/root/memberExcelDown?memberIds="+memberIds;
+//				$.ajax({
+//				type: 'post',
+//				url: '/root/memberExcelDown',
+//				data: 'memberIds='+memberIds,
+//				processData: false,
+//				contentType: false,
+//				type: 'get',
+//				success: function(data) {
+//					alert(data);
+//				},
+//				error: function(error) {
+//					console.log(error);
+//				},
+//				complete: function() {}
+//			});
+			}
+		}
+
+		function memberExcelDownAllCheck(){
+			if($("#memberExcelDownAllCheck").prop("checked")){
+				$("[name='memberId']").prop("checked",true);
+			}else{
+				$("[name='memberId']").prop("checked",false);
+			}
+		}
+
+	</script>
+<div id="ui-datepicker-div" class="ui-datepicker ui-widget ui-widget-content ui-helper-clearfix ui-corner-all"></div></body></html>

@@ -1,0 +1,931 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GO100 종합차트 V4 기획 - 전체화면 레이어형 차트 UX</title>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --surface: #101720;
+      --surface-2: #151e2a;
+      --surface-3: #1b2735;
+      --line: #2a394c;
+      --text: #e9f0f8;
+      --muted: #9aa8b7;
+      --soft: #c3ceda;
+      --red: #f05252;
+      --blue: #3b82f6;
+      --green: #22c55e;
+      --amber: #f59e0b;
+      --cyan: #22d3ee;
+      --violet: #a78bfa;
+      --pink: #f472b6;
+      --teal: #2dd4bf;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+    a { color: #93c5fd; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .layout {
+      display: grid;
+      grid-template-columns: 286px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+    nav {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow: auto;
+      border-right: 1px solid var(--line);
+      background: #0e141c;
+      padding: 22px 18px;
+    }
+    nav h1 {
+      margin: 0 0 8px;
+      font-size: 20px;
+      line-height: 1.25;
+    }
+    nav p {
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    nav .group { margin: 20px 0; }
+    nav .label {
+      margin: 0 0 8px;
+      color: #d2deeb;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    nav a {
+      display: block;
+      padding: 7px 0;
+      color: #b8c6d6;
+      font-size: 13px;
+    }
+    main {
+      max-width: 1500px;
+      padding: 34px clamp(22px, 4vw, 58px) 72px;
+    }
+    h2 {
+      margin: 36px 0 12px;
+      font-size: 25px;
+      line-height: 1.25;
+    }
+    h3 {
+      margin: 24px 0 10px;
+      font-size: 17px;
+    }
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(340px, .78fr);
+      gap: 22px;
+      margin-bottom: 30px;
+      align-items: stretch;
+    }
+    .hero h2 {
+      margin: 0 0 14px;
+      font-size: clamp(32px, 4.6vw, 54px);
+      letter-spacing: 0;
+    }
+    .eyebrow {
+      color: var(--cyan);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .03em;
+      margin-bottom: 8px;
+    }
+    .lead {
+      max-width: 860px;
+      color: #c8d4e2;
+      font-size: 17px;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 4px 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #101821;
+      color: #ccd7e4;
+      font-size: 12px;
+    }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 18px;
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #111922;
+      padding: 14px;
+    }
+    .item strong { display: block; margin-bottom: 5px; }
+    .item p { margin: 0; color: var(--muted); font-size: 13px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #111922;
+      font-size: 13px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 11px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #182231;
+      color: #d8e5f2;
+    }
+    tr:last-child td { border-bottom: 0; }
+    td { color: #c6d2df; }
+    .status {
+      display: inline-flex;
+      justify-content: center;
+      min-width: 66px;
+      padding: 3px 8px;
+      border-radius: 5px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .p0 { background: rgba(240,82,82,.16); color: #ffaaa9; }
+    .p1 { background: rgba(245,158,11,.16); color: #ffd58d; }
+    .p2 { background: rgba(34,211,238,.14); color: #99f6ff; }
+    .mock-shell {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #080c11;
+      box-shadow: 0 22px 70px rgba(0,0,0,.34);
+    }
+    .mock-top {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #111923;
+    }
+    .stock-title {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: baseline;
+      font-size: 18px;
+      font-weight: 850;
+    }
+    .price { color: #fff; font-size: 22px; }
+    .up { color: var(--red); }
+    .down { color: var(--blue); }
+    .subtle { color: var(--muted); font-size: 12px; }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+      justify-content: flex-end;
+    }
+    .chip, .btn, .icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #33465c;
+      border-radius: 6px;
+      background: #0e1620;
+      color: #cbd7e4;
+      font-size: 12px;
+      min-height: 30px;
+      padding: 5px 9px;
+    }
+    .chip.active, .btn.active {
+      border-color: #7aa2d6;
+      background: #23354a;
+      color: #fff;
+    }
+    .icon {
+      width: 32px;
+      padding: 0;
+      font-weight: 800;
+    }
+    .chart-stage {
+      display: grid;
+      grid-template-columns: 1fr;
+      min-height: 650px;
+      background: #0a0f15;
+      position: relative;
+    }
+    .chart-area {
+      display: grid;
+      grid-template-rows: 1fr 132px 118px;
+      gap: 1px;
+      min-height: 650px;
+      background: #172231;
+    }
+    .pane {
+      position: relative;
+      overflow: hidden;
+      background:
+        linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px),
+        #0b1118;
+      background-size: 100% 52px, 70px 100%;
+    }
+    .pane.price-pane { min-height: 398px; }
+    .pane-label {
+      position: absolute;
+      top: 10px;
+      left: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      align-items: center;
+      color: #d8e6f4;
+      font-size: 12px;
+      z-index: 5;
+    }
+    .layer-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      border: 1px solid #34465b;
+      border-radius: 5px;
+      background: rgba(12,18,26,.82);
+      padding: 3px 7px;
+      color: #cdd9e6;
+    }
+    .swatch {
+      width: 18px;
+      height: 3px;
+      border-radius: 999px;
+      background: var(--cyan);
+    }
+    .swatch.ma3 { background: #f97316; }
+    .swatch.ma5 { background: #ef4444; }
+    .swatch.ma20 { background: #38bdf8; }
+    .swatch.vwap { background: #2dd4bf; }
+    .swatch.boll { background: #94a3b8; }
+    .price-line {
+      position: absolute;
+      right: 0;
+      left: 0;
+      height: 2px;
+      background: rgba(239,68,68,.55);
+      top: 43%;
+    }
+    .price-badge {
+      position: absolute;
+      right: 8px;
+      top: calc(43% - 14px);
+      padding: 3px 6px;
+      border-radius: 5px;
+      background: var(--red);
+      color: white;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .candle {
+      position: absolute;
+      bottom: 20%;
+      width: 9px;
+      border-radius: 2px;
+    }
+    .candle::before {
+      content: "";
+      position: absolute;
+      left: 4px;
+      top: -26px;
+      bottom: -22px;
+      width: 1px;
+      background: currentColor;
+      opacity: .86;
+    }
+    .candle.red { background: var(--red); color: var(--red); }
+    .candle.blue { background: var(--blue); color: var(--blue); }
+    .c1 { left: 6%; height: 58px; }
+    .c2 { left: 12%; height: 84px; bottom: 18%; }
+    .c3 { left: 18%; height: 42px; bottom: 28%; }
+    .c4 { left: 24%; height: 96px; bottom: 24%; }
+    .c5 { left: 30%; height: 52px; bottom: 37%; }
+    .c6 { left: 36%; height: 74px; bottom: 33%; }
+    .c7 { left: 42%; height: 40px; bottom: 42%; }
+    .c8 { left: 48%; height: 112px; bottom: 36%; }
+    .c9 { left: 54%; height: 70px; bottom: 49%; }
+    .c10 { left: 60%; height: 88px; bottom: 47%; }
+    .c11 { left: 66%; height: 56px; bottom: 56%; }
+    .c12 { left: 72%; height: 104px; bottom: 50%; }
+    .c13 { left: 78%; height: 64px; bottom: 58%; }
+    .c14 { left: 84%; height: 92px; bottom: 55%; }
+    .c15 { left: 90%; height: 72px; bottom: 60%; }
+    .line {
+      position: absolute;
+      left: 5%;
+      right: 6%;
+      height: 2px;
+      opacity: .92;
+      border-radius: 999px;
+      transform-origin: left center;
+    }
+    .line.ma3 { top: 45%; background: #f97316; transform: rotate(-4deg); }
+    .line.ma5 { top: 49%; background: #ef4444; transform: rotate(-6deg); }
+    .line.ma20 { top: 54%; background: #38bdf8; transform: rotate(-3deg); opacity: .72; }
+    .line.vwap { top: 59%; background: #2dd4bf; transform: rotate(-5deg); opacity: .64; }
+    .band {
+      position: absolute;
+      left: 5%;
+      right: 6%;
+      top: 32%;
+      height: 34%;
+      border-top: 1px dashed rgba(148,163,184,.65);
+      border-bottom: 1px dashed rgba(148,163,184,.65);
+      background: linear-gradient(180deg, rgba(148,163,184,.08), rgba(148,163,184,.02));
+    }
+    .bars {
+      position: absolute;
+      left: 4%;
+      right: 5%;
+      bottom: 14px;
+      height: 72%;
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+    }
+    .bar {
+      flex: 1;
+      min-width: 8px;
+      border-radius: 2px 2px 0 0;
+      background: rgba(240,82,82,.55);
+    }
+    .bar.blue { background: rgba(59,130,246,.62); }
+    .bar.amber { background: rgba(245,158,11,.68); }
+    .axis-note {
+      position: absolute;
+      right: 10px;
+      bottom: 8px;
+      color: #7f8da0;
+      font-size: 11px;
+    }
+    .drawer {
+      position: absolute;
+      right: 14px;
+      top: 56px;
+      width: 338px;
+      max-width: calc(100% - 28px);
+      border: 1px solid #3a4d64;
+      border-radius: 8px;
+      background: rgba(16,23,32,.96);
+      box-shadow: 0 18px 45px rgba(0,0,0,.36);
+      overflow: hidden;
+      z-index: 10;
+    }
+    .drawer.collapsed {
+      width: 212px;
+      top: 14px;
+    }
+    .drawer-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      background: #15202d;
+      font-weight: 800;
+      font-size: 13px;
+    }
+    .drawer-body {
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+    .layer-row {
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      border: 1px solid #2e4054;
+      border-radius: 7px;
+      background: #101821;
+      padding: 8px;
+      font-size: 12px;
+    }
+    .drag {
+      width: 24px;
+      height: 24px;
+      border-radius: 5px;
+      border: 1px solid #34465b;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #96a5b6;
+    }
+    .select-line {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+    .mini-input {
+      width: 52px;
+      height: 28px;
+      border: 1px solid #35485e;
+      border-radius: 6px;
+      background: #0b1118;
+      color: #e9f0f8;
+      padding: 0 7px;
+      font-size: 12px;
+    }
+    .bottom-dock {
+      position: absolute;
+      left: 14px;
+      right: 14px;
+      bottom: 14px;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      z-index: 6;
+    }
+    .dock-card {
+      border: 1px solid #304258;
+      border-radius: 7px;
+      background: rgba(15,22,31,.92);
+      padding: 9px 10px;
+      min-height: 54px;
+    }
+    .dock-card strong { display: block; font-size: 12px; margin-bottom: 3px; }
+    .dock-card span { color: var(--muted); font-size: 12px; }
+    .decision {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .decision .item { min-height: 118px; }
+    .small-note {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .mobile-mock {
+      width: 360px;
+      max-width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #0b1118;
+      margin: 0 auto;
+    }
+    .mobile-mock .mock-top {
+      display: block;
+      padding: 11px;
+    }
+    .mobile-mock .toolbar {
+      justify-content: flex-start;
+      margin-top: 9px;
+    }
+    .mobile-mock .chart-area {
+      min-height: 540px;
+      grid-template-rows: 1fr 105px 95px;
+    }
+    .mobile-mock .drawer.collapsed {
+      right: 10px;
+      top: 10px;
+      width: 156px;
+    }
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
+      nav { position: relative; height: auto; }
+      .hero, .grid-2, .grid-3 { grid-template-columns: 1fr; }
+      main { padding: 24px 16px 50px; }
+      .mock-top { grid-template-columns: 1fr; }
+      .bottom-dock { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .decision { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <nav>
+      <h1>종합차트 V4</h1>
+      <p>전체화면 우선, 접힌 레이어 패널, 분봉/이동평균 설정, 위·아래 이동형 기술지표 목업</p>
+      <div class="group">
+        <div class="label">문서 이동</div>
+        <a href="#summary">요약</a>
+        <a href="#principles">설계 원칙</a>
+        <a href="#mockup">PC 목업</a>
+        <a href="#mobile">모바일 목업</a>
+        <a href="#layers">레이어 설계</a>
+        <a href="#implementation">구현 항목</a>
+      </div>
+      <div class="group">
+        <div class="label">현재 차트 페이지</div>
+        <a href="/stock/005930?name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&tf=daily">독립 종목차트: 삼성전자</a>
+        <a href="/stock/005930?name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&tf=1m">1분봉 진입 예시</a>
+        <a href="/go100/company?code=005930&tab=chart">회사분석 차트 탭</a>
+        <a href="/go100/screener">스크리너 결과 진입</a>
+        <a href="/go100/command-center">백억이 차트분석 채팅</a>
+      </div>
+      <div class="group">
+        <div class="label">차트 기획 이전 버전</div>
+        <a href="/reports/go100_chart_page_audit_plan_v1_20260505.html">차트 감사 V1</a>
+        <a href="/reports/go100_chart_visual_design_plan_v2_20260505.html">시각화 개선 V2</a>
+        <a href="/reports/go100_chart_visual_layer_plan_v2_20260505.html">레이어 기획 V2</a>
+        <a href="/reports/go100_chart_visual_layer_plan_v3_20260505.html">캔들/거래대금/지표 V3</a>
+      </div>
+      <div class="group">
+        <div class="label">스크리너 이전 버전</div>
+        <a href="/reports/go100_screener_design_mockup_v1_20260505.html">스크리너 V1</a>
+        <a href="/reports/go100_screener_design_mockup_v2_20260505.html">스크리너 V2</a>
+        <a href="/reports/go100_screener_design_mockup_v3_20260505.html">스크리너 V3</a>
+        <a href="/reports/go100_screener_design_mockup_v4_20260505.html">스크리너 V4</a>
+        <a href="/reports/go100_screener_design_mockup_v5_20260505.html">스크리너 V5</a>
+        <a href="/reports/go100_screener_design_mockup_v6_20260505.html">스크리너 V6</a>
+        <a href="/reports/go100_screener_design_mockup_v7_20260505.html">스크리너 V7</a>
+      </div>
+    </nav>
+    <main>
+      <section class="hero" id="summary">
+        <div>
+          <div class="eyebrow">GO100 CHART UX PLAN V4 · 2026-05-05 KST</div>
+          <h2>종합차트는 차트가 주인공이고, 정보와 지표는 접히는 레이어로 붙어야 합니다.</h2>
+          <p class="lead">
+            현재 종목차트는 분봉과 지표 경로는 있으나, 컨트롤과 부가 정보가 차트 주변에 노출되어
+            가격 캔들의 기본 판독을 방해합니다. V4는 전체화면 가격 차트를 기본값으로 두고,
+            기술지표 선택 화면은 접힌 상태에서 필요할 때만 열리게 설계합니다.
+          </p>
+          <div class="meta">
+            <span class="pill">기본: 전체화면 차트</span>
+            <span class="pill">레이어 패널: 기본 접힘</span>
+            <span class="pill">분봉: 1/3/5/10/15/30/60분</span>
+            <span class="pill">MA: 3/5/10/20/60/120/240 + 사용자 설정</span>
+          </div>
+        </div>
+        <div class="panel">
+          <h3 style="margin-top:0">결론</h3>
+          <div class="grid-2">
+            <div class="item">
+              <strong>표시 우선순위</strong>
+              <p>가격 캔들, 거래대금, 핵심 MA 3개를 기본으로 노출하고 나머지는 접힌 레이어에서 켭니다.</p>
+            </div>
+            <div class="item">
+              <strong>동시 MA 권장</strong>
+              <p>기본 3개, 최대 5개를 권장합니다. 6개 이상은 경고 후 허용하되 색상/두께 자동 약화가 필요합니다.</p>
+            </div>
+            <div class="item">
+              <strong>지표 위치</strong>
+              <p>가격 위 오버레이, 가격 아래 패널, 하단 도크 사이를 레이어별로 이동할 수 있어야 합니다.</p>
+            </div>
+            <div class="item">
+              <strong>정보 패널</strong>
+              <p>수급, 호가, 뉴스, AI 시그널은 우측/하단/상단 보조 패널로 접고 펼치는 구조가 맞습니다.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="principles">
+        <h2>1. 설계 원칙</h2>
+        <table>
+          <thead>
+            <tr><th>원칙</th><th>상세 설계</th><th>우선순위</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>기술지표 선택 화면 기본 접힘</td>
+              <td>상단에는 지표 아이콘 버튼과 현재 켜진 레이어 칩만 보입니다. 상세 설정은 우측 drawer 또는 하단 sheet로 열립니다.</td>
+              <td><span class="status p0">P0</span></td>
+            </tr>
+            <tr>
+              <td>종합차트 전체화면 우선</td>
+              <td>기본 레이아웃은 차트 100% 폭입니다. 수급·호가·뉴스·시그널·재무는 접히는 사이드/하단/상단 패널로 이동합니다.</td>
+              <td><span class="status p0">P0</span></td>
+            </tr>
+            <tr>
+              <td>분봉 완성</td>
+              <td>1, 3, 5, 10, 15, 30, 60분봉을 같은 버튼 그룹으로 제공하고, 분봉 선택 시 날짜 선택과 데이터 개수 제한을 함께 표시합니다.</td>
+              <td><span class="status p0">P0</span></td>
+            </tr>
+            <tr>
+              <td>이동평균선 기본 세트</td>
+              <td>MA 3, 5, 10, 20, 60, 120, 240을 프리셋으로 제공하고, 사용자가 숫자 입력으로 추가 MA를 만들 수 있게 합니다.</td>
+              <td><span class="status p0">P0</span></td>
+            </tr>
+            <tr>
+              <td>레이어 위치 이동</td>
+              <td>각 지표는 가격 위, 가격 아래, 하단 보조 패널로 이동 가능해야 합니다. 드래그 핸들, 위/아래 버튼, 위치 select를 모두 제공합니다.</td>
+              <td><span class="status p1">P1</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="mockup">
+        <h2>2. PC 전체화면 목업</h2>
+        <p class="small-note">목업 의도: 차트가 첫 화면 대부분을 차지하고, 지표 설정은 기본 접힘 상태로 우측 상단에만 존재합니다. 보조 정보는 하단 도크 또는 접힌 사이드 패널로만 노출합니다.</p>
+        <div class="mock-shell">
+          <div class="mock-top">
+            <div>
+              <div class="stock-title">
+                <span>삼성전자(005930)</span>
+                <span class="price">78,400</span>
+                <span class="up">+2.1%</span>
+                <span class="subtle">2026-05-05 13:50 KST · 실시간 지연/출처 표시 영역</span>
+              </div>
+            </div>
+            <div class="toolbar">
+              <span class="chip active">1분</span>
+              <span class="chip">3분</span>
+              <span class="chip">5분</span>
+              <span class="chip">10분</span>
+              <span class="chip">15분</span>
+              <span class="chip">30분</span>
+              <span class="chip">60분</span>
+              <span class="chip">일</span>
+              <span class="chip">주</span>
+              <span class="chip">월</span>
+              <span class="icon" title="레이어 설정">☰</span>
+              <span class="icon" title="전체화면">⛶</span>
+            </div>
+          </div>
+          <div class="chart-stage">
+            <div class="chart-area">
+              <div class="pane price-pane">
+                <div class="pane-label">
+                  <span class="layer-tag"><span class="swatch ma3"></span>MA3</span>
+                  <span class="layer-tag"><span class="swatch ma5"></span>MA5</span>
+                  <span class="layer-tag"><span class="swatch ma20"></span>MA20</span>
+                  <span class="layer-tag"><span class="swatch vwap"></span>VWAP</span>
+                  <span class="layer-tag"><span class="swatch boll"></span>BOLL 접힘</span>
+                </div>
+                <div class="band"></div>
+                <div class="line ma3"></div>
+                <div class="line ma5"></div>
+                <div class="line ma20"></div>
+                <div class="line vwap"></div>
+                <div class="price-line"></div>
+                <div class="price-badge">78,400</div>
+                <div class="candle red c1"></div>
+                <div class="candle blue c2"></div>
+                <div class="candle red c3"></div>
+                <div class="candle red c4"></div>
+                <div class="candle blue c5"></div>
+                <div class="candle red c6"></div>
+                <div class="candle blue c7"></div>
+                <div class="candle red c8"></div>
+                <div class="candle red c9"></div>
+                <div class="candle blue c10"></div>
+                <div class="candle red c11"></div>
+                <div class="candle red c12"></div>
+                <div class="candle blue c13"></div>
+                <div class="candle red c14"></div>
+                <div class="candle red c15"></div>
+                <div class="axis-note">가격 패널: 강한 색상 오버레이 최대 3개 권장</div>
+              </div>
+              <div class="pane">
+                <div class="pane-label">
+                  <span class="layer-tag"><span class="swatch" style="background:var(--amber)"></span>거래대금 기본</span>
+                  <span class="chip">거래량으로 전환</span>
+                </div>
+                <div class="bars">
+                  <span class="bar" style="height:35%"></span><span class="bar blue" style="height:50%"></span><span class="bar" style="height:43%"></span>
+                  <span class="bar amber" style="height:82%"></span><span class="bar" style="height:58%"></span><span class="bar blue" style="height:46%"></span>
+                  <span class="bar amber" style="height:94%"></span><span class="bar" style="height:70%"></span><span class="bar" style="height:64%"></span>
+                  <span class="bar blue" style="height:52%"></span><span class="bar amber" style="height:88%"></span><span class="bar" style="height:74%"></span>
+                </div>
+                <div class="axis-note">단위: 억원 · 거래량 전환 가능</div>
+              </div>
+              <div class="pane">
+                <div class="pane-label">
+                  <span class="layer-tag"><span class="swatch" style="background:var(--violet)"></span>RSI</span>
+                  <span class="layer-tag"><span class="swatch" style="background:var(--pink)"></span>MACD 이동 가능</span>
+                  <span class="layer-tag"><span class="swatch" style="background:var(--teal)"></span>OBV 하단</span>
+                </div>
+                <div class="line" style="top:45%; background:var(--violet); transform:rotate(2deg)"></div>
+                <div class="line" style="top:62%; background:var(--pink); transform:rotate(-3deg); opacity:.72"></div>
+                <div class="axis-note">보조지표 패널: 위/아래 순서 변경</div>
+              </div>
+            </div>
+            <div class="drawer collapsed">
+              <div class="drawer-head">
+                <span>레이어 7개 · 접힘</span>
+                <span class="btn active">열기</span>
+              </div>
+            </div>
+            <div class="bottom-dock">
+              <div class="dock-card"><strong>AI 시그널</strong><span>눌림 후 회복 감지 · 신뢰도 72</span></div>
+              <div class="dock-card"><strong>수급</strong><span>외국인 +82억 · 기관 -14억</span></div>
+              <div class="dock-card"><strong>뉴스·공시</strong><span>중요 뉴스 2건 · 공시 1건</span></div>
+              <div class="dock-card"><strong>호가/체결</strong><span>체결강도 118 · 매수 우위</span></div>
+            </div>
+          </div>
+        </div>
+
+        <h3>레이어 설정 drawer 열린 상태</h3>
+        <div class="mock-shell">
+          <div class="mock-top">
+            <div class="stock-title"><span>레이어 설정</span><span class="subtle">기본은 접힘, 사용자가 열었을 때만 상세 노출</span></div>
+            <div class="toolbar"><span class="btn active">저장</span><span class="btn">프리셋</span><span class="btn">초기화</span></div>
+          </div>
+          <div class="chart-stage" style="min-height:430px">
+            <div class="chart-area" style="min-height:430px; grid-template-rows:1fr">
+              <div class="pane price-pane">
+                <div class="pane-label"><span class="layer-tag">가격 캔들 + 선택 레이어 미리보기</span></div>
+                <div class="band"></div><div class="line ma3"></div><div class="line ma5"></div><div class="line ma20"></div>
+              </div>
+            </div>
+            <div class="drawer" style="top:18px">
+              <div class="drawer-head"><span>기술지표 레이어</span><span class="btn">접기</span></div>
+              <div class="drawer-body">
+                <div class="select-line">
+                  <span class="chip active">MA 기본</span><span class="chip">추세</span><span class="chip">모멘텀</span><span class="chip">거래</span><span class="chip">변동성</span>
+                </div>
+                <div class="select-line">
+                  <span class="chip active">MA3</span><span class="chip active">MA5</span><span class="chip">MA10</span><span class="chip active">MA20</span>
+                  <span class="chip">MA60</span><span class="chip">MA120</span><span class="chip">MA240</span>
+                </div>
+                <div class="select-line">
+                  <span class="subtle">사용자 MA</span><input class="mini-input" value="34" /><span class="btn">추가</span>
+                  <span class="subtle">권장 동시 노출 3개 · 최대 5개</span>
+                </div>
+                <div class="layer-row"><span class="drag">↕</span><div><strong>MA3</strong><div class="subtle">가격 위 · 굵기 2 · 주황</div></div><span class="btn active">위</span></div>
+                <div class="layer-row"><span class="drag">↕</span><div><strong>MA5</strong><div class="subtle">가격 위 · 굵기 2 · 빨강</div></div><span class="btn active">위</span></div>
+                <div class="layer-row"><span class="drag">↕</span><div><strong>거래대금</strong><div class="subtle">가격 아래 · 기본 패널</div></div><span class="btn">아래</span></div>
+                <div class="layer-row"><span class="drag">↕</span><div><strong>RSI(14)</strong><div class="subtle">보조 패널 · 70/30 기준선</div></div><span class="btn">아래</span></div>
+                <div class="layer-row"><span class="drag">↕</span><div><strong>MACD</strong><div class="subtle">하단 패널 · 접힘 가능</div></div><span class="btn">하단</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="mobile">
+        <h2>3. 모바일 목업</h2>
+        <div class="grid-2">
+          <div class="panel">
+            <h3 style="margin-top:0">모바일 원칙</h3>
+            <p>모바일은 차트 높이를 먼저 확보해야 하므로, 지표 선택은 하단 sheet로 열고 기본은 닫습니다. 시간봉 버튼은 가로 스크롤 칩으로 두며, 사이드 정보는 하단 접이식 카드로만 노출합니다.</p>
+            <div class="item"><strong>터치 우선</strong><p>지표 칩, 분봉 버튼, 전체화면 버튼은 최소 36px 높이를 확보합니다.</p></div>
+            <div class="item" style="margin-top:10px"><strong>레이어 과다 방지</strong><p>모바일에서는 가격 오버레이 3개 초과 시 자동으로 보조 패널 이동 안내를 표시합니다.</p></div>
+          </div>
+          <div class="mobile-mock">
+            <div class="mock-top">
+              <div class="stock-title"><span>삼성전자(005930)</span><span class="up">+2.1%</span></div>
+              <div class="toolbar">
+                <span class="chip active">1분</span><span class="chip">3분</span><span class="chip">5분</span><span class="chip">15분</span><span class="chip">60분</span><span class="icon">☰</span><span class="icon">⛶</span>
+              </div>
+            </div>
+            <div class="chart-stage">
+              <div class="chart-area">
+                <div class="pane price-pane"><div class="pane-label"><span class="layer-tag">MA3 · MA5 · MA20</span></div><div class="line ma3"></div><div class="line ma5"></div><div class="line ma20"></div><div class="price-line"></div></div>
+                <div class="pane"><div class="pane-label"><span class="layer-tag">거래대금</span></div><div class="bars"><span class="bar" style="height:42%"></span><span class="bar amber" style="height:72%"></span><span class="bar blue" style="height:56%"></span><span class="bar" style="height:86%"></span></div></div>
+                <div class="pane"><div class="pane-label"><span class="layer-tag">RSI</span></div><div class="line" style="top:48%; background:var(--violet)"></div></div>
+              </div>
+              <div class="drawer collapsed"><div class="drawer-head"><span>레이어</span><span class="btn active">열기</span></div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="layers">
+        <h2>4. 기술지표 레이어 상세 설계</h2>
+        <table>
+          <thead>
+            <tr><th>그룹</th><th>기본/확장</th><th>권장 위치</th><th>시각화 규칙</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>이동평균선</td>
+              <td>기본 프리셋: 3, 5, 10, 20, 60, 120, 240. 사용자 숫자 입력 추가.</td>
+              <td>가격 위</td>
+              <td>동시 기본 3개, 권장 최대 5개. 6개 이상은 색상 채도를 낮추고 범례를 접습니다.</td>
+            </tr>
+            <tr>
+              <td>거래대금/거래량</td>
+              <td>거래대금 기본, 거래량 토글 전환.</td>
+              <td>가격 아래 첫 패널</td>
+              <td>거래대금은 억원 단위, 거래량은 주 단위. 전일 대비 색상과 상승/하락 색상을 분리합니다.</td>
+            </tr>
+            <tr>
+              <td>추세</td>
+              <td>VWAP, Bollinger, Ichimoku, Supertrend.</td>
+              <td>가격 위 또는 아래</td>
+              <td>Bollinger/Ichimoku는 면적 표현이므로 캔들 대비 opacity 8~14%로 제한합니다.</td>
+            </tr>
+            <tr>
+              <td>모멘텀</td>
+              <td>RSI, MACD, Stochastic, CCI.</td>
+              <td>가격 아래/하단</td>
+              <td>가격 패널과 분리합니다. 기준선 30/50/70 또는 0선을 항상 표시합니다.</td>
+            </tr>
+            <tr>
+              <td>거래/수급</td>
+              <td>OBV, MFI, 체결강도, 외국인/기관 순매수.</td>
+              <td>하단 또는 접힌 도크</td>
+              <td>투자 판단용 정보는 가격 캔들을 가리지 않도록 하단 카드나 보조 패널에 둡니다.</td>
+            </tr>
+            <tr>
+              <td>AI/전략 레이어</td>
+              <td>매수/매도 시그널, 백테스트 체결, 지지/저항, 눌림/돌파 구간.</td>
+              <td>가격 위 + 하단 요약</td>
+              <td>마커는 B/S 단문, 상세 사유는 hover 또는 하단 요약 카드로 분리합니다.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>MA 동시 노출 기준</h3>
+        <div class="decision">
+          <div class="item"><strong>기본값: 3개</strong><p>MA3, MA5, MA20 또는 사용자 프리셋 3개를 기본으로 둡니다.</p></div>
+          <div class="item"><strong>권장 최대: 5개</strong><p>단기 2개, 중기 2개, 장기 1개가 캔들 판독을 크게 해치지 않는 한계입니다.</p></div>
+          <div class="item"><strong>허용 최대: 7개</strong><p>3/5/10/20/60/120/240 전체를 켤 수는 있으나, 경고와 자동 약화가 필요합니다.</p></div>
+          <div class="item"><strong>색상 규칙</strong><p>단기 warm, 중기 cool, 장기 neutral 계열로 묶어 구분합니다.</p></div>
+          <div class="item"><strong>성능 규칙</strong><p>분봉 1,000개 이상에서는 켜진 레이어 수를 제한하거나 가상화/샘플링을 적용합니다.</p></div>
+        </div>
+      </section>
+
+      <section id="implementation">
+        <h2>5. 구현 항목</h2>
+        <table>
+          <thead>
+            <tr><th>단계</th><th>작업</th><th>상세</th><th>검증</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="status p0">P0</span></td>
+              <td>전체화면 차트 레이아웃</td>
+              <td>`/stock/[code]`의 `max-w-7xl + aside` 구조를 차트 중심 full-bleed 구조로 재배치합니다. aside는 접힘 패널로 전환합니다.</td>
+              <td>PC 1440/1920, 모바일 390 viewport에서 차트가 첫 화면 대부분을 차지하는지 확인</td>
+            </tr>
+            <tr>
+              <td><span class="status p0">P0</span></td>
+              <td>기술지표 drawer 기본 접힘</td>
+              <td>현재 펼쳐진 지표 버튼 영역을 `LayerControlDrawer`로 분리하고 기본 collapsed 상태로 시작합니다.</td>
+              <td>초기 진입 시 설정 패널이 차트를 가리지 않는지 확인</td>
+            </tr>
+            <tr>
+              <td><span class="status p0">P0</span></td>
+              <td>MA 설정 확장</td>
+              <td>`IndicatorKey`를 고정 enum에서 period 기반 설정으로 바꾸고 3/5/10/20/60/120/240 + custom period를 지원합니다.</td>
+              <td>MA3/10/240 계산값과 기존 MA5/20/60/120 회귀 확인</td>
+            </tr>
+            <tr>
+              <td><span class="status p0">P0</span></td>
+              <td>분봉 버튼 완성</td>
+              <td>현재 코드상 1/3/5/10/15/30/60분봉은 존재합니다. UI에서 동일 폭 버튼과 URL query 동기화를 정리합니다.</td>
+              <td>`tf=1m/3m/5m/10m/15m/30m/60m` 직접 진입 확인</td>
+            </tr>
+            <tr>
+              <td><span class="status p1">P1</span></td>
+              <td>거래대금 기본 패널</td>
+              <td>현재 API 타입에는 `volume`만 있으므로 `close * volume` 프론트 계산으로 시작하거나 백엔드에 `trading_value`를 추가합니다.</td>
+              <td>억원 단위 표시, 거래량 토글 전환, 결측 데이터 처리 확인</td>
+            </tr>
+            <tr>
+              <td><span class="status p1">P1</span></td>
+              <td>레이어 위치 이동</td>
+              <td>`position: overlay | upper | lower | dock` 모델을 추가하고 드래그 정렬 또는 위/아래 버튼으로 순서를 저장합니다.</td>
+              <td>RSI/MACD/OBV가 위·아래 이동 후 차트 축과 겹치지 않는지 확인</td>
+            </tr>
+            <tr>
+              <td><span class="status p2">P2</span></td>
+              <td>프리셋 저장</td>
+              <td>사용자별 차트 프리셋을 저장합니다. 기본형, 단타형, 추세형, 수급형을 제공하면 반복 사용성이 좋아집니다.</td>
+              <td>저장/불러오기/초기화, 다른 사용자 접근 차단 확인</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

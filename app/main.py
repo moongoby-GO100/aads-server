@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.logging_config import configure_logging
 
-from app.api import health, projects, checkpoints, stream, auth, context, chat, visual_qa, mobile_qa, memory, terminal
+from app.api import health, projects, checkpoints, stream, auth, context, chat, visual_qa, mobile_qa, memory, terminal, browser_bridge
 from app.api.channels import router as channels_router
 from app.api.managers import router as managers_router
 from app.api.conversations import router as conversations_router
@@ -1208,6 +1208,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/devices/android/install",
     "/api/v1/devices/android/download",
     "/api/v1/devices/android/source.zip",
+    "/api/v1/browser-bridge/sessions/register",
     "/api/v1/ops/hot-reload",  # 내부 hot-reload (127.0.0.1 전용)
     "/api/v1/ops/active-streams",  # 내부 스트림 drain 감지 (deploy.sh 전용)
 )
@@ -1320,6 +1321,7 @@ app.include_router(llm_models_router, prefix="/api/v1", tags=["llm-models"])
 app.include_router(braming_router)
 app.include_router(project_docs_router, prefix="/api/v1", tags=["project-docs"])
 app.include_router(terminal.router, prefix="/api/v1", tags=["terminal"])
+app.include_router(browser_bridge.router, prefix="/api/v1", tags=["browser-bridge"])
 
 # 루트 /health — 모니터링 도구 호환 (인증 면제)
 from fastapi.responses import JSONResponse as _JSONResponse

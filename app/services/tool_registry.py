@@ -62,6 +62,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "deep_crawl": True,
     "search_all_projects": True,
     # ── Tier 6: 브라우저 보조 (핵심 2개 상시로드, 나머지 온디맨드) ──────
+    "browser_connect": False,      # Browser Bridge 연결/페어링
     "browser_navigate": False,     # 상시 로드 — AI가 항상 브라우저 접근 가능
     "browser_snapshot": False,     # 상시 로드 — 페이지 구조 확인 필수
     "browser_screenshot": True,
@@ -185,7 +186,7 @@ TOOL_CATEGORY_GUIDE = """\
 - search_all_projects: 6개 프로젝트 동시 검색
 
 ### ⚪ Tier 6 — 브라우저 (소스 분석 후 렌더링 확인 시)
-- browser_navigate/snapshot/screenshot/click/fill/tab_list
+- browser_connect/navigate/snapshot/screenshot/click/fill/tab_list
 - capture_screenshot: URL 스크린샷 캡처 → 이미지 URL 반환
 
 ### 🟣 Pipeline Runner — 코드수정/배포 (기본 권장)
@@ -243,7 +244,7 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
     "search":             ["search_searxng", "web_search"],
     "url_read":           ["jina_read"],
     # Tier 6: 브라우저 — 명시적 요청 시만
-    "browser":            ["browser_navigate"],
+    "browser":            ["browser_connect", "browser_navigate"],
     # CEO 아젠다 관리
     "agenda":             ["add_agenda", "list_agendas", "get_agenda", "update_agenda", "decide_agenda", "search_agendas"],
     "agenda_manage":      ["add_agenda", "list_agendas", "update_agenda"],
@@ -1450,6 +1451,39 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "defer_loading": True,
     },
     # ── AADS-159: 브라우저 도구 (Playwright 기반) ──────────────────────────
+    "browser_connect": {
+        "name": "browser_connect",
+        "description": (
+            "CEO 로컬 Chrome 또는 Browser Bridge 세션 상태를 확인하고, "
+            "OTP/로그인이 필요한 경우 one-time pairing을 생성하거나 등록된 세션을 선택한다. "
+            "인증이 필요한 페이지를 보기 전 먼저 사용한다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "description": "status | create_pairing | select",
+                    "enum": ["status", "create_pairing", "select"],
+                    "default": "status",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "select action에서 활성화할 Browser Bridge session id",
+                },
+                "label": {
+                    "type": "string",
+                    "description": "create_pairing 시 표시할 세션 라벨",
+                    "default": "CEO local Chrome",
+                },
+            },
+            "required": [],
+        },
+        "input_examples": [
+            {"action": "status"},
+            {"action": "create_pairing", "label": "CEO local Chrome"},
+        ],
+    },
     "browser_navigate": {
         "name": "browser_navigate",
         "description": (
@@ -2198,7 +2232,7 @@ _GROUPS: Dict[str, List[str]] = {
     "search": ["search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
-    "browser": ["read_remote_file", "list_remote_dir", "browser_navigate", "browser_snapshot", "browser_screenshot", "capture_screenshot", "browser_click", "browser_fill", "browser_tab_list"],
+    "browser": ["read_remote_file", "list_remote_dir", "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "capture_screenshot", "browser_click", "browser_fill", "browser_tab_list"],
     # AADS-188C Phase 2: 메타 도구 그룹 (Orchestrator)
     "meta": ["check_directive_status", "check_task_status", "read_task_logs", "terminate_task", "delegate_to_agent", "delegate_to_research", "spawn_subagent", "spawn_parallel_subagents"],
     # AADS-186E-1: 크롤링 도구 그룹

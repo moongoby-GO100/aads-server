@@ -1,0 +1,232 @@
+<!DOCTYPE html><html><head>
+		<title>대시보드</title>
+		<!--common head-->
+<!-- <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no"> -->
+<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+
+
+
+
+<!--js-->
+<!--Bootstrap v5.1.3 -->
+<script src="https://pick.newtalk.kr/views/static/js/bootstrap.bundle.min.js"></script>
+<!--jQuery v3.6.0-->
+<!--datetimepicker-->
+<link rel="stylesheet" href="//code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
+<!-- <script src="https://code.jquery.com/jquery-1.12.4.js"></script> -->
+<!-- <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.js"></script> -->
+
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://code.jquery.com/ui/1.12.1/jquery-ui.min.js"></script>
+
+<!--timepicker-->
+<link rel="stylesheet" href="https://pick.newtalk.kr/views/static/css/timepicki.css">
+<script src="https://pick.newtalk.kr/views/static/js/timepicki.js"></script>
+
+
+<script src="https://pick.newtalk.kr/views/static/js/jquery-paged-scroll.min.js"></script>
+
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/noty/3.1.4/noty.css">
+
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/noty/3.1.4/noty.min.js"></script>
+<script src="https://pick.newtalk.kr/views/static/js/helper.js"></script>
+<script src="https://pick.newtalk.kr/views/static/js/common.js"></script>
+<script src="https://pick.newtalk.kr/views/static/js/Sortable.js"></script>
+
+<link href="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/css/select2.min.css" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/js/select2.min.js"></script>
+
+<!--css-->
+<link rel="stylesheet" href="https://netdna.bootstrapcdn.com/font-awesome/3.2.1/css/font-awesome.css">
+<link rel="stylesheet" href="https://pick.newtalk.kr/views/static/css/style_admin.css">		
+</head><body><header class="header-admin">
+	<!--모바일
+	<a class="side_m_bar m-visible" data-bs-toggle="collapse" href="#collapseExample" role="button" aria-expanded="false" aria-controls="collapseExample">
+				<img src="https://pick.newtalk.kr/views/static/img/icon_menu_m.svg" alt="">
+	</a>
+	-->
+	<section class="header_top">
+		<div class="userinfo"> <span class="nicname">(주)뉴톡</span>  님 </div>
+		<a class="dropdown-item btn mid l-orange radius" href="/auth/logout"> 로그아웃</a>
+	</section>
+	<div class="container-fluid">
+		<div class="navbar-wrap">
+			<div class="nav-left">
+									<h1 class="h1">대시보드</h1>
+								<!--
+				<ul class="nav nav-tabs">
+					<li class="nav-item">
+						<a class="active" aria-current="page" href="/root/members">전체 회원</a>
+					</li>
+					<li class="nav-item">
+						<a href="/root/wholesaler">도매 회원</a>
+					</li>
+					<li class="nav-item">
+						<a href="/root/retailer">소매 회원</a>
+					</li>
+					<li class="nav-item">
+						<a href="/root/pigup_admin">픽업관리자</a>
+					</li>
+				</ul>
+				-->
+			</div>
+			<!--
+			<div class="nav-right">
+				<a class="dropdown-toggle" type="button" id="dropdownMenuButton1" data-bs-toggle="dropdown" aria-expanded="false"></a>
+				<ul class="dropdown-menu" aria-labelledby="dropdownMenuButton1">
+					<li><a class="dropdown-item" href="#">관리자01 님</a></li>
+					<li><a class="dropdown-item" href="/root/admin_add">관리자 계정 추가</a></li>
+					<li><a class="dropdown-item" href="/root/admin_list">관리자 목록</a></li>
+					<li><a class="dropdown-item" href="/auth/logout">로그아웃</a></li>
+				</ul>
+			</div>
+			-->
+		</div>
+	</div>
+
+	<div id="loading-overlay" style="display: none;">
+        <div class="loading-content">
+            <img src="https://pick.newtalk.kr/views/assets/images/loading-4.webp" alt="Loading...">
+        </div>
+    </div>
+	
+</header>		<!-- Admin Sidebar -->
+<aside class="sidebar-admin">
+	<div class="side-menu-wrap">
+		<a class="btn-logo" role="button" href="/root/home"><img src="https://pick.newtalk.kr/views/static/img/logo.png"></a>
+		<ul class="side-menu">
+					<li><a class="ad_btn button" on="" role="button" href="/root/home"><i class="admin_gnb1"></i><span class="m-hidden">대시보드</span></a></li>
+			<li><a class="ad_btn button " role="button" href="/root/members"><i class="admin_gnb2"></i><span class="m-hidden">회원관리</span></a></li>
+					<li><a class="ad_btn button " role="button" href="/productSample/product_sample_mng"><i class="admin_gnb3"></i><span class="m-hidden">샘플관리</span></a></li>
+			<!-- <li><a class="ad_btn button " role="button" href="/productSample/product_business_sample_mng"><i class="admin_gnb3"></i><span class="m-hidden">미처리현황</span></a></li> -->
+			<li><a class="ad_btn button " role="button" href="/Product/product_mng"><i class="admin_gnb3"></i><span class="m-hidden">상품관리</span></a></li>
+					<li><a class="ad_btn button " role="button" href="/content/shooting_mng"><i class="admin_gnb3"></i><span class="m-hidden">콘텐츠관리</span></a></li>
+							<!-- <li>
+				<a class="ad_btn button " role="button" href="/root/settlement_shooting_expenses"><i class="admin_gnb3"></i><span class="m-hidden">촬영비용정산</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/ModelFreeplace/place_mng"><i class="admin_gnb3"></i><span class="m-hidden">모델/프리랜서/장소 관리</span></a>
+			</li> -->
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/wholesale_settlement_mng?date1=&amp;date2=&amp;status=1&amp;ncc="><i class="admin_gnb3"></i><span class="m-hidden">입점도매정산관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/retailpage_mng_main"><i class="admin_gnb3"></i><span class="m-hidden">소매페이지관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/settlement_mng"><i class="admin_gnb3"></i><span class="m-hidden">정산관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/product_order"><i class="admin_gnb8"></i><span class="m-hidden">주문관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/vendor_settlement"><i class="admin_gnb3"></i><span class="m-hidden">업체별정산관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/deposit"><i class="admin_gnb4"></i><span class="m-hidden">예치금관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/delivery"><i class="admin_gnb5"></i><span class="m-hidden">택배픽업관리</span></a>
+			</li>
+
+			<li><a class="ad_btn button " role="button" href="/root/message_template"><i class="admin_gnb6"></i><span class="m-hidden">메세지 관리</span></a></li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/notice_manage"><i class="admin_gnb8"></i><span class="m-hidden">앱관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/statistics"><i class="admin_gnb8"></i><span class="m-hidden">통계</span></a>
+			</li>
+
+
+			<li><a class="ad_btn button " role="button" href="/root/coupon"><i class="admin_gnb7"></i><span class="m-hidden">쿠폰관리</span></a></li>
+
+			<li><a class="ad_btn button " role="button" href="/root/center_setting"><i class="admin_gnb5"></i><span class="m-hidden">상가관리</span></a></li>
+
+			<li><a class="ad_btn button " role="button" href="/root/partners_apply"><i class="admin_gnb2"></i><span class="m-hidden">입점상담</span></a></li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/traffic"><i class="admin_gnb8"></i><span class="m-hidden">트래픽</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/admin_add"><i class="admin_gnb9"></i><span class="m-hidden">설정</span></a>
+			</li>
+				</ul>
+	</div>
+</aside>
+
+
+<!--모바일
+<div class="collapse sidebar-wrapper" id="collapseExample">
+	<div class="sidebar">
+		<div class="sidebar-header">
+			<button class="button close" data-bs-toggle="collapse" href="#collapseExample" role="button" aria-expanded="true" aria-controls="collapseExample"></button>
+		</div>
+		<ul class="sidebar-menu" id="collapseExample">
+			<li><a class="ad_btn button" role="button" href="/root/home">홈</a></li>
+			<li class="parent">
+				<a class="ad_btn button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#dropcollapse" aria-expanded="false" aria-controls="dropcollapse">회원 관리</a>
+				<ul class="sidebar-submenu collapse" id="dropcollapse">
+					<li><a href="/root/members">전체회원</li>
+					<li><a href="/root/pigup_admin">픽업관리자</li>
+				</ul>
+			</li>
+			<li><a class="ad_btn button" role="button" href="/root/product_order">상품 관리</a></li>
+			<li><a class="ad_btn button" role="button" href="/root/deposit">예치금 관리</a></li>
+			<li><a class="ad_btn button" role="button" href="/root/delivery"></i>택배 픽업</a></li>
+			<li><a class="ad_btn button" role="button" href="#none">메세지</a></li>
+			<li><a class="ad_btn button" role="button" href="#none">쿠폰</a></li>
+			<li><a class="ad_btn button" role="button" href="#none">게시판</a></li>
+			<li><a class="ad_btn button" role="button" href="/root/basedata">설정</a></li>
+		</ul>
+	</div>
+</div>
+-->	
+	
+		<main class="container_body message">
+			<button class="button primary" onclick="goPage('www.newtalk.kr/auth/login')">뉴톡 페이지 이동</button>
+			<br>
+			<h3>알리고 발송가능건수</h3>
+            <table class="table">
+                <colgroup>
+                    <col><col><col><col>
+                </colgroup>
+                <thead>
+                    <tr>
+                        <th>SMS</th>
+                        <th>LMS</th>
+                        <th>MMS</th>
+                        <th>알림톡</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>5,223</td>
+                        <td>1,694</td>
+                        <td>731</td>
+                        <td>6,750</td>
+                    </tr>
+                </tbody>
+            </table>
+		</main>
+	<script defer="" src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon="{&quot;version&quot;:&quot;2024.11.0&quot;,&quot;token&quot;:&quot;049bbd65c1434f46b0cdf48a2f180d52&quot;,&quot;r&quot;:1,&quot;server_timing&quot;:{&quot;name&quot;:{&quot;cfCacheStatus&quot;:true,&quot;cfEdge&quot;:true,&quot;cfExtPri&quot;:true,&quot;cfL4&quot;:true,&quot;cfOrigin&quot;:true,&quot;cfSpeedBrain&quot;:true},&quot;location_startswith&quot;:null}}" crossorigin="anonymous"></script>
+
+
+	<script>
+		function goPage(url) {
+			window.location.href = 'https://' + url;
+		}
+	</script>
+</body></html>

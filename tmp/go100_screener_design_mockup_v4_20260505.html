@@ -1,0 +1,1067 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GO100 Screener Design Mockup v4</title>
+  <style>
+    :root {
+      --bg: #f3f5f7;
+      --panel: #ffffff;
+      --panel-soft: #f8fafc;
+      --ink: #151b28;
+      --muted: #667085;
+      --line: #d7dee8;
+      --line-strong: #aab6c8;
+      --brand: #0f766e;
+      --brand-strong: #115e59;
+      --blue: #2563eb;
+      --red: #dc2626;
+      --amber: #b45309;
+      --green: #15803d;
+      --violet: #6d28d9;
+      --shadow: 0 10px 24px rgba(15, 23, 42, .08);
+      --radius: 8px;
+      --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--sans);
+      letter-spacing: 0;
+    }
+    button, input, select, textarea { font: inherit; }
+    button { cursor: default; }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      display: grid;
+      grid-template-columns: minmax(240px, 1fr) auto;
+      align-items: center;
+      gap: 14px;
+      min-height: 64px;
+      padding: 0 20px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, .96);
+      backdrop-filter: blur(8px);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+      font-weight: 850;
+    }
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius);
+      background: #111827;
+      color: #fff;
+      font-size: 13px;
+      flex: 0 0 auto;
+    }
+    .brand-text { min-width: 0; }
+    .brand small {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .top-actions {
+      display: flex;
+      justify-content: end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      min-height: 36px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 780;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    .btn.icon {
+      width: 36px;
+      padding: 0;
+      font-size: 16px;
+    }
+    .btn.primary { border-color: var(--brand); background: var(--brand); color: #fff; }
+    .btn.dark { border-color: #111827; background: #111827; color: #fff; }
+    .btn.blue { border-color: var(--blue); background: var(--blue); color: #fff; }
+    .btn.warn { border-color: #f1c88f; background: #fff7ed; color: var(--amber); }
+    .btn.danger { border-color: #fecaca; background: #fff1f2; color: var(--red); }
+    .btn.ghost { background: var(--panel-soft); color: var(--muted); }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: 300px minmax(720px, 1fr) 390px;
+      gap: 14px;
+      max-width: 1840px;
+      margin: 0 auto;
+      padding: 14px;
+      align-items: start;
+    }
+    .panel {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+    }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 48px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+    }
+    .panel-title {
+      min-width: 0;
+      font-size: 14px;
+      font-weight: 850;
+    }
+    .panel-title span {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 720;
+    }
+    .panel-body { padding: 14px; }
+    .left, .right {
+      position: sticky;
+      top: 78px;
+      max-height: calc(100vh - 92px);
+      overflow: auto;
+    }
+
+    .field { display: grid; gap: 6px; margin-bottom: 10px; }
+    .field label, .section-label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 820;
+    }
+    input, select, textarea {
+      width: 100%;
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 0 10px;
+      background: #fff;
+      color: var(--ink);
+    }
+    textarea {
+      min-height: 88px;
+      padding: 10px;
+      resize: vertical;
+    }
+
+    .preset-grid, .check-grid { display: grid; gap: 8px; }
+    .preset, .check-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+      min-height: 40px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      font-size: 12px;
+      font-weight: 750;
+    }
+    .preset.on {
+      border-color: #8fd2ca;
+      background: #ecfdf5;
+      color: var(--brand-strong);
+    }
+    .preset small, .check-row small {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 680;
+    }
+    .check-row input {
+      width: 16px;
+      min-height: 16px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 22px;
+      padding: 0 7px;
+      border-radius: 999px;
+      background: #eef2ff;
+      color: #3730a3;
+      font-size: 11px;
+      font-weight: 850;
+      white-space: nowrap;
+    }
+    .tag.green { background: #ecfdf5; color: var(--green); }
+    .tag.amber { background: #fff7ed; color: var(--amber); }
+    .tag.red { background: #fff1f2; color: var(--red); }
+    .tag.gray { background: #f1f5f9; color: var(--muted); }
+    .tag.violet { background: #f5f3ff; color: var(--violet); }
+    .tag.blue { background: #eff6ff; color: var(--blue); }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      padding: 10px 12px;
+    }
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 760;
+    }
+    .metric strong {
+      display: block;
+      margin-top: 5px;
+      font-size: 19px;
+      line-height: 1.1;
+    }
+
+    .sticky-query {
+      position: sticky;
+      top: 78px;
+      z-index: 35;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 12px;
+      padding: 12px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, .97);
+      box-shadow: var(--shadow);
+    }
+    .formula-line {
+      min-width: 0;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      font-size: 12px;
+      font-weight: 760;
+    }
+    .formula-code {
+      display: inline-flex;
+      max-width: 100%;
+      min-height: 28px;
+      align-items: center;
+      padding: 0 9px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #f8fafc;
+      color: #111827;
+      font-family: var(--mono);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .query-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: end;
+      flex-wrap: wrap;
+    }
+
+    .builder { display: grid; gap: 12px; }
+    .builder-actions {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+    }
+    .action-cluster {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .root-expression {
+      display: grid;
+      grid-template-columns: 120px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+    }
+
+    .group {
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: #fff;
+      box-shadow: var(--shadow);
+    }
+    .group.is-exclude {
+      border-color: #f4a8a8;
+      box-shadow: 0 10px 24px rgba(220, 38, 38, .10);
+    }
+    .group.is-preview {
+      border-style: dashed;
+      box-shadow: none;
+    }
+    .group-head {
+      display: grid;
+      grid-template-columns: 36px 40px minmax(180px, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      min-height: 58px;
+      padding: 9px 10px;
+      border-bottom: 1px solid var(--line);
+      background: #f8fafc;
+    }
+    .group.is-exclude .group-head { background: #fff5f5; }
+    .drag-handle {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border: 1px dashed var(--line-strong);
+      border-radius: var(--radius);
+      background: #fff;
+      color: var(--muted);
+      font-size: 18px;
+      font-weight: 850;
+    }
+    .order-badge {
+      display: grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 999px;
+      background: #111827;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 850;
+    }
+    .exclude-badge { background: var(--red); }
+    .group-name { min-width: 0; }
+    .group-name strong {
+      display: block;
+      font-size: 14px;
+      line-height: 1.2;
+      overflow-wrap: anywhere;
+    }
+    .group-name span {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 720;
+      overflow-wrap: anywhere;
+    }
+    .group-controls {
+      display: flex;
+      gap: 7px;
+      justify-content: end;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .segmented {
+      display: inline-grid;
+      grid-auto-flow: column;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: #fff;
+    }
+    .segmented button {
+      min-width: 46px;
+      min-height: 32px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 850;
+    }
+    .segmented button:last-child { border-right: 0; }
+    .segmented button.on {
+      background: #111827;
+      color: #fff;
+    }
+
+    .condition-list { display: grid; gap: 8px; padding: 10px; }
+    .condition {
+      display: grid;
+      grid-template-columns: 28px minmax(160px, 1.15fr) minmax(150px, .9fr) minmax(96px, .6fr) 74px;
+      gap: 8px;
+      align-items: center;
+      min-height: 44px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+    }
+    .condition .grab {
+      display: grid;
+      place-items: center;
+      width: 26px;
+      height: 28px;
+      border: 1px dashed var(--line);
+      border-radius: var(--radius);
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 850;
+    }
+    .condition-main {
+      min-width: 0;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .condition-main small {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .condition-value {
+      min-height: 30px;
+      display: flex;
+      align-items: center;
+      padding: 0 8px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #f8fafc;
+      color: #111827;
+      font-size: 12px;
+      font-weight: 760;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .mini-actions {
+      display: flex;
+      gap: 6px;
+      justify-content: end;
+    }
+    .mini-btn {
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 850;
+    }
+
+    .drop-row {
+      min-height: 38px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px dashed var(--line-strong);
+      border-radius: var(--radius);
+      background: #f8fafc;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .preview-grid {
+      display: grid;
+      gap: 10px;
+    }
+    .preview-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      overflow: hidden;
+    }
+    .preview-card h3 {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 42px;
+      margin: 0;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line);
+      font-size: 13px;
+    }
+    .preview-card .content { padding: 12px; }
+    .flow-list { display: grid; gap: 8px; }
+    .flow-row {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      min-height: 34px;
+      font-size: 12px;
+      font-weight: 740;
+    }
+    .flow-no {
+      display: grid;
+      place-items: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 999px;
+      background: #111827;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 850;
+    }
+    .flow-no.red { background: var(--red); }
+    .api-box {
+      margin: 0;
+      max-height: 360px;
+      overflow: auto;
+      border: 1px solid #111827;
+      border-radius: var(--radius);
+      background: #0b1020;
+      color: #d7e3ff;
+      padding: 12px;
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.5;
+      white-space: pre;
+    }
+    .logic-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .logic-table th, .logic-table td {
+      padding: 8px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    .logic-table th {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 850;
+    }
+    .logic-table tr:last-child td { border-bottom: 0; }
+
+    .result-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .result-item {
+      min-height: 58px;
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+    }
+    .result-item span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 780;
+    }
+    .result-item strong {
+      display: block;
+      margin-top: 4px;
+      font-size: 16px;
+    }
+
+    .bottom-sheet {
+      display: none;
+      position: sticky;
+      bottom: 0;
+      z-index: 45;
+      margin: 0 -14px -14px;
+      padding: 10px 14px;
+      border-top: 1px solid var(--line);
+      background: rgba(255, 255, 255, .97);
+      box-shadow: 0 -8px 20px rgba(15, 23, 42, .08);
+    }
+
+    @media (max-width: 1320px) {
+      .workspace { grid-template-columns: 280px minmax(0, 1fr); }
+      .right { position: static; grid-column: 1 / -1; max-height: none; }
+      .preview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 960px) {
+      .topbar { grid-template-columns: 1fr; padding: 10px 12px; }
+      .top-actions { justify-content: start; }
+      .workspace { grid-template-columns: 1fr; padding: 10px; }
+      .left, .right, .sticky-query { position: static; max-height: none; }
+      .toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .builder-actions, .root-expression, .sticky-query { grid-template-columns: 1fr; }
+      .condition {
+        grid-template-columns: 28px minmax(0, 1fr);
+      }
+      .condition-value, .mini-actions { grid-column: 2; }
+      .condition .tag { justify-self: start; }
+      .preview-grid { grid-template-columns: 1fr; }
+      .result-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .bottom-sheet { display: block; }
+    }
+    @media (max-width: 560px) {
+      .toolbar, .result-strip { grid-template-columns: 1fr; }
+      .group-head { grid-template-columns: 34px minmax(0, 1fr); }
+      .order-badge, .group-controls { grid-column: 2; }
+      .query-actions, .action-cluster { justify-content: start; }
+      .btn { min-width: 0; white-space: normal; line-height: 1.2; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">G100</div>
+      <div class="brand-text">
+        GO100 조건식 스크리너 v4
+        <small>그룹 조건식, NOT 제외그룹, 프리셋 병합, 저장 payload 명세 포함</small>
+      </div>
+    </div>
+    <div class="top-actions">
+      <button class="btn ghost">임시저장</button>
+      <button class="btn">불러오기</button>
+      <button class="btn primary">조건식 저장</button>
+      <button class="btn dark">조회 실행</button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="panel left">
+      <div class="panel-head">
+        <div class="panel-title">조건 라이브러리<span>프리셋과 제외조건을 그룹으로 병합</span></div>
+      </div>
+      <div class="panel-body">
+        <div class="field">
+          <label for="market">시장</label>
+          <select id="market">
+            <option>KOSPI + KOSDAQ</option>
+            <option>KOSPI</option>
+            <option>KOSDAQ</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="base">기준일</label>
+          <input id="base" value="2026-05-05" />
+        </div>
+
+        <div class="section-label">프리셋 병합 방식</div>
+        <div class="preset-grid" style="margin-top:8px;">
+          <div class="preset on">
+            <div>성장주 기본팩<small>매출성장 + 영업이익률 + 거래대금</small></div>
+            <span class="tag green">AND 병합</span>
+          </div>
+          <div class="preset on">
+            <div>수급 강화팩<small>기관/외국인 5일 순매수</small></div>
+            <span class="tag blue">OR 그룹</span>
+          </div>
+          <div class="preset">
+            <div>저평가 필터<small>PER, PBR, ROE 조건 세트</small></div>
+            <span class="tag gray">미적용</span>
+          </div>
+        </div>
+
+        <div class="section-label" style="margin-top:16px;">NOT 제외그룹 템플릿</div>
+        <div class="check-grid" style="margin-top:8px;">
+          <label class="check-row">
+            <div>관리종목/거래정지<small>status_flags 기반 상시 제외</small></div>
+            <input type="checkbox" checked />
+          </label>
+          <label class="check-row">
+            <div>스팩/우선주 제외<small>stock_name 패턴 + 종목 속성</small></div>
+            <input type="checkbox" checked />
+          </label>
+          <label class="check-row">
+            <div>거래대금 부족<small>20일 평균 30억원 미만</small></div>
+            <input type="checkbox" checked />
+          </label>
+        </div>
+
+        <div class="section-label" style="margin-top:16px;">조건 검색</div>
+        <div class="field" style="margin-top:8px;">
+          <input value="영업이익률, 기관 순매수, RSI" />
+        </div>
+      </div>
+    </aside>
+
+    <section>
+      <div class="toolbar">
+        <div class="metric"><span>포함그룹</span><strong>3</strong></div>
+        <div class="metric"><span>제외그룹</span><strong>1</strong></div>
+        <div class="metric"><span>조건 수</span><strong>12</strong></div>
+        <div class="metric"><span>예상 후보</span><strong>48</strong></div>
+        <div class="metric"><span>검증 상태</span><strong>OK</strong></div>
+      </div>
+
+      <div class="sticky-query">
+        <div class="formula-line">
+          <span class="tag">최종식</span>
+          <span class="formula-code">(G1 AND G2 AND (G3 OR G4)) AND NOT X1</span>
+        </div>
+        <div class="query-actions">
+          <button class="btn">미리보기</button>
+          <button class="btn primary">조회</button>
+          <button class="btn dark">저장 후 실행</button>
+        </div>
+      </div>
+
+      <div class="builder">
+        <div class="builder-actions">
+          <div class="action-cluster">
+            <button class="btn icon" title="그룹 위로">↑</button>
+            <button class="btn icon" title="그룹 아래로">↓</button>
+            <button class="btn">+ 포함그룹</button>
+            <button class="btn danger">+ NOT 제외그룹</button>
+            <button class="btn warn">프리셋 병합</button>
+          </div>
+          <div class="action-cluster">
+            <span class="tag green">드래그 순서 저장</span>
+            <span class="tag amber">API 명세 포함</span>
+          </div>
+        </div>
+
+        <div class="root-expression">
+          <span class="tag">ROOT</span>
+          <div class="formula-code">include_expression = G1 AND G2 AND (G3 OR G4)</div>
+          <div class="segmented" aria-label="root operator">
+            <button class="on">AND</button>
+            <button>OR</button>
+          </div>
+        </div>
+
+        <article class="group">
+          <div class="group-head">
+            <div class="drag-handle">⋮⋮</div>
+            <div class="order-badge">G1</div>
+            <div class="group-name">
+              <strong>기본 유동성 필터</strong>
+              <span>프리셋 성장주 기본팩에서 병합됨, include=true</span>
+            </div>
+            <div class="group-controls">
+              <div class="segmented"><button class="on">AND</button><button>OR</button></div>
+              <button class="btn icon" title="조건 추가">＋</button>
+              <button class="btn icon" title="복제">⧉</button>
+            </div>
+          </div>
+          <div class="condition-list">
+            <div class="condition">
+              <div class="grab">↕</div>
+              <div class="condition-main">20일 평균 거래대금<small>market_data.avg_trading_value_20d</small></div>
+              <div class="condition-value">>= 5,000,000,000</div>
+              <span class="tag green">필수</span>
+              <div class="mini-actions"><button class="mini-btn">↑</button><button class="mini-btn">↓</button></div>
+            </div>
+            <div class="condition">
+              <div class="grab">↕</div>
+              <div class="condition-main">시가총액<small>market_cap</small></div>
+              <div class="condition-value">>= 300,000,000,000</div>
+              <span class="tag">필터</span>
+              <div class="mini-actions"><button class="mini-btn">↑</button><button class="mini-btn">↓</button></div>
+            </div>
+            <div class="drop-row">이 위치로 조건을 끌어 순서 변경</div>
+          </div>
+        </article>
+
+        <article class="group">
+          <div class="group-head">
+            <div class="drag-handle">⋮⋮</div>
+            <div class="order-badge">G2</div>
+            <div class="group-name">
+              <strong>실적 성장 조건</strong>
+              <span>조건 내부 AND, 그룹 순서는 G1 다음</span>
+            </div>
+            <div class="group-controls">
+              <div class="segmented"><button class="on">AND</button><button>OR</button></div>
+              <button class="btn icon" title="조건 추가">＋</button>
+              <button class="btn icon" title="복제">⧉</button>
+            </div>
+          </div>
+          <div class="condition-list">
+            <div class="condition">
+              <div class="grab">↕</div>
+              <div class="condition-main">최근 분기 매출 성장률<small>financials.revenue_growth_qoq</small></div>
+              <div class="condition-value">>= 12.0%</div>
+              <span class="tag green">필수</span>
+              <div class="mini-actions"><button class="mini-btn">↑</button><button class="mini-btn">↓</button></div>
+            </div>
+            <div class="condition">
+              <div class="grab">↕</div>
+              <div class="condition-main">영업이익률<small>financials.operating_margin</small></div>
+              <div class="condition-value">>= 8.0%</div>
+              <span class="tag">필터</span>
+              <div class="mini-actions"><button class="mini-btn">↑</button><button class="mini-btn">↓</button></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="group">
+          <div class="group-head">
+            <div class="drag-handle">⋮⋮</div>
+            <div class="order-badge">G3</div>
+            <div class="group-name">
+              <strong>수급 모멘텀</strong>
+              <span>수급 강화팩이 별도 OR 그룹으로 병합됨</span>
+            </div>
+            <div class="group-controls">
+              <div class="segmented"><button>AND</button><button class="on">OR</button></div>
+              <button class="btn icon" title="조건 추가">＋</button>
+              <button class="btn icon" title="복제">⧉</button>
+            </div>
+          </div>
+          <div class="condition-list">
+            <div class="condition">
+              <div class="grab">↕</div>
+              <div class="condition-main">기관 5일 순매수<small>investor_flow.institution_net_buy_5d</small></div>
+              <div class="condition-value">> 0</div>
+              <span class="tag blue">OR</span>
+              <div class="mini-actions"><button class="mini-btn">↑</button><button class="mini-btn">↓</button></div>
+            </div>
+            <div class="condition">
+              <div class="grab">↕</div>
+              <div class="condition-main">외국인 5일 순매수<small>investor_flow.foreigner_net_buy_5d</small></div>
+              <div class="condition-value">> 0</div>
+              <span class="tag blue">OR</span>
+              <div class="mini-actions"><button class="mini-btn">↑</button><button class="mini-btn">↓</button></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="group is-exclude">
+          <div class="group-head">
+            <div class="drag-handle">⋮⋮</div>
+            <div class="order-badge exclude-badge">X1</div>
+            <div class="group-name">
+              <strong>NOT 제외그룹</strong>
+              <span>최종식에서 AND NOT X1로 적용, include=false</span>
+            </div>
+            <div class="group-controls">
+              <div class="segmented"><button class="on">OR</button><button>AND</button></div>
+              <button class="btn icon" title="조건 추가">＋</button>
+              <button class="btn icon" title="복제">⧉</button>
+            </div>
+          </div>
+          <div class="condition-list">
+            <div class="condition">
+              <div class="grab">↕</div>
+              <div class="condition-main">관리종목 여부<small>status_flags.is_administrative</small></div>
+              <div class="condition-value">= true</div>
+              <span class="tag red">제외</span>
+              <div class="mini-actions"><button class="mini-btn">↑</button><button class="mini-btn">↓</button></div>
+            </div>
+            <div class="condition">
+              <div class="grab">↕</div>
+              <div class="condition-main">거래정지 여부<small>status_flags.is_suspended</small></div>
+              <div class="condition-value">= true</div>
+              <span class="tag red">제외</span>
+              <div class="mini-actions"><button class="mini-btn">↑</button><button class="mini-btn">↓</button></div>
+            </div>
+            <div class="condition">
+              <div class="grab">↕</div>
+              <div class="condition-main">종목명 패턴<small>stock_name</small></div>
+              <div class="condition-value">contains "스팩" OR "우"</div>
+              <span class="tag red">제외</span>
+              <div class="mini-actions"><button class="mini-btn">↑</button><button class="mini-btn">↓</button></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="group is-preview">
+          <div class="group-head">
+            <div class="drag-handle">+</div>
+            <div class="order-badge">G4</div>
+            <div class="group-name">
+              <strong>새 조건그룹 드롭 영역</strong>
+              <span>프리셋 또는 조건을 끌어오면 그룹이 생성됨</span>
+            </div>
+            <div class="group-controls">
+              <button class="btn">그룹 추가</button>
+            </div>
+          </div>
+          <div class="condition-list">
+            <div class="drop-row">조건 라이브러리에서 항목을 끌어 놓기</div>
+          </div>
+        </article>
+      </div>
+
+      <div class="result-strip">
+        <div class="result-item"><span>후보 종목</span><strong>48개</strong></div>
+        <div class="result-item"><span>제외 종목</span><strong>173개</strong></div>
+        <div class="result-item"><span>응답 제한</span><strong>상위 100</strong></div>
+        <div class="result-item"><span>정렬</span><strong>score desc</strong></div>
+      </div>
+
+      <div class="bottom-sheet">
+        <div class="query-actions">
+          <button class="btn">미리보기</button>
+          <button class="btn primary">조회</button>
+          <button class="btn dark">저장 후 실행</button>
+        </div>
+      </div>
+    </section>
+
+    <aside class="panel right">
+      <div class="panel-head">
+        <div class="panel-title">개발 명세<span>화면 상태와 API payload를 동시에 검수</span></div>
+      </div>
+      <div class="panel-body preview-grid">
+        <section class="preview-card">
+          <h3>적용 순서 <span class="tag green">v4 반영</span></h3>
+          <div class="content">
+            <div class="flow-list">
+              <div class="flow-row"><span class="flow-no">1</span><span>시장/기준일 선택</span><span class="tag gray">scope</span></div>
+              <div class="flow-row"><span class="flow-no">2</span><span>프리셋을 포함그룹으로 병합</span><span class="tag blue">merge</span></div>
+              <div class="flow-row"><span class="flow-no">3</span><span>조건과 그룹 순서 드래그 저장</span><span class="tag">order</span></div>
+              <div class="flow-row"><span class="flow-no red">4</span><span>NOT 제외그룹을 마지막에 적용</span><span class="tag red">exclude</span></div>
+              <div class="flow-row"><span class="flow-no">5</span><span>최종식 기준으로 조회/저장</span><span class="tag green">run</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="preview-card">
+          <h3>병합 규칙 <span class="tag amber">프론트 상태</span></h3>
+          <div class="content">
+            <table class="logic-table">
+              <thead>
+                <tr><th>항목</th><th>정책</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>프리셋 AND 병합</td><td>현재 root 끝에 새 include group 추가</td></tr>
+                <tr><td>프리셋 OR 병합</td><td>선택 그룹 내부에 조건 추가 또는 새 OR group 생성</td></tr>
+                <tr><td>중복 조건</td><td>field/operator/value 해시 기준 병합 전 경고</td></tr>
+                <tr><td>제외 조건</td><td>include=false group으로 저장, 최종식은 AND NOT</td></tr>
+                <tr><td>순서</td><td>group_order, condition_order를 payload에 포함</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="preview-card">
+          <h3>저장 payload <span class="tag violet">POST</span></h3>
+          <div class="content">
+<pre class="api-box">POST /api/go100/screener/condition-sets
+{
+  "name": "성장+수급 v4",
+  "market": "ALL",
+  "base_date": "2026-05-05",
+  "root_operator": "AND",
+  "include_expression": "G1 AND G2 AND (G3 OR G4)",
+  "exclude_expression": "X1",
+  "final_expression": "(G1 AND G2 AND (G3 OR G4)) AND NOT X1",
+  "preset_merge": [
+    {
+      "preset_id": "growth_basic",
+      "merge_mode": "append_group",
+      "operator": "AND"
+    },
+    {
+      "preset_id": "flow_boost",
+      "merge_mode": "new_or_group",
+      "operator": "OR"
+    }
+  ],
+  "groups": [
+    {
+      "client_id": "G1",
+      "include": true,
+      "operator": "AND",
+      "group_order": 1,
+      "conditions": [
+        {
+          "field": "avg_trading_value_20d",
+          "operator": ">=",
+          "value": 5000000000,
+          "condition_order": 1
+        }
+      ]
+    },
+    {
+      "client_id": "X1",
+      "include": false,
+      "operator": "OR",
+      "group_order": 99,
+      "conditions": [
+        {
+          "field": "is_administrative",
+          "operator": "=",
+          "value": true,
+          "condition_order": 1
+        }
+      ]
+    }
+  ]
+}</pre>
+          </div>
+        </section>
+
+        <section class="preview-card">
+          <h3>조회 payload <span class="tag green">RUN</span></h3>
+          <div class="content">
+<pre class="api-box">POST /api/go100/screener/run
+{
+  "condition_set_id": "draft",
+  "market": "ALL",
+  "base_date": "2026-05-05",
+  "limit": 100,
+  "sort": [
+    {"field": "go100_score", "direction": "desc"},
+    {"field": "avg_trading_value_20d", "direction": "desc"}
+  ],
+  "dry_run": false,
+  "return_debug": true
+}</pre>
+          </div>
+        </section>
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    const buttons = document.querySelectorAll('.segmented button');
+    buttons.forEach((button) => {
+      button.addEventListener('click', () => {
+        const group = button.parentElement;
+        group.querySelectorAll('button').forEach((peer) => peer.classList.remove('on'));
+        button.classList.add('on');
+      });
+    });
+  </script>
+</body>
+</html>

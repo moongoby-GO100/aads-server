@@ -1,0 +1,2088 @@
+<!DOCTYPE html><html><head>
+		<title>상품관리</title>
+		<!--common head-->
+<!-- <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no"> -->
+<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+
+
+
+
+<!--js-->
+<!--Bootstrap v5.1.3 -->
+<script src="https://pick.newtalk.kr/views/static/js/bootstrap.bundle.min.js"></script>
+<!--jQuery v3.6.0-->
+<!--datetimepicker-->
+<link rel="stylesheet" href="//code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
+<!-- <script src="https://code.jquery.com/jquery-1.12.4.js"></script> -->
+<!-- <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.js"></script> -->
+
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://code.jquery.com/ui/1.12.1/jquery-ui.min.js"></script>
+
+<!--timepicker-->
+<link rel="stylesheet" href="https://pick.newtalk.kr/views/static/css/timepicki.css">
+<script src="https://pick.newtalk.kr/views/static/js/timepicki.js"></script>
+
+
+<script src="https://pick.newtalk.kr/views/static/js/jquery-paged-scroll.min.js"></script>
+
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/noty/3.1.4/noty.css">
+
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/noty/3.1.4/noty.min.js"></script>
+<script src="https://pick.newtalk.kr/views/static/js/helper.js"></script>
+<script src="https://pick.newtalk.kr/views/static/js/common.js"></script>
+<script src="https://pick.newtalk.kr/views/static/js/Sortable.js"></script>
+
+<link href="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/css/select2.min.css" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/js/select2.min.js"></script>
+
+<!--css-->
+<link rel="stylesheet" href="https://netdna.bootstrapcdn.com/font-awesome/3.2.1/css/font-awesome.css">
+<link rel="stylesheet" href="https://pick.newtalk.kr/views/static/css/style_admin.css">		
+<style>
+      .aads-mark { position:absolute; z-index:2147483647; border:4px solid #ef4444; background:rgba(239,68,68,.08); pointer-events:none; }
+      .aads-note { position:absolute; z-index:2147483647; max-width:360px; padding:10px 12px; border-radius:6px; background:#111827; color:#fff; font:700 14px/1.45 Arial,sans-serif; box-shadow:0 8px 24px rgba(0,0,0,.25); pointer-events:none; }
+      .aads-note small { display:block; margin-top:4px; color:#fde68a; font-weight:600; }
+    </style></head><body><header class="header-admin">
+	<!--모바일
+	<a class="side_m_bar m-visible" data-bs-toggle="collapse" href="#collapseExample" role="button" aria-expanded="false" aria-controls="collapseExample">
+				<img src="https://pick.newtalk.kr/views/static/img/icon_menu_m.svg" alt="">
+	</a>
+	-->
+	<section class="header_top">
+		<div class="userinfo"> <span class="nicname">(주)뉴톡</span>  님 </div>
+		<a class="dropdown-item btn mid l-orange radius" href="/auth/logout"> 로그아웃</a>
+	</section>
+	<div class="container-fluid">
+		<div class="navbar-wrap">
+			<div class="nav-left">
+									<!-- <h1 class="h1">주문관리</h1> -->
+					<ul class="nav nav-tabs order">
+						<li class="nav-item">
+							<a href="/root/product_order">발주</a>
+						</li>
+						<li class="nav-item">
+							<a class="active" data-bs-toggle="collapse" href="#collapse" role="button" aria-expanded="false" aria-controls="collapse">입고</a>
+							<div class="nav-child collapse show" id="collapse">
+								<div>
+									<a href="/root/product_store">입고 등록</a>
+									<a class="active mx-2" href="/root/product_store_list">입고 상세 조회</a>
+									<a href="/root/product_barcode">바코드 출력</a>
+								</div>
+							</div>
+						</li>
+					</ul>
+
+								<!--
+				<ul class="nav nav-tabs">
+					<li class="nav-item">
+						<a class="active" aria-current="page" href="/root/members">전체 회원</a>
+					</li>
+					<li class="nav-item">
+						<a href="/root/wholesaler">도매 회원</a>
+					</li>
+					<li class="nav-item">
+						<a href="/root/retailer">소매 회원</a>
+					</li>
+					<li class="nav-item">
+						<a href="/root/pigup_admin">픽업관리자</a>
+					</li>
+				</ul>
+				-->
+			</div>
+			<!--
+			<div class="nav-right">
+				<a class="dropdown-toggle" type="button" id="dropdownMenuButton1" data-bs-toggle="dropdown" aria-expanded="false"></a>
+				<ul class="dropdown-menu" aria-labelledby="dropdownMenuButton1">
+					<li><a class="dropdown-item" href="#">관리자01 님</a></li>
+					<li><a class="dropdown-item" href="/root/admin_add">관리자 계정 추가</a></li>
+					<li><a class="dropdown-item" href="/root/admin_list">관리자 목록</a></li>
+					<li><a class="dropdown-item" href="/auth/logout">로그아웃</a></li>
+				</ul>
+			</div>
+			-->
+		</div>
+	</div>
+
+	<div id="loading-overlay" style="display: none;">
+        <div class="loading-content">
+            <img src="https://pick.newtalk.kr/views/assets/images/loading-4.webp" alt="Loading...">
+        </div>
+    </div>
+	
+</header>		<!-- Admin Sidebar -->
+<aside class="sidebar-admin">
+	<div class="side-menu-wrap">
+		<a class="btn-logo" role="button" href="/root/home"><img src="https://pick.newtalk.kr/views/static/img/logo.png"></a>
+		<ul class="side-menu">
+					<li><a class="ad_btn button" role="button" href="/root/home"><i class="admin_gnb1"></i><span class="m-hidden">대시보드</span></a></li>
+			<li><a class="ad_btn button " role="button" href="/root/members"><i class="admin_gnb2"></i><span class="m-hidden">회원관리</span></a></li>
+					<li><a class="ad_btn button " role="button" href="/productSample/product_sample_mng"><i class="admin_gnb3"></i><span class="m-hidden">샘플관리</span></a></li>
+			<!-- <li><a class="ad_btn button " role="button" href="/productSample/product_business_sample_mng"><i class="admin_gnb3"></i><span class="m-hidden">미처리현황</span></a></li> -->
+			<li><a class="ad_btn button " role="button" href="/Product/product_mng"><i class="admin_gnb3"></i><span class="m-hidden">상품관리</span></a></li>
+					<li><a class="ad_btn button " role="button" href="/content/shooting_mng"><i class="admin_gnb3"></i><span class="m-hidden">콘텐츠관리</span></a></li>
+							<!-- <li>
+				<a class="ad_btn button " role="button" href="/root/settlement_shooting_expenses"><i class="admin_gnb3"></i><span class="m-hidden">촬영비용정산</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/ModelFreeplace/place_mng"><i class="admin_gnb3"></i><span class="m-hidden">모델/프리랜서/장소 관리</span></a>
+			</li> -->
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/wholesale_settlement_mng?date1=&amp;date2=&amp;status=1&amp;ncc="><i class="admin_gnb3"></i><span class="m-hidden">입점도매정산관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/retailpage_mng_main"><i class="admin_gnb3"></i><span class="m-hidden">소매페이지관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/settlement_mng"><i class="admin_gnb3"></i><span class="m-hidden">정산관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button on" role="button" href="/root/product_order"><i class="admin_gnb8"></i><span class="m-hidden">주문관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/vendor_settlement"><i class="admin_gnb3"></i><span class="m-hidden">업체별정산관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/deposit"><i class="admin_gnb4"></i><span class="m-hidden">예치금관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/delivery"><i class="admin_gnb5"></i><span class="m-hidden">택배픽업관리</span></a>
+			</li>
+
+			<li><a class="ad_btn button " role="button" href="/root/message_template"><i class="admin_gnb6"></i><span class="m-hidden">메세지 관리</span></a></li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/notice_manage"><i class="admin_gnb8"></i><span class="m-hidden">앱관리</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/statistics"><i class="admin_gnb8"></i><span class="m-hidden">통계</span></a>
+			</li>
+
+
+			<li><a class="ad_btn button " role="button" href="/root/coupon"><i class="admin_gnb7"></i><span class="m-hidden">쿠폰관리</span></a></li>
+
+			<li><a class="ad_btn button " role="button" href="/root/center_setting"><i class="admin_gnb5"></i><span class="m-hidden">상가관리</span></a></li>
+
+			<li><a class="ad_btn button " role="button" href="/root/partners_apply"><i class="admin_gnb2"></i><span class="m-hidden">입점상담</span></a></li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/traffic"><i class="admin_gnb8"></i><span class="m-hidden">트래픽</span></a>
+			</li>
+
+			<li>
+				<a class="ad_btn button " role="button" href="/root/admin_add"><i class="admin_gnb9"></i><span class="m-hidden">설정</span></a>
+			</li>
+				</ul>
+	</div>
+</aside>
+
+
+<!--모바일
+<div class="collapse sidebar-wrapper" id="collapseExample">
+	<div class="sidebar">
+		<div class="sidebar-header">
+			<button class="button close" data-bs-toggle="collapse" href="#collapseExample" role="button" aria-expanded="true" aria-controls="collapseExample"></button>
+		</div>
+		<ul class="sidebar-menu" id="collapseExample">
+			<li><a class="ad_btn button" role="button" href="/root/home">홈</a></li>
+			<li class="parent">
+				<a class="ad_btn button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#dropcollapse" aria-expanded="false" aria-controls="dropcollapse">회원 관리</a>
+				<ul class="sidebar-submenu collapse" id="dropcollapse">
+					<li><a href="/root/members">전체회원</li>
+					<li><a href="/root/pigup_admin">픽업관리자</li>
+				</ul>
+			</li>
+			<li><a class="ad_btn button" role="button" href="/root/product_order">상품 관리</a></li>
+			<li><a class="ad_btn button" role="button" href="/root/deposit">예치금 관리</a></li>
+			<li><a class="ad_btn button" role="button" href="/root/delivery"></i>택배 픽업</a></li>
+			<li><a class="ad_btn button" role="button" href="#none">메세지</a></li>
+			<li><a class="ad_btn button" role="button" href="#none">쿠폰</a></li>
+			<li><a class="ad_btn button" role="button" href="#none">게시판</a></li>
+			<li><a class="ad_btn button" role="button" href="/root/basedata">설정</a></li>
+		</ul>
+	</div>
+</div>
+-->		<script type="text/javascript" src="https://t1.daumcdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js"></script>
+	
+	
+		<main class="container_body product tpA">
+			<div class="layer-box">
+				<!--<div class="table-wrap serach_info layer-box tpA">-->
+				<div class="table-wrap serach_info">
+					<div class="top">
+						<p>대량 발주 등록 건 조회</p>
+						<div class="btn-wrap tpA">
+							<button id="search_order_btn" class="btn mid orange">검색</button>
+							<button id="search_order_clear_btn" class="btn mid l-orange">초기화</button>
+						</div>
+					</div>
+					<div class="section1">
+						<div>
+							<label>업체명 :</label>
+							<input id="shop_name" class="input" type="text" value="">
+						</div>
+						<div>
+							<label>사입담당자명 : </label>
+							<input id="order_username" class="input" type="text" value="">
+						</div>
+						<div>
+							<label>사입담당자 연락처 : </label>
+							<input id="order_user_tel" class="input" type="text" value="">
+						</div>
+					</div>
+					<div class="date">
+						<!--<label class="mr-2">발주일/입고일 :</label>-->
+						<select id="createdKey" class="select mr-5">
+							<option value="1" selected="">발주등록일</option>
+							<option value="2">입고등록일</option>
+						</select>
+						<div class="datepic-block">
+							<div>
+								<input id="datepicker1" class="input hasDatepicker" placeholder="시작일">
+								<div class="time_pick"><div class="time_pick"><input id="timepicker1" class="input" placeholder="시작시간"><div class="timepicker_wrap "><div class="arrow_top"></div><div class="time"><div class="prev action-next"></div><div class="ti_tx"><input type="text" class="timepicki-input"></div><div class="next action-prev"></div></div><div class="mins"><div class="prev action-next"></div><div class="mi_tx"><input type="text" class="timepicki-input"></div><div class="next action-prev"></div></div><div class="meridian"><div class="prev action-next"></div><div class="mer_tx"><input type="text" class="timepicki-input" readonly=""></div><div class="next action-prev"></div></div></div></div><div class="timepicker_wrap "><div class="arrow_top"></div><div class="time"><div class="prev action-next"></div><div class="ti_tx"><input type="text" class="timepicki-input"></div><div class="next action-prev"></div></div><div class="mins"><div class="prev action-next"></div><div class="mi_tx"><input type="text" class="timepicki-input"></div><div class="next action-prev"></div></div><div class="meridian"><div class="prev action-next"></div><div class="mer_tx"><input type="text" class="timepicki-input" readonly=""></div><div class="next action-prev"></div></div></div><div class="timepicker_wrap "><div class="arrow_top"></div><div class="time"><div class="prev action-next"></div><div class="ti_tx"><input type="text" class="timepicki-input"></div><div class="next action-prev"></div></div><div class="mins"><div class="prev action-next"></div><div class="mi_tx"><input type="text" class="timepicki-input"></div><div class="next action-prev"></div></div><div class="meridian"><div class="prev action-next"></div><div class="mer_tx"><input type="text" class="timepicki-input" readonly=""></div><div class="next action-prev"></div></div></div></div>
+							</div>
+							<div class="mx-1">~</div>
+							<div>
+								<input id="datepicker2" class="input hasDatepicker" placeholder="종료일">
+								<div class="time_pick"><div class="time_pick"><input id="timepicker2" class="input" placeholder="종료시간"><div class="timepicker_wrap "><div class="arrow_top"></div><div class="time"><div class="prev action-next"></div><div class="ti_tx"><input type="text" class="timepicki-input"></div><div class="next action-prev"></div></div><div class="mins"><div class="prev action-next"></div><div class="mi_tx"><input type="text" class="timepicki-input"></div><div class="next action-prev"></div></div><div class="meridian"><div class="prev action-next"></div><div class="mer_tx"><input type="text" class="timepicki-input" readonly=""></div><div class="next action-prev"></div></div></div></div><div class="timepicker_wrap "><div class="arrow_top"></div><div class="time"><div class="prev action-next"></div><div class="ti_tx"><input type="text" class="timepicki-input"></div><div class="next action-prev"></div></div><div class="mins"><div class="prev action-next"></div><div class="mi_tx"><input type="text" class="timepicki-input"></div><div class="next action-prev"></div></div><div class="meridian"><div class="prev action-next"></div><div class="mer_tx"><input type="text" class="timepicki-input" readonly=""></div><div class="next action-prev"></div></div></div><div class="timepicker_wrap "><div class="arrow_top"></div><div class="time"><div class="prev action-next"></div><div class="ti_tx"><input type="text" class="timepicki-input"></div><div class="next action-prev"></div></div><div class="mins"><div class="prev action-next"></div><div class="mi_tx"><input type="text" class="timepicki-input"></div><div class="next action-prev"></div></div><div class="meridian"><div class="prev action-next"></div><div class="mer_tx"><input type="text" class="timepicki-input" readonly=""></div><div class="next action-prev"></div></div></div></div>
+							</div>
+							<div class="btn-wrap tpA">
+								<button id="created_0" name="created_btn" class="btn mid bor-orange small round">전체</button>
+								<button id="created_1" name="created_btn" class="btn mid bor-gray small round">어제</button>
+								<button id="created_2" name="created_btn" class="btn mid bor-gray small round">오늘</button>
+								<button id="created_3" name="created_btn" class="btn mid bor-gray small round">지난 일주일</button>
+								<button id="created_4" name="created_btn" class="btn mid bor-gray small round">지난 한달</button>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+			<div class="layer-box">
+				<div class="table-wrap serach_info">
+					<div class="top">
+						<p>발주 내역 상세 조회</p>
+						<div class="btn-wrap tpA">
+							<button id="order_block_detail_srh_btn" class="btn mid orange">검색</button>
+							<button id="order_block_detail_srh_cancel_btn" class="btn mid l-orange">초기화</button>
+						</div>
+					</div>
+					<div class="section1">
+						<div>
+							<label class="mr-2">매입처정보 :</label>
+							<select id="storeKey" class="select mr-5">
+								<option value="" selected="">전체</option>
+								<option value="1">매입처명</option>
+								<option value="2">매입처ID</option>
+								<option value="3">매입처주소</option>
+							</select>
+							<input id="storeInfo" class="input" type="text" value="">
+						</div>
+						<div>
+							<label>상품정보 : </label>
+							<select id="goodsKey" class="select mr-5">
+								<option value="" selected="">전체</option>
+								<option value="1">상품코드</option>
+								<option value="2">확정상품명</option>
+								<option value="3">모델명</option>
+							</select>
+							<input id="goodsInfo" class="input" type="text" value="">
+						</div>
+						<div style="flex:0;">
+							<label style="width:50%;">진행상태 : </label>
+							<select id="order_status" class="select">
+							<option value="" selected="">전체</option>
+								<option value="1">발주요청</option>
+								<option value="2">출고확정</option>
+								<option value="3">미출고</option>
+								<option value="4">입고등록</option>
+								<option value="5">입고초기화</option>
+							</select>
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<div class="layer-box">
+				<div class="table-wrap" style="height : auto;">
+					<div class="table-top">
+						<table class="table">
+							
+						</table>
+					</div>
+
+					<!--<div class="sub_head" style="">
+						<p class="total-cnt">총 : <strong class="cnt">451,613</strong>건</p>
+						<select id="" class="select">
+							<option value="1">전체</option>
+							<option value="1">50개씩보기</option>
+							<option value="2">30개씩보기</option>
+						</select>
+					</div>-->
+					<div>
+						<div class="sum_list">
+							<div class="sum_list-cont">
+								<div>
+									<span>등록된 건 수</span>
+								</div>
+								<span class="num"><b>451,613</b>건</span>
+							</div>
+
+							<div class="sum_list-cont">
+								<div>
+									<span>매입처 수</span>
+								</div>
+								<span class="num"><b>1,106</b>개</span>
+							</div>
+							
+							<div class="sum_list-cont">
+								<div>
+									<span>상품수량</span>
+								</div>
+								<span class="num"><b>849,751</b>개</span>
+							</div>
+
+							<div class="sum_list-cont orange">
+								<div>
+									<span>합계금액</span>
+								</div>
+								<span class="num"><b>7,074,370,921</b>원</span>
+							</div>
+						</div>
+					</div>
+					<table id="order_data_list" class="table">
+							
+						<thead class="thead order_data_list">
+							<tr>
+								<th class="bdt-y" colspan="7">기본정보</th>
+								<th class="bdt-y" colspan="14">상품정보</th>
+								<th rowspan="2" colspan="2">진행상태</th>
+							</tr>
+							<tr>
+								<th>업체명</th>
+								<th>발주일시</th>
+								<th>입고일시</th>
+								<th>매입처명</th>
+								<th>매입처ID</th>
+								<th>전화번호</th>
+								<th>주소</th>
+								<th>상품코드</th>
+								<th>확정상품명</th>
+								<th>모델명</th>
+								<th>단품</th>
+								<th>고유코드</th>
+								<th style="min-width:30px;">주문<br>수량</th>
+								<th>원가</th>
+								<th>합계금액</th>
+								<th>출고<br>확정 일시</th>
+								<th>실출고<br>수량</th>
+								<th>미출고<br>사유</th>
+								<th>입고</th>
+								<th>불량</th>
+								<th>입고<br>금액</th>
+							</tr>
+						</thead>
+						<tbody id="table_list" class="tbody">
+														<tr>
+								<td>주식회사시크블랙/뉴톡</td>
+								<td>2026-05-03 20:05:45</td>
+								<td>2026-05-04 18:50:02</td>
+								<td>퍼플그레이</td>
+								<td>C26030401</td>
+								<td>01096393221</td>
+								<td>남평화 3F 100호 </td>
+								<td>181605-0002</td>
+								<td class="wrap-default">OPS10452K63-퍼밍저 도트 캉캉 레이어드 끈나시 미니원피스</td>
+								<td>도트캉캉스트랩원피스</td>
+								<td>소라(Sky Blue):FREE</td>
+								<td>684150-0002</td>
+								<td>1</td>
+																<td>10,500</td>
+																<td>10,500</td>
+								<td>-</td>
+								<td>1</td>
+								<td>
+								<a href="javascript:void(0)" class="" onclick="openReason(562608)">-</a>								</td>
+								<td id="562608_arrival_td" ondblclick="change_data(this, 'arrival', '562608')">1</td>
+								<td id="562608_defective_td" ondblclick="change_data(this, 'defective', '562608')">0</td>
+								<td id="562608_arrival_price">10,500원</td>
+																	<td class="green">배송완료</td>
+																										<td>검수완료</td>
+																</tr>
+														<tr>
+								<td>주식회사시크블랙/뉴톡</td>
+								<td>2026-05-03 20:05:45</td>
+								<td>2026-05-04 18:50:02</td>
+								<td>르방</td>
+								<td>2021122101</td>
+								<td>01050171302</td>
+								<td>뉴존 지하1층 109호 </td>
+								<td>152563-0002</td>
+								<td class="wrap-default">NT3790K26-마오루 셔링 언발 반팔 니트</td>
+								<td>200셔링반팔T</td>
+								<td>베이지(Beige):FREE</td>
+								<td>49228-0002</td>
+								<td>1</td>
+																<td>4,000</td>
+																<td>4,000</td>
+								<td>2026-05-03 20:08:44</td>
+								<td>-</td>
+								<td>
+								<a href="javascript:void(0)" class="" onclick="openReason(562609)">가격 6000원으로 인상</a>								</td>
+								<td id="562609_arrival_td" ondblclick="change_data(this, 'arrival', '562609')">0</td>
+								<td id="562609_defective_td" ondblclick="change_data(this, 'defective', '562609')">0</td>
+								<td id="562609_arrival_price">0원</td>
+																	<td class="green">출고취소</td>
+																										<td>출고취소</td>
+																</tr>
+														<tr>
+								<td>주식회사시크블랙/뉴톡</td>
+								<td>2026-05-03 20:05:45</td>
+								<td>2026-05-04 18:50:02</td>
+								<td>르방</td>
+								<td>2021122101</td>
+								<td>01050171302</td>
+								<td>뉴존 지하1층 109호 </td>
+								<td>152434-0001</td>
+								<td class="wrap-default">JK4128K26-도아루 골지 카라 반팔 집업</td>
+								<td>768카라집업반팔</td>
+								<td>아이보리(Ivory):FREE</td>
+								<td>49223-0001</td>
+								<td>1</td>
+																<td>5,000</td>
+																<td>5,000</td>
+								<td>2026-05-03 20:08:44</td>
+								<td>-</td>
+								<td>
+								<a href="javascript:void(0)" class="" onclick="openReason(562610)">가격 6천원으로 인상</a>								</td>
+								<td id="562610_arrival_td" ondblclick="change_data(this, 'arrival', '562610')">0</td>
+								<td id="562610_defective_td" ondblclick="change_data(this, 'defective', '562610')">0</td>
+								<td id="562610_arrival_price">0원</td>
+																	<td class="green">출고취소</td>
+																										<td>출고취소</td>
+																</tr>
+														<tr>
+								<td>주식회사시크블랙/뉴톡</td>
+								<td>2026-05-03 20:05:45</td>
+								<td>2026-05-04 18:50:02</td>
+								<td>슈퍼스타(동원)</td>
+								<td>C2021123101</td>
+								<td>01022900566</td>
+								<td>동원프라자 1층 126 </td>
+								<td>161770-0002</td>
+								<td class="wrap-default">CD2579K34-취췩펌 골지 끈 니트 크롭 볼레로</td>
+								<td>레오볼레로</td>
+								<td>그레이(Gray):FREE</td>
+								<td>59436-0002</td>
+								<td>1</td>
+																<td>8,000</td>
+																<td>8,000</td>
+								<td>-</td>
+								<td>-</td>
+								<td>
+								<a href="javascript:void(0)" class="" onclick="openReason(562611)">-</a>								</td>
+								<td id="562611_arrival_td" ondblclick="change_data(this, 'arrival', '562611')">0</td>
+								<td id="562611_defective_td" ondblclick="change_data(this, 'defective', '562611')">0</td>
+								<td id="562611_arrival_price">0원</td>
+																	<td class="green">출고취소</td>
+																										<td>출고취소</td>
+																</tr>
+														<tr>
+								<td>주식회사시크블랙/뉴톡</td>
+								<td>2026-05-03 20:05:45</td>
+								<td>2026-05-04 18:50:02</td>
+								<td>모노스트릿</td>
+								<td>C2020092103</td>
+								<td>01022465725</td>
+								<td>동원프라자 1층 140호 </td>
+								<td>181363-0003</td>
+								<td class="wrap-default">T17523K62-추페치 배색 단가라 버튼 슬림 캡내장 나시</td>
+								<td>G단가라캡나시</td>
+								<td>네이비(Navy):FREE</td>
+								<td>683896-0003</td>
+								<td>2</td>
+																<td>6,000</td>
+																<td>12,000</td>
+								<td>-</td>
+								<td>2</td>
+								<td>
+								<a href="javascript:void(0)" class="" onclick="openReason(562612)">-</a>								</td>
+								<td id="562612_arrival_td" ondblclick="change_data(this, 'arrival', '562612')">1</td>
+								<td id="562612_defective_td" ondblclick="change_data(this, 'defective', '562612')">0</td>
+								<td id="562612_arrival_price">6,000원</td>
+																	<td class="green">배송완료</td>
+																										<td>검수완료</td>
+																</tr>
+														<tr>
+								<td>주식회사시크블랙/뉴톡</td>
+								<td>2026-05-03 20:05:45</td>
+								<td>2026-05-04 18:50:02</td>
+								<td>모노스트릿</td>
+								<td>C2020092103</td>
+								<td>01022465725</td>
+								<td>동원프라자 1층 140호 </td>
+								<td>181363-0002</td>
+								<td class="wrap-default">T17523K62-추페치 배색 단가라 버튼 슬림 캡내장 나시</td>
+								<td>G단가라캡나시</td>
+								<td>핑크(Pink):FREE</td>
+								<td>683896-0002</td>
+								<td>1</td>
+																<td>6,000</td>
+																<td>6,000</td>
+								<td>-</td>
+								<td>1</td>
+								<td>
+								<a href="javascript:void(0)" class="" onclick="openReason(562613)">-</a>								</td>
+								<td id="562613_arrival_td" ondblclick="change_data(this, 'arrival', '562613')">1</td>
+								<td id="562613_defective_td" ondblclick="change_data(this, 'defective', '562613')">0</td>
+								<td id="562613_arrival_price">6,000원</td>
+																	<td class="green">배송완료</td>
+																										<td>검수완료</td>
+																</tr>
+														<tr>
+								<td>주식회사시크블랙/뉴톡</td>
+								<td>2026-05-03 20:05:45</td>
+								<td>2026-05-04 18:50:02</td>
+								<td>모노스트릿</td>
+								<td>C2020092103</td>
+								<td>01022465725</td>
+								<td>동원프라자 1층 140호 </td>
+								<td>177377-0002</td>
+								<td class="wrap-default">NS1223K52-즈마라 쫀득 스판 배색 투라인 캡나시</td>
+								<td>G데이지브라랫(6670)</td>
+								<td>베이지(Beige):free</td>
+								<td>679304-0002</td>
+								<td>1</td>
+																<td>6,000</td>
+																<td>6,000</td>
+								<td>-</td>
+								<td>1</td>
+								<td>
+								<a href="javascript:void(0)" class="" onclick="openReason(562614)">-</a>								</td>
+								<td id="562614_arrival_td" ondblclick="change_data(this, 'arrival', '562614')">0</td>
+								<td id="562614_defective_td" ondblclick="change_data(this, 'defective', '562614')">0</td>
+								<td id="562614_arrival_price">0원</td>
+																	<td class="green">배송완료</td>
+																										<td>검수완료</td>
+																</tr>
+														<tr>
+								<td>주식회사시크블랙/뉴톡</td>
+								<td>2026-05-03 20:05:45</td>
+								<td>2026-05-04 18:50:02</td>
+								<td>모노스트릿</td>
+								<td>C2020092103</td>
+								<td>01022465725</td>
+								<td>동원프라자 1층 140호 </td>
+								<td>181892-0001</td>
+								<td class="wrap-default">NB3371K63-루키르 오버핏 포켓 체크 셔츠</td>
+								<td>g데일리체크NB</td>
+								<td>아이보리(Ivory):FREE</td>
+								<td>684481-0001</td>
+								<td>2</td>
+																<td>10,000</td>
+																<td>20,000</td>
+								<td>-</td>
+								<td>2</td>
+								<td>
+								<a href="javascript:void(0)" class="" onclick="openReason(562615)">-</a>								</td>
+								<td id="562615_arrival_td" ondblclick="change_data(this, 'arrival', '562615')">0</td>
+								<td id="562615_defective_td" ondblclick="change_data(this, 'defective', '562615')">0</td>
+								<td id="562615_arrival_price">0원</td>
+																	<td class="green">배송완료</td>
+																										<td>검수완료</td>
+																</tr>
+														<tr>
+								<td>주식회사시크블랙/뉴톡</td>
+								<td>2026-05-03 20:05:45</td>
+								<td>2026-05-04 18:50:02</td>
+								<td>모노스트릿</td>
+								<td>C2020092103</td>
+								<td>01022465725</td>
+								<td>동원프라자 1층 140호 </td>
+								<td>177376-0003</td>
+								<td class="wrap-default">NS1224K52-치마라 보들 쫀쫀 캡내장 롱 나시</td>
+								<td>G롱캡나시(6877)</td>
+								<td>그레이(Gray):free</td>
+								<td>679305-0003</td>
+								<td>1</td>
+																<td>5,000</td>
+																<td>5,000</td>
+								<td>-</td>
+								<td>1</td>
+								<td>
+								<a href="javascript:void(0)" class="" onclick="openReason(562616)">-</a>								</td>
+								<td id="562616_arrival_td" ondblclick="change_data(this, 'arrival', '562616')">0</td>
+								<td id="562616_defective_td" ondblclick="change_data(this, 'defective', '562616')">0</td>
+								<td id="562616_arrival_price">0원</td>
+																	<td class="green">배송완료</td>
+																										<td>검수완료</td>
+																</tr>
+														<tr>
+								<td>주식회사시크블랙/뉴톡</td>
+								<td>2026-05-03 20:05:45</td>
+								<td>2026-05-04 18:50:02</td>
+								<td>모노스트릿</td>
+								<td>C2020092103</td>
+								<td>01022465725</td>
+								<td>동원프라자 1층 140호 </td>
+								<td>177376-0002</td>
+								<td class="wrap-default">NS1224K52-치마라 보들 쫀쫀 캡내장 롱 나시</td>
+								<td>G롱캡나시(6877)</td>
+								<td>브라운(Brown):free</td>
+								<td>679305-0002</td>
+								<td>1</td>
+																<td>5,000</td>
+																<td>5,000</td>
+								<td>-</td>
+								<td>1</td>
+								<td>
+								<a href="javascript:void(0)" class="" onclick="openReason(562617)">-</a>								</td>
+								<td id="562617_arrival_td" ondblclick="change_data(this, 'arrival', '562617')">0</td>
+								<td id="562617_defective_td" ondblclick="change_data(this, 'defective', '562617')">0</td>
+								<td id="562617_arrival_price">0원</td>
+																	<td class="green">배송완료</td>
+																										<td>검수완료</td>
+																</tr>
+														<tr>
+								<td>주식회사시크블랙/뉴톡</td>
+								<td>2026-05-03 20:05:45</td>
+								<td>2026-05-04 18:50:02</td>
+								<td>모노스트릿</td>
+								<td>C2020092103</td>
+								<td>01022465725</td>
+								<td>동원프라자 1층 140호 </td>
+								<td>177376-0004</td>
+								<td class="wrap-default">NS1224K52-치마라 보들 쫀쫀 캡내장 롱 나시</td>
+								<td>G롱캡나시(6877)</td>
+								<td>블랙(Black):free</td>
+								<td>679305-0004</td>
+								<td>2</td>
+																<td>5,000</td>
+																<td>10,000</td>
+								<td>-</td>
+								<td>2</td>
+								<td>
+								<a href="javascript:void(0)" class="" onclick="openReason(562618)">-</a>								</td>
+								<td id="562618_arrival_td" ondblclick="change_data(this, 'arrival', '562618')">0</td>
+								<td id="562618_defective_td" ondblclick="change_data(this, 'defective', '562618')">0</td>
+								<td id="562618_arrival_price">0원</td>
+																	<td class="green">배송완료</td>
+																										<td>검수완료</td>
+																</tr>
+														<tr>
+								<td>주식회사시크블랙/뉴톡</td>
+								<td>2026-05-03 20:05:45</td>
+								<td>2026-05-04 18:50:02</td>
+								<td>모노스트릿</td>
+								<td>C2020092103</td>
+								<td>01022465725</td>
+								<td>동원프라자 1층 140호 </td>
+								<td>177376-0001</td>
+								<td class="wrap-default">NS1224K52-치마라 보들 쫀쫀 캡내장 롱 나시</td>
+								<td>G롱캡나시(6877)</td>
+								<td>아이보리(Ivory):free</td>
+								<td>679305-0001</td>
+								<td>1</td>
+																<td>5,000</td>
+																<td>5,000</td>
+								<td>-</td>
+								<td>1</td>
+								<td>
+								<a href="javascript:void(0)" class="" onclick="openReason(562619)">-</a>								</td>
+								<td id="562619_arrival_td" ondblclick="change_data(this, 'arrival', '562619')">0</td>
+								<td id="562619_defective_td" ondblclick="change_data(this, 'defective', '562619')">0</td>
+								<td id="562619_arrival_price">0원</td>
+																	<td class="green">배송완료</td>
+																										<td>검수완료</td>
+																</tr>
+														<tr>
+								<td>주식회사시크블랙/뉴톡</td>
+								<td>2026-05-03 20:05:45</td>
+								<td>2026-05-04 18:50:02</td>
+								<td>모노스트릿</td>
+								<td>C2020092103</td>
+								<td>01022465725</td>
+								<td>동원프라자 1층 140호 </td>
+								<td>181828-0002</td>
+								<td class="wrap-default">BL5907K63-볼센조 유니크 사선 셔링 플레어 반팔 블라우스</td>
+								<td>G셔링리본블라우스</td>
+								<td>블랙(Black):FREE</td>
+								<td>684428-0002</td>
+								<td>14</td>
+																<td>11,000</td>
+																<td>154,000</td>
+								<td>-</td>
+								<td>14</td>
+								<td>
+								<a href="javascript:void(0)" class="" onclick="openReason(562620)">-</a>								</td>
+								<td id="562620_arrival_td" ondblclick="change_data(this, 'arrival', '562620')">1</td>
+								<td id="562620_defective_td" ondblclick="change_data(this, 'defective', '562620')">0</td>
+								<td id="562620_arrival_price">11,000원</td>
+																	<td class="green">배송완료</td>
+																										<td>검수완료</td>
+																</tr>
+														<tr>
+								<td>주식회사시크블랙/뉴톡</td>
+								<td>2026-05-03 20:05:45</td>
+								<td>2026-05-04 18:50:02</td>
+								<td>모노스트릿</td>
+								<td>C2020092103</td>
+								<td>01022465725</td>
+								<td>동원프라자 1층 140호 </td>
+								<td>181271-0002</td>
+								<td class="wrap-default">NB3343K61-모이레 루즈핏 클래식 체크 후드 셔츠</td>
+								<td>G지지미체크NB</td>
+								<td>차콜(Charcoal):FREE</td>
+								<td>683802-0002</td>
+								<td>2</td>
+																<td>12,000</td>
+																<td>24,000</td>
+								<td>-</td>
+								<td>2</td>
+								<td>
+								<a href="javascript:void(0)" class="" onclick="openReason(562621)">-</a>								</td>
+								<td id="562621_arrival_td" ondblclick="change_data(this, 'arrival', '562621')">0</td>
+								<td id="562621_defective_td" ondblclick="change_data(this, 'defective', '562621')">0</td>
+								<td id="562621_arrival_price">0원</td>
+																	<td class="green">배송완료</td>
+																										<td>검수완료</td>
+																</tr>
+														<tr>
+								<td>주식회사시크블랙/뉴톡</td>
+								<td>2026-05-03 20:05:45</td>
+								<td>2026-05-04 18:50:02</td>
+								<td>모노스트릿</td>
+								<td>C2020092103</td>
+								<td>01022465725</td>
+								<td>동원프라자 1층 140호 </td>
+								<td>180264-0003</td>
+								<td class="wrap-default">SET3871K5A-마루엔 루즈핏 카라 니트 가디건 와이드 니트 팬츠 세트</td>
+								<td>G카라가디건SET(H681)</td>
+								<td>차콜(Charcoal):FREE</td>
+								<td>682632-0003</td>
+								<td>1</td>
+																<td>24,000</td>
+																<td>24,000</td>
+								<td>-</td>
+								<td>1</td>
+								<td>
+								<a href="javascript:void(0)" class="" onclick="openReason(562622)">-</a>								</td>
+								<td id="562622_arrival_td" ondblclick="change_data(this, 'arrival', '562622')">1</td>
+								<td id="562622_defective_td" ondblclick="change_data(this, 'defective', '562622')">0</td>
+								<td id="562622_arrival_price">24,000원</td>
+																	<td class="green">배송완료</td>
+																										<td>검수완료</td>
+																</tr>
+														<tr>
+								<td>주식회사시크블랙/뉴톡</td>
+								<td>2026-05-03 20:05:45</td>
+								<td>2026-05-04 18:50:02</td>
+								<td>모노스트릿</td>
+								<td>C2020092103</td>
+								<td>01022465725</td>
+								<td>동원프라자 1층 140호 </td>
+								<td>178131-0004</td>
+								<td class="wrap-default">CD3491K54-재른다 원 오프숄더 반팔 니트 홀터넥 나시 SET</td>
+								<td>닝닝나시SET</td>
+								<td>블랙(Black):free</td>
+								<td>680145-0004</td>
+								<td>1</td>
+																<td>8,000</td>
+																<td>8,000</td>
+								<td>-</td>
+								<td>1</td>
+								<td>
+								<a href="javascript:void(0)" class="" onclick="openReason(562623)">-</a>								</td>
+								<td id="562623_arrival_td" ondblclick="change_data(this, 'arrival', '562623')">0</td>
+								<td id="562623_defective_td" ondblclick="change_data(this, 'defective', '562623')">0</td>
+								<td id="562623_arrival_price">0원</td>
+																	<td class="green">배송완료</td>
+																										<td>검수완료</td>
+																</tr>
+														<tr>
+								<td>주식회사시크블랙/뉴톡</td>
+								<td>2026-05-03 20:05:45</td>
+								<td>2026-05-04 18:50:02</td>
+								<td>모노스트릿</td>
+								<td>C2020092103</td>
+								<td>01022465725</td>
+								<td>동원프라자 1층 140호 </td>
+								<td>178131-0001</td>
+								<td class="wrap-default">CD3491K54-재른다 원 오프숄더 반팔 니트 홀터넥 나시 SET</td>
+								<td>닝닝나시SET</td>
+								<td>화이트(White):free</td>
+								<td>680145-0001</td>
+								<td>1</td>
+																<td>8,000</td>
+																<td>8,000</td>
+								<td>-</td>
+								<td>1</td>
+								<td>
+								<a href="javascript:void(0)" class="" onclick="openReason(562624)">-</a>								</td>
+								<td id="562624_arrival_td" ondblclick="change_data(this, 'arrival', '562624')">0</td>
+								<td id="562624_defective_td" ondblclick="change_data(this, 'defective', '562624')">0</td>
+								<td id="562624_arrival_price">0원</td>
+																	<td class="green">배송완료</td>
+																										<td>검수완료</td>
+																</tr>
+														<tr>
+								<td>주식회사시크블랙/뉴톡</td>
+								<td>2026-05-03 20:05:45</td>
+								<td>2026-05-04 18:50:02</td>
+								<td>모노스트릿</td>
+								<td>C2020092103</td>
+								<td>01022465725</td>
+								<td>동원프라자 1층 140호 </td>
+								<td>177836-0004</td>
+								<td class="wrap-default">NT5889K53-탸항너 여리여리 랩 초커 린넨 긴팔 니트</td>
+								<td>랩초커니트</td>
+								<td>블랙(Black):free</td>
+								<td>679806-0004</td>
+								<td>1</td>
+																<td>9,000</td>
+																<td>9,000</td>
+								<td>-</td>
+								<td>1</td>
+								<td>
+								<a href="javascript:void(0)" class="" onclick="openReason(562625)">-</a>								</td>
+								<td id="562625_arrival_td" ondblclick="change_data(this, 'arrival', '562625')">0</td>
+								<td id="562625_defective_td" ondblclick="change_data(this, 'defective', '562625')">0</td>
+								<td id="562625_arrival_price">0원</td>
+																	<td class="green">배송완료</td>
+																										<td>검수완료</td>
+																</tr>
+														<tr>
+								<td>주식회사시크블랙/뉴톡</td>
+								<td>2026-05-03 20:05:45</td>
+								<td>2026-05-04 18:50:02</td>
+								<td>모노스트릿</td>
+								<td>C2020092103</td>
+								<td>01022465725</td>
+								<td>동원프라자 1층 140호 </td>
+								<td>177836-0001</td>
+								<td class="wrap-default">NT5889K53-탸항너 여리여리 랩 초커 린넨 긴팔 니트</td>
+								<td>랩초커니트</td>
+								<td>오트밀(Oatmeal):free</td>
+								<td>679806-0001</td>
+								<td>1</td>
+																<td>9,000</td>
+																<td>9,000</td>
+								<td>-</td>
+								<td>1</td>
+								<td>
+								<a href="javascript:void(0)" class="" onclick="openReason(562626)">-</a>								</td>
+								<td id="562626_arrival_td" ondblclick="change_data(this, 'arrival', '562626')">0</td>
+								<td id="562626_defective_td" ondblclick="change_data(this, 'defective', '562626')">0</td>
+								<td id="562626_arrival_price">0원</td>
+																	<td class="green">배송완료</td>
+																										<td>검수완료</td>
+																</tr>
+														<tr>
+								<td>주식회사시크블랙/뉴톡</td>
+								<td>2026-05-03 20:05:45</td>
+								<td>2026-05-04 18:50:02</td>
+								<td>모노스트릿</td>
+								<td>C2020092103</td>
+								<td>01022465725</td>
+								<td>동원프라자 1층 140호 </td>
+								<td>177640-0002</td>
+								<td class="wrap-default">T16405K52-엘린 여리여리 롱슬리브 라운드 티셔츠</td>
+								<td>로얄오프T</td>
+								<td>베이지(Beige):free</td>
+								<td>679473-0002</td>
+								<td>2</td>
+																<td>7,000</td>
+																<td>14,000</td>
+								<td>-</td>
+								<td>2</td>
+								<td>
+								<a href="javascript:void(0)" class="" onclick="openReason(562627)">-</a>								</td>
+								<td id="562627_arrival_td" ondblclick="change_data(this, 'arrival', '562627')">0</td>
+								<td id="562627_defective_td" ondblclick="change_data(this, 'defective', '562627')">0</td>
+								<td id="562627_arrival_price">0원</td>
+																	<td class="green">배송완료</td>
+																										<td>검수완료</td>
+																</tr>
+													</tbody>
+					</table>
+				</div>
+			</div>
+			
+			
+
+			<button type="button" class="scrollbtn topbtn" id="btn-back-to-top">
+				<img src="https://pick.newtalk.kr/views/static/img/topbtn.png">
+			</button>
+
+			<button type="button" class="scrollbtn bottombtn" id="btn-back-to-bottom">
+				<img src="https://pick.newtalk.kr/views/static/img/topbtn.png">
+			</button>
+		</main>
+
+		<form id="frmSearch" action="/root/product_store_list" method="post">
+			<input id="f_no" type="hidden" name="no" value="">
+			<input id="fo_no" type="hidden" name="ob_no" value="">
+			<input id="f_shop_name" type="hidden" name="shop_name" value="">
+			<input id="f_order_username" type="hidden" name="order_username" value="">
+			<input id="f_order_user_tel" type="hidden" name="order_user_tel" value="">
+			<input id="f_sDate" type="hidden" name="sDate" value="">
+			<input id="f_eDate" type="hidden" name="eDate" value="">
+			<input id="f_sTime" type="hidden" name="sTime" value="">
+			<input id="f_eTime" type="hidden" name="eTime" value="">
+			<input id="f_createdKey" type="hidden" name="createdKey" value="">
+			<input id="f_created" type="hidden" name="created" value="">
+			<input id="f_storeKey" type="hidden" name="storeKey" value="">
+			<input id="f_storeInfo" type="hidden" name="storeInfo" value="">
+			<input id="f_goodsKey" type="hidden" name="goodsKey" value="">
+			<input id="f_goodsInfo" type="hidden" name="goodsInfo" value="">
+			<input id="f_order_status" type="hidden" name="order_status" value="">
+		</form>
+	<script defer="" src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon="{&quot;version&quot;:&quot;2024.11.0&quot;,&quot;token&quot;:&quot;049bbd65c1434f46b0cdf48a2f180d52&quot;,&quot;r&quot;:1,&quot;server_timing&quot;:{&quot;name&quot;:{&quot;cfCacheStatus&quot;:true,&quot;cfEdge&quot;:true,&quot;cfExtPri&quot;:true,&quot;cfL4&quot;:true,&quot;cfOrigin&quot;:true,&quot;cfSpeedBrain&quot;:true},&quot;location_startswith&quot;:null}}" crossorigin="anonymous"></script>
+
+
+	
+	<div class="modal" id="loadingmodal" tabindex="-1" aria-labelledby="loadingmodalLabel" aria-hidden="true">
+		<div class="modal-dialog modal-signadd" style="margin-top:300px;">
+		<div class="modal-content">
+				<div class="modal-body loading-modal">
+				<button class="button primary" type="button" disabled="">
+					<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+					Loading...
+				</button>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<!-- Modal -->
+	<div class="modal fade new_modal" id="cancel" tabindex="-1" aria-labelledby="cancelLabel" aria-hidden="true">
+		<div class="modal-dialog" style="margin-top:300px;">
+			<div class="modal-content">
+				<div class="modal-header">
+					<h5 class="modal-title" id="cancelLabel">수정이력 보기</h5>
+					<button type="button" class="modal-close" data-bs-dismiss="modal" aria-label="Close"></button>
+				</div>
+				<div class="modal-body">
+					<div>
+						<table class="table">
+							<thead class="thead">
+								<tr>
+									<th rowspan="3">수정일시</th>
+									<th colspan="4">수정내역 구분</th>
+									<th rowspan="3">관리자</th>
+								</tr>
+								<tr style="border-top: 1px solid #d5d5d5;">
+									<th colspan="2" class="orange">입고수량</th>
+									<th colspan="2" class="purple">불량수량</th>
+								</tr>
+								<tr>
+									<th class="orange">수정전</th>
+									<th class="orange">수정후</th>
+									<th class="purple">수정전</th>
+									<th class="purple">수정후</th>
+								</tr>
+							</thead>
+						<tbody id="modify_data_list" class="tbody"></tbody>
+						</table>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<!-- Modal -->
+	<div class="modal fade new_modal new_modal_ad" id="reason" tabindex="-1" aria-labelledby="reasonLabel" aria-hidden="true">
+		<div class="modal-dialog" style="margin-top:100px;">
+			<div class="modal-content">
+				<div class="modal-header">
+					<h5 class="modal-title" id="reasonLabel">미출고 사유</h5>
+					<button type="button" class="modal-close" data-bs-dismiss="modal" aria-label="Close"></button>
+				</div>
+				<div class="modal-body" style="padding: 30px; padding-bottom: 0;">
+					<div>
+						<span>#품절</span>
+						<div class="btn_block mt-1">
+							<button id="goods_all_btn" class="button primary">상품 전체 품절</button>
+							<button id="goods_option_btn" class="button outline">옵션품절</button>
+						</div>
+						<input id="soldOut_type" type="hidden" value="">
+					</div>
+					<div>
+						<div class="date_input mt-2">
+							<div class="tit">
+								<!--<span class="expect">#출고 가능 예정일</span>-->
+								<span class="expect">#출고지연일</span>
+								<div>
+									<label><input id="undefined_date" type="checkbox" class="checkbox">완전품절(단종)</label>
+								</div>
+								<input id="undefined_flag" type="hidden" value="false">
+							</div>
+							<div>
+								<input id="modal_norelease_date" class="input" value="2">
+								<p>출고 가능</p>
+							</div>
+							
+						</div>
+					</div>
+					<div class="mt-1">
+						<!--<span>#기타</span>-->
+						<span>#미출고사유</span>
+						<textarea id="modal_norelease_memo" class="textarea" placeholder="" value=""></textarea>
+						<input id="modal_order_id" type="hidden" value="">
+						<input id="modal_store_id" type="hidden" value="">
+						<input id="modal_obd_id" type="hidden" value="">
+					</div>
+				</div>
+				<div class="modal-footer" style="padding: 30px; padding-top: 0;">
+					<button id="norelease_btn" type="button" class="button orange block">수정 완료</button>
+
+					<div class="history">
+						<h2>미출고사유 수정내역</h2>
+						<table class="table">
+							<thead class="thead">
+								<tr>
+									<th rowspan="2" style="width: 80px;">수정일시</th>
+									<th rowspan="2" style="width: 80px;">구분</th>
+									<th colspan="2">원가 변경</th>
+									<th colspan="2">품절구분 변경</th>
+									<th colspan="2">출고 가능일 변경</th>
+									<th rowspan="2">수정인명</th>
+								</tr>
+								<tr style="border-top: 1px solid #d5d5d5;">
+									<th>전</th>
+									<th>후</th>
+									<th>전</th>
+									<th>후</th>
+									<th>전</th>
+									<th>후</th>
+								</tr>
+							</thead>
+							<tbody id="modal_modify_norelease" class="tbody">
+
+							</tbody>
+						</table>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<!-- Modal -->
+	<div class="modal fade new_modal new_modal_ad" id="cost_change" tabindex="-1" aria-labelledby="costLabel" aria-hidden="true">
+		<div class="modal-dialog" style="margin-top: 300px;">
+			<div class="modal-content">
+				<div class="modal-header">
+					<h5 class="modal-title" id="costLabel">원가 변경 내역</h5>
+					<button type="button" class="modal-close" data-bs-dismiss="modal" aria-label="Close"></button>
+				</div>
+				<div class="modal-body">
+					<div class="history">
+						<table class="table">
+							<thead class="thead">
+								<tr>
+									<th rowspan="2" style="width: 80px;">수정일시</th>
+									<th rowspan="2" style="width: 80px;">구분</th>
+									<th colspan="2">원가 변경 금액</th>
+									<th rowspan="2">수정인명</th>
+								</tr>
+								<tr style="border-top: 1px solid #d5d5d5;">
+									<th>전</th>
+									<th>후</th>
+								</tr>
+							</thead>
+							<tbody id="modal_cost_change" class="tbody">
+							</tbody>
+						</table>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<script>
+		var today = new Date();
+		var start_cnt = 20;
+		var limit_cnt = 20;
+
+		var top_btn = document.getElementById("btn-back-to-top");
+		var bottom_btn = document.getElementById("btn-back-to-bottom");
+
+		var old_norelease_type = '';
+		var old_norelease_date = '';
+		var old_norelease_memo = '';
+
+		// When the user scrolls down 20px from the top of the document, show the button
+		window.onscroll = function () {
+			if (document.documentElement.scrollTop > 20) {
+				top_btn.style.display = "block";
+			} else {
+				top_btn.style.display = "none";
+			}
+		};
+
+		// When the user clicks on the button, scroll to the top of the document
+		top_btn.addEventListener("click", function() {
+			document.documentElement.scrollTop = 0;
+		});
+
+		//Get the bottombutton
+		bottom_btn.addEventListener("click", function() {
+			//load_data_all();
+			load_more_data();
+		});
+
+		$(window).paged_scroll({
+			handleScroll: function(page, container, doneCallback) {
+				load_more_data();
+			},
+			triggerFromBottom: '10px',
+			targetElement: $('#order_data_list'),
+			loading: '<div class="loader">Loading next page ...</div>',
+			pagesToScroll: '22580',
+		});
+
+		$.datepicker.setDefaults({
+			dateFormat: 'yy-mm-dd',
+			prevText: '이전 달',
+			nextText: '다음 달',
+			monthNames: ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'],
+			monthNamesShort: ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'],
+			dayNames: ['일', '월', '화', '수', '목', '금', '토'],
+			dayNamesShort: ['일', '월', '화', '수', '목', '금', '토'],
+			dayNamesMin: ['일', '월', '화', '수', '목', '금', '토'],
+			showMonthAfterYear: true,
+			yearSuffix: '년'
+		});
+
+		$(function() {
+			$( "#datepicker1, #datepicker2" ).datepicker();
+			$('#timepicker1, #timepicker2').timepicki();
+
+			if('' == '') {
+				if('' == '') {
+					$("#datepicker1, #datepicker2").val(getDateStr(today));
+				}else {
+					$("#datepicker1").val('');
+					$("#datepicker2").val(getDateStr(today));
+				}
+			}else {
+				$("#f_created").val('');
+				$("#datepicker1").val('');
+				$("#datepicker2").val('');
+			}
+
+			$('#timepicker1, #timepicker2').timepicki();
+			if('' != '' && '' != '') {
+				$("#timepicker1").val(getTimeStr(''));
+				$("#timepicker2").val(getTimeStr(''));
+			}else if('' != '') {
+				$("#timepicker1").val(getTimeStr(''));
+				$("#timepicker2").val('');
+			}else if('' != '') {
+				$("#timepicker1").val('');
+				$("#timepicker2").val(getTimeStr(''));
+			}else{
+				$("#timepicker1, #timepicker2").val('');
+			}
+
+			setting_formdata();
+
+			$("#search_order_btn").click(function() {
+				$("#f_created").val('5');
+
+				$("#f_sDate").val($("#datepicker1").val());
+				$("#f_eDate").val($("#datepicker2").val());
+				$("#f_sTime").val(setTimeStr($("#timepicker1").val()));
+				$("#f_eTime").val(setTimeStr($("#timepicker2").val()));
+
+				form_submit();
+			});
+
+			// 초기화 버튼 클릭
+			$("#search_order_clear_btn").click(function() {
+				clear_search_value();
+			});
+
+			$("#order_block_detail_srh_btn").click(function() {
+				$("#f_created").val('5');
+
+				$("#f_sDate").val($("#datepicker1").val());
+				$("#f_eDate").val($("#datepicker2").val());
+				$("#f_sTime").val(setTimeStr($("#timepicker1").val()));
+				$("#f_eTime").val(setTimeStr($("#timepicker2").val()));
+
+				form_submit();
+			});
+
+			// 초기화 버튼 클릭
+			$("#order_block_detail_srh_cancel_btn").click(function() {
+				clear_search_value();
+			});
+
+			// 전체 날짜 검색
+			$("#created_0").click(function() {
+				$("#datepicker1, #datepicker2").val(getDateStr(today));
+				$("#f_created").val('');
+				$("#timepicker1, #timepicker2").val('');
+
+				form_submit();
+			});
+
+			// 어제 날짜 검색
+			$("#created_1").click(function() {
+				let yesterday = new Date(today.setDate(today.getDate() - 1));
+				$("#datepicker1, #datepicker2").val(getDateStr(yesterday));
+				$("#f_created").val('1');
+				$("#timepicker1, #timepicker2").val('');
+
+				form_submit();
+			});
+
+			// 오늘 날짜 검색
+			$("#created_2").click(function() {
+				$("#datepicker1, #datepicker2").val(getDateStr(today));
+				$("#f_created").val('2');
+				$("#timepicker1, #timepicker2").val('');
+
+				form_submit();
+			});
+
+			// 지난 1주일 날짜 검색
+			$("#created_3").click(function() {
+				let y = today.getFullYear();
+				let m = today.getMonth();
+				let d = today.getDate();
+
+				$("#datepicker1").val(getDateStr(new Date(y, m, d - 7)));
+				$("#datepicker2").val(getDateStr(today));
+				$("#f_created").val('3');
+				$("#timepicker1, #timepicker2").val('');
+
+				form_submit();
+			});
+
+			// 지난 1달 날짜 검색
+			$("#created_4").click(function() {
+				let y = today.getFullYear();
+				let m = today.getMonth();
+				let d = today.getDate();
+
+				$("#datepicker1").val(getDateStr(new Date(y, m - 1, d)));
+				$("#datepicker2").val(getDateStr(today));
+				$("#f_created").val('4');
+				$("#timepicker1, #timepicker2").val('');
+
+				form_submit();
+			});
+
+			// 진행상태 변경 시
+			$("#order_status").change(function() {
+				form_submit();
+			});
+
+			// 검색 enter key 입력
+			$("#shop_name").keyup(function(e) {
+				if(e.keyCode == 13) {
+					$("#f_created").val('5');
+
+					$("#f_sDate").val($("#datepicker1").val());
+					$("#f_eDate").val($("#datepicker2").val());
+					$("#f_sTime").val(setTimeStr($("#timepicker1").val()));
+					$("#f_eTime").val(setTimeStr($("#timepicker2").val()));
+
+					form_submit();
+				}
+			});
+
+			$("#order_username").keyup(function(e) {
+				if(e.keyCode == 13) {
+					$("#f_created").val('5'); 
+
+					$("#f_sDate").val($("#datepicker1").val());
+					$("#f_eDate").val($("#datepicker2").val());
+					$("#f_sTime").val(setTimeStr($("#timepicker1").val()));
+					$("#f_eTime").val(setTimeStr($("#timepicker2").val()));
+
+					form_submit();
+				}
+			});
+
+			$("#order_user_tel").keyup(function(e) {
+				if(e.keyCode == 13) {
+					$("#f_created").val('5');
+
+					$("#f_sDate").val($("#datepicker1").val());
+					$("#f_eDate").val($("#datepicker2").val());
+					$("#f_sTime").val(setTimeStr($("#timepicker1").val()));
+					$("#f_eTime").val(setTimeStr($("#timepicker2").val()));
+
+					form_submit();
+				}
+			});
+
+			$("#storeInfo").keyup(function(e) {
+				if(e.keyCode == 13) {
+					if($("#storeKey").val() == "") {
+						alert("검색 유형을 선택해주세요");
+						return;
+					}
+
+					$("#f_created").val('5');
+
+					$("#f_sDate").val($("#datepicker1").val());
+					$("#f_eDate").val($("#datepicker2").val());
+					$("#f_sTime").val(setTimeStr($("#timepicker1").val()));
+					$("#f_eTime").val(setTimeStr($("#timepicker2").val()));
+
+					form_submit();
+				}
+			});
+
+			$("#goodsInfo").keyup(function(e) {
+				if(e.keyCode == 13) {
+					if($("#goodsKey").val() == "") {
+						alert("검색 유형을 선택해주세요");
+						return;
+					}
+
+					$("#f_created").val('5');
+
+					$("#f_sDate").val($("#datepicker1").val());
+					$("#f_eDate").val($("#datepicker2").val());
+					$("#f_sTime").val(setTimeStr($("#timepicker1").val()));
+					$("#f_eTime").val(setTimeStr($("#timepicker2").val()));
+
+					form_submit();
+				}
+			});
+
+			// modal 외부 클릭 및 esc 클릭 시 닫힘 방지
+			$("#loadingmodal").modal({
+				backdrop: 'static',
+				keyboard: false
+			});
+
+			// modal > 상품 전체 품절 클릭
+			$("#goods_all_btn").click(function() {
+				if($(this).hasClass('outline')) {
+					$(this).removeClass('outline');
+					$(this).addClass('primary');
+
+					$("#goods_option_btn").removeClass('primary');
+					$("#goods_option_btn").addClass('outline');
+
+					$("#soldOut_type").val('all');
+				}
+			});
+
+			// modal > 옵션품절
+			$("#goods_option_btn").click(function() {
+				if($(this).hasClass('outline')) {
+					$(this).removeClass('outline');
+					$(this).addClass('primary');
+
+					$("#goods_all_btn").removeClass('primary');
+					$("#goods_all_btn").addClass('outline');
+
+					$("#soldOut_type").val('option');
+				}
+			});
+
+			// 미출고 사유 입력 > 미정 클릭
+			$("#undefined_date").change(function() {
+				if($("#undefined_date").is(":checked")) {
+					$("#undefined_flag").val("true");
+					$("#modal_norelease_date").val('');
+					$("#modal_norelease_date").attr('readonly', true);
+				} else {
+					$("#undefined_flag").val("false");
+					$("#modal_norelease_date").removeAttr('readonly');
+				}
+			});
+
+			// 미출고 사유 입력 > 재입고 예정일 입력
+			$("#modal_norelease_date").on("input", function() {
+				if(isNaN($(this).val())) {
+					alert("숫자만 입력가능합니다");
+				}
+				$(this).val($(this).val().replace(/[^-0-9]/g,''));
+			});
+
+			// 미출고 사유 수정 완료 버튼 클릭
+			$("#norelease_btn").click(function() {
+				// 수정사항이 없을 시
+				if(old_norelease_type == $("#soldOut_type").val() && old_norelease_date == $("#undefined_flag").val() && old_norelease_memo == $("#modal_norelease_memo").val()) {
+					alert("변동사항이 없습니다.");	
+					$("#reason").modal("hide");
+					return;
+				}
+
+				let formData = new FormData();
+
+				formData.append("order_id", $("#modal_order_id").val());
+				formData.append("store_id", $("#modal_store_id").val());
+				formData.append("obd_id", $("#modal_obd_id").val());
+				if($("#soldOut_type").val() == 'all') {
+					formData.append("norelease_type", 1);
+				}else if($("#soldOut_type").val() == 'option') {
+					formData.append("norelease_type", 2);
+				}
+				if($("#undefined_flag").val() == 'true') {
+					formData.append("norelease_date", -1);
+				}else {
+					formData.append("norelease_date", $("#modal_norelease_date").val());
+				}
+				formData.append("norelease_memo", $("#modal_norelease_memo").val());
+
+				$.ajax({
+					type: 'post',
+					url: '/root/modify_norelease',
+					data: formData,
+					processData: false,
+					contentType: false,
+					dataType: 'json',
+					success: function(data) {
+						alert(data.info.text);
+						if(data.info.success == 'true'){
+							window.location.reload();
+						}
+					},
+					error: function(error) {
+						console.error(error);
+						alert('처리 중 오류가 발생했습니다.');
+					},
+					complete: function() {}
+				});
+			});
+		});
+
+		function setting_formdata() {
+			$("#f_no").val('');
+			$('#fo_no').val('');
+			$("#f_shop_name").val('');
+			$("#f_order_username").val('');
+			$("#f_order_user_tel").val('');
+			$("#f_sDate").val('');
+			$("#f_eDate").val('');
+			$("#f_sTime").val('');
+			$("#f_eTime").val('');
+			$("#f_createdKey").val('');
+			$("#f_created").val('');
+			$("#f_storeKey").val('');
+			$("#f_storeInfo").val('');
+			$("#f_goodsKey").val('');
+			$("#f_goodsInfo").val('');
+			$("#f_order_status").val('');
+		}
+
+		// 날짜 데이터 문자형 날짜로 만들기 Y-m-d
+		function getDateStr(m_date) {
+			var m_year = m_date.getFullYear();
+			var m_month = (m_date.getMonth() + 1 < 10) ? "0" + (m_date.getMonth() + 1) : (m_date.getMonth() + 1);
+			var m_date = (m_date.getDate() < 10) ? "0" + m_date.getDate() : m_date.getDate();
+			return m_year + "-" + m_month + "-" + m_date;
+		}
+
+		// timepicki 데이터 문자형 시간 문자형으로 만들기 h:i
+		function setTimeStr(m_time) {
+			if(m_time == '') {
+				return m_time;
+			}
+
+			let arr = m_time.split(" ");
+			let time = arr[0].split(":");
+			
+			let m_hour = 0;
+			if(time[0] == '12') {
+				if(arr[1] == '오전') {
+					m_hour = Number(time[0]) - 12;
+				}else {
+					m_hour = Number(time[0]);
+				}
+			}else {
+				if(arr[1] == '오전') {
+					m_hour = Number(time[0]);
+				}else {
+					m_hour = Number(time[0]) + 12;
+				}
+			}
+
+			let time_str = String(m_hour) + ":" + time[1];
+			return time_str;
+		}
+
+		// 시간 문자형 timepicki 데이터 문자형으로 만들기 h:i
+		function getTimeStr(m_time) {
+			let arr = m_time.split(":");
+
+			let meridiem = (parseInt(Number(arr[0])/12) > 0?'오후':'오전');
+			let m_hour = Number(arr[0]) % 12;
+			let hour_str = (m_hour < 10?'0'+ String(m_hour):String(m_hour));
+			
+			let time_str = hour_str + ":" + arr[1] + " " + meridiem;
+			return time_str;
+		}
+
+		function form_submit() {
+			$("#f_shop_name").val($("#shop_name").val());
+			$("#f_order_username").val($("#order_username").val());
+			$("#f_order_user_tel").val($("#order_user_tel").val());
+			$("#f_sDate").val($("#datepicker1").val());
+			$("#f_eDate").val($("#datepicker2").val());
+			$("#f_sTime").val(setTimeStr($("#timepicker1").val()));
+			$("#f_eTime").val(setTimeStr($("#timepicker2").val()));
+			$("#f_createdKey").val($("#createdKey").val());
+			$("#f_storeKey").val($("#storeKey").val());
+			$("#f_storeInfo").val($("#storeInfo").val());
+			$("#f_goodsKey").val($("#goodsKey").val());
+			$("#f_goodsInfo").val($("#goodsInfo").val());
+			$("#f_order_status").val($("#order_status").val());
+
+			let form = document.getElementById("frmSearch");
+			form.submit();
+		}
+
+		// 검색 필터 초기화
+		function clear_search_value() {
+			/*	검색 데이터 초기화
+			$("#datepicker1, #datepicker2").val(getDateStr(today));
+			$("#shop_name").val('');
+			$("#order_username").val('');
+			$("#order_user_tel").val('');
+			$("#timepicker1, #timepicker2").val('');
+
+			$("#f_shop_name").val('');
+			$("#f_order_username").val('');
+			$("#f_order_user_tel").val('');
+			$("#f_created").val('');
+
+			$("button[name=created_btn]").each(function(index, element) {
+				element.className = 'button outline small round';
+			});
+
+			$("#created_0").attr("class", "button primary small round");*/
+
+			/*if($("#f_no").val() == '') {
+				window.location.href = '/root/product_order_list';
+			}else {
+				window.location.href = '/root/product_order_list?no=' + $("#f_no").val() + '&shop_name=' + $("#shop_name").val();
+			}*/
+
+			window.location.href = '/root/product_order_list';
+			
+		}
+
+		// 페이지 추가 load
+		function load_more_data() {
+			let formData = new FormData();
+
+			formData.append("start", start_cnt);
+			formData.append("limit", limit_cnt);
+
+			formData.append("no", $("#f_no").val());
+			formData.append("ob_no", $("#fo_no").val());
+			formData.append("shop_name", $("#f_shop_name").val());
+			formData.append("order_username", $("#f_order_username").val());
+			formData.append("order_user_tel", $("#f_order_user_tel").val());
+			formData.append("sDate", $("#f_sDate").val());
+			formData.append("eDate", $("#f_eDate").val());
+			formData.append("sTime", $("#f_sTime").val());
+			formData.append("eTime", $("#f_eTime").val());
+			formData.append("createdKey", $("#f_createdKey").val());
+			formData.append("created", $("#f_created").val());
+			formData.append("storeKey", $("#f_storeKey").val());
+			formData.append("storeInfo", $("#f_storeInfo").val());
+			formData.append("goodsKey", $("#f_goodsKey").val());
+			formData.append("goodsInfo", $("#f_goodsInfo").val());
+			formData.append("order_status", $("#f_order_status").val());
+
+			$.ajax({
+				type: 'post',
+				url: '/root/load_more_arrival_block_detail',
+				data: formData,
+				processData: false,
+				contentType: false,
+				dataType: 'json',
+				success: function(data) {
+					if(data.info.success == 'true'){
+						let html_data = add_table_data(data.info.data);
+						$("#table_list").append(html_data);
+						start_cnt += limit_cnt;
+					}
+				},
+				error: function(error) {
+					console.error(error);
+					alert('처리 중 오류가 발생했습니다.');
+				},
+				complete: function() {
+
+				}
+			});
+		}
+
+		function add_table_data(arr_data) {
+			let html_tr_data = '';
+			for(let i=0;i<arr_data.length;i++) {
+				html_tr_data += '<tr>';
+				// html_tr_data += '<td><button class="button outline small tosmall" value="'+arr_data[i].id+'">수정</button></td>';
+				html_tr_data += '<td>'+arr_data[i].order_shop_name+'</td>';
+				html_tr_data += '<td>'+arr_data[i].created+'</td>';
+				html_tr_data += '<td>'+arr_data[i].ab_created+'</td>';
+				html_tr_data += '<td>'+arr_data[i].store_shop_name+'</td>';
+				html_tr_data += '<td>'+arr_data[i].store_name+'</td>';
+				html_tr_data += '<td>'+arr_data[i].store_tel+'</td>';
+				html_tr_data += '<td>'+arr_data[i].store_addr+'</td>';
+				html_tr_data += '<td>'+arr_data[i].goods_code+'</td>';
+				html_tr_data += '<td class="wrap-default">'+arr_data[i].goods_name+'</td>';
+				html_tr_data += '<td>'+arr_data[i].goods_model+'</td>';
+				html_tr_data += '<td>'+arr_data[i].goods_option+'</td>';
+				html_tr_data += '<td>'+arr_data[i].original_code+'</td>';
+				html_tr_data += '<td>'+number_format(arr_data[i].order_quantity)+'</td>';
+				if(arr_data[i].cost_cnt > 0) {
+					html_tr_data += '<td><a href="javascript:void(0)" style="color:#e55515;" onclick="openCost(\''+arr_data[i].id+'\')">'+number_format(arr_data[i].order_cost)+'</a></td>';
+				}else {
+				html_tr_data += '<td>'+number_format(arr_data[i].order_cost)+'</td>';
+				}
+				html_tr_data += '<td>'+number_format(arr_data[i].order_parcel_price)+'</td>';
+				html_tr_data += '<td>'+((arr_data[i].release_date)?arr_data[i].release_date:"-")+'</td>';
+				html_tr_data += '<td>'+((arr_data[i].real_quantity)?number_format(arr_data[i].real_quantity):"-")+'</td>';
+				if(arr_data[i].norelease_date) {
+					html_tr_data += '<td><a href="javascript:void(0)" class="" onclick="openReason(\''+arr_data[i].id+'\')">'+arr_data[i].norelease_date+' 출고 가능</a></td>';	
+				}else if(arr_data[i].norelease_memo) {
+					html_tr_data += '<td><a href="javascript:void(0)" class="" onclick="openReason(\''+arr_data[i].id+'\')">'+arr_data[i].norelease_memo+'</a></td>';
+				}else {
+					html_tr_data += '<td><a href="javascript:void(0)" class="" onclick="openReason(\''+arr_data[i].id+'\')">-</a></td>';
+				}
+				html_tr_data += '<td id="'+arr_data[i].id+'_arrival_td" ondblclick="change_data(this, \'arrival\', \''+arr_data[i].id+'\')">'+((arr_data[i].arrival)?number_format(arr_data[i].arrival):'0')+'</td>';
+				html_tr_data += '<td id="'+arr_data[i].id+'_defective_td" ondblclick="change_data(this, \'defective\', \''+arr_data[i].id+'\')">'+((arr_data[i].defective)?number_format(arr_data[i].defective):'0')+'</td>';
+				html_tr_data += '<td id="'+arr_data[i].id+'_arrival_price">'+((arr_data[i].arrival_price)?number_format(arr_data[i].arrival_price):'0')+'원</td>';
+				
+				if(arr_data[i].send_status == 1) {
+					html_tr_data += '<td class="green">발주요청</td>';
+				}else if(arr_data[i].send_status == 2) {
+					html_tr_data += '<td class="green">출고확정</td>';
+				}else if(arr_data[i].send_status == 3) {
+					html_tr_data += '<td class="green">픽업확인</td>';
+				}else if(arr_data[i].send_status == 4) {
+					html_tr_data += '<td class="green">픽업완료</td>';
+				}else if(arr_data[i].send_status == 5) {
+					html_tr_data += '<td class="green">배송완료</td>';
+				}else if(arr_data[i].send_status == 6) {
+					html_tr_data += '<td class="green">발주취소</td>';
+				}else if(arr_data[i].send_status == 7) {
+					html_tr_data += '<td class="green">출고취소</td>';
+				}else {
+					html_tr_data += '<td class="red">품절</td>';
+				}
+				
+				if(arr_data[i].cnt) {
+					html_tr_data += '<td><button class="button danger tosmall" onclick="modify_logs_info(\''+arr_data[i].id+'\')">수정이력</button></td>';
+				}else if(arr_data[i].order_status == 1) {
+					html_tr_data += '<td>발주요청</td>';
+				}else if(arr_data[i].order_status == 2) {
+					html_tr_data += '<td>출고확정</td>';
+				}else if(arr_data[i].order_status == 3) {
+					html_tr_data += '<td>미출고</td>';
+				}else if(arr_data[i].order_status == 4) {
+					html_tr_data += '<td>발주취소</td>';
+				}else if(arr_data[i].order_status == 5) {
+					html_tr_data += '<td>검수완료</td>';
+				}else if(arr_data[i].order_status == 6) {
+					html_tr_data += '<td>입고 초기화</td>';
+				}else if(arr_data[i].order_status == 7) {
+					html_tr_data += '<td>출고취소</td>';
+				}else {
+					html_tr_data += '<td class="red">상태오류</td>';
+				}
+				html_tr_data += '</tr>';
+			}
+
+			return html_tr_data;
+		}
+
+		function number_format(data) {
+			if(data === null || data === undefined) return '0';
+			let regexp = /\B(?=(\d{3})+(?!\d))/g;
+			return data.toString().replace(regexp, ',');
+		}
+
+		function load_data_all() {
+			if(start_cnt >= Number('451613')) {
+				document.documentElement.scrollTop = document.body.scrollHeight;
+				return;
+			}
+
+			$("#loadingmodal").modal("show");
+			let formData = new FormData();
+
+			formData.append("start", 0);
+			formData.append("limit", Number('451613'));
+
+			formData.append("no", $("#f_no").val());
+			formData.append("ob_no", $("#fo_no").val());
+			formData.append("shop_name", $("#f_shop_name").val());
+			formData.append("order_username", $("#f_order_username").val());
+			formData.append("order_user_tel", $("#f_order_user_tel").val());
+			formData.append("sDate", $("#f_sDate").val());
+			formData.append("eDate", $("#f_eDate").val());
+			formData.append("sTime", $("#f_sTime").val());
+			formData.append("eTime", $("#f_eTime").val());
+			formData.append("createdKey", $("#f_createdKey").val());
+			formData.append("created", $("#f_created").val());
+			formData.append("storeKey", $("#f_storeKey").val());
+			formData.append("storeInfo", $("#f_storeInfo").val());
+			formData.append("goodsKey", $("#f_goodsKey").val());
+			formData.append("goodsInfo", $("#f_goodsInfo").val());
+			formData.append("order_status", $("#f_order_status").val());
+
+			$.ajax({
+				type: 'post',
+				url: '/root/load_more_order_block_detail',
+				data: formData,
+				processData: false,
+				contentType: false,
+				dataType: 'json',
+				success: function(data) {
+					if(data.info.success == 'true'){
+						let html_data = add_table_data(data.info.data);
+						$("#table_list").children().remove();
+						$("#table_list").append(html_data);
+						start_cnt = Number('451613');
+					}
+				},
+				error: function(error) {
+					console.error(error);
+					alert('처리 중 오류가 발생했습니다.');
+				},
+				complete: function() {
+					$("#loadingmodal").modal("hide");
+					document.documentElement.scrollTop = document.body.scrollHeight;
+				}
+			});
+		}
+
+		// 더블클릭 값 변경
+		function change_data(elmt, data, obd_id){
+			let old_data = elmt.innerText;
+
+			if(elmt.innerHTML.indexOf('input') == -1) {
+				let input_data = '<div style="display:flex;">';
+				input_data += '<input class="input doubleclick" id="'+data+'_'+obd_id+'" name="'+old_data+'" style="width:25px; text-align:center;" type="text" value="'+old_data+'">';
+				input_data += '<button class="button primary tosmall check" onclick="save_change_data(\''+old_data+'\', \''+obd_id+'\', \''+data+'\')" ></button>';
+				input_data += '</div>';
+
+				elmt.innerHTML = input_data;
+			}else {
+				let value = $('#'+data+'_'+obd_id).attr('name');
+				
+				elmt.innerHTML = value;
+			}
+		}
+
+		// 변경 데이터 값 저장
+		function save_change_data(old_data, obd_id, column_name) {
+			let new_data = $('#'+column_name+'_'+obd_id).val();
+			if(new_data < 0) {
+				$('#'+obd_id+'_'+column_name+'_td').empty();
+				$('#'+obd_id+'_'+column_name+'_td').html(old_data);
+				alert('0이상의 수량을 기입해주세요');
+				return;
+			}
+			if(old_data != new_data) {
+				let formData = new FormData();
+
+				formData.append('old_data', old_data);
+				formData.append('new_data', new_data);
+				formData.append('column_name', column_name);
+				formData.append('obd_id', obd_id);
+
+				$.ajax({
+					type: 'post',
+					url: '/root/order_data_change',
+					data: formData,
+					processData: false,
+					contentType: false,
+					dataType: 'json',
+					success: function(data) {
+						if(data.info.success == 'true'){
+							$('#'+obd_id+'_'+column_name+'_td').empty();
+							$('#'+obd_id+'_'+column_name+'_td').html(new_data);
+							$('#'+obd_id+'_arrival_price').empty();
+							$('#'+obd_id+'_arrival_price').html(number_format(data.info.data) + '원');
+						}else {
+							alert(data.info.text);
+						}
+					},
+					error: function(error) {
+						console.error(error);
+						alert('처리 중 오류가 발생했습니다.');
+					},
+					complete: function() {
+
+					}
+				});
+			}
+		}
+
+		// 수정이력 클릭
+		function modify_logs_info(obd_id) {
+			let formData = new FormData();
+
+			formData.append('obd_id', obd_id);
+
+			$.ajax({
+					type: 'post',
+					url: '/root/modify_logs_info',
+					data: formData,
+					processData: false,
+					contentType: false,
+					dataType: 'json',
+					success: function(data) {
+						if(data.info.success == 'true'){
+							let html_data = add_modify_info_data(data.info.data);
+							$("#modify_data_list").append(html_data);
+							$("#cancel").modal("show");
+						}else {
+							alert(data.info.text);
+						}
+					},
+					error: function(error) {
+						console.error(error);
+						alert('처리 중 오류가 발생했습니다.');
+					},
+					complete: function() {
+
+					}
+				});
+		}
+
+		// 수정이력 테이블 데이터 추가
+		function add_modify_info_data(arr_data) {
+			$("#modify_data_list").empty();
+
+			let html_tr_data = '';
+			for(let i=0;i<arr_data.length;i++) {
+				html_tr_data += '<tr>';
+				if(arr_data[i].column_name == 'arrival') {
+					html_tr_data += '<td>'+arr_data[i].created+'</td>';
+					html_tr_data += '<td class="orange">'+number_format(arr_data[i].old_data)+'</td>';
+					html_tr_data += '<td class="orange">'+number_format(arr_data[i].modify_data)+'</td>';
+					html_tr_data += '<td></td>';
+					html_tr_data += '<td></td>';
+				}else if(arr_data[i].column_name == 'defective') {
+					html_tr_data += '<td>'+arr_data[i].created+'</td>';
+					html_tr_data += '<td></td>';
+					html_tr_data += '<td></td>';
+					html_tr_data += '<td class="purple">'+number_format(arr_data[i].old_data)+'</td>';
+				html_tr_data += '<td class="purple">'+number_format(arr_data[i].modify_data)+'</td>';
+				}
+				html_tr_data += '<td>'+number_format(arr_data[i].userid)+'</td>';
+				html_tr_data += '</tr>';
+			}
+
+			return html_tr_data;
+		}
+
+		// 미출고 사유 클릭
+		function openReason(obd_id) {
+			let formData = new FormData();
+			formData.append('obd_id', obd_id);
+			$("#modal_norelease_date").datepicker();
+			
+			$.ajax({
+				type: 'post',
+				url: '/root/reason_info',
+				data: formData,
+				processData: false,
+				contentType: false,
+				dataType: 'json',
+				success: function(data) {
+					if(data.info.success == 'true'){
+						set_norelease_data(data.info.data, obd_id);
+						set_norelease_modify_data(data.info.data1);
+
+						$("#reason").modal("show");
+					}else {
+						alert(data.info.text);
+					}
+				},
+				error: function(error) {
+					console.error(error);
+					alert('처리 중 오류가 발생했습니다.');
+				},
+				complete: function() {
+
+				}
+			});
+		}
+
+		// 원가 변경 클릭
+		function openCost(obd_id) {
+			let formData = new FormData();
+
+			formData.append('obd_id', obd_id);
+
+			$.ajax({
+				type: 'post',
+				url: '/root/cost_change_list',
+				data: formData,
+				processData: false,
+				contentType: false,
+				dataType: 'json',
+				success: function(data) {
+					if(data.info.success == 'true'){
+						set_cost_modify_data(data.info.data);
+
+						$("#cost_change").modal('show');
+					}else {
+						alert(data.info.text);
+					}
+				},
+				error: function(error) {
+					console.error(error);
+					alert('처리 중 오류가 발생했습니다.');
+				},
+				complete: function() {
+
+				}
+			});
+		}
+
+		// 미출고 내역 setting
+		function set_norelease_data(norelease_data, obd_id) {
+			old_norelease_memo = norelease_data.norelease_memo;
+
+						if(norelease_data.norelease_type == 1) {
+				old_norelease_type = 'all';
+							$("#soldOut_type").val('all');
+							$("#goods_all_btn").attr("class", "button primary round");
+							$("#goods_option_btn").attr("class", "button outline round");
+						}else if(norelease_data.norelease_type == 2){
+				old_norelease_type = 'option';
+							$("#soldOut_type").val('option');
+							$("#goods_option_btn").attr("class", "button primary round");
+							$("#goods_all_btn").attr("class", "button outline round");
+						}
+
+						if(norelease_data.norelease_date == -1) {
+				old_norelease_date = 'true';
+							$("#undefined_date").prop("checked", true);
+							$("#undefined_flag").val('true');
+							$("#modal_norelease_date").val('');
+				$("#modal_norelease_date").attr('readonly', true);
+			}else {
+				old_norelease_date = 'false';
+							$("#undefined_date").prop("checked", false);
+							$("#undefined_flag").val('false');
+							$("#modal_norelease_date").val(norelease_data.norelease_date);
+				$("#modal_norelease_date").attr('readonly', false);
+						}
+						
+						if(norelease_data.norelease_memo != '') {
+							$("#modal_norelease_memo").val(norelease_data.norelease_memo);
+						}
+
+			$("#modal_order_id").val(norelease_data.order_id);
+			$("#modal_store_id").val(norelease_data.store_id);
+			$("#modal_obd_id").val(obd_id);
+					}
+
+		// 미출고 수정 내역 setting
+		function set_norelease_modify_data(data) {
+			$("#modal_modify_norelease").children().remove();
+
+			for(let i=0;i<data.length;i++) {
+				let html_text = '';
+				html_text += '<tr>';
+				html_text += '<td>'+data[i].created+'</td>';
+				html_text += '<td>'+data[i].column_name+'</td>';
+				if(data[i].column_name.indexOf('원가') > -1) {
+					html_text += '<td>'+number_format(data[i].old_cost)+'원</td>';
+					html_text += '<td>'+number_format(data[i].new_cost)+'원</td>';
+				}else {
+					html_text += '<td>-</td>';
+					html_text += '<td>-</td>';
+				}
+
+				if(data[i].column_name.indexOf('품절') > -1) {
+					if(data[i].old_type == 1){
+						html_text += '<td>상품품절</td>';
+					}else if(data[i].old_type == 2) {
+						html_text += '<td>옵션품절</td>';
+					}else {
+						html_text += '<td>-</td>';
+					}
+
+					if(data[i].new_type == 1){
+						html_text += '<td>상품품절</td>';
+					}else if(data[i].new_type == 2) {
+						html_text += '<td>옵션품절</td>';
+					}else {
+						html_text += '<td>-</td>';
+					}
+				}else {
+					html_text += '<td>-</td>';
+					html_text += '<td>-</td>';
+				}
+
+				if(data[i].column_name.indexOf('재입고 예정일') > -1) {
+					if(data[i].old_date == -1) {
+						html_text += '<td>미정</td>';
+					}else if(data[i].old_date > 0) {
+						html_text += '<td>'+data[i].old_date+'일</td>';
+					}else {
+						html_text += '<td>-</td>';
+					}
+
+					if(data[i].new_date == -1) {
+						html_text += '<td>미정</td>';
+					}else if(data[i].new_date > 0) {
+						html_text += '<td>'+data[i].new_date+'일</td>';
+					}else {
+						html_text += '<td>-</td>';
+					}
+				}else {
+					html_text += '<td>-</td>';
+					html_text += '<td>-</td>';
+				}
+				html_text += '<td>'+data[i].username+'</td>';
+				html_text += '</tr>';
+
+				$("#modal_modify_norelease").append(html_text);
+			}
+		}
+
+		function set_cost_modify_data(data) {
+			$("#modal_cost_change").children().remove();
+
+			for(let i=0;i<data.length;i++) {
+				let html_text = '';
+				html_text += '<tr>';
+				html_text += '<td>'+data[i].created+'</td>';
+				html_text += '<td>'+data[i].column_name+'</td>';
+				if(data[i].column_name.indexOf('원가') > -1) {
+					html_text += '<td>'+number_format(data[i].old_cost)+'원</td>';
+					html_text += '<td>'+number_format(data[i].new_cost)+'원</td>';
+				}else {
+					html_text += '<td>-</td>';
+					html_text += '<td>-</td>';
+				}
+
+				html_text += '<td>'+data[i].username+'</td>';
+				html_text += '</tr>';
+
+				$("#modal_cost_change").append(html_text);
+			}
+		}
+	</script>
+<div id="ui-datepicker-div" class="ui-datepicker ui-widget ui-widget-content ui-helper-clearfix ui-corner-all"></div><div class="aads-mark" style="left: 244px; top: 302.5px; width: 1192px; height: 123.5px;"></div><div class="aads-note" style="left: 1050px; top: 230.5px;">⑤ 상품 목록 체크박스/상품 행<br><small>선택 상품 기준으로 엑셀 생성 및 업로드 작업 등록</small></div><div class="aads-note" style="position: fixed; left: 18px; top: 18px; max-width: 520px;">상품 목록: 선택상품 사방넷 자동업로드 버튼 위치<small>NewTalk V1 사방넷 자동업로드 반영 위치 주석</small></div></body><!-- Modal --></html>

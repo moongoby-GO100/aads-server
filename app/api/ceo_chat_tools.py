@@ -2,8 +2,8 @@
 CEO Chat 도구 정의 및 실행 (AADS-157 + AADS-159)
 
 5개 기존 도구: read_file, read_github, search_logs, query_db, fetch_url
-6개 browser 도구: browser_navigate, browser_snapshot, browser_screenshot,
-                  browser_click, browser_fill, browser_tab_list
+7개 browser 도구: browser_connect, browser_navigate, browser_snapshot,
+                  browser_screenshot, browser_click, browser_fill, browser_tab_list
 
 보안 규칙 (하드코딩, LLM 우회 불가):
   - read_file: /root/aads/ 하위만 허용. /etc, /proc, /root/.ssh 차단
@@ -118,7 +118,35 @@ TOOL_DEFINITIONS: List[Dict] = [
             "required": ["url"],
         },
     },
-    # ── Browser 도구 (AADS-159) ────────────────────────────────────────────
+    # ── Browser 도구 (AADS-159 + Browser Bridge) ───────────────────────────
+    {
+        "name": "browser_connect",
+        "description": (
+            "CEO 로컬 Chrome/브라우저 브릿지 세션 연결 상태 조회, one-time pairing 생성, 세션 선택. "
+            "OTP/로그인이 필요한 화면은 먼저 create_pairing으로 CEO 로컬 브라우저를 연결한 뒤 기존 browser_* 도구를 사용."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "description": "status | create_pairing | select",
+                    "enum": ["status", "create_pairing", "select"],
+                    "default": "status",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "select action에서 활성화할 browser bridge session id",
+                },
+                "label": {
+                    "type": "string",
+                    "description": "create_pairing 시 CEO에게 표시할 세션 라벨",
+                    "default": "CEO local Chrome",
+                },
+            },
+            "required": [],
+        },
+    },
     {
         "name": "browser_navigate",
         "description": "Playwright 브라우저로 URL 이동. 허용 도메인: *.newtalk.kr, github.com, localhost.\n이동 후 browser_snapshot으로 페이지 확인.\n예: browser_navigate(url='https://aads.newtalk.kr/')",
@@ -2417,59 +2445,23 @@ def _browser_domain_ok(url: str) -> Optional[str]:
 
 async def _acquire_pw_context() -> Tuple[Any, Optional[str]]:
     """Playwright 컨텍스트 싱글턴 취득. 실패 시 (None, 에러메시지)."""
-    global _pw_handle, _pw_browser, _pw_context, _pw_init_lock
-    if _pw_init_lock is None:
-        _pw_init_lock = asyncio.Lock()
-    async with _pw_init_lock:
-        try:
-            from playwright.async_api import async_playwright
-        except ImportError:
-            return None, "[브라우저 도구 사용 불가] playwright 패키지가 설치되지 않았습니다."
-        try:
-            import os
+    from app.browser_bridge.aads_adapter import acquire_browser_context
 
-            if not os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
-                for p in ["/root/.cache/ms-playwright", "/root/.cache"]:
-                    if os.path.isdir(os.path.join(p, "chromium-1208")) or os.path.isdir(
-                        os.path.join(p, "chromium_headless_shell-1208")
-                    ):
-                        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = p
-                        break
-
-            need_init = (
-                _pw_context is None
-                or _pw_browser is None
-                or not _pw_browser.is_connected()
-            )
-            if need_init:
-                if _pw_handle is not None:
-                    try:
-                        await _pw_handle.stop()
-                    except Exception:
-                        pass
-                _pw_handle = await async_playwright().start()
-                _pw_browser = await _pw_handle.chromium.launch(
-                    headless=True,
-                    args=[
-                        "--no-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--disable-gpu",
-                        "--memory-pressure-off",
-                    ],
-                )
-                _pw_context = await _pw_browser.new_context(
-                    viewport={"width": 1280, "height": 720},
-                    java_script_enabled=True,
-                )
-            return _pw_context, None
-        except Exception as e:
-            return None, f"[브라우저 도구 사용 불가] 초기화 실패: {e}"
+    return await acquire_browser_context()
 
 
 async def _current_page(ctx: Any) -> Any:
     """현재(최신) 페이지 반환. 없으면 새 페이지 생성."""
     pages = ctx.pages
     return pages[-1] if pages else await ctx.new_page()
+
+
+async def _get_or_create_browser_context() -> Any:
+    """Compatibility shim for older E2E credential-vault code."""
+    ctx, err = await _acquire_pw_context()
+    if err:
+        raise RuntimeError(err)
+    return ctx
 
 
 def _snapshot_to_text(node: Dict, depth: int = 0) -> str:
@@ -2548,6 +2540,48 @@ async def tool_browser_navigate(url: str) -> str:
         return f"[탐색 완료]\n제목: {title}\nURL: {page.url}"
     except Exception as e:
         return f"[ERROR] 브라우저 탐색 실패: {e}"
+
+
+async def tool_browser_connect(
+    action: str = "status",
+    session_id: str = "",
+    label: str = "CEO local Chrome",
+) -> str:
+    """Browser Bridge pairing/status/session selection."""
+    from app.browser_bridge.aads_adapter import create_pairing_instructions
+    from app.browser_bridge.service import get_browser_bridge_service
+
+    service = get_browser_bridge_service()
+    action = (action or "status").strip().lower()
+
+    try:
+        if action == "create_pairing":
+            return create_pairing_instructions(label=label or "CEO local Chrome")
+        if action == "select":
+            if not session_id:
+                return "[ERROR] session_id 필수"
+            selected = service.select_session(session_id)
+            return f"[Browser Bridge 선택 완료]\nsession_id: {selected.session_id}\nlabel: {selected.label}"
+        if action != "status":
+            return f"[ERROR] 지원하지 않는 action: {action}"
+
+        sessions = list(service.sessions.public_sessions())
+        active = service.active_session()
+        lines = ["[Browser Bridge 상태]"]
+        lines.append(f"active_session: {active.session_id if active else '(없음)'}")
+        lines.append(f"sessions: {len(sessions)}")
+        for item in sessions[:10]:
+            endpoint = item.get("endpoint", {})
+            marker = "*" if item.get("active") else "-"
+            lines.append(
+                f"  {marker} {item['session_id']} {item['label']} "
+                f"kind={endpoint.get('kind')} storage={item.get('has_storage_state')}"
+            )
+        if not sessions:
+            lines.append("연결이 필요하면 browser_connect(action='create_pairing')을 사용하세요.")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"[ERROR] Browser Bridge 처리 실패: {e}"
 
 
 async def tool_browser_snapshot() -> str:
@@ -2688,7 +2722,7 @@ async def tool_browser_fill(selector: str, value: str) -> str:
     try:
         page = await _current_page(ctx)
         await page.fill(selector, value, timeout=30_000)
-        return f"[입력 완료] selector={selector}, value='{value[:50]}'"
+        return f"[입력 완료] selector={selector}"
     except Exception as e:
         return f"[ERROR] 입력 실패 ({selector}): {e}"
 
@@ -3226,6 +3260,12 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
     elif name == "fetch_url":
         return await tool_fetch_url(params.get("url", ""))
     # ── Browser 도구 (AADS-159) ─────────────────────────────────────────────
+    elif name == "browser_connect":
+        return await tool_browser_connect(
+            action=params.get("action", "status"),
+            session_id=params.get("session_id", ""),
+            label=params.get("label", "CEO local Chrome"),
+        )
     elif name == "browser_navigate":
         return await tool_browser_navigate(params.get("url", ""))
     elif name == "browser_snapshot":

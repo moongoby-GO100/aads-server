@@ -1,0 +1,1270 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GO100 Screener Design Mockup v1</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --panel-2: #f9fafb;
+      --line: #d8dde5;
+      --line-soft: #e8ebf0;
+      --text: #1f2933;
+      --muted: #6b7684;
+      --faint: #8b95a3;
+      --brand: #155e75;
+      --brand-2: #0f766e;
+      --blue: #2563eb;
+      --red: #dc2626;
+      --green: #15803d;
+      --amber: #b45309;
+      --orange: #c2410c;
+      --shadow: 0 10px 24px rgba(31, 41, 51, 0.08);
+      --radius: 8px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      letter-spacing: 0;
+    }
+
+    button, input, select {
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 58px;
+      padding: 0 22px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.94);
+      backdrop-filter: blur(10px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: #0f172a;
+      color: white;
+      font-weight: 800;
+      font-size: 13px;
+    }
+
+    .title-block {
+      min-width: 0;
+    }
+
+    .title {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+      font-weight: 750;
+    }
+
+    .subtitle {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      min-height: 34px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: white;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .btn.primary {
+      border-color: #0f5f6b;
+      background: #0f5f6b;
+      color: white;
+    }
+
+    .btn.ghost {
+      background: transparent;
+    }
+
+    .btn.warn {
+      border-color: #f1d6b8;
+      background: #fff7ed;
+      color: var(--orange);
+    }
+
+    .tabs {
+      display: flex;
+      gap: 4px;
+      padding: 12px 22px 0;
+      background: var(--bg);
+      overflow-x: auto;
+    }
+
+    .tab {
+      min-height: 36px;
+      padding: 0 14px;
+      border: 1px solid transparent;
+      border-bottom: 0;
+      border-radius: 8px 8px 0 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .tab.active {
+      border-color: var(--line);
+      background: white;
+      color: var(--brand);
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: 318px minmax(0, 1fr) 342px;
+      gap: 14px;
+      padding: 14px 22px 24px;
+      max-width: 1760px;
+      margin: 0 auto;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: 0 1px 2px rgba(31, 41, 51, 0.04);
+      min-width: 0;
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 46px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .panel-title {
+      font-size: 13px;
+      font-weight: 800;
+      color: #273444;
+    }
+
+    .panel-sub {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .filter-panel {
+      align-self: start;
+      position: sticky;
+      top: 84px;
+      max-height: calc(100vh - 106px);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .filter-body {
+      overflow: auto;
+      padding: 12px;
+    }
+
+    .section {
+      padding: 12px 0;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .section:first-child { padding-top: 0; }
+    .section:last-child { border-bottom: 0; }
+
+    .section-label {
+      margin-bottom: 8px;
+      color: #344054;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .field-grid {
+      display: grid;
+      gap: 8px;
+    }
+
+    .field-row {
+      display: grid;
+      grid-template-columns: 1fr 88px;
+      gap: 8px;
+    }
+
+    .input, .select {
+      width: 100%;
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: white;
+      color: var(--text);
+      padding: 0 10px;
+      font-size: 13px;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 28px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: white;
+      color: #3d4956;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .chip.active {
+      border-color: #9bd3cf;
+      background: #e6fffb;
+      color: #0f766e;
+    }
+
+    .chip.rank {
+      border-color: #bfdbfe;
+      background: #eff6ff;
+      color: #1d4ed8;
+    }
+
+    .chip.danger {
+      border-color: #fecaca;
+      background: #fef2f2;
+      color: #b91c1c;
+    }
+
+    .switch-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .switch {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+      color: #3d4956;
+    }
+
+    .toggle {
+      width: 34px;
+      height: 20px;
+      border-radius: 999px;
+      background: #cbd5e1;
+      position: relative;
+      flex: 0 0 auto;
+    }
+
+    .toggle::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: white;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+    }
+
+    .toggle.on {
+      background: var(--brand-2);
+    }
+
+    .toggle.on::after {
+      left: 17px;
+    }
+
+    .filter-footer {
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+      border-top: 1px solid var(--line-soft);
+      background: var(--panel-2);
+    }
+
+    .result-panel {
+      display: grid;
+      grid-template-rows: auto auto minmax(360px, 1fr);
+      min-height: calc(100vh - 110px);
+    }
+
+    .summary-strip {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(116px, 1fr));
+      gap: 10px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--panel-2);
+    }
+
+    .metric {
+      min-height: 64px;
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      background: white;
+      padding: 10px;
+    }
+
+    .metric-label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .metric-value {
+      margin-top: 6px;
+      font-size: 18px;
+      font-weight: 800;
+      color: #17212f;
+    }
+
+    .metric-foot {
+      margin-top: 2px;
+      color: var(--faint);
+      font-size: 11px;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 50px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .toolbar-left, .toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      flex-wrap: wrap;
+    }
+
+    .segmented {
+      display: inline-flex;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f3f5f8;
+    }
+
+    .segmented button {
+      min-height: 28px;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .segmented button.active {
+      background: white;
+      color: var(--brand);
+      box-shadow: 0 1px 2px rgba(31, 41, 51, 0.10);
+    }
+
+    .table-wrap {
+      overflow: auto;
+    }
+
+    table {
+      width: 100%;
+      min-width: 1120px;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 12px;
+    }
+
+    thead th {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      height: 38px;
+      padding: 0 10px;
+      border-bottom: 1px solid var(--line);
+      background: #f1f4f8;
+      color: #536171;
+      font-weight: 800;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    thead th:first-child, tbody td:first-child {
+      position: sticky;
+      left: 0;
+      z-index: 6;
+      text-align: left;
+      background: inherit;
+    }
+
+    thead th:first-child {
+      z-index: 8;
+      background: #f1f4f8;
+    }
+
+    tbody tr {
+      background: white;
+    }
+
+    tbody tr:nth-child(even) {
+      background: #fbfcfd;
+    }
+
+    tbody tr.selected {
+      background: #e6fffb;
+      outline: 1px solid #99f6e4;
+      outline-offset: -1px;
+    }
+
+    tbody td {
+      height: 43px;
+      padding: 0 10px;
+      border-bottom: 1px solid var(--line-soft);
+      color: #283544;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .stock-cell {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 230px;
+    }
+
+    .rank {
+      display: grid;
+      place-items: center;
+      width: 23px;
+      height: 23px;
+      border-radius: 6px;
+      background: #eef2f7;
+      color: #475467;
+      font-size: 11px;
+      font-weight: 800;
+      flex: 0 0 auto;
+    }
+
+    .stock-name {
+      font-weight: 800;
+      color: #17212f;
+    }
+
+    .stock-code {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .badges {
+      display: flex;
+      gap: 4px;
+      margin-left: auto;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      height: 20px;
+      padding: 0 6px;
+      border-radius: 5px;
+      background: #eef2f7;
+      color: #526071;
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .badge.hit { background: #fff7ed; color: #c2410c; }
+    .badge.ai { background: #ecfdf5; color: #15803d; }
+
+    .pos { color: var(--red); font-weight: 800; }
+    .neg { color: var(--blue); font-weight: 800; }
+    .strong { font-weight: 800; }
+
+    .right-rail {
+      align-self: start;
+      position: sticky;
+      top: 84px;
+      display: grid;
+      gap: 14px;
+      max-height: calc(100vh - 106px);
+      overflow: auto;
+    }
+
+    .selected-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 14px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .selected-name {
+      font-size: 18px;
+      font-weight: 850;
+    }
+
+    .selected-code {
+      margin-top: 2px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .price-box {
+      text-align: right;
+      flex: 0 0 auto;
+    }
+
+    .price {
+      font-size: 20px;
+      font-weight: 850;
+    }
+
+    .chart {
+      padding: 12px 14px 14px;
+    }
+
+    .chart-tools {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .mini-tabs {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+
+    .mini-tabs button {
+      min-height: 26px;
+      min-width: 34px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: white;
+      color: #435164;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .mini-tabs button.active {
+      border-color: #9bd3cf;
+      background: #e6fffb;
+      color: #0f766e;
+    }
+
+    .chart-canvas {
+      position: relative;
+      height: 210px;
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      background:
+        linear-gradient(to bottom, rgba(216, 221, 229, 0.45) 1px, transparent 1px) 0 0 / 100% 42px,
+        linear-gradient(to right, rgba(216, 221, 229, 0.35) 1px, transparent 1px) 0 0 / 54px 100%,
+        #ffffff;
+      overflow: hidden;
+    }
+
+    .line {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 0;
+      bottom: 0;
+      background:
+        linear-gradient(142deg, transparent 9%, rgba(21, 94, 117, 0.0) 10%, rgba(21, 94, 117, 0.0) 100%);
+    }
+
+    .spark {
+      position: absolute;
+      inset: 16px 14px 38px;
+    }
+
+    .spark svg {
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+    }
+
+    .volume-bars {
+      position: absolute;
+      left: 15px;
+      right: 15px;
+      bottom: 12px;
+      height: 34px;
+      display: grid;
+      grid-template-columns: repeat(32, 1fr);
+      gap: 3px;
+      align-items: end;
+    }
+
+    .bar {
+      min-width: 3px;
+      border-radius: 2px 2px 0 0;
+      background: #cbd5e1;
+    }
+
+    .bar.up { background: rgba(220, 38, 38, 0.45); }
+    .bar.down { background: rgba(37, 99, 235, 0.42); }
+
+    .rail-body {
+      padding: 12px 14px 14px;
+    }
+
+    .kv-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .kv {
+      min-height: 58px;
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      background: var(--panel-2);
+      padding: 9px;
+    }
+
+    .kv label {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .kv strong {
+      display: block;
+      margin-top: 6px;
+      font-size: 14px;
+      color: #17212f;
+    }
+
+    .reason-list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .reason-list li {
+      display: grid;
+      grid-template-columns: 76px 1fr;
+      gap: 8px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--line-soft);
+      font-size: 12px;
+    }
+
+    .reason-list li:last-child {
+      border-bottom: 0;
+    }
+
+    .reason-label {
+      color: var(--muted);
+      font-weight: 800;
+    }
+
+    .report {
+      max-width: 1760px;
+      margin: 0 auto 24px;
+      padding: 0 22px;
+    }
+
+    .report-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+
+    .report-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      padding: 14px;
+    }
+
+    .report-card h3 {
+      margin: 0 0 8px;
+      font-size: 14px;
+    }
+
+    .report-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .mobile-bottom {
+      display: none;
+    }
+
+    @media (max-width: 1320px) {
+      .workspace {
+        grid-template-columns: 300px minmax(0, 1fr);
+      }
+
+      .right-rail {
+        grid-column: 1 / -1;
+        position: static;
+        max-height: none;
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .summary-strip {
+        grid-template-columns: repeat(3, minmax(120px, 1fr));
+      }
+
+      .report-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (max-width: 880px) {
+      .topbar {
+        align-items: flex-start;
+        padding: 10px 14px;
+        flex-direction: column;
+      }
+
+      .tabs {
+        padding: 10px 14px 0;
+      }
+
+      .workspace {
+        display: block;
+        padding: 12px 14px 86px;
+      }
+
+      .filter-panel, .right-rail {
+        position: static;
+        max-height: none;
+        margin-bottom: 12px;
+      }
+
+      .result-panel {
+        min-height: auto;
+      }
+
+      .summary-strip {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .toolbar {
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 10px 14px;
+      }
+
+      .right-rail {
+        display: block;
+      }
+
+      .right-rail .panel {
+        margin-bottom: 12px;
+      }
+
+      .report {
+        padding: 0 14px;
+      }
+
+      .report-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .mobile-bottom {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 30;
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 8px;
+        padding: 10px 12px;
+        border-top: 1px solid var(--line);
+        background: white;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">G100</div>
+      <div class="title-block">
+        <h1 class="title">GO100 종목 스크리너</h1>
+        <div class="subtitle">기준일 2026-05-04 15:30 KST · KOSPI/KOSDAQ 통합 · 데이터 지연 가능</div>
+      </div>
+    </div>
+    <div class="top-actions">
+      <button class="btn ghost">조건 불러오기</button>
+      <button class="btn">저장</button>
+      <button class="btn">CSV</button>
+      <button class="btn warn">리셋</button>
+      <button class="btn primary">검색 실행</button>
+    </div>
+  </header>
+
+  <nav class="tabs" aria-label="screener modes">
+    <button class="tab active">조건검색</button>
+    <button class="tab">전략카드 결과</button>
+    <button class="tab">내 저장 조건</button>
+    <button class="tab">최근 검색</button>
+    <button class="tab">제외/감시 목록</button>
+  </nav>
+
+  <main class="workspace">
+    <aside class="panel filter-panel">
+      <div class="panel-head">
+        <div class="panel-title">검색 조건</div>
+        <div class="panel-sub">5개 적용</div>
+      </div>
+      <div class="filter-body">
+        <section class="section">
+          <div class="section-label">빠른 프리셋</div>
+          <div class="chips">
+            <button class="chip active">거래대금 급증</button>
+            <button class="chip active">외인+기관 순매수</button>
+            <button class="chip">저PER</button>
+            <button class="chip">52주 신고가</button>
+            <button class="chip rank">상승률 TOP 100</button>
+            <button class="chip">RSI 과매도</button>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-label">기간</div>
+          <div class="field-grid">
+            <select class="select">
+              <option>기간 분석</option>
+              <option>기준일 단일</option>
+            </select>
+            <div class="field-row">
+              <input class="input" value="2026-04-01" aria-label="from date" />
+              <input class="input" value="2026-05-04" aria-label="to date" />
+            </div>
+            <div class="chips">
+              <button class="chip active">1개월</button>
+              <button class="chip">1주</button>
+              <button class="chip">3개월</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-label">조건 빌더</div>
+          <div class="field-grid">
+            <select class="select">
+              <option>거래대금</option>
+            </select>
+            <div class="field-row">
+              <select class="select">
+                <option>&gt;=</option>
+              </select>
+              <input class="input" value="300억" />
+            </div>
+            <select class="select">
+              <option>정렬: 기간 상승률 높은 순</option>
+            </select>
+            <button class="btn">조건 추가</button>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-label">적용 조건</div>
+          <div class="chips">
+            <button class="chip active">거래대금 >= 300억</button>
+            <button class="chip active">외인5일 &gt; 0</button>
+            <button class="chip active">기관5일 &gt; 0</button>
+            <button class="chip rank">기간상승률 TOP 100</button>
+            <button class="chip danger">관리종목 제외</button>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-label">제외 필터</div>
+          <div class="switch-list">
+            <div class="switch"><span>관리/투자주의 제외</span><span class="toggle on"></span></div>
+            <div class="switch"><span>거래정지 제외</span><span class="toggle on"></span></div>
+            <div class="switch"><span>우선주 제외</span><span class="toggle on"></span></div>
+            <div class="switch"><span>스팩/리츠 제외</span><span class="toggle"></span></div>
+            <div class="switch"><span>시총 500억 미만 제외</span><span class="toggle on"></span></div>
+          </div>
+        </section>
+      </div>
+      <div class="filter-footer">
+        <button class="btn primary">검색 실행</button>
+        <button class="btn">현재 조건 저장</button>
+      </div>
+    </aside>
+
+    <section class="panel result-panel">
+      <div class="summary-strip">
+        <div class="metric">
+          <div class="metric-label">검색 결과</div>
+          <div class="metric-value">86종목</div>
+          <div class="metric-foot">전일 대비 +12</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">중앙 상승률</div>
+          <div class="metric-value pos">+4.8%</div>
+          <div class="metric-foot">기간 22거래일</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">평균 거래대금</div>
+          <div class="metric-value">1,284억</div>
+          <div class="metric-foot">상위 100 기준</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">외인/기관 동시순매수</div>
+          <div class="metric-value">31종목</div>
+          <div class="metric-foot">최근 5거래일</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">위험 플래그</div>
+          <div class="metric-value">4종목</div>
+          <div class="metric-foot">급등 과열/거래집중</div>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <div class="segmented">
+            <button class="active">전체</button>
+            <button>신호 적중</button>
+            <button>관심</button>
+            <button>제외</button>
+          </div>
+          <button class="btn">컬럼</button>
+          <button class="btn">비교</button>
+        </div>
+        <div class="toolbar-right">
+          <select class="select" style="width: 170px">
+            <option>기간 상승률 높은 순</option>
+            <option>거래대금 높은 순</option>
+            <option>시총 높은 순</option>
+          </select>
+          <button class="btn">20개</button>
+          <button class="btn">1 / 5</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>종목</th>
+              <th>현재가</th>
+              <th>등락률</th>
+              <th>기간%</th>
+              <th>거래대금</th>
+              <th>거래량비</th>
+              <th>시총</th>
+              <th>PER</th>
+              <th>PBR</th>
+              <th>RSI</th>
+              <th>외인5일</th>
+              <th>기관5일</th>
+              <th>신호</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="selected">
+              <td>
+                <div class="stock-cell">
+                  <span class="rank">1</span>
+                  <div>
+                    <div class="stock-name">삼성전자</div>
+                    <div class="stock-code">005930</div>
+                  </div>
+                  <div class="badges"><span class="badge hit">전략</span><span class="badge ai">AI</span></div>
+                </div>
+              </td>
+              <td class="strong">78,400</td>
+              <td class="pos">+2.35%</td>
+              <td class="pos">+12.8%</td>
+              <td>8,420억</td>
+              <td>2.6x</td>
+              <td>468조</td>
+              <td>18.4</td>
+              <td>1.32</td>
+              <td>61</td>
+              <td class="pos">+1,240억</td>
+              <td class="pos">+842억</td>
+              <td>4/5</td>
+            </tr>
+            <tr>
+              <td>
+                <div class="stock-cell">
+                  <span class="rank">2</span>
+                  <div>
+                    <div class="stock-name">SK하이닉스</div>
+                    <div class="stock-code">000660</div>
+                  </div>
+                  <div class="badges"><span class="badge hit">전략</span></div>
+                </div>
+              </td>
+              <td class="strong">184,200</td>
+              <td class="pos">+3.12%</td>
+              <td class="pos">+18.7%</td>
+              <td>5,330억</td>
+              <td>2.1x</td>
+              <td>134조</td>
+              <td>21.0</td>
+              <td>2.14</td>
+              <td>68</td>
+              <td class="pos">+924억</td>
+              <td class="neg">-116억</td>
+              <td>3/5</td>
+            </tr>
+            <tr>
+              <td>
+                <div class="stock-cell">
+                  <span class="rank">3</span>
+                  <div>
+                    <div class="stock-name">한화에어로스페이스</div>
+                    <div class="stock-code">012450</div>
+                  </div>
+                  <div class="badges"><span class="badge ai">AI</span></div>
+                </div>
+              </td>
+              <td class="strong">263,500</td>
+              <td class="neg">-0.94%</td>
+              <td class="pos">+22.4%</td>
+              <td>1,920억</td>
+              <td>1.8x</td>
+              <td>13조</td>
+              <td>24.8</td>
+              <td>3.06</td>
+              <td>72</td>
+              <td class="pos">+288억</td>
+              <td class="pos">+410억</td>
+              <td>3/5</td>
+            </tr>
+            <tr>
+              <td>
+                <div class="stock-cell">
+                  <span class="rank">4</span>
+                  <div>
+                    <div class="stock-name">NAVER</div>
+                    <div class="stock-code">035420</div>
+                  </div>
+                </div>
+              </td>
+              <td class="strong">205,000</td>
+              <td class="pos">+1.06%</td>
+              <td class="pos">+6.2%</td>
+              <td>1,410억</td>
+              <td>1.3x</td>
+              <td>33조</td>
+              <td>28.5</td>
+              <td>1.19</td>
+              <td>55</td>
+              <td class="neg">-92억</td>
+              <td class="pos">+186억</td>
+              <td>2/5</td>
+            </tr>
+            <tr>
+              <td>
+                <div class="stock-cell">
+                  <span class="rank">5</span>
+                  <div>
+                    <div class="stock-name">현대차</div>
+                    <div class="stock-code">005380</div>
+                  </div>
+                  <div class="badges"><span class="badge hit">전략</span></div>
+                </div>
+              </td>
+              <td class="strong">248,000</td>
+              <td class="neg">-1.20%</td>
+              <td class="pos">+9.4%</td>
+              <td>2,020억</td>
+              <td>1.5x</td>
+              <td>52조</td>
+              <td>5.8</td>
+              <td>0.72</td>
+              <td>48</td>
+              <td class="pos">+316억</td>
+              <td class="pos">+271억</td>
+              <td>3/5</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <aside class="right-rail">
+      <section class="panel">
+        <div class="selected-head">
+          <div>
+            <div class="selected-name">삼성전자</div>
+            <div class="selected-code">005930 · KOSPI · 반도체</div>
+          </div>
+          <div class="price-box">
+            <div class="price">78,400</div>
+            <div class="pos">+2.35%</div>
+          </div>
+        </div>
+        <div class="chart">
+          <div class="chart-tools">
+            <div class="mini-tabs">
+              <button>1m</button>
+              <button>5m</button>
+              <button class="active">D</button>
+              <button>W</button>
+              <button>M</button>
+            </div>
+            <button class="btn" style="min-height: 28px; font-size: 12px">전체 차트</button>
+          </div>
+          <div class="chart-canvas">
+            <div class="spark">
+              <svg viewBox="0 0 320 150" preserveAspectRatio="none" aria-label="mock chart">
+                <polyline points="0,116 18,108 34,112 50,94 67,99 84,80 101,86 118,74 135,78 152,58 169,61 186,52 203,65 220,44 237,48 254,34 271,39 288,29 305,35 320,20" fill="none" stroke="#155e75" stroke-width="3" />
+                <polyline points="0,126 18,120 34,118 50,114 67,110 84,102 101,98 118,90 135,88 152,80 169,78 186,72 203,72 220,64 237,60 254,54 271,52 288,48 305,45 320,40" fill="none" stroke="#f59e0b" stroke-width="2" opacity="0.9" />
+                <polyline points="0,90 18,92 34,89 50,88 67,84 84,82 101,79 118,76 135,72 152,69 169,66 186,64 203,62 220,59 237,57 254,54 271,51 288,50 305,48 320,46" fill="none" stroke="#64748b" stroke-width="2" opacity="0.7" />
+              </svg>
+            </div>
+            <div class="volume-bars">
+              <span class="bar up" style="height: 24%"></span><span class="bar down" style="height: 36%"></span><span class="bar up" style="height: 30%"></span><span class="bar up" style="height: 42%"></span>
+              <span class="bar down" style="height: 28%"></span><span class="bar up" style="height: 55%"></span><span class="bar up" style="height: 40%"></span><span class="bar down" style="height: 25%"></span>
+              <span class="bar up" style="height: 46%"></span><span class="bar up" style="height: 62%"></span><span class="bar down" style="height: 38%"></span><span class="bar up" style="height: 59%"></span>
+              <span class="bar up" style="height: 66%"></span><span class="bar down" style="height: 35%"></span><span class="bar up" style="height: 72%"></span><span class="bar up" style="height: 58%"></span>
+              <span class="bar down" style="height: 42%"></span><span class="bar up" style="height: 65%"></span><span class="bar up" style="height: 70%"></span><span class="bar down" style="height: 39%"></span>
+              <span class="bar up" style="height: 76%"></span><span class="bar up" style="height: 82%"></span><span class="bar down" style="height: 46%"></span><span class="bar up" style="height: 88%"></span>
+              <span class="bar up" style="height: 74%"></span><span class="bar down" style="height: 50%"></span><span class="bar up" style="height: 91%"></span><span class="bar up" style="height: 83%"></span>
+              <span class="bar down" style="height: 47%"></span><span class="bar up" style="height: 68%"></span><span class="bar up" style="height: 74%"></span><span class="bar up" style="height: 79%"></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title">선택 종목 요약</div>
+          <div class="panel-sub">실측/계산 기준</div>
+        </div>
+        <div class="rail-body">
+          <div class="kv-grid">
+            <div class="kv"><label>시가총액</label><strong>468조 1,220억</strong></div>
+            <div class="kv"><label>거래대금</label><strong>8,420억</strong></div>
+            <div class="kv"><label>PER / PBR</label><strong>18.4 / 1.32</strong></div>
+            <div class="kv"><label>RSI / VWAP</label><strong>61 / 상회</strong></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title">선정 근거</div>
+          <div class="panel-sub">5개 중 4개 충족</div>
+        </div>
+        <div class="rail-body">
+          <ul class="reason-list">
+            <li><span class="reason-label">수급</span><span>외인과 기관이 최근 5거래일 동시 순매수</span></li>
+            <li><span class="reason-label">거래</span><span>거래대금 8,420억, 평균 대비 2.6배</span></li>
+            <li><span class="reason-label">추세</span><span>20일선과 VWAP 상회, MA 정배열 유지</span></li>
+            <li><span class="reason-label">주의</span><span>단기 상승률 +12.8%로 추격 진입 리스크 표시</span></li>
+          </ul>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <section class="report">
+    <div class="report-grid">
+      <article class="report-card">
+        <h3>1. 현재 문제</h3>
+        <p>조건, 결과, 차트, 저장 조건이 같은 위계로 나열되어 핵심 행동이 흐립니다. 검색 전후 상태가 구분되지 않고 표와 차트가 서로 떨어져 종목 판단 흐름이 끊깁니다.</p>
+      </article>
+      <article class="report-card">
+        <h3>2. 개선 방향</h3>
+        <p>좌측 조건 패널, 중앙 결과 테이블, 우측 종목 근거 패널로 고정합니다. 사용자는 조건을 바꾸고, 결과를 고르고, 차트와 근거를 즉시 확인합니다.</p>
+      </article>
+      <article class="report-card">
+        <h3>3. 추가 기능</h3>
+        <p>컬럼 프리셋, 관심/제외 토글, 조건 버전 저장, 전략카드 결과 탭, 위험 플래그, 모바일 하단 실행바를 추가해 반복 사용성을 높입니다.</p>
+      </article>
+      <article class="report-card">
+        <h3>4. 개발 적용 순서</h3>
+        <p>P0는 레이아웃 재구성, P1은 표 컬럼/우측 패널/차트 연동, P2는 저장 조건 서버화와 개인화입니다. 기존 API는 유지하고 화면 구조부터 바꿉니다.</p>
+      </article>
+    </div>
+  </section>
+
+  <div class="mobile-bottom" aria-label="mobile actions">
+    <button class="btn">조건</button>
+    <button class="btn">결과 86</button>
+    <button class="btn primary">검색</button>
+  </div>
+</body>
+</html>

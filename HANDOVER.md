@@ -1,5 +1,15 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-05)
+- **Common Browser Bridge 모듈 스켈레톤 추가 (2026-05-05 KST)**:
+  - 공통 계층: `app/browser_bridge/` 추가. `BrowserEndpointKind(cdp/websocket/local_agent/storage_state/headless)`, one-time pairing token, 세션 registry, storageState manager, Playwright context adapter, E2E config adapter를 AADS 채팅과 분리된 모듈로 구성했다.
+  - 보안 경계: CDP/WebSocket endpoint는 기본적으로 `localhost`/loopback만 허용한다. pairing token은 원문 저장 없이 hash만 보관하고 1회 사용 후 재사용을 거부한다. storageState는 `.browser_bridge_state/` 하위에만 저장되며 `.gitignore`에 추가했다. `browser_fill` 결과는 입력값을 echo하지 않도록 바꿨다.
+  - API: `app/api/browser_bridge.py` 추가 및 `app/main.py` 라우터 등록. `POST /api/v1/browser-bridge/pairings`는 인증된 사용자가 pairing token을 만들고, `POST /api/v1/browser-bridge/sessions/register`는 local bridge/Chrome 쪽에서 token으로 세션을 등록한다. `GET /sessions`, `POST /sessions/select`, `GET /e2e/config`로 등록 세션과 E2E 인터페이스를 조회한다.
+  - AADS 도구 연동: `browser_connect` 도구를 추가했다. `status`, `create_pairing`, `select` action을 지원하며 기존 `browser_navigate/snapshot/screenshot/click/fill/tab_list`는 Browser Bridge 활성 세션을 우선 사용하고 없으면 기존 headless Playwright 경로를 사용한다.
+  - CEO OTP 흐름: `browser_connect(action="create_pairing")` → CEO 로컬 Chrome/브릿지 에이전트가 `/sessions/register`에 `endpoint.kind=cdp` 또는 `storage_state`로 등록 → CEO가 로컬 Chrome에서 OTP 완료 → AADS browser 도구가 활성 세션을 재사용한다.
+  - E2E 인터페이스: `app.browser_bridge.e2e_adapter.build_e2e_config()`를 추가했다. 환경변수 `AADS_BROWSER_BRIDGE_SESSION_ID`, `AADS_BROWSER_BRIDGE_CDP_URL`, `AADS_BROWSER_BRIDGE_WS_URL`, `AADS_BROWSER_BRIDGE_STORAGE_STATE`가 있으면 final Playwright 확인이 bridge 세션을 우선 사용하고, 없으면 headless Playwright 설정을 반환한다. `app/services/visual_qa.py` 캡처도 이 config를 인자로 전달한다.
+  - 검증 기록: `tests/unit/test_browser_bridge.py`에 loopback 검증, public CDP 차단, one-time token 재사용 거부, storageState 경로 검증을 추가했다.
+
 ## 현재 진행 상태 (2026-05-04)
 - **Android Agent 전기능 구현 후속 안정화 + 채팅 응답 표시 복구 문서화/커밋 준비 (2026-05-04 08:20 KST)**:
   - Android: `runner-4f922625` 산출물은 `05c7dc7`로 이미 커밋되어 있으며, `CommandDispatcher.java` 기준 57개 명령/alias가 등록되어 있다. 후속 패치로 `AndroidCommandHandlers.SensorSnapshot.toJson()`에서 `NaN`/`Infinity` 센서값을 JSON 배열에 넣다 실패하지 않도록 non-finite 값을 skip 처리했다.
