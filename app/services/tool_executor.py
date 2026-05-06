@@ -1828,7 +1828,7 @@ class ToolExecutor:
     async def _inspect_service(self, inp: Dict[str, Any]) -> Any:
         """
         서비스 종합 점검: 프로세스/Docker/로그/헬스체크 수행.
-        list_remote_dir + read_remote_file + health_check 조합.
+        list_remote_dir + run_remote_command + get_all_service_status 조합.
         """
         project = (inp.get("project") or "").upper()
         checks_input = inp.get("checks", ["all"])
@@ -1861,7 +1861,10 @@ class ToolExecutor:
 
         if do_docker:
             try:
-                docker_result = await self._health_check({"server": "all"})
+                docker_result = await self._run_remote_command({
+                    "project": project,
+                    "command": "docker ps --format 'table {{.Names}}\\t{{.Status}}'",
+                })
                 results["docker_status"] = docker_result
                 results["checks_performed"].append("docker")
             except Exception as e:
@@ -1880,8 +1883,34 @@ class ToolExecutor:
 
         if do_health:
             try:
-                health_result = await self._health_check({})
-                results["health"] = health_result
+                # inspect_service의 health 점검은 자체 경로로 수행한다.
+                # (health_check 도구의 직접 재호출/원매핑 방지)
+                service_status = await self._get_all_service_status({"include_details": True})
+                details = []
+                if isinstance(service_status, dict):
+                    if isinstance(service_status.get("details"), list):
+                        details = service_status.get("details", [])
+                    elif isinstance(service_status.get("summary"), list):
+                        details = service_status.get("summary", [])
+
+                project_status = next(
+                    (
+                        row for row in details
+                        if str(row.get("service", "")).upper() == project
+                    ),
+                    None,
+                )
+                if project_status:
+                    results["health"] = project_status
+                else:
+                    results["health"] = {
+                        "error": f"{project} 서비스 상태를 찾을 수 없음",
+                        "available_services": [
+                            str(row.get("service", ""))
+                            for row in details
+                            if isinstance(row, dict)
+                        ],
+                    }
                 results["checks_performed"].append("health")
             except Exception as e:
                 results["health_error"] = str(e)

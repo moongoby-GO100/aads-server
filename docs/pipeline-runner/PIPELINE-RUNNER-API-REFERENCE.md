@@ -49,8 +49,10 @@ Request Body: `JobSubmitRequest`
 
 중복 처리:
 
+- 동일 `instruction_hash` 제출은 API 트랜잭션에서 advisory lock으로 직렬화
 - 동일 `instruction_hash` + 활성 작업이면 기존 job 재사용
 - 동일 `instruction_hash` + 최근 2시간 내 `error`면 `queued`로 리셋 후 재시도
+- DB partial unique index가 active 상태 중복 row를 최종 차단
 
 성공 응답 예시:
 

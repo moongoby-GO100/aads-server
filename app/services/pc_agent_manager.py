@@ -222,6 +222,22 @@ class PCAgentManager:
             if not subs:
                 del self._streaming_subscribers[agent_id]
 
+    # ── 종료 ──────────────────────────────────────────────────────
+
+    async def close_all_connections(self, reason: str = "server_shutdown") -> int:
+        """모든 에이전트 연결을 정상 종료한다. 종료된 연결 수를 반환."""
+        closed = 0
+        for agent_id, conn in list(self._agents.items()):
+            try:
+                await conn.websocket.close(code=1012, reason=reason)
+                closed += 1
+            except Exception:
+                pass
+        self._agents.clear()
+        self._streaming_subscribers.clear()
+        logger.info("pc_agent_all_connections_closed count=%d reason=%s", closed, reason)
+        return closed
+
     # ── 조회 ──────────────────────────────────────────────────────
 
     def list_agents(self) -> list[AgentInfo]:
@@ -233,6 +249,18 @@ class PCAgentManager:
         conn = self._agents.get(agent_id)
         return conn.info if conn else None
 
+    def connected_count(self) -> int:
+        return len(self._agents)
 
-# 싱글톤 인스턴스
-pc_agent_manager = PCAgentManager()
+
+# 싱글톤 인스턴스 — hot-reload 시 기존 연결 상태 보존
+import sys as _sys
+_prev_module = _sys.modules.get(__name__)
+if (
+    _prev_module is not None
+    and hasattr(_prev_module, "pc_agent_manager")
+    and hasattr(getattr(_prev_module, "pc_agent_manager"), "_agents")
+):
+    pc_agent_manager: PCAgentManager = _prev_module.pc_agent_manager
+else:
+    pc_agent_manager = PCAgentManager()

@@ -104,8 +104,10 @@ queued → claimed → running → awaiting_approval → approved → deploying 
 - 엔드포인트: `POST /api/v1/pipeline/jobs`, `POST /api/v1/pipeline/jobs/batch`
 - 입력 검증: 프로젝트 화이트리스트, UUID 세션 ID, size 패턴 검사
 - 중복 처리:
+  - 동일 `instruction_hash` 제출은 `pg_advisory_xact_lock`으로 직렬화
   - 동일 `instruction_hash` + 활성 상태면 기존 job 재사용
   - 동일 `instruction_hash` + 최근 2시간 내 `error`면 `queued`로 리셋 후 재시도
+  - DB partial unique index `uq_pipeline_jobs_active_instruction_hash`로 active 중복 row 생성을 최종 차단
 - 모델 결정:
   - `worker_model`이 있으면 그대로 사용
   - 없으면 `_parse_size_from_instruction()` 또는 `_estimate_size()` 후 `_get_model_for_size()` 호출

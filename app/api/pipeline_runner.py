@@ -22,6 +22,15 @@ logger = structlog.get_logger(__name__)
 _VALID_PROJECTS = {"AADS", "KIS", "GO100", "SF", "NTV2"}
 _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 _JOB_ID_RE = re.compile(r'^runner-[0-9a-zA-Z_-]+$')
+_ACTIVE_PIPELINE_STATUSES = (
+    "queued",
+    "claimed",
+    "running",
+    "awaiting_approval",
+    "approved",
+    "deploying",
+    "rolling_back",
+)
 
 
 def _max_concurrent_per_project() -> int:
@@ -38,6 +47,44 @@ def _record_get(row, key: str, default=None):
         return row[key]
     except (KeyError, IndexError, TypeError):
         return default
+
+
+def _compute_instruction_hash(project: str, instruction: str) -> str:
+    return hashlib.sha256(f"{project}:{instruction}".encode()).hexdigest()[:16]
+
+
+async def _lock_instruction_hash(conn, instruction_hash: str) -> None:
+    """동일 instruction_hash 제출을 트랜잭션 단위로 직렬화한다."""
+    await conn.execute(
+        "SELECT pg_advisory_xact_lock(hashtext($1)::bigint)",
+        f"pipeline_jobs:{instruction_hash}",
+    )
+
+
+async def _find_active_duplicate(conn, instruction_hash: str):
+    return await conn.fetchrow(
+        """
+        SELECT job_id, status, phase
+        FROM pipeline_jobs
+        WHERE instruction_hash = $1
+          AND status = ANY($2::text[])
+        ORDER BY
+          CASE status
+            WHEN 'running' THEN 0
+            WHEN 'claimed' THEN 1
+            WHEN 'awaiting_approval' THEN 2
+            WHEN 'approved' THEN 3
+            WHEN 'deploying' THEN 4
+            WHEN 'rolling_back' THEN 5
+            WHEN 'queued' THEN 6
+            ELSE 7
+          END,
+          created_at ASC
+        LIMIT 1
+        """,
+        instruction_hash,
+        list(_ACTIVE_PIPELINE_STATUSES),
+    )
 
 
 async def _get_model_for_size(conn, size: str) -> str:
@@ -233,27 +280,22 @@ async def submit_job(req: JobSubmitRequest):
 
     job_id = f"runner-{uuid.uuid4().hex[:8]}"
     session_id = req.session_id  # 필수 필드 — validator에서 이미 검증됨
-    instruction_hash = hashlib.sha256(
-        f"{req.project}:{req.instruction}".encode()
-    ).hexdigest()[:16]
+    instruction_hash = _compute_instruction_hash(req.project, req.instruction)
 
     try:
         async with pool.acquire() as conn:
             # 트랜잭션으로 lock 체크 + INSERT 원자성 보장
             async with conn.transaction():
+                await _lock_instruction_hash(conn, instruction_hash)
                 # AADS-239: 중복 재사용 — 기존 작업 활용 (죽이기 → 재사용)
                 # Step 1: 동일 hash + 활성 상태 → 기존 작업 정보 반환
-                existing = await conn.fetchrow(
-                    """
-                    SELECT job_id, status, phase FROM pipeline_jobs
-                    WHERE instruction_hash = $1
-                      AND status IN ('queued','running','claimed','awaiting_approval','approved')
-                    ORDER BY created_at DESC LIMIT 1
-
-                    """,
-                    instruction_hash,
-                )
+                existing = await _find_active_duplicate(conn, instruction_hash)
                 if existing:
+                    logger.info("pipeline_runner.submit_dedup_reused",
+                                requested_job_id=job_id,
+                                existing_job_id=existing["job_id"],
+                                status=existing["status"],
+                                instruction_hash=instruction_hash)
                     return JobSubmitResponse(
                         job_id=existing["job_id"],
                         status="active_exists",
@@ -670,23 +712,20 @@ async def submit_batch(req: BatchSubmitRequest):
                             size = parsed or _estimate_size(item.instruction)
                         model = await _get_model_for_size(conn, size)
 
-                    instruction_hash = hashlib.sha256(
-                        f"{req.project}:{item.instruction}".encode()
-                    ).hexdigest()[:16]
+                    instruction_hash = _compute_instruction_hash(req.project, item.instruction)
+                    await _lock_instruction_hash(conn, instruction_hash)
 
                     # AADS-239: 멱등성 체크 (submit_job과 동일 로직)
                     # Step 1: 동일 hash + 활성 상태 → 기존 작업 재사용
-                    existing = await conn.fetchrow(
-                        """
-                        SELECT job_id, status, phase FROM pipeline_jobs
-                        WHERE instruction_hash = $1
-                          AND status IN ('queued','running','claimed','awaiting_approval','approved')
-                        ORDER BY created_at DESC LIMIT 1
-                        """,
-                        instruction_hash,
-                    )
+                    existing = await _find_active_duplicate(conn, instruction_hash)
                     if existing:
                         key_to_job_id[item.key] = existing["job_id"]
+                        logger.info("pipeline_runner.batch_submit_dedup_reused",
+                                    key=item.key,
+                                    requested_job_id=job_id,
+                                    existing_job_id=existing["job_id"],
+                                    status=existing["status"],
+                                    instruction_hash=instruction_hash)
                         results.append({
                             "key": item.key,
                             "job_id": existing["job_id"],

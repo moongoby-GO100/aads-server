@@ -385,3 +385,11 @@
 - 조치: `app/services/pc_agent_manager.py`의 `unregister_agent()`에 WebSocket 일치 guard를 추가해 stale 연결 종료가 최신 연결을 삭제하지 못하게 변경.
 - 검증: `python3 -m py_compile app/api/pc_agent.py app/services/pc_agent_manager.py` 통과. `python3 -m pytest tests/unit/test_pc_agent_manager_connection_guard.py tests/test_pc_agent_command_builder.py -q` 30개 통과.
 - 별도 기획: 채팅 경량화 문제/개선안은 `docs/reports/20260506_CHAT_LIGHTWEIGHT_PLAN.md`로 분리 문서화. 초기 메시지 로드 축소, `fields=minimal`, revision 기반 polling skip, 메시지 리스트 가상화, artifacts lazy load 순서로 권장.
+
+## 2026-05-06 10:05 KST - Pipeline Runner 중복 제출 구조 차단
+
+- 배경: CEO가 러너 작업지시 시 중복 작업이 많이 생긴다고 보고. 원인 점검 결과 제출 API가 `instruction_hash` 조회 후 `INSERT`하는 구조라 동시 제출 경쟁 조건에서 중복 row가 생길 수 있었고, Shell runner의 `DEDUP_BLOCK`은 실행 직전 차단이라 큐/로그 오염을 막지 못했음.
+- 조치: `app/api/pipeline_runner.py`에 동일 `instruction_hash`별 `pg_advisory_xact_lock` 직렬화를 추가하고, active 상태 조회 범위를 `queued/claimed/running/awaiting_approval/approved/deploying/rolling_back`으로 확장. 단건/배치 제출 모두 기존 active job을 재사용하도록 통일.
+- DB 조치: `migrations/078_pipeline_runner_active_dedup.sql` 추가. 기존 active 중복 row는 1건만 남기고 나머지를 `error/dedup_blocked`로 정리한 뒤 `uq_pipeline_jobs_active_instruction_hash` partial unique index로 재발을 차단.
+- 러너 백스톱: `scripts/pipeline-runner.sh`의 실행 직전 중복 차단 상태를 `cancelled/superseded`에서 `error/dedup_blocked`로 바꿔 대시보드 완료/취소 통계를 오염시키지 않게 수정.
+- 문서: `docs/pipeline-runner/PIPELINE-RUNNER-ARCHITECTURE.md`, `docs/pipeline-runner/PIPELINE-RUNNER-API-REFERENCE.md`에 advisory lock + DB unique guard를 반영.

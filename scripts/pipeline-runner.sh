@@ -388,8 +388,8 @@ check_duplicate() {
         dup_status="${dup_status// /}"
         if [[ "$dup_status" != "done" ]]; then
             log "  DEDUP_BLOCK: 동일 작업 진행 중: $dup_job ($dup_status) — $job_id 차단"
-            db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
-                       error_detail='superseded: 기존 작업 ${dup_job} 계속 진행',
+            db_update "UPDATE pipeline_jobs SET status='error', phase='dedup_blocked',
+                       error_detail='dedup_blocked: 기존 작업 ${dup_job} 계속 진행',
                        review_feedback=E'[중복 차단] 동일 작업 진행 중: ${dup_job} (${dup_status})',
                        updated_at=NOW() WHERE job_id='${job_id}';"
             return 1

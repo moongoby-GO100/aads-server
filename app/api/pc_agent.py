@@ -20,8 +20,16 @@ router = APIRouter()
 
 PC_AGENT_SECRET = os.environ.get("PC_AGENT_SECRET", "")
 HEARTBEAT_INTERVAL = 30  # 초
-_agent_connections: dict[str, WebSocket] = {}
-_EVENT_TABLE_READY = False
+
+# hot-reload 시 기존 WebSocket 연결 상태 보존
+import sys as _sys_reload
+_prev_mod = _sys_reload.modules.get(__name__)
+if _prev_mod is not None and hasattr(_prev_mod, "_agent_connections"):
+    _agent_connections: dict[str, WebSocket] = _prev_mod._agent_connections
+    _EVENT_TABLE_READY: bool = getattr(_prev_mod, "_EVENT_TABLE_READY", False)
+else:
+    _agent_connections: dict[str, WebSocket] = {}
+    _EVENT_TABLE_READY = False
 
 
 async def _record_agent_event(
@@ -106,7 +114,6 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
         if not token_valid and PC_AGENT_SECRET and token == PC_AGENT_SECRET:
             token_valid = True
     if not token_valid and not PC_AGENT_SECRET:
-        # 환경변수 미설정 + DB에 토큰 없으면 허용 (개발 모드)
         token_valid = True
     if not token_valid:
         await websocket.close(code=4001, reason="unauthorized")
@@ -125,7 +132,7 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
 
     await websocket.accept()
     _agent_connections[agent_id] = websocket
-    logger.info("pc_agent_ws_connected agent_id=%s", agent_id)
+    logger.info("pc_agent_ws_connected agent_id=%s total=%d", agent_id, len(_agent_connections))
     await _record_agent_event(agent_id, "connected")
 
     # 등록 메시지 대기 (첫 메시지)
@@ -147,17 +154,27 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
         await websocket.close(code=4003, reason="register failed")
         return
 
+    # 서버 → 클라이언트 keepalive ping (dead connection 조기 감지)
+    async def _server_ping() -> None:
+        try:
+            while True:
+                await asyncio.sleep(HEARTBEAT_INTERVAL)
+                await websocket.send_json({"type": "heartbeat", "id": "", "payload": {}})
+        except Exception:
+            pass
+
+    ping_task = asyncio.create_task(_server_ping())
+
     # 메시지 수신 루프
     try:
         while True:
             raw = await asyncio.wait_for(
-                websocket.receive_json(), timeout=HEARTBEAT_INTERVAL * 2
+                websocket.receive_json(), timeout=HEARTBEAT_INTERVAL * 3
             )
             msg = WSMessage.model_validate(raw)
 
             if msg.type == "heartbeat":
                 pc_agent_manager.update_heartbeat(agent_id)
-                # pong 응답
                 await websocket.send_json(
                     {"type": "heartbeat", "id": msg.id, "payload": {}}
                 )
@@ -166,13 +183,11 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
                 pc_agent_manager.receive_result(msg.id, msg.payload)
 
             elif msg.type == "stream_frame":
-                # 에이전트가 보낸 스트리밍 프레임 → 대시보드 구독자에게 브로드캐스트
                 frame = msg.payload.get("frame", "")
                 if frame:
                     await pc_agent_manager.broadcast_frame(agent_id, frame)
 
             elif msg.type == "network_info":
-                # WoL용 네트워크 정보 자동 등록
                 try:
                     from app.services.wol_service import register_agent_network
                     payload = msg.payload
@@ -190,13 +205,14 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
                     "pc_agent_ws_unknown_type agent_id=%s type=%s", agent_id, msg.type
                 )
 
-    except (WebSocketDisconnect, asyncio.TimeoutError):
-        logger.info("pc_agent_ws_disconnected agent_id=%s", agent_id)
-        await _record_agent_event(agent_id, "disconnected")
+    except (WebSocketDisconnect, asyncio.TimeoutError) as exc:
+        logger.info("pc_agent_ws_disconnected agent_id=%s reason=%s", agent_id, type(exc).__name__)
+        await _record_agent_event(agent_id, "disconnected", reason=type(exc).__name__)
     except Exception as exc:
         logger.error("pc_agent_ws_error agent_id=%s err=%s", agent_id, exc)
         await _record_agent_event(agent_id, "error", reason=str(exc)[:300])
     finally:
+        ping_task.cancel()
         pc_agent_manager.unregister_agent(agent_id, websocket)
         if _agent_connections.get(agent_id) is websocket:
             _agent_connections.pop(agent_id, None)
@@ -209,6 +225,15 @@ async def list_agents():
     """연결된 에이전트 목록 조회."""
     agents = pc_agent_manager.list_agents()
     return {"agents": [a.model_dump(mode="json") for a in agents]}
+
+
+@router.post("/pc-agent/graceful-shutdown")
+async def graceful_shutdown():
+    """배포/재시작 전 모든 PC Agent WebSocket을 정상 종료한다.
+    클라이언트가 1012 코드를 받으면 즉시 재연결을 시도한다."""
+    closed = await pc_agent_manager.close_all_connections(reason="server_restart")
+    _agent_connections.clear()
+    return {"closed": closed, "message": f"{closed}개 연결 정상 종료"}
 
 
 @router.post("/pc-agent/execute")

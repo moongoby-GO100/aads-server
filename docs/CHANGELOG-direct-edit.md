@@ -57,3 +57,53 @@ im→"""structlog 표준화 설정 — 구조화 JSON 로깅 + File
 - Chat-Direct 수정: Android sensor JSON hardening, `runner_response` main chat visibility, Pipeline Runner concurrency docs/config.
 - 기술문서: `docs/reports/20260504_ANDROID_AGENT_CHAT_VISIBILITY_TECHNICAL.md`
 - HANDOVER: `HANDOVER.md` 2026-05-04 현재 진행 상태 추가.
+
+## [2026-05-06 10:02:20 KST] [aads-server] app/services/pc_agent_manager.py
+- Chat-Direct 수정: write: app/services/pc_agent_manager.py
+
+## [2026-05-06 10:02:23 KST] [aads-server] app/services/pc_agent_manager.py
+- Chat-Direct 수정: run_remote_command: grep -rn "list_messages\|list_messages_cursor\|fields=minimal\|fields=full" /roo
+
+## [2026-05-06 10:02:36 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: grep -rn "list_messages\|list_messages_cursor\|fields=minimal\|fields=full" /roo
+
+## [2026-05-06 10:03:45 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: write: app/api/pc_agent.py
+
+## [2026-05-06 10:03:48 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: run_remote_command: grep -rn "quality_score\|memory_facts\|extract_facts\|reflexion\|sleep_time" /ro
+
+## [2026-05-06 10:05:12 KST] [aads-server] app/services/pc_agent_manager.py
+- Chat-Direct 수정: patch: # 싱글톤 인스턴스 — hot-reload 시 기존 연결 상태 보존
+im→# 싱글톤 인스턴스 — hot-reload 시 기존 연결 상태 보존
+im
+
+## [2026-05-06 10:06:48 KST] [aads-server] app/api/pipeline_runner.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server cat /app/app/api/pc_agent.py | wc -l
+
+## [2026-05-06 10:06:55 KST] [aads-server] migrations/078_pipeline_runner_active_dedup.sql
+- Chat-Direct 수정: run_remote_command: docker exec aads-server cat /app/app/api/pc_agent.py | wc -l
+
+## [2026-05-06 10:07:07 KST] [aads-server] scripts/pipeline-runner.sh
+- Chat-Direct 수정: run_remote_command: docker exec aads-server curl -s -X POST http://localhost:8080/api/v1/pc-agent/gr
+
+## [2026-05-06 10:07:23 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server curl -s http://localhost:8080/api/v1/ops/health-check | 
+
+## [2026-05-06 10:07:26 KST] [aads-server] docs/reports/20260506_CHAT_LIGHTWEIGHT_PLAN_v2.md
+- Chat-Direct 수정: write: docs/reports/20260506_CHAT_LIGHTWEIGHT_PLAN_v2.md
+
+## [2026-05-06 10:07:27 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server cat /app/pc_agent/agent.py | wc -l
+
+## [2026-05-06 10:07:30 KST] [aads-server] docs/pipeline-runner/PIPELINE-RUNNER-API-REFERENCE.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server curl -s http://localhost:8080/api/v1/ops/health-check | 
+
+## [2026-05-06 10:07:37 KST] [aads-server] docs/pipeline-runner/PIPELINE-RUNNER-ARCHITECTURE.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server curl -s http://localhost:8080/api/v1/ops/health-check | 
+
+## [2026-05-06 10:07:41 KST] [aads-server] docs/pipeline-runner/PIPELINE-RUNNER-API-REFERENCE.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server cat /app/pc_agent/agent.py | wc -l
+
+## [2026-05-06 10:07:47 KST] [aads-server] docs/pipeline-runner/PIPELINE-RUNNER-ARCHITECTURE.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server cat /app/pc_agent/agent.py | wc -l
