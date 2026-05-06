@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import shlex
+import subprocess
 import uuid
 from collections import OrderedDict
 from datetime import date, datetime
@@ -49,7 +50,7 @@ _LONG_TOOLS = frozenset({
     "deep_research", "delegate_to_agent", "delegate_to_research",
     "capture_screenshot", "run_remote_command", "write_remote_file", "patch_remote_file",
     "pc_execute", "device_command", "execute_sandbox", "visual_qa_test", "fact_check_multiple",
-    "generate_image", "search_all_projects", "deep_crawl",
+    "generate_image", "search_all_projects", "deep_crawl", "deploy_safe",
 })
 
 # ── 파일별 동시 수정 방지 잠금 ─────────────────────────────────────────────
@@ -85,6 +86,21 @@ _PROJECT_SCOPED_TOOLS = frozenset({
     "pipeline_runner_submit",
 })
 _PROJECT_KEYS = ("GO100", "NTV2", "KIS", "SF", "NAS", "KAKAOBOT", "AADS")
+
+_DEPLOY_SAFE_ALLOWED_MODES = frozenset({"reload", "bluegreen", "restart-single"})
+_DEPLOY_SAFE_RELOAD_CMD = ["docker", "exec", "aads-server", "bash", "/app/scripts/reload-api.sh"]
+_DEPLOY_SAFE_BLUEGREEN_CMD = ["bash", "/root/aads/aads-server/deploy.sh", "bluegreen"]
+_DEPLOY_SAFE_RESTART_BASE_CMD = [
+    "docker", "compose", "-f", "/root/aads/aads-server/docker-compose.prod.yml", "restart",
+]
+_DEPLOY_SAFE_HEALTH_ARGS = ["curl", "-fsS", f"{_AADS_API_BASE}/api/v1/ops/health-check"]
+_DEPLOY_SAFE_HEALTH_COMMAND = " ".join(shlex.quote(part) for part in _DEPLOY_SAFE_HEALTH_ARGS)
+_DEPLOY_SAFE_FORBIDDEN_PATTERNS = (
+    "docker compose up -d",
+    "docker-compose up -d",
+    "supervisorctl restart aads-api",
+    "--force",
+)
 
 
 async def _get_file_lock(lock_key: str) -> asyncio.Lock:
@@ -355,6 +371,7 @@ class ToolExecutor:
             "write_remote_file":      self._write_remote_file,
             "patch_remote_file":      self._patch_remote_file,
             "run_remote_command":     self._run_remote_command,
+            "deploy_safe":            self._deploy_safe,
             "git_remote_add":         self._git_remote_add,
             "git_remote_commit":      self._git_remote_commit,
             "git_remote_push":        self._git_remote_push,
@@ -1509,6 +1526,121 @@ class ToolExecutor:
             except Exception as _de:
                 logger.warning(f"run_cmd_mark_deployed_skip: project={project} err={_de}")
 
+        return result
+
+    @staticmethod
+    def _deploy_safe_join_command(parts: list[str]) -> str:
+        return " ".join(shlex.quote(str(part)) for part in parts)
+
+    @staticmethod
+    def _deploy_safe_block_reason(text: str) -> str:
+        lowered = (text or "").lower()
+        for pattern in _DEPLOY_SAFE_FORBIDDEN_PATTERNS:
+            if pattern in lowered:
+                return f"금지 패턴 감지: {pattern}"
+        if ("docker compose up" in lowered or "docker-compose up" in lowered) and "--no-deps" not in lowered:
+            return "금지 패턴 감지: --no-deps 없는 전체 up"
+        return ""
+
+    async def _deploy_safe_run_subprocess(self, parts: list[str]) -> Dict[str, Any]:
+        command = self._deploy_safe_join_command(parts)
+        try:
+            completed = await asyncio.to_thread(
+                subprocess.run,
+                parts,
+                capture_output=True,
+                text=True,
+                shell=False,
+                check=False,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "command": command,
+                "returncode": -1,
+                "stdout": "",
+                "stderr": str(exc),
+            }
+        return {
+            "ok": completed.returncode == 0,
+            "command": command,
+            "returncode": completed.returncode,
+            "stdout": (completed.stdout or "").strip(),
+            "stderr": (completed.stderr or "").strip(),
+        }
+
+    async def _deploy_safe(self, inp: Dict[str, Any]) -> Any:
+        """AADS 무중단 배포 표준 도구 (reload/bluegreen/restart-single)."""
+        mode = str(inp.get("mode") or "").strip().lower()
+        if mode not in _DEPLOY_SAFE_ALLOWED_MODES:
+            return {"error": "mode 필수: reload, bluegreen, restart-single 중 하나"}
+
+        dry_run_input = inp.get("dry_run", True)
+        if isinstance(dry_run_input, str):
+            dry_run = dry_run_input.strip().lower() not in {"false", "0", "no"}
+        else:
+            dry_run = True if dry_run_input is None else bool(dry_run_input)
+
+        service = str(inp.get("service") or "").strip()
+        block_reason = self._deploy_safe_block_reason(f"{mode} {service}")
+        if block_reason:
+            return {"error": block_reason}
+
+        if mode == "reload":
+            command_parts = list(_DEPLOY_SAFE_RELOAD_CMD)
+            description = "Python 코드만 변경된 경우 API reload (0ms 다운타임)"
+        elif mode == "bluegreen":
+            command_parts = list(_DEPLOY_SAFE_BLUEGREEN_CMD)
+            description = "이미지 리빌드가 필요한 경우 bluegreen 배포 (무중단)"
+        else:
+            if not service:
+                return {"error": "restart-single 모드에서는 service 필수"}
+            if service == "aads-server":
+                return {"error": "aads-server는 reload 또는 bluegreen 모드를 사용하세요"}
+            if any(ch.isspace() for ch in service) or any(ch in ";|&`$()<>\\\n\r\t" for ch in service):
+                return {"error": "service 값에 허용되지 않는 문자가 포함되어 있습니다"}
+            command_parts = [*_DEPLOY_SAFE_RESTART_BASE_CMD, service]
+            description = "단일 서비스 안전 재시작"
+
+        command = self._deploy_safe_join_command(command_parts)
+        command_block_reason = self._deploy_safe_block_reason(command)
+        if command_block_reason:
+            return {"error": command_block_reason}
+
+        base = {
+            "mode": mode,
+            "dry_run": dry_run,
+            "command": command,
+            "description": description,
+            "health_check_command": _DEPLOY_SAFE_HEALTH_COMMAND,
+        }
+
+        if dry_run:
+            return base
+
+        pre_health = await self._deploy_safe_run_subprocess(list(_DEPLOY_SAFE_HEALTH_ARGS))
+        if not pre_health.get("ok"):
+            return {
+                **base,
+                "success": False,
+                "error": "배포 전 health-check 실패",
+                "pre_health": pre_health,
+            }
+
+        deploy_result = await self._deploy_safe_run_subprocess(command_parts)
+        await asyncio.sleep(5)
+        post_health = await self._deploy_safe_run_subprocess(list(_DEPLOY_SAFE_HEALTH_ARGS))
+
+        success = bool(deploy_result.get("ok") and post_health.get("ok"))
+        result = {
+            **base,
+            "success": success,
+            "pre_health": pre_health,
+            "deploy_result": deploy_result,
+            "post_health": post_health,
+        }
+        if not success:
+            result["error"] = "deploy_safe 실행 실패"
         return result
 
     async def _git_remote_add(self, inp: Dict[str, Any]) -> Any:

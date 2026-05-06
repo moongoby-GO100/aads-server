@@ -88,6 +88,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "write_remote_file": False,       # 코드 수정 핵심 — 상시 로드
     "patch_remote_file": False,       # 코드 수정 핵심 — 상시 로드
     "run_remote_command": False,      # 명령 실행 핵심 — 상시 로드
+    "deploy_safe": True,              # 배포 안전 실행 — 온디맨드
     "git_remote_add": True,           # Git — 온디맨드
     "git_remote_commit": True,
     "git_remote_push": True,
@@ -749,6 +750,35 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"project": "KIS", "command": "git status --short"},
             {"project": "SF", "command": "docker ps"},
             {"project": "KIS", "command": "supervisorctl status"},
+        ],
+    },
+    "deploy_safe": {
+        "name": "deploy_safe",
+        "description": "AADS 무중단 배포 (reload/bluegreen/restart-single)",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "description": "배포 모드",
+                    "enum": ["reload", "bluegreen", "restart-single"],
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "true면 명령만 반환하고 실행하지 않음",
+                    "default": True,
+                },
+                "service": {
+                    "type": "string",
+                    "description": "restart-single 모드에서 재시작할 서비스명",
+                },
+            },
+            "required": ["mode"],
+        },
+        "input_examples": [
+            {"mode": "reload"},
+            {"mode": "bluegreen", "dry_run": False},
+            {"mode": "restart-single", "service": "litellm"},
         ],
     },
     # ── AADS-195 Phase 3: PC Agent 도구 ──────────────────────────────────
@@ -2303,7 +2333,7 @@ _GROUPS: Dict[str, List[str]] = {
     # AADS-188C Phase 2: 메타 도구 그룹 (Orchestrator)
     "meta": ["check_directive_status", "check_task_status", "read_task_logs", "terminate_task", "delegate_to_agent", "delegate_to_research", "spawn_subagent", "spawn_parallel_subagents"],
     # 운영/관측 도구 그룹
-    "ops": ["tool_metrics"],
+    "ops": ["tool_metrics", "deploy_safe"],
     # AADS-186E-1: 크롤링 도구 그룹
     "crawl": ["jina_read", "crawl4ai_fetch", "deep_crawl"],
     # AADS-186E-2: 메모리 도구 그룹 (+ Memory Upgrade F5/F12)

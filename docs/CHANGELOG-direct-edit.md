@@ -175,3 +175,77 @@ im
 - Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server; python3 -c "
 import re
 f = 'app/services/pc_agent_man
+
+## [2026-05-06 11:09:09 KST] [aads-server] .active_container
+- Chat-Direct 수정: run_remote_command: docker exec aads-server supervisorctl avail
+
+## [2026-05-06 11:09:10 KST] [aads-server] .active_container
+- Chat-Direct 수정: run_remote_command: grep -n "def run\|async def run\|_running\|while\|except\|sleep\|reconnect\|_con
+
+## [2026-05-06 11:09:14 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: sed -n '31,80p' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-05-06 11:09:16 KST] [aads-server] .active_port
+- Chat-Direct 수정: run_remote_command: docker exec aads-server supervisorctl avail
+
+## [2026-05-06 11:09:17 KST] [aads-server] .active_port
+- Chat-Direct 수정: run_remote_command: grep -n "def run\|async def run\|_running\|while\|except\|sleep\|reconnect\|_con
+
+## [2026-05-06 11:12:46 KST] [aads-server] app/services/intent_router.py
+- Chat-Direct 수정: patch:     "url_analyze":      {"model": "claud→    "url_analyze":      {"model": "claud
+
+## [2026-05-06 11:12:49 KST] [aads-server] app/services/intent_router.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server grep -i "pc_agent\|websocket\|ws/agent" /tmp/aads-api.lo
+
+## [2026-05-06 11:12:52 KST] [aads-server] app/services/intent_router.py
+- Chat-Direct 수정: patch:     "execute":            {"model": "cla→    "execute":            {"model": "cla
+
+## [2026-05-06 11:12:59 KST] [aads-server] app/services/intent_router.py
+- Chat-Direct 수정: patch:     "qa":               {"model": "claud→    "qa":               {"model": "claud
+
+## [2026-05-06 11:13:12 KST] [aads-server] app/services/intent_router.py
+- Chat-Direct 수정: patch:     "code_exec":        {"model": "claud→    "code_exec":        {"model": "claud
+
+## [2026-05-06 11:13:18 KST] [aads-server] app/services/intent_router.py
+- Chat-Direct 수정: patch:     "service_inspection": {"model": "cla→    "service_inspection": {"model": "cla
+
+## [2026-05-06 11:18:46 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: patch: class ToolExecutor:
+    """단일 도구 실행 + 타임→_DEPLOY_SAFE_HEALTH_COMMAND = "curl -sf 
+
+## [2026-05-06 11:18:53 KST] [aads-server] app/services/intent_router.py
+- Chat-Direct 수정: patch:     "image_analyze":    {"model": "claud→    "image_analyze":    {"model": "claud
+
+## [2026-05-06 11:19:00 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: patch:             "tool_metrics":           se→            "tool_metrics":           se
+
+## [2026-05-06 11:19:00 KST] [aads-server] app/services/intent_router.py
+- Chat-Direct 수정: run_remote_command: find /root/aads/aads-server/pc_agent -name "*.py" -type f | head -10
+
+## [2026-05-06 11:19:01 KST] [aads-server] app/services/intent_router.py
+- Chat-Direct 수정: patch:     "system_status":    {"model": "claud→    "system_status":    {"model": "claud
+
+## [2026-05-06 11:19:08 KST] [aads-server] app/services/intent_router.py
+- Chat-Direct 수정: patch:     "task_history":     {"model": "claud→    "task_history":     {"model": "claud
+
+## [2026-05-06 11:19:15 KST] [aads-server] app/services/intent_router.py
+- Chat-Direct 수정: patch:     "memory_recall":    {"model": "claud→    "memory_recall":    {"model": "claud
+
+## [2026-05-06 11:19:33 KST] [aads-server] app/services/intent_router.py
+- Chat-Direct 수정: patch:     "workspace_switch": {"model": "claud→    "workspace_switch": {"model": "claud
+
+## [2026-05-06 11:19:39 KST] [aads-server] app/services/intent_router.py
+- Chat-Direct 수정: patch:     "pipeline_runner":    {"model": "cla→    "pipeline_runner":    {"model": "cla
+
+## [2026-05-06 11:19:44 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: patch:     async def _query_decision_graph(self→    # ── deploy_safe / db_safe_write / n
+
+## [2026-05-06 11:19:45 KST] [aads-server] app/services/intent_router.py
+- Chat-Direct 수정: patch:     "all_service_status": {"model": "cla→    "all_service_status": {"model": "cla
+
+## [2026-05-06 11:19:52 KST] [aads-server] app/services/intent_router.py
+- Chat-Direct 수정: patch:     "url_read":           {"model": "cla→    "url_read":           {"model": "cla
+
+## [2026-05-06 11:19:57 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:         "tool_metrics",
+        "add_age→        "tool_metrics", "deploy_safe", "

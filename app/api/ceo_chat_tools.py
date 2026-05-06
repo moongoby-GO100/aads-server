@@ -3636,7 +3636,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         "check_directive_status", "delegate_to_agent", "delegate_to_research",
         "spawn_subagent", "spawn_parallel_subagents",
         "semantic_code_search", "read_uploaded_file",
-        "tool_metrics",
+        "tool_metrics", "deploy_safe", "db_safe_write", "notify_channel",
         "add_agenda", "list_agendas", "get_agenda", "update_agenda",
         "decide_agenda", "search_agendas",
     ):

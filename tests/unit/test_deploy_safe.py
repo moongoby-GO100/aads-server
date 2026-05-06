@@ -104,21 +104,53 @@ async def test_deploy_safe_rejects_full_compose_up_pattern():
 
 
 @pytest.mark.asyncio
-async def test_deploy_safe_execute_uses_health_checks_without_real_remote(monkeypatch):
+async def test_deploy_safe_rejects_force_pattern():
+    from app.services.tool_executor import ToolExecutor
+
+    result = await ToolExecutor()._deploy_safe({
+        "mode": "restart-single",
+        "service": "litellm --force",
+    })
+
+    assert "error" in result
+    assert "--force" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_deploy_safe_rejects_compose_up_without_no_deps_pattern():
+    from app.services.tool_executor import ToolExecutor
+
+    result = await ToolExecutor()._deploy_safe({
+        "mode": "restart-single",
+        "service": "litellm; docker compose up app",
+    })
+
+    assert "error" in result
+    assert "--no-deps 없는 전체 up" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_deploy_safe_execute_uses_subprocess_with_health_checks(monkeypatch):
     from app.services import tool_executor as module
     from app.services.tool_executor import ToolExecutor
 
     executor = ToolExecutor()
     calls = []
 
-    async def fake_run_remote_command(inp):
-        calls.append(inp)
-        return {"ok": True, "command": inp["command"]}
+    async def fake_run_subprocess(parts):
+        calls.append(parts)
+        return {
+            "ok": True,
+            "command": " ".join(parts),
+            "returncode": 0,
+            "stdout": "ok",
+            "stderr": "",
+        }
 
     async def fake_sleep(seconds):
         calls.append({"sleep": seconds})
 
-    monkeypatch.setattr(executor, "_run_remote_command", fake_run_remote_command)
+    monkeypatch.setattr(executor, "_deploy_safe_run_subprocess", fake_run_subprocess)
     monkeypatch.setattr(asyncio, "sleep", fake_sleep)
 
     result = await executor._deploy_safe({"mode": "reload", "dry_run": False})
@@ -126,10 +158,10 @@ async def test_deploy_safe_execute_uses_health_checks_without_real_remote(monkey
     assert result["success"] is True
     assert result["command"] == "docker exec aads-server bash /app/scripts/reload-api.sh"
     assert calls == [
-        {"project": "AADS", "command": module._DEPLOY_SAFE_HEALTH_COMMAND},
-        {"project": "AADS", "command": "docker exec aads-server bash /app/scripts/reload-api.sh"},
+        module._DEPLOY_SAFE_HEALTH_ARGS,
+        ["docker", "exec", "aads-server", "bash", "/app/scripts/reload-api.sh"],
         {"sleep": 5},
-        {"project": "AADS", "command": module._DEPLOY_SAFE_HEALTH_COMMAND},
+        module._DEPLOY_SAFE_HEALTH_ARGS,
     ]
 
 
