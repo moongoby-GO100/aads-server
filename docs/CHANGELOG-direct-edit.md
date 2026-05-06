@@ -249,3 +249,21 @@ f = 'app/services/pc_agent_man
 ## [2026-05-06 11:19:57 KST] [aads-server] app/api/ceo_chat_tools.py
 - Chat-Direct 수정: patch:         "tool_metrics",
         "add_age→        "tool_metrics", "deploy_safe", "
+
+## [2026-05-06 14:46:04 KST] [aads-server] tests/unit/test_deploy_safe.py
+- Chat-Direct 수정: write: tests/unit/test_deploy_safe.py
+
+## [2026-05-06 14:46:43 KST] [aads-server] .active_container
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -m pytest tests/unit/test_deploy_safe.py -v
+
+## [2026-05-06 14:46:51 KST] [aads-server] .active_port
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -m pytest tests/unit/test_deploy_safe.py -v
+
+## [2026-05-06 14:46:55 KST] [aads-server] .active_container
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -m pytest tests/unit/test_tools_and_pipeline.py 
+
+## [2026-05-06 14:47:02 KST] [aads-server] .active_port
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -m pytest tests/unit/test_tools_and_pipeline.py 
+
+## [2026-05-06 14:48:28 KST] [aads-server] tests/unit/test_deploy_safe.py
+- Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/tests/unit/test_deploy_safe.py /root/aads/aads-server
