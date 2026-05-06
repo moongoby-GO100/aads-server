@@ -145,6 +145,23 @@ class ExecutionOut(BaseModel):
     updated_at: datetime
 
 
+class StreamingStatusOut(BaseModel):
+    is_streaming: bool = False
+    just_completed: bool = False
+    recovered: bool = False
+    content_length: int = 0
+    token_count: int = 0
+    tool_count: int = 0
+    last_tool: str = ""
+    partial_content: Optional[str] = None
+    last_message_id: Optional[str] = None
+    execution_id: Optional[str] = None
+    last_event_id: Optional[str] = None
+    message_revision: Optional[str] = None
+    placeholder_revision: Optional[str] = None
+    artifact_revision: Optional[str] = None
+
+
 # ─── AADS-188D: Diff 승인 ────────────────────────────────────────────────────
 
 class ApproveDiffRequest(BaseModel):

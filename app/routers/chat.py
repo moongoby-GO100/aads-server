@@ -32,6 +32,7 @@ from app.models.chat import (
     ResearchOut,
     SessionCreate,
     SessionOut,
+    StreamingStatusOut,
     SessionUpdate,
     TemplateCreate,
     TemplateOut,
@@ -43,6 +44,7 @@ from app.services import chat_service as svc
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
+_CHAT_MESSAGES_HAS_EDITED_AT: Optional[bool] = None
 
 
 def _NOT_FOUND(name: str) -> HTTPException:
@@ -59,6 +61,116 @@ _CODEX_RECONNECT_NOTICE_RE = re.compile(
 def _strip_codex_reconnect_notice(content: str) -> str:
     """Codex transport notices are UI/system noise, not user intent."""
     return _CODEX_RECONNECT_NOTICE_RE.sub("", content or "").strip()
+
+
+async def _chat_messages_has_edited_at(conn) -> bool:
+    global _CHAT_MESSAGES_HAS_EDITED_AT
+    if _CHAT_MESSAGES_HAS_EDITED_AT is None:
+        _CHAT_MESSAGES_HAS_EDITED_AT = bool(await conn.fetchval(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'chat_messages'
+              AND column_name = 'edited_at'
+            LIMIT 1
+            """
+        ))
+    return _CHAT_MESSAGES_HAS_EDITED_AT
+
+
+def _encode_revision(count: Optional[int], changed_at) -> str:
+    count_value = int(count or 0)
+    if not changed_at:
+        return f"{count_value}:0"
+    return f"{count_value}:{int(changed_at.timestamp() * 1_000_000)}"
+
+
+async def _get_streaming_status_revisions(session_id: UUID, conn) -> dict:
+    has_edited_at = await _chat_messages_has_edited_at(conn)
+    message_changed_expr = (
+        "GREATEST(m.created_at, COALESCE(m.edited_at, m.created_at))"
+        if has_edited_at else
+        "m.created_at"
+    )
+    row = await conn.fetchrow(
+        f"""
+        SELECT
+            msg.message_count,
+            msg.message_changed_at,
+            ph.placeholder_count,
+            ph.placeholder_changed_at,
+            art.artifact_count,
+            art.artifact_changed_at,
+            last_msg.last_message_id
+        FROM (
+            SELECT
+                COUNT(*)::bigint AS message_count,
+                MAX({message_changed_expr}) AS message_changed_at
+            FROM chat_messages m
+            WHERE m.session_id = $1
+              AND m.intent IS DISTINCT FROM 'streaming_placeholder'
+        ) AS msg
+        CROSS JOIN (
+            SELECT
+                COUNT(*)::bigint AS placeholder_count,
+                MAX({message_changed_expr}) AS placeholder_changed_at
+            FROM chat_messages m
+            WHERE m.session_id = $1
+              AND m.intent = 'streaming_placeholder'
+        ) AS ph
+        CROSS JOIN (
+            SELECT
+                COUNT(*)::bigint AS artifact_count,
+                MAX(a.updated_at) AS artifact_changed_at
+            FROM chat_artifacts a
+            WHERE a.session_id = $1
+        ) AS art
+        LEFT JOIN LATERAL (
+            SELECT m.id::text AS last_message_id
+            FROM chat_messages m
+            WHERE m.session_id = $1
+              AND m.intent IS DISTINCT FROM 'streaming_placeholder'
+            ORDER BY m.created_at DESC
+            LIMIT 1
+        ) AS last_msg ON TRUE
+        """,
+        session_id,
+    )
+    return {
+        "last_message_id": row["last_message_id"] if row else None,
+        "message_revision": _encode_revision(
+            row["message_count"] if row else 0,
+            row["message_changed_at"] if row else None,
+        ),
+        "placeholder_revision": _encode_revision(
+            row["placeholder_count"] if row else 0,
+            row["placeholder_changed_at"] if row else None,
+        ),
+        "artifact_revision": _encode_revision(
+            row["artifact_count"] if row else 0,
+            row["artifact_changed_at"] if row else None,
+        ),
+    }
+
+
+async def _finalize_streaming_status(session_id: UUID, result: Optional[dict], conn=None) -> dict:
+    payload = dict(result or {"is_streaming": False})
+    try:
+        if conn is None:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as finalize_conn:
+                payload.update(await _get_streaming_status_revisions(session_id, finalize_conn))
+        else:
+            payload.update(await _get_streaming_status_revisions(session_id, conn))
+    except Exception as e:
+        logger.debug("streaming-status revision 조회 실패", error=str(e), session_id=str(session_id))
+        payload.setdefault("last_message_id", None)
+        payload.setdefault("message_revision", None)
+        payload.setdefault("placeholder_revision", None)
+        payload.setdefault("artifact_revision", None)
+    return payload
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -401,7 +513,7 @@ async def send_message(request: Request):
     )
 
 
-@router.get("/chat/sessions/{session_id}/streaming-status", tags=["chat-session"])
+@router.get("/chat/sessions/{session_id}/streaming-status", response_model=StreamingStatusOut, tags=["chat-session"])
 async def get_streaming_status(session_id: UUID):
     """세션의 AI 응답 생성 상태 조회 (세션 이동 후 돌아왔을 때 '생성 중' 표시용).
 
@@ -409,6 +521,7 @@ async def get_streaming_status(session_id: UUID):
     (서버 재시작으로 메모리 유실된 경우 대비).
     서버 재시작 후 recovered 메시지가 있으면 just_completed+recovered=True 반환
     (클라이언트가 메시지를 다시 로드하도록 트리거).
+    응답에는 revision 필드가 포함되며, 클라이언트는 이전 값과 같으면 /messages 재조회를 생략할 수 있다.
     """
     def _looks_terminal_interrupt(content: str) -> bool:
         content = str(content or "")
@@ -423,7 +536,7 @@ async def get_streaming_status(session_id: UUID):
     if status:
         if status.get("is_streaming"):
             if not _looks_terminal_interrupt(status.get("partial_content", "")):
-                return status
+                return await _finalize_streaming_status(session_id, status)
             memory_terminal_status = {
                 **status,
                 "is_streaming": False,
@@ -514,7 +627,7 @@ async def get_streaming_status(session_id: UUID):
                     )
                     _partial = execution_row["partial_content"] or ""
                     _tc, _lt = _extract_tool_progress(execution_row["tools_called"])
-                    return {
+                    return await _finalize_streaming_status(session_id, {
                         "is_streaming": False,
                         "just_completed": True,
                         "content_length": len(_partial),
@@ -523,7 +636,7 @@ async def get_streaming_status(session_id: UUID):
                         "last_tool": _lt,
                         "execution_id": execution_row["execution_id"],
                         "last_event_id": execution_row["last_event_id"],
-                    }
+                    }, conn)
                 if execution_row["status"] in ("running", "retrying"):
                     _partial = execution_row["partial_content"] or ""
                     _tc, _lt = _extract_tool_progress(execution_row["tools_called"])
@@ -603,7 +716,7 @@ async def get_streaming_status(session_id: UUID):
                             session_id,
                             UUID(execution_row["execution_id"]),
                         )
-                        return {
+                        return await _finalize_streaming_status(session_id, {
                             "is_streaming": False,
                             "just_completed": bool(_assistant_id and _clean_partial),
                             "content_length": len(_clean_partial),
@@ -611,8 +724,8 @@ async def get_streaming_status(session_id: UUID):
                             "last_tool": _lt,
                             "execution_id": execution_row["execution_id"],
                             "last_event_id": execution_row["last_event_id"],
-                        }
-                    return {
+                        }, conn)
+                    return await _finalize_streaming_status(session_id, {
                         "is_streaming": True,
                         "just_completed": False,
                         "content_length": len(_partial),
@@ -621,7 +734,7 @@ async def get_streaming_status(session_id: UUID):
                         "partial_content": _partial,
                         "execution_id": execution_row["execution_id"],
                         "last_event_id": execution_row["last_event_id"],
-                    }
+                    }, conn)
                 await conn.execute(
                     """
                     UPDATE chat_sessions
@@ -639,7 +752,7 @@ async def get_streaming_status(session_id: UUID):
                 )
                 if _finished_recently:
                     _tc, _lt = _extract_tool_progress(execution_row["tools_called"])
-                    return {
+                    return await _finalize_streaming_status(session_id, {
                         "is_streaming": False,
                         "just_completed": True,
                         "content_length": len(execution_row["partial_content"] or ""),
@@ -648,7 +761,7 @@ async def get_streaming_status(session_id: UUID):
                         "last_tool": _lt,
                         "execution_id": execution_row["execution_id"],
                         "last_event_id": execution_row["last_event_id"],
-                    }
+                    }, conn)
 
             row = await conn.fetchrow(
                 "SELECT content, tools_called FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at > NOW() - interval '5 minutes' ORDER BY created_at DESC LIMIT 1",
@@ -656,7 +769,16 @@ async def get_streaming_status(session_id: UUID):
             )
             if row:
                 _tc, _lt = _extract_tool_progress(row["tools_called"])
-                return {"is_streaming": True, "just_completed": False, "content_length": len(row["content"] or ""), "tool_count": _tc, "last_tool": _lt, "partial_content": row["content"] or "", "execution_id": None, "last_event_id": None}
+                return await _finalize_streaming_status(session_id, {
+                    "is_streaming": True,
+                    "just_completed": False,
+                    "content_length": len(row["content"] or ""),
+                    "tool_count": _tc,
+                    "last_tool": _lt,
+                    "partial_content": row["content"] or "",
+                    "execution_id": None,
+                    "last_event_id": None,
+                }, conn)
             # 5분 초과 stale placeholder 자동 정리
             await conn.execute(
                 "UPDATE chat_messages SET intent = 'interrupted' WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at <= NOW() - interval '5 minutes'",
@@ -676,7 +798,7 @@ async def get_streaming_status(session_id: UUID):
                     "streaming_status_recovered_detected session=%s",
                     str(session_id)[:8],
                 )
-                return {
+                return await _finalize_streaming_status(session_id, {
                     "is_streaming": False,
                     "just_completed": True,
                     "recovered": True,
@@ -686,29 +808,18 @@ async def get_streaming_status(session_id: UUID):
                     "last_tool": "",
                     "execution_id": None,
                     "last_event_id": None,
-                }
+                }, conn)
+            return await _finalize_streaming_status(
+                session_id,
+                memory_terminal_status or status or {"is_streaming": False},
+                conn,
+            )
     except Exception as e:
         logger.debug("streaming-status DB 조회 실패", error=str(e), session_id=str(session_id))
-    # 폴링 최적화: 마지막 메시지 ID 추가 — 변경 없으면 /messages 페치 스킵
-    _last_msg_id = None
-    try:
-        from app.core.db_pool import get_pool
-        pool = get_pool()
-        async with pool.acquire() as conn:
-            lm_row = await conn.fetchrow(
-                "SELECT id::text FROM chat_messages"
-                " WHERE session_id = $1"
-                "   AND intent IS DISTINCT FROM 'streaming_placeholder'"
-                " ORDER BY created_at DESC LIMIT 1",
-                session_id,
-            )
-            if lm_row:
-                _last_msg_id = lm_row["id"]
-    except Exception:
-        pass
-    result = memory_terminal_status or status or {"is_streaming": False}
-    result["last_message_id"] = _last_msg_id
-    return result
+    return await _finalize_streaming_status(
+        session_id,
+        memory_terminal_status or status or {"is_streaming": False},
+    )
 
 
 @router.get("/chat/executions/{execution_id}/events", tags=["chat-session"])
