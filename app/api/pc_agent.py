@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -132,6 +133,7 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
 
     await websocket.accept()
     _agent_connections[agent_id] = websocket
+    connected_at = datetime.utcnow()
     logger.info("pc_agent_ws_connected agent_id=%s total=%d", agent_id, len(_agent_connections))
     await _record_agent_event(agent_id, "connected")
 
@@ -156,12 +158,23 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
 
     # 서버 → 클라이언트 keepalive ping (dead connection 조기 감지)
     async def _server_ping() -> None:
-        try:
-            while True:
+        while True:
+            try:
                 await asyncio.sleep(HEARTBEAT_INTERVAL)
                 await websocket.send_json({"type": "heartbeat", "id": "", "payload": {}})
-        except Exception:
-            pass
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.info(
+                    "pc_agent_ws_server_ping_failed agent_id=%s err=%s",
+                    agent_id, exc,
+                )
+                # 메시지 수신 루프가 즉시 빠져나가도록 명시적으로 닫는다
+                try:
+                    await websocket.close(code=1011, reason="server_ping_failed")
+                except Exception:
+                    pass
+                return
 
     ping_task = asyncio.create_task(_server_ping())
 
@@ -207,14 +220,37 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
 
     except (WebSocketDisconnect, asyncio.TimeoutError) as exc:
         close_code = getattr(exc, 'code', None)
+        close_reason = getattr(exc, 'reason', None)
         reason_detail = type(exc).__name__
         if close_code is not None:
             reason_detail = f"{reason_detail} code={close_code}"
-        logger.info("pc_agent_ws_disconnected agent_id=%s reason=%s", agent_id, reason_detail)
-        await _record_agent_event(agent_id, "disconnected", reason=reason_detail)
+        if close_reason:
+            reason_detail = f"{reason_detail} reason={close_reason}"
+        uptime_s = (datetime.utcnow() - connected_at).total_seconds()
+        logger.info(
+            "pc_agent_ws_disconnected agent_id=%s reason=%s uptime=%.1fs",
+            agent_id, reason_detail, uptime_s,
+        )
+        await _record_agent_event(
+            agent_id,
+            "disconnected",
+            reason=reason_detail,
+            metadata={
+                "uptime_seconds": round(uptime_s, 1),
+                "close_code": close_code,
+                "close_reason": close_reason,
+                "exc_type": type(exc).__name__,
+            },
+        )
     except Exception as exc:
-        logger.error("pc_agent_ws_error agent_id=%s err=%s", agent_id, exc)
-        await _record_agent_event(agent_id, "error", reason=str(exc)[:300])
+        uptime_s = (datetime.utcnow() - connected_at).total_seconds()
+        logger.error("pc_agent_ws_error agent_id=%s err=%s uptime=%.1fs", agent_id, exc, uptime_s)
+        await _record_agent_event(
+            agent_id,
+            "error",
+            reason=str(exc)[:300],
+            metadata={"uptime_seconds": round(uptime_s, 1), "exc_type": type(exc).__name__},
+        )
     finally:
         ping_task.cancel()
         pc_agent_manager.unregister_agent(agent_id, websocket)
