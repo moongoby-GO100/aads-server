@@ -20,6 +20,83 @@ _REVIEW_MODEL_FALLBACK = _REVIEW_MODEL  # DB 조회 실패 시 기본값
 
 _DIFF_HEADER_RE = re.compile(r"^diff --git a\/.+ b\/.+$", re.MULTILINE)
 _DIFF_HUNK_RE = re.compile(r"^@@ .+ @@$", re.MULTILINE)
+
+
+def _parse_review_json(raw: str) -> Optional[dict]:
+    """LLM 리뷰 응답 JSON을 다단계 전략으로 파싱. 실패 시 None.
+
+    Stage 1: ```json fence 제거 후 직접 json.loads
+    Stage 2: 첫 { ~ 균형잡힌 } 까지 추출 후 json.loads
+    Stage 3: 흔한 오류 자동 정정 (smart quotes / trailing comma / 제어문자)
+    """
+    if not raw:
+        return None
+
+    text = raw.strip()
+    # ```json / ``` fence 제거
+    if text.startswith("```"):
+        first_nl = text.find("\n")
+        if first_nl > 0:
+            text = text[first_nl + 1:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+
+    # Stage 1: 직접 시도
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    # Stage 2: 균형 잡힌 첫 JSON 객체만 추출
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    end = -1
+    for i in range(start, len(text)):
+        c = text[i]
+        if esc:
+            esc = False
+            continue
+        if c == "\\":
+            esc = True
+            continue
+        if c == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    if end == -1:
+        return None
+    candidate = text[start:end]
+    try:
+        return json.loads(candidate)
+    except Exception:
+        pass
+
+    # Stage 3: 흔한 오류 정정
+    fixed = candidate
+    fixed = fixed.replace("“", '"').replace("”", '"')
+    fixed = fixed.replace("‘", "'").replace("’", "'")
+    fixed = re.sub(r",\s*([}\]])", r"\1", fixed)
+    fixed = re.sub(r"(?<!\\)\n", "\\\\n", fixed)
+    fixed = re.sub(r"(?<!\\)\t", "\\\\t", fixed)
+    try:
+        return json.loads(fixed)
+    except Exception:
+        return None
+
+
 _SUSPICIOUS_INPUT_PATTERNS: list[tuple[re.Pattern[str], str, str, bool, str]] = [
     (
         re.compile(
@@ -107,7 +184,7 @@ Developer와 완전히 독립된 컨텍스트에서 평가합니다.
 - REQUEST_CHANGES (0.4~0.69): 수정 필요, 구체적 피드백 제공
 - FLAG (0.4 미만): 심각한 문제, CEO 경고 필요
 
-## 응답 형식 (JSON만):
+## 응답 형식 (JSON만, 추가 설명 금지):
 {
   "verdict": "APPROVE" | "REQUEST_CHANGES" | "FLAG",
   "score": 0.0~1.0,
@@ -340,20 +417,36 @@ async def review_code_diff(
             )
             return verdict
 
-        # JSON 파싱
-        text = result_text.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-            if text.endswith("```"):
-                text = text[:-3]
-            text = text.strip()
-
-        import re
-        json_match = re.search(r'\{[\s\S]*\}', text)
-        if json_match:
-            details = json.loads(json_match.group())
-        else:
-            details = json.loads(text)
+        # JSON 파싱 — 다단계 강건 파서 사용
+        details = _parse_review_json(result_text)
+        if details is None:
+            logger.warning(
+                "code_reviewer_json_parse_failed: job_id=%s model=%s preview=%r",
+                job_id, used_model, (result_text or "")[:200]
+            )
+            verdict_obj = _build_review_verdict(
+                verdict="FLAG",
+                score=0.5,
+                summary="리뷰 응답 파싱 실패 (코드 품질 무관 — 인프라 이슈)",
+                issues=["LLM 리뷰 응답이 유효한 JSON이 아님 — 코드 품질과 무관"],
+                feedback={
+                    "raw_preview": (result_text or "")[:500],
+                    "summary": "리뷰 응답 파싱 실패 (코드 품질 무관 — 인프라 이슈)",
+                },
+                flag_category="REVIEW_PARSER_FAILURE",
+                failure_stage="review_json_parse",
+                needs_retry=True,
+                model_used=used_model,
+            )
+            await _save_review_result(
+                job_id=job_id,
+                project=project,
+                verdict=verdict_obj,
+                diff_size=len(diff),
+                model_used=used_model,
+                cost=0.005,
+            )
+            return verdict_obj
 
         # 가중 평균 계산
         score = (

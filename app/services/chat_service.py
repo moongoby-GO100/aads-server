@@ -2667,7 +2667,12 @@ _AUTO_MESSAGE_EXCLUDE_FILTER = (
 def _message_select_fields(fields: str) -> str:
     if fields == "minimal":
         return (
-            "id, role, LEFT(content, 200) AS content, created_at, "
+            "id, session_id, role, LEFT(content, 200) AS content, "
+            "LENGTH(content) AS content_length, "
+            "intent, model_used, quality_score, created_at, edited_at, "
+            "bookmarked, "
+            "(attachments IS NOT NULL AND attachments::text != '[]' AND attachments::text != 'null') AS has_attachments, "
+            "(tools_called IS NOT NULL AND tools_called::text != '[]' AND tools_called::text != 'null') AS has_tools, "
             "CASE "
             "WHEN intent = 'streaming_placeholder' OR intent LIKE 'streaming%' THEN 'streaming' "
             "WHEN intent = 'rate_limited' THEN 'rate_limited' "
