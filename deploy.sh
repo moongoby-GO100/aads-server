@@ -350,6 +350,11 @@ case "$MODE" in
             echo "[deploy.sh] Phase 1: ✅ active slot switched to ${ACTIVE_CONTAINER}:${ACTIVE_PORT}"
         else
             echo "[deploy.sh] 활성 스트림 0건 — active API graceful restart"
+            # PC Agent WebSocket 정상 종료
+            ACTIVE_API_URL="http://localhost:${ACTIVE_PORT}"
+            echo "[deploy.sh] PC Agent graceful-shutdown..."
+            curl -sf -X POST "${ACTIVE_API_URL}/api/v1/pc-agent/graceful-shutdown" -H "Content-Type: application/json" 2>/dev/null || true
+            sleep 1
             # 배포 플래그 파일 생성 → 서버 startup 시 미완료 대화 자동 재실행 스킵
             docker exec "$ACTIVE_CONTAINER" touch /tmp/aads_deploy_restart 2>/dev/null || true
             docker exec "$ACTIVE_CONTAINER" supervisorctl signal SIGTERM aads-api 2>/dev/null || true

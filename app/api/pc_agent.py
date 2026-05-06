@@ -345,3 +345,20 @@ async def stream_stop(agent_id: str):
         raise HTTPException(status_code=400, detail=str(exc))
 
     return {"command_id": command_id, "status": "stopped"}
+
+
+@router.get("/pc-agent/health")
+async def pc_agent_health():
+    """PC Agent 서브시스템 상태."""
+    agents = pc_agent_manager.list_agents()
+    return {
+        "connected": len(agents),
+        "agents": [
+            {
+                "agent_id": a.agent_id,
+                "hostname": a.hostname,
+                "last_heartbeat": a.last_heartbeat.isoformat() if a.last_heartbeat else None,
+            }
+            for a in agents
+        ],
+    }

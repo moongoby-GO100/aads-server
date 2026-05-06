@@ -30,6 +30,11 @@ else
     exec docker exec "$CONTAINER" bash /app/scripts/reload-api.sh
 fi
 
+# PC Agent WebSocket 정상 종료 — 클라이언트가 1012를 수신하면 즉시 재연결
+log "[INFO] PC Agent WebSocket graceful-shutdown 호출"
+curl -sf -X POST "$INTERNAL_URL/api/v1/pc-agent/graceful-shutdown" -H "Content-Type: application/json" 2>/dev/null || log "[WARN] PC Agent graceful-shutdown 실패 (무시)"
+sleep 1
+
 # Hot-Reload API 호출 (모든 Python 모듈 재로드)
 RESPONSE=$(curl -sf -X POST \
     "$INTERNAL_URL/api/v1/ops/hot-reload" \
