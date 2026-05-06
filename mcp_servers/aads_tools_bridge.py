@@ -26,6 +26,12 @@ import mcp.types as types
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 logger = logging.getLogger("aads_tools_bridge")
 
+# structlog가 stdout에 쓰면 MCP JSON-RPC 전송이 깨진다 — stderr로 강제 지정
+import structlog
+structlog.configure(
+    logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
+)
+
 # 컨테이너(`/app`)와 호스트 직접 실행(`python3.11 -m ...`)을 모두 지원한다.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 for _candidate in (Path("/app"), _REPO_ROOT):

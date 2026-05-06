@@ -863,7 +863,16 @@ def _parse_codex_tool_event(event, session_id=""):
             )
         return payload
 
-    # --- bash/shell 실행 (command_execution) ---
+    # --- bash/shell 실행 시작 (command_execution) ---
+    if evt_type == "item.started" and item_type == "command_execution":
+        return {
+            "type": "tool_use",
+            "tool_name": "bash",
+            "tool_use_id": item.get("id", ""),
+            "tool_input": {"command": item.get("input", "") or item.get("command", "")},
+        }
+
+    # --- bash/shell 실행 완료 (command_execution) ---
     if evt_type == "item.completed" and item_type == "command_execution":
         return {
             "type": "tool_result",
