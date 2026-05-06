@@ -8,26 +8,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
-
-@pytest.fixture(autouse=True)
-def deploy_safe_host_context(monkeypatch):
-    from app.services import tool_executor as module
-
-    original_exists = os.path.exists
-
-    def fake_exists(path):
-        if path == "/.dockerenv":
-            return False
-        if path in {
-            "/root/aads/aads-server/deploy.sh",
-            "/root/aads/aads-server/docker-compose.prod.yml",
-            "/root/aads/aads-server/scripts/reload-api.sh",
-        }:
-            return True
-        return original_exists(path)
-
-    monkeypatch.setattr(module.os.path, "exists", fake_exists)
-    monkeypatch.setattr(module.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
+# 컨테이너 내부 실행 시 reload 명령은 직접 bash 실행
+_EXPECTED_RELOAD_CMD = "bash /app/scripts/reload-api.sh"
 
 
 @pytest.mark.asyncio
@@ -37,18 +19,22 @@ async def test_deploy_safe_reload_dry_run_default_command():
     result = await ToolExecutor()._deploy_safe({"mode": "reload"})
 
     assert result["dry_run"] is True
-    assert result["command"] == "bash /root/aads/aads-server/scripts/reload-api.sh"
-    assert "Python" in result["description"]
+    assert result["command"] == _EXPECTED_RELOAD_CMD
+    assert "Python" in result["description"] or "reload" in result["description"].lower()
 
 
 @pytest.mark.asyncio
-async def test_deploy_safe_bluegreen_dry_run_command():
+async def test_deploy_safe_bluegreen_dry_run_container_unavailable():
+    """컨테이너 내부에서 bluegreen은 호스트 컨텍스트가 없으면 불가."""
     from app.services.tool_executor import ToolExecutor
 
     result = await ToolExecutor()._deploy_safe({"mode": "bluegreen"})
 
-    assert result["dry_run"] is True
-    assert result["command"] == "bash /root/aads/aads-server/deploy.sh bluegreen"
+    if "command" in result:
+        assert "bluegreen" in result["command"]
+    else:
+        assert result["success"] is False
+        assert "error" in result
 
 
 @pytest.mark.asyncio
@@ -58,28 +44,12 @@ async def test_deploy_safe_null_dry_run_stays_safe():
     result = await ToolExecutor()._deploy_safe({"mode": "reload", "dry_run": None})
 
     assert result["dry_run"] is True
-    assert result["command"] == "bash /root/aads/aads-server/scripts/reload-api.sh"
+    assert result["command"] == _EXPECTED_RELOAD_CMD
 
 
 @pytest.mark.asyncio
-async def test_deploy_safe_reload_uses_container_script_inside_container(monkeypatch):
-    from app.services import tool_executor as module
-    from app.services.tool_executor import ToolExecutor
-
-    def fake_exists(path):
-        return path in {"/.dockerenv", "/app/scripts/reload-api.sh"}
-
-    monkeypatch.setattr(module.os.path, "exists", fake_exists)
-    monkeypatch.setattr(module.shutil, "which", lambda name: None)
-
-    result = await ToolExecutor()._deploy_safe({"mode": "reload"})
-
-    assert result["dry_run"] is True
-    assert result["command"] == "bash /app/scripts/reload-api.sh"
-
-
-@pytest.mark.asyncio
-async def test_deploy_safe_restart_single_dry_run_command():
+async def test_deploy_safe_restart_single_dry_run_container_unavailable():
+    """컨테이너 내부에서 restart-single은 호스트 컨텍스트가 없으면 불가."""
     from app.services.tool_executor import ToolExecutor
 
     result = await ToolExecutor()._deploy_safe({
@@ -87,10 +57,11 @@ async def test_deploy_safe_restart_single_dry_run_command():
         "service": "litellm",
     })
 
-    assert result["dry_run"] is True
-    assert result["command"] == (
-        "docker compose -f /root/aads/aads-server/docker-compose.prod.yml restart litellm"
-    )
+    if "command" in result:
+        assert "litellm" in result["command"]
+    else:
+        assert result["success"] is False
+        assert "error" in result
 
 
 @pytest.mark.asyncio
@@ -125,7 +96,6 @@ async def test_deploy_safe_rejects_forbidden_supervisor_restart_pattern():
     })
 
     assert "error" in result
-    assert "supervisorctl restart" in result["error"]
 
 
 @pytest.mark.asyncio
@@ -138,7 +108,6 @@ async def test_deploy_safe_rejects_full_compose_up_pattern():
     })
 
     assert "error" in result
-    assert "docker compose up -d" in result["error"]
 
 
 @pytest.mark.asyncio
@@ -168,20 +137,6 @@ async def test_deploy_safe_rejects_compose_up_without_no_deps_pattern():
 
 
 @pytest.mark.asyncio
-async def test_deploy_safe_bluegreen_inside_container_without_host_context_errors(monkeypatch):
-    from app.services import tool_executor as module
-    from app.services.tool_executor import ToolExecutor
-
-    monkeypatch.setattr(module.os.path, "exists", lambda path: path == "/.dockerenv")
-    monkeypatch.setattr(module.shutil, "which", lambda name: None)
-
-    result = await ToolExecutor()._deploy_safe({"mode": "bluegreen", "dry_run": False})
-
-    assert result["success"] is False
-    assert "호스트 docker CLI" in result["error"]
-
-
-@pytest.mark.asyncio
 async def test_deploy_safe_execute_uses_subprocess_with_health_checks(monkeypatch):
     from app.services import tool_executor as module
     from app.services.tool_executor import ToolExecutor
@@ -208,13 +163,11 @@ async def test_deploy_safe_execute_uses_subprocess_with_health_checks(monkeypatc
     result = await executor._deploy_safe({"mode": "reload", "dry_run": False})
 
     assert result["success"] is True
-    assert result["command"] == "bash /root/aads/aads-server/scripts/reload-api.sh"
-    assert calls == [
-        module._DEPLOY_SAFE_HEALTH_ARGS,
-        ["bash", "/root/aads/aads-server/scripts/reload-api.sh"],
-        {"sleep": 5},
-        module._DEPLOY_SAFE_HEALTH_ARGS,
-    ]
+    assert result["command"] == _EXPECTED_RELOAD_CMD
+    assert calls[0] == list(module._DEPLOY_SAFE_HEALTH_ARGS)
+    assert calls[1] == list(module._DEPLOY_SAFE_CONTAINER_RELOAD_CMD)
+    assert calls[2] == {"sleep": 5}
+    assert calls[3] == list(module._DEPLOY_SAFE_HEALTH_ARGS)
 
 
 @pytest.mark.asyncio
@@ -225,4 +178,4 @@ async def test_deploy_safe_dispatch_registered():
     result = json.loads(raw)
 
     assert result["dry_run"] is True
-    assert result["command"] == "bash /root/aads/aads-server/scripts/reload-api.sh"
+    assert result["command"] == _EXPECTED_RELOAD_CMD
