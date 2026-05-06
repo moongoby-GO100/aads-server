@@ -38,7 +38,6 @@ _DEFER_LOADING: Dict[str, bool] = {
     "semantic_code_search": True,
     "analyze_changes": True,
     "inspect_service": True,
-    "tool_layer_audit": True,
     # ── Tier 3: 액션/실행 ────────────────────────────────────────────────
     "directive_create": False,           # 지시서 — 핵심 액션
     "generate_directive": False,
@@ -133,6 +132,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "crawl4ai_fetch": True,  # 자동 추가
     "query_timeline": True,  # 자동 추가
     "recall_tool_result": True,  # 자동 추가
+    "tool_metrics": True,  # 도구 통계 조회 — 온디맨드
 }
 
 # 도구 카테고리 안내 (시스템 프롬프트 주입용 — context_builder.py에서 사용)
@@ -1218,21 +1218,6 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             },
         ],
     },
-    "tool_layer_audit": {
-        "name": "tool_layer_audit",
-        "description": "3-Layer 도구 아키텍처 정합성 검사 (MCP↔Registry↔Executor)",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "fix": {
-                    "type": "boolean",
-                    "description": "true면 자동 수정 시도",
-                    "default": False,
-                },
-            },
-            "required": [],
-        },
-    },
     # ── AADS-186E-2: PTC 도구 ─────────────────────────────────────────────────
     "code_execution": {
         "type": "code_execution_20250825",
@@ -2054,6 +2039,30 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "required": [],
         },
     },
+    "tool_metrics": {
+        "name": "tool_metrics",
+        "description": "도구 사용 통계 조회 (호출수, 실패율, p95 지연시간)",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "period": {
+                    "type": "string",
+                    "description": "조회 기간 (24h, 7d, 30d). 기본 24h",
+                    "enum": ["24h", "7d", "30d"],
+                    "default": "24h",
+                },
+                "tool_name": {
+                    "type": "string",
+                    "description": "특정 도구명 필터 (선택)",
+                },
+            },
+            "required": [],
+        },
+        "input_examples": [
+            {"period": "24h"},
+            {"period": "7d", "tool_name": "query_database"},
+        ],
+    },
     # ─── 첨부파일 재읽기 도구 ─────────────────────────────────────────────────
     "read_uploaded_file": {
         "name": "read_uploaded_file",
@@ -2289,11 +2298,12 @@ _GROUPS: Dict[str, List[str]] = {
     "action": ["directive_create", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "device_command"],
     "search": ["search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
-    "ops": ["tool_layer_audit"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
     "browser": ["read_remote_file", "list_remote_dir", "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "capture_screenshot", "browser_click", "browser_fill", "browser_tab_list"],
     # AADS-188C Phase 2: 메타 도구 그룹 (Orchestrator)
     "meta": ["check_directive_status", "check_task_status", "read_task_logs", "terminate_task", "delegate_to_agent", "delegate_to_research", "spawn_subagent", "spawn_parallel_subagents"],
+    # 운영/관측 도구 그룹
+    "ops": ["tool_metrics"],
     # AADS-186E-1: 크롤링 도구 그룹
     "crawl": ["jina_read", "crawl4ai_fetch", "deep_crawl"],
     # AADS-186E-2: 메모리 도구 그룹 (+ Memory Upgrade F5/F12)
@@ -2417,9 +2427,6 @@ class ToolRegistry:
 
     def list_all(self) -> List[str]:
         return list(_TOOLS.keys())
-
-    def get_all_tools(self) -> Dict[str, Dict[str, Any]]:
-        return dict(_TOOLS)
 
     def list_groups(self) -> Dict[str, List[str]]:
         return dict(_GROUPS)

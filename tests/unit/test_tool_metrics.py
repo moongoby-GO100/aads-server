@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 
@@ -19,10 +19,12 @@ class _FakeAcquire:
 class _FakeConn:
     def __init__(self, rows):
         self._rows = rows
-        self.fetch_calls: list[tuple[str, tuple[object, ...]]] = []
+        self.last_query = ""
+        self.last_args = ()
 
     async def fetch(self, query: str, *args):
-        self.fetch_calls.append((query, args))
+        self.last_query = query
+        self.last_args = args
         return self._rows
 
 
@@ -35,111 +37,80 @@ class _FakePool:
 
 
 @pytest.mark.asyncio
-async def test_tool_metrics_calculates_summary_and_slowest_top3():
+async def test_tool_metrics_aggregates_summary_and_top3():
     from app.services.tool_executor import ToolExecutor
 
     rows = [
         {
             "tool_name": "query_database",
-            "call_count": 100,
-            "fail_count": 10,
-            "fail_rate_pct": Decimal("10.0"),
-            "p95_latency_ms": Decimal("900"),
-            "avg_latency_ms": Decimal("300"),
+            "total_calls": 20,
+            "failed_calls": 2,
+            "avg_latency_ms": 120.5,
+            "p95_latency_ms": 300.0,
         },
         {
             "tool_name": "read_remote_file",
-            "call_count": 50,
-            "fail_count": 5,
-            "fail_rate_pct": Decimal("10.0"),
-            "p95_latency_ms": Decimal("1200"),
-            "avg_latency_ms": Decimal("220"),
+            "total_calls": 10,
+            "failed_calls": 1,
+            "avg_latency_ms": 80.0,
+            "p95_latency_ms": 500.0,
         },
         {
             "tool_name": "web_search",
-            "call_count": 25,
-            "fail_count": 0,
-            "fail_rate_pct": Decimal("0.0"),
-            "p95_latency_ms": Decimal("2500"),
-            "avg_latency_ms": Decimal("1100"),
+            "total_calls": 5,
+            "failed_calls": 0,
+            "avg_latency_ms": 220.0,
+            "p95_latency_ms": 450.0,
         },
         {
-            "tool_name": "health_check",
-            "call_count": 10,
-            "fail_count": 1,
-            "fail_rate_pct": Decimal("10.0"),
-            "p95_latency_ms": Decimal("150"),
-            "avg_latency_ms": Decimal("80"),
+            "tool_name": "slow_tool",
+            "total_calls": 2,
+            "failed_calls": 1,
+            "avg_latency_ms": 1000.0,
+            "p95_latency_ms": 1400.0,
         },
     ]
-
+    fake_pool = _FakePool(rows)
     executor = ToolExecutor()
-    executor._pool = _FakePool(rows)
 
-    result = await executor._tool_metrics({"period": "24h"})
-
-    assert result["period"] == "24h"
-    assert result["tool_name"] is None
-    assert len(result["metrics"]) == 4
-
-    summary = result["summary"]
-    assert summary["total_calls"] == 185
-    assert summary["total_failures"] == 16
-    assert summary["total_fail_rate_pct"] == 8.6
-
-    slowest = summary["slowest_tools_top3"]
-    assert [item["tool_name"] for item in slowest] == [
-        "web_search",
-        "read_remote_file",
-        "query_database",
-    ]
-
-    fetch_query, fetch_args = executor._pool.conn.fetch_calls[0]
-    assert "WHERE created_at > NOW() - $1::interval" in fetch_query
-    assert "AND tool_name = $2" not in fetch_query
-    assert fetch_args == ("24 hours",)
-
-
-@pytest.mark.asyncio
-async def test_tool_metrics_applies_tool_name_filter_with_bound_param():
-    from app.services.tool_executor import ToolExecutor
-
-    rows = [
-        {
-            "tool_name": "query_database",
-            "call_count": 7,
-            "fail_count": 1,
-            "fail_rate_pct": Decimal("14.3"),
-            "p95_latency_ms": Decimal("880"),
-            "avg_latency_ms": Decimal("300"),
-        }
-    ]
-
-    executor = ToolExecutor()
-    executor._pool = _FakePool(rows)
-
-    result = await executor._tool_metrics({"period": "7d", "tool_name": "query_database"})
+    with patch("app.core.db_pool.get_pool", return_value=fake_pool):
+        result = await executor._tool_metrics({"period": "7d"})
 
     assert result["period"] == "7d"
-    assert result["tool_name"] == "query_database"
-    assert result["summary"]["total_calls"] == 7
-    assert result["summary"]["total_failures"] == 1
-    assert result["summary"]["total_fail_rate_pct"] == 14.3
-
-    fetch_query, fetch_args = executor._pool.conn.fetch_calls[0]
-    assert "AND tool_name = $2" in fetch_query
-    assert fetch_args == ("7 days", "query_database")
+    assert result["summary"]["total_calls"] == 37
+    assert result["summary"]["failed_calls"] == 4
+    assert result["summary"]["failure_rate_pct"] == 10.81
+    assert result["summary"]["slowest_tools_top3"][0]["tool_name"] == "slow_tool"
+    assert result["summary"]["slowest_tools_top3"][1]["tool_name"] == "read_remote_file"
+    assert result["summary"]["slowest_tools_top3"][2]["tool_name"] == "web_search"
+    assert fake_pool.conn.last_args == ("7 days", "")
+    assert "COUNT(*) FILTER (WHERE success = false)" in fake_pool.conn.last_query
+    assert "PERCENTILE_CONT(0.95)" in fake_pool.conn.last_query
+    assert "$1::interval" in fake_pool.conn.last_query
 
 
 @pytest.mark.asyncio
-async def test_tool_metrics_rejects_invalid_period():
+async def test_tool_metrics_uses_bind_parameters_for_tool_name_filter():
+    from app.services.tool_executor import ToolExecutor
+
+    fake_pool = _FakePool([])
+    executor = ToolExecutor()
+    payload = "read_remote_file'; DROP TABLE tool_results_archive; --"
+
+    with patch("app.core.db_pool.get_pool", return_value=fake_pool):
+        result = await executor._tool_metrics({"tool_name": payload})
+
+    assert result["period"] == "24h"
+    assert fake_pool.conn.last_args == ("24 hours", payload)
+    assert payload not in fake_pool.conn.last_query
+
+
+@pytest.mark.asyncio
+async def test_tool_metrics_rejects_invalid_period_without_db_call():
     from app.services.tool_executor import ToolExecutor
 
     executor = ToolExecutor()
-    executor._pool = _FakePool([])
+    with patch("app.core.db_pool.get_pool", side_effect=AssertionError("DB should not be called")):
+        result = await executor._tool_metrics({"period": "90d"})
 
-    result = await executor._tool_metrics({"period": "1h"})
-
-    assert "error" in result
-    assert "24h" in result["error"]
-    assert executor._pool.conn.fetch_calls == []
+    assert result == {"error": "period must be one of: 24h, 7d, 30d"}

@@ -8,11 +8,9 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import hashlib
-import inspect
 import json
 import logging
 import os
-import re
 import shlex
 import uuid
 from collections import OrderedDict
@@ -183,7 +181,6 @@ class ToolExecutor:
         # execution_id별 읽기 도구 결과 캐시 (executor 생명주기 = execution 생명주기)
         self._execution_cache: dict[str, OrderedDict[str, str]] = {}
         self._session_execution_ids: dict[str, str] = {}
-        self._registry: Optional[Any] = None
 
     async def _resolve_execution_id(self, tool_input: Dict[str, Any]) -> str:
         execution_id = str(tool_input.get("execution_id", "") or "").strip()
@@ -375,7 +372,6 @@ class ToolExecutor:
             "inspect_service":        self._inspect_service,
             "get_all_service_status": self._get_all_service_status,
             "generate_directive":     self._generate_directive,
-            "tool_layer_audit":       self._tool_layer_audit,
             # AADS-186E-1 크롤링 도구
             "jina_read":              self._jina_read,
             "crawl4ai_fetch":         self._crawl4ai_fetch,
@@ -444,6 +440,7 @@ class ToolExecutor:
             # Memory Upgrade: F5 + F12 + C4
             "query_timeline":         self._query_timeline,
             "recall_tool_result":     self._recall_tool_result,
+            "tool_metrics":           self._tool_metrics,
             "query_decision_graph":   self._query_decision_graph,
             # AADS-195 Phase 3: PC Agent 도구
             "pc_execute":             self._pc_execute,
@@ -470,82 +467,6 @@ class ToolExecutor:
         if fn is None:
             return {"error": f"unknown_tool: {tool_name}"}
         return await fn(tool_input)
-
-    def _get_dispatch_tool_names(self) -> set[str]:
-        """_dispatch 소스를 파싱해 등록된 도구 키 목록을 반환."""
-        try:
-            source = inspect.getsource(self._dispatch)
-        except Exception as e:
-            logger.warning("tool_layer_audit_dispatch_source_error: %s", e)
-            return set()
-        pattern = r'^\s*"([^"]+)":\s*self\._[A-Za-z0-9_]+'
-        return {m.group(1) for m in re.finditer(pattern, source, re.MULTILINE)}
-
-    def _get_mcp_tool_names(self) -> set[str]:
-        """MCP 노출 도구명 목록을 런타임 import로 반환."""
-        try:
-            from app.api import ceo_chat_tools
-        except Exception as e:
-            logger.warning("tool_layer_audit_mcp_import_error: %s", e)
-            return set()
-
-        tool_defs = getattr(ceo_chat_tools, "CEO_CHAT_TOOLS", None)
-        if not tool_defs:
-            tool_defs = getattr(ceo_chat_tools, "TOOL_DEFINITIONS", [])
-
-        names: set[str] = set()
-        for item in tool_defs or []:
-            name = ""
-            if isinstance(item, dict):
-                name = str(item.get("name") or "").strip()
-            elif isinstance(item, str):
-                name = item.strip()
-            else:
-                name = str(getattr(item, "name", "") or "").strip()
-            if name:
-                names.add(name)
-        return names
-
-    async def _tool_layer_audit(self, inp: Dict[str, Any]) -> Any:
-        """MCP↔Registry↔Executor 3-Layer 도구 정합성 검사."""
-        fix = bool(inp.get("fix", False))
-
-        if self._registry is None:
-            from app.services.tool_registry import ToolRegistry
-
-            self._registry = ToolRegistry()
-
-        registry_tools = set(self._registry.get_all_tools().keys())
-        executor_tools = self._get_dispatch_tool_names()
-        mcp_tools = self._get_mcp_tool_names()
-
-        registry_only = sorted(registry_tools - executor_tools)
-        executor_only = sorted(executor_tools - registry_tools)
-        mcp_only = sorted(mcp_tools - (registry_tools | executor_tools))
-        not_in_mcp = sorted((registry_tools | executor_tools) - mcp_tools)
-        all_aligned = not registry_only and not executor_only and not mcp_only
-
-        fix_applied = False
-        if fix:
-            logger.info(
-                "tool_layer_audit_fix_requested: registry_only=%s executor_only=%s mcp_only=%s",
-                registry_only,
-                executor_only,
-                mcp_only,
-            )
-
-        return {
-            "registry_only": registry_only,
-            "executor_only": executor_only,
-            "mcp_only": mcp_only,
-            "not_in_mcp": not_in_mcp,
-            "all_aligned": all_aligned,
-            "total_registry": len(registry_tools),
-            "total_executor": len(executor_tools),
-            "total_mcp": len(mcp_tools),
-            "fix": fix,
-            "fix_applied": fix_applied,
-        }
 
     # ── system 도구 ─────────────────────────────────────────────────────────
 
@@ -2580,6 +2501,87 @@ class ToolExecutor:
             keyword=inp.get("keyword", ""),
             limit=min(int(inp.get("limit", 5) or 5), 20),
         )
+
+    async def _tool_metrics(self, inp: Dict[str, Any]) -> Any:
+        """도구 사용 통계 조회 (호출 수, 실패율, 지연시간)."""
+        period = str(inp.get("period", "24h") or "24h").strip().lower()
+        tool_name = str(inp.get("tool_name", "") or "").strip()
+
+        interval_map = {
+            "24h": "24 hours",
+            "7d": "7 days",
+            "30d": "30 days",
+        }
+        interval_value = interval_map.get(period)
+        if not interval_value:
+            return {"error": "period must be one of: 24h, 7d, 30d"}
+
+        try:
+            from app.core.db_pool import get_pool
+
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT
+                        tool_name,
+                        COUNT(*) AS total_calls,
+                        COUNT(*) FILTER (WHERE success = false) AS failed_calls,
+                        AVG(latency_ms) AS avg_latency_ms,
+                        PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms) AS p95_latency_ms
+                    FROM tool_results_archive
+                    WHERE created_at >= NOW() - ($1::interval)
+                      AND ($2::text = '' OR tool_name = $2)
+                    GROUP BY tool_name
+                    ORDER BY total_calls DESC, tool_name ASC
+                    """,
+                    interval_value,
+                    tool_name,
+                )
+        except Exception as e:
+            return {"error": str(e)}
+
+        metrics = []
+        total_calls = 0
+        total_failed = 0
+        for row in rows:
+            calls = int(row["total_calls"] or 0)
+            failed = int(row["failed_calls"] or 0)
+            failure_rate_pct = round((failed * 100.0 / calls), 2) if calls > 0 else 0.0
+            avg_latency_ms = round(float(row["avg_latency_ms"]), 2) if row["avg_latency_ms"] is not None else None
+            p95_latency_ms = round(float(row["p95_latency_ms"]), 2) if row["p95_latency_ms"] is not None else None
+
+            metrics.append(
+                {
+                    "tool_name": row["tool_name"],
+                    "calls": calls,
+                    "failed_calls": failed,
+                    "failure_rate_pct": failure_rate_pct,
+                    "avg_latency_ms": avg_latency_ms,
+                    "p95_latency_ms": p95_latency_ms,
+                }
+            )
+            total_calls += calls
+            total_failed += failed
+
+        slowest_tools_top3 = sorted(
+            [item for item in metrics if item["p95_latency_ms"] is not None],
+            key=lambda item: float(item["p95_latency_ms"]),
+            reverse=True,
+        )[:3]
+
+        total_failure_rate_pct = round((total_failed * 100.0 / total_calls), 2) if total_calls > 0 else 0.0
+        return {
+            "period": period,
+            "tool_name": tool_name or None,
+            "summary": {
+                "total_calls": total_calls,
+                "failed_calls": total_failed,
+                "failure_rate_pct": total_failure_rate_pct,
+                "slowest_tools_top3": slowest_tools_top3,
+            },
+            "metrics": metrics,
+        }
 
     async def _query_decision_graph(self, inp: Dict[str, Any]) -> Any:
         """C4: 결정 의존관계 그래프 탐색."""
