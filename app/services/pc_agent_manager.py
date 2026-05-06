@@ -24,6 +24,7 @@ class _AgentConnection:
         self.agent_id = agent_id
         self.websocket = websocket
         self.info = info
+        self.connected_at = datetime.utcnow()
 
 
 class PCAgentManager:

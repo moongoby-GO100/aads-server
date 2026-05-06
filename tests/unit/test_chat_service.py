@@ -6,8 +6,10 @@ from unittest.mock import AsyncMock, patch
 import uuid
 
 import pytest
+from fastapi import Response
 
 from app.services import chat_service
+from app.routers import chat as chat_router
 from app.core import interrupt_queue
 
 
@@ -81,6 +83,62 @@ def test_dedupe_recovery_like_messages_keeps_longest_recovery_message():
     deduped = chat_service._dedupe_recovery_like_messages(messages)
 
     assert [message["id"] for message in deduped] == ["u1", "a2", "a3"]
+
+
+@pytest.mark.asyncio
+async def test_list_messages_minimal_is_read_only_and_selects_light_fields():
+    session_id = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc)
+    message_id = uuid.uuid4()
+
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=None)
+    conn.fetch = AsyncMock(return_value=[
+        {
+            "id": message_id,
+            "role": "assistant",
+            "content": "요약된 응답",
+            "created_at": created_at,
+            "status": "completed",
+        }
+    ])
+    conn.execute = AsyncMock()
+
+    with patch("app.services.chat_service.get_pool", return_value=_Pool(conn)):
+        result = await chat_service.list_messages(
+            session_id,
+            limit=5,
+            sort="desc",
+            fields="minimal",
+            read_only=True,
+        )
+
+    query = " ".join(conn.fetch.await_args.args[0].split())
+    assert "SELECT id, role, LEFT(content, 200) AS content, created_at" in query
+    assert "tools_called" not in query
+    assert "thinking_summary" not in query
+    assert "embedding" not in query
+    conn.execute.assert_not_awaited()
+    assert result == [
+        {
+            "id": message_id,
+            "role": "assistant",
+            "content": "요약된 응답",
+            "created_at": created_at,
+            "status": "completed",
+        }
+    ]
+
+
+def test_message_response_headers_include_timing_size_and_row_count():
+    response = Response()
+    payload = [{"id": str(uuid.uuid4()), "role": "user", "content": "hi"}]
+
+    chat_router._set_message_response_headers(response, 0.0, payload)
+
+    assert response.headers["X-Response-Time"].endswith("ms")
+    assert int(response.headers["X-Payload-Bytes"]) > 0
+    assert response.headers["X-Row-Count"] == "1"
 
 
 def test_streaming_progress_markers_are_not_meaningful_partial_content():

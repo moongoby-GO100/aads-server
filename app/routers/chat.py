@@ -5,12 +5,15 @@ AADS-170: CEO Chat-First 시스템 — 채팅 라우터
 """
 from __future__ import annotations
 
+import json
 import re
+import time
 import structlog
-from typing import List, Optional
+from typing import Any, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel, Field
 
@@ -171,16 +174,41 @@ class PaginatedMessagesOut(BaseModel):
     has_more: bool = False
 
 
-@router.get("/chat/messages", tags=["chat-message"])
-async def get_messages(
-    session_id: UUID = Query(...),
-    limit: int = Query(50, le=1000),
-    cursor: Optional[str] = Query(None, description="created_at ISO 문자열 (이전 메시지 로딩 시)"),
-    offset: Optional[int] = Query(None, ge=0),
-    sort: str = Query("asc", regex="^(asc|desc)$"),
-    include_streaming: bool = Query(False, description="진행 중 streaming_placeholder 포함 여부"),
-):
-    """메시지 목록 — cursor 기반 페이지네이션 (offset 레거시 호환 유지)."""
+def _message_row_count(payload: Any) -> int:
+    if isinstance(payload, list):
+        return len(payload)
+    if isinstance(payload, dict) and isinstance(payload.get("messages"), list):
+        return len(payload["messages"])
+    return 0
+
+
+def _payload_size_bytes(payload: Any) -> int:
+    body = json.dumps(
+        jsonable_encoder(payload),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return len(body.encode("utf-8"))
+
+
+def _set_message_response_headers(response: Response, started_at: float, payload: Any) -> None:
+    payload_bytes = _payload_size_bytes(payload)
+    response.headers["X-Response-Time"] = f"{(time.perf_counter() - started_at) * 1000:.2f}ms"
+    response.headers["X-Payload-Bytes"] = str(payload_bytes)
+    response.headers["X-Row-Count"] = str(_message_row_count(payload))
+
+
+async def _get_messages_payload(
+    session_id: UUID,
+    *,
+    limit: int,
+    cursor: Optional[str],
+    offset: Optional[int],
+    sort: str,
+    include_streaming: bool,
+    fields: str,
+) -> Any:
+    read_only = fields == "minimal"
     # 레거시 offset 모드: offset이 명시적으로 전달되거나, sort=desc(배열 기대)인 경우
     # 프론트엔드 6곳에서 sort=desc + ChatMessage[] 배열을 기대하므로 반드시 배열 반환
     if offset is not None or (sort == "desc" and cursor is None):
@@ -190,6 +218,8 @@ async def get_messages(
             offset=offset or 0,
             sort=sort,
             include_streaming=include_streaming,
+            fields=fields,
+            read_only=read_only,
         )
     # cursor 모드: PaginatedMessagesOut 반환 (항상 ASC)
     return await svc.list_messages_cursor(
@@ -197,7 +227,63 @@ async def get_messages(
         limit=limit,
         cursor=cursor,
         include_streaming=include_streaming,
+        fields=fields,
+        read_only=read_only,
     )
+
+
+@router.get("/chat/messages", tags=["chat-message"])
+async def get_messages(
+    response: Response,
+    session_id: UUID = Query(...),
+    limit: int = Query(50, le=1000),
+    cursor: Optional[str] = Query(None, description="created_at ISO 문자열 (이전 메시지 로딩 시)"),
+    offset: Optional[int] = Query(None, ge=0),
+    sort: str = Query("asc", pattern="^(asc|desc)$"),
+    include_streaming: bool = Query(False, description="진행 중 streaming_placeholder 포함 여부"),
+    fields: str = Query("full", pattern="^(full|minimal)$"),
+):
+    """메시지 목록 — cursor 기반 페이지네이션 (offset 레거시 호환 유지)."""
+    started_at = time.perf_counter()
+    payload = await _get_messages_payload(
+        session_id,
+        limit=limit,
+        cursor=cursor,
+        offset=offset,
+        sort=sort,
+        include_streaming=include_streaming,
+        fields=fields,
+    )
+    _set_message_response_headers(response, started_at, payload)
+    return payload
+
+
+@router.get("/chat/{workspace_id}/sessions/{session_id}/messages", tags=["chat-message"])
+async def get_workspace_session_messages(
+    workspace_id: UUID,
+    session_id: UUID,
+    response: Response,
+    limit: int = Query(50, le=1000),
+    cursor: Optional[str] = Query(None, description="created_at ISO 문자열 (이전 메시지 로딩 시)"),
+    offset: Optional[int] = Query(None, ge=0),
+    sort: str = Query("asc", pattern="^(asc|desc)$"),
+    include_streaming: bool = Query(False, description="진행 중 streaming_placeholder 포함 여부"),
+    fields: str = Query("full", pattern="^(full|minimal)$"),
+):
+    """워크스페이스 경로 메시지 목록 — 기존 /chat/messages와 동일한 응답 계약."""
+    del workspace_id
+    started_at = time.perf_counter()
+    payload = await _get_messages_payload(
+        session_id,
+        limit=limit,
+        cursor=cursor,
+        offset=offset,
+        sort=sort,
+        include_streaming=include_streaming,
+        fields=fields,
+    )
+    _set_message_response_headers(response, started_at, payload)
+    return payload
 
 
 @router.post("/chat/messages/send", tags=["chat-message"])

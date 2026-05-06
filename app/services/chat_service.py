@@ -2641,12 +2641,131 @@ async def _session_has_running_execution(conn: asyncpg.Connection, session_id: u
         )
     )
 
+
+_AUTO_MESSAGE_EXCLUDE_FILTER = (
+    " AND intent IS DISTINCT FROM 'pipeline_c'"
+    " AND intent IS DISTINCT FROM 'ai_review_warning'"
+    " AND intent IS DISTINCT FROM 'system_trigger'"
+    " AND intent IS DISTINCT FROM 'auto_reaction'"
+    " AND intent IS DISTINCT FROM 'ai_review_warning'"
+    " AND intent IS DISTINCT FROM 'system_trigger'"
+    " AND intent IS DISTINCT FROM 'auto_reaction'"
+    " AND NOT content LIKE '🔧 [Pipeline Runner]%'"
+    " AND NOT content LIKE '🔔 [Pipeline Runner]%'"
+    " AND NOT content LIKE '✅ [Pipeline Runner]%'"
+    " AND NOT content LIKE '🚀 [Pipeline Runner]%'"
+    " AND NOT content LIKE '⚠️ [Pipeline Runner]%'"
+    " AND NOT content LIKE '↩️ [Pipeline Runner]%'"
+    " AND NOT content LIKE '❌ [Pipeline Runner]%'"
+    " AND NOT content LIKE '📋 [Pipeline Runner]%'"
+    " AND NOT content LIKE '🔴 [Pipeline Runner]%'"
+    " AND NOT content LIKE '🟡 [Pipeline Runner]%'"
+    " AND NOT content LIKE '🟢 [Pipeline Runner]%'"
+)
+
+
+def _message_select_fields(fields: str) -> str:
+    if fields == "minimal":
+        return (
+            "id, role, LEFT(content, 200) AS content, created_at, "
+            "CASE "
+            "WHEN intent = 'streaming_placeholder' OR intent LIKE 'streaming%' THEN 'streaming' "
+            "WHEN intent = 'rate_limited' THEN 'rate_limited' "
+            "ELSE 'completed' "
+            "END AS status"
+        )
+    return "*"
+
+
+def _message_list_filter(is_active: bool, include_streaming: bool) -> str:
+    intent_filter = "AND intent IS DISTINCT FROM '_deleted_duplicate'"
+    if is_active and not include_streaming:
+        # 활성 스트리밍 중 → placeholder 제외 (프론트 SSE 버블과 중복 방지)
+        intent_filter += " AND intent IS DISTINCT FROM 'streaming_placeholder'"
+    return intent_filter + _AUTO_MESSAGE_EXCLUDE_FILTER
+
+
+async def _promote_inactive_streaming_placeholders(
+    conn: asyncpg.Connection,
+    session_id: str,
+    messages: List[Dict[str, Any]],
+    log_prefix: str,
+) -> List[Dict[str, Any]]:
+    """비활성 세션의 orphan placeholder 정리. 조회 전용 경로에서는 호출하지 않는다."""
+    _promote_ids = []
+    _remove_ids = []
+    sid = uuid.UUID(session_id)
+    for msg in messages:
+        if msg.get("intent") == "streaming_placeholder":
+            content = (msg.get("content") or "").strip()
+            if content and len(content) > 10:
+                _promote_ids.append(msg["id"])
+                msg["intent"] = None
+                msg["model_used"] = "recovered"
+            else:
+                _remove_ids.append(msg["id"])
+    if _promote_ids:
+        for _pid in _promote_ids:
+            try:
+                _uid = _pid if isinstance(_pid, uuid.UUID) else uuid.UUID(str(_pid))
+                # promote 전 검사 1: 정상 저장된 메시지(model_used가 실제 모델명)가 이미 있는지 확인
+                _ph_content = await conn.fetchval("SELECT LEFT(content, 50) FROM chat_messages WHERE id = $1", _uid)
+                _real_exists = await conn.fetchval(
+                    """SELECT count(*) FROM chat_messages
+                       WHERE session_id = $1 AND role = 'assistant'
+                       AND id != $2
+                       AND model_used IS NOT NULL
+                       AND model_used NOT IN ('streaming', 'recovered', 'recovered_from_redis', 'stopped', 'interrupted', 'semantic_cache')
+                       AND intent IS DISTINCT FROM 'streaming_placeholder'""",
+                    sid, _uid,
+                )
+                if _real_exists and _real_exists > 0:
+                    # 정상 응답이 이미 있음 → placeholder만 삭제 (promote 불필요)
+                    await conn.execute("DELETE FROM chat_messages WHERE id = $1", _uid)
+                    await conn.execute(
+                        "UPDATE chat_sessions SET message_count = GREATEST(message_count - 1, 0), updated_at = NOW() WHERE id = $1",
+                        sid,
+                    )
+                    # 결과 목록에서도 제거
+                    _remove_ids.append(_pid)
+                    logger.info(f"{log_prefix}_promote_skipped: real response exists, placeholder deleted session={session_id[:8]}")
+                    continue
+                # promote 전 검사 2: 동일 내용 recovered 중복 검사
+                _dup_cnt = await conn.fetchval(
+                    "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND role = 'assistant' "
+                    "AND model_used IN ('recovered', 'recovered_from_redis') "
+                    "AND LEFT(content, 50) = $2 AND id != $3",
+                    sid, _ph_content, _uid,
+                )
+                if _dup_cnt and _dup_cnt > 0:
+                    await conn.execute("DELETE FROM chat_messages WHERE id = $1", _uid)
+                    await conn.execute(
+                        "UPDATE chat_sessions SET message_count = GREATEST(message_count - 1, 0), updated_at = NOW() WHERE id = $1",
+                        sid,
+                    )
+                    _remove_ids.append(_pid)
+                else:
+                    await conn.execute(
+                        "UPDATE chat_messages SET intent = NULL, model_used = 'recovered', "
+                        "content = regexp_replace(content, E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$', '') "
+                        "WHERE id = $1",
+                        _uid,
+                    )
+            except Exception as _pe:
+                logger.warning(f"{log_prefix}_promote_failed: {_pe}")
+        logger.info(f"{log_prefix}_auto_promoted session={session_id[:8]} count={len(_promote_ids)}")
+    _remove_set = set(str(x) for x in _remove_ids)
+    return [m for m in messages if str(m["id"]) not in _remove_set]
+
+
 async def list_messages(
     session_id: str,
-    limit: int = 200,
+    limit: int = 50,
     offset: int = 0,
     sort: str = "asc",
     include_streaming: bool = False,
+    fields: str = "full",
+    read_only: bool = False,
 ) -> List[Dict[str, Any]]:
     async with get_pool().acquire() as conn:
         order = "DESC" if sort == "desc" else "ASC"
@@ -2656,106 +2775,22 @@ async def list_messages(
         _is_active = (
             session_id in _streaming_state and not _streaming_state[session_id].get("completed", False)
         ) or await _session_has_running_execution(conn, _sid)
-        _intent_filter = "AND intent IS DISTINCT FROM '_deleted_duplicate'"
-        if _is_active and not include_streaming:
-            # 활성 스트리밍 중 → placeholder 제외 (프론트 SSE 버블과 중복 방지)
-            _intent_filter += " AND intent IS DISTINCT FROM 'streaming_placeholder'"
-        # Pipeline Runner 자동 알림 메시지 제외 (intent=NULL이라도 콘텐츠 패턴으로 필터).
-        # runner_response는 AI 검수/상태 보고 본문이므로 채팅창에 표시한다.
-        _intent_filter += (
-            " AND intent IS DISTINCT FROM 'pipeline_c'"
-            " AND intent IS DISTINCT FROM 'ai_review_warning'"
-            " AND intent IS DISTINCT FROM 'system_trigger'"
-            " AND intent IS DISTINCT FROM 'auto_reaction'"
-            " AND intent IS DISTINCT FROM 'ai_review_warning'"
-            " AND intent IS DISTINCT FROM 'system_trigger'"
-            " AND intent IS DISTINCT FROM 'auto_reaction'"
-            " AND NOT content LIKE '🔧 [Pipeline Runner]%'"
-            " AND NOT content LIKE '🔔 [Pipeline Runner]%'"
-            " AND NOT content LIKE '✅ [Pipeline Runner]%'"
-            " AND NOT content LIKE '🚀 [Pipeline Runner]%'"
-            " AND NOT content LIKE '⚠️ [Pipeline Runner]%'"
-            " AND NOT content LIKE '↩️ [Pipeline Runner]%'"
-            " AND NOT content LIKE '❌ [Pipeline Runner]%'"
-            " AND NOT content LIKE '📋 [Pipeline Runner]%'"
-            " AND NOT content LIKE '🔴 [Pipeline Runner]%'"
-            " AND NOT content LIKE '🟡 [Pipeline Runner]%'"
-            " AND NOT content LIKE '🟢 [Pipeline Runner]%'"
-        )
+        _intent_filter = _message_list_filter(_is_active, include_streaming)
+        _select_fields = _message_select_fields(fields)
         rows = await conn.fetch(
-            f"SELECT * FROM chat_messages WHERE session_id = $1 {_intent_filter} ORDER BY created_at {order} LIMIT $2 OFFSET $3",
+            f"SELECT {_select_fields} FROM chat_messages WHERE session_id = $1 {_intent_filter} ORDER BY created_at {order} LIMIT $2 OFFSET $3",
             _sid,
             limit,
             offset,
         )
         results = [_row_to_dict(r) for r in rows]
+        if fields == "minimal":
+            return results
         # 비활성 세션의 streaming_placeholder → 내용 있으면 recovered 전환, 없으면 제외
-        if not _is_active:
-            _promote_ids = []
-            _remove_ids = []
-            for msg in results:
-                if msg.get("intent") == "streaming_placeholder":
-                    content = (msg.get("content") or "").strip()
-                    if content and len(content) > 10:
-                        _promote_ids.append(msg["id"])
-                        msg["intent"] = None
-                        msg["model_used"] = "recovered"
-                    else:
-                        _remove_ids.append(msg["id"])
-            if _promote_ids:
-                for _pid in _promote_ids:
-                    try:
-                        _uid = _pid if isinstance(_pid, __import__('uuid').UUID) else __import__('uuid').UUID(str(_pid))
-                        # promote 전 검사 1: 정상 저장된 메시지(model_used가 실제 모델명)가 이미 있는지 확인
-                        _ph_content = await conn.fetchval("SELECT LEFT(content, 50) FROM chat_messages WHERE id = $1", _uid)
-                        _ph_created = await conn.fetchval("SELECT created_at FROM chat_messages WHERE id = $1", _uid)
-                        # 정상 assistant 응답 = model_used가 streaming/recovered/stopped/interrupted/None이 아닌 것
-                        _real_exists = await conn.fetchval(
-                            """SELECT count(*) FROM chat_messages
-                               WHERE session_id = $1 AND role = 'assistant'
-                               AND id != $2
-                               AND model_used IS NOT NULL
-                               AND model_used NOT IN ('streaming', 'recovered', 'recovered_from_redis', 'stopped', 'interrupted', 'semantic_cache')
-                               AND intent IS DISTINCT FROM 'streaming_placeholder'""",
-                            uuid.UUID(session_id), _uid,
-                        )
-                        if _real_exists and _real_exists > 0:
-                            # 정상 응답이 이미 있음 → placeholder만 삭제 (promote 불필요)
-                            await conn.execute("DELETE FROM chat_messages WHERE id = $1", _uid)
-                            await conn.execute(
-                                "UPDATE chat_sessions SET message_count = GREATEST(message_count - 1, 0), updated_at = NOW() WHERE id = $1",
-                                uuid.UUID(session_id),
-                            )
-                            # 결과 목록에서도 제거
-                            _remove_ids.append(_pid)
-                            logger.info(f"list_messages_promote_skipped: real response exists, placeholder deleted session={session_id[:8]}")
-                            continue
-                        # promote 전 검사 2: 동일 내용 recovered 중복 검사
-                        _dup_cnt = await conn.fetchval(
-                            "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND role = 'assistant' "
-                            "AND model_used IN ('recovered', 'recovered_from_redis') "
-                            "AND LEFT(content, 50) = $2 AND id != $3",
-                            uuid.UUID(session_id), _ph_content, _uid,
-                        )
-                        if _dup_cnt and _dup_cnt > 0:
-                            await conn.execute("DELETE FROM chat_messages WHERE id = $1", _uid)
-                            await conn.execute(
-                                "UPDATE chat_sessions SET message_count = GREATEST(message_count - 1, 0), updated_at = NOW() WHERE id = $1",
-                                uuid.UUID(session_id),
-                            )
-                            _remove_ids.append(_pid)
-                        else:
-                            await conn.execute(
-                                "UPDATE chat_messages SET intent = NULL, model_used = 'recovered', "
-                                "content = regexp_replace(content, E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$', '') "
-                                "WHERE id = $1",
-                                _uid,
-                            )
-                    except Exception as _pe:
-                        logger.warning(f"list_messages_promote_failed: {_pe}")
-                logger.info(f"list_messages_auto_promoted session={session_id[:8]} count={len(_promote_ids)}")
-            _remove_set = set(str(x) for x in _remove_ids)
-            results = [m for m in results if str(m["id"]) not in _remove_set]
+        if not _is_active and not read_only:
+            results = await _promote_inactive_streaming_placeholders(
+                conn, session_id, results, "list_messages",
+            )
         return _dedupe_recovery_like_messages(results)
 
 
@@ -2764,6 +2799,8 @@ async def list_messages_cursor(
     limit: int = 50,
     cursor: Optional[str] = None,
     include_streaming: bool = False,
+    fields: str = "full",
+    read_only: bool = False,
 ) -> Dict[str, Any]:
     """Cursor 기반 메시지 조회 — 최근 N건 또는 cursor 이전 N건 (항상 ASC 반환)."""
     async with get_pool().acquire() as conn:
@@ -2777,38 +2814,15 @@ async def list_messages_cursor(
         _extra_filter = ""
         if _is_active and not include_streaming:
             _extra_filter = " AND intent IS DISTINCT FROM 'streaming_placeholder'"
-        # 자동 메시지 필터 — pipeline_c/system_trigger는 UI에서 접혀있어
-        # 자동 메시지 비율이 높은 세션에서 실제 대화가 안 보이는 문제 방지
-        # intent=NULL인 Pipeline Runner 알림 메시지도 콘텐츠 패턴으로 추가 제외
-        # runner_response는 AI 검수/상태 보고 본문이므로 채팅창에 표시한다.
-        _auto_exclude = (
-            " AND intent IS DISTINCT FROM 'pipeline_c'"
-            " AND intent IS DISTINCT FROM 'ai_review_warning'"
-            " AND intent IS DISTINCT FROM 'system_trigger'"
-            " AND intent IS DISTINCT FROM 'auto_reaction'"
-            " AND intent IS DISTINCT FROM 'ai_review_warning'"
-            " AND intent IS DISTINCT FROM 'system_trigger'"
-            " AND intent IS DISTINCT FROM 'auto_reaction'"
-            " AND NOT content LIKE '🔧 [Pipeline Runner]%'"
-            " AND NOT content LIKE '🔔 [Pipeline Runner]%'"
-            " AND NOT content LIKE '✅ [Pipeline Runner]%'"
-            " AND NOT content LIKE '🚀 [Pipeline Runner]%'"
-            " AND NOT content LIKE '⚠️ [Pipeline Runner]%'"
-            " AND NOT content LIKE '↩️ [Pipeline Runner]%'"
-            " AND NOT content LIKE '❌ [Pipeline Runner]%'"
-            " AND NOT content LIKE '📋 [Pipeline Runner]%'"
-            " AND NOT content LIKE '🔴 [Pipeline Runner]%'"
-            " AND NOT content LIKE '🟡 [Pipeline Runner]%'"
-            " AND NOT content LIKE '🟢 [Pipeline Runner]%'"
-        )
+        _select_fields = _message_select_fields(fields)
         if cursor:
             from datetime import datetime as _dt
             cursor_dt = _dt.fromisoformat(cursor)
             rows = await conn.fetch(
                 "SELECT * FROM ("
-                "  SELECT * FROM chat_messages"
+                f"  SELECT {_select_fields} FROM chat_messages"
                 "  WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate'"
-                f"    {_extra_filter}{_auto_exclude}"
+                f"    {_extra_filter}{_AUTO_MESSAGE_EXCLUDE_FILTER}"
                 "    AND created_at < $2"
                 "  ORDER BY created_at DESC LIMIT $3"
                 ") sub ORDER BY created_at ASC",
@@ -2817,9 +2831,9 @@ async def list_messages_cursor(
         else:
             rows = await conn.fetch(
                 "SELECT * FROM ("
-                "  SELECT * FROM chat_messages"
+                f"  SELECT {_select_fields} FROM chat_messages"
                 "  WHERE session_id = $1 AND intent IS DISTINCT FROM '_deleted_duplicate'"
-                f"    {_extra_filter}{_auto_exclude}"
+                f"    {_extra_filter}{_AUTO_MESSAGE_EXCLUDE_FILTER}"
                 "  ORDER BY created_at DESC LIMIT $2"
                 ") sub ORDER BY created_at ASC",
                 sid, fetch_limit,
@@ -2828,71 +2842,13 @@ async def list_messages_cursor(
         has_more = len(messages) > limit  # has_more는 필터링 전 원본 건수로 판별
         if has_more:
             messages = messages[1:]  # 가장 오래된 1건(초과분) 제거 — dedup 전에 수행
-        # 비활성 세션의 streaming_placeholder → 내용 있으면 recovered 전환, 없으면 제외
-        if not _is_active:
-            _promote_ids = []
-            _remove_ids = []
-            for msg in messages:
-                if msg.get("intent") == "streaming_placeholder":
-                    content = (msg.get("content") or "").strip()
-                    if content and len(content) > 10:
-                        _promote_ids.append(msg["id"])
-                        msg["intent"] = None
-                        msg["model_used"] = "recovered"
-                    else:
-                        _remove_ids.append(msg["id"])
-            if _promote_ids:
-                for _pid in _promote_ids:
-                    try:
-                        _uid = _pid if isinstance(_pid, __import__('uuid').UUID) else __import__('uuid').UUID(str(_pid))
-                        # promote 전 검사 1: 정상 저장된 메시지가 이미 있는지 확인
-                        _real_exists = await conn.fetchval(
-                            """SELECT count(*) FROM chat_messages
-                               WHERE session_id = $1 AND role = 'assistant'
-                               AND id != $2
-                               AND model_used IS NOT NULL
-                               AND model_used NOT IN ('streaming', 'recovered', 'recovered_from_redis', 'stopped', 'interrupted', 'semantic_cache')
-                               AND intent IS DISTINCT FROM 'streaming_placeholder'""",
-                            uuid.UUID(session_id), _uid,
-                        )
-                        if _real_exists and _real_exists > 0:
-                            # 정상 응답이 이미 있음 → placeholder만 삭제 (promote 불필요)
-                            await conn.execute("DELETE FROM chat_messages WHERE id = $1", _uid)
-                            await conn.execute(
-                                "UPDATE chat_sessions SET message_count = GREATEST(message_count - 1, 0), updated_at = NOW() WHERE id = $1",
-                                uuid.UUID(session_id),
-                            )
-                            _remove_ids.append(_pid)
-                            logger.info(f"list_messages_cursor_promote_skipped: real response exists, placeholder deleted session={session_id[:8]}")
-                            continue
-                        # promote 전 검사 2: 동일 내용 recovered 중복 검사
-                        _ph_content = await conn.fetchval("SELECT LEFT(content, 50) FROM chat_messages WHERE id = $1", _uid)
-                        _dup_cnt = await conn.fetchval(
-                            "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND role = 'assistant' "
-                            "AND model_used IN ('recovered', 'recovered_from_redis') "
-                            "AND LEFT(content, 50) = $2 AND id != $3",
-                            uuid.UUID(session_id), _ph_content, _uid,
-                        )
-                        if _dup_cnt and _dup_cnt > 0:
-                            await conn.execute("DELETE FROM chat_messages WHERE id = $1", _uid)
-                            await conn.execute(
-                                "UPDATE chat_sessions SET message_count = GREATEST(message_count - 1, 0), updated_at = NOW() WHERE id = $1",
-                                uuid.UUID(session_id),
-                            )
-                            _remove_ids.append(_pid)
-                        else:
-                            await conn.execute(
-                                "UPDATE chat_messages SET intent = NULL, model_used = 'recovered', "
-                                "content = regexp_replace(content, E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$', '') "
-                                "WHERE id = $1",
-                                _uid,
-                            )
-                    except Exception as _pe:
-                        logger.warning(f"list_messages_cursor_promote_failed: {_pe}")
-                logger.info(f"list_messages_cursor_auto_promoted session={session_id[:8]} count={len(_promote_ids)}")
-            _remove_set = set(str(x) for x in _remove_ids)
-            messages = [m for m in messages if str(m["id"]) not in _remove_set]
-        messages = _dedupe_recovery_like_messages(messages)
+        if fields != "minimal":
+            # 비활성 세션의 streaming_placeholder → 내용 있으면 recovered 전환, 없으면 제외
+            if not _is_active and not read_only:
+                messages = await _promote_inactive_streaming_placeholders(
+                    conn, session_id, messages, "list_messages_cursor",
+                )
+            messages = _dedupe_recovery_like_messages(messages)
         next_cursor = messages[0]["created_at"].isoformat() if has_more and messages else None
         return {
             "messages": messages,

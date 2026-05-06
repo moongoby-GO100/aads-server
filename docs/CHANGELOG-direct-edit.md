@@ -107,3 +107,24 @@ im
 
 ## [2026-05-06 10:07:47 KST] [aads-server] docs/pipeline-runner/PIPELINE-RUNNER-ARCHITECTURE.md
 - Chat-Direct 수정: run_remote_command: docker exec aads-server cat /app/pc_agent/agent.py | wc -l
+
+## [2026-05-06 10:07:57 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: run_remote_command: find /root/aads -type f -name "*.py" | grep -E "(context|prompt|builder|memory|e
+
+## [2026-05-06 10:08:00 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server grep -n "pc_agent" /app/app/main.py
+
+## [2026-05-06 10:08:01 KST] [aads-server] docs/reports/20260506_CHAT_LIGHTWEIGHT_PLAN_v2.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server grep -n "pc_agent" /app/app/main.py
+
+## [2026-05-06 10:08:02 KST] [aads-server] docs/reports/20260506_CHAT_LIGHTWEIGHT_V2.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server grep -n "pc_agent" /app/app/main.py
+
+## [2026-05-06 10:08:03 KST] [aads-server] migrations/078_pipeline_runner_active_dedup.sql
+- Chat-Direct 수정: run_remote_command: docker exec aads-server grep -n "pc_agent" /app/app/main.py
+
+## [2026-05-06 10:08:04 KST] [aads-server] reports/20260506_AADS_tool_audit_and_improvement_report.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server grep -n "pc_agent" /app/app/main.py
+
+## [2026-05-06 10:10:16 KST] [aads-server] app/services/pc_agent_manager.py
+- Chat-Direct 수정: patch:     def __init__(self, agent_id: str, we→    def __init__(self, agent_id: str, we

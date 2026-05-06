@@ -2393,13 +2393,13 @@ export default function ChatPage() {
         if (cancelled) return;
         if (!rawLatest || rawLatest.length === 0) return;
         const latest = _waitingBg
-          ? rawLatest.map((m) => m.intent === "streaming_placeholder" ? { ...m, content: m.content || bgPartialContent || "⏳ AI가 응답을 생성 중입니다..." } : m)
+          ? rawLatest.map((m) => (m.intent === "streaming_placeholder" || (m as any).status === "streaming") ? { ...m, intent: "streaming_placeholder", content: m.content || bgPartialContent || "⏳ AI가 응답을 생성 중입니다..." } : m)
           // FIX: placeholder 삭제 금지 — streaming 아닐 때도 placeholder는 표시 유지
-          : rawLatest.map((m) => m.intent === "streaming_placeholder" ? { ...m, content: m.content || "⏳ AI가 응답을 생성 중입니다..." } : m);
+          : rawLatest.map((m) => (m.intent === "streaming_placeholder" || (m as any).status === "streaming") ? { ...m, intent: "streaming_placeholder", content: m.content || "⏳ AI가 응답을 생성 중입니다..." } : m);
         if (latest.length === 0) return;
         if (_waitingBg) {
-          const hasPlaceholder = rawLatest.some((m) => m.intent === "streaming_placeholder");
-          const _latestFinalAi = rawLatest.find((m) => m.role === "assistant" && m.intent !== "streaming_placeholder" && m.intent !== "rate_limited");
+          const hasPlaceholder = rawLatest.some((m) => m.intent === "streaming_placeholder" || (m as any).status === "streaming");
+          const _latestFinalAi = rawLatest.find((m) => m.role === "assistant" && m.intent !== "streaming_placeholder" && (m as any).status !== "streaming" && m.intent !== "rate_limited" && (m as any).status !== "rate_limited");
           const hasNewFinalAi = _latestFinalAi && _latestFinalAi.id !== lastToastedAiIdRef.current;
           // PERF: AI 메시지 도착 즉시 waitingBgResponse 해제 (placeholder 잔존 여부 무관)
           if (hasNewFinalAi) {
@@ -2424,7 +2424,7 @@ export default function ChatPage() {
             // 자동 트리거(시스템 메시지) 응답이면 토스트 생략
             // rawLatest는 이미 DESC(최신순) — .reverse() 제거하여 최신 user 메시지 기준 판단
             const _lastUser1029 = rawLatest?.find((m: ChatMessage) => m.role === "user");
-            const _lastAi1029 = rawLatest?.find((m: ChatMessage) => m.role === "assistant" && m.intent !== "streaming_placeholder" && m.intent !== "rate_limited");
+            const _lastAi1029 = rawLatest?.find((m: ChatMessage) => m.role === "assistant" && m.intent !== "streaming_placeholder" && (m as any).status !== "streaming" && m.intent !== "rate_limited" && (m as any).status !== "rate_limited");
             if (!isAutoTriggerResponse(_lastUser1029, _lastAi1029)) {
               if (_lastAi1029?.id) lastToastedAiIdRef.current = _lastAi1029.id;
               showCompletionToast("응답이 완료되었습니다");
@@ -2434,16 +2434,16 @@ export default function ChatPage() {
             return;
           }
           if (hasPlaceholder) {
-            const phMsg = rawLatest.find((m) => m.intent === "streaming_placeholder");
+            const phMsg = rawLatest.find((m) => m.intent === "streaming_placeholder" || (m as any).status === "streaming");
             if (phMsg) {
               setMessages(prev => {
                 const idx = prev.findIndex((m) => m.intent === "streaming_placeholder");
                 if (idx >= 0) {
                   const updated = [...prev];
-                  updated[idx] = { ...phMsg, content: phMsg.content || bgPartialContent || "⏳ 생성 중..." };
+                  updated[idx] = { ...phMsg, intent: "streaming_placeholder", content: phMsg.content || bgPartialContent || "⏳ 생성 중..." };
                   return updated;
                 }
-                return [...prev, { ...phMsg, content: phMsg.content || bgPartialContent || "⏳ 생성 중..." }];
+                return [...prev, { ...phMsg, intent: "streaming_placeholder", content: phMsg.content || bgPartialContent || "⏳ 생성 중..." }];
               });
               return;
             }
