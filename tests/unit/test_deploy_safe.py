@@ -9,6 +9,26 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 
+@pytest.fixture(autouse=True)
+def deploy_safe_host_context(monkeypatch):
+    from app.services import tool_executor as module
+
+    original_exists = os.path.exists
+
+    def fake_exists(path):
+        if path == "/.dockerenv":
+            return False
+        if path in {
+            "/root/aads/aads-server/deploy.sh",
+            "/root/aads/aads-server/docker-compose.prod.yml",
+        }:
+            return True
+        return original_exists(path)
+
+    monkeypatch.setattr(module.os.path, "exists", fake_exists)
+    monkeypatch.setattr(module.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
+
+
 @pytest.mark.asyncio
 async def test_deploy_safe_reload_dry_run_default_command():
     from app.services.tool_executor import ToolExecutor
@@ -38,6 +58,23 @@ async def test_deploy_safe_null_dry_run_stays_safe():
 
     assert result["dry_run"] is True
     assert result["command"] == "docker exec aads-server bash /app/scripts/reload-api.sh"
+
+
+@pytest.mark.asyncio
+async def test_deploy_safe_reload_uses_container_script_inside_container(monkeypatch):
+    from app.services import tool_executor as module
+    from app.services.tool_executor import ToolExecutor
+
+    def fake_exists(path):
+        return path in {"/.dockerenv", "/app/scripts/reload-api.sh"}
+
+    monkeypatch.setattr(module.os.path, "exists", fake_exists)
+    monkeypatch.setattr(module.shutil, "which", lambda name: None)
+
+    result = await ToolExecutor()._deploy_safe({"mode": "reload"})
+
+    assert result["dry_run"] is True
+    assert result["command"] == "bash /app/scripts/reload-api.sh"
 
 
 @pytest.mark.asyncio
@@ -127,6 +164,20 @@ async def test_deploy_safe_rejects_compose_up_without_no_deps_pattern():
 
     assert "error" in result
     assert "--no-deps 없는 전체 up" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_deploy_safe_bluegreen_inside_container_without_host_context_errors(monkeypatch):
+    from app.services import tool_executor as module
+    from app.services.tool_executor import ToolExecutor
+
+    monkeypatch.setattr(module.os.path, "exists", lambda path: path == "/.dockerenv")
+    monkeypatch.setattr(module.shutil, "which", lambda name: None)
+
+    result = await ToolExecutor()._deploy_safe({"mode": "bluegreen", "dry_run": False})
+
+    assert result["success"] is False
+    assert "호스트 docker CLI" in result["error"]
 
 
 @pytest.mark.asyncio

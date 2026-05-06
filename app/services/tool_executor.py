@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import uuid
 from collections import OrderedDict
@@ -102,6 +103,7 @@ _PROJECT_KEYS = ("GO100", "NTV2", "KIS", "SF", "NAS", "KAKAOBOT", "AADS")
 
 _DEPLOY_SAFE_ALLOWED_MODES = frozenset({"reload", "bluegreen", "restart-single"})
 _DEPLOY_SAFE_RELOAD_CMD = ["docker", "exec", "aads-server", "bash", "/app/scripts/reload-api.sh"]
+_DEPLOY_SAFE_CONTAINER_RELOAD_CMD = ["bash", "/app/scripts/reload-api.sh"]
 _DEPLOY_SAFE_BLUEGREEN_CMD = ["bash", "/root/aads/aads-server/deploy.sh", "bluegreen"]
 _DEPLOY_SAFE_RESTART_BASE_CMD = [
     "docker", "compose", "-f", "/root/aads/aads-server/docker-compose.prod.yml", "restart",
@@ -1561,6 +1563,43 @@ class ToolExecutor:
             return "금지 패턴 감지: --no-deps 없는 전체 up"
         return ""
 
+    @staticmethod
+    def _deploy_safe_in_container() -> bool:
+        return os.path.exists("/.dockerenv")
+
+    @staticmethod
+    def _deploy_safe_host_context_available() -> bool:
+        return (
+            shutil.which("docker") is not None
+            and os.path.exists("/root/aads/aads-server/deploy.sh")
+            and os.path.exists("/root/aads/aads-server/docker-compose.prod.yml")
+        )
+
+    def _deploy_safe_resolve_command(self, mode: str, service: str) -> tuple[list[str] | None, str, str]:
+        """Return command parts, description, and an optional unavailable reason."""
+        in_container = self._deploy_safe_in_container()
+        host_context = self._deploy_safe_host_context_available()
+
+        if mode == "reload":
+            if in_container:
+                if os.path.exists("/app/scripts/reload-api.sh"):
+                    return (
+                        list(_DEPLOY_SAFE_CONTAINER_RELOAD_CMD),
+                        "Python 코드만 변경된 경우 컨테이너 내부 API reload (0ms 다운타임)",
+                        "",
+                    )
+                return None, "Python 코드만 변경된 경우 API reload (0ms 다운타임)", "컨테이너 내부 reload 스크립트가 없습니다"
+            return list(_DEPLOY_SAFE_RELOAD_CMD), "Python 코드만 변경된 경우 API reload (0ms 다운타임)", ""
+
+        if mode == "bluegreen":
+            if in_container and not host_context:
+                return None, "이미지 리빌드가 필요한 경우 bluegreen 배포 (무중단)", "bluegreen은 호스트 docker CLI와 /root/aads/aads-server/deploy.sh가 필요합니다"
+            return list(_DEPLOY_SAFE_BLUEGREEN_CMD), "이미지 리빌드가 필요한 경우 bluegreen 배포 (무중단)", ""
+
+        if in_container and not host_context:
+            return None, "단일 서비스 안전 재시작", "restart-single은 호스트 docker compose 실행 컨텍스트가 필요합니다"
+        return [*_DEPLOY_SAFE_RESTART_BASE_CMD, service], "단일 서비스 안전 재시작", ""
+
     async def _deploy_safe_run_subprocess(self, parts: list[str]) -> Dict[str, Any]:
         command = self._deploy_safe_join_command(parts)
         try:
@@ -1605,21 +1644,24 @@ class ToolExecutor:
         if block_reason:
             return {"error": block_reason}
 
-        if mode == "reload":
-            command_parts = list(_DEPLOY_SAFE_RELOAD_CMD)
-            description = "Python 코드만 변경된 경우 API reload (0ms 다운타임)"
-        elif mode == "bluegreen":
-            command_parts = list(_DEPLOY_SAFE_BLUEGREEN_CMD)
-            description = "이미지 리빌드가 필요한 경우 bluegreen 배포 (무중단)"
-        else:
+        if mode == "restart-single":
             if not service:
                 return {"error": "restart-single 모드에서는 service 필수"}
             if service == "aads-server":
                 return {"error": "aads-server는 reload 또는 bluegreen 모드를 사용하세요"}
             if any(ch.isspace() for ch in service) or any(ch in ";|&`$()<>\\\n\r\t" for ch in service):
                 return {"error": "service 값에 허용되지 않는 문자가 포함되어 있습니다"}
-            command_parts = [*_DEPLOY_SAFE_RESTART_BASE_CMD, service]
-            description = "단일 서비스 안전 재시작"
+
+        command_parts, description, unavailable_reason = self._deploy_safe_resolve_command(mode, service)
+        if command_parts is None:
+            return {
+                "mode": mode,
+                "dry_run": dry_run,
+                "success": False,
+                "error": unavailable_reason,
+                "description": description,
+                "health_check_command": _DEPLOY_SAFE_HEALTH_COMMAND,
+            }
 
         command = self._deploy_safe_join_command(command_parts)
         command_block_reason = self._deploy_safe_block_reason(command)
