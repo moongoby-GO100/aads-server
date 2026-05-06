@@ -1,6 +1,12 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-06)
+- **대시보드 정적 reports HTML 공개 경로 복구 (2026-05-06 14:46 KST)**:
+  - 증상: `https://aads.newtalk.kr/reports/20260506_newtalk_ai_virtual_model_fitting_service_plan.html` 접속 시 로그인 페이지로 `307` 리다이렉트되어 브라우저에서 보고서가 열리지 않았다.
+  - 원인: HTML 파일은 `aads-dashboard/public/reports/` 및 운영 컨테이너 `/app/public/reports/`에 존재했지만, Next.js `src/middleware.ts`의 인증 미들웨어가 `/reports/*.html` 정적 파일까지 보호 경로로 처리했다.
+  - 조치: `aads-dashboard/src/middleware.ts`에 `/reports/<filename>.(html|htm|pdf|txt|md|csv|json)` 정적 파일만 공개 통과시키는 패턴을 추가했다. `/reports` 대시보드 페이지 자체는 기존 인증 정책을 유지한다.
+  - 배포: `bash /root/aads/aads-dashboard/deploy.sh` blue-green 성공. 활성 슬롯은 `green`, 컨테이너 `aads-dashboard-green` 상태 `running`.
+  - 검증: 내부 `http://127.0.0.1:3100/reports/20260506_newtalk_ai_virtual_model_fitting_service_plan.html` 200 OK, 외부 `https://aads.newtalk.kr/reports/20260506_newtalk_ai_virtual_model_fitting_service_plan.html` 200 OK, `Content-Type: text/html; charset=UTF-8`, `Content-Length: 32058`.
 - **deploy_safe 실행 컨텍스트 보강 + 실패 러너 수동 완료 (2026-05-06 14:42 KST)**:
   - 대상: `runner-dbd3068f` (`AADS deploy_safe 실행성 수정`)는 Claude CLI가 root 권한에서 `--dangerously-skip-permissions`를 거부해 작업 시작 전 실패했다.
   - 조치: `app/services/tool_executor.py`에서 실행 컨텍스트를 감지하도록 보강했다. 호스트에서는 `scripts/reload-api.sh`를 실행해 `.active_container` 기준 활성 컨테이너로 위임하고, 컨테이너 내부 `reload`는 `bash /app/scripts/reload-api.sh`를 직접 실행한다. 컨테이너 내부 `bluegreen`/`restart-single`은 호스트 docker/deploy 컨텍스트가 없으면 명확한 오류를 반환한다.

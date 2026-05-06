@@ -8,8 +8,18 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
-# 컨테이너 내부 실행 시 reload 명령은 직접 bash 실행
-_EXPECTED_RELOAD_CMD = "bash /app/scripts/reload-api.sh"
+def _expected_reload_cmd():
+    from app.services import tool_executor as module
+    from app.services.tool_executor import ToolExecutor
+
+    command_parts, _, unavailable_reason = ToolExecutor()._deploy_safe_resolve_command("reload", "")
+    assert unavailable_reason == ""
+    assert command_parts is not None
+    if ToolExecutor._deploy_safe_in_container():
+        assert command_parts == list(module._DEPLOY_SAFE_CONTAINER_RELOAD_CMD)
+    else:
+        assert command_parts == list(module._DEPLOY_SAFE_RELOAD_CMD)
+    return ToolExecutor._deploy_safe_join_command(command_parts)
 
 
 @pytest.mark.asyncio
@@ -19,7 +29,7 @@ async def test_deploy_safe_reload_dry_run_default_command():
     result = await ToolExecutor()._deploy_safe({"mode": "reload"})
 
     assert result["dry_run"] is True
-    assert result["command"] == _EXPECTED_RELOAD_CMD
+    assert result["command"] == _expected_reload_cmd()
     assert "Python" in result["description"] or "reload" in result["description"].lower()
 
 
@@ -44,7 +54,7 @@ async def test_deploy_safe_null_dry_run_stays_safe():
     result = await ToolExecutor()._deploy_safe({"mode": "reload", "dry_run": None})
 
     assert result["dry_run"] is True
-    assert result["command"] == _EXPECTED_RELOAD_CMD
+    assert result["command"] == _expected_reload_cmd()
 
 
 @pytest.mark.asyncio
@@ -163,9 +173,12 @@ async def test_deploy_safe_execute_uses_subprocess_with_health_checks(monkeypatc
     result = await executor._deploy_safe({"mode": "reload", "dry_run": False})
 
     assert result["success"] is True
-    assert result["command"] == _EXPECTED_RELOAD_CMD
+    assert result["command"] == _expected_reload_cmd()
     assert calls[0] == list(module._DEPLOY_SAFE_HEALTH_ARGS)
-    assert calls[1] == list(module._DEPLOY_SAFE_CONTAINER_RELOAD_CMD)
+    command_parts, _, unavailable_reason = ToolExecutor()._deploy_safe_resolve_command("reload", "")
+    assert unavailable_reason == ""
+    assert command_parts is not None
+    assert calls[1] == command_parts
     assert calls[2] == {"sleep": 5}
     assert calls[3] == list(module._DEPLOY_SAFE_HEALTH_ARGS)
 
@@ -178,4 +191,4 @@ async def test_deploy_safe_dispatch_registered():
     result = json.loads(raw)
 
     assert result["dry_run"] is True
-    assert result["command"] == _EXPECTED_RELOAD_CMD
+    assert result["command"] == _expected_reload_cmd()
