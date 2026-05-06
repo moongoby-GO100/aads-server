@@ -3742,6 +3742,8 @@ async def _stream_anthropic(
     cost = _estimate_cost(model_alias, input_tokens, output_tokens)
     # 프론트 표시용: alias(claude-opus) → 실제 모델ID(claude-opus-4-6)
     _display_model = _ANTHROPIC_MODEL_ID.get(model_alias, model_alias)
+    if use_thinking:
+        logger.info(f"anthropic_thinking_result: model={model_id} thinking_len={len(thinking_text)} turns={_turn}")
     yield {
         "type": "done",
         "model": _display_model,
