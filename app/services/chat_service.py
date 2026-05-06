@@ -2669,6 +2669,7 @@ def _message_select_fields(fields: str) -> str:
         return (
             "id, session_id, role, LEFT(content, 200) AS content, "
             "LENGTH(content) AS content_length, "
+            "(LENGTH(content) > 200) AS is_truncated, "
             "intent, model_used, quality_score, created_at, edited_at, "
             "bookmarked, "
             "(attachments IS NOT NULL AND attachments::text != '[]' AND attachments::text != 'null') AS has_attachments, "
