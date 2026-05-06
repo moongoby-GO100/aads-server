@@ -73,16 +73,16 @@ INTENT_MAP: dict[str, dict] = {
     "diagnosis":        {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
     "task_history":     {"model": "claude-sonnet",                "tools": True,  "group": "all"},
     "search":           {"model": "gemini-3-flash-preview",       "tools": True,  "group": "all",     "gemini_direct": "grounding"},
-    "url_analyze":      {"model": "claude-opus",                 "tools": True,  "group": "all"},
+    "url_analyze":      {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
     "code_task":        {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
     "directive":        {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
     "directive_gen":    {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
     "complex_analysis": {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
     "architect":        {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
-    "code_exec":        {"model": "claude-opus",                 "tools": True,  "group": "all"},
+    "code_exec":        {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
     "memory_recall":    {"model": "claude-sonnet",                "tools": True,  "group": "all"},
-    "qa":               {"model": "claude-opus",                 "tools": True,  "group": "all"},
-    "execution_verify": {"model": "claude-opus",                 "tools": True,  "group": "all"},
+    "qa":               {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
+    "execution_verify": {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
     "workspace_switch": {"model": "claude-opus",                 "tools": True,  "group": "all"},
     "cost_report":      {"model": "claude-sonnet",                "tools": True,  "group": "all"},
     "browser":          {"model": "claude-opus",                 "tools": True,  "group": "all"},
@@ -94,8 +94,8 @@ INTENT_MAP: dict[str, dict] = {
     "cto_impact":       {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
     "cto_tech_debt":    {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
     # AADS-188C: Agent SDK 자율 실행 인텐트
-    "execute":            {"model": "claude-opus",               "tools": True,  "group": "all"},
-    "code_modify":        {"model": "claude-opus",               "tools": True,  "group": "all"},
+    "execute":            {"model": "claude-opus",               "tools": True,  "group": "all",     "thinking": True},
+    "code_modify":        {"model": "claude-opus",               "tools": True,  "group": "all",     "thinking": True},
     # Pipeline Runner: Claude Code 자율 작업 파이프라인
     "pipeline_runner":    {"model": "claude-opus",               "tools": True,  "group": "all"},
     # 자동 반응 (파이프라인 완료 후)
@@ -106,7 +106,7 @@ INTENT_MAP: dict[str, dict] = {
     "task_query":         {"model": "claude-sonnet",              "tools": True,  "group": "all"},
     "status_check":       {"model": "claude-sonnet",              "tools": True,  "group": "all"},
     # AADS-186A 신규 인텐트
-    "service_inspection": {"model": "claude-opus",               "tools": True,  "group": "all"},
+    "service_inspection": {"model": "claude-opus",               "tools": True,  "group": "all",     "thinking": True},
     "all_service_status": {"model": "claude-sonnet",              "tools": True,  "group": "all"},
     # AADS-195 Phase 3: PC 제어 인텐트
     "pc_control":         {"model": "claude-sonnet",              "tools": True,  "group": "all"},
