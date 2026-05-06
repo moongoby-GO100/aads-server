@@ -102,7 +102,7 @@ _PROJECT_SCOPED_TOOLS = frozenset({
 _PROJECT_KEYS = ("GO100", "NTV2", "KIS", "SF", "NAS", "KAKAOBOT", "AADS")
 
 _DEPLOY_SAFE_ALLOWED_MODES = frozenset({"reload", "bluegreen", "restart-single"})
-_DEPLOY_SAFE_RELOAD_CMD = ["docker", "exec", "aads-server", "bash", "/app/scripts/reload-api.sh"]
+_DEPLOY_SAFE_RELOAD_CMD = ["bash", "/root/aads/aads-server/scripts/reload-api.sh"]
 _DEPLOY_SAFE_CONTAINER_RELOAD_CMD = ["bash", "/app/scripts/reload-api.sh"]
 _DEPLOY_SAFE_BLUEGREEN_CMD = ["bash", "/root/aads/aads-server/deploy.sh", "bluegreen"]
 _DEPLOY_SAFE_RESTART_BASE_CMD = [
@@ -1689,8 +1689,13 @@ class ToolExecutor:
             }
 
         deploy_result = await self._deploy_safe_run_subprocess(command_parts)
-        await asyncio.sleep(5)
-        post_health = await self._deploy_safe_run_subprocess(list(_DEPLOY_SAFE_HEALTH_ARGS))
+        post_health = {"ok": False, "command": _DEPLOY_SAFE_HEALTH_COMMAND, "returncode": -1, "stdout": "", "stderr": "not checked"}
+        for attempt in range(36):
+            await asyncio.sleep(5)
+            post_health = await self._deploy_safe_run_subprocess(list(_DEPLOY_SAFE_HEALTH_ARGS))
+            post_health["attempt"] = attempt + 1
+            if post_health.get("ok"):
+                break
 
         success = bool(deploy_result.get("ok") and post_health.get("ok"))
         result = {

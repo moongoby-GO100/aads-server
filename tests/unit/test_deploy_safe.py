@@ -21,6 +21,7 @@ def deploy_safe_host_context(monkeypatch):
         if path in {
             "/root/aads/aads-server/deploy.sh",
             "/root/aads/aads-server/docker-compose.prod.yml",
+            "/root/aads/aads-server/scripts/reload-api.sh",
         }:
             return True
         return original_exists(path)
@@ -36,7 +37,7 @@ async def test_deploy_safe_reload_dry_run_default_command():
     result = await ToolExecutor()._deploy_safe({"mode": "reload"})
 
     assert result["dry_run"] is True
-    assert result["command"] == "docker exec aads-server bash /app/scripts/reload-api.sh"
+    assert result["command"] == "bash /root/aads/aads-server/scripts/reload-api.sh"
     assert "Python" in result["description"]
 
 
@@ -57,7 +58,7 @@ async def test_deploy_safe_null_dry_run_stays_safe():
     result = await ToolExecutor()._deploy_safe({"mode": "reload", "dry_run": None})
 
     assert result["dry_run"] is True
-    assert result["command"] == "docker exec aads-server bash /app/scripts/reload-api.sh"
+    assert result["command"] == "bash /root/aads/aads-server/scripts/reload-api.sh"
 
 
 @pytest.mark.asyncio
@@ -207,10 +208,10 @@ async def test_deploy_safe_execute_uses_subprocess_with_health_checks(monkeypatc
     result = await executor._deploy_safe({"mode": "reload", "dry_run": False})
 
     assert result["success"] is True
-    assert result["command"] == "docker exec aads-server bash /app/scripts/reload-api.sh"
+    assert result["command"] == "bash /root/aads/aads-server/scripts/reload-api.sh"
     assert calls == [
         module._DEPLOY_SAFE_HEALTH_ARGS,
-        ["docker", "exec", "aads-server", "bash", "/app/scripts/reload-api.sh"],
+        ["bash", "/root/aads/aads-server/scripts/reload-api.sh"],
         {"sleep": 5},
         module._DEPLOY_SAFE_HEALTH_ARGS,
     ]
@@ -224,4 +225,4 @@ async def test_deploy_safe_dispatch_registered():
     result = json.loads(raw)
 
     assert result["dry_run"] is True
-    assert result["command"] == "docker exec aads-server bash /app/scripts/reload-api.sh"
+    assert result["command"] == "bash /root/aads/aads-server/scripts/reload-api.sh"

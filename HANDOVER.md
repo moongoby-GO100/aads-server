@@ -1,6 +1,12 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-06)
+- **deploy_safe 실행 컨텍스트 보강 + 실패 러너 수동 완료 (2026-05-06 14:42 KST)**:
+  - 대상: `runner-dbd3068f` (`AADS deploy_safe 실행성 수정`)는 Claude CLI가 root 권한에서 `--dangerously-skip-permissions`를 거부해 작업 시작 전 실패했다.
+  - 조치: `app/services/tool_executor.py`에서 실행 컨텍스트를 감지하도록 보강했다. 호스트에서는 `scripts/reload-api.sh`를 실행해 `.active_container` 기준 활성 컨테이너로 위임하고, 컨테이너 내부 `reload`는 `bash /app/scripts/reload-api.sh`를 직접 실행한다. 컨테이너 내부 `bluegreen`/`restart-single`은 호스트 docker/deploy 컨텍스트가 없으면 명확한 오류를 반환한다.
+  - 조치: `deploy_safe` post-health를 5초 1회에서 최대 36회 재시도 방식으로 바꿔 supervisor 재기동 지연을 실패로 오판하지 않도록 했다.
+  - 검증: `python3 -m compileall app/services/tool_executor.py tests/unit/test_deploy_safe.py` 통과, 운영 활성 컨테이너 `aads-server-green`에서 수정 테스트 `/tmp/test_deploy_safe.py` 기준 `14 passed`.
+  - 주의: 운영 컨테이너에는 `tests/`가 볼륨 마운트되어 있지 않아 최신 테스트 파일을 `/tmp/test_deploy_safe.py`로 복사해 검증했다.
 - **Chat Lightweight v2.2 도구박스/최종버블 회귀 보강**:
   - Backend: `fields=minimal`은 표시용 preview와 도구 요약 메타(`has_tools`, `tool_count`, `tool_names`)만 반환하고, full `tools_called`는 신규 단건 상세 API `GET /api/v1/chat/messages/{message_id}`에서 lazy hydrate한다.
   - Backend: `normalize_tool_events()`를 추가해 legacy string 배열, Codex relay 구조화 이벤트, tool_result/thinking 이벤트를 동일한 `tools_called` 배열 계약으로 정규화한다. 저장 전과 full 응답 전 모두 이 경로를 사용한다.
