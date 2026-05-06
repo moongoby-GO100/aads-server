@@ -5,8 +5,10 @@ WebSocket 엔드포인트 + REST API.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
@@ -18,17 +20,74 @@ router = APIRouter()
 
 PC_AGENT_SECRET = os.environ.get("PC_AGENT_SECRET", "")
 HEARTBEAT_INTERVAL = 30  # 초
+_agent_connections: dict[str, WebSocket] = {}
+_EVENT_TABLE_READY = False
+
+
+async def _record_agent_event(
+    agent_id: str,
+    event: str,
+    *,
+    reason: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """PC Agent 연결 이벤트를 best-effort로 DB에 기록한다."""
+    global _EVENT_TABLE_READY
+    try:
+        from app.core.db_pool import get_pool
+
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            if not _EVENT_TABLE_READY:
+                await conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS pc_agent_connection_events (
+                        id BIGSERIAL PRIMARY KEY,
+                        agent_id TEXT NOT NULL,
+                        event TEXT NOT NULL,
+                        reason TEXT DEFAULT '',
+                        metadata JSONB DEFAULT '{}'::jsonb,
+                        created_at TIMESTAMPTZ DEFAULT NOW()
+                    )
+                    """
+                )
+                await conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_pc_agent_connection_events_recent
+                    ON pc_agent_connection_events (created_at DESC, agent_id)
+                    """
+                )
+                _EVENT_TABLE_READY = True
+            await conn.execute(
+                """
+                INSERT INTO pc_agent_connection_events (agent_id, event, reason, metadata)
+                VALUES ($1, $2, $3, $4::jsonb)
+                """,
+                agent_id,
+                event,
+                reason,
+                json.dumps(metadata or {}),
+            )
+    except Exception as exc:
+        logger.warning("pc_agent_event_record_failed agent_id=%s event=%s err=%s", agent_id, event, exc)
 
 
 async def _verify_token_db(token: str) -> bool:
     """DB에서 토큰 유효성 검증 (kakao_pc_agent_tokens 테이블)."""
     try:
-        from app.core.database import get_pool
-        pool = await get_pool()
-        row = await pool.fetchrow(
-            "SELECT 1 FROM kakao_pc_agent_tokens WHERE token = $1 AND is_active = true",
-            token,
-        )
+        from app.core.db_pool import get_pool
+
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT 1 FROM kakao_pc_agent_tokens WHERE token = $1",
+                token,
+            )
+            if row is not None:
+                await conn.execute(
+                    "UPDATE kakao_pc_agent_tokens SET last_used_at = NOW() WHERE token = $1",
+                    token,
+                )
         return row is not None
     except Exception as exc:
         logger.warning("pc_agent_token_db_check_failed: %s", exc)
@@ -52,21 +111,39 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
     if not token_valid:
         await websocket.close(code=4001, reason="unauthorized")
         logger.warning("pc_agent_ws_auth_failed agent_id=%s", agent_id)
+        await _record_agent_event(agent_id, "auth_failed", reason="unauthorized")
         return
 
+    old_ws = _agent_connections.pop(agent_id, None)
+    if old_ws is not None:
+        try:
+            await old_ws.close(code=4010, reason="replaced_by_new")
+        except Exception:
+            pass
+        logger.info("pc_agent_ws_replaced agent_id=%s", agent_id)
+        await _record_agent_event(agent_id, "replaced", reason="replaced_by_new")
+
     await websocket.accept()
+    _agent_connections[agent_id] = websocket
     logger.info("pc_agent_ws_connected agent_id=%s", agent_id)
+    await _record_agent_event(agent_id, "connected")
 
     # 등록 메시지 대기 (첫 메시지)
     try:
         raw = await asyncio.wait_for(websocket.receive_json(), timeout=10.0)
         msg = WSMessage.model_validate(raw)
         if msg.type != "register":
+            await _record_agent_event(agent_id, "register_failed", reason="first message must be register")
+            if _agent_connections.get(agent_id) is websocket:
+                _agent_connections.pop(agent_id, None)
             await websocket.close(code=4002, reason="first message must be register")
             return
         pc_agent_manager.register_agent(agent_id, websocket, msg.payload)
     except (asyncio.TimeoutError, Exception) as exc:
         logger.error("pc_agent_ws_register_failed agent_id=%s err=%s", agent_id, exc)
+        await _record_agent_event(agent_id, "register_failed", reason=str(exc)[:300])
+        if _agent_connections.get(agent_id) is websocket:
+            _agent_connections.pop(agent_id, None)
         await websocket.close(code=4003, reason="register failed")
         return
 
@@ -115,10 +192,14 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
 
     except (WebSocketDisconnect, asyncio.TimeoutError):
         logger.info("pc_agent_ws_disconnected agent_id=%s", agent_id)
+        await _record_agent_event(agent_id, "disconnected")
     except Exception as exc:
         logger.error("pc_agent_ws_error agent_id=%s err=%s", agent_id, exc)
+        await _record_agent_event(agent_id, "error", reason=str(exc)[:300])
     finally:
-        pc_agent_manager.unregister_agent(agent_id)
+        pc_agent_manager.unregister_agent(agent_id, websocket)
+        if _agent_connections.get(agent_id) is websocket:
+            _agent_connections.pop(agent_id, None)
 
 
 # ── REST API ──────────────────────────────────────────────────────────

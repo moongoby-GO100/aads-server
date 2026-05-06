@@ -376,3 +376,12 @@
 - 배포: `/root/aads/aads-server/deploy.sh` blue-green 경로로 새 `aads-server` 슬롯을 기동. 08:38 KST 기준 `aads-server` Docker health `healthy`, `http://127.0.0.1:8100/health` `status=ok`.
 - 운영 확인: `GET /api/v1/browser-bridge/sessions/register`가 `405 Method Not Allowed`를 반환해 Browser Bridge 라우트가 운영 앱에 로딩된 것을 확인. POST 전용 등록 엔드포인트라 405가 정상 노출 신호임.
 - Git 상태: `main`은 `origin/main`과 일치하도록 push 완료 후 clean 상태 확인.
+
+## 2026-05-06 08:59 KST - PC Agent 재연결 안정화 및 채팅 경량화 분리 기획
+
+- 배경: CEO 채팅 세션 `f31f1238-fdc8-4405-8893-351226e06bda`에서 PC Agent가 연결됐다가 목록에서 사라지는 현상 보고. 채팅 경량화는 별도 문제/기획 보고로 분리하고 PC Agent 끊김 P0만 즉시 조치.
+- 원인: 운영 DB `kakao_pc_agent_tokens`에는 `is_active` 컬럼이 없는데 `app/api/pc_agent.py`가 `is_active = true`를 조회해 토큰 DB 검증 실패 가능성이 있었음. 또한 같은 `agent_id` 재연결 시 예전 WebSocket의 종료 `finally`가 새 연결을 `pc_agent_manager`에서 지울 수 있는 구조였음.
+- 조치: `app/api/pc_agent.py` 토큰 검증을 실제 스키마 기준 `token` 조회 + `last_used_at` 갱신으로 수정. 같은 `agent_id` 신규 연결은 기존 WebSocket을 `4010 replaced_by_new`로 닫고 신규 연결이 승리하도록 `_agent_connections` guard 추가. 연결/인증/교체/해제 이벤트는 `pc_agent_connection_events` 테이블에 best-effort 기록.
+- 조치: `app/services/pc_agent_manager.py`의 `unregister_agent()`에 WebSocket 일치 guard를 추가해 stale 연결 종료가 최신 연결을 삭제하지 못하게 변경.
+- 검증: `python3 -m py_compile app/api/pc_agent.py app/services/pc_agent_manager.py` 통과. `python3 -m pytest tests/unit/test_pc_agent_manager_connection_guard.py tests/test_pc_agent_command_builder.py -q` 30개 통과.
+- 별도 기획: 채팅 경량화 문제/개선안은 `docs/reports/20260506_CHAT_LIGHTWEIGHT_PLAN.md`로 분리 문서화. 초기 메시지 로드 축소, `fields=minimal`, revision 기반 polling skip, 메시지 리스트 가상화, artifacts lazy load 순서로 권장.

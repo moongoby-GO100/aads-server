@@ -50,11 +50,22 @@ class PCAgentManager:
         logger.info("pc_agent_registered agent_id=%s hostname=%s", agent_id, agent_info.hostname)
         return agent_info
 
-    def unregister_agent(self, agent_id: str) -> None:
-        """에이전트 해제."""
-        if agent_id in self._agents:
-            del self._agents[agent_id]
-            logger.info("pc_agent_unregistered agent_id=%s", agent_id)
+    def unregister_agent(self, agent_id: str, websocket: WebSocket | None = None) -> bool:
+        """에이전트 해제.
+
+        websocket이 주어지면 현재 등록된 연결과 같을 때만 해제한다. 같은 agent_id의
+        재연결이 새 WebSocket으로 교체된 뒤, 예전 연결의 finally가 새 연결을 지우는
+        상황을 막기 위한 guard다.
+        """
+        conn = self._agents.get(agent_id)
+        if conn is None:
+            return False
+        if websocket is not None and conn.websocket is not websocket:
+            logger.info("pc_agent_unregister_skipped_stale agent_id=%s", agent_id)
+            return False
+        del self._agents[agent_id]
+        logger.info("pc_agent_unregistered agent_id=%s", agent_id)
+        return True
 
     # ── 명령 전송/결과 ──────────────────────────────────────────────
 
