@@ -3278,7 +3278,7 @@ async def _stream_anthropic(
         "write_remote_file", "patch_remote_file", "run_remote_command",
         "git_remote_add", "git_remote_commit", "git_remote_push",
         "git_remote_create_branch", "deep_crawl", "deep_research",
-        "spawn_subagent", "spawn_parallel_subagents",
+        "spawn_subagent", "spawn_parallel_subagents", "device_command",
     }
     _YELLOW_CONSECUTIVE_LIMIT = 100  # 전체 턴 상한(100)과 동일 — 사실상 무제한
     _effective_max_turns = _MAX_TOOL_TURNS
@@ -3541,9 +3541,7 @@ async def _stream_anthropic(
             _LONG_TOOLS = {"deep_research", "deep_crawl", "spawn_subagent", "spawn_parallel_subagents", "pipeline_c_execute"}
             _tool_timeout = 600 if tu.name in _LONG_TOOLS else 120
             _HB_TOOL_SEC = 8.0  # heartbeat 간격 (초)
-            _tool_input = dict(tu.input or {})
-            _tool_input["__tool_use_id"] = tu.id
-            task = asyncio.create_task(executor.execute(tu.name, _tool_input))
+            task = asyncio.create_task(executor.execute(tu.name, tu.input))
             _tool_start = __import__("time").monotonic()
 
             # Event 기반: 도구 완료 시 콜백으로 이벤트 설정 → heartbeat 루프 즉시 탈출
@@ -3636,6 +3634,23 @@ async def _stream_anthropic(
                     compressed_str + f"\n\n⚠️ 연속 {_consecutive_errors}회 도구 에러. "
                     "같은 방식 재시도 금지. 다른 도구나 다른 파라미터를 시도하세요."
                 )
+            # F5: Tool Result Archive — 도구 결과 전문 보관 (백그라운드)
+            try:
+                from app.services.tool_archive import archive_tool_result as _archive
+                _f5_sid = _cv_sid.get("") if _cv_sid else ""
+                if _f5_sid:
+                    from app.core.db_pool import get_pool as _get_pool_f5
+                    _f5_pool = _get_pool_f5()
+                    async with _f5_pool.acquire() as _f5c:
+                        _f5_mid = await _f5c.fetchval(
+                            "SELECT id::text FROM chat_messages WHERE session_id = $1::uuid AND role = 'user' ORDER BY created_at DESC LIMIT 1",
+                            _f5_sid,
+                        )
+                    if _f5_mid:
+                        asyncio.create_task(_archive(_f5_mid, tu.id, tu.name, dict(tu.input), result_str))
+            except Exception:
+                pass
+
         # 메시지에 AI 응답 + 도구 결과 추가
         # L-07 fix: SDK ContentBlock → API 허용 필드만 추출 (parsed_output 등 제거)
         _serialized = []

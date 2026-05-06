@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import shlex
-import time
 import uuid
 from collections import OrderedDict
 from datetime import date, datetime
@@ -49,7 +48,7 @@ _LONG_TOOLS = frozenset({
     "spawn_subagent", "spawn_parallel_subagents", "run_agent_team", "run_debate",
     "deep_research", "delegate_to_agent", "delegate_to_research",
     "capture_screenshot", "run_remote_command", "write_remote_file", "patch_remote_file",
-    "pc_execute", "execute_sandbox", "visual_qa_test", "fact_check_multiple",
+    "pc_execute", "device_command", "execute_sandbox", "visual_qa_test", "fact_check_multiple",
     "generate_image", "search_all_projects", "deep_crawl",
 })
 
@@ -271,49 +270,13 @@ class ToolExecutor:
     def clear_execution_cache(self, execution_id: str) -> None:
         self._execution_cache.pop(execution_id, None)
 
-    async def _archive_completed_tool_call(
-        self,
-        tool_name: str,
-        tool_input: Dict[str, Any],
-        raw_output: str,
-        latency_ms: int,
-        session_id: str,
-        tool_use_id: str,
-    ) -> None:
-        if not session_id or not tool_name:
-            return
-        try:
-            from app.services.tool_archive import archive_tool_execution
-
-            await archive_tool_execution(
-                session_id=session_id,
-                tool_name=tool_name,
-                input_params=tool_input,
-                raw_output=raw_output,
-                latency_ms=latency_ms,
-                tool_use_id=tool_use_id or None,
-            )
-        except Exception as exc:
-            logger.warning(
-                "tool_archive_failed: tool=%s session=%s error=%s",
-                tool_name,
-                session_id[:8],
-                str(exc)[:200],
-            )
-
     async def execute(self, tool_name: str, tool_input: Dict[str, Any]) -> str:
         """
         도구 실행. 10초 타임아웃, 결과 6000자 제한.
         실패 시 JSON error 반환.
         """
-        _started_at = time.monotonic()
-        _raw_result_for_archive = ""
-        tool_input = dict(tool_input or {})
-        _archive_tool_use_id = str(tool_input.pop("__tool_use_id", "") or "").strip()
-        _archive_session_id = str(
-            tool_input.get("session_id", "") or current_chat_session_id.get("")
-        ).strip()
         try:
+            tool_input = dict(tool_input or {})
             if tool_name in _PROJECT_SCOPED_TOOLS and not str(tool_input.get("project") or "").strip():
                 session_id = str(tool_input.get("session_id", "") or current_chat_session_id.get("")).strip()
                 inferred_project = await _infer_project_from_session(session_id)
@@ -353,12 +316,11 @@ class ToolExecutor:
                 self._dispatch(tool_name, tool_input),
                 timeout=_timeout,
             )
-            _raw_result_for_archive = (
+            result_str = (
                 json.dumps(result, ensure_ascii=False, indent=2, default=_json_default)
                 if not isinstance(result, str)
                 else result
             )
-            result_str = _raw_result_for_archive
             if len(result_str) > _MAX_RESULT_CHARS:
                 result_str = result_str[:_MAX_RESULT_CHARS] + "\n...[결과 일부 생략]"
             if cache_key and execution_id and self._should_cache_result(result_str):
@@ -369,39 +331,13 @@ class ToolExecutor:
                     tool_name,
                     len(self._execution_cache.get(execution_id, {})),
                 )
-            await self._archive_completed_tool_call(
-                tool_name=tool_name,
-                tool_input=tool_input,
-                raw_output=_raw_result_for_archive,
-                latency_ms=int((time.monotonic() - _started_at) * 1000),
-                session_id=_archive_session_id,
-                tool_use_id=_archive_tool_use_id,
-            )
             return result_str
         except asyncio.TimeoutError:
             logger.warning(f"tool_executor timeout: tool={tool_name}")
-            _raw_result_for_archive = json.dumps({"error": "timeout", "tool": tool_name})
-            await self._archive_completed_tool_call(
-                tool_name=tool_name,
-                tool_input=tool_input,
-                raw_output=_raw_result_for_archive,
-                latency_ms=int((time.monotonic() - _started_at) * 1000),
-                session_id=_archive_session_id,
-                tool_use_id=_archive_tool_use_id,
-            )
-            return _raw_result_for_archive
+            return json.dumps({"error": "timeout", "tool": tool_name})
         except Exception as e:
             logger.error(f"tool_executor error: tool={tool_name} error={e}")
-            _raw_result_for_archive = json.dumps({"error": str(e), "tool": tool_name})
-            await self._archive_completed_tool_call(
-                tool_name=tool_name,
-                tool_input=tool_input,
-                raw_output=_raw_result_for_archive,
-                latency_ms=int((time.monotonic() - _started_at) * 1000),
-                session_id=_archive_session_id,
-                tool_use_id=_archive_tool_use_id,
-            )
-            return _raw_result_for_archive
+            return json.dumps({"error": str(e), "tool": tool_name})
 
     async def _dispatch(self, tool_name: str, tool_input: Dict[str, Any]) -> Any:
         """도구 이름 → 실제 함수 매핑."""
@@ -509,6 +445,7 @@ class ToolExecutor:
             "pc_execute":             self._pc_execute,
             "pc_list_agents":         self._pc_list_agents,
             # AADS-230: 통합 디바이스 도구
+            "device_command":         self._device_command,
             "device_execute":         self._device_execute,
             "device_list":            self._device_list,
             # 유령 도구 해소 (Claude+Gemini 양쪽 경로 통일)
@@ -1892,7 +1829,7 @@ class ToolExecutor:
     async def _inspect_service(self, inp: Dict[str, Any]) -> Any:
         """
         서비스 종합 점검: 프로세스/Docker/로그/헬스체크 수행.
-        list_remote_dir + run_remote_command + get_all_service_status 조합.
+        list_remote_dir + read_remote_file + health_check 조합.
         """
         project = (inp.get("project") or "").upper()
         checks_input = inp.get("checks", ["all"])
@@ -1925,10 +1862,7 @@ class ToolExecutor:
 
         if do_docker:
             try:
-                docker_result = await self._run_remote_command({
-                    "project": project,
-                    "command": "docker ps --format 'table {{.Names}}\\t{{.Status}}'",
-                })
+                docker_result = await self._health_check({"server": "all"})
                 results["docker_status"] = docker_result
                 results["checks_performed"].append("docker")
             except Exception as e:
@@ -1947,34 +1881,8 @@ class ToolExecutor:
 
         if do_health:
             try:
-                # inspect_service의 health 점검은 자체 경로로 수행한다.
-                # (health_check 도구의 직접 재호출/원매핑 방지)
-                service_status = await self._get_all_service_status({"include_details": True})
-                details = []
-                if isinstance(service_status, dict):
-                    if isinstance(service_status.get("details"), list):
-                        details = service_status.get("details", [])
-                    elif isinstance(service_status.get("summary"), list):
-                        details = service_status.get("summary", [])
-
-                project_status = next(
-                    (
-                        row for row in details
-                        if str(row.get("service", "")).upper() == project
-                    ),
-                    None,
-                )
-                if project_status:
-                    results["health"] = project_status
-                else:
-                    results["health"] = {
-                        "error": f"{project} 서비스 상태를 찾을 수 없음",
-                        "available_services": [
-                            str(row.get("service", ""))
-                            for row in details
-                            if isinstance(row, dict)
-                        ],
-                    }
+                health_result = await self._health_check({})
+                results["health"] = health_result
                 results["checks_performed"].append("health")
             except Exception as e:
                 results["health_error"] = str(e)
@@ -2679,6 +2587,25 @@ class ToolExecutor:
         if not devices:
             return {"devices": [], "message": "연결된 디바이스가 없습니다."}
         return {"devices": devices, "count": len(devices)}
+
+    async def _device_command(self, inp: Dict[str, Any]) -> Any:
+        """Android 통합 device_command 실행."""
+        from app.services.pc_agent_manager import pc_agent_manager
+
+        device_id = str(inp.get("device_id", "") or "").strip()
+        command = str(inp.get("command", "") or "").strip()
+        args = inp.get("args", {})
+
+        if args is None:
+            args = {}
+        if not isinstance(args, dict):
+            return {"status": "error", "error": "args는 object여야 합니다."}
+
+        return await pc_agent_manager.execute_device_command(
+            device_id=device_id,
+            command=command,
+            args=args,
+        )
 
     async def _delegate_to_agent(self, inp: Dict[str, Any]) -> Any:
         """

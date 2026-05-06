@@ -149,3 +149,24 @@ im
 
 ## [2026-05-06 10:13:04 KST] [aads-server] docs/reports/20260506_CHAT_LIGHTWEIGHT_V2.md
 - Chat-Direct 수정: run_remote_command: docker exec aads-server cat /var/log/aads-api.log 2>/dev/null | grep -i "pc_agen
+
+## [2026-05-06 10:16:23 KST] [aads-server] aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: find /root/aads -name "*.py" -path "*pc*agent*" -not -path "*/node_modules/*" -n
+
+## [2026-05-06 10:16:24 KST] [aads-server] app/models/chat.py
+- Chat-Direct 수정: run_remote_command: find /root/aads -name "*.py" -path "*pc*agent*" -not -path "*/node_modules/*" -n
+
+## [2026-05-06 10:16:25 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: run_remote_command: find /root/aads -name "*.py" -path "*pc*agent*" -not -path "*/node_modules/*" -n
+
+## [2026-05-06 10:16:31 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: cd /tmp/aads-wt-runner-1de4489e && git diff HEAD~1 -- aads-dashboard/src/app/cha
+
+## [2026-05-06 10:19:20 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch:     except (WebSocketDisconnect, asyncio→    except (WebSocketDisconnect, asyncio
+
+## [2026-05-06 10:19:24 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: run_remote_command: sed -n '30,130p' /root/aads/aads-dashboard/src/services/chatApi.ts
+
+## [2026-05-06 10:19:25 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: run_remote_command: cd /tmp/aads-wt-runner-567dd48a && git diff HEAD~1 -- app/services/pc_agent_mana

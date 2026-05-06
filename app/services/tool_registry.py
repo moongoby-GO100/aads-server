@@ -97,6 +97,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "pc_execute": False,              # 상시 로드 — 연결된 PC Agent 명령 실행 (deprecated → device_execute)
     "pc_list_agents": False,          # 상시 로드 — 연결된 PC Agent 조회 (deprecated → device_list)
     # ── 통합 디바이스 도구 (AADS-230) ────────────────────────────────────
+    "device_command": False,          # 상시 로드 — Android 통합 device_command
     "device_execute": False,          # 상시 로드 — PC/Android/iOS 통합 디바이스 명령
     "device_list": False,             # 상시 로드 — 연결된 디바이스 목록
     # ── 미디어/생성 도구 ──────────────────────────────────────────────
@@ -791,6 +792,47 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "type": "object",
             "properties": {},
             "required": [],
+        },
+    },
+    "device_command": {
+        "name": "device_command",
+        "description": (
+            "Android 디바이스에 통합 device_command를 실행합니다. "
+            "지원 명령: screenshot, install_apk, list_apps, tap, swipe, input_text, get_device_info. "
+            "device_id를 생략하면 연결된 단일 디바이스를 자동 선택합니다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "device_id": {
+                    "type": "string",
+                    "description": "대상 Android 디바이스 ID 또는 Android Agent ID (1대 연결 시 생략 가능)",
+                },
+                "command": {
+                    "type": "string",
+                    "enum": [
+                        "screenshot",
+                        "install_apk",
+                        "list_apps",
+                        "tap",
+                        "swipe",
+                        "input_text",
+                        "get_device_info",
+                    ],
+                    "description": "실행할 Android device_command",
+                },
+                "args": {
+                    "type": "object",
+                    "description": (
+                        "명령별 파라미터. "
+                        "예: tap→{\"x\":120,\"y\":240}, "
+                        "swipe→{\"x1\":100,\"y1\":500,\"x2\":100,\"y2\":120,\"duration_ms\":400}, "
+                        "install_apk→{\"apk_path\":\"/tmp/app.apk\"}"
+                    ),
+                    "default": {},
+                },
+            },
+            "required": ["command"],
         },
     },
     "device_execute": {
@@ -2228,7 +2270,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
-    "action": ["directive_create", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file"],
+    "action": ["directive_create", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "device_command"],
     "search": ["search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)

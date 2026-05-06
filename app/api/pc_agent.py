@@ -206,8 +206,12 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
                 )
 
     except (WebSocketDisconnect, asyncio.TimeoutError) as exc:
-        logger.info("pc_agent_ws_disconnected agent_id=%s reason=%s", agent_id, type(exc).__name__)
-        await _record_agent_event(agent_id, "disconnected", reason=type(exc).__name__)
+        close_code = getattr(exc, 'code', None)
+        reason_detail = type(exc).__name__
+        if close_code is not None:
+            reason_detail = f"{reason_detail} code={close_code}"
+        logger.info("pc_agent_ws_disconnected agent_id=%s reason=%s", agent_id, reason_detail)
+        await _record_agent_event(agent_id, "disconnected", reason=reason_detail)
     except Exception as exc:
         logger.error("pc_agent_ws_error agent_id=%s err=%s", agent_id, exc)
         await _record_agent_event(agent_id, "error", reason=str(exc)[:300])
