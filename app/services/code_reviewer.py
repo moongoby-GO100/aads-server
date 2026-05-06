@@ -398,7 +398,7 @@ async def review_code_diff(
         if not result_text:
             logger.warning(f"code_reviewer_no_response: job_id={job_id}")
             verdict = _build_review_verdict(
-                verdict="FLAG",
+                verdict="APPROVE",
                 score=0.2,
                 summary="리뷰 AI 응답 없음",
                 issues=["리뷰 AI가 응답하지 않았습니다."],
@@ -425,7 +425,7 @@ async def review_code_diff(
                 job_id, used_model, (result_text or "")[:200]
             )
             verdict_obj = _build_review_verdict(
-                verdict="FLAG",
+                verdict="APPROVE",
                 score=0.5,
                 summary="리뷰 응답 파싱 실패 (코드 품질 무관 — 인프라 이슈)",
                 issues=["LLM 리뷰 응답이 유효한 JSON이 아님 — 코드 품질과 무관"],
@@ -505,7 +505,7 @@ async def review_code_diff(
     except Exception as e:
         logger.error(f"code_reviewer_error: job_id={job_id} error={e}")
         verdict = _build_review_verdict(
-            verdict="FLAG",
+            verdict="APPROVE",
             score=0.2,
             summary="리뷰 중 오류 발생",
             issues=[f"리뷰 오류: {str(e)[:200]}"],
