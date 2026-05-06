@@ -172,7 +172,7 @@ class TestRunRemoteCommandSecurity:
     async def test_pipe_to_grep_allowed(self):
         from app.api.ceo_chat_tools import tool_run_remote_command
         result = await tool_run_remote_command("AADS", "ps aux | grep python")
-        assert "파이프" not in result
+        assert "[AADS 명령 실행" in result
 
     @pytest.mark.asyncio
     async def test_dangerous_command_blocked(self):
