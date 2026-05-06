@@ -1,6 +1,12 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-06)
+- **NewTalk V1 E2E 계정 env/Vault 관리**:
+  - `.env.e2e.local`에 뉴톡V1 관리자/도매/소매 E2E 계정을 로컬 전용으로 저장하고 `.gitignore`에 `.env.*` 예외 규칙을 보강했다. 실제 비밀번호는 git 추적 대상에서 제외한다.
+  - `.env.e2e.example`에 키 이름과 로그인 URL 템플릿을 추가했다. 관리자/도매는 V1 `https://newtalk.kr/auth/login`, 소매는 `https://pick.newtalk.kr/auth/login` 기준이다.
+  - `scripts/seed_e2e_credentials.py`를 추가해 env 값을 AADS `e2e_credentials` Credential Vault에 암호화 저장할 수 있게 했다.
+
+## 현재 진행 상태 (2026-05-06)
 - **대시보드 정적 reports HTML 공개 경로 복구 (2026-05-06 14:46 KST)**:
   - 증상: `https://aads.newtalk.kr/reports/20260506_newtalk_ai_virtual_model_fitting_service_plan.html` 접속 시 로그인 페이지로 `307` 리다이렉트되어 브라우저에서 보고서가 열리지 않았다.
   - 원인: HTML 파일은 `aads-dashboard/public/reports/` 및 운영 컨테이너 `/app/public/reports/`에 존재했지만, Next.js `src/middleware.ts`의 인증 미들웨어가 `/reports/*.html` 정적 파일까지 보호 경로로 처리했다.
