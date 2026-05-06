@@ -259,6 +259,22 @@ class PCAgentManager:
             if not subs:
                 del self._streaming_subscribers[agent_id]
 
+    # ── 종료 ──────────────────────────────────────────────────────
+
+    async def close_all_connections(self, reason: str = "server_shutdown") -> int:
+        """모든 에이전트 연결을 1012로 정상 종료."""
+        closed = 0
+        for agent_id, conn in list(self._agents.items()):
+            try:
+                await conn.websocket.close(code=1012, reason=reason)
+                closed += 1
+            except Exception:
+                pass
+        self._agents.clear()
+        self._streaming_subscribers.clear()
+        logger.info("pc_agent_all_connections_closed count=%d reason=%s", closed, reason)
+        return closed
+
     # ── 조회 ──────────────────────────────────────────────────────
 
     def list_agents(self) -> list[AgentInfo]:
@@ -269,6 +285,9 @@ class PCAgentManager:
         """특정 에이전트 정보 조회."""
         conn = self._agents.get(agent_id)
         return conn.info if conn else None
+
+    def connected_count(self) -> int:
+        return len(self._agents)
 
     # ── Android device_command ───────────────────────────────────────
 

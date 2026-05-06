@@ -170,3 +170,8 @@ im
 
 ## [2026-05-06 10:19:25 KST] [aads-server] app/api/pc_agent.py
 - Chat-Direct 수정: run_remote_command: cd /tmp/aads-wt-runner-567dd48a && git diff HEAD~1 -- app/services/pc_agent_mana
+
+## [2026-05-06 10:59:09 KST] [aads-server] app/services/pc_agent_manager.py
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server; python3 -c "
+import re
+f = 'app/services/pc_agent_man

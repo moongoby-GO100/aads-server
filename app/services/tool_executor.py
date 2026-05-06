@@ -8,9 +8,11 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import hashlib
+import inspect
 import json
 import logging
 import os
+import re
 import shlex
 import uuid
 from collections import OrderedDict
@@ -181,6 +183,7 @@ class ToolExecutor:
         # execution_id별 읽기 도구 결과 캐시 (executor 생명주기 = execution 생명주기)
         self._execution_cache: dict[str, OrderedDict[str, str]] = {}
         self._session_execution_ids: dict[str, str] = {}
+        self._registry: Optional[Any] = None
 
     async def _resolve_execution_id(self, tool_input: Dict[str, Any]) -> str:
         execution_id = str(tool_input.get("execution_id", "") or "").strip()
@@ -372,6 +375,7 @@ class ToolExecutor:
             "inspect_service":        self._inspect_service,
             "get_all_service_status": self._get_all_service_status,
             "generate_directive":     self._generate_directive,
+            "tool_layer_audit":       self._tool_layer_audit,
             # AADS-186E-1 크롤링 도구
             "jina_read":              self._jina_read,
             "crawl4ai_fetch":         self._crawl4ai_fetch,
@@ -466,6 +470,82 @@ class ToolExecutor:
         if fn is None:
             return {"error": f"unknown_tool: {tool_name}"}
         return await fn(tool_input)
+
+    def _get_dispatch_tool_names(self) -> set[str]:
+        """_dispatch 소스를 파싱해 등록된 도구 키 목록을 반환."""
+        try:
+            source = inspect.getsource(self._dispatch)
+        except Exception as e:
+            logger.warning("tool_layer_audit_dispatch_source_error: %s", e)
+            return set()
+        pattern = r'^\s*"([^"]+)":\s*self\._[A-Za-z0-9_]+'
+        return {m.group(1) for m in re.finditer(pattern, source, re.MULTILINE)}
+
+    def _get_mcp_tool_names(self) -> set[str]:
+        """MCP 노출 도구명 목록을 런타임 import로 반환."""
+        try:
+            from app.api import ceo_chat_tools
+        except Exception as e:
+            logger.warning("tool_layer_audit_mcp_import_error: %s", e)
+            return set()
+
+        tool_defs = getattr(ceo_chat_tools, "CEO_CHAT_TOOLS", None)
+        if not tool_defs:
+            tool_defs = getattr(ceo_chat_tools, "TOOL_DEFINITIONS", [])
+
+        names: set[str] = set()
+        for item in tool_defs or []:
+            name = ""
+            if isinstance(item, dict):
+                name = str(item.get("name") or "").strip()
+            elif isinstance(item, str):
+                name = item.strip()
+            else:
+                name = str(getattr(item, "name", "") or "").strip()
+            if name:
+                names.add(name)
+        return names
+
+    async def _tool_layer_audit(self, inp: Dict[str, Any]) -> Any:
+        """MCP↔Registry↔Executor 3-Layer 도구 정합성 검사."""
+        fix = bool(inp.get("fix", False))
+
+        if self._registry is None:
+            from app.services.tool_registry import ToolRegistry
+
+            self._registry = ToolRegistry()
+
+        registry_tools = set(self._registry.get_all_tools().keys())
+        executor_tools = self._get_dispatch_tool_names()
+        mcp_tools = self._get_mcp_tool_names()
+
+        registry_only = sorted(registry_tools - executor_tools)
+        executor_only = sorted(executor_tools - registry_tools)
+        mcp_only = sorted(mcp_tools - (registry_tools | executor_tools))
+        not_in_mcp = sorted((registry_tools | executor_tools) - mcp_tools)
+        all_aligned = not registry_only and not executor_only and not mcp_only
+
+        fix_applied = False
+        if fix:
+            logger.info(
+                "tool_layer_audit_fix_requested: registry_only=%s executor_only=%s mcp_only=%s",
+                registry_only,
+                executor_only,
+                mcp_only,
+            )
+
+        return {
+            "registry_only": registry_only,
+            "executor_only": executor_only,
+            "mcp_only": mcp_only,
+            "not_in_mcp": not_in_mcp,
+            "all_aligned": all_aligned,
+            "total_registry": len(registry_tools),
+            "total_executor": len(executor_tools),
+            "total_mcp": len(mcp_tools),
+            "fix": fix,
+            "fix_applied": fix_applied,
+        }
 
     # ── system 도구 ─────────────────────────────────────────────────────────
 

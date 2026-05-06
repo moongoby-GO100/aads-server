@@ -38,6 +38,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "semantic_code_search": True,
     "analyze_changes": True,
     "inspect_service": True,
+    "tool_layer_audit": True,
     # ── Tier 3: 액션/실행 ────────────────────────────────────────────────
     "directive_create": False,           # 지시서 — 핵심 액션
     "generate_directive": False,
@@ -1217,6 +1218,21 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             },
         ],
     },
+    "tool_layer_audit": {
+        "name": "tool_layer_audit",
+        "description": "3-Layer 도구 아키텍처 정합성 검사 (MCP↔Registry↔Executor)",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "fix": {
+                    "type": "boolean",
+                    "description": "true면 자동 수정 시도",
+                    "default": False,
+                },
+            },
+            "required": [],
+        },
+    },
     # ── AADS-186E-2: PTC 도구 ─────────────────────────────────────────────────
     "code_execution": {
         "type": "code_execution_20250825",
@@ -2273,6 +2289,7 @@ _GROUPS: Dict[str, List[str]] = {
     "action": ["directive_create", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "device_command"],
     "search": ["search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
+    "ops": ["tool_layer_audit"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
     "browser": ["read_remote_file", "list_remote_dir", "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "capture_screenshot", "browser_click", "browser_fill", "browser_tab_list"],
     # AADS-188C Phase 2: 메타 도구 그룹 (Orchestrator)
@@ -2400,6 +2417,9 @@ class ToolRegistry:
 
     def list_all(self) -> List[str]:
         return list(_TOOLS.keys())
+
+    def get_all_tools(self) -> Dict[str, Dict[str, Any]]:
+        return dict(_TOOLS)
 
     def list_groups(self) -> Dict[str, List[str]]:
         return dict(_GROUPS)
