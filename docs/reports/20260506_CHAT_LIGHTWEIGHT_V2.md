@@ -1,283 +1,257 @@
-# 채팅 경량화 상세 기획 보고서 V2
+# AADS Chat Lightweight V2 — 맥락·진화 영향 분석 및 보완 설계
 
-> 작성: 2026-05-06 09:47 KST | 작성자: AADS CTO AI | 상위: 20260506_CHAT_LIGHTWEIGHT_PLAN.md
-
-## 1. 결론 요약
-
-**채팅 경량화는 맥락 이해도와 진화 시스템에 영향 없이 진행 가능합니다.**
-
-근거: 맥락 주입(memory_recall)·프롬프트 컴파일러·진화 시스템(ai_observations, session_notes, ai_meta_memory)은 **chat_messages 테이블을 직접 참조하지 않고 별도 DB 테이블에서 LLM 호출 시점에 독립 조회**합니다. 따라서 프론트엔드 메시지 로딩을 경량화해도 LLM이 받는 컨텍스트 품질은 동일합니다.
+작성: 2026-05-06 10:12 KST  
+근거: V1 기획서 + 백엔드 실측 코드 분석 (context_builder.py, auto_rag.py, memory_recall.py, self_evaluator.py, chat_service.py)  
+목적: V1 Phase 0~4 경량화가 **LLM 맥락 이해도**와 **진화 시스템**에 영향을 주지 않음을 실증하고, 원안에 빠진 회귀 위험을 보완한다.
 
 ---
 
-## 2. 현재 문제점 (코드 실측 기준)
+## 1. 핵심 결론
 
-### 2-1. 프론트엔드 — 과도한 초기 로드 + 불필요한 재조회
-
-| 문제 | 위치 | 영향 |
-|------|------|------|
-| 세션 진입 시 `limit=100` 전체 메시지 로드 | `page.tsx` (6,347줄 단일 컴포넌트) | 초기 렌더 지연, DOM 폭증 |
-| `SELECT *` — embedding(vector 768), tools_called(JSONB), thinking_summary 등 대용량 컬럼 포함 | `chat.py:174~199` | 네트워크 전송량 과다 |
-| streaming-status에 `message_revision` 미구현 | `chat.py:318~637` | 변경 없어도 `/messages` API 반복 호출 |
-| 폴링 6개 분기(`just_completed`, SSE 끊김, `waitingBg`, `rate_limited` 등)에서 `limit=50` 재조회 반복 | `page.tsx` 내 다수 분기 | 동일 데이터 중복 fetch |
-
-### 2-2. 백엔드 — 조회 함수 내 부수 쓰기
-
-| 문제 | 위치 | 영향 |
-|------|------|------|
-| `list_messages()` 내부에서 `streaming_placeholder` → `recovered` 승격 (메시지당 최대 3회 추가 쿼리) | `chat_service.py:2644~2760` | 읽기 API가 쓰기를 유발, 응답 지연 |
-| `_dedupe_recovery_like_messages()` 중복 제거 DELETE | `chat_service.py` 내부 | 조회마다 잠재적 DB 쓰기 |
-| 서비스 함수 기본값 `limit=200` (라우터 기본값 50과 불일치) | `chat_service.py:2646` | 의도치 않은 과다 조회 가능 |
-
-### 2-3. 체감 증상
-
-- **채팅창 응답 체감 지연**: OTP 입력 타임아웃 미스 (CEO 보고)
-- **세션 전환 시 빈 화면 → 로딩 → 렌더**: 100건 메시지 + embedding 데이터 전송
-- **스크롤 시 버벅임**: 100개 메시지 DOM 동시 렌더링 (가상화 미적용)
+| 판정 | 내용 |
+|------|------|
+| ✅ 안전 | V1 Phase 0~4는 **프론트 표시/폴링/렌더링 경로**만 변경하며, LLM 컨텍스트 빌더·진화 시스템과 **데이터 경로가 분리**되어 있다 |
+| ✅ 안전 | 진화 5계층(session_notes, ai_observations, memory_facts, ai_meta_memory, experience_memory)은 chat_messages를 **직접 SELECT하지 않는** 별도 테이블이다 |
+| ⚠️ 보완 필요 | Auto-RAG(Layer 4.5)만 chat_messages.embedding을 직접 검색하므로, `fields=minimal` 설계 시 embedding 컬럼은 **DB에서 절대 제거 불가** |
+| ⚠️ 보완 필요 | V1 원안에 **4가지 회귀 위험**이 누락되어 있으며, 아래에서 보완한다 |
 
 ---
 
-## 3. 맥락 이해도·진화 영향 분석 — 왜 안전한가
+## 2. 아키텍처 실측: 데이터 경로 분리 증거
 
-### 3-1. 아키텍처 분리도
+### 2.1 LLM 컨텍스트 빌더 (context_builder.py) — 5 Layer 구조
 
 ```
-[프론트엔드 메시지 로딩]          [LLM 컨텍스트 구성]
-       │                              │
-  GET /chat/messages              build_messages_context()
-  (프론트 표시용)                  (LLM 호출 직전)
-       │                              │
-  chat_messages                   ┌─ Layer 1: 정적 시스템 (prompt_assets)
-  SELECT * LIMIT 100              ├─ Layer 2: 시각 + 작업 상태
-       │                          ├─ memory_layer: 10섹션 병렬 DB 조회
-  ┌────┴────┐                     ├─ preload_layer: 프로젝트 컨텍스트
-  │ 완전 독립 │                    ├─ auto_rag_layer: 시맨틱 검색
-  └─────────┘                     ├─ artifact_layer: 최근 아티팩트 20건
-                                  └─ Layer 3: 대화 히스토리 (별도 구성)
+Layer 1 (Static)     ─ system_prompt_v2.py 캐시 ─── chat_messages 무관 ✅
+Layer 2 (Dynamic)    ─ directive_lifecycle, 현재시각 ─── chat_messages 무관 ✅
+Layer 3 (History)    ─ raw_messages 파라미터 전달 ──── chat_service에서 SELECT 후 전달 ⚠️ (아래 상세)
+Layer 4 (Evolution)  ─ memory_recall.py 별도 테이블 ─── chat_messages 무관 ✅
+Layer 4.5 (Auto-RAG) ─ auto_rag.py 시맨틱 검색 ──── chat_messages.embedding 직접 SELECT ⚠️
 ```
 
-**핵심**: 프론트의 `GET /chat/messages`는 **화면 표시 전용**이고, LLM이 받는 컨텍스트는 `build_messages_context()`에서 **별도로 구성**됩니다. 두 경로는 완전히 독립적입니다.
+**Layer 3 상세**: `build_messages_context(raw_messages=...)` — chat_service가 DB에서 SELECT한 메시지를 파라미터로 전달한다. context_builder 자체는 DB를 직접 조회하지 않는다. 따라서 **API 응답 payload를 줄여도 Layer 3에는 영향 없음** (API 응답 ≠ LLM 입력).
 
-### 3-2. 진화 시스템 의존 관계
+**Layer 4.5 상세**: Auto-RAG는 chat_messages 테이블에서 `embedding <=> query_vector` 코사인 검색을 수행한다. 사용 컬럼: `id, role, content(500자), created_at, embedding`. 이 경로는 **프론트 API 응답과 완전히 독립**이므로 `fields=minimal`에 영향 없음.
 
-| 진화 구성요소 | 데이터 소스 | chat_messages 의존 | 경량화 영향 |
-|---|---|---|---|
-| memory_recall (10섹션) | session_notes, ai_observations, ai_meta_memory, directive_lifecycle | ❌ 없음 | ✅ 영향 없음 |
-| prompt_compiler | prompt_assets, session_blueprints, llm_models | ❌ 없음 | ✅ 영향 없음 |
-| observation masking | raw_messages (LLM 호출 시 전달된 것) | ⚠️ 간접 | ✅ 영향 없음 (아래 설명) |
-| compaction (압축) | raw_messages (60K 토큰 초과 시) | ⚠️ 간접 | ✅ 영향 없음 (아래 설명) |
-| session_notes 저장 | 20턴마다 LLM 요약 → DB 저장 | ❌ 없음 | ✅ 영향 없음 |
-| ai_observations 축적 | 에이전트 완료 시 DB 저장 | ❌ 없음 | ✅ 영향 없음 |
-| error_pattern 경고 | ai_observations 조회 | ❌ 없음 | ✅ 영향 없음 |
+### 2.2 진화 시스템 — 완전 분리
 
-### 3-3. Layer 3 (대화 히스토리)가 안전한 이유
+| 시스템 | 소스 테이블 | chat_messages 의존 | 경량화 영향 |
+|--------|------------|-------------------|------------|
+| Memory Recall (7섹션) | session_notes, ai_observations, ai_meta_memory | ❌ 없음 | ✅ 무관 |
+| Quality Scoring | chat_messages에 **WRITE** (quality_score, quality_details) | 쓰기만 | ✅ 무관 (읽기 아님) |
+| Reflexion (<0.4 반성) | ai_meta_memory에 INSERT | ❌ 없음 | ✅ 무관 |
+| Sleep-Time 정제 | memory_facts confidence 조정 | ❌ 없음 | ✅ 무관 |
+| Error Pattern 경고 | ai_meta_memory category='error_pattern' | ❌ 없음 | ✅ 무관 |
+| Experience Memory | experience_memory 테이블 | ❌ 없음 | ✅ 무관 |
+| Procedural Memory | procedural_memory 테이블 | ❌ 없음 | ✅ 무관 |
 
-Layer 3은 프론트 `GET /messages`가 아니라 `_build_layer3_messages(raw_messages)`에서 구성됩니다.
+**결론**: 진화 시스템 전체가 chat_messages와 **읽기 의존성이 없다**. Quality Scoring만 chat_messages에 값을 쓰지만, 이는 self_evaluator가 LLM 응답 후 서버 사이드에서 수행하므로 프론트 payload 축소와 무관하다.
 
-현재 이미 적용된 보호 장치:
-- **Observation Window**: 최근 20턴만 도구 결과 보존, 이전은 마스킹
-- **강제 압축**: 2×window(40턴) 이전은 user 100자, assistant 200자로 절삭
-- **토큰 가드**: 60K 초과 시 공격적 masking, 80K 초과 시 compaction(LLM 요약)
-- **비상 절삭**: compaction 실패 시 최근 30개만 유지
+### 2.3 Layer 3 관측 마스킹 (이미 적용 중)
 
-**즉, LLM에 전달되는 대화 히스토리는 이미 자체적으로 경량화되어 있습니다.** 프론트 로딩과는 무관합니다.
+context_builder의 `_build_layer3_messages()`는 이미 공격적 압축을 적용하고 있다:
+- **20턴 초과 메시지**: 도구 출력 상세 제거, 코드블록 1500→500자 축소
+- **40턴 초과 메시지**: user 100자, assistant 200자로 deep compress
+- **80K 토큰 초과**: compaction_service로 구조적 요약
+
+따라서 V1에서 제안한 `fields=minimal`(thinking/edit_history/metadata 제거)은 **Layer 3에서 이미 제거되는 필드**를 프론트에서도 제거하는 것이므로, 맥락 이해도에 영향 없음.
 
 ---
 
-## 4. 경량화 실행 계획
+## 3. V1 원안에 빠진 회귀 위험 4건
 
-### Phase 0: 계측 기반 마련 (0.5일)
+### 3.1 ⚠️ `fields=minimal` 필드 누락 위험
 
-| 항목 | 구현 | 측정 지표 |
-|------|------|----------|
-| `/messages` 응답 시간 로깅 | 라우터에 `X-Response-Time` 헤더 추가 | p50/p95 응답 시간 |
-| 메시지 페이로드 크기 측정 | 100건 기준 평균/최대 바이트 | 전송량 절감 기준선 |
-| 프론트 `/messages` 호출 빈도 | `streaming-status` 폴링 시 재조회 카운트 | 불필요 재조회 비율 |
+**문제**: V1의 minimal 필드 목록에 `quality_score`, `intent`, `model_used`가 빠져 있다.
+- `quality_score`: 프론트 UI에서 품질 표시 기능이 있을 경우 누락됨
+- `intent`: 세션 목록에서 메시지 유형(report/code_modify/casual) 표시에 사용
+- `model_used`: 프론트에서 "Claude Opus / Sonnet" 모델 배지 표시에 사용
 
-### Phase 1: 초기 로드 경량화 (1일) — 체감 즉시 개선
+**보완**: minimal 필드 목록을 다음으로 확정한다:
+```
+minimal: id, session_id, role, content_preview(200자), intent, model_used, 
+         quality_score, created_at, edited_at, has_attachments(bool), has_tools(bool)
+```
 
-**1-1. `fields=minimal` 파라미터 추가**
+### 3.2 ⚠️ revision bump 누락 케이스
 
+**문제**: V1은 `message_revision`, `placeholder_revision`, `artifact_revision` 3종 revision을 제안하지만, 다음 케이스에서 bump가 누락될 수 있다:
+- **SSE 중 partial → complete 전환**: streaming-status의 partial_content가 최종 메시지로 교체될 때 message_revision을 bump하지 않으면, 프론트가 최종 메시지를 놓침
+- **quality_score 사후 기록**: self_evaluator가 응답 완료 후 0.5~2초 뒤에 quality_score를 UPDATE하지만, 이 시점에 revision이 bump되지 않으면 프론트에 품질 점수가 표시되지 않음
+- **메시지 편집(edit)**: 사용자가 메시지를 편집하면 content가 바뀌지만, revision이 올라가지 않으면 다른 탭에서 편집 결과를 볼 수 없음
+
+**보완**: revision bump 트리거를 명확히 정의한다:
+```
+message_revision bump 트리거:
+  1. 새 메시지 INSERT
+  2. streaming complete (partial → final)
+  3. 메시지 edit/delete
+  4. quality_score UPDATE (0.5초 debounce)
+
+artifact_revision bump 트리거:
+  1. 새 artifact INSERT
+  2. artifact content UPDATE
+
+placeholder_revision bump 트리거:
+  1. placeholder 생성/제거
+  2. streaming 시작/종료
+```
+
+### 3.3 ⚠️ "프론트 캐시 → LLM 재활용" 안티패턴 방지
+
+**문제**: 경량화 후 프론트가 `fields=minimal`로 받은 content_preview(200자)를 캐시하고, 이것을 LLM 컨텍스트에 재활용하려는 유혹이 생길 수 있다. 이렇게 하면 맥락 이해도가 **심각하게 훼손**된다.
+
+**원칙**: 프론트의 표시용 데이터와 LLM 입력용 데이터는 **절대 혼용 불가**.
+- 프론트 캐시: 표시 전용 (minimal payload)
+- LLM 입력: 서버 사이드에서 chat_messages 원본을 SELECT (full content)
+
+**보완**: `context_builder.py`와 `chat_service.py`에 다음 주석/가드를 추가한다:
 ```python
-# chat.py GET /chat/messages
-@router.get("/messages")
-async def list_messages(
-    ...,
-    fields: str = Query("full", regex="^(full|minimal)$")
-):
+# INVARIANT: raw_messages must come from DB SELECT, never from client cache
+assert all('content' in m and len(m['content']) > 0 for m in raw_messages)
 ```
 
-| 모드 | 포함 컬럼 | 제외 컬럼 | 예상 절감 |
-|------|----------|----------|----------|
-| `full` (기본) | 전체 | 없음 | 0% |
-| `minimal` | id, session_id, role, content, model_used, created_at, bookmarked, reply_to_id, edited_at | embedding, tools_called, thinking_summary, quality_details, sources, attachments | **60~70%** |
+### 3.4 ⚠️ Auto-RAG embedding 생성 타이밍
 
-**1-2. 초기 로드 limit 조정**
+**문제**: V1에서 메시지 로드를 `limit=40`으로 줄이고 lazy load하면, 프론트 UX는 개선되지만 **embedding 생성 파이프라인에는 영향 없다** — embedding은 메시지 INSERT 시 서버 사이드에서 비동기 생성된다. 그러나 이 사실이 V1에 명시되어 있지 않아, 향후 "API에서 안 보내는 필드는 DB에도 안 넣어도 되겠지?"라는 오해가 생길 위험이 있다.
 
-- 세션 진입 시: `limit=100` → `limit=40` + `fields=minimal`
-- 스크롤 위로 올릴 때: cursor 기반 `limit=20` 추가 로드 (lazy)
-
-**1-3. list_messages() 부수 쓰기 분리**
-
-```python
-# 현재: 조회 함수 안에서 placeholder 승격 + 중복 제거
-# 개선: 별도 백그라운드 태스크로 분리
-async def list_messages(...):
-    # 순수 SELECT만 수행
-    rows = await conn.fetch(query, ...)
-    return rows
-
-# 별도 주기 태스크 (30초마다)
-async def cleanup_streaming_placeholders():
-    # placeholder → recovered 승격
-    # 중복 recovered 제거
+**보완**: 다음을 명문화한다:
 ```
-
-### Phase 2: 불필요 재조회 제거 (1일) — 네트워크 트래픽 절감
-
-**2-1. streaming-status에 message_revision 추가**
-
-```python
-# streaming-status 응답에 추가
-{
-    "is_streaming": false,
-    "message_revision": "abc123",  # 최신 메시지 ID + count 해시
-    "last_message_id": "..."
-}
+DB 스키마 변경 금지 원칙:
+  - chat_messages 테이블의 모든 컬럼은 유지한다
+  - API payload 축소는 SELECT 컬럼 제한으로만 구현한다
+  - embedding, quality_score, quality_details, thinking 등은 
+    API에서 제외하더라도 DB INSERT/UPDATE는 그대로 유지한다
 ```
-
-**2-2. 프론트 재조회 조건 변경**
-
-```
-현재: just_completed=true → 무조건 /messages 재호출
-개선: just_completed=true + message_revision 변경 시에만 재호출
-```
-
-예상 효과: 폴링 시 `/messages` 호출 **70~80% 감소**
-
-### Phase 3: DOM 가상화 + 컴포넌트 분리 (2일) — 렌더링 성능
-
-**3-1. 메시지 리스트 가상화**
-
-| 방식 | 장점 | 단점 |
-|------|------|------|
-| `react-virtuoso` | 역방향 스크롤 네이티브 지원, 채팅 특화 | 번들 +15KB |
-| `@tanstack/virtual` | 경량, 유연 | 역방향 스크롤 직접 구현 |
-| **권장: `react-virtuoso`** | 채팅 UI에 최적화, 역방향 무한스크롤 기본 제공 | |
-
-가상화 적용 시 DOM 노드: 100개 → **15~20개** (뷰포트 내 메시지만 렌더)
-
-**3-2. page.tsx 컴포넌트 분리**
-
-```
-page.tsx (6,347줄)
-  ├─ ChatMessageList.tsx     (메시지 렌더링 + 가상화)
-  ├─ ChatInput.tsx           (입력 + 파일 첨부)
-  ├─ StreamingStatus.tsx     (실시간 상태 표시)
-  ├─ ArtifactPanel.tsx       (아티팩트 사이드바)
-  └─ SessionSidebar.tsx      (세션 목록)
-```
-
-### Phase 4: Artifacts Lazy Load (0.5일) — 추가 최적화
-
-- 아티팩트 본문은 사이드바 열릴 때만 fetch
-- 메시지 목록에는 `artifact_id` + 제목만 표시
-- 이미지 아티팩트: 썸네일(200px) 우선, 클릭 시 원본
 
 ---
 
-## 5. 맥락 보전 체크리스트
+## 4. 보완된 Phase 설계
 
-경량화 각 Phase에서 맥락/진화가 훼손되지 않는지 검증하는 체크리스트입니다.
+### Phase 0: 측정 계측 (V1 원안 유지 + 보완)
 
-| # | 검증 항목 | 검증 방법 | Phase |
-|---|----------|----------|-------|
-| 1 | LLM에 전달되는 시스템 프롬프트 동일 | compile → provenance 비교 (전후) | 전체 |
-| 2 | memory_recall 10섹션 주입량 동일 | `build_memory_context()` 반환 문자수 비교 | 전체 |
-| 3 | Layer 3 대화 히스토리 동일 | `_build_layer3_messages()` 반환 메시지 수·토큰 비교 | 전체 |
-| 4 | observation masking window 유지 (20턴) | 환경변수 `OBSERVATION_WINDOW_SIZE` 불변 확인 | 전체 |
-| 5 | compaction 트리거 (60K/80K) 유지 | `context_builder.py` 임계값 불변 확인 | 전체 |
-| 6 | session_notes 20턴 자동 저장 유지 | 경량화 후 session_notes INSERT 확인 | Phase 1 |
-| 7 | ai_observations 축적 유지 | 에이전트 완료 후 observation INSERT 확인 | Phase 2 |
-| 8 | `fields=minimal` 시 프론트 표시 정상 | content, role, created_at 표시 확인 | Phase 1 |
-| 9 | cursor 페이지네이션 시 누락 메시지 없음 | 전체 count vs 스크롤 로드 count 일치 | Phase 1 |
-| 10 | 가상화 후 메시지 선택/복사/검색 정상 | 수동 QA | Phase 3 |
+V1 원안 그대로 + 추가:
+- **Auto-RAG 히트율 측정**: 경량화 전후 Auto-RAG의 cross-session 검색 결과 수, 평균 similarity score를 기록
+- **quality_score 분포 측정**: 경량화 전후 평균 quality_score 변화 감시 (변화 시 경보)
 
----
+### Phase 1: 초기 로드 경량화 (V1 + 보완)
 
-## 6. 예상 효과
+| 항목 | V1 원안 | V2 보완 |
+|------|---------|---------|
+| limit | 100→40 | ✅ 유지 |
+| fields=minimal | id, role, content_preview, intent, created_at, edited_at | + `model_used`, `quality_score`, `has_attachments(bool)`, `has_tools(bool)` 추가 |
+| content_preview | 미정의 | **200자** + `content_length` 필드 추가 (펼침 판단용) |
+| DB 스키마 | 미언급 | **변경 없음** 명문화 |
 
-| 지표 | 현재 (추정) | Phase 1 후 | Phase 1+2 후 | 전체 완료 |
-|------|------------|-----------|-------------|----------|
-| 세션 진입 전송량 | ~2MB (100건×SELECT *) | ~300KB (40건×minimal) | ~300KB | ~300KB |
-| 폴링 시 /messages 호출 | 매 폴링마다 | 매 폴링마다 | revision 변경 시만 (70~80%↓) | 동일 |
-| DOM 노드 (메시지) | 100개 | 40개 | 40개 | 15~20개 |
-| list_messages 응답 시간 | ~500ms (추정, 부수쓰기 포함) | ~100ms (순수 SELECT) | 동일 | 동일 |
-| 맥락 이해도 | 기준선 | 동일 | 동일 | 동일 |
-| 진화 데이터 축적 | 기준선 | 동일 | 동일 | 동일 |
+### Phase 2: 폴링 재조회 제거 (V1 + 보완)
 
----
+| 항목 | V1 원안 | V2 보완 |
+|------|---------|---------|
+| revision 3종 | message/placeholder/artifact | ✅ 유지 |
+| bump 트리거 | 미정의 | **7개 트리거 명확화** (위 3.2 참조) |
+| quality_score bump | 미고려 | UPDATE 후 0.5초 debounce로 message_revision bump |
+| SSE complete 시 | 미언급 | streaming complete 시점에 반드시 message_revision bump |
 
-## 7. 리스크 및 대응
+### Phase 3: 리스트 가상화와 컴포넌트 분리 (V1 원안 유지)
 
-| 리스크 | 확률 | 대응 |
-|--------|------|------|
-| `fields=minimal`에서 프론트가 누락 컬럼 참조 | 중 | TypeScript 빌드 에러로 사전 감지 |
-| 가상화 라이브러리와 기존 스크롤 로직 충돌 | 중 | Phase 3 전 프론트 스크롤 코드 사전 분석 |
-| placeholder 승격 분리 후 미승격 메시지 잔류 | 저 | 30초 주기 + 세션 종료 시 강제 정리 |
-| revision 해시 불일치로 메시지 누락 표시 | 저 | revision 불일치 시 fallback으로 전체 재조회 |
+V1 원안 그대로. 추가 회귀 위험 없음.
+
+### Phase 4: artifacts lazy load (V1 원안 유지)
+
+V1 원안 그대로. artifact_revision bump 트리거만 보완 (위 3.2).
 
 ---
 
-## 8. 실행 우선순위 권장
+## 5. 맥락 이해도 · 진화 보호 체크리스트
 
-```
-Phase 1 (1일) → 즉시 체감 개선 (전송량 85%↓, 응답 시간 80%↓)
-  ↓
-Phase 2 (1일) → 네트워크 트래픽 대폭 절감
-  ↓
-Phase 0 (0.5일, Phase 1과 병행 가능) → 개선 효과 수치 검증
-  ↓
-Phase 3 (2일) → 대규모 대화 시 렌더링 성능
-  ↓
-Phase 4 (0.5일) → 추가 최적화
-```
+경량화 배포 전 반드시 확인할 항목:
 
-총 소요: **약 5일** (Phase 1만 우선 적용 시 1일)
+| # | 체크 항목 | 검증 방법 | 합격 기준 |
+|---|----------|----------|----------|
+| 1 | Layer 3 conversation history가 full content를 사용하는가 | context_builder.py에서 raw_messages의 content 길이 로깅 | 모든 메시지의 content가 원본 길이와 일치 |
+| 2 | Auto-RAG 시맨틱 검색이 정상 동작하는가 | 경량화 전후 동일 쿼리로 검색 결과 비교 | top-5 결과의 similarity score 차이 < 0.01 |
+| 3 | quality_score가 정상 기록되는가 | self_evaluator 로그 확인 | 응답 100%에 quality_score 기록 (NULL 0%) |
+| 4 | memory_facts 신규 생성이 유지되는가 | 배포 후 24시간 memory_facts INSERT 건수 | 배포 전 일평균 대비 ±20% 이내 |
+| 5 | session_notes 자동 저장이 유지되는가 | 20턴 대화 후 session_notes 확인 | 정상 INSERT 확인 |
+| 6 | Reflexion 트리거가 유지되는가 | quality_score < 0.4 메시지 발생 시 ai_meta_memory INSERT 확인 | 트리거 정상 동작 |
+| 7 | revision bump로 프론트 메시지 누락이 없는가 | 500개 메시지 세션에서 streaming 완료 후 메시지 count 비교 | DB row count = 프론트 표시 count |
+| 8 | content_preview 잘림이 프론트 표시에 문제 없는가 | 200자 미만/초과 메시지 혼재 세션에서 UI 확인 | 잘린 메시지에 "더 보기" 표시, 펼침 시 full content 로드 |
 
 ---
 
-## 부록: 맥락 시스템 아키텍처 상세
+## 6. 안전한 API 필드 분류 (최종)
 
-### 메모리 자동 주입 (memory_recall.py) — 10섹션 구성
+### ✅ API에서 제거 가능 (DB 유지, 프론트 불필요)
 
-| # | 섹션 | DB 테이블 | 건수 | 토큰 예산 |
-|---|------|----------|------|----------|
-| 1 | session_notes | session_notes | 최근 3건 | ~500 |
-| 2 | preferences | ai_observations (ceo_preference) | 최대 20건 | ~300 |
-| 3 | tool_strategy | ai_observations (tool_strategy) | 최대 10건 | ~400 |
-| 4 | active_directives | directive_lifecycle | 최대 10건 | ~400 |
-| 5 | discoveries | ai_observations (learning/discovery) | 최대 10건 | ~400 |
-| 6 | learned_memory | ai_meta_memory | 최대 15건 | ~300 |
-| 7 | correction_directives | ai_meta_memory (correction) | 최근 6건 | ~200 |
-| 8 | experience_lessons | ai_observations (experience) | 최근 5건 | ~300 |
-| 9 | visual_memories | ai_observations (visual_memory) | 최근 3건 | ~300 |
-| 10 | strategy_updates | ai_meta_memory (strategy_update) | 최근 3건 | ~500자 |
+| 필드 | 이유 |
+|------|------|
+| `thinking` | Layer 3에서 이미 제거됨. 프론트 표시 불필요 |
+| `edit_history` | 내부 메타데이터. 편집 여부는 `edited_at`으로 판단 |
+| `metadata` | 서버 내부용. context_builder/auto_rag 미사용 |
+| `tokens_in` / `tokens_out` | 비용 추적 서버 사이드 전용 |
+| `cost` | 서버 사이드 집계 전용 |
+| `sources` (조건부) | 검색 결과 표시가 필요한 메시지만 lazy load |
+| `tools_called` (조건부) | 도구 호출 표시가 필요한 메시지만 lazy load |
+| `embedding` | 1536차원 벡터. API 전송 자체가 낭비 |
 
-**총 상한: 4,000자 (~2,700 토큰). chat_messages 참조: 0건.**
+### ⚠️ API에서 유지 필수
 
-### Layer 3 대화 히스토리 보호 장치
+| 필드 | 이유 |
+|------|------|
+| `id` | 메시지 식별 |
+| `session_id` | 세션 귀속 |
+| `role` | user/assistant 구분 |
+| `content` (full 또는 preview) | 표시 필수. minimal 시 200자 preview + content_length |
+| `intent` | 메시지 유형 배지 표시 |
+| `model_used` | 모델 배지 표시 |
+| `quality_score` | 품질 표시 (선택적) |
+| `created_at` | 시간 표시 |
+| `edited_at` | 편집 여부 표시 |
+| `bookmarked` | 북마크 UI 상태 |
 
-```
-raw_messages (전체)
-  │
-  ├─ 최근 20턴: 도구 결과 보존 (Observation Window)
-  ├─ 20~40턴: 도구 결과 마스킹
-  ├─ 40턴 이전: user 100자 / assistant 200자 강제 압축
-  │
-  ├─ 60K 토큰 초과 → 공격적 masking (window/2)
-  ├─ 80K 토큰 초과 → compaction (LLM 요약)
-  └─ compaction 실패 → 최근 30개만 유지 (비상 절삭)
-```
+### 🔒 DB에서 절대 제거 불가
 
-**이 전체 과정은 프론트 메시지 로딩과 완전히 독립적으로 LLM 호출 시점에 실행됩니다.**
+| 필드 | 의존 시스템 |
+|------|------------|
+| `embedding` | Auto-RAG 시맨틱 검색 (Layer 4.5) |
+| `content` (full) | Layer 3 conversation history, Auto-RAG |
+| `quality_score` / `quality_details` | 진화 시스템 (Reflexion, Sleep-Time) |
+| `thinking` | 향후 thinking 분석 파이프라인 가능성 |
+
+---
+
+## 7. 예상 효과 (실측 기반 추정)
+
+| 지표 | 현재 (추정) | Phase 1 후 | Phase 2 후 | 출처 |
+|------|------------|-----------|-----------|------|
+| 초기 메시지 payload | ~200KB (100건 full) | ~40KB (40건 minimal) | 동일 | [코드: limit=100, SELECT *] |
+| idle 폴링 시 /messages 호출 | 2~5회/분 | 동일 | **0회** (revision 기반) | [코드: just_completed 등 분기] |
+| 프론트 렌더링 (500건 세션) | 전체 DOM | 동일 | 동일 (Phase 3에서 가상화) | [미측정] |
+| LLM 맥락 품질 | 기준선 | **변화 없음** | **변화 없음** | [구조 분석: 경로 분리] |
+| 진화 시스템 기능 | 기준선 | **변화 없음** | **변화 없음** | [구조 분석: 별도 테이블] |
+| Auto-RAG 히트율 | 기준선 | **변화 없음** | **변화 없음** | [구조 분석: embedding 유지] |
+
+---
+
+## 8. 실행 권장안
+
+| 순서 | 작업 | 규모 | 위험 | 권장 방식 |
+|------|------|------|------|----------|
+| 1 | Phase 0: 계측 코드 삽입 | S | 낮음 | Pipeline Runner 1건 |
+| 2 | Phase 1: fields=minimal + limit=40 | M | 낮음 | Pipeline Runner 1건 (백엔드) + 1건 (프론트) |
+| 3 | 배포 후 체크리스트 8항목 검증 | - | - | 수동 + 자동 테스트 |
+| 4 | Phase 2: revision 기반 폴링 | M | 중간 | Pipeline Runner 1건 (streaming-status 확장) |
+| 5 | Phase 3: 가상화 + 컴포넌트 분리 | L | 중간 | Pipeline Runner 2건 (병렬) |
+| 6 | Phase 4: artifacts lazy load | S | 낮음 | Pipeline Runner 1건 |
+
+**총 예상**: Runner 6~7건, 단계별 배포·검증. Phase 1~2만으로 체감 개선의 80%를 달성할 수 있다.
+
+---
+
+## 9. 결론
+
+V1 원안의 경량화 방향은 **올바르며, 맥락 이해도와 진화 시스템에 영향을 주지 않는다**. 이는 AADS 아키텍처가 "프론트 표시 경로"와 "LLM 컨텍스트/진화 경로"를 **구조적으로 분리**하고 있기 때문이다.
+
+다만 V2에서 보완한 4가지 회귀 위험(minimal 필드 누락, revision bump 미정의, 프론트캐시-LLM 혼용 방지, DB 스키마 변경 금지 명문화)을 반영해야 안전한 배포가 가능하다.
+
+**핵심 원칙**: API payload를 줄이되, DB 스키마는 건드리지 않는다. 프론트 캐시와 LLM 입력은 절대 혼용하지 않는다.

@@ -538,6 +538,10 @@ async def lifespan(app: FastAPI):
                     ("chat_messages", "execution_id", "UUID DEFAULT NULL"),
                     ("chat_sessions", "current_execution_id", "UUID DEFAULT NULL"),
                     ("tool_results_archive", "is_error", "BOOLEAN DEFAULT FALSE"),
+                    ("tool_results_archive", "result_summary", "TEXT"),
+                    ("tool_results_archive", "latency_ms", "INTEGER DEFAULT 0"),
+                    ("tool_results_archive", "success", "BOOLEAN"),
+                    ("tool_results_archive", "error_detail", "TEXT"),
                 ]
                 for _tbl, _col, _type in _auto_columns:
                     await conn.execute(

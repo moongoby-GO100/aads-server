@@ -128,3 +128,24 @@ im
 
 ## [2026-05-06 10:10:16 KST] [aads-server] app/services/pc_agent_manager.py
 - Chat-Direct 수정: patch:     def __init__(self, agent_id: str, we→    def __init__(self, agent_id: str, we
+
+## [2026-05-06 10:10:32 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: write: pc_agent/agent.py
+
+## [2026-05-06 10:10:33 KST] [aads-server] aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: cd /tmp/aads-wt-runner-27bf4563 && git diff --stat HEAD~1
+
+## [2026-05-06 10:10:34 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: run_remote_command: cd /tmp/aads-wt-runner-27bf4563 && git diff --stat HEAD~1
+
+## [2026-05-06 10:10:37 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: run_remote_command: cd /tmp/aads-wt-runner-27bf4563 && git diff --stat HEAD~1
+
+## [2026-05-06 10:10:38 KST] [aads-server] tests/unit/test_chat_service.py
+- Chat-Direct 수정: run_remote_command: cd /tmp/aads-wt-runner-27bf4563 && git diff --stat HEAD~1
+
+## [2026-05-06 10:12:58 KST] [aads-server] docs/reports/20260506_CHAT_LIGHTWEIGHT_V2.md
+- Chat-Direct 수정: write: docs/reports/20260506_CHAT_LIGHTWEIGHT_V2.md
+
+## [2026-05-06 10:13:04 KST] [aads-server] docs/reports/20260506_CHAT_LIGHTWEIGHT_V2.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server cat /var/log/aads-api.log 2>/dev/null | grep -i "pc_agen

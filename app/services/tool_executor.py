@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import shlex
+import time
 import uuid
 from collections import OrderedDict
 from datetime import date, datetime
@@ -270,13 +271,49 @@ class ToolExecutor:
     def clear_execution_cache(self, execution_id: str) -> None:
         self._execution_cache.pop(execution_id, None)
 
+    async def _archive_completed_tool_call(
+        self,
+        tool_name: str,
+        tool_input: Dict[str, Any],
+        raw_output: str,
+        latency_ms: int,
+        session_id: str,
+        tool_use_id: str,
+    ) -> None:
+        if not session_id or not tool_name:
+            return
+        try:
+            from app.services.tool_archive import archive_tool_execution
+
+            await archive_tool_execution(
+                session_id=session_id,
+                tool_name=tool_name,
+                input_params=tool_input,
+                raw_output=raw_output,
+                latency_ms=latency_ms,
+                tool_use_id=tool_use_id or None,
+            )
+        except Exception as exc:
+            logger.warning(
+                "tool_archive_failed: tool=%s session=%s error=%s",
+                tool_name,
+                session_id[:8],
+                str(exc)[:200],
+            )
+
     async def execute(self, tool_name: str, tool_input: Dict[str, Any]) -> str:
         """
         도구 실행. 10초 타임아웃, 결과 6000자 제한.
         실패 시 JSON error 반환.
         """
+        _started_at = time.monotonic()
+        _raw_result_for_archive = ""
+        tool_input = dict(tool_input or {})
+        _archive_tool_use_id = str(tool_input.pop("__tool_use_id", "") or "").strip()
+        _archive_session_id = str(
+            tool_input.get("session_id", "") or current_chat_session_id.get("")
+        ).strip()
         try:
-            tool_input = dict(tool_input or {})
             if tool_name in _PROJECT_SCOPED_TOOLS and not str(tool_input.get("project") or "").strip():
                 session_id = str(tool_input.get("session_id", "") or current_chat_session_id.get("")).strip()
                 inferred_project = await _infer_project_from_session(session_id)
@@ -316,11 +353,12 @@ class ToolExecutor:
                 self._dispatch(tool_name, tool_input),
                 timeout=_timeout,
             )
-            result_str = (
+            _raw_result_for_archive = (
                 json.dumps(result, ensure_ascii=False, indent=2, default=_json_default)
                 if not isinstance(result, str)
                 else result
             )
+            result_str = _raw_result_for_archive
             if len(result_str) > _MAX_RESULT_CHARS:
                 result_str = result_str[:_MAX_RESULT_CHARS] + "\n...[결과 일부 생략]"
             if cache_key and execution_id and self._should_cache_result(result_str):
@@ -331,13 +369,39 @@ class ToolExecutor:
                     tool_name,
                     len(self._execution_cache.get(execution_id, {})),
                 )
+            await self._archive_completed_tool_call(
+                tool_name=tool_name,
+                tool_input=tool_input,
+                raw_output=_raw_result_for_archive,
+                latency_ms=int((time.monotonic() - _started_at) * 1000),
+                session_id=_archive_session_id,
+                tool_use_id=_archive_tool_use_id,
+            )
             return result_str
         except asyncio.TimeoutError:
             logger.warning(f"tool_executor timeout: tool={tool_name}")
-            return json.dumps({"error": "timeout", "tool": tool_name})
+            _raw_result_for_archive = json.dumps({"error": "timeout", "tool": tool_name})
+            await self._archive_completed_tool_call(
+                tool_name=tool_name,
+                tool_input=tool_input,
+                raw_output=_raw_result_for_archive,
+                latency_ms=int((time.monotonic() - _started_at) * 1000),
+                session_id=_archive_session_id,
+                tool_use_id=_archive_tool_use_id,
+            )
+            return _raw_result_for_archive
         except Exception as e:
             logger.error(f"tool_executor error: tool={tool_name} error={e}")
-            return json.dumps({"error": str(e), "tool": tool_name})
+            _raw_result_for_archive = json.dumps({"error": str(e), "tool": tool_name})
+            await self._archive_completed_tool_call(
+                tool_name=tool_name,
+                tool_input=tool_input,
+                raw_output=_raw_result_for_archive,
+                latency_ms=int((time.monotonic() - _started_at) * 1000),
+                session_id=_archive_session_id,
+                tool_use_id=_archive_tool_use_id,
+            )
+            return _raw_result_for_archive
 
     async def _dispatch(self, tool_name: str, tool_input: Dict[str, Any]) -> Any:
         """도구 이름 → 실제 함수 매핑."""
