@@ -267,3 +267,15 @@ f = 'app/services/pc_agent_man
 
 ## [2026-05-06 14:48:28 KST] [aads-server] tests/unit/test_deploy_safe.py
 - Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/tests/unit/test_deploy_safe.py /root/aads/aads-server
+
+## [2026-05-06 14:51:09 KST] [aads-server] tests/unit/test_db_safe_write.py
+- Chat-Direct 수정: write: tests/unit/test_db_safe_write.py
+
+## [2026-05-06 14:51:30 KST] [aads-server] tests/unit/test_db_safe_write.py
+- Chat-Direct 수정: write: tests/unit/test_db_safe_write.py
+
+## [2026-05-06 14:51:32 KST] [aads-server] tests/unit/test_notify_channel.py
+- Chat-Direct 수정: write: tests/unit/test_notify_channel.py
+
+## [2026-05-06 14:51:39 KST] [aads-server] tests/unit/test_notify_channel.py
+- Chat-Direct 수정: write: tests/unit/test_notify_channel.py
