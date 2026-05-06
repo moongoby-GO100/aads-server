@@ -48,3 +48,21 @@ def test_codex_model_aliases_normalized():
     assert "gpt-5.5" in source
     assert "gpt-5.4" in source
     assert "gpt-5.3-codex" in source
+
+
+def test_autonomous_path_stores_structured_tool_events():
+    """자율 실행 경로가 도구 이벤트를 구조화 dict로 저장하는지 확인."""
+    source = CHAT_SERVICE.read_text()
+    # autonomous path에서 tool_use를 dict로 저장
+    assert '"type": "tool_use"' in source
+    assert '"tool_use_id"' in source
+    # autonomous path에서 tool_result도 저장
+    assert '"type": "tool_result"' in source
+    # autonomous path에서 done 이벤트로 model_used 업데이트
+    assert '_done_model = _data.get("model")' in source
+
+
+def test_autonomous_path_done_event_updates_model():
+    """자율 실행 경로가 done 이벤트의 model로 model_used를 업데이트하는지 확인."""
+    source = CHAT_SERVICE.read_text()
+    assert "model_used = _done_model" in source

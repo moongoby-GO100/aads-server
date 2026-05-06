@@ -5063,7 +5063,27 @@ async def send_message_stream(
                         if _etype == "complete":
                             full_response = _data.get("content", full_response)
                     elif _etype == "tool_use":
-                        tools_called.append(_data.get("tool_name", ""))
+                        tools_called.append({
+                            "type": "tool_use",
+                            "tool_name": _data.get("tool_name", ""),
+                            "tool_use_id": _data.get("tool_use_id", ""),
+                            "tool_input": _data.get("tool_input", {}),
+                        })
+                    elif _etype == "tool_result":
+                        tools_called.append({
+                            "type": "tool_result",
+                            "tool_name": _data.get("tool_name", ""),
+                            "tool_use_id": _data.get("tool_use_id", ""),
+                            "content": str(_data.get("content", ""))[:500],
+                            "is_error": bool(_data.get("is_error")),
+                        })
+                    elif _etype == "done":
+                        _done_model = _data.get("model")
+                        if _done_model:
+                            model_used = _done_model
+                        cost_usd += Decimal(str(_data.get("cost", "0")))
+                        input_tokens += _data.get("input_tokens", 0) or 0
+                        output_tokens += _data.get("output_tokens", 0) or 0
                 except Exception:
                     pass
 
@@ -5117,6 +5137,7 @@ async def send_message_stream(
             return
 
         # 9. 모델 선택기 → SSE 스트리밍
+        logger.info("chat_stream_start: session=%s model=%s intent=%s", session_id[:8], intent_result.model, intent)
         from app.services.model_selector import call_stream
         # Langfuse: llm_generation span 시작
         if _lf_trace is not None:
