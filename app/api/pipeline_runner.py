@@ -6,6 +6,7 @@ Pipeline Runner API v2 — DB 기반 작업 제출/승인/조회.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import uuid
 from typing import Optional
@@ -21,6 +22,22 @@ logger = structlog.get_logger(__name__)
 _VALID_PROJECTS = {"AADS", "KIS", "GO100", "SF", "NTV2"}
 _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 _JOB_ID_RE = re.compile(r'^runner-[0-9a-zA-Z_-]+$')
+
+
+def _max_concurrent_per_project() -> int:
+    """API 표시/잠금 판단용 동시 실행 상한. Shell runner 기본값과 맞춘다."""
+    try:
+        return max(1, int(os.getenv("MAX_CONCURRENT_PER_PROJECT", "6")))
+    except ValueError:
+        return 6
+
+
+def _record_get(row, key: str, default=None):
+    """asyncpg.Record 안전 조회. Record는 dict.get을 보장하지 않는다."""
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
 
 
 async def _get_model_for_size(conn, size: str) -> str:
@@ -116,8 +133,9 @@ class JobApproveRequest(BaseModel):
 
 
 async def check_project_lock(conn, project: str, exclude_job_id: str | None = None, parallel_group: str = "") -> bool:
-    """프로젝트에 실행 중인(running/claimed) ���업이 있는지 확인. True면 잠김.
+    """프로젝트에 실행 중인(running/claimed) 작업이 상한에 도달했는지 확인. True면 잠김.
     AADS-211: parallel_group이 지정되면 같은 그룹 내 작업은 동시 실행 허용."""
+    max_concurrent = _max_concurrent_per_project()
     # parallel_group이 있으면 같은 그룹이 아닌 작업만 lock으로 간주
     if parallel_group:
         row = await conn.fetchrow(
@@ -126,7 +144,7 @@ async def check_project_lock(conn, project: str, exclude_job_id: str | None = No
             "AND (parallel_group IS NULL OR parallel_group != $2)",
             project, parallel_group,
         )
-        return (row["cnt"] or 0) > 0
+        return (row["cnt"] or 0) >= max_concurrent
     if exclude_job_id:
         row = await conn.fetchrow(
             "SELECT count(*) as cnt FROM pipeline_jobs "
@@ -139,7 +157,7 @@ async def check_project_lock(conn, project: str, exclude_job_id: str | None = No
             "WHERE project = $1 AND status IN ('running', 'claimed')",
             project,
         )
-    return (row["cnt"] or 0) > 0
+    return (row["cnt"] or 0) >= max_concurrent
 
 
 async def cascade_cleanup_orphans(conn, failed_job_id: str) -> int:
@@ -374,15 +392,15 @@ async def list_jobs(
             "status": r["status"],
             "phase": r["phase"],
             "cycle": r["cycle"],
-            "error_detail": r.get("error_detail"),
+            "error_detail": _record_get(r, "error_detail"),
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
             "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
-            "started_at": r["started_at"].isoformat() if r.get("started_at") else None,
-            "depends_on": r.get("depends_on"),
-            "model": r.get("model") or "",
-            "worker_model": r.get("worker_model") or "",
-            "actual_model": r.get("actual_model") or "",
-            "size": r.get("size") or "M",
+            "started_at": r["started_at"].isoformat() if _record_get(r, "started_at") else None,
+            "depends_on": _record_get(r, "depends_on"),
+            "model": _record_get(r, "model") or "",
+            "worker_model": _record_get(r, "worker_model") or "",
+            "actual_model": _record_get(r, "actual_model") or "",
+            "size": _record_get(r, "size") or "M",
         }
         for r in rows
     ]
@@ -416,8 +434,12 @@ async def get_job(job_id: str):
         "result_output": row["result_output"],
         "git_diff": (row["git_diff"] or "")[:5000],
         "review_feedback": row["review_feedback"],
-        "error_detail": row.get("error_detail"),
-        "started_at": row["started_at"].isoformat() if row.get("started_at") else None,
+        "error_detail": _record_get(row, "error_detail"),
+        "model": _record_get(row, "model") or "",
+        "worker_model": _record_get(row, "worker_model") or "",
+        "actual_model": _record_get(row, "actual_model") or "",
+        "size": _record_get(row, "size") or "M",
+        "started_at": row["started_at"].isoformat() if _record_get(row, "started_at") else None,
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
         "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
     }
@@ -498,7 +520,7 @@ async def notify_completion(job_id: str):
                f"5. 프론트엔드 변경 시 UI 확인 (browser_snapshot 또는 capture_screenshot)\n"
                f"각 단계를 도구로 실제 확인한 후 결과를 CEO에게 보고하세요. 도구 호출 없이 '정상 완료' 보고 금지.")
     elif status == "error":
-        error_detail = row.get("error_detail") or "unknown"
+        error_detail = _record_get(row, "error_detail") or "unknown"
         msg = (f"[시스템] Pipeline Runner 작업 실패\n\n"
                f"**Job**: {job_id}\n**프로젝트**: {project}\n"
                f"**에러 분류**: {error_detail}\n"
@@ -755,6 +777,11 @@ async def lock_status(project: str = Query(..., max_length=10)):
     pool = get_pool()
 
     async with pool.acquire() as conn:
+        running_row = await conn.fetchrow(
+            "SELECT count(*) as cnt FROM pipeline_jobs "
+            "WHERE project = $1 AND status IN ('running', 'claimed')",
+            project,
+        )
         locked = await check_project_lock(conn, project)
         queued_row = await conn.fetchrow(
             "SELECT count(*) as cnt FROM pipeline_jobs "
@@ -765,6 +792,8 @@ async def lock_status(project: str = Query(..., max_length=10)):
     return {
         "project": project,
         "locked": locked,
+        "running_count": running_row["cnt"] if running_row else 0,
+        "max_concurrent_per_project": _max_concurrent_per_project(),
         "queued_count": queued_row["cnt"] if queued_row else 0,
     }
 
