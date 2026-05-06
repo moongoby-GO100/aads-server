@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import os
+import shlex
 import uuid
 from collections import OrderedDict
 from datetime import date, datetime
@@ -754,22 +755,13 @@ class ToolExecutor:
         """
         import uuid as _uuid
 
-        # git diff -- <file> 로 working tree 변경 내용 획득
-        # file_path를 git 레포 루트 기준 상대경로로 정규화 (절대경로 전달 시 대비)
-        _rel_path = file_path
-        for _prefix in ("/root/aads/aads-server/", "/app/app/", "/app/"):
-            if _rel_path.startswith(_prefix):
-                _rel_path = _rel_path[len(_prefix):]
-                break
-        try:
-            from app.api.ceo_chat_tools import tool_run_remote_command
-            diff_result = await tool_run_remote_command(
-                project,
-                f"cd /root/aads/aads-server && git diff -- {_rel_path}",
-            )
-            diff_text = diff_result if isinstance(diff_result, str) else str(diff_result)
-        except Exception as _de:
-            logger.warning(f"ai_review_git_diff_skip: {_de}")
+        diff_text = await self._capture_review_diff(
+            project=project,
+            repo="aads-server",
+            file_path=file_path,
+        )
+        if diff_text.startswith("[ERROR]"):
+            logger.warning(f"ai_review_git_diff_skip: {diff_text[:300]}")
             return
 
         if not diff_text or not diff_text.strip():
@@ -864,15 +856,13 @@ class ToolExecutor:
         파일 경로는 상대경로 그대로 사용한다.
         """
         import uuid as _uuid
-        try:
-            from app.api.ceo_chat_tools import tool_run_remote_command
-            diff_result = await tool_run_remote_command(
-                "GO100",
-                f"git diff -- {file_path}",
-            )
-            diff_text = diff_result if isinstance(diff_result, str) else str(diff_result)
-        except Exception as _de:
-            logger.warning(f"ai_review_git_diff_skip: project=GO100 {_de}")
+        diff_text = await self._capture_review_diff(
+            project="GO100",
+            repo="kis-autotrade-v4",
+            file_path=file_path,
+        )
+        if diff_text.startswith("[ERROR]"):
+            logger.warning(f"ai_review_git_diff_skip: project=GO100 {diff_text[:300]}")
             return
 
         if not diff_text or not diff_text.strip():
@@ -949,6 +939,139 @@ class ToolExecutor:
             )
         except Exception as _dbe:
             logger.warning(f"ai_review_warning_db_skip: project=GO100 {_dbe}")
+
+    async def _run_local_git(self, repo_dir: str, args: list[str], timeout: float = 10.0) -> str:
+        """컨테이너/로컬 실행 환경에서 git 결과를 직접 수집한다."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git",
+                "-C",
+                repo_dir,
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except FileNotFoundError:
+            return "[ERROR] git 실행 파일 없음"
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+            return f"[ERROR] local git timeout: repo={repo_dir}"
+        except Exception as exc:
+            return f"[ERROR] local git 실행 실패: {exc}"
+
+        out = stdout.decode("utf-8", errors="replace")
+        err = stderr.decode("utf-8", errors="replace")
+        if proc.returncode != 0:
+            return f"[ERROR] local git exit={proc.returncode}: {err[:1000]}"
+        return out
+
+    @staticmethod
+    def _remote_git_failed(result: str) -> bool:
+        text = (result or "").strip()
+        if not text:
+            return False
+        lowered = text.lower()
+        return (
+            text.startswith("[ERROR]")
+            or "명령어 파싱 실패" in text
+            or "timed out" in lowered
+            or "timeout" in lowered
+            or "fatal:" in lowered
+            or "[stderr]" in lowered
+        )
+
+    @staticmethod
+    def _strip_remote_command_wrapper(result: str) -> str:
+        """run_remote_command의 실행 헤더/에코를 제거하고 실제 stdout만 남긴다."""
+        lines: list[str] = []
+        for line in (result or "").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("[") or stripped.startswith("$ "):
+                continue
+            lines.append(line)
+        return "\n".join(lines).strip()
+
+    @staticmethod
+    def _aads_repo_root(repo: str) -> str:
+        if repo == "aads-dashboard":
+            return "/root/aads/aads-dashboard"
+        return "/root/aads/aads-server"
+
+    @staticmethod
+    def _repo_relative_path(file_path: str, repo_root: str) -> str:
+        rel_path = (file_path or "").strip()
+        prefixes = (
+            f"{repo_root.rstrip('/')}/",
+            "/root/aads/aads-server/",
+            "/root/aads/aads-dashboard/",
+            "/app/app/",
+            "/app/",
+        )
+        for prefix in prefixes:
+            if rel_path.startswith(prefix):
+                rel_path = rel_path[len(prefix):]
+                break
+        return rel_path
+
+    async def _capture_review_diff(self, project: str, repo: str, file_path: str) -> str:
+        """AI 리뷰용 working-tree diff 수집.
+
+        1차는 기존 SSH 기반 run_remote_command를 사용하고, AADS 로컬 레포는 SSH/host.docker
+        환경 문제가 나면 현재 실행 환경의 git으로 한 번 더 시도한다.
+        """
+        rel_path = self._repo_relative_path(file_path, self._aads_repo_root(repo))
+        if not rel_path:
+            return "[ERROR] diff 대상 파일 경로 없음"
+
+        quoted_path = shlex.quote(rel_path)
+        remote_result = ""
+        try:
+            from app.api.ceo_chat_tools import tool_run_remote_command
+            if project == "AADS":
+                repo_root = self._aads_repo_root(repo)
+                command = f"cd {shlex.quote(repo_root)} && git diff -- {quoted_path}"
+            else:
+                command = f"git diff -- {quoted_path}"
+            diff_result = await tool_run_remote_command(project, command)
+            remote_result = diff_result if isinstance(diff_result, str) else str(diff_result)
+        except Exception as exc:
+            remote_result = f"[ERROR] remote git diff 실행 실패: {exc}"
+
+        if remote_result and not self._remote_git_failed(remote_result):
+            return self._strip_remote_command_wrapper(remote_result)
+
+        if project != "AADS":
+            return remote_result or "[ERROR] remote git diff 결과 없음"
+
+        repo_root = self._aads_repo_root(repo)
+        local_candidates = [repo_root]
+        if repo == "aads-server":
+            local_candidates.append("/app")
+
+        local_errors: list[str] = []
+        for candidate in local_candidates:
+            if not os.path.isdir(candidate):
+                continue
+            local_result = await self._run_local_git(candidate, ["diff", "--", rel_path])
+            if local_result and not local_result.startswith("[ERROR]"):
+                if remote_result:
+                    logger.warning(
+                        "ai_review_git_diff_remote_failed_local_ok: remote=%s",
+                        remote_result[:200],
+                    )
+                return local_result
+            if local_result:
+                local_errors.append(local_result[:300])
+
+        detail = remote_result or "; ".join(local_errors) or "git diff 결과 없음"
+        return f"[ERROR] AI review git diff capture failed: {detail[:1000]}"
 
     async def _write_remote_file(self, inp: Dict[str, Any]) -> Any:
         """원격 서버 파일 쓰기 (SSH, 자동 백업). Yellow 등급.
@@ -1057,16 +1180,9 @@ class ToolExecutor:
 
         실패 시 빈 집합 반환 (Hook을 무력화시키지 않도록 best-effort).
         """
-        try:
-            from app.api.ceo_chat_tools import tool_run_remote_command
-            r1 = await tool_run_remote_command(
-                "AADS", f"cd {repo_dir} && git diff --name-only HEAD"
-            )
-            r2 = await tool_run_remote_command(
-                "AADS", f"cd {repo_dir} && git ls-files --others --exclude-standard"
-            )
+        def _collect(texts: tuple[str, str]) -> set[str]:
             files: set[str] = set()
-            for text in (str(r1), str(r2)):
+            for text in texts:
                 for line in text.splitlines():
                     _ls = line.strip()
                     if not _ls:
@@ -1081,8 +1197,27 @@ class ToolExecutor:
                         _ls = _ls[1:-1]
                     files.add(_ls)
             return files
+
+        try:
+            from app.api.ceo_chat_tools import tool_run_remote_command
+            quoted_repo = shlex.quote(repo_dir)
+            r1 = await tool_run_remote_command(
+                "AADS", f"cd {quoted_repo} && git diff --name-only HEAD"
+            )
+            r2 = await tool_run_remote_command(
+                "AADS", f"cd {quoted_repo} && git ls-files --others --exclude-standard"
+            )
+            if self._remote_git_failed(str(r1)) or self._remote_git_failed(str(r2)):
+                raise RuntimeError(f"remote git status failed: {str(r1)[:120]} {str(r2)[:120]}")
+            return _collect((str(r1), str(r2)))
         except Exception as _e:
             logger.warning(f"git_status_snapshot_skip: repo={repo_dir} err={_e}")
+            if os.path.isdir(repo_dir):
+                r1 = await self._run_local_git(repo_dir, ["diff", "--name-only", "HEAD"])
+                r2 = await self._run_local_git(repo_dir, ["ls-files", "--others", "--exclude-standard"])
+                if not r1.startswith("[ERROR]") and not r2.startswith("[ERROR]"):
+                    logger.warning(f"git_status_snapshot_local_fallback_ok: repo={repo_dir}")
+                    return _collect((r1, r2))
             return set()
 
     async def _git_status_snapshot_aads(self) -> set[str]:
