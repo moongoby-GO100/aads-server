@@ -3744,6 +3744,8 @@ async def _stream_anthropic(
     _display_model = _ANTHROPIC_MODEL_ID.get(model_alias, model_alias)
     if use_thinking:
         logger.info(f"anthropic_thinking_result: model={model_id} thinking_len={len(thinking_text)} turns={_turn}")
+    if use_thinking:
+        logger.info(f"anthropic_thinking_result: model={model_id} thinking_len={len(thinking_text)} turns={_turn}")
     yield {
         "type": "done",
         "model": _display_model,
