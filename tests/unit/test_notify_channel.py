@@ -1,3 +1,4 @@
+"""notify_channel 도구 단위 테스트."""
 from __future__ import annotations
 
 import json
@@ -6,158 +7,112 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.services.tool_executor import ToolExecutor
-from app.services.tool_registry import ToolRegistry
 
 
 @pytest.fixture(autouse=True)
 def clear_notify_dedup():
-    ToolExecutor._notify_dedup.clear()
+    """인스턴스 레벨 dedup 캐시 초기화."""
+    ToolExecutor._notify_dedup_cache = {}
     yield
-    ToolExecutor._notify_dedup.clear()
-
-
-def test_notify_channel_registered_in_registry():
-    registry = ToolRegistry()
-    tool = registry.get_tool("notify_channel")
-
-    assert tool["name"] == "notify_channel"
-    assert "notify_channel" in registry.list_groups()["ops"]
+    ToolExecutor._notify_dedup_cache = {}
 
 
 @pytest.mark.asyncio
-async def test_notify_channel_execute_routes_warning_to_telegram():
-    executor = ToolExecutor()
-
-    with patch.object(
-        executor,
-        "_send_telegram_message",
-        new_callable=AsyncMock,
-        return_value={"status": "sent", "channel": "telegram"},
-    ) as mock_telegram, patch.object(executor, "_log_notify_message") as mock_log:
-        raw_result = await executor.execute(
-            "notify_channel",
-            {"message": "disk warning", "severity": "warning"},
-        )
-
-    result = json.loads(raw_result)
-    assert result["status"] == "sent"
-    assert result["channels"] == ["telegram"]
-    mock_telegram.assert_awaited_once_with("disk warning")
-    mock_log.assert_not_called()
+async def test_notify_channel_rejects_empty_message():
+    result = await ToolExecutor()._notify_channel({"message": ""})
+    assert "error" in result
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("severity", "expected_channels", "expected_telegram_calls", "expected_log_calls"),
-    [
-        ("info", ["system"], 0, 1),
-        ("warning", ["telegram"], 1, 0),
-        ("critical", ["telegram", "system"], 1, 1),
-    ],
-)
-async def test_notify_channel_routes_by_severity(
-    severity,
-    expected_channels,
-    expected_telegram_calls,
-    expected_log_calls,
-):
-    executor = ToolExecutor()
-
-    with patch.object(
-        executor,
-        "_send_telegram_message",
-        new_callable=AsyncMock,
-        return_value={"status": "sent", "channel": "telegram"},
-    ) as mock_telegram, patch.object(executor, "_log_notify_message") as mock_log:
-        result = await executor._notify_channel(
-            {"message": f"{severity} alert", "severity": severity}
-        )
-
-    assert result["status"] == "sent"
-    assert result["channels"] == expected_channels
-    assert mock_telegram.await_count == expected_telegram_calls
-    assert mock_log.call_count == expected_log_calls
+async def test_notify_channel_rejects_invalid_channel():
+    result = await ToolExecutor()._notify_channel({"message": "test", "channel": "email"})
+    assert "error" in result
+    assert "channel" in result["error"]
 
 
 @pytest.mark.asyncio
-async def test_notify_channel_skips_duplicate_with_same_key():
-    executor = ToolExecutor()
+async def test_notify_channel_sends_telegram():
+    mock_send = AsyncMock(return_value="ok")
 
-    with patch.object(
-        executor,
-        "_send_telegram_message",
-        new_callable=AsyncMock,
-        return_value={"status": "sent", "channel": "telegram"},
-    ) as mock_telegram:
-        first = await executor._notify_channel(
-            {"message": "duplicate alert", "severity": "warning", "dedup_key": "disk-68"}
-        )
-        second = await executor._notify_channel(
-            {"message": "duplicate alert", "severity": "warning", "dedup_key": "disk-68"}
-        )
+    with patch("app.api.ceo_chat_tools.tool_send_telegram", mock_send, create=True):
+        result = await ToolExecutor()._notify_channel({
+            "message": "서버 경고",
+            "channel": "telegram",
+            "level": "warn",
+        })
 
-    assert first["status"] == "sent"
-    assert second == {
-        "status": "skipped",
-        "reason": "duplicate",
-        "dedup_key": "disk-68",
-    }
-    mock_telegram.assert_awaited_once_with("duplicate alert")
+    assert result["sent"] is True
+    assert result["channel"] == "telegram"
+    assert result["results"]["telegram"]["success"] is True
+    mock_send.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("channel", "severity", "expected_channels", "expected_telegram_calls", "expected_log_calls"),
-    [
-        ("telegram", "info", ["telegram"], 1, 0),
-        ("system", "critical", ["system"], 0, 1),
-    ],
-)
-async def test_notify_channel_direct_channel_override(
-    channel,
-    severity,
-    expected_channels,
-    expected_telegram_calls,
-    expected_log_calls,
-):
-    executor = ToolExecutor()
+async def test_notify_channel_dedup_skips_second():
+    mock_send = AsyncMock(return_value="ok")
 
-    with patch.object(
-        executor,
-        "_send_telegram_message",
-        new_callable=AsyncMock,
-        return_value={"status": "sent", "channel": "telegram"},
-    ) as mock_telegram, patch.object(executor, "_log_notify_message") as mock_log:
-        result = await executor._notify_channel(
-            {
-                "message": f"{channel} override",
-                "severity": severity,
-                "channel": channel,
-            }
-        )
+    with patch("app.api.ceo_chat_tools.tool_send_telegram", mock_send, create=True):
+        executor = ToolExecutor()
+        first = await executor._notify_channel({
+            "message": "disk alert",
+            "channel": "telegram",
+            "dedup_key": "disk-68",
+        })
+        second = await executor._notify_channel({
+            "message": "disk alert",
+            "channel": "telegram",
+            "dedup_key": "disk-68",
+        })
 
-    assert result["status"] == "sent"
-    assert result["channels"] == expected_channels
-    assert mock_telegram.await_count == expected_telegram_calls
-    assert mock_log.call_count == expected_log_calls
+    assert first["sent"] is True
+    assert second["skipped"] is True
+    assert "dedup" in second["reason"]
 
 
 @pytest.mark.asyncio
-async def test_notify_channel_includes_telegram_error_in_result():
+async def test_notify_channel_slack_not_implemented():
+    result = await ToolExecutor()._notify_channel({
+        "message": "슬랙 테스트",
+        "channel": "slack",
+    })
+
+    assert result["sent"] is True
+    assert result["results"]["slack"]["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_notify_channel_all_sends_to_both():
+    mock_send = AsyncMock(return_value="ok")
+
+    with patch("app.api.ceo_chat_tools.tool_send_telegram", mock_send, create=True):
+        result = await ToolExecutor()._notify_channel({
+            "message": "전체 알림",
+            "channel": "all",
+        })
+
+    assert result["sent"] is True
+    assert "telegram" in result["results"]
+    assert "slack" in result["results"]
+
+
+@pytest.mark.asyncio
+async def test_notify_channel_telegram_error_captured():
+    mock_send = AsyncMock(side_effect=Exception("bot down"))
+
+    with patch("app.api.ceo_chat_tools.tool_send_telegram", mock_send, create=True):
+        result = await ToolExecutor()._notify_channel({
+            "message": "에러 테스트",
+            "channel": "telegram",
+        })
+
+    assert result["sent"] is True
+    assert result["results"]["telegram"]["success"] is False
+    assert "bot down" in result["results"]["telegram"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_notify_channel_registered_in_dispatch():
     executor = ToolExecutor()
-
-    with patch.object(
-        executor,
-        "_send_telegram_message",
-        new_callable=AsyncMock,
-        return_value={"status": "error", "channel": "telegram", "error": "bot down"},
-    ) as mock_telegram, patch.object(executor, "_log_notify_message") as mock_log:
-        result = await executor._notify_channel(
-            {"message": "critical alert", "severity": "critical"}
-        )
-
-    assert result["status"] == "partial"
-    assert result["channels"] == ["system"]
-    assert result["errors"] == [{"channel": "telegram", "error": "bot down"}]
-    mock_telegram.assert_awaited_once_with("critical alert")
-    mock_log.assert_called_once_with("critical", "critical alert")
+    raw = await executor.execute("notify_channel", {"message": ""})
+    result = json.loads(raw)
+    assert "error" in result
