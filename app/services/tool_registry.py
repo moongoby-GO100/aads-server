@@ -2093,6 +2093,71 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"period": "7d", "tool_name": "query_database"},
         ],
     },
+    "db_safe_write": {
+        "name": "db_safe_write",
+        "description": "안전한 DB 쓰기 (INSERT/UPDATE/DELETE만 허용, DDL 차단, 트랜잭션 강제, 전후 카운트 검증, dry-run 지원)",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sql": {
+                    "type": "string",
+                    "description": "실행할 INSERT/UPDATE/DELETE SQL",
+                },
+                "params": {
+                    "type": "array",
+                    "description": "SQL 바인드 파라미터 (선택)",
+                    "items": {},
+                    "default": [],
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "true면 실행하지 않고 검증만 (기본 false)",
+                    "default": False,
+                },
+            },
+            "required": ["sql"],
+        },
+    },
+    "notify_channel": {
+        "name": "notify_channel",
+        "description": "다중 채널 알림 전송 (텔레그램/슬랙). 중복 방지(5분 dedup) 내장.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "알림 메시지",
+                },
+                "channel": {
+                    "type": "string",
+                    "description": "전송 채널 (telegram/slack/all). 기본 telegram",
+                    "enum": ["telegram", "slack", "all"],
+                    "default": "telegram",
+                },
+                "level": {
+                    "type": "string",
+                    "description": "알림 수준 (info/warn/error/success). 기본 info",
+                    "enum": ["info", "warn", "error", "success"],
+                    "default": "info",
+                },
+                "dedup_key": {
+                    "type": "string",
+                    "description": "중복 방지 키 (선택, 미지정 시 메시지 해시 자동 생성)",
+                    "default": "",
+                },
+            },
+            "required": ["message"],
+        },
+    },
+    "tool_layer_audit": {
+        "name": "tool_layer_audit",
+        "description": "MCP/Registry/Executor 3-Layer 도구 정합성 검사. 누락/불일치 도구를 탐지한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
     # ─── 첨부파일 재읽기 도구 ─────────────────────────────────────────────────
     "read_uploaded_file": {
         "name": "read_uploaded_file",
@@ -2333,7 +2398,7 @@ _GROUPS: Dict[str, List[str]] = {
     # AADS-188C Phase 2: 메타 도구 그룹 (Orchestrator)
     "meta": ["check_directive_status", "check_task_status", "read_task_logs", "terminate_task", "delegate_to_agent", "delegate_to_research", "spawn_subagent", "spawn_parallel_subagents"],
     # 운영/관측 도구 그룹
-    "ops": ["tool_metrics", "deploy_safe"],
+    "ops": ["tool_metrics", "deploy_safe", "db_safe_write", "notify_channel", "tool_layer_audit"],
     # AADS-186E-1: 크롤링 도구 그룹
     "crawl": ["jina_read", "crawl4ai_fetch", "deep_crawl"],
     # AADS-186E-2: 메모리 도구 그룹 (+ Memory Upgrade F5/F12)

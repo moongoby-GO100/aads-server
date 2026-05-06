@@ -390,8 +390,6 @@ class ToolExecutor:
             "deploy_safe":            self._deploy_safe,
             "db_safe_write":          self._db_safe_write,
             "notify_channel":         self._notify_channel,
-            "db_safe_write":          self._db_safe_write,
-            "notify_channel":         self._notify_channel,
             "tool_layer_audit":       self._tool_layer_audit,
             "git_remote_add":         self._git_remote_add,
             "git_remote_commit":      self._git_remote_commit,
@@ -2949,6 +2947,7 @@ class ToolExecutor:
 
     async def _tool_layer_audit(self, inp: Dict[str, Any]) -> Any:
         """MCP/Registry/Executor 3-Layer 도구 정합성 검사."""
+        fix = bool(inp.get("fix", False))
         if self._registry is None:
             from app.services.tool_registry import ToolRegistry
             self._registry = ToolRegistry()
@@ -2960,6 +2959,8 @@ class ToolExecutor:
         mcp_only = sorted(mcp_tools - (registry_tools | executor_tools))
         not_in_mcp = sorted((registry_tools | executor_tools) - mcp_tools)
         all_aligned = not registry_only and not executor_only and not mcp_only
+        if fix:
+            logger.info("tool_layer_audit_fix_requested: registry_only=%s executor_only=%s mcp_only=%s", registry_only, executor_only, mcp_only)
         return {
             "all_aligned": all_aligned,
             "total_registry": len(registry_tools),
@@ -2969,6 +2970,8 @@ class ToolExecutor:
             "executor_only": executor_only,
             "mcp_only": mcp_only,
             "not_in_mcp": not_in_mcp,
+            "fix": fix,
+            "fix_applied": False,
         }
 
     # ── db_safe_write ────────────────────────────────────────────────────────
