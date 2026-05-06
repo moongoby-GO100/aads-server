@@ -4,6 +4,22 @@ _v1.0 | 2026-04-02 | 최초 작성_
 
 ## 변경 이력 (최신순)
 
+### 2026-05-06
+
+| 커밋 | 변경 | 구분 |
+|------|------|------|
+| 2026-05-06 | **Chat Lightweight v2.2**: `fields=minimal` 도구 요약 메타(`has_tools/tool_count/tool_names`)와 단건 full hydrate API 추가 | 🐛 Backend |
+| 2026-05-06 | 완료 assistant 버블에서 `tools_called`가 비어도 도구박스 placeholder를 표시하고, 상세 hydrate 후 기존 긴 본문을 200자 preview로 덮어쓰지 않도록 병합 가드 보강 | 🐛 Frontend |
+| 2026-05-06 | 스트리밍 `tool_use/tool_result` 누적 이벤트를 final assistant 메시지에 합치고, legacy string/Codex event `tools_called` 정규화 경로 통일 | 🐛 Backend+Frontend |
+| 2026-05-06 | `codex:gpt-5.5`, `gpt-5.5`, `GPT-5.5 (Codex CLI)` 별칭을 동일 Codex 실행 모델로 정규화 | 🔧 Backend |
+
+검증:
+- `python3 -m pytest tests/unit/test_chat_service.py tests/unit/test_chat_lightweight_frontend_static.py -q`
+
+운영 확인 절차:
+- 대상 세션 `b8a8651b-6226-46df-9a44-36a70e478959`에서 minimal polling 후 도구박스 placeholder → 단건 hydrate → full 도구 상세 표시 순서를 확인한다.
+- 800자 이상 assistant 본문이 minimal polling 이후에도 기존 길이를 유지하는지 확인한다.
+
 ### 2026-04-30
 
 | 커밋 | 변경 | 구분 |

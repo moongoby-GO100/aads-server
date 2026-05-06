@@ -1,5 +1,17 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-06)
+- **Chat Lightweight v2.2 도구박스/최종버블 회귀 보강**:
+  - Backend: `fields=minimal`은 표시용 preview와 도구 요약 메타(`has_tools`, `tool_count`, `tool_names`)만 반환하고, full `tools_called`는 신규 단건 상세 API `GET /api/v1/chat/messages/{message_id}`에서 lazy hydrate한다.
+  - Backend: `normalize_tool_events()`를 추가해 legacy string 배열, Codex relay 구조화 이벤트, tool_result/thinking 이벤트를 동일한 `tools_called` 배열 계약으로 정규화한다. 저장 전과 full 응답 전 모두 이 경로를 사용한다.
+  - Frontend: 완료 assistant 버블에서 `tools_called`가 비어도 `has_tools/tool_count/tool_names`가 있으면 도구박스를 숨기지 않고 hydrate 상태를 표시한다. hydrate 후에는 기존 긴 본문을 minimal 200자 preview로 덮어쓰지 않는다.
+  - Frontend: 스트리밍 중 누적한 `tool_use/tool_result` 이벤트를 final assistant 메시지에 합쳐 완료 직후 도구박스가 사라지지 않게 했다.
+  - Model alias: `codex:gpt-5.5`, `gpt-5.5`, `GPT-5.5 (Codex CLI)`를 Codex 실행 모델 `gpt-5.5`로 정규화한다.
+  - 원칙: DB/LLM 원본 메시지, embedding, quality/reflexion/memory/RAG 저장 경로는 축소하지 않는다. 축소는 프론트 표시 API payload에만 적용한다.
+  - 검증 명령: `python3 -m pytest tests/unit/test_chat_service.py tests/unit/test_chat_lightweight_frontend_static.py -q`
+  - 수동 확인: 세션 `b8a8651b-6226-46df-9a44-36a70e478959`에서 minimal polling 후 도구박스 placeholder, 단건 hydrate 1회, 800자 이상 본문 길이 유지, Codex final 도구 이벤트 보존을 확인한다.
+  - 남은 리스크: 실제 브라우저 DOM 확인은 운영 세션 데이터와 인증 토큰이 필요한 경로라 자동 단위 테스트는 정적/서비스 계약 중심으로 커버한다.
+
 ## 현재 진행 상태 (2026-05-05)
 - **Android Agent Play Protect 차단 대응 (2026-05-05 15:09 KST)**:
   - 원인: 운영 다운로드 APK가 debug 계열 파일명/후보로 제공되고, release APK도 SMS/통화기록/연락처/접근성/알림리스너/디바이스관리 등 고위험 권한을 포함해 Play Protect 차단 가능성이 높았다.

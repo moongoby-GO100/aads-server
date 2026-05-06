@@ -194,6 +194,83 @@ function compareSelectableModels(
   return a.name.localeCompare(b.name);
 }
 
+function normalizeToolEventsForRender(value: unknown): Array<Record<string, any>> {
+  const raw = typeof value === "string"
+    ? (() => { try { return JSON.parse(value); } catch { return value ? [value] : []; } })()
+    : value;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      if (typeof item === "string") {
+        const name = item.trim();
+        return name ? { type: "tool_use", tool_name: name, tool_use_id: "", tool_input: {} } : null;
+      }
+      if (!item || typeof item !== "object") return null;
+      const ev = item as Record<string, any>;
+      const toolName = String(ev.tool_name || ev.name || "").trim();
+      const type = String(ev.type || (toolName ? "tool_use" : "thinking")).trim();
+      if (type === "tool_use" && toolName) {
+        return { ...ev, type, tool_name: toolName, tool_input: ev.tool_input && typeof ev.tool_input === "object" ? ev.tool_input : {} };
+      }
+      if (type === "tool_result" && toolName) {
+        return { ...ev, type, tool_name: toolName, content: ev.content || "" };
+      }
+      if (type === "thinking") {
+        const text = String(ev.thinking || ev.content || "").trim();
+        return text ? { type: "thinking", content: text } : null;
+      }
+      return null;
+    })
+    .filter(Boolean) as Array<Record<string, any>>;
+}
+
+function getToolNamesFromMessage(msg: ChatMessage): string[] {
+  const names = Array.isArray((msg as any).tool_names)
+    ? ((msg as any).tool_names as unknown[]).map((name) => String(name || "").trim()).filter(Boolean)
+    : [];
+  if (names.length > 0) return Array.from(new Set(names));
+  return Array.from(new Set(
+    normalizeToolEventsForRender(msg.tools_called)
+      .map((ev) => String(ev.tool_name || "").trim())
+      .filter(Boolean)
+  ));
+}
+
+function messageHasToolSummary(msg: ChatMessage): boolean {
+  return Boolean(
+    (msg as any).has_tools ||
+    Number((msg as any).tool_count || 0) > 0 ||
+    getToolNamesFromMessage(msg).length > 0
+  );
+}
+
+function buildSummaryToolEvents(msg: ChatMessage): Array<Record<string, any>> {
+  return getToolNamesFromMessage(msg).map((name) => ({
+    type: "tool_use",
+    tool_name: name,
+    tool_use_id: "",
+    tool_input: {},
+    summary_only: true,
+  }));
+}
+
+function mergeMessagePreservingFullContent(current: ChatMessage, incoming: ChatMessage): ChatMessage {
+  const currentContent = current.content || "";
+  const incomingContent = incoming.content || "";
+  const keepCurrentContent =
+    currentContent.length > incomingContent.length &&
+    (Boolean((incoming as any).is_truncated) || Number((incoming as any).content_length || 0) > incomingContent.length);
+  const incomingTools = normalizeToolEventsForRender(incoming.tools_called);
+  const currentTools = normalizeToolEventsForRender(current.tools_called);
+  return {
+    ...current,
+    ...incoming,
+    content: keepCurrentContent ? currentContent : incomingContent,
+    tools_called: (incomingTools.length > 0 ? incomingTools : currentTools) as ChatMessage["tools_called"],
+    ...(currentContent.length > incomingContent.length ? { content_length: Math.max(currentContent.length, Number((incoming as any).content_length || 0)) } : {}),
+  };
+}
+
 // ── MessageItem: React.memo로 개별 메시지 리렌더링 최적화 ──
 interface MessageItemProps {
   msg: ChatMessage;
@@ -239,6 +316,10 @@ const MessageItem = memo(function MessageItem({
   const finalThinkingSummary = msg.role === "assistant" && !isActiveStreaming
     ? String(msg.thinking_summary || msg.thought_summary || "").trim()
     : "";
+  const normalizedToolEvents = normalizeToolEventsForRender(msg.tools_called);
+  const hasToolSummary = msg.role === "assistant" && !isActiveStreaming && messageHasToolSummary(msg);
+  const toolEventsForRender = normalizedToolEvents.length > 0 ? normalizedToolEvents : buildSummaryToolEvents(msg);
+  const toolHydrationStatus = String((msg as any).tool_hydration_status || "");
 
   // P1: 긴 보고서 접이식 상태
   const [contentCollapsed, setContentCollapsed] = useState(
@@ -614,7 +695,7 @@ const MessageItem = memo(function MessageItem({
             </>
           ) : (
             <>
-              {msg.tools_called && Array.isArray(msg.tools_called) && msg.tools_called.length > 0 && (() => {
+              {hasToolSummary && (() => {
                 const toolIcons: Record<string, string> = {
                   read_remote_file: "📄", read_github_file: "📄", list_remote_dir: "📁",
                   write_remote_file: "✏️", patch_remote_file: "✏️",
@@ -633,8 +714,11 @@ const MessageItem = memo(function MessageItem({
                     || (Object.values(inp).filter((x: unknown) => typeof x === 'string')[0] as string) || '';
                   return String(v).slice(0, 80);
                 };
-                const toolUseCount = msg.tools_called!.filter((e: any) => e.type === 'tool_use').length;
-                const lastEvent = [...msg.tools_called!].reverse().find((e: any) => e.type === 'tool_use' || e.type === 'tool_result');
+                const toolUseCount = toolEventsForRender.filter((e: any) => e.type === 'tool_use').length || Number((msg as any).tool_count || 0);
+                const lastEvent = [...toolEventsForRender].reverse().find((e: any) => e.type === 'tool_use' || e.type === 'tool_result');
+                const isHydrating = normalizedToolEvents.length === 0 && toolHydrationStatus === "loading";
+                const hydrateFailed = normalizedToolEvents.length === 0 && toolHydrationStatus === "error";
+                const needsHydrate = normalizedToolEvents.length === 0 && !toolHydrationStatus && Boolean((msg as any).has_tools);
                 return (
                   <details style={{marginBottom: '8px'}}>
                     <summary style={{
@@ -651,6 +735,9 @@ const MessageItem = memo(function MessageItem({
                           — {lastEvent.type === 'tool_result' ? '✅' : getIcon(lastEvent.tool_name)} {lastEvent.tool_name}
                         </span>
                       )}
+                      {isHydrating && (
+                        <span style={{opacity: 0.6, fontSize: '11px', marginLeft: '4px'}}>상세 불러오는 중</span>
+                      )}
                     </summary>
                     <div style={{
                       padding: '8px 10px', marginTop: '4px',
@@ -658,13 +745,23 @@ const MessageItem = memo(function MessageItem({
                       border: '1px solid rgba(108,99,255,0.2)',
                       fontSize: '12px', maxHeight: '240px', overflowY: 'auto',
                     }}>
-                      {msg.tools_called!.map((ev: any, i: number) => (
+                      {(isHydrating || needsHydrate) && (
+                        <div style={{marginBottom: '6px', color: 'var(--ct-text2)', fontSize: '11px'}}>
+                          도구 상세 기록을 불러오는 중입니다.
+                        </div>
+                      )}
+                      {hydrateFailed && toolEventsForRender.length === 0 && (
+                        <div style={{marginBottom: '6px', color: 'var(--ct-text2)', fontSize: '11px'}}>
+                          도구 상세 기록을 불러오지 못했습니다.
+                        </div>
+                      )}
+                      {toolEventsForRender.map((ev: any, i: number) => (
                         <div key={i} style={{marginBottom: '4px'}}>
                           {ev.type === 'tool_use' && (
                             <>
                               <div style={{display: 'flex', alignItems: 'center', gap: '5px', color: 'var(--ct-accent)'}}>
                                 <span>{getIcon(ev.tool_name)}</span>
-                                <span style={{fontWeight: 500}}>{ev.tool_name} 실행</span>
+                                <span style={{fontWeight: 500}}>{ev.tool_name} {ev.summary_only ? "기록됨" : "실행"}</span>
                               </div>
                               {ev.tool_input && getParam(ev.tool_input) && (
                                 <div style={{color: '#888', fontSize: '11px', marginLeft: '18px', fontFamily: 'monospace', wordBreak: 'break-all' as const}}>
@@ -999,6 +1096,10 @@ const MessageItem = memo(function MessageItem({
   prev.editingMsgId === next.editingMsgId &&
   (prev.editingMsgId === prev.msg.id ? prev.editText === next.editText : true) &&
   prev.msg.tools_called === next.msg.tools_called &&
+  (prev.msg as any).has_tools === (next.msg as any).has_tools &&
+  (prev.msg as any).tool_count === (next.msg as any).tool_count &&
+  (prev.msg as any).tool_names === (next.msg as any).tool_names &&
+  (prev.msg as any).tool_hydration_status === (next.msg as any).tool_hydration_status &&
   prev.isActiveStreaming === next.isActiveStreaming &&
   prev.streamingContent === next.streamingContent &&
   prev.streamingThinking === next.streamingThinking &&
@@ -1380,6 +1481,44 @@ export default function ChatPage() {
   const artifactToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const artifactFetchingRef = useRef(false); // 중복 re-fetch 방지
   const artifactFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toolHydrationRequestedRef = useRef<Set<string>>(new Set());
+
+  const needsToolHydration = useCallback((msg: ChatMessage): boolean => {
+    if (msg.role !== "assistant") return false;
+    if (msg.intent === "streaming_placeholder" || msg.intent?.startsWith("streaming")) return false;
+    if (!messageHasToolSummary(msg)) return false;
+    if (normalizeToolEventsForRender(msg.tools_called).length > 0) return false;
+    if ((msg as any).tool_hydration_status === "loaded" || (msg as any).tool_hydration_status === "error") return false;
+    return Boolean((msg as any).has_tools || Number((msg as any).tool_count || 0) > 0);
+  }, []);
+
+  const hydrateMessageTools = useCallback(async (msg: ChatMessage) => {
+    if (!msg.id || toolHydrationRequestedRef.current.has(msg.id)) return;
+    toolHydrationRequestedRef.current.add(msg.id);
+    setMessages((prev) => prev.map((m) =>
+      m.id === msg.id ? { ...m, tool_hydration_status: "loading" } as ChatMessage : m
+    ));
+    try {
+      const fullMsg = await chatApi<ChatMessage>(`/chat/messages/${msg.id}`);
+      setMessages((prev) => prev.map((m) => {
+        if (m.id !== msg.id) return m;
+        return {
+          ...mergeMessagePreservingFullContent(m, fullMsg),
+          tool_hydration_status: "loaded",
+        } as ChatMessage;
+      }));
+    } catch {
+      setMessages((prev) => prev.map((m) =>
+        m.id === msg.id ? { ...m, tool_hydration_status: "error" } as ChatMessage : m
+      ));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!activeSession?.id) return;
+    const targets = messages.filter(needsToolHydration).slice(0, 3);
+    targets.forEach((msg) => { void hydrateMessageTools(msg); });
+  }, [activeSession?.id, messages, needsToolHydration, hydrateMessageTools]);
 
   // Phase 2: 클라이언트는 이전 revision과 비교하여 변경 없으면 /messages 재조회 생략.
   const syncStreamingStatusRevisions = (status?: StreamingStatus | null) => {
@@ -2357,7 +2496,7 @@ export default function ChatPage() {
                 const placeholder = prev.find(m => m.intent === "streaming_placeholder");
                 if (placeholder && _lastAiJc) {
                   // placeholder의 id 유지 → React DOM 재사용 (새 버블 생성 불가)
-                  const inPlaceMsg = { ..._lastAiJc, id: placeholder.id };
+                  const inPlaceMsg = { ...mergeMessagePreservingFullContent(placeholder, _lastAiJc), id: placeholder.id };
                   return prev.map(m => m.intent === "streaming_placeholder" ? inPlaceMsg : m);
                 }
                 // fallback: placeholder 없을 때
@@ -2421,7 +2560,7 @@ export default function ChatPage() {
                 // ★ 완전 in-place: placeholder를 최종 AI 메시지로 교체 (새 버블 방지)
                 const placeholder = prev.find(m => m.intent === "streaming_placeholder");
                 if (placeholder && _lastAiSse) {
-                  const inPlaceMsg = { ..._lastAiSse, id: placeholder.id };
+                  const inPlaceMsg = { ...mergeMessagePreservingFullContent(placeholder, _lastAiSse), id: placeholder.id };
                   return prev.map(m => m.intent === "streaming_placeholder" ? inPlaceMsg : m);
                 }
                 // fallback: placeholder 없을 때
@@ -2549,9 +2688,8 @@ export default function ChatPage() {
                     replaced = true;
                     // Bug 3: match ID가 이미 state에 있으면 temp 메시지 제거 (실제 DB 버전이 이미 존재)
                     if (existingIds.has(match.id)) return null;
-                    // Bug 1: fields=minimal로 잘린 응답이 긴 기존 content를 덮어쓰지 않도록 보존
-                    const content = (m.content || "").length > (match.content || "").length ? m.content : match.content;
-                    return { ...match, content };
+                    // fields=minimal로 잘린 응답이 긴 기존 content/tools를 덮어쓰지 않도록 보존
+                    return mergeMessagePreservingFullContent(m, match);
                   }
                 }
                 return m;
@@ -2573,7 +2711,7 @@ export default function ChatPage() {
               (t.content || "").slice(0, (m.content || "").length) === (m.content || "") &&
               (t.content || "").length > (m.content || "").length
             );
-            return tempMatch ? { ...m, content: tempMatch.content! } : m;
+            return tempMatch ? mergeMessagePreservingFullContent(tempMatch, m) : m;
           });
           // Bug 3: cleanPrev에 이미 있는 ID는 preservedNewMsgs에서 제거 (중복 방지)
           const newMsgIds = new Set(preservedNewMsgs.map((m) => m.id));
@@ -3007,6 +3145,7 @@ export default function ChatPage() {
       const decoder = new TextDecoder();
       let buf = "";
       let gotFinal = false;
+      let accumulatedToolCalls: Array<Record<string, any>> = [];
 
       // Phase4: 토큰 버퍼링 — SSE 끊김 시에도 표시 지속 (2초 분량 선행 버퍼)
       const _tokenQueue: string[] = [];
@@ -3073,6 +3212,7 @@ export default function ChatPage() {
             if (ev.type === "stream_reset") {
               // F8: 출력 검증 실패 → 재시도 시 이전 텍스트 초기화
               full = "";
+              if (ev.reason === "llm_retry") accumulatedToolCalls = [];
               setStreamBuf("");
               setToolStatus("🔄 응답 재검증 중...");
               continue;
@@ -3162,6 +3302,10 @@ export default function ChatPage() {
                     output_tokens: ev.output_tokens || undefined,
                     cost_usd: ev.cost ? parseFloat(ev.cost) : undefined,
                     confidence_label: ev.confidence_label || undefined,
+                    tools_called: accumulatedToolCalls as ChatMessage["tools_called"],
+                    has_tools: accumulatedToolCalls.length > 0,
+                    tool_count: accumulatedToolCalls.filter((toolEv) => toolEv.type === "tool_use").length,
+                    tool_names: Array.from(new Set(accumulatedToolCalls.map((toolEv) => String(toolEv.tool_name || "")).filter(Boolean))),
                     created_at: new Date().toISOString(),
                   };
                   if (hasPlaceholder) {
@@ -3172,6 +3316,15 @@ export default function ChatPage() {
               }
               break; // done 이벤트 수신 → for 루프 탈출
             } else if (ev.type === "tool_use" && ev.tool_name) {
+              accumulatedToolCalls = [
+                ...accumulatedToolCalls,
+                ...normalizeToolEventsForRender([{
+                  type: "tool_use",
+                  tool_name: ev.tool_name,
+                  tool_use_id: ev.tool_use_id || "",
+                  tool_input: ev.tool_input || {},
+                }]),
+              ];
               const toolIcons: Record<string, string> = {
                 read_remote_file: "📄", read_github_file: "📄", list_remote_dir: "📁",
                 write_remote_file: "✏️", patch_remote_file: "✏️",
@@ -3194,6 +3347,19 @@ export default function ChatPage() {
                 setToolStatus(`${icon} ${ev.tool_name} 실행 중...`);
               }
             } else if (ev.type === "tool_result" && ev.tool_name) {
+              accumulatedToolCalls = [
+                ...accumulatedToolCalls,
+                ...normalizeToolEventsForRender([{
+                  type: "tool_result",
+                  tool_name: ev.tool_name,
+                  tool_use_id: ev.tool_use_id || "",
+                  content: ev.content || "",
+                  is_error: ev.is_error,
+                  error_type: ev.error_type,
+                  cancel_scope: ev.cancel_scope,
+                  raw_error: ev.raw_error,
+                }]),
+              ];
               const resultPreview = ev.content ? String(ev.content).slice(0, 60).replace(/\n/g, " ") : "";
               if (!isStale()) {
                 setToolLogs(prev => {
@@ -3232,11 +3398,20 @@ export default function ChatPage() {
               setToolStatus(null);
               // ★ in-place 업데이트
               setMessages((prev) => {
+                const mergedMessage = {
+                  ...(ev.message as ChatMessage),
+                  tools_called: normalizeToolEventsForRender((ev.message as ChatMessage).tools_called).length > 0
+                    ? (ev.message as ChatMessage).tools_called
+                    : accumulatedToolCalls as ChatMessage["tools_called"],
+                  has_tools: Boolean((ev.message as any).has_tools) || accumulatedToolCalls.length > 0,
+                  tool_count: (ev.message as any).tool_count ?? accumulatedToolCalls.filter((toolEv) => toolEv.type === "tool_use").length,
+                  tool_names: (ev.message as any).tool_names ?? Array.from(new Set(accumulatedToolCalls.map((toolEv) => String(toolEv.tool_name || "")).filter(Boolean))),
+                } as ChatMessage;
                 const hasPlaceholder = prev.some(m => m.intent === "streaming_placeholder");
                 if (hasPlaceholder) {
-                  return prev.map(m => m.intent === "streaming_placeholder" ? (ev.message as ChatMessage) : m);
+                  return prev.map(m => m.intent === "streaming_placeholder" ? mergedMessage : m);
                 }
-                return [...prev.filter(m => m.intent !== "streaming_placeholder"), ev.message as ChatMessage];
+                return [...prev.filter(m => m.intent !== "streaming_placeholder"), mergedMessage];
               });
               break; // done → for 루프 탈출
             } else if (ev.type === "yellow_limit") {
@@ -3317,6 +3492,10 @@ export default function ChatPage() {
             execution_id: currentExecutionIdRef.current || undefined,
             role: "assistant" as const,
             content: full,
+            tools_called: accumulatedToolCalls as ChatMessage["tools_called"],
+            has_tools: accumulatedToolCalls.length > 0,
+            tool_count: accumulatedToolCalls.filter((toolEv) => toolEv.type === "tool_use").length,
+            tool_names: Array.from(new Set(accumulatedToolCalls.map((toolEv) => String(toolEv.tool_name || "")).filter(Boolean))),
           };
           if (hasPlaceholder) {
             return prev.map(m => m.intent === "streaming_placeholder" ? finalMsg : m);

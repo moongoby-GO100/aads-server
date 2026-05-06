@@ -582,16 +582,11 @@ async def get_streaming_status(session_id: UUID):
             def _extract_tool_progress(tools_called) -> tuple[int, str]:
                 """tools_called JSON에서 tool_count/last_tool 산출 (BUG #3).
                 asyncpg는 jsonb를 str로 반환할 수 있어 list/str 양쪽 처리."""
-                if not tools_called:
-                    return 0, ""
                 try:
-                    import json as _json
-                    arr = tools_called
-                    if isinstance(arr, (str, bytes)):
-                        arr = _json.loads(arr)
-                    if not isinstance(arr, list):
-                        return 0, ""
-                    tool_uses = [t for t in arr if isinstance(t, dict) and t.get("type") == "tool_use"]
+                    tool_uses = [
+                        t for t in svc.normalize_tool_events(tools_called)
+                        if t.get("type") == "tool_use"
+                    ]
                     last_tool = tool_uses[-1].get("tool_name", "") if tool_uses else ""
                     return len(tool_uses), last_tool
                 except Exception:
@@ -1312,6 +1307,21 @@ async def search_messages(
         limit=limit,
     )
     return {"messages": results, "total": len(results)}
+
+
+@router.get("/chat/messages/{message_id}", tags=["chat-message"])
+async def get_message_detail(
+    message_id: UUID,
+    response: Response,
+    fields: str = Query("full", pattern="^(full|minimal)$"),
+):
+    """단일 메시지 상세. fields=minimal 목록에서 도구박스/전체 본문을 lazy hydrate한다."""
+    started_at = time.perf_counter()
+    result = await svc.get_message(str(message_id), fields=fields)
+    if not result:
+        raise _NOT_FOUND("message")
+    _set_message_response_headers(response, started_at, result)
+    return result
 
 
 # ─── P2-2: 대화 분기 (Branch) API ─────────────────────────────────────────────

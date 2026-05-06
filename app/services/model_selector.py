@@ -656,6 +656,21 @@ _CODEX_MODEL_DISPLAY = {
     "gpt-5.4-mini": "GPT-5.4 Mini (Codex CLI)",
     "gpt-5.3-codex": "GPT-5.3 Codex (Codex CLI)",
 }
+_CODEX_MODEL_ALIASES = {
+    "codex:gpt-5.5": "gpt-5.5",
+    "gpt-5.5 (codex cli)": "gpt-5.5",
+    "codex:gpt-5.4": "gpt-5.4",
+    "gpt-5.4 (codex cli)": "gpt-5.4",
+    "codex:gpt-5.4-mini": "gpt-5.4-mini",
+    "gpt-5.4 mini (codex cli)": "gpt-5.4-mini",
+    "codex:gpt-5.3-codex": "gpt-5.3-codex",
+    "gpt-5.3 codex (codex cli)": "gpt-5.3-codex",
+}
+
+
+def _canonical_codex_model_id(model: Any) -> str:
+    value = str(model or "").strip()
+    return _CODEX_MODEL_ALIASES.get(value.lower(), value)
 
 # DeepSeek 모델 (LiteLLM 경유)
 _DEEPSEEK_COMPATIBILITY_ALIASES = {
@@ -1156,6 +1171,7 @@ async def call_stream(
     _qualified_provider, _qualified_model = _split_provider_qualified_model(str(model))
     if _qualified_provider:
         model = _qualified_model
+    model = _canonical_codex_model_id(model)
     resolved_model, resolved_row = await _resolve_registered_model_alias(model, provider=_qualified_provider)
     if resolved_model and resolved_model != model:
         logger.info("registered_model_alias_resolved: '%s' -> '%s'", model, resolved_model)

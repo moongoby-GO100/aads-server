@@ -6,6 +6,37 @@
 
 ---
 
+## v2.2 업데이트 — 도구박스/최종버블 회귀 보강 (2026-05-06 KST)
+
+### 적용 범위
+
+- `fields=minimal` 응답은 계속 표시 전용 preview를 반환하되, 도구박스 복원에 필요한 `has_tools`, `tool_count`, `tool_names` 요약 메타를 포함한다.
+- full `tools_called` JSON은 minimal payload에 싣지 않고, 프론트가 `has_tools=true` assistant 메시지에 한해 `/chat/messages/{message_id}` 상세 API를 1회 lazy hydrate한다.
+- hydrate merge는 현재 화면에 이미 있는 긴 assistant 본문을 200자 preview로 덮어쓰지 않는다. `content_length/is_truncated` 기준으로 더 긴 content와 기존 tool 이벤트를 보존한다.
+- 스트리밍 중 수신한 `tool_use/tool_result` 이벤트는 final assistant 버블에도 누적해, DB 저장 `tools_called`와 화면 렌더 `tools_called`가 같은 정규화 구조를 쓰도록 했다.
+- `tools_called`가 과거 문자열 배열이거나 Codex relay 구조화 이벤트여도 `normalize_tool_events()`가 동일한 `{type, tool_name, tool_use_id, tool_input/content}` 배열로 맞춘다.
+- `codex:gpt-5.5`, `gpt-5.5`, `GPT-5.5 (Codex CLI)` 표기는 모두 Codex 실행 모델 `gpt-5.5`로 정규화한다.
+
+### v2.2 불변 원칙
+
+프론트 API payload 축소는 **SELECT 컬럼 제한과 상세 lazy load**로만 처리한다. `chat_messages.content`, `embedding`, `quality_score`, `quality_details`, `thinking_summary`, `tools_called` 원본 저장 경로는 축소하지 않는다. LLM 컨텍스트, memory/RAG, quality/reflexion/sleep-time 계층은 서버가 DB 원본을 읽는 기존 경로를 계속 사용한다.
+
+### 수동 검증 절차
+
+대상 세션: `b8a8651b-6226-46df-9a44-36a70e478959`
+
+1. `/chat#b8a8651b-6226-46df-9a44-36a70e478959` 진입 후 Network에서 `/chat/messages?fields=minimal` 응답의 assistant 메시지에 `has_tools/tool_count/tool_names`가 있는지 확인한다.
+2. 같은 assistant 메시지에 `tools_called`가 없거나 빈 배열이어도 도구박스 placeholder가 표시되는지 확인한다.
+3. 이어서 `/chat/messages/{message_id}` 요청이 메시지당 1회만 발생하고, 응답 후 도구박스가 tool detail로 갱신되는지 확인한다.
+4. 800자 이상 assistant 본문이 표시된 상태에서 minimal polling이 다시 와도 화면의 본문 길이가 200자로 줄지 않는지 확인한다.
+5. 새 Codex 응답에서 스트리밍 중 보인 도구 이벤트와 완료 후 도구박스의 도구명/개수가 일치하는지 확인한다.
+
+### 자동 검증
+
+- `python3 -m pytest tests/unit/test_chat_service.py tests/unit/test_chat_lightweight_frontend_static.py -q`
+
+---
+
 ## 1. 핵심 결론
 
 | 판정 | 내용 |

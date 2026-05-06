@@ -615,6 +615,18 @@ def get_model_for_override(model_override: str) -> str:
     프론트엔드 model_override 문자열을 LiteLLM 모델명으로 변환.
     예: "claude-sonnet-4-6" → "claude-sonnet" (litellm alias)
     """
+    model_override = (model_override or "").strip()
+    lowered = model_override.lower()
+    if lowered.startswith("codex:"):
+        return model_override.split(":", 1)[1].strip()
+    codex_display_aliases = {
+        "gpt-5.5 (codex cli)": "gpt-5.5",
+        "gpt-5.4 (codex cli)": "gpt-5.4",
+        "gpt-5.4 mini (codex cli)": "gpt-5.4-mini",
+        "gpt-5.3 codex (codex cli)": "gpt-5.3-codex",
+    }
+    if lowered in codex_display_aliases:
+        return codex_display_aliases[lowered]
     mapping = {
         "claude-sonnet-4-6": "claude-sonnet",
         "claude-opus-4-6":   "claude-opus",

@@ -182,6 +182,96 @@ def _tool_result_event_snapshot(event: Dict[str, Any], content_limit: int = 500)
     return payload
 
 
+def normalize_tool_events(tools_called: Any) -> List[Dict[str, Any]]:
+    """DB 저장/화면 렌더용 도구 이벤트를 단일 구조로 정규화한다.
+
+    과거 row에는 ["tool_name"] 형태가 섞여 있고, Codex relay는 구조화 이벤트를
+    직접 보낸다. 저장 전과 API 반환 전 모두 이 함수를 거쳐 DB와 UI의
+    tools_called 계약을 같게 유지한다.
+    """
+    if not tools_called:
+        return []
+    raw = tools_called
+    if isinstance(raw, (str, bytes)):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = [str(raw)]
+    if isinstance(raw, dict):
+        if isinstance(raw.get("tools_called"), list):
+            raw = raw.get("tools_called")
+        elif isinstance(raw.get("tool_names"), list):
+            raw = raw.get("tool_names")
+        else:
+            raw = [raw]
+    if not isinstance(raw, list):
+        return []
+
+    normalized: List[Dict[str, Any]] = []
+    for item in raw:
+        if isinstance(item, str):
+            name = item.strip()
+            if name:
+                normalized.append({"type": "tool_use", "tool_name": name, "tool_use_id": "", "tool_input": {}})
+            continue
+        if not isinstance(item, dict):
+            continue
+
+        event_type = str(item.get("type") or "").strip()
+        tool_name = str(item.get("tool_name") or item.get("name") or "").strip()
+        if not event_type:
+            event_type = "tool_use" if tool_name else "thinking"
+
+        if event_type == "tool_use":
+            if not tool_name:
+                continue
+            normalized.append({
+                "type": "tool_use",
+                "tool_name": tool_name,
+                "tool_use_id": str(item.get("tool_use_id") or ""),
+                "tool_input": item.get("tool_input") if isinstance(item.get("tool_input"), dict) else {},
+            })
+        elif event_type == "tool_result":
+            if not tool_name:
+                continue
+            payload = {
+                "type": "tool_result",
+                "tool_name": tool_name,
+                "tool_use_id": str(item.get("tool_use_id") or ""),
+                "content": str(item.get("content") or "")[:500],
+            }
+            for key in ("is_error", "error_type", "cancel_scope", "raw_error"):
+                if item.get(key):
+                    payload[key] = item.get(key)
+            normalized.append(payload)
+        elif event_type == "thinking":
+            text = str(item.get("thinking") or item.get("content") or "").strip()
+            if text:
+                normalized.append({"type": "thinking", "content": text[:300]})
+    return normalized
+
+
+def _tool_names_from_events(tool_events: List[Dict[str, Any]]) -> List[str]:
+    names: List[str] = []
+    for event in tool_events:
+        name = str(event.get("tool_name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _apply_tool_summary(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Full message 응답에 도구 요약 메타를 보강한다."""
+    if "tools_called" not in message:
+        return message
+    tool_events = normalize_tool_events(message.get("tools_called"))
+    message["tools_called"] = tool_events
+    message["tool_count"] = len([event for event in tool_events if event.get("type") == "tool_use"])
+    message["tool_names"] = _tool_names_from_events(tool_events)
+    message["has_tools"] = bool(tool_events)
+    return message
+
+
 async def _apply_deferred_interrupts_to_state(
     *,
     session_id: str,
@@ -724,7 +814,7 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any]) -> Non
         _sid = uuid.UUID(session_id)
         _eid_raw = state.get("execution_id")
         _eid = uuid.UUID(str(_eid_raw)) if _eid_raw else None
-        _tool_events_json = json.dumps(state.get("tool_events", []))
+        _tool_events_json = json.dumps(normalize_tool_events(state.get("tool_events", [])))
         async with pool.acquire() as conn:
             if _eid:
                 _exec_row = await conn.fetchrow(
@@ -2666,6 +2756,14 @@ _AUTO_MESSAGE_EXCLUDE_FILTER = (
 
 def _message_select_fields(fields: str) -> str:
     if fields == "minimal":
+        # INVARIANT: fields=minimal is display-only. It never changes DB rows,
+        # embeddings, full content, thinking, quality_details, or LLM raw history.
+        # tools_called is summarized here but the full JSON is lazy-loaded only
+        # for messages that need the tool box.
+        _tool_events = (
+            "(CASE WHEN tools_called IS NOT NULL AND jsonb_typeof(tools_called) = 'array' "
+            "THEN tools_called ELSE '[]'::jsonb END)"
+        )
         return (
             "id, session_id, role, LEFT(content, 200) AS content, "
             "LENGTH(content) AS content_length, "
@@ -2673,7 +2771,17 @@ def _message_select_fields(fields: str) -> str:
             "intent, model_used, quality_score, created_at, edited_at, "
             "bookmarked, "
             "(attachments IS NOT NULL AND attachments::text != '[]' AND attachments::text != 'null') AS has_attachments, "
-            "(tools_called IS NOT NULL AND tools_called::text != '[]' AND tools_called::text != 'null') AS has_tools, "
+            f"(jsonb_array_length({_tool_events}) > 0) AS has_tools, "
+            f"(SELECT COUNT(*)::int FROM jsonb_array_elements({_tool_events}) AS tool_event(value) "
+            " WHERE (jsonb_typeof(tool_event.value) = 'object' AND tool_event.value->>'type' = 'tool_use') "
+            "    OR jsonb_typeof(tool_event.value) = 'string') AS tool_count, "
+            f"COALESCE((SELECT array_agg(name) FROM ("
+            f" SELECT DISTINCT NULLIF(CASE "
+            "  WHEN jsonb_typeof(tool_event.value) = 'object' THEN tool_event.value->>'tool_name' "
+            "  WHEN jsonb_typeof(tool_event.value) = 'string' THEN tool_event.value #>> '{}' "
+            "  ELSE '' END, '') AS name "
+            f" FROM jsonb_array_elements({_tool_events}) AS tool_event(value)"
+            ") tool_name_rows WHERE name IS NOT NULL), ARRAY[]::text[]) AS tool_names, "
             "CASE "
             "WHEN intent = 'streaming_placeholder' OR intent LIKE 'streaming%' THEN 'streaming' "
             "WHEN intent = 'rate_limited' THEN 'rate_limited' "
@@ -2792,6 +2900,7 @@ async def list_messages(
         results = [_row_to_dict(r) for r in rows]
         if fields == "minimal":
             return results
+        results = [_apply_tool_summary(result) for result in results]
         # 비활성 세션의 streaming_placeholder → 내용 있으면 recovered 전환, 없으면 제외
         if not _is_active and not read_only:
             results = await _promote_inactive_streaming_placeholders(
@@ -2849,6 +2958,7 @@ async def list_messages_cursor(
         if has_more:
             messages = messages[1:]  # 가장 오래된 1건(초과분) 제거 — dedup 전에 수행
         if fields != "minimal":
+            messages = [_apply_tool_summary(message) for message in messages]
             # 비활성 세션의 streaming_placeholder → 내용 있으면 recovered 전환, 없으면 제외
             if not _is_active and not read_only:
                 messages = await _promote_inactive_streaming_placeholders(
@@ -2861,6 +2971,28 @@ async def list_messages_cursor(
             "next_cursor": next_cursor,
             "has_more": has_more,
         }
+
+
+async def get_message(message_id: str, fields: str = "full") -> Optional[Dict[str, Any]]:
+    """단일 메시지 조회. minimal 목록에서 도구/본문 상세 hydrate 시 사용한다."""
+    async with get_pool().acquire() as conn:
+        _select_fields = _message_select_fields(fields)
+        row = await conn.fetchrow(
+            f"""
+            SELECT {_select_fields}
+            FROM chat_messages
+            WHERE id = $1
+              AND intent IS DISTINCT FROM '_deleted_duplicate'
+            LIMIT 1
+            """,
+            uuid.UUID(message_id),
+        )
+        if not row:
+            return None
+        result = _row_to_dict(row)
+        if fields != "minimal":
+            result = _apply_tool_summary(result)
+        return result
 
 
 def _is_html_edit_intent(content: str) -> bool:
@@ -3231,6 +3363,7 @@ async def _save_message(
     if _execution_uuid is None and role == "assistant":
         _execution_id_str = _current_execution_id.get(None)
         _execution_uuid = uuid.UUID(_execution_id_str) if _execution_id_str else None
+    normalized_tools_called = normalize_tool_events(tools_called)
 
     # AADS-CRITICAL-FIX #2: INSERT + UPDATE를 트랜잭션으로 감싸 message_count 정합성 보장
     # Stage 3: idempotency_key가 있으면 ON CONFLICT DO NOTHING으로 중복 방지
@@ -3246,7 +3379,7 @@ async def _save_message(
                 RETURNING *
                 """,
                 session_id, _execution_uuid, role, content, model_used, intent, cost, tokens_in, tokens_out,
-                json.dumps(attachments or []), json.dumps(sources or []), json.dumps(tools_called or []),
+                json.dumps(attachments or []), json.dumps(sources or []), json.dumps(normalized_tools_called),
                 thinking_summary, reply_to_id, _branch_uuid, idempotency_key,
             )
             if row is None:
@@ -3262,7 +3395,7 @@ async def _save_message(
                 RETURNING *
                 """,
                 session_id, _execution_uuid, role, content, model_used, intent, cost, tokens_in, tokens_out,
-                json.dumps(attachments or []), json.dumps(sources or []), json.dumps(tools_called or []),
+                json.dumps(attachments or []), json.dumps(sources or []), json.dumps(normalized_tools_called),
                 thinking_summary, reply_to_id, _branch_uuid,
             )
         # Update session message count (atomic with INSERT)
@@ -3306,6 +3439,7 @@ async def _save_and_update_session(
     """#19: Phase C — 별도 커넥션으로 응답 저장 + 세션 비용 업데이트.
     BUG-FIX: placeholder가 있으면 UPDATE로 전환 (DELETE+INSERT gap 제거).
     """
+    normalized_tools_called = normalize_tool_events(tools_called)
     _execution_uuid = execution_id
     if _execution_uuid is None:
         _execution_id_str = _current_execution_id.get(None)
@@ -3383,7 +3517,7 @@ async def _save_and_update_session(
                        WHERE id = $11""",
                     clean_content, intent or None, model_used,
                     cost, tokens_in, tokens_out,
-                    json.dumps(sources or []), json.dumps(tools_called or []),
+                    json.dumps(sources or []), json.dumps(normalized_tools_called),
                     thinking_summary, _execution_uuid, placeholder_id,
                 )
                 logger.info(f"placeholder_promoted_to_final session={str(sid)[:8]} placeholder_id={placeholder_id}")
@@ -3394,7 +3528,7 @@ async def _save_and_update_session(
                     execution_id=_execution_uuid,
                     model_used=model_used, intent=intent, cost=cost,
                     tokens_in=tokens_in, tokens_out=tokens_out,
-                    sources=sources or [], tools_called=tools_called or [],
+                    sources=sources or [], tools_called=normalized_tools_called,
                     thinking_summary=thinking_summary,
                 )
                 _assistant_msg_id = _saved_msg["id"] if _saved_msg else None
@@ -4674,27 +4808,11 @@ async def send_message_stream(
         # 배경: pipeline_runner 등 use_tools=False 인텐트로 분류되면 Codex에 tool_names=[]로 전달 →
         #       릴레이 로그 "tools=0" + DB tools_called=0 누적. UI엔 도구 결과가 섞여 들어오나
         #       구조화 기록 누락으로 재사용/평가/회고 경로가 전부 공백이 됨.
-        _effective_model_for_tools = (model_override or intent_result.model or "").lower()
-        if (
-            _effective_model_for_tools.startswith(("gpt-5.5", "gpt-5.4", "gpt-5.3-codex"))
-            and not tools_for_api
-        ):
-            _codex_tools = _registry.get_eager_tools() or _registry.get_tools("all") or []
-            if _codex_tools:
-                tools_for_api = _codex_tools
-                logger.info(
-                    "codex_tools_enforced",
-                    session_id=session_id,
-                    model=_effective_model_for_tools,
-                    intent=intent,
-                    tools=len(_codex_tools),
-                )
-
-        # AADS-190 P1: Codex CLI 모델은 intent 분류 결과와 무관하게 전체 MCP 도구 강제 주입
-        # 배경: pipeline_runner 등 use_tools=False 인텐트로 분류되면 Codex에 tool_names=[]로 전달 →
-        #       릴레이 로그 "tools=0" + DB tools_called=0 누적. UI엔 도구 결과가 섞여 들어오나
-        #       구조화 기록 누락으로 재사용/평가/회고 경로가 전부 공백이 됨.
-        _effective_model_for_tools = (model_override or intent_result.model or "").lower()
+        _effective_model_for_tools = (
+            get_model_for_override(model_override)
+            if model_override and str(model_override).strip() not in ("mixture", "auto", "")
+            else (intent_result.model or "")
+        ).lower()
         if (
             _effective_model_for_tools.startswith(("gpt-5.5", "gpt-5.4", "gpt-5.3-codex"))
             and not tools_for_api

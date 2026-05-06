@@ -85,6 +85,22 @@ def test_dedupe_recovery_like_messages_keeps_longest_recovery_message():
     assert [message["id"] for message in deduped] == ["u1", "a2", "a3"]
 
 
+def test_normalize_tool_events_accepts_legacy_names_and_codex_events():
+    events = chat_service.normalize_tool_events([
+        "web_search",
+        {"type": "tool_use", "tool_name": "run_remote_command", "tool_input": {"command": "pwd"}},
+        {"type": "tool_result", "tool_name": "run_remote_command", "content": "ok"},
+        {"type": "thinking", "thinking": "checking"},
+    ])
+
+    assert events == [
+        {"type": "tool_use", "tool_name": "web_search", "tool_use_id": "", "tool_input": {}},
+        {"type": "tool_use", "tool_name": "run_remote_command", "tool_use_id": "", "tool_input": {"command": "pwd"}},
+        {"type": "tool_result", "tool_name": "run_remote_command", "tool_use_id": "", "content": "ok"},
+        {"type": "thinking", "content": "checking"},
+    ]
+
+
 @pytest.mark.asyncio
 async def test_list_messages_minimal_is_read_only_and_selects_light_fields():
     session_id = str(uuid.uuid4())
@@ -114,8 +130,11 @@ async def test_list_messages_minimal_is_read_only_and_selects_light_fields():
         )
 
     query = " ".join(conn.fetch.await_args.args[0].split())
-    assert "SELECT id, role, LEFT(content, 200) AS content, created_at" in query
-    assert "tools_called" not in query
+    assert "SELECT id, session_id, role, LEFT(content, 200) AS content" in query
+    assert "AS has_tools" in query
+    assert "AS tool_count" in query
+    assert "AS tool_names" in query
+    assert "SELECT *" not in query
     assert "thinking_summary" not in query
     assert "embedding" not in query
     conn.execute.assert_not_awaited()
@@ -128,6 +147,34 @@ async def test_list_messages_minimal_is_read_only_and_selects_light_fields():
             "status": "completed",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_message_full_normalizes_tools_for_hydrate():
+    message_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    created_at = datetime.now(timezone.utc)
+
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value={
+        "id": message_id,
+        "session_id": session_id,
+        "role": "assistant",
+        "content": "full answer",
+        "tools_called": ["web_search"],
+        "created_at": created_at,
+    })
+
+    with patch("app.services.chat_service.get_pool", return_value=_Pool(conn)):
+        result = await chat_service.get_message(str(message_id))
+
+    assert result["content"] == "full answer"
+    assert result["tools_called"] == [
+        {"type": "tool_use", "tool_name": "web_search", "tool_use_id": "", "tool_input": {}}
+    ]
+    assert result["has_tools"] is True
+    assert result["tool_count"] == 1
+    assert result["tool_names"] == ["web_search"]
 
 
 def test_message_response_headers_include_timing_size_and_row_count():
