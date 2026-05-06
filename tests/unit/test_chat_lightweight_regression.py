@@ -1,7 +1,8 @@
 """Chat Lightweight regression tests — P1."""
 from pathlib import Path
 
-CHAT_PAGE = Path("aads-dashboard/src/app/chat/page.tsx")
+REAL_DASHBOARD_CHAT_PAGE = Path("../aads-dashboard/src/app/chat/page.tsx")
+CHAT_PAGE = REAL_DASHBOARD_CHAT_PAGE if REAL_DASHBOARD_CHAT_PAGE.exists() else Path("aads-dashboard/src/app/chat/page.tsx")
 CHAT_SERVICE = Path("app/services/chat_service.py")
 MODEL_SELECTOR = Path("app/services/model_selector.py")
 INTENT_ROUTER = Path("app/services/intent_router.py")
@@ -9,7 +10,8 @@ INTENT_ROUTER = Path("app/services/intent_router.py")
 
 def test_long_content_not_overwritten_by_minimal():
     source = CHAT_PAGE.read_text()
-    assert "mergeMessagePreservingFullContent" in source
+    assert "mergeServerMessageWithExisting" in source
+    assert "keepExistingContent" in source
     assert "is_truncated" in source or "content_length" in source
 
 

@@ -423,3 +423,12 @@
 - DB 조치: `migrations/078_pipeline_runner_active_dedup.sql` 추가. 기존 active 중복 row는 1건만 남기고 나머지를 `error/dedup_blocked`로 정리한 뒤 `uq_pipeline_jobs_active_instruction_hash` partial unique index로 재발을 차단.
 - 러너 백스톱: `scripts/pipeline-runner.sh`의 실행 직전 중복 차단 상태를 `cancelled/superseded`에서 `error/dedup_blocked`로 바꿔 대시보드 완료/취소 통계를 오염시키지 않게 수정.
 - 문서: `docs/pipeline-runner/PIPELINE-RUNNER-ARCHITECTURE.md`, `docs/pipeline-runner/PIPELINE-RUNNER-API-REFERENCE.md`에 advisory lock + DB unique guard를 반영.
+
+## 2026-05-06 17:05 KST - GPT Codex 도구박스 잔여 회귀 수정
+
+- 배경: CEO가 GPT Codex 실시간 응답에서 도구사용박스가 안 보이거나 부정확하게 표시된다고 보고. 브라우저 검수에서 도구박스는 표시되지만 `tool_result` 중심 이벤트에서 `도구 0개 사용 — ✅ bash`로 카운트가 잘못 나오는 잔여 회귀 확인.
+- 조치: 대시보드 `src/app/chat/page.tsx`의 도구박스 카운트 계산을 `tool_use` 수 → `tool_count` → `tool_names` → 전체 tool event 수 순으로 fallback하도록 수정.
+- 테스트 보강: `tests/unit/test_chat_lightweight_frontend_static.py`, `tests/unit/test_chat_lightweight_regression.py`가 실제 `/root/aads/aads-dashboard` 소스를 우선 검증하도록 수정하고, tool_result-only 이벤트도 도구 사용으로 집계되는 회귀 테스트 추가.
+- 진단 보강: `scripts/thinking_e2e_check.py`가 호스트 실행 시 `localhost:5433`으로 DB 접속 fallback하도록 수정.
+- 검증: `pytest tests/unit/test_chat_lightweight_regression.py tests/unit/test_chat_lightweight_frontend_static.py -q` 11개 통과, `npx eslint src/app/chat/page.tsx` 0 errors(기존 warning 20개), `npm run build` 성공.
+- 운영 DB 확인: 2026-05-06 GPT Codex 계열 assistant 중 `GPT-5.5 (Codex CLI)` 42건/도구저장 40건, `GPT-5.4 (Codex CLI)` 2건/도구저장 2건. `gpt-5.5`, `codex:gpt-5.5` 별칭 저장 21건은 도구 실행 없는 응답으로 확인.
