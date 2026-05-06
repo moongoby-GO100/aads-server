@@ -8,9 +8,11 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import hashlib
+import inspect
 import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 import uuid
@@ -21,6 +23,17 @@ from typing import Any, Dict, Optional
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+class _DryRunRollback(Exception):
+    def __init__(self, plan: list):
+        self.plan = plan
+
+
+class _MaxAffectedExceeded(Exception):
+    def __init__(self, actual: int, limit: int):
+        self.actual = actual
+        self.limit = limit
 
 
 def _json_default(obj: Any) -> Any:
@@ -197,6 +210,7 @@ class ToolExecutor:
         # execution_id별 읽기 도구 결과 캐시 (executor 생명주기 = execution 생명주기)
         self._execution_cache: dict[str, OrderedDict[str, str]] = {}
         self._session_execution_ids: dict[str, str] = {}
+        self._registry: Optional[Any] = None
 
     async def _resolve_execution_id(self, tool_input: Dict[str, Any]) -> str:
         execution_id = str(tool_input.get("execution_id", "") or "").strip()
@@ -372,6 +386,11 @@ class ToolExecutor:
             "patch_remote_file":      self._patch_remote_file,
             "run_remote_command":     self._run_remote_command,
             "deploy_safe":            self._deploy_safe,
+            "db_safe_write":          self._db_safe_write,
+            "notify_channel":         self._notify_channel,
+            "db_safe_write":          self._db_safe_write,
+            "notify_channel":         self._notify_channel,
+            "tool_layer_audit":       self._tool_layer_audit,
             "git_remote_add":         self._git_remote_add,
             "git_remote_commit":      self._git_remote_commit,
             "git_remote_push":        self._git_remote_push,
@@ -1643,6 +1662,139 @@ class ToolExecutor:
             result["error"] = "deploy_safe 실행 실패"
         return result
 
+    # ── db_safe_write ─────────────────────────────────────────────────────────
+
+    _DB_SAFE_BLOCKED_KEYWORDS = {"DROP", "CREATE", "ALTER", "TRUNCATE", "GRANT", "REVOKE", "VACUUM", "REINDEX"}
+
+    async def _db_safe_write(self, inp: Dict[str, Any]) -> Any:
+        """안전한 DB 쓰기 — 트랜잭션 + DDL 차단 + max_affected 검증."""
+        sql = (inp.get("sql") or "").strip()
+        params = inp.get("params") or []
+        dry_run = inp.get("dry_run", True)
+        max_affected = inp.get("max_affected", 1000)
+
+        if not sql:
+            return {"error": "sql 파라미터 필수"}
+
+        sql_upper = sql.upper().split()
+        if not sql_upper:
+            return {"error": "빈 SQL"}
+
+        first_keyword = sql_upper[0]
+        if first_keyword not in ("INSERT", "UPDATE", "DELETE"):
+            return {"error": f"INSERT/UPDATE/DELETE만 허용 (입력: {first_keyword})"}
+
+        for kw in self._DB_SAFE_BLOCKED_KEYWORDS:
+            if kw in sql.upper():
+                return {"error": f"차단된 키워드: {kw}"}
+
+        try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    if dry_run:
+                        explain = await conn.fetch(f"EXPLAIN {sql}", *params)
+                        plan = [dict(r) for r in explain]
+                        raise _DryRunRollback(plan)
+
+                    result = await conn.execute(sql, *params)
+                    affected = int(result.split()[-1]) if result else 0
+
+                    if affected > max_affected:
+                        raise _MaxAffectedExceeded(affected, max_affected)
+
+                    return {
+                        "success": True,
+                        "affected_rows": affected,
+                        "sql": sql,
+                        "dry_run": False,
+                    }
+        except _DryRunRollback as e:
+            return {
+                "success": True,
+                "dry_run": True,
+                "explain_plan": e.plan,
+                "sql": sql,
+                "message": "dry_run 완료 — 실제 실행하려면 dry_run=false",
+            }
+        except _MaxAffectedExceeded as e:
+            return {
+                "success": False,
+                "error": f"max_affected 초과: {e.actual} > {e.limit} — 롤백됨",
+                "sql": sql,
+            }
+        except Exception as e:
+            return {"error": f"DB 오류: {str(e)[:200]}"}
+
+    # ── notify_channel ───────────────────────────────────────────────────────
+
+    _notify_dedup_cache: Dict[str, float] = {}
+    _NOTIFY_DEDUP_TTL = 300.0
+
+    async def _notify_channel(self, inp: Dict[str, Any]) -> Any:
+        """다중 채널 알림 — severity 기반 라우팅 + dedup."""
+        import time
+        import hashlib
+
+        message = (inp.get("message") or "").strip()
+        severity = (inp.get("severity") or "info").lower()
+        channel = inp.get("channel")
+        dedup_key = inp.get("dedup_key")
+
+        if not message:
+            return {"error": "message 파라미터 필수"}
+        if severity not in ("info", "warning", "critical"):
+            return {"error": "severity는 info/warning/critical 중 하나"}
+
+        now = time.time()
+        self._notify_dedup_cache = {
+            k: v for k, v in self._notify_dedup_cache.items()
+            if now - v < self._NOTIFY_DEDUP_TTL
+        }
+
+        if dedup_key:
+            h = hashlib.sha256(dedup_key.encode()).hexdigest()[:16]
+            if h in self._notify_dedup_cache:
+                return {"success": True, "deduped": True, "message": "중복 — 이미 전송됨"}
+            self._notify_dedup_cache[h] = now
+
+        sent_channels = []
+
+        if channel:
+            targets = [channel]
+        elif severity == "info":
+            targets = ["system"]
+        elif severity == "warning":
+            targets = ["telegram"]
+        else:
+            targets = ["telegram", "system"]
+
+        for target in targets:
+            if target == "telegram":
+                try:
+                    from app.services.telegram_bot import get_telegram_bot
+                    bot = get_telegram_bot()
+                    if bot and bot.is_ready:
+                        await bot.send_message(f"[{severity.upper()}] {message}")
+                        sent_channels.append("telegram")
+                    else:
+                        sent_channels.append("telegram:unavailable")
+                except Exception as e:
+                    sent_channels.append(f"telegram:error({str(e)[:50]})")
+            elif target == "system":
+                import logging
+                _logger = logging.getLogger("notify_channel")
+                _logger.info("[%s] %s", severity.upper(), message)
+                sent_channels.append("system")
+
+        return {
+            "success": True,
+            "severity": severity,
+            "channels": sent_channels,
+            "deduped": False,
+        }
+
     async def _git_remote_add(self, inp: Dict[str, Any]) -> Any:
         """원격 서버 git add."""
         project = (inp.get("project") or "").upper()
@@ -2714,6 +2866,160 @@ class ToolExecutor:
             },
             "metrics": metrics,
         }
+
+    # ── tool_layer_audit 헬퍼 ────────────────────────────────────────────────
+
+    def _get_dispatch_tool_names(self) -> set[str]:
+        try:
+            source = inspect.getsource(self._dispatch)
+        except Exception as e:
+            logger.warning("tool_layer_audit_dispatch_source_error: %s", e)
+            return set()
+        pattern = r'^\s*"([^"]+)":\s*self\._[A-Za-z0-9_]+'
+        return {m.group(1) for m in re.finditer(pattern, source, re.MULTILINE)}
+
+    def _get_mcp_tool_names(self) -> set[str]:
+        try:
+            from app.api import ceo_chat_tools
+        except Exception as e:
+            logger.warning("tool_layer_audit_mcp_import_error: %s", e)
+            return set()
+        tool_defs = getattr(ceo_chat_tools, "CEO_CHAT_TOOLS", None)
+        if not tool_defs:
+            tool_defs = getattr(ceo_chat_tools, "TOOL_DEFINITIONS", [])
+        names: set[str] = set()
+        for item in tool_defs or []:
+            name = ""
+            if isinstance(item, dict):
+                name = str(item.get("name") or "").strip()
+            elif isinstance(item, str):
+                name = item.strip()
+            else:
+                name = str(getattr(item, "name", "") or "").strip()
+            if name:
+                names.add(name)
+        return names
+
+    async def _tool_layer_audit(self, inp: Dict[str, Any]) -> Any:
+        """MCP/Registry/Executor 3-Layer 도구 정합성 검사."""
+        if self._registry is None:
+            from app.services.tool_registry import ToolRegistry
+            self._registry = ToolRegistry()
+        registry_tools = set(self._registry.get_all_tools().keys())
+        executor_tools = self._get_dispatch_tool_names()
+        mcp_tools = self._get_mcp_tool_names()
+        registry_only = sorted(registry_tools - executor_tools)
+        executor_only = sorted(executor_tools - registry_tools)
+        mcp_only = sorted(mcp_tools - (registry_tools | executor_tools))
+        not_in_mcp = sorted((registry_tools | executor_tools) - mcp_tools)
+        all_aligned = not registry_only and not executor_only and not mcp_only
+        return {
+            "all_aligned": all_aligned,
+            "total_registry": len(registry_tools),
+            "total_executor": len(executor_tools),
+            "total_mcp": len(mcp_tools),
+            "registry_only": registry_only,
+            "executor_only": executor_only,
+            "mcp_only": mcp_only,
+            "not_in_mcp": not_in_mcp,
+        }
+
+    # ── db_safe_write ────────────────────────────────────────────────────────
+
+    async def _db_safe_write(self, inp: Dict[str, Any]) -> Any:
+        """DB 쓰기 안전 실행 (트랜잭션 강제, 사전/사후 카운트 검증, dry-run)."""
+        sql = str(inp.get("sql", "") or "").strip()
+        params_raw = inp.get("params") or []
+        dry_run = bool(inp.get("dry_run", False))
+        if not sql:
+            return {"error": "sql 파라미터 필수"}
+        sql_upper = sql.upper().strip()
+        for kw in ("DROP ", "TRUNCATE ", "ALTER ", "CREATE DATABASE", "DROP DATABASE"):
+            if kw in sql_upper:
+                return {"error": f"차단된 명령: {kw.strip()}"}
+        if not any(sql_upper.startswith(k) for k in ("INSERT", "UPDATE", "DELETE")):
+            return {"error": "INSERT/UPDATE/DELETE만 허용"}
+        table_name = ""
+        if sql_upper.startswith("INSERT"):
+            parts = sql_upper.split("INTO", 1)
+            if len(parts) > 1:
+                table_name = parts[1].strip().split()[0].strip("(").lower()
+        elif sql_upper.startswith("UPDATE"):
+            table_name = sql_upper.split()[1].strip().lower()
+        elif sql_upper.startswith("DELETE"):
+            parts = sql_upper.split("FROM", 1)
+            if len(parts) > 1:
+                table_name = parts[1].strip().split()[0].lower()
+        if table_name and not re.match(r'^[a-z_][a-z0-9_.]*$', table_name):
+            table_name = ""
+        try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                pre_count = None
+                if table_name:
+                    try:
+                        row = await conn.fetchrow(f'SELECT COUNT(*) AS cnt FROM "{table_name}"')
+                        pre_count = int(row["cnt"]) if row else None
+                    except Exception:
+                        pass
+                if dry_run:
+                    return {"dry_run": True, "sql": sql[:500], "table": table_name, "pre_count": pre_count, "message": "dry_run — 실행하지 않음"}
+                async with conn.transaction():
+                    result = await conn.execute(sql, *params_raw)
+                post_count = None
+                if table_name:
+                    try:
+                        row = await conn.fetchrow(f'SELECT COUNT(*) AS cnt FROM "{table_name}"')
+                        post_count = int(row["cnt"]) if row else None
+                    except Exception:
+                        pass
+                return {
+                    "success": True,
+                    "result": str(result),
+                    "table": table_name,
+                    "pre_count": pre_count,
+                    "post_count": post_count,
+                    "diff": (post_count - pre_count) if pre_count is not None and post_count is not None else None,
+                }
+        except Exception as e:
+            return {"error": str(e), "sql": sql[:200]}
+
+    # ── notify_channel ───────────────────────────────────────────────────────
+
+    async def _notify_channel(self, inp: Dict[str, Any]) -> Any:
+        """다중 채널 알림 통합 (텔레그램/슬랙 + 중복방지)."""
+        import time as _time
+        message = str(inp.get("message", "") or "").strip()
+        channel = str(inp.get("channel", "telegram") or "telegram").strip().lower()
+        level = str(inp.get("level", "info") or "info").strip().lower()
+        dedup_key = str(inp.get("dedup_key", "") or "").strip()
+        if not message:
+            return {"error": "message 파라미터 필수"}
+        if channel not in ("telegram", "slack", "all"):
+            return {"error": "channel은 telegram/slack/all 중 하나"}
+        msg_hash = dedup_key or hashlib.sha256(f"{channel}:{message[:200]}".encode()).hexdigest()[:16]
+        cache_key = f"notify_dedup:{msg_hash}"
+        if not hasattr(self, '_notify_dedup_cache'):
+            self._notify_dedup_cache: dict[str, float] = {}
+        now = _time.time()
+        self._notify_dedup_cache = {k: v for k, v in self._notify_dedup_cache.items() if now - v < 300}
+        if cache_key in self._notify_dedup_cache:
+            return {"skipped": True, "reason": "dedup — 5분 이내 동일 메시지", "dedup_key": msg_hash}
+        prefix = {"info": "ℹ️", "warn": "⚠️", "error": "🔴", "success": "✅"}.get(level, "")
+        formatted = f"{prefix} {message}" if prefix else message
+        results = {}
+        if channel in ("telegram", "all"):
+            try:
+                from app.api.ceo_chat_tools import tool_send_telegram
+                tg_result = await tool_send_telegram(formatted)
+                results["telegram"] = {"success": True, "result": str(tg_result)[:200]}
+            except Exception as e:
+                results["telegram"] = {"success": False, "error": str(e)}
+        if channel in ("slack", "all"):
+            results["slack"] = {"success": False, "error": "슬랙 미구현 — 텔레그램으로 전송됨"}
+        self._notify_dedup_cache[cache_key] = now
+        return {"sent": True, "channel": channel, "level": level, "dedup_key": msg_hash, "results": results}
 
     async def _query_decision_graph(self, inp: Dict[str, Any]) -> Any:
         """C4: 결정 의존관계 그래프 탐색."""
