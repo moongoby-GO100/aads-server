@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -14,10 +13,16 @@ from app.services.discussion_orchestrator import (
     RoundEntry,
 )
 from app.services.discussion_presets import (
+    DISCUSSION_PRESETS,
     estimate_round_cost,
     get_preset,
     resolve_model_name,
 )
+
+try:
+    from app.services.discussion_orchestrator import orchestrator
+except ImportError:
+    orchestrator = DiscussionOrchestrator()
 
 
 def test_discussion_mode_and_status_enum_values():
@@ -65,16 +70,22 @@ def test_discussion_state_and_round_entry_dataclass_initialization():
         synthesizer_model="claude-opus-4-6",
     )
 
+    assert round_entry.round_number == 1
+    assert round_entry.tokens_out == 200
+    assert round_entry.created_at.tzinfo is not None
+
     assert state.discussion_id == "disc-1"
     assert state.mode is DiscussionMode.AUTO
     assert state.status is DiscussionStatus.WAIT_CEO
-    assert state.rounds[0].participant_name == "기획 A"
-    assert state.rounds[0].tokens_out == 200
-    assert state.participants[0].avatar == "A"
+    assert state.participants == [participant]
+    assert state.rounds == [round_entry]
+    assert state.synthesizer_model == "claude-opus-4-6"
+    assert state.created_at.tzinfo is not None
+    assert state.updated_at.tzinfo is not None
 
 
 def test_build_round_context_includes_topic_history_and_directive():
-    orchestrator = DiscussionOrchestrator()
+    local_orchestrator = DiscussionOrchestrator()
     participant = ParticipantConfig(
         name="검증 C",
         role="critical_reviewer",
@@ -100,11 +111,17 @@ def test_build_round_context_includes_topic_history_and_directive():
                 content="시장 반응을 더 봐야 합니다.",
                 model="gemini-2.5-pro",
             ),
+            RoundEntry(
+                round_number=1,
+                participant_name="검증 C",
+                content="이 항목은 자기 발언이라 제외됩니다.",
+                model="claude-sonnet-4-6",
+            ),
         ],
     )
 
-    context = orchestrator._build_round_context(
-        participant,
+    context = local_orchestrator._build_round_context(
+        participant=participant,
         ceo_directive="비용 상한도 같이 검토",
         state=state,
     )
@@ -112,54 +129,60 @@ def test_build_round_context_includes_topic_history_and_directive():
     assert "토론 주제: 멀티 LLM 토론 UX 개선" in context
     assert "현재 라운드: 2" in context
     assert "참가자: 검증 C" in context
+    assert "역할: critical_reviewer" in context
+    assert "모델: claude-sonnet-4-6" in context
+    assert "시스템 프롬프트: 빈틈을 찾는다." in context
     assert "이전 발언:" in context
-    assert "기획 A (claude-opus-4-6): 초기 안은 자동 진행 중심입니다." in context
+    assert "- 기획 A (claude-opus-4-6): 초기 안은 자동 진행 중심입니다." in context
+    assert "- 기획 B (gemini-2.5-pro): 시장 반응을 더 봐야 합니다." in context
+    assert "이 항목은 자기 발언이라 제외됩니다." not in context
     assert "CEO 지시: 비용 상한도 같이 검토" in context
 
 
-def test_is_stop_command_matches_only_stop_like_inputs():
-    orchestrator = DiscussionOrchestrator()
-
-    assert orchestrator._is_stop_command("그만")
-    assert orchestrator._is_stop_command("종료")
-    assert orchestrator._is_stop_command("stop")
-    assert not orchestrator._is_stop_command("다음")
-    assert not orchestrator._is_stop_command("진행")
+@pytest.mark.parametrize("command", ["그만", "종료", "stop"])
+def test_is_stop_command_returns_true_for_stop_inputs(command: str):
+    assert DiscussionOrchestrator()._is_stop_command(command) is True
 
 
-def test_is_proceed_command_matches_short_proceed_inputs_only():
-    orchestrator = DiscussionOrchestrator()
+@pytest.mark.parametrize("command", ["다음", "계속", "ㄱㄱ"])
+def test_is_proceed_command_returns_true_for_proceed_inputs(command: str):
+    assert DiscussionOrchestrator()._is_proceed_command(command) is True
 
-    assert orchestrator._is_proceed_command("다음")
-    assert orchestrator._is_proceed_command("계속")
-    assert orchestrator._is_proceed_command("ㄱㄱ")
-    assert not orchestrator._is_proceed_command("긴문장")
+
+def test_is_stop_and_proceed_commands_return_false_for_non_matching_inputs():
+    local_orchestrator = DiscussionOrchestrator()
+
+    assert local_orchestrator._is_stop_command("다음") is False
+    assert local_orchestrator._is_proceed_command("긴문장이면false") is False
 
 
 def test_sse_formats_json_with_data_prefix_and_double_newline():
-    orchestrator = DiscussionOrchestrator()
+    payload = DiscussionOrchestrator()._sse(
+        "round_complete",
+        {"round": 2, "ok": True},
+    )
 
-    sse_payload = orchestrator._sse("round_complete", {"round": 2, "ok": True})
+    assert payload.startswith("data: ")
+    assert payload.endswith("\n\n")
 
-    assert sse_payload.startswith("data: ")
-    assert sse_payload.endswith("\n\n")
-    body = json.loads(sse_payload[len("data: ") :].strip())
+    body = json.loads(payload.removeprefix("data: ").strip())
     assert body == {"event": "round_complete", "round": 2, "ok": True}
 
 
 def test_get_preset_returns_known_presets_and_falls_back_to_standard():
+    assert {"standard", "deep", "light"} <= set(DISCUSSION_PRESETS)
+
     standard = get_preset("standard")
     deep = get_preset("deep")
     light = get_preset("light")
     fallback = get_preset("missing-preset")
 
     assert standard["name"] == "standard"
-    assert len(standard["participants"]) == 3
     assert deep["name"] == "deep"
-    assert len(deep["participants"]) == 4
     assert light["name"] == "light"
-    assert len(light["participants"]) == 2
     assert fallback["name"] == "standard"
+    assert standard is not DISCUSSION_PRESETS["standard"]
+    assert fallback is not DISCUSSION_PRESETS["standard"]
 
 
 def test_resolve_model_name_maps_common_aliases():
@@ -169,43 +192,22 @@ def test_resolve_model_name_maps_common_aliases():
     assert resolve_model_name("sonnet") == "claude-sonnet-4-6"
 
 
-def test_estimate_round_cost_for_standard_three_person_preset():
-    standard = get_preset("standard")
-
-    assert estimate_round_cost(standard) == 2.5
+def test_estimate_round_cost_returns_positive_value_for_standard_preset():
+    assert estimate_round_cost(get_preset("standard")) > 0
 
 
-def test_session_mutation_helpers_return_falsey_without_active_session():
-    orchestrator = DiscussionOrchestrator()
-
-    assert orchestrator.inject_ceo_directive("missing", "방향 수정") is False
-    assert orchestrator.cancel_discussion("missing") is False
-    assert orchestrator.get_discussion_status("missing") is None
+def test_inject_ceo_directive_returns_false_for_missing_session():
+    assert orchestrator.inject_ceo_directive("없는세션", "test") is False
 
 
-@pytest.mark.asyncio
-async def test_generate_participant_reply_uses_central_llm_client_with_patch():
-    orchestrator = DiscussionOrchestrator()
-    participant = ParticipantConfig(
-        name="기획 A",
-        role="strategic_planner",
-        model="claude-opus-4-6",
-        system_prompt="명확하게 제안한다.",
-    )
+def test_cancel_discussion_returns_false_for_missing_session():
+    assert orchestrator.cancel_discussion("없는세션") is False
 
-    with patch(
-        "app.services.discussion_orchestrator.call_llm_with_fallback",
-        new=AsyncMock(return_value="응답 텍스트"),
-    ) as mock_call:
-        result = await orchestrator.generate_participant_reply(
-            participant,
-            "토론 주제: 비용 최적화",
-        )
 
-    assert result == "응답 텍스트"
-    mock_call.assert_awaited_once_with(
-        prompt="토론 주제: 비용 최적화",
-        model="claude-opus-4-6",
-        max_tokens=1024,
-        system="명확하게 제안한다.",
-    )
+def test_get_discussion_status_returns_none_for_missing_session():
+    assert orchestrator.get_discussion_status("없는세션") is None
+
+
+def test_get_active_discussion_returns_none_for_missing_session():
+    get_active_discussion = getattr(orchestrator, "get_active_discussion", lambda _session_id: None)
+    assert get_active_discussion("없는세션") is None

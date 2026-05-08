@@ -1,0 +1,1881 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AADS 멀티-LLM 토론 오케스트레이터 — 상세 설계안</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --card: #1a1d27;
+    --card-hover: #222633;
+    --border: #2a2e3d;
+    --accent: #6c5ce7;
+    --accent2: #00cec9;
+    --accent3: #fdcb6e;
+    --accent4: #e17055;
+    --accent5: #55efc4;
+    --text: #e4e6eb;
+    --text-dim: #8b8fa3;
+    --text-bright: #ffffff;
+    --ceo-color: #fdcb6e;
+    --claude-color: #6c5ce7;
+    --gemini-color: #00cec9;
+    --critic-color: #e17055;
+    --synth-color: #55efc4;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+
+  /* ── Header ── */
+  .hero {
+    background: linear-gradient(135deg, #1a1d27 0%, #2d1b69 50%, #1a3c34 100%);
+    padding: 60px 40px 50px;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle at 30% 50%, rgba(108,92,231,0.08) 0%, transparent 50%),
+                radial-gradient(circle at 70% 50%, rgba(0,206,201,0.06) 0%, transparent 50%);
+    animation: heroPulse 8s ease-in-out infinite;
+  }
+  @keyframes heroPulse {
+    0%,100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+  }
+  .hero h1 {
+    font-size: 2.4rem;
+    font-weight: 800;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    position: relative;
+    z-index: 1;
+  }
+  .hero .subtitle {
+    color: var(--text-dim);
+    font-size: 1.1rem;
+    margin-top: 12px;
+    position: relative;
+    z-index: 1;
+  }
+  .hero .meta {
+    display: flex;
+    justify-content: center;
+    gap: 30px;
+    margin-top: 24px;
+    position: relative;
+    z-index: 1;
+  }
+  .hero .meta span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    background: rgba(255,255,255,0.05);
+    padding: 6px 14px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+  }
+  .hero .meta span strong {
+    color: var(--text-bright);
+  }
+
+  /* ── Navigation ── */
+  .nav {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: rgba(15,17,23,0.92);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 20px;
+    display: flex;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav a {
+    color: var(--text-dim);
+    text-decoration: none;
+    padding: 14px 18px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    white-space: nowrap;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+  }
+  .nav a:hover, .nav a.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
+  /* ── Layout ── */
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+  section {
+    padding: 50px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  section:last-child { border-bottom: none; }
+  h2 {
+    font-size: 1.6rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  h2 .num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    background: var(--accent);
+    border-radius: 8px;
+    font-size: 0.85rem;
+    color: #fff;
+  }
+  .section-desc {
+    color: var(--text-dim);
+    margin-bottom: 30px;
+    font-size: 0.95rem;
+  }
+  h3 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin: 28px 0 14px;
+    color: var(--accent2);
+  }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 16px;
+    transition: border-color 0.2s;
+  }
+  .card:hover { border-color: var(--accent); }
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+  }
+  .card-title {
+    font-weight: 700;
+    font-size: 1rem;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card-title .icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.9rem;
+  }
+
+  /* ── Participant Cards ── */
+  .participant {
+    border-left: 3px solid;
+    padding-left: 16px;
+  }
+  .participant.ceo { border-left-color: var(--ceo-color); }
+  .participant.claude { border-left-color: var(--claude-color); }
+  .participant.gemini { border-left-color: var(--gemini-color); }
+  .participant.critic { border-left-color: var(--accent4); }
+  .participant.synth { border-left-color: var(--synth-color); }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .badge-ceo { background: rgba(253,203,110,0.15); color: var(--ceo-color); }
+  .badge-claude { background: rgba(108,92,231,0.15); color: var(--claude-color); }
+  .badge-gemini { background: rgba(0,206,201,0.15); color: var(--gemini-color); }
+  .badge-critic { background: rgba(225,112,85,0.15); color: var(--accent4); }
+  .badge-synth { background: rgba(85,239,196,0.15); color: var(--synth-color); }
+
+  /* ── Flow Diagram ── */
+  .flow-container {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 32px;
+    overflow-x: auto;
+  }
+  .flow-step {
+    display: flex;
+    align-items: stretch;
+    margin-bottom: 2px;
+    position: relative;
+  }
+  .flow-line {
+    width: 48px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .flow-dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 3px solid var(--accent);
+    background: var(--bg);
+    z-index: 1;
+    flex-shrink: 0;
+  }
+  .flow-dot.active {
+    background: var(--accent);
+    box-shadow: 0 0 12px rgba(108,92,231,0.4);
+  }
+  .flow-connector {
+    width: 2px;
+    flex-grow: 1;
+    background: var(--border);
+  }
+  .flow-content {
+    flex: 1;
+    padding: 0 0 28px 16px;
+  }
+  .flow-content h4 {
+    font-size: 0.95rem;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+  .flow-content p {
+    color: var(--text-dim);
+    font-size: 0.85rem;
+  }
+
+  /* ── Chat Mock ── */
+  .chat-mock {
+    background: #12141c;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    max-width: 700px;
+    margin: 0 auto;
+  }
+  .chat-header {
+    background: var(--card);
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+    font-size: 0.9rem;
+  }
+  .chat-header .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent5);
+  }
+  .chat-body {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    max-height: 600px;
+    overflow-y: auto;
+  }
+  .chat-msg {
+    display: flex;
+    gap: 10px;
+    animation: msgIn 0.3s ease-out;
+  }
+  @keyframes msgIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .chat-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 800;
+    flex-shrink: 0;
+    color: #fff;
+  }
+  .chat-avatar.ceo { background: linear-gradient(135deg, #f39c12, #e67e22); }
+  .chat-avatar.planner-a { background: linear-gradient(135deg, #6c5ce7, #a29bfe); }
+  .chat-avatar.planner-b { background: linear-gradient(135deg, #00cec9, #81ecec); color: #0a3d3c; }
+  .chat-avatar.critic { background: linear-gradient(135deg, #e17055, #fab1a0); }
+  .chat-avatar.synth { background: linear-gradient(135deg, #00b894, #55efc4); color: #0a3d3c; }
+  .chat-avatar.orch { background: linear-gradient(135deg, #636e72, #b2bec3); }
+  .chat-bubble {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 16px;
+    max-width: 520px;
+    font-size: 0.85rem;
+    line-height: 1.6;
+  }
+  .chat-bubble .sender {
+    font-weight: 700;
+    font-size: 0.78rem;
+    margin-bottom: 4px;
+  }
+  .chat-bubble .sender.ceo-name { color: var(--ceo-color); }
+  .chat-bubble .sender.planner-a-name { color: var(--claude-color); }
+  .chat-bubble .sender.planner-b-name { color: var(--accent2); }
+  .chat-bubble .sender.critic-name { color: var(--accent4); }
+  .chat-bubble .sender.synth-name { color: var(--synth-color); }
+  .chat-bubble .sender.orch-name { color: var(--text-dim); }
+  .chat-bubble.system {
+    background: rgba(108,92,231,0.08);
+    border-color: rgba(108,92,231,0.2);
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    text-align: center;
+    max-width: 100%;
+  }
+  .round-divider {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 8px 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .round-divider::before, .round-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+  .chat-input-mock {
+    border-top: 1px solid var(--border);
+    padding: 14px 20px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  .chat-input-mock input {
+    flex: 1;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    color: var(--text);
+    font-size: 0.85rem;
+    outline: none;
+  }
+  .chat-input-mock button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-weight: 700;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+
+  /* ── Architecture Diagram ── */
+  .arch-diagram {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 32px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  .arch-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .arch-box {
+    padding: 12px 20px;
+    border-radius: 10px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    text-align: center;
+    min-width: 130px;
+    border: 2px solid;
+    position: relative;
+  }
+  .arch-box.ceo-box {
+    background: rgba(253,203,110,0.1);
+    border-color: var(--ceo-color);
+    color: var(--ceo-color);
+  }
+  .arch-box.orch-box {
+    background: rgba(108,92,231,0.12);
+    border-color: var(--accent);
+    color: var(--accent);
+    min-width: 260px;
+    padding: 16px 24px;
+  }
+  .arch-box.llm-box {
+    border-color: var(--accent2);
+    background: rgba(0,206,201,0.08);
+    color: var(--accent2);
+  }
+  .arch-box.db-box {
+    border-color: var(--accent3);
+    background: rgba(253,203,110,0.06);
+    color: var(--accent3);
+  }
+  .arch-box small {
+    display: block;
+    font-weight: 400;
+    font-size: 0.7rem;
+    margin-top: 4px;
+    opacity: 0.7;
+  }
+  .arch-arrow {
+    color: var(--text-dim);
+    font-size: 1.2rem;
+  }
+  .arch-arrow-down {
+    font-size: 1.4rem;
+    color: var(--text-dim);
+  }
+
+  /* ── Table ── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 0.85rem;
+  }
+  th {
+    background: rgba(108,92,231,0.1);
+    color: var(--accent);
+    text-align: left;
+    padding: 12px 16px;
+    font-weight: 700;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 2px solid var(--border);
+  }
+  td {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+  }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  /* ── Code ── */
+  pre {
+    background: #0d0f16;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    overflow-x: auto;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.8rem;
+    line-height: 1.8;
+    color: #abb2bf;
+    margin: 12px 0;
+  }
+  code {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.82rem;
+  }
+  .code-kw { color: #c678dd; }
+  .code-fn { color: #61afef; }
+  .code-str { color: #98c379; }
+  .code-cmt { color: #5c6370; font-style: italic; }
+  .code-type { color: #e5c07b; }
+  .code-num { color: #d19a66; }
+
+  /* ── Timeline ── */
+  .timeline {
+    display: flex;
+    gap: 0;
+    margin: 20px 0;
+    border-radius: 8px;
+    overflow: hidden;
+    height: 42px;
+  }
+  .timeline-block {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #fff;
+    padding: 0 12px;
+    white-space: nowrap;
+  }
+  .timeline-block.t1 { background: var(--accent); flex: 2; }
+  .timeline-block.t2 { background: #2d3436; flex: 3; border-left: 2px solid var(--bg); }
+  .timeline-block.t3 { background: var(--accent2); flex: 1.5; border-left: 2px solid var(--bg); color: #0a3d3c; }
+  .timeline-block.t4 { background: var(--accent3); flex: 1; border-left: 2px solid var(--bg); color: #333; }
+
+  /* ── Cost Chart ── */
+  .cost-bar {
+    display: flex;
+    align-items: center;
+    margin: 8px 0;
+    gap: 12px;
+  }
+  .cost-label {
+    width: 120px;
+    font-size: 0.82rem;
+    color: var(--text-dim);
+    text-align: right;
+    flex-shrink: 0;
+  }
+  .cost-fill-wrap {
+    flex: 1;
+    height: 24px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+  }
+  .cost-fill {
+    height: 100%;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #fff;
+    white-space: nowrap;
+    transition: width 1s ease-out;
+  }
+  .cost-fill.low { background: linear-gradient(90deg, #00b894, #55efc4); color: #0a3d3c; }
+  .cost-fill.mid { background: linear-gradient(90deg, #6c5ce7, #a29bfe); }
+  .cost-fill.high { background: linear-gradient(90deg, #e17055, #fab1a0); color: #333; }
+
+  /* ── Comparison ── */
+  .compare-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .compare-card {
+    border-radius: 12px;
+    padding: 24px;
+    border: 2px solid var(--border);
+    position: relative;
+  }
+  .compare-card.before {
+    background: rgba(225,112,85,0.05);
+    border-color: rgba(225,112,85,0.3);
+  }
+  .compare-card.after {
+    background: rgba(85,239,196,0.05);
+    border-color: rgba(85,239,196,0.3);
+  }
+  .compare-label {
+    position: absolute;
+    top: -10px;
+    left: 16px;
+    background: var(--bg);
+    padding: 0 8px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .compare-card.before .compare-label { color: var(--accent4); }
+  .compare-card.after .compare-label { color: var(--synth-color); }
+
+  /* ── Tabs ── */
+  .tabs { display: flex; gap: 4px; margin-bottom: 20px; }
+  .tab {
+    padding: 8px 18px;
+    border-radius: 8px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    transition: all 0.2s;
+  }
+  .tab:hover { background: rgba(255,255,255,0.05); }
+  .tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* ── Highlight Box ── */
+  .highlight-box {
+    background: rgba(108,92,231,0.08);
+    border: 1px solid rgba(108,92,231,0.2);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin: 16px 0;
+  }
+  .highlight-box.warn {
+    background: rgba(253,203,110,0.06);
+    border-color: rgba(253,203,110,0.2);
+  }
+  .highlight-box.success {
+    background: rgba(85,239,196,0.06);
+    border-color: rgba(85,239,196,0.2);
+  }
+
+  /* ── Responsive ── */
+  @media (max-width: 768px) {
+    .hero h1 { font-size: 1.6rem; }
+    .compare-grid { grid-template-columns: 1fr; }
+    .card-grid { grid-template-columns: 1fr; }
+    .arch-row { flex-direction: column; }
+    .hero .meta { flex-direction: column; gap: 8px; align-items: center; }
+  }
+
+  /* ── Sequence Diagram ── */
+  .seq-diagram {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    overflow-x: auto;
+  }
+  .seq-actors {
+    display: flex;
+    justify-content: space-around;
+    margin-bottom: 16px;
+  }
+  .seq-actor {
+    text-align: center;
+    font-size: 0.78rem;
+    font-weight: 700;
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 2px solid;
+    min-width: 90px;
+  }
+  .seq-messages {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 0.78rem;
+  }
+  .seq-msg {
+    display: flex;
+    align-items: center;
+    padding: 6px 0;
+  }
+  .seq-msg .arrow {
+    flex: 1;
+    height: 2px;
+    position: relative;
+    margin: 0 8px;
+  }
+  .seq-msg .arrow::after {
+    content: '→';
+    position: absolute;
+    right: -4px;
+    top: -10px;
+    font-size: 0.9rem;
+  }
+  .seq-msg .label {
+    background: rgba(255,255,255,0.04);
+    padding: 4px 10px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+
+  /* ── State Machine ── */
+  .state-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 10px 0;
+    flex-wrap: wrap;
+  }
+  .state-box {
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    border: 2px solid;
+    min-width: 100px;
+    text-align: center;
+  }
+  .state-arrow {
+    color: var(--text-dim);
+    font-size: 1rem;
+  }
+  .state-label {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    text-align: center;
+  }
+
+  /* ── Footer ── */
+  footer {
+    text-align: center;
+    padding: 40px;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    border-top: 1px solid var(--border);
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════ HERO ═══════════════════════════════════════════ -->
+<div class="hero">
+  <h1>멀티-LLM 토론 오케스트레이터</h1>
+  <p class="subtitle">서로 다른 LLM이 기획을 경쟁적으로 작성하고, CEO가 실시간 개입하며 최종안을 도출하는 시스템</p>
+  <div class="meta">
+    <span>📋 Task ID: <strong>AADS-DISCUSS</strong></span>
+    <span>📅 작성일: <strong>2026-05-08</strong></span>
+    <span>📐 Size: <strong>M (1~2일)</strong></span>
+    <span>🎯 Priority: <strong>P2-MEDIUM</strong></span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ NAV ═══════════════════════════════════════════ -->
+<nav class="nav">
+  <a href="#overview" class="active">개요</a>
+  <a href="#before-after">Before/After</a>
+  <a href="#participants">참가자 구성</a>
+  <a href="#flow">토론 플로우</a>
+  <a href="#architecture">아키텍처</a>
+  <a href="#chat-ux">대화 UX</a>
+  <a href="#api">API 설계</a>
+  <a href="#data-model">데이터 모델</a>
+  <a href="#cost">비용 분석</a>
+  <a href="#implementation">구현 계획</a>
+  <a href="#risks">리스크</a>
+</nav>
+
+<div class="container">
+
+<!-- ═══════════════════════════════════════════ 1. 개요 ═══════════════════════════════════════════ -->
+<section id="overview">
+  <h2><span class="num">1</span> 기능 개요</h2>
+  <p class="section-desc">하나의 기획 주제에 대해 서로 다른 LLM들이 독립적으로 기획안을 작성하고, 상호 검토·비판·보완하며, CEO가 실시간으로 방향을 조정하여 양질의 최종 기획서를 도출하는 오케스트레이터 시스템.</p>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title"><span class="icon" style="background:rgba(108,92,231,0.15);color:var(--accent)">🎯</span> 핵심 목적</div>
+      <ul style="color:var(--text-dim);font-size:0.85rem;padding-left:18px">
+        <li>단일 LLM의 편향 제거 (모델 다양성)</li>
+        <li>기획 품질 향상 (경쟁적 검토)</li>
+        <li>CEO의 실시간 의사결정 참여</li>
+        <li>검증 가능한 근거 기반 기획</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon" style="background:rgba(0,206,201,0.15);color:var(--accent2)">⚡</span> 핵심 차별점</div>
+      <ul style="color:var(--text-dim);font-size:0.85rem;padding-left:18px">
+        <li>기존 <code>run_debate</code>: 일괄 실행 → 결과만 수신</li>
+        <li><strong>이 기능</strong>: 라운드별 진행 + CEO 개입</li>
+        <li>대화창에 발화자별 구분 표시</li>
+        <li>토론 중 방향 전환·참가자 추가 가능</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon" style="background:rgba(253,203,110,0.15);color:var(--accent3)">🏗️</span> 구현 전략</div>
+      <ul style="color:var(--text-dim);font-size:0.85rem;padding-left:18px">
+        <li>기존 인프라 최대 활용 (채팅 SSE, LiteLLM)</li>
+        <li>CTO AI가 오케스트레이터 역할</li>
+        <li>신규 서비스 1개 + API 2개 추가</li>
+        <li>DB 테이블 1개 추가</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 2. Before/After ═══════════════════════════════════════════ -->
+<section id="before-after">
+  <h2><span class="num">2</span> Before / After 비교</h2>
+  <p class="section-desc">현재 run_debate 대비 신규 토론 오케스트레이터의 구조적 변화</p>
+
+  <div class="compare-grid">
+    <div class="compare-card before">
+      <span class="compare-label">BEFORE — run_debate</span>
+      <h3 style="color:var(--accent4);margin-top:8px">일괄 실행형</h3>
+      <table>
+        <tr><td>진행 방식</td><td>4개 관점 동시 실행 → 합성</td></tr>
+        <tr><td>CEO 참여</td><td>❌ 결과만 수신</td></tr>
+        <tr><td>상호 검토</td><td>❌ 독립 분석만</td></tr>
+        <tr><td>방향 전환</td><td>❌ 재실행 필요</td></tr>
+        <tr><td>대화 표시</td><td>단일 결과 텍스트</td></tr>
+        <tr><td>라운드</td><td>1회 고정</td></tr>
+        <tr><td>소요 시간</td><td>~15초 (병렬)</td></tr>
+        <tr><td>비용/회</td><td>~$1~2</td></tr>
+      </table>
+    </div>
+    <div class="compare-card after">
+      <span class="compare-label">AFTER — Discussion Orchestrator</span>
+      <h3 style="color:var(--synth-color);margin-top:8px">라운드 진행형</h3>
+      <table>
+        <tr><td>진행 방식</td><td>라운드별 순차 진행</td></tr>
+        <tr><td>CEO 참여</td><td>✅ 매 라운드 개입 가능</td></tr>
+        <tr><td>상호 검토</td><td>✅ 이전 발언 참조·비판</td></tr>
+        <tr><td>방향 전환</td><td>✅ 즉시 반영</td></tr>
+        <tr><td>대화 표시</td><td>발화자별 아바타·색상 구분</td></tr>
+        <tr><td>라운드</td><td>1~5회 (CEO 제어)</td></tr>
+        <tr><td>소요 시간</td><td>~2~5분 (라운드 수 의존)</td></tr>
+        <tr><td>비용/회</td><td>~$2~8</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 3. 참가자 구성 ═══════════════════════════════════════════ -->
+<section id="participants">
+  <h2><span class="num">3</span> 참가자 구성</h2>
+  <p class="section-desc">기본 4인 구성. CEO가 참가자를 추가/제거하거나 역할을 커스텀할 수 있음.</p>
+
+  <div class="card-grid" style="grid-template-columns: 1fr 1fr;">
+    <div class="card participant ceo">
+      <div class="card-title">
+        <span class="badge badge-ceo">CEO</span>
+        moongoby — 의사결정권자
+      </div>
+      <table>
+        <tr><td style="width:80px;color:var(--text-dim)">역할</td><td>주제 제시, 방향 전환, 질문, 최종 결정</td></tr>
+        <tr><td style="color:var(--text-dim)">참여</td><td>매 라운드 종료 후 선택적 개입</td></tr>
+        <tr><td style="color:var(--text-dim)">권한</td><td>토론 시작/종료, 참가자 변경, 합성 요청</td></tr>
+        <tr><td style="color:var(--text-dim)">비용</td><td>$0 (사람)</td></tr>
+      </table>
+    </div>
+
+    <div class="card participant claude">
+      <div class="card-title">
+        <span class="badge badge-claude">기획 A</span>
+        Claude Opus — 전략 기획자
+      </div>
+      <table>
+        <tr><td style="width:80px;color:var(--text-dim)">모델</td><td><code>claude-opus-4-6</code></td></tr>
+        <tr><td style="color:var(--text-dim)">성격</td><td>구조적, 체계적, 실행 가능한 기획 중시</td></tr>
+        <tr><td style="color:var(--text-dim)">강점</td><td>장문 분석, 복잡한 의존성, 위험 예측</td></tr>
+        <tr><td style="color:var(--text-dim)">비용</td><td>~$0.5~1.5/라운드</td></tr>
+      </table>
+    </div>
+
+    <div class="card participant gemini">
+      <div class="card-title">
+        <span class="badge badge-gemini">기획 B</span>
+        Gemini 2.5 Pro — 혁신 기획자
+      </div>
+      <table>
+        <tr><td style="width:80px;color:var(--text-dim)">모델</td><td><code>gemini-2.5-pro</code> (LiteLLM)</td></tr>
+        <tr><td style="color:var(--text-dim)">성격</td><td>창의적, 시장 데이터 기반, 대안 제시</td></tr>
+        <tr><td style="color:var(--text-dim)">강점</td><td>웹 그라운딩, 최신 트렌드, 비용 효율</td></tr>
+        <tr><td style="color:var(--text-dim)">비용</td><td>~$0.2~0.8/라운드</td></tr>
+      </table>
+    </div>
+
+    <div class="card participant critic">
+      <div class="card-title">
+        <span class="badge badge-critic">검증자</span>
+        Claude Sonnet — 비판적 검토자
+      </div>
+      <table>
+        <tr><td style="width:80px;color:var(--text-dim)">모델</td><td><code>claude-sonnet-4-6</code></td></tr>
+        <tr><td style="color:var(--text-dim)">성격</td><td>논리적 결함 지적, 실현 가능성 검증</td></tr>
+        <tr><td style="color:var(--text-dim)">강점</td><td>빠른 분석, 팩트체크, 비용/일정 검증</td></tr>
+        <tr><td style="color:var(--text-dim)">비용</td><td>~$0.3~0.8/라운드</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="highlight-box" style="margin-top:20px">
+    <strong>합성자 (Synthesizer)</strong> — 토론 종료 시 전체 논의를 종합하여 최종 기획안을 작성하는 역할.
+    기본: <code>claude-opus-4-6</code> (Extended Thinking 활성). CEO가 합성자를 별도 지정 가능.
+  </div>
+
+  <h3>커스텀 참가자 예시</h3>
+  <table>
+    <thead>
+      <tr><th>시나리오</th><th>추천 구성</th><th>비용/토론</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>기술 아키텍처 설계</td><td>Claude Opus(설계) + Gemini Pro(대안) + Sonnet(보안·비용 검증)</td><td>~$5~8</td></tr>
+      <tr><td>마케팅 전략</td><td>Gemini Pro(시장조사) + Claude Opus(전략) + GPT-4o(크리에이티브)</td><td>~$4~7</td></tr>
+      <tr><td>비용 절감형</td><td>Gemini Flash(기획A) + Sonnet(기획B) + Haiku(검증)</td><td>~$1~3</td></tr>
+      <tr><td>심층 분석형</td><td>Claude Opus×2(다른 관점) + Gemini Pro(교차 검증) + Sonnet(비판)</td><td>~$8~12</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ═══════════════════════════════════════════ 4. 토론 플로우 ═══════════════════════════════════════════ -->
+<section id="flow">
+  <h2><span class="num">4</span> 토론 플로우</h2>
+  <p class="section-desc">라운드 기반 진행. CEO가 각 라운드 후 개입 여부를 결정.</p>
+
+  <div class="flow-container">
+    <!-- Step 1 -->
+    <div class="flow-step">
+      <div class="flow-line">
+        <div class="flow-dot active"></div>
+        <div class="flow-connector"></div>
+      </div>
+      <div class="flow-content">
+        <h4 style="color:var(--ceo-color)">① CEO — 주제 제시</h4>
+        <p>CEO가 토론 주제와 목표를 제시합니다.<br>
+        예: <em>"AADS 과금 시스템 설계 기획해줘. 토론 모드로."</em><br>
+        오케스트레이터가 토론 의도를 감지하고 참가자 구성을 제안합니다.</p>
+      </div>
+    </div>
+
+    <!-- Step 2 -->
+    <div class="flow-step">
+      <div class="flow-line">
+        <div class="flow-dot active" style="border-color:var(--accent2)"></div>
+        <div class="flow-connector"></div>
+      </div>
+      <div class="flow-content">
+        <h4 style="color:var(--accent2)">② 오케스트레이터 — 세션 초기화</h4>
+        <p>참가자 구성 확인 → 토론 세션 생성 → 라운드 1 시작을 선언합니다.<br>
+        각 참가자의 시스템 프롬프트에 역할·관점·톤이 주입됩니다.</p>
+      </div>
+    </div>
+
+    <!-- Step 3 -->
+    <div class="flow-step">
+      <div class="flow-line">
+        <div class="flow-dot" style="border-color:var(--claude-color);background:var(--claude-color)"></div>
+        <div class="flow-connector"></div>
+      </div>
+      <div class="flow-content">
+        <h4 style="color:var(--claude-color)">③ 라운드 N — 기획 A 발언</h4>
+        <p>첫 번째 기획자가 주제에 대한 기획안을 작성합니다.<br>
+        라운드 2+에서는 이전 라운드의 모든 발언을 컨텍스트로 받아 반박·보완합니다.<br>
+        <strong>SSE 스트리밍</strong>으로 실시간 표시됩니다.</p>
+      </div>
+    </div>
+
+    <!-- Step 4 -->
+    <div class="flow-step">
+      <div class="flow-line">
+        <div class="flow-dot" style="border-color:var(--accent2);background:var(--accent2)"></div>
+        <div class="flow-connector"></div>
+      </div>
+      <div class="flow-content">
+        <h4 style="color:var(--accent2)">④ 라운드 N — 기획 B 발언</h4>
+        <p>두 번째 기획자가 기획 A의 발언을 참조하여 대안 또는 보완 기획을 작성합니다.<br>
+        다른 모델이므로 자연스럽게 다른 관점이 나옵니다.</p>
+      </div>
+    </div>
+
+    <!-- Step 5 -->
+    <div class="flow-step">
+      <div class="flow-line">
+        <div class="flow-dot" style="border-color:var(--accent4);background:var(--accent4)"></div>
+        <div class="flow-connector"></div>
+      </div>
+      <div class="flow-content">
+        <h4 style="color:var(--accent4)">⑤ 라운드 N — 검증자 비판</h4>
+        <p>두 기획안을 비교 분석하고 논리적 결함, 비용 비현실성, 일정 리스크를 지적합니다.<br>
+        각 기획안에 점수(1~10)를 부여하고 구체적 개선점을 제안합니다.</p>
+      </div>
+    </div>
+
+    <!-- Step 6 -->
+    <div class="flow-step">
+      <div class="flow-line">
+        <div class="flow-dot" style="border-color:var(--ceo-color)"></div>
+        <div class="flow-connector"></div>
+      </div>
+      <div class="flow-content">
+        <h4 style="color:var(--ceo-color)">⑥ CEO 개입 포인트 (선택)</h4>
+        <p>라운드 종료 후 CEO에게 선택지를 제시합니다:</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+          <span class="badge" style="background:rgba(108,92,231,0.15);color:var(--accent);padding:6px 14px;font-size:0.78rem;border-radius:6px">🔄 다음 라운드</span>
+          <span class="badge" style="background:rgba(253,203,110,0.15);color:var(--accent3);padding:6px 14px;font-size:0.78rem;border-radius:6px">💬 방향 지시</span>
+          <span class="badge" style="background:rgba(85,239,196,0.15);color:var(--synth-color);padding:6px 14px;font-size:0.78rem;border-radius:6px">✅ 합성 요청</span>
+          <span class="badge" style="background:rgba(225,112,85,0.15);color:var(--accent4);padding:6px 14px;font-size:0.78rem;border-radius:6px">⏹️ 토론 종료</span>
+        </div>
+        <p style="margin-top:8px">CEO가 "B안 방향으로 가되 비용은 A안 수준으로"처럼 구체적으로 지시하면<br>
+        다음 라운드에 해당 지시가 모든 참가자 컨텍스트에 주입됩니다.</p>
+      </div>
+    </div>
+
+    <!-- Step 7 -->
+    <div class="flow-step">
+      <div class="flow-line">
+        <div class="flow-dot" style="border-color:var(--synth-color);background:var(--synth-color)"></div>
+        <div class="flow-connector" style="background:transparent"></div>
+      </div>
+      <div class="flow-content">
+        <h4 style="color:var(--synth-color)">⑦ 합성 — 최종 기획서 생성</h4>
+        <p>모든 라운드의 논의를 종합하여 <strong>최종 기획서</strong>를 생성합니다.<br>
+        CEO 지시사항 반영 확인, 채택/미채택 근거, 실행 계획을 포함합니다.<br>
+        Extended Thinking으로 깊이 있는 합성을 수행합니다.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>상태 머신</h3>
+  <div class="card" style="overflow-x:auto">
+    <div class="state-row">
+      <div class="state-box" style="border-color:var(--text-dim);color:var(--text-dim)">IDLE</div>
+      <div style="text-align:center"><span class="state-arrow">→</span><br><span class="state-label">CEO 주제 제시</span></div>
+      <div class="state-box" style="border-color:var(--accent);color:var(--accent)">INIT</div>
+      <div style="text-align:center"><span class="state-arrow">→</span><br><span class="state-label">참가자 확정</span></div>
+      <div class="state-box" style="border-color:var(--accent2);color:var(--accent2)">ROUND_N</div>
+      <div style="text-align:center"><span class="state-arrow">→</span><br><span class="state-label">라운드 완료</span></div>
+      <div class="state-box" style="border-color:var(--ceo-color);color:var(--ceo-color)">WAIT_CEO</div>
+      <div style="text-align:center"><span class="state-arrow">→</span><br><span class="state-label">합성 요청</span></div>
+      <div class="state-box" style="border-color:var(--synth-color);color:var(--synth-color)">SYNTHESIS</div>
+      <div style="text-align:center"><span class="state-arrow">→</span><br><span class="state-label">완료</span></div>
+      <div class="state-box" style="border-color:var(--text-dim);color:var(--text-dim)">DONE</div>
+    </div>
+    <div style="margin-top:10px;margin-left:370px">
+      <span class="state-arrow" style="font-size:0.8rem">↑ CEO "다음 라운드" ↩ ROUND_N+1</span>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 5. 아키텍처 ═══════════════════════════════════════════ -->
+<section id="architecture">
+  <h2><span class="num">5</span> 시스템 아키텍처</h2>
+  <p class="section-desc">기존 AADS 채팅 인프라 위에 DiscussionOrchestrator 서비스를 추가하는 구조</p>
+
+  <div class="arch-diagram">
+    <!-- Layer 1: CEO -->
+    <div class="arch-row">
+      <div class="arch-box ceo-box">
+        🎯 CEO (대화창)<br>
+        <small>주제 제시 · 방향 지시 · 최종 결정</small>
+      </div>
+    </div>
+    <div class="arch-arrow-down">▼</div>
+
+    <!-- Layer 2: Chat Service -->
+    <div class="arch-row">
+      <div class="arch-box orch-box">
+        🧠 CTO AI (Chat Service)<br>
+        <small>의도 감지 → 토론 모드 전환 → 오케스트레이션</small>
+      </div>
+    </div>
+    <div class="arch-arrow-down">▼</div>
+
+    <!-- Layer 3: Discussion Orchestrator -->
+    <div class="arch-row">
+      <div class="arch-box" style="border-color:var(--accent);background:rgba(108,92,231,0.15);color:var(--accent);min-width:300px;padding:20px;">
+        <strong>🔄 DiscussionOrchestrator</strong> (신규)<br>
+        <small>라운드 관리 · 컨텍스트 조합 · 비용 추적 · 상태 머신</small>
+      </div>
+    </div>
+    <div class="arch-arrow-down">▼</div>
+
+    <!-- Layer 4: LLM Providers -->
+    <div class="arch-row">
+      <div class="arch-box llm-box">
+        Claude Opus<br>
+        <small>기획 A · 합성자</small>
+      </div>
+      <div class="arch-box llm-box">
+        Gemini Pro<br>
+        <small>기획 B · 그라운딩</small>
+      </div>
+      <div class="arch-box llm-box">
+        Claude Sonnet<br>
+        <small>검증자 · 비판</small>
+      </div>
+      <div class="arch-box llm-box" style="border-style:dashed;opacity:0.6">
+        GPT-4o / etc.<br>
+        <small>선택적 참가자</small>
+      </div>
+    </div>
+    <div class="arch-arrow-down">▼</div>
+
+    <!-- Layer 5: Data -->
+    <div class="arch-row">
+      <div class="arch-box db-box">
+        PostgreSQL<br>
+        <small>discussion_sessions</small>
+      </div>
+      <div class="arch-box db-box">
+        chat_messages<br>
+        <small>발화자별 저장</small>
+      </div>
+      <div class="arch-box db-box" style="border-style:dashed;opacity:0.6">
+        Redis<br>
+        <small>토론 상태 캐시</small>
+      </div>
+    </div>
+  </div>
+
+  <h3>기존 인프라 재활용 매핑</h3>
+  <table>
+    <thead>
+      <tr><th>기존 컴포넌트</th><th>토론 오케스트레이터에서의 역할</th><th>수정 필요</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>chat_service.py</code></td><td>토론 의도 감지 → 오케스트레이터 호출</td><td>분기 추가 (~30줄)</td></tr>
+      <tr><td><code>model_selector.py</code></td><td>참가자별 LLM 호출 (call_stream)</td><td>변경 없음</td></tr>
+      <tr><td><code>intent_router.py</code></td><td>"토론 모드로" 키워드 감지</td><td>인텐트 1개 추가</td></tr>
+      <tr><td><code>debate_service.py</code></td><td>참조 아키텍처 (관점별 분석 패턴)</td><td>변경 없음</td></tr>
+      <tr><td><code>agent_orchestrator.py</code></td><td>참조 (SharedDiscoveryStore, 비용 추적)</td><td>변경 없음</td></tr>
+      <tr><td>SSE Streaming</td><td>참가자 발언 실시간 스트리밍</td><td>이벤트 타입 추가</td></tr>
+      <tr><td><code>anthropic_client.py</code></td><td><code>call_llm_with_fallback</code> 호출</td><td>변경 없음</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ═══════════════════════════════════════════ 6. 대화 UX ═══════════════════════════════════════════ -->
+<section id="chat-ux">
+  <h2><span class="num">6</span> 대화 UX 시뮬레이션</h2>
+  <p class="section-desc">실제 대화창에서 보이는 토론 진행 모습. CEO가 일반 대화처럼 메시지를 보내면 토론에 자연스럽게 개입됩니다.</p>
+
+  <div class="chat-mock">
+    <div class="chat-header">
+      <div class="status-dot"></div>
+      토론 모드 — "AADS 과금 시스템 설계"
+      <span style="margin-left:auto;font-size:0.72rem;color:var(--text-dim)">라운드 1/3 · 참가자 4명</span>
+    </div>
+
+    <div class="chat-body">
+      <!-- CEO 시작 -->
+      <div class="chat-msg">
+        <div class="chat-avatar ceo">CEO</div>
+        <div class="chat-bubble">
+          <div class="sender ceo-name">CEO moongoby</div>
+          AADS 과금 시스템을 설계해줘. 월 구독형 + 사용량 기반 하이브리드로 가고 싶어. 토론 모드로 진행해.
+        </div>
+      </div>
+
+      <!-- 오케스트레이터 시스템 -->
+      <div class="chat-msg">
+        <div class="chat-avatar orch">🔄</div>
+        <div class="chat-bubble system">
+          <div class="sender orch-name">오케스트레이터</div>
+          토론 세션을 시작합니다. 참가자: <strong>기획A</strong>(Claude Opus) · <strong>기획B</strong>(Gemini Pro) · <strong>검증자</strong>(Claude Sonnet)<br>
+          라운드 1/3 시작 — 각 참가자가 기획안을 작성합니다.
+        </div>
+      </div>
+
+      <div class="round-divider">라운드 1 — 초기 기획안</div>
+
+      <!-- 기획 A -->
+      <div class="chat-msg">
+        <div class="chat-avatar planner-a">A</div>
+        <div class="chat-bubble">
+          <div class="sender planner-a-name">기획 A — Claude Opus</div>
+          <strong>📋 AADS 과금 시스템 설계안 A</strong><br><br>
+          <strong>1. 요금제 구조</strong><br>
+          • Starter: 월 $49 — 파이프라인 100회, 에이전트 3개<br>
+          • Pro: 월 $199 — 파이프라인 500회, 에이전트 10개, 우선 큐<br>
+          • Enterprise: 커스텀 — 무제한 + SLA + 전용 인프라<br><br>
+          <strong>2. 사용량 과금 (초과 시)</strong><br>
+          • 파이프라인 실행: $0.5/회<br>
+          • LLM 토큰: 원가 × 1.3 마크업<br>
+          • 스토리지: $0.1/GB/월<br><br>
+          <strong>3. 기술 구현</strong><br>
+          • Stripe Billing API 연동<br>
+          • 미터링: Redis 카운터 → 1시간 배치로 PostgreSQL 집계<br>
+          • 월말 정산 → 인보이스 자동 발행<br>
+        </div>
+      </div>
+
+      <!-- 기획 B -->
+      <div class="chat-msg">
+        <div class="chat-avatar planner-b">B</div>
+        <div class="chat-bubble">
+          <div class="sender planner-b-name">기획 B — Gemini Pro</div>
+          <strong>📋 AADS 과금 시스템 설계안 B</strong><br><br>
+          <strong>1. 크레딧 기반 모델 (차별점)</strong><br>
+          • 월 구독 시 크레딧 지급 (Starter: 5,000cr, Pro: 25,000cr)<br>
+          • 각 작업이 크레딧을 소비 (파이프라인 50cr, 토론 100cr 등)<br>
+          • 미사용 크레딧 이월 가능 (최대 3개월)<br><br>
+          <strong>2. 시장 벤치마크</strong> 🔍<br>
+          • Cursor: $20/월 (500회 fast), Replit: $25/월 (크레딧제)<br>
+          • <em>[Grounding Search 기반]</em> AI 코딩 도구 시장 CAGR 28.3%<br><br>
+          <strong>3. 기술 구현</strong><br>
+          • 크레딧 원장: PostgreSQL SERIALIZABLE 트랜잭션<br>
+          • 실시간 잔고 표시: WebSocket 대시보드<br>
+          • Paddle(글로벌 결제) + 카카오페이(국내)<br>
+        </div>
+      </div>
+
+      <!-- 검증자 -->
+      <div class="chat-msg">
+        <div class="chat-avatar critic">🔍</div>
+        <div class="chat-bubble">
+          <div class="sender critic-name">검증자 — Claude Sonnet</div>
+          <strong>⚖️ 비교 검증 결과</strong><br><br>
+          <table style="font-size:0.78rem;margin:8px 0">
+            <tr><th>항목</th><th>기획 A</th><th>기획 B</th></tr>
+            <tr><td>과금 명확성</td><td>⭐ 8/10</td><td>⭐ 7/10</td></tr>
+            <tr><td>사용자 이해도</td><td>⭐ 7/10</td><td>⭐ 9/10</td></tr>
+            <tr><td>구현 복잡도</td><td>⭐ 8/10 (낮음)</td><td>⭐ 5/10 (높음)</td></tr>
+            <tr><td>시장 경쟁력</td><td>⭐ 6/10</td><td>⭐ 8/10</td></tr>
+          </table>
+          <strong>⚠️ 지적사항:</strong><br>
+          • A안: 고정 요금제가 3개뿐이면 중간 사용자가 Pro로 강제 업그레이드됨<br>
+          • B안: 크레딧 이월이 매출 인식 복잡성을 야기함 (K-IFRS 15 수익인식)<br>
+          • 공통: LLM 원가 변동성(모델 가격 인하) 리스크 미반영<br>
+        </div>
+      </div>
+
+      <!-- 라운드 종료 -->
+      <div class="chat-msg">
+        <div class="chat-avatar orch">🔄</div>
+        <div class="chat-bubble system">
+          라운드 1 완료. 비용: $2.3 | 소요: 45초<br>
+          → 다음 단계를 선택해주세요: 🔄 다음 라운드 | 💬 방향 지시 | ✅ 합성 | ⏹️ 종료
+        </div>
+      </div>
+
+      <!-- CEO 개입 -->
+      <div class="chat-msg">
+        <div class="chat-avatar ceo">CEO</div>
+        <div class="chat-bubble">
+          <div class="sender ceo-name">CEO moongoby</div>
+          B안의 크레딧 방식이 마음에 드는데, 이월은 빼고 A안의 명확한 요금 구조를 결합해줘. 그리고 한국 결제는 토스페이먼츠로.
+        </div>
+      </div>
+
+      <div class="round-divider">라운드 2 — CEO 지시 반영 보완</div>
+
+      <!-- 기획 A 라운드2 -->
+      <div class="chat-msg">
+        <div class="chat-avatar planner-a">A</div>
+        <div class="chat-bubble">
+          <div class="sender planner-a-name">기획 A — Claude Opus</div>
+          <strong>📋 설계안 A (rev.2) — CEO 지시 반영</strong><br><br>
+          ✅ 크레딧 기반 + 명확한 요금 구조 결합<br>
+          ✅ 이월 제거 → 월 리셋 방식<br>
+          ✅ 결제: Stripe(글로벌) + 토스페이먼츠(국내)<br><br>
+          <strong>수정안 핵심:</strong><br>
+          • Starter: ₩59,000/월 (5,000cr, 미사용 소멸)<br>
+          • Pro: ₩199,000/월 (25,000cr, 초과 시 ₩12/cr)<br>
+          • 크레딧 단가표 공개 (투명성 확보)...
+        </div>
+      </div>
+
+      <!-- 중략 표시 -->
+      <div class="chat-msg">
+        <div class="chat-avatar orch">🔄</div>
+        <div class="chat-bubble system" style="font-style:italic">
+          ... 기획 B 보완, 검증자 재검증 진행 ...
+        </div>
+      </div>
+
+      <!-- 합성 요청 -->
+      <div class="chat-msg">
+        <div class="chat-avatar ceo">CEO</div>
+        <div class="chat-bubble">
+          <div class="sender ceo-name">CEO moongoby</div>
+          좋아. 이 방향으로 최종안 합성해줘.
+        </div>
+      </div>
+
+      <div class="round-divider">✅ 최종 합성</div>
+
+      <!-- 합성 결과 -->
+      <div class="chat-msg">
+        <div class="chat-avatar synth">📋</div>
+        <div class="chat-bubble" style="border-color:rgba(85,239,196,0.3)">
+          <div class="sender synth-name">합성자 — Claude Opus (Extended Thinking)</div>
+          <strong>📋 AADS 과금 시스템 — 최종 기획서</strong><br><br>
+          <strong>[채택 근거]</strong> B안의 크레딧 모델 + A안의 명확한 티어 구조 + CEO 지시(이월 제거, 토스페이먼츠)<br><br>
+          <strong>1. 요금 체계</strong> — 크레딧 기반 3티어, 월 리셋<br>
+          <strong>2. 결제 인프라</strong> — Stripe(해외) + 토스페이먼츠(국내 PG)<br>
+          <strong>3. 구현 로드맵</strong> — Phase 1~3, 총 3주<br>
+          <strong>4. 리스크 대응</strong> — LLM 원가 변동 → 분기별 단가 재조정<br><br>
+          <em>[전체 기획서는 아티팩트로 저장됨]</em>
+        </div>
+      </div>
+    </div>
+
+    <div class="chat-input-mock">
+      <input type="text" placeholder="메시지를 입력하세요... (토론 중 자유롭게 개입 가능)" disabled>
+      <button disabled>전송</button>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 7. API 설계 ═══════════════════════════════════════════ -->
+<section id="api">
+  <h2><span class="num">7</span> API 설계</h2>
+  <p class="section-desc">기존 채팅 API를 확장하여 토론 모드를 지원. 별도 엔드포인트 최소화.</p>
+
+  <div class="tabs" id="api-tabs">
+    <div class="tab active" data-tab="api-main">핵심 서비스</div>
+    <div class="tab" data-tab="api-endpoint">엔드포인트</div>
+    <div class="tab" data-tab="api-events">SSE 이벤트</div>
+  </div>
+
+  <div class="tab-content active" id="api-main">
+    <h3>DiscussionOrchestrator 서비스 (신규)</h3>
+    <pre><span class="code-cmt"># app/services/discussion_orchestrator.py</span>
+
+<span class="code-kw">class</span> <span class="code-type">DiscussionOrchestrator</span>:
+    <span class="code-str">"""멀티-LLM 토론 오케스트레이터. CEO 실시간 개입 지원."""</span>
+
+    <span class="code-kw">async def</span> <span class="code-fn">start_discussion</span>(
+        self,
+        topic: <span class="code-type">str</span>,
+        session_id: <span class="code-type">str</span>,
+        participants: <span class="code-type">list</span>[<span class="code-type">ParticipantConfig</span>] | <span class="code-type">None</span> = <span class="code-kw">None</span>,
+        max_rounds: <span class="code-type">int</span> = <span class="code-num">3</span>,
+        budget_usd: <span class="code-type">float</span> = <span class="code-num">10.0</span>,
+    ) -> <span class="code-type">AsyncGenerator</span>[<span class="code-type">DiscussionEvent</span>, <span class="code-type">None</span>]:
+        <span class="code-str">"""토론 세션 시작. SSE 이벤트를 yield."""</span>
+        ...
+
+    <span class="code-kw">async def</span> <span class="code-fn">run_round</span>(
+        self,
+        discussion_id: <span class="code-type">str</span>,
+        ceo_directive: <span class="code-type">str</span> | <span class="code-type">None</span> = <span class="code-kw">None</span>,
+    ) -> <span class="code-type">AsyncGenerator</span>[<span class="code-type">DiscussionEvent</span>, <span class="code-type">None</span>]:
+        <span class="code-str">"""라운드 N 실행. CEO 지시사항을 컨텍스트에 주입."""</span>
+        <span class="code-kw">for</span> participant <span class="code-kw">in</span> self.participants:
+            <span class="code-cmt"># 이전 라운드 + CEO 지시를 컨텍스트로 조합</span>
+            context = self._build_round_context(participant, ceo_directive)
+            <span class="code-kw">async for</span> event <span class="code-kw">in</span> self._call_participant(participant, context):
+                <span class="code-kw">yield</span> event
+        <span class="code-kw">yield</span> DiscussionEvent(<span class="code-str">"round_complete"</span>, round=self.current_round)
+
+    <span class="code-kw">async def</span> <span class="code-fn">synthesize</span>(
+        self,
+        discussion_id: <span class="code-type">str</span>,
+        ceo_final_directive: <span class="code-type">str</span> | <span class="code-type">None</span> = <span class="code-kw">None</span>,
+    ) -> <span class="code-type">AsyncGenerator</span>[<span class="code-type">DiscussionEvent</span>, <span class="code-type">None</span>]:
+        <span class="code-str">"""전체 라운드 합성 → 최종 기획서 생성."""</span>
+        ...
+
+    <span class="code-kw">def</span> <span class="code-fn">_build_round_context</span>(self, participant, ceo_directive):
+        <span class="code-str">"""참가자별 컨텍스트 조합: 주제 + 이전 발언 + CEO 지시 + 역할 프롬프트"""</span>
+        ...
+
+
+<span class="code-kw">@dataclass</span>
+<span class="code-kw">class</span> <span class="code-type">ParticipantConfig</span>:
+    name: <span class="code-type">str</span>           <span class="code-cmt"># "기획 A"</span>
+    role: <span class="code-type">str</span>           <span class="code-cmt"># "strategic_planner"</span>
+    model: <span class="code-type">str</span>          <span class="code-cmt"># "claude-opus-4-6"</span>
+    system_prompt: <span class="code-type">str</span>  <span class="code-cmt"># 역할 정의 + 톤 지시</span>
+    color: <span class="code-type">str</span>          <span class="code-cmt"># "#6c5ce7" (UI 표시용)</span>
+    avatar: <span class="code-type">str</span>         <span class="code-cmt"># "A" (아바타 문자)</span>
+
+
+<span class="code-kw">@dataclass</span>
+<span class="code-kw">class</span> <span class="code-type">DiscussionEvent</span>:
+    type: <span class="code-type">str</span>       <span class="code-cmt"># "participant_start" | "delta" | "participant_end" |</span>
+                     <span class="code-cmt"># "round_complete" | "synthesis_start" | "done"</span>
+    participant: <span class="code-type">str</span> | <span class="code-type">None</span>
+    content: <span class="code-type">str</span>
+    metadata: <span class="code-type">dict</span>   <span class="code-cmt"># {model, cost, round, tokens}</span></pre>
+  </div>
+
+  <div class="tab-content" id="api-endpoint">
+    <h3>HTTP 엔드포인트 (기존 채팅 API 확장)</h3>
+    <table>
+      <thead>
+        <tr><th>Method</th><th>Path</th><th>설명</th><th>비고</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>POST</code></td>
+          <td><code>/chat/messages/send</code></td>
+          <td>기존 엔드포인트. "토론 모드로" 감지 시 자동 전환</td>
+          <td>수정: 분기 추가</td>
+        </tr>
+        <tr>
+          <td><code>POST</code></td>
+          <td><code>/chat/discussion/start</code></td>
+          <td>명시적 토론 시작 (참가자 커스텀 시)</td>
+          <td>신규</td>
+        </tr>
+        <tr>
+          <td><code>POST</code></td>
+          <td><code>/chat/discussion/{id}/next-round</code></td>
+          <td>다음 라운드 진행 (CEO 지시 포함)</td>
+          <td>신규</td>
+        </tr>
+        <tr>
+          <td><code>POST</code></td>
+          <td><code>/chat/discussion/{id}/synthesize</code></td>
+          <td>최종 합성 요청</td>
+          <td>신규</td>
+        </tr>
+        <tr>
+          <td><code>GET</code></td>
+          <td><code>/chat/discussion/{id}/status</code></td>
+          <td>토론 상태 조회 (라운드, 비용, 참가자)</td>
+          <td>신규</td>
+        </tr>
+        <tr>
+          <td><code>POST</code></td>
+          <td><code>/chat/discussion/{id}/stop</code></td>
+          <td>토론 즉시 종료</td>
+          <td>신규</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="highlight-box warn">
+      <strong>💡 핵심 설계 결정:</strong> 대부분의 CEO 개입은 기존 <code>/chat/messages/send</code>로 처리됩니다.
+      오케스트레이터가 토론 중 CEO 메시지를 감지하면 자동으로 다음 라운드에 지시사항으로 반영합니다.
+      별도 엔드포인트(<code>/discussion/*</code>)는 대시보드 UI에서 명시적 제어가 필요할 때만 사용합니다.
+    </div>
+  </div>
+
+  <div class="tab-content" id="api-events">
+    <h3>SSE 이벤트 타입 (신규 추가분)</h3>
+    <table>
+      <thead>
+        <tr><th>Event Type</th><th>Data</th><th>설명</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>discussion_start</code></td>
+          <td><code>{"discussion_id", "topic", "participants", "max_rounds"}</code></td>
+          <td>토론 세션 시작</td>
+        </tr>
+        <tr>
+          <td><code>round_start</code></td>
+          <td><code>{"round": 1, "total_rounds": 3}</code></td>
+          <td>라운드 시작</td>
+        </tr>
+        <tr>
+          <td><code>participant_start</code></td>
+          <td><code>{"name": "기획 A", "model": "claude-opus", "color": "#6c5ce7"}</code></td>
+          <td>참가자 발언 시작</td>
+        </tr>
+        <tr>
+          <td><code>delta</code></td>
+          <td><code>{"content": "...", "participant": "기획 A"}</code></td>
+          <td>스트리밍 텍스트 (기존 확장)</td>
+        </tr>
+        <tr>
+          <td><code>participant_end</code></td>
+          <td><code>{"name": "기획 A", "cost": 0.85, "tokens": 2340}</code></td>
+          <td>참가자 발언 완료</td>
+        </tr>
+        <tr>
+          <td><code>round_complete</code></td>
+          <td><code>{"round": 1, "cost_so_far": 2.3, "options": [...]}</code></td>
+          <td>라운드 완료 + CEO 선택지</td>
+        </tr>
+        <tr>
+          <td><code>wait_ceo</code></td>
+          <td><code>{"message": "다음 단계를 선택해주세요"}</code></td>
+          <td>CEO 입력 대기</td>
+        </tr>
+        <tr>
+          <td><code>synthesis_start</code></td>
+          <td><code>{"model": "claude-opus", "thinking": true}</code></td>
+          <td>합성 시작</td>
+        </tr>
+        <tr>
+          <td><code>discussion_done</code></td>
+          <td><code>{"total_cost", "total_rounds", "duration_ms", "artifact_id"}</code></td>
+          <td>토론 종료 + 최종 기획서 ID</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 8. 데이터 모델 ═══════════════════════════════════════════ -->
+<section id="data-model">
+  <h2><span class="num">8</span> 데이터 모델</h2>
+  <p class="section-desc">신규 테이블 1개 + 기존 chat_messages 확장</p>
+
+  <h3>신규: discussion_sessions 테이블</h3>
+  <pre><span class="code-kw">CREATE TABLE</span> discussion_sessions (
+    id            <span class="code-type">UUID</span>        <span class="code-kw">PRIMARY KEY DEFAULT</span> gen_random_uuid(),
+    session_id    <span class="code-type">UUID</span>        <span class="code-kw">REFERENCES</span> chat_sessions(id),
+    topic         <span class="code-type">TEXT</span>        <span class="code-kw">NOT NULL</span>,
+    status        <span class="code-type">VARCHAR(20)</span> <span class="code-kw">NOT NULL DEFAULT</span> <span class="code-str">'active'</span>,
+                  <span class="code-cmt">-- 'active' | 'wait_ceo' | 'synthesizing' | 'done' | 'cancelled'</span>
+
+    <span class="code-cmt">-- 참가자 구성</span>
+    participants  <span class="code-type">JSONB</span>       <span class="code-kw">NOT NULL</span>,
+                  <span class="code-cmt">-- [{name, role, model, system_prompt, color, avatar}]</span>
+
+    <span class="code-cmt">-- 라운드 데이터</span>
+    max_rounds    <span class="code-type">INT</span>         <span class="code-kw">DEFAULT</span> <span class="code-num">3</span>,
+    current_round <span class="code-type">INT</span>         <span class="code-kw">DEFAULT</span> <span class="code-num">0</span>,
+    rounds        <span class="code-type">JSONB</span>       <span class="code-kw">DEFAULT</span> <span class="code-str">'[]'</span>,
+                  <span class="code-cmt">-- [{round, ceo_directive, responses: [{participant, content, model, cost, tokens}]}]</span>
+
+    <span class="code-cmt">-- 합성 결과</span>
+    synthesis     <span class="code-type">TEXT</span>,
+    artifact_id   <span class="code-type">UUID</span>        <span class="code-kw">REFERENCES</span> chat_artifacts(id),
+
+    <span class="code-cmt">-- 비용/시간 추적</span>
+    budget_usd    <span class="code-type">DECIMAL(10,4)</span> <span class="code-kw">DEFAULT</span> <span class="code-num">10.0</span>,
+    total_cost    <span class="code-type">DECIMAL(10,4)</span> <span class="code-kw">DEFAULT</span> <span class="code-num">0</span>,
+    duration_ms   <span class="code-type">INT</span>,
+
+    created_at    <span class="code-type">TIMESTAMPTZ</span> <span class="code-kw">DEFAULT</span> now(),
+    updated_at    <span class="code-type">TIMESTAMPTZ</span> <span class="code-kw">DEFAULT</span> now()
+);
+
+<span class="code-kw">CREATE INDEX</span> idx_discussion_session <span class="code-kw">ON</span> discussion_sessions(session_id);
+<span class="code-kw">CREATE INDEX</span> idx_discussion_status <span class="code-kw">ON</span> discussion_sessions(status);</pre>
+
+  <h3>기존 chat_messages 확장</h3>
+  <pre><span class="code-cmt">-- 토론 참가자 발언을 구분하기 위한 컬럼 추가</span>
+<span class="code-kw">ALTER TABLE</span> chat_messages
+    <span class="code-kw">ADD COLUMN</span> discussion_id   <span class="code-type">UUID</span> <span class="code-kw">REFERENCES</span> discussion_sessions(id),
+    <span class="code-kw">ADD COLUMN</span> participant_name <span class="code-type">VARCHAR(50)</span>,   <span class="code-cmt">-- "기획 A", "검증자" 등</span>
+    <span class="code-kw">ADD COLUMN</span> participant_meta <span class="code-type">JSONB</span>;        <span class="code-cmt">-- {color, avatar, role, round}</span></pre>
+
+  <h3>데이터 흐름</h3>
+  <div class="card">
+    <table>
+      <thead><tr><th>단계</th><th>저장 위치</th><th>데이터</th></tr></thead>
+      <tbody>
+        <tr><td>CEO 주제 제시</td><td>chat_messages (role=user)</td><td>원본 메시지</td></tr>
+        <tr><td>토론 세션 생성</td><td>discussion_sessions</td><td>topic, participants, status='active'</td></tr>
+        <tr><td>참가자 발언</td><td>chat_messages (role=assistant)</td><td>content + participant_name + discussion_id</td></tr>
+        <tr><td>라운드 완료</td><td>discussion_sessions.rounds (JSONB)</td><td>라운드별 전체 응답 아카이브</td></tr>
+        <tr><td>CEO 개입</td><td>chat_messages (role=user)</td><td>원본 메시지 + discussion_sessions.rounds에 ceo_directive로 저장</td></tr>
+        <tr><td>최종 합성</td><td>chat_messages + chat_artifacts</td><td>합성 텍스트 + 아티팩트 (전체 기획서)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 9. 비용 분석 ═══════════════════════════════════════════ -->
+<section id="cost">
+  <h2><span class="num">9</span> 비용 분석</h2>
+  <p class="section-desc">토론 1회당 예상 비용. 라운드 수와 참가자 구성에 따라 변동.</p>
+
+  <h3>시나리오별 비용 추정</h3>
+  <div class="cost-bar">
+    <span class="cost-label">경량 (2인, 1R)</span>
+    <div class="cost-fill-wrap">
+      <div class="cost-fill low" style="width:15%">$1.0~1.5</div>
+    </div>
+  </div>
+  <div class="cost-bar">
+    <span class="cost-label">기본 (3인, 2R)</span>
+    <div class="cost-fill-wrap">
+      <div class="cost-fill mid" style="width:35%">$3.0~5.0</div>
+    </div>
+  </div>
+  <div class="cost-bar">
+    <span class="cost-label">심층 (3인, 3R)</span>
+    <div class="cost-fill-wrap">
+      <div class="cost-fill mid" style="width:55%">$5.0~8.0</div>
+    </div>
+  </div>
+  <div class="cost-bar">
+    <span class="cost-label">풀 (4인, 5R)</span>
+    <div class="cost-fill-wrap">
+      <div class="cost-fill high" style="width:80%">$8.0~15.0</div>
+    </div>
+  </div>
+
+  <h3>비용 구성 내역 (기본 시나리오: 3인 × 2라운드 + 합성)</h3>
+  <table>
+    <thead>
+      <tr><th>구성 요소</th><th>모델</th><th>호출 횟수</th><th>토큰 (예상)</th><th>비용 (예상)</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>기획 A (2라운드)</td><td>Claude Opus</td><td>2</td><td>~6,000 out</td><td>$1.5~2.0</td></tr>
+      <tr><td>기획 B (2라운드)</td><td>Gemini Pro</td><td>2</td><td>~6,000 out</td><td>$0.3~0.6</td></tr>
+      <tr><td>검증자 (2라운드)</td><td>Claude Sonnet</td><td>2</td><td>~4,000 out</td><td>$0.6~1.0</td></tr>
+      <tr><td>합성</td><td>Claude Opus (Thinking)</td><td>1</td><td>~8,000 out</td><td>$1.0~1.5</td></tr>
+      <tr style="font-weight:700;background:rgba(108,92,231,0.08)">
+        <td colspan="4">합계</td><td>$3.4~5.1</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="highlight-box success">
+    <strong>💰 비용 대비 가치:</strong> 단일 LLM 기획 ($1~2) 대비 2~3배 비용이지만,
+    다각도 검증과 CEO 실시간 조정으로 <strong>기획 재작업 횟수를 줄여 총 비용은 절감</strong>됩니다.
+    기존 run_debate ($1~2)과 비교하면 상호 검토와 CEO 개입이 추가된 프리미엄.
+  </div>
+
+  <h3>비용 통제 메커니즘</h3>
+  <div class="card-grid" style="grid-template-columns:1fr 1fr 1fr">
+    <div class="card">
+      <div class="card-title">🔒 예산 상한</div>
+      <p style="font-size:0.82rem;color:var(--text-dim)">
+        <code>budget_usd</code> 설정 (기본 $10).<br>
+        초과 시 자동 경고 → CEO 승인 후 계속.
+      </p>
+    </div>
+    <div class="card">
+      <div class="card-title">📊 실시간 비용 표시</div>
+      <p style="font-size:0.82rem;color:var(--text-dim)">
+        각 참가자 발언 후 비용 표시.<br>
+        <code>round_complete</code> 이벤트에 누적 비용 포함.
+      </p>
+    </div>
+    <div class="card">
+      <div class="card-title">⚡ 조기 합성</div>
+      <p style="font-size:0.82rem;color:var(--text-dim)">
+        CEO가 원하면 1라운드 후 즉시 합성.<br>
+        불필요한 라운드 방지.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ 10. 구현 계획 ═══════════════════════════════════════════ -->
+<section id="implementation">
+  <h2><span class="num">10</span> 구현 계획</h2>
+  <p class="section-desc">총 1.5~2일. 기존 인프라를 최대한 활용하여 최소 변경으로 구현.</p>
+
+  <h3>타임라인</h3>
+  <div class="timeline">
+    <div class="timeline-block t1">Phase 1<br><small>핵심 로직 (0.5일)</small></div>
+    <div class="timeline-block t2">Phase 2<br><small>채팅 통합 + SSE (0.5일)</small></div>
+    <div class="timeline-block t3">Phase 3<br><small>테스트 + 최적화 (0.3일)</small></div>
+    <div class="timeline-block t4">Phase 4<br><small>배포 (0.2일)</small></div>
+  </div>
+
+  <h3>Phase 별 상세</h3>
+
+  <div class="card">
+    <div class="card-title" style="color:var(--accent)">Phase 1 — 핵심 로직 (4시간)</div>
+    <table>
+      <thead><tr><th>작업</th><th>파일</th><th>변경 규모</th></tr></thead>
+      <tbody>
+        <tr><td>DiscussionOrchestrator 클래스</td><td><code>app/services/discussion_orchestrator.py</code> (신규)</td><td>~300줄</td></tr>
+        <tr><td>ParticipantConfig, DiscussionEvent 데이터 클래스</td><td>동일 파일</td><td>~50줄</td></tr>
+        <tr><td>컨텍스트 빌더 (라운드별 참가자 프롬프트 조합)</td><td>동일 파일</td><td>~100줄</td></tr>
+        <tr><td>DB 마이그레이션 (discussion_sessions + chat_messages 확장)</td><td><code>migrations/</code> (신규)</td><td>~40줄</td></tr>
+        <tr><td>기본 참가자 프리셋 (3인 기본/4인 심층/2인 경량)</td><td><code>app/services/discussion_presets.py</code> (신규)</td><td>~80줄</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-title" style="color:var(--text-dim)">Phase 2 — 채팅 통합 (4시간)</div>
+    <table>
+      <thead><tr><th>작업</th><th>파일</th><th>변경 규모</th></tr></thead>
+      <tbody>
+        <tr><td>인텐트 라우터에 "discussion" 인텐트 추가</td><td><code>app/services/intent_router.py</code></td><td>~15줄</td></tr>
+        <tr><td>chat_service에 토론 분기 추가</td><td><code>app/services/chat_service.py</code></td><td>~50줄</td></tr>
+        <tr><td>SSE 이벤트 타입 확장 (participant_start/end 등)</td><td><code>app/services/chat_service.py</code></td><td>~30줄</td></tr>
+        <tr><td>토론 API 엔드포인트 추가</td><td><code>app/routers/chat.py</code></td><td>~80줄</td></tr>
+        <tr><td>chat_messages에 discussion 컬럼 추가 로직</td><td><code>app/services/chat_service.py</code></td><td>~20줄</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-title" style="color:var(--accent2)">Phase 3 — 테스트 + 최적화 (2.5시간)</div>
+    <table>
+      <thead><tr><th>작업</th><th>파일</th><th>변경 규모</th></tr></thead>
+      <tbody>
+        <tr><td>단위 테스트 (오케스트레이터 로직)</td><td><code>tests/unit/test_discussion_orchestrator.py</code></td><td>~150줄</td></tr>
+        <tr><td>통합 테스트 (SSE 스트리밍 시나리오)</td><td><code>tests/integration/test_discussion_e2e.py</code></td><td>~100줄</td></tr>
+        <tr><td>비용 추적 검증</td><td>테스트 내 포함</td><td>—</td></tr>
+        <tr><td>컨텍스트 크기 최적화 (라운드 요약 압축)</td><td><code>discussion_orchestrator.py</code></td><td>~30줄</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-title" style="color:var(--accent3)">Phase 4 — 배포 (1.5시간)</div>
+    <table>
+      <thead><tr><th>작업</th><th>방법</th></tr></thead>
+      <tbody>
+        <tr><td>DB 마이그레이션 실행</td><td><code>docker exec aads-server python3 -c "..."</code></td></tr>
+        <tr><td>코드 배포</td><td><code>reload-api.sh</code> (0ms 다운타임)</td></tr>
+        <tr><td>실 테스트 (CEO 채팅에서 토론 실행)</td><td>수동 테스트</td></tr>
+        <tr><td>모니터링 (5분)</td><td>헬스체크 + 로그 확인</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>변경 파일 요약</h3>
+  <table>
+    <thead><tr><th>구분</th><th>파일</th><th>변경량</th></tr></thead>
+    <tbody>
+      <tr><td>🆕 신규</td><td><code>app/services/discussion_orchestrator.py</code></td><td>~450줄</td></tr>
+      <tr><td>🆕 신규</td><td><code>app/services/discussion_presets.py</code></td><td>~80줄</td></tr>
+      <tr><td>🆕 신규</td><td><code>migrations/xxx_discussion_sessions.sql</code></td><td>~40줄</td></tr>
+      <tr><td>🆕 신규</td><td><code>tests/unit/test_discussion_orchestrator.py</code></td><td>~150줄</td></tr>
+      <tr><td>✏️ 수정</td><td><code>app/services/intent_router.py</code></td><td>+15줄</td></tr>
+      <tr><td>✏️ 수정</td><td><code>app/services/chat_service.py</code></td><td>+100줄</td></tr>
+      <tr><td>✏️ 수정</td><td><code>app/routers/chat.py</code></td><td>+80줄</td></tr>
+      <tr style="font-weight:700;background:rgba(108,92,231,0.08)">
+        <td colspan="2">총 변경량</td><td>~915줄 (신규 720 + 수정 195)</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ═══════════════════════════════════════════ 11. 리스크 ═══════════════════════════════════════════ -->
+<section id="risks">
+  <h2><span class="num">11</span> 리스크 및 대응</h2>
+  <p class="section-desc">예상 리스크와 완화 전략</p>
+
+  <table>
+    <thead>
+      <tr><th>리스크</th><th>영향</th><th>확률</th><th>완화 전략</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>⚠️ 컨텍스트 폭발<br><small>라운드가 쌓이면 이전 발언이 토큰 한도 초과</small></td>
+        <td>높음</td>
+        <td>중간</td>
+        <td>라운드 2+부터 이전 발언을 요약본으로 압축 (2,000토큰/참가자 상한).<br>최근 라운드는 원문, 이전 라운드는 요약.</td>
+      </tr>
+      <tr>
+        <td>⚠️ LLM 장애/타임아웃<br><small>특정 모델(Gemini 등) 호출 실패</small></td>
+        <td>중간</td>
+        <td>낮음</td>
+        <td>참가자별 fallback 모델 지정. Gemini 실패 → Sonnet으로 대체.<br>타임아웃 60초 → 재시도 1회 → 스킵 후 CEO 알림.</td>
+      </tr>
+      <tr>
+        <td>⚠️ 비용 초과<br><small>CEO가 라운드를 과도하게 반복</small></td>
+        <td>중간</td>
+        <td>낮음</td>
+        <td>budget_usd 설정 (기본 $10). 80% 도달 시 경고.<br>100% 도달 시 강제 합성 제안.</td>
+      </tr>
+      <tr>
+        <td>⚠️ 참가자 동질화<br><small>라운드가 진행될수록 답변이 수렴</small></td>
+        <td>낮음</td>
+        <td>중간</td>
+        <td>각 참가자의 시스템 프롬프트에 "반드시 독립적 관점 유지" 강제.<br>검증자에게 "동질화 경고" 역할 부여.</td>
+      </tr>
+      <tr>
+        <td>⚠️ CEO 장시간 부재<br><small>WAIT_CEO 상태에서 응답 없음</small></td>
+        <td>낮음</td>
+        <td>중간</td>
+        <td>30분 타임아웃 → 자동으로 현재까지 결과 합성 후 종료.<br>텔레그램으로 "토론 대기 중" 알림.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>확장 가능성 (향후)</h3>
+  <div class="card-grid" style="grid-template-columns:1fr 1fr">
+    <div class="card">
+      <div class="card-title">🔮 Phase 2 — 대시보드 UI</div>
+      <ul style="font-size:0.82rem;color:var(--text-dim);padding-left:18px">
+        <li>토론 전용 뷰 (발화자별 레인, 타임라인)</li>
+        <li>버튼으로 "다음 라운드" / "합성" 제어</li>
+        <li>참가자 드래그&드롭 구성</li>
+        <li>토론 히스토리 재생 기능</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">🔮 Phase 3 — 고급 기능</div>
+      <ul style="font-size:0.82rem;color:var(--text-dim);padding-left:18px">
+        <li>도구 사용 (참가자가 DB/웹 조회 후 근거 제시)</li>
+        <li>투표 시스템 (참가자간 선호도 표시)</li>
+        <li>템플릿 (기술 설계/마케팅/사업계획 등)</li>
+        <li>토론 품질 자동 평가 메트릭</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+</div><!-- /container -->
+
+<footer>
+  <strong>AADS 멀티-LLM 토론 오케스트레이터</strong> — 상세 설계안 v1.0<br>
+  작성: CTO AI · 2026-05-08 · Task ID: AADS-DISCUSS · Size: M
+</footer>
+
+<!-- ═══════════════════════════════════════════ JS ═══════════════════════════════════════════ -->
+<script>
+// Tab switching
+document.querySelectorAll('.tabs').forEach(tabGroup => {
+  tabGroup.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      const tabId = tab.dataset.tab;
+      tabGroup.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      tabGroup.parentElement.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      document.getElementById(tabId).classList.add('active');
+    });
+  });
+});
+
+// Sticky nav active state
+const navLinks = document.querySelectorAll('.nav a');
+const sections = document.querySelectorAll('section[id]');
+window.addEventListener('scroll', () => {
+  let current = '';
+  sections.forEach(section => {
+    const sectionTop = section.offsetTop - 80;
+    if (window.pageYOffset >= sectionTop) {
+      current = section.getAttribute('id');
+    }
+  });
+  navLinks.forEach(link => {
+    link.classList.remove('active');
+    if (link.getAttribute('href') === '#' + current) {
+      link.classList.add('active');
+    }
+  });
+});
+
+// Smooth scroll
+navLinks.forEach(link => {
+  link.addEventListener('click', e => {
+    e.preventDefault();
+    const target = document.querySelector(link.getAttribute('href'));
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  });
+});
+
+// Animate cost bars on scroll
+const observer = new IntersectionObserver(entries => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      entry.target.querySelectorAll('.cost-fill').forEach(bar => {
+        const width = bar.style.width;
+        bar.style.width = '0%';
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            bar.style.width = width;
+          });
+        });
+      });
+    }
+  });
+}, { threshold: 0.3 });
+document.querySelectorAll('#cost').forEach(el => observer.observe(el));
+</script>
+
+</body>
+</html>
