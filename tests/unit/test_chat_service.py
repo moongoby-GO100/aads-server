@@ -482,3 +482,128 @@ async def test_deferred_interrupt_rewrites_no_tool_stream_before_save():
     assert any("interrupt_applied" in chunk for chunk in chunks)
     assert any("stream_reset" in chunk for chunk in chunks)
     assert saved.await_args.args[1] == "수정본 답변"
+
+
+def test_keyword_fallback_routes_discussion_queries():
+    from app.services.intent_router import _keyword_fallback
+
+    result = _keyword_fallback("이 안건 장단점 비교해봐")
+
+    assert result.intent == "discussion"
+
+
+@pytest.mark.asyncio
+async def test_discussion_endpoint_proxies_structured_result():
+    session_id = uuid.uuid4()
+    payload = {
+        "question": "장단점 비교해봐",
+        "message": "## 종합 결론\n\n추천안",
+        "synthesis": "추천안",
+        "perspectives": [{"name": "기술", "analysis": "구현 가능", "key_points": ["속도"]}],
+        "cost_usd": 1.23,
+        "duration_ms": 4567,
+        "debate_id": "debate-1234",
+    }
+
+    with (
+        patch("app.routers.chat.svc.get_session", new=AsyncMock(return_value={"id": str(session_id)})),
+        patch("app.routers.chat.svc.run_discussion", new=AsyncMock(return_value=payload)) as mocked_run,
+    ):
+        result = await chat_router.run_discussion(
+            session_id,
+            chat_router.DiscussionRequest(
+                content="장단점 비교해봐",
+                context="배경",
+                perspectives=[{"name": "기술"}],
+            ),
+        )
+
+    assert result == payload
+    mocked_run.assert_awaited_once_with(
+        str(session_id),
+        "장단점 비교해봐",
+        context="배경",
+        perspectives=[{"name": "기술"}],
+    )
+
+
+@pytest.mark.asyncio
+async def test_send_message_stream_discussion_branch_uses_orchestrator():
+    session_id = str(uuid.uuid4())
+    execution_id = uuid.uuid4()
+    conn = AsyncMock()
+
+    async def _mock_fetchrow(query, *args):
+        if "FROM chat_messages WHERE idempotency_key" in query:
+            return None
+        if "WHERE session_id = $1 AND role = 'user' AND content = $2" in query:
+            return None
+        if "FROM chat_workspaces w" in query:
+            return {
+                "workspace_id": uuid.uuid4(),
+                "workspace_name": "AADS",
+                "system_prompt": "BASE_SYSTEM",
+                "workspace_settings": {},
+                "role_key": "",
+                "session_settings": {},
+            }
+        if "SELECT settings FROM chat_users" in query:
+            return {"settings": {}}
+        return None
+
+    conn.fetchrow = AsyncMock(side_effect=_mock_fetchrow)
+    conn.fetch = AsyncMock(return_value=[])
+    conn.fetchval = AsyncMock(return_value=execution_id)
+
+    orchestrated = {
+        "question": "장단점 비교해봐",
+        "message": "## 종합 결론\n\n추천안",
+        "synthesis": "추천안",
+        "perspectives": [{"name": "기술", "analysis": "구현 가능", "key_points": ["속도"]}],
+        "cost_usd": 1.5,
+        "duration_ms": 3200,
+        "debate_id": "debate-5678",
+        "tools_called": [{"type": "tool_use", "tool_name": "run_debate", "tool_use_id": "debate-5678", "tool_input": {}}],
+    }
+    saved = AsyncMock(return_value=None)
+
+    with (
+        patch("app.services.chat_service.get_pool", return_value=_Pool(conn)),
+        patch("app.services.chat_service.create_trace", return_value=None),
+        patch("app.services.chat_service.get_html_edit_context_state", new=AsyncMock(return_value={"html_context_used": False})),
+        patch(
+            "app.services.context_builder.build_messages_context",
+            new=AsyncMock(return_value=([{"role": "user", "content": "장단점 비교해봐"}], "BASE_SYSTEM")),
+        ),
+        patch(
+            "app.services.intent_router.classify",
+            new=AsyncMock(return_value=SimpleNamespace(
+                intent="discussion",
+                model="claude-opus",
+                use_tools=False,
+                tool_group="",
+                use_gemini_direct=False,
+                gemini_mode="",
+                naver_type="",
+            )),
+        ),
+        patch("app.services.contradiction_detector.detect_contradictions", new=AsyncMock(return_value="")),
+        patch("app.services.chat_embedding_service.embed_texts", new=AsyncMock(return_value=[])),
+        patch("app.services.semantic_cache.SemanticCache.lookup", new=AsyncMock(return_value=None)),
+        patch("app.services.chat_service._save_message", new=AsyncMock(return_value={"id": uuid.uuid4()})),
+        patch("app.services.chat_service._save_and_update_session", new=saved),
+        patch("app.services.chat_service._execute_discussion_orchestrator", new=AsyncMock(return_value=orchestrated)) as mocked_orchestrator,
+    ):
+        chunks = []
+        async for chunk in chat_service.send_message_stream(
+            session_id=session_id,
+            content="장단점 비교해봐",
+            attachments=[],
+        ):
+            chunks.append(chunk)
+
+    mocked_orchestrator.assert_awaited_once()
+    assert any("다관점 토론 오케스트레이터" in chunk for chunk in chunks)
+    assert any("추천안" in chunk for chunk in chunks)
+    assert any('"debate_id": "debate-5678"' in chunk for chunk in chunks)
+    assert saved.await_args.args[1] == "## 종합 결론\n\n추천안"

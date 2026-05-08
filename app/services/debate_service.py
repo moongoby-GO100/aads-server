@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 # 토론 대상 인텐트
 DEBATE_INTENTS = frozenset({
+    "discussion",
     "strategy", "decision", "planning",
     "cto_analysis", "cto_strategy", "architect",
 })
@@ -50,7 +51,7 @@ CEO의 의사결정에 직접 도움이 되는 분석을 제공하세요.""",
     {
         "name": "독립 검증 (Gemini)",
         "role": "researcher",
-        "model": "gemini",
+        "model": "gemini-2.5-flash",
         "system": """당신은 독립적 검증자입니다. 다른 AI의 분석과 무관하게 순수하게 질문 자체를 분석합니다.
 숨겨진 전제, 간과된 대안, 비직관적 리스크를 찾아내세요.
 다른 분석가들이 놓칠 수 있는 맹점을 지적하는 것이 핵심 역할입니다.""",
@@ -208,23 +209,13 @@ async def _analyze_perspective(
 
     try:
         model = persp.get("model", "claude-haiku-4-5-20251001")
-
-        if "gemini" in model.lower():
-            # Gemini 직접 호출 — 교차 모델 검증용
-            from app.core.anthropic_client import _call_gemini
-            result_text = await _call_gemini(
-                prompt=prompt,
-                max_tokens=512,
-                system=persp.get("system", ""),
-            )
-        else:
-            from app.core.anthropic_client import call_llm_with_fallback
-            result_text = await call_llm_with_fallback(
-                prompt=prompt,
-                model=model,
-                max_tokens=512,
-                system=persp.get("system", ""),
-            )
+        from app.core.anthropic_client import call_llm_with_fallback
+        result_text = await call_llm_with_fallback(
+            prompt=prompt,
+            model=model,
+            max_tokens=512,
+            system=persp.get("system", ""),
+        )
 
         if not result_text:
             return PerspectiveResult(name=persp["name"], analysis="응답 없음")

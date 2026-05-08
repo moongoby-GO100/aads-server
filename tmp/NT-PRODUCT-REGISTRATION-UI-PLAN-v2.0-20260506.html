@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NTV2 상품/회원 활성화 UI 기획 v2.0 - V1 다운로드/정산 정책 반영</title>
+  <style>
+    :root {
+      --ink: #111827;
+      --muted: #64748b;
+      --line: #d9e2ec;
+      --paper: #ffffff;
+      --band: #f5f7fb;
+      --blue: #2563eb;
+      --teal: #0f766e;
+      --amber: #b45309;
+      --red: #b91c1c;
+      --green: #15803d;
+      --violet: #6d28d9;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+      line-height: 1.62;
+    }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, .94);
+      backdrop-filter: blur(10px);
+    }
+    .topbar-inner {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 12px 20px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .brand { font-weight: 800; letter-spacing: 0; }
+    .navlinks { display: flex; flex-wrap: wrap; gap: 8px; }
+    .navlinks a, .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      padding: 6px 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: #1f2937;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    header {
+      background: linear-gradient(180deg, #eef4ff 0%, #ffffff 100%);
+      border-bottom: 1px solid var(--line);
+    }
+    .hero {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 48px 20px 36px;
+    }
+    .kicker {
+      color: var(--teal);
+      font-size: 14px;
+      font-weight: 800;
+      margin-bottom: 10px;
+    }
+    h1 {
+      margin: 0;
+      max-width: 920px;
+      font-size: 40px;
+      line-height: 1.18;
+      letter-spacing: 0;
+    }
+    .lead {
+      max-width: 900px;
+      margin-top: 16px;
+      color: #334155;
+      font-size: 18px;
+    }
+    main { max-width: 1180px; margin: 0 auto; padding: 28px 20px 70px; }
+    section { padding: 28px 0; border-bottom: 1px solid var(--line); }
+    h2 { margin: 0 0 16px; font-size: 26px; line-height: 1.25; letter-spacing: 0; }
+    h3 { margin: 22px 0 10px; font-size: 19px; letter-spacing: 0; }
+    p { margin: 0 0 12px; }
+    .summary-grid, .screen-grid, .metric-grid, .task-grid {
+      display: grid;
+      gap: 14px;
+    }
+    .summary-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .screen-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .metric-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    .task-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card, .mock, .note {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+    .card { padding: 16px; }
+    .card b { display: block; margin-bottom: 6px; }
+    .card small { color: var(--muted); }
+    .band {
+      margin: 18px 0;
+      padding: 18px;
+      border: 1px solid var(--line);
+      background: var(--band);
+      border-radius: 8px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 18px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th { background: #f1f5f9; font-weight: 800; }
+    code {
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: #eef2f7;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: .92em;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      background: #eef2ff;
+      color: #3730a3;
+    }
+    .ok { color: var(--green); }
+    .warn { color: var(--amber); }
+    .danger { color: var(--red); }
+    .mock {
+      overflow: hidden;
+      background: #f8fafc;
+    }
+    .mock-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 14px 16px;
+      background: #0f172a;
+      color: #fff;
+    }
+    .mock-head strong { font-size: 16px; }
+    .mock-body { padding: 16px; }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .btn, .chip {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 34px;
+      padding: 7px 11px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #111827;
+      font-weight: 800;
+      font-size: 13px;
+    }
+    .btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+    .btn.teal { background: var(--teal); border-color: var(--teal); color: #fff; }
+    .btn.warn { background: #fff7ed; color: #9a3412; border-color: #fed7aa; }
+    .rows { display: grid; gap: 8px; }
+    .row {
+      display: grid;
+      grid-template-columns: 1.1fr .8fr .7fr .7fr .8fr;
+      gap: 8px;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      font-size: 13px;
+    }
+    .stat {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+    .stat small { color: var(--muted); display: block; }
+    .stat b { display: block; margin-top: 4px; font-size: 22px; }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .step {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fff;
+    }
+    .source {
+      display: block;
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .version-list { display: flex; flex-wrap: wrap; gap: 8px; }
+    .note { padding: 14px 16px; background: #fffdf7; border-color: #f4d58d; }
+    @media (max-width: 900px) {
+      h1 { font-size: 30px; }
+      .summary-grid, .screen-grid, .metric-grid, .task-grid, .flow { grid-template-columns: 1fr; }
+      .row { grid-template-columns: 1fr; }
+      .topbar-inner { align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">NewTalk V2 UI Planning</div>
+      <nav class="navlinks" aria-label="planning links">
+        <a href="https://pick.newtalk.kr/reports/2026-05-06/ntv2-retail-wholesale-sitemap.html">소매/도매 사이트맵</a>
+        <a href="https://v2.newtalk.kr/retail/feed">소매 홈</a>
+        <a href="https://v2.newtalk.kr/retail/downloads">소매 다운로드</a>
+        <a href="https://v2.newtalk.kr/wholesale/downloads">도매 다운로드</a>
+        <a href="https://v2.newtalk.kr/wholesale/settlements">도매 정산</a>
+      </nav>
+    </div>
+  </div>
+
+  <header>
+    <div class="hero">
+      <div class="kicker">v2.0 · 2026-05-06 KST · V1 다운로드/정산/다운로드수 정책 반영</div>
+      <h1>NTV2 상품·회원 활성화 UI 기획 v2.0</h1>
+      <p class="lead">
+        v1.9에서 빠졌던 V1 다운로드 정책, 상품별 다운로드수, 사용자별 다운로드 순위, 웹디자인 주간 정산을 V2 소매/도매 화면 설계에 반영했습니다.
+        모든 UI 기획 문서 상단에는 소매/도매 사이트맵 링크를 고정 노출하는 기준으로 정리합니다.
+      </p>
+      <div class="version-list" aria-label="version history">
+        <a class="pill" href="https://v2.newtalk.kr/NT-PRODUCT-REGISTRATION-UI-PLAN-v1.9-20260505.html">v1.9 원문</a>
+        <span class="pill">v2.0 현재</span>
+        <a class="pill" href="https://pick.newtalk.kr/reports/2026-05-06/ntv2-retail-wholesale-sitemap.html">사이트맵</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section>
+      <h2>요약</h2>
+      <div class="summary-grid">
+        <div class="card"><b>다운로드 정책 보강</b><small>권한, ZIP 구성, 원본 이미지 기준, 부분 실패 로그, 다운로드 이력 UI를 명시했습니다.</small></div>
+        <div class="card"><b>다운로드수 반영</b><small>V1 `goods_down_status` 기준 상품별 다운수, 사용자수, 1주 추이, 회원별 순위를 화면 지표로 반영했습니다.</small></div>
+        <div class="card"><b>정산 반영</b><small>웹디자인 주간 정산의 일~토 기간, 다음 주 수요일 지급예정, 상태/잠금 정책을 V2 운영 화면에 반영했습니다.</small></div>
+        <div class="card"><b>사이트맵 연결</b><small>소매/도매 전체 페이지 링크를 모든 UI 기획 문서에서 확인할 수 있게 상단 링크 기준을 추가했습니다.</small></div>
+      </div>
+      <div class="note">
+        v1.9는 소매·도매 활성화 방향은 맞았지만, 다운로드 페이지에서 CEO님이 지적하신 다운로드수, 사용자수, 정산, 실패/누락 파일, 재다운로드 이력의 운영 기준이 부족했습니다.
+        v2.0은 V1 실제 코드 기준으로 이 빠진 영역을 화면 단위 요구사항으로 확정합니다.
+      </div>
+    </section>
+
+    <section>
+      <h2>V1 정책 확인 결과</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>정책 영역</th>
+            <th>V1 운영 기준</th>
+            <th>V2 반영 기준</th>
+            <th>확인 근거</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>다운로드 권한</td>
+            <td>`down_level`이 1 미만이면 다운로드 불가. 상품코드가 없으면 잘못된 접근으로 처리.</td>
+            <td>소매 다운로드 버튼은 권한 상태에 따라 비활성/안내/업그레이드 CTA를 분리합니다.</td>
+            <td><code>/home/danharoo/www/application/controllers/products.php</code> `goods_zip_urls()`</td>
+          </tr>
+          <tr>
+            <td>ZIP 구성</td>
+            <td>상품코드별 이미지 디렉터리의 원본 파일과 상품 설명 TXT를 ZIP으로 제공. 하위 디렉터리와 썸네일 패턴은 제외.</td>
+            <td>소매 상세와 다운로드 이력에 `원본 이미지`, `TXT`, `HTML/CSV` 포함 여부와 누락 파일 수를 표시합니다.</td>
+            <td><code>products.php</code> `goods_code_zip_down()`</td>
+          </tr>
+          <tr>
+            <td>부분 다운로드 로그</td>
+            <td>JSZip 방식은 `expected`, `success`, `failed`, IP, UA를 로그로 남깁니다.</td>
+            <td>다운로드 페이지에 예상 파일수, 성공 파일수, 실패 파일수, 실패 사유, 재시도 버튼을 표시합니다.</td>
+            <td><code>products.php</code> `goods_zip_download_log()`</td>
+          </tr>
+          <tr>
+            <td>다운로드 이력 저장</td>
+            <td>다운로드 완료 시 `goods_down_status`에 `gb`, `user_id`, `goods_id`, `goods_code`, `user_ip` 저장.</td>
+            <td>V2 `download_logs`는 V1과 호환되도록 상품코드, 상품ID, 사용자ID, 패키지 타입, 파일수, 실패수를 저장합니다.</td>
+            <td><code>/home/danharoo/www/application/models/goods_m.php</code> `down_status()`</td>
+          </tr>
+          <tr>
+            <td>상품별 다운로드수</td>
+            <td>관리자 상품별 다운로드수 현황은 `goods_down_status`를 `goods_id`로 그룹화하고 다운수와 사용자수를 표시.</td>
+            <td>소매 상품카드/상세/도매 반응 화면에 `다운수`, `사용자수`, `최근 7일 다운수`를 노출합니다.</td>
+            <td><code>/home/danharoo/www/application/controllers/admin/products.php</code> `goods_code_down_best_count_ajax_list()`</td>
+          </tr>
+          <tr>
+            <td>회원별 다운로드 순위</td>
+            <td>V1 메인 대시보드는 전체 다운로드수 회원별 순위와 최근 1주 다운로드수 그래프를 운영 지표로 사용.</td>
+            <td>소매 마이페이지와 관리자/도매 분석에서 다운로드 활동 랭킹, 활성 소매회원 지표를 제공합니다.</td>
+            <td><code>/home/danharoo/www/application/controllers/tools.php</code></td>
+          </tr>
+          <tr>
+            <td>웹디자인 정산</td>
+            <td>정산 기간은 일~토, 지급예정일은 다음 주 수요일. 완료건수, 단가, 합계금액, 메모, 상태를 관리.</td>
+            <td>도매 정산/촬영/상세 제작 화면에 작업완료 기준 정산과 지급 상태를 연결합니다.</td>
+            <td><code>/home/danharoo/www/application/controllers/content/webdesign_settlement.php</code></td>
+          </tr>
+          <tr>
+            <td>정산 잠금</td>
+            <td>상태는 `draft`, `confirmed`, `paid`. 지급완료 건은 수정 불가.</td>
+            <td>V2 정산 화면도 지급완료 이후 수정 잠금, 확인완료/지급완료 액션 분리, CSV 다운로드를 유지합니다.</td>
+            <td><code>webdesign_settlement.php</code>, <code>views/content/webdesign_settlement.php</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>다운로드 페이지 v2.0 요구사항</h2>
+      <div class="screen-grid">
+        <div class="mock">
+          <div class="mock-head">
+            <strong>소매 다운로드 센터</strong>
+            <span class="badge">/retail/downloads</span>
+          </div>
+          <div class="mock-body">
+            <div class="metric-grid">
+              <div class="stat"><small>오늘 다운로드</small><b>24</b></div>
+              <div class="stat"><small>최근 7일</small><b>181</b></div>
+              <div class="stat"><small>실패/누락</small><b class="warn">6</b></div>
+              <div class="stat"><small>재다운로드</small><b>39</b></div>
+              <div class="stat"><small>상세HTML</small><b>112</b></div>
+            </div>
+            <div class="toolbar">
+              <span class="chip">전체</span>
+              <span class="chip">이미지 ZIP</span>
+              <span class="chip">상세HTML</span>
+              <span class="chip">CSV/엑셀</span>
+              <span class="chip">실패만</span>
+              <button class="btn primary">선택 재다운로드</button>
+            </div>
+            <div class="rows">
+              <div class="row"><b>린넨 셔츠 세트</b><span>G240501A</span><span>32/32 성공</span><span>다운수 148</span><button class="btn teal">다시 받기</button></div>
+              <div class="row"><b>데님 스커트</b><span>G240501B</span><span class="warn">28/31 부분</span><span>사용자 42</span><button class="btn warn">실패 재시도</button></div>
+              <div class="row"><b>트위드 자켓</b><span>G240501C</span><span>HTML 완료</span><span>최근 7일 18</span><button class="btn">HTML 복사</button></div>
+            </div>
+          </div>
+        </div>
+        <div class="mock">
+          <div class="mock-head">
+            <strong>상품 상세 판매자료 탭</strong>
+            <span class="badge">/retail/product/{id}</span>
+          </div>
+          <div class="mock-body">
+            <div class="toolbar">
+              <button class="btn primary">이미지 ZIP</button>
+              <button class="btn">상세HTML 복사</button>
+              <button class="btn">CSV 받기</button>
+              <button class="btn teal">내 판매가 저장</button>
+            </div>
+            <table>
+              <tbody>
+                <tr><th>패키지 상태</th><td>원본 32장, TXT 1개, HTML 1개, CSV 가능</td></tr>
+                <tr><th>다운로드 반응</th><td>전체 다운수 148, 사용자수 42, 최근 7일 18</td></tr>
+                <tr><th>부분 실패</th><td>실패 파일 3개. 썸네일 제외 후 원본 누락 후보 표시</td></tr>
+                <tr><th>마진</th><td>도매가 21,000원, 권장소매가 39,000원, 예상마진 18,000원</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <h3>필수 컬럼</h3>
+      <table>
+        <thead><tr><th>영역</th><th>표시 항목</th><th>액션</th></tr></thead>
+        <tbody>
+          <tr><td>이력</td><td>다운로드일, 상품코드, 상품명, 패키지 타입, 사용자, IP 일부 마스킹, 성공/실패 파일수</td><td>재다운로드, 실패 재시도, 상세 이동</td></tr>
+          <tr><td>상품 반응</td><td>전체 다운수, 사용자수, 최근 7일 다운수, 찜, 장바구니, 주문전환</td><td>인기순 정렬, 도매처 공유</td></tr>
+          <tr><td>파일 품질</td><td>원본 이미지 수, 썸네일 제외 여부, 누락 파일, HTML/TXT/CSV 생성 여부</td><td>누락 신고, 관리자 재생성 요청</td></tr>
+          <tr><td>정산 연결</td><td>촬영/상세 작업자, 작업완료일, 정산 상태, 지급예정일</td><td>정산 상세 보기, CSV 내보내기</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>도매 화면 반영</h2>
+      <div class="screen-grid">
+        <div class="mock">
+          <div class="mock-head">
+            <strong>도매 다운로드 반응 센터</strong>
+            <span class="badge">/wholesale/downloads</span>
+          </div>
+          <div class="mock-body">
+            <div class="metric-grid">
+              <div class="stat"><small>소매 다운수</small><b>1,284</b></div>
+              <div class="stat"><small>다운 사용자</small><b>316</b></div>
+              <div class="stat"><small>상위 상품</small><b>24</b></div>
+              <div class="stat"><small>누락 신고</small><b class="warn">7</b></div>
+              <div class="stat"><small>주문전환</small><b>18</b></div>
+            </div>
+            <div class="rows">
+              <div class="row"><b>린넨 셔츠 세트</b><span>다운수 148</span><span>사용자 42</span><span>주문 5</span><button class="btn teal">반응 보기</button></div>
+              <div class="row"><b>데님 스커트</b><span>다운수 91</span><span>누락 3</span><span class="warn">보완필요</span><button class="btn warn">이미지 보완</button></div>
+            </div>
+          </div>
+        </div>
+        <div class="mock">
+          <div class="mock-head">
+            <strong>도매 정산/제작비</strong>
+            <span class="badge">/wholesale/settlements</span>
+          </div>
+          <div class="mock-body">
+            <div class="flow">
+              <div class="step"><b>1. 작업완료</b><p>WebWorkerDoneDate 기준 완료건 집계</p></div>
+              <div class="step"><b>2. 확인</b><p>초안에서 확인완료로 잠금 전환</p></div>
+              <div class="step"><b>3. 지급예정</b><p>일~토 정산, 다음 주 수요일 지급</p></div>
+              <div class="step"><b>4. 지급완료</b><p>paid 상태는 수정 불가</p></div>
+            </div>
+            <table>
+              <tbody>
+                <tr><th>정산 기준</th><td>완료건수 × 단가 또는 V1 `TotalPriceWebworker` 합계</td></tr>
+                <tr><th>상태</th><td>초안, 확인완료, 지급완료</td></tr>
+                <tr><th>상세</th><td>상품코드, 상품명, 작업시작일, 완료일, 작업자 메모, 지급상태</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>정보 구조와 사이트맵 연결</h2>
+      <table>
+        <thead><tr><th>대상</th><th>링크</th><th>v2.0 반영 내용</th></tr></thead>
+        <tbody>
+          <tr><td>소매 사이트맵</td><td><a href="https://pick.newtalk.kr/reports/2026-05-06/ntv2-retail-wholesale-sitemap.html">전체 소매/도매 사이트맵</a></td><td>모든 UI 기획서 상단 공통 링크로 노출</td></tr>
+          <tr><td>소매 홈</td><td><a href="https://v2.newtalk.kr/retail/feed">/retail/feed</a></td><td>홈 피드. 다운로드 인기/판매자료 가능 상품 진입</td></tr>
+          <tr><td>소매 탐색</td><td><a href="https://v2.newtalk.kr/retail/explore">/retail/explore</a></td><td>가격/브랜드/정렬 필터와 다운로드 가능 상태 필터</td></tr>
+          <tr><td>소매 상품 상세</td><td><a href="https://v2.newtalk.kr/retail/product/{id}">/retail/product/{id}</a></td><td>판매자료 탭, 다운로드수, 파일 품질, 마진</td></tr>
+          <tr><td>소매 다운로드</td><td><a href="https://v2.newtalk.kr/retail/downloads">/retail/downloads</a></td><td>이력, 재다운로드, 실패 재시도, 다운로드수 지표</td></tr>
+          <tr><td>도매 다운로드</td><td><a href="https://v2.newtalk.kr/wholesale/downloads">/wholesale/downloads</a></td><td>소매 반응, 상품별 다운수, 누락 보완</td></tr>
+          <tr><td>도매 정산</td><td><a href="https://v2.newtalk.kr/wholesale/settlements">/wholesale/settlements</a></td><td>작업완료 기준 정산, 지급예정일, 지급잠금</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>구현 우선순위</h2>
+      <div class="task-grid">
+        <div class="card">
+          <b>P0-5 소매 다운로드 센터 보강</b>
+          <small>`download_logs`에 expected/success/failed, package_type, source를 추가하고 `/retail/downloads`에 지표/필터/재시도 UI를 붙입니다.</small>
+        </div>
+        <div class="card">
+          <b>P0-6 다운로드수 API</b>
+          <small>V1 `goods_down_status`와 V2 `download_logs`를 합산해 상품별 다운수, 사용자수, 최근 7일 집계를 반환합니다.</small>
+        </div>
+        <div class="card">
+          <b>P0-7 도매 반응/정산 화면</b>
+          <small>도매 다운로드 센터에 소매 반응 지표를 붙이고, 정산 화면은 V1 주간 정산 정책을 따릅니다.</small>
+        </div>
+      </div>
+      <table>
+        <thead><tr><th>순서</th><th>작업</th><th>화면</th><th>완료 기준</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>다운로드 이력 스키마 보강</td><td>API/DB</td><td>성공/실패/예상 파일수와 패키지 타입 저장</td></tr>
+          <tr><td>2</td><td>상품별 다운로드수 집계 API</td><td>상품 상세/탐색/도매</td><td>다운수, 사용자수, 최근 7일 지표 표시</td></tr>
+          <tr><td>3</td><td>소매 다운로드 센터 UI</td><td>`/retail/downloads`</td><td>재다운로드, 실패 재시도, 누락 신고 가능</td></tr>
+          <tr><td>4</td><td>도매 다운로드 반응 UI</td><td>`/wholesale/downloads`</td><td>도매가 소매 반응과 보완 필요 상품을 확인</td></tr>
+          <tr><td>5</td><td>정산 화면 정책 반영</td><td>`/wholesale/settlements`</td><td>일~토/다음 수요일/paid 잠금/CSV 반영</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>결론</h2>
+      <p>
+        v2.0의 핵심은 다운로드 버튼을 추가하는 수준이 아니라, V1에서 실제 매출 행동과 운영 판단에 쓰이던 다운로드수·사용자수·파일 품질·정산 상태를 V2 소매/도매 화면의 기본 지표로 올리는 것입니다.
+        소매회원은 판매자료를 바로 받고, 도매회원은 어떤 상품이 실제로 받아지고 팔릴 가능성이 있는지 보며, 운영자는 다운로드와 제작 정산을 한 흐름에서 검증해야 합니다.
+      </p>
+      <p>
+        다음 구현은 P0-5부터 진행하면 됩니다. 먼저 `/retail/downloads`를 V1 정책 기준으로 보강하고, 같은 집계 API를 `/retail/product/{id}`와 `/wholesale/downloads`가 공유하게 만드는 순서가 가장 안전합니다.
+      </p>
+    </section>
+  </main>
+</body>
+</html>

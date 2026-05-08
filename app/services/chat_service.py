@@ -272,6 +272,128 @@ def _apply_tool_summary(message: Dict[str, Any]) -> Dict[str, Any]:
     return message
 
 
+_DISCUSSION_MODEL_USED = "discussion-orchestrator"
+_DISCUSSION_STREAM_CHUNK_SIZE = 700
+
+
+def _build_discussion_context(
+    messages: Optional[List[Dict[str, Any]]],
+    explicit_context: str = "",
+) -> str:
+    """토론 오케스트레이터에 전달할 최근 대화/추가 컨텍스트를 압축한다."""
+    parts: List[str] = []
+    extra = str(explicit_context or "").strip()
+    if extra:
+        parts.append(f"[추가 컨텍스트]\n{extra[:2000]}")
+
+    history_lines: List[str] = []
+    recent_messages = list(messages or [])
+    if recent_messages:
+        recent_messages = recent_messages[:-1] if len(recent_messages) > 1 else []
+    for item in recent_messages[-6:]:
+        role = str(item.get("role") or "").strip()
+        if role not in ("user", "assistant"):
+            continue
+        raw_content = item.get("content", "")
+        if isinstance(raw_content, list):
+            raw_content = "멀티모달 메시지"
+        text = str(raw_content or "").strip()
+        if not text:
+            continue
+        speaker = "CEO" if role == "user" else "Assistant"
+        history_lines.append(f"{speaker}: {text[:300]}")
+
+    if history_lines:
+        parts.append("[최근 대화]\n" + "\n".join(history_lines))
+
+    return "\n\n".join(parts)[:4000]
+
+
+def _serialize_discussion_perspectives(perspectives: Any) -> List[Dict[str, Any]]:
+    serialized: List[Dict[str, Any]] = []
+    for item in perspectives or []:
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+            analysis = str(item.get("analysis") or "").strip()
+            raw_points = item.get("key_points") or []
+        else:
+            name = str(getattr(item, "name", "") or "").strip()
+            analysis = str(getattr(item, "analysis", "") or "").strip()
+            raw_points = getattr(item, "key_points", []) or []
+
+        key_points = [str(point).strip() for point in raw_points if str(point).strip()]
+        serialized.append({
+            "name": name or "관점",
+            "analysis": analysis,
+            "key_points": key_points[:5],
+        })
+    return serialized
+
+
+def _format_discussion_message(
+    synthesis: str,
+    perspectives: List[Dict[str, Any]],
+) -> str:
+    sections: List[str] = ["## 종합 결론", (synthesis or "").strip() or "토론 결과를 생성하지 못했습니다."]
+
+    if perspectives:
+        sections.append("## 관점별 분석")
+        for perspective in perspectives:
+            block_parts = [f"### {perspective['name']}"]
+            if perspective.get("analysis"):
+                block_parts.append(str(perspective["analysis"]).strip())
+            points = perspective.get("key_points") or []
+            if points:
+                block_parts.append("\n".join(f"- {point}" for point in points))
+            sections.append("\n\n".join(part for part in block_parts if part))
+
+    return "\n\n".join(section for section in sections if section).strip()
+
+
+async def _execute_discussion_orchestrator(
+    question: str,
+    *,
+    session_id: str,
+    messages: Optional[List[Dict[str, Any]]] = None,
+    context: str = "",
+    perspectives: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """다관점 토론을 실행하고 저장/스트리밍에 쓸 구조화 결과를 반환한다."""
+    from app.services.debate_service import run_debate
+
+    debate = await run_debate(
+        question=question,
+        intent="discussion",
+        context=_build_discussion_context(messages, explicit_context=context),
+        session_id=session_id,
+        perspectives=perspectives or None,
+    )
+    serialized_perspectives = _serialize_discussion_perspectives(debate.perspectives)
+    message = _format_discussion_message(debate.synthesis, serialized_perspectives)
+
+    return {
+        "question": debate.question,
+        "message": message,
+        "synthesis": debate.synthesis,
+        "perspectives": serialized_perspectives,
+        "cost_usd": float(debate.total_cost),
+        "duration_ms": int(debate.duration_ms),
+        "debate_id": debate.debate_id,
+        "tools_called": [
+            {
+                "type": "tool_use",
+                "tool_name": "run_debate",
+                "tool_use_id": debate.debate_id,
+                "tool_input": {
+                    "question": question[:500],
+                    "perspectives": len(serialized_perspectives),
+                    "has_context": bool(context or messages),
+                },
+            },
+        ],
+    }
+
+
 async def _apply_deferred_interrupts_to_state(
     *,
     session_id: str,
@@ -3599,6 +3721,81 @@ async def _save_and_update_session(
                 pass
 
 
+async def run_discussion(
+    session_id: str,
+    content: str,
+    *,
+    context: str = "",
+    perspectives: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """세션 기준 discussion 토론을 실행하고 구조화 결과를 반환한다."""
+    sid = uuid.UUID(session_id)
+    messages: List[Dict[str, Any]] = []
+    base_prompt = ""
+    workspace_name = "CEO"
+
+    async with get_pool().acquire() as conn:
+        await _save_message(conn, sid, "user", content)
+
+        sp_row = await conn.fetchrow(
+            """
+            SELECT w.system_prompt, w.name AS workspace_name
+            FROM chat_workspaces w
+            JOIN chat_sessions s ON s.workspace_id = w.id
+            WHERE s.id = $1
+            """,
+            sid,
+        )
+        if sp_row:
+            base_prompt = sp_row["system_prompt"] or ""
+            workspace_name = sp_row["workspace_name"] or "CEO"
+
+        hist_rows = await conn.fetch(
+            """
+            SELECT role, content FROM (
+                SELECT role, content, created_at FROM chat_messages
+                WHERE session_id = $1 AND (is_compacted IS NULL OR is_compacted = false)
+                ORDER BY created_at DESC LIMIT 200
+            ) sub ORDER BY created_at ASC
+            """,
+            sid,
+        )
+        raw_messages = [{"role": row["role"], "content": row["content"]} for row in hist_rows]
+
+        from app.services.context_builder import build_messages_context
+
+        try:
+            messages, _ = await build_messages_context(
+                workspace_name=workspace_name,
+                session_id=session_id,
+                raw_messages=raw_messages,
+                base_system_prompt=base_prompt,
+                db_conn=conn,
+                apply_prompt_assets=False,
+            )
+        except Exception as ctx_err:
+            logger.warning("discussion_context_builder_failed session=%s: %s", session_id[:8], ctx_err)
+            messages = raw_messages[-20:]
+
+    result = await _execute_discussion_orchestrator(
+        content,
+        session_id=session_id,
+        messages=messages,
+        context=context,
+        perspectives=perspectives,
+    )
+    await _save_and_update_session(
+        sid,
+        result["message"],
+        session_id_str=session_id,
+        model_used=_DISCUSSION_MODEL_USED,
+        intent="discussion",
+        cost=Decimal(str(result["cost_usd"])),
+        tools_called=result["tools_called"],
+    )
+    return result
+
+
 # ── 재귀 방지 플래그: trigger_ai_reaction → send_message_stream → tool → trigger 무한 루프 차단 ──
 import time as _time
 _ai_reaction_active: dict[str, float] = {}  # session_id → timestamp
@@ -4617,6 +4814,39 @@ async def send_message_stream(
                     )
             except Exception as _exec_model_err:
                 logger.debug(f"execution_requested_model_update_failed: {_exec_model_err}")
+
+        if intent == "discussion":
+            yield f"data: {json.dumps({'type': 'thinking', 'thinking': '다관점 토론 오케스트레이터를 실행 중입니다.'})}\n\n"
+            discussion_result = await _execute_discussion_orchestrator(
+                content,
+                session_id=session_id,
+                messages=messages,
+            )
+            discussion_text = discussion_result["message"]
+            for idx in range(0, len(discussion_text), _DISCUSSION_STREAM_CHUNK_SIZE):
+                yield f"data: {json.dumps({'type': 'delta', 'content': discussion_text[idx:idx + _DISCUSSION_STREAM_CHUNK_SIZE]})}\n\n"
+            await _save_and_update_session(
+                sid,
+                discussion_text,
+                session_id_str=session_id,
+                raw_messages=raw_messages,
+                model_used=_DISCUSSION_MODEL_USED,
+                requested_model=model_override or intent_result.model,
+                intent=intent,
+                cost=Decimal(str(discussion_result['cost_usd'])),
+                tools_called=discussion_result["tools_called"],
+                thinking_summary="다관점 토론 오케스트레이터",
+                **_artifact_chain_kwargs,
+            )
+            _discussion_done = {
+                "type": "done",
+                "intent": intent,
+                "model": _DISCUSSION_MODEL_USED,
+                "cost": str(discussion_result["cost_usd"]),
+                "debate_id": discussion_result["debate_id"],
+            }
+            yield f"data: {json.dumps(_discussion_done)}\n\n"
+            return
 
         # 7. Gemini Direct (Grounding / Deep Research)
         if intent_result.use_gemini_direct:

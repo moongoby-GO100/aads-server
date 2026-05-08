@@ -513,6 +513,35 @@ async def send_message(request: Request):
     )
 
 
+class DiscussionRequest(BaseModel):
+    content: str = Field(..., min_length=1, description="토론할 질문")
+    context: Optional[str] = Field(None, description="추가 배경 컨텍스트")
+    perspectives: List[dict[str, Any]] = Field(default_factory=list, description="선택 관점 설정")
+
+
+class DiscussionResponse(BaseModel):
+    question: str
+    message: str
+    synthesis: str
+    perspectives: List[dict[str, Any]] = Field(default_factory=list)
+    cost_usd: float
+    duration_ms: int
+    debate_id: str
+
+
+@router.post("/chat/sessions/{session_id}/discussion", response_model=DiscussionResponse, tags=["chat-session"])
+async def run_discussion(session_id: UUID, req: DiscussionRequest):
+    """세션 기준 다관점 토론 실행."""
+    if not await svc.get_session(str(session_id)):
+        raise _NOT_FOUND("session")
+    return await svc.run_discussion(
+        str(session_id),
+        req.content,
+        context=req.context or "",
+        perspectives=req.perspectives or None,
+    )
+
+
 @router.get("/chat/sessions/{session_id}/streaming-status", response_model=StreamingStatusOut, tags=["chat-session"])
 async def get_streaming_status(session_id: UUID):
     """세션의 AI 응답 생성 상태 조회 (세션 이동 후 돌아왔을 때 '생성 중' 표시용).

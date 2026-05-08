@@ -59,6 +59,7 @@ INTENT_MAP: dict[str, dict] = {
     "greeting":         {"model": "qwen-turbo",           "tools": False, "group": ""},
     "deep_research":    {"model": "gemini-pro",                  "tools": False, "group": "",        "gemini_direct": "deep_research"},
     "strategy":         {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
+    "discussion":       {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
     "planning":         {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
     "decision":         {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
     "design":           {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
@@ -149,6 +150,7 @@ INTENT_TEMPERATURE_MAP: dict[str, float] = {
     "greeting":           0.1,
     "deep_research":      0.3,
     "strategy":          0.15,
+    "discussion":        0.15,
     "planning":          0.2,
     "decision":          0.2,
     "design":            0.25,
@@ -258,6 +260,7 @@ _CLASSIFY_PROMPT = """당신은 인텐트 분류기입니다. 사용자 메시�
 casual, greeting, system_status, health_check, dashboard, diagnosis, task_history,
 search, url_analyze, deep_research, code_task, directive, directive_gen, complex_analysis,
 strategy, planning, decision, design, design_fix, architect, code_exec, memory_recall,
+discussion,
 qa, execution_verify, workspace_switch, cost_report, browser, image_analyze, video_analyze, server_file,
 cto_strategy, cto_code_analysis, cto_directive, cto_verify, cto_impact, cto_tech_debt,
 service_inspection, all_service_status,
@@ -294,6 +297,7 @@ agenda_manage, agenda_decide, agenda_auto_detect
 - 백과사전, 사전, 뜻, 정의, 의미 → encyclopedia_search
 - 지식인, 지식iN, 질문, Q&A → knowledge_search
 - 딥리서치, "깊이 조사", "조사해서 보고서 써줘", "시장 분석 보고서", "경쟁 분석 보고서", 기술 동향 보고, 논문 조사 → deep_research
+- "토론해봐", "다관점 분석", "장단점 비교", "찬반 비교", "어떻게 해야 할까" → discussion
 - "검색해"만 있으면 → search (빠르고 저렴)
 - URL 분석, 링크 내용 확인 → url_analyze
 - 이 URL 읽어, 이 문서 분석, 이 페이지 내용, http로 시작하는 URL → url_read
@@ -527,6 +531,8 @@ def _keyword_fallback(message: str) -> IntentResult:
         return _make_result("all_service_status")
     if any(w in msg for w in ("심층", "deep research", "리서치 보고서", "시장 조사", "리서치", "경쟁사 분석", "트렌드 분석")):
         return _make_result("deep_research")
+    if any(w in msg for w in ("토론해", "토론해봐", "다관점", "장단점 비교", "찬반 비교", "어떻게 해야 할까", "어떻게 하는 게 좋", "비교해봐")):
+        return _make_result("discussion")
     # Naver 특화 검색 키워드
     if any(w in msg for w in ("뉴스", "기사", "속보", "뉴스 검색")):
         return _make_result("news_search")
