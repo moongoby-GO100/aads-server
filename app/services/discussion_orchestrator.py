@@ -455,7 +455,7 @@ class DiscussionOrchestrator:
 
     async def _save_to_db(self, state: DiscussionState, duration_ms: int) -> None:
         try:
-            from app.core.db import get_pool
+            from app.core.db_pool import get_pool
             pool = await get_pool()
 
             synthesis_text = ""
