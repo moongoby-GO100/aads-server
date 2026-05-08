@@ -542,6 +542,90 @@ async def run_discussion(session_id: UUID, req: DiscussionRequest):
     )
 
 
+# ── Multi-LLM Discussion Orchestrator endpoints ──
+
+class MultiDiscussionStartRequest(BaseModel):
+    topic: str = Field(..., min_length=1, description="토론 주제")
+    mode: str = Field("manual", description="manual 또는 auto")
+    preset: str = Field("standard", description="프리셋: standard, deep, light")
+    custom_participants: Optional[List[dict]] = Field(None, description="커스텀 참가자 목록")
+    budget_usd: float = Field(10.0, ge=0.1, le=100.0, description="예산 한도 (USD)")
+    synthesizer_model: Optional[str] = Field(None, description="종합 모델")
+
+
+class MultiDiscussionContinueRequest(BaseModel):
+    message: str = Field(..., min_length=1, description="CEO 메시지 (다음/계속/그만 또는 지시)")
+
+
+class DiscussionDirectiveRequest(BaseModel):
+    directive: str = Field(..., min_length=1, description="CEO 실시간 지시")
+
+
+@router.post("/chat/sessions/{session_id}/discussion/start", tags=["discussion"])
+async def start_multi_discussion(session_id: UUID, req: MultiDiscussionStartRequest):
+    """멀티-LLM 토론 시작 — SSE 스트리밍."""
+    from app.services.discussion_orchestrator import orchestrator, DiscussionMode
+    mode = DiscussionMode.AUTO if req.mode == "auto" else DiscussionMode.MANUAL
+    gen = orchestrator.start_discussion(
+        session_id=str(session_id),
+        topic=req.topic,
+        mode=mode,
+        preset=req.preset,
+        custom_participants=req.custom_participants,
+        budget_usd=req.budget_usd,
+        synthesizer_model=req.synthesizer_model,
+    )
+    return StreamingResponse(gen, media_type="text/event-stream")
+
+
+@router.post("/chat/sessions/{session_id}/discussion/continue", tags=["discussion"])
+async def continue_multi_discussion(session_id: UUID, req: MultiDiscussionContinueRequest):
+    """CEO 개입/계속/종료 — SSE 스트리밍."""
+    from app.services.discussion_orchestrator import orchestrator
+    gen = orchestrator.continue_discussion(str(session_id), req.message)
+    return StreamingResponse(gen, media_type="text/event-stream")
+
+
+@router.get("/chat/sessions/{session_id}/discussion/status", tags=["discussion"])
+async def get_multi_discussion_status(session_id: UUID):
+    """활성 토론 상태 조회."""
+    from app.services.discussion_orchestrator import orchestrator
+    state = orchestrator.get_active_discussion(str(session_id))
+    if state is None:
+        return {"active": False, "message": "활성 토론이 없습니다."}
+    status = orchestrator.get_discussion_status(state.discussion_id)
+    return {"active": True, **status}
+
+
+@router.post("/chat/sessions/{session_id}/discussion/stop", tags=["discussion"])
+async def stop_multi_discussion(session_id: UUID):
+    """토론 강제 취소."""
+    from app.services.discussion_orchestrator import orchestrator
+    state = orchestrator.get_active_discussion(str(session_id))
+    if state is None:
+        raise HTTPException(status_code=404, detail="활성 토론이 없습니다.")
+    orchestrator.cancel_discussion(state.discussion_id)
+    return {"cancelled": True, "discussion_id": state.discussion_id}
+
+
+@router.post("/chat/sessions/{session_id}/discussion/directive", tags=["discussion"])
+async def inject_discussion_directive(session_id: UUID, req: DiscussionDirectiveRequest):
+    """자동 모드 중 CEO 지시 주입."""
+    from app.services.discussion_orchestrator import orchestrator
+    state = orchestrator.get_active_discussion(str(session_id))
+    if state is None:
+        raise HTTPException(status_code=404, detail="활성 토론이 없습니다.")
+    ok = orchestrator.inject_ceo_directive(state.discussion_id, req.directive)
+    return {"injected": ok, "directive": req.directive}
+
+
+@router.get("/chat/discussion/presets", tags=["discussion"])
+async def list_discussion_presets():
+    """사용 가능한 토론 프리셋 목록."""
+    from app.services.discussion_presets import DISCUSSION_PRESETS
+    return {"presets": DISCUSSION_PRESETS}
+
+
 @router.get("/chat/sessions/{session_id}/streaming-status", response_model=StreamingStatusOut, tags=["chat-session"])
 async def get_streaming_status(session_id: UUID):
     """세션의 AI 응답 생성 상태 조회 (세션 이동 후 돌아왔을 때 '생성 중' 표시용).
