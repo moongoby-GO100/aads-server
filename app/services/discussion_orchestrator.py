@@ -480,7 +480,7 @@ class DiscussionOrchestrator:
                 ensure_ascii=False,
             )
 
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(timezone.utc)
             await pool.execute(
                 """INSERT INTO discussion_sessions
                    (id, session_id, topic, status, mode, participants,
@@ -488,7 +488,7 @@ class DiscussionOrchestrator:
                     budget_usd, total_cost, duration_ms, created_at, updated_at)
                    VALUES ($1, $2, $3, $4, $5, $6::jsonb,
                            $7, $8::jsonb, $9, $10,
-                           $11, $12, $13, $14::timestamptz, $15::timestamptz)
+                           $11, $12, $13, $14, $15)
                 """,
                 state.discussion_id,
                 state.session_id,
