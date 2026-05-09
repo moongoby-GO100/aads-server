@@ -31,7 +31,8 @@ async def build_workspace_preload(
         import asyncio
         from app.services.ceo_pattern_tracker import get_predicted_interests
 
-        recent_facts, last_summary, predicted_interests, error_warnings = await asyncio.gather(
+        strategic_changes, recent_facts, last_summary, predicted_interests, error_warnings = await asyncio.gather(
+            _get_strategic_project_changes(project),
             _get_recent_facts(project),
             _get_last_session_summary(project, session_id),
             get_predicted_interests(),
@@ -48,6 +49,13 @@ async def build_workspace_preload(
             t = estimate_tokens(error_warnings)
             if total + t <= _PRELOAD_TOKEN_BUDGET:
                 parts.append(error_warnings)
+                total += t
+
+        # 중요 아키텍처/기능/API/데이터 모델 변경 (세션 자동 인지 핵심)
+        if isinstance(strategic_changes, str) and strategic_changes:
+            t = estimate_tokens(strategic_changes)
+            if total + t <= _PRELOAD_TOKEN_BUDGET:
+                parts.append(strategic_changes)
                 total += t
 
         # 최근 사실 (최대 10건)
@@ -88,6 +96,52 @@ async def build_workspace_preload(
 
     except Exception as e:
         logger.debug("workspace_preload_error", error=str(e))
+        return ""
+
+
+async def _get_strategic_project_changes(project: str) -> str:
+    """세션이 반드시 알아야 하는 프로젝트 중요 변경을 우선 주입."""
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT category, subject, detail, created_at, referenced_count, confidence
+                FROM memory_facts
+                WHERE project = $1
+                  AND category = ANY($2::text[])
+                  AND superseded_by IS NULL
+                  AND confidence >= 0.7
+                ORDER BY confidence DESC, updated_at DESC, created_at DESC
+                LIMIT 6
+                """,
+                project.upper(),
+                [
+                    "architecture_decision",
+                    "feature_change",
+                    "api_contract",
+                    "data_model_change",
+                ],
+            )
+            if not rows:
+                return ""
+
+            labels = {
+                "architecture_decision": "구조",
+                "feature_change": "기능",
+                "api_contract": "API",
+                "data_model_change": "DB",
+            }
+            lines = []
+            for r in rows:
+                ts = r["created_at"].strftime("%m/%d") if r["created_at"] else ""
+                label = labels.get(r["category"], r["category"])
+                lines.append(f"  - [{ts}][{label}] {r['subject']}")
+            return "## 최근 중요 변경 자동 인지:\n" + "\n".join(lines)
+    except Exception as e:
+        logger.debug("workspace_preload_strategic_changes_error", error=str(e))
         return ""
 
 

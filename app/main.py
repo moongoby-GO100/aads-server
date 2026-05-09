@@ -332,6 +332,17 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"experience_learner_job_error: {e}")
         scheduler.add_job(_run_experience_learner, CronTrigger(hour=7, minute=30, timezone="UTC"), id="experience_learner")
+        # Phase 3.5: Project Change Promoter — 중요 변경을 세션 자동인지 메모리로 승격
+        async def _run_project_change_promoter():
+            try:
+                from app.services.project_change_promoter import promote_completed_project_changes
+                from app.core.db_pool import get_pool
+                result = await promote_completed_project_changes(get_pool(), days=14, limit=30)
+                if result.get("inserted", 0) > 0:
+                    logger.info("project_change_promoter_done", inserted=result["inserted"], scanned=result["jobs_scanned"])
+            except Exception as e:
+                logger.warning(f"project_change_promoter_job_error: {e}")
+        scheduler.add_job(_run_project_change_promoter, 'interval', minutes=30, id="project_change_promoter")
         # P2: eval_pipeline — 주간 품질 리포트 (매주 월요일 07:00 UTC)
         async def _run_weekly_quality_report():
             try:

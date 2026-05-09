@@ -575,7 +575,15 @@ async def start_multi_discussion(session_id: UUID, req: MultiDiscussionStartRequ
         budget_usd=req.budget_usd,
         synthesizer_model=req.synthesizer_model,
     )
-    return StreamingResponse(gen, media_type="text/event-stream")
+    return StreamingResponse(
+        gen,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.post("/chat/sessions/{session_id}/discussion/continue", tags=["discussion"])
@@ -583,7 +591,15 @@ async def continue_multi_discussion(session_id: UUID, req: MultiDiscussionContin
     """CEO 개입/계속/종료 — SSE 스트리밍."""
     from app.services.discussion_orchestrator import orchestrator
     gen = orchestrator.continue_discussion(str(session_id), req.message)
-    return StreamingResponse(gen, media_type="text/event-stream")
+    return StreamingResponse(
+        gen,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.get("/chat/sessions/{session_id}/discussion/status", tags=["discussion"])
