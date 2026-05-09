@@ -327,3 +327,79 @@ pathlib.Path('/app/scripts/e
 
 ## [2026-05-09 10:16:03 KST] [aads-server] .active_port
 - Chat-Direct 수정: run_remote_command: docker exec aads-server grep -n "discussion" /app/app/routers/chat.py
+
+## [2026-05-09 10:23:21 KST] [aads-server] migrations/080_report_output_quality_prompts.sql
+- Chat-Direct 수정: write: migrations/080_report_output_quality_prompts.sql
+
+## [2026-05-09 10:24:00 KST] [aads-server] tmp_MarkdownRenderer.tsx
+- Chat-Direct 수정: write: tmp_MarkdownRenderer.tsx
+
+## [2026-05-09 10:29:07 KST] [aads-server] scripts/tmp_renderer.tsx
+- Chat-Direct 수정: write: scripts/tmp_renderer.tsx
+
+## [2026-05-09 10:31:44 KST] [aads-server] scripts/patch_artifact_panel.py
+- Chat-Direct 수정: write: scripts/patch_artifact_panel.py
+
+## [2026-05-09 10:40:00 KST] [aads-server] scripts/write_discussion_panel.py
+- Chat-Direct 수정: write: scripts/write_discussion_panel.py
+
+## [2026-05-09 10:40:04 KST] [aads-server] scripts/write_discussion_panel.py
+- Chat-Direct 수정: run_remote_command: cat /tmp/dash_build.log
+
+## [2026-05-09 10:40:21 KST] [aads-server] scripts/pipeline-runner.sh
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/write_discussion_panel.py
+
+## [2026-05-09 10:41:11 KST] [aads-server] app/main.py
+- Chat-Direct 수정: run_remote_command: docker compose -f /root/aads/aads-dashboard/docker-compose.yml build aads-dashbo
+
+## [2026-05-09 10:41:33 KST] [aads-server] scripts/litellm_runner.py
+- Chat-Direct 수정: run_remote_command: cat /root/aads/aads-dashboard/src/app/chat/ChatArtifactPanel.tsx | head -50
+
+## [2026-05-09 10:41:35 KST] [aads-server] scripts/litellm_runner.py
+- Chat-Direct 수정: run_remote_command: curl -s -m 5 "http://localhost:8100/api/v1/chat/discussion/presets"
+
+## [2026-05-09 10:42:00 KST] [aads-server] scripts/litellm_runner.py
+- Chat-Direct 수정: run_remote_command: docker compose -f /root/aads/aads-dashboard/docker-compose.yml build aads-dashbo
+
+## [2026-05-09 10:42:40 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: wc -l /root/aads/aads-dashboard/src/app/chat/MarkdownRenderer.tsx
+
+## [2026-05-09 10:43:39 KST] [aads-server] docs/HANDOVER.md
+- Chat-Direct 수정: run_remote_command: grep -E "\"rehype-highlight\"|\"rehype-raw\"" /root/aads/aads-dashboard/package.
+
+## [2026-05-09 10:45:06 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch:     return StreamingResponse(gen, media_→    return StreamingResponse(
+        ge
+
+## [2026-05-09 10:45:10 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: run_remote_command: cat -n /root/aads/aads-dashboard/src/app/chat/MarkdownRenderer.tsx | sed -n '30,
+
+## [2026-05-09 10:45:13 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && npx eslint src/app/chat/MarkdownRenderer.tsx 2>&
+
+## [2026-05-09 10:50:21 KST] [aads-server] scripts/fix_dashboard_build.py
+- Chat-Direct 수정: write: scripts/fix_dashboard_build.py
+
+## [2026-05-09 10:50:28 KST] [aads-server] scripts/fix_dashboard_build.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-dashboard find /app/.next -name "*.js" -exec grep -l "llm-model
+
+## [2026-05-09 10:53:10 KST] [aads-server] migrations/081_pipeline_runner_model_override_reason.sql
+- Chat-Direct 수정: run_remote_command: cat /tmp/dash_build2.log
+
+## [2026-05-09 10:53:12 KST] [aads-server] scripts/aads-pipeline-litellm-runner.114.service
+- Chat-Direct 수정: run_remote_command: cat /tmp/dash_build2.log
+
+## [2026-05-09 10:53:13 KST] [aads-server] scripts/aads-pipeline-litellm-runner.211.service
+- Chat-Direct 수정: run_remote_command: cat /tmp/dash_build2.log
+
+## [2026-05-09 10:54:29 KST] [aads-server] app/static/preview/chat_screenshot.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server cp /tmp/chat_screenshot.png /app/app/static/preview/chat
+
+## [2026-05-09 10:58:22 KST] [aads-server] scripts/patch_summary_card.py
+- Chat-Direct 수정: write: scripts/patch_summary_card.py
+
+## [2026-05-09 10:58:25 KST] [aads-server] scripts/patch_summary_card.py
+- Chat-Direct 수정: run_remote_command: ls /root/aads/aads-dashboard/src/components/chat/
+
+## [2026-05-09 11:00:35 KST] [aads-server] scripts/build_dashboard.sh
+- Chat-Direct 수정: write: scripts/build_dashboard.sh

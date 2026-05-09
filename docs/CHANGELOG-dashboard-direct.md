@@ -36,3 +36,59 @@ p = pathlib.Path('/root/aads/aads-dashboard/src/app/
 - Chat-Direct 수정: run_remote_command: python3 -c "
 import pathlib
 p = pathlib.Path('/root/aads/aads-dashboard/src/app/
+
+## [2026-05-09 10:24:18 KST] [aads-dashboard] package-lock.json
+- Chat-Direct 수정: run_remote_command: npm install --prefix /root/aads/aads-dashboard react-markdown remark-gfm
+
+## [2026-05-09 10:24:18 KST] [aads-dashboard] package.json
+- Chat-Direct 수정: run_remote_command: npm install --prefix /root/aads/aads-dashboard react-markdown remark-gfm
+
+## [2026-05-09 10:29:58 KST] [aads-dashboard] src/app/chat/MarkdownRenderer.tsx
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-server/scripts/tmp_renderer.tsx /root/aads/aads-dashboard/src
+
+## [2026-05-09 10:31:04 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/ChatArtifactPanel.tsx
+- Chat-Direct 수정: patch:                 {[
+                  { i→                {[
+                  { i
+
+## [2026-05-09 10:32:06 KST] [aads-dashboard] src/app/chat/ChatArtifactPanel.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/patch_artifact_panel.py
+
+## [2026-05-09 10:37:26 KST] [aads-dashboard] ../aads-dashboard/src/components/chat/DiscussionPanel.tsx
+- Chat-Direct 수정: write: ../aads-dashboard/src/components/chat/DiscussionPanel.tsx
+
+## [2026-05-09 10:37:46 KST] [aads-dashboard] src/components/chat/DiscussionPanel.tsx.bak
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-dashboard/src/components/chat/DiscussionPanel.tsx /root/aads/
+
+## [2026-05-09 10:37:47 KST] [aads-dashboard] src/components/chat/DiscussionPanel.tsx.bak
+- Chat-Direct 수정: run_remote_command: grep -rn "model.*list\|available.*model\|get_models\|model_selector" /root/aads/
+
+## [2026-05-09 10:40:19 KST] [aads-dashboard] src/components/chat/DiscussionPanel.tsx
+- Chat-Direct 수정: run_remote_command: grep -n "DiscussionPanel\|showDiscussion\|discussion" /root/aads/aads-dashboard/
+
+## [2026-05-09 10:40:19 KST] [aads-dashboard] src/components/chat/DiscussionPanel.tsx
+- Chat-Direct 수정: run_remote_command: grep -n "Syntax\|error\|Error" /tmp/dash_build.log
+
+## [2026-05-09 10:40:28 KST] [aads-dashboard] src/components/chat/DiscussionPanel.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/write_discussion_panel.py
+
+## [2026-05-09 10:44:21 KST] [aads-dashboard] src/app/chat/ChatArtifactPanel.tsx.bak_uncommitted
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && cp src/app/chat/ChatArtifactPanel.tsx src/app/ch
+
+## [2026-05-09 10:44:22 KST] [aads-dashboard] src/app/chat/ChatArtifactPanel.tsx.bak_uncommitted
+- Chat-Direct 수정: run_remote_command: sed -n '498,515p' /root/aads/aads-server/app/routers/chat.py
+
+## [2026-05-09 10:44:50 KST] [aads-dashboard] tsconfig.tsbuildinfo
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && npx tsc --noEmit 2>&1 | grep -i "MarkdownRendere
+
+## [2026-05-09 10:44:51 KST] [aads-dashboard] tsconfig.tsbuildinfo
+- Chat-Direct 수정: run_remote_command: cat /root/aads/aads-dashboard/package.json | grep -E "rehype|remark|react-markdo
+
+## [2026-05-09 10:50:36 KST] [aads-dashboard] src/app/chat/ChatArtifactPanel.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/fix_dashboard_build.py
+
+## [2026-05-09 10:55:23 KST] [aads-dashboard] /root/aads/aads-dashboard/src/components/chat/ArtifactSummaryCard.tsx
+- Chat-Direct 수정: write: /root/aads/aads-dashboard/src/components/chat/ArtifactSummaryCard.tsx
+
+## [2026-05-09 10:55:25 KST] [aads-dashboard] /root/aads/aads-dashboard/src/components/chat/ArtifactPanel.tsx
+- Chat-Direct 수정: patch: import ArtifactHtmlPreview from "./Artif→import ArtifactHtmlPreview from "./Artif
