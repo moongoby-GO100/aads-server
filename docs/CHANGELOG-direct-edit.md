@@ -321,3 +321,9 @@ pathlib.Path('/app/scripts/e
 
 ## [2026-05-09 10:08:59 KST] [aads-server] HANDOVER.md
 - Chat-Direct 수정: run_remote_command: grep -n "report\|보고서\|artifact\|markdown\|render\|chart\|table\|format_response"
+
+## [2026-05-09 10:15:56 KST] [aads-server] .active_container
+- Chat-Direct 수정: run_remote_command: docker exec aads-server grep -n "discussion" /app/app/routers/chat.py
+
+## [2026-05-09 10:16:03 KST] [aads-server] .active_port
+- Chat-Direct 수정: run_remote_command: docker exec aads-server grep -n "discussion" /app/app/routers/chat.py
