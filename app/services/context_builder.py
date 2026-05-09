@@ -159,6 +159,7 @@ async def _build_auto_rag_layer(
     last_user_message: str,
     session_id: str,
     project: Optional[str] = None,
+    current_message_ids: Optional[set[str]] = None,
 ) -> str:
     """F1/F3: Auto-RAG — 매 턴 사용자 메시지에 대한 시맨틱 검색 결과 주입 (Layer 4.5)."""
     try:
@@ -167,6 +168,7 @@ async def _build_auto_rag_layer(
             user_message=last_user_message,
             session_id=session_id,
             project=project,
+            current_message_ids=current_message_ids,
         )
         return f"\n{block}" if block else ""
     except Exception as e:
@@ -414,6 +416,11 @@ async def build_messages_context(
     _project = _normalize_workspace(workspace_name)
     # 마지막 user 메시지 추출 (Auto-RAG용)
     _last_user_msg = ""
+    _current_message_ids: set[str] = {
+        str(_m.get("id") or _m.get("message_id"))
+        for _m in raw_messages
+        if _m.get("id") or _m.get("message_id")
+    }
     for _m in reversed(raw_messages):
         if _m.get("role") == "user":
             _last_user_msg = _m.get("content", "")
@@ -427,7 +434,7 @@ async def build_messages_context(
     layer2, memory_layer, auto_rag_layer, preload_layer, artifact_layer = await asyncio.gather(
         _get_cached_or_build(_l2_cache_key, _build_layer2_dynamic(workspace_name, db_conn=db_conn)),
         _get_cached_or_build(_mem_cache_key, _build_memory_layer(session_id=session_id, project_id=_project)),
-        _build_auto_rag_layer(_last_user_msg, session_id, _project),
+        _build_auto_rag_layer(_last_user_msg, session_id, _project, _current_message_ids),
         _build_workspace_preload_layer(_project, session_id),
         _build_artifact_context_layer(session_id, db_conn=db_conn),
     )

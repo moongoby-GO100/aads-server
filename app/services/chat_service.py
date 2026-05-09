@@ -2067,15 +2067,15 @@ async def _resume_single_stream(
             else:
                 async with pool.acquire() as conn:
                     hist_rows = await conn.fetch("""
-                        SELECT role, content FROM (
-                            SELECT role, content, created_at FROM chat_messages
+                        SELECT id, role, content FROM (
+                            SELECT id, role, content, created_at FROM chat_messages
                             WHERE session_id = $1
                               AND (is_compacted IS NULL OR is_compacted = false)
                               AND intent NOT IN ('streaming_placeholder', 'rate_limited')
                             ORDER BY created_at DESC LIMIT 30
                         ) sub ORDER BY created_at ASC
                     """, sid)
-                raw_messages = [{"role": r["role"], "content": r["content"]} for r in hist_rows]
+                raw_messages = [{"id": str(r["id"]), "role": r["role"], "content": r["content"]} for r in hist_rows]
 
             # 2. 이어서 생성 지침 구성: user 메시지로 추가하지 않아 최신 지시를 덮지 않는다.
             resume_instruction = (
@@ -3528,11 +3528,8 @@ async def _save_message(
     result = _row_to_dict(row)
     # 비동기 임베딩 생성 (실패해도 메시지 저장에 영향 없음)
     try:
-        import asyncio as _emb_asyncio
-        from app.services.chat_embedding_service import embed_and_store_message
-        _emb_asyncio.create_task(
-            embed_and_store_message(get_pool(), str(result["id"]), content)
-        )
+        from app.services.chat_embedding_service import schedule_message_embedding
+        schedule_message_embedding(get_pool(), result["id"], content)
     except Exception:
         pass  # 임베딩 실패는 무시
     return result
@@ -3644,6 +3641,11 @@ async def _save_and_update_session(
                 )
                 logger.info(f"placeholder_promoted_to_final session={str(sid)[:8]} placeholder_id={placeholder_id}")
                 _assistant_msg_id = placeholder_id
+                try:
+                    from app.services.chat_embedding_service import schedule_message_embedding
+                    schedule_message_embedding(get_pool(), placeholder_id, clean_content)
+                except Exception:
+                    pass
             else:
                 _saved_msg = await _save_message(
                     conn, sid, "assistant", content,
@@ -3752,15 +3754,15 @@ async def run_discussion(
 
         hist_rows = await conn.fetch(
             """
-            SELECT role, content FROM (
-                SELECT role, content, created_at FROM chat_messages
+            SELECT id, role, content FROM (
+                SELECT id, role, content, created_at FROM chat_messages
                 WHERE session_id = $1 AND (is_compacted IS NULL OR is_compacted = false)
                 ORDER BY created_at DESC LIMIT 200
             ) sub ORDER BY created_at ASC
             """,
             sid,
         )
-        raw_messages = [{"role": row["role"], "content": row["content"]} for row in hist_rows]
+        raw_messages = [{"id": str(row["id"]), "role": row["role"], "content": row["content"]} for row in hist_rows]
 
         from app.services.context_builder import build_messages_context
 
@@ -4489,8 +4491,8 @@ async def send_message_stream(
                 if _bp_row:
                     hist_rows = await conn.fetch(
                         """
-                        SELECT role, content FROM (
-                            SELECT role, content, created_at FROM chat_messages
+                        SELECT id, role, content FROM (
+                            SELECT id, role, content, created_at FROM chat_messages
                             WHERE session_id = $1
                               AND (is_compacted IS NULL OR is_compacted = false)
                               AND branch_id IS NULL
@@ -4503,21 +4505,21 @@ async def send_message_stream(
                 else:
                     hist_rows = []
                 # 분기 user 메시지를 히스토리 끝에 추가
-                raw_messages = [{"role": r["role"], "content": r["content"]} for r in hist_rows]
+                raw_messages = [{"id": str(r["id"]), "role": r["role"], "content": r["content"]} for r in hist_rows]
                 raw_messages.append({"role": "user", "content": content})
                 logger.info(f"[BRANCH] session={session_id[:8]} branch_id={branch_id} point={branch_point_msg_id[:8]} hist={len(raw_messages)}")
             else:
                 hist_rows = await conn.fetch(
                     """
-                    SELECT role, content FROM (
-                        SELECT role, content, created_at FROM chat_messages
+                    SELECT id, role, content FROM (
+                        SELECT id, role, content, created_at FROM chat_messages
                         WHERE session_id = $1 AND (is_compacted IS NULL OR is_compacted = false)
                         ORDER BY created_at DESC LIMIT 200
                     ) sub ORDER BY created_at ASC
                     """,
                     sid,
                 )
-                raw_messages = [{"role": r["role"], "content": r["content"]} for r in hist_rows]
+                raw_messages = [{"id": str(r["id"]), "role": r["role"], "content": r["content"]} for r in hist_rows]
 
             # 세션 누적 비용 조회 (프론트엔드 표시용)
             _session_cost_row = await conn.fetchrow(

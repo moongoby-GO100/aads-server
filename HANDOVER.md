@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-09)
+- **채팅 메모리/Auto-RAG 맥락 유지 보강 (2026-05-09 07:02 KST)**:
+  - `app/services/chat_embedding_service.py`: `search_semantic()` 결과에 `session_id`를 반환해 Auto-RAG가 same-session/cross-session 출처를 정확히 판정하도록 수정했다. 메시지 임베딩 예약 공통 함수 `schedule_message_embedding()`을 추가했다.
+  - `app/services/context_builder.py`: 현재 프롬프트 히스토리에 이미 포함된 `chat_messages.id`를 Auto-RAG로 전달해 동일 메시지가 `<auto_rag_context>`에 중복 주입되지 않도록 했다.
+  - `app/services/chat_service.py`: 히스토리 로드 쿼리에 `id`를 포함하고, `streaming_placeholder`를 최종 assistant 응답으로 promote하는 경로에서도 최종 본문 임베딩을 예약하도록 보강했다.
+  - 테스트: `pytest -q tests/unit/test_memory_context_regression.py` 3 passed, `python3 -m py_compile app/services/chat_embedding_service.py app/services/auto_rag.py app/services/context_builder.py app/services/chat_service.py tests/unit/test_memory_context_regression.py` 통과, 변경 파일 대상 `git diff --check` 통과.
+  - 실측 DB 상태: 신규 누락 방지 패치 적용 후 과거 `chat_messages` 미임베딩 대상 백필을 완료했다. 2026-05-09 09:55 KST 기준 role별 본문 10자 이상 `embedding IS NULL` 대상은 0건이다.
+  - 주의: 전체 `git diff --check`는 기존 사용자 변경 파일 `docs/CHANGELOG-direct-edit.md`의 trailing whitespace로 실패한다. 이번 변경 코드 파일에는 whitespace 오류가 없다.
+
 ## 현재 진행 상태 (2026-05-06)
 - **NewTalk V1 E2E 계정 env/Vault 관리**:
   - `.env.e2e.local`에 뉴톡V1 관리자/도매/소매 E2E 계정을 로컬 전용으로 저장하고 `.gitignore`에 `.env.*` 예외 규칙을 보강했다. 실제 비밀번호는 git 추적 대상에서 제외한다.
@@ -432,3 +441,13 @@
 - 진단 보강: `scripts/thinking_e2e_check.py`가 호스트 실행 시 `localhost:5433`으로 DB 접속 fallback하도록 수정.
 - 검증: `pytest tests/unit/test_chat_lightweight_regression.py tests/unit/test_chat_lightweight_frontend_static.py -q` 11개 통과, `npx eslint src/app/chat/page.tsx` 0 errors(기존 warning 20개), `npm run build` 성공.
 - 운영 DB 확인: 2026-05-06 GPT Codex 계열 assistant 중 `GPT-5.5 (Codex CLI)` 42건/도구저장 40건, `GPT-5.4 (Codex CLI)` 2건/도구저장 2건. `gpt-5.5`, `codex:gpt-5.5` 별칭 저장 21건은 도구 실행 없는 응답으로 확인.
+
+## 2026-05-09 09:55 KST - 채팅 메모리 임베딩 백필 완료
+
+- 배경: 메모리/맥락유지 개선 후 신규 메시지 임베딩 누락은 줄였지만 과거 `chat_messages`의 assistant 임베딩 누락이 가장 큰 잔여 병목으로 확인됨.
+- 조치: `scripts/backfill_chat_embeddings.py` 추가. 기본 canary는 `assistant` 메시지 100건, 최신순, 20건 배치로 `chat_messages.embedding`을 채움. `--dry-run`, `--role`, `--limit`, `--batch-size`, `--order` 옵션을 지원.
+- canary 실행: `docker exec aads-server python3 /app/scripts/backfill_chat_embeddings.py --limit 100 --batch-size 20 --role assistant --order newest`.
+- 결과: 실행 전 assistant 미임베딩 18,745건, 실행 후 18,645건. 5개 배치에서 100건 처리/100건 업데이트, 오류 0건, 소요 15.53초.
+- 전체 백필: canary 이후 assistant/user/system 대상 전체 백필을 완료했다. 마지막 잔여 assistant 3건은 `docker exec aads-server python3 /app/scripts/backfill_chat_embeddings.py --limit 10 --batch-size 5 --role assistant --order newest`로 처리했고 `missing_before=3`, `missing_after=0`, `updated=3`, 오류 0건이었다.
+- 검증: `python3 -m py_compile scripts/backfill_chat_embeddings.py app/services/chat_embedding_service.py app/services/chat_service.py app/services/context_builder.py` 통과. `pytest -q tests/unit/test_memory_context_regression.py` 5개 통과.
+- DB 확인: 2026-05-09 09:55 KST 기준 `chat_messages` role별 본문 10자 이상 미임베딩 대상은 assistant 0건, user 0건, system 0건이다.

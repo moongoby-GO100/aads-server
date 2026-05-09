@@ -134,6 +134,25 @@ async def embed_and_store_message(pool: Any, message_id: str, content: str) -> N
         logger.warning(f"[ChatEmbed] 메시지 {message_id[:8]}... 임베딩 실패: {e}")
 
 
+def schedule_message_embedding(pool: Any, message_id: Any, content: str) -> bool:
+    """메시지 임베딩 생성을 백그라운드로 예약한다.
+
+    메시지 저장/수정 트랜잭션은 임베딩 실패와 분리되어야 하므로 호출자는
+    예약 성공 여부만 받는다. 실행 중 이벤트 루프가 없으면 False를 반환한다.
+    """
+    if not content or len(content.strip()) < 10:
+        return False
+    try:
+        asyncio.create_task(embed_and_store_message(pool, str(message_id), content))
+        return True
+    except RuntimeError as e:
+        logger.debug(f"[ChatEmbed] 임베딩 예약 실패: {e}")
+        return False
+    except Exception as e:
+        logger.warning(f"[ChatEmbed] 임베딩 예약 오류: {e}")
+        return False
+
+
 async def backfill_embeddings(pool: Any, batch_size: int = 20) -> str:
     """embedding이 NULL인 메시지들 일괄 임베딩 생성."""
     async with pool.acquire() as conn:
@@ -190,6 +209,7 @@ async def search_semantic(pool: Any, query: Any, session_id: Optional[str] = Non
         rows = await conn.fetch(
             f"""
             SELECT m.id, m.role, m.content, m.created_at,
+                   m.session_id::text AS session_id,
                    s.title AS session_name,
                    1 - (m.embedding <=> $1::vector) AS similarity
             FROM chat_messages m
@@ -204,6 +224,7 @@ async def search_semantic(pool: Any, query: Any, session_id: Optional[str] = Non
     return [
         {
             "id": str(r["id"]),
+            "session_id": r["session_id"],
             "role": r["role"],
             "content": r["content"][:500],
             "created_at": r["created_at"],
