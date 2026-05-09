@@ -455,3 +455,11 @@ async def list_
 ## [2026-05-09 09:57:57 KST] [GO100] backend/app/routers/v4_stock_screener.py
 - Chat-Direct 수정: patch:         # go100 형식: entry_rules = [{type→        # go100 형식: entry_rules = [{type
 - finalize: pending
+
+## [2026-05-09 10:03:29 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch:         # go100 형식: entry_rules = [{type→        # go100 형식: entry_rules = [{type
+- finalize: pending
+
+## [2026-05-09 10:03:54 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch:                 elif rtype in ("trailing→                elif rtype in ("trailing
+- finalize: pending
