@@ -333,25 +333,25 @@ async def list_
 ## [2026-04-29 19:46:30 KST] [GO100] backend/app/services/go100/kis_order_gateway.py
 - Chat-Direct 수정: patch:         if not is_production:
           →        if not is_production:
-          
+
 - finalize: pending
 
 ## [2026-04-29 19:46:32 KST] [GO100] backend/app/services/go100/kis_order_gateway.py
 - Chat-Direct 수정: patch:         if not is_production:
           →        if not is_production:
-          
+
 - finalize: pending
 
 ## [2026-04-29 19:46:35 KST] [GO100] backend/app/services/go100/kis_order_gateway.py
 - Chat-Direct 수정: patch:         if not is_production:
           →        if not is_production:
-          
+
 - finalize: pending
 
 ## [2026-04-29 19:46:37 KST] [GO100] backend/app/services/go100/kis_order_gateway.py
 - Chat-Direct 수정: patch:         if not is_production:
           →        if not is_production:
-          
+
 - finalize: pending
 
 ## [2026-04-29 19:46:40 KST] [GO100] backend/app/services/go100/kis_order_gateway.py
@@ -374,4 +374,84 @@ async def list_
 
 ## [2026-05-03 20:45:05 KST] [GO100] backend/app/services/go100/ai/tool_executors.py
 - Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git diff --name-only HEAD
+- finalize: pending
+
+## [2026-05-09 07:10:58 KST] [GO100] backend/app/services/go100/ai/hypothesis_rule_mapper.py
+- Chat-Direct 수정: patch: _ENTRY_PATTERNS: list[tuple[re.Pattern, →_ENTRY_PATTERNS: list[tuple[re.Pattern,
+- finalize: pending
+
+## [2026-05-09 07:11:20 KST] [GO100] backend/app/services/go100/ai/hypothesis_rule_mapper.py
+- Chat-Direct 수정: patch: def parse_entry_conditions(conditions: l→def parse_entry_conditions(conditions: l
+- finalize: pending
+
+## [2026-05-09 07:11:42 KST] [GO100] frontend/src/go100/hooks/useChat.ts
+- Chat-Direct 수정: patch:               } else if (event.type === →              } else if (event.type ===
+- finalize: pending
+
+## [2026-05-09 07:11:44 KST] [GO100] frontend/src/go100/hooks/useChat.ts
+- Chat-Direct 수정: run_remote_command: systemctl is-active go100 go100-frontend
+- finalize: pending
+
+## [2026-05-09 07:14:37 KST] [GO100] scripts/go100/patch_active_cards_readiness.py
+- Chat-Direct 수정: write: scripts/go100/patch_active_cards_readiness.py
+- finalize: pending
+
+## [2026-05-09 07:15:06 KST] [GO100] scripts/go100/patch_active_cards_readiness.py
+- Chat-Direct 수정: write: scripts/go100/patch_active_cards_readiness.py
+- finalize: pending
+
+## [2026-05-09 07:15:18 KST] [GO100] scripts/go100/patch_active_cards_readiness.py
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4/frontend && nohup npx next build > /tmp/go100-frontend
+- finalize: pending
+
+## [2026-05-09 07:16:49 KST] [GO100] scripts/go100/run_bt_3673.py
+- Chat-Direct 수정: write: scripts/go100/run_bt_3673.py
+- finalize: pending
+
+## [2026-05-09 07:21:08 KST] [GO100] frontend/public/manager/_updated_at.txt
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-05-09 07:21:16 KST] [GO100] frontend/public/manager/agents.json
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-05-09 07:21:23 KST] [GO100] frontend/public/manager/errors.json
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-05-09 07:21:29 KST] [GO100] frontend/public/manager/snapshot.json
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-05-09 07:21:37 KST] [GO100] v41_manager/_updated_at.txt
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-05-09 07:21:42 KST] [GO100] v41_manager/desk_status.json
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-05-09 07:21:49 KST] [GO100] v41_manager/mock_trades.json
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-05-09 07:21:55 KST] [GO100] v41_manager/pipeline.json
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-05-09 08:12:16 KST] [GO100] scripts/go100/test_screen_cards.py
+- Chat-Direct 수정: write: scripts/go100/test_screen_cards.py
+- finalize: pending
+
+## [2026-05-09 08:14:48 KST] [GO100] backend/app/services/go100/universe/expression_parser.py
+- Chat-Direct 수정: write: backend/app/services/go100/universe/expression_parser.py
+- finalize: pending
+
+## [2026-05-09 08:16:08 KST] [GO100] scripts/go100/test_screen_cards_detail.py
+- Chat-Direct 수정: write: scripts/go100/test_screen_cards_detail.py
+- finalize: pending
+
+## [2026-05-09 09:57:57 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch:         # go100 형식: entry_rules = [{type→        # go100 형식: entry_rules = [{type
 - finalize: pending

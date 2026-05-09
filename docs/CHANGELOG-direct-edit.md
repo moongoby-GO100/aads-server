@@ -4,10 +4,10 @@
 - Chat-Direct 수정: patch:                    OR ($1 = 'NTV2' AND '→                   OR ($1 = 'NTV2' AND '
 
 ## [2026-04-29 09:35:48 KST] [aads-server] app/services/chat_service.py
-- Chat-Direct 수정: patch:                OR ($1 = 'NTV2' AND 'NT' →               OR ($1 = 'NTV2' AND 'NT' 
+- Chat-Direct 수정: patch:                OR ($1 = 'NTV2' AND 'NT' →               OR ($1 = 'NTV2' AND 'NT'
 
 ## [2026-04-29 09:35:50 KST] [aads-server] app/services/chat_service.py
-- Chat-Direct 수정: patch:                OR ($1 = 'NTV2' AND 'NT' →               OR ($1 = 'NTV2' AND 'NT' 
+- Chat-Direct 수정: patch:                OR ($1 = 'NTV2' AND 'NT' →               OR ($1 = 'NTV2' AND 'NT'
 
 ## [2026-04-29 09:37:20 KST] [aads-server] scripts/_patch_role_dropdown.py
 - Chat-Direct 수정: write: scripts/_patch_role_dropdown.py
@@ -88,7 +88,7 @@ im
 - Chat-Direct 수정: run_remote_command: docker exec aads-server curl -s -X POST http://localhost:8080/api/v1/pc-agent/gr
 
 ## [2026-05-06 10:07:23 KST] [aads-server] HANDOVER.md
-- Chat-Direct 수정: run_remote_command: docker exec aads-server curl -s http://localhost:8080/api/v1/ops/health-check | 
+- Chat-Direct 수정: run_remote_command: docker exec aads-server curl -s http://localhost:8080/api/v1/ops/health-check |
 
 ## [2026-05-06 10:07:26 KST] [aads-server] docs/reports/20260506_CHAT_LIGHTWEIGHT_PLAN_v2.md
 - Chat-Direct 수정: write: docs/reports/20260506_CHAT_LIGHTWEIGHT_PLAN_v2.md
@@ -97,10 +97,10 @@ im
 - Chat-Direct 수정: run_remote_command: docker exec aads-server cat /app/pc_agent/agent.py | wc -l
 
 ## [2026-05-06 10:07:30 KST] [aads-server] docs/pipeline-runner/PIPELINE-RUNNER-API-REFERENCE.md
-- Chat-Direct 수정: run_remote_command: docker exec aads-server curl -s http://localhost:8080/api/v1/ops/health-check | 
+- Chat-Direct 수정: run_remote_command: docker exec aads-server curl -s http://localhost:8080/api/v1/ops/health-check |
 
 ## [2026-05-06 10:07:37 KST] [aads-server] docs/pipeline-runner/PIPELINE-RUNNER-ARCHITECTURE.md
-- Chat-Direct 수정: run_remote_command: docker exec aads-server curl -s http://localhost:8080/api/v1/ops/health-check | 
+- Chat-Direct 수정: run_remote_command: docker exec aads-server curl -s http://localhost:8080/api/v1/ops/health-check |
 
 ## [2026-05-06 10:07:41 KST] [aads-server] docs/pipeline-runner/PIPELINE-RUNNER-API-REFERENCE.md
 - Chat-Direct 수정: run_remote_command: docker exec aads-server cat /app/pc_agent/agent.py | wc -l
@@ -211,7 +211,7 @@ f = 'app/services/pc_agent_man
 
 ## [2026-05-06 11:18:46 KST] [aads-server] app/services/tool_executor.py
 - Chat-Direct 수정: patch: class ToolExecutor:
-    """단일 도구 실행 + 타임→_DEPLOY_SAFE_HEALTH_COMMAND = "curl -sf 
+    """단일 도구 실행 + 타임→_DEPLOY_SAFE_HEALTH_COMMAND = "curl -sf
 
 ## [2026-05-06 11:18:53 KST] [aads-server] app/services/intent_router.py
 - Chat-Direct 수정: patch:     "image_analyze":    {"model": "claud→    "image_analyze":    {"model": "claud
@@ -260,10 +260,10 @@ f = 'app/services/pc_agent_man
 - Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -m pytest tests/unit/test_deploy_safe.py -v
 
 ## [2026-05-06 14:46:55 KST] [aads-server] .active_container
-- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -m pytest tests/unit/test_tools_and_pipeline.py 
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -m pytest tests/unit/test_tools_and_pipeline.py
 
 ## [2026-05-06 14:47:02 KST] [aads-server] .active_port
-- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -m pytest tests/unit/test_tools_and_pipeline.py 
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -m pytest tests/unit/test_tools_and_pipeline.py
 
 ## [2026-05-06 14:48:28 KST] [aads-server] tests/unit/test_deploy_safe.py
 - Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/tests/unit/test_deploy_safe.py /root/aads/aads-server
@@ -279,3 +279,42 @@ f = 'app/services/pc_agent_man
 
 ## [2026-05-06 14:51:39 KST] [aads-server] tests/unit/test_notify_channel.py
 - Chat-Direct 수정: write: tests/unit/test_notify_channel.py
+
+## [2026-05-08 18:20:30 KST] [aads-server] app/services/discussion_orchestrator.py
+- Chat-Direct 수정: write: app/services/discussion_orchestrator.py
+
+## [2026-05-08 18:21:03 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch:     return await svc.run_discussion(
+   →    return await svc.run_discussion(
+
+
+## [2026-05-08 18:25:23 KST] [aads-server] app/services/discussion_orchestrator.py
+- Chat-Direct 수정: write: app/services/discussion_orchestrator.py
+
+## [2026-05-08 18:25:24 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch:     return await svc.run_discussion(
+   →    return await svc.run_discussion(
+
+
+## [2026-05-09 07:44:22 KST] [aads-server] scripts/e2e_discussion_test.py
+- Chat-Direct 수정: write: scripts/e2e_discussion_test.py
+
+## [2026-05-09 07:45:19 KST] [aads-server] scripts/e2e_discussion_test.py
+- Chat-Direct 수정: write: scripts/e2e_discussion_test.py
+
+## [2026-05-09 07:46:09 KST] [aads-server] app/services/discussion_orchestrator.py
+- Chat-Direct 수정: patch:             from app.core.db import get_→            from app.core.db_pool import
+
+## [2026-05-09 07:46:20 KST] [aads-server] scripts/e2e_discussion_test.py
+- Chat-Direct 수정: patch:             from app.core.db import get_→            from app.core.db_pool import
+
+## [2026-05-09 07:48:23 KST] [aads-server] scripts/e2e_disc_v2.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "
+import pathlib
+pathlib.Path('/app/scripts/e
+
+## [2026-05-09 08:07:58 KST] [aads-server] app/services/discussion_orchestrator.py
+- Chat-Direct 수정: patch:             now = datetime.now(timezone.→            now = datetime.now(timezone.
+
+## [2026-05-09 08:08:11 KST] [aads-server] app/services/discussion_orchestrator.py
+- Chat-Direct 수정: patch:                            $11, $12, $13→                           $11, $12, $13
