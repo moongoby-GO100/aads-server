@@ -1,6 +1,12 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-09)
+- **Pipeline Runner 모델 설정/원격 LiteLLM/동시성 보강 (2026-05-09 10:36~KST)**:
+  - 제출 API 기본 정책을 “어드민 `runner_model_config` 자동 선택”으로 고정했다. `worker_model`은 `worker_model_reason`이 함께 들어온 경우에만 `pipeline_jobs.worker_model`에 저장하며, 사유가 없으면 무시하고 자동 설정값을 사용한다.
+  - DB에 `pipeline_jobs.model_override_reason` 컬럼을 추가했다(`migrations/081_pipeline_runner_model_override_reason.sql`).
+  - `scripts/pipeline-runner.sh`에 `RUNNER_ENGINE_MODE=general|litellm` 분기를 추가했다. 일반 러너는 원격 프로젝트의 `litellm:*` 작업을 claim하지 않고, LiteLLM 전용 러너는 `model` 또는 `worker_model`이 `litellm:*`인 작업만 claim한다.
+  - 211/114처럼 `aads-server` 컨테이너가 없는 서버에서도 `python3 /root/scripts/litellm_runner.py`로 직접 실행하도록 원격 LiteLLM 경로를 보강했다. MCP 서버가 없으면 `litellm_runner.py`가 로컬 파일/git 도구 폴백을 사용한다.
+  - 검증: `python3 -m py_compile app/api/pipeline_runner.py app/api/ceo_chat_tools.py app/services/tool_registry.py app/services/tool_executor.py scripts/litellm_runner.py` 통과, `bash -n scripts/pipeline-runner.sh` 통과, 운영 DB 컬럼 생성 확인.
 - **채팅 메모리/Auto-RAG 맥락 유지 보강 (2026-05-09 07:02 KST)**:
   - `app/services/chat_embedding_service.py`: `search_semantic()` 결과에 `session_id`를 반환해 Auto-RAG가 same-session/cross-session 출처를 정확히 판정하도록 수정했다. 메시지 임베딩 예약 공통 함수 `schedule_message_embedding()`을 추가했다.
   - `app/services/context_builder.py`: 현재 프롬프트 히스토리에 이미 포함된 `chat_messages.id`를 Auto-RAG로 전달해 동일 메시지가 `<auto_rag_context>`에 중복 주입되지 않도록 했다.

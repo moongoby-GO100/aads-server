@@ -520,13 +520,17 @@ TOOL_DEFINITIONS: List[Dict] = [
                 },
                 "size": {
                     "type": "string",
-                    "description": "작업 규모 — 모델 자동 선택 (XS/S→Haiku, M/L→Sonnet, XL→Opus). worker_model 지정 시 무시됨.",
+                    "description": "작업 규모 — 어드민 러너 모델 설정값에서 자동 선택. 기본값: M",
                     "enum": ["XS", "S", "M", "L", "XL"],
                     "default": "M",
                 },
                 "worker_model": {
                     "type": "string",
-                    "description": "모델 직접 지정 (지정 시 size 무시).\n\nClaude Runner (기존):\n  claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5\n\nLiteLLM Runner (신규, litellm: 접두사 — MCP 24개 도구 사용 가능):\n  litellm:gemini-2.5-flash ($0.15/task, SWE-bench 78.8%)\n  litellm:deepseek-chat ($0.02/task, SWE-bench 70%)\n  litellm:qwen3-235b ($0.03/task, 한국어 강점)",
+                    "description": "직접 실행 모델. 기본 제출에서는 비워두세요. 이전 실패 재시도, 인증/호환성 문제 우회, 또는 CEO가 반드시 특정 모델을 지시한 경우에만 worker_model_reason과 함께 사용합니다.",
+                },
+                "worker_model_reason": {
+                    "type": "string",
+                    "description": "직접 모델 지정 사유. worker_model을 저장하려면 필수입니다.",
                 },
                 "parallel_group": {
                     "type": "string",
@@ -543,7 +547,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     # ── Pipeline Runner 배치 도구 (AADS-211: 병렬 오케스트레이션) ──────────
     {
         "name": "pipeline_runner_submit_batch",
-        "description": "여러 작업을 한 번에 제출하여 병렬 실행.\n같은 배치 내 작업은 자동 parallel_group 할당. depends_on_key로 순서 제어 가능.\n예: pipeline_runner_submit_batch(project='AADS', jobs=[{key:'A', instruction:'...', worker_model:'claude-opus-4-6'}, {key:'B', instruction:'...', depends_on_key:'A'}])",
+        "description": "여러 작업을 한 번에 제출하여 병렬 실행.\n같은 배치 내 작업은 자동 parallel_group 할당. depends_on_key로 순서 제어 가능.\n기본은 어드민 러너 모델 설정값을 사용하며, worker_model은 worker_model_reason과 함께 필요한 경우만 지정합니다.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -561,7 +565,8 @@ TOOL_DEFINITIONS: List[Dict] = [
                             "key": {"type": "string", "description": "배치 내 식별자 (예: 'A', 'B')"},
                             "instruction": {"type": "string", "description": "작업 지시"},
                             "size": {"type": "string", "default": "M"},
-                            "worker_model": {"type": "string", "description": "모델 직접 지정"},
+                            "worker_model": {"type": "string", "description": "직접 실행 모델. 기본 제출에서는 비워둡니다."},
+                            "worker_model_reason": {"type": "string", "description": "직접 모델 지정 사유. worker_model 저장 시 필수입니다."},
                             "depends_on_key": {"type": "string", "description": "선행 작업의 key (완료 후 실행)"},
                         },
                         "required": ["key", "instruction"],
@@ -3322,6 +3327,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
                     "max_cycles": int(params.get("max_cycles", 3)),
                     "size": params.get("size", "M"),
                     "worker_model": params.get("worker_model", ""),
+                    "worker_model_reason": params.get("worker_model_reason", ""),
                     "parallel_group": params.get("parallel_group", ""),
                     "depends_on": params.get("depends_on", ""),
                 },

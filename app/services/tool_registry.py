@@ -1944,13 +1944,18 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 },
                 "size": {
                     "type": "string",
-                    "description": "작업 규모 — XS/S→haiku(저비용), M/L→sonnet(기본), XL→opus(고성능). 기본값: M",
+                    "description": "작업 규모 — 어드민 러너 모델 설정값에서 자동 선택. 기본값: M",
                     "enum": ["XS", "S", "M", "L", "XL"],
                     "default": "M",
                 },
                 "worker_model": {
                     "type": "string",
-                    "description": "실행 엔진 선택. 비어있으면 Claude Code 우선(실패 시 LiteLLM 폴백).\n'codex:모델명' → Codex CLI 실행 (ChatGPT Plus OAuth). 예: codex:o3, codex:gpt-5\n'litellm' → LiteLLM Runner 직접 실행 (기본모델: qwen3-coder-plus)\n'litellm:모델명' → 특정 모델 직접 지정. 예: litellm:gemini-2.5-flash, litellm:qwen3-coder-plus, litellm:deepseek-chat\nCEO가 'codex로', 'gpt로', 'litellm으로', 'gemini로' 등 명시 시 사용.",
+                    "description": "직접 실행 모델. 기본 제출에서는 비워두세요. 이전 실패 재시도, 인증/호환성 문제 우회, 또는 CEO가 반드시 특정 모델을 지시한 경우에만 worker_model_reason과 함께 사용합니다.",
+                    "default": "",
+                },
+                "worker_model_reason": {
+                    "type": "string",
+                    "description": "직접 모델 지정 사유. worker_model을 저장하려면 필수입니다.",
                     "default": "",
                 },
             },

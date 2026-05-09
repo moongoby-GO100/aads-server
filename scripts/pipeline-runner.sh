@@ -13,8 +13,12 @@
 # ═══════════════════════════════════════════════════════════════════════
 set -eo pipefail
 
+# general: normal Claude/Codex runner. litellm: claims only LiteLLM jobs.
+RUNNER_ENGINE_MODE="${RUNNER_ENGINE_MODE:-general}"
+RUNNER_LOCK_FILE="${RUNNER_LOCK_FILE:-/tmp/pipeline-runner-${RUNNER_ENGINE_MODE}.lock}"
+
 # P1: 중복 실행 방지 — 이미 실행 중이면 즉시 종료
-exec 9>/tmp/pipeline-runner.lock
+exec 9>"$RUNNER_LOCK_FILE"
 if ! flock -n 9; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] 이미 실행 중인 러너가 있습니다. 종료." >&2
     exit 0
@@ -493,9 +497,17 @@ post_to_chat() {
 # 프로젝트별 동시실행 Lock: 같은 프로젝트에 running/claimed 작업이 있으면 claim하지 않음
 claim_queued_job() {
     local filter="$1"
+    local engine_predicate model_return_expr
+    if [[ "$RUNNER_ENGINE_MODE" == "litellm" ]]; then
+        engine_predicate="AND COALESCE(NULLIF(p.worker_model, ''), NULLIF(p.model, ''), '') LIKE 'litellm:%'"
+        model_return_expr="COALESCE(NULLIF(worker_model, ''), NULLIF(model, ''), 'auto')"
+    else
+        engine_predicate="AND NOT (COALESCE(NULLIF(p.worker_model, ''), NULLIF(p.model, ''), '') LIKE 'litellm:%' AND p.project IN ('GO100','KIS','SF','NTV2'))"
+        model_return_expr="COALESCE(NULLIF(worker_model, ''), 'auto')"
+    fi
     # instruction의 줄바꿈을 \\n으로 치환하여 단일행 RETURNING 보장
     # AADS-211: depends_on 체크 — 의존 작업이 done이 아니면 스킵
-    # 방안 B: litellm:* 모델 + 원격 프로젝트 → bash runner가 claim하지 않음 (litellm-runner가 처리)
+    # RUNNER_ENGINE_MODE=litellm: litellm:* 작업만 claim. general은 원격 litellm 작업을 전용 러너에 넘김.
     db_exec "UPDATE pipeline_jobs SET status='claimed', updated_at=NOW()
              WHERE job_id = (
                 SELECT p.job_id FROM pipeline_jobs p
@@ -507,11 +519,11 @@ claim_queued_job() {
                        WHERE r.project = p.project
                          AND r.status IN ('running', 'claimed')
                          AND r.job_id != p.job_id) < ${MAX_CONCURRENT_PER_PROJECT:-6}
-                  AND NOT (COALESCE(p.worker_model, '') LIKE 'litellm:%' AND p.project IN ('GO100','KIS','SF','NTV2'))
+                  ${engine_predicate}
                 ORDER BY COALESCE(p.priority, 0) DESC, p.created_at ASC LIMIT 1
                 FOR UPDATE SKIP LOCKED
              )
-             RETURNING job_id, project, replace(replace(instruction, E'\\n', ' '), '|', ' '), chat_session_id, max_cycles, COALESCE(worker_model, 'auto'), COALESCE(size,'M');"
+             RETURNING job_id, project, replace(replace(instruction, E'\\n', ' '), '|', ' '), chat_session_id, max_cycles, ${model_return_expr}, COALESCE(size,'M');"
 }
 
 claim_approved_job() {
@@ -638,7 +650,11 @@ run_job() {
         if [[ "$job_model" == codex:* ]]; then
             MODEL_CYCLE=("$job_model" "$claude_primary" "$claude_primary" "$claude_secondary" "$claude_secondary")
         elif [[ "$job_model" == litellm:* ]]; then
-            MODEL_CYCLE=("$job_model" "$claude_primary" "$claude_primary" "$claude_secondary" "$claude_secondary")
+            if [[ "$RUNNER_ENGINE_MODE" == "litellm" ]]; then
+                MODEL_CYCLE=("$job_model")
+            else
+                MODEL_CYCLE=("$job_model" "$claude_primary" "$claude_primary" "$claude_secondary" "$claude_secondary")
+            fi
         elif [[ "$job_model" == "claude-"* ]]; then
             MODEL_CYCLE=("$job_model" "$job_model" "$claude_secondary" "$claude_secondary" "$claude_primary" "$claude_primary")
         else
@@ -741,14 +757,29 @@ ${safe_instruction}"
         elif [[ "$current_model" == litellm:* ]]; then
             local llm_model_name="${current_model#litellm:}"
             log "  LITELLM_RUNNER job=$job_id model=$llm_model_name"
-            # instruction을 temp file로 전달 (docker exec arg에 멀티라인/대용량 문자열 깨짐 방지)
-            local instr_file="/root/aads/aads-server/scripts/.litellm_instr_${job_id}.txt"
-            printf '%s' "$safe_instruction" > "$instr_file"
-            timeout "$MAX_RUNTIME" docker exec aads-server python3 /app/scripts/litellm_runner.py \
-                --model "$llm_model_name" \
-                --instruction-file "/app/scripts/.litellm_instr_${job_id}.txt" \
-                --workdir "$workdir" \
-                > "$output_file" 2> "$err_file" &
+            # instruction을 temp file로 전달 (arg에 멀티라인/대용량 문자열 깨짐 방지)
+            local instr_file="${ARTIFACT_DIR}/.litellm_instr_${job_id}.txt"
+            if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'aads-server'; then
+                instr_file="/root/aads/aads-server/scripts/.litellm_instr_${job_id}.txt"
+                printf '%s' "$safe_instruction" > "$instr_file"
+                local container_instr="/app/scripts/.litellm_instr_${job_id}.txt"
+                timeout "$MAX_RUNTIME" docker exec aads-server python3 /app/scripts/litellm_runner.py \
+                    --model "$llm_model_name" \
+                    --instruction-file "$container_instr" \
+                    --workdir "$workdir" \
+                    > "$output_file" 2> "$err_file" &
+            else
+                printf '%s' "$safe_instruction" > "$instr_file"
+                export LITELLM_BASE_URL="${LITELLM_BASE_URL:-http://68.183.183.11:4000}"
+                export LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-litellm}"
+                local litellm_python="/root/aads-litellm-runner-venv/bin/python"
+                [[ -x "$litellm_python" ]] || litellm_python="python3"
+                timeout "$MAX_RUNTIME" "$litellm_python" /root/scripts/litellm_runner.py \
+                    --model "$llm_model_name" \
+                    --instruction-file "$instr_file" \
+                    --workdir "$workdir" \
+                    > "$output_file" 2> "$err_file" &
+            fi
             local claude_pid=$!
         else
             # AADS-242: --dangerously-skip-permissions 추가 (비대화형 -p 모드에서 Write/Bash 권한 prompt 차단 방지)
@@ -800,6 +831,7 @@ ${safe_instruction}"
         fi
 
         # LiteLLM instruction temp file 정리
+        [[ -f "${ARTIFACT_DIR}/.litellm_instr_${job_id}.txt" ]] && rm -f "${ARTIFACT_DIR}/.litellm_instr_${job_id}.txt"
         [[ -f "/root/aads/aads-server/scripts/.litellm_instr_${job_id}.txt" ]] && rm -f "/root/aads/aads-server/scripts/.litellm_instr_${job_id}.txt"
 
         # 방어: Codex 출력 실패 감지
@@ -1922,7 +1954,7 @@ _check_runtime_alerts() {
 # ── 메인 루프 ─────────────────────────────────────────────────────────
 main() {
     _init_db_mode
-    log "═══ Pipeline Runner v2.1 시작 (승인→커밋→푸시→빌드→배포) poll=${POLL_INTERVAL}s, max_runtime=${MAX_RUNTIME}s, retries=${MAX_RETRIES} ═══"
+    log "═══ Pipeline Runner v2.1 시작 (mode=${RUNNER_ENGINE_MODE}, 승인→커밋→푸시→빌드→배포) poll=${POLL_INTERVAL}s, max_runtime=${MAX_RUNTIME}s, retries=${MAX_RETRIES} ═══"
 
     # 프로젝트 필터 구성
     local project_filter=""

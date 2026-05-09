@@ -21,10 +21,13 @@ import argparse
 import asyncio
 import logging
 import os
+import pathlib
+import subprocess
 import sys
 import time
 
 from langchain_core.messages import HumanMessage
+from langchain_core.tools import tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
@@ -67,6 +70,89 @@ _SYSTEM_PROMPT = """당신은 AADS 자율 코딩 에이전트입니다.
 """
 
 
+def _safe_path(workdir: str, path: str) -> pathlib.Path:
+    root = pathlib.Path(workdir).resolve()
+    raw = pathlib.Path(path)
+    if raw.is_absolute():
+        for project_root in (
+            pathlib.Path("/root/aads/aads-server"),
+            pathlib.Path("/root/webapp"),
+            pathlib.Path("/root/kis-autotrade-v4"),
+            pathlib.Path("/data/shortflow"),
+            pathlib.Path("/srv/newtalk-v2"),
+        ):
+            try:
+                rel = raw.resolve().relative_to(project_root)
+                raw = pathlib.Path(rel)
+                break
+            except ValueError:
+                continue
+    target = (root / raw).resolve()
+    if not str(target).startswith(str(root)):
+        raise ValueError("workdir 밖 경로는 접근할 수 없습니다")
+    if any(part in {".env", ".ssh", "credentials", "secrets"} for part in target.parts):
+        raise ValueError("민감 경로는 접근할 수 없습니다")
+    return target
+
+
+def _local_tools(workdir: str):
+    @tool
+    def list_files(pattern: str = ".") -> str:
+        """List files under the project root. Use a relative path or glob-like keyword."""
+        try:
+            root = pathlib.Path(workdir).resolve()
+            if pattern in ("", "."):
+                cmd = ["find", str(root), "-maxdepth", "3", "-type", "f"]
+            else:
+                cmd = ["find", str(root), "-maxdepth", "5", "-type", "f", "-iname", f"*{pattern}*"]
+            proc = subprocess.run(cmd, text=True, capture_output=True, timeout=20)
+            return "\n".join(line.replace(str(root) + "/", "") for line in proc.stdout.splitlines()[:200])
+        except Exception as exc:
+            return f"ERROR: {exc}"
+
+    @tool
+    def read_file(path: str, start_line: int = 1, max_lines: int = 240) -> str:
+        """Read a relative file path from the project root."""
+        try:
+            target = _safe_path(workdir, path)
+            lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
+            start = max(1, int(start_line)) - 1
+            end = start + max(1, min(int(max_lines), 1000))
+            return "\n".join(f"{idx + 1}: {line}" for idx, line in enumerate(lines[start:end], start=start))
+        except Exception as exc:
+            return f"ERROR: {exc}"
+
+    @tool
+    def write_file(path: str, content: str) -> str:
+        """Write a full relative file path under the project root."""
+        try:
+            target = _safe_path(workdir, path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            return f"wrote {path} ({len(content)} bytes)"
+        except Exception as exc:
+            return f"ERROR: {exc}"
+
+    @tool
+    def run_command(command: str) -> str:
+        """Run a safe read-only or validation command in the project root."""
+        blocked = [" rm ", "rm -", "sudo", "shutdown", "reboot", "docker ", "systemctl", "service ", "pkill", "kill "]
+        padded = f" {command.strip()} "
+        if any(token in padded for token in blocked):
+            return "blocked command"
+        proc = subprocess.run(
+            command,
+            shell=True,
+            cwd=workdir,
+            text=True,
+            capture_output=True,
+            timeout=120,
+        )
+        return (proc.stdout + proc.stderr)[-12000:]
+
+    return [list_files, read_file, write_file, run_command]
+
+
 # ── 핵심 에이전트 ─────────────────────────────────────────────────────────
 
 
@@ -95,12 +181,15 @@ async def run_agent(model: str, instruction: str, workdir: str) -> str:
     iteration = 0
 
     try:
-        # langchain-mcp-adapters 0.2.0: async with 제거됨, 직접 await 사용
-        mcp_client = MultiServerMCPClient(mcp_config)
-        tools = await mcp_client.get_tools()
-        logger.info("MCP tools loaded: %d tools from %d servers", len(tools), len(_MCP_SERVERS))
+        try:
+            # langchain-mcp-adapters 0.2.0: async with 제거됨, 직접 await 사용
+            mcp_client = MultiServerMCPClient(mcp_config)
+            tools = await mcp_client.get_tools()
+            logger.info("MCP tools loaded: %d tools from %d servers", len(tools), len(_MCP_SERVERS))
+        except Exception as exc:
+            logger.warning("MCP unavailable, using local filesystem/git tools: %s", exc)
+            tools = _local_tools(workdir)
 
-        # 도구 이름 목록 출력 (검수용)
         tool_names = [t.name for t in tools]
         logger.info("Available tools: %s", tool_names[:20])
 

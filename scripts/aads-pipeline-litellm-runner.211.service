@@ -1,0 +1,33 @@
+[Unit]
+Description=AADS LiteLLM Pipeline Runner — KIS/GO100
+After=network.target aads-pipeline-runner.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root
+ExecStart=/root/scripts/pipeline-runner.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aads-pipeline-litellm-runner
+EnvironmentFile=-/root/.config/aads-runner.env
+Environment=DB_MODE=psql
+Environment=RUNNER_PROJECTS=KIS,GO100
+Environment=RUNNER_ENGINE_MODE=litellm
+Environment=RUNNER_LOCK_FILE=/tmp/pipeline-runner-litellm.lock
+Environment=POLL_INTERVAL=5
+Environment=MAX_RUNTIME=7200
+Environment=MAX_RETRIES=2
+Environment=MAX_CONCURRENT_GLOBAL=10
+Environment=MAX_CONCURRENT_PER_PROJECT=4
+Environment=LITELLM_BASE_URL=http://68.183.183.11:4000
+Environment=LITELLM_MASTER_KEY=sk-litellm
+Environment=HOME=/root
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+LimitNOFILE=65535
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

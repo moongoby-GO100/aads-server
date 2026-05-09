@@ -143,6 +143,7 @@ class JobSubmitRequest(BaseModel):
     max_cycles: int = Field(3, ge=1, le=10, description="최대 검수 사이클")
     size: str = Field("M", description="작업 규모 (XS/S/M/L/XL) — 모델 자동 선택")
     worker_model: str = Field("", description="직접 모델 지정 (빈 문자열이면 size 기반 자동 선택)")
+    worker_model_reason: str = Field("", max_length=500, description="직접 모델 지정 사유")
     parallel_group: str = Field("", description="병렬 실행 그룹 — 같은 그룹 내 작업은 동시 실행")
     depends_on: str = Field("", description="의존 작업 job_id ��� 해당 작업 완료 후에만 실행")
 
@@ -165,6 +166,18 @@ class JobSubmitResponse(BaseModel):
     job_id: str
     status: str
     message: str
+
+
+def _normalize_worker_model_override(worker_model: str, reason: str) -> tuple[str, str]:
+    """Require an explicit reason before persisting a worker_model override."""
+    model = (worker_model or "").strip()
+    override_reason = (reason or "").strip()
+    if not model:
+        return "", ""
+    if not override_reason:
+        logger.warning("pipeline_runner.worker_model_ignored_no_reason", worker_model=model)
+        return "", ""
+    return model, override_reason
 
 
 class JobApproveRequest(BaseModel):
@@ -327,9 +340,13 @@ async def submit_job(req: JobSubmitRequest):
                         message=f"이전 실패 작업을 재시도합니다: {failed['job_id']}",
                     )
                 locked = await check_project_lock(conn, req.project, parallel_group=req.parallel_group)
+                worker_model, worker_model_reason = _normalize_worker_model_override(
+                    req.worker_model,
+                    req.worker_model_reason,
+                )
                 # AADS-211: worker_model 직접 지정 시 size 무시
-                if req.worker_model:
-                    model = req.worker_model
+                if worker_model:
+                    model = worker_model
                     size = req.size  # worker_model 지정 시에도 size 초기화
                 else:
                     # AADS-206B: size 명시 시 우선, 기본값이면 instruction 파���
@@ -354,15 +371,16 @@ async def submit_job(req: JobSubmitRequest):
                     INSERT INTO pipeline_jobs
                       (job_id, project, instruction, instruction_hash, chat_session_id,
                        status, phase, max_cycles, model, size,
-                       worker_model, parallel_group, depends_on,
+                       worker_model, model_override_reason, parallel_group, depends_on,
                        created_at, updated_at)
                     VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, $7, $8,
-                            $9, $10, $11,
+                            $9, $10, $11, $12,
                             NOW(), NOW())
                     """,
                     job_id, req.project, req.instruction, instruction_hash,
                     session_id, req.max_cycles, model, size,
-                    req.worker_model or None, req.parallel_group or None, req.depends_on or None,
+                    worker_model or None, worker_model_reason or None,
+                    req.parallel_group or None, req.depends_on or None,
                 )
                 # P2-2: LISTEN/NOTIFY — 이벤트 드리븐 (asyncpg 소비자용)
                 await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", job_id)
@@ -376,6 +394,8 @@ async def submit_job(req: JobSubmitRequest):
     else:
         logger.info("pipeline_runner.job_submitted", job_id=job_id, project=req.project)
         msg = "작업이 대기열에 추가되었습니다. Runner가 곧 실행합니다."
+    if req.worker_model and not req.worker_model_reason:
+        msg += " 직접 모델 지정은 사유가 없어 저장하지 않았고, 어드민 러너 모델 설정값을 사용합니다."
 
     return JobSubmitResponse(job_id=job_id, status="queued", message=msg)
 
@@ -655,6 +675,7 @@ class BatchJobItem(BaseModel):
     instruction: str = Field(..., max_length=50000)
     size: str = Field("M")
     worker_model: str = Field("")
+    worker_model_reason: str = Field("", max_length=500)
     depends_on_key: str = Field("", description="이 배치 내 다른 작업의 key (자동으로 job_id 매핑)")
 
 
@@ -703,8 +724,13 @@ async def submit_batch(req: BatchSubmitRequest):
                     job_id = key_to_job_id[item.key]
                     depends_on = key_to_job_id.get(item.depends_on_key) if item.depends_on_key else None
 
-                    if item.worker_model:
-                        model = item.worker_model
+                    worker_model, worker_model_reason = _normalize_worker_model_override(
+                        item.worker_model,
+                        item.worker_model_reason,
+                    )
+                    if worker_model:
+                        model = worker_model
+                        size = item.size
                     else:
                         size = item.size
                         if size == "M":
@@ -771,14 +797,14 @@ async def submit_batch(req: BatchSubmitRequest):
                         INSERT INTO pipeline_jobs
                           (job_id, project, instruction, instruction_hash, chat_session_id,
                            status, phase, max_cycles, model, size,
-                           worker_model, parallel_group, depends_on,
+                           worker_model, model_override_reason, parallel_group, depends_on,
                            created_at, updated_at)
                         VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, $7, $8,
-                                $9, $10, $11, NOW(), NOW())
+                                $9, $10, $11, $12, NOW(), NOW())
                         """,
                         job_id, req.project, item.instruction, instruction_hash,
                         req.session_id, req.max_cycles, model, size,
-                        item.worker_model or None, pg, depends_on,
+                        worker_model or None, worker_model_reason or None, pg, depends_on,
                     )
                     # P2-2: LISTEN/NOTIFY
                     await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", job_id)
