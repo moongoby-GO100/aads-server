@@ -6,46 +6,51 @@ from typing import Any
 _DEFAULT_PRESET_NAME = "standard"
 
 MODEL_ALIASES = {
-    "옵스": "claude-opus-4-6",
-    "오푸스": "claude-opus-4-6",
-    "opus": "claude-opus-4-6",
-    "claude-opus": "claude-opus-4-6",
-    "claude-opus-4-6": "claude-opus-4-6",
+    "옵스": "claude-sonnet-4-6",
+    "오푸스": "claude-sonnet-4-6",
+    "opus": "claude-sonnet-4-6",
+    "claude-opus": "claude-sonnet-4-6",
+    "claude-opus-4-6": "claude-sonnet-4-6",
     "소넷": "claude-sonnet-4-6",
     "sonnet": "claude-sonnet-4-6",
     "claude-sonnet": "claude-sonnet-4-6",
     "claude-sonnet-4-6": "claude-sonnet-4-6",
-    "하이쿠": "claude-haiku-4-5",
-    "haiku": "claude-haiku-4-5",
-    "claude-haiku": "claude-haiku-4-5",
-    "claude-haiku-4-5": "claude-haiku-4-5",
+    "하이쿠": "claude-haiku-4-5-20251001",
+    "haiku": "claude-haiku-4-5-20251001",
+    "claude-haiku": "claude-haiku-4-5-20251001",
+    "claude-haiku-4-5": "claude-haiku-4-5-20251001",
+    "claude-haiku-4-5-20251001": "claude-haiku-4-5-20251001",
     "제미나이": "gemini-2.5-pro",
     "gemini": "gemini-2.5-pro",
     "gemini-pro": "gemini-2.5-pro",
     "gemini-2.5-pro": "gemini-2.5-pro",
     "gemini-flash": "gemini-2.5-flash",
     "gemini-2.5-flash": "gemini-2.5-flash",
+    "deepseek": "deepseek-v4-pro",
+    "deepseek-v4-pro": "deepseek-v4-pro",
+    "deepseek-v4-flash": "deepseek-v4-flash",
 }
 
 # Design doc 기준의 라운드당 대략 비용을 모델별 고정값으로 정리한다.
 MODEL_ROUND_COST_USD = {
-    "claude-opus-4-6": 1.0,
     "claude-sonnet-4-6": 0.7,
-    "claude-haiku-4-5": 0.2,
+    "claude-haiku-4-5-20251001": 0.2,
     "gemini-2.5-pro": 0.8,
     "gemini-2.5-flash": 0.1,
+    "deepseek-v4-pro": 0.3,
+    "deepseek-v4-flash": 0.1,
 }
 
 DISCUSSION_PRESETS: dict[str, dict[str, Any]] = {
     "standard": {
         "name": "standard",
         "label": "기본 3인",
-        "synthesizer_model": "claude-opus-4-6",
+        "synthesizer_model": "claude-sonnet-4-6",
         "participants": [
             {
                 "name": "기획 A",
                 "role": "strategic_planner",
-                "model": "claude-opus-4-6",
+                "model": "claude-sonnet-4-6",
                 "color": "#6c5ce7",
                 "avatar": "A",
             },
@@ -59,7 +64,7 @@ DISCUSSION_PRESETS: dict[str, dict[str, Any]] = {
             {
                 "name": "검증 C",
                 "role": "critical_reviewer",
-                "model": "claude-sonnet-4-6",
+                "model": "gemini-2.5-flash",
                 "color": "#fdcb6e",
                 "avatar": "C",
             },
@@ -68,12 +73,12 @@ DISCUSSION_PRESETS: dict[str, dict[str, Any]] = {
     "deep": {
         "name": "deep",
         "label": "심층 4인",
-        "synthesizer_model": "claude-opus-4-6",
+        "synthesizer_model": "claude-sonnet-4-6",
         "participants": [
             {
                 "name": "기획 A",
                 "role": "strategic_planner",
-                "model": "claude-opus-4-6",
+                "model": "claude-sonnet-4-6",
                 "color": "#6c5ce7",
                 "avatar": "A",
             },
@@ -87,7 +92,7 @@ DISCUSSION_PRESETS: dict[str, dict[str, Any]] = {
             {
                 "name": "검증 C",
                 "role": "critical_reviewer",
-                "model": "claude-sonnet-4-6",
+                "model": "claude-haiku-4-5-20251001",
                 "color": "#fdcb6e",
                 "avatar": "C",
             },
@@ -103,7 +108,7 @@ DISCUSSION_PRESETS: dict[str, dict[str, Any]] = {
     "light": {
         "name": "light",
         "label": "경량 2인",
-        "synthesizer_model": "claude-sonnet-4-6",
+        "synthesizer_model": "claude-haiku-4-5-20251001",
         "participants": [
             {
                 "name": "기획 A",
@@ -143,11 +148,11 @@ def resolve_model_name(name: str | None) -> str:
         return MODEL_ALIASES[normalized]
 
     if "옵스" in raw or "오푸스" in raw or "opus" in normalized:
-        return "claude-opus-4-6"
+        return "claude-sonnet-4-6"
     if "소넷" in raw or "sonnet" in normalized:
         return "claude-sonnet-4-6"
     if "하이쿠" in raw or "haiku" in normalized:
-        return "claude-haiku-4-5"
+        return "claude-haiku-4-5-20251001"
     if "제미나이" in raw or "gemini" in normalized:
         if "flash" in normalized or "플래시" in raw:
             return "gemini-2.5-flash"
