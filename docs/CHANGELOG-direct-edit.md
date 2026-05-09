@@ -318,3 +318,6 @@ pathlib.Path('/app/scripts/e
 
 ## [2026-05-09 08:08:11 KST] [aads-server] app/services/discussion_orchestrator.py
 - Chat-Direct 수정: patch:                            $11, $12, $13→                           $11, $12, $13
+
+## [2026-05-09 10:08:59 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: grep -n "report\|보고서\|artifact\|markdown\|render\|chart\|table\|format_response"

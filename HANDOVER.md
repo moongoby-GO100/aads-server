@@ -451,3 +451,11 @@
 - 전체 백필: canary 이후 assistant/user/system 대상 전체 백필을 완료했다. 마지막 잔여 assistant 3건은 `docker exec aads-server python3 /app/scripts/backfill_chat_embeddings.py --limit 10 --batch-size 5 --role assistant --order newest`로 처리했고 `missing_before=3`, `missing_after=0`, `updated=3`, 오류 0건이었다.
 - 검증: `python3 -m py_compile scripts/backfill_chat_embeddings.py app/services/chat_embedding_service.py app/services/chat_service.py app/services/context_builder.py` 통과. `pytest -q tests/unit/test_memory_context_regression.py` 5개 통과.
 - DB 확인: 2026-05-09 09:55 KST 기준 `chat_messages` role별 본문 10자 이상 미임베딩 대상은 assistant 0건, user 0건, system 0건이다.
+
+## 2026-05-09 10:08 KST - AADS changelog 커밋/푸시 및 green 슬롯 무중단 전환
+
+- 커밋: `e7ae7a0 docs: sync direct edit changelogs`, `cb768b2 docs: sync go100 direct changelog`를 `origin/main`에 push 완료.
+- 배포: 기존 `deploy.sh bluegreen` 실행이 선행 PID에서 진행 중이라 중복 실행은 락으로 차단됨. 해당 배포가 `aads-server-green` 이미지를 재빌드하고 green 컨테이너를 healthy 상태로 기동한 것을 확인.
+- 전환: active stream 3건이 8100에 남아 있어 컨테이너 중지는 하지 않고 nginx upstream만 8102 우선, 8100 backup으로 수동 전환 후 `systemctl reload nginx` 완료. `.active_port=8102`, `.active_container=aads-server-green`으로 동기화.
+- 검증: `nginx -t` 통과, `https://aads.newtalk.kr/api/v1/health` OK, `docker inspect aads-server-green` running/healthy, `docker exec aads-server-green python3 -c "from app.main import app"` import OK.
+- 잔여: untracked `scripts/e2e_disc_v2.py`는 문법이 깨진 임시 테스트 초안으로 커밋에서 제외. 정리/수정 여부는 별도 판단 필요.
