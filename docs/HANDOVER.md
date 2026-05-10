@@ -1,5 +1,11 @@
 # AADS HANDOVER
-최종 업데이트: 2026-05-09
+최종 업데이트: 2026-05-11
+
+## 2026-05-11
+- Pipeline Runner dashboard-target guard applied in `scripts/pipeline-runner.sh`: AADS jobs that reference `/root/aads/aads-dashboard`, `aads-dashboard`, or chat/dashboard frontend paths now run against `/root/aads/aads-dashboard` instead of the backend workdir.
+- Runner now blocks `awaiting_approval` when the actual target repo has zero git diff, preventing read-only/tmp-copy failures from being reported as successful work.
+- Approval/reject/deploy cleanup now resolves the same target workdir from the stored job instruction, so dashboard worktrees are committed, pushed, reverted, or removed in the dashboard repo rather than `aads-server`.
+- AADS dashboard-target deploy skips backend reload/bluegreen and runs the dashboard deploy path; dashboard rollback also redeploys the dashboard path instead of the backend path.
 
 ## 2026-05-09
 - Project Change Promoter implemented: completed runner jobs and raw `memory_facts` change events can now be promoted into `architecture_decision`, `feature_change`, `api_contract`, and `data_model_change` facts.

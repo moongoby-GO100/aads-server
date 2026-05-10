@@ -58,6 +58,29 @@ declare -A PROJECT_WORKDIR=(
     ["NTV2"]="/srv/newtalk-v2"
 )
 
+AADS_DASHBOARD_WORKDIR="${AADS_DASHBOARD_WORKDIR:-/root/aads/aads-dashboard}"
+
+is_aads_dashboard_instruction() {
+    local project="$1" instruction="$2"
+    [[ "$project" == "AADS" ]] || return 1
+    printf '%s' "$instruction" | grep -Eiq \
+        '(/root/aads/aads-dashboard|(^|[^A-Za-z0-9_-])aads-dashboard([^A-Za-z0-9_-]|$)|src/(app|components)/chat|DiscussionPanel\.tsx|MarkdownRenderer\.tsx|ChatArtifactPanel\.tsx|ChatInput\.tsx|Artifact(Summary)?Panel\.tsx|package(-lock)?\.json|next\.config|tailwind\.config|tsconfig\.json)'
+}
+
+resolve_project_workdir() {
+    local project="$1" instruction="${2:-}"
+    if is_aads_dashboard_instruction "$project" "$instruction"; then
+        echo "$AADS_DASHBOARD_WORKDIR"
+    else
+        echo "${PROJECT_WORKDIR[$project]:-}"
+    fi
+}
+
+get_job_instruction() {
+    local job_id="$1"
+    db_exec "SELECT instruction FROM pipeline_jobs WHERE job_id='${job_id}' LIMIT 1;" 2>/dev/null || true
+}
+
 # 프로젝트별 허용 목록 (M4: 화이트리스트 검증)
 VALID_PROJECTS="AADS KIS GO100 SF NTV2"
 
@@ -255,7 +278,9 @@ classify_error() {
 # ── 사전 검증 (Pre-validation) ─────────────────────────────────────────
 pre_validate() {
     local job_id="$1" project="$2" session_id="$3"
-    local workdir="${PROJECT_WORKDIR[$project]:-}"
+    local instruction="${4:-}"
+    local workdir
+    workdir=$(resolve_project_workdir "$project" "$instruction")
 
     # 방안 A: 원격 프로젝트 판별 — workdir이 서버68에 없으므로 로컬 체크 스킵
     local is_remote=false
@@ -554,6 +579,13 @@ claim_rejected_job() {
 run_job() {
     local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5" job_model="${6:-auto}" job_size="${7:-M}"
     local output_file="$ARTIFACT_DIR/${job_id}.out" err_file="$ARTIFACT_DIR/${job_id}.err"
+    local workdir
+    workdir=$(resolve_project_workdir "$project" "$instruction")
+    local main_workdir="$workdir"
+    local target_repo="default"
+    if is_aads_dashboard_instruction "$project" "$instruction"; then
+        target_repo="aads-dashboard"
+    fi
 
     # 전역 변수 설정 — cleanup()에서 러너 종료 시 현재 작업을 에러로 마킹하기 위함
     _current_job_id="$job_id"
@@ -579,12 +611,11 @@ run_job() {
     fi
 
     # ── 사전 검증 (Pre-validation) ──
-    pre_validate "$job_id" "$project" "$session_id" || { _release_work_lock "$project" "$job_id"; return 1; }
+    pre_validate "$job_id" "$project" "$session_id" "$instruction" || { _release_work_lock "$project" "$job_id"; return 1; }
 
     # ── 중복 작업 확인 ──
     check_duplicate "$job_id" "$project" "$instruction" || { _release_work_lock "$project" "$job_id"; return 0; }
 
-    local workdir="${PROJECT_WORKDIR[$project]:-}"
     local use_worktree=false
     local worktree_dir=""
 
@@ -607,7 +638,7 @@ run_job() {
         fi
     fi
 
-    log "▶ START job=$job_id project=$project workdir=$workdir"
+    log "▶ START job=$job_id project=$project target=${target_repo} workdir=$workdir"
     db_update "UPDATE pipeline_jobs SET status='running', phase='claude_code_work',
                started_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
     post_to_chat "$session_id" "🔧 [Pipeline Runner] 작업 시작: ${instruction:0:200}"
@@ -903,7 +934,7 @@ $out_tail")
         _cleanup_artifacts "$job_id"
         # worktree 정리
         if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
-            cd "${PROJECT_WORKDIR[$project]:-/tmp}"
+            cd "${main_workdir:-/tmp}"
             git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
             log "  WORKTREE_CLEANUP: /tmp/aads-wt-${job_id}"
         fi
@@ -921,6 +952,29 @@ $out_tail")
     cd "$workdir"
     local git_diff=""
     git_diff=$(git diff HEAD 2>/dev/null | head -c 50000) || true
+
+    if [[ -z "${git_diff//[[:space:]]/}" ]]; then
+        log "  NO_CHANGES job=$job_id target=$target_repo — awaiting_approval 차단"
+        db_update "UPDATE pipeline_jobs SET status='error', phase='no_changes',
+                   error_detail='no_changes',
+                   result_output=$(sql_escape "$output"),
+                   review_feedback=COALESCE(review_feedback,'') || E'\n[Runner Guard] 변경사항 0건 — 실제 대상 저장소에 반영된 diff가 없어 승인 대기로 보내지 않음',
+                   updated_at=NOW() WHERE job_id='${job_id}';"
+        post_to_chat "$session_id" "❌ [Pipeline Runner] 변경사항 0건으로 작업 실패 처리: $job_id — 실제 대상 저장소(${target_repo})에 diff가 없습니다."
+        _release_work_lock "$project" "$job_id"
+        _cleanup_artifacts "$job_id"
+        if [[ -d "$worktree_dir" ]]; then
+            cd "${main_workdir:-/tmp}"
+            git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
+            log "  WORKTREE_CLEANUP: $worktree_dir"
+        fi
+        _notify_ai "$job_id"
+        promote_next_queued "$project"
+        _current_job_id=""
+        _current_session_id=""
+        rm -f /tmp/.pipeline_current_job
+        return 1
+    fi
 
     # ═══ AI Reviewer 단계 — CEO 승인 전 독립 AI 리뷰 ═══
     local review_verdict="APPROVE"
@@ -1067,11 +1121,18 @@ _cleanup_artifacts() {
 # ── 승인된 작업 배포 ──────────────────────────────────────────────────
 deploy_job() {
     local job_id="$1" project="$2" session_id="$3"
-    local workdir="${PROJECT_WORKDIR[$project]:-}"
+    local _job_instruction=""
+    _job_instruction=$(get_job_instruction "$job_id")
+    local workdir
+    workdir=$(resolve_project_workdir "$project" "$_job_instruction")
+    local target_repo="default"
+    if is_aads_dashboard_instruction "$project" "$_job_instruction"; then
+        target_repo="aads-dashboard"
+    fi
     [[ -z "$workdir" || ! -d "$workdir" ]] && return 1
 
     log "[deploy_job] start job_id=$job_id project=$project"
-    log "▶ DEPLOY job=$job_id project=$project"
+    log "▶ DEPLOY job=$job_id project=$project target=$target_repo workdir=$workdir"
 
     # Redis deploy lock 획득 (동시 배포 방지)
     local deploy_lock_result=""
@@ -1096,7 +1157,7 @@ deploy_job() {
 
     post_to_chat "$session_id" "🚀 [Pipeline Runner] 배포 시작: $job_id"
 
-    local main_workdir="${PROJECT_WORKDIR[$project]:-}"
+    local main_workdir="$workdir"
     local worktree_dir="/tmp/aads-wt-${job_id}"
 
     # flock으로 같은 프로젝트 동시 배포 방지
@@ -1109,8 +1170,8 @@ deploy_job() {
         _pre_sha=$(git -C "$main_workdir" rev-parse HEAD 2>/dev/null) || _pre_sha=""
         echo "$_pre_sha" > "/tmp/pipeline-pre-sha-${job_id}"
 
-        if [[ -d "$worktree_dir" ]]; then
-            cd "$worktree_dir"
+            if [[ -d "$worktree_dir" ]]; then
+                cd "$worktree_dir"
             local _wt_add_failed="false"
             if ! git add -A 2>/dev/null; then
                 log "  WARN: worktree git add -A failed, using file-copy fallback"
@@ -1288,62 +1349,68 @@ ${_push_err_tail}")
         AADS)
             # 1) aads-server: 배포 방식 자동 선택 (Hot-Reload 우선)
             local _needs_build="false"
-            if git -C /root/aads/aads-server diff HEAD~1 --name-only 2>/dev/null | grep -qE '(Dockerfile|requirements|docker-compose)'; then
-                _needs_build="true"
-            fi
-
-            if [[ "$_needs_build" == "true" ]]; then
-                # Dockerfile/requirements/docker-compose 변경 → Blue-Green 무중단 배포
-                log "  BLUEGREEN aads-server 무중단 배포 시작 (빌드 파일 변경 감지)"
-                local _aads_deploy_log="/tmp/pipeline-deploy-aads-${job_id}.log"
-                if bash /root/aads/aads-server/deploy.sh bluegreen >"$_aads_deploy_log" 2>&1; then
-                    tail -20 "$_aads_deploy_log" 2>/dev/null || true
-                    log "  BLUEGREEN aads-server 완료"
-                else
-                    local _aads_deploy_tail
-                    _aads_deploy_tail=$(tail -20 "$_aads_deploy_log" 2>/dev/null | head -c 1500)
-                    log "  ERROR: bluegreen 실패 — 기존 서비스 유지 (SSE 스트림 보호): ${_aads_deploy_tail//$'\n'/ }"
-                    post_to_chat "$session_id" "🔴 [Runner] AADS bluegreen 배포 실패 — 기존 서비스 유지: ${_aads_deploy_tail:0:500}"
-                    _build_fail="${_build_fail:+${_build_fail};}aads-server:bluegreen_failed"
-                    db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-server-bluegreen] ' || $(sql_escape "$_aads_deploy_tail") WHERE job_id='${job_id}';"
-                fi
-                rm -f "$_aads_deploy_log" 2>/dev/null || true
-            elif [[ "$_py_changed" == "true" ]]; then
-                # Python 코드만 변경 → Hot-Reload (0초 무중단)
-                log "  HOT-RELOAD: .py 변경 감지 — reload-api.sh 실행 (0초 무중단)"
-                local _aads_reload_log="/tmp/pipeline-reload-aads-${job_id}.log"
-                if bash /root/aads/aads-server/scripts/reload-api.sh >"$_aads_reload_log" 2>&1; then
-                    tail -5 "$_aads_reload_log" 2>/dev/null || true
-                    log "  HOT-RELOAD: 완료 (무중단)"
-                else
-                    local _reload_tail
-                    _reload_tail=$(tail -10 "$_aads_reload_log" 2>/dev/null | head -c 1000)
-                    log "  HOT-RELOAD: 실패 — fallback: deploy.sh bluegreen (무중단)"
-                    local _aads_fallback_log="/tmp/pipeline-reload-fallback-aads-${job_id}.log"
-                    if bash /root/aads/aads-server/deploy.sh bluegreen >"$_aads_fallback_log" 2>&1; then
-                        tail -10 "$_aads_fallback_log" 2>/dev/null || true
-                    else
-                        local _fallback_tail
-                        _fallback_tail=$(tail -20 "$_aads_fallback_log" 2>/dev/null | head -c 1500)
-                        log "  ERROR: hot-reload fallback bluegreen 실패: ${_fallback_tail//$'\n'/ }"
-                        post_to_chat "$session_id" "🔴 [Runner] AADS hot-reload 및 fallback 배포 실패: ${_fallback_tail:0:500}"
-                        _build_fail="${_build_fail:+${_build_fail};}aads-server:reload_and_bluegreen_failed"
-                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-server-reload] ' || $(sql_escape "${_reload_tail}
-${_fallback_tail}") WHERE job_id='${job_id}';"
-                    fi
-                    rm -f "$_aads_fallback_log" 2>/dev/null || true
-                fi
-                rm -f "$_aads_reload_log" 2>/dev/null || true
+            if [[ "$target_repo" == "aads-dashboard" ]]; then
+                log "  SKIP aads-server deploy — dashboard-targeted AADS job"
             else
-                # 비Python 변경 (yml/md/yaml/sh/bak 등) → 서버 재시작 불필요
-                # SIGTERM 방지: deploy.sh code는 SIGTERM을 보내 SSE 스트림을 끊으므로 사용 금지
-                log "  SKIP-DEPLOY: 비Python 변경 — aads-server 재시작 불필요 (yml/md/yaml/sh 등)"
+                if git -C /root/aads/aads-server diff HEAD~1 --name-only 2>/dev/null | grep -qE '(Dockerfile|requirements|docker-compose)'; then
+                    _needs_build="true"
+                fi
+
+                if [[ "$_needs_build" == "true" ]]; then
+                    # Dockerfile/requirements/docker-compose 변경 → Blue-Green 무중단 배포
+                    log "  BLUEGREEN aads-server 무중단 배포 시작 (빌드 파일 변경 감지)"
+                    local _aads_deploy_log="/tmp/pipeline-deploy-aads-${job_id}.log"
+                    if bash /root/aads/aads-server/deploy.sh bluegreen >"$_aads_deploy_log" 2>&1; then
+                        tail -20 "$_aads_deploy_log" 2>/dev/null || true
+                        log "  BLUEGREEN aads-server 완료"
+                    else
+                        local _aads_deploy_tail
+                        _aads_deploy_tail=$(tail -20 "$_aads_deploy_log" 2>/dev/null | head -c 1500)
+                        log "  ERROR: bluegreen 실패 — 기존 서비스 유지 (SSE 스트림 보호): ${_aads_deploy_tail//$'\n'/ }"
+                        post_to_chat "$session_id" "🔴 [Runner] AADS bluegreen 배포 실패 — 기존 서비스 유지: ${_aads_deploy_tail:0:500}"
+                        _build_fail="${_build_fail:+${_build_fail};}aads-server:bluegreen_failed"
+                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-server-bluegreen] ' || $(sql_escape "$_aads_deploy_tail") WHERE job_id='${job_id}';"
+                    fi
+                    rm -f "$_aads_deploy_log" 2>/dev/null || true
+                elif [[ "$_py_changed" == "true" ]]; then
+                    # Python 코드만 변경 → Hot-Reload (0초 무중단)
+                    log "  HOT-RELOAD: .py 변경 감지 — reload-api.sh 실행 (0초 무중단)"
+                    local _aads_reload_log="/tmp/pipeline-reload-aads-${job_id}.log"
+                    if bash /root/aads/aads-server/scripts/reload-api.sh >"$_aads_reload_log" 2>&1; then
+                        tail -5 "$_aads_reload_log" 2>/dev/null || true
+                        log "  HOT-RELOAD: 완료 (무중단)"
+                    else
+                        local _reload_tail
+                        _reload_tail=$(tail -10 "$_aads_reload_log" 2>/dev/null | head -c 1000)
+                        log "  HOT-RELOAD: 실패 — fallback: deploy.sh bluegreen (무중단)"
+                        local _aads_fallback_log="/tmp/pipeline-reload-fallback-aads-${job_id}.log"
+                        if bash /root/aads/aads-server/deploy.sh bluegreen >"$_aads_fallback_log" 2>&1; then
+                            tail -10 "$_aads_fallback_log" 2>/dev/null || true
+                        else
+                            local _fallback_tail
+                            _fallback_tail=$(tail -20 "$_aads_fallback_log" 2>/dev/null | head -c 1500)
+                            log "  ERROR: hot-reload fallback bluegreen 실패: ${_fallback_tail//$'\n'/ }"
+                            post_to_chat "$session_id" "🔴 [Runner] AADS hot-reload 및 fallback 배포 실패: ${_fallback_tail:0:500}"
+                            _build_fail="${_build_fail:+${_build_fail};}aads-server:reload_and_bluegreen_failed"
+                            db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-server-reload] ' || $(sql_escape "${_reload_tail}
+${_fallback_tail}") WHERE job_id='${job_id}';"
+                        fi
+                        rm -f "$_aads_fallback_log" 2>/dev/null || true
+                    fi
+                    rm -f "$_aads_reload_log" 2>/dev/null || true
+                else
+                    # 비Python 변경 (yml/md/yaml/sh/bak 등) → 서버 재시작 불필요
+                    # SIGTERM 방지: deploy.sh code는 SIGTERM을 보내 SSE 스트림을 끊으므로 사용 금지
+                    log "  SKIP-DEPLOY: 비Python 변경 — aads-server 재시작 불필요 (yml/md/yaml/sh 등)"
+                fi
             fi
             # HEARTBEAT: aads-server 배포 완료 후 갱신 (dashboard 빌드 전)
             db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
 
             # 2) aads-dashboard: Docker 이미지 빌드 서비스 → build→swap
-            if [ -n "$(git -C /root/aads/aads-dashboard status --porcelain 2>/dev/null)" ]; then
+            if [[ "$target_repo" == "aads-dashboard" ]]; then
+                DASHBOARD_CHANGED=true
+            elif [ -n "$(git -C /root/aads/aads-dashboard status --porcelain 2>/dev/null)" ]; then
                 log "  COMMIT aads-dashboard changes"
                 git -C /root/aads/aads-dashboard add -A 2>/dev/null || true
                 git -C /root/aads/aads-dashboard commit -m "Pipeline-Runner: ${job_id} (dashboard)" 2>/dev/null || true
@@ -1617,11 +1684,19 @@ ${_dash_fallback_tail}") WHERE job_id='${job_id}';"
 
             case "$project" in
                 AADS)
-                    # 롤백도 무중단 배포 사용 (SSE 스트림 보호)
-                    if bash /root/aads/aads-server/deploy.sh bluegreen 2>&1 | tail -10; then
-                        log "  ROLLBACK_DEPLOY: bluegreen 성공"
+                    if [[ "$target_repo" == "aads-dashboard" ]]; then
+                        if bash /root/aads/aads-dashboard/deploy.sh 2>&1 | tail -10; then
+                            log "  ROLLBACK_DEPLOY: dashboard deploy 성공"
+                        else
+                            log "  ROLLBACK_DEPLOY: dashboard deploy 실패 — 기존 서비스 유지"
+                        fi
                     else
-                        log "  ROLLBACK_DEPLOY: bluegreen 실패 — 기존 서비스 유지"
+                        # 롤백도 무중단 배포 사용 (SSE 스트림 보호)
+                        if bash /root/aads/aads-server/deploy.sh bluegreen 2>&1 | tail -10; then
+                            log "  ROLLBACK_DEPLOY: bluegreen 성공"
+                        else
+                            log "  ROLLBACK_DEPLOY: bluegreen 실패 — 기존 서비스 유지"
+                        fi
                     fi
                     ;;
                 KIS)
@@ -1700,7 +1775,7 @@ ${_dash_fallback_tail}") WHERE job_id='${job_id}';"
 
     # worktree 정리
     if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
-        cd "${PROJECT_WORKDIR[$project]:-/tmp}"
+        cd "$main_workdir"
         git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
         log "  WORKTREE_CLEANUP: /tmp/aads-wt-${job_id}"
     fi
@@ -1712,16 +1787,19 @@ ${_dash_fallback_tail}") WHERE job_id='${job_id}';"
 # ── 거부된 작업 원복 ──────────────────────────────────────────────────
 reject_job() {
     local job_id="$1" project="$2" session_id="$3"
-    local workdir="${PROJECT_WORKDIR[$project]:-}"
+    local _job_instruction=""
+    _job_instruction=$(get_job_instruction "$job_id")
+    local workdir
+    workdir=$(resolve_project_workdir "$project" "$_job_instruction")
     [[ -z "$workdir" || ! -d "$workdir" ]] && return 1
 
-    log "▶ REJECT job=$job_id project=$project"
+    log "▶ REJECT job=$job_id project=$project workdir=$workdir"
     cd "$workdir"
 
     # v2.2: 해당 Runner의 변경사항만 선택적 원복 (다른 Runner의 배포된 변경 보호)
     local worktree_dir="/tmp/aads-wt-${job_id}"
     if [[ -d "$worktree_dir" ]]; then
-        cd "${PROJECT_WORKDIR[$project]:-/tmp}"
+        cd "$workdir"
         git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
         log "  REJECT_WORKTREE_CLEANUP: $worktree_dir"
     else
@@ -1742,7 +1820,7 @@ reject_job() {
 
     # worktree 정리
     if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
-        cd "${PROJECT_WORKDIR[$project]:-/tmp}"
+        cd "$workdir"
         git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
         log "  WORKTREE_CLEANUP: /tmp/aads-wt-${job_id}"
     fi
