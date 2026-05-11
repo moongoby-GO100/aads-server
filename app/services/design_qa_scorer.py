@@ -30,7 +30,7 @@ _FILE_COLLECTION_KEYS = {
     "target_files",
 }
 _VIEWPORT_FONT_SCALING_RE = re.compile(
-    r"(?:font-size\s*:\s*[^;}{\n]*(?:vw|vh|vmin|vmax)\b|text-\[[^\]]*(?:vw|vh|vmin|vmax)[^\]]*\])",
+    r"(?:font-size\s*:\s*[^;}{\n]*(?:vw|vh|vmin|vmax)\b|fontSize\s*:\s*[\"'][^\"']*(?:vw|vh|vmin|vmax)\b[^\"']*[\"']|text-\[[^\]]*(?:vw|vh|vmin|vmax)[^\]]*\])",
     re.IGNORECASE,
 )
 _ARIA_HINT_RE = re.compile(r"\baria-[\w-]+\s*=", re.IGNORECASE)

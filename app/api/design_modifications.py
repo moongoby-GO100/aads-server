@@ -14,6 +14,8 @@ from app.auth import get_current_user
 from app.core.db_pool import get_pool
 from app.services.design_context_builder import DesignContextRequestNotFound
 from app.services.design_context_builder import build_context_pack
+from app.services.design_qa_scorer import DesignModificationRequestNotFoundError
+from app.services.design_qa_scorer import score_modification
 
 router = APIRouter(prefix="/admin/design", tags=["design-modifications"])
 
@@ -709,6 +711,20 @@ async def build_design_modification_context_pack(
     try:
         return await build_context_pack(request_id)
     except DesignContextRequestNotFound as exc:
+        raise HTTPException(status_code=404, detail="design modification request not found") from exc
+    except asyncpg.UndefinedTableError as exc:
+        raise _schema_unavailable(exc)
+
+
+@router.post("/modification-requests/{request_id}/score")
+async def score_design_modification_request(
+    request_id: UUID,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    _require_user_id(current_user)
+    try:
+        return await score_modification(request_id)
+    except DesignModificationRequestNotFoundError as exc:
         raise HTTPException(status_code=404, detail="design modification request not found") from exc
     except asyncpg.UndefinedTableError as exc:
         raise _schema_unavailable(exc)

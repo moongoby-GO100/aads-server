@@ -299,6 +299,28 @@ async def test_build_design_modification_context_pack(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_score_design_modification_request(monkeypatch):
+    async def _fake_score_modification(request_id):
+        return {
+            "request_id": str(request_id),
+            "project_key": "AADS",
+            "total_score": 86,
+            "rating": "conditional_approval",
+            "axes": {"request_match": {"score": 22, "max_score": 25}},
+        }
+
+    monkeypatch.setattr(design_modifications, "score_modification", _fake_score_modification)
+    response = await design_modifications.score_design_modification_request(
+        UUID(REQUEST_ID),
+        current_user=_current_user(),
+    )
+
+    assert response["request_id"] == REQUEST_ID
+    assert response["total_score"] == 86
+    assert response["rating"] == "conditional_approval"
+
+
+@pytest.mark.asyncio
 async def test_context_pack_list_and_preview(monkeypatch):
     monkeypatch.setattr(design_modifications, "get_pool", lambda: _Pool(_DesignConn()))
     list_response = await design_modifications.list_design_context_packs(

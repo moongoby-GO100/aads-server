@@ -1,6 +1,21 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-11)
+- **Chat stream interruption / blue-green deploy guard 보강 (2026-05-11 19:30~KST)**:
+  - 원인: API/대시보드 재시작 중 SSE 스트림이 끊겼고, 이후 `resume_single_stream_error` 경로에서 Codex Relay 재개가 실패해 `interrupted/recovered` 메시지가 남았다.
+  - 실측: active marker는 `aads-server-green:8102`, nginx upstream도 8102 active. 8100/8102 양쪽에 활성·복구 스트림이 남아 다음 blue-green이 backup 슬롯을 재빌드하면 추가 끊김 위험이 있었다.
+  - 조치: `deploy.sh`에 target slot active stream preflight를 추가해 busy backup 슬롯 재빌드를 차단하고, old slot drain timeout 시 강제 restart/stop 대신 스트림 보존을 위해 종료를 스킵하도록 수정했다.
+  - 검증: `bash -n deploy.sh` 통과. 커밋 `f733749 fix: preserve active chat streams during blue-green deploy`.
+
+- **AADS Design Modification Studio 직접 보강/DB 반영 (2026-05-11 19:20~KST)**:
+  - 러너 추가 투입 없이 직접 조치. `runner-54bb2066`은 diff 0건이라 거부했고, 시작 전 queued 상태의 `runner-fb3e9b45`는 중복 충돌 방지를 위해 종료했다.
+  - 운영 DB에 `migrations/082_open_design_hub.sql`, `084_design_modification_studio.sql`, `085_design_qa_scores.sql`을 순서대로 적용했다. `design_projects=1`, `design_screens=4`, `design_decisions=2`, `design_modification_requests=0`, `design_qa_scores=0` 확인.
+  - 백엔드: `app/api/design_modifications.py`에 `POST /api/v1/admin/design/modification-requests/{request_id}/score`를 추가하고, `app/services/design_qa_scorer.py`의 React inline `fontSize: "2vw"` viewport scaling 탐지를 보강했다.
+  - 대시보드: `/design/modifications`, `/design/modifications/new`, `/design/modifications/[id]/context`, `/design/modifications/[id]/workbench` 페이지와 `src/lib/api.ts` Design Modification Studio API 클라이언트를 추가했다. 사이드바에 `Design Studio` 진입 링크를 추가했다.
+  - 검증: `python3 -m py_compile app/api/design_modifications.py app/services/design_context_builder.py app/services/design_qa_scorer.py` 통과. `pytest -q tests/unit/test_design_modifications_api.py tests/unit/test_design_qa_scorer.py` → `11 passed`. `npm run build` 통과하며 신규 라우트 4개가 빌드 출력에 포함됨.
+  - 배포: 백엔드 `deploy.sh`는 code mode로 정상 종료됐으나 이미지 재빌드가 아니라 score API 파일은 활성 컨테이너에 직접 반영 후 `aads-server-green`의 `aads-api`만 재기동했다. OpenAPI에서 `/api/v1/admin/design/modification-requests/{request_id}/score` 노출 확인, `8102/api/v1/health` OK 확인. 대시보드 `deploy.sh`는 blue-green 성공, 활성 슬롯 `blue`, 외부 `/design/modifications/new`는 미로그인 기준 `/login?redirect=...` 307 정상.
+  - 미검증/주의: `npm run lint`는 이번 변경과 무관한 기존 전역 ESLint 오류 273건으로 실패한다. 백엔드 컨테이너 직접 반영분은 다음 정식 이미지 빌드/커밋 전에는 재빌드 시 소스 커밋 기준에 의존한다.
+
 - **AADS-DESIGN-MOD-003 Design Context Pack Builder 추가 (2026-05-11 KST)**:
   - 변경 파일: `app/services/design_context_builder.py`, `app/api/design_modifications.py`, `tests/unit/test_design_context_builder.py`, `tests/unit/test_design_modifications_api.py`, `HANDOVER.md`.
   - 조치: `build_context_pack(request_id)` 서비스를 추가해 `design_projects`, `design_screens`, `design_modification_requests`, `design_token_sets`, `design_visual_snapshots(phase='before')`에서 AI 주입용 context를 조립하고 `design_context_packs`에 저장하도록 구현했다.
