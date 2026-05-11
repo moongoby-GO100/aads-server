@@ -1,6 +1,13 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-11)
+- **AADS-DESIGN-MOD-003 Design Context Pack Builder 추가 (2026-05-11 KST)**:
+  - 변경 파일: `app/services/design_context_builder.py`, `app/api/design_modifications.py`, `tests/unit/test_design_context_builder.py`, `tests/unit/test_design_modifications_api.py`, `HANDOVER.md`.
+  - 조치: `build_context_pack(request_id)` 서비스를 추가해 `design_projects`, `design_screens`, `design_modification_requests`, `design_token_sets`, `design_visual_snapshots(phase='before')`에서 AI 주입용 context를 조립하고 `design_context_packs`에 저장하도록 구현했다.
+  - 조치: context에는 project metadata, screen info, component path candidates, `DESIGN.md` 내용, design tokens, baseline screenshot URL, viewport matrix, allowed/forbidden scope, acceptance criteria를 포함한다. `DESIGN.md`는 repo root와 `docs/` 후보만 읽고, key/token/secret/password 계열 값과 토큰형 문자열은 저장 전 redaction한다.
+  - API: `POST /api/v1/admin/design/modification-requests` 요청 생성 엔드포인트와 `POST /api/v1/admin/design/modification-requests/{request_id}/build-context` 빌더 실행 엔드포인트를 추가했다.
+  - 테스트: builder 단위 테스트는 mock DB와 임시 `DESIGN.md`로 필수 context 조립, redaction, missing_context 저장을 검증하도록 추가했다. API 테스트에는 요청 생성과 build-context 트리거 회귀 테스트를 보강했다.
+
 - **Pipeline Runner AADS 백엔드/대시보드 라우팅 오분류 패치 (2026-05-11 18:17 KST)**:
   - 증상: AADS 지시문에 `Backend workdir: /root/aads/aads-server`와 `Dashboard workdir: /root/aads/aads-dashboard`가 함께 있으면 `scripts/pipeline-runner.sh`가 대시보드 키워드를 먼저 감지해 백엔드 작업도 `/root/aads/aads-dashboard` worktree에서 실행했다.
   - 확인: `runner-ddb6bb2c`, `runner-5159ac44`의 `/tmp/aads-wt-*`가 `aads-dashboard` remote였고 `migrations/`, `app/`이 없었다. 두 작업은 산출 불가능 상태라 종료했다.
@@ -579,22 +586,3 @@
 - 조치: 요청 상세 응답에 화면 메타데이터, visual snapshot 목록, 관련 design decision 목록을 포함해 Phase 2 UI가 별도 write API 없이 workbench 초안을 붙일 수 있게 정리.
 - 테스트/검증 명령: `pytest -q tests/unit/test_design_modifications_api.py`, `python3 -m py_compile app/api/design_modifications.py`.
 - 리스크: `084`는 `082_open_design_hub.sql`의 `design_projects` 선행 적용을 전제로 한다. 또한 `context`/`sources` JSONB 구조는 Phase 3 builder 구현 전까지 loose schema이므로 프런트엔드에서는 optional 필드 방어가 필요하다.
-
-## 2026-05-11 20:05 KST - AADS-DESIGN-MOD-003 Design Context Pack Builder 추가
-
-- 배경: Design Modification Studio 수정 요청을 Runner/프런트가 바로 검토할 수 있도록 화면 메타데이터, 수정 카드, 디자인 결정, 토큰/감사 근거, visual snapshot 메타데이터를 하나의 bounded JSON context pack으로 조립하는 백엔드 생성 로직이 필요해짐.
-- 변경 파일: `app/services/design_context_pack_service.py`, `app/api/design_modifications.py`, `tests/unit/test_design_modifications_api.py`, `HANDOVER.md`.
-- 조치: 신규 `build_design_context_pack()` 순수 빌더를 추가해 `route`, `component_paths`, `current_state`, `target_state`, `locked_constraints`, `acceptance_checks`, `related_decisions`, `risk_notes`, `token_style_evidence`, `snapshot_metadata`를 생성한다.
-- 조치: 민감 키/값, 민감 경로, 과대 문자열/컬렉션을 재귀 필터링하고 `safety_filters`에 redaction/truncation/omission 카운트를 남기도록 했다. 디자인 토큰 계열 키는 유지하되 인증/비밀번호/credential 계열은 redaction 처리한다.
-- API: `POST /api/v1/admin/design/modification-requests/{request_id}/context-pack/preview`는 비영속 미리보기를, `POST /api/v1/admin/design/modification-requests/{request_id}/context-packs`는 `design_context_packs`에 JSONB로 저장하는 생성을 담당한다.
-- 테스트 추가: pack shape, context pack preview/persist API, 민감 정보 및 민감 경로 필터링, snapshot 누락 시 missing_context/risk_notes 유지 케이스를 `tests/unit/test_design_modifications_api.py`에 보강했다.
-
-## 2026-05-11 20:45 KST - AADS-DESIGN-MOD-004 Design Modification Workbench UI 추가
-
-- 배경: CEO/operator가 단일 디자인 수정 요청을 열어 Before/After snapshot metadata, context pack, 관련 design decision, risk notes를 한 화면에서 검토하고 context pack preview/persist를 실행할 수 있는 workbench가 필요해짐.
-- 변경 파일: `aads-dashboard/src/lib/api.ts`, `aads-dashboard/src/app/design/modifications/page.tsx`, `aads-dashboard/src/app/design/modifications/[id]/page.tsx`, `HANDOVER.md`.
-- 조치: dashboard API 클라이언트에 `GET /admin/design/modification-requests`, `GET /admin/design/modification-requests/{id}`, `POST /admin/design/modification-requests/{id}/context-pack/preview`, `POST /admin/design/modification-requests/{id}/context-packs` 메서드와 응답 타입을 추가.
-- 조치: `/design/modifications` 최소 목록 페이지를 추가해 상태 필터, loading/error/empty 상태, 요청별 상세 링크를 제공한다.
-- 조치: `/design/modifications/[id]` workbench를 추가해 좌측 request summary(project, route, problem_type, description, goal, allowed_scope, forbidden_scope, acceptance_criteria, viewport_priority, status)와 우측 Before/After, Context Pack JSON collapsible sections, Related Decisions 탭을 구성했다.
-- 조치: snapshot metadata 또는 image_url이 없을 때 placeholder를 표시하고, context pack의 `risk_notes`가 있으면 placeholder 영역에 함께 노출한다. 현재 로컬 백엔드에는 request status PATCH 계약이 없어 Approve/Reject는 `backend status update not yet wired` 툴팁이 있는 비활성 버튼으로 처리했다.
-- 검증 명령/결과: `npm run typecheck` (cwd: `aads-dashboard`) 실패 - `ENOENT: Could not read package.json`, npm이 `/tmp/aads-wt-runner-270c07f8/package.json`을 찾지 못함. `npm run lint` (cwd: `aads-dashboard`) 동일 사유 실패. `git diff --check` 통과. `npm run build`/`next build`는 지시 금지 명령이라 실행하지 않음.
