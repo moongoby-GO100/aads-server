@@ -2433,6 +2433,8 @@ async def _stream_codex_relay_once(
                     evt_type = event.get("type", "")
                     if evt_type == "assistant" and event.get("subtype") == "text":
                         yield {"type": "delta", "content": event.get("text", "")}
+                    elif evt_type == "thinking":
+                        yield {"type": "thinking", "thinking": event.get("thinking", "")}
                     elif evt_type == "tool_use":
                         yield {
                             "type": "tool_use",

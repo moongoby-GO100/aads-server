@@ -100,6 +100,41 @@ def test_codex_relay_cwd_falls_back_to_default(tmp_path, monkeypatch) -> None:
     assert relay._resolve_codex_cwd("KIS") == str(tmp_path)
 
 
+def test_codex_command_execution_is_not_emitted_as_bash_tool() -> None:
+    relay = _load_claude_relay_module()
+
+    started = relay._parse_codex_tool_event(
+        {
+            "type": "item.started",
+            "item": {
+                "id": "cmd-1",
+                "type": "command_execution",
+                "command": "git status --short",
+            },
+        },
+        session_id="session-1234",
+    )
+    completed = relay._parse_codex_tool_event(
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "cmd-1",
+                "type": "command_execution",
+                "exit_code": 0,
+                "aggregated_output": " M app/services/model_selector.py",
+            },
+        },
+        session_id="session-1234",
+    )
+
+    assert started["type"] == "thinking"
+    assert completed["type"] == "thinking"
+    assert started.get("tool_name") is None
+    assert completed.get("tool_name") is None
+    assert "bash" not in str(started).lower()
+    assert "unknown_tool" not in str(completed)
+
+
 def test_relay_tool_result_cancel_is_reclassified_to_session_scope() -> None:
     classified = _classify_relay_tool_result(
         "user cancelled MCP tool call",

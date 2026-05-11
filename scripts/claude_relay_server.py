@@ -794,7 +794,7 @@ def _parse_codex_tool_event(event, session_id=""):
     Codex 실제 스키마 (2026-04-17 실측):
       - item.started  + item.type=='mcp_tool_call'         → tool_use
       - item.completed + item.type=='mcp_tool_call'        → tool_result
-      - item.completed + item.type=='command_execution'    → tool_result (bash)
+      - item.started/completed + item.type=='command_execution' → thinking
       - item.completed + item.type=='function_call'        → tool_use (구버전 호환)
       - item.completed + item.type=='function_call_output' → tool_result (구버전 호환)
     """
@@ -863,23 +863,24 @@ def _parse_codex_tool_event(event, session_id=""):
             )
         return payload
 
-    # --- bash/shell 실행 시작 (command_execution) ---
+    # --- shell 실행 이벤트 ---
+    # Codex command_execution is already executed by Codex itself. It must not be
+    # replayed as an AADS tool_use, because AADS has no "bash" chat tool and the
+    # frontend/tool loop would surface unknown_tool:bash errors.
     if evt_type == "item.started" and item_type == "command_execution":
+        command = item.get("input", "") or item.get("command", "")
         return {
-            "type": "tool_use",
-            "tool_name": "bash",
-            "tool_use_id": item.get("id", ""),
-            "tool_input": {"command": item.get("input", "") or item.get("command", "")},
+            "type": "thinking",
+            "thinking": "[명령 실행 시작] %s" % str(command)[:240],
         }
 
-    # --- bash/shell 실행 완료 (command_execution) ---
     if evt_type == "item.completed" and item_type == "command_execution":
+        output = item.get("aggregated_output", "") or ""
+        exit_code = item.get("exit_code", 0)
+        status = "실패" if exit_code else "완료"
         return {
-            "type": "tool_result",
-            "tool_name": "bash",
-            "tool_use_id": item.get("id", ""),
-            "content": item.get("aggregated_output", "") or "",
-            "is_error": bool(item.get("exit_code", 0)),
+            "type": "thinking",
+            "thinking": "[명령 실행 %s] exit=%s output=%s" % (status, exit_code, str(output)[:500]),
         }
 
     # --- 구버전 호환 (function_call / function_call_output) ---
