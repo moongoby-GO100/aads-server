@@ -2436,16 +2436,35 @@ async def _stream_codex_relay_once(
                     elif evt_type == "thinking":
                         yield {"type": "thinking", "thinking": event.get("thinking", "")}
                     elif evt_type == "tool_use":
+                        tool_name = event.get("tool_name", "")
+                        if _is_internal_cli_command_tool(tool_name):
+                            command = event.get("tool_input", {}).get("command", "")
+                            yield {
+                                "type": "thinking",
+                                "thinking": "[명령 실행 관찰] %s" % str(command)[:240],
+                            }
+                            continue
                         yield {
                             "type": "tool_use",
-                            "tool_name": event.get("tool_name", ""),
+                            "tool_name": tool_name,
                             "tool_use_id": event.get("tool_use_id", ""),
                             "tool_input": event.get("tool_input", {}),
                         }
                     elif evt_type == "tool_result":
+                        tool_name = event.get("tool_name", "")
+                        if _is_internal_cli_command_tool(tool_name):
+                            status = "실패" if event.get("is_error") else "완료"
+                            yield {
+                                "type": "thinking",
+                                "thinking": "[명령 실행 %s] %s" % (
+                                    status,
+                                    str(event.get("content", ""))[:500],
+                                ),
+                            }
+                            continue
                         tool_event = {
                             "type": "tool_result",
-                            "tool_name": event.get("tool_name", ""),
+                            "tool_name": tool_name,
                             "tool_use_id": event.get("tool_use_id", ""),
                             "content": event.get("content", ""),
                             "is_error": bool(event.get("is_error")),
@@ -2974,6 +2993,20 @@ def _classify_relay_tool_result(
             ),
         }
     return {}
+
+
+def _is_internal_cli_command_tool(tool_name: Any) -> bool:
+    """Detect local shell execution events emitted by CLI relays.
+
+    These are observations about commands already run by the relay process, not
+    AADS chat tools. Passing them through as tool_use makes the chat tool loop
+    try to execute a non-existent "bash" tool.
+    """
+    return str(tool_name or "").strip().lower() in {
+        "bash",
+        "shell",
+        "command_execution",
+    }
 
 
 def _map_cli_event(event: dict, session_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:

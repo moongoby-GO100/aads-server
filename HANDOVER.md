@@ -1,6 +1,12 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-11)
+- **Codex `unknown_tool: bash` 재발 방어 (2026-05-11 12:00 KST)**:
+  - 증상: Codex CLI `command_execution` 이벤트가 AADS 채팅 도구 이벤트 `tool_use: bash`로 노출되어 CEO 화면에 `unknown_tool: bash` 결과가 반복 출력됐다.
+  - 원인: `74c73a6`에서 릴레이 변환 코드는 수정됐으나, `claude-relay.service`는 2026-05-06 16:51 KST부터 계속 실행 중이라 새 코드가 로드되지 않았다. 또한 API 수신부에 구버전 릴레이 이벤트를 막는 2차 방어가 없었다.
+  - 조치: `app/services/model_selector.py`에 `_is_internal_cli_command_tool()`을 추가하고 Codex relay에서 `bash`, `shell`, `command_execution` tool event를 `thinking` observation으로 변환하도록 보강했다.
+  - 검증: `python3 -m py_compile app/services/model_selector.py scripts/claude_relay_server.py` 통과, `pytest -q tests/unit/test_relay_diagnostics.py tests/unit/test_chat_service.py::test_keyword_fallback_routes_only_explicit_discussion_queries tests/unit/test_chat_service.py::test_broad_tool_group_excludes_run_debate` 12 passed.
+  - 운영 반영: `scripts/reload-api.sh` hot reload 완료(`2026-05-11 12:00:36 KST`, 재로드 67개). `claude-relay.service` 본체는 현재 생성 중인 세션을 끊을 수 있어 별도 재시작 필요.
 - **114 Codex OAuth `refresh_token_reused` 재발 대응 (2026-05-11 11:53~12:00 KST)**:
   - 실측: 68/211은 `codex exec --skip-git-repo-check ... gpt-5.5` 최소 호출이 성공했지만, 114는 `refresh_token_reused` 및 `token_expired` 401로 실패했다.
   - 원인: 114의 `/root/.codex/auth.json`이 존재하고 `codex login status`도 `Logged in`으로 나오지만, 실제 access token refresh 단계에서 이미 사용된 refresh token으로 판정된다. 2026-05-05에도 같은 유형으로 “auth 파일 존재 여부가 아니라 실제 `codex exec` 성공 여부로 판단해야 한다”는 이력이 있었다.

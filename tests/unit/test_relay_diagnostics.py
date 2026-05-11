@@ -6,6 +6,7 @@ import types
 from pathlib import Path
 
 from app.services.model_selector import _classify_relay_tool_result
+from app.services.model_selector import _is_internal_cli_command_tool
 from app.services.model_selector import _normalize_codex_project as _normalize_model_selector_codex_project
 from app.services.pipeline_runner_client import (
     get_pipeline_runner_api_url,
@@ -133,6 +134,13 @@ def test_codex_command_execution_is_not_emitted_as_bash_tool() -> None:
     assert completed.get("tool_name") is None
     assert "bash" not in str(started).lower()
     assert "unknown_tool" not in str(completed)
+
+
+def test_model_selector_filters_internal_cli_command_tool_names() -> None:
+    assert _is_internal_cli_command_tool("bash") is True
+    assert _is_internal_cli_command_tool(" shell ") is True
+    assert _is_internal_cli_command_tool("command_execution") is True
+    assert _is_internal_cli_command_tool("pipeline_runner_status") is False
 
 
 def test_relay_tool_result_cancel_is_reclassified_to_session_scope() -> None:
