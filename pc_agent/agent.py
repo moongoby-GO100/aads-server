@@ -124,6 +124,28 @@ def _get_persistent_agent_id() -> str:
     return new_id
 
 
+def _is_truthy(value: str) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _collect_capabilities() -> list[str]:
+    caps = {"pc_control"}
+    if "browser_launch" in COMMAND_HANDLERS:
+        caps.update({"chrome_cdp", "interactive_browser"})
+
+    extra_caps = os.getenv("AADS_PC_AGENT_CAPABILITIES", "")
+    if extra_caps:
+        for item in extra_caps.split(","):
+            norm = item.strip().lower().replace("-", "_")
+            if norm:
+                caps.add(norm)
+
+    if _is_truthy(os.getenv("AADS_PC_AGENT_ENABLE_VVIC", "")):
+        caps.add("vvic")
+
+    return sorted(caps)
+
+
 class PCAgent:
     """PC 제어 에이전트 클라이언트."""
 
@@ -178,6 +200,8 @@ class PCAgent:
                     "payload": {
                         "hostname": self.hostname,
                         "os_info": self.os_info,
+                        "capabilities": _collect_capabilities(),
+                        "command_types": sorted(COMMAND_HANDLERS.keys()),
                     },
                 }))
 

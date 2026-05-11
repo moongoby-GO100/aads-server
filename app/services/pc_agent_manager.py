@@ -11,8 +11,10 @@ import os
 import subprocess
 import tempfile
 import uuid
-from datetime import datetime
-from typing import Any, Dict, Optional, Set
+from collections import deque
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Any, Deque, Dict, Optional, Set
 
 from fastapi import WebSocket
 
@@ -53,6 +55,63 @@ _ANDROID_DEVICE_INFO_PROPS = {
     "sdk_int": "ro.build.version.sdk",
 }
 
+_ERROR_PC_AGENT_OFFLINE = "PC_AGENT_OFFLINE"
+_ERROR_NO_CAPABLE_AGENT = "NO_CAPABLE_AGENT"
+_ERROR_AGENT_BUSY = "AGENT_BUSY"
+_ERROR_LEASE_EXPIRED = "LEASE_EXPIRED"
+_ERROR_CDP_NOT_READY = "CDP_NOT_READY"
+_ERROR_VVIC_LOGIN_REQUIRED = "VVIC_LOGIN_REQUIRED"
+_ERROR_VVIC_BLOCKED = "VVIC_BLOCKED"
+_ERROR_COMMAND_TIMEOUT = "COMMAND_TIMEOUT"
+_KNOWN_ROUTING_ERRORS = frozenset({
+    _ERROR_PC_AGENT_OFFLINE,
+    _ERROR_NO_CAPABLE_AGENT,
+    _ERROR_AGENT_BUSY,
+    _ERROR_LEASE_EXPIRED,
+    _ERROR_CDP_NOT_READY,
+    _ERROR_VVIC_LOGIN_REQUIRED,
+    _ERROR_VVIC_BLOCKED,
+    _ERROR_COMMAND_TIMEOUT,
+})
+_VVIC_JOB_TYPES = frozenset({"vvic", "vvic_cdp", "vvic_scrape"})
+_DEFAULT_MAX_CONCURRENCY_BY_JOB = {"vvic_cdp": 1, "vvic": 1, "vvic_scrape": 1}
+
+
+@dataclass
+class _LeaseRecord:
+    lease_id: str
+    agent_id: str
+    job_type: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    expires_at: datetime
+    queue_position: int = 0
+    command_type: str = ""
+    required_capabilities: tuple[str, ...] = ()
+    ttl_seconds: int = 180
+    error_code: str = ""
+    error_message: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def public_dict(self) -> dict[str, Any]:
+        return {
+            "lease_id": self.lease_id,
+            "agent_id": self.agent_id,
+            "job_type": self.job_type,
+            "status": self.status,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+            "expires_at": self.expires_at.isoformat(),
+            "queue_position": self.queue_position,
+            "command_type": self.command_type,
+            "required_capabilities": list(self.required_capabilities),
+            "ttl_seconds": self.ttl_seconds,
+            "error_code": self.error_code or None,
+            "error_message": self.error_message or None,
+            "metadata": dict(self.metadata or {}),
+        }
+
 
 class _AgentConnection:
     """에이전트 WebSocket 연결 + 메타데이터."""
@@ -71,6 +130,16 @@ class PCAgentManager:
         self._pending_commands: Dict[str, asyncio.Event] = {}
         self._results: Dict[str, CommandResult] = {}
         self._streaming_subscribers: Dict[str, Set[WebSocket]] = {}  # agent_id → 대시보드 WS
+        self._heartbeat_timeout_seconds = int(os.getenv("PC_AGENT_HEARTBEAT_TIMEOUT_SECONDS", "90") or "90")
+        self._lease_default_ttl_seconds = int(os.getenv("PC_AGENT_LEASE_TTL_SECONDS", "180") or "180")
+        self._lease_max_history = int(os.getenv("PC_AGENT_LEASE_HISTORY_MAX", "200") or "200")
+        self._default_max_concurrency = int(os.getenv("PC_AGENT_DEFAULT_MAX_CONCURRENCY", "4") or "4")
+        self._job_max_concurrency: Dict[str, int] = dict(_DEFAULT_MAX_CONCURRENCY_BY_JOB)
+        self._lease_lock = asyncio.Lock()
+        self._leases: Dict[str, _LeaseRecord] = {}
+        self._lease_events: Dict[str, asyncio.Event] = {}
+        self._lease_queues: Dict[tuple[str, str], Deque[str]] = {}
+        self._running_leases: Dict[tuple[str, str], set[str]] = {}
 
     # ── 에이전트 등록/해제 ──────────────────────────────────────────
 
@@ -78,13 +147,25 @@ class PCAgentManager:
         self, agent_id: str, websocket: WebSocket, info: Dict[str, Any]
     ) -> AgentInfo:
         """에이전트 등록."""
+        capabilities = self._normalize_capabilities(info.get("capabilities"))
+        command_types = info.get("command_types")
+        if isinstance(command_types, list):
+            command_type_set = {str(item).strip().lower() for item in command_types if str(item).strip()}
+            if "browser_launch" in command_type_set:
+                capabilities.update({"chrome_cdp", "interactive_browser"})
         agent_info = AgentInfo(
             agent_id=agent_id,
             hostname=info.get("hostname", ""),
             os_info=info.get("os_info", ""),
+            capabilities=sorted(capabilities),
         )
         self._agents[agent_id] = _AgentConnection(agent_id, websocket, agent_info)
-        logger.info("pc_agent_registered agent_id=%s hostname=%s", agent_id, agent_info.hostname)
+        logger.info(
+            "pc_agent_registered agent_id=%s hostname=%s capabilities=%s",
+            agent_id,
+            agent_info.hostname,
+            ",".join(agent_info.capabilities),
+        )
         return agent_info
 
     def unregister_agent(self, agent_id: str, websocket: WebSocket | None = None) -> bool:
@@ -101,6 +182,11 @@ class PCAgentManager:
             logger.info("pc_agent_unregister_skipped_stale agent_id=%s", agent_id)
             return False
         del self._agents[agent_id]
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._expire_agent_leases(agent_id, "agent websocket disconnected"))
+        except RuntimeError:
+            pass
         logger.info("pc_agent_unregistered agent_id=%s", agent_id)
         return True
 
@@ -288,6 +374,617 @@ class PCAgentManager:
 
     def connected_count(self) -> int:
         return len(self._agents)
+
+    # ── Routing / Lease / Queue ───────────────────────────────────────
+
+    def _now(self) -> datetime:
+        return datetime.utcnow()
+
+    def _normalize_capabilities(self, value: Any) -> set[str]:
+        if not isinstance(value, (list, tuple, set)):
+            return set()
+        normalized: set[str] = set()
+        for raw in value:
+            cap = str(raw or "").strip().lower().replace("-", "_")
+            if cap:
+                normalized.add(cap)
+        return normalized
+
+    def _normalize_job_type(self, value: str) -> str:
+        job_type = str(value or "general").strip().lower().replace("-", "_")
+        return job_type or "general"
+
+    def _normalize_error_code(self, value: str) -> str:
+        code = str(value or "").strip().upper()
+        return code if code in _KNOWN_ROUTING_ERRORS else ""
+
+    def _is_online_locked(self, agent_id: str, now: datetime | None = None) -> bool:
+        conn = self._agents.get(agent_id)
+        if conn is None:
+            return False
+        ts = now or self._now()
+        delta = (ts - conn.info.last_heartbeat).total_seconds()
+        return delta <= self._heartbeat_timeout_seconds
+
+    def _max_concurrency_for_job(self, job_type: str) -> int:
+        return max(1, int(self._job_max_concurrency.get(job_type, self._default_max_concurrency)))
+
+    def _lease_key(self, agent_id: str, job_type: str) -> tuple[str, str]:
+        return (agent_id, job_type)
+
+    def _queue_for_key_locked(self, key: tuple[str, str]) -> Deque[str]:
+        queue = self._lease_queues.get(key)
+        if queue is None:
+            queue = deque()
+            self._lease_queues[key] = queue
+        return queue
+
+    def _running_for_key_locked(self, key: tuple[str, str]) -> set[str]:
+        running = self._running_leases.get(key)
+        if running is None:
+            running = set()
+            self._running_leases[key] = running
+        return running
+
+    def _remove_from_queue_locked(self, key: tuple[str, str], lease_id: str) -> None:
+        queue = self._lease_queues.get(key)
+        if not queue:
+            return
+        filtered = deque(item for item in queue if item != lease_id)
+        if filtered:
+            self._lease_queues[key] = filtered
+        else:
+            self._lease_queues.pop(key, None)
+
+    def _refresh_queue_positions_locked(self, key: tuple[str, str]) -> None:
+        queue = self._lease_queues.get(key)
+        if not queue:
+            return
+        for idx, lease_id in enumerate(queue):
+            lease = self._leases.get(lease_id)
+            if lease and lease.status == "queued":
+                lease.queue_position = idx + 1
+
+    def _finalize_lease_locked(
+        self,
+        lease: _LeaseRecord,
+        *,
+        status: str,
+        now: datetime,
+        error_code: str = "",
+        error_message: str = "",
+    ) -> None:
+        key = self._lease_key(lease.agent_id, lease.job_type)
+        self._running_for_key_locked(key).discard(lease.lease_id)
+        self._remove_from_queue_locked(key, lease.lease_id)
+        if not self._running_leases.get(key):
+            self._running_leases.pop(key, None)
+        if not self._lease_queues.get(key):
+            self._lease_queues.pop(key, None)
+        lease.status = status
+        lease.updated_at = now
+        lease.expires_at = now
+        lease.error_code = self._normalize_error_code(error_code)
+        lease.error_message = error_message or lease.error_message
+        lease.queue_position = 0
+        event = self._lease_events.get(lease.lease_id)
+        if event:
+            event.set()
+
+    def _promote_next_locked(self, key: tuple[str, str], now: datetime) -> None:
+        queue = self._lease_queues.get(key)
+        if not queue:
+            return
+        running = self._running_for_key_locked(key)
+        max_concurrency = self._max_concurrency_for_job(key[1])
+        while queue and len(running) < max_concurrency:
+            lease_id = queue.popleft()
+            lease = self._leases.get(lease_id)
+            if lease is None:
+                continue
+            if lease.status != "queued":
+                continue
+            if lease.expires_at <= now:
+                self._finalize_lease_locked(
+                    lease,
+                    status="expired",
+                    now=now,
+                    error_code=_ERROR_LEASE_EXPIRED,
+                    error_message="lease expired before execution",
+                )
+                continue
+            lease.status = "running"
+            lease.queue_position = 0
+            lease.updated_at = now
+            lease.expires_at = now + timedelta(seconds=lease.ttl_seconds)
+            running.add(lease.lease_id)
+            event = self._lease_events.get(lease.lease_id)
+            if event:
+                event.set()
+        if queue:
+            self._lease_queues[key] = queue
+            self._refresh_queue_positions_locked(key)
+        else:
+            self._lease_queues.pop(key, None)
+
+    def _cleanup_stale_leases_locked(self, now: datetime) -> None:
+        affected_keys: set[tuple[str, str]] = set()
+        for lease in list(self._leases.values()):
+            if lease.status not in {"running", "queued"}:
+                continue
+            if lease.expires_at > now:
+                continue
+            self._finalize_lease_locked(
+                lease,
+                status="expired",
+                now=now,
+                error_code=_ERROR_LEASE_EXPIRED,
+                error_message="lease stale timeout",
+            )
+            affected_keys.add(self._lease_key(lease.agent_id, lease.job_type))
+
+        for key in affected_keys:
+            self._promote_next_locked(key, now)
+
+        finalized = [
+            lease
+            for lease in self._leases.values()
+            if lease.status in {"completed", "error", "expired", "cancelled"}
+        ]
+        if len(finalized) <= self._lease_max_history:
+            return
+        finalized.sort(key=lambda item: item.updated_at)
+        for lease in finalized[: len(finalized) - self._lease_max_history]:
+            self._leases.pop(lease.lease_id, None)
+            self._lease_events.pop(lease.lease_id, None)
+
+    def _select_agent_locked(
+        self,
+        *,
+        preferred_agent_id: str,
+        required_capabilities: set[str],
+        job_type: str,
+        now: datetime,
+    ) -> dict[str, Any]:
+        preferred = str(preferred_agent_id or "").strip()
+
+        if preferred:
+            conn = self._agents.get(preferred)
+            if conn is None or not self._is_online_locked(preferred, now):
+                return {
+                    "error_code": _ERROR_PC_AGENT_OFFLINE,
+                    "message": f"agent '{preferred}' is offline",
+                }
+            capabilities = {cap.lower() for cap in conn.info.capabilities}
+            missing = sorted(required_capabilities - capabilities)
+            if missing:
+                return {
+                    "error_code": _ERROR_NO_CAPABLE_AGENT,
+                    "message": f"agent '{preferred}' missing capabilities: {', '.join(missing)}",
+                    "missing_capabilities": missing,
+                }
+            return {"agent_id": preferred}
+
+        online_agents = [
+            conn
+            for conn in self._agents.values()
+            if self._is_online_locked(conn.agent_id, now)
+        ]
+        if not online_agents:
+            return {
+                "error_code": _ERROR_PC_AGENT_OFFLINE,
+                "message": "no online PC agent",
+            }
+
+        capable: list[_AgentConnection] = []
+        for conn in online_agents:
+            caps = {cap.lower() for cap in conn.info.capabilities}
+            if required_capabilities.issubset(caps):
+                capable.append(conn)
+        if not capable:
+            return {
+                "error_code": _ERROR_NO_CAPABLE_AGENT,
+                "message": "no capable PC agent for requested capabilities",
+                "required_capabilities": sorted(required_capabilities),
+            }
+
+        def _score(conn: _AgentConnection) -> tuple[int, int, float]:
+            key = self._lease_key(conn.agent_id, job_type)
+            running = len(self._running_leases.get(key, set()))
+            queued = len(self._lease_queues.get(key, deque()))
+            heartbeat_age = (now - conn.info.last_heartbeat).total_seconds()
+            return (running, queued, heartbeat_age)
+
+        chosen = min(capable, key=_score)
+        return {"agent_id": chosen.agent_id}
+
+    def _map_error_code_from_result(self, result: CommandResult) -> str:
+        payload = result.result if isinstance(result.result, dict) else {}
+        explicit = self._normalize_error_code(str(payload.get("error_code", "")))
+        if explicit:
+            return explicit
+
+        message = str(payload.get("error", "") or payload.get("message", "")).lower()
+        if "cdp_not_ready" in message or ("cdp" in message and "ready" in message):
+            return _ERROR_CDP_NOT_READY
+        if "login required" in message or "vvic_login_required" in message or "로그인" in message:
+            return _ERROR_VVIC_LOGIN_REQUIRED
+        if "blocked" in message or "captcha" in message or "vvic_blocked" in message or "차단" in message:
+            return _ERROR_VVIC_BLOCKED
+        return ""
+
+    def _prepare_vvic_browser_launch_params(self, params: Dict[str, Any], lease_id: str) -> Dict[str, Any]:
+        merged = dict(params or {})
+        merged.setdefault("isolated_profile", True)
+        merged.setdefault("isolation_id", lease_id)
+        merged.setdefault("dynamic_port", True)
+        merged.setdefault("preferred_port", 9222)
+        merged.setdefault("port_candidates", [9222, 9333, 9444, 9555, 9666, 9777])
+        merged.setdefault("require_cdp_ready", True)
+        merged.setdefault("new_window", True)
+        return merged
+
+    async def acquire_lease(
+        self,
+        *,
+        job_type: str,
+        command_type: str,
+        preferred_agent_id: str = "",
+        required_capabilities: list[str] | None = None,
+        ttl_seconds: int | None = None,
+    ) -> dict[str, Any]:
+        normalized_job = self._normalize_job_type(job_type)
+        required = self._normalize_capabilities(required_capabilities or [])
+        if normalized_job in _VVIC_JOB_TYPES:
+            required.update({"vvic", "chrome_cdp", "interactive_browser"})
+            normalized_job = "vvic_cdp"
+
+        async with self._lease_lock:
+            now = self._now()
+            self._cleanup_stale_leases_locked(now)
+
+            selected = self._select_agent_locked(
+                preferred_agent_id=preferred_agent_id,
+                required_capabilities=required,
+                job_type=normalized_job,
+                now=now,
+            )
+            selected_agent_id = str(selected.get("agent_id", "") or "")
+            if not selected_agent_id:
+                return {
+                    "status": "error",
+                    "error_code": selected.get("error_code", _ERROR_NO_CAPABLE_AGENT),
+                    "message": selected.get("message", "agent selection failed"),
+                    "required_capabilities": sorted(required),
+                }
+
+            key = self._lease_key(selected_agent_id, normalized_job)
+            running = self._running_for_key_locked(key)
+            max_concurrency = self._max_concurrency_for_job(normalized_job)
+            ttl = max(int(ttl_seconds or self._lease_default_ttl_seconds), 30)
+            lease_id = str(uuid.uuid4())
+            status = "running" if len(running) < max_concurrency else "queued"
+
+            lease = _LeaseRecord(
+                lease_id=lease_id,
+                agent_id=selected_agent_id,
+                job_type=normalized_job,
+                status=status,
+                created_at=now,
+                updated_at=now,
+                expires_at=now + timedelta(seconds=ttl),
+                command_type=command_type,
+                required_capabilities=tuple(sorted(required)),
+                ttl_seconds=ttl,
+            )
+            self._leases[lease_id] = lease
+            self._lease_events[lease_id] = asyncio.Event()
+
+            if status == "running":
+                running.add(lease_id)
+            else:
+                queue = self._queue_for_key_locked(key)
+                queue.append(lease_id)
+                lease.queue_position = len(queue)
+
+            logger.info(
+                "pc_agent_lease_acquired lease_id=%s agent_id=%s job_type=%s status=%s queue=%d",
+                lease_id,
+                selected_agent_id,
+                normalized_job,
+                status,
+                lease.queue_position,
+            )
+            payload = lease.public_dict()
+            payload["max_concurrency"] = max_concurrency
+            return {"status": status, "lease": payload}
+
+    async def wait_for_lease_turn(self, lease_id: str, timeout_seconds: float) -> dict[str, Any]:
+        deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 0.1)
+        while True:
+            event: asyncio.Event | None = None
+            async with self._lease_lock:
+                now = self._now()
+                self._cleanup_stale_leases_locked(now)
+                lease = self._leases.get(lease_id)
+                if lease is None:
+                    return {
+                        "status": "error",
+                        "error_code": _ERROR_LEASE_EXPIRED,
+                        "message": "lease not found",
+                    }
+                if lease.status == "running":
+                    return {"status": "running", "lease": lease.public_dict()}
+                if lease.status in {"expired", "cancelled", "error", "completed"}:
+                    return {
+                        "status": "error",
+                        "error_code": lease.error_code or _ERROR_LEASE_EXPIRED,
+                        "message": lease.error_message or f"lease status={lease.status}",
+                        "lease": lease.public_dict(),
+                    }
+                event = self._lease_events.get(lease_id)
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    self._finalize_lease_locked(
+                        lease,
+                        status="expired",
+                        now=now,
+                        error_code=_ERROR_AGENT_BUSY,
+                        error_message="queue wait timeout",
+                    )
+                    self._promote_next_locked(self._lease_key(lease.agent_id, lease.job_type), now)
+                    return {
+                        "status": "error",
+                        "error_code": _ERROR_AGENT_BUSY,
+                        "message": "queue wait timeout",
+                        "lease": lease.public_dict(),
+                    }
+
+            if event is None:
+                await asyncio.sleep(0.1)
+                continue
+            remaining = max(0.1, deadline - asyncio.get_running_loop().time())
+            try:
+                await asyncio.wait_for(event.wait(), timeout=min(1.0, remaining))
+            except asyncio.TimeoutError:
+                continue
+            event.clear()
+
+    async def heartbeat_lease(self, lease_id: str, *, extend_seconds: int | None = None) -> dict[str, Any]:
+        async with self._lease_lock:
+            now = self._now()
+            self._cleanup_stale_leases_locked(now)
+            lease = self._leases.get(lease_id)
+            if lease is None:
+                return {
+                    "status": "error",
+                    "error_code": _ERROR_LEASE_EXPIRED,
+                    "message": "lease not found",
+                }
+            if lease.status not in {"running", "queued"}:
+                return {
+                    "status": "error",
+                    "error_code": lease.error_code or _ERROR_LEASE_EXPIRED,
+                    "message": lease.error_message or f"lease status={lease.status}",
+                    "lease": lease.public_dict(),
+                }
+            ttl = max(int(extend_seconds or lease.ttl_seconds), 30)
+            lease.ttl_seconds = ttl
+            lease.updated_at = now
+            lease.expires_at = now + timedelta(seconds=ttl)
+            return {"status": "ok", "lease": lease.public_dict()}
+
+    async def release_lease(
+        self,
+        lease_id: str,
+        *,
+        status: str = "completed",
+        error_code: str = "",
+        error_message: str = "",
+    ) -> dict[str, Any]:
+        async with self._lease_lock:
+            now = self._now()
+            self._cleanup_stale_leases_locked(now)
+            lease = self._leases.get(lease_id)
+            if lease is None:
+                return {
+                    "status": "error",
+                    "error_code": _ERROR_LEASE_EXPIRED,
+                    "message": "lease not found",
+                }
+            if lease.status in {"completed", "expired", "cancelled", "error"}:
+                return {"status": lease.status, "lease": lease.public_dict()}
+            final_status = status if status in {"completed", "expired", "cancelled", "error"} else "completed"
+            self._finalize_lease_locked(
+                lease,
+                status=final_status,
+                now=now,
+                error_code=error_code,
+                error_message=error_message,
+            )
+            self._promote_next_locked(self._lease_key(lease.agent_id, lease.job_type), now)
+            logger.info(
+                "pc_agent_lease_released lease_id=%s status=%s error_code=%s",
+                lease_id,
+                final_status,
+                error_code,
+            )
+            return {"status": final_status, "lease": lease.public_dict()}
+
+    async def list_leases(
+        self,
+        *,
+        agent_id: str = "",
+        job_type: str = "",
+        status: str = "",
+    ) -> list[dict[str, Any]]:
+        normalized_job = self._normalize_job_type(job_type) if job_type else ""
+        status_filter = str(status or "").strip().lower()
+        async with self._lease_lock:
+            now = self._now()
+            self._cleanup_stale_leases_locked(now)
+            items: list[_LeaseRecord] = list(self._leases.values())
+            if agent_id:
+                items = [item for item in items if item.agent_id == agent_id]
+            if normalized_job:
+                items = [item for item in items if item.job_type == normalized_job]
+            if status_filter:
+                items = [item for item in items if item.status == status_filter]
+            items.sort(key=lambda item: item.created_at, reverse=True)
+            return [item.public_dict() for item in items]
+
+    async def get_lease(self, lease_id: str) -> dict[str, Any] | None:
+        async with self._lease_lock:
+            now = self._now()
+            self._cleanup_stale_leases_locked(now)
+            lease = self._leases.get(lease_id)
+            return lease.public_dict() if lease else None
+
+    async def _expire_agent_leases(self, agent_id: str, reason: str) -> None:
+        async with self._lease_lock:
+            now = self._now()
+            affected: set[tuple[str, str]] = set()
+            for lease in self._leases.values():
+                if lease.agent_id != agent_id:
+                    continue
+                if lease.status not in {"running", "queued"}:
+                    continue
+                self._finalize_lease_locked(
+                    lease,
+                    status="expired",
+                    now=now,
+                    error_code=_ERROR_PC_AGENT_OFFLINE,
+                    error_message=reason,
+                )
+                affected.add(self._lease_key(lease.agent_id, lease.job_type))
+            for key in affected:
+                self._promote_next_locked(key, now)
+
+    async def execute_routed_command(
+        self,
+        *,
+        command_type: str,
+        params: Dict[str, Any] | None = None,
+        agent_id: str = "",
+        job_type: str = "general",
+        required_capabilities: list[str] | None = None,
+        queue_if_busy: bool = True,
+        wait_for_turn: bool = True,
+        queue_wait_timeout_seconds: float = 120.0,
+        lease_ttl_seconds: int = 180,
+        command_timeout_seconds: float = 120.0,
+    ) -> dict[str, Any]:
+        request_params: Dict[str, Any] = dict(params or {})
+        lease_response = await self.acquire_lease(
+            job_type=job_type,
+            command_type=command_type,
+            preferred_agent_id=agent_id,
+            required_capabilities=required_capabilities,
+            ttl_seconds=lease_ttl_seconds,
+        )
+        if lease_response.get("status") == "error":
+            return lease_response
+
+        lease_payload = lease_response.get("lease", {})
+        lease_id = str(lease_payload.get("lease_id", "") or "")
+        lease_status = str(lease_response.get("status", "queued"))
+
+        if lease_status == "queued" and not queue_if_busy:
+            await self.release_lease(
+                lease_id,
+                status="cancelled",
+                error_code=_ERROR_AGENT_BUSY,
+                error_message="agent busy",
+            )
+            updated = await self.get_lease(lease_id)
+            return {
+                "status": "error",
+                "error_code": _ERROR_AGENT_BUSY,
+                "message": "agent busy",
+                "lease": updated or lease_payload,
+            }
+
+        if lease_status == "queued" and wait_for_turn:
+            wait_result = await self.wait_for_lease_turn(lease_id, timeout_seconds=queue_wait_timeout_seconds)
+            if wait_result.get("status") == "error":
+                return wait_result
+            lease_payload = wait_result.get("lease", lease_payload)
+        elif lease_status == "queued":
+            return {
+                "status": "queued",
+                "lease": lease_payload,
+                "message": "queued behind running lease",
+            }
+
+        final_job_type = str(lease_payload.get("job_type", "") or "")
+        if final_job_type in _VVIC_JOB_TYPES and command_type == "browser_launch":
+            request_params = self._prepare_vvic_browser_launch_params(request_params, lease_id)
+
+        await self.heartbeat_lease(lease_id, extend_seconds=max(lease_ttl_seconds, int(command_timeout_seconds) + 30))
+        selected_agent_id = str(lease_payload.get("agent_id", "") or "")
+        try:
+            command_id = await self.send_command(selected_agent_id, command_type, request_params)
+        except ValueError:
+            await self.release_lease(
+                lease_id,
+                status="expired",
+                error_code=_ERROR_PC_AGENT_OFFLINE,
+                error_message="agent disconnected before command dispatch",
+            )
+            refreshed = await self.get_lease(lease_id)
+            return {
+                "status": "error",
+                "error_code": _ERROR_PC_AGENT_OFFLINE,
+                "message": "agent disconnected before command dispatch",
+                "lease": refreshed or lease_payload,
+            }
+
+        command_result = await self.get_result(command_id, timeout=command_timeout_seconds)
+        lease_for_return = await self.get_lease(lease_id)
+
+        if command_result.status == "timeout":
+            await self.release_lease(
+                lease_id,
+                status="error",
+                error_code=_ERROR_COMMAND_TIMEOUT,
+                error_message="command timeout",
+            )
+            refreshed = await self.get_lease(lease_id)
+            return {
+                "status": "error",
+                "error_code": _ERROR_COMMAND_TIMEOUT,
+                "message": "command timeout",
+                "command_id": command_id,
+                "lease": refreshed or lease_for_return or lease_payload,
+                "result": command_result.model_dump(mode="json"),
+            }
+
+        if command_result.status == "error":
+            mapped_error = self._map_error_code_from_result(command_result)
+            await self.release_lease(
+                lease_id,
+                status="error",
+                error_code=mapped_error,
+                error_message=str((command_result.result or {}).get("error", "command failed")),
+            )
+            refreshed = await self.get_lease(lease_id)
+            return {
+                "status": "error",
+                "error_code": mapped_error or None,
+                "message": str((command_result.result or {}).get("error", "command failed")),
+                "command_id": command_id,
+                "lease": refreshed or lease_for_return or lease_payload,
+                "result": command_result.model_dump(mode="json"),
+            }
+
+        await self.release_lease(lease_id, status="completed")
+        refreshed = await self.get_lease(lease_id)
+        return {
+            "status": "success",
+            "command_id": command_id,
+            "lease": refreshed or lease_for_return or lease_payload,
+            "result": command_result.model_dump(mode="json"),
+        }
 
     # ── Android device_command ───────────────────────────────────────
 

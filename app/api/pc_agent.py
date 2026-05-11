@@ -14,7 +14,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
-from app.models.pc_agent import CommandRequest, StreamConfig, WSMessage
+from app.models.pc_agent import CommandRequest, RoutedCommandRequest, StreamConfig, WSMessage
 from app.services.pc_agent_manager import pc_agent_manager
 
 logger = logging.getLogger(__name__)
@@ -430,6 +430,70 @@ async def execute_command(req: CommandRequest):
         raise HTTPException(status_code=400, detail=str(exc))
 
     return {"command_id": command_id, "status": "pending"}
+
+
+@router.post("/pc-agent/route-execute")
+async def route_execute_command(req: RoutedCommandRequest):
+    """Capability 기반 라우팅 + lease/queue 제어로 명령 실행."""
+    result = await pc_agent_manager.execute_routed_command(
+        command_type=req.command_type,
+        params=req.params,
+        agent_id=req.agent_id,
+        job_type=req.job_type,
+        required_capabilities=req.required_capabilities,
+        queue_if_busy=req.queue_if_busy,
+        wait_for_turn=req.wait_for_turn,
+        queue_wait_timeout_seconds=req.queue_wait_timeout_seconds,
+        lease_ttl_seconds=req.lease_ttl_seconds,
+        command_timeout_seconds=req.command_timeout_seconds,
+    )
+    if result.get("status") == "error":
+        error_code = str(result.get("error_code", "") or "")
+        status_code = 409 if error_code in {"AGENT_BUSY", "LEASE_EXPIRED"} else 503
+        if error_code in {"NO_CAPABLE_AGENT"}:
+            status_code = 422
+        if error_code in {"COMMAND_TIMEOUT"}:
+            status_code = 504
+        if error_code in {"CDP_NOT_READY", "VVIC_LOGIN_REQUIRED", "VVIC_BLOCKED"}:
+            status_code = 424
+        raise HTTPException(status_code=status_code, detail=result)
+    return result
+
+
+@router.get("/pc-agent/leases")
+async def list_pc_agent_leases(
+    agent_id: str = Query(""),
+    job_type: str = Query(""),
+    status: str = Query(""),
+):
+    """현재 lease/queue 상태 조회."""
+    leases = await pc_agent_manager.list_leases(
+        agent_id=agent_id,
+        job_type=job_type,
+        status=status,
+    )
+    return {"leases": leases, "count": len(leases)}
+
+
+@router.get("/pc-agent/leases/{lease_id}")
+async def get_pc_agent_lease(lease_id: str):
+    """특정 lease 상태 조회."""
+    lease = await pc_agent_manager.get_lease(lease_id)
+    if lease is None:
+        raise HTTPException(status_code=404, detail={"error_code": "LEASE_EXPIRED", "message": "lease not found"})
+    return {"lease": lease}
+
+
+@router.post("/pc-agent/leases/{lease_id}/heartbeat")
+async def heartbeat_pc_agent_lease(
+    lease_id: str,
+    extend_seconds: int = Query(180, ge=30, le=1800),
+):
+    """진행 중 lease heartbeat/만료 연장."""
+    result = await pc_agent_manager.heartbeat_lease(lease_id, extend_seconds=extend_seconds)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=404, detail=result)
+    return result
 
 
 @router.get("/pc-agent/result/{command_id}")

@@ -1,6 +1,12 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-11)
+- **PC Agent VVIC 라우팅/락/큐 직접 패치 (2026-05-11 14:57~KST)**:
+  - `runner-2db6f7fa`가 `claude_code_work` 진입 후 5분 이상 로그 0건/diff 0건으로 정체되어 강제 종료했다.
+  - 직접 조치: `app/services/pc_agent_manager.py`에 capability 기반 agent 선택, per-agent/per-job lease, queue wait, stale lease 회수, routed command 실행 API 기반을 추가했다.
+  - 직접 조치: `app/api/pc_agent.py`에 `POST /api/v1/pc-agent/route/execute`, `GET /api/v1/pc-agent/leases`를 추가하고 health 응답에 capabilities/leases를 노출했다.
+  - 직접 조치: `pc_agent/agent.py`가 COMMAND_HANDLERS 기반 capabilities를 등록 payload로 전송하고, `pc_agent/commands/browser_auto.py`의 `browser_launch`는 `dedicated=true`/`port=0`에서 전용 프로필과 동적 CDP 포트를 사용하며 `/json/version` 준비를 확인한다.
+  - 후속: NTV2 Bridge는 `/api/v1/pc-agent/route/execute` 계약에 맞춰 `job_type=vvic`, `required_capabilities=["vvic","chrome_cdp"]`, `browser_launch` params `dedicated=true`, `port=0`로 연동해야 한다.
 - **Pipeline Runner Task Board 상태 표시 개선 (2026-05-11 14:20~14:25 KST)**:
   - 운영 DB 실측: `queued`는 0건이고, terminal 분류는 `blocked_dependency` 2건, `dedup_blocked` 2건, `no_changes` 2건, `done` 354건, `error` 4건이다.
   - `app/api/admin.py`: `/admin/tasks/stats`가 `no_changes`, `dedup_blocked`, `blocked_dependency` 카운트를 별도 반환하도록 보강했다.

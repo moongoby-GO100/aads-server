@@ -3130,35 +3130,37 @@ class ToolExecutor:
         """PC Agent에 명령 전송 및 결과 수신."""
         from app.services.pc_agent_manager import pc_agent_manager
 
-        agent_id = inp.get("agent_id", "")
-        command_type = inp.get("command_type", "")
+        def _as_bool(value: Any, default: bool) -> bool:
+            if isinstance(value, bool):
+                return value
+            if value is None:
+                return default
+            return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+        agent_id = str(inp.get("agent_id", "") or "").strip()
+        command_type = str(inp.get("command_type", "") or "").strip()
         params = inp.get("params", {})
-
-        if not agent_id:
-            # 연결된 에이전트가 1개면 자동 선택
-            agents = pc_agent_manager.list_agents()
-            if len(agents) == 1:
-                agent_id = agents[0].agent_id
-            elif len(agents) == 0:
-                return {"error": "연결된 PC Agent가 없습니다. PC에서 에이전트를 실행해주세요."}
-            else:
-                return {
-                    "error": "agent_id를 지정해주세요.",
-                    "available_agents": [
-                        {"agent_id": a.agent_id, "hostname": a.hostname}
-                        for a in agents
-                    ],
-                }
-
         if not command_type:
             return {"error": "command_type 필수 (shell, screenshot, file_list, process_list, file_read, file_write, kakao_send, kakao_read, system_info)"}
 
-        try:
-            command_id = await pc_agent_manager.send_command(agent_id, command_type, params)
-            result = await pc_agent_manager.get_result(command_id, timeout=60.0)
-            return result.model_dump(mode="json")
-        except ValueError as e:
-            return {"error": str(e)}
+        if params is None:
+            params = {}
+        if not isinstance(params, dict):
+            return {"error": "params는 object여야 합니다."}
+
+        routed = await pc_agent_manager.execute_routed_command(
+            command_type=command_type,
+            params=params,
+            agent_id=agent_id,
+            job_type=str(inp.get("job_type", "general") or "general"),
+            required_capabilities=inp.get("required_capabilities") if isinstance(inp.get("required_capabilities"), list) else [],
+            queue_if_busy=_as_bool(inp.get("queue_if_busy", True), default=True),
+            wait_for_turn=_as_bool(inp.get("wait_for_turn", True), default=True),
+            queue_wait_timeout_seconds=float(inp.get("queue_wait_timeout_seconds", 120.0) or 120.0),
+            lease_ttl_seconds=int(inp.get("lease_ttl_seconds", 180) or 180),
+            command_timeout_seconds=float(inp.get("timeout", inp.get("command_timeout_seconds", 120.0)) or 120.0),
+        )
+        return routed
 
     async def _pc_list_agents(self, inp: Dict[str, Any]) -> Any:
         """연결된 PC Agent 목록 조회."""
