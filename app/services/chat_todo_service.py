@@ -98,14 +98,14 @@ def should_create_todos(message: str, *, intent: str, use_tools: bool) -> bool:
         return False
     if any(marker in text for marker in ("안녕", "고마워", "감사", "수고", "반가워")) and not use_tools:
         return False
+    if _looks_like_question(text):
+        return False
     if sum(1 for marker in _MULTI_STEP_MARKERS if marker in text) >= 2:
         return True
     if re.search(r"(^|\s)[0-9]+\.\s", text):
         return True
     if use_tools and len(text) >= 8:
         return True
-    if _looks_like_question(text):
-        return False
     return any(hint in text for hint in _ACTION_HINTS) and any(marker in text for marker in ("그리고", "다음", "먼저", "\n", ";"))
 
 

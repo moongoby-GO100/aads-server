@@ -475,6 +475,29 @@ async def test_multistep_request_injects_todo_prompt_block():
 
 
 @pytest.mark.asyncio
+async def test_prepare_turn_todo_context_fails_open_when_schema_missing():
+    with (
+        patch("app.services.chat_todo_service.should_create_todos", return_value=True),
+        patch("app.services.chat_todo_service.extract_todo_titles", return_value=["migration 추가"]),
+        patch(
+            "app.services.chat_todo_service.create_todo_items",
+            new=AsyncMock(side_effect=chat_service.asyncpg.UndefinedTableError("chat_todo_items missing")),
+        ),
+    ):
+        result = await chat_service._prepare_turn_todo_context(
+            session_id=str(uuid.uuid4()),
+            content="migration 추가",
+            intent="code_modify",
+            use_tools=True,
+            execution_id=str(uuid.uuid4()),
+            message_id=str(uuid.uuid4()),
+            intent_override=None,
+        )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_todo_completion_gate_appends_missing_note():
     session_id = str(uuid.uuid4())
     first_id = uuid.uuid4()

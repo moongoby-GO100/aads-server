@@ -203,6 +203,7 @@ def test_completion_gate_detects_missing_items():
 def test_simple_request_does_not_create_todos():
     assert not svc.should_create_todos("안녕", intent="greeting", use_tools=False)
     assert not svc.should_create_todos("AADS가 뭐야?", intent="casual", use_tools=False)
+    assert not svc.should_create_todos("todo리스트 구현되었어?", intent="code_modify", use_tools=True)
     assert svc.extract_todo_titles("안녕", intent="greeting", use_tools=False) == []
 
 

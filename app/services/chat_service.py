@@ -292,28 +292,43 @@ async def _prepare_turn_todo_context(
 
     todo_items: list[dict[str, Any]] = []
     created_this_turn = False
-    if should_create_todos(content, intent=intent, use_tools=use_tools):
-        titles = extract_todo_titles(content, intent=intent, use_tools=use_tools)
-        if titles:
-            todo_items = await create_todo_items(
+    try:
+        if should_create_todos(content, intent=intent, use_tools=use_tools):
+            titles = extract_todo_titles(content, intent=intent, use_tools=use_tools)
+            if titles:
+                todo_items = await create_todo_items(
+                    session_id=session_id,
+                    message_id=message_id,
+                    execution_id=execution_id,
+                    titles=titles,
+                    source="user_turn",
+                    metadata={
+                        "message_excerpt": content[:240],
+                        "origin_intent": intent,
+                        "requires_tool": bool(use_tools),
+                        "created_from": "chat_service",
+                    },
+                )
+                created_this_turn = bool(todo_items)
+        elif should_resume_session_todos(content):
+            todo_items = await list_todo_items(
                 session_id=session_id,
-                message_id=message_id,
-                execution_id=execution_id,
-                titles=titles,
-                source="user_turn",
-                metadata={
-                    "message_excerpt": content[:240],
-                    "origin_intent": intent,
-                    "requires_tool": bool(use_tools),
-                    "created_from": "chat_service",
-                },
+                include_completed=False,
             )
-            created_this_turn = bool(todo_items)
-    elif should_resume_session_todos(content):
-        todo_items = await list_todo_items(
-            session_id=session_id,
-            include_completed=False,
+    except asyncpg.UndefinedTableError as exc:
+        logger.warning(
+            "chat_todo_context_skipped_schema_missing session=%s error=%s",
+            session_id[:8],
+            exc,
         )
+        return None
+    except Exception as exc:
+        logger.warning(
+            "chat_todo_context_skipped_error session=%s error=%s",
+            session_id[:8],
+            exc,
+        )
+        return None
 
     if not todo_items:
         return None
