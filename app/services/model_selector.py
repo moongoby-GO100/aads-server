@@ -2359,6 +2359,51 @@ def _is_codex_retryable_error(error_content: str) -> bool:
     return any(marker in lowered for marker in _CODEX_RETRYABLE_ERROR_MARKERS)
 
 
+def _extract_codex_prompt_and_images(
+    formatted: Union[str, List[Dict[str, Any]]],
+) -> tuple[str, List[Dict[str, str]]]:
+    """Convert Anthropic-style content blocks into Codex prompt + image payloads."""
+    if not isinstance(formatted, list):
+        return str(formatted or ""), []
+
+    text_parts: List[str] = []
+    image_attachments: List[Dict[str, str]] = []
+    for idx, block in enumerate(formatted, start=1):
+        if not isinstance(block, dict):
+            text_parts.append(str(block))
+            continue
+        block_type = block.get("type")
+        if block_type == "text":
+            text_parts.append(str(block.get("text", "")))
+            continue
+        if block_type != "image":
+            continue
+        source = block.get("source") or {}
+        if not isinstance(source, dict):
+            continue
+        raw_data = str(source.get("data", "") or "")
+        if not raw_data:
+            continue
+        image_attachments.append({
+            "name": str(block.get("name") or "image_%d" % idx),
+            "media_type": str(source.get("media_type", "") or "image/png"),
+            "data": raw_data,
+        })
+
+    prompt = "\n".join(part for part in text_parts if part)
+    if image_attachments:
+        prompt = (
+            prompt.rstrip()
+            + "\n\n[첨부 이미지]\n"
+            + "\n".join(
+                "- image_%d: %s" % (idx, img.get("media_type", "image"))
+                for idx, img in enumerate(image_attachments, start=1)
+            )
+            + "\n위 이미지를 함께 분석해 답변하세요."
+        ).strip()
+    return prompt, image_attachments
+
+
 def _build_codex_retry_messages(messages: List[Dict[str, Any]], partial_content: str) -> List[Dict[str, Any]]:
     retry_messages = [dict(message) for message in messages]
     partial_tail = (partial_content or "").strip()[-1500:]
@@ -2386,8 +2431,7 @@ async def _stream_codex_relay_once(
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Codex CLI Relay (/codex-stream) 경유 GPT 스트리밍. ChatGPT Plus OAuth."""
     formatted = _format_messages_for_llm(messages, has_resume=False)
-    if isinstance(formatted, list):
-        formatted = "\n".join(b.get("text", "") for b in formatted if isinstance(b, dict))
+    formatted, image_attachments = _extract_codex_prompt_and_images(formatted)
     relay_project = await _resolve_codex_project(session_id)
     req_body = {
         "model": model,
@@ -2406,6 +2450,8 @@ async def _stream_codex_relay_once(
             if t.get("name")
         ],
     }
+    if image_attachments:
+        req_body["image_attachments"] = image_attachments
     display_model = _CODEX_MODEL_DISPLAY.get(model, model)
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
@@ -3620,12 +3666,18 @@ async def _stream_anthropic(
             }
             tool_calls_made.append(tu.name)
 
+            tool_input = dict(tu.input or {})
+            if tu.name == "search_crawl_match" and not tool_input.get("synthesis_model"):
+                selected_model = str(model_id or "").strip()
+                if selected_model and selected_model.lower() not in {"auto", "mixture"}:
+                    tool_input["_selected_model"] = selected_model
+
             # 도구 실행 — 별도 asyncio.Task + Event 기반 heartbeat (P0-FIX: shield→Event 전환)
             # asyncio.shield 패턴 대신 Event + done_callback으로 도구 블로킹과 heartbeat 완전 분리
-            _LONG_TOOLS = {"deep_research", "deep_crawl", "spawn_subagent", "spawn_parallel_subagents", "pipeline_c_execute"}
+            _LONG_TOOLS = {"deep_research", "deep_crawl", "search_crawl_match", "spawn_subagent", "spawn_parallel_subagents", "pipeline_c_execute"}
             _tool_timeout = 600 if tu.name in _LONG_TOOLS else 120
             _HB_TOOL_SEC = 8.0  # heartbeat 간격 (초)
-            task = asyncio.create_task(executor.execute(tu.name, tu.input))
+            task = asyncio.create_task(executor.execute(tu.name, tool_input))
             _tool_start = __import__("time").monotonic()
 
             # Event 기반: 도구 완료 시 콜백으로 이벤트 설정 → heartbeat 루프 즉시 탈출

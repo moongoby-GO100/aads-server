@@ -556,7 +556,12 @@ async def _call_anthropic_with_tools(
                     "ceo_chat_tool_call tool=%s params=%s",
                     block.name, sanitize_tool_params(block.input),
                 )
-                result = await execute_tool(block.name, block.input, dsn, chat_session_id)
+                tool_input = dict(block.input or {})
+                if block.name == "search_crawl_match" and not tool_input.get("synthesis_model"):
+                    selected_model = str(model or "").strip()
+                    if selected_model and selected_model.lower() not in {"auto", "mixture"}:
+                        tool_input["_selected_model"] = selected_model
+                result = await execute_tool(block.name, tool_input, dsn, chat_session_id)
                 tool_results.append(
                     {
                         "type": "tool_result",

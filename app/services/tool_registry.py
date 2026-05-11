@@ -55,6 +55,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     # ── Tier 4: 외부 검색 (온디맨드, API 비용) ───────────────────────────
     "web_search_brave": True,       # 온디맨드 — Brave 단독
     "web_search": False,             # 핵심 — 통합 검색 (Google→Naver→Kakao 폴백)
+    "search_crawl_match": False,     # 핵심 — SearXNG+크롤링 매칭 보고서
     "jina_read": True,
     "crawl4ai_fetch": True,
     # ── Tier 5: 고비용/장시간 (온디맨드) ─────────────────────────────────
@@ -190,6 +191,7 @@ TOOL_CATEGORY_GUIDE = """\
 
 ### 🟢 Tier 4 — 외부 검색 (API 비용, 3~10초)
 - web_search_brave / web_search: 통합 웹 검색
+- search_crawl_match: SearXNG 검색 + 선택 크롤링 + 본문 근거 매칭 + 종합 보고서
 - jina_read / crawl4ai_fetch: URL 페이지 추출
 
 ### 🔵 Tier 5 — 고비용/장시간 (CEO 명시 요청 시)
@@ -253,7 +255,7 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
     "directive_gen":      ["generate_directive"],
     "cto_directive":      ["generate_directive"],
     # Tier 4: 외부 검색
-    "search":             ["search_searxng", "web_search"],
+    "search":             ["search_crawl_match", "search_searxng", "web_search"],
     "url_read":           ["jina_read"],
     # Tier 6: 브라우저 — 명시적 요청 시만
     "browser":            ["browser_connect", "browser_navigate"],
@@ -1035,6 +1037,41 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             },
             "required": ["query"],
         },
+    },
+    "search_crawl_match": {
+        "name": "search_crawl_match",
+        "description": "SearXNG 검색 결과를 선택 크롤링해 본문 근거 기준으로 재정렬하고, 출처 포함 종합 보고서를 생성합니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "검색 쿼리"},
+                "max_results": {
+                    "type": "integer",
+                    "description": "최종 반환 결과 수 (기본 5, 최대 10)",
+                },
+                "crawl_limit": {
+                    "type": "integer",
+                    "description": "본문 크롤링할 URL 수 (기본 3, 최대 6)",
+                },
+                "depth": {
+                    "type": "integer",
+                    "description": "탐색 깊이 0=shallow, 1=balanced, 2=deep",
+                },
+                "synthesis_model": {
+                    "type": "string",
+                    "description": "종합 보고서 생성 모델 ID (중앙 LLM 라우터 경유)",
+                },
+                "synthesize": {
+                    "type": "boolean",
+                    "description": "최종 종합 보고서 생성 여부 (기본 true)",
+                },
+            },
+            "required": ["query"],
+        },
+        "input_examples": [
+            {"query": "FastAPI health check best practices", "crawl_limit": 3},
+            {"query": "국내 AI 에이전트 플랫폼 비교", "depth": 2, "max_results": 6},
+        ],
     },
     # ── SearXNG 메타검색 ─────────────────────────────────────────────────────
     "search_searxng": {
@@ -2464,7 +2501,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
     "action": ["directive_create", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "device_command"],
-    "search": ["search_searxng", "web_search"],
+    "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
     "browser": ["read_remote_file", "list_remote_dir", "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "capture_screenshot", "browser_click", "browser_fill", "browser_tab_list"],

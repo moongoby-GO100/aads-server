@@ -3899,7 +3899,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
     elif name in (
         "health_check", "dashboard_query", "task_history", "server_status",
         "directive_create", "read_github_file", "query_database", "cost_report",
-        "web_search_brave", "web_search", "search_searxng",
+        "web_search_brave", "web_search", "search_searxng", "search_crawl_match",
         "inspect_service", "get_all_service_status", "generate_directive",
         "jina_read", "crawl4ai_fetch", "deep_crawl",
         "save_note", "recall_notes", "delete_note", "learn_pattern", "observe",

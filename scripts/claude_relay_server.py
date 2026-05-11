@@ -13,6 +13,8 @@ AADS Docker -> (httpx) -> 이 릴레이 -> claude CLI subprocess
 호환: Python 3.6+ (호스트 CentOS 7)
 """
 import asyncio
+import base64
+import binascii
 import hashlib
 import json
 import logging
@@ -1284,6 +1286,71 @@ def _resolve_codex_cwd(project):
     return fallback
 
 
+def _codex_image_suffix(media_type, name):
+    value = (media_type or "").lower().split(";", 1)[0].strip()
+    if value in ("image/jpeg", "image/jpg"):
+        return ".jpg"
+    if value == "image/png":
+        return ".png"
+    ext = Path(str(name or "")).suffix.lower()
+    if ext in (".jpg", ".jpeg", ".png"):
+        return ".jpg" if ext == ".jpeg" else ext
+    return ext or ".png"
+
+
+def _convert_image_bytes_for_codex(data):
+    """Codex CLI image input is safest with PNG/JPEG. Convert other formats to PNG."""
+    try:
+        from io import BytesIO
+        from PIL import Image
+
+        image = Image.open(BytesIO(data))
+        if image.mode not in ("RGB", "RGBA"):
+            image = image.convert("RGBA")
+        if image.mode == "RGBA":
+            background = Image.new("RGB", image.size, (255, 255, 255))
+            background.paste(image, mask=image.split()[-1])
+            image = background
+        output = BytesIO()
+        image.save(output, format="PNG")
+        return output.getvalue(), ".png"
+    except Exception as exc:
+        logger.warning("codex_image_convert_failed: %s", exc)
+        return data, ".png"
+
+
+def _materialize_codex_image_attachments(image_attachments, session_id):
+    if not isinstance(image_attachments, list):
+        return []
+    safe_session = re.sub(r"[^a-zA-Z0-9_.-]+", "_", session_id or "default")[:80]
+    root = Path(tempfile.gettempdir()) / "aads-codex-images" / safe_session
+    root.mkdir(parents=True, exist_ok=True)
+    image_paths = []
+    for idx, image in enumerate(image_attachments, start=1):
+        if not isinstance(image, dict):
+            continue
+        raw_data = str(image.get("data", "") or "").strip()
+        if not raw_data:
+            continue
+        if "," in raw_data and raw_data.lower().startswith("data:"):
+            raw_data = raw_data.split(",", 1)[1]
+        try:
+            data = base64.b64decode(raw_data, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            logger.warning("codex_image_decode_failed: index=%s err=%s", idx, exc)
+            continue
+        suffix = _codex_image_suffix(image.get("media_type"), image.get("name"))
+        if suffix not in (".png", ".jpg", ".jpeg"):
+            data, suffix = _convert_image_bytes_for_codex(data)
+        path = root / ("image_%02d%s" % (idx, ".jpg" if suffix == ".jpeg" else suffix))
+        try:
+            path.write_bytes(data)
+            image_paths.append(str(path))
+        except Exception as exc:
+            logger.warning("codex_image_write_failed: path=%s err=%s", path, exc)
+    return image_paths
+
+
 async def handle_codex_stream(request):
     """Codex CLI subprocess -> NDJSON pseudo-streaming. ChatGPT Plus OAuth."""
     try:
@@ -1294,6 +1361,7 @@ async def handle_codex_stream(request):
     messages_text = body.get("messages_text", "")
     tool_names = body.get("tool_names", [])
     tool_schemas = body.get("tool_schemas", [])
+    image_attachments = body.get("image_attachments", [])
     model = body.get("model", "gpt-5.5")
     session_id = body.get("session_id", "")
     if not messages_text:
@@ -1387,6 +1455,7 @@ async def handle_codex_stream(request):
                 return response
             codex_home = _build_codex_home(session_id, mcp_cfg=mcp_template)
             _codex_cwd = _resolve_codex_cwd(codex_project)
+            codex_image_paths = _materialize_codex_image_attachments(image_attachments, session_id)
             cmd = list(codex_meta.get("argv", []) or []) + [
                 "exec", "--json",
                 "--sandbox", _CODEX_SANDBOX_MODE,
@@ -1394,16 +1463,19 @@ async def handle_codex_stream(request):
             ]
             for add_dir in _CODEX_ADD_DIRS:
                 cmd.extend(["--add-dir", add_dir])
+            for image_path in codex_image_paths:
+                cmd.extend(["--image", image_path])
             if codex_model:
                 cmd.extend(["-m", codex_model])
             cmd.append(prompt)
             logger.info(
-                "Codex: project=%s cwd=%s model=%s prompt_len=%d tools=%d cmd_mode=%s mcp_mode=%s sandbox=%s approval=%s add_dirs=%s",
+                "Codex: project=%s cwd=%s model=%s prompt_len=%d tools=%d images=%d cmd_mode=%s mcp_mode=%s sandbox=%s approval=%s add_dirs=%s",
                 codex_project,
                 _codex_cwd,
                 codex_model,
                 len(prompt),
                 len(tool_names),
+                len(codex_image_paths),
                 codex_meta.get("mode", "unknown"),
                 (mcp_diag or {}).get("path_mode", "unknown"),
                 _CODEX_SANDBOX_MODE,

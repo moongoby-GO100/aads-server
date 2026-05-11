@@ -5089,13 +5089,48 @@ async def send_message_stream(
         # 7. Gemini Direct (Grounding / Deep Research)
         if intent_result.use_gemini_direct:
             if intent_result.gemini_mode == "grounding":
-                # Smart Search: 복잡도 기반 동적 검색 + 원문 크롤링 (AADS-201)
+                # Search Crawl Match: 일반 검색은 SearXNG + 선택 크롤링 + 본문 매칭을 우선 사용
                 _searxng_ok = False
                 try:
-                    from app.services.smart_search_service import smart_search as _smart_search
                     from app.services.gemini_search_service import SearchResult as _SxngResult
                     _naver_type = getattr(intent_result, "naver_type", "")
-                    _smart_result = await _smart_search(content, naver_type=_naver_type)
+                    if _naver_type:
+                        from app.services.smart_search_service import smart_search as _smart_search
+                        _smart_result = await _smart_search(content, naver_type=_naver_type)
+                    else:
+                        from app.services.smart_search_service import search_crawl_match as _search_crawl_match
+                        _selected_model = str(model_override or "").strip()
+                        _synthesis_model = (
+                            _selected_model
+                            if _selected_model and _selected_model.lower() not in {"auto", "mixture"}
+                            else None
+                        )
+                        _match_result = await _search_crawl_match(
+                            content,
+                            max_results=5,
+                            crawl_limit=3,
+                            synthesis_model=_synthesis_model,
+                            synthesize=True,
+                        )
+                        _sources = [
+                            {"title": item.get("title") or item.get("url"), "url": item.get("url")}
+                            for item in _match_result.get("results", [])
+                            if item.get("url")
+                        ]
+                        _report = _match_result.get("synthesized_report") or ""
+                        if not _report and _match_result.get("results"):
+                            _report = "\n\n".join(
+                                f"**{item.get('title') or item.get('url')}**\n{item.get('body_evidence') or item.get('snippet') or ''}\n{item.get('url')}"
+                                for item in _match_result.get("results", [])[:5]
+                            )
+                        _smart_result = {
+                            "formatted_text": _report,
+                            "citations": _sources,
+                            "complexity": _match_result.get("complexity", "MEDIUM"),
+                            "crawl_count": _match_result.get("crawled_count", 0),
+                            "model": _match_result.get("synthesis_model", "gpt-5.5"),
+                            "error": _match_result.get("error"),
+                        }
                     if not _smart_result.get("error") and _smart_result.get("formatted_text"):
                         _text = _smart_result["formatted_text"]
                         _cites = _smart_result.get("citations", [])
@@ -5105,9 +5140,11 @@ async def send_message_stream(
                         yield f"data: {json.dumps({'type': 'delta', 'content': result.text})}\n\n"
                         if result.citations:
                             yield f"data: {json.dumps({'type': 'sources', 'sources': result.citations})}\n\n"
-                        _model_label = f"searxng-{_complexity.lower()}"
+                        _model_label = f"search_crawl_match-{_complexity.lower()}" if not _naver_type else f"searxng-{_complexity.lower()}"
                         if _crawl_count > 0:
                             _model_label += f"+crawl{_crawl_count}"
+                        if not _naver_type and _smart_result.get("model"):
+                            _model_label += f":{_smart_result['model']}"
                         await _save_and_update_session(
                             sid, result.text, model_used=_model_label, intent=intent,
                             cost=Decimal("0"), sources=result.citations,

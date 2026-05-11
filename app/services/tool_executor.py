@@ -47,6 +47,20 @@ def _json_default(obj: Any) -> Any:
         return f"<binary {len(obj)} bytes>"
     return str(obj)
 
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+    return bool(value)
+
 # Pipeline Runner 등에서 현재 채팅 세션 ID를 도구에 전달하기 위한 컨텍스트 변수
 current_chat_session_id: contextvars.ContextVar[str] = contextvars.ContextVar(
     "current_chat_session_id", default=""
@@ -66,6 +80,7 @@ _LONG_TOOLS = frozenset({
     "capture_screenshot", "run_remote_command", "write_remote_file", "patch_remote_file",
     "pc_execute", "device_command", "execute_sandbox", "visual_qa_test", "fact_check_multiple",
     "generate_image", "search_all_projects", "deep_crawl", "deploy_safe",
+    "search_crawl_match",
 })
 
 # ── 파일별 동시 수정 방지 잠금 ─────────────────────────────────────────────
@@ -414,6 +429,7 @@ class ToolExecutor:
             "web_search_brave":       self._web_search,
             "web_search":             self._web_search,
             "search_searxng":         self._search_searxng,
+            "search_crawl_match":     self._search_crawl_match,
             "web_search_naver":       self._web_search_naver,
             "web_search_kakao":       self._web_search_kakao,
             "web_search_google":      self._web_search_google,
@@ -2106,6 +2122,32 @@ class ToolExecutor:
             time_range=inp.get("time_range"),
             engines=inp.get("engines"),
             count=inp.get("count", 10),
+        )
+
+    async def _search_crawl_match(self, inp: Dict[str, Any]) -> Any:
+        """SearXNG 검색 + 선택 크롤링 + 본문 근거 매칭 + 종합 보고서."""
+        query = str(inp.get("query", "") or "").strip()
+        if not query:
+            return {"error": "query 필수"}
+
+        from app.services.smart_search_service import search_crawl_match
+
+        synthesis_model = (
+            inp.get("synthesis_model")
+            or inp.get("model_override")
+            or inp.get("selected_model")
+            or inp.get("_selected_model")
+        )
+        if str(synthesis_model or "").strip().lower() in {"", "auto", "mixture"}:
+            synthesis_model = None
+
+        return await search_crawl_match(
+            query=query,
+            max_results=inp.get("max_results"),
+            crawl_limit=inp.get("crawl_limit"),
+            depth=inp.get("depth"),
+            synthesis_model=synthesis_model,
+            synthesize=_coerce_bool(inp.get("synthesize"), default=True),
         )
 
     async def _web_search_all(self, query: str, count: int = 5) -> Any:
@@ -4124,7 +4166,7 @@ _INTENT_TOOL_MAP: Dict[str, list] = {
     "health_check":        ["health_check"],
     "dashboard":           ["dashboard_query"],
     "diagnosis":           ["dashboard_query", "health_check"],
-    "search":              ["web_search"],
+    "search":              ["search_crawl_match", "web_search"],
     "memory_recall":       ["read_github_file", "query_database"],
     "directive_gen":       ["directive_create", "generate_directive"],
     "execute":             ["directive_create"],

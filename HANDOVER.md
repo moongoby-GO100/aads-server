@@ -569,3 +569,13 @@
 - 조치: `app/services/tool_executor.py`의 `pipeline_runner_submit`/`pipeline_runner_submit_batch`도 동일하게 최근 세션 fallback을 제거.
 - 조치: `app/services/pipeline_runner_service.py`의 레거시 `start_pipeline()`과 완료 후 AI 반응 트리거가 세션 없음 상태에서 최근 세션을 찾아 붙이는 동작을 제거. 세션 없음 작업은 채팅 보고 비활성으로만 처리.
 - 테스트: `tests/unit/test_runner_scope_defaults.py`에 세션 없는 제출이 `_find_recent_session()`을 호출하지 않는 회귀 테스트와 현재 세션 전달 테스트 추가.
+
+## 2026-05-11 19:10 KST - AADS-DESIGN-MOD-001 Design Modification Studio DB/API 기반 추가
+
+- 배경: `Design Modification Studio` Phase 1 범위로 프로젝트별 화면 목록, 수정 요청 목록/상세, context pack 미리보기를 위한 영속 스키마와 read-only 백엔드 계약이 필요해짐. 기존 `migrations/082_open_design_hub.sql`의 `design_projects/design_token_sets/design_audit_runs` 초안과 충돌하지 않는 additive 확장이 요구됨.
+- 변경 파일: `migrations/084_design_modification_studio.sql`, `app/api/design_modifications.py`, `app/main.py`, `tests/unit/test_design_modifications_api.py`.
+- 조치: `design_screens`, `design_modification_requests`, `design_context_packs`, `design_visual_snapshots`, `design_decisions`를 `084` 마이그레이션으로 분리 추가. `project_key`는 기존 `design_projects(project_key)`를 참조하고, 요청 상태/타입, snapshot phase, decision confidence/applies_to에 CHECK 제약과 조회용 인덱스를 부여.
+- 조치: 신규 `app/api/design_modifications.py`에 인증 의존(`get_current_user`)과 `get_pool()` 패턴을 따라 `GET /api/v1/admin/design/projects/{project_key}/screens`, `GET /api/v1/admin/design/projects/{project_key}/modification-requests`, `GET /api/v1/admin/design/modification-requests/{request_id}`, `GET /api/v1/admin/design/modification-requests/{request_id}/context-packs`, `GET /api/v1/admin/design/context-packs/{context_pack_id}/preview`를 추가. 스키마 미적용 상태에서는 list는 빈 결과, detail/preview는 `503 design modification schema is not initialized`로 처리.
+- 조치: 요청 상세 응답에 화면 메타데이터, visual snapshot 목록, 관련 design decision 목록을 포함해 Phase 2 UI가 별도 write API 없이 workbench 초안을 붙일 수 있게 정리.
+- 테스트/검증 명령: `pytest -q tests/unit/test_design_modifications_api.py`, `python3 -m py_compile app/api/design_modifications.py`.
+- 리스크: `084`는 `082_open_design_hub.sql`의 `design_projects` 선행 적용을 전제로 한다. 또한 `context`/`sources` JSONB 구조는 Phase 3 builder 구현 전까지 loose schema이므로 프런트엔드에서는 optional 필드 방어가 필요하다.

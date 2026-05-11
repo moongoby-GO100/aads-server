@@ -497,3 +497,6 @@ _S
             chrome_exe,
 →        import tempfile
         user_dat
+
+## [2026-05-11 18:28:31 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: run_remote_command: grep -n "Claude\|GPT\|Gemini" /root/aads/aads-server/app/services/chat_service.p
