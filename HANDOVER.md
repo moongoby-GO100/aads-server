@@ -1,6 +1,16 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-11)
+- **Pipeline Runner AADS 백엔드/대시보드 라우팅 오분류 패치 (2026-05-11 18:17 KST)**:
+  - 증상: AADS 지시문에 `Backend workdir: /root/aads/aads-server`와 `Dashboard workdir: /root/aads/aads-dashboard`가 함께 있으면 `scripts/pipeline-runner.sh`가 대시보드 키워드를 먼저 감지해 백엔드 작업도 `/root/aads/aads-dashboard` worktree에서 실행했다.
+  - 확인: `runner-ddb6bb2c`, `runner-5159ac44`의 `/tmp/aads-wt-*`가 `aads-dashboard` remote였고 `migrations/`, `app/`이 없었다. 두 작업은 산출 불가능 상태라 종료했다.
+  - 조치: `is_aads_backend_instruction()`을 추가하고 `resolve_project_workdir()`이 AADS 백엔드 명시(`/root/aads/aads-server`, `migrations/`, `app/...`)를 대시보드 키워드보다 우선하도록 수정했다.
+  - 운영 반영: `systemctl restart aads-pipeline-runner`로 새 스크립트를 로드했고, 신규 `runner-40d7dc37`이 `aads-server` remote 및 `migrations/` 보유 worktree에서 실행되는 것을 확인했다.
+  - 검증: `bash -n scripts/pipeline-runner.sh` 통과.
+- **AI 바이브코딩 디자인 수정 상세문서 작성 (2026-05-11 17:37 KST)**:
+  - `docs/reports/20260511_AADS_VIBE_CODING_DESIGN_MODIFICATION_PLAYBOOK.md` 신규 작성.
+  - 기존 디자인 연구/사용자 여정/스마트 디자인 시스템 문서를 근거로 CEO가 AI에게 세밀한 디자인 수정요청을 넣는 수정 카드, Design Context Pack, Design Memory, Before/After QA 루프, 러너 재개 후 지시서 초안을 정리했다.
+
 - **채팅 세션/턴 TODO 게이트 추가 (2026-05-11 KST)**:
   - `migrations/083_chat_todo_items.sql` 추가. `chat_todo_items` 테이블에 `session_id`, `message_id`, `execution_id`, `title`, `status`, `sort_order`, `source`, `metadata`, `completed_at`와 세션/턴 기준 인덱스 및 partial unique 인덱스를 정의했다.
   - `app/services/chat_todo_service.py` 신규 추가. 세션/턴 todo 생성, 조회, 상태 전환(`pending/in_progress/completed/failed/skipped`), completion gate 평가, prompt block 생성, 감사용 `metadata.audit` 누적 로직을 구현했다.

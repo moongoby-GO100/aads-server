@@ -60,6 +60,13 @@ declare -A PROJECT_WORKDIR=(
 
 AADS_DASHBOARD_WORKDIR="${AADS_DASHBOARD_WORKDIR:-/root/aads/aads-dashboard}"
 
+is_aads_backend_instruction() {
+    local project="$1" instruction="$2"
+    [[ "$project" == "AADS" ]] || return 1
+    printf '%s' "$instruction" | grep -Eiq \
+        '(/root/aads/aads-server|(^|[^A-Za-z0-9_-])aads-server([^A-Za-z0-9_-]|$)|(^|[[:space:]/])migrations/|(^|[[:space:]/])app/(api|core|models|schemas|services|main\.py)|pipeline-runner\.sh|deploy\.sh)'
+}
+
 is_aads_dashboard_instruction() {
     local project="$1" instruction="$2"
     [[ "$project" == "AADS" ]] || return 1
@@ -69,7 +76,9 @@ is_aads_dashboard_instruction() {
 
 resolve_project_workdir() {
     local project="$1" instruction="${2:-}"
-    if is_aads_dashboard_instruction "$project" "$instruction"; then
+    if is_aads_backend_instruction "$project" "$instruction"; then
+        echo "${PROJECT_WORKDIR[$project]:-}"
+    elif is_aads_dashboard_instruction "$project" "$instruction"; then
         echo "$AADS_DASHBOARD_WORKDIR"
     else
         echo "${PROJECT_WORKDIR[$project]:-}"
