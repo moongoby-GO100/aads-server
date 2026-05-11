@@ -1,6 +1,12 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-11)
+- **Pipeline Runner Task Board 상태 표시 개선 (2026-05-11 14:20~14:25 KST)**:
+  - 운영 DB 실측: `queued`는 0건이고, terminal 분류는 `blocked_dependency` 2건, `dedup_blocked` 2건, `no_changes` 2건, `done` 354건, `error` 4건이다.
+  - `app/api/admin.py`: `/admin/tasks/stats`가 `no_changes`, `dedup_blocked`, `blocked_dependency` 카운트를 별도 반환하도록 보강했다.
+  - `aads-dashboard/src/app/admin/tasks/page.tsx`: Admin Task Board에 `No Changes`, `Dedup Blocked`, `Blocked Dependency` 칼럼과 별도 색상/라벨을 추가해 세 terminal 상태가 Error로 보이지 않게 했다.
+  - 검증: `python3 -m py_compile app/api/admin.py app/api/pipeline_runner.py`, `npx eslint src/app/admin/tasks/page.tsx`, `npm run build` 통과. 전체 `npm run lint`는 기존 전역 ESLint 오류 248건으로 실패했다.
+  - 운영 반영: `bash /root/aads/aads-dashboard/deploy.sh` 성공. 활성 슬롯은 `blue`, 컨테이너 `aads-dashboard`는 `healthy/running`, 외부 `/login` 200 OK, 보호 페이지 `/admin/tasks`는 미로그인 기준 307 리다이렉트 정상.
 - **PC Agent Chrome CDP 분리 프로필 반영 (2026-05-11 14:18 KST)**:
   - `pc_agent/commands/browser_auto.py`: `browser_launch()`가 기본 Chrome 프로필을 재사용해 `--remote-debugging-port=9222`가 무시되던 문제를 확인했다.
   - 조치: Windows는 `%LOCALAPPDATA%\\KakaoBot\\cdp-profile`, 비Windows는 `~/.kakaobot-cdp-profile`를 기본 `user_data_dir`로 사용하고 `--user-data-dir`, `--new-window` 옵션을 추가했다.

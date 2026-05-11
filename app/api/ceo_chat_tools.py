@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+_GLOBAL_TASK_SCOPES = frozenset({"all", "global"})
 
 _SECRET_PARAM_KEYS = {
     "password", "passwd", "pwd", "password_enc", "secret",
@@ -49,6 +50,22 @@ def sanitize_tool_params(value: Any) -> Any:
     if isinstance(value, list):
         return [sanitize_tool_params(item) for item in value]
     return value
+
+
+def _resolve_task_scope(params: Dict[str, Any], chat_session_id: str = "") -> tuple[str, str]:
+    """작업 상태 조회 기본 범위를 현재 채팅 세션으로 고정한다."""
+    scope = str(params.get("scope", "") or "").strip().lower()
+    if scope in _GLOBAL_TASK_SCOPES:
+        return "all", ""
+
+    from app.services.tool_executor import current_chat_session_id
+
+    session_id = str(
+        params.get("session_id", "") or chat_session_id or current_chat_session_id.get("")
+    ).strip()
+    if session_id:
+        return "current_session", session_id
+    return "all", ""
 
 
 # ─── 도구 정의 (Anthropic tool_use 포맷) ──────────────────────────────────────
@@ -610,12 +627,14 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "pipeline_runner_status",
-        "description": "Pipeline Runner 작업 상태 조회. error_detail(에러분류: timeout/claude_code_crash/git_conflict/build_fail/disk_full/rate_limit/process_died 등) 포함. status: queued/running/awaiting_approval/done/error",
+        "description": "Pipeline Runner 작업 상태 조회. 기본은 현재 채팅 세션 작업만 조회하며, scope='all'일 때만 전체 목록을 조회합니다. error_detail(에러분류: timeout/claude_code_crash/git_conflict/build_fail/disk_full/rate_limit/process_died 등) 포함. status: queued/running/awaiting_approval/done/error",
         "input_schema": {
             "type": "object",
             "properties": {
                 "job_id": {"type": "string", "description": "작업 ID (없으면 전체 목록)"},
                 "status": {"type": "string", "description": "필터: queued, running, awaiting_approval, done, error"},
+                "scope": {"type": "string", "description": "조회 범위. 기본=current_session, 전체 조회 시 all"},
+                "session_id": {"type": "string", "description": "특정 채팅 세션 UUID. 기본은 현재 세션"},
             },
         },
     },
@@ -1210,12 +1229,22 @@ TOOL_DEFINITIONS: List[Dict] = [
     {
         "name": "check_task_status",
         "description": (
-            "Pipeline B/C 활성 작업 현황 조회. 진행 중인 작업의 phase, 경과시간, stall 감지 정보 반환.\n"
-            "예: check_task_status() → 전체 활성 작업 목록"
+            "Pipeline B/C 활성 작업 현황 조회. 기본은 현재 채팅 세션 작업만 조회하며, scope='all'일 때만 전체 활성 작업을 조회합니다. "
+            "진행 중인 작업의 phase, 경과시간, stall 감지 정보 반환.\n"
+            "예: check_task_status() → 현재 세션 활성 작업 목록"
         ),
         "input_schema": {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "scope": {
+                    "type": "string",
+                    "description": "조회 범위. 기본=current_session, 전체 조회 시 all",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "특정 채팅 세션 UUID. 기본은 현재 세션",
+                },
+            },
             "required": [],
         },
     },
@@ -3556,6 +3585,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             get_pipeline_runner_api_url,
         )
         job_id = params.get("job_id", "")
+        scope, session_id = _resolve_task_scope(params, chat_session_id=chat_session_id)
         if job_id:
             url = get_pipeline_runner_api_url(f"jobs/{quote(job_id, safe='')}")
         else:
@@ -3564,6 +3594,8 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             _qp = {"limit": "10"}
             if status_val:
                 _qp["status"] = status_val
+            if scope == "current_session" and session_id:
+                _qp["session_id"] = session_id
         async with httpx.AsyncClient() as client:
             if job_id:
                 resp = await client.get(url, headers=INTERNAL_PIPELINE_HEADERS, timeout=10)
@@ -3781,18 +3813,42 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
     # ── 작업 모니터링 도구 ────────────────────────────────────────────────
     elif name == "check_task_status":
         from app.core.db_pool import get_pool
+
+        scope, session_id = _resolve_task_scope(params, chat_session_id=chat_session_id)
         pool = get_pool()
         async with pool.acquire() as conn:
-            pc_rows = await conn.fetch(
-                "SELECT job_id AS task_id, project, instruction AS title, "
-                "'pipeline_c' AS pipeline, phase, status, created_at "
-                "FROM pipeline_jobs "
-                "WHERE status IN ('running','awaiting_approval','queued') "
-                "OR updated_at > NOW() - interval '1 hour' "
-                "ORDER BY created_at DESC LIMIT 10"
-            )
+            if scope == "current_session" and session_id:
+                pc_rows = await conn.fetch(
+                    "SELECT job_id AS task_id, project, instruction AS title, "
+                    "'pipeline_c' AS pipeline, phase, status, created_at "
+                    "FROM pipeline_jobs "
+                    "WHERE chat_session_id = $1 "
+                    "AND (status IN ('running','awaiting_approval','queued') "
+                    "OR updated_at > NOW() - interval '1 hour') "
+                    "ORDER BY created_at DESC LIMIT 10",
+                    session_id,
+                )
+            else:
+                pc_rows = await conn.fetch(
+                    "SELECT job_id AS task_id, project, instruction AS title, "
+                    "'pipeline_c' AS pipeline, phase, status, created_at "
+                    "FROM pipeline_jobs "
+                    "WHERE status IN ('running','awaiting_approval','queued') "
+                    "OR updated_at > NOW() - interval '1 hour' "
+                    "ORDER BY created_at DESC LIMIT 10"
+                )
         tasks = [{"task_id": r["task_id"], "project": r["project"] or "", "title": (r["title"] or "")[:150], "pipeline": r["pipeline"], "phase": r["phase"] or "", "status": r["status"] or ""} for r in pc_rows]
-        return json.dumps({"tasks": tasks, "count": len(tasks)}, ensure_ascii=False, default=str)
+        return json.dumps(
+            {
+                "tasks": tasks,
+                "count": len(tasks),
+                "scope": scope,
+                "session_id": session_id or None,
+                "pipeline_b_included": False,
+            },
+            ensure_ascii=False,
+            default=str,
+        )
     elif name == "read_task_logs":
         task_id = params.get("task_id", "")
         if not task_id:

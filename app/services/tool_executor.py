@@ -51,6 +51,7 @@ def _json_default(obj: Any) -> Any:
 current_chat_session_id: contextvars.ContextVar[str] = contextvars.ContextVar(
     "current_chat_session_id", default=""
 )
+_GLOBAL_TASK_SCOPES = frozenset({"all", "global"})
 
 LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://aads-litellm:4000")
 LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
@@ -162,6 +163,18 @@ def _project_from_workspace_name(name: str) -> str:
         if any(token in upper or token in name for token in tokens):
             return project
     return ""
+
+
+def _resolve_task_scope(inp: Dict[str, Any]) -> tuple[str, str]:
+    """작업 상태 조회 기본 범위를 현재 채팅 세션으로 고정한다."""
+    scope = str(inp.get("scope", "") or "").strip().lower()
+    if scope in _GLOBAL_TASK_SCOPES:
+        return "all", ""
+
+    session_id = str(inp.get("session_id", "") or current_chat_session_id.get("")).strip()
+    if session_id:
+        return "current_session", session_id
+    return "all", ""
 
 
 async def _infer_project_from_session(session_id: str) -> str:
@@ -2679,30 +2692,49 @@ class ToolExecutor:
         """활성/최근 작업 목록 조회 (Pipeline B/C)."""
         try:
             from app.core.db_pool import get_pool
+
+            scope, session_id = _resolve_task_scope(inp)
             pool = get_pool()
             async with pool.acquire() as conn:
-                # Pipeline Runner (pipeline_c_jobs)
-                pc_rows = await conn.fetch(
-                    """
-                    SELECT job_id AS task_id, project, instruction AS title,
-                           'pipeline_c' AS pipeline, phase, status, created_at
-                    FROM pipeline_jobs
-                    WHERE status IN ('running','awaiting_approval','queued')
-                       OR updated_at > NOW() - interval '1 hour'
-                    ORDER BY created_at DESC LIMIT 10
-                    """
-                )
-                # Pipeline B
-                pb_rows = await conn.fetch(
-                    """
-                    SELECT task_id, project, title,
-                           'pipeline_b' AS pipeline, status AS phase, status, created_at
-                    FROM directive_lifecycle
-                    WHERE executor = 'autonomous_executor'
-                      AND (status = 'in_progress' OR completed_at > NOW() - interval '1 hour')
-                    ORDER BY created_at DESC LIMIT 10
-                    """
-                )
+                if scope == "current_session" and session_id:
+                    pc_rows = await conn.fetch(
+                        """
+                        SELECT job_id AS task_id, project, instruction AS title,
+                               'pipeline_c' AS pipeline, phase, status, created_at
+                        FROM pipeline_jobs
+                        WHERE chat_session_id = $1
+                          AND (
+                              status IN ('running','awaiting_approval','queued')
+                              OR updated_at > NOW() - interval '1 hour'
+                          )
+                        ORDER BY created_at DESC LIMIT 10
+                        """,
+                        session_id,
+                    )
+                    pb_rows = []
+                    pipeline_b_included = False
+                else:
+                    pc_rows = await conn.fetch(
+                        """
+                        SELECT job_id AS task_id, project, instruction AS title,
+                               'pipeline_c' AS pipeline, phase, status, created_at
+                        FROM pipeline_jobs
+                        WHERE status IN ('running','awaiting_approval','queued')
+                           OR updated_at > NOW() - interval '1 hour'
+                        ORDER BY created_at DESC LIMIT 10
+                        """
+                    )
+                    pb_rows = await conn.fetch(
+                        """
+                        SELECT task_id, project, title,
+                               'pipeline_b' AS pipeline, status AS phase, status, created_at
+                        FROM directive_lifecycle
+                        WHERE executor = 'autonomous_executor'
+                          AND (status = 'in_progress' OR completed_at > NOW() - interval '1 hour')
+                        ORDER BY created_at DESC LIMIT 10
+                        """
+                    )
+                    pipeline_b_included = True
             tasks = []
             for r in list(pc_rows) + list(pb_rows):
                 tasks.append({
@@ -2716,7 +2748,14 @@ class ToolExecutor:
             # stall 감지
             from app.services.task_logger import get_stalled_tasks
             stalled = get_stalled_tasks(300)
-            return {"tasks": tasks, "stalled_tasks": stalled, "count": len(tasks)}
+            return {
+                "tasks": tasks,
+                "stalled_tasks": stalled,
+                "count": len(tasks),
+                "scope": scope,
+                "session_id": session_id or None,
+                "pipeline_b_included": pipeline_b_included,
+            }
         except Exception as e:
             return {"error": str(e)}
 
@@ -3694,6 +3733,7 @@ class ToolExecutor:
             get_pipeline_runner_api_url,
         )
         job_id = inp.get("job_id", "")
+        scope, session_id = _resolve_task_scope(inp)
         async with httpx.AsyncClient() as client:
             if job_id:
                 resp = await client.get(
@@ -3705,6 +3745,8 @@ class ToolExecutor:
                 params = {"limit": "10"}
                 if inp.get("status"):
                     params["status"] = inp["status"]
+                if scope == "current_session" and session_id:
+                    params["session_id"] = session_id
                 resp = await client.get(
                     get_pipeline_runner_api_url("jobs"),
                     headers=INTERNAL_PIPELINE_HEADERS,

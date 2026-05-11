@@ -1689,12 +1689,16 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     "check_task_status": {
         "name": "check_task_status",
         "description": (
-            "현재 활성 중이거나 최근 완료된 Pipeline B/C 작업 목록 조회. "
+            "현재 활성 중이거나 최근 완료된 Pipeline B/C 작업 목록 조회. 기본은 현재 채팅 세션 작업만 조회하고, "
+            "`scope=all`일 때만 전체 작업을 조회한다. "
             "'지금 작업 어떻게 돼?', '에이전트 뭐 하고 있어?', '작업 상태', '진행 상황' 등에 사용."
         ),
         "input_schema": {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "scope": {"type": "string", "description": "조회 범위. 기본=current_session, 전체 조회 시 all"},
+                "session_id": {"type": "string", "description": "특정 채팅 세션 UUID. 기본은 현재 세션"},
+            },
             "required": [],
         },
     },
@@ -1977,17 +1981,20 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     },
     "pipeline_runner_status": {
         "name": "pipeline_runner_status",
-        "description": "Pipeline Runner 작업 상태 조회. job_id 없으면 전체 목록.",
+        "description": "Pipeline Runner 작업 상태 조회. job_id 없으면 기본은 현재 채팅 세션 작업만 조회하고, `scope=all`일 때만 전체 목록을 조회한다.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "job_id": {"type": "string", "description": "작업 ID (없으면 전체 목록)"},
                 "status": {"type": "string", "description": "필터: queued, running, awaiting_approval, done, error"},
+                "scope": {"type": "string", "description": "조회 범위. 기본=current_session, 전체 조회 시 all"},
+                "session_id": {"type": "string", "description": "특정 채팅 세션 UUID. 기본은 현재 세션"},
             },
         },
         "input_examples": [
             {"job_id": "runner-abc12345"},
             {"status": "awaiting_approval"},
+            {"scope": "all", "status": "queued"},
             {},
         ],
     },
