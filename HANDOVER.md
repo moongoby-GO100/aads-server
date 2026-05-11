@@ -1,6 +1,11 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-11)
+- **SearXNG + 크롤링 통합 검색 도구 연결 보강 (2026-05-11 19:05 KST)**:
+  - `search_crawl_match`는 `tool_registry`의 `search` 그룹 최우선 도구로 등록되어 있고, `search_searxng`도 같은 그룹에 유지되어 기존 SearXNG 단순 검색 도구가 계속 노출된다.
+  - `app/services/tool_executor.py`의 하위 호환 `_INTENT_TOOL_MAP["search"]`에도 `search_searxng`를 추가해 구형 검색 인텐트 경로에서도 `search_crawl_match`, `search_searxng`, `web_search`가 모두 후보로 잡히게 했다.
+  - 검증: `python3 -m pytest tests/unit/test_search_crawl_match.py -q` → `4 passed`; `python3 -m py_compile app/services/tool_executor.py app/services/tool_registry.py app/services/chat_service.py app/api/ceo_chat_tools.py app/api/ceo_chat.py app/services/model_selector.py app/services/smart_search_service.py` 통과.
+
 - **AADS-DESIGN-MOD-005 Design QA Score/Token Compliance 추가 (2026-05-11 KST)**:
   - `app/services/design_qa_scorer.py` 신규 추가. `score_modification(request_id)`가 요청/컨텍스트팩/snapshot/decision을 읽어 정적 휴리스틱 기반 QA 점수(`request_match`, `context_retention`, `visual_completeness`, `responsive_stability`, `accessibility`, `technical_stability`)를 계산하고 저장한다.
   - `check_token_compliance(file_paths)`를 추가해 raw hex color, emoji icon, repeated button pattern, viewport font scaling을 정적 스캔한다. 파일 경로는 `screen.component_paths`, `allowed_scope`, 최신 context pack의 file/component path 후보에서 수집한다.
