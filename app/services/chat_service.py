@@ -2073,6 +2073,16 @@ async def stop_session_streaming(session_id: str) -> Dict[str, Any]:
         _streaming_state.pop(session_id, None)
         result["stopped"] = False
 
+    try:
+        from app.core.interrupt_queue import set_streaming as _set_interrupt_streaming
+        _set_interrupt_streaming(session_id, False)
+    except Exception as clear_err:
+        logger.warning(
+            "stop_streaming_interrupt_flag_clear_failed session=%s error=%s",
+            session_id[:8],
+            clear_err,
+        )
+
     return result
 
 

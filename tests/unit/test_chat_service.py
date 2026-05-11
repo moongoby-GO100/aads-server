@@ -217,6 +217,26 @@ def test_terminal_interrupt_marker_completes_memory_stream_once():
 
 
 @pytest.mark.asyncio
+async def test_stop_session_streaming_clears_stale_interrupt_stream_flag():
+    session_id = str(uuid.uuid4())
+    interrupt_queue.set_streaming(session_id, True)
+    interrupt_queue.push_interrupt(session_id, "다시 실행해")
+
+    try:
+        result = await chat_service.stop_session_streaming(session_id)
+
+        assert result["stopped"] is False
+        assert interrupt_queue.is_streaming(session_id) is False
+        assert [item["content"] for item in interrupt_queue.pop_pending_interrupts(session_id)] == ["다시 실행해"]
+    finally:
+        interrupt_queue.set_streaming(session_id, False)
+        interrupt_queue.pop_interrupts(session_id)
+        interrupt_queue.pop_pending_interrupts(session_id)
+        chat_service._streaming_state.pop(session_id, None)
+        chat_service._active_bg_tasks.pop(session_id, None)
+
+
+@pytest.mark.asyncio
 async def test_newer_user_message_supersedes_running_execution():
     execution_user_id = str(uuid.uuid4())
     latest_user_id = str(uuid.uuid4())
