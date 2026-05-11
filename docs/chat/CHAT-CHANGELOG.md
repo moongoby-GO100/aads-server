@@ -4,6 +4,23 @@ _v1.0 | 2026-04-02 | 최초 작성_
 
 ## 변경 이력 (최신순)
 
+### 2026-05-12
+
+| 커밋 | 변경 | 구분 |
+|------|------|------|
+| 2026-05-12 | **Chat final visibility guard**: 완료 직후 메시지 재조회가 assistant 저장 gap에서 로컬 최종 버블을 덮어쓰지 않도록 `mergeServerMessagesPreservingLocal()` 경로로 통일하고, `done`/`message_done`/execution replay 완료 직후 `/last-response`를 재확인해 서버 최종 assistant를 병합 | 🐛 Frontend |
+
+실측 원인:
+- 대상 세션 `8ad08cc2-620c-4a70-8305-74a8d9b43c4e`는 DB 기준 assistant 최종 메시지 `2851f6d1-a52a-4f3d-a650-7b14e1f918cf`가 2026-05-12 07:20:03 KST에 저장되어 있었고, `streaming_placeholder=0`, `current_execution_id=NULL`이었다.
+- 따라서 백엔드 저장 실패가 아니라 프론트 완료 직후 재조회/폴링/로컬 placeholder 교체 경로의 표시 소실 문제로 판정했다.
+
+검증:
+- `docker exec aads-postgres psql ... chat_messages/chat_sessions` 대상 세션 실측
+- `python3 -m pytest tests/unit/test_chat_lightweight_frontend_static.py -q` → 3 passed
+- `npx tsc --noEmit --pretty false` → 통과
+- `npx eslint src/app/chat/page.tsx` → 0 errors, existing warnings only
+- `bash /root/aads/aads-dashboard/deploy.sh` → blue-green 배포 성공, 프론트엔드 QA 통과
+
 ### 2026-05-06
 
 | 커밋 | 변경 | 구분 |

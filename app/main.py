@@ -477,6 +477,11 @@ async def lifespan(app: FastAPI):
                         "WHERE status='awaiting_approval' "
                         "AND chat_session_id IS NOT NULL "
                         "AND updated_at < NOW() - INTERVAL '90 seconds' "
+                        "AND NOT EXISTS ("
+                        "  SELECT 1 FROM jsonb_array_elements(COALESCE(logs, '[]'::jsonb)) AS log "
+                        "  WHERE log->>'event' = 'notify_ai' "
+                        "  AND log->>'status' = 'awaiting_approval'"
+                        ") "
                         "ORDER BY updated_at ASC LIMIT 5"
                     )
                 for row in rows:

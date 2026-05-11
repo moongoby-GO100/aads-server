@@ -577,6 +577,36 @@ async def notify_completion(job_id: str):
     output = row["output_preview"] or ""
 
     if status == "awaiting_approval":
+        async with pool.acquire() as conn:
+            notify_claimed = await conn.fetchrow(
+                """
+                UPDATE pipeline_jobs
+                SET logs = COALESCE(logs, '[]'::jsonb) || jsonb_build_array(
+                    jsonb_build_object(
+                        'ts', NOW()::text,
+                        'event', 'notify_ai',
+                        'status', 'awaiting_approval',
+                        'source', 'pipeline_notify'
+                    )
+                )
+                WHERE job_id = $1
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements(COALESCE(logs, '[]'::jsonb)) AS log
+                    WHERE log->>'event' = 'notify_ai'
+                      AND log->>'status' = 'awaiting_approval'
+                  )
+                RETURNING job_id
+                """,
+                job_id,
+            )
+        if not notify_claimed:
+            return {
+                "status": "skipped",
+                "reason": "awaiting_approval already notified",
+                "session_id": session_id,
+                "promoted_job_id": promoted_job_id,
+            }
         msg = (f"[시스템] Pipeline Runner 작업 AI 검수 요청\n\n"
                f"**Job**: {job_id}\n**프로젝트**: {project}\n"
                f"**작업**: {instruction}\n**결과 미리보기**:\n{output[:300]}\n\n"
