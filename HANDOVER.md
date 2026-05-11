@@ -13,7 +13,8 @@
   - 원인: `app/main.py`의 execution resume scanner가 `chat_turn_executions.status IN ('running','retrying')`이어도 `updated_at < NOW() - 90 seconds`가 될 때까지 claim하지 않았다. 재시작 직후에는 DB상 “생성 중”으로 보이지만 새 프로세스 메모리에는 producer가 없어 빈 대기 시간이 생겼다.
   - 조치: 새 API 프로세스 시작 시각보다 이전에 갱신된 running/retrying 실행은 startup scan 5초 후 90초 대기 없이 claim하도록 보강했다. 평시 periodic scanner는 기존 stale 기준을 유지하며 `AADS_EXECUTION_RESUME_STALE_SECONDS`로 조정 가능하다. startup 보조 기준은 `AADS_EXECUTION_RESUME_STARTUP_STALE_SECONDS` 기본 15초다.
   - 변경 파일: `app/main.py`, `docs/chat/CHAT-CHANGELOG.md`, `HANDOVER.md`.
-  - 검증: `python3 -m py_compile app/main.py` 통과. 추가 테스트/배포는 이 항목 작성 직후 이어서 수행 필요.
+  - 검증: `python3 -m py_compile app/main.py app/routers/chat.py app/services/chat_service.py` 통과. `python3 -m pytest tests/unit/test_chat_service.py -q` → 22 passed. 변경 파일 대상 `git diff --check -- app/main.py docs/chat/CHAT-CHANGELOG.md HANDOVER.md` 통과.
+  - 배포: `bash /root/aads/aads-server/deploy.sh code` 성공. 활성 스트림 2건을 감지해 active 직접 재시작 대신 peer slot으로 전환했고, health/DB/채팅/LLM 검증 6단계를 통과했다. 배포 후 active는 `aads-server:8100`, `/api/v1/health` OK, active 컨테이너 소스에서 `reclaim_before` 및 resume env 설정 반영 확인.
   - 주의: 현재 작업트리에 기존 무관 변경 `.active_container`, `.active_port`, `docs/CHANGELOG-go100-direct.md`가 남아 있으며 이번 조치 범위에서 되돌리지 않았다.
 
 - **Chat-embedded Design Studio 운영 카드 추가 (2026-05-12 08:10 KST)**:
