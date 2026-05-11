@@ -86,6 +86,20 @@ _BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "300"))  # 5분
 _FIRST_RESPONSE_TIMEOUT_SEC = float(os.getenv("AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC", "120"))
 _RECOVERY_DEDUPE_MODEL_USED = {"recovered", "recovered_from_redis", "stopped", None}
 _RECOVERY_PREFIX_LEN = 50
+_HISTORY_EXCLUDED_INTENTS = (
+    "streaming_placeholder",
+    "rate_limited",
+    "system_trigger",
+    "auto_reaction",
+    "runner_response",
+)
+
+
+def _history_intent_filter_sql(alias: str = "") -> str:
+    """SQL predicate for messages that should not crowd LLM conversation history."""
+    prefix = f"{alias}." if alias else ""
+    quoted = ", ".join(f"'{intent}'" for intent in _HISTORY_EXCLUDED_INTENTS)
+    return f"AND COALESCE({prefix}intent, '') NOT IN ({quoted})"
 
 _SENTINEL = object()  # Queue 종료 신호
 _RESUME_SEMAPHORE = _heartbeat_asyncio.Semaphore(3)  # 동시 resume 최대 3개 (CEO 지시)
@@ -2066,12 +2080,12 @@ async def _resume_single_stream(
                 raw_messages = [{"role": "user", "content": target_user_msg}] if target_user_msg else []
             else:
                 async with pool.acquire() as conn:
-                    hist_rows = await conn.fetch("""
+                    hist_rows = await conn.fetch(f"""
                         SELECT id, role, content FROM (
                             SELECT id, role, content, created_at FROM chat_messages
                             WHERE session_id = $1
                               AND (is_compacted IS NULL OR is_compacted = false)
-                              AND intent NOT IN ('streaming_placeholder', 'rate_limited')
+                              {_history_intent_filter_sql()}
                             ORDER BY created_at DESC LIMIT 30
                         ) sub ORDER BY created_at ASC
                     """, sid)
@@ -3753,10 +3767,11 @@ async def run_discussion(
             workspace_name = sp_row["workspace_name"] or "CEO"
 
         hist_rows = await conn.fetch(
-            """
+            f"""
             SELECT id, role, content FROM (
                 SELECT id, role, content, created_at FROM chat_messages
                 WHERE session_id = $1 AND (is_compacted IS NULL OR is_compacted = false)
+                {_history_intent_filter_sql()}
                 ORDER BY created_at DESC LIMIT 200
             ) sub ORDER BY created_at ASC
             """,
@@ -4490,13 +4505,14 @@ async def send_message_stream(
                 )
                 if _bp_row:
                     hist_rows = await conn.fetch(
-                        """
+                        f"""
                         SELECT id, role, content FROM (
                             SELECT id, role, content, created_at FROM chat_messages
                             WHERE session_id = $1
                               AND (is_compacted IS NULL OR is_compacted = false)
                               AND branch_id IS NULL
                               AND created_at <= $2
+                              {_history_intent_filter_sql()}
                             ORDER BY created_at DESC LIMIT 200
                         ) sub ORDER BY created_at ASC
                         """,
@@ -4510,10 +4526,11 @@ async def send_message_stream(
                 logger.info(f"[BRANCH] session={session_id[:8]} branch_id={branch_id} point={branch_point_msg_id[:8]} hist={len(raw_messages)}")
             else:
                 hist_rows = await conn.fetch(
-                    """
+                    f"""
                     SELECT id, role, content FROM (
                         SELECT id, role, content, created_at FROM chat_messages
                         WHERE session_id = $1 AND (is_compacted IS NULL OR is_compacted = false)
+                        {_history_intent_filter_sql()}
                         ORDER BY created_at DESC LIMIT 200
                     ) sub ORDER BY created_at ASC
                     """,
@@ -5246,6 +5263,13 @@ async def send_message_stream(
             )
             system_prompt = _compiled_prompt.system_prompt
             _prov = _compiled_prompt.provenance
+            _prov["context_policy"] = {
+                "raw_history_messages": len(raw_messages),
+                "llm_history_messages": len(messages),
+                "excluded_history_intents": list(_HISTORY_EXCLUDED_INTENTS),
+                "conversation_history_limit": 200,
+                "cli_resume_policy": "inject compact recent turns, not latest-user-only",
+            }
             logger.info(
                 f"[PROMPT_COMPILER] compiled assets={len(_prov.get('applied_assets') or [])} "
                 f"layers={_prov.get('layers_applied')} chars={_prov.get('system_prompt_chars')} "

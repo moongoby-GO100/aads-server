@@ -34,6 +34,9 @@ logger = logging.getLogger(__name__)
 
 settings = Settings()
 
+_CLI_NO_RESUME_HISTORY_WINDOW = int(os.getenv("AADS_CLI_HISTORY_WINDOW", "80"))
+_CLI_RESUME_CONTINUITY_WINDOW = int(os.getenv("AADS_CLI_RESUME_CONTINUITY_WINDOW", "12"))
+
 _CODEX_PROJECT_KEYS = ("AADS", "KIS", "GO100", "SF", "NTV2", "NAS", "KAKAOBOT")
 _CODEX_PROJECT_CACHE_TTL_SECONDS = 30.0
 _CODEX_PROJECT_CACHE: Dict[str, tuple[str, float]] = {}
@@ -2838,8 +2841,8 @@ async def _run_agent_sdk_with_key(
 def _format_messages_as_text(messages: List[Dict[str, Any]], has_resume: bool = False) -> str:
     """메시지 배열 → 텍스트 변환.
 
-    has_resume=True: CLI가 이전 대화를 기억하므로 최신 user 메시지만 전달.
-    has_resume=False: 대화 기록 포함 (최근 40개 메시지, CLI에 컨텍스트 제공).
+    has_resume=True: CLI resume이 있더라도 최근 대화 압축본을 함께 전달한다.
+    has_resume=False: 대화 기록 포함 (기본 최근 80개 메시지, CLI에 컨텍스트 제공).
     """
 
     def _extract_text(content) -> str:
@@ -2866,30 +2869,42 @@ def _format_messages_as_text(messages: List[Dict[str, Any]], has_resume: bool = 
             return content
         return str(content)
 
-    # --resume 있으면: 최신 user 메시지만
-    if has_resume:
-        for msg in reversed(messages):
-            if msg.get("role") == "user":
-                text = _extract_text(msg.get("content", ""))
-                if text.strip():
-                    return text
-
-    # --resume 없으면: 최근 대화 기록 포함 (최대 40개 메시지)
-    recent = messages[-40:] if len(messages) > 40 else messages
-    parts = []
-    for msg in recent:
-        role = msg.get("role", "user")
-        if role == "system":
-            continue
-        content = _extract_text(msg.get("content", ""))
-        if not content.strip():
-            continue
-        # 긴 응답은 축소
+    def _compact(role: str, content: str) -> str:
         if role == "assistant" and len(content) > 1000:
-            content = content[:800] + "\n...[응답 축소]..." + content[-200:]
-        role_label = "CEO" if role == "user" else "AI"
-        parts.append("[%s]\n%s" % (role_label, content))
-    return "\n\n".join(parts)
+            return content[:800] + "\n...[응답 축소]..." + content[-200:]
+        if role == "user" and len(content) > 1600:
+            return content[:1300] + "\n...[지시 축소]..." + content[-300:]
+        return content
+
+    def _render_history(history: List[Dict[str, Any]]) -> str:
+        parts = []
+        for msg in history:
+            role = msg.get("role", "user")
+            if role == "system":
+                continue
+            content = _extract_text(msg.get("content", ""))
+            if not content.strip():
+                continue
+            role_label = "CEO" if role == "user" else "AI"
+            parts.append("[%s]\n%s" % (role_label, _compact(role, content)))
+        return "\n\n".join(parts)
+
+    # --resume 있으면: CLI 자체 대화상태만 믿지 않고 최근 턴을 명시 주입한다.
+    # 모델 변경, CLI session map 누락/오염, 긴 러너 보고 뒤 후속지시에서 이전 응답 누락을 방어한다.
+    if has_resume:
+        recent = messages[-_CLI_RESUME_CONTINUITY_WINDOW:] if len(messages) > _CLI_RESUME_CONTINUITY_WINDOW else messages
+        rendered = _render_history(recent)
+        if rendered.strip():
+            return (
+                "[AADS 대화 연속성 컨텍스트]\n"
+                "CLI resume 상태가 있더라도 아래 최근 대화와 CEO의 최신 지시를 우선 참고하세요. "
+                "이 컨텍스트는 모델 변경 또는 resume 상태 손실 시 맥락 유지를 위한 안전장치입니다.\n\n"
+                f"{rendered}"
+            )
+
+    # --resume 없으면: 최근 대화 기록 포함
+    recent = messages[-_CLI_NO_RESUME_HISTORY_WINDOW:] if len(messages) > _CLI_NO_RESUME_HISTORY_WINDOW else messages
+    return _render_history(recent)
 
 
 def _format_messages_for_llm(
@@ -2948,9 +2963,27 @@ def _format_messages_for_llm(
                 blocks.append({"type": "text", "text": b})
         return blocks
 
-    # has_resume=True: 최신 user 메시지만 (이미지 포함)
+    # has_resume=True: 최근 텍스트 히스토리 + 최신 이미지 메시지를 함께 전달
     if has_resume:
-        return _content_to_blocks(content)
+        blocks: List[Dict[str, Any]] = []
+        history_msgs = [m for m in messages if m is not latest_user_msg]
+        recent_history = (
+            history_msgs[-_CLI_RESUME_CONTINUITY_WINDOW:]
+            if len(history_msgs) > _CLI_RESUME_CONTINUITY_WINDOW
+            else history_msgs
+        )
+        history_text = _format_messages_as_text(recent_history, has_resume=False)
+        if history_text.strip():
+            blocks.append({
+                "type": "text",
+                "text": (
+                    "[AADS 대화 연속성 컨텍스트]\n"
+                    "CLI resume 상태가 있더라도 아래 최근 대화를 참고하세요.\n\n"
+                    f"{history_text}\n\n[CEO 최신 메시지]"
+                ),
+            })
+        blocks.extend(_content_to_blocks(content))
+        return blocks
 
     # has_resume=False: 대화 이력(텍스트) + 최신 메시지(이미지 포함)
     blocks: List[Dict[str, Any]] = []
