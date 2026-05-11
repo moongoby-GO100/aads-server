@@ -31,6 +31,7 @@ DEFAULT_SERVER_URL = "wss://aads.newtalk.kr/api/v1/pc-agent/ws"
 HTTP_BASE = "https://aads.newtalk.kr"
 CRASH_COUNT_FILE = INSTALL_DIR / ".crash_count"
 MAX_CRASHES_BEFORE_REDOWNLOAD = 3
+SELF_UPDATE_EXIT_CODE = 42
 
 # ---------------------------------------------------------------------------
 # 로깅 설정
@@ -212,6 +213,7 @@ def run_agent(cfg: dict):
             return None
 
         agent_instance = mod.PCAgent()
+        exit_state: dict[str, int | None] = {"code": None}
 
         class _FakeProc:
             """Thread를 Popen 인터페이스처럼 래핑."""
@@ -220,7 +222,9 @@ def run_agent(cfg: dict):
                 self._agent = agent_obj
 
             def poll(self) -> int | None:
-                return None if self._t.is_alive() else 0
+                if self._t.is_alive():
+                    return None
+                return exit_state["code"] if exit_state["code"] is not None else 0
 
             def terminate(self) -> None:
                 if self._agent:
@@ -233,7 +237,15 @@ def run_agent(cfg: dict):
             import asyncio as _asyncio
             try:
                 _asyncio.run(agent_instance.run())
+                exit_state["code"] = 0
+            except SystemExit as e:
+                if isinstance(e.code, int):
+                    exit_state["code"] = e.code
+                else:
+                    exit_state["code"] = 1
+                logger.info("에이전트 스레드 종료 신호 수신 (code=%s)", exit_state["code"])
             except Exception as e:
+                exit_state["code"] = 1
                 logger.error("에이전트 스레드 오류: %s", e)
 
         t = threading.Thread(target=_run_agent, daemon=True, name="KakaoBotAgent")
@@ -390,6 +402,23 @@ def main() -> None:
                 if stop_requested.is_set():
                     logger.info("사용자 종료 요청으로 런처 루프 종료")
                     break
+
+                if ret == SELF_UPDATE_EXIT_CODE:
+                    logger.info("self_update 종료 신호 감지 — 최신 agent ZIP 다운로드 후 재기동")
+                    _set_crash_count(0)
+                    try:
+                        need, remote_ver = check_update(cfg)
+                        if need:
+                            download_update(cfg, remote_ver)
+                        else:
+                            logger.info("self_update 신호였지만 서버 버전과 로컬 버전이 이미 일치")
+                    except Exception as e:
+                        logger.error("self_update 다운로드 실패 — 기존 코드로 재기동 시도: %s", e)
+                    time.sleep(5)
+                    proc = run_agent(cfg)
+                    if proc is None:
+                        break
+                    continue
 
                 crash_n = _get_crash_count() + 1
                 _set_crash_count(crash_n)

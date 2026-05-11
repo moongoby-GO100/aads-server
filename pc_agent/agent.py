@@ -95,6 +95,23 @@ def _acquire_single_instance() -> bool:
         return True  # 뮤텍스 실패 시 실행 허용
 
 
+def release_single_instance() -> None:
+    """현재 프로세스가 보유한 Windows agent mutex를 명시적으로 해제."""
+    global _win_mutex
+    if sys.platform != "win32" or _win_mutex is None:
+        return
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.ReleaseMutex(_win_mutex)
+        kernel32.CloseHandle(_win_mutex)
+        logger.info("에이전트 단일 인스턴스 뮤텍스 해제 완료")
+    except Exception as e:
+        logger.debug("에이전트 뮤텍스 해제 실패 (무시): %s", e)
+    finally:
+        _win_mutex = None
+
+
 # ── 유틸리티 ──────────────────────────────────────────────────────────────
 
 def _get_persistent_agent_id() -> str:

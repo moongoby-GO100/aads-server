@@ -39,6 +39,13 @@ def _restart_agent() -> None:
     logger.info("에이전트 재시작 중...")
     if getattr(sys, "frozen", False):
         logger.info("frozen EXE 감지 — 종료 후 launcher 자동 재시작")
+        try:
+            import agent as _agent_module
+            release_mutex = getattr(_agent_module, "release_single_instance", None)
+            if callable(release_mutex):
+                release_mutex()
+        except Exception as exc:
+            logger.debug("재시작 전 mutex 해제 실패 (무시): %s", exc)
         sys.exit(42)
     python = sys.executable
     agent_py = str(AGENT_DIR / "agent.py")
