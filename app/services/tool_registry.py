@@ -123,6 +123,11 @@ _DEFER_LOADING: Dict[str, bool] = {
     "send_alert_message": True,       # 온디맨드
     # ── QA ────────────────────────────────────────────────────────────
     "visual_qa_test": True,           # 온디맨드
+    # ── E2E Credential Vault ───────────────────────────────────────────
+    "credential_list": True,          # 온디맨드
+    "credential_register": True,      # 온디맨드
+    "credential_delete": True,        # 온디맨드
+    "credential_test_login": True,    # 온디맨드
     # ── CEO 아젠다 관리 ────────────────────────────────────────────────
     "add_agenda": False,              # 핵심 — CEO/CTO 아젠다 등록
     "list_agendas": False,            # 핵심 — 아젠다 목록 조회
@@ -134,6 +139,10 @@ _DEFER_LOADING: Dict[str, bool] = {
     "query_timeline": True,  # 자동 추가
     "recall_tool_result": True,  # 자동 추가
     "tool_metrics": True,  # 도구 통계 조회 — 온디맨드
+    "crawl4ai_fetch": True,  # 자동 추가
+    "db_safe_write": True,  # 자동 추가
+    "notify_channel": True,  # 자동 추가
+    "tool_layer_audit": True,  # 자동 추가
 }
 
 # 도구 카테고리 안내 (시스템 프롬프트 주입용 — context_builder.py에서 사용)
@@ -2274,6 +2283,58 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "name": "visual_qa_test",
         "description": "UI 비주얼 테스트 (Playwright 기반). 현재 capture_screenshot + 분석 조합 권장.",
         "input_schema": {"type": "object", "properties": {"url": {"type": "string"}, "checks": {"type": "array", "items": {"type": "string"}}}, "required": ["url"]},
+    },
+    # ── E2E Credential Vault (AADS-VAULT) ──────────────────────────────────
+    "credential_list": {
+        "name": "credential_list",
+        "description": "E2E Credential Vault 자격증명 목록 조회. project/service 필터 지원. 비밀번호 마스킹.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "description": "프로젝트 필터 (선택)"},
+                "service": {"type": "string", "description": "서비스명 필터 (선택)"},
+            },
+            "required": [],
+        },
+    },
+    "credential_register": {
+        "name": "credential_register",
+        "description": "새 자격증명 등록 (Fernet 암호화 저장). 동일 service+project+label이면 UPSERT.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "service": {"type": "string", "description": "서비스명"},
+                "username": {"type": "string", "description": "로그인 아이디"},
+                "password": {"type": "string", "description": "비밀번호"},
+                "project": {"type": "string", "description": "프로젝트명 (선택)"},
+                "label": {"type": "string", "description": "라벨 (기본: 기본)"},
+                "login_url": {"type": "string", "description": "로그인 URL (선택)"},
+                "login_steps": {"type": "array", "description": "자동 로그인 스텝 (선택)", "items": {"type": "object"}},
+            },
+            "required": ["service", "username", "password"],
+        },
+    },
+    "credential_delete": {
+        "name": "credential_delete",
+        "description": "자격증명 소프트 삭제.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "credential_id": {"type": "string", "description": "삭제할 자격증명 UUID"},
+            },
+            "required": ["credential_id"],
+        },
+    },
+    "credential_test_login": {
+        "name": "credential_test_login",
+        "description": "저장된 자격증명으로 Playwright 로그인 테스트.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "credential_id": {"type": "string", "description": "테스트할 자격증명 UUID"},
+            },
+            "required": ["credential_id"],
+        },
     },
     # ── CEO 아젠다 관리 (AADS-CEO-AGENDA) ────────────────────────────────────
     "add_agenda": {

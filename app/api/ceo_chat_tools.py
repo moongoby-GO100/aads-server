@@ -32,6 +32,25 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
+_SECRET_PARAM_KEYS = {
+    "password", "passwd", "pwd", "password_enc", "secret",
+    "client_secret", "token", "auth_token", "access_token",
+    "refresh_token", "api_key", "authorization",
+}
+
+
+def sanitize_tool_params(value: Any) -> Any:
+    """도구 입력/이벤트에서 비밀번호와 토큰류를 마스킹."""
+    if isinstance(value, dict):
+        return {
+            k: "********" if str(k).lower() in _SECRET_PARAM_KEYS else sanitize_tool_params(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [sanitize_tool_params(item) for item in value]
+    return value
+
+
 # ─── 도구 정의 (Anthropic tool_use 포맷) ──────────────────────────────────────
 TOOL_DEFINITIONS: List[Dict] = [
     {
@@ -1241,6 +1260,68 @@ TOOL_DEFINITIONS: List[Dict] = [
                 },
             },
             "required": ["task_id"],
+        },
+    },
+    # ── E2E Credential Vault 도구 ──────────────────────────────────────────
+    {
+        "name": "credential_list",
+        "description": "E2E Credential Vault 자격증명 목록 조회. project/service 필터 지원. 비밀번호는 항상 마스킹.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "프로젝트 필터 (선택, 예: AADS, KIS, GO100, SF, NTV2)",
+                },
+                "service": {
+                    "type": "string",
+                    "description": "서비스명 필터 (선택, 예: aads-dashboard)",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "credential_register",
+        "description": "새 자격증명 등록 (Fernet 암호화 저장). 동일 service+project+label이면 UPSERT.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "service": {"type": "string", "description": "서비스명 (예: aads-dashboard, newtalk-admin)"},
+                "username": {"type": "string", "description": "로그인 아이디/이메일"},
+                "password": {"type": "string", "description": "비밀번호"},
+                "project": {"type": "string", "description": "프로젝트명 (선택)"},
+                "label": {"type": "string", "description": "라벨 (기본: 기본)"},
+                "login_url": {"type": "string", "description": "로그인 페이지 URL (선택)"},
+                "login_steps": {
+                    "type": "array",
+                    "description": "자동 로그인 스텝 (선택). [{action, selector, value, url, ms, pattern}]",
+                    "items": {"type": "object"},
+                },
+            },
+            "required": ["service", "username", "password"],
+        },
+    },
+    {
+        "name": "credential_delete",
+        "description": "자격증명 소프트 삭제 (is_active=false).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "credential_id": {"type": "string", "description": "삭제할 자격증명 UUID"},
+            },
+            "required": ["credential_id"],
+        },
+    },
+    {
+        "name": "credential_test_login",
+        "description": "저장된 자격증명으로 Playwright 로그인 테스트. 성공/실패 반환.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "credential_id": {"type": "string", "description": "테스트할 자격증명 UUID"},
+            },
+            "required": ["credential_id"],
         },
     },
 ]
@@ -2541,6 +2622,30 @@ async def tool_browser_navigate(url: str) -> str:
             except Exception as login_err:
                 logger.warning(f"browser auto-login failed: {login_err}")
 
+        # Vault 자동 로그인: /login, /signin, /auth 리다이렉트 감지
+        _login_patterns = ("/login", "/signin", "/auth")
+        _cur = page.url
+        if any(p in _cur for p in _login_patterns) and not any(p in url for p in _login_patterns):
+            try:
+                from app.core.credential_vault import list_credentials, get_credential, execute_login_steps
+                creds = await list_credentials(include_secrets=False)
+                matched = None
+                for c in creds:
+                    c_login_url = c.get("login_url", "") or ""
+                    if c_login_url and (c_login_url in _cur or urlparse(c_login_url).netloc == urlparse(_cur).netloc):
+                        matched = c
+                        break
+                if matched:
+                    full_cred = await get_credential(matched["id"], include_secrets=True)
+                    if full_cred:
+                        await execute_login_steps(page, full_cred)
+                        await page.goto(url, timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
+                        logger.info("vault_auto_login service=%s", matched.get("service"))
+                else:
+                    logger.info("vault_no_matching_credential url=%s", _cur)
+            except Exception as vault_err:
+                logger.warning("vault auto-login failed: %s", vault_err)
+
         title = await page.title()
         return f"[탐색 완료]\n제목: {title}\nURL: {page.url}"
     except Exception as e:
@@ -3233,6 +3338,95 @@ async def _infer_project_from_session(chat_session_id: str) -> str:
     return _project_from_workspace_name(str(row["name"] or ""))
 
 
+# ── E2E Credential Vault 핸들러 ───────────────────────────────────────────────
+
+async def tool_credential_list(project: str = "", service: str = "") -> str:
+    """Vault 자격증명 목록 조회 (비밀번호 마스킹)."""
+    from app.core.credential_vault import list_credentials
+    try:
+        creds = await list_credentials(
+            project=project or None,
+            service=service or None,
+            include_secrets=False,
+        )
+        if not creds:
+            return "[Credential Vault] 등록된 자격증명이 없습니다."
+        lines = [f"[Credential Vault] {len(creds)}건"]
+        for c in creds:
+            lines.append(
+                f"  - id={c['id']} service={c.get('service')} project={c.get('project','(공통)')} "
+                f"label={c.get('label')} username={c.get('username')} password=******** "
+                f"login_url={c.get('login_url','(없음)')}"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        return f"[ERROR] credential_list 실패: {e}"
+
+
+async def tool_credential_register(
+    service: str, username: str, password: str,
+    project: str = "", label: str = "기본",
+    login_url: str = "", login_steps: list = None,
+) -> str:
+    """새 자격증명 등록 (Fernet 암호화)."""
+    from app.core.credential_vault import create_credential
+    try:
+        result = await create_credential(
+            service=service,
+            username=username,
+            password=password,
+            project=project or None,
+            label=label or "기본",
+            login_url=login_url or None,
+            login_steps=login_steps,
+        )
+        return (
+            f"[Credential 등록 완료] id={result['id']} "
+            f"service={result.get('service')} username={result.get('username')} password=********"
+        )
+    except Exception as e:
+        return f"[ERROR] credential_register 실패: {e}"
+
+
+async def tool_credential_delete(credential_id: str) -> str:
+    """자격증명 소프트 삭제."""
+    from app.core.credential_vault import delete_credential
+    try:
+        ok = await delete_credential(credential_id)
+        if ok:
+            return f"[Credential 삭제 완료] id={credential_id} (소프트 삭제)"
+        return f"[ERROR] id={credential_id} 를 찾을 수 없거나 이미 삭제됨"
+    except Exception as e:
+        return f"[ERROR] credential_delete 실패: {e}"
+
+
+async def tool_credential_test_login(credential_id: str) -> str:
+    """저장된 자격증명으로 Playwright 로그인 테스트."""
+    from app.core.credential_vault import get_credential, execute_login_steps, mark_verified
+    try:
+        cred = await get_credential(credential_id, include_secrets=True)
+        if not cred:
+            return f"[ERROR] id={credential_id} 자격증명을 찾을 수 없습니다."
+        if not cred.get("login_url"):
+            return "[ERROR] login_url이 설정되지 않아 테스트할 수 없습니다. credential_register로 login_url을 포함해 재등록하세요."
+        ctx, err = await _acquire_pw_context()
+        if err:
+            return f"[ERROR] 브라우저 연결 필요: {err}"
+        page = await ctx.new_page()
+        try:
+            await page.goto(cred["login_url"], timeout=15000, wait_until="domcontentloaded")
+            success = await execute_login_steps(page, cred)
+            await mark_verified(credential_id, success)
+            current_url = page.url
+            if success:
+                return f"[로그인 테스트 성공] id={credential_id} service={cred.get('service')} → {current_url}"
+            return f"[로그인 테스트 실패] id={credential_id} — 스텝 실행 중 오류 발생. → {current_url}"
+        finally:
+            await page.close()
+    except Exception as e:
+        return f"[ERROR] credential_test_login 실패: {e}"
+
+
 async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session_id: str = "") -> str:
     """도구 이름과 파라미터로 실제 실행."""
     params = dict(params or {})
@@ -3264,6 +3458,26 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         return await tool_query_db(params.get("sql", ""), dsn)
     elif name == "fetch_url":
         return await tool_fetch_url(params.get("url", ""))
+    # ── E2E Credential Vault 도구 ────────────────────────────────────────────
+    elif name == "credential_list":
+        return await tool_credential_list(
+            project=params.get("project", ""),
+            service=params.get("service", ""),
+        )
+    elif name == "credential_register":
+        return await tool_credential_register(
+            service=params.get("service", ""),
+            username=params.get("username", ""),
+            password=params.get("password", ""),
+            project=params.get("project", ""),
+            label=params.get("label", "기본"),
+            login_url=params.get("login_url", ""),
+            login_steps=params.get("login_steps"),
+        )
+    elif name == "credential_delete":
+        return await tool_credential_delete(params.get("credential_id", ""))
+    elif name == "credential_test_login":
+        return await tool_credential_test_login(params.get("credential_id", ""))
     # ── Browser 도구 (AADS-159) ─────────────────────────────────────────────
     elif name == "browser_connect":
         return await tool_browser_connect(

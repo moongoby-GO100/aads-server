@@ -463,7 +463,7 @@ async def _call_anthropic_with_tools(
     stop_reason='end_turn' 또는 max_iterations 초과 시 종료.
     """
     import time as _t
-    from app.api.ceo_chat_tools import TOOL_DEFINITIONS, execute_tool
+    from app.api.ceo_chat_tools import TOOL_DEFINITIONS, execute_tool, sanitize_tool_params
 
     tokens = get_oauth_tokens()
     if not tokens:
@@ -552,7 +552,10 @@ async def _call_anthropic_with_tools(
             # 도구 실행 및 결과 수집
             tool_results = []
             for block in tool_use_blocks:
-                logger.info(f"ceo_chat_tool_call tool={block.name} params={block.input}")
+                logger.info(
+                    "ceo_chat_tool_call tool=%s params=%s",
+                    block.name, sanitize_tool_params(block.input),
+                )
                 result = await execute_tool(block.name, block.input, dsn, chat_session_id)
                 tool_results.append(
                     {

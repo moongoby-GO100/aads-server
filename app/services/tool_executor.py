@@ -466,6 +466,11 @@ class ToolExecutor:
             "list_agendas": self._list_agendas,
             "search_agendas": self._search_agendas,
             "update_agenda": self._update_agenda,
+            # 자동 추가 (check_tool_consistency --fix)
+            "credential_delete": self._credential_delete,
+            "credential_list": self._credential_list,
+            "credential_register": self._credential_register,
+            "credential_test_login": self._credential_test_login,
             # 첨부파일 재읽기
             "read_uploaded_file":     self._read_uploaded_file,
             # 작업 모니터
@@ -4059,6 +4064,27 @@ class ToolExecutor:
             role=inp.get("role", "all"),
             limit=inp.get("limit", 10),
         )
+
+
+    async def _credential_delete(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("credential_delete", inp, "", "")
+
+    async def _credential_list(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("credential_list", inp, "", "")
+
+    async def _credential_register(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("credential_register", inp, "", "")
+
+    async def _credential_test_login(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("credential_test_login", inp, "", "")
 
 # ─── 하위 호환성 ─────────────────────────────────────────────────────────────
 
