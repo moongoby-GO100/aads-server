@@ -1,6 +1,14 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-12)
+- **Chat restart resume trigger guard (2026-05-12 08:34 KST)**:
+  - 요청: 서버 재시작 후 채팅 응답이 이어서 진행되지 않는 문제의 즉시 개선.
+  - 원인: `app/main.py`의 execution resume scanner가 `chat_turn_executions.status IN ('running','retrying')`이어도 `updated_at < NOW() - 90 seconds`가 될 때까지 claim하지 않았다. 재시작 직후에는 DB상 “생성 중”으로 보이지만 새 프로세스 메모리에는 producer가 없어 빈 대기 시간이 생겼다.
+  - 조치: 새 API 프로세스 시작 시각보다 이전에 갱신된 running/retrying 실행은 startup scan 5초 후 90초 대기 없이 claim하도록 보강했다. 평시 periodic scanner는 기존 stale 기준을 유지하며 `AADS_EXECUTION_RESUME_STALE_SECONDS`로 조정 가능하다. startup 보조 기준은 `AADS_EXECUTION_RESUME_STARTUP_STALE_SECONDS` 기본 15초다.
+  - 변경 파일: `app/main.py`, `docs/chat/CHAT-CHANGELOG.md`, `HANDOVER.md`.
+  - 검증: `python3 -m py_compile app/main.py` 통과. 추가 테스트/배포는 이 항목 작성 직후 이어서 수행 필요.
+  - 주의: 현재 작업트리에 기존 무관 변경 `.active_container`, `.active_port`, `docs/CHANGELOG-go100-direct.md`가 남아 있으며 이번 조치 범위에서 되돌리지 않았다.
+
 - **Chat-embedded Design Studio 운영 카드 추가 (2026-05-12 08:10 KST)**:
   - 요청: 독립 `/design/modifications` 페이지로 분리된 Design Studio를 채팅창 안에서 운영할 수 있게 하고, 채팅 AI가 디자인 수정 요청을 맥락 유지형 작업으로 다룰 수 있게 보강.
   - 대시보드: `aads-dashboard/src/app/chat/page.tsx`에 `디자인수정` 액션 칩과 입력창 상단 Design Studio 패널을 추가했다. 채팅 문장/수정 범위/금지 범위/검수 기준을 카드로 고정하고, `POST /api/v1/admin/design/modification-requests` 및 `build-context`를 호출해 컨텍스트팩까지 생성한다.

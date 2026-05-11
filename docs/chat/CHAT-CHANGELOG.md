@@ -8,8 +8,14 @@ _v1.0 | 2026-04-02 | 최초 작성_
 
 | 커밋 | 변경 | 구분 |
 |------|------|------|
+| 2026-05-12 | **Chat restart resume trigger guard**: 서버 재시작 직후 `chat_turn_executions.status IN ('running','retrying')`이지만 새 프로세스 시작 전 생성된 실행은 90초 stale 대기 없이 startup scanner가 즉시 claim하도록 보강. 평시 periodic scanner는 기존 stale 기준을 유지하되 env로 조정 가능 | 🐛 Backend |
 | 2026-05-12 | **Chat-embedded Design Studio**: `/chat` 입력 액션에 `디자인수정` 칩과 Design Studio 패널을 추가해 채팅 문장을 수정 카드/컨텍스트팩으로 바로 저장하고, `Context`/`Workbench`/AI 운영 지시 삽입 흐름을 제공 | ✨ Frontend+Backend |
 | 2026-05-12 | **Chat final visibility guard**: 완료 직후 메시지 재조회가 assistant 저장 gap에서 로컬 최종 버블을 덮어쓰지 않도록 `mergeServerMessagesPreservingLocal()` 경로로 통일하고, `done`/`message_done`/execution replay 완료 직후 `/last-response`를 재확인해 서버 최종 assistant를 병합 | 🐛 Frontend |
+
+Restart resume trigger guard:
+- 기존 트리거는 `current_execution_id`가 가리키는 `running/retrying` 실행 중 `updated_at < NOW() - 90 seconds`만 자동 claim했다.
+- 개선 후 startup scan은 새 API 프로세스 시작 시각보다 이전에 갱신된 실행을 5초 후 즉시 claim한다. 이 조건은 서버 재시작으로 메모리 `_active_bg_tasks`가 사라진 실행만 대상으로 삼기 위한 안전장치다.
+- 운영 조정값: `AADS_EXECUTION_RESUME_STARTUP_STALE_SECONDS` 기본 15초, `AADS_EXECUTION_RESUME_STALE_SECONDS` 기본 90초.
 
 Design Studio 채팅 내장:
 - `src/app/chat/page.tsx`에서 대상 화면, 수정 요청, 허용 범위, 금지 범위, 검수 기준을 입력해 `/api/v1/admin/design/modification-requests`와 `build-context`를 바로 호출한다.

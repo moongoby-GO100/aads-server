@@ -820,7 +820,10 @@ async def lifespan(app: FastAPI):
     _startup_asyncio.create_task(_periodic_placeholder_cleanup())
 
     # execution_id 기반 미완료 응답 자동 재개
+    from datetime import datetime as _resume_datetime, timezone as _resume_timezone
+
     _execution_resume_attempts: dict[str, int] = {}
+    _execution_resume_started_at = _resume_datetime.now(_resume_timezone.utc)
 
     def _is_execution_resume_owner() -> bool:
         """Only the currently published API container should claim DB resume jobs.
@@ -869,7 +872,12 @@ async def lifespan(app: FastAPI):
 
         return True
 
-    async def _resume_pending_executions_once(max_rows: int = 5):
+    async def _resume_pending_executions_once(
+        max_rows: int = 5,
+        *,
+        reclaim_before=None,
+        min_stale_seconds: int = 90,
+    ):
         try:
             if not _is_execution_resume_owner():
                 logger.info(
@@ -920,11 +928,16 @@ async def lifespan(app: FastAPI):
                     ) ph ON TRUE
                     WHERE te.status IN ('running', 'retrying')
                       AND te.updated_at > NOW() - INTERVAL '30 minutes'
-                      AND te.updated_at < NOW() - INTERVAL '90 seconds'
+                      AND (
+                          te.updated_at < NOW() - ($2::int * INTERVAL '1 second')
+                          OR ($3::timestamptz IS NOT NULL AND te.updated_at < $3::timestamptz)
+                      )
                     ORDER BY te.updated_at DESC
                     LIMIT $1
                     """,
                     max_rows,
+                    min_stale_seconds,
+                    reclaim_before,
                 )
 
                 for row in rows:
@@ -979,11 +992,16 @@ async def lifespan(app: FastAPI):
                             error_message = $2
                         WHERE id = $1::uuid
                           AND status IN ('running', 'retrying')
-                          AND updated_at < NOW() - INTERVAL '90 seconds'
+                          AND (
+                              updated_at < NOW() - ($3::int * INTERVAL '1 second')
+                              OR ($4::timestamptz IS NOT NULL AND updated_at < $4::timestamptz)
+                          )
                         RETURNING id::text
                         """,
                         execution_id,
                         "resume_claimed_by:" + os.getenv("HOSTNAME", "unknown")[:80],
+                        min_stale_seconds,
+                        reclaim_before,
                     )
                     if not _claim_id:
                         continue
@@ -1039,15 +1057,24 @@ async def lifespan(app: FastAPI):
     async def _resume_pending_executions_startup():
         import asyncio as _resume_asyncio
         await _resume_asyncio.sleep(5)
-        await _resume_pending_executions_once(max_rows=5)
+        _startup_stale_seconds = int(os.getenv("AADS_EXECUTION_RESUME_STARTUP_STALE_SECONDS", "15"))
+        await _resume_pending_executions_once(
+            max_rows=10,
+            reclaim_before=_execution_resume_started_at,
+            min_stale_seconds=_startup_stale_seconds,
+        )
 
     async def _periodic_execution_resume_scanner():
         import asyncio as _prs_asyncio
+        _periodic_stale_seconds = int(os.getenv("AADS_EXECUTION_RESUME_STALE_SECONDS", "90"))
         await _prs_asyncio.sleep(15)
         while True:
             try:
                 await _prs_asyncio.sleep(30)
-                await _resume_pending_executions_once(max_rows=5)
+                await _resume_pending_executions_once(
+                    max_rows=5,
+                    min_stale_seconds=_periodic_stale_seconds,
+                )
             except Exception as _e:
                 logger.warning(f"execution_resume_scanner_error: {_e}")
 
