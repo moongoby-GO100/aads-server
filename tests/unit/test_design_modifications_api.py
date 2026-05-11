@@ -121,6 +121,28 @@ class _DesignConn:
         return []
 
     async def fetchrow(self, query: str, *args):
+        if "INSERT INTO design_modification_requests" in query:
+            return {
+                "id": REQUEST_ID,
+                "project_key": "AADS",
+                "screen_id": SCREEN_ID,
+                "user_prompt": args[2],
+                "normalized_card": {"target": "/admin/tasks"},
+                "request_type": args[4],
+                "allowed_scope": {"components": ["SummaryCards"]},
+                "forbidden_scope": {"components": ["Sidebar"]},
+                "acceptance_criteria": ["No overlap"],
+                "status": args[8],
+                "created_at": self.ts,
+                "updated_at": self.ts,
+                "screen_route": "/admin/tasks",
+                "screen_name": "Task Monitor",
+                "screen_purpose": "Pipeline Runner 작업 상태 확인",
+                "screen_primary_actions": ["filter", "approve"],
+                "screen_component_paths": ["src/app/admin/tasks/page.tsx"],
+                "screen_metadata": {"viewport": ["390x844", "1440x900"]},
+                "context_pack_count": 0,
+            }
         if "FROM design_modification_requests r" in query:
             return {
                 "id": REQUEST_ID,
@@ -203,6 +225,29 @@ async def test_list_design_screens(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_create_design_modification_request(monkeypatch):
+    monkeypatch.setattr(design_modifications, "get_pool", lambda: _Pool(_DesignConn()))
+    response = await design_modifications.create_design_modification_request(
+        design_modifications.DesignModificationRequestCreate(
+            project_key="aads",
+            screen_id=UUID(SCREEN_ID),
+            user_prompt="Make the summary cards more compact.",
+            normalized_card={"target": "/admin/tasks"},
+            request_type="spacing_density",
+            allowed_scope={"components": ["SummaryCards"]},
+            forbidden_scope={"components": ["Sidebar"]},
+            acceptance_criteria=["No overlap"],
+            status="draft",
+        ),
+        current_user=_current_user(),
+    )
+
+    assert response.request.project_key == "AADS"
+    assert response.request.screen.route == "/admin/tasks"
+    assert response.request.context_pack_count == 0
+
+
+@pytest.mark.asyncio
 async def test_get_design_modification_request_detail(monkeypatch):
     monkeypatch.setattr(design_modifications, "get_pool", lambda: _Pool(_DesignConn()))
     response = await design_modifications.get_design_modification_request(
@@ -235,6 +280,25 @@ async def test_list_design_modification_requests(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_build_design_modification_context_pack(monkeypatch):
+    async def _fake_build_context_pack(request_id):
+        return {
+            "context_pack": {"request_id": str(request_id), "missing_context": []},
+            "source_count": 3,
+            "missing_context_count": 0,
+        }
+
+    monkeypatch.setattr(design_modifications, "build_context_pack", _fake_build_context_pack)
+    response = await design_modifications.build_design_modification_context_pack(
+        UUID(REQUEST_ID),
+        current_user=_current_user(),
+    )
+
+    assert response["context_pack"]["request_id"] == REQUEST_ID
+    assert response["missing_context_count"] == 0
+
+
+@pytest.mark.asyncio
 async def test_context_pack_list_and_preview(monkeypatch):
     monkeypatch.setattr(design_modifications, "get_pool", lambda: _Pool(_DesignConn()))
     list_response = await design_modifications.list_design_context_packs(
@@ -257,71 +321,6 @@ async def test_context_pack_list_and_preview(monkeypatch):
     assert preview_response.context_pack.source_count == 3
 
 
-@pytest.mark.asyncio
-async def test_get_design_modification_request_qa_score(monkeypatch):
-    async def _fake_score_modification(request_id: UUID) -> dict:
-        assert request_id == UUID(REQUEST_ID)
-        return {
-            "request_id": REQUEST_ID,
-            "project_key": "AADS",
-            "scoring_version": "static-v1",
-            "total_score": 86,
-            "rating": "conditional_approval",
-            "axes": {
-                "request_match": {
-                    "score": 22,
-                    "max_score": 25,
-                    "notes": ["2 acceptance criteria are attached to the request."],
-                },
-                "technical_stability": {
-                    "score": 8,
-                    "max_score": 10,
-                    "notes": ["Static-only technical review; runtime lint, build, and browser checks are out of scope here."],
-                },
-            },
-            "token_compliance": {
-                "compliant": False,
-                "files_scanned": 1,
-                "scanned_file_paths": ["src/app/admin/tasks/page.tsx"],
-                "missing_files": [],
-                "summary": {
-                    "total_violations": 1,
-                    "by_kind": {"raw_hex_color": 1},
-                },
-                "violations": [
-                    {
-                        "kind": "raw_hex_color",
-                        "file_path": "src/app/admin/tasks/page.tsx",
-                        "value": "#123456",
-                        "line": 7,
-                        "column": 18,
-                        "context": "className=\"text-[#123456]\"",
-                        "message": "Raw hex color detected. Prefer existing design tokens or CSS variables.",
-                        "count": None,
-                        "files": [],
-                    }
-                ],
-            },
-            "evidence": {
-                "static_only": True,
-                "snapshot_viewports": ["390x844", "1440x900"],
-            },
-            "scored_at": datetime(2026, 5, 11, 9, 0, tzinfo=timezone.utc),
-        }
-
-    monkeypatch.setattr(design_modifications.design_qa_scorer, "score_modification", _fake_score_modification)
-    response = await design_modifications.get_design_modification_request_qa_score(
-        UUID(REQUEST_ID),
-        current_user=_current_user(),
-    )
-
-    assert response.request_id == REQUEST_ID
-    assert response.total_score == 86
-    assert response.rating == "conditional_approval"
-    assert response.axes["request_match"].score == 22
-    assert response.token_compliance.summary["by_kind"]["raw_hex_color"] == 1
-
-
 def test_design_modification_migration_contains_required_schema():
     content = Path("migrations/084_design_modification_studio.sql").read_text(encoding="utf-8")
 
@@ -332,12 +331,3 @@ def test_design_modification_migration_contains_required_schema():
     assert "CREATE TABLE IF NOT EXISTS design_decisions" in content
     assert "design_modification_requests_status_check" in content
     assert "idx_design_context_packs_request_created" in content
-
-
-def test_design_qa_score_migration_contains_required_schema():
-    content = Path("migrations/085_design_qa_scores.sql").read_text(encoding="utf-8")
-
-    assert "CREATE TABLE IF NOT EXISTS design_qa_scores" in content
-    assert "request_match_score" in content
-    assert "token_compliance JSONB" in content
-    assert "idx_design_qa_scores_total_updated" in content

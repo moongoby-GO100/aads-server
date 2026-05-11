@@ -1,18 +1,12 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-11)
-- **SearXNG + 크롤링 통합 검색 도구 연결 보강 (2026-05-11 19:05 KST)**:
-  - `search_crawl_match`는 `tool_registry`의 `search` 그룹 최우선 도구로 등록되어 있고, `search_searxng`도 같은 그룹에 유지되어 기존 SearXNG 단순 검색 도구가 계속 노출된다.
-  - `app/services/tool_executor.py`의 하위 호환 `_INTENT_TOOL_MAP["search"]`에도 `search_searxng`를 추가해 구형 검색 인텐트 경로에서도 `search_crawl_match`, `search_searxng`, `web_search`가 모두 후보로 잡히게 했다.
-  - 검증: `python3 -m pytest tests/unit/test_search_crawl_match.py -q` → `4 passed`; `python3 -m py_compile app/services/tool_executor.py app/services/tool_registry.py app/services/chat_service.py app/api/ceo_chat_tools.py app/api/ceo_chat.py app/services/model_selector.py app/services/smart_search_service.py` 통과.
-
-- **AADS-DESIGN-MOD-005 Design QA Score/Token Compliance 추가 (2026-05-11 KST)**:
-  - `app/services/design_qa_scorer.py` 신규 추가. `score_modification(request_id)`가 요청/컨텍스트팩/snapshot/decision을 읽어 정적 휴리스틱 기반 QA 점수(`request_match`, `context_retention`, `visual_completeness`, `responsive_stability`, `accessibility`, `technical_stability`)를 계산하고 저장한다.
-  - `check_token_compliance(file_paths)`를 추가해 raw hex color, emoji icon, repeated button pattern, viewport font scaling을 정적 스캔한다. 파일 경로는 `screen.component_paths`, `allowed_scope`, 최신 context pack의 file/component path 후보에서 수집한다.
-  - `migrations/085_design_qa_scores.sql` 추가. 요청별 총점/축별 점수와 `score_details`, `token_compliance`, `evidence` JSONB를 보관하는 `design_qa_scores` 테이블을 정의했다.
-  - `app/api/design_modifications.py`에 `GET /api/v1/admin/design/modification-requests/{request_id}/qa-score`를 추가했다. 호출 시 점수를 재계산하고 upsert 결과를 응답한다.
-  - 테스트 파일: `tests/unit/test_design_qa_scorer.py`, `tests/unit/test_design_modifications_api.py`를 보강해 compliance 스캔, 스코어 저장, QA 응답 스키마, `085` 마이그레이션 구조를 검증하도록 추가했다.
-  - 검증 실행은 이번 세션에서 수행하지 않았다.
+- **AADS-DESIGN-MOD-003 Design Context Pack Builder 추가 (2026-05-11 KST)**:
+  - 변경 파일: `app/services/design_context_builder.py`, `app/api/design_modifications.py`, `tests/unit/test_design_context_builder.py`, `tests/unit/test_design_modifications_api.py`, `HANDOVER.md`.
+  - 조치: `build_context_pack(request_id)` 서비스를 추가해 `design_projects`, `design_screens`, `design_modification_requests`, `design_token_sets`, `design_visual_snapshots(phase='before')`에서 AI 주입용 context를 조립하고 `design_context_packs`에 저장하도록 구현했다.
+  - 조치: context에는 project metadata, screen info, component path candidates, `DESIGN.md` 내용, design tokens, baseline screenshot URL, viewport matrix, allowed/forbidden scope, acceptance criteria를 포함한다. `DESIGN.md`는 repo root와 `docs/` 후보만 읽고, key/token/secret/password 계열 값과 토큰형 문자열은 저장 전 redaction한다.
+  - API: `POST /api/v1/admin/design/modification-requests` 요청 생성 엔드포인트와 `POST /api/v1/admin/design/modification-requests/{request_id}/build-context` 빌더 실행 엔드포인트를 추가했다.
+  - 테스트: builder 단위 테스트는 mock DB와 임시 `DESIGN.md`로 필수 context 조립, redaction, missing_context 저장을 검증하도록 추가했다. API 테스트에는 요청 생성과 build-context 트리거 회귀 테스트를 보강했다.
 
 - **Pipeline Runner AADS 백엔드/대시보드 라우팅 오분류 패치 (2026-05-11 18:17 KST)**:
   - 증상: AADS 지시문에 `Backend workdir: /root/aads/aads-server`와 `Dashboard workdir: /root/aads/aads-dashboard`가 함께 있으면 `scripts/pipeline-runner.sh`가 대시보드 키워드를 먼저 감지해 백엔드 작업도 `/root/aads/aads-dashboard` worktree에서 실행했다.

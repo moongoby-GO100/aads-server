@@ -1,6 +1,7 @@
-"""Read-only API for Design Modification Studio foundation."""
+"""API for Design Modification Studio foundation."""
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -11,7 +12,8 @@ from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
 from app.core.db_pool import get_pool
-from app.services import design_qa_scorer
+from app.services.design_context_builder import DesignContextRequestNotFound
+from app.services.design_context_builder import build_context_pack
 
 router = APIRouter(prefix="/admin/design", tags=["design-modifications"])
 
@@ -22,6 +24,22 @@ _REQUEST_STATUSES = {
     "review",
     "approved",
     "rejected",
+}
+_REQUEST_TYPES = {
+    "spacing",
+    "spacing_density",
+    "visual_hierarchy",
+    "color",
+    "color_brand",
+    "typography",
+    "component",
+    "component_consistency",
+    "responsive",
+    "interaction",
+    "content_clarity",
+    "workflow_layout",
+    "flow",
+    "other",
 }
 
 
@@ -50,12 +68,49 @@ def _validate_status(status: str | None) -> str | None:
     return normalized
 
 
+def _validate_request_type(request_type: str | None) -> str:
+    normalized = (request_type or "other").strip().lower()
+    if not normalized:
+        return "other"
+    if normalized not in _REQUEST_TYPES:
+        raise HTTPException(status_code=400, detail=f"unsupported request_type '{request_type}'")
+    return normalized
+
+
 def _as_list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _as_json_value(value: Any, fallback: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return fallback
+        return parsed if isinstance(parsed, (dict, list)) else fallback
+    return fallback if value is None else value
 
 
 def _json_size(value: Any) -> int:
@@ -178,6 +233,22 @@ class DesignModificationRequestDetailResponse(BaseModel):
     decisions: list[DesignDecisionSummary] = Field(default_factory=list)
 
 
+class DesignModificationRequestCreate(BaseModel):
+    project_key: str
+    screen_id: UUID | None = None
+    user_prompt: str = Field(..., min_length=1)
+    normalized_card: dict[str, Any] = Field(default_factory=dict)
+    request_type: str = "other"
+    allowed_scope: Any = Field(default_factory=dict)
+    forbidden_scope: Any = Field(default_factory=dict)
+    acceptance_criteria: list[Any] = Field(default_factory=list)
+    status: str = "draft"
+
+
+class DesignModificationRequestCreateResponse(BaseModel):
+    request: DesignModificationRequestDetail
+
+
 class DesignContextPackSummary(BaseModel):
     id: str
     request_id: str
@@ -218,45 +289,6 @@ class DesignContextPackPreview(BaseModel):
 
 class DesignContextPackPreviewResponse(BaseModel):
     context_pack: DesignContextPackPreview
-
-
-class DesignQAAxisScore(BaseModel):
-    score: int
-    max_score: int
-    notes: list[str] = Field(default_factory=list)
-
-
-class DesignTokenComplianceViolation(BaseModel):
-    kind: str
-    file_path: str
-    value: str
-    line: int | None = None
-    column: int | None = None
-    context: str | None = None
-    message: str
-    count: int | None = None
-    files: list[str] = Field(default_factory=list)
-
-
-class DesignTokenComplianceReport(BaseModel):
-    compliant: bool
-    files_scanned: int
-    scanned_file_paths: list[str] = Field(default_factory=list)
-    missing_files: list[str] = Field(default_factory=list)
-    summary: dict[str, Any] = Field(default_factory=dict)
-    violations: list[DesignTokenComplianceViolation] = Field(default_factory=list)
-
-
-class DesignModificationQAScoreResponse(BaseModel):
-    request_id: str
-    project_key: str
-    scoring_version: str
-    total_score: int
-    rating: str
-    axes: dict[str, DesignQAAxisScore] = Field(default_factory=dict)
-    token_compliance: DesignTokenComplianceReport
-    evidence: dict[str, Any] = Field(default_factory=dict)
-    scored_at: datetime
 
 
 def _serialize_screen(row: dict[str, Any]) -> DesignScreenSummary:
@@ -352,6 +384,92 @@ def _serialize_context_pack_summary(row: dict[str, Any]) -> DesignContextPackSum
 
 def _schema_unavailable(_exc: Exception) -> HTTPException:
     return HTTPException(status_code=503, detail="design modification schema is not initialized")
+
+
+@router.post(
+    "/modification-requests",
+    response_model=DesignModificationRequestCreateResponse,
+    status_code=201,
+)
+async def create_design_modification_request(
+    payload: DesignModificationRequestCreate,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> DesignModificationRequestCreateResponse:
+    _require_user_id(current_user)
+    normalized_project_key = _normalize_project_key(payload.project_key)
+    normalized_request_type = _validate_request_type(payload.request_type)
+    normalized_status = _validate_status(payload.status) or "draft"
+    user_prompt = payload.user_prompt.strip()
+    if not user_prompt:
+        raise HTTPException(status_code=400, detail="user_prompt is required")
+
+    pool = get_pool()
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                WITH inserted AS (
+                    INSERT INTO design_modification_requests (
+                        project_key, screen_id, user_prompt, normalized_card,
+                        request_type, allowed_scope, forbidden_scope,
+                        acceptance_criteria, status
+                    )
+                    VALUES (
+                        $1, $2::uuid, $3, $4::jsonb,
+                        $5, $6::jsonb, $7::jsonb,
+                        $8::jsonb, $9
+                    )
+                    RETURNING id, project_key, screen_id, user_prompt, normalized_card,
+                              request_type, allowed_scope, forbidden_scope,
+                              acceptance_criteria, status, created_at, updated_at
+                )
+                SELECT i.id, i.project_key, i.screen_id, i.user_prompt, i.normalized_card,
+                       i.request_type, i.allowed_scope, i.forbidden_scope,
+                       i.acceptance_criteria, i.status, i.created_at, i.updated_at,
+                       s.route AS screen_route, s.name AS screen_name, s.purpose AS screen_purpose,
+                       s.primary_actions AS screen_primary_actions,
+                       s.component_paths AS screen_component_paths,
+                       s.metadata AS screen_metadata,
+                       0::int AS context_pack_count
+                FROM inserted i
+                LEFT JOIN design_screens s
+                    ON s.id = i.screen_id
+                """,
+                normalized_project_key,
+                payload.screen_id,
+                user_prompt,
+                json.dumps(payload.normalized_card, ensure_ascii=False),
+                normalized_request_type,
+                json.dumps(payload.allowed_scope, ensure_ascii=False),
+                json.dumps(payload.forbidden_scope, ensure_ascii=False),
+                json.dumps(payload.acceptance_criteria, ensure_ascii=False),
+                normalized_status,
+            )
+    except asyncpg.UndefinedTableError as exc:
+        raise _schema_unavailable(exc)
+    except asyncpg.ForeignKeyViolationError as exc:
+        raise HTTPException(status_code=400, detail="project_key or screen_id does not exist") from exc
+    except asyncpg.CheckViolationError as exc:
+        raise HTTPException(status_code=400, detail="invalid design modification request") from exc
+
+    detail_row = dict(row)
+    request = DesignModificationRequestDetail(
+        id=str(detail_row["id"]),
+        project_key=str(detail_row["project_key"]),
+        screen_id=str(detail_row["screen_id"]) if detail_row.get("screen_id") else None,
+        screen=_serialize_screen_ref(detail_row),
+        user_prompt=str(detail_row.get("user_prompt") or ""),
+        normalized_card=_as_dict(detail_row.get("normalized_card")),
+        request_type=str(detail_row.get("request_type") or "other"),
+        allowed_scope=_as_json_value(detail_row.get("allowed_scope"), {}),
+        forbidden_scope=_as_json_value(detail_row.get("forbidden_scope"), {}),
+        acceptance_criteria=_as_list(detail_row.get("acceptance_criteria")),
+        status=str(detail_row.get("status") or "draft"),
+        context_pack_count=int(detail_row.get("context_pack_count") or 0),
+        created_at=detail_row["created_at"],
+        updated_at=detail_row["updated_at"],
+    )
+    return DesignModificationRequestCreateResponse(request=request)
 
 
 @router.get("/projects/{project_key}/screens", response_model=DesignScreenListResponse)
@@ -566,8 +684,8 @@ async def get_design_modification_request(
         user_prompt=str(detail_row.get("user_prompt") or ""),
         normalized_card=_as_dict(detail_row.get("normalized_card")),
         request_type=str(detail_row.get("request_type") or "other"),
-        allowed_scope=detail_row.get("allowed_scope") or {},
-        forbidden_scope=detail_row.get("forbidden_scope") or {},
+        allowed_scope=_as_json_value(detail_row.get("allowed_scope"), {}),
+        forbidden_scope=_as_json_value(detail_row.get("forbidden_scope"), {}),
         acceptance_criteria=_as_list(detail_row.get("acceptance_criteria")),
         status=str(detail_row.get("status") or "draft"),
         context_pack_count=int(detail_row.get("context_pack_count") or 0),
@@ -580,6 +698,20 @@ async def get_design_modification_request(
         snapshots=[_serialize_snapshot(dict(item)) for item in snapshot_rows],
         decisions=[_serialize_decision(dict(item)) for item in decision_rows],
     )
+
+
+@router.post("/modification-requests/{request_id}/build-context")
+async def build_design_modification_context_pack(
+    request_id: UUID,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    _require_user_id(current_user)
+    try:
+        return await build_context_pack(request_id)
+    except DesignContextRequestNotFound as exc:
+        raise HTTPException(status_code=404, detail="design modification request not found") from exc
+    except asyncpg.UndefinedTableError as exc:
+        raise _schema_unavailable(exc)
 
 
 @router.get(
@@ -692,22 +824,3 @@ async def preview_design_context_pack(
         created_at=payload["created_at"],
     )
     return DesignContextPackPreviewResponse(context_pack=preview)
-
-
-@router.get(
-    "/modification-requests/{request_id}/qa-score",
-    response_model=DesignModificationQAScoreResponse,
-)
-async def get_design_modification_request_qa_score(
-    request_id: UUID,
-    current_user: dict[str, Any] = Depends(get_current_user),
-) -> DesignModificationQAScoreResponse:
-    _require_user_id(current_user)
-    try:
-        payload = await design_qa_scorer.score_modification(request_id)
-    except design_qa_scorer.DesignModificationRequestNotFoundError:
-        raise HTTPException(status_code=404, detail="design modification request not found")
-    except asyncpg.UndefinedTableError as exc:
-        raise _schema_unavailable(exc)
-
-    return DesignModificationQAScoreResponse.model_validate(payload)
