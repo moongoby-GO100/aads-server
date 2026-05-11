@@ -221,14 +221,14 @@ async def check_project_lock(conn, project: str, exclude_job_id: str | None = No
 
 
 async def cascade_cleanup_orphans(conn, failed_job_id: str) -> int:
-    """실패한 작업에 의존하는 모든 queued 작업을 재귀적으로 error 처리.
+    """실패한 작업에 의존하는 모든 queued 작업을 재귀적으로 blocked 처리.
     P1-A: 고아 방지 — 의존 트리 전체를 한 번에 정리."""
     total = 0
     to_process = [failed_job_id]
     while to_process:
         current_id = to_process.pop(0)
         result = await conn.fetch(
-            "UPDATE pipeline_jobs SET status = 'error', "
+            "UPDATE pipeline_jobs SET status = 'cancelled', phase = 'blocked_dependency', "
             "error_detail = $2, updated_at = NOW() "
             "WHERE depends_on = $1 AND status = 'queued' "
             "RETURNING job_id",
@@ -262,10 +262,10 @@ async def promote_next_queued(conn, project: str) -> str | None:
             dep_row = await conn.fetchrow(
                 "SELECT status FROM pipeline_jobs WHERE job_id = $1", dep,
             )
-            if dep_row and dep_row["status"] in ("error", "rejected", "rejected_done"):
+            if dep_row and dep_row["status"] in ("error", "rejected", "rejected_done", "cancelled"):
                 # P1-A: 의존 작업 실패 → 자동 고아 처리
                 await conn.execute(
-                    "UPDATE pipeline_jobs SET status = 'error', "
+                    "UPDATE pipeline_jobs SET status = 'cancelled', phase = 'blocked_dependency', "
                     "error_detail = $2, updated_at = NOW() "
                     "WHERE job_id = $1 AND status = 'queued'",
                     row["job_id"],
@@ -283,6 +283,21 @@ async def promote_next_queued(conn, project: str) -> str | None:
                      next_job_id=row["job_id"], project=project)
         return row["job_id"]
     return None
+
+
+def _runner_display_status(status: str, phase: str | None, error_detail: str | None) -> dict[str, str]:
+    """UI가 terminal-but-not-error 상태를 빨간 실패로만 표시하지 않도록 분류한다."""
+    phase = phase or ""
+    error_detail = error_detail or ""
+    if phase == "no_changes" or error_detail == "no_changes":
+        return {"display_status": "no_changes", "status_label": "변경 없음"}
+    if phase == "dedup_blocked" or error_detail.startswith("dedup_blocked"):
+        return {"display_status": "dedup_blocked", "status_label": "중복 차단"}
+    if phase == "blocked_dependency" or error_detail.startswith("blocked_dependency"):
+        return {"display_status": "blocked_dependency", "status_label": "의존 차단"}
+    if status == "cancelled":
+        return {"display_status": "cancelled", "status_label": "종결"}
+    return {"display_status": status, "status_label": status}
 
 
 @router.post("/pipeline/jobs", response_model=JobSubmitResponse, tags=["pipeline-runner"])
@@ -364,7 +379,7 @@ async def submit_job(req: JobSubmitRequest):
                     if not dep_row:
                         raise HTTPException(status_code=400, detail=f"의존 작업을 찾을 수 없습니다: {req.depends_on}")
                     # P1-B: 의존 작업이 이미 실패 상태이면 즉시 거부
-                    if dep_row["status"] in ("error", "rejected", "rejected_done"):
+                    if dep_row["status"] in ("error", "rejected", "rejected_done", "cancelled"):
                         raise HTTPException(status_code=400, detail=f"의존 작업이 이미 실패 상태입니다: {req.depends_on} ({dep_row['status']})")
                 await conn.execute(
                     """
@@ -463,6 +478,7 @@ async def list_jobs(
             "worker_model": _record_get(r, "worker_model") or "",
             "actual_model": _record_get(r, "actual_model") or "",
             "size": _record_get(r, "size") or "M",
+            **_runner_display_status(r["status"], r["phase"], _record_get(r, "error_detail")),
         }
         for r in rows
     ]
@@ -501,6 +517,7 @@ async def get_job(job_id: str):
         "worker_model": _record_get(row, "worker_model") or "",
         "actual_model": _record_get(row, "actual_model") or "",
         "size": _record_get(row, "size") or "M",
+        **_runner_display_status(row["status"], row["phase"], _record_get(row, "error_detail")),
         "started_at": row["started_at"].isoformat() if _record_get(row, "started_at") else None,
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
         "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,

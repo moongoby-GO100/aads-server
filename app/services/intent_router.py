@@ -361,7 +361,7 @@ async def classify(
     Redis 캐싱: 메시지 앞 100자 SHA256 해시 키(앞 16자), TTL 60초.
     """
     # ─── Redis 인텐트 캐시 조회 ──────────────────────────────────────────────
-    _cache_key = f"intent:{hashlib.sha256(message[:100].encode()).hexdigest()[:16]}"
+    _cache_key = _build_intent_cache_key(message, workspace, recent_messages)
     try:
         _r = await _get_intent_redis()
         if _r:
@@ -383,6 +383,10 @@ async def classify(
                 if any(marker in c for marker in ("도구 조회 결과", "tool_use", "🔧", "실행 중")):
                     _prev_used_tools = True
                 break
+
+    _pc_override = _pc_agent_followup_override(message)
+    if _pc_override:
+        return _make_result(_pc_override)
 
     try:
         # LLM에 최근 컨텍스트 제공 (짧은 메시지의 맥락 파악용)
@@ -459,6 +463,72 @@ async def classify(
         logger.info(f"intent_fallback_context_override: casual → status_check for '{message[:40]}'")
         return _make_result("status_check")
     return result
+
+
+def _is_context_dependent_message(message: str) -> bool:
+    """이전 턴 의미에 의존하는 짧은 후속 지시 여부."""
+    msg = (message or "").lower().strip()
+    if len(msg) <= 50:
+        return True
+    return any(
+        marker in msg
+        for marker in (
+            "이거", "그거", "저거", "위 ", "위에", "앞서", "방금", "이전",
+            "전 지시", "전 응답", "이어", "계속", "했는데", "그 작업", "그거",
+            "pc에이전트", "pc 에이전트", "내 pc", "pc연결", "pc 연결",
+        )
+    )
+
+
+def _build_intent_cache_key(
+    message: str,
+    workspace: str = "CEO",
+    recent_messages: list | None = None,
+) -> str:
+    """인텐트 캐시 키.
+
+    같은 문장이라도 워크스페이스와 직전 대화가 다르면 의미가 달라진다.
+    특히 "이거 확인해", "이어서 진행해", "했는데" 같은 후속 지시는
+    메시지 단독 캐싱 시 이전 세션의 인텐트를 재사용하는 문제가 생긴다.
+    """
+    parts = [str(workspace or "CEO").upper(), (message or "")[:100]]
+    if recent_messages and _is_context_dependent_message(message):
+        ctx_parts: list[str] = []
+        for item in recent_messages[-4:]:
+            role = str(item.get("role", ""))[:16]
+            content = str(item.get("content", "") or "").replace("\n", " ")[:160]
+            if role and content:
+                ctx_parts.append(f"{role}:{content}")
+        if ctx_parts:
+            parts.append("|".join(ctx_parts))
+    raw_key = "\n".join(parts)
+    return f"intent:{hashlib.sha256(raw_key.encode()).hexdigest()[:16]}"
+
+
+def _pc_agent_followup_override(message: str) -> str | None:
+    """PC 에이전트 관련 후속 정정/불만을 워크스페이스 전환으로 보내지 않는다."""
+    msg = (message or "").lower().replace(" ", "")
+    if not msg:
+        return None
+
+    mentions_pc_agent = "pc에이전트" in msg or "pcagent" in msg
+    mentions_pc_connection = "내pc" in msg and "연결" in msg
+    if not (mentions_pc_agent or mentions_pc_connection or "pc연결" in msg):
+        return None
+
+    verify_markers = (
+        "진행하라고", "했는데", "안되어", "안돼", "안되", "구현", "연결",
+        "상태", "확인", "점검", "보고", "왜", "문제",
+    )
+    control_markers = (
+        "열어", "실행", "클릭", "입력", "캡처", "스크린샷", "명령", "제어",
+        "파일", "카톡", "카카오",
+    )
+    if any(marker in msg for marker in verify_markers):
+        return "cto_verify"
+    if any(marker in msg for marker in control_markers):
+        return None
+    return "cto_verify"
 
 
 def _make_result(intent: str) -> IntentResult:

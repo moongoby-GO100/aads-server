@@ -403,3 +403,97 @@ pathlib.Path('/app/scripts/e
 
 ## [2026-05-09 11:00:35 KST] [aads-server] scripts/build_dashboard.sh
 - Chat-Direct 수정: write: scripts/build_dashboard.sh
+
+## [2026-05-11 12:12:59 KST] [aads-server] docs/plans/AADS-INFRA-MIGRATION-68-TO-CONTABO5.md
+- Chat-Direct 수정: write: docs/plans/AADS-INFRA-MIGRATION-68-TO-CONTABO5.md
+
+## [2026-05-11 12:24:54 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop
+
+## [2026-05-11 12:25:02 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop
+
+## [2026-05-11 12:28:48 KST] [aads-server] docker-compose.prod.yml
+- Chat-Direct 수정: patch:       - AADS_CONTAINER_NAME=aads-server
+→      - AADS_CONTAINER_NAME=aads-server
+
+
+## [2026-05-11 12:28:49 KST] [aads-server] docker-compose.prod.yml
+- Chat-Direct 수정: patch:       - AADS_CONTAINER_NAME=aads-server-→      - AADS_CONTAINER_NAME=aads-server-
+
+## [2026-05-11 12:29:07 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch: logger = logging.getLogger(__name__)
+
+# →logger = logging.getLogger(__name__)
+
+_S
+
+## [2026-05-11 12:29:37 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:             "required": ["task_id"],
+   →            "required": ["task_id"],
+
+
+## [2026-05-11 12:30:22 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:     return _project_from_workspace_name(→    return _project_from_workspace_name(
+
+## [2026-05-11 12:30:39 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:     elif name == "fetch_url":
+        re→    elif name == "fetch_url":
+        re
+
+## [2026-05-11 12:31:25 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:         # AADS 대시보드 로그인 리다이렉트 감지 → 자동 로그→        # AADS 대시보드 로그인 리다이렉트 감지 → 자동 로그
+
+## [2026-05-11 12:31:54 KST] [aads-server] app/api/ceo_chat.py
+- Chat-Direct 수정: patch:     from app.api.ceo_chat_tools import T→    from app.api.ceo_chat_tools import T
+
+## [2026-05-11 12:32:01 KST] [aads-server] app/api/ceo_chat.py
+- Chat-Direct 수정: run_remote_command: cat /tmp/contabo-sync.log | tail -30
+
+## [2026-05-11 12:32:08 KST] [aads-server] app/api/ceo_chat.py
+- Chat-Direct 수정: patch:                 logger.info(f"ceo_chat_t→                logger.info(
+
+
+## [2026-05-11 12:32:31 KST] [aads-server] app/services/tool_registry.py
+- Chat-Direct 수정: patch:     "visual_qa_test": True,           # →    "visual_qa_test": True,           #
+
+## [2026-05-11 12:33:09 KST] [aads-server] app/services/tool_registry.py
+- Chat-Direct 수정: patch:     # ── CEO 아젠다 관리 (AADS-CEO-AGENDA) ──→    # ── E2E Credential Vault (AADS-VAUL
+
+## [2026-05-11 12:34:22 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:             return f"[ERROR] login_url이 →            return "[ERROR] login_url이 설
+
+## [2026-05-11 12:36:37 KST] [aads-server] docker-compose.prod.yml
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && sed -i '/AADS_PUBLIC_PORT=8100/a\      - VAULT_ENCR
+
+## [2026-05-11 12:43:43 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: patch: # AADS HANDOVER
+
+## 현재 진행 상태 (2026-05-09→# AADS HANDOVER
+
+## 현재 진행 상태 (2026-05-11
+
+## [2026-05-11 12:43:49 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: patch: # GO100 Chat-Direct Edit Changelog
+
+## [→# GO100 Chat-Direct Edit Changelog
+
+## [
+
+## [2026-05-11 13:54:33 KST] [aads-server] app/api/admin.py
+- Chat-Direct 수정: run_remote_command: curl -sS -X POST https://aads.newtalk.kr/api/v1/pc-agent/execute -H "Content-Typ
+
+## [2026-05-11 13:55:12 KST] [aads-server] migrations/082_open_design_hub.sql
+- Chat-Direct 수정: run_remote_command: grep -rE "command_type|COMMANDS|register" /root/aads/aads-server/pc_agent/agent_
+
+## [2026-05-11 14:03:59 KST] [aads-server] pc_agent/commands/browser_auto.py
+- Chat-Direct 수정: patch:         cmd = [
+            chrome_exe,
+→        import tempfile
+        user_dat
+
+## [2026-05-11 14:11:47 KST] [aads-server] pc_agent/commands/browser_auto.py
+- Chat-Direct 수정: patch:         cmd = [
+            chrome_exe,
+→        import tempfile
+        user_dat

@@ -401,6 +401,37 @@ promote_next_queued() {
     fi
 }
 
+cleanup_blocked_dependencies() {
+    local blocked_existing blocked_missing
+    blocked_existing=$(db_exec "UPDATE pipeline_jobs p SET status='cancelled',
+                                phase='blocked_dependency',
+                                error_detail='blocked_dependency: parent ' || p.depends_on || ' is ' || dep.status,
+                                review_feedback=COALESCE(p.review_feedback,'') || E'\n[Runner Guard] 선행 작업 ' || p.depends_on || ' 상태가 ' || dep.status || '라 자동 진행 불가 — blocked_dependency로 종결',
+                                updated_at=NOW()
+                                FROM pipeline_jobs dep
+                                WHERE p.depends_on = dep.job_id
+                                  AND p.status='queued'
+                                  AND p.phase='queued'
+                                  AND dep.status IN ('error','rejected','rejected_done','cancelled')
+                                RETURNING p.job_id;" 2>/dev/null) || true
+    blocked_missing=$(db_exec "UPDATE pipeline_jobs p SET status='cancelled',
+                               phase='blocked_dependency',
+                               error_detail='blocked_dependency: parent ' || p.depends_on || ' is missing',
+                               review_feedback=COALESCE(p.review_feedback,'') || E'\n[Runner Guard] 선행 작업 ' || p.depends_on || ' 이 DB에 없어 자동 진행 불가 — blocked_dependency로 종결',
+                               updated_at=NOW()
+                               WHERE p.status='queued'
+                                 AND p.phase='queued'
+                                 AND p.depends_on IS NOT NULL
+                                 AND NOT EXISTS (
+                                     SELECT 1 FROM pipeline_jobs dep
+                                     WHERE dep.job_id = p.depends_on
+                                 )
+                               RETURNING p.job_id;" 2>/dev/null) || true
+    if [[ -n "$blocked_existing$blocked_missing" ]]; then
+        log "  BLOCKED_DEPENDENCY_CLEANUP existing=${blocked_existing//$'\n'/,} missing=${blocked_missing//$'\n'/,}"
+    fi
+}
+
 # ── 중복 작업 확인 ─────────────────────────────────────────────────────
 compute_instruction_hash() {
     echo -n "${2}:${1}" | sha256sum | cut -d' ' -f1 | head -c 16
@@ -443,7 +474,7 @@ check_duplicate() {
         dup_status="${dup_status// /}"
         if [[ "$dup_status" != "done" ]]; then
             log "  DEDUP_BLOCK: 동일 작업 진행 중: $dup_job ($dup_status) — $job_id 차단"
-            db_update "UPDATE pipeline_jobs SET status='error', phase='dedup_blocked',
+            db_update "UPDATE pipeline_jobs SET status='cancelled', phase='dedup_blocked',
                        error_detail='dedup_blocked: 기존 작업 ${dup_job} 계속 진행',
                        review_feedback=E'[중복 차단] 동일 작업 진행 중: ${dup_job} (${dup_status})',
                        updated_at=NOW() WHERE job_id='${job_id}';"
@@ -992,13 +1023,13 @@ $out_tail")
     git_diff=$(git diff HEAD 2>/dev/null | head -c 50000) || true
 
     if [[ -z "${git_diff//[[:space:]]/}" ]]; then
-        log "  NO_CHANGES job=$job_id target=$target_repo — awaiting_approval 차단"
-        db_update "UPDATE pipeline_jobs SET status='error', phase='no_changes',
+        log "  NO_CHANGES job=$job_id target=$target_repo — awaiting_approval 차단, cancelled 처리"
+        db_update "UPDATE pipeline_jobs SET status='cancelled', phase='no_changes',
                    error_detail='no_changes',
                    result_output=$(sql_escape "$output"),
                    review_feedback=COALESCE(review_feedback,'') || E'\n[Runner Guard] 변경사항 0건 — 실제 대상 저장소에 반영된 diff가 없어 승인 대기로 보내지 않음',
                    updated_at=NOW() WHERE job_id='${job_id}';"
-        post_to_chat "$session_id" "❌ [Pipeline Runner] 변경사항 0건으로 작업 실패 처리: $job_id — 실제 대상 저장소(${target_repo})에 diff가 없습니다."
+        post_to_chat "$session_id" "⚠️ [Pipeline Runner] 변경사항 0건으로 작업 종결: $job_id — 실제 대상 저장소(${target_repo})에 diff가 없어 승인 대기로 보내지 않았습니다."
         _release_work_lock "$project" "$job_id"
         _cleanup_artifacts "$job_id"
         if [[ -d "$worktree_dir" ]]; then
@@ -2127,6 +2158,9 @@ main() {
         # 방안A: 완료된 백그라운드 작업 정리
         _reap_bg_jobs
 
+        # 선행 작업이 실패/거부/누락된 queued 작업은 claim 전에 terminal 상태로 정리
+        cleanup_blocked_dependencies
+
         # 1) queued 작업 원자적 클레임 (C4)
         local pending
         pending=$(claim_queued_job "$project_filter" 2>/dev/null) || true
@@ -2177,6 +2211,7 @@ main() {
             _watchdog_check "$project_filter"
             _cleanup_old_artifacts
             _check_runtime_alerts "$project_filter"
+            cleanup_blocked_dependencies
         fi
 
         # P2-2: 적응형 폴링 — 작업 발견 시 즉시 재폴링, 유휴 시에만 대기

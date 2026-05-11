@@ -13,13 +13,25 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_TASK_BOARD_STATUSES = {"queued", "running", "awaiting_approval", "done", "error"}
+_TASK_BOARD_STATUSES = {
+    "queued",
+    "running",
+    "awaiting_approval",
+    "done",
+    "no_changes",
+    "dedup_blocked",
+    "blocked_dependency",
+    "error",
+}
 _TASK_BOARD_STATUS_SQL = (
     "CASE "
+    "WHEN phase = 'no_changes' OR error_detail = 'no_changes' THEN 'no_changes' "
+    "WHEN phase = 'dedup_blocked' OR error_detail LIKE 'dedup_blocked%' THEN 'dedup_blocked' "
+    "WHEN phase = 'blocked_dependency' OR error_detail LIKE 'blocked_dependency%' THEN 'blocked_dependency' "
     "WHEN status = 'queued' THEN 'queued' "
     "WHEN status IN ('running', 'claimed') THEN 'running' "
     "WHEN status = 'awaiting_approval' THEN 'awaiting_approval' "
-    "WHEN status IN ('done', 'approved') THEN 'done' "
+    "WHEN status IN ('done', 'approved', 'rejected_done') THEN 'done' "
     "ELSE 'error' "
     "END"
 )
@@ -247,6 +259,39 @@ async def get_token_profile():
         "sections": profile_sections(),
         "workspaces": profile_all_workspaces(),
     }
+
+
+@router.get("/admin/design/projects")
+async def list_design_projects():
+    """Open Design Hub Phase 0 read-only project registry preview."""
+    from app.services.design_audit_service import ALLOWED_PROJECT_ROOTS
+
+    projects = [
+        {
+            "project_key": project_key,
+            "display_name": project_key.replace("_", " "),
+            "repo_path": root.as_posix(),
+            "status": "draft",
+            "read_only": True,
+        }
+        for project_key, root in sorted(ALLOWED_PROJECT_ROOTS.items())
+    ]
+    return {"projects": projects, "count": len(projects), "phase": "0"}
+
+
+@router.get("/admin/design/audit/preview")
+async def preview_design_audit(
+    project_key: str = Query("AADS", description="Allowlisted project key"),
+    path: Optional[str] = Query(None, description="Optional path under the project root"),
+    max_files: int = Query(80, ge=1, le=250),
+):
+    """Open Design Hub Phase 0 bounded read-only source audit preview."""
+    from app.services.design_audit_service import audit_project_preview
+
+    try:
+        return audit_project_preview(project_key=project_key, requested_path=path, max_files=max_files)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _load_model_parity_intent_map() -> tuple[str, dict[str, dict]]:
@@ -1784,6 +1829,9 @@ async def get_admin_task_stats():
                 COUNT(*) FILTER (WHERE board_status = 'running') AS running,
                 COUNT(*) FILTER (WHERE board_status = 'awaiting_approval') AS awaiting_approval,
                 COUNT(*) FILTER (WHERE board_status = 'done') AS done,
+                COUNT(*) FILTER (WHERE board_status = 'no_changes') AS no_changes,
+                COUNT(*) FILTER (WHERE board_status = 'dedup_blocked') AS dedup_blocked,
+                COUNT(*) FILTER (WHERE board_status = 'blocked_dependency') AS blocked_dependency,
                 COUNT(*) FILTER (WHERE board_status = 'error') AS error,
                 COUNT(*) AS total
             FROM jobs
@@ -1795,6 +1843,9 @@ async def get_admin_task_stats():
         "running": row["running"] or 0,
         "awaiting_approval": row["awaiting_approval"] or 0,
         "done": row["done"] or 0,
+        "no_changes": row["no_changes"] or 0,
+        "dedup_blocked": row["dedup_blocked"] or 0,
+        "blocked_dependency": row["blocked_dependency"] or 0,
         "error": row["error"] or 0,
         "total": row["total"] or 0,
     }

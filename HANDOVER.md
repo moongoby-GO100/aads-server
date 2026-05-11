@@ -1,6 +1,23 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-11)
+- **PC Agent Chrome CDP 분리 프로필 반영 (2026-05-11 14:18 KST)**:
+  - `pc_agent/commands/browser_auto.py`: `browser_launch()`가 기본 Chrome 프로필을 재사용해 `--remote-debugging-port=9222`가 무시되던 문제를 확인했다.
+  - 조치: Windows는 `%LOCALAPPDATA%\\KakaoBot\\cdp-profile`, 비Windows는 `~/.kakaobot-cdp-profile`를 기본 `user_data_dir`로 사용하고 `--user-data-dir`, `--new-window` 옵션을 추가했다.
+  - 현재 상태: 서버 측 소스에는 반영됐지만, CEO PC에서 실행 중인 에이전트 바이너리에는 즉시 적용되지 않는다. 실제 PC 에이전트 재배포 또는 재업데이트 후 재검증이 필요하다.
+- **Pipeline Runner terminal 상태 분류 보강 (2026-05-11 14:13~14:18 KST)**:
+  - `scripts/pipeline-runner.sh`: 변경 0건(`no_changes`)과 중복 차단(`dedup_blocked`)을 실제 실행 실패 `error`가 아니라 `cancelled` terminal 상태로 저장하도록 변경했다.
+  - `scripts/pipeline-runner.sh`와 `app/api/pipeline_runner.py`: 선행 job이 `error/rejected/rejected_done/cancelled`이거나 DB에 없는 queued 작업은 `blocked_dependency`로 자동 종결한다.
+  - 운영 DB 정리: 선행 `rejected_done`에 묶인 AADS queued 2건을 `blocked_dependency`로 종결했고, 기존 `no_changes`/`dedup_blocked` error 4건을 `cancelled`로 재분류했다.
+  - 대시보드 `ChatArtifactPanel.tsx`: `display_status/status_label`을 사용해 `변경 없음`, `중복 차단`, `의존 차단`을 빨간 에러가 아닌 terminal 경고/종결 상태로 표시하고, 세션 안에 부모 job이 없는 의존 작업도 루트에 표시한다.
+- **AADS Open Design Hub 기획 문서화 (2026-05-11 13:45 KST)**:
+  - `docs/plans/AADS-SMART-DESIGN-SYSTEM.md`를 확장해 전 프로젝트 디자인 운영 체계인 `docs/plans/AADS-OPEN-DESIGN-HUB.md`를 신규 작성했다.
+  - 핵심 방향은 공통 토큰, 프로젝트별 adapter, Design Auditor, Project Starter, Admin Design Hub UI를 분리하는 구조다.
+  - 첫 러너 작업 범위는 대규모 UI 전면 교체가 아니라 Phase 0 기반(스키마 초안, API 계약, 스캐너 PoC, 구현 분해 문서)으로 제한한다.
+- **AADS Open Design Hub Phase 0 직접 보강 (2026-05-11 13:54 KST)**:
+  - `runner-0143f0a0`는 `claude_code_work` 중 로그/heartbeat 없이 산출물이 `.codex`만 남은 상태에서 2026-05-11 13:52:59 KST 강제 종료됐다.
+  - 대안으로 기존 `app/services/design_audit_service.py` 및 `/api/v1/admin/design/*` read-only API 계약을 기준으로 `docs/plans/AADS-OPEN-DESIGN-HUB-IMPLEMENTATION.md`를 추가했다.
+  - `tests/unit/test_design_audit_service.py`를 추가해 색상 탐지, Tailwind arbitrary color 탐지, 이모지 탐지, button class 반복 패턴, allowlist 경로 방어, empty input 동작을 검증한다.
 - **Codex `unknown_tool: bash` 재발 방어 (2026-05-11 12:00 KST)**:
   - 증상: Codex CLI `command_execution` 이벤트가 AADS 채팅 도구 이벤트 `tool_use: bash`로 노출되어 CEO 화면에 `unknown_tool: bash` 결과가 반복 출력됐다.
   - 원인: `74c73a6`에서 릴레이 변환 코드는 수정됐으나, `claude-relay.service`는 2026-05-06 16:51 KST부터 계속 실행 중이라 새 코드가 로드되지 않았다. 또한 API 수신부에 구버전 릴레이 이벤트를 막는 2차 방어가 없었다.
@@ -499,3 +516,12 @@
 - 배포 패키지: `pc_agent/VERSION`을 `1.0.19`로 올리고 active/standby 컨테이너의 `/app/pc_agent`에 반영. 운영 `GET /api/v1/kakao-bot/agent/version`은 `1.0.19`, ZIP 내부도 `VERSION=1.0.19` 및 수정 코드 포함 확인.
 - 검증: `python3 -m py_compile pc_agent/agent.py pc_agent/launcher.py` 통과. `pytest tests/unit/test_pc_agent_api_disconnects.py tests/unit/test_pc_agent_manager_connection_guard.py -q` 5개 통과. `aads-server-green` Docker health `healthy`, `/health` `status=ok`.
 - 잔여: 현재 서버의 `kakaobot-setup.exe` 바이너리는 Windows 빌드가 필요해 Linux 서버에서 직접 재빌드 불가. `pc_agent/**` 푸시 시 `.github/workflows/build-pc-agent.yml`이 Windows GitHub Actions에서 새 EXE를 빌드/Release 등록하도록 되어 있어 커밋/푸시로 트리거해야 함.
+
+## 2026-05-11 13:52 KST - AADS-204 Open Design Hub Phase 0 직접 구현
+
+- 배경: `runner-0143f0a0`가 5분 이상 `running/claude_code_work` 상태였지만 task 로그 0건, 전용 worktree 변경 0건, 백엔드가 아닌 dashboard 형태 worktree로 확인되어 산출물 없는 점유로 판단.
+- 조치: `terminate_task(runner-0143f0a0)`로 러너를 종료하고 새 러너 추가 투입 없이 직접 Phase 0 범위만 구현.
+- 구현: `app/services/design_audit_service.py` 신규 추가. raw hex/rgb 색상, Tailwind arbitrary color, JSX/HTML 이모지 아이콘, 반복 button class 패턴을 순수 함수로 탐지.
+- API: `app/api/admin.py`에 read-only `GET /api/v1/admin/design/projects`, `GET /api/v1/admin/design/audit/preview` 추가. allowlist 루트 밖 경로 접근은 차단.
+- 문서/스키마: `docs/plans/AADS-OPEN-DESIGN-HUB-IMPLEMENTATION.md`에 Phase 1~4 runner 작업 분해를 작성하고, 운영 DB 미적용 초안 `migrations/082_open_design_hub.sql`을 추가.
+- 테스트: `tests/unit/test_design_audit_service.py`에 색상/이모지 탐지, button class 반복, allowlist escape 방어, empty input 검증 추가.

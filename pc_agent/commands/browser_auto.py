@@ -367,6 +367,19 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
         if not chrome_exe:
             chrome_exe = chrome_paths[0]  # 기본값 시도
 
+    if sys.platform == "win32":
+        default_profile_dir = os.path.join(
+            os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+            "KakaoBot",
+            "cdp-profile",
+        )
+    else:
+        default_profile_dir = os.path.join(
+            os.path.expanduser("~"),
+            ".kakaobot-cdp-profile",
+        )
+    profile_dir = params.get("user_data_dir", default_profile_dir)
+
     try:
         # 이미 실행 중인지 확인
         try:
@@ -382,10 +395,13 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
         cmd = [
             chrome_exe,
             f"--remote-debugging-port={port}",
+            f"--user-data-dir={profile_dir}",
             "--no-first-run",
             "--no-default-browser-check",
+            "--new-window",
             url,
         ]
+        os.makedirs(profile_dir, exist_ok=True)
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         # 잠시 대기 후 연결 확인
         await asyncio.sleep(2)
@@ -396,7 +412,11 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
             logger.info("Chrome CDP 시작 완료 (포트 %d)", port)
             return {
                 "status": "success",
-                "data": {"message": f"Chrome 시작 완료 (CDP 포트 {port})", "port": port},
+                "data": {
+                    "message": f"Chrome 시작 완료 (CDP 포트 {port})",
+                    "port": port,
+                    "user_data_dir": profile_dir,
+                },
             }
         except (ConnectionRefusedError, OSError):
             return {
@@ -404,6 +424,7 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
                 "data": {
                     "message": "Chrome 프로세스 시작됨, CDP 연결 대기 중 — 잠시 후 재시도하세요",
                     "port": port,
+                    "user_data_dir": profile_dir,
                 },
             }
     except FileNotFoundError:

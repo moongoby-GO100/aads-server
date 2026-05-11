@@ -1,5 +1,19 @@
 # GO100 Chat-Direct Edit Changelog
 
+## [2026-05-11 12:00:00 KST] [GO100] scripts/migrate_orphan_users.py
+- Chat-Direct 수정: write: orphan user_id 1/2/3 → user_id 15 재할당 마이그레이션 스크립트
+- 실행 결과: accounts 7, portfolios 25, positions 130, orders 118, live_orders 110 재할당 완료
+- 12건 OPEN 포지션 FORCE_CLOSED 처리
+- finalize: done
+
+## [2026-05-11 11:30:00 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch: FundPool clamp 버그 수정(initial_capital/peak_capital 미clamp), DEFAULT_USER_ID 3→6, loguru %s→{} 3건
+- finalize: done
+
+## [2026-05-11 11:00:00 KST] [GO100] scripts/fix_force_closed_pnl.py
+- Chat-Direct 수정: write: FORCE_CLOSED 25건 PnL NULL 복구 스크립트
+- finalize: done
+
 ## [2026-04-28 17:35:50 KST] [GO100] HANDOVER.md
 - Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && grep -rn "FROM accounts\|from accounts" backend/app
 - finalize: pending
@@ -462,4 +476,150 @@ async def list_
 
 ## [2026-05-09 10:03:54 KST] [GO100] backend/app/routers/v4_stock_screener.py
 - Chat-Direct 수정: patch:                 elif rtype in ("trailing→                elif rtype in ("trailing
+- finalize: pending
+
+## [2026-05-11 12:14:29 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:         self._fund_pool.available = clam→        self._fund_pool.available = clam
+- finalize: pending
+
+## [2026-05-11 12:15:35 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:         logger.info(
+            "[FUND_→        logger.info(
+            "[FUND_
+- finalize: pending
+
+## [2026-05-11 12:16:34 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:             logger.info(
+               →            logger.info(
+
+- finalize: pending
+
+## [2026-05-11 12:16:51 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch: _DEFAULT_GO100_USER_ID = int(os.getenv("→_DEFAULT_GO100_USER_ID = int(os.getenv("
+- finalize: pending
+
+## [2026-05-11 12:18:21 KST] [GO100] scripts/fix_force_closed_pnl.py
+- Chat-Direct 수정: write: scripts/fix_force_closed_pnl.py
+- finalize: pending
+
+## [2026-05-11 12:20:01 KST] [GO100] scripts/fix_force_closed_pnl.py
+- Chat-Direct 수정: write: scripts/fix_force_closed_pnl.py
+- finalize: pending
+
+## [2026-05-11 12:20:42 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:             logger.info(
+               →            logger.info(
+
+- finalize: pending
+
+## [2026-05-11 12:29:02 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:         self._fund_pool.available = clam→        self._fund_pool.available = clam
+- finalize: pending
+
+## [2026-05-11 12:29:04 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:         logger.info(
+            "[FUND_→        logger.info(
+            "[FUND_
+- finalize: pending
+
+## [2026-05-11 12:29:14 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:             logger.info(
+               →            logger.info(
+
+- finalize: pending
+
+## [2026-05-11 12:29:22 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch: _DEFAULT_GO100_USER_ID = int(os.getenv("→_DEFAULT_GO100_USER_ID = int(os.getenv("
+- finalize: pending
+
+## [2026-05-11 12:30:18 KST] [GO100] frontend/public/manager/_updated_at.txt
+- Chat-Direct 수정: run_remote_command: psql -h localhost -U kisauto -d kisautotrade -c "UPDATE go100_positions SET pnl_
+- finalize: pending
+
+## [2026-05-11 12:30:27 KST] [GO100] scripts/fix_force_closed_pnl.py
+- Chat-Direct 수정: write: scripts/fix_force_closed_pnl.py
+- finalize: pending
+
+## [2026-05-11 12:32:02 KST] [GO100] scripts/fix_force_closed_pnl.py
+- Chat-Direct 수정: write: scripts/fix_force_closed_pnl.py
+- finalize: pending
+
+## [2026-05-11 12:32:13 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:             logger.info(
+               →            logger.info(
+
+- finalize: pending
+
+## [2026-05-11 12:32:18 KST] [GO100] docs/TABLE_SEPARATION_GUIDE.md
+- Chat-Direct 수정: write: docs/TABLE_SEPARATION_GUIDE.md
+- finalize: pending
+
+## [2026-05-11 12:40:00 KST] [GO100] scripts/migrate_orphan_users.py
+- Chat-Direct 수정: write: scripts/migrate_orphan_users.py
+- finalize: pending
+
+## [2026-05-11 12:40:52 KST] [GO100] scripts/migrate_orphan_users.py
+- Chat-Direct 수정: write: scripts/migrate_orphan_users.py
+- finalize: pending
+
+## [2026-05-11 12:55:46 KST] [GO100] backend/app/services/execution/fund_pool.py
+- Chat-Direct 수정: patch:     def _can_allocate_unlocked(self, des→    def _can_allocate_unlocked(self, des
+- finalize: pending
+
+## [2026-05-11 12:57:53 KST] [GO100] backend/app/services/brain/fund_commander.py
+- Chat-Direct 수정: patch:         desk_cap_applied = False
+       →        desk_cap_applied = False
+
+- finalize: pending
+
+## [2026-05-11 13:03:52 KST] [GO100] backend/app/services/execution/order_executor.py
+- Chat-Direct 수정: patch:                       AND (:aid IS NULL →                      AND (:aid::bigint
+- finalize: pending
+
+## [2026-05-11 13:05:37 KST] [GO100] backend/app/services/execution/order_executor.py
+- Chat-Direct 수정: patch:                       AND (:aid::bigint →                      AND (CAST(:aid AS
+- finalize: pending
+
+## [2026-05-11 13:08:33 KST] [GO100] backend/app/services/execution/fund_pool.py
+- Chat-Direct 수정: patch:     def _can_allocate_unlocked(self, des→    def _can_allocate_unlocked(self, des
+- finalize: pending
+
+## [2026-05-11 13:16:25 KST] [GO100] backend/app/services/execution/fund_pool.py
+- Chat-Direct 수정: patch:     def _can_allocate_unlocked(self, des→    def _can_allocate_unlocked(self, des
+- finalize: pending
+
+## [2026-05-11 14:09:15 KST] [GO100] frontend/src/go100/components/portfolio/HoldingsTable.tsx
+- Chat-Direct 수정: write: frontend/src/go100/components/portfolio/HoldingsTable.tsx
+- finalize: pending
+
+## [2026-05-11 14:10:47 KST] [GO100] frontend/src/go100/components/portfolio/AccountHierarchyDropdown.tsx
+- Chat-Direct 수정: write: frontend/src/go100/components/portfolio/AccountHierarchyDropdown.tsx
+- finalize: pending
+
+## [2026-05-11 14:12:01 KST] [GO100] frontend/src/go100/components/portfolio/StrategyPerformanceChart.tsx
+- Chat-Direct 수정: write: frontend/src/go100/components/portfolio/StrategyPerformanceChart.tsx
+- finalize: pending
+
+## [2026-05-11 14:13:24 KST] [GO100] frontend/src/go100/api/portfolioApi.ts
+- Chat-Direct 수정: write: frontend/src/go100/api/portfolioApi.ts
+- finalize: pending
+
+## [2026-05-11 14:14:44 KST] [GO100] frontend/src/go100/components/portfolio/RecentOrdersTable.tsx
+- Chat-Direct 수정: write: frontend/src/go100/components/portfolio/RecentOrdersTable.tsx
+- finalize: pending
+
+## [2026-05-11 14:15:42 KST] [GO100] frontend/src/go100/pages/PortfolioPage.tsx
+- Chat-Direct 수정: write: frontend/src/go100/pages/PortfolioPage.tsx
+- finalize: pending
+
+## [2026-05-11 14:16:25 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch:
+
+@portfolio_dashboard_router.get("/stra→
+
+@portfolio_dashboard_router.get("/rece
+- finalize: pending
+
+## [2026-05-11 14:17:15 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch:                 COALESCE(t.status, 'FILL→                'FILLED'::VARCHAR AS sta
 - finalize: pending
