@@ -618,3 +618,11 @@
 - 조치: 요청 상세 응답에 화면 메타데이터, visual snapshot 목록, 관련 design decision 목록을 포함해 Phase 2 UI가 별도 write API 없이 workbench 초안을 붙일 수 있게 정리.
 - 테스트/검증 명령: `pytest -q tests/unit/test_design_modifications_api.py`, `python3 -m py_compile app/api/design_modifications.py`.
 - 리스크: `084`는 `082_open_design_hub.sql`의 `design_projects` 선행 적용을 전제로 한다. 또한 `context`/`sources` JSONB 구조는 Phase 3 builder 구현 전까지 loose schema이므로 프런트엔드에서는 optional 필드 방어가 필요하다.
+
+## 2026-05-12 07:56 KST - 채팅 TODO 조회 UI 및 stale 정리 보강
+
+- 배경: 채팅 TODO 하네스가 DB/프롬프트 내부에만 존재해 CEO가 채팅창에서 todo 작성 여부를 직접 확인할 수 없었고, 완료 판정이 애매한 `in_progress` 항목이 오래 남는 문제가 확인됨.
+- 백엔드 조치: `GET /api/v1/chat/sessions/{session_id}/todos`를 추가해 세션별 todo를 조회하도록 했다. 조회 시 기본으로 오래된 `in_progress` 항목을 `pending`으로 되돌리고, 활성 항목이 없으면 첫 active 항목을 다시 `in_progress`로 승격한다.
+- 채팅 하네스 조치: TODO 조회 API에서 stale 정리를 기본 수행하도록 해, 채팅창 진입/갱신 시 오래된 진행 상태가 자동 정리되게 했다.
+- 대시보드 조치: `/chat` 입력 영역 상단에 세션 TODO 패널을 추가했다. 진행/완료/실패 카운트, 최대 8개 항목, 상태 라벨, 수동 새로고침을 표시하며 스트리밍 중에는 4초, 평시에는 30초 간격으로 갱신한다.
+- 검증: `python3 -m pytest tests/unit/test_chat_todo_service.py tests/unit/test_chat_service.py::test_multistep_request_injects_todo_prompt_block tests/unit/test_chat_service.py::test_prepare_turn_todo_context_fails_open_when_schema_missing tests/unit/test_chat_service.py::test_todo_completion_gate_appends_missing_note -q` 8개 통과. `python3 -m py_compile app/services/chat_todo_service.py app/services/chat_service.py app/routers/chat.py` 통과. `npx eslint src/app/chat/page.tsx src/app/chat/types.ts` 0 errors/기존 warning 20개. `npx tsc --noEmit --pretty false` 통과. 테스트용 `JWT_SECRET_KEY=test-secret`로 앱 라우트 등록 확인 결과 `/api/v1/chat/sessions/{session_id}/todos` 등록 확인.

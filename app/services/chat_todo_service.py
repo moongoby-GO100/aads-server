@@ -24,6 +24,7 @@ TODO_TERMINAL_STATUSES = (
     TODO_STATUS_SKIPPED,
 )
 TODO_VALID_STATUSES = set(TODO_ACTIVE_STATUSES) | set(TODO_TERMINAL_STATUSES)
+DEFAULT_STALE_IN_PROGRESS_MINUTES = 120
 
 _ACTION_HINTS = (
     "확인", "점검", "검증", "분석", "조사", "수정", "추가", "삭제", "생성", "작성",
@@ -481,6 +482,87 @@ async def list_todo_items(
     pool = get_pool()
     async with pool.acquire() as active_conn:
         return await _list(active_conn)
+
+
+async def cleanup_stale_in_progress_todos(
+    *,
+    session_id: str,
+    stale_after_minutes: int = DEFAULT_STALE_IN_PROGRESS_MINUTES,
+    conn: Any | None = None,
+) -> list[dict[str, Any]]:
+    """Reset old in_progress rows so stale work does not block the next turn."""
+    sid = uuid.UUID(str(session_id))
+    stale_after_minutes = max(5, int(stale_after_minutes or DEFAULT_STALE_IN_PROGRESS_MINUTES))
+
+    async def _cleanup(active_conn: Any) -> list[dict[str, Any]]:
+        rows = await active_conn.fetch(
+            """
+            UPDATE chat_todo_items
+            SET status = $3,
+                metadata = jsonb_set(
+                    jsonb_set(
+                        COALESCE(metadata, '{}'::jsonb),
+                        '{stale_reset_at}',
+                        to_jsonb(NOW()::text),
+                        true
+                    ),
+                    '{stale_reset_reason}',
+                    to_jsonb('in_progress_timeout'::text),
+                    true
+                ),
+                updated_at = NOW(),
+                completed_at = NULL
+            WHERE session_id = $1
+              AND status = $2
+              AND updated_at < NOW() - make_interval(mins => $4::int)
+            RETURNING *
+            """,
+            sid,
+            TODO_STATUS_IN_PROGRESS,
+            TODO_STATUS_PENDING,
+            stale_after_minutes,
+        )
+        reset_rows = [dict(row) for row in rows]
+        if reset_rows:
+            logger.info(
+                "chat_todo_stale_reset session=%s count=%s minutes=%s",
+                str(session_id)[:8],
+                len(reset_rows),
+                stale_after_minutes,
+            )
+        active_rows = await active_conn.fetch(
+            """
+            SELECT *
+            FROM chat_todo_items
+            WHERE session_id = $1
+              AND status = ANY($2::text[])
+            ORDER BY sort_order ASC, created_at ASC
+            """,
+            sid,
+            list(TODO_ACTIVE_STATUSES),
+        )
+        has_in_progress = any(row["status"] == TODO_STATUS_IN_PROGRESS for row in active_rows)
+        if not has_in_progress and active_rows:
+            promoted = await update_todo_item(
+                todo_id=str(active_rows[0]["id"]),
+                status=TODO_STATUS_IN_PROGRESS,
+                metadata={
+                    "stale_cleanup_promoted": True,
+                    "stale_after_minutes": stale_after_minutes,
+                },
+                source="stale_cleanup",
+                conn=active_conn,
+            )
+            if promoted:
+                reset_rows.append(promoted)
+        return reset_rows
+
+    if conn is not None:
+        return await _cleanup(conn)
+
+    pool = get_pool()
+    async with pool.acquire() as active_conn:
+        return await _cleanup(active_conn)
 
 
 async def update_todo_item(

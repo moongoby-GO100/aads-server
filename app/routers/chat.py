@@ -27,6 +27,7 @@ from app.models.chat import (
     BranchCreateRequest,
     DriveFileOut,
     ExecutionOut,
+    ChatTodoItemOut,
     MessageOut,
     MessageUpdateRequest,
     ResearchOut,
@@ -1779,6 +1780,31 @@ async def get_memory_context(session_id: UUID):
     if not result or "error" in result:
         raise _NOT_FOUND("session or memory context")
     return result
+
+
+@router.get("/chat/sessions/{session_id}/todos", response_model=List[ChatTodoItemOut], tags=["chat-todo"])
+async def get_session_todos(
+    session_id: UUID,
+    include_completed: bool = Query(True),
+    cleanup_stale: bool = Query(True, description="오래된 in_progress todo를 pending으로 정리"),
+    stale_minutes: int = Query(120, ge=5, le=1440),
+):
+    """세션별 내부 TODO 하네스 상태를 조회한다."""
+    from app.services.chat_todo_service import cleanup_stale_in_progress_todos, list_todo_items
+
+    try:
+        if cleanup_stale:
+            await cleanup_stale_in_progress_todos(
+                session_id=str(session_id),
+                stale_after_minutes=stale_minutes,
+            )
+        return await list_todo_items(
+            session_id=str(session_id),
+            include_completed=include_completed,
+        )
+    except Exception as exc:
+        logger.warning("chat_todo_list_failed", session_id=str(session_id), error=str(exc))
+        raise HTTPException(status_code=500, detail="failed to load session todos") from exc
 
 
 @router.post("/chat/errors/report", response_model=ErrorReportOut, tags=["chat-errors"])

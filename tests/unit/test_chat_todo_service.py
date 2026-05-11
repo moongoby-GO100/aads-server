@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -86,6 +86,25 @@ class _TodoConn:
 
     async def fetch(self, query: str, *args):
         normalized = " ".join(query.split())
+        if normalized.startswith("UPDATE chat_todo_items SET status = $3"):
+            session_id, from_status, to_status, stale_minutes = args
+            cutoff = _utcnow() - timedelta(minutes=int(stale_minutes))
+            rows = []
+            for row in self.items.values():
+                if (
+                    str(row["session_id"]) == str(session_id)
+                    and row["status"] == from_status
+                    and row["updated_at"] < cutoff
+                ):
+                    row["status"] = to_status
+                    row["metadata"] = {
+                        **row.get("metadata", {}),
+                        "stale_reset_reason": "in_progress_timeout",
+                    }
+                    row["updated_at"] = _utcnow()
+                    row["completed_at"] = None
+                    rows.append(dict(row))
+            return rows
         if "FROM chat_todo_items" not in normalized:
             raise AssertionError(f"unexpected fetch query: {normalized}")
 
@@ -173,6 +192,33 @@ async def test_todo_service_crud_state_transition_and_session_isolation():
     assert len(listed_b) == 1
     assert listed_b[0]["title"] == "session B 점검"
     assert listed_b[0]["id"] == created_b[0]["id"]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_stale_in_progress_resets_and_promotes_next_item():
+    conn = _TodoConn()
+    session_id = str(uuid.uuid4())
+    created = await svc.create_todo_items(
+        session_id=session_id,
+        message_id=str(uuid.uuid4()),
+        execution_id=str(uuid.uuid4()),
+        titles=["오래된 진행 항목", "다음 항목"],
+        source="user_turn",
+        conn=conn,
+    )
+    conn.items[str(created[0]["id"])]["updated_at"] = _utcnow() - timedelta(minutes=180)
+
+    cleaned = await svc.cleanup_stale_in_progress_todos(
+        session_id=session_id,
+        stale_after_minutes=120,
+        conn=conn,
+    )
+
+    listed = await svc.list_todo_items(session_id=session_id, include_completed=False, conn=conn)
+    assert len(cleaned) >= 2
+    assert listed[0]["title"] == "오래된 진행 항목"
+    assert listed[0]["status"] == svc.TODO_STATUS_IN_PROGRESS
+    assert listed[0]["metadata"]["stale_cleanup_promoted"] is True
 
 
 def test_completion_gate_detects_missing_items():
