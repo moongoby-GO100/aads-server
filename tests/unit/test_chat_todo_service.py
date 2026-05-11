@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from app.models.chat import ChatTodoItemOut
 from app.services import chat_todo_service as svc
 
 
@@ -192,6 +193,27 @@ async def test_todo_service_crud_state_transition_and_session_isolation():
     assert len(listed_b) == 1
     assert listed_b[0]["title"] == "session B 점검"
     assert listed_b[0]["id"] == created_b[0]["id"]
+
+
+@pytest.mark.asyncio
+async def test_todo_rows_decode_jsonb_metadata_strings_for_api_response():
+    conn = _TodoConn()
+    session_id = str(uuid.uuid4())
+    created = await svc.create_todo_items(
+        session_id=session_id,
+        message_id=str(uuid.uuid4()),
+        execution_id=str(uuid.uuid4()),
+        titles=["API response validation"],
+        source="user_turn",
+        metadata={"created_from": "test"},
+        conn=conn,
+    )
+    conn.items[str(created[0]["id"])]["metadata"] = json.dumps({"created_from": "asyncpg"}, ensure_ascii=False)
+
+    listed = await svc.list_todo_items(session_id=session_id, conn=conn)
+
+    assert listed[0]["metadata"] == {"created_from": "asyncpg"}
+    ChatTodoItemOut.model_validate(listed[0])
 
 
 @pytest.mark.asyncio

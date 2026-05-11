@@ -60,7 +60,20 @@ def _normalize_text(value: str) -> str:
 def _normalize_metadata(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        if isinstance(parsed, dict):
+            return parsed
     return {}
+
+
+def _normalize_todo_row(row: Any) -> dict[str, Any]:
+    item = dict(row)
+    item["metadata"] = _normalize_metadata(item.get("metadata"))
+    return item
 
 
 def _append_audit(
@@ -414,7 +427,7 @@ async def create_todo_items(
                 source,
                 json.dumps(item_metadata, ensure_ascii=False),
             )
-            rows.append(dict(row))
+            rows.append(_normalize_todo_row(row))
         logger.info(
             "chat_todo_created session=%s execution=%s count=%s source=%s",
             str(session_id)[:8],
@@ -474,7 +487,7 @@ async def list_todo_items(
 
     async def _list(active_conn: Any) -> list[dict[str, Any]]:
         rows = await active_conn.fetch(query, *params)
-        return [dict(row) for row in rows]
+        return [_normalize_todo_row(row) for row in rows]
 
     if conn is not None:
         return await _list(conn)
@@ -522,7 +535,7 @@ async def cleanup_stale_in_progress_todos(
             TODO_STATUS_PENDING,
             stale_after_minutes,
         )
-        reset_rows = [dict(row) for row in rows]
+        reset_rows = [_normalize_todo_row(row) for row in rows]
         if reset_rows:
             logger.info(
                 "chat_todo_stale_reset session=%s count=%s minutes=%s",
@@ -617,7 +630,7 @@ async def update_todo_item(
             json.dumps(merged_metadata, ensure_ascii=False),
             completed_at,
         )
-        return dict(row) if row else None
+        return _normalize_todo_row(row) if row else None
 
     if conn is not None:
         return await _update(conn)
