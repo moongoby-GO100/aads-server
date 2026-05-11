@@ -1,6 +1,13 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-12)
+- **Chat TODO 패널 UX 보강 (2026-05-12 08:36 KST)**:
+  - 요청: 채팅창 상단 TODO 패널을 접을 수 있게 하고, 기본 상태에서 완료 이력보다 진행/대기 항목을 먼저 보이도록 조정.
+  - 대시보드 조치: `aads-dashboard/src/app/chat/page.tsx`에 `todoCollapsed`, `showAllTodos` 상태를 추가했다. 세션 전환 시 기본값을 `펼침 + 진행만`으로 초기화하고, 헤더에 `전체/진행만` 토글과 접기 버튼을 넣었다.
+  - 표시 정책: 기본 목록은 `pending`/`in_progress`만 노출하고, 완료/실패/skip 항목은 숨긴 뒤 필요 시 `전체` 버튼으로 확장한다. 활성 TODO가 없으면 빈 상태 문구를 보여 주고, 완료 이력이 남아 있으면 확장 가능 여부를 같이 안내한다.
+  - 문서 기록: `aads-dashboard/README.md` 주요 기능에 채팅 TODO 패널 기본 동작을 추가했다.
+  - 검증: `npx tsc --noEmit --pretty false` 통과. 파일 단위 ESLint는 기존 warning만 있고 새 error 없음. 배포는 다른 세션에서 이미 반영된 상태라 이번 작업에서는 커밋/푸시만 수행 예정.
+
 - **Chat restart resume trigger guard (2026-05-12 08:34 KST)**:
   - 요청: 서버 재시작 후 채팅 응답이 이어서 진행되지 않는 문제의 즉시 개선.
   - 원인: `app/main.py`의 execution resume scanner가 `chat_turn_executions.status IN ('running','retrying')`이어도 `updated_at < NOW() - 90 seconds`가 될 때까지 claim하지 않았다. 재시작 직후에는 DB상 “생성 중”으로 보이지만 새 프로세스 메모리에는 producer가 없어 빈 대기 시간이 생겼다.
