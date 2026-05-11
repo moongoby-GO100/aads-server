@@ -634,3 +634,9 @@
 - 채팅 하네스 조치: TODO 조회 API에서 stale 정리를 기본 수행하도록 해, 채팅창 진입/갱신 시 오래된 진행 상태가 자동 정리되게 했다.
 - 대시보드 조치: `/chat` 입력 영역 상단에 세션 TODO 패널을 추가했다. 진행/완료/실패 카운트, 최대 8개 항목, 상태 라벨, 수동 새로고침을 표시하며 스트리밍 중에는 4초, 평시에는 30초 간격으로 갱신한다.
 - 검증: `python3 -m pytest tests/unit/test_chat_todo_service.py tests/unit/test_chat_service.py::test_multistep_request_injects_todo_prompt_block tests/unit/test_chat_service.py::test_prepare_turn_todo_context_fails_open_when_schema_missing tests/unit/test_chat_service.py::test_todo_completion_gate_appends_missing_note -q` 8개 통과. `python3 -m py_compile app/services/chat_todo_service.py app/services/chat_service.py app/routers/chat.py` 통과. `npx eslint src/app/chat/page.tsx src/app/chat/types.ts` 0 errors/기존 warning 20개. `npx tsc --noEmit --pretty false` 통과. 테스트용 `JWT_SECRET_KEY=test-secret`로 앱 라우트 등록 확인 결과 `/api/v1/chat/sessions/{session_id}/todos` 등록 확인.
+
+## 2026-05-12 08:15 KST - NTV2 원격 파일 도구 workdir 보정
+
+- 배경: `runner-635be17c` 검수 과정에서 `read_remote_file(project='NTV2', file_path='src/app/Http/Controllers/Api/SourcingRpaController.php')`가 실제 운영 repo `/srv/newtalk-v2`가 아니라 서버 루트 기준 `/src/...`를 읽어 stale 파일을 근거로 반려되는 문제가 확인됨.
+- 조치: `app/core/project_config.py`의 NTV2 `workdir`를 `/`에서 `/srv/newtalk-v2`로 변경해 `read_remote_file`, `list_remote_dir`, `run_remote_command`, git 도구가 동일한 운영 Git 루트를 기본 기준으로 사용하도록 보정.
+- 검증: `/srv/newtalk-v2` 기준 `git status --short` 깨끗함, `git log -- src/app/Http/Controllers/Api/SourcingRpaController.php`에 `babb193 Persist VVIC batch scrape jobs` 확인, `php -l /srv/newtalk-v2/src/app/Http/Controllers/Api/SourcingRpaController.php` 통과. AADS 측은 `python3 -m py_compile app/core/project_config.py`로 확인 예정.
