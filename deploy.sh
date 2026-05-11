@@ -172,6 +172,10 @@ restart_old_slot_after_drain() {
             sleep 30
             elapsed=$((elapsed + 30))
         done
+        if [[ "${active:-0}" != "0" && -n "${active:-}" ]]; then
+            echo "[deploy.sh] old slot ${old_container}:${old_port} still has active streams=${active}; skip restart to preserve SSE"
+            return 0
+        fi
         docker exec "$old_container" touch /tmp/aads_deploy_restart 2>/dev/null || true
         docker exec "$old_container" supervisorctl restart aads-api >/dev/null 2>&1 || true
         docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
@@ -410,6 +414,14 @@ case "$MODE" in
         fi
         echo "[deploy.sh] 현재: :${CURRENT_PORT} → 전환 대상: :${NEW_PORT} (${NEW_CONTAINER})"
 
+        TARGET_STREAMS="$(stream_count_for_port "$NEW_PORT")"
+        if [[ "${TARGET_STREAMS:-0}" != "0" && -n "${TARGET_STREAMS:-}" && "${AADS_DEPLOY_ALLOW_BUSY_TARGET:-false}" != "true" ]]; then
+            echo "[deploy.sh] ❌ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT}에 활성 스트림 ${TARGET_STREAMS}건 존재 — 재빌드 시 응답 끊김 위험으로 배포 중단"
+            echo "[deploy.sh]    잠시 후 재시도하거나, 긴급 강제 배포가 필요할 때만 AADS_DEPLOY_ALLOW_BUSY_TARGET=true를 명시하세요."
+            notify "❌ Blue-Green 중단: target slot ${NEW_CONTAINER}:${NEW_PORT} active streams=${TARGET_STREAMS}"
+            exit 1
+        fi
+
         # ① 새 컨테이너 빌드 + 시작
         cd "$COMPOSE_DIR"
         echo "[deploy.sh] ① ${NEW_CONTAINER} 빌드 + 시작..."
@@ -519,6 +531,12 @@ case "$MODE" in
                 sleep 30
                 _OLD_DRAIN_ELAPSED=$((_OLD_DRAIN_ELAPSED + 30))
             done
+
+            if [ "${_OLD_ACTIVE:-0}" != "0" ] && [ -n "${_OLD_ACTIVE:-}" ]; then
+                echo "[deploy.sh]   구 컨테이너 활성 스트림 ${_OLD_ACTIVE}건 유지 — 응답 보존을 위해 종료 스킵"
+                docker exec "$OLD_CONTAINER" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
+                exit 0
+            fi
 
             docker stop --time 30 "$OLD_CONTAINER" 2>/dev/null || true
             echo "[deploy.sh] ⑤ ✅ ${OLD_CONTAINER} 종료 완료"
