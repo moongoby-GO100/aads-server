@@ -89,13 +89,23 @@ class BrowserBridgeService:
     def active_session(self) -> BrowserBridgeSession | None:
         return self.sessions.get_active()
 
-    async def acquire_playwright_context(self) -> tuple[Any, Optional[str]]:
-        """Return an active bridge Playwright context or a headless fallback context."""
+    async def acquire_playwright_context(
+        self,
+        session_id: str | None = None,
+    ) -> tuple[Any, Optional[str]]:
+        """Return a bridge Playwright context or a headless fallback context.
+
+        When session_id is provided, that exact Browser Bridge session is used
+        and the global active session is not changed. This lets concurrent
+        jobs pin themselves to different local browser sessions.
+        """
         if self._context_lock is None:
             self._context_lock = asyncio.Lock()
         async with self._context_lock:
             try:
-                session = self.sessions.get_active()
+                session = self.sessions.get(session_id) if session_id else self.sessions.get_active()
+                if session_id and not session:
+                    raise BrowserBridgeError(f"browser bridge session not found: {session_id}")
                 if session:
                     context = await self._context_for_session(session)
                     session.mark_used()
@@ -183,6 +193,13 @@ class BrowserBridgeService:
 
     def e2e_config(self, session_id: str | None = None) -> dict[str, Any]:
         session = self.sessions.get(session_id) if session_id else self.sessions.get_active()
+        if session_id and not session:
+            return {
+                "mode": "unavailable",
+                "session_id": session_id,
+                "headless_fallback": False,
+                "error": f"browser bridge session not found: {session_id}",
+            }
         if not session:
             return {"mode": "headless", "session_id": None, "headless_fallback": True}
 

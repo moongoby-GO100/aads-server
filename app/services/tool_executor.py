@@ -2838,8 +2838,9 @@ class ToolExecutor:
         if not url:
             return {"error": "url 필수"}
         full_page = inp.get("full_page", False)
+        browser_session_id = inp.get("browser_session_id", "")
         from app.api.ceo_chat_tools import tool_capture_screenshot
-        return await tool_capture_screenshot(url, full_page)
+        return await tool_capture_screenshot(url, full_page, browser_session_id=browser_session_id)
 
     async def _terminate_task(self, inp: Dict[str, Any]) -> Any:
         """스톨된 작업을 강제 종료. Pipeline Runner는 원격 PID kill, Pipeline B는 DB 상태 변경."""
@@ -3836,26 +3837,30 @@ class ToolExecutor:
         url = inp.get("url", "")
         if not url:
             return {"error": "url 필수"}
+        browser_session_id = inp.get("browser_session_id", "")
         from app.api.ceo_chat_tools import tool_browser_navigate
-        return await tool_browser_navigate(url)
+        return await tool_browser_navigate(url, browser_session_id=browser_session_id)
 
     async def _browser_snapshot(self, inp: Dict[str, Any]) -> Any:
         """현재 페이지 접근성 트리 추출 (텍스트 기반 UI 분석)."""
+        browser_session_id = inp.get("browser_session_id", "")
         from app.api.ceo_chat_tools import tool_browser_snapshot
-        return await tool_browser_snapshot()
+        return await tool_browser_snapshot(browser_session_id=browser_session_id)
 
     async def _browser_screenshot(self, inp: Dict[str, Any]) -> Any:
         """현재 페이지 PNG 스크린샷 촬영."""
+        browser_session_id = inp.get("browser_session_id", "")
         from app.api.ceo_chat_tools import tool_browser_screenshot
-        return await tool_browser_screenshot()
+        return await tool_browser_screenshot(browser_session_id=browser_session_id)
 
     async def _browser_click(self, inp: Dict[str, Any]) -> Any:
         """CSS selector로 요소 클릭."""
         selector = inp.get("selector", "")
         if not selector:
             return {"error": "selector 필수"}
+        browser_session_id = inp.get("browser_session_id", "")
         from app.api.ceo_chat_tools import tool_browser_click
-        return await tool_browser_click(selector)
+        return await tool_browser_click(selector, browser_session_id=browser_session_id)
 
     async def _browser_fill(self, inp: Dict[str, Any]) -> Any:
         """입력 필드에 텍스트 채우기."""
@@ -3863,13 +3868,15 @@ class ToolExecutor:
         value = inp.get("value", "")
         if not selector:
             return {"error": "selector 필수"}
+        browser_session_id = inp.get("browser_session_id", "")
         from app.api.ceo_chat_tools import tool_browser_fill
-        return await tool_browser_fill(selector, value)
+        return await tool_browser_fill(selector, value, browser_session_id=browser_session_id)
 
     async def _browser_tab_list(self, inp: Dict[str, Any]) -> Any:
         """열린 탭 목록 반환."""
+        browser_session_id = inp.get("browser_session_id", "")
         from app.api.ceo_chat_tools import tool_browser_tab_list
-        return await tool_browser_tab_list()
+        return await tool_browser_tab_list(browser_session_id=browser_session_id)
 
     async def _semantic_code_search(self, inp: Dict[str, Any]) -> Any:
         """AADS-188B: ChromaDB 벡터 기반 시맨틱 코드 검색."""

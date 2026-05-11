@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
@@ -114,8 +114,11 @@ async def select_session(
 
 
 @router.get("/e2e/config")
-async def e2e_config(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    config = get_browser_bridge_service().e2e_config()
+async def e2e_config(
+    session_id: str | None = Query(default=None, description="특정 Browser Bridge session id"),
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    config = get_browser_bridge_service().e2e_config(session_id=session_id)
     return {
         "config": config,
         "env_interface": {

@@ -1617,6 +1617,10 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "type": "string",
                     "description": "접속할 URL (https://aads.newtalk.kr/chat 등)",
                 },
+                "browser_session_id": {
+                    "type": "string",
+                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
+                },
             },
             "required": ["url"],
         },
@@ -1635,7 +1639,12 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         ),
         "input_schema": {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "browser_session_id": {
+                    "type": "string",
+                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
+                },
+            },
             "required": [],
         },
     },
@@ -1647,7 +1656,12 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         ),
         "input_schema": {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "browser_session_id": {
+                    "type": "string",
+                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
+                },
+            },
             "required": [],
         },
     },
@@ -1670,6 +1684,10 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "type": "boolean",
                     "description": "전체 페이지 캡처 여부 (기본: false, 뷰포트만)",
                 },
+                "browser_session_id": {
+                    "type": "string",
+                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
+                },
             },
             "required": ["url"],
         },
@@ -1683,6 +1701,10 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "selector": {
                     "type": "string",
                     "description": "클릭할 요소의 CSS selector 또는 'text=버튼텍스트'",
+                },
+                "browser_session_id": {
+                    "type": "string",
+                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
                 },
             },
             "required": ["selector"],
@@ -1707,6 +1729,10 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "type": "string",
                     "description": "입력할 텍스트",
                 },
+                "browser_session_id": {
+                    "type": "string",
+                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
+                },
             },
             "required": ["selector", "value"],
         },
@@ -1717,7 +1743,12 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "description": "헤드리스 브라우저에 열린 탭 목록을 조회한다.",
         "input_schema": {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "browser_session_id": {
+                    "type": "string",
+                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
+                },
+            },
             "required": [],
         },
         "defer_loading": True,

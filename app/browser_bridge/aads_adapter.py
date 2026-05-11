@@ -6,8 +6,12 @@ from typing import Any, Optional
 from .service import get_browser_bridge_service
 
 
-async def acquire_browser_context() -> tuple[Any, Optional[str]]:
-    return await get_browser_bridge_service().acquire_playwright_context()
+async def acquire_browser_context(
+    browser_session_id: str | None = None,
+) -> tuple[Any, Optional[str]]:
+    return await get_browser_bridge_service().acquire_playwright_context(
+        session_id=browser_session_id or None
+    )
 
 
 def create_pairing_instructions(label: str = "CEO local Chrome", created_by: str = "") -> str:

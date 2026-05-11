@@ -102,3 +102,99 @@ def test_storage_state_session_writes_only_ignored_state_dir(tmp_path) -> None:
     assert session.storage_state_ref
     assert config["mode"] == "storage_state"
     assert config["storage_state_path"].startswith(str(tmp_path))
+
+
+def test_e2e_config_can_pin_specific_session_without_changing_active(tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    first_pairing = service.create_pairing(label="Work A")
+    second_pairing = service.create_pairing(label="Work B")
+
+    first = service.register_session(
+        pairing_token=first_pairing.token,
+        label="Work A",
+        endpoint_kind="cdp",
+        endpoint_url="http://127.0.0.1:9222",
+    )
+    second = service.register_session(
+        pairing_token=second_pairing.token,
+        label="Work B",
+        endpoint_kind="cdp",
+        endpoint_url="http://127.0.0.1:9223",
+    )
+    service.select_session(first.session_id)
+
+    config = service.e2e_config(session_id=second.session_id)
+
+    assert config["mode"] == "cdp"
+    assert config["session_id"] == second.session_id
+    assert config["cdp_url"] == "http://127.0.0.1:9223"
+    assert service.active_session().session_id == first.session_id
+
+
+def test_e2e_config_reports_missing_pinned_session(tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(),
+        storage_states=StorageStateManager(tmp_path),
+    )
+
+    config = service.e2e_config(session_id="bb-missing")
+
+    assert config["mode"] == "unavailable"
+    assert config["session_id"] == "bb-missing"
+    assert config["headless_fallback"] is False
+    assert "browser bridge session not found: bb-missing" in config["error"]
+
+
+@pytest.mark.asyncio
+async def test_acquire_specific_session_does_not_change_active_session(tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    first_pairing = service.create_pairing(label="Work A")
+    second_pairing = service.create_pairing(label="Work B")
+
+    first = service.register_session(
+        pairing_token=first_pairing.token,
+        label="Work A",
+        endpoint_kind="cdp",
+        endpoint_url="http://127.0.0.1:9222",
+    )
+    second = service.register_session(
+        pairing_token=second_pairing.token,
+        label="Work B",
+        endpoint_kind="cdp",
+        endpoint_url="http://127.0.0.1:9223",
+    )
+    service.select_session(first.session_id)
+
+    async def fake_context(session):
+        return {"session_id": session.session_id}
+
+    service._context_for_session = fake_context  # type: ignore[method-assign]
+
+    context, error = await service.acquire_playwright_context(session_id=second.session_id)
+
+    assert error is None
+    assert context == {"session_id": second.session_id}
+    assert service.active_session().session_id == first.session_id
+
+
+@pytest.mark.asyncio
+async def test_acquire_specific_session_reports_missing_session(tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(),
+        storage_states=StorageStateManager(tmp_path),
+    )
+
+    context, error = await service.acquire_playwright_context(session_id="bb-missing")
+
+    assert context is None
+    assert "browser bridge session not found: bb-missing" in error

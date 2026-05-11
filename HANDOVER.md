@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-12)
+- **Browser Bridge 다중 세션 병렬 고정 지원 (2026-05-12 07:15~KST)**:
+  - 요청: 여러 Browser Bridge 세션을 동시에 띄우고 각각 다른 작업에 고정해 진행할 수 있도록 즉시 구현.
+  - 조치: `BrowserBridgeService.acquire_playwright_context(session_id=...)`가 특정 세션을 직접 획득하도록 보강했다. 명시 `session_id` 사용 시 전역 active 세션을 바꾸지 않으며, 없을 때만 기존 active/headless fallback 동작을 유지한다.
+  - 조치: `browser_navigate`, `browser_snapshot`, `browser_screenshot`, `browser_click`, `browser_fill`, `browser_tab_list`, `capture_screenshot`에 `browser_session_id` 입력을 추가하고 `ToolExecutor`, `ceo_chat_tools`, `tool_registry` 경로를 연결했다.
+  - 조치: `/api/v1/browser-bridge/e2e/config?session_id=...`로 특정 세션 E2E 설정 조회를 지원한다. 잘못된 고정 세션 ID는 `mode=unavailable`, `headless_fallback=false`로 명시해 조용한 headless fallback을 막는다.
+  - 사용법: 여러 세션을 등록한 뒤 각 작업/러너/채팅 도구 호출에 `browser_session_id="bb-..."`를 넣으면 서로 다른 브라우저 세션에서 병렬 실행된다. 기존 `browser_connect(action="select")` 방식은 하위 호환용 active 세션 선택으로 유지된다.
+  - 검증: `pytest tests/unit/test_browser_bridge.py -q` → `12 passed`. `python3 -m compileall app/browser_bridge app/api/browser_bridge.py app/api/ceo_chat_tools.py app/services/tool_executor.py app/services/tool_registry.py` 통과.
+
 ## 현재 진행 상태 (2026-05-11)
 - **Chat stream interruption / blue-green deploy guard 보강 (2026-05-11 19:30~KST)**:
   - 원인: API/대시보드 재시작 중 SSE 스트림이 끊겼고, 이후 `resume_single_stream_error` 경로에서 Codex Relay 재개가 실패해 `interrupted/recovered` 메시지가 남았다.

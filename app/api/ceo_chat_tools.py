@@ -192,7 +192,11 @@ TOOL_DEFINITIONS: List[Dict] = [
                 "url": {
                     "type": "string",
                     "description": "이동할 URL (예: https://aads.newtalk.kr/)",
-                }
+                },
+                "browser_session_id": {
+                    "type": "string",
+                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
+                },
             },
             "required": ["url"],
         },
@@ -202,7 +206,12 @@ TOOL_DEFINITIONS: List[Dict] = [
         "description": "현재 브라우저 페이지의 접근성 트리를 텍스트로 추출. 스크린샷보다 정확한 구조 분석. browser_navigate 후 사용.",
         "input_schema": {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "browser_session_id": {
+                    "type": "string",
+                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
+                },
+            },
             "required": [],
         },
     },
@@ -211,7 +220,12 @@ TOOL_DEFINITIONS: List[Dict] = [
         "description": "현재 브라우저 페이지 PNG 스크린샷. base64 반환. 시각적 레이아웃 확인용. browser_navigate 후 사용.",
         "input_schema": {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "browser_session_id": {
+                    "type": "string",
+                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
+                },
+            },
             "required": [],
         },
     },
@@ -224,7 +238,11 @@ TOOL_DEFINITIONS: List[Dict] = [
                 "selector": {
                     "type": "string",
                     "description": "클릭할 요소의 CSS selector (예: button#submit, text=로그인)",
-                }
+                },
+                "browser_session_id": {
+                    "type": "string",
+                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
+                },
             },
             "required": ["selector"],
         },
@@ -243,6 +261,10 @@ TOOL_DEFINITIONS: List[Dict] = [
                     "type": "string",
                     "description": "입력할 텍스트",
                 },
+                "browser_session_id": {
+                    "type": "string",
+                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
+                },
             },
             "required": ["selector", "value"],
         },
@@ -252,7 +274,12 @@ TOOL_DEFINITIONS: List[Dict] = [
         "description": "현재 열린 브라우저 탭 목록 (URL + 제목). 최대 3탭.",
         "input_schema": {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "browser_session_id": {
+                    "type": "string",
+                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
+                },
+            },
             "required": [],
         },
     },
@@ -1220,6 +1247,10 @@ TOOL_DEFINITIONS: List[Dict] = [
                 "full_page": {
                     "type": "boolean",
                     "description": "전체 페이지 캡처 여부 (기본 false = 뷰포트만)",
+                },
+                "browser_session_id": {
+                    "type": "string",
+                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
                 },
             },
             "required": ["url"],
@@ -2558,11 +2589,11 @@ def _browser_domain_ok(url: str) -> Optional[str]:
     return None
 
 
-async def _acquire_pw_context() -> Tuple[Any, Optional[str]]:
+async def _acquire_pw_context(browser_session_id: str = "") -> Tuple[Any, Optional[str]]:
     """Playwright 컨텍스트 싱글턴 취득. 실패 시 (None, 에러메시지)."""
     from app.browser_bridge.aads_adapter import acquire_browser_context
 
-    return await acquire_browser_context()
+    return await acquire_browser_context(browser_session_id=browser_session_id or None)
 
 
 async def _current_page(ctx: Any) -> Any:
@@ -2626,12 +2657,12 @@ async def _do_aads_login(page: Any) -> None:
     await page.wait_for_timeout(3000)
 
 
-async def tool_browser_navigate(url: str) -> str:
+async def tool_browser_navigate(url: str, browser_session_id: str = "") -> str:
     """브라우저로 URL 이동 (도메인 화이트리스트 검사 포함)."""
     blocked = _browser_domain_ok(url)
     if blocked:
         return blocked
-    ctx, err = await _acquire_pw_context()
+    ctx, err = await _acquire_pw_context(browser_session_id)
     if err:
         return err
     try:
@@ -2709,6 +2740,7 @@ async def tool_browser_connect(
         lines = ["[Browser Bridge 상태]"]
         lines.append(f"active_session: {active.session_id if active else '(없음)'}")
         lines.append(f"sessions: {len(sessions)}")
+        lines.append("parallel_hint: browser_* 도구에 browser_session_id를 지정하면 active 세션을 바꾸지 않고 해당 세션에서 실행됩니다.")
         for item in sessions[:10]:
             endpoint = item.get("endpoint", {})
             marker = "*" if item.get("active") else "-"
@@ -2723,9 +2755,9 @@ async def tool_browser_connect(
         return f"[ERROR] Browser Bridge 처리 실패: {e}"
 
 
-async def tool_browser_snapshot() -> str:
+async def tool_browser_snapshot(browser_session_id: str = "") -> str:
     """현재 페이지의 UI 구조를 텍스트로 추출 (LLM 최적)."""
-    ctx, err = await _acquire_pw_context()
+    ctx, err = await _acquire_pw_context(browser_session_id)
     if err:
         return err
     try:
@@ -2785,9 +2817,9 @@ async def tool_browser_snapshot() -> str:
         return f"[ERROR] 스냅샷 실패: {e}"
 
 
-async def tool_browser_screenshot() -> str:
+async def tool_browser_screenshot(browser_session_id: str = "") -> str:
     """현재 페이지 PNG 스크린샷 촬영 (base64 반환)."""
-    ctx, err = await _acquire_pw_context()
+    ctx, err = await _acquire_pw_context(browser_session_id)
     if err:
         return err
     try:
@@ -2799,14 +2831,18 @@ async def tool_browser_screenshot() -> str:
         return f"[ERROR] 스크린샷 실패: {e}"
 
 
-async def tool_capture_screenshot(url: str, full_page: bool = False) -> str:
+async def tool_capture_screenshot(
+    url: str,
+    full_page: bool = False,
+    browser_session_id: str = "",
+) -> str:
     """URL 스크린샷을 캡처하여 이미지 URL 반환 (채팅에 인라인 표시용)."""
     if not url:
         return "[ERROR] url 필수"
     blocked = _browser_domain_ok(url)
     if blocked:
         return blocked
-    ctx, err = await _acquire_pw_context()
+    ctx, err = await _acquire_pw_context(browser_session_id)
     if err:
         return err
     try:
@@ -2840,9 +2876,9 @@ async def tool_capture_screenshot(url: str, full_page: bool = False) -> str:
         return f"[ERROR] 스크린샷 캡처 실패: {e}"
 
 
-async def tool_browser_click(selector: str) -> str:
+async def tool_browser_click(selector: str, browser_session_id: str = "") -> str:
     """CSS selector로 요소 클릭."""
-    ctx, err = await _acquire_pw_context()
+    ctx, err = await _acquire_pw_context(browser_session_id)
     if err:
         return err
     try:
@@ -2853,9 +2889,9 @@ async def tool_browser_click(selector: str) -> str:
         return f"[ERROR] 클릭 실패 ({selector}): {e}"
 
 
-async def tool_browser_fill(selector: str, value: str) -> str:
+async def tool_browser_fill(selector: str, value: str, browser_session_id: str = "") -> str:
     """입력 필드에 텍스트 채우기."""
-    ctx, err = await _acquire_pw_context()
+    ctx, err = await _acquire_pw_context(browser_session_id)
     if err:
         return err
     try:
@@ -2866,9 +2902,9 @@ async def tool_browser_fill(selector: str, value: str) -> str:
         return f"[ERROR] 입력 실패 ({selector}): {e}"
 
 
-async def tool_browser_tab_list() -> str:
+async def tool_browser_tab_list(browser_session_id: str = "") -> str:
     """열린 탭 목록 반환."""
-    ctx, err = await _acquire_pw_context()
+    ctx, err = await _acquire_pw_context(browser_session_id)
     if err:
         return err
     try:
@@ -3515,17 +3551,27 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             label=params.get("label", "CEO local Chrome"),
         )
     elif name == "browser_navigate":
-        return await tool_browser_navigate(params.get("url", ""))
+        return await tool_browser_navigate(
+            params.get("url", ""),
+            browser_session_id=params.get("browser_session_id", ""),
+        )
     elif name == "browser_snapshot":
-        return await tool_browser_snapshot()
+        return await tool_browser_snapshot(browser_session_id=params.get("browser_session_id", ""))
     elif name == "browser_screenshot":
-        return await tool_browser_screenshot()
+        return await tool_browser_screenshot(browser_session_id=params.get("browser_session_id", ""))
     elif name == "browser_click":
-        return await tool_browser_click(params.get("selector", ""))
+        return await tool_browser_click(
+            params.get("selector", ""),
+            browser_session_id=params.get("browser_session_id", ""),
+        )
     elif name == "browser_fill":
-        return await tool_browser_fill(params.get("selector", ""), params.get("value", ""))
+        return await tool_browser_fill(
+            params.get("selector", ""),
+            params.get("value", ""),
+            browser_session_id=params.get("browser_session_id", ""),
+        )
     elif name == "browser_tab_list":
-        return await tool_browser_tab_list()
+        return await tool_browser_tab_list(browser_session_id=params.get("browser_session_id", ""))
     # ── SSH 원격 접근 도구 (AADS-165) ────────────────────────────────────────
     elif name == "list_remote_dir":
         return await tool_list_remote_dir(
@@ -3763,7 +3809,11 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         return await tool_git_remote_create_branch(params.get("project", ""), params.get("branch_name", ""))
     # ── 스크린샷 (독립 캡처) ──────────────────────────────────────────────
     elif name == "capture_screenshot":
-        return await tool_capture_screenshot(params.get("url", ""), params.get("full_page", False))
+        return await tool_capture_screenshot(
+            params.get("url", ""),
+            params.get("full_page", False),
+            browser_session_id=params.get("browser_session_id", ""),
+        )
     # ── 프로젝트 DB 도구 ─────────────────────────────────────────────────
     elif name == "query_project_database":
         from app.api.ceo_chat_tools_db import query_project_database
