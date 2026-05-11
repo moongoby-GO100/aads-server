@@ -391,6 +391,136 @@ async def test_html_context_injection():
 
 
 @pytest.mark.asyncio
+async def test_multistep_request_injects_todo_prompt_block():
+    captured = {}
+    session_id = str(uuid.uuid4())
+    execution_id = uuid.uuid4()
+    conn = AsyncMock()
+
+    async def _mock_fetchrow(query, *args):
+        if "FROM chat_messages WHERE idempotency_key" in query:
+            return None
+        if "WHERE session_id = $1 AND role = 'user' AND content = $2" in query:
+            return None
+        if "FROM chat_workspaces w" in query:
+            return {
+                "workspace_id": uuid.uuid4(),
+                "workspace_name": "AADS",
+                "system_prompt": "BASE_SYSTEM",
+                "workspace_settings": {},
+                "role_key": "",
+                "session_settings": {},
+            }
+        if "FROM chat_session_stats" in query:
+            return {"cost_total": 0, "message_count": 0}
+        if "SELECT settings FROM chat_users" in query:
+            return {"settings": {}}
+        return None
+
+    conn.fetchrow = AsyncMock(side_effect=_mock_fetchrow)
+    conn.fetch = AsyncMock(return_value=[])
+    conn.fetchval = AsyncMock(return_value=execution_id)
+
+    async def _mock_call_stream(*, system_prompt, **kwargs):
+        captured["system_prompt"] = system_prompt
+        yield {"type": "error", "content": "stop"}
+
+    with (
+        patch("app.services.chat_service.get_pool", return_value=_Pool(conn)),
+        patch("app.services.chat_service.create_trace", return_value=None),
+        patch("app.services.chat_service._get_last_html_artifact", new=AsyncMock(return_value=None)),
+        patch(
+            "app.services.context_builder.build_messages_context",
+            new=AsyncMock(return_value=([{"role": "user", "content": "1. migration 추가 2. chat_service 통합"}], "BASE_SYSTEM")),
+        ),
+        patch(
+            "app.services.intent_router.classify",
+            new=AsyncMock(return_value=SimpleNamespace(
+                intent="code_modify",
+                model="claude-sonnet",
+                use_tools=True,
+                tool_group="all",
+                use_gemini_direct=False,
+                gemini_mode=None,
+            )),
+        ),
+        patch("app.services.contradiction_detector.detect_contradictions", new=AsyncMock(return_value="")),
+        patch("app.services.chat_embedding_service.embed_texts", new=AsyncMock(return_value=[])),
+        patch("app.services.semantic_cache.SemanticCache.lookup", new=AsyncMock(return_value=None)),
+        patch("app.services.chat_service._save_message", new=AsyncMock(return_value={"id": uuid.uuid4()})),
+        patch("app.services.chat_service._save_and_update_session", new=AsyncMock(return_value=None)),
+        patch("app.services.chat_todo_service.should_create_todos", return_value=True),
+        patch("app.services.chat_todo_service.extract_todo_titles", return_value=["migration 추가", "chat_service 통합"]),
+        patch(
+            "app.services.chat_todo_service.create_todo_items",
+            new=AsyncMock(return_value=[
+                {"id": uuid.uuid4(), "title": "migration 추가"},
+                {"id": uuid.uuid4(), "title": "chat_service 통합"},
+            ]),
+        ) as mocked_create,
+        patch("app.services.model_selector.call_stream", new=_mock_call_stream),
+    ):
+        chunks = []
+        async for chunk in chat_service.send_message_stream(
+            session_id=session_id,
+            content="1. migration 추가 2. chat_service 통합",
+            attachments=[],
+        ):
+            chunks.append(chunk)
+
+    mocked_create.assert_awaited_once()
+    assert "[세션 TODO 운영 규칙]" in captured["system_prompt"]
+    assert "1. migration 추가" in captured["system_prompt"]
+    assert "2. chat_service 통합" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_todo_completion_gate_appends_missing_note():
+    session_id = str(uuid.uuid4())
+    first_id = uuid.uuid4()
+    second_id = uuid.uuid4()
+    token = chat_service._current_todo_context.set({
+        "session_id": session_id,
+        "execution_id": str(uuid.uuid4()),
+        "resume_session_scope": False,
+    })
+    try:
+        with (
+            patch(
+                "app.services.chat_todo_service.list_todo_items",
+                new=AsyncMock(return_value=[
+                    {"id": first_id, "title": "migration 추가", "metadata": {}},
+                    {"id": second_id, "title": "chat_service 통합", "metadata": {}},
+                ]),
+            ),
+            patch(
+                "app.services.chat_todo_service.evaluate_todo_completion",
+                return_value={
+                    "completed_ids": [],
+                    "missing_items": [{"id": second_id, "title": "chat_service 통합", "metadata": {}}],
+                    "missing_titles": ["chat_service 통합"],
+                    "all_completed": False,
+                    "has_failure_signal": False,
+                },
+            ),
+            patch("app.services.chat_todo_service.mark_complete", new=AsyncMock()),
+            patch("app.services.chat_todo_service.update_todo_item", new=AsyncMock()) as mocked_update,
+        ):
+            content, gate = await chat_service._apply_todo_completion_gate(
+                session_id=uuid.UUID(session_id),
+                content="migration 추가 완료했습니다.",
+                tools_called=[],
+            )
+    finally:
+        chat_service._current_todo_context.reset(token)
+
+    assert gate["missing_titles"] == ["chat_service 통합"]
+    assert "[세션 TODO 점검]" in content
+    assert "chat_service 통합" in content
+    mocked_update.assert_awaited()
+
+
+@pytest.mark.asyncio
 async def test_deferred_interrupt_rewrites_no_tool_stream_before_save():
     session_id = str(uuid.uuid4())
     execution_id = uuid.uuid4()

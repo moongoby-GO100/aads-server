@@ -595,6 +595,12 @@ async def lifespan(app: FastAPI):
                     "ON chat_messages(execution_id) "
                     "WHERE intent = 'streaming_placeholder' AND execution_id IS NOT NULL"
                 )
+                try:
+                    from app.services.chat_todo_service import ensure_chat_todo_schema
+
+                    await ensure_chat_todo_schema(conn)
+                except Exception as todo_schema_err:
+                    logger.warning("chat_todo_schema_init_failed", error=str(todo_schema_err))
                 # INSERT 기능 테스트
                 _test_ok = await conn.fetchval(
                     "SELECT EXISTS(SELECT 1 FROM information_schema.columns "

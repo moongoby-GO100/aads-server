@@ -162,6 +162,23 @@ class StreamingStatusOut(BaseModel):
     artifact_revision: Optional[str] = None
 
 
+# ─── Session Todo ────────────────────────────────────────────────────────────
+
+class ChatTodoItemOut(BaseModel):
+    id: uuid.UUID
+    session_id: uuid.UUID
+    message_id: Optional[uuid.UUID] = None
+    execution_id: Optional[uuid.UUID] = None
+    title: str
+    status: str
+    sort_order: int
+    source: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+    completed_at: Optional[datetime] = None
+
+
 # ─── AADS-188D: Diff 승인 ────────────────────────────────────────────────────
 
 class ApproveDiffRequest(BaseModel):

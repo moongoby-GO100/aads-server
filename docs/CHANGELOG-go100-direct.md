@@ -623,3 +623,23 @@ async def list_
 ## [2026-05-11 14:17:15 KST] [GO100] backend/app/routers/go100/portfolio_router.py
 - Chat-Direct 수정: patch:                 COALESCE(t.status, 'FILL→                'FILLED'::VARCHAR AS sta
 - finalize: pending
+
+## [2026-05-11 15:27:33 KST] [GO100] scripts/emergency_liquidate_go100_20260511.py
+- Chat-Direct 수정: write: scripts/emergency_liquidate_go100_20260511.py
+- finalize: pending
+
+## [2026-05-11 15:29:12 KST] [GO100] scripts/emergency_liquidate_go100_20260511.py
+- Chat-Direct 수정: write: scripts/emergency_liquidate_go100_20260511.py
+- finalize: pending
+
+## [2026-05-11 15:30:06 KST] [GO100] scripts/check_go100_liquidation_status_20260511.py
+- Chat-Direct 수정: write: scripts/check_go100_liquidation_status_20260511.py
+- finalize: pending
+
+## [2026-05-11 15:32:09 KST] [GO100] scripts/disable_go100_account7_cards_20260511.py
+- Chat-Direct 수정: write: scripts/disable_go100_account7_cards_20260511.py
+- finalize: pending
+
+## [2026-05-11 15:32:36 KST] [GO100] scripts/disable_go100_account7_cards_20260511.py
+- Chat-Direct 수정: write: scripts/disable_go100_account7_cards_20260511.py
+- finalize: pending

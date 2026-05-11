@@ -30,6 +30,9 @@ _current_execution_id: _ContextVar[Optional[str]] = _ContextVar("_current_execut
 _artifact_extraction_context: _ContextVar[Optional[Dict[str, Any]]] = _ContextVar(
     "_artifact_extraction_context", default=None,
 )
+_current_todo_context: _ContextVar[Optional[Dict[str, Any]]] = _ContextVar(
+    "_current_todo_context", default=None,
+)
 
 # AADS-191 Phase1: Redis Stream 토큰 버퍼링 (서버 재시작 시 스트리밍 복구)
 from app.services import redis_stream as _redis_stream
@@ -263,6 +266,160 @@ def normalize_tool_events(tools_called: Any) -> List[Dict[str, Any]]:
             if text:
                 normalized.append({"type": "thinking", "content": text[:300]})
     return normalized
+
+
+async def _prepare_turn_todo_context(
+    *,
+    session_id: str,
+    content: str,
+    intent: str,
+    use_tools: bool,
+    execution_id: Optional[str],
+    message_id: Optional[str],
+    intent_override: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    if intent_override and intent_override != "auto_resume":
+        return None
+
+    from app.services.chat_todo_service import (
+        build_todo_prompt_block,
+        create_todo_items,
+        extract_todo_titles,
+        list_todo_items,
+        should_create_todos,
+        should_resume_session_todos,
+    )
+
+    todo_items: list[dict[str, Any]] = []
+    created_this_turn = False
+    if should_create_todos(content, intent=intent, use_tools=use_tools):
+        titles = extract_todo_titles(content, intent=intent, use_tools=use_tools)
+        if titles:
+            todo_items = await create_todo_items(
+                session_id=session_id,
+                message_id=message_id,
+                execution_id=execution_id,
+                titles=titles,
+                source="user_turn",
+                metadata={
+                    "message_excerpt": content[:240],
+                    "origin_intent": intent,
+                    "requires_tool": bool(use_tools),
+                    "created_from": "chat_service",
+                },
+            )
+            created_this_turn = bool(todo_items)
+    elif should_resume_session_todos(content):
+        todo_items = await list_todo_items(
+            session_id=session_id,
+            include_completed=False,
+        )
+
+    if not todo_items:
+        return None
+
+    return {
+        "session_id": session_id,
+        "execution_id": execution_id,
+        "message_id": message_id,
+        "created_this_turn": created_this_turn,
+        "resume_session_scope": not created_this_turn,
+        "todo_ids": [str(item.get("id")) for item in todo_items if item.get("id")],
+        "prompt_block": build_todo_prompt_block(todo_items),
+        "missing_titles": [],
+    }
+
+
+async def _apply_todo_completion_gate(
+    *,
+    session_id: uuid.UUID,
+    content: str,
+    tools_called: Optional[List[Dict[str, Any]]] = None,
+    conn: Optional[asyncpg.Connection] = None,
+) -> tuple[str, Optional[Dict[str, Any]]]:
+    todo_context = _current_todo_context.get(None)
+    if not todo_context or todo_context.get("session_id") != str(session_id):
+        return content, None
+
+    from app.services.chat_todo_service import (
+        TODO_STATUS_IN_PROGRESS,
+        TODO_STATUS_PENDING,
+        build_missing_todo_note,
+        evaluate_todo_completion,
+        list_todo_items,
+        mark_complete,
+        mark_failed,
+        update_todo_item,
+    )
+
+    todo_items = []
+    execution_id = todo_context.get("execution_id")
+    if execution_id:
+        todo_items = await list_todo_items(
+            session_id=str(session_id),
+            execution_id=execution_id,
+            include_completed=False,
+            conn=conn,
+        )
+    if not todo_items and todo_context.get("resume_session_scope"):
+        todo_items = await list_todo_items(
+            session_id=str(session_id),
+            include_completed=False,
+            conn=conn,
+        )
+    if not todo_items:
+        return content, None
+
+    evaluation = evaluate_todo_completion(
+        todo_items,
+        response_text=content,
+        tools_called=normalize_tool_events(tools_called),
+    )
+    completed_ids = set(evaluation["completed_ids"])
+    missing_ids = {str(item.get("id")) for item in evaluation["missing_items"]}
+    has_failure_signal = bool(evaluation["has_failure_signal"])
+
+    missing_order = 0
+    for item in todo_items:
+        todo_id = str(item.get("id"))
+        if todo_id in completed_ids:
+            await mark_complete(
+                todo_id,
+                metadata={"completion_gate": "matched_response"},
+                conn=conn,
+            )
+            continue
+        if todo_id not in missing_ids:
+            continue
+        if has_failure_signal:
+            await mark_failed(
+                todo_id,
+                reason="assistant_response_failed",
+                metadata={"completion_gate": "failure_signal"},
+                conn=conn,
+            )
+            continue
+        await update_todo_item(
+            todo_id=todo_id,
+            status=TODO_STATUS_IN_PROGRESS if missing_order == 0 else TODO_STATUS_PENDING,
+            metadata={
+                "completion_gate_missing": True,
+                "last_response_excerpt": content[:400],
+            },
+            source="completion_gate",
+            conn=conn,
+        )
+        missing_order += 1
+
+    if evaluation["missing_titles"] and not has_failure_signal:
+        missing_note = build_missing_todo_note(evaluation["missing_titles"])
+        if missing_note and missing_note not in content:
+            content = content.rstrip() + "\n\n" + missing_note.strip()
+
+    todo_context["missing_titles"] = evaluation["missing_titles"]
+    todo_context["all_completed"] = evaluation["all_completed"]
+    _current_todo_context.set(todo_context)
+    return content, evaluation
 
 
 def _tool_names_from_events(tool_events: List[Dict[str, Any]]) -> List[str]:
@@ -3579,6 +3736,12 @@ async def _save_and_update_session(
         _execution_uuid = uuid.UUID(_execution_id_str) if _execution_id_str else None
     async with get_pool().acquire() as conn:
         async with conn.transaction():
+            content, _todo_gate = await _apply_todo_completion_gate(
+                session_id=sid,
+                content=content,
+                tools_called=normalized_tools_called,
+                conn=conn,
+            )
             if _execution_uuid:
                 _exec_row = await conn.fetchrow(
                     """
@@ -4203,6 +4366,7 @@ async def send_message_stream(
     _lf_span_intent = None
     _lf_span_llm = None
     _trace_start_time = __import__("time").monotonic()
+    _todo_context_token = _current_todo_context.set(None)
 
     try:
         from app.services.tool_executor import current_chat_session_id
@@ -4849,6 +5013,20 @@ async def send_message_stream(
                     guarded_intent,
                     content[:80],
                 )
+
+        _todo_context = await _prepare_turn_todo_context(
+            session_id=session_id,
+            content=content,
+            intent=intent,
+            use_tools=bool(intent_result.use_tools),
+            execution_id=_execution_id_str,
+            message_id=str(_saved_user_message_id) if _saved_user_message_id else None,
+            intent_override=intent_override,
+        )
+        if _todo_context:
+            _current_todo_context.set(_todo_context)
+            if _todo_context.get("prompt_block"):
+                system_prompt = system_prompt + str(_todo_context["prompt_block"])
 
         if intent == "discussion":
             yield f"data: {json.dumps({'type': 'thinking', 'thinking': '다관점 토론 오케스트레이터를 실행 중입니다.'})}\n\n"
@@ -5990,6 +6168,7 @@ async def send_message_stream(
         yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns, 'confidence_label': _confidence_label})}\n\n"
 
     finally:
+        _current_todo_context.reset(_todo_context_token)
         set_streaming(session_id, False)
 
 

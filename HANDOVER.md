@@ -1,6 +1,20 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-11)
+- **채팅 세션/턴 TODO 게이트 추가 (2026-05-11 KST)**:
+  - `migrations/083_chat_todo_items.sql` 추가. `chat_todo_items` 테이블에 `session_id`, `message_id`, `execution_id`, `title`, `status`, `sort_order`, `source`, `metadata`, `completed_at`와 세션/턴 기준 인덱스 및 partial unique 인덱스를 정의했다.
+  - `app/services/chat_todo_service.py` 신규 추가. 세션/턴 todo 생성, 조회, 상태 전환(`pending/in_progress/completed/failed/skipped`), completion gate 평가, prompt block 생성, 감사용 `metadata.audit` 누적 로직을 구현했다.
+  - `app/services/chat_service.py`에 복수 작업/도구 실행형 요청 감지 후 turn todo를 생성하는 훅을 연결했다. prompt에 `[세션 TODO 운영 규칙]`을 주입하고, 최종 저장 직전에 completion gate로 미완료 항목을 감지해 status/metadata를 갱신하며 필요한 경우 `[세션 TODO 점검]` 메모를 응답에 덧붙인다.
+  - `app/main.py` startup schema 보강에 `ensure_chat_todo_schema()`를 연결해 migration 적용 전에도 신규 테이블/인덱스를 안전하게 보장한다.
+  - `app/models/chat.py`에 `ChatTodoItemOut` 스키마를 추가했다.
+  - 테스트:
+    - `E2B_API_KEY=dummy pytest -q tests/unit/test_chat_todo_service.py tests/unit/test_chat_service.py` → `24 passed`
+    - `E2B_API_KEY=dummy pytest -q tests/unit/test_context_continuity.py tests/unit/test_runner_scope_defaults.py tests/unit/test_intent_context_followups.py` → `11 passed`
+  - 남은 리스크:
+    - completion gate는 현재 응답 본문/도구 사용 흔적 기반 heuristic 판정이다. 항목 표현이 크게 바뀌면 일부 todo가 `pending`으로 남을 수 있다.
+    - 실제 운영 Postgres에 `083_chat_todo_items.sql` 적용 자체는 이 세션에서 수행하지 않았고, migration 파일 존재/구조 검증과 startup schema 경로로 적용 가능성만 확인했다.
+
+## 현재 진행 상태 (2026-05-11)
 - **PC Agent VVIC 라우팅/락/큐 직접 패치 (2026-05-11 14:57~KST)**:
   - `runner-2db6f7fa`가 `claude_code_work` 진입 후 5분 이상 로그 0건/diff 0건으로 정체되어 강제 종료했다.
   - 직접 조치: `app/services/pc_agent_manager.py`에 capability 기반 agent 선택, per-agent/per-job lease, queue wait, stale lease 회수, routed command 실행 API 기반을 추가했다.
