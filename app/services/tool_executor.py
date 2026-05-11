@@ -3662,16 +3662,10 @@ class ToolExecutor:
         """Pipeline Runner로 작업 제출."""
         # 1순위: 도구 호출 시 명시적으로 전달된 session_id
         # 2순위: ContextVar (일반 대화에서는 정확함)
-        # 3순위: DB에서 최근 활성 세션 자동 탐지 (디폴트 동작)
+        # 다른 채팅창 오보고 방지를 위해 프로젝트 최근 활성 세션 fallback은 금지한다.
         _session_id = inp.get("session_id", "") or current_chat_session_id.get("")
         if not _session_id:
-            try:
-                from app.services.pipeline_runner_service import _find_recent_session
-                _session_id = await _find_recent_session(inp.get("project", "AADS"))
-            except Exception:
-                pass
-        if not _session_id:
-            return {"error": "활성 세션을 찾을 수 없습니다. session_id를 명시하세요."}
+            return {"error": "현재 채팅 세션을 확인할 수 없습니다. 작업을 지시한 채팅창의 session_id를 명시하세요."}
         import httpx
         from app.services.pipeline_runner_client import (
             INTERNAL_PIPELINE_HEADERS,
@@ -3700,13 +3694,7 @@ class ToolExecutor:
         """Pipeline Runner 배치 제출 — 여러 작업을 병렬 실행."""
         _session_id = inp.get("session_id", "") or current_chat_session_id.get("")
         if not _session_id:
-            try:
-                from app.services.pipeline_runner_service import _find_recent_session
-                _session_id = await _find_recent_session(inp.get("project", "AADS"))
-            except Exception:
-                pass
-        if not _session_id:
-            return {"error": "활성 세션을 찾을 수 없습니다. session_id를 명시하세요."}
+            return {"error": "현재 채팅 세션을 확인할 수 없습니다. 작업을 지시한 채팅창의 session_id를 명시하세요."}
         import httpx
         from app.services.pipeline_runner_client import (
             INTERNAL_PIPELINE_HEADERS,

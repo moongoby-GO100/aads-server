@@ -552,7 +552,7 @@ TOOL_DEFINITIONS: List[Dict] = [
                 },
                 "session_id": {
                     "type": "string",
-                    "description": "작업 완료보고를 받을 세션 ID. 생략 시 현재 세션 자동 감지.",
+                    "description": "작업 완료보고를 받을 채팅 세션 UUID. 생략 시 현재 실행 컨텍스트의 세션만 사용하며, 프로젝트 최근 세션으로 대체하지 않습니다.",
                 },
                 "size": {
                     "type": "string",
@@ -3548,16 +3548,11 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             INTERNAL_PIPELINE_HEADERS,
             get_pipeline_runner_api_url,
         )
-        # session_id 강제: 1순위 도구파라미터, 2순위 함수인자, 3순위 ContextVar
+        # session_id 강제: 1순위 도구파라미터, 2순위 함수인자, 3순위 ContextVar.
+        # 다른 채팅창 오보고 방지를 위해 프로젝트 최근 활성 세션 fallback은 금지한다.
         _sid = params.get("session_id", "") or chat_session_id or current_chat_session_id.get("")
         if not _sid:
-            try:
-                from app.services.pipeline_runner_service import _find_recent_session
-                _sid = await _find_recent_session(params.get("project", "AADS"))
-            except Exception:
-                pass
-        if not _sid:
-            return "[ERROR] 활성 세션을 찾을 수 없습니다. session_id를 명시하세요."
+            return "[ERROR] 현재 채팅 세션을 확인할 수 없습니다. 작업을 지시한 채팅창의 session_id를 명시하세요."
         import httpx
         async with httpx.AsyncClient() as client:
             resp = await client.post(

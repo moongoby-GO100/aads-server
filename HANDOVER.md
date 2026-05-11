@@ -551,3 +551,11 @@
 - API: `app/api/admin.py`에 read-only `GET /api/v1/admin/design/projects`, `GET /api/v1/admin/design/audit/preview` 추가. allowlist 루트 밖 경로 접근은 차단.
 - 문서/스키마: `docs/plans/AADS-OPEN-DESIGN-HUB-IMPLEMENTATION.md`에 Phase 1~4 runner 작업 분해를 작성하고, 운영 DB 미적용 초안 `migrations/082_open_design_hub.sql`을 추가.
 - 테스트: `tests/unit/test_design_audit_service.py`에 색상/이모지 탐지, button class 반복, allowlist escape 방어, empty input 검증 추가.
+
+## 2026-05-11 15:43 KST - Runner 지시 세션 최근 활성 fallback 차단
+
+- 배경: CEO가 각 채팅창에서 러너에게 지시할 때 “지시한 채팅창”이 아니라 “해당 프로젝트의 최근 활성 세션”으로 귀속되는 문제를 지적.
+- 조치: `app/api/ceo_chat_tools.py`의 `pipeline_runner_submit`에서 `params.session_id → chat_session_id → current_chat_session_id`까지만 허용하고, `_find_recent_session(project)` fallback을 제거. 세션이 없으면 제출을 거부하도록 변경.
+- 조치: `app/services/tool_executor.py`의 `pipeline_runner_submit`/`pipeline_runner_submit_batch`도 동일하게 최근 세션 fallback을 제거.
+- 조치: `app/services/pipeline_runner_service.py`의 레거시 `start_pipeline()`과 완료 후 AI 반응 트리거가 세션 없음 상태에서 최근 세션을 찾아 붙이는 동작을 제거. 세션 없음 작업은 채팅 보고 비활성으로만 처리.
+- 테스트: `tests/unit/test_runner_scope_defaults.py`에 세션 없는 제출이 `_find_recent_session()`을 호출하지 않는 회귀 테스트와 현재 세션 전달 테스트 추가.

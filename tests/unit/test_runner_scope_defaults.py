@@ -38,6 +38,15 @@ class _FakeAsyncClient:
         })
         return self._response
 
+    async def post(self, url, *, headers=None, json=None, timeout=None):
+        self.calls.append({
+            "url": url,
+            "headers": headers,
+            "json": json,
+            "timeout": timeout,
+        })
+        return self._response
+
 
 class _FakeAcquire:
     def __init__(self, conn) -> None:
@@ -122,6 +131,42 @@ async def test_ceo_pipeline_runner_status_scope_all_skips_session_filter():
 
 
 @pytest.mark.asyncio
+async def test_ceo_pipeline_runner_submit_requires_current_session_without_recent_fallback():
+    from app.api.ceo_chat_tools import execute_tool
+
+    with patch(
+        "app.services.pipeline_runner_service._find_recent_session",
+        side_effect=AssertionError("recent-session fallback must not be used"),
+    ):
+        result = await execute_tool(
+            "pipeline_runner_submit",
+            {"project": "AADS", "instruction": "test"},
+            dsn="postgresql://unused",
+            chat_session_id="",
+        )
+
+    assert "현재 채팅 세션을 확인할 수 없습니다" in result
+
+
+@pytest.mark.asyncio
+async def test_ceo_pipeline_runner_submit_uses_current_session():
+    from app.api.ceo_chat_tools import execute_tool
+
+    client = _FakeAsyncClient(_FakeResponse(text='{"job_id":"runner-test"}', payload={"job_id": "runner-test"}))
+
+    with patch("httpx.AsyncClient", return_value=client):
+        result = await execute_tool(
+            "pipeline_runner_submit",
+            {"project": "AADS", "instruction": "test"},
+            dsn="postgresql://unused",
+            chat_session_id=_SESSION_ID,
+        )
+
+    assert json.loads(result)["job_id"] == "runner-test"
+    assert client.calls[0]["json"]["session_id"] == _SESSION_ID
+
+
+@pytest.mark.asyncio
 async def test_tool_executor_check_task_status_defaults_to_current_session():
     from app.services.tool_executor import ToolExecutor, current_chat_session_id
 
@@ -155,3 +200,16 @@ async def test_tool_executor_pipeline_runner_status_scope_all_skips_session_filt
 
     assert result == []
     assert client.calls[0]["params"] == {"limit": "10", "status": "queued"}
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_pipeline_runner_submit_requires_current_session_without_recent_fallback():
+    from app.services.tool_executor import ToolExecutor
+
+    with patch(
+        "app.services.pipeline_runner_service._find_recent_session",
+        side_effect=AssertionError("recent-session fallback must not be used"),
+    ):
+        result = await ToolExecutor()._pipeline_runner_submit({"project": "AADS", "instruction": "test"})
+
+    assert "현재 채팅 세션을 확인할 수 없습니다" in result["error"]
