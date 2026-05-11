@@ -1,6 +1,14 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-12)
+- **Chat-embedded Design Studio 운영 카드 추가 (2026-05-12 08:10 KST)**:
+  - 요청: 독립 `/design/modifications` 페이지로 분리된 Design Studio를 채팅창 안에서 운영할 수 있게 하고, 채팅 AI가 디자인 수정 요청을 맥락 유지형 작업으로 다룰 수 있게 보강.
+  - 대시보드: `aads-dashboard/src/app/chat/page.tsx`에 `디자인수정` 액션 칩과 입력창 상단 Design Studio 패널을 추가했다. 채팅 문장/수정 범위/금지 범위/검수 기준을 카드로 고정하고, `POST /api/v1/admin/design/modification-requests` 및 `build-context`를 호출해 컨텍스트팩까지 생성한다.
+  - 대시보드: 생성 후 `Context`, `Workbench` 바로가기와 `AI 운영 지시로 넣기` 버튼을 제공해 사용자가 같은 채팅 AI에게 “컨텍스트팩 기준으로 구현/러너 투입/검수 진행”을 이어서 지시할 수 있다.
+  - 백엔드: `app/services/intent_router.py`에서 `design/design_fix` 인텐트가 도구 사용 경로를 타도록 변경했다. `app/services/tool_registry.py`와 `app/services/tool_executor.py`에 `create_design_modification_request` 도구를 등록해 채팅 AI가 직접 디자인 수정 요청 카드와 컨텍스트팩을 생성할 수 있게 했다.
+  - 검증: `python3 -m py_compile app/services/intent_router.py app/services/tool_registry.py app/services/tool_executor.py` 통과. `npx eslint src/app/chat/page.tsx` 0 errors/기존 warnings 21개. `npx tsc --noEmit --pretty false` 통과.
+  - 미반영: 이 항목 작성 시점에는 커밋/푸시/배포 전이며, `docs/CHANGELOG-go100-direct.md` 기존 무관 변경은 이번 작업 범위에서 제외해야 한다.
+
 - **Chat final response visibility guard (2026-05-12 07:34~KST)**:
   - 요청: 특정 채팅 세션 `8ad08cc2-620c-4a70-8305-74a8d9b43c4e`에서 최종 응답이 작성됐으나 화면에 노출되지 않고 사라진 원인 파악 및 즉시 조치.
   - 실측: 2026-05-12 07:44 KST 재조회 기준 해당 세션은 `chat_messages=1285`, `streaming_placeholder=0`, `chat_sessions.current_execution_id=NULL`이었다. 문제로 지목된 assistant `2851f6d1-a52a-4f3d-a650-7b14e1f918cf`는 2026-05-12 07:20:03 KST에 DB 저장되어 있으며 본문 길이는 2925자였다.

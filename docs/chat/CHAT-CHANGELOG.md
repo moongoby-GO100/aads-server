@@ -8,7 +8,14 @@ _v1.0 | 2026-04-02 | 최초 작성_
 
 | 커밋 | 변경 | 구분 |
 |------|------|------|
+| 2026-05-12 | **Chat-embedded Design Studio**: `/chat` 입력 액션에 `디자인수정` 칩과 Design Studio 패널을 추가해 채팅 문장을 수정 카드/컨텍스트팩으로 바로 저장하고, `Context`/`Workbench`/AI 운영 지시 삽입 흐름을 제공 | ✨ Frontend+Backend |
 | 2026-05-12 | **Chat final visibility guard**: 완료 직후 메시지 재조회가 assistant 저장 gap에서 로컬 최종 버블을 덮어쓰지 않도록 `mergeServerMessagesPreservingLocal()` 경로로 통일하고, `done`/`message_done`/execution replay 완료 직후 `/last-response`를 재확인해 서버 최종 assistant를 병합 | 🐛 Frontend |
+
+Design Studio 채팅 내장:
+- `src/app/chat/page.tsx`에서 대상 화면, 수정 요청, 허용 범위, 금지 범위, 검수 기준을 입력해 `/api/v1/admin/design/modification-requests`와 `build-context`를 바로 호출한다.
+- `app/services/tool_registry.py`와 `app/services/tool_executor.py`에 `create_design_modification_request` 도구를 등록했다.
+- `app/services/intent_router.py`에서 `design/design_fix` 인텐트가 도구 사용 경로를 타도록 변경했다.
+- 검증: `python3 -m py_compile app/services/intent_router.py app/services/tool_registry.py app/services/tool_executor.py`, `npx eslint src/app/chat/page.tsx`, `npx tsc --noEmit --pretty false`.
 
 실측 원인:
 - 2026-05-12 07:44 KST 재조회 기준 대상 세션 `8ad08cc2-620c-4a70-8305-74a8d9b43c4e`는 `chat_messages=1285`, `streaming_placeholder=0`, `current_execution_id=NULL`이었다.

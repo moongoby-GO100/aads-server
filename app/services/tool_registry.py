@@ -41,6 +41,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     # ── Tier 3: 액션/실행 ────────────────────────────────────────────────
     "directive_create": False,           # 지시서 — 핵심 액션
     "generate_directive": False,
+    "create_design_modification_request": False,
     "delegate_to_agent": False,          # Orchestrator 핵심
     "delegate_to_research": False,
     "spawn_subagent": False,              # 서브에이전트 — 핵심 위임 도구
@@ -254,6 +255,8 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
     "directive":          ["generate_directive"],
     "directive_gen":      ["generate_directive"],
     "cto_directive":      ["generate_directive"],
+    "design":             ["create_design_modification_request", "read_remote_file", "capture_screenshot"],
+    "design_fix":         ["create_design_modification_request", "read_remote_file", "capture_screenshot", "pipeline_runner_submit"],
     # Tier 4: 외부 검색
     "search":             ["search_crawl_match", "search_searxng", "web_search"],
     "url_read":           ["jina_read"],
@@ -380,6 +383,74 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "model": "sonnet",
                 "description": "ops/page.tsx에 일별 비용 트렌드 차트 추가.",
                 "depends_on": "AADS-189",
+            },
+        ],
+    },
+    "create_design_modification_request": {
+        "name": "create_design_modification_request",
+        "description": (
+            "Design Studio 수정 요청 카드를 생성하고 선택적으로 컨텍스트팩을 즉시 빌드합니다. "
+            "채팅 AI가 디자인 수정 운영을 시작할 때 화면, 허용/금지 범위, 검수 기준을 고정하는 도구입니다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project_key": {
+                    "type": "string",
+                    "description": "프로젝트 키. 기본 AADS.",
+                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                    "default": "AADS",
+                },
+                "screen_id": {
+                    "type": "string",
+                    "description": "design_screens.id UUID. 모르면 생략 가능.",
+                },
+                "screen_route": {
+                    "type": "string",
+                    "description": "screen_id를 모를 때 찾을 화면 route 예: /chat, /admin/tasks.",
+                },
+                "user_prompt": {
+                    "type": "string",
+                    "description": "사용자의 디자인 수정 요청 원문.",
+                },
+                "request_type": {
+                    "type": "string",
+                    "description": "수정 유형.",
+                    "enum": ["spacing_density", "visual_hierarchy", "color_brand", "typography", "component_consistency", "responsive", "interaction", "content_clarity", "workflow_layout", "other"],
+                    "default": "other",
+                },
+                "allowed_scope": {
+                    "type": "array",
+                    "description": "변경 허용 범위 목록.",
+                    "items": {"type": "string"},
+                },
+                "forbidden_scope": {
+                    "type": "array",
+                    "description": "변경 금지 범위 목록.",
+                    "items": {"type": "string"},
+                },
+                "acceptance_criteria": {
+                    "type": "array",
+                    "description": "완료 검수 기준 목록.",
+                    "items": {"type": "string"},
+                },
+                "build_context": {
+                    "type": "boolean",
+                    "description": "생성 직후 컨텍스트팩 빌드 여부. 기본 true.",
+                    "default": True,
+                },
+            },
+            "required": ["user_prompt"],
+        },
+        "input_examples": [
+            {
+                "project_key": "AADS",
+                "screen_route": "/chat",
+                "user_prompt": "채팅 입력창에서 디자인 수정 요청을 바로 만들 수 있게 해줘",
+                "request_type": "workflow_layout",
+                "allowed_scope": ["채팅 입력 영역과 작업 카드 UI"],
+                "forbidden_scope": ["채팅 SSE, 인증, DB 스키마 변경"],
+                "acceptance_criteria": ["모바일에서 겹침 없음", "컨텍스트팩 생성 링크 제공"],
             },
         ],
     },
@@ -2531,7 +2602,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
-    "action": ["directive_create", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "device_command"],
+    "action": ["directive_create", "create_design_modification_request", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "device_command"],
     "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
@@ -2568,6 +2639,7 @@ _INTENT_TOOL_MAP: Dict[str, List[str]] = {
     "image_search": ["search", "crawl"], "encyclopedia_search": ["search", "crawl"],
     "knowledge_search": ["search", "crawl"],
     "code_task": ["action", "research", "meta"], "code_modify": ["action", "research", "meta"],
+    "design": ["action", "browser", "meta"], "design_fix": ["action", "browser", "meta"],
     "code_exec": ["action", "research"], "code_explorer": ["action", "research"],
     "analyze_changes": ["action", "research"], "architect": ["action", "research", "meta"],
     "cto_code_analysis": ["action", "research"], "cto_tech_debt": ["action", "research"],

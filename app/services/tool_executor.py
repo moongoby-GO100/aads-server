@@ -407,6 +407,7 @@ class ToolExecutor:
             "task_history":           self._task_history,
             "server_status":          self._server_status,
             "directive_create":       self._directive_create,
+            "create_design_modification_request": self._create_design_modification_request,
             "read_github_file":       self._read_github_file,
             "query_database":         self._query_database,
             "query_project_database": self._query_project_database,
@@ -610,6 +611,116 @@ class ToolExecutor:
             f"\nDESCRIPTION: {description}\n"
             f">>>DIRECTIVE_END"
         )
+
+    async def _create_design_modification_request(self, inp: Dict[str, Any]) -> Any:
+        """Create a Design Studio request card from chat/tool use."""
+        project_key = str(inp.get("project_key") or "AADS").strip().upper()
+        user_prompt = str(inp.get("user_prompt") or "").strip()
+        if not user_prompt:
+            return {"error": "user_prompt 필수"}
+        if project_key not in {"AADS", "KIS", "GO100", "SF", "NTV2"}:
+            return {"error": "project_key는 AADS/KIS/GO100/SF/NTV2 중 하나여야 합니다."}
+
+        request_type = str(inp.get("request_type") or "other").strip().lower() or "other"
+        allowed_request_types = {
+            "spacing", "spacing_density", "visual_hierarchy", "color", "color_brand",
+            "typography", "component", "component_consistency", "responsive",
+            "interaction", "content_clarity", "workflow_layout", "flow", "other",
+        }
+        if request_type not in allowed_request_types:
+            request_type = "other"
+
+        def _list_from(value: Any) -> list[str]:
+            if isinstance(value, list):
+                return [str(item).strip() for item in value if str(item).strip()]
+            if isinstance(value, str):
+                return [line.strip() for line in value.splitlines() if line.strip()]
+            return []
+
+        screen_id = str(inp.get("screen_id") or "").strip()
+        screen_route = str(inp.get("screen_route") or "").strip()
+        build_context = _coerce_bool(inp.get("build_context"), default=True)
+        session_id = str(inp.get("session_id") or current_chat_session_id.get("") or "").strip()
+
+        try:
+            from app.core.db_pool import get_pool
+
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                if not screen_id and screen_route:
+                    screen_id = str(await conn.fetchval(
+                        """
+                        SELECT id::text
+                        FROM design_screens
+                        WHERE project_key = $1
+                          AND (route = $2 OR name ILIKE $3)
+                        ORDER BY updated_at DESC
+                        LIMIT 1
+                        """,
+                        project_key,
+                        screen_route,
+                        f"%{screen_route}%",
+                    ) or "")
+
+                normalized_card = {
+                    "source": "chat_ai_tool",
+                    "chat_session_id": session_id or None,
+                    "screen_route": screen_route or None,
+                    "request_type": request_type,
+                    "summary": user_prompt[:240],
+                }
+                row = await conn.fetchrow(
+                    """
+                    WITH inserted AS (
+                        INSERT INTO design_modification_requests (
+                            project_key, screen_id, user_prompt, normalized_card,
+                            request_type, allowed_scope, forbidden_scope,
+                            acceptance_criteria, status
+                        )
+                        VALUES (
+                            $1, NULLIF($2, '')::uuid, $3, $4::jsonb,
+                            $5, $6::jsonb, $7::jsonb,
+                            $8::jsonb, 'ready'
+                        )
+                        RETURNING id, project_key, screen_id, user_prompt,
+                                  request_type, status, created_at
+                    )
+                    SELECT i.id::text AS id, i.project_key, i.screen_id::text AS screen_id,
+                           i.user_prompt, i.request_type, i.status, i.created_at,
+                           s.route AS screen_route, s.name AS screen_name
+                    FROM inserted i
+                    LEFT JOIN design_screens s ON s.id = i.screen_id
+                    """,
+                    project_key,
+                    screen_id,
+                    user_prompt,
+                    json.dumps(normalized_card, ensure_ascii=False),
+                    request_type,
+                    json.dumps({"notes": _list_from(inp.get("allowed_scope"))}, ensure_ascii=False),
+                    json.dumps({"notes": _list_from(inp.get("forbidden_scope"))}, ensure_ascii=False),
+                    json.dumps(_list_from(inp.get("acceptance_criteria")), ensure_ascii=False),
+                )
+        except Exception as exc:
+            return {"error": str(exc)}
+
+        request_id = str(row["id"])
+        context_pack = None
+        if build_context:
+            try:
+                from app.services.design_context_builder import build_context_pack
+                context_pack = await build_context_pack(uuid.UUID(request_id))
+            except Exception as exc:
+                context_pack = {"error": str(exc)}
+
+        return {
+            "status": "created",
+            "request": dict(row),
+            "context_pack": context_pack,
+            "urls": {
+                "context": f"/design/modifications/{request_id}/context",
+                "workbench": f"/design/modifications/{request_id}/workbench",
+            },
+        }
 
     async def _read_github_file(self, inp: Dict[str, Any]) -> Any:
         repo = (inp.get("repo") or "").strip()

@@ -62,8 +62,8 @@ INTENT_MAP: dict[str, dict] = {
     "discussion":       {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
     "planning":         {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
     "decision":         {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
-    "design":           {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
-    "design_fix":       {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
+    "design":           {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
+    "design_fix":       {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
     "image_analyze":    {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
     "video_analyze":    {"model": "gemini-3-flash-preview",       "tools": False, "group": ""},
     "cto_strategy":     {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
@@ -313,7 +313,7 @@ agenda_manage, agenda_decide, agenda_auto_detect
 - 전략, 방향성 → strategy
 - 기획 → planning
 - 의사결정 → decision
-- 디자인 → design
+- 디자인, 디자인 스튜디오, 디자인 수정 카드 생성, UI 수정 요청 생성 → design
 - "스크린샷 찍어", "화면 캡처", "렌더링 확인", "화면이 이상해", "화면 봐줘" → browser
 - "여기 확인해", "여기 채팅창 기능 분석", "여기 기능 분석", "페이지 기능 분석" → cto_code_analysis (소스 코드 우선 분석)
 - "PC 스크린샷 찍어", "PC 화면 캡처", "PC 화면" → pc_screenshot
