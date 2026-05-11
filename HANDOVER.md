@@ -465,3 +465,13 @@
 - 전환: active stream 3건이 8100에 남아 있어 컨테이너 중지는 하지 않고 nginx upstream만 8102 우선, 8100 backup으로 수동 전환 후 `systemctl reload nginx` 완료. `.active_port=8102`, `.active_container=aads-server-green`으로 동기화.
 - 검증: `nginx -t` 통과, `https://aads.newtalk.kr/api/v1/health` OK, `docker inspect aads-server-green` running/healthy, `docker exec aads-server-green python3 -c "from app.main import app"` import OK.
 - 잔여: untracked `scripts/e2e_disc_v2.py`는 문법이 깨진 임시 테스트 초안으로 커밋에서 제외. 정리/수정 여부는 별도 판단 필요.
+
+## 2026-05-11 10:49 KST - discussion 인텐트 명시 요청 가드 적용
+
+- 배경: CEO 운영 질문이 `discussion`으로 오분류되어 다관점 토론 오케스트레이터가 자동 실행되고, 실측 없는 토론 합성 결과가 일반 답변처럼 저장되는 문제가 확인됨.
+- 조치: `intent_router.is_explicit_debate_request()`를 추가해 `토론해봐`, `다관점 토론해`, `run_debate` 같은 명시 실행 요청만 `discussion`으로 허용. `장단점 비교`, `어떻게 해야 할까`, 토론 기능 자체 조치 요청은 `cto_strategy`/`code_modify`/`cto_verify`로 되돌리도록 가드 추가.
+- 조치: "다관점 토론은 명시 지시 때만 진행되게 조치해"처럼 토론 기능 정책을 바꾸라는 문장이 `casual`로 빠지지 않도록 키워드 폴백에서도 `code_modify`로 분류되게 보강.
+- 조치: `chat_service.send_message_stream()`에 2차 방어선을 추가해 LLM 분류가 `discussion`을 반환해도 명시 토론 요청이 아니면 오케스트레이터 실행을 차단.
+- 조치: `tool_registry`의 broad `all` 도구 그룹에서 `run_debate`를 제외해 일반 도구 사용 인텐트에서 모델이 암묵적으로 다관점 토론 도구를 호출하지 못하게 함.
+- 검증: `python3 -m py_compile app/services/intent_router.py app/services/chat_service.py app/services/tool_registry.py tests/unit/test_chat_service.py` 통과. `pytest -q tests/unit/test_chat_service.py -k 'discussion or debate or broad_tool_group'` 4개 통과. 운영 컨테이너 `classify()` 샘플 기준 조치 지시는 `code_modify`, 세션 진화 확인 질문은 `cto_verify`, 명시 문장 `다관점 토론해봐`만 `discussion`.
+- 운영 반영: `bash scripts/reload-api.sh`로 active `aads-server-green` hot-reload 완료(`재로드=53개`). `https://aads.newtalk.kr/api/v1/health` OK, `aads-server-green` running/healthy.

@@ -2412,7 +2412,9 @@ _GROUPS: Dict[str, List[str]] = {
     "research": ["deep_research", "code_explorer", "analyze_changes", "search_all_projects", "semantic_code_search"],
     # CEO 아젠다 관리 도구 그룹
     "agenda": ["add_agenda", "list_agendas", "get_agenda", "update_agenda", "decide_agenda", "search_agendas"],
-    "all": list(_TOOLS.keys()),
+    # run_debate is intentionally excluded from broad tool exposure. Debate is
+    # started only through an explicit discussion request path.
+    "all": [name for name in _TOOLS.keys() if name != "run_debate"],
 }
 
 # Phase A: 인텐트별 도구 필터링 — 코어 도구 + 인텐트별 그룹 조합

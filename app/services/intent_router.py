@@ -297,7 +297,9 @@ agenda_manage, agenda_decide, agenda_auto_detect
 - 백과사전, 사전, 뜻, 정의, 의미 → encyclopedia_search
 - 지식인, 지식iN, 질문, Q&A → knowledge_search
 - 딥리서치, "깊이 조사", "조사해서 보고서 써줘", "시장 분석 보고서", "경쟁 분석 보고서", 기술 동향 보고, 논문 조사 → deep_research
-- "토론해봐", "다관점 분석", "장단점 비교", "찬반 비교", "어떻게 해야 할까" → discussion
+- "토론해봐", "다관점으로 분석해", "다관점 토론해", "찬반 토론해", "run_debate" → discussion
+- "장단점 비교", "어떻게 해야 할까", "의견 줘"만 있으면 → cto_strategy 또는 strategy (discussion 아님)
+- "다관점 토론은 명시 지시 때만", "토론 기능 조치", "인텐트 문제 수정"처럼 토론 기능 자체를 조치/수정/확인하는 요청 → code_modify 또는 status_check (discussion 아님)
 - "검색해"만 있으면 → search (빠르고 저렴)
 - URL 분석, 링크 내용 확인 → url_analyze
 - 이 URL 읽어, 이 문서 분석, 이 페이지 내용, http로 시작하는 URL → url_read
@@ -430,6 +432,14 @@ async def classify(
                         if _prev_used_tools and len(message) <= 30:
                             logger.info(f"intent_context_override: {intent} → status_check (prev used tools) for '{message[:40]}'")
                             return _make_result("status_check")
+                    if intent == "discussion" and not is_explicit_debate_request(message):
+                        override = _discussion_guard_fallback(message)
+                        logger.info(
+                            "intent_discussion_guard: discussion → %s for '%s'",
+                            override,
+                            message[:80],
+                        )
+                        return _make_result(override)
                     result = _make_result(intent)
                     # Redis 캐시 저장 (TTL 60초 — 컨텍스트 의존 오분류 방지를 위해 짧게)
                     try:
@@ -473,13 +483,15 @@ def _command_override(message: str) -> str | None:
     msg = message.lower().strip()
     # 명령형 키워드 + 어미 조합
     _cmd_keywords = ("확인", "보고", "점검", "진단", "체크", "조회", "분석", "파악", "살펴", "알아봐")
-    _action_keywords = ("수정", "배포", "실행", "재시작", "적용", "반영", "시작")
+    _action_keywords = ("수정", "배포", "실행", "재시작", "적용", "반영", "시작", "조치", "구현")
     _cmd_suffixes = ("하라", "해라", "해봐", "해줘", "하고", "해서", "하라고")
 
     has_cmd = any(kw in msg for kw in _cmd_keywords)
     has_action = any(kw in msg for kw in _action_keywords)
     has_suffix = any(sf in msg for sf in _cmd_suffixes)
 
+    if any(w in msg for w in ("인텐트", "인턴트", "intent", "라우팅", "오분류", "분류")) and has_action:
+        return "code_modify"
     # "확인하고 보고하라" / "점검해봐" / "진단해줘"
     if has_cmd and (has_suffix or len(message) <= 30):
         return "status_check"
@@ -490,6 +502,52 @@ def _command_override(message: str) -> str | None:
     if ("넌 " in msg or "너는 " in msg) and any(w in msg for w in ("가능", "접근", "할 수", "할수", "서버")):
         return "status_check"
     return None
+
+
+_EXPLICIT_DEBATE_PATTERNS = (
+    r"\brun_debate\b",
+    r"\bdebate\b",
+    r"토론\s*(해|해줘|해봐|하자|시작|진행)",
+    r"다관점(으로)?\s*(토론|분석|검토)\s*(해|해줘|해봐|하자|시작)?",
+    r"다각도(로)?\s*(토론|분석|검토)\s*(해|해줘|해봐|하자|시작)?",
+    r"관점별(로)?\s*(토론|분석|검토)\s*(해|해줘|해봐|하자|시작)?",
+    r"찬반\s*토론\s*(해|해줘|해봐|하자|시작)?",
+)
+
+_DEBATE_META_ACTION_WORDS = (
+    "조치", "수정", "구현", "반영", "적용", "배포", "고쳐", "막아",
+    "분류", "라우팅", "인텐트", "intent", "오분류", "문제",
+)
+
+
+def is_explicit_debate_request(message: str) -> bool:
+    """CEO가 토론 실행을 명시한 경우에만 True.
+
+    토론 기능을 고치라는 문장에 "다관점 토론"이 포함되어도 토론 실행으로 보지 않는다.
+    """
+    msg = (message or "").lower().strip()
+    if not msg:
+        return False
+
+    if any(word in msg for word in _DEBATE_META_ACTION_WORDS):
+        strong_execute = ("토론해" in msg or "토론 해" in msg or "run_debate" in msg or "debate " in msg)
+        if not strong_execute:
+            return False
+
+    return any(_re.search(pattern, msg) for pattern in _EXPLICIT_DEBATE_PATTERNS)
+
+
+def _discussion_guard_fallback(message: str) -> str:
+    """discussion 오분류를 일반 운영/전략 인텐트로 되돌린다."""
+    msg = (message or "").lower()
+    override = _command_override(message)
+    if override:
+        return override
+    if any(w in msg for w in ("조치", "수정", "구현", "반영", "적용", "고쳐", "막아")):
+        return "code_modify"
+    if any(w in msg for w in ("확인", "보고", "점검", "검증", "운영", "상태", "되나", "맞나", "정확")):
+        return "cto_verify"
+    return "cto_strategy"
 
 
 def _keyword_fallback(message: str) -> IntentResult:
@@ -531,8 +589,13 @@ def _keyword_fallback(message: str) -> IntentResult:
         return _make_result("all_service_status")
     if any(w in msg for w in ("심층", "deep research", "리서치 보고서", "시장 조사", "리서치", "경쟁사 분석", "트렌드 분석")):
         return _make_result("deep_research")
-    if any(w in msg for w in ("토론해", "토론해봐", "다관점", "장단점 비교", "찬반 비교", "어떻게 해야 할까", "어떻게 하는 게 좋", "비교해봐")):
+    if is_explicit_debate_request(message):
         return _make_result("discussion")
+    if (
+        any(w in msg for w in ("다관점", "다각도", "관점별", "토론", "run_debate", "debate"))
+        and any(w in msg for w in ("조치", "수정", "고쳐", "반영", "적용", "구현", "막아", "명시", "정확하게 지시"))
+    ):
+        return _make_result("code_modify")
     # Naver 특화 검색 키워드
     if any(w in msg for w in ("뉴스", "기사", "속보", "뉴스 검색")):
         return _make_result("news_search")
@@ -561,6 +624,8 @@ def _keyword_fallback(message: str) -> IntentResult:
         return _make_result("directive_gen")
     if any(w in msg for w in ("아키텍처", "설계", "architect")):
         return _make_result("architect")
+    if any(w in msg for w in ("장단점 비교", "찬반 비교", "어떻게 해야 할까", "어떻게 하는 게 좋", "비교해봐")):
+        return _make_result("cto_strategy")
     if any(w in msg for w in ("전략", "strategy")):
         return _make_result("strategy")
     if any(w in msg for w in ("직접 수정", "코드 고쳐", "파일 수정", "반영해", "코드 수정해", "수정해서 배포", "수정하고 배포")):
@@ -600,6 +665,10 @@ def _keyword_fallback(message: str) -> IntentResult:
         return _make_result("analyze_changes")
     if any(w in msg for w in ("전체 프로젝트 검색", "6개 서비스에서", "모든 프로젝트 코드", "전체 코드 검색")):
         return _make_result("search_all_projects")
+    if any(w in msg for w in ("인텐트", "인턴트", "intent", "라우팅", "오분류", "분류")) and any(w in msg for w in ("조치", "수정", "고쳐", "반영", "적용", "구현", "막아")):
+        return _make_result("code_modify")
+    if any(w in msg for w in ("되나", "맞나", "정확한 맥락", "정확한 정보", "진화", "발전하는 세션", "확인하고", "보고완료")):
+        return _make_result("cto_verify")
 
     # ─── CEO 명령형 패턴 (casual 오분류 방지) ─────────────────────────────
     # "확인하라", "보고하라", "점검해", "진단해" 등 짧은 명령형

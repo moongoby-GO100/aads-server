@@ -484,19 +484,33 @@ async def test_deferred_interrupt_rewrites_no_tool_stream_before_save():
     assert saved.await_args.args[1] == "수정본 답변"
 
 
-def test_keyword_fallback_routes_discussion_queries():
-    from app.services.intent_router import _keyword_fallback
+def test_keyword_fallback_routes_only_explicit_discussion_queries():
+    from app.services.intent_router import _keyword_fallback, is_explicit_debate_request
 
-    result = _keyword_fallback("이 안건 장단점 비교해봐")
+    result = _keyword_fallback("이 안건 다관점 토론해봐")
 
     assert result.intent == "discussion"
+    assert is_explicit_debate_request("이 안건 다관점 토론해봐")
+
+    comparison = _keyword_fallback("이 안건 장단점 비교해봐")
+    assert comparison.intent == "cto_strategy"
+    assert not is_explicit_debate_request("인텐트 문제 조치해. 다관점 토론은 명시 지시 때만")
+    meta_request = _keyword_fallback("다관점 토론은 내가 정확하게 지시 할때 진행되게 조치해")
+    assert meta_request.intent == "code_modify"
+
+
+def test_broad_tool_group_excludes_run_debate():
+    from app.services.tool_registry import ToolRegistry
+
+    tools = ToolRegistry().get_tools("all")
+    assert "run_debate" not in {tool["name"] for tool in tools}
 
 
 @pytest.mark.asyncio
 async def test_discussion_endpoint_proxies_structured_result():
     session_id = uuid.uuid4()
     payload = {
-        "question": "장단점 비교해봐",
+        "question": "다관점 토론해봐",
         "message": "## 종합 결론\n\n추천안",
         "synthesis": "추천안",
         "perspectives": [{"name": "기술", "analysis": "구현 가능", "key_points": ["속도"]}],
@@ -512,7 +526,7 @@ async def test_discussion_endpoint_proxies_structured_result():
         result = await chat_router.run_discussion(
             session_id,
             chat_router.DiscussionRequest(
-                content="장단점 비교해봐",
+                content="다관점 토론해봐",
                 context="배경",
                 perspectives=[{"name": "기술"}],
             ),
@@ -521,7 +535,7 @@ async def test_discussion_endpoint_proxies_structured_result():
     assert result == payload
     mocked_run.assert_awaited_once_with(
         str(session_id),
-        "장단점 비교해봐",
+        "다관점 토론해봐",
         context="배경",
         perspectives=[{"name": "기술"}],
     )
@@ -556,7 +570,7 @@ async def test_send_message_stream_discussion_branch_uses_orchestrator():
     conn.fetchval = AsyncMock(return_value=execution_id)
 
     orchestrated = {
-        "question": "장단점 비교해봐",
+        "question": "다관점 토론해봐",
         "message": "## 종합 결론\n\n추천안",
         "synthesis": "추천안",
         "perspectives": [{"name": "기술", "analysis": "구현 가능", "key_points": ["속도"]}],
@@ -573,7 +587,7 @@ async def test_send_message_stream_discussion_branch_uses_orchestrator():
         patch("app.services.chat_service.get_html_edit_context_state", new=AsyncMock(return_value={"html_context_used": False})),
         patch(
             "app.services.context_builder.build_messages_context",
-            new=AsyncMock(return_value=([{"role": "user", "content": "장단점 비교해봐"}], "BASE_SYSTEM")),
+            new=AsyncMock(return_value=([{"role": "user", "content": "다관점 토론해봐"}], "BASE_SYSTEM")),
         ),
         patch(
             "app.services.intent_router.classify",
@@ -597,13 +611,13 @@ async def test_send_message_stream_discussion_branch_uses_orchestrator():
         chunks = []
         async for chunk in chat_service.send_message_stream(
             session_id=session_id,
-            content="장단점 비교해봐",
+            content="다관점 토론해봐",
             attachments=[],
         ):
             chunks.append(chunk)
 
     mocked_orchestrator.assert_awaited_once()
-    assert any("다관점 토론 오케스트레이터" in chunk for chunk in chunks)
-    assert any("추천안" in chunk for chunk in chunks)
+    assert any('"type": "thinking"' in chunk for chunk in chunks)
+    assert any('"type": "delta"' in chunk for chunk in chunks)
     assert any('"debate_id": "debate-5678"' in chunk for chunk in chunks)
     assert saved.await_args.args[1] == "## 종합 결론\n\n추천안"

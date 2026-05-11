@@ -4818,6 +4818,22 @@ async def send_message_stream(
                 logger.debug(f"execution_requested_model_update_failed: {_exec_model_err}")
 
         if intent == "discussion":
+            from app.services.intent_router import _discussion_guard_fallback, is_explicit_debate_request
+            if not is_explicit_debate_request(content):
+                guarded_intent = _discussion_guard_fallback(content)
+                intent = guarded_intent
+                intent_result.intent = guarded_intent
+                guarded_cfg = getattr(intent_result, "tool_group", "") or "all"
+                intent_result.use_tools = True
+                intent_result.tool_group = guarded_cfg
+                logger.info(
+                    "discussion_branch_guarded session=%s fallback_intent=%s content=%s",
+                    session_id[:8],
+                    guarded_intent,
+                    content[:80],
+                )
+
+        if intent == "discussion":
             yield f"data: {json.dumps({'type': 'thinking', 'thinking': '다관점 토론 오케스트레이터를 실행 중입니다.'})}\n\n"
             discussion_result = await _execute_discussion_orchestrator(
                 content,
