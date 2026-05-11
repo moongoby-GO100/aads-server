@@ -19,6 +19,112 @@ import type {
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://aads.newtalk.kr/api/v1";
 
+export interface DesignScreenRef {
+  id: string;
+  route: string;
+  name: string;
+  purpose: string;
+  primary_actions: unknown[];
+  component_paths: unknown[];
+  metadata: Record<string, unknown>;
+}
+
+export interface DesignVisualSnapshotSummary {
+  id: string;
+  request_id: string;
+  phase: string;
+  viewport: string;
+  image_url: string;
+  dom_summary: unknown;
+  captured_at: string;
+}
+
+export interface DesignDecisionSummary {
+  id: string;
+  project_key: string;
+  screen_id: string | null;
+  subject: string;
+  decision: string;
+  rationale: string | null;
+  applies_to: string;
+  confidence: number;
+  supersedes_id: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DesignModificationRequestSummary {
+  id: string;
+  project_key: string;
+  screen_id: string | null;
+  screen_route: string | null;
+  screen_name: string | null;
+  request_type: string;
+  status: string;
+  prompt_excerpt: string;
+  acceptance_criteria_count: number;
+  context_pack_count: number;
+  latest_context_pack_created_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DesignModificationRequestListResponse {
+  project_key?: string;
+  requests: DesignModificationRequestSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+  status?: string | null;
+  screen_id?: string | null;
+}
+
+export interface DesignModificationRequestDetail {
+  id: string;
+  project_key: string;
+  screen_id: string | null;
+  screen: DesignScreenRef | null;
+  user_prompt: string;
+  normalized_card: Record<string, unknown>;
+  request_type: string;
+  allowed_scope: unknown;
+  forbidden_scope: unknown;
+  acceptance_criteria: unknown[];
+  status: string;
+  context_pack_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DesignModificationRequestDetailResponse {
+  request: DesignModificationRequestDetail;
+  snapshots: DesignVisualSnapshotSummary[];
+  decisions: DesignDecisionSummary[];
+}
+
+export interface GeneratedDesignContextPack {
+  id: string | null;
+  request_id: string;
+  project_key: string;
+  screen_id: string | null;
+  screen_route: string | null;
+  screen_name: string | null;
+  source_count: number;
+  missing_context_count: number;
+  context: Record<string, unknown>;
+  sources: unknown[];
+  missing_context: unknown[];
+  prompt_chars: number;
+  safety_report: Record<string, unknown>;
+  persisted: boolean;
+  created_at: string | null;
+}
+
+export interface DesignContextPackGenerateResponse {
+  context_pack: GeneratedDesignContextPack;
+}
+
 function getAuthHeaders(): Record<string, string> {
   if (typeof window === "undefined") return {};
   const token = localStorage.getItem("aads_token");
@@ -377,6 +483,29 @@ export const api = {
   },
   getAdminTask: (jobId: string) => request<any>(`/admin/tasks/${encodeURIComponent(jobId)}`),
   getAdminTaskStats: () => request<any>("/admin/tasks/stats"),
+
+  // AADS-DESIGN-MOD-004: Design Modification Studio workbench
+  getDesignModificationRequests: (params?: { status?: string; screen_id?: string; limit?: number; offset?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.status) q.set("status", params.status);
+    if (params?.screen_id) q.set("screen_id", params.screen_id);
+    if (params?.limit) q.set("limit", String(params.limit));
+    if (params?.offset) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return request<DesignModificationRequestListResponse>(`/admin/design/modification-requests${qs ? `?${qs}` : ""}`);
+  },
+  getDesignModificationRequest: (id: string) =>
+    request<DesignModificationRequestDetailResponse>(`/admin/design/modification-requests/${encodeURIComponent(id)}`),
+  previewDesignContextPack: (id: string, options?: { max_snapshots?: number; max_decisions?: number }) =>
+    request<DesignContextPackGenerateResponse>(`/admin/design/modification-requests/${encodeURIComponent(id)}/context-pack/preview`, {
+      method: "POST",
+      body: JSON.stringify(options || {}),
+    }),
+  persistDesignContextPack: (id: string, options?: { max_snapshots?: number; max_decisions?: number }) =>
+    request<DesignContextPackGenerateResponse>(`/admin/design/modification-requests/${encodeURIComponent(id)}/context-packs`, {
+      method: "POST",
+      body: JSON.stringify(options || {}),
+    }),
 
   // LLM API 키 관리 (AADS-188)
   getLlmKeys: () => request<any[]>("/llm-keys"),
