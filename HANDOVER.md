@@ -489,3 +489,13 @@
 - 조치: `tool_registry`의 broad `all` 도구 그룹에서 `run_debate`를 제외해 일반 도구 사용 인텐트에서 모델이 암묵적으로 다관점 토론 도구를 호출하지 못하게 함.
 - 검증: `python3 -m py_compile app/services/intent_router.py app/services/chat_service.py app/services/tool_registry.py tests/unit/test_chat_service.py` 통과. `pytest -q tests/unit/test_chat_service.py -k 'discussion or debate or broad_tool_group'` 4개 통과. 운영 컨테이너 `classify()` 샘플 기준 조치 지시는 `code_modify`, 세션 진화 확인 질문은 `cto_verify`, 명시 문장 `다관점 토론해봐`만 `discussion`.
 - 운영 반영: `bash scripts/reload-api.sh`로 active `aads-server-green` hot-reload 완료(`재로드=53개`). `https://aads.newtalk.kr/api/v1/health` OK, `aads-server-green` running/healthy.
+
+## 2026-05-11 13:33 KST - PC Agent 트레이 미표시 원인 조치
+
+- 배경: CEO PC에서 PC Agent 종료 후 재다운로드/재실행 시 트레이 아이콘이 보이지 않는 문제가 보고됨.
+- 실측: 서버 API는 `connected: 1`이었고, PC 명령으로 `AADS-PC-Agent-Setup-1.0.14.exe` PID `18392`, `18264`가 잔존 실행 중임을 확인. 트레이 종료 요청 후 런처가 에이전트 종료를 크래시로 오인해 백그라운드 에이전트를 재시작하면서 트레이만 사라진 상태로 판단.
+- 즉시 조치: PC Agent 명령으로 PID `18392`, `18264` 지연 종료를 실행했고, 서버 `/api/v1/pc-agent/health` 기준 `connected: 0`으로 내려간 것을 확인.
+- 코드 조치: `pc_agent/launcher.py`에 `stop_requested` 이벤트를 추가해 트레이 종료 시 런처 루프가 재시작하지 않고 종료되도록 수정. `pc_agent/agent.py`는 `stop()` 호출 시 현재 WebSocket을 `client_stop`으로 닫도록 보강.
+- 배포 패키지: `pc_agent/VERSION`을 `1.0.19`로 올리고 active/standby 컨테이너의 `/app/pc_agent`에 반영. 운영 `GET /api/v1/kakao-bot/agent/version`은 `1.0.19`, ZIP 내부도 `VERSION=1.0.19` 및 수정 코드 포함 확인.
+- 검증: `python3 -m py_compile pc_agent/agent.py pc_agent/launcher.py` 통과. `pytest tests/unit/test_pc_agent_api_disconnects.py tests/unit/test_pc_agent_manager_connection_guard.py -q` 5개 통과. `aads-server-green` Docker health `healthy`, `/health` `status=ok`.
+- 잔여: 현재 서버의 `kakaobot-setup.exe` 바이너리는 Windows 빌드가 필요해 Linux 서버에서 직접 재빌드 불가. `pc_agent/**` 푸시 시 `.github/workflows/build-pc-agent.yml`이 Windows GitHub Actions에서 새 EXE를 빌드/Release 등록하도록 되어 있어 커밋/푸시로 트리거해야 함.

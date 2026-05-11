@@ -359,11 +359,13 @@ def main() -> None:
         save_config(cfg)
 
     # 트레이를 별도 스레드에서 실행 (메인 스레드에서 프로세스 감시)
+    stop_requested = threading.Event()
     try:
         from tray import create_tray
 
         def on_quit():
             """트레이 종료 콜백."""
+            stop_requested.set()
             if proc and proc.poll() is None:
                 proc.terminate()
 
@@ -385,6 +387,10 @@ def main() -> None:
         while True:
             ret = proc.poll()
             if ret is not None:
+                if stop_requested.is_set():
+                    logger.info("사용자 종료 요청으로 런처 루프 종료")
+                    break
+
                 crash_n = _get_crash_count() + 1
                 _set_crash_count(crash_n)
                 logger.warning("에이전트 종료 (코드 %s) — 크래시 %d회", ret, crash_n)
@@ -422,6 +428,10 @@ def main() -> None:
             time.sleep(2)
     except KeyboardInterrupt:
         logger.info("런처 종료 요청")
+        try:
+            stop_requested.set()
+        except NameError:
+            pass
         if proc and proc.poll() is None:
             proc.terminate()
 

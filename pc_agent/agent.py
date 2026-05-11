@@ -135,10 +135,13 @@ class PCAgent:
         self.hostname = platform.node()
         self.os_info = f"{platform.system()} {platform.release()} {platform.version()}"
         self._running = True
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._ws: Any | None = None
 
     async def run(self) -> None:
         """메인 루프 — 서버 연결 + 재연결."""
         logger.info("PC Agent 시작 agent_id=%s hostname=%s", self.agent_id, self.hostname)
+        self._loop = asyncio.get_running_loop()
 
         while self._running:
             try:
@@ -166,6 +169,7 @@ class PCAgent:
                 close_timeout=10,
             ) as ws:
                 logger.info("서버 연결 성공")
+                self._ws = ws
 
                 # 등록 메시지 전송
                 await ws.send(json.dumps({
@@ -219,6 +223,7 @@ class PCAgent:
                 finally:
                     heartbeat_task.cancel()
                     update_task.cancel()
+                    self._ws = None
 
         except websockets.ConnectionClosedError as e:
             if e.code == 4010:
@@ -324,6 +329,13 @@ class PCAgent:
     def stop(self) -> None:
         """에이전트 종료."""
         self._running = False
+        ws = self._ws
+        loop = self._loop
+        if ws is not None and loop is not None and loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(ws.close(code=1001, reason="client_stop"), loop)
+            except Exception as exc:
+                logger.debug("WebSocket 종료 예약 실패: %s", exc)
         logger.info("PC Agent 종료 요청")
 
 
