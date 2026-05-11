@@ -1,6 +1,14 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-11)
+- **AADS-DESIGN-MOD-005 Design QA Score/Token Compliance 추가 (2026-05-11 KST)**:
+  - `app/services/design_qa_scorer.py` 신규 추가. `score_modification(request_id)`가 요청/컨텍스트팩/snapshot/decision을 읽어 정적 휴리스틱 기반 QA 점수(`request_match`, `context_retention`, `visual_completeness`, `responsive_stability`, `accessibility`, `technical_stability`)를 계산하고 저장한다.
+  - `check_token_compliance(file_paths)`를 추가해 raw hex color, emoji icon, repeated button pattern, viewport font scaling을 정적 스캔한다. 파일 경로는 `screen.component_paths`, `allowed_scope`, 최신 context pack의 file/component path 후보에서 수집한다.
+  - `migrations/085_design_qa_scores.sql` 추가. 요청별 총점/축별 점수와 `score_details`, `token_compliance`, `evidence` JSONB를 보관하는 `design_qa_scores` 테이블을 정의했다.
+  - `app/api/design_modifications.py`에 `GET /api/v1/admin/design/modification-requests/{request_id}/qa-score`를 추가했다. 호출 시 점수를 재계산하고 upsert 결과를 응답한다.
+  - 테스트 파일: `tests/unit/test_design_qa_scorer.py`, `tests/unit/test_design_modifications_api.py`를 보강해 compliance 스캔, 스코어 저장, QA 응답 스키마, `085` 마이그레이션 구조를 검증하도록 추가했다.
+  - 검증 실행은 이번 세션에서 수행하지 않았다.
+
 - **Pipeline Runner AADS 백엔드/대시보드 라우팅 오분류 패치 (2026-05-11 18:17 KST)**:
   - 증상: AADS 지시문에 `Backend workdir: /root/aads/aads-server`와 `Dashboard workdir: /root/aads/aads-dashboard`가 함께 있으면 `scripts/pipeline-runner.sh`가 대시보드 키워드를 먼저 감지해 백엔드 작업도 `/root/aads/aads-dashboard` worktree에서 실행했다.
   - 확인: `runner-ddb6bb2c`, `runner-5159ac44`의 `/tmp/aads-wt-*`가 `aads-dashboard` remote였고 `migrations/`, `app/`이 없었다. 두 작업은 산출 불가능 상태라 종료했다.
@@ -579,12 +587,3 @@
 - 조치: 요청 상세 응답에 화면 메타데이터, visual snapshot 목록, 관련 design decision 목록을 포함해 Phase 2 UI가 별도 write API 없이 workbench 초안을 붙일 수 있게 정리.
 - 테스트/검증 명령: `pytest -q tests/unit/test_design_modifications_api.py`, `python3 -m py_compile app/api/design_modifications.py`.
 - 리스크: `084`는 `082_open_design_hub.sql`의 `design_projects` 선행 적용을 전제로 한다. 또한 `context`/`sources` JSONB 구조는 Phase 3 builder 구현 전까지 loose schema이므로 프런트엔드에서는 optional 필드 방어가 필요하다.
-
-## 2026-05-11 20:05 KST - AADS-DESIGN-MOD-003 Design Context Pack Builder 추가
-
-- 배경: Design Modification Studio 수정 요청을 Runner/프런트가 바로 검토할 수 있도록 화면 메타데이터, 수정 카드, 디자인 결정, 토큰/감사 근거, visual snapshot 메타데이터를 하나의 bounded JSON context pack으로 조립하는 백엔드 생성 로직이 필요해짐.
-- 변경 파일: `app/services/design_context_pack_service.py`, `app/api/design_modifications.py`, `tests/unit/test_design_modifications_api.py`, `HANDOVER.md`.
-- 조치: 신규 `build_design_context_pack()` 순수 빌더를 추가해 `route`, `component_paths`, `current_state`, `target_state`, `locked_constraints`, `acceptance_checks`, `related_decisions`, `risk_notes`, `token_style_evidence`, `snapshot_metadata`를 생성한다.
-- 조치: 민감 키/값, 민감 경로, 과대 문자열/컬렉션을 재귀 필터링하고 `safety_filters`에 redaction/truncation/omission 카운트를 남기도록 했다. 디자인 토큰 계열 키는 유지하되 인증/비밀번호/credential 계열은 redaction 처리한다.
-- API: `POST /api/v1/admin/design/modification-requests/{request_id}/context-pack/preview`는 비영속 미리보기를, `POST /api/v1/admin/design/modification-requests/{request_id}/context-packs`는 `design_context_packs`에 JSONB로 저장하는 생성을 담당한다.
-- 테스트 추가: pack shape, context pack preview/persist API, 민감 정보 및 민감 경로 필터링, snapshot 누락 시 missing_context/risk_notes 유지 케이스를 `tests/unit/test_design_modifications_api.py`에 보강했다.

@@ -4166,7 +4166,7 @@ _INTENT_TOOL_MAP: Dict[str, list] = {
     "health_check":        ["health_check"],
     "dashboard":           ["dashboard_query"],
     "diagnosis":           ["dashboard_query", "health_check"],
-    "search":              ["search_crawl_match", "web_search"],
+    "search":              ["search_crawl_match", "search_searxng", "web_search"],
     "memory_recall":       ["read_github_file", "query_database"],
     "directive_gen":       ["directive_create", "generate_directive"],
     "execute":             ["directive_create"],

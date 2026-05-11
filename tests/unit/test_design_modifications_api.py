@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
@@ -11,7 +10,6 @@ import pytest
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret")
 
 from app.api import design_modifications
-from app.services.design_context_pack_service import build_design_context_pack
 
 SCREEN_ID = "11111111-1111-1111-1111-111111111111"
 REQUEST_ID = "22222222-2222-2222-2222-222222222222"
@@ -42,7 +40,6 @@ class _Pool:
 class _DesignConn:
     def __init__(self):
         self.ts = datetime(2026, 5, 11, 9, 0, tzinfo=timezone.utc)
-        self.inserted_context_pack = None
 
     async def fetch(self, query: str, *args):
         if "FROM design_screens s" in query:
@@ -124,18 +121,6 @@ class _DesignConn:
         return []
 
     async def fetchrow(self, query: str, *args):
-        if "INSERT INTO design_context_packs" in query:
-            self.inserted_context_pack = {
-                "request_id": str(args[0]),
-                "context": json.loads(args[1]),
-                "sources": json.loads(args[2]),
-                "missing_context": json.loads(args[3]),
-                "prompt_chars": args[4],
-            }
-            return {
-                "id": CONTEXT_PACK_ID,
-                "created_at": self.ts,
-            }
         if "FROM design_modification_requests r" in query:
             return {
                 "id": REQUEST_ID,
@@ -161,11 +146,7 @@ class _DesignConn:
                 "screen_purpose": "Pipeline Runner 작업 상태 확인",
                 "screen_primary_actions": ["filter", "approve"],
                 "screen_component_paths": ["src/app/admin/tasks/page.tsx"],
-                "screen_metadata": {
-                    "viewport": ["390x844", "1440x900"],
-                    "design_tokens": {"spacing": "compact", "radius": "8px"},
-                    "audit_summary": {"raw_color_count": 0},
-                },
+                "screen_metadata": {"viewport": ["390x844", "1440x900"]},
                 "context_pack_count": 2,
             }
         if "FROM design_context_packs cp" in query and "JOIN design_modification_requests r" in query:
@@ -277,103 +258,68 @@ async def test_context_pack_list_and_preview(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_generate_context_pack_preview_and_persist(monkeypatch):
-    conn = _DesignConn()
-    monkeypatch.setattr(design_modifications, "get_pool", lambda: _Pool(conn))
+async def test_get_design_modification_request_qa_score(monkeypatch):
+    async def _fake_score_modification(request_id: UUID) -> dict:
+        assert request_id == UUID(REQUEST_ID)
+        return {
+            "request_id": REQUEST_ID,
+            "project_key": "AADS",
+            "scoring_version": "static-v1",
+            "total_score": 86,
+            "rating": "conditional_approval",
+            "axes": {
+                "request_match": {
+                    "score": 22,
+                    "max_score": 25,
+                    "notes": ["2 acceptance criteria are attached to the request."],
+                },
+                "technical_stability": {
+                    "score": 8,
+                    "max_score": 10,
+                    "notes": ["Static-only technical review; runtime lint, build, and browser checks are out of scope here."],
+                },
+            },
+            "token_compliance": {
+                "compliant": False,
+                "files_scanned": 1,
+                "scanned_file_paths": ["src/app/admin/tasks/page.tsx"],
+                "missing_files": [],
+                "summary": {
+                    "total_violations": 1,
+                    "by_kind": {"raw_hex_color": 1},
+                },
+                "violations": [
+                    {
+                        "kind": "raw_hex_color",
+                        "file_path": "src/app/admin/tasks/page.tsx",
+                        "value": "#123456",
+                        "line": 7,
+                        "column": 18,
+                        "context": "className=\"text-[#123456]\"",
+                        "message": "Raw hex color detected. Prefer existing design tokens or CSS variables.",
+                        "count": None,
+                        "files": [],
+                    }
+                ],
+            },
+            "evidence": {
+                "static_only": True,
+                "snapshot_viewports": ["390x844", "1440x900"],
+            },
+            "scored_at": datetime(2026, 5, 11, 9, 0, tzinfo=timezone.utc),
+        }
 
-    preview_response = await design_modifications.preview_generated_design_context_pack(
+    monkeypatch.setattr(design_modifications.design_qa_scorer, "score_modification", _fake_score_modification)
+    response = await design_modifications.get_design_modification_request_qa_score(
         UUID(REQUEST_ID),
-        options=design_modifications.DesignContextPackBuildRequest(),
         current_user=_current_user(),
     )
-    persist_response = await design_modifications.generate_design_context_pack(
-        UUID(REQUEST_ID),
-        options=design_modifications.DesignContextPackBuildRequest(),
-        current_user=_current_user(),
-    )
 
-    preview_pack = preview_response.context_pack
-    assert preview_pack.persisted is False
-    assert preview_pack.context["route"] == "/admin/tasks"
-    assert preview_pack.context["component_paths"] == ["src/app/admin/tasks/page.tsx"]
-    assert preview_pack.context["target_state"]["request_type"] == "spacing_density"
-    assert preview_pack.context["locked_constraints"]["forbidden_scope"]["components"] == ["Sidebar"]
-    assert preview_pack.context["token_style_evidence"]["tokens"][0]["value"]["spacing"] == "compact"
-    assert preview_pack.context["acceptance_checks"][0]["source"] == "request.acceptance_criteria"
-
-    persisted_pack = persist_response.context_pack
-    assert persisted_pack.persisted is True
-    assert persisted_pack.id == CONTEXT_PACK_ID
-    assert conn.inserted_context_pack["context"]["pack_version"] == "design-context-pack/v1"
-    assert conn.inserted_context_pack["prompt_chars"] == persisted_pack.prompt_chars
-
-
-def test_build_design_context_pack_filters_secrets_and_sensitive_paths():
-    row = {
-        "id": REQUEST_ID,
-        "project_key": "AADS",
-        "screen_id": SCREEN_ID,
-        "user_prompt": "카드 간격을 줄여주세요. api_key=verysecretvalue",
-        "normalized_card": {
-            "target": "/admin/tasks",
-            "snippets": [
-                {"path": ".env.local", "content": "password=hidden"},
-                {"path": "src/app/admin/tasks/page.tsx", "content": "className='gap-2'"},
-            ],
-        },
-        "request_type": "spacing_density",
-        "allowed_scope": {"components": ["SummaryCards"]},
-        "forbidden_scope": {"credential": "do-not-include"},
-        "acceptance_criteria": ["No overlap"],
-        "status": "ready",
-        "screen_route": "/admin/tasks",
-        "screen_name": "Task Monitor",
-        "screen_purpose": "Pipeline Runner 작업 상태 확인",
-        "screen_primary_actions": ["filter"],
-        "screen_component_paths": ["src/app/admin/tasks/page.tsx"],
-        "screen_metadata": {
-            "design_tokens": {"spacing": "compact"},
-            "credentials": {"token": "secret"},
-        },
-    }
-
-    result = build_design_context_pack(row, [], [])
-    dumped = json.dumps(result.context, ensure_ascii=False)
-
-    assert "verysecretvalue" not in dumped
-    assert ".env" not in dumped
-    assert "hidden" not in dumped
-    assert "do-not-include" not in dumped
-    assert result.context["target_state"]["normalized_card"]["snippets"][0] == "[omitted:sensitive_source]"
-    assert result.context["target_state"]["user_prompt"] == "[redacted:sensitive]"
-    assert result.context["safety_filters"]["redacted_count"] >= 2
-
-
-def test_build_design_context_pack_handles_missing_snapshot_gracefully():
-    row = {
-        "id": REQUEST_ID,
-        "project_key": "AADS",
-        "screen_id": SCREEN_ID,
-        "user_prompt": "목록을 더 많이 보여주세요.",
-        "normalized_card": {"target": "/admin/tasks"},
-        "request_type": "spacing_density",
-        "allowed_scope": {},
-        "forbidden_scope": {},
-        "acceptance_criteria": ["1440px에서 row 8개 이상"],
-        "status": "ready",
-        "screen_route": "/admin/tasks",
-        "screen_name": "Task Monitor",
-        "screen_purpose": "Pipeline Runner 작업 상태 확인",
-        "screen_primary_actions": ["filter"],
-        "screen_component_paths": ["src/app/admin/tasks/page.tsx"],
-        "screen_metadata": {},
-    }
-
-    result = build_design_context_pack(row, [], [])
-
-    assert result.context["current_state"]["snapshots"] == []
-    assert any(item["kind"] == "visual_snapshots" for item in result.missing_context)
-    assert any("No visual snapshot metadata" in note for note in result.context["risk_notes"])
+    assert response.request_id == REQUEST_ID
+    assert response.total_score == 86
+    assert response.rating == "conditional_approval"
+    assert response.axes["request_match"].score == 22
+    assert response.token_compliance.summary["by_kind"]["raw_hex_color"] == 1
 
 
 def test_design_modification_migration_contains_required_schema():
@@ -386,3 +332,12 @@ def test_design_modification_migration_contains_required_schema():
     assert "CREATE TABLE IF NOT EXISTS design_decisions" in content
     assert "design_modification_requests_status_check" in content
     assert "idx_design_context_packs_request_created" in content
+
+
+def test_design_qa_score_migration_contains_required_schema():
+    content = Path("migrations/085_design_qa_scores.sql").read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS design_qa_scores" in content
+    assert "request_match_score" in content
+    assert "token_compliance JSONB" in content
+    assert "idx_design_qa_scores_total_updated" in content

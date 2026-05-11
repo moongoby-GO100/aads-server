@@ -1,18 +1,17 @@
-"""API for Design Modification Studio screens, requests, and context packs."""
+"""Read-only API for Design Modification Studio foundation."""
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
 import asyncpg
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
 from app.core.db_pool import get_pool
-from app.services.design_context_pack_service import build_design_context_pack
+from app.services import design_qa_scorer
 
 router = APIRouter(prefix="/admin/design", tags=["design-modifications"])
 
@@ -221,31 +220,43 @@ class DesignContextPackPreviewResponse(BaseModel):
     context_pack: DesignContextPackPreview
 
 
-class DesignContextPackBuildRequest(BaseModel):
-    max_snapshots: int = Field(default=12, ge=0, le=24)
-    max_decisions: int = Field(default=24, ge=0, le=50)
+class DesignQAAxisScore(BaseModel):
+    score: int
+    max_score: int
+    notes: list[str] = Field(default_factory=list)
 
 
-class GeneratedDesignContextPack(BaseModel):
-    id: str | None = None
+class DesignTokenComplianceViolation(BaseModel):
+    kind: str
+    file_path: str
+    value: str
+    line: int | None = None
+    column: int | None = None
+    context: str | None = None
+    message: str
+    count: int | None = None
+    files: list[str] = Field(default_factory=list)
+
+
+class DesignTokenComplianceReport(BaseModel):
+    compliant: bool
+    files_scanned: int
+    scanned_file_paths: list[str] = Field(default_factory=list)
+    missing_files: list[str] = Field(default_factory=list)
+    summary: dict[str, Any] = Field(default_factory=dict)
+    violations: list[DesignTokenComplianceViolation] = Field(default_factory=list)
+
+
+class DesignModificationQAScoreResponse(BaseModel):
     request_id: str
     project_key: str
-    screen_id: str | None = None
-    screen_route: str | None = None
-    screen_name: str | None = None
-    source_count: int
-    missing_context_count: int
-    context: dict[str, Any] = Field(default_factory=dict)
-    sources: list[Any] = Field(default_factory=list)
-    missing_context: list[Any] = Field(default_factory=list)
-    prompt_chars: int
-    safety_report: dict[str, Any] = Field(default_factory=dict)
-    persisted: bool = False
-    created_at: datetime | None = None
-
-
-class DesignContextPackGenerateResponse(BaseModel):
-    context_pack: GeneratedDesignContextPack
+    scoring_version: str
+    total_score: int
+    rating: str
+    axes: dict[str, DesignQAAxisScore] = Field(default_factory=dict)
+    token_compliance: DesignTokenComplianceReport
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    scored_at: datetime
 
 
 def _serialize_screen(row: dict[str, Any]) -> DesignScreenSummary:
@@ -341,113 +352,6 @@ def _serialize_context_pack_summary(row: dict[str, Any]) -> DesignContextPackSum
 
 def _schema_unavailable(_exc: Exception) -> HTTPException:
     return HTTPException(status_code=503, detail="design modification schema is not initialized")
-
-
-def _jsonb_payload(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, default=str)
-
-
-async def _load_context_pack_inputs(
-    conn: Any,
-    request_id: UUID,
-    max_snapshots: int,
-    max_decisions: int,
-) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
-    row = await conn.fetchrow(
-        """
-        SELECT r.id, r.project_key, r.screen_id, r.user_prompt, r.normalized_card,
-               r.request_type, r.allowed_scope, r.forbidden_scope, r.acceptance_criteria,
-               r.status, r.created_at, r.updated_at,
-               s.route AS screen_route, s.name AS screen_name, s.purpose AS screen_purpose,
-               s.primary_actions AS screen_primary_actions,
-               s.component_paths AS screen_component_paths,
-               s.metadata AS screen_metadata
-        FROM design_modification_requests r
-        LEFT JOIN design_screens s
-            ON s.id = r.screen_id
-        WHERE r.id = $1::uuid
-        """,
-        request_id,
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="design modification request not found")
-
-    snapshot_rows = []
-    if max_snapshots > 0:
-        snapshot_rows = await conn.fetch(
-            """
-            SELECT id, request_id, phase, viewport, image_url, dom_summary, captured_at
-            FROM design_visual_snapshots
-            WHERE request_id = $1::uuid
-            ORDER BY
-                CASE phase
-                    WHEN 'before' THEN 0
-                    WHEN 'after' THEN 1
-                    WHEN 'regression' THEN 2
-                    ELSE 3
-                END,
-                captured_at DESC
-            LIMIT $2
-            """,
-            request_id,
-            max_snapshots,
-        )
-
-    decision_rows = []
-    if max_decisions > 0:
-        decision_rows = await conn.fetch(
-            """
-            SELECT id, project_key, screen_id, subject, decision, rationale,
-                   applies_to, confidence, supersedes_id, metadata, created_at, updated_at
-            FROM design_decisions
-            WHERE project_key = $1
-              AND (screen_id = $2::uuid OR screen_id IS NULL)
-            ORDER BY
-                CASE applies_to
-                    WHEN 'screen' THEN 0
-                    WHEN 'component' THEN 1
-                    WHEN 'project' THEN 2
-                    ELSE 3
-                END,
-                created_at DESC
-            LIMIT $3
-            """,
-            row["project_key"],
-            row["screen_id"],
-            max_decisions,
-        )
-
-    return dict(row), [dict(item) for item in snapshot_rows], [dict(item) for item in decision_rows]
-
-
-def _generated_context_pack_response(
-    request_row: dict[str, Any],
-    build_result: Any,
-    *,
-    context_pack_id: str | None = None,
-    created_at: datetime | None = None,
-    persisted: bool = False,
-) -> DesignContextPackGenerateResponse:
-    context = build_result.context
-    return DesignContextPackGenerateResponse(
-        context_pack=GeneratedDesignContextPack(
-            id=context_pack_id,
-            request_id=str(request_row["id"]),
-            project_key=str(request_row["project_key"]),
-            screen_id=str(request_row["screen_id"]) if request_row.get("screen_id") else None,
-            screen_route=request_row.get("screen_route"),
-            screen_name=request_row.get("screen_name"),
-            source_count=len(build_result.sources),
-            missing_context_count=len(build_result.missing_context),
-            context=context,
-            sources=build_result.sources,
-            missing_context=build_result.missing_context,
-            prompt_chars=int(build_result.prompt_chars),
-            safety_report=build_result.safety_report,
-            persisted=persisted,
-            created_at=created_at,
-        )
-    )
 
 
 @router.get("/projects/{project_key}/screens", response_model=DesignScreenListResponse)
@@ -732,81 +636,6 @@ async def list_design_context_packs(
     )
 
 
-@router.post(
-    "/modification-requests/{request_id}/context-pack/preview",
-    response_model=DesignContextPackGenerateResponse,
-)
-async def preview_generated_design_context_pack(
-    request_id: UUID,
-    options: DesignContextPackBuildRequest | None = Body(None),
-    current_user: dict[str, Any] = Depends(get_current_user),
-) -> DesignContextPackGenerateResponse:
-    _require_user_id(current_user)
-    opts = options or DesignContextPackBuildRequest()
-    pool = get_pool()
-
-    try:
-        async with pool.acquire() as conn:
-            request_row, snapshot_rows, decision_rows = await _load_context_pack_inputs(
-                conn,
-                request_id,
-                opts.max_snapshots,
-                opts.max_decisions,
-            )
-    except asyncpg.UndefinedTableError as exc:
-        raise _schema_unavailable(exc)
-
-    build_result = build_design_context_pack(request_row, snapshot_rows, decision_rows)
-    return _generated_context_pack_response(request_row, build_result)
-
-
-@router.post(
-    "/modification-requests/{request_id}/context-packs",
-    response_model=DesignContextPackGenerateResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-async def generate_design_context_pack(
-    request_id: UUID,
-    options: DesignContextPackBuildRequest | None = Body(None),
-    current_user: dict[str, Any] = Depends(get_current_user),
-) -> DesignContextPackGenerateResponse:
-    _require_user_id(current_user)
-    opts = options or DesignContextPackBuildRequest()
-    pool = get_pool()
-
-    try:
-        async with pool.acquire() as conn:
-            request_row, snapshot_rows, decision_rows = await _load_context_pack_inputs(
-                conn,
-                request_id,
-                opts.max_snapshots,
-                opts.max_decisions,
-            )
-            build_result = build_design_context_pack(request_row, snapshot_rows, decision_rows)
-            inserted = await conn.fetchrow(
-                """
-                INSERT INTO design_context_packs (request_id, context, sources, missing_context, prompt_chars)
-                VALUES ($1::uuid, $2::jsonb, $3::jsonb, $4::jsonb, $5)
-                RETURNING id, created_at
-                """,
-                request_id,
-                _jsonb_payload(build_result.context),
-                _jsonb_payload(build_result.sources),
-                _jsonb_payload(build_result.missing_context),
-                build_result.prompt_chars,
-            )
-    except asyncpg.UndefinedTableError as exc:
-        raise _schema_unavailable(exc)
-
-    return _generated_context_pack_response(
-        request_row,
-        build_result,
-        context_pack_id=str(inserted["id"]) if inserted else None,
-        created_at=inserted["created_at"] if inserted else None,
-        persisted=True,
-    )
-
-
 @router.get(
     "/context-packs/{context_pack_id}/preview",
     response_model=DesignContextPackPreviewResponse,
@@ -863,3 +692,22 @@ async def preview_design_context_pack(
         created_at=payload["created_at"],
     )
     return DesignContextPackPreviewResponse(context_pack=preview)
+
+
+@router.get(
+    "/modification-requests/{request_id}/qa-score",
+    response_model=DesignModificationQAScoreResponse,
+)
+async def get_design_modification_request_qa_score(
+    request_id: UUID,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> DesignModificationQAScoreResponse:
+    _require_user_id(current_user)
+    try:
+        payload = await design_qa_scorer.score_modification(request_id)
+    except design_qa_scorer.DesignModificationRequestNotFoundError:
+        raise HTTPException(status_code=404, detail="design modification request not found")
+    except asyncpg.UndefinedTableError as exc:
+        raise _schema_unavailable(exc)
+
+    return DesignModificationQAScoreResponse.model_validate(payload)
