@@ -3,11 +3,11 @@
 ## 현재 진행 상태 (2026-05-12)
 - **Chat final response visibility guard (2026-05-12 07:34~KST)**:
   - 요청: 특정 채팅 세션 `8ad08cc2-620c-4a70-8305-74a8d9b43c4e`에서 최종 응답이 작성됐으나 화면에 노출되지 않고 사라진 원인 파악 및 즉시 조치.
-  - 실측: DB 기준 해당 세션은 `chat_messages=1283`, `streaming_placeholder=0`, 최신 assistant `2851f6d1-a52a-4f3d-a650-7b14e1f918cf`가 2026-05-12 07:20:03 KST에 저장되어 있었다. `chat_sessions.current_execution_id`는 NULL이었다.
+  - 실측: 2026-05-12 07:44 KST 재조회 기준 해당 세션은 `chat_messages=1285`, `streaming_placeholder=0`, `chat_sessions.current_execution_id=NULL`이었다. 문제로 지목된 assistant `2851f6d1-a52a-4f3d-a650-7b14e1f918cf`는 2026-05-12 07:20:03 KST에 DB 저장되어 있으며 본문 길이는 2925자였다.
   - 원인: 백엔드 저장 실패가 아니라 프론트 완료 직후 재조회/폴링 경로가 assistant 저장 gap에서 로컬 최종 버블을 `setMessages(processed)`로 덮어쓸 수 있었다. 또한 `done` 수신 직후 서버 최종 메시지 ID를 `/last-response`로 재고정하는 보강이 부족했다.
   - 조치: `aads-dashboard/src/app/chat/page.tsx`에서 세션 메시지 재조회 결과를 기존 메시지와 병합하도록 변경하고, `mergeLatestAssistantFromServer()`를 추가해 `done`, `message_done`, execution replay 완료, just_completed gap에서 `/last-response` 최종 assistant를 조용히 병합한다.
   - 문서: `docs/chat/CHAT-CHANGELOG.md`에 2026-05-12 항목을 추가했다.
-  - 검증/배포: `python3 -m pytest tests/unit/test_chat_lightweight_frontend_static.py -q` 3 passed, `npx tsc --noEmit --pretty false` 통과, `npx eslint src/app/chat/page.tsx` 0 errors/기존 warnings only. `bash /root/aads/aads-dashboard/deploy.sh`로 blue-green 배포 성공, 활성 슬롯 `blue`, 프론트엔드 QA 통과.
+  - 검증/반영 확인: `python3 -m pytest tests/unit/test_chat_lightweight_frontend_static.py -q` 3 passed, `npx tsc --noEmit --pretty false` 통과, `npx eslint src/app/chat/page.tsx` 0 errors/기존 warnings 20개. `aads-dashboard` 컨테이너는 healthy이며 2026-05-12 07:42 KST에 시작되었고, 외부 `/chat`은 미로그인 기준 `/login?redirect=%2Fchat` 307 응답을 확인했다. `.active_container`/`.active_port` 파일은 없어 활성 슬롯명은 미확인.
 
 - **Browser Bridge 다중 세션 병렬 고정 지원 (2026-05-12 07:15~KST)**:
   - 요청: 여러 Browser Bridge 세션을 동시에 띄우고 각각 다른 작업에 고정해 진행할 수 있도록 즉시 구현.
