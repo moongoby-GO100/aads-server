@@ -275,6 +275,32 @@ classify_error() {
     fi
 }
 
+codex_auth_disabled_until() {
+    local marker="${AADS_CODEX_AUTH_DISABLED_FILE:-/tmp/aads-codex-auth-disabled-until}"
+    [[ -f "$marker" ]] || return 1
+    local until_ts
+    until_ts=$(cat "$marker" 2>/dev/null || echo 0)
+    [[ "$until_ts" =~ ^[0-9]+$ ]] || { rm -f "$marker" 2>/dev/null || true; return 1; }
+    local now_ts
+    now_ts=$(date +%s)
+    if [[ "$until_ts" -gt "$now_ts" ]]; then
+        echo "$until_ts"
+        return 0
+    fi
+    rm -f "$marker" 2>/dev/null || true
+    return 1
+}
+
+mark_codex_auth_disabled() {
+    local reason="$1"
+    local marker="${AADS_CODEX_AUTH_DISABLED_FILE:-/tmp/aads-codex-auth-disabled-until}"
+    local ttl="${AADS_CODEX_AUTH_DISABLED_TTL:-7200}"
+    [[ "$ttl" =~ ^[0-9]+$ ]] || ttl=7200
+    local until_ts=$(( $(date +%s) + ttl ))
+    printf '%s\n' "$until_ts" > "$marker" 2>/dev/null || true
+    log "  CODEX_AUTH_DISABLED_SET reason=${reason:0:80} until_epoch=$until_ts ttl=${ttl}s"
+}
+
 # ── 사전 검증 (Pre-validation) ─────────────────────────────────────────
 pre_validate() {
     local job_id="$1" project="$2" session_id="$3"
@@ -763,6 +789,15 @@ ${safe_instruction}"
         else
             log "  MODEL_FALLBACK job=$job_id model=$current_model cycle=$cycle_num attempt=$((attempt+1))/$total_attempts"
         fi
+        if [[ "$current_model" == codex:* ]]; then
+            local codex_disabled_until=""
+            if codex_disabled_until=$(codex_auth_disabled_until); then
+                log "  CODEX_AUTH_DISABLED_SKIP job=$job_id model=$current_model until_epoch=$codex_disabled_until"
+                db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[Codex] ${current_model} skip: auth cooldown active until ${codex_disabled_until}' WHERE job_id='${job_id}';"
+                attempt=$((attempt + 1))
+                continue
+            fi
+        fi
         # Codex CLI Runner 분기 (codex: 접두사, ChatGPT Plus OAuth)
         # 가용 모델: gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex (2026-04-28 Codex catalog)
         # Pro 전용(gpt-5.4-pro, gpt-5.4-nano, gpt-5.3-codex-spark)은 ChatGPT Plus에서 미지원
@@ -840,6 +875,9 @@ ${safe_instruction}"
                 if grep -qiE "FAILED:|ERROR:|unauthorized|forbidden|invalid.?key|auth" "$err_file" 2>/dev/null; then
                     local _err_msg
                     _err_msg=$(head -3 "$err_file" | tr '\n' ' ' | head -c 100)
+                    if grep -qiE "refresh_token_reused|token_expired|Please log out and sign in again" "$err_file" 2>/dev/null; then
+                        mark_codex_auth_disabled "$_err_msg"
+                    fi
                     log "  CODEX_ERROR_SKIP job=$job_id reason='${_err_msg}' → immediate fallback"
                     db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[Codex] ${current_model} 즉시폴백: ${_err_msg:0:60}' WHERE job_id='${job_id}';"
                     break

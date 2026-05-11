@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-11)
+- **114 Codex OAuth `refresh_token_reused` 재발 대응 (2026-05-11 11:53~12:00 KST)**:
+  - 실측: 68/211은 `codex exec --skip-git-repo-check ... gpt-5.5` 최소 호출이 성공했지만, 114는 `refresh_token_reused` 및 `token_expired` 401로 실패했다.
+  - 원인: 114의 `/root/.codex/auth.json`이 존재하고 `codex login status`도 `Logged in`으로 나오지만, 실제 access token refresh 단계에서 이미 사용된 refresh token으로 판정된다. 2026-05-05에도 같은 유형으로 “auth 파일 존재 여부가 아니라 실제 `codex exec` 성공 여부로 판단해야 한다”는 이력이 있었다.
+  - 조치: `scripts/pipeline-runner.sh`에 Codex auth broken 쿨다운을 추가했다. `refresh_token_reused`, `token_expired`, `Please log out and sign in again` 감지 시 `/tmp/aads-codex-auth-disabled-until` 마커를 2시간 생성하고, 이후 같은 서버의 `codex:*` 모델은 즉시 skip 후 다음 모델로 넘어간다.
+  - 운영 반영: 211/114 `/root/scripts/pipeline-runner.sh`에 동기화했고 `aads-pipeline-runner`를 재시작했다. 114에는 현재 깨진 OAuth 상태를 반영해 쿨다운 마커를 즉시 생성했다. 211은 Codex 실행 성공 상태라 마커를 생성하지 않았다.
+  - 주의: 68의 현재 ChatGPT OAuth 파일을 114로 단순 복사하면 114는 일시 복구될 수 있으나, OAuth refresh token 회전 특성상 다음에는 68 또는 114 중 한쪽이 다시 `refresh_token_reused`로 깨질 수 있다. 114는 독립 device-auth 재로그인이 근본 복구다.
+
 ## 현재 진행 상태 (2026-05-09)
 - **Pipeline Runner 모델 설정/원격 LiteLLM/동시성 보강 (2026-05-09 10:36~KST)**:
   - 제출 API 기본 정책을 “어드민 `runner_model_config` 자동 선택”으로 고정했다. `worker_model`은 `worker_model_reason`이 함께 들어온 경우에만 `pipeline_jobs.worker_model`에 저장하며, 사유가 없으면 무시하고 자동 설정값을 사용한다.
