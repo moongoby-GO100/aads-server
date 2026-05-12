@@ -15,6 +15,7 @@ from typing import Any, Iterable
 
 _PENDING_STATUSES = ("dirty", "committed")
 _UNDEPLOYED_STATUSES = ("dirty", "committed", "pushed")
+_TRACKED_STATUSES = ("dirty", "committed", "pushed", "deployed")
 
 _WORK_DONE_MARKERS = (
     "수정",
@@ -68,6 +69,11 @@ _DEPLOY_DONE_RE = re.compile(
     r"(?:배포|deploy).{0,18}(?:완료|성공|했습니다|했음|됨|done)",
     re.IGNORECASE | re.DOTALL,
 )
+_DOCUMENT_DONE_RE = re.compile(
+    r"(?:문서기록|문서 기록|문서|handover|HANDOVER).{0,24}"
+    r"(?:완료|성공|했습니다|했음|됨|반영|갱신|업데이트|updated)",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 @dataclass
@@ -88,11 +94,16 @@ class CompletionContractResult:
         }
 
 
-def _normalize_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+def _normalize_rows(
+    rows: Iterable[dict[str, Any]],
+    *,
+    allowed_statuses: Iterable[str] = _UNDEPLOYED_STATUSES,
+) -> list[dict[str, Any]]:
+    allowed = set(allowed_statuses)
     normalized: list[dict[str, Any]] = []
     for row in rows or []:
         status = str(row.get("status") or "").strip()
-        if status not in _UNDEPLOYED_STATUSES:
+        if status not in allowed:
             continue
         normalized.append(
             {
@@ -104,6 +115,16 @@ def _normalize_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return normalized
+
+
+def _is_documentation_path(path: str) -> bool:
+    lowered = (path or "").lower()
+    return (
+        lowered.endswith("handover.md")
+        or lowered.startswith("docs/")
+        or "/docs/" in lowered
+        or lowered.endswith(".md")
+    )
 
 
 def _has_disclosure(response_text: str) -> bool:
@@ -136,7 +157,10 @@ def _build_note(rows: list[dict[str, Any]], violations: list[str]) -> str:
     lines = ["", "", "⚠️ 완료 상태 보정"]
     if violations:
         lines.append(f"- 보정 사유: {', '.join(violations)}")
-    lines.append("- 현재 workspace ledger 기준으로 아직 최종 완료되지 않은 변경이 있습니다.")
+    if rows:
+        lines.append("- 현재 workspace ledger 기준으로 아직 최종 완료되지 않은 변경이 있습니다.")
+    else:
+        lines.append("- 현재 workspace ledger 기준으로 응답의 완료 보고를 입증할 변경 기록을 찾지 못했습니다.")
 
     shown = 0
     for (project, repo), group_rows in sorted(grouped.items()):
@@ -159,22 +183,32 @@ def evaluate_completion_contract(
     intent: str,
     changes: Iterable[dict[str, Any]],
 ) -> CompletionContractResult:
-    rows = _normalize_rows(changes)
+    all_rows = _normalize_rows(changes, allowed_statuses=_TRACKED_STATUSES)
+    rows = _normalize_rows(changes, allowed_statuses=_UNDEPLOYED_STATUSES)
     pending_rows = [row for row in rows if row["status"] in _PENDING_STATUSES]
     undeployed_rows = rows
 
-    if not rows:
+    response = response_text or ""
+    document_rows = [row for row in all_rows if _is_documentation_path(row["file_path"])]
+    pending_document_rows = [row for row in document_rows if row["status"] in _UNDEPLOYED_STATUSES]
+
+    if not rows and not _DOCUMENT_DONE_RE.search(response):
         return CompletionContractResult(response_text=response_text)
 
     violations: list[str] = []
-    if pending_rows and _COMMIT_DONE_RE.search(response_text or ""):
+    if pending_rows and _COMMIT_DONE_RE.search(response):
         violations.append("commit_report_conflicts_with_ledger")
-    if pending_rows and _PUSH_DONE_RE.search(response_text or ""):
+    if pending_rows and _PUSH_DONE_RE.search(response):
         violations.append("push_report_conflicts_with_ledger")
-    if undeployed_rows and _DEPLOY_DONE_RE.search(response_text or ""):
+    if undeployed_rows and _DEPLOY_DONE_RE.search(response):
         violations.append("deploy_report_conflicts_with_ledger")
     if pending_rows and not _has_disclosure(response_text) and _looks_like_work_completion(response_text, user_msg, intent):
         violations.append("missing_commit_push_disclosure")
+    if _DOCUMENT_DONE_RE.search(response):
+        if not document_rows:
+            violations.append("document_report_unverified_by_ledger")
+        elif pending_document_rows:
+            violations.append("document_report_conflicts_with_ledger")
 
     if not violations:
         return CompletionContractResult(
@@ -208,10 +242,7 @@ async def enforce_completion_contract(
 
     from app.services.workspace_change_tracker import list_changes
 
-    changes = await list_changes(
-        session_id=session_id,
-        statuses=_UNDEPLOYED_STATUSES,
-    )
+    changes = await list_changes(session_id=session_id)
     return evaluate_completion_contract(
         response_text=response_text,
         user_msg=user_msg,

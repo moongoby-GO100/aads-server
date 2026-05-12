@@ -61,3 +61,43 @@ def test_completion_contract_accepts_explicit_pending_disclosure():
 
     assert result.adjusted is False
     assert result.response_text == response
+
+
+def test_completion_contract_blocks_unverified_document_done():
+    result = evaluate_completion_contract(
+        response_text="코드 수정과 문서기록 완료했습니다.",
+        user_msg="수정하고 문서기록까지 해",
+        intent="code_modify",
+        changes=[
+            {
+                "project": "AADS",
+                "repo": "aads-server",
+                "file_path": "app/services/example.py",
+                "status": "deployed",
+            }
+        ],
+    )
+
+    assert result.adjusted is True
+    assert "document_report_unverified_by_ledger" in result.violation_types
+    assert "완료 상태 보정" in result.response_text
+
+
+def test_completion_contract_blocks_pending_document_done():
+    result = evaluate_completion_contract(
+        response_text="HANDOVER 문서 업데이트 완료했습니다.",
+        user_msg="문서기록해",
+        intent="code_modify",
+        changes=[
+            {
+                "project": "AADS",
+                "repo": "aads-server",
+                "file_path": "HANDOVER.md",
+                "status": "dirty",
+            }
+        ],
+    )
+
+    assert result.adjusted is True
+    assert "document_report_conflicts_with_ledger" in result.violation_types
+    assert "HANDOVER.md" in result.response_text

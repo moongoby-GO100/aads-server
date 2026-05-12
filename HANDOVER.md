@@ -1,6 +1,14 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-12)
+- **Chat completion contract 문서기록 검증 보강 (2026-05-12 11:44 KST)**:
+  - 요청: 커밋/푸시/문서기록 실행 시기와 훅 개선안의 권장조치를 실제 반영.
+  - 조치: `app/services/response_completion_contract.py`가 세션 ledger 전체 상태(`dirty/committed/pushed/deployed`)를 읽도록 변경했다. 이제 응답이 "문서기록 완료/HANDOVER 업데이트 완료"라고 보고할 때 ledger에 `HANDOVER.md` 또는 `docs/*.md` 변경 근거가 없으면 `document_report_unverified_by_ledger`, 문서 파일이 아직 미커밋/미푸시/미배포 상태면 `document_report_conflicts_with_ledger`로 보정한다.
+  - 조치: `tests/unit/test_response_completion_contract.py`에 문서기록 허위 완료 및 pending 문서 완료 보고 차단 테스트를 추가했다.
+  - 운영 반영: active `8100`과 standby `8102`에 hot-reload를 호출했다. active는 `app.services.response_completion_contract`와 `app.services.chat_service` 모두 reload OK, standby는 `chat_service` reload OK이며 completion contract 모듈은 아직 미로드 상태라 다음 import 시 최신 파일을 로드한다.
+  - 검증: `python3 -m pytest tests/unit/test_response_completion_contract.py -q` → 5 passed. `python3 -m py_compile app/services/response_completion_contract.py app/services/chat_service.py app/services/workspace_change_tracker.py` 통과. 운영 DB `prompt_assets.slug='global-chat-completion-contract'`는 enabled=true, layer_id=1, priority=6 확인.
+  - 주의: 커밋/푸시는 아직 수행하지 않았다. 작업트리에 기존 브라우저 브릿지/BG/채팅 완료계약 변경이 섞여 있어, 이 항목 커밋 시에는 completion contract 관련 hunk만 부분 스테이징해야 한다.
+
 - **AADS Blue-Green standby 자동 동기화 보강 (2026-05-12 10:41 KST)**:
   - 요청: B→G 전환 후 B가 자동으로 G와 동기화되어 다음 전환/rollback 때 미반영 슬롯이 노출되지 않는지 확인.
   - 확인: 기존 백엔드 BG는 새 슬롯 빌드→upstream 전환 후 old 슬롯을 drain 뒤 stop하거나, 스트림이 남으면 old 슬롯을 그대로 두었다. 대시보드는 old 슬롯을 warm standby로 유지했지만 재빌드하지 않았다. 따라서 "전환 직후 반대 슬롯도 같은 release로 자동 동기화"는 완전 적용 상태가 아니었다.
