@@ -1,6 +1,14 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-12)
+- **Chat 보고서 깊이 계약 및 부실보고 재작성 게이트 (2026-05-12 12:45 KST)**:
+  - 요청: 채팅창 보고서 출력 품질 개선이 실제 응답 내용까지 개선되는지 확인 후, 문제점·원인·개선 권장안·완료기준이 빈약한 보고를 즉시 개선.
+  - 조치: `app/services/output_validator.py`에 `REPORT_STRUCTURE_WEAK` 검사를 추가했다. 보고/분석/CTO/리서치 계열 인텐트가 너무 짧거나 `문제점/리스크`, `원인/근거`, `개선 권장안`, `검증 방법/완료기준`, `다음 단계` 중 핵심 구조를 2개 이상 누락하면 저장 전 재작성 스트림으로 돌린다.
+  - 조치: `migrations/087_chat_report_depth_contract.sql`을 추가했다. 신규 L1 `global-report-depth-contract`와 L4 `intent-report-output`, `intent-analysis-output`을 보강해 보고형 응답의 필수 섹션과 품질 하한을 프롬프트 레이어에서도 강제한다.
+  - 조치: `tests/unit/test_tools_and_pipeline.py`에 부실 분석 응답 차단 및 구조화 분석 응답 통과 테스트를 추가했다.
+  - 검증 예정: `python3 -m pytest tests/unit/test_tools_and_pipeline.py -q`, `python3 -m py_compile app/services/output_validator.py`, 운영 DB 087 적용 및 prompt_assets 검증.
+  - 주의: 현재 작업트리에는 이번 작업 전부터 `.active_container`, `.active_port`, `docs/CHANGELOG-go100-direct.md` 변경이 남아 있으며 이번 변경 범위에서 되돌리지 않는다.
+
 - **AADS runtime marker 커밋/ledger 오염 방지 (2026-05-12 11:55 KST)**:
   - 요청: BG 전환 후 `.active_container`/`.active_port` 같은 런타임 marker가 커밋/dirty ledger에 섞이는 문제를 이어서 개선.
   - 조치: `app/services/workspace_change_tracker.py`에 AADS `aads-server` 런타임 상태 파일 ignore 가드를 추가했다. 신규 record/list/finalize 경로에서 `.active_container`, `.active_port`를 workspace change ledger 대상으로 보지 않는다.
@@ -843,3 +851,10 @@
 - 조치: `app/services/chat_service.py`에 `_save_interrupted_partial_message()`를 추가해 추가지시 반영 직전 현재까지의 응답을 별도 assistant 버블로 DB 저장하고, SSE `partial_preserved` 이벤트로 프론트에 즉시 병합한다.
 - 조치: Dashboard `src/app/chat/page.tsx`가 `partial_preserved` 이벤트를 수신하면 기존 버블을 보존한 뒤 새 stream buffer만 reset하도록 변경했다. `src/services/chatApi.ts`의 SSE/streaming-status 타입도 백엔드 응답 필드에 맞췄다. Service Worker `public/sw.js`의 `/chat`/`/api`/`/_next` network-only 정책은 유지했다.
 - 검증: `python3 -m py_compile app/routers/chat.py app/services/chat_service.py` 통과. `pytest -q tests/unit/test_chat_service.py::test_deferred_interrupt_rewrites_no_tool_stream_before_save` 1개 통과. `pytest -q tests/unit/test_tools_and_pipeline.py -k 'last_response_settles_stale_running_execution or settle_stale_execution_recovers_recent_progress_without_live_runtime or settle_stale_execution_keeps_recent_live_runtime'` 3개 통과. Dashboard `npx tsc --noEmit --pretty false` 통과.
+
+## 2026-05-12 12:52 KST - 채팅 DB 저장 응답 새로고침 노출 보장
+
+- 배경: `aa433b41-0ad2-421c-ae7c-bac4806035cc` 최근 응답 점검 중 대상 세션 자체는 최신 실행이 `completed`였지만, 전역 DB에는 최근 `running` 실행 5건과 `streaming_placeholder` 5건이 남아 있었다. 프론트 일부 메시지 재조회 경로가 `include_streaming=true` 없이 `/chat/messages`를 호출해 DB에 저장된 내용 있는 placeholder를 새로고침/완료 폴링에서 놓칠 수 있었다.
+- 조치: Dashboard `src/app/chat/page.tsx`에 `surfaceDbSavedStreamingPlaceholders()`를 추가했다. DB에 저장된 `streaming_placeholder` 본문이 10자 초과면 일반 assistant/recovered 버블로 승격해 병합하고, 빈 placeholder는 active/waiting 경로에서만 생성 중 버블로 유지한다.
+- 조치: 초기 로드, 빈 화면 자동 재시도, 이전 메시지 로드, execution replay 완료, just_completed 폴링, SSE 무음 종료 복구, stop 이후 DB 동기화, background stop 동기화의 `/chat/messages` 호출에 `include_streaming=true`를 적용했다.
+- 검증: Dashboard `npx tsc --noEmit` 통과. `npx eslint src/app/chat/page.tsx` 에러 0개, 기존 경고 21개. DB 실측 기준 12:51 KST `chat_turn_executions`는 `completed=2256`, `interrupted=3627`, `running=5`, `streaming_placeholder=5`이며 5건 모두 최근 활성 응답으로 강제 정리하지 않았다.

@@ -271,6 +271,56 @@ class TestOutputValidator:
         matched = any(p.search(test_text) for p in _FABRICATED_XML_PATTERNS)
         assert not matched, "정상 텍스트가 오탐됨"
 
+    def test_report_quality_rejects_thin_analysis(self):
+        from app.services.output_validator import validate_response
+
+        response = (
+            "반영은 되어 있습니다. 다만 품질은 더 개선할 수 있습니다. "
+            "추가로 프롬프트를 보강하면 됩니다."
+        )
+        result = validate_response(
+            response_text=response,
+            tools_called=True,
+            intent="cto_strategy",
+        )
+
+        assert result.is_valid is False
+        assert result.violation_type == "REPORT_STRUCTURE_WEAK"
+        assert "문제점" in result.retry_prompt
+        assert "완료기준" in result.retry_prompt
+
+    def test_report_quality_accepts_structured_analysis(self):
+        from app.services.output_validator import validate_response
+
+        response = """
+**요약** — 핵심 문제는 보고서 본문이 형식만 갖추고 판단 근거가 약한 점입니다.
+
+## 문제점/리스크
+| 항목 | 상태 | 근거 |
+|---|---|---|
+| 보고 품질 | 부족 | [DB 조회] |
+| 사용자 만족 | 위험 | [최근 응답 샘플] |
+| 완료 판단 | 불명확 | [코드 확인] |
+
+## 원인/근거
+원인은 L4 규칙이 문제점과 개선안을 강제하지 않는 구조입니다. 검증은 DB와 코드 기준으로 확인했습니다.
+
+## 개선 권장안
+권장안은 프롬프트 보강, validator 재작성 트리거, 샘플 회귀 테스트 순서입니다.
+
+## 검증 방법/완료기준
+완료기준은 구조화 응답이 통과하고 빈약 응답이 REPORT_STRUCTURE_WEAK로 차단되는 것입니다.
+
+→ 다음 단계: 운영 DB 마이그레이션 적용 후 pytest로 회귀 검증합니다.
+"""
+        result = validate_response(
+            response_text=response,
+            tools_called=True,
+            intent="cto_strategy",
+        )
+
+        assert result.is_valid is True
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 5. Intent → 도구 활성화 흐름 테스트

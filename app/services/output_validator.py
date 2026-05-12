@@ -9,6 +9,7 @@ AADS-188C Phase 3 + R-CRITICAL-002: Output Validator — 거짓 보고 방지.
   FABRICATED_RESULTS     — 가짜 도구 결과 XML 태그를 텍스트로 생성한 응답 (차단)
   FABRICATED_DATA_TABLE  — 도구 미호출 상태에서 DB 조회/결과처럼 보이는 마크다운 테이블 생성 (차단)
   INCONSISTENT_DATA      — 응답 내 수치가 동일 턴의 도구 결과와 모순되는 경우 (차단)
+  REPORT_STRUCTURE_WEAK  — 보고/분석 응답이 문제점·원인·권장안·검증기준 없이 빈약한 경우 (재작성)
 """
 from __future__ import annotations
 
@@ -69,6 +70,47 @@ _MARKDOWN_TABLE = re.compile(
     r'\|[^\n]+\|\s*\n\s*\|[\s\-:]+\|',
 )
 
+# ─── 보고서 품질 구조 검사 ───────────────────────────────────────────────────
+
+_REPORT_QUALITY_INTENTS = frozenset({
+    "report",
+    "audit",
+    "deep_research",
+    "cto_strategy",
+    "url_analyze",
+    "knowledge_query",
+    "fact_check",
+    "research",
+    "complex_analysis",
+    "analysis",
+    "strategy",
+    "planning",
+    "decision",
+    "cto_code_analysis",
+    "cto_verify",
+    "cto_impact",
+    "cto_tech_debt",
+    "cost_report",
+    "runner_response",
+})
+
+_REPORT_REQUIRED_GROUPS: dict[str, tuple[str, ...]] = {
+    "problem_or_risk": (
+        "문제", "문제점", "이슈", "리스크", "위험", "한계", "차단", "주의", "누락",
+    ),
+    "cause_or_evidence": (
+        "원인", "근거", "증거", "확인", "실측", "출처", "코드", "DB", "로그", "검증",
+    ),
+    "recommendation": (
+        "권장", "권장안", "개선", "개선안", "조치", "대안", "추천", "다음 단계",
+    ),
+    "success_or_validation": (
+        "완료기준", "성공 기준", "검증", "테스트", "측정", "확인 방법", "판정",
+    ),
+}
+
+_REPORT_MIN_STRUCTURE_CHARS = 280
+
 # ─── 검증 결과 ─────────────────────────────────────────────────────────────────
 
 
@@ -109,6 +151,10 @@ def validate_response(
             if _incon:
                 logger.error(f"[OutputValidator] INCONSISTENT_DATA detected: {_incon.message}")
                 return _incon
+        _report_quality = check_report_quality_structure(stripped, intent)
+        if _report_quality:
+            logger.warning(f"[OutputValidator] REPORT_STRUCTURE_WEAK detected: {_report_quality.message}")
+            return _report_quality
         return _OK
 
     # ── FABRICATED_DATA_TABLE: 도구 미호출인데 DB 조회 결과처럼 보이는 테이블 ──
@@ -116,6 +162,12 @@ def validate_response(
     if _fdt:
         logger.error(f"[OutputValidator] FABRICATED_DATA_TABLE detected: {_fdt.message}")
         return _fdt
+
+    # ── REPORT_STRUCTURE_WEAK: 분석/보고 응답에 핵심 섹션이 빠진 경우 ──
+    _report_quality = check_report_quality_structure(stripped, intent)
+    if _report_quality:
+        logger.warning(f"[OutputValidator] REPORT_STRUCTURE_WEAK detected: {_report_quality.message}")
+        return _report_quality
 
     # ── EMPTY_PROMISE: 짧은 텍스트 + 빈 약속 패턴 ─────────────────────────
     if len(stripped) < 100:
@@ -172,6 +224,82 @@ def validate_response(
             return _warn  # 이제 차단 (is_valid=False)
 
     return _OK
+
+
+def check_report_quality_structure(
+    response_text: str,
+    intent: str = "",
+) -> Optional[ValidationResult]:
+    """
+    보고/분석 응답이 CEO 판단에 필요한 구조를 갖췄는지 검사한다.
+
+    UI 렌더러가 좋아져도 본문 자체가 빈약하면 사용자는 개선을 체감하지 못한다.
+    이 검사는 보고형 인텐트에서 문제점, 근거/원인, 권장안, 검증/완료 기준 중
+    2개 이상이 누락되면 재작성하도록 막는다.
+    """
+    normalized_intent = (intent or "").strip()
+    if normalized_intent not in _REPORT_QUALITY_INTENTS:
+        return None
+
+    text = (response_text or "").strip()
+    if len(text) < _REPORT_MIN_STRUCTURE_CHARS:
+        return ValidationResult(
+            is_valid=False,
+            violation_type="REPORT_STRUCTURE_WEAK",
+            message=(
+                f"보고형 인텐트 응답이 너무 짧음: {len(text)}자 — "
+                "문제점/원인/권장안/검증기준을 담기 어려움"
+            ),
+            retry_prompt=_build_report_quality_retry_prompt(
+                ["minimum_depth"],
+                "응답 분량이 부족합니다.",
+            ),
+        )
+
+    lowered = text.lower()
+    missing = [
+        group
+        for group, keywords in _REPORT_REQUIRED_GROUPS.items()
+        if not any(keyword.lower() in lowered for keyword in keywords)
+    ]
+    has_table = bool(_MARKDOWN_TABLE.search(text))
+    has_next_action = ("→ 다음" in text) or ("→ 권장" in text) or ("다음 단계" in text)
+
+    structural_gaps = list(missing)
+    if not has_table and len(text) >= 500:
+        structural_gaps.append("table_or_matrix")
+    if not has_next_action:
+        structural_gaps.append("next_action")
+
+    if len(structural_gaps) < 2:
+        return None
+
+    return ValidationResult(
+        is_valid=False,
+        violation_type="REPORT_STRUCTURE_WEAK",
+        message=(
+            "보고서 핵심 구조 누락: "
+            + ", ".join(structural_gaps[:6])
+        ),
+        retry_prompt=_build_report_quality_retry_prompt(
+            structural_gaps,
+            "문제점·원인·권장안·검증/완료기준 중 필수 항목이 부족합니다.",
+        ),
+    )
+
+
+def _build_report_quality_retry_prompt(missing: list[str], reason: str) -> str:
+    missing_text = ", ".join(missing[:8]) if missing else "unknown"
+    return (
+        "[시스템 재시도 지시 — 보고 품질 부족] "
+        f"{reason} 누락 항목: {missing_text}. "
+        "이전 응답을 CEO 보고서 기준으로 다시 작성하세요. "
+        "첫 1~2줄에 결론을 두고, 본문에는 반드시 다음 섹션을 포함하세요: "
+        "1) 문제점/리스크, 2) 원인/근거(도구·DB·코드 출처), "
+        "3) 개선 권장안(우선순위 포함), 4) 검증 방법/완료기준, "
+        "5) → 다음 단계. "
+        "비교 항목이 3개 이상이면 마크다운 표를 사용하고, 확인하지 못한 값은 미검증으로 표시하세요."
+    )
 
 
 # ─── 수치 환각 감지 (차단) ────────────────────────────────────────────────────
