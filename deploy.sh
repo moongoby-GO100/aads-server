@@ -553,6 +553,8 @@ case "$MODE" in
         echo "[deploy.sh] ⑤ ${OLD_CONTAINER} standby 동기화 시작"
         echo "$NEW_PORT" > /root/aads/aads-server/.active_port
         echo "$NEW_CONTAINER" > /root/aads/aads-server/.active_container
+        docker exec "$NEW_CONTAINER" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
+        docker exec "$OLD_CONTAINER" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
         sync_standby_slot_after_drain "$OLD_CONTAINER" "$OLD_PORT"
 
         HEALTH_URL="http://localhost:${NEW_PORT}/api/v1/health"
