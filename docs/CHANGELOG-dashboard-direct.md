@@ -92,3 +92,9 @@ p = pathlib.Path('/root/aads/aads-dashboard/src/app/
 
 ## [2026-05-09 10:55:25 KST] [aads-dashboard] /root/aads/aads-dashboard/src/components/chat/ArtifactPanel.tsx
 - Chat-Direct 수정: patch: import ArtifactHtmlPreview from "./Artif→import ArtifactHtmlPreview from "./Artif
+
+## [2026-05-13 08:22:10 KST] [aads-dashboard] public/reports/newtalk-ai-fashion-user-flow-detail-v2.html
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-server/reports/newtalk-ai-fashion-user-flow-detail-v2.html /r
+
+## [2026-05-13 08:26:07 KST] [aads-dashboard] ../aads-dashboard/public/reports/aads-smart-cursor-design-spec.html
+- Chat-Direct 수정: write: ../aads-dashboard/public/reports/aads-smart-cursor-design-spec.html

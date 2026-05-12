@@ -247,7 +247,7 @@ LAYER1_TOOLS = """<tools_available>
 
 **T6 스케줄/태스크**: schedule_task, unschedule_task, list_scheduled_tasks, check_task_status, read_task_logs, terminate_task
 
-**T7 이미지 생성**: generate_image
+**T7 미디어 생성**: generate_image, edit_image, generate_video, video_status, video_download
 </tools_available>"""
 
 LAYER1_RULES = """<rules>

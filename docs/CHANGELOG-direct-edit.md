@@ -530,3 +530,12 @@ _S
 
 ## [2026-05-12 13:38:42 KST] [aads-server] tests/unit/test_browser_bridge.py
 - Chat-Direct 수정: run_remote_command: find /root/aads -maxdepth 4 -type d -name '*7e568511*'
+
+## [2026-05-13 08:18:55 KST] [aads-server] reports/newtalk-ai-fashion-user-flow-detail-v2.html
+- Chat-Direct 수정: write: reports/newtalk-ai-fashion-user-flow-detail-v2.html
+
+## [2026-05-13 08:19:27 KST] [aads-server] reports/newtalk-ai-fashion-influencer-plan-v1.html
+- Chat-Direct 수정: patch:     <a href="/reports/newtalk-ai-fashion→    <a href="/reports/newtalk-ai-fashion
+
+## [2026-05-13 08:21:56 KST] [aads-server] reports/newtalk-ai-fashion-user-flow-detail-v2.html
+- Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/reports/newtalk-ai-fashion-user-flow-detail-v2.html /

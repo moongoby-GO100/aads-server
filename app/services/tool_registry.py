@@ -110,6 +110,10 @@ _DEFER_LOADING: Dict[str, bool] = {
     "device_list": False,             # 상시 로드 — 연결된 디바이스 목록
     # ── 미디어/생성 도구 ──────────────────────────────────────────────
     "generate_image": False,          # 핵심 — CEO 이미지 요청 빈번
+    "edit_image": True,               # 온디맨드 — 입력 이미지 편집
+    "generate_video": False,          # 핵심 — 비동기 동영상 생성 job
+    "video_status": False,            # 핵심 — 동영상 job 상태 조회
+    "video_download": True,           # 온디맨드 — 완료 영상 저장/메타데이터
     # ── 검색 도구 (한국어 특화) ───────────────────────────────────────
     "search_naver": False,            # 핵심 — 한국어 뉴스/블로그
     "search_naver_multi": True,       # 온디맨드
@@ -2493,8 +2497,73 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     # ── 미디어/생성 ──────────────────────────────────────────────────────────
     "generate_image": {
         "name": "generate_image",
-        "description": "이미지 생성 (Google Imagen 4.0 → GPT-Image-1 폴백). 프롬프트 기반 이미지 생성 후 base64 data URI 반환.",
-        "input_schema": {"type": "object", "properties": {"prompt": {"type": "string", "description": "이미지 생성 프롬프트"}, "size": {"type": "string", "default": "1024x1024"}}, "required": ["prompt"]},
+        "description": "이미지 생성. gpt-image-2, imagen-4.0-*, gemini-3.1-flash-image-preview 라우팅 문자열을 인식하며 기존 base64 data URI 응답을 유지한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "이미지 생성 프롬프트"},
+                "size": {"type": "string", "default": "1024x1024"},
+                "model_id": {"type": "string", "description": "선택 모델 (예: gpt-image-2, imagen-4.0-generate-001)"},
+                "provider": {"type": "string", "description": "선택 provider (openai/google/gemini)"},
+                "session_id": {"type": "string", "description": "요청 채팅 세션 ID"},
+            },
+            "required": ["prompt"],
+        },
+    },
+    "edit_image": {
+        "name": "edit_image",
+        "description": "이미지 편집 job 생성/실행. OpenAI gpt-image-2 편집 라우팅을 우선 사용하고 미설정 시 NOT_CONFIGURED를 반환한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "이미지 편집 지시"},
+                "image_path": {"type": "string", "description": "편집할 로컬 이미지 경로"},
+                "image_url": {"type": "string", "description": "편집할 이미지 URL 또는 참조"},
+                "image_data": {"type": "string", "description": "data URI/base64 이미지"},
+                "mask_path": {"type": "string", "description": "선택 마스크 이미지 경로"},
+                "size": {"type": "string", "default": "1024x1024"},
+                "model_id": {"type": "string", "default": "gpt-image-2"},
+                "provider": {"type": "string", "description": "선택 provider"},
+                "session_id": {"type": "string", "description": "요청 채팅 세션 ID"},
+            },
+            "required": ["prompt"],
+        },
+    },
+    "generate_video": {
+        "name": "generate_video",
+        "description": "비동기 동영상 생성 job 생성. sora-2, sora-2-pro, veo-3.1-generate-preview 라우팅 문자열을 인식한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "동영상 생성 프롬프트"},
+                "input_refs": {"type": "object", "description": "참조 이미지/비디오/옵션", "default": {}},
+                "model_id": {"type": "string", "default": "sora-2"},
+                "provider": {"type": "string", "description": "선택 provider"},
+                "session_id": {"type": "string", "description": "요청 채팅 세션 ID"},
+            },
+            "required": ["prompt"],
+        },
+    },
+    "video_status": {
+        "name": "video_status",
+        "description": "동영상 생성 job 상태 조회.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"job_id": {"type": "string", "description": "generate_video가 반환한 job_id"}},
+            "required": ["job_id"],
+        },
+    },
+    "video_download": {
+        "name": "video_download",
+        "description": "완료된 동영상 job 결과를 안전 경로에 저장하고 파일 경로/메타데이터를 반환.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string", "description": "generate_video가 반환한 job_id"},
+                "output_dir": {"type": "string", "description": "선택 저장 루트. 생략 시 AADS_MEDIA_OUTPUT_DIR 사용"},
+            },
+            "required": ["job_id"],
+        },
     },
     # ── 한국어 검색 ──────────────────────────────────────────────────────────
     "search_naver": {
@@ -2743,7 +2812,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
-    "action": ["directive_create", "create_design_modification_request", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "device_command"],
+    "action": ["directive_create", "create_design_modification_request", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download"],
     "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)

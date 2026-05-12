@@ -1255,3 +1255,27 @@ tests/smoke_test_result_*
 ## [2026-05-12 16:33:00 KST] [GO100] frontend/src/go100/hooks/useChat.ts
 - Chat-Direct 수정: patch:         if (!completedByDoneEvent && abo→        const remainingLine = buffer.tri
 - finalize: pending
+
+## [2026-05-13 08:18:29 KST] [GO100] backend/app/routers/go100/ai_router.py
+- Chat-Direct 수정: patch:     meta.setdefault("prompt_provenance",→    intent = str(meta.get("intent") or "
+- finalize: pending
+
+## [2026-05-13 08:22:47 KST] [GO100] backend/app/routers/go100/ai_router.py
+- Chat-Direct 수정: patch:     meta.setdefault("prompt_provenance",→    intent = str(meta.get("intent") or "
+- finalize: pending
+
+## [2026-05-13 08:23:24 KST] [GO100] scripts/go100_p0_fix_20260513.py
+- Chat-Direct 수정: write: scripts/go100_p0_fix_20260513.py
+- finalize: pending
+
+## [2026-05-13 08:24:18 KST] [GO100] scripts/go100_p0_fix_20260513.py
+- Chat-Direct 수정: write: scripts/go100_p0_fix_20260513.py
+- finalize: pending
+
+## [2026-05-13 08:24:55 KST] [GO100] scripts/go100_p0_fix_20260513.py
+- Chat-Direct 수정: write: scripts/go100_p0_fix_20260513.py
+- finalize: pending
+
+## [2026-05-13 08:25:33 KST] [GO100] scripts/go100_p0_fix_20260513.py
+- Chat-Direct 수정: write: scripts/go100_p0_fix_20260513.py
+- finalize: pending

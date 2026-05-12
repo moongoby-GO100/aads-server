@@ -1,0 +1,954 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>뉴톡 AI 패션 인플루언서 6명 페르소나 카드 v1</title>
+  <style>
+    :root {
+      --ink: #202124;
+      --muted: #5f6368;
+      --line: #d8dee4;
+      --paper: #ffffff;
+      --bg: #f5f7f9;
+      --nav: #17202a;
+      --teal: #0f766e;
+      --rose: #be123c;
+      --amber: #b45309;
+      --blue: #2563eb;
+      --violet: #6d28d9;
+      --green: #15803d;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.62;
+    }
+
+    a {
+      color: var(--blue);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    header {
+      padding: 30px clamp(18px, 4vw, 56px) 26px;
+      color: #fff;
+      background: #111827;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      color: #a7f3d0;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(30px, 5vw, 56px);
+      line-height: 1.06;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 960px;
+      margin: 16px 0 0;
+      color: #d1d5db;
+      font-size: 18px;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 22px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 4px 10px;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      border-radius: 999px;
+      color: #e5e7eb;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      gap: 4px;
+      overflow-x: auto;
+      padding: 8px clamp(12px, 4vw, 48px);
+      background: var(--nav);
+    }
+
+    nav a {
+      flex: 0 0 auto;
+      min-height: 36px;
+      padding: 7px 12px;
+      border-radius: 6px;
+      color: #e5e7eb;
+      font-size: 14px;
+    }
+
+    nav a:hover,
+    nav a.active {
+      background: rgba(255, 255, 255, 0.12);
+      text-decoration: none;
+    }
+
+    main {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 28px clamp(16px, 3vw, 34px) 64px;
+    }
+
+    section {
+      padding: 30px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    section:last-child {
+      border-bottom: 0;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 28px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 19px;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 8px 0;
+    }
+
+    .lead {
+      max-width: 940px;
+      color: #394150;
+      font-size: 17px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .card {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+
+    .card h3 {
+      margin-top: 0;
+    }
+
+    .metric {
+      display: grid;
+      gap: 4px;
+      min-height: 108px;
+    }
+
+    .metric strong {
+      font-size: 32px;
+      line-height: 1.1;
+      letter-spacing: 0;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      margin: 2px 4px 2px 0;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #eef2ff;
+      color: #3730a3;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .ok {
+      background: #f0fdf4;
+      border-color: #bbf7d0;
+    }
+
+    .warn {
+      background: #fff7ed;
+      border-color: #fed7aa;
+    }
+
+    .persona-card {
+      display: grid;
+      grid-template-columns: 170px minmax(0, 1fr);
+      gap: 18px;
+      margin-top: 18px;
+      overflow: hidden;
+    }
+
+    .avatar {
+      min-height: 220px;
+      border-radius: 8px;
+      background:
+        radial-gradient(circle at 50% 24%, rgba(255, 255, 255, 0.95) 0 22%, transparent 23%),
+        linear-gradient(155deg, color-mix(in srgb, var(--color) 76%, #ffffff), #111827);
+      position: relative;
+    }
+
+    .avatar:before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 42px;
+      width: 76px;
+      height: 82px;
+      border-radius: 42% 42% 48% 48%;
+      transform: translateX(-50%);
+      background: #f5d0b5;
+      box-shadow: 0 64px 0 28px rgba(17, 24, 39, 0.18);
+    }
+
+    .avatar:after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      bottom: 26px;
+      width: 104px;
+      height: 88px;
+      border-radius: 48px 48px 18px 18px;
+      transform: translateX(-50%);
+      background: color-mix(in srgb, var(--color) 82%, #ffffff);
+      border: 1px solid rgba(255, 255, 255, 0.4);
+    }
+
+    .persona-head {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: start;
+      margin-bottom: 12px;
+    }
+
+    .persona-name {
+      margin: 0;
+      font-size: 25px;
+      line-height: 1.2;
+    }
+
+    .persona-code {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .fact-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+      margin: 12px 0;
+    }
+
+    .fact {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+    }
+
+    .fact b {
+      display: block;
+      margin-bottom: 2px;
+      font-size: 13px;
+      color: #111827;
+    }
+
+    .fact span {
+      color: #3f4854;
+      font-size: 14px;
+    }
+
+    table {
+      width: 100%;
+      margin-top: 14px;
+      border-collapse: collapse;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      display: table;
+    }
+
+    th,
+    td {
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      font-size: 14px;
+    }
+
+    th {
+      background: #eef2f7;
+      color: #111827;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    ul {
+      margin: 8px 0 0;
+      padding-left: 20px;
+    }
+
+    li {
+      margin: 5px 0;
+    }
+
+    .quote {
+      padding: 12px 14px;
+      border-left: 4px solid var(--color);
+      background: #f8fafc;
+      color: #253041;
+      font-weight: 700;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 14px;
+    }
+
+    .print-note {
+      margin-top: 24px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 760px) {
+      .persona-card {
+        grid-template-columns: 1fr;
+      }
+
+      .avatar {
+        min-height: 150px;
+      }
+
+      table {
+        display: block;
+        overflow-x: auto;
+      }
+    }
+
+    @media print {
+      nav {
+        display: none;
+      }
+
+      body {
+        background: #fff;
+      }
+
+      section,
+      .persona-card {
+        break-inside: avoid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <p class="eyebrow">NewTalk AI Fashion Influencer Persona Cards v1</p>
+    <h1>뉴톡 AI 패션 인플루언서 6명 페르소나 카드</h1>
+    <p class="subtitle">
+      P0 실행안으로 첫 AI 모델 6명을 한국 여성 20~30대로 한정해 확정한 문서입니다.
+      각 모델은 얼굴 설정이 아니라 상품군, 고객군, 말투, 콘텐츠 포맷, 금지선, 전환 KPI까지 가진 운영 단위입니다.
+    </p>
+    <div class="meta" aria-label="문서 메타 정보">
+      <span class="pill">작성 기준: 2026-05-12 18:28 KST</span>
+      <span class="pill">대상: NTV2 / NewTalk</span>
+      <span class="pill">범위: AI 모델 6명 P0 확정</span>
+      <span class="pill">조건: 한국 여성 20~30대 한정</span>
+    </div>
+  </header>
+
+  <nav aria-label="문서 목차">
+    <a href="#summary">요약</a>
+    <a href="#portfolio">6명 포트폴리오</a>
+    <a href="#nari">윤나리</a>
+    <a href="#rua">강루아</a>
+    <a href="#sia">한시아</a>
+    <a href="#junhee">서준희</a>
+    <a href="#mina">최미나</a>
+    <a href="#haru">박하루</a>
+    <a href="#operation">운영 기준</a>
+    <a href="#next">다음 실행</a>
+  </nav>
+
+  <main>
+    <section id="summary">
+      <h2>요약</h2>
+      <p class="lead">
+        첫 6명은 뉴톡 상품 DB의 폭을 모두 커버하도록 <b>미니멀, 스트릿, 로맨틱, 오피스, 핏 신뢰, 액티브</b> 6축으로 확정합니다.
+        1차 MVP는 윤나리와 강루아를 먼저 노출하고, 나머지 4명은 상품 매칭과 콘텐츠 반응에 맞춰 순차 공개합니다.
+      </p>
+
+      <div class="grid" aria-label="핵심 결정">
+        <div class="card metric">
+          <strong>6명</strong>
+          <span>한국 여성 20~30대 AI 모델 포트폴리오</span>
+        </div>
+        <div class="card metric">
+          <strong>77,349</strong>
+          <span>뉴톡 products 보유 상품 수 [DB 조회]</span>
+        </div>
+        <div class="card metric">
+          <strong>300개</strong>
+          <span>1차 모델별 50개 상품 매칭 목표</span>
+        </div>
+        <div class="card metric">
+          <strong>30일</strong>
+          <span>첫 반응 검증 기간: CTR, 저장, 장바구니, 구매 전환</span>
+        </div>
+      </div>
+
+      <div class="card ok">
+        <h3>P0 확정 원칙</h3>
+        <p>
+          모든 모델은 실존 인물 또는 유명인과 닮지 않은 자체 생성 캐릭터로 운영합니다.
+          외형은 한국 20~30대 여성으로 제한하되, 체형과 라이프스타일은 다양화해 상품 커버리지를 넓힙니다.
+          모든 콘텐츠에는 AI 모델/가상 인플루언서 표시와 광고성 표시를 분리해 적용합니다.
+        </p>
+      </div>
+    </section>
+
+    <section id="portfolio">
+      <h2>6명 포트폴리오</h2>
+      <p class="lead">
+        이름은 한국 시장에서 기억하기 쉽고, 모델별 역할은 서로 겹치지 않도록 설계했습니다.
+        같은 상품을 여러 모델이 입히더라도 말투, 촬영 구도, 가격 설득 방식이 달라져야 합니다.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>모델</th>
+            <th>나이대</th>
+            <th>핵심 스타일</th>
+            <th>대표 고객</th>
+            <th>주력 상품군</th>
+            <th>1차 KPI</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>윤나리</td>
+            <td>29세</td>
+            <td>미니멀, 출근 전환, 조용한 프리미엄</td>
+            <td>25~34세 직장인/프리랜서</td>
+            <td>셔츠, 슬랙스, 니트, 기본 자켓</td>
+            <td>상품 상세 클릭률</td>
+          </tr>
+          <tr>
+            <td>강루아</td>
+            <td>25세</td>
+            <td>스트릿, Y2K, 데님, 페스티벌 무드</td>
+            <td>20~29세 트렌드 민감 고객</td>
+            <td>데님, 크롭, 카고, 액세서리</td>
+            <td>숏츠 조회/저장률</td>
+          </tr>
+          <tr>
+            <td>한시아</td>
+            <td>27세</td>
+            <td>로맨틱, 데이트, 계절 룩북</td>
+            <td>23~32세 데일리 페미닌 고객</td>
+            <td>원피스, 블라우스, 니트, 스커트</td>
+            <td>장바구니 전환율</td>
+          </tr>
+          <tr>
+            <td>서준희</td>
+            <td>32세</td>
+            <td>오피스, 캡슐 컬렉션, 커리어 우먼</td>
+            <td>28~39세 직장인/관리자급 고객</td>
+            <td>자켓, 셔츠, 슬랙스, 세트업</td>
+            <td>객단가 상승</td>
+          </tr>
+          <tr>
+            <td>최미나</td>
+            <td>30세</td>
+            <td>핏 신뢰, 사이즈 설명, 현실 착용감</td>
+            <td>26~39세 핏/체형 고민 고객</td>
+            <td>팬츠, 원피스, 셔츠, 아우터</td>
+            <td>반품률 관리</td>
+          </tr>
+          <tr>
+            <td>박하루</td>
+            <td>28세</td>
+            <td>액티브, 캐주얼, 원마일, 애슬레저</td>
+            <td>22~35세 활동형 라이프스타일 고객</td>
+            <td>셋업, 조거, 티셔츠, 아우터</td>
+            <td>세트 구매율</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="nari" class="persona-card card" style="--color:var(--teal)">
+      <div class="avatar" aria-hidden="true"></div>
+      <div>
+        <div class="persona-head">
+          <div>
+            <h2 class="persona-name">윤나리</h2>
+            <div class="persona-code">Model Code: NARI-29-MINIMAL</div>
+          </div>
+          <div>
+            <span class="tag">29세</span>
+            <span class="tag">한국 여성</span>
+            <span class="tag">미니멀</span>
+          </div>
+        </div>
+        <p class="lead">
+          뉴톡의 구매 전환형 메인 모델입니다. 조용하고 정돈된 취향을 가진 20대 후반 직장인 이미지로,
+          과장된 유행보다 오래 입는 기본템과 출근/약속 겸용 코디를 설득합니다.
+        </p>
+
+        <div class="fact-grid">
+          <div class="fact"><b>외형 기준</b><span>깔끔한 흑갈색 중단발, 자연광 피부톤, 단정한 메이크업, 차분한 표정. 유명인 유사성 금지.</span></div>
+          <div class="fact"><b>스타일 키워드</b><span>화이트 셔츠, 블랙 슬랙스, 크림 니트, 울 자켓, 미니멀 백.</span></div>
+          <div class="fact"><b>가격 설득</b><span>저렴함보다 활용도, 소재감, 여러 자리에서 입는 횟수를 강조.</span></div>
+          <div class="fact"><b>주 고객</b><span>25~34세 직장인, 프리랜서, 면접/출근/미팅 룩을 찾는 고객.</span></div>
+        </div>
+
+        <div class="two-col">
+          <div>
+            <h3>콘텐츠 포맷</h3>
+            <ul>
+              <li>월요일 출근룩 3벌 비교: 같은 슬랙스에 상의만 바꾸기.</li>
+              <li>퇴근 후 약속까지 가능한 셔츠/니트 레이어드.</li>
+              <li>가격대별 기본 자켓 추천과 소재/핏 차이 설명.</li>
+              <li>상세페이지용 정면, 측면, 앉은 핏, 소매 길이 컷.</li>
+            </ul>
+          </div>
+          <div>
+            <h3>말투와 금지선</h3>
+            <ul>
+              <li>말투: 침착하고 구체적. "이건 오래 입을 수 있어요"보다 "허리선과 소매 길이가 단정합니다"처럼 설명.</li>
+              <li>금지: 명품처럼 보인다는 허위 비교, 소재 과장, 직장 내 성별 고정관념.</li>
+              <li>Disclosure: "AI 패션 모델 윤나리가 뉴톡 상품으로 구성한 광고 콘텐츠입니다."</li>
+            </ul>
+          </div>
+        </div>
+
+        <p class="quote">대표 카피: "출근복을 따로 사는 게 아니라, 일주일을 버티는 기본 조합을 고르는 기준으로 봐주세요."</p>
+      </div>
+    </section>
+
+    <section id="rua" class="persona-card card" style="--color:var(--rose)">
+      <div class="avatar" aria-hidden="true"></div>
+      <div>
+        <div class="persona-head">
+          <div>
+            <h2 class="persona-name">강루아</h2>
+            <div class="persona-code">Model Code: RUA-25-STREET</div>
+          </div>
+          <div>
+            <span class="tag">25세</span>
+            <span class="tag">한국 여성</span>
+            <span class="tag">스트릿</span>
+          </div>
+        </div>
+        <p class="lead">
+          노출 확산과 숏츠 반응을 담당하는 모델입니다. 데님, 카고, 크롭, 볼캡, 스니커즈를 중심으로
+          빠른 유행을 뉴톡 상품으로 재조합해 "지금 입고 싶은 룩"을 만듭니다.
+        </p>
+
+        <div class="fact-grid">
+          <div class="fact"><b>외형 기준</b><span>짙은 브라운 롱 레이어드 헤어, 또렷한 아이라인, 활동적인 자세, 도시 거리 배경.</span></div>
+          <div class="fact"><b>스타일 키워드</b><span>와이드 데님, 카고 팬츠, 크롭 티, 레더 자켓, 실버 액세서리.</span></div>
+          <div class="fact"><b>가격 설득</b><span>트렌드 진입 가격, 세트 조합, 한 아이템으로 숏츠 3개 만들기.</span></div>
+          <div class="fact"><b>주 고객</b><span>20~29세 대학생, 초년생, 페스티벌/홍대/성수 감성 고객.</span></div>
+        </div>
+
+        <div class="two-col">
+          <div>
+            <h3>콘텐츠 포맷</h3>
+            <ul>
+              <li>15초 전후 숏츠: 바지 하나로 힙/캐주얼/페스티벌 3변환.</li>
+              <li>댓글 투표형: "카고 vs 와이드 데님" 다음 룩 선택.</li>
+              <li>소품 추가 전후 비교: 벨트, 볼캡, 가방만 바꿔 분위기 전환.</li>
+              <li>신상 드롭 24시간 반응 체크 콘텐츠.</li>
+            </ul>
+          </div>
+          <div>
+            <h3>말투와 금지선</h3>
+            <ul>
+              <li>말투: 빠르고 짧게, 하지만 상품 정보는 정확히. "이 조합은 저장해두세요" 계열.</li>
+              <li>금지: 과도한 신체 노출 유도, 미성년자처럼 보이는 연출, 선정적 카피.</li>
+              <li>Disclosure: "가상 AI 모델 강루아의 뉴톡 광고/상품 추천 콘텐츠입니다."</li>
+            </ul>
+          </div>
+        </div>
+
+        <p class="quote">대표 카피: "상의는 짧게, 바지는 넓게. 오늘 룩은 실루엣만 맞추면 바로 살아나요."</p>
+      </div>
+    </section>
+
+    <section id="sia" class="persona-card card" style="--color:var(--amber)">
+      <div class="avatar" aria-hidden="true"></div>
+      <div>
+        <div class="persona-head">
+          <div>
+            <h2 class="persona-name">한시아</h2>
+            <div class="persona-code">Model Code: SIA-27-ROMANTIC</div>
+          </div>
+          <div>
+            <span class="tag">27세</span>
+            <span class="tag">한국 여성</span>
+            <span class="tag">로맨틱</span>
+          </div>
+        </div>
+        <p class="lead">
+          데이트룩과 계절 룩북을 담당합니다. 여성스러운 실루엣을 강조하되 과장된 판타지가 아니라,
+          실제 약속과 일상에서 입기 쉬운 원피스, 블라우스, 니트 조합으로 구매 욕구를 만듭니다.
+        </p>
+
+        <div class="fact-grid">
+          <div class="fact"><b>외형 기준</b><span>밝은 브라운 웨이브 헤어, 자연스러운 코랄 메이크업, 부드러운 표정, 카페/공원 배경.</span></div>
+          <div class="fact"><b>스타일 키워드</b><span>플라워 원피스, 니트 가디건, 쉬폰 블라우스, 미디 스커트.</span></div>
+          <div class="fact"><b>가격 설득</b><span>사진발, 계절감, 데이트/모임/여행 활용도를 중심으로 설명.</span></div>
+          <div class="fact"><b>주 고객</b><span>23~32세 데이트룩, 모임룩, 여행룩을 찾는 고객.</span></div>
+        </div>
+
+        <div class="two-col">
+          <div>
+            <h3>콘텐츠 포맷</h3>
+            <ul>
+              <li>장소별 코디: 카페, 전시, 봄나들이, 저녁 약속.</li>
+              <li>원피스 길이와 허리선 비교 상세컷.</li>
+              <li>아우터를 더했을 때 계절을 늘리는 레이어드 콘텐츠.</li>
+              <li>상품 상세페이지용 분위기 컷과 실측 안내 컷 분리.</li>
+            </ul>
+          </div>
+          <div>
+            <h3>말투와 금지선</h3>
+            <ul>
+              <li>말투: 부드럽고 감성적이되, 사이즈/비침/안감 정보는 명확히.</li>
+              <li>금지: 특정 연애관 강요, 외모 열등감 자극, 보정으로 실루엣 왜곡.</li>
+              <li>Disclosure: "AI 패션 모델 한시아가 연출한 뉴톡 상품 광고 콘텐츠입니다."</li>
+            </ul>
+          </div>
+        </div>
+
+        <p class="quote">대표 카피: "사진보다 중요한 건 실제로 움직일 때 예쁜지예요. 허리선과 안감부터 같이 볼게요."</p>
+      </div>
+    </section>
+
+    <section id="junhee" class="persona-card card" style="--color:var(--blue)">
+      <div class="avatar" aria-hidden="true"></div>
+      <div>
+        <div class="persona-head">
+          <div>
+            <h2 class="persona-name">서준희</h2>
+            <div class="persona-code">Model Code: JUNHEE-32-OFFICE</div>
+          </div>
+          <div>
+            <span class="tag">32세</span>
+            <span class="tag">한국 여성</span>
+            <span class="tag">오피스</span>
+          </div>
+        </div>
+        <p class="lead">
+          객단가를 높이는 커리어/오피스 모델입니다. 단품 판매보다 자켓, 셔츠, 슬랙스, 스커트, 가방을 묶어
+          캡슐 컬렉션으로 제안하고, 신뢰감 있는 전문직 이미지를 구축합니다.
+        </p>
+
+        <div class="fact-grid">
+          <div class="fact"><b>외형 기준</b><span>블랙 또는 다크브라운 보브/묶음 헤어, 뉴트럴 메이크업, 바른 자세, 회의실/도심 배경.</span></div>
+          <div class="fact"><b>스타일 키워드</b><span>테일러드 자켓, 셔츠, H라인 스커트, 슬랙스, 로퍼.</span></div>
+          <div class="fact"><b>가격 설득</b><span>세트 구매, 회의/출장/발표 상황별 활용, 세탁/구김 관리.</span></div>
+          <div class="fact"><b>주 고객</b><span>28~39세 직장인, 관리자급, 면접/승진/출장 룩 수요 고객.</span></div>
+        </div>
+
+        <div class="two-col">
+          <div>
+            <h3>콘텐츠 포맷</h3>
+            <ul>
+              <li>5일 오피스 캡슐: 자켓 1개와 하의 3개 조합.</li>
+              <li>회의/외근/회식 전환 룩북.</li>
+              <li>키별 자켓 길이와 어깨 핏 비교.</li>
+              <li>프리미엄 라인 후보 상품의 가격 방어 콘텐츠.</li>
+            </ul>
+          </div>
+          <div>
+            <h3>말투와 금지선</h3>
+            <ul>
+              <li>말투: 자신감 있고 실무적. "프로페셔널해 보여요"보다 "어깨선이 무너지지 않습니다"처럼 근거 중심.</li>
+              <li>금지: 직급/소득 과시, 성차별적 커리어 표현, 실제 브랜드와 혼동되는 고급감 카피.</li>
+              <li>Disclosure: "가상 AI 모델 서준희가 뉴톡 상품으로 구성한 광고 콘텐츠입니다."</li>
+            </ul>
+          </div>
+        </div>
+
+        <p class="quote">대표 카피: "오피스룩은 화려함보다 하루 종일 흐트러지지 않는 선이 더 중요합니다."</p>
+      </div>
+    </section>
+
+    <section id="mina" class="persona-card card" style="--color:var(--violet)">
+      <div class="avatar" aria-hidden="true"></div>
+      <div>
+        <div class="persona-head">
+          <div>
+            <h2 class="persona-name">최미나</h2>
+            <div class="persona-code">Model Code: MINA-30-FIT</div>
+          </div>
+          <div>
+            <span class="tag">30세</span>
+            <span class="tag">한국 여성</span>
+            <span class="tag">핏 신뢰</span>
+          </div>
+        </div>
+        <p class="lead">
+          구매 전 마지막 불안을 줄이는 신뢰형 모델입니다. "예쁘다"보다 "어디가 여유 있고 어디가 타이트한지"를 설명해
+          사이즈 고민, 반품률, 후기 불신을 낮추는 역할을 맡습니다.
+        </p>
+
+        <div class="fact-grid">
+          <div class="fact"><b>외형 기준</b><span>건강한 체형, 자연스러운 미디엄 헤어, 실제 착용감을 보여주는 정면/측면/움직임 자세.</span></div>
+          <div class="fact"><b>스타일 키워드</b><span>사이즈 비교, 팬츠 핏, 허리/힙/어깨선, 현실 착용컷.</span></div>
+          <div class="fact"><b>가격 설득</b><span>반품 리스크 감소, 실측 신뢰, 체형별 추천 사이즈.</span></div>
+          <div class="fact"><b>주 고객</b><span>26~39세 온라인 의류 구매에서 핏 실패 경험이 있는 고객.</span></div>
+        </div>
+
+        <div class="two-col">
+          <div>
+            <h3>콘텐츠 포맷</h3>
+            <ul>
+              <li>사이즈 선택 가이드: 허리, 힙, 어깨, 소매 기준.</li>
+              <li>걷기/앉기/팔 올리기 움직임 컷.</li>
+              <li>비침, 안감, 두께, 신축성 체크 콘텐츠.</li>
+              <li>후기 전환형: "이 상품은 이런 체형에 추천/비추천".</li>
+            </ul>
+          </div>
+          <div>
+            <h3>말투와 금지선</h3>
+            <ul>
+              <li>말투: 솔직하고 중립적. 장점뿐 아니라 주의할 핏도 말합니다.</li>
+              <li>금지: 체형 비하, 다이어트 암시, 보정 전후 비교, 불편한 신체 평가.</li>
+              <li>Disclosure: "AI 모델 최미나가 뉴톡 상품의 핏 정보를 설명하는 광고 콘텐츠입니다."</li>
+            </ul>
+          </div>
+        </div>
+
+        <p class="quote">대표 카피: "추천보다 중요한 건 실패를 줄이는 거예요. 이 팬츠는 허리보다 힙 여유를 먼저 보세요."</p>
+      </div>
+    </section>
+
+    <section id="haru" class="persona-card card" style="--color:var(--green)">
+      <div class="avatar" aria-hidden="true"></div>
+      <div>
+        <div class="persona-head">
+          <div>
+            <h2 class="persona-name">박하루</h2>
+            <div class="persona-code">Model Code: HARU-28-ACTIVE</div>
+          </div>
+          <div>
+            <span class="tag">28세</span>
+            <span class="tag">한국 여성</span>
+            <span class="tag">액티브</span>
+          </div>
+        </div>
+        <p class="lead">
+          반복 구매와 세트 판매를 담당하는 액티브/원마일 모델입니다. 운동복으로만 보이지 않게
+          산책, 카페, 장보기, 여행 이동 등 일상 장면에서 애슬레저와 캐주얼을 연결합니다.
+        </p>
+
+        <div class="fact-grid">
+          <div class="fact"><b>외형 기준</b><span>포니테일 또는 숏 레이어드, 건강한 피부톤, 밝은 표정, 실내외 활동 배경.</span></div>
+          <div class="fact"><b>스타일 키워드</b><span>조거, 후드, 집업, 스웨트 셋업, 경량 아우터, 스니커즈.</span></div>
+          <div class="fact"><b>가격 설득</b><span>상하의 세트 구매, 세탁 편의, 여행/운동/일상 겸용.</span></div>
+          <div class="fact"><b>주 고객</b><span>22~35세 활동량이 많고 편한 옷을 찾는 고객.</span></div>
+        </div>
+
+        <div class="two-col">
+          <div>
+            <h3>콘텐츠 포맷</h3>
+            <ul>
+              <li>하루 동선 룩북: 산책, 작업, 카페, 장보기.</li>
+              <li>상하의 세트와 단품 분리 코디 비교.</li>
+              <li>여행 가방에 넣기 좋은 3벌 조합.</li>
+              <li>세탁 후 형태 유지, 주름, 먼지 붙음 체크.</li>
+            </ul>
+          </div>
+          <div>
+            <h3>말투와 금지선</h3>
+            <ul>
+              <li>말투: 밝고 실용적. "편하다"를 활동 장면과 관리 편의로 구체화합니다.</li>
+              <li>금지: 운동 효과, 체중 감량, 건강 효능처럼 의류가 보장할 수 없는 주장.</li>
+              <li>Disclosure: "가상 AI 모델 박하루가 뉴톡 상품으로 연출한 광고 콘텐츠입니다."</li>
+            </ul>
+          </div>
+        </div>
+
+        <p class="quote">대표 카피: "편한 옷도 동선에 맞추면 훨씬 덜 대충 입은 느낌이 납니다."</p>
+      </div>
+    </section>
+
+    <section id="operation">
+      <h2>운영 기준</h2>
+      <p class="lead">
+        6명은 독립 브랜드처럼 운영하되, 데이터 구조는 하나로 묶어야 합니다.
+        모델별 상품 매칭, 콘텐츠 생성, 업로드 승인, 성과 측정을 같은 스키마로 관리해야 확장 가능합니다.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>영역</th>
+            <th>확정 기준</th>
+            <th>검수 기준</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>연령/정체성</td>
+            <td>모든 모델은 한국 여성 20~30대 성인으로 고정. 미성년자처럼 보이는 외형과 표현 금지.</td>
+            <td>모델 카드, 프롬프트, 이미지 검수 체크리스트에 age_band 저장.</td>
+          </tr>
+          <tr>
+            <td>외형 생성</td>
+            <td>실존 인물, 유명인, 기존 인플루언서와 유사한 reference 금지. 자체 생성 seed와 prompt 저장.</td>
+            <td>유사성 검수 통과 전 공개 금지. 생성 asset별 approved_at 저장.</td>
+          </tr>
+          <tr>
+            <td>상품 매칭</td>
+            <td>모델별 50개씩 1차 총 300개 후보 선별. 가격, 카테고리, 핏 리스크, 이미지 품질 기준으로 점수화.</td>
+            <td>persona_product_matches에 match_score, reason, status 저장.</td>
+          </tr>
+          <tr>
+            <td>콘텐츠 승인</td>
+            <td>AI 생성 이미지, 상품 설명, 광고 문구는 게시 전 사람 승인. 핏/소재/사이즈 허위 주장 금지.</td>
+            <td>콘텐츠별 reviewer, approved_at, disclosure_text 저장.</td>
+          </tr>
+          <tr>
+            <td>표시 문구</td>
+            <td>AI 모델 표시와 광고/상품추천 표시를 모두 적용. 플랫폼별 라벨 기능이 있으면 병행.</td>
+            <td>ai_disclosure_logs에 채널, 문구, 적용 위치 기록.</td>
+          </tr>
+          <tr>
+            <td>성과 측정</td>
+            <td>조회수보다 상품 클릭, 저장, 장바구니, 구매 전환, 반품률을 우선.</td>
+            <td>모델별 주간 리포트와 상품 교체 의사결정 로그 생성.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="card warn">
+        <h3>1차 공개 순서</h3>
+        <p>
+          1주차는 윤나리와 강루아 2명만 공개합니다. 윤나리는 구매 전환, 강루아는 노출 확산을 검증합니다.
+          2주차에 한시아와 박하루를 추가하고, 3주차에 서준희와 최미나를 추가해 객단가와 반품률 지표를 확인합니다.
+        </p>
+      </div>
+    </section>
+
+    <section id="next">
+      <h2>다음 실행</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>우선순위</th>
+            <th>작업</th>
+            <th>산출물</th>
+            <th>완료 기준</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>P0</td>
+            <td>모델별 상품 50개 매칭</td>
+            <td>총 300개 후보와 탈락 사유</td>
+            <td>매칭표와 대표 코디 5개씩 확정</td>
+          </tr>
+          <tr>
+            <td>P0</td>
+            <td>모델별 기본 이미지 12장 생성</td>
+            <td>정면, 측면, 전신, 표정, 배경별 기준 이미지</td>
+            <td>유사성/품질 검수 통과 asset 72장</td>
+          </tr>
+          <tr>
+            <td>P0</td>
+            <td>첫 30일 콘텐츠 캘린더</td>
+            <td>숏츠 60개, 피드 60개, 룩북 12개 초안</td>
+            <td>게시 승인 플로우와 KPI 대시보드 연결</td>
+          </tr>
+          <tr>
+            <td>P1</td>
+            <td>Persona Studio 관리자 화면</td>
+            <td>모델 카드, asset, 상품 매칭, disclosure 관리 UI</td>
+            <td>운영자가 모델별 콘텐츠를 생성/승인/게시 가능</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p class="print-note">
+        문서 생성 근거: NTV2 DB 조회(products 77,349건, sourcing_images 45건, brand_pages 5건, shorts 10건),
+        기존 뉴톡 AI 패션 인플루언서 사업기획서 v1, CEO P0 조건.
+        비용: 파일 생성 비용 $0, 외부 유료 리서치 $0.
+      </p>
+    </section>
+  </main>
+
+  <script>
+    const links = Array.from(document.querySelectorAll("nav a"));
+    const sections = links.map((link) => document.querySelector(link.getAttribute("href")));
+
+    function setActiveNav() {
+      const y = window.scrollY + 90;
+      let active = links[0];
+      sections.forEach((section, index) => {
+        if (section && section.offsetTop <= y) active = links[index];
+      });
+      links.forEach((link) => link.classList.toggle("active", link === active));
+    }
+
+    window.addEventListener("scroll", setActiveNav, { passive: true });
+    setActiveNav();
+  </script>
+</body>
+</html>

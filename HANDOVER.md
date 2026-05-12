@@ -1,6 +1,17 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-12)
+- **MediaGenerationService 및 이미지/동영상 공통 job 구조 P0 (AADS-MEDIA-GENERATION-P0-REWORK-20260512)**:
+  - 조치: `app/services/media_generation_service.py`를 신설해 `generate_image`, `edit_image`, `generate_video`, `video_status`, `video_download`를 공통 job 구조로 통합했다. 기존 이미지 성공 응답의 `url/provider/prompt` 형태는 유지하고 `job_id/status/model_id`만 추가했다.
+  - DB migration: `migrations/088_media_generation_jobs.sql` 추가. `media_generation_jobs` 테이블은 `id`, `job_id`, `kind(image/edit_image/video)`, `provider`, `model_id`, `prompt`, `input_refs`, `status`, `result_uri`, `result_path`, `result_metadata`, `error_message`, `requested_by`, `session_id`, `created_at`, `updated_at`, `completed_at` 및 idempotent index/check constraint를 포함한다.
+  - API/도구: `app/api/image.py`, `app/api/ceo_chat_tools.py`, `app/services/tool_registry.py`, `app/services/tool_executor.py`, `app/services/agent_sdk_service.py`, `app/core/prompts/system_prompt_v2.py`에 `generate_image`, `edit_image`, `generate_video`, `video_status`, `video_download`를 등록했다.
+  - 모델 문자열: 이미지 `gpt-image-2`, `imagen-4.0-*`, `gemini-3.1-flash-image-preview`; 동영상 `sora-2`, `sora-2-pro`, `veo-3.1-generate-preview`; LLM `gpt-5.5`, `claude-opus-4-7`, `gemini-3.1-pro-preview`를 route recognition fallback에서 인식한다.
+  - graceful path: provider key 미설정은 `NOT_CONFIGURED`, P0 adapter 미지원은 `PROVIDER_UNAVAILABLE`, 결과 미준비/부재는 `JOB_NOT_READY`/`RESULT_UNAVAILABLE`로 반환해 도구/API가 크래시하지 않게 했다. 동영상 다운로드 저장 경로는 `AADS_MEDIA_OUTPUT_DIR` 하위로 제한한다.
+  - 테스트: `tests/unit/test_media_generation_service.py`, `tests/unit/test_media_generation_tools.py` 추가. `python3 -m py_compile app/services/media_generation_service.py app/api/image.py app/api/ceo_chat_tools.py app/services/tool_executor.py app/services/tool_registry.py app/services/agent_sdk_service.py app/core/prompts/system_prompt_v2.py tests/unit/test_media_generation_service.py tests/unit/test_media_generation_tools.py` 통과. `python3 -m pytest tests/unit/test_media_generation_service.py tests/unit/test_media_generation_tools.py tests/unit/test_tool_layer_audit.py -q` → 13 passed. `git diff --check` 통과.
+  - 참고: 추가 확인으로 실행한 `tests/test_agent_sdk.py`와 `tests/unit/test_tools_and_pipeline.py`는 현재 테스트 환경의 `E2B_API_KEY` 누락, 원격 명령 timeout, 기존 Agent hook 기대값 차이로 일부 실패했다. 신규 미디어 경로 실패는 아니다.
+  - Git: 기본 `.git` 파일은 `/root/aads/aads-server/.git/worktrees/aads-wt-runner-aafc4150`를 가리키는 read-only bind mount라 index.lock 생성이 차단된다. 같은 worktree에서 `/tmp/aads-wt-runner-aafc4150/.git-local` writable metadata로 커밋을 생성했다.
+  - 푸시/배포: 수행하지 않음.
+
 - **Runner 세션 자동 주입 보강 (2026-05-12 15:21 KST)**:
   - 문제: 특정 채팅창에서 `pipeline_runner_submit`/`batch`가 현재 세션을 못 받아 `session_id를 주시면` 식으로 되묻는 응답이 발생했다. 실측 기준 세션 `f31f1238-fdc8-4405-8893-351226e06bda`에서 15:15 KST에 실제 실패 후 수동 UUID 역조회로 재투입한 흔적이 남아 있었다.
   - 조치: `app/services/tool_executor.py`에 `_resolve_bound_chat_session_id()`를 추가해 `ContextVar → 명시 session_id → Agent SDK active chat session` 순으로 세션을 해석하도록 보강했다. `app/api/ceo_chat_tools.py`도 같은 fallback을 사용하도록 맞췄다.

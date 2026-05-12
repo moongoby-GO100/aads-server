@@ -1,0 +1,1026 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>뉴톡 AI 패션 상품 제작 — 사용자 흐름 상세 기획서 v2</title>
+  <style>
+    :root{--ink:#202124;--muted:#5f6368;--line:#d8dee4;--paper:#fff;--bg:#f5f7f9;--nav:#17202a;--green:#0f766e;--blue:#2563eb;--rose:#be123c;--amber:#b45309;--violet:#6d28d9;--slate:#334155}
+    *{box-sizing:border-box}
+    body{margin:0;color:var(--ink);background:var(--bg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.62}
+    a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
+    header{background:#111827;color:#fff;padding:32px clamp(18px,4vw,56px) 28px}
+    .eyebrow{margin:0 0 8px;color:#a7f3d0;font-size:13px;font-weight:700}
+    h1{margin:0;font-size:clamp(28px,5vw,52px);line-height:1.08}
+    .subtitle{max-width:980px;margin:16px 0 0;color:#d1d5db;font-size:17px}
+    .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}
+    .pill{display:inline-flex;align-items:center;min-height:30px;padding:4px 10px;border:1px solid rgba(255,255,255,.24);border-radius:999px;color:#e5e7eb;font-size:13px;white-space:nowrap}
+    nav{position:sticky;top:0;z-index:20;display:flex;gap:4px;overflow-x:auto;padding:8px clamp(12px,4vw,48px);background:var(--nav);border-top:1px solid rgba(255,255,255,.08)}
+    nav a{flex:0 0 auto;min-height:36px;padding:7px 12px;border-radius:6px;color:#e5e7eb;font-size:13px;text-decoration:none}
+    nav a:hover{background:rgba(255,255,255,.12)}
+    main{max-width:1280px;margin:0 auto;padding:28px clamp(16px,3vw,34px) 70px}
+    section{padding:34px 0;border-bottom:1px solid var(--line)}section:last-child{border-bottom:0}
+    h2{margin:0 0 14px;font-size:26px;line-height:1.2}
+    h3{margin:24px 0 8px;font-size:18px;line-height:1.3}
+    h4{margin:18px 0 6px;font-size:15px;font-weight:700;color:var(--slate)}
+    p{margin:8px 0}.lead{max-width:980px;color:#394150;font-size:16px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:16px}
+    .card{background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:16px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.card h3{margin-top:0}
+    .ok{background:#f0fdf4;border-color:#bbf7d0}.warn{background:#fff7ed;border-color:#fed7aa}.risk{background:#fff1f2;border-color:#fecdd3}
+    .tag{display:inline-flex;align-items:center;min-height:24px;padding:2px 8px;border-radius:999px;background:#eef2ff;color:#3730a3;font-size:12px;font-weight:700}
+    table{width:100%;margin-top:14px;border-collapse:collapse;background:var(--paper);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+    th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;font-size:13px}
+    th{background:#f1f5f9;color:#334155;font-weight:800}tr:last-child td{border-bottom:0}
+    code{padding:2px 5px;border-radius:4px;background:#eef2f7;color:#0f172a;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em}
+    .list{margin:8px 0 0;padding-left:18px}.list li{margin:5px 0}
+    .step-header{display:flex;align-items:center;gap:12px;margin:0 0 12px}
+    .num{display:grid;place-items:center;width:48px;height:48px;border-radius:10px;color:#fff;font-weight:900;font-size:20px;flex-shrink:0}
+    .flow-section{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:24px;margin-top:18px}
+    .sub-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px}
+    .sub-card{border:1px solid var(--line);border-radius:6px;padding:12px;font-size:13px}
+    .sub-card h4{margin:0 0 6px;font-size:14px}
+    .status-flow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:10px 0}
+    .status-badge{display:inline-flex;align-items:center;min-height:28px;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;background:#f1f5f9;color:#334155}
+    .status-arrow{color:var(--muted);font-size:16px}
+    .highlight-box{border-left:4px solid var(--blue);padding:12px 16px;background:#eff6ff;border-radius:0 6px 6px 0;margin:12px 0;font-size:14px}
+    .highlight-box.green{border-left-color:var(--green);background:#f0fdf4}
+    .highlight-box.amber{border-left-color:var(--amber);background:#fffbeb}
+    .highlight-box.rose{border-left-color:var(--rose);background:#fff1f2}
+    footer{padding:24px clamp(18px,4vw,56px) 36px;color:#e5e7eb;background:#111827;font-size:14px}
+    @media(max-width:760px){.sub-grid{grid-template-columns:1fr}th,td{font-size:12px;padding:8px}}
+    @media print{nav{display:none}body{background:#fff}main{max-width:none}section{break-inside:avoid}}
+  </style>
+</head>
+<body>
+
+<header>
+  <p class="eyebrow">NewTalk AI Fashion — User Flow Detail v2</p>
+  <h1>뉴톡 AI 패션 상품 제작<br>사용자 흐름 상세 기획서</h1>
+  <p class="subtitle">
+    상품등록 → 제품컷등록 → 모델선택 → 코디매칭 → 모델컷생성(주상품 20장/부상품 10장) → 감성 이미지컷생성 → 상세페이지 생성까지,
+    각 단계의 서브스텝·데이터 흐름·비즈니스 룰·엣지케이스·검수 기준을 정의합니다.
+  </p>
+  <div class="meta">
+    <span class="pill">작성 기준: 2026-05-13 08:08 KST</span>
+    <span class="pill">대상: NTV2 / NewTalk</span>
+    <span class="pill">범위: 관리자 제작 콘솔 사용자 흐름 전체</span>
+    <span class="pill">상태: P0 상세 기획 v2</span>
+  </div>
+</header>
+
+<nav>
+  <a href="#overview">전체 흐름</a>
+  <a href="#step1">① 상품등록</a>
+  <a href="#step2">② 제품컷등록</a>
+  <a href="#step3">③ 모델선택</a>
+  <a href="#step4">④ 코디매칭</a>
+  <a href="#step5">⑤ 모델컷생성</a>
+  <a href="#step6">⑥ 감성이미지컷</a>
+  <a href="#step7">⑦ 상세페이지</a>
+  <a href="#data">데이터 설계</a>
+  <a href="#edge">엣지케이스</a>
+  <a href="#kpi">KPI</a>
+  <a href="/reports/newtalk-ai-fashion-influencer-plan-v1.html">← 사업기획서</a>
+</nav>
+
+<main>
+
+<!-- ============================================================ -->
+<!-- 전체 흐름 개요 -->
+<!-- ============================================================ -->
+<section id="overview">
+  <h2>전체 사용자 흐름 개요</h2>
+  <p class="lead">
+    관리자(운영자)가 하나의 상품을 AI 패션 인플루언서 판매 콘텐츠로 완성하는 7단계 파이프라인입니다.
+    각 단계는 <b>입력 → 처리 → 검수 → 다음 단계 진입 조건</b>으로 구성됩니다.
+    어느 단계에서든 검수 탈락 시 이전 단계로 되돌아갈 수 있고, 최종 판매 반영은 운영자 승인 후에만 가능합니다.
+  </p>
+
+  <div class="highlight-box green">
+    <b>핵심 원칙:</b> 모든 AI 생성 결과는 <b>초안(draft)</b> 상태로 저장되며, 운영자 승인 후에만 <b>승인(approved)</b> → <b>판매반영(published)</b>으로 전환됩니다.
+  </div>
+
+  <h3>상태 머신 (전체)</h3>
+  <div class="status-flow">
+    <span class="status-badge" style="background:#dbeafe;color:#1e40af">① 상품등록</span>
+    <span class="status-arrow">→</span>
+    <span class="status-badge" style="background:#d1fae5;color:#065f46">② 제품컷등록</span>
+    <span class="status-arrow">→</span>
+    <span class="status-badge" style="background:#ede9fe;color:#5b21b6">③ 모델선택</span>
+    <span class="status-arrow">→</span>
+    <span class="status-badge" style="background:#fce7f3;color:#9d174d">④ 코디매칭</span>
+    <span class="status-arrow">→</span>
+    <span class="status-badge" style="background:#fef3c7;color:#92400e">⑤ 모델컷생성</span>
+    <span class="status-arrow">→</span>
+    <span class="status-badge" style="background:#e0e7ff;color:#3730a3">⑥ 감성이미지컷</span>
+    <span class="status-arrow">→</span>
+    <span class="status-badge" style="background:#fee2e2;color:#991b1b">⑦ 상세페이지</span>
+    <span class="status-arrow">→</span>
+    <span class="status-badge" style="background:#111827;color:#a7f3d0">판매반영</span>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>단계</th><th>입력</th><th>산출물</th><th>다음 단계 진입 조건</th><th>예상 소요</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>① 상품등록</td><td>상품 기본정보, 가격, 옵션</td><td>products 레코드, workflow 시작</td><td>필수값 입력 완료 + AI 제작 활성화</td><td>5~10분</td></tr>
+      <tr><td>② 제품컷등록</td><td>상품 실물 이미지 3장 이상</td><td>product_images, QA 점수</td><td>QA 통과 이미지 3장 이상</td><td>10~20분</td></tr>
+      <tr><td>③ 모델선택</td><td>상품 카테고리, 타깃 연령</td><td>persona_id 확정</td><td>모델 1명 이상 선택</td><td>2~5분</td></tr>
+      <tr><td>④ 코디매칭</td><td>주상품 + 뉴톡 부상품 후보</td><td>코디 세트 1~5개</td><td>코디 세트 1개 이상 확정</td><td>10~15분</td></tr>
+      <tr><td>⑤ 모델컷생성</td><td>코디 세트, 모델, 제품컷</td><td>주상품 20장 + 부상품별 10장</td><td>승인 컷 주상품 10장 + 부상품 5장 이상</td><td>30~60분 (생성+검수)</td></tr>
+      <tr><td>⑥ 감성이미지컷</td><td>승인 모델컷, 톤 선택</td><td>감성컷 8~10장</td><td>승인 컷 5장 이상</td><td>20~40분</td></tr>
+      <tr><td>⑦ 상세페이지</td><td>승인 컷, 상품정보, 카피</td><td>V1 호환 상세페이지 HTML</td><td>운영자 최종 승인</td><td>15~30분</td></tr>
+    </tbody>
+  </table>
+
+  <h3>현재 뉴톡 보유 자원 [DB 조회, 2026-05-13]</h3>
+  <div class="sub-grid">
+    <div class="sub-card"><h4>products</h4><b style="font-size:24px">76,203건</b><br><span style="color:var(--muted)">상품 DB (information_schema 기준)</span></div>
+    <div class="sub-card"><h4>product_images</h4><b style="font-size:24px">0건</b><br><span style="color:var(--muted)">V2 이미지 테이블 (아직 미적재)</span></div>
+    <div class="sub-card"><h4>product_details</h4><b style="font-size:24px">0건</b><br><span style="color:var(--muted)">상세페이지 HTML (아직 미적재)</span></div>
+    <div class="sub-card"><h4>sourcing_images</h4><b style="font-size:24px">41건</b><br><span style="color:var(--muted)">중국소싱 이미지</span></div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- STEP 1: 상품등록 -->
+<!-- ============================================================ -->
+<section id="step1">
+  <div class="flow-section">
+    <div class="step-header">
+      <div class="num" style="background:#1e40af">1</div>
+      <div><h2 style="margin:0">상품등록</h2><p style="margin:4px 0 0;color:var(--muted)">Product Registration</p></div>
+    </div>
+
+    <p class="lead">
+      상품의 기본 정보를 등록하고 AI 제작 파이프라인을 활성화하는 첫 단계입니다.
+      기존 뉴톡V1 상품등록 필수값을 유지하면서, AI 모델컷/상세페이지 생성에 필요한 확장 필드를 추가합니다.
+    </p>
+
+    <h3>1-1. V1 기존 필수값 (유지)</h3>
+    <table>
+      <thead><tr><th>필드</th><th>DB 컬럼</th><th>타입</th><th>필수</th><th>설명</th></tr></thead>
+      <tbody>
+        <tr><td>상품명</td><td><code>products.name</code></td><td>varchar(255)</td><td>✅</td><td>검색·노출에 사용. 30자 이내 권장</td></tr>
+        <tr><td>상품코드</td><td><code>products.product_code</code></td><td>varchar(50) UNIQUE</td><td>✅</td><td>자동채번 또는 수동 입력. V1 호환: v1_goods_idx 매핑</td></tr>
+        <tr><td>공급가</td><td><code>products.supply_price</code></td><td>unsigned int</td><td>✅</td><td>원가 기준. 마진율 자동 계산에 사용</td></tr>
+        <tr><td>판매가</td><td><code>products.retail_price</code></td><td>unsigned int</td><td>✅</td><td>소비자 노출 가격</td></tr>
+        <tr><td>도매가</td><td><code>products.wholesale_price</code></td><td>unsigned int</td><td>⬜</td><td>도매 판매 시 적용</td></tr>
+        <tr><td>매입가</td><td><code>products.purchase_price</code></td><td>unsigned int</td><td>⬜</td><td>실제 매입 원가</td></tr>
+        <tr><td>설명</td><td><code>products.description</code></td><td>text</td><td>⬜</td><td>기본 상품 설명 텍스트</td></tr>
+        <tr><td>브랜드</td><td><code>products.brand</code></td><td>varchar(255)</td><td>⬜</td><td>자체 브랜드 또는 도매 브랜드</td></tr>
+        <tr><td>상태</td><td><code>products.status</code></td><td>varchar(20)</td><td>✅</td><td>active, inactive, draft, soldout</td></tr>
+        <tr><td>옵션</td><td><code>product_options</code></td><td>별도 테이블</td><td>✅</td><td>color, size, option_code, stock, additional_price</td></tr>
+        <tr><td>카테고리</td><td><code>product_categories</code></td><td>별도 테이블</td><td>✅</td><td>categories.id 연결 (parent_id로 계층)</td></tr>
+      </tbody>
+    </table>
+
+    <h3>1-2. AI 제작용 확장 필드 (신규)</h3>
+    <p>기존 products 테이블을 수정하지 않고, <code>ai_product_workflows</code> 테이블에 AI 관련 속성을 분리합니다.</p>
+    <table>
+      <thead><tr><th>필드</th><th>권장 컬럼</th><th>타입</th><th>목적</th></tr></thead>
+      <tbody>
+        <tr><td>AI 제작 여부</td><td><code>ai_enabled</code></td><td>boolean</td><td>이 상품에 AI 콘텐츠 생성을 활성화할지 여부</td></tr>
+        <tr><td>타깃 연령대</td><td><code>target_age_range</code></td><td>varchar(20)</td><td>"10대후반", "20대초반", "20대후반", "30대" 등. 모델 자동매칭에 사용</td></tr>
+        <tr><td>착용 시즌</td><td><code>season</code></td><td>varchar(20)</td><td>SS, FW, 사계절. 코디 매칭과 감성컷 톤에 영향</td></tr>
+        <tr><td>핏 키워드</td><td><code>fit_keywords</code></td><td>json</td><td>["오버핏","크롭","루즈핏"] 등. 모델컷 프롬프트에 반영</td></tr>
+        <tr><td>금지 연출</td><td><code>prohibited_styles</code></td><td>json</td><td>["교복","수영복","과노출"] 등. 생성 시 네거티브 프롬프트</td></tr>
+        <tr><td>선호 모델</td><td><code>preferred_persona_ids</code></td><td>json</td><td>특정 모델 우선 배정. 비어 있으면 자동 추천</td></tr>
+        <tr><td>상세페이지 톤</td><td><code>detail_page_tone</code></td><td>varchar(30)</td><td>"미니멀", "감성", "캐주얼", "프리미엄". 상세페이지 카피 톤</td></tr>
+        <tr><td>워크플로우 상태</td><td><code>current_step</code></td><td>varchar(30)</td><td>registered → asset_uploaded → model_selected → coordi_matched → model_cut_done → mood_cut_done → detail_page_done → published</td></tr>
+      </tbody>
+    </table>
+
+    <h3>1-3. 상태 머신</h3>
+    <div class="status-flow">
+      <span class="status-badge">draft</span>
+      <span class="status-arrow">→</span>
+      <span class="status-badge" style="background:#dbeafe">registered</span>
+      <span class="status-arrow">→</span>
+      <span class="status-badge" style="background:#d1fae5">asset_uploaded</span>
+      <span class="status-arrow">→</span>
+      <span class="status-badge" style="background:#ede9fe">model_selected</span>
+      <span class="status-arrow">→</span>
+      <span class="status-badge" style="background:#fce7f3">coordi_matched</span>
+      <span class="status-arrow">→</span>
+      <span class="status-badge" style="background:#fef3c7">model_cut_done</span>
+      <span class="status-arrow">→</span>
+      <span class="status-badge" style="background:#e0e7ff">mood_cut_done</span>
+      <span class="status-arrow">→</span>
+      <span class="status-badge" style="background:#fee2e2">detail_page_done</span>
+      <span class="status-arrow">→</span>
+      <span class="status-badge" style="background:#111827;color:#a7f3d0">published</span>
+    </div>
+
+    <h3>1-4. 서브스텝 상세</h3>
+    <div class="sub-grid">
+      <div class="sub-card">
+        <h4>1-4-1. 상품 기본정보 입력</h4>
+        <ul class="list">
+          <li>상품명 입력 (중복 체크)</li>
+          <li>상품코드 자동채번: <code>{카테고리코드}-{연도}{월}-{시퀀스4자리}</code></li>
+          <li>V1 기존 상품이면 <code>v1_goods_idx</code> 자동 매핑</li>
+          <li>공급가/판매가/도매가 입력, 마진율 자동 계산 표시</li>
+        </ul>
+      </div>
+      <div class="sub-card">
+        <h4>1-4-2. 옵션/재고 설정</h4>
+        <ul class="list">
+          <li>컬러별 사이즈 매트릭스 입력</li>
+          <li>옵션별 추가가, 재고, 옵션코드</li>
+          <li>0 재고 옵션은 AI 생성 대상에서 자동 제외</li>
+          <li>컬러 헥스코드 입력 → 제품컷 색상 매칭 검증에 사용</li>
+        </ul>
+      </div>
+      <div class="sub-card">
+        <h4>1-4-3. AI 제작 옵션 활성화</h4>
+        <ul class="list">
+          <li>"AI 모델컷 제작" 토글 ON</li>
+          <li>타깃 연령, 시즌, 핏 키워드 선택</li>
+          <li>금지 연출 입력 (선택)</li>
+          <li>AI 제작 큐에 등록 → <code>ai_product_workflows</code> INSERT</li>
+        </ul>
+      </div>
+      <div class="sub-card">
+        <h4>1-4-4. 진입 조건 체크</h4>
+        <ul class="list">
+          <li>✅ 상품명, 판매가, 카테고리 입력 완료</li>
+          <li>✅ 옵션 1개 이상 등록</li>
+          <li>✅ 재고 1개 이상 옵션 존재</li>
+          <li>❌ 미충족 시: 필수값 누락 안내 → 저장은 되나 다음 단계 진입 차단</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="highlight-box amber">
+      <b>엣지케이스:</b> V1에서 마이그레이션된 상품(v1_goods_idx 있음)은 기존 V1 이미지/상세페이지가 있을 수 있습니다.
+      이 경우 "기존 V1 데이터 가져오기" 버튼으로 제품컷 단계를 건너뛸 수 있으나, AI 생성 품질을 위해 제품컷 재등록을 권장합니다.
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- STEP 2: 제품컷 등록 -->
+<!-- ============================================================ -->
+<section id="step2">
+  <div class="flow-section">
+    <div class="step-header">
+      <div class="num" style="background:#065f46">2</div>
+      <div><h2 style="margin:0">제품컷 등록</h2><p style="margin:4px 0 0;color:var(--muted)">Product Cut Upload &amp; QA</p></div>
+    </div>
+
+    <p class="lead">
+      주상품의 실물 기준 이미지를 업로드하는 단계입니다. AI 모델컷의 품질은 여기서 올리는 제품컷의 품질에 직접 좌우됩니다.
+      최소 3장 이상 업로드해야 하며, 자동 QA를 통과한 이미지만 다음 단계 입력으로 사용됩니다.
+    </p>
+
+    <h3>2-1. 필수 업로드 컷 구성</h3>
+    <table>
+      <thead><tr><th>컷 타입</th><th>필수/권장</th><th>용도</th><th>규격</th><th>주의사항</th></tr></thead>
+      <tbody>
+        <tr><td>정면 전체컷</td><td>✅ 필수</td><td>AI 모델 착용 기준 이미지</td><td>1200×1600px 이상, JPG/PNG</td><td>배경 단순, 상품 전체 노출, 구김 없음</td></tr>
+        <tr><td>후면컷</td><td>✅ 필수</td><td>뒷면 디자인 확인, 모델 후면 생성 참고</td><td>동일</td><td>후면 디자인이 없으면 정면과 동일 톤 단색 배경</td></tr>
+        <tr><td>측면컷</td><td>⭐ 권장</td><td>핏감, 실루엣 확인</td><td>동일</td><td>행거가 보이지 않도록 주의</td></tr>
+        <tr><td>소재 클로즈업</td><td>⭐ 권장</td><td>소재감, 질감, 봉제 품질 확인</td><td>800×800px 이상</td><td>자연광 권장, 플래시 반사 금지</td></tr>
+        <tr><td>컬러별 컷</td><td>⭐ 권장</td><td>옵션 컬러별 정확한 색상 참고</td><td>동일</td><td>모니터 색상 차이 주의, 컬러칩 포함 권장</td></tr>
+        <tr><td>착용 참고컷</td><td>⬜ 선택</td><td>실제 착용 핏 참고 (AI가 아닌 실제 착용)</td><td>제한 없음</td><td>AI 생성 입력이 아닌 참고용. 워터마크 있어도 가능</td></tr>
+      </tbody>
+    </table>
+
+    <h3>2-2. 자동 QA 점수 체계</h3>
+    <p>업로드 즉시 자동 점검하여 100점 만점으로 채점합니다. <b>60점 미만은 자동 제외</b>, 60~79점은 경고 표시, 80점 이상은 통과입니다.</p>
+    <table>
+      <thead><tr><th>점검 항목</th><th>배점</th><th>자동 탈락 조건</th><th>검증 방법</th></tr></thead>
+      <tbody>
+        <tr><td>해상도</td><td>20점</td><td>800px 미만 어느 한 축</td><td>이미지 메타데이터 width/height</td></tr>
+        <tr><td>선명도</td><td>15점</td><td>라플라시안 분산 < 50</td><td>OpenCV Laplacian variance</td></tr>
+        <tr><td>배경 복잡도</td><td>15점</td><td>배경 영역 엣지 밀도 > 0.4</td><td>배경 세그멘테이션 + Canny edge</td></tr>
+        <tr><td>상품 가림률</td><td>15점</td><td>상품 영역 30% 이상 가림</td><td>객체 감지 + 바운딩박스 겹침</td></tr>
+        <tr><td>워터마크</td><td>10점</td><td>워터마크 감지 시 자동 탈락</td><td>OCR + 패턴 매칭</td></tr>
+        <tr><td>컬러 신뢰도</td><td>15점</td><td>등록 컬러와 ΔE > 15</td><td>CIE ΔE2000 색차 계산</td></tr>
+        <tr><td>중복 이미지</td><td>10점</td><td>기존 업로드와 pHash 유사도 > 0.95</td><td>Perceptual hash 비교</td></tr>
+      </tbody>
+    </table>
+
+    <h3>2-3. 운영자 작업</h3>
+    <div class="sub-grid">
+      <div class="sub-card">
+        <h4>대표컷 지정</h4>
+        <p>드래그로 대표 이미지 1장 선택. <code>product_images.is_primary = true</code> 설정. 상세페이지 히어로, 검색 썸네일, 코디 보드에 사용.</p>
+      </div>
+      <div class="sub-card">
+        <h4>옵션별 이미지 매핑</h4>
+        <p>컬러 옵션이 여러 개면 각 옵션에 해당 컷을 연결. <code>product_images.type</code>에 "option_블랙", "option_아이보리" 등 기록.</p>
+      </div>
+      <div class="sub-card">
+        <h4>불량컷 제외</h4>
+        <p>QA 60점 이상이지만 운영자 판단으로 부적합한 컷은 수동 제외. 제외 사유 기록(색상왜곡, 구김, 오염 등).</p>
+      </div>
+      <div class="sub-card">
+        <h4>보정 요청</h4>
+        <p>해상도/색상 보정이 필요한 컷은 "보정 후 재업로드" 상태로 표시. 보정 전까지 AI 생성 입력에서 제외.</p>
+      </div>
+    </div>
+
+    <h3>2-4. 데이터 흐름</h3>
+    <div class="highlight-box">
+      <b>입력:</b> 이미지 파일 (JPG/PNG/WebP, 최대 10MB/장, 최대 20장)<br>
+      <b>저장:</b> <code>product_images</code> 테이블 — product_id, type, path, filename, file_size, sort_order, is_primary<br>
+      <b>AI 확장:</b> <code>ai_product_assets</code> 테이블 — workflow_id, asset_type='product_cut', qa_score, qa_details(json), status<br>
+      <b>출력:</b> QA 통과 이미지 리스트 → ③모델선택, ⑤모델컷생성 단계의 입력으로 전달
+    </div>
+
+    <h3>2-5. 진입/탈출 조건</h3>
+    <div class="sub-grid">
+      <div class="sub-card ok">
+        <h4>✅ 다음 단계 진입</h4>
+        <p>QA 통과(60점 이상) 이미지 3장 이상 + 대표컷 1장 지정 완료</p>
+      </div>
+      <div class="sub-card risk">
+        <h4>❌ 차단 조건</h4>
+        <p>전체 이미지 QA 평균 60점 미만 / 대표컷 미지정 / 워터마크 이미지만 존재</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- STEP 3: 모델선택 -->
+<!-- ============================================================ -->
+<section id="step3">
+  <div class="flow-section">
+    <div class="step-header">
+      <div class="num" style="background:#5b21b6">3</div>
+      <div><h2 style="margin:0">모델선택</h2><p style="margin:4px 0 0;color:var(--muted)">AI Model Selection (P0 수동 / P1 자동매칭)</p></div>
+    </div>
+
+    <p class="lead">
+      등록된 상품에 가장 적합한 AI 모델을 선택하는 단계입니다.
+      P0에서는 운영자가 6명 페르소나 카드를 비교해 직접 선택하고,
+      P1부터는 상품 속성과 과거 성과 데이터를 기반으로 시스템이 최적 모델을 자동 추천합니다.
+    </p>
+
+    <h3>3-1. P0 수동 선택 화면</h3>
+    <table>
+      <thead><tr><th>AI 모델</th><th>나이</th><th>스타일 축</th><th>주력 카테고리</th><th>가격대</th><th>금지 연출</th></tr></thead>
+      <tbody>
+        <tr><td>윤서아</td><td>29세</td><td>오피스 미니멀</td><td>블레이저, 셔츠, 슬랙스</td><td>5~15만원</td><td>과노출, 캐주얼 과잉</td></tr>
+        <tr><td>한루아</td><td>24세</td><td>스트릿 캐주얼</td><td>후디, 카고, 데님</td><td>2~8만원</td><td>포멀, 정장</td></tr>
+        <tr><td>강민채</td><td>32세</td><td>프리미엄 데일리</td><td>원피스, 트렌치, 코트</td><td>8~25만원</td><td>트렌디 과잉, 로고 과다</td></tr>
+        <tr><td>정하린</td><td>27세</td><td>페미닌 룩북</td><td>블라우스, 스커트, 니트원피스</td><td>4~12만원</td><td>보이시, 하드코어 스트릿</td></tr>
+        <tr><td>이도연</td><td>35세</td><td>모던 라이프스타일</td><td>셋업, 와이드팬츠, 셔츠드레스</td><td>6~18만원</td><td>10대 타깃, 교복</td></tr>
+        <tr><td>박세린</td><td>19세</td><td>뉴어덜트 캠퍼스</td><td>가디건, 티셔츠, 데님, 백팩</td><td>2~6만원</td><td>교복, 미성년 암시, 선정적 연출</td></tr>
+      </tbody>
+    </table>
+
+    <h3>3-2. P1 자동매칭 점수 산정 공식</h3>
+    <div class="highlight-box green">
+      <b>총점 = 카테고리 적합도(30) + 타깃 연령 매칭(20) + 스타일 키워드 일치(20) + 가격대 적합도(10) + 과거 성과(20)</b>
+    </div>
+    <table>
+      <thead><tr><th>항목</th><th>배점</th><th>산정 방법</th><th>데이터 소스</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>카테고리 적합도</td><td>30점</td>
+          <td>상품 카테고리가 모델 주력 카테고리에 포함되면 30점, 인접 카테고리면 20점, 무관하면 5점</td>
+          <td><code>categories</code> + 모델별 주력 카테고리 매핑</td>
+        </tr>
+        <tr>
+          <td>타깃 연령 매칭</td><td>20점</td>
+          <td>상품 target_age_range와 모델 페르소나 연령 차이 |Δ| ≤ 3세 → 20점, 4~7세 → 12점, 8세+ → 5점</td>
+          <td><code>ai_product_workflows.target_age_range</code> + 페르소나 나이</td>
+        </tr>
+        <tr>
+          <td>스타일 키워드</td><td>20점</td>
+          <td>상품 fit_keywords와 모델 style_keywords의 Jaccard 유사도 × 20</td>
+          <td><code>ai_product_workflows.fit_keywords</code> + 페르소나 스타일 키워드</td>
+        </tr>
+        <tr>
+          <td>가격대 적합도</td><td>10점</td>
+          <td>상품 판매가가 모델 담당 가격 범위 안이면 10점, ±20% 이내 7점, 범위 밖 3점</td>
+          <td><code>products.retail_price</code> + 모델별 가격 범위</td>
+        </tr>
+        <tr>
+          <td>과거 성과</td><td>20점</td>
+          <td>같은 카테고리+모델 조합의 과거 30일 CTR × 전환율 상위 → 20점, 중간 → 12점, 하위/데이터없음 → 5점</td>
+          <td><code>ai_generation_performance</code> (P1에서 축적)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>3-3. 복수 모델 선택</h3>
+    <p>하나의 상품에 모델 2~3명까지 선택 가능합니다. 복수 선택 시 코디·모델컷·상세페이지가 모델별로 분기됩니다.</p>
+    <div class="sub-grid">
+      <div class="sub-card ok">
+        <h4>복수 선택이 유리한 경우</h4>
+        <ul class="list">
+          <li>연령층이 넓은 상품 (예: 기본 니트 → 서아+세린)</li>
+          <li>스타일 범위가 넓은 상품 (예: 데님 자켓 → 루아+하린)</li>
+          <li>A/B 테스트로 어떤 모델이 전환율이 높은지 비교</li>
+        </ul>
+      </div>
+      <div class="sub-card warn">
+        <h4>단일 선택이 나은 경우</h4>
+        <ul class="list">
+          <li>명확한 타깃 상품 (예: 출근용 블레이저 → 서아)</li>
+          <li>생성 비용/시간 제한이 있을 때</li>
+          <li>첫 PoC 단계에서 변수 최소화</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>3-4. 가드레일</h3>
+    <div class="highlight-box rose">
+      <b>10대 후반 모델(박세린) 자동 차단 조건:</b><br>
+      • 상품 카테고리가 "수영복", "속옷", "란제리"인 경우 자동 제외<br>
+      • 금지 연출 키워드에 "교복", "미성년", "학생" 포함 시 자동 제외<br>
+      • 운영자가 수동 선택해도 시스템이 확인 팝업으로 재확인
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- STEP 4: 코디매칭 -->
+<!-- ============================================================ -->
+<section id="step4">
+  <div class="flow-section">
+    <div class="step-header">
+      <div class="num" style="background:#9d174d">4</div>
+      <div><h2 style="margin:0">코디매칭</h2><p style="margin:4px 0 0;color:var(--muted)">Coordination Matching — 뉴톡 상품 기반</p></div>
+    </div>
+
+    <p class="lead">
+      주상품을 중심으로 부상품(상의/하의/아우터/신발/가방/액세서리)을 조합해 코디 세트를 만드는 단계입니다.
+      <b>핵심 원칙: 되도록 뉴톡 판매 상품으로 코디를 구성</b>하여, 코디 내 모든 상품이 구매 가능하도록 합니다.
+    </p>
+
+    <h3>4-1. 코디 구성 규칙</h3>
+    <table>
+      <thead><tr><th>역할</th><th>정의</th><th>모델컷 수량</th><th>선택 기준</th></tr></thead>
+      <tbody>
+        <tr><td><b>주상품</b></td><td>이 코디에서 판매 전환의 중심이 되는 상품</td><td><b>20장 내외</b></td><td>현재 등록 중인 상품. 항상 1개</td></tr>
+        <tr><td><b>부상품</b></td><td>주상품과 함께 스타일링하는 보조 상품</td><td><b>상품별 10장 내외</b></td><td>뉴톡 판매 상품 우선, 재고·가격·색상 조화 고려</td></tr>
+        <tr><td><b>스타일링 소품</b></td><td>판매 대상이 아닌 연출용 소품</td><td>별도 생성 안 함</td><td>뉴톡 상품에 적합한 부상품이 없을 때만 사용</td></tr>
+      </tbody>
+    </table>
+
+    <h3>4-2. 부상품 후보 선정 로직</h3>
+    <div class="highlight-box">
+      <b>쿼리 우선순위:</b> 뉴톡 판매중(status='active') + 재고 > 0 + 같은 시즌 + 판매가 범위 ±50% + 카테고리 보완(상의↔하의, 아우터+이너) + 색상 조화 점수
+    </div>
+    <table>
+      <thead><tr><th>필터 단계</th><th>조건</th><th>탈락 시</th></tr></thead>
+      <tbody>
+        <tr><td>1. 판매 상태</td><td><code>products.status = 'active'</code></td><td>비활성/품절 상품 제외</td></tr>
+        <tr><td>2. 재고</td><td><code>product_options.stock > 0</code> (1개 이상 옵션)</td><td>전 옵션 0재고 제외</td></tr>
+        <tr><td>3. 카테고리 보완</td><td>주상품이 상의면 하의/스커트 우선, 아우터면 이너 우선</td><td>같은 카테고리끼리는 충돌(상의+상의) → 제외</td></tr>
+        <tr><td>4. 가격대</td><td>주상품 판매가의 ±50% 범위 안</td><td>주상품 5만원인데 부상품 30만원 → 제외</td></tr>
+        <tr><td>5. 시즌</td><td>같은 시즌 또는 사계절 상품</td><td>SS 주상품에 FW 부상품 → 제외</td></tr>
+        <tr><td>6. 색상 조화</td><td>주상품 대표 컬러와 CIE ΔE ≤ 30 (유사/보색 모두 포함)</td><td>극단적 색상 충돌만 제외</td></tr>
+        <tr><td>7. 모델 적합도</td><td>선택된 모델의 주력 카테고리 + 가격대에 부합</td><td>모델 금지 카테고리 제외</td></tr>
+      </tbody>
+    </table>
+
+    <h3>4-3. 코디 세트 구성</h3>
+    <p>상품 1개당 <b>3~5개 코디 세트</b>를 만듭니다. 각 세트는 다른 분위기(데일리/출근/데이트/캐주얼/프리미엄)를 담아야 합니다.</p>
+    <table>
+      <thead><tr><th>코디 세트</th><th>예시 (주상품: 화이트 블라우스)</th><th>분위기</th><th>부상품 수</th></tr></thead>
+      <tbody>
+        <tr><td>세트 A</td><td>블라우스 + 슬랙스 + 로퍼</td><td>출근룩</td><td>2개</td></tr>
+        <tr><td>세트 B</td><td>블라우스 + 데님 스커트 + 스니커즈</td><td>캐주얼</td><td>2개</td></tr>
+        <tr><td>세트 C</td><td>블라우스 + 와이드 팬츠 + 토트백</td><td>데일리</td><td>2개</td></tr>
+        <tr><td>세트 D</td><td>블라우스 + 플리츠 스커트 + 힐</td><td>데이트</td><td>2개</td></tr>
+        <tr><td>세트 E</td><td>블라우스 + 트렌치 코트 + 가죽백</td><td>프리미엄</td><td>2개</td></tr>
+      </tbody>
+    </table>
+
+    <h3>4-4. 뉴톡 상품 부족 시 대안</h3>
+    <div class="sub-grid">
+      <div class="sub-card warn">
+        <h4>뉴톡 상품 없음</h4>
+        <p>해당 카테고리에 뉴톡 판매 상품이 없거나 전부 품절일 때:</p>
+        <ul class="list">
+          <li>1순위: 소싱 대기 상품(sourcing_items)에서 가져오기</li>
+          <li>2순위: 스타일링 소품으로 대체 (판매 태그 없이, "코디 참고"로 노출)</li>
+          <li>3순위: 해당 슬롯 비워두고 주상품 단독 코디로 진행</li>
+        </ul>
+      </div>
+      <div class="sub-card ok">
+        <h4>세트 확정 후 데이터</h4>
+        <p><code>ai_outfit_sets</code> 저장:</p>
+        <ul class="list">
+          <li>workflow_id, set_name, mood_theme</li>
+          <li>main_product_id (주상품)</li>
+          <li>sub_products (JSON: [{product_id, role, slot}])</li>
+          <li>styling_only_items (판매 불가 소품)</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>4-5. 진입/탈출 조건</h3>
+    <div class="sub-grid">
+      <div class="sub-card ok">
+        <h4>✅ 다음 단계 진입</h4>
+        <p>코디 세트 1개 이상 확정 + 주상품 지정 + 부상품 재고/판매상태 확인 완료</p>
+      </div>
+      <div class="sub-card risk">
+        <h4>❌ 차단</h4>
+        <p>코디 세트 0개 / 주상품 미지정 / 부상품 전체 품절(경고 후 단독 코디로 전환 가능)</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- STEP 5: 모델컷 생성 -->
+<!-- ============================================================ -->
+<section id="step5">
+  <div class="flow-section">
+    <div class="step-header">
+      <div class="num" style="background:#92400e">5</div>
+      <div><h2 style="margin:0">모델컷 생성</h2><p style="margin:4px 0 0;color:var(--muted)">AI Model Cut Generation — 주상품 20장 / 부상품 10장</p></div>
+    </div>
+
+    <p class="lead">
+      선택된 모델이 코디 세트를 착용한 이미지를 AI로 생성합니다.
+      <b>1코디당 주상품은 약 20장, 부상품은 상품별 약 10장 내외</b>로 생성하여
+      상세페이지, 룩북, SNS, 숏츠에 쓸 수 있는 다양한 컷을 확보합니다.
+    </p>
+
+    <h3>5-1. 주상품 20장 세부 구성</h3>
+    <table>
+      <thead><tr><th>컷 타입</th><th>수량</th><th>구도</th><th>용도</th><th>프롬프트 핵심</th></tr></thead>
+      <tbody>
+        <tr><td>전신 정면</td><td>4장</td><td>머리끝~발끝, 정면 약간 3/4</td><td>상세페이지 메인, 룩북 카드</td><td>전신 비율, 상품 전체 노출, 배경 단순</td></tr>
+        <tr><td>전신 움직임</td><td>3장</td><td>걷기, 돌기, 앉기 등 자연스러운 동작</td><td>SNS 피드, 숏츠 프레임</td><td>자연광, 동적 포즈, 상품 핏 강조</td></tr>
+        <tr><td>반신 (상반신)</td><td>4장</td><td>허리 위 크롭, 얼굴+상의 중심</td><td>상세페이지 중단, 프로필 활용</td><td>얼굴 표정, 상의 디테일, 목선·칼라 강조</td></tr>
+        <tr><td>좌우/후면</td><td>4장</td><td>좌측면, 우측면, 후면, 후면 3/4</td><td>핏 확인, 뒷면 디자인 확인</td><td>실루엣, 등판 디자인, 옆선 라인</td></tr>
+        <tr><td>소재/핏 강조</td><td>3장</td><td>소매, 단추, 봉제선, 소재감 클로즈업</td><td>상세페이지 디테일 블록</td><td>소재 질감, 스티칭, 로고/라벨, 촉감 연상</td></tr>
+        <tr><td>코디 전체 컷</td><td>2장</td><td>전신, 부상품과 함께 착용한 완성 룩</td><td>코디 추천, 연관상품 영역</td><td>주상품+부상품 조화, 세트 느낌</td></tr>
+      </tbody>
+    </table>
+
+    <h3>5-2. 부상품 10장 세부 구성</h3>
+    <table>
+      <thead><tr><th>컷 타입</th><th>수량</th><th>구도</th><th>용도</th></tr></thead>
+      <tbody>
+        <tr><td>주상품과 함께 착용</td><td>4장</td><td>전신/반신, 부상품이 잘 보이는 각도</td><td>코디 추천, 연관상품 상세</td></tr>
+        <tr><td>부상품 클로즈업</td><td>3장</td><td>부상품 자체의 디테일, 소재, 핏</td><td>부상품 상세페이지 보조</td></tr>
+        <tr><td>다른 각도</td><td>2장</td><td>측면, 후면 등 다양한 각도</td><td>구매 결정 보조</td></tr>
+        <tr><td>상세페이지 보조</td><td>1장</td><td>부상품 단독 전신 또는 플랫레이</td><td>부상품 연결 링크 썸네일</td></tr>
+      </tbody>
+    </table>
+
+    <h3>5-3. 프롬프트 구조</h3>
+    <div class="highlight-box">
+      <b>기본 프롬프트 템플릿:</b><br>
+      <code>[모델 reference ID], wearing [주상품 설명] in [컬러], [핏 키워드], [코디 부상품 설명],
+      [구도: full body / half body / close-up], [배경: studio white / outdoor street / cafe],
+      [조명: natural / soft studio], [분위기: minimal / casual / premium],
+      Korean fashion editorial style, high quality, realistic fabric texture</code>
+    </div>
+    <div class="highlight-box rose">
+      <b>네거티브 프롬프트 (항상 포함):</b><br>
+      <code>deformed hands, extra fingers, distorted logo, wrong pattern, different color from reference,
+      watermark, text overlay, unrealistic body proportions, school uniform, underage appearance,
+      explicit content, celebrity resemblance</code>
+    </div>
+
+    <h3>5-4. 생성 파라미터</h3>
+    <table>
+      <thead><tr><th>파라미터</th><th>기본값</th><th>조정 범위</th><th>영향</th></tr></thead>
+      <tbody>
+        <tr><td>Reference 강도</td><td>0.75</td><td>0.5~0.9</td><td>높을수록 제품컷 원형에 가깝지만 포즈 자유도 감소</td></tr>
+        <tr><td>모델 일관성</td><td>0.85</td><td>0.7~0.95</td><td>높을수록 같은 인물 유지, 낮으면 다양한 표정/각도</td></tr>
+        <tr><td>배경 다양성</td><td>3가지</td><td>1~5가지</td><td>스튜디오, 야외, 실내 등 배경 종류 수</td></tr>
+        <tr><td>생성 배치 크기</td><td>4장/배치</td><td>2~8장</td><td>한 번에 생성하는 장 수. 클수록 빠르나 품질 분산 증가</td></tr>
+        <tr><td>품질 설정</td><td>HD (1024×1536)</td><td>SD~UHD</td><td>상세페이지용은 HD 이상 필수</td></tr>
+      </tbody>
+    </table>
+
+    <h3>5-5. 불합격 기준 (자동 + 수동)</h3>
+    <table>
+      <thead><tr><th>불합격 사유</th><th>심각도</th><th>자동 감지</th><th>조치</th></tr></thead>
+      <tbody>
+        <tr><td>손/팔/다리 변형</td><td>🔴 치명</td><td>가능 (손가락 수 감지)</td><td>자동 폐기 + 재생성</td></tr>
+        <tr><td>로고/패턴 왜곡</td><td>🔴 치명</td><td>부분 가능 (패턴 매칭)</td><td>자동 경고 + 수동 검수</td></tr>
+        <tr><td>상품 색상 불일치</td><td>🟡 중요</td><td>가능 (ΔE > 10)</td><td>자동 경고 + 운영자 판단</td></tr>
+        <tr><td>과도한 노출</td><td>🔴 치명</td><td>가능 (NSFW 분류)</td><td>자동 폐기</td></tr>
+        <tr><td>실물과 다른 길이감</td><td>🟡 중요</td><td>부분 가능</td><td>수동 검수 필요</td></tr>
+        <tr><td>배경 불일치</td><td>🟢 경미</td><td>불가</td><td>수동 검수</td></tr>
+        <tr><td>모델 얼굴 불일치</td><td>🟡 중요</td><td>가능 (face embedding)</td><td>자동 경고 + 재생성</td></tr>
+        <tr><td>실존 인물 유사</td><td>🔴 치명</td><td>가능 (유명인 DB 대조)</td><td>자동 폐기 + 알림</td></tr>
+      </tbody>
+    </table>
+
+    <h3>5-6. 검수 워크플로우</h3>
+    <div class="sub-grid">
+      <div class="sub-card">
+        <h4>5-6-1. 자동 1차 필터</h4>
+        <ul class="list">
+          <li>생성 즉시 자동 QA 실행</li>
+          <li>치명 결함 자동 폐기</li>
+          <li>중요 경고 → 검수 큐에 "주의" 태그</li>
+          <li>통과 → 검수 대기 상태</li>
+        </ul>
+      </div>
+      <div class="sub-card">
+        <h4>5-6-2. 운영자 검수</h4>
+        <ul class="list">
+          <li>제품 원본컷과 나란히 비교</li>
+          <li>승인 / 재생성 / 폐기 선택</li>
+          <li>상세페이지 사용 / 숏츠 사용 / 룩북 사용 용도 태그</li>
+          <li>폐기 시 사유 필수 입력 → 프롬프트 개선 데이터</li>
+        </ul>
+      </div>
+      <div class="sub-card">
+        <h4>5-6-3. 재생성</h4>
+        <ul class="list">
+          <li>폐기 사유를 네거티브 프롬프트에 반영</li>
+          <li>같은 구도·배경 유지, seed만 변경</li>
+          <li>3회 연속 폐기 시 → 제품컷 재업로드 권고</li>
+          <li>최대 재생성 5회/구도, 초과 시 수동 프롬프트 편집</li>
+        </ul>
+      </div>
+      <div class="sub-card ok">
+        <h4>5-6-4. 완료 기준</h4>
+        <ul class="list">
+          <li>✅ 주상품: 승인 컷 10장 이상 (20장 중 50%+)</li>
+          <li>✅ 부상품: 승인 컷 상품별 5장 이상</li>
+          <li>✅ 전신/반신/클로즈업 각 2장 이상 포함</li>
+          <li>✅ 모든 승인 컷에 용도 태그 지정</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- STEP 6: 감성 이미지컷 -->
+<!-- ============================================================ -->
+<section id="step6">
+  <div class="flow-section">
+    <div class="step-header">
+      <div class="num" style="background:#3730a3">6</div>
+      <div><h2 style="margin:0">제품 연출 느낌 감성 이미지컷 생성</h2><p style="margin:4px 0 0;color:var(--muted)">Mood &amp; Lifestyle Image Generation</p></div>
+    </div>
+
+    <p class="lead">
+      판매 전환용 상세페이지 상단과 SNS 유입을 위한 분위기 컷을 생성합니다.
+      모델이 반드시 등장하지 않아도 되며, 상품의 계절감·사용 장면·감성을 강화하는 이미지입니다.
+      모델컷이 "이 옷을 입으면 이렇게 보인다"라면, 감성컷은 "이 옷을 입고 이런 장면에 있다"입니다.
+    </p>
+
+    <h3>6-1. 기본 세트 구성 (코디 세트당 8~10장)</h3>
+    <table>
+      <thead><tr><th>컷 타입</th><th>수량</th><th>설명</th><th>용도</th></tr></thead>
+      <tbody>
+        <tr><td>룩북 메인컷</td><td>3장</td><td>모델 착용 상태에서 가장 감성적인 연출. 배경·조명·소품으로 분위기 강조</td><td>상세페이지 히어로, SNS 대표 이미지</td></tr>
+        <tr><td>라이프스타일컷</td><td>3장</td><td>카페, 거리, 사무실, 공원 등 실제 생활 장면에서의 착용</td><td>SNS 피드, 배너, 광고 소재</td></tr>
+        <tr><td>컬러 무드컷</td><td>2장</td><td>상품 대표 컬러를 중심으로 한 톤앤매너 이미지. 모델 없이 플랫레이/행거/소품 구성 가능</td><td>상세페이지 컬러 설명, 옵션 선택 영역</td></tr>
+        <tr><td>배너형 컷</td><td>2장</td><td>16:9 또는 3:1 가로비율, 텍스트 오버레이 공간 확보</td><td>브랜드 페이지 배너, 프로모션, 카카오 알림톡</td></tr>
+      </tbody>
+    </table>
+
+    <h3>6-2. 톤 선택지</h3>
+    <table>
+      <thead><tr><th>톤</th><th>배경 키워드</th><th>조명</th><th>소품 예시</th><th>적합 상품</th></tr></thead>
+      <tbody>
+        <tr><td>데일리</td><td>집 현관, 거울, 베란다</td><td>자연광, 따뜻한 톤</td><td>커피, 가방, 책</td><td>기본 아이템, 이지웨어</td></tr>
+        <tr><td>출근룩</td><td>오피스 로비, 지하철, 엘리베이터</td><td>형광등+자연광 믹스</td><td>노트북, 텀블러, 서류</td><td>블레이저, 슬랙스, 셔츠</td></tr>
+        <tr><td>데이트룩</td><td>레스토랑, 전시회, 야경 거리</td><td>따뜻한 인공광, 보케</td><td>와인잔, 꽃, 미술품</td><td>원피스, 스커트, 니트</td></tr>
+        <tr><td>여행룩</td><td>공항, 호텔, 해변, 시장</td><td>밝은 자연광</td><td>캐리어, 선글라스, 모자</td><td>편안한 의류, 아우터</td></tr>
+        <tr><td>캠퍼스룩</td><td>도서관, 캠퍼스, 벤치, 잔디</td><td>맑은 야외광</td><td>백팩, 교재, 텀블러</td><td>캐주얼, 데님, 가디건</td></tr>
+        <tr><td>프리미엄 무드</td><td>호텔 스위트, 갤러리, 루프탑</td><td>스튜디오 조명, 깊은 톤</td><td>향수, 가죽 소품</td><td>코트, 원피스, 고가 아이템</td></tr>
+      </tbody>
+    </table>
+
+    <h3>6-3. 가드레일</h3>
+    <div class="sub-grid">
+      <div class="sub-card risk">
+        <h4>금지 사항</h4>
+        <ul class="list">
+          <li>상품 실물에 없는 디테일(단추, 포켓, 패턴)을 새로 만들지 않기</li>
+          <li>주상품 판매 포인트를 흐리는 과도한 배경/소품 금지</li>
+          <li>타 브랜드 로고가 보이는 소품 사용 금지</li>
+          <li>제품컷에 없는 컬러를 감성컷에서 새로 생성 금지</li>
+        </ul>
+      </div>
+      <div class="sub-card ok">
+        <h4>품질 기준</h4>
+        <ul class="list">
+          <li>브랜드 톤앤매너 일관성: 같은 코디 세트의 감성컷은 동일 톤</li>
+          <li>상품 인식도: 감성컷에서도 상품이 명확히 식별 가능</li>
+          <li>텍스트 오버레이 영역: 배너형 컷은 상단/하단 30% 여백 확보</li>
+          <li>해상도: 최소 1200×800px, 배너형은 1920×640px</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>6-4. 완료 기준</h3>
+    <div class="highlight-box green">
+      ✅ 승인 감성컷 5장 이상 (8~10장 생성 중 50%+)<br>
+      ✅ 룩북 메인컷 1장 이상 + 라이프스타일컷 1장 이상 포함<br>
+      ✅ 배너형 컷 1장 이상 (상세페이지 상단용)<br>
+      ✅ 주상품 색상/디자인이 제품컷과 일치 확인
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- STEP 7: 상세페이지 생성 -->
+<!-- ============================================================ -->
+<section id="step7">
+  <div class="flow-section">
+    <div class="step-header">
+      <div class="num" style="background:#991b1b">7</div>
+      <div><h2 style="margin:0">상세페이지 생성</h2><p style="margin:4px 0 0;color:var(--muted)">Detail Page Builder — V1 기준 호환</p></div>
+    </div>
+
+    <p class="lead">
+      승인된 모델컷과 감성컷을 조합하여 뉴톡V1 상품등록 기준에 호환되는 상세페이지를 생성합니다.
+      단순 이미지 나열이 아니라, <b>판매 스토리 구조</b>로 구성하여 조회 → 체류 → 장바구니 → 구매 전환을 최적화합니다.
+    </p>
+
+    <h3>7-1. 상세페이지 블록 구조</h3>
+    <table>
+      <thead><tr><th>순서</th><th>블록</th><th>콘텐츠</th><th>이미지 소스</th><th>목적</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><b>히어로 배너</b></td><td>감성 메인컷 + 상품명 + 한줄 카피</td><td>감성 룩북 메인컷</td><td>3초 내 시선 잡기, 스크롤 유도</td></tr>
+        <tr><td>2</td><td><b>핵심 판매 포인트</b></td><td>3~4개 아이콘+텍스트 (소재/핏/시즌/세탁)</td><td>없음 (텍스트+아이콘)</td><td>빠른 의사결정 정보 제공</td></tr>
+        <tr><td>3</td><td><b>모델 착용컷</b></td><td>전신 정면 2장 + 움직임 1장</td><td>모델컷 주상품 전신</td><td>"입으면 이렇게 보인다" 핏 확인</td></tr>
+        <tr><td>4</td><td><b>디테일 클로즈업</b></td><td>소재/봉제/라벨 클로즈업 2~3장 + 설명</td><td>모델컷 소재강조 + 제품컷</td><td>소재감, 품질, 마감 확인</td></tr>
+        <tr><td>5</td><td><b>핏 가이드</b></td><td>모델 신체 사이즈 + 착용 사이즈 + 핏 설명</td><td>모델컷 반신/측면</td><td>사이즈 선택 돕기, 반품 감소</td></tr>
+        <tr><td>6</td><td><b>코디 추천</b></td><td>코디 전체컷 + 부상품 링크 2~3개</td><td>모델컷 코디전체 + 부상품컷</td><td>객단가 상승, 연관 구매 유도</td></tr>
+        <tr><td>7</td><td><b>컬러 옵션</b></td><td>옵션별 착용컷 또는 제품컷</td><td>옵션별 모델컷 또는 제품컷</td><td>컬러 선택 돕기</td></tr>
+        <tr><td>8</td><td><b>라이프스타일</b></td><td>감성 라이프스타일컷 2~3장</td><td>감성 라이프스타일컷</td><td>감성적 구매 동기 부여</td></tr>
+        <tr><td>9</td><td><b>사이즈 차트</b></td><td>옵션별 실측 사이즈 표</td><td>없음 (표)</td><td>정확한 사이즈 정보</td></tr>
+        <tr><td>10</td><td><b>배송/교환/반품</b></td><td>배송비, 교환/반품 규정, 세탁 방법</td><td>없음 (텍스트)</td><td>구매 안심, CS 문의 감소</td></tr>
+        <tr><td>11</td><td><b>AI 표시</b></td><td>"이 페이지의 모델 이미지는 AI로 생성되었습니다"</td><td>없음 (텍스트)</td><td>법규 준수, 신뢰 구축</td></tr>
+      </tbody>
+    </table>
+
+    <h3>7-2. 자동 초안 생성 로직</h3>
+    <div class="sub-grid">
+      <div class="sub-card">
+        <h4>입력 데이터</h4>
+        <ul class="list">
+          <li>상품 기본정보 (products 테이블)</li>
+          <li>옵션/재고 (product_options)</li>
+          <li>승인 모델컷 (용도 태그별 분류)</li>
+          <li>승인 감성컷 (타입별 분류)</li>
+          <li>코디 세트 정보 (부상품 링크)</li>
+          <li>모델 페르소나 (말투, 톤)</li>
+        </ul>
+      </div>
+      <div class="sub-card">
+        <h4>생성 프로세스</h4>
+        <ul class="list">
+          <li>1. 블록 순서에 따라 이미지 자동 배치</li>
+          <li>2. 상품 속성 기반 판매 카피 자동 생성</li>
+          <li>3. 모델 페르소나 말투로 추천 멘트 생성</li>
+          <li>4. 사이즈 차트 자동 구성</li>
+          <li>5. 배송/교환 템플릿 자동 삽입</li>
+          <li>6. AI 표시 문구 자동 삽입</li>
+        </ul>
+      </div>
+      <div class="sub-card">
+        <h4>출력 형식</h4>
+        <ul class="list">
+          <li><code>product_details.html_content</code>에 저장</li>
+          <li>모바일 퍼스트 반응형 HTML</li>
+          <li>이미지는 CDN URL 참조</li>
+          <li>블록별 JSON 구조도 병행 저장 (편집용)</li>
+        </ul>
+      </div>
+      <div class="sub-card">
+        <h4>V1 호환성</h4>
+        <ul class="list">
+          <li>기존 V1 상세페이지 렌더링과 동일한 HTML 구조</li>
+          <li>V1 이미지 정렬 도구와 호환</li>
+          <li>v1_goods_idx 있으면 V1 상품에도 연결 가능</li>
+          <li>기존 상세 CSS 클래스 유지</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>7-3. 운영자 편집 기능</h3>
+    <table>
+      <thead><tr><th>편집 항목</th><th>방법</th><th>제한</th></tr></thead>
+      <tbody>
+        <tr><td>이미지 순서</td><td>드래그 앤 드롭</td><td>히어로 블록은 항상 최상단</td></tr>
+        <tr><td>이미지 교체</td><td>승인 컷 풀에서 선택</td><td>미승인 이미지 사용 불가</td></tr>
+        <tr><td>블록 삭제</td><td>블록별 삭제 버튼</td><td>AI 표시 블록 삭제 불가</td></tr>
+        <tr><td>판매 카피</td><td>인라인 텍스트 편집</td><td>과장/허위 광고 표현 자동 감지 경고</td></tr>
+        <tr><td>CTA 위치</td><td>"구매하기" 버튼 위치 조정</td><td>최소 1개 CTA 필수</td></tr>
+        <tr><td>코디 상품 링크</td><td>부상품 추가/제거</td><td>품절 상품 자동 경고</td></tr>
+      </tbody>
+    </table>
+
+    <h3>7-4. 판매 반영 전 최종 체크리스트</h3>
+    <div class="sub-grid">
+      <div class="sub-card ok">
+        <h4>✅ 필수 확인 (자동)</h4>
+        <ul class="list">
+          <li>판매가 입력 확인</li>
+          <li>옵션/재고 1개 이상</li>
+          <li>대표 이미지 1장 이상</li>
+          <li>상세페이지 블록 5개 이상</li>
+          <li>AI 표시 블록 존재</li>
+          <li>배송/교환 정보 존재</li>
+        </ul>
+      </div>
+      <div class="sub-card warn">
+        <h4>⚠️ 권장 확인 (수동)</h4>
+        <ul class="list">
+          <li>모바일 미리보기에서 이미지 잘림 없음</li>
+          <li>판매 카피에 과장 표현 없음</li>
+          <li>부상품 링크 클릭 시 정상 이동</li>
+          <li>사이즈 차트 실측값 확인</li>
+          <li>배송비 정확성</li>
+        </ul>
+      </div>
+      <div class="sub-card">
+        <h4>노출 채널 선택</h4>
+        <ul class="list">
+          <li>☐ 뉴톡 상품 상세</li>
+          <li>☐ AI 모델 룩북 페이지</li>
+          <li>☐ 브랜드 페이지</li>
+          <li>☐ SNS 공유 링크 생성</li>
+          <li>☐ 숏츠 연결</li>
+        </ul>
+      </div>
+      <div class="sub-card">
+        <h4>판매 상태 선택</h4>
+        <ul class="list">
+          <li>즉시 판매 (published)</li>
+          <li>예약 판매 (날짜/시간 지정)</li>
+          <li>비공개 (내부 검토용)</li>
+          <li>품절 대기 (재고 입고 후 자동 오픈)</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>7-5. 판매 반영 후 성과 수집</h3>
+    <div class="highlight-box green">
+      판매 반영 24시간 후 자동 알림:<br>
+      • 조회수, 상세페이지 체류시간, 스크롤 깊이<br>
+      • 장바구니 추가율, 찜 수<br>
+      • 구매 전환율, 객단가<br>
+      • 모델별/코디 세트별 분리 추적<br>
+      • 이탈 블록 (어디서 이탈했는지) → 상세페이지 개선 근거
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- 데이터 설계 -->
+<!-- ============================================================ -->
+<section id="data">
+  <h2>데이터/API 설계</h2>
+  <p class="lead">
+    기존 뉴톡V2 테이블(products, product_images, product_options, product_details, categories)을 수정하지 않고,
+    AI 제작 파이프라인 전용 테이블을 옆에 붙이는 방식입니다. 기존 판매 흐름을 깨뜨리지 않습니다.
+  </p>
+
+  <h3>기존 V2 테이블 (변경 없음)</h3>
+  <table>
+    <thead><tr><th>테이블</th><th>용도</th><th>현재 건수 [DB 조회]</th><th>AI 파이프라인 연결</th></tr></thead>
+    <tbody>
+      <tr><td><code>products</code></td><td>상품 기본정보</td><td>76,203건</td><td>ai_product_workflows.product_id → products.id</td></tr>
+      <tr><td><code>product_images</code></td><td>상품 이미지</td><td>0건</td><td>제품컷 업로드 시 여기에 저장 + ai_product_assets에 확장 정보</td></tr>
+      <tr><td><code>product_options</code></td><td>컬러/사이즈/재고</td><td>3건</td><td>옵션별 이미지 매핑, 재고 기반 코디 필터</td></tr>
+      <tr><td><code>product_details</code></td><td>상세페이지 HTML</td><td>0건</td><td>최종 승인 상세페이지 저장</td></tr>
+      <tr><td><code>categories</code></td><td>카테고리 (parent_id 계층)</td><td>11건</td><td>모델 매칭, 코디 매칭 기준</td></tr>
+      <tr><td><code>product_scores</code></td><td>인기도/트렌드 점수</td><td>미측정</td><td>P1 자동매칭 과거 성과 데이터</td></tr>
+    </tbody>
+  </table>
+
+  <h3>신규 AI 파이프라인 테이블</h3>
+  <table>
+    <thead><tr><th>테이블</th><th>핵심 필드</th><th>역할</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>ai_product_workflows</code></td>
+        <td>id, product_id, current_step, target_age_range, season, fit_keywords(json), prohibited_styles(json), preferred_persona_ids(json), detail_page_tone, ai_enabled, approved_at, published_at, created_at, updated_at</td>
+        <td>상품 1개의 AI 제작 전체 상태 관리</td>
+      </tr>
+      <tr>
+        <td><code>ai_product_assets</code></td>
+        <td>id, workflow_id, product_id, asset_type(product_cut/model_cut/mood_cut/detail_page), image_url, prompt, seed, qa_score, qa_details(json), status(pending/approved/rejected), rejected_reason, usage_tags(json), created_at</td>
+        <td>모든 이미지 자산 통합 관리</td>
+      </tr>
+      <tr>
+        <td><code>ai_model_matches</code></td>
+        <td>id, workflow_id, persona_id, match_score, score_breakdown(json), selected_by(manual/auto), selected_at</td>
+        <td>모델 선택/추천 결과 저장</td>
+      </tr>
+      <tr>
+        <td><code>ai_outfit_sets</code></td>
+        <td>id, workflow_id, set_name, mood_theme, main_product_id, sub_products(json), styling_only_items(json), status, created_at</td>
+        <td>코디 세트 구성 관리</td>
+      </tr>
+      <tr>
+        <td><code>ai_generation_jobs</code></td>
+        <td>id, workflow_id, outfit_id, persona_id, job_type(model_cut/mood_cut/detail_page/shorts), prompt_version, quantity, status(queued/running/done/failed), error_message, started_at, completed_at</td>
+        <td>생성 작업 큐</td>
+      </tr>
+      <tr>
+        <td><code>ai_detail_pages</code></td>
+        <td>id, workflow_id, product_id, html_content, blocks_json, version, status(draft/approved/published), approved_by, published_at</td>
+        <td>상세페이지 초안/승인본 관리. 승인 시 product_details에 복사</td>
+      </tr>
+      <tr>
+        <td><code>ai_generation_performance</code></td>
+        <td>id, workflow_id, persona_id, outfit_id, channel, views, cart_adds, purchases, revenue, ctr, conversion_rate, measured_at</td>
+        <td>성과 추적. P1 자동매칭에 피드백</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>핵심 API 엔드포인트</h3>
+  <table>
+    <thead><tr><th>API</th><th>메서드</th><th>기능</th></tr></thead>
+    <tbody>
+      <tr><td><code>/api/ai-fashion/workflows</code></td><td>POST</td><td>AI 제작 워크플로우 시작</td></tr>
+      <tr><td><code>/api/ai-fashion/workflows/{id}</code></td><td>GET</td><td>현재 단계, 진행률, 산출물 요약</td></tr>
+      <tr><td><code>/api/ai-fashion/workflows/{id}/assets</code></td><td>POST</td><td>제품컷 업로드 + QA</td></tr>
+      <tr><td><code>/api/ai-fashion/workflows/{id}/model-matches</code></td><td>GET/POST</td><td>모델 추천 조회 / 모델 선택</td></tr>
+      <tr><td><code>/api/ai-fashion/workflows/{id}/outfits</code></td><td>POST</td><td>코디 세트 저장</td></tr>
+      <tr><td><code>/api/ai-fashion/workflows/{id}/outfits/suggest</code></td><td>GET</td><td>부상품 후보 자동 추천</td></tr>
+      <tr><td><code>/api/ai-fashion/workflows/{id}/generate</code></td><td>POST</td><td>모델컷/감성컷 생성 큐 등록</td></tr>
+      <tr><td><code>/api/ai-fashion/workflows/{id}/assets/{assetId}/review</code></td><td>PATCH</td><td>이미지 승인/폐기</td></tr>
+      <tr><td><code>/api/ai-fashion/workflows/{id}/detail-page</code></td><td>POST/GET</td><td>상세페이지 초안 생성 / 조회</td></tr>
+      <tr><td><code>/api/ai-fashion/workflows/{id}/publish</code></td><td>POST</td><td>최종 판매 반영</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<!-- 엣지케이스 -->
+<!-- ============================================================ -->
+<section id="edge">
+  <h2>엣지케이스 &amp; 예외 처리</h2>
+  <table>
+    <thead><tr><th>상황</th><th>발생 단계</th><th>처리 방법</th></tr></thead>
+    <tbody>
+      <tr><td>V1 마이그레이션 상품 (v1_goods_idx 존재)</td><td>① 상품등록</td><td>"V1 데이터 가져오기" 버튼으로 기존 이미지/설명 불러오기 가능. 단, AI 생성 품질을 위해 제품컷 재등록 권장</td></tr>
+      <tr><td>제품컷 전체 QA 탈락</td><td>② 제품컷</td><td>재업로드 안내 + 촬영 가이드 팝업. 3회 연속 전체 탈락 시 "수동 QA 통과" 관리자 권한 제공</td></tr>
+      <tr><td>적합 모델 없음 (전원 점수 40점 미만)</td><td>③ 모델선택</td><td>가장 높은 점수 모델 경고 표시 + "모델 없이 제품컷만 상세페이지" 옵션 제공</td></tr>
+      <tr><td>뉴톡 부상품 0건 (해당 카테고리)</td><td>④ 코디매칭</td><td>스타일링 소품 대체 또는 주상품 단독 코디. "추천 부상품 소싱 요청" 버튼 노출</td></tr>
+      <tr><td>부상품 품절 (코디 확정 후)</td><td>④~⑤</td><td>코디 세트에 "품절 경고" 태그. 대체 상품 자동 추천. 품절 부상품 모델컷은 생성하지 않음</td></tr>
+      <tr><td>모델컷 5회 연속 폐기</td><td>⑤ 모델컷</td><td>프롬프트 수동 편집 모드로 전환 + 제품컷 품질 재확인 권고</td></tr>
+      <tr><td>감성컷에서 상품 인식 불가</td><td>⑥ 감성컷</td><td>reference 강도 0.8 이상으로 재생성. 실패 시 모델 착용 감성컷으로 전환</td></tr>
+      <tr><td>상세페이지 AI 표시 삭제 시도</td><td>⑦ 상세페이지</td><td>삭제 차단 + "AI 표시는 법규 준수를 위해 필수입니다" 안내</td></tr>
+      <tr><td>판매 반영 후 재고 0 전환</td><td>판매 후</td><td>자동 "품절" 상태 전환 + 관련 숏츠/SNS 게시물에 품절 태그 업데이트</td></tr>
+      <tr><td>워크플로우 중간 이탈</td><td>전 단계</td><td>마지막 단계 상태 유지. 대시보드에서 언제든 재진입 가능. 30일 미활동 시 보관 처리</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<!-- KPI -->
+<!-- ============================================================ -->
+<section id="kpi">
+  <h2>P0 목표 KPI &amp; 완료 기준</h2>
+
+  <h3>파일럿 목표: 상품 10개 완료</h3>
+  <table>
+    <thead><tr><th>지표</th><th>목표</th><th>측정 방법</th></tr></thead>
+    <tbody>
+      <tr><td>워크플로우 완료율</td><td>10개 상품 → 상세페이지 판매 반영까지 완료</td><td>ai_product_workflows.current_step = 'published' 10건</td></tr>
+      <tr><td>모델컷 승인률</td><td>50% 이상 (20장 중 10장+)</td><td>ai_product_assets 승인/전체 비율</td></tr>
+      <tr><td>감성컷 승인률</td><td>50% 이상 (10장 중 5장+)</td><td>동일</td></tr>
+      <tr><td>상세페이지 평균 블록 수</td><td>8블록 이상</td><td>ai_detail_pages.blocks_json 길이</td></tr>
+      <tr><td>AI 표시 누락</td><td>0건</td><td>자동 체크</td></tr>
+      <tr><td>운영자 1상품 소요 시간</td><td>2시간 이내 (생성 대기 제외)</td><td>workflow created_at ~ published_at 차이</td></tr>
+    </tbody>
+  </table>
+
+  <h3>P1 자동화 전환 조건</h3>
+  <div class="highlight-box amber">
+    상품 10개 파일럿에서 아래 데이터를 확보한 뒤에만 자동매칭/자동추천 강화:<br>
+    • 모델별 카테고리 승인률 통계<br>
+    • 코디 세트별 클릭/전환 비교<br>
+    • 프롬프트 버전별 폐기율 비교<br>
+    • 상세페이지 블록별 이탈률 분석<br>
+    <b>데이터 없이 자동화부터 넣으면 잘못된 모델/코디가 대량 생성되어 검수 비용이 커집니다.</b>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <p>문서 근거: NTV2 DB 조회(products 76,203건, product_images 0건, product_details 0건, sourcing_images 41건, categories 11건, product_options 3건) — 조회 시각 2026-05-13 KST</p>
+  <p>관련 문서:
+    <a href="/reports/newtalk-ai-fashion-influencer-plan-v1.html">사업기획서 v1</a> |
+    <a href="/reports/newtalk-ai-fashion-persona-cards-p0.html">P0 페르소나 카드</a> |
+    <a href="/reports/newtalk-ai-fashion-uiux-plan-p0.html">P0 UI/UX 기획서</a> |
+    <a href="/reports/newtalk-ai-fashion-commerce-flow-plan-p0.html">P0 실행 흐름</a>
+  </p>
+  <p style="color:#6b7280">이 문서는 AI(Claude Opus)가 CEO 지시에 따라 작성했으며, NTV2 실측 DB 데이터와 기존 기획서를 기반으로 합니다.</p>
+</footer>
+
+</body>
+</html>

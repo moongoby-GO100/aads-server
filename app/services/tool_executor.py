@@ -100,7 +100,8 @@ _LONG_TOOLS = frozenset({
     "deep_research", "delegate_to_agent", "delegate_to_research",
     "capture_screenshot", "run_remote_command", "write_remote_file", "patch_remote_file",
     "pc_execute", "device_command", "execute_sandbox", "visual_qa_test", "fact_check_multiple",
-    "generate_image", "search_all_projects", "deep_crawl", "deploy_safe",
+    "generate_image", "edit_image", "generate_video", "video_download",
+    "search_all_projects", "deep_crawl", "deploy_safe",
     "search_crawl_match",
 })
 
@@ -563,6 +564,10 @@ class ToolExecutor:
             "device_list":            self._device_list,
             # 유령 도구 해소 (Claude+Gemini 양쪽 경로 통일)
             "generate_image":          self._generate_image,
+            "edit_image":              self._edit_image,
+            "generate_video":          self._generate_video,
+            "video_status":            self._video_status,
+            "video_download":          self._video_download,
             "send_telegram":           self._send_telegram,
             "fact_check":              self._fact_check,
             "fact_check_multiple":     self._fact_check_multiple,
@@ -4297,9 +4302,60 @@ class ToolExecutor:
 
     async def _generate_image(self, inp: Dict[str, Any]) -> Any:
         """이미지 생성."""
-        from app.services.image_service import image_service
-        result = await image_service.generate(inp.get("prompt", ""), inp.get("size", "1024x1024"))
-        return result
+        from app.services.media_generation_service import media_generation_service
+
+        return await media_generation_service.generate_image(
+            inp.get("prompt", ""),
+            inp.get("size", "1024x1024"),
+            model_id=inp.get("model_id"),
+            provider=inp.get("provider"),
+            session_id=inp.get("session_id") or _resolve_bound_chat_session_id(),
+        )
+
+    async def _edit_image(self, inp: Dict[str, Any]) -> Any:
+        """이미지 편집."""
+        from app.services.media_generation_service import media_generation_service
+
+        input_refs = {
+            key: inp.get(key)
+            for key in ("image_path", "image_url", "image_data", "mask_path", "input_image_path")
+            if inp.get(key)
+        }
+        return await media_generation_service.edit_image(
+            inp.get("prompt", ""),
+            input_refs=input_refs,
+            size=inp.get("size", "1024x1024"),
+            model_id=inp.get("model_id", "gpt-image-2"),
+            provider=inp.get("provider"),
+            session_id=inp.get("session_id") or _resolve_bound_chat_session_id(),
+        )
+
+    async def _generate_video(self, inp: Dict[str, Any]) -> Any:
+        """비동기 동영상 생성 job 생성."""
+        from app.services.media_generation_service import media_generation_service
+
+        return await media_generation_service.generate_video(
+            inp.get("prompt", ""),
+            input_refs=inp.get("input_refs") or {},
+            model_id=inp.get("model_id", "sora-2"),
+            provider=inp.get("provider"),
+            session_id=inp.get("session_id") or _resolve_bound_chat_session_id(),
+        )
+
+    async def _video_status(self, inp: Dict[str, Any]) -> Any:
+        """동영상 생성 job 상태 조회."""
+        from app.services.media_generation_service import media_generation_service
+
+        return await media_generation_service.video_status(inp.get("job_id", ""))
+
+    async def _video_download(self, inp: Dict[str, Any]) -> Any:
+        """동영상 결과 저장/메타데이터 반환."""
+        from app.services.media_generation_service import media_generation_service
+
+        return await media_generation_service.video_download(
+            inp.get("job_id", ""),
+            output_dir=inp.get("output_dir"),
+        )
 
     async def _send_telegram(self, inp: Dict[str, Any]) -> Any:
         """텔레그램 메시지 전송."""

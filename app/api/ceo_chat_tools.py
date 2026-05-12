@@ -473,7 +473,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     # ── 이미지/팩트체크/검색/샌드박스/알림 도구 ──────────────────────────────
     {
         "name": "generate_image",
-        "description": "이미지 생성 (Imagen 4.0 / GPT-Image-1). 프롬프트로 이미지 생성 후 URL 반환.\n예: generate_image(prompt='한국 전통 한옥 마을 일러스트', size='1024x1024')",
+        "description": "이미지 생성 (gpt-image-2 / imagen-4.0-* / gemini-3.1-flash-image-preview 라우팅 인식). 프롬프트로 이미지 생성 후 URL 반환.\n예: generate_image(prompt='한국 전통 한옥 마을 일러스트', size='1024x1024')",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -486,8 +486,77 @@ TOOL_DEFINITIONS: List[Dict] = [
                     "description": "이미지 크기 (기본: 1024x1024)",
                     "default": "1024x1024",
                 },
+                "model_id": {
+                    "type": "string",
+                    "description": "선택 모델 (예: gpt-image-2, imagen-4.0-generate-001)",
+                },
+                "provider": {
+                    "type": "string",
+                    "description": "선택 provider (openai/google/gemini)",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "요청 채팅 세션 ID",
+                },
             },
             "required": ["prompt"],
+        },
+    },
+    {
+        "name": "edit_image",
+        "description": "이미지 편집 job 생성/실행. gpt-image-2 편집 라우팅을 우선 사용하고 미설정 시 NOT_CONFIGURED를 반환.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "이미지 편집 지시"},
+                "image_path": {"type": "string", "description": "편집할 로컬 이미지 경로"},
+                "image_url": {"type": "string", "description": "편집할 이미지 URL 또는 참조"},
+                "image_data": {"type": "string", "description": "data URI/base64 이미지"},
+                "mask_path": {"type": "string", "description": "선택 마스크 이미지 경로"},
+                "size": {"type": "string", "description": "이미지 크기", "default": "1024x1024"},
+                "model_id": {"type": "string", "description": "선택 모델", "default": "gpt-image-2"},
+                "provider": {"type": "string", "description": "선택 provider"},
+                "session_id": {"type": "string", "description": "요청 채팅 세션 ID"},
+            },
+            "required": ["prompt"],
+        },
+    },
+    {
+        "name": "generate_video",
+        "description": "비동기 동영상 생성 job 생성. sora-2, sora-2-pro, veo-3.1-generate-preview 라우팅 문자열을 인식.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "동영상 생성 프롬프트"},
+                "input_refs": {"type": "object", "description": "참조 이미지/비디오/옵션", "default": {}},
+                "model_id": {"type": "string", "description": "선택 모델", "default": "sora-2"},
+                "provider": {"type": "string", "description": "선택 provider"},
+                "session_id": {"type": "string", "description": "요청 채팅 세션 ID"},
+            },
+            "required": ["prompt"],
+        },
+    },
+    {
+        "name": "video_status",
+        "description": "동영상 생성 job 상태 조회.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string", "description": "generate_video가 반환한 job_id"},
+            },
+            "required": ["job_id"],
+        },
+    },
+    {
+        "name": "video_download",
+        "description": "완료된 동영상 job 결과를 안전 경로에 저장하고 파일 경로/메타데이터를 반환.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string", "description": "generate_video가 반환한 job_id"},
+                "output_dir": {"type": "string", "description": "선택 저장 루트. 생략 시 AADS_MEDIA_OUTPUT_DIR 사용"},
+            },
+            "required": ["job_id"],
         },
     },
     {
@@ -4128,8 +4197,51 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         )
     # ── 이미지/팩트체크/검색/샌드박스/알림 도구 ──────────────────────────
     elif name == "generate_image":
-        from app.services.image_service import image_service
-        result = await image_service.generate(params.get("prompt", ""), params.get("size", "1024x1024"))
+        from app.services.media_generation_service import media_generation_service
+        result = await media_generation_service.generate_image(
+            params.get("prompt", ""),
+            params.get("size", "1024x1024"),
+            model_id=params.get("model_id"),
+            provider=params.get("provider"),
+            session_id=params.get("session_id") or chat_session_id,
+        )
+        return json.dumps(result, ensure_ascii=False)
+    elif name == "edit_image":
+        from app.services.media_generation_service import media_generation_service
+        input_refs = {
+            key: params.get(key)
+            for key in ("image_path", "image_url", "image_data", "mask_path", "input_image_path")
+            if params.get(key)
+        }
+        result = await media_generation_service.edit_image(
+            params.get("prompt", ""),
+            input_refs=input_refs,
+            size=params.get("size", "1024x1024"),
+            model_id=params.get("model_id", "gpt-image-2"),
+            provider=params.get("provider"),
+            session_id=params.get("session_id") or chat_session_id,
+        )
+        return json.dumps(result, ensure_ascii=False)
+    elif name == "generate_video":
+        from app.services.media_generation_service import media_generation_service
+        result = await media_generation_service.generate_video(
+            params.get("prompt", ""),
+            input_refs=params.get("input_refs") or {},
+            model_id=params.get("model_id", "sora-2"),
+            provider=params.get("provider"),
+            session_id=params.get("session_id") or chat_session_id,
+        )
+        return json.dumps(result, ensure_ascii=False)
+    elif name == "video_status":
+        from app.services.media_generation_service import media_generation_service
+        result = await media_generation_service.video_status(params.get("job_id", ""))
+        return json.dumps(result, ensure_ascii=False, default=str)
+    elif name == "video_download":
+        from app.services.media_generation_service import media_generation_service
+        result = await media_generation_service.video_download(
+            params.get("job_id", ""),
+            output_dir=params.get("output_dir"),
+        )
         return json.dumps(result, ensure_ascii=False)
     elif name == "fact_check":
         from app.services.fact_checker import FactChecker

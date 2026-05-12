@@ -1,0 +1,882 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>뉴톡 AI 패션 상품 제작 상세 실행 기획서 P0</title>
+  <style>
+    :root {
+      --ink: #202124;
+      --muted: #5f6368;
+      --line: #d8dee4;
+      --paper: #ffffff;
+      --bg: #f6f7f9;
+      --nav: #17202a;
+      --green: #0f766e;
+      --blue: #2563eb;
+      --rose: #be123c;
+      --amber: #b45309;
+      --violet: #6d28d9;
+      --slate: #334155;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.58;
+    }
+
+    a {
+      color: var(--blue);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    header {
+      background: #111827;
+      color: #fff;
+      padding: 30px clamp(18px, 4vw, 56px) 26px;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      color: #a7f3d0;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(30px, 5vw, 54px);
+      line-height: 1.08;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 980px;
+      margin: 16px 0 0;
+      color: #d1d5db;
+      font-size: 18px;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 22px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 4px 10px;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      border-radius: 999px;
+      color: #e5e7eb;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      gap: 4px;
+      overflow-x: auto;
+      padding: 8px clamp(12px, 4vw, 48px);
+      background: var(--nav);
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    nav a {
+      flex: 0 0 auto;
+      min-height: 36px;
+      padding: 7px 12px;
+      border-radius: 6px;
+      color: #e5e7eb;
+      font-size: 14px;
+      text-decoration: none;
+    }
+
+    nav a:hover,
+    nav a.active {
+      background: rgba(255, 255, 255, 0.12);
+      text-decoration: none;
+    }
+
+    main {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 28px clamp(16px, 3vw, 34px) 70px;
+    }
+
+    section {
+      padding: 30px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    section:last-child {
+      border-bottom: 0;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 28px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 19px;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 8px 0;
+    }
+
+    .lead {
+      max-width: 980px;
+      color: #394150;
+      font-size: 17px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .card {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+
+    .card h3 {
+      margin-top: 0;
+    }
+
+    .ok {
+      background: #f0fdf4;
+      border-color: #bbf7d0;
+    }
+
+    .warn {
+      background: #fff7ed;
+      border-color: #fed7aa;
+    }
+
+    .risk {
+      background: #fff1f2;
+      border-color: #fecdd3;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #eef2ff;
+      color: #3730a3;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .metric strong {
+      display: block;
+      color: #111827;
+      font-size: 34px;
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    .metric span {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .flow {
+      display: grid;
+      gap: 16px;
+      margin-top: 18px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 56px 1fr;
+      gap: 14px;
+      align-items: start;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .num {
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      border-radius: 8px;
+      background: #111827;
+      color: #fff;
+      font-weight: 800;
+    }
+
+    table {
+      width: 100%;
+      margin-top: 14px;
+      border-collapse: collapse;
+      overflow: hidden;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    th,
+    td {
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      font-size: 14px;
+    }
+
+    th {
+      background: #f1f5f9;
+      color: #334155;
+      font-weight: 800;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .screen {
+      border-left: 4px solid var(--blue);
+    }
+
+    .screen.alt {
+      border-left-color: var(--green);
+    }
+
+    .screen.warnline {
+      border-left-color: var(--amber);
+    }
+
+    .list {
+      margin: 8px 0 0;
+      padding-left: 18px;
+    }
+
+    .list li {
+      margin: 5px 0;
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: #eef2f7;
+      color: #0f172a;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.92em;
+    }
+
+    footer {
+      padding: 24px clamp(18px, 4vw, 56px) 36px;
+      color: #e5e7eb;
+      background: #111827;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <p class="eyebrow">NewTalk AI Fashion Product Workflow P0</p>
+    <h1>뉴톡 AI 패션 상품 제작 상세 실행 기획서</h1>
+    <p class="subtitle">
+      상품등록부터 제품컷 등록, 모델 선택, 뉴톡 상품 기반 코디, 모델컷 생성, 감성 이미지컷 생성,
+      뉴톡V1 기준 상세페이지 생성과 판매 전환까지 한 화면 흐름으로 구현하기 위한 실제 적용 기획서입니다.
+    </p>
+    <div class="meta" aria-label="문서 메타 정보">
+      <span class="pill">작성 기준: 2026-05-12 20:02 KST</span>
+      <span class="pill">대상: NTV2 / NewTalk</span>
+      <span class="pill">범위: 관리자 제작 콘솔, AI 생성 파이프라인, 판매 연결</span>
+      <span class="pill">상태: P0 상세 실행안</span>
+    </div>
+  </header>
+
+  <nav aria-label="문서 목차">
+    <a href="#summary">요약</a>
+    <a href="#principles">원칙</a>
+    <a href="#flow">전체 흐름</a>
+    <a href="#screens">화면 설계</a>
+    <a href="#generation">생성 규격</a>
+    <a href="#data">데이터/API</a>
+    <a href="#approval">검수</a>
+    <a href="#roadmap">구현 순서</a>
+    <a href="#criteria">완료 기준</a>
+  </nav>
+
+  <main>
+    <section id="summary">
+      <h2>요약</h2>
+      <p class="lead">
+        P0의 핵심은 기존 상품등록 화면에 AI 기능을 덧붙이는 수준이 아니라,
+        <b>하나의 상품을 AI 인플루언서 판매 콘텐츠로 완성하는 제작 콘솔</b>을 만드는 것입니다.
+        운영자는 주상품을 등록하고 제품컷을 올린 뒤, 모델과 코디를 선택하면 시스템이 모델컷,
+        감성 이미지컷, 상세페이지, 숏츠 초안을 순차 생성합니다.
+      </p>
+      <div class="grid" aria-label="현재 활용 자산">
+        <div class="card metric">
+          <strong>77,349</strong>
+          <span>products 보유 상품 수 [DB 조회]</span>
+        </div>
+        <div class="card metric">
+          <strong>45</strong>
+          <span>sourcing_images 보유 이미지 수 [DB 조회]</span>
+        </div>
+        <div class="card metric">
+          <strong>5</strong>
+          <span>brand_pages 보유 브랜드 페이지 수 [DB 조회]</span>
+        </div>
+        <div class="card metric">
+          <strong>10</strong>
+          <span>shorts 보유 숏츠 수 [DB 조회]</span>
+        </div>
+      </div>
+      <div class="card ok">
+        <h3>P0 결론</h3>
+        <p>
+          첫 버전은 자동 최적화보다 <b>운영자 승인형 반자동 제작</b>이 맞습니다.
+          모델 자동매칭, 코디 자동추천, 상세페이지 자동생성은 모두 후보를 제안하되,
+          최종 판매 반영은 사람이 승인해야 품질과 법적 리스크를 통제할 수 있습니다.
+        </p>
+      </div>
+    </section>
+
+    <section id="principles">
+      <h2>제품 설계 원칙</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>상품이 주인공</h3>
+          <p>AI 모델은 상품 판매를 돕는 매체입니다. 상세페이지와 모델컷은 주상품의 핏, 소재, 길이감, 컬러를 가장 먼저 설명해야 합니다.</p>
+        </div>
+        <div class="card">
+          <h3>뉴톡 상품으로 코디</h3>
+          <p>부상품은 가능하면 뉴톡 판매 상품에서 선택합니다. 품절, 가격대 불일치, 카테고리 충돌이 있으면 외부 소품 또는 비노출 스타일링으로 대체합니다.</p>
+        </div>
+        <div class="card">
+          <h3>AI 표시 기본값</h3>
+          <p>모델컷, 감성컷, 숏츠, 상세페이지에는 AI 생성 또는 AI 보정 여부를 관리자가 확인할 수 있는 표시 필드를 둡니다.</p>
+        </div>
+        <div class="card">
+          <h3>승인 후 판매</h3>
+          <p>생성 결과는 초안 상태로 저장하고, 상품 담당자가 컷, 문구, 가격, 재고, 판매채널을 승인해야 판매 시스템에 반영됩니다.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="flow">
+      <h2>전체 사용자 흐름</h2>
+      <p class="lead">
+        관리자 기준의 기본 플로우는 아래 8단계입니다. 고객은 최종적으로 모델 룩북, 상품 상세페이지, 숏츠, 판매 링크를 통해 유입됩니다.
+      </p>
+      <div class="flow">
+        <div class="step">
+          <div class="num">1</div>
+          <div>
+            <h3>상품등록</h3>
+            <p>상품명, 카테고리, 가격, 원가, 옵션, 재고, 공급처, 판매 상태를 입력합니다. 기존 뉴톡V1 상품등록 기준을 기본값으로 삼고, AI 제작용 필드를 추가합니다.</p>
+            <ul class="list">
+              <li>필수 입력: 상품명, 대표 카테고리, 판매가, 옵션, 재고, 대표 이미지 또는 제품컷 대기 상태.</li>
+              <li>AI 추가 필드: 타깃 연령대, 착용 시즌, 핏 키워드, 금지 연출, 모델 선호도, 상세페이지 톤.</li>
+              <li>상태값: <code>draft</code>, <code>asset_pending</code>, <code>styling_pending</code>, <code>generating</code>, <code>review</code>, <code>approved</code>, <code>published</code>.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">2</div>
+          <div>
+            <h3>제품컷 등록</h3>
+            <p>주상품의 실물 기준 이미지를 업로드합니다. AI 생성 품질은 제품컷 품질에 좌우되므로 업로드 시 품질 체크를 통과해야 다음 단계로 이동합니다.</p>
+            <ul class="list">
+              <li>권장 컷: 정면, 후면, 측면, 소재 클로즈업, 컬러별 컷, 착용 참고컷.</li>
+              <li>자동 점검: 해상도, 배경 복잡도, 상품 가림, 워터마크, 컬러 왜곡, 중복 이미지.</li>
+              <li>운영자 보정: 대표컷 지정, 색상명 매칭, 옵션별 이미지 연결, 불량컷 제외.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">3</div>
+          <div>
+            <h3>모델선택</h3>
+            <p>P0는 6명 페르소나 중 운영자가 직접 선택합니다. P1부터는 상품 카테고리, 가격대, 타깃, 과거 전환 데이터를 이용해 최적 모델을 자동 추천합니다.</p>
+            <ul class="list">
+              <li>P0: 모델 카드에서 연령대, 키, 체형, 스타일, 말투, 주력 카테고리, 금지 연출을 비교해 선택.</li>
+              <li>P1 자동매칭 점수: 카테고리 적합도 30점, 타깃 연령 20점, 스타일 키워드 20점, 가격대 10점, 과거 성과 20점.</li>
+              <li>가드: 10대 후반 페르소나는 만 19세 이상 성인으로만 운영하고 교복, 미성년 암시, 선정적 연출을 금지.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">4</div>
+          <div>
+            <h3>코디매칭</h3>
+            <p>주상품을 중심으로 부상품을 매칭합니다. 되도록 뉴톡 판매 상품에서 부상품을 고르고, 판매 가능성이 낮거나 품절인 상품은 후보에서 제외합니다.</p>
+            <ul class="list">
+              <li>주상품: 이번 상세페이지와 판매 전환의 중심 상품.</li>
+              <li>부상품: 상의, 하의, 아우터, 신발, 가방, 액세서리 등 함께 판매하거나 스타일링에 쓰는 뉴톡 상품.</li>
+              <li>매칭 기준: 색상 조화, 계절, 가격대, 재고, 배송 가능성, 카테고리 충돌, 모델 페르소나 적합도.</li>
+              <li>결과: 코디 세트 3~5개를 만들고 각 세트에 주상품 노출컷과 부상품 보조컷 수량을 지정.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">5</div>
+          <div>
+            <h3>모델컷 생성</h3>
+            <p>1코디당 주상품은 약 20장, 부상품은 상품별 약 10장 내외로 생성합니다. 모든 컷은 제품 원형 보존, 착용 핏, 상세페이지 활용도를 기준으로 검수합니다.</p>
+            <ul class="list">
+              <li>주상품 20장: 전신 6장, 반신 4장, 좌우/후면 4장, 움직임 3장, 소재/핏 강조 3장.</li>
+              <li>부상품 10장: 함께 착용 4장, 클로즈업 3장, 다른 각도 2장, 상세페이지 보조 1장.</li>
+              <li>불합격 기준: 로고/패턴 왜곡, 손/팔/다리 오류, 상품 색상 불일치, 과도한 노출, 실물과 다른 길이감.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">6</div>
+          <div>
+            <h3>제품 연출 느낌 감성 이미지컷 생성</h3>
+            <p>판매 전환용 상세페이지 상단과 SNS 유입을 위한 분위기 컷을 생성합니다. 모델이 반드시 등장하지 않아도 되며, 상품의 계절감과 사용 장면을 강화합니다.</p>
+            <ul class="list">
+              <li>기본 세트: 룩북 메인컷 3장, 라이프스타일컷 3장, 컬러 무드컷 2장, 배너형 컷 2장.</li>
+              <li>톤 선택: 데일리, 출근룩, 데이트룩, 여행룩, 캠퍼스룩, 프리미엄 무드.</li>
+              <li>가드: 상품 실물과 다른 디테일을 새로 만들지 않고, 주상품 판매 포인트를 흐리지 않도록 배경과 소품을 제한.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">7</div>
+          <div>
+            <h3>상세페이지 생성</h3>
+            <p>뉴톡V1 상품등록 기준을 유지하면서 AI 모델컷과 감성컷을 연결합니다. 개선 방향은 상세페이지를 이미지 나열이 아니라 판매 스토리 구조로 만드는 것입니다.</p>
+            <ul class="list">
+              <li>구성: 히어로 이미지, 핵심 카피, 모델 착용컷, 핏 설명, 소재/디테일, 코디 제안, 옵션/사이즈, 배송/교환 안내, AI 표시.</li>
+              <li>자동 초안: 상품명, 가격, 옵션, 모델 페르소나, 코디 세트, 이미지 승인본을 조합해 상세페이지 HTML 또는 이미지 블록 생성.</li>
+              <li>운영자 편집: 컷 순서 변경, 문구 수정, 이미지 제외, 판매 CTA 위치 지정, 뉴톡 판매 상품 태그 연결.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">8</div>
+          <div>
+            <h3>판매 시스템 반영</h3>
+            <p>승인된 상세페이지와 콘텐츠를 뉴톡 판매 시스템에 연결합니다. 판매 상태는 예약, 즉시판매, 비공개, 품절대기 중 선택합니다.</p>
+            <ul class="list">
+              <li>판매 반영 전 체크: 가격, 재고, 옵션, 배송비, 교환/반품, AI 표시, 저작권/상표 리스크.</li>
+              <li>노출 채널: 상품 상세페이지, AI 모델 룩북, 브랜드 페이지, 숏츠, SNS 공유 링크.</li>
+              <li>성과 수집: 조회수, 장바구니, 찜, 구매, 모델별 전환율, 코디 세트별 전환율.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="screens">
+      <h2>실제 적용 UI/UX 화면 설계</h2>
+      <div class="grid">
+        <div class="card screen">
+          <h3>01. AI 상품 제작 대시보드</h3>
+          <p>진행 중 상품을 단계별 칸반으로 보여줍니다.</p>
+          <ul class="list">
+            <li>필터: 카테고리, 담당자, 모델, 상태, 생성 실패, 판매 대기.</li>
+            <li>카드 정보: 상품 썸네일, 주상품명, 모델, 코디 수, 생성 컷 수, 승인률, 마지막 작업 시각.</li>
+            <li>주요 버튼: 새 제작 시작, 실패 재생성, 검수 대기 보기, 판매 반영.</li>
+          </ul>
+        </div>
+        <div class="card screen alt">
+          <h3>02. 상품등록/AI 제작 옵션</h3>
+          <p>기존 상품등록 폼 아래에 AI 제작 섹션을 추가합니다.</p>
+          <ul class="list">
+            <li>AI 제작 여부 토글, 타깃 연령, 원하는 모델 분위기, 금지 연출 입력.</li>
+            <li>상품 설명이 부족하면 AI 상세페이지 생성 버튼을 비활성화.</li>
+            <li>V1 기준 필수값은 그대로 유지해 기존 운영 흐름을 깨지 않습니다.</li>
+          </ul>
+        </div>
+        <div class="card screen warnline">
+          <h3>03. 제품컷 QA 보드</h3>
+          <p>업로드된 제품컷을 자동 점수화하고 통과/보정/제외로 나눕니다.</p>
+          <ul class="list">
+            <li>이미지별 점수: 해상도, 선명도, 배경, 상품 가림, 컬러 신뢰도.</li>
+            <li>대표컷과 옵션컷을 드래그로 지정.</li>
+            <li>AI 생성에 부적합한 컷은 사유를 표시하고 재업로드를 요청.</li>
+          </ul>
+        </div>
+        <div class="card screen">
+          <h3>04. 모델 선택 패널</h3>
+          <p>6명 AI 모델을 상품 적합도 순으로 보여줍니다.</p>
+          <ul class="list">
+            <li>P0: 운영자 직접 선택, 추천 사유는 규칙 기반 표시.</li>
+            <li>P1: 자동 추천 점수와 예상 콘텐츠 톤 제공.</li>
+            <li>모델별 금지 연출, AI 표시 문구, 적합 카테고리를 카드 안에 노출.</li>
+          </ul>
+        </div>
+        <div class="card screen alt">
+          <h3>05. 코디 매칭 보드</h3>
+          <p>주상품을 중앙에 두고 부상품 후보를 오른쪽에서 선택합니다.</p>
+          <ul class="list">
+            <li>후보 정렬: 색상 조화, 재고, 가격대, 카테고리, 모델 적합도.</li>
+            <li>코디 세트별 주상품/부상품 역할 지정.</li>
+            <li>품절 또는 판매중지 상품은 자동 제외하고 대체 후보를 제시.</li>
+          </ul>
+        </div>
+        <div class="card screen warnline">
+          <h3>06. 생성 작업 큐</h3>
+          <p>모델컷, 부상품컷, 감성컷, 숏츠, 상세페이지 생성을 일괄 관리합니다.</p>
+          <ul class="list">
+            <li>작업 단위: 코디 세트, 모델, 컷 타입, 생성 수량, 프롬프트 버전.</li>
+            <li>진행 표시: 대기, 생성 중, 실패, 검수 대기, 승인, 폐기.</li>
+            <li>실패 시 같은 설정으로 재시도하거나 제품컷/코디 단계로 되돌아갑니다.</li>
+          </ul>
+        </div>
+        <div class="card screen">
+          <h3>07. 컷 검수 갤러리</h3>
+          <p>생성 이미지를 상품 정확도와 판매 활용도 기준으로 빠르게 승인합니다.</p>
+          <ul class="list">
+            <li>일괄 작업: 승인, 제외, 재생성, 상세페이지 사용, 숏츠 사용.</li>
+            <li>비교 보기: 제품 원본컷과 생성컷을 나란히 표시.</li>
+            <li>오류 태그: 색상 불일치, 패턴 왜곡, 신체 오류, 과노출, 상품 가림.</li>
+          </ul>
+        </div>
+        <div class="card screen alt">
+          <h3>08. 상세페이지 빌더</h3>
+          <p>승인된 컷을 뉴톡V1 상품등록 기준 상세페이지 구조에 자동 배치합니다.</p>
+          <ul class="list">
+            <li>블록: 히어로, 착용컷, 디테일, 코디 추천, 사이즈, 배송/교환, AI 표시.</li>
+            <li>편집: 문구 수정, 이미지 순서 변경, 블록 삭제/추가, CTA 고정.</li>
+            <li>미리보기: 모바일 우선, PC 보조, 판매 버튼과 옵션 선택까지 확인.</li>
+          </ul>
+        </div>
+        <div class="card screen warnline">
+          <h3>09. 숏츠 초안 생성</h3>
+          <p>상세페이지 승인 컷을 기반으로 숏츠 스토리보드를 생성합니다.</p>
+          <ul class="list">
+            <li>구성: 3초 후킹, 모델 착용, 디테일 강조, 코디 전환, 상품 CTA.</li>
+            <li>자막: 모델 말투와 판매 포인트를 반영하되 과장 광고 문구는 차단.</li>
+            <li>상품 태그: 주상품 필수, 부상품 선택 태그.</li>
+          </ul>
+        </div>
+        <div class="card screen">
+          <h3>10. 판매 런칭 체크리스트</h3>
+          <p>판매 반영 전 마지막 승인 화면입니다.</p>
+          <ul class="list">
+            <li>필수 체크: 가격, 옵션, 재고, 배송, 이미지 승인, 상세페이지, AI 표시.</li>
+            <li>노출 선택: 일반 상품상세, 모델 룩북, 브랜드 페이지, 숏츠, SNS 공유.</li>
+            <li>런칭 후 24시간 성과 알림: 조회, 장바구니, 구매, 이탈 블록.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="generation">
+      <h2>생성 산출물 규격</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>산출물</th>
+            <th>기본 수량</th>
+            <th>사용 위치</th>
+            <th>검수 기준</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>주상품 모델컷</td>
+            <td>1코디당 20장 내외</td>
+            <td>상세페이지, 룩북, 숏츠, SNS</td>
+            <td>상품 색상/핏/길이감 보존, 모델 신체 오류 없음, 판매 포인트 명확</td>
+          </tr>
+          <tr>
+            <td>부상품 모델컷</td>
+            <td>부상품별 10장 내외</td>
+            <td>코디 추천, 연관상품, 숏츠 보조컷</td>
+            <td>주상품을 방해하지 않음, 태그 연결 가능, 재고/판매 상태 정상</td>
+          </tr>
+          <tr>
+            <td>감성 이미지컷</td>
+            <td>코디 세트당 8~10장</td>
+            <td>상세페이지 상단, 배너, SNS 썸네일</td>
+            <td>브랜드 톤 일관성, 상품 오인 방지, 과도한 배경/소품 배제</td>
+          </tr>
+          <tr>
+            <td>상세페이지 초안</td>
+            <td>상품당 1개</td>
+            <td>뉴톡 상품 상세</td>
+            <td>V1 필수 정보 충족, 모바일 가독성, CTA 명확, AI 표시 포함</td>
+          </tr>
+          <tr>
+            <td>숏츠 초안</td>
+            <td>상품당 2~3개</td>
+            <td>뉴톡 숏츠, 외부 SNS</td>
+            <td>상품 태그, 자막, CTA, AI/광고 표시, 과장 문구 없음</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="data">
+      <h2>데이터/API 설계</h2>
+      <p class="lead">
+        P0는 기존 상품 테이블을 바꾸기보다 AI 제작 테이블을 옆에 붙이는 방식이 안전합니다.
+        기존 판매 흐름을 유지하고, AI 제작 상태와 산출물만 별도 관리합니다.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>도메인</th>
+            <th>권장 테이블/객체</th>
+            <th>핵심 필드</th>
+            <th>역할</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>제작 프로젝트</td>
+            <td><code>ai_product_workflows</code></td>
+            <td>product_id, status, target_age, tone, persona_id, current_step, approved_at</td>
+            <td>상품 1개가 AI 판매 콘텐츠로 완성되는 전체 상태 관리</td>
+          </tr>
+          <tr>
+            <td>제품컷</td>
+            <td><code>ai_product_assets</code></td>
+            <td>workflow_id, product_id, image_url, asset_type, qa_score, rejected_reason</td>
+            <td>제품컷, 모델컷, 감성컷, 상세페이지 사용 이미지 관리</td>
+          </tr>
+          <tr>
+            <td>모델 매칭</td>
+            <td><code>ai_model_matches</code></td>
+            <td>workflow_id, persona_id, score, reason, selected_by, selected_at</td>
+            <td>P0 수동 선택과 P1 자동 추천 결과 저장</td>
+          </tr>
+          <tr>
+            <td>코디 세트</td>
+            <td><code>ai_outfit_sets</code></td>
+            <td>workflow_id, main_product_id, sub_product_ids, theme, status</td>
+            <td>뉴톡 상품 기반 코디 구성과 판매 태그 관리</td>
+          </tr>
+          <tr>
+            <td>생성 작업</td>
+            <td><code>ai_generation_jobs</code></td>
+            <td>workflow_id, outfit_id, job_type, prompt_version, quantity, status, error</td>
+            <td>모델컷/감성컷/숏츠/상세페이지 생성 큐</td>
+          </tr>
+          <tr>
+            <td>상세페이지</td>
+            <td><code>ai_detail_pages</code></td>
+            <td>workflow_id, product_id, html, blocks_json, published_product_id, status</td>
+            <td>V1 기준 상세페이지 초안과 승인본 저장</td>
+          </tr>
+        </tbody>
+      </table>
+      <h3>권장 API</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>API</th>
+            <th>메서드</th>
+            <th>목적</th>
+            <th>응답</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>/api/ai-fashion/workflows</code></td>
+            <td>POST</td>
+            <td>상품 기반 AI 제작 프로젝트 시작</td>
+            <td>workflow_id, current_step</td>
+          </tr>
+          <tr>
+            <td><code>/api/ai-fashion/workflows/{id}/assets</code></td>
+            <td>POST</td>
+            <td>제품컷 업로드 및 QA</td>
+            <td>asset list, qa score, rejected_reason</td>
+          </tr>
+          <tr>
+            <td><code>/api/ai-fashion/workflows/{id}/model-matches</code></td>
+            <td>GET</td>
+            <td>모델 후보와 추천 사유 조회</td>
+            <td>persona list, score, reason</td>
+          </tr>
+          <tr>
+            <td><code>/api/ai-fashion/workflows/{id}/outfits</code></td>
+            <td>POST</td>
+            <td>코디 세트 저장</td>
+            <td>outfit_id, validation result</td>
+          </tr>
+          <tr>
+            <td><code>/api/ai-fashion/workflows/{id}/generate</code></td>
+            <td>POST</td>
+            <td>모델컷/감성컷/상세페이지/숏츠 생성 큐 등록</td>
+            <td>job_ids, estimated_count</td>
+          </tr>
+          <tr>
+            <td><code>/api/ai-fashion/workflows/{id}/publish</code></td>
+            <td>POST</td>
+            <td>승인된 상세페이지와 콘텐츠 판매 반영</td>
+            <td>product_url, shorts_urls, status</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="approval">
+      <h2>검수와 운영 규칙</h2>
+      <div class="grid">
+        <div class="card ok">
+          <h3>상품 정확성 검수</h3>
+          <ul class="list">
+            <li>색상, 패턴, 길이, 핏, 소재감이 제품컷과 맞는지 확인.</li>
+            <li>옵션별 이미지가 섞이지 않았는지 확인.</li>
+            <li>과장된 보정으로 실제 상품과 다르게 보이는 컷은 폐기.</li>
+          </ul>
+        </div>
+        <div class="card warn">
+          <h3>모델/연출 검수</h3>
+          <ul class="list">
+            <li>10대 후반 페르소나는 만 19세 이상 성인 설정만 허용.</li>
+            <li>교복, 미성년 암시, 선정성, 실존 인물 유사 연출 금지.</li>
+            <li>모델별 말투와 세계관은 판매 카피에서 과도하게 앞서지 않도록 제한.</li>
+          </ul>
+        </div>
+        <div class="card risk">
+          <h3>광고/AI 표시 검수</h3>
+          <ul class="list">
+            <li>AI 생성 이미지 또는 AI 보정 컷 여부를 관리자 필드에 기록.</li>
+            <li>SNS/숏츠에는 광고 또는 자체 판매 콘텐츠 표시 기준을 적용.</li>
+            <li>체형 보정, 효능 표현, 품질 보증 표현은 근거 없는 문구를 차단.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="roadmap">
+      <h2>P0 구현 순서</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>순서</th>
+            <th>작업</th>
+            <th>완료 산출물</th>
+            <th>완료 기준</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td>기존 상품등록/V1 상세페이지 구조 분석</td>
+            <td>필드 매핑표, 상세페이지 블록 기준</td>
+            <td>V1 필수값과 AI 추가값 충돌 없음</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td>AI 제작 워크플로우 테이블/API 설계</td>
+            <td>마이그레이션, API 명세, 상태 머신</td>
+            <td>상품 1개 기준 단계 이동과 저장 가능</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td>관리자 제작 콘솔 UI 구현</td>
+            <td>대시보드, 제품컷 QA, 모델 선택, 코디 보드</td>
+            <td>운영자가 상품 1개를 생성 큐까지 보낼 수 있음</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td>생성 큐와 검수 갤러리 구현</td>
+            <td>작업 큐, 결과 갤러리, 승인/재생성 액션</td>
+            <td>20장/10장 규격으로 생성 결과를 승인 처리 가능</td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td>상세페이지 빌더와 판매 반영</td>
+            <td>V1 호환 상세페이지 초안, 판매 반영 버튼</td>
+            <td>승인된 상세페이지가 뉴톡 판매 URL로 노출됨</td>
+          </tr>
+          <tr>
+            <td>6</td>
+            <td>숏츠 초안과 성과 수집</td>
+            <td>숏츠 스토리보드, 상품 태그, 성과 대시보드</td>
+            <td>상품별 조회/장바구니/구매 전환 추적 가능</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="criteria">
+      <h2>P0 완료 기준</h2>
+      <div class="card ok">
+        <h3>상품 10개 파일럿 기준</h3>
+        <p>
+          P0는 대량 자동화보다 상품 10개를 실제로 판매 가능한 상세페이지와 숏츠 초안까지 완성하는 것을 성공 기준으로 잡습니다.
+        </p>
+        <ul class="list">
+          <li>상품 10개가 상품등록, 제품컷, 모델 선택, 코디 매칭, 모델컷 생성, 감성컷 생성, 상세페이지 생성, 판매 반영까지 완료.</li>
+          <li>각 상품당 주상품 모델컷 20장 내외, 부상품컷 10장 내외, 감성컷 8장 이상 생성 및 검수.</li>
+          <li>상세페이지는 모바일에서 이미지, 옵션, CTA, 배송/교환, AI 표시가 정상 노출.</li>
+          <li>모델/코디/상세페이지/숏츠별 성과 추적 필드가 저장됨.</li>
+          <li>운영자가 실패 사유를 보고 제품컷, 모델, 코디, 프롬프트 중 어디를 수정해야 하는지 판단 가능.</li>
+        </ul>
+      </div>
+      <div class="card warn">
+        <h3>P1 자동화 전환 조건</h3>
+        <p>
+          상품 10개 파일럿에서 승인률, 생성 실패율, 판매 전환 데이터를 확보한 뒤에만 최적 모델 자동매칭과 코디 자동추천을 강화합니다.
+          데이터 없이 자동화부터 넣으면 잘못된 모델/코디가 대량 생성되어 운영 검수 비용이 커집니다.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>문서 근거: NTV2 DB 조회(products, sourcing_images, brand_pages, shorts), 기존 뉴톡 AI 패션 사업기획서, P0 UI/UX 기획서.</p>
+    <p>관련 문서: <a href="/reports/newtalk-ai-fashion-influencer-plan-v1.html">사업기획서 v1</a> · <a href="/reports/newtalk-ai-fashion-uiux-plan-p0.html">P0 UI/UX 적용 기획서</a> · <a href="/reports/newtalk-ai-fashion-commerce-flow-plan-p0.html">P0 실행 흐름 계획</a></p>
+  </footer>
+
+  <script>
+    const links = [...document.querySelectorAll("nav a")];
+    const sectionLinks = links.filter((link) => link.getAttribute("href")?.startsWith("#"));
+    const sections = sectionLinks.map((link) => document.querySelector(link.getAttribute("href")));
+
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        links.forEach((link) => link.classList.remove("active"));
+        const active = document.querySelector(`nav a[href="#${entry.target.id}"]`);
+        if (active) active.classList.add("active");
+      });
+    }, { rootMargin: "-35% 0px -55% 0px", threshold: 0.01 });
+
+    sections.filter(Boolean).forEach((section) => observer.observe(section));
+  </script>
+</body>
+</html>
