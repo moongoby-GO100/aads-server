@@ -1502,8 +1502,7 @@ ${_fallback_tail}") WHERE job_id='${job_id}';"
             CURRENT_TIME=$(date +%s)
             DIFF_SECONDS=$((CURRENT_TIME - DASHBOARD_LAST_COMMIT))
             if [ "$DASHBOARD_CHANGED" = true ] || [ "$DIFF_SECONDS" -lt 600 ]; then
-                log "  ZERO-DOWNTIME aads-dashboard — deploy.sh 호출 (헬스체크+롤백)"
-                local _compose_file="/root/aads/aads-server/docker-compose.prod.yml"
+                log "  BLUEGREEN aads-dashboard — deploy.sh 호출 (헬스체크+롤백)"
                 local _dash_deploy_log="/tmp/pipeline-deploy-dashboard-${job_id}.log"
                 if bash /root/aads/aads-dashboard/deploy.sh >"$_dash_deploy_log" 2>&1; then
                     tail -10 "$_dash_deploy_log" 2>/dev/null || true
@@ -1511,21 +1510,10 @@ ${_fallback_tail}") WHERE job_id='${job_id}';"
                 else
                     local _dash_tail
                     _dash_tail=$(tail -20 "$_dash_deploy_log" 2>/dev/null | head -c 1500)
-                    log "  DASHBOARD DEPLOY: deploy.sh 실패 — fallback: 인라인 docker 교체: ${_dash_tail//$'\n'/ }"
-                    local _dash_fallback_log="/tmp/pipeline-deploy-dashboard-fallback-${job_id}.log"
-                    if docker compose -f "$_compose_file" build aads-dashboard >"$_dash_fallback_log" 2>&1 \
-                       && docker compose -f "$_compose_file" up -d --no-build --no-deps aads-dashboard >>"$_dash_fallback_log" 2>&1; then
-                        tail -5 "$_dash_fallback_log" 2>/dev/null || true
-                    else
-                        local _dash_fallback_tail
-                        _dash_fallback_tail=$(tail -20 "$_dash_fallback_log" 2>/dev/null | head -c 1500)
-                        log "  ERROR: dashboard fallback deploy 실패: ${_dash_fallback_tail//$'\n'/ }"
-                        post_to_chat "$session_id" "🔴 [Runner] AADS dashboard 배포 실패: ${_dash_fallback_tail:0:500}"
-                        _build_fail="${_build_fail:+${_build_fail};}aads-dashboard:deploy_failed"
-                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-dashboard] ' || $(sql_escape "${_dash_tail}
-${_dash_fallback_tail}") WHERE job_id='${job_id}';"
-                    fi
-                    rm -f "$_dash_fallback_log" 2>/dev/null || true
+                    log "  ERROR: dashboard blue-green deploy 실패 — 직접 docker fallback 차단: ${_dash_tail//$'\n'/ }"
+                    post_to_chat "$session_id" "🔴 [Runner] AADS dashboard blue-green 배포 실패: ${_dash_tail:0:500}"
+                    _build_fail="${_build_fail:+${_build_fail};}aads-dashboard:deploy_failed"
+                    db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-dashboard] ' || $(sql_escape "${_dash_tail}") WHERE job_id='${job_id}';"
                 fi
                 rm -f "$_dash_deploy_log" 2>/dev/null || true
 

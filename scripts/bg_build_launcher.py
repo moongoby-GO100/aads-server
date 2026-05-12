@@ -9,12 +9,9 @@ if pid > 0:
 else:
     os.setsid()
     with open("/tmp/dashboard_build.log", "w") as log:
-        for cmd in [
-            "docker compose -f /root/aads/aads-dashboard/docker-compose.yml build --no-cache",
-            "docker compose -f /root/aads/aads-dashboard/docker-compose.yml up -d",
-        ]:
-            log.write("[RUN] %s\n" % cmd)
-            log.flush()
-            subprocess.call(cmd.split(), stdout=log, stderr=log)
+        cmd = ["/root/aads/aads-dashboard/deploy.sh"]
+        log.write("[RUN] %s\n" % " ".join(cmd))
+        log.flush()
+        subprocess.call(cmd, stdout=log, stderr=log)
         log.write("[DONE]\n")
     os._exit(0)

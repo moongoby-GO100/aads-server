@@ -1,6 +1,24 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-12)
+- **AADS API/server/dashboard blue-green 강제 범위 확대 (2026-05-12 09:17~KST)**:
+  - 요청: API, server, dashboard, Docker 계층까지 BG 적용 여부를 확인하고 즉시 조치.
+  - 원인: 백엔드 러너 표준 배포는 `deploy.sh bluegreen`이었지만, 대시보드 러너 후처리가 `docker compose build` 후 `up -d aads-dashboard`로 직접 교체했고, 텔레그램 승인봇/승인 API/watchdog에도 `aads-server`·`aads-dashboard` 직접 restart/compose 경로가 남아 있었다.
+  - 조치: `scripts/pipeline-runner.sh.local`의 대시보드 후처리를 `/root/aads/aads-dashboard/deploy.sh` 호출로 변경했다. `scripts/tg_approval_bot.py`, `app/api/approval.py`, `app/api/watchdog.py`는 AADS API/dashboard 직접 restart/compose 명령을 blue-green 배포 스크립트로 리다이렉트한다.
+  - 조치: 실제 실행 러너인 `scripts/pipeline-runner.sh`에서도 대시보드 deploy 실패 시 직접 docker compose fallback을 제거했다. `scripts/rebuild_dashboard.sh`, `scripts/rebuild_dashboard_aads188.sh`, `scripts/rebuild-dashboard.sh`, `scripts/build_dashboard.sh`, `scripts/build_dashboard_once.sh`, `scripts/build-dashboard.sh`, `scripts/bg_build_launcher.py`는 직접 compose 대신 대시보드 BG 스크립트 래퍼로 바꿨다.
+  - 조치: `app/services/unified_healer.py`도 `docker restart aads-server`/`aads-dashboard`를 blue-green 배포로 리다이렉트한다. `aads-dashboard/deploy.sh`는 이전 슬롯을 즉시 stop하지 않고 기본 warm standby로 유지하며, 필요 시 `AADS_DASHBOARD_STOP_PREVIOUS=true`일 때만 정리한다.
+  - 운영 반영: nginx upstream과 `.active_port/.active_container`를 `8102/aads-server-green`으로 정합화했고, active 8102의 스트림 0건을 확인한 뒤 `aads-api`만 reload해 healer 리다이렉트까지 런타임에 반영했다. `aads-pipeline-runner`도 재시작해 수정된 `scripts/pipeline-runner.sh`를 로드했다.
+  - 검증: `nginx -t`, `bash -n deploy.sh`, `bash -n scripts/pipeline-runner.sh`, 대시보드/빌드 래퍼 `bash -n`, `python3 -m py_compile app/api/approval.py app/api/watchdog.py app/services/unified_healer.py scripts/tg_approval_bot.py scripts/bg_build_launcher.py` 통과. 외부 `https://aads.newtalk.kr/api/v1/health` 200, `/login` 200, `aads-pipeline-runner` active 확인.
+  - 주의: DB/Postgres, Redis, LiteLLM, socket-proxy 같은 의존 컨테이너는 blue-green 대상이 아니며, 직접 재시작 대신 장애 시 수동 승인·별도 복구 기준으로 다뤄야 한다.
+
+- **AADS deploy.sh blue-green 기본 강제 (2026-05-12 09:06 KST)**:
+  - 요청: AADS 무중단 배포가 일부 경로에서 서버 재시작/응답 끊김을 유발할 수 있어 즉시 조치.
+  - 원인: 러너 표준 경로는 `deploy.sh bluegreen`을 호출하지만, `deploy.sh` 자체 기본값이 `code`였고 `code`/`reload`/`build` 레거시 모드가 active API 재시작 경로를 그대로 열어 두고 있었다.
+  - 조치: `deploy.sh` 무인자 기본값을 `bluegreen`으로 변경하고, `code`/`reload`/`build` 요청은 기본적으로 `bluegreen`으로 자동 리다이렉트하도록 가드했다. 불가피한 수동 점검 때만 `AADS_DEPLOY_ALLOW_LEGACY_RESTART=true`를 명시하면 기존 모드를 실행할 수 있다.
+  - 의존성 확인: 2026-05-12 09:06 KST 기준 `.active_port=8100`, `.active_container=aads-server`, nginx upstream도 8100 primary/8102 backup으로 일치했다. `aads-server`, `aads-server-green`, `aads-postgres`, `aads-redis`, `aads-litellm`, `aads-dashboard`는 running/healthy 상태였다.
+  - 검증: `bash -n deploy.sh` 통과. 양쪽 API `http://127.0.0.1:8100/api/v1/health`, `http://127.0.0.1:8102/api/v1/health` 모두 OK. active 8100에는 스트림 4건이 있어 불필요한 재배포는 실행하지 않았다.
+  - 주의: 이 조치는 다음 배포 호출부터 적용된다. 현재 작업트리의 기존 무관 변경 `docs/CHANGELOG-go100-direct.md`는 건드리지 않았다.
+
 - **Chat TODO 패널 UX 보강 (2026-05-12 08:36 KST)**:
   - 요청: 채팅창 상단 TODO 패널을 접을 수 있게 하고, 기본 상태에서 완료 이력보다 진행/대기 항목을 먼저 보이도록 조정.
   - 대시보드 조치: `aads-dashboard/src/app/chat/page.tsx`에 `todoCollapsed`, `showAllTodos` 상태를 추가했다. 세션 전환 시 기본값을 `펼침 + 진행만`으로 초기화하고, 헤더에 `전체/진행만` 토글과 접기 버튼을 넣었다.

@@ -1145,13 +1145,12 @@ deploy_job() {
             CURRENT_TIME=$(date +%s)
             DIFF_SECONDS=$((CURRENT_TIME - DASHBOARD_LAST_COMMIT))
             if [ "$DASHBOARD_CHANGED" = true ] || [ "$DIFF_SECONDS" -lt 600 ]; then
-                log "  ZERO-DOWNTIME aads-dashboard (${DIFF_SECONDS}s ago)"
-                local _compose_file="/root/aads/aads-server/docker-compose.prod.yml"
-                # Step 1: 이미지만 빌드 (기존 컨테이너 유지)
-                if docker compose -f "$_compose_file" build aads-dashboard 2>&1 | tail -5; then
-                    # Step 2: 빌드 성공 → 컨테이너 교체
-                    docker compose -f "$_compose_file" up -d --no-build aads-dashboard 2>/dev/null || true
-                    log "  aads-dashboard zero-downtime swap complete"
+                log "  BLUEGREEN aads-dashboard (${DIFF_SECONDS}s ago)"
+                # Dashboard도 직접 docker compose 교체 금지. 전용 blue-green 스크립트가
+                # standby 빌드 → health → nginx swap → 외부 health 순서로 처리한다.
+                if DASHBOARD_EXTERNAL_HEALTH_URL="https://aads.newtalk.kr/login" \
+                    bash /root/aads/aads-dashboard/deploy.sh 2>&1 | tail -30; then
+                    log "  aads-dashboard blue-green deploy complete"
 
                     # ── QA 자동 실행: 대시보드 배포 후 프론트엔드 검증 ──
                     log "  QA: 30초 대기 후 Visual QA 실행..."
@@ -1197,8 +1196,8 @@ deploy_job() {
                         fi
                     fi
                 else
-                    log "  WARN: aads-dashboard build failed — 기존 서비스 유지"
-                    post_to_chat "$session_id" "⚠️ [Runner] 대시보드 빌드 실패 — 기존 버전 유지"
+                    log "  WARN: aads-dashboard blue-green deploy failed — 기존 서비스 유지"
+                    post_to_chat "$session_id" "⚠️ [Runner] 대시보드 blue-green 배포 실패 — 기존 버전 유지"
                 fi
             else
                 log "  SKIP aads-dashboard rebuild (no recent commits, last: ${DIFF_SECONDS}s ago)"

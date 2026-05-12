@@ -1,16 +1,16 @@
 #!/bin/bash
 # AADS 안전 배포 게이트웨이
-# 사용법: deploy.sh [code|reload|build|bluegreen]
-#   code      (기본) — SIGTERM + 60초 대기 + supervisorctl start (graceful)
-#   reload           — supervisorctl restart (빠른 재기동, ~10초)
-#   build            — docker compose up -d --build --no-deps aads-server (1~3분 중단)
-#   bluegreen        — Blue↔Green 무중단 전환 (중단 0초, 자동 롤백, upstream 전환)
+# 사용법: deploy.sh [bluegreen|code|reload|build]
+#   bluegreen (기본) — Blue↔Green 무중단 전환 (중단 0초, 자동 롤백, upstream 전환)
+#   code/reload/build — 레거시 모드. 기본 차단 후 bluegreen으로 자동 전환.
+#                      불가피한 수동 점검 때만 AADS_DEPLOY_ALLOW_LEGACY_RESTART=true 지정.
 #
 # 검증 6단계: 의존성→코드검증→배포→Health→DB스키마→채팅→LLM→프론트QA
 
 set -euo pipefail
 
-MODE="${1:-code}"
+REQUESTED_MODE="${1:-bluegreen}"
+MODE="$REQUESTED_MODE"
 COMPOSE_DIR="/root/aads/aads-server"
 HEALTH_URL="http://localhost:8100/api/v1/health"
 MAX_WAIT="${AADS_DEPLOY_MAX_WAIT:-30}"
@@ -21,11 +21,19 @@ ACTIVE_PORT_FILE="${COMPOSE_DIR}/.active_port"
 
 get_active_port() {
     local port=""
-    if [[ -f "$ACTIVE_PORT_FILE" ]]; then
-        port=$(tr -d '[:space:]' < "$ACTIVE_PORT_FILE" 2>/dev/null || true)
+    local upstream_port=""
+    local upstream_count="0"
+    if [[ -f "$UPSTREAM_CONF" ]]; then
+        upstream_count=$(grep "server 127.0.0.1:" "$UPSTREAM_CONF" | grep -v backup | grep -cE '127\.0\.0\.1:(8100|8102)' || true)
+        if [[ "$upstream_count" == "1" ]]; then
+            upstream_port=$(grep "server 127.0.0.1:" "$UPSTREAM_CONF" | grep -v backup | grep -oP '127\.0\.0\.1:\K(8100|8102)' | head -1 || true)
+        fi
     fi
-    if [[ -z "$port" && -f "$UPSTREAM_CONF" ]]; then
-        port=$(grep "server 127.0.0.1:" "$UPSTREAM_CONF" | grep -v backup | head -1 | grep -oP '127\.0\.0\.1:\K[0-9]+' || true)
+    if [[ "$upstream_port" == "8100" || "$upstream_port" == "8102" ]]; then
+        port="$upstream_port"
+        echo "$port" > "$ACTIVE_PORT_FILE" 2>/dev/null || true
+    elif [[ -f "$ACTIVE_PORT_FILE" ]]; then
+        port=$(tr -d '[:space:]' < "$ACTIVE_PORT_FILE" 2>/dev/null || true)
     fi
     if [[ "$port" != "8100" && "$port" != "8102" ]]; then
         port="8100"
@@ -189,7 +197,16 @@ if [[ -f "${COMPOSE_DIR}/.env" ]]; then
     export TELEGRAM_CHAT_ID=$(grep -oP '^TELEGRAM_CHAT_ID=\K.*' "${COMPOSE_DIR}/.env" 2>/dev/null || true)
 fi
 
-echo "[deploy.sh] mode=${MODE} at $(date '+%Y-%m-%d %H:%M:%S')"
+if [[ "$MODE" == "code" || "$MODE" == "reload" || "$MODE" == "build" ]]; then
+    if [[ "${AADS_DEPLOY_ALLOW_LEGACY_RESTART:-false}" == "true" ]]; then
+        echo "[deploy.sh] ⚠️ legacy mode=${MODE} explicitly allowed by AADS_DEPLOY_ALLOW_LEGACY_RESTART=true"
+    else
+        echo "[deploy.sh] ⚠️ legacy mode=${MODE} would restart active API; redirecting to bluegreen"
+        MODE="bluegreen"
+    fi
+fi
+
+echo "[deploy.sh] requested_mode=${REQUESTED_MODE} effective_mode=${MODE} at $(date '+%Y-%m-%d %H:%M:%S')"
 
 if [[ "$MODE" == "code" ]]; then
     MAX_WAIT="${AADS_DEPLOY_MAX_WAIT:-60}"
@@ -454,8 +471,10 @@ case "$MODE" in
         echo "[deploy.sh] ③ upstream 전환: :${CURRENT_PORT} → :${NEW_PORT}"
         cp "$UPSTREAM_CONF" "${UPSTREAM_CONF}.pre_deploy"
         # 새 포트에서 backup 제거, 기존 포트에 backup 추가
-        sed -i "s/server 127.0.0.1:${NEW_PORT} max_fails=3 fail_timeout=30s backup;/server 127.0.0.1:${NEW_PORT} max_fails=3 fail_timeout=30s;/g" "$UPSTREAM_CONF"
-        sed -i "s/server 127.0.0.1:${CURRENT_PORT} max_fails=3 fail_timeout=30s;/server 127.0.0.1:${CURRENT_PORT} max_fails=3 fail_timeout=30s backup;/g" "$UPSTREAM_CONF"
+        sed -i -E \
+            -e "s/server 127\.0\.0\.1:${NEW_PORT} [^;]*;/server 127.0.0.1:${NEW_PORT} max_fails=0;/g" \
+            -e "s/server 127\.0\.0\.1:${CURRENT_PORT} [^;]*;/server 127.0.0.1:${CURRENT_PORT} max_fails=3 fail_timeout=30s backup;/g" \
+            "$UPSTREAM_CONF"
         if ! nginx -t 2>/dev/null; then
             echo "[deploy.sh] ❌ nginx 설정 오류 — 롤백"
             cp "${UPSTREAM_CONF}.pre_deploy" "$UPSTREAM_CONF"
@@ -548,7 +567,7 @@ case "$MODE" in
         notify "✅ Blue-Green 완전 무중단 배포: :${CURRENT_PORT} → :${NEW_PORT}"
         ;;
     *)
-        echo "[deploy.sh] ERROR: 알 수 없는 모드 '$MODE'. code|reload|build|bluegreen 사용"
+        echo "[deploy.sh] ERROR: 알 수 없는 모드 '$MODE'. bluegreen|code|reload|build 사용"
         exit 1
         ;;
 esac

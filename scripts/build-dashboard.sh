@@ -1,7 +1,5 @@
 #!/bin/bash
-echo "[$(date)] Dashboard build started" > /tmp/dashboard-build.log
-docker compose -f /root/aads/aads-dashboard/docker-compose.yml build aads-dashboard >> /tmp/dashboard-build.log 2>&1
-echo "[$(date)] Build exit: $?" >> /tmp/dashboard-build.log
-docker compose -f /root/aads/aads-dashboard/docker-compose.yml up -d aads-dashboard >> /tmp/dashboard-build.log 2>&1
-echo "[$(date)] Deploy exit: $?" >> /tmp/dashboard-build.log
-echo "BUILD_DONE" >> /tmp/dashboard-build.log
+set -euo pipefail
+echo "[$(date)] Dashboard blue-green deploy started" > /tmp/dashboard-build.log
+/root/aads/aads-dashboard/deploy.sh >> /tmp/dashboard-build.log 2>&1
+echo "[$(date)] Dashboard blue-green deploy done" >> /tmp/dashboard-build.log

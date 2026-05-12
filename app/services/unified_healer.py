@@ -26,7 +26,6 @@ logger = structlog.get_logger("unified_healer")
 # ── 안전/위험 명령 분류 ──────────────────────────────────────────────────────
 
 SAFE_COMMANDS = {
-    "docker restart aads-server",
     "docker restart aads-postgres",
     "docker restart aads-redis",
     "docker restart aads-litellm",
@@ -35,6 +34,7 @@ SAFE_COMMANDS = {
     "docker stop -t 30 aads-server",
     "docker system prune -f",
     "/root/aads/aads-server/deploy.sh bluegreen",
+    "/root/aads/aads-dashboard/deploy.sh",
 }
 
 SAFE_PREFIXES = [
@@ -266,8 +266,29 @@ def _parse_docker_command(command: str) -> tuple[str, str]:
     return "", ""
 
 
+def _redirect_aads_core_restart(command: str, target_server: str = "68") -> str:
+    """AADS API/dashboard 직접 restart/compose 명령을 blue-green 배포로 치환."""
+    normalized = " ".join((command or "").split())
+    if target_server != "68" or not normalized:
+        return command
+    if "aads-server" in normalized and (
+        normalized.startswith("docker restart")
+        or normalized.startswith("docker compose")
+        or normalized.startswith("docker-compose")
+    ):
+        return "/root/aads/aads-server/deploy.sh bluegreen"
+    if "aads-dashboard" in normalized and (
+        normalized.startswith("docker restart")
+        or normalized.startswith("docker compose")
+        or normalized.startswith("docker-compose")
+    ):
+        return "/root/aads/aads-dashboard/deploy.sh"
+    return command
+
+
 async def _execute_command(command: str, target_server: str = "68") -> dict:
     """명령 실행. 68서버 docker 명령은 Unix Socket API로, 그 외=SSH."""
+    command = _redirect_aads_core_restart(command, target_server)
     try:
         if target_server == "68":
             # docker 명령은 Docker Engine API로 직접 실행

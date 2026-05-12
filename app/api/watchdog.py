@@ -289,9 +289,12 @@ async def watchdog_services():
 # --- 자동 복구 실행 ---
 async def _attempt_recovery(error_id: int, command: str) -> bool:
     """안전한 명령만 실행. 화이트리스트 기반."""
+    command = _redirect_aads_restart_command(command)
     SAFE_PREFIXES = [
         "docker restart",
         "docker compose",
+        "/root/aads/aads-server/deploy.sh",
+        "/root/aads/aads-dashboard/deploy.sh",
         "systemctl reload nginx",
         "systemctl restart",
         "curl",
@@ -319,3 +322,23 @@ async def _attempt_recovery(error_id: int, command: str) -> bool:
     except Exception as e:
         logger.error("recovery_execution_failed", error_id=error_id, error=str(e))
         return False
+
+
+def _redirect_aads_restart_command(command: str) -> str:
+    """AADS API/dashboard 자동복구는 직접 restart 대신 blue-green 배포로 통일."""
+    normalized = " ".join((command or "").split())
+    if not normalized:
+        return command
+    if "aads-server" in normalized and (
+        normalized.startswith("docker restart")
+        or normalized.startswith("docker compose")
+        or normalized.startswith("docker-compose")
+    ):
+        return "/root/aads/aads-server/deploy.sh bluegreen"
+    if "aads-dashboard" in normalized and (
+        normalized.startswith("docker restart")
+        or normalized.startswith("docker compose")
+        or normalized.startswith("docker-compose")
+    ):
+        return "/root/aads/aads-dashboard/deploy.sh"
+    return command

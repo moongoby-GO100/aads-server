@@ -236,9 +236,12 @@ async def _execute_approved_action(row) -> dict:
 
 async def _run_command(command: str, target_server: str) -> dict:
     """서버에서 명령 실행. 68=로컬, 그 외=SSH."""
+    command = _redirect_aads_restart_command(command, target_server)
     SAFE_PREFIXES = [
         "docker restart", "docker compose",
         "systemctl reload", "systemctl restart",
+        "/root/aads/aads-server/deploy.sh",
+        "/root/aads/aads-dashboard/deploy.sh",
         "curl",
         "sudo systemctl restart",
         "sudo systemctl reload",
@@ -291,6 +294,26 @@ async def _run_command(command: str, target_server: str) -> dict:
         return {"success": False, "output": "Command timed out (120s)"}
     except Exception as e:
         return {"success": False, "output": str(e)}
+
+
+def _redirect_aads_restart_command(command: str, target_server: str) -> str:
+    """AADS 핵심 서비스 직접 재시작 명령을 blue-green 배포 경로로 치환."""
+    normalized = " ".join((command or "").split())
+    if target_server != "68" or not normalized:
+        return command
+    if "aads-server" in normalized and (
+        normalized.startswith("docker restart")
+        or normalized.startswith("docker compose")
+        or normalized.startswith("docker-compose")
+    ):
+        return "/root/aads/aads-server/deploy.sh bluegreen"
+    if "aads-dashboard" in normalized and (
+        normalized.startswith("docker restart")
+        or normalized.startswith("docker compose")
+        or normalized.startswith("docker-compose")
+    ):
+        return "/root/aads/aads-dashboard/deploy.sh"
+    return command
 
 
 async def _run_claude_code(instruction: str, target_server: str) -> dict:

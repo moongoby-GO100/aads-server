@@ -47,7 +47,7 @@ log = logging.getLogger("tg_approval_bot")
 RECOVERY_COMMANDS = {
     "aads_server": {
         "label": "aads-server 컨테이너",
-        "cmd": "cd /root/aads && docker compose -f docker-compose.prod.yml up -d --no-deps aads-server",
+        "cmd": "/root/aads/aads-server/deploy.sh bluegreen",
         "server": "68"
     },
     "auto_trigger": {
@@ -62,7 +62,7 @@ RECOVERY_COMMANDS = {
     },
     "aads_dashboard": {
         "label": "aads-dashboard 컨테이너",
-        "cmd": "cd /root/aads && docker compose -f docker-compose.prod.yml up -d --no-deps aads-dashboard",
+        "cmd": "/root/aads/aads-dashboard/deploy.sh",
         "server": "68"
     },
     "aads_postgres": {
