@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import io
+import json
+import urllib.error
+
 import pytest
 
+from app.browser_bridge import service as service_module
 from app.browser_bridge.models import BrowserEndpointKind
 from app.browser_bridge.registry import PairingManager, SessionRegistry
 from app.browser_bridge.security import BrowserBridgeSecurityError, validate_bridge_endpoint
@@ -213,6 +218,69 @@ def test_active_api_ports_include_blue_green_fallbacks(monkeypatch) -> None:
     ports = BrowserBridgeService._active_api_ports()
 
     assert ports == ["8100", "8102"]
+
+
+@pytest.mark.asyncio
+async def test_active_api_fallback_surfaces_non_routing_http_error(monkeypatch) -> None:
+    service = BrowserBridgeService()
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        BrowserBridgeService,
+        "_active_api_ports",
+        classmethod(lambda cls: ["8102", "8100"]),
+    )
+
+    def fake_urlopen(req, timeout):  # noqa: ANN001, ARG001
+        calls.append(req.full_url)
+        if "8102" in req.full_url:
+            body = {
+                "detail": {
+                    "status": "error",
+                    "error_code": "PC_AGENT_OFFLINE",
+                    "message": "agent '2e9379a1-fed' is offline",
+                }
+            }
+        else:
+            body = {
+                "detail": {
+                    "status": "error",
+                    "error_code": None,
+                    "message": "파일을 찾을 수 없습니다",
+                    "result": {
+                        "result": {
+                            "error": "파일을 찾을 수 없습니다",
+                            "missing": ["C:\\AADS_UPLOAD_PROBE_DO_NOT_EXIST.jpg"],
+                        }
+                    },
+                }
+            }
+        raise urllib.error.HTTPError(
+            req.full_url,
+            503,
+            "Service Unavailable",
+            hdrs=None,
+            fp=io.BytesIO(json.dumps(body).encode("utf-8")),
+        )
+
+    monkeypatch.setattr(service_module.urllib.request, "urlopen", fake_urlopen)
+
+    result = await service._execute_pc_agent_route_via_active_api(
+        command_type="browser_file_upload",
+        params={
+            "port": 9222,
+            "selector": "input[type=file]",
+            "file_paths": ["C:\\AADS_UPLOAD_PROBE_DO_NOT_EXIST.jpg"],
+        },
+        agent_id="2e9379a1-fed",
+        job_type="browser_bridge_probe",
+        required_capabilities=["interactive_browser"],
+    )
+
+    assert len(calls) == 2
+    assert result is not None
+    assert result["message"] == "파일을 찾을 수 없습니다"
+    assert result["result"]["result"]["missing"] == ["C:\\AADS_UPLOAD_PROBE_DO_NOT_EXIST.jpg"]
 
 
 @pytest.mark.asyncio

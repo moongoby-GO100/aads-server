@@ -601,6 +601,26 @@ class BrowserBridgeService:
                 try:
                     with urllib.request.urlopen(req, timeout=max(95, command_timeout_seconds + 5)) as resp:
                         raw = resp.read().decode("utf-8")
+                except urllib.error.HTTPError as exc:
+                    try:
+                        raw_error = exc.read().decode("utf-8", errors="ignore")
+                        parsed_error = json.loads(raw_error)
+                    except Exception:
+                        logger.warning("browser_bridge_active_pc_agent_fallback_http_failed url=%s err=%s", url, exc)
+                        continue
+                    detail = parsed_error.get("detail") if isinstance(parsed_error, dict) else None
+                    if isinstance(detail, dict):
+                        error_code = str(detail.get("error_code") or "")
+                        if error_code in {"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"}:
+                            logger.warning(
+                                "browser_bridge_active_pc_agent_fallback_route_unavailable url=%s error_code=%s",
+                                url,
+                                error_code,
+                            )
+                            continue
+                        return detail
+                    logger.warning("browser_bridge_active_pc_agent_fallback_http_bad_detail url=%s err=%s", url, exc)
+                    continue
                 except (urllib.error.URLError, TimeoutError, OSError) as exc:
                     logger.warning("browser_bridge_active_pc_agent_fallback_failed url=%s err=%s", url, exc)
                     continue
