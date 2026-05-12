@@ -388,6 +388,11 @@ class AgentSDKService:
 _active_chat_session_id: Optional[str] = None
 
 
+def get_active_chat_session_id() -> str:
+    """Return the chat session currently bound to the Agent SDK stream."""
+    return str(_active_chat_session_id or "").strip()
+
+
 # ─── 싱글턴 ───────────────────────────────────────────────────────────────────
 
 _instance: Optional[AgentSDKService] = None

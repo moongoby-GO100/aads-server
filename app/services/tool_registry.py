@@ -206,7 +206,7 @@ TOOL_CATEGORY_GUIDE = """\
 - search_all_projects: 6개 프로젝트 동시 검색
 
 ### ⚪ Tier 6 — 브라우저 (소스 분석 후 렌더링 확인 시)
-- browser_connect/navigate/snapshot/screenshot/click/fill/tab_list
+- browser_connect/navigate/snapshot/screenshot/click/fill/press_key/select_option/check/upload_file/download/tab_list
 - capture_screenshot: URL 스크린샷 캡처 → 이미지 URL 반환
 
 ### 🟣 Pipeline Runner — 코드수정/배포 (기본 권장)
@@ -266,7 +266,12 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
     "search":             ["search_crawl_match", "search_searxng", "web_search"],
     "url_read":           ["jina_read"],
     # Tier 6: 브라우저 — 명시적 요청 시만
-    "browser":            ["browser_connect", "browser_navigate"],
+    "browser":            [
+        "browser_connect", "browser_navigate", "browser_snapshot",
+        "browser_screenshot", "browser_click", "browser_fill",
+        "browser_press_key", "browser_select_option", "browser_check",
+        "browser_upload_file", "browser_download", "browser_tab_list",
+    ],
     # CEO 아젠다 관리
     "agenda":             ["add_agenda", "list_agendas", "get_agenda", "update_agenda", "decide_agenda", "search_agendas"],
     "agenda_manage":      ["add_agenda", "list_agendas", "update_agenda"],

@@ -67,11 +67,11 @@ def _resolve_task_scope(params: Dict[str, Any], chat_session_id: str = "") -> tu
     if scope in _GLOBAL_TASK_SCOPES:
         return "all", ""
 
-    from app.services.tool_executor import current_chat_session_id
+    from app.services.tool_executor import _resolve_bound_chat_session_id
 
-    session_id = str(
-        params.get("session_id", "") or chat_session_id or current_chat_session_id.get("")
-    ).strip()
+    session_id = _resolve_bound_chat_session_id(
+        chat_session_id or params.get("session_id", "")
+    )
     if session_id:
         return "current_session", session_id
     return "all", ""
@@ -3842,9 +3842,11 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
     """도구 이름과 파라미터로 실제 실행."""
     params = dict(params or {})
     if name in {"pipeline_runner_submit", "pipeline_runner_submit_batch", "pipeline_c_start"}:
-        from app.services.tool_executor import current_chat_session_id
+        from app.services.tool_executor import _resolve_bound_chat_session_id, current_chat_session_id
 
         current_session = str(chat_session_id or current_chat_session_id.get("") or "").strip()
+        if not current_session:
+            current_session = _resolve_bound_chat_session_id(params.get("session_id", ""))
         supplied_session = str(params.get("session_id", "") or "").strip()
         if current_session:
             params["session_id"] = current_session
@@ -4011,11 +4013,12 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             get_pipeline_runner_api_url,
         )
         # session_id 강제: 1순위 현재 채팅 핸들러/ContextVar,
-        # 2순위 도구파라미터(외부 직접 호출 fallback).
+        # 2순위 도구파라미터(외부 직접 호출 fallback),
+        # 3순위 Agent SDK active chat binding.
         # 다른 채팅창 오보고 방지를 위해 프로젝트 최근 활성 세션 fallback은 금지한다.
-        _sid = chat_session_id or current_chat_session_id.get("") or params.get("session_id", "")
+        _sid = _resolve_bound_chat_session_id(chat_session_id or params.get("session_id", ""))
         if not _sid:
-            return "[ERROR] 현재 채팅 세션을 확인할 수 없습니다. 작업을 지시한 채팅창의 session_id를 명시하세요."
+            return "[ERROR] 현재 채팅 세션 컨텍스트를 찾지 못했습니다. 같은 채팅창에서 다시 요청해 주세요."
         import httpx
         async with httpx.AsyncClient() as client:
             resp = await client.post(

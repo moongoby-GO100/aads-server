@@ -3833,7 +3833,9 @@ async def _stream_anthropic(
                 "deep_research", "deep_crawl", "search_crawl_match",
                 "spawn_subagent", "spawn_parallel_subagents", "pipeline_c_execute",
                 "browser_connect", "browser_navigate", "browser_snapshot",
-                "browser_screenshot", "browser_click", "browser_fill", "browser_tab_list",
+                "browser_screenshot", "browser_click", "browser_fill",
+                "browser_press_key", "browser_select_option", "browser_check",
+                "browser_upload_file", "browser_download", "browser_tab_list",
             }
             _tool_timeout = 600 if tu.name in _LONG_TOOLS else 120
             _HB_TOOL_SEC = 8.0  # heartbeat 간격 (초)

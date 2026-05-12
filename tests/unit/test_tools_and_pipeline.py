@@ -34,27 +34,38 @@ import pytest
 class TestToolTimeouts:
     """도구 실행 타임아웃 분류 테스트."""
 
+    BROWSER_TOOL_NAMES = (
+        "browser_connect",
+        "browser_navigate",
+        "browser_snapshot",
+        "browser_screenshot",
+        "browser_click",
+        "browser_fill",
+        "browser_press_key",
+        "browser_select_option",
+        "browser_check",
+        "browser_upload_file",
+        "browser_download",
+        "browser_tab_list",
+    )
+
     def test_browser_tools_have_cdp_timeout_budget(self):
         from app.services import tool_executor
 
         assert tool_executor._TOOL_TIMEOUT == 20.0
         assert tool_executor._BROWSER_TOOL_TIMEOUT >= 210.0
         assert tool_executor._BROWSER_TOOL_TIMEOUT > tool_executor._LONG_TOOL_TIMEOUT
-        for tool_name in (
-            "browser_connect",
-            "browser_navigate",
-            "browser_snapshot",
-            "browser_screenshot",
-            "browser_click",
-            "browser_fill",
-            "browser_press_key",
-            "browser_select_option",
-            "browser_check",
-            "browser_upload_file",
-            "browser_download",
-            "browser_tab_list",
-        ):
+        for tool_name in self.BROWSER_TOOL_NAMES:
             assert tool_name in tool_executor._BROWSER_TOOLS
+
+    def test_browser_intent_exposes_all_browser_tools(self):
+        from app.services import tool_executor
+        from app.services.tool_registry import INTENT_REQUIRED_TOOLS
+
+        for tool_name in self.BROWSER_TOOL_NAMES:
+            assert tool_name in tool_executor._INTENT_TOOL_MAP["browser"]
+            assert tool_name in tool_executor._INTENT_TOOL_MAP["browser_action"]
+            assert tool_name in INTENT_REQUIRED_TOOLS["browser"]
 
 
 class TestPathNormalization:

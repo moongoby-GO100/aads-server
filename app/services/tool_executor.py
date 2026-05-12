@@ -65,6 +65,21 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
 current_chat_session_id: contextvars.ContextVar[str] = contextvars.ContextVar(
     "current_chat_session_id", default=""
 )
+
+
+def _resolve_bound_chat_session_id(explicit_session_id: Any = "") -> str:
+    """Resolve the chat session bound to the current request."""
+    session_id = str(current_chat_session_id.get("") or explicit_session_id or "").strip()
+    if session_id:
+        return session_id
+    try:
+        from app.services.agent_sdk_service import get_active_chat_session_id
+
+        return get_active_chat_session_id()
+    except Exception:
+        return ""
+
+
 _GLOBAL_TASK_SCOPES = frozenset({"all", "global"})
 
 LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://aads-litellm:4000")
@@ -192,7 +207,7 @@ def _resolve_task_scope(inp: Dict[str, Any]) -> tuple[str, str]:
     if scope in _GLOBAL_TASK_SCOPES:
         return "all", ""
 
-    session_id = str(inp.get("session_id", "") or current_chat_session_id.get("")).strip()
+    session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
     if session_id:
         return "current_session", session_id
     return "all", ""
@@ -3851,10 +3866,11 @@ class ToolExecutor:
         """Pipeline Runner로 작업 제출."""
         # 1순위: 현재 채팅 ContextVar
         # 2순위: 도구 호출 시 명시적으로 전달된 session_id (외부 직접 호출 fallback)
+        # 3순위: Agent SDK active chat binding (SDK callback 경로 보강)
         # 다른 채팅창 오보고 방지를 위해 프로젝트 최근 활성 세션 fallback은 금지한다.
-        _session_id = current_chat_session_id.get("") or inp.get("session_id", "")
+        _session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
         if not _session_id:
-            return {"error": "현재 채팅 세션을 확인할 수 없습니다. 작업을 지시한 채팅창의 session_id를 명시하세요."}
+            return {"error": "현재 채팅 세션 컨텍스트를 찾지 못했습니다. 같은 채팅창에서 다시 요청해 주세요."}
         import httpx
         from app.services.pipeline_runner_client import (
             INTERNAL_PIPELINE_HEADERS,
@@ -3881,9 +3897,9 @@ class ToolExecutor:
 
     async def _pipeline_runner_submit_batch(self, inp: Dict[str, Any]) -> Any:
         """Pipeline Runner 배치 제출 — 여러 작업을 병렬 실행."""
-        _session_id = current_chat_session_id.get("") or inp.get("session_id", "")
+        _session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
         if not _session_id:
-            return {"error": "현재 채팅 세션을 확인할 수 없습니다. 작업을 지시한 채팅창의 session_id를 명시하세요."}
+            return {"error": "현재 채팅 세션 컨텍스트를 찾지 못했습니다. 같은 채팅창에서 다시 요청해 주세요."}
         import httpx
         from app.services.pipeline_runner_client import (
             INTERNAL_PIPELINE_HEADERS,
@@ -4448,8 +4464,8 @@ _INTENT_TOOL_MAP: Dict[str, list] = {
     "task_query":             ["check_directive_status"],
     "status_check":           ["check_directive_status"],
     # AADS-159: 브라우저 인텐트
-    "browser":                ["browser_connect", "browser_navigate", "browser_snapshot"],
-    "browser_action":         ["browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download"],
+    "browser":                ["browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list"],
+    "browser_action":         ["browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list"],
     # AADS-190: 원격 쓰기/패치/실행/Git 인텐트
     "code_modify":            ["read_remote_file", "write_remote_file", "patch_remote_file", "run_remote_command"],
     "code_fix":               ["read_remote_file", "patch_remote_file", "run_remote_command"],

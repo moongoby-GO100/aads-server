@@ -4271,7 +4271,9 @@ async def trigger_ai_reaction(
         "- '정상 완료'라고 보고하려면 최소 health_check 또는 docker ps로 실제 확인 필수.\n"
         "- 프론트엔드 변경 시 browser_snapshot으로 렌더링 확인 권장.\n\n"
         f"[현재 세션 ID: {session_id}]\n"
-        f"pipeline_runner_submit 호출 시 반드시 session_id=\"{session_id}\"를 포함하세요."
+        "pipeline_runner_submit / pipeline_runner_submit_batch / check_task_status 호출 시 "
+        "서버가 현재 채팅 세션을 자동 주입합니다. "
+        "사용자에게 session_id를 다시 요구하지 말고 현재 채팅 기준으로 진행하세요."
     )
 
     # 🆕 CEO의 SSE 스트리밍(with_background_completion) 실행 중이면 큐잉 (CEO 작업 중단 금지)

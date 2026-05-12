@@ -64,6 +64,27 @@ _BROWSER_FILL_PATTERNS = [
     r"입력해", r"텍스트\s*입력", r"값\s*넣어", r"작성해", r"\bfill\b", r"타이핑",
 ]
 
+_BROWSER_PRESS_KEY_PATTERNS = [
+    r"키\s*입력", r"키\s*눌러", r"엔터", r"enter", r"tab", r"escape", r"\bpress\b",
+]
+
+_BROWSER_SELECT_PATTERNS = [
+    r"옵션\s*선택", r"셀렉트", r"select\s*option", r"\bselect\b",
+]
+
+_BROWSER_CHECK_PATTERNS = [
+    r"체크해", r"체크\s*설정", r"라디오\s*선택", r"동의\s*체크", r"\bcheck\b",
+]
+
+_BROWSER_UPLOAD_PATTERNS = [
+    r"파일\s*업로드", r"이미지\s*업로드", r"파일\s*선택", r"이미지\s*선택",
+    r"첨부", r"\bupload\b",
+]
+
+_BROWSER_DOWNLOAD_PATTERNS = [
+    r"다운로드", r"내려받", r"\bdownload\b",
+]
+
 _BROWSER_SCREENSHOT_PATTERNS = [
     r"브라우저\s*캡처", r"페이지\s*스크린샷", r"웹\s*캡처", r"브라우저\s*스크린샷",
 ]
@@ -143,21 +164,53 @@ def build_command(message: str) -> Optional[Dict[str, Any]]:
         value = _extract_quoted(msg, index=1)
         return {"type": "browser_fill", "selector": selector or "", "value": value or ""}
 
-    # 13. 브라우저 텍스트 추출
+    # 13. 브라우저 키 입력
+    if _match_any(msg_lower, _BROWSER_PRESS_KEY_PATTERNS):
+        return {"type": "browser_press_key", "key": _extract_key(msg) or "", "selector": _extract_selector(msg)}
+
+    # 14. 브라우저 select 옵션 선택
+    if _match_any(msg_lower, _BROWSER_SELECT_PATTERNS):
+        return {
+            "type": "browser_select_option",
+            "selector": _extract_quoted(msg, index=0) or "",
+            "value": _extract_quoted(msg, index=1) or "",
+        }
+
+    # 15. 브라우저 체크박스/라디오 상태 설정
+    if _match_any(msg_lower, _BROWSER_CHECK_PATTERNS):
+        return {"type": "browser_check", "selector": _extract_selector(msg), "checked": _extract_checked(msg)}
+
+    # 16. 브라우저 파일 업로드
+    if _match_any(msg_lower, _BROWSER_UPLOAD_PATTERNS):
+        return {
+            "type": "browser_file_upload",
+            "selector": _extract_selector(msg, default="input[type=file]"),
+            "file_paths": _extract_paths(msg),
+        }
+
+    # 17. 브라우저 다운로드
+    if _match_any(msg_lower, _BROWSER_DOWNLOAD_PATTERNS):
+        return {
+            "type": "browser_download",
+            "selector": _extract_selector(msg),
+            "download_dir": _extract_path(msg) or "",
+        }
+
+    # 18. 브라우저 텍스트 추출
     if _match_any(msg_lower, _BROWSER_TEXT_PATTERNS):
         selector = _extract_quoted(msg)
         return {"type": "browser_get_text", "selector": selector or "body"}
 
-    # 14. 브라우저 JS 실행
+    # 19. 브라우저 JS 실행
     if _match_any(msg_lower, _BROWSER_EVAL_PATTERNS):
         script = _extract_quoted(msg)
         return {"type": "browser_eval", "script": script or ""}
 
-    # 15. 브라우저 탭 목록
+    # 20. 브라우저 탭 목록
     if _match_any(msg_lower, _BROWSER_TABS_PATTERNS):
         return {"type": "browser_tabs"}
 
-    # 16. 셸 명령 (프로그램 실행 등)
+    # 21. 셸 명령 (프로그램 실행 등)
     shell_cmd = _parse_shell_command(msg_lower, msg)
     if shell_cmd:
         return shell_cmd
@@ -198,6 +251,28 @@ def build_command_for_intent(intent: str, message: str) -> Optional[Dict[str, An
             selector = _extract_quoted(message, index=0)
             value = _extract_quoted(message, index=1)
             return {"type": "browser_fill", "selector": selector or "", "value": value or ""}
+        if _match_any(msg_lower, _BROWSER_PRESS_KEY_PATTERNS):
+            return {"type": "browser_press_key", "key": _extract_key(message) or "", "selector": _extract_selector(message)}
+        if _match_any(msg_lower, _BROWSER_SELECT_PATTERNS):
+            return {
+                "type": "browser_select_option",
+                "selector": _extract_quoted(message, index=0) or "",
+                "value": _extract_quoted(message, index=1) or "",
+            }
+        if _match_any(msg_lower, _BROWSER_CHECK_PATTERNS):
+            return {"type": "browser_check", "selector": _extract_selector(message), "checked": _extract_checked(message)}
+        if _match_any(msg_lower, _BROWSER_UPLOAD_PATTERNS):
+            return {
+                "type": "browser_file_upload",
+                "selector": _extract_selector(message, default="input[type=file]"),
+                "file_paths": _extract_paths(message),
+            }
+        if _match_any(msg_lower, _BROWSER_DOWNLOAD_PATTERNS):
+            return {
+                "type": "browser_download",
+                "selector": _extract_selector(message),
+                "download_dir": _extract_path(message) or "",
+            }
         if _match_any(msg_lower, _BROWSER_TEXT_PATTERNS):
             selector = _extract_quoted(message)
             return {"type": "browser_get_text", "selector": selector or "body"}
@@ -295,7 +370,7 @@ def format_result(command_type: str, result: Dict[str, Any] | None) -> str:
         checked = data.get("checked", "") if isinstance(data, dict) else ""
         return f"체크 상태 설정 완료: `{selector}` checked={checked}"
 
-    if command_type == "browser_file_upload":
+    if command_type in ("browser_file_upload", "browser_upload_file"):
         count = data.get("count", "") if isinstance(data, dict) else ""
         return f"파일 업로드 입력 완료: {count}개"
 
@@ -380,6 +455,13 @@ def _extract_path(message: str) -> Optional[str]:
     return None
 
 
+def _extract_paths(message: str) -> list[str]:
+    """메시지에서 Windows/Unix 파일 경로를 모두 추출."""
+    paths = re.findall(r"[A-Za-z]:\\[^\s'\"]+", message)
+    paths.extend(re.findall(r"/[^\s'\"]+", message))
+    return paths
+
+
 def _extract_url(message: str) -> Optional[str]:
     """메시지에서 URL 추출."""
     url_match = re.search(r"https?://[^\s'\"]+", message)
@@ -398,6 +480,60 @@ def _extract_quoted(message: str, index: int = 0) -> Optional[str]:
     if matches and index < len(matches):
         return matches[index]
     return None
+
+
+def _extract_selector(message: str, default: str = "") -> str:
+    """따옴표 문자열 중 파일/URL 경로가 아닌 첫 값을 CSS selector로 간주."""
+    for value in re.findall(r"['\"](.+?)['\"]", message):
+        if not _looks_like_path(value) and not value.startswith(("http://", "https://")):
+            return value
+    selector_match = re.search(
+        r"((?:text=|#|(?<![A-Za-z0-9])\.|\[|input\[)[^\s,]+(?:\][^\s,]*)?)",
+        message,
+    )
+    if selector_match:
+        return selector_match.group(1)
+    return default
+
+
+def _looks_like_path(value: str) -> bool:
+    return bool(re.match(r"^[A-Za-z]:\\", value) or value.startswith(("/", "~", ".")))
+
+
+def _extract_key(message: str) -> Optional[str]:
+    """자연어에서 대표 키 이름 추출."""
+    lower = message.lower()
+    key_map = {
+        "백스페이스": "Backspace",
+        "backspace": "Backspace",
+        "삭제": "Delete",
+        "delete": "Delete",
+        "위쪽": "ArrowUp",
+        "아래쪽": "ArrowDown",
+        "왼쪽": "ArrowLeft",
+        "오른쪽": "ArrowRight",
+        "엔터": "Enter",
+        "enter": "Enter",
+        "탭": "Tab",
+        "tab": "Tab",
+        "esc": "Escape",
+        "escape": "Escape",
+        "스페이스": "Space",
+        "space": "Space",
+    }
+    for token, key in key_map.items():
+        if token in lower:
+            return key
+    quoted = _extract_quoted(message)
+    if quoted and not _looks_like_path(quoted):
+        return quoted
+    return None
+
+
+def _extract_checked(message: str) -> bool:
+    """체크 상태 자연어 추출. 명시적 해제/false만 False."""
+    lower = message.lower()
+    return not any(token in lower for token in ("해제", "풀어", "uncheck", "false", "off"))
 
 
 def _parse_shell_command(msg_lower: str, original: str) -> Optional[Dict[str, Any]]:

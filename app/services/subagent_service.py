@@ -111,6 +111,16 @@ def _build_tool_schemas() -> List[Dict[str, Any]]:
             {"name": "deep_research", "description": "깊은 조사", "input_schema": {"type": "object", "properties": {"topic": {"type": "string"}}, "required": ["topic"]}},
             {"name": "save_note", "description": "노트 저장", "input_schema": {"type": "object", "properties": {"content": {"type": "string"}}, "required": ["content"]}},
             {"name": "browser_navigate", "description": "브라우저 이동", "input_schema": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}},
+            {"name": "browser_snapshot", "description": "브라우저 접근성 트리 추출", "input_schema": {"type": "object", "properties": {}, "required": []}},
+            {"name": "browser_screenshot", "description": "브라우저 스크린샷", "input_schema": {"type": "object", "properties": {}, "required": []}},
+            {"name": "browser_click", "description": "브라우저 클릭", "input_schema": {"type": "object", "properties": {"selector": {"type": "string"}}, "required": ["selector"]}},
+            {"name": "browser_fill", "description": "브라우저 텍스트 입력", "input_schema": {"type": "object", "properties": {"selector": {"type": "string"}, "value": {"type": "string"}}, "required": ["selector", "value"]}},
+            {"name": "browser_press_key", "description": "브라우저 키 입력", "input_schema": {"type": "object", "properties": {"key": {"type": "string"}, "selector": {"type": "string"}}, "required": ["key"]}},
+            {"name": "browser_select_option", "description": "select 옵션 선택", "input_schema": {"type": "object", "properties": {"selector": {"type": "string"}, "value": {"type": "string"}}, "required": ["selector", "value"]}},
+            {"name": "browser_check", "description": "체크박스/라디오 상태 설정", "input_schema": {"type": "object", "properties": {"selector": {"type": "string"}, "checked": {"type": "boolean"}}, "required": ["selector"]}},
+            {"name": "browser_upload_file", "description": "file input에 파일 지정", "input_schema": {"type": "object", "properties": {"selector": {"type": "string"}, "file_path": {"type": "string"}, "file_paths": {"type": "array", "items": {"type": "string"}}}, "required": ["selector"]}},
+            {"name": "browser_download", "description": "다운로드 유발 클릭 후 파일 저장", "input_schema": {"type": "object", "properties": {"selector": {"type": "string"}, "download_dir": {"type": "string"}, "timeout_seconds": {"type": "number"}}, "required": ["selector"]}},
+            {"name": "browser_tab_list", "description": "브라우저 탭 목록", "input_schema": {"type": "object", "properties": {}, "required": []}},
             {"name": "export_data", "description": "데이터 내보내기", "input_schema": {"type": "object", "properties": {"data": {"type": "array"}, "fmt": {"type": "string"}}, "required": ["data"]}},
         ]
 

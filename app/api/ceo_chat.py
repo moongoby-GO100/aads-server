@@ -1725,10 +1725,12 @@ async def send_ceo_message(req: CeoChatRequest):
         ctx_mgr = ContextManager(conn)
         system_prompt = await ctx_mgr.build_context(session_id)
 
-        # 세션 라우팅: AI가 pipeline_runner_submit 호출 시 명시적 session_id 전달하도록 안내
+        # 세션 라우팅: 서버가 현재 채팅 세션을 자동 주입한다.
         system_prompt += (
             f"\n\n[현재 세션 ID: {session_id}]\n"
-            f"pipeline_runner_submit 호출 시 반드시 session_id=\"{session_id}\"를 포함하세요."
+            "pipeline_runner_submit / pipeline_runner_submit_batch 호출 시 "
+            "서버가 현재 채팅 세션을 자동 주입합니다. "
+            "사용자에게 session_id를 다시 요구하지 말고 현재 채팅 기준으로 진행하세요."
         )
         active_tasks = await ctx_mgr.load_active_tasks()
 

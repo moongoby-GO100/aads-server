@@ -78,10 +78,43 @@ class TestBuildCommand:
         assert result is not None
         assert result["type"] == "system_info"
 
+    def test_browser_upload_file(self) -> None:
+        result = build_command("브라우저에서 이미지 업로드 C:\\Users\\CEO\\Pictures\\a.jpg")
+        assert result is not None
+        assert result["type"] == "browser_file_upload"
+        assert result["selector"] == "input[type=file]"
+        assert result["file_paths"] == ["C:\\Users\\CEO\\Pictures\\a.jpg"]
+
+    def test_browser_upload_file_with_selector(self) -> None:
+        result = build_command("브라우저에서 'input[name=images]'에 파일 업로드 C:\\Users\\CEO\\Pictures\\a.jpg")
+        assert result is not None
+        assert result["type"] == "browser_file_upload"
+        assert result["selector"] == "input[name=images]"
+
+    def test_browser_press_key(self) -> None:
+        result = build_command("브라우저에서 'input[name=q]' 엔터 눌러")
+        assert result is not None
+        assert result["type"] == "browser_press_key"
+        assert result["selector"] == "input[name=q]"
+        assert result["key"] == "Enter"
+
+    def test_browser_select_check_download(self) -> None:
+        select_cmd = build_command("브라우저에서 'select[name=category]' 옵션 선택 'outer'")
+        check_cmd = build_command("브라우저에서 'input[name=agree]' 체크해")
+        download_cmd = build_command("브라우저에서 'button.download' 다운로드")
+
+        assert select_cmd is not None
+        assert select_cmd["type"] == "browser_select_option"
+        assert select_cmd["value"] == "outer"
+        assert check_cmd is not None
+        assert check_cmd["type"] == "browser_check"
+        assert check_cmd["checked"] is True
+        assert download_cmd is not None
+        assert download_cmd["type"] == "browser_download"
+
     def test_no_match(self) -> None:
         result = build_command("오늘 날씨 어때")
         assert result is None
-
 
 class TestBuildCommandForIntent:
     """인텐트 기반 명령 빌더 테스트."""
@@ -110,6 +143,11 @@ class TestBuildCommandForIntent:
         assert result is not None
         assert result["type"] == "shell"
 
+    def test_pc_browser_upload_file(self) -> None:
+        result = build_command_for_intent("pc_browser", "이미지 업로드 C:\\Users\\CEO\\Pictures\\a.jpg")
+        assert result is not None
+        assert result["type"] == "browser_file_upload"
+
 
 class TestFormatResult:
     """결과 포맷 변환 테스트."""
@@ -133,6 +171,10 @@ class TestFormatResult:
     def test_kakao_send_result(self) -> None:
         result = format_result("kakao_send", {"data": {"recipient": "김대리", "sent": True}, "status": "success"})
         assert "김대리" in result
+
+    def test_browser_upload_result_alias(self) -> None:
+        result = format_result("browser_upload_file", {"data": {"count": 2}, "status": "success"})
+        assert "2개" in result
 
 
 class TestImports:

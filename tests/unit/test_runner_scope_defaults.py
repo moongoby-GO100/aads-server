@@ -145,7 +145,27 @@ async def test_ceo_pipeline_runner_submit_requires_current_session_without_recen
             chat_session_id="",
         )
 
-    assert "현재 채팅 세션을 확인할 수 없습니다" in result
+    assert "현재 채팅 세션 컨텍스트를 찾지 못했습니다" in result
+
+
+@pytest.mark.asyncio
+async def test_ceo_pipeline_runner_submit_uses_agent_sdk_active_session_fallback():
+    from app.api.ceo_chat_tools import execute_tool
+
+    client = _FakeAsyncClient(_FakeResponse(text='{"job_id":"runner-test"}', payload={"job_id": "runner-test"}))
+
+    with patch("app.services.agent_sdk_service._active_chat_session_id", _SESSION_ID), patch(
+        "httpx.AsyncClient", return_value=client
+    ):
+        result = await execute_tool(
+            "pipeline_runner_submit",
+            {"project": "AADS", "instruction": "test"},
+            dsn="postgresql://unused",
+            chat_session_id="",
+        )
+
+    assert json.loads(result)["job_id"] == "runner-test"
+    assert client.calls[0]["json"]["session_id"] == _SESSION_ID
 
 
 @pytest.mark.asyncio
@@ -210,6 +230,21 @@ async def test_tool_executor_check_task_status_defaults_to_current_session():
 
 
 @pytest.mark.asyncio
+async def test_tool_executor_check_task_status_uses_agent_sdk_active_session_fallback():
+    from app.services.tool_executor import ToolExecutor
+
+    fake_pool = _FakePool()
+    with patch("app.services.agent_sdk_service._active_chat_session_id", _SESSION_ID), patch(
+        "app.core.db_pool.get_pool", return_value=fake_pool
+    ):
+        result = await ToolExecutor()._check_task_status({})
+
+    assert result["scope"] == "current_session"
+    assert result["session_id"] == _SESSION_ID
+    assert any("chat_session_id = $1" in query for query, _args in fake_pool.conn.calls)
+
+
+@pytest.mark.asyncio
 async def test_tool_executor_pipeline_runner_status_scope_all_skips_session_filter():
     from app.services.tool_executor import ToolExecutor, current_chat_session_id
 
@@ -235,7 +270,42 @@ async def test_tool_executor_pipeline_runner_submit_requires_current_session_wit
     ):
         result = await ToolExecutor()._pipeline_runner_submit({"project": "AADS", "instruction": "test"})
 
-    assert "현재 채팅 세션을 확인할 수 없습니다" in result["error"]
+    assert "현재 채팅 세션 컨텍스트를 찾지 못했습니다" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_pipeline_runner_submit_uses_agent_sdk_active_session_fallback():
+    from app.services.tool_executor import ToolExecutor
+
+    client = _FakeAsyncClient(_FakeResponse(payload={"job_id": "runner-test"}))
+    with patch("app.services.agent_sdk_service._active_chat_session_id", _SESSION_ID), patch(
+        "httpx.AsyncClient", return_value=client
+    ):
+        result = await ToolExecutor()._pipeline_runner_submit({
+            "project": "AADS",
+            "instruction": "test",
+        })
+
+    assert result["job_id"] == "runner-test"
+    assert client.calls[0]["json"]["session_id"] == _SESSION_ID
+
+
+@pytest.mark.asyncio
+async def test_ceo_pipeline_runner_status_uses_agent_sdk_active_session_fallback():
+    from app.api.ceo_chat_tools import execute_tool
+
+    client = _FakeAsyncClient(_FakeResponse(text="[]", payload=[]))
+    with patch("app.services.agent_sdk_service._active_chat_session_id", _SESSION_ID), patch(
+        "httpx.AsyncClient", return_value=client
+    ):
+        await execute_tool(
+            "pipeline_runner_status",
+            {"status": "queued"},
+            dsn="postgresql://unused",
+            chat_session_id="",
+        )
+
+    assert client.calls[0]["params"]["session_id"] == _SESSION_ID
 
 
 @pytest.mark.asyncio

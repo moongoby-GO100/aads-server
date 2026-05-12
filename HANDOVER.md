@@ -1,6 +1,13 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-12)
+- **Runner 세션 자동 주입 보강 (2026-05-12 15:21 KST)**:
+  - 문제: 특정 채팅창에서 `pipeline_runner_submit`/`batch`가 현재 세션을 못 받아 `session_id를 주시면` 식으로 되묻는 응답이 발생했다. 실측 기준 세션 `f31f1238-fdc8-4405-8893-351226e06bda`에서 15:15 KST에 실제 실패 후 수동 UUID 역조회로 재투입한 흔적이 남아 있었다.
+  - 조치: `app/services/tool_executor.py`에 `_resolve_bound_chat_session_id()`를 추가해 `ContextVar → 명시 session_id → Agent SDK active chat session` 순으로 세션을 해석하도록 보강했다. `app/api/ceo_chat_tools.py`도 같은 fallback을 사용하도록 맞췄다.
+  - 조치: `app/api/ceo_chat.py` 시스템 프롬프트를 수정해 Runner 제출 시 서버가 현재 채팅 세션을 자동 주입하며, 사용자에게 `session_id`를 다시 요구하지 말도록 명시했다.
+  - 검증: `pytest -q tests/unit/test_runner_scope_defaults.py` → 10 passed.
+  - 주의: 코드 변경만 반영했다. 커밋/푸시/배포는 아직 수행하지 않았다.
+
 - **Browser Bridge 파일 업로드/다운로드/고급 입력 도구 보강 (2026-05-12 14:09 KST)**:
   - 요청: 신상마켓 필수 이미지 업로드가 막히지 않도록 Browser Bridge에 파일 선택/업로드/다운로드/입력 제어 도구를 추가.
   - 조치: `browser_press_key`, `browser_select_option`, `browser_check`, `browser_upload_file`, `browser_download` 도구를 `ceo_chat_tools`, `tool_registry`, `ToolExecutor`, 모델 스트리밍 타임아웃 경로에 등록했다.
@@ -895,3 +902,9 @@
 - 배경: 러너 오귀속 방지 패치 후, 도구 실행 컨텍스트에 현재 채팅 세션이 표시되기 전에 모델이 `session_id: null` 또는 다른 URL의 세션 ID를 만든 경우 `pipeline_runner_submit`이 "현재 채팅 세션을 확인할 수 없습니다"로 차단되거나 `check_task_status`가 `session_id: null`로 표시되는 경로가 남아 있었다.
 - 조치: `app/services/model_selector.py`에 `_bind_tool_session_input()`을 추가해 `pipeline_runner_submit`, `pipeline_runner_submit_batch`, `pipeline_c_start`, `pipeline_runner_status`, `check_task_status`, `check_directive_status` 호출은 프론트 `tool_use` 이벤트 표시 전과 실제 실행 전 모두 현재 AADS 채팅 세션 ID를 주입하도록 했다. `scope=all` 요청은 전역 조회 의도를 존중해 세션을 주입하지 않는다.
 - 검증: `python3 -m py_compile app/services/model_selector.py app/services/tool_executor.py app/api/ceo_chat_tools.py` 통과. `pytest -q tests/unit/test_runner_scope_defaults.py` 10개 통과. 신규 회귀 테스트로 잘못 전달된 러너 `session_id` 덮어쓰기, `check_task_status(session_id=None)` 현재 세션 주입, `scope=all` 예외를 확인했다.
+
+## 2026-05-12 15:39 KST - Agent SDK 상태조회 세션 바인딩 누락 보정
+
+- 배경: 위 세션 선주입 패치 후에도 Agent SDK 자동 트리거 경로에서는 `check_task_status` 기본 범위 결정이 `current_chat_session_id`만 보고 있어 `session_id: null`처럼 보이거나, 자동 트리거 안내문이 여전히 `session_id` 수동 전달을 요구하는 불일치가 남아 있었다.
+- 조치: `app/services/tool_executor.py`, `app/api/ceo_chat_tools.py`의 `_resolve_task_scope()`가 `_resolve_bound_chat_session_id()`를 사용하도록 바꿔 Agent SDK active chat binding까지 같은 규칙으로 적용했다. `app/services/chat_service.py`의 자동 트리거 안내문도 `pipeline_runner_submit`, `pipeline_runner_submit_batch`, `check_task_status` 모두 서버가 현재 채팅 세션을 자동 주입한다고 명시하도록 정리했다.
+- 검증: `python3 -m py_compile app/services/tool_executor.py app/api/ceo_chat_tools.py app/services/chat_service.py tests/unit/test_runner_scope_defaults.py` 통과. `pytest -q tests/test_pc_agent_command_builder.py tests/unit/test_runner_scope_defaults.py tests/unit/test_tools_and_pipeline.py` 99개 통과. 신규 회귀 테스트로 Agent SDK active session만 있을 때 `check_task_status`와 `pipeline_runner_status`가 현재 세션 필터를 유지하는지 확인했다.
