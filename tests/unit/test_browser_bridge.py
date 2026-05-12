@@ -32,7 +32,7 @@ def test_validate_bridge_endpoint_rejects_public_or_credentialed_cdp(url: str) -
 def test_pairing_token_is_one_time_for_session_registration(tmp_path) -> None:
     service = BrowserBridgeService(
         pairings=PairingManager(default_ttl_seconds=60),
-        sessions=SessionRegistry(),
+        sessions=SessionRegistry(tmp_path / "sessions"),
         storage_states=StorageStateManager(tmp_path),
     )
     pairing = service.create_pairing(label="CEO Chrome")
@@ -60,7 +60,7 @@ def test_pairing_token_is_one_time_for_session_registration(tmp_path) -> None:
 def test_invalid_endpoint_does_not_consume_pairing_token(tmp_path) -> None:
     service = BrowserBridgeService(
         pairings=PairingManager(default_ttl_seconds=60),
-        sessions=SessionRegistry(),
+        sessions=SessionRegistry(tmp_path / "sessions"),
         storage_states=StorageStateManager(tmp_path),
     )
     pairing = service.create_pairing(label="CEO Chrome")
@@ -86,7 +86,7 @@ def test_invalid_endpoint_does_not_consume_pairing_token(tmp_path) -> None:
 def test_storage_state_session_writes_only_ignored_state_dir(tmp_path) -> None:
     service = BrowserBridgeService(
         pairings=PairingManager(default_ttl_seconds=60),
-        sessions=SessionRegistry(),
+        sessions=SessionRegistry(tmp_path / "sessions"),
         storage_states=StorageStateManager(tmp_path),
     )
     pairing = service.create_pairing(label="OTP storage")
@@ -107,7 +107,7 @@ def test_storage_state_session_writes_only_ignored_state_dir(tmp_path) -> None:
 def test_e2e_config_can_pin_specific_session_without_changing_active(tmp_path) -> None:
     service = BrowserBridgeService(
         pairings=PairingManager(default_ttl_seconds=60),
-        sessions=SessionRegistry(),
+        sessions=SessionRegistry(tmp_path / "sessions"),
         storage_states=StorageStateManager(tmp_path),
     )
     first_pairing = service.create_pairing(label="Work A")
@@ -138,7 +138,7 @@ def test_e2e_config_can_pin_specific_session_without_changing_active(tmp_path) -
 def test_e2e_config_reports_missing_pinned_session(tmp_path) -> None:
     service = BrowserBridgeService(
         pairings=PairingManager(default_ttl_seconds=60),
-        sessions=SessionRegistry(),
+        sessions=SessionRegistry(tmp_path / "sessions"),
         storage_states=StorageStateManager(tmp_path),
     )
 
@@ -150,11 +150,195 @@ def test_e2e_config_reports_missing_pinned_session(tmp_path) -> None:
     assert "browser bridge session not found: bb-missing" in config["error"]
 
 
+def test_session_registry_persists_sessions_and_leases(tmp_path) -> None:
+    first = SessionRegistry(state_dir=tmp_path)
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=first,
+        storage_states=StorageStateManager(tmp_path),
+    )
+    session = service.register_trusted_session(
+        label="PC Agent Chrome A",
+        endpoint_kind="local_agent",
+        metadata={
+            "agent_id": "ceo-pc",
+            "port": "9222",
+            "endpoint_kind": "local_agent",
+        },
+    )
+    leased = first.acquire_lease(owner="job-a", preferred_session_id=session.session_id, ttl_seconds=60)
+
+    assert leased.session_id == session.session_id
+    assert leased.lease_owner == "job-a"
+
+    second = SessionRegistry(state_dir=tmp_path)
+    loaded = second.get(session.session_id)
+
+    assert loaded is not None
+    assert loaded.endpoint.kind == BrowserEndpointKind.LOCAL_AGENT
+    assert loaded.endpoint.metadata["agent_id"] == "ceo-pc"
+    assert loaded.lease_owner == "job-a"
+
+    assert second.release_lease(owner="job-a", session_id=session.session_id) == 1
+    assert second.get(session.session_id).lease_owner == ""
+
+
+def test_pairing_manager_persists_unconsumed_pairings(tmp_path) -> None:
+    first = PairingManager(default_ttl_seconds=60, state_dir=tmp_path)
+    pairing = first.create_pairing(label="CEO Chrome", created_by="test")
+
+    second = PairingManager(default_ttl_seconds=60, state_dir=tmp_path)
+    record = second.consume(pairing.token)
+
+    assert record.pairing_id == pairing.pairing_id
+    assert record.label == "CEO Chrome"
+
+    third = PairingManager(default_ttl_seconds=60, state_dir=tmp_path)
+    with pytest.raises(ValueError, match="pairing token invalid"):
+        third.consume(pairing.token)
+
+
+def test_active_api_route_urls_include_active_container(monkeypatch) -> None:
+    monkeypatch.setenv("AADS_ACTIVE_CONTAINER", "aads-server-green")
+
+    urls = BrowserBridgeService._active_api_route_urls("8102")
+
+    assert urls[0] == "http://127.0.0.1:8102/api/v1/pc-agent/route-execute"
+    assert "http://aads-server-green:8080/api/v1/pc-agent/route-execute" in urls
+
+
+def test_active_api_ports_include_blue_green_fallbacks(monkeypatch) -> None:
+    monkeypatch.setenv("AADS_ACTIVE_PORT", "8100")
+
+    ports = BrowserBridgeService._active_api_ports()
+
+    assert ports == ["8100", "8102"]
+
+
+@pytest.mark.asyncio
+async def test_ensure_pc_agent_cdp_registers_local_agent_session(monkeypatch, tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(state_dir=tmp_path),
+        storage_states=StorageStateManager(tmp_path),
+    )
+
+    async def fake_execute_routed_command(**kwargs):
+        assert kwargs["command_type"] == "browser_launch"
+        assert kwargs["required_capabilities"] == ["interactive_browser"]
+        return {
+            "status": "success",
+            "lease": {"agent_id": "ceo-pc"},
+            "result": {
+                "result": {
+                    "port": 9333,
+                    "user_data_dir": "C:/AADS/chrome/isolated-a",
+                    "websocket_debugger_url": "ws://127.0.0.1:9333/devtools/browser/test",
+                }
+            },
+        }
+
+    from app.services import pc_agent_manager as manager_module
+
+    monkeypatch.setattr(manager_module.pc_agent_manager, "execute_routed_command", fake_execute_routed_command)
+
+    session = await service.ensure_pc_agent_cdp_session(
+        label="Worker A",
+        url="https://aads.newtalk.kr/",
+        preferred_port=9333,
+    )
+
+    assert session.endpoint.kind == BrowserEndpointKind.LOCAL_AGENT
+    assert session.endpoint.metadata["agent_id"] == "ceo-pc"
+    assert session.endpoint.metadata["port"] == "9333"
+    assert session.endpoint.metadata["cdp_url"] == "pc-agent://ceo-pc/cdp/9333"
+
+
+@pytest.mark.asyncio
+async def test_local_agent_context_does_not_require_server_playwright(monkeypatch, tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(state_dir=tmp_path),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    session = service.register_trusted_session(
+        label="CEO PC Chrome",
+        endpoint_kind="local_agent",
+        metadata={
+            "agent_id": "ceo-pc",
+            "port": "9222",
+            "endpoint_kind": "local_agent",
+            "last_url": "about:blank",
+        },
+        activate=True,
+    )
+
+    async def fail_playwright():
+        raise AssertionError("local_agent must not start Playwright on the server")
+
+    monkeypatch.setattr(service, "_ensure_playwright", fail_playwright)
+
+    context, error = await service.acquire_playwright_context(session_id=session.session_id)
+
+    assert error is None
+    assert context.pages[0].url == "about:blank"
+
+
+@pytest.mark.asyncio
+async def test_local_agent_commands_fallback_to_active_api(monkeypatch, tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(state_dir=tmp_path),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    session = service.register_trusted_session(
+        label="CEO PC Chrome",
+        endpoint_kind="local_agent",
+        metadata={
+            "agent_id": "ceo-pc",
+            "port": "9222",
+            "endpoint_kind": "local_agent",
+            "last_url": "about:blank",
+        },
+        activate=True,
+    )
+
+    from app.services import pc_agent_manager as manager_module
+
+    async def fake_local_execute(**_kwargs):
+        return {"status": "error", "error_code": "PC_AGENT_OFFLINE", "message": "agent offline"}
+
+    active_calls: list[dict] = []
+
+    async def fake_active_execute(**kwargs):
+        active_calls.append(kwargs)
+        return {
+            "status": "success",
+            "lease": {"agent_id": "ceo-pc"},
+            "result": {"result": {"ok": True}},
+        }
+
+    monkeypatch.setattr(manager_module.pc_agent_manager, "execute_routed_command", fake_local_execute)
+    monkeypatch.setattr(service, "_execute_pc_agent_route_via_active_api", fake_active_execute)
+
+    context, error = await service.acquire_playwright_context(session_id=session.session_id)
+
+    assert error is None
+    await context.pages[0].goto("https://aads.newtalk.kr/")
+    assert active_calls
+    assert active_calls[0]["command_type"] == "browser_navigate"
+    assert active_calls[0]["agent_id"] == "ceo-pc"
+    assert active_calls[0]["params"]["port"] == 9222
+    assert active_calls[0]["queue_wait_timeout_seconds"] == 60
+    assert active_calls[0]["command_timeout_seconds"] == 180
+    assert active_calls[0]["lease_ttl_seconds"] == 210
+
+
 @pytest.mark.asyncio
 async def test_acquire_specific_session_does_not_change_active_session(tmp_path) -> None:
     service = BrowserBridgeService(
         pairings=PairingManager(default_ttl_seconds=60),
-        sessions=SessionRegistry(),
+        sessions=SessionRegistry(tmp_path / "sessions"),
         storage_states=StorageStateManager(tmp_path),
     )
     first_pairing = service.create_pairing(label="Work A")
@@ -190,7 +374,7 @@ async def test_acquire_specific_session_does_not_change_active_session(tmp_path)
 async def test_acquire_specific_session_reports_missing_session(tmp_path) -> None:
     service = BrowserBridgeService(
         pairings=PairingManager(default_ttl_seconds=60),
-        sessions=SessionRegistry(),
+        sessions=SessionRegistry(tmp_path / "sessions"),
         storage_states=StorageStateManager(tmp_path),
     )
 

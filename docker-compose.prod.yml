@@ -109,6 +109,7 @@ services:
       - VAULT_ENCRYPTION_KEY=${VAULT_ENCRYPTION_KEY:-}
       - AADS_ACTIVE_CONTAINER_FILE=/app/.active_container
       - AADS_ACTIVE_PORT_FILE=/app/.active_port
+      - AADS_BROWSER_BRIDGE_STATE_DIR=/app/browser-bridge-state
     volumes:
       # ★ 소스 볼륨 마운트: 호스트 수정 → 컨테이너 즉시 반영
       - /root/aads/aads-server/app:/app/app:rw
@@ -119,6 +120,7 @@ services:
       - /root/aads/aads-server/migrations:/app/migrations:rw
       - /root/aads/aads-server/pc_agent:/app/pc_agent:rw
       - /root/aads/aads-server/scripts:/app/scripts:rw
+      - /root/aads/aads-server/browser-bridge-state:/app/browser-bridge-state:rw
       - /root/aads/aads-server/supervisord.conf:/app/supervisord.conf:ro
       - /root/aads/aads-docs/docs:/root/aads/aads-docs/docs:ro
       - /root/aads/aads-docs/reports:/root/aads/aads-docs/reports:ro
@@ -184,6 +186,7 @@ services:
       - VAULT_ENCRYPTION_KEY=${VAULT_ENCRYPTION_KEY:-}
       - AADS_ACTIVE_CONTAINER_FILE=/app/.active_container
       - AADS_ACTIVE_PORT_FILE=/app/.active_port
+      - AADS_BROWSER_BRIDGE_STATE_DIR=/app/browser-bridge-state
     volumes:
       - /root/aads/aads-server/app:/app/app:rw
       - /root/aads/aads-server/.active_container:/app/.active_container:ro
@@ -193,6 +196,7 @@ services:
       - /root/aads/aads-server/migrations:/app/migrations:rw
       - /root/aads/aads-server/pc_agent:/app/pc_agent:rw
       - /root/aads/aads-server/scripts:/app/scripts:rw
+      - /root/aads/aads-server/browser-bridge-state:/app/browser-bridge-state:rw
       - /root/aads/aads-server/supervisord.conf:/app/supervisord.conf:ro
       - /root/aads/aads-docs/docs:/root/aads/aads-docs/docs:ro
       - /root/aads/aads-docs/reports:/root/aads/aads-docs/reports:ro

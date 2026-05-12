@@ -3805,8 +3805,23 @@ async def _save_and_update_session(
                 placeholder_id = await conn.fetchval(
                     """
                     SELECT COALESCE(
+                        (
+                            SELECT id
+                            FROM chat_messages
+                            WHERE execution_id = $1
+                              AND intent = 'streaming_placeholder'
+                            ORDER BY created_at DESC
+                            LIMIT 1
+                        ),
                         (SELECT assistant_message_id FROM chat_turn_executions WHERE id = $1),
-                        (SELECT id FROM chat_messages WHERE execution_id = $1 ORDER BY created_at DESC LIMIT 1)
+                        (
+                            SELECT id
+                            FROM chat_messages
+                            WHERE execution_id = $1
+                              AND role = 'assistant'
+                            ORDER BY created_at DESC
+                            LIMIT 1
+                        )
                     )
                     """,
                     _execution_uuid,
@@ -3862,7 +3877,10 @@ async def _save_and_update_session(
                 await conn.execute(
                     """
                     UPDATE chat_turn_executions
-                    SET assistant_message_id = COALESCE(assistant_message_id, $2),
+                    SET assistant_message_id = CASE
+                            WHEN $2::uuid IS NULL THEN assistant_message_id
+                            ELSE $2::uuid
+                        END,
                         requested_model = COALESCE($3, requested_model),
                         actual_model = COALESCE($4, actual_model),
                         status = 'completed',
@@ -6099,6 +6117,29 @@ async def send_message_stream(
                 if _critic_validation.is_valid:
                     full_response = _critic_retry_response
 
+        _completion_contract = None
+        try:
+            from app.services.response_completion_contract import enforce_completion_contract
+
+            _completion_contract = await enforce_completion_contract(
+                response_text=full_response,
+                user_msg=content,
+                session_id=session_id,
+                intent=intent,
+            )
+            if _completion_contract.adjusted:
+                full_response = _completion_contract.response_text
+                logger.warning(
+                    "completion_contract_adjusted session=%s violations=%s pending=%s",
+                    session_id[:8],
+                    ",".join(_completion_contract.violation_types),
+                    _completion_contract.pending_count,
+                )
+                if _completion_contract.note:
+                    yield f"data: {json.dumps({'type': 'delta', 'content': _completion_contract.note})}\n\n"
+        except Exception as _contract_err:
+            logger.warning(f"completion_contract_check_failed: {_contract_err}")
+
         # ═══ #19: Phase C — 응답 저장 (별도 커넥션) ═══
         _thinking_truncated = (thinking_summary or "")[:2000] or None
         if thinking_summary and len(thinking_summary) > 2000:
@@ -6144,6 +6185,33 @@ async def send_message_stream(
                 logger.info(f"output_validator_violation_recorded: {_validation.violation_type}", session_id=session_id)
             except Exception as _viol_err:
                 logger.warning(f"output_validator_violation_save_error: {_viol_err}")
+
+        # ═══ Phase C-1.6: Completion contract correction → quality_details 기록 ═══
+        if _completion_contract and _completion_contract.adjusted:
+            try:
+                _contract_details = json.dumps(_completion_contract.quality_details(), ensure_ascii=False)
+                async with get_pool().acquire() as _contract_conn:
+                    await _contract_conn.execute(
+                        """
+                        UPDATE chat_messages
+                        SET quality_details = COALESCE(quality_details, '{}'::jsonb) || $1::jsonb,
+                            quality_score = CASE WHEN quality_score IS NULL THEN 0.6 ELSE LEAST(quality_score, 0.6) END
+                        WHERE id = (
+                            SELECT id FROM chat_messages
+                            WHERE session_id = $2 AND role = 'assistant'
+                            ORDER BY created_at DESC LIMIT 1
+                        )
+                        """,
+                        _contract_details,
+                        sid,
+                    )
+                logger.info(
+                    "completion_contract_recorded session=%s pending=%s",
+                    session_id[:8],
+                    _completion_contract.pending_count,
+                )
+            except Exception as _contract_save_err:
+                logger.warning(f"completion_contract_save_error: {_contract_save_err}")
 
         # ═══ Phase C-2: Memory Upgrade Background Tasks ═══
         import asyncio as _bg_asyncio

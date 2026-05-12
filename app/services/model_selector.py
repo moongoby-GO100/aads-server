@@ -3674,7 +3674,12 @@ async def _stream_anthropic(
 
             # 도구 실행 — 별도 asyncio.Task + Event 기반 heartbeat (P0-FIX: shield→Event 전환)
             # asyncio.shield 패턴 대신 Event + done_callback으로 도구 블로킹과 heartbeat 완전 분리
-            _LONG_TOOLS = {"deep_research", "deep_crawl", "search_crawl_match", "spawn_subagent", "spawn_parallel_subagents", "pipeline_c_execute"}
+            _LONG_TOOLS = {
+                "deep_research", "deep_crawl", "search_crawl_match",
+                "spawn_subagent", "spawn_parallel_subagents", "pipeline_c_execute",
+                "browser_connect", "browser_navigate", "browser_snapshot",
+                "browser_screenshot", "browser_click", "browser_fill", "browser_tab_list",
+            }
             _tool_timeout = 600 if tu.name in _LONG_TOOLS else 120
             _HB_TOOL_SEC = 8.0  # heartbeat 간격 (초)
             task = asyncio.create_task(executor.execute(tu.name, tool_input))

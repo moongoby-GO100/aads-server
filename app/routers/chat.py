@@ -174,6 +174,149 @@ async def _finalize_streaming_status(session_id: UUID, result: Optional[dict], c
     return payload
 
 
+def _extract_tool_progress(tools_called: Any) -> tuple[int, str]:
+    """Return tool progress from persisted tool events."""
+    try:
+        tool_uses = [
+            t for t in svc.normalize_tool_events(tools_called)
+            if t.get("type") == "tool_use"
+        ]
+        last_tool = tool_uses[-1].get("tool_name", "") if tool_uses else ""
+        return len(tool_uses), last_tool
+    except Exception:
+        return 0, ""
+
+
+def _has_live_streaming_runtime(session_id: UUID | str, cached_status: Optional[dict] = None) -> bool:
+    """Check whether a session still has an in-process producer on this server."""
+    sid = str(session_id)
+    if cached_status and cached_status.get("is_streaming"):
+        return True
+    if is_streaming(sid):
+        return True
+    _state = getattr(svc, "_streaming_state", {}).get(sid)
+    if _state and not _state.get("completed", False):
+        return True
+    _task = getattr(svc, "_active_bg_tasks", {}).get(sid)
+    return bool(_task is not None and not _task.done())
+
+
+async def _settle_stale_execution_for_recovery(
+    conn,
+    session_id: UUID,
+    execution_row: Any,
+    *,
+    has_live_runtime: bool = False,
+) -> Optional[dict]:
+    """Terminalize dead running executions so recovery APIs stop hiding final content."""
+    if not execution_row or execution_row["status"] not in ("running", "retrying"):
+        return None
+
+    _partial = execution_row["partial_content"] or ""
+    _tc, _lt = _extract_tool_progress(execution_row["tools_called"])
+    _clean_partial = svc._strip_streaming_progress_markers(_partial)
+    _first_response_grace = int(getattr(svc, "_FIRST_RESPONSE_TIMEOUT_SEC", 120)) + 30
+    _recovery_grace = 20
+    _no_db_progress = (
+        not svc._has_meaningful_partial_content(_clean_partial)
+        and not execution_row["last_event_id"]
+        and _tc == 0
+    )
+    _stale_empty_execution = (
+        _no_db_progress
+        and int(execution_row["updated_age_seconds"] or 0) >= _first_response_grace
+    )
+    _stale_progressed_execution = (
+        not has_live_runtime
+        and int(execution_row["updated_age_seconds"] or 0) >= _recovery_grace
+        and (
+            svc._has_meaningful_partial_content(_clean_partial)
+            or bool(execution_row["last_event_id"])
+            or _tc > 0
+        )
+    )
+    if execution_row["updated_recently"] and not (
+        _stale_empty_execution or _stale_progressed_execution
+    ):
+        return None
+
+    _execution_uuid = UUID(execution_row["execution_id"])
+    _assistant_id = None
+    if _clean_partial and svc._has_meaningful_partial_content(_clean_partial):
+        _final_partial = (
+            _clean_partial
+            if "응답이 중단" in _clean_partial
+            else _clean_partial + "\n\n_(응답이 중단되어 여기까지 보존되었습니다.)_"
+        )
+        _assistant_id = await conn.fetchval(
+            """
+            UPDATE chat_messages
+            SET content = $2,
+                intent = NULL,
+                model_used = 'interrupted',
+                edited_at = NOW()
+            WHERE execution_id = $1
+              AND intent = 'streaming_placeholder'
+            RETURNING id
+            """,
+            _execution_uuid,
+            _final_partial,
+        )
+    else:
+        _deleted_placeholder_id = await conn.fetchval(
+            """
+            DELETE FROM chat_messages
+            WHERE execution_id = $1
+              AND intent = 'streaming_placeholder'
+            RETURNING id
+            """,
+            _execution_uuid,
+        )
+        if _deleted_placeholder_id:
+            await conn.execute(
+                "UPDATE chat_sessions SET message_count = GREATEST(message_count - 1, 0), updated_at = NOW() WHERE id = $1",
+                session_id,
+            )
+
+    await conn.execute(
+        """
+        UPDATE chat_turn_executions
+        SET status = 'interrupted',
+            assistant_message_id = CASE
+                WHEN $2::uuid IS NULL THEN assistant_message_id
+                ELSE $2::uuid
+            END,
+            completed_at = COALESCE(completed_at, NOW()),
+            updated_at = NOW(),
+            error_message = COALESCE(error_message, 'stale running execution settled by recovery endpoint')
+        WHERE id = $1
+          AND status IN ('running', 'retrying')
+        """,
+        _execution_uuid,
+        _assistant_id,
+    )
+    await conn.execute(
+        """
+        UPDATE chat_sessions
+        SET current_execution_id = NULL,
+            updated_at = NOW()
+        WHERE id = $1
+          AND current_execution_id = $2
+        """,
+        session_id,
+        _execution_uuid,
+    )
+    return {
+        "is_streaming": False,
+        "just_completed": bool(_assistant_id and _clean_partial),
+        "content_length": len(_clean_partial),
+        "tool_count": _tc,
+        "last_tool": _lt,
+        "execution_id": execution_row["execution_id"],
+        "last_event_id": execution_row["last_event_id"],
+    }
+
+
 # ════════════════════════════════════════════════════════════════════════════════
 # Workspace
 # ════════════════════════════════════════════════════════════════════════════════
@@ -674,6 +817,7 @@ async def get_streaming_status(session_id: UUID):
             }
         elif status.get("just_completed"):
             memory_terminal_status = status
+    _has_live_runtime = _has_live_streaming_runtime(session_id, status)
     # 메모리에 없으면 DB에서 placeholder 확인 (5분 이내만 유효)
     try:
         from app.core.db_pool import get_pool
@@ -689,8 +833,14 @@ async def get_streaming_status(session_id: UUID):
                        (te.updated_at > NOW() - interval '5 minutes') AS updated_recently,
                        te.completed_at,
                        am.model_used AS assistant_model_used,
-                       COALESCE(am.content, pm.content) AS partial_content,
-                       COALESCE(am.tools_called, pm.tools_called) AS tools_called
+                       CASE
+                           WHEN te.status IN ('running', 'retrying') THEN COALESCE(pm.content, am.content)
+                           ELSE COALESCE(am.content, pm.content)
+                       END AS partial_content,
+                       CASE
+                           WHEN te.status IN ('running', 'retrying') THEN COALESCE(pm.tools_called, am.tools_called)
+                           ELSE COALESCE(am.tools_called, pm.tools_called)
+                       END AS tools_called
                 FROM chat_sessions s
                 LEFT JOIN chat_turn_executions te
                   ON te.id = s.current_execution_id
@@ -763,93 +913,16 @@ async def get_streaming_status(session_id: UUID):
                         "last_event_id": execution_row["last_event_id"],
                     }, conn)
                 if execution_row["status"] in ("running", "retrying"):
+                    _settled = await _settle_stale_execution_for_recovery(
+                        conn,
+                        session_id,
+                        execution_row,
+                        has_live_runtime=_has_live_runtime,
+                    )
+                    if _settled:
+                        return await _finalize_streaming_status(session_id, _settled, conn)
                     _partial = execution_row["partial_content"] or ""
                     _tc, _lt = _extract_tool_progress(execution_row["tools_called"])
-                    _clean_partial = svc._strip_streaming_progress_markers(_partial)
-                    _first_response_grace = int(getattr(svc, "_FIRST_RESPONSE_TIMEOUT_SEC", 120)) + 30
-                    _no_db_progress = (
-                        not svc._has_meaningful_partial_content(_clean_partial)
-                        and not execution_row["last_event_id"]
-                        and _tc == 0
-                    )
-                    _stale_empty_execution = (
-                        _no_db_progress
-                        and int(execution_row["updated_age_seconds"] or 0) >= _first_response_grace
-                    )
-                    if (not execution_row["updated_recently"]) or _stale_empty_execution:
-                        _assistant_id = None
-                        if _clean_partial and svc._has_meaningful_partial_content(_clean_partial):
-                            _final_partial = (
-                                _clean_partial
-                                if "응답이 중단" in _clean_partial
-                                else _clean_partial + "\n\n_(응답이 중단되어 여기까지 보존되었습니다.)_"
-                            )
-                            _assistant_id = await conn.fetchval(
-                                """
-                                UPDATE chat_messages
-                                SET content = $2,
-                                    intent = NULL,
-                                    model_used = 'interrupted',
-                                    edited_at = NOW()
-                                WHERE execution_id = $1
-                                  AND intent = 'streaming_placeholder'
-                                RETURNING id
-                                """,
-                                UUID(execution_row["execution_id"]),
-                                _final_partial,
-                            )
-                        else:
-                            _deleted_placeholder_id = await conn.fetchval(
-                                """
-                                DELETE FROM chat_messages
-                                WHERE execution_id = $1
-                                  AND intent = 'streaming_placeholder'
-                                RETURNING id
-                                """,
-                                UUID(execution_row["execution_id"]),
-                            )
-                            if _deleted_placeholder_id:
-                                await conn.execute(
-                                    "UPDATE chat_sessions SET message_count = GREATEST(message_count - 1, 0), updated_at = NOW() WHERE id = $1",
-                                    session_id,
-                                )
-                        await conn.execute(
-                            """
-                            UPDATE chat_turn_executions
-                            SET status = 'interrupted',
-                                assistant_message_id = CASE
-                                    WHEN $2::uuid IS NULL THEN NULL
-                                    ELSE COALESCE(assistant_message_id, $2::uuid)
-                                END,
-                                completed_at = COALESCE(completed_at, NOW()),
-                                updated_at = NOW(),
-                                error_message = COALESCE(error_message, 'stale running execution without live stream state')
-                            WHERE id = $1
-                              AND status IN ('running', 'retrying')
-                            """,
-                            UUID(execution_row["execution_id"]),
-                            _assistant_id,
-                        )
-                        await conn.execute(
-                            """
-                            UPDATE chat_sessions
-                            SET current_execution_id = NULL,
-                                updated_at = NOW()
-                            WHERE id = $1
-                              AND current_execution_id = $2
-                            """,
-                            session_id,
-                            UUID(execution_row["execution_id"]),
-                        )
-                        return await _finalize_streaming_status(session_id, {
-                            "is_streaming": False,
-                            "just_completed": bool(_assistant_id and _clean_partial),
-                            "content_length": len(_clean_partial),
-                            "tool_count": _tc,
-                            "last_tool": _lt,
-                            "execution_id": execution_row["execution_id"],
-                            "last_event_id": execution_row["last_event_id"],
-                        }, conn)
                     return await _finalize_streaming_status(session_id, {
                         "is_streaming": True,
                         "just_completed": False,
@@ -1109,18 +1182,68 @@ async def get_last_response(session_id: UUID):
     클라이언트가 네트워크 끊김 후 서버에서 완성된 응답이 있는지 확인.
     """
     from app.core.db_pool import get_pool
+    _has_live_runtime = _has_live_streaming_runtime(session_id)
     pool = get_pool()
     async with pool.acquire() as conn:
         current_execution = await conn.fetchrow(
             """
-            SELECT te.id, te.status, te.assistant_message_id
+            SELECT te.id::text AS execution_id,
+                   te.status,
+                   te.assistant_message_id,
+                   te.last_event_id,
+                   te.updated_at,
+                   EXTRACT(EPOCH FROM (NOW() - te.updated_at))::int AS updated_age_seconds,
+                   (te.updated_at > NOW() - interval '5 minutes') AS updated_recently,
+                   CASE
+                       WHEN te.status IN ('running', 'retrying') THEN COALESCE(pm.content, am.content)
+                       ELSE COALESCE(am.content, pm.content)
+                   END AS partial_content,
+                   CASE
+                       WHEN te.status IN ('running', 'retrying') THEN COALESCE(pm.tools_called, am.tools_called)
+                       ELSE COALESCE(am.tools_called, pm.tools_called)
+                   END AS tools_called
             FROM chat_sessions s
             LEFT JOIN chat_turn_executions te
               ON te.id = s.current_execution_id
+            LEFT JOIN chat_messages am
+              ON am.id = te.assistant_message_id
+            LEFT JOIN LATERAL (
+                SELECT content, tools_called
+                FROM chat_messages
+                WHERE execution_id = te.id
+                  AND intent = 'streaming_placeholder'
+                ORDER BY created_at DESC
+                LIMIT 1
+            ) pm ON TRUE
             WHERE s.id = $1
             """,
             session_id,
         )
+        if current_execution and current_execution["status"] in ("running", "retrying"):
+            _settled = await _settle_stale_execution_for_recovery(
+                conn,
+                session_id,
+                current_execution,
+                has_live_runtime=_has_live_runtime,
+            )
+            if _settled:
+                current_execution = None
+            else:
+                return {"found": False, "generating": True}
+
+        if current_execution and current_execution["status"] == "completed":
+            await conn.execute(
+                """
+                UPDATE chat_sessions
+                SET current_execution_id = NULL,
+                    updated_at = NOW()
+                WHERE id = $1
+                  AND current_execution_id = $2
+                """,
+                session_id,
+                UUID(current_execution["execution_id"]),
+            )
+
         if current_execution and current_execution["status"] in ("running", "retrying"):
             return {"found": False, "generating": True}
 
@@ -1271,7 +1394,7 @@ async def resume_interrupted(session_id: UUID):
             """
             SELECT te.id::text AS execution_id,
                    te.requested_model,
-                   COALESCE(te.assistant_message_id, ph.id) AS placeholder_id,
+                   COALESCE(ph.id, te.assistant_message_id) AS placeholder_id,
                    COALESCE(ph.content, am.content, '') AS partial_content,
                    COALESCE(um.content, (
                        SELECT content FROM chat_messages

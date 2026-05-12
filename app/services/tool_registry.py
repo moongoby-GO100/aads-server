@@ -1646,6 +1646,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "description": (
             "CEO 로컬 Chrome 또는 Browser Bridge 세션 상태를 확인하고, "
             "OTP/로그인이 필요한 경우 one-time pairing을 생성하거나 등록된 세션을 선택한다. "
+            "PC Agent가 연결된 경우 ensure_pc_cdp로 분리 Chrome CDP 세션을 자동 준비한다. "
             "인증이 필요한 페이지를 보기 전 먼저 사용한다."
         ),
         "input_schema": {
@@ -1653,8 +1654,8 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "status | create_pairing | select",
-                    "enum": ["status", "create_pairing", "select"],
+                    "description": "status | create_pairing | select | ensure_pc_cdp",
+                    "enum": ["status", "create_pairing", "select", "ensure_pc_cdp"],
                     "default": "status",
                 },
                 "session_id": {
@@ -1663,8 +1664,26 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 },
                 "label": {
                     "type": "string",
-                    "description": "create_pairing 시 표시할 세션 라벨",
+                    "description": "create_pairing/ensure_pc_cdp 시 표시할 세션 라벨",
                     "default": "CEO local Chrome",
+                },
+                "agent_id": {
+                    "type": "string",
+                    "description": "ensure_pc_cdp 시 사용할 PC Agent id. 생략하면 capability 라우팅으로 선택",
+                },
+                "url": {
+                    "type": "string",
+                    "description": "ensure_pc_cdp 시 Chrome을 열 초기 URL",
+                    "default": "about:blank",
+                },
+                "preferred_port": {
+                    "type": "integer",
+                    "description": "ensure_pc_cdp 시 선호 CDP 포트",
+                },
+                "activate": {
+                    "type": "boolean",
+                    "description": "준비한 세션을 active로 지정할지 여부",
+                    "default": False,
                 },
             },
             "required": [],
@@ -1672,6 +1691,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "input_examples": [
             {"action": "status"},
             {"action": "create_pairing", "label": "CEO local Chrome"},
+            {"action": "ensure_pc_cdp", "label": "VVIC worker A", "preferred_port": 9222},
         ],
     },
     "browser_navigate": {

@@ -75,7 +75,7 @@ app.include_router(chat_v2_router, prefix="/api/v1", tags=["chat-v2"])  # L1065 
 |--------|------|------|
 | GET | `/chat/sessions/{id}/streaming-status` | 스트리밍 상태 조회 |
 | GET | `/chat/sessions/{id}/stream-resume` | **SSE 재연결** (Redis Stream 이어읽기) |
-| GET | `/chat/sessions/{id}/last-response` | 최종 완성 응답 조회 |
+| GET | `/chat/sessions/{id}/last-response` | 최종 완성 응답 조회. 죽은 `running/retrying` 실행은 stale 판정 후 placeholder 보존/정리까지 수행 |
 | POST | `/chat/sessions/{id}/stop` | 스트리밍 중지 |
 | POST | `/chat/sessions/{id}/interrupt` | 인터럽트 (새 지시) |
 | POST | `/chat/sessions/{id}/resume` | 중단된 스트리밍 재개 |

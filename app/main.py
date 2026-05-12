@@ -903,9 +903,9 @@ async def lifespan(app: FastAPI):
                     SELECT te.id::text AS execution_id,
                            te.session_id::text AS session_id,
                            te.requested_model,
-                           te.assistant_message_id,
+                           COALESCE(ph.id, te.assistant_message_id) AS assistant_message_id,
                            EXTRACT(EPOCH FROM (NOW() - te.updated_at))::int AS stale_seconds,
-                           COALESCE(am.content, ph.content, '') AS partial_content,
+                           COALESCE(ph.content, am.content, '') AS partial_content,
                            COALESCE(um.content, '') AS last_user_msg,
                            w.name AS workspace_name
                     FROM chat_turn_executions te
@@ -1022,10 +1022,11 @@ async def lifespan(app: FastAPI):
                             execution_id,
                             row["partial_content"] or "",
                         )
+                    if placeholder_id:
                         await conn.execute(
                             """
                             UPDATE chat_turn_executions
-                            SET assistant_message_id = COALESCE(assistant_message_id, $2),
+                            SET assistant_message_id = $2,
                                 updated_at = NOW()
                             WHERE id = $1::uuid
                             """,

@@ -74,6 +74,11 @@ _AADS_API_BASE = os.getenv("AADS_API_BASE", "http://localhost:8080")
 _MAX_RESULT_CHARS = 25000  # ~8000 토큰 (지시서 기준 25,000 허용)
 _TOOL_TIMEOUT = 20.0  # 일반 도구 타임아웃
 _LONG_TOOL_TIMEOUT = 55.0  # MCP stdio 클라이언트 타임아웃(~60s) 이내로 응답 보장
+_BROWSER_TOOL_TIMEOUT = 210.0  # Browser Bridge CDP/PC Agent 명령(최대 180s) + 여유
+_BROWSER_TOOLS = frozenset({
+    "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot",
+    "browser_click", "browser_fill", "browser_tab_list",
+})
 _LONG_TOOLS = frozenset({
     "spawn_subagent", "spawn_parallel_subagents", "run_agent_team", "run_debate",
     "deep_research", "delegate_to_agent", "delegate_to_research",
@@ -371,7 +376,10 @@ class ToolExecutor:
                             decorated_result = decorated_result[:_MAX_RESULT_CHARS] + "\n...[결과 일부 생략]"
                         return decorated_result
 
-            _timeout = _LONG_TOOL_TIMEOUT if tool_name in _LONG_TOOLS else _TOOL_TIMEOUT
+            if tool_name in _BROWSER_TOOLS:
+                _timeout = _BROWSER_TOOL_TIMEOUT
+            else:
+                _timeout = _LONG_TOOL_TIMEOUT if tool_name in _LONG_TOOLS else _TOOL_TIMEOUT
             result = await asyncio.wait_for(
                 self._dispatch(tool_name, tool_input),
                 timeout=_timeout,
@@ -3941,6 +3949,10 @@ class ToolExecutor:
             action=inp.get("action", "status"),
             session_id=inp.get("session_id", ""),
             label=inp.get("label", "CEO local Chrome"),
+            agent_id=inp.get("agent_id", ""),
+            url=inp.get("url", "about:blank"),
+            preferred_port=inp.get("preferred_port"),
+            activate=bool(inp.get("activate", False)),
         )
 
     async def _browser_navigate(self, inp: Dict[str, Any]) -> Any:

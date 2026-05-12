@@ -643,3 +643,224 @@ async def list_
 ## [2026-05-11 15:32:36 KST] [GO100] scripts/disable_go100_account7_cards_20260511.py
 - Chat-Direct 수정: write: scripts/disable_go100_account7_cards_20260511.py
 - finalize: pending
+
+## [2026-05-11 19:28:42 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: # GO100 HANDOVER — 2026-04-21
+
+## 최근 진행 →# GO100 HANDOVER — 2026-04-21
+
+## 최근 진행
+- finalize: pending
+
+## [2026-05-11 19:30:43 KST] [GO100] scripts/go100/reconcile_v4_positions_with_holdings.py
+- Chat-Direct 수정: write: scripts/go100/reconcile_v4_positions_with_holdings.py
+- finalize: pending
+
+## [2026-05-11 19:31:12 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: # GO100 HANDOVER — 2026-04-21
+
+## 최근 진행 →# GO100 HANDOVER — 2026-04-21
+
+## 최근 진행
+- finalize: pending
+
+## [2026-05-11 19:45:24 KST] [GO100] scripts/go100_make_e2e_token.py
+- Chat-Direct 수정: write: scripts/go100_make_e2e_token.py
+- finalize: pending
+
+## [2026-05-11 19:45:40 KST] [GO100] frontend/e2e/go100-portfolio-live-data.spec.ts
+- Chat-Direct 수정: write: frontend/e2e/go100-portfolio-live-data.spec.ts
+- finalize: pending
+
+## [2026-05-11 19:46:44 KST] [GO100] scripts/go100_make_e2e_token.py
+- Chat-Direct 수정: write: scripts/go100_make_e2e_token.py
+- finalize: pending
+
+## [2026-05-11 19:47:58 KST] [GO100] test-results/.last-run.json
+- Chat-Direct 수정: run_remote_command: npm --prefix frontend exec playwright -- test e2e/go100-portfolio-live-data.spec
+- finalize: pending
+
+## [2026-05-11 19:47:59 KST] [GO100] test-results/frontend-e2e-go100-portfol-97089-data-for-moongoby-naver-com/error-context.md
+- Chat-Direct 수정: run_remote_command: npm --prefix frontend exec playwright -- test e2e/go100-portfolio-live-data.spec
+- finalize: pending
+
+## [2026-05-11 19:49:48 KST] [GO100] frontend/e2e/go100-portfolio-live-data.spec.ts
+- Chat-Direct 수정: write: frontend/e2e/go100-portfolio-live-data.spec.ts
+- finalize: pending
+
+## [2026-05-11 19:51:11 KST] [GO100] scripts/go100_make_e2e_token.py
+- Chat-Direct 수정: write: scripts/go100_make_e2e_token.py
+- finalize: pending
+
+## [2026-05-11 19:52:32 KST] [GO100] frontend/e2e/go100-portfolio-live-data.spec.ts
+- Chat-Direct 수정: write: frontend/e2e/go100-portfolio-live-data.spec.ts
+- finalize: pending
+
+## [2026-05-11 19:58:22 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch:     params = {
+        "uid": uid,
+     →    params = {
+        "uid": uid,
+
+- finalize: pending
+
+## [2026-05-12 07:25:34 KST] [GO100] backend/app/services/go100/user_utils.py
+- Chat-Direct 수정: patch: async def get_user_email(db: AsyncSessio→async def get_go100_domain_uid(db: Async
+- finalize: pending
+
+## [2026-05-12 07:25:48 KST] [GO100] backend/app/routers/go100/strategy_router.py
+- Chat-Direct 수정: patch: from backend.app.services.go100.user_uti→from backend.app.services.go100.user_uti
+- finalize: pending
+
+## [2026-05-12 07:26:05 KST] [GO100] backend/app/routers/go100/strategy_router.py
+- Chat-Direct 수정: patch: async def _effective_user_id(current_use→async def _effective_user_id(current_use
+- finalize: pending
+
+## [2026-05-12 07:26:23 KST] [GO100] backend/app/routers/go100/strategy_router.py
+- Chat-Direct 수정: patch:     result = await db.execute(
+        t→    result = await db.execute(
+        t
+- finalize: pending
+
+## [2026-05-12 07:26:38 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch: from backend.app.services.go100.strategy→from backend.app.services.go100.strategy
+- finalize: pending
+
+## [2026-05-12 07:27:00 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch:     """포트폴리오 전체 요약: 총 평가금액, 총 수익률, 보유 종목→    """포트폴리오 전체 요약: 총 평가금액, 총 수익률, 보유 종목
+- finalize: pending
+
+## [2026-05-12 07:27:17 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch:     """실전/모의 계좌 유형별 소계."""
+    uid = cur→    """실전/모의 계좌 유형별 소계."""
+    uid = awa
+- finalize: pending
+
+## [2026-05-12 07:27:33 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch:     """포트폴리오 3단계 필터용 계좌 트리: 전체 → 증권사 → 계→    """포트폴리오 3단계 필터용 계좌 트리: 전체 → 증권사 → 계
+- finalize: pending
+
+## [2026-05-12 07:27:49 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch:     """보유 종목 목록: 종목명, 수량, 평균단가, 현재가, 수익률→    """보유 종목 목록: 종목명, 수량, 평균단가, 현재가, 수익률
+- finalize: pending
+
+## [2026-05-12 07:28:03 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch:     """최근 주문 목록. 실계좌 v4 주문요청과 GO100 모의 주→    """최근 주문 목록. 실계좌 v4 주문요청과 GO100 모의 주
+- finalize: pending
+
+## [2026-05-12 07:28:19 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch:     """전략카드별 누적 수익률."""
+    uid = curren→    """전략카드별 누적 수익률."""
+    uid = await
+- finalize: pending
+
+## [2026-05-12 07:28:38 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch:     """포트폴리오 생성."""
+    try:
+        ret→    """포트폴리오 생성."""
+    uid = await get_
+- finalize: pending
+
+## [2026-05-12 07:28:55 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch:     """내 포트폴리오 목록."""
+    return await g→    """내 포트폴리오 목록."""
+    uid = await ge
+- finalize: pending
+
+## [2026-05-12 07:29:11 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch:     """포트폴리오 상세 (포지션 포함)."""
+    try:
+  →    """포트폴리오 상세 (포지션 포함)."""
+    uid = a
+- finalize: pending
+
+## [2026-05-12 07:29:27 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch:     """포트폴리오 수정."""
+    try:
+        ret→    """포트폴리오 수정."""
+    uid = await get_
+- finalize: pending
+
+## [2026-05-12 07:29:43 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch:     """포트폴리오 비활성화."""
+    try:
+        r→    """포트폴리오 비활성화."""
+    uid = await ge
+- finalize: pending
+
+## [2026-05-12 07:29:58 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch:     """포지션 목록."""
+    try:
+        retur→    """포지션 목록."""
+    uid = await get_go
+- finalize: pending
+
+## [2026-05-12 07:30:13 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch:     """성과 요약."""
+    try:
+        return→    """성과 요약."""
+    uid = await get_go1
+- finalize: pending
+
+## [2026-05-12 07:30:29 KST] [GO100] scripts/go100_make_e2e_token.py
+- Chat-Direct 수정: patch: token = auth_service.create_access_token→token = auth_service.create_access_token
+- finalize: pending
+
+## [2026-05-12 07:30:51 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: # GO100 HANDOVER — 2026-04-21
+
+## 최근 진행 →# GO100 HANDOVER — 2026-04-21
+
+## 최근 진행
+- finalize: pending
+
+## [2026-05-12 07:33:00 KST] [GO100] test-results/go100-portfolio-live-data.png
+- Chat-Direct 수정: run_remote_command: npm --prefix frontend exec playwright test frontend/e2e/go100-portfolio-live-dat
+- finalize: pending
+
+## [2026-05-12 07:34:10 KST] [GO100] frontend/e2e/go100-portfolio-live-data.spec.ts
+- Chat-Direct 수정: patch:   await expect(page.getByText('EMERG_LIQ→  await expect(page.getByText('EMERG_LIQ
+- finalize: pending
+
+## [2026-05-12 07:34:53 KST] [GO100] test-results/frontend-e2e-go100-portfol-97089-data-for-moongoby-naver-com/error-context.md
+- Chat-Direct 수정: run_remote_command: npm --prefix frontend exec playwright test frontend/e2e/go100-portfolio-live-dat
+- finalize: pending
+
+## [2026-05-12 07:35:12 KST] [GO100] frontend/e2e/go100-portfolio-live-data.spec.ts
+- Chat-Direct 수정: patch:   await expect(page.getByText('[모의] 변동성돌→  await expect(page.getByText('변동성돌파 모멘텀
+- finalize: pending
+
+## [2026-05-12 07:35:36 KST] [GO100] test-results/go100-portfolio-live-data.png
+- Chat-Direct 수정: run_remote_command: npm --prefix frontend exec playwright test frontend/e2e/go100-portfolio-live-dat
+- finalize: pending
+
+## [2026-05-12 07:47:25 KST] [GO100] frontend/src/lib/api/strategy-cards.ts
+- Chat-Direct 수정: write: frontend/src/lib/api/strategy-cards.ts
+- finalize: pending
+
+## [2026-05-12 07:47:44 KST] [GO100] frontend/src/go100/components/command-center/StrategyTab.tsx
+- Chat-Direct 수정: patch:     ]).then(([stData, sigData, riskData]→    ]).then(([stData, sigData, riskData]
+- finalize: pending
+
+## [2026-05-12 07:48:45 KST] [GO100] scripts/go100/activate_moongoby_live_pipeline.py
+- Chat-Direct 수정: write: scripts/go100/activate_moongoby_live_pipeline.py
+- finalize: pending
+
+## [2026-05-12 09:00:36 KST] [GO100] snapshot.json
+- Chat-Direct 수정: run_remote_command: find . -maxdepth 3 -type d
+- finalize: pending
+
+## [2026-05-12 11:24:23 KST] [GO100] backend/app/services/go100/strategy/card_fixer.py
+- Chat-Direct 수정: patch: _DESK_KEYWORDS: list[tuple[int, list[str→_DESK_KEYWORDS: list[tuple[int, list[str
+- finalize: pending
+
+## [2026-05-12 11:25:21 KST] [GO100] scripts/go100_fix_live_strategy_desk_mapping_20260512.py
+- Chat-Direct 수정: write: scripts/go100_fix_live_strategy_desk_mapping_20260512.py
+- finalize: pending
+
+## [2026-05-12 11:25:51 KST] [GO100] scripts/go100_fix_live_strategy_desk_mapping_20260512.py
+- Chat-Direct 수정: patch: def db_params() -> dict:
+    return {
+  →def _load_env_file() -> dict[str, str]:
+
+- finalize: pending

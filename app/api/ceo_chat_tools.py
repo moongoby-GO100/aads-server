@@ -40,6 +40,13 @@ _SECRET_PARAM_KEYS = {
 }
 
 
+def _aads_local_workdir() -> str:
+    """Return the AADS repo root in both Docker and host test environments."""
+    if Path("/app/app/main.py").exists():
+        return "/app"
+    return str(Path(__file__).resolve().parents[2])
+
+
 def sanitize_tool_params(value: Any) -> Any:
     """도구 입력/이벤트에서 비밀번호와 토큰류를 마스킹."""
     if isinstance(value, dict):
@@ -158,16 +165,17 @@ TOOL_DEFINITIONS: List[Dict] = [
     {
         "name": "browser_connect",
         "description": (
-            "CEO 로컬 Chrome/브라우저 브릿지 세션 연결 상태 조회, one-time pairing 생성, 세션 선택. "
-            "OTP/로그인이 필요한 화면은 먼저 create_pairing으로 CEO 로컬 브라우저를 연결한 뒤 기존 browser_* 도구를 사용."
+            "CEO 로컬 Chrome/브라우저 브릿지 세션 연결 상태 조회, one-time pairing 생성, 세션 선택, "
+            "PC Agent CDP 세션 자동 준비. OTP/로그인이 필요한 화면은 먼저 create_pairing 또는 ensure_pc_cdp로 "
+            "브라우저 세션을 연결한 뒤 기존 browser_* 도구를 사용."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "status | create_pairing | select",
-                    "enum": ["status", "create_pairing", "select"],
+                    "description": "status | create_pairing | select | ensure_pc_cdp",
+                    "enum": ["status", "create_pairing", "select", "ensure_pc_cdp"],
                     "default": "status",
                 },
                 "session_id": {
@@ -176,8 +184,26 @@ TOOL_DEFINITIONS: List[Dict] = [
                 },
                 "label": {
                     "type": "string",
-                    "description": "create_pairing 시 CEO에게 표시할 세션 라벨",
+                    "description": "create_pairing/ensure_pc_cdp 시 표시할 세션 라벨",
                     "default": "CEO local Chrome",
+                },
+                "agent_id": {
+                    "type": "string",
+                    "description": "ensure_pc_cdp 시 사용할 PC Agent id. 생략하면 capability 라우팅으로 선택",
+                },
+                "url": {
+                    "type": "string",
+                    "description": "ensure_pc_cdp 시 Chrome을 열 초기 URL",
+                    "default": "about:blank",
+                },
+                "preferred_port": {
+                    "type": "integer",
+                    "description": "ensure_pc_cdp 시 선호 CDP 포트",
+                },
+                "activate": {
+                    "type": "boolean",
+                    "description": "생성/준비한 세션을 active로 지정할지 여부",
+                    "default": False,
                 },
             },
             "required": [],
@@ -1750,7 +1776,7 @@ async def tool_list_remote_dir(
     if project == "AADS":
         from app.core.project_config import PROJECT_MAP
         # 컨테이너 내부 경로 사용 (호스트 /root/aads/aads-server/app → 컨테이너 /app/app)
-        workdir = "/app"
+        workdir = _aads_local_workdir()
         max_depth = min(max(1, max_depth), _SSH_MAX_DEPTH)
         from posixpath import normpath, join as pjoin
         target = normpath(pjoin(workdir, path)) if path else workdir
@@ -1864,7 +1890,7 @@ async def tool_read_remote_file(project: str, file_path: str, offset: int = 1, l
     if project == "AADS":
         file_path = _normalize_aads_path(file_path)
         from app.core.project_config import PROJECT_MAP
-        workdir = "/app"
+        workdir = _aads_local_workdir()
         from posixpath import normpath, join as pjoin
         resolved = normpath(pjoin(workdir, file_path))
         if not resolved.startswith(workdir):
@@ -1970,7 +1996,7 @@ async def tool_write_remote_file(project: str, file_path: str, content: str, bac
         file_path = _normalize_aads_path(file_path)
         from app.core.project_config import PROJECT_MAP
         # 컨테이너 내부 경로 사용 (호스트 /root/aads/aads-server/app → 컨테이너 /app/app)
-        workdir = "/app"
+        workdir = _aads_local_workdir()
         content_bytes = content.encode("utf-8")
         if len(content_bytes) > _SSH_MAX_WRITE_BYTES:
             return f"[ERROR] 파일 크기 초과: {len(content_bytes):,} bytes > 1MB 제한"
@@ -2099,7 +2125,7 @@ async def _read_raw_file(project: str, file_path: str) -> str:
     project = project.upper()
     if project == "AADS":
         file_path = _normalize_aads_path(file_path)
-        workdir = "/app"
+        workdir = _aads_local_workdir()
         from posixpath import normpath, join as pjoin
         resolved = normpath(pjoin(workdir, file_path))
         if not resolved.startswith(workdir):
@@ -2716,6 +2742,10 @@ async def tool_browser_connect(
     action: str = "status",
     session_id: str = "",
     label: str = "CEO local Chrome",
+    agent_id: str = "",
+    url: str = "about:blank",
+    preferred_port: int | None = None,
+    activate: bool = False,
 ) -> str:
     """Browser Bridge pairing/status/session selection."""
     from app.browser_bridge.aads_adapter import create_pairing_instructions
@@ -2732,6 +2762,25 @@ async def tool_browser_connect(
                 return "[ERROR] session_id 필수"
             selected = service.select_session(session_id)
             return f"[Browser Bridge 선택 완료]\nsession_id: {selected.session_id}\nlabel: {selected.label}"
+        if action == "ensure_pc_cdp":
+            session = await service.ensure_pc_agent_cdp_session(
+                agent_id=agent_id or "",
+                label=label or "PC Agent Chrome",
+                url=url or "about:blank",
+                preferred_port=preferred_port,
+                activate=bool(activate),
+            )
+            endpoint = session.endpoint.public_dict()
+            metadata = endpoint.get("metadata", {})
+            return (
+                "[Browser Bridge PC Agent CDP 준비 완료]\n"
+                f"session_id: {session.session_id}\n"
+                f"label: {session.label}\n"
+                f"agent_id: {metadata.get('agent_id')}\n"
+                f"port: {metadata.get('port')}\n"
+                f"kind: {endpoint.get('kind')}\n"
+                "사용: browser_* 도구에 browser_session_id를 지정하세요."
+            )
         if action != "status":
             return f"[ERROR] 지원하지 않는 action: {action}"
 
@@ -2746,7 +2795,8 @@ async def tool_browser_connect(
             marker = "*" if item.get("active") else "-"
             lines.append(
                 f"  {marker} {item['session_id']} {item['label']} "
-                f"kind={endpoint.get('kind')} storage={item.get('has_storage_state')}"
+                f"kind={endpoint.get('kind')} storage={item.get('has_storage_state')} "
+                f"leased={item.get('leased')}"
             )
         if not sessions:
             lines.append("연결이 필요하면 browser_connect(action='create_pairing')을 사용하세요.")
@@ -3549,6 +3599,10 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             action=params.get("action", "status"),
             session_id=params.get("session_id", ""),
             label=params.get("label", "CEO local Chrome"),
+            agent_id=params.get("agent_id", ""),
+            url=params.get("url", "about:blank"),
+            preferred_port=params.get("preferred_port"),
+            activate=bool(params.get("activate", False)),
         )
     elif name == "browser_navigate":
         return await tool_browser_navigate(

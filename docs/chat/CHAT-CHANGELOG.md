@@ -8,9 +8,16 @@ _v1.0 | 2026-04-02 | 최초 작성_
 
 | 커밋 | 변경 | 구분 |
 |------|------|------|
+| 2026-05-12 | **Last-response stale execution settlement**: `/last-response`가 `current_execution_id`의 죽은 `running/retrying` 실행 때문에 무기한 `generating=true`만 반환하지 않도록, `streaming-status`와 동일한 stale 판정으로 placeholder를 보존 응답으로 승격하거나 빈 placeholder를 정리한 뒤 최신 assistant 조회를 계속 수행 | 🐛 Backend |
 | 2026-05-12 | **Chat restart resume trigger guard**: 서버 재시작 직후 `chat_turn_executions.status IN ('running','retrying')`이지만 새 프로세스 시작 전 생성된 실행은 90초 stale 대기 없이 startup scanner가 즉시 claim하도록 보강. 평시 periodic scanner는 기존 stale 기준을 유지하되 env로 조정 가능 | 🐛 Backend |
 | 2026-05-12 | **Chat-embedded Design Studio**: `/chat` 입력 액션에 `디자인수정` 칩과 Design Studio 패널을 추가해 채팅 문장을 수정 카드/컨텍스트팩으로 바로 저장하고, `Context`/`Workbench`/AI 운영 지시 삽입 흐름을 제공 | ✨ Frontend+Backend |
 | 2026-05-12 | **Chat final visibility guard**: 완료 직후 메시지 재조회가 assistant 저장 gap에서 로컬 최종 버블을 덮어쓰지 않도록 `mergeServerMessagesPreservingLocal()` 경로로 통일하고, `done`/`message_done`/execution replay 완료 직후 `/last-response`를 재확인해 서버 최종 assistant를 병합 | 🐛 Frontend |
+
+Last-response stale execution settlement:
+- 기존 `/last-response`는 `chat_sessions.current_execution_id`가 `running/retrying`이면 실행이 실제로 죽었는지 확인하지 않고 `generating=true`를 반환했다.
+- 개선 후 5분 이상 갱신이 없거나, 첫 응답 제한 시간 이후 토큰/도구/이벤트 진행이 없는 실행은 `interrupted`로 terminalize한다.
+- 의미 있는 partial이 있으면 `streaming_placeholder`를 같은 row에서 최종 assistant로 승격하고, 비어 있으면 placeholder를 삭제한 뒤 `message_count`를 보정한다.
+- 이 처리는 `/streaming-status`와 `/last-response` 양쪽에서 같은 helper를 사용해 재진입, 폴링, SSE 끊김 복구 경로의 판정 차이를 줄인다.
 
 Restart resume trigger guard:
 - 기존 트리거는 `current_execution_id`가 가리키는 `running/retrying` 실행 중 `updated_at < NOW() - 90 seconds`만 자동 claim했다.

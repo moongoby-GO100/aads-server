@@ -78,6 +78,8 @@ class BrowserBridgeSession:
     active: bool = False
     expires_at: Optional[datetime] = None
     last_used_at: Optional[datetime] = None
+    lease_owner: str = ""
+    lease_expires_at: Optional[datetime] = None
 
     @property
     def is_expired(self) -> bool:
@@ -96,6 +98,9 @@ class BrowserBridgeSession:
             "expires_at": self.expires_at.isoformat() if self.expires_at else None,
             "last_used_at": self.last_used_at.isoformat() if self.last_used_at else None,
             "has_storage_state": bool(self.storage_state_ref),
+            "lease_owner": self.lease_owner or None,
+            "lease_expires_at": self.lease_expires_at.isoformat() if self.lease_expires_at else None,
+            "leased": bool(self.lease_owner and self.lease_expires_at and self.lease_expires_at > utcnow()),
         }
 
 

@@ -19,6 +19,7 @@ import os
 import sys
 import re
 import json
+from uuid import uuid4
 
 # 프로젝트 루트
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -28,6 +29,28 @@ import pytest
 # ═══════════════════════════════════════════════════════════════════
 # 1. 도구 함수 단위 테스트
 # ═══════════════════════════════════════════════════════════════════
+
+
+class TestToolTimeouts:
+    """도구 실행 타임아웃 분류 테스트."""
+
+    def test_browser_tools_have_cdp_timeout_budget(self):
+        from app.services import tool_executor
+
+        assert tool_executor._TOOL_TIMEOUT == 20.0
+        assert tool_executor._BROWSER_TOOL_TIMEOUT >= 210.0
+        assert tool_executor._BROWSER_TOOL_TIMEOUT > tool_executor._LONG_TOOL_TIMEOUT
+        for tool_name in (
+            "browser_connect",
+            "browser_navigate",
+            "browser_snapshot",
+            "browser_screenshot",
+            "browser_click",
+            "browser_fill",
+            "browser_tab_list",
+        ):
+            assert tool_name in tool_executor._BROWSER_TOOLS
+
 
 class TestPathNormalization:
     """AADS 경로 자동교정 테스트."""
@@ -406,6 +429,104 @@ class TestRegressions:
         from app.routers.chat import get_streaming_status
         src = inspect.getsource(get_streaming_status)
         assert "streaming_placeholder" in src
+
+    def test_last_response_settles_stale_running_execution(self):
+        """last-response가 죽은 running 실행 때문에 최종 응답 복구를 막지 않음."""
+        import inspect
+        from app.routers.chat import get_last_response
+        src = inspect.getsource(get_last_response)
+        assert "_settle_stale_execution_for_recovery" in src
+        assert "stale running execution settled by recovery endpoint" in inspect.getsource(
+            __import__("app.routers.chat", fromlist=["_settle_stale_execution_for_recovery"])._settle_stale_execution_for_recovery
+        )
+
+    def test_final_save_promotes_execution_placeholder_before_old_assistant(self):
+        """최종 저장은 이전 assistant_message_id보다 execution placeholder를 우선 승격."""
+        import inspect
+        from app.services.chat_service import _save_and_update_session
+
+        src = inspect.getsource(_save_and_update_session)
+        placeholder_select = "WHERE execution_id = $1\n                              AND intent = 'streaming_placeholder'"
+        assistant_select = "SELECT assistant_message_id FROM chat_turn_executions WHERE id = $1"
+        assert placeholder_select in src
+        assert src.index(placeholder_select) < src.index(assistant_select)
+        assert "ELSE $2::uuid" in src
+
+    @pytest.mark.asyncio
+    async def test_settle_stale_execution_recovers_recent_progress_without_live_runtime(self, monkeypatch):
+        """메모리상 live runtime이 없으면 recent partial도 recovery가 정리."""
+        from app.routers import chat as chat_router
+
+        class FakeConn:
+            def __init__(self):
+                self.execute_calls = []
+                self.fetchval_calls = []
+
+            async def fetchval(self, query, *args):
+                self.fetchval_calls.append(query)
+                if "UPDATE chat_messages" in query:
+                    return uuid4()
+                return None
+
+            async def execute(self, query, *args):
+                self.execute_calls.append(query)
+
+        monkeypatch.setattr(chat_router.svc, "normalize_tool_events", lambda tools: tools or [])
+        monkeypatch.setattr(chat_router.svc, "_strip_streaming_progress_markers", lambda text: text)
+        monkeypatch.setattr(chat_router.svc, "_has_meaningful_partial_content", lambda text: bool((text or "").strip()))
+        monkeypatch.setattr(chat_router.svc, "_FIRST_RESPONSE_TIMEOUT_SEC", 120, raising=False)
+
+        settled = await chat_router._settle_stale_execution_for_recovery(
+            FakeConn(),
+            uuid4(),
+            {
+                "status": "running",
+                "partial_content": "partial answer",
+                "tools_called": [],
+                "last_event_id": "1778546800-0",
+                "updated_age_seconds": 25,
+                "updated_recently": True,
+                "execution_id": str(uuid4()),
+            },
+            has_live_runtime=False,
+        )
+
+        assert settled is not None
+        assert settled["just_completed"] is True
+
+    @pytest.mark.asyncio
+    async def test_settle_stale_execution_keeps_recent_live_runtime(self, monkeypatch):
+        """실제 live runtime이 있으면 recent running execution은 유지."""
+        from app.routers import chat as chat_router
+
+        class FakeConn:
+            async def fetchval(self, query, *args):
+                raise AssertionError("recent live execution should not mutate DB")
+
+            async def execute(self, query, *args):
+                raise AssertionError("recent live execution should not mutate DB")
+
+        monkeypatch.setattr(chat_router.svc, "normalize_tool_events", lambda tools: tools or [])
+        monkeypatch.setattr(chat_router.svc, "_strip_streaming_progress_markers", lambda text: text)
+        monkeypatch.setattr(chat_router.svc, "_has_meaningful_partial_content", lambda text: bool((text or "").strip()))
+        monkeypatch.setattr(chat_router.svc, "_FIRST_RESPONSE_TIMEOUT_SEC", 120, raising=False)
+
+        settled = await chat_router._settle_stale_execution_for_recovery(
+            FakeConn(),
+            uuid4(),
+            {
+                "status": "running",
+                "partial_content": "partial answer",
+                "tools_called": [],
+                "last_event_id": "1778546800-0",
+                "updated_age_seconds": 25,
+                "updated_recently": True,
+                "execution_id": str(uuid4()),
+            },
+            has_live_runtime=True,
+        )
+
+        assert settled is None
 
     def test_tool_executor_all_tools_callable(self):
         """ToolExecutor의 모든 도구 매핑이 실제 callable 메서드를 참조하는지 검증.

@@ -43,6 +43,27 @@ class SessionSelectRequest(BaseModel):
     session_id: str
 
 
+class EnsurePcCdpSessionRequest(BaseModel):
+    agent_id: str = Field(default="", max_length=120)
+    label: str = Field(default="PC Agent Chrome", max_length=120)
+    url: str = Field(default="about:blank", max_length=2048)
+    preferred_port: int | None = Field(default=None, ge=1024, le=65535)
+    isolated_profile: bool = True
+    isolation_id: str = Field(default="", max_length=80)
+    activate: bool = False
+
+
+class SessionLeaseRequest(BaseModel):
+    owner: str = Field(min_length=1, max_length=160)
+    preferred_session_id: str = Field(default="", max_length=80)
+    ttl_seconds: int = Field(default=300, ge=30, le=3600)
+
+
+class SessionLeaseReleaseRequest(BaseModel):
+    owner: str = Field(default="", max_length=160)
+    session_id: str = Field(default="", max_length=80)
+
+
 @router.post("/pairings")
 async def create_pairing(
     req: PairingCreateRequest,
@@ -111,6 +132,54 @@ async def select_session(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"status": "selected", "session": session.public_dict()}
+
+
+@router.post("/sessions/ensure-pc-cdp")
+async def ensure_pc_cdp_session(
+    req: EnsurePcCdpSessionRequest,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    service = get_browser_bridge_service()
+    try:
+        session = await service.ensure_pc_agent_cdp_session(
+            agent_id=req.agent_id,
+            label=req.label,
+            url=req.url,
+            preferred_port=req.preferred_port,
+            isolated_profile=req.isolated_profile,
+            isolation_id=req.isolation_id,
+            activate=req.activate,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=424, detail=str(exc)) from exc
+    return {"status": "ready", "session": session.public_dict()}
+
+
+@router.post("/sessions/lease")
+async def lease_session(
+    req: SessionLeaseRequest,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    service = get_browser_bridge_service()
+    try:
+        session = service.sessions.acquire_lease(
+            owner=req.owner,
+            preferred_session_id=req.preferred_session_id,
+            ttl_seconds=req.ttl_seconds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "leased", "session": session.public_dict()}
+
+
+@router.post("/sessions/release-lease")
+async def release_session_lease(
+    req: SessionLeaseReleaseRequest,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    service = get_browser_bridge_service()
+    released = service.sessions.release_lease(owner=req.owner, session_id=req.session_id)
+    return {"status": "released", "released": released}
 
 
 @router.get("/e2e/config")

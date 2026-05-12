@@ -1,16 +1,46 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-12)
-- **AADS Blue-Green 양 슬롯 동기화 및 host-only 포트 정책 (2026-05-12 11:21 KST)**:
-  - 요청: BG가 필요한 Docker/API/server/dashboard 항목 전체에 전환 후 반대 슬롯 자동 동기화가 적용되는지 확인하고 개선.
-  - 확인: 기존 API BG는 새 슬롯 전환 후 old 슬롯을 stop하거나 스트림이 남으면 그대로 두는 구조였고, dashboard BG도 old 슬롯을 warm standby로 유지만 했다. 따라서 다음 전환 때 stale 슬롯이 active가 될 수 있었다.
-  - 조치: `deploy.sh`에 전환 후 old API 슬롯의 active stream drain을 기다린 뒤 같은 release로 재빌드하는 `sync_standby_slot_after_drain()`을 추가했다. 기존 active stream은 nginx reload 이후 old worker/slot에서 유지되고, 신규 요청은 새 active 슬롯으로 간다.
-  - 조치: `aads-dashboard/deploy.sh`도 외부 health 통과 후 이전 dashboard 슬롯을 같은 release로 재빌드해 warm standby로 동기화한다. `AADS_DASHBOARD_STOP_PREVIOUS=true`일 때만 이전처럼 정리한다.
-  - 조치: API `8100/8102`와 dashboard `3100/3101` publish port를 compose 기준 `127.0.0.1`로 제한했다. 기존 컨테이너가 재생성되기 전까지는 `scripts/apply-bg-port-firewall.sh`와 `scripts/aads-bg-host-only-ports.service`로 public 직접 접근을 차단한다.
-  - 조치: `scripts/blue_green_deploy.sh`는 중복 구현을 제거하고 표준 `/root/aads/aads-server/deploy.sh bluegreen` 래퍼로 전환했다. `system_prompt_v2.py`, `ckp_manager.py`의 직접 compose 배포 문구도 BG 표준 경로로 정리했다.
-  - 주석 정리: `nginx-aads-upstream.conf`의 stale active-slot 주석을 “non-backup line이 active이며 deploy 스크립트가 재작성” 기준으로 정리했다.
-  - 검증: `bash -n deploy.sh`, `bash -n scripts/blue_green_deploy.sh`, `bash -n /root/aads/aads-dashboard/deploy.sh`, `docker compose -f docker-compose.prod.yml config --quiet`, dashboard compose config, `nginx -t`, `curl` health를 통과했다.
-  - 남은 운영 상태: active blue 슬롯은 활성 스트림 보호 때문에 다음 BG 순환 시 loopback publish까지 반영된다. 파일 정책과 firewall guard는 적용되어 있다.
+- **AADS Blue-Green standby 자동 동기화 보강 (2026-05-12 10:41 KST)**:
+  - 요청: B→G 전환 후 B가 자동으로 G와 동기화되어 다음 전환/rollback 때 미반영 슬롯이 노출되지 않는지 확인.
+  - 확인: 기존 백엔드 BG는 새 슬롯 빌드→upstream 전환 후 old 슬롯을 drain 뒤 stop하거나, 스트림이 남으면 old 슬롯을 그대로 두었다. 대시보드는 old 슬롯을 warm standby로 유지했지만 재빌드하지 않았다. 따라서 "전환 직후 반대 슬롯도 같은 release로 자동 동기화"는 완전 적용 상태가 아니었다.
+  - 조치: `deploy.sh`에 `sync_standby_slot_after_drain`을 추가했다. BG 전환 후 old API 슬롯의 active stream이 0이 될 때까지 기다린 뒤 같은 release로 old 슬롯을 `docker compose up -d --build --no-deps` 재생성하고 health를 확인한다. 스트림이 장시간 유지되면 응답 보존을 우선해 동기화는 스킵 로그를 남긴다.
+  - 조치: `aads-dashboard/deploy.sh`는 upstream 전환과 외부 health 통과 후 이전 dashboard 슬롯을 즉시 재빌드해 warm standby를 같은 release로 맞춘다. `AADS_DASHBOARD_STOP_PREVIOUS=true`일 때만 이전처럼 정리한다.
+  - 검증 예정: `bash -n /root/aads/aads-server/deploy.sh`, `bash -n /root/aads/aads-dashboard/deploy.sh`, compose config, nginx config. 실제 슬롯 재생성은 active stream 확인 후 BG 배포 시 적용한다.
+
+- **AADS BG 포트 바인딩/주석 정리 (2026-05-12 10:23~10:25 KST)**:
+  - 요청: `8080/8100/8102` 포트 의미 혼동을 만든 문제를 개선하고 관련 주석을 정리.
+  - 원인: nginx는 host loopback `127.0.0.1:8100/8102/3100/3101`로 프록시하지만 Docker compose 포트가 `0.0.0.0`에 publish되어 외부에서 우회 접근 가능한 형태였다. 또한 `nginx-aads-upstream.conf` 주석이 특정 슬롯을 active로 단정해 실제 deploy 후 상태와 어긋날 수 있었다.
+  - 조치: `docker-compose.prod.yml`의 API blue/green `8100/8102`와 dashboard blue/green `3100/3101` 포트를 `127.0.0.1` 바인딩으로 변경했다. 개발 compose의 API/dashboard 단일 포트도 같은 정책으로 맞췄다.
+  - 조치: upstream 주석을 "non-backup line이 active이며 deploy.sh가 재작성"하는 설명으로 수정했다. dashboard deploy QA 호출은 잘못된 host `localhost:8080` 대신 `AADS_API_BASE` 기본값 `http://127.0.0.1:8100`을 사용하도록 고쳤다.
+  - 즉시/영속 가드: active API `8100`에 실행 스트림 2건이 있어 컨테이너 재생성은 보류했다. 대신 Docker publish 우회 접근을 막기 위해 `DOCKER-USER`에 원래 목적지 포트 `8100/8102/3100/3101` DROP 규칙을 추가하고, IPv6 `INPUT`에도 동일 포트 DROP 규칙을 추가했다. loopback/nginx 접근은 유지된다. 재부팅/배포 후에도 복원되도록 `scripts/apply-bg-port-firewall.sh`와 `scripts/aads-bg-host-only-ports.service`를 추가하고 `deploy.sh`에서도 동일 가드를 재적용한다.
+  - 검증: `docker compose -f docker-compose.prod.yml config`, `docker compose -f /root/aads/aads-dashboard/docker-compose.yml config`, `nginx -t`, `curl http://127.0.0.1:8100/api/v1/health`, `curl https://aads.newtalk.kr/api/v1/health` 통과.
+  - 주의: compose 포트 바인딩 변경은 컨테이너 재생성 후 `docker ps`의 listen 주소까지 `127.0.0.1`로 반영된다. active 스트림 존재 시 즉시 재생성하면 채팅 끊김이 생길 수 있으므로 blue-green 슬롯 순환으로 적용해야 한다.
+
+- **Chat DB-saved response visibility guard 배포 (2026-05-12 10:16~10:23 KST)**:
+  - 요청: `47c6e3de-5b92-4ee7-a175-bd20e3cc8b50` 채팅창에서 새로고침 시 DB에 저장된 응답 버블이 사라지는 현상 즉시 조치.
+  - 원인: 프론트 폴링 최적화가 `streaming-status.last_message_id`만 비교했다. 이 값은 placeholder를 제외한 최신 메시지 기준이라, DB에 `streaming_placeholder`가 저장/갱신되어도 같은 값으로 판단해 `/chat/messages` 재조회를 건너뛸 수 있었다.
+  - 조치: `aads-dashboard/src/app/chat/page.tsx`에서 `message_revision + placeholder_revision`을 함께 비교하도록 변경했다. 세션 전환 시 revision ref를 초기화하고, DB placeholder가 존재하면 waiting 상태가 아직 false여도 `include_streaming=true`로 메시지를 조회한다.
+  - 검증: `npx tsc --noEmit --pretty false` 통과. `npx eslint src/app/chat/page.tsx` 0 errors/기존 warnings 21개. `bash /root/aads/aads-dashboard/deploy.sh` 성공, 활성 슬롯 `blue`, 프론트엔드 QA 통과. 외부 `/chat`은 미로그인 기준 `/login?redirect=%2Fchat` 307 확인.
+  - 현재 대상 세션 DB: 2026-05-12 10:22 KST 기준 `streaming_placeholder=0`, visible assistant 메시지 3951건.
+
+- **Chat completion contract hard guard 적용 (2026-05-12 09:55~10:02 KST)**:
+  - 요청: "훅으로 명시했는데 채팅창에서 적용이 안 된다"는 문제의 개선안 즉시 적용.
+  - 원인: `prompt_assets` 지시는 채팅 system prompt에는 붙지만, 파일 수정 후처리 훅/ledger와 최종 응답 저장 경로가 직접 연결되어 있지 않았다. 그래서 모델이 커밋/푸시/문서기록 상태를 누락하거나 잘못 보고해도 저장 직전 하드 가드가 없었다.
+  - 조치: `app/services/response_completion_contract.py`를 추가해 `chat_workspace_change_ledger`의 `dirty/committed/pushed` 상태와 최종 응답 내용을 대조한다. 미커밋/미푸시 변경이 있는데 완료 상태를 누락하거나, ledger와 충돌하는 "커밋/푸시/배포 완료" 문구가 있으면 응답에 `완료 상태 보정` 블록을 자동 추가하고 `quality_details`에 기록한다.
+  - 조치: `app/services/chat_service.py`의 최종 저장 직전에 completion contract를 실행하도록 연결했다. 보정 발생 시 SSE delta로 보정 블록을 사용자에게 즉시 보여준 뒤 같은 내용을 DB에 저장한다.
+  - 조치: `migrations/086_chat_completion_contract_prompt.sql`로 L1 `global-chat-completion-contract` prompt asset을 추가/갱신했다. 일반 채팅 prompt compile 결과에 해당 asset이 붙는지 active 컨테이너에서 확인했다.
+  - 운영 반영: 운영 DB에 086 마이그레이션 적용 완료. active stream 2건이 있던 `aads-server-green:8102`는 건드리지 않고, standby `aads-server:8100`만 `aads-api` 재기동 후 nginx upstream을 8100으로 전환했다. 기존 green 스트림은 보존 상태다.
+  - 검증: `python3 -m pytest tests/unit/test_response_completion_contract.py -q` → 3 passed. `python3 -m py_compile app/services/response_completion_contract.py app/services/chat_service.py` 통과. 운영 DB `prompt_assets.slug='global-chat-completion-contract'` 1건 활성. active 컨테이너 `PromptCompiler.compile(... intent='code_modify')` 결과 `asset_applied=True`, `asset_count=13`. 외부 `https://aads.newtalk.kr/api/v1/health` OK.
+  - 주의: `chat_service.py`에는 이번 작업 전부터 있던 별도 미커밋 hunk가 같이 남아 있어 커밋 시 completion contract hunk만 부분 스테이징해야 한다.
+
+- **PC Agent active-slot 재연결 및 Browser Bridge fallback 보강 (2026-05-12 09:56~10:00 KST)**:
+  - 요청: CEO PC Agent가 자동 업데이트/재연결 반영 후에도 다시 연결되지 않는지 확인하고 즉시 조치.
+  - 확인: active 포트는 `8102`, active 컨테이너는 `aads-server-green`이다. 외부 도메인과 `8102` 모두 PC Agent `2e9379a1-fed` 연결 1건을 반환했고, old 슬롯 `8100`은 0건으로 정리됐다.
+  - 원인: 현재 채팅 MCP 도구 프로세스가 old 컨테이너 `aads-server` 안에서 실행 중이라 로컬 `pc_agent_manager`에는 연결이 없었다. 기존 fallback은 컨테이너 내부에서 `127.0.0.1:8102`를 호출해 active green에 닿지 못했다.
+  - 조치: `app/browser_bridge/service.py`의 active API fallback URL 후보에 `.active_container` 기반 `http://aads-server-green:8080` 경로를 추가했다. 컨테이너 내부 fresh process에서 old 컨테이너가 active green route-execute로 우회해 `local_agent` 세션을 생성하는 것을 확인했다.
+  - 검증: `python3 -m py_compile app/browser_bridge/service.py app/api/browser_bridge.py app/api/ceo_chat_tools.py` 통과. `python3 -m pytest tests/unit/test_browser_bridge.py` → 18 passed. `docker exec aads-server curl http://aads-server-green:8080/api/v1/pc-agent/health` → connected 1. `docker exec aads-server python3 -c ...ensure_pc_agent_cdp_session...` → `bb-ba65758c530c local_agent 2e9379a1-fed 9222`.
+  - 주의: 현재 이 대화에 이미 붙어 있는 MCP 도구 프로세스는 패치 전 로드된 코드라 `browser_connect(ensure_pc_cdp)`가 계속 offline을 반환할 수 있다. 다음 MCP 프로세스 시작 또는 도구 브릿지 재시작 후에는 새 fallback이 적용된다.
 
 - **AADS API/server/dashboard blue-green 강제 범위 확대 (2026-05-12 09:17~KST)**:
   - 요청: API, server, dashboard, Docker 계층까지 BG 적용 여부를 확인하고 즉시 조치.
@@ -685,3 +715,107 @@
 - 배경: `runner-635be17c` 검수 과정에서 `read_remote_file(project='NTV2', file_path='src/app/Http/Controllers/Api/SourcingRpaController.php')`가 실제 운영 repo `/srv/newtalk-v2`가 아니라 서버 루트 기준 `/src/...`를 읽어 stale 파일을 근거로 반려되는 문제가 확인됨.
 - 조치: `app/core/project_config.py`의 NTV2 `workdir`를 `/`에서 `/srv/newtalk-v2`로 변경해 `read_remote_file`, `list_remote_dir`, `run_remote_command`, git 도구가 동일한 운영 Git 루트를 기본 기준으로 사용하도록 보정.
 - 검증: `/srv/newtalk-v2` 기준 `git status --short` 깨끗함, `git log -- src/app/Http/Controllers/Api/SourcingRpaController.php`에 `babb193 Persist VVIC batch scrape jobs` 확인, `php -l /srv/newtalk-v2/src/app/Http/Controllers/Api/SourcingRpaController.php` 통과. AADS 측 `python3 -m py_compile app/core/project_config.py`, `get_workdir('NTV2') == '/srv/newtalk-v2'`, 컨테이너 내부 `tool_read_remote_file`/`ToolExecutor.read_remote_file`가 `/srv/newtalk-v2/src/...`를 읽는 것까지 확인.
+
+## 2026-05-12 09:11 KST - 채팅 last-response stale 실행 정리 보강
+
+- 배경: 서버 재시작/프로듀서 유실 뒤 `chat_sessions.current_execution_id`가 죽은 `running/retrying` 실행을 계속 가리키면 `/last-response`가 `generating=true`만 반환해 최종 응답 병합을 막을 수 있는 경로가 확인됨.
+- 조치: `app/routers/chat.py`에 `_settle_stale_execution_for_recovery()`를 추가하고 `/streaming-status`, `/last-response`가 동일 helper로 stale 실행을 terminalize하게 했다. 의미 있는 partial은 기존 `streaming_placeholder` row를 최종 assistant로 승격하고, 빈 placeholder는 삭제 후 `message_count`를 보정한다.
+- 문서: `docs/chat/CHAT-CHANGELOG.md`, `docs/chat/CHAT-BACKEND-SPEC.md`에 last-response stale settlement 계약을 반영했다.
+- 검증: `python3 -m py_compile app/routers/chat.py` 통과. `pytest -q tests/unit/test_tools_and_pipeline.py::TestRegressions::test_streaming_status_checks_db_placeholder tests/unit/test_tools_and_pipeline.py::TestRegressions::test_last_response_settles_stale_running_execution` 2개 통과. `git diff --check -- app/routers/chat.py tests/unit/test_tools_and_pipeline.py docs/chat/CHAT-CHANGELOG.md docs/chat/CHAT-BACKEND-SPEC.md HANDOVER.md` 통과.
+
+## 2026-05-12 09:27 KST - Browser Bridge PC Agent CDP 세션 풀 보강
+
+- 배경: 다중 Browser Bridge 세션은 `browser_session_id` 고정 호출까지 구현돼 있었지만, 세션 레지스트리가 프로세스 메모리라 재시작 후 사라지고, PC Agent가 띄운 Chrome CDP 포트는 CEO PC의 loopback이라 서버 Playwright가 직접 붙을 수 없는 구조적 한계가 확인됨.
+- 조치: `SessionRegistry`를 `.browser_bridge_state/sessions.json` 지속 저장 방식으로 보강하고, 세션별 `lease_owner/lease_expires_at`을 추가해 작업별 세션 점유/해제가 가능하게 했다.
+- 조치: `BrowserBridgeService.ensure_pc_agent_cdp_session()`을 추가해 PC Agent `browser_launch`를 capability 라우팅으로 실행하고, 결과 포트/프로필/agent_id를 `local_agent` Browser Bridge 세션으로 자동 등록하도록 했다.
+- 조치: `local_agent` 세션을 Playwright-like context facade로 연결해 기존 `browser_navigate/snapshot/screenshot/click/fill/tab_list` 도구가 PC Agent의 `browser_*` 명령으로 프록시 실행되게 했다.
+- API/도구: `POST /api/v1/browser-bridge/sessions/ensure-pc-cdp`, `/sessions/lease`, `/sessions/release-lease`를 추가하고, `browser_connect(action='ensure_pc_cdp')`를 tool schema와 executor에 노출했다.
+- 운영 반영: active `aads-server-green`에 `bash scripts/reload-api.sh`로 hot-reload 적용(`재로드=51개`). MCP group 재시작 후 `mcp-filesystem/git/memory` RUNNING, `playwright-mcp`는 기존 설정대로 STOPPED 상태 유지.
+- 검증: `python3 -m pytest tests/unit/test_browser_bridge.py -q` 14개 통과. `python3 -m py_compile app/browser_bridge/models.py app/browser_bridge/registry.py app/browser_bridge/service.py app/api/browser_bridge.py app/api/ceo_chat_tools.py app/services/tool_executor.py app/services/tool_registry.py tests/unit/test_browser_bridge.py` 통과. active 컨테이너 직접 호출 기준 `tool_browser_connect(action='status')` 정상 응답, `/api/v1/pc-agent/health`는 `connected=0`.
+
+## 2026-05-12 09:41 KST - Browser Bridge PC Agent active API fallback
+
+- 배경: PC Agent는 active `aads-server-green:8102`의 `/api/v1/pc-agent/health`에서 `connected=1`로 확인되지만, `browser_connect(action='ensure_pc_cdp')` 도구 프로세스는 자체 `pc_agent_manager` 메모리만 조회해 `no online PC agent`를 반환하는 불일치가 확인됨.
+- 조치: `BrowserBridgeService.ensure_pc_agent_cdp_session()`에 로컬 manager가 `PC_AGENT_OFFLINE`을 반환하면 `.active_port` 기준 active API의 `/api/v1/pc-agent/route-execute`로 `browser_launch`를 재시도하는 fallback을 추가. 성공 결과는 기존과 동일하게 `local_agent` Browser Bridge 세션으로 등록한다.
+- 검증: active API 직접 호출로 `agent_id=2e9379a1-fed`, `port=9222`, `cdp_ready=true` 확인. `python3 -m py_compile app/browser_bridge/service.py` 통과. `python3 -m pytest tests/unit/test_browser_bridge.py` 16개 통과. 로컬 service 직접 호출로 `bb-3e4b1af2c101` local_agent 세션 생성 확인.
+
+## 2026-05-12 09:49 KST - 채팅 last-response stale recovery 보강
+
+- 배경: 서버 재시작 또는 런타임 유실 뒤 `chat_turn_executions.status='running'`과 `streaming_placeholder`만 남고 실제 in-memory producer는 없는 경우, `last-response`/`streaming-status`가 `updated_at` 최근성만 근거로 최대 5분 동안 `generating=true`를 반환해 최종 응답 복구를 막는 구간이 남아 있었다.
+- 조치: `app/routers/chat.py`에 `_has_live_streaming_runtime()`를 추가해 `interrupt_queue`, `_streaming_state`, `_active_bg_tasks`를 함께 보고 실제 live producer 존재를 먼저 판별하도록 보강했다.
+- 조치: `_settle_stale_execution_for_recovery()`는 live runtime이 없고 DB상 partial/tool/last_event 진행 흔적이 20초 이상 남아 있으면 recent execution도 즉시 `interrupted`로 정리하고 placeholder 내용을 최종 보존 응답으로 승격하도록 변경했다.
+- 검증: active `aads-server-green` 컨테이너 내부 `/app/app/routers/chat.py`에 recovery patch 문자열 존재 확인. `python3 -m py_compile app/routers/chat.py` 통과. `pytest tests/unit/test_tools_and_pipeline.py -q -k 'last_response or streaming_status'` 통과. DB 실측 기준 `running` 2건, `streaming_placeholder` 2건이며 이 중 하나는 현재 활성 채팅 세션 `8ad08...`의 진행 중 응답이다.
+
+## 2026-05-12 09:54 KST - 채팅 최종 저장 placeholder 우선순위 보강
+
+- 배경: DB 실측에서 현재 세션 실행 `60fb54d2...`가 `retrying`이고, `assistant_message_id`는 과거 장애 안내 메시지(3,353자)를 가리키며 최신 응답은 별도 `streaming_placeholder`(2,390자)에 남는 불일치가 확인됨. `last-response` 조회는 placeholder 우선으로 보정됐지만, 최종 저장 함수 `_save_and_update_session()`은 여전히 `assistant_message_id`를 먼저 선택해 과거 row를 최종 응답으로 덮어쓸 수 있었다.
+- 조치: `app/services/chat_service.py` 최종 저장 경로가 execution-scoped `streaming_placeholder`를 먼저 승격하고, `chat_turn_executions.assistant_message_id`도 최종 row id로 교체하도록 변경했다.
+- 조치: `app/main.py` startup resume claim도 placeholder가 있으면 실행의 `assistant_message_id`를 placeholder id로 정렬하도록 변경했다.
+- 검증: `python3 -m py_compile app/main.py app/routers/chat.py app/services/chat_service.py` 통과. `pytest -q tests/unit/test_tools_and_pipeline.py -k 'last_response or streaming_status or final_save'` 3개 통과. `bash scripts/reload-api.sh` 성공(`재로드=45개`). DB 실측 기준 09:54 KST에 `running/retrying` 0건, `streaming_placeholder` 0건.
+
+## 2026-05-12 09:54 KST - 채팅 응답 사라짐 재발 원인 확정 및 검증 갱신
+
+- 원인: 09:50 KST active 컨테이너 재시작(SIGTERM) 중 현재 응답의 in-memory producer가 사라졌고, DB에는 `retrying` 실행과 `streaming_placeholder` 본문만 남았다. 해당 실행의 `assistant_message_id`는 과거 limit 장애 안내 메시지를 가리켜 `COALESCE(am.content, pm.content)` 계열 조회가 최신 placeholder 본문을 놓칠 수 있었다.
+- 조치: active 컨테이너에 반영된 `app/routers/chat.py`/`app/main.py`가 running/retrying 상태에서 placeholder 본문을 우선 읽는지 확인했다. `/last-response`와 `/streaming-status`가 live runtime 부재 시 stale 실행을 `interrupted`로 정리하도록 동작 확인했다.
+- 추가 보정: `app/api/ceo_chat_tools.py`의 AADS 로컬 파일 workdir을 `/app` 고정에서 `_aads_local_workdir()`으로 변경해 Docker(`/app`)와 호스트 테스트(`/root/aads/aads-server`) 양쪽에서 `read_remote_file`/`patch_remote_file`가 같은 경로를 읽게 했다.
+- 검증: `python3 -m py_compile app/api/ceo_chat_tools.py app/main.py app/routers/chat.py` 통과. `pytest -q tests/unit/test_tools_and_pipeline.py` 47개 통과. `pytest -q tests/unit/test_chat_service.py tests/unit/test_context_continuity.py` 25개 통과. 09:54 KST DB 실측 기준 최근 6시간 `running/retrying` 0건, 전체 `streaming_placeholder` 0건.
+
+## 2026-05-12 10:49 KST - AADS Blue-Green 양 슬롯 동기화 및 host-only 포트 정책
+
+- 배경: Blue-Green 전환 후 새 active 슬롯만 최신 빌드가 되고 이전 슬롯이 stale standby로 남으면 다음 전환 시 미반영 코드가 다시 active가 될 수 있는 문제가 확인됨. 또한 기존에 생성된 blue 슬롯은 `0.0.0.0:8100/3100`으로 열려 있어 외부 접근면이 nginx `:443` 밖으로 남을 수 있었다.
+- 조치: `deploy.sh`에 `sync_standby_slot_after_drain()`을 추가해 API Blue-Green 전환 성공 후 이전 슬롯의 active stream이 빠진 뒤 같은 release로 재빌드하도록 변경했다. 전환 전 active stream drain 대기는 제거하고, nginx reload 후 old slot drain/sync로 넘겨 신규 요청은 즉시 새 슬롯으로 가게 했다.
+- 조치: `/root/aads/aads-dashboard/deploy.sh`도 전환 후 이전 dashboard 슬롯을 stop하지 않고 같은 release로 재빌드해 warm standby로 동기화하도록 변경했다.
+- 조치: `docker-compose.prod.yml`의 API/dashboard blue/green publish port를 `127.0.0.1` 바인딩으로 제한하고, 기존 컨테이너가 재생성되기 전까지 `scripts/apply-bg-port-firewall.sh`와 `scripts/aads-bg-host-only-ports.service`로 BG 포트 직접 접근 차단을 보강했다.
+- 주석 정리: `nginx-aads-upstream.conf`와 운영 `/etc/nginx/conf.d/aads-upstream.conf`의 stale active-slot 주석을 “non-backup line이 active” 기준으로 정리했다.
+- 검증: `bash -n deploy.sh`, `bash -n /root/aads/aads-dashboard/deploy.sh`, `docker compose -f docker-compose.prod.yml config --quiet` 통과. 실측 런타임은 `aads-server-green:8102`와 `aads-dashboard-green:3101`은 loopback 바인딩으로 재생성 완료, active `aads-server:8100`/`aads-dashboard:3100`은 현재 활성 스트림 보호 때문에 다음 BG 순환 시 loopback 바인딩으로 재생성 예정.
+
+## 2026-05-12 10:54 KST - AADS Blue-Green 자동동기화 적용 범위 재점검
+
+- 점검 범위: API blue/green, Dashboard blue/green, `docker-compose.prod.yml` 포트 publish, `/etc/nginx/conf.d/aads-upstream.conf`, 저장소 `nginx-aads-upstream.conf`, systemd host-only guard, 현재 컨테이너 image/port 상태.
+- 확인 결과: 파일 기준으로 API `deploy.sh`와 Dashboard `deploy.sh` 모두 전환 후 이전 슬롯을 같은 release로 재빌드하는 standby 동기화가 적용되어 있다. compose 파일도 API `8100/8102`, Dashboard `3100/3101` publish가 모두 `127.0.0.1`로 제한되어 있다.
+- 보정: 저장소 `nginx-aads-upstream.conf`의 API active 슬롯이 운영 `/etc/nginx/conf.d/aads-upstream.conf`와 달리 `8102` active로 남아 있어, 현재 운영 기준인 `8100` active / `8102` backup으로 맞췄다. Dashboard `deploy.sh` 상단 설명도 “이전 슬롯 유지”에서 “이전 슬롯 standby 동기화”로 정리했다.
+- 런타임 상태: 현재 active API는 `aads-server:8100`, active Dashboard는 `aads-dashboard:3100`이다. green 슬롯(`8102`, `3101`)은 이미 loopback 바인딩과 최신 이미지로 재생성됐지만, blue active 슬롯은 활성 스트림 보호 때문에 아직 기존 image/`0.0.0.0` publish 상태로 살아 있다. host-only firewall guard는 active 상태로 직접 접근 차단을 보강 중이다.
+- 검증: `bash -n deploy.sh`, `bash -n /root/aads/aads-dashboard/deploy.sh`, `diff -u nginx-aads-upstream.conf /etc/nginx/conf.d/aads-upstream.conf`, `nginx -t`, API health `8100/8102=200`, active stream `8100=4`, `8102=0`.
+
+## 2026-05-12 10:55 KST - 채팅 완료 직후 버블 소실 DB 노출 폴백
+
+- 배경: 실시간 응답 완료 직후 `/last-response`가 `generating=true`를 반환하면 프론트가 병합을 중단해, DB에는 `streaming_placeholder` 본문이 저장되어 있어도 화면에서 응답 버블이 사라지는 경로가 남아 있었다.
+- 조치: Dashboard `src/app/chat/page.tsx`의 `mergeLatestAssistantFromServer()`에 `/chat/messages?...&include_streaming=true` 폴백을 추가했다. `/last-response`가 최종 메시지를 못 주더라도 DB에 저장된 assistant 또는 내용 있는 `streaming_placeholder`를 recovered assistant로 병합해 새로고침/완료 직후 화면에서 버리지 않게 했다.
+- 검증: `npx tsc --noEmit` 통과. `npx eslint src/app/chat/page.tsx` 에러 0개, 기존 경고 21개. DB 실측 기준 10:55 KST `streaming_placeholder=2`, visible assistant `26,607`.
+
+## 2026-05-12 11:01 KST - AADS Blue-Green 전체 대상 재점검 및 레거시 우회 차단
+
+- 배경: BG가 필요한 Docker/API/server/dashboard 항목 전체에 전환 후 standby 자동동기화가 적용됐는지 재확인했다. 표준 경로는 맞지만 `scripts/blue_green_deploy.sh`가 이전 구현으로 남아 있어 수동 실행 시 old slot stop 및 미동기화 상태를 만들 수 있었다.
+- 조치: `scripts/blue_green_deploy.sh`를 표준 `/root/aads/aads-server/deploy.sh bluegreen` 래퍼로 바꿔 중복 구현을 제거했다.
+- 조치: `app/core/prompts/system_prompt_v2.py`, `app/services/ckp_manager.py`의 오래된 `docker compose ... aads-server` 배포 문구를 `bash /root/aads/aads-server/deploy.sh bluegreen`으로 정리했다.
+- 검증: `bash -n deploy.sh`, `bash -n scripts/blue_green_deploy.sh`, `bash -n /root/aads/aads-dashboard/deploy.sh`, `python3 -m py_compile app/core/prompts/system_prompt_v2.py app/services/ckp_manager.py`, `docker compose -f docker-compose.prod.yml config --quiet`, `nginx -t` 통과. `8100/8102` API health와 외부 `https://aads.newtalk.kr/api/v1/health`, `/login` 200 확인.
+- 남은 상태: active API `aads-server:8100`은 기존 컨테이너라 런타임 publish가 아직 `0.0.0.0:8100->8080`으로 보인다. 저장소 compose는 `127.0.0.1`로 수정됐고 host-only firewall guard가 보강 중이며, 다음 BG 순환에서 active blue가 재생성되면 publish도 loopback으로 맞춰진다.
+
+## 2026-05-12 11:09 KST - 채팅 완료 직후 버블 소실 서비스워커/폴백 보강
+
+- 배경: 대시보드 `public/sw.js`가 `/chat`을 precache하고 캐시명을 `aads-v1`로 고정해, 배포 후에도 브라우저가 구버전 `/chat` shell과 예전 메시지 병합 로직을 실행할 수 있었다. 또한 `page.tsx`의 별도 last-response fallback 루프가 `generating=true`에서 DB 메시지 폴백 없이 중단하는 경로가 남아 있었다.
+- 조치: Dashboard `public/sw.js`를 `aads-v2-static-only`로 변경하고 `/chat`, `/api`, `/_next` 요청은 항상 network-only로 처리하게 했다. `src/app/chat/page.tsx`의 별도 last-response fallback도 `generating=true`에서 `mergeLatestAssistantFromServer()`를 호출해 DB에 저장된 assistant 또는 내용 있는 `streaming_placeholder`를 recovered assistant로 병합하도록 보강했다.
+- 검증: `npx tsc --noEmit` 통과. `npx eslint src/app/chat/page.tsx` 에러 0개, 기존 경고 21개. 양 dashboard 슬롯(`aads-dashboard`, `aads-dashboard-green`)과 외부 `http://127.0.0.1:3101/sw.js`에서 `/chat`/`/api`/`/_next` network-only 정책 확인. DB 실측 기준 11:08 KST `streaming_placeholder=2`, visible assistant `26,612`, `chat_turn_executions`는 `completed=2,237`, `interrupted=3,613`, `retrying=2`.
+
+## 2026-05-12 11:15 KST - 채팅 버블 소실 최종 재검증
+
+- 재검증: 대시보드 `src/app/chat/page.tsx`의 `mergeLatestAssistantFromServer()`에 `/chat/messages?...&include_streaming=true` 폴백이 적용되어 있고, `public/sw.js`는 `/chat`, `/api`, `/_next`를 network-only로 처리한다.
+- 운영 확인: 외부 `https://aads.newtalk.kr/sw.js`, blue `127.0.0.1:3100/sw.js`, green `127.0.0.1:3101/sw.js` 모두 `aads-v2-static-only` 서비스워커를 반환했다. 양 dashboard 컨테이너 `/app/public/sw.js`에도 동일 문자열이 확인됐다.
+- DB 실측: `chat_messages.intent='streaming_placeholder'` 0건, `chat_turn_executions.status='running'` 0건, 상태 집계는 `completed=2,238`, `interrupted=3,614`, `retrying=1`이다.
+- 검증: `npx tsc --noEmit` 통과. `npx eslint src/app/chat/page.tsx` 에러 0개, 기존 경고 21개.
+- 주의: 변경은 운영에 배포됐지만 아직 dashboard/server 저장소에 커밋/푸시하지 않았다.
+
+## 2026-05-12 11:30 KST - 채팅 추가지시 중 이전 응답 버블 보존
+
+- 배경: 스트리밍 중 추가 지시 또는 새 요청을 시작할 때 Dashboard `src/app/chat/page.tsx`가 기존 `streaming_placeholder`를 `prev.filter(m => m.intent !== "streaming_placeholder")`로 제거한 뒤 새 placeholder를 붙이는 경로가 확인됨. 이 때문에 이전 지시에 대한 부분 응답 버블이 화면에서 사라질 수 있었다.
+- 조치: `freezeStreamingPlaceholders()`를 추가해 새 요청 시작 전 기존 진행 버블을 삭제하지 않고 `interrupted`/부분 응답 assistant 버블로 고정하도록 변경했다.
+- 조치: 서버 최종 메시지 병합 시 같은 `execution_id`의 DB placeholder만 제거하도록 `mergeServerMessagesPreservingLocal()`을 보강했다. 이로써 DB에 저장된 최종 assistant가 들어오면 오래된 placeholder 잔상은 정리하되, 다른 진행 버블은 삭제하지 않는다.
+- 검증: `npx tsc --noEmit` 통과. `npx eslint src/app/chat/page.tsx` 에러 0개, 기존 경고 21개. `python3 -m py_compile app/routers/chat.py app/main.py app/services/chat_service.py` 통과. `pytest tests/unit/test_chat_service.py tests/unit/test_chat_lightweight_regression.py tests/unit/test_chat_lightweight_frontend_static.py tests/unit/test_response_completion_contract.py` 36개 통과.
+
+## 2026-05-12 11:34 KST - Browser Bridge CDP 등록 타임아웃 보강
+
+- 배경: `browser_connect(action='ensure_pc_cdp')`가 기존 Browser Bridge 세션은 보지만 새 CDP 등록 실행에서 약 95초 후 `no online PC agent`로 실패했다. 실측 결과 `.active_port`/외부 도메인은 `8100`을 보는데 PC Agent WebSocket은 `8102` 슬롯에 붙어 있었다.
+- 원인: `BrowserBridgeService._execute_pc_agent_route_via_active_api()`가 `.active_port` 단일 슬롯만 route-execute fallback으로 시도했다. 또한 컨테이너 내부에서는 `127.0.0.1:8102`가 호스트 포트가 아니므로 `8102 -> aads-server-green:8080` 컨테이너 DNS fallback이 필요했다.
+- 조치: `app/browser_bridge/service.py`에 `_active_api_ports()`를 추가해 `8100/8102` 양 슬롯을 fallback 후보로 시도하고, `_active_api_route_urls()`가 `8100 -> aads-server:8080`, `8102 -> aads-server-green:8080`을 직접 포함하도록 변경했다.
+- 검증: `pytest -q tests/unit/test_browser_bridge.py tests/unit/test_pc_agent_routing_leases.py` 24개 통과. `curl http://127.0.0.1:8102/api/v1/pc-agent/route-execute` 직접 호출로 `browser_launch` 성공, `agent_id=2e9379a1-fed`, `port=9222`, `cdp_ready=true` 확인. 새 컨테이너 Python 프로세스에서 `ensure_pc_agent_cdp_session()` 성공, `bb-ba65758c530c local_agent 2e9379a1-fed 9222` 확인.
+- 주의: 현재 채팅에 붙은 MCP stdio transport는 구버전 모듈을 들고 있어 `pkill -f mcp_servers.aads_tools_bridge`로 종료했으며, 직후 MCP 호출은 `Transport closed`를 반환했다. 서버 전체 재시작은 하지 않았다. 다음 MCP attach는 새 코드 기준으로 떠야 한다.
