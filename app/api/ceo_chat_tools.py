@@ -504,7 +504,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "edit_image",
-        "description": "이미지 편집 job 생성/실행. gpt-image-2 편집 라우팅을 우선 사용하고 미설정 시 NOT_CONFIGURED를 반환.",
+        "description": "이미지 편집 job 생성/실행. DB 기본 라우팅을 우선 사용하고 미설정 시 NOT_CONFIGURED를 반환.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -514,7 +514,7 @@ TOOL_DEFINITIONS: List[Dict] = [
                 "image_data": {"type": "string", "description": "data URI/base64 이미지"},
                 "mask_path": {"type": "string", "description": "선택 마스크 이미지 경로"},
                 "size": {"type": "string", "description": "이미지 크기", "default": "1024x1024"},
-                "model_id": {"type": "string", "description": "선택 모델", "default": "gpt-image-2"},
+                "model_id": {"type": "string", "description": "선택 모델"},
                 "provider": {"type": "string", "description": "선택 provider"},
                 "session_id": {"type": "string", "description": "요청 채팅 세션 ID"},
             },
@@ -529,7 +529,7 @@ TOOL_DEFINITIONS: List[Dict] = [
             "properties": {
                 "prompt": {"type": "string", "description": "동영상 생성 프롬프트"},
                 "input_refs": {"type": "object", "description": "참조 이미지/비디오/옵션", "default": {}},
-                "model_id": {"type": "string", "description": "선택 모델", "default": "sora-2"},
+                "model_id": {"type": "string", "description": "선택 모델"},
                 "provider": {"type": "string", "description": "선택 provider"},
                 "session_id": {"type": "string", "description": "요청 채팅 세션 ID"},
             },
@@ -4217,7 +4217,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             params.get("prompt", ""),
             input_refs=input_refs,
             size=params.get("size", "1024x1024"),
-            model_id=params.get("model_id", "gpt-image-2"),
+            model_id=params.get("model_id"),
             provider=params.get("provider"),
             session_id=params.get("session_id") or chat_session_id,
         )
@@ -4227,7 +4227,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         result = await media_generation_service.generate_video(
             params.get("prompt", ""),
             input_refs=params.get("input_refs") or {},
-            model_id=params.get("model_id", "sora-2"),
+            model_id=params.get("model_id"),
             provider=params.get("provider"),
             session_id=params.get("session_id") or chat_session_id,
         )

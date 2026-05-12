@@ -4325,7 +4325,7 @@ class ToolExecutor:
             inp.get("prompt", ""),
             input_refs=input_refs,
             size=inp.get("size", "1024x1024"),
-            model_id=inp.get("model_id", "gpt-image-2"),
+            model_id=inp.get("model_id"),
             provider=inp.get("provider"),
             session_id=inp.get("session_id") or _resolve_bound_chat_session_id(),
         )
@@ -4337,7 +4337,7 @@ class ToolExecutor:
         return await media_generation_service.generate_video(
             inp.get("prompt", ""),
             input_refs=inp.get("input_refs") or {},
-            model_id=inp.get("model_id", "sora-2"),
+            model_id=inp.get("model_id"),
             provider=inp.get("provider"),
             session_id=inp.get("session_id") or _resolve_bound_chat_session_id(),
         )

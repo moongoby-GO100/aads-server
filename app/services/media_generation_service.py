@@ -61,6 +61,9 @@ class MediaRoute:
     model_id: str
     configured: bool
     supported: bool
+    enabled: bool = True
+    availability: str = "available"
+    source: str = "fallback"
     reason: str = ""
 
 
@@ -74,6 +77,23 @@ def _json_default(value: Any) -> str:
 
 def _as_json(value: Any) -> str:
     return json.dumps(value or {}, ensure_ascii=False, default=_json_default)
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    if value is None:
+        return {}
+    try:
+        return dict(value)
+    except (TypeError, ValueError):
+        return {}
 
 
 def _secret_value(settings_obj: Any, name: str) -> str:
@@ -180,14 +200,47 @@ class MediaGenerationService:
             async with pool.acquire() as conn:
                 row = await conn.fetchrow(
                     """
-                    SELECT provider, model_id, execution_model_id, execution_backend
+                    SELECT provider, model_id, execution_model_id, execution_backend,
+                           is_active, is_selectable, is_executable,
+                           verification_status, metadata, capabilities
                     FROM llm_models
                     WHERE (model_id = $1 OR execution_model_id = $1)
-                      AND COALESCE(is_active, TRUE) = TRUE
                     ORDER BY updated_at DESC NULLS LAST, id DESC
                     LIMIT 1
                     """,
                     model_id,
+                )
+                return _normalize_job_row(row) if row else None
+        except Exception:
+            return None
+
+    async def _fetch_default_route(self, kind: str) -> dict[str, Any] | None:
+        pool = self._get_pool_or_none()
+        if not pool:
+            return None
+        route_key = str(kind or "").strip()
+        if not route_key:
+            return None
+        try:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT pref.route_key, pref.provider, pref.model_id,
+                           pref.display_order, pref.is_enabled, pref.is_default,
+                           pref.notes, pref.updated_at, pref.updated_by,
+                           models.execution_model_id, models.execution_backend,
+                           models.is_active, models.is_selectable, models.is_executable,
+                           models.verification_status, models.metadata, models.capabilities
+                    FROM model_routing_preferences AS pref
+                    LEFT JOIN llm_models AS models
+                      ON models.provider = pref.provider
+                     AND (models.model_id = pref.model_id OR models.execution_model_id = pref.model_id)
+                    WHERE pref.route_key = $1
+                    ORDER BY pref.is_default DESC, pref.is_enabled DESC,
+                             pref.display_order ASC, pref.updated_at DESC NULLS LAST
+                    LIMIT 1
+                    """,
+                    route_key,
                 )
                 return _normalize_job_row(row) if row else None
         except Exception:
@@ -218,6 +271,33 @@ class MediaGenerationService:
             return "gemini-3.1-flash-image-preview"
         return "imagen-4.0-generate-001"
 
+    @staticmethod
+    def _db_route_enabled(row: Mapping[str, Any] | None) -> bool:
+        if not row:
+            return True
+        if row.get("is_enabled") is False:
+            return False
+        if row.get("is_selectable") is False:
+            return False
+        metadata = _as_dict(row.get("metadata"))
+        if metadata.get("disabled") is True:
+            return False
+        return True
+
+    @staticmethod
+    def _db_route_note(row: Mapping[str, Any] | None) -> str:
+        if not row:
+            return ""
+        metadata = _as_dict(row.get("metadata"))
+        return str(
+            row.get("notes")
+            or metadata.get("routing_note")
+            or metadata.get("availability_note")
+            or metadata.get("discovery_requirement")
+            or row.get("verification_status")
+            or ""
+        ).strip()
+
     async def resolve_route(
         self,
         kind: str,
@@ -228,13 +308,31 @@ class MediaGenerationService:
         normalized_kind = "image" if kind == "edit_image" else str(kind or "").strip()
         requested_model = str(model_id or "").strip()
         requested_provider = str(provider or "").strip().lower()
+        explicit_request = bool(requested_model or requested_provider)
+        source = "explicit" if explicit_request else "fallback"
+        enabled = True
+        route_note = ""
 
-        db_route = await self._fetch_model_route(requested_model)
+        db_route = await self._fetch_model_route(requested_model) if requested_model else None
         if db_route:
             requested_provider = str(db_route.get("provider") or requested_provider).strip().lower()
             requested_model = str(
                 db_route.get("execution_model_id") or db_route.get("model_id") or requested_model
             ).strip()
+            enabled = self._db_route_enabled(db_route)
+            route_note = self._db_route_note(db_route)
+        elif not explicit_request:
+            default_route = await self._fetch_default_route(str(kind or "").strip() or normalized_kind)
+            if default_route:
+                requested_provider = str(default_route.get("provider") or "").strip().lower()
+                requested_model = str(
+                    default_route.get("execution_model_id")
+                    or default_route.get("model_id")
+                    or ""
+                ).strip()
+                enabled = self._db_route_enabled(default_route)
+                route_note = self._db_route_note(default_route)
+                source = "db_default"
 
         inferred = self.recognize_model(requested_model)
         if not requested_provider:
@@ -256,16 +354,26 @@ class MediaGenerationService:
         configured = self._provider_configured(requested_provider)
         supported = self._route_supported(kind, requested_provider, requested_model)
         reason = ""
-        if not configured:
+        if not enabled:
+            reason = route_note or f"{requested_provider}:{requested_model} is disabled by DB routing configuration"
+            availability = "disabled"
+        elif not configured:
             reason = f"{requested_provider or 'provider'} credentials are not configured"
+            availability = "not_configured"
         elif not supported:
             reason = f"{requested_provider}:{requested_model} is not available in the P0 adapter"
+            availability = "adapter_unavailable"
+        else:
+            availability = "available"
         return MediaRoute(
             kind=kind,
             provider=requested_provider,
             model_id=requested_model,
             configured=configured,
             supported=supported,
+            enabled=enabled,
+            availability=availability,
+            source=source,
             reason=reason,
         )
 
@@ -447,6 +555,8 @@ class MediaGenerationService:
             "status": "failed",
             "provider": (route.provider if route else job.get("provider")),
             "model_id": (route.model_id if route else job.get("model_id")),
+            "availability": (route.availability if route else "unknown"),
+            "route_source": (route.source if route else "unknown"),
         }
 
     async def _mark_failed(
@@ -459,7 +569,14 @@ class MediaGenerationService:
     ) -> dict[str, Any]:
         metadata = {"error_code": code}
         if route:
-            metadata.update({"provider": route.provider, "model_id": route.model_id})
+            metadata.update(
+                {
+                    "provider": route.provider,
+                    "model_id": route.model_id,
+                    "availability": route.availability,
+                    "route_source": route.source,
+                }
+            )
         await self.update_job_status(
             str(job.get("job_id") or ""),
             "failed",
@@ -491,6 +608,13 @@ class MediaGenerationService:
             requested_by=requested_by,
             session_id=session_id,
         )
+        if not route.enabled:
+            return await self._mark_failed(
+                job,
+                code="MODEL_DISABLED",
+                message=route.reason,
+                route=route,
+            )
         if not route.configured:
             return await self._mark_failed(
                 job,
@@ -506,7 +630,7 @@ class MediaGenerationService:
                 route=route,
             )
         try:
-            if model_id or provider:
+            if route.source in {"explicit", "db_default"}:
                 result = await self._generate_image_with_route(prompt, size, route)
             else:
                 from app.services.image_service import image_service
@@ -615,7 +739,7 @@ class MediaGenerationService:
         *,
         input_refs: dict[str, Any] | None = None,
         size: str = "1024x1024",
-        model_id: str | None = "gpt-image-2",
+        model_id: str | None = None,
         provider: str | None = None,
         requested_by: str | None = None,
         session_id: str | None = None,
@@ -634,6 +758,13 @@ class MediaGenerationService:
             requested_by=requested_by,
             session_id=session_id,
         )
+        if not route.enabled:
+            return await self._mark_failed(
+                job,
+                code="MODEL_DISABLED",
+                message=route.reason,
+                route=route,
+            )
         if not route.configured:
             return await self._mark_failed(
                 job,
@@ -727,7 +858,7 @@ class MediaGenerationService:
         prompt: str,
         *,
         input_refs: dict[str, Any] | None = None,
-        model_id: str | None = "sora-2",
+        model_id: str | None = None,
         provider: str | None = None,
         requested_by: str | None = None,
         session_id: str | None = None,
@@ -745,6 +876,13 @@ class MediaGenerationService:
             requested_by=requested_by,
             session_id=session_id,
         )
+        if not route.enabled:
+            return await self._mark_failed(
+                job,
+                code="MODEL_DISABLED",
+                message=route.reason,
+                route=route,
+            )
         if not route.configured:
             return await self._mark_failed(
                 job,

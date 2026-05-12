@@ -2512,7 +2512,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     },
     "edit_image": {
         "name": "edit_image",
-        "description": "이미지 편집 job 생성/실행. OpenAI gpt-image-2 편집 라우팅을 우선 사용하고 미설정 시 NOT_CONFIGURED를 반환한다.",
+        "description": "이미지 편집 job 생성/실행. DB 기본 라우팅을 우선 사용하고 미설정 시 NOT_CONFIGURED를 반환한다.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -2522,7 +2522,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "image_data": {"type": "string", "description": "data URI/base64 이미지"},
                 "mask_path": {"type": "string", "description": "선택 마스크 이미지 경로"},
                 "size": {"type": "string", "default": "1024x1024"},
-                "model_id": {"type": "string", "default": "gpt-image-2"},
+                "model_id": {"type": "string", "description": "선택 모델"},
                 "provider": {"type": "string", "description": "선택 provider"},
                 "session_id": {"type": "string", "description": "요청 채팅 세션 ID"},
             },
@@ -2537,7 +2537,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "properties": {
                 "prompt": {"type": "string", "description": "동영상 생성 프롬프트"},
                 "input_refs": {"type": "object", "description": "참조 이미지/비디오/옵션", "default": {}},
-                "model_id": {"type": "string", "default": "sora-2"},
+                "model_id": {"type": "string", "description": "선택 모델"},
                 "provider": {"type": "string", "description": "선택 provider"},
                 "session_id": {"type": "string", "description": "요청 채팅 세션 ID"},
             },

@@ -1279,3 +1279,63 @@ tests/smoke_test_result_*
 ## [2026-05-13 08:25:33 KST] [GO100] scripts/go100_p0_fix_20260513.py
 - Chat-Direct 수정: write: scripts/go100_p0_fix_20260513.py
 - finalize: pending
+
+## [2026-05-13 08:38:47 KST] [GO100] scripts/fix_p0_20260513.py
+- Chat-Direct 수정: write: scripts/fix_p0_20260513.py
+- finalize: pending
+
+## [2026-05-13 08:39:46 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
+- Chat-Direct 수정: patch:         return "KRX"
+
+    async def _res→        return "KRX"
+
+    async def _loa
+- finalize: pending
+
+## [2026-05-13 08:40:12 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
+- Chat-Direct 수정: patch:                 SELECT id AS position_id→                SELECT id AS position_id
+- finalize: pending
+
+## [2026-05-13 08:40:24 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
+- Chat-Direct 수정: patch:             current_price = price_map.ge→            current_price = price_map.ge
+- finalize: pending
+
+## [2026-05-13 08:40:34 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
+- Chat-Direct 수정: patch:         if sizing_result.available_slots→        card_max_stocks = int(card.get("
+- finalize: pending
+
+## [2026-05-13 08:40:50 KST] [GO100] scripts/fix_p0_20260513.py
+- Chat-Direct 수정: patch: DB_DSN = "postgresql://kis_admin:wlstn67→DB_DSN = "postgresql://kis_admin:KisAuto
+- finalize: pending
+
+## [2026-05-13 08:47:06 KST] [GO100] scripts/fix_p0_20260513.py
+- Chat-Direct 수정: write: scripts/fix_p0_20260513.py
+- finalize: pending
+
+## [2026-05-13 08:47:21 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
+- Chat-Direct 수정: patch:         return "KRX"
+
+    async def _res→        return "KRX"
+
+    async def _loa
+- finalize: pending
+
+## [2026-05-13 08:47:30 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
+- Chat-Direct 수정: patch:                 SELECT id AS position_id→                SELECT id AS position_id
+- finalize: pending
+
+## [2026-05-13 08:47:33 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
+- Chat-Direct 수정: patch:             current_price = price_map.ge→            current_price = price_map.ge
+- finalize: pending
+
+## [2026-05-13 08:47:35 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
+- Chat-Direct 수정: patch:         if sizing_result.available_slots→        card_max_stocks = int(card.get("
+- finalize: pending
+
+## [2026-05-13 08:47:40 KST] [GO100] scripts/fix_p0_20260513.py
+- Chat-Direct 수정: patch: DB_DSN = "postgresql://kis_admin:wlstn67→DB_DSN = "postgresql://kis_admin:KisAuto
+- finalize: pending
+
+## [2026-05-13 08:51:55 KST] [GO100] backend/app/services/go100/ai/realtime_guardrails.py
+- Chat-Direct 수정: patch:     positions = [dict(row) for row in po→    positions = [dict(row) for row in po
+- finalize: pending

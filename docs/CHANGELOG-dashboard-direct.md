@@ -98,3 +98,6 @@ p = pathlib.Path('/root/aads/aads-dashboard/src/app/
 
 ## [2026-05-13 08:26:07 KST] [aads-dashboard] ../aads-dashboard/public/reports/aads-smart-cursor-design-spec.html
 - Chat-Direct 수정: write: ../aads-dashboard/public/reports/aads-smart-cursor-design-spec.html
+
+## [2026-05-13 08:43:02 KST] [aads-dashboard] ../aads-dashboard/public/reports/aads-smart-cursor-design-spec.html
+- Chat-Direct 수정: write: ../aads-dashboard/public/reports/aads-smart-cursor-design-spec.html

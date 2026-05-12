@@ -30,6 +30,7 @@ const navItems = [
   { href: "/admin/tasks", label: "Task Board", icon: "🗂️" },
   { href: "/admin/agents", label: "Agent Registry", icon: "🧩" },
   { href: "/admin/governance", label: "Governance", icon: "🏛️" },
+  { href: "/admin/model-routing", label: "모델 라우팅", icon: "🧭" },
   { href: "/admin/model-parity", label: "모델 패리티", icon: "⚖️" },
   { href: "/admin/deploy", label: "배포 현황", icon: "🚀" },
   { href: "/admin/sessions", label: "세션 리플레이", icon: "📹" },

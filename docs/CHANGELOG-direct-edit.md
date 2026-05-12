@@ -539,3 +539,18 @@ _S
 
 ## [2026-05-13 08:21:56 KST] [aads-server] reports/newtalk-ai-fashion-user-flow-detail-v2.html
 - Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/reports/newtalk-ai-fashion-user-flow-detail-v2.html /
+
+## [2026-05-13 08:37:02 KST] [aads-server] app/static/reports/aads-smart-cursor-design-spec.html
+- Chat-Direct 수정: run_remote_command: docker cp /root/aads/aads-dashboard/public/reports/aads-smart-cursor-design-spec
+
+## [2026-05-13 08:43:02 KST] [aads-server] tmp_smart_cursor_spec.html
+- Chat-Direct 수정: write: tmp_smart_cursor_spec.html
+
+## [2026-05-13 08:47:40 KST] [aads-server] reports/newtalk-ai-model-creation-management-p0.html
+- Chat-Direct 수정: write: reports/newtalk-ai-model-creation-management-p0.html
+
+## [2026-05-13 08:50:03 KST] [aads-server] reports/newtalk-ai-model-creation-management-p0.html
+- Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/reports/newtalk-ai-model-creation-management-p0.html 
+
+## [2026-05-13 08:52:51 KST] [aads-server] reports/newtalk-ai-fashion-influencer-plan-v1.html
+- Chat-Direct 수정: run_remote_command: cp /var/www/aads-public/reports/newtalk-ai-fashion-influencer-plan-v1.html /root

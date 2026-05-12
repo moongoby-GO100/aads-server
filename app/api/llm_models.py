@@ -28,6 +28,20 @@ class ChatModelPreferenceInput(BaseModel):
     is_pinned: bool = False
 
 
+class ModelRoutingPreferenceInput(BaseModel):
+    route_key: str = Field(..., pattern=r"^(image|edit_image|video|llm)$")
+    provider: str
+    model_id: str
+    display_order: int = Field(100, ge=0)
+    is_enabled: bool = True
+    is_default: bool = False
+    notes: str | None = None
+
+
+class ModelRoutingPreferencesUpdate(BaseModel):
+    preferences: list[ModelRoutingPreferenceInput]
+
+
 def _coerce_json_object(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
@@ -90,6 +104,42 @@ async def _ensure_chat_model_preferences_table() -> None:
         )
 
 
+async def _ensure_model_routing_preferences_table() -> None:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS model_routing_preferences (
+                route_key TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                display_order INTEGER NOT NULL DEFAULT 100,
+                is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                is_default BOOLEAN NOT NULL DEFAULT FALSE,
+                notes TEXT NOT NULL DEFAULT '',
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_by TEXT NOT NULL DEFAULT 'system',
+                PRIMARY KEY (route_key, provider, model_id),
+                CONSTRAINT model_routing_preferences_route_key_chk
+                    CHECK (route_key IN ('image', 'edit_image', 'video', 'llm'))
+            )
+            """
+        )
+        await conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_model_routing_preferences_one_default
+            ON model_routing_preferences(route_key)
+            WHERE is_default = TRUE
+            """
+        )
+        await conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_model_routing_preferences_order
+            ON model_routing_preferences(route_key, is_default DESC, is_enabled DESC, display_order ASC)
+            """
+        )
+
+
 def _build_chat_preference_key(model_id: str, provider: str | None = None, preference_key: str | None = None) -> tuple[str, str, str]:
     normalized_model = model_id.strip()
     normalized_provider = (provider or "").strip().lower()
@@ -106,6 +156,61 @@ def _build_chat_preference_key(model_id: str, provider: str | None = None, prefe
         normalized_provider, normalized_model = normalized_model.split(":", 1)
     normalized_provider = normalized_provider or "legacy"
     return f"{normalized_provider}:{normalized_model}", normalized_provider, normalized_model
+
+
+def _routing_availability(row: Any) -> str:
+    if not row["is_enabled"]:
+        return "disabled"
+    if not row["registry_model_id"]:
+        return "not_registered"
+    if row["is_active"] or row["is_executable"]:
+        return "available"
+    status = str(row["verification_status"] or "").strip().lower()
+    if status == "review_required":
+        return "review_required"
+    return "not_configured"
+
+
+def _routing_preference_payload(row: Any) -> dict[str, Any]:
+    metadata = _coerce_json_object(row["metadata"])
+    capabilities = _coerce_json_object(row["capabilities"])
+    pricing = _coerce_json_object(row["pricing"])
+    availability = _routing_availability(row)
+    note = str(row["notes"] or "").strip()
+    if not note:
+        note = str(
+            metadata.get("routing_note")
+            or metadata.get("availability_note")
+            or metadata.get("discovery_requirement")
+            or ""
+        ).strip()
+    if not note and availability == "not_registered":
+        note = "llm_models registry row is missing"
+    elif not note and availability == "not_configured":
+        note = "provider key or executable runtime has not been verified"
+    return {
+        "route_key": row["route_key"],
+        "provider": row["provider"],
+        "model_id": row["model_id"],
+        "display_name": row["display_name"] or row["model_id"],
+        "execution_model_id": row["execution_model_id"],
+        "family": row["family"],
+        "category": row["category"],
+        "display_order": row["display_order"],
+        "is_enabled": row["is_enabled"],
+        "is_default": row["is_default"],
+        "is_active": row["is_active"],
+        "is_selectable": row["is_selectable"],
+        "is_executable": row["is_executable"],
+        "availability": availability,
+        "verification_status": row["verification_status"],
+        "notes": note,
+        "metadata": metadata,
+        "capabilities": capabilities,
+        "pricing": pricing,
+        "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+        "updated_by": row["updated_by"],
+    }
 
 
 async def _fetch_last_registry_sync() -> dict[str, Any] | None:
@@ -313,6 +418,142 @@ async def update_chat_model_preferences(items: list[ChatModelPreferenceInput]) -
         for row in rows
     ]
     return {"ok": True, "preferences": preferences, "total": len(preferences)}
+
+
+@router.get("/routing-preferences")
+async def get_model_routing_preferences() -> dict[str, Any]:
+    await _ensure_model_routing_preferences_table()
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT pref.route_key, pref.provider, pref.model_id,
+                   pref.display_order, pref.is_enabled, pref.is_default,
+                   pref.notes, pref.updated_at, pref.updated_by,
+                   models.model_id AS registry_model_id,
+                   models.display_name, models.family, models.category,
+                   models.execution_model_id, models.is_active,
+                   models.is_selectable, models.is_executable,
+                   models.verification_status, models.metadata,
+                   models.capabilities, models.pricing
+            FROM model_routing_preferences AS pref
+            LEFT JOIN LATERAL (
+                SELECT m.model_id, m.display_name, m.family, m.category,
+                       m.execution_model_id, m.is_active, m.is_selectable,
+                       m.is_executable, m.verification_status, m.metadata,
+                       m.capabilities, m.pricing, m.updated_at, m.id
+                FROM llm_models AS m
+                WHERE m.provider = pref.provider
+                  AND (m.model_id = pref.model_id OR m.execution_model_id = pref.model_id)
+                ORDER BY CASE WHEN m.model_id = pref.model_id THEN 0 ELSE 1 END,
+                         m.updated_at DESC NULLS LAST, m.id DESC
+                LIMIT 1
+            ) AS models ON TRUE
+            ORDER BY CASE pref.route_key
+                         WHEN 'image' THEN 1
+                         WHEN 'edit_image' THEN 2
+                         WHEN 'video' THEN 3
+                         WHEN 'llm' THEN 4
+                         ELSE 99
+                     END,
+                     pref.is_default DESC,
+                     pref.is_enabled DESC,
+                     pref.display_order ASC,
+                     pref.provider ASC,
+                     pref.model_id ASC
+            """
+        )
+    preferences = [_routing_preference_payload(row) for row in rows]
+    route_counts: dict[str, int] = {}
+    default_models: dict[str, str] = {}
+    for item in preferences:
+        route_key = str(item["route_key"])
+        route_counts[route_key] = route_counts.get(route_key, 0) + 1
+        if item["is_default"]:
+            default_models[route_key] = item["model_id"]
+    return {
+        "preferences": preferences,
+        "total": len(preferences),
+        "route_counts": route_counts,
+        "default_models": default_models,
+    }
+
+
+@router.put("/routing-preferences")
+async def update_model_routing_preferences(req: ModelRoutingPreferencesUpdate) -> dict[str, Any]:
+    await _ensure_model_routing_preferences_table()
+    await _ensure_chat_model_preferences_table()
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            for item in req.preferences:
+                provider = (
+                    normalize_provider(item.provider)
+                    if item.route_key == "llm"
+                    else item.provider.strip().lower()
+                )
+                model_id = item.model_id.strip()
+                if item.is_default:
+                    await conn.execute(
+                        """
+                        UPDATE model_routing_preferences
+                        SET is_default = FALSE, updated_at = NOW(), updated_by = 'settings_ui'
+                        WHERE route_key = $1 AND is_default = TRUE
+                        """,
+                        item.route_key,
+                    )
+                await conn.execute(
+                    """
+                    INSERT INTO model_routing_preferences (
+                        route_key, provider, model_id, display_order,
+                        is_enabled, is_default, notes, updated_at, updated_by
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), 'settings_ui')
+                    ON CONFLICT (route_key, provider, model_id)
+                    DO UPDATE SET
+                        display_order = EXCLUDED.display_order,
+                        is_enabled = EXCLUDED.is_enabled,
+                        is_default = EXCLUDED.is_default,
+                        notes = EXCLUDED.notes,
+                        updated_at = NOW(),
+                        updated_by = EXCLUDED.updated_by
+                    """,
+                    item.route_key,
+                    provider,
+                    model_id,
+                    item.display_order,
+                    item.is_enabled,
+                    item.is_default,
+                    item.notes or "",
+                )
+                if item.route_key == "llm" and item.is_default:
+                    preference_key, pref_provider, pref_model = _build_chat_preference_key(
+                        model_id,
+                        provider=provider,
+                    )
+                    await conn.execute(
+                        """
+                        INSERT INTO chat_model_preferences (
+                            preference_key, provider, model_id, display_order,
+                            is_hidden, is_favorite, is_pinned, updated_at, updated_by
+                        )
+                        VALUES ($1, $2, $3, 0, FALSE, TRUE, TRUE, NOW(), 'settings_ui')
+                        ON CONFLICT (preference_key)
+                        DO UPDATE SET
+                            provider = EXCLUDED.provider,
+                            model_id = EXCLUDED.model_id,
+                            display_order = EXCLUDED.display_order,
+                            is_hidden = FALSE,
+                            is_favorite = TRUE,
+                            is_pinned = TRUE,
+                            updated_at = NOW(),
+                            updated_by = EXCLUDED.updated_by
+                        """,
+                        preference_key,
+                        pref_provider,
+                        pref_model,
+                    )
+    return await get_model_routing_preferences()
 
 
 @router.post("/sync")

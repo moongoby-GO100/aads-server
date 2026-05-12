@@ -25,7 +25,7 @@ class EditImageRequest(BaseModel):
     image_data: str | None = None
     mask_path: str | None = None
     size: str = "1024x1024"
-    model_id: str | None = "gpt-image-2"
+    model_id: str | None = None
     provider: str | None = None
     requested_by: str | None = None
     session_id: str | None = None
@@ -34,7 +34,7 @@ class EditImageRequest(BaseModel):
 class VideoRequest(BaseModel):
     prompt: str
     input_refs: dict = Field(default_factory=dict)
-    model_id: str | None = "sora-2"
+    model_id: str | None = None
     provider: str | None = None
     requested_by: str | None = None
     session_id: str | None = None

@@ -1,0 +1,809 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>뉴톡 AI 모델 생성 및 관리 상세 기획서 P0</title>
+  <style>
+    :root{--ink:#202124;--muted:#5f6368;--line:#d8dee4;--paper:#fff;--bg:#f5f7f9;--nav:#17202a;--green:#0f766e;--blue:#2563eb;--rose:#be123c;--amber:#b45309;--violet:#6d28d9;--slate:#334155}
+    *{box-sizing:border-box}
+    body{margin:0;color:var(--ink);background:var(--bg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.62}
+    a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
+    header{background:linear-gradient(135deg,#111827 0%,#1e1b4b 100%);color:#fff;padding:32px clamp(18px,4vw,56px) 28px}
+    .eyebrow{margin:0 0 8px;color:#c4b5fd;font-size:13px;font-weight:700}
+    h1{margin:0;font-size:clamp(26px,5vw,48px);line-height:1.08}
+    .subtitle{max-width:980px;margin:16px 0 0;color:#d1d5db;font-size:16px}
+    .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}
+    .pill{display:inline-flex;align-items:center;min-height:30px;padding:4px 10px;border:1px solid rgba(255,255,255,.24);border-radius:999px;color:#e5e7eb;font-size:13px;white-space:nowrap}
+    nav{position:sticky;top:0;z-index:20;display:flex;gap:4px;overflow-x:auto;padding:8px clamp(12px,4vw,48px);background:var(--nav);border-top:1px solid rgba(255,255,255,.08)}
+    nav a{flex:0 0 auto;min-height:36px;padding:7px 12px;border-radius:6px;color:#e5e7eb;font-size:13px;text-decoration:none}
+    nav a:hover{background:rgba(255,255,255,.12)}
+    main{max-width:1280px;margin:0 auto;padding:28px clamp(16px,3vw,34px) 70px}
+    section{padding:34px 0;border-bottom:1px solid var(--line)}section:last-child{border-bottom:0}
+    h2{margin:0 0 14px;font-size:26px;line-height:1.2}
+    h3{margin:24px 0 8px;font-size:18px;line-height:1.3}
+    h4{margin:18px 0 6px;font-size:15px;font-weight:700;color:var(--slate)}
+    p{margin:8px 0}.lead{max-width:980px;color:#394150;font-size:16px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:16px}
+    .card{background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:16px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.card h3{margin-top:0}
+    .ok{background:#f0fdf4;border-color:#bbf7d0}.warn{background:#fff7ed;border-color:#fed7aa}.risk{background:#fff1f2;border-color:#fecdd3}
+    .tag{display:inline-flex;align-items:center;min-height:24px;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:700}
+    .tag-violet{background:#ede9fe;color:#5b21b6}.tag-blue{background:#dbeafe;color:#1e40af}.tag-green{background:#d1fae5;color:#065f46}.tag-rose{background:#ffe4e6;color:#9f1239}.tag-amber{background:#fef3c7;color:#92400e}
+    table{width:100%;margin-top:14px;border-collapse:collapse;background:var(--paper);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+    th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;font-size:13px}
+    th{background:#f1f5f9;color:#334155;font-weight:800}tr:last-child td{border-bottom:0}
+    code{padding:2px 5px;border-radius:4px;background:#eef2f7;color:#0f172a;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em}
+    .list{margin:8px 0 0;padding-left:18px}.list li{margin:5px 0}
+    .highlight-box{border-left:4px solid var(--blue);padding:12px 16px;background:#eff6ff;border-radius:0 6px 6px 0;margin:12px 0;font-size:14px}
+    .highlight-box.green{border-left-color:var(--green);background:#f0fdf4}
+    .highlight-box.amber{border-left-color:var(--amber);background:#fffbeb}
+    .highlight-box.rose{border-left-color:var(--rose);background:#fff1f2}
+    .highlight-box.violet{border-left-color:var(--violet);background:#f5f3ff}
+    .sub-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px}
+    .sub-card{border:1px solid var(--line);border-radius:6px;padding:12px;font-size:13px}
+    .sub-card h4{margin:0 0 6px;font-size:14px}
+    .flow-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:14px 0}
+    .flow-step{display:inline-flex;align-items:center;min-height:36px;padding:6px 14px;border-radius:8px;font-size:13px;font-weight:700;color:#fff}
+    .flow-arrow{color:var(--muted);font-size:18px;font-weight:900}
+    .layer-card{border:2px solid var(--line);border-radius:10px;padding:18px;margin-top:14px}
+    .layer-card h3{margin:0 0 10px;font-size:17px}
+    .param-table td:first-child{font-weight:700;white-space:nowrap;width:160px}
+    footer{padding:24px clamp(18px,4vw,56px) 36px;color:#e5e7eb;background:#111827;font-size:14px}
+    @media(max-width:760px){.sub-grid{grid-template-columns:1fr}.flow-row{flex-direction:column;align-items:flex-start}th,td{font-size:12px;padding:8px}}
+    @media print{nav{display:none}body{background:#fff}main{max-width:none}section{break-inside:avoid}}
+  </style>
+</head>
+<body>
+
+<header>
+  <p class="eyebrow">NewTalk AI Model — Creation &amp; Management P0</p>
+  <h1>뉴톡 AI 모델 생성 및 관리<br>상세 기획서</h1>
+  <p class="subtitle">
+    AI 패션 모델 6명을 정밀하게 생성하고, 헤어스타일·메이크업·표정·포즈·계절감 등 디테일 변형을
+    운영자가 쉽게 적용·관리·재사용할 수 있는 시스템 기획입니다.
+    "한 번 만들고 끝"이 아니라 "만들고 → 변형하고 → 상황별로 적용하고 → 이력을 추적"하는 운영 체계를 설계합니다.
+  </p>
+  <div class="meta">
+    <span class="pill">작성 기준: 2026-05-13 KST</span>
+    <span class="pill">대상: NTV2 / NewTalk</span>
+    <span class="pill">범위: AI 모델 생성 파이프라인 + 변형 시스템 + 관리 콘솔</span>
+    <span class="pill">상태: P0 상세 기획</span>
+  </div>
+</header>
+
+<nav>
+  <a href="#concept">설계 개념</a>
+  <a href="#creation">생성 파이프라인</a>
+  <a href="#identity">정체성 고정</a>
+  <a href="#variation">변형 시스템</a>
+  <a href="#presets">프리셋 라이브러리</a>
+  <a href="#version">버전 관리</a>
+  <a href="#console">관리 콘솔 UI</a>
+  <a href="#apply">상황별 적용</a>
+  <a href="#data">데이터 설계</a>
+  <a href="#guard">가드레일</a>
+  <a href="#roadmap">구현 로드맵</a>
+  <a href="/reports/newtalk-ai-fashion-influencer-plan-v1.html">← 사업기획서</a>
+</nav>
+
+<main>
+
+<!-- ============================================================ -->
+<!-- 설계 개념 -->
+<!-- ============================================================ -->
+<section id="concept">
+  <h2>설계 개념</h2>
+  <p class="lead">
+    AI 모델을 "한 번 만드는 것"은 시작일 뿐입니다. 실제 운영에서는 <b>같은 모델이 상황에 따라 헤어, 메이크업,
+    표정, 포즈, 계절 의상을 바꿔야</b> 합니다. 이 기획서의 핵심은 모델의 <b>정체성(얼굴·체형·톤)은 고정</b>하면서
+    <b>스타일 레이어만 교체</b>할 수 있는 구조를 만드는 것입니다.
+  </p>
+
+  <h3>3계층 아키텍처</h3>
+  <div class="highlight-box violet">
+    <b>Base Identity (불변)</b> — 얼굴 골격, 체형, 피부톤, 고유 분위기 → 한 번 확정하면 변경 불가<br>
+    <b>Style Layer (교체 가능)</b> — 헤어, 메이크업, 액세서리, 네일, 표정 → 상황별 자유 교체<br>
+    <b>Scene Layer (1회성)</b> — 포즈, 배경, 조명, 의상 → 촬영(생성)마다 새로 설정
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>🧬 Base Identity</h3>
+      <p><b>절대 변경 불가.</b> 모델의 DNA 같은 것입니다.</p>
+      <ul class="list">
+        <li>얼굴 골격 (정면/3/4/측면 reference 20장+)</li>
+        <li>체형 (키, 어깨 너비, 체형 타입)</li>
+        <li>피부톤 (CIE Lab 기준값)</li>
+        <li>눈/코/입 비율, 광대, 턱선</li>
+        <li>고유 분위기 (밝은/차분한/도시적 등)</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>💄 Style Layer</h3>
+      <p><b>자유 교체 가능.</b> 프리셋으로 저장/재사용합니다.</p>
+      <ul class="list">
+        <li>헤어스타일 (컷, 길이, 컬러, 스타일링)</li>
+        <li>메이크업 (베이스, 아이, 립, 블러셔)</li>
+        <li>액세서리 (귀걸이, 목걸이, 안경, 모자)</li>
+        <li>네일 (색상, 길이, 디자인)</li>
+        <li>표정 (미소, 무표정, 웃음, 시선 방향)</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>📸 Scene Layer</h3>
+      <p><b>1회성 설정.</b> 촬영(생성)마다 새로 정합니다.</p>
+      <ul class="list">
+        <li>포즈 (전신, 반신, 앉기, 걷기 등)</li>
+        <li>배경 (스튜디오, 야외, 카페, 오피스)</li>
+        <li>조명 (자연광, 스튜디오, 야간)</li>
+        <li>의상 (상품 착용 — 코디 단계에서 결정)</li>
+        <li>계절감 (봄 꽃, 여름 빛, 가을 낙엽, 겨울 눈)</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>운영 원칙</h3>
+  <div class="highlight-box green">
+    <b>핵심:</b> 같은 모델인지 한눈에 알아볼 수 있어야 합니다. 헤어를 바꾸고 메이크업을 바꿔도 "이 사람"이라는 동일 인물성이 유지되어야 합니다.
+    이를 위해 Base Identity는 Face Embedding 벡터로 고정하고, 모든 생성 결과를 이 벡터와 비교해 동일 인물성을 자동 검증합니다.
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- 생성 파이프라인 -->
+<!-- ============================================================ -->
+<section id="creation">
+  <h2>AI 모델 생성 파이프라인</h2>
+  <p class="lead">
+    AI 모델 1명을 완성하기까지 6단계를 거칩니다. 각 단계는 이전 단계의 산출물을 검증한 뒤 진행합니다.
+  </p>
+
+  <div class="flow-row">
+    <span class="flow-step" style="background:#5b21b6">1. 페르소나 설정</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-step" style="background:#1e40af">2. 얼굴 시드 생성</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-step" style="background:#065f46">3. 멀티앵글 확장</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-step" style="background:#92400e">4. 체형/전신 확정</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-step" style="background:#9d174d">5. 일관성 검증</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-step" style="background:#111827">6. Reference Set 확정</span>
+  </div>
+
+  <h3>1단계: 페르소나 설정</h3>
+  <div class="layer-card">
+    <h3><span class="tag tag-violet">입력</span> 운영자가 정의</h3>
+    <table class="param-table">
+      <tbody>
+        <tr><td>이름</td><td>가상 한국 이름 (예: 윤서아). 실존 인물과 겹치지 않도록 확인</td></tr>
+        <tr><td>나이</td><td>만 19~35세 범위. 10대 후반은 반드시 만 19세 이상 성인</td></tr>
+        <tr><td>스타일 축</td><td>"오피스 미니멀", "스트릿 캐주얼" 등 핵심 패션 정체성</td></tr>
+        <tr><td>얼굴 인상</td><td>"시원한 눈매 + 날카로운 턱선", "둥근 볼 + 부드러운 인상" 등 텍스트 기술</td></tr>
+        <tr><td>체형</td><td>키(cm), 체형 타입(슬림/보통/탄탄), 어깨 타입(좁은/보통/넓은)</td></tr>
+        <tr><td>피부톤</td><td>한국 기준 웜톤/쿨톤/뉴트럴, Fitzpatrick II~IV</td></tr>
+        <tr><td>기본 헤어</td><td>기본 상태 헤어 (변형 전 디폴트)</td></tr>
+        <tr><td>기본 메이크업</td><td>기본 상태 메이크업 (변형 전 디폴트)</td></tr>
+        <tr><td>말투</td><td>SNS 캡션/숏츠 자막에 쓸 텍스트 톤</td></tr>
+        <tr><td>금지 연출</td><td>교복, 미성년 암시, 과노출, 실존 인물 유사 등</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>2단계: 얼굴 시드 생성</h3>
+  <div class="layer-card">
+    <h3><span class="tag tag-blue">핵심</span> 모델의 DNA를 만드는 가장 중요한 단계</h3>
+    <table class="param-table">
+      <tbody>
+        <tr><td>생성 수량</td><td>후보 얼굴 <b>50장</b> 생성 → 운영자가 <b>1장</b> 선택</td></tr>
+        <tr><td>프롬프트</td><td>페르소나 텍스트 기술 + 인상/나이/피부톤/헤어 키워드</td></tr>
+        <tr><td>해상도</td><td>정면 얼굴 512×512 → 선택 후 1024×1024 업스케일</td></tr>
+        <tr><td>선택 기준</td><td>실존 인물 비유사, 자연스러운 비율, 브랜드 톤 적합, 반복 생성 가능성</td></tr>
+        <tr><td>거부 기준</td><td>유명인 유사도 > 0.7, 비대칭 과도, 피부 결함, uncanny valley</td></tr>
+      </tbody>
+    </table>
+    <div class="highlight-box rose">
+      <b>실존 인물 유사 검증:</b> 선택 즉시 유명인 Face DB(한국 연예인/인플루언서 10,000명+)와 cosine similarity 비교.
+      0.7 초과 시 자동 차단 + 알림. 0.5~0.7은 경고 표시 + 운영자 재확인.
+    </div>
+  </div>
+
+  <h3>3단계: 멀티앵글 확장</h3>
+  <div class="layer-card">
+    <h3><span class="tag tag-green">확장</span> 선택된 얼굴을 다양한 각도로 확장</h3>
+    <table>
+      <thead><tr><th>각도</th><th>수량</th><th>용도</th><th>검증</th></tr></thead>
+      <tbody>
+        <tr><td>정면 0°</td><td>5장</td><td>상세페이지, 프로필</td><td>시드 얼굴과 embedding 일치도 > 0.90</td></tr>
+        <tr><td>좌 3/4 (30°)</td><td>4장</td><td>룩북, SNS 피드</td><td>귀/턱선/광대 일관성 확인</td></tr>
+        <tr><td>우 3/4 (330°)</td><td>4장</td><td>룩북, SNS 피드</td><td>좌측과 대칭 일관성</td></tr>
+        <tr><td>좌 측면 (90°)</td><td>3장</td><td>코/턱 라인 확인</td><td>코 높이, 턱선 각도 일관</td></tr>
+        <tr><td>우 측면 (270°)</td><td>3장</td><td>코/턱 라인 확인</td><td>좌측면과 대칭</td></tr>
+        <tr><td>약간 위 (15° 틸트)</td><td>3장</td><td>자연스러운 카메라 각도</td><td>이마/눈 비율 유지</td></tr>
+        <tr><td>약간 아래 (345° 틸트)</td><td>2장</td><td>숏츠 셀피 각도</td><td>턱 비율 자연스러움</td></tr>
+      </tbody>
+    </table>
+    <p><b>합계: 24장.</b> 이 중 운영자 승인 <b>20장 이상</b>이 Reference Set의 얼굴 파트가 됩니다.</p>
+  </div>
+
+  <h3>4단계: 체형/전신 확정</h3>
+  <div class="layer-card">
+    <h3><span class="tag tag-amber">전신</span> 얼굴 + 체형 결합</h3>
+    <table class="param-table">
+      <tbody>
+        <tr><td>전신 생성</td><td>확정 얼굴로 전신 이미지 <b>30장</b> 생성</td></tr>
+        <tr><td>포즈</td><td>기본 서기, 걷기, 앉기, 기대기, 돌아보기 (6종 × 5장)</td></tr>
+        <tr><td>의상</td><td>뉴트럴 의상 (흰 티+데님/검정 원피스/회색 니트) — 의상이 아닌 체형 확인 목적</td></tr>
+        <tr><td>체형 검증</td><td>키 비율(머리:전신 = 1:7~1:8), 어깨 너비, 팔 길이, 다리 비율 일관성</td></tr>
+        <tr><td>승인 기준</td><td>20장 이상 승인 → 전신 Reference Set 완성</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>5단계: 일관성 검증</h3>
+  <div class="sub-grid">
+    <div class="sub-card">
+      <h4>Face Embedding 검증</h4>
+      <p>모든 승인 이미지에서 얼굴을 추출하여 시드 얼굴과 cosine similarity 계산. <b>0.88 미만은 자동 탈락.</b></p>
+    </div>
+    <div class="sub-card">
+      <h4>체형 일관성 검증</h4>
+      <p>전신 이미지에서 키포인트(어깨, 허리, 엉덩이, 무릎) 비율이 기준치 ±5% 이내.</p>
+    </div>
+    <div class="sub-card">
+      <h4>피부톤 일관성</h4>
+      <p>얼굴/팔/다리 피부톤 CIE ΔE < 8. 조명 차이를 감안해도 같은 피부로 보여야 합니다.</p>
+    </div>
+    <div class="sub-card">
+      <h4>실존 인물 최종 대조</h4>
+      <p>전체 승인 세트를 다시 한번 유명인 DB와 대조. 한 장이라도 0.7 초과하면 해당 각도 재생성.</p>
+    </div>
+  </div>
+
+  <h3>6단계: Reference Set 확정</h3>
+  <div class="highlight-box green">
+    <b>최종 산출물 (모델 1명당):</b><br>
+    • 얼굴 Reference: 20장 이상 (다양한 각도/표정)<br>
+    • 전신 Reference: 20장 이상 (다양한 포즈/뉴트럴 의상)<br>
+    • Face Embedding 벡터: 512차원 (동일 인물성 검증 기준값)<br>
+    • 체형 키포인트 기준치: 어깨/허리/엉덩이/무릎 비율<br>
+    • 피부톤 기준값: CIE Lab (L*, a*, b*)<br>
+    • 메타 정보: 이름, 나이, 스타일 축, 금지 연출, 기본 헤어/메이크업<br>
+    <b>상태: <code>base_confirmed</code> → 이후 변형 시스템으로 진입 가능</b>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- 정체성 고정 -->
+<!-- ============================================================ -->
+<section id="identity">
+  <h2>정체성 고정 메커니즘</h2>
+  <p class="lead">
+    "이 모델은 항상 이 사람으로 보여야 한다"를 기술적으로 보장하는 구조입니다.
+    헤어를 바꾸고 메이크업을 바꿔도 <b>Face Embedding 유사도가 0.88 이상</b>이어야 통과합니다.
+  </p>
+
+  <table>
+    <thead><tr><th>고정 요소</th><th>기준값 저장</th><th>검증 방법</th><th>임계값</th><th>위반 시</th></tr></thead>
+    <tbody>
+      <tr><td>얼굴 골격</td><td>512차원 embedding</td><td>cosine similarity</td><td>≥ 0.88</td><td>자동 폐기 + 재생성</td></tr>
+      <tr><td>피부톤</td><td>CIE Lab (L*, a*, b*)</td><td>ΔE2000</td><td>≤ 8.0</td><td>경고 + 운영자 판단</td></tr>
+      <tr><td>체형 비율</td><td>키포인트 비율 벡터</td><td>유클리드 거리</td><td>≤ 5%</td><td>경고 + 운영자 판단</td></tr>
+      <tr><td>눈 색상</td><td>RGB 범위</td><td>색상 거리</td><td>ΔE ≤ 5</td><td>자동 보정 시도</td></tr>
+      <tr><td>입술 형태</td><td>랜드마크 비율</td><td>비율 비교</td><td>≤ 8%</td><td>경고</td></tr>
+    </tbody>
+  </table>
+
+  <div class="highlight-box amber">
+    <b>왜 0.88인가:</b> 0.90 이상은 같은 포즈/표정에서만 달성 가능해 변형 자유도가 떨어짐.
+    0.85 이하는 다른 사람으로 인식될 위험. 0.88은 헤어/메이크업 변경을 허용하면서도 동일 인물성을 유지하는 실무 임계값.
+    P0 운영 데이터로 조정 가능합니다.
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- 변형 시스템 -->
+<!-- ============================================================ -->
+<section id="variation">
+  <h2>변형 시스템 (Style Layer)</h2>
+  <p class="lead">
+    운영자가 AI 모델의 스타일을 쉽게 변경하는 핵심 기능입니다.
+    각 변형 요소는 <b>파라미터 슬라이더 + 프리셋 선택</b> 두 가지 방식으로 조정할 수 있습니다.
+  </p>
+
+  <!-- 헤어스타일 -->
+  <div class="layer-card">
+    <h3>💇 헤어스타일 변형</h3>
+    <table>
+      <thead><tr><th>파라미터</th><th>선택지</th><th>프롬프트 반영 예시</th><th>주의사항</th></tr></thead>
+      <tbody>
+        <tr><td><b>길이</b></td><td>숏컷 / 단발(턱선) / 어깨 / 쇄골 / 가슴 / 허리</td><td><code>shoulder-length hair</code></td><td>길이 변경 시 전신컷 비율 재검증 필요</td></tr>
+        <tr><td><b>컬러</b></td><td>자연 블랙 / 다크브라운 / 밝은브라운 / 애쉬 / 와인 / 하이라이트 / 투톤</td><td><code>dark brown hair with subtle highlights</code></td><td>피부톤과 조화 확인. CIE ΔE로 부자연스러운 조합 경고</td></tr>
+        <tr><td><b>스타일링</b></td><td>생머리 / 웨이브 / C컬 / S컬 / 업스타일 / 포니테일 / 번(bun) / 반묶음 / 브레이드</td><td><code>soft C-curl styled hair</code></td><td>바람에 날리는 연출은 Scene Layer에서 별도 설정</td></tr>
+        <tr><td><b>앞머리</b></td><td>이마 노출 / 시스루뱅 / 풀뱅 / 사이드뱅 / 커튼뱅</td><td><code>see-through bangs</code></td><td>얼굴 embedding에 영향 줄 수 있어 검증 강화</td></tr>
+        <tr><td><b>가르마</b></td><td>가운데 / 3:7 / 2:8 / 지그재그</td><td><code>3:7 side part</code></td><td>—</td></tr>
+      </tbody>
+    </table>
+    <div class="highlight-box">
+      <b>헤어 변경 시 자동 실행:</b> 변경된 헤어로 정면+3/4 각도 4장 시험 생성 → Face Embedding 검증(≥ 0.88) → 통과 시 해당 헤어 프리셋 승인
+    </div>
+  </div>
+
+  <!-- 메이크업 -->
+  <div class="layer-card">
+    <h3>💄 메이크업 변형</h3>
+    <table>
+      <thead><tr><th>영역</th><th>파라미터</th><th>선택지</th><th>프롬프트 키워드</th></tr></thead>
+      <tbody>
+        <tr><td rowspan="3"><b>베이스</b></td><td>커버력</td><td>내추럴 / 세미 / 풀커버</td><td><code>natural skin, dewy finish</code></td></tr>
+        <tr><td>마감</td><td>글로우(촉촉) / 세미매트 / 풀매트</td><td><code>semi-matte foundation</code></td></tr>
+        <tr><td>블러셔</td><td>무 / 피치 / 코랄 / 로즈 / 베리</td><td><code>soft peach blush on cheekbones</code></td></tr>
+        <tr><td rowspan="3"><b>아이</b></td><td>아이섀도</td><td>무 / 누드 / 브라운 / 핑크 / 버건디 / 스모키 / 글리터</td><td><code>warm brown eyeshadow</code></td></tr>
+        <tr><td>아이라인</td><td>무 / 자연 / 캣아이 / 언더라인</td><td><code>thin cat-eye liner</code></td></tr>
+        <tr><td>속눈썹</td><td>자연 / 볼륨 / 뷰러만</td><td><code>natural lashes, curled</code></td></tr>
+        <tr><td rowspan="2"><b>립</b></td><td>컬러</td><td>누드 / MLBB / 코랄 / 레드 / 버건디 / 핑크 / 브라운</td><td><code>MLBB lip color</code></td></tr>
+        <tr><td>마감</td><td>글로스 / 벨벳 / 매트 / 물먹은</td><td><code>velvet finish lips</code></td></tr>
+        <tr><td><b>눈썹</b></td><td>형태</td><td>자연 / 일자 / 아치 / 세미아치</td><td><code>natural straight brows</code></td></tr>
+      </tbody>
+    </table>
+    <div class="highlight-box">
+      <b>메이크업 변경 시:</b> 베이스가 풀커버+매트이면 피부톤 ΔE 검증을 완화(≤ 12). 자연 베이스일 때만 ΔE ≤ 8 적용.
+    </div>
+  </div>
+
+  <!-- 액세서리 -->
+  <div class="layer-card">
+    <h3>💎 액세서리 변형</h3>
+    <table>
+      <thead><tr><th>카테고리</th><th>선택지</th><th>주의사항</th></tr></thead>
+      <tbody>
+        <tr><td><b>귀걸이</b></td><td>없음 / 스터드 / 후프(소) / 후프(대) / 드롭 / 태슬</td><td>뉴톡 상품이면 상품 태그 연결 가능</td></tr>
+        <tr><td><b>목걸이</b></td><td>없음 / 체인(얇은) / 체인(굵은) / 펜던트 / 초커 / 레이어드</td><td>의상 목선과 충돌하지 않도록 코디 단계에서 재확인</td></tr>
+        <tr><td><b>안경</b></td><td>없음 / 라운드 / 보스턴 / 투명 / 선글라스(라운드) / 선글라스(스퀘어)</td><td>안경 착용 시 Face Embedding에 영향 → 검증 임계값 0.85로 완화</td></tr>
+        <tr><td><b>모자</b></td><td>없음 / 볼캡 / 버킷햇 / 베레모 / 비니</td><td>얼굴 상단 가림 → embedding 검증에 이마 가중치 감소 적용</td></tr>
+        <tr><td><b>시계/팔찌</b></td><td>없음 / 미니멀 시계 / 뱅글 / 비즈 팔찌</td><td>제품 클로즈업 시 노출. 뉴톡 상품이면 태그 연결</td></tr>
+        <tr><td><b>가방</b></td><td>없음 / 토트 / 크로스백 / 클러치 / 백팩</td><td>코디 단계 부상품과 연결. Scene Layer 소속이지만 프리셋 저장 가능</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- 표정/시선 -->
+  <div class="layer-card">
+    <h3>😊 표정 / 시선 변형</h3>
+    <table>
+      <thead><tr><th>파라미터</th><th>선택지</th><th>용도</th></tr></thead>
+      <tbody>
+        <tr><td><b>표정</b></td><td>미소(입꼬리만) / 활짝 웃음 / 무표정(쿨) / 약간 놀란 / 차분한 / 시크한</td><td>룩북 vs 숏츠 vs 상세페이지별 다른 표정 필요</td></tr>
+        <tr><td><b>시선</b></td><td>카메라 정면 / 살짝 옆 / 위 / 아래 / 먼 곳</td><td>피드는 정면, 숏츠는 다양한 시선</td></tr>
+        <tr><td><b>입</b></td><td>닫은 입 / 살짝 벌린 입 / 이빨 보이는 미소</td><td>립 제품 강조 시 "살짝 벌린 입"</td></tr>
+        <tr><td><b>고개 기울기</b></td><td>정면 / 왼쪽 틸트 / 오른쪽 틸트 (5~15°)</td><td>자연스러운 포즈감. 15° 초과는 부자연스러움</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- 프리셋 라이브러리 -->
+<!-- ============================================================ -->
+<section id="presets">
+  <h2>프리셋 라이브러리</h2>
+  <p class="lead">
+    자주 쓰는 스타일 조합을 <b>프리셋</b>으로 저장해 두고, 다음에 한 클릭으로 적용합니다.
+    프리셋은 모델별로도 저장하고, 전체 모델 공유 프리셋으로도 관리할 수 있습니다.
+  </p>
+
+  <h3>프리셋 구조</h3>
+  <table>
+    <thead><tr><th>항목</th><th>설명</th><th>예시</th></tr></thead>
+    <tbody>
+      <tr><td><b>프리셋 이름</b></td><td>사람이 읽을 수 있는 이름</td><td>"봄 데일리 내추럴"</td></tr>
+      <tr><td><b>대상 모델</b></td><td>특정 모델 전용 또는 공유</td><td>"윤서아 전용" 또는 "공용"</td></tr>
+      <tr><td><b>헤어 설정</b></td><td>길이/컬러/스타일링/앞머리/가르마</td><td>쇄골 / 다크브라운 / C컬 / 시스루뱅 / 3:7</td></tr>
+      <tr><td><b>메이크업 설정</b></td><td>베이스/아이/립/눈썹 전체</td><td>내추럴 글로우 / 누드 섀도 / MLBB 벨벳 / 자연 눈썹</td></tr>
+      <tr><td><b>액세서리 설정</b></td><td>귀걸이/목걸이/안경 등</td><td>스터드 / 없음 / 없음</td></tr>
+      <tr><td><b>표정 설정</b></td><td>기본 표정/시선</td><td>미소 / 카메라 정면</td></tr>
+      <tr><td><b>검증 상태</b></td><td>이 조합으로 시험 생성 후 embedding 통과 여부</td><td>✅ 검증됨 (0.91)</td></tr>
+      <tr><td><b>썸네일</b></td><td>이 프리셋으로 생성한 대표 이미지</td><td>정면 반신 1장</td></tr>
+    </tbody>
+  </table>
+
+  <h3>기본 제공 프리셋 (모델당 5종)</h3>
+  <div class="sub-grid">
+    <div class="sub-card ok">
+      <h4>🌸 봄 데일리</h4>
+      <p>C컬 / 밝은브라운 / 시스루뱅<br>피치블러셔 / 코랄립 / 글로우<br>스터드 귀걸이 / 미소</p>
+    </div>
+    <div class="sub-card ok">
+      <h4>☀️ 여름 쿨톤</h4>
+      <p>웨이브 묶음 / 자연블랙<br>세미매트 / 핑크섀도 / 누드립<br>선글라스 / 활짝 웃음</p>
+    </div>
+    <div class="sub-card ok">
+      <h4>🍂 가을 무드</h4>
+      <p>S컬 / 와인브라운 / 사이드뱅<br>브라운섀도 / 버건디립 / 벨벳<br>후프 귀걸이 / 시크한 표정</p>
+    </div>
+    <div class="sub-card ok">
+      <h4>❄️ 겨울 미니멀</h4>
+      <p>생머리 / 다크브라운 / 이마노출<br>풀매트 / 누드섀도 / MLBB<br>없음 / 무표정(쿨)</p>
+    </div>
+    <div class="sub-card ok">
+      <h4>🏢 오피스</h4>
+      <p>반묶음 / 자연블랙 / 커튼뱅<br>세미매트 / 브라운아이라인 / 코랄립<br>미니멀시계 / 차분한 미소</p>
+    </div>
+  </div>
+
+  <h3>프리셋 사용 흐름</h3>
+  <div class="flow-row">
+    <span class="flow-step" style="background:#5b21b6">프리셋 선택</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-step" style="background:#1e40af">파라미터 미세조정 (선택)</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-step" style="background:#065f46">시험 생성 2장</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-step" style="background:#92400e">Embedding 검증</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-step" style="background:#111827">적용/저장</span>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- 버전 관리 -->
+<!-- ============================================================ -->
+<section id="version">
+  <h2>버전 관리</h2>
+  <p class="lead">
+    모델의 모든 변경 이력을 추적합니다. "지난달 봄 룩북에서 쓴 헤어스타일로 돌아가고 싶다"
+    → 해당 버전을 찾아 한 클릭으로 복원할 수 있습니다.
+  </p>
+
+  <h3>버전 트리 구조</h3>
+  <div class="highlight-box violet">
+    <b>Base v1.0</b> (불변) → 최초 확정된 얼굴/체형/피부톤<br>
+    ├ <b>Style v1.1</b> — 기본 헤어+메이크업 (생성 시점 디폴트)<br>
+    ├ <b>Style v1.2</b> — 봄 데일리 프리셋 적용<br>
+    ├ <b>Style v1.3</b> — 여름 쿨톤 프리셋 + 커스텀 립 변경<br>
+    ├ <b>Style v2.0</b> — 헤어 대폭 변경 (숏컷 전환)<br>
+    │ ├ <b>Style v2.1</b> — 숏컷 + 가을 메이크업<br>
+    │ └ <b>Style v2.2</b> — 숏컷 + 겨울 미니멀<br>
+    └ <b>Style v3.0</b> — 다시 롱헤어 복원 + 새 컬러<br>
+  </div>
+
+  <table>
+    <thead><tr><th>버전 규칙</th><th>설명</th></tr></thead>
+    <tbody>
+      <tr><td><b>Major (v2.0)</b></td><td>헤어 길이 대폭 변경, 메이크업 계열 전환 등 "다른 느낌"이 될 때. 새 시험 생성 + embedding 재검증 필수</td></tr>
+      <tr><td><b>Minor (v1.2)</b></td><td>프리셋 적용, 소소한 파라미터 조정. 기존 검증 결과로 충분</td></tr>
+      <tr><td><b>복원</b></td><td>과거 버전 선택 → 해당 스타일 파라미터 복원 → 새 minor 버전으로 생성</td></tr>
+      <tr><td><b>비교</b></td><td>두 버전을 나란히 비교. 파라미터 차이를 하이라이트로 표시</td></tr>
+      <tr><td><b>즐겨찾기</b></td><td>자주 쓰는 버전에 ★ 표시. 코디 매칭 시 즐겨찾기 버전 우선 노출</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<!-- 관리 콘솔 UI -->
+<!-- ============================================================ -->
+<section id="console">
+  <h2>AI 모델 관리 콘솔 UI</h2>
+  <p class="lead">
+    운영자가 AI 모델을 생성하고, 스타일을 바꾸고, 프리셋을 관리하고, 버전을 추적하는 실제 화면입니다.
+  </p>
+
+  <div class="grid">
+    <div class="card">
+      <h3>화면 1: 모델 대시보드</h3>
+      <span class="tag tag-violet">메인 화면</span>
+      <ul class="list">
+        <li>6명 모델 카드 그리드 (현재 적용 중인 스타일 썸네일)</li>
+        <li>각 카드: 이름, 나이, 현재 헤어/메이크업 요약, 최근 사용일, 생성 콘텐츠 수</li>
+        <li>필터: 스타일 축, 연령대, 최근 사용 순</li>
+        <li>버튼: "새 모델 생성", "스타일 변경", "히스토리"</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>화면 2: 모델 생성 위자드</h3>
+      <span class="tag tag-blue">6단계 스텝</span>
+      <ul class="list">
+        <li>Step 1: 페르소나 기본정보 폼 (이름/나이/인상/체형)</li>
+        <li>Step 2: 얼굴 시드 — 50장 갤러리에서 1장 선택</li>
+        <li>Step 3: 멀티앵글 — 자동 생성 후 승인/재생성</li>
+        <li>Step 4: 전신 — 체형 확인 + 승인</li>
+        <li>Step 5: 일관성 검증 리포트</li>
+        <li>Step 6: Reference Set 최종 확정</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>화면 3: 스타일 에디터</h3>
+      <span class="tag tag-green">핵심 기능</span>
+      <ul class="list">
+        <li>좌측: 현재 모델 미리보기 (실시간 반영은 P1)</li>
+        <li>우측: 헤어/메이크업/액세서리/표정 탭</li>
+        <li>각 탭: 슬라이더 + 드롭다운 + 프리셋 원클릭</li>
+        <li>하단: "시험 생성" → 2장 미리보기 → "적용" 또는 "되돌리기"</li>
+        <li>사이드: 프리셋 라이브러리 패널 (드래그로 적용)</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>화면 4: 버전 히스토리</h3>
+      <span class="tag tag-amber">타임라인</span>
+      <ul class="list">
+        <li>세로 타임라인: 각 버전 날짜 + 변경 내용 + 썸네일</li>
+        <li>버전 간 비교: 두 버전 선택 → 파라미터 diff + 이미지 비교</li>
+        <li>복원 버튼: 과거 버전 스타일 파라미터 복원</li>
+        <li>즐겨찾기 ★: 자주 쓰는 버전 상단 고정</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>화면 5: 프리셋 관리</h3>
+      <span class="tag tag-rose">라이브러리</span>
+      <ul class="list">
+        <li>카테고리별 정리: 계절, 상황(출근/데이트/캐주얼), 모델별</li>
+        <li>프리셋 카드: 썸네일 + 파라미터 요약 + 검증 상태</li>
+        <li>새 프리셋 만들기: 현재 스타일 에디터 상태를 저장</li>
+        <li>공유: 모델간 프리셋 복사 (헤어만/메이크업만/전체)</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>화면 6: 일괄 적용</h3>
+      <span class="tag tag-violet">효율</span>
+      <ul class="list">
+        <li>캠페인/시즌 단위로 모델 여러 명에 같은 톤 적용</li>
+        <li>예: "가을 캠페인" → 6명 모두 가을 무드 프리셋 일괄 적용</li>
+        <li>각 모델별 시험 생성 + 일괄 embedding 검증</li>
+        <li>실패한 모델만 개별 조정</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- 상황별 적용 -->
+<!-- ============================================================ -->
+<section id="apply">
+  <h2>상황별 적용 시나리오</h2>
+  <p class="lead">
+    실제 운영에서 AI 모델 스타일을 바꿔야 하는 상황과 대응 방법입니다.
+  </p>
+
+  <table>
+    <thead><tr><th>상황</th><th>변경 범위</th><th>프리셋 사용</th><th>절차</th><th>소요 시간</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>시즌 전환 (봄→여름)</b></td>
+        <td>헤어 스타일링 + 메이크업 톤 + 표정</td>
+        <td>계절 프리셋 적용</td>
+        <td>프리셋 선택 → 시험 생성 → 승인 → 전 상품 코디에 적용</td>
+        <td>10~20분/모델</td>
+      </tr>
+      <tr>
+        <td><b>특별 캠페인 (밸런타인 데이)</b></td>
+        <td>메이크업(레드립) + 액세서리(하트 귀걸이) + 표정(웃음)</td>
+        <td>커스텀 프리셋 새로 만들기</td>
+        <td>스타일 에디터에서 수정 → 저장 → 캠페인 기간만 적용</td>
+        <td>15~30분/모델</td>
+      </tr>
+      <tr>
+        <td><b>상품 카테고리별 스타일</b></td>
+        <td>오피스 상품 → 오피스 프리셋 / 캐주얼 → 데일리 프리셋</td>
+        <td>기존 프리셋 선택</td>
+        <td>코디 매칭 시 상품 카테고리에 따라 프리셋 자동 추천</td>
+        <td>2~5분 (프리셋 선택만)</td>
+      </tr>
+      <tr>
+        <td><b>헤어스타일 대폭 변경 (숏컷 전환)</b></td>
+        <td>헤어 전체 재설정</td>
+        <td>Major 버전 업 (v2.0)</td>
+        <td>스타일 에디터 → 시험 생성 8장 → embedding 전수 검증 → 확정</td>
+        <td>30~60분</td>
+      </tr>
+      <tr>
+        <td><b>트렌드 반영 (유행 메이크업)</b></td>
+        <td>아이 메이크업 위주 변경</td>
+        <td>프리셋 수정 또는 신규</td>
+        <td>레퍼런스 이미지 참고 → 파라미터 조정 → 시험 → 적용</td>
+        <td>15~25분</td>
+      </tr>
+      <tr>
+        <td><b>숏츠용 다이내믹 표정</b></td>
+        <td>표정/시선만 변경</td>
+        <td>표정 프리셋 (검증 불필요)</td>
+        <td>표정 탭에서 선택 → 바로 생성</td>
+        <td>1~3분</td>
+      </tr>
+      <tr>
+        <td><b>과거 스타일 복원</b></td>
+        <td>이전 버전 전체</td>
+        <td>버전 히스토리에서 복원</td>
+        <td>히스토리 → 해당 버전 선택 → "이 스타일로 복원" → 확인</td>
+        <td>3~5분</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="highlight-box green">
+    <b>자동 추천 (P1 목표):</b> 코디 매칭 단계에서 상품 카테고리·시즌·타깃 연령에 따라 해당 모델의 가장 적합한 프리셋을 자동 추천.
+    예: "겨울 코트 상품 + 윤서아" → "겨울 미니멀" 프리셋 자동 제안.
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- 데이터 설계 -->
+<!-- ============================================================ -->
+<section id="data">
+  <h2>데이터 설계</h2>
+
+  <h3>신규 테이블</h3>
+  <table>
+    <thead><tr><th>테이블</th><th>핵심 필드</th><th>역할</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>ai_personas</code></td>
+        <td>id, name, age, style_axis, face_description, body_type(json), skin_tone(json), default_hair(json), default_makeup(json), speech_tone, prohibited_styles(json), status, face_embedding(vector), body_keypoints(json), skin_lab(json), created_at</td>
+        <td>모델 Base Identity 저장. face_embedding은 동일 인물성 검증의 기준값</td>
+      </tr>
+      <tr>
+        <td><code>ai_persona_references</code></td>
+        <td>id, persona_id, ref_type(face/body/fullbody), angle, image_url, embedding_score, qa_status, created_at</td>
+        <td>모델별 Reference Set 이미지 관리. 얼굴 24장+전신 30장 저장</td>
+      </tr>
+      <tr>
+        <td><code>ai_style_versions</code></td>
+        <td>id, persona_id, version_code(v1.0), version_type(major/minor), hair_params(json), makeup_params(json), accessory_params(json), expression_params(json), preset_id, thumbnail_url, embedding_score, is_favorite, created_by, created_at</td>
+        <td>스타일 변형 버전 히스토리. 모든 변경을 추적</td>
+      </tr>
+      <tr>
+        <td><code>ai_style_presets</code></td>
+        <td>id, name, scope(persona/global), persona_id, category(season/occasion/custom), hair_params(json), makeup_params(json), accessory_params(json), expression_params(json), thumbnail_url, verification_status, embedding_score, usage_count, created_at</td>
+        <td>프리셋 라이브러리. 모델별 또는 공유 프리셋 저장</td>
+      </tr>
+      <tr>
+        <td><code>ai_generation_logs</code></td>
+        <td>id, persona_id, style_version_id, prompt_full(text), seed, model_engine, generation_params(json), result_image_url, embedding_score, qa_status, rejected_reason, created_at</td>
+        <td>생성 이력 추적. 프롬프트→결과→검증 전 과정 기록</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>핵심 API</h3>
+  <table>
+    <thead><tr><th>API</th><th>메서드</th><th>기능</th></tr></thead>
+    <tbody>
+      <tr><td><code>/api/ai-personas</code></td><td>GET/POST</td><td>모델 목록 조회 / 신규 모델 생성 시작</td></tr>
+      <tr><td><code>/api/ai-personas/{id}</code></td><td>GET</td><td>모델 상세 (현재 스타일, 버전, Reference Set)</td></tr>
+      <tr><td><code>/api/ai-personas/{id}/references</code></td><td>POST/GET</td><td>Reference Set 업로드/조회</td></tr>
+      <tr><td><code>/api/ai-personas/{id}/style</code></td><td>GET/PATCH</td><td>현재 스타일 조회 / 파라미터 변경</td></tr>
+      <tr><td><code>/api/ai-personas/{id}/style/preview</code></td><td>POST</td><td>변경된 파라미터로 시험 생성 (2장)</td></tr>
+      <tr><td><code>/api/ai-personas/{id}/style/apply</code></td><td>POST</td><td>시험 결과 승인 → 새 버전 확정</td></tr>
+      <tr><td><code>/api/ai-personas/{id}/versions</code></td><td>GET</td><td>버전 히스토리 타임라인</td></tr>
+      <tr><td><code>/api/ai-personas/{id}/versions/{vid}/restore</code></td><td>POST</td><td>과거 버전 스타일 복원</td></tr>
+      <tr><td><code>/api/ai-presets</code></td><td>GET/POST</td><td>프리셋 라이브러리 조회 / 새 프리셋 저장</td></tr>
+      <tr><td><code>/api/ai-presets/{id}/apply</code></td><td>POST</td><td>프리셋을 특정 모델에 적용 (시험 생성 포함)</td></tr>
+      <tr><td><code>/api/ai-personas/batch-apply</code></td><td>POST</td><td>여러 모델에 동일 프리셋 일괄 적용</td></tr>
+    </tbody>
+  </table>
+
+  <h3>json 파라미터 구조 예시</h3>
+  <div class="highlight-box">
+    <b>hair_params:</b><br>
+    <code>{"length":"shoulder","color":"dark_brown","highlights":"subtle","styling":"c_curl","bangs":"see_through","parting":"3_7"}</code><br><br>
+    <b>makeup_params:</b><br>
+    <code>{"base_coverage":"natural","base_finish":"dewy","blusher":"peach","eye_shadow":"nude","eye_liner":"natural","lashes":"natural_curled","lip_color":"mlbb","lip_finish":"velvet","brow":"natural_straight"}</code><br><br>
+    <b>accessory_params:</b><br>
+    <code>{"earring":"stud","necklace":"none","glasses":"none","hat":"none","watch":"minimal","bag":"none"}</code><br><br>
+    <b>expression_params:</b><br>
+    <code>{"expression":"soft_smile","gaze":"camera_front","mouth":"closed","head_tilt":"none"}</code>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- 가드레일 -->
+<!-- ============================================================ -->
+<section id="guard">
+  <h2>가드레일 &amp; 리스크 관리</h2>
+
+  <div class="grid">
+    <div class="card risk">
+      <h3>실존 인물 유사</h3>
+      <ul class="list">
+        <li>생성 시마다 유명인 Face DB 대조</li>
+        <li>cosine similarity > 0.7 → 자동 폐기</li>
+        <li>0.5~0.7 → 경고 + 운영자 확인</li>
+        <li>DB: 한국 연예인/인플루언서 10,000명+</li>
+        <li>월 1회 DB 업데이트</li>
+      </ul>
+    </div>
+    <div class="card risk">
+      <h3>10대 후반 모델 보호</h3>
+      <ul class="list">
+        <li>만 19세 성인 페르소나만 허용</li>
+        <li>교복, 미성년 암시 프롬프트 자동 차단</li>
+        <li>선정적 메이크업/표정 조합 경고</li>
+        <li>모든 콘텐츠에 성인 설정 표시</li>
+      </ul>
+    </div>
+    <div class="card warn">
+      <h3>동일 인물성 깨짐</h3>
+      <ul class="list">
+        <li>변형 후 embedding < 0.88 → 적용 차단</li>
+        <li>안경/모자 착용 시 임계값 0.85로 완화</li>
+        <li>연속 3회 실패 → 해당 변형 조합 비호환 알림</li>
+        <li>비호환 파라미터 조합 DB 축적 → 자동 경고</li>
+      </ul>
+    </div>
+    <div class="card warn">
+      <h3>AI 표시 의무</h3>
+      <ul class="list">
+        <li>모든 생성 이미지 EXIF에 AI 생성 태그</li>
+        <li>SNS 게시 시 프로필/캡션에 AI 표시</li>
+        <li>상세페이지 AI 표시 블록 필수</li>
+        <li>표시 누락 시 판매 반영 차단</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- 구현 로드맵 -->
+<!-- ============================================================ -->
+<section id="roadmap">
+  <h2>구현 로드맵</h2>
+
+  <table>
+    <thead><tr><th>단계</th><th>기간</th><th>작업</th><th>산출물</th><th>완료 기준</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>P0-1</b></td><td>1~2주</td>
+        <td>페르소나 DB 설계 + 생성 파이프라인 (2단계까지)</td>
+        <td>ai_personas, ai_persona_references 테이블, 얼굴 시드 생성 API</td>
+        <td>1명 모델의 얼굴 시드 50장 → 1장 선택 가능</td>
+      </tr>
+      <tr>
+        <td><b>P0-2</b></td><td>2~3주</td>
+        <td>멀티앵글 + 전신 + 일관성 검증</td>
+        <td>Face Embedding 검증, Reference Set 확정 플로우</td>
+        <td>1명 모델 완성 (얼굴 20장 + 전신 20장 + embedding 기준값)</td>
+      </tr>
+      <tr>
+        <td><b>P0-3</b></td><td>3~4주</td>
+        <td>스타일 에디터 + 프리셋 라이브러리</td>
+        <td>ai_style_versions, ai_style_presets 테이블, 관리 콘솔 UI</td>
+        <td>헤어/메이크업 변경 → 시험 생성 → embedding 검증 → 적용 가능</td>
+      </tr>
+      <tr>
+        <td><b>P0-4</b></td><td>4~5주</td>
+        <td>버전 관리 + 일괄 적용 + 6명 완성</td>
+        <td>버전 히스토리, 복원, 일괄 프리셋 적용</td>
+        <td>6명 모델 × 5종 프리셋 = 30개 스타일 검증 완료</td>
+      </tr>
+      <tr>
+        <td><b>P1</b></td><td>6~8주</td>
+        <td>실시간 미리보기 + 자동 프리셋 추천 + 상품 연동</td>
+        <td>스타일 에디터 실시간 반영, 코디 단계 자동 추천</td>
+        <td>운영자가 프리셋 선택 없이 상품만 넣으면 최적 스타일 자동 적용</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>P0 파일럿 목표</h3>
+  <div class="highlight-box green">
+    <b>모델 6명 × 프리셋 5종 = 30개 스타일 확정.</b><br>
+    각 스타일에서 정면+3/4 시험 생성 → 동일 인물성(embedding ≥ 0.88) 검증 통과.<br>
+    운영자가 프리셋 한 클릭으로 스타일 전환 후 5분 이내 코디 매칭 진입 가능.<br>
+    모든 버전 히스토리 추적 가능, 과거 스타일 복원 3클릭 이내.
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <p>관련 문서:
+    <a href="/reports/newtalk-ai-fashion-influencer-plan-v1.html">사업기획서 v1</a> |
+    <a href="/reports/newtalk-ai-fashion-persona-cards-p0.html">P0 페르소나 카드</a> |
+    <a href="/reports/newtalk-ai-fashion-user-flow-detail-v2.html">사용자 흐름 상세 v2</a> |
+    <a href="/reports/newtalk-ai-fashion-uiux-plan-p0.html">UI/UX 기획서</a>
+  </p>
+  <p style="color:#6b7280">이 문서는 AI(Claude Opus)가 CEO 지시에 따라 작성했으며, 기존 페르소나 카드와 사업기획서를 기반으로 합니다. 2026-05-13 KST</p>
+</footer>
+
+</body>
+</html>

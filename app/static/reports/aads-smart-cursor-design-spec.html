@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AADS 스마트 커서 인스펙터 — 상세 구현 기획서</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --surface2: #1c2333;
+    --border: #30363d; --text: #e6edf3; --text2: #8b949e;
+    --accent: #58a6ff; --accent2: #3fb950; --warn: #d29922;
+    --error: #f85149; --purple: #bc8cff; --pink: #f778ba;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.7;
+    padding: 0; min-height: 100vh;
+  }
+  .hero {
+    background: linear-gradient(135deg, #0d1117 0%, #161b22 50%, #1a1e2e 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 60px 40px 50px; text-align: center;
+    position: relative; overflow: hidden;
+  }
+  .hero::before {
+    content: ''; position: absolute; top: -50%; left: -50%;
+    width: 200%; height: 200%;
+    background: radial-gradient(circle at 30% 50%, rgba(88,166,255,0.06) 0%, transparent 50%),
+                radial-gradient(circle at 70% 50%, rgba(188,140,255,0.04) 0%, transparent 50%);
+    animation: pulse 8s ease-in-out infinite alternate;
+  }
+  @keyframes pulse { from { opacity: 0.5; } to { opacity: 1; } }
+  .hero > * { position: relative; z-index: 1; }
+  .hero h1 { font-size: 2.4em; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 12px; }
+  .hero h1 span { background: linear-gradient(135deg, var(--accent), var(--purple)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .hero .subtitle { font-size: 1.15em; color: var(--text2); max-width: 680px; margin: 0 auto 24px; }
+  .hero .meta { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; font-size: 0.85em; color: var(--text2); }
+  .hero .meta .tag { padding: 4px 14px; border-radius: 20px; font-weight: 600; border: 1px solid var(--border); }
+  .hero .meta .tag.p0 { border-color: var(--error); color: var(--error); }
+  .hero .meta .tag.ver { border-color: var(--accent); color: var(--accent); }
+  .container { max-width: 1100px; margin: 0 auto; padding: 40px 24px; }
+  .toc { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 28px 32px; margin-bottom: 48px; }
+  .toc h2 { font-size: 1.1em; color: var(--accent); margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .toc ol { padding-left: 20px; columns: 2; column-gap: 40px; }
+  .toc li { margin-bottom: 8px; font-size: 0.95em; break-inside: avoid; }
+  .toc a { color: var(--text); text-decoration: none; border-bottom: 1px dashed var(--border); transition: all 0.2s; }
+  .toc a:hover { color: var(--accent); border-color: var(--accent); }
+  section { margin-bottom: 56px; }
+  section h2 { font-size: 1.5em; font-weight: 700; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid var(--border); display: flex; align-items: center; gap: 12px; }
+  section h2 .num { background: var(--accent); color: var(--bg); width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 8px; font-size: 0.75em; font-weight: 800; flex-shrink: 0; }
+  section h3 { font-size: 1.15em; color: var(--purple); margin: 24px 0 12px; }
+  section h4 { font-size: 1em; color: var(--accent2); margin: 16px 0 8px; }
+  p { margin-bottom: 14px; color: var(--text); }
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin: 16px 0; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px 22px; transition: border-color 0.2s; }
+  .card:hover { border-color: var(--accent); }
+  .card .card-title { font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+  .card .card-title .icon { font-size: 1.3em; }
+  .card p { font-size: 0.9em; color: var(--text2); margin-bottom: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.9em; background: var(--surface); border-radius: 10px; overflow: hidden; border: 1px solid var(--border); }
+  th { background: var(--surface2); padding: 12px 16px; text-align: left; font-weight: 700; color: var(--accent); font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--border); }
+  td { padding: 10px 16px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(88,166,255,0.03); }
+  code { background: var(--surface2); padding: 2px 7px; border-radius: 5px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.88em; color: var(--pink); }
+  pre { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin: 16px 0; overflow-x: auto; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.85em; line-height: 1.6; color: var(--text2); }
+  pre code { background: none; padding: 0; color: inherit; }
+  .flow-diagram { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 32px; margin: 24px 0; text-align: center; overflow-x: auto; }
+  .flow-steps { display: flex; align-items: center; justify-content: center; gap: 0; flex-wrap: nowrap; min-width: max-content; margin: 0 auto; }
+  .flow-step { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; min-width: 130px; text-align: center; transition: all 0.2s; }
+  .flow-step:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .flow-step .step-icon { font-size: 1.5em; margin-bottom: 6px; }
+  .flow-step .step-label { font-weight: 700; font-size: 0.85em; }
+  .flow-step .step-desc { font-size: 0.75em; color: var(--text2); margin-top: 4px; }
+  .flow-arrow { font-size: 1.4em; color: var(--accent); padding: 0 6px; flex-shrink: 0; }
+  .wireframe { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 0; margin: 24px 0; overflow: hidden; }
+  .wireframe-header { background: var(--surface2); padding: 10px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; font-size: 0.85em; color: var(--text2); }
+  .wireframe-header .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .wireframe-header .dot.r { background: #f85149; } .wireframe-header .dot.y { background: #d29922; } .wireframe-header .dot.g { background: #3fb950; }
+  .wireframe-body { padding: 24px; position: relative; min-height: 400px; }
+  .wf-page { display: grid; grid-template-columns: 250px 1fr 320px; gap: 16px; height: 360px; }
+  .wf-sidebar { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; font-size: 0.8em; }
+  .wf-sidebar .wf-item { padding: 8px 10px; border-radius: 6px; margin-bottom: 4px; cursor: pointer; }
+  .wf-sidebar .wf-item:hover { background: rgba(88,166,255,0.08); }
+  .wf-sidebar .wf-item.active { background: rgba(88,166,255,0.12); border: 1px solid rgba(88,166,255,0.3); }
+  .wf-content { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; position: relative; overflow: hidden; }
+  .wf-cursor-indicator { position: absolute; top: 80px; left: 120px; width: 180px; height: 60px; border: 2px solid var(--accent); border-radius: 8px; background: rgba(88,166,255,0.06); animation: cursorPulse 2s ease-in-out infinite; }
+  @keyframes cursorPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(88,166,255,0.3); } 50% { box-shadow: 0 0 0 8px rgba(88,166,255,0.05); } }
+  .wf-cursor-label { position: absolute; top: 65px; left: 306px; background: var(--accent); color: var(--bg); padding: 3px 10px; border-radius: 6px; font-size: 0.75em; font-weight: 700; white-space: nowrap; }
+  .wf-panel { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; font-size: 0.8em; overflow-y: auto; }
+  .wf-panel .panel-title { font-weight: 700; color: var(--accent); margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 6px; }
+  .wf-issue { background: rgba(248,81,73,0.06); border: 1px solid rgba(248,81,73,0.2); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; font-size: 0.85em; }
+  .wf-issue .issue-tag { color: var(--error); font-weight: 700; font-size: 0.8em; }
+  .wf-improve { background: rgba(63,185,80,0.06); border: 1px solid rgba(63,185,80,0.2); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; font-size: 0.85em; }
+  .wf-improve .improve-tag { color: var(--accent2); font-weight: 700; font-size: 0.8em; }
+  .phase-timeline { display: flex; gap: 0; margin: 24px 0; position: relative; }
+  .phase-timeline::before { content: ''; position: absolute; top: 28px; left: 40px; right: 40px; height: 3px; background: var(--border); z-index: 0; }
+  .phase { flex: 1; text-align: center; position: relative; z-index: 1; padding: 0 8px; }
+  .phase .phase-dot { width: 20px; height: 20px; border-radius: 50%; margin: 18px auto 14px; border: 3px solid var(--border); background: var(--bg); }
+  .phase.active .phase-dot { border-color: var(--accent); background: var(--accent); }
+  .phase.done .phase-dot { border-color: var(--accent2); background: var(--accent2); }
+  .phase .phase-name { font-weight: 700; font-size: 0.85em; margin-bottom: 4px; }
+  .phase .phase-period { font-size: 0.75em; color: var(--text2); }
+  .phase .phase-detail { font-size: 0.78em; color: var(--text2); margin-top: 6px; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.78em; font-weight: 700; }
+  .badge.p0 { background: rgba(248,81,73,0.15); color: var(--error); border: 1px solid rgba(248,81,73,0.3); }
+  .badge.p1 { background: rgba(210,153,34,0.15); color: var(--warn); border: 1px solid rgba(210,153,34,0.3); }
+  .badge.p2 { background: rgba(88,166,255,0.15); color: var(--accent); border: 1px solid rgba(88,166,255,0.3); }
+  .badge.new { background: rgba(188,140,255,0.15); color: var(--purple); border: 1px solid rgba(188,140,255,0.3); }
+  .badge.exist { background: rgba(63,185,80,0.15); color: var(--accent2); border: 1px solid rgba(63,185,80,0.3); }
+  .arch-box { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 28px; margin: 20px 0; }
+  .arch-layers { display: flex; flex-direction: column; gap: 12px; }
+  .arch-layer { border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; display: flex; align-items: center; gap: 16px; }
+  .arch-layer .layer-label { min-width: 120px; font-weight: 700; font-size: 0.85em; flex-shrink: 0; }
+  .arch-layer .layer-items { display: flex; gap: 8px; flex-wrap: wrap; }
+  .arch-layer .layer-item { padding: 4px 12px; border-radius: 6px; font-size: 0.8em; font-weight: 600; border: 1px solid var(--border); }
+  .arch-layer.frontend { border-color: rgba(88,166,255,0.3); }
+  .arch-layer.frontend .layer-label { color: var(--accent); }
+  .arch-layer.frontend .layer-item { border-color: rgba(88,166,255,0.3); color: var(--accent); }
+  .arch-layer.backend { border-color: rgba(63,185,80,0.3); }
+  .arch-layer.backend .layer-label { color: var(--accent2); }
+  .arch-layer.backend .layer-item { border-color: rgba(63,185,80,0.3); color: var(--accent2); }
+  .arch-layer.ai { border-color: rgba(188,140,255,0.3); }
+  .arch-layer.ai .layer-label { color: var(--purple); }
+  .arch-layer.ai .layer-item { border-color: rgba(188,140,255,0.3); color: var(--purple); }
+  .arch-layer.infra { border-color: rgba(210,153,34,0.3); }
+  .arch-layer.infra .layer-label { color: var(--warn); }
+  .arch-layer.infra .layer-item { border-color: rgba(210,153,34,0.3); color: var(--warn); }
+  .checklist { list-style: none; padding: 0; margin: 16px 0; }
+  .checklist li { padding: 8px 14px; border-bottom: 1px solid var(--border); font-size: 0.9em; display: flex; align-items: flex-start; gap: 10px; }
+  .checklist li:last-child { border-bottom: none; }
+  .checklist .check { color: var(--accent2); font-weight: 700; flex-shrink: 0; }
+  .footer { text-align: center; padding: 40px; color: var(--text2); border-top: 1px solid var(--border); font-size: 0.85em; }
+  @media (max-width: 800px) {
+    .hero { padding: 40px 20px 30px; } .hero h1 { font-size: 1.6em; }
+    .toc ol { columns: 1; } .card-grid { grid-template-columns: 1fr; }
+    .wf-page { grid-template-columns: 1fr; height: auto; }
+    .flow-steps { flex-wrap: wrap; gap: 8px; } .flow-arrow { display: none; }
+    .arch-layer { flex-direction: column; align-items: flex-start; }
+    .phase-timeline { flex-wrap: wrap; } .phase-timeline::before { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1><span>Smart Cursor Inspector</span></h1>
+  <p class="subtitle">마우스 커서가 닿는 UI 요소를 AI가 실시간 분석하여 문제점과 개선안을 즉시 화면 위에 보여주는 AADS Design Studio의 차세대 인터페이스</p>
+  <div class="meta">
+    <span class="tag p0">P0 — 핵심 기능</span>
+    <span class="tag ver">AADS-SMART-CURSOR v1.0</span>
+    <span>2026-05-13 | CTO AI | CEO moongoby</span>
+  </div>
+</div>
+
+<div class="container">
+
+<div class="toc">
+  <h2>목차</h2>
+  <ol>
+    <li><a href="#sec1">개요 및 목표</a></li>
+    <li><a href="#sec2">현재 시스템 기반 분석</a></li>
+    <li><a href="#sec3">핵심 사용자 플로우</a></li>
+    <li><a href="#sec4">화면 와이어프레임</a></li>
+    <li><a href="#sec5">아키텍처 설계</a></li>
+    <li><a href="#sec6">컴포넌트 상세 설계</a></li>
+    <li><a href="#sec7">API 스펙</a></li>
+    <li><a href="#sec8">AI 분석 엔진 설계</a></li>
+    <li><a href="#sec9">구현 로드맵</a></li>
+    <li><a href="#sec10">검수 기준 및 KPI</a></li>
+    <li><a href="#sec11">리스크 및 대응</a></li>
+    <li><a href="#sec12">비용 추정</a></li>
+  </ol>
+</div>
+
+<!-- 1. 개요 -->
+<section id="sec1">
+  <h2><span class="num">1</span> 개요 및 목표</h2>
+  <p><strong>스마트 커서 인스펙터</strong>는 CEO가 브라우저에서 AADS 대시보드(또는 임의 웹 앱)를 열고, 마우스를 UI 요소 위에 올리기만 하면 AI가 해당 요소의 디자인/접근성/일관성 문제를 <strong>자동 분석</strong>해서 화면 위 패널에 즉시 정리해 보여주는 기능입니다.</p>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title"><span class="icon">🎯</span> 핵심 가치</div>
+      <p>별도 메뉴 이동 없이, 보고 있는 화면 위에서 바로 디자인 문제를 발견하고 수정 요청까지 이어짐</p>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">⚡</span> 즉시 피드백</div>
+      <p>커서 hover 300ms 후 DOM 정보 수집 → AI 분석 → 1~3초 내 결과 오버레이 표시</p>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">🔗</span> Design Studio 연동</div>
+      <p>발견된 문제에서 "수정 요청" 클릭 시 Design Studio 요청 카드가 자동 생성됨</p>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">🖥️</span> 화면 공유 기반</div>
+      <p>기존 ScreenShare 컴포넌트의 캡처 기능을 확장하여 커서 좌표 기반 영역 스크린샷 활용</p>
+    </div>
+  </div>
+  <h3>목표 요약</h3>
+  <table>
+    <tr><th>구분</th><th>목표</th></tr>
+    <tr><td>사용자 경험</td><td>마우스 올리기만으로 디자인 피드백 → 클릭 한 번에 수정 요청 생성</td></tr>
+    <tr><td>분석 정확도</td><td>색상 토큰화, 간격 일관성, 접근성(WCAG AA), 반응형 오류 탐지 80% 이상</td></tr>
+    <tr><td>응답 속도</td><td>hover 후 3초 이내 첫 결과 표시, 상세 분석은 5초 이내</td></tr>
+    <tr><td>적용 범위</td><td>AADS 대시보드 우선 → 이후 NTV2/SF/GO100 확장 가능</td></tr>
+  </table>
+</section>
+
+<!-- 2. 현재 시스템 기반 -->
+<section id="sec2">
+  <h2><span class="num">2</span> 현재 시스템 기반 분석</h2>
+  <p>스마트 커서는 완전 신규가 아니라 기존 AADS 구성요소 위에 구축됩니다.</p>
+  <table>
+    <tr><th>기존 구성요소</th><th>현재 상태</th><th>스마트 커서에서 활용</th></tr>
+    <tr><td><code>ScreenShare.tsx</code></td><td><span class="badge exist">있음</span></td><td>화면 공유 MediaStream + captureFrame() → 커서 위치 기반 영역 캡처로 확장</td></tr>
+    <tr><td><code>Design Studio 패널</code></td><td><span class="badge exist">있음</span></td><td>분석 결과에서 "수정 요청" 클릭 시 Design Studio 요청 카드 자동 생성</td></tr>
+    <tr><td><code>design_audit_service.py</code></td><td><span class="badge exist">있음</span></td><td>색상 토큰, 버튼 패턴, 이모지 감지 → 커서 대상 파일/컴포넌트 집중 스캔</td></tr>
+    <tr><td><code>design_modifications API</code></td><td><span class="badge exist">있음</span></td><td>분석 결과를 modification_request로 저장, context_pack 생성</td></tr>
+    <tr><td><code>design_qa_scorer.py</code></td><td><span class="badge exist">있음</span></td><td>QA 점수화 로직 → 커서 대상 요소의 품질 점수 실시간 계산</td></tr>
+    <tr><td><code>visual_qa_test</code> 도구</td><td><span class="badge exist">있음</span></td><td>브라우저 스크린샷 기반 시각 QA → 영역 스냅샷 QA로 전환</td></tr>
+    <tr><td>커서 좌표 → DOM 매핑</td><td><span class="badge new">신규</span></td><td>elementFromPoint() + Accessibility Tree 추출 레이어 필요</td></tr>
+    <tr><td>실시간 오버레이 UI</td><td><span class="badge new">신규</span></td><td>hover 대상 위에 분석 결과 카드/하이라이트 표시</td></tr>
+    <tr><td>AI 분석 요청 Debounce</td><td><span class="badge new">신규</span></td><td>hover 300ms 안정 시에만 분석 요청 발생 (성능/비용 제어)</td></tr>
+  </table>
+</section>
+
+<!-- 3. 핵심 사용자 플로우 -->
+<section id="sec3">
+  <h2><span class="num">3</span> 핵심 사용자 플로우</h2>
+  <h3>3.1 기본 플로우: 커서 → 분석 → 수정 요청</h3>
+  <div class="flow-diagram">
+    <div class="flow-steps">
+      <div class="flow-step"><div class="step-icon">🔍</div><div class="step-label">인스펙터 ON</div><div class="step-desc">채팅창 또는 단축키로<br>스마트 커서 활성화</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="step-icon">🖱️</div><div class="step-label">요소 Hover</div><div class="step-desc">마우스를 UI 요소 위에<br>300ms 이상 유지</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="step-icon">📐</div><div class="step-label">정보 수집</div><div class="step-desc">DOM + 스타일 + 접근성<br>+ 영역 스크린샷 캡처</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="step-icon">🤖</div><div class="step-label">AI 분석</div><div class="step-desc">디자인 규칙 위반<br>문제점/개선안 생성</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="step-icon">💡</div><div class="step-label">결과 오버레이</div><div class="step-desc">화면 위 패널에<br>문제점/개선안 표시</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="step-icon">📝</div><div class="step-label">수정 요청</div><div class="step-desc">"수정 요청" 버튼 →<br>Design Studio 카드 생성</div></div>
+    </div>
+  </div>
+
+  <h3>3.2 사용 시나리오</h3>
+  <div class="card-grid">
+    <div class="card"><div class="card-title"><span class="icon">📱</span> 시나리오 A: 간격 문제 발견</div><p>CEO가 채팅 목록 위에 커서를 올림 → AI가 "세션 항목 간 간격이 8px/16px 혼용, 12px로 통일 권장" 표시 → "수정 요청" 클릭 → 자동으로 요청 카드 생성</p></div>
+    <div class="card"><div class="card-title"><span class="icon">🎨</span> 시나리오 B: 색상 비일관 탐지</div><p>버튼 위에 커서를 올림 → AI가 "이 버튼 #3b82f6, 같은 페이지 다른 버튼 #2563eb — 디자인 토큰 blue-500으로 통일 권장" 표시</p></div>
+    <div class="card"><div class="card-title"><span class="icon">♿</span> 시나리오 C: 접근성 경고</div><p>텍스트 영역 위에 커서를 올림 → AI가 "대비율 3.2:1 — WCAG AA 기준 4.5:1 미달" 경고 표시, 대비 개선된 색상 추천</p></div>
+    <div class="card"><div class="card-title"><span class="icon">📏</span> 시나리오 D: 레이아웃 점검</div><p>카드 그리드 위에 커서를 올림 → AI가 "768px 이하에서 2열 → 1열 전환 누락, @media 쿼리 추가 권장" 표시</p></div>
+  </div>
+</section>
+
+<!-- 4. 와이어프레임 -->
+<section id="sec4">
+  <h2><span class="num">4</span> 화면 와이어프레임</h2>
+  <div class="wireframe">
+    <div class="wireframe-header">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span style="margin-left:12px">AADS Dashboard — 스마트 커서 인스펙터 활성 상태</span>
+    </div>
+    <div class="wireframe-body">
+      <div class="wf-page">
+        <div class="wf-sidebar">
+          <div style="font-weight:700;margin-bottom:12px;color:var(--accent);font-size:0.9em">🔍 Smart Inspector <span style="float:right;font-size:0.8em;color:var(--accent2)">ON</span></div>
+          <div style="border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:8px;font-size:0.75em;color:var(--text2)">분석 모드: 실시간 | 깊이: 표준</div>
+          <div class="wf-item">📊 전체 페이지 스캔</div>
+          <div class="wf-item active">🖱️ 커서 추적 모드</div>
+          <div class="wf-item">📐 영역 선택 모드</div>
+          <div class="wf-item">📋 분석 히스토리</div>
+          <div style="border-top:1px solid var(--border);padding-top:12px;margin-top:12px">
+            <div style="font-size:0.75em;color:var(--text2);margin-bottom:8px">최근 분석</div>
+            <div style="font-size:0.8em;padding:6px 8px;background:rgba(88,166,255,0.06);border-radius:4px;margin-bottom:4px"><span style="color:var(--error)">⚠️</span> 버튼 색상 비일관 (3건)</div>
+            <div style="font-size:0.8em;padding:6px 8px;background:rgba(88,166,255,0.06);border-radius:4px;margin-bottom:4px"><span style="color:var(--warn)">⚠️</span> 간격 혼용 (2건)</div>
+            <div style="font-size:0.8em;padding:6px 8px;background:rgba(88,166,255,0.06);border-radius:4px"><span style="color:var(--accent2)">✅</span> 접근성 양호 (1건)</div>
+          </div>
+        </div>
+        <div class="wf-content">
+          <div style="font-weight:600;margin-bottom:12px;font-size:0.85em;color:var(--text2)">대상 화면 (채팅 페이지)</div>
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px;font-size:0.8em"><div style="display:flex;gap:8px;align-items:center"><span style="width:28px;height:28px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:0.7em">AI</span><div>안녕하세요! 무엇을 도와드릴까요?</div></div></div>
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:0.8em"><div style="display:flex;gap:8px;align-items:center"><span style="width:28px;height:28px;border-radius:50%;background:var(--purple);display:flex;align-items:center;justify-content:center;font-size:0.7em">👤</span><div>디자인 수정 요청합니다</div></div></div>
+          <div class="wf-cursor-indicator"></div>
+          <div class="wf-cursor-label">🎯 분석 중... Button / class="px-4 py-2"</div>
+          <div style="position:absolute;bottom:12px;left:16px;right:16px"><div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px;font-size:0.8em;display:flex;gap:8px;align-items:center"><span>💬</span><div style="flex:1;color:var(--text2)">메시지를 입력하세요...</div><span style="padding:4px 10px;background:var(--accent);color:var(--bg);border-radius:6px;font-size:0.8em;font-weight:600">전송</span></div></div>
+        </div>
+        <div class="wf-panel">
+          <div class="panel-title">🤖 AI 분석 결과</div>
+          <div style="font-size:0.8em;color:var(--text2);margin-bottom:10px;padding:6px 10px;background:var(--surface);border-radius:6px"><strong>대상:</strong> &lt;button&gt; .chat-send-btn<br><strong>경로:</strong> chat/page.tsx:6832<br><strong>크기:</strong> 64x32px / padding: 4px 10px</div>
+          <div class="wf-issue"><div class="issue-tag">❌ 색상 비일관</div><div style="margin-top:4px">이 버튼 <code>#58a6ff</code>, 상단 버튼 <code>#3b82f6</code> — <code>blue-500</code> 토큰으로 통일 권장</div></div>
+          <div class="wf-issue"><div class="issue-tag">⚠️ 접근성</div><div style="margin-top:4px">텍스트 대비율 3.8:1 → WCAG AA 기준 4.5:1 미달. <code>#ffffff</code> 텍스트 또는 배경 어둡게 권장</div></div>
+          <div class="wf-improve"><div class="improve-tag">💡 개선안</div><div style="margin-top:4px">padding <code>4px 10px</code> → <code>8px 16px</code>로 터치 영역 확대 (최소 44px 권장)</div></div>
+          <div style="margin-top:12px;display:flex;gap:6px"><button style="flex:1;padding:8px;background:var(--accent);color:var(--bg);border:none;border-radius:6px;font-weight:700;font-size:0.8em;cursor:pointer">📝 수정 요청 생성</button><button style="padding:8px 12px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:0.8em;cursor:pointer">📋 복사</button></div>
+          <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)"><div style="font-size:0.8em;font-weight:700;color:var(--warn);margin-bottom:8px">📊 요소 품질 점수</div><div style="display:flex;gap:4px;margin-bottom:6px"><div style="flex:3;height:6px;background:var(--accent2);border-radius:3px"></div><div style="flex:1;height:6px;background:var(--error);border-radius:3px"></div><div style="flex:0.5;height:6px;background:var(--warn);border-radius:3px"></div></div><div style="font-size:0.75em;color:var(--text2);display:flex;justify-content:space-between"><span>색상: 60</span><span>간격: 85</span><span>접근성: 45</span></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 5. 아키텍처 -->
+<section id="sec5">
+  <h2><span class="num">5</span> 아키텍처 설계</h2>
+  <div class="arch-box">
+    <div class="arch-layers">
+      <div class="arch-layer frontend"><div class="layer-label">🖥️ Frontend<br>(Next.js)</div><div class="layer-items"><div class="layer-item">SmartCursorOverlay</div><div class="layer-item">ElementInspector</div><div class="layer-item">AnalysisPanel</div><div class="layer-item">ScreenShare (확장)</div><div class="layer-item">DesignStudioCard</div></div></div>
+      <div class="arch-layer backend"><div class="layer-label">⚙️ Backend<br>(FastAPI)</div><div class="layer-items"><div class="layer-item">smart_cursor_api.py</div><div class="layer-item">design_audit_service.py</div><div class="layer-item">design_modifications.py</div><div class="layer-item">design_context_builder.py</div><div class="layer-item">design_qa_scorer.py</div></div></div>
+      <div class="arch-layer ai"><div class="layer-label">🤖 AI 엔진</div><div class="layer-items"><div class="layer-item">컨텍스트 조합기</div><div class="layer-item">규칙 기반 검증기</div><div class="layer-item">LLM 분석기</div><div class="layer-item">개선안 생성기</div></div></div>
+      <div class="arch-layer infra"><div class="layer-label">🗄️ Storage</div><div class="layer-items"><div class="layer-item">design_screens</div><div class="layer-item">design_modification_requests</div><div class="layer-item">design_context_packs</div><div class="layer-item">smart_cursor_cache</div></div></div>
+    </div>
+  </div>
+
+  <h3>5.1 데이터 플로우</h3>
+  <pre><code>  [브라우저]                      [AADS Backend]                   [AI Engine]
+     |                                |                                |
+     |  1. mousemove (debounce 300ms) |                                |
+     |------------------------------&gt;|                                |
+     |  2. elementFromPoint()         |                                |
+     |     + getComputedStyle()       |                                |
+     |     + a11y tree extract        |                                |
+     |  3. region screenshot (canvas) |                                |
+     |------------------------------&gt;|                                |
+     |  POST /smart-cursor/analyze    |  4. 규칙 기반 1차 검증          |
+     |  { dom_info, styles, a11y,     |     (color tokens, spacing,    |
+     |    screenshot_b64, cursor_xy } |      button patterns)          |
+     |                                |------------------------------&gt;|
+     |                                |  5. LLM 분석 (필요 시만)       |
+     |                                |     { 컨텍스트 + 캡처 이미지 } |
+     |                                |&lt;------------------------------|
+     |                                |  6. 결과 정규화 + 캐싱          |
+     |&lt;------------------------------|                                |
+     |  7. 오버레이 렌더링             |                                |
+     |     + 수정 요청 버튼            |                                |</code></pre>
+</section>
+
+<!-- 6. 컴포넌트 상세 -->
+<section id="sec6">
+  <h2><span class="num">6</span> 컴포넌트 상세 설계</h2>
+  <h3>6.1 Frontend 컴포넌트</h3>
+  <table>
+    <tr><th>컴포넌트</th><th>파일</th><th>역할</th><th>상태</th></tr>
+    <tr><td><code>SmartCursorProvider</code></td><td><code>SmartCursor/Provider.tsx</code></td><td>Context API로 인스펙터 ON/OFF, 분석 모드, 결과 상태 관리</td><td><span class="badge new">신규</span></td></tr>
+    <tr><td><code>ElementInspector</code></td><td><code>SmartCursor/ElementInspector.tsx</code></td><td>mousemove 리스너, elementFromPoint(), debounce, DOM/스타일/접근성 정보 수집</td><td><span class="badge new">신규</span></td></tr>
+    <tr><td><code>CursorHighlight</code></td><td><code>SmartCursor/CursorHighlight.tsx</code></td><td>hover 대상 요소 위에 하이라이트 border + 태그명/클래스 라벨 오버레이</td><td><span class="badge new">신규</span></td></tr>
+    <tr><td><code>AnalysisPanel</code></td><td><code>SmartCursor/AnalysisPanel.tsx</code></td><td>분석 결과(문제점/개선안/점수) 우측 패널 표시. "수정 요청 생성" 버튼 포함</td><td><span class="badge new">신규</span></td></tr>
+    <tr><td><code>ScreenShare</code></td><td><code>chat/ScreenShare.tsx</code></td><td>기존 캡처에 영역 캡처(cropToRect) 메서드 추가</td><td><span class="badge exist">확장</span></td></tr>
+    <tr><td><code>DesignStudioCard</code></td><td><code>chat/page.tsx</code></td><td>기존 Design Studio 패널 — 스마트 커서 결과에서 카드 생성 연동</td><td><span class="badge exist">확장</span></td></tr>
+  </table>
+
+  <h3>6.2 ElementInspector 핵심 로직</h3>
+  <pre><code>// SmartCursor/ElementInspector.tsx — 핵심 pseudocode
+
+function handleMouseMove(e: MouseEvent) {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() =&gt; inspectElement(e.clientX, e.clientY), 300);
+}
+
+async function inspectElement(x: number, y: number) {
+  const el = document.elementFromPoint(x, y);
+  if (!el || el === lastInspectedElement) return;
+
+  const domInfo = {
+    tagName: el.tagName,
+    className: el.className,
+    id: el.id,
+    textContent: el.textContent?.slice(0, 200),
+    rect: el.getBoundingClientRect(),
+    parentChain: getParentChain(el, 3),
+  };
+
+  const styles = {
+    computed: extractKeyStyles(getComputedStyle(el)),
+    tailwindClasses: extractTailwindClasses(el),
+  };
+
+  const a11y = {
+    role: el.getAttribute('role'),
+    ariaLabel: el.getAttribute('aria-label'),
+    tabIndex: el.tabIndex,
+    contrastRatio: calculateContrastRatio(styles.computed),
+  };
+
+  const screenshot = await screenShareRef.current?.captureRegion(domInfo.rect);
+
+  const result = await fetch('/api/v1/smart-cursor/analyze', {
+    method: 'POST',
+    body: JSON.stringify({ domInfo, styles, a11y, screenshot_b64: screenshot, cursor: {x, y} }),
+  });
+
+  setAnalysisResult(await result.json());
+  setHighlightRect(domInfo.rect);
+}</code></pre>
+
+  <h3>6.3 AnalysisPanel 결과 구조</h3>
+  <pre><code>interface AnalysisResult {
+  target: {
+    tagName: string;
+    selector: string;
+    componentPath: string;
+    filePath: string;
+  };
+  issues: Array&lt;{
+    severity: 'error' | 'warning' | 'info';
+    category: 'color' | 'spacing' | 'accessibility' | 'responsive' | 'consistency' | 'typography';
+    title: string;
+    description: string;
+    current: string;
+    recommended: string;
+    rule: string;
+  }&gt;;
+  improvements: Array&lt;{
+    priority: 'high' | 'medium' | 'low';
+    title: string;
+    description: string;
+    before: string;
+    after: string;
+  }&gt;;
+  scores: {
+    color: number;       // 0~100
+    spacing: number;
+    accessibility: number;
+    consistency: number;
+    overall: number;
+  };
+  meta: {
+    analyzedAt: string;
+    latencyMs: number;
+    usedLLM: boolean;
+    cacheHit: boolean;
+  };
+}</code></pre>
+</section>
+
+<!-- 7. API 스펙 -->
+<section id="sec7">
+  <h2><span class="num">7</span> API 스펙</h2>
+  <h3>7.1 엔드포인트 목록</h3>
+  <table>
+    <tr><th>Method</th><th>Path</th><th>설명</th></tr>
+    <tr><td><code>POST</code></td><td><code>/api/v1/smart-cursor/analyze</code></td><td>커서 위치 요소 분석 요청. 규칙 기반 1차 → LLM 2차(필요 시)</td></tr>
+    <tr><td><code>POST</code></td><td><code>/api/v1/smart-cursor/analyze-region</code></td><td>드래그로 선택한 영역 분석 (복수 요소)</td></tr>
+    <tr><td><code>POST</code></td><td><code>/api/v1/smart-cursor/page-scan</code></td><td>전체 페이지 일괄 스캔 (design_audit_service 확장)</td></tr>
+    <tr><td><code>GET</code></td><td><code>/api/v1/smart-cursor/history</code></td><td>최근 분석 히스토리 (세션별)</td></tr>
+    <tr><td><code>POST</code></td><td><code>/api/v1/smart-cursor/to-design-request</code></td><td>분석 결과를 Design Studio 수정 요청으로 변환/저장</td></tr>
+  </table>
+
+  <h3>7.2 분석 요청 페이로드</h3>
+  <pre><code>// POST /api/v1/smart-cursor/analyze
+{
+  "project_key": "AADS",
+  "page_url": "https://aads.newtalk.kr/chat",
+  "cursor": { "x": 450, "y": 280 },
+  "dom_info": {
+    "tag_name": "button",
+    "class_name": "px-4 py-2 bg-blue-500 text-white rounded",
+    "id": "send-btn",
+    "text_content": "전송",
+    "rect": { "x": 430, "y": 265, "width": 64, "height": 32 },
+    "parent_chain": [
+      { "tag": "div", "class": "flex gap-2 items-center" },
+      { "tag": "div", "class": "chat-input-container" }
+    ]
+  },
+  "styles": {
+    "color": "#ffffff",
+    "background-color": "#3b82f6",
+    "padding": "8px 16px",
+    "font-size": "14px",
+    "border-radius": "6px"
+  },
+  "a11y": {
+    "role": "button",
+    "aria_label": null,
+    "tab_index": 0,
+    "contrast_ratio": 4.2
+  },
+  "screenshot_b64": "data:image/png;base64,...",
+  "analysis_depth": "standard"
+}</code></pre>
+
+  <h3>7.3 분석 응답</h3>
+  <pre><code>// 200 OK
+{
+  "target": {
+    "tag_name": "button",
+    "selector": "#send-btn",
+    "component_path": "chat/page.tsx:6832",
+    "file_path": "src/app/chat/page.tsx"
+  },
+  "issues": [
+    {
+      "severity": "warning",
+      "category": "accessibility",
+      "title": "대비율 미달",
+      "description": "텍스트/배경 대비율 4.2:1 — WCAG AA 기준 4.5:1 미달",
+      "current": "contrast 4.2:1",
+      "recommended": "contrast &gt;= 4.5:1 (배경 #2563eb 사용 시 5.1:1)",
+      "rule": "wcag-aa-contrast"
+    }
+  ],
+  "improvements": [
+    {
+      "priority": "medium",
+      "title": "디자인 토큰 통일",
+      "description": "bg-blue-500 대신 디자인 시스템의 --accent 토큰 사용 권장",
+      "before": "className=\"bg-blue-500\"",
+      "after": "className=\"bg-[var(--ct-accent)]\""
+    }
+  ],
+  "scores": { "color": 65, "spacing": 80, "accessibility": 55, "consistency": 70, "overall": 68 },
+  "meta": { "analyzed_at": "2026-05-13T08:30:00+09:00", "latency_ms": 1420, "used_llm": false, "cache_hit": false }
+}</code></pre>
+</section>
+
+<!-- 8. AI 분석 엔진 -->
+<section id="sec8">
+  <h2><span class="num">8</span> AI 분석 엔진 설계</h2>
+  <h3>8.1 2단계 분석 전략</h3>
+  <p>비용 효율을 위해 <strong>규칙 기반 1차 → LLM 2차</strong> 계층 구조를 사용합니다.</p>
+  <table>
+    <tr><th>단계</th><th>방식</th><th>속도</th><th>비용</th><th>대상</th></tr>
+    <tr><td>1차</td><td>규칙 기반 검증기</td><td>&lt; 100ms</td><td>$0</td><td>색상 토큰 일관성, WCAG 대비율, 간격 패턴, 터치 영역, 버튼 패턴 일관성</td></tr>
+    <tr><td>2차</td><td>LLM 시각 분석</td><td>1~3초</td><td>~$0.005/요청</td><td>레이아웃 구조 판단, 정보 계층 분석, UX 카피 품질, 시각적 균형</td></tr>
+  </table>
+
+  <h3>8.2 규칙 기반 검증 항목</h3>
+  <table>
+    <tr><th>카테고리</th><th>검증 규칙</th><th>소스</th></tr>
+    <tr><td>색상</td><td>하드코딩된 hex/rgb → 디자인 토큰 매핑 위반 탐지</td><td><code>design_audit_service.py</code> HEX_COLOR_RE, RGB_COLOR_RE</td></tr>
+    <tr><td>접근성</td><td>WCAG AA 대비율(4.5:1), aria-label 누락, role 미지정</td><td>프론트 수집 데이터 기반 계산</td></tr>
+    <tr><td>간격</td><td>같은 컨테이너 내 자식 요소 간 margin/padding 불일치</td><td>DOM parent_chain + computed style 비교</td></tr>
+    <tr><td>버튼</td><td>같은 페이지 내 버튼 클래스 패턴 불일치</td><td><code>design_audit_service.py</code> BUTTON_CLASS_RE</td></tr>
+    <tr><td>터치</td><td>인터랙티브 요소 최소 44x44px 미달</td><td>rect 크기 검사</td></tr>
+    <tr><td>타이포</td><td>font-size 계단(12/14/16/20/24)에서 벗어난 비표준 크기</td><td>computed font-size 검사</td></tr>
+  </table>
+
+  <h3>8.3 LLM 분석 트리거 조건</h3>
+  <ul class="checklist">
+    <li><span class="check">→</span> 사용자가 "상세 분석" 모드를 선택했을 때</li>
+    <li><span class="check">→</span> 1차 규칙 검증에서 문제가 0건일 때 (놓친 문제가 있을 수 있으므로)</li>
+    <li><span class="check">→</span> 복잡한 레이아웃 요소 (grid, flex 컨테이너)일 때</li>
+    <li><span class="check">→</span> 사용자가 "수정 요청 생성" 전에 상세 맥락이 필요할 때</li>
+  </ul>
+
+  <h3>8.4 LLM 프롬프트 구조</h3>
+  <pre><code>SYSTEM:
+  당신은 UI/UX 디자인 전문 감사 AI입니다.
+  주어진 UI 요소의 DOM 정보, 스타일, 접근성 상태, 스크린샷을 분석하여
+  문제점과 개선안을 구조화된 JSON으로 반환합니다.
+
+USER:
+  ## 분석 대상
+  - 요소: {tag_name} #{id} .{class_name}
+  - 파일: {file_path}:{line}
+  - 페이지: {page_url}
+
+  ## 수집 정보
+  DOM: {dom_info_json}
+  스타일: {styles_json}
+  접근성: {a11y_json}
+  1차 검증 결과: {rule_based_results}
+  프로젝트 디자인 결정: {design_decisions_context}
+
+  ## 요청
+  1차에서 놓친 디자인 문제점과 개선안을 분석하세요.
+  레이아웃 구조, 정보 계층, 시각적 균형, UX 카피 품질을 중심으로 봐주세요.</code></pre>
+</section>
+
+<!-- 9. 구현 로드맵 -->
+<section id="sec9">
+  <h2><span class="num">9</span> 구현 로드맵</h2>
+  <div class="phase-timeline">
+    <div class="phase active"><div class="phase-dot"></div><div class="phase-name">Phase 1</div><div class="phase-period">MVP Core</div><div class="phase-detail">커서 추적 + 규칙 검증<br>+ 오버레이 표시</div></div>
+    <div class="phase"><div class="phase-dot"></div><div class="phase-name">Phase 2</div><div class="phase-period">AI 연동</div><div class="phase-detail">LLM 2차 분석<br>+ Design Studio 연결</div></div>
+    <div class="phase"><div class="phase-dot"></div><div class="phase-name">Phase 3</div><div class="phase-period">고도화</div><div class="phase-detail">영역 선택 + 페이지 스캔<br>+ 히스토리</div></div>
+    <div class="phase"><div class="phase-dot"></div><div class="phase-name">Phase 4</div><div class="phase-period">확장</div><div class="phase-detail">외부 URL 분석<br>+ 다른 프로젝트 적용</div></div>
+  </div>
+
+  <h3>Phase 1 — MVP Core (약 3일)</h3>
+  <table>
+    <tr><th>Task ID</th><th>작업</th><th>파일</th><th>산출물</th></tr>
+    <tr><td>SC-001</td><td>SmartCursorProvider + ElementInspector</td><td><code>SmartCursor/Provider.tsx</code><br><code>SmartCursor/ElementInspector.tsx</code></td><td>mousemove → elementFromPoint → DOM/스타일/접근성 수집</td></tr>
+    <tr><td>SC-002</td><td>CursorHighlight 오버레이</td><td><code>SmartCursor/CursorHighlight.tsx</code></td><td>hover 요소 위에 경계선 + 태그/클래스 라벨 표시</td></tr>
+    <tr><td>SC-003</td><td>규칙 기반 분석 API</td><td><code>app/api/smart_cursor.py</code></td><td>POST /smart-cursor/analyze — 6종 규칙 검증</td></tr>
+    <tr><td>SC-004</td><td>AnalysisPanel 기본 UI</td><td><code>SmartCursor/AnalysisPanel.tsx</code></td><td>문제점/개선안/점수 우측 패널</td></tr>
+    <tr><td>SC-005</td><td>채팅창 토글 버튼</td><td><code>chat/page.tsx</code></td><td>"🔍" 버튼으로 인스펙터 ON/OFF</td></tr>
+  </table>
+
+  <h3>Phase 2 — AI 연동 (약 2일)</h3>
+  <table>
+    <tr><th>Task ID</th><th>작업</th><th>산출물</th></tr>
+    <tr><td>SC-006</td><td>LLM 2차 분석 파이프라인</td><td>규칙 결과 + 스크린샷 → Haiku 분석 → 결과 병합</td></tr>
+    <tr><td>SC-007</td><td>Design Studio 수정 요청 연결</td><td>"수정 요청" 버튼 → design_modification_requests INSERT + context_pack 자동 생성</td></tr>
+    <tr><td>SC-008</td><td>ScreenShare captureRegion 확장</td><td>특정 rect 영역만 캡처하는 메서드 추가</td></tr>
+  </table>
+
+  <h3>Phase 3 — 고도화 (약 2일)</h3>
+  <table>
+    <tr><th>Task ID</th><th>작업</th><th>산출물</th></tr>
+    <tr><td>SC-009</td><td>영역 선택 모드 (드래그)</td><td>마우스 드래그로 분석 영역 지정, 복수 요소 일괄 분석</td></tr>
+    <tr><td>SC-010</td><td>전체 페이지 스캔</td><td>현재 보이는 뷰포트 전체를 자동 스캔, 이슈 목록 일괄 표시</td></tr>
+    <tr><td>SC-011</td><td>분석 히스토리</td><td>세션별 분석 이력 저장, 이전 분석 재조회, 변화 추적</td></tr>
+  </table>
+
+  <h3>Phase 4 — 확장 (약 2일)</h3>
+  <table>
+    <tr><th>Task ID</th><th>작업</th><th>산출물</th></tr>
+    <tr><td>SC-012</td><td>외부 URL 분석</td><td>URL 입력 → browser_navigate → 스크린샷 + DOM 수집 → 분석</td></tr>
+    <tr><td>SC-013</td><td>멀티 프로젝트 적용</td><td>NTV2/SF/GO100 프로젝트별 디자인 규칙 세트 분리 적용</td></tr>
+    <tr><td>SC-014</td><td>단축키 + 제스처</td><td>Ctrl+Shift+I 토글, Esc 닫기, 방향키 요소 이동</td></tr>
+  </table>
+</section>
+
+<!-- 10. 검수 기준 -->
+<section id="sec10">
+  <h2><span class="num">10</span> 검수 기준 및 KPI</h2>
+  <table>
+    <tr><th>항목</th><th>기준</th><th>측정 방법</th></tr>
+    <tr><td>응답 속도</td><td>hover 후 3초 이내 첫 결과 표시</td><td>meta.latency_ms 측정, P95 &lt; 3000ms</td></tr>
+    <tr><td>분석 정확도</td><td>규칙 기반 탐지: 알려진 문제의 80% 이상 검출</td><td>테스트 페이지(의도적 문제 삽입)로 검증</td></tr>
+    <tr><td>오탐률</td><td>False positive &lt; 20%</td><td>정상 요소 100개 스캔 시 오탐 20개 미만</td></tr>
+    <tr><td>비용 효율</td><td>LLM 호출 비율 &lt; 30% (70%는 규칙만으로 처리)</td><td>meta.used_llm 통계</td></tr>
+    <tr><td>수정 요청 전환율</td><td>분석 결과 중 30% 이상이 수정 요청으로 전환</td><td>to-design-request / analyze 호출 비율</td></tr>
+    <tr><td>UI 비파괴</td><td>인스펙터 ON 상태에서 기존 채팅/대시보드 기능 100% 정상</td><td>기존 E2E 테스트 통과</td></tr>
+    <tr><td>메모리</td><td>인스펙터 활성 시 추가 메모리 &lt; 50MB</td><td>Chrome DevTools Memory 프로파일</td></tr>
+  </table>
+
+  <h3>완료 판정 체크리스트 (Phase 1 MVP)</h3>
+  <ul class="checklist">
+    <li><span class="check">☐</span> 채팅창에서 "🔍" 버튼으로 인스펙터 ON/OFF 토글 가능</li>
+    <li><span class="check">☐</span> 마우스 hover 시 대상 요소에 하이라이트 표시</li>
+    <li><span class="check">☐</span> 300ms debounce 후 분석 요청 발생</li>
+    <li><span class="check">☐</span> 우측 패널에 문제점/개선안/품질 점수 표시</li>
+    <li><span class="check">☐</span> 색상 토큰, 접근성 대비, 간격 일관성 중 2개 이상 규칙 작동</li>
+    <li><span class="check">☐</span> "수정 요청 생성" 버튼 동작 (Design Studio API 연동)</li>
+    <li><span class="check">☐</span> 인스펙터 OFF 시 오버레이 완전 제거, 기존 기능 영향 없음</li>
+    <li><span class="check">☐</span> 분석 응답 P95 &lt; 3초</li>
+  </ul>
+</section>
+
+<!-- 11. 리스크 -->
+<section id="sec11">
+  <h2><span class="num">11</span> 리스크 및 대응</h2>
+  <table>
+    <tr><th>리스크</th><th>영향</th><th>대응</th></tr>
+    <tr><td style="color:var(--error)">성능 저하</td><td>mousemove 이벤트 폭주로 메인 스레드 블로킹</td><td>300ms debounce + requestAnimationFrame + 동시 분석 1개 제한</td></tr>
+    <tr><td style="color:var(--error)">LLM 비용 폭주</td><td>빠른 마우스 이동 시 분석 요청 폭주</td><td>규칙 1차 필터 70% 처리 + LLM은 "상세 분석" 모드에서만 + 세션당 50회 캡</td></tr>
+    <tr><td style="color:var(--warn)">Cross-Origin 제약</td><td>외부 URL 분석 시 iframe/DOM 접근 불가</td><td>Phase 1은 같은 도메인만 지원. Phase 4에서 CDP 기반 분석</td></tr>
+    <tr><td style="color:var(--warn)">오탐 누적</td><td>규칙이 엄격하면 정상 요소에도 경고 → 신뢰도 저하</td><td>"이 문제 무시" 버튼 + 오탐 피드백으로 규칙 튜닝</td></tr>
+    <tr><td style="color:var(--warn)">React 렌더링 충돌</td><td>오버레이가 DOM을 직접 조작 → 상태 불일치</td><td>React Portal(document.body)로 독립 레이어 렌더링</td></tr>
+    <tr><td style="color:var(--accent)">스크린샷 정확도</td><td>MediaStream 캡처가 실제 화면과 불일치 가능</td><td>canvas 해상도를 devicePixelRatio에 맞춤. 영역 좌표 보정</td></tr>
+  </table>
+</section>
+
+<!-- 12. 비용 -->
+<section id="sec12">
+  <h2><span class="num">12</span> 비용 추정</h2>
+  <h3>12.1 개발 비용 (러너 기준)</h3>
+  <table>
+    <tr><th>Phase</th><th>Task 수</th><th>예상 비용</th><th>기간</th></tr>
+    <tr><td>Phase 1 (MVP Core)</td><td>5</td><td>$5~8</td><td>3일</td></tr>
+    <tr><td>Phase 2 (AI 연동)</td><td>3</td><td>$3~5</td><td>2일</td></tr>
+    <tr><td>Phase 3 (고도화)</td><td>3</td><td>$3~5</td><td>2일</td></tr>
+    <tr><td>Phase 4 (확장)</td><td>3</td><td>$3~5</td><td>2일</td></tr>
+    <tr style="font-weight:700"><td>합계</td><td>14</td><td>$14~23</td><td>~9일</td></tr>
+  </table>
+
+  <h3>12.2 운영 비용 (월간 추정)</h3>
+  <table>
+    <tr><th>항목</th><th>단가</th><th>예상 사용량</th><th>월 비용</th></tr>
+    <tr><td>규칙 기반 분석</td><td>$0 (서버 내부)</td><td>~500회/월</td><td>$0</td></tr>
+    <tr><td>LLM 2차 분석 (Haiku)</td><td>~$0.005/요청</td><td>~150회/월 (30%)</td><td>~$0.75</td></tr>
+    <tr><td>스크린샷 저장</td><td>로컬 디스크</td><td>~200MB/월</td><td>$0</td></tr>
+    <tr style="font-weight:700"><td>합계</td><td></td><td></td><td>~$1/월</td></tr>
+  </table>
+  <p style="font-size:0.9em;color:var(--text2)">LLM은 Haiku 기준. CEO가 일상적으로 사용해도 월 $1 미만으로 추정됩니다. 규칙 기반이 70% 이상 처리하므로 비용 효율적입니다.</p>
+</section>
+
+</div>
+
+<div class="footer">
+  AADS Smart Cursor Inspector — 상세 구현 기획서 v1.0<br>
+  2026-05-13 | CTO AI (Claude Opus) | CEO moongoby<br>
+  <span style="color:var(--accent)">AADS 자율 AI 개발 시스템</span>
+</div>
+
+</body>
+</html>

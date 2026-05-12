@@ -812,6 +812,20 @@
 - 조치: `app/main.py` startup resume claim도 placeholder가 있으면 실행의 `assistant_message_id`를 placeholder id로 정렬하도록 변경했다.
 - 검증: `python3 -m py_compile app/main.py app/routers/chat.py app/services/chat_service.py` 통과. `pytest -q tests/unit/test_tools_and_pipeline.py -k 'last_response or streaming_status or final_save'` 3개 통과. `bash scripts/reload-api.sh` 성공(`재로드=45개`). DB 실측 기준 09:54 KST에 `running/retrying` 0건, `streaming_placeholder` 0건.
 
+## 2026-05-13 - DB 기반 미디어/LLM 모델 라우팅 및 어드민 반영
+
+- 작업 ID: `AADS-MEDIA-ADMIN-DB-CONFIG-P1-20260513`, 대상 채팅 세션 `8ad08cc2-620c-4a70-8305-74a8d9b43c4e`.
+- 변경 파일: `app/services/media_generation_service.py`, `app/api/llm_models.py`, `app/api/image.py`, `app/api/ceo_chat_tools.py`, `app/services/tool_executor.py`, `app/services/tool_registry.py`, `aads-dashboard/src/app/admin/model-routing/page.tsx`, `aads-dashboard/src/lib/api.ts`, `aads-dashboard/src/components/Sidebar.tsx`, `aads-dashboard/src/app/settings/page.tsx`, `migrations/089_model_routing_preferences.sql`, `tests/unit/test_media_generation_service.py`, `tests/unit/test_model_routing_admin_static.py`.
+- DB migration/seed: `migrations/089_model_routing_preferences.sql`가 `model_routing_preferences`를 idempotent 생성하고, `llm_models`/`chat_model_preferences`에 CEO 지정 모델을 seed한다. 기본값은 기존 default가 없을 때만 `image=gpt-image-2`, `edit_image=gpt-image-2`, `video=sora-2`, `llm=gpt-5.5`로 설정한다.
+- 라우팅: `MediaGenerationService.resolve_route()` 순서를 `explicit request override > DB default/preference > env/config fallback > NOT_CONFIGURED/disabled/provider unavailable`로 변경했다. `imagen-4.0-*` prefix는 계속 인식하며, disabled/default 미설정/adapter pending은 `availability`, `route_source`, `MODEL_DISABLED`/`NOT_CONFIGURED`/`PROVIDER_UNAVAILABLE` 상태로 반환한다.
+- API/Admin: `/api/v1/llm-models/routing-preferences` GET/PUT을 추가했다. 대시보드 `/admin/model-routing`에서 이미지/이미지편집/동영상/LLM별 provider, model_id, availability, enabled/default, notes를 조회하고 기본 모델/활성 상태를 저장할 수 있다.
+- 검증 SQL:
+  - `SELECT route_key, provider, model_id, is_enabled, is_default, notes FROM model_routing_preferences ORDER BY route_key, display_order;`
+  - `SELECT provider, model_id, execution_model_id, is_selectable, is_executable, verification_status FROM llm_models WHERE model_id IN ('gpt-image-2','imagen-4.0-generate-001','gemini-3.1-flash-image-preview','sora-2','sora-2-pro','veo-3.1-generate-preview','gpt-5.5','claude-opus-4-7','gemini-3.1-pro-preview') ORDER BY provider, model_id;`
+  - `SELECT preference_key, provider, model_id, is_favorite, is_pinned FROM chat_model_preferences WHERE model_id IN ('gpt-5.5','claude-opus-4-7','gemini-3.1-pro-preview') ORDER BY display_order;`
+- 검증 명령: `python3 -m py_compile app/services/media_generation_service.py app/api/llm_models.py app/api/image.py app/services/tool_executor.py app/api/ceo_chat_tools.py app/services/tool_registry.py` 통과. `python3 -m pytest -q tests/unit/test_media_generation_service.py tests/unit/test_model_routing_admin_static.py` 13개 통과. `git diff --check` 통과. `npx tsc --noEmit --pretty false`는 로컬 `tsc`가 없어 npm registry 조회를 시도했고, 네트워크 제한(`ENOTFOUND registry.npmjs.org`)으로 수행되지 않았다.
+- 상태: 변경분은 local commit 대상으로 정리했고, push/deploy는 수행하지 않았다.
+
 ## 2026-05-12 09:54 KST - 채팅 응답 사라짐 재발 원인 확정 및 검증 갱신
 
 - 원인: 09:50 KST active 컨테이너 재시작(SIGTERM) 중 현재 응답의 in-memory producer가 사라졌고, DB에는 `retrying` 실행과 `streaming_placeholder` 본문만 남았다. 해당 실행의 `assistant_message_id`는 과거 limit 장애 안내 메시지를 가리켜 `COALESCE(am.content, pm.content)` 계열 조회가 최신 placeholder 본문을 놓칠 수 있었다.
