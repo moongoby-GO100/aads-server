@@ -182,10 +182,11 @@ def build_command(message: str) -> Optional[Dict[str, Any]]:
 
     # 16. 브라우저 파일 업로드
     if _match_any(msg_lower, _BROWSER_UPLOAD_PATTERNS):
+        paths = _extract_paths(msg)
         return {
             "type": "browser_file_upload",
             "selector": _extract_selector(msg, default="input[type=file]"),
-            "file_paths": _extract_paths(msg),
+            "file_paths": paths,
         }
 
     # 17. 브라우저 다운로드

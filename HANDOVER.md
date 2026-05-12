@@ -908,3 +908,16 @@
 - 배경: 위 세션 선주입 패치 후에도 Agent SDK 자동 트리거 경로에서는 `check_task_status` 기본 범위 결정이 `current_chat_session_id`만 보고 있어 `session_id: null`처럼 보이거나, 자동 트리거 안내문이 여전히 `session_id` 수동 전달을 요구하는 불일치가 남아 있었다.
 - 조치: `app/services/tool_executor.py`, `app/api/ceo_chat_tools.py`의 `_resolve_task_scope()`가 `_resolve_bound_chat_session_id()`를 사용하도록 바꿔 Agent SDK active chat binding까지 같은 규칙으로 적용했다. `app/services/chat_service.py`의 자동 트리거 안내문도 `pipeline_runner_submit`, `pipeline_runner_submit_batch`, `check_task_status` 모두 서버가 현재 채팅 세션을 자동 주입한다고 명시하도록 정리했다.
 - 검증: `python3 -m py_compile app/services/tool_executor.py app/api/ceo_chat_tools.py app/services/chat_service.py tests/unit/test_runner_scope_defaults.py` 통과. `pytest -q tests/test_pc_agent_command_builder.py tests/unit/test_runner_scope_defaults.py tests/unit/test_tools_and_pipeline.py` 99개 통과. 신규 회귀 테스트로 Agent SDK active session만 있을 때 `check_task_status`와 `pipeline_runner_status`가 현재 세션 필터를 유지하는지 확인했다.
+
+## 2026-05-12 16:11 KST - PC Agent 브라우저 신규 명령 자동 업데이트 유도
+
+- 배경: Browser Bridge 세션은 `local_agent`로 남아 있었고 `8102` green 슬롯의 `/api/v1/pc-agent/health`는 PC Agent 1개 연결을 보고했지만, `browser_check` 더미 실행이 `지원하지 않는 명령: browser_check`로 실패했다. 원인은 CEO PC에서 실행 중인 PC Agent 코드가 신규 브라우저 명령 핸들러를 아직 받지 못했는데 서버와 로컬 버전이 모두 `1.0.20`이라 자동 업데이트가 버전 차이를 감지하지 못한 상태였다.
+- 조치: `app/services/pc_agent_command_builder.py`에 남아 있던 병합 충돌 마커를 제거해 업로드 자연어 명령 빌더를 복구하고, `pc_agent/VERSION`을 `1.0.21`로 올려 PC Agent 5분 주기 자동 업데이트 루프가 새 ZIP 다운로드와 자체 재기동을 수행하도록 유도했다.
+- 검증: `curl http://127.0.0.1:8102/api/v1/kakao-bot/agent/version` 응답이 `version=1.0.21`로 변경됨을 확인했다. `python3 -m py_compile app/services/pc_agent_command_builder.py pc_agent/agent.py pc_agent/launcher.py pc_agent/commands/browser_auto.py pc_agent/commands/__init__.py` 통과. `pytest -q tests/test_pc_agent_command_builder.py tests/unit/test_browser_bridge.py tests/unit/test_tools_and_pipeline.py` 107개 통과.
+- 남은 확인: CEO PC Agent가 다음 업데이트 주기 후 재접속하면 `browser_check`/`browser_upload_file` 더미 실행이 `지원하지 않는 명령`이 아닌 selector/file validation 오류로 바뀌는지 확인해야 한다. 즉시 필요하면 CEO PC에서 `run.bat` 재실행이 가장 빠른 강제 갱신 경로다.
+
+## 2026-05-12 16:16 KST - Backend Blue-Green 배포 상태 파일 보정
+
+- 배경: nginx upstream은 `8102` green 슬롯이 active였지만 `.active_port`가 `8100`으로 남아 `deploy.sh bluegreen`이 실제 active 슬롯을 전환 대상으로 오판했다. upstream 파일에는 API와 WS upstream의 non-backup 라인이 각각 있어 기존 `grep -c` 기준이 2줄을 보고 상태 파일 fallback으로 떨어졌다.
+- 조치: `deploy.sh`의 active port 판정을 non-backup 포트의 고유값(`sort -u`) 기준으로 바꾸고, active container도 판정된 포트에서 직접 동기화하도록 수정했다. 이후 standby `8100`의 stale active task 1건은 DB상 완료 응답 저장을 확인한 뒤 `AADS_DEPLOY_ALLOW_BUSY_TARGET=true`로 standby 한정 rebuild를 허용해 blue-green 전환을 완료했다.
+- 검증: `bash -n deploy.sh` 통과. `bash /root/aads/aads-server/deploy.sh bluegreen` 1차는 잘못된 상태 파일 때문에 target busy로 중단됐고, 패치 후 `AADS_DEPLOY_ALLOW_BUSY_TARGET=true bash /root/aads/aads-server/deploy.sh bluegreen`은 Phase 0.5~6 모두 통과했다. 배포 후 `.active_port=8100`, `.active_container=aads-server`, `curl http://127.0.0.1:8100/api/v1/health` 및 `curl https://aads.newtalk.kr/api/v1/health` 모두 `status=ok` 확인.
