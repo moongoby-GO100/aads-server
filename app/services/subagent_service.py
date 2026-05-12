@@ -58,7 +58,8 @@ _SUBAGENT_TOOLS = [
     "export_data",
     # 브라우저
     "browser_navigate", "browser_snapshot", "browser_screenshot",
-    "browser_click", "browser_fill", "browser_tab_list",
+    "browser_click", "browser_fill", "browser_press_key", "browser_select_option",
+    "browser_check", "browser_upload_file", "browser_download", "browser_tab_list",
 ]
 
 

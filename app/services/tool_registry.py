@@ -70,6 +70,11 @@ _DEFER_LOADING: Dict[str, bool] = {
     "browser_screenshot": True,
     "browser_click": True,
     "browser_fill": True,
+    "browser_press_key": True,
+    "browser_select_option": True,
+    "browser_check": True,
+    "browser_upload_file": True,
+    "browser_download": True,
     "browser_tab_list": True,
     # ── 기타 ─────────────────────────────────────────────────────────────
     "code_execution": True,
@@ -1859,6 +1864,83 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         },
         "defer_loading": True,
     },
+    "browser_press_key": {
+        "name": "browser_press_key",
+        "description": "현재 페이지에서 키를 입력한다. selector가 있으면 해당 요소에 포커스 후 입력한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "입력할 키. 예: Enter, Tab, Escape, ArrowDown, a"},
+                "selector": {"type": "string", "description": "포커스할 요소 CSS selector (선택)"},
+                "browser_session_id": {"type": "string", "description": "특정 Browser Bridge session id"},
+                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 Browser Bridge 세션"},
+            },
+            "required": ["key"],
+        },
+        "defer_loading": True,
+    },
+    "browser_select_option": {
+        "name": "browser_select_option",
+        "description": "현재 페이지의 select 요소에서 옵션을 선택한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "select 요소 CSS selector"},
+                "value": {"type": "string", "description": "선택할 option value 또는 표시 텍스트"},
+                "browser_session_id": {"type": "string", "description": "특정 Browser Bridge session id"},
+                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 Browser Bridge 세션"},
+            },
+            "required": ["selector", "value"],
+        },
+        "defer_loading": True,
+    },
+    "browser_check": {
+        "name": "browser_check",
+        "description": "현재 페이지의 체크박스 또는 라디오 버튼 상태를 설정한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "checkbox/radio 요소 CSS selector"},
+                "checked": {"type": "boolean", "description": "체크 여부", "default": True},
+                "browser_session_id": {"type": "string", "description": "특정 Browser Bridge session id"},
+                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 Browser Bridge 세션"},
+            },
+            "required": ["selector"],
+        },
+        "defer_loading": True,
+    },
+    "browser_upload_file": {
+        "name": "browser_upload_file",
+        "description": "input[type=file]에 파일 경로를 지정한다. PC Agent 세션에서는 CEO PC 경로, 서버 세션에서는 서버 경로를 사용한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "input[type=file] CSS selector"},
+                "file_paths": {"type": "array", "items": {"type": "string"}, "description": "업로드할 파일 경로 목록"},
+                "file_path": {"type": "string", "description": "단일 업로드 파일 경로"},
+                "browser_session_id": {"type": "string", "description": "특정 Browser Bridge session id"},
+                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 Browser Bridge 세션"},
+            },
+            "required": ["selector"],
+        },
+        "defer_loading": True,
+    },
+    "browser_download": {
+        "name": "browser_download",
+        "description": "다운로드 버튼/링크를 클릭하고 다운로드 완료 파일 경로를 반환한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "다운로드 버튼/링크 CSS selector 또는 text=..."},
+                "download_dir": {"type": "string", "description": "저장 디렉터리"},
+                "timeout_seconds": {"type": "number", "description": "다운로드 대기 시간", "default": 60},
+                "browser_session_id": {"type": "string", "description": "특정 Browser Bridge session id"},
+                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 Browser Bridge 세션"},
+            },
+            "required": ["selector"],
+        },
+        "defer_loading": True,
+    },
     "browser_tab_list": {
         "name": "browser_tab_list",
         "description": "헤드리스 브라우저에 열린 탭 목록을 조회한다.",
@@ -2660,7 +2742,7 @@ _GROUPS: Dict[str, List[str]] = {
     "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
-    "browser": ["read_remote_file", "list_remote_dir", "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "capture_screenshot", "browser_click", "browser_fill", "browser_tab_list"],
+    "browser": ["read_remote_file", "list_remote_dir", "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "capture_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list"],
     # AADS-188C Phase 2: 메타 도구 그룹 (Orchestrator)
     "meta": ["check_directive_status", "check_task_status", "read_task_logs", "terminate_task", "delegate_to_agent", "delegate_to_research", "spawn_subagent", "spawn_parallel_subagents"],
     # 운영/관측 도구 그룹

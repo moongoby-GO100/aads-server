@@ -319,6 +319,208 @@ async def browser_fill(params: Dict[str, Any]) -> Dict[str, Any]:
         return {"status": "error", "data": {"error": str(e)}}
 
 
+async def browser_press_key(params: Dict[str, Any]) -> Dict[str, Any]:
+    """키 입력. params: key(필수), selector(선택)."""
+    key = str(params.get("key", "") or "")
+    selector = str(params.get("selector", "") or "")
+    if not key:
+        return {"status": "error", "data": {"error": "key 파라미터가 필요합니다"}}
+
+    port = _effective_port(params)
+    try:
+        ws_url = await _get_ws_url(port=port)
+        if selector:
+            focus_js = f"""
+            (function() {{
+                var el = document.querySelector({json.dumps(selector)});
+                if (!el) return JSON.stringify({{"error": "요소를 찾을 수 없습니다: " + {json.dumps(selector)}}});
+                el.focus();
+                return JSON.stringify({{"focused": true}});
+            }})()
+            """
+            focus = await _send_cdp(ws_url, "Runtime.evaluate", {"expression": focus_js, "returnByValue": True})
+            value = focus.get("result", {}).get("value", "{}")
+            data = json.loads(value) if isinstance(value, str) else value
+            if isinstance(data, dict) and data.get("error"):
+                return {"status": "error", "data": data}
+
+        if len(key) == 1:
+            await _send_cdp(ws_url, "Input.insertText", {"text": key})
+        else:
+            await _send_cdp(ws_url, "Input.dispatchKeyEvent", {"type": "keyDown", "key": key})
+            await _send_cdp(ws_url, "Input.dispatchKeyEvent", {"type": "keyUp", "key": key})
+        return {"status": "success", "data": {"key": key, "selector": selector}}
+    except ConnectionError:
+        return _chrome_not_running_error(port)
+    except Exception as e:
+        return {"status": "error", "data": {"error": str(e)}}
+
+
+async def browser_select_option(params: Dict[str, Any]) -> Dict[str, Any]:
+    """select 옵션 선택. params: selector(필수), value(필수: 문자열 또는 목록)."""
+    selector = str(params.get("selector", "") or "")
+    value = params.get("value")
+    if not selector:
+        return {"status": "error", "data": {"error": "selector 파라미터가 필요합니다"}}
+    if value is None:
+        return {"status": "error", "data": {"error": "value 파라미터가 필요합니다"}}
+
+    values = value if isinstance(value, list) else [value]
+    values = [str(v) for v in values]
+    port = _effective_port(params)
+    try:
+        ws_url = await _get_ws_url(port=port)
+        js = f"""
+        (function() {{
+            var el = document.querySelector({json.dumps(selector)});
+            if (!el) return JSON.stringify({{"error": "요소를 찾을 수 없습니다: " + {json.dumps(selector)}}});
+            if (el.tagName.toLowerCase() !== 'select') return JSON.stringify({{"error": "select 요소가 아닙니다: " + {json.dumps(selector)}}});
+            var wanted = new Set({json.dumps(values)});
+            var matched = [];
+            for (var option of el.options) {{
+                var ok = wanted.has(option.value) || wanted.has((option.textContent || '').trim());
+                if (el.multiple) option.selected = ok;
+                else if (ok) el.value = option.value;
+                if (ok) matched.push(option.value);
+            }}
+            if (!matched.length) return JSON.stringify({{"error": "일치하는 옵션이 없습니다", "value": {json.dumps(values)}}});
+            el.dispatchEvent(new Event('input', {{bubbles: true}}));
+            el.dispatchEvent(new Event('change', {{bubbles: true}}));
+            return JSON.stringify({{"selected": matched, "selector": {json.dumps(selector)}}});
+        }})()
+        """
+        result = await _send_cdp(ws_url, "Runtime.evaluate", {"expression": js, "returnByValue": True})
+        res_value = result.get("result", {}).get("value", "{}")
+        data = json.loads(res_value) if isinstance(res_value, str) else res_value
+        if "error" in data:
+            return {"status": "error", "data": data}
+        return {"status": "success", "data": data}
+    except ConnectionError:
+        return _chrome_not_running_error(port)
+    except Exception as e:
+        return {"status": "error", "data": {"error": str(e)}}
+
+
+async def browser_check(params: Dict[str, Any]) -> Dict[str, Any]:
+    """체크박스/라디오 상태 설정. params: selector(필수), checked(기본 true)."""
+    selector = str(params.get("selector", "") or "")
+    checked = _as_bool(params.get("checked", True), default=True)
+    if not selector:
+        return {"status": "error", "data": {"error": "selector 파라미터가 필요합니다"}}
+
+    port = _effective_port(params)
+    try:
+        ws_url = await _get_ws_url(port=port)
+        js = f"""
+        (function() {{
+            var el = document.querySelector({json.dumps(selector)});
+            if (!el) return JSON.stringify({{"error": "요소를 찾을 수 없습니다: " + {json.dumps(selector)}}});
+            if (!('checked' in el)) return JSON.stringify({{"error": "checked 속성이 없는 요소입니다: " + {json.dumps(selector)}}});
+            var desired = {json.dumps(checked)};
+            if (Boolean(el.checked) !== desired) el.click();
+            el.checked = desired;
+            el.dispatchEvent(new Event('input', {{bubbles: true}}));
+            el.dispatchEvent(new Event('change', {{bubbles: true}}));
+            return JSON.stringify({{"selector": {json.dumps(selector)}, "checked": Boolean(el.checked)}});
+        }})()
+        """
+        result = await _send_cdp(ws_url, "Runtime.evaluate", {"expression": js, "returnByValue": True})
+        res_value = result.get("result", {}).get("value", "{}")
+        data = json.loads(res_value) if isinstance(res_value, str) else res_value
+        if "error" in data:
+            return {"status": "error", "data": data}
+        return {"status": "success", "data": data}
+    except ConnectionError:
+        return _chrome_not_running_error(port)
+    except Exception as e:
+        return {"status": "error", "data": {"error": str(e)}}
+
+
+async def browser_file_upload(params: Dict[str, Any]) -> Dict[str, Any]:
+    """file input에 PC 로컬 파일 지정. params: selector(필수), file_paths 또는 file_path."""
+    selector = str(params.get("selector", "") or "")
+    raw_paths = params.get("file_paths", params.get("file_path", ""))
+    file_paths = raw_paths if isinstance(raw_paths, list) else [raw_paths]
+    file_paths = [os.path.abspath(os.path.expanduser(str(p))) for p in file_paths if str(p or "").strip()]
+    if not selector:
+        return {"status": "error", "data": {"error": "selector 파라미터가 필요합니다"}}
+    if not file_paths:
+        return {"status": "error", "data": {"error": "file_paths 파라미터가 필요합니다"}}
+    missing = [p for p in file_paths if not os.path.isfile(p)]
+    if missing:
+        return {"status": "error", "data": {"error": "파일을 찾을 수 없습니다", "missing": missing}}
+
+    port = _effective_port(params)
+    try:
+        ws_url = await _get_ws_url(port=port)
+        doc = await _send_cdp(ws_url, "DOM.getDocument", {"depth": -1, "pierce": True})
+        root_id = doc.get("root", {}).get("nodeId")
+        node = await _send_cdp(ws_url, "DOM.querySelector", {"nodeId": root_id, "selector": selector})
+        node_id = node.get("nodeId")
+        if not node_id:
+            return {"status": "error", "data": {"error": f"요소를 찾을 수 없습니다: {selector}"}}
+        await _send_cdp(ws_url, "DOM.setFileInputFiles", {"nodeId": node_id, "files": file_paths})
+        return {"status": "success", "data": {"selector": selector, "files": file_paths, "count": len(file_paths)}}
+    except ConnectionError:
+        return _chrome_not_running_error(port)
+    except Exception as e:
+        return {"status": "error", "data": {"error": str(e)}}
+
+
+async def browser_download(params: Dict[str, Any]) -> Dict[str, Any]:
+    """다운로드를 유발하는 요소를 클릭하고 PC 다운로드 파일을 감지한다."""
+    selector = str(params.get("selector", "") or "")
+    if not selector:
+        return {"status": "error", "data": {"error": "selector 파라미터가 필요합니다"}}
+    download_dir = str(params.get("download_dir", "") or "").strip()
+    if not download_dir:
+        download_dir = os.path.join(os.path.expanduser("~"), "AADSDownloads")
+    download_dir = os.path.abspath(os.path.expanduser(download_dir))
+    timeout_seconds = float(params.get("timeout_seconds", 60) or 60)
+
+    port = _effective_port(params)
+    try:
+        os.makedirs(download_dir, exist_ok=True)
+        before = {name: os.path.getmtime(os.path.join(download_dir, name)) for name in os.listdir(download_dir)}
+        version = await _probe_cdp_version(port)
+        if version and version.get("webSocketDebuggerUrl"):
+            try:
+                await _send_cdp(
+                    str(version["webSocketDebuggerUrl"]),
+                    "Browser.setDownloadBehavior",
+                    {"behavior": "allow", "downloadPath": download_dir, "eventsEnabled": True},
+                )
+            except Exception as exc:
+                logger.warning("download behavior setup failed: %s", exc)
+
+        click_result = await browser_click({**params, "port": port, "selector": selector})
+        if click_result.get("status") != "success":
+            return click_result
+
+        deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 1)
+        while asyncio.get_running_loop().time() < deadline:
+            candidates = []
+            for name in os.listdir(download_dir):
+                if name.endswith((".crdownload", ".tmp")):
+                    continue
+                path = os.path.join(download_dir, name)
+                if not os.path.isfile(path):
+                    continue
+                mtime = os.path.getmtime(path)
+                if name not in before or mtime > before.get(name, 0):
+                    candidates.append((mtime, path))
+            if candidates:
+                candidates.sort(reverse=True)
+                path = candidates[0][1]
+                return {"status": "success", "data": {"path": path, "size": os.path.getsize(path), "download_dir": download_dir}}
+            await asyncio.sleep(0.5)
+        return {"status": "error", "data": {"error": "다운로드 파일 감지 시간 초과", "download_dir": download_dir}}
+    except ConnectionError:
+        return _chrome_not_running_error(port)
+    except Exception as e:
+        return {"status": "error", "data": {"error": str(e)}}
+
+
 async def browser_screenshot(params: Dict[str, Any]) -> Dict[str, Any]:
     """브라우저 스크린샷. CDP Page.captureScreenshot → base64."""
     port = _effective_port(params)

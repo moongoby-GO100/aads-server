@@ -282,6 +282,27 @@ def format_result(command_type: str, result: Dict[str, Any] | None) -> str:
         selector = data.get("selector", "") if isinstance(data, dict) else ""
         return f"텍스트 입력 완료: `{selector}`"
 
+    if command_type == "browser_press_key":
+        key = data.get("key", "") if isinstance(data, dict) else ""
+        return f"키 입력 완료: `{key}`"
+
+    if command_type == "browser_select_option":
+        selector = data.get("selector", "") if isinstance(data, dict) else ""
+        return f"옵션 선택 완료: `{selector}`"
+
+    if command_type == "browser_check":
+        selector = data.get("selector", "") if isinstance(data, dict) else ""
+        checked = data.get("checked", "") if isinstance(data, dict) else ""
+        return f"체크 상태 설정 완료: `{selector}` checked={checked}"
+
+    if command_type == "browser_file_upload":
+        count = data.get("count", "") if isinstance(data, dict) else ""
+        return f"파일 업로드 입력 완료: {count}개"
+
+    if command_type == "browser_download":
+        path = data.get("path", "") if isinstance(data, dict) else ""
+        return f"다운로드 완료: `{path}`"
+
     if command_type == "browser_get_text":
         text = data.get("text", "") if isinstance(data, dict) else str(data)
         return f"페이지 텍스트:\n```\n{text}\n```"

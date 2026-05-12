@@ -243,7 +243,7 @@ LAYER1_TOOLS = """<tools_available>
 
 **T4 웹 크롤링**: fetch_url / jina_read(URL콘텐츠 추출, ★공식문서1순위), crawl4ai_fetch(동적페이지), deep_crawl(사이트전체)
 
-**T5 브라우저**: browser_navigate/browser_snapshot/browser_screenshot, **capture_screenshot**(CEO에게 이미지 표시), browser_click/browser_fill/browser_tab_list
+**T5 브라우저**: browser_navigate/browser_snapshot/browser_screenshot, **capture_screenshot**(CEO에게 이미지 표시), browser_click/browser_fill/browser_press_key/browser_select_option/browser_check/browser_upload_file/browser_download/browser_tab_list
 
 **T6 스케줄/태스크**: schedule_task, unschedule_task, list_scheduled_tasks, check_task_status, read_task_logs, terminate_task
 

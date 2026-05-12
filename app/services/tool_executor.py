@@ -77,7 +77,8 @@ _LONG_TOOL_TIMEOUT = 55.0  # MCP stdio 클라이언트 타임아웃(~60s) 이내
 _BROWSER_TOOL_TIMEOUT = 210.0  # Browser Bridge CDP/PC Agent 명령(최대 180s) + 여유
 _BROWSER_TOOLS = frozenset({
     "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot",
-    "browser_click", "browser_fill", "browser_tab_list",
+    "browser_click", "browser_fill", "browser_press_key", "browser_select_option",
+    "browser_check", "browser_upload_file", "browser_download", "browser_tab_list",
 })
 _LONG_TOOLS = frozenset({
     "spawn_subagent", "spawn_parallel_subagents", "run_agent_team", "run_debate",
@@ -488,6 +489,11 @@ class ToolExecutor:
             "browser_screenshot":     self._browser_screenshot,
             "browser_click":          self._browser_click,
             "browser_fill":           self._browser_fill,
+            "browser_press_key":      self._browser_press_key,
+            "browser_select_option":  self._browser_select_option,
+            "browser_check":          self._browser_check,
+            "browser_upload_file":    self._browser_upload_file,
+            "browser_download":       self._browser_download,
             "browser_tab_list":       self._browser_tab_list,
             # AADS-190 Phase2-A: 서브에이전트
             "spawn_subagent":         self._spawn_subagent,
@@ -4041,6 +4047,73 @@ class ToolExecutor:
             browser_work_key=browser_work_key,
         )
 
+    async def _browser_press_key(self, inp: Dict[str, Any]) -> Any:
+        """브라우저 키 입력."""
+        key = inp.get("key", "")
+        if not key:
+            return {"error": "key 필수"}
+        from app.api.ceo_chat_tools import tool_browser_press_key
+        return await tool_browser_press_key(
+            key,
+            selector=inp.get("selector", ""),
+            browser_session_id=inp.get("browser_session_id", ""),
+            browser_work_key=inp.get("browser_work_key", ""),
+        )
+
+    async def _browser_select_option(self, inp: Dict[str, Any]) -> Any:
+        """select 옵션 선택."""
+        selector = inp.get("selector", "")
+        if not selector:
+            return {"error": "selector 필수"}
+        from app.api.ceo_chat_tools import tool_browser_select_option
+        return await tool_browser_select_option(
+            selector,
+            inp.get("value", ""),
+            browser_session_id=inp.get("browser_session_id", ""),
+            browser_work_key=inp.get("browser_work_key", ""),
+        )
+
+    async def _browser_check(self, inp: Dict[str, Any]) -> Any:
+        """체크박스/라디오 상태 설정."""
+        selector = inp.get("selector", "")
+        if not selector:
+            return {"error": "selector 필수"}
+        from app.api.ceo_chat_tools import tool_browser_check
+        return await tool_browser_check(
+            selector,
+            checked=bool(inp.get("checked", True)),
+            browser_session_id=inp.get("browser_session_id", ""),
+            browser_work_key=inp.get("browser_work_key", ""),
+        )
+
+    async def _browser_upload_file(self, inp: Dict[str, Any]) -> Any:
+        """file input에 파일 지정."""
+        selector = inp.get("selector", "")
+        if not selector:
+            return {"error": "selector 필수"}
+        from app.api.ceo_chat_tools import tool_browser_upload_file
+        return await tool_browser_upload_file(
+            selector,
+            file_paths=inp.get("file_paths"),
+            file_path=inp.get("file_path", ""),
+            browser_session_id=inp.get("browser_session_id", ""),
+            browser_work_key=inp.get("browser_work_key", ""),
+        )
+
+    async def _browser_download(self, inp: Dict[str, Any]) -> Any:
+        """브라우저 다운로드 실행."""
+        selector = inp.get("selector", "")
+        if not selector:
+            return {"error": "selector 필수"}
+        from app.api.ceo_chat_tools import tool_browser_download
+        return await tool_browser_download(
+            selector,
+            download_dir=inp.get("download_dir", ""),
+            timeout_seconds=float(inp.get("timeout_seconds", 60) or 60),
+            browser_session_id=inp.get("browser_session_id", ""),
+            browser_work_key=inp.get("browser_work_key", ""),
+        )
+
     async def _browser_tab_list(self, inp: Dict[str, Any]) -> Any:
         """열린 탭 목록 반환."""
         browser_session_id = inp.get("browser_session_id", "")
@@ -4376,7 +4449,7 @@ _INTENT_TOOL_MAP: Dict[str, list] = {
     "status_check":           ["check_directive_status"],
     # AADS-159: 브라우저 인텐트
     "browser":                ["browser_connect", "browser_navigate", "browser_snapshot"],
-    "browser_action":         ["browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot"],
+    "browser_action":         ["browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download"],
     # AADS-190: 원격 쓰기/패치/실행/Git 인텐트
     "code_modify":            ["read_remote_file", "write_remote_file", "patch_remote_file", "run_remote_command"],
     "code_fix":               ["read_remote_file", "patch_remote_file", "run_remote_command"],

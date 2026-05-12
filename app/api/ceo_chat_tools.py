@@ -2,8 +2,10 @@
 CEO Chat 도구 정의 및 실행 (AADS-157 + AADS-159)
 
 5개 기존 도구: read_file, read_github, search_logs, query_db, fetch_url
-7개 browser 도구: browser_connect, browser_navigate, browser_snapshot,
-                  browser_screenshot, browser_click, browser_fill, browser_tab_list
+12개 browser 도구: browser_connect, browser_navigate, browser_snapshot,
+                   browser_screenshot, browser_click, browser_fill,
+                   browser_press_key, browser_select_option, browser_check,
+                   browser_upload_file, browser_download, browser_tab_list
 
 보안 규칙 (하드코딩, LLM 우회 불가):
   - read_file: /root/aads/ 하위만 허용. /etc, /proc, /root/.ssh 차단
@@ -317,6 +319,78 @@ TOOL_DEFINITIONS: List[Dict] = [
                 },
             },
             "required": ["selector", "value"],
+        },
+    },
+    {
+        "name": "browser_press_key",
+        "description": "브라우저에서 키를 입력한다. selector를 지정하면 해당 요소에 포커스 후 입력한다.\n예: browser_press_key(key='Enter') 또는 browser_press_key(selector='input[name=q]', key='Enter')",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "입력할 키. 예: Enter, Tab, Escape, ArrowDown, a"},
+                "selector": {"type": "string", "description": "포커스할 요소 CSS selector (선택)"},
+                "browser_session_id": {"type": "string", "description": "특정 Browser Bridge session id"},
+                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 Browser Bridge 세션"},
+            },
+            "required": ["key"],
+        },
+    },
+    {
+        "name": "browser_select_option",
+        "description": "select 요소의 옵션을 value 또는 표시 텍스트로 선택한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "select 요소 CSS selector"},
+                "value": {"type": "string", "description": "선택할 option value 또는 표시 텍스트"},
+                "browser_session_id": {"type": "string", "description": "특정 Browser Bridge session id"},
+                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 Browser Bridge 세션"},
+            },
+            "required": ["selector", "value"],
+        },
+    },
+    {
+        "name": "browser_check",
+        "description": "체크박스 또는 라디오 버튼 상태를 설정한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "checkbox/radio 요소 CSS selector"},
+                "checked": {"type": "boolean", "description": "체크 여부", "default": True},
+                "browser_session_id": {"type": "string", "description": "특정 Browser Bridge session id"},
+                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 Browser Bridge 세션"},
+            },
+            "required": ["selector"],
+        },
+    },
+    {
+        "name": "browser_upload_file",
+        "description": "file input 요소에 파일을 지정한다. PC Agent 세션에서는 CEO PC 로컬 경로, headless/server 세션에서는 서버 경로를 사용한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "input[type=file] CSS selector"},
+                "file_paths": {"type": "array", "items": {"type": "string"}, "description": "업로드할 파일 경로 목록"},
+                "file_path": {"type": "string", "description": "단일 업로드 파일 경로"},
+                "browser_session_id": {"type": "string", "description": "특정 Browser Bridge session id"},
+                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 Browser Bridge 세션"},
+            },
+            "required": ["selector"],
+        },
+    },
+    {
+        "name": "browser_download",
+        "description": "다운로드를 유발하는 요소를 클릭하고 다운로드 완료 파일 경로를 반환한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "다운로드 버튼/링크 CSS selector 또는 text=..."},
+                "download_dir": {"type": "string", "description": "저장 디렉터리. PC Agent 세션은 CEO PC 경로, 서버 세션은 서버 경로"},
+                "timeout_seconds": {"type": "number", "description": "다운로드 대기 시간", "default": 60},
+                "browser_session_id": {"type": "string", "description": "특정 Browser Bridge session id"},
+                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 Browser Bridge 세션"},
+            },
+            "required": ["selector"],
         },
     },
     {
@@ -2668,6 +2742,15 @@ async def _current_page(ctx: Any) -> Any:
     return pages[-1] if pages else await ctx.new_page()
 
 
+def _browser_file_paths(file_paths: Any = None, file_path: str = "") -> list[str]:
+    raw = file_paths if isinstance(file_paths, list) else []
+    if not raw and file_paths:
+        raw = [file_paths]
+    if file_path:
+        raw.append(file_path)
+    return [str(path).strip() for path in raw if str(path or "").strip()]
+
+
 async def _get_or_create_browser_context() -> Any:
     """Compatibility shim for older E2E credential-vault code."""
     ctx, err = await _acquire_pw_context()
@@ -3032,6 +3115,137 @@ async def tool_browser_fill(
         return f"[입력 완료] selector={selector}"
     except Exception as e:
         return f"[ERROR] 입력 실패 ({selector}): {e}"
+
+
+async def tool_browser_press_key(
+    key: str,
+    selector: str = "",
+    browser_session_id: str = "",
+    browser_work_key: str = "",
+) -> str:
+    """키 입력."""
+    if not key:
+        return "[ERROR] key 필수"
+    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key)
+    if err:
+        return err
+    try:
+        page = await _current_page(ctx)
+        local_press = getattr(page, "press_key", None)
+        if callable(local_press):
+            await local_press(key, selector=selector)
+        elif selector:
+            await page.press(selector, key, timeout=30_000)
+        else:
+            await page.keyboard.press(key)
+        target = f" selector={selector}" if selector else ""
+        return f"[키 입력 완료]{target} key={key}"
+    except Exception as e:
+        return f"[ERROR] 키 입력 실패 ({key}): {e}"
+
+
+async def tool_browser_select_option(
+    selector: str,
+    value: str,
+    browser_session_id: str = "",
+    browser_work_key: str = "",
+) -> str:
+    """select 옵션 선택."""
+    if not selector:
+        return "[ERROR] selector 필수"
+    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key)
+    if err:
+        return err
+    try:
+        page = await _current_page(ctx)
+        await page.select_option(selector, value, timeout=30_000)
+        return f"[옵션 선택 완료] selector={selector}"
+    except Exception as e:
+        return f"[ERROR] 옵션 선택 실패 ({selector}): {e}"
+
+
+async def tool_browser_check(
+    selector: str,
+    checked: bool = True,
+    browser_session_id: str = "",
+    browser_work_key: str = "",
+) -> str:
+    """체크박스/라디오 상태 설정."""
+    if not selector:
+        return "[ERROR] selector 필수"
+    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key)
+    if err:
+        return err
+    try:
+        page = await _current_page(ctx)
+        local_check = getattr(page, "set_checked", None)
+        if callable(local_check):
+            await local_check(selector, bool(checked))
+        else:
+            await page.locator(selector).set_checked(bool(checked), timeout=30_000)
+        return f"[체크 상태 설정 완료] selector={selector} checked={bool(checked)}"
+    except Exception as e:
+        return f"[ERROR] 체크 상태 설정 실패 ({selector}): {e}"
+
+
+async def tool_browser_upload_file(
+    selector: str,
+    file_paths: Any = None,
+    file_path: str = "",
+    browser_session_id: str = "",
+    browser_work_key: str = "",
+) -> str:
+    """file input에 파일 지정."""
+    if not selector:
+        return "[ERROR] selector 필수"
+    paths = _browser_file_paths(file_paths, file_path)
+    if not paths:
+        return "[ERROR] file_path 또는 file_paths 필수"
+    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key)
+    if err:
+        return err
+    try:
+        page = await _current_page(ctx)
+        await page.set_input_files(selector, paths, timeout=30_000)
+        return f"[파일 업로드 입력 완료] selector={selector} files={len(paths)}"
+    except Exception as e:
+        return f"[ERROR] 파일 업로드 입력 실패 ({selector}): {e}"
+
+
+async def tool_browser_download(
+    selector: str,
+    download_dir: str = "",
+    timeout_seconds: float = 60,
+    browser_session_id: str = "",
+    browser_work_key: str = "",
+) -> str:
+    """다운로드를 유발하는 요소 클릭 후 파일 저장."""
+    if not selector:
+        return "[ERROR] selector 필수"
+    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key)
+    if err:
+        return err
+    try:
+        page = await _current_page(ctx)
+        local_download = getattr(page, "download", None)
+        if callable(local_download):
+            data = await local_download(selector, download_dir=download_dir, timeout_seconds=timeout_seconds)
+            return f"[다운로드 완료]\npath: {data.get('path')}\nsize: {data.get('size')}"
+
+        target_dir = Path(download_dir or "/tmp/aads_browser_downloads").expanduser()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        timeout_ms = max(int(float(timeout_seconds) * 1000), 1000)
+        async with page.expect_download(timeout=timeout_ms) as download_info:
+            await page.click(selector, timeout=30_000)
+        download = await download_info.value
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", download.suggested_filename or f"download-{uuid.uuid4().hex[:8]}")
+        dest = target_dir / safe_name
+        if dest.exists():
+            dest = target_dir / f"{dest.stem}-{uuid.uuid4().hex[:6]}{dest.suffix}"
+        await download.save_as(str(dest))
+        return f"[다운로드 완료]\npath: {dest}\nfilename: {download.suggested_filename}"
+    except Exception as e:
+        return f"[ERROR] 다운로드 실패 ({selector}): {e}"
 
 
 async def tool_browser_tab_list(browser_session_id: str = "", browser_work_key: str = "") -> str:
@@ -3729,6 +3943,43 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         return await tool_browser_fill(
             params.get("selector", ""),
             params.get("value", ""),
+            browser_session_id=params.get("browser_session_id", ""),
+            browser_work_key=params.get("browser_work_key", ""),
+        )
+    elif name == "browser_press_key":
+        return await tool_browser_press_key(
+            params.get("key", ""),
+            selector=params.get("selector", ""),
+            browser_session_id=params.get("browser_session_id", ""),
+            browser_work_key=params.get("browser_work_key", ""),
+        )
+    elif name == "browser_select_option":
+        return await tool_browser_select_option(
+            params.get("selector", ""),
+            params.get("value", ""),
+            browser_session_id=params.get("browser_session_id", ""),
+            browser_work_key=params.get("browser_work_key", ""),
+        )
+    elif name == "browser_check":
+        return await tool_browser_check(
+            params.get("selector", ""),
+            checked=bool(params.get("checked", True)),
+            browser_session_id=params.get("browser_session_id", ""),
+            browser_work_key=params.get("browser_work_key", ""),
+        )
+    elif name == "browser_upload_file":
+        return await tool_browser_upload_file(
+            params.get("selector", ""),
+            file_paths=params.get("file_paths"),
+            file_path=params.get("file_path", ""),
+            browser_session_id=params.get("browser_session_id", ""),
+            browser_work_key=params.get("browser_work_key", ""),
+        )
+    elif name == "browser_download":
+        return await tool_browser_download(
+            params.get("selector", ""),
+            download_dir=params.get("download_dir", ""),
+            timeout_seconds=float(params.get("timeout_seconds", 60) or 60),
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
         )

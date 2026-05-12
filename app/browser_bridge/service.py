@@ -200,6 +200,26 @@ class _LocalAgentPage:
     async def fill(self, selector: str, value: str, **_: Any) -> None:
         await self._run_browser_command("browser_fill", {"selector": selector, "value": value})
 
+    async def press_key(self, key: str, selector: str = "") -> None:
+        await self._run_browser_command("browser_press_key", {"key": key, "selector": selector})
+
+    async def select_option(self, selector: str, value: str | list[str], **_: Any) -> None:
+        await self._run_browser_command("browser_select_option", {"selector": selector, "value": value})
+
+    async def set_checked(self, selector: str, checked: bool, **_: Any) -> None:
+        await self._run_browser_command("browser_check", {"selector": selector, "checked": checked})
+
+    async def set_input_files(self, selector: str, files: str | list[str], **_: Any) -> None:
+        file_paths = files if isinstance(files, list) else [files]
+        await self._run_browser_command("browser_file_upload", {"selector": selector, "file_paths": file_paths})
+
+    async def download(self, selector: str, download_dir: str = "", timeout_seconds: float = 60) -> dict[str, Any]:
+        return await self._run_browser_command(
+            "browser_download",
+            {"selector": selector, "download_dir": download_dir, "timeout_seconds": timeout_seconds},
+            command_timeout_seconds=max(float(timeout_seconds) + 15, LOCAL_AGENT_COMMAND_TIMEOUT_SECONDS),
+        )
+
     async def wait_for_timeout(self, ms: int) -> None:
         await asyncio.sleep(max(0, ms) / 1000)
 

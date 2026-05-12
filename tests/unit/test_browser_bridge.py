@@ -335,6 +335,69 @@ async def test_local_agent_commands_fallback_to_active_api(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
+async def test_local_agent_browser_input_file_and_download_commands(monkeypatch, tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(state_dir=tmp_path),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    session = service.register_trusted_session(
+        label="CEO PC Chrome",
+        endpoint_kind="local_agent",
+        metadata={
+            "agent_id": "ceo-pc",
+            "port": "9222",
+            "endpoint_kind": "local_agent",
+            "last_url": "about:blank",
+        },
+        activate=True,
+    )
+
+    from app.services import pc_agent_manager as manager_module
+
+    async def fake_local_execute(**_kwargs):
+        return {"status": "error", "error_code": "PC_AGENT_OFFLINE", "message": "agent offline"}
+
+    active_calls: list[dict] = []
+
+    async def fake_active_execute(**kwargs):
+        active_calls.append(kwargs)
+        command_type = kwargs["command_type"]
+        data = {"ok": True}
+        if command_type == "browser_download":
+            data = {"path": "C:/Users/CEO/AADSDownloads/image.zip", "size": 1234}
+        return {
+            "status": "success",
+            "lease": {"agent_id": "ceo-pc"},
+            "result": {"result": data},
+        }
+
+    monkeypatch.setattr(manager_module.pc_agent_manager, "execute_routed_command", fake_local_execute)
+    monkeypatch.setattr(service, "_execute_pc_agent_route_via_active_api", fake_active_execute)
+
+    context, error = await service.acquire_playwright_context(session_id=session.session_id)
+
+    assert error is None
+    page = context.pages[0]
+    await page.press_key("Enter", selector="input[name=q]")
+    await page.select_option("select[name=category]", "outer")
+    await page.set_checked("input[name=agree]", True)
+    await page.set_input_files("input[type=file]", ["C:/Users/CEO/Pictures/a.jpg"])
+    downloaded = await page.download("button.download", download_dir="C:/Users/CEO/AADSDownloads")
+
+    assert downloaded["path"].endswith("image.zip")
+    assert [call["command_type"] for call in active_calls] == [
+        "browser_press_key",
+        "browser_select_option",
+        "browser_check",
+        "browser_file_upload",
+        "browser_download",
+    ]
+    assert active_calls[3]["params"]["file_paths"] == ["C:/Users/CEO/Pictures/a.jpg"]
+    assert active_calls[4]["params"]["download_dir"] == "C:/Users/CEO/AADSDownloads"
+
+
+@pytest.mark.asyncio
 async def test_acquire_specific_session_does_not_change_active_session(tmp_path) -> None:
     service = BrowserBridgeService(
         pairings=PairingManager(default_ttl_seconds=60),

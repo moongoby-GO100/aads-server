@@ -1,6 +1,14 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-12)
+- **Browser Bridge 파일 업로드/다운로드/고급 입력 도구 보강 (2026-05-12 14:09 KST)**:
+  - 요청: 신상마켓 필수 이미지 업로드가 막히지 않도록 Browser Bridge에 파일 선택/업로드/다운로드/입력 제어 도구를 추가.
+  - 조치: `browser_press_key`, `browser_select_option`, `browser_check`, `browser_upload_file`, `browser_download` 도구를 `ceo_chat_tools`, `tool_registry`, `ToolExecutor`, 모델 스트리밍 타임아웃 경로에 등록했다.
+  - 조치: `local_agent` Browser Bridge facade가 위 5개 기능을 PC Agent 명령으로 프록시하도록 추가했다. PC Agent CDP 핸들러에는 `browser_press_key`, `browser_select_option`, `browser_check`, `browser_file_upload`, `browser_download`를 추가했다.
+  - 운영 사용: 신상마켓 작업은 `browser_work_key="ntv2-sinsang-registration"` 전용 세션에서 `browser_upload_file(selector="input[type=file]", file_paths=[...])`를 사용한다. PC Agent 세션에서는 파일 경로가 CEO PC 로컬 경로 기준이다.
+  - 검증: `python3 -m py_compile app/browser_bridge/service.py app/api/ceo_chat_tools.py app/services/tool_executor.py app/services/tool_registry.py app/services/model_selector.py app/services/subagent_service.py app/services/pc_agent_command_builder.py pc_agent/commands/browser_auto.py pc_agent/commands/__init__.py` 통과. `pytest -q tests/unit/test_browser_bridge.py tests/unit/test_tools_and_pipeline.py` → 72 passed.
+  - 주의: 코드 변경만 완료했다. 커밋/푸시/배포는 아직 수행하지 않았다.
+
 - **Browser Bridge 업무별 전용 세션 매니저 (AADS-BRIDGE-SESSION-001, 2026-05-12 KST)**:
   - 요청: NTV2/신상마켓 상품등록 세션을 침범하지 않도록 중국상품소싱/검수/VVIC 등 업무별 Browser Bridge 전용 세션을 자동 확보·분리.
   - 조치: `BrowserBridgeSession`에 `work_key`, `protected`를 추가하고 세션 registry 저장/조회에 반영했다. `ntv2-sinsang-registration`은 보호 업무 키이며, `sinsang`/`신상마켓` 라벨 세션도 보호 세션으로 취급한다.
