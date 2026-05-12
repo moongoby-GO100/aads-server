@@ -101,6 +101,27 @@ def test_normalize_tool_events_accepts_legacy_names_and_codex_events():
     ]
 
 
+def test_actionable_quoted_instruction_is_promoted_from_missed_reply_complaint():
+    content = (
+        "내가 지시한 지시내용에 응답이 없는데\n"
+        '"뉴스매매 데일리 이거 비활성화 하라고했는데 내가 직접 화면에서 '
+        '비활성화 할건데 화면 확인하고 내가 비활성화 할수 있게 조치하고 보고해" '
+        "이렇게 마지막 채팅창 대화버블에 남아있는데 왜 응답을 못하는거지?"
+    )
+
+    promoted = chat_service._promote_actionable_quoted_instruction(content)
+
+    assert "[응답 누락 지적에서 추출한 현재 실행 지시]" in promoted
+    assert "뉴스매매 데일리 이거 비활성화" in promoted
+    assert "실제 처리해야 할 CEO 지시" in promoted
+
+
+def test_actionable_quoted_instruction_does_not_promote_plain_quotes():
+    content = '그가 "뉴스매매 데일리"라고 말했는데 의미가 뭐야?'
+
+    assert chat_service._promote_actionable_quoted_instruction(content) == content
+
+
 @pytest.mark.asyncio
 async def test_list_messages_minimal_is_read_only_and_selects_light_fields():
     session_id = str(uuid.uuid4())

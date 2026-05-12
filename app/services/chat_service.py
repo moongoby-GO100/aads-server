@@ -104,6 +104,84 @@ def _history_intent_filter_sql(alias: str = "") -> str:
     quoted = ", ".join(f"'{intent}'" for intent in _HISTORY_EXCLUDED_INTENTS)
     return f"AND COALESCE({prefix}intent, '') NOT IN ({quoted})"
 
+
+_ACTIONABLE_QUOTE_CONTEXT_MARKERS = (
+    "응답이 없",
+    "응답을 못",
+    "답변이 없",
+    "대화버블",
+    "마지막 채팅창",
+    "지시내용",
+    "지시한 지시",
+)
+_ACTIONABLE_QUOTE_VERBS = (
+    "조치",
+    "보고",
+    "확인",
+    "수정",
+    "적용",
+    "반영",
+    "비활성화",
+    "활성화",
+    "진행",
+    "처리",
+    "해줘",
+    "하게",
+)
+
+
+def _extract_actionable_quoted_instruction(content: str) -> Optional[str]:
+    """Return the CEO instruction quoted inside a complaint about a missed reply.
+
+    CEO often reports "the last bubble says \"...do X...\" but there is no answer".
+    Without this normalization the model treats the turn as a diagnosis question and
+    may ignore the quoted command. The quote is only promoted when the surrounding
+    text clearly says a prior reply was missed and the quoted text is imperative.
+    """
+    text = (content or "").strip()
+    if not text or not any(marker in text for marker in _ACTIONABLE_QUOTE_CONTEXT_MARKERS):
+        return None
+
+    candidates: list[str] = []
+    for pattern in (
+        r'"([^"\n]{12,1200})"',
+        r"'([^'\n]{12,1200})'",
+        r"“([^”]{12,1200})”",
+        r"‘([^’]{12,1200})’",
+    ):
+        candidates.extend(match.strip() for match in re.findall(pattern, text, flags=re.DOTALL))
+
+    # Fallback for copied chat text pasted on its own line after the complaint.
+    if not candidates:
+        for line in text.splitlines():
+            cleaned = line.strip(" \t>\"'“”‘’")
+            if 12 <= len(cleaned) <= 1200:
+                candidates.append(cleaned)
+
+    for candidate in candidates:
+        normalized = re.sub(r"\s+", " ", candidate).strip()
+        if not normalized:
+            continue
+        if any(verb in normalized for verb in _ACTIONABLE_QUOTE_VERBS):
+            return normalized[:1200]
+    return None
+
+
+def _promote_actionable_quoted_instruction(content: str) -> str:
+    quoted_instruction = _extract_actionable_quoted_instruction(content)
+    if not quoted_instruction:
+        return content
+    if "[응답 누락 지적에서 추출한 현재 실행 지시]" in content:
+        return content
+    return (
+        content.rstrip()
+        + "\n\n[응답 누락 지적에서 추출한 현재 실행 지시]\n"
+        + quoted_instruction
+        + "\n\n[처리 규칙]\n"
+        + "- 위 인용 지시는 설명 대상이 아니라 이번 턴에서 실제 처리해야 할 CEO 지시다.\n"
+        + "- 원인 확인만으로 끝내지 말고 가능한 도구 실행/코드 조치/화면 확인까지 수행한 뒤 보고하라."
+    )
+
 _SENTINEL = object()  # Queue 종료 신호
 _RESUME_SEMAPHORE = _heartbeat_asyncio.Semaphore(3)  # 동시 resume 최대 3개 (CEO 지시)
 
@@ -4527,6 +4605,11 @@ async def send_message_stream(
             _pending_text = "\n".join(f"[이전 추가 지시] {p['content']}" for p in _pending)
             content = f"{_pending_text}\n\n{content}"
             logger.info(f"[PENDING_INTERRUPT] session={session_id[:8]} injected={len(_pending)} items")
+
+        promoted_content = _promote_actionable_quoted_instruction(content)
+        if promoted_content != content:
+            content = promoted_content
+            logger.info("actionable_quoted_instruction_promoted session=%s", session_id[:8])
 
         # 1. 첨부파일 처리 — Ephemeral Document Context (#파일맥락보호)
         #    파일 전문은 content에 넣지 않고 Layer D로 현재 턴에만 주입.

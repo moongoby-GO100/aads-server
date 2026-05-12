@@ -2,6 +2,8 @@
 최종 업데이트: 2026-05-12
 
 ## 2026-05-12
+- 2026-05-12 15:20 KST: `app/services/chat_service.py`에 응답 누락 지적 속 인용 지시 승격 로직을 추가했다. `"마지막 대화버블에 '...조치하고 보고해'가 남아 있는데 왜 응답을 못하나"` 유형은 인용된 실제 CEO 지시를 이번 턴 실행 대상으로 시스템 프롬프트에 다시 붙인다.
+- 검증: `python3 -m py_compile app/services/chat_service.py`, `.venv/bin/python -m py_compile app/services/chat_service.py`, `.venv/bin/python` 직접 헬퍼 호출 검증 통과. 현재 `.venv`에는 `pytest`가 없어 추가 단위 테스트 실행은 미수행.
 - Browser Bridge 업무 키 전용 세션 매니저 적용: `ntv2-sinsang-registration`, `ntv2-china-sourcing-admin`, `ntv2-vvic-scrape` 같은 업무 키로 세션을 확보한다.
 - `ntv2-sinsang-registration`은 보호 세션이다. 중국상품소싱 관리자 검수나 VVIC 수집 자동화는 이 세션을 공유하지 말고 `browser_work_key`를 지정해 별도 세션을 사용한다.
 - 사용 예시: `browser_connect(action="ensure_work_session", work_key="ntv2-china-sourcing-admin")`, 이후 `browser_navigate(url="...", browser_work_key="ntv2-china-sourcing-admin")`.
