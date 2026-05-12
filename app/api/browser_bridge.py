@@ -37,6 +37,8 @@ class SessionRegisterRequest(BaseModel):
     storage_state: dict[str, Any] | None = None
     activate: bool = True
     expires_hours: int | None = Field(default=None, ge=1, le=24 * 30)
+    work_key: str = Field(default="", max_length=120)
+    protected: bool = False
 
 
 class SessionSelectRequest(BaseModel):
@@ -51,6 +53,15 @@ class EnsurePcCdpSessionRequest(BaseModel):
     isolated_profile: bool = True
     isolation_id: str = Field(default="", max_length=80)
     activate: bool = False
+    work_key: str = Field(default="", max_length=120)
+
+
+class EnsureWorkSessionRequest(BaseModel):
+    work_key: str = Field(min_length=2, max_length=120)
+    label: str = Field(default="", max_length=120)
+    agent_id: str = Field(default="", max_length=120)
+    url: str = Field(default="about:blank", max_length=2048)
+    preferred_port: int | None = Field(default=None, ge=1024, le=65535)
 
 
 class SessionLeaseRequest(BaseModel):
@@ -107,6 +118,8 @@ async def register_session(req: SessionRegisterRequest) -> dict[str, Any]:
             metadata=req.endpoint.metadata,
             activate=req.activate,
             expires_hours=req.expires_hours,
+            work_key=req.work_key,
+            protected=req.protected,
         )
     except BrowserBridgeSecurityError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -118,7 +131,8 @@ async def register_session(req: SessionRegisterRequest) -> dict[str, Any]:
 @router.get("/sessions")
 async def list_sessions(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     service = get_browser_bridge_service()
-    return {"sessions": list(service.sessions.public_sessions())}
+    status = service.work_session_status()
+    return {"sessions": status["sessions"], "work_sessions": status["work_sessions"]}
 
 
 @router.post("/sessions/select")
@@ -149,10 +163,38 @@ async def ensure_pc_cdp_session(
             isolated_profile=req.isolated_profile,
             isolation_id=req.isolation_id,
             activate=req.activate,
+            work_key=req.work_key,
         )
     except Exception as exc:
         raise HTTPException(status_code=424, detail=str(exc)) from exc
     return {"status": "ready", "session": session.public_dict()}
+
+
+@router.post("/work-sessions/ensure")
+async def ensure_work_session(
+    req: EnsureWorkSessionRequest,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    service = get_browser_bridge_service()
+    try:
+        session = await service.ensure_work_session(
+            work_key=req.work_key,
+            label=req.label,
+            agent_id=req.agent_id,
+            url=req.url,
+            preferred_port=req.preferred_port,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=424, detail=str(exc)) from exc
+    return {"status": "ready", "session": session.public_dict()}
+
+
+@router.get("/work-sessions")
+async def list_work_sessions(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    service = get_browser_bridge_service()
+    return service.work_session_status()
 
 
 @router.post("/sessions/lease")

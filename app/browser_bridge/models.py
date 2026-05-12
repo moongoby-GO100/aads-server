@@ -80,6 +80,8 @@ class BrowserBridgeSession:
     last_used_at: Optional[datetime] = None
     lease_owner: str = ""
     lease_expires_at: Optional[datetime] = None
+    work_key: str = ""
+    protected: bool = False
 
     @property
     def is_expired(self) -> bool:
@@ -101,6 +103,8 @@ class BrowserBridgeSession:
             "lease_owner": self.lease_owner or None,
             "lease_expires_at": self.lease_expires_at.isoformat() if self.lease_expires_at else None,
             "leased": bool(self.lease_owner and self.lease_expires_at and self.lease_expires_at > utcnow()),
+            "work_key": self.work_key or None,
+            "protected": bool(self.protected),
         }
 
 

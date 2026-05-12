@@ -1647,6 +1647,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "CEO 로컬 Chrome 또는 Browser Bridge 세션 상태를 확인하고, "
             "OTP/로그인이 필요한 경우 one-time pairing을 생성하거나 등록된 세션을 선택한다. "
             "PC Agent가 연결된 경우 ensure_pc_cdp로 분리 Chrome CDP 세션을 자동 준비한다. "
+            "ensure_work_session으로 업무 키별 전용 세션을 확보한다. "
             "인증이 필요한 페이지를 보기 전 먼저 사용한다."
         ),
         "input_schema": {
@@ -1654,8 +1655,8 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "status | create_pairing | select | ensure_pc_cdp",
-                    "enum": ["status", "create_pairing", "select", "ensure_pc_cdp"],
+                    "description": "status | create_pairing | select | ensure_pc_cdp | ensure_work_session",
+                    "enum": ["status", "create_pairing", "select", "ensure_pc_cdp", "ensure_work_session"],
                     "default": "status",
                 },
                 "session_id": {
@@ -1664,8 +1665,12 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 },
                 "label": {
                     "type": "string",
-                    "description": "create_pairing/ensure_pc_cdp 시 표시할 세션 라벨",
+                    "description": "create_pairing/ensure_pc_cdp/ensure_work_session 시 표시할 세션 라벨",
                     "default": "CEO local Chrome",
+                },
+                "work_key": {
+                    "type": "string",
+                    "description": "ensure_work_session 시 사용할 업무 키. 예: ntv2-sinsang-registration, ntv2-china-sourcing-admin, ntv2-vvic-scrape",
                 },
                 "agent_id": {
                     "type": "string",
@@ -1692,6 +1697,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"action": "status"},
             {"action": "create_pairing", "label": "CEO local Chrome"},
             {"action": "ensure_pc_cdp", "label": "VVIC worker A", "preferred_port": 9222},
+            {"action": "ensure_work_session", "work_key": "ntv2-china-sourcing-admin"},
         ],
     },
     "browser_navigate": {
@@ -1711,6 +1717,10 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "browser_session_id": {
                     "type": "string",
                     "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
+                },
+                "browser_work_key": {
+                    "type": "string",
+                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
                 },
             },
             "required": ["url"],
@@ -1735,6 +1745,10 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "type": "string",
                     "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
                 },
+                "browser_work_key": {
+                    "type": "string",
+                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
+                },
             },
             "required": [],
         },
@@ -1751,6 +1765,10 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "browser_session_id": {
                     "type": "string",
                     "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
+                },
+                "browser_work_key": {
+                    "type": "string",
+                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
                 },
             },
             "required": [],
@@ -1779,6 +1797,10 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "type": "string",
                     "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
                 },
+                "browser_work_key": {
+                    "type": "string",
+                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
+                },
             },
             "required": ["url"],
         },
@@ -1796,6 +1818,10 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "browser_session_id": {
                     "type": "string",
                     "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
+                },
+                "browser_work_key": {
+                    "type": "string",
+                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
                 },
             },
             "required": ["selector"],
@@ -1824,6 +1850,10 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "type": "string",
                     "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
                 },
+                "browser_work_key": {
+                    "type": "string",
+                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
+                },
             },
             "required": ["selector", "value"],
         },
@@ -1838,6 +1868,10 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "browser_session_id": {
                     "type": "string",
                     "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
+                },
+                "browser_work_key": {
+                    "type": "string",
+                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
                 },
             },
             "required": [],

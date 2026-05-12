@@ -864,3 +864,61 @@ async def list_
   →def _load_env_file() -> dict[str, str]:
 
 - finalize: pending
+
+## [2026-05-12 13:30:00 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch: def _get_db_params() -> dict:
+    return→def _get_db_params() -> dict:
+    return
+- finalize: pending
+
+## [2026-05-12 13:30:16 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:                     gsc.entry_rules,
+   →                    gsc.entry_rules,
+   
+- finalize: pending
+
+## [2026-05-12 13:30:35 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:             (card_id, name, entry_rules,→            (card_id, name, entry_rules,
+- finalize: pending
+
+## [2026-05-12 13:30:52 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:             # exit_rules에서 TP/SL 추출 (카드별→            # TP/SL/Trailing: 카드 exit_ru
+- finalize: pending
+
+## [2026-05-12 13:31:10 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:                 "card_id": card_id,
+    →                "card_id": card_id,
+    
+- finalize: pending
+
+## [2026-05-12 13:31:27 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:                 "tp_pct": tp_pct,
+      →                "tp_pct": tp_pct,
+      
+- finalize: pending
+
+## [2026-05-12 13:31:44 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:             result = await executor.plac→            result = await executor.plac
+- finalize: pending
+
+## [2026-05-12 13:32:07 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:             tp_pct = card.get("tp_pct", →            tp_pct = card.get("tp_pct", 
+- finalize: pending
+
+## [2026-05-12 13:32:41 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:     def _db_open_position(
+        self,→    def _db_open_position(
+        self,
+- finalize: pending
+
+## [2026-05-12 13:34:03 KST] [GO100] scripts/go100_backfill_today_live_positions.py
+- Chat-Direct 수정: write: scripts/go100_backfill_today_live_positions.py
+- finalize: pending
+
+## [2026-05-12 13:36:48 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: # GO100 HANDOVER — 2026-04-21
+
+## 최근 진행 →# GO100 HANDOVER — 2026-04-21
+
+## 최근 진행 
+- finalize: pending

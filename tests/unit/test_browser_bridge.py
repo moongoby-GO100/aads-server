@@ -382,3 +382,92 @@ async def test_acquire_specific_session_reports_missing_session(tmp_path) -> Non
 
     assert context is None
     assert "browser bridge session not found: bb-missing" in error
+
+
+@pytest.mark.asyncio
+async def test_work_key_session_does_not_reuse_protected_sinsang_session(monkeypatch, tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(tmp_path / "sessions"),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    sinsang = service.register_trusted_session(
+        label="NTV2 Sinsang registration",
+        endpoint_kind="local_agent",
+        metadata={"agent_id": "ceo-pc", "port": "9222", "endpoint_kind": "local_agent"},
+        work_key="ntv2-sinsang-registration",
+        protected=True,
+        activate=True,
+    )
+    created: list[dict] = []
+
+    async def fake_ensure_pc_agent_cdp_session(**kwargs):
+        created.append(kwargs)
+        port = str(9300 + len(created))
+        return service.register_trusted_session(
+            label=kwargs["label"],
+            endpoint_kind="local_agent",
+            metadata={"agent_id": "ceo-pc", "port": port, "endpoint_kind": "local_agent"},
+            work_key=kwargs["work_key"],
+            protected=kwargs["protected"],
+            activate=kwargs["activate"],
+        )
+
+    monkeypatch.setattr(service, "ensure_pc_agent_cdp_session", fake_ensure_pc_agent_cdp_session)
+
+    china = await service.ensure_work_session(work_key="ntv2-china-sourcing-admin")
+    again = await service.ensure_work_session(work_key="ntv2-china-sourcing-admin")
+
+    assert china.session_id != sinsang.session_id
+    assert again.session_id == china.session_id
+    assert len(created) == 1
+    assert created[0]["isolation_id"] == "ntv2-china-sourcing-admin"
+    assert created[0]["activate"] is False
+    assert service.active_session().session_id == sinsang.session_id
+
+    status = service.work_session_status()
+    work_keys = {item["work_key"]: item for item in status["work_sessions"]}
+    assert work_keys["ntv2-sinsang-registration"]["protected"] is True
+    assert work_keys["ntv2-china-sourcing-admin"]["session_id"] == china.session_id
+    assert work_keys["ntv2-china-sourcing-admin"]["last_used_at"]
+
+
+@pytest.mark.asyncio
+async def test_work_key_session_recreates_stale_disconnected_context(monkeypatch, tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(tmp_path / "sessions"),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    stale = service.register_trusted_session(
+        label="NTV2 China sourcing admin",
+        endpoint_kind="cdp",
+        endpoint_url="http://127.0.0.1:9333",
+        work_key="ntv2-china-sourcing-admin",
+        activate=True,
+    )
+
+    class DisconnectedBrowser:
+        def is_connected(self) -> bool:
+            return False
+
+    service._session_browsers[stale.session_id] = DisconnectedBrowser()
+
+    async def fake_ensure_pc_agent_cdp_session(**kwargs):
+        return service.register_trusted_session(
+            label=kwargs["label"],
+            endpoint_kind="local_agent",
+            metadata={"agent_id": "ceo-pc", "port": "9334", "endpoint_kind": "local_agent"},
+            work_key=kwargs["work_key"],
+            protected=kwargs["protected"],
+            activate=kwargs["activate"],
+        )
+
+    monkeypatch.setattr(service, "ensure_pc_agent_cdp_session", fake_ensure_pc_agent_cdp_session)
+
+    recreated = await service.ensure_work_session(work_key="ntv2-china-sourcing-admin")
+
+    assert recreated.session_id != stale.session_id
+    assert recreated.work_key == "ntv2-china-sourcing-admin"
+    assert service.sessions.get(stale.session_id).work_key == ""
+    assert service.active_session().session_id == stale.session_id

@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 import os
+import re
 import urllib.error
 import urllib.request
 from datetime import timedelta
@@ -28,6 +29,32 @@ LOCAL_AGENT_COMMAND_TIMEOUT_SECONDS = 120
 LOCAL_AGENT_NAVIGATION_TIMEOUT_SECONDS = 180
 LOCAL_AGENT_SNAPSHOT_TIMEOUT_SECONDS = 180
 LOCAL_AGENT_LEASE_BUFFER_SECONDS = 30
+WORK_KEY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._:-]{1,119}$")
+PROTECTED_WORK_KEYS = {"ntv2-sinsang-registration"}
+PROTECTED_LABEL_MARKERS = ("sinsang", "신상마켓")
+DEFAULT_WORK_SESSION_LABELS = {
+    "ntv2-sinsang-registration": "NTV2 Sinsang registration",
+    "ntv2-china-sourcing-admin": "NTV2 China sourcing admin",
+    "ntv2-vvic-scrape": "NTV2 VVIC scrape",
+}
+
+
+def normalize_work_key(work_key: str) -> str:
+    value = (work_key or "").strip().lower()
+    if not value:
+        raise ValueError("work_key required")
+    if not WORK_KEY_PATTERN.match(value):
+        raise ValueError("work_key must be 2-120 chars: lowercase letters, digits, dot, dash, underscore, colon")
+    return value
+
+
+def default_work_session_label(work_key: str) -> str:
+    return DEFAULT_WORK_SESSION_LABELS.get(work_key, f"Browser work session: {work_key}")
+
+
+def looks_like_protected_label(label: str) -> bool:
+    normalized = (label or "").strip().lower()
+    return any(marker in normalized for marker in PROTECTED_LABEL_MARKERS)
 
 
 class _LocalAgentLocator:
@@ -232,12 +259,20 @@ class BrowserBridgeService:
         metadata: dict[str, Any] | None = None,
         activate: bool = True,
         expires_hours: int | None = None,
+        work_key: str = "",
+        protected: bool = False,
     ) -> BrowserBridgeSession:
+        normalized_work_key = normalize_work_key(work_key) if work_key else ""
+        is_protected = bool(protected or normalized_work_key in PROTECTED_WORK_KEYS or looks_like_protected_label(label))
+        endpoint_metadata = dict(metadata or {})
+        if normalized_work_key:
+            endpoint_metadata["work_key"] = normalized_work_key
+            endpoint_metadata["protected"] = is_protected
         endpoint = BrowserEndpoint(
             kind=BrowserEndpointKind(endpoint_kind),
             url=endpoint_url,
             browser_name=browser_name or "chromium",
-            metadata=metadata or {},
+            metadata=endpoint_metadata,
         )
         validate_bridge_endpoint(endpoint.kind, endpoint.url)
 
@@ -257,8 +292,10 @@ class BrowserBridgeService:
             storage_state_ref=storage_state_ref,
             created_by=pairing.created_by,
             expires_at=expires_at,
+            work_key=normalized_work_key,
+            protected=is_protected,
         )
-        return self.sessions.register(session, activate=activate)
+        return self.sessions.register(session, activate=activate and not normalized_work_key)
 
     def register_trusted_session(
         self,
@@ -272,12 +309,20 @@ class BrowserBridgeService:
         expires_hours: int | None = None,
         session_id: str | None = None,
         created_by: str = "system",
+        work_key: str = "",
+        protected: bool = False,
     ) -> BrowserBridgeSession:
+        normalized_work_key = normalize_work_key(work_key) if work_key else ""
+        is_protected = bool(protected or normalized_work_key in PROTECTED_WORK_KEYS or looks_like_protected_label(label))
+        endpoint_metadata = dict(metadata or {})
+        if normalized_work_key:
+            endpoint_metadata["work_key"] = normalized_work_key
+            endpoint_metadata["protected"] = is_protected
         endpoint = BrowserEndpoint(
             kind=BrowserEndpointKind(endpoint_kind),
             url=endpoint_url,
             browser_name=browser_name or "chromium",
-            metadata=metadata or {},
+            metadata=endpoint_metadata,
         )
         validate_bridge_endpoint(endpoint.kind, endpoint.url)
         expires_at = utcnow() + timedelta(hours=expires_hours) if expires_hours else None
@@ -288,6 +333,8 @@ class BrowserBridgeService:
             registered_at=utcnow(),
             created_by=created_by,
             expires_at=expires_at,
+            work_key=normalized_work_key,
+            protected=is_protected,
         )
         return self.sessions.register(session, activate=activate)
 
@@ -301,10 +348,14 @@ class BrowserBridgeService:
         isolated_profile: bool = True,
         isolation_id: str = "",
         activate: bool = False,
+        work_key: str = "",
+        protected: bool = False,
     ) -> BrowserBridgeSession:
         """Launch or reuse Chrome through PC Agent and register a local-agent bridge session."""
         from app.services.pc_agent_manager import pc_agent_manager
 
+        normalized_work_key = normalize_work_key(work_key) if work_key else ""
+        is_protected = bool(protected or normalized_work_key in PROTECTED_WORK_KEYS or looks_like_protected_label(label))
         launch_params: dict[str, Any] = {
             "url": url or "about:blank",
             "dynamic_port": True,
@@ -313,8 +364,8 @@ class BrowserBridgeService:
         }
         if preferred_port:
             launch_params["preferred_port"] = int(preferred_port)
-        if isolation_id:
-            launch_params["isolation_id"] = isolation_id
+        if isolation_id or normalized_work_key:
+            launch_params["isolation_id"] = isolation_id or normalized_work_key
 
         routed = await pc_agent_manager.execute_routed_command(
             command_type="browser_launch",
@@ -355,6 +406,13 @@ class BrowserBridgeService:
             port=str(port),
             endpoint_kind=BrowserEndpointKind.LOCAL_AGENT.value,
         )
+        existing_is_protected = bool(
+            existing and (existing.protected or existing.work_key in PROTECTED_WORK_KEYS or looks_like_protected_label(existing.label))
+        )
+        if existing and existing_is_protected and existing.work_key != normalized_work_key:
+            existing = None
+        if existing and normalized_work_key and existing.work_key and existing.work_key != normalized_work_key:
+            existing = None
         metadata = {
             "agent_id": selected_agent_id,
             "port": str(port),
@@ -364,20 +422,114 @@ class BrowserBridgeService:
             "cdp_url": f"pc-agent://{selected_agent_id}/cdp/{port}",
             "last_url": url or "about:blank",
         }
+        if normalized_work_key:
+            metadata["work_key"] = normalized_work_key
+            metadata["protected"] = is_protected
         if existing:
             existing.endpoint.metadata = metadata
             existing.label = label or existing.label
-            self.sessions.touch(existing)
-            if activate:
+            if normalized_work_key:
+                existing.work_key = normalized_work_key
+                existing.protected = is_protected
+                existing = self.sessions.bind_work_key(
+                    existing,
+                    work_key=normalized_work_key,
+                    protected=is_protected,
+                )
+            else:
+                self.sessions.touch(existing)
+            if activate and not normalized_work_key:
                 return self.select_session(existing.session_id)
             return existing
         return self.register_trusted_session(
             label=label,
             endpoint_kind=BrowserEndpointKind.LOCAL_AGENT.value,
             metadata=metadata,
-            activate=activate,
+            activate=activate and not normalized_work_key,
             created_by="pc_agent",
+            work_key=normalized_work_key,
+            protected=is_protected,
         )
+
+    async def ensure_work_session(
+        self,
+        *,
+        work_key: str,
+        label: str = "",
+        agent_id: str = "",
+        url: str = "about:blank",
+        preferred_port: int | None = None,
+    ) -> BrowserBridgeSession:
+        """Return the dedicated Browser Bridge session for a business workflow.
+
+        The active Browser Bridge session is intentionally left unchanged.
+        Work sessions use isolated PC Agent Chrome profiles so login storage does
+        not bleed into another workflow.
+        """
+        normalized_work_key = normalize_work_key(work_key)
+        is_protected = normalized_work_key in PROTECTED_WORK_KEYS or looks_like_protected_label(label)
+        existing = self.sessions.find_by_work_key(normalized_work_key)
+        if existing and self._session_reusable(existing):
+            existing.mark_used()
+            if is_protected and not existing.protected:
+                existing.protected = True
+            self.sessions.touch(existing)
+            logger.info(
+                "browser_bridge_work_session_reused work_key=%s session_id=%s active_unchanged=true",
+                normalized_work_key,
+                existing.session_id,
+            )
+            return existing
+
+        if existing:
+            logger.warning(
+                "browser_bridge_work_session_recreate work_key=%s old_session_id=%s reason=stale_or_expired",
+                normalized_work_key,
+                existing.session_id,
+            )
+
+        session = await self.ensure_pc_agent_cdp_session(
+            agent_id=agent_id,
+            label=label or default_work_session_label(normalized_work_key),
+            url=url or "about:blank",
+            preferred_port=preferred_port,
+            isolated_profile=True,
+            isolation_id=normalized_work_key,
+            activate=False,
+            work_key=normalized_work_key,
+            protected=is_protected,
+        )
+        session.mark_used()
+        self.sessions.touch(session)
+        logger.info(
+            "browser_bridge_work_session_ready work_key=%s session_id=%s active_unchanged=true protected=%s",
+            normalized_work_key,
+            session.session_id,
+            is_protected,
+        )
+        return session
+
+    def _session_reusable(self, session: BrowserBridgeSession) -> bool:
+        if session.is_expired:
+            return False
+        if session.endpoint.kind == BrowserEndpointKind.LOCAL_AGENT:
+            metadata = dict(session.endpoint.metadata or {})
+            return bool(metadata.get("agent_id") and metadata.get("port"))
+        browser = self._session_browsers.get(session.session_id)
+        if browser is not None and hasattr(browser, "is_connected"):
+            try:
+                return bool(browser.is_connected())
+            except Exception:
+                return False
+        return True
+
+    def work_session_status(self) -> dict[str, Any]:
+        active = self.active_session()
+        return {
+            "active_session": active.session_id if active else None,
+            "work_sessions": self.sessions.public_work_sessions(),
+            "sessions": list(self.sessions.public_sessions()),
+        }
 
     async def _execute_pc_agent_route_via_active_api(
         self,

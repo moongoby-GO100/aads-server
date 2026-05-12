@@ -1,6 +1,15 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-12)
+- **Browser Bridge 업무별 전용 세션 매니저 (AADS-BRIDGE-SESSION-001, 2026-05-12 KST)**:
+  - 요청: NTV2/신상마켓 상품등록 세션을 침범하지 않도록 중국상품소싱/검수/VVIC 등 업무별 Browser Bridge 전용 세션을 자동 확보·분리.
+  - 조치: `BrowserBridgeSession`에 `work_key`, `protected`를 추가하고 세션 registry 저장/조회에 반영했다. `ntv2-sinsang-registration`은 보호 업무 키이며, `sinsang`/`신상마켓` 라벨 세션도 보호 세션으로 취급한다.
+  - 조치: `BrowserBridgeService.ensure_work_session()`을 추가했다. 호출자는 `browser_work_key` 또는 `browser_connect(action="ensure_work_session", work_key="ntv2-china-sourcing-admin")`를 넘기며, 매니저가 기존 전용 세션 재사용/stale 세션 재생성/isolated profile 생성까지 처리한다. 이 경로는 `activate=False`로 동작해 active 세션을 바꾸지 않는다.
+  - API/도구: `POST /api/v1/browser-bridge/work-sessions/ensure`, `GET /api/v1/browser-bridge/work-sessions`를 추가했다. `GET /sessions`와 `browser_connect(status)`는 세션 라벨, storage 여부, leased 여부, last_used_at, work_key/protected 매핑을 노출한다.
+  - 로그인 자동화: AADS/vault 자동 로그인은 `browser_work_key` 또는 `browser_session_id`가 명시된 분리 세션에서만 수행해 기존 active 세션 쿠키/스토리지와 섞이지 않게 했다.
+  - 운영 규칙: 신상마켓 상품등록은 `browser_work_key="ntv2-sinsang-registration"` 전용으로만 사용한다. 중국상품소싱 관리자 검수는 `browser_work_key="ntv2-china-sourcing-admin"`, VVIC 수집은 `browser_work_key="ntv2-vvic-scrape"`를 사용하고 raw `browser_session_id` 공유를 피한다.
+  - 테스트: `tests/unit/test_browser_bridge.py`에 보호 신상마켓 세션과 중국상품소싱 세션 분리, 동일 업무 키 재사용, disconnected context 재생성, active 세션 불변 검증 케이스를 추가했다.
+
 - **Chat 보고서 깊이 계약 및 부실보고 재작성 게이트 (2026-05-12 12:45 KST)**:
   - 요청: 채팅창 보고서 출력 품질 개선이 실제 응답 내용까지 개선되는지 확인 후, 문제점·원인·개선 권장안·완료기준이 빈약한 보고를 즉시 개선.
   - 조치: `app/services/output_validator.py`에 `REPORT_STRUCTURE_WEAK` 검사를 추가했다. 보고/분석/CTO/리서치 계열 인텐트가 너무 짧거나 `문제점/리스크`, `원인/근거`, `개선 권장안`, `검증 방법/완료기준`, `다음 단계` 중 핵심 구조를 2개 이상 누락하면 저장 전 재작성 스트림으로 돌린다.

@@ -473,7 +473,10 @@ async def test_call_stream_routes_registry_claude_backend_without_static_allowli
 def test_is_codex_retryable_error_distinguishes_transient_and_auth_errors():
     assert model_selector._is_codex_retryable_error("Codex Relay timeout (300s)")
     assert model_selector._is_codex_retryable_error("Codex Relay not healthy: 503")
+    assert model_selector._is_codex_retryable_error("Codex Relay 429: rate limit, please retry later")
     assert not model_selector._is_codex_retryable_error("Codex Relay 401: unauthorized")
+    assert not model_selector._is_codex_retryable_error("You've hit your limit · resets 3am")
+    assert not model_selector._is_codex_retryable_error("You exceeded your current quota, please check your plan and billing details.")
 
 
 @pytest.mark.asyncio

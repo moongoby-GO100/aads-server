@@ -1,5 +1,12 @@
 # AADS HANDOVER
-최종 업데이트: 2026-05-11
+최종 업데이트: 2026-05-12
+
+## 2026-05-12
+- Browser Bridge 업무 키 전용 세션 매니저 적용: `ntv2-sinsang-registration`, `ntv2-china-sourcing-admin`, `ntv2-vvic-scrape` 같은 업무 키로 세션을 확보한다.
+- `ntv2-sinsang-registration`은 보호 세션이다. 중국상품소싱 관리자 검수나 VVIC 수집 자동화는 이 세션을 공유하지 말고 `browser_work_key`를 지정해 별도 세션을 사용한다.
+- 사용 예시: `browser_connect(action="ensure_work_session", work_key="ntv2-china-sourcing-admin")`, 이후 `browser_navigate(url="...", browser_work_key="ntv2-china-sourcing-admin")`.
+- 상태 확인: `browser_connect(action="status")` 또는 `GET /api/v1/browser-bridge/work-sessions`에서 label, storage, leased, last_used_at, work_key/protected 매핑을 확인한다.
+- AADS/vault 자동 로그인은 분리 세션(`browser_work_key` 또는 `browser_session_id` 명시)에서만 수행한다.
 
 ## 2026-05-11
 - Pipeline Runner dashboard-target guard applied in `scripts/pipeline-runner.sh`: AADS jobs that reference `/root/aads/aads-dashboard`, `aads-dashboard`, or chat/dashboard frontend paths now run against `/root/aads/aads-dashboard` instead of the backend workdir.

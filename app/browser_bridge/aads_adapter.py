@@ -8,10 +8,20 @@ from .service import get_browser_bridge_service
 
 async def acquire_browser_context(
     browser_session_id: str | None = None,
+    browser_work_key: str | None = None,
+    url: str = "about:blank",
 ) -> tuple[Any, Optional[str]]:
-    return await get_browser_bridge_service().acquire_playwright_context(
-        session_id=browser_session_id or None
-    )
+    service = get_browser_bridge_service()
+    if browser_work_key and not browser_session_id:
+        try:
+            session = await service.ensure_work_session(
+                work_key=browser_work_key,
+                url=url or "about:blank",
+            )
+        except Exception as exc:
+            return None, f"[브라우저 업무 세션 확보 실패] {exc}"
+        browser_session_id = session.session_id
+    return await service.acquire_playwright_context(session_id=browser_session_id or None)
 
 
 def create_pairing_instructions(label: str = "CEO local Chrome", created_by: str = "") -> str:

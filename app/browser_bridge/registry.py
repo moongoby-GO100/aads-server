@@ -174,6 +174,8 @@ class SessionRegistry:
             "last_used_at": session.last_used_at.isoformat() if session.last_used_at else None,
             "lease_owner": session.lease_owner,
             "lease_expires_at": session.lease_expires_at.isoformat() if session.lease_expires_at else None,
+            "work_key": session.work_key,
+            "protected": session.protected,
         }
 
     def _parse_dt(self, value: str | None) -> datetime | None:
@@ -206,6 +208,8 @@ class SessionRegistry:
             last_used_at=self._parse_dt(payload.get("last_used_at")),
             lease_owner=str(payload.get("lease_owner") or ""),
             lease_expires_at=self._parse_dt(payload.get("lease_expires_at")),
+            work_key=str(payload.get("work_key") or ""),
+            protected=bool(payload.get("protected")),
         )
 
     def _load(self) -> None:
@@ -241,6 +245,8 @@ class SessionRegistry:
     def register(self, session: BrowserBridgeSession, *, activate: bool = True) -> BrowserBridgeSession:
         validate_bridge_endpoint(session.endpoint.kind, session.endpoint.url)
         with self._lock:
+            if session.work_key:
+                self._unbind_work_key_locked(session.work_key, except_session_id=session.session_id)
             if activate:
                 for existing in self._sessions.values():
                     existing.active = False
@@ -248,6 +254,16 @@ class SessionRegistry:
             self._sessions[session.session_id] = session
             self._save_locked()
         return session
+
+    def _unbind_work_key_locked(self, work_key: str, *, except_session_id: str = "") -> int:
+        released = 0
+        for existing in self._sessions.values():
+            if existing.session_id == except_session_id:
+                continue
+            if existing.work_key == work_key:
+                existing.work_key = ""
+                released += 1
+        return released
 
     def list_sessions(self, include_expired: bool = False) -> list[BrowserBridgeSession]:
         with self._lock:
@@ -298,6 +314,43 @@ class SessionRegistry:
             if all(str(metadata.get(key) or "") == str(value) for key, value in criteria.items()):
                 return session
         return None
+
+    def find_by_work_key(self, work_key: str) -> Optional[BrowserBridgeSession]:
+        work_key = (work_key or "").strip()
+        if not work_key:
+            return None
+        with self._lock:
+            sessions = list(self._sessions.values())
+        for session in sessions:
+            if session.is_expired:
+                continue
+            if session.work_key == work_key:
+                return session
+        return None
+
+    def bind_work_key(
+        self,
+        session: BrowserBridgeSession,
+        *,
+        work_key: str,
+        protected: bool = False,
+    ) -> BrowserBridgeSession:
+        work_key = (work_key or "").strip()
+        if not work_key:
+            raise ValueError("work_key required")
+        with self._lock:
+            current = self._sessions.get(session.session_id)
+            if current is None or current.is_expired:
+                raise ValueError(f"browser bridge session not found: {session.session_id}")
+            self._unbind_work_key_locked(work_key, except_session_id=current.session_id)
+            current.work_key = work_key
+            current.protected = bool(protected)
+            metadata = dict(current.endpoint.metadata or {})
+            metadata["work_key"] = work_key
+            metadata["protected"] = bool(protected)
+            current.endpoint.metadata = metadata
+            self._save_locked()
+            return current
 
     def acquire_lease(
         self,
@@ -354,6 +407,13 @@ class SessionRegistry:
 
     def public_sessions(self, include_expired: bool = False) -> Iterable[dict]:
         return [session.public_dict() for session in self.list_sessions(include_expired=include_expired)]
+
+    def public_work_sessions(self) -> list[dict]:
+        return [
+            session.public_dict()
+            for session in self.list_sessions()
+            if session.work_key
+        ]
 
 
 def new_session_id() -> str:
