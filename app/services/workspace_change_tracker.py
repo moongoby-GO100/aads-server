@@ -22,6 +22,13 @@ _STATUS_DIRTY = "dirty"
 _STATUS_COMMITTED = "committed"
 _STATUS_PUSHED = "pushed"
 _STATUS_DEPLOYED = "deployed"
+_AADS_RUNTIME_STATE_PATHS = {".active_container", ".active_port"}
+
+
+def _is_ignored_change_path(project: str, repo: str, file_path: str) -> bool:
+    """Return true for runtime state files that must not enter the change ledger."""
+    normalized = _normalize_repo_path(project, repo, file_path)
+    return project == "AADS" and repo == "aads-server" and normalized in _AADS_RUNTIME_STATE_PATHS
 
 
 async def ensure_workspace_change_table() -> None:
@@ -85,6 +92,14 @@ async def record_change(
     sid = (session_id or "").strip()
     if not sid:
         raise ValueError("session_id is required")
+    if _is_ignored_change_path(project, repo, file_path):
+        logger.info(
+            "workspace_change_ignored_runtime_state project=%s repo=%s file=%s",
+            project,
+            repo,
+            file_path,
+        )
+        return
     pool = get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
@@ -159,7 +174,11 @@ async def list_changes(
             """,
             *args,
         )
-    return [dict(r) for r in rows]
+    return [
+        dict(r)
+        for r in rows
+        if not _is_ignored_change_path(str(r["project"]), str(r["repo"]), str(r["file_path"]))
+    ]
 
 
 async def has_pending_changes(*, session_id: str, project: Optional[str] = None) -> bool:

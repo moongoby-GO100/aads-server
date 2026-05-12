@@ -1,6 +1,14 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-12)
+- **AADS runtime marker 커밋/ledger 오염 방지 (2026-05-12 11:55 KST)**:
+  - 요청: BG 전환 후 `.active_container`/`.active_port` 같은 런타임 marker가 커밋/dirty ledger에 섞이는 문제를 이어서 개선.
+  - 조치: `app/services/workspace_change_tracker.py`에 AADS `aads-server` 런타임 상태 파일 ignore 가드를 추가했다. 신규 record/list/finalize 경로에서 `.active_container`, `.active_port`를 workspace change ledger 대상으로 보지 않는다.
+  - 조치: `app/services/tool_executor.py`의 run_remote_command 전후 git diff hook 필터에도 동일 파일을 제외했다.
+  - 조치: `scripts/pipeline-runner.sh` deploy 단계의 `git add -A` 직후 `.active_container`, `.active_port`를 즉시 unstaging하여 러너 승인/배포 커밋에 marker가 섞이지 않게 했다.
+  - 검증: `python3 -m pytest tests/unit/test_workspace_change_tracker.py tests/unit/test_response_completion_contract.py -q` → 7 passed. `python3 -m py_compile app/services/workspace_change_tracker.py app/services/tool_executor.py app/services/chat_service.py` 통과.
+  - 주의: 현재 작업트리에는 실제 운영 상태를 반영한 `.active_container=aads-server`, `.active_port=8100` dirty가 남아 있다. 이는 이번 커밋 대상에서 제외해야 한다.
+
 - **Chat completion contract 문서기록 검증 보강 (2026-05-12 11:44 KST)**:
   - 요청: 커밋/푸시/문서기록 실행 시기와 훅 개선안의 권장조치를 실제 반영.
   - 조치: `app/services/response_completion_contract.py`가 세션 ledger 전체 상태(`dirty/committed/pushed/deployed`)를 읽도록 변경했다. 이제 응답이 "문서기록 완료/HANDOVER 업데이트 완료"라고 보고할 때 ledger에 `HANDOVER.md` 또는 `docs/*.md` 변경 근거가 없으면 `document_report_unverified_by_ledger`, 문서 파일이 아직 미커밋/미푸시/미배포 상태면 `document_report_conflicts_with_ledger`로 보정한다.

@@ -1255,6 +1255,7 @@ deploy_job() {
                 log "  WARN: worktree git add -A failed, using file-copy fallback"
                 _wt_add_failed="true"
             fi
+            git reset -q -- .active_container .active_port 2>/dev/null || true
 
             local diff_content
             diff_content=$(git diff --cached HEAD 2>/dev/null) || true
@@ -1269,6 +1270,7 @@ deploy_job() {
                     cd "$main_workdir"
                 }
                 git add -A 2>/dev/null || true
+                git reset -q -- .active_container .active_port 2>/dev/null || true
             else
                 # diff_content가 비어있어도 실제 변경 파일이 있을 수 있음 (git index 이상 등)
                 local _changed_files
@@ -1294,6 +1296,7 @@ deploy_job() {
                     done <<< "$_changed_files"
                     cd "$main_workdir"
                     git add -A 2>/dev/null || true
+                    git reset -q -- .active_container .active_port 2>/dev/null || true
                 else
                     log "  WORKTREE_NO_CHANGES: $job_id"
                 fi
@@ -1302,6 +1305,7 @@ deploy_job() {
         else
             cd "$main_workdir"
             git add -A 2>/dev/null || true
+            git reset -q -- .active_container .active_port 2>/dev/null || true
         fi
 
         # .py 파일 변경 여부 감지 (커밋 전 staged 변경 기준)

@@ -1621,10 +1621,13 @@ class ToolExecutor:
         # 노이즈 필터: 민감/빌드 산출물/백업 제외 (공통)
         _skip_prefixes = (".git/", "node_modules/", ".next/", "__pycache__/", ".venv/", "venv/", "dist/", "build/")
         _skip_suffixes = (".bak_aads", ".pyc", ".pyo", ".log", ".lock")
+        _skip_exact = {".active_container", ".active_port"}
 
         def _filter(paths: set[str]) -> list[str]:
             out: list[str] = []
             for p in sorted(paths):
+                if p in _skip_exact:
+                    continue
                 if any(p.startswith(pre) for pre in _skip_prefixes):
                     continue
                 if p.endswith(_skip_suffixes):
