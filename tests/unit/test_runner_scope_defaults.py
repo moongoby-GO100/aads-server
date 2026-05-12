@@ -257,3 +257,29 @@ async def test_tool_executor_pipeline_runner_submit_overrides_supplied_session_w
 
     assert result["job_id"] == "runner-test"
     assert client.calls[0]["json"]["session_id"] == _SESSION_ID
+
+
+def test_model_selector_binds_current_session_before_tool_display():
+    from app.services.model_selector import _bind_tool_session_input
+
+    wrong_session = "22222222-2222-2222-2222-222222222222"
+
+    submit_input = _bind_tool_session_input(
+        "pipeline_runner_submit",
+        {"project": "GO100", "instruction": "test", "session_id": wrong_session},
+        _SESSION_ID,
+    )
+    status_input = _bind_tool_session_input(
+        "check_task_status",
+        {"session_id": None},
+        _SESSION_ID,
+    )
+    global_input = _bind_tool_session_input(
+        "check_task_status",
+        {"scope": "all", "session_id": None},
+        _SESSION_ID,
+    )
+
+    assert submit_input["session_id"] == _SESSION_ID
+    assert status_input["session_id"] == _SESSION_ID
+    assert global_input["session_id"] is None

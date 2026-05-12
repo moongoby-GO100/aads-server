@@ -874,3 +874,16 @@
 - 조치: `app/services/agent_sdk_service.py`, `app/services/tool_executor.py`, `app/api/ceo_chat_tools.py`에서 `pipeline_runner_submit`, `pipeline_runner_submit_batch`, `pipeline_c_start`는 현재 채팅 핸들러/ContextVar 세션을 도구 입력의 `session_id`보다 우선하도록 변경했다. 현재 세션이 있으면 URL에서 추출된 다른 세션 ID는 덮어쓰고 경고 로그를 남긴다.
 - 조치: 프로젝트 자동 추론도 러너 제출 계열에서는 덮어쓴 현재 세션 기준으로 수행되게 보정했다. 세션이 전혀 없을 때만 외부 직접 호출 fallback으로 입력 `session_id`를 사용하며, 프로젝트 최근 활성 세션 fallback은 계속 금지한다.
 - 검증: `python3 -m py_compile app/services/agent_sdk_service.py app/services/tool_executor.py app/api/ceo_chat_tools.py` 통과. `pytest -q tests/unit/test_runner_scope_defaults.py` 9개 통과. 신규 회귀 테스트로 잘못 전달된 `session_id`가 현재 채팅 세션으로 덮어써지는지 확인했다.
+
+## 2026-05-12 13:43 KST - Codex/Claude CLI relay 재시도 2초 30회 적용
+
+- 배경: Codex relay는 기존 `2초, 5초` 2회 재시도였고, Claude CLI relay에는 같은 모델로 이어쓰기 재시도 래퍼가 없어 429/timeout/relay 5xx/일시 연결 끊김 시 응답이 중단될 수 있었다.
+- 조치: `app/services/model_selector.py`에 공통 relay 재시도 정책을 추가해 Codex relay와 Claude CLI relay 모두 기본 `2초 간격 x 30회` 재시도로 통일했다. 환경변수 `AADS_RELAY_RETRY_INTERVAL_SECONDS`, `AADS_RELAY_RETRY_MAX_RETRIES`로 조정 가능하다.
+- 조치: Claude CLI relay도 partial 응답이 있으면 재시도 요청에 직전 assistant 초안을 붙여 동일 모델이 마지막 문장 다음부터 자연스럽게 이어 쓰도록 보강했다. 명시적 quota/결제/인증/`You've hit your limit ... resets` 계열은 재시도하지 않는다.
+- 검증: `python3 -m py_compile app/services/model_selector.py` 통과. `pytest -q tests/unit/test_model_selector_dynamic_routing.py::test_stream_cli_relay_retries_same_model_before_returning_done tests/unit/test_model_selector_dynamic_routing.py::test_stream_codex_relay_retries_same_model_before_returning_done tests/unit/test_model_selector_dynamic_routing.py::test_relay_retry_policy_defaults_to_two_seconds_thirty_retries` 3개 통과.
+
+## 2026-05-12 13:52 KST - Runner/작업조회 도구 현재 채팅 세션 선주입
+
+- 배경: 러너 오귀속 방지 패치 후, 도구 실행 컨텍스트에 현재 채팅 세션이 표시되기 전에 모델이 `session_id: null` 또는 다른 URL의 세션 ID를 만든 경우 `pipeline_runner_submit`이 "현재 채팅 세션을 확인할 수 없습니다"로 차단되거나 `check_task_status`가 `session_id: null`로 표시되는 경로가 남아 있었다.
+- 조치: `app/services/model_selector.py`에 `_bind_tool_session_input()`을 추가해 `pipeline_runner_submit`, `pipeline_runner_submit_batch`, `pipeline_c_start`, `pipeline_runner_status`, `check_task_status`, `check_directive_status` 호출은 프론트 `tool_use` 이벤트 표시 전과 실제 실행 전 모두 현재 AADS 채팅 세션 ID를 주입하도록 했다. `scope=all` 요청은 전역 조회 의도를 존중해 세션을 주입하지 않는다.
+- 검증: `python3 -m py_compile app/services/model_selector.py app/services/tool_executor.py app/api/ceo_chat_tools.py` 통과. `pytest -q tests/unit/test_runner_scope_defaults.py` 10개 통과. 신규 회귀 테스트로 잘못 전달된 러너 `session_id` 덮어쓰기, `check_task_status(session_id=None)` 현재 세션 주입, `scope=all` 예외를 확인했다.

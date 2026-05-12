@@ -40,6 +40,8 @@ _CLI_RESUME_CONTINUITY_WINDOW = int(os.getenv("AADS_CLI_RESUME_CONTINUITY_WINDOW
 _CODEX_PROJECT_KEYS = ("AADS", "KIS", "GO100", "SF", "NTV2", "NAS", "KAKAOBOT")
 _CODEX_PROJECT_CACHE_TTL_SECONDS = 30.0
 _CODEX_PROJECT_CACHE: Dict[str, tuple[str, float]] = {}
+_RELAY_RETRY_INTERVAL_SECONDS = float(os.getenv("AADS_RELAY_RETRY_INTERVAL_SECONDS", "2"))
+_RELAY_RETRY_MAX_RETRIES = int(os.getenv("AADS_RELAY_RETRY_MAX_RETRIES", "30"))
 _PROJECT_RUNTIME_HINTS = {
     "AADS": "local_workdir=/root/aads/aads-server; dashboard=/root/aads/aads-dashboard",
     "KIS": "remote_server=server-211; remote_workdir=/root/kis-autotrade-v4",
@@ -216,6 +218,46 @@ def _is_db_slot_rate_limited(record: Optional[Dict[str, Any]]) -> bool:
 
 # AADS session_id → CLI session_id 매핑 (대화 이어가기용)
 _cli_session_map: Dict[str, str] = {}  # {aads_session_id: cli_session_id}
+
+_SESSION_BOUND_TOOLS = {
+    "pipeline_runner_submit",
+    "pipeline_runner_submit_batch",
+    "pipeline_c_start",
+    "pipeline_runner_status",
+    "check_task_status",
+    "check_directive_status",
+}
+
+
+def _bind_tool_session_input(
+    tool_name: str,
+    tool_input: Optional[Dict[str, Any]],
+    session_id: Optional[str],
+) -> Dict[str, Any]:
+    """Attach the active AADS chat session before displaying/executing tools."""
+    bound = dict(tool_input or {})
+    active_session = str(session_id or "").strip()
+    if not active_session or tool_name not in _SESSION_BOUND_TOOLS:
+        return bound
+
+    scope = str(bound.get("scope") or "").strip().lower()
+    if scope in {"all", "global", "*"}:
+        return bound
+
+    supplied_session = str(bound.get("session_id") or "").strip()
+    if tool_name in {"pipeline_runner_submit", "pipeline_runner_submit_batch", "pipeline_c_start"}:
+        if supplied_session and supplied_session != active_session:
+            logger.warning(
+                "runner_session_override_before_tool_call: tool=%s supplied=%s current=%s",
+                tool_name,
+                supplied_session[:8],
+                active_session[:8],
+            )
+        bound["session_id"] = active_session
+    elif not supplied_session:
+        bound["session_id"] = active_session
+
+    return bound
 
 _INTENT_POLICY_CACHE_TTL_SECONDS = 300
 _INTENT_POLICY_CACHE: Dict[str, Any] = {"expires_at": 0.0, "policies": {}}
@@ -1821,9 +1863,10 @@ async def _stream_litellm_anthropic(
                 tool_results = []
                 from app.api.ceo_chat_tools import execute_tool as _exec_tool
                 for tu in _tool_uses:
-                    yield {"type": "tool_use", "tool_name": tu["name"], "tool_use_id": tu["id"], "tool_input": tu["input"]}
+                    tool_input = _bind_tool_session_input(tu["name"], tu["input"], session_id)
+                    yield {"type": "tool_use", "tool_name": tu["name"], "tool_use_id": tu["id"], "tool_input": tool_input}
                     try:
-                        result = await _exec_tool(tu["name"], tu["input"], "", session_id or "")
+                        result = await _exec_tool(tu["name"], tool_input, "", session_id or "")
                         yield {"type": "tool_result", "tool_name": tu["name"], "content": str(result)[:3000]}
                         tool_results.append({
                             "type": "tool_result",
@@ -2086,6 +2129,7 @@ async def _stream_litellm_openai(
                 _args = json.loads(tc["args_buf"]) if isinstance(tc["args_buf"], str) else tc["args_buf"]
             except Exception:
                 _args = {}
+            _args = _bind_tool_session_input(tc["name"], _args, session_id)
             try:
                 _res = await _exec_tool(tc["name"], _args, "", session_id or "")
                 return {"id": tc["id"], "name": tc["name"], "args": _args, "result": str(_res)[:4000], "ok": True}
@@ -2103,6 +2147,7 @@ async def _stream_litellm_openai(
                 _args = json.loads(tc["args_buf"]) if isinstance(tc["args_buf"], str) else tc["args_buf"]
             except Exception:
                 _args = {}
+            _args = _bind_tool_session_input(tc["name"], _args, session_id)
             yield {"type": "tool_use", "tool_name": tc["name"], "tool_use_id": tc["id"], "tool_input": _args}
 
         _exec_results = await asyncio.gather(*[_run_one(tc) for tc in _sorted_tcs])
@@ -2167,7 +2212,7 @@ async def _stream_claude_sonnet_fallback(
         yield event
 
 
-async def _stream_cli_relay(
+async def _stream_cli_relay_once(
     model: str,
     system_prompt: str,
     messages: List[Dict[str, Any]],
@@ -2319,8 +2364,8 @@ async def _stream_cli_relay(
         logger.info(f"cli_relay_session_map: aads={session_id[:8]} -> cli={_captured_cli_sid[:8]}")
 
 
-_CODEX_RETRY_DELAYS = (2.0, 5.0)
-_CODEX_RETRYABLE_ERROR_MARKERS = (
+_RELAY_RETRY_DELAYS = tuple(_RELAY_RETRY_INTERVAL_SECONDS for _ in range(_RELAY_RETRY_MAX_RETRIES))
+_RELAY_RETRYABLE_ERROR_MARKERS = (
     "429",
     "rate limit",
     "rate_limit",
@@ -2344,7 +2389,7 @@ _CODEX_RETRYABLE_ERROR_MARKERS = (
     "econnreset",
     "network is unreachable",
 )
-_CODEX_NON_RETRYABLE_ERROR_MARKERS = (
+_RELAY_NON_RETRYABLE_ERROR_MARKERS = (
     "401",
     "403",
     "404",
@@ -2360,15 +2405,113 @@ _CODEX_NON_RETRYABLE_ERROR_MARKERS = (
     "authentication",
     "permission denied",
 )
+_CODEX_RETRY_DELAYS = _RELAY_RETRY_DELAYS
+_CLI_RETRY_DELAYS = _RELAY_RETRY_DELAYS
+_CODEX_RETRYABLE_ERROR_MARKERS = _RELAY_RETRYABLE_ERROR_MARKERS
+_CODEX_NON_RETRYABLE_ERROR_MARKERS = _RELAY_NON_RETRYABLE_ERROR_MARKERS
 
 
-def _is_codex_retryable_error(error_content: str) -> bool:
+def _is_relay_retryable_error(error_content: str) -> bool:
     lowered = str(error_content or "").lower()
     if not lowered:
         return False
-    if any(marker in lowered for marker in _CODEX_NON_RETRYABLE_ERROR_MARKERS):
+    if any(marker in lowered for marker in _RELAY_NON_RETRYABLE_ERROR_MARKERS):
         return False
-    return any(marker in lowered for marker in _CODEX_RETRYABLE_ERROR_MARKERS)
+    return any(marker in lowered for marker in _RELAY_RETRYABLE_ERROR_MARKERS)
+
+
+def _is_codex_retryable_error(error_content: str) -> bool:
+    return _is_relay_retryable_error(error_content)
+
+
+def _is_cli_retryable_error(error_content: str) -> bool:
+    return _is_relay_retryable_error(error_content)
+
+
+def _build_cli_retry_messages(messages: List[Dict[str, Any]], partial_content: str) -> List[Dict[str, Any]]:
+    retry_messages = [dict(message) for message in messages]
+    partial = (partial_content or "").strip()
+    if not partial:
+        return retry_messages
+    retry_messages.append(
+        {
+            "role": "assistant",
+            "content": partial[-6000:],
+        }
+    )
+    retry_messages.append(
+        {
+            "role": "user",
+            "content": (
+                "직전 Claude CLI 응답이 연결 문제로 중단되었습니다. "
+                "위 assistant 초안의 마지막 문장 다음부터 자연스럽게 이어서 답변하고, "
+                "이미 작성한 내용은 반복하지 마세요."
+            ),
+        }
+    )
+    return retry_messages
+
+
+async def _stream_cli_relay(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    session_id: Optional[str] = None,
+    oauth_slot: Optional[str] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    sdk_model = _ANTHROPIC_MODEL_ID.get(model, model)
+    retry_messages = messages
+    partial_content = ""
+
+    for attempt_idx in range(len(_CLI_RETRY_DELAYS) + 1):
+        last_error: Optional[str] = None
+        async for event in _stream_cli_relay_once(
+            model,
+            system_prompt,
+            retry_messages,
+            tools=tools,
+            session_id=session_id,
+            oauth_slot=oauth_slot,
+        ):
+            event_type = event.get("type")
+            if event_type == "delta":
+                partial_content += event.get("content", "")
+                yield event
+                continue
+            if event_type == "error":
+                last_error = str(event.get("content", "CLI relay error"))
+                break
+            yield event
+            if event_type == "done":
+                return
+
+        if not last_error:
+            return
+
+        if attempt_idx >= len(_CLI_RETRY_DELAYS) or not _is_cli_retryable_error(last_error):
+            yield {"type": "error", "content": last_error}
+            return
+
+        retry_delay = _CLI_RETRY_DELAYS[attempt_idx]
+        logger.warning(
+            "cli_relay_retry_same_model: model=%s session=%s attempt=%s/%s error=%s",
+            model,
+            (session_id or "default")[:8],
+            attempt_idx + 1,
+            len(_CLI_RETRY_DELAYS),
+            last_error[:200],
+        )
+        yield {
+            "type": "delta",
+            "content": (
+                f"\n\n⚠️ _{sdk_model} 연결이 일시 중단되어 "
+                f"{retry_delay:.0f}초 후 동일 모델로 다시 이어갑니다 ({attempt_idx + 1}/{len(_CLI_RETRY_DELAYS)})._"
+                "\n\n"
+            ),
+        }
+        await asyncio.sleep(retry_delay)
+        retry_messages = _build_cli_retry_messages(messages, partial_content)
 
 
 def _extract_codex_prompt_and_images(
@@ -3670,15 +3813,15 @@ async def _stream_anthropic(
                 # 제한 리셋 (경고 후 계속 진행 — 프론트에서 차단 UI 표시)
                 _consecutive_yellow = 0
 
+            tool_calls_made.append(tu.name)
+
+            tool_input = _bind_tool_session_input(tu.name, tu.input, session_id)
             yield {
                 "type": "tool_use",
                 "tool_name": tu.name,
-                "tool_input": tu.input,
+                "tool_input": tool_input,
                 "tool_use_id": tu.id,
             }
-            tool_calls_made.append(tu.name)
-
-            tool_input = dict(tu.input or {})
             if tu.name == "search_crawl_match" and not tool_input.get("synthesis_model"):
                 selected_model = str(model_id or "").strip()
                 if selected_model and selected_model.lower() not in {"auto", "mixture"}:

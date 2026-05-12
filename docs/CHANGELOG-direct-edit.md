@@ -500,3 +500,33 @@ _S
 
 ## [2026-05-11 18:28:31 KST] [aads-server] app/api/ceo_chat_tools.py
 - Chat-Direct 수정: run_remote_command: grep -n "Claude\|GPT\|Gemini" /root/aads/aads-server/app/services/chat_service.p
+
+## [2026-05-12 13:38:32 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: find /root/aads -maxdepth 4 -type d -name '*7e568511*'
+
+## [2026-05-12 13:38:33 KST] [aads-server] app/api/browser_bridge.py
+- Chat-Direct 수정: run_remote_command: find /root/aads -maxdepth 4 -type d -name '*7e568511*'
+
+## [2026-05-12 13:38:34 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: run_remote_command: find /root/aads -maxdepth 4 -type d -name '*7e568511*'
+
+## [2026-05-12 13:38:35 KST] [aads-server] app/browser_bridge/aads_adapter.py
+- Chat-Direct 수정: run_remote_command: find /root/aads -maxdepth 4 -type d -name '*7e568511*'
+
+## [2026-05-12 13:38:36 KST] [aads-server] app/browser_bridge/models.py
+- Chat-Direct 수정: run_remote_command: find /root/aads -maxdepth 4 -type d -name '*7e568511*'
+
+## [2026-05-12 13:38:37 KST] [aads-server] app/browser_bridge/registry.py
+- Chat-Direct 수정: run_remote_command: find /root/aads -maxdepth 4 -type d -name '*7e568511*'
+
+## [2026-05-12 13:38:39 KST] [aads-server] app/browser_bridge/service.py
+- Chat-Direct 수정: run_remote_command: find /root/aads -maxdepth 4 -type d -name '*7e568511*'
+
+## [2026-05-12 13:38:40 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: run_remote_command: find /root/aads -maxdepth 4 -type d -name '*7e568511*'
+
+## [2026-05-12 13:38:41 KST] [aads-server] app/services/tool_registry.py
+- Chat-Direct 수정: run_remote_command: find /root/aads -maxdepth 4 -type d -name '*7e568511*'
+
+## [2026-05-12 13:38:42 KST] [aads-server] tests/unit/test_browser_bridge.py
+- Chat-Direct 수정: run_remote_command: find /root/aads -maxdepth 4 -type d -name '*7e568511*'
