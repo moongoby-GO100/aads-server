@@ -555,6 +555,9 @@ case "$MODE" in
         echo "$NEW_CONTAINER" > /root/aads/aads-server/.active_container
         docker exec "$NEW_CONTAINER" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
         docker exec "$OLD_CONTAINER" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
+        echo "[deploy.sh] ⑤ PC Agent reconnect trigger on old slot :${OLD_PORT}"
+        curl -sf -X POST "http://127.0.0.1:${OLD_PORT}/api/v1/pc-agent/graceful-shutdown" \
+            -H "Content-Type: application/json" 2>/dev/null || true
         sync_standby_slot_after_drain "$OLD_CONTAINER" "$OLD_PORT"
 
         HEALTH_URL="http://localhost:${NEW_PORT}/api/v1/health"
