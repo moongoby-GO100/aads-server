@@ -24,9 +24,18 @@ get_active_port() {
     local upstream_port=""
     local upstream_count="0"
     if [[ -f "$UPSTREAM_CONF" ]]; then
-        upstream_count=$(grep "server 127.0.0.1:" "$UPSTREAM_CONF" | grep -v backup | grep -cE '127\.0\.0\.1:(8100|8102)' || true)
+        upstream_count=$(grep "server 127.0.0.1:" "$UPSTREAM_CONF" \
+            | grep -v backup \
+            | grep -oP '127\.0\.0\.1:\K(8100|8102)' \
+            | sort -u \
+            | wc -l \
+            | tr -d '[:space:]' || true)
         if [[ "$upstream_count" == "1" ]]; then
-            upstream_port=$(grep "server 127.0.0.1:" "$UPSTREAM_CONF" | grep -v backup | grep -oP '127\.0\.0\.1:\K(8100|8102)' | head -1 || true)
+            upstream_port=$(grep "server 127.0.0.1:" "$UPSTREAM_CONF" \
+                | grep -v backup \
+                | grep -oP '127\.0\.0\.1:\K(8100|8102)' \
+                | sort -u \
+                | head -1 || true)
         fi
     fi
     if [[ "$upstream_port" == "8100" || "$upstream_port" == "8102" ]]; then
@@ -43,6 +52,16 @@ get_active_port() {
 
 get_active_container() {
     local container=""
+    local port="${ACTIVE_PORT:-}"
+    if [[ "$port" == "8100" ]]; then
+        echo "aads-server" > "$ACTIVE_CONTAINER_FILE" 2>/dev/null || true
+        echo "aads-server"
+        return 0
+    elif [[ "$port" == "8102" ]]; then
+        echo "aads-server-green" > "$ACTIVE_CONTAINER_FILE" 2>/dev/null || true
+        echo "aads-server-green"
+        return 0
+    fi
     if [[ -f "$ACTIVE_CONTAINER_FILE" ]]; then
         container=$(tr -d '[:space:]' < "$ACTIVE_CONTAINER_FILE" 2>/dev/null || true)
     fi
