@@ -1,0 +1,14 @@
+.git
+.github
+.pytest_cache
+.ruff_cache
+.venv
+.venv.*
+__pycache__
+*.py[cod]
+node_modules
+reports
+tmp
+backup
+browser-bridge-state
+.browser_bridge_state
