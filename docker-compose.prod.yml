@@ -92,7 +92,8 @@ services:
     restart: always
     stop_grace_period: 30s
     ports:
-      - "8100:8080"
+      # Host-only API port. Public traffic must enter through nginx :443.
+      - "127.0.0.1:8100:8080"
     env_file:
       - .env
     environment:
@@ -166,7 +167,8 @@ services:
     restart: "no"
     stop_grace_period: 30s
     ports:
-      - "8102:8080"
+      # Host-only API port. Public traffic must enter through nginx :443.
+      - "127.0.0.1:8102:8080"
     env_file:
       - .env
     environment:
@@ -296,7 +298,8 @@ services:
     container_name: aads-dashboard
     restart: always
     ports:
-      - "3100:3100"
+      # Host-only dashboard port. Public traffic must enter through nginx :443.
+      - "127.0.0.1:3100:3100"
     environment:
       - NODE_ENV=production
       - NEXT_PUBLIC_API_URL=https://aads.newtalk.kr/api/v1
@@ -323,7 +326,8 @@ services:
     container_name: aads-dashboard-green
     restart: "no"
     ports:
-      - "3101:3101"
+      # Host-only dashboard port. Public traffic must enter through nginx :443.
+      - "127.0.0.1:3101:3101"
     environment:
       - NODE_ENV=production
       - NEXT_PUBLIC_API_URL=https://aads.newtalk.kr/api/v1

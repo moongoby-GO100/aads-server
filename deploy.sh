@@ -191,6 +191,48 @@ restart_old_slot_after_drain() {
     disown
 }
 
+sync_standby_slot_after_drain() {
+    local old_container="$1"
+    local old_port="$2"
+
+    (
+        local drain_max="${AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-1800}"
+        local elapsed=0
+        local active="0"
+        while [[ $elapsed -lt $drain_max ]]; do
+            active="$(stream_count_for_port "$old_port")"
+            if [[ "$active" == "0" || -z "$active" ]]; then
+                break
+            fi
+            echo "[deploy.sh] standby sync wait ${old_container}:${old_port} active streams=${active}; wait 30s"
+            sleep 30
+            elapsed=$((elapsed + 30))
+        done
+
+        if [[ "${active:-0}" != "0" && -n "${active:-}" ]]; then
+            echo "[deploy.sh] standby sync skipped: ${old_container}:${old_port} still has active streams=${active}"
+            docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
+            return 0
+        fi
+
+        echo "[deploy.sh] standby sync: rebuilding ${old_container}:${old_port} from current release"
+        cd "$COMPOSE_DIR"
+        if [[ "$old_container" == "aads-server-green" ]]; then
+            docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" --profile green up -d --build --no-deps "$old_container"
+        else
+            docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" up -d --build --no-deps "$old_container"
+        fi
+
+        if wait_port_health "$old_port" 90; then
+            docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
+            echo "[deploy.sh] standby sync complete: ${old_container}:${old_port}"
+        else
+            echo "[deploy.sh] standby sync WARN: ${old_container}:${old_port} health failed after rebuild"
+        fi
+    ) &
+    disown
+}
+
 # .env에서 텔레그램 변수 로드
 if [[ -f "${COMPOSE_DIR}/.env" ]]; then
     export TELEGRAM_BOT_TOKEN=$(grep -oP '^TELEGRAM_BOT_TOKEN=\K.*' "${COMPOSE_DIR}/.env" 2>/dev/null || true)
@@ -210,6 +252,13 @@ echo "[deploy.sh] requested_mode=${REQUESTED_MODE} effective_mode=${MODE} at $(d
 
 if [[ "$MODE" == "code" ]]; then
     MAX_WAIT="${AADS_DEPLOY_MAX_WAIT:-60}"
+fi
+
+# Keep blue/green host ports private even before containers are recreated with
+# loopback-only publish bindings.
+if [[ -x "${COMPOSE_DIR}/scripts/apply-bg-port-firewall.sh" ]]; then
+    "${COMPOSE_DIR}/scripts/apply-bg-port-firewall.sh" >/dev/null 2>&1 || \
+        echo "[deploy.sh] ⚠️ BG host-only firewall guard apply failed; continuing deploy"
 fi
 
 # ── Phase 0: 의존 컨테이너 상태 확인 + 복구 ──
@@ -483,31 +532,7 @@ case "$MODE" in
             exit 1
         fi
 
-        echo "[deploy.sh] [5/6] 활성 스트림 drain 대기..."
-        _DRAIN_MAX=300
-        _DRAIN_ELAPSED=0
-        _DRAIN_INTERVAL=10
-        while [ "$_DRAIN_ELAPSED" -lt "$_DRAIN_MAX" ]; do
-            _ACTIVE=$(
-                (
-                    curl -s -m 5 "http://127.0.0.1:${ACTIVE_PORT}/api/v1/ops/active-streams" 2>/dev/null \
-                    | python3 -c "import sys,json; print(json.load(sys.stdin).get('count', 0))" 2>/dev/null
-                ) || echo "0"
-            )
-
-            if [ "$_ACTIVE" = "0" ] || [ -z "$_ACTIVE" ]; then
-                echo "[deploy.sh]   활성 스트림 0건 — drain 완료"
-                break
-            fi
-
-            echo "[deploy.sh]   활성 스트림 ${_ACTIVE}건 — ${_DRAIN_INTERVAL}초 대기 (${_DRAIN_ELAPSED}/${_DRAIN_MAX}s)"
-            sleep "$_DRAIN_INTERVAL"
-            _DRAIN_ELAPSED=$((_DRAIN_ELAPSED + _DRAIN_INTERVAL))
-        done
-        if [ "$_DRAIN_ELAPSED" -ge "$_DRAIN_MAX" ]; then
-            echo "[deploy.sh]   WARN: drain 타임아웃 (${_DRAIN_MAX}s) — 강제 전환"
-        fi
-
+        echo "[deploy.sh] [5/6] nginx reload — existing streams remain on the old worker/slot"
         systemctl reload nginx
         echo "[deploy.sh]   nginx upstream 전환 완료"
 
@@ -524,43 +549,11 @@ case "$MODE" in
             exit 1
         fi
 
-        # ⑤ 이전 컨테이너 지연 종료 (활성 스트림 drain 후 종료)
-        echo "[deploy.sh] ⑤ ${OLD_CONTAINER} 지연 종료 시작"
+        # ⑤ 이전 컨테이너를 drain 후 같은 release로 재빌드해 warm standby로 동기화
+        echo "[deploy.sh] ⑤ ${OLD_CONTAINER} standby 동기화 시작"
         echo "$NEW_PORT" > /root/aads/aads-server/.active_port
         echo "$NEW_CONTAINER" > /root/aads/aads-server/.active_container
-
-        (
-            _OLD_DRAIN_MAX=600
-            _OLD_DRAIN_ELAPSED=0
-
-            while [ "$_OLD_DRAIN_ELAPSED" -lt "$_OLD_DRAIN_MAX" ]; do
-                _OLD_ACTIVE=$(
-                    (
-                        curl -s -m 5 "http://127.0.0.1:${OLD_PORT}/api/v1/ops/active-streams" 2>/dev/null \
-                        | python3 -c "import sys,json; print(json.load(sys.stdin).get('count', 0))" 2>/dev/null
-                    ) || echo "0"
-                )
-
-                if [ "$_OLD_ACTIVE" = "0" ] || [ -z "$_OLD_ACTIVE" ]; then
-                    echo "[deploy.sh]   구 컨테이너 활성 스트림 0건 — 안전 종료"
-                    break
-                fi
-
-                echo "[deploy.sh]   구 컨테이너 활성 스트림 ${_OLD_ACTIVE}건 — 30초 대기"
-                sleep 30
-                _OLD_DRAIN_ELAPSED=$((_OLD_DRAIN_ELAPSED + 30))
-            done
-
-            if [ "${_OLD_ACTIVE:-0}" != "0" ] && [ -n "${_OLD_ACTIVE:-}" ]; then
-                echo "[deploy.sh]   구 컨테이너 활성 스트림 ${_OLD_ACTIVE}건 유지 — 응답 보존을 위해 종료 스킵"
-                docker exec "$OLD_CONTAINER" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
-                exit 0
-            fi
-
-            docker stop --time 30 "$OLD_CONTAINER" 2>/dev/null || true
-            echo "[deploy.sh] ⑤ ✅ ${OLD_CONTAINER} 종료 완료"
-        ) &
-        disown
+        sync_standby_slot_after_drain "$OLD_CONTAINER" "$OLD_PORT"
 
         HEALTH_URL="http://localhost:${NEW_PORT}/api/v1/health"
         echo "[deploy.sh] ✅ Blue-Green 완전 무중단 배포 완료: :${NEW_PORT} 활성"

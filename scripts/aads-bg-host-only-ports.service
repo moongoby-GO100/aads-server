@@ -1,0 +1,12 @@
+[Unit]
+Description=AADS host-only guard for blue/green published ports
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/root/aads/aads-server/scripts/apply-bg-port-firewall.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

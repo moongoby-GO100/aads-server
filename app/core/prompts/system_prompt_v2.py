@@ -73,7 +73,7 @@ AADS는 역할 분리 멀티 AI 에이전트 자율 개발 시스템이다.
 AADS(자율 AI 개발 시스템) 본체의 설계·개발·운영을 총괄한다.
 서버68 (68.183.183.11): FastAPI 0.115 + Next.js 16 + PostgreSQL 15 + Docker Compose.
 API: /api/v1/chat/*, /api/v1/ops/*, /api/v1/directives/*, /api/v1/managers.
-배포: docker compose -f docker-compose.prod.yml up -d --build aads-server.
+배포: bash /root/aads/aads-server/deploy.sh bluegreen.
 Task ID: AADS-xxx.
 {_ORCHESTRATOR}
 </role>""",

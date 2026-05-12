@@ -1,6 +1,17 @@
 # AADS HANDOVER
 
 ## 현재 진행 상태 (2026-05-12)
+- **AADS Blue-Green 양 슬롯 동기화 및 host-only 포트 정책 (2026-05-12 11:21 KST)**:
+  - 요청: BG가 필요한 Docker/API/server/dashboard 항목 전체에 전환 후 반대 슬롯 자동 동기화가 적용되는지 확인하고 개선.
+  - 확인: 기존 API BG는 새 슬롯 전환 후 old 슬롯을 stop하거나 스트림이 남으면 그대로 두는 구조였고, dashboard BG도 old 슬롯을 warm standby로 유지만 했다. 따라서 다음 전환 때 stale 슬롯이 active가 될 수 있었다.
+  - 조치: `deploy.sh`에 전환 후 old API 슬롯의 active stream drain을 기다린 뒤 같은 release로 재빌드하는 `sync_standby_slot_after_drain()`을 추가했다. 기존 active stream은 nginx reload 이후 old worker/slot에서 유지되고, 신규 요청은 새 active 슬롯으로 간다.
+  - 조치: `aads-dashboard/deploy.sh`도 외부 health 통과 후 이전 dashboard 슬롯을 같은 release로 재빌드해 warm standby로 동기화한다. `AADS_DASHBOARD_STOP_PREVIOUS=true`일 때만 이전처럼 정리한다.
+  - 조치: API `8100/8102`와 dashboard `3100/3101` publish port를 compose 기준 `127.0.0.1`로 제한했다. 기존 컨테이너가 재생성되기 전까지는 `scripts/apply-bg-port-firewall.sh`와 `scripts/aads-bg-host-only-ports.service`로 public 직접 접근을 차단한다.
+  - 조치: `scripts/blue_green_deploy.sh`는 중복 구현을 제거하고 표준 `/root/aads/aads-server/deploy.sh bluegreen` 래퍼로 전환했다. `system_prompt_v2.py`, `ckp_manager.py`의 직접 compose 배포 문구도 BG 표준 경로로 정리했다.
+  - 주석 정리: `nginx-aads-upstream.conf`의 stale active-slot 주석을 “non-backup line이 active이며 deploy 스크립트가 재작성” 기준으로 정리했다.
+  - 검증: `bash -n deploy.sh`, `bash -n scripts/blue_green_deploy.sh`, `bash -n /root/aads/aads-dashboard/deploy.sh`, `docker compose -f docker-compose.prod.yml config --quiet`, dashboard compose config, `nginx -t`, `curl` health를 통과했다.
+  - 남은 운영 상태: active blue 슬롯은 활성 스트림 보호 때문에 다음 BG 순환 시 loopback publish까지 반영된다. 파일 정책과 firewall guard는 적용되어 있다.
+
 - **AADS API/server/dashboard blue-green 강제 범위 확대 (2026-05-12 09:17~KST)**:
   - 요청: API, server, dashboard, Docker 계층까지 BG 적용 여부를 확인하고 즉시 조치.
   - 원인: 백엔드 러너 표준 배포는 `deploy.sh bluegreen`이었지만, 대시보드 러너 후처리가 `docker compose build` 후 `up -d aads-dashboard`로 직접 교체했고, 텔레그램 승인봇/승인 API/watchdog에도 `aads-server`·`aads-dashboard` 직접 restart/compose 경로가 남아 있었다.

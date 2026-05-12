@@ -611,7 +611,7 @@ python -m pytest tests/ -v
 
 ## 배포 절차
 ```bash
-docker compose -f docker-compose.prod.yml up -d --build aads-server
+bash /root/aads/aads-server/deploy.sh bluegreen
 curl -s https://aads.newtalk.kr/api/v1/ops/health-check | python3 -m json.tool
 ```
 
