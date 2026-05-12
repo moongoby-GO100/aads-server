@@ -1,13 +1,8 @@
 {
   "mcpServers": {
     "aads-tools": {
-      "command": "docker",
-      "args": [
-        "exec", "-i",
-        "-e", "AADS_SESSION_ID=",
-        "aads-server",
-        "python3", "-m", "mcp_servers.aads_tools_bridge"
-      ]
+      "command": "/root/aads/aads-server/scripts/mcp-active-bridge.sh",
+      "args": []
     }
   }
 }

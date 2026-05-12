@@ -445,14 +445,11 @@ def _inject_session_into_cfg(cfg, session_id):
 def _build_docker_bridge_cfg(session_id, base_cfg=None):
     safe_sid = session_id or "default"
     cfg = {
-        "command": shutil.which("docker") or "docker",
-        "args": [
-            "exec", "-i", "-e", "AADS_SESSION_ID=" + safe_sid,
-            "aads-server", "python3", "-m", "mcp_servers.aads_tools_bridge",
-        ],
+        "command": str(_REPO_ROOT / "scripts" / "mcp-active-bridge.sh"),
+        "args": [],
         "cwd": None,
         "env": dict((base_cfg or {}).get("env", {}) or {}),
-        "_path_mode": "docker_exec",
+        "_path_mode": "active_docker_exec",
     }
     cfg["env"]["AADS_SESSION_ID"] = safe_sid
     return cfg
@@ -735,9 +732,10 @@ def _load_mcp_template(session_id):
     if MCP_TEMPLATE.exists():
         template = json.loads(MCP_TEMPLATE.read_text())
     else:
-        template = {"mcpServers": {"aads-tools": {"command": "docker", "args": [
-            "exec", "-i", "-e", "AADS_SESSION_ID=" + safe_sid,
-            "aads-server", "python3", "-m", "mcp_servers.aads_tools_bridge"]}}}
+        template = {"mcpServers": {"aads-tools": {
+            "command": str(_REPO_ROOT / "scripts" / "mcp-active-bridge.sh"),
+            "args": [],
+        }}}
     servers = template.get("mcpServers", {})
     for name, cfg in servers.items():
         injected = _inject_session_into_cfg(cfg, safe_sid)
