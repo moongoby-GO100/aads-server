@@ -317,6 +317,92 @@ async def _settle_stale_execution_for_recovery(
     }
 
 
+async def _settle_or_surface_orphan_placeholder(
+    conn,
+    session_id: UUID,
+    placeholder_row: Any,
+) -> Optional[dict]:
+    """Make a DB-only placeholder visible when no producer can finish it."""
+    if not placeholder_row:
+        return None
+
+    _partial = placeholder_row["content"] or ""
+    _clean_partial = svc._strip_streaming_progress_markers(_partial)
+    if svc._has_meaningful_partial_content(_clean_partial):
+        _final_partial = (
+            _clean_partial
+            if "응답이 중단" in _clean_partial
+            else _clean_partial + "\n\n_(응답이 중단되어 여기까지 보존되었습니다.)_"
+        )
+        updated = await conn.fetchrow(
+            """
+            UPDATE chat_messages
+            SET content = $2,
+                intent = NULL,
+                model_used = 'interrupted',
+                edited_at = NOW()
+            WHERE id = $1
+              AND intent = 'streaming_placeholder'
+            RETURNING id::text, content, model_used, intent, execution_id::text AS execution_id,
+                      created_at::text AS created_at_text
+            """,
+            placeholder_row["id"],
+            _final_partial,
+        )
+        if not updated:
+            return None
+        return {
+            "found": True,
+            "message": {
+                "id": updated["id"],
+                "session_id": str(session_id),
+                "role": "assistant",
+                "content": updated["content"],
+                "model_used": updated["model_used"],
+                "created_at": updated["created_at_text"],
+                "intent": updated["intent"],
+                "execution_id": updated["execution_id"],
+            },
+            "status": {
+                "is_streaming": False,
+                "just_completed": True,
+                "content_length": len(_clean_partial),
+                "tool_count": _extract_tool_progress(placeholder_row["tools_called"])[0],
+                "last_tool": _extract_tool_progress(placeholder_row["tools_called"])[1],
+                "partial_content": updated["content"],
+                "execution_id": updated["execution_id"],
+                "last_event_id": None,
+            },
+        }
+
+    deleted = await conn.fetchval(
+        """
+        DELETE FROM chat_messages
+        WHERE id = $1
+          AND intent = 'streaming_placeholder'
+        RETURNING id
+        """,
+        placeholder_row["id"],
+    )
+    if deleted:
+        await conn.execute(
+            "UPDATE chat_sessions SET message_count = GREATEST(message_count - 1, 0), updated_at = NOW() WHERE id = $1",
+            session_id,
+        )
+    return {
+        "found": False,
+        "status": {
+            "is_streaming": False,
+            "just_completed": False,
+            "content_length": 0,
+            "tool_count": 0,
+            "last_tool": "",
+            "execution_id": None,
+            "last_event_id": None,
+        },
+    }
+
+
 # ════════════════════════════════════════════════════════════════════════════════
 # Workspace
 # ════════════════════════════════════════════════════════════════════════════════
@@ -962,10 +1048,29 @@ async def get_streaming_status(session_id: UUID):
                     }, conn)
 
             row = await conn.fetchrow(
-                "SELECT content, tools_called FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at > NOW() - interval '5 minutes' ORDER BY created_at DESC LIMIT 1",
+                """
+                SELECT id, content, tools_called, execution_id::text AS execution_id
+                FROM chat_messages
+                WHERE session_id = $1
+                  AND intent = 'streaming_placeholder'
+                  AND created_at > NOW() - interval '5 minutes'
+                ORDER BY created_at DESC LIMIT 1
+                """,
                 session_id,
             )
             if row:
+                if not _has_live_runtime:
+                    _settled_placeholder = await _settle_or_surface_orphan_placeholder(
+                        conn,
+                        session_id,
+                        row,
+                    )
+                    if _settled_placeholder and _settled_placeholder.get("status"):
+                        return await _finalize_streaming_status(
+                            session_id,
+                            _settled_placeholder["status"],
+                            conn,
+                        )
                 _tc, _lt = _extract_tool_progress(row["tools_called"])
                 return await _finalize_streaming_status(session_id, {
                     "is_streaming": True,
@@ -1247,13 +1352,33 @@ async def get_last_response(session_id: UUID):
         if current_execution and current_execution["status"] in ("running", "retrying"):
             return {"found": False, "generating": True}
 
-        # streaming_placeholder가 존재하면 아직 생성 중 — 이전 답변 반환 방지
-        has_placeholder = await conn.fetchval(
-            "SELECT 1 FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at > NOW() - interval '5 minutes' LIMIT 1",
+        # streaming_placeholder가 존재하면 보통 생성 중이다. 단, live runtime이
+        # 없으면 DB에 저장된 내용을 화면에서 숨기지 말고 보존 응답으로 승격한다.
+        placeholder_row = await conn.fetchrow(
+            """
+            SELECT id, content, tools_called, execution_id::text AS execution_id
+            FROM chat_messages
+            WHERE session_id = $1
+              AND intent = 'streaming_placeholder'
+              AND created_at > NOW() - interval '5 minutes'
+            ORDER BY created_at DESC LIMIT 1
+            """,
             session_id,
         )
-        if has_placeholder:
+        if placeholder_row and _has_live_runtime:
             return {"found": False, "generating": True}
+        if placeholder_row:
+            _settled_placeholder = await _settle_or_surface_orphan_placeholder(
+                conn,
+                session_id,
+                placeholder_row,
+            )
+            if _settled_placeholder and _settled_placeholder.get("found"):
+                return {
+                    "found": True,
+                    "generating": False,
+                    "message": _settled_placeholder["message"],
+                }
 
         latest_user = await conn.fetchrow(
             """
@@ -1302,6 +1427,7 @@ async def get_last_response(session_id: UUID):
             "model_used": row["model_used"],
             "created_at": row["created_at_text"],
             "intent": row["intent"],
+            "execution_id": row["execution_id"],
         },
     }
 

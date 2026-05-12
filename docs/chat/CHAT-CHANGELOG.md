@@ -8,10 +8,17 @@ _v1.0 | 2026-04-02 | 최초 작성_
 
 | 커밋 | 변경 | 구분 |
 |------|------|------|
+| 2026-05-12 | **DB-saved response visibility / interrupt preserve**: live runtime이 없는 DB-only `streaming_placeholder`는 `/streaming-status`와 `/last-response`에서 보존 assistant로 승격해 화면에 노출하고, 추가지시 반영 전 partial 응답은 `partial_preserved` SSE로 별도 버블 저장/병합 | 🐛 Backend+Frontend |
 | 2026-05-12 | **Last-response stale execution settlement**: `/last-response`가 `current_execution_id`의 죽은 `running/retrying` 실행 때문에 무기한 `generating=true`만 반환하지 않도록, `streaming-status`와 동일한 stale 판정으로 placeholder를 보존 응답으로 승격하거나 빈 placeholder를 정리한 뒤 최신 assistant 조회를 계속 수행 | 🐛 Backend |
 | 2026-05-12 | **Chat restart resume trigger guard**: 서버 재시작 직후 `chat_turn_executions.status IN ('running','retrying')`이지만 새 프로세스 시작 전 생성된 실행은 90초 stale 대기 없이 startup scanner가 즉시 claim하도록 보강. 평시 periodic scanner는 기존 stale 기준을 유지하되 env로 조정 가능 | 🐛 Backend |
 | 2026-05-12 | **Chat-embedded Design Studio**: `/chat` 입력 액션에 `디자인수정` 칩과 Design Studio 패널을 추가해 채팅 문장을 수정 카드/컨텍스트팩으로 바로 저장하고, `Context`/`Workbench`/AI 운영 지시 삽입 흐름을 제공 | ✨ Frontend+Backend |
 | 2026-05-12 | **Chat final visibility guard**: 완료 직후 메시지 재조회가 assistant 저장 gap에서 로컬 최종 버블을 덮어쓰지 않도록 `mergeServerMessagesPreservingLocal()` 경로로 통일하고, `done`/`message_done`/execution replay 완료 직후 `/last-response`를 재확인해 서버 최종 assistant를 병합 | 🐛 Frontend |
+
+DB-saved response visibility / interrupt preserve:
+- 기존에는 5분 이내 `streaming_placeholder`가 있으면 live runtime 유무와 관계없이 `generating=true` 또는 `is_streaming=true`가 반환되어, DB에 본문이 저장된 응답도 화면에서 생성 중 상태로 숨을 수 있었다.
+- 개선 후 live runtime이 없고 의미 있는 placeholder 본문이 있으면 같은 row를 `model_used='interrupted'`, `intent=NULL` assistant로 승격한다. 본문이 비어 있으면 placeholder를 삭제해 빈 버블을 남기지 않는다.
+- 스트리밍 중 CEO 추가지시가 반영될 때는 기존 partial을 `_save_interrupted_partial_message()`로 별도 assistant 메시지로 저장하고 `partial_preserved` 이벤트를 전송한다. 프론트는 이 이벤트를 기존 메시지 목록에 병합한 뒤 새 응답 stream buffer만 초기화하며, `chatApi.ts` 타입 계약도 새 SSE/streaming-status 필드를 포함한다.
+- 검증: `python3 -m py_compile app/routers/chat.py app/services/chat_service.py`, `pytest -q tests/unit/test_chat_service.py::test_deferred_interrupt_rewrites_no_tool_stream_before_save`, `pytest -q tests/unit/test_tools_and_pipeline.py -k 'last_response_settles_stale_running_execution or settle_stale_execution_recovers_recent_progress_without_live_runtime or settle_stale_execution_keeps_recent_live_runtime'`, Dashboard `npx tsc --noEmit --pretty false`.
 
 Last-response stale execution settlement:
 - 기존 `/last-response`는 `chat_sessions.current_execution_id`가 `running/retrying`이면 실행이 실제로 죽었는지 확인하지 않고 `generating=true`를 반환했다.

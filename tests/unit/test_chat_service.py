@@ -570,6 +570,10 @@ async def test_deferred_interrupt_rewrites_no_tool_stream_before_save():
     conn = AsyncMock()
 
     async def _mock_fetchrow(query, *args):
+        if "model_used = 'interrupted'" in query and "content = $2" in query:
+            return None
+        if "INSERT INTO chat_messages (session_id, role, content, model_used, intent)" in query:
+            return {"id": uuid.uuid4(), "created_at_text": datetime.now(timezone.utc).isoformat()}
         if "FROM chat_messages WHERE idempotency_key" in query:
             return None
         if "WHERE session_id = $1 AND role = 'user' AND content = $2" in query:

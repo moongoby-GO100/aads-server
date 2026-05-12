@@ -835,3 +835,11 @@
 - 조치: `app/browser_bridge/service.py`에 `_active_api_ports()`를 추가해 `8100/8102` 양 슬롯을 fallback 후보로 시도하고, `_active_api_route_urls()`가 `8100 -> aads-server:8080`, `8102 -> aads-server-green:8080`을 직접 포함하도록 변경했다.
 - 검증: `pytest -q tests/unit/test_browser_bridge.py tests/unit/test_pc_agent_routing_leases.py` 24개 통과. `curl http://127.0.0.1:8102/api/v1/pc-agent/route-execute` 직접 호출로 `browser_launch` 성공, `agent_id=2e9379a1-fed`, `port=9222`, `cdp_ready=true` 확인. 새 컨테이너 Python 프로세스에서 `ensure_pc_agent_cdp_session()` 성공, `bb-ba65758c530c local_agent 2e9379a1-fed 9222` 확인.
 - 주의: 현재 채팅에 붙은 MCP stdio transport는 구버전 모듈을 들고 있어 `pkill -f mcp_servers.aads_tools_bridge`로 종료했으며, 직후 MCP 호출은 `Transport closed`를 반환했다. 서버 전체 재시작은 하지 않았다. 다음 MCP attach는 새 코드 기준으로 떠야 한다.
+
+## 2026-05-12 11:52 KST - 채팅 응답 보존/추가지시 이어쓰기 보강
+
+- 배경: 실시간 응답 완료 후 또는 서버/LLM 연결 끊김 후 DB에 저장된 assistant/`streaming_placeholder` 내용이 화면에서 숨겨지는 경로가 남아 있었다. 또한 스트리밍 중 CEO 추가지시가 반영될 때 기존 응답 버블이 `stream_reset`으로 지워지고 새 응답만 이어지는 UX가 확인됐다.
+- 조치: `app/routers/chat.py`의 `/streaming-status`, `/last-response`가 live runtime 없는 DB-only placeholder를 무기한 `generating=true`로 숨기지 않고, 의미 있는 내용은 `interrupted` assistant로 승격해 화면에 노출하도록 보강했다. 빈 placeholder는 삭제해 빈 생성 버블이 남지 않게 했다.
+- 조치: `app/services/chat_service.py`에 `_save_interrupted_partial_message()`를 추가해 추가지시 반영 직전 현재까지의 응답을 별도 assistant 버블로 DB 저장하고, SSE `partial_preserved` 이벤트로 프론트에 즉시 병합한다.
+- 조치: Dashboard `src/app/chat/page.tsx`가 `partial_preserved` 이벤트를 수신하면 기존 버블을 보존한 뒤 새 stream buffer만 reset하도록 변경했다. `src/services/chatApi.ts`의 SSE/streaming-status 타입도 백엔드 응답 필드에 맞췄다. Service Worker `public/sw.js`의 `/chat`/`/api`/`/_next` network-only 정책은 유지했다.
+- 검증: `python3 -m py_compile app/routers/chat.py app/services/chat_service.py` 통과. `pytest -q tests/unit/test_chat_service.py::test_deferred_interrupt_rewrites_no_tool_stream_before_save` 1개 통과. `pytest -q tests/unit/test_tools_and_pipeline.py -k 'last_response_settles_stale_running_execution or settle_stale_execution_recovers_recent_progress_without_live_runtime or settle_stale_execution_keeps_recent_live_runtime'` 3개 통과. Dashboard `npx tsc --noEmit --pretty false` 통과.

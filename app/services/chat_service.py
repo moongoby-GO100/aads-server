@@ -683,6 +683,13 @@ async def _apply_deferred_interrupts_to_state(
                 )
 
             if revised_response.strip():
+                preserved_message = await _save_interrupted_partial_message(
+                    session_id,
+                    previous_response,
+                    reason="interrupt_fast_revision",
+                )
+                if preserved_message:
+                    yield f"data: {json.dumps({'type': 'partial_preserved', 'message': preserved_message})}\n\n"
                 state["full_response"] = revised_response
                 yield f"data: {json.dumps({'type': 'stream_reset', 'reason': 'interrupt_applied'})}\n\n"
                 for idx in range(0, len(revised_response), 600):
@@ -712,6 +719,13 @@ async def _apply_deferred_interrupts_to_state(
                     yield f"event: interrupt_applied\ndata: {json.dumps({'type': 'interrupt_applied', 'content': event.get('content', '')})}\n\n"
                 elif etype == "delta":
                     if not reset_sent:
+                        preserved_message = await _save_interrupted_partial_message(
+                            session_id,
+                            previous_response,
+                            reason="interrupt_stream_revision",
+                        )
+                        if preserved_message:
+                            yield f"data: {json.dumps({'type': 'partial_preserved', 'message': preserved_message})}\n\n"
                         yield f"data: {json.dumps({'type': 'stream_reset', 'reason': 'interrupt_applied'})}\n\n"
                         reset_sent = True
                     interrupt_response += event.get("content", "")
@@ -1071,6 +1085,83 @@ async def _mark_execution_interrupted(
     current_task = _current_asyncio_task_or_none()
     if task is not None and task is not current_task and not task.done():
         task.cancel()
+
+
+async def _save_interrupted_partial_message(
+    session_id: str,
+    content: str,
+    *,
+    reason: str = "interrupt_applied",
+) -> Optional[Dict[str, Any]]:
+    """Persist a partial answer as a visible assistant bubble before a reset."""
+    clean_partial = _strip_streaming_progress_markers(content or "")
+    if not clean_partial or not _has_meaningful_partial_content(clean_partial):
+        return None
+    if reason.startswith("llm_retry"):
+        marker = "\n\n_(LLM 연결이 끊겨 여기까지 보존하고, 이어서 다시 생성합니다.)_"
+        marker_key = "이어서 다시 생성합니다"
+    elif reason.startswith("output_validator") or reason == "critic_regenerate":
+        marker = "\n\n_(응답 재검증으로 여기까지 보존하고, 이어서 다시 작성합니다.)_"
+        marker_key = "이어서 다시 작성합니다"
+    else:
+        marker = "\n\n_(이전 지시 응답은 여기까지 보존되고, 최신 지시를 이어서 처리합니다.)_"
+        marker_key = "최신 지시를 이어서 처리합니다"
+    final_content = clean_partial if marker_key in clean_partial else clean_partial + marker
+    sid = uuid.UUID(str(session_id))
+    async with get_pool().acquire() as conn:
+        existing = await conn.fetchrow(
+            """
+            SELECT id, created_at::text AS created_at_text
+            FROM chat_messages
+            WHERE session_id = $1
+              AND role = 'assistant'
+              AND model_used = 'interrupted'
+              AND content = $2
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            sid,
+            final_content,
+        )
+        if existing:
+            saved_id = existing["id"]
+            created_at_text = existing["created_at_text"]
+        else:
+            saved = await conn.fetchrow(
+                """
+                INSERT INTO chat_messages (session_id, role, content, model_used, intent)
+                VALUES ($1, 'assistant', $2, 'interrupted', NULL)
+                RETURNING id, created_at::text AS created_at_text
+                """,
+                sid,
+                final_content,
+            )
+            saved_id = saved["id"]
+            created_at_text = saved["created_at_text"]
+            await conn.execute(
+                """
+                UPDATE chat_sessions
+                SET message_count = message_count + 1,
+                    updated_at = NOW()
+                WHERE id = $1
+                """,
+                sid,
+            )
+    logger.info(
+        "interrupted_partial_preserved session=%s reason=%s len=%s",
+        str(session_id)[:8],
+        reason,
+        len(final_content),
+    )
+    return {
+        "id": str(saved_id),
+        "session_id": str(session_id),
+        "role": "assistant",
+        "content": final_content,
+        "model_used": "interrupted",
+        "intent": None,
+        "created_at": created_at_text,
+    }
 
 
 async def _interrupt_execution_if_newer_user(
@@ -5750,6 +5841,13 @@ async def send_message_stream(
                                 _backoff = 0.5 * (2 ** _stream_attempt)  # 0.5s, 1s
                             logger.warning(f"stream_retry: session={session_id[:8]} attempt={_stream_attempt+1}/3 error={_err_content[:80]} partial_len={len(full_response)} backoff={_backoff}s")
                             if full_response:
+                                _preserved_message = await _save_interrupted_partial_message(
+                                    session_id,
+                                    full_response,
+                                    reason="llm_retry_error",
+                                )
+                                if _preserved_message:
+                                    yield f"data: {json.dumps({'type': 'partial_preserved', 'message': _preserved_message})}\n\n"
                                 yield f"data: {json.dumps({'type': 'stream_reset', 'reason': 'llm_retry'})}\n\n"
                                 full_response = ""
                                 thinking_summary = ""
@@ -5808,6 +5906,13 @@ async def send_message_stream(
                     _backoff = 0.5 * (2 ** _stream_attempt)
                     logger.warning(f"stream_exception_retry: session={session_id[:8]} attempt={_stream_attempt+1}/3 exc={type(_stream_exc).__name__}: {str(_stream_exc)[:80]} backoff={_backoff}s")
                     if full_response:
+                        _preserved_message = await _save_interrupted_partial_message(
+                            session_id,
+                            full_response,
+                            reason="llm_retry_exception",
+                        )
+                        if _preserved_message:
+                            yield f"data: {json.dumps({'type': 'partial_preserved', 'message': _preserved_message})}\n\n"
                         yield f"data: {json.dumps({'type': 'stream_reset', 'reason': 'llm_retry'})}\n\n"
                         full_response = ""
                         thinking_summary = ""
@@ -5894,6 +5999,13 @@ async def send_message_stream(
                     yield f"event: interrupt_applied\ndata: {json.dumps({'type': 'interrupt_applied', 'content': event.get('content', '')})}\n\n"
                 elif etype == "delta":
                     if not _reset_sent:
+                        _preserved_message = await _save_interrupted_partial_message(
+                            session_id,
+                            _previous_response,
+                            reason="interrupt_stream_revision",
+                        )
+                        if _preserved_message:
+                            yield f"data: {json.dumps({'type': 'partial_preserved', 'message': _preserved_message})}\n\n"
                         yield f"data: {json.dumps({'type': 'stream_reset', 'reason': 'interrupt_applied'})}\n\n"
                         _reset_sent = True
                     _interrupt_response += event.get("content", "")
@@ -5945,6 +6057,13 @@ async def send_message_stream(
                 f"(intent={intent}, model={model_used}, tokens_out={output_tokens})"
             )
             # F8: 클라이언트에 stream_reset 전송 — 이전 잘못된 텍스트 초기화
+            _preserved_message = await _save_interrupted_partial_message(
+                session_id,
+                full_response,
+                reason=f"output_validator_{_validation.violation_type}",
+            )
+            if _preserved_message:
+                yield f"data: {json.dumps({'type': 'partial_preserved', 'message': _preserved_message})}\n\n"
             yield f"data: {json.dumps({'type': 'stream_reset', 'reason': _validation.violation_type})}\n\n"
             # DB 저장 시 재시도 응답만 사용하도록 원본 응답 별도 보관
             _failed_response = full_response
@@ -6046,6 +6165,13 @@ async def send_message_stream(
                 _critic_verdict.score,
                 (_critic_verdict.feedback or "")[:160],
             )
+            _preserved_message = await _save_interrupted_partial_message(
+                session_id,
+                full_response,
+                reason="critic_regenerate",
+            )
+            if _preserved_message:
+                yield f"data: {json.dumps({'type': 'partial_preserved', 'message': _preserved_message})}\n\n"
             yield f"data: {json.dumps({'type': 'stream_reset', 'reason': 'critic_regenerate'})}\n\n"
 
             _critic_retry_messages = list(messages)
