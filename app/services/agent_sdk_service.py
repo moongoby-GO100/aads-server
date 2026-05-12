@@ -128,7 +128,12 @@ def _build_aads_sdk_tools() -> list:
         async def _handler(args: Dict[str, Any]) -> Dict[str, Any]:
             tool_args = dict(args or {})
             _sid = _active_chat_session_id
-            if _sid and not str(tool_args.get("session_id") or "").strip():
+            if _sid and name in {"pipeline_runner_submit", "pipeline_runner_submit_batch"}:
+                # Runner jobs must be attributed to the chat tab that issued
+                # the tool call. Do not let a session_id copied from a URL in
+                # the prompt override the active chat session.
+                tool_args["session_id"] = _sid
+            elif _sid and not str(tool_args.get("session_id") or "").strip():
                 tool_args["session_id"] = _sid
             result = await _exec.execute(name, tool_args)
             return {"content": [{"type": "text", "text": result}]}

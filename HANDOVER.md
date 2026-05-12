@@ -858,3 +858,10 @@
 - 조치: Dashboard `src/app/chat/page.tsx`에 `surfaceDbSavedStreamingPlaceholders()`를 추가했다. DB에 저장된 `streaming_placeholder` 본문이 10자 초과면 일반 assistant/recovered 버블로 승격해 병합하고, 빈 placeholder는 active/waiting 경로에서만 생성 중 버블로 유지한다.
 - 조치: 초기 로드, 빈 화면 자동 재시도, 이전 메시지 로드, execution replay 완료, just_completed 폴링, SSE 무음 종료 복구, stop 이후 DB 동기화, background stop 동기화의 `/chat/messages` 호출에 `include_streaming=true`를 적용했다.
 - 검증: Dashboard `npx tsc --noEmit` 통과. `npx eslint src/app/chat/page.tsx` 에러 0개, 기존 경고 21개. DB 실측 기준 12:51 KST `chat_turn_executions`는 `completed=2256`, `interrupted=3627`, `running=5`, `streaming_placeholder=5`이며 5건 모두 최근 활성 응답으로 강제 정리하지 않았다.
+
+## 2026-05-12 13:11 KST - Runner 제출 세션 오귀속 차단
+
+- 배경: `b3390fab-8b0a-43a0-a1fc-b9ec1ce85f57` 채팅창에서 러너 작업을 지시했지만, 프롬프트에 포함된 다른 GO100 채팅 URL의 `session_id`가 도구 입력으로 전달되며 러너 job이 다른 세션으로 귀속되는 현상이 확인됨.
+- 조치: `app/services/agent_sdk_service.py`, `app/services/tool_executor.py`, `app/api/ceo_chat_tools.py`에서 `pipeline_runner_submit`, `pipeline_runner_submit_batch`, `pipeline_c_start`는 현재 채팅 핸들러/ContextVar 세션을 도구 입력의 `session_id`보다 우선하도록 변경했다. 현재 세션이 있으면 URL에서 추출된 다른 세션 ID는 덮어쓰고 경고 로그를 남긴다.
+- 조치: 프로젝트 자동 추론도 러너 제출 계열에서는 덮어쓴 현재 세션 기준으로 수행되게 보정했다. 세션이 전혀 없을 때만 외부 직접 호출 fallback으로 입력 `session_id`를 사용하며, 프로젝트 최근 활성 세션 fallback은 계속 금지한다.
+- 검증: `python3 -m py_compile app/services/agent_sdk_service.py app/services/tool_executor.py app/api/ceo_chat_tools.py` 통과. `pytest -q tests/unit/test_runner_scope_defaults.py` 9개 통과. 신규 회귀 테스트로 잘못 전달된 `session_id`가 현재 채팅 세션으로 덮어써지는지 확인했다.

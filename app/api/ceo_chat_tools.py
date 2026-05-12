@@ -3545,14 +3545,30 @@ async def tool_credential_test_login(credential_id: str) -> str:
 async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session_id: str = "") -> str:
     """도구 이름과 파라미터로 실제 실행."""
     params = dict(params or {})
+    if name in {"pipeline_runner_submit", "pipeline_runner_submit_batch", "pipeline_c_start"}:
+        from app.services.tool_executor import current_chat_session_id
+
+        current_session = str(chat_session_id or current_chat_session_id.get("") or "").strip()
+        supplied_session = str(params.get("session_id", "") or "").strip()
+        if current_session:
+            params["session_id"] = current_session
+            if supplied_session and supplied_session != current_session:
+                logger.warning(
+                    "runner_session_override: tool=%s supplied=%s current=%s",
+                    name,
+                    supplied_session[:8],
+                    current_session[:8],
+                )
     if name in _PROJECT_SCOPED_TOOLS and not str(params.get("project") or "").strip():
-        inferred_project = await _infer_project_from_session(chat_session_id)
+        inferred_project = await _infer_project_from_session(
+            str(chat_session_id or params.get("session_id", "") or "").strip()
+        )
         if inferred_project:
             params["project"] = inferred_project
             logger.info(
                 "tool_project_autofilled: tool=%s session=%s project=%s",
                 name,
-                chat_session_id[:8],
+                str(chat_session_id or params.get("session_id", ""))[:8],
                 inferred_project,
             )
 
@@ -3648,9 +3664,10 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             INTERNAL_PIPELINE_HEADERS,
             get_pipeline_runner_api_url,
         )
-        # session_id 강제: 1순위 도구파라미터, 2순위 함수인자, 3순위 ContextVar.
+        # session_id 강제: 1순위 현재 채팅 핸들러/ContextVar,
+        # 2순위 도구파라미터(외부 직접 호출 fallback).
         # 다른 채팅창 오보고 방지를 위해 프로젝트 최근 활성 세션 fallback은 금지한다.
-        _sid = params.get("session_id", "") or chat_session_id or current_chat_session_id.get("")
+        _sid = chat_session_id or current_chat_session_id.get("") or params.get("session_id", "")
         if not _sid:
             return "[ERROR] 현재 채팅 세션을 확인할 수 없습니다. 작업을 지시한 채팅창의 session_id를 명시하세요."
         import httpx

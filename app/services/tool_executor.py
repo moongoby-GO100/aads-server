@@ -342,6 +342,18 @@ class ToolExecutor:
         """
         try:
             tool_input = dict(tool_input or {})
+            if tool_name in {"pipeline_runner_submit", "pipeline_runner_submit_batch", "pipeline_c_start"}:
+                current_session = str(current_chat_session_id.get("") or "").strip()
+                supplied_session = str(tool_input.get("session_id", "") or "").strip()
+                if current_session:
+                    tool_input["session_id"] = current_session
+                    if supplied_session and supplied_session != current_session:
+                        logger.warning(
+                            "runner_session_override: tool=%s supplied=%s current=%s",
+                            tool_name,
+                            supplied_session[:8],
+                            current_session[:8],
+                        )
             if tool_name in _PROJECT_SCOPED_TOOLS and not str(tool_input.get("project") or "").strip():
                 session_id = str(tool_input.get("session_id", "") or current_chat_session_id.get("")).strip()
                 inferred_project = await _infer_project_from_session(session_id)
@@ -3825,10 +3837,10 @@ class ToolExecutor:
 
     async def _pipeline_runner_submit(self, inp: Dict[str, Any]) -> Any:
         """Pipeline Runner로 작업 제출."""
-        # 1순위: 도구 호출 시 명시적으로 전달된 session_id
-        # 2순위: ContextVar (일반 대화에서는 정확함)
+        # 1순위: 현재 채팅 ContextVar
+        # 2순위: 도구 호출 시 명시적으로 전달된 session_id (외부 직접 호출 fallback)
         # 다른 채팅창 오보고 방지를 위해 프로젝트 최근 활성 세션 fallback은 금지한다.
-        _session_id = inp.get("session_id", "") or current_chat_session_id.get("")
+        _session_id = current_chat_session_id.get("") or inp.get("session_id", "")
         if not _session_id:
             return {"error": "현재 채팅 세션을 확인할 수 없습니다. 작업을 지시한 채팅창의 session_id를 명시하세요."}
         import httpx
@@ -3857,7 +3869,7 @@ class ToolExecutor:
 
     async def _pipeline_runner_submit_batch(self, inp: Dict[str, Any]) -> Any:
         """Pipeline Runner 배치 제출 — 여러 작업을 병렬 실행."""
-        _session_id = inp.get("session_id", "") or current_chat_session_id.get("")
+        _session_id = current_chat_session_id.get("") or inp.get("session_id", "")
         if not _session_id:
             return {"error": "현재 채팅 세션을 확인할 수 없습니다. 작업을 지시한 채팅창의 session_id를 명시하세요."}
         import httpx

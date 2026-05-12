@@ -167,6 +167,29 @@ async def test_ceo_pipeline_runner_submit_uses_current_session():
 
 
 @pytest.mark.asyncio
+async def test_ceo_pipeline_runner_submit_overrides_supplied_session_with_current_session():
+    from app.api.ceo_chat_tools import execute_tool
+
+    wrong_session = "22222222-2222-2222-2222-222222222222"
+    client = _FakeAsyncClient(_FakeResponse(text='{"job_id":"runner-test"}', payload={"job_id": "runner-test"}))
+
+    with patch("httpx.AsyncClient", return_value=client):
+        result = await execute_tool(
+            "pipeline_runner_submit",
+            {
+                "project": "AADS",
+                "instruction": "test",
+                "session_id": wrong_session,
+            },
+            dsn="postgresql://unused",
+            chat_session_id=_SESSION_ID,
+        )
+
+    assert json.loads(result)["job_id"] == "runner-test"
+    assert client.calls[0]["json"]["session_id"] == _SESSION_ID
+
+
+@pytest.mark.asyncio
 async def test_tool_executor_check_task_status_defaults_to_current_session():
     from app.services.tool_executor import ToolExecutor, current_chat_session_id
 
@@ -213,3 +236,24 @@ async def test_tool_executor_pipeline_runner_submit_requires_current_session_wit
         result = await ToolExecutor()._pipeline_runner_submit({"project": "AADS", "instruction": "test"})
 
     assert "현재 채팅 세션을 확인할 수 없습니다" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_pipeline_runner_submit_overrides_supplied_session_with_context():
+    from app.services.tool_executor import ToolExecutor, current_chat_session_id
+
+    wrong_session = "22222222-2222-2222-2222-222222222222"
+    client = _FakeAsyncClient(_FakeResponse(payload={"job_id": "runner-test"}))
+    token = current_chat_session_id.set(_SESSION_ID)
+    try:
+        with patch("httpx.AsyncClient", return_value=client):
+            result = await ToolExecutor()._pipeline_runner_submit({
+                "project": "AADS",
+                "instruction": "test",
+                "session_id": wrong_session,
+            })
+    finally:
+        current_chat_session_id.reset(token)
+
+    assert result["job_id"] == "runner-test"
+    assert client.calls[0]["json"]["session_id"] == _SESSION_ID
