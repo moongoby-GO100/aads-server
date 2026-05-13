@@ -188,6 +188,7 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
     "qwen3-vl-235b": (_decimal(0.6), _decimal(2.4)),
     "qwen-omni-turbo": (_decimal(0.02), _decimal(0.06)),
     "dashscope-deepseek-v3.2": (_decimal(0.28), _decimal(0.42)),
+    "kimi-k2.6": (_decimal(0.6), _decimal(2.4)),
     "kimi-k2.5": (_decimal(0.6), _decimal(2.4)),
     "kimi-k2": (_decimal(0.6), _decimal(2.4)),
     "kimi-latest": (_decimal(0.02), _decimal(0.06)),
@@ -335,7 +336,7 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
         "qwen-omni-turbo",
         "dashscope-deepseek-v3.2",
     ),
-    "kimi": ("kimi-k2.5", "kimi-k2", "kimi-latest", "kimi-128k", "kimi-8k"),
+    "kimi": ("kimi-k2.6", "kimi-k2.5", "kimi-k2", "kimi-latest", "kimi-128k", "kimi-8k"),
     "minimax": ("minimax-m2.7", "minimax-m2.5"),
 }
 
@@ -912,6 +913,28 @@ async def _fetch_litellm_models() -> tuple[list[dict[str, Any]], dict[str, Any]]
     return rows, {"status": "ok", "count": len(rows)}
 
 
+async def _fetch_kimi_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    key = await _get_first_provider_key("kimi")
+    if not key:
+        return [], {"status": "skipped", "error": "no_kimi_key", "count": 0}
+    try:
+        async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT_SECONDS) as client:
+            resp = await client.get(
+                "https://api.moonshot.ai/v1/models",
+                headers={"Authorization": f"Bearer {key}"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        return [], {"status": "failed", "error": str(exc)[:200], "count": 0}
+    rows = [
+        {"model_id": item["id"], "display_name": item.get("id", ""), "raw": item}
+        for item in data.get("data", [])
+        if isinstance(item, dict) and item.get("id")
+    ]
+    return rows, {"status": "ok", "count": len(rows), "model_source": "discovery"}
+
+
 async def discover_provider_model_rows(
     key_rows: Iterable[dict[str, Any]],
     *,
@@ -928,6 +951,7 @@ async def discover_provider_model_rows(
         "anthropic": _fetch_anthropic_models,
         "gemini": _fetch_gemini_models,
         "litellm": _fetch_litellm_models,
+        "kimi": _fetch_kimi_models,
     }
     all_rows: list[dict[str, Any]] = []
     run_results: list[dict[str, Any]] = []
