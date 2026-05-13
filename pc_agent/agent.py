@@ -149,6 +149,8 @@ def _collect_capabilities() -> list[str]:
     caps = {"pc_control"}
     if "browser_launch" in COMMAND_HANDLERS:
         caps.update({"chrome_cdp", "interactive_browser"})
+    if "ollama_chat" in COMMAND_HANDLERS:
+        caps.add("pc_ollama")
 
     extra_caps = os.getenv("AADS_PC_AGENT_CAPABILITIES", "")
     if extra_caps:

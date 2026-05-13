@@ -253,6 +253,77 @@ def test_route_metadata_accepts_json_string():
     assert metadata["execution_model_id"] == "qwen3.6-plus"
 
 
+def test_route_metadata_accepts_pc_ollama_backend():
+    metadata = model_selector._route_metadata(
+        {
+            "metadata": {
+                "execution_backend": "pc_ollama",
+                "execution_model_id": "gemma4:e4b",
+            }
+        }
+    )
+
+    assert metadata["execution_backend"] == "pc_ollama"
+    assert metadata["execution_model_id"] == "gemma4:e4b"
+
+
+@pytest.mark.asyncio
+async def test_call_stream_routes_pc_ollama_backend(monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    async def _fake_get_db_key(*_args, **_kwargs):
+        return ""
+
+    async def _fake_available_models():
+        return {"gemma4:e4b"}
+
+    async def _fake_registry_row(model_id: str, provider=None):
+        assert model_id == "gemma4:e4b"
+        return {
+            "provider": "pc_ollama",
+            "model_id": model_id,
+            "metadata": {
+                "execution_backend": "pc_ollama",
+                "execution_model_id": "gemma4:e4b",
+                "timeout_seconds": 120,
+            },
+        }
+
+    async def _fake_pc_ollama_stream(display_model, metadata, system_prompt, messages, tools=None, session_id=None):
+        calls.append((display_model, metadata.get("execution_model_id")))
+        assert system_prompt
+        assert messages[-1]["role"] == "user"
+        assert session_id == "session-pc"
+        yield {"type": "delta", "content": "ok"}
+        yield {"type": "done", "model": display_model, "cost": "$0", "input_tokens": 1, "output_tokens": 1}
+
+    async def _unexpected_stream(*_args, **_kwargs):
+        raise AssertionError("non-PC route should not run")
+        yield
+
+    monkeypatch.setattr(model_selector, "_get_db_key", _fake_get_db_key)
+    monkeypatch.setattr(model_selector, "get_available_model_ids", _fake_available_models)
+    monkeypatch.setattr(model_selector, "_get_registered_model_row", _fake_registry_row)
+    monkeypatch.setattr(model_selector, "_stream_pc_ollama_provider", _fake_pc_ollama_stream)
+    monkeypatch.setattr(model_selector, "_stream_litellm_openai", _unexpected_stream)
+    monkeypatch.setattr(model_selector, "_stream_litellm", _unexpected_stream)
+
+    events = [
+        event
+        async for event in model_selector.call_stream(
+            IntentResult(intent="casual", model="gemma4:e4b", use_tools=False, tool_group=""),
+            "system prompt",
+            [{"role": "user", "content": "로컬 모델 테스트"}],
+            model_override="gemma4:e4b",
+            session_id="session-pc",
+        )
+    ]
+
+    assert calls == [("gemma4:e4b", "gemma4:e4b")]
+    assert events[-1]["type"] == "done"
+    assert events[-1]["model"] == "gemma4:e4b"
+
+
 @pytest.mark.asyncio
 async def test_resolve_registered_model_alias_uses_registry_metadata(monkeypatch):
     async def _fake_registered_models(active_only=False):

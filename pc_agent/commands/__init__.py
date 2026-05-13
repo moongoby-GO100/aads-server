@@ -41,6 +41,7 @@ security = _safe_import("security")
 process_monitor = _safe_import("process_monitor")
 kakao_auto = _safe_import("kakao_auto")
 network = _safe_import("network")
+ollama = _safe_import("ollama")
 
 
 def _handler(mod, attr: str):
@@ -145,6 +146,13 @@ _RAW_HANDLERS = {
     "network_info": _handler(network, "network_info"),
     "wol_register": _handler(network, "wol_register"),
     "wol_send": _handler(network, "wol_send"),
+    # P8: 로컬 Ollama 브릿지
+    "ollama_version": _handler(ollama, "version"),
+    "ollama_list": _handler(ollama, "list_models"),
+    "ollama_ps": _handler(ollama, "ps"),
+    "ollama_pull": _handler(ollama, "pull"),
+    "ollama_chat": _handler(ollama, "chat"),
+    "ollama_benchmark": _handler(ollama, "benchmark"),
 }
 
 # None 핸들러 제거 — 사용 가능한 명령만 등록
@@ -159,5 +167,5 @@ __all__ = [
     "kakao", "updater", "input_control", "window_control",
     "screen_utils", "system_extra", "screen_stream",
     "macro", "browser_auto", "file_transfer", "scheduler",
-    "security", "process_monitor", "kakao_auto", "network", "COMMAND_HANDLERS",
+    "security", "process_monitor", "kakao_auto", "network", "ollama", "COMMAND_HANDLERS",
 ]

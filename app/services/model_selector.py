@@ -917,7 +917,7 @@ def _route_metadata(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     ).strip()
     if execution_model_id:
         metadata["execution_model_id"] = execution_model_id
-    if backend in {"openai_compatible_direct", "litellm_proxy", "codex_cli", "claude_cli_relay"}:
+    if backend in {"openai_compatible_direct", "litellm_proxy", "pc_ollama", "codex_cli", "claude_cli_relay"}:
         return metadata
     return {}
 
@@ -1001,6 +1001,83 @@ async def _stream_direct_openai_provider(
         cost_model=display_model,
     ):
         yield event
+
+
+async def _stream_pc_ollama_provider(
+    display_model: str,
+    metadata: Dict[str, Any],
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    session_id: Optional[str] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """Route a chat turn through the connected CEO PC's local Ollama runtime."""
+    del tools, session_id
+    from app.services.pc_agent_manager import pc_agent_manager
+
+    request_model = str(metadata.get("execution_model_id") or display_model).strip() or display_model
+    agent_id = str(metadata.get("agent_id") or "").strip()
+    try:
+        timeout_seconds = float(metadata.get("timeout_seconds") or 300)
+    except (TypeError, ValueError):
+        timeout_seconds = 300.0
+    timeout_seconds = max(1.0, min(timeout_seconds, 900.0))
+    try:
+        max_tokens = int(metadata.get("max_tokens") or 2048)
+    except (TypeError, ValueError):
+        max_tokens = 2048
+
+    clean_msgs = [m for m in messages if m.get("role") != "system"]
+    ollama_messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
+    for msg in clean_msgs:
+        role = str(msg.get("role") or "user")
+        if role not in {"system", "user", "assistant", "tool"}:
+            role = "user"
+        content = _convert_content_for_openai(msg.get("content", ""))
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False)
+        if role == "tool":
+            role = "user"
+            content = f"[tool_result]\n{content}"
+        ollama_messages.append({"role": role, "content": content})
+
+    result = await pc_agent_manager.execute_routed_command(
+        command_type="ollama_chat",
+        params={
+            "model": request_model,
+            "messages": ollama_messages,
+            "temperature": _ctx_temperature.get(0.2),
+            "max_tokens": max_tokens,
+            "timeout_seconds": timeout_seconds,
+        },
+        agent_id=agent_id,
+        job_type="pc_ollama",
+        required_capabilities=["pc_ollama"],
+        queue_if_busy=True,
+        wait_for_turn=True,
+        queue_wait_timeout_seconds=min(timeout_seconds, 120.0),
+        lease_ttl_seconds=int(timeout_seconds) + 30,
+        command_timeout_seconds=timeout_seconds,
+    )
+    if result.get("status") != "success":
+        detail = result.get("message") or result.get("detail") or result.get("error_code") or "pc_ollama route failed"
+        yield {"type": "error", "content": f"PC Ollama {display_model} unavailable: {detail}"}
+        return
+
+    payload = (result.get("result") or {}).get("result") or {}
+    content = str(payload.get("content") or "")
+    raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
+    if not content:
+        yield {"type": "error", "content": "PC Ollama empty_response"}
+        return
+    yield {"type": "delta", "content": content}
+    yield {
+        "type": "done",
+        "model": display_model,
+        "cost": "$0",
+        "input_tokens": int(raw.get("prompt_eval_count") or 0),
+        "output_tokens": int(raw.get("eval_count") or 0),
+    }
 
 
 def _fallback_for_unavailable_model_legacy(model: str, available_models: set[str]) -> str:
@@ -1328,6 +1405,17 @@ async def call_stream(
                 session_id=session_id,
                 display_model=model,
                 cost_model=model,
+            ):
+                yield event
+            return
+        elif backend == "pc_ollama":
+            async for event in _stream_pc_ollama_provider(
+                model,
+                route_metadata,
+                system_prompt,
+                messages,
+                tools=tools,
+                session_id=session_id,
             ):
                 yield event
             return

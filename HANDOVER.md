@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-13 11:49 KST) - PC Ollama Gemma 4 E4B 브릿지 1차 반영
+- 배경: CEO 지시로 `gemma4:e4b`를 먼저 PC Ollama에 설치하고 AADS `pc_ollama` 브릿지로 붙인 뒤 품질/속도 실측, `gemma4:26b`는 별도 비교 테스트로만 진행해야 한다.
+- 조치: `pc_agent/commands/ollama.py`에 Ollama version/list/ps/pull/chat/benchmark 명령을 추가하고, `pc_agent/commands/__init__.py`에 `ollama_*` command_type을 등록했다. `ollama_chat`/`ollama_benchmark`는 Ollama API의 `prompt_eval_count`, `eval_count`, duration 기반 속도 메트릭을 반환한다.
+- 조치: `pc_agent/agent.py`가 `ollama_chat` 핸들러 존재 시 `pc_ollama` capability를 등록하도록 보강했다. PC Agent 배포 버전은 `1.0.23`으로 올렸다.
+- 확인: DB `llm_models`에는 `pc_ollama/gemma4:e4b`가 active/executable/pending_verification, `pc_ollama/gemma4:26b`가 inactive/comparison_only로 등록돼 있다. `model_selector.py`에는 `execution_backend=pc_ollama` 경로가 들어와 있으며 `tests/unit/test_model_selector_dynamic_routing.py`에 회귀 테스트가 추가돼 있다.
+- 검증: `python3 -m pytest tests/test_pc_agent_command_builder.py tests/unit/test_pc_agent_routing_leases.py tests/unit/test_model_selector_dynamic_routing.py -q` → 56 passed. `docker exec aads-server-green python -m py_compile /app/pc_agent/commands/ollama.py /app/pc_agent/commands/__init__.py /app/pc_agent/agent.py` 통과. `docker exec aads-server-green`에서 `ollama_*` 6개 핸들러 노출 확인.
+- 운영 반영: DB seed `migrations/092_pc_ollama_gemma4_bridge.sql`를 idempotent 재적용했다. `aads-server`/`aads-server-green` 양쪽에서 `app.services.model_selector` hot-reload 성공, `/api/v1/health` OK 확인. 커밋 `35a494f feat: add PC Ollama Gemma bridge` 생성.
+- 미완료/주의: 2026-05-13 11:48:18 KST에 PC Agent `2e9379a1-fed`가 WebSocket code=1000으로 연결 해제되어 현재 연결 0건이다. 따라서 `self_update`, `ollama pull gemma4:e4b`, 품질/속도 실측은 아직 실행하지 못했다. PC Agent가 재연결되면 `self_update` 후 `ollama_pull`/`ollama_benchmark`를 즉시 재시도해야 한다.
+
 ## 현재 진행 상태 (2026-05-13 11:20 KST) - NTV2 Browser Bridge work-session route-execute 프록시
 - 배경: NTV2 신상마켓 자동상품등록이 AADS Browser Bridge 세션 확보에는 성공했지만, 후속 `browser_eval`/업로드 명령이 공개 `/pc-agent/route-execute` 경로에서 PC Agent 연결 0건/503 계층에 걸릴 수 있었다.
 - 조치: `app/api/browser_bridge.py`에 인증된 `/api/v1/browser-bridge/work-sessions/route-execute` 엔드포인트를 추가했다. 요청의 `work_key`로 work-session을 먼저 확보하고, session_id/label/port를 params에 보강한 뒤 active PC Agent route API로 전달한다.
