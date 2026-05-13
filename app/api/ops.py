@@ -703,10 +703,10 @@ async def health_check():
             try:
                 if _docker_host.startswith("tcp://"):
                     _base = _docker_host.replace("tcp://", "http://")
-                    _url = f"{_base}/v1.24/containers/{cname}/json"
+                    _url = f"{_base}/v1.41/containers/{cname}/json"
                     _r = _sp.run(["curl", "-sf", _url, "--max-time", "3"], capture_output=True, text=True, timeout=5)
                 else:
-                    _url = f"http://localhost/v1.24/containers/{cname}/json"
+                    _url = f"http://localhost/v1.41/containers/{cname}/json"
                     _r = _sp.run(["curl", "-sf", "--unix-socket", "/var/run/docker.sock", _url, "--max-time", "3"],
                                  capture_output=True, text=True, timeout=5)
                 if _r.returncode == 0 and _r.stdout:

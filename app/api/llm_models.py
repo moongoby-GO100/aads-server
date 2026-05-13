@@ -29,7 +29,7 @@ class ChatModelPreferenceInput(BaseModel):
 
 
 class ModelRoutingPreferenceInput(BaseModel):
-    route_key: str = Field(..., pattern=r"^(image|edit_image|video|llm)$")
+    route_key: str = Field(..., pattern=r"^(image|edit_image|video|llm|music|audio|runner_llm)$")
     provider: str
     model_id: str
     display_order: int = Field(100, ge=0)
@@ -104,6 +104,60 @@ async def _ensure_chat_model_preferences_table() -> None:
         )
 
 
+async def _seed_media_models(conn) -> None:
+    """미디어 모델 시드 — ON CONFLICT DO NOTHING으로 멱등 실행."""
+    await conn.execute("""
+        INSERT INTO llm_models
+          (provider, model_id, display_name, family, category,
+           execution_model_id, is_active, discovery_source)
+        VALUES
+          ('openai','dall-e-3','DALL-E 3','dall-e','media_image','dall-e-3',true,'manual'),
+          ('openai','dall-e-2','DALL-E 2','dall-e','media_image','dall-e-2',false,'manual'),
+          ('black-forest-labs','flux-1.1-pro','Flux 1.1 Pro','flux','media_image','flux-1.1-pro',true,'manual'),
+          ('black-forest-labs','flux-dev','Flux Dev','flux','media_image','flux-dev',false,'manual'),
+          ('stability','stable-diffusion-3-5','Stable Diffusion 3.5','stable-diffusion','media_image','stable-diffusion-3-5',true,'manual'),
+          ('stability','stable-diffusion-xl','Stable Diffusion XL','stable-diffusion','media_image','stable-diffusion-xl',false,'manual'),
+          ('google','imagen-4.0-generate-001','Imagen 4.0','imagen','media_image','imagen-4.0-generate-001',true,'manual'),
+          ('runway','gen-4-turbo','Runway Gen-4 Turbo','gen','media_video','gen-4-turbo',true,'manual'),
+          ('runway','gen-3-alpha','Runway Gen-3 Alpha','gen','media_video','gen-3-alpha',false,'manual'),
+          ('kling','kling-2.0','Kling 2.0','kling','media_video','kling-2.0',true,'manual'),
+          ('pika','pika-2.2','Pika 2.2','pika','media_video','pika-2.2',true,'manual'),
+          ('google','veo-3.0-generate-preview','Veo 3.0 Preview','veo','media_video','veo-3.0-generate-preview',true,'manual'),
+          ('suno','suno-v4','Suno v4','suno','media_music','suno-v4',true,'manual'),
+          ('udio','udio-3.0','Udio 3.0','udio','media_music','udio-3.0',true,'manual'),
+          ('meta','musicgen-large','MusicGen Large','musicgen','media_music','musicgen-large',false,'manual'),
+          ('meta','musicgen-melody','MusicGen Melody','musicgen','media_music','musicgen-melody',false,'manual'),
+          ('elevenlabs','eleven-v3','ElevenLabs v3','eleven','media_audio','eleven-v3',true,'manual'),
+          ('openai','tts-1-hd','OpenAI TTS HD','tts','media_audio','tts-1-hd',true,'manual'),
+          ('openai','tts-1','OpenAI TTS','tts','media_audio','tts-1',false,'manual'),
+          ('google','google-wavenet-tts','Google WaveNet TTS','wavenet','media_audio','google-wavenet-tts',false,'manual')
+        ON CONFLICT (provider, model_id) DO NOTHING
+    """)
+    await conn.execute("""
+        INSERT INTO model_routing_preferences
+          (route_key, provider, model_id, display_order, is_enabled, is_default, notes, updated_by)
+        VALUES
+          ('image','openai','dall-e-3',10,true,false,'DALL-E 3','system'),
+          ('image','black-forest-labs','flux-1.1-pro',20,true,false,'Flux 1.1 Pro','system'),
+          ('image','stability','stable-diffusion-3-5',30,true,false,'SD 3.5','system'),
+          ('image','google','imagen-4.0-generate-001',40,true,false,'Imagen 4.0','system'),
+          ('video','runway','gen-4-turbo',10,true,false,'Gen-4 Turbo','system'),
+          ('video','kling','kling-2.0',20,true,false,'Kling 2.0','system'),
+          ('video','pika','pika-2.2',30,true,false,'Pika 2.2','system'),
+          ('video','google','veo-3.0-generate-preview',40,true,false,'Veo 3.0','system'),
+          ('music','suno','suno-v4',10,true,true,'Suno v4','system'),
+          ('music','udio','udio-3.0',20,true,false,'Udio 3.0','system'),
+          ('music','meta','musicgen-large',30,false,false,'MusicGen Large','system'),
+          ('audio','elevenlabs','eleven-v3',10,true,true,'ElevenLabs v3','system'),
+          ('audio','openai','tts-1-hd',20,true,false,'OpenAI TTS HD','system'),
+          ('audio','google','google-wavenet-tts',30,false,false,'WaveNet TTS','system'),
+          ('runner_llm','anthropic','claude-opus-4-7',10,true,true,'Runner 기본','system'),
+          ('runner_llm','openai','gpt-5.5',20,true,false,'GPT-5.5 백업','system'),
+          ('runner_llm','google','gemini-2.5-pro',30,true,false,'Gemini 2.5 Pro 백업','system')
+        ON CONFLICT (route_key, provider, model_id) DO NOTHING
+    """)
+
+
 async def _ensure_model_routing_preferences_table() -> None:
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -138,6 +192,26 @@ async def _ensure_model_routing_preferences_table() -> None:
             ON model_routing_preferences(route_key, is_default DESC, is_enabled DESC, display_order ASC)
             """
         )
+        await conn.execute(
+            'ALTER TABLE model_routing_preferences '
+            'DROP CONSTRAINT IF EXISTS model_routing_preferences_route_key_chk'
+        )
+        await conn.execute(
+            "ALTER TABLE model_routing_preferences "
+            "ADD CONSTRAINT model_routing_preferences_route_key_chk "
+            "CHECK (route_key IN "
+            "('image','edit_image','video','llm','music','audio','runner_llm'))"
+        )
+        await conn.execute(
+            'ALTER TABLE model_routing_preferences ADD COLUMN IF NOT EXISTS display_name TEXT'
+        )
+        await conn.execute(
+            'ALTER TABLE model_routing_preferences ADD COLUMN IF NOT EXISTS family TEXT'
+        )
+        await conn.execute(
+            'ALTER TABLE model_routing_preferences ADD COLUMN IF NOT EXISTS category TEXT'
+        )
+        await _seed_media_models(conn)
 
 
 def _build_chat_preference_key(model_id: str, provider: str | None = None, preference_key: str | None = None) -> tuple[str, str, str]:
@@ -454,6 +528,9 @@ async def get_model_routing_preferences() -> dict[str, Any]:
                          WHEN 'edit_image' THEN 2
                          WHEN 'video' THEN 3
                          WHEN 'llm' THEN 4
+                         WHEN 'music' THEN 5
+                         WHEN 'audio' THEN 6
+                         WHEN 'runner_llm' THEN 7
                          ELSE 99
                      END,
                      pref.is_default DESC,
@@ -489,7 +566,7 @@ async def update_model_routing_preferences(req: ModelRoutingPreferencesUpdate) -
             for item in req.preferences:
                 provider = (
                     normalize_provider(item.provider)
-                    if item.route_key == "llm"
+                    if item.route_key in ('llm', 'runner_llm')
                     else item.provider.strip().lower()
                 )
                 model_id = item.model_id.strip()
