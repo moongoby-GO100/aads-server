@@ -626,6 +626,44 @@ TOOL_DEFINITIONS: List[Dict] = [
         },
     },
     {
+        "name": "local_embed",
+        "description": "CEO PC 로컬 Ollama 임베딩 모델(qwen3-embedding:0.6b / bge-m3)로 텍스트 임베딩 벡터 반환. RAG·유사도 검색에 활용.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "input": {
+                    "type": "string",
+                    "description": "임베딩할 텍스트 (단일 문자열)",
+                },
+                "model": {
+                    "type": "string",
+                    "description": "임베딩 모델. 기본값: qwen3-embedding:0.6b. 대안: bge-m3",
+                    "default": "qwen3-embedding:0.6b",
+                },
+            },
+            "required": ["input"],
+        },
+    },
+    {
+        "name": "local_ocr",
+        "description": "CEO PC 로컬 OCR로 이미지에서 텍스트 추출. 쇼핑몰 상품 라벨·영수증·문서 인식에 활용.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "image_url": {
+                    "type": "string",
+                    "description": "OCR 처리할 이미지 URL",
+                },
+                "language": {
+                    "type": "string",
+                    "description": "인식 언어. 기본값: kor+eng",
+                    "default": "kor+eng",
+                },
+            },
+            "required": ["image_url"],
+        },
+    },
+    {
         "name": "fact_check",
         "description": "팩트체크 (DB + 웹 교차검증). 주장의 사실 여부를 검증하고 근거 반환.\n예: fact_check(claim='삼성전자 2025년 매출이 300조를 넘었다')",
         "input_schema": {

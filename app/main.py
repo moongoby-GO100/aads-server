@@ -42,6 +42,7 @@ from app.api.memory_monitor import router as memory_monitor_router
 from app.api.pc_agent import router as pc_agent_router
 from app.api.pc_ollama_bridge import router as pc_ollama_bridge_router
 from app.api.local_models import router as local_models_router
+from app.api.local_media_router import router as local_media_router
 from app.api.device import router as device_router
 from app.api.kakao_bot import router as kakao_bot_router
 from app.api.agenda import router as agenda_router
@@ -1381,6 +1382,7 @@ app.include_router(braming_router)
 app.include_router(project_docs_router, prefix="/api/v1", tags=["project-docs"])
 app.include_router(terminal.router, prefix="/api/v1", tags=["terminal"])
 app.include_router(browser_bridge.router, prefix="/api/v1", tags=["browser-bridge"])
+app.include_router(local_media_router)
 
 # 루트 /health — 모니터링 도구 호환 (인증 면제)
 from fastapi.responses import JSONResponse as _JSONResponse
