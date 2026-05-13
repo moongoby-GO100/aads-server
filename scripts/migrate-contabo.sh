@@ -1,4 +1,5 @@
 #!/bin/bash
+# ⚠️ 1회성 마이그레이션 스크립트 — 운영 환경(서버 68) 실행 금지
 # migrate-contabo.sh — AADS Contabo VPS 원클릭 배포 스크립트
 # task_id: CUR-AADS-INFRA-CONTABO-009
 # 실행 위치: 새 Contabo VPS (Ubuntu 22.04 LTS)
