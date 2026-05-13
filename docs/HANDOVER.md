@@ -4,7 +4,7 @@
 ## 2026-05-13
 - 2026-05-13 KST: CEO PC 로컬 양자화/멀티모달 모델 브릿지 준비를 추가했다. `scripts/local_model_install_queue.json`을 canonical queue로 두고 `app/services/local_model_manager.py`가 queue/status/single-item install-test 라우팅을 담당한다.
 - PC Agent에 `local_model_queue_status`, `local_model_install_test`, `local_model_media_job` 안전 핸들러를 추가하고 `pc_agent/VERSION`을 `1.0.26`으로 올렸다. `local_model_install`과 `local_media_job` lease 동시성은 1로 제한해 대형 모델 병렬 설치를 막는다.
-- `app/api/local_models.py` REST API와 채팅 도구 `local_model_queue_status`, `local_model_install_test`, `generate_music`, `generate_3d_asset`, `media_job_status`를 추가했다. `local_image`, `local_video`, `local_music`, `local_3d`는 async media job으로만 준비되며 기본 채팅 모델 라우팅은 변경하지 않았다.
+- `app/api/local_models.py` REST API와 채팅 도구 `local_model_queue_status`, `local_model_install_test`, `generate_music`, `generate_three_d_asset`, `media_job_status`를 추가했다. `local_image`, `local_video`, `local_music`, `local_3d`는 async media job으로만 준비되며 기본 채팅 모델 라우팅은 변경하지 않았다.
 - DB 준비: `093_pc_ollama_quantized_model_pack.sql`, `094_pc_ollama_backend_correction.sql`, `095_local_multimodal_model_bridge.sql`을 추가했다. `095`는 `media_generation_jobs.kind`에 `music`, `model_3d`를 허용하고 `pc_local` 모델 레지스트리를 queued/prepared 상태로 seed한다.
 - 운영 주의: PC Agent가 offline이거나 새 capability를 아직 받지 못한 경우 설치 완료로 간주하지 않는다. 응답은 queued/prepared 또는 offline/not-updated 상태로만 보고해야 한다.
 

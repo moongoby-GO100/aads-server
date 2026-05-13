@@ -33,7 +33,7 @@ CEO PC target is RTX 3060 12GB + 32GB RAM. Install order must be staged:
   - `local_model_install_test`
   - `local_model_media_job`
 - `local_model_install` and `local_media_job` PC Agent lease concurrency is capped at 1.
-- `generate_music`, `generate_3d_asset`, `media_job_status`, `local_model_queue_status`, and `local_model_install_test` are exposed as chat/tool calls.
+- `generate_music`, `generate_three_d_asset`, `media_job_status`, `local_model_queue_status`, and `local_model_install_test` are exposed as chat/tool calls.
 - `image`, `edit_image`, `video`, `music`, and `model_3d` local media calls are async job style. They return queued/prepared metadata and do not become default chat routes.
 
 ## Install Queue
@@ -86,7 +86,7 @@ Each installed model must record:
   - `generate_image` with `provider=pc_local` for `local_image`
   - `generate_video` with `provider=pc_local` for `local_video`
   - `generate_music`
-  - `generate_3d_asset`
+  - `generate_three_d_asset`
   - `media_job_status`
 
 ## Official Sources Checked

@@ -101,7 +101,7 @@ _LONG_TOOLS = frozenset({
     "capture_screenshot", "run_remote_command", "write_remote_file", "patch_remote_file",
     "pc_execute", "device_command", "execute_sandbox", "visual_qa_test", "fact_check_multiple",
     "generate_image", "edit_image", "generate_video", "video_download",
-    "local_model_install_test", "generate_music", "generate_3d_asset",
+    "local_model_install_test", "generate_music", "generate_three_d_asset",
     "search_all_projects", "deep_crawl", "deploy_safe",
     "search_crawl_match",
 })
@@ -544,8 +544,6 @@ class ToolExecutor:
             "credential_list": self._credential_list,
             "credential_register": self._credential_register,
             "credential_test_login": self._credential_test_login,
-            # 자동 추가 (check_tool_consistency --fix)
-            "generate_3d_asset": self._generate_3d_asset,
             # 첨부파일 재읽기
             "read_uploaded_file":     self._read_uploaded_file,
             # 작업 모니터
@@ -574,7 +572,7 @@ class ToolExecutor:
             "local_model_queue_status": self._local_model_queue_status,
             "local_model_install_test": self._local_model_install_test,
             "generate_music":          self._generate_music,
-            "generate_3d_asset":       self._generate_3d_asset,
+            "generate_three_d_asset":       self._generate_three_d_asset,
             "media_job_status":        self._media_job_status,
             "send_telegram":           self._send_telegram,
             "fact_check":              self._fact_check,
@@ -4432,7 +4430,7 @@ class ToolExecutor:
             session_id=inp.get("session_id") or _resolve_bound_chat_session_id(),
         )
 
-    async def _generate_3d_asset(self, inp: Dict[str, Any]) -> Any:
+    async def _generate_three_d_asset(self, inp: Dict[str, Any]) -> Any:
         """local_3d 비동기 job 생성."""
         from app.services.media_generation_service import media_generation_service
 
@@ -4577,12 +4575,6 @@ class ToolExecutor:
         """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
         from app.api.ceo_chat_tools import execute_tool
         return await execute_tool("credential_test_login", inp, "", "")
-
-
-    async def _generate_3d_asset(self, inp: Dict[str, Any]) -> Any:
-        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
-        from app.api.ceo_chat_tools import execute_tool
-        return await execute_tool("generate_3d_asset", inp, "", "")
 
 # ─── 하위 호환성 ─────────────────────────────────────────────────────────────
 

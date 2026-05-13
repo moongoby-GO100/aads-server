@@ -117,7 +117,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "local_model_queue_status": True, # 온디맨드 — CEO PC 로컬 모델 설치 큐 상태
     "local_model_install_test": True,  # 온디맨드 — 단일 큐 항목 prepare/install/test
     "generate_music": True,           # 온디맨드 — local_music async job
-    "generate_3d_asset": True,        # 온디맨드 — local_3d async job
+    "generate_three_d_asset": True,        # 온디맨드 — local_3d async job
     "media_job_status": True,         # 온디맨드 — 공통 media job 상태
     # ── 검색 도구 (한국어 특화) ───────────────────────────────────────
     "search_naver": False,            # 핵심 — 한국어 뉴스/블로그
@@ -160,7 +160,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "notify_channel": True,  # 자동 추가
     "tool_layer_audit": True,  # 자동 추가
     "crawl4ai_fetch": True,  # 자동 추가
-    "generate_3d_asset": True,  # 자동 추가
+    "generate_three_d_asset": True,  # 자동 추가
 }
 
 # 도구 카테고리 안내 (시스템 프롬프트 주입용 — context_builder.py에서 사용)
@@ -2614,8 +2614,8 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "required": ["prompt"],
         },
     },
-    "generate_3d_asset": {
-        "name": "generate_3d_asset",
+    "generate_three_d_asset": {
+        "name": "generate_three_d_asset",
         "description": "CEO PC local_3d 비동기 job 생성. 설치/런타임 준비 전에는 queued/prepared 상태만 반환한다.",
         "input_schema": {
             "type": "object",
@@ -2885,7 +2885,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
-    "action": ["directive_create", "create_design_modification_request", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_3d_asset", "media_job_status"],
+    "action": ["directive_create", "create_design_modification_request", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status"],
     "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)

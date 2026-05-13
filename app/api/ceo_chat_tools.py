@@ -602,7 +602,7 @@ TOOL_DEFINITIONS: List[Dict] = [
         },
     },
     {
-        "name": "generate_3d_asset",
+        "name": "generate_three_d_asset",
         "description": "CEO PC local_3d 비동기 job 생성. 설치/런타임 준비 전에는 queued/prepared 상태만 반환한다.",
         "input_schema": {
             "type": "object",
@@ -4337,7 +4337,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             session_id=params.get("session_id") or chat_session_id,
         )
         return json.dumps(result, ensure_ascii=False, default=str)
-    elif name == "generate_3d_asset":
+    elif name == "generate_three_d_asset":
         from app.services.media_generation_service import media_generation_service
         result = await media_generation_service.generate_3d(
             params.get("prompt", ""),

@@ -18,7 +18,7 @@ def test_media_tools_registered_in_registry_and_mcp_definitions():
         "local_model_queue_status",
         "local_model_install_test",
         "generate_music",
-        "generate_3d_asset",
+        "generate_three_d_asset",
         "media_job_status",
     }
     registry = ToolRegistry()
@@ -39,7 +39,7 @@ def test_tool_executor_dispatch_contains_all_media_tools():
         "local_model_queue_status",
         "local_model_install_test",
         "generate_music",
-        "generate_3d_asset",
+        "generate_three_d_asset",
         "media_job_status",
     }
 
