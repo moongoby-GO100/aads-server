@@ -824,7 +824,7 @@
   - `SELECT provider, model_id, execution_model_id, is_selectable, is_executable, verification_status FROM llm_models WHERE model_id IN ('gpt-image-2','imagen-4.0-generate-001','gemini-3.1-flash-image-preview','sora-2','sora-2-pro','veo-3.1-generate-preview','gpt-5.5','claude-opus-4-7','gemini-3.1-pro-preview') ORDER BY provider, model_id;`
   - `SELECT preference_key, provider, model_id, is_favorite, is_pinned FROM chat_model_preferences WHERE model_id IN ('gpt-5.5','claude-opus-4-7','gemini-3.1-pro-preview') ORDER BY display_order;`
 - 검증 명령: `python3 -m py_compile app/services/media_generation_service.py app/api/llm_models.py app/api/image.py app/services/tool_executor.py app/api/ceo_chat_tools.py app/services/tool_registry.py` 통과. `python3 -m pytest -q tests/unit/test_media_generation_service.py tests/unit/test_model_routing_admin_static.py` 13개 통과. `git diff --check` 통과. `npx tsc --noEmit --pretty false`는 로컬 `tsc`가 없어 npm registry 조회를 시도했고, 네트워크 제한(`ENOTFOUND registry.npmjs.org`)으로 수행되지 않았다.
-- 상태: 변경분은 local commit 대상으로 정리했고, push/deploy는 수행하지 않았다.
+- 상태: P1 백엔드는 `runner-9852ee94` 승인 후 `113ba80`으로 main/origin 반영됐다. 러너의 대시보드 배포는 nginx 검증 단계에서 실패했으나, 실제 대시보드 저장소에 별도 보정 커밋 `6fd83ff feat: add model routing admin page`를 적용/푸시하고 `bash deploy.sh`로 blue-green 배포를 완료했다. `migrations/089_model_routing_preferences.sql`는 운영 DB에 수동 적용해 `model_routing_preferences` 12건, 최신 chat model preference 3건이 확인됐다.
 
 ## 2026-05-12 09:54 KST - 채팅 응답 사라짐 재발 원인 확정 및 검증 갱신
 
