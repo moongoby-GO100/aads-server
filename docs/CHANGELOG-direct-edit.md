@@ -727,3 +727,12 @@ MAX
 
 ## [2026-05-13 14:49:25 KST] [aads-server] scripts/rebuild_dashboard.sh
 - Chat-Direct 수정: write: scripts/rebuild_dashboard.sh
+
+## [2026-05-13 14:52:30 KST] [aads-server] scripts/rebuild_dashboard.sh
+- Chat-Direct 수정: write: scripts/rebuild_dashboard.sh
+
+## [2026-05-13 14:52:36 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: cat /root/aads/aads-dashboard/deploy.sh
+
+## [2026-05-13 14:52:45 KST] [aads-server] scripts/rebuild_dashboard.sh
+- Chat-Direct 수정: run_remote_command: cat /root/aads/aads-dashboard/deploy.sh
