@@ -64,6 +64,21 @@ class EnsureWorkSessionRequest(BaseModel):
     preferred_port: int | None = Field(default=None, ge=1024, le=65535)
 
 
+class WorkSessionRouteExecuteRequest(BaseModel):
+    work_key: str = Field(min_length=2, max_length=120)
+    command_type: str = Field(min_length=1, max_length=120)
+    params: dict[str, Any] = Field(default_factory=dict)
+    label: str = Field(default="", max_length=120)
+    agent_id: str = Field(default="", max_length=120)
+    job_type: str = Field(default="browser_bridge_work_session", max_length=120)
+    required_capabilities: list[str] = Field(default_factory=lambda: ["interactive_browser"])
+    queue_wait_timeout_seconds: float = Field(default=60, ge=1, le=300)
+    lease_ttl_seconds: int = Field(default=120, ge=30, le=3600)
+    command_timeout_seconds: float = Field(default=90, ge=1, le=300)
+    url: str = Field(default="about:blank", max_length=2048)
+    preferred_port: int | None = Field(default=None, ge=1024, le=65535)
+
+
 class SessionLeaseRequest(BaseModel):
     owner: str = Field(min_length=1, max_length=160)
     preferred_session_id: str = Field(default="", max_length=80)
@@ -189,6 +204,52 @@ async def ensure_work_session(
     except Exception as exc:
         raise HTTPException(status_code=424, detail=str(exc)) from exc
     return {"status": "ready", "session": session.public_dict()}
+
+
+@router.post("/work-sessions/route-execute")
+async def route_execute_work_session(
+    req: WorkSessionRouteExecuteRequest,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    service = get_browser_bridge_service()
+    try:
+        session = await service.ensure_work_session(
+            work_key=req.work_key,
+            label=req.label,
+            agent_id=req.agent_id,
+            url=req.url,
+            preferred_port=req.preferred_port,
+        )
+        endpoint = session.endpoint.public_dict()
+        metadata = endpoint.get("metadata", {}) if isinstance(endpoint, dict) else {}
+        agent_id = str(req.agent_id or metadata.get("agent_id") or "")
+        port = metadata.get("port")
+        params = dict(req.params or {})
+        params.setdefault("work_key", session.work_key or req.work_key)
+        params.setdefault("browser_session_id", session.session_id)
+        params.setdefault("session_id", session.session_id)
+        params.setdefault("label", session.label or req.label)
+        if port:
+            params.setdefault("port", int(port))
+            params.setdefault("preferred_port", int(port))
+
+        result = await service._execute_pc_agent_route_via_active_api(
+            command_type=req.command_type,
+            params=params,
+            agent_id=agent_id,
+            job_type=req.job_type,
+            required_capabilities=req.required_capabilities,
+            queue_wait_timeout_seconds=req.queue_wait_timeout_seconds,
+            lease_ttl_seconds=req.lease_ttl_seconds,
+            command_timeout_seconds=req.command_timeout_seconds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=424, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=503, detail="No active PC Agent route API is available")
+    return result
 
 
 @router.get("/work-sessions")

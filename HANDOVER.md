@@ -1,5 +1,12 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-13 11:20 KST) - NTV2 Browser Bridge work-session route-execute 프록시
+- 배경: NTV2 신상마켓 자동상품등록이 AADS Browser Bridge 세션 확보에는 성공했지만, 후속 `browser_eval`/업로드 명령이 공개 `/pc-agent/route-execute` 경로에서 PC Agent 연결 0건/503 계층에 걸릴 수 있었다.
+- 조치: `app/api/browser_bridge.py`에 인증된 `/api/v1/browser-bridge/work-sessions/route-execute` 엔드포인트를 추가했다. 요청의 `work_key`로 work-session을 먼저 확보하고, session_id/label/port를 params에 보강한 뒤 active PC Agent route API로 전달한다.
+- 검증: `python3 -m py_compile app/api/browser_bridge.py`, `docker exec aads-server python -m py_compile /app/app/api/browser_bridge.py`, `pytest -q tests/unit/test_browser_bridge.py` 23개 통과. `aads-server`/`aads-server-green` 재시작 후 health OK 확인.
+- 운영 확인: NTV2 `php artisan sinsang:register-product --product-id=64003` dry-run이 등록 폼 입력, 이미지 20장 base64 업로드, 폼 검증까지 통과하고 외부 최종 등록 전 `dry_run.stop_before_submit`에서 정상 중단됐다.
+- 미완료/주의: `supervisorctl status`상 `mcp-servers:playwright-mcp`는 여전히 STOPPED이며, `supervisorctl start`는 `ERROR (no such file)`을 반환했다. 별도 Playwright MCP 실행 파일/슈퍼바이저 설정 복구가 필요하다.
+
 ## 현재 진행 상태 (2026-05-13 10:25 KST) - Runner reliability hardening 직접 조치
 - 배경: `runner-d32984ff`/`runner-a72c6c24`는 변경 누락 또는 git diff 불일치로 반려됐고, 재작업 `runner-3fc39db2`는 로그 없이 진행 중이라 직접 조치로 전환했다.
 - 조치: `app/api/pipeline_runner.py`에서 동일 `project + instruction_hash + parallel_group(scope)` 활성 작업이 있으면 새 요청을 `cancelled/dedup_blocked` row로 저장하고, 원본 job/status/phase와 `auto_retryable=false` 로그를 남기도록 보강했다. 실패/누락 의존 작업은 API 제출 시점에 `blocked_dependency`로 터미널 종결한다.
