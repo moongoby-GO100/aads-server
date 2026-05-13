@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>뉴톡 AI 패션 숏츠/릴스 자동생성 상세 기획서 P0</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --card: #273449;
+      --nav: #17202a;
+      --accent: #f472b6;
+      --accent2: #a78bfa;
+      --accent3: #34d399;
+      --accent4: #fbbf24;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --border: #334155;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+    }
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: var(--nav);
+      padding: 0.6rem 1rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      border-bottom: 1px solid var(--border);
+    }
+    nav a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.82rem;
+      padding: 0.3rem 0.7rem;
+      border-radius: 6px;
+      transition: all 0.2s;
+    }
+    nav a:hover,
+    nav a.active {
+      color: #fff;
+      background: rgba(244,114,182,0.2);
+    }
+    .container { max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem; }
+    h1 { font-size: 2rem; margin-bottom: 0.5rem; background: linear-gradient(135deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .subtitle { color: var(--muted); font-size: 0.95rem; margin-bottom: 2rem; }
+    h2 { font-size: 1.35rem; color: var(--accent); margin: 2.5rem 0 1rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border); }
+    h3 { font-size: 1.1rem; color: var(--accent2); margin: 1.5rem 0 0.7rem; }
+    h4 { font-size: 0.95rem; color: var(--accent3); margin: 1.2rem 0 0.5rem; }
+    p, li { margin-bottom: 0.5rem; }
+    ul, ol { padding-left: 1.5rem; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin: 1rem 0;
+    }
+    .highlight-card {
+      background: linear-gradient(135deg, rgba(244,114,182,0.1), rgba(167,139,250,0.1));
+      border-color: var(--accent);
+    }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+    th { background: var(--card); color: var(--accent2); text-align: left; padding: 0.7rem; border: 1px solid var(--border); }
+    td { padding: 0.7rem; border: 1px solid var(--border); vertical-align: top; }
+    tr:hover { background: rgba(255,255,255,0.03); }
+    code { background: rgba(244,114,182,0.15); padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.85rem; }
+    pre { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; font-size: 0.85rem; margin: 1rem 0; }
+    .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+    .badge-p0 { background: #dc2626; color: #fff; }
+    .badge-p1 { background: #f59e0b; color: #000; }
+    .badge-p2 { background: #3b82f6; color: #fff; }
+    .badge-new { background: #10b981; color: #fff; }
+    .flow-step { display: flex; align-items: flex-start; gap: 1rem; margin: 1rem 0; }
+    .flow-num { min-width: 2.5rem; height: 2.5rem; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 1.1rem; flex-shrink: 0; }
+    .flow-content { flex: 1; }
+    .pipeline-flow { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 1rem 0; }
+    .pipeline-node { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 1rem; font-size: 0.85rem; text-align: center; min-width: 120px; }
+    .pipeline-node.active { border-color: var(--accent); background: rgba(244,114,182,0.15); }
+    .pipeline-arrow { color: var(--accent); font-size: 1.2rem; }
+    .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin: 1rem 0; }
+    .metric-item { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 1.2rem; text-align: center; }
+    .metric-value { font-size: 1.8rem; font-weight: 700; color: var(--accent); }
+    .metric-label { font-size: 0.82rem; color: var(--muted); margin-top: 0.3rem; }
+    .warn { background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.3); border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+    .warn::before { content: "⚠️ "; }
+    .info { background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.3); border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+    .info::before { content: "ℹ️ "; }
+    .section-link { color: var(--accent3); text-decoration: underline; }
+    footer { margin-top: 3rem; padding: 1.5rem; text-align: center; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--border); }
+    @media (max-width: 768px) {
+      nav { padding: 0.4rem; }
+      nav a { font-size: 0.72rem; padding: 0.2rem 0.4rem; }
+      .container { padding: 1rem; }
+      h1 { font-size: 1.4rem; }
+      .metric-grid { grid-template-columns: 1fr 1fr; }
+      .pipeline-flow { flex-direction: column; }
+      .pipeline-arrow { transform: rotate(90deg); }
+    }
+  </style>
+</head>
+<body>
+
+<nav aria-label="문서 목차">
+  <a href="/reports/newtalk-ai-fashion-influencer-plan-v1.html">📋 사업기획서</a>
+  <a href="/reports/newtalk-ai-fashion-persona-cards-p0.html">P0 페르소나</a>
+  <a href="/reports/newtalk-ai-model-creation-management-p0.html">AI모델 생성/관리</a>
+  <a href="/reports/newtalk-ai-fashion-codi-matching-p0.html">코디 매칭</a>
+  <a href="/reports/newtalk-ai-detail-page-generation-p0.html">상세페이지</a>
+  <a href="/reports/newtalk-ai-shorts-reels-generation-p0.html" class="active" style="color:#f472b6;font-weight:700">✦ 숏츠/릴스 자동생성</a>
+  <a href="/reports/newtalk-ai-fashion-uiux-plan-p0.html">UI/UX</a>
+  <a href="/reports/newtalk-ai-fashion-user-flow-detail-v2.html">사용자흐름 v2</a>
+</nav>
+
+<div class="container">
+
+  <h1>뉴톡 AI 패션 숏츠/릴스 자동생성 상세 기획서</h1>
+  <p class="subtitle">
+    <span class="badge badge-p0">P0</span>
+    문서 버전 1.0 · 작성 기준 2026-05-13 KST · 뉴톡 AI 패션 인플루언서 사업기획서 부속 문서
+  </p>
+
+  <!-- ================================================================ -->
+  <h2>1. 범위와 전제</h2>
+
+  <div class="card">
+    <h3>1.1 In-Scope</h3>
+    <ul>
+      <li>뉴톡 AI 패션 인플루언서 모델이 출연하는 <strong>패션 숏츠(15~60초)</strong> 자동 생성</li>
+      <li>인스타 릴스 / 유튜브 숏츠 / 틱톡 동시 배포 포맷</li>
+      <li>뉴톡 상품 기반 코디 착용컷 → 동영상 변환 파이프라인</li>
+      <li>AI 카피라이팅: 대본, 자막, 해시태그, CTA 자동 생성</li>
+      <li>음악/효과음 자동 매칭 및 라이선스 관리</li>
+      <li>뉴톡V1 상품↔숏츠 태그 연결 (판매 전환 추적)</li>
+      <li>ShortFlow v3.0 10-Layer 양산형 회피 엔진 적용</li>
+    </ul>
+    <h3>1.2 Out-of-Scope</h3>
+    <ul>
+      <li>실사 촬영 영상 편집 (향후 Phase 2)</li>
+      <li>라이브 커머스 연동</li>
+      <li>유튜브 채널 자동 운영 (ShortFlow SaaS 영역)</li>
+      <li>결제/과금 시스템 (별도 기획)</li>
+    </ul>
+    <h3>1.3 핵심 전제</h3>
+    <ul>
+      <li>AI 모델 이미지: <a href="/reports/newtalk-ai-model-creation-management-p0.html" class="section-link">AI 모델 생성/관리 기획서</a>의 3-Layer 시스템에서 생성된 모델컷/코디컷 사용</li>
+      <li>코디 매칭: <a href="/reports/newtalk-ai-fashion-codi-matching-p0.html" class="section-link">코디 매칭 기획서</a>에서 확정된 코디 결과물이 입력</li>
+      <li>상세페이지: <a href="/reports/newtalk-ai-detail-page-generation-p0.html" class="section-link">상세페이지 자동생성 기획서</a>와 병행 — 동일 상품의 상세페이지+숏츠가 함께 생성</li>
+      <li>ShortFlow 기술 자산: SF 프로젝트의 10-Layer 엔진, FFmpeg 파이프라인, 2-Track 구조 활용</li>
+      <li>뉴톡 DB 실측: <code>shorts</code> 10건, <code>products</code> 77,349건, <code>sourcing_images</code> 45건, <code>categories</code> 11개 [DB 조회, 2026-05-13]</li>
+    </ul>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2>2. 숏츠/릴스 콘텐츠 유형 (6종)</h2>
+
+  <table>
+    <thead>
+      <tr><th>#</th><th>유형</th><th>길이</th><th>목적</th><th>빈도</th><th>우선순위</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>S1</td>
+        <td><strong>OOTD 숏츠</strong><br>오늘의 코디</td>
+        <td>15~30초</td>
+        <td>모델의 일상 코디 노출, 상품 인지도 확보</td>
+        <td>모델당 주 3회</td>
+        <td><span class="badge badge-p0">P0</span></td>
+      </tr>
+      <tr>
+        <td>S2</td>
+        <td><strong>코디 전환 숏츠</strong><br>Before → After</td>
+        <td>15~20초</td>
+        <td>스타일 변신 임팩트, 공유·저장 유도</td>
+        <td>모델당 주 2회</td>
+        <td><span class="badge badge-p0">P0</span></td>
+      </tr>
+      <tr>
+        <td>S3</td>
+        <td><strong>상품 포커스 숏츠</strong><br>단일 상품 하이라이트</td>
+        <td>20~30초</td>
+        <td>주상품 상세 노출, 구매 전환</td>
+        <td>신상품 등록 시</td>
+        <td><span class="badge badge-p0">P0</span></td>
+      </tr>
+      <tr>
+        <td>S4</td>
+        <td><strong>시즌/트렌드 숏츠</strong><br>계절 코디 모음</td>
+        <td>30~45초</td>
+        <td>시즌별 트렌드 큐레이션</td>
+        <td>시즌당 4~6회</td>
+        <td><span class="badge badge-p1">P1</span></td>
+      </tr>
+      <tr>
+        <td>S5</td>
+        <td><strong>Get the Look 숏츠</strong><br>셀럽/트렌드 해석</td>
+        <td>30~45초</td>
+        <td>트렌드 편승, 검색 유입</td>
+        <td>트렌드 발생 시</td>
+        <td><span class="badge badge-p1">P1</span></td>
+      </tr>
+      <tr>
+        <td>S6</td>
+        <td><strong>감성 무드 릴스</strong><br>룩북/브랜드 무드</td>
+        <td>45~60초</td>
+        <td>브랜드 무드 구축, 팔로워 확보</td>
+        <td>모델당 월 2회</td>
+        <td><span class="badge badge-p2">P2</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ================================================================ -->
+  <h2>3. 자동생성 파이프라인 (10단계)</h2>
+
+  <div class="pipeline-flow">
+    <div class="pipeline-node active">① 트리거</div>
+    <span class="pipeline-arrow">→</span>
+    <div class="pipeline-node">② 상품/코디 수집</div>
+    <span class="pipeline-arrow">→</span>
+    <div class="pipeline-node">③ 컨셉 결정</div>
+    <span class="pipeline-arrow">→</span>
+    <div class="pipeline-node">④ 대본 생성</div>
+    <span class="pipeline-arrow">→</span>
+    <div class="pipeline-node">⑤ 이미지 시퀀스</div>
+  </div>
+  <div class="pipeline-flow">
+    <div class="pipeline-node">⑥ 모션/전환</div>
+    <span class="pipeline-arrow">→</span>
+    <div class="pipeline-node">⑦ 자막/CTA</div>
+    <span class="pipeline-arrow">→</span>
+    <div class="pipeline-node">⑧ 음악 매칭</div>
+    <span class="pipeline-arrow">→</span>
+    <div class="pipeline-node">⑨ 품질 검증</div>
+    <span class="pipeline-arrow">→</span>
+    <div class="pipeline-node active">⑩ 배포/태깅</div>
+  </div>
+
+  <div class="card">
+    <h3>① 트리거 (자동/수동)</h3>
+    <table>
+      <tr><th>트리거 유형</th><th>조건</th><th>우선순위</th></tr>
+      <tr><td>신상품 등록</td><td>뉴톡V1에 신상품 등록 + 제품컷 3장 이상 업로드 시 자동 트리거</td><td><span class="badge badge-p0">P0</span></td></tr>
+      <tr><td>코디 완성</td><td>코디 매칭 시스템에서 코디 확정 시 자동 트리거</td><td><span class="badge badge-p0">P0</span></td></tr>
+      <tr><td>스케줄 발행</td><td>모델별 주간 콘텐츠 캘린더 기준 자동 트리거</td><td><span class="badge badge-p1">P1</span></td></tr>
+      <tr><td>수동 생성</td><td>관리자가 상품/모델/유형 선택 후 직접 생성 요청</td><td><span class="badge badge-p0">P0</span></td></tr>
+      <tr><td>트렌드 감지</td><td>검색량/SNS 급상승 키워드 감지 시 자동 제안</td><td><span class="badge badge-p2">P2</span></td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>② 상품/코디 수집</h3>
+    <p><strong>입력:</strong> 상품 ID(GoodsCode), 코디 매칭 결과, AI 모델 ID</p>
+    <ul>
+      <li>V1 상품 DB에서 상품명, 가격, 카테고리, 소재, 색상 메타 수집</li>
+      <li>V1 이미지 폴더(<code>/home/danharoo/www/data/files/goods/goodscode/img/{GoodsCode}/</code>)에서 제품컷 수집</li>
+      <li>코디 매칭 결과에서 주상품 + 부상품 리스트, 코디 테마 수집</li>
+      <li>AI 모델 프로필에서 체형, 스타일 톤, 말투, 금지 표현 로드</li>
+    </ul>
+    <p><strong>출력:</strong> <code>shorts_job_context</code> JSON (상품 메타 + 이미지 URL + 코디 + 모델 프로필)</p>
+  </div>
+
+  <div class="card">
+    <h3>③ 컨셉 결정</h3>
+    <p>LLM이 상품 특성 + 모델 페르소나 + 시즌/트렌드를 분석해 숏츠 유형(S1~S6)과 연출 컨셉을 자동 결정합니다.</p>
+    <table>
+      <tr><th>입력</th><th>결정 항목</th><th>결정 기준</th></tr>
+      <tr><td>상품 카테고리</td><td>숏츠 유형</td><td>상의/원피스→S1, 세트→S2, 신상품→S3, 시즌전환기→S4</td></tr>
+      <tr><td>모델 페르소나</td><td>톤/무드</td><td>페르소나별 말투·감성(미니멀/스트릿/로맨틱/Y2K)</td></tr>
+      <tr><td>가격대</td><td>CTA 전략</td><td>3만원 미만→임팩트가, 3~8만원→가성비, 8만원+→프리미엄</td></tr>
+      <tr><td>시즌/날씨</td><td>배경/컬러톤</td><td>여름→밝고 산뜻, 겨울→따뜻한 톤, 봄/가을→파스텔/뮤트</td></tr>
+    </table>
+    <p><strong>출력:</strong> <code>concept_brief</code> (유형, 무드, 컬러톤, CTA전략, 예상 길이)</p>
+  </div>
+
+  <div class="card">
+    <h3>④ 대본 생성 (AI)</h3>
+    <p>LLM이 모델 페르소나 말투로 숏츠 대본을 자동 작성합니다.</p>
+    <h4>대본 구조 (유형별)</h4>
+    <table>
+      <tr><th>유형</th><th>구조</th><th>예시 (모델: 하윤 22세)</th></tr>
+      <tr>
+        <td>S1 OOTD</td>
+        <td>Hook(2초) → 전신컷(3초) → 디테일 3컷(6초) → CTA(3초)</td>
+        <td>"오늘 뭐 입지? 이 조합이면 5초 만에 완성 🔥 <br>링크 프로필에!"</td>
+      </tr>
+      <tr>
+        <td>S2 전환</td>
+        <td>Before(3초) → 전환효과(1초) → After(5초) → 상품태그(3초)</td>
+        <td>"집콕룩에서 → 데이트룩으로! 카디건 하나면 끝 💕"</td>
+      </tr>
+      <tr>
+        <td>S3 포커스</td>
+        <td>상품 클로즈업(5초) → 착용(8초) → 디테일(5초) → 가격/CTA(5초)</td>
+        <td>"이 가격에 이 핏? 솔직히 3벌 샀어 ㅋㅋ"</td>
+      </tr>
+    </table>
+    <h4>대본 생성 규칙</h4>
+    <ul>
+      <li>모델별 금지 표현 자동 필터링 (페르소나 카드의 <code>forbidden_expressions</code>)</li>
+      <li>상품 정보 정확성: 가격, 소재, 사이즈 — DB 값만 사용, 과장 금지</li>
+      <li>CTA 패턴 5종 이상 로테이션 (동일 CTA 3회 연속 사용 금지)</li>
+      <li>해시태그 자동 생성: 상품명 + 카테고리 + 트렌드 + 모델명 (최대 15개)</li>
+      <li>AI 생성 표시 문구 의무 삽입: "AI가 생성한 콘텐츠입니다"</li>
+    </ul>
+    <p><strong>출력:</strong> <code>script</code> (대사 텍스트, 자막 텍스트, 해시태그, CTA, 예상 타임라인)</p>
+  </div>
+
+  <div class="card">
+    <h3>⑤ 이미지 시퀀스 구성</h3>
+    <p>모델컷 + 제품컷 + 감성컷을 대본 타임라인에 맞춰 시퀀스로 배열합니다.</p>
+    <h4>컷 구성 기준</h4>
+    <table>
+      <tr><th>컷 유형</th><th>소스</th><th>용도</th><th>해상도</th></tr>
+      <tr><td>전신 모델컷</td><td>AI 모델 생성 시스템</td><td>전체 코디 노출</td><td>1080×1920 (9:16)</td></tr>
+      <tr><td>상반신 모델컷</td><td>AI 모델 생성 시스템</td><td>상의/악세서리 디테일</td><td>1080×1920</td></tr>
+      <tr><td>제품 클로즈업</td><td>V1 제품컷 폴더</td><td>상품 디테일, 소재감</td><td>원본 → 1080×1920 크롭</td></tr>
+      <tr><td>감성/배경컷</td><td>AI 이미지 생성</td><td>무드 설정, 전환 장면</td><td>1080×1920</td></tr>
+      <tr><td>텍스트 카드</td><td>자동 생성 (템플릿)</td><td>가격, CTA, 브랜드</td><td>1080×1920</td></tr>
+    </table>
+    <h4>시퀀스 배열 규칙</h4>
+    <ul>
+      <li>Hook(첫 2초): 가장 임팩트 있는 전신컷 또는 전환 이전 컷</li>
+      <li>중반: 디테일 컷 3~5장 — 상품별 1.5~2초씩</li>
+      <li>마감: CTA 텍스트 카드 + 상품 태그 오버레이</li>
+      <li>최소 5컷, 최대 15컷 (사용자 설정 가능)</li>
+      <li>동일 앵글 연속 배치 금지 — 전신→상반신→클로즈업→전신 교차</li>
+    </ul>
+    <p><strong>출력:</strong> <code>image_sequence[]</code> (이미지 경로, 표시 시간, 크롭 좌표, 전환 유형)</p>
+  </div>
+
+  <div class="card">
+    <h3>⑥ 모션/전환 효과 적용</h3>
+    <p>정적 이미지를 동적 영상으로 변환하는 핵심 단계입니다.</p>
+    <h4>모션 효과 라이브러리 (12종)</h4>
+    <table>
+      <tr><th>코드</th><th>효과</th><th>적용 대상</th><th>구현</th></tr>
+      <tr><td>M01</td><td>Ken Burns (줌인)</td><td>전신컷</td><td>FFmpeg zoompan filter</td></tr>
+      <tr><td>M02</td><td>Ken Burns (줌아웃)</td><td>감성컷</td><td>FFmpeg zoompan filter</td></tr>
+      <tr><td>M03</td><td>좌→우 패닝</td><td>코디 전체샷</td><td>FFmpeg crop + overlay</td></tr>
+      <tr><td>M04</td><td>우→좌 패닝</td><td>코디 전체샷</td><td>FFmpeg crop + overlay</td></tr>
+      <tr><td>M05</td><td>상→하 틸트</td><td>전신 모델컷</td><td>FFmpeg scroll filter</td></tr>
+      <tr><td>M06</td><td>하→상 틸트</td><td>전신 모델컷</td><td>FFmpeg scroll filter</td></tr>
+      <tr><td>M07</td><td>페이드 전환</td><td>장면 전환</td><td>FFmpeg xfade=fade</td></tr>
+      <tr><td>M08</td><td>와이프 전환</td><td>Before→After</td><td>FFmpeg xfade=wipeleft</td></tr>
+      <tr><td>M09</td><td>슬라이드 전환</td><td>상품 교체</td><td>FFmpeg xfade=slideleft</td></tr>
+      <tr><td>M10</td><td>줌 전환</td><td>디테일 진입</td><td>FFmpeg xfade=circlecrop</td></tr>
+      <tr><td>M11</td><td>플래시 전환</td><td>코디 전환</td><td>FFmpeg xfade=fadewhite</td></tr>
+      <tr><td>M12</td><td>정지(스틸)</td><td>텍스트 카드</td><td>FFmpeg loop filter</td></tr>
+    </table>
+    <h4>자동 모션 배정 규칙</h4>
+    <ul>
+      <li>전신컷: M01 또는 M05 (줌인 또는 상→하 틸트)</li>
+      <li>디테일컷: M03 또는 M04 (좌우 패닝)</li>
+      <li>전환 장면: 유형별 고정 — S2(Before→After)는 M08 와이프</li>
+      <li>동일 모션 연속 2회 사용 금지 (자동 로테이션)</li>
+      <li>텍스트 카드: 항상 M12 정지</li>
+    </ul>
+    <p><strong>출력:</strong> <code>motion_timeline[]</code> (컷별 효과 코드, 시작/종료 시간, 파라미터)</p>
+  </div>
+
+  <div class="card">
+    <h3>⑦ 자막/CTA 오버레이</h3>
+    <h4>자막 스타일 시스템</h4>
+    <table>
+      <tr><th>요소</th><th>기본 스타일</th><th>사용자 변경 가능</th></tr>
+      <tr><td>폰트</td><td>Pretendard Bold / Noto Sans KR</td><td>✅ 3종 선택</td></tr>
+      <tr><td>크기</td><td>36pt (1080p 기준)</td><td>✅ 24~48pt</td></tr>
+      <tr><td>위치</td><td>하단 20% 영역</td><td>✅ 상단/중앙/하단</td></tr>
+      <tr><td>배경</td><td>반투명 검정 (60% opacity)</td><td>✅ 색상/투명도</td></tr>
+      <tr><td>애니메이션</td><td>페이드인 0.3초</td><td>✅ 페이드/슬라이드/타이핑</td></tr>
+      <tr><td>상품 태그</td><td>상품명 + 가격 + 링크 아이콘</td><td>✅ 표시/비표시</td></tr>
+    </table>
+    <h4>CTA 오버레이 규칙</h4>
+    <ul>
+      <li>마지막 3초에 CTA 카드 자동 삽입</li>
+      <li>상품 가격: V1 DB <code>price</code> 실시간 반영 (할인가 있으면 취소선 + 할인가)</li>
+      <li>"AI 생성 콘텐츠" 표시: 영상 우측 하단 워터마크, 8pt, 전체 재생 시간 노출</li>
+      <li>뉴톡 로고: 좌측 상단 워터마크, 브랜드별 커스텀 가능</li>
+    </ul>
+    <p><strong>출력:</strong> <code>overlay_config</code> (자막 텍스트/타이밍, CTA 디자인, 워터마크)</p>
+  </div>
+
+  <div class="card">
+    <h3>⑧ 음악/효과음 매칭</h3>
+    <h4>음악 라이브러리 구조</h4>
+    <table>
+      <tr><th>카테고리</th><th>무드</th><th>BPM</th><th>적용 유형</th><th>라이선스</th></tr>
+      <tr><td>Upbeat Pop</td><td>밝고 경쾌</td><td>110~130</td><td>S1 OOTD, S2 전환</td><td>로열티 프리</td></tr>
+      <tr><td>Chill Lo-fi</td><td>차분/감성</td><td>70~90</td><td>S6 감성 무드</td><td>로열티 프리</td></tr>
+      <tr><td>Trendy Beat</td><td>힙/트렌디</td><td>90~110</td><td>S5 Get the Look</td><td>로열티 프리</td></tr>
+      <tr><td>Elegant</td><td>고급/세련</td><td>80~100</td><td>S3 프리미엄 상품</td><td>로열티 프리</td></tr>
+      <tr><td>Seasonal</td><td>시즌별</td><td>다양</td><td>S4 시즌 트렌드</td><td>로열티 프리</td></tr>
+    </table>
+    <h4>자동 매칭 로직</h4>
+    <ul>
+      <li>숏츠 유형 + 모델 페르소나 무드 → 카테고리 1차 필터</li>
+      <li>영상 길이 + BPM → 비트 포인트 자동 정렬 (컷 전환 타이밍 = 비트)</li>
+      <li>동일 모델 최근 5개 숏츠와 중복 곡 금지</li>
+      <li>효과음: 전환 시 "whoosh", CTA 시 "ding" 자동 삽입 (선택 사항)</li>
+    </ul>
+    <div class="warn">
+      <strong>라이선스 주의:</strong> 모든 BGM은 상업적 사용 가능 로열티 프리 라이선스만 허용. 플랫폼별 저작권 클레임 리스크가 있는 트랙은 자동 제외. 라이선스 만료일 관리 필수.
+    </div>
+    <p><strong>출력:</strong> <code>audio_config</code> (BGM 파일, 볼륨, 비트맵, 효과음)</p>
+  </div>
+
+  <div class="card">
+    <h3>⑨ 품질 검증 — 10-Layer 엔진 적용</h3>
+    <p>ShortFlow v3.0의 10-Layer 양산형 회피 엔진을 패션 숏츠에 맞게 커스터마이즈합니다.</p>
+    <table>
+      <tr><th>Layer</th><th>검증 항목</th><th>패션 숏츠 기준</th><th>실패 시 처리</th></tr>
+      <tr><td>L1</td><td>대본 다양성</td><td>동일 모델 최근 10편과 대본 유사도 &lt; 0.70</td><td>대본 재생성</td></tr>
+      <tr><td>L2</td><td>시각 패턴</td><td>컷 구성 순서·비율이 최근 5편과 &ge; 30% 상이</td><td>시퀀스 재배열</td></tr>
+      <tr><td>L3</td><td>오디오 변이</td><td>동일 BGM 최근 3편 내 미사용</td><td>BGM 교체</td></tr>
+      <tr><td>L4</td><td>원본성 점수</td><td>ORIGINALITY_SCORE &ge; 75</td><td>자동 생성 중단, 수동 검토 대기</td></tr>
+      <tr><td>L5</td><td>크로스 비디오 유사도</td><td>전체 포트폴리오 대비 유사도 &lt; 0.80</td><td>모션/전환 효과 교체</td></tr>
+      <tr><td>L6</td><td>정책 키워드</td><td>플랫폼별 금지어 + 과장 광고 표현 필터</td><td>해당 문구 자동 교체</td></tr>
+      <tr><td>L7</td><td>발행 간격</td><td>동일 모델 숏츠 발행 간격 &ge; 4시간</td><td>발행 큐 지연</td></tr>
+      <tr><td>L8</td><td>채널 다양성</td><td>주간: OOTD &le; 50%, 포커스 &le; 30%, 기타 &ge; 20%</td><td>유형 강제 교체</td></tr>
+      <tr><td>L9</td><td>메타데이터</td><td>제목·해시태그 중복도 &lt; 0.60, 해시태그 5~15개</td><td>자동 재생성</td></tr>
+      <tr><td>L10</td><td>최종 품질</td><td>해상도 1080×1920, 비트레이트 &ge; 4Mbps, 오디오 AAC 44.1kHz</td><td>재렌더링</td></tr>
+    </table>
+    <p><strong>통과 기준:</strong> 10개 레이어 전체 PASS → 자동 발행 큐 진입. 1개라도 FAIL → 해당 레이어 자동 수정 → 재검증 (최대 3회). 3회 실패 → 수동 검토 대기.</p>
+  </div>
+
+  <div class="card">
+    <h3>⑩ 배포/태깅</h3>
+    <h4>멀티플랫폼 동시 배포</h4>
+    <table>
+      <tr><th>플랫폼</th><th>포맷</th><th>해상도</th><th>최대 길이</th><th>API/방식</th></tr>
+      <tr><td>인스타 릴스</td><td>MP4 (H.264)</td><td>1080×1920</td><td>90초</td><td>Instagram Graph API</td></tr>
+      <tr><td>유튜브 숏츠</td><td>MP4 (H.264)</td><td>1080×1920</td><td>60초</td><td>YouTube Data API v3</td></tr>
+      <tr><td>틱톡</td><td>MP4 (H.264)</td><td>1080×1920</td><td>60초</td><td>TikTok Content Posting API</td></tr>
+      <tr><td>뉴톡 피드</td><td>MP4 (H.264)</td><td>1080×1920</td><td>제한 없음</td><td>뉴톡V1 직접 업로드</td></tr>
+    </table>
+    <h4>뉴톡V1 상품 태깅 연동</h4>
+    <ul>
+      <li>숏츠 생성 시 등장 상품 <code>GoodsCode</code> 자동 태깅 → <code>shorts</code> 테이블 + <code>short_product_tags</code> 테이블</li>
+      <li>뉴톡 피드에서 숏츠 재생 시 상품 카드 오버레이 → 상품 상세페이지 링크</li>
+      <li>전환 추적: 숏츠 조회 → 상품 클릭 → 구매 퍼널 측정</li>
+    </ul>
+    <h4>배포 스케줄링</h4>
+    <ul>
+      <li>골든 타임: 평일 12:00~13:00, 18:00~21:00 / 주말 10:00~12:00 (KST)</li>
+      <li>플랫폼별 최적 시간대 자동 계산 (추후 A/B 테스트 기반 학습)</li>
+      <li>발행 큐: 생성 완료 → 품질 검증 통과 → 스케줄 큐 → 예약 시간 도달 → 자동 발행</li>
+    </ul>
+    <p><strong>출력:</strong> 발행된 URL, 상품 태그, 전환 추적 코드, 발행 시각</p>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2>4. FFmpeg 렌더링 파이프라인</h2>
+
+  <div class="card">
+    <h3>4.1 출력 스펙</h3>
+    <table>
+      <tr><th>항목</th><th>값</th></tr>
+      <tr><td>해상도</td><td>1080 × 1920 (9:16)</td></tr>
+      <tr><td>코덱</td><td>H.264 High Profile</td></tr>
+      <tr><td>비트레이트</td><td>6 Mbps (가변)</td></tr>
+      <tr><td>프레임레이트</td><td>30fps</td></tr>
+      <tr><td>오디오</td><td>AAC 44.1kHz stereo, 192kbps</td></tr>
+      <tr><td>컨테이너</td><td>MP4 (faststart)</td></tr>
+      <tr><td>최대 파일 크기</td><td>100MB (플랫폼 제한 준수)</td></tr>
+    </table>
+
+    <h3>4.2 렌더링 흐름</h3>
+    <pre>
+이미지 시퀀스 → [모션 효과 적용] → 컷별 영상 클립
+  ↓
+컷별 클립 → [xfade 전환 연결] → 무음 영상
+  ↓
+무음 영상 + BGM + 효과음 → [amix 오디오 믹싱] → 음악 포함 영상
+  ↓
+음악 포함 영상 + 자막 ASS → [subtitles 필터] → 자막 포함 영상
+  ↓
+자막 포함 영상 + 워터마크 PNG → [overlay 필터] → 최종 MP4
+  ↓
+최종 MP4 → [qt-faststart] → 스트리밍 최적화 완료</pre>
+
+    <h3>4.3 예상 렌더링 시간</h3>
+    <table>
+      <tr><th>숏츠 길이</th><th>컷 수</th><th>렌더링 시간 (서버 기준)</th></tr>
+      <tr><td>15초</td><td>5컷</td><td>~20초</td></tr>
+      <tr><td>30초</td><td>10컷</td><td>~40초</td></tr>
+      <tr><td>60초</td><td>15컷</td><td>~90초</td></tr>
+    </table>
+    <p class="info"><strong>참고:</strong> SF 서버(114)의 FFmpeg 4.2.7 기준. GPU 가속 미적용 상태. GPU 도입 시 3~5배 단축 예상 [미측정].</p>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2>5. DB 스키마 설계</h2>
+
+  <div class="card">
+    <h3>5.1 기존 테이블 활용</h3>
+    <table>
+      <tr><th>테이블</th><th>현재 상태</th><th>활용 방안</th></tr>
+      <tr><td><code>shorts</code></td><td>10건, 9컬럼 (id, user_id, title, video_url, thumbnail_url, view_count, status, created_at, updated_at)</td><td>숏츠 발행 기본 테이블로 유지·확장</td></tr>
+      <tr><td><code>products</code></td><td>77,349건</td><td>상품 메타 소스</td></tr>
+      <tr><td><code>categories</code></td><td>11개</td><td>카테고리 기반 컨셉 결정</td></tr>
+    </table>
+
+    <h3>5.2 신규 테이블 (6개)</h3>
+    <pre>
+-- 1) 숏츠 생성 작업 큐
+CREATE TABLE shorts_jobs (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  shorts_id BIGINT NULL,                    -- 생성 완료 시 shorts.id 연결
+  model_id INT NOT NULL,                    -- AI 모델 ID
+  codi_id BIGINT NULL,                      -- 코디 매칭 결과 ID
+  shorts_type ENUM('S1','S2','S3','S4','S5','S6') NOT NULL,
+  status ENUM('pending','generating','rendering','verifying','ready','published','failed') DEFAULT 'pending',
+  concept_brief JSON,                       -- 컨셉 결정 결과
+  script JSON,                              -- 대본 (텍스트, 자막, 해시태그)
+  image_sequence JSON,                      -- 이미지 시퀀스 배열
+  motion_timeline JSON,                     -- 모션/전환 효과 타임라인
+  audio_config JSON,                        -- BGM, 효과음 설정
+  overlay_config JSON,                      -- 자막, CTA, 워터마크 설정
+  render_path VARCHAR(500),                 -- 렌더링 결과 파일 경로
+  quality_score DECIMAL(5,2),               -- 10-Layer 종합 점수
+  layer_results JSON,                       -- 10-Layer 각 레이어 pass/fail
+  retry_count INT DEFAULT 0,
+  error_message TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_status (status),
+  INDEX idx_model (model_id)
+);
+
+-- 2) 숏츠-상품 태깅 (전환 추적)
+CREATE TABLE short_product_tags (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  shorts_id BIGINT NOT NULL,
+  goods_code VARCHAR(50) NOT NULL,          -- V1 GoodsCode
+  product_id BIGINT NULL,                   -- NTV2 products.id
+  tag_type ENUM('main','sub') DEFAULT 'main',
+  display_order INT DEFAULT 0,
+  click_count INT DEFAULT 0,
+  purchase_count INT DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_shorts (shorts_id),
+  INDEX idx_goods (goods_code)
+);
+
+-- 3) 숏츠 발행 이력 (멀티플랫폼)
+CREATE TABLE shorts_publications (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  shorts_id BIGINT NOT NULL,
+  platform ENUM('instagram','youtube','tiktok','newtalk') NOT NULL,
+  platform_post_id VARCHAR(200),            -- 플랫폼 게시물 ID
+  published_url VARCHAR(500),
+  scheduled_at TIMESTAMP NULL,              -- 예약 발행 시각
+  published_at TIMESTAMP NULL,              -- 실제 발행 시각
+  status ENUM('scheduled','publishing','published','failed') DEFAULT 'scheduled',
+  views INT DEFAULT 0,
+  likes INT DEFAULT 0,
+  shares INT DEFAULT 0,
+  comments INT DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_shorts_platform (shorts_id, platform),
+  INDEX idx_status (status)
+);
+
+-- 4) BGM 라이브러리
+CREATE TABLE shorts_bgm_library (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  title VARCHAR(200) NOT NULL,
+  artist VARCHAR(200),
+  category ENUM('upbeat_pop','chill_lofi','trendy_beat','elegant','seasonal') NOT NULL,
+  mood VARCHAR(100),
+  bpm INT,
+  duration_sec INT,
+  file_path VARCHAR(500) NOT NULL,
+  license_type VARCHAR(100) NOT NULL,
+  license_expires_at DATE NULL,
+  usage_count INT DEFAULT 0,
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_category (category),
+  INDEX idx_active (is_active)
+);
+
+-- 5) 숏츠 성과 일별 집계
+CREATE TABLE shorts_analytics_daily (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  shorts_id BIGINT NOT NULL,
+  date DATE NOT NULL,
+  platform ENUM('instagram','youtube','tiktok','newtalk') NOT NULL,
+  views INT DEFAULT 0,
+  likes INT DEFAULT 0,
+  shares INT DEFAULT 0,
+  comments INT DEFAULT 0,
+  product_clicks INT DEFAULT 0,
+  purchases INT DEFAULT 0,
+  revenue DECIMAL(12,2) DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_shorts_date_platform (shorts_id, date, platform)
+);
+
+-- 6) shorts 테이블 확장 컬럼
+ALTER TABLE shorts ADD COLUMN IF NOT EXISTS
+  model_id INT NULL AFTER user_id,
+  shorts_type VARCHAR(10) NULL AFTER model_id,
+  duration_sec INT NULL AFTER shorts_type,
+  platform_targets JSON NULL AFTER duration_sec,
+  ai_disclosure BOOLEAN DEFAULT TRUE AFTER platform_targets,
+  quality_score DECIMAL(5,2) NULL AFTER ai_disclosure;</pre>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2>6. 관리자 화면 (4개 페이지)</h2>
+
+  <div class="card">
+    <h3>6.1 숏츠 생성 대시보드</h3>
+    <p><strong>경로:</strong> <code>/admin/shorts</code></p>
+    <ul>
+      <li>작업 큐 현황: pending / generating / rendering / verifying / ready / published / failed 카운트</li>
+      <li>최근 생성 숏츠 목록 (썸네일, 모델명, 유형, 상태, 품질 점수)</li>
+      <li>빠른 생성 버튼: 상품 선택 → 모델 선택 → 유형 선택 → 생성 시작</li>
+      <li>일/주/월 생성 통계 차트</li>
+    </ul>
+
+    <h3>6.2 숏츠 편집/미리보기</h3>
+    <p><strong>경로:</strong> <code>/admin/shorts/{id}/edit</code></p>
+    <ul>
+      <li>타임라인 에디터: 컷 순서 드래그, 각 컷 표시 시간 조절</li>
+      <li>자막 편집: 인라인 텍스트 수정, 위치/스타일 변경</li>
+      <li>BGM 교체: 라이브러리에서 선택, 미리듣기</li>
+      <li>CTA 편집: 문구/디자인/위치 변경</li>
+      <li>미리보기 플레이어: 수정 사항 실시간 반영 (프록시 해상도)</li>
+      <li>최종 렌더링 버튼 → 품질 검증 → 발행 큐 진입</li>
+    </ul>
+
+    <h3>6.3 발행 관리</h3>
+    <p><strong>경로:</strong> <code>/admin/shorts/publish</code></p>
+    <ul>
+      <li>발행 캘린더: 주간 뷰, 모델별/플랫폼별 필터</li>
+      <li>예약 발행 설정: 날짜/시간 선택, 플랫폼 선택 (다중)</li>
+      <li>발행 이력: 플랫폼별 게시물 ID, 발행 시각, 현재 조회수</li>
+      <li>실패 재시도: 발행 실패 건 원인 확인 + 재발행</li>
+    </ul>
+
+    <h3>6.4 성과 분석</h3>
+    <p><strong>경로:</strong> <code>/admin/shorts/analytics</code></p>
+    <ul>
+      <li>기간별 조회수/좋아요/공유/댓글 추이 차트</li>
+      <li>모델별 성과 비교 테이블</li>
+      <li>상품별 전환 퍼널: 숏츠 조회 → 상품 클릭 → 구매</li>
+      <li>숏츠 유형별(S1~S6) 성과 비교</li>
+      <li>플랫폼별 성과 비교 (인스타 vs 유튜브 vs 틱톡 vs 뉴톡)</li>
+      <li>ROI 리포트: 생성 비용 대비 판매 전환 금액</li>
+    </ul>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2>7. ShortFlow 자산 활용 계획</h2>
+
+  <div class="card highlight-card">
+    <p>SF 프로젝트(ShortFlow v3.0)는 이미 YouTube Shorts 자동화 SaaS로 설계되어 있습니다. 뉴톡 AI 패션 숏츠에서 직접 활용하거나 참조할 수 있는 자산을 정리합니다.</p>
+    <table>
+      <tr><th>SF 자산</th><th>활용 방안</th><th>커스텀 필요 사항</th></tr>
+      <tr>
+        <td>10-Layer 양산형 회피 엔진</td>
+        <td>패션 숏츠 품질 검증에 직접 적용</td>
+        <td>패션 도메인 기준 추가 (L2 시각 패턴 → 코디 구성 검증, L6 → 과장 광고 필터)</td>
+      </tr>
+      <tr>
+        <td>2-Track 파이프라인</td>
+        <td>Track A(AI 생성) 위주로 활용, Track B(원본 편집)는 향후 실사 촬영 시</td>
+        <td>입력을 쿠팡 상품에서 뉴톡 상품으로 변경</td>
+      </tr>
+      <tr>
+        <td>FFmpeg 렌더링 파이프라인</td>
+        <td>동일 서버(114)에서 공유</td>
+        <td>모션 효과 12종 추가, 패션 전용 전환 효과</td>
+      </tr>
+      <tr>
+        <td>Worker + Redis 큐</td>
+        <td>숏츠 생성 작업 큐 인프라 재사용</td>
+        <td>뉴톡 전용 큐 채널 분리</td>
+      </tr>
+      <tr>
+        <td>TTS 엔진 연동</td>
+        <td>나레이션이 필요한 S3/S4 유형에 활용</td>
+        <td>모델별 음성 매핑 (페르소나 카드 기반)</td>
+      </tr>
+      <tr>
+        <td>YouTube API 연동</td>
+        <td>유튜브 숏츠 자동 업로드에 직접 활용</td>
+        <td>뉴톡 전용 채널 OAuth 설정 추가</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2>8. 콘텐츠 캘린더 템플릿</h2>
+
+  <div class="card">
+    <h3>모델당 주간 콘텐츠 기본 배분</h3>
+    <table>
+      <tr><th>요일</th><th>콘텐츠 유형</th><th>플랫폼</th><th>발행 시간 (KST)</th></tr>
+      <tr><td>월</td><td>S1 OOTD</td><td>인스타 + 뉴톡</td><td>12:30</td></tr>
+      <tr><td>화</td><td>—</td><td>—</td><td>—</td></tr>
+      <tr><td>수</td><td>S2 코디 전환</td><td>인스타 + 틱톡 + 뉴톡</td><td>19:00</td></tr>
+      <tr><td>목</td><td>S1 OOTD</td><td>유튜브 + 뉴톡</td><td>12:30</td></tr>
+      <tr><td>금</td><td>S3 상품 포커스 (신상품 시)</td><td>전 플랫폼</td><td>18:00</td></tr>
+      <tr><td>토</td><td>S1 OOTD</td><td>인스타 + 틱톡 + 뉴톡</td><td>11:00</td></tr>
+      <tr><td>일</td><td>—</td><td>—</td><td>—</td></tr>
+    </table>
+    <p><strong>주간 기준:</strong> OOTD 3회 + 코디 전환 1회 + 상품 포커스 1회 = <strong>주 5편</strong></p>
+    <p><strong>6명 모델 기준:</strong> 주 30편, 월 120편, 연 1,440편</p>
+    <p>사용자가 관리자 화면에서 캘린더를 직접 조정할 수 있습니다.</p>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2>9. 비용 구조</h2>
+
+  <div class="card">
+    <table>
+      <tr><th>항목</th><th>단가</th><th>월 예상 (120편 기준)</th><th>비고</th></tr>
+      <tr><td>LLM (대본/컨셉)</td><td>~$0.05/편</td><td>~$6</td><td>Sonnet 기준, 대본+컨셉 2회 호출</td></tr>
+      <tr><td>AI 이미지 생성</td><td>별도 (모델컷 기획서 참조)</td><td>—</td><td>모델컷/코디컷은 별도 파이프라인</td></tr>
+      <tr><td>BGM 라이선스</td><td>로열티 프리 구독</td><td>~$15</td><td>Artlist/Epidemic Sound 등</td></tr>
+      <tr><td>FFmpeg 렌더링</td><td>서버 비용만</td><td>$0 (자체 서버)</td><td>SF 서버114 공유</td></tr>
+      <tr><td>플랫폼 API</td><td>무료 (할당량 내)</td><td>$0</td><td>YouTube 10k units/일</td></tr>
+      <tr><td>스토리지</td><td>~15MB/편</td><td>~1.8GB/월</td><td>NAS 또는 클라우드</td></tr>
+      <tr><td><strong>합계</strong></td><td></td><td><strong>~$21/월</strong></td><td>모델컷 생성 비용 제외</td></tr>
+    </table>
+    <div class="info">
+      <strong>수익 대비:</strong> 숏츠 1편당 상품 1건 전환 시 평균 마진 5,000원 가정 → 월 120편 중 5% 전환 = 6건 × 5,000원 = 30,000원.
+      전환율 향상이 핵심. 상세페이지 연동으로 전환 경로 단축 필요. [미측정 — MVP 이후 실측 필요]
+    </div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2>10. 플랫폼별 정책 준수</h2>
+
+  <div class="card">
+    <table>
+      <tr><th>플랫폼</th><th>AI 콘텐츠 표시 의무</th><th>숏츠 정책 핵심</th><th>대응</th></tr>
+      <tr>
+        <td>인스타 릴스</td>
+        <td>AI 생성 라벨 의무 (Meta Oversight Board 2024~)</td>
+        <td>스팸/반복 콘텐츠 감지 시 도달 제한</td>
+        <td>AI 라벨 자동 삽입 + 10-Layer L1/L5 다양성 검증</td>
+      </tr>
+      <tr>
+        <td>유튜브 숏츠</td>
+        <td>AI 변경 콘텐츠 라벨 의무 (YouTube 2024.03~)</td>
+        <td>반복/양산형 콘텐츠 → 추천 제외</td>
+        <td>업로드 시 AI 라벨 API 파라미터 전송 + 10-Layer L4 원본성</td>
+      </tr>
+      <tr>
+        <td>틱톡</td>
+        <td>AI 생성 콘텐츠 라벨 의무 (TikTok 2024.05~)</td>
+        <td>완전 자동 게시 계정 → 제재 리스크</td>
+        <td>AI 라벨 + 수동 발행 승인 옵션 + 발행 간격 조절</td>
+      </tr>
+      <tr>
+        <td>뉴톡</td>
+        <td>자체 정책 수립 필요</td>
+        <td>—</td>
+        <td>"AI 생성 콘텐츠" 워터마크 + 프로필 고지</td>
+      </tr>
+    </table>
+    <div class="warn">
+      <strong>공통 필수:</strong> 모든 플랫폼에서 AI 생성 콘텐츠임을 명확히 표시. 실존 인물 사칭 금지. 과장 광고 금지. AI 표시 누락 시 계정 정지 리스크.
+    </div>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2>11. MVP 실행 계획 (30일)</h2>
+
+  <div class="card">
+    <table>
+      <tr><th>주차</th><th>마일스톤</th><th>산출물</th><th>완료 기준</th></tr>
+      <tr>
+        <td><strong>W1</strong><br>D1~D7</td>
+        <td>인프라 + S1 OOTD 파이프라인</td>
+        <td>
+          <ul>
+            <li>DB 테이블 6개 생성</li>
+            <li>FFmpeg 모션 효과 M01~M07 구현</li>
+            <li>S1 OOTD 10단계 파이프라인 E2E</li>
+            <li>수동 트리거 → 렌더링 → 파일 출력</li>
+          </ul>
+        </td>
+        <td>S1 OOTD 숏츠 1편 수동 생성 성공</td>
+      </tr>
+      <tr>
+        <td><strong>W2</strong><br>D8~D14</td>
+        <td>S2/S3 + 자막/음악</td>
+        <td>
+          <ul>
+            <li>S2 코디 전환, S3 상품 포커스 파이프라인</li>
+            <li>자막 오버레이 시스템</li>
+            <li>BGM 자동 매칭 (5곡 시드)</li>
+            <li>CTA/워터마크 오버레이</li>
+          </ul>
+        </td>
+        <td>S1/S2/S3 각 1편 생성 성공, 자막+BGM 포함</td>
+      </tr>
+      <tr>
+        <td><strong>W3</strong><br>D15~D21</td>
+        <td>10-Layer + 관리자 화면</td>
+        <td>
+          <ul>
+            <li>10-Layer 검증 엔진 (L1~L10)</li>
+            <li>관리자 대시보드 (생성 목록, 미리보기)</li>
+            <li>발행 관리 페이지 (뉴톡 피드 발행)</li>
+          </ul>
+        </td>
+        <td>10-Layer 전체 통과하는 숏츠 5편 연속 생성</td>
+      </tr>
+      <tr>
+        <td><strong>W4</strong><br>D22~D30</td>
+        <td>멀티플랫폼 + 성과 추적</td>
+        <td>
+          <ul>
+            <li>인스타 릴스 API 연동 (또는 수동 업로드 가이드)</li>
+            <li>상품 태깅 + 전환 추적</li>
+            <li>성과 분석 대시보드 기초</li>
+            <li>6명 모델 × 5편 = 30편 생성</li>
+          </ul>
+        </td>
+        <td>모델 6명 각 5편 = 30편 생성·발행, 전환 추적 가동</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2>12. 리스크와 대응</h2>
+
+  <div class="card">
+    <table>
+      <tr><th>리스크</th><th>영향</th><th>대응</th></tr>
+      <tr>
+        <td>AI 이미지 → 영상 변환 품질</td>
+        <td>정적 이미지 나열 느낌 → 시청 이탈</td>
+        <td>모션 효과 12종 + 전환 효과로 동적 느낌 확보. 향후 AI 비디오 생성(Sora/Kling) 도입 검토</td>
+      </tr>
+      <tr>
+        <td>플랫폼 AI 콘텐츠 제재 강화</td>
+        <td>도달률 하락 또는 계정 제재</td>
+        <td>AI 표시 의무 준수 + 10-Layer 양산형 회피 + 수동 승인 옵션</td>
+      </tr>
+      <tr>
+        <td>BGM 저작권 클레임</td>
+        <td>영상 수익화 차단 또는 삭제</td>
+        <td>로열티 프리 전용 라이브러리 + 라이선스 만료 자동 감지</td>
+      </tr>
+      <tr>
+        <td>전환율 부족</td>
+        <td>ROI 미달</td>
+        <td>A/B 테스트 + CTA 최적화 + 상세페이지 직접 연결 강화</td>
+      </tr>
+      <tr>
+        <td>렌더링 서버 부하</td>
+        <td>월 120편 기준 ~3시간/월, 현재 문제 없으나 확장 시 병목</td>
+        <td>Redis 큐 우선순위 + 야간 배치 렌더링 + GPU 도입 검토</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2>13. 향후 확장 (Phase 2~3)</h2>
+
+  <div class="card">
+    <table>
+      <tr><th>Phase</th><th>기능</th><th>예상 시기</th></tr>
+      <tr>
+        <td>Phase 2</td>
+        <td>
+          <ul>
+            <li>AI 비디오 생성 (Sora/Kling/Runway) — 정적 이미지 → 실제 움직임</li>
+            <li>AI 음성 나레이션 (모델별 전용 TTS 음성 클론)</li>
+            <li>A/B 테스트 자동화: 썸네일, 제목, CTA 변형 자동 테스트</li>
+            <li>실사 촬영 + AI 편집 하이브리드 (Track B 활성화)</li>
+          </ul>
+        </td>
+        <td>MVP 후 60일</td>
+      </tr>
+      <tr>
+        <td>Phase 3</td>
+        <td>
+          <ul>
+            <li>라이브 커머스 연동: 숏츠 → 라이브 전환 자동 유도</li>
+            <li>트렌드 자동 감지 → 실시간 숏츠 생성 (Get the Look 자동화)</li>
+            <li>다국어 숏츠: 한/영/일/중 자동 자막+음성 변환</li>
+            <li>외부 셀러 오픈: 도매/소매 셀러에게 숏츠 자동생성 서비스 제공</li>
+          </ul>
+        </td>
+        <td>MVP 후 120일</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- ================================================================ -->
+  <h2>14. 다른 기획서와의 연결</h2>
+
+  <div class="card">
+    <table>
+      <tr><th>연결 문서</th><th>입력/출력 관계</th><th>의존도</th></tr>
+      <tr>
+        <td><a href="/reports/newtalk-ai-model-creation-management-p0.html">AI 모델 생성/관리</a></td>
+        <td>모델컷/코디컷 이미지 → 숏츠 이미지 시퀀스 <strong>입력</strong></td>
+        <td><span class="badge badge-p0">필수</span></td>
+      </tr>
+      <tr>
+        <td><a href="/reports/newtalk-ai-fashion-codi-matching-p0.html">코디 매칭 시스템</a></td>
+        <td>코디 결과 (주상품+부상품) → 숏츠 상품 구성 <strong>입력</strong></td>
+        <td><span class="badge badge-p0">필수</span></td>
+      </tr>
+      <tr>
+        <td><a href="/reports/newtalk-ai-detail-page-generation-p0.html">상세페이지 자동생성</a></td>
+        <td>동일 상품의 상세페이지 ↔ 숏츠 동시 생성, CTA 링크 교차</td>
+        <td><span class="badge badge-p1">권장</span></td>
+      </tr>
+      <tr>
+        <td><a href="/reports/newtalk-ai-fashion-persona-cards-p0.html">P0 페르소나 카드</a></td>
+        <td>모델별 말투/금지표현/스타일 → 대본 생성 규칙 <strong>입력</strong></td>
+        <td><span class="badge badge-p0">필수</span></td>
+      </tr>
+      <tr>
+        <td><a href="/reports/newtalk-ai-fashion-uiux-plan-p0.html">UI/UX 기획서</a></td>
+        <td>관리자 숏츠 관리 화면 → UI/UX 스타일 가이드 준수</td>
+        <td><span class="badge badge-p1">권장</span></td>
+      </tr>
+    </table>
+  </div>
+
+  <footer>
+    뉴톡 AI 패션 인플루언서 사업기획서 부속 문서 · 숏츠/릴스 자동생성 상세 기획서 P0<br>
+    작성 기준: 2026-05-13 KST · DB 실측: NTV2 query_project_database · ShortFlow 참조: SF v3.0 기획서<br>
+    <a href="/reports/newtalk-ai-fashion-influencer-plan-v1.html" style="color:var(--accent);">← 사업기획서로 돌아가기</a>
+  </footer>
+
+</div>
+
+<script>
+  const links = Array.from(document.querySelectorAll("nav a"));
+  const current = window.location.pathname;
+  links.forEach(a => {
+    if (a.getAttribute("href") === current) a.classList.add("active");
+  });
+</script>
+
+</body>
+</html>

@@ -101,3 +101,24 @@ p = pathlib.Path('/root/aads/aads-dashboard/src/app/
 
 ## [2026-05-13 08:43:02 KST] [aads-dashboard] ../aads-dashboard/public/reports/aads-smart-cursor-design-spec.html
 - Chat-Direct 수정: write: ../aads-dashboard/public/reports/aads-smart-cursor-design-spec.html
+
+## [2026-05-13 13:34:55 KST] [aads-dashboard] public/reports/newtalk-ai-detail-page-generation-p0.html
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-server/reports/newtalk-ai-detail-page-generation-p0.html /roo
+
+## [2026-05-13 13:37:35 KST] [aads-dashboard] public/reports/newtalk-ai-fashion-influencer-plan-v1.html
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-server/reports/newtalk-ai-fashion-influencer-plan-v1.html /ro
+
+## [2026-05-13 13:40:20 KST] [aads-dashboard] ../aads-dashboard/public/reports/newtalk-ai-fashion-detail-page-autogen-p0.html
+- Chat-Direct 수정: write: ../aads-dashboard/public/reports/newtalk-ai-fashion-detail-page-autogen-p0.html
+
+## [2026-05-13 13:47:25 KST] [aads-dashboard] public/reports/newtalk-ai-fashion-detail-page-autogen-p0.html
+- Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/temp_detail_page_autogen.html /root/aads/aads-dashboa
+
+## [2026-05-13 13:47:43 KST] [aads-dashboard] ../aads-dashboard/public/reports/newtalk-ai-fashion-influencer-plan-v1.html
+- Chat-Direct 수정: patch:     <a href="/reports/newtalk-ai-fashion→    <a href="/reports/newtalk-ai-fashion
+
+## [2026-05-13 13:56:24 KST] [aads-dashboard] public/reports/newtalk-ai-shorts-reels-generation-p0.html
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-server/reports/newtalk-ai-shorts-reels-generation-p0.html /ro
+
+## [2026-05-13 13:56:26 KST] [aads-dashboard] public/reports/newtalk-ai-shorts-reels-generation-p0.html
+- Chat-Direct 수정: run_remote_command: python3 /tmp/aads-run-local-tests.py

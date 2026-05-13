@@ -1,16 +1,17 @@
 -- 093_pc_ollama_quantized_model_pack.sql
--- Register the RTX 3060-friendly local Ollama model pack behind LiteLLM.
+-- Register RTX 3060-friendly local Ollama models behind the PC Agent backend.
 
 BEGIN;
 
 CREATE TEMP TABLE _pc_ollama_seed_models (
-    provider, model_id, display_name, family, category,
-    supports_tools, supports_thinking, supports_vision, supports_coding,
-    is_active, is_selectable, is_executable, verification_status,
-    execution_model_id, canonical_model, timeout_seconds, max_tokens,
-    display_order, is_hidden, is_favorite, routing_enabled, notes
-) ON COMMIT DROP AS
-VALUES
+    provider TEXT, model_id TEXT, display_name TEXT, family TEXT, category TEXT,
+    supports_tools BOOLEAN, supports_thinking BOOLEAN, supports_vision BOOLEAN, supports_coding BOOLEAN,
+    is_active BOOLEAN, is_selectable BOOLEAN, is_executable BOOLEAN, verification_status TEXT,
+    execution_model_id TEXT, canonical_model TEXT, timeout_seconds INTEGER, max_tokens INTEGER,
+    display_order INTEGER, is_hidden BOOLEAN, is_favorite BOOLEAN, routing_enabled BOOLEAN, notes TEXT
+) ON COMMIT DROP;
+
+INSERT INTO _pc_ollama_seed_models VALUES
     ('litellm', 'pc-gemma4-e2b', 'PC Gemma4 E2B Fast', 'gemma4', 'local_llm_fast', FALSE, FALSE, TRUE, FALSE, TRUE, TRUE, TRUE, 'pending_benchmark', 'pc-gemma4-e2b', 'gemma4:e2b', 240, 2048, 78, FALSE, FALSE, TRUE, 'Fast edge Gemma4 model for local drafting and smoke tests.'),
     ('litellm', 'pc-gemma4-e4b', 'PC Gemma4 E4B', 'gemma4', 'local_llm', FALSE, FALSE, TRUE, FALSE, TRUE, TRUE, TRUE, 'pending_benchmark', 'pc-gemma4-e4b', 'gemma4:e4b', 300, 2048, 80, FALSE, TRUE, TRUE, 'Primary CEO PC local Gemma4 candidate.'),
     ('litellm', 'pc-gemma4-26b', 'PC Gemma4 26B A4B Compare', 'gemma4', 'local_llm_compare', FALSE, FALSE, TRUE, FALSE, FALSE, TRUE, TRUE, 'comparison_only', 'pc-gemma4-26b', 'gemma4:26b', 600, 2048, 90, TRUE, FALSE, FALSE, 'Comparison-only MoE route; enable after benchmark if stable.'),
@@ -23,6 +24,7 @@ VALUES
     ('litellm', 'pc-qwen3-30b', 'PC Qwen3 30B A3B Compare', 'qwen3', 'local_llm_compare', FALSE, TRUE, FALSE, TRUE, FALSE, TRUE, TRUE, 'comparison_only', 'pc-qwen3-30b', 'qwen3:30b', 600, 2048, 120, TRUE, FALSE, FALSE, 'Large MoE comparison route; benchmark-only on RTX 3060.'),
     ('litellm', 'pc-qwen2.5vl-3b', 'PC Qwen2.5-VL 3B Vision Fast', 'qwen2.5vl', 'local_vlm_fast', FALSE, FALSE, TRUE, FALSE, TRUE, TRUE, TRUE, 'pending_benchmark', 'pc-qwen2.5vl-3b', 'qwen2.5vl:3b', 300, 2048, 130, FALSE, FALSE, TRUE, 'Fast local vision-language model for image understanding.'),
     ('litellm', 'pc-qwen2.5vl-7b', 'PC Qwen2.5-VL 7B Vision', 'qwen2.5vl', 'local_vlm', FALSE, FALSE, TRUE, FALSE, TRUE, TRUE, TRUE, 'pending_benchmark', 'pc-qwen2.5vl-7b', 'qwen2.5vl:7b', 420, 2048, 132, FALSE, FALSE, TRUE, 'Primary local vision-language model for OCR/layout/image QA.');
+
 INSERT INTO llm_models (
     provider, model_id, display_name, family, category,
     supports_tools, supports_thinking, supports_vision, supports_coding,
@@ -47,13 +49,7 @@ SELECT
     ),
     execution_model_id, 'manual_seed',
     NOW(), NULL, verification_status, NULL,
-    jsonb_build_object(
-        'local_llm', TRUE,
-        'pc_ollama', TRUE,
-        'litellm_proxy', TRUE,
-        'vision', supports_vision,
-        'cost', '$0-runtime'
-    ),
+    jsonb_build_object('local_llm', TRUE, 'pc_ollama', TRUE, 'litellm_proxy', TRUE, 'vision', supports_vision, 'cost', '$0-runtime'),
     '{"input_per_million":0,"output_per_million":0,"currency":"USD"}'::jsonb,
     is_selectable, is_executable, NOW()
 FROM _pc_ollama_seed_models
@@ -85,8 +81,7 @@ DO UPDATE SET
 INSERT INTO model_routing_preferences (
     route_key, provider, model_id, display_order, is_enabled, is_default, notes, updated_at, updated_by
 )
-SELECT
-    'llm', provider, model_id, display_order, routing_enabled, FALSE, notes, NOW(), 'migration_093'
+SELECT 'llm', provider, model_id, display_order, routing_enabled, FALSE, notes, NOW(), 'migration_093'
 FROM _pc_ollama_seed_models
 ON CONFLICT (route_key, provider, model_id)
 DO UPDATE SET
@@ -100,8 +95,7 @@ DO UPDATE SET
 INSERT INTO chat_model_preferences (
     preference_key, provider, model_id, display_order, is_hidden, is_favorite, is_pinned, updated_by, updated_at
 )
-SELECT
-    provider || ':' || model_id, provider, model_id, display_order, is_hidden, is_favorite, FALSE, 'migration_093', NOW()
+SELECT provider || ':' || model_id, provider, model_id, display_order, is_hidden, is_favorite, FALSE, 'migration_093', NOW()
 FROM _pc_ollama_seed_models
 ON CONFLICT (preference_key)
 DO UPDATE SET

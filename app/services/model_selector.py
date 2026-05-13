@@ -1033,7 +1033,11 @@ async def _stream_pc_ollama_provider(
     del tools, session_id
     from app.services.pc_agent_manager import pc_agent_manager
 
-    request_model = str(metadata.get("execution_model_id") or display_model).strip() or display_model
+    request_model = str(
+        metadata.get("canonical_model")
+        or metadata.get("execution_model_id")
+        or display_model
+    ).strip() or display_model
     agent_id = str(metadata.get("agent_id") or "").strip()
     try:
         timeout_seconds = float(metadata.get("timeout_seconds") or 300)
@@ -1067,6 +1071,7 @@ async def _stream_pc_ollama_provider(
             "temperature": _ctx_temperature.get(0.2),
             "max_tokens": max_tokens,
             "timeout_seconds": timeout_seconds,
+            "think": bool(metadata.get("think", False)),
         },
         agent_id=agent_id,
         job_type="pc_ollama",

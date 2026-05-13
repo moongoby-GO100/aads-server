@@ -560,3 +560,164 @@ _S
 
 ## [2026-05-13 09:14:34 KST] [aads-server] docs/plans/AADS-PC-AGENT-MULTI-SERVICE.md
 - Chat-Direct 수정: write: docs/plans/AADS-PC-AGENT-MULTI-SERVICE.md
+
+## [2026-05-13 13:32:46 KST] [aads-server] reports/newtalk-ai-detail-page-generation-p0.html
+- Chat-Direct 수정: write: reports/newtalk-ai-detail-page-generation-p0.html
+
+## [2026-05-13 13:32:50 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "import psycopg2; print('ok')" 2>&1
+
+## [2026-05-13 13:34:40 KST] [aads-server] reports/newtalk-ai-detail-page-generation-p0.html
+- Chat-Direct 수정: run_remote_command: docker cp aads-server-green:/app/reports/newtalk-ai-detail-page-generation-p0.ht
+
+## [2026-05-13 13:34:59 KST] [aads-server] docs/CHANGELOG-dashboard-direct.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -t -c "SELECT event, count(*), ma
+
+## [2026-05-13 13:35:48 KST] [aads-server] reports/newtalk-ai-fashion-influencer-plan-v1.html
+- Chat-Direct 수정: run_remote_command: sed -i 's|<a href="/reports/newtalk-ai-model-creation-management-p0.html" style=
+
+## [2026-05-13 13:36:33 KST] [aads-server] reports/newtalk-ai-fashion-influencer-plan-v1.html
+- Chat-Direct 수정: patch:           <a href="/reports/newtalk-ai-m→          <a href="/reports/newtalk-ai-m
+
+## [2026-05-13 13:40:15 KST] [aads-server] app/services/pc_agent_manager.py
+- Chat-Direct 수정: patch: # 싱글톤 인스턴스
+pc_agent_manager = PCAgentMan→# 싱글톤 인스턴스 — hot-reload 시 기존 연결 상태 보존
+im
+
+## [2026-05-13 13:40:21 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:         self._running = True
+        sel→        self._running = True
+        sel
+
+## [2026-05-13 13:40:29 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:         while self._running:
+           →        while self._running:
+           
+
+## [2026-05-13 13:40:36 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:         except websockets.ConnectionClos→        except websockets.ConnectionClos
+
+## [2026-05-13 13:40:53 KST] [aads-server] pc_agent/VERSION
+- Chat-Direct 수정: write: pc_agent/VERSION
+
+## [2026-05-13 13:43:45 KST] [aads-server] pc_agent/commands/ollama.py
+- Chat-Direct 수정: run_remote_command: cat /etc/nginx/conf.d/pc-agent.conf 2>/dev/null | head -80
+
+## [2026-05-13 13:43:49 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: run_remote_command: ls -la /root/aads/aads-server/.git/worktrees/
+
+## [2026-05-13 13:47:04 KST] [aads-server] temp_detail_page_autogen.html
+- Chat-Direct 수정: write: temp_detail_page_autogen.html
+
+## [2026-05-13 13:52:35 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: run_remote_command: grep -n "proxy_read_timeout\|proxy_send_timeout\|Upgrade\|websocket\|pc-agent" /
+
+## [2026-05-13 13:52:36 KST] [aads-server] app/api/local_models.py
+- Chat-Direct 수정: run_remote_command: grep -n "proxy_read_timeout\|proxy_send_timeout\|Upgrade\|websocket\|pc-agent" /
+
+## [2026-05-13 13:52:37 KST] [aads-server] app/services/local_model_manager.py
+- Chat-Direct 수정: run_remote_command: grep -n "proxy_read_timeout\|proxy_send_timeout\|Upgrade\|websocket\|pc-agent" /
+
+## [2026-05-13 13:52:39 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: run_remote_command: grep -n "proxy_read_timeout\|proxy_send_timeout\|Upgrade\|websocket\|pc-agent" /
+
+## [2026-05-13 13:52:40 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "SELECT agent_id, event, reaso
+
+## [2026-05-13 13:52:41 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "SELECT agent_id, event, reaso
+
+## [2026-05-13 13:52:46 KST] [aads-server] app/services/pc_agent_manager.py
+- Chat-Direct 수정: run_remote_command: grep -n "proxy_read_timeout\|proxy_send_timeout\|Upgrade\|websocket\|pc-agent" /
+
+## [2026-05-13 13:52:47 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: run_remote_command: grep -n "proxy_read_timeout\|proxy_send_timeout\|Upgrade\|websocket\|pc-agent" /
+
+## [2026-05-13 13:52:48 KST] [aads-server] app/services/tool_registry.py
+- Chat-Direct 수정: run_remote_command: grep -n "proxy_read_timeout\|proxy_send_timeout\|Upgrade\|websocket\|pc-agent" /
+
+## [2026-05-13 13:52:49 KST] [aads-server] app/services/pc_agent_manager.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "SELECT agent_id, event, reaso
+
+## [2026-05-13 13:52:50 KST] [aads-server] docs/HANDOVER.md
+- Chat-Direct 수정: run_remote_command: grep -n "proxy_read_timeout\|proxy_send_timeout\|Upgrade\|websocket\|pc-agent" /
+
+## [2026-05-13 13:52:50 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "SELECT agent_id, event, reaso
+
+## [2026-05-13 13:52:51 KST] [aads-server] app/services/tool_registry.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "SELECT agent_id, event, reaso
+
+## [2026-05-13 13:52:51 KST] [aads-server] reports/newtalk-ai-shorts-reels-generation-p0.html
+- Chat-Direct 수정: write: reports/newtalk-ai-shorts-reels-generation-p0.html
+
+## [2026-05-13 13:52:53 KST] [aads-server] docs/HANDOVER.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "SELECT agent_id, event, reaso
+
+## [2026-05-13 13:52:57 KST] [aads-server] migrations/095_local_multimodal_model_bridge.sql
+- Chat-Direct 수정: run_remote_command: grep -n "proxy_read_timeout\|proxy_send_timeout\|Upgrade\|websocket\|pc-agent" /
+
+## [2026-05-13 13:52:58 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: run_remote_command: grep -n "proxy_read_timeout\|proxy_send_timeout\|Upgrade\|websocket\|pc-agent" /
+
+## [2026-05-13 13:53:00 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "SELECT agent_id, event, reaso
+
+## [2026-05-13 13:53:06 KST] [aads-server] pc_agent/commands/__init__.py
+- Chat-Direct 수정: run_remote_command: grep -n "proxy_read_timeout\|proxy_send_timeout\|Upgrade\|websocket\|pc-agent" /
+
+## [2026-05-13 13:53:06 KST] [aads-server] pc_agent/commands/__init__.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "SELECT agent_id, event, reaso
+
+## [2026-05-13 13:53:12 KST] [aads-server] pc_agent/commands/local_models.py
+- Chat-Direct 수정: run_remote_command: grep -n "proxy_read_timeout\|proxy_send_timeout\|Upgrade\|websocket\|pc-agent" /
+
+## [2026-05-13 13:53:13 KST] [aads-server] tests/unit/test_media_generation_service.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "SELECT agent_id, event, reaso
+
+## [2026-05-13 13:53:14 KST] [aads-server] tests/unit/test_local_model_manager.py
+- Chat-Direct 수정: run_remote_command: grep -n "proxy_read_timeout\|proxy_send_timeout\|Upgrade\|websocket\|pc-agent" /
+
+## [2026-05-13 13:53:15 KST] [aads-server] tests/unit/test_media_generation_service.py
+- Chat-Direct 수정: run_remote_command: grep -n "proxy_read_timeout\|proxy_send_timeout\|Upgrade\|websocket\|pc-agent" /
+
+## [2026-05-13 13:53:19 KST] [aads-server] tests/unit/test_media_generation_tools.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "SELECT agent_id, event, reaso
+
+## [2026-05-13 13:53:19 KST] [aads-server] reports/newtalk-ai-fashion-influencer-plan-v1.html
+- Chat-Direct 수정: patch:     <a href="/reports/newtalk-ai-detail-→    <a href="/reports/newtalk-ai-detail-
+
+## [2026-05-13 13:55:50 KST] [aads-server] reports/newtalk-ai-shorts-reels-generation-p0.html
+- Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/reports/newtalk-ai-shorts-reels-generation-p0.html /r
+
+## [2026-05-13 13:58:44 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch: RECONNECT_DELAY = 5  # 초
+AUTO_UPDATE_INT→RECONNECT_DELAY = 5  # 초 — 기본 재연결 대기
+MAX
+
+## [2026-05-13 13:58:54 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:     async def run(self) -> None:
+       →    async def run(self) -> None:
+       
+
+## [2026-05-13 13:58:55 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:             async with websockets.connec→            async with websockets.connec
+
+## [2026-05-13 13:59:17 KST] [aads-server] pc_agent/commands/updater.py
+- Chat-Direct 수정: patch:     loop = asyncio.get_event_loop()
+    →    async def _delayed_restart():
+      
+
+## [2026-05-13 13:59:36 KST] [aads-server] pc_agent/VERSION
+- Chat-Direct 수정: write: pc_agent/VERSION
+
+## [2026-05-13 14:03:45 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:                         elif msg_type ==→                        elif msg_type ==
+
+## [2026-05-13 14:03:53 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:     async def run(self) -> None:
+       →    async def run(self) -> None:
+       
+
+## [2026-05-13 14:03:59 KST] [aads-server] pc_agent/VERSION
+- Chat-Direct 수정: write: pc_agent/VERSION

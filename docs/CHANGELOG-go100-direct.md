@@ -1356,3 +1356,146 @@ tests/smoke_test_result_*
 - Chat-Direct 수정: patch:         stocks.append({
             "nam→        broker = row.get("broker_type") 
 - finalize: pending
+
+## [2026-05-13 13:39:45 KST] [GO100] backend/app/main.py
+- Chat-Direct 수정: patch:     try:
+        async with async_engine→    try:
+        async with async_engine
+- finalize: pending
+
+## [2026-05-13 13:40:00 KST] [GO100] backend/app/main.py
+- Chat-Direct 수정: patch:     go100_llm_registry_router, go100_aut→    go100_llm_registry_router, go100_aut
+- finalize: pending
+
+## [2026-05-13 13:40:50 KST] [GO100] backend/app/services/go100/autonomy_service.py
+- Chat-Direct 수정: patch: async def run_autonomous_pm_dry_run(→async def approve_decision(
+    db: Asyn
+- finalize: pending
+
+## [2026-05-13 13:41:05 KST] [GO100] backend/app/routers/go100/autonomy_router.py
+- Chat-Direct 수정: patch: from backend.app.services.go100.autonomy→from backend.app.services.go100.autonomy
+- finalize: pending
+
+## [2026-05-13 13:41:25 KST] [GO100] backend/app/routers/go100/autonomy_router.py
+- Chat-Direct 수정: patch: @router.get("/decisions/{decision_id}")
+→@router.get("/decisions/{decision_id}")
+
+- finalize: pending
+
+## [2026-05-13 13:42:25 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch: @portfolio_dashboard_router.get("/recent→@portfolio_dashboard_router.get("/holdin
+- finalize: pending
+
+## [2026-05-13 13:42:54 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: # GO100 HANDOVER — 2026-04-21
+
+## 최근 진행 →# GO100 HANDOVER — 2026-04-21
+
+## 최근 완료 
+- finalize: pending
+
+## [2026-05-13 13:43:26 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch:         raw = await call_llm_with_fallba→        raw = await call_llm_with_fallba
+- finalize: pending
+
+## [2026-05-13 13:48:04 KST] [GO100] backend/app/main.py
+- Chat-Direct 수정: patch:     try:
+        async with async_engine→    try:
+        async with async_engine
+- finalize: pending
+
+## [2026-05-13 13:48:13 KST] [GO100] backend/app/main.py
+- Chat-Direct 수정: patch:     go100_llm_registry_router, go100_aut→    go100_llm_registry_router, go100_aut
+- finalize: pending
+
+## [2026-05-13 13:48:26 KST] [GO100] backend/app/services/go100/autonomy_service.py
+- Chat-Direct 수정: patch: async def run_autonomous_pm_dry_run(→async def approve_decision(
+    db: Asyn
+- finalize: pending
+
+## [2026-05-13 13:48:35 KST] [GO100] backend/app/routers/go100/autonomy_router.py
+- Chat-Direct 수정: patch: from backend.app.services.go100.autonomy→from backend.app.services.go100.autonomy
+- finalize: pending
+
+## [2026-05-13 13:48:40 KST] [GO100] backend/app/routers/go100/autonomy_router.py
+- Chat-Direct 수정: patch: @router.get("/decisions/{decision_id}")
+→@router.get("/decisions/{decision_id}")
+
+- finalize: pending
+
+## [2026-05-13 13:48:53 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch: @portfolio_dashboard_router.get("/recent→@portfolio_dashboard_router.get("/holdin
+- finalize: pending
+
+## [2026-05-13 13:49:03 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: # GO100 HANDOVER — 2026-04-21
+
+## 최근 진행 →# GO100 HANDOVER — 2026-04-21
+
+## 최근 완료 
+- finalize: pending
+
+## [2026-05-13 13:49:16 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch:         raw = await call_llm_with_fallba→        raw = await call_llm_with_fallba
+- finalize: pending
+
+## [2026-05-13 13:56:36 KST] [GO100] backend/app/services/go100/ai/tool_executors.py
+- Chat-Direct 수정: patch:     "get_events": get_events,
+    "get_e→    "get_events": get_events,
+    "get_e
+- finalize: pending
+
+## [2026-05-13 13:57:11 KST] [GO100] backend/app/services/go100/ai/tool_executors.py
+- Chat-Direct 수정: patch: TOOL_EXECUTORS = {
+    "get_market_overv→def analyze_user_holdings(user_id: Optio
+- finalize: pending
+
+## [2026-05-13 13:58:08 KST] [GO100] frontend/src/go100/api/portfolioApi.ts
+- Chat-Direct 수정: patch: export async function getRecentOrders(
+ →export async function getRecentOrders(
+ 
+- finalize: pending
+
+## [2026-05-13 13:59:13 KST] [GO100] frontend/src/go100/pages/PortfolioPage.tsx
+- Chat-Direct 수정: patch: import {
+  getPortfolioAccountTree,
+  ge→import {
+  getPortfolioAccountTree,
+  ge
+- finalize: pending
+
+## [2026-05-13 13:59:27 KST] [GO100] frontend/src/go100/pages/PortfolioPage.tsx
+- Chat-Direct 수정: patch:   const [recentOrders, setRecentOrders] →  const [recentOrders, setRecentOrders] 
+- finalize: pending
+
+## [2026-05-13 13:59:44 KST] [GO100] frontend/src/go100/pages/PortfolioPage.tsx
+- Chat-Direct 수정: patch:   const handleStockAnalysisToggle = (sto→  const handleStockAnalysisToggle = (sto
+- finalize: pending
+
+## [2026-05-13 14:00:09 KST] [GO100] frontend/src/go100/pages/PortfolioPage.tsx
+- Chat-Direct 수정: patch:         <div className="lg:col-span-2 sp→        <div className="lg:col-span-2 sp
+- finalize: pending
+
+## [2026-05-13 14:01:21 KST] [GO100] frontend/src/go100/api/autonomyApi.ts
+- Chat-Direct 수정: write: frontend/src/go100/api/autonomyApi.ts
+- finalize: pending
+
+## [2026-05-13 14:01:48 KST] [GO100] frontend/src/go100/pages/ApprovalsPage.tsx
+- Chat-Direct 수정: write: frontend/src/go100/pages/ApprovalsPage.tsx
+- finalize: pending
+
+## [2026-05-13 14:02:10 KST] [GO100] frontend/src/app/(protected)/go100/approvals/page.tsx
+- Chat-Direct 수정: write: frontend/src/app/(protected)/go100/approvals/page.tsx
+- finalize: pending
+
+## [2026-05-13 14:02:37 KST] [GO100] frontend/src/go100/api/_approvals_route_tmp.tsx
+- Chat-Direct 수정: write: frontend/src/go100/api/_approvals_route_tmp.tsx
+- finalize: pending
+
+## [2026-05-13 14:02:48 KST] [GO100] frontend/src/app/(protected)/go100/approvals/page.tsx
+- Chat-Direct 수정: run_remote_command: cp /root/kis-autotrade-v4/frontend/src/go100/api/_approvals_route_tmp.tsx "/root
+- finalize: pending
+
+## [2026-05-13 14:03:34 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: ## 최근 완료 작업 (05/13 13:40 KST — 사용자 여정 7단→## 최근 완료 작업 (05/13 14:00 KST — 프론트+채팅 도구
+- finalize: pending

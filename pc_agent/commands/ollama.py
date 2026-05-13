@@ -158,6 +158,8 @@ async def chat(params: Dict[str, Any]) -> Dict[str, Any]:
         options["temperature"] = params.get("temperature")
     if "max_tokens" in params:
         options["num_predict"] = params.get("max_tokens")
+    if "think" in params:
+        options["think"] = bool(params.get("think"))
 
     payload: Dict[str, Any] = {
         "model": model,
@@ -177,6 +179,8 @@ async def chat(params: Dict[str, Any]) -> Dict[str, Any]:
         )
         message = data.get("message") or {}
         content = message.get("content") if isinstance(message, dict) else ""
+        if not content and isinstance(message, dict):
+            content = message.get("thinking") or message.get("reasoning") or ""
         return {
             "status": "success",
             "data": {

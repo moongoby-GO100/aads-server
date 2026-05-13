@@ -159,8 +159,6 @@ _DEFER_LOADING: Dict[str, bool] = {
     "db_safe_write": True,  # 자동 추가
     "notify_channel": True,  # 자동 추가
     "tool_layer_audit": True,  # 자동 추가
-    "crawl4ai_fetch": True,  # 자동 추가
-    "generate_three_d_asset": True,  # 자동 추가
 }
 
 # 도구 카테고리 안내 (시스템 프롬프트 주입용 — context_builder.py에서 사용)
