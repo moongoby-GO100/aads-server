@@ -178,6 +178,7 @@ class PCAgent:
         self._running = True
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ws: Any | None = None
+        self._last_close_code: int | None = None
 
     async def run(self) -> None:
         """메인 루프 — 서버 연결 + 재연결."""
@@ -185,14 +186,20 @@ class PCAgent:
         self._loop = asyncio.get_running_loop()
 
         while self._running:
+            self._last_close_code = None
             try:
                 await self._connect()
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error("연결 오류: %s — %d초 후 재연결", e, RECONNECT_DELAY)
+                code = getattr(e, 'code', None)
+                if code is not None:
+                    self._last_close_code = code
+                logger.error("연결 오류 (code=%s): %s", self._last_close_code, e)
             if self._running:
-                await asyncio.sleep(RECONNECT_DELAY)
+                delay = 1 if self._last_close_code in (1012, 1006, 1001) else RECONNECT_DELAY
+                logger.info("재연결 대기 %d초 (close_code=%s)", delay, self._last_close_code)
+                await asyncio.sleep(delay)
 
     async def _connect(self) -> None:
         """WebSocket 서버 연결."""
@@ -269,13 +276,16 @@ class PCAgent:
                     self._ws = None
 
         except websockets.ConnectionClosedError as e:
+            self._last_close_code = e.code
             if e.code == 4010:
-                # 서버가 "다른 인스턴스가 이미 활성" 통보 → 이 프로세스 종료
                 logger.warning(
                     "서버가 중복 연결 거부 (4010: %s) — 이 인스턴스 종료",
                     e.reason,
                 )
                 self._running = False
+                return
+            if e.code == 1012:
+                logger.info("서버 재시작 알림 (1012) — 즉시 재연결")
                 return
             raise
 
