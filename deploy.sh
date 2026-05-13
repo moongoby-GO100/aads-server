@@ -82,20 +82,44 @@ get_active_container() {
 }
 
 
+_verify_telegram_alert() {
+    # verify_active_slot 차단 시 텔레그램 알림. notify() 함수 정의 전이라 인라인 처리.
+    local msg="$1"
+    if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
+        curl -sf -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="🚨 [AADS Deploy 차단] ${msg}" \
+            -d parse_mode=HTML >/dev/null 2>&1 || true
+    fi
+}
+
 verify_active_slot() {
     # AADS: nginx upstream active 라인과 .active_port 파일 정합성 + 실제 컨테이너 생존 검증.
     # blue-green 배포 후 nginx가 죽은 슬롯을 가리키면 외부 502 발생 (2026-05-13 incident).
     local active_port="$1"
     local nginx_active=""
+    local nginx_active_count="0"
     if [[ -f "$UPSTREAM_CONF" ]]; then
+        nginx_active_count=$(grep "server 127.0.0.1:" "$UPSTREAM_CONF" \
+            | grep -v backup \
+            | grep -oP '127\.0\.0\.1:\K(8100|8102)' \
+            | sort -u | wc -l | tr -d '[:space:]' || true)
         nginx_active=$(grep "server 127.0.0.1:" "$UPSTREAM_CONF" \
             | grep -v backup \
             | grep -oP '127\.0\.0\.1:\K(8100|8102)' \
             | sort -u | head -1 || true)
     fi
+    # AADS: multi-active는 비정상(drain 중이거나 sed swap 실패) — 차단 + 알람
+    if [[ "$nginx_active_count" != "1" ]]; then
+        echo "[deploy.sh] ❌ nginx upstream active 라인이 ${nginx_active_count}개 (정상=1) — 배포 차단"
+        echo "[deploy.sh]    수동 정합성 회복: grep 'server 127' $UPSTREAM_CONF"
+        _verify_telegram_alert "verify_active_slot: multi-active 감지(count=${nginx_active_count})"
+        exit 1
+    fi
     if [[ -z "$nginx_active" ]]; then
-        echo "[deploy.sh] ⚠️ nginx upstream active port 식별 실패 (multi-active 또는 파일 누락) — 검증 skip"
-        return 0
+        echo "[deploy.sh] ❌ nginx upstream active port 파싱 실패 — 배포 차단"
+        _verify_telegram_alert "verify_active_slot: active port 파싱 실패"
+        exit 1
     fi
     if [[ "$nginx_active" != "$active_port" ]]; then
         echo "[deploy.sh] ❌ ACTIVE 슬롯 불일치"
@@ -106,6 +130,7 @@ verify_active_slot() {
         echo "[deploy.sh]      1) docker ps | grep aads-server"
         echo "[deploy.sh]      2) 살아있는 쪽에 맞춰 nginx upstream 또는 .active_port 정정"
         echo "[deploy.sh]      3) nginx -s reload"
+        _verify_telegram_alert "verify_active_slot: 슬롯 불일치 nginx=:${nginx_active} file=:${active_port}"
         exit 1
     fi
     local target_container=""
@@ -119,6 +144,7 @@ verify_active_slot() {
         echo "[deploy.sh]    수동 복구 절차:"
         echo "[deploy.sh]      1) docker start ${target_container}"
         echo "[deploy.sh]      2) 또는 살아있는 쪽으로 nginx upstream swap 후 reload"
+        _verify_telegram_alert "verify_active_slot: ${target_container}(:${active_port}) 죽음"
         exit 1
     fi
     echo "[deploy.sh] ✅ ACTIVE 슬롯 일관성 확인: :${active_port} (${target_container})"
