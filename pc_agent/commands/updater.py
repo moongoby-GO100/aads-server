@@ -64,12 +64,9 @@ async def execute(params: dict) -> dict:
             "data": {"updated": False, "message": "이미 최신 버전입니다"},
         }
 
-    # 업데이트 감지 — launcher가 재다운로드 처리하므로 VERSION 리셋 후 재시작
+    # launcher가 exit=42 감지 후 check_update()로 직접 버전 비교하므로 VERSION 리셋 불필요
+    # VERSION 리셋 시 다운로드 실패 → "0.0.0" 고착 → 무한 재시작 루프 위험 제거
     logger.info("업데이트 감지, 재시작 예정")
-    try:
-        VERSION_FILE.write_text("0.0.0", encoding="utf-8")
-    except Exception:
-        pass
 
     async def _delayed_restart():
         await asyncio.sleep(2.0)
