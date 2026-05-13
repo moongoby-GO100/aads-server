@@ -19,6 +19,7 @@ import UpdateBanner from "@/components/UpdateBanner";
 import { Workspace, ChatSession, ChatMessage, Artifact, Theme, ArtifactMode, ArtifactTab, ScreenSize, DARK, LIGHT } from "./types";
 import { BASE_URL, getToken, authHdrs, chatApi, uploadChatFile } from "./api";
 import { processInline, InlineMd, CopyableCodeBlock, MarkdownBlock } from "./MarkdownRenderer";
+import { getCompactModelClassification, getModelGroupLabel } from "@/lib/modelRegistryPresentation";
 
 type AuthKeyStatus = {
   label?: string;
@@ -49,9 +50,14 @@ type LlmRegistryModel = {
   provider: string;
   model_id: string;
   display_name?: string;
+  family?: string | null;
+  category?: string | null;
+  execution_model_id?: string | null;
   input_cost?: string | number | null;
   output_cost?: string | number | null;
   is_active?: boolean;
+  is_selectable?: boolean;
+  is_executable?: boolean;
 };
 
 type ChatModelPreference = {
@@ -87,6 +93,11 @@ type SelectableModelOption = {
   preferenceKey: string;
   name: string;
   provider: string;
+  family?: string | null;
+  category?: string | null;
+  executionModelId?: string | null;
+  groupLabel: string;
+  classification: string;
   cost: string;
   isActive: boolean;
   isPinned?: boolean;
@@ -152,14 +163,43 @@ function buildSelectableModelOption(row: LlmRegistryModel, duplicateModelIds: Se
   const optionId = duplicateModelIds.has(row.model_id) ? `${row.provider}:${modelId}` : modelId;
   const staticOption = STATIC_MODEL_OPTION_MAP.get(optionId);
   const fallbackStaticOption = STATIC_MODEL_OPTION_MAP.get(modelId);
+  const hasRegistryCost = row.input_cost !== undefined || row.output_cost !== undefined;
+  const displayModel = {
+    provider: row.provider || staticOption?.provider || fallbackStaticOption?.provider || "legacy",
+    model_id: row.model_id,
+    family: row.family,
+    category: row.category,
+    execution_model_id: row.execution_model_id,
+  };
   return {
     id: optionId,
     modelId,
     preferenceKey: buildChatPreferenceKey(row.provider, row.model_id),
-    name: staticOption?.name || fallbackStaticOption?.name || row.display_name || optionId,
-    provider: staticOption?.provider || fallbackStaticOption?.provider || row.provider,
-    cost: staticOption?.cost || fallbackStaticOption?.cost || formatCostLabel(row.input_cost, row.output_cost),
+    name: row.display_name || staticOption?.name || fallbackStaticOption?.name || optionId,
+    provider: row.provider || staticOption?.provider || fallbackStaticOption?.provider || "legacy",
+    family: row.family,
+    category: row.category,
+    executionModelId: row.execution_model_id,
+    groupLabel: getModelGroupLabel(displayModel),
+    classification: getCompactModelClassification(displayModel),
+    cost: hasRegistryCost ? formatCostLabel(row.input_cost, row.output_cost) : staticOption?.cost || fallbackStaticOption?.cost || "변동",
     isActive: true,
+  };
+}
+
+function buildLegacySelectableModelOption(
+  optionId: string,
+  option: Omit<SelectableModelOption, "groupLabel" | "classification">,
+): SelectableModelOption {
+  const displayModel = {
+    provider: option.provider,
+    model_id: option.modelId,
+  };
+  return {
+    ...option,
+    id: optionId,
+    groupLabel: optionId === "mixture" ? "Auto" : getModelGroupLabel(displayModel),
+    classification: optionId === "mixture" ? "Auto" : getCompactModelClassification(displayModel),
   };
 }
 
@@ -1234,7 +1274,9 @@ export default function ChatPage() {
         .filter(([, count]) => count > 1)
         .map(([modelId]) => modelId),
     );
-    const autoOption = {
+    const autoOption = buildLegacySelectableModelOption(
+      "mixture",
+      {
       ...(STATIC_MODEL_OPTION_MAP.get("mixture") || { id: "mixture", name: "자동 라우팅 (혼합)", provider: "auto", cost: "자동" }),
       modelId: "mixture",
       preferenceKey: "mixture",
@@ -1242,7 +1284,8 @@ export default function ChatPage() {
       isPinned: preferenceMap.get("mixture")?.is_pinned ?? false,
       isFavorite: preferenceMap.get("mixture")?.is_favorite ?? false,
       isHidden: preferenceMap.get("mixture")?.is_hidden ?? false,
-    };
+      },
+    );
 
     if (runtimeModels === null) {
       const currentModelId = normalizeModelIdForSelector(model || DEFAULT_MODEL);
@@ -1252,7 +1295,7 @@ export default function ChatPage() {
         ? [
             autoOption,
             currentOption
-              ? {
+              ? buildLegacySelectableModelOption(currentModelId, {
                   ...currentOption,
                   modelId: currentModelId,
                   preferenceKey: currentPreferenceKey,
@@ -1260,8 +1303,8 @@ export default function ChatPage() {
                   isPinned: (preferenceMap.get(currentPreferenceKey) || preferenceMap.get(currentModelId))?.is_pinned ?? false,
                   isFavorite: (preferenceMap.get(currentPreferenceKey) || preferenceMap.get(currentModelId))?.is_favorite ?? false,
                   isHidden: (preferenceMap.get(currentPreferenceKey) || preferenceMap.get(currentModelId))?.is_hidden ?? false,
-                }
-              : {
+                })
+              : buildLegacySelectableModelOption(currentModelId, {
                   id: currentModelId,
                   modelId: currentModelId.includes(":") ? currentModelId.split(":").slice(1).join(":") : currentModelId,
                   preferenceKey: currentPreferenceKey,
@@ -1272,7 +1315,7 @@ export default function ChatPage() {
                   isPinned: (preferenceMap.get(currentPreferenceKey) || preferenceMap.get(currentModelId))?.is_pinned ?? false,
                   isFavorite: (preferenceMap.get(currentPreferenceKey) || preferenceMap.get(currentModelId))?.is_favorite ?? false,
                   isHidden: (preferenceMap.get(currentPreferenceKey) || preferenceMap.get(currentModelId))?.is_hidden ?? false,
-                },
+                }),
           ]
         : [autoOption];
     }
@@ -1303,7 +1346,7 @@ export default function ChatPage() {
       const currentPreferenceKey = preferenceKeyForSelectorId(currentModelId, currentOption?.provider);
       options.push(
         currentOption
-          ? {
+          ? buildLegacySelectableModelOption(currentModelId, {
               ...currentOption,
               modelId: currentModelId,
               preferenceKey: currentPreferenceKey,
@@ -1312,8 +1355,8 @@ export default function ChatPage() {
               isPinned: (preferenceMap.get(currentPreferenceKey) || preferenceMap.get(currentModelId))?.is_pinned ?? false,
               isFavorite: (preferenceMap.get(currentPreferenceKey) || preferenceMap.get(currentModelId))?.is_favorite ?? false,
               isHidden: (preferenceMap.get(currentPreferenceKey) || preferenceMap.get(currentModelId))?.is_hidden ?? false,
-            }
-          : {
+            })
+          : buildLegacySelectableModelOption(currentModelId, {
               id: currentModelId,
               modelId: currentModelId.includes(":") ? currentModelId.split(":").slice(1).join(":") : currentModelId,
               preferenceKey: currentPreferenceKey,
@@ -1324,11 +1367,23 @@ export default function ChatPage() {
               isPinned: (preferenceMap.get(currentPreferenceKey) || preferenceMap.get(currentModelId))?.is_pinned ?? false,
               isFavorite: (preferenceMap.get(currentPreferenceKey) || preferenceMap.get(currentModelId))?.is_favorite ?? false,
               isHidden: (preferenceMap.get(currentPreferenceKey) || preferenceMap.get(currentModelId))?.is_hidden ?? false,
-            }
+            })
       );
     }
     return options;
   }, [model, modelPreferences, runtimeModels]);
+
+  const groupedSelectableModels = useMemo(() => {
+    const groups = new Map<string, { label: string; options: SelectableModelOption[] }>();
+    for (const option of selectableModels.filter((item) => item.id !== "mixture")) {
+      const key = option.groupLabel || "Other";
+      if (!groups.has(key)) {
+        groups.set(key, { label: key, options: [] });
+      }
+      groups.get(key)?.options.push(option);
+    }
+    return Array.from(groups.values());
+  }, [selectableModels]);
 
   const activeSelectableModelIds = useMemo(
     () => {
@@ -5390,14 +5445,25 @@ export default function ChatPage() {
               border: "1px solid var(--ct-border)",
               borderRadius: "6px",
               cursor: "pointer",
-              maxWidth: "200px",
+              maxWidth: "280px",
               outline: "none",
             }}
           >
-            {selectableModels.map((m) => (
-              <option key={m.id} value={m.id} disabled={!m.isActive}>
-                {m.name} ({["자동", "무료", "변동"].includes(m.cost) ? m.cost : `${m.cost}/M`})
-              </option>
+            {selectableModels
+              .filter((option) => option.id === "mixture")
+              .map((option) => (
+                <option key={option.id} value={option.id} disabled={!option.isActive}>
+                  {option.name} ({["자동", "무료", "변동"].includes(option.cost) ? option.cost : `${option.cost}/M`})
+                </option>
+              ))}
+            {groupedSelectableModels.map((group) => (
+              <optgroup key={group.label} label={group.label}>
+                {group.options.map((option) => (
+                  <option key={option.id} value={option.id} disabled={!option.isActive}>
+                    {`${option.name} · ${option.classification} (${["자동", "무료", "변동"].includes(option.cost) ? option.cost : `${option.cost}/M`})`}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
 

@@ -4,6 +4,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import Header from "@/components/Header";
 import { api } from "@/lib/api";
+import {
+  getModelCategoryLabel,
+  getModelFamilyLabel,
+  getProviderDisplayLabel,
+} from "@/lib/modelRegistryPresentation";
 
 type RouteKey = "image" | "edit_image" | "video" | "llm";
 
@@ -53,6 +58,35 @@ function formatDateTime(value?: string | null): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
+}
+
+function badgeStyle(background: string, color: string, border: string): { background: string; color: string; border: string } {
+  return { background, color, border };
+}
+
+function providerBadgeStyle(provider: string): { background: string; color: string; border: string } {
+  const tones: Record<string, string> = {
+    anthropic: "#d4a017",
+    codex: "#0f172a",
+    deepseek: "#00bcd4",
+    gemini: "#4285f4",
+    groq: "#ff6b6b",
+    kimi: "#2563eb",
+    minimax: "#ef4444",
+    openai: "#10a37f",
+    openrouter: "#f97316",
+    qwen: "#7c3aed",
+  };
+  const tone = tones[String(provider || "").trim().toLowerCase()] || "var(--accent)";
+  return badgeStyle(tone, "#fff", "1px solid transparent");
+}
+
+function familyBadgeStyle(): { background: string; color: string; border: string } {
+  return badgeStyle("rgba(59,130,246,0.12)", "var(--accent)", "1px solid rgba(59,130,246,0.22)");
+}
+
+function categoryBadgeStyle(): { background: string; color: string; border: string } {
+  return badgeStyle("rgba(34,197,94,0.12)", "var(--success)", "1px solid rgba(34,197,94,0.22)");
 }
 
 export default function ModelRoutingPage() {
@@ -262,9 +296,10 @@ export default function ModelRoutingPage() {
                           </label>
                         </td>
                         <td className="px-4 py-3">
-                          <span className="text-xs font-bold px-2 py-0.5 rounded" style={{ background: "var(--bg-hover)", color: "var(--text-primary)", border: "1px solid var(--border)" }}>
-                            {item.provider}
+                          <span className="text-xs font-bold px-2 py-0.5 rounded" style={providerBadgeStyle(item.provider)}>
+                            {getProviderDisplayLabel(item)}
                           </span>
+                          <p className="text-[11px] mt-1 font-mono" style={{ color: "var(--text-secondary)" }}>{item.provider}</p>
                         </td>
                         <td className="px-4 py-3 min-w-[260px]">
                           <p className="font-mono text-xs break-all" style={{ color: "var(--text-primary)" }}>{item.model_id}</p>
@@ -285,9 +320,17 @@ export default function ModelRoutingPage() {
                           <p className="text-[11px]" style={{ color: "var(--text-primary)" }}>
                             {item.is_active ? "active" : "inactive"} · {item.is_executable ? "executable" : "not executable"}
                           </p>
-                          <p className="text-[11px] mt-1" style={{ color: "var(--text-secondary)" }}>
-                            {item.is_selectable === false ? "not selectable" : "selectable"} · {item.category || item.family || "-"}
-                          </p>
+                          <div className="flex items-center gap-1 flex-wrap mt-2">
+                            <span className="text-[11px] px-2 py-0.5 rounded" style={familyBadgeStyle()}>
+                              {getModelFamilyLabel(item)}
+                            </span>
+                            <span className="text-[11px] px-2 py-0.5 rounded" style={categoryBadgeStyle()}>
+                              {getModelCategoryLabel(item)}
+                            </span>
+                            <span className="text-[11px] px-2 py-0.5 rounded" style={{ background: "var(--bg-hover)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}>
+                              {item.is_selectable === false ? "not selectable" : "selectable"}
+                            </span>
+                          </div>
                         </td>
                         <td className="px-4 py-3 min-w-[320px]">
                           <textarea

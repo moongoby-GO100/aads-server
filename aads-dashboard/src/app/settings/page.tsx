@@ -1,7 +1,17 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import Header from "@/components/Header";
 import { api } from "@/lib/api";
+import {
+  findRegistryModelByStoredValue,
+  getCompactModelClassification,
+  getModelCategoryLabel,
+  getModelFamilyLabel,
+  getModelGroupLabel,
+  getProviderDisplayLabel,
+  splitStoredModelValue,
+  type RegistryPresentationModel,
+} from "@/lib/modelRegistryPresentation";
 import type { HealthResponse } from "@/types";
 
 const QUICK_LINKS = [
@@ -25,16 +35,38 @@ const SIZE_LABELS: Record<string, string> = {
 
 
 
-const AVAILABLE_MODELS = [
-  { group: "Claude (월정액)", models: ["claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"] },
-  { group: "Codex/GPT (월정액)", models: ["codex:gpt-5.5", "codex:gpt-5.4", "codex:gpt-5.4-mini", "codex:gpt-5.3-codex"] },
-  { group: "MiniMax (월정액)", models: ["litellm:minimax-m2.7", "litellm:minimax-m2.5"] },
-  { group: "Groq (무료)", models: ["litellm:groq-llama-70b", "litellm:groq-qwen3-32b", "litellm:groq-kimi-k2", "litellm:groq-llama4-scout"] },
-  { group: "Gemini", models: ["litellm:gemini-2.5-flash", "litellm:gemini-2.5-pro", "litellm:gemini-3-flash-preview", "litellm:gemini-3-pro-preview", "litellm:gemini-3.1-flash-lite-preview", "litellm:gemini-3.1-pro-preview"] },
-  { group: "Qwen", models: ["qwen-turbo", "litellm:qwen3-coder-plus", "litellm:qwen3-235b", "litellm:qwen3-max", "litellm:qwen3-coder-flash"] },
-  { group: "DeepSeek", models: ["litellm:deepseek-chat", "litellm:deepseek-reasoner"] },
-  { group: "Kimi", models: ["litellm:kimi-k2", "litellm:kimi-k2.5"] },
-  { group: "OpenRouter", models: ["litellm:openrouter-grok-4-fast", "litellm:openrouter-deepseek-v3"] },
+const LEGACY_RUNNER_MODEL_VALUES = [
+  "claude-opus-4-7",
+  "claude-opus-4-6",
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5-20251001",
+  "codex:gpt-5.5",
+  "codex:gpt-5.4",
+  "codex:gpt-5.4-mini",
+  "codex:gpt-5.3-codex",
+  "litellm:minimax-m2.7",
+  "litellm:minimax-m2.5",
+  "litellm:groq-llama-70b",
+  "litellm:groq-qwen3-32b",
+  "litellm:groq-kimi-k2",
+  "litellm:groq-llama4-scout",
+  "litellm:gemini-2.5-flash",
+  "litellm:gemini-2.5-pro",
+  "litellm:gemini-3-flash-preview",
+  "litellm:gemini-3-pro-preview",
+  "litellm:gemini-3.1-flash-lite-preview",
+  "litellm:gemini-3.1-pro-preview",
+  "qwen-turbo",
+  "litellm:qwen3-coder-plus",
+  "litellm:qwen3-235b",
+  "litellm:qwen3-max",
+  "litellm:qwen3-coder-flash",
+  "litellm:deepseek-chat",
+  "litellm:deepseek-reasoner",
+  "litellm:kimi-k2",
+  "litellm:kimi-k2.5",
+  "litellm:openrouter-grok-4-fast",
+  "litellm:openrouter-deepseek-v3",
 ];
 
 interface ModelConfig {
@@ -42,6 +74,23 @@ interface ModelConfig {
   models: string[];
   updated_at: string | null;
   updated_by: string;
+}
+
+interface LlmRegistryModel extends RegistryPresentationModel {
+  provider: string;
+  model_id: string;
+}
+
+interface RunnerModelCatalogOption {
+  value: string;
+  displayName: string;
+  groupLabel: string;
+  classification: string;
+  providerLabel: string;
+  categoryLabel: string;
+  familyLabel: string;
+  registryModel: LlmRegistryModel | null;
+  isRegistered: boolean;
 }
 
 interface LlmKey {
@@ -189,6 +238,32 @@ function formatUsageDetail(usage: UsageWindow): string {
     return usage.models.slice(0, 2).join(", ");
   }
   return "측정치 없음";
+}
+
+function badgeStyle(
+  background: string,
+  color: string,
+  border: string,
+): { background: string; color: string; border: string } {
+  return { background, color, border };
+}
+
+function providerBadgeStyle(provider?: string | null): { background: string; color: string; border: string } {
+  const normalized = String(provider || "").trim().toLowerCase();
+  const tone = PROVIDER_COLORS[normalized] || "var(--accent)";
+  return badgeStyle(tone, "#fff", "1px solid transparent");
+}
+
+function familyBadgeStyle(): { background: string; color: string; border: string } {
+  return badgeStyle("rgba(59,130,246,0.12)", "var(--accent)", "1px solid rgba(59,130,246,0.22)");
+}
+
+function categoryBadgeStyle(): { background: string; color: string; border: string } {
+  return badgeStyle("rgba(16,185,129,0.12)", "var(--success)", "1px solid rgba(16,185,129,0.22)");
+}
+
+function legacyBadgeStyle(): { background: string; color: string; border: string } {
+  return badgeStyle("rgba(148,163,184,0.12)", "var(--text-secondary)", "1px solid rgba(148,163,184,0.22)");
 }
 
 function statusStyle(status: string): { background: string; color: string; border: string } {
@@ -620,6 +695,7 @@ function LlmAccountUsagePanel() {
 
 function RunnerModelConfig() {
   const [configs, setConfigs] = useState<ModelConfig[]>([]);
+  const [registryModels, setRegistryModels] = useState<LlmRegistryModel[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
@@ -627,18 +703,79 @@ function RunnerModelConfig() {
 
   const load = useCallback(() => {
     setLoading(true);
-    api.getRunnerModels()
-      .then((r: any) => {
-        const sorted = (r.configs || []).sort(
-          (a: ModelConfig, b: ModelConfig) => SIZE_ORDER.indexOf(a.size) - SIZE_ORDER.indexOf(b.size)
-        );
-        setConfigs(sorted);
+    Promise.allSettled([
+      api.getRunnerModels(),
+      (api as any).getLlmModels(),
+    ])
+      .then(([configResult, registryResult]) => {
+        if (configResult.status === "fulfilled") {
+          const sorted = (configResult.value.configs || []).sort(
+            (a: ModelConfig, b: ModelConfig) => SIZE_ORDER.indexOf(a.size) - SIZE_ORDER.indexOf(b.size)
+          );
+          setConfigs(sorted);
+        } else {
+          throw new Error("runner_model_config load failed");
+        }
+
+        if (registryResult.status === "fulfilled") {
+          setRegistryModels(Array.isArray(registryResult.value.models) ? registryResult.value.models : []);
+        } else {
+          setRegistryModels([]);
+        }
       })
       .catch(() => setMsg("로드 실패"))
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const runnerModelCatalog = useMemo<RunnerModelCatalogOption[]>(() => {
+    const values = new Set<string>(LEGACY_RUNNER_MODEL_VALUES);
+    configs.forEach((config) => config.models.forEach((value) => value && values.add(value)));
+
+    return Array.from(values)
+      .filter(Boolean)
+      .map((value) => {
+        const registryModel = findRegistryModelByStoredValue(registryModels, value);
+        const parsedValue = splitStoredModelValue(value);
+        const displayModel = registryModel || {
+          provider: parsedValue.providerHint || "legacy",
+          model_id: parsedValue.modelId || value,
+        };
+        return {
+          value,
+          displayName: registryModel?.display_name || value,
+          groupLabel: registryModel ? getModelGroupLabel(registryModel) : "Legacy / Unclassified",
+          classification: registryModel ? getCompactModelClassification(registryModel) : "Legacy / Unclassified",
+          providerLabel: getProviderDisplayLabel(displayModel),
+          familyLabel: getModelFamilyLabel(displayModel),
+          categoryLabel: getModelCategoryLabel(displayModel),
+          registryModel,
+          isRegistered: Boolean(registryModel),
+        };
+      })
+      .sort((a, b) => (
+        a.groupLabel.localeCompare(b.groupLabel)
+        || a.displayName.localeCompare(b.displayName)
+        || a.value.localeCompare(b.value)
+      ));
+  }, [configs, registryModels]);
+
+  const runnerModelCatalogGroups = useMemo(() => {
+    const groups = new Map<string, RunnerModelCatalogOption[]>();
+    for (const option of runnerModelCatalog) {
+      if (!groups.has(option.groupLabel)) {
+        groups.set(option.groupLabel, []);
+      }
+      groups.get(option.groupLabel)?.push(option);
+    }
+    return Array.from(groups.entries()).map(([group, options]) => ({ group, options }));
+  }, [runnerModelCatalog]);
+
+  const runnerModelInfoMap = useMemo(
+    () => new Map(runnerModelCatalog.map((option) => [option.value, option])),
+    [runnerModelCatalog],
+  );
 
   const moveModel = (sizeIdx: number, modelIdx: number, dir: -1 | 1) => {
     const next = [...configs];
@@ -701,20 +838,48 @@ function RunnerModelConfig() {
             )}
           </div>
           <div className="space-y-2">
-            {cfg.models.map((model, mi) => (
-              <div key={mi} className="flex items-center gap-2 rounded px-3 py-2" style={{ background: "var(--bg-primary)" }}>
-                <span className="text-xs font-bold w-5 text-center" style={{ color: mi === 0 ? "var(--success)" : "var(--text-secondary)" }}>
-                  {mi + 1}
-                </span>
-                <span className="flex-1 text-sm font-mono truncate" style={{ color: "var(--text-primary)" }}>{model}</span>
-                <button onClick={() => moveModel(si, mi, -1)} disabled={mi === 0}
-                  className="px-1.5 py-0.5 rounded text-xs disabled:opacity-30" style={{ background: "var(--bg-hover)" }}>▲</button>
-                <button onClick={() => moveModel(si, mi, 1)} disabled={mi === cfg.models.length - 1}
-                  className="px-1.5 py-0.5 rounded text-xs disabled:opacity-30" style={{ background: "var(--bg-hover)" }}>▼</button>
-                <button onClick={() => removeModel(si, mi)} disabled={cfg.models.length <= 1}
-                  className="px-1.5 py-0.5 rounded text-xs disabled:opacity-30" style={{ color: "var(--danger)" }}>✕</button>
-              </div>
-            ))}
+            {cfg.models.map((model, mi) => {
+              const modelInfo = runnerModelInfoMap.get(model);
+              const providerTone = modelInfo?.registryModel ? providerBadgeStyle(modelInfo.registryModel.provider) : legacyBadgeStyle();
+              return (
+                <div key={mi} className="flex items-start gap-2 rounded px-3 py-2" style={{ background: "var(--bg-primary)" }}>
+                  <span className="text-xs font-bold w-5 text-center pt-1" style={{ color: mi === 0 ? "var(--success)" : "var(--text-secondary)" }}>
+                    {mi + 1}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-mono break-all" style={{ color: "var(--text-primary)" }}>{model}</span>
+                      <span className="text-[11px] px-2 py-0.5 rounded" style={providerTone}>
+                        {modelInfo?.providerLabel || "Legacy"}
+                      </span>
+                      <span className="text-[11px] px-2 py-0.5 rounded" style={familyBadgeStyle()}>
+                        {modelInfo?.familyLabel || "Model"}
+                      </span>
+                      <span className="text-[11px] px-2 py-0.5 rounded" style={categoryBadgeStyle()}>
+                        {modelInfo?.categoryLabel || "General"}
+                      </span>
+                    </div>
+                    <p className="text-[11px] mt-1 break-all" style={{ color: "var(--text-secondary)" }}>
+                      {modelInfo?.displayName || model}
+                      {modelInfo?.registryModel?.execution_model_id && modelInfo.registryModel.execution_model_id !== modelInfo.registryModel.model_id
+                        ? ` -> ${modelInfo.registryModel.execution_model_id}`
+                        : ""}
+                    </p>
+                    <p className="text-[11px] mt-1" style={{ color: "var(--text-secondary)" }}>
+                      {modelInfo?.classification || "Legacy / Unclassified"}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0 pt-1">
+                    <button onClick={() => moveModel(si, mi, -1)} disabled={mi === 0}
+                      className="px-1.5 py-0.5 rounded text-xs disabled:opacity-30" style={{ background: "var(--bg-hover)" }}>▲</button>
+                    <button onClick={() => moveModel(si, mi, 1)} disabled={mi === cfg.models.length - 1}
+                      className="px-1.5 py-0.5 rounded text-xs disabled:opacity-30" style={{ background: "var(--bg-hover)" }}>▼</button>
+                    <button onClick={() => removeModel(si, mi)} disabled={cfg.models.length <= 1}
+                      className="px-1.5 py-0.5 rounded text-xs disabled:opacity-30" style={{ color: "var(--danger)" }}>✕</button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
           <div className="flex gap-2 mt-2">
             <select
@@ -724,10 +889,12 @@ function RunnerModelConfig() {
               style={{ background: "var(--bg-primary)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
             >
               <option value="">모델 선택...</option>
-              {AVAILABLE_MODELS.map((g) => (
+              {runnerModelCatalogGroups.map((g) => (
                 <optgroup key={g.group} label={g.group}>
-                  {g.models.filter((m) => !cfg.models.includes(m)).map((m) => (
-                    <option key={m} value={m}>{m}</option>
+                  {g.options.filter((option) => !cfg.models.includes(option.value)).map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {`${option.displayName} · ${option.classification}`}
+                    </option>
                   ))}
                 </optgroup>
               ))}

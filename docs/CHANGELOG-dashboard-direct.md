@@ -122,3 +122,12 @@ p = pathlib.Path('/root/aads/aads-dashboard/src/app/
 
 ## [2026-05-13 13:56:26 KST] [aads-dashboard] public/reports/newtalk-ai-shorts-reels-generation-p0.html
 - Chat-Direct 수정: run_remote_command: python3 /tmp/aads-run-local-tests.py
+
+## [2026-05-13 14:35:14 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:           // SSE reader가 아직 활성 상태면 strea→          // P0-FIX: 서버에 활성 실행 없으면 stale
+
+## [2026-05-13 14:35:18 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:           waitingBgTimeoutRef.current = →          waitingBgTimeoutRef.current = 
+
+## [2026-05-13 14:36:05 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:         // 서버에서 스트리밍 아님 + 프론트 streaming=→        // 서버에서 스트리밍 아님 + 프론트 streaming=

@@ -1,5 +1,17 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-13 13:31 KST) - AADS-185 chat/settings model classification UI
+- 배경: CEO 요청으로 chat 모델 드롭다운에서 provider/type 구분을 즉시 강화하고, 같은 분류를 admin settings 모델 UI에도 반영해야 했다. 기존 chat UI는 registry row 위에 static selector label이 우선되는 구간이 있었고, runner settings는 hard-coded grouped model list에 의존하고 있었다.
+- 조치: `aads-dashboard/src/lib/modelRegistryPresentation.ts`를 추가해 registry 기반 provider/category/family 표시, legacy stored value(`codex:*`, `litellm:*`) 해석, grouped label 생성 로직을 공통화했다.
+- 조치: `aads-dashboard/src/app/chat/page.tsx`에서 active registry row의 `display_name/provider/family/category/execution_model_id`를 우선 사용하도록 selector option 빌드를 조정했다. chat 모델 select는 native `optgroup`으로 provider/category 단위 그룹을 만들고, 닫힌 상태에서도 `Codex/Gemini/DeepSeek/Claude/OpenAI/Local` 분류가 보이도록 option text에 classification을 붙였다. static `MODEL_OPTIONS`는 registry 미로딩/비활성 현재값 fallback에만 남는다.
+- 조치: `aads-dashboard/src/app/settings/page.tsx`의 Runner Model Config는 `getLlmModels()`를 같이 읽어 registry metadata를 current configured model rows와 add-model select 양쪽에 붙였다. 기존 hard-coded grouped list는 `LEGACY_RUNNER_MODEL_VALUES`로 축소해 저장 포맷 호환 seed로만 사용하고, 실제 group/provider/category/family 표시는 registry 우선으로 생성한다.
+- 조치: `aads-dashboard/src/app/admin/model-routing/page.tsx`에 provider/category/family badge를 추가해 routing model rows도 같은 분류 체계를 보이도록 맞췄다.
+- 테스트: `python3 -m pytest tests/unit/test_chat_lightweight_frontend_static.py tests/unit/test_model_routing_admin_static.py -q` → 7 passed. `git diff --check` 통과.
+- 프론트 검증 제약: 이 worktree에는 `package.json`, `tsconfig.json`, ESLint config가 없어 TypeScript/ESLint 검증은 실행 불가였다.
+- 남은 fallback/주의:
+  - `settings/page.tsx`의 `LEGACY_RUNNER_MODEL_VALUES`는 `runner_model_config` 저장값이 아직 `codex:*`, `litellm:*`, bare Claude/Qwen 혼합 포맷을 쓰기 때문에 완전 제거하지 않았다. 다만 registry row가 있으면 group/label/badge는 static 값을 덮지 않고 registry metadata를 우선 사용한다.
+  - `chat/page.tsx`의 `STATIC_MODEL_OPTION_MAP`도 registry fetch 실패 또는 현재 세션의 비활성 모델 표시 fallback용으로만 남겨뒀다. registry row가 존재할 때는 name/provider/cost 분류를 static 값이 덮어쓰지 않는다.
+
 ## 현재 진행 상태 (2026-05-13 11:49 KST) - PC Ollama Gemma 4 E4B 브릿지 1차 반영
 - 배경: CEO 지시로 `gemma4:e4b`를 먼저 PC Ollama에 설치하고 AADS `pc_ollama` 브릿지로 붙인 뒤 품질/속도 실측, `gemma4:26b`는 별도 비교 테스트로만 진행해야 한다.
 - 조치: `pc_agent/commands/ollama.py`에 Ollama version/list/ps/pull/chat/benchmark 명령을 추가하고, `pc_agent/commands/__init__.py`에 `ollama_*` command_type을 등록했다. `ollama_chat`/`ollama_benchmark`는 Ollama API의 `prompt_eval_count`, `eval_count`, duration 기반 속도 메트릭을 반환한다.
