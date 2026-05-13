@@ -34,6 +34,29 @@ _current_todo_context: _ContextVar[Optional[Dict[str, Any]]] = _ContextVar(
     "_current_todo_context", default=None,
 )
 
+
+def _safe_reset_context_var(ctx_var: _ContextVar, token, label: str = "") -> None:
+    """ContextVar.reset() 가드.
+
+    async generator/Task 경계에서 set()과 reset()이 다른 asyncio Context에 걸쳐 실행되면
+    ValueError("Token was created in a different Context")가 발생해 producer가 사망.
+    SSE 스트림이 끊겨 사용자가 응답을 받지 못하는 사고가 반복되어, reset 호출을 가드한다.
+
+    token이 None이거나 ValueError/LookupError 발생 시 경고만 남기고 계속 진행.
+    """
+    if token is None:
+        return
+    try:
+        ctx_var.reset(token)
+    except (ValueError, LookupError) as _e:
+        try:
+            _var_name = ctx_var.name  # type: ignore[attr-defined]
+        except AttributeError:
+            _var_name = "<unknown>"
+        logger.warning(
+            f"ctx_reset_skipped name={_var_name} label={label} err={type(_e).__name__}"
+        )
+
 # AADS-191 Phase1: Redis Stream 토큰 버퍼링 (서버 재시작 시 스트리밍 복구)
 from app.services import redis_stream as _redis_stream
 
@@ -1063,6 +1086,8 @@ async def _mark_execution_interrupted(
     sid = uuid.UUID(str(session_id))
     eid = uuid.UUID(str(execution_id))
     pid = uuid.UUID(str(placeholder_id)) if placeholder_id else None
+    # AADS: reason은 항상 문자열로 정규화 (bool/None이 전달돼도 reason[:1000] 안전)
+    reason = str(reason) if not isinstance(reason, str) else reason
 
     if pid is None:
         pid = await conn.fetchval(
@@ -1675,7 +1700,8 @@ async def with_background_completion(
                     if _client_gone_since and (now - _client_gone_since) > _BG_AUTO_CANCEL_SEC:
                         logger.warning(f"bg_auto_cancel: session={session_id[:8]} client gone for {now - _client_gone_since:.0f}s, auto-stopping")
                         await _interim_save_streaming(session_id, state)
-                        state["_producer_incomplete_exit"] = True
+                        # AADS: bool 대신 reason 문자열로 저장 (L1138 reason[:1000] 슬라이싱 호환)
+                        state["_producer_incomplete_exit"] = "client_gone_auto_cancel"
                         return  # producer 종료 → finally에서 cleanup
         except BaseException as e:
             # BaseException: CancelledError, GeneratorExit 등 모두 잡음
@@ -4092,7 +4118,7 @@ async def _save_and_update_session(
             try:
                 await _extract_artifacts(sid, content)
             finally:
-                _artifact_extraction_context.reset(_ctx_token)
+                _safe_reset_context_var(_artifact_extraction_context, _ctx_token, label="artifact_extract")
         except Exception as _art_err:
             logger.debug(f"artifact_extract_error: {_art_err}")
 
@@ -4581,6 +4607,7 @@ async def send_message_stream(
     _lf_span_llm = None
     _trace_start_time = __import__("time").monotonic()
     _todo_context_token = _current_todo_context.set(None)
+    _todo_context_token_mid: Any = None  # AADS: L5246 set() 토큰 추적 (역순 reset용)
 
     try:
         from app.services.tool_executor import current_chat_session_id
@@ -5243,7 +5270,7 @@ async def send_message_stream(
             intent_override=intent_override,
         )
         if _todo_context:
-            _current_todo_context.set(_todo_context)
+            _todo_context_token_mid = _current_todo_context.set(_todo_context)
             if _todo_context.get("prompt_block"):
                 system_prompt = system_prompt + str(_todo_context["prompt_block"])
 
@@ -6509,7 +6536,10 @@ async def send_message_stream(
         yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns, 'confidence_label': _confidence_label})}\n\n"
 
     finally:
-        _current_todo_context.reset(_todo_context_token)
+        # ContextVar set/reset이 async generator/Task 경계에서 분리되면 ValueError 발생.
+        # 역순 reset + helper 가드로 producer 사망(SSE 스트림 끊김) 방지.
+        _safe_reset_context_var(_current_todo_context, _todo_context_token_mid, label=f"todo_mid:{session_id[:8]}")
+        _safe_reset_context_var(_current_todo_context, _todo_context_token, label=f"todo_init:{session_id[:8]}")
         set_streaming(session_id, False)
 
 

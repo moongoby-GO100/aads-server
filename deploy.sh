@@ -81,9 +81,54 @@ get_active_container() {
     echo "aads-server"
 }
 
+
+verify_active_slot() {
+    # AADS: nginx upstream active 라인과 .active_port 파일 정합성 + 실제 컨테이너 생존 검증.
+    # blue-green 배포 후 nginx가 죽은 슬롯을 가리키면 외부 502 발생 (2026-05-13 incident).
+    local active_port="$1"
+    local nginx_active=""
+    if [[ -f "$UPSTREAM_CONF" ]]; then
+        nginx_active=$(grep "server 127.0.0.1:" "$UPSTREAM_CONF" \
+            | grep -v backup \
+            | grep -oP '127\.0\.0\.1:\K(8100|8102)' \
+            | sort -u | head -1 || true)
+    fi
+    if [[ -z "$nginx_active" ]]; then
+        echo "[deploy.sh] ⚠️ nginx upstream active port 식별 실패 (multi-active 또는 파일 누락) — 검증 skip"
+        return 0
+    fi
+    if [[ "$nginx_active" != "$active_port" ]]; then
+        echo "[deploy.sh] ❌ ACTIVE 슬롯 불일치"
+        echo "[deploy.sh]    nginx upstream active = :${nginx_active}"
+        echo "[deploy.sh]    .active_port 파일      = :${active_port}"
+        echo "[deploy.sh]    이 상태에서 배포하면 nginx가 죽은 백엔드를 가리킬 수 있음."
+        echo "[deploy.sh]    수동 정합성 회복 후 재시도:"
+        echo "[deploy.sh]      1) docker ps | grep aads-server"
+        echo "[deploy.sh]      2) 살아있는 쪽에 맞춰 nginx upstream 또는 .active_port 정정"
+        echo "[deploy.sh]      3) nginx -s reload"
+        exit 1
+    fi
+    local target_container=""
+    case "$active_port" in
+        8100) target_container="aads-server" ;;
+        8102) target_container="aads-server-green" ;;
+    esac
+    if [[ -n "$target_container" ]] && ! docker inspect "$target_container" --format '{{.State.Running}}' 2>/dev/null | grep -q true; then
+        echo "[deploy.sh] ❌ ACTIVE 컨테이너 ${target_container} 가 실행 중이 아님 (포트 :${active_port})"
+        echo "[deploy.sh]    nginx upstream이 죽은 백엔드를 가리킴 → 외부 502 발생 가능."
+        echo "[deploy.sh]    수동 복구 절차:"
+        echo "[deploy.sh]      1) docker start ${target_container}"
+        echo "[deploy.sh]      2) 또는 살아있는 쪽으로 nginx upstream swap 후 reload"
+        exit 1
+    fi
+    echo "[deploy.sh] ✅ ACTIVE 슬롯 일관성 확인: :${active_port} (${target_container})"
+}
+
 ACTIVE_PORT="$(get_active_port)"
 ACTIVE_CONTAINER="$(get_active_container)"
 HEALTH_URL="http://localhost:${ACTIVE_PORT}/api/v1/health"
+
+verify_active_slot "$ACTIVE_PORT"
 
 # Blue/green 컨테이너가 현재 active 슬롯을 읽어 background recovery 소유권을 판단한다.
 # Docker bind mount 대상 파일은 컨테이너 생성 전에 반드시 존재해야 한다.
