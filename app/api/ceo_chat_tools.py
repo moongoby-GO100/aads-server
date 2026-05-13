@@ -560,6 +560,72 @@ TOOL_DEFINITIONS: List[Dict] = [
         },
     },
     {
+        "name": "local_model_queue_status",
+        "description": "CEO PC 로컬 모델 설치 큐와 PC Agent 연결/lease 상태를 조회한다. scripts/local_model_install_queue.json이 canonical queue다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "agent_id": {"type": "string", "description": "선택 PC Agent id"},
+                "include_items": {"type": "boolean", "description": "큐 항목 포함 여부", "default": True},
+            },
+        },
+    },
+    {
+        "name": "local_model_install_test",
+        "description": "CEO PC 로컬 모델 큐 항목 하나만 prepare/install/test 한다. 대형 모델 병렬 설치는 하지 않으며 설치/다운로드는 명시 플래그가 필요하다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "item_id": {"type": "string", "description": "local_model_queue_status가 반환한 item_id"},
+                "action": {"type": "string", "enum": ["status", "prepare", "install", "test", "install_test"], "default": "prepare"},
+                "agent_id": {"type": "string", "description": "선택 PC Agent id"},
+                "allow_install": {"type": "boolean", "default": False},
+                "allow_download": {"type": "boolean", "default": False},
+                "timeout_seconds": {"type": "number", "default": 900},
+            },
+            "required": ["item_id"],
+        },
+    },
+    {
+        "name": "generate_music",
+        "description": "CEO PC local_music 비동기 job 생성. 설치/런타임 준비 전에는 queued/prepared 상태만 반환한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "음악/오디오 생성 프롬프트"},
+                "input_refs": {"type": "object", "default": {}},
+                "model_id": {"type": "string", "description": "선택 로컬 모델"},
+                "provider": {"type": "string", "description": "기본 pc_local"},
+                "session_id": {"type": "string"},
+            },
+            "required": ["prompt"],
+        },
+    },
+    {
+        "name": "generate_3d_asset",
+        "description": "CEO PC local_3d 비동기 job 생성. 설치/런타임 준비 전에는 queued/prepared 상태만 반환한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "3D asset 생성 프롬프트"},
+                "input_refs": {"type": "object", "default": {}},
+                "model_id": {"type": "string", "description": "선택 로컬 모델"},
+                "provider": {"type": "string", "description": "기본 pc_local"},
+                "session_id": {"type": "string"},
+            },
+            "required": ["prompt"],
+        },
+    },
+    {
+        "name": "media_job_status",
+        "description": "image/video/music/3D 공통 media_generation_jobs 상태 조회.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"job_id": {"type": "string", "description": "media job id"}},
+            "required": ["job_id"],
+        },
+    },
+    {
         "name": "fact_check",
         "description": "팩트체크 (DB + 웹 교차검증). 주장의 사실 여부를 검증하고 근거 반환.\n예: fact_check(claim='삼성전자 2025년 매출이 300조를 넘었다')",
         "input_schema": {
@@ -4243,6 +4309,48 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             output_dir=params.get("output_dir"),
         )
         return json.dumps(result, ensure_ascii=False)
+    elif name == "local_model_queue_status":
+        from app.services.local_model_manager import local_model_manager
+        result = await local_model_manager.queue_status(
+            agent_id=params.get("agent_id", ""),
+            include_items=bool(params.get("include_items", True)),
+        )
+        return json.dumps(result, ensure_ascii=False, default=str)
+    elif name == "local_model_install_test":
+        from app.services.local_model_manager import local_model_manager
+        result = await local_model_manager.run_install_test(
+            item_id=params.get("item_id", ""),
+            action=params.get("action", "prepare"),
+            agent_id=params.get("agent_id", ""),
+            allow_install=bool(params.get("allow_install", False)),
+            allow_download=bool(params.get("allow_download", False)),
+            timeout_seconds=float(params.get("timeout_seconds", 900) or 900),
+        )
+        return json.dumps(result, ensure_ascii=False, default=str)
+    elif name == "generate_music":
+        from app.services.media_generation_service import media_generation_service
+        result = await media_generation_service.generate_music(
+            params.get("prompt", ""),
+            input_refs=params.get("input_refs") or {},
+            model_id=params.get("model_id"),
+            provider=params.get("provider") or "pc_local",
+            session_id=params.get("session_id") or chat_session_id,
+        )
+        return json.dumps(result, ensure_ascii=False, default=str)
+    elif name == "generate_3d_asset":
+        from app.services.media_generation_service import media_generation_service
+        result = await media_generation_service.generate_3d(
+            params.get("prompt", ""),
+            input_refs=params.get("input_refs") or {},
+            model_id=params.get("model_id"),
+            provider=params.get("provider") or "pc_local",
+            session_id=params.get("session_id") or chat_session_id,
+        )
+        return json.dumps(result, ensure_ascii=False, default=str)
+    elif name == "media_job_status":
+        from app.services.media_generation_service import media_generation_service
+        result = await media_generation_service.media_status(params.get("job_id", ""))
+        return json.dumps(result, ensure_ascii=False, default=str)
     elif name == "fact_check":
         from app.services.fact_checker import FactChecker
         checker = FactChecker()

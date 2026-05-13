@@ -74,7 +74,13 @@ _KNOWN_ROUTING_ERRORS = frozenset({
     _ERROR_COMMAND_TIMEOUT,
 })
 _VVIC_JOB_TYPES = frozenset({"vvic", "vvic_cdp", "vvic_scrape"})
-_DEFAULT_MAX_CONCURRENCY_BY_JOB = {"vvic_cdp": 1, "vvic": 1, "vvic_scrape": 1}
+_DEFAULT_MAX_CONCURRENCY_BY_JOB = {
+    "vvic_cdp": 1,
+    "vvic": 1,
+    "vvic_scrape": 1,
+    "local_model_install": 1,
+    "local_media_job": 1,
+}
 
 
 @dataclass

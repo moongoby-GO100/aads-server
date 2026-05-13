@@ -1,0 +1,38 @@
+{
+  "created_at_kst": "2026-05-13 13:24",
+  "hardware_target": "RTX 3060 12GB VRAM, 32GB RAM",
+  "policy": {
+    "parallel_installs": false,
+    "benchmark_required_before_default": true,
+    "large_models_are_comparison_only": true
+  },
+  "ollama": [
+    {"priority": 1, "model": "gemma4:e4b", "route_model_id": "pc-gemma4-e4b", "aads_use": "local_llm"},
+    {"priority": 1, "model": "qwen3:4b", "route_model_id": "pc-qwen3-4b", "aads_use": "local_llm_fast"},
+    {"priority": 1, "model": "qwen3:8b", "route_model_id": "pc-qwen3-8b", "aads_use": "local_llm"},
+    {"priority": 1, "model": "qwen2.5vl:3b", "route_model_id": "pc-qwen2.5vl-3b", "aads_use": "local_vlm_fast"},
+    {"priority": 2, "model": "qwen2.5vl:7b", "route_model_id": "pc-qwen2.5vl-7b", "aads_use": "local_vlm"},
+    {"priority": 2, "model": "qwen3:14b", "route_model_id": "pc-qwen3-14b", "aads_use": "local_llm_quality"},
+    {"priority": 2, "model": "gemma4:26b", "route_model_id": "pc-gemma4-26b", "aads_use": "comparison_only"},
+    {"priority": 3, "model": "qwen3:30b", "route_model_id": "pc-qwen3-30b", "aads_use": "comparison_only"}
+  ],
+  "transformers": [
+    {"priority": 1, "model": "openai/whisper-large-v3-turbo", "bridge": "local_audio", "task": "stt"},
+    {"priority": 2, "model": "Qwen/Qwen3-Embedding-0.6B", "bridge": "local_embedding", "task": "embedding"},
+    {"priority": 2, "model": "BAAI/bge-m3", "bridge": "local_embedding", "task": "embedding"},
+    {"priority": 3, "model": "Qwen/Qwen3-Reranker-0.6B", "bridge": "local_rerank", "task": "rerank"}
+  ],
+  "document": [
+    {"priority": 1, "model": "PaddlePaddle/PaddleOCR-VL", "bridge": "local_document", "task": "ocr_layout"},
+    {"priority": 1, "model": "tesseract-5", "bridge": "local_document", "task": "ocr_text"}
+  ],
+  "media": [
+    {"priority": 2, "model": "black-forest-labs/FLUX.2-klein-4B", "bridge": "local_image", "task": "image_generate_edit"},
+    {"priority": 2, "model": "QwenLM/Qwen-Image", "bridge": "local_image", "task": "image_generate_edit"},
+    {"priority": 2, "model": "Tongyi-MAI/Z-Image-Turbo", "bridge": "local_image", "task": "image_generate"},
+    {"priority": 2, "model": "Wan-Video/Wan2.2-TI2V-5B", "bridge": "local_video", "task": "image_to_video"},
+    {"priority": 2, "model": "Lightricks/LTX-Video", "bridge": "local_video", "task": "text_or_image_to_video"},
+    {"priority": 3, "model": "stabilityai/stable-audio-open-1.0", "bridge": "local_music", "task": "music_audio_generate"},
+    {"priority": 3, "model": "Tencent-Hunyuan/Hunyuan3D-2.1", "bridge": "local_3d", "task": "image_to_3d"}
+  ]
+}

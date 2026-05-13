@@ -42,6 +42,7 @@ process_monitor = _safe_import("process_monitor")
 kakao_auto = _safe_import("kakao_auto")
 network = _safe_import("network")
 ollama = _safe_import("ollama")
+local_models = _safe_import("local_models")
 
 
 def _handler(mod, attr: str):
@@ -153,6 +154,10 @@ _RAW_HANDLERS = {
     "ollama_pull": _handler(ollama, "pull"),
     "ollama_chat": _handler(ollama, "chat"),
     "ollama_benchmark": _handler(ollama, "benchmark"),
+    # P9: 로컬 양자화/멀티모달 모델 큐
+    "local_model_queue_status": _handler(local_models, "queue_status"),
+    "local_model_install_test": _handler(local_models, "install_test"),
+    "local_model_media_job": _handler(local_models, "media_job"),
 }
 
 # None 핸들러 제거 — 사용 가능한 명령만 등록
@@ -167,5 +172,6 @@ __all__ = [
     "kakao", "updater", "input_control", "window_control",
     "screen_utils", "system_extra", "screen_stream",
     "macro", "browser_auto", "file_transfer", "scheduler",
-    "security", "process_monitor", "kakao_auto", "network", "ollama", "COMMAND_HANDLERS",
+    "security", "process_monitor", "kakao_auto", "network", "ollama",
+    "local_models", "COMMAND_HANDLERS",
 ]

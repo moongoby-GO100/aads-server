@@ -58,7 +58,9 @@ logger = logging.getLogger("pc-agent")
 SERVER_URL = os.getenv("AADS_SERVER_URL", "wss://aads.newtalk.kr/api/v1/pc-agent/ws")
 AGENT_SECRET = os.getenv("AADS_AGENT_TOKEN", os.getenv("PC_AGENT_SECRET", ""))
 HEARTBEAT_INTERVAL = 25  # 초
-RECONNECT_DELAY = 5  # 초
+RECONNECT_DELAY = 5  # 초 — 기본 재연결 대기
+MAX_RECONNECT_DELAY = 120  # 초 — 최대 백오프
+CONNECT_TIMEOUT = 15  # 초 — 연결 시도 타임아웃
 AUTO_UPDATE_INTERVAL = 300  # 초 — 5분마다 서버 버전 확인 (HTTP 기반)
 
 # ── 단일 인스턴스 (Windows 뮤텍스) ────────────────────────────────────────
@@ -151,6 +153,8 @@ def _collect_capabilities() -> list[str]:
         caps.update({"chrome_cdp", "interactive_browser"})
     if "ollama_chat" in COMMAND_HANDLERS:
         caps.add("pc_ollama")
+    if "local_model_queue_status" in COMMAND_HANDLERS:
+        caps.add("local_model_manager")
 
     extra_caps = os.getenv("AADS_PC_AGENT_CAPABILITIES", "")
     if extra_caps:
@@ -184,21 +188,30 @@ class PCAgent:
         """메인 루프 — 서버 연결 + 재연결."""
         logger.info("PC Agent 시작 agent_id=%s hostname=%s", self.agent_id, self.hostname)
         self._loop = asyncio.get_running_loop()
+        consecutive_failures = 0
 
         while self._running:
             self._last_close_code = None
             try:
                 await self._connect()
+                consecutive_failures = 0
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 code = getattr(e, 'code', None)
                 if code is not None:
                     self._last_close_code = code
-                logger.error("연결 오류 (code=%s): %s", self._last_close_code, e)
+                consecutive_failures += 1
+                logger.error("연결 오류 (code=%s, 연속실패=%d): %s", self._last_close_code, consecutive_failures, e)
             if self._running:
-                delay = 1 if self._last_close_code in (1012, 1006, 1001) else RECONNECT_DELAY
-                logger.info("재연결 대기 %d초 (close_code=%s)", delay, self._last_close_code)
+                if self._last_close_code in (1012, 1006, 1001):
+                    delay = 1
+                    consecutive_failures = 0
+                else:
+                    base = min(RECONNECT_DELAY * (2 ** min(consecutive_failures - 1, 5)), MAX_RECONNECT_DELAY)
+                    jitter = min(base * 0.3, 5)
+                    delay = base + (hash(self.agent_id) % 100) / 100.0 * jitter
+                logger.info("재연결 대기 %.1f초 (close_code=%s, 연속실패=%d)", delay, self._last_close_code, consecutive_failures)
                 await asyncio.sleep(delay)
 
     async def _connect(self) -> None:
@@ -215,6 +228,7 @@ class PCAgent:
                 ping_interval=20,
                 ping_timeout=20,
                 close_timeout=10,
+                open_timeout=CONNECT_TIMEOUT,
             ) as ws:
                 logger.info("서버 연결 성공")
                 self._ws = ws

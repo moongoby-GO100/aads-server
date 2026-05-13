@@ -329,6 +329,7 @@ async def test_video_download_saves_data_uri(tmp_path: Path):
 
 def test_media_generation_migration_contains_idempotent_job_table():
     sql = Path("migrations/088_media_generation_jobs.sql").read_text()
+    local_sql = Path("migrations/095_local_multimodal_model_bridge.sql").read_text()
 
     assert "BEGIN;" in sql
     assert "COMMIT;" in sql
@@ -336,6 +337,8 @@ def test_media_generation_migration_contains_idempotent_job_table():
     assert "job_id TEXT NOT NULL UNIQUE" in sql
     assert "CHECK (kind IN ('image', 'edit_image', 'video'))" in sql
     assert "CREATE INDEX IF NOT EXISTS idx_media_generation_jobs_job_id" in sql
+    assert "DROP CONSTRAINT IF EXISTS media_generation_jobs_kind_chk" in local_sql
+    assert "'music', 'model_3d'" in local_sql
 
 
 def test_model_routing_migration_seeds_ceo_models_and_preferences():

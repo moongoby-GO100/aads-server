@@ -114,6 +114,11 @@ _DEFER_LOADING: Dict[str, bool] = {
     "generate_video": False,          # 핵심 — 비동기 동영상 생성 job
     "video_status": False,            # 핵심 — 동영상 job 상태 조회
     "video_download": True,           # 온디맨드 — 완료 영상 저장/메타데이터
+    "local_model_queue_status": True, # 온디맨드 — CEO PC 로컬 모델 설치 큐 상태
+    "local_model_install_test": True,  # 온디맨드 — 단일 큐 항목 prepare/install/test
+    "generate_music": True,           # 온디맨드 — local_music async job
+    "generate_3d_asset": True,        # 온디맨드 — local_3d async job
+    "media_job_status": True,         # 온디맨드 — 공통 media job 상태
     # ── 검색 도구 (한국어 특화) ───────────────────────────────────────
     "search_naver": False,            # 핵심 — 한국어 뉴스/블로그
     "search_naver_multi": True,       # 온디맨드
@@ -154,6 +159,8 @@ _DEFER_LOADING: Dict[str, bool] = {
     "db_safe_write": True,  # 자동 추가
     "notify_channel": True,  # 자동 추가
     "tool_layer_audit": True,  # 자동 추가
+    "crawl4ai_fetch": True,  # 자동 추가
+    "generate_3d_asset": True,  # 자동 추가
 }
 
 # 도구 카테고리 안내 (시스템 프롬프트 주입용 — context_builder.py에서 사용)
@@ -2565,6 +2572,72 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "required": ["job_id"],
         },
     },
+    "local_model_queue_status": {
+        "name": "local_model_queue_status",
+        "description": "CEO PC 로컬 모델 설치 큐와 PC Agent 연결/lease 상태를 조회한다. scripts/local_model_install_queue.json이 canonical queue다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "agent_id": {"type": "string", "description": "선택 PC Agent id"},
+                "include_items": {"type": "boolean", "default": True},
+            },
+        },
+    },
+    "local_model_install_test": {
+        "name": "local_model_install_test",
+        "description": "CEO PC 로컬 모델 큐 항목 하나만 prepare/install/test 한다. 대형 모델 병렬 설치는 하지 않으며 설치/다운로드는 명시 플래그가 필요하다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "item_id": {"type": "string", "description": "local_model_queue_status가 반환한 item_id"},
+                "action": {"type": "string", "enum": ["status", "prepare", "install", "test", "install_test"], "default": "prepare"},
+                "agent_id": {"type": "string"},
+                "allow_install": {"type": "boolean", "default": False},
+                "allow_download": {"type": "boolean", "default": False},
+                "timeout_seconds": {"type": "number", "default": 900},
+            },
+            "required": ["item_id"],
+        },
+    },
+    "generate_music": {
+        "name": "generate_music",
+        "description": "CEO PC local_music 비동기 job 생성. 설치/런타임 준비 전에는 queued/prepared 상태만 반환한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "음악/오디오 생성 프롬프트"},
+                "input_refs": {"type": "object", "default": {}},
+                "model_id": {"type": "string"},
+                "provider": {"type": "string", "default": "pc_local"},
+                "session_id": {"type": "string"},
+            },
+            "required": ["prompt"],
+        },
+    },
+    "generate_3d_asset": {
+        "name": "generate_3d_asset",
+        "description": "CEO PC local_3d 비동기 job 생성. 설치/런타임 준비 전에는 queued/prepared 상태만 반환한다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "3D asset 생성 프롬프트"},
+                "input_refs": {"type": "object", "default": {}},
+                "model_id": {"type": "string"},
+                "provider": {"type": "string", "default": "pc_local"},
+                "session_id": {"type": "string"},
+            },
+            "required": ["prompt"],
+        },
+    },
+    "media_job_status": {
+        "name": "media_job_status",
+        "description": "image/video/music/3D 공통 media_generation_jobs 상태 조회.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"job_id": {"type": "string", "description": "media job id"}},
+            "required": ["job_id"],
+        },
+    },
     # ── 한국어 검색 ──────────────────────────────────────────────────────────
     "search_naver": {
         "name": "search_naver",
@@ -2812,7 +2885,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
-    "action": ["directive_create", "create_design_modification_request", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download"],
+    "action": ["directive_create", "create_design_modification_request", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_3d_asset", "media_job_status"],
     "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)

@@ -50,7 +50,7 @@ LLM_ROUTING_MODELS = (
 )
 
 TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
-VALID_JOB_KINDS = {"image", "edit_image", "video"}
+VALID_JOB_KINDS = {"image", "edit_image", "video", "music", "model_3d"}
 VALID_JOB_STATUSES = {"queued", "running", "succeeded", "failed", "cancelled"}
 
 
@@ -279,6 +279,8 @@ class MediaGenerationService:
 
     def _provider_configured(self, provider: str) -> bool:
         normalized = str(provider or "").lower()
+        if normalized in {"pc_local", "local_pc", "local", "ceo_pc", "pc_agent"}:
+            return True
         if normalized == "openai":
             return bool(_secret_value(self.settings, "OPENAI_API_KEY"))
         if normalized == "google":
@@ -344,7 +346,39 @@ class MediaGenerationService:
         enabled = True
         route_note = ""
 
-        db_route = await self._fetch_model_route(requested_model) if requested_model else None
+        local_item: dict[str, Any] | None = None
+        local_provider_requested = requested_provider in {"pc_local", "local_pc", "local", "ceo_pc", "pc_agent"}
+        try:
+            from app.services.local_model_manager import LOCAL_PROVIDER_ALIASES, local_model_manager
+
+            local_provider_requested = requested_provider in LOCAL_PROVIDER_ALIASES
+            if local_provider_requested or requested_model:
+                local_item = local_model_manager.resolve_media_model(
+                    kind=normalized_kind,
+                    model_id=requested_model,
+                    provider=requested_provider,
+                )
+        except Exception:
+            local_item = None
+
+        if local_item:
+            requested_provider = "pc_local"
+            requested_model = str(local_item.get("model") or requested_model).strip()
+            source = "local_queue"
+        elif local_provider_requested:
+            return MediaRoute(
+                kind=kind,
+                provider="pc_local",
+                model_id=requested_model or normalized_kind,
+                configured=True,
+                supported=False,
+                enabled=True,
+                availability="queued_model_not_found",
+                source="local_queue",
+                reason="requested local model is not present in scripts/local_model_install_queue.json",
+            )
+
+        db_route = await self._fetch_model_route(requested_model) if requested_model and not local_item else None
         if db_route:
             requested_provider = str(requested_provider or db_route.get("provider") or "").strip().lower()
             if not db_route.get("matched_by_prefix"):
@@ -380,6 +414,8 @@ class MediaGenerationService:
             inferred = self.recognize_model(requested_model)
             requested_provider = requested_provider or inferred.get("provider", "")
 
+        if requested_provider in {"local", "local_pc", "ceo_pc", "pc_agent"}:
+            requested_provider = "pc_local"
         if not requested_provider:
             requested_provider = "google" if _secret_value(self.settings, "GOOGLE_API_KEY") else "openai"
 
@@ -411,14 +447,20 @@ class MediaGenerationService:
 
     def _route_supported(self, kind: str, provider: str, model_id: str) -> bool:
         if kind == "image":
+            if provider == "pc_local":
+                return True
             return provider in {"openai", "google"} and (
                 model_id in {"gpt-image-2", "gpt-image-1", "dall-e-3"}
                 or _is_imagen_4_model(model_id)
             )
         if kind == "edit_image":
+            if provider == "pc_local":
+                return True
             return provider == "openai" and model_id in {"gpt-image-2", "gpt-image-1"}
         if kind == "video":
-            return False
+            return provider == "pc_local"
+        if kind in {"music", "model_3d"}:
+            return provider == "pc_local"
         return False
 
     async def _insert_job(
@@ -617,6 +659,49 @@ class MediaGenerationService:
         )
         return self._job_error(code=code, message=message, job=job, route=route)
 
+    async def _prepare_local_media_job(
+        self,
+        *,
+        job: Mapping[str, Any],
+        kind: str,
+        prompt: str,
+        input_refs: dict[str, Any] | None,
+        route: MediaRoute,
+    ) -> dict[str, Any]:
+        from app.services.local_model_manager import local_model_manager
+
+        dispatch = await local_model_manager.dispatch_media_job(
+            job=job,
+            kind=kind,
+            prompt=prompt,
+            input_refs=input_refs or {},
+        )
+        metadata = {
+            "provider": route.provider,
+            "model_id": route.model_id,
+            "route_source": route.source,
+            "local_dispatch": dispatch,
+            "local_job_state": "queued_or_prepared",
+        }
+        updated = await self.update_job_status(
+            str(job.get("job_id") or ""),
+            "queued",
+            result_metadata=metadata,
+        )
+        public = _public_job(updated or job)
+        public.update(
+            {
+                "job_id": job.get("job_id"),
+                "kind": kind,
+                "status": "queued",
+                "provider": route.provider,
+                "model_id": route.model_id,
+                "availability": "queued_or_prepared",
+                "local_dispatch": dispatch,
+            }
+        )
+        return public
+
     async def generate_image(
         self,
         prompt: str,
@@ -636,7 +721,7 @@ class MediaGenerationService:
             model_id=route.model_id,
             prompt=prompt,
             input_refs={"size": size},
-            status="running",
+            status="queued" if route.provider == "pc_local" else "running",
             requested_by=requested_by,
             session_id=session_id,
         )
@@ -659,6 +744,14 @@ class MediaGenerationService:
                 job,
                 code="PROVIDER_UNAVAILABLE",
                 message=route.reason,
+                route=route,
+            )
+        if route.provider == "pc_local":
+            return await self._prepare_local_media_job(
+                job=job,
+                kind="image",
+                prompt=prompt,
+                input_refs={"size": size},
                 route=route,
             )
         try:
@@ -786,7 +879,7 @@ class MediaGenerationService:
             model_id=route.model_id,
             prompt=prompt,
             input_refs={**refs, "size": size},
-            status="running",
+            status="queued" if route.provider == "pc_local" else "running",
             requested_by=requested_by,
             session_id=session_id,
         )
@@ -809,6 +902,14 @@ class MediaGenerationService:
                 job,
                 code="PROVIDER_UNAVAILABLE",
                 message=route.reason,
+                route=route,
+            )
+        if route.provider == "pc_local":
+            return await self._prepare_local_media_job(
+                job=job,
+                kind="edit_image",
+                prompt=prompt,
+                input_refs={**refs, "size": size},
                 route=route,
             )
         image_path = refs.get("image_path") or refs.get("input_image_path")
@@ -922,12 +1023,113 @@ class MediaGenerationService:
                 message=route.reason,
                 route=route,
             )
+        if route.provider == "pc_local":
+            return await self._prepare_local_media_job(
+                job=job,
+                kind="video",
+                prompt=prompt,
+                input_refs=input_refs or {},
+                route=route,
+            )
         return await self._mark_failed(
             job,
             code="PROVIDER_UNAVAILABLE",
             message=route.reason or "Video provider adapter is not available in P0",
             route=route,
         )
+
+    async def _generate_local_async_job(
+        self,
+        kind: str,
+        prompt: str,
+        *,
+        input_refs: dict[str, Any] | None = None,
+        model_id: str | None = None,
+        provider: str | None = "pc_local",
+        requested_by: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        if not str(prompt or "").strip():
+            raise ValueError("프롬프트를 입력하세요")
+        route = await self.resolve_route(kind, model_id=model_id, provider=provider or "pc_local")
+        job = await self._insert_job(
+            kind=kind,
+            provider=route.provider,
+            model_id=route.model_id,
+            prompt=prompt,
+            input_refs=input_refs or {},
+            status="queued",
+            requested_by=requested_by,
+            session_id=session_id,
+        )
+        if not route.enabled:
+            return await self._mark_failed(job, code="MODEL_DISABLED", message=route.reason, route=route)
+        if not route.configured:
+            return await self._mark_failed(job, code="NOT_CONFIGURED", message=route.reason, route=route)
+        if not route.supported or route.provider != "pc_local":
+            return await self._mark_failed(
+                job,
+                code="PROVIDER_UNAVAILABLE",
+                message=route.reason or f"{kind} provider adapter is not available",
+                route=route,
+            )
+        return await self._prepare_local_media_job(
+            job=job,
+            kind=kind,
+            prompt=prompt,
+            input_refs=input_refs or {},
+            route=route,
+        )
+
+    async def generate_music(
+        self,
+        prompt: str,
+        *,
+        input_refs: dict[str, Any] | None = None,
+        model_id: str | None = None,
+        provider: str | None = "pc_local",
+        requested_by: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        return await self._generate_local_async_job(
+            "music",
+            prompt,
+            input_refs=input_refs,
+            model_id=model_id,
+            provider=provider,
+            requested_by=requested_by,
+            session_id=session_id,
+        )
+
+    async def generate_3d(
+        self,
+        prompt: str,
+        *,
+        input_refs: dict[str, Any] | None = None,
+        model_id: str | None = None,
+        provider: str | None = "pc_local",
+        requested_by: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        return await self._generate_local_async_job(
+            "model_3d",
+            prompt,
+            input_refs=input_refs,
+            model_id=model_id,
+            provider=provider,
+            requested_by=requested_by,
+            session_id=session_id,
+        )
+
+    async def media_status(self, job_id: str) -> dict[str, Any]:
+        job = await self.get_job(str(job_id or "").strip())
+        if not job:
+            return {
+                "error": "JOB_NOT_FOUND",
+                "message": "media job not found or storage unavailable",
+                "job_id": job_id,
+            }
+        return _public_job(job)
 
     async def video_status(self, job_id: str) -> dict[str, Any]:
         job = await self.get_job(str(job_id or "").strip())

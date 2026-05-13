@@ -71,8 +71,15 @@ async def execute(params: dict) -> dict:
     except Exception:
         pass
 
-    loop = asyncio.get_event_loop()
-    loop.call_later(2.0, _restart_agent)
+    async def _delayed_restart():
+        await asyncio.sleep(2.0)
+        _restart_agent()
+
+    try:
+        asyncio.ensure_future(_delayed_restart())
+    except Exception:
+        loop = asyncio.get_event_loop()
+        loop.call_later(2.0, _restart_agent)
 
     return {
         "status": "ok",
