@@ -1,5 +1,11 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-13) - Model Routing Admin 실제 대시보드 반영 보정
+- 배경: `runner-64aadb0d` P1 산출물은 AADS 서버 저장소의 `aads-dashboard/src/app/admin/model-routing/page.tsx`에는 반영됐지만, 실제 배포 대상 저장소 `/root/aads/aads-dashboard`에는 route stats, Registry 컬럼, default 누락 저장 차단이 빠져 있었다.
+- 조치: 실제 대시보드 저장소 `src/app/admin/model-routing/page.tsx`에 P1 UI hardening을 적용하고 `dc91387 fix: apply model routing admin hardening` 커밋으로 push했다.
+- 검증: `npx eslint src/app/admin/model-routing/page.tsx` 통과, `npm run build` 통과, `bash /root/aads/aads-dashboard/deploy.sh` blue-green 배포 성공. 배포 로그 기준 active dashboard는 blue(`3100`), standby green(`3101`)은 같은 릴리스로 동기화 완료, 프론트 QA는 `UNKNOWN` 결과지만 배포 스크립트상 통과 처리.
+- 운영 확인: `docker ps`에서 `aads-dashboard`, `aads-dashboard-green`, `aads-server`, `aads-server-green` 모두 healthy. DB `model_routing_preferences`에는 image/edit_image/video/llm 기본 route가 존재한다.
+
 ## 현재 진행 상태 (2026-05-13) - PC Agent 멀티서비스 CDP 격리
 - 배경: 중국상품소싱, 신상마켓 상품수집/등록, 사방넷 등록 등 여러 업무가 같은 PC Agent Browser Bridge를 동시에 쓰면 기존 전역 CDP 포트가 마지막 실행 세션으로 덮여 다른 업무 탭을 조작할 위험이 있었다.
 - 조치: `pc_agent/commands/browser_auto.py`의 단일 `_ACTIVE_CDP_PORT` 구조를 제거하고 `CDPSessionManager`가 `work_key -> port/profile/pid`를 관리하도록 보강했다. 같은 `work_key`의 기존 CDP만 재사용하고, 다른 업무 또는 외부 CDP가 점유한 포트는 건너뛰며, 포트 풀이 찬 경우 OS 빈 포트로 격리 시도한다.
