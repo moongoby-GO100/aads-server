@@ -109,10 +109,14 @@ class _LocalAgentPage:
     ) -> dict[str, Any]:
         from app.services.pc_agent_manager import pc_agent_manager
 
+        merged = self._params(params)
+        if "work_key" not in merged and hasattr(self._session, "work_key") and self._session.work_key:
+            merged["work_key"] = self._session.work_key
+
         lease_ttl_seconds = int(command_timeout_seconds + LOCAL_AGENT_LEASE_BUFFER_SECONDS)
         result = await pc_agent_manager.execute_routed_command(
             command_type=command_type,
-            params=self._params(params),
+            params=merged,
             agent_id=self._agent_id,
             job_type=f"browser_bridge_{self._session.session_id}",
             required_capabilities=["interactive_browser"],
@@ -125,7 +129,7 @@ class _LocalAgentPage:
         if result.get("status") != "success" and str(result.get("error_code") or "") == "PC_AGENT_OFFLINE":
             active_result = await self._service._execute_pc_agent_route_via_active_api(
                 command_type=command_type,
-                params=self._params(params),
+                params=merged,
                 agent_id=self._agent_id,
                 job_type=f"browser_bridge_{self._session.session_id}",
                 required_capabilities=["interactive_browser"],
@@ -386,6 +390,8 @@ class BrowserBridgeService:
             launch_params["preferred_port"] = int(preferred_port)
         if isolation_id or normalized_work_key:
             launch_params["isolation_id"] = isolation_id or normalized_work_key
+        if normalized_work_key:
+            launch_params["work_key"] = normalized_work_key
 
         routed = await pc_agent_manager.execute_routed_command(
             command_type="browser_launch",

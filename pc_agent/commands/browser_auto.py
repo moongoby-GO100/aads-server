@@ -8,16 +8,89 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import urllib.request
 import uuid
+from dataclasses import dataclass, field
+from time import time as _time
 from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
 CDP_HOST = "localhost"
 CDP_PORT = 9222
-_ACTIVE_CDP_PORT = CDP_PORT
 _MSG_ID = 0
+
+
+@dataclass
+class CDPSession:
+    work_key: str
+    port: int
+    profile_dir: str
+    pid: int = 0
+    connected_at: float = field(default_factory=_time)
+
+
+class CDPSessionManager:
+    _sessions: dict[str, CDPSession] = {}
+    _port_pool: list[int] = [9222, 9333, 9444, 9555, 9666, 9777]
+    _lock = threading.Lock()
+
+    @classmethod
+    def normalize_work_key(cls, work_key: str) -> str:
+        return str(work_key or "general").strip() or "general"
+
+    @classmethod
+    def get_session(cls, work_key: str) -> CDPSession | None:
+        return cls._sessions.get(cls.normalize_work_key(work_key))
+
+    @classmethod
+    def get_by_port(cls, port: int) -> CDPSession | None:
+        with cls._lock:
+            for session in cls._sessions.values():
+                if session.port == port:
+                    return session
+        return None
+
+    @classmethod
+    def allocate_port(
+        cls,
+        work_key: str,
+        preferred: int | None = None,
+        candidates: list[int] | None = None,
+    ) -> int:
+        normalized_work_key = cls.normalize_work_key(work_key)
+        with cls._lock:
+            existing = cls._sessions.get(normalized_work_key)
+            if existing:
+                return existing.port
+            used = {s.port for s in cls._sessions.values()}
+            ordered: list[int] = []
+            if preferred:
+                ordered.append(preferred)
+            ordered.extend(candidates or cls._port_pool)
+            ordered.extend(cls._port_pool)
+            for port in ordered:
+                if port not in used:
+                    return port
+        return _find_free_port()
+
+    @classmethod
+    def register(cls, work_key: str, port: int, profile_dir: str, pid: int = 0) -> CDPSession:
+        normalized_work_key = cls.normalize_work_key(work_key)
+        with cls._lock:
+            session = CDPSession(work_key=normalized_work_key, port=port, profile_dir=profile_dir, pid=pid)
+            cls._sessions[normalized_work_key] = session
+            return session
+
+    @classmethod
+    def release(cls, work_key: str) -> None:
+        with cls._lock:
+            cls._sessions.pop(cls.normalize_work_key(work_key), None)
+
+    @classmethod
+    def get_all(cls) -> dict[str, CDPSession]:
+        return dict(cls._sessions)
 
 
 def _next_id() -> int:
@@ -47,8 +120,16 @@ def _coerce_port(value: Any, default: int = CDP_PORT) -> int:
 
 def _effective_port(params: Dict[str, Any] | None = None) -> int:
     if isinstance(params, dict) and "port" in params:
-        return _coerce_port(params.get("port"), _ACTIVE_CDP_PORT)
-    return _ACTIVE_CDP_PORT
+        return _coerce_port(params.get("port"), CDP_PORT)
+    if isinstance(params, dict):
+        work_key = CDPSessionManager.normalize_work_key(params.get("work_key", "general"))
+        session = CDPSessionManager.get_session(work_key)
+        if session:
+            return session.port
+    general = CDPSessionManager.get_session("general")
+    if general:
+        return general.port
+    return CDP_PORT
 
 
 async def _http_get_json(port: int, path: str, timeout: float = 2.0) -> Any:
@@ -151,7 +232,7 @@ def _candidate_ports(params: Dict[str, Any]) -> list[int]:
 
 async def _get_ws_url(target_idx: int = 0, port: int | None = None) -> str:
     """Chrome 디버그 WS URL 획득 (/json/version 또는 /json)."""
-    resolved_port = int(port or _ACTIVE_CDP_PORT)
+    resolved_port = int(port or CDP_PORT)
     version = await _probe_cdp_version(resolved_port)
     if version is None:
         raise ConnectionError(
@@ -618,8 +699,8 @@ async def browser_tabs(params: Dict[str, Any]) -> Dict[str, Any]:
 
 async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
     """Chrome CDP 전용 세션 시작 (전용 프로필 + 동적 포트 충돌 회피)."""
-    global _ACTIVE_CDP_PORT
     url = params.get("url", "about:blank")
+    work_key = CDPSessionManager.normalize_work_key(str(params.get("work_key", "general")))
 
     # OS별 Chrome 경로
     if sys.platform == "win32":
@@ -644,26 +725,62 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
 
     profile_dir = _resolve_profile_dir(params)
     ports = _candidate_ports(params)
+    preferred = _coerce_port(params.get("preferred_port", params.get("port", CDP_PORT)), CDP_PORT)
     new_window = _as_bool(params.get("new_window", True), default=True)
     ready_timeout = float(params.get("ready_timeout_seconds", 15.0) or 15.0)
 
     try:
         os.makedirs(profile_dir, exist_ok=True)
 
-        for port in ports:
-            existing = await _probe_cdp_version(port)
+        existing_session = CDPSessionManager.get_session(work_key)
+        if existing_session:
+            existing = await _probe_cdp_version(existing_session.port)
             if existing is not None:
-                _ACTIVE_CDP_PORT = port
                 return {
                     "status": "success",
                     "data": {
-                        "message": f"기존 CDP 세션 사용 (port {port})",
-                        "port": port,
-                        "user_data_dir": profile_dir,
+                        "message": f"기존 CDP 세션 사용 (port {existing_session.port})",
+                        "port": existing_session.port,
+                        "user_data_dir": existing_session.profile_dir,
                         "cdp_ready": True,
                         "websocket_debugger_url": existing.get("webSocketDebuggerUrl", ""),
                     },
                 }
+            CDPSessionManager.release(work_key)
+
+        first_port = CDPSessionManager.allocate_port(work_key, preferred=preferred, candidates=ports)
+        ports = [first_port] + [p for p in ports if p != first_port]
+
+        for port in ports:
+            existing = await _probe_cdp_version(port)
+            if existing is not None:
+                owner = CDPSessionManager.get_by_port(port)
+                if owner and owner.work_key == work_key:
+                    CDPSessionManager.register(work_key, port, profile_dir, pid=owner.pid)
+                    return {
+                        "status": "success",
+                        "data": {
+                            "message": f"기존 CDP 세션 사용 (port {port})",
+                            "port": port,
+                            "user_data_dir": profile_dir,
+                            "cdp_ready": True,
+                            "websocket_debugger_url": existing.get("webSocketDebuggerUrl", ""),
+                        },
+                    }
+                if work_key == "general" and owner is None:
+                    CDPSessionManager.register(work_key, port, profile_dir)
+                    return {
+                        "status": "success",
+                        "data": {
+                            "message": f"기존 CDP 세션 사용 (port {port})",
+                            "port": port,
+                            "user_data_dir": profile_dir,
+                            "cdp_ready": True,
+                            "websocket_debugger_url": existing.get("webSocketDebuggerUrl", ""),
+                        },
+                    }
+                # 다른 work_key 또는 외부 CDP가 이미 점유한 포트는 재사용하지 않는다.
+                continue
 
             if await _is_port_open(port):
                 # 열려 있지만 /json/version 미응답이면 다른 포트로 우회
@@ -680,13 +797,13 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
                 cmd.append("--new-window")
             cmd.append(url)
 
-            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             ready = await _wait_cdp_ready(port, ready_timeout)
             if ready is None:
                 continue
 
-            _ACTIVE_CDP_PORT = port
-            logger.info("Chrome CDP 시작 완료 (port=%d profile=%s)", port, profile_dir)
+            CDPSessionManager.register(work_key, port, profile_dir, pid=int(proc.pid or 0))
+            logger.info("Chrome CDP 시작 완료 (port=%d profile=%s work_key=%s)", port, profile_dir, work_key)
             return {
                 "status": "success",
                 "data": {
@@ -697,6 +814,34 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
                     "websocket_debugger_url": ready.get("webSocketDebuggerUrl", ""),
                 },
             }
+
+        if work_key != "general":
+            # 명시적 업무 키는 기존 전역 9222를 훔쳐 쓰지 않고, OS 빈 포트로 한 번 더 격리 시도한다.
+            port = _find_free_port()
+            cmd = [
+                chrome_exe,
+                f"--remote-debugging-port={port}",
+                f"--user-data-dir={profile_dir}",
+                "--no-first-run",
+                "--no-default-browser-check",
+            ]
+            if new_window:
+                cmd.append("--new-window")
+            cmd.append(url)
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            ready = await _wait_cdp_ready(port, ready_timeout)
+            if ready is not None:
+                CDPSessionManager.register(work_key, port, profile_dir, pid=int(proc.pid or 0))
+                return {
+                    "status": "success",
+                    "data": {
+                        "message": f"Chrome CDP 준비 완료 (port {port})",
+                        "port": port,
+                        "user_data_dir": profile_dir,
+                        "cdp_ready": True,
+                        "websocket_debugger_url": ready.get("webSocketDebuggerUrl", ""),
+                    },
+                }
 
         return {
             "status": "error",

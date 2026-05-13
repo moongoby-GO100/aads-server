@@ -291,7 +291,10 @@ async def test_ensure_pc_agent_cdp_registers_local_agent_session(monkeypatch, tm
         storage_states=StorageStateManager(tmp_path),
     )
 
+    captured_kwargs = {}
+
     async def fake_execute_routed_command(**kwargs):
+        captured_kwargs.update(kwargs)
         assert kwargs["command_type"] == "browser_launch"
         assert kwargs["required_capabilities"] == ["interactive_browser"]
         return {
@@ -314,12 +317,16 @@ async def test_ensure_pc_agent_cdp_registers_local_agent_session(monkeypatch, tm
         label="Worker A",
         url="https://aads.newtalk.kr/",
         preferred_port=9333,
+        work_key="ntv2-china-sourcing-admin",
     )
 
     assert session.endpoint.kind == BrowserEndpointKind.LOCAL_AGENT
     assert session.endpoint.metadata["agent_id"] == "ceo-pc"
     assert session.endpoint.metadata["port"] == "9333"
     assert session.endpoint.metadata["cdp_url"] == "pc-agent://ceo-pc/cdp/9333"
+    assert captured_kwargs["params"]["work_key"] == "ntv2-china-sourcing-admin"
+    assert captured_kwargs["params"]["isolation_id"] == "ntv2-china-sourcing-admin"
+    assert session.work_key == "ntv2-china-sourcing-admin"
 
 
 @pytest.mark.asyncio

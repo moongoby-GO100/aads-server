@@ -1,5 +1,12 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-13) - PC Agent 멀티서비스 CDP 격리
+- 배경: 중국상품소싱, 신상마켓 상품수집/등록, 사방넷 등록 등 여러 업무가 같은 PC Agent Browser Bridge를 동시에 쓰면 기존 전역 CDP 포트가 마지막 실행 세션으로 덮여 다른 업무 탭을 조작할 위험이 있었다.
+- 조치: `pc_agent/commands/browser_auto.py`의 단일 `_ACTIVE_CDP_PORT` 구조를 제거하고 `CDPSessionManager`가 `work_key -> port/profile/pid`를 관리하도록 보강했다. 같은 `work_key`의 기존 CDP만 재사용하고, 다른 업무 또는 외부 CDP가 점유한 포트는 건너뛰며, 포트 풀이 찬 경우 OS 빈 포트로 격리 시도한다.
+- 조치: `app/browser_bridge/service.py`의 PC Agent `browser_launch` 파라미터에 정규화된 `work_key`를 주입하고, 이후 local-agent 브라우저 명령에도 세션 `work_key`가 자동 전달되도록 유지했다. `ensure_work_session(work_key=...)`는 active 세션을 바꾸지 않는 업무별 전용 브릿지 세션으로 동작한다.
+- 테스트: 실행 중 컨테이너에 수정 파일을 반영한 뒤 `docker exec aads-server python -m pytest tests/unit/test_cdp_session_manager.py tests/unit/test_browser_bridge.py -q` 37개 통과. `docker exec aads-server python -m ruff check pc_agent/commands/browser_auto.py app/browser_bridge/service.py tests/unit/test_cdp_session_manager.py tests/unit/test_browser_bridge.py` 통과. `docker exec aads-server python -m py_compile pc_agent/commands/browser_auto.py app/browser_bridge/service.py` 통과. `rg -n "_ACTIVE_CDP_PORT|global _ACTIVE_CDP_PORT"` 결과 없음.
+- 운영 지침: 중국상품소싱은 `browser_work_key="ntv2-china-sourcing-admin"`, 신상마켓 등록은 `browser_work_key="ntv2-sinsang-registration"`, 사방넷 등록은 별도 `browser_work_key`를 지정해 같은 PC Agent 인스턴스 안에서 분리 사용한다.
+
 ## 현재 진행 상태 (2026-05-13)
 - **AADS-MEDIA-ADMIN-DB-CONFIG-P1-20260513 — DB 기반 미디어/LLM 모델 라우팅 hardening**:
   - 변경 파일: `app/services/media_generation_service.py`, `migrations/090_media_llm_routing_admin_hardening.sql`, `aads-dashboard/src/app/admin/model-routing/page.tsx`, `tests/unit/test_media_generation_service.py`, `tests/unit/test_model_routing_admin_static.py`, `HANDOVER.md`.
