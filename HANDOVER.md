@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-13 10:12 KST) - Browser Bridge work_key별 CDP 포트 재검증/보강
+- 배경: NTV2 중국상품소싱 검수 중 `browser_work_key` 세션은 분리됐지만 실제 local-agent metadata가 같은 PC Agent `port=9222`를 공유해 신상마켓 세션과 중국소싱 세션이 충돌할 수 있었다.
+- 조치: `app/browser_bridge/service.py`에 기본 업무 포트 매핑을 추가했다. `ntv2-sinsang-registration=9222`, `ntv2-sinsang-direct-registration=9333`, `ntv2-china-sourcing-admin=9444`, `ntv2-vvic-scrape=9555`를 우선 요청하고, 기존 work_key 세션이 다른 work_key와 같은 `agent_id/port`를 공유하면 재사용하지 않고 재생성하도록 보강했다.
+- 조치: PC Agent가 여전히 다른 work_key 소유 CDP 포트를 반환하면 `BrowserBridgeError`로 차단해 세션 registry가 잘못된 포트에 재바인딩되지 않게 했다. `app/api/hot_reload.py`에는 `app.browser_bridge.` prefix를 허용해 API 컨테이너 재시작 없이 브릿지 서비스 모듈을 반영할 수 있게 했다.
+- 검증: `python3 -m py_compile app/api/hot_reload.py app/browser_bridge/service.py pc_agent/commands/browser_auto.py` 통과. `python3 -m pytest tests/unit/test_browser_bridge.py tests/unit/test_cdp_session_manager.py -q` 39개 통과. active 8100/green 8102 모두 `app.api.hot_reload`, `app.browser_bridge.service` hot-reload 성공 및 `/api/v1/health` OK.
+- 운영 확인: `browser_connect(action="ensure_work_session")` 기준 같은 PC Agent `2e9379a1-fed`에서 `ntv2-sinsang-registration`은 `port=9666`, `ntv2-china-sourcing-admin`은 `port=9444`, `ntv2-vvic-scrape`는 `port=9555`로 분리됐다. active session은 기존 `bb-949cbd0dfef4`에서 바뀌지 않았다.
+- 주의: 기존 과거 세션 registry에는 `work_key`가 비어 있거나 metadata만 남은 9222 세션들이 있어 status 목록에 보일 수 있다. 신규 호출은 top-level `work_key` 세션을 우선하며 공유 포트 감지 시 재생성한다.
+
 ## 현재 진행 상태 (2026-05-13 09:51~09:52 KST) - 미디어 라우팅/어드민 운영 재검증
 - 배경: `runner-aafc4150`, `runner-64aadb0d`는 둘 다 `aads-dashboard:deploy_failed`로 남아 있었지만, 실제 운영 파일과 컨테이너 상태가 일치하는지 재검증이 필요했다.
 - 확인: `read_remote_file` 기준 `app/services/media_generation_service.py`, `migrations/090_media_llm_routing_admin_hardening.sql`, `aads-dashboard/src/app/admin/model-routing/page.tsx`가 운영 서버에 반영돼 있었다.
