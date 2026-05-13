@@ -1,5 +1,12 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-13 16:25 KST) - AADS Blue-Green 미진 항목 즉시 보정
+- 배경: AADS 무중단 배포 전수 검수 후 남은 권장/미진 항목을 재확인했다. 실측 기준 nginx upstream은 API green `8102` active, dashboard green `3101` active였지만 `.active_port/.active_container` marker는 API blue `8100/aads-server`로 어긋나 있었다.
+- 조치: `.active_port=8102`, `.active_container=aads-server-green`으로 marker를 nginx upstream 기준에 맞게 정합했다. active green에는 실행 스트림 4건이 있어 컨테이너 재빌드/재시작은 수행하지 않았다.
+- 조치: `docker-compose.prod.yml`의 `aads-server-green`, `aads-dashboard-green` restart policy를 `unless-stopped`로 변경했다. 런타임에도 `docker update --restart unless-stopped`를 적용해 재부팅/daemon 재시작 후 standby 슬롯이 사라지는 문제를 줄인다.
+- 확인: `deploy.sh`는 upstream의 non-backup 라인을 우선 읽어 active marker를 보정하고, BG 전환 후 `sync_standby_slot_after_drain`로 old API 슬롯을 drain 후 재빌드한다. dashboard `deploy.sh`도 전환 후 이전 슬롯을 재빌드해 warm standby 동기화한다.
+- 검증: `docker compose -f docker-compose.prod.yml config`, `nginx -t`, `127.0.0.1:8100/8102` API health, `127.0.0.1:3100/3101` dashboard `/login`, 외부 `https://aads.newtalk.kr/api/v1/health`와 `/login` 모두 `200` 확인. restart policy inspect에서 green API/dashboard 모두 `unless-stopped`, marker는 `8102/aads-server-green`으로 upstream active와 일치한다.
+
 ## 현재 진행 상태 (2026-05-13 13:31 KST) - AADS-185 chat/settings model classification UI
 - 배경: CEO 요청으로 chat 모델 드롭다운에서 provider/type 구분을 즉시 강화하고, 같은 분류를 admin settings 모델 UI에도 반영해야 했다. 기존 chat UI는 registry row 위에 static selector label이 우선되는 구간이 있었고, runner settings는 hard-coded grouped model list에 의존하고 있었다.
 - 조치: `aads-dashboard/src/lib/modelRegistryPresentation.ts`를 추가해 registry 기반 provider/category/family 표시, legacy stored value(`codex:*`, `litellm:*`) 해석, grouped label 생성 로직을 공통화했다.

@@ -166,7 +166,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: aads-server-green
-    restart: "no"
+    restart: unless-stopped
     stop_grace_period: 30s
     ports:
       # Host-only API port. Public traffic must enter through nginx :443.
@@ -328,7 +328,7 @@ services:
       context: ../aads-dashboard
       dockerfile: Dockerfile
     container_name: aads-dashboard-green
-    restart: "no"
+    restart: unless-stopped
     ports:
       # Host-only dashboard port. Public traffic must enter through nginx :443.
       - "127.0.0.1:3101:3101"
