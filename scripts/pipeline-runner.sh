@@ -266,7 +266,13 @@ classify_error() {
     elif echo "$combined" | grep -qi "authentication\|unauthorized\| 401 "; then
         echo "auth_error"
     elif echo "$combined" | grep -qi "rate limit\|429\|quota exceeded"; then
-        echo "rate_limit"
+        local rate_line=""
+        rate_line=$(printf '%s\n' "$combined" | grep -iE -m1 "rate limit|429|quota exceeded|too many requests|you've hit your limit" | head -c 80)
+        if [[ -n "${rate_line//[[:space:]]/}" ]]; then
+            echo "rate_limit: ${rate_line}"
+        else
+            echo "rate_limit"
+        fi
     elif echo "$combined" | grep -qi "No space left\|ENOSPC\|disk full"; then
         echo "disk_full"
     elif echo "$combined" | grep -qi "SyntaxError\|syntax error"; then
@@ -994,16 +1000,27 @@ ${safe_instruction}"
         local out_tail=""
         [[ -f "$output_file" ]] && out_tail=$(tail -100 "$output_file" | head -c 2000)
 
-        local safe_output safe_feedback safe_detail
+        local safe_output safe_feedback safe_error_detail
         safe_output=$(sql_escape "$output")
         safe_feedback=$(sql_escape "exit=$exit_code type=$error_type (${attempt}회 시도)
 --- stderr (마지막 2KB) ---
 $err_content
 --- stdout (마지막 100줄) ---
 $out_tail")
+        local error_detail_msg="${error_type}"
+        if [[ "$error_type" == *": "* ]]; then
+            :
+        elif [[ -n "$err_content" ]]; then
+            local first_line
+            first_line=$(printf '%s\n' "$err_content" | head -1 | tr '\r' ' ' | head -c 80)
+            if [[ -n "${first_line//[[:space:]]/}" ]]; then
+                error_detail_msg="${error_type}: ${first_line}"
+            fi
+        fi
+        safe_error_detail=$(sql_escape "$error_detail_msg")
 
         db_update "UPDATE pipeline_jobs SET status='error', phase='error',
-                   error_detail='${error_type}',
+                   error_detail=${safe_error_detail},
                    result_output=${safe_output},
                    review_feedback=COALESCE(review_feedback,'') || E'\n' || ${safe_feedback},
                    updated_at=NOW() WHERE job_id='${job_id}';"
@@ -1033,8 +1050,16 @@ $out_tail")
 
     if [[ -z "${git_diff//[[:space:]]/}" ]]; then
         log "  NO_CHANGES job=$job_id target=$target_repo — awaiting_approval 차단, cancelled 처리"
+        local no_change_reason="no_changes"
+        if [[ -f "$output_file" ]]; then
+            local out_first
+            out_first=$(head -1 "$output_file" 2>/dev/null | tr '\r' ' ' | head -c 60)
+            if [[ -n "${out_first//[[:space:]]/}" ]]; then
+                no_change_reason="no_changes: ${out_first}"
+            fi
+        fi
         db_update "UPDATE pipeline_jobs SET status='cancelled', phase='no_changes',
-                   error_detail='no_changes',
+                   error_detail=$(sql_escape "$no_change_reason"),
                    result_output=$(sql_escape "$output"),
                    review_feedback=COALESCE(review_feedback,'') || E'\n[Runner Guard] 변경사항 0건 — 실제 대상 저장소에 반영된 diff가 없어 승인 대기로 보내지 않음',
                    updated_at=NOW() WHERE job_id='${job_id}';"

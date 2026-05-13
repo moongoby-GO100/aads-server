@@ -131,3 +131,6 @@ p = pathlib.Path('/root/aads/aads-dashboard/src/app/
 
 ## [2026-05-13 14:36:05 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
 - Chat-Direct 수정: patch:         // 서버에서 스트리밍 아님 + 프론트 streaming=→        // 서버에서 스트리밍 아님 + 프론트 streaming=
+
+## [2026-05-13 14:48:17 KST] [aads-dashboard] ../aads-dashboard/run-deploy.sh
+- Chat-Direct 수정: write: ../aads-dashboard/run-deploy.sh

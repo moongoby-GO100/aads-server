@@ -721,3 +721,9 @@ MAX
 
 ## [2026-05-13 14:03:59 KST] [aads-server] pc_agent/VERSION
 - Chat-Direct 수정: write: pc_agent/VERSION
+
+## [2026-05-13 14:48:27 KST] [aads-server] docs/CHANGELOG-dashboard-direct.md
+- Chat-Direct 수정: run_remote_command: docker inspect aads-dashboard --format '{{.Config.Image}} {{.Created}}'
+
+## [2026-05-13 14:49:25 KST] [aads-server] scripts/rebuild_dashboard.sh
+- Chat-Direct 수정: write: scripts/rebuild_dashboard.sh
