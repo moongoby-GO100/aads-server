@@ -1,5 +1,12 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-13 09:51~09:52 KST) - 미디어 라우팅/어드민 운영 재검증
+- 배경: `runner-aafc4150`, `runner-64aadb0d`는 둘 다 `aads-dashboard:deploy_failed`로 남아 있었지만, 실제 운영 파일과 컨테이너 상태가 일치하는지 재검증이 필요했다.
+- 확인: `read_remote_file` 기준 `app/services/media_generation_service.py`, `migrations/090_media_llm_routing_admin_hardening.sql`, `aads-dashboard/src/app/admin/model-routing/page.tsx`가 운영 서버에 반영돼 있었다.
+- DB 확인: `model_routing_preferences`에 image/edit_image/video/llm 기본 route가 존재하고, `media_generation_jobs` 테이블도 존재한다. `llm_models`에는 미디어/LLM 관련 대상 model_id 11종 이상이 등록돼 있다.
+- 운영 조치: `bash /root/aads/aads-dashboard/deploy.sh`를 2026-05-13 09:51 KST에 수동 재실행했고, green 슬롯 기동 → nginx reload → external `/login` 200 → standby blue 동기화 → QA `UNKNOWN`까지 모두 성공했다.
+- 현재 상태: 2026-05-13 09:52 KST 기준 `aads-dashboard`, `aads-dashboard-green`, `aads-server`, `aads-server-green` 모두 `healthy`, 외부 `https://aads.newtalk.kr/login`은 `200 OK`다.
+
 ## 현재 진행 상태 (2026-05-13) - Model Routing Admin 실제 대시보드 반영 보정
 - 배경: `runner-64aadb0d` P1 산출물은 AADS 서버 저장소의 `aads-dashboard/src/app/admin/model-routing/page.tsx`에는 반영됐지만, 실제 배포 대상 저장소 `/root/aads/aads-dashboard`에는 route stats, Registry 컬럼, default 누락 저장 차단이 빠져 있었다.
 - 조치: 실제 대시보드 저장소 `src/app/admin/model-routing/page.tsx`에 P1 UI hardening을 적용하고 `dc91387 fix: apply model routing admin hardening` 커밋으로 push했다.
