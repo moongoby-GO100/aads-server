@@ -41,7 +41,11 @@ class _Conn:
         if "FROM model_routing_preferences" in query:
             return self.default_routes.get(args[0])
         if "FROM llm_models" in query:
-            return self.model_routes.get(args[0])
+            if args:
+                return self.model_routes.get(args[0])
+            if "prefix_family" in query:
+                return self.model_routes.get("imagen-4.0-*")
+            return None
         if "INSERT INTO media_generation_jobs" in query:
             job_id = args[0]
             row = {
@@ -202,6 +206,32 @@ async def test_route_precedence_explicit_db_default_then_fallback():
 
 
 @pytest.mark.asyncio
+async def test_imagen_prefix_explicit_model_uses_db_family_without_replacing_model():
+    conn = _Conn()
+    conn.model_routes["imagen-4.0-*"] = {
+        "provider": "google",
+        "model_id": "imagen-4.0-generate-001",
+        "execution_model_id": "imagen-4.0-generate-001",
+        "is_enabled": True,
+        "is_selectable": True,
+        "metadata": {"routing_note": "prefix family"},
+        "capabilities": {"prefix_family": "imagen-4.0-*"},
+    }
+    svc = MediaGenerationService(
+        settings_obj=_settings(google_key="google-test"),
+        pool_provider=lambda: _Pool(conn),
+    )
+
+    route = await svc.resolve_route("image", model_id="imagen-4.0-custom-preview")
+
+    assert route.source == "explicit"
+    assert route.provider == "google"
+    assert route.model_id == "imagen-4.0-custom-preview"
+    assert route.supported is True
+    assert route.availability == "available"
+
+
+@pytest.mark.asyncio
 async def test_disabled_db_default_returns_clear_status_before_credentials():
     conn = _Conn()
     conn.default_routes["image"] = {
@@ -310,6 +340,7 @@ def test_media_generation_migration_contains_idempotent_job_table():
 
 def test_model_routing_migration_seeds_ceo_models_and_preferences():
     sql = Path("migrations/089_model_routing_preferences.sql").read_text()
+    hardening_sql = Path("migrations/090_media_llm_routing_admin_hardening.sql").read_text()
 
     assert "CREATE TABLE IF NOT EXISTS model_routing_preferences" in sql
     for model_id in (
@@ -323,5 +354,7 @@ def test_model_routing_migration_seeds_ceo_models_and_preferences():
         "claude-opus-4-7",
         "gemini-3.1-pro-preview",
     ):
-        assert model_id in sql
+        assert model_id in sql + hardening_sql
     assert "ON CONFLICT (route_key, provider, model_id)" in sql
+    assert "CREATE TABLE IF NOT EXISTS runner_model_config" in hardening_sql
+    assert "ON CONFLICT (size) DO NOTHING" in hardening_sql

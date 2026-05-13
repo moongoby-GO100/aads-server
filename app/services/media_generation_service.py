@@ -54,6 +54,10 @@ VALID_JOB_KINDS = {"image", "edit_image", "video"}
 VALID_JOB_STATUSES = {"queued", "running", "succeeded", "failed", "cancelled"}
 
 
+def _is_imagen_4_model(model_id: str) -> bool:
+    return str(model_id or "").strip().lower().startswith("imagen-4.0-")
+
+
 @dataclass(frozen=True)
 class MediaRoute:
     kind: str
@@ -166,7 +170,7 @@ class MediaGenerationService:
         lowered = model.lower()
         if lowered in {"gpt-image-2", "gpt-image-1", "dall-e-3"}:
             return {"kind": "image", "provider": "openai", "model_id": model}
-        if lowered.startswith("imagen-4.0-"):
+        if _is_imagen_4_model(lowered):
             return {"kind": "image", "provider": "google", "model_id": model}
         if lowered == "gemini-3.1-flash-image-preview":
             return {"kind": "image", "provider": "gemini", "model_id": model}
@@ -198,11 +202,14 @@ class MediaGenerationService:
             return None
         try:
             async with pool.acquire() as conn:
+                select_columns = """
+                    provider, model_id, execution_model_id, execution_backend,
+                    is_active, is_selectable, is_executable,
+                    verification_status, metadata, capabilities
+                """
                 row = await conn.fetchrow(
-                    """
-                    SELECT provider, model_id, execution_model_id, execution_backend,
-                           is_active, is_selectable, is_executable,
-                           verification_status, metadata, capabilities
+                    f"""
+                    SELECT {select_columns}
                     FROM llm_models
                     WHERE (model_id = $1 OR execution_model_id = $1)
                     ORDER BY updated_at DESC NULLS LAST, id DESC
@@ -210,7 +217,31 @@ class MediaGenerationService:
                     """,
                     model_id,
                 )
-                return _normalize_job_row(row) if row else None
+                if row:
+                    return _normalize_job_row(row)
+
+                if _is_imagen_4_model(model_id):
+                    row = await conn.fetchrow(
+                        f"""
+                        SELECT {select_columns}
+                        FROM llm_models
+                        WHERE provider = 'google'
+                          AND (
+                              capabilities->>'prefix_family' = 'imagen-4.0-*'
+                              OR model_id LIKE 'imagen-4.0-%'
+                          )
+                        ORDER BY CASE WHEN model_id = 'imagen-4.0-generate-001' THEN 0 ELSE 1 END,
+                                 is_active DESC, is_executable DESC,
+                                 updated_at DESC NULLS LAST, id DESC
+                        LIMIT 1
+                        """
+                    )
+                    if row:
+                        data = _normalize_job_row(row)
+                        data["matched_by_prefix"] = True
+                        data["requested_model_id"] = model_id
+                        return data
+                return None
         except Exception:
             return None
 
@@ -315,10 +346,11 @@ class MediaGenerationService:
 
         db_route = await self._fetch_model_route(requested_model) if requested_model else None
         if db_route:
-            requested_provider = str(db_route.get("provider") or requested_provider).strip().lower()
-            requested_model = str(
-                db_route.get("execution_model_id") or db_route.get("model_id") or requested_model
-            ).strip()
+            requested_provider = str(requested_provider or db_route.get("provider") or "").strip().lower()
+            if not db_route.get("matched_by_prefix"):
+                requested_model = str(
+                    db_route.get("execution_model_id") or db_route.get("model_id") or requested_model
+                ).strip()
             enabled = self._db_route_enabled(db_route)
             route_note = self._db_route_note(db_route)
         elif not explicit_request:
@@ -381,7 +413,7 @@ class MediaGenerationService:
         if kind == "image":
             return provider in {"openai", "google"} and (
                 model_id in {"gpt-image-2", "gpt-image-1", "dall-e-3"}
-                or model_id.startswith("imagen-4.0-")
+                or _is_imagen_4_model(model_id)
             )
         if kind == "edit_image":
             return provider == "openai" and model_id in {"gpt-image-2", "gpt-image-1"}

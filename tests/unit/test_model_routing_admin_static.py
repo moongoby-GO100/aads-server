@@ -23,7 +23,18 @@ def test_model_routing_admin_page_exposes_required_model_fields():
     api_source = DASHBOARD_API.read_text()
     sidebar_source = SIDEBAR.read_text()
 
-    for text in ("이미지", "동영상", "LLM", "provider", "model_id", "availability", "is_enabled", "is_default"):
+    for text in (
+        "이미지",
+        "동영상",
+        "LLM",
+        "provider",
+        "model_id",
+        "availability",
+        "is_enabled",
+        "is_default",
+        "routeStats",
+        "Registry",
+    ):
         assert text in source
     assert "getModelRoutingPreferences" in api_source
     assert "updateModelRoutingPreferences" in api_source

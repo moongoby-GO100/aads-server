@@ -554,3 +554,9 @@ _S
 
 ## [2026-05-13 08:52:51 KST] [aads-server] reports/newtalk-ai-fashion-influencer-plan-v1.html
 - Chat-Direct 수정: run_remote_command: cp /var/www/aads-public/reports/newtalk-ai-fashion-influencer-plan-v1.html /root
+
+## [2026-05-13 09:10:01 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "CREATE INDEX IF NOT EXISTS id
+
+## [2026-05-13 09:14:34 KST] [aads-server] docs/plans/AADS-PC-AGENT-MULTI-SERVICE.md
+- Chat-Direct 수정: write: docs/plans/AADS-PC-AGENT-MULTI-SERVICE.md

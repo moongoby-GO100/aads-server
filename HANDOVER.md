@@ -1,5 +1,18 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-13)
+- **AADS-MEDIA-ADMIN-DB-CONFIG-P1-20260513 — DB 기반 미디어/LLM 모델 라우팅 hardening**:
+  - 변경 파일: `app/services/media_generation_service.py`, `migrations/090_media_llm_routing_admin_hardening.sql`, `aads-dashboard/src/app/admin/model-routing/page.tsx`, `tests/unit/test_media_generation_service.py`, `tests/unit/test_model_routing_admin_static.py`, `HANDOVER.md`.
+  - 백엔드: explicit `imagen-4.0-*` 요청이 DB registry의 `prefix_family='imagen-4.0-*'` row를 참조하되 요청 model_id를 보존하도록 보강했다. explicit provider가 있으면 DB 조회 provider로 덮지 않고, DB default/preference 미구성 시 기존 env/config fallback과 `NOT_CONFIGURED` graceful path를 유지한다.
+  - DB migration/seed: `migrations/090_media_llm_routing_admin_hardening.sql` 추가. `model_routing_preferences`와 `runner_model_config`를 idempotent하게 보강하고, 이미지 `gpt-image-2`, `imagen-4.0-*`, `gemini-3.1-flash-image-preview`, 동영상 `sora-2`, `sora-2-pro`, `veo-3.1-generate-preview`, LLM `gpt-5.5`, `claude-opus-4-7`, `gemini-3.1-pro-preview`를 `llm_models`/routing/chat preference/runner 기본 seed에 반영한다. 기존 `settings_ui` 변경은 덮지 않고 누락값만 보강한다.
+  - 대시보드: `/admin/model-routing`에서 route별 available/blocked/disabled 요약, registry active/executable/selectable 상태를 표시하고, route에 등록 모델이 있는데 default가 없으면 저장 전 차단한다.
+  - 검증 SQL:
+    - `SELECT provider, model_id, verification_status, is_selectable, is_executable, capabilities FROM llm_models WHERE model_id IN ('gpt-image-2','imagen-4.0-generate-001','gemini-3.1-flash-image-preview','sora-2','sora-2-pro','veo-3.1-generate-preview','gpt-5.5','claude-opus-4-7','gemini-3.1-pro-preview') ORDER BY provider, model_id;`
+    - `SELECT route_key, provider, model_id, is_enabled, is_default, notes FROM model_routing_preferences ORDER BY route_key, display_order;`
+    - `SELECT size, models, updated_by FROM runner_model_config WHERE size IN ('XS','S','M','L','XL','AI_REVIEW') ORDER BY size;`
+  - 검증 명령: `python3 -m py_compile app/services/media_generation_service.py app/api/llm_models.py` 통과. `python3 -m pytest tests/unit/test_media_generation_service.py tests/unit/test_model_routing_admin_static.py -q` → 14 passed. `git diff --check` 통과.
+  - Git/반영 상태: commit 생성 완료. 기본 `.git` metadata가 read-only라 이 worktree의 writable `.git-local` metadata로 커밋했다. push/deploy는 수행하지 않음.
+
 ## 현재 진행 상태 (2026-05-12)
 - **MediaGenerationService 및 이미지/동영상 공통 job 구조 P0 (AADS-MEDIA-GENERATION-P0-REWORK-20260512)**:
   - 조치: `app/services/media_generation_service.py`를 신설해 `generate_image`, `edit_image`, `generate_video`, `video_status`, `video_download`를 공통 job 구조로 통합했다. 기존 이미지 성공 응답의 `url/provider/prompt` 형태는 유지하고 `job_id/status/model_id`만 추가했다.

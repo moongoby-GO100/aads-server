@@ -1339,3 +1339,20 @@ tests/smoke_test_result_*
 ## [2026-05-13 08:51:55 KST] [GO100] backend/app/services/go100/ai/realtime_guardrails.py
 - Chat-Direct 수정: patch:     positions = [dict(row) for row in po→    positions = [dict(row) for row in po
 - finalize: pending
+
+## [2026-05-13 09:09:53 KST] [GO100] backend/app/services/go100/ai/realtime_guardrails.py
+- Chat-Direct 수정: patch:     positions = [dict(row) for row in po→    positions = [dict(row) for row in po
+- finalize: pending
+
+## [2026-05-13 09:09:56 KST] [GO100] backend/app/services/go100/ai/realtime_guardrails.py
+- Chat-Direct 수정: patch:     holdings = (guardrail.preflight or {→    holdings = (guardrail.preflight or {
+- finalize: pending
+
+## [2026-05-13 09:09:58 KST] [GO100] backend/app/services/go100/ai/prompt_layers/tasks.py
+- Chat-Direct 수정: patch: _PORTFOLIO_STATUS_TEMPLATE = """## 보유종목/→_PORTFOLIO_STATUS_TEMPLATE = """## 보유종목/
+- finalize: pending
+
+## [2026-05-13 09:10:16 KST] [GO100] backend/app/routers/go100/ai_router.py
+- Chat-Direct 수정: patch:         stocks.append({
+            "nam→        broker = row.get("broker_type") 
+- finalize: pending
