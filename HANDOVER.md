@@ -1011,3 +1011,10 @@
 - 배경: nginx upstream은 `8102` green 슬롯이 active였지만 `.active_port`가 `8100`으로 남아 `deploy.sh bluegreen`이 실제 active 슬롯을 전환 대상으로 오판했다. upstream 파일에는 API와 WS upstream의 non-backup 라인이 각각 있어 기존 `grep -c` 기준이 2줄을 보고 상태 파일 fallback으로 떨어졌다.
 - 조치: `deploy.sh`의 active port 판정을 non-backup 포트의 고유값(`sort -u`) 기준으로 바꾸고, active container도 판정된 포트에서 직접 동기화하도록 수정했다. 이후 standby `8100`의 stale active task 1건은 DB상 완료 응답 저장을 확인한 뒤 `AADS_DEPLOY_ALLOW_BUSY_TARGET=true`로 standby 한정 rebuild를 허용해 blue-green 전환을 완료했다.
 - 검증: `bash -n deploy.sh` 통과. `bash /root/aads/aads-server/deploy.sh bluegreen` 1차는 잘못된 상태 파일 때문에 target busy로 중단됐고, 패치 후 `AADS_DEPLOY_ALLOW_BUSY_TARGET=true bash /root/aads/aads-server/deploy.sh bluegreen`은 Phase 0.5~6 모두 통과했다. 배포 후 `.active_port=8100`, `.active_container=aads-server`, `curl http://127.0.0.1:8100/api/v1/health` 및 `curl https://aads.newtalk.kr/api/v1/health` 모두 `status=ok` 확인.
+
+## 2026-05-13 12:22 KST - DeepSeek 채팅 선택 응답 중단 원인 보정
+
+- 배경: 채팅창에서 DeepSeek V4 Pro/Flash를 선택하면 프론트와 DB 레지스트리는 `deepseek-v4-pro`/`deepseek-v4-flash`를 활성 모델로 노출하지만, 실제 LiteLLM 런타임에는 `deepseek-reasoner`/`deepseek-chat`만 등록되어 있었다. 직접 호출 결과 `deepseek-v4-pro`는 LiteLLM 400 Invalid model, `deepseek-reasoner`는 200 OK였다.
+- 조치: `app/services/model_selector.py`에 DeepSeek 표시 모델과 LiteLLM 실행 모델을 분리하는 런타임 alias를 추가했다. 화면/비용/응답 모델 표시는 `deepseek-v4-*`를 유지하고, LiteLLM 호출은 `deepseek-v4-pro -> deepseek-reasoner`, `deepseek-v4-flash -> deepseek-chat`으로 보낸다.
+- 조치: `app/services/model_registry.py` 템플릿도 같은 실행 alias를 쓰도록 변경해 향후 레지스트리 재동기화 시 `execution_model_id`가 실제 LiteLLM 모델명으로 저장되게 했다.
+- 검증: `python3 -m py_compile app/services/model_selector.py app/services/model_registry.py` 통과. `pytest -q tests/unit/test_model_selector_dynamic_routing.py` 20개 통과. 운영 DB `llm_models` DeepSeek 4건의 `execution_model_id`를 `deepseek-v4-pro -> deepseek-reasoner`, `deepseek-v4-flash -> deepseek-chat`으로 보정했다. 컨테이너 내부 `call_stream(model_override='deepseek-v4-pro')` 실호출에서 `delta='OK'`, `done.model='deepseek-v4-pro'` 확인.
