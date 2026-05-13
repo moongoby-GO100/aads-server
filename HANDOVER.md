@@ -1044,4 +1044,5 @@
 - 조치: `app/services/chat_todo_service.py`에 세션 범위 보호가 있는 `update_session_todo_item`, `delete_session_todo_item`, `clear_session_todos`, `retry_failed_session_todos`를 추가했다. `app/routers/chat.py`에는 `PATCH/DELETE /chat/sessions/{session_id}/todos/{todo_id}`, `POST /chat/sessions/{session_id}/todos/clear`, `POST /chat/sessions/{session_id}/todos/retry-failed`를 추가했다.
 - 조치: Dashboard `src/app/chat/page.tsx` TODO 패널에 실패 재시도, 완료 비우기, 실패 비우기, 대기 비우기, 항목별 재시도/제외/숨김 버튼을 연결했다. 기본 표시는 진행/대기 우선 정책을 유지한다.
 - 검증: `python3 -m py_compile app/models/chat.py app/services/chat_todo_service.py app/routers/chat.py` 통과. `pytest -q tests/unit/test_chat_todo_service.py` 7개 통과. Dashboard `npx tsc --noEmit --pretty false` 통과. `npx eslint src/app/chat/page.tsx` 에러 0개, 기존 경고 21개.
-- 배포: CEO 지시에 따라 서버/대시보드 커밋, 푸시, blue-green 무중단 배포 및 사후 헬스 검증 대상으로 진행한다.
+- 배포: 서버 커밋 `5319e7f`와 대시보드 커밋 `7b55c87`을 `origin/main`에 푸시했다. 서버 blue-green 배포 후 nginx upstream은 API `8100` active / `8102` backup이며, `https://aads.newtalk.kr/api/v1/health`가 `status=ok`를 반환했다. 대시보드 blue-green 배포 후 nginx upstream은 dashboard `3100` active / `3101` backup이며, `https://aads.newtalk.kr/login`이 HTTP 200을 반환했다.
+- 주의: 대시보드 `bash deploy.sh`는 빌드와 슬롯 전환 이후 `aads-dashboard` 컨테이너명 충돌 메시지로 종료코드 1을 반환해 스크립트의 후속 자동 QA 단계는 실행되지 않았다. 사후 검증 기준으로 `aads-dashboard`와 `aads-dashboard-green`은 모두 healthy이고 외부 `/login` 및 `/chat` 리다이렉트가 정상이다.
