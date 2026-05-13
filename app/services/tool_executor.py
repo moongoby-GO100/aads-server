@@ -2902,7 +2902,7 @@ class ToolExecutor:
                     pc_rows = await conn.fetch(
                         """
                         SELECT job_id AS task_id, project, instruction AS title,
-                               'pipeline_c' AS pipeline, phase, status, created_at
+                               'pipeline_c' AS pipeline, phase, status, error_detail, created_at
                         FROM pipeline_jobs
                         WHERE chat_session_id = $1
                           AND (
@@ -2919,7 +2919,7 @@ class ToolExecutor:
                     pc_rows = await conn.fetch(
                         """
                         SELECT job_id AS task_id, project, instruction AS title,
-                               'pipeline_c' AS pipeline, phase, status, created_at
+                               'pipeline_c' AS pipeline, phase, status, error_detail, created_at
                         FROM pipeline_jobs
                         WHERE status IN ('running','awaiting_approval','queued')
                            OR updated_at > NOW() - interval '1 hour'
@@ -2939,13 +2939,46 @@ class ToolExecutor:
                     pipeline_b_included = True
             tasks = []
             for r in list(pc_rows) + list(pb_rows):
+                phase = r["phase"] or ""
+                status = r["status"] or ""
+                error_detail = ""
+                try:
+                    error_detail = r["error_detail"] or ""
+                except (KeyError, IndexError):
+                    error_detail = ""
+                display_status = phase if phase in {
+                    "no_changes", "dedup_blocked", "blocked_dependency",
+                    "build_fail", "deploy_failed", "review_failed",
+                    "auth_unavailable", "tool_timeout",
+                } else (error_detail.split(":", 1)[0] if error_detail else status)
+                if display_status not in {
+                    "no_changes", "dedup_blocked", "blocked_dependency",
+                    "build_fail", "deploy_failed", "review_failed",
+                    "auth_unavailable", "tool_timeout",
+                }:
+                    display_status = status
+                if display_status == "no_changes":
+                    status_group = "complete"
+                elif display_status in {"dedup_blocked", "blocked_dependency"}:
+                    status_group = "blocked"
+                elif display_status in {"build_fail", "deploy_failed", "review_failed", "auth_unavailable", "tool_timeout"}:
+                    status_group = "action_required"
+                elif status in {"running", "claimed", "queued"}:
+                    status_group = "active"
+                elif status in {"done", "approved", "rejected_done"}:
+                    status_group = "complete"
+                else:
+                    status_group = "action_required" if status == "error" else "unknown"
                 tasks.append({
                     "task_id": r["task_id"],
                     "project": r["project"] or "",
                     "title": (r["title"] or "")[:150],
                     "pipeline": r["pipeline"],
-                    "phase": r["phase"] or "",
-                    "status": r["status"] or "",
+                    "phase": phase,
+                    "status": status,
+                    "display_status": display_status,
+                    "status_group": status_group,
+                    "error_detail": error_detail,
                 })
             # stall 감지
             from app.services.task_logger import get_stalled_tasks

@@ -4398,7 +4398,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             if scope == "current_session" and session_id:
                 pc_rows = await conn.fetch(
                     "SELECT job_id AS task_id, project, instruction AS title, "
-                    "'pipeline_c' AS pipeline, phase, status, created_at "
+                    "'pipeline_c' AS pipeline, phase, status, error_detail, created_at "
                     "FROM pipeline_jobs "
                     "WHERE chat_session_id = $1 "
                     "AND (status IN ('running','awaiting_approval','queued') "
@@ -4409,13 +4409,51 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             else:
                 pc_rows = await conn.fetch(
                     "SELECT job_id AS task_id, project, instruction AS title, "
-                    "'pipeline_c' AS pipeline, phase, status, created_at "
+                    "'pipeline_c' AS pipeline, phase, status, error_detail, created_at "
                     "FROM pipeline_jobs "
                     "WHERE status IN ('running','awaiting_approval','queued') "
                     "OR updated_at > NOW() - interval '1 hour' "
                     "ORDER BY created_at DESC LIMIT 10"
                 )
-        tasks = [{"task_id": r["task_id"], "project": r["project"] or "", "title": (r["title"] or "")[:150], "pipeline": r["pipeline"], "phase": r["phase"] or "", "status": r["status"] or ""} for r in pc_rows]
+        tasks = []
+        classified = {
+            "no_changes", "dedup_blocked", "blocked_dependency",
+            "build_fail", "deploy_failed", "review_failed",
+            "auth_unavailable", "tool_timeout",
+        }
+        for r in pc_rows:
+            phase = r["phase"] or ""
+            status = r["status"] or ""
+            try:
+                error_detail = r["error_detail"] or ""
+            except (KeyError, IndexError):
+                error_detail = ""
+            display_status = phase if phase in classified else (error_detail.split(":", 1)[0] if error_detail else status)
+            if display_status not in classified:
+                display_status = status
+            if display_status == "no_changes":
+                status_group = "complete"
+            elif display_status in {"dedup_blocked", "blocked_dependency"}:
+                status_group = "blocked"
+            elif display_status in classified:
+                status_group = "action_required"
+            elif status in {"running", "claimed", "queued"}:
+                status_group = "active"
+            elif status in {"done", "approved", "rejected_done"}:
+                status_group = "complete"
+            else:
+                status_group = "action_required" if status == "error" else "unknown"
+            tasks.append({
+                "task_id": r["task_id"],
+                "project": r["project"] or "",
+                "title": (r["title"] or "")[:150],
+                "pipeline": r["pipeline"],
+                "phase": phase,
+                "status": status,
+                "display_status": display_status,
+                "status_group": status_group,
+                "error_detail": error_detail,
+            })
         return json.dumps(
             {
                 "tasks": tasks,

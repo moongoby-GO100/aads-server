@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-13 10:25 KST) - Runner reliability hardening 직접 조치
+- 배경: `runner-d32984ff`/`runner-a72c6c24`는 변경 누락 또는 git diff 불일치로 반려됐고, 재작업 `runner-3fc39db2`는 로그 없이 진행 중이라 직접 조치로 전환했다.
+- 조치: `app/api/pipeline_runner.py`에서 동일 `project + instruction_hash + parallel_group(scope)` 활성 작업이 있으면 새 요청을 `cancelled/dedup_blocked` row로 저장하고, 원본 job/status/phase와 `auto_retryable=false` 로그를 남기도록 보강했다. 실패/누락 의존 작업은 API 제출 시점에 `blocked_dependency`로 터미널 종결한다.
+- 조치: `no_changes`, `dedup_blocked`, `blocked_dependency`, `build_fail`, `deploy_failed`, `review_failed`, `auth_unavailable`, `tool_timeout`을 `display_status/status_group/auto_retryable`로 분리하고, `check_task_status`와 Admin Task Board 집계가 같은 분류를 노출하도록 맞췄다.
+- 조치: `running/claimed` 작업인데 `task_logs`가 비어 있으면 API 응답에 `health_probe={task_logs: empty, runner_pid, proc_alive, systemd: not_checked_by_api}`를 노출한다. 외부 systemd 명령은 API에서 실행하지 않는다.
+- 추가: `migrations/091_pipeline_runner_reliability_statuses.sql`로 기존 terminal-but-not-error 상태를 보정하고, 기존 `instruction_hash` 단독 unique index를 `project + instruction_hash + COALESCE(parallel_group,'')` scope unique index로 교체한다.
+- 검증 예정: `python3 -m py_compile`, `pytest -q tests/unit/test_pipeline_runner_reliability.py tests/unit/test_runner_scope_defaults.py`, `bash -n scripts/pipeline-runner.sh`, `git diff --check`.
+
 ## 현재 진행 상태 (2026-05-13 10:12 KST) - Browser Bridge work_key별 CDP 포트 재검증/보강
 - 배경: NTV2 중국상품소싱 검수 중 `browser_work_key` 세션은 분리됐지만 실제 local-agent metadata가 같은 PC Agent `port=9222`를 공유해 신상마켓 세션과 중국소싱 세션이 충돌할 수 있었다.
 - 조치: `app/browser_bridge/service.py`에 기본 업무 포트 매핑을 추가했다. `ntv2-sinsang-registration=9222`, `ntv2-sinsang-direct-registration=9333`, `ntv2-china-sourcing-admin=9444`, `ntv2-vvic-scrape=9555`를 우선 요청하고, 기존 work_key 세션이 다른 work_key와 같은 `agent_id/port`를 공유하면 재사용하지 않고 재생성하도록 보강했다.

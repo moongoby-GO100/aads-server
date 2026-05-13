@@ -21,6 +21,11 @@ _TASK_BOARD_STATUSES = {
     "no_changes",
     "dedup_blocked",
     "blocked_dependency",
+    "build_fail",
+    "deploy_failed",
+    "review_failed",
+    "auth_unavailable",
+    "tool_timeout",
     "error",
 }
 _TASK_BOARD_STATUS_SQL = (
@@ -28,6 +33,11 @@ _TASK_BOARD_STATUS_SQL = (
     "WHEN phase = 'no_changes' OR error_detail = 'no_changes' THEN 'no_changes' "
     "WHEN phase = 'dedup_blocked' OR error_detail LIKE 'dedup_blocked%' THEN 'dedup_blocked' "
     "WHEN phase = 'blocked_dependency' OR error_detail LIKE 'blocked_dependency%' THEN 'blocked_dependency' "
+    "WHEN phase = 'build_fail' OR error_detail LIKE 'build_fail%' THEN 'build_fail' "
+    "WHEN phase = 'deploy_failed' OR error_detail LIKE 'deploy_failed%' THEN 'deploy_failed' "
+    "WHEN phase = 'review_failed' OR error_detail LIKE 'review_failed%' THEN 'review_failed' "
+    "WHEN phase = 'auth_unavailable' OR error_detail LIKE 'auth_unavailable%' THEN 'auth_unavailable' "
+    "WHEN phase = 'tool_timeout' OR error_detail LIKE 'tool_timeout%' THEN 'tool_timeout' "
     "WHEN status = 'queued' THEN 'queued' "
     "WHEN status IN ('running', 'claimed') THEN 'running' "
     "WHEN status = 'awaiting_approval' THEN 'awaiting_approval' "
@@ -1832,6 +1842,11 @@ async def get_admin_task_stats():
                 COUNT(*) FILTER (WHERE board_status = 'no_changes') AS no_changes,
                 COUNT(*) FILTER (WHERE board_status = 'dedup_blocked') AS dedup_blocked,
                 COUNT(*) FILTER (WHERE board_status = 'blocked_dependency') AS blocked_dependency,
+                COUNT(*) FILTER (WHERE board_status = 'build_fail') AS build_fail,
+                COUNT(*) FILTER (WHERE board_status = 'deploy_failed') AS deploy_failed,
+                COUNT(*) FILTER (WHERE board_status = 'review_failed') AS review_failed,
+                COUNT(*) FILTER (WHERE board_status = 'auth_unavailable') AS auth_unavailable,
+                COUNT(*) FILTER (WHERE board_status = 'tool_timeout') AS tool_timeout,
                 COUNT(*) FILTER (WHERE board_status = 'error') AS error,
                 COUNT(*) AS total
             FROM jobs
@@ -1846,6 +1861,11 @@ async def get_admin_task_stats():
         "no_changes": row["no_changes"] or 0,
         "dedup_blocked": row["dedup_blocked"] or 0,
         "blocked_dependency": row["blocked_dependency"] or 0,
+        "build_fail": row["build_fail"] or 0,
+        "deploy_failed": row["deploy_failed"] or 0,
+        "review_failed": row["review_failed"] or 0,
+        "auth_unavailable": row["auth_unavailable"] or 0,
+        "tool_timeout": row["tool_timeout"] or 0,
         "error": row["error"] or 0,
         "total": row["total"] or 0,
     }

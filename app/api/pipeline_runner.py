@@ -31,6 +31,39 @@ _ACTIVE_PIPELINE_STATUSES = (
     "deploying",
     "rolling_back",
 )
+_TERMINAL_BLOCKING_STATUSES = (
+    "error",
+    "rejected",
+    "rejected_done",
+    "cancelled",
+    "build_fail",
+    "deploy_failed",
+    "review_failed",
+    "auth_unavailable",
+    "tool_timeout",
+    "dedup_blocked",
+    "blocked_dependency",
+)
+_DISPLAY_STATUS_LABELS = {
+    "no_changes": "변경 없음",
+    "dedup_blocked": "중복 차단",
+    "blocked_dependency": "의존 차단",
+    "build_fail": "빌드 실패",
+    "deploy_failed": "배포 실패",
+    "review_failed": "검수 실패",
+    "auth_unavailable": "인증 필요",
+    "tool_timeout": "도구 타임아웃",
+}
+_DISPLAY_STATUS_GROUPS = {
+    "no_changes": "complete",
+    "dedup_blocked": "blocked",
+    "blocked_dependency": "blocked",
+    "build_fail": "action_required",
+    "deploy_failed": "action_required",
+    "review_failed": "action_required",
+    "auth_unavailable": "action_required",
+    "tool_timeout": "action_required",
+}
 
 
 def _max_concurrent_per_project() -> int:
@@ -61,13 +94,20 @@ async def _lock_instruction_hash(conn, instruction_hash: str) -> None:
     )
 
 
-async def _find_active_duplicate(conn, instruction_hash: str):
+def _parallel_scope(parallel_group: str | None) -> str:
+    return (parallel_group or "").strip()
+
+
+async def _find_active_duplicate(conn, project: str, instruction_hash: str, parallel_group: str = ""):
+    scope = _parallel_scope(parallel_group)
     return await conn.fetchrow(
         """
-        SELECT job_id, status, phase
+        SELECT job_id, status, phase, parallel_group
         FROM pipeline_jobs
-        WHERE instruction_hash = $1
-          AND status = ANY($2::text[])
+        WHERE project = $1
+          AND instruction_hash = $2
+          AND COALESCE(parallel_group, '') = $3
+          AND status = ANY($4::text[])
         ORDER BY
           CASE status
             WHEN 'running' THEN 0
@@ -82,9 +122,103 @@ async def _find_active_duplicate(conn, instruction_hash: str):
           created_at ASC
         LIMIT 1
         """,
+        project,
         instruction_hash,
+        scope,
         list(_ACTIVE_PIPELINE_STATUSES),
     )
+
+
+async def _record_dedup_blocked(conn, *, job_id: str, req: "JobSubmitRequest",
+                                instruction_hash: str, existing) -> str:
+    detail = (
+        f"dedup_blocked: existing job {existing['job_id']} "
+        f"is {existing['status']}/{existing['phase']}"
+    )
+    await conn.execute(
+        """
+        INSERT INTO pipeline_jobs
+          (job_id, project, instruction, instruction_hash, chat_session_id,
+           status, phase, max_cycles, size, parallel_group, depends_on,
+           error_detail, review_feedback, logs, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5,
+                'cancelled', 'dedup_blocked', $6, $7, $8, $9,
+                $10, $11,
+                jsonb_build_array(jsonb_build_object(
+                  'ts', NOW()::text,
+                  'event', 'dedup_blocked',
+                  'existing_job_id', $12,
+                  'existing_status', $13,
+                  'existing_phase', $14,
+                  'parallel_scope', $15,
+                  'auto_retryable', false
+                )),
+                NOW(), NOW())
+        """,
+        job_id,
+        req.project,
+        req.instruction,
+        instruction_hash,
+        req.session_id,
+        req.max_cycles,
+        req.size,
+        req.parallel_group or None,
+        req.depends_on or None,
+        detail,
+        f"[Runner Guard] {detail}; auto_retryable=false",
+        existing["job_id"],
+        existing["status"],
+        existing["phase"],
+        _parallel_scope(req.parallel_group),
+    )
+    logger.info("pipeline_runner.submit_dedup_blocked",
+                blocked_job_id=job_id,
+                existing_job_id=existing["job_id"],
+                instruction_hash=instruction_hash,
+                parallel_scope=_parallel_scope(req.parallel_group))
+    return detail
+
+
+async def _record_blocked_dependency(conn, *, job_id: str, req: "JobSubmitRequest",
+                                     instruction_hash: str, dep_status: str) -> str:
+    detail = f"blocked_dependency: parent {req.depends_on} is {dep_status}"
+    await conn.execute(
+        """
+        INSERT INTO pipeline_jobs
+          (job_id, project, instruction, instruction_hash, chat_session_id,
+           status, phase, max_cycles, size, parallel_group, depends_on,
+           error_detail, review_feedback, logs, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5,
+                'cancelled', 'blocked_dependency', $6, $7, $8, $9,
+                $10, $11,
+                jsonb_build_array(jsonb_build_object(
+                  'ts', NOW()::text,
+                  'event', 'blocked_dependency',
+                  'depends_on', $12,
+                  'upstream_status', $13,
+                  'auto_retryable', false
+                )),
+                NOW(), NOW())
+        """,
+        job_id,
+        req.project,
+        req.instruction,
+        instruction_hash,
+        req.session_id,
+        req.max_cycles,
+        req.size,
+        req.parallel_group or None,
+        req.depends_on or None,
+        detail,
+        f"[Runner Guard] {detail}; auto_retryable=false",
+        req.depends_on,
+        dep_status,
+    )
+    logger.info("pipeline_runner.submit_blocked_dependency",
+                blocked_job_id=job_id,
+                depends_on=req.depends_on,
+                upstream_status=dep_status)
+    return detail
 
 
 async def _get_model_for_size(conn, size: str) -> str:
@@ -285,19 +419,57 @@ async def promote_next_queued(conn, project: str) -> str | None:
     return None
 
 
-def _runner_display_status(status: str, phase: str | None, error_detail: str | None) -> dict[str, str]:
+def _runner_display_status(status: str, phase: str | None, error_detail: str | None) -> dict[str, object]:
     """UI가 terminal-but-not-error 상태를 빨간 실패로만 표시하지 않도록 분류한다."""
     phase = phase or ""
     error_detail = error_detail or ""
-    if phase == "no_changes" or error_detail == "no_changes":
-        return {"display_status": "no_changes", "status_label": "변경 없음"}
-    if phase == "dedup_blocked" or error_detail.startswith("dedup_blocked"):
-        return {"display_status": "dedup_blocked", "status_label": "중복 차단"}
-    if phase == "blocked_dependency" or error_detail.startswith("blocked_dependency"):
-        return {"display_status": "blocked_dependency", "status_label": "의존 차단"}
+    candidates = (phase, status, error_detail.split(":", 1)[0])
+    for candidate in candidates:
+        if candidate in _DISPLAY_STATUS_LABELS:
+            return {
+                "display_status": candidate,
+                "status_label": _DISPLAY_STATUS_LABELS[candidate],
+                "status_group": _DISPLAY_STATUS_GROUPS[candidate],
+                "auto_retryable": candidate == "tool_timeout",
+            }
     if status == "cancelled":
-        return {"display_status": "cancelled", "status_label": "종결"}
-    return {"display_status": status, "status_label": status}
+        return {"display_status": "cancelled", "status_label": "종결",
+                "status_group": "blocked", "auto_retryable": False}
+    group = "active" if status in ("queued", "claimed", "running", "deploying", "rolling_back") else "unknown"
+    if status == "awaiting_approval":
+        group = "action_required"
+    elif status in ("done", "approved", "rejected_done"):
+        group = "complete"
+    elif status in ("error", "rejected"):
+        group = "action_required"
+    return {"display_status": status, "status_label": status,
+            "status_group": group, "auto_retryable": False}
+
+
+async def _runner_health_probe(conn, row) -> dict | None:
+    status = _record_get(row, "status") or ""
+    if status not in ("running", "claimed"):
+        return None
+    job_id = _record_get(row, "job_id") or ""
+    logs_row = await conn.fetchrow(
+        "SELECT EXISTS(SELECT 1 FROM task_logs WHERE task_id = $1 LIMIT 1) AS has_logs",
+        job_id,
+    )
+    if logs_row and logs_row["has_logs"]:
+        return None
+    pid = _record_get(row, "runner_pid")
+    proc_alive = None
+    if pid:
+        try:
+            proc_alive = os.path.exists(f"/proc/{int(pid)}")
+        except (TypeError, ValueError):
+            proc_alive = False
+    return {
+        "task_logs": "empty",
+        "runner_pid": pid,
+        "proc_alive": proc_alive,
+        "systemd": "not_checked_by_api",
+    }
 
 
 @router.post("/pipeline/jobs", response_model=JobSubmitResponse, tags=["pipeline-runner"])
@@ -317,17 +489,24 @@ async def submit_job(req: JobSubmitRequest):
                 await _lock_instruction_hash(conn, instruction_hash)
                 # AADS-239: 중복 재사용 — 기존 작업 활용 (죽이기 → 재사용)
                 # Step 1: 동일 hash + 활성 상태 → 기존 작업 정보 반환
-                existing = await _find_active_duplicate(conn, instruction_hash)
+                existing = await _find_active_duplicate(
+                    conn,
+                    req.project,
+                    instruction_hash,
+                    req.parallel_group,
+                )
                 if existing:
-                    logger.info("pipeline_runner.submit_dedup_reused",
-                                requested_job_id=job_id,
-                                existing_job_id=existing["job_id"],
-                                status=existing["status"],
-                                instruction_hash=instruction_hash)
+                    detail = await _record_dedup_blocked(
+                        conn,
+                        job_id=job_id,
+                        req=req,
+                        instruction_hash=instruction_hash,
+                        existing=existing,
+                    )
                     return JobSubmitResponse(
-                        job_id=existing["job_id"],
-                        status="active_exists",
-                        message=f"이미 진행 중인 작업이 있습니다: {existing['job_id']} (현재 {existing['phase']}). 해당 작업을 계속 진행합니다.",
+                        job_id=job_id,
+                        status="dedup_blocked",
+                        message=f"{detail}. 기존 작업을 계속 진행합니다.",
                     )
                 # Step 2: 동일 hash + error + 2시간 내 → 기존 작업 queued로 리셋하여 재시도
                 failed = await conn.fetchrow(
@@ -377,10 +556,32 @@ async def submit_job(req: JobSubmitRequest):
                         req.depends_on,
                     )
                     if not dep_row:
-                        raise HTTPException(status_code=400, detail=f"의존 작업을 찾을 수 없습니다: {req.depends_on}")
+                        detail = await _record_blocked_dependency(
+                            conn,
+                            job_id=job_id,
+                            req=req,
+                            instruction_hash=instruction_hash,
+                            dep_status="missing",
+                        )
+                        return JobSubmitResponse(
+                            job_id=job_id,
+                            status="blocked_dependency",
+                            message=detail,
+                        )
                     # P1-B: 의존 작업이 이미 실패 상태이면 즉시 거부
-                    if dep_row["status"] in ("error", "rejected", "rejected_done", "cancelled"):
-                        raise HTTPException(status_code=400, detail=f"의존 작업이 이미 실패 상태입니다: {req.depends_on} ({dep_row['status']})")
+                    if dep_row["status"] in _TERMINAL_BLOCKING_STATUSES:
+                        detail = await _record_blocked_dependency(
+                            conn,
+                            job_id=job_id,
+                            req=req,
+                            instruction_hash=instruction_hash,
+                            dep_status=dep_row["status"],
+                        )
+                        return JobSubmitResponse(
+                            job_id=job_id,
+                            status="blocked_dependency",
+                            message=detail,
+                        )
                 await conn.execute(
                     """
                     INSERT INTO pipeline_jobs
@@ -452,7 +653,8 @@ async def list_jobs(
             f"""
             SELECT job_id, project, instruction, status, phase, cycle,
                    error_detail, created_at, updated_at,
-                   started_at, depends_on, chat_session_id, model, worker_model, actual_model, size
+                   started_at, depends_on, chat_session_id, model, worker_model,
+                   actual_model, size, runner_pid
             FROM pipeline_jobs
             {where}
             ORDER BY created_at DESC
@@ -461,27 +663,32 @@ async def list_jobs(
             *params, limit,
         )
 
-    return [
-        {
-            "job_id": r["job_id"],
-            "project": r["project"],
-            "instruction": r["instruction"][:200],
-            "status": r["status"],
-            "phase": r["phase"],
-            "cycle": r["cycle"],
-            "error_detail": _record_get(r, "error_detail"),
-            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
-            "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
-            "started_at": r["started_at"].isoformat() if _record_get(r, "started_at") else None,
-            "depends_on": _record_get(r, "depends_on"),
-            "model": _record_get(r, "model") or "",
-            "worker_model": _record_get(r, "worker_model") or "",
-            "actual_model": _record_get(r, "actual_model") or "",
-            "size": _record_get(r, "size") or "M",
-            **_runner_display_status(r["status"], r["phase"], _record_get(r, "error_detail")),
-        }
-        for r in rows
-    ]
+    results = []
+    async with pool.acquire() as conn:
+        for r in rows:
+            item = {
+                "job_id": r["job_id"],
+                "project": r["project"],
+                "instruction": r["instruction"][:200],
+                "status": r["status"],
+                "phase": r["phase"],
+                "cycle": r["cycle"],
+                "error_detail": _record_get(r, "error_detail"),
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+                "started_at": r["started_at"].isoformat() if _record_get(r, "started_at") else None,
+                "depends_on": _record_get(r, "depends_on"),
+                "model": _record_get(r, "model") or "",
+                "worker_model": _record_get(r, "worker_model") or "",
+                "actual_model": _record_get(r, "actual_model") or "",
+                "size": _record_get(r, "size") or "M",
+                **_runner_display_status(r["status"], r["phase"], _record_get(r, "error_detail")),
+            }
+            health_probe = await _runner_health_probe(conn, r)
+            if health_probe:
+                item["health_probe"] = health_probe
+            results.append(item)
+    return results
 
 
 @router.get("/pipeline/jobs/{job_id}", tags=["pipeline-runner"])
@@ -501,7 +708,7 @@ async def get_job(job_id: str):
     if not row:
         raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다")
 
-    return {
+    result = {
         "job_id": row["job_id"],
         "project": row["project"],
         "instruction": row["instruction"],
@@ -522,6 +729,11 @@ async def get_job(job_id: str):
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
         "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
     }
+    async with pool.acquire() as conn:
+        health_probe = await _runner_health_probe(conn, row)
+    if health_probe:
+        result["health_probe"] = health_probe
+    return result
 
 
 @router.post("/pipeline/jobs/{job_id}/notify", tags=["pipeline-runner"])
@@ -789,23 +1001,58 @@ async def submit_batch(req: BatchSubmitRequest):
                     await _lock_instruction_hash(conn, instruction_hash)
 
                     # AADS-239: 멱등성 체크 (submit_job과 동일 로직)
-                    # Step 1: 동일 hash + 활성 상태 → 기존 작업 재사용
-                    existing = await _find_active_duplicate(conn, instruction_hash)
+                    # Step 1: 동일 hash + 동일 parallel_group 활성 상태 → blocked 기록
+                    existing = await _find_active_duplicate(conn, req.project, instruction_hash, pg)
                     if existing:
-                        key_to_job_id[item.key] = existing["job_id"]
-                        logger.info("pipeline_runner.batch_submit_dedup_reused",
-                                    key=item.key,
-                                    requested_job_id=job_id,
-                                    existing_job_id=existing["job_id"],
-                                    status=existing["status"],
-                                    instruction_hash=instruction_hash)
+                        detail = (
+                            f"dedup_blocked: existing job {existing['job_id']} "
+                            f"is {existing['status']}/{existing['phase']}"
+                        )
+                        await conn.execute(
+                            """
+                            INSERT INTO pipeline_jobs
+                              (job_id, project, instruction, instruction_hash, chat_session_id,
+                               status, phase, max_cycles, model, size, worker_model,
+                               model_override_reason, parallel_group, depends_on,
+                               error_detail, review_feedback, logs, created_at, updated_at)
+                            VALUES ($1, $2, $3, $4, $5,
+                                    'cancelled', 'dedup_blocked', $6, $7, $8, $9,
+                                    $10, $11, $12,
+                                    $13, $14,
+                                    jsonb_build_array(jsonb_build_object(
+                                      'ts', NOW()::text,
+                                      'event', 'dedup_blocked',
+                                      'existing_job_id', $15,
+                                      'parallel_scope', $16,
+                                      'auto_retryable', false
+                                    )),
+                                    NOW(), NOW())
+                            """,
+                            job_id,
+                            req.project,
+                            item.instruction,
+                            instruction_hash,
+                            req.session_id,
+                            req.max_cycles,
+                            model,
+                            size,
+                            worker_model or None,
+                            worker_model_reason or None,
+                            pg,
+                            depends_on,
+                            detail,
+                            f"[Runner Guard] {detail}; auto_retryable=false",
+                            existing["job_id"],
+                            _parallel_scope(pg),
+                        )
                         results.append({
                             "key": item.key,
-                            "job_id": existing["job_id"],
+                            "job_id": job_id,
                             "model": model,
                             "depends_on": depends_on,
                             "skipped": True,
-                            "reason": f"활성 작업 재사용: {existing['phase']}",
+                            "status": "dedup_blocked",
+                            "reason": detail,
                         })
                         continue
 
