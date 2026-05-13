@@ -72,6 +72,11 @@ class _TodoConn:
             return row
         if normalized == "SELECT * FROM chat_todo_items WHERE id = $1":
             return self.items.get(str(args[0]))
+        if normalized == "SELECT * FROM chat_todo_items WHERE id = $1 AND session_id = $2":
+            row = self.items.get(str(args[0]))
+            if row and str(row["session_id"]) == str(args[1]):
+                return row
+            return None
         if normalized.startswith("UPDATE chat_todo_items SET title = $2"):
             todo_id, title, status, metadata_json, completed_at = args
             row = self.items[str(todo_id)]
@@ -83,11 +88,25 @@ class _TodoConn:
                 "completed_at": completed_at,
             })
             return row
+        if normalized.startswith("DELETE FROM chat_todo_items WHERE id = $1 AND session_id = $2"):
+            todo_id, session_id = args
+            row = self.items.get(str(todo_id))
+            if row and str(row["session_id"]) == str(session_id):
+                return self.items.pop(str(todo_id))
+            return None
         raise AssertionError(f"unexpected fetchrow query: {normalized}")
 
     async def fetch(self, query: str, *args):
         normalized = " ".join(query.split())
-        if normalized.startswith("UPDATE chat_todo_items SET status = $3"):
+        if normalized.startswith("DELETE FROM chat_todo_items WHERE session_id = $1"):
+            session_id, statuses = args
+            deleted = []
+            for key, row in list(self.items.items()):
+                if str(row["session_id"]) == str(session_id) and row["status"] in set(statuses):
+                    deleted.append({"id": row["id"]})
+                    self.items.pop(key)
+            return deleted
+        if normalized.startswith("UPDATE chat_todo_items SET status = $3") and "make_interval" in normalized:
             session_id, from_status, to_status, stale_minutes = args
             cutoff = _utcnow() - timedelta(minutes=int(stale_minutes))
             rows = []
@@ -101,6 +120,20 @@ class _TodoConn:
                     row["metadata"] = {
                         **row.get("metadata", {}),
                         "stale_reset_reason": "in_progress_timeout",
+                    }
+                    row["updated_at"] = _utcnow()
+                    row["completed_at"] = None
+                    rows.append(dict(row))
+            return rows
+        if normalized.startswith("UPDATE chat_todo_items SET status = $3"):
+            session_id, from_status, to_status = args
+            rows = []
+            for row in self.items.values():
+                if str(row["session_id"]) == str(session_id) and row["status"] == from_status:
+                    row["status"] = to_status
+                    row["metadata"] = {
+                        **row.get("metadata", {}),
+                        "retried_from": from_status,
                     }
                     row["updated_at"] = _utcnow()
                     row["completed_at"] = None
@@ -241,6 +274,76 @@ async def test_cleanup_stale_in_progress_resets_and_promotes_next_item():
     assert listed[0]["title"] == "오래된 진행 항목"
     assert listed[0]["status"] == svc.TODO_STATUS_IN_PROGRESS
     assert listed[0]["metadata"]["stale_cleanup_promoted"] is True
+
+
+@pytest.mark.asyncio
+async def test_user_actions_update_delete_clear_and_retry_by_session_scope():
+    conn = _TodoConn()
+    session_a = str(uuid.uuid4())
+    session_b = str(uuid.uuid4())
+    created_a = await svc.create_todo_items(
+        session_id=session_a,
+        message_id=str(uuid.uuid4()),
+        execution_id=str(uuid.uuid4()),
+        titles=["대기 항목", "실패 항목", "완료 항목"],
+        source="user_turn",
+        conn=conn,
+    )
+    await svc.create_todo_items(
+        session_id=session_b,
+        message_id=str(uuid.uuid4()),
+        execution_id=str(uuid.uuid4()),
+        titles=["다른 세션 항목"],
+        source="user_turn",
+        conn=conn,
+    )
+    await svc.mark_failed(str(created_a[1]["id"]), conn=conn)
+    await svc.mark_complete(str(created_a[2]["id"]), conn=conn)
+
+    skipped = await svc.update_session_todo_item(
+        session_id=session_a,
+        todo_id=str(created_a[0]["id"]),
+        status=svc.TODO_STATUS_SKIPPED,
+        metadata={"reason": "manual_hide"},
+        conn=conn,
+    )
+    assert skipped["status"] == svc.TODO_STATUS_SKIPPED
+    assert skipped["metadata"]["reason"] == "manual_hide"
+
+    cross_session = await svc.update_session_todo_item(
+        session_id=session_b,
+        todo_id=str(created_a[0]["id"]),
+        status=svc.TODO_STATUS_PENDING,
+        conn=conn,
+    )
+    assert cross_session is None
+
+    retried = await svc.retry_failed_session_todos(session_id=session_a, conn=conn)
+    assert retried == 1
+    listed = await svc.list_todo_items(session_id=session_a, conn=conn)
+    assert any(
+        item["title"] == "실패 항목"
+        and item["status"] in {svc.TODO_STATUS_PENDING, svc.TODO_STATUS_IN_PROGRESS}
+        for item in listed
+    )
+
+    deleted = await svc.delete_session_todo_item(
+        session_id=session_a,
+        todo_id=str(created_a[2]["id"]),
+        conn=conn,
+    )
+    assert deleted["title"] == "완료 항목"
+
+    cleared = await svc.clear_session_todos(
+        session_id=session_a,
+        statuses=[svc.TODO_STATUS_SKIPPED],
+        conn=conn,
+    )
+    assert cleared == 1
+    remaining_a = await svc.list_todo_items(session_id=session_a, conn=conn)
+    remaining_b = await svc.list_todo_items(session_id=session_b, conn=conn)
+    assert {item["title"] for item in remaining_a} == {"실패 항목"}
+    assert {item["title"] for item in remaining_b} == {"다른 세션 항목"}
 
 
 def test_completion_gate_detects_missing_items():

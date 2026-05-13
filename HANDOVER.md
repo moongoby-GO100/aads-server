@@ -1037,3 +1037,11 @@
 - 조치: `app/services/model_selector.py`에 DeepSeek 표시 모델과 LiteLLM 실행 모델을 분리하는 런타임 alias를 추가했다. 화면/비용/응답 모델 표시는 `deepseek-v4-*`를 유지하고, LiteLLM 호출은 `deepseek-v4-pro -> deepseek-reasoner`, `deepseek-v4-flash -> deepseek-chat`으로 보낸다.
 - 조치: `app/services/model_registry.py` 템플릿도 같은 실행 alias를 쓰도록 변경해 향후 레지스트리 재동기화 시 `execution_model_id`가 실제 LiteLLM 모델명으로 저장되게 했다.
 - 검증: `python3 -m py_compile app/services/model_selector.py app/services/model_registry.py` 통과. `pytest -q tests/unit/test_model_selector_dynamic_routing.py` 20개 통과. 운영 DB `llm_models` DeepSeek 4건의 `execution_model_id`를 `deepseek-v4-pro -> deepseek-reasoner`, `deepseek-v4-flash -> deepseek-chat`으로 보정했다. 컨테이너 내부 `call_stream(model_override='deepseek-v4-pro')` 실호출에서 `delta='OK'`, `done.model='deepseek-v4-pro'` 확인.
+
+## 2026-05-13 16:25 KST - 채팅 TODO 목록 수동 정리 액션 추가
+
+- 배경: 채팅창 상단 TODO 패널은 조회/접기/진행 필터만 제공해 `pending`, `failed`, `completed`, `skipped` 항목을 사용자가 직접 정리하거나 실패 항목을 재시도할 수 없었다.
+- 조치: `app/services/chat_todo_service.py`에 세션 범위 보호가 있는 `update_session_todo_item`, `delete_session_todo_item`, `clear_session_todos`, `retry_failed_session_todos`를 추가했다. `app/routers/chat.py`에는 `PATCH/DELETE /chat/sessions/{session_id}/todos/{todo_id}`, `POST /chat/sessions/{session_id}/todos/clear`, `POST /chat/sessions/{session_id}/todos/retry-failed`를 추가했다.
+- 조치: Dashboard `src/app/chat/page.tsx` TODO 패널에 실패 재시도, 완료 비우기, 실패 비우기, 대기 비우기, 항목별 재시도/제외/숨김 버튼을 연결했다. 기본 표시는 진행/대기 우선 정책을 유지한다.
+- 검증: `python3 -m py_compile app/models/chat.py app/services/chat_todo_service.py app/routers/chat.py` 통과. `pytest -q tests/unit/test_chat_todo_service.py` 7개 통과. Dashboard `npx tsc --noEmit --pretty false` 통과. `npx eslint src/app/chat/page.tsx` 에러 0개, 기존 경고 21개.
+- 배포: CEO 지시에 따라 서버/대시보드 커밋, 푸시, blue-green 무중단 배포 및 사후 헬스 검증 대상으로 진행한다.

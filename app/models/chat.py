@@ -179,6 +179,27 @@ class ChatTodoItemOut(BaseModel):
     completed_at: Optional[datetime] = None
 
 
+class ChatTodoUpdateRequest(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=300)
+    status: Optional[str] = Field(
+        None,
+        description="pending | in_progress | completed | failed | skipped",
+    )
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ChatTodoBulkActionRequest(BaseModel):
+    statuses: List[str] = Field(
+        default_factory=list,
+        description="삭제/정리 대상 상태 목록. 비우면 completed/failed/skipped.",
+    )
+
+
+class ChatTodoBulkActionOut(BaseModel):
+    affected: int
+    statuses: List[str] = Field(default_factory=list)
+
+
 # ─── AADS-188D: Diff 승인 ────────────────────────────────────────────────────
 
 class ApproveDiffRequest(BaseModel):

@@ -25,9 +25,12 @@ from app.models.chat import (
     ArtifactOut,
     ArtifactUpdate,
     BranchCreateRequest,
+    ChatTodoBulkActionOut,
+    ChatTodoBulkActionRequest,
     DriveFileOut,
     ExecutionOut,
     ChatTodoItemOut,
+    ChatTodoUpdateRequest,
     MessageOut,
     MessageUpdateRequest,
     ResearchOut,
@@ -2054,6 +2057,78 @@ async def get_session_todos(
     except Exception as exc:
         logger.warning("chat_todo_list_failed", session_id=str(session_id), error=str(exc))
         raise HTTPException(status_code=500, detail="failed to load session todos") from exc
+
+
+@router.patch("/chat/sessions/{session_id}/todos/{todo_id}", response_model=ChatTodoItemOut, tags=["chat-todo"])
+async def update_session_todo(session_id: UUID, todo_id: UUID, req: ChatTodoUpdateRequest):
+    """세션별 TODO 상태/제목을 사용자 액션으로 갱신한다."""
+    from app.services.chat_todo_service import update_session_todo_item
+
+    if req.status is None and req.title is None and not req.metadata:
+        raise HTTPException(status_code=400, detail="no todo update requested")
+    try:
+        row = await update_session_todo_item(
+            session_id=str(session_id),
+            todo_id=str(todo_id),
+            status=req.status,
+            title=req.title,
+            metadata=req.metadata,
+            source="chat_ui",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.warning("chat_todo_update_failed", session_id=str(session_id), todo_id=str(todo_id), error=str(exc))
+        raise HTTPException(status_code=500, detail="failed to update session todo") from exc
+    if not row:
+        raise _NOT_FOUND("todo")
+    return row
+
+
+@router.delete("/chat/sessions/{session_id}/todos/{todo_id}", response_model=ChatTodoItemOut, tags=["chat-todo"])
+async def delete_session_todo(session_id: UUID, todo_id: UUID):
+    """세션별 TODO 한 건을 목록에서 제거한다."""
+    from app.services.chat_todo_service import delete_session_todo_item
+
+    try:
+        row = await delete_session_todo_item(session_id=str(session_id), todo_id=str(todo_id))
+    except Exception as exc:
+        logger.warning("chat_todo_delete_failed", session_id=str(session_id), todo_id=str(todo_id), error=str(exc))
+        raise HTTPException(status_code=500, detail="failed to delete session todo") from exc
+    if not row:
+        raise _NOT_FOUND("todo")
+    return row
+
+
+@router.post("/chat/sessions/{session_id}/todos/clear", response_model=ChatTodoBulkActionOut, tags=["chat-todo"])
+async def clear_session_todos(session_id: UUID, req: ChatTodoBulkActionRequest):
+    """세션별 TODO를 상태 기준으로 일괄 제거한다. 기본은 completed/failed/skipped."""
+    from app.services.chat_todo_service import clear_session_todos as clear_items
+
+    try:
+        affected = await clear_items(session_id=str(session_id), statuses=req.statuses)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.warning("chat_todo_clear_failed", session_id=str(session_id), error=str(exc))
+        raise HTTPException(status_code=500, detail="failed to clear session todos") from exc
+    return ChatTodoBulkActionOut(
+        affected=affected,
+        statuses=req.statuses or ["completed", "failed", "skipped"],
+    )
+
+
+@router.post("/chat/sessions/{session_id}/todos/retry-failed", response_model=ChatTodoBulkActionOut, tags=["chat-todo"])
+async def retry_failed_session_todos(session_id: UUID):
+    """실패 TODO를 pending으로 되돌려 다음 턴에서 다시 진행할 수 있게 한다."""
+    from app.services.chat_todo_service import retry_failed_session_todos as retry_items
+
+    try:
+        affected = await retry_items(session_id=str(session_id))
+    except Exception as exc:
+        logger.warning("chat_todo_retry_failed", session_id=str(session_id), error=str(exc))
+        raise HTTPException(status_code=500, detail="failed to retry failed todos") from exc
+    return ChatTodoBulkActionOut(affected=affected, statuses=["failed"])
 
 
 @router.post("/chat/errors/report", response_model=ErrorReportOut, tags=["chat-errors"])

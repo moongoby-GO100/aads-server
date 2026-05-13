@@ -640,6 +640,179 @@ async def update_todo_item(
         return await _update(active_conn)
 
 
+async def update_session_todo_item(
+    *,
+    session_id: str,
+    todo_id: str,
+    status: Optional[str] = None,
+    title: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+    source: str = "user_action",
+    conn: Any | None = None,
+) -> Optional[dict[str, Any]]:
+    sid = uuid.UUID(str(session_id))
+    todo_uuid = uuid.UUID(str(todo_id))
+
+    async def _update(active_conn: Any) -> Optional[dict[str, Any]]:
+        current = await active_conn.fetchrow(
+            "SELECT * FROM chat_todo_items WHERE id = $1 AND session_id = $2",
+            todo_uuid,
+            sid,
+        )
+        if not current:
+            return None
+        return await update_todo_item(
+            todo_id=str(todo_uuid),
+            status=status,
+            title=title,
+            metadata=metadata,
+            source=source,
+            conn=active_conn,
+        )
+
+    if conn is not None:
+        return await _update(conn)
+
+    pool = get_pool()
+    async with pool.acquire() as active_conn:
+        return await _update(active_conn)
+
+
+async def delete_session_todo_item(
+    *,
+    session_id: str,
+    todo_id: str,
+    conn: Any | None = None,
+) -> Optional[dict[str, Any]]:
+    sid = uuid.UUID(str(session_id))
+    todo_uuid = uuid.UUID(str(todo_id))
+
+    async def _delete(active_conn: Any) -> Optional[dict[str, Any]]:
+        row = await active_conn.fetchrow(
+            """
+            DELETE FROM chat_todo_items
+            WHERE id = $1 AND session_id = $2
+            RETURNING *
+            """,
+            todo_uuid,
+            sid,
+        )
+        return _normalize_todo_row(row) if row else None
+
+    if conn is not None:
+        return await _delete(conn)
+
+    pool = get_pool()
+    async with pool.acquire() as active_conn:
+        return await _delete(active_conn)
+
+
+def _validate_statuses(statuses: Iterable[str] | None, *, default_terminal: bool = False) -> list[str]:
+    normalized = [str(status).strip() for status in (statuses or []) if str(status).strip()]
+    if not normalized and default_terminal:
+        normalized = list(TODO_TERMINAL_STATUSES)
+    invalid = [status for status in normalized if status not in TODO_VALID_STATUSES]
+    if invalid:
+        raise ValueError(f"invalid todo status: {', '.join(invalid)}")
+    return normalized
+
+
+async def clear_session_todos(
+    *,
+    session_id: str,
+    statuses: Iterable[str] | None = None,
+    conn: Any | None = None,
+) -> int:
+    sid = uuid.UUID(str(session_id))
+    target_statuses = _validate_statuses(statuses, default_terminal=True)
+
+    async def _clear(active_conn: Any) -> int:
+        rows = await active_conn.fetch(
+            """
+            DELETE FROM chat_todo_items
+            WHERE session_id = $1
+              AND status = ANY($2::text[])
+            RETURNING id
+            """,
+            sid,
+            target_statuses,
+        )
+        return len(rows)
+
+    if conn is not None:
+        return await _clear(conn)
+
+    pool = get_pool()
+    async with pool.acquire() as active_conn:
+        return await _clear(active_conn)
+
+
+async def retry_failed_session_todos(
+    *,
+    session_id: str,
+    conn: Any | None = None,
+) -> int:
+    sid = uuid.UUID(str(session_id))
+
+    async def _retry(active_conn: Any) -> int:
+        rows = await active_conn.fetch(
+            """
+            UPDATE chat_todo_items
+            SET status = $3,
+                metadata = jsonb_set(
+                    jsonb_set(
+                        COALESCE(metadata, '{}'::jsonb),
+                        '{retried_at}',
+                        to_jsonb(NOW()::text),
+                        true
+                    ),
+                    '{retried_from}',
+                    to_jsonb($2::text),
+                    true
+                ),
+                updated_at = NOW(),
+                completed_at = NULL
+            WHERE session_id = $1
+              AND status = $2
+            RETURNING *
+            """,
+            sid,
+            TODO_STATUS_FAILED,
+            TODO_STATUS_PENDING,
+        )
+        reset_count = len(rows)
+        if not reset_count:
+            return 0
+        active_rows = await active_conn.fetch(
+            """
+            SELECT *
+            FROM chat_todo_items
+            WHERE session_id = $1
+              AND status = ANY($2::text[])
+            ORDER BY sort_order ASC, created_at ASC
+            """,
+            sid,
+            list(TODO_ACTIVE_STATUSES),
+        )
+        has_in_progress = any(row["status"] == TODO_STATUS_IN_PROGRESS for row in active_rows)
+        if not has_in_progress and active_rows:
+            await update_todo_item(
+                todo_id=str(active_rows[0]["id"]),
+                status=TODO_STATUS_IN_PROGRESS,
+                metadata={"retry_promoted": True},
+                source="user_retry",
+                conn=active_conn,
+            )
+        return reset_count
+
+    if conn is not None:
+        return await _retry(conn)
+
+    pool = get_pool()
+    async with pool.acquire() as active_conn:
+        return await _retry(active_conn)
+
+
 async def mark_complete(
     todo_id: str,
     *,
