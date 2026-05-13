@@ -346,6 +346,12 @@ _DEEPSEEK_COMPATIBILITY_ALIASES = {
     "deepseek-chat": "deepseek-v4-flash",
     "deepseek-reasoner": "deepseek-v4-pro",
 }
+_DEEPSEEK_LITELLM_RUNTIME_ALIASES = {
+    "deepseek-v4-flash": "deepseek-chat",
+    "deepseek-v4-pro": "deepseek-reasoner",
+    "deepseek-chat": "deepseek-chat",
+    "deepseek-reasoner": "deepseek-reasoner",
+}
 _ANTHROPIC_RUNTIME_MODEL_IDS = {
     "claude-sonnet": "claude-sonnet-4-6",
     "claude-opus": "claude-opus-4-7",
@@ -443,6 +449,12 @@ def _canonical_model_id(model_id: str) -> str:
     return _DEEPSEEK_COMPATIBILITY_ALIASES.get(model_id, model_id)
 
 
+def _runtime_model_id(provider: str, model_id: str) -> str:
+    if provider == "deepseek":
+        return _DEEPSEEK_LITELLM_RUNTIME_ALIASES.get(model_id, model_id)
+    return _canonical_model_id(model_id)
+
+
 def _compatibility_alias_metadata(model_id: str) -> dict[str, Any]:
     canonical_model = _DEEPSEEK_COMPATIBILITY_ALIASES.get(model_id)
     if not canonical_model:
@@ -495,7 +507,7 @@ def _build_template(provider: str, model_id: str) -> ModelTemplate:
     category = _category_for(model_id)
     execution_backend = None
     execution_base_url = None
-    execution_model_id = _canonical_model_id(model_id)
+    execution_model_id = _runtime_model_id(provider, model_id)
     if provider == "deepseek":
         execution_backend = "litellm_proxy"
     elif provider in _DIRECT_PROVIDER_BASE_URLS:

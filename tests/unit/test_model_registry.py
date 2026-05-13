@@ -55,11 +55,15 @@ def test_build_registry_snapshots_registers_deepseek_v4_and_alias_metadata():
     deepseek_models = {row["model_id"]: row for row in model_rows if row["provider"] == "deepseek"}
     assert {"deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"} <= set(deepseek_models)
     assert deepseek_models["deepseek-v4-pro"]["supports_thinking"] is True
-    assert deepseek_models["deepseek-v4-flash"]["metadata"]["execution_model_id"] == "deepseek-v4-flash"
+    assert deepseek_models["deepseek-v4-flash"]["metadata"]["execution_model_id"] == "deepseek-chat"
+    assert deepseek_models["deepseek-v4-flash"]["execution_model_id"] == "deepseek-chat"
+    assert deepseek_models["deepseek-v4-pro"]["metadata"]["execution_model_id"] == "deepseek-reasoner"
+    assert deepseek_models["deepseek-v4-pro"]["execution_model_id"] == "deepseek-reasoner"
     assert deepseek_models["deepseek-chat"]["metadata"]["canonical_model"] == "deepseek-v4-flash"
     assert deepseek_models["deepseek-chat"]["metadata"]["deprecation_date"] == "2026-07-24"
     assert deepseek_models["deepseek-chat"]["metadata"]["compatibility_alias"] is True
-    assert deepseek_models["deepseek-chat"]["execution_model_id"] == "deepseek-v4-flash"
+    assert deepseek_models["deepseek-chat"]["execution_model_id"] == "deepseek-chat"
+    assert deepseek_models["deepseek-reasoner"]["execution_model_id"] == "deepseek-reasoner"
 
     deepseek_summary = next(row for row in provider_rows if row["provider"] == "deepseek")
     assert deepseek_summary["runtime_executable"] is True

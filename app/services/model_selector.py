@@ -722,11 +722,22 @@ _DEEPSEEK_COMPATIBILITY_ALIASES = {
     "deepseek-chat": "deepseek-v4-flash",
     "deepseek-reasoner": "deepseek-v4-pro",
 }
+_DEEPSEEK_LITELLM_RUNTIME_ALIASES = {
+    "deepseek-v4-flash": "deepseek-chat",
+    "deepseek-v4-pro": "deepseek-reasoner",
+    "deepseek-chat": "deepseek-chat",
+    "deepseek-reasoner": "deepseek-reasoner",
+}
 _DEEPSEEK_MODELS = {"deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"}
 
 
 def _canonical_deepseek_model_id(model: str) -> str:
     return _DEEPSEEK_COMPATIBILITY_ALIASES.get(model, model)
+
+
+def _litellm_deepseek_model_id(model: str) -> str:
+    """Return the model id actually registered in LiteLLM for DeepSeek routes."""
+    return _DEEPSEEK_LITELLM_RUNTIME_ALIASES.get(model, model)
 
 # OpenRouter 모델 (LiteLLM 경유, openrouter/ prefix)
 _OPENROUTER_MODELS = {
@@ -853,6 +864,7 @@ def _split_provider_qualified_model(model_id: str) -> tuple[str | None, str]:
 async def _get_registered_model_row(model_id: str, provider: str | None = None) -> Optional[Dict[str, Any]]:
     rows = await _list_registered_models(active_only=False)
     normalized_provider = str(provider or "").strip().lower()
+    target_model = str(model_id or "").strip()
 
     def _candidate_ids(row: Dict[str, Any]) -> set[str]:
         metadata = _coerce_metadata(row.get("metadata"))
@@ -873,12 +885,18 @@ async def _get_registered_model_row(model_id: str, provider: str | None = None) 
 
     if normalized_provider:
         for row in rows:
+            if row.get("provider") == normalized_provider and str(row.get("model_id") or "").strip() == target_model:
+                return row
+        for row in rows:
             if row.get("provider") != normalized_provider:
                 continue
-            if model_id in _candidate_ids(row):
+            if target_model in _candidate_ids(row):
                 return row
     for row in rows:
-        if model_id in _candidate_ids(row):
+        if str(row.get("model_id") or "").strip() == target_model:
+            return row
+    for row in rows:
+        if target_model in _candidate_ids(row):
             return row
     return None
 
@@ -1375,12 +1393,12 @@ async def call_stream(
     if route_metadata:
         provider = str((registered_row or {}).get("provider") or "")
         backend = str(route_metadata.get("execution_backend") or "").strip()
-        if provider == "deepseek" and backend == "openai_compatible_direct":
+        if provider == "deepseek":
             backend = "litellm_proxy"
             route_metadata = {
                 **route_metadata,
                 "execution_backend": backend,
-                "execution_model_id": _canonical_deepseek_model_id(model),
+                "execution_model_id": _litellm_deepseek_model_id(model),
                 "execution_base_url": "",
             }
         if backend == "openai_compatible_direct":
@@ -1635,7 +1653,7 @@ async def call_stream(
     # Groq / DeepSeek 모델 → LiteLLM 경유 (OpenAI 호환, 실패 시 Gemini Flash 폴백)
     if model in _GROQ_MODELS or model in _DEEPSEEK_MODELS:
         _had_error = False
-        _request_model = _canonical_deepseek_model_id(model) if model in _DEEPSEEK_MODELS else model
+        _request_model = _litellm_deepseek_model_id(model) if model in _DEEPSEEK_MODELS else model
         async for event in _stream_litellm_openai(
             _request_model,
             system_prompt,
