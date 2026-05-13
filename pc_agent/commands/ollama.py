@@ -158,14 +158,13 @@ async def chat(params: Dict[str, Any]) -> Dict[str, Any]:
         options["temperature"] = params.get("temperature")
     if "max_tokens" in params:
         options["num_predict"] = params.get("max_tokens")
-    if "think" in params:
-        options["think"] = bool(params.get("think"))
-
     payload: Dict[str, Any] = {
         "model": model,
         "messages": messages,
         "stream": False,
     }
+    if "think" in params:
+        payload["think"] = bool(params.get("think"))
     if options:
         payload["options"] = options
 

@@ -88,6 +88,7 @@ def _post_ollama_chat(model: str, timeout_seconds: float) -> dict[str, Any]:
         "model": model,
         "messages": [{"role": "user", "content": "AADS local model smoke test. Reply OK in Korean."}],
         "stream": False,
+        "think": False,
         "options": {"num_predict": 64, "temperature": 0.1},
     }
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -101,7 +102,10 @@ def _post_ollama_chat(model: str, timeout_seconds: float) -> dict[str, Any]:
         raw = resp.read().decode("utf-8", errors="replace")
     data = json.loads(raw or "{}")
     message = data.get("message") if isinstance(data.get("message"), dict) else {}
-    return {"content": str(message.get("content") or ""), "raw_model": data.get("model") or model}
+    content = str(message.get("content") or "")
+    if not content:
+        content = str(message.get("thinking") or message.get("reasoning") or "")
+    return {"content": content, "raw_model": data.get("model") or model}
 
 
 async def _ollama_status(item: dict[str, Any], params: Dict[str, Any]) -> dict[str, Any]:

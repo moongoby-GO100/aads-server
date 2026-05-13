@@ -7,6 +7,7 @@
 - `app/api/local_models.py` REST API와 채팅 도구 `local_model_queue_status`, `local_model_install_test`, `generate_music`, `generate_three_d_asset`, `media_job_status`를 추가했다. `local_image`, `local_video`, `local_music`, `local_3d`는 async media job으로만 준비되며 기본 채팅 모델 라우팅은 변경하지 않았다.
 - DB 준비: `093_pc_ollama_quantized_model_pack.sql`, `094_pc_ollama_backend_correction.sql`, `095_local_multimodal_model_bridge.sql`을 추가했다. `095`는 `media_generation_jobs.kind`에 `music`, `model_3d`를 허용하고 `pc_local` 모델 레지스트리를 queued/prepared 상태로 seed한다.
 - 운영 주의: PC Agent가 offline이거나 새 capability를 아직 받지 못한 경우 설치 완료로 간주하지 않는다. 응답은 queued/prepared 또는 offline/not-updated 상태로만 보고해야 한다.
+- 2026-05-13 14:11 KST: PC Agent `1.0.27` 준비. Ollama `/api/chat`의 `think` 값을 top-level로 전달하도록 보정하고, 로컬 모델 smoke test가 `content`가 비어 있을 때 `thinking/reasoning`을 fallback으로 기록하도록 수정했다. `self_update` 명령은 성공했지만 이후 WebSocket 재연결이 아직 확인되지 않아 모델 설치/테스트 재개는 PC Agent 재실행 후 진행해야 한다.
 
 ## 2026-05-12
 - 2026-05-12 15:20 KST: `app/services/chat_service.py`에 응답 누락 지적 속 인용 지시 승격 로직을 추가했다. `"마지막 대화버블에 '...조치하고 보고해'가 남아 있는데 왜 응답을 못하나"` 유형은 인용된 실제 CEO 지시를 이번 턴 실행 대상으로 시스템 프롬프트에 다시 붙인다.
