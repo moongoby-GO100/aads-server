@@ -608,6 +608,19 @@ async def _send_cdp_command(
                         "title": candidate_title,
                     }
                     return result
+                except CDPCommandError as cmd_exc:
+                    if cmd_exc.code == _ERROR_RUNTIME_EVALUATE_TIMEOUT and method == "Runtime.evaluate":
+                        try:
+                            await _request_cdp(
+                                ws,
+                                "Runtime.terminateExecution",
+                                None,
+                                timeout_seconds=2.0,
+                                session_id=session_id,
+                            )
+                        except Exception:
+                            pass
+                    raise
                 finally:
                     try:
                         await _request_cdp(
