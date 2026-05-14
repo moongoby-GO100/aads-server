@@ -118,6 +118,7 @@ _RAW_HANDLERS = {
     "browser_get_text": _handler(browser_auto, "browser_get_text"),
     "browser_eval": _handler(browser_auto, "browser_eval"),
     "browser_tabs": _handler(browser_auto, "browser_tabs"),
+    "browser_health": _handler(browser_auto, "browser_health"),
     "browser_launch": _handler(browser_auto, "browser_launch"),
     # P4: 파일 전송
     "file_upload": _handler(file_transfer, "file_upload"),
