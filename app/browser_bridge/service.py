@@ -19,7 +19,10 @@ from .storage_state import StorageStateManager
 
 
 class BrowserBridgeError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, error_code: str = "", detail: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.error_code = str(error_code or "")
+        self.detail = dict(detail or {})
 
 
 logger = logging.getLogger(__name__)
@@ -36,6 +39,16 @@ DEFAULT_WORK_SESSION_LABELS = {
     "ntv2-sinsang-registration": "NTV2 Sinsang registration",
     "ntv2-china-sourcing-admin": "NTV2 China sourcing admin",
     "ntv2-vvic-scrape": "NTV2 VVIC scrape",
+}
+LOCAL_AGENT_RECOVERABLE_ERROR_CODES = {"CDP_NOT_READY", "RUNTIME_EVALUATE_TIMEOUT", "STALE_TARGET"}
+LOCAL_AGENT_JS_COMMANDS = {
+    "browser_click",
+    "browser_fill",
+    "browser_press_key",
+    "browser_select_option",
+    "browser_check",
+    "browser_get_text",
+    "browser_eval",
 }
 
 
@@ -89,7 +102,12 @@ class _LocalAgentPage:
     def __init__(self, session: BrowserBridgeSession, service: "BrowserBridgeService"):
         self._session = session
         self._service = service
-        metadata = dict(session.endpoint.metadata or {})
+        self._sync_from_session(session)
+
+    def _sync_from_session(self, session: BrowserBridgeSession | None = None) -> None:
+        if session is not None:
+            self._session = session
+        metadata = dict(self._session.endpoint.metadata or {})
         self._agent_id = str(metadata.get("agent_id") or "")
         self._port = int(metadata.get("port") or 9222)
         self.url = str(metadata.get("last_url") or "about:blank")
@@ -109,49 +127,90 @@ class _LocalAgentPage:
     ) -> dict[str, Any]:
         from app.services.pc_agent_manager import pc_agent_manager
 
-        merged = self._params(params)
-        if "work_key" not in merged and hasattr(self._session, "work_key") and self._session.work_key:
-            merged["work_key"] = self._session.work_key
+        recovery_attempted = False
+        requested_url = str((params or {}).get("url") or self.url or "about:blank")
 
-        lease_ttl_seconds = int(command_timeout_seconds + LOCAL_AGENT_LEASE_BUFFER_SECONDS)
-        result = await pc_agent_manager.execute_routed_command(
-            command_type=command_type,
-            params=merged,
-            agent_id=self._agent_id,
-            job_type=f"browser_bridge_{self._session.session_id}",
-            required_capabilities=["interactive_browser"],
-            queue_if_busy=True,
-            wait_for_turn=True,
-            queue_wait_timeout_seconds=queue_wait_timeout_seconds,
-            lease_ttl_seconds=lease_ttl_seconds,
-            command_timeout_seconds=command_timeout_seconds,
-        )
-        if result.get("status") != "success" and str(result.get("error_code") or "") == "PC_AGENT_OFFLINE":
-            active_result = await self._service._execute_pc_agent_route_via_active_api(
+        while True:
+            merged = self._params(params)
+            if "work_key" not in merged and hasattr(self._session, "work_key") and self._session.work_key:
+                merged["work_key"] = self._session.work_key
+            if command_type in LOCAL_AGENT_JS_COMMANDS:
+                merged.setdefault("evaluate_timeout_seconds", min(max(command_timeout_seconds - 5.0, 5.0), 20.0))
+
+            lease_ttl_seconds = int(command_timeout_seconds + LOCAL_AGENT_LEASE_BUFFER_SECONDS)
+            result = await pc_agent_manager.execute_routed_command(
                 command_type=command_type,
                 params=merged,
                 agent_id=self._agent_id,
                 job_type=f"browser_bridge_{self._session.session_id}",
                 required_capabilities=["interactive_browser"],
+                queue_if_busy=True,
+                wait_for_turn=True,
                 queue_wait_timeout_seconds=queue_wait_timeout_seconds,
                 lease_ttl_seconds=lease_ttl_seconds,
                 command_timeout_seconds=command_timeout_seconds,
             )
-            if active_result is not None:
-                result = active_result
-        if result.get("status") != "success":
-            raise BrowserBridgeError(str(result.get("message") or result.get("error_code") or result))
-        command_result = result.get("result") if isinstance(result, dict) else None
-        data = command_result.get("result") if isinstance(command_result, dict) else None
-        if data is None and isinstance(command_result, dict):
-            data = command_result.get("data")
-        if data is None and isinstance(result, dict):
-            data = result.get("data")
-        if isinstance(data, dict):
-            if data.get("error"):
-                raise BrowserBridgeError(str(data.get("error")))
-            return data
-        return {}
+            if result.get("status") != "success" and str(result.get("error_code") or "") == "PC_AGENT_OFFLINE":
+                active_result = await self._service._execute_pc_agent_route_via_active_api(
+                    command_type=command_type,
+                    params=merged,
+                    agent_id=self._agent_id,
+                    job_type=f"browser_bridge_{self._session.session_id}",
+                    required_capabilities=["interactive_browser"],
+                    queue_wait_timeout_seconds=queue_wait_timeout_seconds,
+                    lease_ttl_seconds=lease_ttl_seconds,
+                    command_timeout_seconds=command_timeout_seconds,
+                )
+                if active_result is not None:
+                    result = active_result
+
+            if result.get("status") == "success":
+                command_result = result.get("result") if isinstance(result, dict) else None
+                data = command_result.get("result") if isinstance(command_result, dict) else None
+                if data is None and isinstance(command_result, dict):
+                    data = command_result.get("data")
+                if data is None and isinstance(result, dict):
+                    data = result.get("data")
+                if isinstance(data, dict):
+                    if data.get("error"):
+                        raise BrowserBridgeError(
+                            str(data.get("error")),
+                            error_code=str(data.get("error_code") or ""),
+                            detail=data,
+                        )
+                    self._service._mark_local_agent_session_healthy(
+                        self._session,
+                        agent_id=self._agent_id,
+                        port=self._port,
+                        last_url=requested_url,
+                    )
+                    return data
+                self._service._mark_local_agent_session_healthy(
+                    self._session,
+                    agent_id=self._agent_id,
+                    port=self._port,
+                    last_url=requested_url,
+                )
+                return {}
+
+            error_code, error_message, error_detail = self._service._extract_pc_agent_route_error(result)
+            if (
+                not recovery_attempted
+                and self._session.work_key
+                and error_code in LOCAL_AGENT_RECOVERABLE_ERROR_CODES
+            ):
+                recovered = await self._service._recover_local_agent_session(
+                    self._session,
+                    reason=error_code,
+                    agent_id=self._agent_id,
+                    preferred_port=self._port,
+                    requested_url=requested_url,
+                )
+                if recovered is not None:
+                    recovery_attempted = True
+                    self._sync_from_session(recovered)
+                    continue
+            raise BrowserBridgeError(error_message, error_code=error_code, detail=error_detail)
 
     async def goto(self, url: str, **_: Any) -> None:
         await self._run_browser_command(
@@ -374,6 +433,7 @@ class BrowserBridgeService:
         activate: bool = False,
         work_key: str = "",
         protected: bool = False,
+        force_recreate: bool = False,
     ) -> BrowserBridgeSession:
         """Launch or reuse Chrome through PC Agent and register a local-agent bridge session."""
         from app.services.pc_agent_manager import pc_agent_manager
@@ -427,7 +487,7 @@ class BrowserBridgeService:
         if not isinstance(data, dict):
             raise BrowserBridgeError("PC Agent browser_launch returned no data")
         port = int(data.get("port") or preferred_port or 9222)
-        existing = self.sessions.find_by_metadata(
+        existing = None if force_recreate else self.sessions.find_by_metadata(
             agent_id=selected_agent_id,
             port=str(port),
             endpoint_kind=BrowserEndpointKind.LOCAL_AGENT.value,
@@ -447,6 +507,7 @@ class BrowserBridgeService:
             "endpoint_kind": BrowserEndpointKind.LOCAL_AGENT.value,
             "cdp_url": f"pc-agent://{selected_agent_id}/cdp/{port}",
             "last_url": url or "about:blank",
+            "stale": False,
         }
         if normalized_work_key:
             metadata["work_key"] = normalized_work_key
@@ -485,6 +546,7 @@ class BrowserBridgeService:
         agent_id: str = "",
         url: str = "about:blank",
         preferred_port: int | None = None,
+        force_recreate: bool = False,
     ) -> BrowserBridgeSession:
         """Return the dedicated Browser Bridge session for a business workflow.
 
@@ -494,7 +556,7 @@ class BrowserBridgeService:
         """
         normalized_work_key = normalize_work_key(work_key)
         is_protected = normalized_work_key in PROTECTED_WORK_KEYS or looks_like_protected_label(label)
-        existing = self.sessions.find_by_work_key(normalized_work_key)
+        existing = None if force_recreate else self.sessions.find_by_work_key(normalized_work_key)
         if existing and self._session_reusable(existing):
             existing.mark_used()
             if is_protected and not existing.protected:
@@ -507,11 +569,18 @@ class BrowserBridgeService:
             )
             return existing
 
-        if existing:
+        stale_existing = self.sessions.find_by_work_key(normalized_work_key) if force_recreate else existing
+        if stale_existing:
             logger.warning(
                 "browser_bridge_work_session_recreate work_key=%s old_session_id=%s reason=stale_or_expired",
                 normalized_work_key,
-                existing.session_id,
+                stale_existing.session_id,
+            )
+            self.sessions.retire_session(
+                stale_existing.session_id,
+                stale_reason="force_recreate" if force_recreate else "stale_or_expired",
+                clear_work_key=True,
+                clear_lease=True,
             )
 
         session = await self.ensure_pc_agent_cdp_session(
@@ -524,6 +593,7 @@ class BrowserBridgeService:
             activate=False,
             work_key=normalized_work_key,
             protected=is_protected,
+            force_recreate=force_recreate,
         )
         session.mark_used()
         self.sessions.touch(session)
@@ -540,6 +610,8 @@ class BrowserBridgeService:
             return False
         if session.endpoint.kind == BrowserEndpointKind.LOCAL_AGENT:
             metadata = dict(session.endpoint.metadata or {})
+            if metadata.get("stale"):
+                return False
             return bool(metadata.get("agent_id") and metadata.get("port"))
         browser = self._session_browsers.get(session.session_id)
         if browser is not None and hasattr(browser, "is_connected"):
@@ -548,6 +620,84 @@ class BrowserBridgeService:
             except Exception:
                 return False
         return True
+
+    def _extract_pc_agent_route_error(self, result: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
+        detail = dict(result or {})
+        command_result = detail.get("result") if isinstance(detail, dict) else None
+        nested = command_result.get("result") if isinstance(command_result, dict) else None
+        if nested is None and isinstance(detail.get("data"), dict):
+            nested = detail.get("data")
+        nested_detail = dict(nested or {}) if isinstance(nested, dict) else {}
+        error_code = str(
+            detail.get("error_code")
+            or nested_detail.get("error_code")
+            or ""
+        ).strip()
+        message = str(
+            detail.get("message")
+            or nested_detail.get("error")
+            or nested_detail.get("message")
+            or error_code
+            or detail
+        )
+        combined_detail = dict(detail)
+        if nested_detail:
+            combined_detail.setdefault("command_result", nested_detail)
+        return error_code, message, combined_detail
+
+    def _mark_local_agent_session_healthy(
+        self,
+        session: BrowserBridgeSession,
+        *,
+        agent_id: str,
+        port: int,
+        last_url: str,
+    ) -> None:
+        metadata = dict(session.endpoint.metadata or {})
+        metadata["agent_id"] = agent_id
+        metadata["port"] = str(port)
+        metadata["last_url"] = last_url or metadata.get("last_url") or "about:blank"
+        metadata["stale"] = False
+        metadata.pop("stale_reason", None)
+        metadata["last_ok_at"] = utcnow().isoformat()
+        session.endpoint.metadata = metadata
+        session.mark_used()
+        self.sessions.touch(session)
+
+    async def _recover_local_agent_session(
+        self,
+        session: BrowserBridgeSession,
+        *,
+        reason: str,
+        agent_id: str,
+        preferred_port: int,
+        requested_url: str,
+    ) -> BrowserBridgeSession | None:
+        work_key = str(session.work_key or "").strip()
+        if not work_key:
+            return None
+        self.sessions.retire_session(
+            session.session_id,
+            stale_reason=reason,
+            clear_work_key=True,
+            clear_lease=True,
+        )
+        self._session_contexts.pop(session.session_id, None)
+        self._session_browsers.pop(session.session_id, None)
+        logger.warning(
+            "browser_bridge_local_agent_recover work_key=%s session_id=%s reason=%s",
+            work_key,
+            session.session_id,
+            reason,
+        )
+        return await self.ensure_work_session(
+            work_key=work_key,
+            label=session.label,
+            agent_id=agent_id,
+            url=requested_url or str((session.endpoint.metadata or {}).get("last_url") or "about:blank"),
+            preferred_port=preferred_port or None,
+            force_recreate=True,
+        )
 
     def work_session_status(self) -> dict[str, Any]:
         active = self.active_session()
@@ -597,6 +747,10 @@ class BrowserBridgeService:
 
         def _post() -> dict[str, Any] | None:
             body = json.dumps(payload).encode("utf-8")
+            request_timeout_seconds = max(
+                10.0,
+                min(300.0, float(queue_wait_timeout_seconds) + float(command_timeout_seconds) + 5.0),
+            )
             for url in deduped_urls:
                 req = urllib.request.Request(
                     url,
@@ -605,7 +759,7 @@ class BrowserBridgeService:
                     method="POST",
                 )
                 try:
-                    with urllib.request.urlopen(req, timeout=max(95, command_timeout_seconds + 5)) as resp:
+                    with urllib.request.urlopen(req, timeout=request_timeout_seconds) as resp:
                         raw = resp.read().decode("utf-8")
                 except urllib.error.HTTPError as exc:
                     try:

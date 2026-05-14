@@ -242,6 +242,10 @@ class SessionRegistry:
         except OSError:
             pass
 
+    def _is_stale_session(self, session: BrowserBridgeSession) -> bool:
+        metadata = dict(session.endpoint.metadata or {})
+        return bool(metadata.get("stale"))
+
     def register(self, session: BrowserBridgeSession, *, activate: bool = True) -> BrowserBridgeSession:
         validate_bridge_endpoint(session.endpoint.kind, session.endpoint.url)
         with self._lock:
@@ -310,6 +314,8 @@ class SessionRegistry:
         for session in sessions:
             if session.is_expired:
                 continue
+            if self._is_stale_session(session):
+                continue
             metadata = dict(session.endpoint.metadata or {})
             if all(str(metadata.get(key) or "") == str(value) for key, value in criteria.items()):
                 return session
@@ -323,6 +329,8 @@ class SessionRegistry:
             sessions = list(self._sessions.values())
         for session in sessions:
             if session.is_expired:
+                continue
+            if self._is_stale_session(session):
                 continue
             if session.work_key == work_key:
                 return session
@@ -351,6 +359,35 @@ class SessionRegistry:
             current.endpoint.metadata = metadata
             self._save_locked()
             return current
+
+    def retire_session(
+        self,
+        session_id: str,
+        *,
+        stale_reason: str = "",
+        clear_work_key: bool = False,
+        clear_active: bool = False,
+        clear_lease: bool = True,
+    ) -> Optional[BrowserBridgeSession]:
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                return None
+            if clear_work_key:
+                session.work_key = ""
+            if clear_active:
+                session.active = False
+            if clear_lease:
+                session.lease_owner = ""
+                session.lease_expires_at = None
+            metadata = dict(session.endpoint.metadata or {})
+            metadata["stale"] = True
+            if stale_reason:
+                metadata["stale_reason"] = stale_reason
+            metadata["stale_marked_at"] = utcnow().isoformat()
+            session.endpoint.metadata = metadata
+            self._save_locked()
+            return session
 
     def acquire_lease(
         self,

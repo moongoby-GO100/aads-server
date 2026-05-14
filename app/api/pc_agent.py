@@ -452,9 +452,9 @@ async def route_execute_command(req: RoutedCommandRequest):
         status_code = 409 if error_code in {"AGENT_BUSY", "LEASE_EXPIRED"} else 503
         if error_code in {"NO_CAPABLE_AGENT"}:
             status_code = 422
-        if error_code in {"COMMAND_TIMEOUT"}:
+        if error_code in {"COMMAND_TIMEOUT", "RUNTIME_EVALUATE_TIMEOUT"}:
             status_code = 504
-        if error_code in {"CDP_NOT_READY", "VVIC_LOGIN_REQUIRED", "VVIC_BLOCKED"}:
+        if error_code in {"CDP_NOT_READY", "STALE_TARGET", "SYNTAX_ERROR", "SPA_SHELL_ONLY", "VVIC_LOGIN_REQUIRED", "VVIC_BLOCKED"}:
             status_code = 424
         raise HTTPException(status_code=status_code, detail=result)
     return result

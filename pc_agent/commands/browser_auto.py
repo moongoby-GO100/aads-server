@@ -19,7 +19,24 @@ logger = logging.getLogger(__name__)
 
 CDP_HOST = "localhost"
 CDP_PORT = 9222
+CDP_CONNECT_TIMEOUT_SECONDS = float(os.getenv("AADS_CDP_CONNECT_TIMEOUT_SECONDS", "5") or "5")
+CDP_COMMAND_TIMEOUT_SECONDS = float(os.getenv("AADS_CDP_COMMAND_TIMEOUT_SECONDS", "15") or "15")
+CDP_EVALUATE_TIMEOUT_SECONDS = float(os.getenv("AADS_CDP_EVALUATE_TIMEOUT_SECONDS", "12") or "12")
+CDP_RECOVERY_RETRY_LIMIT = max(0, int(os.getenv("AADS_CDP_RECOVERY_RETRY_LIMIT", "1") or "1"))
+VVIC_SPA_MIN_TEXT_LENGTH = max(40, int(os.getenv("AADS_VVIC_SPA_MIN_TEXT_LENGTH", "120") or "120"))
+_ERROR_CDP_NOT_READY = "CDP_NOT_READY"
+_ERROR_RUNTIME_EVALUATE_TIMEOUT = "RUNTIME_EVALUATE_TIMEOUT"
+_ERROR_STALE_TARGET = "STALE_TARGET"
+_ERROR_SYNTAX_ERROR = "SYNTAX_ERROR"
+_ERROR_SPA_SHELL_ONLY = "SPA_SHELL_ONLY"
 _MSG_ID = 0
+
+
+class CDPCommandError(RuntimeError):
+    def __init__(self, code: str, message: str, *, details: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.code = str(code or _ERROR_CDP_NOT_READY)
+        self.details = dict(details or {})
 
 
 @dataclass
@@ -29,6 +46,10 @@ class CDPSession:
     profile_dir: str
     pid: int = 0
     connected_at: float = field(default_factory=_time)
+    last_heartbeat_at: float = field(default_factory=_time)
+    last_target_id: str = ""
+    last_target_url: str = ""
+    last_error_code: str = ""
 
 
 class CDPSessionManager:
@@ -82,6 +103,30 @@ class CDPSessionManager:
             session = CDPSession(work_key=normalized_work_key, port=port, profile_dir=profile_dir, pid=pid)
             cls._sessions[normalized_work_key] = session
             return session
+
+    @classmethod
+    def mark_healthy(cls, work_key: str, *, target_id: str = "", target_url: str = "") -> None:
+        normalized_work_key = cls.normalize_work_key(work_key)
+        with cls._lock:
+            session = cls._sessions.get(normalized_work_key)
+            if session is None:
+                return
+            session.last_heartbeat_at = _time()
+            session.last_error_code = ""
+            if target_id:
+                session.last_target_id = target_id
+            if target_url:
+                session.last_target_url = target_url
+
+    @classmethod
+    def mark_error(cls, work_key: str, *, error_code: str = "") -> None:
+        normalized_work_key = cls.normalize_work_key(work_key)
+        with cls._lock:
+            session = cls._sessions.get(normalized_work_key)
+            if session is None:
+                return
+            session.last_heartbeat_at = _time()
+            session.last_error_code = str(error_code or "")
 
     @classmethod
     def release(cls, work_key: str) -> None:
@@ -230,94 +275,493 @@ def _candidate_ports(params: Dict[str, Any]) -> list[int]:
     return candidates
 
 
-async def _get_ws_url(target_idx: int = 0, port: int | None = None) -> str:
-    """Chrome 디버그 WS URL 획득 (/json/version 또는 /json)."""
-    resolved_port = int(port or CDP_PORT)
-    version = await _probe_cdp_version(resolved_port)
+def _work_key_from_params(params: Dict[str, Any] | None = None) -> str:
+    if not isinstance(params, dict):
+        return CDPSessionManager.normalize_work_key("general")
+    return CDPSessionManager.normalize_work_key(params.get("work_key", "general"))
+
+
+def _resolve_timeout(
+    params: Dict[str, Any] | None,
+    *,
+    param_name: str,
+    default: float,
+    minimum: float = 1.0,
+    maximum: float = 60.0,
+) -> float:
+    raw_value = default
+    if isinstance(params, dict):
+        raw_value = params.get(param_name, params.get("command_timeout_seconds", default))
+    try:
+        timeout = float(raw_value or default)
+    except Exception:
+        timeout = float(default)
+    timeout = max(minimum, min(timeout, maximum))
+    if isinstance(params, dict):
+        try:
+            outer_timeout = float(params.get("command_timeout_seconds", 0) or 0)
+        except Exception:
+            outer_timeout = 0.0
+        if outer_timeout > 1.0:
+            timeout = min(timeout, max(minimum, outer_timeout - 1.0))
+    return timeout
+
+
+def _looks_like_crashed_target(url: str, title: str) -> bool:
+    haystack = f"{url} {title}".lower()
+    return any(token in haystack for token in ("chrome-error://", "chrome://crash", "aw, snap", "target crashed"))
+
+
+def _looks_like_translated_target(url: str, title: str) -> bool:
+    haystack = f"{url} {title}".lower()
+    return "translate.google" in haystack or "translate.goog" in haystack or "google translate" in haystack
+
+
+def _looks_like_vvic_target(url: str, title: str) -> bool:
+    haystack = f"{url} {title}".lower()
+    return "vvic" in haystack
+
+
+def _target_sort_key(target: dict[str, Any], *, preferred_target_id: str = "") -> tuple[int, int, int, int, str]:
+    target_id = str(target.get("targetId") or target.get("id") or "")
+    url = str(target.get("url") or "")
+    title = str(target.get("title") or "")
+    return (
+        0 if preferred_target_id and target_id == preferred_target_id else 1,
+        1 if _looks_like_crashed_target(url, title) else 0,
+        1 if _looks_like_translated_target(url, title) else 0,
+        1 if url.strip().lower() in {"", "about:blank", "chrome://newtab/"} else 0,
+        target_id,
+    )
+
+
+async def _get_browser_ws_url(port: int) -> str:
+    version = await _probe_cdp_version(port)
     if version is None:
-        raise ConnectionError(
-            f"CDP_NOT_READY: http://{CDP_HOST}:{resolved_port}/json/version 응답 없음"
+        raise CDPCommandError(
+            _ERROR_CDP_NOT_READY,
+            f"http://{CDP_HOST}:{port}/json/version 응답 없음",
+            details={"port": port},
         )
     ws_url = str(version.get("webSocketDebuggerUrl", "") or "").strip()
-
-    try:
-        targets = await _list_cdp_targets(resolved_port)
-        pages = [t for t in targets if t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
-        if not pages:
-            pages = [t for t in targets if t.get("webSocketDebuggerUrl")]
-        if pages:
-            if target_idx >= len(pages):
-                target_idx = 0
-            ws_url = str(pages[target_idx].get("webSocketDebuggerUrl") or ws_url)
-    except Exception:
-        pass
-
     if not ws_url:
-        raise ConnectionError(
-            f"CDP_NOT_READY: webSocketDebuggerUrl 누락 (port={resolved_port})"
+        raise CDPCommandError(
+            _ERROR_CDP_NOT_READY,
+            f"webSocketDebuggerUrl 누락 (port={port})",
+            details={"port": port},
         )
     return ws_url
 
 
-_STALE_CDP_EVENTS = frozenset({
-    "Inspector.targetCrashed", "Inspector.detached",
-    "Target.detachedFromTarget", "Target.targetCrashed",
-})
+async def _select_page_targets(
+    port: int,
+    *,
+    target_id: str = "",
+    target_idx: int = 0,
+) -> list[dict[str, Any]]:
+    try:
+        targets = await _list_cdp_targets(port)
+    except Exception as exc:
+        raise CDPCommandError(
+            _ERROR_CDP_NOT_READY,
+            f"CDP target 목록 조회 실패: {exc}",
+            details={"port": port},
+        ) from exc
+    pages: list[dict[str, Any]] = []
+    for target in targets:
+        if not isinstance(target, dict):
+            continue
+        ws_url = str(target.get("webSocketDebuggerUrl") or "").strip()
+        target_type = str(target.get("type") or "").strip().lower()
+        if target_type and target_type != "page":
+            continue
+        if not ws_url:
+            continue
+        enriched = dict(target)
+        enriched["targetId"] = str(target.get("targetId") or target.get("id") or "")
+        pages.append(enriched)
+    if not pages:
+        raise CDPCommandError(
+            _ERROR_STALE_TARGET,
+            f"usable page target 없음 (port={port})",
+            details={"port": port},
+        )
+
+    if target_id:
+        exact = [page for page in pages if str(page.get("targetId") or "") == target_id]
+        if exact:
+            pages = exact + [page for page in pages if page not in exact]
+    else:
+        pages = sorted(pages, key=lambda target: _target_sort_key(target))
+        if 0 <= target_idx < len(pages):
+            selected = pages[target_idx]
+            pages = [selected] + [page for page in pages if page is not selected]
+
+    healthy = [
+        page for page in pages
+        if not _looks_like_crashed_target(str(page.get("url") or ""), str(page.get("title") or ""))
+    ]
+    return healthy or pages
 
 
-async def _send_cdp(ws_url: str, method: str, params: Dict[str, Any] | None = None, timeout: float = 30) -> Dict[str, Any]:
-    """CDP 명령 전송 및 결과 수신. timeout은 전체 작업 타임아웃(초)."""
-    import websockets
+def _classify_cdp_error(method: str, message: str) -> str:
+    lowered = str(message or "").lower()
+    if "syntaxerror" in lowered or "unexpected token" in lowered:
+        return _ERROR_SYNTAX_ERROR
+    if any(
+        token in lowered
+        for token in (
+            "cannot find context with specified id",
+            "target closed",
+            "session closed",
+            "target detached",
+            "execution context was destroyed",
+            "inspector.targetcrashed",
+        )
+    ):
+        return _ERROR_STALE_TARGET
+    if "timed out" in lowered or "timeout" in lowered:
+        return _ERROR_RUNTIME_EVALUATE_TIMEOUT if method == "Runtime.evaluate" else _ERROR_CDP_NOT_READY
+    return _ERROR_CDP_NOT_READY
 
+
+def _cdp_error_from_payload(method: str, payload: dict[str, Any]) -> CDPCommandError:
+    message = str(payload.get("message") or payload)
+    code = _classify_cdp_error(method, message)
+    return CDPCommandError(code, f"{method} failed: {message}", details={"method": method, "cdp_error": payload})
+
+
+async def _recv_cdp_response(
+    ws: Any,
+    *,
+    msg_id: int,
+    method: str,
+    timeout_seconds: float,
+    session_id: str = "",
+) -> Dict[str, Any]:
+    deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 0.1)
+    while True:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            code = _ERROR_RUNTIME_EVALUATE_TIMEOUT if method == "Runtime.evaluate" else _ERROR_CDP_NOT_READY
+            raise CDPCommandError(
+                code,
+                f"{method} timed out after {timeout_seconds:.1f}s",
+                details={"method": method, "timeout_seconds": timeout_seconds},
+            )
+        raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+        response = json.loads(raw)
+        if response.get("id") == msg_id:
+            if "error" in response:
+                raise _cdp_error_from_payload(method, response["error"])
+            return response.get("result", {})
+
+        event_method = str(response.get("method") or "")
+        if event_method == "Inspector.targetCrashed":
+            raise CDPCommandError(
+                _ERROR_STALE_TARGET,
+                "Chrome tab crashed while waiting for CDP response",
+                details={"event": event_method, "method": method},
+            )
+        if event_method == "Target.detachedFromTarget":
+            event_params = response.get("params") or {}
+            detached_session_id = str(event_params.get("sessionId") or "")
+            if session_id and detached_session_id == session_id:
+                reason = str(event_params.get("reason") or "target detached")
+                raise CDPCommandError(
+                    _ERROR_STALE_TARGET,
+                    f"Target detached: {reason}",
+                    details={"event": event_method, "detach_reason": reason, "method": method},
+                )
+
+
+async def _request_cdp(
+    ws: Any,
+    method: str,
+    params: Dict[str, Any] | None = None,
+    *,
+    timeout_seconds: float,
+    session_id: str = "",
+) -> Dict[str, Any]:
     msg_id = _next_id()
     payload: Dict[str, Any] = {"id": msg_id, "method": method}
-    if params:
+    if params is not None:
         payload["params"] = params
-
-    async def _exchange():
-        async with websockets.connect(ws_url, max_size=10 * 1024 * 1024, open_timeout=5, close_timeout=3) as ws:
-            await ws.send(json.dumps(payload))
-            while True:
-                raw = await asyncio.wait_for(ws.recv(), timeout=min(timeout, 30))
-                resp = json.loads(raw)
-                evt = resp.get("method")
-                if evt in _STALE_CDP_EVENTS:
-                    raise ConnectionError(f"STALE_TARGET: {evt}")
-                if resp.get("id") == msg_id:
-                    if "error" in resp:
-                        raise RuntimeError(f"CDP 오류: {resp['error']}")
-                    return resp.get("result", {})
-
-    try:
-        return await asyncio.wait_for(_exchange(), timeout=timeout + 2)
-    except asyncio.TimeoutError:
-        raise TimeoutError(f"RUNTIME_EVALUATE_TIMEOUT: {method} — {timeout}초 초과")
+    if session_id:
+        payload["sessionId"] = session_id
+    await asyncio.wait_for(ws.send(json.dumps(payload)), timeout=max(1.0, min(timeout_seconds, 5.0)))
+    return await _recv_cdp_response(
+        ws,
+        msg_id=msg_id,
+        method=method,
+        timeout_seconds=timeout_seconds,
+        session_id=session_id,
+    )
 
 
-async def _send_cdp_multi(ws_url: str, commands: list[tuple[str, Dict[str, Any] | None]], timeout: float = 30) -> list[Dict[str, Any]]:
-    """여러 CDP 명령을 하나의 WS 연결로 순차 실행."""
+async def _send_cdp(
+    ws_url: str,
+    method: str,
+    params: Dict[str, Any] | None = None,
+    *,
+    timeout_seconds: float = CDP_COMMAND_TIMEOUT_SECONDS,
+    session_id: str = "",
+) -> Dict[str, Any]:
     import websockets
 
-    results = []
-    async with websockets.connect(ws_url, max_size=10 * 1024 * 1024, open_timeout=5, close_timeout=3) as ws:
-        for method, params in commands:
-            msg_id = _next_id()
-            payload: Dict[str, Any] = {"id": msg_id, "method": method}
-            if params:
-                payload["params"] = params
-            await ws.send(json.dumps(payload))
-            while True:
-                raw = await asyncio.wait_for(ws.recv(), timeout=min(timeout, 30))
-                resp = json.loads(raw)
-                evt = resp.get("method")
-                if evt in _STALE_CDP_EVENTS:
-                    raise ConnectionError(f"STALE_TARGET: {evt}")
-                if resp.get("id") == msg_id:
-                    if "error" in resp:
-                        raise RuntimeError(f"CDP 오류: {resp['error']}")
-                    results.append(resp.get("result", {}))
-                    break
-    return results
+    async with websockets.connect(
+        ws_url,
+        open_timeout=CDP_CONNECT_TIMEOUT_SECONDS,
+        close_timeout=1,
+        max_size=10 * 1024 * 1024,
+    ) as ws:
+        return await _request_cdp(
+            ws,
+            method,
+            params,
+            timeout_seconds=timeout_seconds,
+            session_id=session_id,
+        )
+
+
+async def _send_cdp_command(
+    port: int,
+    method: str,
+    params: Dict[str, Any] | None = None,
+    *,
+    timeout_seconds: float,
+    target_id: str = "",
+    target_idx: int = 0,
+) -> Dict[str, Any]:
+    import websockets
+
+    browser_ws_url = await _get_browser_ws_url(port)
+    if method.startswith("Browser.") or method.startswith("Target."):
+        return await _send_cdp(browser_ws_url, method, params, timeout_seconds=timeout_seconds)
+
+    candidates = await _select_page_targets(port, target_id=target_id, target_idx=target_idx)
+    attempts = candidates[: max(1, min(len(candidates), CDP_RECOVERY_RETRY_LIMIT + 1))]
+    last_error: CDPCommandError | None = None
+
+    for candidate in attempts:
+        candidate_target_id = str(candidate.get("targetId") or candidate.get("id") or "")
+        candidate_url = str(candidate.get("url") or "")
+        candidate_title = str(candidate.get("title") or "")
+        try:
+            async with websockets.connect(
+                browser_ws_url,
+                open_timeout=CDP_CONNECT_TIMEOUT_SECONDS,
+                close_timeout=1,
+                max_size=10 * 1024 * 1024,
+            ) as ws:
+                try:
+                    await _request_cdp(
+                        ws,
+                        "Target.activateTarget",
+                        {"targetId": candidate_target_id},
+                        timeout_seconds=min(3.0, timeout_seconds),
+                    )
+                except CDPCommandError:
+                    pass
+
+                attach = await _request_cdp(
+                    ws,
+                    "Target.attachToTarget",
+                    {"targetId": candidate_target_id, "flatten": True},
+                    timeout_seconds=min(3.0, timeout_seconds),
+                )
+                session_id = str(attach.get("sessionId") or "")
+                if not session_id:
+                    raise CDPCommandError(
+                        _ERROR_STALE_TARGET,
+                        f"target attach 실패: {candidate_target_id}",
+                        details={"target_id": candidate_target_id, "url": candidate_url},
+                    )
+                try:
+                    result = await _request_cdp(
+                        ws,
+                        method,
+                        params,
+                        timeout_seconds=timeout_seconds,
+                        session_id=session_id,
+                    )
+                    result["_target"] = {
+                        "id": candidate_target_id,
+                        "url": candidate_url,
+                        "title": candidate_title,
+                    }
+                    return result
+                finally:
+                    try:
+                        await _request_cdp(
+                            ws,
+                            "Target.detachFromTarget",
+                            {"sessionId": session_id},
+                            timeout_seconds=1.5,
+                        )
+                    except Exception:
+                        pass
+        except CDPCommandError as exc:
+            last_error = exc
+            if exc.code not in {_ERROR_STALE_TARGET, _ERROR_RUNTIME_EVALUATE_TIMEOUT, _ERROR_CDP_NOT_READY}:
+                raise
+
+    if last_error is not None:
+        raise last_error
+    raise CDPCommandError(
+        _ERROR_STALE_TARGET,
+        f"usable page target 없음 (port={port})",
+        details={"port": port},
+    )
+
+
+async def _collect_page_diagnostics(
+    port: int,
+    *,
+    timeout_seconds: float,
+    target_id: str = "",
+    target_idx: int = 0,
+) -> dict[str, Any]:
+    js = """
+    (() => {
+      const selectors = [
+        '[data-product-id]',
+        '[data-goods-id]',
+        '.search-list .item',
+        '.goods-list .item',
+        '.goods-list-item',
+        '.search-result-item',
+        '[class*="goods-item"]',
+        '[class*="product-card"]'
+      ];
+      let cardCount = 0;
+      let matchedSelector = '';
+      for (const selector of selectors) {
+        try {
+          const count = document.querySelectorAll(selector).length;
+          if (count > 0) {
+            cardCount = count;
+            matchedSelector = selector;
+            break;
+          }
+        } catch (err) {}
+      }
+      const bodyText = (document.body && (document.body.innerText || document.body.textContent) || '').trim();
+      return {
+        readyState: document.readyState || '',
+        href: String(location.href || ''),
+        title: document.title || '',
+        bodyTextLength: bodyText.length,
+        matchedSelector,
+        cardCount
+      };
+    })()
+    """
+    try:
+        result = await _send_cdp_command(
+            port,
+            "Runtime.evaluate",
+            {"expression": js, "returnByValue": True, "awaitPromise": False},
+            timeout_seconds=timeout_seconds,
+            target_id=target_id,
+            target_idx=target_idx,
+        )
+    except CDPCommandError as exc:
+        return {"error_code": exc.code, "error": str(exc)}
+
+    payload = result.get("result", {})
+    value = payload.get("value")
+    diagnostics = value if isinstance(value, dict) else {}
+    if not isinstance(diagnostics, dict):
+        diagnostics = {}
+    if isinstance(result.get("_target"), dict):
+        diagnostics.setdefault("target_id", result["_target"].get("id"))
+        diagnostics.setdefault("target_url", result["_target"].get("url"))
+    return diagnostics
+
+
+def _is_spa_shell_only(diagnostics: dict[str, Any]) -> bool:
+    url = str(diagnostics.get("href") or diagnostics.get("target_url") or "")
+    title = str(diagnostics.get("title") or "")
+    if not _looks_like_vvic_target(url, title):
+        return False
+    ready_state = str(diagnostics.get("readyState") or "").lower()
+    body_text_length = int(diagnostics.get("bodyTextLength") or 0)
+    card_count = int(diagnostics.get("cardCount") or 0)
+    return ready_state in {"interactive", "complete"} and card_count == 0 and body_text_length < VVIC_SPA_MIN_TEXT_LENGTH
+
+
+def _record_cdp_success(params: Dict[str, Any] | None, target: dict[str, Any] | None = None) -> None:
+    work_key = _work_key_from_params(params)
+    target_payload = dict(target or {})
+    CDPSessionManager.mark_healthy(
+        work_key,
+        target_id=str(target_payload.get("id") or ""),
+        target_url=str(target_payload.get("url") or ""),
+    )
+
+
+def _command_error_response(port: int, params: Dict[str, Any] | None, exc: CDPCommandError) -> Dict[str, Any]:
+    work_key = _work_key_from_params(params)
+    CDPSessionManager.mark_error(work_key, error_code=exc.code)
+    if exc.code == _ERROR_CDP_NOT_READY:
+        CDPSessionManager.release(work_key)
+    data = {"error": str(exc), "error_code": exc.code, "port": port}
+    data.update(exc.details)
+    return {"status": "error", "data": data}
+
+
+async def _diagnose_cdp_failure(
+    port: int,
+    params: Dict[str, Any] | None,
+    exc: CDPCommandError,
+) -> CDPCommandError:
+    if exc.code not in {_ERROR_CDP_NOT_READY, _ERROR_RUNTIME_EVALUATE_TIMEOUT, _ERROR_STALE_TARGET}:
+        return exc
+    try:
+        diagnostics = await _collect_page_diagnostics(
+            port,
+            timeout_seconds=min(4.0, CDP_EVALUATE_TIMEOUT_SECONDS),
+            target_id=str((params or {}).get("target_id") or ""),
+            target_idx=int((params or {}).get("target_idx", 0) or 0),
+        )
+    except Exception:
+        return exc
+    if not diagnostics:
+        return exc
+    if _is_spa_shell_only(diagnostics):
+        return CDPCommandError(
+            _ERROR_SPA_SHELL_ONLY,
+            "VVIC 검색 페이지가 SPA 셸만 반환했습니다.",
+            details={"diagnostics": diagnostics},
+        )
+    enriched = dict(exc.details)
+    enriched["diagnostics"] = diagnostics
+    return CDPCommandError(exc.code, str(exc), details=enriched)
+
+
+def _decode_runtime_value(result: Dict[str, Any]) -> Any:
+    payload = result.get("result", {}) if isinstance(result, dict) else {}
+    value = payload.get("value")
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
+def _runtime_exception_error(result: Dict[str, Any]) -> CDPCommandError | None:
+    payload = result.get("result", {}) if isinstance(result, dict) else {}
+    exception = payload.get("exceptionDetails") if isinstance(payload, dict) else None
+    if not isinstance(exception, dict):
+        return None
+    text = str(exception.get("text") or "")
+    details = exception.get("exception") if isinstance(exception.get("exception"), dict) else {}
+    class_name = str(details.get("className") or "")
+    description = str(details.get("description") or payload.get("description") or text or "JS 실행 오류")
+    code = _ERROR_SYNTAX_ERROR if class_name == "SyntaxError" or "syntaxerror" in description.lower() else _classify_cdp_error("Runtime.evaluate", description)
+    return CDPCommandError(code, description, details={"exceptionDetails": exception})
 
 
 def _chrome_not_running_error(port: int) -> Dict[str, Any]:
@@ -342,14 +786,25 @@ async def browser_navigate(params: Dict[str, Any]) -> Dict[str, Any]:
 
     port = _effective_port(params)
     try:
-        ws_url = await _get_ws_url(port=port)
-        result = await _send_cdp(ws_url, "Page.navigate", {"url": url})
+        timeout_seconds = _resolve_timeout(params, param_name="page_timeout_seconds", default=CDP_COMMAND_TIMEOUT_SECONDS, maximum=90.0)
+        result = await _send_cdp_command(port, "Page.navigate", {"url": url}, timeout_seconds=timeout_seconds)
+        _record_cdp_success(params, result.get("_target"))
         logger.info("브라우저 이동: %s", url)
-        return {"status": "success", "data": {"url": url, "frameId": result.get("frameId", "")}}
-    except ConnectionError:
-        return _chrome_not_running_error(port)
+        target = result.get("_target", {}) if isinstance(result, dict) else {}
+        return {
+            "status": "success",
+            "data": {
+                "url": url,
+                "frameId": result.get("frameId", ""),
+                "target_id": target.get("id"),
+                "target_url": target.get("url"),
+            },
+        }
+    except CDPCommandError as exc:
+        exc = await _diagnose_cdp_failure(port, params, exc)
+        return _command_error_response(port, params, exc)
     except Exception as e:
-        return {"status": "error", "data": {"error": str(e)}}
+        return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
 
 
 async def browser_click(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -360,7 +815,6 @@ async def browser_click(params: Dict[str, Any]) -> Dict[str, Any]:
 
     port = _effective_port(params)
     try:
-        ws_url = await _get_ws_url(port=port)
         # querySelector로 노드 찾기 → 좌표 계산 → 클릭
         js = f"""
         (function() {{
@@ -373,17 +827,27 @@ async def browser_click(params: Dict[str, Any]) -> Dict[str, Any]:
             return JSON.stringify({{"x": x, "y": y, "clicked": true}});
         }})()
         """
-        result = await _send_cdp(ws_url, "Runtime.evaluate", {"expression": js, "returnByValue": True})
-        value = result.get("result", {}).get("value", "{}")
-        data = json.loads(value) if isinstance(value, str) else value
-        if "error" in data:
+        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=30.0)
+        result = await _send_cdp_command(
+            port,
+            "Runtime.evaluate",
+            {"expression": js, "returnByValue": True, "awaitPromise": False},
+            timeout_seconds=timeout_seconds,
+        )
+        error = _runtime_exception_error(result)
+        if error is not None:
+            raise error
+        data = _decode_runtime_value(result)
+        if isinstance(data, dict) and data.get("error"):
             return {"status": "error", "data": data}
+        _record_cdp_success(params, result.get("_target"))
         logger.info("브라우저 클릭: %s", selector)
         return {"status": "success", "data": data}
-    except ConnectionError:
-        return _chrome_not_running_error(port)
+    except CDPCommandError as exc:
+        exc = await _diagnose_cdp_failure(port, params, exc)
+        return _command_error_response(port, params, exc)
     except Exception as e:
-        return {"status": "error", "data": {"error": str(e)}}
+        return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
 
 
 async def browser_fill(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -395,7 +859,6 @@ async def browser_fill(params: Dict[str, Any]) -> Dict[str, Any]:
 
     port = _effective_port(params)
     try:
-        ws_url = await _get_ws_url(port=port)
         js = f"""
         (function() {{
             var el = document.querySelector({json.dumps(selector)});
@@ -407,17 +870,27 @@ async def browser_fill(params: Dict[str, Any]) -> Dict[str, Any]:
             return JSON.stringify({{"filled": true, "selector": {json.dumps(selector)}}});
         }})()
         """
-        result = await _send_cdp(ws_url, "Runtime.evaluate", {"expression": js, "returnByValue": True})
-        res_value = result.get("result", {}).get("value", "{}")
-        data = json.loads(res_value) if isinstance(res_value, str) else res_value
-        if "error" in data:
+        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=30.0)
+        result = await _send_cdp_command(
+            port,
+            "Runtime.evaluate",
+            {"expression": js, "returnByValue": True, "awaitPromise": False},
+            timeout_seconds=timeout_seconds,
+        )
+        error = _runtime_exception_error(result)
+        if error is not None:
+            raise error
+        data = _decode_runtime_value(result)
+        if isinstance(data, dict) and data.get("error"):
             return {"status": "error", "data": data}
+        _record_cdp_success(params, result.get("_target"))
         logger.info("브라우저 입력: %s", selector)
         return {"status": "success", "data": data}
-    except ConnectionError:
-        return _chrome_not_running_error(port)
+    except CDPCommandError as exc:
+        exc = await _diagnose_cdp_failure(port, params, exc)
+        return _command_error_response(port, params, exc)
     except Exception as e:
-        return {"status": "error", "data": {"error": str(e)}}
+        return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
 
 
 async def browser_press_key(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -429,7 +902,8 @@ async def browser_press_key(params: Dict[str, Any]) -> Dict[str, Any]:
 
     port = _effective_port(params)
     try:
-        ws_url = await _get_ws_url(port=port)
+        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=30.0)
+        target_info: dict[str, Any] | None = None
         if selector:
             focus_js = f"""
             (function() {{
@@ -439,22 +913,32 @@ async def browser_press_key(params: Dict[str, Any]) -> Dict[str, Any]:
                 return JSON.stringify({{"focused": true}});
             }})()
             """
-            focus = await _send_cdp(ws_url, "Runtime.evaluate", {"expression": focus_js, "returnByValue": True})
-            value = focus.get("result", {}).get("value", "{}")
-            data = json.loads(value) if isinstance(value, str) else value
+            focus = await _send_cdp_command(
+                port,
+                "Runtime.evaluate",
+                {"expression": focus_js, "returnByValue": True, "awaitPromise": False},
+                timeout_seconds=timeout_seconds,
+            )
+            error = _runtime_exception_error(focus)
+            if error is not None:
+                raise error
+            data = _decode_runtime_value(focus)
             if isinstance(data, dict) and data.get("error"):
                 return {"status": "error", "data": data}
+            target_info = focus.get("_target") if isinstance(focus.get("_target"), dict) else None
 
         if len(key) == 1:
-            await _send_cdp(ws_url, "Input.insertText", {"text": key})
+            result = await _send_cdp_command(port, "Input.insertText", {"text": key}, timeout_seconds=timeout_seconds)
         else:
-            await _send_cdp(ws_url, "Input.dispatchKeyEvent", {"type": "keyDown", "key": key})
-            await _send_cdp(ws_url, "Input.dispatchKeyEvent", {"type": "keyUp", "key": key})
+            result = await _send_cdp_command(port, "Input.dispatchKeyEvent", {"type": "keyDown", "key": key}, timeout_seconds=timeout_seconds)
+            await _send_cdp_command(port, "Input.dispatchKeyEvent", {"type": "keyUp", "key": key}, timeout_seconds=timeout_seconds)
+        _record_cdp_success(params, target_info or result.get("_target"))
         return {"status": "success", "data": {"key": key, "selector": selector}}
-    except ConnectionError:
-        return _chrome_not_running_error(port)
+    except CDPCommandError as exc:
+        exc = await _diagnose_cdp_failure(port, params, exc)
+        return _command_error_response(port, params, exc)
     except Exception as e:
-        return {"status": "error", "data": {"error": str(e)}}
+        return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
 
 
 async def browser_select_option(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -470,7 +954,6 @@ async def browser_select_option(params: Dict[str, Any]) -> Dict[str, Any]:
     values = [str(v) for v in values]
     port = _effective_port(params)
     try:
-        ws_url = await _get_ws_url(port=port)
         js = f"""
         (function() {{
             var el = document.querySelector({json.dumps(selector)});
@@ -490,16 +973,26 @@ async def browser_select_option(params: Dict[str, Any]) -> Dict[str, Any]:
             return JSON.stringify({{"selected": matched, "selector": {json.dumps(selector)}}});
         }})()
         """
-        result = await _send_cdp(ws_url, "Runtime.evaluate", {"expression": js, "returnByValue": True})
-        res_value = result.get("result", {}).get("value", "{}")
-        data = json.loads(res_value) if isinstance(res_value, str) else res_value
-        if "error" in data:
+        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=30.0)
+        result = await _send_cdp_command(
+            port,
+            "Runtime.evaluate",
+            {"expression": js, "returnByValue": True, "awaitPromise": False},
+            timeout_seconds=timeout_seconds,
+        )
+        error = _runtime_exception_error(result)
+        if error is not None:
+            raise error
+        data = _decode_runtime_value(result)
+        if isinstance(data, dict) and data.get("error"):
             return {"status": "error", "data": data}
+        _record_cdp_success(params, result.get("_target"))
         return {"status": "success", "data": data}
-    except ConnectionError:
-        return _chrome_not_running_error(port)
+    except CDPCommandError as exc:
+        exc = await _diagnose_cdp_failure(port, params, exc)
+        return _command_error_response(port, params, exc)
     except Exception as e:
-        return {"status": "error", "data": {"error": str(e)}}
+        return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
 
 
 async def browser_check(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -511,7 +1004,6 @@ async def browser_check(params: Dict[str, Any]) -> Dict[str, Any]:
 
     port = _effective_port(params)
     try:
-        ws_url = await _get_ws_url(port=port)
         js = f"""
         (function() {{
             var el = document.querySelector({json.dumps(selector)});
@@ -525,16 +1017,26 @@ async def browser_check(params: Dict[str, Any]) -> Dict[str, Any]:
             return JSON.stringify({{"selector": {json.dumps(selector)}, "checked": Boolean(el.checked)}});
         }})()
         """
-        result = await _send_cdp(ws_url, "Runtime.evaluate", {"expression": js, "returnByValue": True})
-        res_value = result.get("result", {}).get("value", "{}")
-        data = json.loads(res_value) if isinstance(res_value, str) else res_value
-        if "error" in data:
+        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=30.0)
+        result = await _send_cdp_command(
+            port,
+            "Runtime.evaluate",
+            {"expression": js, "returnByValue": True, "awaitPromise": False},
+            timeout_seconds=timeout_seconds,
+        )
+        error = _runtime_exception_error(result)
+        if error is not None:
+            raise error
+        data = _decode_runtime_value(result)
+        if isinstance(data, dict) and data.get("error"):
             return {"status": "error", "data": data}
+        _record_cdp_success(params, result.get("_target"))
         return {"status": "success", "data": data}
-    except ConnectionError:
-        return _chrome_not_running_error(port)
+    except CDPCommandError as exc:
+        exc = await _diagnose_cdp_failure(port, params, exc)
+        return _command_error_response(port, params, exc)
     except Exception as e:
-        return {"status": "error", "data": {"error": str(e)}}
+        return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
 
 
 async def browser_file_upload(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -553,19 +1055,36 @@ async def browser_file_upload(params: Dict[str, Any]) -> Dict[str, Any]:
 
     port = _effective_port(params)
     try:
-        ws_url = await _get_ws_url(port=port)
-        doc = await _send_cdp(ws_url, "DOM.getDocument", {"depth": -1, "pierce": True})
+        timeout_seconds = _resolve_timeout(params, param_name="page_timeout_seconds", default=CDP_COMMAND_TIMEOUT_SECONDS, maximum=45.0)
+        doc = await _send_cdp_command(
+            port,
+            "DOM.getDocument",
+            {"depth": -1, "pierce": True},
+            timeout_seconds=timeout_seconds,
+        )
         root_id = doc.get("root", {}).get("nodeId")
-        node = await _send_cdp(ws_url, "DOM.querySelector", {"nodeId": root_id, "selector": selector})
+        node = await _send_cdp_command(
+            port,
+            "DOM.querySelector",
+            {"nodeId": root_id, "selector": selector},
+            timeout_seconds=timeout_seconds,
+        )
         node_id = node.get("nodeId")
         if not node_id:
             return {"status": "error", "data": {"error": f"요소를 찾을 수 없습니다: {selector}"}}
-        await _send_cdp(ws_url, "DOM.setFileInputFiles", {"nodeId": node_id, "files": file_paths})
+        await _send_cdp_command(
+            port,
+            "DOM.setFileInputFiles",
+            {"nodeId": node_id, "files": file_paths},
+            timeout_seconds=timeout_seconds,
+        )
+        _record_cdp_success(params, node.get("_target") or doc.get("_target"))
         return {"status": "success", "data": {"selector": selector, "files": file_paths, "count": len(file_paths)}}
-    except ConnectionError:
-        return _chrome_not_running_error(port)
+    except CDPCommandError as exc:
+        exc = await _diagnose_cdp_failure(port, params, exc)
+        return _command_error_response(port, params, exc)
     except Exception as e:
-        return {"status": "error", "data": {"error": str(e)}}
+        return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
 
 
 async def browser_download(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -583,16 +1102,15 @@ async def browser_download(params: Dict[str, Any]) -> Dict[str, Any]:
     try:
         os.makedirs(download_dir, exist_ok=True)
         before = {name: os.path.getmtime(os.path.join(download_dir, name)) for name in os.listdir(download_dir)}
-        version = await _probe_cdp_version(port)
-        if version and version.get("webSocketDebuggerUrl"):
-            try:
-                await _send_cdp(
-                    str(version["webSocketDebuggerUrl"]),
-                    "Browser.setDownloadBehavior",
-                    {"behavior": "allow", "downloadPath": download_dir, "eventsEnabled": True},
-                )
-            except Exception as exc:
-                logger.warning("download behavior setup failed: %s", exc)
+        try:
+            await _send_cdp_command(
+                port,
+                "Browser.setDownloadBehavior",
+                {"behavior": "allow", "downloadPath": download_dir, "eventsEnabled": True},
+                timeout_seconds=min(max(timeout_seconds, 5.0), 30.0),
+            )
+        except CDPCommandError as exc:
+            logger.warning("download behavior setup failed: %s", exc)
 
         click_result = await browser_click({**params, "port": port, "selector": selector})
         if click_result.get("status") != "success":
@@ -616,40 +1134,42 @@ async def browser_download(params: Dict[str, Any]) -> Dict[str, Any]:
                 return {"status": "success", "data": {"path": path, "size": os.path.getsize(path), "download_dir": download_dir}}
             await asyncio.sleep(0.5)
         return {"status": "error", "data": {"error": "다운로드 파일 감지 시간 초과", "download_dir": download_dir}}
-    except ConnectionError:
-        return _chrome_not_running_error(port)
+    except CDPCommandError as exc:
+        exc = await _diagnose_cdp_failure(port, params, exc)
+        return _command_error_response(port, params, exc)
     except Exception as e:
-        return {"status": "error", "data": {"error": str(e)}}
+        return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
 
 
 async def browser_screenshot(params: Dict[str, Any]) -> Dict[str, Any]:
     """브라우저 스크린샷. CDP Page.captureScreenshot → base64."""
     port = _effective_port(params)
     try:
-        ws_url = await _get_ws_url(port=port)
         fmt = params.get("format", "png")
         quality = params.get("quality", 80)
         cdp_params: Dict[str, Any] = {"format": fmt}
         if fmt == "jpeg":
             cdp_params["quality"] = quality
-        result = await _send_cdp(ws_url, "Page.captureScreenshot", cdp_params)
+        timeout_seconds = _resolve_timeout(params, param_name="page_timeout_seconds", default=CDP_COMMAND_TIMEOUT_SECONDS, maximum=45.0)
+        result = await _send_cdp_command(port, "Page.captureScreenshot", cdp_params, timeout_seconds=timeout_seconds)
         img_data = result.get("data", "")
+        _record_cdp_success(params, result.get("_target"))
         logger.info("브라우저 스크린샷 캡처 (%s)", fmt)
         return {
             "status": "success",
             "data": {"screenshot_base64": img_data, "format": fmt},
         }
-    except ConnectionError:
-        return _chrome_not_running_error(port)
+    except CDPCommandError as exc:
+        exc = await _diagnose_cdp_failure(port, params, exc)
+        return _command_error_response(port, params, exc)
     except Exception as e:
-        return {"status": "error", "data": {"error": str(e)}}
+        return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
 
 
 async def browser_get_text(params: Dict[str, Any]) -> Dict[str, Any]:
     """페이지 또는 셀렉터 텍스트 추출. params: selector(선택)"""
     port = _effective_port(params)
     try:
-        ws_url = await _get_ws_url(port=port)
         selector = params.get("selector", "")
         if selector:
             js = f"""
@@ -662,102 +1182,98 @@ async def browser_get_text(params: Dict[str, Any]) -> Dict[str, Any]:
         else:
             js = "JSON.stringify({text: document.body.innerText})"
 
-        result = await _send_cdp(ws_url, "Runtime.evaluate", {"expression": js, "returnByValue": True})
-        value = result.get("result", {}).get("value", "{}")
-        data = json.loads(value) if isinstance(value, str) else value
-        if "error" in data:
+        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=30.0)
+        result = await _send_cdp_command(
+            port,
+            "Runtime.evaluate",
+            {"expression": js, "returnByValue": True, "awaitPromise": False},
+            timeout_seconds=timeout_seconds,
+        )
+        error = _runtime_exception_error(result)
+        if error is not None:
+            raise error
+        data = _decode_runtime_value(result)
+        if isinstance(data, dict) and data.get("error"):
             return {"status": "error", "data": data}
+        _record_cdp_success(params, result.get("_target"))
+        diagnostics = await _collect_page_diagnostics(
+            port,
+            timeout_seconds=min(3.0, timeout_seconds),
+            target_id=str((result.get("_target") or {}).get("id") or ""),
+        )
+        if _is_spa_shell_only(diagnostics):
+            spa_error = CDPCommandError(
+                _ERROR_SPA_SHELL_ONLY,
+                "VVIC 검색 페이지가 SPA 셸만 반환했습니다.",
+                details={"diagnostics": diagnostics},
+            )
+            return _command_error_response(port, params, spa_error)
         return {"status": "success", "data": data}
-    except ConnectionError:
-        return _chrome_not_running_error(port)
+    except CDPCommandError as exc:
+        exc = await _diagnose_cdp_failure(port, params, exc)
+        return _command_error_response(port, params, exc)
     except Exception as e:
-        return {"status": "error", "data": {"error": str(e)}}
+        return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
 
 
 async def browser_eval(params: Dict[str, Any]) -> Dict[str, Any]:
-    """JavaScript 실행. params: expression(필수), timeout(선택, 기본20초). 로컬 PC 전용."""
+    """JavaScript 실행. params: expression(필수). 로컬 PC 전용, 로그 필수."""
     expression = params.get("expression", "")
     if not expression:
-        return {"status": "error", "data": {"error": "expression 파라미터가 필요합니다", "error_code": "INVALID_PARAMS"}}
+        return {"status": "error", "data": {"error": "expression 파라미터가 필요합니다"}}
 
-    eval_timeout = min(float(params.get("timeout", 20) or 20), 40)
-    logger.info("browser_eval (timeout=%ss): %s", eval_timeout, expression[:200])
+    logger.info("브라우저 JS 실행: %s", expression[:200])
 
     port = _effective_port(params)
-    work_key = CDPSessionManager.normalize_work_key(params.get("work_key", "general"))
-
     try:
-        ws_url = await _get_ws_url(port=port)
-    except ConnectionError:
-        return _chrome_not_running_error(port)
-
-    try:
-        result = await _send_cdp(ws_url, "Runtime.evaluate", {
-            "expression": expression,
-            "returnByValue": True,
-            "awaitPromise": True,
-        }, timeout=eval_timeout)
-
-        exc_details = result.get("exceptionDetails")
-        if exc_details:
-            desc = (exc_details.get("text", "")
-                    or (exc_details.get("exception") or {}).get("description", ""))
-            cls_name = (exc_details.get("exception") or {}).get("className", "")
-            is_syntax = cls_name == "SyntaxError" or "SyntaxError" in str(desc)
-            return {
-                "status": "error",
-                "data": {
-                    "error": desc or "JS 실행 오류",
-                    "error_code": "SYNTAX_ERROR" if is_syntax else "JS_RUNTIME_ERROR",
-                },
-            }
-
+        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=30.0)
+        result = await _send_cdp_command(
+            port,
+            "Runtime.evaluate",
+            {
+                "expression": expression,
+                "returnByValue": True,
+                "awaitPromise": True,
+            },
+            timeout_seconds=timeout_seconds,
+            target_id=str(params.get("target_id") or ""),
+            target_idx=int(params.get("target_idx", 0) or 0),
+        )
+        error = _runtime_exception_error(result)
+        if error is not None:
+            raise error
         res_data = result.get("result", {})
         if res_data.get("subtype") == "error":
-            return {
-                "status": "error",
-                "data": {
-                    "error": res_data.get("description", "JS 실행 오류"),
-                    "error_code": "JS_RUNTIME_ERROR",
-                },
-            }
-
-        value = res_data.get("value")
-        if isinstance(value, str) and len(value.strip()) == 0:
-            try:
-                probe = await _send_cdp(ws_url, "Runtime.evaluate", {
-                    "expression": "document.body ? document.body.innerText.length : -1",
-                    "returnByValue": True,
-                }, timeout=5)
-                body_len = probe.get("result", {}).get("value")
-                if body_len is not None and int(body_len) <= 0:
-                    return {
-                        "status": "error",
-                        "data": {
-                            "error": "페이지가 SPA 셸만 반환 — 콘텐츠 로드 전",
-                            "error_code": "SPA_SHELL_ONLY",
-                            "body_length": body_len,
-                        },
-                    }
-            except Exception:
-                pass
-
+            raise CDPCommandError(_ERROR_CDP_NOT_READY, str(res_data.get("description", "JS 실행 오류")))
+        _record_cdp_success(params, result.get("_target"))
+        diagnostics = await _collect_page_diagnostics(
+            port,
+            timeout_seconds=min(3.0, timeout_seconds),
+            target_id=str((result.get("_target") or {}).get("id") or ""),
+        )
+        if _is_spa_shell_only(diagnostics):
+            spa_error = CDPCommandError(
+                _ERROR_SPA_SHELL_ONLY,
+                "VVIC 검색 페이지가 SPA 셸만 반환했습니다.",
+                details={"diagnostics": diagnostics},
+            )
+            return _command_error_response(port, params, spa_error)
+        target = result.get("_target", {}) if isinstance(result, dict) else {}
         return {
             "status": "success",
-            "data": {"value": value, "type": res_data.get("type", "")},
+            "data": {
+                "value": res_data.get("value"),
+                "type": res_data.get("type", ""),
+                "target_id": target.get("id"),
+                "target_url": target.get("url"),
+                "diagnostics": diagnostics,
+            },
         }
-    except TimeoutError as e:
-        logger.warning("browser_eval timeout: %s", e)
-        return {"status": "error", "data": {"error": str(e), "error_code": "RUNTIME_EVALUATE_TIMEOUT"}}
-    except ConnectionError as e:
-        err_str = str(e)
-        if "STALE_TARGET" in err_str:
-            logger.warning("browser_eval stale target — releasing session: work_key=%s", work_key)
-            CDPSessionManager.release(work_key)
-            return {"status": "error", "data": {"error": err_str, "error_code": "STALE_TARGET"}}
-        return _chrome_not_running_error(port)
+    except CDPCommandError as exc:
+        exc = await _diagnose_cdp_failure(port, params, exc)
+        return _command_error_response(port, params, exc)
     except Exception as e:
-        return {"status": "error", "data": {"error": str(e), "error_code": "CDP_UNKNOWN_ERROR"}}
+        return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
 
 
 async def browser_tabs(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -767,71 +1283,11 @@ async def browser_tabs(params: Dict[str, Any]) -> Dict[str, Any]:
         targets = await _list_cdp_targets(port)
         tabs = [
             {"id": t.get("id", ""), "title": t.get("title", ""), "url": t.get("url", ""), "type": t.get("type", "")}
-            for t in targets if t.get("type") == "page"
+            for t in targets if t.get("type") == "page" or t.get("webSocketDebuggerUrl")
         ]
         return {"status": "success", "data": {"tabs": tabs, "count": len(tabs)}}
     except Exception:
         return _chrome_not_running_error(port)
-
-
-async def browser_health(params: Dict[str, Any]) -> Dict[str, Any]:
-    """CDP 세션 건강 확인 + stale 세션 정리. params: work_key(선택), cleanup(선택, 기본true)."""
-    work_key = CDPSessionManager.normalize_work_key(params.get("work_key", "general"))
-    do_cleanup = _as_bool(params.get("cleanup", True), default=True)
-    port = _effective_port(params)
-
-    session = CDPSessionManager.get_session(work_key)
-    if session:
-        port = session.port
-
-    version = await _probe_cdp_version(port)
-    if version is None:
-        if do_cleanup and session:
-            CDPSessionManager.release(work_key)
-            logger.info("browser_health: stale session 정리 (work_key=%s port=%d)", work_key, port)
-        return {
-            "status": "error",
-            "data": {
-                "error": f"CDP 응답 없음 (port {port})",
-                "error_code": "CDP_NOT_READY",
-                "port": port,
-                "work_key": work_key,
-                "session_released": do_cleanup and session is not None,
-            },
-        }
-
-    try:
-        ws_url = await _get_ws_url(port=port)
-        result = await _send_cdp(ws_url, "Runtime.evaluate", {
-            "expression": "JSON.stringify({readyState: document.readyState, href: location.href, bodyLen: document.body ? document.body.innerText.length : -1})",
-            "returnByValue": True,
-        }, timeout=5)
-        value = result.get("result", {}).get("value", "{}")
-        data = json.loads(value) if isinstance(value, str) else (value or {})
-        return {
-            "status": "success",
-            "data": {
-                "port": port,
-                "work_key": work_key,
-                "cdp_version": version.get("Browser", ""),
-                "page": data,
-            },
-        }
-    except (TimeoutError, ConnectionError) as e:
-        if do_cleanup and session:
-            CDPSessionManager.release(work_key)
-        return {
-            "status": "error",
-            "data": {
-                "error": str(e),
-                "error_code": "STALE_TARGET" if "STALE" in str(e) else "RUNTIME_EVALUATE_TIMEOUT",
-                "port": port,
-                "work_key": work_key,
-                "session_released": do_cleanup and session is not None,
-            },
-        }
-    except Exception as e:
-        return {"status": "error", "data": {"error": str(e), "error_code": "CDP_UNKNOWN_ERROR"}}
 
 
 async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:

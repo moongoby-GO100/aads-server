@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 
 import pytest
@@ -137,3 +138,24 @@ async def test_execute_routed_command_maps_timeout_to_command_timeout() -> None:
 
     assert result["status"] == "error"
     assert result["error_code"] == "COMMAND_TIMEOUT"
+
+
+@pytest.mark.asyncio
+async def test_pending_command_is_failed_immediately_when_agent_disconnects() -> None:
+    manager = PCAgentManager()
+    ws = _DummyWebSocket()
+    manager.register_agent(
+        "ceo-pc",
+        ws,  # type: ignore[arg-type]
+        {"hostname": "ceo", "capabilities": ["chrome_cdp", "interactive_browser"]},
+    )
+
+    command_id = await manager.send_command("ceo-pc", "browser_eval", {"expression": "document.readyState"})
+    wait_task = asyncio.create_task(manager.get_result(command_id, timeout=5.0))
+
+    assert manager.unregister_agent("ceo-pc", ws) is True
+
+    result = await wait_task
+    assert result.status == "error"
+    assert result.result is not None
+    assert result.result["error_code"] == "PC_AGENT_OFFLINE"

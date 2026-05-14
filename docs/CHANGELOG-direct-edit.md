@@ -812,3 +812,31 @@ with open('/root/aads/aads-server/.gitignore','a') as f:
 
 ## [2026-05-14 09:34:48 KST] [aads-server] scripts/codex_auth_monitor.py
 - Chat-Direct 수정: patch:         return "Logged in" in r.stdout→        return "Logged in" in (r.stdout 
+
+## [2026-05-14 17:50:23 KST] [aads-server] pc_agent/commands/browser_auto.py
+- Chat-Direct 수정: patch: async def _send_cdp(ws_url: str, method:→_STALE_CDP_EVENTS = frozenset({
+    "Ins
+
+## [2026-05-14 17:50:33 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: grep -n "chat-notify" /root/aads/aads-server/app/api/ops.py /root/aads/aads-serv
+
+## [2026-05-14 17:50:34 KST] [aads-server] pc_agent/commands/browser_auto.py
+- Chat-Direct 수정: patch: async def _send_cdp_multi(ws_url: str, c→async def _send_cdp_multi(ws_url: str, c
+
+## [2026-05-14 17:50:41 KST] [aads-server] pc_agent/commands/browser_auto.py
+- Chat-Direct 수정: run_remote_command: grep -n "chat-notify" /root/aads/aads-server/app/api/ops.py /root/aads/aads-serv
+
+## [2026-05-14 17:51:07 KST] [aads-server] pc_agent/commands/browser_auto.py
+- Chat-Direct 수정: patch: async def browser_eval(params: Dict[str,→async def browser_eval(params: Dict[str,
+
+## [2026-05-14 17:51:32 KST] [aads-server] pc_agent/commands/browser_auto.py
+- Chat-Direct 수정: patch: async def browser_launch(params: Dict[st→async def browser_health(params: Dict[st
+
+## [2026-05-14 17:51:44 KST] [aads-server] pc_agent/commands/__init__.py
+- Chat-Direct 수정: patch:     "browser_tabs": _handler(browser_aut→    "browser_tabs": _handler(browser_aut
+
+## [2026-05-14 18:03:15 KST] [aads-server] pc_agent/VERSION
+- Chat-Direct 수정: write: pc_agent/VERSION
+
+## [2026-05-14 18:03:58 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: curl -s -X POST http://localhost:8100/api/v1/pc-agent/route-execute -H "Content-

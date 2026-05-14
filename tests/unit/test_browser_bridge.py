@@ -188,6 +188,36 @@ def test_session_registry_persists_sessions_and_leases(tmp_path) -> None:
     assert second.get(session.session_id).lease_owner == ""
 
 
+def test_session_registry_retire_marks_stale_and_skips_work_key_lookup(tmp_path) -> None:
+    registry = SessionRegistry(state_dir=tmp_path)
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=registry,
+        storage_states=StorageStateManager(tmp_path),
+    )
+    session = service.register_trusted_session(
+        label="NTV2 VVIC scrape",
+        endpoint_kind="local_agent",
+        metadata={"agent_id": "ceo-pc", "port": "9222", "endpoint_kind": "local_agent"},
+        work_key="ntv2-vvic-scrape",
+    )
+
+    retired = registry.retire_session(
+        session.session_id,
+        stale_reason="STALE_TARGET",
+        clear_work_key=True,
+        clear_lease=True,
+    )
+
+    assert retired is not None
+    assert registry.find_by_work_key("ntv2-vvic-scrape") is None
+    loaded = registry.get(session.session_id)
+    assert loaded is not None
+    assert loaded.work_key == ""
+    assert loaded.endpoint.metadata["stale"] is True
+    assert loaded.endpoint.metadata["stale_reason"] == "STALE_TARGET"
+
+
 def test_pairing_manager_persists_unconsumed_pairings(tmp_path) -> None:
     first = PairingManager(default_ttl_seconds=60, state_dir=tmp_path)
     pairing = first.create_pairing(label="CEO Chrome", created_by="test")

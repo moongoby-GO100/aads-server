@@ -63,6 +63,10 @@ _ERROR_CDP_NOT_READY = "CDP_NOT_READY"
 _ERROR_VVIC_LOGIN_REQUIRED = "VVIC_LOGIN_REQUIRED"
 _ERROR_VVIC_BLOCKED = "VVIC_BLOCKED"
 _ERROR_COMMAND_TIMEOUT = "COMMAND_TIMEOUT"
+_ERROR_RUNTIME_EVALUATE_TIMEOUT = "RUNTIME_EVALUATE_TIMEOUT"
+_ERROR_STALE_TARGET = "STALE_TARGET"
+_ERROR_SYNTAX_ERROR = "SYNTAX_ERROR"
+_ERROR_SPA_SHELL_ONLY = "SPA_SHELL_ONLY"
 _KNOWN_ROUTING_ERRORS = frozenset({
     _ERROR_PC_AGENT_OFFLINE,
     _ERROR_NO_CAPABLE_AGENT,
@@ -72,6 +76,10 @@ _KNOWN_ROUTING_ERRORS = frozenset({
     _ERROR_VVIC_LOGIN_REQUIRED,
     _ERROR_VVIC_BLOCKED,
     _ERROR_COMMAND_TIMEOUT,
+    _ERROR_RUNTIME_EVALUATE_TIMEOUT,
+    _ERROR_STALE_TARGET,
+    _ERROR_SYNTAX_ERROR,
+    _ERROR_SPA_SHELL_ONLY,
 })
 _VVIC_JOB_TYPES = frozenset({"vvic", "vvic_cdp", "vvic_scrape"})
 _DEFAULT_MAX_CONCURRENCY_BY_JOB = {
@@ -135,6 +143,8 @@ class PCAgentManager:
         self._agents: Dict[str, _AgentConnection] = {}
         self._pending_commands: Dict[str, asyncio.Event] = {}
         self._results: Dict[str, CommandResult] = {}
+        self._command_agents: Dict[str, str] = {}
+        self._agent_commands: Dict[str, Set[str]] = {}
         self._streaming_subscribers: Dict[str, Set[WebSocket]] = {}  # agent_id → 대시보드 WS
         self._heartbeat_timeout_seconds = int(os.getenv("PC_AGENT_HEARTBEAT_TIMEOUT_SECONDS", "90") or "90")
         self._lease_default_ttl_seconds = int(os.getenv("PC_AGENT_LEASE_TTL_SECONDS", "180") or "180")
@@ -188,6 +198,11 @@ class PCAgentManager:
             logger.info("pc_agent_unregister_skipped_stale agent_id=%s", agent_id)
             return False
         del self._agents[agent_id]
+        self._fail_pending_commands_for_agent(
+            agent_id,
+            reason="agent websocket disconnected",
+            error_code=_ERROR_PC_AGENT_OFFLINE,
+        )
         try:
             loop = asyncio.get_running_loop()
             loop.create_task(self._expire_agent_leases(agent_id, "agent websocket disconnected"))
@@ -214,6 +229,7 @@ class PCAgentManager:
             command_id=command_id,
             agent_id=agent_id,
         )
+        self._track_command(agent_id, command_id)
 
         # WebSocket으로 명령 전송
         msg = WSMessage(
@@ -221,7 +237,13 @@ class PCAgentManager:
             id=command_id,
             payload={"command_type": command_type, "params": params},
         )
-        await conn.websocket.send_json(msg.model_dump(mode="json"))
+        try:
+            await conn.websocket.send_json(msg.model_dump(mode="json"))
+        except Exception:
+            self._pending_commands.pop(command_id, None)
+            self._results.pop(command_id, None)
+            self._untrack_command(command_id, agent_id)
+            raise
         logger.info(
             "pc_agent_command_sent agent_id=%s command_id=%s type=%s",
             agent_id, command_id, command_type,
@@ -245,6 +267,7 @@ class PCAgentManager:
                 result.status = "timeout"
                 result.completed_at = datetime.utcnow()
             self._pending_commands.pop(command_id, None)
+            self._untrack_command(command_id, result.agent_id if result else "")
             logger.warning("pc_agent_command_timeout command_id=%s", command_id)
             if result:
                 return result
@@ -253,7 +276,9 @@ class PCAgentManager:
             )
 
         self._pending_commands.pop(command_id, None)
-        return self._results[command_id]
+        result = self._results[command_id]
+        self._untrack_command(command_id, result.agent_id)
+        return result
 
     def receive_result(self, command_id: str, result: Dict[str, Any]) -> None:
         """에이전트로부터 결과 수신."""
@@ -265,6 +290,7 @@ class PCAgentManager:
         stored.status = result.get("status", "success")
         stored.result = result.get("data")
         stored.completed_at = datetime.utcnow()
+        self._untrack_command(command_id, stored.agent_id)
 
         event = self._pending_commands.get(command_id)
         if event:
@@ -357,6 +383,11 @@ class PCAgentManager:
         """모든 에이전트 연결을 1012로 정상 종료."""
         closed = 0
         for agent_id, conn in list(self._agents.items()):
+            self._fail_pending_commands_for_agent(
+                agent_id,
+                reason=reason,
+                error_code=_ERROR_PC_AGENT_OFFLINE,
+            )
             try:
                 await conn.websocket.close(code=1012, reason=reason)
                 closed += 1
@@ -403,6 +434,51 @@ class PCAgentManager:
     def _normalize_error_code(self, value: str) -> str:
         code = str(value or "").strip().upper()
         return code if code in _KNOWN_ROUTING_ERRORS else ""
+
+    def _track_command(self, agent_id: str, command_id: str) -> None:
+        self._command_agents[command_id] = agent_id
+        if agent_id not in self._agent_commands:
+            self._agent_commands[agent_id] = set()
+        self._agent_commands[agent_id].add(command_id)
+
+    def _untrack_command(self, command_id: str, agent_id: str = "") -> None:
+        tracked_agent_id = agent_id or self._command_agents.pop(command_id, "")
+        if tracked_agent_id:
+            self._command_agents.pop(command_id, None)
+            tracked = self._agent_commands.get(tracked_agent_id)
+            if tracked is not None:
+                tracked.discard(command_id)
+                if not tracked:
+                    self._agent_commands.pop(tracked_agent_id, None)
+
+    def _fail_pending_commands_for_agent(self, agent_id: str, *, reason: str, error_code: str) -> int:
+        command_ids = list(self._agent_commands.get(agent_id, set()))
+        failed = 0
+        now = datetime.utcnow()
+        for command_id in command_ids:
+            stored = self._results.get(command_id)
+            if stored is None or stored.status != "pending":
+                self._untrack_command(command_id, agent_id)
+                continue
+            stored.status = "error"
+            stored.result = {
+                "error": reason,
+                "error_code": self._normalize_error_code(error_code) or error_code,
+            }
+            stored.completed_at = now
+            event = self._pending_commands.get(command_id)
+            if event is not None:
+                event.set()
+            self._untrack_command(command_id, agent_id)
+            failed += 1
+        if failed:
+            logger.warning(
+                "pc_agent_pending_commands_failed agent_id=%s count=%d error_code=%s",
+                agent_id,
+                failed,
+                error_code,
+            )
+        return failed
 
     def _is_online_locked(self, agent_id: str, now: datetime | None = None) -> bool:
         conn = self._agents.get(agent_id)
@@ -613,6 +689,14 @@ class PCAgentManager:
         message = str(payload.get("error", "") or payload.get("message", "")).lower()
         if "cdp_not_ready" in message or ("cdp" in message and "ready" in message):
             return _ERROR_CDP_NOT_READY
+        if "runtime_evaluate_timeout" in message or ("runtime.evaluate" in message and "timed out" in message):
+            return _ERROR_RUNTIME_EVALUATE_TIMEOUT
+        if "stale_target" in message or "target detached" in message or "target closed" in message:
+            return _ERROR_STALE_TARGET
+        if "syntaxerror" in message or "unexpected token" in message:
+            return _ERROR_SYNTAX_ERROR
+        if "spa_shell_only" in message or "spa shell only" in message:
+            return _ERROR_SPA_SHELL_ONLY
         if "login required" in message or "vvic_login_required" in message or "로그인" in message:
             return _ERROR_VVIC_LOGIN_REQUIRED
         if "blocked" in message or "captcha" in message or "vvic_blocked" in message or "차단" in message:
@@ -881,6 +965,7 @@ class PCAgentManager:
         command_timeout_seconds: float = 120.0,
     ) -> dict[str, Any]:
         request_params: Dict[str, Any] = dict(params or {})
+        request_params.setdefault("command_timeout_seconds", float(command_timeout_seconds))
         lease_response = await self.acquire_lease(
             job_type=job_type,
             command_type=command_type,

@@ -1539,3 +1539,23 @@ tests/smoke_test_result_*
 ## [2026-05-14 09:14:11 KST] [GO100] v41_manager/mock_trades.json
 - Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
 - finalize: pending
+
+## [2026-05-14 18:03:50 KST] [GO100] scripts/_fix_p0_user_context.py
+- Chat-Direct 수정: write: scripts/_fix_p0_user_context.py
+- finalize: pending
+
+## [2026-05-14 18:04:02 KST] [GO100] backend/app/services/go100/ai/agent_core.py
+- Chat-Direct 수정: run_remote_command: python3 /root/kis-autotrade-v4/scripts/_fix_p0_user_context.py
+- finalize: pending
+
+## [2026-05-14 18:05:47 KST] [GO100] scripts/_fix_p0_34_guardrail_prompt.py
+- Chat-Direct 수정: write: scripts/_fix_p0_34_guardrail_prompt.py
+- finalize: pending
+
+## [2026-05-14 18:05:58 KST] [GO100] backend/app/services/go100/ai/prompt_layers/core.py
+- Chat-Direct 수정: run_remote_command: python3 /root/kis-autotrade-v4/scripts/_fix_p0_34_guardrail_prompt.py
+- finalize: pending
+
+## [2026-05-14 18:06:06 KST] [GO100] backend/app/services/go100/ai/realtime_guardrails.py
+- Chat-Direct 수정: run_remote_command: python3 /root/kis-autotrade-v4/scripts/_fix_p0_34_guardrail_prompt.py
+- finalize: pending
