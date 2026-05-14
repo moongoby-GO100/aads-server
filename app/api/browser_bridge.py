@@ -225,6 +225,22 @@ async def route_execute_work_session(
         agent_id = str(req.agent_id or metadata.get("agent_id") or "")
         port = metadata.get("port")
         params = dict(req.params or {})
+        effective_command_timeout_seconds = float(req.command_timeout_seconds)
+        raw_param_timeout = (
+            params.get("command_timeout_seconds")
+            if "command_timeout_seconds" in params
+            else params.get("timeout")
+        )
+        if raw_param_timeout is not None:
+            try:
+                param_timeout = float(raw_param_timeout)
+            except Exception:
+                param_timeout = effective_command_timeout_seconds
+            if param_timeout > 0:
+                effective_command_timeout_seconds = min(effective_command_timeout_seconds, param_timeout)
+        params["command_timeout_seconds"] = effective_command_timeout_seconds
+        if req.command_type.strip().lower() == "browser_eval" and "evaluate_timeout_seconds" not in params:
+            params["evaluate_timeout_seconds"] = max(1.0, min(20.0, effective_command_timeout_seconds - 0.5))
         params.setdefault("work_key", session.work_key or req.work_key)
         params.setdefault("browser_session_id", session.session_id)
         params.setdefault("session_id", session.session_id)
@@ -241,7 +257,7 @@ async def route_execute_work_session(
             required_capabilities=req.required_capabilities,
             queue_wait_timeout_seconds=req.queue_wait_timeout_seconds,
             lease_ttl_seconds=req.lease_ttl_seconds,
-            command_timeout_seconds=req.command_timeout_seconds,
+            command_timeout_seconds=effective_command_timeout_seconds,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

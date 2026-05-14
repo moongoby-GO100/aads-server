@@ -840,3 +840,14 @@ with open('/root/aads/aads-server/.gitignore','a') as f:
 
 ## [2026-05-14 18:03:58 KST] [aads-server] docs/CHANGELOG-go100-direct.md
 - Chat-Direct 수정: run_remote_command: curl -s -X POST http://localhost:8100/api/v1/pc-agent/route-execute -H "Content-
+
+## [2026-05-15 08:32:35 KST] [aads-server] pc_agent/commands/browser_auto.py
+- Chat-Direct 수정: patch:                 try:
+                   →                try:
+                   
+
+## [2026-05-15 08:32:39 KST] [aads-server] pc_agent/commands/browser_auto.py
+- Chat-Direct 수정: patch: def _command_error_response(port: int, p→def _command_error_response(port: int, p
+
+## [2026-05-15 08:32:43 KST] [aads-server] pc_agent/commands/browser_auto.py
+- Chat-Direct 수정: patch:     # PC Agent WebSocket (wss:// upgrade→THIS_WILL_NOT_MATCH

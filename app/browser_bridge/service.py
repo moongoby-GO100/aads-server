@@ -40,7 +40,7 @@ DEFAULT_WORK_SESSION_LABELS = {
     "ntv2-china-sourcing-admin": "NTV2 China sourcing admin",
     "ntv2-vvic-scrape": "NTV2 VVIC scrape",
 }
-LOCAL_AGENT_RECOVERABLE_ERROR_CODES = {"CDP_NOT_READY", "RUNTIME_EVALUATE_TIMEOUT", "STALE_TARGET"}
+LOCAL_AGENT_RECOVERABLE_ERROR_CODES = {"CDP_NOT_READY", "RUNTIME_EVALUATE_TIMEOUT", "STALE_TARGET", "COMMAND_TIMEOUT"}
 LOCAL_AGENT_JS_COMMANDS = {
     "browser_click",
     "browser_fill",
@@ -135,7 +135,7 @@ class _LocalAgentPage:
             if "work_key" not in merged and hasattr(self._session, "work_key") and self._session.work_key:
                 merged["work_key"] = self._session.work_key
             if command_type in LOCAL_AGENT_JS_COMMANDS:
-                merged.setdefault("evaluate_timeout_seconds", min(max(command_timeout_seconds - 5.0, 5.0), 20.0))
+                merged.setdefault("evaluate_timeout_seconds", max(1.0, min(20.0, command_timeout_seconds - 0.5)))
 
             lease_ttl_seconds = int(command_timeout_seconds + LOCAL_AGENT_LEASE_BUFFER_SECONDS)
             result = await pc_agent_manager.execute_routed_command(

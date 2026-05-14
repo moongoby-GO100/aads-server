@@ -435,6 +435,62 @@ class PCAgentManager:
         code = str(value or "").strip().upper()
         return code if code in _KNOWN_ROUTING_ERRORS else ""
 
+    def _coerce_timeout_seconds(self, value: Any, *, default: float, minimum: float = 1.0, maximum: float = 900.0) -> float:
+        try:
+            timeout = float(value)
+        except Exception:
+            timeout = float(default)
+        return max(minimum, min(timeout, maximum))
+
+    def _effective_command_timeout_seconds(self, command_timeout_seconds: float, params: Dict[str, Any]) -> float:
+        route_timeout = self._coerce_timeout_seconds(command_timeout_seconds, default=120.0)
+        raw_param_timeout = None
+        if isinstance(params, dict):
+            if "command_timeout_seconds" in params:
+                raw_param_timeout = params.get("command_timeout_seconds")
+            elif "timeout" in params:
+                raw_param_timeout = params.get("timeout")
+        if raw_param_timeout is None:
+            return route_timeout
+        param_timeout = self._coerce_timeout_seconds(raw_param_timeout, default=route_timeout)
+        # route-execute timeout is authoritative upper bound.
+        return min(route_timeout, param_timeout)
+
+    async def _cleanup_browser_session_on_timeout(
+        self,
+        *,
+        agent_id: str,
+        command_type: str,
+        params: Dict[str, Any],
+        timeout_seconds: float,
+    ) -> None:
+        normalized_command = str(command_type or "").strip().lower()
+        if not normalized_command.startswith("browser_"):
+            return
+        work_key = str((params or {}).get("work_key") or "").strip()
+        if not work_key:
+            return
+        cleanup_params: Dict[str, Any] = {
+            "work_key": work_key,
+            "cleanup": True,
+        }
+        if "port" in (params or {}):
+            cleanup_params["port"] = params.get("port")
+        try:
+            cleanup_command_id = await self.send_command(agent_id, "browser_health", cleanup_params)
+            await self.get_result(
+                cleanup_command_id,
+                timeout=max(1.0, min(3.0, float(timeout_seconds))),
+            )
+        except Exception as exc:
+            logger.debug(
+                "pc_agent_timeout_cleanup_failed agent_id=%s command_type=%s work_key=%s err=%s",
+                agent_id,
+                normalized_command,
+                work_key,
+                exc,
+            )
+
     def _track_command(self, agent_id: str, command_id: str) -> None:
         self._command_agents[command_id] = agent_id
         if agent_id not in self._agent_commands:
@@ -965,7 +1021,11 @@ class PCAgentManager:
         command_timeout_seconds: float = 120.0,
     ) -> dict[str, Any]:
         request_params: Dict[str, Any] = dict(params or {})
-        request_params.setdefault("command_timeout_seconds", float(command_timeout_seconds))
+        effective_command_timeout_seconds = self._effective_command_timeout_seconds(
+            command_timeout_seconds,
+            request_params,
+        )
+        request_params["command_timeout_seconds"] = effective_command_timeout_seconds
         lease_response = await self.acquire_lease(
             job_type=job_type,
             command_type=command_type,
@@ -1010,8 +1070,12 @@ class PCAgentManager:
         final_job_type = str(lease_payload.get("job_type", "") or "")
         if final_job_type in _VVIC_JOB_TYPES and command_type == "browser_launch":
             request_params = self._prepare_vvic_browser_launch_params(request_params, lease_id)
+            request_params["command_timeout_seconds"] = effective_command_timeout_seconds
 
-        await self.heartbeat_lease(lease_id, extend_seconds=max(lease_ttl_seconds, int(command_timeout_seconds) + 30))
+        await self.heartbeat_lease(
+            lease_id,
+            extend_seconds=max(lease_ttl_seconds, int(effective_command_timeout_seconds) + 30),
+        )
         selected_agent_id = str(lease_payload.get("agent_id", "") or "")
         try:
             command_id = await self.send_command(selected_agent_id, command_type, request_params)
@@ -1030,7 +1094,7 @@ class PCAgentManager:
                 "lease": refreshed or lease_payload,
             }
 
-        command_result = await self.get_result(command_id, timeout=command_timeout_seconds)
+        command_result = await self.get_result(command_id, timeout=effective_command_timeout_seconds)
         lease_for_return = await self.get_lease(lease_id)
 
         if command_result.status == "timeout":
@@ -1039,6 +1103,12 @@ class PCAgentManager:
                 status="error",
                 error_code=_ERROR_COMMAND_TIMEOUT,
                 error_message="command timeout",
+            )
+            await self._cleanup_browser_session_on_timeout(
+                agent_id=selected_agent_id,
+                command_type=command_type,
+                params=request_params,
+                timeout_seconds=effective_command_timeout_seconds,
             )
             refreshed = await self.get_lease(lease_id)
             return {

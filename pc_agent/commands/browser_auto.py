@@ -307,6 +307,23 @@ def _resolve_timeout(
     return timeout
 
 
+def _resolve_command_timeout_budget(
+    params: Dict[str, Any] | None,
+    *,
+    default: float = CDP_COMMAND_TIMEOUT_SECONDS,
+    minimum: float = 1.0,
+    maximum: float = 300.0,
+) -> float:
+    raw_value = default
+    if isinstance(params, dict):
+        raw_value = params.get("command_timeout_seconds", params.get("timeout", default))
+    try:
+        timeout = float(raw_value or default)
+    except Exception:
+        timeout = float(default)
+    return max(minimum, min(timeout, maximum))
+
+
 def _looks_like_crashed_target(url: str, title: str) -> bool:
     haystack = f"{url} {title}".lower()
     return any(token in haystack for token in ("chrome-error://", "chrome://crash", "aw, snap", "target crashed"))
@@ -704,10 +721,11 @@ def _record_cdp_success(params: Dict[str, Any] | None, target: dict[str, Any] | 
 def _command_error_response(port: int, params: Dict[str, Any] | None, exc: CDPCommandError) -> Dict[str, Any]:
     work_key = _work_key_from_params(params)
     CDPSessionManager.mark_error(work_key, error_code=exc.code)
-    if exc.code == _ERROR_CDP_NOT_READY:
+    if exc.code in {_ERROR_CDP_NOT_READY, _ERROR_RUNTIME_EVALUATE_TIMEOUT, _ERROR_STALE_TARGET}:
         CDPSessionManager.release(work_key)
     data = {"error": str(exc), "error_code": exc.code, "port": port}
     data.update(exc.details)
+    data.setdefault("work_key", work_key)
     return {"status": "error", "data": data}
 
 
@@ -1225,20 +1243,43 @@ async def browser_eval(params: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("브라우저 JS 실행: %s", expression[:200])
 
     port = _effective_port(params)
+    started_at = _time()
+    command_budget_seconds = _resolve_command_timeout_budget(
+        params,
+        default=max(CDP_EVALUATE_TIMEOUT_SECONDS + 2.0, CDP_COMMAND_TIMEOUT_SECONDS),
+        minimum=1.0,
+        maximum=300.0,
+    )
     try:
-        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=30.0)
-        result = await _send_cdp_command(
-            port,
-            "Runtime.evaluate",
-            {
-                "expression": expression,
-                "returnByValue": True,
-                "awaitPromise": True,
-            },
-            timeout_seconds=timeout_seconds,
-            target_id=str(params.get("target_id") or ""),
-            target_idx=int(params.get("target_idx", 0) or 0),
+        timeout_seconds = _resolve_timeout(
+            params,
+            param_name="evaluate_timeout_seconds",
+            default=CDP_EVALUATE_TIMEOUT_SECONDS,
+            maximum=30.0,
         )
+        timeout_seconds = min(timeout_seconds, max(1.0, command_budget_seconds - 0.5))
+        try:
+            result = await asyncio.wait_for(
+                _send_cdp_command(
+                    port,
+                    "Runtime.evaluate",
+                    {
+                        "expression": expression,
+                        "returnByValue": True,
+                        "awaitPromise": True,
+                    },
+                    timeout_seconds=timeout_seconds,
+                    target_id=str(params.get("target_id") or ""),
+                    target_idx=int(params.get("target_idx", 0) or 0),
+                ),
+                timeout=max(0.5, timeout_seconds + 0.25),
+            )
+        except asyncio.TimeoutError as exc:
+            raise CDPCommandError(
+                _ERROR_RUNTIME_EVALUATE_TIMEOUT,
+                f"Runtime.evaluate timed out after {timeout_seconds:.1f}s",
+                details={"timeout_seconds": timeout_seconds},
+            ) from exc
         error = _runtime_exception_error(result)
         if error is not None:
             raise error
@@ -1246,11 +1287,16 @@ async def browser_eval(params: Dict[str, Any]) -> Dict[str, Any]:
         if res_data.get("subtype") == "error":
             raise CDPCommandError(_ERROR_CDP_NOT_READY, str(res_data.get("description", "JS 실행 오류")))
         _record_cdp_success(params, result.get("_target"))
-        diagnostics = await _collect_page_diagnostics(
-            port,
-            timeout_seconds=min(3.0, timeout_seconds),
-            target_id=str((result.get("_target") or {}).get("id") or ""),
-        )
+        diagnostics: dict[str, Any] = {}
+        elapsed = max(0.0, _time() - started_at)
+        remaining_budget = command_budget_seconds - elapsed
+        if remaining_budget > 0.7:
+            diagnostics_timeout = min(3.0, timeout_seconds, max(0.5, remaining_budget - 0.25))
+            diagnostics = await _collect_page_diagnostics(
+                port,
+                timeout_seconds=diagnostics_timeout,
+                target_id=str((result.get("_target") or {}).get("id") or ""),
+            )
         if _is_spa_shell_only(diagnostics):
             spa_error = CDPCommandError(
                 _ERROR_SPA_SHELL_ONLY,

@@ -435,9 +435,27 @@ async def execute_command(req: CommandRequest):
 @router.post("/pc-agent/route-execute")
 async def route_execute_command(req: RoutedCommandRequest):
     """Capability 기반 라우팅 + lease/queue 제어로 명령 실행."""
+    params = dict(req.params or {})
+    effective_command_timeout_seconds = float(req.command_timeout_seconds)
+    raw_param_timeout = (
+        params.get("command_timeout_seconds")
+        if "command_timeout_seconds" in params
+        else params.get("timeout")
+    )
+    if raw_param_timeout is not None:
+        try:
+            param_timeout = float(raw_param_timeout)
+        except Exception:
+            param_timeout = effective_command_timeout_seconds
+        if param_timeout > 0:
+            effective_command_timeout_seconds = min(effective_command_timeout_seconds, param_timeout)
+    params["command_timeout_seconds"] = effective_command_timeout_seconds
+    if req.command_type.strip().lower() == "browser_eval" and "evaluate_timeout_seconds" not in params:
+        params["evaluate_timeout_seconds"] = max(1.0, min(20.0, effective_command_timeout_seconds - 0.5))
+
     result = await pc_agent_manager.execute_routed_command(
         command_type=req.command_type,
-        params=req.params,
+        params=params,
         agent_id=req.agent_id,
         job_type=req.job_type,
         required_capabilities=req.required_capabilities,
@@ -445,7 +463,7 @@ async def route_execute_command(req: RoutedCommandRequest):
         wait_for_turn=req.wait_for_turn,
         queue_wait_timeout_seconds=req.queue_wait_timeout_seconds,
         lease_ttl_seconds=req.lease_ttl_seconds,
-        command_timeout_seconds=req.command_timeout_seconds,
+        command_timeout_seconds=effective_command_timeout_seconds,
     )
     if result.get("status") == "error":
         error_code = str(result.get("error_code", "") or "")

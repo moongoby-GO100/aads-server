@@ -1559,3 +1559,11 @@ tests/smoke_test_result_*
 ## [2026-05-14 18:06:06 KST] [GO100] backend/app/services/go100/ai/realtime_guardrails.py
 - Chat-Direct 수정: run_remote_command: python3 /root/kis-autotrade-v4/scripts/_fix_p0_34_guardrail_prompt.py
 - finalize: pending
+
+## [2026-05-15 08:29:48 KST] [GO100] reports/20260515_BAEKEOGIE_DEEP_RESEARCH_REPORT.md
+- Chat-Direct 수정: write: reports/20260515_BAEKEOGIE_DEEP_RESEARCH_REPORT.md
+- finalize: pending
+
+## [2026-05-15 08:33:10 KST] [GO100] reports/20260515_백억이_세계최고AI투자시스템_연구보고서.md
+- Chat-Direct 수정: write: reports/20260515_백억이_세계최고AI투자시스템_연구보고서.md
+- finalize: pending
