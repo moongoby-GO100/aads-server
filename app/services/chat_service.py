@@ -111,7 +111,6 @@ _streaming_state: Dict[str, Dict[str, Any]] = {}
 _BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "300"))  # 5분
 _FIRST_RESPONSE_TIMEOUT_SEC = float(os.getenv("AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC", "120"))
 _COOLDOWN_SECS_DEFAULT = 300
-_COOLDOWN_SECS_DEFAULT = 300
 _RECOVERY_DEDUPE_MODEL_USED = {"recovered", "recovered_from_redis", "stopped", None}
 _RECOVERY_PREFIX_LEN = 50
 _HISTORY_EXCLUDED_INTENTS = (
