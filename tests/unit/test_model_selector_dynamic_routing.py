@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
 
 import pytest
@@ -645,6 +646,19 @@ def test_relay_retry_policy_defaults_to_two_seconds_thirty_retries():
     assert set(model_selector._CODEX_RETRY_DELAYS) == {2.0}
     assert len(model_selector._CLI_RETRY_DELAYS) == 30
     assert set(model_selector._CLI_RETRY_DELAYS) == {2.0}
+
+
+def test_parse_quota_reset_seconds_handles_codex_cli_fixed_kst_time():
+    seconds = model_selector._parse_quota_reset_seconds("You've hit your limit · resets 3am (Asia/Seoul)")
+
+    kst = timezone(timedelta(hours=9))
+    now_kst = datetime.now(kst)
+    expected_target = now_kst.replace(hour=3, minute=0, second=0, microsecond=0)
+    if expected_target <= now_kst:
+        expected_target += timedelta(days=1)
+    expected_seconds = max(int((expected_target - now_kst).total_seconds()), 60)
+
+    assert abs(seconds - expected_seconds) <= 2
 
 
 @pytest.mark.asyncio

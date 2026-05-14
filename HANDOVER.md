@@ -1,5 +1,12 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-14 12:08 KST) - 68/211/114 Codex CLI 인증 반영
+- 배경: CEO가 각 서버에서 OpenAI/Codex OAuth 승인을 완료한 뒤, 서버별 `~/.codex/auth.json`에 인증 코드가 실제 반영됐는지와 독립 refresh_token 보유 여부 확인이 필요했다.
+- 조치: 68(AADS), 211(KIS/GO100), 114(SF/NTV2)에서 `codex login status`, `auth.json` 메타데이터, access_token 만료시각, refresh_token SHA-256 prefix를 토큰 원문 없이 확인했다.
+- 확인: 68 refresh hash `402feecaeab86c90`, 211 refresh hash `276586fe417f1d44`, 114 refresh hash `39c79c4780b50dca`로 모두 달라 서버별 독립 refresh_token 보유 상태다. access_token 만료는 각각 2026-05-24 11:33:48/11:37:00/11:38:50 KST로 갱신됐다.
+- 검증: `codex exec --skip-git-repo-check` 최소 호출이 68=`OK-68`, 211=`OK-211`, 114=`OK-114`로 성공했다. MCP 원격 실행은 211에서 50초 타임아웃, 114에서 transport closed가 있었으나 직접 SSH 대안 검증으로 성공 확인했다.
+- 주의: 211/114 `codex exec` 실행 시 `bubblewrap` 미설치 경고가 출력됐고 bundled bubblewrap fallback으로 계속 실행됐다. 인증 문제는 아니지만 추후 패키지 보강 대상으로 남긴다.
+
 ## 현재 진행 상태 (2026-05-13 16:25 KST) - AADS Blue-Green 미진 항목 즉시 보정
 - 배경: AADS 무중단 배포 전수 검수 후 남은 권장/미진 항목을 재확인했다. 실측 기준 nginx upstream은 API green `8102` active, dashboard green `3101` active였지만 `.active_port/.active_container` marker는 API blue `8100/aads-server`로 어긋나 있었다.
 - 조치: `.active_port=8102`, `.active_container=aads-server-green`으로 marker를 nginx upstream 기준에 맞게 정합했다. active green에는 실행 스트림 4건이 있어 컨테이너 재빌드/재시작은 수행하지 않았다.

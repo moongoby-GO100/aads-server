@@ -1,5 +1,9 @@
 # AADS HANDOVER
-최종 업데이트: 2026-05-13
+최종 업데이트: 2026-05-14
+
+## 2026-05-14
+- Codex CLI quota 안내 중 `You've hit your limit · resets 3am (Asia/Seoul)` 고정시각 패턴이 `_parse_quota_reset_seconds()`에서 다음 03:00 KST까지의 초 단위로 파싱되는지 회귀 테스트를 추가했다.
+- 검증: `pytest tests/unit/test_model_selector_dynamic_routing.py -q` 20개 통과. 운영 컨테이너 `aads-server`에서도 `resets 3am (Asia/Seoul)`이 다음 03:00 KST 기준 복구 시간으로 파싱됨을 확인했다.
 
 ## 2026-05-13
 - 2026-05-13 KST: CEO PC 로컬 양자화/멀티모달 모델 브릿지 준비를 추가했다. `scripts/local_model_install_queue.json`을 canonical queue로 두고 `app/services/local_model_manager.py`가 queue/status/single-item install-test 라우팅을 담당한다.
