@@ -759,3 +759,12 @@ MAX
 - Chat-Direct 수정: run_remote_command: python3 -c "
 # Add runtime markers to server .gitignore
 with open('/root/aads/aa
+
+## [2026-05-14 09:20:06 KST] [aads-server] scripts/codex_token_refresh.py
+- Chat-Direct 수정: write: scripts/codex_token_refresh.py
+
+## [2026-05-14 09:20:09 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git push origin main
+
+## [2026-05-14 09:20:16 KST] [aads-server] scripts/codex_token_refresh.py
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git push origin main
