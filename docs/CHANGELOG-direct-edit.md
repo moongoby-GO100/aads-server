@@ -768,3 +768,35 @@ with open('/root/aads/aa
 
 ## [2026-05-14 09:20:16 KST] [aads-server] scripts/codex_token_refresh.py
 - Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git push origin main
+
+## [2026-05-14 09:29:25 KST] [aads-server] litellm-config.yaml
+- Chat-Direct 수정: patch: - model_name: claude-sonnet
+  litellm_pa→- model_name: qwen-turbo
+
+## [2026-05-14 09:30:56 KST] [aads-server] litellm-config.yaml
+- Chat-Direct 수정: run_remote_command: python3 -c "
+import re
+f='/root/aads/aads-server/litellm-config.yaml'
+with open(
+
+## [2026-05-14 09:31:04 KST] [aads-server] litellm-config.yaml.bak_before_claude_fix
+- Chat-Direct 수정: run_remote_command: python3 -c "
+import re
+f='/root/aads/aads-server/litellm-config.yaml'
+with open(
+
+## [2026-05-14 09:33:13 KST] [aads-server] scripts/codex_auth_monitor.py
+- Chat-Direct 수정: write: scripts/codex_auth_monitor.py
+
+## [2026-05-14 09:33:15 KST] [aads-server] scripts/codex_auth_monitor.py
+- Chat-Direct 수정: run_remote_command: python3 -c "
+import json,time,base64
+d=json.load(open('/root/.codex/auth.json'))
+
+## [2026-05-14 09:33:20 KST] [aads-server] scripts/codex_auth_monitor.py
+- Chat-Direct 수정: run_remote_command: ssh -i /root/.ssh/id_ed25519 -o StrictHostKeyChecking=no -o ConnectTimeout=10 ro
+
+## [2026-05-14 09:33:23 KST] [aads-server] .gitignore
+- Chat-Direct 수정: run_remote_command: python3 -c "
+with open('/root/aads/aads-server/.gitignore','a') as f:
+    f.writ

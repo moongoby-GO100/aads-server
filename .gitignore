@@ -57,3 +57,6 @@ playwright/.auth/
 # BG runtime markers
 .active_container
 .active_port
+
+# Backup files
+*.bak_*
