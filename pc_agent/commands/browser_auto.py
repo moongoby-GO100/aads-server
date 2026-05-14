@@ -1290,6 +1290,65 @@ async def browser_tabs(params: Dict[str, Any]) -> Dict[str, Any]:
         return _chrome_not_running_error(port)
 
 
+async def browser_health(params: Dict[str, Any]) -> Dict[str, Any]:
+    """CDP 세션 건강 확인 + stale 세션 정리. params: work_key(선택), cleanup(선택, 기본true)."""
+    work_key = CDPSessionManager.normalize_work_key(params.get("work_key", "general"))
+    do_cleanup = bool(params.get("cleanup", True))
+    port = _effective_port(params)
+
+    session = CDPSessionManager.get_session(work_key)
+    if session:
+        port = session.port
+
+    version = await _probe_cdp_version(port)
+    if version is None:
+        if do_cleanup and session:
+            CDPSessionManager.release(work_key)
+            logger.info("browser_health: stale session 정리 (work_key=%s port=%d)", work_key, port)
+        return {
+            "status": "error",
+            "data": {
+                "error": f"CDP 응답 없음 (port {port})",
+                "error_code": _ERROR_CDP_NOT_READY,
+                "port": port,
+                "work_key": work_key,
+                "session_released": do_cleanup and session is not None,
+            },
+        }
+
+    try:
+        result = await _send_cdp_command(port, "Runtime.evaluate", {
+            "expression": "JSON.stringify({readyState: document.readyState, href: location.href, bodyLen: document.body ? document.body.innerText.length : -1})",
+            "returnByValue": True,
+        }, timeout_seconds=5)
+        value = result.get("result", {}).get("value", "{}")
+        data = json.loads(value) if isinstance(value, str) else (value or {})
+        return {
+            "status": "success",
+            "data": {
+                "port": port,
+                "work_key": work_key,
+                "cdp_version": version.get("Browser", ""),
+                "page": data,
+            },
+        }
+    except CDPCommandError as e:
+        if do_cleanup and session:
+            CDPSessionManager.release(work_key)
+        return {
+            "status": "error",
+            "data": {
+                "error": str(e),
+                "error_code": e.code,
+                "port": port,
+                "work_key": work_key,
+                "session_released": do_cleanup and session is not None,
+            },
+        }
+    except Exception as e:
+        return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY}}
+
+
 async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
     """Chrome CDP 전용 세션 시작 (전용 프로필 + 동적 포트 충돌 회피)."""
     url = params.get("url", "about:blank")
