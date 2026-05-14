@@ -53,3 +53,7 @@ browser-bridge-state/
 storageState*.json
 storage_state*.json
 playwright/.auth/
+
+# BG runtime markers
+.active_container
+.active_port

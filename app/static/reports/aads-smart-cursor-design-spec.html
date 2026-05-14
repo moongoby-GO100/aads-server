@@ -3,13 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AADS 스마트 커서 인스펙터 — 상세 구현 기획서</title>
+<title>AADS 스마트 커서 인스펙터 — 상세 구현 기획서 v2.0</title>
 <style>
   :root {
     --bg: #0d1117; --surface: #161b22; --surface2: #1c2333;
     --border: #30363d; --text: #e6edf3; --text2: #8b949e;
     --accent: #58a6ff; --accent2: #3fb950; --warn: #d29922;
     --error: #f85149; --purple: #bc8cff; --pink: #f778ba;
+    --cyan: #56d4dd;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -34,27 +35,33 @@
   .hero > * { position: relative; z-index: 1; }
   .hero h1 { font-size: 2.4em; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 12px; }
   .hero h1 span { background: linear-gradient(135deg, var(--accent), var(--purple)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-  .hero .subtitle { font-size: 1.15em; color: var(--text2); max-width: 680px; margin: 0 auto 24px; }
+  .hero .subtitle { font-size: 1.15em; color: var(--text2); max-width: 720px; margin: 0 auto 24px; }
   .hero .meta { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; font-size: 0.85em; color: var(--text2); }
   .hero .meta .tag { padding: 4px 14px; border-radius: 20px; font-weight: 600; border: 1px solid var(--border); }
   .hero .meta .tag.p0 { border-color: var(--error); color: var(--error); }
   .hero .meta .tag.ver { border-color: var(--accent); color: var(--accent); }
+  .hero .meta .tag.new { border-color: var(--purple); color: var(--purple); }
   .container { max-width: 1100px; margin: 0 auto; padding: 40px 24px; }
   .toc { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 28px 32px; margin-bottom: 48px; }
   .toc h2 { font-size: 1.1em; color: var(--accent); margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.05em; }
   .toc ol { padding-left: 20px; columns: 2; column-gap: 40px; }
   .toc li { margin-bottom: 8px; font-size: 0.95em; break-inside: avoid; }
+  .toc li.new-item { color: var(--purple); }
   .toc a { color: var(--text); text-decoration: none; border-bottom: 1px dashed var(--border); transition: all 0.2s; }
+  .toc li.new-item a { color: var(--purple); border-color: rgba(188,140,255,0.3); }
   .toc a:hover { color: var(--accent); border-color: var(--accent); }
   section { margin-bottom: 56px; }
   section h2 { font-size: 1.5em; font-weight: 700; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid var(--border); display: flex; align-items: center; gap: 12px; }
   section h2 .num { background: var(--accent); color: var(--bg); width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 8px; font-size: 0.75em; font-weight: 800; flex-shrink: 0; }
+  section h2 .num.new-num { background: var(--purple); }
   section h3 { font-size: 1.15em; color: var(--purple); margin: 24px 0 12px; }
   section h4 { font-size: 1em; color: var(--accent2); margin: 16px 0 8px; }
   p { margin-bottom: 14px; color: var(--text); }
   .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin: 16px 0; }
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px 22px; transition: border-color 0.2s; }
   .card:hover { border-color: var(--accent); }
+  .card.new-card { border-color: rgba(188,140,255,0.3); }
+  .card.new-card:hover { border-color: var(--purple); }
   .card .card-title { font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
   .card .card-title .icon { font-size: 1.3em; }
   .card p { font-size: 0.9em; color: var(--text2); margin-bottom: 0; }
@@ -63,6 +70,8 @@
   td { padding: 10px 16px; border-bottom: 1px solid var(--border); vertical-align: top; }
   tr:last-child td { border-bottom: none; }
   tr:hover td { background: rgba(88,166,255,0.03); }
+  tr.new-row td { background: rgba(188,140,255,0.04); }
+  tr.new-row:hover td { background: rgba(188,140,255,0.08); }
   code { background: var(--surface2); padding: 2px 7px; border-radius: 5px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.88em; color: var(--pink); }
   pre { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin: 16px 0; overflow-x: auto; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.85em; line-height: 1.6; color: var(--text2); }
   pre code { background: none; padding: 0; color: inherit; }
@@ -70,6 +79,7 @@
   .flow-steps { display: flex; align-items: center; justify-content: center; gap: 0; flex-wrap: nowrap; min-width: max-content; margin: 0 auto; }
   .flow-step { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; min-width: 130px; text-align: center; transition: all 0.2s; }
   .flow-step:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .flow-step.new-step { border-color: rgba(188,140,255,0.3); }
   .flow-step .step-icon { font-size: 1.5em; margin-bottom: 6px; }
   .flow-step .step-label { font-weight: 700; font-size: 0.85em; }
   .flow-step .step-desc { font-size: 0.75em; color: var(--text2); margin-top: 4px; }
@@ -94,12 +104,17 @@
   .wf-issue .issue-tag { color: var(--error); font-weight: 700; font-size: 0.8em; }
   .wf-improve { background: rgba(63,185,80,0.06); border: 1px solid rgba(63,185,80,0.2); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; font-size: 0.85em; }
   .wf-improve .improve-tag { color: var(--accent2); font-weight: 700; font-size: 0.8em; }
+  .wf-system { background: rgba(86,212,221,0.06); border: 1px solid rgba(86,212,221,0.2); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; font-size: 0.85em; }
+  .wf-system .system-tag { color: var(--cyan); font-weight: 700; font-size: 0.8em; }
+  .wf-proactive { background: rgba(188,140,255,0.06); border: 1px solid rgba(188,140,255,0.2); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; font-size: 0.85em; }
+  .wf-proactive .proactive-tag { color: var(--purple); font-weight: 700; font-size: 0.8em; }
   .phase-timeline { display: flex; gap: 0; margin: 24px 0; position: relative; }
   .phase-timeline::before { content: ''; position: absolute; top: 28px; left: 40px; right: 40px; height: 3px; background: var(--border); z-index: 0; }
   .phase { flex: 1; text-align: center; position: relative; z-index: 1; padding: 0 8px; }
   .phase .phase-dot { width: 20px; height: 20px; border-radius: 50%; margin: 18px auto 14px; border: 3px solid var(--border); background: var(--bg); }
   .phase.active .phase-dot { border-color: var(--accent); background: var(--accent); }
   .phase.done .phase-dot { border-color: var(--accent2); background: var(--accent2); }
+  .phase.new-phase .phase-dot { border-color: var(--purple); background: var(--purple); }
   .phase .phase-name { font-weight: 700; font-size: 0.85em; margin-bottom: 4px; }
   .phase .phase-period { font-size: 0.75em; color: var(--text2); }
   .phase .phase-detail { font-size: 0.78em; color: var(--text2); margin-top: 6px; }
@@ -109,12 +124,14 @@
   .badge.p2 { background: rgba(88,166,255,0.15); color: var(--accent); border: 1px solid rgba(88,166,255,0.3); }
   .badge.new { background: rgba(188,140,255,0.15); color: var(--purple); border: 1px solid rgba(188,140,255,0.3); }
   .badge.exist { background: rgba(63,185,80,0.15); color: var(--accent2); border: 1px solid rgba(63,185,80,0.3); }
+  .badge.v2 { background: rgba(86,212,221,0.15); color: var(--cyan); border: 1px solid rgba(86,212,221,0.3); }
   .arch-box { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 28px; margin: 20px 0; }
   .arch-layers { display: flex; flex-direction: column; gap: 12px; }
   .arch-layer { border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; display: flex; align-items: center; gap: 16px; }
   .arch-layer .layer-label { min-width: 120px; font-weight: 700; font-size: 0.85em; flex-shrink: 0; }
   .arch-layer .layer-items { display: flex; gap: 8px; flex-wrap: wrap; }
   .arch-layer .layer-item { padding: 4px 12px; border-radius: 6px; font-size: 0.8em; font-weight: 600; border: 1px solid var(--border); }
+  .arch-layer .layer-item.v2-item { border-style: dashed; }
   .arch-layer.frontend { border-color: rgba(88,166,255,0.3); }
   .arch-layer.frontend .layer-label { color: var(--accent); }
   .arch-layer.frontend .layer-item { border-color: rgba(88,166,255,0.3); color: var(--accent); }
@@ -124,6 +141,9 @@
   .arch-layer.ai { border-color: rgba(188,140,255,0.3); }
   .arch-layer.ai .layer-label { color: var(--purple); }
   .arch-layer.ai .layer-item { border-color: rgba(188,140,255,0.3); color: var(--purple); }
+  .arch-layer.monitor { border-color: rgba(86,212,221,0.3); }
+  .arch-layer.monitor .layer-label { color: var(--cyan); }
+  .arch-layer.monitor .layer-item { border-color: rgba(86,212,221,0.3); color: var(--cyan); }
   .arch-layer.infra { border-color: rgba(210,153,34,0.3); }
   .arch-layer.infra .layer-label { color: var(--warn); }
   .arch-layer.infra .layer-item { border-color: rgba(210,153,34,0.3); color: var(--warn); }
@@ -131,6 +151,17 @@
   .checklist li { padding: 8px 14px; border-bottom: 1px solid var(--border); font-size: 0.9em; display: flex; align-items: flex-start; gap: 10px; }
   .checklist li:last-child { border-bottom: none; }
   .checklist .check { color: var(--accent2); font-weight: 700; flex-shrink: 0; }
+  .update-banner { background: linear-gradient(135deg, rgba(188,140,255,0.08), rgba(86,212,221,0.08)); border: 1px solid rgba(188,140,255,0.3); border-radius: 10px; padding: 16px 20px; margin: 16px 0; }
+  .update-banner .banner-title { font-weight: 700; color: var(--purple); margin-bottom: 6px; font-size: 0.95em; }
+  .update-banner p { font-size: 0.88em; color: var(--text2); margin-bottom: 0; }
+  .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0; }
+  .status-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+  .status-card .status-label { font-size: 0.75em; color: var(--text2); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+  .status-card .status-value { font-size: 1.3em; font-weight: 800; }
+  .status-card .status-value.good { color: var(--accent2); }
+  .status-card .status-value.warn { color: var(--warn); }
+  .status-card .status-value.bad { color: var(--error); }
+  .status-card .status-detail { font-size: 0.8em; color: var(--text2); margin-top: 4px; }
   .footer { text-align: center; padding: 40px; color: var(--text2); border-top: 1px solid var(--border); font-size: 0.85em; }
   @media (max-width: 800px) {
     .hero { padding: 40px 20px 30px; } .hero h1 { font-size: 1.6em; }
@@ -139,6 +170,7 @@
     .flow-steps { flex-wrap: wrap; gap: 8px; } .flow-arrow { display: none; }
     .arch-layer { flex-direction: column; align-items: flex-start; }
     .phase-timeline { flex-wrap: wrap; } .phase-timeline::before { display: none; }
+    .status-grid { grid-template-columns: 1fr; }
   }
 </style>
 </head>
@@ -146,15 +178,21 @@
 
 <div class="hero">
   <h1><span>Smart Cursor Inspector</span></h1>
-  <p class="subtitle">마우스 커서가 닿는 UI 요소를 AI가 실시간 분석하여 문제점과 개선안을 즉시 화면 위에 보여주는 AADS Design Studio의 차세대 인터페이스</p>
+  <p class="subtitle">마우스 커서가 닿는 UI 요소를 AI가 실시간 분석하여 디자인 문제점, 백엔드 API 연동 상태, DB 연결 상태, 코드 로직까지 선제적으로 보고하는 AADS의 차세대 인터페이스</p>
   <div class="meta">
     <span class="tag p0">P0 — 핵심 기능</span>
-    <span class="tag ver">AADS-SMART-CURSOR v1.0</span>
-    <span>2026-05-13 | CTO AI | CEO moongoby</span>
+    <span class="tag ver">AADS-SMART-CURSOR v2.0</span>
+    <span class="tag new">v2.0 실시간 모니터링 추가</span>
+    <span>2026-05-14 | CTO AI | CEO moongoby</span>
   </div>
 </div>
 
 <div class="container">
+
+<div class="update-banner">
+  <div class="banner-title">v2.0 업데이트 (2026-05-14)</div>
+  <p>CEO 요청에 따라 <strong>실시간 백엔드 API 연동 상태, DB 연결 상태, 코드 로직 분석, 선제적 보고</strong> 기능이 추가되었습니다. 기존 디자인 분석에 시스템 모니터링 레이어가 결합되어, 커서가 닿는 UI 요소의 프론트엔드→백엔드→DB 전체 스택을 실시간으로 파악할 수 있습니다.</p>
+</div>
 
 <div class="toc">
   <h2>목차</h2>
@@ -167,10 +205,13 @@
     <li><a href="#sec6">컴포넌트 상세 설계</a></li>
     <li><a href="#sec7">API 스펙</a></li>
     <li><a href="#sec8">AI 분석 엔진 설계</a></li>
-    <li><a href="#sec9">구현 로드맵</a></li>
-    <li><a href="#sec10">검수 기준 및 KPI</a></li>
-    <li><a href="#sec11">리스크 및 대응</a></li>
-    <li><a href="#sec12">비용 추정</a></li>
+    <li class="new-item"><a href="#sec9">실시간 시스템 모니터링 설계</a> <span class="badge v2">v2.0 NEW</span></li>
+    <li class="new-item"><a href="#sec10">컴포넌트→API→DB 매핑 레지스트리</a> <span class="badge v2">v2.0 NEW</span></li>
+    <li class="new-item"><a href="#sec11">선제적 보고 엔진</a> <span class="badge v2">v2.0 NEW</span></li>
+    <li><a href="#sec12">구현 로드맵</a></li>
+    <li><a href="#sec13">검수 기준 및 KPI</a></li>
+    <li><a href="#sec14">리스크 및 대응</a></li>
+    <li><a href="#sec15">비용 추정</a></li>
   </ol>
 </div>
 
@@ -178,6 +219,12 @@
 <section id="sec1">
   <h2><span class="num">1</span> 개요 및 목표</h2>
   <p><strong>스마트 커서 인스펙터</strong>는 CEO가 브라우저에서 AADS 대시보드(또는 임의 웹 앱)를 열고, 마우스를 UI 요소 위에 올리기만 하면 AI가 해당 요소의 디자인/접근성/일관성 문제를 <strong>자동 분석</strong>해서 화면 위 패널에 즉시 정리해 보여주는 기능입니다.</p>
+
+  <div class="update-banner">
+    <div class="banner-title">v2.0 확장: 풀스택 실시간 모니터링</div>
+    <p>디자인 분석을 넘어, 커서가 닿는 UI 컴포넌트의 <strong>백엔드 API 연동 상태, DB 연결/쿼리 성능, 코드 로직 건강도</strong>를 실시간으로 파악하고, 문제가 감지되면 <strong>선제적으로 보고</strong>합니다.</p>
+  </div>
+
   <div class="card-grid">
     <div class="card">
       <div class="card-title"><span class="icon">🎯</span> 핵심 가치</div>
@@ -195,7 +242,24 @@
       <div class="card-title"><span class="icon">🖥️</span> 화면 공유 기반</div>
       <p>기존 ScreenShare 컴포넌트의 캡처 기능을 확장하여 커서 좌표 기반 영역 스크린샷 활용</p>
     </div>
+    <div class="card new-card">
+      <div class="card-title"><span class="icon">📡</span> 실시간 API 모니터링 <span class="badge v2">v2.0</span></div>
+      <p>커서가 닿는 컴포넌트가 호출하는 백엔드 API의 응답시간, 에러율, 연결 상태를 실시간으로 표시</p>
+    </div>
+    <div class="card new-card">
+      <div class="card-title"><span class="icon">🗄️</span> DB 연결 상태 감시 <span class="badge v2">v2.0</span></div>
+      <p>해당 API가 사용하는 DB 테이블의 연결 풀 상태, 쿼리 성능, 데이터 정합성을 확인</p>
+    </div>
+    <div class="card new-card">
+      <div class="card-title"><span class="icon">🔍</span> 코드 로직 분석 <span class="badge v2">v2.0</span></div>
+      <p>프론트 컴포넌트 → 백엔드 API → DB 테이블까지 전체 호출 체인을 역추적하여 로직 상태 표시</p>
+    </div>
+    <div class="card new-card">
+      <div class="card-title"><span class="icon">🚨</span> 선제적 보고 <span class="badge v2">v2.0</span></div>
+      <p>AI가 잠재 문제(느린 쿼리, 에러 급증, 메모리 누수 징후)를 감지하면 hover 전에도 해당 영역에 경고 표시</p>
+    </div>
   </div>
+
   <h3>목표 요약</h3>
   <table>
     <tr><th>구분</th><th>목표</th></tr>
@@ -203,6 +267,9 @@
     <tr><td>분석 정확도</td><td>색상 토큰화, 간격 일관성, 접근성(WCAG AA), 반응형 오류 탐지 80% 이상</td></tr>
     <tr><td>응답 속도</td><td>hover 후 3초 이내 첫 결과 표시, 상세 분석은 5초 이내</td></tr>
     <tr><td>적용 범위</td><td>AADS 대시보드 우선 → 이후 NTV2/SF/GO100 확장 가능</td></tr>
+    <tr class="new-row"><td>시스템 모니터링 <span class="badge v2">v2.0</span></td><td>커서 대상 컴포넌트의 API 응답시간/DB 상태/에러율을 2초 내 표시</td></tr>
+    <tr class="new-row"><td>선제 보고 <span class="badge v2">v2.0</span></td><td>잠재 문제를 CEO가 발견하기 전에 화면 위 경고로 표시 (SSE 기반)</td></tr>
+    <tr class="new-row"><td>풀스택 역추적 <span class="badge v2">v2.0</span></td><td>프론트 컴포넌트 → API 엔드포인트 → DB 테이블 매핑 정확도 90% 이상</td></tr>
   </table>
 </section>
 
@@ -218,9 +285,18 @@
     <tr><td><code>design_modifications API</code></td><td><span class="badge exist">있음</span></td><td>분석 결과를 modification_request로 저장, context_pack 생성</td></tr>
     <tr><td><code>design_qa_scorer.py</code></td><td><span class="badge exist">있음</span></td><td>QA 점수화 로직 → 커서 대상 요소의 품질 점수 실시간 계산</td></tr>
     <tr><td><code>visual_qa_test</code> 도구</td><td><span class="badge exist">있음</span></td><td>브라우저 스크린샷 기반 시각 QA → 영역 스냅샷 QA로 전환</td></tr>
+    <tr class="new-row"><td><code>app/api/stream.py</code> <span class="badge v2">v2.0</span></td><td><span class="badge exist">있음</span></td><td>SSE 실시간 스트리밍 — 선제 보고 푸시 채널로 활용</td></tr>
+    <tr class="new-row"><td><code>app/api/task_monitor.py</code> <span class="badge v2">v2.0</span></td><td><span class="badge exist">있음</span></td><td>파이프라인 작업 모니터 SSE — 시스템 상태 스트리밍 확장</td></tr>
+    <tr class="new-row"><td><code>health_checker.py</code> <span class="badge v2">v2.0</span></td><td><span class="badge exist">있음</span></td><td>DB/파이프라인/정합성 검사 + <code>auto_fix</code> 자동복구 → 컴포넌트별 헬스 데이터 제공</td></tr>
+    <tr class="new-row"><td><code>auto_fix_dispatcher.py</code> <span class="badge v2">v2.0</span></td><td><span class="badge exist">있음</span></td><td>장애 자동 복구 — 선제 보고에서 "자동 수정" 버튼 연동</td></tr>
+    <tr class="new-row"><td><code>browser_bridge.py</code> <span class="badge v2">v2.0</span></td><td><span class="badge exist">있음</span></td><td>CEO PC Chrome CDP 연결 — 실시간 DOM 접근 채널</td></tr>
+    <tr class="new-row"><td><code>alert_manager.py</code> <span class="badge v2">v2.0</span></td><td><span class="badge exist">있음</span></td><td>알림 관리 — 선제 보고 임계값 관리 및 알림 이력</td></tr>
     <tr><td>커서 좌표 → DOM 매핑</td><td><span class="badge new">신규</span></td><td>elementFromPoint() + Accessibility Tree 추출 레이어 필요</td></tr>
     <tr><td>실시간 오버레이 UI</td><td><span class="badge new">신규</span></td><td>hover 대상 위에 분석 결과 카드/하이라이트 표시</td></tr>
     <tr><td>AI 분석 요청 Debounce</td><td><span class="badge new">신규</span></td><td>hover 300ms 안정 시에만 분석 요청 발생 (성능/비용 제어)</td></tr>
+    <tr class="new-row"><td>컴포넌트→API→DB 매핑 레지스트리 <span class="badge v2">v2.0</span></td><td><span class="badge new">신규</span></td><td>프론트 컴포넌트가 어떤 API를 호출하고, 그 API가 어떤 DB 테이블을 사용하는지 역추적</td></tr>
+    <tr class="new-row"><td>선제 분석 트리거 <span class="badge v2">v2.0</span></td><td><span class="badge new">신규</span></td><td>SSE로 잠재 문제를 hover 전에 경고 오버레이로 표시</td></tr>
+    <tr class="new-row"><td>시스템 상태 패널 <span class="badge v2">v2.0</span></td><td><span class="badge new">신규</span></td><td>API 응답시간, DB 풀 상태, 에러율, 메모리를 대시보드 형태로 표시</td></tr>
   </table>
 </section>
 
@@ -244,18 +320,54 @@
     </div>
   </div>
 
-  <h3>3.2 사용 시나리오</h3>
+  <h3>3.2 v2.0 풀스택 모니터링 플로우 <span class="badge v2">NEW</span></h3>
+  <div class="flow-diagram">
+    <div class="flow-steps">
+      <div class="flow-step new-step"><div class="step-icon">🖱️</div><div class="step-label">요소 Hover</div><div class="step-desc">UI 컴포넌트 위에<br>커서 위치</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step new-step"><div class="step-icon">🗺️</div><div class="step-label">레지스트리 조회</div><div class="step-desc">컴포넌트 → API<br>→ DB 테이블 매핑</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step new-step"><div class="step-icon">📡</div><div class="step-label">병렬 상태 수집</div><div class="step-desc">API 응답시간 + DB 풀<br>+ 에러율 + 헬스체크</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step new-step"><div class="step-icon">🔬</div><div class="step-label">코드 로직 분석</div><div class="step-desc">호출 체인 역추적<br>의존성/취약점 점검</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step new-step"><div class="step-icon">📊</div><div class="step-label">시스템 상태 패널</div><div class="step-desc">API/DB/코드 상태를<br>통합 대시보드 표시</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step new-step"><div class="step-icon">🚨</div><div class="step-label">선제 경고</div><div class="step-desc">임계값 초과 시<br>자동 알림 + 수정 제안</div></div>
+    </div>
+  </div>
+
+  <h3>3.3 선제적 보고 플로우 <span class="badge v2">NEW</span></h3>
+  <div class="flow-diagram">
+    <div class="flow-steps">
+      <div class="flow-step new-step"><div class="step-icon">🔄</div><div class="step-label">백그라운드 감시</div><div class="step-desc">SSE 스트림으로<br>시스템 상태 수신</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step new-step"><div class="step-icon">⚠️</div><div class="step-label">이상 감지</div><div class="step-desc">API 지연, DB 느림,<br>에러율 급증 감지</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step new-step"><div class="step-icon">🎯</div><div class="step-label">영역 하이라이트</div><div class="step-desc">문제 관련 UI 영역에<br>경고 아이콘 표시</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step new-step"><div class="step-icon">📋</div><div class="step-label">CEO 보고</div><div class="step-desc">hover 없이도<br>선제적 문제 알림</div></div>
+    </div>
+  </div>
+
+  <h3>3.4 사용 시나리오</h3>
   <div class="card-grid">
     <div class="card"><div class="card-title"><span class="icon">📱</span> 시나리오 A: 간격 문제 발견</div><p>CEO가 채팅 목록 위에 커서를 올림 → AI가 "세션 항목 간 간격이 8px/16px 혼용, 12px로 통일 권장" 표시 → "수정 요청" 클릭 → 자동으로 요청 카드 생성</p></div>
     <div class="card"><div class="card-title"><span class="icon">🎨</span> 시나리오 B: 색상 비일관 탐지</div><p>버튼 위에 커서를 올림 → AI가 "이 버튼 #3b82f6, 같은 페이지 다른 버튼 #2563eb — 디자인 토큰 blue-500으로 통일 권장" 표시</p></div>
     <div class="card"><div class="card-title"><span class="icon">♿</span> 시나리오 C: 접근성 경고</div><p>텍스트 영역 위에 커서를 올림 → AI가 "대비율 3.2:1 — WCAG AA 기준 4.5:1 미달" 경고 표시, 대비 개선된 색상 추천</p></div>
     <div class="card"><div class="card-title"><span class="icon">📏</span> 시나리오 D: 레이아웃 점검</div><p>카드 그리드 위에 커서를 올림 → AI가 "768px 이하에서 2열 → 1열 전환 누락, @media 쿼리 추가 권장" 표시</p></div>
+    <div class="card new-card"><div class="card-title"><span class="icon">📡</span> 시나리오 E: API 지연 감지 <span class="badge v2">v2.0</span></div><p>세션 목록 위에 커서를 올림 → 시스템 패널에 "이 컴포넌트의 API <code>/api/v1/chat/sessions</code> 평균 응답 1,200ms (정상 범위 300ms 이하) ⚠️" → "→ 쿼리 최적화 요청" 버튼</p></div>
+    <div class="card new-card"><div class="card-title"><span class="icon">🗄️</span> 시나리오 F: DB 연결 이상 <span class="badge v2">v2.0</span></div><p>대시보드 메인 페이지를 열자마자 SSE로 "DB 연결 풀 사용률 85% — 자동 감지" 경고가 상단에 표시됨 → 클릭 시 상세 패널 열림</p></div>
+    <div class="card new-card"><div class="card-title"><span class="icon">🔍</span> 시나리오 G: 코드 로직 역추적 <span class="badge v2">v2.0</span></div><p>에러가 표시되는 영역에 커서를 올림 → AI가 "이 컴포넌트 → <code>GET /api/v1/ops/health</code> → <code>health_checker.py:_check_db()</code> → <code>pipeline_jobs</code> 테이블" 호출 체인 표시</p></div>
+    <div class="card new-card"><div class="card-title"><span class="icon">🚨</span> 시나리오 H: 선제적 경고 <span class="badge v2">v2.0</span></div><p>CEO가 화면을 보고 있을 때, hover 없이도 AI가 "⚠️ 작업 모니터 API의 에러율이 최근 5분간 12% → 평소 2% 대비 급증. 원인: DB 쿼리 타임아웃 3건" 자동 표시</p></div>
   </div>
 </section>
 
 <!-- 4. 와이어프레임 -->
 <section id="sec4">
   <h2><span class="num">4</span> 화면 와이어프레임</h2>
+
+  <h3>4.1 디자인 분석 모드</h3>
   <div class="wireframe">
     <div class="wireframe-header">
       <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
@@ -269,6 +381,7 @@
           <div class="wf-item">📊 전체 페이지 스캔</div>
           <div class="wf-item active">🖱️ 커서 추적 모드</div>
           <div class="wf-item">📐 영역 선택 모드</div>
+          <div class="wf-item" style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px;color:var(--cyan)">📡 시스템 모니터</div>
           <div class="wf-item">📋 분석 히스토리</div>
           <div style="border-top:1px solid var(--border);padding-top:12px;margin-top:12px">
             <div style="font-size:0.75em;color:var(--text2);margin-bottom:8px">최근 분석</div>
@@ -291,8 +404,52 @@
           <div class="wf-issue"><div class="issue-tag">❌ 색상 비일관</div><div style="margin-top:4px">이 버튼 <code>#58a6ff</code>, 상단 버튼 <code>#3b82f6</code> — <code>blue-500</code> 토큰으로 통일 권장</div></div>
           <div class="wf-issue"><div class="issue-tag">⚠️ 접근성</div><div style="margin-top:4px">텍스트 대비율 3.8:1 → WCAG AA 기준 4.5:1 미달. <code>#ffffff</code> 텍스트 또는 배경 어둡게 권장</div></div>
           <div class="wf-improve"><div class="improve-tag">💡 개선안</div><div style="margin-top:4px">padding <code>4px 10px</code> → <code>8px 16px</code>로 터치 영역 확대 (최소 44px 권장)</div></div>
+          <div class="wf-system"><div class="system-tag">📡 시스템 상태 <span class="badge v2">v2.0</span></div><div style="margin-top:4px">API: <code>/api/v1/chat/send</code> — 응답 <span style="color:var(--accent2)">120ms</span> ✅<br>DB: <code>chat_messages</code> — 연결 <span style="color:var(--accent2)">정상</span> ✅</div></div>
           <div style="margin-top:12px;display:flex;gap:6px"><button style="flex:1;padding:8px;background:var(--accent);color:var(--bg);border:none;border-radius:6px;font-weight:700;font-size:0.8em;cursor:pointer">📝 수정 요청 생성</button><button style="padding:8px 12px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:0.8em;cursor:pointer">📋 복사</button></div>
           <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)"><div style="font-size:0.8em;font-weight:700;color:var(--warn);margin-bottom:8px">📊 요소 품질 점수</div><div style="display:flex;gap:4px;margin-bottom:6px"><div style="flex:3;height:6px;background:var(--accent2);border-radius:3px"></div><div style="flex:1;height:6px;background:var(--error);border-radius:3px"></div><div style="flex:0.5;height:6px;background:var(--warn);border-radius:3px"></div></div><div style="font-size:0.75em;color:var(--text2);display:flex;justify-content:space-between"><span>색상: 60</span><span>간격: 85</span><span>접근성: 45</span></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>4.2 시스템 모니터링 모드 <span class="badge v2">v2.0 NEW</span></h3>
+  <div class="wireframe">
+    <div class="wireframe-header">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span style="margin-left:12px">AADS Dashboard — 시스템 모니터링 + 선제 보고 활성</span>
+    </div>
+    <div class="wireframe-body">
+      <div style="margin-bottom:16px">
+        <div class="wf-proactive"><div class="proactive-tag">🚨 선제 경고 (자동 감지)</div><div style="margin-top:6px">⚠️ <code>/api/v1/chat/sessions</code> 응답시간이 최근 5분간 <strong>1,200ms</strong>로 급증 (평소 280ms). 원인: <code>chat_sessions</code> 테이블 풀스캔 쿼리 3건 감지. → <button style="padding:2px 8px;background:var(--purple);color:var(--bg);border:none;border-radius:4px;font-size:0.8em;cursor:pointer;margin-left:4px">쿼리 최적화 요청</button></div></div>
+      </div>
+      <div class="status-grid">
+        <div class="status-card">
+          <div class="status-label">API 응답시간 (P95)</div>
+          <div class="status-value good">285ms</div>
+          <div class="status-detail">최근 5분 평균 | 정상 범위</div>
+        </div>
+        <div class="status-card">
+          <div class="status-label">DB 연결 풀</div>
+          <div class="status-value warn">72%</div>
+          <div class="status-detail">18/25 connections 사용 중</div>
+        </div>
+        <div class="status-card">
+          <div class="status-label">에러율</div>
+          <div class="status-value good">0.3%</div>
+          <div class="status-detail">최근 1시간 | 5xx 에러 기준</div>
+        </div>
+        <div class="status-card">
+          <div class="status-label">활성 SSE 스트림</div>
+          <div class="status-value good">4</div>
+          <div class="status-detail">채팅 + 작업모니터 + 선제보고 + 헬스</div>
+        </div>
+      </div>
+      <div style="margin-top:16px">
+        <div style="font-weight:700;color:var(--cyan);font-size:0.9em;margin-bottom:12px">🔬 커서 대상 컴포넌트 호출 체인</div>
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:16px;font-family:'SF Mono','Fira Code',monospace;font-size:0.8em;color:var(--text2);line-height:2">
+          <span style="color:var(--accent)">🖥️ SessionList</span> <span style="color:var(--text2)">→</span> <span style="color:var(--accent2)">GET /api/v1/chat/sessions</span> <span style="color:var(--text2)">→</span> <span style="color:var(--purple)">chat_service.py:get_sessions()</span> <span style="color:var(--text2)">→</span> <span style="color:var(--warn)">chat_sessions 테이블</span><br>
+          <span style="padding-left:20px;color:var(--text2)">↳</span> <span style="color:var(--accent2)">GET /api/v1/chat/workspaces</span> <span style="color:var(--text2)">→</span> <span style="color:var(--purple)">chat_service.py:get_workspaces()</span> <span style="color:var(--text2)">→</span> <span style="color:var(--warn)">workspaces 테이블</span><br>
+          <span style="padding-left:20px;color:var(--text2)">↳</span> <span style="color:var(--accent2)">SSE /api/v1/tasks/active</span> <span style="color:var(--text2)">→</span> <span style="color:var(--purple)">task_monitor.py</span> <span style="color:var(--text2)">→</span> <span style="color:var(--warn)">pipeline_jobs 테이블</span>
         </div>
       </div>
     </div>
@@ -304,14 +461,15 @@
   <h2><span class="num">5</span> 아키텍처 설계</h2>
   <div class="arch-box">
     <div class="arch-layers">
-      <div class="arch-layer frontend"><div class="layer-label">🖥️ Frontend<br>(Next.js)</div><div class="layer-items"><div class="layer-item">SmartCursorOverlay</div><div class="layer-item">ElementInspector</div><div class="layer-item">AnalysisPanel</div><div class="layer-item">ScreenShare (확장)</div><div class="layer-item">DesignStudioCard</div></div></div>
-      <div class="arch-layer backend"><div class="layer-label">⚙️ Backend<br>(FastAPI)</div><div class="layer-items"><div class="layer-item">smart_cursor_api.py</div><div class="layer-item">design_audit_service.py</div><div class="layer-item">design_modifications.py</div><div class="layer-item">design_context_builder.py</div><div class="layer-item">design_qa_scorer.py</div></div></div>
-      <div class="arch-layer ai"><div class="layer-label">🤖 AI 엔진</div><div class="layer-items"><div class="layer-item">컨텍스트 조합기</div><div class="layer-item">규칙 기반 검증기</div><div class="layer-item">LLM 분석기</div><div class="layer-item">개선안 생성기</div></div></div>
-      <div class="arch-layer infra"><div class="layer-label">🗄️ Storage</div><div class="layer-items"><div class="layer-item">design_screens</div><div class="layer-item">design_modification_requests</div><div class="layer-item">design_context_packs</div><div class="layer-item">smart_cursor_cache</div></div></div>
+      <div class="arch-layer frontend"><div class="layer-label">🖥️ Frontend<br>(Next.js)</div><div class="layer-items"><div class="layer-item">SmartCursorOverlay</div><div class="layer-item">ElementInspector</div><div class="layer-item">AnalysisPanel</div><div class="layer-item">ScreenShare (확장)</div><div class="layer-item">DesignStudioCard</div><div class="layer-item v2-item">SystemStatusPanel</div><div class="layer-item v2-item">ProactiveAlertBar</div></div></div>
+      <div class="arch-layer backend"><div class="layer-label">⚙️ Backend<br>(FastAPI)</div><div class="layer-items"><div class="layer-item">smart_cursor_api.py</div><div class="layer-item">design_audit_service.py</div><div class="layer-item">design_modifications.py</div><div class="layer-item">design_context_builder.py</div><div class="layer-item">design_qa_scorer.py</div><div class="layer-item v2-item">component_registry.py</div><div class="layer-item v2-item">system_monitor_api.py</div></div></div>
+      <div class="arch-layer monitor"><div class="layer-label">📡 Monitor<br><span class="badge v2">v2.0</span></div><div class="layer-items"><div class="layer-item">health_checker.py</div><div class="layer-item">auto_fix_dispatcher.py</div><div class="layer-item">alert_manager.py</div><div class="layer-item">stream.py (SSE)</div><div class="layer-item">task_monitor.py</div><div class="layer-item v2-item">proactive_engine.py</div></div></div>
+      <div class="arch-layer ai"><div class="layer-label">🤖 AI 엔진</div><div class="layer-items"><div class="layer-item">컨텍스트 조합기</div><div class="layer-item">규칙 기반 검증기</div><div class="layer-item">LLM 분석기</div><div class="layer-item">개선안 생성기</div><div class="layer-item v2-item">시스템 이상 감지기</div></div></div>
+      <div class="arch-layer infra"><div class="layer-label">🗄️ Storage</div><div class="layer-items"><div class="layer-item">design_screens</div><div class="layer-item">design_modification_requests</div><div class="layer-item">design_context_packs</div><div class="layer-item">smart_cursor_cache</div><div class="layer-item v2-item">component_api_registry</div><div class="layer-item v2-item">system_health_snapshots</div></div></div>
     </div>
   </div>
 
-  <h3>5.1 데이터 플로우</h3>
+  <h3>5.1 데이터 플로우 (디자인 분석)</h3>
   <pre><code>  [브라우저]                      [AADS Backend]                   [AI Engine]
      |                                |                                |
      |  1. mousemove (debounce 300ms) |                                |
@@ -332,6 +490,30 @@
      |&lt;------------------------------|                                |
      |  7. 오버레이 렌더링             |                                |
      |     + 수정 요청 버튼            |                                |</code></pre>
+
+  <h3>5.2 데이터 플로우 (시스템 모니터링) <span class="badge v2">v2.0</span></h3>
+  <pre><code>  [브라우저]                      [AADS Backend]                   [Monitor Layer]
+     |                                |                                |
+     |  1. hover → 컴포넌트 식별       |                                |
+     |------------------------------&gt;|                                |
+     |  GET /smart-cursor/system-info |  2. component_registry 조회    |
+     |  { component: "SessionList" }  |     → API endpoints 매핑       |
+     |                                |     → DB tables 매핑            |
+     |                                |------------------------------&gt;|
+     |                                |  3. 병렬 상태 수집:             |
+     |                                |     health_checker._check_db() |
+     |                                |     API 응답시간 메트릭         |
+     |                                |     에러 로그 최근 N건          |
+     |                                |&lt;------------------------------|
+     |&lt;------------------------------|  4. 통합 결과 반환              |
+     |  5. SystemStatusPanel 렌더링    |                                |
+     |                                |                                |
+     |  ===== 선제 보고 (SSE) =====    |                                |
+     |                                |                                |
+     |&lt;====== SSE 스트림 ============|  6. proactive_engine 30초 주기  |
+     |  event: system_alert            |     임계값 초과 감지            |
+     |  { component, issue, severity } |     → SSE 이벤트 push          |
+     |  7. ProactiveAlertBar 표시      |                                |</code></pre>
 </section>
 
 <!-- 6. 컴포넌트 상세 -->
@@ -344,6 +526,9 @@
     <tr><td><code>ElementInspector</code></td><td><code>SmartCursor/ElementInspector.tsx</code></td><td>mousemove 리스너, elementFromPoint(), debounce, DOM/스타일/접근성 정보 수집</td><td><span class="badge new">신규</span></td></tr>
     <tr><td><code>CursorHighlight</code></td><td><code>SmartCursor/CursorHighlight.tsx</code></td><td>hover 대상 요소 위에 하이라이트 border + 태그명/클래스 라벨 오버레이</td><td><span class="badge new">신규</span></td></tr>
     <tr><td><code>AnalysisPanel</code></td><td><code>SmartCursor/AnalysisPanel.tsx</code></td><td>분석 결과(문제점/개선안/점수) 우측 패널 표시. "수정 요청 생성" 버튼 포함</td><td><span class="badge new">신규</span></td></tr>
+    <tr class="new-row"><td><code>SystemStatusPanel</code></td><td><code>SmartCursor/SystemStatusPanel.tsx</code></td><td>커서 대상 컴포넌트의 API/DB/코드 상태를 대시보드 형태로 표시</td><td><span class="badge v2">v2.0</span></td></tr>
+    <tr class="new-row"><td><code>ProactiveAlertBar</code></td><td><code>SmartCursor/ProactiveAlertBar.tsx</code></td><td>SSE 기반 선제 경고 상단 바 — 이상 감지 시 자동 표시, 클릭 시 상세 패널</td><td><span class="badge v2">v2.0</span></td></tr>
+    <tr class="new-row"><td><code>CallChainViewer</code></td><td><code>SmartCursor/CallChainViewer.tsx</code></td><td>프론트→API→서비스→DB 호출 체인을 시각화하는 트리 컴포넌트</td><td><span class="badge v2">v2.0</span></td></tr>
     <tr><td><code>ScreenShare</code></td><td><code>chat/ScreenShare.tsx</code></td><td>기존 캡처에 영역 캡처(cropToRect) 메서드 추가</td><td><span class="badge exist">확장</span></td></tr>
     <tr><td><code>DesignStudioCard</code></td><td><code>chat/page.tsx</code></td><td>기존 Design Studio 패널 — 스마트 커서 결과에서 카드 생성 연동</td><td><span class="badge exist">확장</span></td></tr>
   </table>
@@ -383,52 +568,71 @@ async function inspectElement(x: number, y: number) {
 
   const screenshot = await screenShareRef.current?.captureRegion(domInfo.rect);
 
-  const result = await fetch('/api/v1/smart-cursor/analyze', {
-    method: 'POST',
-    body: JSON.stringify({ domInfo, styles, a11y, screenshot_b64: screenshot, cursor: {x, y} }),
-  });
+  // v1: 디자인 분석 + v2: 시스템 상태 병렬 요청
+  const [designResult, systemResult] = await Promise.all([
+    fetch('/api/v1/smart-cursor/analyze', {
+      method: 'POST',
+      body: JSON.stringify({ domInfo, styles, a11y, screenshot_b64: screenshot, cursor: {x, y} }),
+    }).then(r =&gt; r.json()),
+    fetch('/api/v1/smart-cursor/system-info', {
+      method: 'POST',
+      body: JSON.stringify({ component: identifyComponent(el), page_url: location.href }),
+    }).then(r =&gt; r.json()),
+  ]);
 
-  setAnalysisResult(await result.json());
+  setAnalysisResult(designResult);
+  setSystemStatus(systemResult);  // v2.0
   setHighlightRect(domInfo.rect);
 }</code></pre>
 
-  <h3>6.3 AnalysisPanel 결과 구조</h3>
+  <h3>6.3 AnalysisResult + SystemStatus 결과 구조</h3>
   <pre><code>interface AnalysisResult {
-  target: {
-    tagName: string;
-    selector: string;
-    componentPath: string;
-    filePath: string;
-  };
+  target: { tagName: string; selector: string; componentPath: string; filePath: string; };
   issues: Array&lt;{
     severity: 'error' | 'warning' | 'info';
     category: 'color' | 'spacing' | 'accessibility' | 'responsive' | 'consistency' | 'typography';
-    title: string;
-    description: string;
-    current: string;
-    recommended: string;
-    rule: string;
+    title: string; description: string; current: string; recommended: string; rule: string;
   }&gt;;
   improvements: Array&lt;{
     priority: 'high' | 'medium' | 'low';
+    title: string; description: string; before: string; after: string;
+  }&gt;;
+  scores: { color: number; spacing: number; accessibility: number; consistency: number; overall: number; };
+  meta: { analyzedAt: string; latencyMs: number; usedLLM: boolean; cacheHit: boolean; };
+}
+
+// v2.0: 시스템 상태 응답
+interface SystemStatus {
+  component: string;                          // "SessionList"
+  call_chain: Array&lt;{
+    layer: 'frontend' | 'api' | 'service' | 'db';
+    name: string;                             // "GET /api/v1/chat/sessions"
+    file_path: string;                        // "app/api/chat.py:145"
+    status: 'healthy' | 'degraded' | 'error';
+    latency_ms?: number;
+    error_rate?: number;
+  }&gt;;
+  db_status: {
+    tables: string[];                         // ["chat_sessions", "workspaces"]
+    pool_usage: number;                       // 0.72
+    avg_query_ms: number;                     // 12
+    connection_healthy: boolean;
+  };
+  api_status: {
+    endpoints: Array&lt;{
+      path: string;                           // "/api/v1/chat/sessions"
+      avg_response_ms: number;                // 280
+      error_rate_5min: number;                // 0.003
+      last_error?: string;
+    }&gt;;
+  };
+  proactive_alerts: Array&lt;{
+    severity: 'critical' | 'warning' | 'info';
     title: string;
     description: string;
-    before: string;
-    after: string;
+    detected_at: string;
+    suggested_action: string;
   }&gt;;
-  scores: {
-    color: number;       // 0~100
-    spacing: number;
-    accessibility: number;
-    consistency: number;
-    overall: number;
-  };
-  meta: {
-    analyzedAt: string;
-    latencyMs: number;
-    usedLLM: boolean;
-    cacheHit: boolean;
-  };
 }</code></pre>
 </section>
 
@@ -443,74 +647,74 @@ async function inspectElement(x: number, y: number) {
     <tr><td><code>POST</code></td><td><code>/api/v1/smart-cursor/page-scan</code></td><td>전체 페이지 일괄 스캔 (design_audit_service 확장)</td></tr>
     <tr><td><code>GET</code></td><td><code>/api/v1/smart-cursor/history</code></td><td>최근 분석 히스토리 (세션별)</td></tr>
     <tr><td><code>POST</code></td><td><code>/api/v1/smart-cursor/to-design-request</code></td><td>분석 결과를 Design Studio 수정 요청으로 변환/저장</td></tr>
+    <tr class="new-row"><td><code>POST</code></td><td><code>/api/v1/smart-cursor/system-info</code> <span class="badge v2">v2.0</span></td><td>컴포넌트명 → 연관 API/DB/코드 상태 조회</td></tr>
+    <tr class="new-row"><td><code>GET</code></td><td><code>/api/v1/smart-cursor/registry</code> <span class="badge v2">v2.0</span></td><td>컴포넌트→API→DB 매핑 레지스트리 전체 조회</td></tr>
+    <tr class="new-row"><td><code>PUT</code></td><td><code>/api/v1/smart-cursor/registry/{component}</code> <span class="badge v2">v2.0</span></td><td>특정 컴포넌트의 API/DB 매핑 수동 등록/수정</td></tr>
+    <tr class="new-row"><td><code>GET</code></td><td><code>/api/v1/smart-cursor/proactive/stream</code> <span class="badge v2">v2.0</span></td><td>SSE 선제 보고 스트림 — 이상 감지 시 실시간 푸시</td></tr>
+    <tr class="new-row"><td><code>GET</code></td><td><code>/api/v1/smart-cursor/health-dashboard</code> <span class="badge v2">v2.0</span></td><td>전체 시스템 상태 요약 (API 응답시간, DB 풀, 에러율)</td></tr>
   </table>
 
-  <h3>7.2 분석 요청 페이로드</h3>
-  <pre><code>// POST /api/v1/smart-cursor/analyze
+  <h3>7.2 시스템 모니터링 요청/응답 <span class="badge v2">v2.0</span></h3>
+  <pre><code>// POST /api/v1/smart-cursor/system-info
 {
-  "project_key": "AADS",
+  "component": "SessionList",
   "page_url": "https://aads.newtalk.kr/chat",
-  "cursor": { "x": 450, "y": 280 },
-  "dom_info": {
-    "tag_name": "button",
-    "class_name": "px-4 py-2 bg-blue-500 text-white rounded",
-    "id": "send-btn",
-    "text_content": "전송",
-    "rect": { "x": 430, "y": 265, "width": 64, "height": 32 },
-    "parent_chain": [
-      { "tag": "div", "class": "flex gap-2 items-center" },
-      { "tag": "div", "class": "chat-input-container" }
+  "include_call_chain": true,
+  "include_db_status": true,
+  "include_proactive": true,
+  "time_window_minutes": 5
+}
+
+// 200 OK
+{
+  "component": "SessionList",
+  "call_chain": [
+    { "layer": "frontend", "name": "SessionList", "file_path": "src/app/chat/page.tsx:1200", "status": "healthy" },
+    { "layer": "api", "name": "GET /api/v1/chat/sessions", "file_path": "app/api/chat.py:145", "status": "healthy", "latency_ms": 280 },
+    { "layer": "service", "name": "chat_service.get_sessions()", "file_path": "app/services/chat_service.py:89", "status": "healthy" },
+    { "layer": "db", "name": "chat_sessions", "file_path": "SELECT * FROM chat_sessions WHERE ...", "status": "healthy", "latency_ms": 12 }
+  ],
+  "db_status": {
+    "tables": ["chat_sessions", "workspaces"],
+    "pool_usage": 0.72,
+    "avg_query_ms": 12,
+    "connection_healthy": true
+  },
+  "api_status": {
+    "endpoints": [
+      { "path": "/api/v1/chat/sessions", "avg_response_ms": 280, "error_rate_5min": 0.002, "last_error": null }
     ]
   },
-  "styles": {
-    "color": "#ffffff",
-    "background-color": "#3b82f6",
-    "padding": "8px 16px",
-    "font-size": "14px",
-    "border-radius": "6px"
-  },
-  "a11y": {
-    "role": "button",
-    "aria_label": null,
-    "tab_index": 0,
-    "contrast_ratio": 4.2
-  },
-  "screenshot_b64": "data:image/png;base64,...",
-  "analysis_depth": "standard"
+  "proactive_alerts": [],
+  "meta": { "registry_hit": true, "collected_at": "2026-05-14T07:30:00+09:00" }
 }</code></pre>
 
-  <h3>7.3 분석 응답</h3>
-  <pre><code>// 200 OK
-{
-  "target": {
-    "tag_name": "button",
-    "selector": "#send-btn",
-    "component_path": "chat/page.tsx:6832",
-    "file_path": "src/app/chat/page.tsx"
-  },
-  "issues": [
-    {
-      "severity": "warning",
-      "category": "accessibility",
-      "title": "대비율 미달",
-      "description": "텍스트/배경 대비율 4.2:1 — WCAG AA 기준 4.5:1 미달",
-      "current": "contrast 4.2:1",
-      "recommended": "contrast &gt;= 4.5:1 (배경 #2563eb 사용 시 5.1:1)",
-      "rule": "wcag-aa-contrast"
-    }
-  ],
-  "improvements": [
-    {
-      "priority": "medium",
-      "title": "디자인 토큰 통일",
-      "description": "bg-blue-500 대신 디자인 시스템의 --accent 토큰 사용 권장",
-      "before": "className=\"bg-blue-500\"",
-      "after": "className=\"bg-[var(--ct-accent)]\""
-    }
-  ],
-  "scores": { "color": 65, "spacing": 80, "accessibility": 55, "consistency": 70, "overall": 68 },
-  "meta": { "analyzed_at": "2026-05-13T08:30:00+09:00", "latency_ms": 1420, "used_llm": false, "cache_hit": false }
-}</code></pre>
+  <h3>7.3 선제 보고 SSE 이벤트 <span class="badge v2">v2.0</span></h3>
+  <pre><code>// GET /api/v1/smart-cursor/proactive/stream (SSE)
+
+event: system_alert
+data: {
+  "severity": "warning",
+  "component": "SessionList",
+  "title": "API 응답시간 급증",
+  "description": "/api/v1/chat/sessions 응답시간이 1,200ms로 급증 (평소 280ms)",
+  "cause": "chat_sessions 테이블 풀스캔 쿼리 감지",
+  "suggested_action": "INDEX 추가 또는 쿼리 WHERE 조건 최적화",
+  "detected_at": "2026-05-14T07:28:00+09:00",
+  "affected_area": { "selector": ".session-list-container", "highlight": true }
+}
+
+event: health_update
+data: {
+  "api_p95_ms": 285,
+  "db_pool_pct": 72,
+  "error_rate_pct": 0.3,
+  "active_streams": 4,
+  "updated_at": "2026-05-14T07:30:00+09:00"
+}
+
+event: keepalive
+data: {}</code></pre>
 </section>
 
 <!-- 8. AI 분석 엔진 -->
@@ -522,6 +726,8 @@ async function inspectElement(x: number, y: number) {
     <tr><th>단계</th><th>방식</th><th>속도</th><th>비용</th><th>대상</th></tr>
     <tr><td>1차</td><td>규칙 기반 검증기</td><td>&lt; 100ms</td><td>$0</td><td>색상 토큰 일관성, WCAG 대비율, 간격 패턴, 터치 영역, 버튼 패턴 일관성</td></tr>
     <tr><td>2차</td><td>LLM 시각 분석</td><td>1~3초</td><td>~$0.005/요청</td><td>레이아웃 구조 판단, 정보 계층 분석, UX 카피 품질, 시각적 균형</td></tr>
+    <tr class="new-row"><td>시스템 <span class="badge v2">v2.0</span></td><td>실시간 메트릭 수집</td><td>&lt; 500ms</td><td>$0</td><td>API 응답시간, DB 연결 풀, 에러율, 쿼리 성능 — 레지스트리 기반</td></tr>
+    <tr class="new-row"><td>선제 <span class="badge v2">v2.0</span></td><td>이상 감지 엔진</td><td>30초 주기</td><td>$0</td><td>임계값 초과, 에러 급증, 느린 쿼리 패턴 — SSE 푸시</td></tr>
   </table>
 
   <h3>8.2 규칙 기반 검증 항목</h3>
@@ -533,6 +739,9 @@ async function inspectElement(x: number, y: number) {
     <tr><td>버튼</td><td>같은 페이지 내 버튼 클래스 패턴 불일치</td><td><code>design_audit_service.py</code> BUTTON_CLASS_RE</td></tr>
     <tr><td>터치</td><td>인터랙티브 요소 최소 44x44px 미달</td><td>rect 크기 검사</td></tr>
     <tr><td>타이포</td><td>font-size 계단(12/14/16/20/24)에서 벗어난 비표준 크기</td><td>computed font-size 검사</td></tr>
+    <tr class="new-row"><td>API 지연 <span class="badge v2">v2.0</span></td><td>컴포넌트 연관 API 응답시간 &gt; 1초, 에러율 &gt; 5%</td><td>시스템 메트릭 + component_registry</td></tr>
+    <tr class="new-row"><td>DB 상태 <span class="badge v2">v2.0</span></td><td>연결 풀 &gt; 80%, 쿼리 &gt; 500ms, 연결 실패</td><td>health_checker + DB 메트릭</td></tr>
+    <tr class="new-row"><td>에러 패턴 <span class="badge v2">v2.0</span></td><td>최근 5분간 동일 API 에러 3건 이상 반복</td><td>error_log 테이블 집계</td></tr>
   </table>
 
   <h3>8.3 LLM 분석 트리거 조건</h3>
@@ -567,14 +776,187 @@ USER:
   레이아웃 구조, 정보 계층, 시각적 균형, UX 카피 품질을 중심으로 봐주세요.</code></pre>
 </section>
 
-<!-- 9. 구현 로드맵 -->
+<!-- 9. 실시간 시스템 모니터링 설계 (v2.0 NEW) -->
 <section id="sec9">
-  <h2><span class="num">9</span> 구현 로드맵</h2>
+  <h2><span class="num new-num">9</span> 실시간 시스템 모니터링 설계 <span class="badge v2">v2.0 NEW</span></h2>
+  <p>커서가 닿는 UI 컴포넌트의 <strong>백엔드 API → 서비스 레이어 → DB 테이블</strong> 전체 스택을 실시간으로 모니터링합니다. 기존 AADS 인프라(<code>health_checker.py</code>, <code>stream.py</code>, <code>task_monitor.py</code>)를 확장하여 구현합니다.</p>
+
+  <h3>9.1 모니터링 대상</h3>
+  <table>
+    <tr><th>레이어</th><th>모니터링 항목</th><th>데이터 소스</th><th>임계값</th></tr>
+    <tr><td style="color:var(--accent)">API 엔드포인트</td><td>응답시간 (P50/P95/P99), 에러율, 호출 빈도</td><td>FastAPI middleware 메트릭, error_log 테이블</td><td>P95 &gt; 1,000ms ⚠️, &gt; 3,000ms ❌</td></tr>
+    <tr><td style="color:var(--accent2)">DB 연결</td><td>풀 사용률, 쿼리 지연, 연결 실패, 테이블 크기</td><td><code>health_checker._check_db()</code>, <code>pg_stat_activity</code></td><td>풀 &gt; 80% ⚠️, 연결 실패 ❌</td></tr>
+    <tr><td style="color:var(--purple)">서비스 로직</td><td>함수 호출 체인, 의존성 상태, 예외 발생률</td><td>코드 정적 분석 + error_log 집계</td><td>예외율 &gt; 5% ⚠️</td></tr>
+    <tr><td style="color:var(--warn)">인프라</td><td>메모리, CPU, 디스크, Docker 컨테이너 상태</td><td><code>health_checker</code> system checks</td><td>메모리 &gt; 85% ⚠️</td></tr>
+    <tr><td style="color:var(--cyan)">SSE 스트림</td><td>활성 연결 수, 끊김 빈도, 지연</td><td><code>stream.py</code>, <code>task_monitor.py</code></td><td>끊김 &gt; 3회/분 ⚠️</td></tr>
+  </table>
+
+  <h3>9.2 동작 원리</h3>
+  <div class="card-grid">
+    <div class="card new-card">
+      <div class="card-title"><span class="icon">1️⃣</span> Hover 시 → 즉시 조회</div>
+      <p>커서가 컴포넌트 위에 올라가면, 레지스트리에서 연관 API/DB를 찾고 현재 상태를 <strong>500ms 내</strong> 수집하여 SystemStatusPanel에 표시합니다.</p>
+    </div>
+    <div class="card new-card">
+      <div class="card-title"><span class="icon">2️⃣</span> 백그라운드 → SSE 스트림</div>
+      <p>인스펙터 ON 상태에서 <code>proactive_engine</code>이 <strong>30초 주기</strong>로 시스템 상태를 수집하고, 임계값 초과 시 SSE로 ProactiveAlertBar에 실시간 푸시합니다.</p>
+    </div>
+    <div class="card new-card">
+      <div class="card-title"><span class="icon">3️⃣</span> 이상 감지 → 자동 하이라이트</div>
+      <p>문제가 감지된 API/DB와 연관된 UI 영역에 <strong>경고 아이콘</strong>이 자동으로 표시됩니다. CEO가 hover하지 않아도 문제 영역이 먼저 보입니다.</p>
+    </div>
+    <div class="card new-card">
+      <div class="card-title"><span class="icon">4️⃣</span> 선제 보고 → 수정 제안</div>
+      <p>감지된 문제에 대해 AI가 <strong>원인 분석 + 수정 제안</strong>을 자동 생성합니다. "쿼리 최적화 요청" 또는 "자동 복구 실행" 버튼으로 즉시 조치 가능합니다.</p>
+    </div>
+  </div>
+
+  <h3>9.3 기존 인프라 활용 매핑</h3>
+  <table>
+    <tr><th>기존 컴포넌트</th><th>경로</th><th>스마트 커서 v2.0에서 활용</th></tr>
+    <tr><td><code>health_checker.py</code></td><td><code>app/services/health_checker.py</code></td><td>DB 연결 풀, 정합성, 자동복구(auto_fix) → 컴포넌트별 DB 상태 데이터</td></tr>
+    <tr><td><code>stream.py</code></td><td><code>app/api/stream.py</code></td><td>SSE 스트리밍 인프라 → 선제 보고 채널 확장</td></tr>
+    <tr><td><code>task_monitor.py</code></td><td><code>app/api/task_monitor.py</code></td><td>파이프라인 상태 SSE → 작업 관련 컴포넌트 상태 연동</td></tr>
+    <tr><td><code>auto_fix_dispatcher.py</code></td><td><code>app/services/auto_fix_dispatcher.py</code></td><td>자동 복구 → "자동 수정" 버튼 연동</td></tr>
+    <tr><td><code>alert_manager.py</code></td><td><code>app/services/alert_manager.py</code></td><td>알림 이력/임계값 → 선제 보고 임계값 관리</td></tr>
+    <tr><td><code>unified_healer.py</code></td><td><code>app/services/unified_healer.py</code></td><td>통합 치유 → 선제 보고에서 "자동 치유 실행" 옵션 연동</td></tr>
+    <tr><td><code>browser_bridge.py</code></td><td><code>app/api/browser_bridge.py</code></td><td>CEO PC Chrome CDP → 실시간 DOM 접근/이벤트 채널</td></tr>
+  </table>
+</section>
+
+<!-- 10. 컴포넌트→API→DB 매핑 레지스트리 (v2.0 NEW) -->
+<section id="sec10">
+  <h2><span class="num new-num">10</span> 컴포넌트→API→DB 매핑 레지스트리 <span class="badge v2">v2.0 NEW</span></h2>
+  <p>스마트 커서가 UI 요소를 식별하면, 해당 요소가 어떤 백엔드 API를 호출하고, 그 API가 어떤 DB 테이블을 사용하는지 역추적해야 합니다. 이를 위해 <strong>컴포넌트→API→DB 매핑 레지스트리</strong>를 구축합니다.</p>
+
+  <h3>10.1 레지스트리 구축 방식</h3>
+  <table>
+    <tr><th>방식</th><th>설명</th><th>정확도</th><th>비용</th></tr>
+    <tr><td><strong>1단계: 정적 분석</strong></td><td>프론트 코드에서 <code>fetch()</code>/<code>axios</code> 호출 추출 → 컴포넌트별 API 매핑 자동 생성</td><td>80%</td><td>1회성 스크립트</td></tr>
+    <tr><td><strong>2단계: 백엔드 역추적</strong></td><td>API 라우터에서 서비스 함수 → DB 쿼리 체인을 AST 분석으로 추출</td><td>85%</td><td>1회성 스크립트</td></tr>
+    <tr><td><strong>3단계: 런타임 수집</strong></td><td>실제 API 요청 시 <code>X-Component</code> 헤더로 프론트 컴포넌트명 전달 → 서버에서 자동 기록</td><td>95%</td><td>미들웨어 추가</td></tr>
+    <tr><td><strong>4단계: 수동 보정</strong></td><td>자동 매핑이 부정확한 경우 CEO/개발자가 레지스트리 API로 직접 수정</td><td>100%</td><td>필요 시만</td></tr>
+  </table>
+
+  <h3>10.2 레지스트리 스키마</h3>
+  <pre><code>-- component_api_registry 테이블
+CREATE TABLE component_api_registry (
+  id SERIAL PRIMARY KEY,
+  component_name VARCHAR(200) NOT NULL,    -- "SessionList"
+  component_path VARCHAR(500),              -- "src/app/chat/page.tsx:1200"
+  api_endpoint VARCHAR(500) NOT NULL,       -- "GET /api/v1/chat/sessions"
+  api_file_path VARCHAR(500),               -- "app/api/chat.py:145"
+  service_function VARCHAR(300),            -- "chat_service.get_sessions"
+  service_file_path VARCHAR(500),           -- "app/services/chat_service.py:89"
+  db_tables TEXT[],                         -- {"chat_sessions","workspaces"}
+  mapping_source VARCHAR(50) DEFAULT 'static_analysis',  -- static_analysis|runtime|manual
+  confidence FLOAT DEFAULT 0.8,
+  last_verified_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_component_registry_name ON component_api_registry(component_name);
+CREATE INDEX idx_component_registry_api ON component_api_registry(api_endpoint);</code></pre>
+
+  <h3>10.3 레지스트리 예시 데이터</h3>
+  <table>
+    <tr><th>컴포넌트</th><th>API</th><th>서비스 함수</th><th>DB 테이블</th></tr>
+    <tr><td><code>SessionList</code></td><td><code>GET /api/v1/chat/sessions</code></td><td><code>chat_service.get_sessions()</code></td><td><code>chat_sessions</code>, <code>workspaces</code></td></tr>
+    <tr><td><code>ChatInput</code></td><td><code>POST /api/v1/chat/send</code></td><td><code>chat_service.process_message()</code></td><td><code>chat_messages</code></td></tr>
+    <tr><td><code>TaskMonitor</code></td><td><code>GET /api/v1/tasks/active</code></td><td><code>task_monitor.get_active_tasks()</code></td><td><code>pipeline_jobs</code></td></tr>
+    <tr><td><code>DesignStudioPanel</code></td><td><code>POST /api/v1/design/modifications</code></td><td><code>design_modifications.create()</code></td><td><code>design_modification_requests</code></td></tr>
+    <tr><td><code>HealthDashboard</code></td><td><code>GET /api/v1/ops/health-check</code></td><td><code>health_checker.run_checks()</code></td><td><code>error_log</code>, <code>alert_history</code></td></tr>
+  </table>
+</section>
+
+<!-- 11. 선제적 보고 엔진 (v2.0 NEW) -->
+<section id="sec11">
+  <h2><span class="num new-num">11</span> 선제적 보고 엔진 <span class="badge v2">v2.0 NEW</span></h2>
+  <p>CEO가 문제를 발견하기 <strong>전에</strong> AI가 먼저 감지하고 화면 위에 경고를 표시합니다. 기존 <code>health_checker.py</code>와 <code>alert_manager.py</code>를 활용하되, UI 연동과 30초 주기 SSE 푸시가 추가됩니다.</p>
+
+  <h3>11.1 선제 감지 규칙</h3>
+  <table>
+    <tr><th>감지 항목</th><th>임계값</th><th>심각도</th><th>자동 조치</th></tr>
+    <tr><td>API 응답시간 급증</td><td>P95 &gt; 1,000ms (평소 대비 3배 이상)</td><td style="color:var(--warn)">⚠️ Warning</td><td>느린 쿼리 로그 수집 + 원인 표시</td></tr>
+    <tr><td>에러율 급증</td><td>5분간 에러율 &gt; 5% (평소 &lt; 1%)</td><td style="color:var(--error)">❌ Critical</td><td>최근 에러 로그 3건 + 스택트레이스</td></tr>
+    <tr><td>DB 연결 풀 포화</td><td>사용률 &gt; 85%</td><td style="color:var(--warn)">⚠️ Warning</td><td>활성 쿼리 목록 + 연결 대기 수</td></tr>
+    <tr><td>DB 연결 실패</td><td>연결 실패 1건 이상</td><td style="color:var(--error)">❌ Critical</td><td>auto_fix_dispatcher 자동 복구 트리거</td></tr>
+    <tr><td>메모리 사용 급증</td><td>&gt; 85% 또는 5분간 10% 이상 증가</td><td style="color:var(--warn)">⚠️ Warning</td><td>프로세스별 메모리 사용량 표시</td></tr>
+    <tr><td>SSE 스트림 끊김</td><td>같은 스트림이 3회/분 이상 재연결</td><td style="color:var(--accent)">ℹ️ Info</td><td>영향받는 UI 컴포넌트 표시</td></tr>
+    <tr><td>파이프라인 작업 정체</td><td>queued 상태 15분 이상</td><td style="color:var(--warn)">⚠️ Warning</td><td>정체 작업 목록 + 원인 추정</td></tr>
+  </table>
+
+  <h3>11.2 선제 보고 엔진 아키텍처</h3>
+  <pre><code>class ProactiveEngine:
+    """30초 주기로 시스템 상태를 수집하고 이상 감지 시 SSE 푸시."""
+
+    INTERVAL_SECONDS = 30
+    THRESHOLDS = {
+        "api_p95_ms": 1000,        # API 응답시간
+        "error_rate_pct": 5.0,      # 에러율 %
+        "db_pool_pct": 85,          # DB 풀 사용률 %
+        "memory_pct": 85,           # 메모리 사용률 %
+        "sse_reconnects_per_min": 3, # SSE 재연결 빈도
+    }
+
+    async def collect_metrics(self) -&gt; dict:
+        """health_checker + DB 메트릭 + API 메트릭 병렬 수집."""
+        health = await health_checker.run_checks()
+        db_stats = await self._query_db_stats()
+        api_stats = await self._collect_api_metrics()
+        return {"health": health, "db": db_stats, "api": api_stats}
+
+    async def detect_anomalies(self, metrics: dict) -&gt; list:
+        """임계값 초과 항목을 선제 경고로 변환."""
+        alerts = []
+        if metrics["api"]["p95_ms"] &gt; self.THRESHOLDS["api_p95_ms"]:
+            alerts.append(self._make_alert("warning", "API 응답시간 급증", ...))
+        if metrics["db"]["pool_pct"] &gt; self.THRESHOLDS["db_pool_pct"]:
+            alerts.append(self._make_alert("warning", "DB 연결 풀 포화", ...))
+        # ... 각 임계값 체크
+        return alerts
+
+    async def push_to_sse(self, alerts: list):
+        """감지된 경고를 SSE proactive/stream으로 push."""
+        for alert in alerts:
+            await sse_manager.send_event("system_alert", alert)
+
+    async def run_loop(self):
+        """메인 루프: 30초마다 수집 → 감지 → 푸시."""
+        while True:
+            metrics = await self.collect_metrics()
+            alerts = await self.detect_anomalies(metrics)
+            if alerts:
+                await self.push_to_sse(alerts)
+            await asyncio.sleep(self.INTERVAL_SECONDS)</code></pre>
+
+  <h3>11.3 UI 표시 방식</h3>
+  <div class="card-grid">
+    <div class="card new-card">
+      <div class="card-title"><span class="icon">📊</span> ProactiveAlertBar (상단)</div>
+      <p>이상 감지 시 화면 상단에 슬라이드인 경고 바 표시. 심각도별 색상 구분. 클릭 시 상세 패널 열림. 5초 후 자동 축소 (닫히지는 않음).</p>
+    </div>
+    <div class="card new-card">
+      <div class="card-title"><span class="icon">🎯</span> 영역 경고 아이콘</div>
+      <p>문제가 감지된 API/DB와 연관된 UI 영역 우측 상단에 ⚠️ 아이콘 오버레이. hover 시 문제 요약 툴팁 표시.</p>
+    </div>
+    <div class="card new-card">
+      <div class="card-title"><span class="icon">📋</span> 시스템 모니터 사이드바</div>
+      <p>인스펙터 사이드바에 "📡 시스템 모니터" 탭 추가. 전체 시스템 상태 대시보드 + 선제 경고 히스토리 표시.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 12. 구현 로드맵 -->
+<section id="sec12">
+  <h2><span class="num">12</span> 구현 로드맵</h2>
   <div class="phase-timeline">
     <div class="phase active"><div class="phase-dot"></div><div class="phase-name">Phase 1</div><div class="phase-period">MVP Core</div><div class="phase-detail">커서 추적 + 규칙 검증<br>+ 오버레이 표시</div></div>
     <div class="phase"><div class="phase-dot"></div><div class="phase-name">Phase 2</div><div class="phase-period">AI 연동</div><div class="phase-detail">LLM 2차 분석<br>+ Design Studio 연결</div></div>
     <div class="phase"><div class="phase-dot"></div><div class="phase-name">Phase 3</div><div class="phase-period">고도화</div><div class="phase-detail">영역 선택 + 페이지 스캔<br>+ 히스토리</div></div>
     <div class="phase"><div class="phase-dot"></div><div class="phase-name">Phase 4</div><div class="phase-period">확장</div><div class="phase-detail">외부 URL 분석<br>+ 다른 프로젝트 적용</div></div>
+    <div class="phase new-phase"><div class="phase-dot"></div><div class="phase-name">Phase 5</div><div class="phase-period">시스템 모니터링</div><div class="phase-detail">실시간 API/DB 감시<br>+ 선제 보고 + 레지스트리</div></div>
   </div>
 
   <h3>Phase 1 — MVP Core (약 3일)</h3>
@@ -610,11 +992,22 @@ USER:
     <tr><td>SC-013</td><td>멀티 프로젝트 적용</td><td>NTV2/SF/GO100 프로젝트별 디자인 규칙 세트 분리 적용</td></tr>
     <tr><td>SC-014</td><td>단축키 + 제스처</td><td>Ctrl+Shift+I 토글, Esc 닫기, 방향키 요소 이동</td></tr>
   </table>
+
+  <h3>Phase 5 — 실시간 시스템 모니터링 (약 4일) <span class="badge v2">v2.0 NEW</span></h3>
+  <table>
+    <tr><th>Task ID</th><th>작업</th><th>파일</th><th>산출물</th></tr>
+    <tr class="new-row"><td>SC-015</td><td>컴포넌트→API→DB 매핑 레지스트리 구축</td><td><code>app/services/component_registry.py</code><br>DB: <code>component_api_registry</code></td><td>정적 분석 스크립트 + 레지스트리 API + 초기 매핑 데이터</td></tr>
+    <tr class="new-row"><td>SC-016</td><td>system-info API 구현</td><td><code>app/api/smart_cursor.py</code></td><td>POST /smart-cursor/system-info — 레지스트리 기반 풀스택 상태 조회</td></tr>
+    <tr class="new-row"><td>SC-017</td><td>SystemStatusPanel + CallChainViewer UI</td><td><code>SmartCursor/SystemStatusPanel.tsx</code><br><code>SmartCursor/CallChainViewer.tsx</code></td><td>API/DB/코드 상태 대시보드 + 호출 체인 시각화</td></tr>
+    <tr class="new-row"><td>SC-018</td><td>선제 보고 엔진 (ProactiveEngine)</td><td><code>app/services/proactive_engine.py</code></td><td>30초 주기 이상 감지 + SSE 푸시 (/proactive/stream)</td></tr>
+    <tr class="new-row"><td>SC-019</td><td>ProactiveAlertBar + 영역 경고 아이콘 UI</td><td><code>SmartCursor/ProactiveAlertBar.tsx</code></td><td>상단 경고 바 + 문제 영역 자동 하이라이트</td></tr>
+    <tr class="new-row"><td>SC-020</td><td>런타임 레지스트리 자동 수집 (X-Component)</td><td>프론트 fetch wrapper + 백엔드 미들웨어</td><td>실제 사용 패턴 기반 레지스트리 자동 보강</td></tr>
+  </table>
 </section>
 
-<!-- 10. 검수 기준 -->
-<section id="sec10">
-  <h2><span class="num">10</span> 검수 기준 및 KPI</h2>
+<!-- 13. 검수 기준 -->
+<section id="sec13">
+  <h2><span class="num">13</span> 검수 기준 및 KPI</h2>
   <table>
     <tr><th>항목</th><th>기준</th><th>측정 방법</th></tr>
     <tr><td>응답 속도</td><td>hover 후 3초 이내 첫 결과 표시</td><td>meta.latency_ms 측정, P95 &lt; 3000ms</td></tr>
@@ -624,9 +1017,14 @@ USER:
     <tr><td>수정 요청 전환율</td><td>분석 결과 중 30% 이상이 수정 요청으로 전환</td><td>to-design-request / analyze 호출 비율</td></tr>
     <tr><td>UI 비파괴</td><td>인스펙터 ON 상태에서 기존 채팅/대시보드 기능 100% 정상</td><td>기존 E2E 테스트 통과</td></tr>
     <tr><td>메모리</td><td>인스펙터 활성 시 추가 메모리 &lt; 50MB</td><td>Chrome DevTools Memory 프로파일</td></tr>
+    <tr class="new-row"><td>시스템 상태 응답 <span class="badge v2">v2.0</span></td><td>system-info API 응답 &lt; 2초</td><td>meta.collected_at 기준 지연 측정</td></tr>
+    <tr class="new-row"><td>레지스트리 정확도 <span class="badge v2">v2.0</span></td><td>컴포넌트→API 매핑 정확도 90% 이상</td><td>수동 검증 50개 컴포넌트 대조</td></tr>
+    <tr class="new-row"><td>선제 감지율 <span class="badge v2">v2.0</span></td><td>실제 장애의 70% 이상을 CEO 발견 전 감지</td><td>alert vs. CEO 보고 시간 비교</td></tr>
+    <tr class="new-row"><td>선제 보고 지연 <span class="badge v2">v2.0</span></td><td>이상 발생 후 60초 이내 CEO 화면에 표시</td><td>감지 시각 vs. SSE 수신 시각</td></tr>
   </table>
 
-  <h3>완료 판정 체크리스트 (Phase 1 MVP)</h3>
+  <h3>완료 판정 체크리스트</h3>
+  <p><strong>Phase 1 MVP (디자인 분석)</strong></p>
   <ul class="checklist">
     <li><span class="check">☐</span> 채팅창에서 "🔍" 버튼으로 인스펙터 ON/OFF 토글 가능</li>
     <li><span class="check">☐</span> 마우스 hover 시 대상 요소에 하이라이트 표시</li>
@@ -637,11 +1035,22 @@ USER:
     <li><span class="check">☐</span> 인스펙터 OFF 시 오버레이 완전 제거, 기존 기능 영향 없음</li>
     <li><span class="check">☐</span> 분석 응답 P95 &lt; 3초</li>
   </ul>
+  <p><strong>Phase 5 시스템 모니터링 <span class="badge v2">v2.0</span></strong></p>
+  <ul class="checklist">
+    <li><span class="check">☐</span> hover 시 API 응답시간, DB 상태, 에러율이 SystemStatusPanel에 표시</li>
+    <li><span class="check">☐</span> 프론트→API→서비스→DB 호출 체인이 CallChainViewer에 정확히 표시</li>
+    <li><span class="check">☐</span> 컴포넌트 매핑 레지스트리에 50개 이상 매핑 등록</li>
+    <li><span class="check">☐</span> SSE 선제 보고 스트림이 정상 연결되고 이벤트 수신 확인</li>
+    <li><span class="check">☐</span> API 지연 급증 시 ProactiveAlertBar에 경고 자동 표시</li>
+    <li><span class="check">☐</span> DB 연결 풀 85% 초과 시 선제 경고 발생</li>
+    <li><span class="check">☐</span> "자동 복구 실행" 버튼이 auto_fix_dispatcher와 연동</li>
+    <li><span class="check">☐</span> 시스템 모니터 사이드바 탭에 전체 상태 대시보드 표시</li>
+  </ul>
 </section>
 
-<!-- 11. 리스크 -->
-<section id="sec11">
-  <h2><span class="num">11</span> 리스크 및 대응</h2>
+<!-- 14. 리스크 -->
+<section id="sec14">
+  <h2><span class="num">14</span> 리스크 및 대응</h2>
   <table>
     <tr><th>리스크</th><th>영향</th><th>대응</th></tr>
     <tr><td style="color:var(--error)">성능 저하</td><td>mousemove 이벤트 폭주로 메인 스레드 블로킹</td><td>300ms debounce + requestAnimationFrame + 동시 분석 1개 제한</td></tr>
@@ -650,38 +1059,47 @@ USER:
     <tr><td style="color:var(--warn)">오탐 누적</td><td>규칙이 엄격하면 정상 요소에도 경고 → 신뢰도 저하</td><td>"이 문제 무시" 버튼 + 오탐 피드백으로 규칙 튜닝</td></tr>
     <tr><td style="color:var(--warn)">React 렌더링 충돌</td><td>오버레이가 DOM을 직접 조작 → 상태 불일치</td><td>React Portal(document.body)로 독립 레이어 렌더링</td></tr>
     <tr><td style="color:var(--accent)">스크린샷 정확도</td><td>MediaStream 캡처가 실제 화면과 불일치 가능</td><td>canvas 해상도를 devicePixelRatio에 맞춤. 영역 좌표 보정</td></tr>
+    <tr class="new-row"><td style="color:var(--error)">레지스트리 부정확 <span class="badge v2">v2.0</span></td><td>잘못된 컴포넌트→API 매핑으로 엉뚱한 상태 표시</td><td>런타임 자동 수집(X-Component)으로 정확도 보강 + 수동 보정 UI</td></tr>
+    <tr class="new-row"><td style="color:var(--warn)">선제 보고 과다 <span class="badge v2">v2.0</span></td><td>너무 잦은 경고로 CEO 피로감 → 무시하게 됨</td><td>임계값 자동 튜닝 + "이 알림 끄기" + 중복 경고 5분 억제</td></tr>
+    <tr class="new-row"><td style="color:var(--warn)">SSE 연결 부하 <span class="badge v2">v2.0</span></td><td>선제 보고 SSE + 기존 SSE로 연결 수 증가</td><td>기존 stream.py에 이벤트 타입 추가하여 단일 SSE 연결 공유</td></tr>
+    <tr class="new-row"><td style="color:var(--accent)">메트릭 수집 부하 <span class="badge v2">v2.0</span></td><td>30초 주기 전체 메트릭 수집이 DB 부하 유발</td><td>경량 쿼리만 사용 + 결과 60초 캐싱 + pg_stat 뷰 활용</td></tr>
   </table>
 </section>
 
-<!-- 12. 비용 -->
-<section id="sec12">
-  <h2><span class="num">12</span> 비용 추정</h2>
-  <h3>12.1 개발 비용 (러너 기준)</h3>
+<!-- 15. 비용 -->
+<section id="sec15">
+  <h2><span class="num">15</span> 비용 추정</h2>
+  <h3>15.1 개발 비용 (러너 기준)</h3>
   <table>
     <tr><th>Phase</th><th>Task 수</th><th>예상 비용</th><th>기간</th></tr>
     <tr><td>Phase 1 (MVP Core)</td><td>5</td><td>$5~8</td><td>3일</td></tr>
     <tr><td>Phase 2 (AI 연동)</td><td>3</td><td>$3~5</td><td>2일</td></tr>
     <tr><td>Phase 3 (고도화)</td><td>3</td><td>$3~5</td><td>2일</td></tr>
     <tr><td>Phase 4 (확장)</td><td>3</td><td>$3~5</td><td>2일</td></tr>
-    <tr style="font-weight:700"><td>합계</td><td>14</td><td>$14~23</td><td>~9일</td></tr>
+    <tr class="new-row"><td>Phase 5 (시스템 모니터링) <span class="badge v2">v2.0</span></td><td>6</td><td>$8~12</td><td>4일</td></tr>
+    <tr style="font-weight:700"><td>합계</td><td>20</td><td>$22~35</td><td>~13일</td></tr>
   </table>
 
-  <h3>12.2 운영 비용 (월간 추정)</h3>
+  <h3>15.2 운영 비용 (월간 추정)</h3>
   <table>
     <tr><th>항목</th><th>단가</th><th>예상 사용량</th><th>월 비용</th></tr>
     <tr><td>규칙 기반 분석</td><td>$0 (서버 내부)</td><td>~500회/월</td><td>$0</td></tr>
     <tr><td>LLM 2차 분석 (Haiku)</td><td>~$0.005/요청</td><td>~150회/월 (30%)</td><td>~$0.75</td></tr>
     <tr><td>스크린샷 저장</td><td>로컬 디스크</td><td>~200MB/월</td><td>$0</td></tr>
+    <tr class="new-row"><td>시스템 메트릭 수집 <span class="badge v2">v2.0</span></td><td>$0 (서버 내부)</td><td>~86,400회/월 (30초 주기)</td><td>$0</td></tr>
+    <tr class="new-row"><td>SSE 선제 보고 <span class="badge v2">v2.0</span></td><td>$0 (서버 내부)</td><td>상시 연결</td><td>$0</td></tr>
+    <tr class="new-row"><td>레지스트리 DB 저장 <span class="badge v2">v2.0</span></td><td>$0 (PostgreSQL)</td><td>~500행</td><td>$0</td></tr>
     <tr style="font-weight:700"><td>합계</td><td></td><td></td><td>~$1/월</td></tr>
   </table>
-  <p style="font-size:0.9em;color:var(--text2)">LLM은 Haiku 기준. CEO가 일상적으로 사용해도 월 $1 미만으로 추정됩니다. 규칙 기반이 70% 이상 처리하므로 비용 효율적입니다.</p>
+  <p style="font-size:0.9em;color:var(--text2)">시스템 모니터링은 서버 내부 리소스만 사용하므로 추가 운영 비용이 없습니다. LLM은 Haiku 기준. CEO가 일상적으로 사용해도 월 $1 미만으로 추정됩니다.</p>
 </section>
 
 </div>
 
 <div class="footer">
-  AADS Smart Cursor Inspector — 상세 구현 기획서 v1.0<br>
-  2026-05-13 | CTO AI (Claude Opus) | CEO moongoby<br>
+  AADS Smart Cursor Inspector — 상세 구현 기획서 v2.0<br>
+  2026-05-14 | CTO AI (Claude Opus) | CEO moongoby<br>
+  <span style="color:var(--purple)">v2.0: 실시간 시스템 모니터링 + 선제적 보고 추가</span><br>
   <span style="color:var(--accent)">AADS 자율 AI 개발 시스템</span>
 </div>
 

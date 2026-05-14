@@ -736,3 +736,26 @@ MAX
 
 ## [2026-05-13 14:52:45 KST] [aads-server] scripts/rebuild_dashboard.sh
 - Chat-Direct 수정: run_remote_command: cat /root/aads/aads-dashboard/deploy.sh
+
+## [2026-05-14 08:43:29 KST] [aads-server] scripts/deploy_dashboard_bg.sh
+- Chat-Direct 수정: write: scripts/deploy_dashboard_bg.sh
+
+## [2026-05-14 09:02:36 KST] [aads-server] scripts/codex_device_auth.sh
+- Chat-Direct 수정: write: scripts/codex_device_auth.sh
+
+## [2026-05-14 09:03:27 KST] [aads-server] scripts/codex_device_auth.py
+- Chat-Direct 수정: write: scripts/codex_device_auth.py
+
+## [2026-05-14 09:03:32 KST] [aads-server] scripts/codex_device_auth.py
+- Chat-Direct 수정: run_remote_command: tmux kill-session -t codex-auth 2>/dev/null; echo "killed"
+
+## [2026-05-14 09:05:36 KST] [aads-server] scripts/codex_auth_sync.sh
+- Chat-Direct 수정: write: scripts/codex_auth_sync.sh
+
+## [2026-05-14 09:15:30 KST] [aads-server] scripts/codex_device_auth.py
+- Chat-Direct 수정: write: scripts/codex_device_auth.py
+
+## [2026-05-14 09:16:54 KST] [aads-server] .gitignore
+- Chat-Direct 수정: run_remote_command: python3 -c "
+# Add runtime markers to server .gitignore
+with open('/root/aads/aa

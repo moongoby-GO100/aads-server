@@ -1499,3 +1499,43 @@ tests/smoke_test_result_*
 ## [2026-05-13 14:03:34 KST] [GO100] HANDOVER.md
 - Chat-Direct 수정: patch: ## 최근 완료 작업 (05/13 13:40 KST — 사용자 여정 7단→## 최근 완료 작업 (05/13 14:00 KST — 프론트+채팅 도구
 - finalize: pending
+
+## [2026-05-14 08:37:34 KST] [GO100] backend/app/services/go100/ai/hypothesis_draft.py
+- Chat-Direct 수정: patch:     if any(phrase in compact for phrase →    if any(phrase in compact for phrase 
+- finalize: pending
+
+## [2026-05-14 09:11:17 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
+- Chat-Direct 수정: patch: _LLM_AUTONOMOUS_PROMPT = """## GO100_LLM→_LLM_AUTONOMOUS_PROMPT = """## GO100_LLM
+- finalize: pending
+
+## [2026-05-14 09:13:23 KST] [GO100] frontend/public/manager/_updated_at.txt
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-05-14 09:13:30 KST] [GO100] frontend/public/manager/agents.json
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-05-14 09:13:37 KST] [GO100] frontend/public/manager/errors.json
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-05-14 09:13:44 KST] [GO100] frontend/public/manager/snapshot.json
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-05-14 09:13:51 KST] [GO100] snapshot.json
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-05-14 09:13:58 KST] [GO100] v41_manager/_updated_at.txt
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-05-14 09:14:04 KST] [GO100] v41_manager/desk_status.json
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-05-14 09:14:11 KST] [GO100] v41_manager/mock_trades.json
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending

@@ -134,3 +134,33 @@ p = pathlib.Path('/root/aads/aads-dashboard/src/app/
 
 ## [2026-05-13 14:48:17 KST] [aads-dashboard] ../aads-dashboard/run-deploy.sh
 - Chat-Direct 수정: write: ../aads-dashboard/run-deploy.sh
+
+## [2026-05-14 08:03:05 KST] [aads-dashboard] public/reports/aads-smart-cursor-design-spec.html
+- Chat-Direct 수정: run_remote_command: grep -n "cli_relay_retry_same_model\|CLI Relay unreachable\|relay_failed\|_RELAY
+
+## [2026-05-14 08:03:08 KST] [aads-dashboard] public/reports/aads-smart-cursor-design-spec.html
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-server/app/static/reports/aads-smart-cursor-design-spec.html 
+
+## [2026-05-14 08:12:33 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch: const DEFAULT_ROLE_OPTIONS = [
+  { id: "→const DEFAULT_ROLE_OPTIONS = [
+  { id: "
+
+## [2026-05-14 08:12:56 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 -c "
+import re
+path = '/root/aads/aads-dashboard/src/app/chat/page.tsx'
+
+
+## [2026-05-14 08:13:00 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: ssh root@5.104.86.116 "curl -s -o /dev/null -w '%{http_code}' http://localhost:8
+
+## [2026-05-14 08:39:00 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch: const DEFAULT_ROLE_OPTIONS = [
+  { id: "→const DEFAULT_ROLE_OPTIONS = [
+  { id: "
+
+## [2026-05-14 09:17:09 KST] [aads-dashboard] .gitignore
+- Chat-Direct 수정: run_remote_command: python3 -c "
+# Add runtime markers + build cache to dashboard .gitignore
+with op

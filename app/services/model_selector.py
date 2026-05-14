@@ -1478,6 +1478,12 @@ async def call_stream(
         "gemini-2.5-flash": "claude-sonnet",
         "gemini-2.0-flash": "claude-haiku",
     }
+    # CLI Relay 비활성화 환경(CLAUDE_CLI_ENABLED=false, server5 등) → LiteLLM 직접 라우팅
+    if not _CLAUDE_CLI_ENABLED and (model not in _GEMINI_MODELS and model in _ANTHROPIC_MODEL_ID):
+        async for event in _stream_litellm(model, system_prompt, messages, tools=tools, session_id=session_id):
+            yield event
+        return
+
     if route_backend == "claude_cli_relay" or (model not in _GEMINI_MODELS and model in _ANTHROPIC_MODEL_ID):
         _original_model = model
         _downgrade = _MODEL_DOWNGRADE.get(model, [model])
@@ -1579,6 +1585,18 @@ async def call_stream(
                     return
 
             logger.warning(f"tier_exhausted: {_fm}/slot{_fs}[{_fi}]")
+
+        # Tier3: CLI Relay 오프라인 환경(server5 등) → LiteLLM으로 같은 모델 직접 시도
+        _litellm_direct_err = False
+        logger.info(f"litellm_direct_fallback: trying {_original_model} via LiteLLM after relay failure")
+        async for event in _stream_litellm(_original_model, system_prompt, messages, tools=tools, session_id=session_id):
+            if event.get("type") == "error":
+                _litellm_direct_err = True
+                logger.warning(f"litellm_direct_fallback_failed: {_original_model}: {event.get('content', '')[:80]}")
+                break
+            yield event
+        if not _litellm_direct_err:
+            return
 
         # 모든 Claude 모델×계정 실패 → 동급 외부 모델 순차 시도
         try:
@@ -2504,6 +2522,7 @@ _RELAY_NON_RETRYABLE_ERROR_MARKERS = (
     "401",
     "403",
     "404",
+    "cli relay unreachable",  # 헬스체크 연결 실패 → 즉시 포기, 재시도 불필요
     "you've hit your limit",
     "you have hit your limit",
     "resets ",
