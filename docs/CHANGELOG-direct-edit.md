@@ -800,3 +800,15 @@ d=json.load(open('/root/.codex/auth.json'))
 - Chat-Direct 수정: run_remote_command: python3 -c "
 with open('/root/aads/aads-server/.gitignore','a') as f:
     f.writ
+
+## [2026-05-14 09:34:12 KST] [aads-server] scripts/codex_auth_monitor.py
+- Chat-Direct 수정: patch:         r = subprocess.run(["codex", "lo→        codex_path = os.environ.get("COD
+
+## [2026-05-14 09:34:18 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: grep "REQUESTED_MODE" /root/aads/aads-server/deploy.sh
+
+## [2026-05-14 09:34:19 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: curl -s http://localhost:4000/v1/models -H "Authorization: Bearer sk-litellm" | 
+
+## [2026-05-14 09:34:48 KST] [aads-server] scripts/codex_auth_monitor.py
+- Chat-Direct 수정: patch:         return "Logged in" in r.stdout→        return "Logged in" in (r.stdout 
