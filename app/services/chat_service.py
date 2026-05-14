@@ -110,6 +110,7 @@ _streaming_state: Dict[str, Dict[str, Any]] = {}
 # 클라이언트 이탈 후 자동 종료 시간 (초)
 _BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "300"))  # 5분
 _FIRST_RESPONSE_TIMEOUT_SEC = float(os.getenv("AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC", "120"))
+_COOLDOWN_SECS_DEFAULT = 300
 _RECOVERY_DEDUPE_MODEL_USED = {"recovered", "recovered_from_redis", "stopped", None}
 _RECOVERY_PREFIX_LEN = 50
 _HISTORY_EXCLUDED_INTENTS = (
@@ -1811,18 +1812,29 @@ async def with_background_completion(
                             # partial content에서 ⏳ 마커 제거 후 rate_limited intent로 보존
                             _partial = state.get("content", "")
                             _partial_clean = re.sub(r'\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\s*$', '', _partial).rstrip()
+                            _err_raw = str(state.get("_producer_exception_type") or state.get("_producer_incomplete_exit") or "")
+                            from app.services.model_selector import _parse_quota_reset_seconds, _format_reset_kst
+                            _reset_secs = _parse_quota_reset_seconds(_err_raw)
+                            _reset_hint = _format_reset_kst(_reset_secs) if _reset_secs > _COOLDOWN_SECS_DEFAULT else "잠시 후"
                             _rate_content = (
-                                (_partial_clean + "\n\n⚠️ _API rate limit / 과부하로 응답이 일시 중단되었습니다. 잠시 후 자동으로 이어서 생성됩니다._")
+                                (_partial_clean + f"\n\n⚠️ _API 쿼터 소진으로 응답이 일시 중단되었습니다. {_reset_hint} 자동으로 이어서 생성됩니다._")
                                 if _partial_clean
-                                else "⚠️ _API rate limit / 과부하로 응답 생성이 중단되었습니다. 잠시 후 자동으로 이어서 생성됩니다._"
+                                else f"⚠️ _API 쿼터 소진으로 응답 생성이 중단되었습니다. {_reset_hint} 자동으로 이어서 생성됩니다._"
                             )
                             _updated = await _conn.execute(
                                 "UPDATE chat_messages SET content = $1, intent = 'rate_limited', model_used = 'rate_limited' "
                                 "WHERE session_id = $2 AND intent = 'streaming_placeholder'",
                                 _rate_content, uuid.UUID(session_id),
                             )
-                            logger.warning(f"rate_limit_placeholder_preserved session={session_id[:8]} partial_len={len(_partial_clean)} updated={_updated}")
+                            logger.warning(f"rate_limit_placeholder_preserved session={session_id[:8]} partial_len={len(_partial_clean)} reset_secs={_reset_secs} updated={_updated}")
                             state["_rate_limited"] = True
+                            state["_quota_reset_seconds"] = _reset_secs
+                            if state.get("execution_id"):
+                                _reset_msg = f"quota_exhausted: reset {_reset_hint}"
+                                await _conn.execute(
+                                    "UPDATE chat_turn_executions SET error_message = $1, updated_at = NOW() WHERE id = $2 AND status IN ('running','retrying')",
+                                    _reset_msg[:500], uuid.UUID(str(state["execution_id"])),
+                                )
                     except Exception as _rl_err:
                         logger.warning(f"rate_limit_preserve_failed session={session_id[:8]}: {_rl_err}")
         finally:

@@ -130,6 +130,39 @@ _CLAUDE_RELAY_NAVER_FIRST = os.getenv("CLAUDE_RELAY_NAVER_FIRST", "false").lower
 _SLOT_COOLDOWN: Dict[str, float] = {}  # {slot: expire_timestamp}
 _COOLDOWN_SECS = 300  # 5분
 
+import re as _re_mod
+
+def _parse_quota_reset_seconds(error_msg: str) -> int:
+    """에러 메시지에서 쿼터 복구 시간(초)을 파싱. 못 찾으면 _COOLDOWN_SECS 반환."""
+    if not error_msg:
+        return _COOLDOWN_SECS
+    low = error_msg.lower()
+    m = _re_mod.search(r'resets?\s+in\s+(\d+)\s*(hour|hr|시간)', low)
+    if m:
+        return int(m.group(1)) * 3600
+    m = _re_mod.search(r'resets?\s+in\s+(\d+)\s*(week|주)', low)
+    if m:
+        return int(m.group(1)) * 7 * 86400
+    m = _re_mod.search(r'resets?\s+in\s+(\d+)\s*(minute|min|분)', low)
+    if m:
+        return int(m.group(1)) * 60
+    m = _re_mod.search(r'resets?\s+in\s+(\d+)\s*(day|일)', low)
+    if m:
+        return int(m.group(1)) * 86400
+    if "exceeded your current quota" in low or "billing details" in low:
+        return 86400
+    return _COOLDOWN_SECS
+
+def _format_reset_kst(seconds: int) -> str:
+    """복구까지 남은 초를 KST 시각 문자열로 변환."""
+    import datetime as _dt
+    reset_at = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=9))) + _dt.timedelta(seconds=seconds)
+    if seconds >= 86400:
+        return f"약 {seconds // 86400}일 후 ({reset_at.strftime('%m/%d %H:%M')} KST)"
+    if seconds >= 3600:
+        return f"약 {seconds // 3600}시간 후 ({reset_at.strftime('%H:%M')} KST)"
+    return f"약 {seconds // 60}분 후 ({reset_at.strftime('%H:%M')} KST)"
+
 def _parse_rl_reset_ms(headers=None):
     if not headers:
         return None
@@ -1512,10 +1545,12 @@ async def call_stream(
                         _err_msg = event.get("content", "")
                         logger.warning(f"relay_err: {_target_model}/slot{_slot}[{_si}] — {_err_msg[:80]}")
                         if any(k in _err_msg.lower() for k in ("429", "rate", "limit", "overloaded", "quota")):
-                            _mark_slot_cooldown(_slot)
+                            _reset_secs = _parse_quota_reset_seconds(_err_msg)
+                            _mark_slot_cooldown(_slot, duration_override=_reset_secs)
                             _slot_key = _slot_records.get(_slot, {}).get("key_name")
                             if _slot_key:
-                                await _mark_key_rate_limited(_slot_key, seconds=_COOLDOWN_SECS)
+                                await _mark_key_rate_limited(_slot_key, seconds=_reset_secs)
+                            logger.warning("quota_reset_parsed: slot=%s seconds=%d msg=%s", _slot, _reset_secs, _err_msg[:120])
                         break
                     yield event
                 if not _err:
@@ -1555,12 +1590,14 @@ async def call_stream(
                     _err_msg = event.get("content", "")
                     logger.warning(f"relay_err: {_fm}/slot{_fs}[{_fi}] — {_err_msg[:80]}")
                     _err_lower = _err_msg.lower()
-                    # 429/한도/크레딧 오류 → 기존 쿨다운 등록
+                    # 429/한도/크레딧 오류 → 복구 시간 파싱 후 쿨다운 등록
                     if any(k in _err_lower for k in ("429", "rate", "limit", "overloaded", "quota")):
-                        _mark_slot_cooldown(_fs)
+                        _reset_secs = _parse_quota_reset_seconds(_err_msg)
+                        _mark_slot_cooldown(_fs, duration_override=_reset_secs)
                         _slot_key = _slot_records.get(_fs, {}).get("key_name")
                         if _slot_key:
-                            await _mark_key_rate_limited(_slot_key, seconds=_COOLDOWN_SECS)
+                            await _mark_key_rate_limited(_slot_key, seconds=_reset_secs)
+                        logger.warning("quota_reset_parsed: slot=%s seconds=%d msg=%s", _fs, _reset_secs, _err_msg[:120])
                     # CLI exit 반복 실패는 짧은 고정 쿨다운 적용
                     elif any(k in _err_lower for k in ("cli exited", "exit code", "exited with code")):
                         _mark_slot_cooldown(_fs, duration_override=60)
