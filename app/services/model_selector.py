@@ -149,6 +149,22 @@ def _parse_quota_reset_seconds(error_msg: str) -> int:
     m = _re_mod.search(r'resets?\s+in\s+(\d+)\s*(day|일)', low)
     if m:
         return int(m.group(1)) * 86400
+    # Codex CLI 고정시각 패턴: "resets 3am (Asia/Seoul)", "resets at 3:00 AM"
+    m = _re_mod.search(r'resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?:\s*\(?\s*(?:asia/seoul|kst)\s*\)?)?', low)
+    if m:
+        import datetime as _dt
+        _KST = _dt.timezone(_dt.timedelta(hours=9))
+        now_kst = _dt.datetime.now(_KST)
+        h = int(m.group(1))
+        mi = int(m.group(2)) if m.group(2) else 0
+        if m.group(3) == 'pm' and h != 12:
+            h += 12
+        elif m.group(3) == 'am' and h == 12:
+            h = 0
+        target = now_kst.replace(hour=h, minute=mi, second=0, microsecond=0)
+        if target <= now_kst:
+            target += _dt.timedelta(days=1)
+        return max(int((target - now_kst).total_seconds()), 60)
     if "exceeded your current quota" in low or "billing details" in low:
         return 86400
     return _COOLDOWN_SECS
