@@ -78,6 +78,10 @@ _MAX_CONCURRENT = int(os.getenv("CLAUDE_RELAY_MAX_CONCURRENT", "1"))
 _SEMAPHORE_ACQUIRE_TIMEOUT_SEC = float(os.getenv("CLAUDE_RELAY_ACQUIRE_TIMEOUT_SEC", "20"))
 _semaphore = None  # 앱 시작 시 실제 이벤트 루프에서 생성 (Python 3.6 different loop 방지)
 
+# AADS-191: 세마포어 leak 진단/방지용 활성 lease 카운터
+_ACTIVE_LEASES = {"claude": 0, "codex": 0}
+_STDERR_READ_TIMEOUT_SEC = float(os.getenv("CLAUDE_RELAY_STDERR_READ_TIMEOUT_SEC", "3"))
+
 # --- Direct OAuth ---
 _DIRECT_OAUTH_ENABLED = os.getenv("AADS_CLAUDE_DIRECT_OAUTH", "0") == "1"
 _ENV_OAUTH_FILE = Path(os.getenv("ENV_OAUTH_FILE", "/root/.genspark/.env.oauth"))
@@ -114,22 +118,38 @@ class _SemaphoreLease:
         self._acquired = False
 
     async def __aenter__(self):
+        # AADS-191: wait_for + Semaphore.acquire race condition 방지.
+        # acquire() task를 직접 만들어 cancel 시점에 slot leak이 없도록 처리.
+        acquire_task = asyncio.ensure_future(self._semaphore.acquire())
         try:
-            await asyncio.wait_for(self._semaphore.acquire(), timeout=self._timeout_sec)
+            await asyncio.wait_for(asyncio.shield(acquire_task), timeout=self._timeout_sec)
         except asyncio.TimeoutError:
+            # wait_for가 timeout 시 acquire_task는 shield로 살아있음.
+            # 이미 acquire 성공 직후일 수 있으므로 callback에서 release 보장.
+            def _release_if_acquired(task):
+                if not task.cancelled() and task.exception() is None:
+                    try:
+                        self._semaphore.release()
+                    except Exception:
+                        pass
+            acquire_task.add_done_callback(_release_if_acquired)
+            acquire_task.cancel()
             logger.error(
-                "%s_relay_busy: session=%s acquire_timeout=%.1fs",
+                "%s_relay_busy: session=%s acquire_timeout=%.1fs active_leases=%s",
                 self._relay_name,
                 _short_session(self._session_id),
                 self._timeout_sec,
+                dict(_ACTIVE_LEASES),
             )
             raise
         self._acquired = True
+        _ACTIVE_LEASES[self._relay_name] = _ACTIVE_LEASES.get(self._relay_name, 0) + 1
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
         if self._acquired:
             self._semaphore.release()
+            _ACTIVE_LEASES[self._relay_name] = max(0, _ACTIVE_LEASES.get(self._relay_name, 0) - 1)
             self._acquired = False
         return False
 
@@ -1191,20 +1211,45 @@ async def handle_stream(request):
                 except ConnectionResetError:
                     logger.info("CLI stream error write skipped: client already closed aads=%s", aads_session_id[:8])
             finally:
+                # AADS-191: docker exec subprocess가 SIGTERM/SIGKILL 후에도 pipe를 끊지 않아
+                # stderr.read()가 영원히 block되는 leak을 방지한다.
                 if proc.returncode is None:
                     try:
                         proc.terminate()
                         await asyncio.wait_for(proc.wait(), timeout=5)
                     except (asyncio.TimeoutError, ProcessLookupError):
-                        proc.kill()
+                        try:
+                            proc.kill()
+                        except ProcessLookupError:
+                            pass
                 if proc.stderr:
-                    stderr_bytes = await proc.stderr.read()
+                    try:
+                        stderr_bytes = await asyncio.wait_for(
+                            proc.stderr.read(), timeout=_STDERR_READ_TIMEOUT_SEC
+                        )
+                    except asyncio.TimeoutError:
+                        stderr_bytes = b""
+                        logger.warning(
+                            "CLI stderr_read_timeout: aads=%s — forcing pipe close to prevent slot leak",
+                            aads_session_id[:8] if aads_session_id else "none",
+                        )
+                        try:
+                            proc.kill()
+                        except (ProcessLookupError, Exception):
+                            pass
                     if stderr_bytes:
                         stderr_text = stderr_bytes.decode("utf-8", errors="replace")
                         if proc.returncode not in (None, 0):
                             logger.warning("CLI stderr(exit=%s): %s", proc.returncode, stderr_text[:1200])
                         else:
                             logger.info("CLI stderr: %s", stderr_text[:500])
+                # AADS-191: subprocess transport 강제 close로 fd leak 차단
+                try:
+                    transport = getattr(proc, "_transport", None)
+                    if transport is not None:
+                        transport.close()
+                except Exception:
+                    pass
 
             if proc.returncode != 0:
                 logger.warning("CLI exited %s (slot=%s, resume=%s)", proc.returncode, slot, is_resume)
@@ -1565,20 +1610,44 @@ async def handle_codex_stream(request):
                 except ConnectionResetError:
                     logger.info("Codex stream error write skipped: client already closed session=%s", (session_id or "default")[:8])
             finally:
+                # AADS-191: Codex CLI도 동일한 pipe leak 가능성 차단
                 if proc.returncode is None:
                     try:
                         proc.terminate()
                         await asyncio.wait_for(proc.wait(), timeout=5)
                     except (asyncio.TimeoutError, ProcessLookupError):
-                        proc.kill()
+                        try:
+                            proc.kill()
+                        except ProcessLookupError:
+                            pass
                 if proc.stderr:
-                    stderr_bytes = await proc.stderr.read()
+                    try:
+                        stderr_bytes = await asyncio.wait_for(
+                            proc.stderr.read(), timeout=_STDERR_READ_TIMEOUT_SEC
+                        )
+                    except asyncio.TimeoutError:
+                        stderr_bytes = b""
+                        logger.warning(
+                            "Codex stderr_read_timeout: session=%s — forcing pipe close to prevent slot leak",
+                            (session_id or "default")[:8],
+                        )
+                        try:
+                            proc.kill()
+                        except (ProcessLookupError, Exception):
+                            pass
                     if stderr_bytes:
                         stderr_text = stderr_bytes.decode("utf-8", errors="replace")
                         if "ERROR" in stderr_text or "Forbidden" in stderr_text or "Unauthorized" in stderr_text:
                             logger.warning("Codex stderr: %s", stderr_text[:800])
                         else:
                             logger.info("Codex stderr: %s", stderr_text[:500])
+                # AADS-191: subprocess transport 강제 close로 fd leak 차단
+                try:
+                    transport = getattr(proc, "_transport", None)
+                    if transport is not None:
+                        transport.close()
+                except Exception:
+                    pass
             try:
                 await _stream_write(response, json.dumps({
                     "type": "result", "result": full_text,
@@ -1606,11 +1675,22 @@ async def handle_codex_stream(request):
 
 
 async def handle_health(request):
+    # AADS-191: 세마포어 leak 가시성을 위해 active_leases / semaphore_value 노출
+    sem_value = None
+    try:
+        if _semaphore is not None:
+            sem_value = _semaphore._value
+    except Exception:
+        pass
     health = {"status": "ok", "port": PORT, "sessions": len(_session_map),
               "auth_mode": "direct_oauth" if _DIRECT_OAUTH_ENABLED else "litellm_proxy",
               "claude_cmd_mode": _resolve_cli_command("claude").get("mode", "unknown"),
               "codex_cmd_mode": _resolve_cli_command("codex").get("mode", "unknown"),
-              "mcp_bridge_mode": _MCP_BRIDGE_MODE}
+              "mcp_bridge_mode": _MCP_BRIDGE_MODE,
+              "max_concurrent": _MAX_CONCURRENT,
+              "semaphore_available": sem_value,
+              "active_leases": dict(_ACTIVE_LEASES),
+              "stderr_read_timeout_sec": _STDERR_READ_TIMEOUT_SEC}
     if _DIRECT_OAUTH_ENABLED:
         token, slot, label = _pick_token()
         health.update({"oauth_slot": slot, "oauth_label": label, "token_available": bool(token)})

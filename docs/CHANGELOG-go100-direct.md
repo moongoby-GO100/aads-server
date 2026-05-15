@@ -1567,3 +1567,197 @@ tests/smoke_test_result_*
 ## [2026-05-15 08:33:10 KST] [GO100] reports/20260515_백억이_세계최고AI투자시스템_연구보고서.md
 - Chat-Direct 수정: write: reports/20260515_백억이_세계최고AI투자시스템_연구보고서.md
 - finalize: pending
+
+## [2026-05-15 09:52:26 KST] [GO100] backend/app/services/go100/ai/realtime_guardrails.py
+- Chat-Direct 수정: patch: def _looks_like_internal_error(lower_tex→def _looks_like_internal_error(lower_tex
+- finalize: pending
+
+## [2026-05-15 09:52:48 KST] [GO100] backend/app/services/go100/ai/realtime_guardrails.py
+- Chat-Direct 수정: patch:         else:
+            lower_text = t→        else:
+            lower_text = t
+- finalize: pending
+
+## [2026-05-15 09:54:00 KST] [GO100] backend/app/services/go100/ai/agent_core.py
+- Chat-Direct 수정: patch: async def _run_with_model(
+    provider:→def _self_check_response(result: dict) -
+- finalize: pending
+
+## [2026-05-15 09:54:48 KST] [GO100] backend/app/services/go100/ai/agent_core.py
+- Chat-Direct 수정: patch: import asyncio
+import json
+import loggin→import asyncio
+import json
+import loggin
+- finalize: pending
+
+## [2026-05-15 10:01:20 KST] [GO100] backend/app/services/go100/ai/tool_executors.py
+- Chat-Direct 수정: patch: logger = logging.getLogger(__name__)
+
+
+#→logger = logging.getLogger(__name__)
+
+_s
+- finalize: pending
+
+## [2026-05-15 10:01:32 KST] [GO100] backend/app/services/go100/ai/tool_executors.py
+- Chat-Direct 수정: patch: logger = logging.getLogger(__name__)
+
+
+#→logger = logging.getLogger(__name__)
+
+_s
+- finalize: pending
+
+## [2026-05-15 10:02:07 KST] [GO100] backend/app/services/go100/ai/tool_executors.py
+- Chat-Direct 수정: patch:     async def _run():
+        from sqlal→    async def _run():
+        _factory =
+- finalize: pending
+
+## [2026-05-15 10:02:21 KST] [GO100] backend/app/services/go100/ai/tool_executors.py
+- Chat-Direct 수정: patch:     async def _run():
+        from sqlal→    async def _run():
+        _factory =
+- finalize: pending
+
+## [2026-05-15 10:03:10 KST] [GO100] backend/app/services/go100/ai/tool_executors.py
+- Chat-Direct 수정: patch:     async def _run():
+        from sqlal→    async def _run():
+        _factory =
+- finalize: pending
+
+## [2026-05-15 10:03:23 KST] [GO100] backend/app/services/go100/ai/tool_executors.py
+- Chat-Direct 수정: patch:     async def _run():
+        from sqlal→    async def _run():
+        _factory =
+- finalize: pending
+
+## [2026-05-15 10:04:01 KST] [GO100] backend/app/services/go100/ai/tool_executors.py
+- Chat-Direct 수정: patch:     async def _run():
+        from sqlal→    async def _run():
+        from sqlal
+- finalize: pending
+
+## [2026-05-15 10:04:25 KST] [GO100] backend/app/services/go100/ai/tool_executors.py
+- Chat-Direct 수정: patch:                 ),
+            }
+       →                ),
+            }
+
+    tr
+- finalize: pending
+
+## [2026-05-15 10:05:13 KST] [GO100] backend/app/services/go100/ai/tool_executors.py
+- Chat-Direct 수정: patch:     async def _run():
+        from datet→    async def _run():
+        from datet
+- finalize: pending
+
+## [2026-05-15 10:05:23 KST] [GO100] backend/app/services/go100/ai/tool_executors.py
+- Chat-Direct 수정: patch:         from sqlalchemy import text as s→        from sqlalchemy import text as s
+- finalize: pending
+
+## [2026-05-15 10:05:31 KST] [GO100] backend/app/services/go100/ai/tool_executors.py
+- Chat-Direct 수정: patch:             ok_count = sum(1 for r in re→            ok_count = sum(1 for r in re
+- finalize: pending
+
+## [2026-05-15 10:07:35 KST] [GO100] backend/app/services/go100/ai/tool_executors.py
+- Chat-Direct 수정: patch:             results = []
+            for→        results = []
+        for row in 
+- finalize: pending
+
+## [2026-05-15 10:10:57 KST] [GO100] frontend/src/go100/components/command-center/ChatMessage.tsx
+- Chat-Direct 수정: run_remote_command: python3 -c "
+with open('/root/kis-autotrade-v4/backend/app/services/go100/ai/too
+- finalize: pending
+
+## [2026-05-15 10:10:57 KST] [GO100] frontend/src/go100/components/command-center/ChatMessage.tsx
+- Chat-Direct 수정: run_remote_command: grep -n "cards\|inline_card\|approval_required\|parseCards\|extractCards" /root/
+- finalize: pending
+
+## [2026-05-15 10:12:36 KST] [GO100] backend/app/services/go100/ai/tool_executors.py
+- Chat-Direct 수정: run_remote_command: python3 << 'PYEOF'
+import subprocess
+
+# Get original file from the commit before
+- finalize: pending
+
+## [2026-05-15 10:13:52 KST] [GO100] frontend/src/go100/components/command-center/ChatMessage.tsx
+- Chat-Direct 수정: patch: function ApprovalRequiredCard({ card }: →function ApprovalRequiredCard({ card }: 
+- finalize: pending
+
+## [2026-05-15 10:15:17 KST] [GO100] frontend/src/go100/components/command-center/ChatMessage.tsx
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-05-15 10:15:58 KST] [GO100] frontend/public/manager/_updated_at.txt
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop stash@{0}
+- finalize: pending
+
+## [2026-05-15 10:16:05 KST] [GO100] frontend/public/manager/agents.json
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop stash@{0}
+- finalize: pending
+
+## [2026-05-15 10:16:11 KST] [GO100] frontend/public/manager/errors.json
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop stash@{0}
+- finalize: pending
+
+## [2026-05-15 10:16:18 KST] [GO100] frontend/public/manager/snapshot.json
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop stash@{0}
+- finalize: pending
+
+## [2026-05-15 10:16:26 KST] [GO100] v41_manager/_updated_at.txt
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop stash@{0}
+- finalize: pending
+
+## [2026-05-15 10:16:32 KST] [GO100] v41_manager/desk_status.json
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop stash@{0}
+- finalize: pending
+
+## [2026-05-15 10:16:38 KST] [GO100] v41_manager/mock_trades.json
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop stash@{0}
+- finalize: pending
+
+## [2026-05-15 10:16:45 KST] [GO100] v41_manager/pipeline.json
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop stash@{0}
+- finalize: pending
+
+## [2026-05-15 10:18:18 KST] [GO100] frontend/src/go100/hooks/useChat.ts
+- Chat-Direct 수정: run_remote_command: journalctl -u go100 --since "30 min ago" --no-pager 2>/dev/null | grep -i "CHAT-
+- finalize: pending
+
+## [2026-05-15 12:08:01 KST] [GO100] frontend/src/go100/components/command-center/ChatMessage.tsx
+- Chat-Direct 수정: patch:               const decisionId = String(→              const decisionId = String(
+- finalize: pending
+
+## [2026-05-15 12:08:15 KST] [GO100] backend/app/services/go100/autonomy_service.py
+- Chat-Direct 수정: patch:             WHERE decision_id = :decisio→            WHERE (decision_id = :decisi
+- finalize: pending
+
+## [2026-05-15 12:08:38 KST] [GO100] backend/app/services/go100/autonomy_service.py
+- Chat-Direct 수정: patch:     return [dict(row) for row in result.→    return [dict(row) for row in result.
+- finalize: pending
+
+## [2026-05-15 12:08:55 KST] [GO100] backend/app/services/go100/autonomy_service.py
+- Chat-Direct 수정: patch:             WHERE decision_id = :decisio→            WHERE (decision_id = :decisi
+- finalize: pending
+
+## [2026-05-15 12:09:21 KST] [GO100] backend/app/services/go100/autonomy_service.py
+- Chat-Direct 수정: patch:             WHERE (decision_id = :decisi→            WHERE (decision_id = :decisi
+- finalize: pending
+
+## [2026-05-15 12:09:42 KST] [GO100] backend/app/routers/go100/ai_router.py
+- Chat-Direct 수정: patch:     if gated_actions:
+        _card = {
+→    approval_cards: list[dict[str, Any]]
+- finalize: pending
+
+## [2026-05-15 12:10:01 KST] [GO100] backend/app/routers/go100/ai_router.py
+- Chat-Direct 수정: patch:             _ai_id = await _save_msg(db,→            _ai_id = await _save_msg(db,
+- finalize: pending
+
+## [2026-05-15 12:10:50 KST] [GO100] backend/app/routers/go100/ai_router.py
+- Chat-Direct 수정: patch:             _ai_id = await _save_msg(db,→            _ai_id = await _save_msg(db,
+- finalize: pending

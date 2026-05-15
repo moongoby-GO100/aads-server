@@ -167,3 +167,13 @@ with op
 
 ## [2026-05-15 09:41:53 KST] [aads-dashboard] src/app/chat/page.tsx
 - Chat-Direct 수정: run_remote_command: sed -i '667,668d' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-05-15 09:44:05 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i '1444s/prev.streaming === next.streaming &&/prev.streaming === next.strea
+
+## [2026-05-15 09:59:52 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i '667,668d' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-05-15 10:41:25 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/_fix.py 2>/dev/null; python3 -c "
+import 

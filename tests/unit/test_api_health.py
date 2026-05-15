@@ -48,7 +48,7 @@ def test_health_ok(client):
     data = resp.json()
     assert data["status"] == "ok"
     assert data["graph_ready"] is True
-    assert data["version"] == "0.1.0"
+    assert data["version"] == "0.2.1"
 
 
 def test_health_initializing(client_no_graph):

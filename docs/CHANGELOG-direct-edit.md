@@ -851,3 +851,21 @@ with open('/root/aads/aads-server/.gitignore','a') as f:
 
 ## [2026-05-15 08:32:43 KST] [aads-server] pc_agent/commands/browser_auto.py
 - Chat-Direct 수정: patch:     # PC Agent WebSocket (wss:// upgrade→THIS_WILL_NOT_MATCH
+
+## [2026-05-15 09:43:32 KST] [aads-server] app/services/pc_agent_manager.py
+- Chat-Direct 수정: run_remote_command: sed -n '674,684p' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-05-15 09:43:33 KST] [aads-server] pc_agent/commands/browser_auto.py
+- Chat-Direct 수정: run_remote_command: sed -n '674,684p' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-05-15 09:43:34 KST] [aads-server] tests/unit/test_browser_auto_eval.py
+- Chat-Direct 수정: run_remote_command: sed -n '674,684p' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-05-15 09:48:40 KST] [aads-server] scripts/run-dashboard-deploy.sh
+- Chat-Direct 수정: write: scripts/run-dashboard-deploy.sh
+
+## [2026-05-15 10:03:24 KST] [aads-server] scripts/run-dashboard-deploy.sh
+- Chat-Direct 수정: write: scripts/run-dashboard-deploy.sh
+
+## [2026-05-15 12:14:00 KST] [aads-server] tests/unit/test_api_health.py
+- Chat-Direct 수정: patch:     assert data["version"] == "0.1.0"→    assert data["version"] == "0.2.1"
