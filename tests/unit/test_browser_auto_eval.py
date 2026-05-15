@@ -10,6 +10,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "pc_agent
 import browser_auto  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _reset_browser_auto_state() -> None:
+    browser_auto.CDPSessionManager._sessions.clear()
+    browser_auto.CDPCommandGuardManager._guards.clear()
+
+
 @pytest.mark.asyncio
 async def test_browser_eval_maps_syntax_error(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_send_cdp_command(_port, _method, _params=None, **_kwargs):
@@ -112,3 +118,61 @@ async def test_browser_eval_skips_diagnostics_when_timeout_budget_is_almost_spen
     assert result["status"] == "success"
     assert result["data"]["value"] == "ok"
     assert result["data"]["diagnostics"] == {}
+
+
+@pytest.mark.asyncio
+async def test_browser_eval_defaults_to_non_await_promise(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_send_cdp_command(_port, _method, params=None, **_kwargs):
+        captured["params"] = dict(params or {})
+        return {
+            "result": {
+                "type": "string",
+                "value": "ok",
+            },
+            "_target": {
+                "id": "page-1",
+                "url": "https://www.vvic.com/search?keyword=%EC%9B%90%ED%94%BC%EC%8A%A4",
+                "title": "VVIC Search",
+            },
+        }
+
+    async def fake_collect_page_diagnostics(_port, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(browser_auto, "_send_cdp_command", fake_send_cdp_command)
+    monkeypatch.setattr(browser_auto, "_collect_page_diagnostics", fake_collect_page_diagnostics)
+
+    result = await browser_auto.browser_eval(
+        {
+            "expression": "JSON.stringify({ok:true})",
+            "port": 9555,
+            "work_key": "ntv2-vvic-scrape",
+        }
+    )
+
+    assert result["status"] == "success"
+    assert captured["params"]["awaitPromise"] is False  # type: ignore[index]
+
+
+def test_runtime_timeout_cleanup_keeps_work_key_session() -> None:
+    browser_auto.CDPSessionManager.register("ntv2-vvic-scrape", 9555, "/tmp/vvic", pid=1234)
+    exc = browser_auto.CDPCommandError(
+        browser_auto._ERROR_RUNTIME_EVALUATE_TIMEOUT,
+        "Runtime.evaluate timed out",
+        details={
+            "runtime_cleanup": {"attempted": True, "succeeded": True},
+            "detach_cleanup": {"attempted": True, "succeeded": True},
+        },
+    )
+
+    result = browser_auto._command_error_response(
+        9555,
+        {"work_key": "ntv2-vvic-scrape", "port": 9555},
+        exc,
+    )
+
+    assert result["status"] == "error"
+    assert result["data"]["session_released"] is False
+    assert browser_auto.CDPSessionManager.get_session("ntv2-vvic-scrape") is not None

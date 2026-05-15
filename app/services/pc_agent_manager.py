@@ -478,9 +478,20 @@ class PCAgentManager:
             cleanup_params["port"] = params.get("port")
         try:
             cleanup_command_id = await self.send_command(agent_id, "browser_health", cleanup_params)
-            await self.get_result(
+            cleanup_result = await self.get_result(
                 cleanup_command_id,
                 timeout=max(1.0, min(3.0, float(timeout_seconds))),
+            )
+            cleanup_payload = cleanup_result.result if isinstance(cleanup_result.result, dict) else {}
+            logger.info(
+                "pc_agent_timeout_cleanup_result agent_id=%s command_type=%s work_key=%s status=%s error_code=%s session_released=%s guard_released=%s",
+                agent_id,
+                normalized_command,
+                work_key,
+                cleanup_result.status,
+                cleanup_payload.get("error_code"),
+                cleanup_payload.get("session_released"),
+                cleanup_payload.get("guard_released"),
             )
         except Exception as exc:
             logger.debug(

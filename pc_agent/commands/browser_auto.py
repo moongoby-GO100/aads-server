@@ -23,6 +23,8 @@ CDP_CONNECT_TIMEOUT_SECONDS = float(os.getenv("AADS_CDP_CONNECT_TIMEOUT_SECONDS"
 CDP_COMMAND_TIMEOUT_SECONDS = float(os.getenv("AADS_CDP_COMMAND_TIMEOUT_SECONDS", "15") or "15")
 CDP_EVALUATE_TIMEOUT_SECONDS = float(os.getenv("AADS_CDP_EVALUATE_TIMEOUT_SECONDS", "12") or "12")
 CDP_RECOVERY_RETRY_LIMIT = max(0, int(os.getenv("AADS_CDP_RECOVERY_RETRY_LIMIT", "1") or "1"))
+CDP_COMMAND_GUARD_WAIT_SECONDS = float(os.getenv("AADS_CDP_COMMAND_GUARD_WAIT_SECONDS", "4.0") or "4.0")
+CDP_COMMAND_GUARD_STALE_SECONDS = float(os.getenv("AADS_CDP_COMMAND_GUARD_STALE_SECONDS", "45") or "45")
 VVIC_SPA_MIN_TEXT_LENGTH = max(40, int(os.getenv("AADS_VVIC_SPA_MIN_TEXT_LENGTH", "120") or "120"))
 _ERROR_CDP_NOT_READY = "CDP_NOT_READY"
 _ERROR_RUNTIME_EVALUATE_TIMEOUT = "RUNTIME_EVALUATE_TIMEOUT"
@@ -50,6 +52,13 @@ class CDPSession:
     last_target_id: str = ""
     last_target_url: str = ""
     last_error_code: str = ""
+
+
+@dataclass
+class _CommandGuard:
+    key: str
+    owner: str
+    acquired_at: float
 
 
 class CDPSessionManager:
@@ -136,6 +145,80 @@ class CDPSessionManager:
     @classmethod
     def get_all(cls) -> dict[str, CDPSession]:
         return dict(cls._sessions)
+
+
+class CDPCommandGuardManager:
+    _guards: dict[str, _CommandGuard] = {}
+    _lock = threading.Lock()
+
+    @classmethod
+    def _guard_key(cls, params: Dict[str, Any] | None, *, port: int) -> str:
+        if isinstance(params, dict):
+            work_key = str(params.get("work_key") or "").strip()
+            if work_key:
+                return f"work:{CDPSessionManager.normalize_work_key(work_key)}"
+        return f"port:{port}"
+
+    @classmethod
+    async def acquire(
+        cls,
+        params: Dict[str, Any] | None,
+        *,
+        port: int,
+        wait_timeout_seconds: float,
+        stale_after_seconds: float,
+    ) -> tuple[str, str, bool]:
+        loop = asyncio.get_running_loop()
+        key = cls._guard_key(params, port=port)
+        owner = uuid.uuid4().hex
+        reclaimed = False
+        deadline = loop.time() + max(0.25, wait_timeout_seconds)
+        while True:
+            now = loop.time()
+            with cls._lock:
+                current = cls._guards.get(key)
+                if current is None:
+                    cls._guards[key] = _CommandGuard(key=key, owner=owner, acquired_at=now)
+                    return key, owner, reclaimed
+                age = max(0.0, now - current.acquired_at)
+                if age >= stale_after_seconds:
+                    cls._guards[key] = _CommandGuard(key=key, owner=owner, acquired_at=now)
+                    reclaimed = True
+                    logger.warning(
+                        "cdp_command_guard_reclaimed key=%s previous_owner=%s age=%.2fs stale_after=%.2fs",
+                        key,
+                        current.owner,
+                        age,
+                        stale_after_seconds,
+                    )
+                    return key, owner, reclaimed
+            if now >= deadline:
+                raise CDPCommandError(
+                    _ERROR_RUNTIME_EVALUATE_TIMEOUT,
+                    f"previous command lock busy: {key}",
+                    details={
+                        "guard_key": key,
+                        "guard_wait_seconds": max(0.0, wait_timeout_seconds),
+                        "guard_stale_after_seconds": max(0.0, stale_after_seconds),
+                    },
+                )
+            await asyncio.sleep(0.05)
+
+    @classmethod
+    def release(cls, key: str, owner: str) -> None:
+        if not key or not owner:
+            return
+        with cls._lock:
+            current = cls._guards.get(key)
+            if current is not None and current.owner == owner:
+                cls._guards.pop(key, None)
+
+    @classmethod
+    def force_release(cls, key: str) -> None:
+        if not key:
+            return
+        with cls._lock:
+            cls._guards.pop(key, None)
 
 
 def _next_id() -> int:
@@ -541,6 +624,92 @@ async def _send_cdp(
         )
 
 
+async def _best_effort_runtime_terminate(
+    ws: Any,
+    *,
+    session_id: str,
+    timeout_seconds: float,
+    reason: str,
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "action": "Runtime.terminateExecution",
+        "reason": reason,
+        "attempted": bool(session_id),
+        "succeeded": False,
+    }
+    if not session_id:
+        return report
+    try:
+        await asyncio.shield(
+            _request_cdp(
+                ws,
+                "Runtime.terminateExecution",
+                None,
+                timeout_seconds=max(0.5, timeout_seconds),
+                session_id=session_id,
+            )
+        )
+        report["succeeded"] = True
+    except BaseException as exc:
+        report["error"] = str(exc)
+    return report
+
+
+async def _best_effort_detach(
+    ws: Any,
+    *,
+    session_id: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "action": "Target.detachFromTarget",
+        "attempted": bool(session_id),
+        "succeeded": False,
+    }
+    if not session_id:
+        return report
+    try:
+        await asyncio.shield(
+            _request_cdp(
+                ws,
+                "Target.detachFromTarget",
+                {"sessionId": session_id},
+                timeout_seconds=max(0.5, timeout_seconds),
+            )
+        )
+        report["succeeded"] = True
+    except BaseException as exc:
+        report["error"] = str(exc)
+    return report
+
+
+async def _best_effort_target_probe(
+    ws: Any,
+    *,
+    target_id: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "action": "Target.getTargetInfo",
+        "target_id": target_id,
+        "attempted": bool(target_id),
+        "succeeded": False,
+    }
+    if not target_id:
+        return report
+    try:
+        await _request_cdp(
+            ws,
+            "Target.getTargetInfo",
+            {"targetId": target_id},
+            timeout_seconds=max(0.5, timeout_seconds),
+        )
+        report["succeeded"] = True
+    except Exception as exc:
+        report["error"] = str(exc)
+    return report
+
+
 async def _send_cdp_command(
     port: int,
     method: str,
@@ -559,15 +728,26 @@ async def _send_cdp_command(
     candidates = await _select_page_targets(port, target_id=target_id, target_idx=target_idx)
     attempts = candidates[: max(1, min(len(candidates), CDP_RECOVERY_RETRY_LIMIT + 1))]
     last_error: CDPCommandError | None = None
+    deadline = asyncio.get_running_loop().time() + max(0.5, timeout_seconds)
 
-    for candidate in attempts:
+    for idx, candidate in enumerate(attempts):
+        remaining_budget = deadline - asyncio.get_running_loop().time()
+        if remaining_budget <= 0:
+            break
+        per_attempt_timeout = max(
+            0.5,
+            min(
+                remaining_budget,
+                max(0.5, timeout_seconds / max(1, len(attempts) - idx)),
+            ),
+        )
         candidate_target_id = str(candidate.get("targetId") or candidate.get("id") or "")
         candidate_url = str(candidate.get("url") or "")
         candidate_title = str(candidate.get("title") or "")
         try:
             async with websockets.connect(
                 browser_ws_url,
-                open_timeout=CDP_CONNECT_TIMEOUT_SECONDS,
+                open_timeout=max(0.5, min(CDP_CONNECT_TIMEOUT_SECONDS, per_attempt_timeout)),
                 close_timeout=1,
                 max_size=10 * 1024 * 1024,
             ) as ws:
@@ -576,7 +756,7 @@ async def _send_cdp_command(
                         ws,
                         "Target.activateTarget",
                         {"targetId": candidate_target_id},
-                        timeout_seconds=min(3.0, timeout_seconds),
+                        timeout_seconds=max(0.5, min(3.0, per_attempt_timeout)),
                     )
                 except CDPCommandError:
                     pass
@@ -585,7 +765,7 @@ async def _send_cdp_command(
                     ws,
                     "Target.attachToTarget",
                     {"targetId": candidate_target_id, "flatten": True},
-                    timeout_seconds=min(3.0, timeout_seconds),
+                    timeout_seconds=max(0.5, min(3.0, per_attempt_timeout)),
                 )
                 session_id = str(attach.get("sessionId") or "")
                 if not session_id:
@@ -594,14 +774,39 @@ async def _send_cdp_command(
                         f"target attach 실패: {candidate_target_id}",
                         details={"target_id": candidate_target_id, "url": candidate_url},
                     )
+                probe = await _best_effort_target_probe(
+                    ws,
+                    target_id=candidate_target_id,
+                    timeout_seconds=max(0.5, min(1.5, per_attempt_timeout)),
+                )
+                if not probe.get("succeeded"):
+                    raise CDPCommandError(
+                        _ERROR_STALE_TARGET,
+                        f"target probe 실패: {candidate_target_id}",
+                        details={
+                            "target_id": candidate_target_id,
+                            "target_probe": probe,
+                        },
+                    )
+                command_error: CDPCommandError | None = None
                 try:
+                    pre_runtime_cleanup: dict[str, Any] = {}
+                    if method == "Runtime.evaluate":
+                        pre_runtime_cleanup = await _best_effort_runtime_terminate(
+                            ws,
+                            session_id=session_id,
+                            timeout_seconds=max(0.5, min(1.5, per_attempt_timeout)),
+                            reason="pre_eval_cleanup",
+                        )
                     result = await _request_cdp(
                         ws,
                         method,
                         params,
-                        timeout_seconds=timeout_seconds,
+                        timeout_seconds=max(0.5, min(per_attempt_timeout, deadline - asyncio.get_running_loop().time())),
                         session_id=session_id,
                     )
+                    if pre_runtime_cleanup:
+                        result["_cleanup"] = {"pre_runtime_cleanup": pre_runtime_cleanup}
                     result["_target"] = {
                         "id": candidate_target_id,
                         "url": candidate_url,
@@ -609,28 +814,30 @@ async def _send_cdp_command(
                     }
                     return result
                 except CDPCommandError as cmd_exc:
+                    command_error = cmd_exc
                     if cmd_exc.code == _ERROR_RUNTIME_EVALUATE_TIMEOUT and method == "Runtime.evaluate":
-                        try:
-                            await _request_cdp(
-                                ws,
-                                "Runtime.terminateExecution",
-                                None,
-                                timeout_seconds=2.0,
-                                session_id=session_id,
-                            )
-                        except Exception:
-                            pass
+                        cmd_exc.details["runtime_cleanup"] = await _best_effort_runtime_terminate(
+                            ws,
+                            session_id=session_id,
+                            timeout_seconds=max(0.5, min(2.0, per_attempt_timeout)),
+                            reason="timeout_cleanup",
+                        )
+                    if method == "Runtime.evaluate" and "runtime_cleanup" not in cmd_exc.details:
+                        cmd_exc.details["runtime_cleanup"] = await _best_effort_runtime_terminate(
+                            ws,
+                            session_id=session_id,
+                            timeout_seconds=max(0.5, min(1.5, per_attempt_timeout)),
+                            reason="error_cleanup",
+                        )
                     raise
                 finally:
-                    try:
-                        await _request_cdp(
-                            ws,
-                            "Target.detachFromTarget",
-                            {"sessionId": session_id},
-                            timeout_seconds=1.5,
-                        )
-                    except Exception:
-                        pass
+                    detach_cleanup = await _best_effort_detach(
+                        ws,
+                        session_id=session_id,
+                        timeout_seconds=max(0.5, min(1.5, per_attempt_timeout)),
+                    )
+                    if command_error is not None:
+                        command_error.details.setdefault("detach_cleanup", detach_cleanup)
         except CDPCommandError as exc:
             last_error = exc
             if exc.code not in {_ERROR_STALE_TARGET, _ERROR_RUNTIME_EVALUATE_TIMEOUT, _ERROR_CDP_NOT_READY}:
@@ -638,6 +845,12 @@ async def _send_cdp_command(
 
     if last_error is not None:
         raise last_error
+    if method == "Runtime.evaluate":
+        raise CDPCommandError(
+            _ERROR_RUNTIME_EVALUATE_TIMEOUT,
+            f"{method} timed out after {timeout_seconds:.1f}s",
+            details={"method": method, "timeout_seconds": timeout_seconds, "port": port},
+        )
     raise CDPCommandError(
         _ERROR_STALE_TARGET,
         f"usable page target 없음 (port={port})",
@@ -734,11 +947,19 @@ def _record_cdp_success(params: Dict[str, Any] | None, target: dict[str, Any] | 
 def _command_error_response(port: int, params: Dict[str, Any] | None, exc: CDPCommandError) -> Dict[str, Any]:
     work_key = _work_key_from_params(params)
     CDPSessionManager.mark_error(work_key, error_code=exc.code)
-    if exc.code in {_ERROR_CDP_NOT_READY, _ERROR_RUNTIME_EVALUATE_TIMEOUT, _ERROR_STALE_TARGET}:
+    release_session = exc.code in {_ERROR_CDP_NOT_READY, _ERROR_STALE_TARGET}
+    if exc.code == _ERROR_RUNTIME_EVALUATE_TIMEOUT:
+        runtime_cleanup = exc.details.get("runtime_cleanup") if isinstance(exc.details, dict) else None
+        detach_cleanup = exc.details.get("detach_cleanup") if isinstance(exc.details, dict) else None
+        runtime_ok = bool(isinstance(runtime_cleanup, dict) and runtime_cleanup.get("succeeded"))
+        detach_ok = bool(isinstance(detach_cleanup, dict) and detach_cleanup.get("succeeded"))
+        release_session = not (runtime_ok and detach_ok)
+    if release_session:
         CDPSessionManager.release(work_key)
     data = {"error": str(exc), "error_code": exc.code, "port": port}
     data.update(exc.details)
     data.setdefault("work_key", work_key)
+    data["session_released"] = release_session
     return {"status": "error", "data": data}
 
 
@@ -748,6 +969,8 @@ async def _diagnose_cdp_failure(
     exc: CDPCommandError,
 ) -> CDPCommandError:
     if exc.code not in {_ERROR_CDP_NOT_READY, _ERROR_RUNTIME_EVALUATE_TIMEOUT, _ERROR_STALE_TARGET}:
+        return exc
+    if exc.code == _ERROR_RUNTIME_EVALUATE_TIMEOUT and _as_bool((params or {}).get("skip_timeout_diagnostics", True), default=True):
         return exc
     try:
         diagnostics = await _collect_page_diagnostics(
@@ -1263,6 +1486,9 @@ async def browser_eval(params: Dict[str, Any]) -> Dict[str, Any]:
         minimum=1.0,
         maximum=300.0,
     )
+    guard_key = ""
+    guard_owner = ""
+    guard_reclaimed = False
     try:
         timeout_seconds = _resolve_timeout(
             params,
@@ -1271,28 +1497,27 @@ async def browser_eval(params: Dict[str, Any]) -> Dict[str, Any]:
             maximum=30.0,
         )
         timeout_seconds = min(timeout_seconds, max(1.0, command_budget_seconds - 0.5))
-        try:
-            result = await asyncio.wait_for(
-                _send_cdp_command(
-                    port,
-                    "Runtime.evaluate",
-                    {
-                        "expression": expression,
-                        "returnByValue": True,
-                        "awaitPromise": True,
-                    },
-                    timeout_seconds=timeout_seconds,
-                    target_id=str(params.get("target_id") or ""),
-                    target_idx=int(params.get("target_idx", 0) or 0),
-                ),
-                timeout=max(0.5, timeout_seconds + 0.25),
-            )
-        except asyncio.TimeoutError as exc:
-            raise CDPCommandError(
-                _ERROR_RUNTIME_EVALUATE_TIMEOUT,
-                f"Runtime.evaluate timed out after {timeout_seconds:.1f}s",
-                details={"timeout_seconds": timeout_seconds},
-            ) from exc
+        await_promise = _as_bool(params.get("await_promise", False), default=False)
+        guard_wait_seconds = min(CDP_COMMAND_GUARD_WAIT_SECONDS, max(0.5, command_budget_seconds - 0.25))
+        guard_stale_after_seconds = max(CDP_COMMAND_GUARD_STALE_SECONDS, timeout_seconds + 2.0)
+        guard_key, guard_owner, guard_reclaimed = await CDPCommandGuardManager.acquire(
+            params,
+            port=port,
+            wait_timeout_seconds=guard_wait_seconds,
+            stale_after_seconds=guard_stale_after_seconds,
+        )
+        result = await _send_cdp_command(
+            port,
+            "Runtime.evaluate",
+            {
+                "expression": expression,
+                "returnByValue": True,
+                "awaitPromise": await_promise,
+            },
+            timeout_seconds=timeout_seconds,
+            target_id=str(params.get("target_id") or ""),
+            target_idx=int(params.get("target_idx", 0) or 0),
+        )
         error = _runtime_exception_error(result)
         if error is not None:
             raise error
@@ -1326,6 +1551,9 @@ async def browser_eval(params: Dict[str, Any]) -> Dict[str, Any]:
                 "target_id": target.get("id"),
                 "target_url": target.get("url"),
                 "diagnostics": diagnostics,
+                "await_promise": await_promise,
+                "guard_reclaimed": guard_reclaimed,
+                "cleanup": result.get("_cleanup", {}),
             },
         }
     except CDPCommandError as exc:
@@ -1333,6 +1561,8 @@ async def browser_eval(params: Dict[str, Any]) -> Dict[str, Any]:
         return _command_error_response(port, params, exc)
     except Exception as e:
         return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
+    finally:
+        CDPCommandGuardManager.release(guard_key, guard_owner)
 
 
 async def browser_tabs(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -1354,10 +1584,17 @@ async def browser_health(params: Dict[str, Any]) -> Dict[str, Any]:
     work_key = CDPSessionManager.normalize_work_key(params.get("work_key", "general"))
     do_cleanup = bool(params.get("cleanup", True))
     port = _effective_port(params)
+    guard_key = CDPCommandGuardManager._guard_key({"work_key": work_key}, port=port)
+    guard_released = False
 
     session = CDPSessionManager.get_session(work_key)
     if session:
         port = session.port
+        guard_key = CDPCommandGuardManager._guard_key({"work_key": work_key}, port=port)
+
+    if do_cleanup:
+        CDPCommandGuardManager.force_release(guard_key)
+        guard_released = True
 
     version = await _probe_cdp_version(port)
     if version is None:
@@ -1372,6 +1609,7 @@ async def browser_health(params: Dict[str, Any]) -> Dict[str, Any]:
                 "port": port,
                 "work_key": work_key,
                 "session_released": do_cleanup and session is not None,
+                "guard_released": guard_released,
             },
         }
 
@@ -1379,6 +1617,7 @@ async def browser_health(params: Dict[str, Any]) -> Dict[str, Any]:
         result = await _send_cdp_command(port, "Runtime.evaluate", {
             "expression": "JSON.stringify({readyState: document.readyState, href: location.href, bodyLen: document.body ? document.body.innerText.length : -1})",
             "returnByValue": True,
+            "awaitPromise": False,
         }, timeout_seconds=5)
         value = result.get("result", {}).get("value", "{}")
         data = json.loads(value) if isinstance(value, str) else (value or {})
@@ -1389,6 +1628,8 @@ async def browser_health(params: Dict[str, Any]) -> Dict[str, Any]:
                 "work_key": work_key,
                 "cdp_version": version.get("Browser", ""),
                 "page": data,
+                "guard_released": guard_released,
+                "cleanup": result.get("_cleanup", {}),
             },
         }
     except CDPCommandError as e:
@@ -1402,6 +1643,7 @@ async def browser_health(params: Dict[str, Any]) -> Dict[str, Any]:
                 "port": port,
                 "work_key": work_key,
                 "session_released": do_cleanup and session is not None,
+                "guard_released": guard_released,
             },
         }
     except Exception as e:

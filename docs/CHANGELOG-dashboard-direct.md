@@ -164,3 +164,6 @@ path = '/root/aads/aads-dashboard/src/app/chat/page.tsx'
 - Chat-Direct 수정: run_remote_command: python3 -c "
 # Add runtime markers + build cache to dashboard .gitignore
 with op
+
+## [2026-05-15 09:41:53 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i '667,668d' /root/aads/aads-dashboard/src/app/chat/page.tsx
