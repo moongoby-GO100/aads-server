@@ -60,3 +60,4 @@ playwright/.auth/
 
 # Backup files
 *.bak_*
+*.bak.*
