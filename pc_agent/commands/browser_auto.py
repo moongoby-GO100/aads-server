@@ -517,6 +517,8 @@ def _classify_cdp_error(method: str, message: str) -> str:
             "target detached",
             "execution context was destroyed",
             "inspector.targetcrashed",
+            "navigated or closed",
+            "inspected target navigated",
         )
     ):
         return _ERROR_STALE_TARGET
@@ -842,6 +844,8 @@ async def _send_cdp_command(
             last_error = exc
             if exc.code not in {_ERROR_STALE_TARGET, _ERROR_RUNTIME_EVALUATE_TIMEOUT, _ERROR_CDP_NOT_READY}:
                 raise
+            if exc.code == _ERROR_STALE_TARGET and (deadline - asyncio.get_running_loop().time()) > 2.0:
+                await asyncio.sleep(1.5)
 
     if last_error is not None:
         raise last_error
