@@ -211,8 +211,8 @@ stream_count_for_port() {
     local port="$1"
     (
         curl -s -m 5 "http://127.0.0.1:${port}/api/v1/ops/active-streams" 2>/dev/null \
-        | python3 -c "import sys,json; print(json.load(sys.stdin).get('count', 0))" 2>/dev/null
-    ) || echo "0"
+        | python3 -c "import sys,json; value=json.load(sys.stdin).get('count', 'unknown'); print(value if value is not None else 'unknown')" 2>/dev/null
+    ) || echo "unknown"
 }
 
 wait_port_health() {
@@ -286,6 +286,15 @@ sync_standby_slot_after_drain() {
     local old_port="$2"
 
     (
+        # Do not rebuild the previous active slot immediately after switching.
+        # Existing nginx workers may still hold SSE/WebSocket streams on that slot,
+        # and the active-stream counter can be briefly stale during handoff.
+        local min_wait="${AADS_DEPLOY_STANDBY_SYNC_MIN_WAIT:-600}"
+        if [[ "$min_wait" != "0" ]]; then
+            echo "[deploy.sh] standby sync grace wait ${old_container}:${old_port} ${min_wait}s"
+            sleep "$min_wait"
+        fi
+
         local drain_max="${AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-1800}"
         local elapsed=0
         local active="0"
@@ -304,6 +313,10 @@ sync_standby_slot_after_drain() {
             docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
             return 0
         fi
+
+        echo "[deploy.sh] standby sync PC Agent reconnect trigger on drained old slot :${old_port}"
+        curl -sf -X POST "http://127.0.0.1:${old_port}/api/v1/pc-agent/graceful-shutdown" \
+            -H "Content-Type: application/json" 2>/dev/null || true
 
         echo "[deploy.sh] standby sync: rebuilding ${old_container}:${old_port} from current release"
         cd "$COMPOSE_DIR"
@@ -645,9 +658,6 @@ case "$MODE" in
         echo "$NEW_CONTAINER" > /root/aads/aads-server/.active_container
         docker exec "$NEW_CONTAINER" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
         docker exec "$OLD_CONTAINER" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
-        echo "[deploy.sh] ⑤ PC Agent reconnect trigger on old slot :${OLD_PORT}"
-        curl -sf -X POST "http://127.0.0.1:${OLD_PORT}/api/v1/pc-agent/graceful-shutdown" \
-            -H "Content-Type: application/json" 2>/dev/null || true
         sync_standby_slot_after_drain "$OLD_CONTAINER" "$OLD_PORT"
 
         HEALTH_URL="http://localhost:${NEW_PORT}/api/v1/health"

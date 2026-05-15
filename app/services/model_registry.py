@@ -348,8 +348,8 @@ _DEEPSEEK_COMPATIBILITY_ALIASES = {
     "deepseek-reasoner": "deepseek-v4-pro",
 }
 _DEEPSEEK_LITELLM_RUNTIME_ALIASES = {
-    "deepseek-v4-flash": "deepseek-chat",
-    "deepseek-v4-pro": "deepseek-reasoner",
+    "deepseek-v4-flash": "deepseek-v4-flash",
+    "deepseek-v4-pro": "deepseek-v4-pro",
     "deepseek-chat": "deepseek-chat",
     "deepseek-reasoner": "deepseek-reasoner",
 }

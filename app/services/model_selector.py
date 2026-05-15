@@ -772,8 +772,8 @@ _DEEPSEEK_COMPATIBILITY_ALIASES = {
     "deepseek-reasoner": "deepseek-v4-pro",
 }
 _DEEPSEEK_LITELLM_RUNTIME_ALIASES = {
-    "deepseek-v4-flash": "deepseek-chat",
-    "deepseek-v4-pro": "deepseek-reasoner",
+    "deepseek-v4-flash": "deepseek-v4-flash",
+    "deepseek-v4-pro": "deepseek-v4-pro",
     "deepseek-chat": "deepseek-chat",
     "deepseek-reasoner": "deepseek-reasoner",
 }
@@ -798,7 +798,7 @@ _OPENROUTER_MODELS = {
 }
 
 # Kimi 모델 (Moonshot AI, LiteLLM 경유)
-_KIMI_MODELS = {"kimi-k2.5", "kimi-k2", "kimi-latest", "kimi-128k", "kimi-8k"}
+_KIMI_MODELS = {"kimi-k2.6", "kimi-k2.5", "kimi-k2", "kimi-latest", "kimi-128k", "kimi-8k"}
 
 # MiniMax 모델 (LiteLLM 경유)
 _MINIMAX_MODELS = {"minimax-m2.7", "minimax-m2.5"}
@@ -2151,7 +2151,7 @@ async def _stream_litellm_openai(
         "groq-kimi-k2": 32768, "groq-llama-70b": 8192, "groq-llama-8b": 8192,
         "groq-llama4-scout": 16384, "groq-qwen3-32b": 32768,
         "groq-gpt-oss-120b": 16384, "groq-compound": 32768,
-        "kimi-k2": 8192, "kimi-k2.5": 8192, "kimi-latest": 8192,
+        "kimi-k2": 8192, "kimi-k2.5": 8192, "kimi-k2.6": 8192, "kimi-latest": 8192,
         "kimi-128k": 8192, "kimi-8k": 8192,
         "minimax-m2.7": 16384, "minimax-m2.5": 16384,
     }
@@ -2160,6 +2160,10 @@ async def _stream_litellm_openai(
     extra_params: Dict[str, Any] = {}
     if is_thinking:
         extra_params["reasoning_effort"] = "low"
+    # DeepSeek V4 Pro/Flash: thinking 활성 시 content가 비고 reasoning_content만 내려오는
+    # 케이스가 있어 채팅 본문 안정성을 위해 기본 채팅 경로에서는 thinking을 끈다.
+    if model in {"deepseek-v4-flash", "deepseek-v4-pro"}:
+        extra_params["extra_body"] = {"thinking": {"type": "disabled"}}
     # Qwen3 계열: thinking 모드 비활성화 → 도구 호출 우선 (thinking 활성 시 도구 무시됨)
     if "qwen3" in model.lower() and "thinking" not in model.lower():
         extra_params["extra_body"] = {"enable_thinking": False}

@@ -216,7 +216,7 @@ async def test_call_stream_executes_deepseek_v4_display_model_with_litellm_runti
     ]
 
     assert captured == {
-        "request_model": "deepseek-reasoner",
+        "request_model": "deepseek-v4-pro",
         "display_model": "deepseek-v4-pro",
         "cost_model": "deepseek-v4-pro",
     }
@@ -452,8 +452,8 @@ async def test_registered_model_lookup_prefers_exact_model_id_before_alias(monke
             {
                 "provider": "deepseek",
                 "model_id": "deepseek-v4-pro",
-                "execution_model_id": "deepseek-reasoner",
-                "metadata": {"execution_model_id": "deepseek-reasoner"},
+                "execution_model_id": "deepseek-v4-pro",
+                "metadata": {"execution_model_id": "deepseek-v4-pro"},
             },
         ]
 

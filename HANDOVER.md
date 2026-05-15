@@ -1,5 +1,34 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-16 08:28 KST) - Kimi K2.6/DeepSeek V4 Pro 적용 및 BG 배포 중단 원인 보강
+- 배경: CEO가 Kimi K2.6 채팅 연결, DeepSeek V4 Pro 러너 공식 ID 통일, L/XL 비교, 그리고 blue-green 중 API가 끊긴 원인 확인을 요청했다.
+- 원인: `deploy.sh bluegreen`은 비활성 슬롯 빌드/헬스 확인 후 nginx 전환하는 구조는 맞지만, 전환 직후 old slot standby 동기화가 즉시 재빌드될 수 있었다. 이때 `/api/v1/ops/active-streams` 조회 실패가 `0`으로 처리되면 기존 SSE/채팅 스트림이 남아 있어도 old slot이 재시작되어 끊김/502가 발생할 수 있었다.
+- 조치: `deploy.sh`에서 active-streams 조회 실패를 `unknown`으로 처리해 busy로 간주되게 했고, old slot standby sync 전에 기본 600초 grace wait를 추가했다. PC Agent `graceful-shutdown`도 전환 직후가 아니라 drain 이후 재빌드 직전에 호출되도록 순서를 변경했다.
+- 조치: `litellm-config.yaml`에 `kimi-k2.6`, `deepseek-v4-pro`, `deepseek-v4-flash`를 로드했고, DeepSeek V4 Pro/Flash에는 `thinking.type=disabled`를 설정해 본문 `content`가 비지 않도록 했다. `app/services/model_selector.py`와 `app/services/model_registry.py`도 공식 실행 ID 기준으로 정리했다.
+- 검증: `bash -n deploy.sh` 통과. `python3 -m pytest tests/unit/test_model_registry.py tests/unit/test_model_selector_dynamic_routing.py -q` 결과 30개 통과. LiteLLM 실호출 기준 `kimi-k2.6`은 `OK`, `deepseek-v4-pro`는 thinking 비활성 후 `OK` 본문 반환 확인.
+- 배포: `docker restart aads-litellm`로 LiteLLM 설정을 반영했고, `bash /root/aads/aads-server/deploy.sh bluegreen` 실행 결과 6단계 검증 통과. nginx API active는 `8102(aads-server-green)`, backup은 `8100(aads-server)`이며 `https://aads.newtalk.kr/api/v1/health`가 `status=ok`를 반환했다.
+- 주의: old blue 슬롯 standby 동기화는 600초 grace wait 후 백그라운드에서 진행된다. 즉시 active 서비스는 green으로 정상 제공 중이며, 커밋/푸시는 별도 수행 여부를 최종 보고에서 확인해야 한다.
+
+## 현재 진행 상태 (2026-05-16 08:07 KST) - Kimi K2.6 채팅 연결 + DeepSeek V4 Pro 공식 ID 통일
+- 배경: CEO가 Kimi K2.6 채팅 즉시 연결, DeepSeek V4 Pro의 노출/실행 모델명 통일, L/XL 규모 코딩 비교를 요청했다.
+- 조치: `app/services/model_selector.py`에 `kimi-k2.6`을 Kimi 실행 허용 목록에 추가하고, DeepSeek V4 Pro/Flash가 legacy alias(`deepseek-reasoner`, `deepseek-chat`)가 아닌 공식 API ID(`deepseek-v4-pro`, `deepseek-v4-flash`)로 LiteLLM에 전달되도록 보정했다.
+- 조치: `app/services/model_registry.py`의 DeepSeek 실행 ID 정책도 공식 ID 기준으로 맞췄고, `litellm-config.yaml`에 `kimi-k2.6`, `deepseek-v4-pro`, `deepseek-v4-flash`를 추가했다. DB 기준 `chat_model_preferences`에는 `kimi/kimi-k2.6` order 45, `deepseek/deepseek-v4-pro` order 50이 노출된다.
+- 조치: `runner_model_config` 기준 L/XL 후보에 `litellm:deepseek-v4-pro`가 포함되어 러너가 공식 ID로 호출할 수 있다.
+- 검증: `python3 -m pytest tests/unit/test_model_registry.py tests/unit/test_model_selector_dynamic_routing.py -q` 결과 30개 통과. LiteLLM `/v1/models`에 `kimi-k2.6`, `deepseek-v4-pro`, `deepseek-v4-flash` 노출 확인. LiteLLM 실호출에서 `kimi-k2.6` 0.58초, `deepseek-v4-pro` 0.95초로 `ok` 응답 확인.
+- 비교: `/tmp/aads_deepseek_gpt_opus_lxl_benchmark_20260516.json`에 L/XL read-only 비교 결과를 저장했다. L/XL 모두 DeepSeek V4 Pro, GPT-5.5, Claude Opus 4.7 호출 성공.
+- 주의: 이번 변경은 로컬 워크트리 및 실행 컨테이너/DB에 반영됐으나, 커밋/푸시/정식 blue-green 배포는 아직 수행하지 않았다. 워크트리에 다른 미커밋 변경이 다수 있어 최종 커밋 시 관련 파일만 분리 스테이징해야 한다.
+
+## 현재 진행 상태 (2026-05-15 17:45 KST) - Google 이미지 모델 등록/실시간 갤러리 보강
+- 배경: CEO 지시로 OpenAI 이미지 경로는 제외하고 Google 이미지 모델(Nano Banana/Nano Banana 2/Nano Banana Pro/Imagen 4 계열)을 AADS에 등록해야 했다. 동시에 생성 결과를 모델별·프롬프트별로 실시간 확인 가능한 공개 갤러리가 필요했다. 기존 Imagen 4.0 50장은 CEO 선택 1-B안에 따라 삭제하지 않고 `B안 보존본`으로 분리했다.
+- 조치: `app/services/media_generation_service.py`에서 Gemini Pro 이미지 모델의 잘못된 ID(`gemini-3.1-pro-image-preview`)를 공식 ID(`gemini-3-pro-image-preview`)로 정정하고, legacy alias를 canonical ID로 매핑하도록 보강했다. 기본 이미지 라우트가 OpenAI 비활성 상태에 걸리면 Imagen/Gemini 경로로 자동 폴백하도록 수정했다.
+- 조치: `app/api/image.py`의 공개 갤러리 API가 `has_image`, `image_url`을 반환하도록 확장했다. `app/static/gallery/index.html`은 실시간 API 우선, `manifest.json` 폴백, 모델/페르소나/트랙 필터, 한글 카드 요약, 프롬프트 보기, `Imagen 4.0` 초도 결과의 `B안 보존본` 분리를 지원하도록 전면 교체했다.
+- 조치: `app/api/llm_models.py` seed와 `migrations/096_google_image_models_and_routes.sql`을 추가해 `gemini-2.5-flash-image`, `gemini-3.1-flash-image-preview`, `gemini-3-pro-image-preview`, `imagen-4.0-{standard,fast,ultra}`를 영속 등록하고, OpenAI 기본 이미지/edit_image 라우트는 CEO 지시에 맞춰 비활성 처리하도록 준비했다.
+- 확인: DB 실측 기준 `llm_api_keys.OPENAI_API_KEY is_active=false`, `GEMINI_API_KEY/GEMINI_API_KEY_2 is_active=true`이며, `media_generation_jobs` 최근 기록은 `Imagen 4.0` 성공 50건 이후 `gemini-3.1-flash-image-preview`/`gemini-3.1-pro-image-preview` 실패 3건이 남아 있었다. 이는 Pro 이미지 모델 ID 오기와 미반영 코드 상태가 원인이었다.
+- 적용: `migrations/096_google_image_models_and_routes.sql`를 Postgres에 재적용해 Google/Gemini 이미지 모델 6종을 `media_image` active/selectable로 등록했고, `model_routing_preferences`에서 OpenAI `gpt-image-2` image/edit_image 경로를 비활성화했다. image 기본값은 `google/imagen-4.0-generate-001`이다.
+- 검증: `app.services.media_generation_service`, `app.api.image`, `app.api.llm_models` hot-reload 성공. `generate_image`로 A안 `gemini-3.1-flash-image-preview` job `media-2cfeeba17e9e4d8c`, C안 `gemini-3-pro-image-preview` job `media-ecd863c179ad4a35`가 각각 성공했고 DB `media_generation_jobs`에 저장됐다.
+- 공개 확인: `https://aads.newtalk.kr/reports/gallery/` 200 OK, `https://aads.newtalk.kr/reports/gallery/manifest.json` 200 `application/json`, A안/C안 이미지 직접 URL도 200 `image/jpeg` 확인. `scripts/export_gallery.py`는 data URI MIME에 따라 `.jpg/.png/.webp` 확장자를 쓰도록 보정했다.
+- 미완료: FastAPI 신규 `/api/v1/image/gallery` 라우트는 서버 route table 재등록 전이라 public API는 아직 404/401 경로가 남아 있다. 현재 CEO 실시간 확인은 정적 manifest 기반 갤러리로 정상 제공한다. 커밋/푸시/정식 배포는 아직 미실행.
+
 ## 현재 진행 상태 (2026-05-14 12:08 KST) - 68/211/114 Codex CLI 인증 반영
 - 배경: CEO가 각 서버에서 OpenAI/Codex OAuth 승인을 완료한 뒤, 서버별 `~/.codex/auth.json`에 인증 코드가 실제 반영됐는지와 독립 refresh_token 보유 여부 확인이 필요했다.
 - 조치: 68(AADS), 211(KIS/GO100), 114(SF/NTV2)에서 `codex login status`, `auth.json` 메타데이터, access_token 만료시각, refresh_token SHA-256 prefix를 토큰 원문 없이 확인했다.
@@ -1053,3 +1082,30 @@
 - 검증: `python3 -m py_compile app/models/chat.py app/services/chat_todo_service.py app/routers/chat.py` 통과. `pytest -q tests/unit/test_chat_todo_service.py` 7개 통과. Dashboard `npx tsc --noEmit --pretty false` 통과. `npx eslint src/app/chat/page.tsx` 에러 0개, 기존 경고 21개.
 - 배포: 서버 커밋 `5319e7f`와 대시보드 커밋 `7b55c87`을 `origin/main`에 푸시했다. 서버 blue-green 배포 후 nginx upstream은 API `8100` active / `8102` backup이며, `https://aads.newtalk.kr/api/v1/health`가 `status=ok`를 반환했다. 대시보드 blue-green 배포 후 nginx upstream은 dashboard `3100` active / `3101` backup이며, `https://aads.newtalk.kr/login`이 HTTP 200을 반환했다.
 - 주의: 대시보드 `bash deploy.sh`는 빌드와 슬롯 전환 이후 `aads-dashboard` 컨테이너명 충돌 메시지로 종료코드 1을 반환해 스크립트의 후속 자동 QA 단계는 실행되지 않았다. 사후 검증 기준으로 `aads-dashboard`와 `aads-dashboard-green`은 모두 healthy이고 외부 `/login` 및 `/chat` 리다이렉트가 정상이다.
+
+## 2026-05-15 18:27 KST - NewTalk AI 6-persona Nano Banana 2 seed generation
+
+- 배경: CEO가 `newtalk-ai-fashion-persona-cards-p0.html`의 상세 페르소나 카드 6명을 `newtalk-ai-model-creation-management-p0.html#console` 기획 기준으로 Nano Banana 2 생성해 갤러리에서 확인 가능하게 요청했다.
+- 조치: `ai_personas`에 윤서아, 한루아, 강민채, 정하린, 이도연, 박세린 6명을 상세 카드 기준으로 upsert하고 상태를 `seed_generating`으로 정리했다. `gemini-3.1-flash-image-preview`를 Nano Banana 2 경로로 사용해 각 1장씩 face seed 후보를 생성했다.
+- DB 기록: `media_generation_jobs` id `64~69` 6건이 `succeeded`이며, `ai_generation_logs` 6건과 `ai_persona_references` 6건을 `generation_type=face_seed`, `ref_type=face_seed`, `metadata.subtype=candidate`로 연결했다.
+- 갤러리: `reports/newtalk-ai-model-gallery-live.html`과 `app/static/gallery/` manifest를 갱신해 모델명, 6명 페르소나 필터, `6명 페르소나 시드` 트랙, 한국어 카드 요약, 프롬프트 토글을 반영했다. 공개 경로는 `https://aads.newtalk.kr/reports/gallery/?t=202605151827`이다.
+- 검증: `docker exec aads-server python3 /app/scripts/export_gallery.py` 결과 `Exported 66 images, 69 total`. 공개 URL `curl -I` 200 OK 확인. Browser Bridge CDP 세션 `bb-f8549551378b`에서 갤러리 접근성 트리 기준 최신 카드 `#69~#64` 6건이 모두 Nano Banana 2/성공/페르소나 시드로 표시됨을 확인했다.
+- 주의: 기획서의 완전한 1인 모델 생성 기준은 얼굴 후보 50장 생성 후 1장 선택, 다각도 24장, 전신 30장이다. 이번 작업은 6명 각각의 첫 face seed 후보 생성 단계이며, 50장 확장은 CEO 선택 후 진행해야 한다. 커밋/푸시/백엔드 배포는 수행하지 않았다.
+
+## 2026-05-15 18:37 KST - NewTalk AI 6-persona Nano Banana 2 face seeds expanded to 5 each
+
+- 배경: CEO가 얼굴 후보 50장이 아니라 6명 각각 5장씩만 생성하도록 추가 지시했다.
+- 조치: 기존 Nano Banana 2 페르소나 시드 `id=64~69`와 2번째 후보 `id=70~75`를 보존하고, 같은 페르소나 카드 기준으로 candidate 3~5를 배치 생성했다. 추가 생성 18건은 모두 `gemini-3.1-flash-image-preview`로 `media_generation_jobs`에 저장됐다.
+- DB 기록: 페르소나 프롬프트 기준 최종 카운트는 윤서아/한루아/강민채/정하린/이도연/박세린 각 5건이며, 전체 30건 모두 `succeeded`다. 최종 id 범위는 `64~75`, `76~93`이다.
+- 갤러리: `bash scripts/gallery_sync.sh`로 `app/static/gallery/`, `/var/www/aads-public/reports/gallery/`, 대시보드 공개 경로를 동기화했다. 공개 URL은 `https://aads.newtalk.kr/reports/gallery/`이며 manifest 기준 `persona_items=30`, `persona_images=30`이다.
+- 검증: 공개 갤러리 HTTP 200, manifest HTTP 200 확인. Browser Bridge 접근성 트리에서 최신 `#93~#64`가 `6명 페르소나 시드`, `Nano Banana 2`, `Google Gemini`, `성공`, 한글 카드 요약, 프롬프트 토글로 표시됨을 확인했다.
+- 주의: 이미지 품질 선별, 동일 인물성 embedding 검증, `ai_persona_references`의 approved 대표컷 지정은 아직 미진행이다. 커밋/푸시/백엔드 배포는 수행하지 않았다.
+
+## 2026-05-16 08:26 KST - Han Rua multi-angle approval recommendations
+
+- 배경: CEO가 한루아 89번 시드 기반 멀티앵글 얼굴 결과에서 검토 전 승인추천 20장을 표시하도록 지시했다.
+- 조치: `ai_persona_references`에서 한루아 `persona_id=3`의 멀티앵글 29건은 실제 승인값 `is_approved=false`를 유지하고, 추천 20건에만 `metadata.approval_recommended=true`, `approval_recommendation_rank`, `approval_recommendation_reason`을 기록했다.
+- 추천 대상: media id `144,145,146,147,149,150,153,170,154,155,156,157,172,159,160,161,162,164,166,173`이며 ref id 기준 `61,62,63,64,66,67,69,86,70,71,72,73,88,75,76,77,78,80,82,89`다.
+- 갤러리: `scripts/export_gallery.py`가 `ai_persona_references` 메타데이터를 manifest에 포함하도록 보정했고, `app/static/gallery/index.html`에 승인추천 배지, 추천 사유, ref/angle 표시, `승인추천만` 필터, 추천 건수 칩을 추가했다. `bash scripts/gallery_sync.sh`로 `/var/www/aads-public/reports/gallery/`에 동기화했다.
+- 검증: DB 추천 카운트 20건, 공개 manifest 추천 카운트 20건/총 173건 확인. 공개 URL `https://aads.newtalk.kr/reports/gallery/` HTTP 200 확인. Browser Bridge에서 `승인추천만` 필터 적용 시 현재 필터 결과 20건과 `승인추천 #1~#20` 표시를 확인했다.
+- 주의: 이번 조치는 CEO 검토용 추천 표시이며 실제 승인 처리(`is_approved=true`)와 embedding similarity 정량 검증은 아직 수행하지 않았다. 커밋/푸시/정식 배포는 수행하지 않았다.
