@@ -109,7 +109,7 @@ _active_bg_tasks: Dict[str, _heartbeat_asyncio.Task] = {}
 _streaming_state: Dict[str, Dict[str, Any]] = {}
 # 클라이언트 이탈 후 자동 종료 시간 (초)
 _BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "300"))  # 5분
-_FIRST_RESPONSE_TIMEOUT_SEC = float(os.getenv("AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC", "120"))
+_FIRST_RESPONSE_TIMEOUT_SEC = float(os.getenv("AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC", "180"))
 _COOLDOWN_SECS_DEFAULT = 300
 _RECOVERY_DEDUPE_MODEL_USED = {"recovered", "recovered_from_redis", "stopped", None}
 _RECOVERY_PREFIX_LEN = 50

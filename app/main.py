@@ -766,6 +766,15 @@ async def lifespan(app: FastAPI):
                         "WHERE intent = 'streaming_placeholder' AND execution_id IS NULL "
                         "AND created_at < NOW() - interval '1 minute'"
                     )
+                    # execution_id 있지만 실행이 이미 completed/interrupted인 고아 placeholder도 정리
+                    _orphan_with_exec = await _c.fetch(
+                        "SELECT m.id, m.session_id, m.content FROM chat_messages m "
+                        "LEFT JOIN chat_turn_executions te ON te.id = m.execution_id "
+                        "WHERE m.intent = 'streaming_placeholder' AND m.execution_id IS NOT NULL "
+                        "AND m.created_at < NOW() - interval '2 minutes' "
+                        "AND (te.id IS NULL OR te.status NOT IN ('running', 'retrying'))"
+                    )
+                    _stale = list(_stale) + list(_orphan_with_exec)
                     _promoted = 0
                     _deleted = 0
                     for row in _stale:
@@ -930,7 +939,7 @@ async def lifespan(app: FastAPI):
                         LIMIT 1
                     ) ph ON TRUE
                     WHERE te.status IN ('running', 'retrying')
-                      AND te.updated_at > NOW() - INTERVAL '30 minutes'
+                      AND te.updated_at > NOW() - INTERVAL '2 hours'
                       AND (
                           te.updated_at < NOW() - ($2::int * INTERVAL '1 second')
                           OR ($3::timestamptz IS NOT NULL AND te.updated_at < $3::timestamptz)
@@ -949,6 +958,19 @@ async def lifespan(app: FastAPI):
                     if sid in _abt_exec and not _abt_exec[sid].done():
                         continue
                     if sid in _ss_exec and not _ss_exec[sid].get("completed"):
+                        continue
+                    _stale_sec = int(row["stale_seconds"] or 0)
+                    if _stale_sec > 600:
+                        await _mei_exec(
+                            conn,
+                            sid,
+                            execution_id,
+                            f"force_interrupted_stale_{_stale_sec}s",
+                            partial_content=row["partial_content"] or "",
+                            placeholder_id=str(row["assistant_message_id"]) if row["assistant_message_id"] else None,
+                            delete_empty_placeholder=not bool((row["partial_content"] or "").strip()),
+                        )
+                        logger.info("stale_force_interrupt: session=%s execution=%s stale=%ds", sid[:8], execution_id[:8], _stale_sec)
                         continue
                     if _execution_resume_attempts.get(execution_id, 0) >= 2:
                         await _mei_exec(
@@ -1070,7 +1092,7 @@ async def lifespan(app: FastAPI):
 
     async def _periodic_execution_resume_scanner():
         import asyncio as _prs_asyncio
-        _periodic_stale_seconds = int(os.getenv("AADS_EXECUTION_RESUME_STALE_SECONDS", "90"))
+        _periodic_stale_seconds = int(os.getenv("AADS_EXECUTION_RESUME_STALE_SECONDS", "60"))
         await _prs_asyncio.sleep(15)
         while True:
             try:
@@ -1268,6 +1290,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/browser-bridge/sessions/register",
     "/api/v1/ops/hot-reload",  # 내부 hot-reload (127.0.0.1 전용)
     "/api/v1/ops/active-streams",  # 내부 스트림 drain 감지 (deploy.sh 전용)
+    "/api/v1/image/gallery",  # AI 모델 이미지 갤러리 (공개 읽기전용)
 )
 # 내부 모니터링 (verify_monitor_key로 별도 인증)
 _MONITOR_KEY_PATHS = (
