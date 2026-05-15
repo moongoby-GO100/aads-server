@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 import logging
+import random
 import time
 from typing import Optional
 
@@ -28,9 +29,21 @@ logger = logging.getLogger(__name__)
 _GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
 _DASHSCOPE_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 _DASHSCOPE_API_KEY = os.getenv("ALIBABA_API_KEY", "")
-_CLAUDE_RETRY_DELAY_SEC = 5.0
+_CLAUDE_RETRY_BASE_SEC = 2.0
+_CLAUDE_RETRY_MAX_DELAY_SEC = 30.0
+_CLAUDE_RETRY_JITTER_SEC = 1.5
 _CLAUDE_MAX_RETRIES = 60
 _CLAUDE_RETRY_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504, 529}
+
+
+def _retry_delay(attempt: int, status_code: int | None = None) -> float:
+    """Exponential backoff with jitter. 429 gets longer initial wait."""
+    if status_code == 429:
+        base = max(_CLAUDE_RETRY_BASE_SEC * 2, 4.0)
+    else:
+        base = _CLAUDE_RETRY_BASE_SEC
+    delay = min(base * (2 ** min(attempt, 6)), _CLAUDE_RETRY_MAX_DELAY_SEC)
+    return delay + random.uniform(0, _CLAUDE_RETRY_JITTER_SEC)
 
 _bg_qwen_fail_streak: int = 0  # qwen-turbo 연속 실패 카운터 (AADS-204)
 
@@ -185,15 +198,16 @@ async def call_llm_with_fallback(
                     duration_ms=duration_ms,
                 )
                 if retry_count < _CLAUDE_MAX_RETRIES:
+                    wait = _retry_delay(retry_count, status_code=None)
                     logger.warning(
                         "claude_bg_retry_timeout: key=%s retry_count=%d/%d wait=%.1fs last_error=%s",
                         key[:12],
                         retry_count + 1,
                         _CLAUDE_MAX_RETRIES,
-                        _CLAUDE_RETRY_DELAY_SEC,
+                        wait,
                         str(e)[:160],
                     )
-                    await asyncio.sleep(_CLAUDE_RETRY_DELAY_SEC)
+                    await asyncio.sleep(wait)
                     continue
                 logger.warning(
                     "claude_bg_timeout_exhausted: key=%s model=%s retry_count=%d last_error=%s",
@@ -216,16 +230,17 @@ async def call_llm_with_fallback(
                     duration_ms=duration_ms,
                 )
                 if retryable and retry_count < _CLAUDE_MAX_RETRIES:
+                    wait = _retry_delay(retry_count, status_code)
                     logger.warning(
                         "claude_bg_retry: key=%s retry_count=%d/%d status=%s wait=%.1fs last_error=%s",
                         key[:12],
                         retry_count + 1,
                         _CLAUDE_MAX_RETRIES,
                         status_code or "timeout",
-                        _CLAUDE_RETRY_DELAY_SEC,
+                        wait,
                         str(e)[:160],
                     )
-                    await asyncio.sleep(_CLAUDE_RETRY_DELAY_SEC)
+                    await asyncio.sleep(wait)
                     continue
                 if status_code == 429:
                     mark_token_rate_limited(key, _get_error_headers(e))
@@ -417,15 +432,16 @@ async def call_llm_messages_with_fallback(**kwargs) -> object:
                     duration_ms=duration_ms,
                 )
                 if retry_count < _CLAUDE_MAX_RETRIES:
+                    wait = _retry_delay(retry_count, status_code=None)
                     logger.warning(
                         "claude_msg_retry_timeout: key=%s retry_count=%d/%d wait=%.1fs last_error=%s",
                         key[:12],
                         retry_count + 1,
                         _CLAUDE_MAX_RETRIES,
-                        _CLAUDE_RETRY_DELAY_SEC,
+                        wait,
                         str(e)[:160],
                     )
-                    await asyncio.sleep(_CLAUDE_RETRY_DELAY_SEC)
+                    await asyncio.sleep(wait)
                     continue
                 logger.warning(
                     "claude_msg_timeout_exhausted: key=%s model=%s retry_count=%d last_error=%s",
@@ -448,16 +464,17 @@ async def call_llm_messages_with_fallback(**kwargs) -> object:
                     duration_ms=duration_ms,
                 )
                 if retryable and retry_count < _CLAUDE_MAX_RETRIES:
+                    wait = _retry_delay(retry_count, status_code)
                     logger.warning(
                         "claude_msg_retry: key=%s retry_count=%d/%d status=%s wait=%.1fs last_error=%s",
                         key[:12],
                         retry_count + 1,
                         _CLAUDE_MAX_RETRIES,
                         status_code or "timeout",
-                        _CLAUDE_RETRY_DELAY_SEC,
+                        wait,
                         str(e)[:160],
                     )
-                    await asyncio.sleep(_CLAUDE_RETRY_DELAY_SEC)
+                    await asyncio.sleep(wait)
                     continue
                 if status_code == 429:
                     mark_token_rate_limited(key, _get_error_headers(e))
@@ -476,13 +493,25 @@ async def call_llm_messages_with_fallback(**kwargs) -> object:
 
 # ── DashScope 직접 호출 (Alibaba Qwen 모델) ─────────────────────────
 
+_FALLBACK_QUICK_RETRIES = 3
+_FALLBACK_QUICK_DELAYS = (1.0, 2.0, 4.0)
+_FALLBACK_RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504, 529}
+
+
+def _is_fallback_retryable(exc: Exception) -> bool:
+    status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+    if isinstance(status, int) and status in _FALLBACK_RETRYABLE_STATUS:
+        return True
+    return isinstance(exc, (asyncio.TimeoutError, httpx.ReadTimeout, httpx.TimeoutException))
+
+
 async def _call_dashscope(
     prompt: str,
     model: str,
     max_tokens: int = 256,
     system: Optional[str] = None,
 ) -> str:
-    """DashScope API 직접 호출 (OpenAI 호환)."""
+    """DashScope API 직접 호출 (OpenAI 호환). 일시 오류 시 3회 빠른 재시도."""
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
@@ -494,22 +523,34 @@ async def _call_dashscope(
         "max_tokens": max(max_tokens, 512),
     }
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            f"{_DASHSCOPE_BASE_URL}/chat/completions",
-            json=body,
-            headers={
-                "Authorization": f"Bearer {_DASHSCOPE_API_KEY}",
-                "Content-Type": "application/json",
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        content = data["choices"][0]["message"].get("content") or ""
-        if not content:
-            raise ValueError(f"DashScope returned empty content for model {model}")
-        logger.info("dashscope_bg_ok: model=%s tokens=%s", model, data.get("usage", {}))
-        return content
+    last_err: Optional[Exception] = None
+    for attempt in range(_FALLBACK_QUICK_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    f"{_DASHSCOPE_BASE_URL}/chat/completions",
+                    json=body,
+                    headers={
+                        "Authorization": f"Bearer {_DASHSCOPE_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                content = data["choices"][0]["message"].get("content") or ""
+                if not content:
+                    raise ValueError(f"DashScope returned empty content for model {model}")
+                logger.info("dashscope_bg_ok: model=%s tokens=%s", model, data.get("usage", {}))
+                return content
+        except Exception as e:
+            last_err = e
+            if attempt < _FALLBACK_QUICK_RETRIES and _is_fallback_retryable(e):
+                wait = _FALLBACK_QUICK_DELAYS[attempt]
+                logger.warning("dashscope_quick_retry: model=%s attempt=%d wait=%.1fs err=%s", model, attempt + 1, wait, str(e)[:80])
+                await asyncio.sleep(wait)
+                continue
+            raise
+    raise last_err  # unreachable but satisfies type checker
 
 
 async def _call_dashscope_messages(
@@ -558,7 +599,7 @@ async def _call_litellm(
     max_tokens: int = 256,
     system: Optional[str] = None,
 ) -> str:
-    """LiteLLM 프록시 경유 텍스트 생성 (OpenAI 호환 API)."""
+    """LiteLLM 프록시 경유 텍스트 생성 (OpenAI 호환 API). 일시 오류 시 3회 빠른 재시도."""
     _lc = get_litellm_config()
     url = f"{_lc['url']}/v1/chat/completions"
 
@@ -573,18 +614,30 @@ async def _call_litellm(
         "max_tokens": max(max_tokens, 512),
     }
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            url,
-            json=body,
-            headers={"Authorization": f"Bearer {_lc['key']}"},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        content = data["choices"][0]["message"].get("content") or ""
-        if not content:
-            raise ValueError(f"LiteLLM returned empty content for model {model}")
-        return content
+    last_err: Optional[Exception] = None
+    for attempt in range(_FALLBACK_QUICK_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    url,
+                    json=body,
+                    headers={"Authorization": f"Bearer {_lc['key']}"},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                content = data["choices"][0]["message"].get("content") or ""
+                if not content:
+                    raise ValueError(f"LiteLLM returned empty content for model {model}")
+                return content
+        except Exception as e:
+            last_err = e
+            if attempt < _FALLBACK_QUICK_RETRIES and _is_fallback_retryable(e):
+                wait = _FALLBACK_QUICK_DELAYS[attempt]
+                logger.warning("litellm_quick_retry: model=%s attempt=%d wait=%.1fs err=%s", model, attempt + 1, wait, str(e)[:80])
+                await asyncio.sleep(wait)
+                continue
+            raise
+    raise last_err
 
 
 async def _call_litellm_messages(

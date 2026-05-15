@@ -2659,7 +2659,7 @@ async def _resume_single_stream(
                         len(redis_content),
                     )
 
-                retry_delays = [30, 60, 120]
+                retry_delays = [10, 20, 40, 60, 120]
                 last_error: Optional[BaseException] = None
                 full_response = partial_content  # 기존 부분 응답에 이어붙임
                 cost_usd = Decimal("0")
