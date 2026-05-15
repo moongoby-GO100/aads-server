@@ -1821,3 +1821,86 @@ import subprocess
 
 ## 최근 진행 
 - finalize: pending
+
+## [2026-05-15 13:32:23 KST] [GO100] v41_manager/_updated_at.txt
+- Chat-Direct 수정: run_remote_command: .venv/bin/python -c "import httpx,json; token=open('/tmp/go100_e2e_token.txt').r
+- finalize: pending
+
+## [2026-05-15 14:12:40 KST] [GO100] frontend/src/go100/api/autonomyApi.ts
+- Chat-Direct 수정: patch: export async function approveDecision(de→export async function approveDecision(de
+- finalize: pending
+
+## [2026-05-15 14:12:56 KST] [GO100] frontend/src/go100/components/command-center/ChatMessage.tsx
+- Chat-Direct 수정: patch: import { approveDecision, rejectDecision→import { approveDecision, approveOrderDe
+- finalize: pending
+
+## [2026-05-15 14:13:19 KST] [GO100] frontend/src/go100/components/command-center/ChatMessage.tsx
+- Chat-Direct 수정: patch: function ApprovalRequiredCard({ card }: →function ApprovalRequiredCard({ card }: 
+- finalize: pending
+
+## [2026-05-15 14:13:36 KST] [GO100] frontend/src/go100/components/command-center/ChatMessage.tsx
+- Chat-Direct 수정: patch:         await approveDecision(id);→        const item = items.find((candida
+- finalize: pending
+
+## [2026-05-15 14:13:50 KST] [GO100] frontend/src/go100/components/command-center/ChatMessage.tsx
+- Chat-Direct 수정: patch:                           onClick={() =>→                          onClick={() =>
+- finalize: pending
+
+## [2026-05-15 14:14:08 KST] [GO100] frontend/src/go100/components/command-center/ChatMessage.tsx
+- Chat-Direct 수정: patch:     if (pending.length === 0) return;
+  →    if (pending.length === 0) return;
+  
+- finalize: pending
+
+## [2026-05-15 14:14:30 KST] [GO100] backend/app/routers/go100/ai_router.py
+- Chat-Direct 수정: patch:     action = result_data.get("action") o→    action = result_data.get("action") o
+- finalize: pending
+
+## [2026-05-15 14:22:09 KST] [GO100] reports/20260515_liquidation_flow_incident_report.md
+- Chat-Direct 수정: write: reports/20260515_liquidation_flow_incident_report.md
+- finalize: pending
+
+## [2026-05-15 14:58:53 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
+- Chat-Direct 수정: patch: import hashlib
+import json
+from datetime→import hashlib
+import json
+import re
+fro
+- finalize: pending
+
+## [2026-05-15 14:59:18 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
+- Chat-Direct 수정: patch: def _contains_any(message: str | None, t→def _contains_any(message: str | None, t
+- finalize: pending
+
+## [2026-05-15 14:59:36 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
+- Chat-Direct 수정: patch:     positions = holdings.get("positions"→    positions = holdings.get("positions"
+- finalize: pending
+
+## [2026-05-15 15:00:00 KST] [GO100] backend/app/services/go100/ai/realtime_guardrails.py
+- Chat-Direct 수정: patch:             if (
+                _is_sto→            if (
+                _is_sto
+- finalize: pending
+
+## [2026-05-15 15:00:19 KST] [GO100] backend/app/services/go100/ai/realtime_guardrails.py
+- Chat-Direct 수정: patch: def _is_basis_only(text: str, guardrail:→def _is_explicit_close_instruction(messa
+- finalize: pending
+
+## [2026-05-15 15:00:42 KST] [GO100] backend/app/routers/go100/ai_router.py
+- Chat-Direct 수정: patch:     if gated_actions is not None:
+      →    if gated_actions is not None:
+      
+- finalize: pending
+
+## [2026-05-15 15:02:08 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
+- Chat-Direct 수정: patch: def _requested_account_suffixes(message:→def _requested_account_suffixes(message:
+- finalize: pending
+
+## [2026-05-15 15:03:22 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: # GO100 HANDOVER — 2026-04-21
+
+## 2026-0→# GO100 HANDOVER — 2026-04-21
+
+## 2026-0
+- finalize: pending

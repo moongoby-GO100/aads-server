@@ -177,3 +177,11 @@ with op
 ## [2026-05-15 10:41:25 KST] [aads-dashboard] src/app/chat/page.tsx
 - Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/_fix.py 2>/dev/null; python3 -c "
 import 
+
+## [2026-05-15 14:23:03 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:   return [
+    ...prev.filter((message) →  const merged = [
+    ...prev.filter((m
+
+## [2026-05-15 14:24:05 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/fix_bubble_dedup.py

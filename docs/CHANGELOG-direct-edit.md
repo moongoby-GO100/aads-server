@@ -923,3 +923,6 @@ _FALLBACK_QU
 
 ## [2026-05-15 12:59:52 KST] [aads-server] app/services/chat_service.py
 - Chat-Direct 수정: patch:                 retry_delays = [30, 60, →                retry_delays = [10, 20, 
+
+## [2026-05-15 14:23:48 KST] [aads-server] scripts/fix_bubble_dedup.py
+- Chat-Direct 수정: write: scripts/fix_bubble_dedup.py
