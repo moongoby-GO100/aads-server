@@ -19,6 +19,7 @@ import hashlib
 import json
 import logging
 import os
+import signal
 import re
 import shutil
 import sys
@@ -82,6 +83,24 @@ _semaphore = None  # 앱 시작 시 실제 이벤트 루프에서 생성 (Python
 _ACTIVE_LEASES = {"claude": 0, "codex": 0}
 _STDERR_READ_TIMEOUT_SEC = float(os.getenv("CLAUDE_RELAY_STDERR_READ_TIMEOUT_SEC", "3"))
 
+# AADS-191B: lease registry — 세션별 슬롯 점유 현황 추적 (운영 가시성)
+_LEASE_REGISTRY = {}  # lease_id -> {relay, session_id, started_at, proc_pid, cli_model}
+_LEASE_ID_COUNTER = 0
+
+def _next_lease_id():
+    global _LEASE_ID_COUNTER
+    _LEASE_ID_COUNTER += 1
+    return _LEASE_ID_COUNTER
+
+# AADS-191B: hard timeout — 90분 초과 시 강제 종료 (정상 작업의 99% 차지하는 30분 이하 영향 없음)
+# 데이터 근거: 7일간 2834건 중 30분 이하 98.87%, 60분+ 4건 전부 interrupted(비정상)
+_MAX_LEASE_SEC = float(os.getenv("CLAUDE_RELAY_MAX_LEASE_SEC", "5400"))
+
+# AADS-191B-8B: docker exec를 coreutils timeout으로 감싸기 (OS 레벨 안전망)
+# python wait_for가 실패하거나 relay가 죽어도 OS가 강제 kill
+_OS_TIMEOUT_BIN = os.getenv("CLAUDE_RELAY_OS_TIMEOUT_BIN", "/usr/bin/timeout")
+_OS_TIMEOUT_ENABLED = os.getenv("CLAUDE_RELAY_OS_TIMEOUT_ENABLED", "1") == "1"
+
 # --- Direct OAuth ---
 _DIRECT_OAUTH_ENABLED = os.getenv("AADS_CLAUDE_DIRECT_OAUTH", "0") == "1"
 _ENV_OAUTH_FILE = Path(os.getenv("ENV_OAUTH_FILE", "/root/.genspark/.env.oauth"))
@@ -116,6 +135,19 @@ class _SemaphoreLease:
         self._relay_name = relay_name
         self._session_id = session_id or ""
         self._acquired = False
+        # AADS-191B: lease registry 식별자 + proc 정보
+        self._lease_id = None
+        self._proc_pid = None
+        self._cli_model = None
+
+    def attach_proc(self, pid, model=""):
+        """handle_stream이 subprocess 생성 후 호출 — registry에 PID 기록."""
+        self._proc_pid = pid
+        self._cli_model = model
+        entry = _LEASE_REGISTRY.get(self._lease_id)
+        if entry is not None:
+            entry["proc_pid"] = pid
+            entry["cli_model"] = model
 
     async def __aenter__(self):
         # AADS-191: wait_for + Semaphore.acquire race condition 방지.
@@ -144,6 +176,16 @@ class _SemaphoreLease:
             raise
         self._acquired = True
         _ACTIVE_LEASES[self._relay_name] = _ACTIVE_LEASES.get(self._relay_name, 0) + 1
+        # AADS-191B: lease registry 등록
+        self._lease_id = _next_lease_id()
+        _LEASE_REGISTRY[self._lease_id] = {
+            "lease_id": self._lease_id,
+            "relay": self._relay_name,
+            "session_id": _short_session(self._session_id),
+            "started_at": time.time(),
+            "proc_pid": None,
+            "cli_model": None,
+        }
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
@@ -151,6 +193,9 @@ class _SemaphoreLease:
             self._semaphore.release()
             _ACTIVE_LEASES[self._relay_name] = max(0, _ACTIVE_LEASES.get(self._relay_name, 0) - 1)
             self._acquired = False
+        # AADS-191B: lease registry 해제 (acquire 실패 시 self._lease_id=None이라 안전)
+        if self._lease_id is not None:
+            _LEASE_REGISTRY.pop(self._lease_id, None)
         return False
 
 _MODEL_MAP = {
@@ -1062,7 +1107,7 @@ async def handle_stream(request):
             _SEMAPHORE_ACQUIRE_TIMEOUT_SEC,
             "claude",
             aads_session_id,
-        ):
+        ) as _lease:
             claude_meta = _resolve_cli_command("claude")
             claude_preflight = _preflight_cli_command(claude_meta)
             if not claude_preflight.get("ok"):
@@ -1157,9 +1202,20 @@ async def handle_stream(request):
                         (mcp_diag or {}).get("path_mode", "unknown"))
 
             cli_env = _build_claude_env(token)
+            # AADS-191B-8B: coreutils timeout으로 cmd 감싸기 — OS 레벨 hard kill 안전망
+            # Python wait_for가 실패해도, relay가 crash해도, 시간 초과 시 자식 프로세스가 자체 종료됨.
+            if _OS_TIMEOUT_ENABLED and os.path.isfile(_OS_TIMEOUT_BIN):
+                # --kill-after=10: SIGTERM 보낸 후 10초 안에 안 죽으면 SIGKILL
+                # signal=TERM: 먼저 SIGTERM (정상 cleanup 기회)
+                effective_cmd = [_OS_TIMEOUT_BIN, "--kill-after=10", "--signal=TERM",
+                                 str(int(_MAX_LEASE_SEC))] + cmd
+            else:
+                effective_cmd = cmd
             proc = await asyncio.create_subprocess_exec(
-                *cmd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                *effective_cmd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, env=cli_env)
+            # AADS-191B: lease registry에 PID/모델 등록
+            _lease.attach_proc(proc.pid, cli_model)
 
             proc.stdin.write(_stdin_data.encode("utf-8"))
             await proc.stdin.drain()
@@ -1448,7 +1504,7 @@ async def handle_codex_stream(request):
             _SEMAPHORE_ACQUIRE_TIMEOUT_SEC,
             "codex",
             session_id,
-        ):
+        ) as _lease:
             codex_meta = _resolve_cli_command("codex")
             codex_preflight = _preflight_cli_command(codex_meta)
             if not codex_preflight.get("ok"):
@@ -1532,10 +1588,18 @@ async def handle_codex_stream(request):
             proc_env["AADS_SESSION_ID"] = session_id or "default"
             proc_env["HOME"] = codex_home
             proc_env.setdefault("TMPDIR", "/tmp")
+            # AADS-191B-8B: OS 레벨 timeout 안전망 (Claude와 동일)
+            if _OS_TIMEOUT_ENABLED and os.path.isfile(_OS_TIMEOUT_BIN):
+                effective_cmd = [_OS_TIMEOUT_BIN, "--kill-after=10", "--signal=TERM",
+                                 str(int(_MAX_LEASE_SEC))] + cmd
+            else:
+                effective_cmd = cmd
             proc = await asyncio.create_subprocess_exec(
-                *cmd, stdin=asyncio.subprocess.PIPE,
+                *effective_cmd, stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, env=proc_env)
+            # AADS-191B: lease registry에 PID/모델 등록
+            _lease.attach_proc(proc.pid, codex_model or "")
             proc.stdin.close()
             full_text = ""
             input_tokens = output_tokens = 0
@@ -1690,11 +1754,36 @@ async def handle_health(request):
               "max_concurrent": _MAX_CONCURRENT,
               "semaphore_available": sem_value,
               "active_leases": dict(_ACTIVE_LEASES),
-              "stderr_read_timeout_sec": _STDERR_READ_TIMEOUT_SEC}
+              "lease_count": len(_LEASE_REGISTRY),
+              "stderr_read_timeout_sec": _STDERR_READ_TIMEOUT_SEC,
+              "max_lease_sec": _MAX_LEASE_SEC,
+              "os_timeout_enabled": _OS_TIMEOUT_ENABLED}
     if _DIRECT_OAUTH_ENABLED:
         token, slot, label = _pick_token()
         health.update({"oauth_slot": slot, "oauth_label": label, "token_available": bool(token)})
     return web.json_response(health)
+
+
+async def handle_leases(request):
+    """AADS-191B: 현재 슬롯 점유 중인 lease 목록 (운영 가시성)."""
+    now = time.time()
+    leases = []
+    for entry in list(_LEASE_REGISTRY.values()):
+        age = now - entry.get("started_at", now)
+        leases.append({
+            "lease_id": entry.get("lease_id"),
+            "relay": entry.get("relay"),
+            "session_id": entry.get("session_id"),
+            "proc_pid": entry.get("proc_pid"),
+            "cli_model": entry.get("cli_model"),
+            "age_sec": round(age, 1),
+            "stale": age > _MAX_LEASE_SEC,
+        })
+    return web.json_response({
+        "total": len(leases),
+        "max_lease_sec": _MAX_LEASE_SEC,
+        "leases": leases,
+    })
 
 
 async def handle_oauth_switch(request):
@@ -1736,11 +1825,51 @@ async def handle_reset_session(request):
     return web.json_response({"error": "not found"}, status=404)
 
 
+async def _lease_watchdog():
+    """AADS-191B: 60초마다 stale lease 감지 후 강제 종료.
+
+    OS-level `timeout` 명령(8-B)이 이미 hard kill을 보장하지만,
+    relay 내부 lease 상태도 일관성 유지 + 운영 로그 가시성을 위해 병행.
+    """
+    while True:
+        try:
+            await asyncio.sleep(60)
+            now = time.time()
+            for entry in list(_LEASE_REGISTRY.values()):
+                age = now - entry.get("started_at", now)
+                if age <= _MAX_LEASE_SEC:
+                    continue
+                pid = entry.get("proc_pid")
+                logger.warning(
+                    "lease_watchdog: stale lease_id=%s relay=%s session=%s age=%.0fs pid=%s — SIGKILL",
+                    entry.get("lease_id"), entry.get("relay"),
+                    entry.get("session_id"), age, pid,
+                )
+                if pid:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    except Exception as kill_err:
+                        logger.warning("lease_watchdog kill failed pid=%s: %s", pid, kill_err)
+        except asyncio.CancelledError:
+            logger.info("lease_watchdog cancelled — exiting")
+            return
+        except Exception as exc:
+            logger.error("lease_watchdog loop error: %s", exc)
+
+
 async def _on_startup(app):
     """앱 시작 시 실제 이벤트 루프에서 Semaphore 생성 (Python 3.6 호환)."""
     global _semaphore
     _semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
     logger.info("Semaphore created: max_concurrent=%d", _MAX_CONCURRENT)
+    # AADS-191B: lease watchdog 시작
+    app["_lease_watchdog_task"] = asyncio.create_task(_lease_watchdog())
+    logger.info(
+        "Lease watchdog started: max_lease_sec=%.0f os_timeout=%s stderr_read_timeout=%.1f",
+        _MAX_LEASE_SEC, _OS_TIMEOUT_ENABLED, _STDERR_READ_TIMEOUT_SEC,
+    )
 
 
 def create_app():
@@ -1749,6 +1878,7 @@ def create_app():
     app.router.add_post("/stream", handle_stream)
     app.router.add_post("/codex-stream", handle_codex_stream)
     app.router.add_get("/health", handle_health)
+    app.router.add_get("/leases", handle_leases)
     app.router.add_post("/oauth/switch", handle_oauth_switch)
     app.router.add_get("/sessions", handle_sessions)
     app.router.add_delete("/sessions/{aads_session_id}", handle_reset_session)

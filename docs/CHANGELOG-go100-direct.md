@@ -1795,3 +1795,29 @@ import subprocess
 ## [2026-05-15 12:24:23 KST] [GO100] backend/app/routers/go100/ai_router.py
 - Chat-Direct 수정: patch:             _ai_id = await _save_msg(db,→            _ai_id = await _save_msg(db,
 - finalize: pending
+
+## [2026-05-15 12:48:30 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
+- Chat-Direct 수정: patch:     return {
+        "primary_intent": i→    return {
+        "primary_intent": i
+- finalize: pending
+
+## [2026-05-15 12:48:50 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
+- Chat-Direct 수정: patch:     guardrail_payload = guardrail_payloa→    guardrail_payload = guardrail_payloa
+- finalize: pending
+
+## [2026-05-15 12:49:16 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
+- Chat-Direct 수정: patch:         elif pnl_f is not None and pnl_f→        elif pnl_f is not None and pnl_f
+- finalize: pending
+
+## [2026-05-15 12:49:34 KST] [GO100] backend/app/services/go100/ai/realtime_guardrails.py
+- Chat-Direct 수정: patch:             elif tools_used == 0 and has→            elif tools_used == 0 and has
+- finalize: pending
+
+## [2026-05-15 13:26:18 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: # GO100 HANDOVER — 2026-04-21
+
+## 최근 진행 →# GO100 HANDOVER — 2026-04-21
+
+## 최근 진행 
+- finalize: pending

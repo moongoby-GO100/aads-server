@@ -878,3 +878,48 @@ with open('/root/aads/aads-server/.gitignore','a') as f:
 
 ## [2026-05-15 12:27:52 KST] [aads-server] tests/unit/test_api_health.py
 - Chat-Direct 수정: patch:     assert data["version"] == "0.1.0"→    assert data["version"] == "0.2.1"
+
+## [2026-05-15 12:46:27 KST] [aads-server] scripts/claude_relay_server.py.bak.20260515-124620.AADS191-B-pre
+- Chat-Direct 수정: run_remote_command: ls -la /app/ 2>/dev/null | head -30
+
+## [2026-05-15 12:46:39 KST] [aads-server] scripts/claude_relay_server.py
+- Chat-Direct 수정: run_remote_command: find /app/app -type f -name "*.py" 2>/dev/null | sort
+
+## [2026-05-15 12:57:10 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch: import asyncio
+import os
+import logging
+→import asyncio
+import os
+import logging
+
+
+## [2026-05-15 12:57:25 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch: _CLAUDE_RETRY_DELAY_SEC = 5.0
+_CLAUDE_MA→_CLAUDE_RETRY_BASE_SEC = 2.0
+_CLAUDE_RET
+
+## [2026-05-15 12:57:43 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch:             except (httpx.ReadTimeout, a→            except (httpx.ReadTimeout, a
+
+## [2026-05-15 12:57:53 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch:                 if retryable and retry_c→                if retryable and retry_c
+
+## [2026-05-15 12:58:03 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch:             except (httpx.ReadTimeout, a→            except (httpx.ReadTimeout, a
+
+## [2026-05-15 12:58:13 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch:                 if retryable and retry_c→                if retryable and retry_c
+
+## [2026-05-15 12:58:53 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch: async def _call_dashscope(
+    prompt: s→_FALLBACK_QUICK_RETRIES = 3
+_FALLBACK_QU
+
+## [2026-05-15 12:59:06 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch: async def _call_litellm(
+    prompt: str→async def _call_litellm(
+    prompt: str
+
+## [2026-05-15 12:59:52 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 retry_delays = [30, 60, →                retry_delays = [10, 20, 
