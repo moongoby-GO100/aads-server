@@ -1761,3 +1761,37 @@ import subprocess
 ## [2026-05-15 12:10:50 KST] [GO100] backend/app/routers/go100/ai_router.py
 - Chat-Direct 수정: patch:             _ai_id = await _save_msg(db,→            _ai_id = await _save_msg(db,
 - finalize: pending
+
+## [2026-05-15 12:23:19 KST] [GO100] frontend/src/go100/components/command-center/ChatMessage.tsx
+- Chat-Direct 수정: patch:               const decisionId = String(→              const decisionId = String(
+- finalize: pending
+
+## [2026-05-15 12:23:24 KST] [GO100] backend/app/services/go100/autonomy_service.py
+- Chat-Direct 수정: patch:             WHERE decision_id = :decisio→            WHERE (decision_id = :decisi
+- finalize: pending
+
+## [2026-05-15 12:23:33 KST] [GO100] backend/app/services/go100/autonomy_service.py
+- Chat-Direct 수정: patch:     return [dict(row) for row in result.→    return [dict(row) for row in result.
+- finalize: pending
+
+## [2026-05-15 12:23:45 KST] [GO100] backend/app/services/go100/autonomy_service.py
+- Chat-Direct 수정: patch:             WHERE decision_id = :decisio→            WHERE (decision_id = :decisi
+- finalize: pending
+
+## [2026-05-15 12:23:53 KST] [GO100] backend/app/services/go100/autonomy_service.py
+- Chat-Direct 수정: patch:             WHERE (decision_id = :decisi→            WHERE (decision_id = :decisi
+- finalize: pending
+
+## [2026-05-15 12:24:01 KST] [GO100] backend/app/routers/go100/ai_router.py
+- Chat-Direct 수정: patch:     if gated_actions:
+        _card = {
+→    approval_cards: list[dict[str, Any]]
+- finalize: pending
+
+## [2026-05-15 12:24:04 KST] [GO100] backend/app/routers/go100/ai_router.py
+- Chat-Direct 수정: patch:             _ai_id = await _save_msg(db,→            _ai_id = await _save_msg(db,
+- finalize: pending
+
+## [2026-05-15 12:24:23 KST] [GO100] backend/app/routers/go100/ai_router.py
+- Chat-Direct 수정: patch:             _ai_id = await _save_msg(db,→            _ai_id = await _save_msg(db,
+- finalize: pending

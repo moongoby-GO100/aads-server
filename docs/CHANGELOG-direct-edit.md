@@ -869,3 +869,12 @@ with open('/root/aads/aads-server/.gitignore','a') as f:
 
 ## [2026-05-15 12:14:00 KST] [aads-server] tests/unit/test_api_health.py
 - Chat-Direct 수정: patch:     assert data["version"] == "0.1.0"→    assert data["version"] == "0.2.1"
+
+## [2026-05-15 12:17:30 KST] [aads-server] tests/unit/test_api_health.py
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && sed -i 's/assert data\["version"\] == "0.1.0"/asser
+
+## [2026-05-15 12:23:25 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -t -c "SELECT id, role, LEFT(cont
+
+## [2026-05-15 12:27:52 KST] [aads-server] tests/unit/test_api_health.py
+- Chat-Direct 수정: patch:     assert data["version"] == "0.1.0"→    assert data["version"] == "0.2.1"
