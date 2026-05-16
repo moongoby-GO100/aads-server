@@ -2771,10 +2771,18 @@ async def _resume_single_stream(
         try:
             async with get_pool().acquire() as c:
                 final = partial_content + "\n\n⚠️ _서버 재시작 후 이어서 생성에 실패했습니다. 다시 질문해주세요._" if partial_content else "⚠️ _서버 재시작 후 응답 생성에 실패했습니다. 다시 질문해주세요._"
-                await c.execute(
+                _upd_result = await c.execute(
                     "UPDATE chat_messages SET content = $1, intent = NULL, model_used = 'recovered', execution_id = COALESCE(execution_id, $3) WHERE id = $2",
                     final, placeholder_id, _execution_uuid,
                 )
+                if _upd_result == "UPDATE 0":
+                    _fb_id = await c.fetchval(
+                        "INSERT INTO chat_messages (session_id, execution_id, role, content, model_used) "
+                        "VALUES ($1, $2, 'assistant', $3, 'interrupted') RETURNING id",
+                        uuid.UUID(session_id), _execution_uuid, final,
+                    )
+                    placeholder_id = _fb_id
+                    logger.warning(f"resume_fallback_inserted: session={session_id[:8]} new_msg={_fb_id}")
                 if _execution_uuid:
                     await c.execute(
                         """
@@ -2802,8 +2810,8 @@ async def _resume_single_stream(
                     "completed": True,
                     "execution_id": execution_id,
                 }
-        except Exception:
-            pass
+        except Exception as _fb_err:
+            logger.error(f"resume_fallback_save_failed: session={session_id[:8]} error={_fb_err}")
     finally:
         if _resume_task is not None and _active_bg_tasks.get(session_id) is _resume_task:
             _active_bg_tasks.pop(session_id, None)

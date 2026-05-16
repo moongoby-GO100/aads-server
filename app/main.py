@@ -915,6 +915,7 @@ async def lifespan(app: FastAPI):
                     SELECT te.id::text AS execution_id,
                            te.session_id::text AS session_id,
                            te.requested_model,
+                           te.retry_count,
                            COALESCE(ph.id, te.assistant_message_id) AS assistant_message_id,
                            EXTRACT(EPOCH FROM (NOW() - te.updated_at))::int AS stale_seconds,
                            COALESCE(ph.content, am.content, '') AS partial_content,
@@ -972,7 +973,7 @@ async def lifespan(app: FastAPI):
                         )
                         logger.info("stale_force_interrupt: session=%s execution=%s stale=%ds", sid[:8], execution_id[:8], _stale_sec)
                         continue
-                    if _execution_resume_attempts.get(execution_id, 0) >= 2:
+                    if (row.get("retry_count") or 0) >= 2:
                         await _mei_exec(
                             conn,
                             sid,
@@ -1013,6 +1014,7 @@ async def lifespan(app: FastAPI):
                         """
                         UPDATE chat_turn_executions
                         SET status = 'retrying',
+                            retry_count = retry_count + 1,
                             updated_at = NOW(),
                             error_message = $2
                         WHERE id = $1::uuid
@@ -1059,8 +1061,7 @@ async def lifespan(app: FastAPI):
                             placeholder_id,
                         )
 
-                    _execution_resume_attempts[execution_id] = _execution_resume_attempts.get(execution_id, 0) + 1
-                    _startup_asyncio.create_task(
+                    _resume_t = _startup_asyncio.create_task(
                         _rss_exec(
                             sid,
                             placeholder_id,
@@ -1071,11 +1072,30 @@ async def lifespan(app: FastAPI):
                             requested_model=row["requested_model"],
                         )
                     )
+                    def _on_resume_done(_t, _sid=sid, _eid=execution_id):
+                        if _t.cancelled():
+                            return
+                        _exc = _t.exception()
+                        if _exc:
+                            logger.error("resume_task_escaped: session=%s execution=%s error=%s", _sid[:8], _eid[:8], _exc)
+                            async def _sync_exec_status():
+                                try:
+                                    async with _gp_exec().acquire() as _c:
+                                        await _c.execute(
+                                            "UPDATE chat_turn_executions SET status = 'interrupted', "
+                                            "error_message = $2, completed_at = COALESCE(completed_at, NOW()), "
+                                            "updated_at = NOW() WHERE id = $1::uuid AND status NOT IN ('completed', 'interrupted')",
+                                            _eid, f"task_escaped: {str(_exc)[:400]}",
+                                        )
+                                except Exception:
+                                    pass
+                            _startup_asyncio.ensure_future(_sync_exec_status())
+                    _resume_t.add_done_callback(_on_resume_done)
                     logger.info(
                         "execution_resume: session=%s execution=%s attempt=%s",
                         sid[:8],
                         execution_id[:8],
-                        _execution_resume_attempts[execution_id],
+                        (row.get("retry_count") or 0) + 1,
                     )
         except Exception as e:
             logger.warning(f"execution_resume_scan_failed: {e}")
