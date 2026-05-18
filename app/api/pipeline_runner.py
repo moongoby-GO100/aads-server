@@ -64,6 +64,7 @@ _DISPLAY_STATUS_GROUPS = {
     "auth_unavailable": "action_required",
     "tool_timeout": "action_required",
 }
+_DEFAULT_LOCAL_PID_PROJECTS = {"AADS"}
 
 
 def _max_concurrent_per_project() -> int:
@@ -80,6 +81,30 @@ def _record_get(row, key: str, default=None):
         return row[key]
     except (KeyError, IndexError, TypeError):
         return default
+
+
+def _local_pid_projects() -> set[str]:
+    """Projects whose runner_pid belongs to this API host.
+
+    KIS/GO100/SF/NTV2 runners execute on remote servers, so checking their
+    runner_pid against this host's /proc would create false stale positives.
+    """
+    raw = os.getenv("PIPELINE_RUNNER_LOCAL_PID_PROJECTS", "AADS")
+    projects = {item.strip().upper() for item in raw.split(",") if item.strip()}
+    return projects or set(_DEFAULT_LOCAL_PID_PROJECTS)
+
+
+def _is_local_runner_project(project: str | None) -> bool:
+    return (project or "").upper() in _local_pid_projects()
+
+
+def _local_pid_alive(pid) -> bool | None:
+    if not pid:
+        return None
+    try:
+        return os.path.exists(f"/proc/{int(pid)}")
+    except (TypeError, ValueError):
+        return False
 
 
 def _compute_instruction_hash(project: str, instruction: str) -> str:
@@ -451,25 +476,87 @@ async def _runner_health_probe(conn, row) -> dict | None:
     if status not in ("running", "claimed"):
         return None
     job_id = _record_get(row, "job_id") or ""
+    project = _record_get(row, "project") or ""
     logs_row = await conn.fetchrow(
         "SELECT EXISTS(SELECT 1 FROM task_logs WHERE task_id = $1 LIMIT 1) AS has_logs",
         job_id,
     )
-    if logs_row and logs_row["has_logs"]:
-        return None
+    has_logs = bool(logs_row and logs_row["has_logs"])
     pid = _record_get(row, "runner_pid")
     proc_alive = None
-    if pid:
-        try:
-            proc_alive = os.path.exists(f"/proc/{int(pid)}")
-        except (TypeError, ValueError):
-            proc_alive = False
+    proc_scope = "no_pid"
+    if pid and _is_local_runner_project(project):
+        proc_alive = _local_pid_alive(pid)
+        proc_scope = "local_proc"
+    elif pid:
+        proc_scope = "remote_proc_not_checked_by_api"
+
+    reasons = []
+    if not has_logs:
+        reasons.append("empty_task_logs")
+    if proc_alive is False:
+        reasons.append("dead_local_pid")
+    if not reasons:
+        return None
     return {
-        "task_logs": "empty",
+        "task_logs": "present" if has_logs else "empty",
         "runner_pid": pid,
         "proc_alive": proc_alive,
+        "proc_scope": proc_scope,
+        "suspect_stale": proc_alive is False,
+        "reasons": reasons,
         "systemd": "not_checked_by_api",
     }
+
+
+async def _cleanup_dead_local_runner_processes(conn, project: str, min_age_seconds: int = 120) -> int:
+    """Clear dead local runner rows before submit/dedup decisions.
+
+    Only local projects are mutated here. Remote-project runner PIDs are owned
+    by their runner host and must be cleaned by the remote watchdog.
+    """
+    if not _is_local_runner_project(project):
+        return 0
+    rows = await conn.fetch(
+        """
+        SELECT job_id, runner_pid
+        FROM pipeline_jobs
+        WHERE project = $1
+          AND status IN ('running', 'claimed')
+          AND runner_pid IS NOT NULL
+          AND updated_at < NOW() - ($2::int * INTERVAL '1 second')
+        """,
+        project,
+        min_age_seconds,
+    )
+    cleaned = 0
+    for row in rows:
+        pid = _record_get(row, "runner_pid")
+        if _local_pid_alive(pid) is not False:
+            continue
+        result = await conn.execute(
+            """
+            UPDATE pipeline_jobs
+            SET status = 'error',
+                phase = 'error',
+                error_detail = 'process_died',
+                runner_pid = NULL,
+                review_feedback = COALESCE(review_feedback, '') || $2,
+                updated_at = NOW()
+            WHERE job_id = $1
+              AND status IN ('running', 'claimed')
+            """,
+            row["job_id"],
+            f"\n[API stale guard] Local runner process PID={pid} is not alive; marked error before dedup/lock.",
+        )
+        if result and result != "UPDATE 0":
+            cleaned += 1
+            logger.warning(
+                "pipeline_runner.local_dead_pid_cleaned",
+                job_id=row["job_id"],
+                runner_pid=pid,
+            )
+    return cleaned
 
 
 @router.post("/pipeline/jobs", response_model=JobSubmitResponse, tags=["pipeline-runner"])
@@ -487,6 +574,7 @@ async def submit_job(req: JobSubmitRequest):
             # 트랜잭션으로 lock 체크 + INSERT 원자성 보장
             async with conn.transaction():
                 await _lock_instruction_hash(conn, instruction_hash)
+                await _cleanup_dead_local_runner_processes(conn, req.project)
                 # AADS-239: 중복 재사용 — 기존 작업 활용 (죽이기 → 재사용)
                 # Step 1: 동일 hash + 활성 상태 → 기존 작업 정보 반환
                 existing = await _find_active_duplicate(

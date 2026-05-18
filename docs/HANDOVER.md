@@ -1,5 +1,12 @@
 # AADS HANDOVER
-최종 업데이트: 2026-05-14
+최종 업데이트: 2026-05-19
+
+## 2026-05-19
+- Pipeline Runner API stale guard 보강: `app/api/pipeline_runner.py`가 AADS 로컬 runner PID만 `/proc`로 검증하고, KIS/GO100/SF/NTV2 원격 runner PID는 로컬 dead PID로 오탐하지 않도록 분리했다.
+- AADS 로컬 `running/claimed` 작업의 runner PID가 죽었고 120초 이상 지난 경우, 새 작업 제출 전 `process_died` error로 정리해 dedup/lock이 막히는 재발을 줄인다.
+- Contabo sync 개선: `scripts/sync-to-contabo.sh` lockfile PID 재사용 오탐을 줄이고, dashboard blue-green deploy는 `AADS_DASHBOARD_QA_STRICT=true`로 실행해 QA `UNKNOWN/ERROR`가 단순 성공 sync로 기록되지 않게 했다.
+- 운영 cron 정리: root crontab의 존재하지 않는 `scripts/launch-sync.sh` 호출을 제거했고, `/etc/cron.d/contabo-sync`의 실제 `sync-to-contabo.sh` 5분 주기만 남겼다.
+- 검증: `python3 -m py_compile app/api/pipeline_runner.py`, `bash -n scripts/sync-to-contabo.sh`, `pytest -q tests/unit/test_pipeline_runner_reliability.py` 통과.
 
 ## 2026-05-14
 - Codex CLI quota 안내 중 `You've hit your limit · resets 3am (Asia/Seoul)` 고정시각 패턴이 `_parse_quota_reset_seconds()`에서 다음 03:00 KST까지의 초 단위로 파싱되는지 회귀 테스트를 추가했다.

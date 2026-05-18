@@ -7,18 +7,24 @@ import pytest
 
 
 class _FakeConn:
-    def __init__(self, *, fetchrow_result=None) -> None:
+    def __init__(self, *, fetchrow_result=None, fetch_result=None) -> None:
         self.fetchrow_result = fetchrow_result
+        self.fetch_result = fetch_result or []
         self.fetchrow_calls: list[tuple[str, tuple[object, ...]]] = []
+        self.fetch_calls: list[tuple[str, tuple[object, ...]]] = []
         self.execute_calls: list[tuple[str, tuple[object, ...]]] = []
 
     async def fetchrow(self, query: str, *args):
         self.fetchrow_calls.append((query, args))
         return self.fetchrow_result
 
+    async def fetch(self, query: str, *args):
+        self.fetch_calls.append((query, args))
+        return self.fetch_result
+
     async def execute(self, query: str, *args):
         self.execute_calls.append((query, args))
-        return "INSERT 0 1"
+        return "UPDATE 1" if "UPDATE pipeline_jobs" in query else "INSERT 0 1"
 
 
 def test_runner_display_status_classifies_terminal_non_error_states():
@@ -94,6 +100,7 @@ async def test_runner_health_probe_reports_empty_logs_without_systemd_check():
     conn = _FakeConn(fetchrow_result={"has_logs": False})
     row = {
         "job_id": "runner-live",
+        "project": "AADS",
         "status": "running",
         "runner_pid": os.getpid(),
     }
@@ -104,6 +111,51 @@ async def test_runner_health_probe_reports_empty_logs_without_systemd_check():
         "task_logs": "empty",
         "runner_pid": os.getpid(),
         "proc_alive": True,
+        "proc_scope": "local_proc",
+        "suspect_stale": False,
+        "reasons": ["empty_task_logs"],
         "systemd": "not_checked_by_api",
     }
 
+
+@pytest.mark.asyncio
+async def test_runner_health_probe_does_not_check_remote_pid_as_local_dead():
+    from app.api.pipeline_runner import _runner_health_probe
+
+    conn = _FakeConn(fetchrow_result={"has_logs": True})
+    row = {
+        "job_id": "runner-remote",
+        "project": "NTV2",
+        "status": "running",
+        "runner_pid": 999999,
+    }
+
+    assert await _runner_health_probe(conn, row) is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_dead_local_runner_processes_skips_remote_project():
+    from app.api.pipeline_runner import _cleanup_dead_local_runner_processes
+
+    conn = _FakeConn(fetch_result=[{"job_id": "runner-remote", "runner_pid": 999999}])
+
+    cleaned = await _cleanup_dead_local_runner_processes(conn, "NTV2")
+
+    assert cleaned == 0
+    assert conn.fetch_calls == []
+    assert conn.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_cleanup_dead_local_runner_processes_marks_dead_aads_pid():
+    from app.api.pipeline_runner import _cleanup_dead_local_runner_processes
+
+    conn = _FakeConn(fetch_result=[{"job_id": "runner-dead", "runner_pid": 999999}])
+
+    cleaned = await _cleanup_dead_local_runner_processes(conn, "AADS", min_age_seconds=1)
+
+    assert cleaned == 1
+    query, args = conn.execute_calls[0]
+    assert "error_detail = 'process_died'" in query
+    assert args[0] == "runner-dead"
+    assert "PID=999999" in args[1]
