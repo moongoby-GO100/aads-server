@@ -272,8 +272,11 @@ async def test_cleanup_stale_in_progress_resets_and_promotes_next_item():
     listed = await svc.list_todo_items(session_id=session_id, include_completed=False, conn=conn)
     assert len(cleaned) >= 2
     assert listed[0]["title"] == "오래된 진행 항목"
-    assert listed[0]["status"] == svc.TODO_STATUS_IN_PROGRESS
-    assert listed[0]["metadata"]["stale_cleanup_promoted"] is True
+    assert listed[0]["status"] == svc.TODO_STATUS_PENDING
+    assert listed[0]["metadata"]["stale_reset_reason"] == "in_progress_timeout"
+    assert listed[1]["title"] == "다음 항목"
+    assert listed[1]["status"] == svc.TODO_STATUS_IN_PROGRESS
+    assert listed[1]["metadata"]["stale_cleanup_promoted"] is True
 
 
 @pytest.mark.asyncio

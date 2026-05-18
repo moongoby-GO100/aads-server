@@ -1261,3 +1261,11 @@
 - 검증: `pytest -q tests/unit/test_credential_vault.py` 4건 통과. `ruff check app/core/credential_vault.py tests/unit/test_credential_vault.py` 통과. `credential_list(project=GO100, service=go100.newtalk.kr)`에서 username 복호화 정상 표시를 확인했다. `bash deploy.sh bluegreen`으로 active API를 `8102 → 8100` 전환했고 health/DB schema/chat/LLM 검증이 통과했다.
 - E2E 결과: active 컨테이너 내부 Playwright 검증에서 `login_steps_type=list`, `login_success=True`, 최종 URL `https://go100.newtalk.kr/go100/command-center?...`를 확인했다. GO100 로그인 폼은 hydration 후 입력 필드가 나타나므로 `navigate → wait 3000ms → fill #username/#password` 순서로 Vault login_steps를 보정했다.
 - 주의: MCP `credential_test_login` 브릿지는 구버전 green 프로세스에 붙어 있을 경우 동일 오류를 반환할 수 있다. active API/컨테이너 기준 검증은 통과했으며, green standby 재동기화 이후 브릿지 재연결 시 MCP 경로도 동일 코드가 적용된다.
+
+## 2026-05-18 18:15 KST - Chat TODO stale promotion guard for session 5f09a33c
+
+- 배경: 세션 `5f09a33c-7535-42e6-929d-ae999803c64f`에서 "질문에 응답을 못한다"는 보고가 있었고, DB 기준 최신 assistant가 `interrupted_partial`로 끝난 뒤 `chat_todo_items`에 오래된 active TODO 3건이 남아 있었다.
+- 원인: `cleanup_stale_in_progress_todos()`가 오래된 `in_progress`를 `pending`으로 reset한 직후 같은 항목을 다시 `in_progress`로 승격해, `이어서/다음 단계` 후속 지시가 낡은 generic TODO에 계속 묶일 수 있었다.
+- 조치: stale reset된 row는 같은 cleanup 호출 안에서 재승격하지 않도록 `reset_ids`를 제외하고, 다음 active row만 승격하게 수정했다. 대상 세션의 active TODO 3건은 `skipped_reason=stale_target_session_unblock`으로 정리해 새 질문이 과거 TODO에 묶이지 않게 했다.
+- 검증: `pytest tests/unit/test_chat_todo_service.py -q` 7건 통과. `ruff check app/services/chat_todo_service.py tests/unit/test_chat_todo_service.py` 통과. DB 기준 대상 세션 active TODO는 3건에서 0건으로 감소했다.
+- 주의: 화면 캡처는 PC Agent CDP 재준비 후에도 기존 탭 문서가 NTV2 보고서 DOM을 유지해 채팅 UI 직접 확인은 미완료다. DB/API 상태 기준으로 세션 차단 상태는 해소했다.

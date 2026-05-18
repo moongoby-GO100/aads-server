@@ -543,6 +543,7 @@ async def cleanup_stale_in_progress_todos(
                 len(reset_rows),
                 stale_after_minutes,
             )
+        reset_ids = {str(row.get("id")) for row in reset_rows if row.get("id")}
         active_rows = await active_conn.fetch(
             """
             SELECT *
@@ -555,9 +556,10 @@ async def cleanup_stale_in_progress_todos(
             list(TODO_ACTIVE_STATUSES),
         )
         has_in_progress = any(row["status"] == TODO_STATUS_IN_PROGRESS for row in active_rows)
-        if not has_in_progress and active_rows:
+        promotable_rows = [row for row in active_rows if str(row["id"]) not in reset_ids]
+        if not has_in_progress and promotable_rows:
             promoted = await update_todo_item(
-                todo_id=str(active_rows[0]["id"]),
+                todo_id=str(promotable_rows[0]["id"]),
                 status=TODO_STATUS_IN_PROGRESS,
                 metadata={
                     "stale_cleanup_promoted": True,
