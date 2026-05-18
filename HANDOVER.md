@@ -1252,3 +1252,11 @@
 - 배포/커밋: `bash deploy.sh bluegreen`으로 active API를 `8100 → 8102` 전환했다. commit `54ae3e1 fix: hide interrupted partials and prevent active API restarts`를 `origin/main`에 푸시했다.
 - 검증: `python3 -m py_compile app/routers/chat.py app/services/chat_service.py`, `bash -n deploy.sh`, 컨테이너 내부 `python -m py_compile /app/app/routers/chat.py /app/app/services/chat_service.py` 통과. `https://aads.newtalk.kr/api/v1/health` OK, active port file `8102`, DB 기준 `visible_interrupted_null=0`, `hidden_interrupted_partial=347` 확인.
 - 주의: 작업트리에는 `.active_port/.active_container`, 모델/갤러리/NGINX 관련 기존 미커밋 변경이 남아 있으며 이번 채팅 복구 커밋에는 포함하지 않았다.
+
+## 2026-05-18 16:52 KST - E2E Credential Vault JSONB normalization and GO100 account refresh
+
+- 배경: GO100 디자인/E2E 확인 과정에서 "각 프로젝트 E2E 자동로그인이 막힘" 보고가 나왔고, GO100 Vault row의 username 복호화 실패 및 `credential_test_login`의 `'str' object has no attribute 'get'` 오류를 확인했다.
+- 원인: 기존 GO100 E2E row는 현재 Vault key로 복호화되지 않았고, `login_steps`/`extra_fields` JSONB가 asyncpg 또는 legacy double-encoded row 경로에서 문자열로 반환될 때 자동로그인 실행부가 문자열을 step dict처럼 순회했다.
+- 조치: `app/core/credential_vault.py`에 JSONB 정규화 헬퍼를 추가해 `list_credentials`, `get_credential`, `get_login_credential`, `create_credential`, `update_credential` 경로에서 `login_steps=list`, `extra_fields=dict`를 보장한다. GO100 E2E 계정은 `service=go100.newtalk.kr`, `project=GO100`, `label=E2E 테스트 계정`에 CEO 계정으로 재등록해 현재 Vault key 기준으로 재암호화했다.
+- 검증: `pytest -q tests/unit/test_credential_vault.py` 4건 통과. `ruff check app/core/credential_vault.py tests/unit/test_credential_vault.py` 통과. `credential_list(project=GO100, service=go100.newtalk.kr)`에서 username 복호화 정상 표시를 확인했다.
+- 주의: 패치 배포 전 운영 `credential_test_login`은 구버전 코드로 인해 동일 오류가 날 수 있다. 커밋/푸시/blue-green 배포 후 같은 credential id로 재검증해야 한다.

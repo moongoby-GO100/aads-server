@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -19,6 +18,48 @@ _VAULT_KEY: bytes | None = None
 
 
 _VAULT_KEY_FILE = "/app/app/.vault.key"
+
+
+def _coerce_json_list(value: Any) -> list[Any]:
+    """Return a JSON list from asyncpg jsonb values or legacy double-encoded rows."""
+    parsed = _coerce_json_value(value)
+    return parsed if isinstance(parsed, list) else []
+
+
+def _coerce_json_dict(value: Any) -> dict[str, Any]:
+    """Return a JSON object from asyncpg jsonb values or legacy double-encoded rows."""
+    parsed = _coerce_json_value(value)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _coerce_json_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (list, dict)):
+        return value
+    if not isinstance(value, str):
+        return value
+
+    text = value.strip()
+    if not text:
+        return None
+    for _ in range(2):
+        try:
+            decoded = json.loads(text)
+        except (TypeError, json.JSONDecodeError):
+            return None
+        if isinstance(decoded, str):
+            text = decoded.strip()
+            continue
+        return decoded
+    return None
+
+
+def _normalize_json_fields(item: dict[str, Any]) -> dict[str, Any]:
+    """Normalize JSONB fields before API responses or login execution."""
+    item["extra_fields"] = _coerce_json_dict(item.get("extra_fields"))
+    item["login_steps"] = _coerce_json_list(item.get("login_steps"))
+    return item
 
 
 def _get_fernet() -> Fernet:
@@ -82,6 +123,7 @@ async def list_credentials(
     results = []
     for row in rows:
         item = dict(row)
+        _normalize_json_fields(item)
         item["id"] = str(item["id"])
         # 시간 필드 직렬화
         for tf in ("created_at", "updated_at", "last_used_at", "last_verified"):
@@ -123,6 +165,7 @@ async def get_credential(
         return None
 
     item = dict(row)
+    _normalize_json_fields(item)
     item["id"] = str(item["id"])
     for tf in ("created_at", "updated_at", "last_used_at", "last_verified"):
         if item.get(tf):
@@ -185,7 +228,7 @@ async def create_credential(
         """,
         service, project, label, login_url,
         username_enc, password_enc,
-        json.dumps(enc_extra), json.dumps(login_steps or []),
+        json.dumps(enc_extra), json.dumps(_coerce_json_list(login_steps)),
     )
 
     cred_id = str(row["id"])
@@ -234,7 +277,7 @@ async def update_credential(
 
     if "login_steps" in kwargs:
         sets.append(f"login_steps = ${idx}::jsonb")
-        args.append(json.dumps(kwargs["login_steps"]))
+        args.append(json.dumps(_coerce_json_list(kwargs["login_steps"])))
         idx += 1
 
     if "is_active" in kwargs:
@@ -302,6 +345,7 @@ async def get_login_credential(
         return None
 
     item = dict(row)
+    _normalize_json_fields(item)
     item["id"] = str(item["id"])
     item["username"] = decrypt_value(item["username_enc"])
     item["password"] = decrypt_value(item["password_enc"])
