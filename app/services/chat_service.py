@@ -1145,6 +1145,38 @@ async def _mark_execution_interrupted(
                 pid,
             )
 
+    if assistant_message_id is None and "superseded_by_newer_user" not in reason:
+        fallback_content = (
+            "⚠️ _응답 생성이 중단되어 복구 응답을 만들지 못했습니다. "
+            "같은 질문으로 다시 이어서 처리할 수 있습니다._"
+        )
+        assistant_message_id = await conn.fetchval(
+            """
+            INSERT INTO chat_messages (session_id, execution_id, role, content, model_used, tools_called)
+            SELECT $1, $2, 'assistant', $3, 'interrupted', '[]'::jsonb
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM chat_messages
+                WHERE execution_id = $2
+                  AND role = 'assistant'
+            )
+            RETURNING id
+            """,
+            sid,
+            eid,
+            fallback_content,
+        )
+        if assistant_message_id:
+            await conn.execute(
+                """
+                UPDATE chat_sessions
+                SET message_count = message_count + 1,
+                    updated_at = NOW()
+                WHERE id = $1
+                """,
+                sid,
+            )
+
     await conn.execute(
         """
         UPDATE chat_turn_executions

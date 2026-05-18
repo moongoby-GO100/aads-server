@@ -1201,3 +1201,11 @@
 - 조치: `app/routers/chat.py`의 수동 resume retry_count SELECT/UPDATE를 `$1` 바인딩 쿼리로 수정하고, UPDATE 시 `updated_at=NOW()`를 함께 기록하도록 보강했다.
 - 검증: `python3 -m py_compile app/routers/chat.py` 통과. 실행 중인 `aads-server`, `aads-server-green` 컨테이너 내부 파일에도 `$1` 수정이 반영된 상태를 확인했다.
 - 주의: 이 항목은 수동 resume 엔드포인트 안정화이며, 응답 버블 1개 보장 패치는 대시보드 `src/app/chat/page.tsx`에 별도 반영했다.
+
+## 2026-05-18 15:08 KST - Chat interrupted execution fallback guard
+
+- 배경: 세션 `2648cf77-4256-45e8-9cde-0e563ffefe5c`에서 최신 질문 이후 assistant 메시지가 0건으로 남아 응답 버블이 사라지는 현상을 확인했다. 해당 실행 `53241773-856d-48de-bbf7-dfa4085c9643`은 `resume_claimed_by` 후 `interrupted`로 종료됐지만 assistant fallback이 없었다.
+- 조치: `app/services/chat_service.py`의 `_mark_execution_interrupted()`가 superseded가 아닌 terminal interruption에서 assistant 메시지 0건을 만들지 않도록 fallback assistant를 1회 insert한다. `app/main.py`의 resume scanner done callback도 resume task cancel/error 시 execution 상태와 fallback assistant를 DB에 동기화한다.
+- 데이터 보정: 대상 실행 `53241773-856d-48de-bbf7-dfa4085c9643`에 fallback assistant `2dfd93b3-5929-4c33-91e2-084c8c90cc8d`를 연결해 새로고침 후 빈 응답으로 남지 않게 했다.
+- 검증: `python3 -m py_compile app/main.py app/services/chat_service.py` 통과. `bash deploy.sh bluegreen`으로 API active를 `8102 → 8100` 전환했고 health/DB schema/chat table/LLM 검증이 통과했다. active 컨테이너 내부 코드에서 fallback 문자열 반영을 확인했다.
+- 주의: 이 조치는 “응답 0건으로 사라짐” 방지용 P0 가드다. 프론트의 local placeholder/DB placeholder 경합 자체는 대시보드 `src/app/chat/page.tsx`의 별도 경로로 계속 관리해야 한다.
