@@ -1518,13 +1518,15 @@ async def call_stream(
         "claude-haiku": ["claude-haiku"],
     }
     _SAMEGRADE_FALLBACK = {
-        "claude-opus": ["gpt-5.4", "gemini-3.1-pro-preview"],
-        "claude-sonnet": ["gpt-5.4", "gemini-3-flash-preview"],
-        "claude-haiku": ["gpt-5.4-mini", "gemini-3.1-flash-lite-preview"],
+        "claude-opus": ["gpt-5.5", "deepseek-v4-pro", "gemini-3.1-pro-preview"],
+        "claude-sonnet": ["gpt-5.5", "deepseek-v4-flash", "gemini-2.5-flash"],
+        "claude-haiku": ["gpt-5.4-mini", "deepseek-v4-flash", "gemini-3.1-flash-lite-preview"],
     }
     _GEMINI_SAMEGRADE = {
+        "gemini-3.1-pro-preview": "claude-opus",
         "gemini-2.5-pro": "claude-opus",
         "gemini-2.5-flash": "claude-sonnet",
+        "gemini-3.1-flash-lite-preview": "claude-haiku",
         "gemini-2.0-flash": "claude-haiku",
     }
     # CLI Relay 비활성화 환경(CLAUDE_CLI_ENABLED=false, server5 등) → LiteLLM 직접 라우팅
@@ -2182,8 +2184,10 @@ async def _stream_litellm_openai(
                     }
                 })
 
-    MAX_TOOL_LOOPS = 500  # Claude 동일 수준 (CEO 지시)
+    MAX_TOOL_LOOPS = int(os.getenv("LITELLM_MAX_TOOL_LOOPS", "30"))
+    MAX_TOOL_CALLS = int(os.getenv("CHAT_MAX_TOOL_CALLS", "25"))
     _consecutive_fail = 0  # 연속 도구 실패 카운터 (AADS-225-D)
+    _tool_calls_made = 0
 
     for _loop_iter in range(MAX_TOOL_LOOPS + 1):
         # 이번 턴의 tool_calls 누적 (index → {id, name, args_buf})
@@ -2337,6 +2341,7 @@ async def _stream_litellm_openai(
             yield {"type": "tool_use", "tool_name": tc["name"], "tool_use_id": tc["id"], "tool_input": _args}
 
         _exec_results = await asyncio.gather(*[_run_one(tc) for tc in _sorted_tcs])
+        _tool_calls_made += len(_exec_results)
 
         # 실행 결과만 yield + tool 메시지 추가
         for _er in _exec_results:
@@ -2364,6 +2369,22 @@ async def _stream_litellm_openai(
                 break
         else:
             _consecutive_fail = 0
+
+        if _tool_calls_made >= MAX_TOOL_CALLS:
+            logger.warning(
+                "litellm_tool_call_cap_reached: session=%s model=%s calls=%d cap=%d",
+                (session_id or "")[:8], model, _tool_calls_made, MAX_TOOL_CALLS,
+            )
+            loop_msgs.append({
+                "role": "user",
+                "content": (
+                    "[시스템] 채팅 응답의 도구 호출 상한에 도달했습니다. "
+                    "추가 도구 호출 없이 지금까지 확인한 사실, 완료/미완료 항목, "
+                    "다음 조치를 최종 답변으로 간결하게 정리하세요. "
+                    "장기 작업은 Pipeline Runner 또는 백그라운드 작업으로 넘기라고 안내하세요."
+                ),
+            })
+            _oai_tools = []
 
         logger.info(f"gemini_tool_loop: iter={_loop_iter+1} tools={[e['name'] for e in _exec_results]}")
         # loop_iter 증가 후 재호출
@@ -3140,11 +3161,14 @@ async def _run_agent_sdk_with_key(
                         if tool_id and tool_name:
                             _tool_id_to_name[tool_id] = tool_name
                         tools_called_list.append(tool_name)
+                        tool_input = block.input if hasattr(block, "input") else {}
+                        if isinstance(tool_input, dict):
+                            tool_input = _bind_tool_session_input(tool_name, tool_input, session_id)
                         yield {
                             "type": "tool_use",
                             "tool_name": tool_name,
                             "tool_use_id": tool_id,
-                            "tool_input": block.input if hasattr(block, "input") else {},
+                            "tool_input": tool_input,
                         }
                     elif block_type == "ThinkingBlock":
                         thinking = getattr(block, "thinking", "")
@@ -3721,9 +3745,11 @@ async def _stream_anthropic(
     output_tokens = 0
 
     # Tool Use 루프 — 절대 상한 + wall-clock 타임아웃
-    _MAX_TOOL_TURNS = int(os.getenv("MAX_TOOL_TURNS", "500"))
-    _TOOL_TURN_EXTEND = 50  # 자동 연장 턴
-    _WALL_CLOCK_TIMEOUT = int(os.getenv("TOOL_LOOP_TIMEOUT_SEC", "1800"))  # 30분 절대 타임아웃
+    _MAX_TOOL_TURNS = int(os.getenv("MAX_TOOL_TURNS", "30"))
+    _MAX_TOOL_CALLS = int(os.getenv("CHAT_MAX_TOOL_CALLS", "25"))
+    _AUTO_EXTEND_TOOL_TURNS = os.getenv("AUTO_EXTEND_TOOL_TURNS", "false").lower() in {"1", "true", "yes"}
+    _TOOL_TURN_EXTEND = 50  # 명시적으로 AUTO_EXTEND_TOOL_TURNS=true일 때만 사용
+    _WALL_CLOCK_TIMEOUT = int(os.getenv("TOOL_LOOP_TIMEOUT_SEC", "600"))  # 채팅 응답 표면 기본 10분
     _wall_clock_start = __import__("time").monotonic()
     # 방어: messages에서 role="system" 필터링 — Claude API는 system을 top-level 파라미터로만 허용
     current_messages = [m for m in messages if m.get("role") != "system"]
@@ -4161,6 +4187,22 @@ async def _stream_anthropic(
             {"role": "user", "content": tool_results},
         ]
 
+        if len(tool_calls_made) >= _MAX_TOOL_CALLS and tools:
+            logger.warning(
+                "anthropic_tool_call_cap_reached: session=%s model=%s calls=%d cap=%d",
+                (session_id or "")[:8], model_id, len(tool_calls_made), _MAX_TOOL_CALLS,
+            )
+            current_messages.append({
+                "role": "user",
+                "content": (
+                    "[시스템] 채팅 응답의 도구 호출 상한에 도달했습니다. "
+                    "추가 도구 호출 없이 지금까지 확인한 사실, 완료/미완료 항목, "
+                    "다음 조치를 최종 답변으로 간결하게 정리하세요. "
+                    "장기 작업은 Pipeline Runner 또는 백그라운드 작업으로 넘기라고 안내하세요."
+                ),
+            })
+            tools = None
+
         # Layer A: 도구 루프 토큰 예산 관리 (120K)
         current_messages = _trim_tool_loop_context(current_messages, _turn)
 
@@ -4196,17 +4238,27 @@ async def _stream_anthropic(
 
         _turn += 1
 
-        # 도구 턴 한도 도달 시 CEO 승인 요청 이벤트 발행 + 자동 연장
+        # 도구 턴 한도 도달 시 기본은 자동 연장하지 않고 최종 응답으로 닫는다.
         if _turn >= _effective_max_turns and tool_use_blocks:
-            logger.warning(f"tool_turn_limit: {_turn}/{_effective_max_turns} turns used, extending by {_TOOL_TURN_EXTEND}")
-            _effective_max_turns += _TOOL_TURN_EXTEND
-            # 무제한 — compaction이 컨텍스트 자동 관리
-            yield {
-                "type": "tool_turn_limit",
-                "content": f"도구 호출이 {_turn}회에 도달했습니다. {_TOOL_TURN_EXTEND}턴 자동 연장합니다.",
-                "current_turn": _turn,
-                "extended_to": _effective_max_turns,
-            }
+            if _AUTO_EXTEND_TOOL_TURNS:
+                logger.warning(f"tool_turn_limit: {_turn}/{_effective_max_turns} turns used, extending by {_TOOL_TURN_EXTEND}")
+                _effective_max_turns += _TOOL_TURN_EXTEND
+                yield {
+                    "type": "tool_turn_limit",
+                    "content": f"도구 호출이 {_turn}회에 도달했습니다. {_TOOL_TURN_EXTEND}턴 자동 연장합니다.",
+                    "current_turn": _turn,
+                    "extended_to": _effective_max_turns,
+                }
+            else:
+                logger.warning(f"tool_turn_limit_stop: {_turn}/{_effective_max_turns} turns used, forcing final answer")
+                current_messages.append({
+                    "role": "user",
+                    "content": (
+                        "[시스템] 도구 턴 한도에 도달했습니다. 추가 도구 호출 없이 "
+                        "현재까지 확인한 내용을 최종 답변으로 정리하세요."
+                    ),
+                })
+                tools = None
 
     cost = _estimate_cost(model_alias, input_tokens, output_tokens)
     # 프론트 표시용: alias(claude-opus) → 실제 모델ID(claude-opus-4-6)

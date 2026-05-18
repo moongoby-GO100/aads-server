@@ -1093,7 +1093,15 @@ async def get_streaming_status(session_id: UUID):
                 }, conn)
             # 5분 초과 stale placeholder 자동 정리
             await conn.execute(
-                "UPDATE chat_messages SET intent = 'interrupted' WHERE session_id = $1 AND intent = 'streaming_placeholder' AND created_at <= NOW() - interval '5 minutes'",
+                """
+                UPDATE chat_messages
+                SET intent = 'interrupted_partial',
+                    model_used = 'interrupted',
+                    edited_at = NOW()
+                WHERE session_id = $1
+                  AND intent = 'streaming_placeholder'
+                  AND created_at <= NOW() - interval '5 minutes'
+                """,
                 session_id,
             )
             # 서버 재시작 후 recovered 메시지 감지: 5분 이내 model_used='recovered' 메시지 존재 시

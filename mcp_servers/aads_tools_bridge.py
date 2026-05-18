@@ -103,6 +103,42 @@ TOOL_NAME_MAP: dict[str, str] = {
 }
 
 
+_SESSION_BOUND_TOOLS = {
+    "pipeline_runner_submit",
+    "pipeline_runner_submit_batch",
+    "pipeline_c_start",
+    "pipeline_runner_status",
+    "check_task_status",
+    "check_directive_status",
+}
+
+
+def _bind_aads_chat_session(name: str, params: dict) -> tuple[dict, str]:
+    """Bind the MCP subprocess to the AADS chat tab that launched it."""
+    bound = dict(params or {})
+    session_id = str(os.getenv("AADS_SESSION_ID", "") or "").strip()
+    if not session_id or name not in _SESSION_BOUND_TOOLS:
+        return bound, session_id
+
+    scope = str(bound.get("scope") or "").strip().lower()
+    if scope in {"all", "global", "*"}:
+        return bound, session_id
+
+    supplied_session = str(bound.get("session_id") or "").strip()
+    if name in {"pipeline_runner_submit", "pipeline_runner_submit_batch", "pipeline_c_start"}:
+        if supplied_session and supplied_session != session_id:
+            logger.warning(
+                "mcp_runner_session_override: tool=%s supplied=%s current=%s",
+                name,
+                supplied_session[:8],
+                session_id[:8],
+            )
+        bound["session_id"] = session_id
+    elif not supplied_session:
+        bound["session_id"] = session_id
+    return bound, session_id
+
+
 async def _call_tool(name: str, params: dict) -> str:
     """도구 실행 래퍼 — ToolExecutor 우선, execute_tool 폴백.
 
@@ -113,12 +149,17 @@ async def _call_tool(name: str, params: dict) -> str:
 
     # MCP 이름 → ToolExecutor dispatch 이름 변환
     dispatch_name = TOOL_NAME_MAP.get(name, name)
+    bound_params, session_id = _bind_aads_chat_session(name, params)
 
     # 1순위: ToolExecutor (dispatch 이름으로 실행)
+    token = None
     try:
-        from app.services.tool_executor import ToolExecutor
+        from app.services.tool_executor import ToolExecutor, current_chat_session_id
+
+        if session_id:
+            token = current_chat_session_id.set(session_id)
         executor = ToolExecutor()
-        result = await executor.execute(dispatch_name, params)
+        result = await executor.execute(dispatch_name, bound_params)
         result_str = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
 
         # unknown_tool 반환 시 execute_tool 폴백으로 전환
@@ -128,13 +169,18 @@ async def _call_tool(name: str, params: dict) -> str:
             return result_str
     except Exception as e1:
         logger.debug(f"ToolExecutor error for {dispatch_name} (mcp: {name}): {e1}")
+    finally:
+        if token is not None:
+            try:
+                current_chat_session_id.reset(token)
+            except Exception:
+                pass
 
     # 2순위: execute_tool (레거시 폴백 — 원래 MCP 이름으로 실행)
     try:
         from app.api.ceo_chat_tools import execute_tool
-        session_id = os.getenv("AADS_SESSION_ID", "")
         dsn = os.getenv("DATABASE_URL", "")
-        result = await execute_tool(name, params, dsn, session_id)
+        result = await execute_tool(name, bound_params, dsn, session_id)
         return result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
     except Exception as e2:
         logger.error(f"Tool {name} error: {e2}")

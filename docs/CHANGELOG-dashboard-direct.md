@@ -185,3 +185,187 @@ import
 
 ## [2026-05-15 14:24:05 KST] [aads-dashboard] src/app/chat/page.tsx
 - Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/fix_bubble_dedup.py
+
+## [2026-05-15 15:42:11 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/fix_bubble_race.py
+
+## [2026-05-15 16:27:58 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: docker cp aads-server:/var/www/aads-public/reports/ai-model-seeds/yoon-seoa-seed
+
+## [2026-05-15 16:27:59 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 -c "
+import re, sys
+path = '/root/aads/aads-dashboard/src/app/chat/page.
+
+## [2026-05-15 17:15:18 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -n '639,770p' /root/aads/aads-server/app/routers/chat.py
+
+## [2026-05-15 17:15:20 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 -c "
+import re
+
+path = '/root/aads/aads-dashboard/src/app/chat/page.tsx'
+
+## [2026-05-15 17:16:46 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:           if (hasNewFinalAi) {
+         →          if (hasNewFinalAi) {
+         
+
+## [2026-05-15 17:16:52 KST] [aads-dashboard] src/lib/api.ts.bak.20260515-171652.AADS193
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && git add src/app/chat/page.tsx && git diff --cach
+
+## [2026-05-15 17:16:54 KST] [aads-dashboard] src/lib/api.ts
+- Chat-Direct 수정: run_remote_command: grep -c "yoon-seoa-seed" /var/www/aads-public/reports/gallery/manifest.json
+
+## [2026-05-15 17:16:54 KST] [aads-dashboard] src/lib/api.ts.bak.20260515-171652.AADS193
+- Chat-Direct 수정: run_remote_command: grep -c "yoon-seoa-seed" /var/www/aads-public/reports/gallery/manifest.json
+
+## [2026-05-15 17:17:01 KST] [aads-dashboard] src/app/chat/page.tsx.bak_20260515_1713
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-dashboard/src/app/chat/page.tsx /root/aads/aads-dashboard/src
+
+## [2026-05-15 17:17:18 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 -c "
+p='/root/aads/aads-dashboard/src/app/chat/page.tsx'
+with open(p,'r'
+
+## [2026-05-15 17:17:24 KST] [aads-dashboard] src/app/ops/servers/page.tsx
+- Chat-Direct 수정: run_remote_command: grep -n "tool_use\|tool_executor\|execute_tool\|tool_call" /root/aads/aads-serve
+
+## [2026-05-15 17:17:25 KST] [aads-dashboard] src/app/ops/servers/page.tsx
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && git push origin main
+
+## [2026-05-16 08:06:44 KST] [aads-dashboard] public/reports/gallery/media-3944a09b71455542.jpg
+- Chat-Direct 수정: run_remote_command: grep -n "def stream_response\|def chat\|async def generate\|model_override\|inte
+
+## [2026-05-16 08:06:44 KST] [aads-dashboard] public/reports/gallery/media-4b6e3b4279b87981.jpg
+- Chat-Direct 수정: run_remote_command: grep -n "def stream_response\|def chat\|async def generate\|model_override\|inte
+
+## [2026-05-16 08:06:44 KST] [aads-dashboard] public/reports/gallery/media-57ee896f083fd111.jpg
+- Chat-Direct 수정: run_remote_command: grep -n "def stream_response\|def chat\|async def generate\|model_override\|inte
+
+## [2026-05-16 08:06:44 KST] [aads-dashboard] public/reports/gallery/media-6ed27e7b7e15d366.jpg
+- Chat-Direct 수정: run_remote_command: grep -n "def stream_response\|def chat\|async def generate\|model_override\|inte
+
+## [2026-05-16 08:06:44 KST] [aads-dashboard] public/reports/gallery/media-aef39f98758bfcc3.jpg
+- Chat-Direct 수정: run_remote_command: grep -n "def stream_response\|def chat\|async def generate\|model_override\|inte
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-145351a0bc7c4d7b.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-14a99018552d4497.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-1f3bd69db3a4412d.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-21fc6bc6fb324318.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-268312578b16497f.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-49cc7691279b445d.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-4ae57ece9b064251.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-4ee1ba96053d4f49.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-550847cd5e8b454f.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-616a15540acc48c8.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-72f02b1614644b5e.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-7d4a7e5f9281430c.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-8386f55284784e65.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-a3e2c41fe7d24498.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-a78f9dfe895a42bc.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-a8f152c422504d6d.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-b66af9e8abab4a46.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-c168c6a4539445ac.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-c4b615a8ac994f3d.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-d0d1783e71b848ff.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-d3b0367adf624718.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-d9d5b3f4b3ec49c3.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-dd633207a32f47fb.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-eb264d8c098c4e07.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-edf64490135d42e0.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-eff3b58021874612.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-f1a08add90864172.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-fe63f3c54a9849d1.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-fe7dab92ce314062.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 09:25:25 KST] [aads-dashboard] public/reports/gallery/media-feaf1bc6c2d94903.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "resume_claimed_by" /root/aads/aads-server/app/ 2>/dev/null | head -20
+
+## [2026-05-16 10:14:56 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:   if (replaced) return next;
+  return [
+→  if (replaced) return next;
+  // ★ DEDU
+
+## [2026-05-16 10:15:40 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/fix_dedup_bubbles.py
+
+## [2026-05-18 11:00:36 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:       if (persistedContent.length > 10) →      if (persistedContent.length > 10) 
+
+## [2026-05-18 11:01:05 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && sed -i '262a\        if (options.keepEmpty) {\n 
+
+## [2026-05-18 11:13:03 KST] [aads-dashboard] deploy.sh
+- Chat-Direct 수정: run_remote_command: grep -r "aads-dashboard" /etc/nginx/conf.d/ -l
+
+## [2026-05-18 12:56:17 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:           <span>
+              {msg.mode→          <span>
+              {/* 응답 완료
+
+## [2026-05-18 12:56:45 KST] [aads-dashboard] src/app/chat/page.tsx.bak_status_badge
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-dashboard/src/app/chat/page.tsx /root/aads/aads-dashboard/src
+
+## [2026-05-18 12:57:25 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: cat > /tmp/patch_status_badge.py << 'PYEOF'
+import pathlib
+p = pathlib.Path('/ro

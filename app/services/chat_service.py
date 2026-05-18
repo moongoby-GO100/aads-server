@@ -119,6 +119,8 @@ _HISTORY_EXCLUDED_INTENTS = (
     "system_trigger",
     "auto_reaction",
     "runner_response",
+    "interrupted_partial",
+    "interruption_notice",
 )
 
 
@@ -1120,7 +1122,7 @@ async def _mark_execution_interrupted(
                 """
                 UPDATE chat_messages
                 SET content = $1,
-                    intent = 'interrupted_partial',
+                    intent = 'interruption_notice',
                     model_used = 'interrupted',
                     edited_at = NOW()
                 WHERE id = $2
@@ -1128,7 +1130,7 @@ async def _mark_execution_interrupted(
                 final_content,
                 pid,
             )
-            assistant_message_id = None
+            assistant_message_id = pid
         elif delete_empty_placeholder:
             await conn.execute("DELETE FROM chat_messages WHERE id = $1", pid)
             assistant_message_id = None
@@ -1137,7 +1139,7 @@ async def _mark_execution_interrupted(
                 """
                 UPDATE chat_messages
                 SET content = $1,
-                    intent = 'interrupted_partial',
+                    intent = 'interruption_notice',
                     model_used = 'interrupted',
                     edited_at = NOW()
                 WHERE id = $2
@@ -1145,7 +1147,28 @@ async def _mark_execution_interrupted(
                 "⚠️ _응답 생성이 중단되었습니다. 최신 지시를 다시 처리할 수 있습니다._",
                 pid,
             )
-            assistant_message_id = None
+            assistant_message_id = pid
+
+    if assistant_message_id is None:
+        assistant_message_id = await conn.fetchval(
+            """
+            SELECT id
+            FROM chat_messages
+            WHERE execution_id = $1
+              AND role = 'assistant'
+              AND intent IN ('interrupted_partial', 'interruption_notice', 'streaming_placeholder')
+            ORDER BY
+              CASE
+                WHEN intent = 'interrupted_partial' THEN 0
+                WHEN intent = 'interruption_notice' THEN 1
+                ELSE 2
+              END,
+              length(COALESCE(content, '')) DESC,
+              created_at DESC
+            LIMIT 1
+            """,
+            eid,
+        )
 
     if assistant_message_id is None and "superseded_by_newer_user" not in reason:
         fallback_content = (
@@ -1155,13 +1178,12 @@ async def _mark_execution_interrupted(
         assistant_message_id = await conn.fetchval(
             """
             INSERT INTO chat_messages (session_id, execution_id, role, content, model_used, intent, tools_called)
-            SELECT $1, $2, 'assistant', $3, 'interrupted', 'interrupted_partial', '[]'::jsonb
+            SELECT $1, $2, 'assistant', $3, 'interrupted', 'interruption_notice', '[]'::jsonb
             WHERE NOT EXISTS (
                 SELECT 1
                 FROM chat_messages
                 WHERE execution_id = $2
                   AND role = 'assistant'
-                  AND intent IS DISTINCT FROM 'interrupted_partial'
             )
             RETURNING id
             """,
@@ -1231,6 +1253,8 @@ async def _save_interrupted_partial_message(
     content: str,
     *,
     reason: str = "interrupt_applied",
+    execution_id: Optional[str] = None,
+    placeholder_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Persist a partial answer as a visible assistant bubble before a reset."""
     clean_partial = _strip_streaming_progress_markers(content or "")
@@ -1247,7 +1271,83 @@ async def _save_interrupted_partial_message(
         marker_key = "최신 지시를 이어서 처리합니다"
     final_content = clean_partial if marker_key in clean_partial else clean_partial + marker
     sid = uuid.UUID(str(session_id))
+    eid = uuid.UUID(str(execution_id)) if execution_id else None
+    pid = uuid.UUID(str(placeholder_id)) if placeholder_id else None
     async with get_pool().acquire() as conn:
+        if eid is None or pid is None:
+            active_row = await conn.fetchrow(
+                """
+                SELECT te.id AS execution_id,
+                       COALESCE(
+                           te.assistant_message_id,
+                           (
+                               SELECT id
+                               FROM chat_messages
+                               WHERE execution_id = te.id
+                                 AND intent = 'streaming_placeholder'
+                               ORDER BY created_at DESC
+                               LIMIT 1
+                           )
+                       ) AS placeholder_id
+                FROM chat_turn_executions te
+                WHERE te.session_id = $1
+                  AND te.status IN ('running', 'retrying')
+                  AND te.completed_at IS NULL
+                ORDER BY te.started_at DESC
+                LIMIT 1
+                """,
+                sid,
+            )
+            if active_row:
+                eid = eid or active_row["execution_id"]
+                pid = pid or active_row["placeholder_id"]
+
+        if pid:
+            updated = await conn.fetchrow(
+                """
+                UPDATE chat_messages
+                SET content = $1,
+                    model_used = 'interrupted',
+                    intent = 'interrupted_partial',
+                    execution_id = COALESCE(execution_id, $2),
+                    edited_at = NOW()
+                WHERE id = $3
+                RETURNING id, created_at::text AS created_at_text
+                """,
+                final_content,
+                eid,
+                pid,
+            )
+            if updated:
+                if eid:
+                    await conn.execute(
+                        """
+                        UPDATE chat_turn_executions
+                        SET assistant_message_id = COALESCE(assistant_message_id, $2),
+                            updated_at = NOW()
+                        WHERE id = $1
+                        """,
+                        eid,
+                        updated["id"],
+                    )
+                logger.info(
+                    "interrupted_partial_bound session=%s execution=%s reason=%s len=%s",
+                    str(session_id)[:8],
+                    str(eid)[:8] if eid else "-",
+                    reason,
+                    len(final_content),
+                )
+                return {
+                    "id": str(updated["id"]),
+                    "session_id": str(session_id),
+                    "execution_id": str(eid) if eid else None,
+                    "role": "assistant",
+                    "content": final_content,
+                    "model_used": "interrupted",
+                    "intent": "interrupted_partial",
+                    "created_at": updated["created_at_text"],
+                }
+
         existing = await conn.fetchrow(
             """
             SELECT id, created_at::text AS created_at_text
@@ -1269,12 +1369,13 @@ async def _save_interrupted_partial_message(
         else:
             saved = await conn.fetchrow(
                 """
-                INSERT INTO chat_messages (session_id, role, content, model_used, intent)
-                VALUES ($1, 'assistant', $2, 'interrupted', 'interrupted_partial')
+                INSERT INTO chat_messages (session_id, execution_id, role, content, model_used, intent)
+                VALUES ($1, $3, 'assistant', $2, 'interrupted', 'interrupted_partial')
                 RETURNING id, created_at::text AS created_at_text
                 """,
                 sid,
                 final_content,
+                eid,
             )
             saved_id = saved["id"]
             created_at_text = saved["created_at_text"]
@@ -1564,10 +1665,10 @@ async def _delete_streaming_placeholder(session_id: str, execution_id: Optional[
                         logger.info(f"placeholder_dedup_deleted session={session_id[:8]} — same recovered already exists")
                     else:
                         await conn.execute(
-                            "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'recovered' WHERE id = $1",
+                            "UPDATE chat_messages SET content = $2, intent = 'interrupted_partial', model_used = 'interrupted' WHERE id = $1",
                             placeholder['id'], content,
                         )
-                        logger.warning(f"placeholder_promoted session={session_id[:8]} — final save missing, placeholder promoted to response")
+                        logger.warning(f"placeholder_promoted session={session_id[:8]} — final save missing, placeholder promoted to interrupted partial")
                 else:
                     # 내용도 없으면 삭제
                     await conn.execute("DELETE FROM chat_messages WHERE id = $1", placeholder['id'])
@@ -2424,7 +2525,7 @@ async def _resume_interrupted_streams_legacy_disabled() -> int:
                     else:
                         final = clean_partial + "\n\n⚠️ _서버 재시작으로 응답이 중단되었습니다. 다시 질문해주세요._" if clean_partial else "⚠️ _서버 재시작으로 응답이 중단되었습니다. 다시 질문해주세요._"
                         await c.execute(
-                            "UPDATE chat_messages SET content = $1, intent = NULL, model_used = 'interrupted' WHERE id = $2",
+                            "UPDATE chat_messages SET content = $1, intent = 'interruption_notice', model_used = 'interrupted' WHERE id = $2",
                             final, placeholder_id,
                         )
 
@@ -2819,37 +2920,41 @@ async def _resume_single_stream(
         logger.error(f"resume_single_stream_error: session={session_id[:8]} error={e}")
         try:
             async with get_pool().acquire() as c:
-                final = partial_content + "\n\n⚠️ _서버 재시작 후 이어서 생성에 실패했습니다. 다시 질문해주세요._" if partial_content else "⚠️ _서버 재시작 후 응답 생성에 실패했습니다. 다시 질문해주세요._"
-                _upd_result = await c.execute(
-                    "UPDATE chat_messages SET content = $1, intent = NULL, model_used = 'recovered', execution_id = COALESCE(execution_id, $3) WHERE id = $2",
-                    final, placeholder_id, _execution_uuid,
-                )
-                if _upd_result == "UPDATE 0":
-                    _fb_id = await c.fetchval(
-                        "INSERT INTO chat_messages (session_id, execution_id, role, content, model_used) "
-                        "VALUES ($1, $2, 'assistant', $3, 'interrupted') RETURNING id",
-                        uuid.UUID(session_id), _execution_uuid, final,
-                    )
-                    placeholder_id = _fb_id
-                    logger.warning(f"resume_fallback_inserted: session={session_id[:8]} new_msg={_fb_id}")
                 if _execution_uuid:
-                    await c.execute(
-                        """
-                        UPDATE chat_turn_executions
-                        SET assistant_message_id = COALESCE(assistant_message_id, $2),
-                            requested_model = COALESCE($3, requested_model),
-                            actual_model = COALESCE(actual_model, 'recovered'),
-                            status = 'interrupted',
-                            error_message = $4,
-                            completed_at = COALESCE(completed_at, NOW()),
-                            updated_at = NOW()
-                        WHERE id = $1
-                        """,
-                        _execution_uuid,
-                        placeholder_id,
-                        requested_model,
-                        str(e)[:500],
+                    final = (
+                        partial_content + "\n\n⚠️ _서버 재시작 후 이어서 생성에 실패했습니다. 다시 질문해주세요._"
+                        if partial_content
+                        else ""
                     )
+                    await _mark_execution_interrupted(
+                        c,
+                        session_id,
+                        str(_execution_uuid),
+                        f"resume_single_stream_error: {str(e)[:400]}",
+                        partial_content=final,
+                        placeholder_id=str(placeholder_id) if placeholder_id else None,
+                        delete_empty_placeholder=not bool(final),
+                    )
+                else:
+                    final = (
+                        partial_content + "\n\n⚠️ _서버 재시작 후 이어서 생성에 실패했습니다. 다시 질문해주세요._"
+                        if partial_content
+                        else "⚠️ _서버 재시작 후 응답 생성에 실패했습니다. 다시 질문해주세요._"
+                    )
+                    _upd_result = await c.execute(
+                        "UPDATE chat_messages SET content = $1, intent = 'interruption_notice', model_used = 'interrupted' WHERE id = $2",
+                        final,
+                        placeholder_id,
+                    )
+                    if _upd_result == "UPDATE 0":
+                        _fb_id = await c.fetchval(
+                            "INSERT INTO chat_messages (session_id, role, content, model_used, intent) "
+                            "VALUES ($1, 'assistant', $2, 'interrupted', 'interruption_notice') RETURNING id",
+                            uuid.UUID(session_id),
+                            final,
+                        )
+                        placeholder_id = _fb_id
+                        logger.warning(f"resume_fallback_inserted: session={session_id[:8]} new_msg={_fb_id}")
                 logger.warning(f"resume_failed_kept_recovered: session={session_id[:8]} bubble={placeholder_id} kept as recovered for retry")
                 _streaming_state[session_id] = {
                     **_streaming_state.get(session_id, {}),
@@ -3320,6 +3425,7 @@ _AUTO_MESSAGE_EXCLUDE_FILTER = (
     " AND intent IS DISTINCT FROM 'system_trigger'"
     " AND intent IS DISTINCT FROM 'auto_reaction'"
     " AND intent IS DISTINCT FROM 'interrupted_partial'"
+    " AND intent IS DISTINCT FROM 'interruption_notice'"
     " AND intent IS DISTINCT FROM 'ai_review_warning'"
     " AND intent IS DISTINCT FROM 'system_trigger'"
     " AND intent IS DISTINCT FROM 'auto_reaction'"
@@ -3443,7 +3549,7 @@ async def _promote_inactive_streaming_placeholders(
                     _remove_ids.append(_pid)
                 else:
                     await conn.execute(
-                        "UPDATE chat_messages SET intent = NULL, model_used = 'recovered', "
+                        "UPDATE chat_messages SET intent = 'interrupted_partial', model_used = 'interrupted', "
                         "content = regexp_replace(content, E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$', '') "
                         "WHERE id = $1",
                         _uid,
@@ -4139,6 +4245,17 @@ async def _save_and_update_session(
                 )
                 _assistant_msg_id = _saved_msg["id"] if _saved_msg else None
             if _execution_uuid:
+                await conn.execute(
+                    """
+                    DELETE FROM chat_messages
+                    WHERE execution_id = $1
+                      AND role = 'assistant'
+                      AND intent IN ('interrupted_partial', 'interruption_notice')
+                      AND ($2::uuid IS NULL OR id <> $2)
+                    """,
+                    _execution_uuid,
+                    _assistant_msg_id,
+                )
                 await conn.execute(
                     """
                     UPDATE chat_turn_executions

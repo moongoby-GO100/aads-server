@@ -729,7 +729,7 @@ async def lifespan(app: FastAPI):
                                 _cleaned += 1
                             else:
                                 await _c.execute(
-                                    "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'recovered' WHERE id = $1",
+                                    "UPDATE chat_messages SET content = $2, intent = 'interrupted_partial', model_used = 'interrupted' WHERE id = $1",
                                     _ph["id"], _clean_content,
                                 )
                                 _promoted += 1
@@ -809,7 +809,7 @@ async def lifespan(app: FastAPI):
                                         _deleted += 1
                                     else:
                                         await _c.execute(
-                                            "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'recovered' WHERE id = $1",
+                                            "UPDATE chat_messages SET content = $2, intent = 'interrupted_partial', model_used = 'interrupted' WHERE id = $1",
                                             row["id"], _clean,
                                         )
                                         _promoted += 1
@@ -918,7 +918,12 @@ async def lifespan(app: FastAPI):
                            te.requested_model,
                            te.retry_count,
                            COALESCE(ph.id, te.assistant_message_id) AS assistant_message_id,
-                           EXTRACT(EPOCH FROM (NOW() - te.updated_at))::int AS stale_seconds,
+                           EXTRACT(EPOCH FROM (
+                               NOW() - GREATEST(
+                                   te.updated_at,
+                                   COALESCE(ph.edited_at, ph.created_at, te.updated_at)
+                               )
+                           ))::int AS stale_seconds,
                            COALESCE(ph.content, am.content, '') AS partial_content,
                            COALESCE(um.content, '') AS last_user_msg,
                            w.name AS workspace_name
@@ -933,7 +938,7 @@ async def lifespan(app: FastAPI):
                     LEFT JOIN chat_messages um
                       ON um.id = te.user_message_id
                     LEFT JOIN LATERAL (
-                        SELECT id, content
+                        SELECT id, content, created_at, edited_at
                         FROM chat_messages
                         WHERE execution_id = te.id
                           AND intent = 'streaming_placeholder'
@@ -943,8 +948,17 @@ async def lifespan(app: FastAPI):
                     WHERE te.status IN ('running', 'retrying')
                       AND te.updated_at > NOW() - INTERVAL '2 hours'
                       AND (
-                          te.updated_at < NOW() - ($2::int * INTERVAL '1 second')
-                          OR ($3::timestamptz IS NOT NULL AND te.updated_at < $3::timestamptz)
+                          GREATEST(
+                              te.updated_at,
+                              COALESCE(ph.edited_at, ph.created_at, te.updated_at)
+                          ) < NOW() - ($2::int * INTERVAL '1 second')
+                          OR (
+                              $3::timestamptz IS NOT NULL
+                              AND GREATEST(
+                                  te.updated_at,
+                                  COALESCE(ph.edited_at, ph.created_at, te.updated_at)
+                              ) < $3::timestamptz
+                          )
                       )
                     ORDER BY te.updated_at DESC
                     LIMIT $1

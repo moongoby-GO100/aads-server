@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-18 18:53 KST) - MCP 러너 제출 세션 ID 유실 수정
+- 배경: CEO가 `https://aads.newtalk.kr/chat#93a6bddb-742d-44af-95d5-6958760284f8` 채팅에서 러너 작업 지시 시 "현재 채팅 세션 컨텍스트를 찾지 못했습니다" 오류가 나는 원인 확인과 즉시 조치를 요청했다.
+- 원인: Agent SDK/MCP 경로는 `AADS_SESSION_ID` 환경변수로 현재 채팅 ID를 넘기고 있었지만, `mcp_servers/aads_tools_bridge.py`가 `ToolExecutor`를 먼저 호출하면서 이 값을 `current_chat_session_id` ContextVar 또는 `params.session_id`에 주입하지 않았다. 그 결과 `pipeline_runner_submit`이 `execute_tool` fallback까지 가기 전에 세션 없음 오류로 종료됐다.
+- 조치: MCP bridge에서 session-bound 도구(`pipeline_runner_submit`, `pipeline_runner_submit_batch`, `pipeline_runner_status`, `check_task_status` 등)에 `AADS_SESSION_ID`를 바인딩하고, 러너 제출은 모델이 잘못 넣은 `session_id`를 현재 채팅 ID로 덮어쓰게 했다. `app/services/model_selector.py`의 Agent SDK tool_use 표시도 러너 도구에는 현재 세션 ID가 보이도록 보강했다.
+- 검증: `pytest tests/unit/test_aads_tools_bridge.py tests/unit/test_runner_scope_defaults.py -q` 17개 통과. `python3 -m py_compile mcp_servers/aads_tools_bridge.py app/services/model_selector.py` 통과. 컨테이너 내부 `docker exec aads-server python3 -m py_compile /app/mcp_servers/aads_tools_bridge.py /app/app/services/model_selector.py` 통과, `docker exec aads-server python3 -m pytest /app/tests/unit/test_aads_tools_bridge.py -q` 1개 통과. `/api/v1/ops/health-check`는 `pipeline_healthy=true`, `active_count=0` 확인.
+- 배포/주의: `mcp_servers/`와 `app/`는 `aads-server` 컨테이너에 bind mount되어 있어 MCP bridge 수정은 다음 Agent SDK MCP subprocess부터 적용된다. API 프로세스 재시작/blue-green 배포는 기존 미커밋 변경이 많아 이번 턴에서는 수행하지 않았다. 커밋/푸시도 아직 하지 않았다.
+
+## 현재 진행 상태 (2026-05-18 18:38 KST) - 채팅 버블 중복/응답 사라짐 재발 차단
+- 배경: CEO가 채팅창 응답이 사라지고 assistant 버블이 계속 중복 생성되는 현상이 다시 발생한다고 보고하고, 왜 이전 조치가 적용되지 않는지 원인 파악과 즉시 조치를 요청했다.
+- 원인: 이전 패치가 `_mark_execution_interrupted()` 중심 경로에는 적용됐지만, `app/main.py` startup/periodic placeholder cleanup, `app/services/chat_service.py`의 `_delete_streaming_placeholder()` 및 inactive placeholder promotion 경로가 아직 `streaming_placeholder`를 `intent=NULL, model_used='recovered'`로 승격했다. 이 값은 숨김 필터를 우회해 과거 partial이 일반 assistant 버블처럼 노출된다.
+- 추가 원인: 대시보드 `src/app/chat/page.tsx`가 SSE `partial_preserved` 이벤트를 받으면 보존 partial을 일반 assistant 버블로 추가하고 새 `streaming_placeholder`를 또 만들어, 재검증/인터럽트 중 "응답 버블 2개"를 직접 만들 수 있었다.
+- 조치: stale/orphan placeholder 승격 경로를 모두 `intent='interrupted_partial', model_used='interrupted'`로 바꿔 일반 버블 노출을 차단했다. 프론트는 DB 저장 placeholder를 더 이상 `recovered` 일반 응답으로 변환하지 않고, `partial_preserved`도 같은 streaming placeholder만 재사용하도록 변경했다. 렌더 목록에서 `interrupted_partial`도 제외했다.
+- DB 보정: 기존 `intent IS NULL AND model_used IN ('recovered','interrupted')` visible draft 1,866건을 `interrupted_partial`로 정리했다. 보정 후 visible draft 0건, 10분 초과 stale running 0건, 동일 execution 다중 placeholder 0건을 확인했다.
+- 배포/검증: `python3 -m py_compile app/main.py app/services/chat_service.py app/routers/chat.py` 통과. `npx eslint src/app/chat/page.tsx`는 신규 error 0건, 기존 warning 22건. 백엔드는 blue-green 배포로 active `8102(aads-server-green)`, 대시보드는 active `3101(aads-dashboard-green)` 전환 완료. 대시보드 자동 QA는 `UNKNOWN`으로 미확정이며 통과로 간주하지 않는다.
+- 주의: 이번 변경 파일은 `app/main.py`, `app/services/chat_service.py`, `/root/aads/aads-dashboard/src/app/chat/page.tsx`, `HANDOVER.md`다. 해당 파일들에는 이전 미커밋 변경이 섞여 있어 이번 턴에서는 커밋/푸시하지 않았다.
+
 ## 현재 진행 상태 (2026-05-18 16:24 KST) - 채팅 끊김/무중단 배포 active 재시작 차단
 - 배경: CEO가 채팅 응답이 중간에 끊기고, 무중단 배포가 되어야 하는데 왜 실제 스트림이 끊기는지 원인 확인과 즉시 조치를 요청했다.
 - 원인: `deploy.sh code` 경로에 active stream이 0으로 측정되면 active API 슬롯을 직접 graceful restart하는 레거시 분기가 남아 있었다. 이 경로가 실행되면 blue-green 전환이 아니라 현재 연결된 SSE/채팅 스트림이 붙은 API 프로세스가 stop/SIGKILL 대상이 되어 응답이 끊길 수 있다.
@@ -1269,3 +1285,12 @@
 - 조치: stale reset된 row는 같은 cleanup 호출 안에서 재승격하지 않도록 `reset_ids`를 제외하고, 다음 active row만 승격하게 수정했다. 대상 세션의 active TODO 3건은 `skipped_reason=stale_target_session_unblock`으로 정리해 새 질문이 과거 TODO에 묶이지 않게 했다.
 - 검증: `pytest tests/unit/test_chat_todo_service.py -q` 7건 통과. `ruff check app/services/chat_todo_service.py tests/unit/test_chat_todo_service.py` 통과. DB 기준 대상 세션 active TODO는 3건에서 0건으로 감소했다.
 - 주의: 화면 캡처는 PC Agent CDP 재준비 후에도 기존 탭 문서가 NTV2 보고서 DOM을 유지해 채팅 UI 직접 확인은 미완료다. DB/API 상태 기준으로 세션 차단 상태는 해소했다.
+
+## 2026-05-18 19:04 KST - Chat bubble duplicate/disappearing recovery display guard
+
+- 배경: AADS 채팅에서 응답 버블이 사라지고 중단/복구 버블이 중복 표시되는 현상이 재발했다. DB 기준 최신 정상 응답 중복은 없었고, `streaming_placeholder` 1건과 과거 `interruption_notice`/`interrupted_partial`가 함께 남아 프론트 표시 단계에서 2개처럼 보이는 상태였다.
+- 원인: 이전 패치는 `interrupted_partial`만 숨겼고, `_mark_execution_interrupted()`가 새로 만든 `interruption_notice`는 일반 assistant처럼 렌더링될 수 있었다. 또한 SSE 종료 fallback이 partial placeholder를 `intent=undefined, model_used='interrupted'`로 바꿔 숨김 필터를 우회했다.
+- 조치: `/root/aads/aads-dashboard/src/app/chat/page.tsx`에서 `interruption_notice`를 draft/숨김 대상으로 포함하고, SSE 종료 fallback partial을 `interrupted_partial`로 고정했다. `/root/aads/aads-server/app/services/chat_service.py`에서는 최종 응답 저장 시 같은 execution의 `interrupted_partial`과 `interruption_notice`를 함께 삭제해 최종 응답과 중단 notice가 공존하지 않도록 했다.
+- 배포: Dashboard `bash deploy.sh`로 active를 `aads-dashboard`/`3100`으로 전환했고 green standby도 동기화했다. API `bash deploy.sh bluegreen`으로 active를 `aads-server-green`/`8102`로 전환했다.
+- 검증: `python3 -m py_compile app/services/chat_service.py` 통과. `npx eslint src/app/chat/page.tsx`는 기존 warning 22건, error 0건. Dashboard build 통과, API health/DB schema/chat table/LLM 검증 통과. 컨테이너 내부 active API에 `intent IN ('interrupted_partial', 'interruption_notice')` 반영 확인.
+- 주의: 현재 세션 `ac5278a7-2f13-4cd7-9aa1-83d41fb23c97`와 세션 `2648cf77-4256-45e8-9cde-0e563ffefe5c`에는 deploy 중 `resume_claimed_by` running 실행이 남아 있으며, 최신 assistant는 `streaming_placeholder` 1건이다. 본 패치는 표시 중복/사라짐 방지 레이어를 보강한 것이고, 장기 running 자동 회수 정책은 별도 후속 개선 대상이다.

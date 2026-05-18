@@ -926,3 +926,466 @@ _FALLBACK_QU
 
 ## [2026-05-15 14:23:48 KST] [aads-server] scripts/fix_bubble_dedup.py
 - Chat-Direct 수정: write: scripts/fix_bubble_dedup.py
+
+## [2026-05-15 15:23:51 KST] [aads-server] .gitignore
+- Chat-Direct 수정: patch: # Backup files
+*.bak_*→# Backup files
+*.bak_*
+*.bak.*
+
+## [2026-05-15 15:24:21 KST] [aads-server] .gitignore
+- Chat-Direct 수정: run_remote_command: echo '*.bak.*' >> /root/aads/aads-server/.gitignore
+
+## [2026-05-15 15:29:19 KST] [aads-server] .gitignore
+- Chat-Direct 수정: patch: # Backup files
+*.bak_*→# Backup files
+*.bak_*
+*.bak.*
+
+## [2026-05-15 15:29:41 KST] [aads-server] .gitignore
+- Chat-Direct 수정: run_remote_command: echo '*.bak.*' >> /root/aads/aads-server/.gitignore
+
+## [2026-05-15 15:29:42 KST] [aads-server] .gitignore
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "SELECT job_id, status, projec
+
+## [2026-05-15 15:38:38 KST] [aads-server] pc_agent/commands/browser_auto.py
+- Chat-Direct 수정: patch:     if any(
+        token in lowered
+   →    if any(
+        token in lowered
+   
+
+## [2026-05-15 15:38:43 KST] [aads-server] pc_agent/commands/browser_auto.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -t -A -c "DELETE FROM chat_messag
+
+## [2026-05-15 15:39:25 KST] [aads-server] pc_agent/commands/browser_auto.py
+- Chat-Direct 수정: patch:     if last_error is not None:
+        r→    if last_error is not None and last_e
+
+## [2026-05-15 15:40:50 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: grep -n "streamingRef.current\s*=" /root/aads/aads-dashboard/src/app/chat/page.t
+
+## [2026-05-15 15:41:54 KST] [aads-server] scripts/fix_bubble_race.py
+- Chat-Direct 수정: write: scripts/fix_bubble_race.py
+
+## [2026-05-15 15:43:24 KST] [aads-server] pc_agent/commands/browser_auto.py
+- Chat-Direct 수정: patch:     if last_error is not None and last_e→    if last_error is not None:
+
+## [2026-05-15 15:43:51 KST] [aads-server] pc_agent/commands/browser_auto.py
+- Chat-Direct 수정: patch:         except CDPCommandError as exc:
+ →        except CDPCommandError as exc:
+ 
+
+## [2026-05-15 15:49:55 KST] [aads-server] scripts/extract_face_seeds.py
+- Chat-Direct 수정: write: scripts/extract_face_seeds.py
+
+## [2026-05-15 15:51:40 KST] [aads-server] /var/www/aads-public/reports/newtalk-face-seed-review.html
+- Chat-Direct 수정: write: /var/www/aads-public/reports/newtalk-face-seed-review.html
+
+## [2026-05-15 15:52:39 KST] [aads-server] reports/newtalk-face-seed-review.html
+- Chat-Direct 수정: write: reports/newtalk-face-seed-review.html
+
+## [2026-05-15 15:56:50 KST] [aads-server] nginx/reports.conf
+- Chat-Direct 수정: write: nginx/reports.conf
+
+## [2026-05-15 16:07:37 KST] [aads-server] reports/ai-model-seeds/index.html
+- Chat-Direct 수정: write: reports/ai-model-seeds/index.html
+
+## [2026-05-15 16:16:19 KST] [aads-server] app/api/image.py
+- Chat-Direct 수정: write: app/api/image.py
+
+## [2026-05-15 16:17:27 KST] [aads-server] reports/ai-model-gallery.html
+- Chat-Direct 수정: write: reports/ai-model-gallery.html
+
+## [2026-05-15 16:19:40 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:     "/api/v1/ops/active-streams",  # 내부 →    "/api/v1/ops/active-streams",  # 내부 
+
+## [2026-05-15 16:27:42 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch: _FIRST_RESPONSE_TIMEOUT_SEC = float(os.g→_FIRST_RESPONSE_TIMEOUT_SEC = float(os.g
+
+## [2026-05-15 16:29:04 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:         _periodic_stale_seconds = int(os→        _periodic_stale_seconds = int(os
+
+## [2026-05-15 16:29:12 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:                       AND te.updated_at →                      AND te.updated_at 
+
+## [2026-05-15 16:29:29 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:                     if _execution_resume→                    _stale_sec = int(row
+
+## [2026-05-15 16:29:48 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:                     # 현재 스트리밍 중인 세션은 제외
+→                    # 현재 스트리밍 중인 세션은 제외
+
+
+## [2026-05-15 16:31:26 KST] [aads-server] scripts/export_gallery.py
+- Chat-Direct 수정: write: scripts/export_gallery.py
+
+## [2026-05-15 16:31:31 KST] [aads-server] scripts/export_gallery.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -m pytest tests/unit/test_tools_and_pipeline.py 
+
+## [2026-05-15 16:32:42 KST] [aads-server] reports/ai-model-gallery.html
+- Chat-Direct 수정: write: reports/ai-model-gallery.html
+
+## [2026-05-15 16:33:22 KST] [aads-server] scripts/gallery_sync.sh
+- Chat-Direct 수정: write: scripts/gallery_sync.sh
+
+## [2026-05-15 16:33:28 KST] [aads-server] scripts/gallery_sync.sh
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git commit -m "AADS-193: 채팅 응답 끊김 개선 — stale 감지 60s
+
+## [2026-05-15 16:36:34 KST] [aads-server] scripts/export_gallery.py
+- Chat-Direct 수정: write: scripts/export_gallery.py
+
+## [2026-05-15 16:36:51 KST] [aads-server] app/static/gallery/manifest.json
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:36:52 KST] [aads-server] app/static/gallery/media-09d4efb6db994e39.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:36:53 KST] [aads-server] app/static/gallery/media-0bdba68604d2440d.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:36:54 KST] [aads-server] app/static/gallery/manifest.json
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:36:54 KST] [aads-server] app/static/gallery/media-131fb7aa2ba84185.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:36:55 KST] [aads-server] app/static/gallery/media-0bdba68604d2440d.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:36:56 KST] [aads-server] app/static/gallery/media-17e48bf069b64766.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:36:57 KST] [aads-server] app/static/gallery/media-131fb7aa2ba84185.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:36:57 KST] [aads-server] app/static/gallery/media-185285eea91e4a6d.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:36:58 KST] [aads-server] app/static/gallery/media-17e48bf069b64766.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:36:58 KST] [aads-server] app/static/gallery/media-2585a40ebc134cc3.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:36:59 KST] [aads-server] app/static/gallery/media-185285eea91e4a6d.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:36:59 KST] [aads-server] app/static/gallery/media-2bb1860c84d943bd.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:00 KST] [aads-server] app/static/gallery/media-2585a40ebc134cc3.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:37:00 KST] [aads-server] app/static/gallery/media-2e0e470c54964c66.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:02 KST] [aads-server] app/static/gallery/media-2bb1860c84d943bd.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:37:02 KST] [aads-server] app/static/gallery/media-35d73fbfd3264458.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:03 KST] [aads-server] app/static/gallery/media-3c386f59d35b4967.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:37:03 KST] [aads-server] app/static/gallery/media-3b19aff1fb3446bf.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:05 KST] [aads-server] app/static/gallery/media-428056912b44445c.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:37:05 KST] [aads-server] app/static/gallery/media-3b6f551eab464146.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:06 KST] [aads-server] app/static/gallery/media-4e4c6b9604c444c1.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:37:06 KST] [aads-server] app/static/gallery/media-3c2b7735554b4dae.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:07 KST] [aads-server] app/static/gallery/media-3c386f59d35b4967.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:07 KST] [aads-server] app/static/gallery/media-61b1257ff32c4276.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:37:08 KST] [aads-server] app/static/gallery/media-3cea6b823c14475f.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:09 KST] [aads-server] app/static/gallery/media-62206891c70148a8.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:37:10 KST] [aads-server] app/static/gallery/media-68ef727dab0748f0.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:37:10 KST] [aads-server] app/static/gallery/media-428056912b44445c.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:11 KST] [aads-server] app/static/gallery/media-4e4c6b9604c444c1.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:11 KST] [aads-server] app/static/gallery/media-7433d9bda5964451.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:37:12 KST] [aads-server] app/static/gallery/media-9661c0503ff24bed.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:37:12 KST] [aads-server] app/static/gallery/media-53e572fb7fb14805.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:13 KST] [aads-server] app/static/gallery/media-b1642aa57a254388.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:37:13 KST] [aads-server] app/static/gallery/media-54000d29eaf44f89.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:15 KST] [aads-server] app/static/gallery/media-56c46ac685cc4d1b.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:15 KST] [aads-server] app/static/gallery/media-b9581578c69c4b03.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:37:16 KST] [aads-server] app/static/gallery/media-bb6ff0e3aa7e4c76.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:37:16 KST] [aads-server] app/static/gallery/media-618f3ddff9524e61.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:17 KST] [aads-server] app/static/gallery/media-61b1257ff32c4276.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:17 KST] [aads-server] app/static/gallery/media-e1222219311743c5.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:37:18 KST] [aads-server] app/static/gallery/media-ed99edeea3624b05.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:37:18 KST] [aads-server] app/static/gallery/media-62206891c70148a8.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:19 KST] [aads-server] app/static/gallery/media-f19fda55261645d3.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:37:19 KST] [aads-server] app/static/gallery/media-660f0e202161456e.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:20 KST] [aads-server] app/static/gallery/media-fd33fad95e2443ea.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:37:20 KST] [aads-server] app/static/gallery/media-68ef727dab0748f0.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:21 KST] [aads-server] app/static/gallery/media-fe597ccd8c244c34.png
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build" | grep -v grep | wc -l
+
+## [2026-05-15 16:37:21 KST] [aads-server] app/static/gallery/media-733ea2828202432a.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:22 KST] [aads-server] app/static/gallery/media-7433d9bda5964451.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:23 KST] [aads-server] app/static/gallery/media-7feea28362094585.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:24 KST] [aads-server] app/static/gallery/media-80b2afb001ba4a7a.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:25 KST] [aads-server] app/static/gallery/media-8895f66971334e42.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:27 KST] [aads-server] app/static/gallery/media-8eeec46836a8443a.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:28 KST] [aads-server] app/static/gallery/media-92d912e428224c73.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:29 KST] [aads-server] app/static/gallery/media-9661c0503ff24bed.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:30 KST] [aads-server] app/static/gallery/media-9737d635886347c7.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:31 KST] [aads-server] app/static/gallery/media-9c28e96d1289450d.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:37:32 KST] [aads-server] app/static/gallery/media-9d787684b5a5414a.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/export_gallery.py
+
+## [2026-05-15 16:38:51 KST] [aads-server] /var/www/aads-public/reports/ai-model-seeds/index.html
+- Chat-Direct 수정: write: /var/www/aads-public/reports/ai-model-seeds/index.html
+
+## [2026-05-15 16:45:34 KST] [aads-server] scripts/gallery_sync.sh
+- Chat-Direct 수정: write: scripts/gallery_sync.sh
+
+## [2026-05-15 16:45:42 KST] [aads-server] /tmp/dashboard-rebuild.sh
+- Chat-Direct 수정: write: /tmp/dashboard-rebuild.sh
+
+## [2026-05-15 16:46:15 KST] [aads-server] scripts/dashboard-rebuild.sh
+- Chat-Direct 수정: write: scripts/dashboard-rebuild.sh
+
+## [2026-05-15 17:10:12 KST] [aads-server] reports/gallery-manifest.json
+- Chat-Direct 수정: write: reports/gallery-manifest.json
+
+## [2026-05-15 17:11:27 KST] [aads-server] reports/ai-model-gallery.html
+- Chat-Direct 수정: write: reports/ai-model-gallery.html
+
+## [2026-05-15 17:11:57 KST] [aads-server] docs/knowledge/CODEX-APP-SERVER-RATE-LIMITS.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -t -c "SELECT current_model, mess
+
+## [2026-05-15 17:12:41 KST] [aads-server] scripts/claude_relay_server.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -t -c "SELECT table_name FROM inf
+
+## [2026-05-15 17:12:42 KST] [aads-server] scripts/claude_relay_server.py
+- Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/reports/gallery-manifest.json /var/www/aads-public/re
+
+## [2026-05-15 17:15:17 KST] [aads-server] app/api/ops.py
+- Chat-Direct 수정: run_remote_command: sed -n '639,770p' /root/aads/aads-server/app/routers/chat.py
+
+## [2026-05-15 17:15:16 KST] [aads-server] app/api/ops.py
+- Chat-Direct 수정: run_remote_command: python3 -c "
+import re
+
+path = '/root/aads/aads-dashboard/src/app/chat/page.tsx'
+
+## [2026-05-15 17:26:02 KST] [aads-server] app/static/gallery/index.html
+- Chat-Direct 수정: write: app/static/gallery/index.html
+
+## [2026-05-15 17:26:10 KST] [aads-server] app/static/gallery/index.html
+- Chat-Direct 수정: run_remote_command: docker inspect aads-dashboard --format '{{.Created}}' 2>/dev/null
+
+## [2026-05-15 17:28:56 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch: IMAGE_MODELS = (
+    "gpt-image-2",
+    →IMAGE_MODELS = (
+    "gpt-image-2",
+    
+
+## [2026-05-15 17:29:04 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:         if lowered == "gemini-3.1-flash-→        if lowered in {"gemini-3.1-flash
+
+## [2026-05-15 17:29:11 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:         if kind == "image":
+            →        if kind == "image":
+            
+
+## [2026-05-15 17:29:26 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:         if route.provider == "google":
+ →        if route.provider == "google":
+ 
+
+## [2026-05-15 17:29:34 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && DASHBOARD_EXTERNAL_HEALTH_URL=http://127.0.0.1/l
+
+## [2026-05-15 17:29:48 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:         return {"url": f"data:image/png;→        return {"url": f"data:image/png;
+
+## [2026-05-15 17:30:24 KST] [aads-server] litellm-config.yaml
+- Chat-Direct 수정: patch: - model_name: gemini-2.5-flash-image
+  l→- model_name: gemini-2.5-flash-image
+  l
+
+## [2026-05-16 08:06:43 KST] [aads-server] app/static/gallery/media-aef39f98758bfcc3.jpg
+- Chat-Direct 수정: run_remote_command: grep -n "def stream_response\|def chat\|async def generate\|model_override\|inte
+
+## [2026-05-16 08:22:41 KST] [aads-server] deploy.sh
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "
+import ast, re
+with open('/app/app/services
+
+## [2026-05-16 08:32:39 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: curl -s -X POST http://localhost:8100/api/v1/governance/intent-policies -H "Cont
+
+## [2026-05-16 08:34:24 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: patch:     _SAMEGRADE_FALLBACK = {
+        "cla→    _SAMEGRADE_FALLBACK = {
+        "cla
+
+## [2026-05-16 09:38:57 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 await c.execute(
+       →                _upd_result = await c.ex
+
+## [2026-05-16 09:39:12 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:         except Exception:
+            pa→        except Exception as _fb_err:
+   
+
+## [2026-05-16 09:39:30 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:                     SELECT te.id::text A→                    SELECT te.id::text A
+
+## [2026-05-16 09:39:42 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:                     if _execution_resume→                    if (row.get("retry_c
+
+## [2026-05-16 09:39:54 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:                         UPDATE chat_turn→                        UPDATE chat_turn
+
+## [2026-05-16 09:40:14 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:                     _execution_resume_at→                    _resume_t = _startup
+
+## [2026-05-16 09:41:06 KST] [aads-server] app/static/gallery/media-325fb71e952c40db.jpg
+- Chat-Direct 수정: run_remote_command: python3 -c "import py_compile; py_compile.compile('/root/aads/aads-server/app/se
+
+## [2026-05-16 09:41:07 KST] [aads-server] app/static/gallery/media-8026cf447cbe4d3e.jpg
+- Chat-Direct 수정: run_remote_command: python3 -c "import py_compile; py_compile.compile('/root/aads/aads-server/app/se
+
+## [2026-05-16 09:41:09 KST] [aads-server] app/static/gallery/media-9543aae294ba48ae.jpg
+- Chat-Direct 수정: run_remote_command: python3 -c "import py_compile; py_compile.compile('/root/aads/aads-server/app/se
+
+## [2026-05-16 10:15:26 KST] [aads-server] scripts/fix_dedup_bubbles.py
+- Chat-Direct 수정: write: scripts/fix_dedup_bubbles.py
+
+## [2026-05-16 10:17:57 KST] [aads-server] scripts/deploy_dashboard.sh
+- Chat-Direct 수정: write: scripts/deploy_dashboard.sh
+
+## [2026-05-17 11:25:12 KST] [aads-server] reports/20260517_grok_build_research_report.md
+- Chat-Direct 수정: write: reports/20260517_grok_build_research_report.md
+
+## [2026-05-17 11:35:23 KST] [aads-server] reports/20260517_llm_wiki_system_research_report.md
+- Chat-Direct 수정: write: reports/20260517_llm_wiki_system_research_report.md
+
+## [2026-05-17 11:42:35 KST] [aads-server] reports/20260517_obsidian_research_report.md
+- Chat-Direct 수정: write: reports/20260517_obsidian_research_report.md
+
+## [2026-05-18 09:47:50 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch: _BG_AUTO_CANCEL_SEC = int(os.getenv("BG_→_BG_AUTO_CANCEL_SEC = int(os.getenv("BG_
+
+## [2026-05-18 09:47:51 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:         min_stale_seconds: int = 90,→        min_stale_seconds: int = 60,
+
+## [2026-05-18 09:48:51 KST] [aads-server] app/api/ops.py
+- Chat-Direct 수정: patch:             infra["recovery_pending_stre→            infra["recovery_pending_stre
+
+## [2026-05-18 10:13:04 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 VALUES ($1, 'assistant',→                VALUES ($1, 'assistant',
+
+## [2026-05-18 10:13:12 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:         "model_used": "interrupted",
+   →        "model_used": "interrupted",
+   
+
+## [2026-05-18 10:13:29 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch: _AUTO_MESSAGE_EXCLUDE_FILTER = (
+    " A→_AUTO_MESSAGE_EXCLUDE_FILTER = (
+    " A
+
+## [2026-05-18 10:13:43 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:             SELECT id, created_at::text →            SELECT id, created_at::text 
+
+## [2026-05-18 11:13:13 KST] [aads-server] docker-compose.prod.yml
+- Chat-Direct 수정: run_remote_command: curl -s localhost:8100/api/v1/ops/health-check | python3 -c "import sys,json; d=
+
+## [2026-05-18 11:55:42 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "
+import re
+
+# F-2: Add retry_count hard cap 
+
+## [2026-05-18 11:57:56 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "
+# F-5: Add retry_count increment + hard cap
+
+## [2026-05-18 16:14:47 KST] [aads-server] reports/NTV2-AI-STUDIO-ADMIN-UI-SPEC-v2.0-20260518.html
+- Chat-Direct 수정: write: reports/NTV2-AI-STUDIO-ADMIN-UI-SPEC-v2.0-20260518.html
+
+## [2026-05-18 16:30:03 KST] [aads-server] reports/ntv2-ai-studio-admin-ui-spec-v1.html
+- Chat-Direct 수정: write: reports/ntv2-ai-studio-admin-ui-spec-v1.html

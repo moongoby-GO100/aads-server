@@ -1786,6 +1786,144 @@ async def handle_leases(request):
     })
 
 
+# AADS-193: Codex app-server JSON-RPC를 통한 rate-limit 조회
+_CODEX_USAGE_CACHE = {"ts": 0, "payload": None}
+_CODEX_USAGE_CACHE_TTL = int(os.getenv("CODEX_USAGE_CACHE_TTL_SEC", "60"))
+_CODEX_USAGE_RPC_TIMEOUT = float(os.getenv("CODEX_USAGE_RPC_TIMEOUT_SEC", "8"))
+
+
+async def _query_codex_rate_limits():
+    """codex app-server JSON-RPC로 account/rateLimits/read 호출.
+
+    호스트 ~/.codex/auth.json 사용 (auth_mode=chatgpt). 응답 파싱은 방어적으로
+    처리하여 codex CLI 업데이트로 스키마 변경 시에도 빈 응답으로 안전하게 fallback.
+    """
+    codex_meta = _resolve_cli_command("codex")
+    codex_argv = list(codex_meta.get("argv") or []) or ["codex"]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *(codex_argv + ["app-server"]),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:
+        return {"error": "codex_bin_not_found", "detail": str(exc)}
+
+    async def _do_rpc():
+        # 1) initialize
+        proc.stdin.write((json.dumps({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"clientInfo": {"name": "aads", "title": "AADS", "version": "1.0"},
+                       "capabilities": {}}
+        }) + "\n").encode())
+        await proc.stdin.drain()
+        # init 응답 대기 (notification은 무시)
+        while True:
+            line = await proc.stdout.readline()
+            if not line:
+                raise RuntimeError("codex_app_server_eof_before_init")
+            try:
+                msg = json.loads(line.decode(errors="replace"))
+            except json.JSONDecodeError:
+                continue
+            if msg.get("id") == 1:
+                break  # init response 받음
+        # 2) notifications/initialized
+        proc.stdin.write((json.dumps({
+            "jsonrpc": "2.0", "method": "notifications/initialized"
+        }) + "\n").encode())
+        await proc.stdin.drain()
+        # 3) account/rateLimits/read
+        proc.stdin.write((json.dumps({
+            "jsonrpc": "2.0", "id": 2, "method": "account/rateLimits/read", "params": {}
+        }) + "\n").encode())
+        await proc.stdin.drain()
+        # 응답 대기
+        while True:
+            line = await proc.stdout.readline()
+            if not line:
+                raise RuntimeError("codex_app_server_eof_before_response")
+            try:
+                msg = json.loads(line.decode(errors="replace"))
+            except json.JSONDecodeError:
+                continue
+            if msg.get("id") == 2:
+                return msg.get("result", {})
+
+    try:
+        result = await asyncio.wait_for(_do_rpc(), timeout=_CODEX_USAGE_RPC_TIMEOUT)
+    except asyncio.TimeoutError:
+        return {"error": "codex_rpc_timeout", "timeout_sec": _CODEX_USAGE_RPC_TIMEOUT}
+    except Exception as exc:
+        return {"error": "codex_rpc_failed", "detail": str(exc)[:200]}
+    finally:
+        try:
+            proc.terminate()
+            await asyncio.wait_for(proc.wait(), timeout=2)
+        except (asyncio.TimeoutError, ProcessLookupError):
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+
+    # 응답 정규화 — 변경 위험 대응 (try/except로 감싸 부분 성공 허용)
+    out = {"ok": True, "raw_plan_type": None, "limits": []}
+    try:
+        rate = result.get("rateLimits", {})
+        out["raw_plan_type"] = rate.get("planType")
+        by_id = result.get("rateLimitsByLimitId") or {"_default": rate}
+        for limit_id, entry in by_id.items():
+            primary = entry.get("primary") or {}
+            secondary = entry.get("secondary") or {}
+            credits = entry.get("credits") or {}
+            out["limits"].append({
+                "limit_id": entry.get("limitId") or limit_id,
+                "plan_type": entry.get("planType"),
+                "primary": {
+                    "used_percent": primary.get("usedPercent"),
+                    "window_minutes": primary.get("windowDurationMins"),
+                    "resets_at_epoch": primary.get("resetsAt"),
+                },
+                "secondary": {
+                    "used_percent": secondary.get("usedPercent"),
+                    "window_minutes": secondary.get("windowDurationMins"),
+                    "resets_at_epoch": secondary.get("resetsAt"),
+                },
+                "credits": {
+                    "has_credits": credits.get("hasCredits"),
+                    "unlimited": credits.get("unlimited"),
+                    "balance": credits.get("balance"),
+                },
+            })
+    except Exception as parse_exc:
+        out["parse_warning"] = str(parse_exc)[:200]
+    return out
+
+
+async def handle_codex_usage(request):
+    """AADS-193: /codex-usage — shared secret 보호 + 60초 캐시."""
+    # shared secret 검증
+    secret_expected = _load_relay_secret()
+    if secret_expected:
+        provided = request.headers.get("X-Claude-Relay-Secret", "")
+        if provided != secret_expected:
+            return web.json_response({"error": "invalid relay secret"}, status=403)
+    # 캐시 확인
+    now = time.time()
+    cached = _CODEX_USAGE_CACHE.get("payload")
+    cache_ts = _CODEX_USAGE_CACHE.get("ts", 0)
+    if cached and (now - cache_ts) < _CODEX_USAGE_CACHE_TTL:
+        return web.json_response({"cached": True, "age_sec": round(now - cache_ts, 1),
+                                  "ttl_sec": _CODEX_USAGE_CACHE_TTL, **cached})
+    # 라이브 호출
+    payload = await _query_codex_rate_limits()
+    payload["fetched_at"] = int(now)
+    _CODEX_USAGE_CACHE["payload"] = payload
+    _CODEX_USAGE_CACHE["ts"] = now
+    return web.json_response({"cached": False, "ttl_sec": _CODEX_USAGE_CACHE_TTL, **payload})
+
+
 async def handle_oauth_switch(request):
     try:
         body = await request.json()
@@ -1879,6 +2017,7 @@ def create_app():
     app.router.add_post("/codex-stream", handle_codex_stream)
     app.router.add_get("/health", handle_health)
     app.router.add_get("/leases", handle_leases)
+    app.router.add_get("/codex-usage", handle_codex_usage)
     app.router.add_post("/oauth/switch", handle_oauth_switch)
     app.router.add_get("/sessions", handle_sessions)
     app.router.add_delete("/sessions/{aads_session_id}", handle_reset_session)
