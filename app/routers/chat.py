@@ -11,6 +11,7 @@ import time
 import structlog
 from typing import Any, List, Optional
 from uuid import UUID
+import uuid
 
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File
 from fastapi.encoders import jsonable_encoder
@@ -1575,6 +1576,20 @@ async def resume_interrupted(session_id: UUID):
 
     if not row:
         return {"resumed": False, "message": "중단된 응답이 없습니다."}
+
+    # F-5: retry_count hard cap + increment for manual resume
+    if row["execution_id"]:
+        async with pool.acquire() as conn2:
+            _rc = await conn2.fetchval(
+                "SELECT retry_count FROM chat_turn_executions WHERE id = ",
+                uuid.UUID(row["execution_id"]),
+            )
+            if (_rc or 0) >= 5:
+                return {"resumed": False, "message": f"재시도 한도 초과 (retry_count={_rc}). 새 메시지를 보내주세요."}
+            await conn2.execute(
+                "UPDATE chat_turn_executions SET retry_count = retry_count + 1 WHERE id = ",
+                uuid.UUID(row["execution_id"]),
+            )
 
     partial = row["partial_content"] or ""
     clean_partial = re.sub(r'\n\n⏳ _.*?_$', '', partial, flags=re.DOTALL).strip()

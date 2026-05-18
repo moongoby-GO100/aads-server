@@ -2295,7 +2295,13 @@ async def stop_session_streaming(session_id: str) -> Dict[str, Any]:
 
 
 async def resume_interrupted_streams() -> int:
-    """서버 재시작 후 중단된 스트리밍을 자동 이어서 생성.
+    """Legacy resume path — disabled (F-4). Use _resume_pending_executions instead."""
+    logger.info("resume_interrupted_streams: DISABLED (F-4 legacy removal). M-9 scanner handles all resumes.")
+    return 0
+
+
+async def _resume_interrupted_streams_legacy_disabled() -> int:
+    """서버 재시작 후 중단된 스트리밍을 자동 이어서 생성 — LEGACY DISABLED.
 
     streaming_placeholder가 남은 세션을 찾아서:
     1. placeholder의 중간 결과를 보존
@@ -2436,6 +2442,18 @@ async def _resume_single_stream(
 
             pool = get_pool()
             sid = uuid.UUID(session_id)
+            # F-2: Hard cap on retry_count to prevent infinite resume loops
+            if _execution_uuid:
+                async with pool.acquire() as _cap_conn:
+                    _rc = await _cap_conn.fetchval(
+                        'SELECT retry_count FROM chat_turn_executions WHERE id = $1',
+                        _execution_uuid,
+                    )
+                    if (_rc or 0) >= 5:
+                        logger.error(f'resume_hard_cap_exceeded: session={session_id[:8]} retry_count={_rc}')
+                        _streaming_state.pop(session_id, None)
+                        _active_bg_tasks.pop(session_id, None)
+                        return
             await _wait_for_resume_slot_cooldown()
 
             if _execution_uuid:
@@ -6247,6 +6265,13 @@ async def send_message_stream(
                     output_tokens = event.get("output_tokens", 0) or 0
                     # tools_called는 스트리밍 중 직접 누적한 구조화 이벤트 유지 (done 이벤트로 덮어쓰지 않음)
                 elif etype == "error":
+                    # F-6: Save partial before returning on validator retry error
+                    if _retry_response and _retry_response.strip():
+                        await _save_interrupted_partial_message(
+                            session_id=session_id,
+                            content=_retry_response,
+                            reason='validator_retry_error',
+                        )
                     yield f"data: {json.dumps({'type': 'error', 'content': event.get('content', '오류'), 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
                     return
 
