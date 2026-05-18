@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 모델 실시간 갤러리</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f5f2ea;
+  --panel:#fffdfa;
+  --ink:#1a1815;
+  --muted:#6e665d;
+  --line:#e4d9c8;
+  --accent:#885f34;
+  --accent-soft:#f1e2cf;
+  --ok:#205c3b;
+  --warn:#7d4f15;
+  --bad:#8c2f39;
+}
+body{font-family:"Apple SD Gothic Neo","Noto Sans KR",sans-serif;background:radial-gradient(circle at top,#fff8ef 0,#f5f2ea 45%,#eee7da 100%);color:var(--ink);min-height:100vh}
+.shell{max-width:1500px;margin:0 auto;padding:24px}
+.hero{background:linear-gradient(135deg,#2f2419,#5d4025 58%,#a77843 100%);color:#fff;border-radius:28px;padding:28px 28px 22px;box-shadow:0 18px 44px rgba(68,43,18,.18)}
+.hero h1{font-size:30px;line-height:1.2;margin-bottom:10px}
+.hero p{font-size:14px;line-height:1.7;color:rgba(255,255,255,.84);max-width:980px}
+.hero-meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:999px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);font-size:12px}
+.controls{margin-top:18px;background:var(--panel);border:1px solid var(--line);border-radius:22px;padding:18px;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;box-shadow:0 10px 28px rgba(73,51,25,.08)}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-size:12px;color:var(--muted);font-weight:700}
+.field select,.field input{height:40px;border-radius:12px;border:1px solid var(--line);background:#fff;padding:0 12px;color:var(--ink);outline:none}
+.field select:focus,.field input:focus{border-color:var(--accent)}
+.actions{display:flex;align-items:flex-end;gap:10px}
+button{height:40px;border:0;border-radius:12px;padding:0 16px;background:var(--accent);color:#fff;font-weight:700;cursor:pointer}
+button.secondary{background:#efe4d3;color:#5a3d1f}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:18px 0}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:16px 18px;box-shadow:0 10px 24px rgba(73,51,25,.06)}
+.stat .label{font-size:12px;color:var(--muted);margin-bottom:6px}
+.stat .value{font-size:24px;font-weight:800}
+.notice{margin-bottom:16px;padding:14px 16px;border-radius:18px;background:#fff7ea;border:1px solid #ead4b1;color:#70481a;line-height:1.6;font-size:13px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:18px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:24px;overflow:hidden;box-shadow:0 14px 32px rgba(73,51,25,.08);display:flex;flex-direction:column}
+.thumb-wrap{position:relative;background:linear-gradient(145deg,#efe3d3,#d9c0a0)}
+.thumb{width:100%;aspect-ratio:1/1;object-fit:cover;display:block}
+.thumb.empty{display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:18px;background:linear-gradient(145deg,#6e665d,#423a32)}
+.badge-row{position:absolute;left:12px;right:12px;top:12px;display:flex;gap:8px;flex-wrap:wrap}
+.badge{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;font-size:11px;font-weight:800;background:rgba(255,255,255,.9);color:#3d2c18}
+.badge.track-preserved{background:#f8ead2;color:#764813}
+.badge.track-live{background:#e3f3ea;color:#215a3a}
+.badge.track-compare{background:#e6ecff;color:#24427a}
+.badge.track-persona{background:#e8f7f2;color:#0f766e}
+.badge.track-failed{background:#fde7ea;color:#8c2f39}
+.body{padding:16px 16px 18px;display:flex;flex-direction:column;gap:10px}
+.title{font-size:17px;font-weight:800;line-height:1.35}
+.sub{font-size:13px;color:var(--muted);line-height:1.6;min-height:42px}
+.tag-row{display:flex;flex-wrap:wrap;gap:7px}
+.tag{display:inline-flex;align-items:center;padding:5px 8px;border-radius:999px;background:var(--accent-soft);color:#58381a;font-size:11px;font-weight:700}
+.tag.model{background:#efe2ff;color:#553384}
+.tag.provider{background:#dff4ff;color:#17526b}
+.tag.status.ok{background:#e3f3ea;color:var(--ok)}
+.tag.status.bad{background:#fde7ea;color:var(--bad)}
+.meta{font-size:12px;color:var(--muted)}
+.prompt-toggle{display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:800;color:#7a5430;cursor:pointer;padding:10px 12px;border-radius:14px;background:#f8f1e7}
+.prompt{display:none;padding:12px 14px;border-radius:16px;background:#f5efe7;color:#473a2c;font-size:12px;line-height:1.7;white-space:pre-wrap;word-break:break-word}
+.prompt.show{display:block}
+.empty-state{padding:80px 20px;text-align:center;color:var(--muted);font-size:16px}
+.footer-note{margin-top:20px;font-size:12px;color:var(--muted);text-align:right}
+.modal-backdrop{position:fixed;inset:0;background:rgba(18,14,10,.72);display:none;align-items:center;justify-content:center;padding:20px;z-index:1000}
+.modal-backdrop.show{display:flex}
+.modal{width:min(1100px,100%);max-height:92vh;overflow:auto;background:var(--panel);border-radius:28px;border:1px solid var(--line);box-shadow:0 30px 70px rgba(0,0,0,.28)}
+.modal img{width:100%;max-height:65vh;object-fit:contain;background:#111}
+.modal-body{padding:20px}
+.modal-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px}
+.modal-title{font-size:22px;font-weight:900}
+.modal-close{background:#eee1ce;color:#5a3d1f}
+.modal-prompt{padding:14px 16px;border-radius:18px;background:#f6efe6;font-size:13px;line-height:1.8;white-space:pre-wrap;word-break:break-word}
+@media (max-width:1100px){
+  .controls{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (max-width:720px){
+  .shell{padding:14px}
+  .hero{padding:22px 18px}
+  .hero h1{font-size:24px}
+  .controls{grid-template-columns:1fr}
+  .stats{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <section class="hero">
+    <h1>AI 모델 실시간 갤러리</h1>
+    <p>생성 이미지를 모델별로 바로 확인하고, 카드에서 한글 요약과 원본 생성 프롬프트를 함께 검토할 수 있습니다. 잘못 생성된 `Imagen 4.0` 초도 얼굴 시드는 `B안 보존본`으로 분리 보존합니다.</p>
+    <div class="hero-meta">
+      <span class="chip" id="chipTotal">전체 0건</span>
+      <span class="chip" id="chipSuccess">성공 0건</span>
+      <span class="chip" id="chipTrack">트랙 -</span>
+      <span class="chip" id="chipUpdated">갱신 대기</span>
+    </div>
+  </section>
+
+  <section class="controls">
+    <div class="field">
+      <label for="filterModel">모델</label>
+      <select id="filterModel"><option value="">전체 모델</option></select>
+    </div>
+    <div class="field">
+      <label for="filterPersona">페르소나</label>
+      <select id="filterPersona"><option value="">전체 페르소나</option></select>
+    </div>
+    <div class="field">
+      <label for="filterTrack">트랙</label>
+      <select id="filterTrack">
+        <option value="">전체 트랙</option>
+        <option value="persona">6명 페르소나 시드</option>
+        <option value="compare">A/C 비교 테스트</option>
+        <option value="preserved">B안 보존본</option>
+        <option value="live">정식 테스트/운영</option>
+        <option value="failed">실패/점검</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="filterStatus">상태</label>
+      <select id="filterStatus">
+        <option value="">전체 상태</option>
+        <option value="succeeded">성공</option>
+        <option value="failed">실패</option>
+        <option value="running">생성중</option>
+        <option value="pending">대기중</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="searchPrompt">프롬프트 검색</label>
+      <input id="searchPrompt" type="text" placeholder="헤어, 메이크업, 블라우스">
+    </div>
+    <div class="actions">
+      <button id="refreshBtn" type="button">새로고침</button>
+      <button class="secondary" id="toggleAutoBtn" type="button">자동갱신 ON</button>
+    </div>
+  </section>
+
+  <section class="stats">
+    <article class="stat"><div class="label">현재 필터 결과</div><div class="value" id="statFiltered">0</div></article>
+    <article class="stat"><div class="label">성공 이미지</div><div class="value" id="statSucceeded">0</div></article>
+    <article class="stat"><div class="label">B안 보존본</div><div class="value" id="statPreserved">0</div></article>
+    <article class="stat"><div class="label">실패/점검</div><div class="value" id="statFailed">0</div></article>
+  </section>
+
+  <div class="notice">실시간 API가 열려 있으면 `/api/v1/image/gallery`를 우선 사용합니다. 아직 API 반영 전이면 `manifest.json`으로 자동 폴백합니다.</div>
+
+  <section class="grid" id="gallery">
+    <div class="empty-state">갤러리 로딩 중입니다.</div>
+  </section>
+
+  <div class="footer-note">자동 새로고침 간격: 15초</div>
+</div>
+
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal">
+    <img id="modalImage" alt="">
+    <div class="modal-body">
+      <div class="modal-head">
+        <div>
+          <div class="modal-title" id="modalTitle"></div>
+          <div class="tag-row" id="modalTags" style="margin-top:10px"></div>
+        </div>
+        <button class="modal-close" id="modalClose" type="button">닫기</button>
+      </div>
+      <div class="meta" id="modalMeta" style="margin-bottom:14px"></div>
+      <div class="modal-prompt" id="modalPrompt"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_URL = "/api/v1/image/gallery?limit=120";
+const ASSET_BASE = location.pathname.includes("/gallery/") ? "" : "gallery/";
+const MANIFEST_URL = `${ASSET_BASE}manifest.json`;
+const AUTO_REFRESH_MS = 15000;
+const MODEL_LABELS = {
+  "imagen-4.0-generate-001": "Imagen 4.0",
+  "imagen-4.0-fast-generate-001": "Imagen 4 Fast",
+  "imagen-4.0-ultra-generate-001": "Imagen 4 Ultra",
+  "gemini-2.5-flash-image": "Nano Banana",
+  "gemini-3.1-flash-image-preview": "Nano Banana 2",
+  "gemini-3-pro-image-preview": "Nano Banana Pro",
+  "gemini-3.1-pro-image-preview": "Nano Banana Pro(구형 ID)",
+  "gpt-image-2": "GPT Image 2",
+};
+const PROVIDER_LABELS = {
+  google: "Google",
+  gemini: "Google Gemini",
+  openai: "OpenAI",
+};
+const STATUS_LABELS = {
+  succeeded: "성공",
+  failed: "실패",
+  running: "생성중",
+  pending: "대기중",
+};
+
+let allItems = [];
+let filteredItems = [];
+let autoRefresh = true;
+let autoTimer = null;
+
+function fmtDate(iso) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${y}-${m}-${day} ${hh}:${mm}`;
+}
+
+function modelLabel(modelId) {
+  return MODEL_LABELS[modelId] || modelId || "-";
+}
+
+function providerLabel(provider) {
+  return PROVIDER_LABELS[provider] || provider || "-";
+}
+
+function statusLabel(status) {
+  return STATUS_LABELS[status] || status || "-";
+}
+
+function extractPersona(prompt) {
+  if (!prompt) return "미지정";
+  if (/(Yoon Seo-?A|윤서아)/i.test(prompt)) return "윤서아";
+  if (/(Han Lua|한루아)/i.test(prompt)) return "한루아";
+  if (/(Kang Min-?chae|강민채)/i.test(prompt)) return "강민채";
+  if (/(Jung Ha-?rin|정하린)/i.test(prompt)) return "정하린";
+  if (/(Lee Do-?yeon|이도연)/i.test(prompt)) return "이도연";
+  if (/(Park Se-?rin|박세린)/i.test(prompt)) return "박세린";
+  if (/24-year-old Korean woman/i.test(prompt)) return "윤서아";
+  return "미지정";
+}
+
+function koreanSummary(prompt) {
+  if (!prompt) return "프롬프트 없음";
+  const parts = [];
+
+  if (/office minimal|workwear|startup brand manager|white silk blouse|white blouse|white shirt/i.test(prompt)) parts.push("오피스 미니멀");
+  else if (/street casual|hoodie|cropped knit|denim street/i.test(prompt)) parts.push("스트릿 캐주얼");
+  else if (/premium daily|trench coat|fine knit dress|rose beige/i.test(prompt)) parts.push("프리미엄 데일리");
+  else if (/feminine|date-look|lookbook|coral rose|A-line skirt/i.test(prompt)) parts.push("페미닌 룩북");
+  else if (/modern lifestyle|shirt dress|tote|beige rose/i.test(prompt)) parts.push("모던 라이프스타일");
+  else if (/late-teen new adult|entry casual|cardigan|Mary Jane/i.test(prompt)) parts.push("뉴어덜트 캐주얼");
+  else if (/white silk blouse|white blouse|white shirt/i.test(prompt)) parts.push("화이트 블라우스");
+  else if (/black turtleneck/i.test(prompt)) parts.push("블랙 터틀넥");
+  else if (/cream blazer|tailored cream blazer/i.test(prompt)) parts.push("크림 블레이저");
+  else if (/striped Breton/i.test(prompt)) parts.push("스트라이프 브르통 탑");
+  else if (/oatmeal|chunky cable-knit/i.test(prompt)) parts.push("오트밀 니트");
+  else if (/terracotta|rust-colored/i.test(prompt)) parts.push("테라코타 니트");
+  else if (/navy/i.test(prompt)) parts.push("네이비 톤");
+  else if (/beige/i.test(prompt)) parts.push("베이지 톤");
+  else parts.push("패션 포트레이트");
+
+  if (/neutral gray background/i.test(prompt)) parts.push("회색 배경");
+  else if (/studio/i.test(prompt)) parts.push("스튜디오");
+  else if (/cafe/i.test(prompt)) parts.push("카페");
+  else if (/outdoor|rooftop|street/i.test(prompt)) parts.push("야외");
+  else if (/window/i.test(prompt)) parts.push("자연광");
+
+  if (/MLBB/i.test(prompt)) parts.push("MLBB 메이크업");
+  else if (/clear rose lip/i.test(prompt)) parts.push("맑은 로즈립");
+  else if (/rose beige lip/i.test(prompt)) parts.push("로즈 베이지 립");
+  else if (/coral rose lip/i.test(prompt)) parts.push("코랄 로즈립");
+  else if (/beige rose lip/i.test(prompt)) parts.push("베이지 로즈립");
+  else if (/tinted rose lip/i.test(prompt)) parts.push("틴티드 로즈립");
+  if (/6:4 side part/i.test(prompt)) parts.push("6:4 가르마");
+  return parts.join(" · ");
+}
+
+function inferTrack(item) {
+  if (item.status !== "succeeded") return "failed";
+  if (item.model_id === "gemini-3.1-flash-image-preview" && /face seed candidate|페르소나|Persona:/i.test(item.prompt || "")) return "persona";
+  if (/품질 비교 테스트/.test(item.prompt || "")) return "compare";
+  if ((item.model_id || "").startsWith("imagen-4.0-")) return "preserved";
+  return "live";
+}
+
+function trackLabel(track) {
+  if (track === "persona") return "6명 페르소나 시드";
+  if (track === "compare") return "A/C 비교 테스트";
+  if (track === "preserved") return "B안 보존본";
+  if (track === "live") return "정식 테스트";
+  return "실패/점검";
+}
+
+function imageUrl(item) {
+  if (item.image_url) return item.image_url;
+  if (item.image_file) {
+    if (/^(https?:|data:|\/)/.test(item.image_file)) return item.image_file;
+    return `${ASSET_BASE}${item.image_file}`;
+  }
+  return "";
+}
+
+async function fetchGallery() {
+  const response = await fetch(`${API_URL}&t=${Date.now()}`);
+  if (!response.ok) throw new Error(`api_${response.status}`);
+  const payload = await response.json();
+  return {
+    source: "api",
+    items: (payload.items || []).map((item) => ({ ...item })),
+  };
+}
+
+async function fetchManifest() {
+  const response = await fetch(`${MANIFEST_URL}?t=${Date.now()}`);
+  if (!response.ok) throw new Error(`manifest_${response.status}`);
+  const payload = await response.json();
+  return {
+    source: "manifest",
+    items: (payload.items || []).map((item) => ({
+      ...item,
+      image_url: item.image_file || null,
+      has_image: Boolean(item.has_image),
+    })),
+  };
+}
+
+async function loadGallery() {
+  document.getElementById("gallery").innerHTML = "<div class='empty-state'>갤러리 로딩 중입니다.</div>";
+  try {
+    let payload;
+    try {
+      payload = await fetchGallery();
+    } catch (_err) {
+      payload = await fetchManifest();
+    }
+    allItems = payload.items.map((item) => ({
+      ...item,
+      persona: extractPersona(item.prompt),
+      summary: koreanSummary(item.prompt),
+      track: inferTrack(item),
+    }));
+    buildFilters();
+    applyFilters();
+    document.getElementById("chipUpdated").textContent = `마지막 갱신 ${fmtDate(new Date().toISOString())}`;
+    document.getElementById("chipTrack").textContent = `데이터 소스 ${payload.source === "api" ? "실시간 API" : "manifest 폴백"}`;
+  } catch (error) {
+    document.getElementById("gallery").innerHTML = "<div class='empty-state'>갤러리 데이터를 불러오지 못했습니다.</div>";
+    document.getElementById("chipUpdated").textContent = "갱신 실패";
+  }
+}
+
+function buildFilters() {
+  const modelSelect = document.getElementById("filterModel");
+  const personaSelect = document.getElementById("filterPersona");
+  const currentModel = modelSelect.value;
+  const currentPersona = personaSelect.value;
+  const models = [...new Set(allItems.map((item) => item.model_id).filter(Boolean))].sort();
+  const personas = [...new Set(allItems.map((item) => item.persona).filter(Boolean))].sort();
+  modelSelect.innerHTML = "<option value=''>전체 모델</option>";
+  personaSelect.innerHTML = "<option value=''>전체 페르소나</option>";
+  models.forEach((modelId) => {
+    const option = document.createElement("option");
+    option.value = modelId;
+    option.textContent = modelLabel(modelId);
+    modelSelect.appendChild(option);
+  });
+  personas.forEach((persona) => {
+    const option = document.createElement("option");
+    option.value = persona;
+    option.textContent = persona;
+    personaSelect.appendChild(option);
+  });
+  modelSelect.value = models.includes(currentModel) ? currentModel : "";
+  personaSelect.value = personas.includes(currentPersona) ? currentPersona : "";
+}
+
+function applyFilters() {
+  const modelValue = document.getElementById("filterModel").value;
+  const personaValue = document.getElementById("filterPersona").value;
+  const trackValue = document.getElementById("filterTrack").value;
+  const statusValue = document.getElementById("filterStatus").value;
+  const keyword = document.getElementById("searchPrompt").value.trim().toLowerCase();
+
+  filteredItems = allItems.filter((item) => {
+    if (modelValue && item.model_id !== modelValue) return false;
+    if (personaValue && item.persona !== personaValue) return false;
+    if (trackValue && item.track !== trackValue) return false;
+    if (statusValue && item.status !== statusValue) return false;
+    if (keyword && !`${item.prompt || ""} ${item.summary}`.toLowerCase().includes(keyword)) return false;
+    return true;
+  });
+
+  renderStats();
+  renderCards();
+}
+
+function renderStats() {
+  const succeeded = filteredItems.filter((item) => item.status === "succeeded").length;
+  const preserved = filteredItems.filter((item) => item.track === "preserved").length;
+  const failed = filteredItems.filter((item) => item.track === "failed").length;
+  const modelSummary = [...new Set(filteredItems.map((item) => modelLabel(item.model_id)))].join(", ") || "-";
+  document.getElementById("chipTotal").textContent = `전체 ${allItems.length}건`;
+  document.getElementById("chipSuccess").textContent = `성공 ${allItems.filter((item) => item.status === "succeeded").length}건`;
+  document.getElementById("statFiltered").textContent = String(filteredItems.length);
+  document.getElementById("statSucceeded").textContent = String(succeeded);
+  document.getElementById("statPreserved").textContent = String(preserved);
+  document.getElementById("statFailed").textContent = String(failed);
+  document.getElementById("chipTrack").textContent = `현재 모델 ${modelSummary}`;
+}
+
+function promptToggle(index) {
+  const node = document.getElementById(`prompt-${index}`);
+  if (!node) return;
+  node.classList.toggle("show");
+}
+
+function cardTemplate(item, index) {
+  const track = item.track;
+  const trackClass = track === "persona" ? "track-persona" : (track === "compare" ? "track-compare" : (track === "preserved" ? "track-preserved" : (track === "live" ? "track-live" : "track-failed")));
+  const statusClass = item.status === "succeeded" ? "ok" : "bad";
+  const thumbSrc = imageUrl(item);
+  const thumb = item.has_image && thumbSrc
+    ? `<img class="thumb" src="${thumbSrc}" alt="${item.persona}" loading="lazy">`
+    : `<div class="thumb empty">${statusLabel(item.status)}</div>`;
+  return `
+    <article class="card">
+      <div class="thumb-wrap" role="button" tabindex="0" onclick="openModal(${index})" onkeypress="if(event.key==='Enter'){openModal(${index})}">
+        ${thumb}
+        <div class="badge-row">
+          <span class="badge ${trackClass}">${trackLabel(track)}</span>
+          <span class="badge">#${item.id ?? "-"}</span>
+        </div>
+      </div>
+      <div class="body">
+        <div class="title">${item.persona} · ${item.summary}</div>
+        <div class="sub">${modelLabel(item.model_id)} · ${providerLabel(item.provider)} · ${statusLabel(item.status)}</div>
+        <div class="tag-row">
+          <span class="tag model">${modelLabel(item.model_id)}</span>
+          <span class="tag provider">${providerLabel(item.provider)}</span>
+          <span class="tag status ${statusClass}">${statusLabel(item.status)}</span>
+        </div>
+        <div class="meta">생성시각 ${fmtDate(item.completed_at || item.created_at)}</div>
+        <div class="prompt-toggle" onclick="promptToggle(${index})">
+          <span>생성 프롬프트 보기</span>
+          <span>▾</span>
+        </div>
+        <div class="prompt" id="prompt-${index}">${escapeHtml(item.prompt || "프롬프트 없음")}</div>
+      </div>
+    </article>
+  `;
+}
+
+function renderCards() {
+  const gallery = document.getElementById("gallery");
+  if (!filteredItems.length) {
+    gallery.innerHTML = "<div class='empty-state'>조건에 맞는 이미지가 없습니다.</div>";
+    return;
+  }
+  gallery.innerHTML = filteredItems.map((item, index) => cardTemplate(item, index)).join("");
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function openModal(index) {
+  const item = filteredItems[index];
+  if (!item) return;
+  document.getElementById("modalTitle").textContent = `${item.persona} · ${item.summary}`;
+  document.getElementById("modalMeta").textContent = `모델 ${modelLabel(item.model_id)} · 상태 ${statusLabel(item.status)} · 생성 ${fmtDate(item.completed_at || item.created_at)}`;
+  document.getElementById("modalPrompt").textContent = item.prompt || "프롬프트 없음";
+  document.getElementById("modalTags").innerHTML = [
+    `<span class="tag model">${modelLabel(item.model_id)}</span>`,
+    `<span class="tag provider">${providerLabel(item.provider)}</span>`,
+    `<span class="tag">${trackLabel(item.track)}</span>`,
+    `<span class="tag">#${item.id ?? "-"}</span>`,
+  ].join("");
+  const modalImage = document.getElementById("modalImage");
+  if (item.has_image && imageUrl(item)) {
+    modalImage.src = imageUrl(item);
+    modalImage.style.display = "block";
+  } else {
+    modalImage.removeAttribute("src");
+    modalImage.style.display = "none";
+  }
+  document.getElementById("modalBackdrop").classList.add("show");
+}
+
+function closeModal() {
+  document.getElementById("modalBackdrop").classList.remove("show");
+}
+
+function syncAutoRefreshButton() {
+  const button = document.getElementById("toggleAutoBtn");
+  button.textContent = autoRefresh ? "자동갱신 ON" : "자동갱신 OFF";
+}
+
+function setAutoRefresh(enabled) {
+  autoRefresh = enabled;
+  if (autoTimer) clearInterval(autoTimer);
+  if (enabled) {
+    autoTimer = setInterval(() => {
+      loadGallery();
+    }, AUTO_REFRESH_MS);
+  }
+  syncAutoRefreshButton();
+}
+
+document.getElementById("refreshBtn").addEventListener("click", loadGallery);
+document.getElementById("toggleAutoBtn").addEventListener("click", () => setAutoRefresh(!autoRefresh));
+document.getElementById("filterModel").addEventListener("change", applyFilters);
+document.getElementById("filterPersona").addEventListener("change", applyFilters);
+document.getElementById("filterTrack").addEventListener("change", applyFilters);
+document.getElementById("filterStatus").addEventListener("change", applyFilters);
+document.getElementById("searchPrompt").addEventListener("input", applyFilters);
+document.getElementById("modalClose").addEventListener("click", closeModal);
+document.getElementById("modalBackdrop").addEventListener("click", (event) => {
+  if (event.target.id === "modalBackdrop") closeModal();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeModal();
+});
+
+setAutoRefresh(true);
+loadGallery();
+</script>
+</body>
+</html>
