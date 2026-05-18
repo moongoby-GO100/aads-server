@@ -5,7 +5,7 @@
 - 원인: 대시보드 배포는 서버 compose(`/root/aads/aads-server/docker-compose.prod.yml`)를 canonical로 사용하지만, 과거 `/root/aads/aads-dashboard/docker-compose.yml` 경로의 잔여 컨테이너가 있으면 standby 재빌드 단계에서 컨테이너명 충돌 가능성이 있었다. 또한 `UNKNOWN` QA 결과를 성공처럼 기록하는 보고 오류가 있었다.
 - 조치: `/root/aads/aads-dashboard/deploy.sh`에 배포 lock(`/tmp/aads-dashboard-deploy.lock`), 외부 compose 잔여 컨테이너 정리, `AADS_RELEASE_SHA` 주입/검증, QA `UNKNOWN` 미통과 처리를 추가했다. `docker-compose.prod.yml`의 dashboard blue/green 서비스에도 `AADS_RELEASE_SHA` env를 추가했다.
 - 조치: `scripts/deploy_dashboard.sh`, `scripts/dashboard-rebuild.sh`는 direct compose rebuild를 중단하고 canonical `/root/aads/aads-dashboard/deploy.sh`로만 연결하도록 변경했다. 서버 `deploy.sh`도 프론트 QA `UNKNOWN`을 전체 검증 통과로 표현하지 않고 `frontend_qa=unknown_non_blocking`으로 분리 보고한다.
-- 검증: `bash -n deploy.sh`, `bash -n /root/aads/aads-dashboard/deploy.sh`, `bash -n scripts/deploy_dashboard.sh`, `bash -n scripts/dashboard-rebuild.sh`, `docker compose -f docker-compose.prod.yml config --quiet`, `nginx -t` 통과. 실제 `bash /root/aads/aads-dashboard/deploy.sh` 실행 결과 green 전환, 외부 `/login` 200, standby blue 재빌드, 양 슬롯 release `a74390a85969` 확인. QA API는 `UNKNOWN`을 반환해 통과가 아니라 미확정으로 기록했다.
+- 검증: `bash -n deploy.sh`, `bash -n /root/aads/aads-dashboard/deploy.sh`, `bash -n scripts/deploy_dashboard.sh`, `bash -n scripts/dashboard-rebuild.sh`, `docker compose -f docker-compose.prod.yml config --quiet`, `nginx -t` 통과. 실제 `bash /root/aads/aads-dashboard/deploy.sh` 실행 결과 green 전환, 외부 `/login` 200, standby blue 재빌드, 커밋/푸시 후 재배포까지 수행해 양 슬롯 release `f2e3b4c56b88` 확인. QA API는 `UNKNOWN`을 반환해 통과가 아니라 미확정으로 기록했다.
 - 주의: QA API가 `UNKNOWN`을 반환하는 원인은 별도 개선 대상이다. 이번 조치 범위는 배포/전환/standby 동기화와 오보고 방지다.
 
 ## 현재 진행 상태 (2026-05-16 08:28 KST) - Kimi K2.6/DeepSeek V4 Pro 적용 및 BG 배포 중단 원인 보강
