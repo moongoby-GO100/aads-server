@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-18 16:24 KST) - 채팅 끊김/무중단 배포 active 재시작 차단
+- 배경: CEO가 채팅 응답이 중간에 끊기고, 무중단 배포가 되어야 하는데 왜 실제 스트림이 끊기는지 원인 확인과 즉시 조치를 요청했다.
+- 원인: `deploy.sh code` 경로에 active stream이 0으로 측정되면 active API 슬롯을 직접 graceful restart하는 레거시 분기가 남아 있었다. 이 경로가 실행되면 blue-green 전환이 아니라 현재 연결된 SSE/채팅 스트림이 붙은 API 프로세스가 stop/SIGKILL 대상이 되어 응답이 끊길 수 있다.
+- 추가 원인: chat recovery/status 경로 중 stale execution/orphan placeholder 정리 SQL이 중단 응답을 `intent=NULL, model_used='interrupted'`로 바꿔 일반 assistant 버블처럼 노출했다. 이 때문에 실제 완료 답변이 아닌 partial이 채팅창에 남거나, 복구 과정에서 중복/사라짐처럼 보일 수 있었다.
+- 조치: `deploy.sh code`에서 active API 직접 재시작 분기를 차단하고, active_streams 값과 무관하게 peer slot 전환만 허용하도록 변경했다. peer slot을 찾지 못하면 배포를 중단한다.
+- 조치: `app/routers/chat.py`, `app/services/chat_service.py`에서 interrupted partial을 `intent='interrupted_partial'`로 유지하도록 보정했다. 기존 DB의 visible `model_used='interrupted' AND intent IS NULL` 13건도 숨김 intent로 보정했다.
+- 검증/배포: 커밋 `54ae3e1 fix: hide interrupted partials and prevent active API restarts` 생성 및 `origin/main` push 확인. active API는 `8102(aads-server-green)`으로 전환됐고, `https://aads.newtalk.kr/api/v1/health`는 `status=ok`를 반환한다. DB visible interrupted null은 0건 확인.
+- 주의: 워크트리에는 이번 장애 조치와 무관한 기존 미커밋 파일들이 다수 남아 있다. 후속 커밋 시 관련 파일만 분리 스테이징해야 한다.
+
 ## 현재 진행 상태 (2026-05-18 16:06 KST) - 채팅 응답 사라짐/과거 partial 노출 재발 방지
 - 배경: CEO가 채팅창에서 응답이 사라지고 이전에 조치했던 partial/중단 버블 문제가 반복 재발한다고 보고했다.
 - 원인: 기존 개선은 `_mark_execution_interrupted()` 경로에는 적용됐지만, 새 응답 시작 전 stale `streaming_placeholder` 정리 경로와 resume task callback 경로가 별도 SQL로 남아 공통 중단 처리 함수를 우회했다. 이 때문에 일부 partial이 `intent=NULL, model_used='interrupted'`로 visible assistant 버블이 되거나, placeholder가 있으면 fallback INSERT가 생략되는 경합이 남았다.
