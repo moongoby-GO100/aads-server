@@ -1209,3 +1209,10 @@
 - 데이터 보정: 대상 실행 `53241773-856d-48de-bbf7-dfa4085c9643`에 fallback assistant `2dfd93b3-5929-4c33-91e2-084c8c90cc8d`를 연결해 새로고침 후 빈 응답으로 남지 않게 했다.
 - 검증: `python3 -m py_compile app/main.py app/services/chat_service.py` 통과. `bash deploy.sh bluegreen`으로 API active를 `8102 → 8100` 전환했고 health/DB schema/chat table/LLM 검증이 통과했다. active 컨테이너 내부 코드에서 fallback 문자열 반영을 확인했다.
 - 주의: 이 조치는 “응답 0건으로 사라짐” 방지용 P0 가드다. 프론트의 local placeholder/DB placeholder 경합 자체는 대시보드 `src/app/chat/page.tsx`의 별도 경로로 계속 관리해야 한다.
+
+## 2026-05-18 15:21 KST - Chat resume dependency conflict guard
+
+- 배경: 이전 개선안이 이미 반영됐는데도 중단/복구 시 응답 버블이 사라지거나 2개처럼 보이는 재발 원인을 재검수했다.
+- 원인: `interrupted_partial`는 과거 partial 숨김용 intent인데, 프론트가 현재 진행 중인 placeholder도 30초 타임아웃 시 같은 intent로 바꿔 숨김 필터와 충돌했다. 또한 resume scanner가 메모리 `_streaming_state`가 남아 있으면 stale 여부와 무관하게 DB running 회수를 건너뛰어 오래된 실행이 계속 running으로 남을 수 있었다.
+- 조치: `app/main.py`에서 `_streaming_state` skip 조건을 stale-aware로 바꿔 최근 갱신 상태만 보호하고, 오래된 메모리 상태는 회수 가능하게 했다.
+- 검증: `python3 -m py_compile app/main.py` 통과. 대시보드 대응 패치는 `/root/aads/aads-dashboard/src/app/chat/page.tsx`에서 현재 partial을 숨김 intent가 아닌 visible interrupted bubble로 보존하도록 반영했다.

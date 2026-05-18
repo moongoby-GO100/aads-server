@@ -829,6 +829,7 @@ async def lifespan(app: FastAPI):
                 pass
 
     import asyncio as _startup_asyncio
+    import time as _resume_time
     _startup_asyncio.create_task(_periodic_placeholder_cleanup())
 
     # execution_id 기반 미완료 응답 자동 재개
@@ -958,8 +959,26 @@ async def lifespan(app: FastAPI):
                     execution_id = row["execution_id"]
                     if sid in _abt_exec and not _abt_exec[sid].done():
                         continue
-                    if sid in _ss_exec and not _ss_exec[sid].get("completed"):
-                        continue
+                    _live_state = _ss_exec.get(sid)
+                    if _live_state and not _live_state.get("completed"):
+                        _state_updated_at = float(
+                            _live_state.get("updated_at")
+                            or _live_state.get("started_at")
+                            or 0
+                        )
+                        _state_age_sec = (
+                            _resume_time.monotonic() - _state_updated_at
+                            if _state_updated_at > 0
+                            else 999999
+                        )
+                        if _state_age_sec < max(30, min_stale_seconds):
+                            continue
+                        logger.warning(
+                            "execution_resume_reclaim_stale_memory_state: session=%s execution=%s state_age=%.1fs",
+                            sid[:8],
+                            execution_id[:8],
+                            _state_age_sec,
+                        )
                     _stale_sec = int(row["stale_seconds"] or 0)
                     if _stale_sec > 600:
                         await _mei_exec(
