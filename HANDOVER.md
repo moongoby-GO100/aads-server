@@ -1233,3 +1233,13 @@
 - 데이터 보정: 최근 24시간 `interrupted` 실행 중 assistant row가 0건이던 7건에 visible fallback assistant를 삽입하고 `assistant_message_id`를 연결했다. 사용자 직접 중지(`stopped by user`) 1건은 의도 중지로 남겼다.
 - 검증: `python3 -m py_compile app/main.py app/services/chat_service.py` 통과. active 컨테이너 내부 `/app/app/main.py`, `/app/app/services/chat_service.py`에서 `resume_task_cancelled`, `interrupted_partial`, `superseded while preserving partial response` 반영 확인. DB 기준 사용자 중지가 아닌 최근 24시간 `interrupted AND assistant_message_id IS NULL`은 0건이다.
 - 주의: 작업트리에는 갤러리/모델/NGINX 관련 기존 미커밋 변경이 남아 있으며, 이번 채팅 복구 패치와 무관하므로 건드리지 않았다.
+
+## 2026-05-18 16:25 KST - Chat interrupted partial visibility and active restart guard
+
+- 배경: 세션 `aa433b41-0ad2-421c-ae7c-bac4806035cc`에서 응답이 오래 이어지다 완료 답변으로 닫히지 않고, 과거 partial 응답이 새 assistant 버블처럼 보이는 현상이 재발했다.
+- 원인: `app/routers/chat.py`의 streaming-status/recovery 경로가 stale `streaming_placeholder`를 `intent=NULL, model_used='interrupted'`로 바꿔 일반 assistant처럼 노출했다. 또한 `deploy.sh code`에는 active stream count가 0으로 보이면 active API를 직접 재시작하는 레거시 경로가 남아 있어 SSE 연결을 끊을 수 있었다.
+- 조치: `app/routers/chat.py`의 stale execution/orphan placeholder surface 경로를 `intent='interrupted_partial'`로 고정했다. `app/services/chat_service.py`의 `_mark_execution_interrupted()` fallback insert도 `interrupted_partial` intent를 기록하게 바꿨다. `deploy.sh code`는 active stream 여부와 무관하게 peer slot 전환만 허용하고, peer slot이 없으면 active 직접 재시작을 차단한다.
+- 데이터 보정: `role='assistant' AND model_used='interrupted' AND intent IS NULL` 13건을 `interrupted_partial`로 정리했고, 배포 직후 구버전 active가 다시 만든 1건도 추가 보정했다. 최종 DB 기준 visible interrupted null은 0건이다.
+- 배포/커밋: `bash deploy.sh bluegreen`으로 active API를 `8100 → 8102` 전환했다. commit `54ae3e1 fix: hide interrupted partials and prevent active API restarts`를 `origin/main`에 푸시했다.
+- 검증: `python3 -m py_compile app/routers/chat.py app/services/chat_service.py`, `bash -n deploy.sh`, 컨테이너 내부 `python -m py_compile /app/app/routers/chat.py /app/app/services/chat_service.py` 통과. `https://aads.newtalk.kr/api/v1/health` OK, active port file `8102`, DB 기준 `visible_interrupted_null=0`, `hidden_interrupted_partial=347` 확인.
+- 주의: 작업트리에는 `.active_port/.active_container`, 모델/갤러리/NGINX 관련 기존 미커밋 변경이 남아 있으며 이번 채팅 복구 커밋에는 포함하지 않았다.
