@@ -1096,39 +1096,27 @@ async def lifespan(app: FastAPI):
                             async def _sync_cancelled_status():
                                 try:
                                     async with _gp_exec().acquire() as _c:
-                                        _fb_id = await _c.fetchval(
+                                        _ph = await _c.fetchrow(
                                             """
-                                            INSERT INTO chat_messages (
-                                                session_id, execution_id, role, content, model_used, tools_called
-                                            )
-                                            SELECT $1::uuid, $2::uuid, 'assistant', $3, 'interrupted', '[]'::jsonb
-                                            WHERE NOT EXISTS (
-                                                SELECT 1
-                                                FROM chat_messages
-                                                WHERE execution_id = $2::uuid
-                                                  AND role = 'assistant'
-                                            )
-                                            RETURNING id
+                                            SELECT id::text AS id, content
+                                            FROM chat_messages
+                                            WHERE execution_id = $1::uuid
+                                              AND intent = 'streaming_placeholder'
+                                            ORDER BY created_at DESC
+                                            LIMIT 1
                                             """,
+                                            _eid,
+                                        )
+                                        _partial = (_ph["content"] if _ph else "") or ""
+                                        await _mei_exec(
+                                            _c,
                                             _sid,
                                             _eid,
-                                            "⚠️ _응답 복구 작업이 중단되어 최종 응답을 만들지 못했습니다. 같은 질문으로 다시 이어서 처리할 수 있습니다._",
+                                            "resume_task_cancelled",
+                                            partial_content=_partial,
+                                            placeholder_id=_ph["id"] if _ph else None,
+                                            delete_empty_placeholder=not bool(_strip_streaming_progress_markers_exec(_partial).strip()),
                                         )
-                                        await _c.execute(
-                                            "UPDATE chat_turn_executions SET status = 'interrupted', "
-                                            "assistant_message_id = COALESCE(assistant_message_id, $2), "
-                                            "error_message = 'resume_task_cancelled', "
-                                            "completed_at = COALESCE(completed_at, NOW()), "
-                                            "updated_at = NOW() WHERE id = $1::uuid AND status NOT IN ('completed', 'interrupted')",
-                                            _eid, _fb_id,
-                                        )
-                                        if _fb_id:
-                                            await _c.execute(
-                                                "UPDATE chat_sessions SET message_count = message_count + 1, "
-                                                "current_execution_id = NULL, updated_at = NOW() "
-                                                "WHERE id = $1::uuid AND current_execution_id = $2::uuid",
-                                                _sid, _eid,
-                                            )
                                 except Exception:
                                     pass
                             _startup_asyncio.ensure_future(_sync_cancelled_status())
@@ -1139,38 +1127,27 @@ async def lifespan(app: FastAPI):
                             async def _sync_exec_status():
                                 try:
                                     async with _gp_exec().acquire() as _c:
-                                        _fb_id = await _c.fetchval(
+                                        _ph = await _c.fetchrow(
                                             """
-                                            INSERT INTO chat_messages (
-                                                session_id, execution_id, role, content, model_used, tools_called
-                                            )
-                                            SELECT $1::uuid, $2::uuid, 'assistant', $3, 'interrupted', '[]'::jsonb
-                                            WHERE NOT EXISTS (
-                                                SELECT 1
-                                                FROM chat_messages
-                                                WHERE execution_id = $2::uuid
-                                                  AND role = 'assistant'
-                                            )
-                                            RETURNING id
+                                            SELECT id::text AS id, content
+                                            FROM chat_messages
+                                            WHERE execution_id = $1::uuid
+                                              AND intent = 'streaming_placeholder'
+                                            ORDER BY created_at DESC
+                                            LIMIT 1
                                             """,
+                                            _eid,
+                                        )
+                                        _partial = (_ph["content"] if _ph else "") or ""
+                                        await _mei_exec(
+                                            _c,
                                             _sid,
                                             _eid,
-                                            "⚠️ _응답 복구 작업이 오류로 중단되어 최종 응답을 만들지 못했습니다. 같은 질문으로 다시 이어서 처리할 수 있습니다._",
+                                            f"task_escaped: {str(_exc)[:400]}",
+                                            partial_content=_partial,
+                                            placeholder_id=_ph["id"] if _ph else None,
+                                            delete_empty_placeholder=not bool(_strip_streaming_progress_markers_exec(_partial).strip()),
                                         )
-                                        await _c.execute(
-                                            "UPDATE chat_turn_executions SET status = 'interrupted', "
-                                            "assistant_message_id = COALESCE(assistant_message_id, $2), "
-                                            "error_message = $3, completed_at = COALESCE(completed_at, NOW()), "
-                                            "updated_at = NOW() WHERE id = $1::uuid AND status NOT IN ('completed', 'interrupted')",
-                                            _eid, _fb_id, f"task_escaped: {str(_exc)[:400]}",
-                                        )
-                                        if _fb_id:
-                                            await _c.execute(
-                                                "UPDATE chat_sessions SET message_count = message_count + 1, "
-                                                "current_execution_id = NULL, updated_at = NOW() "
-                                                "WHERE id = $1::uuid AND current_execution_id = $2::uuid",
-                                                _sid, _eid,
-                                            )
                                 except Exception:
                                     pass
                             _startup_asyncio.ensure_future(_sync_exec_status())

@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-18 16:06 KST) - 채팅 응답 사라짐/과거 partial 노출 재발 방지
+- 배경: CEO가 채팅창에서 응답이 사라지고 이전에 조치했던 partial/중단 버블 문제가 반복 재발한다고 보고했다.
+- 원인: 기존 개선은 `_mark_execution_interrupted()` 경로에는 적용됐지만, 새 응답 시작 전 stale `streaming_placeholder` 정리 경로와 resume task callback 경로가 별도 SQL로 남아 공통 중단 처리 함수를 우회했다. 이 때문에 일부 partial이 `intent=NULL, model_used='interrupted'`로 visible assistant 버블이 되거나, placeholder가 있으면 fallback INSERT가 생략되는 경합이 남았다.
+- 조치: `app/services/chat_service.py`에서 stale placeholder 정리를 `_mark_execution_interrupted()`로 통합하고, execution 없는 legacy placeholder도 `interrupted_partial`로 숨긴 뒤 별도 visible fallback 안내만 남기도록 변경했다. `app/main.py`의 resume task cancelled/escaped callback도 직접 INSERT 대신 `_mark_execution_interrupted()`를 호출하도록 변경했다.
+- DB 보정: `model_used='interrupted' AND intent IS NULL`이면서 경고문이 아닌 visible partial 8건을 `intent='interrupted_partial'`로 보정했다. 보정 후 visible partial 0건, stale streaming placeholder 0건 확인.
+- 검증/배포: `python3 -m py_compile app/services/chat_service.py app/main.py` 통과. `bash /root/aads/aads-server/deploy.sh bluegreen`으로 API active를 `8100(aads-server)`로 전환했고 `/health` OK, active/standby 컨테이너 코드 반영을 확인했다.
+- 주의: 이번 조치 파일은 `app/main.py`, `app/services/chat_service.py`이며, 워크트리에는 이번 작업과 무관한 기존 미커밋 파일들이 다수 남아 있다.
+
 ## 현재 진행 상태 (2026-05-18 11:19 KST) - Dashboard BG 배포/standby 동기화 보강
 - 배경: CEO가 코드 수정 후 UI 반영까지 blue-green 무중단 배포와 전환 후 BG 자동동기화가 정상 작동하지 않는 부분을 전수 검수하고 개선 조치하라고 지시했다.
 - 원인: 대시보드 배포는 서버 compose(`/root/aads/aads-server/docker-compose.prod.yml`)를 canonical로 사용하지만, 과거 `/root/aads/aads-dashboard/docker-compose.yml` 경로의 잔여 컨테이너가 있으면 standby 재빌드 단계에서 컨테이너명 충돌 가능성이 있었다. 또한 `UNKNOWN` QA 결과를 성공처럼 기록하는 보고 오류가 있었다.

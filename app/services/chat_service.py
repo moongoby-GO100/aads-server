@@ -1120,7 +1120,7 @@ async def _mark_execution_interrupted(
                 """
                 UPDATE chat_messages
                 SET content = $1,
-                    intent = NULL,
+                    intent = 'interrupted_partial',
                     model_used = 'interrupted',
                     edited_at = NOW()
                 WHERE id = $2
@@ -1128,6 +1128,7 @@ async def _mark_execution_interrupted(
                 final_content,
                 pid,
             )
+            assistant_message_id = None
         elif delete_empty_placeholder:
             await conn.execute("DELETE FROM chat_messages WHERE id = $1", pid)
             assistant_message_id = None
@@ -1136,7 +1137,7 @@ async def _mark_execution_interrupted(
                 """
                 UPDATE chat_messages
                 SET content = $1,
-                    intent = NULL,
+                    intent = 'interrupted_partial',
                     model_used = 'interrupted',
                     edited_at = NOW()
                 WHERE id = $2
@@ -1144,6 +1145,7 @@ async def _mark_execution_interrupted(
                 "⚠️ _응답 생성이 중단되었습니다. 최신 지시를 다시 처리할 수 있습니다._",
                 pid,
             )
+            assistant_message_id = None
 
     if assistant_message_id is None and "superseded_by_newer_user" not in reason:
         fallback_content = (
@@ -1159,6 +1161,7 @@ async def _mark_execution_interrupted(
                 FROM chat_messages
                 WHERE execution_id = $2
                   AND role = 'assistant'
+                  AND intent IS DISTINCT FROM 'interrupted_partial'
             )
             RETURNING id
             """,
@@ -1969,7 +1972,21 @@ async def with_background_completion(
             for _ph in _stale_placeholders:
                 _clean = _strip_streaming_progress_markers(_ph["content"] or "")
                 _ph_execution_id = _ph["execution_id"]
-                if _clean:
+                if _ph_execution_id:
+                    await _mark_execution_interrupted(
+                        _conn,
+                        session_id,
+                        str(_ph_execution_id),
+                        "superseded while preserving partial response",
+                        partial_content=_clean,
+                        placeholder_id=str(_ph["id"]),
+                        delete_empty_placeholder=not bool(_clean),
+                    )
+                    if _clean:
+                        _preserved_count += 1
+                    else:
+                        _deleted_count += 1
+                elif _clean:
                     _final = (
                         _clean
                         if "최신 지시를 우선 처리" in _clean or "응답 생성이 중단" in _clean
@@ -1979,7 +1996,7 @@ async def with_background_completion(
                         """
                         UPDATE chat_messages
                         SET content = $1,
-                            intent = NULL,
+                            intent = 'interrupted_partial',
                             model_used = 'interrupted',
                             edited_at = NOW()
                         WHERE id = $2
@@ -1987,32 +2004,13 @@ async def with_background_completion(
                         _final,
                         _ph["id"],
                     )
-                    if _ph_execution_id:
-                        await _conn.execute(
-                            """
-                            UPDATE chat_turn_executions
-                            SET status = 'interrupted',
-                                assistant_message_id = COALESCE(assistant_message_id, $2),
-                                completed_at = COALESCE(completed_at, NOW()),
-                                updated_at = NOW(),
-                                error_message = COALESCE(error_message, 'superseded while preserving partial response')
-                            WHERE id = $1
-                              AND status IN ('running', 'retrying')
-                            """,
-                            _ph_execution_id,
-                            _ph["id"],
-                        )
-                        await _conn.execute(
-                            """
-                            UPDATE chat_sessions
-                            SET current_execution_id = NULL,
-                                updated_at = NOW()
-                            WHERE id = $1
-                              AND current_execution_id = $2
-                            """,
-                            uuid.UUID(session_id),
-                            _ph_execution_id,
-                        )
+                    await _save_message(
+                        _conn,
+                        uuid.UUID(session_id),
+                        "assistant",
+                        "⚠️ _이전 응답이 중단되어 최종 응답을 만들지 못했습니다. 같은 질문으로 다시 이어서 처리할 수 있습니다._",
+                        model_used="interrupted",
+                    )
                     _preserved_count += 1
                 else:
                     await _conn.execute("DELETE FROM chat_messages WHERE id = $1", _ph["id"])
