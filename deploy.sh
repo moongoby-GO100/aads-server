@@ -778,6 +778,7 @@ fi
 
 # ── Phase 6: 프론트엔드 QA (non-blocking) ──
 echo "[deploy.sh] Phase 6: 프론트엔드 QA 검사..."
+FRONTEND_QA_STATUS="skipped"
 CHANGED_FILES=$(git -C "$COMPOSE_DIR" diff HEAD~1 --name-only 2>/dev/null || echo "")
 if echo "$CHANGED_FILES" | grep -q "aads-dashboard/"; then
     echo "[deploy.sh] Phase 6: 대시보드 변경 감지 — Next.js 빌드 대기 (20초)..."
@@ -787,6 +788,7 @@ if echo "$CHANGED_FILES" | grep -q "aads-dashboard/"; then
         -d '{"pages": ["/", "/chat", "/ops"]}' 2>/dev/null) || QA_RESPONSE=""
     if [[ -z "$QA_RESPONSE" ]]; then
         echo "[deploy.sh] ⚠️ Phase 6: QA API 응답 없음 — 스킵 (non-blocking)"
+        FRONTEND_QA_STATUS="no_response"
     else
         QA_VERDICT=$(echo "$QA_RESPONSE" | python3 -c "
 import sys, json
@@ -799,16 +801,19 @@ except:
         if [[ "$QA_VERDICT" == "FAIL" ]]; then
             echo "[deploy.sh] ⚠️ Phase 6: ❌ 프론트 QA 실패 (non-blocking)"
             notify "❌ 프론트 QA 실패 — 확인 필요 (non-blocking)"
+            FRONTEND_QA_STATUS="failed_non_blocking"
         elif [[ "$QA_VERDICT" == "PASS" ]]; then
             echo "[deploy.sh] Phase 6: ✅ 프론트 QA 통과"
+            FRONTEND_QA_STATUS="passed"
         else
-            echo "[deploy.sh] ⚠️ Phase 6: QA 결과 불명 (verdict=${QA_VERDICT}) — 스킵"
+            echo "[deploy.sh] ⚠️ Phase 6: QA 결과 불명 (verdict=${QA_VERDICT}) — 통과로 간주하지 않음"
+            FRONTEND_QA_STATUS="unknown_non_blocking"
         fi
     fi
 else
     echo "[deploy.sh] Phase 6: 프론트 변경 없음 — QA 스킵"
 fi
 
-echo "[deploy.sh] ✅ 배포 완료 — 6단계 검증 통과 (mode=${MODE})"
-notify "✅ 배포 완료 — 6단계 검증 통과 (mode=${MODE})"
+echo "[deploy.sh] ✅ 배포 완료 — 필수 검증 통과 (mode=${MODE}, frontend_qa=${FRONTEND_QA_STATUS})"
+notify "✅ 배포 완료 — 필수 검증 통과 (mode=${MODE}, frontend_qa=${FRONTEND_QA_STATUS})"
 exit 0

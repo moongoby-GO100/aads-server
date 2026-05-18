@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-18 11:19 KST) - Dashboard BG 배포/standby 동기화 보강
+- 배경: CEO가 코드 수정 후 UI 반영까지 blue-green 무중단 배포와 전환 후 BG 자동동기화가 정상 작동하지 않는 부분을 전수 검수하고 개선 조치하라고 지시했다.
+- 원인: 대시보드 배포는 서버 compose(`/root/aads/aads-server/docker-compose.prod.yml`)를 canonical로 사용하지만, 과거 `/root/aads/aads-dashboard/docker-compose.yml` 경로의 잔여 컨테이너가 있으면 standby 재빌드 단계에서 컨테이너명 충돌 가능성이 있었다. 또한 `UNKNOWN` QA 결과를 성공처럼 기록하는 보고 오류가 있었다.
+- 조치: `/root/aads/aads-dashboard/deploy.sh`에 배포 lock(`/tmp/aads-dashboard-deploy.lock`), 외부 compose 잔여 컨테이너 정리, `AADS_RELEASE_SHA` 주입/검증, QA `UNKNOWN` 미통과 처리를 추가했다. `docker-compose.prod.yml`의 dashboard blue/green 서비스에도 `AADS_RELEASE_SHA` env를 추가했다.
+- 조치: `scripts/deploy_dashboard.sh`, `scripts/dashboard-rebuild.sh`는 direct compose rebuild를 중단하고 canonical `/root/aads/aads-dashboard/deploy.sh`로만 연결하도록 변경했다. 서버 `deploy.sh`도 프론트 QA `UNKNOWN`을 전체 검증 통과로 표현하지 않고 `frontend_qa=unknown_non_blocking`으로 분리 보고한다.
+- 검증: `bash -n deploy.sh`, `bash -n /root/aads/aads-dashboard/deploy.sh`, `bash -n scripts/deploy_dashboard.sh`, `bash -n scripts/dashboard-rebuild.sh`, `docker compose -f docker-compose.prod.yml config --quiet`, `nginx -t` 통과. 실제 `bash /root/aads/aads-dashboard/deploy.sh` 실행 결과 green 전환, 외부 `/login` 200, standby blue 재빌드, 양 슬롯 release `a74390a85969` 확인. QA API는 `UNKNOWN`을 반환해 통과가 아니라 미확정으로 기록했다.
+- 주의: QA API가 `UNKNOWN`을 반환하는 원인은 별도 개선 대상이다. 이번 조치 범위는 배포/전환/standby 동기화와 오보고 방지다.
+
 ## 현재 진행 상태 (2026-05-16 08:28 KST) - Kimi K2.6/DeepSeek V4 Pro 적용 및 BG 배포 중단 원인 보강
 - 배경: CEO가 Kimi K2.6 채팅 연결, DeepSeek V4 Pro 러너 공식 ID 통일, L/XL 비교, 그리고 blue-green 중 API가 끊긴 원인 확인을 요청했다.
 - 원인: `deploy.sh bluegreen`은 비활성 슬롯 빌드/헬스 확인 후 nginx 전환하는 구조는 맞지만, 전환 직후 old slot standby 동기화가 즉시 재빌드될 수 있었다. 이때 `/api/v1/ops/active-streams` 조회 실패가 `0`으로 처리되면 기존 SSE/채팅 스트림이 남아 있어도 old slot이 재시작되어 끊김/502가 발생할 수 있었다.

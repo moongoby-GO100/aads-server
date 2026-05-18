@@ -309,6 +309,7 @@ services:
       - NEXT_PUBLIC_API_URL=https://aads.newtalk.kr/api/v1
       - PORT=3100
       - TZ=Asia/Seoul
+      - AADS_RELEASE_SHA=${AADS_RELEASE_SHA:-unknown}
     networks:
       - aads_network
     healthcheck:
@@ -337,6 +338,7 @@ services:
       - NEXT_PUBLIC_API_URL=https://aads.newtalk.kr/api/v1
       - PORT=3101
       - TZ=Asia/Seoul
+      - AADS_RELEASE_SHA=${AADS_RELEASE_SHA:-unknown}
     networks:
       - aads_network
     healthcheck:
