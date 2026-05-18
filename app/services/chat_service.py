@@ -1221,6 +1221,7 @@ async def _save_interrupted_partial_message(
               AND role = 'assistant'
               AND model_used = 'interrupted'
               AND content = $2
+              AND (intent = 'interrupted_partial' OR intent IS NULL)
             ORDER BY created_at DESC
             LIMIT 1
             """,
@@ -1234,7 +1235,7 @@ async def _save_interrupted_partial_message(
             saved = await conn.fetchrow(
                 """
                 INSERT INTO chat_messages (session_id, role, content, model_used, intent)
-                VALUES ($1, 'assistant', $2, 'interrupted', NULL)
+                VALUES ($1, 'assistant', $2, 'interrupted', 'interrupted_partial')
                 RETURNING id, created_at::text AS created_at_text
                 """,
                 sid,
@@ -1263,7 +1264,7 @@ async def _save_interrupted_partial_message(
         "role": "assistant",
         "content": final_content,
         "model_used": "interrupted",
-        "intent": None,
+        "intent": "interrupted_partial",
         "created_at": created_at_text,
     }
 
@@ -3270,6 +3271,7 @@ _AUTO_MESSAGE_EXCLUDE_FILTER = (
     " AND intent IS DISTINCT FROM 'ai_review_warning'"
     " AND intent IS DISTINCT FROM 'system_trigger'"
     " AND intent IS DISTINCT FROM 'auto_reaction'"
+    " AND intent IS DISTINCT FROM 'interrupted_partial'"
     " AND intent IS DISTINCT FROM 'ai_review_warning'"
     " AND intent IS DISTINCT FROM 'system_trigger'"
     " AND intent IS DISTINCT FROM 'auto_reaction'"
