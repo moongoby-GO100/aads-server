@@ -8,6 +8,39 @@
 - 검증: `bash -n deploy.sh`, `bash -n /root/aads/aads-dashboard/deploy.sh`, `bash -n scripts/deploy_dashboard.sh`, `bash -n scripts/dashboard-rebuild.sh`, `docker compose -f docker-compose.prod.yml config --quiet`, `nginx -t` 통과. 실제 `bash /root/aads/aads-dashboard/deploy.sh` 실행 결과 green 전환, 외부 `/login` 200, standby blue 재빌드, 커밋/푸시 후 재배포까지 수행해 양 슬롯 release `f2e3b4c56b88` 확인. QA API는 `UNKNOWN`을 반환해 통과가 아니라 미확정으로 기록했다.
 - 주의: QA API가 `UNKNOWN`을 반환하는 원인은 별도 개선 대상이다. 이번 조치 범위는 배포/전환/standby 동기화와 오보고 방지다.
 
+## 현재 진행 상태 (2026-05-16 11:00 KST) - 한루아 기획서 스타일 프리셋 5종 시험 생성 완료
+- 배경: CEO가 기획서에 정의된 스타일 프리셋 단계 기준으로 한루아 전신 승인 이후 프리셋 시험 이미지 생성을 이어가라고 지시했다.
+- 조치: `scripts/generate_han_rua_doc_style_presets.py`로 기획서 기본 프리셋 5종(봄 데일리 내추럴, 여름 쿨톤, 가을 무드, 겨울 미니멀, 오피스 차분한 미소)을 각 2장씩 생성했다. 사용 모델은 Nano Banana 2 경로인 `gemini-3.1-flash-image-preview`다.
+- DB 기록: `media_generation_jobs.id=333~342` 10건이 모두 `succeeded`이며, `ai_persona_references.id=311~320`으로 연결했다. `metadata.reference_set=han_rua_doc_style_preset`, `metadata.style_preset_name/style_preset_slug/trial_index`, `approval_recommended=true`, `approval_recommendation_rank=1~10`을 기록했다. 실제 승인값은 CEO 검토 전이므로 `is_approved=false`다.
+- 갤러리: `scripts/export_gallery.py`, `app/api/image.py`, `app/static/gallery/index.html` 경로 기준으로 프리셋 메타(`reference_set`, `style_preset_name`, `style_preset_slug`, `style_preset_trial_index`)를 반환/표시하도록 반영했고, 정적 갤러리와 대시보드 공개 경로에 동기화했다. 접촉시트는 `https://aads.newtalk.kr/reports/gallery/han-rua-doc-style-preset-contact-sheet.jpg`다.
+- 배포/검증: API blue 슬롯 `8100`, green 슬롯 `8102`, 공개 URL `https://aads.newtalk.kr/api/v1/image/gallery?limit=3` 모두 프리셋 메타를 반환한다. 공개 접촉시트와 `manifest.json`은 200 OK이며, manifest 기준 `han_rua_doc_style_preset` 10건을 확인했다.
+- 주의: 이번 10장은 승인추천 상태이며 CEO 승인 전이다. 커밋/푸시는 아직 수행하지 않았다.
+
+## 현재 진행 상태 (2026-05-16 09:52 KST) - 한루아 후면 전신 프리셋 보강
+- 배경: CEO가 한루아 전신 프리셋 세트에 뒷모습 전신도 몇 컷 반영하라고 추가 지시했다.
+- 조치: Nano Banana 2(`gemini-3.1-flash-image-preview`)로 89번 얼굴 시드를 strict identity source로 둔 후면 전신 4컷을 추가 생성했다. 구성은 정후면 1장, 후면 좌/우 3/4 각 1장, 후면 워킹 1장이다.
+- DB 기록: 신규 `media_generation_jobs.id=317~320` 4건이 모두 `succeeded`이며, `ai_persona_references.id=271~274`로 연결했다. DB `ref_type` 체크 제약상 실제 컬럼은 `fullbody_turn/fullbody_walk`를 사용했고, 세부 후면 구분은 `metadata.rear_ref_type=fullbody_back/fullbody_back_turn_left/fullbody_back_turn_right/fullbody_back_walk`, `metadata.reference_set=han_rua_fullbody_swimfit_rear_preset`로 저장했다.
+- 갤러리: `scripts/export_gallery.py`, `app/static/gallery/index.html`, `app/api/image.py`를 보강해 후면 세트 메타데이터와 "한루아 전신 프리셋(후면)" 트랙을 표시하도록 했다. 정적 갤러리와 대시보드 공개 경로에 동기화했다.
+- 검증: `python3 -m py_compile scripts/export_gallery.py app/api/image.py` 통과, 갤러리 JS `node --check /tmp/gallery-script.js` 통과. 공개 `https://aads.newtalk.kr/reports/gallery/` 200 OK, `manifest.json` 200 OK, manifest 기준 후면 세트 4건 확인. 스크린샷 캡처는 로컬 CDP `localhost:9222` 응답 없음으로 실패했다.
+- 주의: 후면 4컷은 승인추천(`approval_recommended=true`)으로 표시했지만 아직 CEO 승인 전이다. 커밋/푸시/정식 배포는 아직 수행하지 않았다.
+
+## 현재 진행 상태 (2026-05-16 09:42 KST) - 한루아 수영복/핏 전신 프리셋 세트 생성
+- 배경: CEO가 전신 이미지를 향후 프리셋으로 활용하려면 금지 조건보다 목적 설명이 중요하며, 몸매가 충분히 드러나는 복장 또는 수영복 등으로 생성하라고 추가 지시했다.
+- 안전 범위: 한루아는 DB 기준 24세 성인(`ai_personas.id=3`)으로 확인했다. 프롬프트에는 "성인 24세", "전신 프리셋/가상 피팅용 체형·비율 확인", "비선정적 패션 카탈로그", "노출/란제리/성적 포즈 금지"를 명시했다.
+- 조치: 89번 얼굴 시드(`media_generation_jobs.id=89`)를 strict identity source로 사용해 Nano Banana 2(`gemini-3.1-flash-image-preview`)로 `han_rua_fullbody_swimfit_preset` 30장을 생성했다. 복장은 원피스 수영복, 피트니스 바디수트, 요가 유니타드, 탱크 바디수트+바이크 쇼츠 등 체형·비율 확인 가능한 비선정적 전신 프리셋 기준으로 구성했다.
+- DB 기록: 정상 reference 30건, 승인추천 20건, CEO 승인 0건이다. 허용 `ref_type` 제약에 맞춰 `fullbody_stand/turn/walk/lean`으로 저장했고, 세트 구분은 `metadata.reference_set=han_rua_fullbody_swimfit_preset`, `swimfit_preset=true`로 기록했다.
+- 갤러리: `scripts/export_gallery.py`와 `app/static/gallery/index.html`을 보강해 `reference_set`, `reference_outfit`을 manifest에 포함하고, 카드 라벨을 "한루아 전신 프리셋(수영복/핏)"으로 표시한다. 접촉시트는 `https://aads.newtalk.kr/reports/gallery/han-rua-fullbody-swimfit-preset-contact-sheet.jpg`로 배치했다.
+- 검증: `python3 -m py_compile app/api/image.py scripts/export_gallery.py` 통과, 갤러리 JS `node --check` 통과. 공개 URL `https://aads.newtalk.kr/reports/gallery/`, `manifest.json`, 접촉시트 모두 200 OK. DB 기준 `han_rua_fullbody_swimfit_preset` reference 30건/승인추천 20건/승인 0건 확인.
+- 주의: 첫 배치 스크립트가 `image_url NOT NULL` 제약을 반영하지 못해 중복 실패 job 22건이 남았다. 정상 갤러리/승인 대상은 `succeeded + reference_set`으로 연결된 30건만 사용한다. 커밋/푸시/정식 배포는 아직 수행하지 않았다.
+
+## 현재 진행 상태 (2026-05-16 09:25 KST) - 한루아 전신 프리셋 생성/승인추천 표시
+- 배경: CEO가 한루아 89번 이미지 기반 멀티앵글 얼굴 승인 후 다음 단계로 전신컷을 요청했고, 전신 프리셋 용도라 체형·비율이 확인되는 복장이 필요하다고 추가 지시했다.
+- 확인: 기존 한루아 전신 30장은 생성/갤러리 반영은 됐지만 검은 재킷/후디 중심이라 전신 프리셋의 체형 확인 기준에는 부족했다.
+- 조치: 89번 얼굴 시드를 strict identity source로 사용해 Nano Banana 2(`gemini-3.1-flash-image-preview`)로 fitted neutral base outfit 전신 프리셋 30장을 추가 생성했다. 생성 중 새 `ref_type=fullbody_preset_*`가 DB 체크 제약에 걸려 실패 처리됐으나, 반환된 이미지가 `media_generation_jobs`에 보존돼 있어 `fullbody_stand/turn/walk/lean` 허용 타입으로 reference를 복구하고 `metadata.reference_set=han_rua_fullbody_preset`, `body_preset=true`로 구분했다.
+- 조치: 접촉시트 육안 검수 기준으로 20장을 `approval_recommended=true`로 표시했다. 혼동 방지를 위해 한루아의 과거 얼굴/기존 전신 추천 플래그는 해제하되, 이미 승인된 얼굴 20장의 `is_approved=true` 값은 유지했다.
+- 공개 확인: `https://aads.newtalk.kr/reports/gallery/`와 `manifest.json`에 전신 프리셋 30장, 승인추천 20장이 반영됐다. 접촉시트는 `https://aads.newtalk.kr/reports/gallery/han-rua-fullbody-preset-contact-sheet.jpg`로 확인 가능하다.
+- 미완료/주의: 전신 프리셋 20장은 아직 CEO 승인 전이다. 승인 후에는 같은 인물성 검증/스타일 프리셋 생성 단계로 넘어가야 한다. 커밋/푸시/정식 배포는 아직 수행하지 않았다.
+
 ## 현재 진행 상태 (2026-05-16 08:28 KST) - Kimi K2.6/DeepSeek V4 Pro 적용 및 BG 배포 중단 원인 보강
 - 배경: CEO가 Kimi K2.6 채팅 연결, DeepSeek V4 Pro 러너 공식 ID 통일, L/XL 비교, 그리고 blue-green 중 API가 끊긴 원인 확인을 요청했다.
 - 원인: `deploy.sh bluegreen`은 비활성 슬롯 빌드/헬스 확인 후 nginx 전환하는 구조는 맞지만, 전환 직후 old slot standby 동기화가 즉시 재빌드될 수 있었다. 이때 `/api/v1/ops/active-streams` 조회 실패가 `0`으로 처리되면 기존 SSE/채팅 스트림이 남아 있어도 old slot이 재시작되어 끊김/502가 발생할 수 있었다.
@@ -16,6 +49,7 @@
 - 검증: `bash -n deploy.sh` 통과. `python3 -m pytest tests/unit/test_model_registry.py tests/unit/test_model_selector_dynamic_routing.py -q` 결과 30개 통과. LiteLLM 실호출 기준 `kimi-k2.6`은 `OK`, `deepseek-v4-pro`는 thinking 비활성 후 `OK` 본문 반환 확인.
 - 배포: `docker restart aads-litellm`로 LiteLLM 설정을 반영했고, `bash /root/aads/aads-server/deploy.sh bluegreen` 실행 결과 6단계 검증 통과. nginx API active는 `8102(aads-server-green)`, backup은 `8100(aads-server)`이며 `https://aads.newtalk.kr/api/v1/health`가 `status=ok`를 반환했다.
 - 주의: old blue 슬롯 standby 동기화는 600초 grace wait 후 백그라운드에서 진행된다. 즉시 active 서비스는 green으로 정상 제공 중이며, 커밋/푸시는 별도 수행 여부를 최종 보고에서 확인해야 한다.
+- 추가 확인(2026-05-16 08:32 KST): 실제 적용 파일 `/etc/nginx/conf.d/aads-upstream.conf`와 상태 파일은 API green `8102`, dashboard green `3101` active로 일치했다. 저장소 사본 `nginx-aads-upstream.conf`가 blue active로 뒤처져 있어 실제 적용 파일과 동일하게 보정했다. `diff -u nginx-aads-upstream.conf /etc/nginx/conf.d/aads-upstream.conf` 출력 없음, `nginx -t` 성공, 외부 `/api/v1/health` 200 OK 확인.
 
 ## 현재 진행 상태 (2026-05-16 08:07 KST) - Kimi K2.6 채팅 연결 + DeepSeek V4 Pro 공식 ID 통일
 - 배경: CEO가 Kimi K2.6 채팅 즉시 연결, DeepSeek V4 Pro의 노출/실행 모델명 통일, L/XL 규모 코딩 비교를 요청했다.
@@ -1117,3 +1151,46 @@
 - 갤러리: `scripts/export_gallery.py`가 `ai_persona_references` 메타데이터를 manifest에 포함하도록 보정했고, `app/static/gallery/index.html`에 승인추천 배지, 추천 사유, ref/angle 표시, `승인추천만` 필터, 추천 건수 칩을 추가했다. `bash scripts/gallery_sync.sh`로 `/var/www/aads-public/reports/gallery/`에 동기화했다.
 - 검증: DB 추천 카운트 20건, 공개 manifest 추천 카운트 20건/총 173건 확인. 공개 URL `https://aads.newtalk.kr/reports/gallery/` HTTP 200 확인. Browser Bridge에서 `승인추천만` 필터 적용 시 현재 필터 결과 20건과 `승인추천 #1~#20` 표시를 확인했다.
 - 주의: 이번 조치는 CEO 검토용 추천 표시이며 실제 승인 처리(`is_approved=true`)와 embedding similarity 정량 검증은 아직 수행하지 않았다. 커밋/푸시/정식 배포는 수행하지 않았다.
+
+## 2026-05-16 08:41 KST - Gallery approval API deployment recovery
+
+- 배경: 갤러리에서 승인추천 이미지를 바로 승인/취소할 수 있도록 `/api/v1/image/gallery/approve` API와 정적 갤러리 승인 버튼을 반영하던 중, `/api/v1/image/gallery`가 SQL `AmbiguousColumnError`로 500을 반환했다.
+- 조치: `app/api/image.py`의 lateral subquery `ORDER BY id`를 `ORDER BY ref.id DESC`로 명확히 고쳐 갤러리 GET 500을 해소했다. 승인 API는 `reference_ids` 직접 승인/취소와 `approve_recommended=true` 전체 추천 승인 경로를 제공한다. 갤러리 UI는 선택승인, 추천 전체승인, 선택승인취소 버튼과 승인완료 배지를 사용한다.
+- 배포/복구: `aads-api` 재시작 중 blue 슬롯이 오래 `STOPPING`에 머물렀으나, green 슬롯이 공개 트래픽을 정상 처리했다. 이후 blue 컨테이너를 복구해 API `8102(aads-server-green)` active, API `8100(aads-server)` backup 모두 healthy 상태를 확인했다.
+- 검증: `python3 -m py_compile app/api/image.py` 통과. `curl http://127.0.0.1:8100/api/v1/image/gallery?limit=1` 200, `curl http://127.0.0.1:8102/api/v1/image/gallery?limit=1` 200, `curl https://aads.newtalk.kr/api/v1/image/gallery?limit=1` 200 확인. 무효 승인 요청은 `400 {"detail":"승인할 reference_id가 없습니다"}`로 검증 실패를 정상 반환했다. DB 기준 `approval_recommended=20`, `is_approved=0`, `ai_persona_references=84`, `media_generation_jobs(kind=image)=173` 확인. `nginx -t` 성공.
+- 주의: CEO 실제 승인은 아직 누르지 않았다. 커밋/푸시는 아직 수행하지 않았고, 작업트리에는 갤러리/모델 관련 이전 미커밋 변경이 함께 남아 있다.
+
+## 2026-05-16 09:04 KST - Han Rua fullbody Reference Set generated
+
+- 배경: CEO가 한루아 얼굴 Reference 추천 20장을 승인한 뒤 다음 단계 진행을 지시했다. 기획서 기준 다음 단계는 확정 얼굴 기반 전신 30장 생성 후 20장 이상 승인이다.
+- 조치: 한루아 `persona_id=3`의 승인 얼굴 reference 20건을 DB에서 확인한 뒤, seed image `media_generation_jobs.id=89`를 입력 참조로 Nano Banana 2(`gemini-3.1-flash-image-preview`) 전신 후보 30장을 생성했다.
+- DB 기록: 전신 후보 30장은 `media_generation_jobs.id=205~234`로 저장됐고, `ai_persona_references`에는 허용 타입 `fullbody_stand/walk/sit/lean/turn`으로 연결했다. 한루아 상태는 `fullbody`다.
+- 갤러리: `app/static/gallery/index.html`에 `한루아 전신 Reference` 트랙 구분을 추가했고, 기본 화면은 성공 이미지만 보이도록 보정했다. `추천 전체승인` 버튼은 현재 화면의 미승인 추천만 승인하도록 조정했다. 전신 30장 중 20장에 `metadata.approval_recommended=true`, 추천 순위와 추천 사유를 기록했다. 정적 갤러리는 `/var/www/aads-public/reports/gallery/`와 대시보드 공개 경로에 동기화했다.
+- 검증: `node --check /tmp/gallery-inline.js` 통과. `docker exec aads-server-green python3 /app/scripts/export_gallery.py` 결과 `Exported 165 images, 200 total`. 공개 갤러리 `https://aads.newtalk.kr/reports/gallery/` HTTP 200, 공개 API 최신 40건 기준 `fullbody_in_latest40=30`, `recommended_in_latest40=20` 확인.
+- 주의: 전신 후보의 실제 승인(`is_approved=true`)은 아직 CEO 검토 전이다. 동일 인물성 embedding 정량 검증은 아직 미구현/미기록이며, 이번 추천은 접촉시트 육안 검토 기준이다. 커밋/푸시는 아직 수행하지 않았다.
+
+## 2026-05-16 09:50 KST - Han Rua rear-view fullbody preset recommendations
+
+- 배경: CEO가 전신 프리셋 검토용으로 뒷모습 전신컷도 몇 장 반영하고 추천 표시하도록 지시했다.
+- 조치: 한루아 전신 프리셋 보강 세트 `han_rua_fullbody_swimfit_rear_preset` 4장을 갤러리 추천 대상으로 반영했다. 대상은 `media_generation_jobs.id=317~320`, `ai_persona_references.id=271~274`이며 `ref_type`은 `fullbody_turn` 3장, `fullbody_walk` 1장이다.
+- 추천 표시: 기존 전신 추천 20장 뒤에 `approval_recommendation_rank=21~24`, `approval_recommended=true`, `approval_recommendation_reason=후면 전신 프리셋 보강 추천`을 기록했다. 실제 승인값은 CEO 검토 전이므로 `is_approved=false`로 유지했다.
+- 갤러리: `han-rua-fullbody-rear-preset-contact-sheet.jpg` 접촉시트를 생성하고 `bash scripts/gallery_sync.sh`로 `/var/www/aads-public/reports/gallery/`에 동기화했다.
+- 검증: DB 조회로 후면 4장 추천/미승인 상태를 확인했고, 공개 갤러리 `https://aads.newtalk.kr/reports/gallery/`와 `manifest.json`이 HTTP 200을 반환했다.
+- 주의: 후면 컷은 전신 프리셋 보강용 추천 표시만 완료된 상태이며, CEO가 갤러리에서 승인해야 `is_approved=true`가 된다. 커밋/푸시는 아직 수행하지 않았다.
+
+## 2026-05-16 10:10 KST - Han Rua style preset recovery and gallery track
+
+- 배경: CEO가 전신 승인 후 다음 단계 진행을 지시했고, 스타일 프리셋 12장 생성 중 이미지는 반환됐지만 `ai_persona_references.ref_type='style_preset'`이 체크 제약에 막혀 `media_generation_jobs.id=321~332`가 실패 상태로 남았다.
+- 조치: `migrations/097_ai_persona_style_preset_ref_type.sql`을 추가하고 DB에 적용해 `style_preset` reference 타입을 허용했다. 기존 `result_uri`가 존재하던 12개 job은 재생성 없이 `status='succeeded'`로 복구하고 `ai_persona_references.id=299~310`으로 연결했다.
+- 추천 표시: 12장 모두 `metadata.reference_set='han_rua_style_preset'`, `approval_recommended=true`, `approval_recommendation_rank=1~12`, `approval_recommendation_reason=전신 승인본 기반 스타일 프리셋 후보`로 기록했다. 실제 승인값은 CEO 검토 전이므로 `is_approved=false`다.
+- 갤러리: `app/static/gallery/index.html`에 `한루아 스타일 프리셋` 필터/트랙 라벨을 추가했고, `han-rua-style-preset-contact-sheet.jpg` 접촉시트를 생성했다. `bash scripts/gallery_sync.sh`로 `/var/www/aads-public/reports/gallery/`에 동기화했다.
+- 검증: DB 조회 기준 `style_preset` 12건 모두 `succeeded`, reference 연결, 추천 12건 확인. 공개 갤러리 `https://aads.newtalk.kr/reports/gallery/` HTTP 200, 스타일 접촉시트 HTTP 200 `image/jpeg`, 최신 API `limit=12` 기준 style preset 12건 확인. 승인/삭제 API는 빈 요청에 정상 `400`을 반환했다.
+- 주의: 동일 인물성 face embedding 정량 검증은 아직 미구현이며, 이번 단계는 승인 전신본 기반 스타일 프리셋 후보 생성/복구와 갤러리 검토 준비다. 커밋/푸시는 아직 수행하지 않았다.
+
+## 2026-05-18 08:04 KST - AADS knowledge-to-wisdom evolution research report
+
+- 배경: CEO가 AADS와 전체 운영 프로젝트에 필요한 자료/지식을 어떻게 수집, 분류, 저장, 관리하고 이를 지혜화해 진화와 발전에 연결할지 최신 자료 기반 심층 연구와 보고서 저장을 요청했다.
+- 조치: NIST AI RMF Generative AI Profile, OWASP LLM Top 10 2025, OpenAI Retrieval, Google Vertex AI Grounding/Memory Bank, Anthropic Claude Code Memory, LangChain Long-term Memory, Microsoft GraphRAG, 2026년 agent memory 논문, ByteRover, LightRAG를 교차 조사했다. 내부 AADS 문서와 DB schema도 확인해 현행 `memory_facts`, `ai_observations`, `ai_meta_memory`, `research_archive` 구조에 맞춘 DIKW+E 지식 운영 모델을 작성했다.
+- 산출물: `docs/reports/20260518_AADS_KNOWLEDGE_WISDOM_EVOLUTION_RESEARCH.md`를 추가했다.
+- 검증: KST 시각 `2026-05-18 08:04:19 KST` 실측. DB 기준 `memory_facts=48347`, `ai_observations=1461`, `ai_meta_memory=4183` 확인. 보고서 파일 markdown 생성 완료.
+- 주의: 이번 작업은 연구 보고서 작성/저장 단계다. DB migration, `research_archive` row insert, 대시보드 UI, 자동 ingestion/eval 구현, 커밋/푸시/배포는 수행하지 않았다.

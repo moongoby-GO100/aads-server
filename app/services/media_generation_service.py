@@ -33,10 +33,13 @@ IMAGE_MODELS = (
     "gpt-image-2",
     "gpt-image-1",
     "dall-e-3",
+    "nano-banana-2",
     "imagen-4.0-generate-001",
     "imagen-4.0-fast-generate-001",
     "imagen-4.0-ultra-generate-001",
+    "gemini-2.5-flash-image",
     "gemini-3.1-flash-image-preview",
+    "gemini-3-pro-image-preview",
 )
 VIDEO_MODELS = (
     "sora-2",
@@ -56,6 +59,20 @@ VALID_JOB_STATUSES = {"queued", "running", "succeeded", "failed", "cancelled"}
 
 def _is_imagen_4_model(model_id: str) -> bool:
     return str(model_id or "").strip().lower().startswith("imagen-4.0-")
+
+
+def _canonical_media_model_id(model_id: str) -> str:
+    normalized = str(model_id or "").strip().lower()
+    aliases = {
+        "nano-banana-2": "gemini-3.1-flash-image-preview",
+        "nano_banana_2": "gemini-3.1-flash-image-preview",
+        "nano banana 2": "gemini-3.1-flash-image-preview",
+        "gemini-image-proxy": "gemini-3.1-flash-image-preview",
+        "gemini-3.1-pro-image-preview": "gemini-3-pro-image-preview",
+        "gemini-3.1-pro-preview-image": "gemini-3-pro-image-preview",
+        "gemini-3-pro-image": "gemini-3-pro-image-preview",
+    }
+    return aliases.get(normalized, str(model_id or "").strip())
 
 
 @dataclass(frozen=True)
@@ -166,13 +183,13 @@ class MediaGenerationService:
 
     @staticmethod
     def recognize_model(model_id: str) -> dict[str, str]:
-        model = str(model_id or "").strip()
+        model = _canonical_media_model_id(model_id)
         lowered = model.lower()
         if lowered in {"gpt-image-2", "gpt-image-1", "dall-e-3"}:
             return {"kind": "image", "provider": "openai", "model_id": model}
         if _is_imagen_4_model(lowered):
             return {"kind": "image", "provider": "google", "model_id": model}
-        if lowered == "gemini-3.1-flash-image-preview":
+        if lowered in {"gemini-3.1-flash-image-preview", "gemini-3-pro-image-preview", "gemini-2.5-flash-image"}:
             return {"kind": "image", "provider": "gemini", "model_id": model}
         if lowered in {"sora-2", "sora-2-pro"}:
             return {"kind": "video", "provider": "openai", "model_id": model}
@@ -339,7 +356,7 @@ class MediaGenerationService:
         provider: str | None = None,
     ) -> MediaRoute:
         normalized_kind = "image" if kind == "edit_image" else str(kind or "").strip()
-        requested_model = str(model_id or "").strip()
+        requested_model = _canonical_media_model_id(model_id or "")
         requested_provider = str(provider or "").strip().lower()
         explicit_request = bool(requested_model or requested_provider)
         source = "explicit" if explicit_request else "fallback"
@@ -433,6 +450,27 @@ class MediaGenerationService:
             availability = "adapter_unavailable"
         else:
             availability = "available"
+        if not explicit_request and kind == "image" and availability != "available":
+            for fallback_provider, fallback_model in (
+                ("google", "imagen-4.0-generate-001"),
+                ("google", "imagen-4.0-fast-generate-001"),
+                ("google", "imagen-4.0-ultra-generate-001"),
+                ("gemini", "gemini-3.1-flash-image-preview"),
+                ("gemini", "gemini-2.5-flash-image"),
+                ("gemini", "gemini-3-pro-image-preview"),
+            ):
+                if self._provider_configured(fallback_provider) and self._route_supported(
+                    kind, fallback_provider, fallback_model
+                ):
+                    requested_provider = fallback_provider
+                    requested_model = fallback_model
+                    configured = True
+                    supported = True
+                    enabled = True
+                    availability = "available"
+                    source = "builtin_fallback"
+                    reason = ""
+                    break
         return MediaRoute(
             kind=kind,
             provider=requested_provider,
@@ -446,8 +484,15 @@ class MediaGenerationService:
         )
 
     def _route_supported(self, kind: str, provider: str, model_id: str) -> bool:
+        model_id = _canonical_media_model_id(model_id)
         if kind == "image":
             if provider == "pc_local":
+                return True
+            if provider == "gemini" and model_id in {
+                "gemini-3.1-flash-image-preview",
+                "gemini-3-pro-image-preview",
+                "gemini-2.5-flash-image",
+            }:
                 return True
             return provider in {"openai", "google"} and (
                 model_id in {"gpt-image-2", "gpt-image-1", "dall-e-3"}
@@ -803,6 +848,8 @@ class MediaGenerationService:
             return await self._generate_openai_image(sanitized, prompt, size, route.model_id)
         if route.provider == "google":
             return await self._generate_google_image(sanitized, prompt, route.model_id)
+        if route.provider == "gemini":
+            return await self._generate_gemini_native_image(sanitized, prompt, route.model_id)
         raise ValueError(route.reason or "provider unavailable")
 
     async def _generate_openai_image(
@@ -857,6 +904,37 @@ class MediaGenerationService:
         image_bytes = response.generated_images[0].image.image_bytes
         b64 = base64.b64encode(image_bytes).decode()
         return {"url": f"data:image/png;base64,{b64}", "provider": model_id, "prompt": original}
+
+    async def _generate_gemini_native_image(
+        self,
+        sanitized: str,
+        original: str,
+        model_id: str,
+    ) -> dict[str, Any]:
+        model_id = _canonical_media_model_id(model_id)
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=_secret_value(self.settings, "GOOGLE_API_KEY"))
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: client.models.generate_content(
+                model=model_id,
+                contents=sanitized,
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE"],
+                ),
+            ),
+        )
+        if not response.candidates:
+            raise ValueError(f"No candidates returned from Gemini {model_id}")
+        for part in response.candidates[0].content.parts:
+            if part.inline_data and part.inline_data.mime_type.startswith("image/"):
+                b64 = base64.b64encode(part.inline_data.data).decode()
+                mime = part.inline_data.mime_type
+                return {"url": f"data:{mime};base64,{b64}", "provider": model_id, "prompt": original}
+        raise ValueError(f"No image part found in Gemini {model_id} response")
 
     async def edit_image(
         self,
