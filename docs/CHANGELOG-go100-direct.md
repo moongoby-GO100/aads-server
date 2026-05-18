@@ -5865,3 +5865,13 @@ echo "[→CURRENT_BRANCH=$(git rev-parse --abbrev-
 
 ## 2026-0
 - finalize: pending
+
+## [2026-05-19 07:49:55 KST] [GO100] backend/app/services/go100/ai/realtime_guardrails.py
+- Chat-Direct 수정: patch:     if guardrail.tool_required:
+        →    if guardrail.tool_required:
+        
+- finalize: pending
+
+## [2026-05-19 07:50:07 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
+- Chat-Direct 수정: patch:     data_sources = _dedupe(list(guardrai→    data_sources = _dedupe(list(guardrai
+- finalize: pending

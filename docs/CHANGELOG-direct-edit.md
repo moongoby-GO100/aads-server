@@ -1389,3 +1389,6 @@ import re
 
 ## [2026-05-18 16:30:03 KST] [aads-server] reports/ntv2-ai-studio-admin-ui-spec-v1.html
 - Chat-Direct 수정: write: reports/ntv2-ai-studio-admin-ui-spec-v1.html
+
+## [2026-05-19 07:50:04 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git diff scripts/claude_relay_server.py
