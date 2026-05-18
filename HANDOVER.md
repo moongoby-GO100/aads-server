@@ -1224,3 +1224,12 @@
 - 원인: `interrupted_partial`는 과거 partial 숨김용 intent인데, 프론트가 현재 진행 중인 placeholder도 30초 타임아웃 시 같은 intent로 바꿔 숨김 필터와 충돌했다. 또한 resume scanner가 메모리 `_streaming_state`가 남아 있으면 stale 여부와 무관하게 DB running 회수를 건너뛰어 오래된 실행이 계속 running으로 남을 수 있었다.
 - 조치: `app/main.py`에서 `_streaming_state` skip 조건을 stale-aware로 바꿔 최근 갱신 상태만 보호하고, 오래된 메모리 상태는 회수 가능하게 했다.
 - 검증: `python3 -m py_compile app/main.py` 통과. 대시보드 대응 패치는 `/root/aads/aads-dashboard/src/app/chat/page.tsx`에서 현재 partial을 숨김 intent가 아닌 visible interrupted bubble로 보존하도록 반영했다.
+
+## 2026-05-18 16:08 KST - Chat interruption cleanup deployment and data backfill
+
+- 배경: CEO가 응답이 사라진다고 재보고했고, 15:21 패치 이후에도 resume task callback/stale placeholder cleanup 경로가 `_mark_execution_interrupted()` 공통 보장 규칙을 우회할 수 있음을 확인했다.
+- 조치: `app/main.py`의 resume task cancel/error callback과 `app/services/chat_service.py`의 stale placeholder 정리 경로를 `_mark_execution_interrupted()`로 통합했다. partial은 `interrupted_partial`로 숨기고, 사용자 supersede가 아닌 terminal interruption은 visible fallback assistant를 1회 생성하도록 보장했다.
+- 배포: commit `fff81a2 fix: unify chat interruption recovery cleanup`이 `origin/main`에 반영됐다. `bash deploy.sh bluegreen` 이후 active API는 `aads-server`/`8100`이며 health OK다.
+- 데이터 보정: 최근 24시간 `interrupted` 실행 중 assistant row가 0건이던 7건에 visible fallback assistant를 삽입하고 `assistant_message_id`를 연결했다. 사용자 직접 중지(`stopped by user`) 1건은 의도 중지로 남겼다.
+- 검증: `python3 -m py_compile app/main.py app/services/chat_service.py` 통과. active 컨테이너 내부 `/app/app/main.py`, `/app/app/services/chat_service.py`에서 `resume_task_cancelled`, `interrupted_partial`, `superseded while preserving partial response` 반영 확인. DB 기준 사용자 중지가 아닌 최근 24시간 `interrupted AND assistant_message_id IS NULL`은 0건이다.
+- 주의: 작업트리에는 갤러리/모델/NGINX 관련 기존 미커밋 변경이 남아 있으며, 이번 채팅 복구 패치와 무관하므로 건드리지 않았다.
