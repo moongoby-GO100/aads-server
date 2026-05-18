@@ -775,6 +775,19 @@ async def health_check():
             infra["recovery_pending_streams"] = None
             infra["recent_placeholders"] = None
 
+        # ── completion_rate_24h: 24시간 실행 완료율 (50% 미만 시 경보 대상) ──
+        try:
+            _cr_row = await _hc.fetchrow(
+                "SELECT count(*) FILTER (WHERE status='completed') as ok, count(*) as total "
+                "FROM chat_turn_executions WHERE started_at > now() - interval '24 hours'"
+            )
+            _cr_total = int(_cr_row["total"]) if _cr_row else 0
+            infra["completion_rate_24h"] = round(100.0 * int(_cr_row["ok"]) / _cr_total, 1) if _cr_total > 0 else None
+            infra["completions_24h"] = int(_cr_row["ok"]) if _cr_row else 0
+            infra["executions_24h"] = _cr_total
+        except Exception:
+            infra["completion_rate_24h"] = None
+
         all_containers_ok = all(v == "running" for k, v in infra.items()
                                 if k in ("aads-server", "aads-postgres", "aads-redis", "aads-socket-proxy", "aads-litellm", "aads-dashboard"))
 
@@ -1733,6 +1746,64 @@ async def get_llm_account_usage():
     from app.services.llm_account_usage import get_account_usage_snapshot
 
     return await get_account_usage_snapshot()
+
+
+# ─── Codex live rate-limit (AADS-193) ─────────────────────────────────────
+_CODEX_USAGE_PROXY_CACHE = {"ts": 0, "payload": None}
+_CODEX_USAGE_PROXY_TTL = int(os.getenv("CODEX_USAGE_PROXY_TTL_SEC", "30"))
+
+
+@router.get("/ops/codex-usage")
+async def get_codex_usage():
+    """Codex CLI app-server 실시간 rate-limit 조회 → 마스킹/캐시된 응답.
+
+    내부 동작: relay의 /codex-usage(shared secret)를 호출, 30초 캐시.
+    """
+    import time as _t
+    import httpx
+    from app.api.health import _load_relay_secret  # type: ignore
+    now = _t.time()
+    cached = _CODEX_USAGE_PROXY_CACHE.get("payload")
+    cache_ts = _CODEX_USAGE_PROXY_CACHE.get("ts", 0)
+    if cached and (now - cache_ts) < _CODEX_USAGE_PROXY_TTL:
+        return {"cached": True, "age_sec": round(now - cache_ts, 1),
+                "ttl_sec": _CODEX_USAGE_PROXY_TTL, **cached}
+    secret = _load_relay_secret() or ""
+    headers = {"X-Claude-Relay-Secret": secret} if secret else {}
+    relay_url = os.getenv("CLAUDE_RELAY_URL", "http://host.docker.internal:8199")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=2.0)) as client:
+            resp = await client.get(f"{relay_url}/codex-usage", headers=headers)
+        if resp.status_code != 200:
+            return {"ok": False, "error": "relay_returned_non_200",
+                    "status": resp.status_code, "detail": resp.text[:200]}
+        payload = resp.json()
+    except Exception as exc:
+        return {"ok": False, "error": "relay_call_failed", "detail": str(exc)[:200]}
+    # limits 가공 — Unix epoch → ISO + 남은 시간(초)
+    from datetime import datetime, timezone
+    enriched_limits = []
+    for limit in (payload.get("limits") or []):
+        new_limit = dict(limit)
+        for window in ("primary", "secondary"):
+            w = dict(limit.get(window) or {})
+            epoch = w.get("resets_at_epoch")
+            if isinstance(epoch, (int, float)):
+                dt = datetime.fromtimestamp(epoch, tz=timezone.utc)
+                w["resets_at_iso"] = dt.isoformat()
+                w["resets_in_sec"] = max(0, int(epoch - now))
+            new_limit[window] = w
+        enriched_limits.append(new_limit)
+    out = {
+        "ok": payload.get("ok", False),
+        "plan_type": payload.get("raw_plan_type"),
+        "limits": enriched_limits,
+        "fetched_at": payload.get("fetched_at"),
+        "relay_cached": payload.get("cached", False),
+    }
+    _CODEX_USAGE_PROXY_CACHE["payload"] = out
+    _CODEX_USAGE_PROXY_CACHE["ts"] = now
+    return {"cached": False, "ttl_sec": _CODEX_USAGE_PROXY_TTL, **out}
 
 
 # ─── 도구 오류율 통계 API (AADS-206) ─────────────────────────────────────

@@ -888,7 +888,7 @@ async def lifespan(app: FastAPI):
         max_rows: int = 5,
         *,
         reclaim_before=None,
-        min_stale_seconds: int = 90,
+        min_stale_seconds: int = 60,
     ):
         try:
             if not _is_execution_resume_owner():
