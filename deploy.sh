@@ -501,8 +501,8 @@ case "$MODE" in
         PEER_PORT="$(peer_port_for "$ACTIVE_PORT")"
         PEER_CONTAINER="$(container_for_port "$PEER_PORT")"
 
-        if [[ "${ACTIVE_STREAMS:-0}" != "0" && -n "$PEER_PORT" && -n "$PEER_CONTAINER" ]]; then
-            echo "[deploy.sh] 활성 스트림 ${ACTIVE_STREAMS}건 감지 — active 재시작 대신 peer slot으로 전환"
+        if [[ -n "$PEER_PORT" && -n "$PEER_CONTAINER" ]]; then
+            echo "[deploy.sh] active API 직접 재시작 금지 — active_streams=${ACTIVE_STREAMS} 여부와 무관하게 peer slot으로 전환"
             if ! curl -sf "http://127.0.0.1:${PEER_PORT}/api/v1/health" >/dev/null 2>&1; then
                 echo "[deploy.sh] ❌ peer slot ${PEER_CONTAINER}:${PEER_PORT} health 실패 — 스트림 보호를 위해 배포 중단"
                 notify "❌ code 배포 중단: active stream ${ACTIVE_STREAMS}건, peer unhealthy"
@@ -522,7 +522,9 @@ case "$MODE" in
             HEALTH_URL="http://localhost:${ACTIVE_PORT}/api/v1/health"
             echo "[deploy.sh] Phase 1: ✅ active slot switched to ${ACTIVE_CONTAINER}:${ACTIVE_PORT}"
         else
-            echo "[deploy.sh] 활성 스트림 0건 — active API graceful restart"
+            echo "[deploy.sh] ❌ peer slot을 찾지 못해 active API 직접 재시작을 차단합니다"
+            notify "❌ code 배포 중단: peer slot missing"
+            exit 1
             # PC Agent WebSocket 정상 종료
             ACTIVE_API_URL="http://localhost:${ACTIVE_PORT}"
             echo "[deploy.sh] PC Agent graceful-shutdown..."

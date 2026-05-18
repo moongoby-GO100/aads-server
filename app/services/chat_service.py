@@ -1154,8 +1154,8 @@ async def _mark_execution_interrupted(
         )
         assistant_message_id = await conn.fetchval(
             """
-            INSERT INTO chat_messages (session_id, execution_id, role, content, model_used, tools_called)
-            SELECT $1, $2, 'assistant', $3, 'interrupted', '[]'::jsonb
+            INSERT INTO chat_messages (session_id, execution_id, role, content, model_used, intent, tools_called)
+            SELECT $1, $2, 'assistant', $3, 'interrupted', 'interrupted_partial', '[]'::jsonb
             WHERE NOT EXISTS (
                 SELECT 1
                 FROM chat_messages

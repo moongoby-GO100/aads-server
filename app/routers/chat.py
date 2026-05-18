@@ -261,7 +261,7 @@ async def _settle_stale_execution_for_recovery(
             """
             UPDATE chat_messages
             SET content = $2,
-                intent = NULL,
+                intent = 'interrupted_partial',
                 model_used = 'interrupted',
                 edited_at = NOW()
             WHERE execution_id = $1
@@ -347,7 +347,7 @@ async def _settle_or_surface_orphan_placeholder(
             """
             UPDATE chat_messages
             SET content = $2,
-                intent = NULL,
+                intent = 'interrupted_partial',
                 model_used = 'interrupted',
                 edited_at = NOW()
             WHERE id = $1
