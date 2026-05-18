@@ -1194,3 +1194,10 @@
 - 산출물: `docs/reports/20260518_AADS_KNOWLEDGE_WISDOM_EVOLUTION_RESEARCH.md`를 추가했다.
 - 검증: KST 시각 `2026-05-18 08:04:19 KST` 실측. DB 기준 `memory_facts=48347`, `ai_observations=1461`, `ai_meta_memory=4183` 확인. 보고서 파일 markdown 생성 완료.
 - 주의: 이번 작업은 연구 보고서 작성/저장 단계다. DB migration, `research_archive` row insert, 대시보드 UI, 자동 ingestion/eval 구현, 커밋/푸시/배포는 수행하지 않았다.
+
+## 2026-05-18 14:40 KST - Chat manual resume retry_count SQL fix
+
+- 배경: 채팅 복구/재연결 후 버블이 2개로 보이는 문제를 조사하던 중, 수동 `POST /api/v1/chat/sessions/{session_id}/resume` 경로의 retry_count SELECT/UPDATE SQL이 `WHERE id = `에서 끊겨 있어 실제 호출 시 DB 문법 오류가 날 수 있음을 확인했다.
+- 조치: `app/routers/chat.py`의 수동 resume retry_count SELECT/UPDATE를 `$1` 바인딩 쿼리로 수정하고, UPDATE 시 `updated_at=NOW()`를 함께 기록하도록 보강했다.
+- 검증: `python3 -m py_compile app/routers/chat.py` 통과. 실행 중인 `aads-server`, `aads-server-green` 컨테이너 내부 파일에도 `$1` 수정이 반영된 상태를 확인했다.
+- 주의: 이 항목은 수동 resume 엔드포인트 안정화이며, 응답 버블 1개 보장 패치는 대시보드 `src/app/chat/page.tsx`에 별도 반영했다.
