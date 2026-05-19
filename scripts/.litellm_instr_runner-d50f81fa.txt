@@ -1,0 +1,19 @@
+[필수 규칙 — 반드시 준수]
+1. 코드 수정만 수행하세요. 파일 생성/수정/삭제만 허용됩니다.
+2. 다음 명령은 절대 실행하지 마세요:
+   - docker build, docker compose, docker restart
+   - npm run build, npm start, next build
+   - supervisorctl, systemctl, service restart
+   - kill, pkill (프로세스 종료)
+3. 빌드와 배포는 CEO 승인 후 Runner가 자동으로 수행합니다.
+4. 작업 완료 시 '빌드 필요' 또는 '배포 필요' 등을 언급하지 마세요. Runner가 알아서 합니다.
+5. [R-AUTH] 인증 토큰 규칙:
+   - AADS는 Auth Token(OAuth) 사용: ANTHROPIC_AUTH_TOKEN (sk-ant-oat01-...)
+   - ANTHROPIC_API_KEY를 코드에서 직접 참조/추가 금지
+   - 2계정 스위치: AUTH_TOKEN(1순위) → API_KEY_FALLBACK(2순위) → Gemini LiteLLM(3순위)
+   - 외부 LLM(Gemini/DeepSeek): 반드시 LiteLLM 프록시 경유, 직접 REST API 호출 금지
+   - 중앙 클라이언트: anthropic_client.py의 call_llm_with_fallback() 사용
+
+위 규칙을 위반하면 작업이 거부됩니다.
+
+TASK_ID: AADS-CEO-CHAT-OPT TITLE: LLM 사용량 배치 로깅 + 인텐트 규칙 설정화 + 요청 중복 제거 PRIORITY: P2 SIZE: M MODE: code_modify  ## 수정 1: LLM 사용량 배치 로깅 (P2-10) 파일: 현재 LLM usage를 기록하는 코드를 찾아서 수정 (app/api/ceo_chat.py 또는 app/services/chat_service.py 또는 app/core/anthropic_client.py)  현재 LLM 호출당 1건 DB write (도구 루프 시 턴당 10-20건).  조치: - 모듈 수준 _usage_buffer: List[dict] 생성 - 호출 시 buffer에 추가, 30초 간격 또는 100건 도달 시 batch INSERT - asyncio.create_task로 백그라운드 flush - 앱 종료 시 잔여 buffer flush  ## 수정 2: 인텐트 규칙 설정화 (P2-14) 파일: app/routers/chat.py (또는 INTENT_RULES가 정의된 파일)  현재 INTENT_RULES가 하드코딩.  조치: - system_memory 테이블에서 category='intent_rules'로 로드 - 메모리 캐시 TTL 300초 - DB 조회 실패 시 현재 하드코딩 값 fallback - hot-reload 시 캐시 자동 무효화  ## 수정 3: 요청 중복 제거 캐시 (P3-18) 파일: 메시지 수신 엔드포인트 (app/routers/chat.py의 send_message 등)  동일 세션+메시지가 10초 내 재요청 시 중복 LLM 호출.  조치: - _recent_requests: Dict[str, float] — key=hash(session_id+message[:200]) - 동일 해시가 10초 내 존재하면 409 Conflict 반환 또는 기존 실행 결과 대기 - TTL 10초, lazy cleanup  검증: py_compile 통과 필수.

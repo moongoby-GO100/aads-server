@@ -23,7 +23,11 @@ import json
 import logging
 import os
 import re
-from typing import Any, Dict, List, Optional
+import socket
+import subprocess
+import threading
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -43,22 +47,43 @@ _DEFAULT_DB_TYPE: Dict[str, str] = {
     "NTV2": "mysql",
 }
 
+def _ssh_tunnel_config(
+    project: str,
+    *,
+    ssh_host: str,
+    ssh_user: str,
+    ssh_key: str,
+    remote_host: str,
+    remote_port: int,
+) -> Dict[str, Any]:
+    """프로젝트별 SSH 설정. 환경변수 없으면 기존 기본값 유지."""
+    return {
+        "ssh_host": os.getenv(f"SSH_{project}_HOST", ssh_host),
+        "ssh_user": os.getenv(f"SSH_{project}_USER", ssh_user),
+        "ssh_key": os.getenv(f"SSH_{project}_KEY", ssh_key),
+        "remote_host": remote_host,
+        "remote_port": remote_port,
+    }
+
+
 # SSH 터널 필요 프로젝트 (MySQL on 114서버)
 _SSH_TUNNEL_PROJECTS: Dict[str, Dict[str, Any]] = {
-    "SF": {
-        "ssh_host": "116.120.58.155",
-        "ssh_user": "root",
-        "ssh_key": "/root/.ssh/id_ed25519_newtalk",
-        "remote_host": "127.0.0.1",
-        "remote_port": 3306,
-    },
-    "NTV2": {
-        "ssh_host": "116.120.58.155",
-        "ssh_user": "root",
-        "ssh_key": "/root/.ssh/id_ed25519_newtalk",
-        "remote_host": "127.0.0.1",
-        "remote_port": 3307,
-    },
+    "SF": _ssh_tunnel_config(
+        "SF",
+        ssh_host="116.120.58.155",
+        ssh_user="root",
+        ssh_key="/root/.ssh/id_ed25519_newtalk",
+        remote_host="127.0.0.1",
+        remote_port=3306,
+    ),
+    "NTV2": _ssh_tunnel_config(
+        "NTV2",
+        ssh_host="116.120.58.155",
+        ssh_user="root",
+        ssh_key="/root/.ssh/id_ed25519_newtalk",
+        remote_host="127.0.0.1",
+        remote_port=3307,
+    ),
 }
 
 _SENSITIVE_COLUMNS = re.compile(
@@ -93,9 +118,11 @@ _DML_IN_CTE = re.compile(
 # ─── 연결 캐시 ───────────────────────────────────────────────────────────────
 
 _pg_pools: Dict[str, Any] = {}       # asyncpg 풀
-_ssh_tunnels: Dict[str, Any] = {}    # sshtunnel 인스턴스
+_SSH_TUNNEL_POOL: Dict[Tuple[str, int], Dict[str, Any]] = {}
+_SSH_TUNNEL_IDLE_SECONDS = 300.0
 _MAX_POOL_SIZE = 3
-_pool_lock = asyncio.Lock()          # H2: pool/tunnel 생성 경쟁 방지
+_pool_lock = asyncio.Lock()          # PG 풀 생성/재생성 경쟁 방지
+_ssh_tunnel_lock = threading.Lock()  # SSH 터널 생성/정리 경쟁 방지
 
 
 # ─── 환경변수에서 DB 설정 조회 ────────────────────────────────────────────────
@@ -191,6 +218,47 @@ def _serialize_value(v: Any) -> Any:
 
 # ─── PostgreSQL 연결 (asyncpg) ────────────────────────────────────────────────
 
+def _is_pg_pool_open(pool: Any) -> bool:
+    """asyncpg Pool이 acquire 가능한 상태인지 확인."""
+    return pool is not None and not getattr(pool, "_closed", False)
+
+
+def _should_recreate_pg_pool(exc: Exception) -> bool:
+    """stale pool/connection 계열 오류만 1회 재생성 대상으로 분류."""
+    if isinstance(exc, (OSError, ConnectionError, asyncio.TimeoutError)):
+        return True
+
+    exc_name = exc.__class__.__name__
+    if exc_name in {
+        "InterfaceError",
+        "InternalClientError",
+        "ConnectionDoesNotExistError",
+        "CannotConnectNowError",
+        "TooManyConnectionsError",
+    }:
+        return True
+
+    message = str(exc).lower()
+    return "pool is closed" in message or "connection is closed" in message
+
+
+async def _discard_pg_pool(project: str, pool: Any = None) -> None:
+    """캐시된 PG 풀을 제거한다. 다른 요청이 이미 교체한 풀은 건드리지 않는다."""
+    resolved = _PROJECT_ALIAS.get(project, project)
+    pool_to_close = None
+
+    async with _pool_lock:
+        cached_pool = _pg_pools.get(resolved)
+        if pool is None or cached_pool is pool:
+            pool_to_close = _pg_pools.pop(resolved, None)
+
+    if pool_to_close and _is_pg_pool_open(pool_to_close):
+        try:
+            await pool_to_close.close()
+        except Exception:
+            logger.exception(f"query_project_database: PG 풀 종료 실패 | {project}({resolved})")
+
+
 async def _get_pg_pool(project: str):
     """PostgreSQL asyncpg 풀 반환 (캐싱). H2: Lock으로 경쟁 방지."""
     import asyncpg
@@ -198,11 +266,10 @@ async def _get_pg_pool(project: str):
     resolved = _PROJECT_ALIAS.get(project, project)
 
     async with _pool_lock:
-        if resolved in _pg_pools:
-            pool = _pg_pools[resolved]
-            if not pool._closed:
-                return pool
-            del _pg_pools[resolved]
+        pool = _pg_pools.get(resolved)
+        if _is_pg_pool_open(pool):
+            return pool
+        _pg_pools.pop(resolved, None)
 
         config = _get_project_db_config(project)
         if not config or not config["database"]:
@@ -229,21 +296,38 @@ async def _get_pg_pool(project: str):
 
 async def _query_postgresql(project: str, q: str) -> List[Dict[str, Any]]:
     """PostgreSQL 쿼리 실행. C2: read-only 트랜잭션으로 안전하게 실행."""
-    pool = await _get_pg_pool(project)
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            await conn.execute("SET LOCAL default_transaction_read_only = on")
-            rows = await conn.fetch(q)
-        return [{k: _serialize_value(v) for k, v in dict(r).items()} for r in rows]
+    last_error: Optional[Exception] = None
+
+    for attempt in range(2):
+        pool = await _get_pg_pool(project)
+        if not _is_pg_pool_open(pool):
+            await _discard_pg_pool(project, pool)
+            last_error = ConnectionError("PostgreSQL pool is closed")
+            continue
+
+        try:
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute("SET LOCAL default_transaction_read_only = on")
+                    rows = await conn.fetch(q)
+                return [{k: _serialize_value(v) for k, v in dict(r).items()} for r in rows]
+        except Exception as exc:
+            if attempt == 0 and _should_recreate_pg_pool(exc):
+                logger.warning(
+                    f"query_project_database: PG 풀 재생성 후 재시도 | {project} "
+                    f"error={exc.__class__.__name__}"
+                )
+                await _discard_pg_pool(project, pool)
+                last_error = exc
+                continue
+            raise
+
+    if last_error:
+        raise last_error
+    raise ConnectionError("PostgreSQL pool acquire failed")
 
 
 # ─── MySQL 연결 (SSH 터널 subprocess + pymysql) ──────────────────────────────
-
-import socket
-import subprocess
-import time
-
-_tunnel_procs: Dict[str, Dict[str, Any]] = {}  # project → {"proc": Popen, "local_port": int}
 
 
 def _find_free_port() -> int:
@@ -253,93 +337,181 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
+def _ssh_tunnel_pool_key(tunnel_config: Dict[str, Any]) -> Tuple[str, int]:
+    """SSH 터널 풀 키: SSH host + 원격 DB 포트."""
+    return (str(tunnel_config["ssh_host"]), int(tunnel_config["remote_port"]))
+
+
+def _terminate_process(proc: subprocess.Popen) -> None:
+    """터널 프로세스를 정상 종료 요청한다."""
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        logger.warning("query_project_database: SSH 터널 종료 대기 시간 초과")
+
+
+def _cleanup_idle_ssh_tunnels(now: Optional[float] = None) -> None:
+    """5분 이상 미사용 또는 이미 종료된 SSH 터널을 다음 호출에서 정리."""
+    now = time.monotonic() if now is None else now
+    for pool_key, info in list(_SSH_TUNNEL_POOL.items()):
+        proc = info.get("process")
+        if not proc or proc.poll() is not None:
+            _SSH_TUNNEL_POOL.pop(pool_key, None)
+            continue
+
+        last_used = float(info.get("last_used", 0.0))
+        if now - last_used > _SSH_TUNNEL_IDLE_SECONDS:
+            _SSH_TUNNEL_POOL.pop(pool_key, None)
+            _terminate_process(proc)
+            logger.info(f"query_project_database: SSH 터널 idle 정리 | key={pool_key}")
+
+
+def _drop_ssh_tunnel(project: str) -> None:
+    """문제 있는 터널을 풀에서 제거한다."""
+    tunnel_config = _SSH_TUNNEL_PROJECTS.get(project)
+    if not tunnel_config:
+        return
+
+    pool_key = _ssh_tunnel_pool_key(tunnel_config)
+    with _ssh_tunnel_lock:
+        info = _SSH_TUNNEL_POOL.pop(pool_key, None)
+        if info and info.get("process"):
+            _terminate_process(info["process"])
+
+
+def _should_recreate_ssh_tunnel(exc: Exception) -> bool:
+    """SSH 터널 단절로 볼 수 있는 MySQL 연결 오류만 재시도 대상으로 분류."""
+    if isinstance(exc, OSError):
+        return True
+
+    code = exc.args[0] if getattr(exc, "args", None) else None
+    if code in {2002, 2003, 2006, 2013}:
+        return True
+
+    if exc.__class__.__name__ == "InterfaceError":
+        return True
+
+    message = str(exc).lower()
+    return any(
+        phrase in message
+        for phrase in (
+            "connection refused",
+            "can't connect",
+            "lost connection",
+            "server has gone away",
+            "connection reset",
+        )
+    )
+
+
 def _ensure_ssh_tunnel(project: str) -> int:
     """SSH 터널 subprocess 시작/재사용. 로컬 포트 반환."""
-    # 기존 터널 확인
-    if project in _tunnel_procs:
-        info = _tunnel_procs[project]
-        proc = info["proc"]
-        if proc.poll() is None:  # 아직 실행 중
-            return info["local_port"]
-        # 종료됨 → 재생성
-        del _tunnel_procs[project]
-
     tunnel_config = _SSH_TUNNEL_PROJECTS.get(project)
     if not tunnel_config:
         raise ValueError(f"프로젝트 {project}의 SSH 터널 설정 없음")
 
-    # SSH 키 찾기
-    ssh_key = tunnel_config["ssh_key"]
-    if not os.path.exists(ssh_key):
-        for alt_key in ["/root/.ssh/id_ed25519", "/root/.ssh/id_rsa"]:
-            if os.path.exists(alt_key):
-                ssh_key = alt_key
+    pool_key = _ssh_tunnel_pool_key(tunnel_config)
+
+    with _ssh_tunnel_lock:
+        now = time.monotonic()
+        _cleanup_idle_ssh_tunnels(now)
+
+        info = _SSH_TUNNEL_POOL.get(pool_key)
+        if info:
+            proc = info["process"]
+            if proc.poll() is None:
+                info["last_used"] = now
+                return int(info["local_port"])
+            _SSH_TUNNEL_POOL.pop(pool_key, None)
+
+        # SSH 키 찾기
+        ssh_key = tunnel_config["ssh_key"]
+        if not os.path.exists(ssh_key):
+            for alt_key in ["/root/.ssh/id_ed25519", "/root/.ssh/id_rsa"]:
+                if os.path.exists(alt_key):
+                    ssh_key = alt_key
+                    break
+
+        local_port = _find_free_port()
+        remote_host = tunnel_config["remote_host"]
+        remote_port = tunnel_config["remote_port"]
+        ssh_host = tunnel_config["ssh_host"]
+        ssh_user = tunnel_config["ssh_user"]
+
+        cmd = [
+            "ssh", "-N", "-L",
+            f"{local_port}:{remote_host}:{remote_port}",
+            f"{ssh_user}@{ssh_host}",
+            "-i", ssh_key,
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ServerAliveInterval=30",
+            "-o", "ConnectTimeout=10",
+        ]
+
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        # 터널 연결 대기
+        for _ in range(20):
+            time.sleep(0.3)
+            try:
+                s = socket.create_connection(("127.0.0.1", local_port), timeout=1)
+                s.close()
                 break
+            except (ConnectionRefusedError, OSError):
+                if proc.poll() is not None:
+                    stderr = proc.stderr.read().decode()[:200] if proc.stderr else ""
+                    raise RuntimeError(f"SSH 터널 시작 실패: {stderr}")
+        else:
+            _terminate_process(proc)
+            raise RuntimeError("SSH 터널 연결 타임아웃 (6초)")
 
-    local_port = _find_free_port()
-    remote_host = tunnel_config["remote_host"]
-    remote_port = tunnel_config["remote_port"]
-    ssh_host = tunnel_config["ssh_host"]
-    ssh_user = tunnel_config["ssh_user"]
-
-    cmd = [
-        "ssh", "-N", "-L",
-        f"{local_port}:{remote_host}:{remote_port}",
-        f"{ssh_user}@{ssh_host}",
-        "-i", ssh_key,
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "ServerAliveInterval=30",
-        "-o", "ConnectTimeout=10",
-    ]
-
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    # 터널 연결 대기
-    for _ in range(20):
-        time.sleep(0.3)
-        try:
-            s = socket.create_connection(("127.0.0.1", local_port), timeout=1)
-            s.close()
-            break
-        except (ConnectionRefusedError, OSError):
-            if proc.poll() is not None:
-                stderr = proc.stderr.read().decode()[:200] if proc.stderr else ""
-                raise RuntimeError(f"SSH 터널 시작 실패: {stderr}")
-    else:
-        proc.kill()
-        raise RuntimeError(f"SSH 터널 연결 타임아웃 (6초)")
-
-    _tunnel_procs[project] = {"proc": proc, "local_port": local_port}
-    logger.info(
-        f"query_project_database: SSH 터널 생성 | {project} "
-        f"local:{local_port} → {ssh_host}:{remote_port}"
-    )
-    return local_port
+        _SSH_TUNNEL_POOL[pool_key] = {
+            "process": proc,
+            "local_port": local_port,
+            "last_used": time.monotonic(),
+        }
+        logger.info(
+            f"query_project_database: SSH 터널 생성 | {project} "
+            f"local:{local_port} → {ssh_host}:{remote_port}"
+        )
+        return local_port
 
 
 def _query_mysql_sync(project: str, q: str, config: Dict[str, str]) -> List[Dict[str, Any]]:
     """MySQL 쿼리 실행 (동기, SSH 터널 경유)."""
     import pymysql
 
-    local_port = _ensure_ssh_tunnel(project)
+    for attempt in range(2):
+        local_port = _ensure_ssh_tunnel(project)
+        try:
+            conn = pymysql.connect(
+                host="127.0.0.1",
+                port=local_port,
+                user=config["user"],
+                password=config["password"],
+                database=config["database"],
+                charset="utf8mb4",
+                connect_timeout=10,
+                read_timeout=30,
+                cursorclass=pymysql.cursors.DictCursor,
+            )
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(q)
+                    rows = cursor.fetchall()
+                    return [{k: _serialize_value(v) for k, v in row.items()} for row in rows]
+            finally:
+                conn.close()
+        except (pymysql.err.OperationalError, pymysql.err.InterfaceError, OSError) as exc:
+            if attempt == 0 and _should_recreate_ssh_tunnel(exc):
+                logger.warning(f"query_project_database: SSH 터널 재생성 후 재시도 | {project}")
+                _drop_ssh_tunnel(project)
+                continue
+            raise
 
-    conn = pymysql.connect(
-        host="127.0.0.1",
-        port=local_port,
-        user=config["user"],
-        password=config["password"],
-        database=config["database"],
-        charset="utf8mb4",
-        connect_timeout=10,
-        read_timeout=30,
-        cursorclass=pymysql.cursors.DictCursor,
-    )
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute(q)
-            rows = cursor.fetchall()
-            return [{k: _serialize_value(v) for k, v in row.items()} for row in rows]
-    finally:
-        conn.close()
+    raise ConnectionError(f"프로젝트 {project} MySQL 연결 실패")
 
 
 async def _query_mysql(project: str, q: str, db_name: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -376,12 +548,12 @@ async def close_all_project_connections():
             pass
     _pg_pools.clear()
 
-    for key, info in list(_tunnel_procs.items()):
+    for key, info in list(_SSH_TUNNEL_POOL.items()):
         try:
-            info["proc"].kill()
+            _terminate_process(info["process"])
         except Exception:
             pass
-    _tunnel_procs.clear()
+    _SSH_TUNNEL_POOL.clear()
 
     logger.info("close_all_project_connections: 모든 프로젝트 DB 연결 정리 완료")
 

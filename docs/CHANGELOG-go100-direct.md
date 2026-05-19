@@ -5875,3 +5875,15 @@ echo "[→CURRENT_BRANCH=$(git rev-parse --abbrev-
 ## [2026-05-19 07:50:07 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
 - Chat-Direct 수정: patch:     data_sources = _dedupe(list(guardrai→    data_sources = _dedupe(list(guardrai
 - finalize: pending
+
+## [2026-05-19 14:29:45 KST] [GO100] frontend/src/go100/components/StrategyResultCard.tsx
+- Chat-Direct 수정: patch: function renderRuleSummary(rules: Record→import { renderKoreanRuleSummary } from 
+- finalize: pending
+
+## [2026-05-19 14:30:11 KST] [GO100] frontend/src/go100/components/StrategyCard.tsx
+- Chat-Direct 수정: patch:           <div className="flex items-sta→          <div className="flex items-sta
+- finalize: pending
+
+## [2026-05-19 14:30:23 KST] [GO100] frontend/src/go100/components/StrategyResultCard.tsx
+- Chat-Direct 수정: patch:           <h4 className="mt-2 mb-1 font-→          <h4 className="mt-2 mb-1 font-
+- finalize: pending
