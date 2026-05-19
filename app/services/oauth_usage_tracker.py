@@ -21,6 +21,12 @@ from app.core.auth_provider import get_oauth_tokens, get_token_labels
 logger = logging.getLogger(__name__)
 
 KST = timezone(timedelta(hours=9))
+USAGE_LOG_FLUSH_BATCH_SIZE = 10
+USAGE_LOG_FLUSH_INTERVAL_SEC = 30.0
+
+_USAGE_LOG_BUFFER: List[Dict[str, Any]] = []
+_USAGE_LOG_LOCK = asyncio.Lock()
+_USAGE_LOG_FLUSH_TASK: Optional[asyncio.Task] = None
 
 # ── 토큰 → 슬롯 매핑 ──────────────────────────────────────────────────
 
@@ -83,26 +89,45 @@ def parse_ratelimit_headers(headers: Any) -> Dict[str, Any]:
 
 # ── DB 기록 (fire-and-forget) ─────────────────────────────────────────
 
-async def _insert_usage(
-    account_slot: str,
-    token_prefix: str,
-    model: str,
-    input_tokens: int,
-    output_tokens: int,
-    cache_creation_tokens: int,
-    cache_read_tokens: int,
-    cost_usd: float,
-    rl: Dict[str, Any],
-    call_source: str,
-    session_id: str,
-    error_code: Optional[str],
-    duration_ms: int,
-) -> None:
-    """DB INSERT — 실패해도 로그만 남기고 예외 전파 안 함."""
+def _usage_log_values(entry: Dict[str, Any]) -> tuple[Any, ...]:
+    rl = entry["rl"]
+    return (
+        entry["account_slot"],
+        entry["token_prefix"],
+        entry["model"],
+        entry["input_tokens"],
+        entry["output_tokens"],
+        entry["cache_creation_tokens"],
+        entry["cache_read_tokens"],
+        float(entry["cost_usd"]),
+        rl.get("rl_requests_limit"),
+        rl.get("rl_requests_remaining"),
+        rl.get("rl_requests_reset"),
+        rl.get("rl_tokens_limit"),
+        rl.get("rl_tokens_remaining"),
+        rl.get("rl_tokens_reset"),
+        rl.get("rl_input_tokens_limit"),
+        rl.get("rl_input_tokens_remaining"),
+        rl.get("rl_input_tokens_reset"),
+        rl.get("rl_output_tokens_limit"),
+        rl.get("rl_output_tokens_remaining"),
+        rl.get("rl_output_tokens_reset"),
+        entry["call_source"],
+        entry["session_id"],
+        entry["error_code"],
+        entry["duration_ms"],
+    )
+
+
+async def _insert_usage_batch(entries: List[Dict[str, Any]]) -> None:
+    """배치 INSERT — 실패해도 로그만 남기고 예외 전파 안 함."""
+    if not entries:
+        return
+
     try:
         pool = get_pool()
         async with pool.acquire() as conn:
-            await conn.execute(
+            await conn.executemany(
                 """
                 INSERT INTO oauth_usage_log (
                     account_slot, token_prefix, model,
@@ -120,18 +145,65 @@ async def _insert_usage(
                     $21,$22,$23,$24
                 )
                 """,
-                account_slot, token_prefix, model,
-                input_tokens, output_tokens,
-                cache_creation_tokens, cache_read_tokens,
-                float(cost_usd),
-                rl.get("rl_requests_limit"), rl.get("rl_requests_remaining"), rl.get("rl_requests_reset"),
-                rl.get("rl_tokens_limit"), rl.get("rl_tokens_remaining"), rl.get("rl_tokens_reset"),
-                rl.get("rl_input_tokens_limit"), rl.get("rl_input_tokens_remaining"), rl.get("rl_input_tokens_reset"),
-                rl.get("rl_output_tokens_limit"), rl.get("rl_output_tokens_remaining"), rl.get("rl_output_tokens_reset"),
-                call_source, session_id or "", error_code, duration_ms,
+                [_usage_log_values(entry) for entry in entries],
             )
     except Exception as e:
-        logger.warning("oauth_usage_insert_failed: %s", str(e)[:120])
+        logger.warning("oauth_usage_batch_insert_failed: %s", str(e)[:120])
+
+
+async def _drain_usage_buffer() -> List[Dict[str, Any]]:
+    async with _USAGE_LOG_LOCK:
+        if not _USAGE_LOG_BUFFER:
+            return []
+        entries = list(_USAGE_LOG_BUFFER)
+        _USAGE_LOG_BUFFER.clear()
+        return entries
+
+
+async def _flush_usage_buffer() -> None:
+    entries = await _drain_usage_buffer()
+    if entries:
+        await _insert_usage_batch(entries)
+
+
+async def _usage_flush_loop() -> None:
+    try:
+        while True:
+            await asyncio.sleep(USAGE_LOG_FLUSH_INTERVAL_SEC)
+            await _flush_usage_buffer()
+    except asyncio.CancelledError:
+        await _flush_usage_buffer()
+        raise
+
+
+def _ensure_flush_task() -> None:
+    global _USAGE_LOG_FLUSH_TASK
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    if _USAGE_LOG_FLUSH_TASK and not _USAGE_LOG_FLUSH_TASK.done():
+        task_loop = _USAGE_LOG_FLUSH_TASK.get_loop()
+        if task_loop is loop:
+            return
+
+    _USAGE_LOG_FLUSH_TASK = loop.create_task(_usage_flush_loop())
+
+
+async def _enqueue_usage(entry: Dict[str, Any]) -> None:
+    _ensure_flush_task()
+
+    entries_to_flush: List[Dict[str, Any]] = []
+    async with _USAGE_LOG_LOCK:
+        _USAGE_LOG_BUFFER.append(entry)
+        if len(_USAGE_LOG_BUFFER) >= USAGE_LOG_FLUSH_BATCH_SIZE:
+            entries_to_flush = list(_USAGE_LOG_BUFFER)
+            _USAGE_LOG_BUFFER.clear()
+
+    if entries_to_flush:
+        await _insert_usage_batch(entries_to_flush)
 
 
 def log_usage(
@@ -148,7 +220,7 @@ def log_usage(
     error_code: Optional[str] = None,
     duration_ms: int = 0,
 ) -> None:
-    """사용량 기록 (fire-and-forget). LLM 호출 직후 호출."""
+    """사용량 기록 (buffered fire-and-forget). LLM 호출 직후 호출."""
     rl = parse_ratelimit_headers(headers)
     slot = _token_slot(token)
     prefix = _token_prefix(token)
@@ -161,23 +233,30 @@ def log_usage(
             slot, remaining,
         )
 
-    asyncio.ensure_future(
-        _insert_usage(
-            account_slot=slot,
-            token_prefix=prefix,
-            model=model,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cache_creation_tokens=cache_creation_tokens,
-            cache_read_tokens=cache_read_tokens,
-            cost_usd=cost_usd,
-            rl=rl,
-            call_source=call_source,
-            session_id=session_id,
-            error_code=error_code,
-            duration_ms=duration_ms,
-        )
-    )
+    entry = {
+        "account_slot": slot,
+        "token_prefix": prefix,
+        "model": model,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cache_creation_tokens": cache_creation_tokens,
+        "cache_read_tokens": cache_read_tokens,
+        "cost_usd": cost_usd,
+        "rl": rl,
+        "call_source": call_source,
+        "session_id": session_id or "",
+        "error_code": error_code,
+        "duration_ms": duration_ms,
+    }
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.debug("oauth_usage_log_skipped_no_running_loop: model=%s source=%s", model, call_source)
+        return
+
+    _ensure_flush_task()
+    loop.create_task(_enqueue_usage(entry))
 
 
 # ── 조회: 5시간/1주일 롤링 윈도우 ─────────────────────────────────────

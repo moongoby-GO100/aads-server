@@ -21,9 +21,17 @@ def _get_int_env(name: str, default: int) -> int:
         return default
 
 
-STREAM_KEEPALIVE_INTERVAL_SEC = max(1, _get_int_env("STREAM_KEEPALIVE_INTERVAL_SEC", 15))
+def _get_float_env(name: str, default: float) -> float:
+    """실수 환경변수를 안전하게 읽는다."""
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+SSE_KEEPALIVE_INTERVAL = max(1, _get_int_env("SSE_KEEPALIVE_INTERVAL", 15))
+SSE_FLUSH_INTERVAL = max(0.0, _get_float_env("SSE_FLUSH_INTERVAL", 0.05))
 STREAM_BATCH_SIZE = max(1, _get_int_env("STREAM_BATCH_SIZE", 10))
-STREAM_BATCH_SLEEP_SEC = 0.05
 
 
 def _sse_event(event: str, data: dict) -> str:
@@ -119,7 +127,7 @@ async def _stream_project_execution(project_id: str):
     for i in range(0, len(events), STREAM_BATCH_SIZE):
         yield "".join(events[i:i + STREAM_BATCH_SIZE])
         if i + STREAM_BATCH_SIZE < len(events):
-            await asyncio.sleep(STREAM_BATCH_SLEEP_SEC)
+            await asyncio.sleep(SSE_FLUSH_INTERVAL)
 
 
 @router.post("/projects/{project_id}/stream")
@@ -146,7 +154,7 @@ async def stream_project(project_id: str):
                 try:
                     chunk = await asyncio.wait_for(
                         stream_iter.__anext__(),
-                        timeout=STREAM_KEEPALIVE_INTERVAL_SEC,
+                        timeout=SSE_KEEPALIVE_INTERVAL,
                     )
                     yield chunk
                 except asyncio.TimeoutError:

@@ -1392,3 +1392,9 @@ import re
 
 ## [2026-05-19 07:50:04 KST] [aads-server] docs/CHANGELOG-go100-direct.md
 - Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git diff scripts/claude_relay_server.py
+
+## [2026-05-19 14:44:14 KST] [aads-server] app/api/stream.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server-green grep -c "_FINALIZE_DB_RETRY_DELAYS" /app/app/servi
+
+## [2026-05-19 14:44:17 KST] [aads-server] app/api/stream.py
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && grep -n "flush_usage_buffer\|_usage_buffer\|batch_l

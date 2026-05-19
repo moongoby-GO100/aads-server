@@ -12,7 +12,7 @@ import re as _re
 import logging
 import os
 from dataclasses import dataclass, asdict
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 
@@ -135,6 +135,114 @@ INTENT_MAP: dict[str, dict] = {
     "encyclopedia_search":{"model": "gemini-3-flash-preview",     "tools": True,  "group": "all",     "gemini_direct": "grounding", "naver_type": "encyc"},
     "knowledge_search":   {"model": "gemini-3-flash-preview",     "tools": True,  "group": "all",     "gemini_direct": "grounding", "naver_type": "kin"},
 }
+
+INTENT_RULES: dict[str, dict[str, Any]] = {
+    "pc_kakao": {"keywords": ("카카오톡으로", "카톡 보내", "카톡으로", "카카오톡 메시지", "카톡 메시지")},
+    "pc_screenshot": {"keywords": ("pc 스크린샷", "pc 화면 캡처", "pc 화면 찍", "pc화면")},
+    "pc_file": {"keywords": ("pc 파일", "pc에서 파일", "pc 폴더")},
+    "pc_control": {"keywords": ("pc 제어", "pc 원격", "pc에서 실행", "pc에서 열어", "pc 프로그램", "pc 명령", "pc에서 메모장", "pc에서 크롬")},
+    "greeting": {"keywords": ("안녕", "hello", "hi ", "반가")},
+    "complex_analysis": {"keywords": ("도구 테스트", "전체 테스트", "전부 테스트", "모든 도구", "tool test", "도구 전부", "도구 모두")},
+    "task_query": {"keywords": ("시킨거", "진행", "확인", "됐나", "했나", "작업 현황", "다른 친구", "다른 애", "걔", "그 봇", "진행 상태"), "min_hits": 2},
+    "status_check": {"keywords": ("전체 상태 보고", "시스템 체크", "상태 체크", "현재 상태 알려", "전체 현황")},
+    "health_check": {"keywords": ("헬스체크", "서버 상태", "health")},
+    "pipeline_runner": {"keywords": ("파이프라인 시작", "파이프라인c", "pipeline c", "클로드봇", "봇한테 시켜", "봇에게 시켜", "자율작업", "자율 작업")},
+    "dashboard": {"keywords": ("대시보드", "작업현황", "pipeline", "파이프라인")},
+    "server_file": {"keywords": ("서버 검색", "원격 서버", "ssh 파일", "서버 파일", "프로젝트 서버에서", "kis 서버", "sf 서버", "ntv2 서버", "go100 서버")},
+    "service_inspection": {"keywords": ("서비스 점검", "점검해", "프로세스 확인", "서비스 상태 자세히", "docker 상태", "로그 확인")},
+    "all_service_status": {"keywords": ("전체 서비스 상태", "6개 서비스", "올 스테이터스", "모든 서비스 상태")},
+    "deep_research": {"keywords": ("심층", "deep research", "리서치 보고서", "시장 조사", "리서치", "경쟁사 분석", "트렌드 분석")},
+    "news_search": {"keywords": ("뉴스", "기사", "속보", "뉴스 검색")},
+    "blog_search": {"keywords": ("블로그", "후기", "리뷰 검색", "블로그 검색")},
+    "shop_search": {"keywords": ("쇼핑", "최저가", "가격 비교", "상품 검색", "쇼핑 검색")},
+    "local_search": {"keywords": ("맛집", "근처", "지역 검색", "장소 검색", "주변")},
+    "book_search": {"keywords": ("책 검색", "도서 검색", "서적", "isbn")},
+    "image_search": {"keywords": ("이미지 검색", "사진 찾", "이미지 찾")},
+    "encyclopedia_search": {"keywords": ("백과사전", "사전", "의미", "뜻이")},
+    "knowledge_search": {"keywords": ("지식인", "지식in", "q&a")},
+    "directive_gen": {"keywords": ("지시서", "directive_start", ">>>directive")},
+    "architect": {"keywords": ("아키텍처", "설계", "architect")},
+    "cto_strategy": {"keywords": ("장단점 비교", "찬반 비교", "어떻게 해야 할까", "어떻게 하는 게 좋", "비교해봐")},
+    "strategy": {"keywords": ("전략", "strategy")},
+    "code_modify": {"keywords": ("직접 수정", "코드 고쳐", "파일 수정", "반영해", "코드 수정해", "수정해서 배포", "수정하고 배포")},
+    "execute": {"keywords": ("실행해", "배포해", "서버 재시작", "빌드해", "테스트 돌려", "deploy")},
+    "code_task": {"keywords": ("코드", "버그", "수정", "개발")},
+    "cto_strategy_secondary": {"keywords": ("전략 토론", "방향 의견", "어떻게 생각", "기술 방향")},
+    "cto_code_analysis": {"keywords": ("코드 분석", "코드 흐름", "함수 추적", "소스 분석")},
+    "cto_directive": {"keywords": ("지시서 생성", "태스크 생성", "작업 지시", "이거 시켜")},
+    "cto_verify": {"keywords": ("작업 결과 검증", "커밋 확인", "결과 점검", "되나", "맞나", "정확한 맥락", "정확한 정보", "진화", "발전하는 세션", "확인하고", "보고완료")},
+    "cto_impact": {"keywords": ("영향 분석", "이거 바꾸면", "사전 분석")},
+    "cto_tech_debt": {"keywords": ("기술 부채", "todo 정리", "fixme", "정리 필요")},
+    "browser": {"keywords": ("스크린샷", "화면 캡처", "화면 봐줘", "렌더링 확인", "ui 깨", "화면이 이상")},
+    "cto_code_analysis_page": {"keywords": ("여기 확인", "여기 채팅", "여기 기능", "채팅창 기능", "페이지 기능")},
+    "url_read": {"keywords": ("이 url 읽어", "이 문서 분석", "이 페이지 내용", "http://", "https://", "url 열어", "링크 내용")},
+    "deep_crawl": {"keywords": ("조사해서 정리", "여러 소스 비교", "크롤링해서 분석", "딥 크롤", "deep crawl")},
+    "deep_research_secondary": {"keywords": ("딥리서치", "깊이 조사", "종합 보고서 써줘", "시장 분석 보고서", "경쟁 분석 보고서", "기술 동향 보고", "논문 조사", "조사해줘", "조사해서", "경쟁사", "트렌드", "보고서 작성")},
+    "code_explorer": {"keywords": ("함수 호출 체인", "로직 흐름 추적", "코드 탐색", "함수 추적 다이어그램", "trace_function")},
+    "analyze_changes": {"keywords": ("git 변경 분석", "최근 커밋 분석", "변경사항 위험도", "이번주 변경", "이번달 변경")},
+    "search_all_projects": {"keywords": ("전체 프로젝트 검색", "6개 서비스에서", "모든 프로젝트 코드", "전체 코드 검색")},
+}
+
+KEYWORD_FALLBACK_HEAD = (
+    "pc_kakao",
+    "pc_screenshot",
+    "pc_file",
+    "pc_control",
+    "greeting",
+    "complex_analysis",
+    "task_query",
+    "status_check",
+    "health_check",
+    "pipeline_runner",
+    "dashboard",
+    "server_file",
+    "service_inspection",
+    "all_service_status",
+    "deep_research",
+)
+
+KEYWORD_FALLBACK_SEARCH = (
+    "news_search",
+    "blog_search",
+    "shop_search",
+    "local_search",
+    "book_search",
+    "image_search",
+    "encyclopedia_search",
+    "knowledge_search",
+)
+
+KEYWORD_FALLBACK_TAIL = (
+    "directive_gen",
+    "architect",
+    "cto_strategy",
+    "strategy",
+    "code_modify",
+    "execute",
+    "code_task",
+    "cto_strategy_secondary",
+    "cto_code_analysis",
+    "cto_directive",
+    "cto_verify",
+    "cto_impact",
+    "cto_tech_debt",
+    "browser",
+    "cto_code_analysis_page",
+    "url_read",
+    "deep_crawl",
+    "deep_research_secondary",
+    "code_explorer",
+    "analyze_changes",
+    "search_all_projects",
+)
+
+COMMAND_OVERRIDE_RULES: dict[str, tuple[str, ...]] = {
+    "status_check": ("확인", "보고", "점검", "진단", "체크", "조회", "분석", "파악", "살펴", "알아봐"),
+    "execute": ("수정", "배포", "실행", "재시작", "적용", "반영", "시작", "조치", "구현"),
+}
+
+COMMAND_SUFFIX_RULES = ("하라", "해라", "해봐", "해줘", "하고", "해서", "하라고")
+INTENT_META_RULES = ("인텐트", "인턴트", "intent", "라우팅", "오분류", "분류")
 
 _DEFAULT_INTENT = IntentResult(
     intent="casual",
@@ -548,19 +656,31 @@ def _make_result(intent: str) -> IntentResult:
     )
 
 
+def _matches_intent_rule(msg: str, rule: dict[str, Any]) -> bool:
+    keywords = tuple(rule.get("keywords", ()))
+    if not keywords:
+        return False
+    min_hits = int(rule.get("min_hits", 1))
+    hits = sum(1 for keyword in keywords if keyword in msg)
+    return hits >= min_hits
+
+
+def _resolve_intent_from_rules(msg: str, ordered_intents: tuple[str, ...]) -> str | None:
+    for intent in ordered_intents:
+        rule = INTENT_RULES.get(intent)
+        if rule and _matches_intent_rule(msg, rule):
+            return intent
+    return None
+
+
 def _command_override(message: str) -> str | None:
     """CEO 명령형 메시지가 casual/greeting으로 오분류된 경우 보정."""
     msg = message.lower().strip()
-    # 명령형 키워드 + 어미 조합
-    _cmd_keywords = ("확인", "보고", "점검", "진단", "체크", "조회", "분석", "파악", "살펴", "알아봐")
-    _action_keywords = ("수정", "배포", "실행", "재시작", "적용", "반영", "시작", "조치", "구현")
-    _cmd_suffixes = ("하라", "해라", "해봐", "해줘", "하고", "해서", "하라고")
+    has_cmd = any(kw in msg for kw in COMMAND_OVERRIDE_RULES["status_check"])
+    has_action = any(kw in msg for kw in COMMAND_OVERRIDE_RULES["execute"])
+    has_suffix = any(sf in msg for sf in COMMAND_SUFFIX_RULES)
 
-    has_cmd = any(kw in msg for kw in _cmd_keywords)
-    has_action = any(kw in msg for kw in _action_keywords)
-    has_suffix = any(sf in msg for sf in _cmd_suffixes)
-
-    if any(w in msg for w in ("인텐트", "인턴트", "intent", "라우팅", "오분류", "분류")) and has_action:
+    if any(w in msg for w in INTENT_META_RULES) and has_action:
         return "code_modify"
     # "확인하고 보고하라" / "점검해봐" / "진단해줘"
     if has_cmd and (has_suffix or len(message) <= 30):
@@ -624,41 +744,10 @@ def _keyword_fallback(message: str) -> IntentResult:
     """Gemini 실패 시 키워드 기반 분류."""
     msg = message.lower()
 
-    # AADS-195 Phase 3: PC 제어 인텐트 (키워드 우선)
-    if any(w in msg for w in ("카카오톡으로", "카톡 보내", "카톡으로", "카카오톡 메시지", "카톡 메시지")):
-        return _make_result("pc_kakao")
-    if any(w in msg for w in ("pc 스크린샷", "pc 화면 캡처", "pc 화면 찍", "pc화면")):
-        return _make_result("pc_screenshot")
-    if any(w in msg for w in ("pc 파일", "pc에서 파일", "pc 폴더")):
-        return _make_result("pc_file")
-    if any(w in msg for w in ("pc 제어", "pc 원격", "pc에서 실행", "pc에서 열어", "pc 프로그램", "pc 명령", "pc에서 메모장", "pc에서 크롬")):
-        return _make_result("pc_control")
-    if any(w in msg for w in ("안녕", "hello", "hi ", "반가")):
-        return _make_result("greeting")
-    if any(w in msg for w in ("도구 테스트", "전체 테스트", "전부 테스트", "모든 도구", "tool test", "도구 전부", "도구 모두")):
-        return _make_result("complex_analysis")
-    # AADS-188C Phase 2: task_query — 2개 이상 키워드 매칭으로 정확도 향상
-    _tq_keywords = ["시킨거", "진행", "확인", "됐나", "했나", "작업 현황", "다른 친구", "다른 애", "걔", "그 봇", "진행 상태"]
-    _tq_hits = sum(1 for w in _tq_keywords if w in msg)
-    if _tq_hits >= 2:
-        return _make_result("task_query")
-    # AADS-188C Phase 2: status_check
-    if any(w in msg for w in ("전체 상태 보고", "시스템 체크", "상태 체크", "현재 상태 알려", "전체 현황")):
-        return _make_result("status_check")
-    if any(w in msg for w in ("헬스체크", "서버 상태", "health")):
-        return _make_result("health_check")
-    if any(w in msg for w in ("파이프라인 시작", "파이프라인c", "pipeline c", "클로드봇", "봇한테 시켜", "봇에게 시켜", "자율작업", "자율 작업")):
-        return _make_result("pipeline_runner")
-    if any(w in msg for w in ("대시보드", "작업현황", "pipeline", "파이프라인")):
-        return _make_result("dashboard")
-    if any(w in msg for w in ("서버 검색", "원격 서버", "ssh 파일", "서버 파일", "프로젝트 서버에서", "kis 서버", "sf 서버", "ntv2 서버", "go100 서버")):
-        return _make_result("server_file")
-    if any(w in msg for w in ("서비스 점검", "점검해", "프로세스 확인", "서비스 상태 자세히", "docker 상태", "로그 확인")):
-        return _make_result("service_inspection")
-    if any(w in msg for w in ("전체 서비스 상태", "6개 서비스", "올 스테이터스", "모든 서비스 상태")):
-        return _make_result("all_service_status")
-    if any(w in msg for w in ("심층", "deep research", "리서치 보고서", "시장 조사", "리서치", "경쟁사 분석", "트렌드 분석")):
-        return _make_result("deep_research")
+    head_intent = _resolve_intent_from_rules(msg, KEYWORD_FALLBACK_HEAD)
+    if head_intent:
+        normalized = "cto_strategy" if head_intent == "cto_strategy_secondary" else head_intent
+        return _make_result(normalized)
     if is_explicit_debate_request(message):
         return _make_result("discussion")
     if (
@@ -666,23 +755,11 @@ def _keyword_fallback(message: str) -> IntentResult:
         and any(w in msg for w in ("조치", "수정", "고쳐", "반영", "적용", "구현", "막아", "명시", "정확하게 지시"))
     ):
         return _make_result("code_modify")
-    # Naver 특화 검색 키워드
-    if any(w in msg for w in ("뉴스", "기사", "속보", "뉴스 검색")):
-        return _make_result("news_search")
-    if any(w in msg for w in ("블로그", "후기", "리뷰 검색", "블로그 검색")):
-        return _make_result("blog_search")
-    if any(w in msg for w in ("쇼핑", "최저가", "가격 비교", "상품 검색", "쇼핑 검색")):
-        return _make_result("shop_search")
-    if any(w in msg for w in ("맛집", "근처", "지역 검색", "장소 검색", "주변")):
-        return _make_result("local_search")
-    if any(w in msg for w in ("책 검색", "도서 검색", "서적", "isbn")):
-        return _make_result("book_search")
-    if any(w in msg for w in ("이미지 검색", "사진 찾", "이미지 찾")):
-        return _make_result("image_search")
-    if any(w in msg for w in ("백과사전", "사전", "의미", "뜻이")):
-        return _make_result("encyclopedia_search")
-    if any(w in msg for w in ("지식인", "지식in", "q&a")):
-        return _make_result("knowledge_search")
+
+    search_intent = _resolve_intent_from_rules(msg, KEYWORD_FALLBACK_SEARCH)
+    if search_intent:
+        return _make_result(search_intent)
+
     # 기술/라이브러리 관련 키워드가 함께 있으면 code_task 우선 (SearXNG 허용)
     _tech_keywords = ("라이브러리", "프레임워크", "패키지", "버전", "api ", "sdk", "공식문서", "최신 버전",
                       "설치", "import", "pip ", "npm ", "yarn ", "모듈", "의존성", "changelog")
@@ -690,63 +767,25 @@ def _keyword_fallback(message: str) -> IntentResult:
         if any(tw in msg for tw in _tech_keywords) or any(w in msg for w in ("코드", "버그", "개발", "구현", "함수")):
             return _make_result("code_task")
         return _make_result("search")
-    if any(w in msg for w in ("지시서", "directive_start", ">>>directive")):
-        return _make_result("directive_gen")
-    if any(w in msg for w in ("아키텍처", "설계", "architect")):
-        return _make_result("architect")
-    if any(w in msg for w in ("장단점 비교", "찬반 비교", "어떻게 해야 할까", "어떻게 하는 게 좋", "비교해봐")):
-        return _make_result("cto_strategy")
-    if any(w in msg for w in ("전략", "strategy")):
-        return _make_result("strategy")
-    if any(w in msg for w in ("직접 수정", "코드 고쳐", "파일 수정", "반영해", "코드 수정해", "수정해서 배포", "수정하고 배포")):
+
+    tail_intent = _resolve_intent_from_rules(msg, KEYWORD_FALLBACK_TAIL)
+    if tail_intent:
+        normalization_map = {
+            "cto_strategy_secondary": "cto_strategy",
+            "cto_code_analysis_page": "cto_code_analysis",
+            "deep_research_secondary": "deep_research",
+        }
+        return _make_result(normalization_map.get(tail_intent, tail_intent))
+
+    if any(w in msg for w in INTENT_META_RULES) and any(w in msg for w in ("조치", "수정", "고쳐", "반영", "적용", "구현", "막아")):
         return _make_result("code_modify")
-    if any(w in msg for w in ("실행해", "배포해", "서버 재시작", "빌드해", "테스트 돌려", "deploy")):
-        return _make_result("execute")
-    if any(w in msg for w in ("코드", "버그", "수정", "개발")):
-        return _make_result("code_task")
-    # CTO 모드 키워드 폴백
-    if any(w in msg for w in ("전략 토론", "방향 의견", "어떻게 생각", "기술 방향")):
-        return _make_result("cto_strategy")
-    if any(w in msg for w in ("코드 분석", "코드 흐름", "함수 추적", "소스 분석")):
-        return _make_result("cto_code_analysis")
-    if any(w in msg for w in ("지시서 생성", "태스크 생성", "작업 지시", "이거 시켜")):
-        return _make_result("cto_directive")
-    if any(w in msg for w in ("작업 결과 검증", "커밋 확인", "결과 점검")):
-        return _make_result("cto_verify")
-    if any(w in msg for w in ("영향 분석", "이거 바꾸면", "사전 분석")):
-        return _make_result("cto_impact")
-    if any(w in msg for w in ("기술 부채", "todo 정리", "fixme", "정리 필요")):
-        return _make_result("cto_tech_debt")
-    # 브라우저 도구 — 렌더링 확인이 명확한 경우만
-    if any(w in msg for w in ("스크린샷", "화면 캡처", "화면 봐줘", "렌더링 확인", "ui 깨", "화면이 이상")):
-        return _make_result("browser")
-    # "여기 확인해", "채팅창 기능" → 코드 분석 우선 (cto_code_analysis)
-    if any(w in msg for w in ("여기 확인", "여기 채팅", "여기 기능", "채팅창 기능", "페이지 기능")):
-        return _make_result("cto_code_analysis")
-    if any(w in msg for w in ("이 url 읽어", "이 문서 분석", "이 페이지 내용", "http://", "https://", "url 열어", "링크 내용")):
-        return _make_result("url_read")
-    if any(w in msg for w in ("조사해서 정리", "여러 소스 비교", "크롤링해서 분석", "딥 크롤", "deep crawl")):
-        return _make_result("deep_crawl")
-    if any(w in msg for w in ("딥리서치", "깊이 조사", "종합 보고서 써줘", "시장 분석 보고서", "경쟁 분석 보고서", "기술 동향 보고", "논문 조사", "조사해줘", "조사해서", "경쟁사", "트렌드", "보고서 작성")):
-        return _make_result("deep_research")
-    if any(w in msg for w in ("함수 호출 체인", "로직 흐름 추적", "코드 탐색", "함수 추적 다이어그램", "trace_function")):
-        return _make_result("code_explorer")
-    if any(w in msg for w in ("git 변경 분석", "최근 커밋 분석", "변경사항 위험도", "이번주 변경", "이번달 변경")):
-        return _make_result("analyze_changes")
-    if any(w in msg for w in ("전체 프로젝트 검색", "6개 서비스에서", "모든 프로젝트 코드", "전체 코드 검색")):
-        return _make_result("search_all_projects")
-    if any(w in msg for w in ("인텐트", "인턴트", "intent", "라우팅", "오분류", "분류")) and any(w in msg for w in ("조치", "수정", "고쳐", "반영", "적용", "구현", "막아")):
-        return _make_result("code_modify")
-    if any(w in msg for w in ("되나", "맞나", "정확한 맥락", "정확한 정보", "진화", "발전하는 세션", "확인하고", "보고완료")):
-        return _make_result("cto_verify")
 
     # ─── CEO 명령형 패턴 (casual 오분류 방지) ─────────────────────────────
     # "확인하라", "보고하라", "점검해", "진단해" 등 짧은 명령형
-    _cmd_keywords = ("확인", "보고", "점검", "진단", "체크", "조회", "분석", "파악", "살펴", "알아봐", "찾아봐")
-    _cmd_suffixes = ("하라", "해라", "해봐", "해줘", "하고", "해서")
-    if any(kw in msg for kw in _cmd_keywords):
+    status_keywords = COMMAND_OVERRIDE_RULES["status_check"] + ("찾아봐",)
+    if any(kw in msg for kw in status_keywords):
         # 명령형 어미가 있거나 메시지가 짧으면(CEO 지시 스타일) → status_check
-        if any(msg.endswith(sf) or sf in msg for sf in _cmd_suffixes) or len(message) <= 30:
+        if any(msg.endswith(sf) or sf in msg for sf in COMMAND_SUFFIX_RULES) or len(message) <= 30:
             return _make_result("status_check")
     # "넌 ~할 수 있다" 패턴 → 능력 확인 후 실행 기대
     if ("넌 " in msg or "너는 " in msg) and any(w in msg for w in ("가능", "접근", "할 수", "할수", "서버")):

@@ -120,8 +120,14 @@ def _ssh_tunnel_config(
             ),
             ssh_key,
         ),
-        "remote_host": _env_value((f"{project}_DB_HOST", "DB_HOST"), remote_host),
-        "remote_port": _env_int((f"{project}_DB_PORT", "DB_PORT"), remote_port),
+        "remote_host": _env_value(
+            (f"{project}_DB_HOST", f"SSH_{project}_REMOTE_HOST", "SSH_REMOTE_HOST"),
+            remote_host,
+        ),
+        "remote_port": _env_int(
+            (f"{project}_DB_PORT", f"SSH_{project}_REMOTE_PORT", "SSH_REMOTE_PORT"),
+            remote_port,
+        ),
     }
 
 
@@ -203,14 +209,14 @@ def _get_project_db_config(project: str) -> Optional[Dict[str, str]]:
     database = os.getenv(f"{prefix}_DB_NAME", "")
     user = os.getenv(f"{prefix}_DB_USER", "")
     password = os.getenv(f"{prefix}_DB_PASSWORD", "")
-    host = _env_value((f"{prefix}_DB_HOST", "DB_HOST"), "")
+    host = _env_value((f"{prefix}_DB_HOST",), "")
     if not host and (database or user or password):
         host = default_host
     if not host:
         return None
     return {
         "host": host,
-        "port": _env_value((f"{prefix}_DB_PORT", "DB_PORT"), default_port),
+        "port": _env_value((f"{prefix}_DB_PORT",), default_port),
         "database": database,
         "user": user,
         "password": password,
@@ -496,6 +502,7 @@ def _redact_ssh_key_paths(message: str) -> str:
         key_path = str(config.get("ssh_key", ""))
         if key_path:
             key_paths.add(key_path)
+            key_paths.add(os.path.expanduser(key_path))
     for key_path in key_paths:
         safe = safe.replace(key_path, "<ssh-key>")
     return safe
@@ -593,7 +600,7 @@ def _ensure_ssh_tunnel(project: str) -> int:
                 _terminate_process(stale["process"])
 
         # SSH 키 찾기
-        ssh_key = tunnel_config["ssh_key"]
+        ssh_key = os.path.expanduser(str(tunnel_config["ssh_key"]))
         if not os.path.exists(ssh_key):
             for alt_key in ["/root/.ssh/id_ed25519", "/root/.ssh/id_rsa"]:
                 if os.path.exists(alt_key):

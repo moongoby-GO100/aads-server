@@ -27,9 +27,12 @@ import json
 import re
 import uuid
 import logging
+import asyncio
+import hashlib
+import time
 import asyncpg
 import httpx
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -44,6 +47,13 @@ settings = Settings()
 import os as _os
 # 환경변수화: CEO 채팅 max_tokens 최고한도
 _MAX_TOKENS_CEO = int(_os.getenv("MAX_TOKENS_CEO_CHAT", "32768"))
+_REQUEST_DEDUP_WINDOW_SEC = 0.5
+_REQUEST_DEDUP_TTL_SEC = 60.0
+_REQUEST_DEDUP_CLEANUP_INTERVAL_SEC = 60.0
+_REQUEST_DEDUP_CACHE: Dict[Tuple[str, str], float] = {}
+_REQUEST_DEDUP_LOCK = asyncio.Lock()
+_REQUEST_DEDUP_LAST_CLEANUP = 0.0
+_RECENT_ASSISTANT_RESPONSE_WINDOW_SEC = 5.0
 
 
 def _anthropic_error_try_next_oauth_key(exc: APIStatusError) -> bool:
@@ -59,6 +69,77 @@ def _anthropic_error_try_next_oauth_key(exc: APIStatusError) -> bool:
         except Exception:
             parts.append(str(body))
     return "limit" in " ".join(parts).lower()
+
+
+def _message_content_hash(content: str) -> str:
+    normalized = (content or "").strip()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+async def _is_duplicate_request(session_id: str, content: str) -> bool:
+    now = time.monotonic()
+    cache_key = (session_id, _message_content_hash(content))
+
+    async with _REQUEST_DEDUP_LOCK:
+        global _REQUEST_DEDUP_LAST_CLEANUP
+
+        if now - _REQUEST_DEDUP_LAST_CLEANUP >= _REQUEST_DEDUP_CLEANUP_INTERVAL_SEC:
+            expire_before = now - _REQUEST_DEDUP_TTL_SEC
+            expired = [
+                key for key, timestamp in _REQUEST_DEDUP_CACHE.items()
+                if timestamp < expire_before
+            ]
+            for key in expired:
+                _REQUEST_DEDUP_CACHE.pop(key, None)
+            _REQUEST_DEDUP_LAST_CLEANUP = now
+
+        previous = _REQUEST_DEDUP_CACHE.get(cache_key)
+        if previous is not None and now - previous <= _REQUEST_DEDUP_WINDOW_SEC:
+            return True
+
+        _REQUEST_DEDUP_CACHE[cache_key] = now
+        return False
+
+
+async def _build_duplicate_response(
+    conn,
+    session_id: str,
+    message: str,
+    requested_model: Optional[str] = None,
+) -> Dict[str, Any]:
+    fallback_model = requested_model or route_model(message)
+    fallback_intent = classify_intent(message)
+
+    last_assistant = await conn.fetchrow(
+        """SELECT content, model_used, created_at
+           FROM ceo_chat_messages
+           WHERE session_id = $1 AND role = 'assistant'
+           ORDER BY created_at DESC LIMIT 1""",
+        session_id,
+    )
+
+    response_text = ""
+    model_id = fallback_model
+    if last_assistant:
+        created_at = last_assistant["created_at"]
+        recent_cutoff = datetime.now(timezone.utc) - timedelta(seconds=_RECENT_ASSISTANT_RESPONSE_WINDOW_SEC)
+        if created_at and created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        if created_at and created_at >= recent_cutoff:
+            response_text = last_assistant["content"] or ""
+            model_id = last_assistant["model_used"] or model_id
+
+    return {
+        "session_id": session_id,
+        "response": response_text,
+        "model_used": _model_display_name(model_id) if model_id else "",
+        "model_id": model_id or "",
+        "intent": fallback_intent,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "active_tasks": [],
+    }
 
 
 def _ceo_oauth_anthropic_clients():
@@ -1720,6 +1801,11 @@ async def send_ceo_message(req: CeoChatRequest):
             await conn.execute(
                 "INSERT INTO ceo_chat_sessions (session_id) VALUES ($1)", session_id
             )
+
+        if await _is_duplicate_request(session_id, req.message):
+            logger.info("ceo_chat_duplicate_skipped session=%s", session_id[:8])
+            requested_model = req.model if req.model and req.model != "mixture" else None
+            return await _build_duplicate_response(conn, session_id, req.message, requested_model)
 
         # 컨텍스트 빌드 (AADS-190: memory_recall 통합)
         ctx_mgr = ContextManager(conn)
