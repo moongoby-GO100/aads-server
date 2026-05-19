@@ -4,6 +4,7 @@ POST /api/v1/projects/{id}/stream — 8-agent 실행 상태를 SSE로 실시간 
 """
 import asyncio
 import json
+import os
 import time
 from datetime import datetime
 
@@ -12,7 +13,17 @@ from fastapi.responses import StreamingResponse
 
 router = APIRouter()
 
-KEEPALIVE_INTERVAL = 20  # 초 (Nginx 60s timeout 대비)
+def _get_int_env(name: str, default: int) -> int:
+    """정수 환경변수를 안전하게 읽는다."""
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+STREAM_KEEPALIVE_INTERVAL_SEC = max(1, _get_int_env("STREAM_KEEPALIVE_INTERVAL_SEC", 15))
+STREAM_BATCH_SIZE = max(1, _get_int_env("STREAM_BATCH_SIZE", 10))
+STREAM_BATCH_SLEEP_SEC = 0.05
 
 
 def _sse_event(event: str, data: dict) -> str:
@@ -68,40 +79,47 @@ async def _stream_project_execution(project_id: str):
     llm_calls = state.values.get("llm_calls_count", 0)
     total_cost = state.values.get("total_cost_usd", 0.0)
 
-    # 에이전트 완료 상태 전송
+    events = []
+
+    # 에이전트 완료 상태 수집
     for agent in agents_completed:
-        yield _sse_event("agent_complete", {
+        events.append(_sse_event("agent_complete", {
             "agent": agent,
             "timestamp": datetime.utcnow().isoformat(),
             "status": "completed",
-        })
-        await asyncio.sleep(0.05)
+        }))
 
-    # 현재 체크포인트 전송
-    yield _sse_event("checkpoint", {
+    # 현재 체크포인트 수집
+    events.append(_sse_event("checkpoint", {
         "stage": current_stage,
         "auto_approved": True,
         "timestamp": datetime.utcnow().isoformat(),
-    })
+    }))
 
-    # 파이프라인 상태 전송
+    # 파이프라인 상태 수집
     is_completed = current_stage in ("completed", "cancelled")
-    yield _sse_event("pipeline_status", {
+    events.append(_sse_event("pipeline_status", {
         "project_id": project_id,
         "status": "completed" if is_completed else "in_progress",
         "checkpoint_stage": current_stage,
         "llm_calls_count": llm_calls,
         "total_cost_usd": total_cost,
         "generated_files": state.values.get("generated_files", []),
-    })
+    }))
 
     if is_completed:
-        yield _sse_event("pipeline_complete", {
+        events.append(_sse_event("pipeline_complete", {
             "project_id": project_id,
             "total_cost_usd": total_cost,
             "llm_calls_count": llm_calls,
             "timestamp": datetime.utcnow().isoformat(),
-        })
+        }))
+
+    # 이벤트를 배치로 묶어 전송하고, 배치 사이에만 짧게 대기한다.
+    for i in range(0, len(events), STREAM_BATCH_SIZE):
+        yield "".join(events[i:i + STREAM_BATCH_SIZE])
+        if i + STREAM_BATCH_SIZE < len(events):
+            await asyncio.sleep(STREAM_BATCH_SLEEP_SEC)
 
 
 @router.post("/projects/{project_id}/stream")
@@ -114,13 +132,29 @@ async def stream_project(project_id: str):
     """
     async def event_generator():
         try:
+            # stream_start는 즉시 전송
+            yield _sse_event("stream_start", {
+                "project_id": project_id,
+                "timestamp": datetime.utcnow().isoformat(),
+            })
+
             # keepalive ping
             yield ": keepalive\n\n"
 
-            async for chunk in _stream_project_execution(project_id):
-                yield chunk
+            stream_iter = _stream_project_execution(project_id).__aiter__()
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(
+                        stream_iter.__anext__(),
+                        timeout=STREAM_KEEPALIVE_INTERVAL_SEC,
+                    )
+                    yield chunk
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                except StopAsyncIteration:
+                    break
 
-            # 종료 신호
+            # done은 즉시 전송
             yield _sse_event("done", {"project_id": project_id})
         except Exception as e:
             yield _sse_event("error", {"message": str(e), "project_id": project_id})
