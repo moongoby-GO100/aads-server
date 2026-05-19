@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional
 
 import asyncpg
 from anthropic import APIStatusError
@@ -118,6 +118,7 @@ _stale_cleanup_task: _heartbeat_asyncio.Task | None = getattr(
 # 클라이언트 이탈 후 자동 종료 시간 (초)
 _BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "600"))  # 10분 (도구 실행 중 탭 전환 보호)
 _FIRST_RESPONSE_TIMEOUT_SEC = float(os.getenv("AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC", "180"))
+_FINALIZE_DB_RETRY_DELAYS = (0.5, 1.0, 2.0)
 _COOLDOWN_SECS_DEFAULT = 300
 _RECOVERY_DEDUPE_MODEL_USED = {"recovered", "recovered_from_redis", "stopped", None}
 _RECOVERY_PREFIX_LEN = 50
@@ -311,6 +312,46 @@ def _tool_result_event_snapshot(event: Dict[str, Any], content_limit: int = 500)
     if event.get("raw_error"):
         payload["raw_error"] = str(event.get("raw_error", ""))[:content_limit]
     return payload
+
+
+async def _retry_background_finalize_step(
+    *,
+    session_id: str,
+    execution_id: Optional[str],
+    step_name: str,
+    operation: Callable[[], Awaitable[None]],
+) -> bool:
+    """Retry producer-finally DB writes so short DB blips do not leave stale UI state."""
+    total_attempts = len(_FINALIZE_DB_RETRY_DELAYS) + 1
+    for attempt in range(1, total_attempts + 1):
+        try:
+            await operation()
+            return True
+        except Exception as exc:
+            if attempt == total_attempts:
+                logger.error(
+                    "bg_finalize_failed session=%s execution=%s step=%s attempts=%s error=%s",
+                    session_id[:8],
+                    str(execution_id or "")[:8],
+                    step_name,
+                    total_attempts,
+                    exc,
+                    exc_info=True,
+                )
+                return False
+            delay = _FINALIZE_DB_RETRY_DELAYS[attempt - 1]
+            logger.warning(
+                "bg_finalize_retry session=%s execution=%s step=%s next_attempt=%s/%s delay=%.1fs error=%s",
+                session_id[:8],
+                str(execution_id or "")[:8],
+                step_name,
+                attempt + 1,
+                total_attempts,
+                delay,
+                exc,
+            )
+            await _heartbeat_asyncio.sleep(delay)
+    return False
 
 
 def normalize_tool_events(tools_called: Any) -> List[Dict[str, Any]]:
@@ -1830,6 +1871,7 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any]) -> Non
                         "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
                         _sid,
                     )
+        state["_last_content_len"] = len(content)
         _sc = state.get("_save_count", 0) + 1
         state["_save_count"] = _sc
         (logger.info if _sc <= 2 else logger.debug)(
@@ -1844,7 +1886,12 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any]) -> Non
         logger.warning(f"interim_save_failed session={session_id[:8]}: {e}")
 
 
-async def _delete_streaming_placeholder(session_id: str, execution_id: Optional[str] = None) -> None:
+async def _delete_streaming_placeholder(
+    session_id: str,
+    execution_id: Optional[str] = None,
+    *,
+    raise_on_error: bool = False,
+) -> None:
     """스트리밍 완료 후 placeholder 메시지 삭제 (최종 응답이 별도로 저장되므로).
     안전장치: 최종 응답이 없으면 placeholder를 최종 응답으로 전환.
     Race condition 완화: placeholder 생성 이전 user 메시지 이후 정상 응답이 있으면 promote 안 함."""
@@ -1946,6 +1993,8 @@ async def _delete_streaming_placeholder(session_id: str, execution_id: Optional[
                     )
                     logger.warning(f"empty_placeholder_deleted session={session_id[:8]}")
     except Exception as e:
+        if raise_on_error:
+            raise
         logger.warning(f"delete_placeholder_failed session={session_id[:8]}: {e}")
 
 
@@ -1982,12 +2031,39 @@ async def with_background_completion(
         "last_event_at": _state_start,
         "first_response_at": None,
         "last_idle_save": 0.0,
+        "_last_content_len": None,
     }
     _streaming_state[session_id] = state
 
     _client_gone_since: float = 0  # 클라이언트 이탈 시각 (monotonic)
 
     _token_idx = 0  # Redis Stream 토큰 인덱스
+
+    async def _maybe_interim_save_after_disconnect() -> bool:
+        content_len = len(state.get("content", "") or "")
+        if state.get("_last_content_len") == content_len:
+            return False
+        await _interim_save_streaming(session_id, state)
+        return True
+
+    async def _ensure_execution_completed_in_db() -> None:
+        execution_id = state.get("execution_id")
+        if not execution_id:
+            return
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE chat_turn_executions
+                SET status = 'completed',
+                    error_message = NULL,
+                    completed_at = COALESCE(completed_at, NOW()),
+                    updated_at = NOW()
+                WHERE id = $1
+                  AND status IN ('running', 'retrying')
+                """,
+                uuid.UUID(str(execution_id)),
+            )
 
     async def _regenerate_stream(session_id: str, partial_content: str) -> AsyncGenerator[str, None]:
         """에러 후 재시도: 마지막 user 메시지를 기반으로 스트리밍 재생성."""
@@ -2101,13 +2177,13 @@ async def with_background_completion(
                     # 3초마다 중간 저장 (connected와 동일 간격, DB 부하 67% 감소)
                     if now - state["last_save"] > 3:
                         state["last_save"] = now
-                        await _interim_save_streaming(session_id, state)
+                        await _maybe_interim_save_after_disconnect()
                     # 클라이언트 이탈 후: LLM 활동 없으면 _BG_AUTO_CANCEL_SEC, 활동 중이면 최대 30분
                     _idle_since_last_event = now - state.get("last_event_at", _client_gone_since)
                     _effective_cancel_sec = _BG_AUTO_CANCEL_SEC if _idle_since_last_event > 120 else min(_BG_AUTO_CANCEL_SEC * 3, 1800)
                     if _client_gone_since and (now - _client_gone_since) > _effective_cancel_sec:
                         logger.warning(f"bg_auto_cancel: session={session_id[:8]} client gone for {now - _client_gone_since:.0f}s, auto-stopping")
-                        await _interim_save_streaming(session_id, state)
+                        await _maybe_interim_save_after_disconnect()
                         # AADS: bool 대신 reason 문자열로 저장 (L1138 reason[:1000] 슬라이싱 호환)
                         state["_producer_incomplete_exit"] = "client_gone_auto_cancel"
                         return  # producer 종료 → finally에서 cleanup
@@ -2271,6 +2347,12 @@ async def with_background_completion(
                     await _redis_stream.mark_stream_done(_stream_id_for_state(session_id, state))
                 except Exception:
                     pass
+                await _retry_background_finalize_step(
+                    session_id=session_id,
+                    execution_id=state.get("execution_id"),
+                    step_name="execution_completed",
+                    operation=_ensure_execution_completed_in_db,
+                )
             else:
                 logger.warning(
                     "bg_producer_incomplete_exit session=%s execution=%s exception=%s rate_limited=%s",
@@ -2280,7 +2362,7 @@ async def with_background_completion(
                     state.get("_rate_limited", False),
                 )
                 if not state.get("_rate_limited", False) and state.get("execution_id"):
-                    try:
+                    async def _mark_interrupted_step() -> None:
                         _pool = get_pool()
                         async with _pool.acquire() as _conn:
                             await _mark_execution_interrupted(
@@ -2293,20 +2375,25 @@ async def with_background_completion(
                                 partial_content=state.get("content", ""),
                                 delete_empty_placeholder=False,
                             )
-                    except Exception as _interrupt_err:
-                        logger.warning(
-                            "bg_producer_interrupt_mark_failed session=%s execution=%s error=%s",
-                            session_id[:8],
-                            str(state.get("execution_id") or "")[:8],
-                            _interrupt_err,
-                        )
+                    await _retry_background_finalize_step(
+                        session_id=session_id,
+                        execution_id=state.get("execution_id"),
+                        step_name="mark_interrupted",
+                        operation=_mark_interrupted_step,
+                    )
             # 스트리밍 완료 → placeholder 삭제 (최종 응답이 generator 내부에서 저장됨)
             # rate_limited/미완료 종료 시에는 placeholder를 보존하여 재시작 복구 대상에 남긴다.
             if _completed_ok and not state.get("_rate_limited", False):
-                try:
-                    await _delete_streaming_placeholder(session_id, execution_id=state.get("execution_id"))
-                except Exception as del_err:
-                    logger.warning(f"bg_producer_placeholder_delete_err session={session_id}: {del_err}")
+                await _retry_background_finalize_step(
+                    session_id=session_id,
+                    execution_id=state.get("execution_id"),
+                    step_name="delete_placeholder",
+                    operation=lambda: _delete_streaming_placeholder(
+                        session_id,
+                        execution_id=state.get("execution_id"),
+                        raise_on_error=True,
+                    ),
+                )
             # 상태를 즉시 삭제하지 않고 completed로 전환 (세션 복귀 시 감지용, 90초 후 자동 정리)
             if session_id in _streaming_state:
                 _streaming_state[session_id]["completed"] = True
@@ -2565,7 +2652,7 @@ async def with_background_completion(
         _client_gone = True
         _client_gone_since = _bg_time.monotonic()
         # 즉시 중간 저장 (돌아왔을 때 바로 보이도록)
-        _heartbeat_asyncio.create_task(_interim_save_streaming(session_id, state))
+        _heartbeat_asyncio.create_task(_maybe_interim_save_after_disconnect())
         logger.info(f"client_disconnected session={session_id} — producer continues in background (auto-cancel in {_BG_AUTO_CANCEL_SEC}s), interim save triggered")
     finally:
         _hb_stop.set()
