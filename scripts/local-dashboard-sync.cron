@@ -1,0 +1,1 @@
+*/5 * * * * root /root/aads/aads-server/scripts/local-dashboard-sync.sh

@@ -741,20 +741,45 @@ class PipelineCJob:
             return {"error": str(e)}
 
     async def _run_frontend_qa_if_needed(self):
-        """AADS 프로젝트 + aads-dashboard 변경 시 QA 파이프라인 자동 실행."""
+        """AADS 프로젝트 + aads-dashboard 변경 시 대시보드 BG 배포 + QA 자동 실행."""
         if self.project != "AADS":
             return
         if "aads-dashboard/" not in (self.git_diff or ""):
             return
 
         try:
+            self._log("frontend_deploy", "프론트엔드(dashboard) 변경 감지 — 대시보드 BG 배포 시작...")
+            await self._post_to_chat(
+                f"🔨 **[대시보드 배포 시작]** `{self.job_id}`\n"
+                f"aads-dashboard 변경 감지. Blue-Green 배포를 실행합니다..."
+            )
+            _dash_deploy_ok = False
+            try:
+                _dash_result = await self._ssh_command(
+                    "bash /root/aads/aads-dashboard/deploy.sh",
+                    timeout=300,
+                )
+                _dash_deploy_ok = "배포 완료" in _dash_result or "배포 성공" in _dash_result or "blue-green" in _dash_result.lower()
+                self._log("frontend_deploy_done", f"대시보드 배포 완료: {_dash_result[-300:]}")
+                await self._post_to_chat(
+                    f"{'✅' if _dash_deploy_ok else '⚠️'} **[대시보드 배포 {'완료' if _dash_deploy_ok else '결과 확인 필요'}]** `{self.job_id}`\n"
+                    f"{_dash_result[-200:]}"
+                )
+            except Exception as _deploy_err:
+                logger.warning(f"pipeline_c_frontend_deploy_error job={self.job_id}: {_deploy_err}")
+                await self._post_to_chat(
+                    f"⚠️ **[대시보드 배포 실패]** `{self.job_id}`\n"
+                    f"오류: {str(_deploy_err)[:300]}\n"
+                    f"기존 대시보드 유지. 수동: `bash /root/aads/aads-dashboard/deploy.sh`"
+                )
+
             from app.services.qa_pipeline import run_full_qa
             from app.services.ceo_notify import notify_ceo
 
-            self._log("frontend_qa", "프론트엔드(dashboard) 변경 감지 — QA 자동 실행 중...")
+            self._log("frontend_qa", "대시보드 배포 후 QA 검증 시작...")
             await self._post_to_chat(
                 f"🔍 **[프론트엔드 QA 시작]** `{self.job_id}`\n"
-                f"aads-dashboard 변경 감지. 시각적 QA 검사를 실행합니다..."
+                f"대시보드 배포 후 시각적 QA 검사를 실행합니다..."
             )
 
             qa_result = await run_full_qa(
