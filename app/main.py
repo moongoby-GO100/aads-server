@@ -1206,6 +1206,22 @@ async def lifespan(app: FastAPI):
 
     _startup_asyncio.create_task(_check_missed_sleep_time())
 
+    # Rate limit 만료 자동 정리 + model registry 복구 (재발 방지)
+    async def _periodic_rate_limit_cleanup():
+        import asyncio as _rl_asyncio
+        await _rl_asyncio.sleep(30)
+        while True:
+            try:
+                from app.services.model_registry import clear_expired_rate_limits
+                result = await clear_expired_rate_limits()
+                if result.get("cleared", 0) > 0:
+                    logger.info(f"rate_limit_auto_cleanup: {result}")
+            except Exception as _e:
+                logger.warning(f"rate_limit_auto_cleanup_failed: {_e}")
+            await _rl_asyncio.sleep(60)
+
+    _startup_asyncio.create_task(_periodic_rate_limit_cleanup())
+
     # KakaoBot SaaS 스케줄러 시작
     try:
         from app.services.kakaobot_scheduler import start_scheduler_tasks

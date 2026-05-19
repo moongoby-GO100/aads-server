@@ -1291,6 +1291,21 @@ async def ensure_runtime_models_fresh(*, provider: str | None = None, active_onl
     if now_ts - last_attempt < _AUTO_REFRESH_MIN_INTERVAL_SECONDS:
         return {"checked": False, "triggered": False, "reason": "cooldown", "provider": normalized_provider or None}
 
+    # 만료된 rate limit 즉시 정리 → 복구 re-sync
+    try:
+        rl_result = await clear_expired_rate_limits()
+        if rl_result.get("cleared", 0) > 0 and rl_result.get("synced"):
+            _auto_refresh_attempts[scope] = now_ts
+            return {
+                "checked": True,
+                "triggered": True,
+                "reason": "rate_limit_auto_cleared",
+                "provider": normalized_provider or None,
+                "cleared_keys": rl_result.get("keys", []),
+            }
+    except Exception:
+        logger.warning("ensure_runtime_models_fresh.rate_limit_clear_failed")
+
     pool = get_pool()
     async with pool.acquire() as conn:
         key_rows = await _fetch_key_rows(conn)
@@ -1307,11 +1322,16 @@ async def ensure_runtime_models_fresh(*, provider: str | None = None, active_onl
             continue
         if int(key_state.get(provider_name, {}).get("available_key_count", 0)) <= 0:
             continue
+        provider_rows = [row for row in registry_rows if row.get("provider") == provider_name]
+        inactive_count = sum(1 for row in provider_rows if not row.get("is_active"))
+        if not provider_rows or inactive_count == 0:
+            continue
+        total_count = len(provider_rows)
+        if inactive_count > 0 and inactive_count >= total_count * 0.5:
+            stale_providers.append(provider_name)
+            continue
         template_ids = {t.model_id for t in templates}
-        template_rows = [
-            row for row in registry_rows
-            if row.get("provider") == provider_name and row.get("model_id") in template_ids
-        ]
+        template_rows = [row for row in provider_rows if row.get("model_id") in template_ids]
         if template_rows and any(bool(row.get("is_active")) for row in template_rows):
             continue
         stale_providers.append(provider_name)
@@ -1677,3 +1697,48 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
         "normalized_providers": normalized_providers,
         "review_required_providers": review_required_providers,
     }
+
+
+async def clear_expired_rate_limits() -> dict[str, Any]:
+    """만료된 rate_limited_until을 NULL로 초기화하고, 변경 시 registry를 재동기화한다."""
+    pool = get_pool()
+    cleared_keys: list[str] = []
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                UPDATE llm_api_keys
+                SET rate_limited_until = NULL, updated_at = NOW()
+                WHERE rate_limited_until IS NOT NULL
+                  AND rate_limited_until <= NOW()
+                RETURNING key_name, provider
+                """
+            )
+            cleared_keys = [row["key_name"] for row in rows]
+    except Exception:
+        logger.exception("clear_expired_rate_limits.db_failed")
+        return {"cleared": 0, "synced": False, "error": "db_failed"}
+
+    if not cleared_keys:
+        return {"cleared": 0, "synced": False, "reason": "none_expired"}
+
+    logger.info(
+        "clear_expired_rate_limits.cleared",
+        extra={"keys": cleared_keys, "count": len(cleared_keys)},
+    )
+    try:
+        from app.core.llm_key_provider import invalidate_key_cache
+        invalidate_key_cache()
+    except Exception:
+        pass
+
+    invalidate_registry_cache()
+    try:
+        result = await sync_model_registry(
+            triggered_by="rate_limit_auto_clear",
+            reason=f"expired_keys:{','.join(cleared_keys)}",
+        )
+        return {"cleared": len(cleared_keys), "synced": bool(result.get("ok")), "keys": cleared_keys}
+    except Exception:
+        logger.exception("clear_expired_rate_limits.sync_failed")
+        return {"cleared": len(cleared_keys), "synced": False, "keys": cleared_keys, "error": "sync_failed"}
