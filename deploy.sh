@@ -586,11 +586,13 @@ case "$MODE" in
         echo "[deploy.sh] 현재: :${CURRENT_PORT} → 전환 대상: :${NEW_PORT} (${NEW_CONTAINER})"
 
         TARGET_STREAMS="$(stream_count_for_port "$NEW_PORT")"
-        if [[ "${TARGET_STREAMS:-0}" != "0" && -n "${TARGET_STREAMS:-}" && "${AADS_DEPLOY_ALLOW_BUSY_TARGET:-false}" != "true" ]]; then
+        if [[ "$TARGET_STREAMS" =~ ^[0-9]+$ ]] && [[ "$TARGET_STREAMS" -gt 0 ]] && [[ "${AADS_DEPLOY_ALLOW_BUSY_TARGET:-false}" != "true" ]]; then
             echo "[deploy.sh] ❌ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT}에 활성 스트림 ${TARGET_STREAMS}건 존재 — 재빌드 시 응답 끊김 위험으로 배포 중단"
             echo "[deploy.sh]    잠시 후 재시도하거나, 긴급 강제 배포가 필요할 때만 AADS_DEPLOY_ALLOW_BUSY_TARGET=true를 명시하세요."
             notify "❌ Blue-Green 중단: target slot ${NEW_CONTAINER}:${NEW_PORT} active streams=${TARGET_STREAMS}"
             exit 1
+        elif [[ "$TARGET_STREAMS" != "0" ]]; then
+            echo "[deploy.sh] ⚠️ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT} active-streams 확인값=${TARGET_STREAMS} — 미기동/미응답 슬롯으로 판단하고 재빌드를 진행합니다."
         fi
 
         # ① 새 컨테이너 빌드 + 시작

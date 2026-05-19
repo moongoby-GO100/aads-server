@@ -4,6 +4,7 @@
 - 배경: CEO가 현재 반영분을 최종 코드 기준으로 전체 검증하고, 이상 없으면 커밋·푸시·무중단 배포까지 진행하라고 지시했다.
 - 검증: `python3 -m py_compile app/main.py app/api/ceo_chat.py app/api/ceo_chat_tools_db.py app/api/stream.py app/api/conversations.py app/api/ops.py app/services/chat_service.py app/services/oauth_usage_tracker.py` 통과. `pytest -q tests/test_aads165_cross_project.py tests/unit/test_chat_service.py tests/unit/test_chat_lightweight_regression.py tests/unit/test_chat_lightweight_frontend_static.py`는 `106 passed, 1 warning` 통과. 대시보드 `npx eslint src/app/chat/page.tsx`는 errors 0, warnings 22로 기존 경고만 확인했다.
 - 조치: 현행 구현과 어긋나던 테스트 기대값을 정리했다. `tests/test_aads165_cross_project.py`는 1MB SSH 응답 제한, `casual` 인텐트, 빈 경로 거부 등 현재 계약에 맞춰 수정했다. `tests/unit/test_chat_service.py`는 stale cleanup/deferred interrupt fixture를 현 코드 흐름에 맞게 보정했다. `tests/unit/test_chat_lightweight_frontend_static.py`는 현재 대시보드의 `mergeServerMessageWithExisting`/`selectableModels` 구조를 기준으로 갱신했다.
+- 배포 이슈: 첫 `deploy.sh bluegreen` 시도는 inactive target slot `aads-server-green:8102`가 미기동이라 `active-streams=unknown`이 나왔고, 스크립트가 이를 busy 슬롯으로 오인해 배포를 차단했다. `deploy.sh`에서 target slot 확인값이 숫자일 때만 busy 차단하고, `unknown`/미응답은 재빌드 가능한 상태로 처리하도록 수정했다.
 - 커밋 범위: AADS 관련 테스트와 `HANDOVER.md`만 커밋 대상으로 유지한다. `docs/CHANGELOG-go100-direct.md`는 GO100 작업 잔여 변경이라 제외하고, `.active_container`, `.active_port`, `nginx-aads-upstream.conf`는 blue-green 배포 중 자동 변경되는 런타임 슬롯 메타파일이라 제외한다.
 
 ## 현재 진행 상태 (2026-05-19 15:22 KST) - 스트리밍 개선 러너 후속 확인 및 stale execution 정리
