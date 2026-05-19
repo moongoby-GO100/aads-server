@@ -701,6 +701,8 @@ def _is_auto_executable_discovered(provider: str, model_id: str, raw: dict[str, 
     )
     if any(token in lowered for token in excluded):
         return False
+    if provider == "anthropic":
+        return lowered.startswith("claude-")
     if provider == "openai":
         return lowered.startswith(("gpt-", "o"))
     if provider == "gemini":
@@ -1116,6 +1118,39 @@ def build_registry_snapshots(key_rows: Iterable[dict[str, Any]]) -> tuple[list[d
                     "is_executable": has_runtime_models,
                 }
             )
+
+            for alias_id in _MODEL_ACCEPTED_ALIASES.get(template.model_id, ()):
+                alias_template = _build_template(provider, alias_id)
+                alias_metadata = dict(metadata)
+                alias_metadata["alias_of"] = template.model_id
+                alias_metadata["model_source"] = "accepted_alias"
+                model_rows.append(
+                    {
+                        "provider": provider,
+                        "model_id": alias_id,
+                        "display_name": alias_template.display_name or _display_name_for_provider(provider, alias_id),
+                        "family": alias_template.family or template.family,
+                        "category": alias_template.category or template.category,
+                        "supports_tools": template.supports_tools,
+                        "supports_thinking": template.supports_thinking,
+                        "supports_vision": template.supports_vision,
+                        "supports_coding": template.supports_coding,
+                        "input_cost": template.input_cost,
+                        "output_cost": template.output_cost,
+                        "is_active": has_runtime_models,
+                        "activation_source": activation_source,
+                        "linked_key_name": linked_key_name,
+                        "metadata": alias_metadata,
+                        "execution_model_id": alias_template.execution_model_id or alias_id,
+                        "discovery_source": "accepted_alias",
+                        "verification_status": "verified" if has_runtime_models else "unknown",
+                        "last_verified_at": state.get("last_verified_at"),
+                        "capabilities": _model_capabilities(provider, alias_id),
+                        "pricing": _pricing_for(alias_id),
+                        "is_selectable": has_runtime_models,
+                        "is_executable": has_runtime_models,
+                    }
+                )
 
         provider_rows.append(
             {
