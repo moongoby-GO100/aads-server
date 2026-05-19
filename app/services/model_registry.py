@@ -703,6 +703,8 @@ def _is_auto_executable_discovered(provider: str, model_id: str, raw: dict[str, 
         return False
     if provider == "anthropic":
         return lowered.startswith("claude-")
+    if provider == "anthropic":
+        return lowered.startswith("claude-")
     if provider == "openai":
         return lowered.startswith(("gpt-", "o"))
     if provider == "gemini":
@@ -1777,3 +1779,4 @@ async def clear_expired_rate_limits() -> dict[str, Any]:
     except Exception:
         logger.exception("clear_expired_rate_limits.sync_failed")
         return {"cleared": len(cleared_keys), "synced": False, "keys": cleared_keys, "error": "sync_failed"}
+

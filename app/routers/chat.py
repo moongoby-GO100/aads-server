@@ -1188,6 +1188,19 @@ async def stream_resume(
                 active_execution = str(current_execution["id"])
         except Exception:
             active_execution = None
+    if not active_execution:
+        try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                _recent = await conn.fetchval(
+                    "SELECT id FROM chat_turn_executions WHERE session_id = $1 AND created_at > now() - interval '30 minutes' ORDER BY created_at DESC LIMIT 1",
+                    session_id,
+                )
+                if _recent:
+                    active_execution = str(_recent)
+        except Exception:
+            pass
     stream_id = active_execution or sid
 
     # Last-Event-ID 우선: 쿼리 파라미터 → HTTP 헤더
@@ -1210,14 +1223,19 @@ async def stream_resume(
         while True:
             state = svc._streaming_state.get(sid)
             if not state:
-                # Phase4: Redis Stream XREAD로 실시간 복구 시도
-                try:
-                    from app.services.stream_worker import deliver_sse
-                    async for event in deliver_sse(stream_id, last_event_id="0"):
-                        yield event
-                    return
-                except Exception:
-                    pass
+                # Phase4: Redis Stream XREAD로 실시간 복구 시도 (dual-key: execution_id → session_id)
+                _keys_to_try = [stream_id] if stream_id == sid else [stream_id, sid]
+                for _try_key in _keys_to_try:
+                    try:
+                        from app.services.stream_worker import deliver_sse
+                        _got_data = False
+                        async for event in deliver_sse(_try_key, last_event_id="0"):
+                            _got_data = True
+                            yield event
+                        if _got_data:
+                            return
+                    except Exception:
+                        pass
                 # Redis 실패 시 DB fallback
                 from app.core.db_pool import get_pool
                 try:
