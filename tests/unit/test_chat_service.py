@@ -275,7 +275,7 @@ async def test_cleanup_stale_streaming_placeholders_promotes_message_and_interru
     conn.execute = AsyncMock()
     chat_service._streaming_state[session_id] = {
         "content": "",
-        "completed": False,
+        "completed": True,
         "started_at": chat_service._bg_time.monotonic(),
     }
 
@@ -661,7 +661,7 @@ async def test_deferred_interrupt_rewrites_no_tool_stream_before_save():
     async def _mock_fetchrow(query, *args):
         if "model_used = 'interrupted'" in query and "content = $2" in query:
             return None
-        if "INSERT INTO chat_messages (session_id, role, content, model_used, intent)" in query:
+        if "INSERT INTO chat_messages" in query and "RETURNING id, created_at::text AS created_at_text" in query:
             return {"id": uuid.uuid4(), "created_at_text": datetime.now(timezone.utc).isoformat()}
         if "FROM chat_messages WHERE idempotency_key" in query:
             return None

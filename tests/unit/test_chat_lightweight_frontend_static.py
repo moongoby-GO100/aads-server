@@ -8,10 +8,10 @@ CHAT_PAGE = REAL_DASHBOARD_CHAT_PAGE if REAL_DASHBOARD_CHAT_PAGE.exists() else P
 def test_minimal_polling_uses_content_preserving_merge_guard():
     source = CHAT_PAGE.read_text()
 
-    assert "function mergeMessagePreservingFullContent" in source
-    assert "keepCurrentContent" in source
-    assert "content: keepCurrentContent ? currentContent : incomingContent" in source
-    assert "mergeMessagePreservingFullContent(m, fullMsg)" in source
+    assert "function mergeServerMessageWithExisting" in source
+    assert "keepExistingContent" in source
+    assert "content: keepExistingContent ? existingContent : serverContent" in source
+    assert "replaceStreamingPlaceholderWithFinal" in source
 
 
 def test_minimal_tool_summary_hydrates_full_message_once():
@@ -33,7 +33,7 @@ def test_tool_result_only_events_count_as_tool_usage():
 def test_chat_model_dropdown_groups_registry_backed_options():
     source = CHAT_PAGE.read_text()
 
-    assert "groupedSelectableModels" in source
-    assert "<optgroup key={group.label} label={group.label}>" in source
-    assert "getCompactModelClassification" in source
-    assert "getModelGroupLabel" in source
+    assert "const selectableModels = useMemo<SelectableModelOption[]>" in source
+    assert "buildSelectableModelOption" in source
+    assert "compareSelectableModels" in source
+    assert "{selectableModels.map((m) => (" in source

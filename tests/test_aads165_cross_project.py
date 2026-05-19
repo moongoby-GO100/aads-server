@@ -14,6 +14,7 @@ Python 3.6 호환: AsyncMock 대신 수동 coroutine mock 사용.
 import sys
 import types
 import asyncio
+import importlib.util
 from unittest.mock import MagicMock, patch
 
 # --- 외부 의존성 sys.modules mock (Docker 외부 venv에서 실행 시) ---
@@ -24,8 +25,14 @@ _MOCK_MODULES = [
     "app.config",
 ]
 
+def _should_mock_module(module_name: str) -> bool:
+    if module_name in sys.modules:
+        return False
+    return importlib.util.find_spec(module_name) is None
+
+
 for _mod_name in _MOCK_MODULES:
-    if _mod_name not in sys.modules:
+    if _should_mock_module(_mod_name):
         mock_mod = types.ModuleType(_mod_name)
         # pydantic 관련 mock
         if _mod_name == "pydantic":
@@ -123,8 +130,10 @@ class TestValidateSshPath:
     def test_valid_nested_path(self):
         assert _validate_ssh_path("src/strategy/backtest.py", self.WORKDIR) is None
 
-    def test_valid_empty_path(self):
-        assert _validate_ssh_path("", self.WORKDIR) is None
+    def test_empty_path_rejected(self):
+        result = _validate_ssh_path("", self.WORKDIR)
+        assert result is not None
+        assert "허용되지 않는 문자" in result
 
     # -- 명령 인젝션 차단 --
     def test_reject_semicolon_injection(self):
@@ -166,7 +175,7 @@ class TestValidateSshPath:
     def test_reject_path_traversal_dotdot(self):
         result = _validate_ssh_path("../../etc/passwd", self.WORKDIR)
         assert result is not None
-        assert "WORKDIR" in result
+        assert "허용 경로" in result
 
     def test_reject_path_traversal_deep(self):
         result = _validate_ssh_path("src/../../../root/.ssh/id_rsa", self.WORKDIR)
@@ -307,8 +316,8 @@ class TestToolListRemoteDir:
 
     @pytest.mark.asyncio
     async def test_result_truncation(self):
-        """50KB 초과 응답은 잘림 처리."""
-        huge_output = b"x" * (60 * 1024)
+        """1MB 초과 응답은 잘림 처리."""
+        huge_output = b"x" * (_SSH_MAX_RESULT_BYTES + 1024)
         with patch(
             "app.api.ceo_chat_tools.asyncio.create_subprocess_exec",
             new=_mock_subprocess(stdout=huge_output),
@@ -384,15 +393,18 @@ class TestToolReadRemoteFile:
             assert "타임아웃" in result
 
     @pytest.mark.asyncio
-    async def test_result_truncation(self):
-        """50KB 초과 파일 잘림 처리."""
+    async def test_large_single_line_content_preserved(self):
+        """offset/limit 범위 안의 큰 단일 라인은 그대로 반환."""
         huge_content = b"A" * (60 * 1024)
+        stdout = b"1\n---SEPARATOR---\n" + huge_content
         with patch(
             "app.api.ceo_chat_tools.asyncio.create_subprocess_exec",
-            new=_mock_subprocess(stdout=huge_content),
+            new=_mock_subprocess(stdout=stdout),
         ):
             result = await tool_read_remote_file("NTV2", "big_file.txt")
-            assert "잘림" in result
+            assert "[NTV2" in result
+            assert "잘림" not in result
+            assert "AAAA" in result
 
     def test_all_projects_have_server_mapping(self):
         """모든 프로젝트가 서버 매핑 보유."""
@@ -446,8 +458,8 @@ class TestClassifyIntent:
         assert classify_intent("새 기능 만들어줘") == "execute"
 
     def test_strategy_fallback(self):
-        """아무 키워드도 매칭 안 되면 strategy."""
-        assert classify_intent("안녕하세요 좋은 아침입니다") == "strategy"
+        """인사 키워드는 casual로 분류된다."""
+        assert classify_intent("안녕하세요 좋은 아침입니다") == "casual"
 
     def test_diagnosis_intent(self):
         # "왜 안돼" -- diagnosis 키워드만 포함, dashboard 키워드 없음
