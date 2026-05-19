@@ -19,6 +19,7 @@ DB 매핑:
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import logging
 import os
@@ -47,22 +48,80 @@ _DEFAULT_DB_TYPE: Dict[str, str] = {
     "NTV2": "mysql",
 }
 
+_DEFAULT_DB_ENDPOINT: Dict[str, Tuple[str, str]] = {
+    "KIS": ("host.docker.internal", "5432"),
+    "SF": ("127.0.0.1", "3306"),
+    "NTV2": ("127.0.0.1", "3307"),
+}
+
+
+def _env_value(names: Tuple[str, ...], default: str = "") -> str:
+    """첫 번째로 설정된 환경변수 값을 반환한다."""
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    return default
+
+
+def _env_int(names: Tuple[str, ...], default: int) -> int:
+    """정수 환경변수 파싱. 잘못된 값은 기존 기본값으로 폴백한다."""
+    value = _env_value(names, "")
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _get_db_type(project: str) -> str:
+    """DB 타입 조회. 별칭 해석 후 환경변수 오버라이드를 적용한다."""
+    resolved = _PROJECT_ALIAS.get(project, project)
+    return os.getenv(
+        f"{resolved.upper()}_DB_TYPE",
+        _DEFAULT_DB_TYPE.get(resolved, "postgresql"),
+    )
+
+
 def _ssh_tunnel_config(
     project: str,
     *,
     ssh_host: str,
+    ssh_port: int,
     ssh_user: str,
     ssh_key: str,
     remote_host: str,
     remote_port: int,
 ) -> Dict[str, Any]:
     """프로젝트별 SSH 설정. 환경변수 없으면 기존 기본값 유지."""
+    project = project.upper()
     return {
-        "ssh_host": os.getenv(f"SSH_{project}_HOST", ssh_host),
-        "ssh_user": os.getenv(f"SSH_{project}_USER", ssh_user),
-        "ssh_key": os.getenv(f"SSH_{project}_KEY", ssh_key),
-        "remote_host": remote_host,
-        "remote_port": remote_port,
+        "ssh_host": _env_value(
+            (f"{project}_SSH_HOST", f"SSH_{project}_HOST", "SSH_HOST"),
+            ssh_host,
+        ),
+        "ssh_port": _env_int(
+            (f"{project}_SSH_PORT", f"SSH_{project}_PORT", "SSH_PORT"),
+            ssh_port,
+        ),
+        "ssh_user": _env_value(
+            (f"{project}_SSH_USER", f"SSH_{project}_USER", "SSH_USER"),
+            ssh_user,
+        ),
+        "ssh_key": _env_value(
+            (
+                f"{project}_SSH_KEY_PATH",
+                f"SSH_{project}_KEY_PATH",
+                f"{project}_SSH_KEY",
+                f"SSH_{project}_KEY",
+                "SSH_KEY_PATH",
+                "SSH_KEY",
+            ),
+            ssh_key,
+        ),
+        "remote_host": _env_value((f"{project}_DB_HOST", "DB_HOST"), remote_host),
+        "remote_port": _env_int((f"{project}_DB_PORT", "DB_PORT"), remote_port),
     }
 
 
@@ -71,6 +130,7 @@ _SSH_TUNNEL_PROJECTS: Dict[str, Dict[str, Any]] = {
     "SF": _ssh_tunnel_config(
         "SF",
         ssh_host="116.120.58.155",
+        ssh_port=22,
         ssh_user="root",
         ssh_key="/root/.ssh/id_ed25519_newtalk",
         remote_host="127.0.0.1",
@@ -79,6 +139,7 @@ _SSH_TUNNEL_PROJECTS: Dict[str, Dict[str, Any]] = {
     "NTV2": _ssh_tunnel_config(
         "NTV2",
         ssh_host="116.120.58.155",
+        ssh_port=22,
         ssh_user="root",
         ssh_key="/root/.ssh/id_ed25519_newtalk",
         remote_host="127.0.0.1",
@@ -118,10 +179,13 @@ _DML_IN_CTE = re.compile(
 # ─── 연결 캐시 ───────────────────────────────────────────────────────────────
 
 _pg_pools: Dict[str, Any] = {}       # asyncpg 풀
-_SSH_TUNNEL_POOL: Dict[Tuple[str, int], Dict[str, Any]] = {}
+_pg_pool_refs: Dict[int, int] = {}   # pool.close 전 acquire 대기/사용 중인 요청 수
+_pg_pool_closing: set[int] = set()
+_SSH_TUNNEL_POOL: Dict[Tuple[str, int, str, int], Dict[str, Any]] = {}
 _SSH_TUNNEL_IDLE_SECONDS = 300.0
 _MAX_POOL_SIZE = 3
 _pool_lock = asyncio.Lock()          # PG 풀 생성/재생성 경쟁 방지
+_pool_drain_condition = asyncio.Condition(_pool_lock)
 _ssh_tunnel_lock = threading.Lock()  # SSH 터널 생성/정리 경쟁 방지
 
 
@@ -131,16 +195,25 @@ def _get_project_db_config(project: str) -> Optional[Dict[str, str]]:
     """환경변수에서 프로젝트 DB 접속 정보 조회. 별칭 자동 해석."""
     resolved = _PROJECT_ALIAS.get(project, project)
     prefix = resolved.upper()
-    host = os.getenv(f"{prefix}_DB_HOST", "")
+    db_type = _get_db_type(resolved)
+    default_host, default_port = _DEFAULT_DB_ENDPOINT.get(
+        resolved,
+        ("", "5432" if db_type == "postgresql" else "3306"),
+    )
+    database = os.getenv(f"{prefix}_DB_NAME", "")
+    user = os.getenv(f"{prefix}_DB_USER", "")
+    password = os.getenv(f"{prefix}_DB_PASSWORD", "")
+    host = _env_value((f"{prefix}_DB_HOST", "DB_HOST"), "")
+    if not host and (database or user or password):
+        host = default_host
     if not host:
         return None
-    db_type = os.getenv(f"{prefix}_DB_TYPE", _DEFAULT_DB_TYPE.get(resolved, "postgresql"))
     return {
         "host": host,
-        "port": os.getenv(f"{prefix}_DB_PORT", "5432" if db_type == "postgresql" else "3306"),
-        "database": os.getenv(f"{prefix}_DB_NAME", ""),
-        "user": os.getenv(f"{prefix}_DB_USER", ""),
-        "password": os.getenv(f"{prefix}_DB_PASSWORD", ""),
+        "port": _env_value((f"{prefix}_DB_PORT", "DB_PORT"), default_port),
+        "database": database,
+        "user": user,
+        "password": password,
         "type": db_type,
     }
 
@@ -243,20 +316,35 @@ def _should_recreate_pg_pool(exc: Exception) -> bool:
 
 
 async def _discard_pg_pool(project: str, pool: Any = None) -> None:
-    """캐시된 PG 풀을 제거한다. 다른 요청이 이미 교체한 풀은 건드리지 않는다."""
+    """캐시된 PG 풀을 제거하고 현재 acquire 대기/사용 요청이 빠질 때까지 드레인한다."""
     resolved = _PROJECT_ALIAS.get(project, project)
     pool_to_close = None
+    pool_id = None
 
-    async with _pool_lock:
+    async with _pool_drain_condition:
         cached_pool = _pg_pools.get(resolved)
         if pool is None or cached_pool is pool:
             pool_to_close = _pg_pools.pop(resolved, None)
+        if not pool_to_close:
+            return
 
-    if pool_to_close and _is_pg_pool_open(pool_to_close):
-        try:
+        pool_id = id(pool_to_close)
+        if pool_id in _pg_pool_closing:
+            return
+
+        _pg_pool_closing.add(pool_id)
+        while _pg_pool_refs.get(pool_id, 0) > 0:
+            await _pool_drain_condition.wait()
+
+    try:
+        if pool_to_close and _is_pg_pool_open(pool_to_close):
             await pool_to_close.close()
-        except Exception:
-            logger.exception(f"query_project_database: PG 풀 종료 실패 | {project}({resolved})")
+    except Exception:
+        logger.exception(f"query_project_database: PG 풀 종료 실패 | {project}({resolved})")
+    finally:
+        async with _pool_drain_condition:
+            _pg_pool_closing.discard(pool_id)
+            _pg_pool_refs.pop(pool_id, None)
 
 
 async def _get_pg_pool(project: str):
@@ -294,30 +382,60 @@ async def _get_pg_pool(project: str):
         return pool
 
 
+@asynccontextmanager
+async def _borrow_pg_pool(project: str):
+    """풀 acquire 대기 중인 요청까지 드레인 대상으로 추적한다."""
+    resolved = _PROJECT_ALIAS.get(project, project)
+    pool = None
+    pool_id = None
+
+    while True:
+        candidate = await _get_pg_pool(project)
+        async with _pool_drain_condition:
+            if _pg_pools.get(resolved) is candidate and _is_pg_pool_open(candidate):
+                pool = candidate
+                pool_id = id(candidate)
+                _pg_pool_refs[pool_id] = _pg_pool_refs.get(pool_id, 0) + 1
+                break
+        await asyncio.sleep(0)
+
+    try:
+        yield pool
+    finally:
+        async with _pool_drain_condition:
+            refs = _pg_pool_refs.get(pool_id, 0)
+            if refs <= 1:
+                _pg_pool_refs.pop(pool_id, None)
+            else:
+                _pg_pool_refs[pool_id] = refs - 1
+            _pool_drain_condition.notify_all()
+
+
 async def _query_postgresql(project: str, q: str) -> List[Dict[str, Any]]:
     """PostgreSQL 쿼리 실행. C2: read-only 트랜잭션으로 안전하게 실행."""
     last_error: Optional[Exception] = None
 
     for attempt in range(2):
-        pool = await _get_pg_pool(project)
-        if not _is_pg_pool_open(pool):
-            await _discard_pg_pool(project, pool)
-            last_error = ConnectionError("PostgreSQL pool is closed")
-            continue
-
+        pool = None
         try:
-            async with pool.acquire() as conn:
-                async with conn.transaction():
-                    await conn.execute("SET LOCAL default_transaction_read_only = on")
-                    rows = await conn.fetch(q)
-                return [{k: _serialize_value(v) for k, v in dict(r).items()} for r in rows]
+            async with _borrow_pg_pool(project) as pool:
+                if not _is_pg_pool_open(pool):
+                    raise ConnectionError("PostgreSQL pool is closed")
+                async with pool.acquire(timeout=10) as conn:
+                    async with conn.transaction():
+                        await conn.execute("SET LOCAL default_transaction_read_only = on")
+                        rows = await conn.fetch(q)
+                    return [{k: _serialize_value(v) for k, v in dict(r).items()} for r in rows]
         except Exception as exc:
             if attempt == 0 and _should_recreate_pg_pool(exc):
                 logger.warning(
                     f"query_project_database: PG 풀 재생성 후 재시도 | {project} "
                     f"error={exc.__class__.__name__}"
                 )
-                await _discard_pg_pool(project, pool)
+                if pool is not None:
+                    await _discard_pg_pool(project, pool)
+                else:
+                    await _discard_pg_pool(project)
                 last_error = exc
                 continue
             raise
@@ -337,9 +455,55 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
-def _ssh_tunnel_pool_key(tunnel_config: Dict[str, Any]) -> Tuple[str, int]:
-    """SSH 터널 풀 키: SSH host + 원격 DB 포트."""
-    return (str(tunnel_config["ssh_host"]), int(tunnel_config["remote_port"]))
+def _ssh_tunnel_pool_key(tunnel_config: Dict[str, Any]) -> Tuple[str, int, str, int]:
+    """SSH 터널 풀 키: SSH endpoint + 원격 DB endpoint."""
+    return (
+        str(tunnel_config["ssh_host"]),
+        int(tunnel_config["ssh_port"]),
+        str(tunnel_config["remote_host"]),
+        int(tunnel_config["remote_port"]),
+    )
+
+
+def _is_ssh_tunnel_usable(info: Dict[str, Any]) -> bool:
+    """프로세스와 로컬 포워드 포트가 모두 살아있는지 확인한다."""
+    proc = info.get("process")
+    if not proc or proc.poll() is not None:
+        return False
+
+    try:
+        local_port = int(info.get("local_port", 0))
+    except (TypeError, ValueError):
+        return False
+    if local_port <= 0:
+        return False
+
+    try:
+        with socket.create_connection(("127.0.0.1", local_port), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def _redact_ssh_key_paths(message: str) -> str:
+    """로그/응답에 SSH 키 경로가 노출되지 않도록 치환한다."""
+    safe = message or ""
+    key_paths = {
+        "/root/.ssh/id_ed25519",
+        "/root/.ssh/id_rsa",
+    }
+    for config in _SSH_TUNNEL_PROJECTS.values():
+        key_path = str(config.get("ssh_key", ""))
+        if key_path:
+            key_paths.add(key_path)
+    for key_path in key_paths:
+        safe = safe.replace(key_path, "<ssh-key>")
+    return safe
+
+
+def _sanitize_ssh_error(message: str) -> str:
+    """SSH 오류 메시지에서 키 경로를 제거한다."""
+    return _redact_ssh_key_paths((message or "").strip().replace("\n", " ")[:200])
 
 
 def _terminate_process(proc: subprocess.Popen) -> None:
@@ -421,11 +585,12 @@ def _ensure_ssh_tunnel(project: str) -> int:
 
         info = _SSH_TUNNEL_POOL.get(pool_key)
         if info:
-            proc = info["process"]
-            if proc.poll() is None:
+            if _is_ssh_tunnel_usable(info):
                 info["last_used"] = now
                 return int(info["local_port"])
-            _SSH_TUNNEL_POOL.pop(pool_key, None)
+            stale = _SSH_TUNNEL_POOL.pop(pool_key, None)
+            if stale and stale.get("process"):
+                _terminate_process(stale["process"])
 
         # SSH 키 찾기
         ssh_key = tunnel_config["ssh_key"]
@@ -439,30 +604,33 @@ def _ensure_ssh_tunnel(project: str) -> int:
         remote_host = tunnel_config["remote_host"]
         remote_port = tunnel_config["remote_port"]
         ssh_host = tunnel_config["ssh_host"]
+        ssh_port = int(tunnel_config["ssh_port"])
         ssh_user = tunnel_config["ssh_user"]
 
         cmd = [
             "ssh", "-N", "-L",
-            f"{local_port}:{remote_host}:{remote_port}",
-            f"{ssh_user}@{ssh_host}",
+            f"127.0.0.1:{local_port}:{remote_host}:{remote_port}",
             "-i", ssh_key,
+            "-p", str(ssh_port),
             "-o", "StrictHostKeyChecking=no",
+            "-o", "BatchMode=yes",
+            "-o", "ExitOnForwardFailure=yes",
             "-o", "ServerAliveInterval=30",
             "-o", "ConnectTimeout=10",
+            f"{ssh_user}@{ssh_host}",
         ]
 
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         # 터널 연결 대기
         for _ in range(20):
             time.sleep(0.3)
-            try:
-                s = socket.create_connection(("127.0.0.1", local_port), timeout=1)
-                s.close()
+            if _is_ssh_tunnel_usable({"process": proc, "local_port": local_port}):
                 break
-            except (ConnectionRefusedError, OSError):
-                if proc.poll() is not None:
-                    stderr = proc.stderr.read().decode()[:200] if proc.stderr else ""
-                    raise RuntimeError(f"SSH 터널 시작 실패: {stderr}")
+            if proc.poll() is not None:
+                stderr = proc.stderr.read().decode(errors="replace") if proc.stderr else ""
+                safe_stderr = _sanitize_ssh_error(stderr)
+                detail = f": {safe_stderr}" if safe_stderr else ""
+                raise RuntimeError(f"SSH 터널 시작 실패{detail}")
         else:
             _terminate_process(proc)
             raise RuntimeError("SSH 터널 연결 타임아웃 (6초)")
@@ -474,7 +642,7 @@ def _ensure_ssh_tunnel(project: str) -> int:
         }
         logger.info(
             f"query_project_database: SSH 터널 생성 | {project} "
-            f"local:{local_port} → {ssh_host}:{remote_port}"
+            f"local:{local_port} -> {ssh_host}:{ssh_port}/{remote_host}:{remote_port}"
         )
         return local_port
 
@@ -541,12 +709,11 @@ async def _query_mysql(project: str, q: str, db_name: Optional[str] = None) -> L
 
 async def close_all_project_connections():
     """서버 종료 시 모든 프로젝트 DB 연결 및 SSH 터널 정리."""
-    for key, pool in list(_pg_pools.items()):
+    for key in list(_pg_pools.keys()):
         try:
-            await pool.close()
+            await _discard_pg_pool(key)
         except Exception:
             pass
-    _pg_pools.clear()
 
     for key, info in list(_SSH_TUNNEL_POOL.items()):
         try:
@@ -593,7 +760,7 @@ async def query_project_database(
 
     try:
         resolved = _PROJECT_ALIAS.get(project, project)
-        db_type = _DEFAULT_DB_TYPE.get(resolved, "postgresql")
+        db_type = _get_db_type(resolved)
 
         if db_type == "postgresql":
             result_rows = await _query_postgresql(project, q)
@@ -619,8 +786,10 @@ async def query_project_database(
 
     except Exception as e:
         # H3: credentials가 포함될 수 있는 에러 메시지는 로그에만 기록
-        logger.error(f"query_project_database: FAIL | project={project} error={e}")
-        safe_msg = str(e)
+        safe_msg = _redact_ssh_key_paths(str(e))
+        logger.error(
+            f"query_project_database: FAIL | project={project} error={safe_msg}"
+        )
         # DSN/credentials 패턴 제거
         if any(kw in safe_msg.lower() for kw in ("password", "postgresql://", "mysql://", "credentials")):
             safe_msg = "연결 오류가 발생했습니다 (상세 내용은 서버 로그 참조)"
@@ -635,7 +804,7 @@ async def list_project_databases() -> Dict[str, Any]:
     for project in _SUPPORTED_PROJECTS:
         config = _get_project_db_config(project)
         alias = _PROJECT_ALIAS.get(project)
-        db_type = _DEFAULT_DB_TYPE.get(_PROJECT_ALIAS.get(project, project), "postgresql")
+        db_type = _get_db_type(_PROJECT_ALIAS.get(project, project))
 
         if not config or not config["host"]:
             result[project] = {"status": "not_configured"}
@@ -652,9 +821,9 @@ async def list_project_databases() -> Dict[str, Any]:
 
         try:
             if db_type == "postgresql":
-                pool = await _get_pg_pool(project)
-                async with pool.acquire() as conn:
-                    version = await conn.fetchval("SELECT version()")
+                async with _borrow_pg_pool(project) as pool:
+                    async with pool.acquire(timeout=10) as conn:
+                        version = await conn.fetchval("SELECT version()")
                 info["status"] = "connected"
                 info["version"] = version[:60] if version else "unknown"
             else:
@@ -667,7 +836,7 @@ async def list_project_databases() -> Dict[str, Any]:
                 info["version"] = rows[0]["v"][:60] if rows else "unknown"
         except Exception as e:
             info["status"] = "error"
-            info["error"] = str(e)[:150]
+            info["error"] = _redact_ssh_key_paths(str(e))[:150]
 
         result[project] = info
     return result
