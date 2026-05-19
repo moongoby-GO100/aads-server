@@ -258,6 +258,74 @@ async def test_stop_session_streaming_clears_stale_interrupt_stream_flag():
 
 
 @pytest.mark.asyncio
+async def test_cleanup_stale_streaming_placeholders_promotes_message_and_interrupts_execution():
+    session_id = str(uuid.uuid4())
+    execution_id = str(uuid.uuid4())
+    message_id = uuid.uuid4()
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=[
+        {
+            "id": message_id,
+            "session_id": session_id,
+            "execution_id": execution_id,
+            "content": "부분 응답입니다.\n\n⏳ _생성 중..._",
+        }
+    ])
+    conn.fetchval = AsyncMock(return_value=None)
+    conn.execute = AsyncMock()
+    chat_service._streaming_state[session_id] = {
+        "content": "",
+        "completed": False,
+        "started_at": chat_service._bg_time.monotonic(),
+    }
+
+    try:
+        with patch("app.services.chat_service.get_pool", return_value=_Pool(conn)):
+            result = await chat_service.cleanup_stale_streaming_placeholders(timeout_sec=600)
+
+        executed_sql = [" ".join(call.args[0].split()) for call in conn.execute.await_args_list]
+        assert result["cleaned"] == 1
+        assert result["promoted"] == 1
+        assert any("intent = 'interrupted_partial'" in sql for sql in executed_sql)
+        assert any("UPDATE chat_turn_executions" in sql and "status = 'interrupted'" in sql for sql in executed_sql)
+        assert any("UPDATE chat_sessions" in sql and "current_execution_id = NULL" in sql for sql in executed_sql)
+        assert chat_service._streaming_state[session_id]["completed"] is True
+        assert "부분 응답입니다." in chat_service._streaming_state[session_id]["content"]
+    finally:
+        chat_service._streaming_state.pop(session_id, None)
+        chat_service._active_bg_tasks.pop(session_id, None)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_stale_streaming_placeholders_skips_live_session():
+    session_id = str(uuid.uuid4())
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=[
+        {
+            "id": uuid.uuid4(),
+            "session_id": session_id,
+            "execution_id": None,
+            "content": "아직 실행 중",
+        }
+    ])
+    conn.fetchval = AsyncMock()
+    conn.execute = AsyncMock()
+    chat_service._active_bg_tasks[session_id] = SimpleNamespace(done=lambda: False)
+
+    try:
+        with patch("app.services.chat_service.get_pool", return_value=_Pool(conn)):
+            result = await chat_service.cleanup_stale_streaming_placeholders(timeout_sec=600)
+
+        assert result["cleaned"] == 0
+        assert result["skipped_active"] == 1
+        conn.fetchval.assert_not_awaited()
+        conn.execute.assert_not_awaited()
+    finally:
+        chat_service._active_bg_tasks.pop(session_id, None)
+        chat_service._streaming_state.pop(session_id, None)
+
+
+@pytest.mark.asyncio
 async def test_newer_user_message_supersedes_running_execution():
     execution_user_id = str(uuid.uuid4())
     latest_user_id = str(uuid.uuid4())

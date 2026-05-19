@@ -698,146 +698,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("model_registry_startup_sync_failed", error=str(e))
 
-    # 서버 시작 시 stale placeholder → 내용 있으면 보존(promote), 없으면 삭제
     try:
-        async with db_pool.acquire() as _c:
-            # ── startup placeholder cleanup (중복 버블 방지 강화) ──
-            _placeholders = await _c.fetch(
-                "SELECT id, session_id, content FROM chat_messages WHERE intent = 'streaming_placeholder' AND execution_id IS NULL"
-            )
-            _promoted = 0
-            _cleaned = 0
-            for _ph in _placeholders:
-                _ph_content = (_ph["content"] or "").strip()
-                if _ph_content:
-                    # 동일 세션에 placeholder 이후 최종 응답이 이미 있으면 삭제 (중복 방지)
-                    _has_final = await _c.fetchval(
-                        "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND role = 'assistant' "
-                        "AND intent IS DISTINCT FROM 'streaming_placeholder' "
-                        "AND created_at >= (SELECT created_at FROM chat_messages WHERE id = $2)",
-                        _ph["session_id"], _ph["id"],
-                    )
-                    if _has_final and _has_final > 0:
-                        await _c.execute("DELETE FROM chat_messages WHERE id = $1", _ph["id"])
-                        _cleaned += 1
-                    else:
-                        import re as _re
-                        _clean_content = _re.sub(r'\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\s*$', '', _ph_content).rstrip()
-                        if _clean_content:
-                            # Stage 2: promote 전 동일 내용 recovered 중복 검사 (앞 50자 비교)
-                            _prefix = _clean_content[:50]
-                            _dup_recovered = await _c.fetchval(
-                                "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND role = 'assistant' "
-                                "AND model_used IN ('recovered', 'recovered_from_redis') AND LEFT(content, 50) = $2 AND id != $3",
-                                _ph["session_id"], _prefix, _ph["id"],
-                            )
-                            if _dup_recovered and _dup_recovered > 0:
-                                await _c.execute("DELETE FROM chat_messages WHERE id = $1", _ph["id"])
-                                _cleaned += 1
-                            else:
-                                await _c.execute(
-                                    "UPDATE chat_messages SET content = $2, intent = 'interrupted_partial', model_used = 'interrupted' WHERE id = $1",
-                                    _ph["id"], _clean_content,
-                                )
-                                _promoted += 1
-                        else:
-                            await _c.execute("DELETE FROM chat_messages WHERE id = $1", _ph["id"])
-                            _cleaned += 1
-                else:
-                    await _c.execute("DELETE FROM chat_messages WHERE id = $1", _ph["id"])
-                    _cleaned += 1
-            if (_promoted and _promoted > 0) or (_cleaned and _cleaned > 0):
-                logger.info(f"startup_placeholder_cleanup: promoted={_promoted or 0} deleted={_cleaned or 0}")
-                await _c.execute(
-                    "UPDATE chat_sessions s SET message_count = "
-                    "(SELECT count(*) FROM chat_messages m WHERE m.session_id = s.id)"
-                )
+        from app.services.chat_service import (
+            cleanup_stale_streaming_placeholders as _startup_cleanup_stale_placeholders,
+            ensure_stale_placeholder_cleanup_task as _ensure_stale_placeholder_cleanup_task,
+        )
+
+        await _startup_cleanup_stale_placeholders()
+        _ensure_stale_placeholder_cleanup_task()
     except Exception as _e:
         logger.warning(f"startup_placeholder_cleanup_failed: {_e}")
 
-    # 주기적 stale placeholder 처리 (15초마다, 1분 초과분 — 중복 버블 방지 강화)
-    async def _periodic_placeholder_cleanup():
-        import asyncio as _pc_asyncio
-        while True:
-            await _pc_asyncio.sleep(15)  # 15초
-            try:
-                from app.core.db_pool import get_pool as _gp_pc
-                from app.services.chat_service import _streaming_state
-                _pool = _gp_pc()
-                async with _pool.acquire() as _c:
-                    # 현재 스트리밍 중인 세션은 제외
-                    _active_sids = [k for k, v in _streaming_state.items() if not v.get("completed")]
-                    # 1분 초과 + 스트리밍 아닌 placeholder만 대상 (2분→1분 단축: 고아 placeholder 빠른 정리)
-                    _stale = await _c.fetch(
-                        "SELECT id, session_id, content FROM chat_messages "
-                        "WHERE intent = 'streaming_placeholder' AND execution_id IS NULL "
-                        "AND created_at < NOW() - interval '1 minute'"
-                    )
-                    # execution_id 있지만 실행이 이미 completed/interrupted인 고아 placeholder도 정리
-                    _orphan_with_exec = await _c.fetch(
-                        "SELECT m.id, m.session_id, m.content FROM chat_messages m "
-                        "LEFT JOIN chat_turn_executions te ON te.id = m.execution_id "
-                        "WHERE m.intent = 'streaming_placeholder' AND m.execution_id IS NOT NULL "
-                        "AND m.created_at < NOW() - interval '2 minutes' "
-                        "AND (te.id IS NULL OR te.status NOT IN ('running', 'retrying'))"
-                    )
-                    _stale = list(_stale) + list(_orphan_with_exec)
-                    _promoted = 0
-                    _deleted = 0
-                    for row in _stale:
-                        _sid_str = str(row["session_id"])
-                        if _sid_str in _active_sids:
-                            continue  # 아직 스트리밍 중 → 건드리지 않음
-                        content = row["content"] or ""
-                        if content.strip():
-                            # 최종 응답이 이미 있으면 중복 방지를 위해 삭제
-                            _has_final = await _c.fetchval(
-                                "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND role = 'assistant' "
-                                "AND intent IS DISTINCT FROM 'streaming_placeholder' "
-                                "AND created_at >= (SELECT created_at FROM chat_messages WHERE id = $2)",
-                                row["session_id"], row["id"],
-                            )
-                            if _has_final and _has_final > 0:
-                                await _c.execute("DELETE FROM chat_messages WHERE id = $1", row["id"])
-                                _deleted += 1
-                            else:
-                                import re as _re
-                                _clean = _re.sub(r'\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\s*$', '', content).rstrip()
-                                if _clean:
-                                    # Stage 2: promote 전 동일 내용 recovered 중복 검사
-                                    _prefix = _clean[:50]
-                                    _dup_rec = await _c.fetchval(
-                                        "SELECT count(*) FROM chat_messages WHERE session_id = $1 AND role = 'assistant' "
-                                        "AND model_used IN ('recovered', 'recovered_from_redis') AND LEFT(content, 50) = $2 AND id != $3",
-                                        row["session_id"], _prefix, row["id"],
-                                    )
-                                    if _dup_rec and _dup_rec > 0:
-                                        await _c.execute("DELETE FROM chat_messages WHERE id = $1", row["id"])
-                                        _deleted += 1
-                                    else:
-                                        await _c.execute(
-                                            "UPDATE chat_messages SET content = $2, intent = 'interrupted_partial', model_used = 'interrupted' WHERE id = $1",
-                                            row["id"], _clean,
-                                        )
-                                        _promoted += 1
-                                else:
-                                    await _c.execute("DELETE FROM chat_messages WHERE id = $1", row["id"])
-                                    _deleted += 1
-                        else:
-                            await _c.execute("DELETE FROM chat_messages WHERE id = $1", row["id"])
-                            _deleted += 1
-                    if _promoted or _deleted:
-                        logger.info(f"periodic_placeholder_cleanup: promoted={_promoted} deleted={_deleted}")
-                        await _c.execute(
-                            "UPDATE chat_sessions s SET message_count = "
-                            "(SELECT count(*) FROM chat_messages m WHERE m.session_id = s.id)"
-                        )
-            except Exception:
-                pass
-
     import asyncio as _startup_asyncio
     import time as _resume_time
-    _startup_asyncio.create_task(_periodic_placeholder_cleanup())
 
     # execution_id 기반 미완료 응답 자동 재개
     from datetime import datetime as _resume_datetime, timezone as _resume_timezone
@@ -1242,7 +1115,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"startup_embedding_backfill_failed: {e}")
 
-    import asyncio as _startup_asyncio
     _startup_asyncio.create_task(_backfill_missing_embeddings())
 
     # missed sleep-time agent 체크 — 24시간 이상 인사이트 미생성 시 즉시 실행
@@ -1308,6 +1180,11 @@ async def lifespan(app: FastAPI):
     if scheduler:
         scheduler.shutdown(wait=False)
         logger.info("apscheduler_stopped")
+    try:
+        from app.services.chat_service import cancel_stale_placeholder_cleanup_task
+        await cancel_stale_placeholder_cleanup_task()
+    except Exception as _cleanup_err:
+        logger.warning(f"stale_placeholder_cleanup_task_stop_failed: {_cleanup_err}")
     try:
         from app.core.langfuse_config import flush_langfuse
         flush_langfuse()

@@ -112,12 +112,17 @@ _active_bg_tasks: Dict[str, _heartbeat_asyncio.Task] = getattr(
 _streaming_state: Dict[str, Dict[str, Any]] = getattr(
     _sys.modules.get(__name__), '_streaming_state', None
 ) or {}
+_stale_cleanup_task: _heartbeat_asyncio.Task | None = getattr(
+    _sys.modules.get(__name__), "_stale_cleanup_task", None
+) or None
 # 클라이언트 이탈 후 자동 종료 시간 (초)
 _BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "600"))  # 10분 (도구 실행 중 탭 전환 보호)
 _FIRST_RESPONSE_TIMEOUT_SEC = float(os.getenv("AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC", "180"))
 _COOLDOWN_SECS_DEFAULT = 300
 _RECOVERY_DEDUPE_MODEL_USED = {"recovered", "recovered_from_redis", "stopped", None}
 _RECOVERY_PREFIX_LEN = 50
+_STALE_PLACEHOLDER_TIMEOUT_SEC_DEFAULT = 600
+_STALE_CLEANUP_INTERVAL_SEC_DEFAULT = 300
 _HISTORY_EXCLUDED_INTENTS = (
     "streaming_placeholder",
     "rate_limited",
@@ -1036,6 +1041,288 @@ def _current_asyncio_task_or_none():
         return _heartbeat_asyncio.current_task()
     except RuntimeError:
         return None
+
+
+def _get_positive_env_int(name: str, default: int, *, minimum: int) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "invalid_env_int name=%s raw=%r default=%s",
+            name,
+            raw,
+            default,
+        )
+        return default
+    if value < minimum:
+        logger.warning(
+            "env_int_below_minimum name=%s value=%s minimum=%s using_default=%s",
+            name,
+            value,
+            minimum,
+            default,
+        )
+        return default
+    return value
+
+
+def get_stale_placeholder_timeout_sec() -> int:
+    return _get_positive_env_int(
+        "STALE_PLACEHOLDER_TIMEOUT_SEC",
+        _STALE_PLACEHOLDER_TIMEOUT_SEC_DEFAULT,
+        minimum=60,
+    )
+
+
+def get_stale_cleanup_interval_sec() -> int:
+    return _get_positive_env_int(
+        "STALE_CLEANUP_INTERVAL_SEC",
+        _STALE_CLEANUP_INTERVAL_SEC_DEFAULT,
+        minimum=30,
+    )
+
+
+def _get_live_streaming_session_ids() -> set[str]:
+    active_sessions = {
+        sid for sid, task in list(_active_bg_tasks.items())
+        if task is not None and not task.done()
+    }
+    active_sessions.update(
+        sid for sid, state in _streaming_state.items()
+        if state and not state.get("completed", False)
+    )
+    return active_sessions
+
+
+def _format_stale_placeholder_content(content: str) -> str:
+    clean = _strip_streaming_progress_markers(content or "")
+    if _has_meaningful_partial_content(clean):
+        marker = "_(응답이 중단되어 여기까지 보존되었습니다.)_"
+        if marker in clean or "응답 생성이 중단" in clean:
+            return clean
+        return clean + "\n\n" + marker
+    return (
+        "⚠️ _응답 생성이 중단되어 여기까지 보존된 내용이 없습니다. "
+        "같은 질문으로 다시 요청할 수 있습니다._"
+    )
+
+
+async def cleanup_stale_streaming_placeholders(
+    *,
+    timeout_sec: Optional[int] = None,
+) -> Dict[str, int]:
+    timeout = (
+        timeout_sec
+        if timeout_sec is not None
+        else get_stale_placeholder_timeout_sec()
+    )
+    timeout = max(int(timeout), 60)
+    live_sessions = _get_live_streaming_session_ids()
+
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT m.id,
+                   m.session_id::text AS session_id,
+                   m.execution_id::text AS execution_id,
+                   m.content
+            FROM chat_messages m
+            LEFT JOIN chat_turn_executions te
+              ON te.id = m.execution_id
+            WHERE m.intent = 'streaming_placeholder'
+              AND COALESCE(
+                    m.edited_at,
+                    m.created_at,
+                    te.updated_at,
+                    te.started_at
+                  ) < NOW() - ($1::int * INTERVAL '1 second')
+            ORDER BY COALESCE(
+                m.edited_at,
+                m.created_at,
+                te.updated_at,
+                te.started_at
+            ) ASC
+            """,
+            timeout,
+        )
+
+        cleaned = 0
+        promoted = 0
+        deleted = 0
+        skipped_active = 0
+        deleted_session_ids: set[uuid.UUID] = set()
+
+        for row in rows:
+            session_id = row["session_id"]
+            if session_id in live_sessions:
+                skipped_active += 1
+                continue
+
+            session_uuid = uuid.UUID(session_id)
+            execution_id = row["execution_id"]
+            execution_uuid = uuid.UUID(str(execution_id)) if execution_id else None
+            has_final_message = await conn.fetchval(
+                """
+                SELECT 1
+                FROM chat_messages
+                WHERE session_id = $1
+                  AND role = 'assistant'
+                  AND intent IS DISTINCT FROM 'streaming_placeholder'
+                  AND created_at >= (
+                      SELECT created_at FROM chat_messages WHERE id = $2
+                  )
+                LIMIT 1
+                """,
+                session_uuid,
+                row["id"],
+            )
+
+            assistant_message_id = row["id"]
+            if has_final_message:
+                await conn.execute(
+                    "DELETE FROM chat_messages WHERE id = $1",
+                    row["id"],
+                )
+                deleted += 1
+                cleaned += 1
+                deleted_session_ids.add(session_uuid)
+                assistant_message_id = None
+                _streaming_state.pop(session_id, None)
+            else:
+                final_content = _format_stale_placeholder_content(row["content"] or "")
+                await conn.execute(
+                    """
+                    UPDATE chat_messages
+                    SET content = $2,
+                        intent = 'interrupted_partial',
+                        model_used = 'interrupted',
+                        edited_at = NOW()
+                    WHERE id = $1
+                    """,
+                    row["id"],
+                    final_content,
+                )
+                promoted += 1
+                cleaned += 1
+                state = _streaming_state.get(session_id)
+                if state is not None:
+                    state["content"] = final_content
+                    state["completed"] = True
+                    state["completed_at"] = _bg_time.monotonic()
+
+            if execution_uuid:
+                await conn.execute(
+                    """
+                    UPDATE chat_turn_executions
+                    SET assistant_message_id = CASE
+                            WHEN $2::uuid IS NULL THEN assistant_message_id
+                            ELSE COALESCE(assistant_message_id, $2)
+                        END,
+                        status = 'interrupted',
+                        error_message = COALESCE(error_message, $3),
+                        completed_at = COALESCE(completed_at, NOW()),
+                        updated_at = NOW()
+                    WHERE id = $1
+                      AND status IN ('running', 'retrying')
+                    """,
+                    execution_uuid,
+                    assistant_message_id,
+                    f"stale placeholder cleanup after {timeout} seconds",
+                )
+                await conn.execute(
+                    """
+                    UPDATE chat_sessions
+                    SET current_execution_id = NULL,
+                        updated_at = NOW()
+                    WHERE id = $1
+                      AND current_execution_id = $2
+                    """,
+                    session_uuid,
+                    execution_uuid,
+                )
+
+        for session_uuid in deleted_session_ids:
+            await conn.execute(
+                """
+                UPDATE chat_sessions
+                SET message_count = (
+                        SELECT count(*)
+                        FROM chat_messages
+                        WHERE session_id = $1
+                    ),
+                    updated_at = NOW()
+                WHERE id = $1
+                """,
+                session_uuid,
+            )
+
+    if cleaned:
+        logger.info(
+            "stale_placeholder_cleanup cleaned=%s promoted=%s deleted=%s skipped_active=%s timeout_sec=%s",
+            cleaned,
+            promoted,
+            deleted,
+            skipped_active,
+            timeout,
+        )
+
+    return {
+        "scanned": len(rows),
+        "cleaned": cleaned,
+        "promoted": promoted,
+        "deleted": deleted,
+        "skipped_active": skipped_active,
+        "timeout_sec": timeout,
+    }
+
+
+async def _stale_placeholder_cleanup_loop() -> None:
+    global _stale_cleanup_task
+    try:
+        while True:
+            await _heartbeat_asyncio.sleep(get_stale_cleanup_interval_sec())
+            try:
+                await cleanup_stale_streaming_placeholders()
+            except _heartbeat_asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(f"stale_placeholder_cleanup_loop_failed: {exc}")
+    except _heartbeat_asyncio.CancelledError:
+        logger.info("stale_placeholder_cleanup_loop_stopped")
+        raise
+    finally:
+        if _stale_cleanup_task is _current_asyncio_task_or_none():
+            _stale_cleanup_task = None
+
+
+def ensure_stale_placeholder_cleanup_task() -> None:
+    global _stale_cleanup_task
+    if _stale_cleanup_task and not _stale_cleanup_task.done():
+        return
+    _stale_cleanup_task = _heartbeat_asyncio.create_task(
+        _stale_placeholder_cleanup_loop()
+    )
+    logger.info(
+        "stale_placeholder_cleanup_loop_started interval_sec=%s timeout_sec=%s",
+        get_stale_cleanup_interval_sec(),
+        get_stale_placeholder_timeout_sec(),
+    )
+
+
+async def cancel_stale_placeholder_cleanup_task() -> None:
+    global _stale_cleanup_task
+    task = _stale_cleanup_task
+    if task is None:
+        return
+    _stale_cleanup_task = None
+    if task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except _heartbeat_asyncio.CancelledError:
+        pass
 
 
 async def _execution_has_newer_user_message(conn, session_id: str, execution_id: str) -> bool:

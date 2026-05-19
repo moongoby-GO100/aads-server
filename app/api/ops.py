@@ -76,6 +76,76 @@ async def _get_stream_activity_snapshot(recent_minutes: int = 5) -> Dict[str, An
     }
 
 
+@router.get("/ops/streaming-metrics")
+async def get_streaming_metrics():
+    """스트리밍 운영 메트릭 조회."""
+    try:
+        from app.core.db_pool import get_pool as _gp
+
+        async with _gp().acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                WITH active AS (
+                    SELECT COUNT(*)::int AS active_streaming_count,
+                           COALESCE(
+                               AVG(EXTRACT(EPOCH FROM (NOW() - started_at))),
+                               0
+                           ) AS avg_streaming_duration_sec
+                    FROM chat_turn_executions
+                    WHERE status IN ('running', 'retrying')
+                      AND completed_at IS NULL
+                ),
+                recent AS (
+                    SELECT COUNT(*) FILTER (WHERE status = 'completed')::int AS completed_count,
+                           COUNT(*) FILTER (WHERE status = 'interrupted')::int AS interrupted_count
+                    FROM chat_turn_executions
+                    WHERE status IN ('completed', 'interrupted')
+                      AND COALESCE(completed_at, updated_at, started_at) >= NOW() - INTERVAL '1 hour'
+                )
+                SELECT active.active_streaming_count,
+                       ROUND(active.avg_streaming_duration_sec::numeric, 1) AS avg_streaming_duration_sec,
+                       recent.completed_count,
+                       recent.interrupted_count,
+                       CASE
+                           WHEN (recent.completed_count + recent.interrupted_count) > 0
+                           THEN ROUND(
+                               recent.completed_count::numeric * 100.0
+                               / (recent.completed_count + recent.interrupted_count),
+                               1
+                           )
+                           ELSE 0
+                       END AS completed_ratio_pct,
+                       CASE
+                           WHEN (recent.completed_count + recent.interrupted_count) > 0
+                           THEN ROUND(
+                               recent.interrupted_count::numeric * 100.0
+                               / (recent.completed_count + recent.interrupted_count),
+                               1
+                           )
+                           ELSE 0
+                       END AS interrupted_ratio_pct
+                FROM active
+                CROSS JOIN recent
+                """
+            )
+    except Exception as e:
+        logger.warning("streaming_metrics_failed", error=str(e))
+        raise HTTPException(status_code=500, detail="failed_to_load_streaming_metrics")
+
+    return {
+        "active_streaming_count": int(row["active_streaming_count"] or 0),
+        "average_streaming_duration_sec": float(row["avg_streaming_duration_sec"] or 0),
+        "recent_one_hour": {
+            "completed_count": int(row["completed_count"] or 0),
+            "interrupted_count": int(row["interrupted_count"] or 0),
+            "completed_ratio_pct": float(row["completed_ratio_pct"] or 0),
+            "interrupted_ratio_pct": float(row["interrupted_ratio_pct"] or 0),
+        },
+        "window_minutes": 60,
+        "generated_at": datetime.now(KST).isoformat(),
+    }
+
+
 @router.get("/version")
 async def get_version():
     """배포 버전 해시 반환 — 프론트엔드 자동 새로고침용"""
