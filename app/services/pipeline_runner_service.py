@@ -741,7 +741,31 @@ class PipelineCJob:
             return {"error": str(e)}
 
     async def _run_frontend_qa_if_needed(self):
-        """AADS 프로젝트 + aads-dashboard 변경 시 대시보드 BG 배포 + QA 자동 실행."""
+        """AADS/GO100 프로젝트 프론트엔드 변경 시 BG 배포 자동 실행."""
+        # GO100: frontend/ 변경 시 서버211 BG 배포 트리거
+        if self.project == "GO100":
+            if "frontend/" not in (self.git_diff or ""):
+                return
+            try:
+                self._log("go100_frontend_deploy", "GO100 frontend/ 변경 감지 — 서버211 BG 배포 트리거...")
+                await self._post_to_chat(
+                    f"🔨 **[GO100 프론트 배포 시작]** `{self.job_id}`\n"
+                    f"frontend/ 변경 감지. Blue-Green 배포를 실행합니다..."
+                )
+                _result = await self._ssh_command(
+                    "bash scripts/deploy_frontend_blue_green.sh --apply",
+                    timeout=360,
+                )
+                _ok = any(kw in _result for kw in ["배포 성공", "완료", "active", "SUCCESS"])
+                self._log("go100_frontend_deploy_done", f"GO100 프론트 배포: {_result[-300:]}")
+                await self._post_to_chat(
+                    f"{'✅' if _ok else '⚠️'} **[GO100 프론트 배포 {'완료' if _ok else '확인 필요'}]** `{self.job_id}`\n"
+                    f"{_result[-200:]}"
+                )
+            except Exception as _e:
+                logger.warning(f"pipeline_c_go100_frontend_deploy_error job={self.job_id}: {_e}")
+            return
+
         if self.project != "AADS":
             return
         if "aads-dashboard/" not in (self.git_diff or ""):
