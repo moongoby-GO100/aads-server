@@ -104,9 +104,14 @@ async def with_heartbeat(
 # 클라이언트 SSE 연결이 끊겨도 LLM 생성을 백그라운드에서 완료하여 DB에 저장.
 # 핵심: 생성 태스크(producer)와 SSE 전송(consumer)을 asyncio.Queue로 분리.
 # 클라이언트 disconnect → consumer만 중단, producer는 독립적으로 계속 실행.
-_active_bg_tasks: Dict[str, _heartbeat_asyncio.Task] = {}
+import sys as _sys
+_active_bg_tasks: Dict[str, _heartbeat_asyncio.Task] = getattr(
+    _sys.modules.get(__name__), '_active_bg_tasks', None
+) or {}
 # 스트리밍 중간 상태 추적: session_id → {content, tool_count, last_tool, updated_at}
-_streaming_state: Dict[str, Dict[str, Any]] = {}
+_streaming_state: Dict[str, Dict[str, Any]] = getattr(
+    _sys.modules.get(__name__), '_streaming_state', None
+) or {}
 # 클라이언트 이탈 후 자동 종료 시간 (초)
 _BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "600"))  # 10분 (도구 실행 중 탭 전환 보호)
 _FIRST_RESPONSE_TIMEOUT_SEC = float(os.getenv("AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC", "180"))
@@ -1245,7 +1250,7 @@ async def _mark_execution_interrupted(
     task = _active_bg_tasks.get(str(session_id))
     current_task = _current_asyncio_task_or_none()
     if task is not None and task is not current_task and not task.done():
-        task.cancel()
+        task.cancel(msg=f"mark_interrupted:{reason[:80]}")
 
 
 async def _save_interrupted_partial_message(
@@ -1834,8 +1839,10 @@ async def with_background_completion(
                     if now - state["last_save"] > 1:
                         state["last_save"] = now
                         await _interim_save_streaming(session_id, state)
-                    # 클라이언트 이탈 후 _BG_AUTO_CANCEL_SEC(5분) 경과 시 자동 중단
-                    if _client_gone_since and (now - _client_gone_since) > _BG_AUTO_CANCEL_SEC:
+                    # 클라이언트 이탈 후: LLM 활동 없으면 _BG_AUTO_CANCEL_SEC, 활동 중이면 최대 30분
+                    _idle_since_last_event = now - state.get("last_event_at", _client_gone_since)
+                    _effective_cancel_sec = _BG_AUTO_CANCEL_SEC if _idle_since_last_event > 120 else min(_BG_AUTO_CANCEL_SEC * 3, 1800)
+                    if _client_gone_since and (now - _client_gone_since) > _effective_cancel_sec:
                         logger.warning(f"bg_auto_cancel: session={session_id[:8]} client gone for {now - _client_gone_since:.0f}s, auto-stopping")
                         await _interim_save_streaming(session_id, state)
                         # AADS: bool 대신 reason 문자열로 저장 (L1138 reason[:1000] 슬라이싱 호환)
@@ -1845,7 +1852,10 @@ async def with_background_completion(
             # BaseException: CancelledError, GeneratorExit 등 모두 잡음
             import traceback as _tb
             logger.warning(f"bg_producer_error session={session_id}: {type(e).__name__}: {e}\n{''.join(_tb.format_exception(type(e), e, e.__traceback__))}")
-            state["_producer_exception_type"] = type(e).__name__
+            _cancel_reason = ""
+            if isinstance(e, _heartbeat_asyncio.CancelledError):
+                _cancel_reason = getattr(e, 'args', ('',))[0] if e.args else ""
+            state["_producer_exception_type"] = f"{type(e).__name__}:{_cancel_reason}" if _cancel_reason else type(e).__name__
             _err_str = str(e).lower()
             _is_retryable = (
                 not isinstance(e, (_heartbeat_asyncio.CancelledError, GeneratorExit, KeyboardInterrupt, SystemExit))
@@ -2050,7 +2060,7 @@ async def with_background_completion(
     # 기존 태스크가 있으면 취소 후 교체
     old_task = _active_bg_tasks.pop(session_id, None)
     if old_task and not old_task.done():
-        old_task.cancel()
+        old_task.cancel(msg="superseded_by_new_execution")
         logger.info(f"bg_task_replaced session={session_id}")
 
     # BUG-SESSION-MIX FIX: 새 producer 시작 전 잔류 streaming_placeholder 정리.
