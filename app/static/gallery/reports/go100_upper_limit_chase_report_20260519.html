@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GO100 상한가따라잡기 전략 및 최근 5거래일 백데이터</title>
+  <style>
+    :root {
+      --ink: #1f2937;
+      --muted: #6b7280;
+      --line: #d7dde6;
+      --bg: #f7f9fc;
+      --panel: #ffffff;
+      --accent: #0f766e;
+      --risk: #b42318;
+      --warn: #b7791f;
+      --good: #166534;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", Arial, sans-serif;
+      line-height: 1.55;
+    }
+    header {
+      background: #ffffff;
+      border-bottom: 1px solid var(--line);
+      padding: 28px 36px 22px;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 28px 24px 56px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 34px 0 14px;
+      font-size: 21px;
+      letter-spacing: 0;
+    }
+    h3 {
+      margin: 22px 0 10px;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+    .meta, .note {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 22px;
+    }
+    .metric {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .metric b {
+      display: block;
+      font-size: 24px;
+      margin-bottom: 4px;
+    }
+    .metric span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 22px;
+      margin-top: 18px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      background: #fff;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 9px 8px;
+      text-align: right;
+      white-space: nowrap;
+    }
+    th {
+      background: #eef3f7;
+      color: #334155;
+      font-weight: 700;
+    }
+    td:first-child, th:first-child,
+    td:nth-child(2), th:nth-child(2),
+    td:nth-child(3), th:nth-child(3) {
+      text-align: left;
+    }
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    .pill {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .a { background: #dcfce7; color: var(--good); }
+    .b { background: #e0f2fe; color: #075985; }
+    .d { background: #fee2e2; color: var(--risk); }
+    .rule-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .rule {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: #fbfdff;
+    }
+    .rule strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--accent);
+    }
+    .warn {
+      border-left: 4px solid var(--warn);
+      padding: 10px 12px;
+      background: #fff8e6;
+      color: #5f4700;
+      margin: 12px 0;
+    }
+    .risk {
+      border-left: 4px solid var(--risk);
+      padding: 10px 12px;
+      background: #fff1f0;
+      color: #7a271a;
+      margin: 12px 0;
+    }
+    .chart {
+      display: grid;
+      grid-template-columns: 110px 1fr 66px;
+      gap: 8px;
+      align-items: center;
+      margin: 9px 0;
+      font-size: 13px;
+    }
+    .bar {
+      height: 14px;
+      background: #dbeafe;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .bar > i {
+      display: block;
+      height: 100%;
+      background: var(--accent);
+    }
+    footer {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 22px;
+    }
+    @media (max-width: 820px) {
+      header { padding: 22px 18px; }
+      main { padding: 18px 12px 40px; }
+      .summary, .rule-grid { grid-template-columns: 1fr; }
+      h1 { font-size: 23px; }
+      section { padding: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>GO100 상한가따라잡기 전략 및 최근 5거래일 백데이터</h1>
+    <div class="meta">작성 기준: 2026-05-19 17:04:21 KST · 데이터 출처: GO100 PostgreSQL `ohlcv_daily`, `v4_ohlcv_minute_2026_05`, `v4_market_ranking`</div>
+  </header>
+  <main>
+    <div class="summary">
+      <div class="metric"><b>96건</b><span>최근 5거래일 상한가 도달 후보</span></div>
+      <div class="metric"><b>82건</b><span>익일 시가 갭 검증 가능 표본</span></div>
+      <div class="metric"><b>+4.27%</b><span>검증 표본 평균 익일 시가 갭</span></div>
+      <div class="metric"><b>+6.42%</b><span>A등급 평균 익일 시가 갭</span></div>
+    </div>
+
+    <section>
+      <h2>결론</h2>
+      <p>
+        상한가따라잡기 전략은 “상한가에 이미 붙은 종목을 추격”하는 방식보다
+        <strong>+20% 돌파 이후 +25% 재돌파, +28% 전후 수급 확인, 종가 상한가 고정 여부</strong>를 보는 방식이 유리합니다.
+        최근 5거래일 백데이터에서는 A등급(사전 포착 신호와 종가 고정이 모두 확인된 후보)의 익일 시가 갭 평균이 전체 후보보다 높았습니다.
+      </p>
+      <div class="risk">
+        투자 유의: 이 문서는 전략 설계와 백데이터 검토용입니다. 실제 매수·매도 결정은 실시간 호가, 거래대금, 공시/뉴스, 시장 레짐, 손절 기준을 함께 확인해야 합니다.
+      </div>
+    </section>
+
+    <section>
+      <h2>전략카드 바로 입력용 종목발굴 조건</h2>
+      <p>
+        최근 5거래일 백데이터에서 전체 후보의 평균 익일 시가 갭은 <strong>+4.27%</strong>, A등급의 평균 익일 시가 갭은
+        <strong>+6.42%</strong>였습니다. 따라서 전략카드 조건은 “당일 상한가 도달 후보” 전체가 아니라
+        <strong>A등급 정의를 그대로 종목 발굴 규칙으로 고정</strong>하는 방식이 합리적입니다.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>항목</th>
+              <th>전략카드 입력값</th>
+              <th>근거</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>전략명</td>
+              <td>상한가따라잡기 v1 - 오전 사전진입형</td>
+              <td>최근 5거래일 상한가 도달 후보 96건 분석 기준</td>
+            </tr>
+            <tr>
+              <td>목표</td>
+              <td>당일 오전에 상한가 예상 종목을 선별해 +20%~+25% 급등 구간에서 사전진입하고, 익일 시가 갭과 익일 고점에서 분할익절</td>
+              <td>전체 평균 익일 갭 +4.27%, A등급 평균 익일 갭 +6.42%</td>
+            </tr>
+            <tr>
+              <td>시장 레짐</td>
+              <td>상승장 또는 횡보장만 허용. 급락장, 지수 -1.5% 이하 약세장, 장초반 시장 급락시는 신규 진입 금지</td>
+              <td>갭 전략은 종가 강도와 다음날 심리 유지가 중요함</td>
+            </tr>
+            <tr>
+              <td>기본 유니버스</td>
+              <td>KOSPI/KOSDAQ 보통주 중심. ETF, ETN, 스팩, 우선주, 거래정지, 관리종목, 분봉 결측 종목 제외</td>
+              <td>하위 사례에 우선주/결측/왜곡 표본 포함</td>
+            </tr>
+            <tr>
+              <td>장전 관심군</td>
+              <td>전일 강세 테마, 전일 거래대금 100억원 이상, 전일 종가 강도 +15% 이상 또는 최근 5거래일 내 상한가/29% 도달 이력 보유 종목 우선</td>
+              <td>보고서 일자별 상한가 도달 종목과 거래대금/테마군 기준</td>
+            </tr>
+            <tr>
+              <td>테마 우선순위</td>
+              <td>같은 테마군에서 동시 강세 종목이 2종목 이상이면 최우선 감시군으로 승격. 단일 테마 단독 종목은 거래대금 조건을 더 엄격히 적용</td>
+              <td>테마 확산이 붙은 날에 후속 종목 재현 가능성이 높음</td>
+            </tr>
+            <tr>
+              <td>오전 1차 트리거</td>
+              <td>09:00~10:30 KST 내 전일 종가 대비 +20% 첫 돌파, 오전 누적 거래대금 50억원 이상, 직전 5분봉 저점 이탈 없음</td>
+              <td>A등급 정의의 핵심 시작 구간</td>
+            </tr>
+            <tr>
+              <td>오전 2차 확인</td>
+              <td>11:00 KST 이전 +25% 재돌파 또는 안착, 눌림 구간이 1~3개 분봉 내에서 종료, 거래대금이 1차 돌파 구간보다 감소하지 않을 것</td>
+              <td>A등급은 +25% 확인과 종가 강도 동반</td>
+            </tr>
+            <tr>
+              <td>신규진입 금지</td>
+              <td>+28% 이후 첫 진입 금지, 13:00 이후 첫 급등 포착 금지, 오전 거래대금 30억원 미만 종목 금지</td>
+              <td>오후 포착 또는 막판 상한가 종목은 B/D 비중이 높음</td>
+            </tr>
+            <tr>
+              <td>오버나이트 보유 조건</td>
+              <td>종가 +25% 이상 유지, 종가가 고가 대비 -3% 이내, 상한가 또는 고가권 잠김, 거래대금 100억원 이상이면 우선 보유</td>
+              <td>익일 갭 전략은 종가 고정 강도가 핵심</td>
+            </tr>
+            <tr>
+              <td>익절 규칙</td>
+              <td>익일 시초 +3%~+7% 1차 50% 익절, 익일 장중 +10%~+20% 2차 익절, 갭 약세 출발 시 시초가~5분 내 비중 축소</td>
+              <td>익일 갭 확보 후 고점 분할익절이 기대값 방어에 유리</td>
+            </tr>
+            <tr>
+              <td>손절 규칙</td>
+              <td>당일 진입 후 +20% 돌파 직전 기준봉 저점 이탈 또는 매수가 대비 -5% 손절. 익일 갭 실패 후 시초가 이탈시 즉시 축소</td>
+              <td>상한가 추세 실패시 되돌림이 빠름</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>오전 대상종목 발굴 순서</h3>
+      <ol>
+        <li>장 시작 전 08:30~08:55 KST에 전일 상한가/29% 도달 종목, 전일 거래대금 상위 급등주, 동일 테마 확산 종목을 묶어 1차 감시군을 만듭니다.</li>
+        <li>09:00~09:30 KST에는 갭 출발 강도보다 거래대금 속도와 +20% 접근 속도를 먼저 봅니다. 1차 감시군 중 거래대금이 붙지 않는 종목은 즉시 제외합니다.</li>
+        <li>09:30~10:30 KST에는 +20% 첫 돌파와 +25% 재돌파 여부를 체크합니다. 이 구간을 통과한 종목만 사전진입 후보로 남깁니다.</li>
+        <li>10:30~11:00 KST에는 눌림목 길이, 재돌파 성공, 호가 잠김 여부를 확인해 A등급만 오버나이트 후보로 승격합니다.</li>
+      </ol>
+
+      <h3>전략카드용 점수화 기준</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>평가축</th>
+              <th>점수</th>
+              <th>조건</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>테마 강도</td><td>+2</td><td>동일 테마군 강세 종목 2개 이상</td></tr>
+            <tr><td>전일 자금 집중</td><td>+2</td><td>전일 거래대금 300억원 이상</td></tr>
+            <tr><td>오전 속도</td><td>+3</td><td>10:30 이전 +20% 돌파</td></tr>
+            <tr><td>안착 확인</td><td>+3</td><td>11:00 이전 +25% 재돌파 또는 유지</td></tr>
+            <tr><td>종가 강도</td><td>+2</td><td>종가 +25% 이상, 고가 대비 -3% 이내</td></tr>
+            <tr><td>감점</td><td>-3</td><td>13:00 이후 첫 급등 포착, 분봉 결측, 우선주/왜곡 가능성</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><strong>운영 기준:</strong> 총점 8점 이상만 A등급 사전진입 후보, 5~7점은 장중 단타 후보, 4점 이하는 감시만 하고 진입하지 않습니다.</p>
+    </section>
+
+    <section>
+      <h2>5거래일 백데이터 집계</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>거래일</th>
+              <th>후보</th>
+              <th>A등급</th>
+              <th>B등급</th>
+              <th>D등급</th>
+              <th>전체 평균 익일갭</th>
+              <th>A등급 평균 익일갭</th>
+              <th>양(+) 갭</th>
+              <th>검증 표본</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>2026-05-19</td><td>14</td><td>8</td><td>2</td><td>4</td><td>-</td><td>-</td><td>0</td><td>0</td></tr>
+            <tr><td>2026-05-18</td><td>12</td><td>8</td><td>3</td><td>1</td><td>-2.79%</td><td>-2.14%</td><td>4</td><td>12</td></tr>
+            <tr><td>2026-05-15</td><td>15</td><td>7</td><td>4</td><td>4</td><td>+6.93%</td><td>+14.10%</td><td>10</td><td>15</td></tr>
+            <tr><td>2026-05-14</td><td>24</td><td>13</td><td>6</td><td>5</td><td>+3.80%</td><td>+6.67%</td><td>17</td><td>24</td></tr>
+            <tr><td>2026-05-13</td><td>31</td><td>24</td><td>2</td><td>5</td><td>+6.09%</td><td>+6.90%</td><td>20</td><td>31</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>일자별 후보 수</h3>
+      <div class="chart"><span>2026-05-19</span><div class="bar"><i style="width:45%"></i></div><strong>14</strong></div>
+      <div class="chart"><span>2026-05-18</span><div class="bar"><i style="width:39%"></i></div><strong>12</strong></div>
+      <div class="chart"><span>2026-05-15</span><div class="bar"><i style="width:48%"></i></div><strong>15</strong></div>
+      <div class="chart"><span>2026-05-14</span><div class="bar"><i style="width:77%"></i></div><strong>24</strong></div>
+      <div class="chart"><span>2026-05-13</span><div class="bar"><i style="width:100%"></i></div><strong>31</strong></div>
+    </section>
+
+    <section>
+      <h2>상승 사례 상위 20건</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>거래일</th><th>종목</th><th>등급</th><th>고가%</th><th>종가%</th><th>익일 시가갭</th><th>+20%</th><th>+25%</th><th>+28%</th><th>+29%</th><th>분봉수</th><th>거래량</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>2026-05-15</td><td>에스에이엠티(031330)</td><td><span class="pill a">A</span></td><td>30.00</td><td>30.00</td><td>30.00</td><td>12:36</td><td>12:36</td><td>12:36</td><td>12:36</td><td>165</td><td>6,539,622</td></tr>
+            <tr><td>2026-05-13</td><td>동양고속(084670)</td><td><span class="pill a">A</span></td><td>29.88</td><td>29.88</td><td>29.94</td><td>12:36</td><td>12:36</td><td>12:36</td><td>12:36</td><td>71</td><td>110,667</td></tr>
+            <tr><td>2026-05-13</td><td>판타지오(032800)</td><td><span class="pill a">A</span></td><td>30.00</td><td>30.00</td><td>29.89</td><td>15:30</td><td>15:30</td><td>15:30</td><td>15:30</td><td>1</td><td>159,495</td></tr>
+            <tr><td>2026-05-14</td><td>소룩스(290690)</td><td><span class="pill a">A</span></td><td>30.00</td><td>30.00</td><td>29.84</td><td>12:36</td><td>12:36</td><td>12:36</td><td>12:36</td><td>95</td><td>1,379,626</td></tr>
+            <tr><td>2026-05-13</td><td>천일고속(000650)</td><td><span class="pill a">A</span></td><td>29.79</td><td>29.79</td><td>28.85</td><td>12:37</td><td>12:37</td><td>12:37</td><td>12:37</td><td>16</td><td>10,997</td></tr>
+            <tr><td>2026-05-14</td><td>차백신연구소(261780)</td><td><span class="pill a">A</span></td><td>29.95</td><td>29.95</td><td>19.95</td><td>12:36</td><td>12:36</td><td>12:36</td><td>12:36</td><td>78</td><td>4,702,718</td></tr>
+            <tr><td>2026-05-15</td><td>삼지전자(037460)</td><td><span class="pill a">A</span></td><td>29.97</td><td>29.97</td><td>19.23</td><td>12:36</td><td>12:36</td><td>12:36</td><td>12:36</td><td>161</td><td>1,666,646</td></tr>
+            <tr><td>2026-05-13</td><td>한화갤러리아우(45226K)</td><td><span class="pill d">D</span></td><td>29.94</td><td>29.94</td><td>19.01</td><td>-</td><td>-</td><td>-</td><td>-</td><td>1</td><td>126,616</td></tr>
+            <tr><td>2026-05-13</td><td>389680(389680)</td><td><span class="pill a">A</span></td><td>29.87</td><td>29.87</td><td>17.71</td><td>09:02</td><td>09:02</td><td>09:02</td><td>09:02</td><td>155</td><td>362,343</td></tr>
+            <tr><td>2026-05-14</td><td>동양고속(084670)</td><td><span class="pill a">A</span></td><td>29.94</td><td>29.94</td><td>17.62</td><td>12:36</td><td>12:36</td><td>12:36</td><td>12:36</td><td>91</td><td>171,431</td></tr>
+            <tr><td>2026-05-13</td><td>쏘카(403550)</td><td><span class="pill a">A</span></td><td>29.95</td><td>29.95</td><td>17.27</td><td>12:36</td><td>12:36</td><td>12:36</td><td>12:36</td><td>160</td><td>776,363</td></tr>
+            <tr><td>2026-05-15</td><td>소룩스(290690)</td><td><span class="pill a">A</span></td><td>29.84</td><td>29.84</td><td>17.06</td><td>12:36</td><td>12:36</td><td>12:36</td><td>12:36</td><td>139</td><td>10,423,759</td></tr>
+            <tr><td>2026-05-15</td><td>케스피온(079190)</td><td><span class="pill a">A</span></td><td>29.99</td><td>29.99</td><td>16.97</td><td>12:36</td><td>12:36</td><td>14:02</td><td>14:09</td><td>138</td><td>7,229,138</td></tr>
+            <tr><td>2026-05-13</td><td>한화갤러리아(452260)</td><td><span class="pill a">A</span></td><td>30.00</td><td>30.00</td><td>12.91</td><td>13:27</td><td>13:30</td><td>13:33</td><td>13:33</td><td>163</td><td>49,374,537</td></tr>
+            <tr><td>2026-05-15</td><td>아이로보틱스(066430)</td><td><span class="pill a">A</span></td><td>29.96</td><td>29.96</td><td>10.71</td><td>12:36</td><td>12:36</td><td>12:36</td><td>12:36</td><td>158</td><td>4,328,274</td></tr>
+            <tr><td>2026-05-13</td><td>계양전기우(012205)</td><td><span class="pill d">D</span></td><td>29.77</td><td>29.77</td><td>10.53</td><td>-</td><td>-</td><td>-</td><td>-</td><td>1</td><td>898,592</td></tr>
+            <tr><td>2026-05-13</td><td>미래산업(025560)</td><td><span class="pill a">A</span></td><td>29.98</td><td>29.98</td><td>10.07</td><td>12:36</td><td>12:36</td><td>12:36</td><td>12:36</td><td>123</td><td>336,861</td></tr>
+            <tr><td>2026-05-13</td><td>피델릭스(032580)</td><td><span class="pill a">A</span></td><td>29.96</td><td>29.96</td><td>9.97</td><td>12:36</td><td>12:36</td><td>12:36</td><td>12:36</td><td>111</td><td>11,488,338</td></tr>
+            <tr><td>2026-05-13</td><td>에이프로젠바이오로직스(003060)</td><td><span class="pill a">A</span></td><td>29.97</td><td>29.97</td><td>9.18</td><td>09:02</td><td>09:03</td><td>09:03</td><td>09:03</td><td>188</td><td>567,576</td></tr>
+            <tr><td>2026-05-15</td><td>한세엠케이(069640)</td><td><span class="pill a">A</span></td><td>29.98</td><td>29.98</td><td>8.99</td><td>15:01</td><td>15:01</td><td>15:01</td><td>15:01</td><td>8</td><td>1,464,783</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>실패·주의 사례 하위 15건</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>거래일</th><th>종목</th><th>등급</th><th>고가%</th><th>종가%</th><th>익일 시가갭</th><th>+20%</th><th>+25%</th><th>+28%</th><th>+29%</th><th>분봉수</th><th>거래량</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>2026-05-13</td><td>성문전자우(014915)</td><td><span class="pill a">A</span></td><td>29.91</td><td>29.91</td><td>-11.84</td><td>09:30</td><td>09:30</td><td>09:30</td><td>09:30</td><td>12</td><td>191,665</td></tr>
+            <tr><td>2026-05-14</td><td>라메디텍(462510)</td><td><span class="pill a">A</span></td><td>29.81</td><td>29.81</td><td>-9.98</td><td>12:36</td><td>12:36</td><td>12:36</td><td>12:36</td><td>66</td><td>1,195,781</td></tr>
+            <tr><td>2026-05-18</td><td>베셀(177350)</td><td><span class="pill a">A</span></td><td>29.94</td><td>29.94</td><td>-9.07</td><td>15:07</td><td>15:07</td><td>15:07</td><td>15:07</td><td>7</td><td>1,953,884</td></tr>
+            <tr><td>2026-05-18</td><td>삼지전자(037460)</td><td><span class="pill b">B</span></td><td>29.91</td><td>13.60</td><td>-8.87</td><td>09:05</td><td>10:17</td><td>11:13</td><td>12:18</td><td>379</td><td>4,040,318</td></tr>
+            <tr><td>2026-05-18</td><td>에스에이엠티(031330)</td><td><span class="pill a">A</span></td><td>30.00</td><td>30.00</td><td>-8.23</td><td>09:02</td><td>09:02</td><td>09:02</td><td>09:02</td><td>379</td><td>1,642,724</td></tr>
+            <tr><td>2026-05-13</td><td>그린생명과학(114450)</td><td><span class="pill a">A</span></td><td>29.95</td><td>29.95</td><td>-7.82</td><td>14:53</td><td>14:59</td><td>15:00</td><td>15:01</td><td>134</td><td>7,247,214</td></tr>
+            <tr><td>2026-05-18</td><td>메이슨캐피탈(021880)</td><td><span class="pill a">A</span></td><td>29.94</td><td>29.94</td><td>-6.45</td><td>12:36</td><td>12:45</td><td>12:47</td><td>12:47</td><td>134</td><td>41,409,474</td></tr>
+            <tr><td>2026-05-18</td><td>사토시홀딩스(223310)</td><td><span class="pill d">D</span></td><td>29.95</td><td>-27.92</td><td>-6.19</td><td>-</td><td>-</td><td>-</td><td>-</td><td>164</td><td>1,875,943</td></tr>
+            <tr><td>2026-05-13</td><td>서울바이오시스(092190)</td><td><span class="pill a">A</span></td><td>29.94</td><td>29.94</td><td>-5.16</td><td>12:36</td><td>12:36</td><td>12:36</td><td>12:36</td><td>151</td><td>2,372,281</td></tr>
+            <tr><td>2026-05-13</td><td>형지글로벌(308100)</td><td><span class="pill b">B</span></td><td>29.94</td><td>11.50</td><td>-4.30</td><td>12:38</td><td>12:38</td><td>12:38</td><td>12:38</td><td>161</td><td>8,584,699</td></tr>
+            <tr><td>2026-05-15</td><td>티피씨글로벌(130740)</td><td><span class="pill a">A</span></td><td>29.97</td><td>29.97</td><td>-4.26</td><td>12:39</td><td>12:39</td><td>12:39</td><td>12:39</td><td>63</td><td>2,625,391</td></tr>
+            <tr><td>2026-05-15</td><td>천일고속(000650)</td><td><span class="pill b">B</span></td><td>30.00</td><td>12.03</td><td>-4.08</td><td>09:03</td><td>09:08</td><td>14:32</td><td>14:32</td><td>373</td><td>643,575</td></tr>
+            <tr><td>2026-05-18</td><td>비투엔(307870)</td><td><span class="pill a">A</span></td><td>29.99</td><td>29.99</td><td>-3.51</td><td>15:02</td><td>15:02</td><td>15:02</td><td>15:02</td><td>5</td><td>1,372,439</td></tr>
+            <tr><td>2026-05-15</td><td>동양고속(084670)</td><td><span class="pill b">B</span></td><td>29.89</td><td>17.08</td><td>-2.89</td><td>12:40</td><td>14:03</td><td>14:04</td><td>14:32</td><td>164</td><td>4,226,180</td></tr>
+            <tr><td>2026-05-15</td><td>내츄럴엔도텍(168330)</td><td><span class="pill d">D</span></td><td>29.44</td><td>19.00</td><td>-2.46</td><td>15:13</td><td>-</td><td>-</td><td>-</td><td>19</td><td>1,471,151</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>전략 규칙 v1</h2>
+      <div class="rule-grid">
+        <div class="rule">
+          <strong>1차 감시</strong>
+          전일 종가 대비 +15% 이상, 거래대금 급증, 당일 테마/뉴스가 확인되는 종목만 관심군에 편입합니다.
+        </div>
+        <div class="rule">
+          <strong>1차 진입</strong>
+          +20% 돌파 후 3분 이내 눌림이 작고, 분봉 거래량이 직전 평균 대비 증가하면 30~40% 비중으로 진입합니다.
+        </div>
+        <div class="rule">
+          <strong>2차 진입</strong>
+          +25% 재돌파 또는 +25% 위 지지 확인 시 추가 진입합니다. 단, 호가 공백과 단일가성 급등은 제외합니다.
+        </div>
+        <div class="rule">
+          <strong>신규 진입 금지</strong>
+          +28% 이후 첫 포착 종목은 원칙적으로 신규 진입하지 않습니다. 기대값보다 갭하락 리스크가 커집니다.
+        </div>
+        <div class="rule">
+          <strong>종가 보유 조건</strong>
+          종가가 +28% 이상이고 상한가 잔량 또는 고가권 고정이 유지될 때만 익일 갭 전략으로 이월합니다.
+        </div>
+        <div class="rule">
+          <strong>손절/청산</strong>
+          진입 후 +20%선 이탈, 체결강도 급락, 상한가 풀림 후 재잠금 실패 시 당일 청산합니다.
+        </div>
+      </div>
+      <div class="warn">
+        핵심 필터: D등급처럼 분봉 근거가 없거나 종가가 무너진 종목은 익일 갭 목적의 이월 대상에서 제외해야 합니다.
+      </div>
+    </section>
+
+    <section>
+      <h2>등급 정의</h2>
+      <ul>
+        <li><strong>A등급:</strong> +20%, +25%, +28% 신호가 분봉에서 확인되고 종가가 +28% 이상으로 고정된 후보.</li>
+        <li><strong>B등급:</strong> +20%, +25% 사전 포착은 가능하지만 종가 고정이 약하거나 +28% 유지가 불충분한 후보.</li>
+        <li><strong>D등급:</strong> 분봉 신호가 누락되었거나 장중 급등 후 종가가 크게 무너진 후보.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>데이터 한계</h2>
+      <ul>
+        <li>2026-05-19는 익일 시가가 아직 없어 성과 검증에서 제외했습니다.</li>
+        <li>2026-05-19 분봉은 12:36 KST 이후부터 존재해 장초반 신호가 누락될 수 있습니다.</li>
+        <li>일부 종목은 첫 분봉이 이미 +20% 이상이라 실제 선진입 가능 시각은 더 이른 시점일 수 있습니다.</li>
+        <li>본 백데이터는 가격·분봉 기준이며, 실전 매매에는 호가 잔량, 체결강도, 뉴스, 공시, 테마 강도 필터가 추가되어야 합니다.</li>
+      </ul>
+    </section>
+
+    <footer>
+      생성 파일: go100_upper_limit_chase_report_20260519.html · 변경/배포 코드 없음 · 원자료 SQL 기준: 전일 종가 대비 당일 고가 +29%~+31% 도달 종목
+    </footer>
+  </main>
+</body>
+</html>

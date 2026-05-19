@@ -615,6 +615,7 @@ class PipelineCJob:
                 async with git_project_lock(self.project, timeout=60):
                     push_result = await self._ssh_command("git push")
                 self._log("push_done", f"push 완료: {push_result[:200]}")
+                await self._save_to_db()
             except Exception as _push_err:
                 logger.error(f"approve_push_failed: job={self.job_id} err={_push_err}")
                 self.status = "error"
@@ -645,6 +646,8 @@ class PipelineCJob:
                         "curl -sf http://localhost:8080/health 2>/dev/null && echo OK || echo WAIT",
                         timeout=5, retries=1,
                     )
+                    if _poll % 5 == 4:
+                        await self._save_to_db()
                     if "OK" in _health:
                         break
                 else:
@@ -675,6 +678,7 @@ class PipelineCJob:
             # 일반 프로젝트 재시작
             if restart_cmd:
                 self._log("restarting", f"서비스 재시작: {restart_cmd}")
+                await self._save_to_db()
                 await self._ssh_command(restart_cmd)
                 await asyncio.sleep(5)  # 재시작 대기
 

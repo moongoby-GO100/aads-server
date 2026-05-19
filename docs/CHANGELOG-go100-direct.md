@@ -5891,3 +5891,7 @@ echo "[→CURRENT_BRANCH=$(git rev-parse --abbrev-
 ## [2026-05-19 14:40:51 KST] [GO100] scripts/local-frontend-sync.cron
 - Chat-Direct 수정: write: scripts/local-frontend-sync.cron
 - finalize: pending
+
+## [2026-05-20 08:35:43 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:     async def _get_effective_capital_fro→    async def _get_effective_capital_fro
+- finalize: pending

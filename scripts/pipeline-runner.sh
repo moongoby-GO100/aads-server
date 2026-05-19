@@ -1400,9 +1400,7 @@ ${_push_err_tail}")
             else
                 log "  GIT_PUSH_OK job=$job_id"
                 echo "ok" > "/tmp/pipeline-push-result-${job_id}"
-                # HEARTBEAT: push 성공 후 updated_at 갱신 (deploy_timeout 10분 방지)
-                db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
-                # HEARTBEAT: push 성공 후 updated_at 갱신 (deploy_timeout 10분 방지)
+                # HEARTBEAT: push 성공 후 updated_at 갱신 (deploy_timeout 20분 방지)
                 db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
             fi
         fi
@@ -1596,6 +1594,8 @@ ${_fallback_tail}") WHERE job_id='${job_id}';"
         KIS)
             # KIS: systemd 서비스 → graceful restart (~2초)
             # kis-v41-api (port 8003), kis-webapp-api (port 8001)
+            # HEARTBEAT: 서비스 재시작 직전 갱신
+            db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
             systemctl restart kis-v41-api 2>/dev/null || true
             log "  RESTART kis-v41-api"
             # webapp은 별도 workdir이므로 변경 감지
@@ -1603,12 +1603,16 @@ ${_fallback_tail}") WHERE job_id='${job_id}';"
                 git -C /root/webapp add -A 2>/dev/null || true
                 git -C /root/webapp commit -m "Pipeline-Runner: ${job_id} (webapp)" 2>/dev/null || true
                 git -C /root/webapp push 2>/dev/null || true
+                # HEARTBEAT: 서비스 재시작 직전 갱신
+                db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
                 systemctl restart kis-webapp-api 2>/dev/null || true
                 log "  RESTART kis-webapp-api"
             fi
             ;;
         GO100)
             # GO100 API: systemd → restart (~2초)
+            # HEARTBEAT: 서비스 재시작 직전 갱신
+            db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
             systemctl restart go100 2>/dev/null || true
             log "  RESTART go100 api"
             # GO100 Frontend: npm build → restart (빌드 중 기존 서비스 유지)
@@ -1623,6 +1627,8 @@ ${_fallback_tail}") WHERE job_id='${job_id}';"
                     _fe_changed=$(git -C /root/kis-autotrade-v4 diff HEAD~1 HEAD --name-only -- frontend/ 2>/dev/null) || true
                 fi
                 if [ -n "$_fe_changed" ]; then
+                    # HEARTBEAT: GO100 프론트엔드 BG 배포 시작 직전 갱신
+                    db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
                     log "  ZERO-DOWNTIME go100-frontend build start (changed: $(echo "$_fe_changed" | wc -l) files)"
                     cd "$_fe_dir"
                     # P1: build 전 BUILD_ID 캡처 (빌드 반영 검증용)
@@ -1639,6 +1645,8 @@ ${_fallback_tail}") WHERE job_id='${job_id}';"
                             _build_fail="go100-frontend:BUILD_ID_unchanged"
                         fi
                         # Step 2: 빌드 성공 → restart (새 .next/ 반영)
+                        # HEARTBEAT: 서비스 재시작 직전 갱신
+                        db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
                         systemctl restart go100-frontend 2>/dev/null || true
                         log "  go100-frontend zero-downtime restart complete (BUILD_ID=${_new_build_id:0:8})"
                     else
@@ -1654,6 +1662,8 @@ ${_fallback_tail}") WHERE job_id='${job_id}';"
         SF)
             # ShortFlow: 볼륨마운트 서비스 → docker restart (~3초)
             local _sf_compose="/data/shortflow/docker-compose.yml"
+            # HEARTBEAT: 서비스 재시작 직전 갱신
+            db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
             docker restart shortflow-worker 2>/dev/null || true
             docker restart shortflow-dashboard 2>/dev/null || true
             log "  RESTART shortflow-worker, shortflow-dashboard"
@@ -1667,6 +1677,8 @@ ${_fallback_tail}") WHERE job_id='${job_id}';"
                 _saas_changed=$(git -C /data/shortflow diff HEAD~1 HEAD --name-only -- saas-dashboard/ 2>/dev/null) || true
             fi
             if [ -n "$_saas_changed" ]; then
+                # HEARTBEAT: SF 프론트엔드 BG 배포 시작 직전 갱신
+                db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
                 log "  ZERO-DOWNTIME shortflow-saas-dashboard"
                 if docker compose -f "$_sf_compose" build saas-dashboard 2>&1 | tail -5; then
                     docker compose -f "$_sf_compose" up -d --no-build saas-dashboard 2>/dev/null || true
@@ -1704,6 +1716,8 @@ ${_fallback_tail}") WHERE job_id='${job_id}';"
                 fi
             fi
             # Reverb: 볼륨마운트 → restart
+            # HEARTBEAT: 서비스 재시작 직전 갱신
+            db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
             docker restart newtalk-v2-reverb 2>/dev/null || true
             log "  RESTART newtalk-v2-reverb"
             ;;
@@ -1969,14 +1983,14 @@ _recover_stuck_jobs() {
         done <<< "$zombie_rows"
     fi
 
-    # BUG-7: deploying 상태 10분 초과 → error 전환
+    # BUG-7: deploying 상태 20분 초과 → error 전환
     local deploy_timed_out
     deploy_timed_out=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='error',
                                 error_detail='deploy_timeout',
-                                review_feedback=COALESCE(review_feedback,'') || E'\n[Deploy Timeout] deploying 상태 10분 초과',
+                                review_feedback=COALESCE(review_feedback,'') || E'\n[Deploy Timeout] deploying 상태 20분 초과',
                                 updated_at=NOW()
                                 WHERE status='deploying'
-                                  AND updated_at < NOW() - INTERVAL '10 minutes'
+                                  AND updated_at < NOW() - INTERVAL '20 minutes'
                                   $filter
                                 RETURNING job_id;" 2>/dev/null) || true
     if [[ -n "$deploy_timed_out" ]]; then
@@ -1990,7 +2004,7 @@ _recover_stuck_jobs() {
             _dt_session="${_dt_session// /}"
             _dt_project=$(db_exec "SELECT project FROM pipeline_jobs WHERE job_id='${_dt_id}';" 2>/dev/null) || true
             _dt_project="${_dt_project// /}"
-            post_to_chat "$_dt_session" "⏰ [Pipeline Runner] 배포 타임아웃 (10분 초과): $_dt_id — 자동 에러 처리됨"
+            post_to_chat "$_dt_session" "⏰ [Pipeline Runner] 배포 타임아웃 (20분 초과): $_dt_id — 자동 에러 처리됨"
             _notify_ai "$_dt_id"
             [[ -n "$_dt_project" ]] && promote_next_queued "$_dt_project"
         done <<< "$deploy_timed_out"

@@ -1413,3 +1413,8 @@ import re
 
 ## [2026-05-19 14:49:43 KST] [aads-server] docs/CHANGELOG-direct-edit.md
 - Chat-Direct 수정: run_remote_command: docker exec aads-server-green python3 -c "from app.api.chat import invalidate_in
+
+## [2026-05-20 08:34:56 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: patch:     _SAMEGRADE_FALLBACK = {
+        "cla→    _SAMEGRADE_FALLBACK = {
+        "cla

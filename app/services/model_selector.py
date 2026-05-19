@@ -1518,8 +1518,8 @@ async def call_stream(
         "claude-haiku": ["claude-haiku"],
     }
     _SAMEGRADE_FALLBACK = {
-        "claude-opus": ["gpt-5.5", "deepseek-v4-pro", "gemini-3.1-pro-preview"],
-        "claude-sonnet": ["gpt-5.5", "deepseek-v4-flash", "gemini-2.5-flash"],
+        "claude-opus": ["deepseek-v4-pro", "gemini-3.1-pro-preview"],
+        "claude-sonnet": ["deepseek-v4-flash", "gemini-2.5-flash"],
         "claude-haiku": ["gpt-5.4-mini", "deepseek-v4-flash", "gemini-3.1-flash-lite-preview"],
     }
     _GEMINI_SAMEGRADE = {
