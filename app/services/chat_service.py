@@ -6126,6 +6126,13 @@ async def send_message_stream(
                                 tool_result_payload.get("error_type", "tool_error"),
                             )
                         yield f"data: {json.dumps(_tool_result_event_snapshot(event, content_limit=300))}\n\n"
+                        try:
+                            from app.core.interrupt_queue import has_interrupt as _has_intr_check
+                            if _has_intr_check(session_id):
+                                logger.info(f"interrupt_after_tool_result session={session_id[:8]}")
+                                break
+                        except Exception:
+                            pass
                     elif etype == "yellow_limit":
                         yield f"data: {json.dumps({'type': 'yellow_limit', 'content': event.get('content', ''), 'tool_name': event.get('tool_name', ''), 'consecutive_count': event.get('consecutive_count', 0)})}\n\n"
                     elif etype == "done":
@@ -6277,12 +6284,14 @@ async def send_message_stream(
             _interrupt_messages = list(messages)
             if _previous_response.strip():
                 _interrupt_messages.append({"role": "assistant", "content": _previous_response.strip()})
+            _original_q = content[:500] if content else ""
             _interrupt_messages.append({
                 "role": "user",
                 "content": (
                     "[CEO 추가 지시]\n"
+                    f"[원래 질문: {_original_q}]\n\n"
                     "방금 스트리밍 중 CEO가 아래 추가 지시를 보냈습니다. "
-                    "이미 작성한 답변을 그대로 반복하지 말고, 추가 지시를 반영해 최종 답변을 다시 작성하세요. "
+                    "원래 질문의 맥락을 유지하면서, 추가 지시를 반영해 최종 답변을 다시 작성하세요. "
                     "추가 지시가 기존 답변과 충돌하면 CEO의 추가 지시를 우선합니다.\n\n"
                     f"{_interrupt_text}{_attachment_note}"
                 ),
