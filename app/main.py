@@ -228,10 +228,11 @@ async def lifespan(app: FastAPI):
                 logger.warning("model_registry_periodic_sync_failed", error=str(e))
 
         async def _run_rate_limit_recovery():
-            """만료된 rate_limited_until 자동 클리어 + 모델 재활성화."""
+            """만료된 rate_limited_until 자동 클리어 + 비활성 키 재활성화 + 모델 재활성화."""
             try:
                 from app.core.db_pool import get_pool
                 pool = get_pool()
+                needs_sync = False
                 async with pool.acquire() as conn:
                     cleared = await conn.fetch(
                         """
@@ -242,14 +243,53 @@ async def lifespan(app: FastAPI):
                         RETURNING id, provider, key_name
                         """
                     )
-                if cleared:
-                    key_names = [r["key_name"] for r in cleared]
-                    logger.info("rate_limit_recovery: cleared %d expired keys: %s", len(cleared), key_names)
+                    if cleared:
+                        key_names = [r["key_name"] for r in cleared]
+                        logger.info("rate_limit_recovery: cleared %d expired rate limits: %s", len(cleared), key_names)
+                        needs_sync = True
+
+                    reactivated = await conn.fetch(
+                        """
+                        UPDATE llm_api_keys
+                        SET is_active = TRUE, updated_at = NOW()
+                        WHERE is_active = FALSE
+                          AND (rate_limited_until IS NULL OR rate_limited_until <= NOW())
+                          AND encrypted_value IS NOT NULL
+                          AND key_name NOT IN ('OPENAI_API_KEY')
+                        RETURNING id, provider, key_name
+                        """
+                    )
+                    if reactivated:
+                        reactivated_names = [r["key_name"] for r in reactivated]
+                        logger.info("rate_limit_recovery: reactivated %d keys: %s", len(reactivated), reactivated_names)
+                        needs_sync = True
+
+                    stale_models = await conn.fetchval(
+                        """
+                        SELECT COUNT(*) FROM llm_models m
+                        WHERE m.provider = 'anthropic'
+                          AND m.is_active = FALSE
+                          AND m.discovery_source = 'template'
+                          AND EXISTS (
+                            SELECT 1 FROM llm_api_keys k
+                            WHERE k.provider = 'anthropic'
+                              AND k.is_active = TRUE
+                              AND (k.rate_limited_until IS NULL OR k.rate_limited_until <= NOW())
+                          )
+                        """
+                    )
+                    if stale_models and stale_models > 0:
+                        logger.info("rate_limit_recovery: %d stale anthropic template models detected, forcing sync", stale_models)
+                        needs_sync = True
+
+                if needs_sync:
                     from app.services.model_registry import invalidate_registry_cache, sync_model_registry
+                    from app.core.llm_key_provider import invalidate_key_cache
+                    invalidate_key_cache()
                     invalidate_registry_cache()
                     await sync_model_registry(
                         triggered_by="rate_limit_recovery",
-                        reason=f"expired_keys:{','.join(key_names)}",
+                        reason="expired_keys_or_stale_models",
                     )
             except Exception as e:
                 logger.warning("rate_limit_recovery_failed: %s", str(e)[:200])

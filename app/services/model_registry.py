@@ -19,7 +19,9 @@ logger = logging.getLogger(__name__)
 
 _CACHE_TTL_SECONDS = 30
 _DISCOVERY_TIMEOUT_SECONDS = float(os.getenv("LLM_MODEL_DISCOVERY_TIMEOUT_SECONDS", "8"))
+_AUTO_REFRESH_MIN_INTERVAL_SECONDS = max(15, int(os.getenv("LLM_MODEL_REGISTRY_AUTO_REFRESH_SECONDS", "15")))
 _cache: dict[str, tuple[Any, float]] = {}
+_auto_refresh_attempts: dict[str, float] = {}
 
 _PROVIDER_ALIASES = {
     "anthropic": "anthropic",
@@ -1275,6 +1277,62 @@ async def list_registered_models(*, provider: str | None = None, active_only: bo
         normalized_row["pricing"] = _coerce_json_object(normalized_row.get("pricing"))
         filtered.append(normalized_row)
     return _cache_set(cache_key, filtered)
+
+
+async def ensure_runtime_models_fresh(*, provider: str | None = None, active_only: bool = False) -> dict[str, Any]:
+    """active_only 조회 직전 stale runtime registry를 짧게 자동 복구한다."""
+    if not active_only:
+        return {"checked": False, "triggered": False, "reason": "inactive_request"}
+
+    normalized_provider = normalize_provider(provider or "")
+    scope = normalized_provider or "*"
+    now_ts = time.time()
+    last_attempt = _auto_refresh_attempts.get(scope, 0.0)
+    if now_ts - last_attempt < _AUTO_REFRESH_MIN_INTERVAL_SECONDS:
+        return {"checked": False, "triggered": False, "reason": "cooldown", "provider": normalized_provider or None}
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        key_rows = await _fetch_key_rows(conn)
+        registry_rows = await _fetch_registry_rows(conn) or []
+
+    key_state = _build_key_state(key_rows)
+    providers = [normalized_provider] if normalized_provider else sorted(key_state.keys())
+    stale_providers: list[str] = []
+    for provider_name in providers:
+        if not provider_name:
+            continue
+        templates = _PROVIDER_TEMPLATES.get(provider_name)
+        if not templates:
+            continue
+        if int(key_state.get(provider_name, {}).get("available_key_count", 0)) <= 0:
+            continue
+        template_ids = {t.model_id for t in templates}
+        template_rows = [
+            row for row in registry_rows
+            if row.get("provider") == provider_name and row.get("model_id") in template_ids
+        ]
+        if template_rows and any(bool(row.get("is_active")) for row in template_rows):
+            continue
+        stale_providers.append(provider_name)
+
+    if not stale_providers:
+        return {"checked": True, "triggered": False, "reason": "healthy", "provider": normalized_provider or None}
+
+    _auto_refresh_attempts[scope] = now_ts
+    invalidate_registry_cache()
+    result = await sync_model_registry(
+        triggered_by="llm_models_auto_refresh",
+        reason=f"active_only_stale:{','.join(stale_providers)}",
+    )
+    return {
+        "checked": True,
+        "triggered": bool(result.get("ok")),
+        "reason": "stale_runtime_catalog",
+        "provider": normalized_provider or None,
+        "stale_providers": stale_providers,
+        "sync_ok": bool(result.get("ok")),
+    }
 
 
 async def list_provider_summaries() -> list[dict[str, Any]]:
