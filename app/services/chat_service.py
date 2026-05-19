@@ -1446,11 +1446,16 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any]) -> Non
         tool_count = state.get("tool_count", 0)
         last_tool = state.get("last_tool", "")
 
-        # 변경 감지: 이전 저장 내용과 동일하면 스킵
-        _save_key = f"{len(content)}:{tool_count}:{last_tool}"
+        # 변경 감지 + 최소 flush 간격 500ms (다중 경로 중복 방지)
+        _te = state.get("tool_events", [])
+        _save_key = f"{len(content)}:{tool_count}:{last_tool}:{len(_te)}"
         if state.get("_last_save_key") == _save_key:
             return
+        _now_flush = _bg_time.monotonic()
+        if state.get("_last_save_key") is not None and _now_flush - state.get("_last_flush_ts", 0) < 0.5:
+            return
         state["_last_save_key"] = _save_key
+        state["_last_flush_ts"] = _now_flush
         # 스트리밍 중임을 나타내는 마커 + 현재 진행상황
         streaming_note = f"\n\n⏳ _생성 중... (도구 {tool_count}회 호출{', 최근: ' + last_tool if last_tool else ''})_"
         display_content = (content + streaming_note) if content else f"⏳ _AI가 응답을 생성 중입니다... (도구 {tool_count}회 호출 중)_"
@@ -1459,25 +1464,16 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any]) -> Non
         _sid = uuid.UUID(session_id)
         _eid_raw = state.get("execution_id")
         _eid = uuid.UUID(str(_eid_raw)) if _eid_raw else None
-        _tool_events_json = json.dumps(normalize_tool_events(state.get("tool_events", [])))
+        _te_len = len(_te)
+        if _te_len != state.get("_last_te_len", -1):
+            _tool_events_json = json.dumps(normalize_tool_events(_te))
+            state["_cached_te_json"] = _tool_events_json
+            state["_last_te_len"] = _te_len
+        else:
+            _tool_events_json = state.get("_cached_te_json", "[]")
         async with pool.acquire() as conn:
             if _eid:
-                _exec_row = await conn.fetchrow(
-                    "SELECT status, completed_at FROM chat_turn_executions WHERE id = $1",
-                    _eid,
-                )
-                if (
-                    not _exec_row
-                    or _exec_row["status"] not in ("running", "retrying")
-                    or _exec_row["completed_at"] is not None
-                ):
-                    logger.info(
-                        "interim_save_skipped_terminal session=%s execution=%s status=%s",
-                        session_id[:8],
-                        str(_eid)[:8],
-                        _exec_row["status"] if _exec_row else "missing",
-                    )
-                    return
+                # pre-SELECT 제거: UPSERT의 WHERE EXISTS가 terminal 상태 자동 필터링
                 _row = await conn.fetchrow(
                     """INSERT INTO chat_messages (session_id, execution_id, role, content, intent, model_used, tools_called)
                        SELECT $1, $2, 'assistant', $3, 'streaming_placeholder', 'streaming', $4::jsonb
@@ -1505,53 +1501,30 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any]) -> Non
                         str(_eid)[:8],
                     )
                     return
-                if _row and _row["is_new"]:
-                    await conn.execute(
-                        """
-                        UPDATE chat_sessions
-                        SET message_count = message_count + 1,
-                            updated_at = NOW(),
-                            current_execution_id = $2
-                        WHERE id = $1
-                          AND EXISTS (
-                            SELECT 1 FROM chat_turn_executions
-                            WHERE id = $2
-                              AND status IN ('running', 'retrying')
-                              AND completed_at IS NULL
-                          )
-                        """,
-                        _sid,
-                        _eid,
-                    )
-                else:
-                    await conn.execute(
-                        """
-                        UPDATE chat_sessions
-                        SET current_execution_id = $2,
-                            updated_at = NOW()
-                        WHERE id = $1
-                          AND EXISTS (
-                            SELECT 1 FROM chat_turn_executions
-                            WHERE id = $2
-                              AND status IN ('running', 'retrying')
-                              AND completed_at IS NULL
-                          )
-                        """,
-                        _sid,
-                        _eid,
-                    )
+                _is_new = bool(_row and _row["is_new"])
                 await conn.execute(
                     """
-                    UPDATE chat_turn_executions
-                    SET assistant_message_id = COALESCE(assistant_message_id, $2),
-                        status = CASE WHEN completed_at IS NULL THEN 'running' ELSE status END,
-                        last_event_id = COALESCE($3, last_event_id),
+                    WITH upd_exec AS (
+                        UPDATE chat_turn_executions
+                        SET assistant_message_id = COALESCE(assistant_message_id, $4),
+                            status = CASE WHEN completed_at IS NULL THEN 'running' ELSE status END,
+                            last_event_id = COALESCE($5, last_event_id),
+                            updated_at = NOW()
+                        WHERE id = $2
+                          AND status IN ('running', 'retrying')
+                          AND completed_at IS NULL
+                        RETURNING id
+                    )
+                    UPDATE chat_sessions
+                    SET message_count = CASE WHEN $3 THEN message_count + 1 ELSE message_count END,
+                        current_execution_id = $2,
                         updated_at = NOW()
                     WHERE id = $1
-                      AND status IN ('running', 'retrying')
-                      AND completed_at IS NULL
+                      AND EXISTS (SELECT 1 FROM upd_exec)
                     """,
+                    _sid,
                     _eid,
+                    _is_new,
                     _row["id"] if _row else None,
                     state.get("last_event_id"),
                 )
@@ -1570,12 +1543,15 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any]) -> Non
                         "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
                         _sid,
                     )
-        logger.info(
-            "interim_save session=%s execution=%s tools=%s content_len=%s",
+        _sc = state.get("_save_count", 0) + 1
+        state["_save_count"] = _sc
+        (logger.info if _sc <= 2 else logger.debug)(
+            "interim_save session=%s execution=%s tools=%s content_len=%s n=%d",
             session_id[:8],
             str(_eid)[:8] if _eid else "-",
             tool_count,
             len(content),
+            _sc,
         )
     except Exception as e:
         logger.warning(f"interim_save_failed session={session_id[:8]}: {e}")
@@ -1835,8 +1811,8 @@ async def with_background_completion(
                 # 클라이언트 disconnect 후 처리
                 if _client_gone:
                     now = _bg_time.monotonic()
-                    # 1초마다 중간 저장
-                    if now - state["last_save"] > 1:
+                    # 3초마다 중간 저장 (connected와 동일 간격, DB 부하 67% 감소)
+                    if now - state["last_save"] > 3:
                         state["last_save"] = now
                         await _interim_save_streaming(session_id, state)
                     # 클라이언트 이탈 후: LLM 활동 없으면 _BG_AUTO_CANCEL_SEC, 활동 중이면 최대 30분
