@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-19 11:21 KST) - 채팅 버블 소실/중복 및 추가지시 지연 재발 차단 보강
+- 배경: CEO가 채팅 응답이 자연스럽게 같은 버블에서 완료되지 않고, 복구 중 버블이 사라졌다가 다시 나타나거나 중복 생성되며, `waitingBgResponse` 상태의 추가 지시도 늦게 반영된다고 보고했다.
+- 원인: 대시보드 `src/app/chat/page.tsx`는 `waitingBgResponse`로 전환된 뒤에도 일부 경로에서 `_invisibleRecoveryActivated`를 세우지 않아 `finally`에서 `streaming_placeholder`를 너무 일찍 해제했다. 또 복구 타임아웃/서버 점검 경로가 draft 버블을 `intent=undefined` 일반 assistant로 바꿔 이후 최종 응답이 오면 같은 execution의 최종 버블이 다시 append될 수 있었다.
+- 추가 원인: `replaceStreamingPlaceholderWithFinal()`은 `streaming_placeholder`만 교체 대상으로 봐서, 이미 `interrupted_partial`로 전환된 draft는 같은 버블에 최종 응답을 덮어쓰지 못했다. `waitingBgResponse=true, streaming=false` 상태의 추가 지시는 인터럽트 큐로 들어가지 않고 신규 요청처럼 처리될 수 있었다.
+- 조치: 공통 draft 전환 helper(`convertDraftMessage`)를 추가해 placeholder/recovered timeout 경로를 모두 `interrupted_partial`로 통일했다. 최종 응답 병합은 같은 `execution_id` 또는 동일 prefix를 가진 draft assistant까지 같은 `render_id`로 치환하도록 보강했다. `waitingBgResponse` 구간도 인터럽트 입력으로 간주하도록 바꿨고, SSE `done` 없이 폴링 복구로 넘어가는 경로에서는 `_invisibleRecoveryActivated`를 즉시 세워 같은 버블을 유지하게 했다.
+- 백엔드 조치: `app/services/chat_service.py`에서 `stream_start` 직후 `_interim_save_streaming()`을 호출해 첫 토큰 전 지연 구간에도 DB placeholder를 즉시 생성하도록 보강했다. 세션 전환/복구/새로고침 시 초기 응답 버블이 늦게 보이는 문제를 줄이기 위한 조치다.
+- 검증: `python3 -m py_compile app/services/chat_service.py` 통과. `/root/aads/aads-dashboard`에서 `./node_modules/.bin/tsc --noEmit` 통과. `./node_modules/.bin/eslint src/app/chat/page.tsx`는 신규 error 없이 기존 warning 22건만 재확인했다.
+- 주의: 이번 턴은 로컬 코드/HANDOVER 갱신까지만 수행했고, 커밋/푸시/배포는 아직 하지 않았다. 운영 반영 전 실제 `be533af6...`, `aa433b41...` 류 세션에서 same-bubble completion과 waitingBg interrupt 동작을 브라우저로 재검증해야 한다.
+
+## 현재 진행 상태 (2026-05-19 08:43 KST) - PC Qwen3 로컬 모델 LiteLLM 등록/프록시 검증
+- 배경: CEO가 `pc-qwen3-8b`와 운영 후보 `pc-qwen3-4b`, `pc-qwen3-14b`를 `litellm-config.yaml`에 등록하고 LiteLLM만 재시작해 운영 경로를 열라고 지시했다.
+- 조치: `litellm-config.yaml`에 3개 모델을 OpenAI 호환 모델명으로 추가했다. PC Agent가 현재 green API 슬롯에 연결되어 있어 `api_base`는 `http://aads-server-green:8080/pc-ollama/v1`로 지정했고, AADS 전역 JWT 미들웨어 통과용 `x-monitor-key`를 `extra_headers`에 설정했다.
+- 추가 조치: `/pc-ollama` 브릿지가 hot-reload 이후 분리된 `pc_agent_manager` 싱글톤을 직접 참조해 `no online PC agent`를 반환하는 문제가 확인되어, `app/api/pc_ollama_bridge.py`가 내부 `/api/v1/pc-agent/route-execute` 경로를 호출하도록 보정했다. AADS 서버 재시작 없이 `app.api.pc_ollama_bridge`만 hot-reload했다.
+- 검증: `python3 -m py_compile app/api/pc_ollama_bridge.py` 통과. `docker restart aads-litellm` 후 `aads-litellm` healthy 확인. LiteLLM `/v1/models`에 `pc-qwen3-4b`, `pc-qwen3-8b`, `pc-qwen3-14b` 노출 확인. `/v1/chat/completions` 실호출 결과 4B 3.346초, 8B 3.608초, 14B 5.386초로 모두 HTTP 200 성공.
+- 주의: `pc-qwen3-4b`는 성공했지만 짧은 테스트에서 thinking성 문구가 본문에 섞였다. Qwen3 계열의 thinking 제어/본문 정리는 후속으로 `think=false` 처리나 브릿지 응답 정규화 보강이 필요하다. 이번 턴에서는 커밋/푸시하지 않았다.
+
 ## 현재 진행 상태 (2026-05-18 18:53 KST) - MCP 러너 제출 세션 ID 유실 수정
 - 배경: CEO가 `https://aads.newtalk.kr/chat#93a6bddb-742d-44af-95d5-6958760284f8` 채팅에서 러너 작업 지시 시 "현재 채팅 세션 컨텍스트를 찾지 못했습니다" 오류가 나는 원인 확인과 즉시 조치를 요청했다.
 - 원인: Agent SDK/MCP 경로는 `AADS_SESSION_ID` 환경변수로 현재 채팅 ID를 넘기고 있었지만, `mcp_servers/aads_tools_bridge.py`가 `ToolExecutor`를 먼저 호출하면서 이 값을 `current_chat_session_id` ContextVar 또는 `params.session_id`에 주입하지 않았다. 그 결과 `pipeline_runner_submit`이 `execute_tool` fallback까지 가기 전에 세션 없음 오류로 종료됐다.
@@ -1294,3 +1310,12 @@
 - 배포: Dashboard `bash deploy.sh`로 active를 `aads-dashboard`/`3100`으로 전환했고 green standby도 동기화했다. API `bash deploy.sh bluegreen`으로 active를 `aads-server-green`/`8102`로 전환했다.
 - 검증: `python3 -m py_compile app/services/chat_service.py` 통과. `npx eslint src/app/chat/page.tsx`는 기존 warning 22건, error 0건. Dashboard build 통과, API health/DB schema/chat table/LLM 검증 통과. 컨테이너 내부 active API에 `intent IN ('interrupted_partial', 'interruption_notice')` 반영 확인.
 - 주의: 현재 세션 `ac5278a7-2f13-4cd7-9aa1-83d41fb23c97`와 세션 `2648cf77-4256-45e8-9cde-0e563ffefe5c`에는 deploy 중 `resume_claimed_by` running 실행이 남아 있으며, 최신 assistant는 `streaming_placeholder` 1건이다. 본 패치는 표시 중복/사라짐 방지 레이어를 보강한 것이고, 장기 running 자동 회수 정책은 별도 후속 개선 대상이다.
+
+## 2026-05-19 08:49 KST - PC Qwen3 chat selector LiteLLM routing fix
+
+- 배경: CEO가 AADS 채팅창에서 PC 로컬 LLM 모델을 선택하고 대화 가능한지 확인을 요청했다.
+- 확인: `/api/v1/llm-models?active_only=true` 기준 `pc-qwen3-4b`, `pc-qwen3-8b`, `pc-qwen3-14b`는 모두 active/selectable 상태였다. LiteLLM 직접 호출은 `pc-qwen3-8b`가 3.01초에 `2+2의 결과는 4입니다.`로 성공했다.
+- 원인: 채팅창 SSE 경로는 기존 DB metadata의 `execution_backend=pc_ollama` 때문에 LiteLLM이 아니라 API 프로세스 내부 PC Agent manager를 직접 보며 `no online PC agent`로 실패했다. 반면 LiteLLM은 `/pc-ollama/v1/chat/completions` 브릿지를 통해 정상 응답했다.
+- 조치: 운영 DB의 세 모델 metadata `execution_backend`를 `litellm_proxy`로 변경했다. `scripts/add_pc_models.py`도 재등록 시 같은 LiteLLM 경유 메타데이터를 쓰도록 수정했다.
+- 검증: 채팅창과 동일한 `/chat/messages/send` SSE 경로에서 `pc-qwen3-8b` 10.79초 성공, `pc-qwen3-4b` 37.69초 성공, `pc-qwen3-14b` 18.03초 성공. 테스트 세션은 `[CEO] 통합지시` 워크스페이스에 자동검증 제목으로 생성됐다.
+- 주의: `pc-qwen3-4b`는 "OK만 출력" 지시에도 thinking 설명이 본문에 섞였다. 선택/대화는 가능하지만 Qwen3 thinking 출력 정규화는 후속 개선 대상이다. 커밋/푸시/배포는 수행하지 않았다.

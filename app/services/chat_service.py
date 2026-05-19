@@ -5217,6 +5217,39 @@ async def send_message_stream(
                 _session_role_key = str(_workspace_settings_prefetched.get("default_role_key") or "").strip()
 
         yield f"data: {json.dumps({'type': 'stream_start', 'stream_id': _stream_id, 'execution_id': _execution_id_str, 'html_context_used': _html_context_state.get('html_context_used', False)})}\n\n"
+        # 첫 토큰 전 지연 구간에도 DB placeholder를 즉시 남겨 복구/세션복귀 시 버블이 보이도록 한다.
+        _prefill_started_at = _bg_time.monotonic()
+        _prefill_state = _streaming_state.get(session_id)
+        if not isinstance(_prefill_state, dict):
+            _prefill_state = {
+                "content": "",
+                "tool_count": 0,
+                "last_tool": "",
+                "last_save": _prefill_started_at,
+                "started_at": _prefill_started_at,
+                "tool_events": [],
+                "execution_id": _execution_id_str,
+                "last_event_id": None,
+                "saw_done_event": False,
+                "last_event_at": _prefill_started_at,
+                "first_response_at": None,
+                "last_idle_save": 0.0,
+            }
+            _streaming_state[session_id] = _prefill_state
+        else:
+            _prefill_state.setdefault("execution_id", _execution_id_str)
+            _prefill_state.setdefault("started_at", _prefill_started_at)
+            _prefill_state.setdefault("last_event_at", _prefill_started_at)
+            _prefill_state.setdefault("last_save", _prefill_started_at)
+            _prefill_state.setdefault("content", "")
+            _prefill_state.setdefault("tool_count", 0)
+            _prefill_state.setdefault("last_tool", "")
+            _prefill_state.setdefault("tool_events", [])
+            _prefill_state.setdefault("last_event_id", None)
+            _prefill_state.setdefault("saw_done_event", False)
+            _prefill_state.setdefault("first_response_at", None)
+            _prefill_state.setdefault("last_idle_save", 0.0)
+        await _interim_save_streaming(session_id, _prefill_state)
 
         # ★ Phase A 종료 — DB 커넥션 async with 블록 종료로 자동 반환 (LLM 스트리밍 중 점유 방지)
 
