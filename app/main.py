@@ -227,11 +227,40 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("model_registry_periodic_sync_failed", error=str(e))
 
+        async def _run_rate_limit_recovery():
+            """만료된 rate_limited_until 자동 클리어 + 모델 재활성화."""
+            try:
+                from app.core.db_pool import get_pool
+                pool = get_pool()
+                async with pool.acquire() as conn:
+                    cleared = await conn.fetch(
+                        """
+                        UPDATE llm_api_keys
+                        SET rate_limited_until = NULL, updated_at = NOW()
+                        WHERE rate_limited_until IS NOT NULL
+                          AND rate_limited_until <= NOW()
+                        RETURNING id, provider, key_name
+                        """
+                    )
+                if cleared:
+                    key_names = [r["key_name"] for r in cleared]
+                    logger.info("rate_limit_recovery: cleared %d expired keys: %s", len(cleared), key_names)
+                    from app.services.model_registry import invalidate_registry_cache, sync_model_registry
+                    invalidate_registry_cache()
+                    await sync_model_registry(
+                        triggered_by="rate_limit_recovery",
+                        reason=f"expired_keys:{','.join(key_names)}",
+                    )
+            except Exception as e:
+                logger.warning("rate_limit_recovery_failed: %s", str(e)[:200])
+
         scheduler = AsyncIOScheduler()
         # 2분마다 규칙 평가
         scheduler.add_job(_run_alert_evaluation, "interval", minutes=2, id="alert_eval")
         # 30초마다 자율복구 사이클
         scheduler.add_job(_run_healing_cycle, "interval", seconds=30, id="healing_cycle")
+        # 60초마다 만료된 rate limit 자동 복구 + 모델 재활성화
+        scheduler.add_job(_run_rate_limit_recovery, "interval", seconds=60, id="rate_limit_recovery")
         # 최신 LLM catalog 반영 — 기본 6시간 주기
         scheduler.add_job(
             _run_periodic_model_registry_sync,
