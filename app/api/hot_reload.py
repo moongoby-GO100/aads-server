@@ -54,6 +54,9 @@ class HotReloadResponse(BaseModel):
     skipped: int
     success: int
     failed: int
+    active_tasks_pre: int = 0
+    active_tasks_post: int = 0
+    tasks_lost: int = 0
 
 
 def _get_services_modules() -> list[str]:
@@ -81,18 +84,14 @@ async def hot_reload(req: HotReloadRequest = None):
 
     주의사항:
     - DB 풀, 인증, 설정 모듈은 보안/안정성을 위해 재로드 불가
-    - 재로드된 모듈의 전역 상태(캐시 등)는 초기화됨
+    - reload-safe dict 패턴으로 활성 태스크 상태는 보존됨
     """
-    # 요청 바디가 없을 때 기본값 처리
     if req is None:
         req = HotReloadRequest()
 
-    # 대상 모듈 결정
     if req.modules:
-        # 지정 모듈 목록 검증
         target_modules = req.modules
     else:
-        # services 전체 (현재 로드된 것만)
         target_modules = _get_services_modules()
 
     if not target_modules:
@@ -107,15 +106,38 @@ async def hot_reload(req: HotReloadRequest = None):
     results: dict[str, str] = {}
     skipped = 0
 
+    # ── Pre-reload: 활성 스트리밍 중간 상태를 DB에 저장 ──
+    _pre_active = 0
+    _pre_streaming = 0
+    try:
+        _chat_svc = sys.modules.get("app.services.chat_service")
+        if _chat_svc:
+            _bg = getattr(_chat_svc, '_active_bg_tasks', {})
+            _ss = getattr(_chat_svc, '_streaming_state', {})
+            _pre_active = len(_bg)
+            _pre_streaming = len(_ss)
+            if _pre_active > 0:
+                logger.info(
+                    f"hot_reload_pre: {_pre_active} active tasks, "
+                    f"{_pre_streaming} streaming — saving interim state"
+                )
+                _isave = getattr(_chat_svc, '_interim_save_streaming', None)
+                if _isave:
+                    for _sid, _st in list(_ss.items()):
+                        try:
+                            await _isave(_sid, _st)
+                        except Exception as _e:
+                            logger.warning(f"hot_reload_interim_save_err: {_sid[:8]} — {_e}")
+    except Exception as _e:
+        logger.warning(f"hot_reload_pre_err: {_e}")
+
     for module_name in sorted(target_modules):
-        # 재로드 허용 범위 확인
         if not _is_reloadable(module_name):
             results[module_name] = "skipped: 재로드 금지 모듈"
             skipped += 1
             logger.warning(f"hot_reload_blocked: {module_name}")
             continue
 
-        # sys.modules에 없으면 스킵 (아직 로드된 적 없음)
         module = sys.modules.get(module_name)
         if module is None:
             results[module_name] = "skipped: 미로드 모듈"
@@ -130,13 +152,33 @@ async def hot_reload(req: HotReloadRequest = None):
             results[module_name] = f"error: {e}"
             logger.error(f"hot_reload_error: {module_name} — {e}")
 
+    # ── Post-reload: 활성 태스크 생존 확인 ──
+    _post_active = 0
+    _tasks_lost = 0
+    if _pre_active > 0:
+        try:
+            _cs = sys.modules.get("app.services.chat_service")
+            if _cs:
+                _post_active = len(getattr(_cs, '_active_bg_tasks', {}))
+                _tasks_lost = max(0, _pre_active - _post_active)
+                if _tasks_lost > 0:
+                    logger.error(
+                        f"hot_reload_TASK_LOSS: pre={_pre_active} "
+                        f"post={_post_active} lost={_tasks_lost}"
+                    )
+                else:
+                    logger.info(f"hot_reload_post: all {_post_active} tasks survived")
+        except Exception as _e:
+            logger.warning(f"hot_reload_post_err: {_e}")
+
     # 집계
     ok_count = sum(1 for v in results.values() if v == "ok")
     fail_count = sum(1 for v in results.values() if v.startswith("error:"))
 
     logger.info(
         f"hot_reload_done: total={len(target_modules)} "
-        f"success={ok_count} failed={fail_count} skipped={skipped}"
+        f"success={ok_count} failed={fail_count} skipped={skipped} "
+        f"tasks_pre={_pre_active} tasks_post={_post_active} tasks_lost={_tasks_lost}"
     )
 
     return HotReloadResponse(
@@ -145,6 +187,9 @@ async def hot_reload(req: HotReloadRequest = None):
         skipped=skipped,
         success=ok_count,
         failed=fail_count,
+        active_tasks_pre=_pre_active,
+        active_tasks_post=_post_active,
+        tasks_lost=_tasks_lost,
     )
 
 
