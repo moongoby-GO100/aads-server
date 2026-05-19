@@ -11,9 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.db_pool import get_pool
 from app.core.auth_provider import get_oauth_tokens, get_token_labels
@@ -27,6 +26,32 @@ USAGE_LOG_FLUSH_INTERVAL_SEC = 30.0
 _USAGE_LOG_BUFFER: List[Dict[str, Any]] = []
 _USAGE_LOG_LOCK = asyncio.Lock()
 _USAGE_LOG_FLUSH_TASK: Optional[asyncio.Task] = None
+_USAGE_LOG_COLUMNS: Tuple[str, ...] = (
+    "account_slot",
+    "token_prefix",
+    "model",
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_tokens",
+    "cache_read_tokens",
+    "cost_usd",
+    "rl_requests_limit",
+    "rl_requests_remaining",
+    "rl_requests_reset",
+    "rl_tokens_limit",
+    "rl_tokens_remaining",
+    "rl_tokens_reset",
+    "rl_input_tokens_limit",
+    "rl_input_tokens_remaining",
+    "rl_input_tokens_reset",
+    "rl_output_tokens_limit",
+    "rl_output_tokens_remaining",
+    "rl_output_tokens_reset",
+    "call_source",
+    "session_id",
+    "error_code",
+    "duration_ms",
+)
 
 # ── 토큰 → 슬롯 매핑 ──────────────────────────────────────────────────
 
@@ -89,7 +114,7 @@ def parse_ratelimit_headers(headers: Any) -> Dict[str, Any]:
 
 # ── DB 기록 (fire-and-forget) ─────────────────────────────────────────
 
-def _usage_log_values(entry: Dict[str, Any]) -> tuple[Any, ...]:
+def _usage_log_values(entry: Dict[str, Any]) -> Tuple[Any, ...]:
     rl = entry["rl"]
     return (
         entry["account_slot"],
@@ -120,35 +145,30 @@ def _usage_log_values(entry: Dict[str, Any]) -> tuple[Any, ...]:
 
 
 async def _insert_usage_batch(entries: List[Dict[str, Any]]) -> None:
-    """배치 INSERT — 실패해도 로그만 남기고 예외 전파 안 함."""
+    """배치 INSERT."""
     if not entries:
         return
 
-    try:
-        pool = get_pool()
-        async with pool.acquire() as conn:
-            await conn.executemany(
-                """
-                INSERT INTO oauth_usage_log (
-                    account_slot, token_prefix, model,
-                    input_tokens, output_tokens,
-                    cache_creation_tokens, cache_read_tokens,
-                    cost_usd,
-                    rl_requests_limit, rl_requests_remaining, rl_requests_reset,
-                    rl_tokens_limit, rl_tokens_remaining, rl_tokens_reset,
-                    rl_input_tokens_limit, rl_input_tokens_remaining, rl_input_tokens_reset,
-                    rl_output_tokens_limit, rl_output_tokens_remaining, rl_output_tokens_reset,
-                    call_source, session_id, error_code, duration_ms
-                ) VALUES (
-                    $1,$2,$3,$4,$5,$6,$7,$8,
-                    $9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-                    $21,$22,$23,$24
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        chunk_size = 100
+        column_sql = ", ".join(_USAGE_LOG_COLUMNS)
+        column_count = len(_USAGE_LOG_COLUMNS)
+        for chunk_start in range(0, len(entries), chunk_size):
+            chunk = entries[chunk_start:chunk_start + chunk_size]
+            values_sql: List[str] = []
+            args: List[Any] = []
+            for row_index, entry in enumerate(chunk):
+                base = row_index * column_count
+                placeholders = ", ".join(
+                    f"${base + column_index + 1}" for column_index in range(column_count)
                 )
-                """,
-                [_usage_log_values(entry) for entry in entries],
+                values_sql.append(f"({placeholders})")
+                args.extend(_usage_log_values(entry))
+            await conn.execute(
+                f"INSERT INTO oauth_usage_log ({column_sql}) VALUES {', '.join(values_sql)}",
+                *args,
             )
-    except Exception as e:
-        logger.warning("oauth_usage_batch_insert_failed: %s", str(e)[:120])
 
 
 async def _drain_usage_buffer() -> List[Dict[str, Any]]:
@@ -162,8 +182,15 @@ async def _drain_usage_buffer() -> List[Dict[str, Any]]:
 
 async def _flush_usage_buffer() -> None:
     entries = await _drain_usage_buffer()
-    if entries:
+    if not entries:
+        return
+
+    try:
         await _insert_usage_batch(entries)
+    except Exception as e:
+        async with _USAGE_LOG_LOCK:
+            _USAGE_LOG_BUFFER[:0] = entries
+        logger.warning("oauth_usage_batch_insert_failed: %s", str(e)[:120])
 
 
 async def _usage_flush_loop() -> None:
@@ -203,7 +230,12 @@ async def _enqueue_usage(entry: Dict[str, Any]) -> None:
             _USAGE_LOG_BUFFER.clear()
 
     if entries_to_flush:
-        await _insert_usage_batch(entries_to_flush)
+        try:
+            await _insert_usage_batch(entries_to_flush)
+        except Exception as e:
+            async with _USAGE_LOG_LOCK:
+                _USAGE_LOG_BUFFER[:0] = entries_to_flush
+            logger.warning("oauth_usage_batch_insert_failed: %s", str(e)[:120])
 
 
 def log_usage(

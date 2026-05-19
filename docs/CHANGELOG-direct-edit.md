@@ -1398,3 +1398,18 @@ import re
 
 ## [2026-05-19 14:44:17 KST] [aads-server] app/api/stream.py
 - Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && grep -n "flush_usage_buffer\|_usage_buffer\|batch_l
+
+## [2026-05-19 14:49:31 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git log --oneline -5
+
+## [2026-05-19 14:49:36 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server-green python3 -c "from app.api.chat import invalidate_in
+
+## [2026-05-19 14:49:37 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server-green grep -n "_SSH_TUNNEL_POOL\|asyncio.Lock.*pool\|_po
+
+## [2026-05-19 14:49:40 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git worktree remove /tmp/aads-wt-runner-6052496b --
+
+## [2026-05-19 14:49:43 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server-green python3 -c "from app.api.chat import invalidate_in
