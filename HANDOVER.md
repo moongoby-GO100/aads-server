@@ -1319,3 +1319,11 @@
 - 조치: 운영 DB의 세 모델 metadata `execution_backend`를 `litellm_proxy`로 변경했다. `scripts/add_pc_models.py`도 재등록 시 같은 LiteLLM 경유 메타데이터를 쓰도록 수정했다.
 - 검증: 채팅창과 동일한 `/chat/messages/send` SSE 경로에서 `pc-qwen3-8b` 10.79초 성공, `pc-qwen3-4b` 37.69초 성공, `pc-qwen3-14b` 18.03초 성공. 테스트 세션은 `[CEO] 통합지시` 워크스페이스에 자동검증 제목으로 생성됐다.
 - 주의: `pc-qwen3-4b`는 "OK만 출력" 지시에도 thinking 설명이 본문에 섞였다. 선택/대화는 가능하지만 Qwen3 thinking 출력 정규화는 후속 개선 대상이다. 커밋/푸시/배포는 수행하지 않았다.
+
+## 2026-05-19 15:09 KST - Chat stream finalize DB retry hardening
+
+- 배경: 스트리밍 종료 직전 짧은 DB 블립이 발생하면 `chat_turn_executions`가 `running`으로 남고 placeholder 삭제가 누락되어, 화면상 stale 응답 흔적이 남을 수 있었다.
+- 조치: `app/services/chat_service.py`에 producer `finally` 단계 전용 재시도 헬퍼를 추가하고, execution 완료 기록, interrupted 마킹, placeholder 삭제를 각각 재시도하도록 보강했다. 클라이언트 disconnect 직후에는 content 길이가 실제로 늘어난 경우에만 중간 저장하도록 줄여 불필요한 DB write도 줄였다.
+- 커밋: 로컬 커밋 `d1985ed fix: retry chat stream finalize writes` 생성 상태이며, 본 문서 기록 후 별도 문서 커밋과 함께 푸시한다.
+- 검증: `python3 -m py_compile app/services/chat_service.py`, `git diff --cached --check` 통과. `pytest -q tests/unit/test_chat_service.py`는 26개 중 24개 통과, 2개 실패(`test_cleanup_stale_streaming_placeholders_promotes_message_and_interrupts_execution`, `test_deferred_interrupt_rewrites_no_tool_stream_before_save`)로 현재 main 기준 회귀 또는 기존 테스트 미정합 가능성이 남아 있다.
+- 주의: Pipeline Runner 상태 조회 MCP는 같은 시점에 `All connection attempts failed`로 실패했고, `check_task_status`도 `DB pool이 초기화되지 않았습니다` 오류를 반환해 러너 현황은 git/컨테이너 기준으로만 확인했다.
