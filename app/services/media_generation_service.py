@@ -929,7 +929,14 @@ class MediaGenerationService:
         )
         if not response.candidates:
             raise ValueError(f"No candidates returned from Gemini {model_id}")
-        for part in response.candidates[0].content.parts:
+        candidate = response.candidates[0]
+        if not candidate.content or not candidate.content.parts:
+            finish_reason = getattr(candidate, "finish_reason", None)
+            raise ValueError(
+                f"Gemini {model_id} returned candidate without image content"
+                f" (finish_reason={finish_reason})"
+            )
+        for part in candidate.content.parts:
             if part.inline_data and part.inline_data.mime_type.startswith("image/"):
                 b64 = base64.b64encode(part.inline_data.data).decode()
                 mime = part.inline_data.mime_type
