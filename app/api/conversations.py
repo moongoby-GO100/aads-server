@@ -2,32 +2,41 @@
 AADS Conversations API - 대화창 저장 내용 조회
 데이터 소스: system_memory 테이블의 conversation:* 카테고리
 """
-from fastapi import APIRouter, Query
-from typing import Optional
 import json
 import re
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional, Sequence
+
+from fastapi import APIRouter, Query
+from dateutil.parser import isoparse
+
 from app.memory.store import memory_store
 
 KST = timezone(timedelta(hours=9))
+CHUNK_KEY_PATTERN = r"^(.+)_([0-9]+)of([0-9]+)$"
+CHUNK_KEY_REGEX = re.compile(CHUNK_KEY_PATTERN)
+CHUNK_KEY_SQL_PATTERN = r"^(.+)_([0-9]+)of([0-9]+)$"
+CHAT_MESSAGES_TRGM_EXTENSION_SQL = "CREATE EXTENSION IF NOT EXISTS pg_trgm"
+CHAT_MESSAGES_TRGM_INDEX_SQL = (
+    "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_chat_messages_content_gin "
+    "ON chat_messages USING gin (content gin_trgm_ops)"
+)
 
 
-def _to_kst_str(dt_or_str) -> str:
+def _to_kst_str(dt_or_str: Any) -> Optional[str]:
     """datetime 또는 문자열을 KST 포맷으로 변환 (T-085)"""
     if not dt_or_str:
         return None
     if isinstance(dt_or_str, datetime):
         dt = dt_or_str if dt_or_str.tzinfo else dt_or_str.replace(tzinfo=timezone.utc)
-        return dt.astimezone(KST).strftime("%Y-%m-%dT%H:%M:%S+09:00")
-    s = str(dt_or_str)
-    try:
-        s_clean = s.replace("Z", "+00:00")
-        dt = datetime.fromisoformat(s_clean)
-        if not dt.tzinfo:
+    else:
+        try:
+            dt = isoparse(str(dt_or_str))
+        except (TypeError, ValueError):
+            return str(dt_or_str)
+        if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(KST).strftime("%Y-%m-%dT%H:%M:%S+09:00")
-    except Exception:
-        return s
+    return dt.astimezone(KST).strftime("%Y-%m-%dT%H:%M:%S+09:00")
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
@@ -82,59 +91,243 @@ def _channel_to_category(channel: str) -> Optional[str]:
     return f"conversation:{ch}"
 
 
-def _merge_chunks(rows: list) -> list:
+def _decode_memory_value(raw_value: Any) -> dict:
+    if isinstance(raw_value, dict):
+        return raw_value
+    if isinstance(raw_value, str):
+        return json.loads(raw_value)
+    return json.loads(str(raw_value))
+
+
+def _extract_chunk_meta(key: str) -> tuple[str, int, int]:
+    match = CHUNK_KEY_REGEX.match(key)
+    if not match:
+        return key, 1, 1
+    return match.group(1), int(match.group(2)), int(match.group(3))
+
+
+def _build_conversation_where(
+    *,
+    project: Optional[str] = None,
+    channel: Optional[str] = None,
+    keyword: Optional[str] = None,
+) -> tuple[str, list[Any]]:
+    clauses = ["category LIKE 'conversation:%'"]
+    params: list[Any] = []
+
+    if project:
+        params.append(f"conversation:{project.lower()}")
+        clauses.append(f"category = ${len(params)}")
+
+    if channel and channel.upper() != "ALL":
+        params.append(_channel_to_category(channel))
+        clauses.append(f"category = ${len(params)}")
+
+    if keyword:
+        params.append(f"%{keyword}%")
+        clauses.append(f"value::text ILIKE ${len(params)}")
+
+    return " WHERE " + " AND ".join(clauses), params
+
+
+def _append_order_limit_offset(
+    sql: str,
+    params: Sequence[Any],
+    *,
+    order_by: str,
+    limit: int,
+    offset: int = 0,
+) -> tuple[str, list[Any]]:
+    paged_params = list(params)
+    limit_idx = len(paged_params) + 1
+    offset_idx = limit_idx + 1
+    paged_params.extend([limit, offset])
+    paged_sql = (
+        f"{sql} ORDER BY {order_by} LIMIT ${limit_idx} OFFSET ${offset_idx}"
+    )
+    return paged_sql, paged_params
+
+
+def _build_conversation_select_query(
+    select_clause: str,
+    *,
+    order_by: str,
+    limit: int,
+    offset: int = 0,
+    project: Optional[str] = None,
+    channel: Optional[str] = None,
+    keyword: Optional[str] = None,
+) -> tuple[str, list[Any]]:
+    where_sql, params = _build_conversation_where(
+        project=project,
+        channel=channel,
+        keyword=keyword,
+    )
+    return _append_order_limit_offset(
+        f"{select_clause}{where_sql}",
+        params,
+        order_by=order_by,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def _build_conversation_count_query(
+    *,
+    project: Optional[str] = None,
+    channel: Optional[str] = None,
+    keyword: Optional[str] = None,
+) -> tuple[str, list[Any]]:
+    where_sql, params = _build_conversation_where(
+        project=project,
+        channel=channel,
+        keyword=keyword,
+    )
+    return f"SELECT COUNT(*) FROM system_memory{where_sql}", params
+
+
+def _chunked_messages_count_query() -> str:
+    return f"""
+        WITH parsed AS (
+            SELECT key, regexp_match(key, '{CHUNK_KEY_SQL_PATTERN}') AS chunk_match
+            FROM system_memory
+            WHERE category = $1
+        )
+        SELECT COUNT(DISTINCT COALESCE(chunk_match[1], key))
+        FROM parsed
+    """
+
+
+def _chunked_messages_page_query() -> str:
+    return f"""
+        WITH parsed AS (
+            SELECT
+                id,
+                category,
+                key,
+                value,
+                created_at,
+                regexp_match(key, '{CHUNK_KEY_SQL_PATTERN}') AS chunk_match
+            FROM system_memory
+            WHERE category = $1
+        ),
+        normalized AS (
+            SELECT
+                id,
+                category,
+                key,
+                value,
+                created_at,
+                COALESCE(chunk_match[1], key) AS base_key,
+                COALESCE((chunk_match[2])::int, 1) AS chunk_idx,
+                COALESCE((chunk_match[3])::int, 1) AS total_chunks
+            FROM parsed
+        ),
+        ranked AS (
+            SELECT
+                id,
+                category,
+                key,
+                value,
+                created_at,
+                base_key,
+                chunk_idx,
+                total_chunks,
+                ROW_NUMBER() OVER (
+                    PARTITION BY base_key
+                    ORDER BY chunk_idx, created_at, id
+                ) AS chunk_row_number,
+                MAX(created_at) OVER (PARTITION BY base_key) AS base_created_at
+            FROM normalized
+        ),
+        paged_base_keys AS (
+            SELECT
+                base_key,
+                MAX(base_created_at) AS base_created_at
+            FROM ranked
+            GROUP BY base_key
+            ORDER BY base_created_at DESC, base_key DESC
+            LIMIT $2 OFFSET $3
+        )
+        SELECT
+            r.id,
+            r.category,
+            r.key,
+            r.value,
+            r.created_at,
+            r.base_key,
+            r.chunk_idx,
+            r.total_chunks,
+            r.chunk_row_number,
+            r.base_created_at
+        FROM ranked r
+        JOIN paged_base_keys pb ON pb.base_key = r.base_key
+        ORDER BY pb.base_created_at DESC, pb.base_key DESC, r.chunk_row_number ASC
+    """
+
+
+def _merge_chunk_parts(parts: list[dict[str, Any]]) -> dict[str, Any]:
+    first = parts[0]
+    snapshot = "".join(part["content"].get("snapshot", "") for part in parts)
+    total_chunks = max(part["total"] for part in parts)
+    merged_count = len(parts)
+    created_at = first.get("base_created_at", first["created_at"])
+    return {
+        "id": first["id"],
+        "key": first["base_key"],
+        "channel": _category_to_channel(first["category"]),
+        "project": first["content"].get("project", ""),
+        "source": first["content"].get("source", "genspark_bridge"),
+        "snapshot": snapshot,
+        "chunk": "1/1" if total_chunks == 1 else f"merged({merged_count})",
+        "created_at": str(created_at),
+    }
+
+
+def _merge_chunks(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     청크 분할된 레코드를 합쳐서 하나의 메시지로 반환.
     key 패턴: chat_1234_1of2, chat_1234_2of2 → chat_1234
     """
-    groups: dict = {}
-    order: list = []
-    chunk_pattern = re.compile(r"^(.+)_(\d+)of(\d+)$")
+    merged_rows: list[dict[str, Any]] = []
+    current_base: Optional[str] = None
+    current_parts: list[dict[str, Any]] = []
 
     for row in rows:
+        base_key = row.get("base_key")
+        chunk_idx = row.get("chunk_idx")
+        total_chunks = row.get("total_chunks")
+        if base_key is None or chunk_idx is None or total_chunks is None:
+            base_key, chunk_idx, total_chunks = _extract_chunk_meta(row["key"])
         key = row["key"]
-        m = chunk_pattern.match(key)
-        if m:
-            base = m.group(1)
-            idx = int(m.group(2))
-            total_chunks = int(m.group(3))
-        else:
-            base = key
-            idx = 1
-            total_chunks = 1
+        content = _decode_memory_value(row["value"])
 
-        if base not in groups:
-            groups[base] = []
-            order.append(base)
-        val = row["value"]
-        content = val if isinstance(val, dict) else json.loads(val)
-        groups[base].append({
-            "idx": idx,
+        if current_base is not None and base_key != current_base:
+            merged_rows.append(_merge_chunk_parts(current_parts))
+            current_parts = []
+
+        current_base = base_key
+        current_parts.append({
+            "idx": chunk_idx,
             "total": total_chunks,
             "content": content,
             "created_at": row["created_at"],
+            "base_created_at": row.get("base_created_at", row["created_at"]),
             "id": row["id"],
             "category": row["category"],
             "key": key,
-            "base_key": base,
+            "base_key": base_key,
         })
 
-    result = []
-    for base in order:
-        parts = sorted(groups[base], key=lambda x: x["idx"])
-        snapshot = "".join(p["content"].get("snapshot", "") for p in parts)
-        first = parts[0]
-        result.append({
-            "id": first["id"],
-            "key": base,
-            "channel": _category_to_channel(first["category"]),
-            "project": first["content"].get("project", ""),
-            "source": first["content"].get("source", "genspark_bridge"),
-            "snapshot": snapshot,
-            "chunk": f"1/1" if len(parts) == 1 else f"merged({len(parts)})",
-            "created_at": str(first["created_at"]),
-        })
-    return result
+    if current_parts:
+        merged_rows.append(_merge_chunk_parts(current_parts))
+
+    return merged_rows
+
+
+async def ensure_chat_messages_search_index(conn) -> None:
+    await conn.execute(CHAT_MESSAGES_TRGM_EXTENSION_SQL)
+    await conn.execute(CHAT_MESSAGES_TRGM_INDEX_SQL)
 
 
 @router.get("/channels")
@@ -212,16 +405,16 @@ async def get_messages(
     category = _channel_to_category(channel)
     async with memory_store.pool.acquire() as conn:
         total = await conn.fetchval(
-            "SELECT COUNT(*) FROM system_memory WHERE category = $1", category
+            _chunked_messages_count_query(),
+            category,
         )
         rows = await conn.fetch(
-            "SELECT id, category, key, value, created_at FROM system_memory "
-            "WHERE category = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-            category, limit + 50, offset  # 청크 병합을 위해 여유분 포함
+            _chunked_messages_page_query(),
+            category,
+            limit,
+            offset,
         )
         messages = _merge_chunks([dict(r) for r in rows])
-        # limit 재적용 (청크 병합 후)
-        messages = messages[:limit]
         return {
             "channel": channel.upper(),
             "total": total,
@@ -242,26 +435,19 @@ async def search_conversations(
     Response: {"results":[{"id":N,"channel":"KIS","snippet":"...","created_at":"..."}]}
     """
     async with memory_store.pool.acquire() as conn:
-        if channel.upper() == "ALL":
-            rows = await conn.fetch(
-                "SELECT id, category, key, value, created_at FROM system_memory "
-                "WHERE category LIKE 'conversation:%' AND value::text ILIKE $1 "
-                "ORDER BY created_at DESC LIMIT $2",
-                f"%{q}%", limit
-            )
-        else:
-            cat = _channel_to_category(channel)
-            rows = await conn.fetch(
-                "SELECT id, category, key, value, created_at FROM system_memory "
-                "WHERE category = $1 AND value::text ILIKE $2 "
-                "ORDER BY created_at DESC LIMIT $3",
-                cat, f"%{q}%", limit
-            )
+        search_query, params = _build_conversation_select_query(
+            "SELECT id, category, key, value, created_at FROM system_memory",
+            order_by="created_at DESC, key DESC",
+            limit=limit,
+            offset=0,
+            channel=channel,
+            keyword=q,
+        )
+        rows = await conn.fetch(search_query, *params)
 
         results = []
         for row in rows:
-            val = row["value"]
-            content = val if isinstance(val, dict) else json.loads(val)
+            content = _decode_memory_value(row["value"])
             snapshot = content.get("snapshot", "")
             # 검색어 주변 스니펫 추출
             idx = snapshot.lower().find(q.lower())
@@ -293,43 +479,25 @@ async def list_conversations(
     데이터 소스: system_memory 테이블의 conversation:* 카테고리
     """
     async with memory_store.pool.acquire() as conn:
-        base_query = "SELECT key, value, category, updated_at FROM system_memory WHERE category LIKE 'conversation:%'"
-        params = []
-        idx = 1
+        list_query, list_params = _build_conversation_select_query(
+            "SELECT key, value, category, updated_at FROM system_memory",
+            order_by="updated_at DESC, key DESC",
+            limit=limit,
+            offset=offset,
+            project=project,
+            keyword=keyword,
+        )
+        rows = await conn.fetch(list_query, *list_params)
 
-        if project:
-            base_query += f" AND category = ${idx}"
-            params.append(f"conversation:{project}")
-            idx += 1
-
-        if keyword:
-            base_query += f" AND value::text ILIKE ${idx}"
-            params.append(f"%{keyword}%")
-            idx += 1
-
-        base_query += f" ORDER BY updated_at DESC LIMIT ${idx} OFFSET ${idx + 1}"
-        params.extend([limit, offset])
-
-        rows = await conn.fetch(base_query, *params)
-
-        # 총 건수
-        count_query = "SELECT COUNT(*) FROM system_memory WHERE category LIKE 'conversation:%'"
-        count_params = []
-        cidx = 1
-        if project:
-            count_query += f" AND category = ${cidx}"
-            count_params.append(f"conversation:{project}")
-            cidx += 1
-        if keyword:
-            count_query += f" AND value::text ILIKE ${cidx}"
-            count_params.append(f"%{keyword}%")
-
+        count_query, count_params = _build_conversation_count_query(
+            project=project,
+            keyword=keyword,
+        )
         total = await conn.fetchval(count_query, *count_params)
 
         conversations = []
         for row in rows:
-            raw = row["value"]
-            val = raw if isinstance(raw, dict) else json.loads(raw)
+            val = _decode_memory_value(row["value"])
             conversations.append({
                 "id": row["key"],
                 "project": row["category"].replace("conversation:", ""),

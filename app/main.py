@@ -618,6 +618,13 @@ async def lifespan(app: FastAPI):
                     logger.error("startup_schema_validation_FAILED: chat_messages.content missing")
                 else:
                     logger.info("startup_schema_validation_ok")
+                try:
+                    from app.api.conversations import ensure_chat_messages_search_index
+
+                    await ensure_chat_messages_search_index(conn)
+                    logger.info("chat_messages_trgm_index_ensured")
+                except Exception as index_init_err:
+                    logger.warning("chat_messages_trgm_index_init_failed", error=str(index_init_err))
         except Exception as e:
             logger.error("startup_schema_migration_failed", error=str(e))
 
