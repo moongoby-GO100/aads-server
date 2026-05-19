@@ -333,6 +333,43 @@ def _normalize_intent_policy_model(model: Any) -> str:
     return _INTENT_POLICY_MODEL_ALIASES.get(model_name, model_name)
 
 
+# mixture/auto 기본 모델 DB 캐시 (TTL 60초)
+_LLM_DEFAULT_CACHE: Dict[str, Any] = {"expires_at": 0.0, "model": None}
+
+
+async def _get_default_llm_model_from_db() -> Optional[str]:
+    """DB model_routing_preferences 에서 route_key="llm", is_default=True, is_enabled=True 인
+    기본 모델을 조회한다. TTL 60초 캐시 적용. 실패 시 None 반환 (폴백은 호출자에서 처리)."""
+    now = _time_mod.monotonic()
+    cached_expires = float(_LLM_DEFAULT_CACHE.get("expires_at") or 0.0)
+    cached_model = _LLM_DEFAULT_CACHE.get("model")
+    if cached_expires > now and cached_model is not None:
+        return cached_model
+    try:
+        try:
+            from app.db import get_pool  # type: ignore
+        except ImportError:
+            from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT provider, model_id FROM model_routing_preferences "
+                "WHERE route_key = 'llm' AND is_default = TRUE AND is_enabled = TRUE "
+                "LIMIT 1"
+            )
+        if row:
+            provider = (row["provider"] or "").strip().lower()
+            model_id = (row["model_id"] or "").strip()
+            result = model_id if provider == "anthropic" else f"{provider}:{model_id}"
+            _LLM_DEFAULT_CACHE["model"] = result
+            _LLM_DEFAULT_CACHE["expires_at"] = now + 60.0
+            logger.info("llm_default_from_db: provider=%s model_id=%s → %s", provider, model_id, result)
+            return result
+    except Exception as e:
+        logger.warning("llm_default_db_lookup_failed: %s", e)
+    return None
+
+
 def invalidate_intent_policy_cache() -> None:
     _INTENT_POLICY_CACHE["policies"] = {}
     _INTENT_POLICY_CACHE["expires_at"] = 0.0
@@ -1358,10 +1395,15 @@ async def call_stream(
     )
     model = _effective_override or intent_result.model
 
-    # FIX-4: 빈 모델명 가드 — model이 None/빈문자열이면 기본값 적용
+    # FIX-4: 빈 모델명 가드 — model이 None/빈문자열이면 DB 기본값 조회 후 폴백
     if not model or not str(model).strip():
-        logger.warning("empty_model_fallback: model is empty/None → 'claude-sonnet'")
-        model = "claude-sonnet"
+        _db_default = await _get_default_llm_model_from_db()
+        if _db_default:
+            logger.info("empty_model_fallback: using DB default → '%s'", _db_default)
+            model = _db_default
+        else:
+            logger.warning("empty_model_fallback: DB lookup failed → 'claude-sonnet'")
+            model = "claude-sonnet"
     _qualified_provider, _qualified_model = _split_provider_qualified_model(str(model))
     if _qualified_provider:
         model = _qualified_model
