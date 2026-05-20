@@ -1902,3 +1902,15 @@ def _retr
 
 ## [2026-05-20 14:21:46 KST] [aads-server] scripts/deploy_dashboard_now.sh
 - Chat-Direct 수정: write: scripts/deploy_dashboard_now.sh
+
+## [2026-05-20 14:23:54 KST] [aads-server] nginx-aads-upstream.conf.dashboard.bak
+- Chat-Direct 수정: run_remote_command: find /root/aads/aads-dashboard/src -name "UsageBar*" -o -name "usageBar*" -o -na
+
+## [2026-05-20 14:26:24 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && git diff --stat
+
+## [2026-05-20 14:28:09 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch: async def get_usage_stats() -> Dict[str,→async def get_usage_stats() -> Dict[str,
+
+## [2026-05-20 14:28:20 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:     _startup_asyncio.create_task(_period→    _startup_asyncio.create_task(_period

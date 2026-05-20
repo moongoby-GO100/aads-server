@@ -6624,3 +6624,7 @@ async def
 ## [2026-05-20 13:59:05 KST] [GO100] frontend/src/go100/components/dashboard/StrategyCards.tsx
 - Chat-Direct 수정: run_remote_command: python3 -c "import shutil, pathlib; src=pathlib.Path('/tmp/aads-wt-runner-7bb573
 - finalize: pending
+
+## [2026-05-20 14:26:17 KST] [GO100] frontend/tsconfig.json
+- Chat-Direct 수정: run_remote_command: grep -n "can_allocate\|allocated_amount\|desk_limits\|desk_used" /root/kis-autot
+- finalize: pending
