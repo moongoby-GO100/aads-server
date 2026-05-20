@@ -154,22 +154,27 @@ def _build_note(rows: list[dict[str, Any]], violations: list[str]) -> str:
     for row in rows:
         grouped.setdefault((row["project"], row["repo"]), []).append(row)
 
+    total = len(rows)
     lines = ["", "", "⚠️ 완료 상태 보정"]
     if violations:
         lines.append(f"- 보정 사유: {', '.join(violations)}")
     if rows:
-        lines.append("- 현재 workspace ledger 기준으로 아직 최종 완료되지 않은 변경이 있습니다.")
+        lines.append(f"- workspace ledger 기준 미완료 변경: {total}건. 아래는 대표 항목만 표시합니다.")
     else:
         lines.append("- 현재 workspace ledger 기준으로 응답의 완료 보고를 입증할 변경 기록을 찾지 못했습니다.")
 
     shown = 0
     for (project, repo), group_rows in sorted(grouped.items()):
+        if shown >= 5:
+            break
         lines.append(f"- {project or '-'} / {repo or '-'}")
-        for row in group_rows[:5]:
+        for row in group_rows[: max(0, 5 - shown)]:
             shown += 1
             lines.append(f"  - `{row['file_path']}`: {_format_status(row['status'])}")
-        if len(group_rows) > 5:
-            lines.append(f"  - 외 {len(group_rows) - 5}건")
+            if shown >= 5:
+                break
+    if total > shown:
+        lines.append(f"- 외 {total - shown}건은 상세 `git status`/workspace ledger에서 확인해야 합니다.")
     if shown == 0:
         lines.append("- pending 파일 목록을 불러오지 못했습니다.")
     lines.append("- 따라서 최종 완료 보고에는 커밋/푸시/문서기록/배포 상태를 별도로 확인해야 합니다.")

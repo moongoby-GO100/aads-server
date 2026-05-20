@@ -101,3 +101,27 @@ def test_completion_contract_blocks_pending_document_done():
     assert result.adjusted is True
     assert "document_report_conflicts_with_ledger" in result.violation_types
     assert "HANDOVER.md" in result.response_text
+
+
+def test_completion_contract_note_is_compact_for_large_dirty_ledger():
+    changes = [
+        {
+            "project": "AADS",
+            "repo": "aads-server",
+            "file_path": f"app/file_{idx}.py",
+            "status": "dirty",
+        }
+        for idx in range(12)
+    ]
+    result = evaluate_completion_contract(
+        response_text="조치 완료했습니다.",
+        user_msg="모두 조치해",
+        intent="code_modify",
+        changes=changes,
+    )
+
+    assert result.adjusted is True
+    assert "미완료 변경: 12건" in result.response_text
+    assert "외 7건" in result.response_text
+    assert "app/file_0.py" in result.response_text
+    assert "app/file_5.py" not in result.response_text

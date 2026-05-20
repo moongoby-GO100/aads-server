@@ -92,6 +92,17 @@ _REPORT_QUALITY_INTENTS = frozenset({
     "cto_tech_debt",
     "cost_report",
     "runner_response",
+    "status_check",
+    "task_query",
+    "health_check",
+    "diagnosis",
+    "debug",
+    "error_analysis",
+    "code_modify",
+    "deploy",
+    "pipeline",
+    "git_ops",
+    "execute",
 })
 
 _REPORT_REQUIRED_GROUPS: dict[str, tuple[str, ...]] = {
@@ -110,6 +121,7 @@ _REPORT_REQUIRED_GROUPS: dict[str, tuple[str, ...]] = {
 }
 
 _REPORT_MIN_STRUCTURE_CHARS = 280
+_STATUS_REPORT_MIN_STRUCTURE_CHARS = 180
 
 # ─── 검증 결과 ─────────────────────────────────────────────────────────────────
 
@@ -242,7 +254,12 @@ def check_report_quality_structure(
         return None
 
     text = (response_text or "").strip()
-    if len(text) < _REPORT_MIN_STRUCTURE_CHARS:
+    min_chars = (
+        _STATUS_REPORT_MIN_STRUCTURE_CHARS
+        if normalized_intent in {"status_check", "task_query", "health_check", "runner_response"}
+        else _REPORT_MIN_STRUCTURE_CHARS
+    )
+    if len(text) < min_chars:
         return ValidationResult(
             is_valid=False,
             violation_type="REPORT_STRUCTURE_WEAK",

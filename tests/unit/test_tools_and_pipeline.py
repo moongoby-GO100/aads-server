@@ -337,6 +337,41 @@ class TestOutputValidator:
 
         assert result.is_valid is True
 
+    def test_status_report_quality_rejects_thin_next_step_report(self):
+        from app.services.output_validator import validate_response
+
+        response = "DB에는 저장되어 있습니다. 화면 표시 패치가 우선입니다. → 다음 단계: 즉시 패치합니다."
+        result = validate_response(
+            response_text=response,
+            tools_called=True,
+            intent="status_check",
+        )
+
+        assert result.is_valid is False
+        assert result.violation_type == "REPORT_STRUCTURE_WEAK"
+
+    def test_status_report_quality_accepts_compact_structured_report(self):
+        from app.services.output_validator import validate_response
+
+        response = """
+**현황** — 최신 응답은 DB에는 저장됐지만 화면 표시 경로가 불안정합니다.
+
+| 문제점 | 원인/근거 | 권장 조치 | 검증 |
+|---|---|---|---|
+| 응답 미노출 | 렌더 필터와 SSE 병합 경합 [코드 확인] | 표시 필터 완화 | URL 재확인 |
+| 다음 단계 부족 | 보고 템플릿 미강제 [코드 확인] | validator 강화 | 회귀 테스트 |
+| 완료판정 불명확 | 배포/커밋 상태 누락 [git status] | 완료상태 보정 | ledger 확인 |
+
+→ 다음 단계: validator 회귀 테스트와 배포 후 동일 URL을 재검증합니다.
+"""
+        result = validate_response(
+            response_text=response,
+            tools_called=True,
+            intent="status_check",
+        )
+
+        assert result.is_valid is True
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 5. Intent → 도구 활성화 흐름 테스트

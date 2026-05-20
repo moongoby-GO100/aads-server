@@ -1376,3 +1376,10 @@
 - 조치: `app/services/chat_service.py`의 비활성 `streaming_placeholder` 승격 기준을 `len(content) > 10`에서 `content` 존재 여부로 낮췄다. 이제 짧은 partial도 recovered assistant로 승격되어 화면 조회 경로에서 누락되지 않는다.
 - 검증: `python3 -m py_compile app/services/chat_service.py` 통과.
 - 배포: 본 문서 기록 후 대시보드 패치와 함께 커밋/푸시 및 무중단 배포를 진행한다.
+
+## 2026-05-20 17:22 KST - CEO report quality hard gate v2
+
+- 배경: 세션 `be533af6-c514-4bbc-b71c-bb68705addc0` 문제 보고에서 응답이 "DB에는 저장됨" 수준으로 끝나고, 화면 미노출 원인·개선안·다음 단계·완료기준이 부족하다는 CEO 피드백이 있었다.
+- 조치: `app/services/output_validator.py`의 `REPORT_STRUCTURE_WEAK` 적용 범위를 `status_check`, `task_query`, `health_check`, `diagnosis`, `debug`, `error_analysis`, `code_modify`, `deploy`, `pipeline`, `git_ops`, `execute`까지 확대했다. `app/services/response_completion_contract.py`의 완료상태 보정 문구는 대표 5건만 표시하도록 압축해 본문 보고를 덮지 않게 했다.
+- 프롬프트: `migrations/099_report_quality_hard_gate_v2.sql`을 추가해 L1 `global-report-depth-contract`를 v2로 강화하고, L4 `intent-status-report-output`을 신설했다. 상태조회/작업현황 응답도 문제점, 원인/근거, 구현·조치 단계, 개선 권장안, 검증/완료기준, 다음 단계를 포함해야 한다.
+- 검증 예정: `pytest -q tests/unit/test_tools_and_pipeline.py::TestOutputValidator tests/unit/test_response_completion_contract.py` 및 운영 DB migration 적용 후 `prompt_assets` row 길이/intent_scope를 확인한다.
