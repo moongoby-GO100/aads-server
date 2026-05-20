@@ -1360,3 +1360,9 @@
 - 커밋: 로컬 커밋 `d1985ed fix: retry chat stream finalize writes` 생성 상태이며, 본 문서 기록 후 별도 문서 커밋과 함께 푸시한다.
 - 검증: `python3 -m py_compile app/services/chat_service.py`, `git diff --cached --check` 통과. `pytest -q tests/unit/test_chat_service.py`는 26개 중 24개 통과, 2개 실패(`test_cleanup_stale_streaming_placeholders_promotes_message_and_interrupts_execution`, `test_deferred_interrupt_rewrites_no_tool_stream_before_save`)로 현재 main 기준 회귀 또는 기존 테스트 미정합 가능성이 남아 있다.
 - 주의: Pipeline Runner 상태 조회 MCP는 같은 시점에 `All connection attempts failed`로 실패했고, `check_task_status`도 `DB pool이 초기화되지 않았습니다` 오류를 반환해 러너 현황은 git/컨테이너 기준으로만 확인했다.
+## 2026-05-20 15:42 KST - Chat partial preservation threshold tightened to 1 char
+
+- 배경: CEO가 응답 사라짐 재발과 함께 "1자라도 있으면 DB에 저장하고 화면에 표시"를 지시했다.
+- 조치: `app/services/chat_service.py`의 비활성 `streaming_placeholder` 승격 기준을 `len(content) > 10`에서 `content` 존재 여부로 낮췄다. 이제 짧은 partial도 recovered assistant로 승격되어 화면 조회 경로에서 누락되지 않는다.
+- 검증: `python3 -m py_compile app/services/chat_service.py` 통과.
+- 배포: 본 문서 기록 후 대시보드 패치와 함께 커밋/푸시 및 무중단 배포를 진행한다.

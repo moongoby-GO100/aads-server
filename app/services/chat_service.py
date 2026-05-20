@@ -3895,7 +3895,7 @@ async def _promote_inactive_streaming_placeholders(
     for msg in messages:
         if msg.get("intent") == "streaming_placeholder":
             content = (msg.get("content") or "").strip()
-            if content and len(content) > 10:
+            if content:
                 _promote_ids.append(msg["id"])
                 msg["intent"] = None
                 msg["model_used"] = "recovered"
