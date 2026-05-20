@@ -24,11 +24,28 @@ fi
 echo $$ > "$LOCKFILE"
 trap "rm -f $LOCKFILE" EXIT
 
-# 현재 소스 해시 (빌드 산출물 제외)
-CURRENT_HASH=$(cd "$DASHBOARD_DIR" && find . \
-    \( -path './.git' -o -path './.git/*' -o -path './node_modules' -o -path './node_modules/*' -o -path './.next' -o -path './.next/*' \) -prune \
-    -o -type f ! -name 'tsconfig.tsbuildinfo' -print0 \
-    | sort -z | xargs -0 md5sum 2>/dev/null | md5sum | cut -d' ' -f1)
+compute_source_hash() {
+    cd "$DASHBOARD_DIR"
+    find . \
+        \( -path './.git' -o -path './.git/*' \
+        -o -path './node_modules' -o -path './node_modules/*' \
+        -o -path './.next' -o -path './.next/*' \
+        -o -path './docs' -o -path './docs/*' \
+        -o -path './reports' -o -path './reports/*' \) -prune \
+        -o -type f \
+        ! -name 'tsconfig.tsbuildinfo' \
+        ! -name '.active_port' \
+        ! -name '.active_container' \
+        ! -name 'build.log' \
+        ! -name 'HANDOVER.md' \
+        ! -name '*.bak_aads*' \
+        ! -name '*.bak_*' \
+        -print0 \
+        | sort -z | xargs -0 md5sum 2>/dev/null | md5sum | cut -d' ' -f1
+}
+
+# 현재 소스 해시 (배포 상태/문서/빌드 산출물 제외)
+CURRENT_HASH=$(compute_source_hash)
 
 OLD_HASH=$(cat "$HASH_FILE" 2>/dev/null || echo "none")
 

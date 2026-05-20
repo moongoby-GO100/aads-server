@@ -477,3 +477,17 @@ export async function updateNodeContent(\
 
 ## [2026-05-20 13:44:52 KST] [aads-dashboard] src/app/docs/page.tsx.bak_1779252287
 - Chat-Direct 수정: run_remote_command: cp /root/aads/aads-dashboard/src/app/docs/page.tsx /root/aads/aads-dashboard/src
+
+## [2026-05-20 14:16:57 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:       const _startDrain = () => {
+      →      const _startDrain = () => {
+      
+
+## [2026-05-20 14:17:28 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i '4148,4154s/.*//' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-05-20 14:17:29 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && nohup bash deploy.sh > /tmp/dashboard-deploy-052
+
+## [2026-05-20 14:20:39 KST] [aads-dashboard] deploy.sh
+- Chat-Direct 수정: run_remote_command: docker exec aads-server cat /var/log/supervisor/aads-api-stderr.log

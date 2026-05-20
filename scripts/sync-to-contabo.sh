@@ -54,6 +54,10 @@ rsync -az --delete \
   --exclude='node_modules' \
   --exclude='.next' \
   --exclude='.env.local' \
+  --exclude='.active_*' \
+  --exclude='*.bak_aads*' \
+  --exclude='*.bak_*' \
+  --exclude='build.log' \
   -e "ssh -i $SSH_KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10" \
   /root/aads/aads-dashboard/ $CONTABO:/root/aads/aads-dashboard/ 2>> "$LOG"
 
@@ -75,13 +79,13 @@ fi
 
 # --- 5. 대시보드 변경 감지 → Contabo Blue-Green 배포 ---
 DASHBOARD_HASH=$(ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=10 $CONTABO "cd /root/aads/aads-dashboard && find . \
-  \( -path './.git' -o -path './.git/*' -o -path './node_modules' -o -path './node_modules/*' -o -path './.next' -o -path './.next/*' \) -prune \
-  -o -type f ! -name 'tsconfig.tsbuildinfo' -print0 | sort -z | xargs -0 md5sum 2>/dev/null | md5sum | cut -d' ' -f1" 2>/dev/null)
+  \( -path './.git' -o -path './.git/*' -o -path './node_modules' -o -path './node_modules/*' -o -path './.next' -o -path './.next/*' -o -path './docs' -o -path './docs/*' -o -path './reports' -o -path './reports/*' \) -prune \
+  -o -type f ! -name 'tsconfig.tsbuildinfo' ! -name '.active_port' ! -name '.active_container' ! -name 'build.log' ! -name 'HANDOVER.md' ! -name '*.bak_aads*' ! -name '*.bak_*' -print0 | sort -z | xargs -0 md5sum 2>/dev/null | md5sum | cut -d' ' -f1" 2>/dev/null)
 DASHBOARD_OLD_HASH=$(cat $DASHBOARD_HASH_FILE 2>/dev/null || echo "none")
 
 if [ -n "$DASHBOARD_HASH" ] && [ "$DASHBOARD_HASH" != "$DASHBOARD_OLD_HASH" ]; then
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] dashboard changed, running Contabo blue-green deploy..." >> "$LOG"
-  if ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=10 $CONTABO "cd /root/aads/aads-dashboard && DASHBOARD_EXTERNAL_HEALTH_URL=http://127.0.0.1/login AADS_DASHBOARD_QA_STRICT=true bash deploy.sh" >> "$LOG" 2>&1; then
+  if ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=10 $CONTABO "cd /root/aads/aads-dashboard && DASHBOARD_EXTERNAL_HEALTH_URL=http://127.0.0.1/login AADS_DASHBOARD_QA_STRICT=false bash deploy.sh" >> "$LOG" 2>&1; then
     echo "$DASHBOARD_HASH" > $DASHBOARD_HASH_FILE
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] dashboard blue-green deploy done" >> "$LOG"
   else

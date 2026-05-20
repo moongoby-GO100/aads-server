@@ -1232,6 +1232,14 @@ async def lifespan(app: FastAPI):
 
     _startup_asyncio.create_task(_periodic_rate_limit_cleanup())
 
+    # Claude Max 사용량 폴러 시작
+    try:
+        from app.services.oauth_usage_tracker import ensure_claude_max_poller_running
+        ensure_claude_max_poller_running()
+        logger.info("claude_max_usage_poller_started_at_boot")
+    except Exception as e:
+        logger.warning(f"claude_max_usage_poller_start_failed: {e}")
+
     # KakaoBot SaaS 스케줄러 시작
     try:
         from app.services.kakaobot_scheduler import start_scheduler_tasks

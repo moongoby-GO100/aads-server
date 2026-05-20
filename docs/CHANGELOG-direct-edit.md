@@ -1890,3 +1890,15 @@ def _retr
 
 ## [2026-05-20 13:51:57 KST] [aads-server] app/services/chat_service.py
 - Chat-Direct 수정: patch:                 # 클라이언트 연결 중 3초마다 중간 저장 →                # 클라이언트 연결 중 3초마다 중간 저장 
+
+## [2026-05-20 14:16:54 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch: async def get_usage_stats() -> Dict[str,→async def get_usage_stats() -> Dict[str,
+
+## [2026-05-20 14:17:27 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:     _startup_asyncio.create_task(_period→    _startup_asyncio.create_task(_period
+
+## [2026-05-20 14:21:35 KST] [aads-server] scripts/sync-to-contabo.sh
+- Chat-Direct 수정: run_remote_command: docker exec aads-server grep -i "poller\|snapshot\|claude_max" /var/log/aads-app
+
+## [2026-05-20 14:21:46 KST] [aads-server] scripts/deploy_dashboard_now.sh
+- Chat-Direct 수정: write: scripts/deploy_dashboard_now.sh

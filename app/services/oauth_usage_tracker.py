@@ -340,6 +340,7 @@ def log_usage(
 
 async def get_usage_stats() -> Dict[str, Any]:
     """5시간/1주일 사용량 통계 + 최신 rate-limit 상태."""
+    ensure_claude_max_poller_running()
     pool = get_pool()
     async with pool.acquire() as conn:
         # 5시간 윈도우
