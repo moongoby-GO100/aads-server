@@ -27,6 +27,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "read_remote_file": False,           # 코드 분석 1순위 — 상시 로드
     "query_database": False,             # DB 조회 2순위 — 상시 로드
     "query_project_database": False,     # 프로젝트 DB 조회 — 상시 로드
+    "todo_write": False,                 # 채팅 하단 TODO 명시 관리 — 상시 로드
     "list_project_databases": True,      # DB 목록 — 온디맨드
     "task_history": False,               # 작업 현황 — 빈번 조회
     "list_remote_dir": False,            # 파일 탐색 — 빈번 사용
@@ -2876,6 +2877,61 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"keyword": "비용"},
         ],
     },
+    "todo_write": {
+        "name": "todo_write",
+        "description": (
+            "현재 채팅 세션 하단 TODO를 명시적으로 관리합니다. "
+            "작업을 시작/완료/실패/건너뜀 처리하거나, 진행 중 새 하위 작업이 생기면 생성합니다. "
+            "session_id를 생략하면 현재 채팅 세션에 자동 연결됩니다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "description": "수행할 작업.",
+                    "enum": ["list", "create", "start", "complete", "fail", "skip", "update"],
+                },
+                "todo_id": {
+                    "type": "string",
+                    "description": "대상 TODO UUID. 알 수 없으면 title 또는 current=true 사용.",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "생성할 제목 또는 기존 TODO 검색/수정 제목.",
+                },
+                "titles": {
+                    "type": "array",
+                    "description": "create 전용: 여러 TODO 제목.",
+                    "items": {"type": "string"},
+                },
+                "status": {
+                    "type": "string",
+                    "description": "update 전용 상태.",
+                    "enum": ["pending", "in_progress", "completed", "failed", "skipped"],
+                },
+                "current": {
+                    "type": "boolean",
+                    "description": "todo_id/title이 없을 때 현재 in_progress 항목을 대상으로 삼습니다.",
+                    "default": False,
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "실패/건너뜀/상태변경 사유.",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "대상 채팅 세션 UUID. 보통 생략합니다.",
+                },
+            },
+            "required": ["action"],
+        },
+        "input_examples": [
+            {"action": "start", "todo_id": "00000000-0000-0000-0000-000000000000"},
+            {"action": "complete", "current": True},
+            {"action": "create", "titles": ["배포 상태 확인", "헬스체크 보고"]},
+        ],
+    },
 }
 
 
@@ -2883,7 +2939,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
-    "action": ["directive_create", "create_design_modification_request", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status"],
+    "action": ["directive_create", "create_design_modification_request", "todo_write", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status"],
     "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
@@ -2907,6 +2963,7 @@ _GROUPS: Dict[str, List[str]] = {
 
 # Phase A: 인텐트별 도구 필터링 — 코어 도구 + 인텐트별 그룹 조합
 _CORE_TOOLS = [
+    "todo_write",
     "read_remote_file", "query_database", "query_project_database",
     "list_remote_dir", "run_remote_command", "capture_screenshot",
     "pipeline_runner_submit", "pipeline_runner_status", "pipeline_runner_approve",

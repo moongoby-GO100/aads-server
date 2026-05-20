@@ -1,5 +1,15 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-20 16:07 KST) - 채팅 하단 TODO 명시 관리 도구 반영
+- 배경: CEO가 채팅창 하단 TODO를 실제 작업 리스트 제목으로 작성·관리하고, 채팅 AI가 TODO 항목을 직접 관리하게 즉시 반영하라고 지시했다.
+- 조치:
+  - `app/services/tool_registry.py`: `todo_write` 도구를 상시 로드/eager/core/action/all 도구로 등록했다. 모델은 현재 세션 TODO를 `list/create/start/complete/fail/skip/update`로 직접 관리할 수 있다.
+  - `app/services/tool_executor.py`: `todo_write` 실행기를 추가했다. 현재 채팅 세션 ContextVar를 기본으로 사용하고, 대상 TODO는 `todo_id`, 제목 매칭, 또는 `current=true`로 찾는다. 완료/실패/건너뜀 처리 후 진행 중 항목이 없으면 다음 pending 항목을 자동으로 `in_progress` 승격한다.
+  - `app/services/chat_todo_service.py`: TODO 프롬프트에 `todo_id`, 상태, `todo_write` 사용 규칙을 노출해 추정형 완료 판정 대신 명시적 도구 갱신을 우선하게 했다.
+  - `tests/unit/test_todo_write_tool.py`, `tests/unit/test_chat_todo_service.py`: 도구 등록, 세션 미바인딩 안전 거부, 현재 항목 완료 후 다음 항목 승격, 프롬프트 규칙 노출 테스트를 추가했다.
+- 검증: `python3 -m py_compile app/services/chat_todo_service.py app/services/tool_registry.py app/services/tool_executor.py tests/unit/test_todo_write_tool.py tests/unit/test_chat_todo_service.py` 통과. `python3 -m pytest tests/unit/test_todo_write_tool.py tests/unit/test_chat_todo_service.py -q` 결과 **11 passed**.
+- 배포/주의: 현재 변경은 백엔드 코드와 테스트/HANDOVER 반영 단계다. 운영 반영에는 API reload 또는 blue-green 배포가 필요하다. 기존 워크트리에 다수 미커밋 변경이 있어 커밋 시 이번 6개 파일만 선별 스테이징해야 한다.
+
 ## 현재 진행 상태 (2026-05-20 11:46 KST) - 채팅 응답 버블 사라짐 핫픽스 + 상류 SSE 단절 자동 재시도
 - 배경: CEO가 `https://aads.newtalk.kr/chat#ac5278a7-2f13-4cd7-9aa1-83d41fb23c97`에서 "응답을 못 마치고 진행하다 응답 버블이 사라진다"고 보고했다.
 - 실측: `/var/log/aads-api.log.1` 동일 세션에서 `bg_auto_cancel: session=ac5278a7 client gone for 1806~1814s` 2회, `list_messages_promote_skipped: real response exists, placeholder deleted session=ac5278a7` + `list_messages_auto_promoted session=ac5278a7 count=1`이 직접 찍혀 있었다. `bg_producer_error … CancelledError`는 `app/services/model_selector.py:2536 _stream_cli_relay_once`의 `resp.aiter_lines()`에서 상류 SSE가 끊긴 패턴.

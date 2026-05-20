@@ -441,6 +441,7 @@ class ToolExecutor:
         """도구 이름 → 실제 함수 매핑."""
         dispatch = {
             "health_check":           self._health_check,
+            "todo_write":             self._todo_write,
             "dashboard_query":        self._dashboard_query,
             "task_history":           self._task_history,
             "server_status":          self._server_status,
@@ -592,6 +593,164 @@ class ToolExecutor:
         return await fn(tool_input)
 
     # ── system 도구 ─────────────────────────────────────────────────────────
+
+    async def _todo_write(self, inp: Dict[str, Any]) -> Any:
+        """Manage the current chat session TODO list from tool-use."""
+        from app.services.chat_todo_service import (
+            TODO_ACTIVE_STATUSES,
+            TODO_STATUS_COMPLETED,
+            TODO_STATUS_FAILED,
+            TODO_STATUS_IN_PROGRESS,
+            TODO_STATUS_PENDING,
+            TODO_STATUS_SKIPPED,
+            TODO_TERMINAL_STATUSES,
+            TODO_VALID_STATUSES,
+            create_todo_items,
+            list_todo_items,
+            update_session_todo_item,
+        )
+
+        session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
+        if not session_id:
+            return {"error": "missing_session_id", "message": "todo_write requires a bound chat session"}
+
+        action = str(inp.get("action") or "").strip().lower()
+        status_map = {
+            "start": TODO_STATUS_IN_PROGRESS,
+            "complete": TODO_STATUS_COMPLETED,
+            "fail": TODO_STATUS_FAILED,
+            "skip": TODO_STATUS_SKIPPED,
+        }
+        if action not in {"list", "create", "start", "complete", "fail", "skip", "update"}:
+            return {"error": "invalid_action", "allowed": ["list", "create", "start", "complete", "fail", "skip", "update"]}
+
+        async def _promote_next_if_needed() -> Optional[Dict[str, Any]]:
+            active = await list_todo_items(
+                session_id=session_id,
+                statuses=TODO_ACTIVE_STATUSES,
+                include_completed=False,
+            )
+            if any(item.get("status") == TODO_STATUS_IN_PROGRESS for item in active):
+                return None
+            pending = next((item for item in active if item.get("status") == TODO_STATUS_PENDING), None)
+            if not pending:
+                return None
+            return await update_session_todo_item(
+                session_id=session_id,
+                todo_id=str(pending["id"]),
+                status=TODO_STATUS_IN_PROGRESS,
+                metadata={"promoted_by": "todo_write"},
+                source="assistant_tool",
+            )
+
+        async def _resolve_target() -> Optional[Dict[str, Any]]:
+            todo_id = str(inp.get("todo_id") or "").strip()
+            items = await list_todo_items(session_id=session_id, include_completed=True)
+            if todo_id:
+                return next((item for item in items if str(item.get("id")) == todo_id), None)
+
+            title = str(inp.get("title") or "").strip()
+            normalized_title = re.sub(r"\s+", " ", title).strip().lower()
+            if normalized_title:
+                exact = [
+                    item for item in items
+                    if re.sub(r"\s+", " ", str(item.get("title") or "")).strip().lower() == normalized_title
+                ]
+                if exact:
+                    return exact[0]
+                partial = [
+                    item for item in items
+                    if normalized_title in re.sub(r"\s+", " ", str(item.get("title") or "")).strip().lower()
+                    or re.sub(r"\s+", " ", str(item.get("title") or "")).strip().lower() in normalized_title
+                ]
+                if partial:
+                    return partial[0]
+
+            if _coerce_bool(inp.get("current"), False) or not (todo_id or title):
+                in_progress = next((item for item in items if item.get("status") == TODO_STATUS_IN_PROGRESS), None)
+                if in_progress:
+                    return in_progress
+                return next((item for item in items if item.get("status") == TODO_STATUS_PENDING), None)
+            return None
+
+        if action == "list":
+            items = await list_todo_items(session_id=session_id, include_completed=True)
+            return {"session_id": session_id, "count": len(items), "items": items[:50]}
+
+        if action == "create":
+            titles = inp.get("titles")
+            if not isinstance(titles, list):
+                titles = []
+            prepared_titles = [str(title).strip() for title in titles if str(title).strip()]
+            single_title = str(inp.get("title") or "").strip()
+            if single_title:
+                prepared_titles.insert(0, single_title)
+            if not prepared_titles:
+                return {"error": "missing_title", "message": "create requires title or titles"}
+            rows = await create_todo_items(
+                session_id=session_id,
+                titles=prepared_titles,
+                source="assistant_tool",
+                metadata={
+                    "created_from": "todo_write",
+                    "reason": str(inp.get("reason") or "")[:500],
+                },
+            )
+            requested_status = str(inp.get("status") or "").strip()
+            if requested_status and requested_status in TODO_VALID_STATUSES:
+                updated_rows = []
+                for row in rows:
+                    updated = await update_session_todo_item(
+                        session_id=session_id,
+                        todo_id=str(row["id"]),
+                        status=requested_status,
+                        metadata={"status_set_by": "todo_write"},
+                        source="assistant_tool",
+                    )
+                    updated_rows.append(updated or row)
+                rows = updated_rows
+            return {"session_id": session_id, "action": action, "count": len(rows), "items": rows}
+
+        target = await _resolve_target()
+        if not target:
+            return {
+                "error": "todo_not_found",
+                "message": "No matching TODO was found for todo_id/title/current.",
+                "session_id": session_id,
+            }
+
+        next_status = status_map.get(action)
+        if action == "update":
+            requested_status = str(inp.get("status") or "").strip()
+            next_status = requested_status or None
+            if next_status and next_status not in TODO_VALID_STATUSES:
+                return {"error": "invalid_status", "allowed": sorted(TODO_VALID_STATUSES)}
+
+        next_title = str(inp.get("title") or "").strip() or None
+        if action != "update":
+            next_title = None
+
+        updated = await update_session_todo_item(
+            session_id=session_id,
+            todo_id=str(target["id"]),
+            status=next_status,
+            title=next_title,
+            metadata={
+                "updated_from": "todo_write",
+                "reason": str(inp.get("reason") or "")[:500],
+                "action": action,
+            },
+            source="assistant_tool",
+        )
+        promoted = None
+        if updated and updated.get("status") in TODO_TERMINAL_STATUSES:
+            promoted = await _promote_next_if_needed()
+        return {
+            "session_id": session_id,
+            "action": action,
+            "item": updated,
+            "promoted_next": promoted,
+        }
 
     async def _health_check(self, inp: Dict[str, Any]) -> Any:
         try:

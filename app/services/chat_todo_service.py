@@ -224,10 +224,15 @@ def build_todo_prompt_block(todo_items: Iterable[dict[str, Any]]) -> str:
         "[세션 TODO 운영 규칙]",
         "- 이 요청은 복수 작업 또는 실행형 요청으로 분류되었다.",
         "- 아래 TODO 순서를 기준으로 진행하고, 처리하지 않은 항목은 완료로 단정하지 마라.",
+        "- 작업 시작/완료/실패/추가 항목 발생 시 가능하면 todo_write 도구로 TODO 상태를 명시적으로 갱신하라.",
+        "- todo_write가 실패한 경우에만 최종 응답의 수행 내역으로 보조 판정한다.",
         "- 최종 응답 전 TODO 누락 여부를 다시 점검하라.",
     ]
     for index, item in enumerate(items[:8], start=1):
-        lines.append(f"{index}. {item.get('title', '')}")
+        lines.append(
+            f"{index}. [{item.get('status', 'pending')}] {item.get('title', '')} "
+            f"(todo_id={item.get('id', '')})"
+        )
     return "\n".join(lines)
 
 

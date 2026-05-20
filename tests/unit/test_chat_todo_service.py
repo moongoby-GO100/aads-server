@@ -374,6 +374,22 @@ def test_completion_gate_detects_missing_items():
     assert result["all_completed"] is False
 
 
+def test_todo_prompt_exposes_ids_and_tool_write_rule():
+    todo_id = uuid.uuid4()
+
+    prompt = svc.build_todo_prompt_block([
+        {
+            "id": todo_id,
+            "title": "실제 작업 리스트 제목 관리",
+            "status": svc.TODO_STATUS_IN_PROGRESS,
+        }
+    ])
+
+    assert "todo_write 도구로 TODO 상태를 명시적으로 갱신" in prompt
+    assert f"todo_id={todo_id}" in prompt
+    assert "[in_progress] 실제 작업 리스트 제목 관리" in prompt
+
+
 def test_simple_request_does_not_create_todos():
     assert not svc.should_create_todos("안녕", intent="greeting", use_tools=False)
     assert not svc.should_create_todos("AADS가 뭐야?", intent="casual", use_tools=False)
