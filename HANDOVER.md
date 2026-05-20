@@ -1,5 +1,15 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-20 17:11 KST) - 채팅 하단 TODO PM식 제목 생성 기준 개선
+- 배경: CEO가 채팅창 하단 TODO 리스트를 실제 작업 리스트 제목처럼 PM식으로 작성·관리되게 개선하라고 지시했다.
+- 조치:
+  - `app/services/chat_todo_service.py`: 자동 TODO 제목 생성 단계에 PM식 정규화 로직을 추가했다. `다음단계로/권장조치로/즉시` 같은 진행 접두어와 `해줘/보고해/조치해` 같은 요청형 어미를 제거하고, 액션 동사(`확인`, `수정`, `개선`, `추가`, `검증`, `배포`, `보고`)를 감지해 `대상 + 액션/완료조건` 형태로 제목을 만든다.
+  - 예: `다음단계로 PM식 작성으로 개선 진행하고 보고해` → `PM식 TODO 작성 기준 개선 및 결과 보고`.
+  - 예: `버블 내용 저장 오류 수정하고 검증해` → `버블 내용 저장 오류 수정 및 검증`.
+  - `tests/unit/test_chat_todo_service.py`: PM식 제목 변환과 번호 목록 분리 후 액션/검증 의도가 유지되는 회귀 테스트를 추가했다.
+- 검증: `python3 -m py_compile app/services/chat_todo_service.py tests/unit/test_chat_todo_service.py tests/unit/test_todo_write_tool.py` 통과. `python3 -m pytest tests/unit/test_todo_write_tool.py tests/unit/test_chat_todo_service.py -q` 결과 **13 passed**.
+- 배포/주의: 이번 턴은 백엔드 코드와 테스트, HANDOVER 기록까지 반영했다. 운영 프로세스 reload/blue-green 배포, 커밋/푸시는 아직 수행하지 않았다. 워크트리에 기존 미커밋 변경이 많으므로 커밋 시 이번 3개 파일만 선별해야 한다.
+
 ## 현재 진행 상태 (2026-05-20 16:07 KST) - 채팅 하단 TODO 명시 관리 도구 반영
 - 배경: CEO가 채팅창 하단 TODO를 실제 작업 리스트 제목으로 작성·관리하고, 채팅 AI가 TODO 항목을 직접 관리하게 즉시 반영하라고 지시했다.
 - 조치:
@@ -1382,4 +1392,6 @@
 - 배경: 세션 `be533af6-c514-4bbc-b71c-bb68705addc0` 문제 보고에서 응답이 "DB에는 저장됨" 수준으로 끝나고, 화면 미노출 원인·개선안·다음 단계·완료기준이 부족하다는 CEO 피드백이 있었다.
 - 조치: `app/services/output_validator.py`의 `REPORT_STRUCTURE_WEAK` 적용 범위를 `status_check`, `task_query`, `health_check`, `diagnosis`, `debug`, `error_analysis`, `code_modify`, `deploy`, `pipeline`, `git_ops`, `execute`까지 확대했다. `app/services/response_completion_contract.py`의 완료상태 보정 문구는 대표 5건만 표시하도록 압축해 본문 보고를 덮지 않게 했다.
 - 프롬프트: `migrations/099_report_quality_hard_gate_v2.sql`을 추가해 L1 `global-report-depth-contract`를 v2로 강화하고, L4 `intent-status-report-output`을 신설했다. 상태조회/작업현황 응답도 문제점, 원인/근거, 구현·조치 단계, 개선 권장안, 검증/완료기준, 다음 단계를 포함해야 한다.
-- 검증 예정: `pytest -q tests/unit/test_tools_and_pipeline.py::TestOutputValidator tests/unit/test_response_completion_contract.py` 및 운영 DB migration 적용 후 `prompt_assets` row 길이/intent_scope를 확인한다.
+- 검증: `pytest tests/unit/test_response_completion_contract.py tests/unit/test_tools_and_pipeline.py tests/unit/test_chat_todo_service.py` 결과 69 passed, 1 warning. 운영 DB `prompt_assets` 기준 `global-report-depth-contract` 1020자, `intent-status-report-output` 763자, 둘 다 enabled=true 확인. `curl http://127.0.0.1:8100/api/v1/health` OK, `nginx -t` 통과.
+- 배포: `bash deploy.sh bluegreen` 완료 후 active API는 `.active_port=8100`, `.active_container=aads-server`다. 실제 `/etc/nginx/conf.d/aads-upstream.conf`도 8100 active로 확인했고, 저장소 `nginx-aads-upstream.conf`도 동일하게 맞췄다.
+- 주의: 워크트리에는 이전 TODO/갤러리/문서 관련 미커밋 변경이 섞여 있어 커밋 시 이번 범위 파일만 선별해야 한다.
