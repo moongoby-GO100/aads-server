@@ -512,8 +512,11 @@ async def get_claude_max_usage() -> Dict[str, Any]:
     """Claude Max 5h/1w 사용량 — Codex 호환 포맷.
 
     내부 oauth_usage_log 기반 실측 + unified_5h/7d 컬럼 활용.
+    DB 스냅샷 우선 + 백그라운드 폴러 lazy-start.
     """
     import os
+    # 폴러가 안돌고 있으면 자동 시작 (hot-reload 호환)
+    ensure_claude_max_poller_running()
     pool = get_pool()
     now = datetime.now(timezone.utc)
     now_kst = now.astimezone(KST)
@@ -682,16 +685,103 @@ async def should_switch_account(current_token: str) -> bool:
 
 # ── Claude.ai 실시간 사용량 API ──────────────────────────────────────
 _CLAUDE_AI_USAGE_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
-_CLAUDE_AI_USAGE_TTL = 60
+_CLAUDE_AI_USAGE_TTL = 30  # 메모리 캐시 30초
 
 
-async def fetch_claude_ai_usage() -> Optional[Dict[str, Any]]:
-    """claude.ai/api/organizations/{org_id}/usage 실시간 조회 (60초 캐시)."""
+async def get_latest_claude_max_snapshot(max_age_sec: int = 300) -> Optional[Dict[str, Any]]:
+    """DB에 저장된 가장 최근 Claude Max 사용량 스냅샷 조회.
+
+    max_age_sec 이내의 스냅샷만 반환 (그보다 오래되면 None).
+    """
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT fetched_at, source, plan_type,
+                       five_hour_utilization, five_hour_resets_at,
+                       seven_day_utilization, seven_day_resets_at, raw_data
+                FROM claude_max_usage_snapshot
+                WHERE fetched_at >= NOW() - ($1 || ' seconds')::INTERVAL
+                ORDER BY fetched_at DESC LIMIT 1
+            """, str(max_age_sec))
+        if not row:
+            return None
+        return {
+            "five_hour": {
+                "utilization": float(row["five_hour_utilization"]) if row["five_hour_utilization"] is not None else 0.0,
+                "resets_at": row["five_hour_resets_at"].isoformat() if row["five_hour_resets_at"] else None,
+            },
+            "seven_day": {
+                "utilization": float(row["seven_day_utilization"]) if row["seven_day_utilization"] is not None else 0.0,
+                "resets_at": row["seven_day_resets_at"].isoformat() if row["seven_day_resets_at"] else None,
+            },
+            "source": "db_snapshot",
+            "fetched_at": row["fetched_at"].astimezone(KST).isoformat(),
+            "snapshot_age_sec": int((datetime.now(timezone.utc) - row["fetched_at"]).total_seconds()),
+        }
+    except Exception as e:
+        logger.warning("get_latest_claude_max_snapshot failed: %s", str(e)[:120])
+        return None
+
+
+async def _save_claude_max_snapshot(data: Dict[str, Any]) -> None:
+    """claude.ai 실측 데이터를 DB에 영속 저장."""
+    import os
+    import json as _json
+    try:
+        five = data.get("five_hour") or {}
+        seven = data.get("seven_day") or {}
+        five_reset = None
+        if five.get("resets_at"):
+            try:
+                five_reset = datetime.fromisoformat(five["resets_at"].replace("Z", "+00:00"))
+            except Exception:
+                five_reset = None
+        seven_reset = None
+        if seven.get("resets_at"):
+            try:
+                seven_reset = datetime.fromisoformat(seven["resets_at"].replace("Z", "+00:00"))
+            except Exception:
+                seven_reset = None
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO claude_max_usage_snapshot
+                    (fetched_at, source, plan_type, five_hour_utilization, five_hour_resets_at,
+                     seven_day_utilization, seven_day_resets_at, raw_data)
+                VALUES (NOW(), $1, $2, $3, $4, $5, $6, $7::jsonb)
+            """,
+                "claude_ai_api",
+                os.getenv("CLAUDE_MAX_PLAN_TYPE", "max_20x"),
+                float(five.get("utilization") or 0),
+                five_reset,
+                float(seven.get("utilization") or 0),
+                seven_reset,
+                _json.dumps(data, default=str),
+            )
+    except Exception as e:
+        logger.warning("_save_claude_max_snapshot failed: %s", str(e)[:120])
+
+
+async def fetch_claude_ai_usage(prefer_db: bool = True) -> Optional[Dict[str, Any]]:
+    """claude.ai/api/organizations/{org_id}/usage 실시간 조회.
+
+    DB 우선 (5분 이내 스냅샷) → 메모리 캐시 (30초) → 외부 API 직접 호출 (실패 시 DB로 폴백).
+    조회 성공 시 자동으로 DB에 스냅샷 저장.
+    """
     import os
     import time as _t
     import httpx
 
     now = _t.time()
+
+    # 1) DB 스냅샷 우선 (5분 이내)
+    if prefer_db:
+        snap = await get_latest_claude_max_snapshot(max_age_sec=int(os.getenv("CLAUDE_MAX_DB_TTL", "60")))
+        if snap:
+            return snap
+
+    # 2) 메모리 캐시
     cached = _CLAUDE_AI_USAGE_CACHE.get("data")
     if cached and (now - _CLAUDE_AI_USAGE_CACHE["ts"]) < _CLAUDE_AI_USAGE_TTL:
         return cached
@@ -712,7 +802,9 @@ async def fetch_claude_ai_usage() -> Optional[Dict[str, Any]]:
         except Exception:
             pass
     if not session_key or not org_id:
-        return None
+        # 인증 정보 없음 → DB 스냅샷 폴백 (TTL 24h)
+        snap = await get_latest_claude_max_snapshot(max_age_sec=86400)
+        return snap
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=3.0)) as client:
@@ -727,7 +819,9 @@ async def fetch_claude_ai_usage() -> Optional[Dict[str, Any]]:
             )
         if resp.status_code != 200:
             logger.warning("claude_ai_usage_fetch_failed: %d", resp.status_code)
-            return cached
+            # 외부 API 실패 → DB 스냅샷 폴백
+            snap = await get_latest_claude_max_snapshot(max_age_sec=86400)
+            return snap or cached
 
         data = resp.json()
         five_h = data.get("five_hour") or {}
@@ -746,7 +840,45 @@ async def fetch_claude_ai_usage() -> Optional[Dict[str, Any]]:
         }
         _CLAUDE_AI_USAGE_CACHE["data"] = result
         _CLAUDE_AI_USAGE_CACHE["ts"] = now
+        # DB 영속 저장 (실패해도 호출은 성공으로 처리)
+        await _save_claude_max_snapshot(result)
         return result
     except Exception as e:
         logger.warning("claude_ai_usage_error: %s", str(e)[:120])
-        return cached
+        # 예외 발생 → DB 스냅샷 폴백
+        snap = await get_latest_claude_max_snapshot(max_age_sec=86400)
+        return snap or cached
+
+
+async def claude_max_usage_poller(interval_sec: int = 60) -> None:
+    """백그라운드 폴러: 사용자 접속과 무관하게 주기적으로 claude.ai 사용량을 DB에 적재."""
+    logger.info("claude_max_usage_poller started (interval=%ds)", interval_sec)
+    while True:
+        try:
+            await fetch_claude_ai_usage(prefer_db=False)
+        except Exception as e:
+            logger.warning("claude_max_usage_poller iter failed: %s", str(e)[:120])
+        await asyncio.sleep(interval_sec)
+
+
+_CLAUDE_MAX_POLLER_TASK: Optional[asyncio.Task] = None
+
+
+def ensure_claude_max_poller_running(interval_sec: Optional[int] = None) -> bool:
+    """폴러 task가 실행 중이 아니면 시작 (lazy, idempotent).
+
+    /ops/usage-stats 호출 등에서 자동 트리거되어 hot-reload만으로도 활성화.
+    """
+    global _CLAUDE_MAX_POLLER_TASK
+    import os
+    try:
+        if _CLAUDE_MAX_POLLER_TASK is not None and not _CLAUDE_MAX_POLLER_TASK.done():
+            return False
+        iv = interval_sec or int(os.getenv("CLAUDE_MAX_POLL_INTERVAL_SEC", "60"))
+        loop = asyncio.get_event_loop()
+        _CLAUDE_MAX_POLLER_TASK = loop.create_task(claude_max_usage_poller(interval_sec=iv))
+        logger.info("claude_max_usage_poller_lazy_started interval=%ds", iv)
+        return True
+    except Exception as e:
+        logger.warning("ensure_claude_max_poller_running failed: %s", str(e)[:120])
+        return False

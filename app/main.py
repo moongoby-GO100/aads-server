@@ -778,6 +778,16 @@ async def lifespan(app: FastAPI):
     except Exception as _e:
         logger.warning(f"startup_placeholder_cleanup_failed: {_e}")
 
+    # Claude Max 사용량 백그라운드 폴러 (DB 영속 저장 + 실시간 갱신)
+    try:
+        import asyncio as _claude_max_asyncio
+        from app.services.oauth_usage_tracker import claude_max_usage_poller as _claude_max_poller
+        _interval = int(os.getenv("CLAUDE_MAX_POLL_INTERVAL_SEC", "60"))
+        _claude_max_asyncio.create_task(_claude_max_poller(interval_sec=_interval))
+        logger.info("claude_max_usage_poller_started interval=%ds", _interval)
+    except Exception as _e:
+        logger.warning(f"claude_max_usage_poller_start_failed: {_e}")
+
     import asyncio as _startup_asyncio
     import time as _resume_time
 
@@ -1355,6 +1365,9 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/ops/hot-reload",  # 내부 hot-reload (127.0.0.1 전용)
     "/api/v1/ops/active-streams",  # 내부 스트림 drain 감지 (deploy.sh 전용)
     "/api/v1/image/gallery",  # AI 모델 이미지 갤러리 (공개 읽기전용)
+    "/api/v1/ops/usage-stats",  # 사용량 통계 (읽기전용)
+    "/api/v1/ops/codex-usage",  # Codex 사용량 (읽기전용)
+    "/api/v1/ops/claude-max-usage",  # Claude Max 사용량 (읽기전용)
 )
 # 내부 모니터링 (verify_monitor_key로 별도 인증)
 _MONITOR_KEY_PATHS = (
