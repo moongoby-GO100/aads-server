@@ -422,6 +422,15 @@ async def get_usage_stats() -> Dict[str, Any]:
             ORDER BY cnt DESC
         """)
 
+        latest_unified_stats = await conn.fetchrow("""
+            SELECT unified_5h_status, unified_5h_utilization,
+                   unified_5h_reset, unified_7d_status,
+                   unified_7d_utilization, unified_7d_reset
+            FROM oauth_usage_log
+            WHERE unified_5h_utilization IS NOT NULL
+            ORDER BY id DESC LIMIT 1
+        """)
+
     def _row_to_dict(r):
         d = dict(r)
         for k, v in d.items():
@@ -442,6 +451,7 @@ async def get_usage_stats() -> Dict[str, Any]:
     db_pct_5h = round(min(tok_5h / plan_limit_5h, 1.0) * 100, 1) if plan_limit_5h else 0
     db_pct_1w = round(min(tok_1w / plan_limit_1w, 1.0) * 100, 1) if plan_limit_1w else 0
 
+    # 1순위: claude.ai API (실시간), 2순위: anthropic_header, 3순위: DB 추정
     try:
         real_usage = await fetch_claude_ai_usage()
     except Exception as _e:
@@ -449,11 +459,19 @@ async def get_usage_stats() -> Dict[str, Any]:
         real_usage = None
 
     if real_usage:
-        used_pct_5h = real_usage["five_hour"]["utilization"]
-        used_pct_1w = real_usage["seven_day"]["utilization"]
+        u5 = real_usage["five_hour"]["utilization"]
+        u7 = real_usage["seven_day"]["utilization"]
+        used_pct_5h = round(u5 * 100, 1) if u5 <= 1.0 else round(u5, 1)
+        used_pct_1w = round(u7 * 100, 1) if u7 <= 1.0 else round(u7, 1)
         resets_at_5h = real_usage["five_hour"].get("resets_at")
         resets_at_1w = real_usage["seven_day"].get("resets_at")
         usage_source = "claude_ai_api"
+    elif latest_unified_stats and latest_unified_stats["unified_5h_utilization"] is not None:
+        used_pct_5h = round(latest_unified_stats["unified_5h_utilization"] * 100, 1)
+        used_pct_1w = round((latest_unified_stats["unified_7d_utilization"] or 0) * 100, 1)
+        resets_at_5h = latest_unified_stats["unified_5h_reset"].astimezone(KST).isoformat() if latest_unified_stats["unified_5h_reset"] else None
+        resets_at_1w = latest_unified_stats["unified_7d_reset"].astimezone(KST).isoformat() if latest_unified_stats["unified_7d_reset"] else None
+        usage_source = "anthropic_header"
     else:
         used_pct_5h = db_pct_5h
         used_pct_1w = db_pct_1w
@@ -546,7 +564,28 @@ async def get_claude_max_usage() -> Dict[str, Any]:
     db_pct_5h = round(min(tok_5h / plan_limit_5h, 1.0) * 100, 1) if plan_limit_5h else 0
     db_pct_1w = round(min(tok_1w / plan_limit_1w, 1.0) * 100, 1) if plan_limit_1w else 0
 
-    if latest_unified and latest_unified["unified_5h_utilization"] is not None:
+    # 1순위: claude.ai API (실시간), 2순위: anthropic_header, 3순위: DB 추정
+    try:
+        real_usage = await fetch_claude_ai_usage()
+    except Exception as _e:
+        logger.warning("fetch_claude_ai_usage failed: %s", str(_e)[:100])
+        real_usage = None
+
+    if real_usage:
+        u5 = real_usage["five_hour"]["utilization"]
+        u7 = real_usage["seven_day"]["utilization"]
+        used_pct_5h = round(u5 * 100, 1) if u5 <= 1.0 else round(u5, 1)
+        used_pct_1w = round(u7 * 100, 1) if u7 <= 1.0 else round(u7, 1)
+        resets_at_5h_iso = real_usage["five_hour"].get("resets_at")
+        resets_at_1w_iso = real_usage["seven_day"].get("resets_at")
+        try:
+            r5 = datetime.fromisoformat(resets_at_5h_iso) if resets_at_5h_iso else now + timedelta(hours=5)
+            r1w = datetime.fromisoformat(resets_at_1w_iso) if resets_at_1w_iso else now + timedelta(days=7)
+        except Exception:
+            r5 = now + timedelta(hours=5)
+            r1w = now + timedelta(days=7)
+        usage_source = "claude_ai_api"
+    elif latest_unified and latest_unified["unified_5h_utilization"] is not None:
         used_pct_5h = round(latest_unified["unified_5h_utilization"] * 100, 1)
         used_pct_1w = round((latest_unified["unified_7d_utilization"] or 0) * 100, 1)
         r5_reset = latest_unified["unified_5h_reset"]
@@ -557,32 +596,13 @@ async def get_claude_max_usage() -> Dict[str, Any]:
         resets_at_1w_iso = r1w.isoformat()
         usage_source = "anthropic_header"
     else:
-        try:
-            real_usage = await fetch_claude_ai_usage()
-        except Exception as _e:
-            logger.warning("fetch_claude_ai_usage failed: %s", str(_e)[:100])
-            real_usage = None
-
-        if real_usage:
-            used_pct_5h = real_usage["five_hour"]["utilization"]
-            used_pct_1w = real_usage["seven_day"]["utilization"]
-            resets_at_5h_iso = real_usage["five_hour"].get("resets_at")
-            resets_at_1w_iso = real_usage["seven_day"].get("resets_at")
-            try:
-                r5 = datetime.fromisoformat(resets_at_5h_iso) if resets_at_5h_iso else now + timedelta(hours=5)
-                r1w = datetime.fromisoformat(resets_at_1w_iso) if resets_at_1w_iso else now + timedelta(days=7)
-            except Exception:
-                r5 = now + timedelta(hours=5)
-                r1w = now + timedelta(days=7)
-            usage_source = "claude_ai_api"
-        else:
-            used_pct_5h = db_pct_5h
-            used_pct_1w = db_pct_1w
-            r5 = now + timedelta(hours=5)
-            r1w = now + timedelta(days=7)
-            resets_at_5h_iso = r5.isoformat()
-            resets_at_1w_iso = r1w.isoformat()
-            usage_source = "db_estimate"
+        used_pct_5h = db_pct_5h
+        used_pct_1w = db_pct_1w
+        r5 = now + timedelta(hours=5)
+        r1w = now + timedelta(days=7)
+        resets_at_5h_iso = r5.isoformat()
+        resets_at_1w_iso = r1w.isoformat()
+        usage_source = "db_estimate"
 
     unified = {}
     if latest_unified:
