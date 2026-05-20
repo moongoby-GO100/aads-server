@@ -900,6 +900,8 @@ async def _apply_deferred_interrupts_to_state(
                     tool_result_payload = _tool_result_event_snapshot(event)
                     state.setdefault("tools_called", []).append(tool_result_payload)
                     yield f"data: {json.dumps(_tool_result_event_snapshot(event, content_limit=300))}\n\n"
+                elif etype == "retry_progress":
+                    yield f"data: {json.dumps({'type': 'retry_progress', 'attempt': event.get('attempt', 0), 'max_attempts': event.get('max_attempts', 0), 'content': event.get('content', '')})}\n\n"
                 elif etype == "yellow_limit":
                     yield f"data: {json.dumps({'type': 'yellow_limit', 'content': event.get('content', ''), 'tool_name': event.get('tool_name', ''), 'consecutive_count': event.get('consecutive_count', 0)})}\n\n"
                 elif etype in ("complete", "max_iterations", "cost_limit"):
@@ -6566,6 +6568,8 @@ async def send_message_stream(
                                 break
                         except Exception:
                             pass
+                    elif etype == "retry_progress":
+                        yield f"data: {json.dumps({'type': 'retry_progress', 'attempt': event.get('attempt', 0), 'max_attempts': event.get('max_attempts', 0), 'content': event.get('content', '')})}\n\n"
                     elif etype == "yellow_limit":
                         yield f"data: {json.dumps({'type': 'yellow_limit', 'content': event.get('content', ''), 'tool_name': event.get('tool_name', ''), 'consecutive_count': event.get('consecutive_count', 0)})}\n\n"
                     elif etype == "done":
@@ -6585,7 +6589,7 @@ async def send_message_stream(
                             if any(k in _err_lower for k in ("529", "overloaded", "overload")):
                                 _backoff = 2 * (2 ** _stream_attempt)  # 2s, 4s
                             elif any(k in _err_lower for k in ("429", "rate", "limit")):
-                                _backoff = 5 * (2 ** _stream_attempt)  # 5s, 10s
+                                _backoff = 3  # CEO: 429는 고정 3초
                             else:  # ConnectionError, timeout, 기타
                                 _backoff = 0.5 * (2 ** _stream_attempt)  # 0.5s, 1s
                             logger.warning(f"stream_retry: session={session_id[:8]} attempt={_stream_attempt+1}/3 error={_err_content[:80]} partial_len={len(full_response)} backoff={_backoff}s")
