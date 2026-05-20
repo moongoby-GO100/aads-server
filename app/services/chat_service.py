@@ -116,13 +116,13 @@ _stale_cleanup_task: _heartbeat_asyncio.Task | None = getattr(
     _sys.modules.get(__name__), "_stale_cleanup_task", None
 ) or None
 # 클라이언트 이탈 후 자동 종료 시간 (초)
-_BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "600"))  # 10분 (도구 실행 중 탭 전환 보호)
+_BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "900"))  # 15분 (도구 실행 중 탭 전환 보호)
 _FIRST_RESPONSE_TIMEOUT_SEC = float(os.getenv("AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC", "180"))
 _FINALIZE_DB_RETRY_DELAYS = (0.5, 1.0, 2.0)
 _COOLDOWN_SECS_DEFAULT = 300
 _RECOVERY_DEDUPE_MODEL_USED = {"recovered", "recovered_from_redis", "stopped", None}
 _RECOVERY_PREFIX_LEN = 50
-_STALE_PLACEHOLDER_TIMEOUT_SEC_DEFAULT = 600
+_STALE_PLACEHOLDER_TIMEOUT_SEC_DEFAULT = 1200
 _STALE_CLEANUP_INTERVAL_SEC_DEFAULT = 300
 _HISTORY_EXCLUDED_INTENTS = (
     "streaming_placeholder",
