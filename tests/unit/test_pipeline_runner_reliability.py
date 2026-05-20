@@ -44,6 +44,50 @@ def test_runner_display_status_classifies_terminal_non_error_states():
     assert action_required["status_group"] == "action_required"
 
 
+def test_extract_target_files_normalizes_server_and_dashboard_paths():
+    from app.api.pipeline_runner import _extract_target_files
+
+    files = _extract_target_files(
+        "파일: app/api/pipeline_runner.py, "
+        "/root/aads/aads-dashboard/src/app/chat/page.tsx "
+        "package.json deploy.sh"
+    )
+
+    assert "server:app/api/pipeline_runner.py" in files
+    assert "dashboard:src/app/chat/page.tsx" in files
+    assert "dashboard:package.json" in files
+    assert "server:deploy.sh" in files
+
+
+@pytest.mark.asyncio
+async def test_find_active_file_conflict_detects_overlapping_instruction_files():
+    from app.api.pipeline_runner import _find_active_file_conflict
+
+    conn = _FakeConn(
+        fetch_result=[
+            {
+                "job_id": "runner-live",
+                "instruction": "파일: app/api/pipeline_runner.py 수정",
+                "status": "running",
+                "phase": "claude_code_work",
+            }
+        ]
+    )
+
+    conflict = await _find_active_file_conflict(
+        conn,
+        project="AADS",
+        target_files={"server:app/api/pipeline_runner.py"},
+    )
+
+    assert conflict == {
+        "job_id": "runner-live",
+        "status": "running",
+        "phase": "claude_code_work",
+        "overlap": ["server:app/api/pipeline_runner.py"],
+    }
+
+
 @pytest.mark.asyncio
 async def test_active_duplicate_lookup_is_scoped_by_project_hash_and_parallel_group():
     from app.api.pipeline_runner import _find_active_duplicate

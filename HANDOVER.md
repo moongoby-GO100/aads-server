@@ -1,5 +1,15 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-20 17:36 KST) - 동시 작업 동일파일 충돌 및 동시 배포 방어
+- 배경: CEO가 AI 동시 작업에서 의존성 문제, 동일 파일 수정 충돌, 동시 배포 시 nginx upstream 경합을 즉시 조치하라고 지시했다.
+- 조치:
+  - `app/api/pipeline_runner.py`: 러너 제출 지시문에서 명시 파일 경로를 추출·정규화하는 `_extract_target_files()`와 활성 작업 충돌 탐지 `_find_active_file_conflict()`를 추가했다. 신규 작업이 활성 작업과 같은 파일을 건드리면 취소하지 않고 `depends_on=<기존 job_id>`를 자동 부여해 선행 작업 완료 후 실행되게 했다. 배치 제출도 같은 배치 내부 및 외부 활성 작업의 동일 파일 충돌을 자동 의존성으로 직렬화한다.
+  - `scripts/pipeline-runner.sh`: 병렬 실행 모드에서 worktree 생성 실패 또는 `/tmp` 여유 공간 5GB 미만이면 main 작업공간 fallback을 금지하고 `worktree_unavailable`/`worktree_disk_low`로 실패 처리한다. 동일 작업공간에 여러 AI가 섞여 수정하는 경로를 차단했다.
+  - `deploy.sh`, `/root/aads/aads-dashboard/deploy.sh`: 백엔드와 대시보드 배포가 공유하는 `/etc/nginx/conf.d/aads-upstream.conf`를 동시에 수정하지 못하도록 `/tmp/aads-nginx-upstream.lock` 공통 `flock`을 추가했다.
+  - `tests/unit/test_pipeline_runner_reliability.py`: 파일 경로 정규화와 활성 동일파일 충돌 탐지 회귀 테스트를 추가했다.
+- 검증: `python3 -m py_compile app/api/pipeline_runner.py` 통과. `python3 -m pytest tests/unit/test_pipeline_runner_reliability.py -q` 결과 9 passed. `bash -n scripts/pipeline-runner.sh`, `bash -n deploy.sh`, `bash -n /root/aads/aads-dashboard/deploy.sh` 통과. `bash scripts/reload-api.sh`로 API hot reload 완료(`재로드=51개`). `https://aads.newtalk.kr/api/v1/health`와 `http://localhost:8100/api/v1/health` 모두 `status=ok`.
+- 배포/주의: 전체 blue-green 배포와 커밋/푸시는 아직 수행하지 않았다. 워크트리에 기존 미커밋 변경이 많으므로 커밋 시 이번 파일만 선별해야 한다.
+
 ## 현재 진행 상태 (2026-05-20 17:11 KST) - 채팅 하단 TODO PM식 제목 생성 기준 개선
 - 배경: CEO가 채팅창 하단 TODO 리스트를 실제 작업 리스트 제목처럼 PM식으로 작성·관리되게 개선하라고 지시했다.
 - 조치:
@@ -1395,3 +1405,12 @@
 - 검증: `pytest tests/unit/test_response_completion_contract.py tests/unit/test_tools_and_pipeline.py tests/unit/test_chat_todo_service.py` 결과 69 passed, 1 warning. 운영 DB `prompt_assets` 기준 `global-report-depth-contract` 1020자, `intent-status-report-output` 763자, 둘 다 enabled=true 확인. `curl http://127.0.0.1:8100/api/v1/health` OK, `nginx -t` 통과.
 - 배포: `bash deploy.sh bluegreen` 완료 후 active API는 `.active_port=8100`, `.active_container=aads-server`다. 실제 `/etc/nginx/conf.d/aads-upstream.conf`도 8100 active로 확인했고, 저장소 `nginx-aads-upstream.conf`도 동일하게 맞췄다.
 - 주의: 워크트리에는 이전 TODO/갤러리/문서 관련 미커밋 변경이 섞여 있어 커밋 시 이번 범위 파일만 선별해야 한다.
+
+## 2026-05-20 17:50 KST - query_db unknown_tool fallback and prompt correction
+
+- 배경: 채팅 응답 말미에 `[도구호출: query_db]`가 출력되고 런타임이 `unknown_tool: query_db`를 반환했다.
+- 원인: 현재 공개 도구 레지스트리의 DB 조회 도구명은 `query_database`인데, 정적 시스템 프롬프트 일부가 legacy `query_db`를 지시했고 `ToolExecutor._dispatch()`에는 `query_db` 별칭이 없었다.
+- 조치: `app/core/prompts/system_prompt_v2.py`의 DB 조회 지시와 도구 선택표를 `query_database`로 정정했다. `app/services/tool_executor.py`에는 legacy `query_db`를 `_query_database`로 연결하는 호환 alias를 추가했다.
+- 검증: `python3 -m py_compile app/core/prompts/system_prompt_v2.py app/services/tool_executor.py` 통과. `pytest -q tests/unit/test_tool_executor_aliases.py tests/test_tool_awareness.py::test_tool_executor_dispatch_registered` 2건 통과. 운영 DB `prompt_assets`에는 `query_db` 문구가 없음을 확인했다.
+- 배포: `bash deploy.sh code`가 blue-green으로 전환되어 active API가 `aads-server-green`/`8102`로 변경됐다. `https://aads.newtalk.kr/api/v1/health` OK. active 컨테이너 내부에서 `query_db` alias와 `query_database` 프롬프트 문구 반영을 확인했다.
+- 주의: 대시보드 배포가 먼저 nginx 공통 락을 잡고 있어 API 배포가 대기했다. 이후 락 해제 후 순차 배포되어 공통 락 방어가 실제로 작동했다.

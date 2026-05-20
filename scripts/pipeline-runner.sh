@@ -703,10 +703,34 @@ run_job() {
                 use_worktree=true
                 log "  WORKTREE: $worktree_dir 생성 (avail=${avail_gb}GB)"
             else
-                log "  WORKTREE_FAIL: fallback to main workdir"
+                log "  WORKTREE_FAIL: isolated worktree required; refusing main workdir fallback"
+                db_update "UPDATE pipeline_jobs SET status='error', phase='worktree_unavailable',
+                           error_detail='worktree_unavailable',
+                           review_feedback=COALESCE(review_feedback,'') || E'\n[Runner Guard] 병렬 실행 모드에서 worktree 생성 실패 — main 작업공간 fallback 차단',
+                           updated_at=NOW() WHERE job_id='${job_id}';"
+                post_to_chat "$session_id" "❌ [Pipeline Runner] worktree 생성 실패로 작업 차단: $job_id — main 작업공간 fallback을 금지했습니다."
+                _release_work_lock "$project" "$job_id"
+                _cleanup_artifacts "$job_id"
+                promote_next_queued "$project"
+                _current_job_id=""
+                _current_session_id=""
+                rm -f /tmp/.pipeline_current_job
+                return 1
             fi
         else
-            log "  WORKTREE_SKIP: 디스크 부족 ${avail_gb}GB < 5GB"
+            log "  WORKTREE_SKIP: 디스크 부족 ${avail_gb}GB < 5GB; refusing main workdir fallback"
+            db_update "UPDATE pipeline_jobs SET status='error', phase='worktree_disk_low',
+                       error_detail='worktree_disk_low',
+                       review_feedback=COALESCE(review_feedback,'') || E'\n[Runner Guard] 병렬 실행 모드에서 worktree 디스크 여유 부족 — main 작업공간 fallback 차단',
+                       updated_at=NOW() WHERE job_id='${job_id}';"
+            post_to_chat "$session_id" "❌ [Pipeline Runner] worktree 디스크 부족으로 작업 차단: $job_id (${avail_gb}GB < 5GB)"
+            _release_work_lock "$project" "$job_id"
+            _cleanup_artifacts "$job_id"
+            promote_next_queued "$project"
+            _current_job_id=""
+            _current_session_id=""
+            rm -f /tmp/.pipeline_current_job
+            return 1
         fi
     fi
 

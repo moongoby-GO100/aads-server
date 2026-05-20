@@ -65,6 +65,22 @@ _DISPLAY_STATUS_GROUPS = {
     "tool_timeout": "action_required",
 }
 _DEFAULT_LOCAL_PID_PROJECTS = {"AADS"}
+_TARGET_FILE_RE = re.compile(
+    r"(?<![A-Za-z0-9@])"
+    r"(?:/root/aads/(?:aads-server|aads-dashboard)/)?"
+    r"[A-Za-z0-9_.@-]+(?:/[A-Za-z0-9_.@-]+)*"
+    r"\.(?:py|tsx|ts|jsx|js|sh|sql|ya?ml|json|md|html|css|toml|ini|conf)"
+    r"(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+_SPECIAL_TARGET_RE = re.compile(
+    r"(?<![A-Za-z0-9@])"
+    r"(?:/root/aads/(?:aads-server|aads-dashboard)/)?"
+    r"(?:Dockerfile|docker-compose(?:\.[A-Za-z0-9_-]+)?\.ya?ml|package-lock\.json|package\.json|deploy\.sh)"
+    r"(?![A-Za-z0-9_.-])",
+    re.IGNORECASE,
+)
+_PATH_TRAILING_CHARS = ".,;:)]}'\"`"
 
 
 def _max_concurrent_per_project() -> int:
@@ -81,6 +97,76 @@ def _record_get(row, key: str, default=None):
         return row[key]
     except (KeyError, IndexError, TypeError):
         return default
+
+
+def _normalize_target_file_path(path: str) -> str:
+    """Normalize file references so jobs touching the same file serialize."""
+    value = (path or "").strip().strip(_PATH_TRAILING_CHARS)
+    value = value.replace("\\", "/")
+    if not value:
+        return ""
+    if value.startswith("/root/aads/aads-server/"):
+        return f"server:{value.removeprefix('/root/aads/aads-server/')}"
+    if value.startswith("/root/aads/aads-dashboard/"):
+        return f"dashboard:{value.removeprefix('/root/aads/aads-dashboard/')}"
+    value = re.sub(r"^\./+", "", value)
+    if value.startswith("aads-server/"):
+        return f"server:{value.removeprefix('aads-server/')}"
+    if value.startswith("aads-dashboard/"):
+        return f"dashboard:{value.removeprefix('aads-dashboard/')}"
+    if value.startswith(("src/", "public/")) or value in {"package.json", "package-lock.json"}:
+        return f"dashboard:{value}"
+    return f"server:{value}"
+
+
+def _extract_target_files(instruction: str) -> set[str]:
+    """Extract explicit target files from a runner instruction."""
+    files: set[str] = set()
+    matches = list(_TARGET_FILE_RE.finditer(instruction or "")) + list(_SPECIAL_TARGET_RE.finditer(instruction or ""))
+    for match in matches:
+        normalized = _normalize_target_file_path(match.group(0))
+        if normalized:
+            files.add(normalized)
+    return files
+
+
+async def _find_active_file_conflict(
+    conn,
+    *,
+    project: str,
+    target_files: set[str],
+    ignore_job_ids: set[str] | None = None,
+) -> dict | None:
+    """Return an active job touching one of target_files, if instruction paths overlap."""
+    if not target_files:
+        return None
+    ignored = ignore_job_ids or set()
+    rows = await conn.fetch(
+        """
+        SELECT job_id, instruction, status, phase
+        FROM pipeline_jobs
+        WHERE project = $1
+          AND status = ANY($2::text[])
+        ORDER BY created_at DESC
+        LIMIT 100
+        """,
+        project,
+        list(_ACTIVE_PIPELINE_STATUSES),
+    )
+    for row in rows:
+        existing_job_id = row["job_id"]
+        if existing_job_id in ignored:
+            continue
+        existing_files = _extract_target_files(row["instruction"] or "")
+        overlap = target_files & existing_files
+        if overlap:
+            return {
+                "job_id": existing_job_id,
+                "status": row["status"],
+                "phase": row["phase"],
+                "overlap": sorted(overlap),
+            }
+    return None
 
 
 def _local_pid_projects() -> set[str]:
@@ -568,6 +654,9 @@ async def submit_job(req: JobSubmitRequest):
     job_id = f"runner-{uuid.uuid4().hex[:8]}"
     session_id = req.session_id  # 필수 필드 — validator에서 이미 검증됨
     instruction_hash = _compute_instruction_hash(req.project, req.instruction)
+    target_files = _extract_target_files(req.instruction)
+    auto_depends_on = ""
+    auto_dependency_reason = ""
 
     try:
         async with pool.acquire() as conn:
@@ -670,21 +759,49 @@ async def submit_job(req: JobSubmitRequest):
                             status="blocked_dependency",
                             message=detail,
                         )
+                else:
+                    conflict = await _find_active_file_conflict(
+                        conn,
+                        project=req.project,
+                        target_files=target_files,
+                    )
+                    if conflict:
+                        auto_depends_on = conflict["job_id"]
+                        overlap = ", ".join(conflict["overlap"])
+                        auto_dependency_reason = (
+                            f"[Runner Guard] 동일 파일 충돌 감지: {overlap}; "
+                            f"{auto_depends_on} 완료 후 자동 실행"
+                        )
+                        logger.info(
+                            "pipeline_runner.file_conflict_auto_dependency",
+                            job_id=job_id,
+                            project=req.project,
+                            depends_on=auto_depends_on,
+                            overlap=conflict["overlap"],
+                        )
+                effective_depends_on = req.depends_on or auto_depends_on or None
                 await conn.execute(
                     """
                     INSERT INTO pipeline_jobs
                       (job_id, project, instruction, instruction_hash, chat_session_id,
                        status, phase, max_cycles, model, size,
                        worker_model, model_override_reason, parallel_group, depends_on,
-                       created_at, updated_at)
+                       review_feedback, logs, created_at, updated_at)
                     VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, $7, $8,
                             $9, $10, $11, $12,
+                            $13,
+                            CASE WHEN $13 = '' THEN '[]'::jsonb ELSE jsonb_build_array(jsonb_build_object(
+                              'ts', NOW()::text,
+                              'event', 'file_conflict_auto_dependency',
+                              'depends_on', $12
+                            )) END,
                             NOW(), NOW())
                     """,
                     job_id, req.project, req.instruction, instruction_hash,
                     session_id, req.max_cycles, model, size,
                     worker_model or None, worker_model_reason or None,
-                    req.parallel_group or None, req.depends_on or None,
+                    req.parallel_group or None, effective_depends_on,
+                    auto_dependency_reason,
                 )
                 # P2-2: LISTEN/NOTIFY — 이벤트 드리븐 (asyncpg 소비자용)
                 await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", job_id)
@@ -698,6 +815,8 @@ async def submit_job(req: JobSubmitRequest):
     else:
         logger.info("pipeline_runner.job_submitted", job_id=job_id, project=req.project)
         msg = "작업이 대기열에 추가되었습니다. Runner가 곧 실행합니다."
+    if auto_depends_on:
+        msg += f" 동일 파일 충돌을 감지해 {auto_depends_on} 완료 후 실행되도록 자동 의존성을 부여했습니다."
     if req.worker_model and not req.worker_model_reason:
         msg += " 직접 모델 지정은 사유가 없어 저장하지 않았고, 어드민 러너 모델 설정값을 사용합니다."
 
@@ -1064,12 +1183,15 @@ async def submit_batch(req: BatchSubmitRequest):
         key_to_job_id[item.key] = f"runner-{uuid.uuid4().hex[:8]}"
 
     results = []
+    batch_file_owner: dict[str, str] = {}
     try:
         async with pool.acquire() as conn:
             async with conn.transaction():
                 for item in req.jobs:
                     job_id = key_to_job_id[item.key]
                     depends_on = key_to_job_id.get(item.depends_on_key) if item.depends_on_key else None
+                    item_target_files = _extract_target_files(item.instruction)
+                    auto_dependency_reason = ""
 
                     worker_model, worker_model_reason = _normalize_worker_model_override(
                         item.worker_model,
@@ -1174,28 +1296,65 @@ async def submit_batch(req: BatchSubmitRequest):
                         })
                         continue
 
+                    if not depends_on:
+                        internal_conflicts = sorted(
+                            path for path in item_target_files if path in batch_file_owner
+                        )
+                        if internal_conflicts:
+                            depends_on = batch_file_owner[internal_conflicts[0]]
+                            auto_dependency_reason = (
+                                "[Runner Guard] 배치 내 동일 파일 충돌 감지: "
+                                f"{', '.join(internal_conflicts)}; {depends_on} 완료 후 자동 실행"
+                            )
+                        else:
+                            conflict = await _find_active_file_conflict(
+                                conn,
+                                project=req.project,
+                                target_files=item_target_files,
+                                ignore_job_ids=set(key_to_job_id.values()),
+                            )
+                            if conflict:
+                                depends_on = conflict["job_id"]
+                                auto_dependency_reason = (
+                                    "[Runner Guard] 활성 작업과 동일 파일 충돌 감지: "
+                                    f"{', '.join(conflict['overlap'])}; {depends_on} 완료 후 자동 실행"
+                                )
+
                     await conn.execute(
                         """
                         INSERT INTO pipeline_jobs
                           (job_id, project, instruction, instruction_hash, chat_session_id,
                            status, phase, max_cycles, model, size,
                            worker_model, model_override_reason, parallel_group, depends_on,
-                           created_at, updated_at)
+                           review_feedback, logs, created_at, updated_at)
                         VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, $7, $8,
-                                $9, $10, $11, $12, NOW(), NOW())
+                                $9, $10, $11, $12,
+                                $13,
+                                CASE WHEN $13 = '' THEN '[]'::jsonb ELSE jsonb_build_array(jsonb_build_object(
+                                  'ts', NOW()::text,
+                                  'event', 'file_conflict_auto_dependency',
+                                  'depends_on', $12
+                                )) END,
+                                NOW(), NOW())
                         """,
                         job_id, req.project, item.instruction, instruction_hash,
                         req.session_id, req.max_cycles, model, size,
                         worker_model or None, worker_model_reason or None, pg, depends_on,
+                        auto_dependency_reason,
                     )
                     # P2-2: LISTEN/NOTIFY
                     await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", job_id)
+
+                    for path in item_target_files:
+                        batch_file_owner.setdefault(path, job_id)
 
                     results.append({
                         "key": item.key,
                         "job_id": job_id,
                         "model": model,
                         "depends_on": depends_on,
+                        "auto_dependency": bool(auto_dependency_reason),
+                        "target_files": sorted(item_target_files),
                     })
 
     except HTTPException:

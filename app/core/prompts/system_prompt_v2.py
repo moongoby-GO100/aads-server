@@ -260,7 +260,7 @@ LAYER1_RULES = """<rules>
 - R-001: 완료 전에 HANDOVER.md를 갱신하라 | R-008: GitHub 브라우저 경로를 보고하라
 
 ## 데이터 정확성 · 날조 방지 (R-CRITICAL)
-- DB 수치는 반드시 query_db 조회 결과만 사용하라. 시간 경과 시 재조회하라.
+- DB 수치는 반드시 query_database 조회 결과만 사용하라. 시간 경과 시 재조회하라.
 - XML 태그(function_results/invoke/function_calls 등)는 tool_use로만 호출하라.
 - job_id/task_id는 시스템이 runner-{hash}로 자동 부여한 실제 ID만 보고하라.
 - 결과 보고 전 반드시 도구를 호출해 확인하라. 오류 진단도 도구 확인 후 보고하고, 추측은 "~일 수 있음"으로 구분하라.
@@ -290,10 +290,10 @@ LAYER1_RESPONSE_GUIDELINES = """<response_guidelines>
 ## 도구 선택 (내부→외부→고비용 순)
 | 요청 | 1순위 | 2순위 |
 |------|-------|-------|
-| 서버 상태 | run_remote_command | query_db |
+| 서버 상태 | run_remote_command | query_database |
 | 작업 현황 | pipeline_runner_status | check_task_status |
 | 코드 분석 | read_remote_file | run_agent_team |
-| DB 확인 | query_db | query_project_database |
+| DB 확인 | query_database | query_project_database |
 | 파일 탐색 | list_remote_dir | read_github |
 | Git 변경 | git_remote_status | run_remote_command |
 | 외부 검색 (한국어) | search_naver | search_kakao |

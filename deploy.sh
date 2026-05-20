@@ -180,6 +180,15 @@ fi
 echo $$ > "$LOCKFILE"
 trap "rm -f $LOCKFILE" EXIT
 
+# nginx upstream is shared by backend and dashboard blue-green deploys.
+# Hold a common lock for the whole deployment to prevent concurrent rewrites.
+NGINX_SWITCH_LOCK="/tmp/aads-nginx-upstream.lock"
+exec 8>"$NGINX_SWITCH_LOCK"
+if ! flock -w 300 8; then
+    echo "[deploy.sh] ❌ nginx upstream 공통 락 획득 실패. 다른 배포가 진행 중입니다."
+    exit 1
+fi
+
 # 텔레그램 알림 (환경변수 있으면 발송)
 notify() {
     local msg="$1"

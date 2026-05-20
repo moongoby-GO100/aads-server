@@ -449,6 +449,8 @@ class ToolExecutor:
             "create_design_modification_request": self._create_design_modification_request,
             "read_github_file":       self._read_github_file,
             "query_database":         self._query_database,
+            # Backward-compatible alias for legacy prompts/tool-call traces.
+            "query_db":               self._query_database,
             "query_project_database": self._query_project_database,
             "list_project_databases": self._list_project_databases,
             "read_remote_file":       self._read_remote_file,
