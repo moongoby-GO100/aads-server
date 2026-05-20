@@ -369,3 +369,111 @@ with open(p,'r'
 - Chat-Direct 수정: run_remote_command: cat > /tmp/patch_status_badge.py << 'PYEOF'
 import pathlib
 p = pathlib.Path('/ro
+
+## [2026-05-20 09:03:48 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i '481s/if (_dupExists) return prev.filter((message) => !message.id.startsW
+
+## [2026-05-20 09:25:39 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i '4271,4274d' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-05-20 09:34:59 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/braming/api.ts
+- Chat-Direct 수정: patch: export async function synthesizeSession(→export async function synthesizeSession(
+
+## [2026-05-20 09:35:26 KST] [aads-dashboard] src/app/braming/api.ts
+- Chat-Direct 수정: run_remote_command: sed -i '/^}$/i \
+\
+export async function updateNodeContent(\
+  sessionId: string
+
+## [2026-05-20 09:37:07 KST] [aads-dashboard] src/app/braming/components/NodeDetailPanel.tsx
+- Chat-Direct 수정: run_remote_command: cat > /root/aads/aads-dashboard/src/app/braming/components/NodeDetailPanel.tsx <
+
+## [2026-05-20 09:37:53 KST] [aads-dashboard] src/app/braming/page.tsx
+- Chat-Direct 수정: run_remote_command: cat > /root/aads/aads-dashboard/src/app/braming/page.tsx << 'ENDOFFILE'
+"use cli
+
+## [2026-05-20 09:54:19 KST] [aads-dashboard] src/app/braming/components/BramingNode.tsx
+- Chat-Direct 수정: run_remote_command: cat > /root/aads/aads-dashboard/src/app/braming/components/BramingNode.tsx << 'E
+
+## [2026-05-20 09:54:48 KST] [aads-dashboard] src/app/braming/components/BramingCanvas.tsx
+- Chat-Direct 수정: run_remote_command: cat > /root/aads/aads-dashboard/src/app/braming/components/BramingCanvas.tsx << 
+
+## [2026-05-20 09:54:50 KST] [aads-dashboard] src/app/braming/components/BramingCanvas.tsx
+- Chat-Direct 수정: run_remote_command: docker exec aads-server bash -c "bash -n /app/deploy.sh && echo 'deploy.sh OK'"
+
+## [2026-05-20 10:35:36 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:   const lastKnownMessageRevisionRef = us→  const lastKnownMessageRevisionRef = us
+
+## [2026-05-20 10:36:10 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: find /usr/local/lib -name "*.js" -path "*claude*" 2>/dev/null | xargs grep -l "u
+
+## [2026-05-20 10:36:11 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: docker exec aads-dashboard-green find /app/.next/static/chunks/app/braming/ -nam
+
+## [2026-05-20 10:36:12 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i '2185a\
+\
+  // 탭 복귀 시 DB에서 메시지 재조회 — 백그라운드 저장된 응답을 화면에 반영\
+  useEffect(()
+
+## [2026-05-20 10:57:18 KST] [aads-dashboard] src/components/chat/UsageBar.tsx
+- Chat-Direct 수정: run_remote_command: docker exec aads-dashboard-green grep -o "prevNodesRef\|펼치기\|접기\|collapsed" /app
+
+## [2026-05-20 10:57:22 KST] [aads-dashboard] src/components/chat/UsageBar.tsx
+- Chat-Direct 수정: run_remote_command: cat > /root/aads/aads-dashboard/src/components/chat/UsageBar.tsx << 'USAGEBAR_EO
+
+## [2026-05-20 10:57:39 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i '16a import UsageBar from "@/components/chat/UsageBar";' /root/aads/aads-
+
+## [2026-05-20 11:09:56 KST] [aads-dashboard] ../aads-dashboard/src/app/braming/components/NodeDetailPanel.tsx
+- Chat-Direct 수정: patch:   }, [node?.id]);→  }, [node?.id, node?.label, node?.conte
+
+## [2026-05-20 11:09:57 KST] [aads-dashboard] ../aads-dashboard/src/app/braming/page.tsx
+- Chat-Direct 수정: patch: import { useState, useCallback } from "r→import { useState, useCallback, useRef }
+
+## [2026-05-20 11:25:22 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:             const sorted = [...messages]→            const sorted = [...messages]
+
+## [2026-05-20 11:25:59 KST] [aads-dashboard] src/app/chat/page.tsx.bak_aads_0520
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-dashboard/src/app/chat/page.tsx /root/aads/aads-dashboard/src
+
+## [2026-05-20 11:27:20 KST] [aads-dashboard] ../aads-dashboard/src/components/chat/UsageBar.tsx
+- Chat-Direct 수정: write: ../aads-dashboard/src/components/chat/UsageBar.tsx
+
+## [2026-05-20 11:59:14 KST] [aads-dashboard] src/hooks/useChatSSE.ts
+- Chat-Direct 수정: run_remote_command: sed -i '426a\\n                } else if (chunk.type === "retry_progress") {\n  
+
+## [2026-05-20 12:51:02 KST] [aads-dashboard] src/app/docs/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/fix_docs_html_render.py
+
+## [2026-05-20 12:59:42 KST] [aads-dashboard] src/app/docs/page.tsx.bak_format
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/patch_docs_format_filter.py
+
+## [2026-05-20 12:59:43 KST] [aads-dashboard] src/app/docs/page.tsx.bak_format
+- Chat-Direct 수정: run_remote_command: curl -s "http://localhost:8100/api/v1/project-docs/scan?force=true" | python3 -c
+
+## [2026-05-20 13:21:17 KST] [aads-dashboard] ../aads-dashboard/src/components/chat/UsageBar.tsx
+- Chat-Direct 수정: patch:   useEffect(() => {
+    fetchUsage();
+  →  useEffect(() => {
+    fetchUsage();
+  
+
+## [2026-05-20 13:21:36 KST] [aads-dashboard] src/components/chat/UsageBar.tsx
+- Chat-Direct 수정: run_remote_command: sed -i 's|const iv = setInterval(fetchUsage, 60_000);|const iv = setInterval(fet
+
+## [2026-05-20 13:30:10 KST] [aads-dashboard] src/app/chat/page.tsx.bak_opt
+- Chat-Direct 수정: run_remote_command: docker ps -a --filter "name=aads-dashboard" --format "{{.ID}} {{.Names}} {{.Stat
+
+## [2026-05-20 13:30:15 KST] [aads-dashboard] src/app/chat/page.tsx.bak_opt
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/patch_optimistic_ui.py
+
+## [2026-05-20 13:37:53 KST] [aads-dashboard] ../aads-dashboard/src/components/chat/UsageBar.tsx
+- Chat-Direct 수정: patch:   useEffect(() => {
+    fetchUsage();
+  →  useEffect(() => {
+    fetchUsage();
+  
+
+## [2026-05-20 13:44:52 KST] [aads-dashboard] src/app/docs/page.tsx.bak_1779252287
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-dashboard/src/app/docs/page.tsx /root/aads/aads-dashboard/src

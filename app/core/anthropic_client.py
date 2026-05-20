@@ -34,15 +34,14 @@ _CLAUDE_RETRY_MAX_DELAY_SEC = 30.0
 _CLAUDE_RETRY_JITTER_SEC = 1.5
 _CLAUDE_MAX_RETRIES = 60
 _CLAUDE_RETRY_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504, 529}
-_CLAUDE_429_MAX_RETRIES = 5
+_CLAUDE_429_MAX_RETRIES = 30
 
 
 def _retry_delay(attempt: int, status_code: int | None = None) -> float:
-    """Exponential backoff with jitter. 429 gets longer initial wait."""
+    """429: 고정 3초 (CEO 지시). 그 외: exponential backoff with jitter."""
     if status_code == 429:
-        base = max(_CLAUDE_RETRY_BASE_SEC * 2, 4.0)
-    else:
-        base = _CLAUDE_RETRY_BASE_SEC
+        return 3.0
+    base = _CLAUDE_RETRY_BASE_SEC
     delay = min(base * (2 ** min(attempt, 6)), _CLAUDE_RETRY_MAX_DELAY_SEC)
     return delay + random.uniform(0, _CLAUDE_RETRY_JITTER_SEC)
 

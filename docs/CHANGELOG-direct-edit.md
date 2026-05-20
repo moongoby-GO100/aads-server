@@ -1418,3 +1418,475 @@ import re
 - Chat-Direct 수정: patch:     _SAMEGRADE_FALLBACK = {
         "cla→    _SAMEGRADE_FALLBACK = {
         "cla
+
+## [2026-05-20 08:36:44 KST] [aads-server] app/services/pipeline_runner_service.py
+- Chat-Direct 수정: run_remote_command: docker stop aads-dashboard 2>/dev/null; docker rm aads-dashboard 2>/dev/null; cd
+
+## [2026-05-20 08:36:45 KST] [aads-server] scripts/pipeline-runner.sh
+- Chat-Direct 수정: run_remote_command: docker stop aads-dashboard 2>/dev/null; docker rm aads-dashboard 2>/dev/null; cd
+
+## [2026-05-20 08:37:18 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "
+import shutil
+path = '/app/app/services/mod
+
+## [2026-05-20 08:37:25 KST] [aads-server] app/services/model_selector.py.bak2
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "
+import shutil
+path = '/app/app/services/mod
+
+## [2026-05-20 08:38:07 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "
+path = '/app/app/services/model_selector.py
+
+## [2026-05-20 09:34:12 KST] [aads-server] app/services/braming_service.py
+- Chat-Direct 수정: patch: async def save_node_ceo_opinion(→async def update_node_content(
+    sessi
+
+## [2026-05-20 09:34:26 KST] [aads-server] app/api/braming.py
+- Chat-Direct 수정: patch: from app.services.braming_service import→from app.services.braming_service import
+
+## [2026-05-20 09:34:39 KST] [aads-server] app/api/braming.py
+- Chat-Direct 수정: patch: class NodePickRequest(BaseModel):
+    pi→class NodeContentUpdateRequest(BaseModel
+
+## [2026-05-20 09:34:45 KST] [aads-server] app/api/braming.py
+- Chat-Direct 수정: patch: @router.put("/sessions/{session_id}/node→@router.put("/sessions/{session_id}/node
+
+## [2026-05-20 09:53:43 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                     await _retry_backgro→                    await _retry_backgro
+
+## [2026-05-20 09:53:52 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch:                 if retryable and retry_c→                if status_code == 429:
+ 
+
+## [2026-05-20 09:54:00 KST] [aads-server] deploy.sh
+- Chat-Direct 수정: patch:         # ③ upstream 전환 (aads-upstream.c→        # P1: 전환 전 현재 슬롯 활성 스트림 drain 대기
+
+## [2026-05-20 09:57:18 KST] [aads-server] deploy.sh
+- Chat-Direct 수정: run_remote_command: sed -i '625a\
+\        # P1: 전환 전 현재 슬롯 활성 스트림 drain 대기 (최대 60초)\
+\        ACTIV
+
+## [2026-05-20 10:01:27 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                     await _retry_backgro→                    await _retry_backgro
+
+## [2026-05-20 10:01:28 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch:                 if retryable and retry_c→                if status_code == 429:
+ 
+
+## [2026-05-20 10:01:30 KST] [aads-server] deploy.sh
+- Chat-Direct 수정: patch:         # ③ upstream 전환 (aads-upstream.c→        # P1: 전환 전 현재 슬롯 활성 스트림 drain 대기
+
+## [2026-05-20 10:03:37 KST] [aads-server] deploy.sh
+- Chat-Direct 수정: run_remote_command: sed -i '625a\
+\        # P1: 전환 전 현재 슬롯 활성 스트림 drain 대기 (최대 60초)\
+\        ACTIV
+
+## [2026-05-20 10:09:18 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch: _CLAUDE_RETRY_STATUS_CODES = {408, 409, →_CLAUDE_RETRY_STATUS_CODES = {408, 409, 
+
+## [2026-05-20 10:09:28 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: run_remote_command: docker builder prune -f --filter "until=1h"
+
+## [2026-05-20 10:09:32 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch:     for key in keys_to_try:
+        last→    for key in keys_to_try:
+        last
+
+## [2026-05-20 10:09:50 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch:                 if status_code == 429:
+ →                if status_code == 429:
+ 
+
+## [2026-05-20 10:10:04 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch:     for key in keys_to_try:
+        for →    for key in keys_to_try:
+        _429
+
+## [2026-05-20 10:10:29 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch:                 if retryable and retry_c→                if status_code == 429:
+ 
+
+## [2026-05-20 10:16:02 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch: _CLAUDE_RETRY_STATUS_CODES = {408, 409, →_CLAUDE_RETRY_STATUS_CODES = {408, 409, 
+
+## [2026-05-20 10:16:09 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch:     for key in keys_to_try:
+        last→    for key in keys_to_try:
+        last
+
+## [2026-05-20 10:16:16 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch:                 if status_code == 429:
+ →                if status_code == 429:
+ 
+
+## [2026-05-20 10:16:23 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch:     for key in keys_to_try:
+        for →    for key in keys_to_try:
+        _429
+
+## [2026-05-20 10:16:31 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch:                 if retryable and retry_c→                if status_code == 429:
+ 
+
+## [2026-05-20 10:20:29 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch: _CLAUDE_429_MAX_RETRIES = 5
+_CLAUDE_429_→_CLAUDE_429_MAX_RETRIES = 5
+
+## [2026-05-20 10:20:37 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: run_remote_command: ls -la /root/aads/aads-dashboard/src
+
+## [2026-05-20 10:21:53 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch: _CLAUDE_429_MAX_RETRIES = 5
+_CLAUDE_429_→_CLAUDE_429_MAX_RETRIES = 5
+
+## [2026-05-20 10:33:37 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch: _BG_AUTO_CANCEL_SEC = int(os.getenv("BG_→_BG_AUTO_CANCEL_SEC = int(os.getenv("BG_
+
+## [2026-05-20 10:33:38 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch: _STALE_PLACEHOLDER_TIMEOUT_SEC_DEFAULT =→_STALE_PLACEHOLDER_TIMEOUT_SEC_DEFAULT =
+
+## [2026-05-20 10:43:58 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch: async def should_switch_account(current_→async def get_claude_max_usage() -> Dict
+
+## [2026-05-20 10:44:05 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-dashboard grep -r "handleTabFocusRefetch\|tabFocusRefetch\|탭 복귀
+
+## [2026-05-20 10:44:08 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server strings /usr/local/lib/python3.12/site-packages/claude_a
+
+## [2026-05-20 10:44:19 KST] [aads-server] app/api/ops.py
+- Chat-Direct 수정: patch: # ─── 도구 오류율 통계 API (AADS-206) ─────────→# ─── Claude Max 사용량 API ───────────────
+
+## [2026-05-20 10:44:23 KST] [aads-server] app/api/ops.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-dashboard cat /app/.next/BUILD_ID
+
+## [2026-05-20 10:44:38 KST] [aads-server] app/api/ops.py
+- Chat-Direct 수정: run_remote_command: nohup bash /root/aads/aads-dashboard/deploy.sh > /tmp/dashboard-deploy-v4.log 2>
+
+## [2026-05-20 10:51:48 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:     token_labels = get_token_labels()
+
+ →    token_labels = get_token_labels()
+
+ 
+
+## [2026-05-20 11:12:19 KST] [aads-server] scripts/fix_braming_bubble_edit.py
+- Chat-Direct 수정: write: scripts/fix_braming_bubble_edit.py
+
+## [2026-05-20 11:12:21 KST] [aads-server] scripts/fix_braming_bubble_edit.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server sed -n '1385,1410p' /app/app/main.py
+
+## [2026-05-20 11:13:28 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:     "/api/v1/image/gallery",  # AI 모델 이미→    "/api/v1/image/gallery",  # AI 모델 이미
+
+## [2026-05-20 11:13:32 KST] [aads-server] app/main.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "
+import asyncio, asyncpg, os
+async def main(
+
+## [2026-05-20 11:14:50 KST] [aads-server] scripts/deploy_dashboard.py
+- Chat-Direct 수정: write: scripts/deploy_dashboard.py
+
+## [2026-05-20 11:16:08 KST] [aads-server] scripts/deploy_dashboard_bg.py
+- Chat-Direct 수정: write: scripts/deploy_dashboard_bg.py
+
+## [2026-05-20 11:23:59 KST] [aads-server] docker-compose.yml
+- Chat-Direct 수정: patch:       - CLAUDE_RELAY_URL=${CLAUDE_RELAY_→      - CLAUDE_RELAY_URL=${CLAUDE_RELAY_
+
+## [2026-05-20 11:25:44 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:     if tokens_remaining is not None and →    if tokens_remaining is not None and 
+
+## [2026-05-20 11:26:07 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:     # Claude Max utilization 계산
+    impo→    # Claude Max utilization — 실제 API 우선
+
+## [2026-05-20 11:26:36 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:     plan_limit_5h = int(os.getenv("CLAUD→    plan_limit_5h = int(os.getenv("CLAUD
+
+## [2026-05-20 11:28:13 KST] [aads-server] scripts/tmp_write_usage_bar.py
+- Chat-Direct 수정: write: scripts/tmp_write_usage_bar.py
+
+## [2026-05-20 11:32:35 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:     session_key = os.getenv("CLAUDE_SESS→    session_key = os.getenv("CLAUDE_SESS
+
+## [2026-05-20 11:33:21 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:             env = dotenv_values("/root/a→            for p in ("/app/.env", "/roo
+
+## [2026-05-20 11:34:01 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server bash /app/scripts/reload-api.sh
+
+## [2026-05-20 11:37:20 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:         if resp.status_code != 200:
+    →        if resp.status_code != 200:
+    
+
+## [2026-05-20 11:37:26 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:         logger.warning("claude_ai_usage_→        logger.warning("claude_ai_usage_
+
+## [2026-05-20 11:38:18 KST] [aads-server] docs/handover-notes/2026-05-20_chat_bubble_disappear_hotfix.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "from dotenv import dotenv_values; e=dotenv_v
+
+## [2026-05-20 11:39:45 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:                 headers={"accept": "appl→                headers={
+              
+
+## [2026-05-20 11:45:06 KST] [aads-server] app/api/ops.py
+- Chat-Direct 수정: patch:     from app.services.oauth_usage_tracke→    from app.services.oauth_usage_tracke
+
+## [2026-05-20 11:47:12 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:     real_usage = await fetch_claude_ai_u→    try:
+        real_usage = await fetc
+
+## [2026-05-20 11:47:27 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:     real_usage = await fetch_claude_ai_u→    try:
+        real_usage = await fetc
+
+## [2026-05-20 11:48:14 KST] [aads-server] app/api/ops.py
+- Chat-Direct 수정: patch:     from app.services.oauth_usage_tracke→    from app.services.oauth_usage_tracke
+
+## [2026-05-20 11:52:43 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:     session_key = os.getenv("CLAUDE_SESS→    session_key = os.getenv("CLAUDE_SESS
+
+## [2026-05-20 11:54:15 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:     session_key = os.getenv("CLAUDE_SESS→    session_key = os.getenv("CLAUDE_SESS
+
+## [2026-05-20 11:54:24 KST] [aads-server] app/api/ops.py
+- Chat-Direct 수정: patch:     from app.services.oauth_usage_tracke→    from app.services.oauth_usage_tracke
+
+## [2026-05-20 11:55:37 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:             if _is_retryable:
+          →            if _is_retryable:
+          
+
+## [2026-05-20 11:55:47 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:     "session_id",
+    "error_code",
+    →    "session_id",
+    "error_code",
+    
+
+## [2026-05-20 11:55:50 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: patch:         "claude-opus": ["deepseek-v4-pro→        "claude-opus": ["gpt-5.5", "gemi
+
+## [2026-05-20 11:55:56 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:     return {
+        "rl_requests_limit"→    def _float(key: str) -> Optional[flo
+
+## [2026-05-20 11:55:58 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:         entry["session_id"],
+        ent→        entry["session_id"],
+        ent
+
+## [2026-05-20 11:56:01 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: patch:         elif backend == "codex_cli":
+   →        elif backend == "codex_cli":
+   
+
+## [2026-05-20 11:56:48 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:     try:
+        real_usage = await fetc→    if latest_unified and latest_unified
+
+## [2026-05-20 11:57:21 KST] [aads-server] docker-compose.yml
+- Chat-Direct 수정: patch:       - CLAUDE_RELAY_URL=${CLAUDE_RELAY_→      - CLAUDE_RELAY_URL=${CLAUDE_RELAY_
+
+## [2026-05-20 12:00:00 KST] [aads-server] docker-compose.yml
+- Chat-Direct 수정: run_remote_command: python3 -c "
+p='/root/aads/aads-server/docker-compose.yml'
+with open(p) as f: c 
+
+## [2026-05-20 12:03:48 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:             ORDER BY cnt DESC
+        ""→            ORDER BY cnt DESC
+        ""
+
+## [2026-05-20 12:03:51 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: run_remote_command: ps aux | grep "docker.*build.*dashboard" | grep -v grep | wc -l
+
+## [2026-05-20 12:03:56 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:     try:
+        real_usage = await fetc→    if latest_unified_stats and latest_u
+
+## [2026-05-20 12:40:17 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: patch: _RELAY_RETRY_INTERVAL_SECONDS = float(os→_RELAY_RETRY_INTERVAL_SECONDS = float(os
+
+## [2026-05-20 12:40:25 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch: _CLAUDE_429_MAX_RETRIES = 5
+
+
+def _retry→_CLAUDE_429_MAX_RETRIES = 30
+
+
+def _retr
+
+## [2026-05-20 12:40:41 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: patch:         yield {
+            "type": "del→        yield {
+            "type": "ret
+
+## [2026-05-20 12:41:01 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: patch:         yield {
+            "type": "del→        yield {
+            "type": "ret
+
+## [2026-05-20 12:41:17 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: patch:         # 재시도 로직: 일시적 에러(400/429/529/503→        # 재시도 로직: 429는 3초×30회, 그 외 일시적 에
+
+## [2026-05-20 12:41:40 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: patch:                 if _retry_attempt <= _MA→                if _retry_attempt <= _MA
+
+## [2026-05-20 12:41:54 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                             elif any(k i→                            elif any(k i
+
+## [2026-05-20 12:42:56 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                     elif etype == "yello→                    elif etype == "retry
+
+## [2026-05-20 12:43:07 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 elif etype == "yellow_li→                elif etype == "retry_pro
+
+## [2026-05-20 12:50:46 KST] [aads-server] scripts/fix_docs_html_render.py
+- Chat-Direct 수정: write: scripts/fix_docs_html_render.py
+
+## [2026-05-20 12:50:51 KST] [aads-server] scripts/fix_docs_html_render.py
+- Chat-Direct 수정: run_remote_command: grep -n "messages/send\|async def send_message\|async def produce_assistant\|mem
+
+## [2026-05-20 12:51:33 KST] [aads-server] scripts/deploy_dashboard_bg2.py
+- Chat-Direct 수정: write: scripts/deploy_dashboard_bg2.py
+
+## [2026-05-20 12:51:40 KST] [aads-server] scripts/deploy_dashboard_bg2.py
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/deploy_dashboard_bg.py
+
+## [2026-05-20 12:57:53 KST] [aads-server] app/api/project_docs.py
+- Chat-Direct 수정: patch: EXTENSIONS = {".md", ".txt", ".html", ".→EXTENSIONS = {
+    ".md", ".txt", ".html
+
+## [2026-05-20 12:58:08 KST] [aads-server] app/api/project_docs.py
+- Chat-Direct 수정: patch: async def _scan_project(project: str, co→def _detect_format(name: str) -> str:
+  
+
+## [2026-05-20 12:58:25 KST] [aads-server] app/api/project_docs.py
+- Chat-Direct 수정: patch:         results.append({
+            "na→        results.append({
+            "na
+
+## [2026-05-20 12:58:36 KST] [aads-server] app/api/project_docs.py
+- Chat-Direct 수정: patch:         results.append({
+            "na→        results.append({
+            "na
+
+## [2026-05-20 12:59:27 KST] [aads-server] scripts/patch_docs_format_filter.py
+- Chat-Direct 수정: write: scripts/patch_docs_format_filter.py
+
+## [2026-05-20 13:01:33 KST] [aads-server] scripts/fix_docs_unicode.py
+- Chat-Direct 수정: write: scripts/fix_docs_unicode.py
+
+## [2026-05-20 13:01:41 KST] [aads-server] scripts/fix_docs_unicode.py
+- Chat-Direct 수정: run_remote_command: grep -rn "organizations.*usage\|/api/oauth/usage" app/
+
+## [2026-05-20 13:03:27 KST] [aads-server] ../docker-compose.yml
+- Chat-Direct 수정: patch:       - /root/aads/aads-server/docs:/app→      - /root/aads/aads-server/docs:/app
+
+## [2026-05-20 13:03:28 KST] [aads-server] app/api/project_docs.py
+- Chat-Direct 수정: patch: EXTENSIONS = {".md", ".txt", ".html", ".→EXTENSIONS = {".md", ".txt", ".html", ".
+
+## [2026-05-20 13:04:05 KST] [aads-server] scripts/deploy_dashboard_bg.py
+- Chat-Direct 수정: write: scripts/deploy_dashboard_bg.py
+
+## [2026-05-20 13:05:28 KST] [aads-server] docker-compose.yml
+- Chat-Direct 수정: run_remote_command: sed -i '131a\      - /root/aads/aads-server/reports:/app/reports:ro' /root/aads/
+
+## [2026-05-20 13:05:30 KST] [aads-server] docker-compose.yml
+- Chat-Direct 수정: run_remote_command: grep -n "3101\|3100\|dashboard" /etc/nginx/conf.d/aads.conf 2>/dev/null
+
+## [2026-05-20 13:06:47 KST] [aads-server] app/api/project_docs.py
+- Chat-Direct 수정: patch:             {"base": "/root/aads/aads-co→            {"base": "/root/aads/aads-co
+
+## [2026-05-20 13:07:25 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:     if latest_unified_stats and latest_u→    # 1순위: claude.ai API (실시간), 2순위: ant
+
+## [2026-05-20 13:07:50 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:     if latest_unified and latest_unified→    # 1순위: claude.ai API (실시간), 2순위: ant
+
+## [2026-05-20 13:19:33 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch: # ── Claude.ai 실시간 사용량 API ─────────────→# ── Claude.ai 실시간 사용량 API ─────────────
+
+## [2026-05-20 13:19:47 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:         if not session_key or not org_id→        if not session_key or not org_id
+
+## [2026-05-20 13:20:16 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:     if not session_key or not org_id:
+  →    if not session_key or not org_id:
+  
+
+## [2026-05-20 13:21:01 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:     try:
+        from app.services.chat_→    try:
+        from app.services.chat_
+
+## [2026-05-20 13:24:57 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch: async def get_claude_max_usage() -> Dict→async def get_claude_max_usage() -> Dict
+
+## [2026-05-20 13:29:50 KST] [aads-server] scripts/patch_optimistic_ui.py
+- Chat-Direct 수정: write: scripts/patch_optimistic_ui.py
+
+## [2026-05-20 13:31:17 KST] [aads-server] app/api/project_docs.py
+- Chat-Direct 수정: patch:             {"base": "/app/app/static/do→            {"base": "/app/app/static/do
+
+## [2026-05-20 13:37:20 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch: # ── Claude.ai 실시간 사용량 API ─────────────→# ── Claude.ai 실시간 사용량 API ─────────────
+
+## [2026-05-20 13:37:21 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:         if not session_key or not org_id→        if not session_key or not org_id
+
+## [2026-05-20 13:37:23 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch:     if not session_key or not org_id:
+  →    if not session_key or not org_id:
+  
+
+## [2026-05-20 13:37:45 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:     try:
+        from app.services.chat_→    try:
+        from app.services.chat_
+
+## [2026-05-20 13:39:35 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch: async def claude_max_usage_poller(interv→async def claude_max_usage_poller(interv
+
+## [2026-05-20 13:39:43 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server ls -la /app/docs/ /app/reports/ 2>/dev/null | head -30
+
+## [2026-05-20 13:39:54 KST] [aads-server] app/services/oauth_usage_tracker.py
+- Chat-Direct 수정: patch: async def get_claude_max_usage() -> Dict→async def get_claude_max_usage() -> Dict
+
+## [2026-05-20 13:40:13 KST] [aads-server] app/api/project_docs.py
+- Chat-Direct 수정: patch: EXTENSIONS = {
+    ".md", ".txt", ".html→EXTENSIONS = {
+    # 문서/리포트
+    ".md", "
+
+## [2026-05-20 13:40:21 KST] [aads-server] app/api/project_docs.py
+- Chat-Direct 수정: patch: def _detect_format(name: str) -> str:
+  →def _detect_format(name: str) -> str:
+  
+
+## [2026-05-20 13:40:37 KST] [aads-server] app/api/project_docs.py
+- Chat-Direct 수정: patch: """
+프로젝트별 문서 통합 조회 API.
+3개 서버(68/211/114→"""
+프로젝트별 문서 통합 조회 API.
+3개 서버(68/211/114
+
+## [2026-05-20 13:40:47 KST] [aads-server] app/api/project_docs.py
+- Chat-Direct 수정: patch:     full_path = f"{base_path}/{file_path→    full_path = f"{base_path}/{file_path
+
+## [2026-05-20 13:45:36 KST] [aads-server] scripts/patch_docs_page_v2.py
+- Chat-Direct 수정: write: scripts/patch_docs_page_v2.py
+
+## [2026-05-20 13:51:22 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:         _execution_id_str: Optional[str]→        _execution_id_str: Optional[str]
+
+## [2026-05-20 13:51:42 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 # Redis Stream 병행 저장 — e→                # Redis Stream 병행 저장 — h
+
+## [2026-05-20 13:51:57 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 # 클라이언트 연결 중 3초마다 중간 저장 →                # 클라이언트 연결 중 3초마다 중간 저장 

@@ -5895,3 +5895,732 @@ echo "[→CURRENT_BRANCH=$(git rev-parse --abbrev-
 ## [2026-05-20 08:35:43 KST] [GO100] backend/app/services/system/orchestrator.py
 - Chat-Direct 수정: patch:     async def _get_effective_capital_fro→    async def _get_effective_capital_fro
 - finalize: pending
+
+## [2026-05-20 08:38:01 KST] [GO100] frontend/tsconfig.json
+- Chat-Direct 수정: run_remote_command: cat /tmp/go100-bg-deploy-20260520.log
+- finalize: pending
+
+## [2026-05-20 08:51:06 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:         self._post_market_executed = Fal→        self._post_market_executed = Fal
+- finalize: pending
+
+## [2026-05-20 08:51:26 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:     async def _handle_pre_market(self) -→    async def _handle_pre_market(self) -
+- finalize: pending
+
+## [2026-05-20 08:51:48 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:         except Exception as e:
+         →        except Exception as e:
+         
+- finalize: pending
+
+## [2026-05-20 08:52:07 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:         if now >= self._pre_market_time:→        if now >= self._pre_market_time:
+- finalize: pending
+
+## [2026-05-20 08:56:13 KST] [GO100] frontend/tsconfig.json
+- Chat-Direct 수정: run_remote_command: find /root/kis-autotrade-v4/backend/app/core/ -name "*.py" -type f
+- finalize: pending
+
+## [2026-05-20 08:58:25 KST] [GO100] scripts/emergency_sell_302.py
+- Chat-Direct 수정: write: scripts/emergency_sell_302.py
+- finalize: pending
+
+## [2026-05-20 08:59:19 KST] [GO100] scripts/emergency_sell_302_v2.py
+- Chat-Direct 수정: write: scripts/emergency_sell_302_v2.py
+- finalize: pending
+
+## [2026-05-20 09:00:14 KST] [GO100] snapshot.json
+- Chat-Direct 수정: run_remote_command: grep -R "chat/sessions" backend/app
+- finalize: pending
+
+## [2026-05-20 09:02:00 KST] [GO100] backend/app/services/go100/chat_message_store.py
+- Chat-Direct 수정: patch: from sqlalchemy import text
+from sqlalch→from sqlalchemy import text
+from sqlalch
+- finalize: pending
+
+## [2026-05-20 09:02:25 KST] [GO100] backend/app/services/go100/chat_message_store.py
+- Chat-Direct 수정: patch:         cards = meta.get("cards") if isi→        cards = meta.get("cards") if isi
+- finalize: pending
+
+## [2026-05-20 09:02:40 KST] [GO100] backend/app/routers/go100/chat_router.py
+- Chat-Direct 수정: patch:         stored_messages = await list_mes→        stored_messages = await list_mes
+- finalize: pending
+
+## [2026-05-20 09:02:44 KST] [GO100] backend/app/routers/go100/chat_router.py
+- Chat-Direct 수정: run_remote_command: grep "TRADING_START\|TRADING_END\|NXT_TRADING" /root/kis-autotrade-v4/.env
+- finalize: pending
+
+## [2026-05-20 09:02:56 KST] [GO100] frontend/src/go100/hooks/useChat.ts
+- Chat-Direct 수정: patch:     window.addEventListener('popstate', →    window.addEventListener('popstate', 
+- finalize: pending
+
+## [2026-05-20 09:03:32 KST] [GO100] frontend/src/go100/components/command-center/ChatArea.tsx
+- Chat-Direct 수정: patch:   const modelLabel = MODEL_OVERRIDE_LABE→  const modelLabel = MODEL_OVERRIDE_LABE
+- finalize: pending
+
+## [2026-05-20 09:03:48 KST] [GO100] frontend/src/go100/components/command-center/ChatArea.tsx
+- Chat-Direct 수정: patch:         {renderedMessages}
+      </div>
+→        {hiddenMessageCount > 0 && (
+   
+- finalize: pending
+
+## [2026-05-20 09:04:21 KST] [GO100] frontend/src/go100/components/command-center/chat-area.css
+- Chat-Direct 수정: patch: .chat-scroll {
+  flex: 1;
+  overflow-y: →.chat-scroll {
+  flex: 1;
+  overflow-y: 
+- finalize: pending
+
+## [2026-05-20 09:45:52 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:         bet_size = None
+        if self.→        desk_id = int(getattr(signal, "d
+- finalize: pending
+
+## [2026-05-20 09:46:27 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:         if self.risk_manager and bet_siz→        if self.risk_manager and bet_siz
+- finalize: pending
+
+## [2026-05-20 09:46:43 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:                     user_id=_uid,
+      →                    user_id=_uid,
+      
+- finalize: pending
+
+## [2026-05-20 09:46:56 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:                         desk_id=getattr(→                        desk_id=desk_id,
+- finalize: pending
+
+## [2026-05-20 09:47:43 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:             try:
+                _uid = →            try:
+                order_k
+- finalize: pending
+
+## [2026-05-20 09:48:25 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: 
+## 2026-05-20 09:20 KST - GO100 command→
+## 2026-05-20 09:43 KST - GO100 실시간 주문 
+- finalize: pending
+
+## [2026-05-20 09:48:28 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: sed -n '145,250p' /root/kis-autotrade-v4/backend/app/services/go100/backtest/sig
+- finalize: pending
+
+## [2026-05-20 09:51:02 KST] [GO100] backend/app/services/go100/backtest/signal_evaluator.py
+- Chat-Direct 수정: patch:         logger.warning(f"[SignalEval] 미지→        # ── 상따전략 카드 #119 전용 entry_rule 
+- finalize: pending
+
+## [2026-05-20 09:51:04 KST] [GO100] backend/app/services/go100/backtest/signal_evaluator.py
+- Chat-Direct 수정: run_remote_command: grep -R "detect_regime" -n backend/app/services | head -50
+- finalize: pending
+
+## [2026-05-20 09:52:04 KST] [GO100] scripts/apply_whitepaper_119_v4.py
+- Chat-Direct 수정: run_remote_command: psql -h localhost -U kis_admin -d kisautotrade -c "INSERT INTO go100_strategy_wh
+- finalize: pending
+
+## [2026-05-20 09:52:04 KST] [GO100] backend/app/services/factory.py
+- Chat-Direct 수정: patch:     async def create_reservation(self, s→    async def create_reservation(self, s
+- finalize: pending
+
+## [2026-05-20 09:52:28 KST] [GO100] backend/app/services/strategy/strategies/s_desk3_limit_up_chase.py
+- Chat-Direct 수정: write: backend/app/services/strategy/strategies/s_desk3_limit_up_chase.py
+- finalize: pending
+
+## [2026-05-20 09:52:28 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: - 조치: `backend/app/services/system/orche→- 조치 1: `backend/app/services/system/orc
+- finalize: pending
+
+## [2026-05-20 09:53:23 KST] [GO100] backend/app/services/factory.py
+- Chat-Direct 수정: patch:         engine = StrategyEngine(db_sessi→        engine = StrategyEngine(db_sessi
+- finalize: pending
+
+## [2026-05-20 09:54:10 KST] [GO100] scripts/download_whitepaper_119.sh
+- Chat-Direct 수정: run_remote_command: sleep 8 && journalctl -u go100 --since "2026-05-20 09:51" --no-pager -n 30 --gre
+- finalize: pending
+
+## [2026-05-20 09:55:54 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:         try:
+            if self._calend→        try:
+            if self._calend
+- finalize: pending
+
+## [2026-05-20 09:56:13 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: - 검증: `python3 -m py_compile backend/app→- 조치 3: reload 후 `regime_detector=None`,
+- finalize: pending
+
+## [2026-05-20 09:56:15 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: journalctl -u go100 --since "2026-05-20 09:55:30" --no-pager -n 15 --output=shor
+- finalize: pending
+
+## [2026-05-20 10:23:08 KST] [GO100] frontend/src/go100/hooks/useWebSocket.ts
+- Chat-Direct 수정: patch:     const token = getToken();
+    if (!t→    if (!path) return;
+    const token =
+- finalize: pending
+
+## [2026-05-20 10:23:26 KST] [GO100] frontend/src/go100/hooks/useWebSocket.ts
+- Chat-Direct 수정: run_remote_command: psql -h localhost -U postgres -l 2>/dev/null | head -20
+- finalize: pending
+
+## [2026-05-20 10:23:29 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch: import psycopg2
+import psycopg2.extras
+f→import psycopg2
+import psycopg2.extras
+i
+- finalize: pending
+
+## [2026-05-20 10:23:54 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch: def _has_fresh_snapshot(conn) -> bool:
+ →def _has_fresh_snapshot(conn) -> bool:
+ 
+- finalize: pending
+
+## [2026-05-20 10:24:19 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch: class SearchRequest(BaseModel):
+    cond→class SearchRequest(BaseModel):
+    cond
+- finalize: pending
+
+## [2026-05-20 10:24:47 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch: @router.post("/search/v2")
+async def sea→@router.post("/live-prices")
+async def l
+- finalize: pending
+
+## [2026-05-20 10:25:26 KST] [GO100] backend/app/services/data/kis_ws_collector.py
+- Chat-Direct 수정: patch:                                 stock_co→                                stock_co
+- finalize: pending
+
+## [2026-05-20 10:25:29 KST] [GO100] backend/app/services/data/kis_ws_collector.py
+- Chat-Direct 수정: run_remote_command: find frontend/src/app -path *command-center*
+- finalize: pending
+
+## [2026-05-20 10:25:43 KST] [GO100] backend/app/routers/v4_websocket.py
+- Chat-Direct 수정: patch: from datetime import datetime, timezone
+→from datetime import datetime, timezone
+
+- finalize: pending
+
+## [2026-05-20 10:26:06 KST] [GO100] backend/app/routers/v4_websocket.py
+- Chat-Direct 수정: patch: def _verify_ws_token(token: str) -> dict→def _verify_ws_token(token: str) -> dict
+- finalize: pending
+
+## [2026-05-20 10:26:51 KST] [GO100] backend/app/routers/v4_websocket.py
+- Chat-Direct 수정: patch: @router.websocket("/ws/ticks")
+async def→@router.websocket("/ws/ticks")
+async def
+- finalize: pending
+
+## [2026-05-20 10:27:14 KST] [GO100] frontend/src/go100/api/screenerApi.ts
+- Chat-Direct 수정: patch: export const enrichScreenerStocks = (sto→export const enrichScreenerStocks = (sto
+- finalize: pending
+
+## [2026-05-20 10:27:32 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: patch:   getAdvancedScreenerMeta,
+  getConditio→  getAdvancedScreenerMeta,
+  getConditio
+- finalize: pending
+
+## [2026-05-20 10:27:48 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: patch: import { buildDisplayIndicators } from "→import { buildDisplayIndicators } from "
+- finalize: pending
+
+## [2026-05-20 10:28:08 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: patch: interface ScreenedStock {
+  code: string→interface ScreenedStock {
+  code: string
+- finalize: pending
+
+## [2026-05-20 10:28:36 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: patch: function changeClass(value: number | nul→function changeClass(value: number | nul
+- finalize: pending
+
+## [2026-05-20 10:28:54 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: patch:   const [cardSortBy, setCardSortBy] = us→  const [cardSortBy, setCardSortBy] = us
+- finalize: pending
+
+## [2026-05-20 10:29:10 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: patch: import { Suspense, useEffect, useMemo, u→import { Suspense, useCallback, useEffec
+- finalize: pending
+
+## [2026-05-20 10:29:28 KST] [GO100] frontend/src/go100/components/StrategyCard.tsx
+- Chat-Direct 수정: patch:   BarChart3,
+  CalendarClock,
+  Eye,
+  M→  BarChart3,
+  BookOpen,
+  CalendarClock
+- finalize: pending
+
+## [2026-05-20 10:29:29 KST] [GO100] frontend/src/go100/components/StrategyCard.tsx
+- Chat-Direct 수정: run_remote_command: cat /etc/systemd/system/go100-ws-nxt-am.service
+- finalize: pending
+
+## [2026-05-20 10:29:36 KST] [GO100] frontend/src/app/(protected)/go100/strategies/[id]/page.tsx
+- Chat-Direct 수정: patch:       <StrategyTrustFlow report={readine→      <StrategyTrustFlow report={readine
+- finalize: pending
+
+## [2026-05-20 10:29:46 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: patch:   const totalPages = Math.max(1, Math.ce→  const totalPages = Math.max(1, Math.ce
+- finalize: pending
+
+## [2026-05-20 10:29:56 KST] [GO100] frontend/src/go100/components/StrategyCard.tsx
+- Chat-Direct 수정: patch:           <Button
+            variant="o→          <Button
+            variant="o
+- finalize: pending
+
+## [2026-05-20 10:30:11 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: patch:                 {screenResult.source && →                {screenResult.source && 
+- finalize: pending
+
+## [2026-05-20 10:30:22 KST] [GO100] frontend/src/go100/components/dashboard/StrategyCards.tsx
+- Chat-Direct 수정: patch: "use client";
+
+import type { DashboardSt→"use client";
+
+import Link from "next/li
+- finalize: pending
+
+## [2026-05-20 10:30:32 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: patch:         <div>
+          <h1 className="m→        <div>
+          <h1 className="m
+- finalize: pending
+
+## [2026-05-20 10:30:33 KST] [GO100] frontend/src/go100/components/dashboard/StrategyCards.tsx
+- Chat-Direct 수정: patch:               <div className="mt-1 flex →              <div className="mt-1 flex 
+- finalize: pending
+
+## [2026-05-20 10:31:34 KST] [GO100] frontend/src/app/(protected)/go100/strategies/[id]/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 -c "from pathlib import Path; p=Path('frontend/src/app/(protected)/go100
+- finalize: pending
+
+## [2026-05-20 10:32:37 KST] [GO100] backend/app/services/strategy/strategies/s_desk2_limit_up_chase.py
+- Chat-Direct 수정: write: backend/app/services/strategy/strategies/s_desk2_limit_up_chase.py
+- finalize: pending
+
+## [2026-05-20 10:32:57 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: - 알려진 한계: 고정 종목코드를 조건식/metadata/최근 백테스트에→- 알려진 한계: 고정 종목코드를 조건식/metadata/최근 백테스트에
+- finalize: pending
+
+## [2026-05-20 10:33:03 KST] [GO100] backend/app/services/factory.py
+- Chat-Direct 수정: patch:         try:
+            from backend.ap→        try:
+            from backend.ap
+- finalize: pending
+
+## [2026-05-20 10:33:04 KST] [GO100] backend/app/services/factory.py
+- Chat-Direct 수정: run_remote_command: systemctl status go100-ws-nxt-am
+- finalize: pending
+
+## [2026-05-20 10:35:38 KST] [GO100] backend/app/services/strategy/strategies/s_desk2_limit_up_chase.py
+- Chat-Direct 수정: write: backend/app/services/strategy/strategies/s_desk2_limit_up_chase.py
+- finalize: pending
+
+## [2026-05-20 10:35:42 KST] [GO100] backend/app/services/factory.py
+- Chat-Direct 수정: patch:         try:
+            from backend.ap→        try:
+            from backend.ap
+- finalize: pending
+
+## [2026-05-20 10:36:05 KST] [GO100] scripts/fix_nginx_ws.sh
+- Chat-Direct 수정: write: scripts/fix_nginx_ws.sh
+- finalize: pending
+
+## [2026-05-20 10:44:08 KST] [GO100] frontend/src/go100/hooks/useWebSocket.ts
+- Chat-Direct 수정: patch:     const token = getToken();
+    if (!t→    if (!path) return;
+    const token =
+- finalize: pending
+
+## [2026-05-20 10:44:11 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch: import psycopg2
+import psycopg2.extras
+f→import psycopg2
+import psycopg2.extras
+i
+- finalize: pending
+
+## [2026-05-20 10:44:14 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch: def _has_fresh_snapshot(conn) -> bool:
+ →def _has_fresh_snapshot(conn) -> bool:
+ 
+- finalize: pending
+
+## [2026-05-20 10:44:17 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch: class SearchRequest(BaseModel):
+    cond→class SearchRequest(BaseModel):
+    cond
+- finalize: pending
+
+## [2026-05-20 10:44:22 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch: @router.post("/search/v2")
+async def sea→@router.post("/live-prices")
+async def l
+- finalize: pending
+
+## [2026-05-20 10:44:25 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: run_remote_command: find /root/kis-autotrade-v4/backend -name "*account_sync*" -o -name "*balance_sy
+- finalize: pending
+
+## [2026-05-20 10:44:40 KST] [GO100] backend/app/services/data/kis_ws_collector.py
+- Chat-Direct 수정: patch:                                 stock_co→                                stock_co
+- finalize: pending
+
+## [2026-05-20 10:44:42 KST] [GO100] backend/app/routers/v4_websocket.py
+- Chat-Direct 수정: patch: from datetime import datetime, timezone
+→from datetime import datetime, timezone
+
+- finalize: pending
+
+## [2026-05-20 10:44:45 KST] [GO100] backend/app/routers/v4_websocket.py
+- Chat-Direct 수정: patch: def _verify_ws_token(token: str) -> dict→def _verify_ws_token(token: str) -> dict
+- finalize: pending
+
+## [2026-05-20 10:44:47 KST] [GO100] backend/app/routers/v4_websocket.py
+- Chat-Direct 수정: patch: @router.websocket("/ws/ticks")
+async def→@router.websocket("/ws/ticks")
+async def
+- finalize: pending
+
+## [2026-05-20 10:44:52 KST] [GO100] frontend/src/go100/api/screenerApi.ts
+- Chat-Direct 수정: patch: export const enrichScreenerStocks = (sto→export const enrichScreenerStocks = (sto
+- finalize: pending
+
+## [2026-05-20 10:45:00 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: patch:   getAdvancedScreenerMeta,
+  getConditio→  getAdvancedScreenerMeta,
+  getConditio
+- finalize: pending
+
+## [2026-05-20 10:45:06 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: patch: import { buildDisplayIndicators } from "→import { buildDisplayIndicators } from "
+- finalize: pending
+
+## [2026-05-20 10:45:15 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: patch: interface ScreenedStock {
+  code: string→interface ScreenedStock {
+  code: string
+- finalize: pending
+
+## [2026-05-20 10:45:23 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: patch: function changeClass(value: number | nul→function changeClass(value: number | nul
+- finalize: pending
+
+## [2026-05-20 10:45:30 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: patch:   const [cardSortBy, setCardSortBy] = us→  const [cardSortBy, setCardSortBy] = us
+- finalize: pending
+
+## [2026-05-20 10:45:39 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: patch: import { Suspense, useEffect, useMemo, u→import { Suspense, useCallback, useEffec
+- finalize: pending
+
+## [2026-05-20 10:45:48 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: patch:   const totalPages = Math.max(1, Math.ce→  const totalPages = Math.max(1, Math.ce
+- finalize: pending
+
+## [2026-05-20 10:45:59 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: patch:                 {screenResult.source && →                {screenResult.source && 
+- finalize: pending
+
+## [2026-05-20 10:46:08 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: patch:         <div>
+          <h1 className="m→        <div>
+          <h1 className="m
+- finalize: pending
+
+## [2026-05-20 10:49:21 KST] [GO100] scripts/fix_nginx_ws.sh
+- Chat-Direct 수정: write: scripts/fix_nginx_ws.sh
+- finalize: pending
+
+## [2026-05-20 11:01:51 KST] [GO100] backend/scripts/sync_all_balances.py
+- Chat-Direct 수정: write: backend/scripts/sync_all_balances.py
+- finalize: pending
+
+## [2026-05-20 11:02:03 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:         self._kis_api = getattr(order_ex→        self._kis_api = getattr(order_ex
+- finalize: pending
+
+## [2026-05-20 11:02:29 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:     async def _get_available_cash_cached→    def invalidate_cash_cache(self) -> N
+- finalize: pending
+
+## [2026-05-20 11:02:47 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:     async def _clamp_fund_pool_to_availa→    async def _clamp_fund_pool_to_availa
+- finalize: pending
+
+## [2026-05-20 11:03:23 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:             try:
+                await s→            try:
+                await s
+- finalize: pending
+
+## [2026-05-20 11:03:41 KST] [GO100] backend/app/services/execution/fund_commander.py
+- Chat-Direct 수정: patch:         self._kis_api = kis_api
+        →        self._kis_api = kis_api
+        
+- finalize: pending
+
+## [2026-05-20 11:04:43 KST] [GO100] frontend/src/go100/components/command-center/ChatMessage.tsx
+- Chat-Direct 수정: run_remote_command: PGPASSWORD=$(grep KIS_DB_PASSWORD /root/kis-autotrade-v4/.env | cut -d= -f2) psq
+- finalize: pending
+
+## [2026-05-20 11:04:52 KST] [GO100] frontend/src/go100/components/command-center/MarketTab.tsx
+- Chat-Direct 수정: run_remote_command: PGPASSWORD=$(grep KIS_DB_PASSWORD /root/kis-autotrade-v4/.env | cut -d= -f2) psq
+- finalize: pending
+
+## [2026-05-20 11:04:59 KST] [GO100] frontend/src/go100/hooks/useChat.ts
+- Chat-Direct 수정: run_remote_command: PGPASSWORD=$(grep KIS_DB_PASSWORD /root/kis-autotrade-v4/.env | cut -d= -f2) psq
+- finalize: pending
+
+## [2026-05-20 11:06:25 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: run_remote_command: sleep 30 && tail -100 /var/log/go100/live_trading.log | grep -E "FUND_POOL|real_
+- finalize: pending
+
+## [2026-05-20 11:10:06 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && find backend/app/services/system -name "position*.p
+- finalize: pending
+
+## [2026-05-20 11:11:38 KST] [GO100] backend/scripts/sync_all_balances.py
+- Chat-Direct 수정: write: backend/scripts/sync_all_balances.py
+- finalize: pending
+
+## [2026-05-20 11:11:41 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:         self._kis_api = getattr(order_ex→        self._kis_api = getattr(order_ex
+- finalize: pending
+
+## [2026-05-20 11:11:43 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:     async def _get_available_cash_cached→    def invalidate_cash_cache(self) -> N
+- finalize: pending
+
+## [2026-05-20 11:11:46 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:     async def _clamp_fund_pool_to_availa→    async def _clamp_fund_pool_to_availa
+- finalize: pending
+
+## [2026-05-20 11:11:56 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:             try:
+                await s→            try:
+                await s
+- finalize: pending
+
+## [2026-05-20 11:11:58 KST] [GO100] backend/app/services/execution/fund_commander.py
+- Chat-Direct 수정: patch:         self._kis_api = kis_api
+        →        self._kis_api = kis_api
+        
+- finalize: pending
+
+## [2026-05-20 11:12:32 KST] [GO100] frontend/tsconfig.json
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && timeout 60 /root/kis-autotrade-v4/venv/bin/python b
+- finalize: pending
+
+## [2026-05-20 11:16:11 KST] [GO100] frontend/tsconfig.json
+- Chat-Direct 수정: run_remote_command: grep -rn "invalidate_cash_cache" /root/kis-autotrade-v4/backend/app/services/exe
+- finalize: pending
+
+## [2026-05-20 11:18:25 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:         if not order_result or not getat→        if not order_result or not getat
+- finalize: pending
+
+## [2026-05-20 11:18:36 KST] [GO100] backend/app/services/execution/fund_commander.py
+- Chat-Direct 수정: patch:     async def _clamp_available_to_real_c→    async def _clamp_available_to_real_c
+- finalize: pending
+
+## [2026-05-20 11:19:00 KST] [GO100] backend/app/services/execution/fund_commander.py
+- Chat-Direct 수정: patch:     async def _get_available_cash_cached→    async def _check_external_cash_inval
+- finalize: pending
+
+## [2026-05-20 11:19:47 KST] [GO100] scripts/cron/run_sync_all_balances.sh
+- Chat-Direct 수정: write: scripts/cron/run_sync_all_balances.sh
+- finalize: pending
+
+## [2026-05-20 11:22:56 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:         if not order_result or not getat→        if not order_result or not getat
+- finalize: pending
+
+## [2026-05-20 11:23:04 KST] [GO100] backend/app/services/execution/fund_commander.py
+- Chat-Direct 수정: patch:     async def _clamp_available_to_real_c→    async def _clamp_available_to_real_c
+- finalize: pending
+
+## [2026-05-20 11:23:12 KST] [GO100] backend/app/services/execution/fund_commander.py
+- Chat-Direct 수정: patch:     async def _get_available_cash_cached→    async def _check_external_cash_inval
+- finalize: pending
+
+## [2026-05-20 11:23:40 KST] [GO100] scripts/cron/run_sync_all_balances.sh
+- Chat-Direct 수정: write: scripts/cron/run_sync_all_balances.sh
+- finalize: pending
+
+## [2026-05-20 11:39:55 KST] [GO100] /etc/nginx/sites-enabled/kis-autotrade
+- Chat-Direct 수정: write: /etc/nginx/sites-enabled/kis-autotrade
+- finalize: pending
+
+## [2026-05-20 11:40:18 KST] [GO100] scripts/nginx-kis-autotrade-v4cleanup.conf
+- Chat-Direct 수정: write: scripts/nginx-kis-autotrade-v4cleanup.conf
+- finalize: pending
+
+## [2026-05-20 12:44:40 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: run_remote_command: grep -rl "strategy.cards\|strategy-cards\|/trade\b\|/dashboard\b\|/llm\b" /root/
+- finalize: pending
+
+## [2026-05-20 12:48:24 KST] [GO100] docs/GO100_INTEGRATED_SITEMAP.md
+- Chat-Direct 수정: write: docs/GO100_INTEGRATED_SITEMAP.md
+- finalize: pending
+
+## [2026-05-20 13:27:29 KST] [GO100] /etc/systemd/system/go100-frontend.service
+- Chat-Direct 수정: write: /etc/systemd/system/go100-frontend.service
+- finalize: pending
+
+## [2026-05-20 13:27:53 KST] [GO100] scripts/go100-frontend.service
+- Chat-Direct 수정: write: scripts/go100-frontend.service
+- finalize: pending
+
+## [2026-05-20 13:27:53 KST] [GO100] scripts/go100-frontend.service
+- Chat-Direct 수정: run_remote_command: journalctl -u go100 --no-pager --grep "Booting worker"
+- finalize: pending
+
+## [2026-05-20 13:29:51 KST] [GO100] scripts/go100-frontend.service
+- Chat-Direct 수정: write: scripts/go100-frontend.service
+- finalize: pending
+
+## [2026-05-20 13:38:29 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch: def _redis_price_map(stock_codes: list[s→def _today_snapshot_join_sql(alias: str 
+- finalize: pending
+
+## [2026-05-20 13:38:32 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: run_remote_command: journalctl -u go100 --since '13:37' --no-pager | grep -E 'CYCLE [0-9]+ \] done|o
+- finalize: pending
+
+## [2026-05-20 13:38:47 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch:     use_snapshot = (
+        _is_market_→    live_snapshot = _fresh_snapshot_meta
+- finalize: pending
+
+## [2026-05-20 13:39:05 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch:     if use_snapshot:
+        snap_join =→    if use_snapshot:
+        snap_join =
+- finalize: pending
+
+## [2026-05-20 13:39:25 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch:     # 스냅샷 오버레이 (장중 실시간)
+    if use_snaps→    # 스냅샷 오버레이 (장중 실시간)
+    if use_snaps
+- finalize: pending
+
+## [2026-05-20 13:39:42 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch:     use_snapshot = (
+        _is_market_→    live_snapshot = _fresh_snapshot_meta
+- finalize: pending
+
+## [2026-05-20 13:40:02 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch:     if use_snapshot:
+        snap_join =→    if use_snapshot:
+        snap_join =
+- finalize: pending
+
+## [2026-05-20 13:40:22 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch:     bd_fmt = _fmt_date(base_date)
+
+    r→    response_date = _response_base_date(
+- finalize: pending
+
+## [2026-05-20 13:40:39 KST] [GO100] scripts/migrate_cards_to_ceo.py
+- Chat-Direct 수정: write: scripts/migrate_cards_to_ceo.py
+- finalize: pending
+
+## [2026-05-20 13:40:55 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch:     return {
+        "items": items,
+   →    response_date = _response_base_date(
+- finalize: pending
+
+## [2026-05-20 13:41:16 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch:         cur.execute(
+            """
+   →        cur.execute(
+            """
+   
+- finalize: pending
+
+## [2026-05-20 13:41:47 KST] [GO100] backend/app/routers/go100/strategy_router.py
+- Chat-Direct 수정: patch:             snap_result = await db.execu→            snap_result = await db.execu
+- finalize: pending
+
+## [2026-05-20 13:41:49 KST] [GO100] backend/app/routers/go100/strategy_router.py
+- Chat-Direct 수정: run_remote_command: systemctl status go100 --no-pager
+- finalize: pending
+
+## [2026-05-20 13:42:08 KST] [GO100] backend/app/routers/go100/strategy_router.py
+- Chat-Direct 수정: patch:             if snap_map:
+               →            live_snapshot_at = None
+    
+- finalize: pending
+
+## [2026-05-20 13:42:29 KST] [GO100] backend/app/routers/go100/strategy_router.py
+- Chat-Direct 수정: patch:     # 장중이면 stock_price_snapshot으로 실시간 가격→    # 장중이면 stock_price_snapshot으로 실시간 가격
+- finalize: pending
+
+## [2026-05-20 13:42:39 KST] [GO100] backend/app/routers/go100/strategy_router.py
+- Chat-Direct 수정: patch:             snap_result = await db.execu→            snap_result = await db.execu
+- finalize: pending
+
+## [2026-05-20 13:42:53 KST] [GO100] backend/app/routers/go100/strategy_router.py
+- Chat-Direct 수정: patch:             snap_map = {r.stock_code: r →            snap_map = {r.stock_code: r 
+- finalize: pending
+
+## [2026-05-20 13:43:11 KST] [GO100] backend/app/routers/go100/strategy_router.py
+- Chat-Direct 수정: patch:         "screened_at": datetime.now(KST)→        "screened_at": datetime.now(KST)
+- finalize: pending
+
+## [2026-05-20 13:45:08 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: 
+## 2026-05-20 12:44 KST - GO100 스크리너 실시→
+## 2026-05-20 13:44 KST - GO100 스크리너 조건
+- finalize: pending
+
+## [2026-05-20 13:52:46 KST] [GO100] backend/app/main.py
+- Chat-Direct 수정: run_remote_command: systemctl status go100-frontend --no-pager -l
+- finalize: pending
+
+## [2026-05-20 13:52:47 KST] [GO100] frontend/src/app/(protected)/reports/page.tsx
+- Chat-Direct 수정: run_remote_command: systemctl status go100-frontend --no-pager -l
+- finalize: pending
+
+## [2026-05-20 13:52:48 KST] [GO100] frontend/src/go100/components/command-center/ChatMessage.tsx
+- Chat-Direct 수정: run_remote_command: systemctl status go100-frontend --no-pager -l
+- finalize: pending
+
+## [2026-05-20 13:53:41 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: patch:     if _exclude_price_clauses:
+        e→    if use_snapshot:
+        _snap_sort 
+- finalize: pending
+
+## [2026-05-20 13:57:48 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: run_remote_command: curl -s http://localhost:8002/api/v4/accounts/7/balance
+- finalize: pending
+
+## [2026-05-20 13:58:53 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: python3 -c "import shutil, pathlib; src=pathlib.Path('/tmp/aads-wt-runner-7bb573
+- finalize: pending
+
+## [2026-05-20 13:59:02 KST] [GO100] backend/app/services/go100/strategy_whitepaper_service.py
+- Chat-Direct 수정: run_remote_command: python3 -c "import shutil, pathlib; src=pathlib.Path('/tmp/aads-wt-runner-7bb573
+- finalize: pending
+
+## [2026-05-20 13:59:03 KST] [GO100] frontend/src/app/(protected)/go100/strategies/[id]/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 -c "import shutil, pathlib; src=pathlib.Path('/tmp/aads-wt-runner-7bb573
+- finalize: pending
+
+## [2026-05-20 13:59:04 KST] [GO100] frontend/src/go100/components/StrategyCard.tsx
+- Chat-Direct 수정: run_remote_command: python3 -c "import shutil, pathlib; src=pathlib.Path('/tmp/aads-wt-runner-7bb573
+- finalize: pending
+
+## [2026-05-20 13:59:05 KST] [GO100] frontend/src/go100/components/dashboard/StrategyCards.tsx
+- Chat-Direct 수정: run_remote_command: python3 -c "import shutil, pathlib; src=pathlib.Path('/tmp/aads-wt-runner-7bb573
+- finalize: pending

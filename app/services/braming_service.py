@@ -808,6 +808,42 @@ async def get_node_detail(
     return _to_public_node(node)
 
 
+async def update_node_content(
+    session_id: str,
+    node_id: str,
+    label: Optional[str] = None,
+    content: Optional[str] = None,
+) -> dict[str, Any]:
+    """노드의 label/content를 CEO가 직접 수정."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await _fetch_node(conn, session_id, node_id)
+        sets: list[str] = []
+        params: list[Any] = [session_id, node_id]
+        idx = 3
+        if label is not None:
+            sets.append(f"label = ${idx}")
+            params.append(label[:500])
+            idx += 1
+        if content is not None:
+            sets.append(f"content = ${idx}")
+            params.append(content[:10000])
+            idx += 1
+        if not sets:
+            raise ValueError("label 또는 content 중 하나는 필요합니다.")
+        await conn.execute(
+            f"""
+            UPDATE braming_nodes
+            SET {', '.join(sets)}
+            WHERE session_id = $1::uuid AND id = $2::uuid
+            """,
+            *params,
+        )
+        await _touch_session(conn, session_id)
+        node = await _build_node_detail(conn, session_id, node_id)
+    return _to_public_node(node)
+
+
 async def save_node_ceo_opinion(
     session_id: str,
     node_id: str,

@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import mimetypes
 import os
 import time
 from pathlib import Path
@@ -36,6 +38,12 @@ SERVER_CONFIG = {
             {"base": "/root/aads/aads-dashboard/reports", "label": "대시보드 리포트"},
             {"base": "/root/aads/aads-core/docs", "label": "코어 문서"},
             {"base": "/root/aads/aads-core/reports", "label": "코어 리포트"},
+            {"base": "/app/app/static/docs", "label": "정적 문서"},
+            {"base": "/app/app/static/reports", "label": "정적 리포트"},
+            {"base": "/app/app/static/preview", "label": "프리뷰"},
+            {"base": "/app/app/static/gallery", "label": "갤러리"},
+            {"base": "/root/aads/aads-dashboard/public/reports", "label": "대시보드 공개 리포트"},
+            {"base": "/root/aads/aads-dashboard/public/exports", "label": "대시보드 내보내기"},
         ],
     },
     "KIS": {
@@ -70,7 +78,27 @@ SERVER_CONFIG = {
     },
 }
 
-EXTENSIONS = {".md", ".txt", ".html", ".json", ".yaml", ".yml", ".py", ".sh", ".sql"}
+EXTENSIONS = {
+    # 문서/리포트
+    ".md", ".txt", ".html", ".htm", ".rst", ".pdf",
+    # 데이터
+    ".json", ".yaml", ".yml", ".toml", ".xml", ".csv",
+    # 코드
+    ".py", ".sh", ".sql", ".js", ".ts", ".tsx", ".jsx", ".css",
+    # 설정/로그
+    ".ini", ".cfg", ".conf", ".log",
+    # 이미지 (브라우저 표시 가능)
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico",
+    # 오피스 문서 (다운로드 안내)
+    ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp",
+}
+
+# 바이너리 처리 대상 (텍스트로 읽지 않고 base64/raw)
+BINARY_EXTENSIONS = {
+    ".pdf",
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico",
+    ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp",
+}
 
 
 def _load_persistent_cache() -> Optional[dict]:
@@ -182,6 +210,7 @@ async def _scan_local(base: str, exclude: list[str] | None = None, include: list
             "size": stat.st_size,
             "modified": int(stat.st_mtime),
             "type": _classify(p.name, rel),
+            "format": _detect_format(p.name),
         })
     return results
 
@@ -210,6 +239,7 @@ async def _scan_remote(host: str, base: str, exclude: list[str] | None = None, i
             "size": int(size_str) if size_str.isdigit() else 0,
             "modified": int(float(mtime_str)) if mtime_str else 0,
             "type": _classify(name, rel_path),
+            "format": _detect_format(name),
         })
     return sorted(results, key=lambda x: x["path"])
 
@@ -261,6 +291,28 @@ def _classify(name: str, path: str) -> str:
             any(key in nl for key in ("config", "settings", "compose", "env")):
         return "config"
     return "doc"
+
+
+def _detect_format(name: str) -> str:
+    """파일 확장자 기반 포맷 분류."""
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    _FORMAT_MAP = {
+        # 문서
+        "md": "markdown", "txt": "text", "html": "html", "htm": "html", "rst": "rst", "pdf": "pdf",
+        # 데이터
+        "json": "json", "yaml": "yaml", "yml": "yaml", "toml": "toml", "xml": "xml", "csv": "csv",
+        # 코드
+        "py": "python", "sh": "shell", "sql": "sql",
+        "js": "javascript", "ts": "typescript", "tsx": "typescript", "jsx": "javascript",
+        "css": "css", "ini": "config", "cfg": "config", "conf": "config", "log": "log",
+        # 이미지
+        "png": "image", "jpg": "image", "jpeg": "image", "gif": "image",
+        "svg": "image", "webp": "image", "bmp": "image", "ico": "image",
+        # 오피스
+        "docx": "word", "xlsx": "excel", "pptx": "powerpoint",
+        "odt": "word", "ods": "excel", "odp": "powerpoint",
+    }
+    return _FORMAT_MAP.get(ext, "other")
 
 
 async def _scan_project(project: str, config: dict, previous: Optional[dict] = None) -> dict:
@@ -365,22 +417,44 @@ async def get_doc_content(
     full_path = f"{base_path}/{file_path}"
     host = config["host"]
 
+    # 확장자 기반 바이너리 판별
+    ext = ("." + file_path.rsplit(".", 1)[-1].lower()) if "." in file_path else ""
+    is_binary = ext in BINARY_EXTENSIONS
+    mime_type = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+
     if host is None:
         # 로컬 파일
         p = Path(full_path)
         if not p.exists() or not p.is_file():
             raise HTTPException(404, "File not found")
-        if p.stat().st_size > 1_000_000:
-            raise HTTPException(413, "File too large (>1MB)")
-        content = p.read_text(encoding="utf-8", errors="replace")
+        size_bytes = p.stat().st_size
+        # 텍스트 1MB / 바이너리 10MB 한도
+        max_size = 10_000_000 if is_binary else 1_000_000
+        if size_bytes > max_size:
+            raise HTTPException(413, f"File too large (>{max_size // 1_000_000}MB)")
+        if is_binary:
+            raw = p.read_bytes()
+            content = base64.b64encode(raw).decode("ascii")
+        else:
+            content = p.read_text(encoding="utf-8", errors="replace")
     else:
         # 원격 파일
-        content = await _run_cmd(
-            ["ssh", "-o", "ConnectTimeout=5", host, f"cat '{full_path}'"],
-            timeout=10,
-        )
-        if not content:
-            raise HTTPException(404, "File not found or empty")
+        if is_binary:
+            # SSH base64 인코딩으로 바이너리 안전 전송
+            b64_output = await _run_cmd(
+                ["ssh", "-o", "ConnectTimeout=5", host, f"base64 -w0 '{full_path}' 2>/dev/null"],
+                timeout=15,
+            )
+            if not b64_output:
+                raise HTTPException(404, "File not found or empty")
+            content = b64_output.strip()
+        else:
+            content = await _run_cmd(
+                ["ssh", "-o", "ConnectTimeout=5", host, f"cat '{full_path}'"],
+                timeout=10,
+            )
+            if not content:
+                raise HTTPException(404, "File not found or empty")
 
     return {
         "project": project,
@@ -388,4 +462,7 @@ async def get_doc_content(
         "full_path": full_path,
         "content": content,
         "size": len(content),
+        "encoding": "base64" if is_binary else "text",
+        "mime_type": mime_type,
+        "is_binary": is_binary,
     }

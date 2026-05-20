@@ -40,7 +40,7 @@ _CLI_RESUME_CONTINUITY_WINDOW = int(os.getenv("AADS_CLI_RESUME_CONTINUITY_WINDOW
 _CODEX_PROJECT_KEYS = ("AADS", "KIS", "GO100", "SF", "NTV2", "NAS", "KAKAOBOT")
 _CODEX_PROJECT_CACHE_TTL_SECONDS = 30.0
 _CODEX_PROJECT_CACHE: Dict[str, tuple[str, float]] = {}
-_RELAY_RETRY_INTERVAL_SECONDS = float(os.getenv("AADS_RELAY_RETRY_INTERVAL_SECONDS", "2"))
+_RELAY_RETRY_INTERVAL_SECONDS = float(os.getenv("AADS_RELAY_RETRY_INTERVAL_SECONDS", "3"))
 _RELAY_RETRY_MAX_RETRIES = int(os.getenv("AADS_RELAY_RETRY_MAX_RETRIES", "30"))
 _PROJECT_RUNTIME_HINTS = {
     "AADS": "local_workdir=/root/aads/aads-server; dashboard=/root/aads/aads-dashboard",
@@ -1534,14 +1534,42 @@ async def call_stream(
                 yield event
             return
         elif backend == "codex_cli":
+            _codex_had_error = False
+            _codex_error_content = ""
             async for event in _stream_codex_relay(
-                model,
-                system_prompt,
-                messages,
-                tools=tools,
-                session_id=session_id,
+                model, system_prompt, messages, tools=tools, session_id=session_id,
             ):
+                if event.get("type") == "error":
+                    _codex_had_error = True
+                    _codex_error_content = event.get("content", "")
+                    break
                 yield event
+            if not _codex_had_error:
+                return
+            _CODEX_FB = {
+                "gpt-5.5": ["claude-opus", "gemini-3.1-pro-preview"],
+                "gpt-5.4": ["claude-sonnet", "gemini-2.5-flash"],
+                "gpt-5.4-mini": ["claude-haiku", "gemini-3.1-flash-lite-preview"],
+            }
+            for _cfb in _CODEX_FB.get(model, []):
+                try:
+                    yield {"type": "delta", "content": f"\n\n⚠️ _{model} 장애 — {_cfb}로 전환합니다._\n\n"}
+                    _cfb_err = False
+                    if _cfb in _ANTHROPIC_MODEL_ID:
+                        _cfb_stream = _stream_cli_relay(_cfb, system_prompt, messages, tools=tools, session_id=session_id)
+                    else:
+                        _cfb_stream = _stream_litellm(_cfb, system_prompt, messages, tools=tools, session_id=session_id)
+                    async for ev in _cfb_stream:
+                        if isinstance(ev, dict) and ev.get("type") == "error":
+                            _cfb_err = True
+                            logger.warning(f"codex_fb_failed: {model}→{_cfb}: {ev.get('content', '')[:80]}")
+                            break
+                        yield ev
+                    if not _cfb_err:
+                        return
+                except Exception as _cfb_exc:
+                    logger.warning(f"codex_fb_exc: {model}→{_cfb}: {_cfb_exc}")
+            yield {"type": "error", "content": _codex_error_content}
             return
 
     route_backend = str(route_metadata.get("execution_backend") or "").strip()
@@ -2768,12 +2796,10 @@ async def _stream_cli_relay(
             last_error[:200],
         )
         yield {
-            "type": "delta",
-            "content": (
-                f"\n\n⚠️ _{sdk_model} 연결이 일시 중단되어 "
-                f"{retry_delay:.0f}초 후 동일 모델로 다시 이어갑니다 ({attempt_idx + 1}/{len(_CLI_RETRY_DELAYS)})._"
-                "\n\n"
-            ),
+            "type": "retry_progress",
+            "attempt": attempt_idx + 1,
+            "max_attempts": len(_CLI_RETRY_DELAYS),
+            "content": f"⏳ 재시도 중 ({attempt_idx + 1}/{len(_CLI_RETRY_DELAYS)})...",
         }
         await asyncio.sleep(retry_delay)
         retry_messages = _build_cli_retry_messages(messages, partial_content)
@@ -3027,12 +3053,10 @@ async def _stream_codex_relay(
             last_error[:200],
         )
         yield {
-            "type": "delta",
-            "content": (
-                f"\n\n⚠️ _{display_model} 연결이 일시 중단되어 "
-                f"{retry_delay:.0f}초 후 동일 모델로 다시 이어갑니다 ({attempt_idx + 1}/{len(_CODEX_RETRY_DELAYS)})._"
-                "\n\n"
-            ),
+            "type": "retry_progress",
+            "attempt": attempt_idx + 1,
+            "max_attempts": len(_CODEX_RETRY_DELAYS),
+            "content": f"⏳ 재시도 중 ({attempt_idx + 1}/{len(_CODEX_RETRY_DELAYS)})...",
         }
         await asyncio.sleep(retry_delay)
         retry_messages = _build_codex_retry_messages(messages, partial_content)
@@ -3944,10 +3968,9 @@ async def _stream_anthropic(
                     _preview = str(_m.get("content", ""))[:80] if isinstance(_m.get("content"), str) else f"[{_ct}] len={len(_m.get('content', []))}" if isinstance(_m.get("content"), list) else str(type(_m.get("content")))
                     logger.info(f"anthropic_msg[{_mi}]: role={_m.get('role')} content_type={_ct} preview={_preview}")
 
-        # 재시도 로직: 일시적 에러(400/429/529/503/네트워크)는 최대 10회 재시도
-        # 400: Anthropic API 간헐적 invalid_request_error (2026-03 발생, ~50% 실패율)
+        # 재시도 로직: 429는 3초×30회, 그 외 일시적 에러는 최대 10회 재시도
         _RETRYABLE_STATUS = {400, 403, 429, 503, 529}
-        _MAX_RETRIES = 10
+        _MAX_RETRIES = 30
         _retry_attempt = 0
         _last_error = None
         final_msg = None
@@ -3982,7 +4005,7 @@ async def _stream_anthropic(
                     logger.warning("oat_switch_on_rate_limit: rotated OAuth / direct client, retrying")
                     _retry_attempt -= 1  # 스위치 후 재시도 카운트 차감
                 if _retry_attempt <= _MAX_RETRIES:
-                    _wait = min(2 ** _retry_attempt, 10)
+                    _wait = 3 if _status == 429 else min(2 ** _retry_attempt, 10)
                     logger.warning(f"claude_retry: attempt {_retry_attempt}/{_MAX_RETRIES}, status={_status}, wait={_wait}s, error={str(e)[:100]}")
                     yield {"type": "heartbeat"}
                     await asyncio.sleep(_wait)
@@ -3999,8 +4022,7 @@ async def _stream_anthropic(
                     logger.warning("oat_switch_on_quota_class: status=%s, rotated OAuth / direct client", _status)
                     _retry_attempt -= 1
                 if _status in _RETRYABLE_STATUS and _retry_attempt <= _MAX_RETRIES:
-                    # 400: 간헐적 에러 → 짧은 대기, 429/503: rate limit → 지수 백오프
-                    _wait = 0.3 if _status == 400 else min(2 ** _retry_attempt, 10)
+                    _wait = 0.3 if _status == 400 else (3 if _status == 429 else min(2 ** _retry_attempt, 10))
                     logger.warning(f"claude_retry: attempt {_retry_attempt}/{_MAX_RETRIES}, status={_status}, wait={_wait}s")
                     yield {"type": "heartbeat"}
                     await asyncio.sleep(_wait)

@@ -20,6 +20,7 @@ from app.services.braming_service import (
     set_node_pick,
     set_node_vote,
     synthesize_session,
+    update_node_content,
 )
 
 router = APIRouter(prefix="/api/v1/braming", tags=["braming"])
@@ -52,6 +53,11 @@ class NodeOpinionRequest(BaseModel):
 
 class NodeVoteRequest(BaseModel):
     vote: Optional[Literal["up", "down"]] = Field(default=None, description="찬성(up), 반대(down), 해제(null)")
+
+
+class NodeContentUpdateRequest(BaseModel):
+    label: Optional[str] = Field(default=None, description="노드 제목 (변경 시)")
+    content: Optional[str] = Field(default=None, description="노드 본문 (변경 시)")
 
 
 class NodePickRequest(BaseModel):
@@ -176,6 +182,27 @@ async def synthesize(session_id: str):
         return await synthesize_session(session_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/sessions/{session_id}/nodes/{node_id}/content")
+async def update_content(
+    session_id: str,
+    node_id: str,
+    req: NodeContentUpdateRequest,
+):
+    try:
+        return {
+            "node": await update_node_content(
+                session_id,
+                node_id,
+                label=req.label,
+                content=req.content,
+            ),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
