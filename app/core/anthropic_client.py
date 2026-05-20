@@ -35,7 +35,6 @@ _CLAUDE_RETRY_JITTER_SEC = 1.5
 _CLAUDE_MAX_RETRIES = 60
 _CLAUDE_RETRY_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504, 529}
 _CLAUDE_429_MAX_RETRIES = 5
-_CLAUDE_429_MAX_RETRIES = 5
 
 
 def _retry_delay(attempt: int, status_code: int | None = None) -> float:
