@@ -34,6 +34,7 @@ _CLAUDE_RETRY_MAX_DELAY_SEC = 30.0
 _CLAUDE_RETRY_JITTER_SEC = 1.5
 _CLAUDE_MAX_RETRIES = 60
 _CLAUDE_RETRY_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504, 529}
+_CLAUDE_429_MAX_RETRIES = 5
 
 
 def _retry_delay(attempt: int, status_code: int | None = None) -> float:
@@ -164,6 +165,7 @@ async def call_llm_with_fallback(
     keys_to_try = get_available_tokens()
     for key in keys_to_try:
         last_error: Optional[Exception] = None
+        _429_count = 0
         for retry_count in range(_CLAUDE_MAX_RETRIES + 1):
             t0 = time.monotonic()
             try:
@@ -230,10 +232,19 @@ async def call_llm_with_fallback(
                     duration_ms=duration_ms,
                 )
                 if status_code == 429:
+                    _429_count += 1
+                    if _429_count <= _CLAUDE_429_MAX_RETRIES:
+                        wait = _retry_delay(_429_count - 1, 429)
+                        logger.warning(
+                            "claude_429_retry: key=%s model=%s attempt=%d/%d wait=%.1fs",
+                            key[:12], model, _429_count, _CLAUDE_429_MAX_RETRIES, wait,
+                        )
+                        await asyncio.sleep(wait)
+                        continue
                     mark_token_rate_limited(key, _get_error_headers(e))
                     logger.warning(
-                        "claude_429_immediate_switch: key=%s model=%s retry=%d → next fallback",
-                        key[:12], model, retry_count,
+                        "claude_429_limit_exhausted: key=%s model=%s after=%d retries → next token",
+                        key[:12], model, _CLAUDE_429_MAX_RETRIES,
                     )
                     break
                 if retryable and retry_count < _CLAUDE_MAX_RETRIES:
@@ -407,6 +418,7 @@ async def call_llm_messages_with_fallback(**kwargs) -> object:
     last_error: Optional[Exception] = None
 
     for key in keys_to_try:
+        _429_count = 0
         for retry_count in range(_CLAUDE_MAX_RETRIES + 1):
             t0 = time.monotonic()
             try:
@@ -468,6 +480,22 @@ async def call_llm_messages_with_fallback(**kwargs) -> object:
                     error_code=error_code,
                     duration_ms=duration_ms,
                 )
+                if status_code == 429:
+                    _429_count += 1
+                    if _429_count <= _CLAUDE_429_MAX_RETRIES:
+                        wait = _retry_delay(_429_count - 1, 429)
+                        logger.warning(
+                            "claude_msg_429_retry: key=%s attempt=%d/%d wait=%.1fs",
+                            key[:12], _429_count, _CLAUDE_429_MAX_RETRIES, wait,
+                        )
+                        await asyncio.sleep(wait)
+                        continue
+                    mark_token_rate_limited(key, _get_error_headers(e))
+                    logger.warning(
+                        "claude_msg_429_exhausted: key=%s after=%d retries → next token",
+                        key[:12], _CLAUDE_429_MAX_RETRIES,
+                    )
+                    break
                 if retryable and retry_count < _CLAUDE_MAX_RETRIES:
                     wait = _retry_delay(retry_count, status_code)
                     logger.warning(
@@ -481,8 +509,6 @@ async def call_llm_messages_with_fallback(**kwargs) -> object:
                     )
                     await asyncio.sleep(wait)
                     continue
-                if status_code == 429:
-                    mark_token_rate_limited(key, _get_error_headers(e))
                 logger.warning(
                     "claude_msg_error: key=%s model=%s retry_count=%d status=%s last_error=%s",
                     key[:12],
