@@ -1528,7 +1528,7 @@ ${_fallback_tail}") WHERE job_id='${job_id}';"
             DASHBOARD_LAST_COMMIT=$(git -C /root/aads/aads-dashboard log -1 --format=%ct 2>/dev/null || echo 0)
             CURRENT_TIME=$(date +%s)
             DIFF_SECONDS=$((CURRENT_TIME - DASHBOARD_LAST_COMMIT))
-            if [ "$DASHBOARD_CHANGED" = true ] || [ "$DIFF_SECONDS" -lt 600 ]; then
+            if [ "$DASHBOARD_CHANGED" = true ] || [ "$DIFF_SECONDS" -lt 3600 ]; then
                 log "  BLUEGREEN aads-dashboard — deploy.sh 호출 (헬스체크+롤백)"
                 local _dash_deploy_log="/tmp/pipeline-deploy-dashboard-${job_id}.log"
                 if bash /root/aads/aads-dashboard/deploy.sh >"$_dash_deploy_log" 2>&1; then

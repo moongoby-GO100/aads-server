@@ -772,8 +772,18 @@ class PipelineCJob:
 
         if self.project != "AADS":
             return
-        if "aads-dashboard/" not in (self.git_diff or ""):
-            return
+        _has_dash_diff = "aads-dashboard/" in (self.git_diff or "")
+        if not _has_dash_diff:
+            try:
+                _dash_ts = (await self._ssh_command(
+                    "git -C /root/aads/aads-dashboard log -1 --format=%ct"
+                )).strip()
+                import time as _time_mod
+                if abs(_time_mod.time() - int(_dash_ts)) > 3600:
+                    return
+                self._log("frontend_deploy", "git_diff에 dashboard 경로 없지만 최근 커밋 감지 — 배포 진행")
+            except Exception:
+                return
 
         try:
             self._log("frontend_deploy", "프론트엔드(dashboard) 변경 감지 — 대시보드 BG 배포 시작...")
