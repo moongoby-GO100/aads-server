@@ -1560,7 +1560,7 @@ async def call_stream(
         "claude-haiku": ["claude-haiku"],
     }
     _SAMEGRADE_FALLBACK = {
-        "claude-opus": ["deepseek-v4-pro", "gemini-3.1-pro-preview"],
+        "claude-opus": ["gpt-5.5", "gemini-3.1-pro-preview"],
         "claude-sonnet": ["deepseek-v4-flash", "gemini-2.5-flash"],
         "claude-haiku": ["gpt-5.4-mini", "deepseek-v4-flash", "gemini-3.1-flash-lite-preview"],
     }
@@ -2601,6 +2601,21 @@ async def _stream_cli_relay_once(
         return
     except httpx.ReadTimeout:
         yield {"type": "error", "content": "CLI Relay timeout (600s)"}
+        return
+    except asyncio.CancelledError:
+        # [2026-05-20] 상류 SSE 단절(httpcore 내부) vs 외부 task cancel 구분:
+        # cancelling() > 0이면 부모가 명시적으로 cancel한 것 → 그대로 전파.
+        # cancelling() == 0이면 내부 네트워크 중단 → retryable error로 변환하여
+        # 상위 _stream_cli_relay 재시도 루프가 동일 모델로 이어서 응답하게 한다.
+        _curr_task = asyncio.current_task()
+        if _curr_task is not None and _curr_task.cancelling() > 0:
+            raise
+        logger.warning(
+            "cli_relay_stream_cancelled (upstream disconnect): model=%s session=%s",
+            model,
+            (session_id or "default")[:8],
+        )
+        yield {"type": "error", "content": "CLI Relay stream connection aborted (upstream disconnect)"}
         return
     except Exception as e:
         logger.error(f"cli_relay_error: {e}")

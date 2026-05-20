@@ -1979,19 +1979,19 @@ async def _delete_streaming_placeholder(
                         )
                         logger.info(f"placeholder_dedup_deleted session={session_id[:8]} — same recovered already exists")
                     else:
+                        # intent=NULL로 보존 — 폴링에서도 계속 표시 (버블 유지)
                         await conn.execute(
-                            "UPDATE chat_messages SET content = $2, intent = 'interrupted_partial', model_used = 'interrupted' WHERE id = $1",
+                            "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'interrupted' WHERE id = $1",
                             placeholder['id'], content,
                         )
-                        logger.warning(f"placeholder_promoted session={session_id[:8]} — final save missing, placeholder promoted to interrupted partial")
+                        logger.warning(f"placeholder_promoted session={session_id[:8]} — final save missing, placeholder preserved as interrupted")
                 else:
-                    # 내용도 없으면 삭제
-                    await conn.execute("DELETE FROM chat_messages WHERE id = $1", placeholder['id'])
+                    # [2026-05-20] 빈 placeholder도 DELETE 대신 안내로 보존 — 응답 버블 사라짐 방지
                     await conn.execute(
-                        "UPDATE chat_sessions SET message_count = GREATEST(message_count - 1, 0), updated_at = NOW() WHERE id = $1",
-                        uuid.UUID(session_id),
+                        "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'interrupted' WHERE id = $1",
+                        placeholder['id'], "⚠️ 응답이 중단되었습니다. 다시 시도해 주세요.",
                     )
-                    logger.warning(f"empty_placeholder_deleted session={session_id[:8]}")
+                    logger.warning(f"empty_placeholder_preserved session={session_id[:8]} — interrupted notice")
     except Exception as e:
         if raise_on_error:
             raise
@@ -2204,24 +2204,25 @@ async def with_background_completion(
                 )
             )
             if _is_retryable:
-                _max_retries = 3
-                _retry_delays = [30, 60, 90]
+                _max_retries = 30
+                _retry_delay_sec = 3
                 _retried = False
 
                 for _retry_idx in range(_max_retries):
-                    _delay = _retry_delays[min(_retry_idx, len(_retry_delays) - 1)]
-                    logger.info(f"stream_retry session={session_id[:8]} attempt={_retry_idx+1}/{_max_retries} delay={_delay}s")
+                    logger.info(f"stream_retry session={session_id[:8]} attempt={_retry_idx+1}/{_max_retries} delay={_retry_delay_sec}s")
 
                     try:
                         _retry_msg = json.dumps({
-                            "type": "delta",
-                            "content": f"\n\n⏳ _API 일시 중단 — {_delay}초 후 자동 재시도 ({_retry_idx+1}/{_max_retries})..._\n\n",
+                            "type": "retry_progress",
+                            "attempt": _retry_idx + 1,
+                            "max_attempts": _max_retries,
+                            "content": f"⏳ 재시도 중 ({_retry_idx+1}/{_max_retries})...",
                         })
                         await queue.put((f"data: {_retry_msg}\n\n", None))
                     except Exception:
                         pass
 
-                    await _heartbeat_asyncio.sleep(_delay)
+                    await _heartbeat_asyncio.sleep(_retry_delay_sec)
 
                     try:
                         _partial = state.get("content", "").strip()
@@ -3881,8 +3882,12 @@ async def _promote_inactive_streaming_placeholders(
     messages: List[Dict[str, Any]],
     log_prefix: str,
 ) -> List[Dict[str, Any]]:
-    """비활성 세션의 orphan placeholder 정리. 조회 전용 경로에서는 호출하지 않는다."""
+    """비활성 세션의 orphan placeholder 정리. 조회 전용 경로에서는 호출하지 않는다.
+    [2026-05-20] 빈/짧은 placeholder도 삭제하지 않고 '응답 중단' 안내로 보존 — 화면에서
+    응답 버블이 사라지는 현상(세션 ac5278a7) 방지. intent=NULL로 보존하여 후속 폴링에서도
+    유지되도록 한다."""
     _promote_ids = []
+    _empty_ids = []
     _remove_ids = []
     sid = uuid.UUID(session_id)
     for msg in messages:
@@ -3893,7 +3898,11 @@ async def _promote_inactive_streaming_placeholders(
                 msg["intent"] = None
                 msg["model_used"] = "recovered"
             else:
-                _remove_ids.append(msg["id"])
+                # 빈/짧은 placeholder도 안내 메시지로 보존 — 버블 사라짐 방지
+                _empty_ids.append(msg["id"])
+                msg["intent"] = None
+                msg["model_used"] = "interrupted"
+                msg["content"] = "⚠️ 응답이 중단되었습니다. 다시 시도해 주세요."
     if _promote_ids:
         for _pid in _promote_ids:
             try:
@@ -3935,8 +3944,10 @@ async def _promote_inactive_streaming_placeholders(
                     )
                     _remove_ids.append(_pid)
                 else:
+                    # intent=NULL로 보존 — 후속 폴링에서도 표시되도록 (interrupted_partial은
+                    # _AUTO_MESSAGE_EXCLUDE_FILTER로 가려져 버블이 사라지던 문제 회피)
                     await conn.execute(
-                        "UPDATE chat_messages SET intent = 'interrupted_partial', model_used = 'interrupted', "
+                        "UPDATE chat_messages SET intent = NULL, model_used = 'interrupted', "
                         "content = regexp_replace(content, E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$', '') "
                         "WHERE id = $1",
                         _uid,
@@ -3944,6 +3955,18 @@ async def _promote_inactive_streaming_placeholders(
             except Exception as _pe:
                 logger.warning(f"{log_prefix}_promote_failed: {_pe}")
         logger.info(f"{log_prefix}_auto_promoted session={session_id[:8]} count={len(_promote_ids)}")
+    if _empty_ids:
+        # 빈 placeholder도 DELETE 대신 안내 UPDATE로 보존 — 버블 유지
+        for _eid in _empty_ids:
+            try:
+                _uid = _eid if isinstance(_eid, uuid.UUID) else uuid.UUID(str(_eid))
+                await conn.execute(
+                    "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'interrupted' WHERE id = $1",
+                    _uid, "⚠️ 응답이 중단되었습니다. 다시 시도해 주세요.",
+                )
+            except Exception as _ee:
+                logger.warning(f"{log_prefix}_empty_promote_failed: {_ee}")
+        logger.info(f"{log_prefix}_empty_preserved session={session_id[:8]} count={len(_empty_ids)}")
     _remove_set = set(str(x) for x in _remove_ids)
     return [m for m in messages if str(m["id"]) not in _remove_set]
 
