@@ -2166,18 +2166,18 @@ async def with_background_completion(
                     await _interim_save_streaming(session_id, state)
                 await queue.put((chunk, _entry_id))
 
-                # 클라이언트 연결 중 3초마다 중간 저장 — heartbeat-only 구간 스킵 (DB 부하 ~40% 감소)
+                # 클라이언트 연결 중 1초마다 중간 저장 — heartbeat-only 구간 스킵 (중단 시 유실 최소화)
                 if not _client_gone and _event_type not in ("heartbeat", None, ""):
                     _now_rt = _bg_time.monotonic()
-                    if _now_rt - state["last_save"] > 3:
+                    if _now_rt - state["last_save"] > 1:
                         state["last_save"] = _now_rt
                         await _interim_save_streaming(session_id, state)
 
                 # 클라이언트 disconnect 후 처리
                 if _client_gone:
                     now = _bg_time.monotonic()
-                    # 3초마다 중간 저장 (connected와 동일 간격, DB 부하 67% 감소)
-                    if now - state["last_save"] > 3:
+                    # 1초마다 중간 저장 (중단 시 유실 최소화)
+                    if now - state["last_save"] > 1:
                         state["last_save"] = now
                         await _maybe_interim_save_after_disconnect()
                     # 클라이언트 이탈 후: LLM 활동 없으면 _BG_AUTO_CANCEL_SEC, 활동 중이면 최대 30분
@@ -4573,12 +4573,16 @@ async def _save_and_update_session(
                     )
                     return
                 if await _execution_has_newer_user_message(conn, str(sid), str(_execution_uuid)):
+                    _existing_content = await conn.fetchval(
+                        "SELECT content FROM chat_messages WHERE execution_id = $1 AND intent = 'streaming_placeholder' ORDER BY created_at DESC LIMIT 1",
+                        str(_execution_uuid),
+                    )
                     await _mark_execution_interrupted(
                         conn,
                         str(sid),
                         str(_execution_uuid),
                         "final_save_superseded_by_newer_user_message",
-                        partial_content="",
+                        partial_content=_existing_content or "",
                         delete_empty_placeholder=True,
                     )
                     return
