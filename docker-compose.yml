@@ -89,6 +89,8 @@ services:
       - ALIBABA_API_KEY=${ALIBABA_API_KEY:-}
       # Claude CLI Relay (호스트 실행, MCP 도구 브릿지 경유)
       - CLAUDE_RELAY_URL=${CLAUDE_RELAY_URL:-http://host.docker.internal:8199}
+      - CLAUDE_SESSION_KEY=${CLAUDE_SESSION_KEY:-}
+      - CLAUDE_ORG_ID=${CLAUDE_ORG_ID:-}
       - CLAUDE_CLI_ENABLED=${CLAUDE_CLI_ENABLED:-true}
       # Agent SDK 번들 CLI 인증 (OAuth 토큰 직접 사용, Naver 우선 → Gmail 폴백)
       - ANTHROPIC_API_KEY=${ANTHROPIC_AUTH_TOKEN_2}

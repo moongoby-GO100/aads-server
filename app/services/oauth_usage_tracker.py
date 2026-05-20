@@ -51,6 +51,15 @@ _USAGE_LOG_COLUMNS: Tuple[str, ...] = (
     "session_id",
     "error_code",
     "duration_ms",
+    "unified_status",
+    "unified_5h_status",
+    "unified_5h_utilization",
+    "unified_5h_reset",
+    "unified_7d_status",
+    "unified_7d_utilization",
+    "unified_7d_reset",
+    "unified_fallback",
+    "unified_fallback_pct",
 )
 
 # ── 토큰 → 슬롯 매핑 ──────────────────────────────────────────────────
@@ -96,6 +105,24 @@ def parse_ratelimit_headers(headers: Any) -> Dict[str, Any]:
                 pass
         return None
 
+    def _float(key: str) -> Optional[float]:
+        val = headers.get(key)
+        if val is not None:
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                pass
+        return None
+
+    def _epoch(key: str) -> Optional[datetime]:
+        val = headers.get(key)
+        if val is not None:
+            try:
+                return datetime.fromtimestamp(int(val), tz=timezone.utc)
+            except (ValueError, TypeError, OSError):
+                pass
+        return None
+
     return {
         "rl_requests_limit": _int("anthropic-ratelimit-requests-limit"),
         "rl_requests_remaining": _int("anthropic-ratelimit-requests-remaining"),
@@ -109,6 +136,15 @@ def parse_ratelimit_headers(headers: Any) -> Dict[str, Any]:
         "rl_output_tokens_limit": _int("anthropic-ratelimit-output-tokens-limit"),
         "rl_output_tokens_remaining": _int("anthropic-ratelimit-output-tokens-remaining"),
         "rl_output_tokens_reset": _ts("anthropic-ratelimit-output-tokens-reset"),
+        "unified_status": headers.get("anthropic-ratelimit-unified-status"),
+        "unified_5h_status": headers.get("anthropic-ratelimit-unified-5h-status"),
+        "unified_5h_utilization": _float("anthropic-ratelimit-unified-5h-utilization"),
+        "unified_5h_reset": _epoch("anthropic-ratelimit-unified-5h-reset"),
+        "unified_7d_status": headers.get("anthropic-ratelimit-unified-7d-status"),
+        "unified_7d_utilization": _float("anthropic-ratelimit-unified-7d-utilization"),
+        "unified_7d_reset": _epoch("anthropic-ratelimit-unified-7d-reset"),
+        "unified_fallback": headers.get("anthropic-ratelimit-unified-representative-claim"),
+        "unified_fallback_pct": _float("anthropic-ratelimit-unified-fallback-percentage"),
     }
 
 
@@ -141,6 +177,15 @@ def _usage_log_values(entry: Dict[str, Any]) -> Tuple[Any, ...]:
         entry["session_id"],
         entry["error_code"],
         entry["duration_ms"],
+        rl.get("unified_status"),
+        rl.get("unified_5h_status"),
+        rl.get("unified_5h_utilization"),
+        rl.get("unified_5h_reset"),
+        rl.get("unified_7d_status"),
+        rl.get("unified_7d_utilization"),
+        rl.get("unified_7d_reset"),
+        rl.get("unified_fallback"),
+        rl.get("unified_fallback_pct"),
     )
 
 
@@ -388,6 +433,34 @@ async def get_usage_stats() -> Dict[str, Any]:
 
     token_labels = get_token_labels()
 
+    # Claude Max utilization — 실제 API 우선, 폴백으로 DB 추정
+    import os as _os
+    plan_limit_5h = int(_os.getenv("CLAUDE_MAX_5H_TOKEN_LIMIT", "5000000"))
+    plan_limit_1w = int(_os.getenv("CLAUDE_MAX_1W_TOKEN_LIMIT", "50000000"))
+    tok_5h = sum(int(r.get("total_tokens", 0)) for r in rows_5h)
+    tok_1w = sum(int(r.get("total_tokens", 0)) for r in rows_1w)
+    db_pct_5h = round(min(tok_5h / plan_limit_5h, 1.0) * 100, 1) if plan_limit_5h else 0
+    db_pct_1w = round(min(tok_1w / plan_limit_1w, 1.0) * 100, 1) if plan_limit_1w else 0
+
+    try:
+        real_usage = await fetch_claude_ai_usage()
+    except Exception as _e:
+        logger.warning("fetch_claude_ai_usage failed in stats: %s", str(_e)[:100])
+        real_usage = None
+
+    if real_usage:
+        used_pct_5h = real_usage["five_hour"]["utilization"]
+        used_pct_1w = real_usage["seven_day"]["utilization"]
+        resets_at_5h = real_usage["five_hour"].get("resets_at")
+        resets_at_1w = real_usage["seven_day"].get("resets_at")
+        usage_source = "claude_ai_api"
+    else:
+        used_pct_5h = db_pct_5h
+        used_pct_1w = db_pct_1w
+        resets_at_5h = None
+        resets_at_1w = None
+        usage_source = "db_estimate"
+
     return {
         "token_labels": token_labels,
         "window_5h": [_row_to_dict(r) for r in rows_5h],
@@ -396,7 +469,168 @@ async def get_usage_stats() -> Dict[str, Any]:
         "latest_ratelimit": [_row_to_dict(r) for r in rows_latest_rl],
         "hourly_trend": [_row_to_dict(r) for r in rows_hourly],
         "errors_5h": [_row_to_dict(r) for r in rows_errors],
+        "claude_max": {
+            "plan_type": _os.getenv("CLAUDE_MAX_PLAN_TYPE", "max_20x"),
+            "source": usage_source,
+            "primary": {
+                "used_percent": used_pct_5h,
+                "window_minutes": 300,
+                "total_tokens": tok_5h,
+                "resets_at": resets_at_5h,
+            },
+            "secondary": {
+                "used_percent": used_pct_1w,
+                "window_minutes": 10080,
+                "total_tokens": tok_1w,
+                "resets_at": resets_at_1w,
+            },
+            "plan_limits": {"token_5h": plan_limit_5h, "token_1w": plan_limit_1w},
+        },
         "generated_at": datetime.now(KST).isoformat(),
+    }
+
+
+async def get_claude_max_usage() -> Dict[str, Any]:
+    """Claude Max 5h/1w 사용량 — Codex 호환 포맷.
+
+    내부 oauth_usage_log 기반 실측 + unified_5h/7d 컬럼 활용.
+    """
+    import os
+    pool = get_pool()
+    now = datetime.now(timezone.utc)
+    now_kst = now.astimezone(KST)
+
+    async with pool.acquire() as conn:
+        row_5h = await conn.fetchrow("""
+            SELECT COUNT(*) as calls,
+                   COALESCE(SUM(input_tokens), 0) as input_tok,
+                   COALESCE(SUM(output_tokens), 0) as output_tok,
+                   COALESCE(SUM(input_tokens + output_tokens), 0) as total_tok,
+                   COALESCE(SUM(cost_usd), 0) as cost
+            FROM oauth_usage_log
+            WHERE created_at >= NOW() - INTERVAL '5 hours'
+              AND error_code IS NULL
+        """)
+        row_1w = await conn.fetchrow("""
+            SELECT COUNT(*) as calls,
+                   COALESCE(SUM(input_tokens), 0) as input_tok,
+                   COALESCE(SUM(output_tokens), 0) as output_tok,
+                   COALESCE(SUM(input_tokens + output_tokens), 0) as total_tok,
+                   COALESCE(SUM(cost_usd), 0) as cost
+            FROM oauth_usage_log
+            WHERE created_at >= NOW() - INTERVAL '7 days'
+              AND error_code IS NULL
+        """)
+        latest_unified = await conn.fetchrow("""
+            SELECT unified_5h_status, unified_5h_utilization,
+                   unified_5h_reset, unified_7d_status,
+                   unified_7d_utilization, unified_7d_reset
+            FROM oauth_usage_log
+            WHERE unified_5h_utilization IS NOT NULL
+            ORDER BY id DESC LIMIT 1
+        """)
+        by_model = await conn.fetch("""
+            SELECT model, COUNT(*) as calls,
+                   COALESCE(SUM(input_tokens + output_tokens), 0) as total_tok
+            FROM oauth_usage_log
+            WHERE created_at >= NOW() - INTERVAL '5 hours'
+              AND error_code IS NULL
+            GROUP BY model ORDER BY total_tok DESC LIMIT 10
+        """)
+
+    plan_limit_5h = int(os.getenv("CLAUDE_MAX_5H_TOKEN_LIMIT", "5000000"))
+    plan_limit_1w = int(os.getenv("CLAUDE_MAX_1W_TOKEN_LIMIT", "50000000"))
+
+    tok_5h = int(row_5h["total_tok"])
+    tok_1w = int(row_1w["total_tok"])
+    db_pct_5h = round(min(tok_5h / plan_limit_5h, 1.0) * 100, 1) if plan_limit_5h else 0
+    db_pct_1w = round(min(tok_1w / plan_limit_1w, 1.0) * 100, 1) if plan_limit_1w else 0
+
+    if latest_unified and latest_unified["unified_5h_utilization"] is not None:
+        used_pct_5h = round(latest_unified["unified_5h_utilization"] * 100, 1)
+        used_pct_1w = round((latest_unified["unified_7d_utilization"] or 0) * 100, 1)
+        r5_reset = latest_unified["unified_5h_reset"]
+        r1w_reset = latest_unified["unified_7d_reset"]
+        r5 = r5_reset if r5_reset else now + timedelta(hours=5)
+        r1w = r1w_reset if r1w_reset else now + timedelta(days=7)
+        resets_at_5h_iso = r5.isoformat()
+        resets_at_1w_iso = r1w.isoformat()
+        usage_source = "anthropic_header"
+    else:
+        try:
+            real_usage = await fetch_claude_ai_usage()
+        except Exception as _e:
+            logger.warning("fetch_claude_ai_usage failed: %s", str(_e)[:100])
+            real_usage = None
+
+        if real_usage:
+            used_pct_5h = real_usage["five_hour"]["utilization"]
+            used_pct_1w = real_usage["seven_day"]["utilization"]
+            resets_at_5h_iso = real_usage["five_hour"].get("resets_at")
+            resets_at_1w_iso = real_usage["seven_day"].get("resets_at")
+            try:
+                r5 = datetime.fromisoformat(resets_at_5h_iso) if resets_at_5h_iso else now + timedelta(hours=5)
+                r1w = datetime.fromisoformat(resets_at_1w_iso) if resets_at_1w_iso else now + timedelta(days=7)
+            except Exception:
+                r5 = now + timedelta(hours=5)
+                r1w = now + timedelta(days=7)
+            usage_source = "claude_ai_api"
+        else:
+            used_pct_5h = db_pct_5h
+            used_pct_1w = db_pct_1w
+            r5 = now + timedelta(hours=5)
+            r1w = now + timedelta(days=7)
+            resets_at_5h_iso = r5.isoformat()
+            resets_at_1w_iso = r1w.isoformat()
+            usage_source = "db_estimate"
+
+    unified = {}
+    if latest_unified:
+        try:
+            unified = {
+                "source": "anthropic_header",
+                "status_5h": latest_unified["unified_5h_status"],
+                "utilization_5h": latest_unified["unified_5h_utilization"],
+                "reset_5h": latest_unified["unified_5h_reset"].astimezone(KST).isoformat() if latest_unified["unified_5h_reset"] else None,
+                "status_7d": latest_unified["unified_7d_status"],
+                "utilization_7d": latest_unified["unified_7d_utilization"],
+                "reset_7d": latest_unified["unified_7d_reset"].astimezone(KST).isoformat() if latest_unified["unified_7d_reset"] else None,
+            }
+        except Exception:
+            pass
+
+    return {
+        "ok": True,
+        "source": usage_source,
+        "plan_type": os.getenv("CLAUDE_MAX_PLAN_TYPE", "max_20x"),
+        "limits": [{
+            "limit_id": "claude_max",
+            "plan_type": os.getenv("CLAUDE_MAX_PLAN_TYPE", "max_20x"),
+            "primary": {
+                "used_percent": used_pct_5h,
+                "window_minutes": 300,
+                "resets_at_epoch": int(r5.timestamp()),
+                "resets_at_iso": resets_at_5h_iso,
+                "resets_in_sec": max(0, int(r5.timestamp() - now.timestamp())),
+                "calls": int(row_5h["calls"]),
+                "total_tokens": tok_5h,
+                "cost_usd": float(row_5h["cost"]),
+            },
+            "secondary": {
+                "used_percent": used_pct_1w,
+                "window_minutes": 10080,
+                "resets_at_epoch": int(r1w.timestamp()),
+                "resets_at_iso": resets_at_1w_iso,
+                "resets_in_sec": max(0, int(r1w.timestamp() - now.timestamp())),
+                "calls": int(row_1w["calls"]),
+                "total_tokens": tok_1w,
+                "cost_usd": float(row_1w["cost"]),
+            },
+        }],
+        "by_model_5h": [{"model": r["model"], "calls": int(r["calls"]), "tokens": int(r["total_tok"])} for r in by_model],
+        "plan_limits": {"token_5h": plan_limit_5h, "token_1w": plan_limit_1w},
+        "last_anthropic_unified": unified or None,
+        "fetched_at": now_kst.isoformat(),
     }
 
 
@@ -424,3 +658,75 @@ async def should_switch_account(current_token: str) -> bool:
     if requests_remaining is not None and requests_remaining < 3:
         return True
     return False
+
+
+# ── Claude.ai 실시간 사용량 API ──────────────────────────────────────
+_CLAUDE_AI_USAGE_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
+_CLAUDE_AI_USAGE_TTL = 60
+
+
+async def fetch_claude_ai_usage() -> Optional[Dict[str, Any]]:
+    """claude.ai/api/organizations/{org_id}/usage 실시간 조회 (60초 캐시)."""
+    import os
+    import time as _t
+    import httpx
+
+    now = _t.time()
+    cached = _CLAUDE_AI_USAGE_CACHE.get("data")
+    if cached and (now - _CLAUDE_AI_USAGE_CACHE["ts"]) < _CLAUDE_AI_USAGE_TTL:
+        return cached
+
+    session_key = os.getenv("CLAUDE_SESSION_KEY", "")
+    org_id = os.getenv("CLAUDE_ORG_ID", "")
+    if not session_key or not org_id:
+        try:
+            from dotenv import dotenv_values
+            for p in ("/app/.env", "/root/aads/aads-server/.env"):
+                if os.path.exists(p):
+                    env = dotenv_values(p)
+                    break
+            else:
+                env = {}
+            session_key = session_key or env.get("CLAUDE_SESSION_KEY", "")
+            org_id = org_id or env.get("CLAUDE_ORG_ID", "")
+        except Exception:
+            pass
+    if not session_key or not org_id:
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=3.0)) as client:
+            resp = await client.get(
+                f"https://claude.ai/api/organizations/{org_id}/usage",
+                cookies={"sessionKey": session_key, "lastActiveOrg": org_id},
+                headers={
+                    "accept": "application/json",
+                    "anthropic-client-platform": "web",
+                    "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                },
+            )
+        if resp.status_code != 200:
+            logger.warning("claude_ai_usage_fetch_failed: %d", resp.status_code)
+            return cached
+
+        data = resp.json()
+        five_h = data.get("five_hour") or {}
+        seven_d = data.get("seven_day") or {}
+        result = {
+            "five_hour": {
+                "utilization": five_h.get("utilization", 0),
+                "resets_at": five_h.get("resets_at"),
+            },
+            "seven_day": {
+                "utilization": seven_d.get("utilization", 0),
+                "resets_at": seven_d.get("resets_at"),
+            },
+            "source": "claude_ai_api",
+            "fetched_at": datetime.now(KST).isoformat(),
+        }
+        _CLAUDE_AI_USAGE_CACHE["data"] = result
+        _CLAUDE_AI_USAGE_CACHE["ts"] = now
+        return result
+    except Exception as e:
+        logger.warning("claude_ai_usage_error: %s", str(e)[:120])
+        return cached

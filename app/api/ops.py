@@ -1876,6 +1876,28 @@ async def get_codex_usage():
     return {"cached": False, "ttl_sec": _CODEX_USAGE_PROXY_TTL, **out}
 
 
+# ─── Claude Max 사용량 API ─────────────────────────────────────────────
+_CLAUDE_MAX_CACHE = {"ts": 0, "payload": None}
+_CLAUDE_MAX_TTL = int(os.getenv("CLAUDE_MAX_USAGE_TTL_SEC", "60"))
+
+
+@router.get("/ops/claude-max-usage")
+async def get_claude_max_usage():
+    """Claude Max 5h/1w 사용량 — Codex /codex-usage 호환 포맷."""
+    import time as _t
+    now = _t.time()
+    cached = _CLAUDE_MAX_CACHE.get("payload")
+    cache_ts = _CLAUDE_MAX_CACHE.get("ts", 0)
+    if cached and (now - cache_ts) < _CLAUDE_MAX_TTL:
+        return {"cached": True, "age_sec": round(now - cache_ts, 1),
+                "ttl_sec": _CLAUDE_MAX_TTL, **cached}
+    from app.services.oauth_usage_tracker import get_claude_max_usage as _get
+    payload = await _get()
+    _CLAUDE_MAX_CACHE["payload"] = payload
+    _CLAUDE_MAX_CACHE["ts"] = now
+    return {"cached": False, "ttl_sec": _CLAUDE_MAX_TTL, **payload}
+
+
 # ─── 도구 오류율 통계 API (AADS-206) ─────────────────────────────────────
 @router.get("/ops/tool-stats")
 async def get_tool_stats(hours: int = Query(24, ge=1, le=168)):
