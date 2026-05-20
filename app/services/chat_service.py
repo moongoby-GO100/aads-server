@@ -2381,6 +2381,33 @@ async def with_background_completion(
                         step_name="mark_interrupted",
                         operation=_mark_interrupted_step,
                     )
+                # P0: execution_id 없어도 partial content > 20자면 DB 강제 저장
+                if not state.get("_rate_limited", False) and not state.get("execution_id"):
+                    _partial_raw = state.get("content", "")
+                    _partial_clean = _strip_streaming_progress_markers(_partial_raw)
+                    if len(_partial_clean) > 20:
+                        async def _force_save_orphan_partial() -> None:
+                            _pool = get_pool()
+                            async with _pool.acquire() as _conn:
+                                _ph_id = await _conn.fetchval(
+                                    "SELECT id FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' ORDER BY created_at DESC LIMIT 1",
+                                    uuid.UUID(str(session_id)),
+                                )
+                                if _ph_id:
+                                    _marker = "\n\n_(이전 응답은 중단 처리되었습니다. 최신 지시를 우선 처리합니다.)_"
+                                    await _conn.execute(
+                                        "UPDATE chat_messages SET content = $1, intent = 'interruption_notice', model_used = 'interrupted', edited_at = NOW() WHERE id = $2",
+                                        _partial_clean + _marker, _ph_id,
+                                    )
+                                    logger.info("force_saved_orphan_partial session=%s len=%d placeholder=%s", session_id[:8], len(_partial_clean), str(_ph_id)[:8])
+                                else:
+                                    logger.warning("force_save_orphan_partial_no_placeholder session=%s len=%d", session_id[:8], len(_partial_clean))
+                        await _retry_background_finalize_step(
+                            session_id=session_id,
+                            execution_id=None,
+                            step_name="force_save_orphan_partial",
+                            operation=_force_save_orphan_partial,
+                        )
             # 스트리밍 완료 → placeholder 삭제 (최종 응답이 generator 내부에서 저장됨)
             # rate_limited/미완료 종료 시에는 placeholder를 보존하여 재시작 복구 대상에 남긴다.
             if _completed_ok and not state.get("_rate_limited", False):

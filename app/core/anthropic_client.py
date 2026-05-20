@@ -229,6 +229,13 @@ async def call_llm_with_fallback(
                     error_code=error_code,
                     duration_ms=duration_ms,
                 )
+                if status_code == 429:
+                    mark_token_rate_limited(key, _get_error_headers(e))
+                    logger.warning(
+                        "claude_429_immediate_switch: key=%s model=%s retry=%d → next fallback",
+                        key[:12], model, retry_count,
+                    )
+                    break
                 if retryable and retry_count < _CLAUDE_MAX_RETRIES:
                     wait = _retry_delay(retry_count, status_code)
                     logger.warning(
@@ -242,8 +249,6 @@ async def call_llm_with_fallback(
                     )
                     await asyncio.sleep(wait)
                     continue
-                if status_code == 429:
-                    mark_token_rate_limited(key, _get_error_headers(e))
                 logger.warning(
                     "claude_bg_error: key=%s model=%s retry_count=%d status=%s last_error=%s",
                     key[:12],

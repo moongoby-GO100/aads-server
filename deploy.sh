@@ -623,6 +623,26 @@ case "$MODE" in
             exit 1
         fi
 
+        # P1: 전환 전 현재 슬롯 활성 스트림 drain 대기 (최대 60초)
+        ACTIVE_STREAMS="$(stream_count_for_port "$CURRENT_PORT")"
+        if [[ "$ACTIVE_STREAMS" =~ ^[0-9]+$ ]] && [[ "$ACTIVE_STREAMS" -gt 0 ]]; then
+            echo "[deploy.sh] ⏳ 현재 슬롯 :${CURRENT_PORT} 활성 스트림 ${ACTIVE_STREAMS}건 — 최대 60초 대기"
+            DRAIN_ELAPSED=0
+            while [[ $DRAIN_ELAPSED -lt 60 ]]; do
+                sleep 5
+                DRAIN_ELAPSED=$((DRAIN_ELAPSED + 5))
+                ACTIVE_STREAMS="$(stream_count_for_port "$CURRENT_PORT")"
+                if [[ "$ACTIVE_STREAMS" == "0" || -z "$ACTIVE_STREAMS" ]]; then
+                    echo "[deploy.sh] ✅ 활성 스트림 0건 — 전환 진행 (${DRAIN_ELAPSED}초 대기)"
+                    break
+                fi
+                echo "[deploy.sh]   대기중... active=${ACTIVE_STREAMS} (${DRAIN_ELAPSED}/60초)"
+            done
+            if [[ "$ACTIVE_STREAMS" =~ ^[0-9]+$ ]] && [[ "$ACTIVE_STREAMS" -gt 0 ]]; then
+                echo "[deploy.sh] ⚠️ ${ACTIVE_STREAMS}건 스트림 아직 활성 — nginx graceful reload로 전환 진행 (기존 worker가 스트림 유지)"
+            fi
+        fi
+
         # ③ upstream 전환 (aads-upstream.conf에서 backup 키워드 조작)
         echo "[deploy.sh] ③ upstream 전환: :${CURRENT_PORT} → :${NEW_PORT}"
         cp "$UPSTREAM_CONF" "${UPSTREAM_CONF}.pre_deploy"
