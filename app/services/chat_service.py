@@ -2067,7 +2067,7 @@ async def with_background_completion(
                 uuid.UUID(str(execution_id)),
             )
 
-    async def _regenerate_stream(session_id: str, partial_content: str) -> AsyncGenerator[str, None]:
+    async def _regenerate_stream(session_id: str, partial_content: str, model: str = "claude-sonnet") -> AsyncGenerator[str, None]:
         """에러 후 재시도: 마지막 user 메시지를 기반으로 스트리밍 재생성."""
         pool = get_pool()
         _sid = uuid.UUID(session_id)
@@ -2099,11 +2099,11 @@ async def with_background_completion(
         async for event in call_stream(
             intent_result=IntentResult(
                 intent="strategy",
-                model="claude-sonnet",
+                model=model,
                 use_tools=True,
                 tool_group="all",
             ),
-            model_override="claude-sonnet",
+            model_override=model,
             messages=[{"role": "user", "content": last_user + _continue_prompt}],
             tools=ToolRegistry().get_tools("all"),
             system_prompt=f"워크스페이스: {workspace or 'CEO'}. 이전 응답이 중단되어 이어서 생성합니다.",
@@ -2209,9 +2209,10 @@ async def with_background_completion(
                 _max_retries = 30
                 _retry_delay_sec = 3
                 _retried = False
+                _original_model = state.get("model_used", "claude-sonnet")
 
                 for _retry_idx in range(_max_retries):
-                    logger.info(f"stream_retry session={session_id[:8]} attempt={_retry_idx+1}/{_max_retries} delay={_retry_delay_sec}s")
+                    logger.info(f"stream_retry session={session_id[:8]} attempt={_retry_idx+1}/{_max_retries} model={_original_model} delay={_retry_delay_sec}s")
 
                     try:
                         _retry_msg = json.dumps({
@@ -2229,12 +2230,12 @@ async def with_background_completion(
                     try:
                         _partial = state.get("content", "").strip()
                         _retry_completed = False
-                        _retry_model = "claude-sonnet"
+                        _retry_model = _original_model
                         _retry_cost = Decimal("0")
                         _retry_tokens_in = 0
                         _retry_tokens_out = 0
                         _retry_error: Optional[str] = None
-                        async for chunk in _regenerate_stream(session_id, _partial):
+                        async for chunk in _regenerate_stream(session_id, _partial, model=_original_model):
                             _entry_id = None
                             if 'data: {' in chunk:
                                 try:
@@ -2293,6 +2294,71 @@ async def with_background_completion(
                             break
                     except Exception as retry_err:
                         logger.warning(f"stream_retry_failed session={session_id[:8]} attempt={_retry_idx+1}: {retry_err}")
+
+                if not _retried:
+                    _FALLBACK_CHAIN_429 = {
+                        "claude-opus": ["gpt-5.5", "gemini-3.1-pro-preview"],
+                        "gpt-5.5": ["claude-opus", "gemini-3.1-pro-preview"],
+                        "claude-sonnet": ["deepseek-v4-flash", "gemini-2.5-flash"],
+                        "claude-haiku": ["gpt-5.4-mini", "gemini-3.1-flash-lite-preview"],
+                    }
+                    for _fb_model in _FALLBACK_CHAIN_429.get(_original_model, []):
+                        try:
+                            logger.info(f"429_model_fallback session={session_id[:8]} {_original_model}→{_fb_model}")
+                            _fb_notify = json.dumps({
+                                "type": "model_fallback",
+                                "content": f"⚠️ {_original_model} 한도 초과 — {_fb_model}로 전환합니다.",
+                                "from_model": _original_model,
+                                "to_model": _fb_model,
+                            })
+                            await queue.put((f"data: {_fb_notify}\n\n", None))
+                            _fb_ok = False
+                            _fb_cost = Decimal("0")
+                            _fb_tokens_in = 0
+                            _fb_tokens_out = 0
+                            async for chunk in _regenerate_stream(session_id, state.get("content", "").strip(), model=_fb_model):
+                                _entry_id = None
+                                if 'data: {' in chunk:
+                                    try:
+                                        _entry_id = await _redis_stream.publish_token(_stream_id_for_state(session_id, state), chunk, _token_idx)
+                                        if _entry_id:
+                                            state["last_event_id"] = _entry_id
+                                        _token_idx += 1
+                                    except Exception:
+                                        pass
+                                await queue.put((chunk, _entry_id))
+                                if 'data: {' in chunk:
+                                    try:
+                                        _d = json.loads(chunk[chunk.index('{'):chunk.rstrip().rindex('}') + 1])
+                                        if _d.get("type") == "delta":
+                                            state["content"] += _d.get("content", "")
+                                        elif _d.get("type") == "done":
+                                            _fb_ok = True
+                                            state["model_used"] = _d.get("model", _fb_model)
+                                            _fb_cost = Decimal(str(_d.get("cost", "0")))
+                                            _fb_tokens_in = _d.get("input_tokens", 0) or 0
+                                            _fb_tokens_out = _d.get("output_tokens", 0) or 0
+                                        elif _d.get("type") == "error":
+                                            raise RuntimeError(_d.get("content", "fallback error"))
+                                    except (json.JSONDecodeError, ValueError):
+                                        pass
+                            if _fb_ok:
+                                await _save_and_update_session(
+                                    uuid.UUID(session_id),
+                                    state.get("content", "").strip(),
+                                    session_id_str=session_id,
+                                    model_used=state.get("model_used", _fb_model),
+                                    cost=_fb_cost,
+                                    tokens_in=_fb_tokens_in,
+                                    tokens_out=_fb_tokens_out,
+                                    tools_called=state.get("tool_events", []),
+                                )
+                                state["saw_done_event"] = True
+                                _retried = True
+                                logger.info(f"429_model_fallback_success session={session_id[:8]} {_original_model}→{_fb_model}")
+                                break
+                        except Exception as _fb_err:
+                            logger.warning(f"429_model_fallback_failed session={session_id[:8]} {_original_model}→{_fb_model}: {_fb_err}")
 
                 if not _retried:
                     try:
