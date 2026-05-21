@@ -842,6 +842,8 @@ async def _apply_deferred_interrupts_to_state(
                     session_id,
                     previous_response,
                     reason="interrupt_fast_revision",
+                    tokens_in=int(state.get("input_tokens") or 0),
+                    tokens_out=int(state.get("output_tokens") or 0),
                 )
                 if preserved_message:
                     yield f"data: {json.dumps({'type': 'partial_preserved', 'message': preserved_message})}\n\n"
@@ -878,6 +880,8 @@ async def _apply_deferred_interrupts_to_state(
                             session_id,
                             previous_response,
                             reason="interrupt_stream_revision",
+                            tokens_in=int(state.get("input_tokens") or 0),
+                            tokens_out=int(state.get("output_tokens") or 0),
                         )
                         if preserved_message:
                             yield f"data: {json.dumps({'type': 'partial_preserved', 'message': preserved_message})}\n\n"
@@ -1590,6 +1594,8 @@ async def _save_interrupted_partial_message(
     reason: str = "interrupt_applied",
     execution_id: Optional[str] = None,
     placeholder_id: Optional[str] = None,
+    tokens_in: int = 0,
+    tokens_out: int = 0,
 ) -> Optional[Dict[str, Any]]:
     """Persist a partial answer as a visible assistant bubble before a reset."""
     clean_partial = _strip_streaming_progress_markers(content or "")
@@ -1637,6 +1643,8 @@ async def _save_interrupted_partial_message(
                 eid = eid or active_row["execution_id"]
                 pid = pid or active_row["placeholder_id"]
 
+        _ti = int(tokens_in or 0)
+        _to = int(tokens_out or 0)
         if pid:
             updated = await conn.fetchrow(
                 """
@@ -1645,6 +1653,8 @@ async def _save_interrupted_partial_message(
                     model_used = 'interrupted',
                     intent = 'interrupted_partial',
                     execution_id = COALESCE(execution_id, $2),
+                    tokens_in = CASE WHEN $4 > 0 THEN $4 ELSE tokens_in END,
+                    tokens_out = CASE WHEN $5 > 0 THEN $5 ELSE tokens_out END,
                     edited_at = NOW()
                 WHERE id = $3
                 RETURNING id, created_at::text AS created_at_text
@@ -1652,6 +1662,8 @@ async def _save_interrupted_partial_message(
                 final_content,
                 eid,
                 pid,
+                _ti,
+                _to,
             )
             if updated:
                 if eid:
@@ -1704,13 +1716,15 @@ async def _save_interrupted_partial_message(
         else:
             saved = await conn.fetchrow(
                 """
-                INSERT INTO chat_messages (session_id, execution_id, role, content, model_used, intent)
-                VALUES ($1, $3, 'assistant', $2, 'interrupted', 'interrupted_partial')
+                INSERT INTO chat_messages (session_id, execution_id, role, content, model_used, intent, tokens_in, tokens_out)
+                VALUES ($1, $3, 'assistant', $2, 'interrupted', 'interrupted_partial', $4, $5)
                 RETURNING id, created_at::text AS created_at_text
                 """,
                 sid,
                 final_content,
                 eid,
+                _ti,
+                _to,
             )
             saved_id = saved["id"]
             created_at_text = saved["created_at_text"]
@@ -6666,6 +6680,8 @@ async def send_message_stream(
                                     session_id,
                                     full_response,
                                     reason="llm_retry_error",
+                                    tokens_in=int(input_tokens or 0),
+                                    tokens_out=int(output_tokens or 0),
                                 )
                                 if _preserved_message:
                                     yield f"data: {json.dumps({'type': 'partial_preserved', 'message': _preserved_message})}\n\n"
@@ -6731,6 +6747,8 @@ async def send_message_stream(
                             session_id,
                             full_response,
                             reason="llm_retry_exception",
+                            tokens_in=int(input_tokens or 0),
+                            tokens_out=int(output_tokens or 0),
                         )
                         if _preserved_message:
                             yield f"data: {json.dumps({'type': 'partial_preserved', 'message': _preserved_message})}\n\n"
