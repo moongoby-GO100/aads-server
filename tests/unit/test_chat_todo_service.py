@@ -397,6 +397,30 @@ def test_simple_request_does_not_create_todos():
     assert svc.extract_todo_titles("안녕", intent="greeting", use_tools=False) == []
 
 
+def test_extract_todo_titles_uses_pm_style_action_titles():
+    titles = svc.extract_todo_titles(
+        "다음단계로 PM식 작성으로 개선 진행하고 보고해",
+        intent="code_modify",
+        use_tools=True,
+    )
+
+    assert titles == ["PM식 TODO 작성 기준 개선 및 결과 보고"]
+    assert all(not title.endswith(("해줘", "보고해", "진행해")) for title in titles)
+
+
+def test_extract_todo_titles_splits_pm_actions_and_completion_intent():
+    titles = svc.extract_todo_titles(
+        "1. 브레인스토밍 페이지 확인해 2. 버블 내용 저장 오류 수정하고 검증해",
+        intent="code_modify",
+        use_tools=True,
+    )
+
+    assert titles == [
+        "브레인스토밍 페이지 확인",
+        "버블 내용 저장 오류 수정 및 검증",
+    ]
+
+
 def test_chat_todo_migration_contains_required_schema():
     content = Path("migrations/083_chat_todo_items.sql").read_text(encoding="utf-8")
 

@@ -39,6 +39,40 @@ _GENERIC_STOPWORDS = {
     "및", "후", "전", "관련", "기존", "추가", "수정", "점검", "확인", "정리", "보고",
     "the", "and", "for", "with", "from", "into", "this", "that",
 }
+_PM_NOISE_PREFIXES = (
+    "권장조치로",
+    "권장 조치로",
+    "다음단계로",
+    "다음 단계로",
+    "이어서",
+    "계속",
+    "즉시",
+    "바로",
+)
+_PM_REQUEST_SUFFIXES = (
+    "해줘",
+    "해주세요",
+    "해",
+    "진행해",
+    "진행해줘",
+    "진행하고",
+    "처리해",
+    "조치해",
+    "조치해줘",
+    "보고해",
+    "보고해줘",
+    "알려줘",
+)
+_PM_ACTION_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("배포", ("배포", "반영")),
+    ("검증", ("검증", "테스트")),
+    ("개선", ("개선",)),
+    ("수정", ("수정", "조치", "고쳐", "해결")),
+    ("추가", ("추가", "구현", "붙여", "만들")),
+    ("확인", ("확인", "점검", "봐", "살펴")),
+    ("정리", ("정리", "작성", "문서", "체크리스트")),
+    ("보고", ("보고", "알려")),
+)
 _HEADING_PREFIXES = (
     "목표",
     "완료 조건",
@@ -149,6 +183,92 @@ def _clean_candidate(raw: str) -> str:
     return re.sub(r"\s+", " ", candidate).strip()
 
 
+def _strip_pm_request_noise(text: str) -> str:
+    value = re.sub(r"\s+", " ", (text or "").strip())
+    for prefix in _PM_NOISE_PREFIXES:
+        value = re.sub(rf"^{re.escape(prefix)}\s*", "", value)
+    value = value.replace("PM식 작성", "PM식 TODO 작성 기준")
+    value = value.replace("PM식작성", "PM식 TODO 작성 기준")
+    value = value.strip(" .:-")
+    for suffix in _PM_REQUEST_SUFFIXES:
+        value = re.sub(rf"\s*{re.escape(suffix)}$", "", value)
+    value = re.sub(r"(?:할\s*수\s*있게|될\s*수\s*있게)\s*", "", value)
+    value = re.sub(r"\s+", " ", value).strip(" .:-")
+    return value
+
+
+def _detect_pm_actions(text: str) -> list[str]:
+    actions: list[str] = []
+    for action, patterns in _PM_ACTION_PATTERNS:
+        if any(pattern in text for pattern in patterns) and action not in actions:
+            actions.append(action)
+    return actions
+
+
+def _remove_action_phrases(text: str, actions: list[str]) -> str:
+    value = text
+    replacements = {
+        "배포": r"(?:배포|반영)(?:되게|되도록|해|해줘|하고|하기|할\s*수\s*있게)?",
+        "검증": r"(?:검증|테스트)(?:해|해줘|하고|하기)?",
+        "개선": r"(?:개선)(?:해|해줘|하고|하기)?",
+        "수정": r"(?:수정|개선|조치|고쳐|해결)(?:해|해줘|하고|하기)?",
+        "추가": r"(?:추가|구현|붙여|만들)(?:어|해|해줘|하고|하기)?",
+        "확인": r"(?:확인|점검|봐|살펴)(?:해|해줘|하고|하기)?",
+        "정리": r"(?:정리|작성)(?:해|해줘|하고|하기)?",
+        "보고": r"(?:보고|알려)(?:해|해줘|하고|하기)?",
+    }
+    for action in actions:
+        pattern = replacements.get(action)
+        if pattern:
+            value = re.sub(pattern, " ", value)
+    value = re.sub(r"\s*(?:및|하고|해서|하여|하고서)\s*", " ", value)
+    value = re.sub(r"(?:진행)(?:해|해줘|하고|하기)?", " ", value)
+    value = re.sub(r"(?:으로|로)$", "", value.strip())
+    value = re.sub(r"\s+", " ", value).strip(" .:-")
+    value = value.replace("PM식 TODO 기준", "PM식 TODO 작성 기준")
+    return value
+
+
+def _build_pm_action_phrase(actions: list[str]) -> str:
+    if not actions:
+        return "처리"
+    if "확인" in actions and "수정" in actions:
+        phrase = "원인 확인 및 조치"
+    elif "개선" in actions and "검증" in actions:
+        phrase = "개선 및 검증"
+    elif "개선" in actions:
+        phrase = "개선"
+    elif "수정" in actions and "검증" in actions:
+        phrase = "수정 및 검증"
+    elif "추가" in actions and "검증" in actions:
+        phrase = "추가 및 검증"
+    elif "확인" in actions and "보고" in actions:
+        phrase = "확인 및 결과 보고"
+    elif "정리" in actions and "보고" in actions:
+        phrase = "정리 및 보고"
+    else:
+        primary = next((item for item in actions if item != "보고"), actions[0])
+        phrase = primary
+    if "보고" in actions and "보고" not in phrase:
+        phrase = f"{phrase} 및 결과 보고"
+    return phrase
+
+
+def _format_pm_todo_title(candidate: str) -> str:
+    raw = _clean_candidate(candidate)
+    actions = _detect_pm_actions(raw)
+    cleaned = _strip_pm_request_noise(raw)
+    if not cleaned:
+        return ""
+    target = _remove_action_phrases(cleaned, actions)
+    action_phrase = _build_pm_action_phrase(actions)
+    if not target:
+        target = cleaned
+    title = f"{target} {action_phrase}".strip()
+    title = re.sub(r"\s+", " ", title).strip(" .:-")
+    return title[:160]
+
+
 def _split_clause_candidates(message: str) -> list[str]:
     text = _insert_task_breaks(message)
     lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -192,13 +312,16 @@ def extract_todo_titles(message: str, *, intent: str, use_tools: bool, max_items
         cleaned = _clean_candidate(candidate)
         if not cleaned or len(cleaned) < 4:
             continue
-        key = _normalize_text(cleaned)
+        title = _format_pm_todo_title(cleaned)
+        if not title:
+            continue
+        key = _normalize_text(title)
         if key in seen:
             continue
         if key.startswith("목표 ") or key.startswith("완료 조건 "):
             continue
         seen.add(key)
-        titles.append(cleaned[:160])
+        titles.append(title)
         if len(titles) >= max_items:
             return titles
 

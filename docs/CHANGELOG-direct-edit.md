@@ -1914,3 +1914,158 @@ def _retr
 
 ## [2026-05-20 14:28:20 KST] [aads-server] app/main.py
 - Chat-Direct 수정: patch:     _startup_asyncio.create_task(_period→    _startup_asyncio.create_task(_period
+
+## [2026-05-20 14:30:44 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: curl -s http://localhost:8100/api/v1/ops/claude-max-usage
+
+## [2026-05-20 14:30:44 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: ls /root/aads/aads-dashboard/scripts/
+
+## [2026-05-20 14:47:23 KST] [aads-server] scripts/pipeline-runner.sh
+- Chat-Direct 수정: patch:             if [ "$DASHBOARD_CHANGED" = →            if [ "$DASHBOARD_CHANGED" = 
+
+## [2026-05-20 14:49:02 KST] [aads-server] app/services/pipeline_runner_service.py
+- Chat-Direct 수정: patch:         if self.project != "AADS":
+     →        if self.project != "AADS":
+     
+
+## [2026-05-20 15:10:49 KST] [aads-server] app/models/chat.py
+- Chat-Direct 수정: patch: class ChatTodoUpdateRequest(BaseModel):
+→class ChatTodoCreateRequest(BaseModel):
+
+
+## [2026-05-20 15:11:34 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch: from app.models.chat import (
+    Approv→from app.models.chat import (
+    Approv
+
+## [2026-05-20 15:11:51 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch: @router.get("/chat/sessions/{session_id}→@router.post("/chat/sessions/{session_id
+
+## [2026-05-20 15:13:17 KST] [aads-server] scripts/patch_todo_manual.py
+- Chat-Direct 수정: write: scripts/patch_todo_manual.py
+
+## [2026-05-20 15:15:52 KST] [aads-server] scripts/patch_todo_manual.py
+- Chat-Direct 수정: write: scripts/patch_todo_manual.py
+
+## [2026-05-20 15:25:42 KST] [aads-server] reports/auto-routing-strategy-2026.html
+- Chat-Direct 수정: write: reports/auto-routing-strategy-2026.html
+
+## [2026-05-20 17:36:32 KST] [aads-server] scripts/pipeline-runner.sh
+- Chat-Direct 수정: run_remote_command: grep -n "mergeServerMessages\|scrollToBottom\|scrollTo\|isNearBottom\|handleSSEM
+
+## [2026-05-20 17:42:54 KST] [aads-server] nginx-aads-upstream.conf
+- Chat-Direct 수정: run_remote_command: awk 'NR>=4270 && NR<=4440' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-05-20 17:53:17 KST] [aads-server] tests/unit/test_tool_executor_aliases.py
+- Chat-Direct 수정: run_remote_command: sed -n '2260,2420p' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-05-20 18:13:14 KST] [aads-server] nginx-aads-upstream.conf
+- Chat-Direct 수정: run_remote_command: ps aux | grep "npm run build\|deploy.sh" | grep -v grep
+
+## [2026-05-20 18:18:04 KST] [aads-server] scripts/fix_bubble_scroll.py
+- Chat-Direct 수정: write: scripts/fix_bubble_scroll.py
+
+## [2026-05-20 18:18:11 KST] [aads-server] scripts/fix_bubble_scroll.py
+- Chat-Direct 수정: run_remote_command: sed -n '3415,3430p' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-05-20 18:22:20 KST] [aads-server] scripts/deploy_dashboard_bg.sh
+- Chat-Direct 수정: write: scripts/deploy_dashboard_bg.sh
+
+## [2026-05-20 18:22:24 KST] [aads-server] scripts/deploy_dashboard_bg.sh
+- Chat-Direct 수정: run_remote_command: cat /tmp/aads-dashboard-deploy.lock
+
+## [2026-05-20 18:49:59 KST] [aads-server] scripts/patch_bubble_dedup.py
+- Chat-Direct 수정: write: scripts/patch_bubble_dedup.py
+
+## [2026-05-20 19:12:25 KST] [aads-server] scripts/patch_bubble_dedup.py
+- Chat-Direct 수정: write: scripts/patch_bubble_dedup.py
+
+## [2026-05-20 19:20:15 KST] [aads-server] tmp/ntv2-codi-sources/goods-28-source.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-dashboard-green ls /app/.next/static/chunks/app/chat/ 2>/dev/nu
+
+## [2026-05-20 19:20:16 KST] [aads-server] tmp/ntv2-codi-sources/goods-39-source.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-dashboard-green ls /app/.next/static/chunks/app/chat/ 2>/dev/nu
+
+## [2026-05-20 19:20:17 KST] [aads-server] tmp/ntv2-codi-sources/goods-5-source.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-dashboard-green ls /app/.next/static/chunks/app/chat/ 2>/dev/nu
+
+## [2026-05-21 07:44:41 KST] [aads-server] scripts/tmp_patch3.py
+- Chat-Direct 수정: write: scripts/tmp_patch3.py
+
+## [2026-05-21 08:09:42 KST] [aads-server] scripts/tmp_patch3.py
+- Chat-Direct 수정: write: scripts/tmp_patch3.py
+
+## [2026-05-21 08:36:16 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 # 클라이언트 연결 중 3초마다 중간 저장 →                # 클라이언트 연결 중 1초마다 중간 저장 
+
+## [2026-05-21 08:36:22 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                     # 3초마다 중간 저장 (connec→                    # 1초마다 중간 저장 (중단 시 유
+
+## [2026-05-21 08:40:03 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 if await _execution_has_→                if await _execution_has_
+
+## [2026-05-21 08:43:01 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 # 클라이언트 연결 중 3초마다 중간 저장 →                # 클라이언트 연결 중 1초마다 중간 저장 
+
+## [2026-05-21 08:43:03 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                     # 3초마다 중간 저장 (connec→                    # 1초마다 중간 저장 (중단 시 유
+
+## [2026-05-21 08:43:13 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 if await _execution_has_→                if await _execution_has_
+
+## [2026-05-21 08:49:52 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:     async def _regenerate_stream(session→    async def _regenerate_stream(session
+
+## [2026-05-21 08:49:59 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:         async for event in call_stream(
+→        async for event in call_stream(
+
+
+## [2026-05-21 08:50:16 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 _retried = False
+       →                _retried = False
+       
+
+## [2026-05-21 08:50:23 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                         async for chunk →                        async for chunk 
+
+## [2026-05-21 08:50:49 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 _max_retries = 30
+      →                _max_retries = 30
+      
+
+## [2026-05-21 08:50:55 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                         _retry_model = "→                        _retry_model = _
+
+## [2026-05-21 08:51:48 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                     except Exception as →                    except Exception as 
+
+## [2026-05-21 09:18:49 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch: _AUTO_MESSAGE_EXCLUDE_FILTER = (
+    " A→_AUTO_MESSAGE_EXCLUDE_FILTER = (
+    " A
+
+## [2026-05-21 09:49:15 KST] [aads-server] test-results/.last-run.json
+- Chat-Direct 수정: run_remote_command: grep -n "setInterval.*3000\|setInterval.*iv\|}, 3000);\|}, 5000);" /root/aads/aa
+
+## [2026-05-21 09:54:43 KST] [aads-server] scripts/patch_chat_safety_net.py
+- Chat-Direct 수정: write: scripts/patch_chat_safety_net.py
+
+## [2026-05-21 09:56:53 KST] [aads-server] docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html
+- Chat-Direct 수정: write: docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html
+
+## [2026-05-21 09:58:56 KST] [aads-server] docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html
+- Chat-Direct 수정: write: docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html
+
+## [2026-05-21 10:03:03 KST] [aads-server] scripts/run_dashboard_deploy.sh
+- Chat-Direct 수정: write: scripts/run_dashboard_deploy.sh
+
+## [2026-05-21 10:04:52 KST] [aads-server] app/static/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-server/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html /root/aads/aa
+
+## [2026-05-21 10:17:38 KST] [aads-server] scripts/patch_chat_fixes.py
+- Chat-Direct 수정: write: scripts/patch_chat_fixes.py
+
+## [2026-05-21 10:18:05 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:     "/api/v1/ops/claude-max-usage",  # C→    "/api/v1/ops/claude-max-usage",  # C

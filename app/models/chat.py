@@ -179,6 +179,12 @@ class ChatTodoItemOut(BaseModel):
     completed_at: Optional[datetime] = None
 
 
+class ChatTodoCreateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=300)
+    status: str = Field(default="pending", description="pending | in_progress")
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
 class ChatTodoUpdateRequest(BaseModel):
     title: Optional[str] = Field(None, min_length=1, max_length=300)
     status: Optional[str] = Field(

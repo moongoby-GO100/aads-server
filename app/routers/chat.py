@@ -28,6 +28,7 @@ from app.models.chat import (
     BranchCreateRequest,
     ChatTodoBulkActionOut,
     ChatTodoBulkActionRequest,
+    ChatTodoCreateRequest,
     DriveFileOut,
     ExecutionOut,
     ChatTodoItemOut,
@@ -2078,6 +2079,36 @@ async def get_memory_context(session_id: UUID):
     if not result or "error" in result:
         raise _NOT_FOUND("session or memory context")
     return result
+
+
+@router.post("/chat/sessions/{session_id}/todos", response_model=ChatTodoItemOut, status_code=201, tags=["chat-todo"])
+async def create_session_todo(session_id: UUID, req: ChatTodoCreateRequest):
+    """CEO가 직접 TODO 항목을 수동 생성."""
+    from app.services.chat_todo_service import create_todo_items
+    try:
+        rows = await create_todo_items(
+            session_id=str(session_id),
+            titles=[req.title],
+            source="ceo_manual",
+            metadata=req.metadata,
+        )
+        if not rows:
+            raise HTTPException(status_code=500, detail="failed to create todo item")
+        if req.status and req.status != "pending":
+            from app.services.chat_todo_service import update_todo_item
+            updated = await update_todo_item(
+                todo_id=str(rows[0]["id"]),
+                status=req.status,
+                source="ceo_manual",
+            )
+            if updated:
+                return updated
+        return rows[0]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("chat_todo_create_failed", session_id=str(session_id), error=str(exc))
+        raise HTTPException(status_code=500, detail="failed to create session todo") from exc
 
 
 @router.get("/chat/sessions/{session_id}/todos", response_model=List[ChatTodoItemOut], tags=["chat-todo"])
