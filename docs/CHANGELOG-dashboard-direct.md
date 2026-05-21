@@ -584,3 +584,9 @@ filepath = "/root/a
 
 ## [2026-05-21 10:17:51 KST] [aads-dashboard] src/app/chat/page.tsx
 - Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/patch_chat_fixes.py
+
+## [2026-05-21 10:48:59 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:     const timer = setTimeout(async () =>→    const timer = setTimeout(async () =>
+
+## [2026-05-21 10:49:22 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i 's/      if (Date.now() < mergeCooldownUntilRef.current) return;/      \/
