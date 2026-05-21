@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AADS 채팅 시스템 기술문서 v1.0</title>
+<style>
+  :root {
+    --bg: #0f172a; --card: #1e293b; --border: #334155;
+    --text: #e2e8f0; --muted: #94a3b8; --accent: #8b5cf6;
+    --green: #22c55e; --red: #ef4444; --yellow: #eab308; --blue: #3b82f6;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:'Pretendard','Inter',system-ui,sans-serif; line-height:1.7; }
+  .container { max-width:1200px; margin:0 auto; padding:24px; }
+  
+  /* Header */
+  .doc-header { background:linear-gradient(135deg,#1e1b4b,#312e81); border-radius:16px; padding:40px 32px; margin-bottom:32px; border:1px solid rgba(139,92,246,0.3); }
+  .doc-header h1 { font-size:2rem; color:#c4b5fd; margin-bottom:8px; }
+  .doc-header .subtitle { color:#a78bfa; font-size:1.1rem; }
+  .version-badge { display:inline-block; background:rgba(139,92,246,0.2); color:#a78bfa; padding:4px 12px; border-radius:20px; font-size:0.8rem; margin-top:12px; border:1px solid rgba(139,92,246,0.4); }
+  .meta-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; margin-top:20px; }
+  .meta-item { background:rgba(0,0,0,0.2); padding:8px 16px; border-radius:8px; }
+  .meta-item .label { color:var(--muted); font-size:0.75rem; text-transform:uppercase; letter-spacing:0.5px; }
+  .meta-item .value { color:var(--text); font-size:0.9rem; font-weight:600; }
+  
+  /* Navigation */
+  .toc { background:var(--card); border-radius:12px; padding:24px; margin-bottom:32px; border:1px solid var(--border); }
+  .toc h2 { color:var(--accent); font-size:1.1rem; margin-bottom:16px; }
+  .toc-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:8px; }
+  .toc a { color:var(--blue); text-decoration:none; font-size:0.9rem; padding:6px 12px; border-radius:6px; display:block; transition:background 0.2s; }
+  .toc a:hover { background:rgba(59,130,246,0.1); }
+  .toc a .num { color:var(--muted); margin-right:6px; }
+  
+  /* Sections */
+  .section { background:var(--card); border-radius:12px; padding:32px; margin-bottom:24px; border:1px solid var(--border); }
+  .section h2 { color:var(--accent); font-size:1.4rem; margin-bottom:20px; padding-bottom:12px; border-bottom:2px solid rgba(139,92,246,0.3); }
+  .section h3 { color:#c4b5fd; font-size:1.1rem; margin:20px 0 12px; }
+  .section h4 { color:var(--blue); font-size:0.95rem; margin:16px 0 8px; }
+  .section p { color:var(--text); margin-bottom:12px; font-size:0.9rem; }
+  
+  /* Tables */
+  table { width:100%; border-collapse:collapse; margin:16px 0; font-size:0.85rem; }
+  th { background:rgba(139,92,246,0.15); color:#c4b5fd; padding:10px 12px; text-align:left; border:1px solid var(--border); font-weight:600; }
+  td { padding:8px 12px; border:1px solid var(--border); color:var(--text); vertical-align:top; }
+  tr:nth-child(even) td { background:rgba(0,0,0,0.15); }
+  
+  /* Code */
+  code { background:rgba(0,0,0,0.3); color:#f9c74f; padding:2px 6px; border-radius:4px; font-size:0.82rem; font-family:'JetBrains Mono','Fira Code',monospace; }
+  pre { background:rgba(0,0,0,0.4); padding:16px; border-radius:8px; overflow-x:auto; margin:12px 0; border:1px solid var(--border); }
+  pre code { background:none; padding:0; color:#e2e8f0; }
+  
+  /* Badges */
+  .badge { display:inline-block; padding:2px 8px; border-radius:12px; font-size:0.75rem; font-weight:600; }
+  .badge-green { background:rgba(34,197,94,0.2); color:var(--green); }
+  .badge-red { background:rgba(239,68,68,0.2); color:var(--red); }
+  .badge-yellow { background:rgba(234,179,8,0.2); color:var(--yellow); }
+  .badge-blue { background:rgba(59,130,246,0.2); color:var(--blue); }
+  .badge-purple { background:rgba(139,92,246,0.2); color:var(--accent); }
+  
+  /* Priority Tags */
+  .p0 { background:rgba(239,68,68,0.2); color:var(--red); padding:2px 8px; border-radius:4px; font-size:0.75rem; font-weight:700; }
+  .p1 { background:rgba(234,179,8,0.2); color:var(--yellow); padding:2px 8px; border-radius:4px; font-size:0.75rem; font-weight:700; }
+  .p2 { background:rgba(59,130,246,0.2); color:var(--blue); padding:2px 8px; border-radius:4px; font-size:0.75rem; font-weight:700; }
+  .p3 { background:rgba(148,163,184,0.2); color:var(--muted); padding:2px 8px; border-radius:4px; font-size:0.75rem; font-weight:700; }
+  
+  /* Diagrams */
+  .diagram { background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:8px; padding:20px; margin:16px 0; font-family:'JetBrains Mono',monospace; font-size:0.8rem; line-height:1.5; white-space:pre; overflow-x:auto; color:#94a3b8; }
+  .diagram .highlight { color:var(--accent); font-weight:600; }
+  .diagram .flow { color:var(--green); }
+  .diagram .warn { color:var(--yellow); }
+  
+  /* Stats Grid */
+  .stats-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin:16px 0; }
+  .stat-card { background:rgba(0,0,0,0.2); border-radius:8px; padding:16px; text-align:center; border:1px solid var(--border); }
+  .stat-card .num { font-size:1.8rem; font-weight:700; color:var(--accent); }
+  .stat-card .label { font-size:0.75rem; color:var(--muted); margin-top:4px; }
+  
+  /* Issue Cards */
+  .issue-card { background:rgba(0,0,0,0.2); border-radius:8px; padding:16px; margin:12px 0; border-left:4px solid var(--yellow); }
+  .issue-card.critical { border-left-color:var(--red); }
+  .issue-card.info { border-left-color:var(--blue); }
+  .issue-card .title { font-weight:600; color:var(--text); margin-bottom:6px; }
+  .issue-card .desc { color:var(--muted); font-size:0.85rem; }
+  
+  /* Changelog */
+  .changelog { margin:16px 0; }
+  .changelog-entry { display:flex; gap:16px; padding:12px 0; border-bottom:1px solid rgba(255,255,255,0.05); }
+  .changelog-date { color:var(--muted); font-size:0.8rem; min-width:80px; flex-shrink:0; }
+  .changelog-content { font-size:0.85rem; }
+  
+  /* Responsive */
+  @media (max-width:768px) {
+    .container { padding:12px; }
+    .doc-header { padding:24px 16px; }
+    .doc-header h1 { font-size:1.5rem; }
+    .section { padding:20px 16px; }
+    .toc-grid { grid-template-columns:1fr; }
+    .meta-grid { grid-template-columns:1fr 1fr; }
+  }
+  
+  /* Print */
+  @media print {
+    body { background:#fff; color:#000; }
+    .section { border:1px solid #ccc; break-inside:avoid; }
+    .doc-header { background:#f8f8f8; }
+    table { font-size:0.75rem; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<!-- HEADER -->
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<div class="doc-header">
+  <h1>AADS 채팅 시스템 기술문서</h1>
+  <div class="subtitle">CEO Chat-First System — 기획 · 아키텍처 · 구현 · 문제점 · 개선안</div>
+  <span class="version-badge">📋 v1.0.0 · 2026-05-21 · 최초 작성</span>
+  <div class="meta-grid">
+    <div class="meta-item"><div class="label">프로젝트</div><div class="value">AADS (자율 AI 개발 시스템)</div></div>
+    <div class="meta-item"><div class="label">서버</div><div class="value">서버68 (68.183.183.11)</div></div>
+    <div class="meta-item"><div class="label">백엔드</div><div class="value">FastAPI 0.115 · Python 3.11</div></div>
+    <div class="meta-item"><div class="label">프론트엔드</div><div class="value">Next.js 16 · React 19</div></div>
+    <div class="meta-item"><div class="label">데이터베이스</div><div class="value">PostgreSQL 15 + pgvector</div></div>
+    <div class="meta-item"><div class="label">도메인</div><div class="value">aads.newtalk.kr</div></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<!-- TABLE OF CONTENTS -->
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<div class="toc">
+  <h2>📑 목차</h2>
+  <div class="toc-grid">
+    <a href="#sec1"><span class="num">1.</span> 기획 — 시스템 개요 및 목표</a>
+    <a href="#sec2"><span class="num">2.</span> 아키텍처 — 전체 구조</a>
+    <a href="#sec3"><span class="num">3.</span> 데이터베이스 스키마</a>
+    <a href="#sec4"><span class="num">4.</span> 백엔드 구현 상세</a>
+    <a href="#sec5"><span class="num">5.</span> 프론트엔드 구현 상세</a>
+    <a href="#sec6"><span class="num">6.</span> SSE 스트리밍 파이프라인</a>
+    <a href="#sec7"><span class="num">7.</span> 모델 라우팅 및 비용 관리</a>
+    <a href="#sec8"><span class="num">8.</span> 운영 현황 통계</a>
+    <a href="#sec9"><span class="num">9.</span> 현재 문제점 분석</a>
+    <a href="#sec10"><span class="num">10.</span> 개선안 로드맵</a>
+    <a href="#sec11"><span class="num">11.</span> 버전 이력</a>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<!-- 1. 기획 -->
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="sec1">
+  <h2>1. 기획 — 시스템 개요 및 목표</h2>
+  
+  <h3>1.1 시스템 정체성</h3>
+  <p>AADS 채팅 시스템은 CEO(moongoby)가 자연어로 6개 프로젝트(AADS, KIS, GO100, SF, NTV2, NAS)를 통합 운영하는 <strong>Chat-First 인터페이스</strong>입니다. 단순 대화가 아니라, 코드 수정 · 배포 · DB 조회 · 서버 관리 · 리서치 · 팩트체크까지 50+ 도구를 실시간으로 호출하는 <strong>오케스트레이션 허브</strong>입니다.</p>
+  
+  <h3>1.2 핵심 설계 원칙</h3>
+  <table>
+    <tr><th>원칙</th><th>설명</th><th>구현</th></tr>
+    <tr><td>Chat-First</td><td>모든 운영 액션이 채팅 메시지에서 시작</td><td>24종 Intent 분류 → 도구 자동 바인딩</td></tr>
+    <tr><td>워크스페이스 분리</td><td>프로젝트별 독립 시스템 프롬프트 · 역할 · 메모리</td><td>25개 워크스페이스, role_key 기반 역할 전환</td></tr>
+    <tr><td>실시간 스트리밍</td><td>LLM 응답을 토큰 단위 실시간 전달</td><td>SSE + 30ms 토큰 버퍼 + heartbeat(3초)</td></tr>
+    <tr><td>무중단 운영</td><td>배포·모델 전환 중에도 채팅 유지</td><td>Blue-Green 배포 + Redis Stream 복구</td></tr>
+    <tr><td>비용 효율</td><td>Intent별 최적 모델 자동 선택</td><td>Opus(복잡) → Sonnet(코드) → Flash(단순) 라우팅</td></tr>
+    <tr><td>멀티 모델</td><td>Claude, GPT, Gemini, DeepSeek 등 30+ 모델</td><td>OAuth 2토큰 폴백 + LiteLLM + OpenRouter</td></tr>
+  </table>
+  
+  <h3>1.3 사용자 플로우</h3>
+  <div class="diagram">
+<span class="highlight">[CEO 브라우저]</span> ──▶ <span class="highlight">[Next.js Dashboard]</span> ──▶ <span class="highlight">[FastAPI Backend]</span>
+      │                        │                           │
+      │  1. 워크스페이스 선택    │  chatApi.ts               │  /api/v1/chat/*
+      │  2. 세션 선택/생성       │  useChatSession.ts        │  ceo_chat.py
+      │  3. 메시지 입력          │  useChatSSE.ts            │  chat_service.py
+      │  4. SSE 스트리밍 수신    │  ChatBubble.tsx           │  model_selector.py
+      │  5. 도구 결과 실시간     │  ChatStream.tsx           │  50+ MCP Tools
+      │  6. 아티팩트 패널        │  ChatArtifactPanel.tsx    │  chat_artifacts
+      └─────────────────────────┘                           └──▶ <span class="flow">[PostgreSQL + Redis]</span>
+  </div>
+  
+  <h3>1.4 주요 기능 목록</h3>
+  <table>
+    <tr><th>기능</th><th>상태</th><th>설명</th></tr>
+    <tr><td>워크스페이스 관리</td><td><span class="badge badge-green">운영중</span></td><td>25개 워크스페이스, 시스템 프롬프트 · 색상 · 아이콘 커스터마이즈</td></tr>
+    <tr><td>세션 관리</td><td><span class="badge badge-green">운영중</span></td><td>생성/삭제/고정/태그/모델 선택/역할(role_key) 설정</td></tr>
+    <tr><td>SSE 스트리밍</td><td><span class="badge badge-green">운영중</span></td><td>토큰 버퍼(30ms) + heartbeat(3s) + 5회 자동 재시도</td></tr>
+    <tr><td>24종 Intent 분류</td><td><span class="badge badge-green">운영중</span></td><td>casual → deep_research → execute 등 키워드 기반 분류</td></tr>
+    <tr><td>50+ 도구 호출</td><td><span class="badge badge-green">운영중</span></td><td>tool_use/tool_result 실시간 SSE 이벤트</td></tr>
+    <tr><td>멀티 모델 라우팅</td><td><span class="badge badge-green">운영중</span></td><td>30+ 모델, OAuth 2토큰 자동 폴백</td></tr>
+    <tr><td>마크다운 렌더링</td><td><span class="badge badge-green">운영중</span></td><td>테이블, 코드블록, 차트, 이미지, 링크, 멘션칩</td></tr>
+    <tr><td>메시지 편집/재전송</td><td><span class="badge badge-green">운영중</span></td><td>사용자 메시지 인라인 편집 → 재전송</td></tr>
+    <tr><td>북마크/복사/지시서</td><td><span class="badge badge-green">운영중</span></td><td>호버 액션 버튼, 패널 보기</td></tr>
+    <tr><td>아티팩트 패널</td><td><span class="badge badge-green">운영중</span></td><td>코드/문서/차트 아티팩트 우측 패널 표시</td></tr>
+    <tr><td>TODO 자동 추출</td><td><span class="badge badge-green">운영중</span></td><td>PM식 TODO 생성 → 완료 게이트 자동 판정</td></tr>
+    <tr><td>CEO 인터럽트</td><td><span class="badge badge-green">운영중</span></td><td>스트리밍 중 추가 지시 → fast_revision 적용</td></tr>
+    <tr><td>메모리 자동 주입</td><td><span class="badge badge-green">운영중</span></td><td>5섹션(session_notes/preferences/tool_strategy/directives/discoveries)</td></tr>
+    <tr><td>임베딩 검색</td><td><span class="badge badge-green">운영중</span></td><td>pgvector 기반 메시지 벡터 검색</td></tr>
+    <tr><td>스트림 복구</td><td><span class="badge badge-green">운영중</span></td><td>Redis Stream 기반 서버 재시작 시 복구</td></tr>
+    <tr><td>신뢰도 배지</td><td><span class="badge badge-green">운영중</span></td><td>db_realtime / ai_inference / mixed 구분 표시</td></tr>
+    <tr><td>인라인 차트</td><td><span class="badge badge-green">운영중</span></td><td>```chart 코드펜스 → bar/line/pie 시각화</td></tr>
+  </table>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<!-- 2. 아키텍처 -->
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="sec2">
+  <h2>2. 아키텍처 — 전체 구조</h2>
+  
+  <h3>2.1 시스템 구성도</h3>
+  <div class="diagram">
+┌──────────────────────────────────────────────────────────────────────────┐
+│                          <span class="highlight">AADS Chat System Architecture</span>                     │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  <span class="flow">[Browser]</span>                                                              │
+│     │                                                                    │
+│     ▼                                                                    │
+│  <span class="highlight">[Cloudflare CDN]</span> ── aads.newtalk.kr                                   │
+│     │                                                                    │
+│     ▼                                                                    │
+│  <span class="highlight">[Nginx Reverse Proxy]</span> ── Blue/Green Upstream                         │
+│     │              │                                                     │
+│     ▼              ▼                                                     │
+│  <span class="flow">[Next.js 16]</span>    <span class="flow">[FastAPI 0.115]</span>                                      │
+│  Dashboard        aads-server:8100                                       │
+│  (SSR/CSR)           │                                                   │
+│                      ├──▶ <span class="highlight">/api/v1/chat/workspaces</span>   (CRUD)              │
+│                      ├──▶ <span class="highlight">/api/v1/chat/sessions</span>     (CRUD + role_key)   │
+│                      ├──▶ <span class="highlight">/api/v1/chat/messages/send</span> (SSE Streaming)    │
+│                      ├──▶ <span class="highlight">/api/v1/chat/messages</span>     (CRUD + search)     │
+│                      ├──▶ <span class="highlight">/api/v1/chat/artifacts</span>    (CRUD)              │
+│                      ├──▶ <span class="highlight">/api/v1/chat/drive</span>        (파일 관리)         │
+│                      └──▶ <span class="highlight">/api/v1/ceo-chat/send</span>     (Legacy v1)        │
+│                              │                                           │
+│                              ▼                                           │
+│                 ┌─────────────────────────┐                              │
+│                 │   <span class="highlight">PromptCompiler</span>          │                              │
+│                 │   · prompt_assets (L1~L5)│                              │
+│                 │   · memory_recall.py     │                              │
+│                 │   · intent_classifier    │                              │
+│                 └────────────┬────────────┘                              │
+│                              │                                           │
+│                 ┌────────────▼────────────┐                              │
+│                 │   <span class="highlight">Model Selector</span>         │                              │
+│                 │   · OAuth 2-token rotate │                              │
+│                 │   · Intent → Model map   │                              │
+│                 │   · 429/402 fallback     │                              │
+│                 │   · LiteLLM proxy        │                              │
+│                 └────────────┬────────────┘                              │
+│                              │                                           │
+│            ┌─────────────────┼─────────────────┐                         │
+│            ▼                 ▼                  ▼                         │
+│     <span class="flow">[Anthropic API]</span>    <span class="flow">[OpenAI API]</span>     <span class="flow">[Google Gemini]</span>            │
+│     Claude Opus/Sonnet   GPT-5/5.5          Gemini 2.5/3.1              │
+│     Haiku 4.5            o1/o3              Flash/Pro                    │
+│                                                                          │
+│  <span class="warn">[Data Layer]</span>                                                          │
+│     ├── PostgreSQL 15 (aads-postgres:5433)                               │
+│     │     · chat_workspaces / chat_sessions / chat_messages              │
+│     │     · chat_artifacts / chat_todo_items / chat_turn_executions      │
+│     │     · pgvector (message embedding)                                 │
+│     ├── Redis (Stream 기반 스트리밍 복구)                                 │
+│     └── File System (/root/aads/uploads/)                                │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+  </div>
+  
+  <h3>2.2 레이어 구조</h3>
+  <table>
+    <tr><th>레이어</th><th>경로/파일</th><th>책임</th></tr>
+    <tr><td><strong>API Router</strong></td><td><code>app/api/ceo_chat.py</code> (2,097줄)</td><td>라우팅, 인텐트 분류, 모델 라우팅, LLM 호출, 비용 계산</td></tr>
+    <tr><td><strong>API Router (Legacy)</strong></td><td><code>app/api/chat.py</code> (291줄)</td><td>Phase 1 키워드 라우터 (브릿지용, LLM 미호출)</td></tr>
+    <tr><td><strong>서비스 레이어</strong></td><td><code>app/services/chat_service.py</code> (8,147줄)</td><td>DB CRUD, SSE 스트리밍, 백그라운드 완료, 인터럽트, TODO 게이트</td></tr>
+    <tr><td><strong>TODO 서비스</strong></td><td><code>app/services/chat_todo_service.py</code> (979줄)</td><td>PM식 TODO 생성/판정/완료 게이트</td></tr>
+    <tr><td><strong>임베딩 서비스</strong></td><td><code>app/services/chat_embedding_service.py</code></td><td>메시지 벡터화 + 유사 검색</td></tr>
+    <tr><td><strong>도구 서비스</strong></td><td><code>app/services/chat_tools.py</code></td><td>50+ MCP 도구 바인딩</td></tr>
+    <tr><td><strong>모델 셀렉터</strong></td><td><code>app/services/model_selector.py</code></td><td>call_stream, 429 재시도, OAuth 슬롯 쿨다운</td></tr>
+    <tr><td><strong>프롬프트 컴파일러</strong></td><td><code>app/core/prompt_compiler.py</code></td><td>L1~L5 에셋 합성, provenance 기록</td></tr>
+    <tr><td><strong>인증</strong></td><td><code>app/core/auth_provider.py</code></td><td>OAuth 토큰 관리, 클라이언트 생성</td></tr>
+    <tr><td><strong>Pydantic 모델</strong></td><td><code>app/models/chat.py</code> (294줄)</td><td>요청/응답 스키마 전체 정의</td></tr>
+  </table>
+
+  <h3>2.3 프론트엔드 구조</h3>
+  <table>
+    <tr><th>파일</th><th>타입</th><th>책임</th></tr>
+    <tr><td><code>src/app/chat/page.tsx</code></td><td>Page</td><td>메인 채팅 페이지 (오케스트레이터)</td></tr>
+    <tr><td><code>src/components/chat/ChatLayout.tsx</code></td><td>Layout</td><td>3-column 레이아웃 (사이드바 + 메인 + 아티팩트)</td></tr>
+    <tr><td><code>src/components/chat/ChatBubble.tsx</code></td><td>Component</td><td>메시지 버블 (마크다운/코드블록/표/차트/출처/액션)</td></tr>
+    <tr><td><code>src/components/chat/ChatStream.tsx</code></td><td>Component</td><td>메시지 목록 + 스크롤 관리</td></tr>
+    <tr><td><code>src/components/chat/ChatInput.tsx</code></td><td>Component</td><td>입력창 (모델선택/파일첨부/전송)</td></tr>
+    <tr><td><code>src/app/chat/ChatSidebar.tsx</code></td><td>Component</td><td>워크스페이스/세션 목록 + 검색</td></tr>
+    <tr><td><code>src/app/chat/ChatArtifactPanel.tsx</code></td><td>Component</td><td>우측 아티팩트 패널</td></tr>
+    <tr><td><code>src/hooks/useChatSSE.ts</code></td><td>Hook</td><td>SSE 스트리밍 + 토큰 버퍼 + 재연결</td></tr>
+    <tr><td><code>src/hooks/useChatSession.ts</code></td><td>Hook</td><td>워크스페이스/세션/메시지 상태 관리</td></tr>
+    <tr><td><code>src/services/chatApi.ts</code></td><td>Service</td><td>REST/SSE API 클라이언트 전체</td></tr>
+    <tr><td><code>src/services/streamManager.ts</code></td><td>Service</td><td>멀티세션 스트림 상태 추적</td></tr>
+    <tr><td><code>src/services/errorReporter.ts</code></td><td>Service</td><td>에러 리포팅 → 백엔드 전송</td></tr>
+    <tr><td><code>src/styles/chat-theme.css</code></td><td>Style</td><td>CSS 변수 기반 다크/라이트 테마</td></tr>
+  </table>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<!-- 3. DB 스키마 -->
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="sec3">
+  <h2>3. 데이터베이스 스키마</h2>
+  
+  <h3>3.1 테이블 목록 (12개)</h3>
+  <table>
+    <tr><th>테이블</th><th>용도</th><th>핵심 컬럼</th></tr>
+    <tr><td><code>chat_workspaces</code></td><td>워크스페이스 (프로젝트별 채팅 공간)</td><td>id, name, system_prompt, settings, color, icon</td></tr>
+    <tr><td><code>chat_sessions</code></td><td>세션 (대화 단위)</td><td>id, workspace_id, title, summary, cost_total, current_model, role_key, current_execution_id, pinned, tags</td></tr>
+    <tr><td><code>chat_messages</code></td><td>메시지 (대화 내용)</td><td>id, session_id, role, content, model_used, intent, cost, tokens_in/out, tools_called, sources, embedding(vector), quality_score, is_compacted, thinking_summary</td></tr>
+    <tr><td><code>chat_turn_executions</code></td><td>턴 실행 추적</td><td>id, session_id, user_message_id, assistant_message_id, requested/actual_model, status, retry_count, error_message</td></tr>
+    <tr><td><code>chat_artifacts</code></td><td>아티팩트 (코드/문서/차트)</td><td>id, session_id, workspace_id, type, title, content, metadata</td></tr>
+    <tr><td><code>chat_todo_items</code></td><td>세션 TODO 추적</td><td>id, session_id, message_id, execution_id, title, status, sort_order, source, metadata(match_terms, audit)</td></tr>
+    <tr><td><code>chat_files</code></td><td>파일 첨부</td><td>연관 메시지 파일</td></tr>
+    <tr><td><code>chat_drive_files</code></td><td>드라이브 파일</td><td>워크스페이스별 파일 저장소</td></tr>
+    <tr><td><code>chat_model_preferences</code></td><td>모델 선호 설정</td><td>사용자별 모델 우선순위</td></tr>
+    <tr><td><code>chat_workspace_change_ledger</code></td><td>변경 원장</td><td>워크스페이스 설정 변경 이력</td></tr>
+    <tr><td><code>ceo_chat_sessions</code></td><td>Legacy CEO 세션</td><td>v1 호환용</td></tr>
+    <tr><td><code>ceo_chat_messages</code></td><td>Legacy CEO 메시지</td><td>v1 호환용</td></tr>
+  </table>
+  
+  <h3>3.2 chat_messages 상세 스키마</h3>
+  <table>
+    <tr><th>컬럼</th><th>타입</th><th>기본값</th><th>설명</th></tr>
+    <tr><td>id</td><td>UUID</td><td>gen_random_uuid()</td><td>PK</td></tr>
+    <tr><td>session_id</td><td>UUID FK</td><td>-</td><td>chat_sessions 참조</td></tr>
+    <tr><td>role</td><td>VARCHAR</td><td>-</td><td>user / assistant / system</td></tr>
+    <tr><td>content</td><td>TEXT</td><td>-</td><td>메시지 본문 (마크다운)</td></tr>
+    <tr><td>model_used</td><td>VARCHAR</td><td>NULL</td><td>실제 사용 모델 ID</td></tr>
+    <tr><td>intent</td><td>VARCHAR</td><td>NULL</td><td>분류된 인텐트 (24종+시스템)</td></tr>
+    <tr><td>cost</td><td>NUMERIC</td><td>0</td><td>비용 (USD)</td></tr>
+    <tr><td>tokens_in</td><td>INTEGER</td><td>0</td><td>입력 토큰</td></tr>
+    <tr><td>tokens_out</td><td>INTEGER</td><td>0</td><td>출력 토큰</td></tr>
+    <tr><td>tools_called</td><td>JSONB</td><td>[]</td><td>도구 호출 이벤트 배열</td></tr>
+    <tr><td>sources</td><td>JSONB</td><td>[]</td><td>출처 목록</td></tr>
+    <tr><td>attachments</td><td>JSONB</td><td>[]</td><td>첨부파일 메타</td></tr>
+    <tr><td>embedding</td><td>vector</td><td>NULL</td><td>pgvector 임베딩 (1536d)</td></tr>
+    <tr><td>quality_score</td><td>FLOAT</td><td>NULL</td><td>응답 품질 점수 (0~1)</td></tr>
+    <tr><td>is_compacted</td><td>BOOLEAN</td><td>false</td><td>컨텍스트 압축 여부</td></tr>
+    <tr><td>thinking_summary</td><td>TEXT</td><td>NULL</td><td>사고 과정 요약</td></tr>
+    <tr><td>bookmarked</td><td>BOOLEAN</td><td>false</td><td>북마크 상태</td></tr>
+    <tr><td>edited_at</td><td>TIMESTAMPTZ</td><td>NULL</td><td>수정 시각</td></tr>
+    <tr><td>artifact_id</td><td>UUID FK</td><td>NULL</td><td>연결 아티팩트</td></tr>
+    <tr><td>created_at</td><td>TIMESTAMPTZ</td><td>now()</td><td>생성 시각</td></tr>
+  </table>
+  
+  <h3>3.3 ER 관계</h3>
+  <div class="diagram">
+<span class="highlight">chat_workspaces</span> (1) ──── (N) <span class="highlight">chat_sessions</span> (1) ──── (N) <span class="highlight">chat_messages</span>
+       │                              │                        │
+       │                              │                        ├── (N) tools_called [JSONB]
+       │                              │                        ├── (N) sources [JSONB]
+       │                              │                        └── (1) embedding [vector]
+       │                              │
+       │                              ├──── (N) <span class="flow">chat_turn_executions</span>
+       │                              ├──── (N) <span class="flow">chat_todo_items</span>
+       │                              └──── (N) <span class="flow">chat_artifacts</span>
+       │
+       └──── (N) <span class="flow">chat_drive_files</span>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<!-- 4. 백엔드 구현 상세 -->
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="sec4">
+  <h2>4. 백엔드 구현 상세</h2>
+  
+  <h3>4.1 CEO Chat 라우터 (<code>ceo_chat.py</code>, 2,097줄)</h3>
+  <h4>Intent Classifier (24종)</h4>
+  <table>
+    <tr><th>인텐트</th><th>키워드 예시</th><th>권장 모델</th><th>도구</th></tr>
+    <tr><td>casual</td><td>안녕, ㅎㅇ, ㅋㅋ</td><td>gemini-2.0-flash</td><td>없음</td></tr>
+    <tr><td>deep_research</td><td>딥리서치, 심층조사</td><td>gemini-2.5-pro</td><td>도구 활성</td></tr>
+    <tr><td>url_analyze</td><td>URL 분석, http://</td><td>gemini-2.5-flash</td><td>도구 활성</td></tr>
+    <tr><td>planning</td><td>기획안, 로드맵</td><td>claude-sonnet-4-6</td><td>도구 활성</td></tr>
+    <tr><td>decision</td><td>결정해줘, 장단점</td><td>claude-opus-4-6</td><td>도구 활성</td></tr>
+    <tr><td>design_fix</td><td>디자인수정, UI수정</td><td>auto</td><td>Vision + Code</td></tr>
+    <tr><td>qa</td><td>QA, 테스트, 검수</td><td>auto</td><td>QA Agent + Judge</td></tr>
+    <tr><td>architect</td><td>설계검토, 아키텍처</td><td>auto</td><td>Architect Agent</td></tr>
+    <tr><td>health_check</td><td>헬스체크, 시스템 상태</td><td>auto</td><td>전용 도구</td></tr>
+    <tr><td>pipeline_runner</td><td>파이프라인, 봇한테</td><td>auto</td><td>Runner submit</td></tr>
+    <tr><td>execute</td><td>만들어, 수정해, 배포</td><td>claude-sonnet-4-6</td><td>지시서 생성</td></tr>
+    <tr><td>dashboard</td><td>상태, 현황, 보고</td><td>auto</td><td>도구 활성</td></tr>
+    <tr><td>diagnosis</td><td>왜, 안돼, 오류</td><td>auto</td><td>도구 활성</td></tr>
+    <tr><td>strategy</td><td>기획, 전략, 설계</td><td>auto</td><td>대화형</td></tr>
+  </table>
+  <p><em>* 분류 우선순위: workspace_switch → directive_gen → deep_research → ... → strategy (기본값)</em></p>
+  
+  <h4>모델 라우팅 로직</h4>
+  <pre><code>def route_model(message: str) -> str:
+    complex_kw = ['설계', '분석', '개선안', '보고', '아키텍처', '전략', '검토', '평가']
+    code       = ['수정해', '만들어', '추가해', '지시서', '코드', '고쳐']
+    simple     = ['실행해', '결과', '상태', '확인', '스크린샷']
+    
+    if any(p in message for p in complex_kw): return 'claude-opus-4-6'     # $5/M in, $25/M out
+    if any(p in message for p in code):       return 'claude-sonnet-4-6'   # $3/M in, $15/M out
+    if any(p in message for p in simple):     return 'gemini-2.5-flash'    # $0.30/M in, $2.50/M out
+    return 'claude-sonnet-4-6'  # 기본값</code></pre>
+  
+  <h4>OAuth 폴백 체인</h4>
+  <pre><code># 호출 순서
+ANTHROPIC_AUTH_TOKEN (1순위 OAuth)
+  → 402/429/403 시 → ANTHROPIC_AUTH_TOKEN_2 (2순위 OAuth)
+    → 모두 실패 시 → Gemini via LiteLLM (3순위)
+
+# 캐시 제어: Anthropic 시스템 프롬프트에 cache_control: {"type": "ephemeral"} 적용
+# 비용 계산: calc_cost(model, input_tokens, output_tokens) → USD</code></pre>
+
+  <h3>4.2 Chat Service (<code>chat_service.py</code>, 8,147줄)</h3>
+  <h4>핵심 기능 목록</h4>
+  <table>
+    <tr><th>기능</th><th>구현</th><th>설명</th></tr>
+    <tr><td>SSE 스트리밍</td><td><code>with_heartbeat()</code></td><td>3초 간격 heartbeat, 150초 무응답 타임아웃</td></tr>
+    <tr><td>백그라운드 완료</td><td><code>_active_bg_tasks</code></td><td>클라이언트 연결 끊겨도 LLM 생성 계속 → DB 저장</td></tr>
+    <tr><td>스트리밍 상태</td><td><code>_streaming_state</code></td><td>세션별 진행 상태 (content, tool_count, last_tool)</td></tr>
+    <tr><td>중복 방지</td><td><code>_is_duplicate_request()</code></td><td>0.5초 윈도우 SHA256 해시 기반 dedup</td></tr>
+    <tr><td>인터럽트</td><td><code>_apply_deferred_interrupts_to_state()</code></td><td>스트리밍 중 CEO 추가 지시 → fast_revision</td></tr>
+    <tr><td>TODO 게이트</td><td><code>_apply_todo_completion_gate()</code></td><td>응답 완료 시 TODO 자동 판정</td></tr>
+    <tr><td>히스토리 필터</td><td><code>_HISTORY_EXCLUDED_INTENTS</code></td><td>placeholder/system 메시지를 LLM 히스토리에서 제외</td></tr>
+    <tr><td>복구 중복제거</td><td><code>_dedupe_recovery_like_messages()</code></td><td>연속 recovery 메시지 중 최장 1건만 유지</td></tr>
+    <tr><td>Resume 세마포어</td><td><code>_RESUME_SEMAPHORE(3)</code></td><td>동시 resume 최대 3개 제한</td></tr>
+    <tr><td>도구 이벤트 정규화</td><td><code>normalize_tool_events()</code></td><td>legacy/codex/구조화 이벤트를 단일 형식으로 통일</td></tr>
+    <tr><td>토론 오케스트레이터</td><td><code>_execute_discussion_orchestrator()</code></td><td>run_debate 서비스 연동, 다관점 분석</td></tr>
+    <tr><td>인용 명령 추출</td><td><code>_promote_actionable_quoted_instruction()</code></td><td>"응답이 없" 문맥에서 CEO 인용 지시 추출</td></tr>
+    <tr><td>Stale 정리</td><td><code>_stale_cleanup_task</code></td><td>1,200초 이상 멈춘 placeholder 자동 정리</td></tr>
+  </table>
+
+  <h3>4.3 TODO 서비스 (<code>chat_todo_service.py</code>, 979줄)</h3>
+  <p>PM식 TODO 자동 생성 → 완료 게이트 판정 시스템:</p>
+  <table>
+    <tr><th>단계</th><th>함수</th><th>설명</th></tr>
+    <tr><td>1. 생성 판정</td><td><code>should_create_todos()</code></td><td>6자 이상 + 멀티스텝 마커/번호목록/도구필요 시 생성</td></tr>
+    <tr><td>2. 제목 추출</td><td><code>extract_todo_titles()</code></td><td>줄바꿈/번호/세미콜론으로 분리 → PM식 포맷</td></tr>
+    <tr><td>3. PM 포맷</td><td><code>_format_pm_todo_title()</code></td><td>"[대상] [액션]" 형태로 정규화 (최대 160자)</td></tr>
+    <tr><td>4. DB 저장</td><td><code>create_todo_items()</code></td><td>첫 항목 in_progress, 나머지 pending</td></tr>
+    <tr><td>5. 완료 판정</td><td><code>evaluate_todo_completion()</code></td><td>match_terms 기반 응답 텍스트 매칭</td></tr>
+    <tr><td>6. 실패 감지</td><td><code>response_indicates_failure()</code></td><td>"실패/오류/에러/불가" 키워드 탐지</td></tr>
+    <tr><td>7. 프롬프트 주입</td><td><code>build_todo_prompt_block()</code></td><td>[세션 TODO 운영 규칙] 블록 생성</td></tr>
+    <tr><td>8. 누락 알림</td><td><code>build_missing_todo_note()</code></td><td>응답 미포함 항목 목록 추가</td></tr>
+  </table>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<!-- 5. 프론트엔드 구현 상세 -->
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="sec5">
+  <h2>5. 프론트엔드 구현 상세</h2>
+  
+  <h3>5.1 ChatBubble 마크다운 렌더러</h3>
+  <p><code>MarkdownContent</code> 컴포넌트가 처리하는 마크다운 요소:</p>
+  <table>
+    <tr><th>요소</th><th>파싱 방식</th><th>렌더링</th></tr>
+    <tr><td>코드블록</td><td>``` 감지 → lang 추출</td><td><code>CodeBlock</code> 컴포넌트 (복사 버튼 포함)</td></tr>
+    <tr><td>차트</td><td>```chart JSON 파싱</td><td><code>InlineChart</code> 컴포넌트 (bar/line/pie)</td></tr>
+    <tr><td>마크다운 표</td><td>| 파이프 구분 파싱</td><td>HTML table (zebra 스트라이프)</td></tr>
+    <tr><td>헤딩 (h1~h4)</td><td># 카운트</td><td>크기 차등 p 태그</td></tr>
+    <tr><td>인용</td><td>&gt; 접두사</td><td>보라색 좌측 테두리 blockquote</td></tr>
+    <tr><td>목록</td><td>- / * / 숫자.</td><td>ul/li (중첩 미지원)</td></tr>
+    <tr><td>볼드/이탤릭</td><td>** / *</td><td>strong / em</td></tr>
+    <tr><td>인라인코드</td><td>`</td><td>노란색 code 태그</td></tr>
+    <tr><td>링크</td><td>[text](url)</td><td>보라색 a 태그 (새 탭, XSS 방어)</td></tr>
+    <tr><td>이미지</td><td>![alt](url)</td><td>img 태그 (lazy loading, URL 검증)</td></tr>
+    <tr><td>자동 링크</td><td>https:// 패턴</td><td>보라색 a 태그</td></tr>
+    <tr><td>멘션칩</td><td>@KIS, @GO100 등</td><td>보라색 배경 칩</td></tr>
+    <tr><td>구분선</td><td>--- / ***</td><td>hr 태그</td></tr>
+  </table>
+  
+  <h3>5.2 ChatBubble 기능</h3>
+  <table>
+    <tr><th>기능</th><th>사용자 버블</th><th>AI 버블</th></tr>
+    <tr><td>편집</td><td>✅ 인라인 편집 → 재전송</td><td>-</td></tr>
+    <tr><td>재지시</td><td>✅ 입력창 복사(🔄)</td><td>-</td></tr>
+    <tr><td>복사</td><td>-</td><td>✅ 클립보드 복사</td></tr>
+    <tr><td>북마크</td><td>-</td><td>✅ ★/☆ 토글</td></tr>
+    <tr><td>지시서 생성</td><td>-</td><td>✅ 📋 클릭</td></tr>
+    <tr><td>패널 보기</td><td>-</td><td>✅ 🗂 클릭</td></tr>
+    <tr><td>사고 과정</td><td>-</td><td>✅ 접이식 ThoughtSummary</td></tr>
+    <tr><td>출처 카드</td><td>-</td><td>✅ SourceCard</td></tr>
+    <tr><td>신뢰도 배지</td><td>-</td><td>✅ ConfidenceBadge</td></tr>
+    <tr><td>첨부파일</td><td>✅ FileAttachmentCards</td><td>-</td></tr>
+    <tr><td>인텐트 배지</td><td>-</td><td>✅ pipeline_c/agent_result/system</td></tr>
+    <tr><td>메타정보</td><td>시간 표시</td><td>모델 · 토큰 · 비용 · 시간</td></tr>
+    <tr><td>XSS 방어</td><td>-</td><td>✅ stripToolXml, isSafeUrl</td></tr>
+  </table>
+  
+  <h3>5.3 ChatLayout 3-Column</h3>
+  <div class="diagram">
+┌──────────┬──────────────────────────────┬──────────┐
+│ Sidebar  │        Main Chat Area        │ Artifact │
+│  240px   │        flex-1 (중앙)          │  360px   │
+│          │                              │  xl만 표시│
+│ ·워크스페│ ┌────────────────────────────┐│          │
+│  이스 목록│ │  ChatStream (메시지 목록)  ││ ·코드    │
+│ ·세션 목록│ │  - ChatBubble x N         ││ ·문서    │
+│ ·검색    │ │  - 스크롤 관리              ││ ·차트    │
+│ ·새 세션 │ ├────────────────────────────┤│          │
+│          │ │  ChatInput (입력창)        ││          │
+│ 모바일:  │ │  - 모델선택 · 첨부 · 전송  ││          │
+│ overlay  │ └────────────────────────────┘│          │
+└──────────┴──────────────────────────────┴──────────┘
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<!-- 6. SSE 스트리밍 파이프라인 -->
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="sec6">
+  <h2>6. SSE 스트리밍 파이프라인</h2>
+  
+  <h3>6.1 이벤트 타입 전체 목록</h3>
+  <table>
+    <tr><th>이벤트</th><th>방향</th><th>페이로드</th><th>설명</th></tr>
+    <tr><td><code>delta</code></td><td>Server→Client</td><td>content: string</td><td>토큰 단위 텍스트 조각</td></tr>
+    <tr><td><code>thinking</code></td><td>Server→Client</td><td>content: string</td><td>Claude Extended Thinking 스트림</td></tr>
+    <tr><td><code>thought_summary</code></td><td>Server→Client</td><td>summary: string</td><td>사고 과정 요약</td></tr>
+    <tr><td><code>tool_use</code></td><td>Server→Client</td><td>tool_name, tool_use_id</td><td>도구 호출 시작</td></tr>
+    <tr><td><code>tool_result</code></td><td>Server→Client</td><td>tool_name, content</td><td>도구 실행 결과</td></tr>
+    <tr><td><code>sources</code></td><td>Server→Client</td><td>sources: SourceItem[]</td><td>출처 목록</td></tr>
+    <tr><td><code>research.progress</code></td><td>Server→Client</td><td>content: string</td><td>딥리서치 진행 상황</td></tr>
+    <tr><td><code>research.complete</code></td><td>Server→Client</td><td>-</td><td>딥리서치 완료</td></tr>
+    <tr><td><code>yellow_limit</code></td><td>Server→Client</td><td>consecutive_count</td><td>쓰기 도구 연속 실행 경고</td></tr>
+    <tr><td><code>stream_reset</code></td><td>Server→Client</td><td>reason: string</td><td>스트림 리셋 (Gemini 재시도 등)</td></tr>
+    <tr><td><code>retry_progress</code></td><td>Server→Client</td><td>content: string</td><td>429 재시도 진행 상태</td></tr>
+    <tr><td><code>heartbeat</code></td><td>Server→Client</td><td>-</td><td>3초 간격 연결 유지 (256byte 패딩)</td></tr>
+    <tr><td><code>done</code></td><td>Server→Client</td><td>model_used, tokens, cost</td><td>스트리밍 정상 완료</td></tr>
+    <tr><td><code>error</code></td><td>Server→Client</td><td>content: string</td><td>오류 (재시도 없이 종료)</td></tr>
+    <tr><td><code>resume_done</code></td><td>Server→Client</td><td>-</td><td>stream-resume 재연결 완료</td></tr>
+    <tr><td><code>partial_preserved</code></td><td>Server→Client</td><td>message: object</td><td>인터럽트 전 부분 응답 보존</td></tr>
+  </table>
+  
+  <h3>6.2 토큰 버퍼 렌더링 (AADS-TOKEN-BUFFER)</h3>
+  <div class="diagram">
+<span class="highlight">[서버 SSE delta]</span> ──▶ tokenBufferRef.push() ──▶ <span class="flow">[30ms 렌더 루프]</span>
+                                                     │
+                                          ┌──────────▼──────────┐
+                                          │ 버퍼 &lt; 50개: 1개씩   │
+                                          │ 버퍼 ≥ 50개: batch   │
+                                          │ (len/10개씩 소비)     │
+                                          └──────────┬──────────┘
+                                                     │
+                                          displayTextRef += tokens.join('')
+                                                     │
+                                          setState({ streamingText })
+                                                     │
+                                          <span class="flow">[ChatBubble 렌더]</span>
+  </div>
+  
+  <h3>6.3 재연결 & 복구 전략</h3>
+  <table>
+    <tr><th>단계</th><th>조건</th><th>액션</th></tr>
+    <tr><td>1. Inactivity</td><td>150초 무응답</td><td>abort → 재연결 시도</td></tr>
+    <tr><td>2. stream-resume</td><td>lastEventId != "0"</td><td>Last-Event-ID 기반 SSE 재연결</td></tr>
+    <tr><td>3. Exponential Backoff</td><td>재시도 1~5회</td><td>1s → 2s → 4s → 8s → 16s (최대 30s)</td></tr>
+    <tr><td>4. Poll Fallback</td><td>5회 실패</td><td>3초 후 getMessages() 1회 조회</td></tr>
+    <tr><td>5. Error Report</td><td>폴백도 실패</td><td>reportError() → 백엔드 기록, 사용자 에러 표시</td></tr>
+  </table>
+  
+  <h3>6.4 서버측 스트리밍 보호</h3>
+  <table>
+    <tr><th>보호 메커니즘</th><th>설정</th><th>설명</th></tr>
+    <tr><td>Heartbeat</td><td>3초 간격</td><td>Cloudflare 100s / Nginx 유휴 타임아웃 방어</td></tr>
+    <tr><td>백그라운드 완료</td><td>15분 자동취소</td><td>클라이언트 이탈 후에도 LLM 생성 → DB 저장</td></tr>
+    <tr><td>Resume 세마포어</td><td>동시 3개</td><td>resume 폭주 방어</td></tr>
+    <tr><td>First Response 타임아웃</td><td>180초</td><td>첫 응답 없으면 타임아웃</td></tr>
+    <tr><td>Redis Stream</td><td>토큰 버퍼링</td><td>서버 재시작 시 토큰 복구</td></tr>
+    <tr><td>Stale 정리</td><td>1,200초</td><td>20분 이상 멈춘 placeholder 자동 정리</td></tr>
+    <tr><td>중복 요청 필터</td><td>0.5초 윈도우</td><td>SHA256 해시 기반 dedup</td></tr>
+  </table>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<!-- 7. 모델 라우팅 및 비용 관리 -->
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="sec7">
+  <h2>7. 모델 라우팅 및 비용 관리</h2>
+  
+  <h3>7.1 지원 모델 (30+ 종)</h3>
+  <table>
+    <tr><th>Provider</th><th>모델</th><th>Input $/M</th><th>Output $/M</th><th>용도</th></tr>
+    <tr><td>Anthropic</td><td>claude-opus-4-6</td><td>5.00</td><td>25.00</td><td>복잡 분석/전략</td></tr>
+    <tr><td>Anthropic</td><td>claude-sonnet-4-6</td><td>3.00</td><td>15.00</td><td>코드/기본 작업</td></tr>
+    <tr><td>Anthropic</td><td>claude-haiku-4-5</td><td>0.80</td><td>4.00</td><td>단순 분류/확인</td></tr>
+    <tr><td>OpenAI</td><td>gpt-5</td><td>10.00</td><td>30.00</td><td>고급 분석</td></tr>
+    <tr><td>OpenAI</td><td>gpt-5-mini</td><td>0.25</td><td>2.00</td><td>경량 작업</td></tr>
+    <tr><td>Google</td><td>gemini-2.5-flash</td><td>0.30</td><td>2.50</td><td>단순/검색</td></tr>
+    <tr><td>Google</td><td>gemini-2.5-pro</td><td>7.00</td><td>21.00</td><td>딥리서치</td></tr>
+    <tr><td>OpenRouter</td><td>nemotron-free</td><td>0.00</td><td>0.00</td><td>무료 테스트</td></tr>
+    <tr><td>OpenRouter</td><td>grok-4-fast</td><td>0.20</td><td>0.20</td><td>경량 2M 컨텍스트</td></tr>
+    <tr><td>OpenRouter</td><td>deepseek-v3</td><td>0.26</td><td>0.26</td><td>코드 보조</td></tr>
+  </table>
+  
+  <h3>7.2 비용 제어 체계</h3>
+  <table>
+    <tr><th>레벨</th><th>설정</th><th>액션</th></tr>
+    <tr><td>일일 예산</td><td>$5.00 (LITELLM_DAILY_BUDGET_USD)</td><td>초과 시 Opus 차단</td></tr>
+    <tr><td>월간 경고</td><td>$150.00 (LITELLM_MONTHLY_BUDGET_WARN_USD)</td><td>초과 시 경고</td></tr>
+    <tr><td>CEO 선택</td><td>ModelSelector UI</td><td>model_override → 자동 라우팅 무시</td></tr>
+    <tr><td>인텐트 라우팅</td><td>_CHAT_FIRST_MODEL_MAP</td><td>casual → flash, decision → opus</td></tr>
+    <tr><td>비용 보고</td><td>/chat/cost-summary</td><td>일별/월별 비용 + 모델 breakdown</td></tr>
+  </table>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<!-- 8. 운영 현황 통계 -->
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="sec8">
+  <h2>8. 운영 현황 통계</h2>
+  <p style="color:var(--muted);font-size:0.8rem;">기준: 2026-05-21 09:17 KST [DB 조회]</p>
+  
+  <div class="stats-grid">
+    <div class="stat-card"><div class="num">49,205</div><div class="label">총 메시지</div></div>
+    <div class="stat-card"><div class="num">96</div><div class="label">세션</div></div>
+    <div class="stat-card"><div class="num">25</div><div class="label">워크스페이스</div></div>
+    <div class="stat-card"><div class="num">18,663</div><div class="label">아티팩트</div></div>
+    <div class="stat-card"><div class="num">1,215</div><div class="label">TODO 항목</div></div>
+    <div class="stat-card"><div class="num">30+</div><div class="label">지원 모델</div></div>
+  </div>
+  
+  <h3>8.1 모델 사용 현황 (assistant 응답 기준)</h3>
+  <table>
+    <tr><th>모델</th><th>사용 횟수</th><th>비율</th></tr>
+    <tr><td>claude-opus-4-6</td><td>4,867</td><td><span class="badge badge-purple">1위</span></td></tr>
+    <tr><td>claude-sonnet-4-6</td><td>3,292</td><td><span class="badge badge-blue">2위</span></td></tr>
+    <tr><td>claude-haiku-4-5</td><td>2,529</td><td>3위</td></tr>
+    <tr><td>interrupted</td><td>2,288</td><td><span class="badge badge-yellow">⚠ 중단</span></td></tr>
+    <tr><td>GPT-5.4 (Codex CLI)</td><td>1,072</td><td>Codex</td></tr>
+    <tr><td>claude-opus (alias)</td><td>792</td><td>별칭</td></tr>
+    <tr><td>GPT-5.5 (Codex CLI)</td><td>738</td><td>Codex</td></tr>
+    <tr><td>gemini-3.1-flash-lite</td><td>637</td><td>경량</td></tr>
+    <tr><td>claude-opus-4-7</td><td>385</td><td>최신</td></tr>
+    <tr><td>recovered_from_redis</td><td>92</td><td><span class="badge badge-yellow">⚠ 복구</span></td></tr>
+    <tr><td>stopped</td><td>88</td><td><span class="badge badge-red">중단</span></td></tr>
+  </table>
+  
+  <h3>8.2 인텐트 분포</h3>
+  <table>
+    <tr><th>인텐트</th><th>건수</th><th>비고</th></tr>
+    <tr><td>_deleted_duplicate</td><td>9,913</td><td><span class="badge badge-red">⚠ 삭제된 중복</span></td></tr>
+    <tr><td>pipeline_c</td><td>4,311</td><td>Pipeline Runner 응답</td></tr>
+    <tr><td>system_trigger</td><td>2,798</td><td>시스템 자동 트리거</td></tr>
+    <tr><td>runner_response</td><td>2,758</td><td>러너 결과</td></tr>
+    <tr><td>interrupted_partial</td><td>2,264</td><td><span class="badge badge-yellow">⚠ 중단</span></td></tr>
+    <tr><td>status_check</td><td>2,166</td><td>상태 조회</td></tr>
+    <tr><td>auto_reaction</td><td>996</td><td>자동 반응</td></tr>
+    <tr><td>casual</td><td>817</td><td>인사/잡담</td></tr>
+    <tr><td>pipeline_runner</td><td>808</td><td>러너 제출</td></tr>
+    <tr><td>task_query</td><td>776</td><td>작업 조회</td></tr>
+  </table>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<!-- 9. 현재 문제점 분석 -->
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="sec9">
+  <h2>9. 현재 문제점 분석</h2>
+  
+  <h3>9.1 Critical (P0)</h3>
+  
+  <div class="issue-card critical">
+    <div class="title"><span class="p0">P0</span> 스트리밍 응답 실시간 DB 저장 미비 (반복 에러 21회)</div>
+    <div class="desc">
+      <strong>현상:</strong> 스트리밍 중 서버 재시작/연결 끊김 시 부분 응답이 DB에 저장되지 않아 빈 버블 발생.<br>
+      <strong>원인:</strong> <code>chat_service.py</code>의 producer-finally 경로에서 DB 쓰기 실패 시 3회 재시도(<code>_FINALIZE_DB_RETRY_DELAYS</code>)하지만, 타임아웃(0.5s/1s/2s)이 DB 부하 시 부족. Redis Stream 복구도 <code>recovered_from_redis</code> 92건으로 불완전.<br>
+      <strong>영향:</strong> CEO가 "응답이 없다"고 반복 보고 (에러패턴 53회).<br>
+      <strong>파일:</strong> <code>app/services/chat_service.py</code> — <code>_retry_background_finalize_step()</code>
+    </div>
+  </div>
+  
+  <div class="issue-card critical">
+    <div class="title"><span class="p0">P0</span> 응답 버블 중복 생성 (세션 이동 후 보고 미출력 28회)</div>
+    <div class="desc">
+      <strong>현상:</strong> 세션 전환 후 복귀 시 동일 응답이 2개 버블로 표시.<br>
+      <strong>원인:</strong> (1) 프론트 <code>useChatSession.ts</code>의 <code>selectSession</code>에서 메시지 로드 후 스트리밍 상태 복구 시 중복 append. (2) 백그라운드 완료(<code>_active_bg_tasks</code>)와 폴백 복구(<code>pollFallback</code>)가 동시에 DB 저장.<br>
+      <strong>영향:</strong> 화면 혼란, CEO 짜증 (experience_lessons 기록).<br>
+      <strong>파일:</strong> <code>src/hooks/useChatSession.ts</code>, <code>app/services/chat_service.py</code>
+    </div>
+  </div>
+  
+  <div class="issue-card critical">
+    <div class="title"><span class="p0">P0</span> interrupted 메시지 2,288건 — 비정상 중단 비율 과다</div>
+    <div class="desc">
+      <strong>현상:</strong> <code>model_used='interrupted'</code> 메시지가 전체 assistant 응답의 약 14.5%.<br>
+      <strong>원인:</strong> CEO 인터럽트, OAuth 429 연속, Cloudflare 타임아웃, 클라이언트 탭 전환 등 복합 원인.<br>
+      <strong>영향:</strong> 불필요한 비용 발생 + 사용자 경험 저하.<br>
+      <strong>파일:</strong> <code>app/services/chat_service.py</code> — <code>_save_interrupted_partial_message()</code>
+    </div>
+  </div>
+  
+  <h3>9.2 High (P1)</h3>
+  
+  <div class="issue-card">
+    <div class="title"><span class="p1">P1</span> _deleted_duplicate 인텐트 9,913건 — DB 오염</div>
+    <div class="desc">
+      <strong>현상:</strong> 삭제 표시된 중복 메시지가 전체의 약 20%를 차지.<br>
+      <strong>원인:</strong> dedup 로직이 "soft delete" (intent를 <code>_deleted_duplicate</code>로 변경) 방식으로, 실제 행은 삭제하지 않음.<br>
+      <strong>개선:</strong> 일정 기간 경과 후 물리 삭제 또는 파티셔닝으로 분리.
+    </div>
+  </div>
+  
+  <div class="issue-card">
+    <div class="title"><span class="p1">P1</span> ceo_chat.py 단일 파일 2,097줄 — 유지보수 어려움</div>
+    <div class="desc">
+      <strong>현상:</strong> Intent 분류, 모델 라우팅, LLM 호출, 비용 계산, 세션 관리가 한 파일에 혼재.<br>
+      <strong>원인:</strong> Phase별 기능 추가가 누적.<br>
+      <strong>개선:</strong> <code>intent_classifier.py</code>, <code>llm_caller.py</code>, <code>cost_calculator.py</code>로 분리.
+    </div>
+  </div>
+  
+  <div class="issue-card">
+    <div class="title"><span class="p1">P1</span> chat_service.py 8,147줄 — God Object</div>
+    <div class="desc">
+      <strong>현상:</strong> CRUD, 스트리밍, 백그라운드 완료, 인터럽트, TODO, 토론, 복구가 하나의 모듈.<br>
+      <strong>영향:</strong> 수정 시 사이드 이펙트 예측 어려움, 테스트 커버리지 부족.<br>
+      <strong>개선:</strong> <code>streaming_service.py</code>, <code>interrupt_service.py</code>, <code>recovery_service.py</code> 분리.
+    </div>
+  </div>
+  
+  <div class="issue-card">
+    <div class="title"><span class="p1">P1</span> 마크다운 렌더러 커스텀 구현 — 엣지 케이스 취약</div>
+    <div class="desc">
+      <strong>현상:</strong> <code>ChatBubble.tsx</code>의 <code>MarkdownContent</code>가 정규식 기반 자체 파서.<br>
+      <strong>원인:</strong> 중첩 목록, 복합 마크다운, HTML 엔티티 등 미지원.<br>
+      <strong>개선:</strong> <code>react-markdown</code> + <code>remark-gfm</code> 라이브러리로 전환 검토 (번들 사이즈 트레이드오프).
+    </div>
+  </div>
+  
+  <h3>9.3 Medium (P2)</h3>
+  
+  <div class="issue-card info">
+    <div class="title"><span class="p2">P2</span> Legacy ceo_chat_sessions/messages 테이블 잔존</div>
+    <div class="desc">v1 호환용으로 남아있으나 실제 사용률 미확인. 마이그레이션 또는 삭제 검토 필요.</div>
+  </div>
+  
+  <div class="issue-card info">
+    <div class="title"><span class="p2">P2</span> 워크스페이스 25개 중 테스트용 11개</div>
+    <div class="desc">Codex 테스트 워크스페이스(codex-smoke-*, Codex UI Opus47 *)가 11개. 정리 또는 아카이브 필요.</div>
+  </div>
+  
+  <div class="issue-card info">
+    <div class="title"><span class="p2">P2</span> Intent 분류가 키워드 기반 — 오분류 가능성</div>
+    <div class="desc">"KIS 상태" → qa 분류 방지 로직이 있으나, 복합 문장에서 우선순위 충돌 가능. LLM 기반 분류 또는 2-pass 검증 고려.</div>
+  </div>
+  
+  <div class="issue-card info">
+    <div class="title"><span class="p2">P2</span> 프론트엔드 번들 최적화 미확인</div>
+    <div class="desc">ChatBubble 내 인라인 마크다운 파서, Chart 컴포넌트가 코드 스플리팅 없이 번들에 포함.</div>
+  </div>
+  
+  <div class="issue-card info">
+    <div class="title"><span class="p2">P2</span> embedding 컬럼 활용도 미확인</div>
+    <div class="desc">chat_messages.embedding (vector) 컬럼 존재하나, 검색 API 활용 빈도와 인덱스 성능 미측정.</div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<!-- 10. 개선안 로드맵 -->
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="sec10">
+  <h2>10. 개선안 로드맵</h2>
+  
+  <h3>10.1 즉시 조치 (1주 내)</h3>
+  <table>
+    <tr><th>#</th><th>우선순위</th><th>항목</th><th>대상 파일</th><th>기대 효과</th></tr>
+    <tr><td>1</td><td><span class="p0">P0</span></td><td>스트리밍 DB 저장 재시도 강화 (타임아웃 2s→5s, 최대 5회)</td><td><code>chat_service.py</code></td><td>빈 버블 발생률 감소</td></tr>
+    <tr><td>2</td><td><span class="p0">P0</span></td><td>세션 복귀 시 중복 버블 방지 (render_id 기반 dedup)</td><td><code>useChatSession.ts</code>, <code>ChatStream.tsx</code></td><td>버블 중복 제거</td></tr>
+    <tr><td>3</td><td><span class="p0">P0</span></td><td>interrupted 메시지 원인별 분류 및 자동 복구 강화</td><td><code>chat_service.py</code></td><td>중단 비율 14.5% → 5% 이하 목표</td></tr>
+    <tr><td>4</td><td><span class="p1">P1</span></td><td>_deleted_duplicate 물리 삭제 스케줄러 (7일 경과)</td><td>신규 <code>cleanup_service.py</code></td><td>DB 용량 20% 절감</td></tr>
+  </table>
+  
+  <h3>10.2 단기 개선 (1개월 내)</h3>
+  <table>
+    <tr><th>#</th><th>우선순위</th><th>항목</th><th>기대 효과</th></tr>
+    <tr><td>5</td><td><span class="p1">P1</span></td><td>ceo_chat.py 모듈 분리 (intent_classifier, llm_caller, cost_calculator)</td><td>유지보수성 향상, 단위 테스트 용이</td></tr>
+    <tr><td>6</td><td><span class="p1">P1</span></td><td>chat_service.py 분리 (streaming, interrupt, recovery, todo)</td><td>사이드 이펙트 감소, 코드 리뷰 용이</td></tr>
+    <tr><td>7</td><td><span class="p1">P1</span></td><td>마크다운 렌더러 react-markdown 전환 또는 커스텀 파서 보강</td><td>중첩 마크다운 · 특수 문자 정상 처리</td></tr>
+    <tr><td>8</td><td><span class="p2">P2</span></td><td>Intent 분류 2-pass 검증 (키워드 → LLM 확인)</td><td>오분류율 감소</td></tr>
+    <tr><td>9</td><td><span class="p2">P2</span></td><td>테스트 워크스페이스 아카이브/삭제</td><td>사이드바 정리, DB 경량화</td></tr>
+  </table>
+  
+  <h3>10.3 중기 개선 (3개월 내)</h3>
+  <table>
+    <tr><th>#</th><th>우선순위</th><th>항목</th><th>기대 효과</th></tr>
+    <tr><td>10</td><td><span class="p2">P2</span></td><td>메시지 무한 스크롤 + 가상화 (현재 50개 한정)</td><td>대규모 세션 UX 개선</td></tr>
+    <tr><td>11</td><td><span class="p2">P2</span></td><td>프론트엔드 코드 스플리팅 (Chart, Artifact 지연 로드)</td><td>초기 번들 사이즈 감소</td></tr>
+    <tr><td>12</td><td><span class="p2">P2</span></td><td>embedding 검색 인덱스 최적화 (IVFFlat → HNSW)</td><td>벡터 검색 성능 향상</td></tr>
+    <tr><td>13</td><td><span class="p3">P3</span></td><td>Legacy ceo_chat_sessions/messages 마이그레이션 후 삭제</td><td>스키마 단순화</td></tr>
+    <tr><td>14</td><td><span class="p3">P3</span></td><td>WebSocket 전환 검토 (SSE 한계 — 양방향 필요 시)</td><td>인터럽트 지연 감소</td></tr>
+  </table>
+  
+  <h3>10.4 검증 방법</h3>
+  <table>
+    <tr><th>개선 항목</th><th>완료 기준</th><th>측정 방법</th></tr>
+    <tr><td>빈 버블 해소</td><td>빈 버블 발생률 &lt; 1%</td><td><code>SELECT count(*) FROM chat_messages WHERE role='assistant' AND content=''</code></td></tr>
+    <tr><td>중복 버블 해소</td><td>중복 보고 0건/주</td><td>error_log 모니터링</td></tr>
+    <tr><td>중단 비율</td><td>interrupted &lt; 5%</td><td><code>SELECT count(*) ... WHERE model_used='interrupted'</code> / 전체 비율</td></tr>
+    <tr><td>DB 용량</td><td>_deleted_duplicate 0건</td><td>인텐트별 count 조회</td></tr>
+    <tr><td>코드 분리</td><td>단일 파일 &lt; 1,500줄</td><td><code>wc -l</code></td></tr>
+  </table>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<!-- 11. 버전 이력 -->
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<div class="section" id="sec11">
+  <h2>11. 버전 이력</h2>
+  <p>이 문서는 AADS 채팅 시스템의 유지보수 기준 문서입니다. 코드 변경 시 해당 섹션을 함께 업데이트합니다.</p>
+  
+  <table>
+    <tr><th>버전</th><th>날짜</th><th>작성자</th><th>변경 내용</th></tr>
+    <tr><td>v1.0.0</td><td>2026-05-21</td><td>AADS CTO AI</td><td>최초 작성 — 기획/아키텍처/구현/DB/문제점/개선안 전수 분석</td></tr>
+  </table>
+  
+  <h3>업데이트 규칙</h3>
+  <table>
+    <tr><th>변경 유형</th><th>버전 규칙</th><th>예시</th></tr>
+    <tr><td>섹션 내용 수정/추가</td><td>Patch (v1.0.x)</td><td>문제점 1건 추가 → v1.0.1</td></tr>
+    <tr><td>섹션 구조 변경</td><td>Minor (v1.x.0)</td><td>새 섹션 추가 → v1.1.0</td></tr>
+    <tr><td>전체 재작성</td><td>Major (vX.0.0)</td><td>아키텍처 전면 변경 → v2.0.0</td></tr>
+  </table>
+  
+  <h3>관련 문서</h3>
+  <table>
+    <tr><th>문서</th><th>경로</th><th>설명</th></tr>
+    <tr><td>CLAUDE.md</td><td><code>/app/CLAUDE.md</code></td><td>AADS 전체 프로젝트 규칙</td></tr>
+    <tr><td>AADS Knowledge</td><td><code>docs/knowledge/AADS-KNOWLEDGE.md</code></td><td>아키텍처/파이프라인/교차검증 지식</td></tr>
+    <tr><td>Shared Lessons</td><td><code>docs/shared-lessons/INDEX.md</code></td><td>프로젝트 간 공유 교훈</td></tr>
+    <tr><td>CEO Directives</td><td>GitHub raw</td><td>CEO 절대 규칙 문서</td></tr>
+  </table>
+</div>
+
+<!-- Footer -->
+<div style="text-align:center; padding:32px 0; color:var(--muted); font-size:0.8rem;">
+  <p>AADS Chat System Technical Document v1.0.0 · 2026-05-21 · 서버68</p>
+  <p>이 문서는 코드 변경 시 함께 업데이트되어야 합니다.</p>
+</div>
+
+</div><!-- container -->
+</body>
+</html>
