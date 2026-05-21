@@ -2183,15 +2183,15 @@ async def with_background_completion(
                 # 클라이언트 연결 중 1초마다 중간 저장 — heartbeat-only 구간 스킵 (중단 시 유실 최소화)
                 if not _client_gone and _event_type not in ("heartbeat", None, ""):
                     _now_rt = _bg_time.monotonic()
-                    if _now_rt - state["last_save"] > 1:
+                    if _now_rt - state["last_save"] > 5:
                         state["last_save"] = _now_rt
                         await _interim_save_streaming(session_id, state)
 
                 # 클라이언트 disconnect 후 처리
                 if _client_gone:
                     now = _bg_time.monotonic()
-                    # 1초마다 중간 저장 (중단 시 유실 최소화)
-                    if now - state["last_save"] > 1:
+                    # 5초마다 중간 저장 (DB 부하 감소, 500ms dedup 가드 병행)
+                    if now - state["last_save"] > 5:
                         state["last_save"] = now
                         await _maybe_interim_save_after_disconnect()
                     # 클라이언트 이탈 후: LLM 활동 없으면 _BG_AUTO_CANCEL_SEC, 활동 중이면 최대 30분
