@@ -2069,3 +2069,12 @@ def _retr
 
 ## [2026-05-21 10:18:05 KST] [aads-server] app/main.py
 - Chat-Direct 수정: patch:     "/api/v1/ops/claude-max-usage",  # C→    "/api/v1/ops/claude-max-usage",  # C
+
+## [2026-05-21 10:49:14 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: sed -i 's/      if (Date.now() < mergeCooldownUntilRef.current) return;/      \/
+
+## [2026-05-21 10:49:18 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: find /root/aads/aads-server -name "main.py" -path "*/app/*"
+
+## [2026-05-21 10:49:24 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: find /root/aads/aads-server -name "main.py" -path "*/app/*"
