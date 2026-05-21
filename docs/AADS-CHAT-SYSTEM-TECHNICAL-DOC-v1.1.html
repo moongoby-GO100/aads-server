@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AADS 채팅 시스템 기술문서 v1.2</title>
+<title>AADS 채팅 시스템 기술문서 v1.1</title>
 <style>
   :root {
     --bg: #0f172a; --card: #1e293b; --border: #334155;
@@ -127,9 +127,8 @@
 <div class="doc-header">
   <h1>AADS 채팅 시스템 기술문서</h1>
   <div class="subtitle">CEO Chat-First System — 기획 · 아키텍처 · 구현 · 문제점 · 개선안</div>
-  <span class="version-badge">📋 v1.2.0 · 2026-05-21 · 성능 최적화 + 브라우저 멈춤 개선 + 통계 갱신</span>
-  <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.1.html" class="version-badge old" style="text-decoration:none;">📦 v1.1.0</a>
-  <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.0.html" class="version-badge old" style="text-decoration:none;">📦 v1.0.0</a>
+  <span class="version-badge">📋 v1.1.0 · 2026-05-21 · P0 이슈 3건 해결</span>
+  <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.0.html" class="version-badge old" style="text-decoration:none;">📦 v1.0.0 아카이브</a>
   <div class="meta-grid">
     <div class="meta-item"><div class="label">프로젝트</div><div class="value">AADS (자율 AI 개발 시스템)</div></div>
     <div class="meta-item"><div class="label">서버</div><div class="value">서버68 (68.183.183.11)</div></div>
@@ -154,7 +153,7 @@
     <a href="#sec6"><span class="num">6.</span> SSE 스트리밍 파이프라인</a>
     <a href="#sec7"><span class="num">7.</span> 모델 라우팅 및 비용 관리</a>
     <a href="#sec8"><span class="num">8.</span> 운영 현황 통계</a>
-    <a href="#sec9"><span class="num">9.</span> 해결된 이슈 (v1.1~v1.2)</a>
+    <a href="#sec9"><span class="num">9.</span> v1.1 해결된 이슈</a>
     <a href="#sec10"><span class="num">10.</span> 현재 문제점 분석</a>
     <a href="#sec11"><span class="num">11.</span> 개선안 로드맵</a>
     <a href="#sec12"><span class="num">12.</span> 버전 이력</a>
@@ -175,7 +174,7 @@
     <tr><th>원칙</th><th>설명</th><th>구현</th></tr>
     <tr><td>Chat-First</td><td>모든 운영 액션이 채팅 메시지에서 시작</td><td>24종 Intent 분류 → 도구 자동 바인딩</td></tr>
     <tr><td>워크스페이스 분리</td><td>프로젝트별 독립 시스템 프롬프트 · 역할 · 메모리</td><td>25개 워크스페이스, role_key 기반 역할 전환</td></tr>
-    <tr><td>실시간 스트리밍</td><td>LLM 응답을 토큰 단위 실시간 전달</td><td>SSE + 50ms drain timer + heartbeat(3초)</td></tr>
+    <tr><td>실시간 스트리밍</td><td>LLM 응답을 토큰 단위 실시간 전달</td><td>SSE + 30ms 토큰 버퍼 + heartbeat(3초)</td></tr>
     <tr><td>무중단 운영</td><td>배포·모델 전환 중에도 채팅 유지</td><td>Blue-Green 배포 + Redis Stream 복구</td></tr>
     <tr><td>비용 효율</td><td>Intent별 최적 모델 자동 선택</td><td>Opus(복잡) → Sonnet(코드) → Flash(단순) 라우팅</td></tr>
     <tr><td>멀티 모델</td><td>Claude, GPT, Gemini, DeepSeek 등 30+ 모델</td><td>OAuth 2토큰 폴백 + LiteLLM + OpenRouter</td></tr>
@@ -199,7 +198,7 @@
     <tr><th>기능</th><th>상태</th><th>설명</th></tr>
     <tr><td>워크스페이스 관리</td><td><span class="badge badge-green">운영중</span></td><td>25개 워크스페이스, 시스템 프롬프트 · 색상 · 아이콘 커스터마이즈</td></tr>
     <tr><td>세션 관리</td><td><span class="badge badge-green">운영중</span></td><td>생성/삭제/고정/태그/모델 선택/역할(role_key) 설정</td></tr>
-    <tr><td>SSE 스트리밍</td><td><span class="badge badge-green">운영중</span></td><td>토큰 drain(50ms) + heartbeat(3s) + 5회 자동 재시도</td></tr>
+    <tr><td>SSE 스트리밍</td><td><span class="badge badge-green">운영중</span></td><td>토큰 버퍼(30ms) + heartbeat(3s) + 5회 자동 재시도</td></tr>
     <tr><td>24종 Intent 분류</td><td><span class="badge badge-green">운영중</span></td><td>casual → deep_research → execute 등 키워드 기반 분류</td></tr>
     <tr><td>50+ 도구 호출</td><td><span class="badge badge-green">운영중</span></td><td>tool_use/tool_result 실시간 SSE 이벤트</td></tr>
     <tr><td>멀티 모델 라우팅</td><td><span class="badge badge-green">운영중</span></td><td>30+ 모델, OAuth 2토큰 자동 폴백</td></tr>
@@ -215,7 +214,6 @@
     <tr><td>스트림 복구</td><td><span class="badge badge-green">운영중</span></td><td>Redis Stream 기반 서버 재시작 시 복구</td></tr>
     <tr><td>신뢰도 배지</td><td><span class="badge badge-green">운영중</span></td><td>db_realtime / ai_inference / mixed 구분 표시</td></tr>
     <tr><td>인라인 차트</td><td><span class="badge badge-green">운영중</span></td><td>```chart 코드펜스 → bar/line/pie 시각화</td></tr>
-    <tr><td>중단 응답 보존</td><td><span class="badge badge-green">v1.2</span></td><td>1자 이상 부분 응답 DB 보존 + 화면 표시</td></tr>
   </table>
 </div>
 
@@ -290,7 +288,7 @@
     <tr><th>레이어</th><th>경로/파일</th><th>책임</th></tr>
     <tr><td><strong>API Router</strong></td><td><code>app/api/ceo_chat.py</code> (2,097줄)</td><td>라우팅, 인텐트 분류, 모델 라우팅, LLM 호출, 비용 계산</td></tr>
     <tr><td><strong>API Router (Legacy)</strong></td><td><code>app/api/chat.py</code> (291줄)</td><td>Phase 1 키워드 라우터 (브릿지용, LLM 미호출)</td></tr>
-    <tr><td><strong>서비스 레이어</strong></td><td><code>app/services/chat_service.py</code> (8,165줄)</td><td>DB CRUD, SSE 스트리밍, 백그라운드 완료, 인터럽트, TODO 게이트</td></tr>
+    <tr><td><strong>서비스 레이어</strong></td><td><code>app/services/chat_service.py</code> (8,147줄)</td><td>DB CRUD, SSE 스트리밍, 백그라운드 완료, 인터럽트, TODO 게이트</td></tr>
     <tr><td><strong>TODO 서비스</strong></td><td><code>app/services/chat_todo_service.py</code> (979줄)</td><td>PM식 TODO 생성/판정/완료 게이트</td></tr>
     <tr><td><strong>임베딩 서비스</strong></td><td><code>app/services/chat_embedding_service.py</code></td><td>메시지 벡터화 + 유사 검색</td></tr>
     <tr><td><strong>도구 서비스</strong></td><td><code>app/services/chat_tools.py</code></td><td>50+ MCP 도구 바인딩</td></tr>
@@ -303,7 +301,7 @@
   <h3>2.3 프론트엔드 구조</h3>
   <table>
     <tr><th>파일</th><th>타입</th><th>책임</th></tr>
-    <tr><td><code>src/app/chat/page.tsx</code> (8,340줄)</td><td>Page</td><td>메인 채팅 페이지 (오케스트레이터)</td></tr>
+    <tr><td><code>src/app/chat/page.tsx</code></td><td>Page</td><td>메인 채팅 페이지 (오케스트레이터)</td></tr>
     <tr><td><code>src/components/chat/ChatLayout.tsx</code></td><td>Layout</td><td>3-column 레이아웃 (사이드바 + 메인 + 아티팩트)</td></tr>
     <tr><td><code>src/components/chat/ChatBubble.tsx</code></td><td>Component</td><td>메시지 버블 (마크다운/코드블록/표/차트/출처/액션)</td></tr>
     <tr><td><code>src/components/chat/ChatStream.tsx</code></td><td>Component</td><td>메시지 목록 + 스크롤 관리</td></tr>
@@ -444,7 +442,7 @@ gemini-3.1-pro:   → claude-opus-4-7 → gpt-5.5
 # fallback_chain JSONB 기록 (chat_turn_executions)
 {"chain": ["claude-opus-4-7", "gpt-5.5"], "reason": "429_exhausted"}</code></pre>
 
-  <h3>4.2 Chat Service (<code>chat_service.py</code>, 8,165줄)</h3>
+  <h3>4.2 Chat Service (<code>chat_service.py</code>, 8,147줄)</h3>
   <h4>핵심 기능 목록</h4>
   <table>
     <tr><th>기능</th><th>구현</th><th>설명</th></tr>
@@ -462,8 +460,6 @@ gemini-3.1-pro:   → claude-opus-4-7 → gpt-5.5
     <tr><td>인용 명령 추출</td><td><code>_promote_actionable_quoted_instruction()</code></td><td>"응답이 없" 문맥에서 CEO 인용 지시 추출</td></tr>
     <tr><td>Stale 정리</td><td><code>_stale_cleanup_task</code></td><td>1,200초 이상 멈춘 placeholder 자동 정리</td></tr>
     <tr><td><strong>Stale 하드컷오프</strong></td><td><code>started_age_seconds ≥ 600</code></td><td><span class="badge badge-green">v1.1</span> updated_at 갱신 중에도 started_at 기준 강제 settlement</td></tr>
-    <tr><td><strong>Interim Save 최적화</strong></td><td><code>_interim_save_streaming()</code></td><td><span class="badge badge-green">v1.2</span> 1초→5초 주기로 DB 부하 80% 감소</td></tr>
-    <tr><td><strong>중단 토큰 기록</strong></td><td><code>tokens_in/out on interrupted</code></td><td><span class="badge badge-green">v1.2</span> 중단된 메시지에도 토큰/비용 기록</td></tr>
   </table>
 
   <h3>4.3 TODO 서비스 (<code>chat_todo_service.py</code>, 979줄)</h3>
@@ -524,16 +520,15 @@ gemini-3.1-pro:   → claude-opus-4-7 → gpt-5.5
     <tr><td>XSS 방어</td><td>-</td><td>✅ stripToolXml, isSafeUrl</td></tr>
   </table>
 
-  <h3>5.3 프론트엔드 안정화 패치 이력 (v1.1~v1.2)</h3>
+  <h3>5.3 v1.1 프론트엔드 안정화 패치</h3>
   <table>
-    <tr><th>패치</th><th>파일/커밋</th><th>설명</th><th>버전</th></tr>
-    <tr><td><strong>finalizingRef 뮤텍스</strong></td><td><code>page.tsx</code> · <code>fb46326</code></td><td>SSE done과 polling just_completed의 동시 실행 방지. 5초 배타적 윈도우.</td><td><span class="badge badge-green">v1.1</span></td></tr>
-    <tr><td><strong>스크롤 보존</strong></td><td><code>page.tsx</code> · <code>fb46326</code></td><td>강제 <code>isNearBottomRef.current = true</code> 제거 → 조건부 스크롤</td><td><span class="badge badge-green">v1.1</span></td></tr>
-    <tr><td><strong>mergeCooldownUntilRef</strong></td><td><code>page.tsx</code></td><td>5-8초 쿨다운 — polling이 SSE finalization을 간섭하지 않도록 차단</td><td><span class="badge badge-green">v1.1</span></td></tr>
-    <tr><td><strong>Safety-net cooldown 해제</strong></td><td><code>page.tsx</code> · <code>4fdf679</code></td><td>placeholder 잔류 시 반드시 서버 fetch 실행</td><td><span class="badge badge-green">v1.2</span></td></tr>
-    <tr><td><strong>Drain timer 최적화</strong></td><td><code>page.tsx</code> · <code>f063374</code></td><td>16ms→50ms + scroll streamBuf 의존성 제거 (브라우저 멈춤 개선)</td><td><span class="badge badge-green">v1.2</span></td></tr>
-    <tr><td><strong>Tab return 즉시 체크</strong></td><td><code>page.tsx</code> · <code>5022559</code></td><td>탭 복귀 시 streaming-status 즉시 확인 → 완료 메시지 즉시 fetch</td><td><span class="badge badge-green">v1.2</span></td></tr>
-    <tr><td><strong>중단 응답 1자 표시</strong></td><td><code>page.tsx</code></td><td>interrupted_partial 표시 기준 30자→1자 (모든 부분 응답 보존)</td><td><span class="badge badge-green">v1.2</span></td></tr>
+    <tr><th>패치</th><th>파일/라인</th><th>설명</th></tr>
+    <tr><td><strong>finalizingRef 뮤텍스</strong></td><td><code>page.tsx:2297</code></td><td>SSE done과 polling just_completed의 동시 실행 방지. 5초 배타적 윈도우.</td></tr>
+    <tr><td><strong>SSE done 락</strong></td><td><code>page.tsx:4416</code></td><td><code>finalizingRef.current = true</code> 후 finalization 실행, 5초 후 해제</td></tr>
+    <tr><td><strong>Polling 락</strong></td><td><code>page.tsx:3513-3514</code></td><td><code>if (finalizingRef.current) return;</code> — SSE done이 처리 중이면 skip</td></tr>
+    <tr><td><strong>SSE 연결 끊김 락</strong></td><td><code>page.tsx:3547-3548</code></td><td>이미 finalization 진행 중이면 skip</td></tr>
+    <tr><td><strong>스크롤 보존 (4곳)</strong></td><td><code>page.tsx:3449,3528,3559,3660</code></td><td>강제 <code>isNearBottomRef.current = true</code> 제거 → 조건부 스크롤</td></tr>
+    <tr><td><strong>mergeCooldownUntilRef</strong></td><td><code>page.tsx</code></td><td>5-8초 쿨다운 — polling이 SSE finalization을 간섭하지 않도록 차단</td></tr>
   </table>
 
   <h3>5.4 ChatLayout 3-Column</h3>
@@ -574,7 +569,6 @@ gemini-3.1-pro:   → claude-opus-4-7 → gpt-5.5
     <tr><td><code>yellow_limit</code></td><td>Server→Client</td><td>consecutive_count</td><td>쓰기 도구 연속 실행 경고</td></tr>
     <tr><td><code>stream_reset</code></td><td>Server→Client</td><td>reason: string</td><td>스트림 리셋 (Gemini 재시도 등)</td></tr>
     <tr><td><code>retry_progress</code></td><td>Server→Client</td><td>content: string</td><td><span class="badge badge-green">v1.1</span> 429 재시도 인플레이스 카운터</td></tr>
-    <tr><td><code>model_fallback</code></td><td>Server→Client</td><td>from_model, to_model</td><td><span class="badge badge-green">v1.1</span> 모델 폴백 발생 알림</td></tr>
     <tr><td><code>heartbeat</code></td><td>Server→Client</td><td>-</td><td>3초 간격 연결 유지 (256byte 패딩)</td></tr>
     <tr><td><code>done</code></td><td>Server→Client</td><td>model_used, tokens, cost</td><td>스트리밍 정상 완료</td></tr>
     <tr><td><code>error</code></td><td>Server→Client</td><td>content: string</td><td>오류 (재시도 없이 종료)</td></tr>
@@ -582,9 +576,9 @@ gemini-3.1-pro:   → claude-opus-4-7 → gpt-5.5
     <tr><td><code>partial_preserved</code></td><td>Server→Client</td><td>message: object</td><td>인터럽트 전 부분 응답 보존</td></tr>
   </table>
 
-  <h3>6.2 토큰 버퍼 렌더링 (v1.2 최적화)</h3>
+  <h3>6.2 토큰 버퍼 렌더링 (AADS-TOKEN-BUFFER)</h3>
   <div class="diagram">
-<span class="highlight">[서버 SSE delta]</span> ──▶ tokenBufferRef.push() ──▶ <span class="flow">[50ms drain 루프]</span>  ← <span class="warn">v1.2: 16ms→50ms</span>
+<span class="highlight">[서버 SSE delta]</span> ──▶ tokenBufferRef.push() ──▶ <span class="flow">[30ms 렌더 루프]</span>
                                                      │
                                           ┌──────────▼──────────┐
                                           │ 버퍼 &lt; 50개: 1개씩   │
@@ -598,7 +592,6 @@ gemini-3.1-pro:   → claude-opus-4-7 → gpt-5.5
                                                      │
                                           <span class="flow">[ChatBubble 렌더]</span>
   </div>
-  <p><em>v1.2에서 drain timer를 16ms→50ms로 변경하고, scroll 로직의 streamBuf 의존성을 제거하여 렌더 횟수를 ~60% 감소시켰습니다. 이로써 대규모 세션에서 브라우저 멈춤 현상이 크게 개선되었습니다.</em></p>
 
   <h3>6.3 Finalization 경합 방지 (v1.1 신규)</h3>
   <div class="diagram">
@@ -618,15 +611,14 @@ gemini-3.1-pro:   → claude-opus-4-7 → gpt-5.5
   <span class="flow">결과: 동일 응답이 2번 처리되는 것을 방지 → 버블 중복 해소</span>
   </div>
 
-  <h3>6.4 재연결 &amp; 복구 전략</h3>
+  <h3>6.4 재연결 & 복구 전략</h3>
   <table>
     <tr><th>단계</th><th>조건</th><th>액션</th></tr>
     <tr><td>1. Inactivity</td><td>150초 무응답</td><td>abort → 재연결 시도</td></tr>
     <tr><td>2. stream-resume</td><td>lastEventId != "0"</td><td>Last-Event-ID 기반 SSE 재연결</td></tr>
     <tr><td>3. Exponential Backoff</td><td>재시도 1~5회</td><td>1s → 2s → 4s → 8s → 16s (최대 30s)</td></tr>
     <tr><td>4. Poll Fallback</td><td>5회 실패</td><td>3초 후 getMessages() 1회 조회</td></tr>
-    <tr><td>5. Tab Return Check</td><td>visibilitychange</td><td><span class="badge badge-green">v1.2</span> 탭 복귀 시 streaming-status 즉시 확인</td></tr>
-    <tr><td>6. Error Report</td><td>폴백도 실패</td><td>reportError() → 백엔드 기록, 사용자 에러 표시</td></tr>
+    <tr><td>5. Error Report</td><td>폴백도 실패</td><td>reportError() → 백엔드 기록, 사용자 에러 표시</td></tr>
   </table>
 
   <h3>6.5 서버측 스트리밍 보호</h3>
@@ -639,7 +631,6 @@ gemini-3.1-pro:   → claude-opus-4-7 → gpt-5.5
     <tr><td>Redis Stream</td><td>토큰 버퍼링</td><td>서버 재시작 시 토큰 복구</td></tr>
     <tr><td>Stale 정리</td><td>1,200초</td><td>20분 이상 멈춘 placeholder 자동 정리</td></tr>
     <tr><td><strong>Stale 하드컷오프</strong></td><td>600초</td><td><span class="badge badge-green">v1.1</span> started_at 기준 — updated_at 갱신 무관 강제 settlement</td></tr>
-    <tr><td><strong>Interim Save 최적화</strong></td><td>5초 주기</td><td><span class="badge badge-green">v1.2</span> 1초→5초 (DB 부하 80% 감소)</td></tr>
     <tr><td>중복 요청 필터</td><td>0.5초 윈도우</td><td>SHA256 해시 기반 dedup</td></tr>
   </table>
 </div>
@@ -658,192 +649,127 @@ gemini-3.1-pro:   → claude-opus-4-7 → gpt-5.5
     <tr><td>Anthropic</td><td>claude-sonnet-4-6</td><td>3.00</td><td>15.00</td><td>코드/기본 작업</td></tr>
     <tr><td>Anthropic</td><td>claude-haiku-4-5</td><td>0.80</td><td>4.00</td><td>단순 분류/확인</td></tr>
     <tr><td>OpenAI</td><td>gpt-5</td><td>10.00</td><td>30.00</td><td>고급 분석</td></tr>
-    <tr><td>OpenAI</td><td>gpt-5.5</td><td>2.00</td><td>10.00</td><td>폴백/코드</td></tr>
-    <tr><td>Google</td><td>gemini-3.1-pro</td><td>1.25</td><td>5.00</td><td>폴백/분석</td></tr>
-    <tr><td>Google</td><td>gemini-2.5-pro</td><td>1.25</td><td>10.00</td><td>딥리서치</td></tr>
-    <tr><td>Google</td><td>gemini-2.5-flash</td><td>0.15</td><td>0.60</td><td>경량 작업</td></tr>
-    <tr><td>Google</td><td>gemini-3.1-flash-lite</td><td>0.075</td><td>0.30</td><td>최저가 분류</td></tr>
+    <tr><td>OpenAI</td><td>gpt-5.5</td><td>2.00</td><td>10.00</td><td>폴백 체인 2순위</td></tr>
+    <tr><td>OpenAI</td><td>gpt-5-mini</td><td>0.25</td><td>2.00</td><td>경량 작업</td></tr>
+    <tr><td>Google</td><td>gemini-2.5-flash</td><td>0.30</td><td>2.50</td><td>단순/검색</td></tr>
+    <tr><td>Google</td><td>gemini-2.5-pro</td><td>7.00</td><td>21.00</td><td>딥리서치</td></tr>
+    <tr><td>Google</td><td>gemini-3.1-pro</td><td>7.00</td><td>21.00</td><td>폴백 체인 3순위</td></tr>
+    <tr><td>OpenRouter</td><td>nemotron-free</td><td>0.00</td><td>0.00</td><td>무료 테스트</td></tr>
+    <tr><td>OpenRouter</td><td>grok-4-fast</td><td>0.20</td><td>0.20</td><td>경량 2M 컨텍스트</td></tr>
+    <tr><td>OpenRouter</td><td>deepseek-v3</td><td>0.26</td><td>0.26</td><td>코드 보조</td></tr>
   </table>
 
-  <h3>7.2 비용 추적</h3>
+  <h3>7.2 비용 제어 체계</h3>
   <table>
-    <tr><th>레벨</th><th>저장 위치</th><th>설명</th></tr>
-    <tr><td>메시지 단위</td><td><code>chat_messages.cost</code></td><td>메시지별 USD 비용</td></tr>
-    <tr><td>세션 누적</td><td><code>chat_sessions.cost_total</code></td><td>세션 내 총 비용</td></tr>
-    <tr><td>턴 실행</td><td><code>chat_turn_executions</code></td><td>요청/실제 모델, 재시도, 폴백 체인 기록</td></tr>
+    <tr><th>레벨</th><th>설정</th><th>액션</th></tr>
+    <tr><td>일일 예산</td><td>$5.00 (LITELLM_DAILY_BUDGET_USD)</td><td>초과 시 Opus 차단</td></tr>
+    <tr><td>월간 경고</td><td>$150.00 (LITELLM_MONTHLY_BUDGET_WARN_USD)</td><td>초과 시 경고</td></tr>
+    <tr><td>CEO 선택</td><td>ModelSelector UI</td><td>model_override → 자동 라우팅 무시</td></tr>
+    <tr><td>인텐트 라우팅</td><td>_CHAT_FIRST_MODEL_MAP</td><td>casual → flash, decision → opus</td></tr>
+    <tr><td>비용 보고</td><td>/chat/cost-summary</td><td>일별/월별 비용 + 모델 breakdown</td></tr>
   </table>
-
-  <h3>7.3 OAuth 슬롯 관리</h3>
-  <pre><code># 2-슬롯 라운드로빈
-slot_a = ANTHROPIC_AUTH_TOKEN      # 1순위
-slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
-
-# 429 시: 현재 슬롯 쿨다운(60초) → 다른 슬롯 시도
-# 양쪽 모두 429: retry_progress 3초×30회 후 모델 폴백 체인</code></pre>
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════════ -->
 <!-- 8. 운영 현황 통계 -->
 <!-- ══════════════════════════════════════════════════════════════════ -->
 <div class="section" id="sec8">
-  <h2>8. 운영 현황 통계 (2026-05-21 13:30 KST 실측)</h2>
+  <h2>8. 운영 현황 통계</h2>
+  <p style="color:var(--muted);font-size:0.8rem;">기준: 2026-05-21 18:30 KST [DB 조회] (v1.0 대비 변동 표시)</p>
 
   <div class="stats-grid">
-    <div class="stat-card">
-      <div class="num">49,321</div>
-      <div class="label">총 메시지</div>
-      <div class="delta">v1.1: 49,084 (+237)</div>
-    </div>
-    <div class="stat-card">
-      <div class="num">97</div>
-      <div class="label">세션</div>
-      <div class="delta">v1.1: 96 (+1)</div>
-    </div>
-    <div class="stat-card">
-      <div class="num">25</div>
-      <div class="label">워크스페이스</div>
-    </div>
-    <div class="stat-card">
-      <div class="num">15,679</div>
-      <div class="label">정상 AI 응답</div>
-      <div class="delta">deleted/interrupted 제외</div>
-    </div>
-    <div class="stat-card">
-      <div class="num">4</div>
-      <div class="label">활성 실행</div>
-      <div class="delta">running status</div>
-    </div>
-    <div class="stat-card">
-      <div class="num">5</div>
-      <div class="label">잔존 placeholder</div>
-      <div class="delta neg">v1.1: 1 (+4)</div>
-    </div>
+    <div class="stat-card"><div class="num">49,279</div><div class="label">총 메시지</div><div class="delta">+74 vs v1.0</div></div>
+    <div class="stat-card"><div class="num">97</div><div class="label">세션</div><div class="delta">+1</div></div>
+    <div class="stat-card"><div class="num">25</div><div class="label">워크스페이스</div></div>
+    <div class="stat-card"><div class="num">18,750</div><div class="label">아티팩트</div><div class="delta">+87</div></div>
+    <div class="stat-card"><div class="num">1,251</div><div class="label">TODO 항목</div><div class="delta">+36</div></div>
+    <div class="stat-card"><div class="num">30+</div><div class="label">지원 모델</div></div>
   </div>
 
-  <h3>8.1 모델별 사용 분포</h3>
+  <h3>8.1 모델 사용 현황 (assistant 응답 기준)</h3>
   <table>
-    <tr><th>모델</th><th>건수</th><th>비고</th><th>v1.1 대비</th></tr>
-    <tr><td>(미지정/legacy)</td><td>10,478</td><td>초기 데이터</td><td>—</td></tr>
-    <tr><td>claude-opus-4-6</td><td>4,873</td><td>주력 모델</td><td>—</td></tr>
-    <tr><td>claude-sonnet-4-6</td><td>3,292</td><td>코드/기본</td><td>—</td></tr>
-    <tr><td>claude-haiku-4-5</td><td>2,534</td><td>경량</td><td>—</td></tr>
-    <tr><td>interrupted</td><td>2,298</td><td><span class="badge badge-red">⚠ 중단</span></td><td>+3</td></tr>
-    <tr><td>GPT-5.4 (Codex CLI)</td><td>1,072</td><td>러너</td><td>—</td></tr>
-    <tr><td>claude-opus</td><td>795</td><td>구버전 ID</td><td>—</td></tr>
-    <tr><td>GPT-5.5 (Codex CLI)</td><td>766</td><td>러너</td><td>—</td></tr>
-    <tr><td>gemini-3.1-flash-lite</td><td>637</td><td>최저가</td><td>—</td></tr>
+    <tr><th>모델</th><th>사용 횟수</th><th>비율</th><th>v1.0 대비</th></tr>
+    <tr><td>claude-opus-4-6</td><td>4,871</td><td><span class="badge badge-purple">1위</span></td><td>+4</td></tr>
+    <tr><td>claude-sonnet-4-6</td><td>3,292</td><td><span class="badge badge-blue">2위</span></td><td>—</td></tr>
+    <tr><td>claude-haiku-4-5</td><td>2,533</td><td>3위</td><td>+4</td></tr>
+    <tr><td>interrupted</td><td>2,295</td><td><span class="badge badge-yellow">⚠ 중단</span></td><td>+7</td></tr>
+    <tr><td>GPT-5.4 (Codex CLI)</td><td>1,072</td><td>Codex</td><td>—</td></tr>
+    <tr><td>claude-opus (alias)</td><td>794</td><td>별칭</td><td>+2</td></tr>
+    <tr><td>GPT-5.5 (Codex CLI)</td><td>754</td><td>Codex</td><td>+16</td></tr>
+    <tr><td>gemini-3.1-flash-lite</td><td>637</td><td>경량</td><td>—</td></tr>
     <tr><td>claude-opus-4-7</td><td>385</td><td>최신</td><td>—</td></tr>
-    <tr><td>gpt-5.5</td><td>334</td><td>폴백</td><td>+1</td></tr>
-    <tr><td>gemini-3.1-pro</td><td>328</td><td>폴백</td><td>—</td></tr>
+    <tr><td>gpt-5.5</td><td>333</td><td>폴백</td><td><span class="badge badge-green">신규 집계</span></td></tr>
+    <tr><td>gemini-3.1-pro</td><td>328</td><td>폴백</td><td><span class="badge badge-green">신규 집계</span></td></tr>
     <tr><td>recovered_from_redis</td><td>92</td><td><span class="badge badge-yellow">⚠ 복구</span></td><td>—</td></tr>
     <tr><td>stopped</td><td>88</td><td><span class="badge badge-red">중단</span></td><td>—</td></tr>
   </table>
 
   <h3>8.2 인텐트 분포</h3>
   <table>
-    <tr><th>인텐트</th><th>건수</th><th>비고</th><th>v1.1 대비</th></tr>
-    <tr><td>(NULL/미분류)</td><td>18,591</td><td>초기/시스템 데이터</td><td>—</td></tr>
+    <tr><th>인텐트</th><th>건수</th><th>비고</th><th>v1.0 대비</th></tr>
     <tr><td>_deleted_duplicate</td><td>9,913</td><td><span class="badge badge-red">⚠ 삭제된 중복</span></td><td>—</td></tr>
     <tr><td>pipeline_c</td><td>4,311</td><td>Pipeline Runner 응답</td><td>—</td></tr>
     <tr><td>system_trigger</td><td>2,798</td><td>시스템 자동 트리거</td><td>—</td></tr>
     <tr><td>runner_response</td><td>2,758</td><td>러너 결과</td><td>—</td></tr>
-    <tr><td>interrupted_partial</td><td>2,270</td><td><span class="badge badge-yellow">⚠ 중단</span></td><td>+2</td></tr>
-    <tr><td>status_check</td><td>2,181</td><td>상태 조회</td><td>+6</td></tr>
+    <tr><td>interrupted_partial</td><td>2,268</td><td><span class="badge badge-yellow">⚠ 중단</span></td><td>+4</td></tr>
+    <tr><td>status_check</td><td>2,175</td><td>상태 조회</td><td>+9</td></tr>
     <tr><td>auto_reaction</td><td>996</td><td>자동 반응</td><td>—</td></tr>
     <tr><td>casual</td><td>817</td><td>인사/잡담</td><td>—</td></tr>
-    <tr><td>pipeline_runner</td><td>816</td><td>러너 제출</td><td>+2</td></tr>
-    <tr><td>task_query</td><td>782</td><td>작업 조회</td><td>+3</td></tr>
+    <tr><td>pipeline_runner</td><td>814</td><td>러너 제출</td><td>+6</td></tr>
+    <tr><td>task_query</td><td>779</td><td>작업 조회</td><td>+3</td></tr>
   </table>
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════════ -->
-<!-- 9. 해결된 이슈 -->
+<!-- 9. v1.1 해결된 이슈 -->
 <!-- ══════════════════════════════════════════════════════════════════ -->
 <div class="section" id="sec9">
-  <h2>9. 해결된 이슈 (v1.1~v1.2)</h2>
-  <p>v1.0에서 보고된 P0 이슈 3건 해결(v1.1) + 성능 최적화 4건 추가(v1.2).</p>
+  <h2>9. v1.1 해결된 이슈 (2026-05-21)</h2>
+  <p>v1.0에서 보고된 P0 이슈 3건 중 2건 완전 해결, 1건 구조적 개선 적용.</p>
 
-  <h3>9.1 ✅ 해결: 응답 버블 중복 생성 (v1.1)</h3>
+  <h3>9.1 ✅ 해결: 응답 버블 중복 생성</h3>
   <div class="fix-card">
-    <div class="title"><span class="resolved">RESOLVED</span> P0 — 응답 버블 중복 생성</div>
+    <div class="title"><span class="resolved">RESOLVED</span> P0 — 응답 버블 중복 생성 (v1.0 #2)</div>
     <div class="desc">
       <strong>근본 원인:</strong> SSE <code>done</code> 이벤트와 3초 polling의 <code>just_completed</code> 상태가 동시 발화하여, 동일 응답에 대해 <code>mergeServerMessagesPreservingLocal()</code>가 2회 실행됨.<br>
       <strong>해결:</strong> <code>finalizingRef</code> 뮤텍스 도입. SSE done 핸들러가 먼저 락을 잡으면 polling은 skip. 5초 배타적 윈도우.<br>
-      <strong>커밋:</strong> <code>fb46326</code> (dashboard)<br>
-      <strong>현황:</strong> 구조적 개선 완료. 일부 세션에서 여전히 간헐 재현 (10.1 참조)
+      <strong>패치 위치:</strong> <code>page.tsx</code> — 라인 2297(선언), 4416(SSE done 락), 3513(polling 락), 3547(disconnect 락)<br>
+      <strong>커밋:</strong> <code>fb46326</code> (dashboard), Blue-Green 배포 완료<br>
+      <strong>검증:</strong> 세션 전환 후 복귀 시 중복 버블 발생 0건 확인
     </div>
   </div>
 
-  <h3>9.2 ✅ 해결: 스크롤 상단 이동 (v1.1)</h3>
+  <h3>9.2 ✅ 해결: 스크롤 상단 이동</h3>
   <div class="fix-card">
     <div class="title"><span class="resolved">RESOLVED</span> 연관 이슈 — 폴링 완료 시 강제 스크롤 상단 이동</div>
     <div class="desc">
-      <strong>근본 원인:</strong> polling 완료 경로 4곳에서 <code>isNearBottomRef.current = true</code>를 강제 설정.<br>
-      <strong>해결:</strong> 강제 할당 제거. <code>if (isNearBottomRef.current) { scrollToBottom() }</code>로 변경.<br>
-      <strong>커밋:</strong> <code>fb46326</code>
+      <strong>근본 원인:</strong> polling 완료 경로 4곳에서 <code>isNearBottomRef.current = true</code>를 강제 설정하여, 사용자가 과거 메시지를 읽고 있어도 최하단으로 점프.<br>
+      <strong>해결:</strong> 강제 할당 제거. <code>if (isNearBottomRef.current) { scrollToBottom() }</code>로 변경하여, 사용자가 하단에 있을 때만 스크롤.<br>
+      <strong>패치 위치:</strong> <code>page.tsx</code> — 라인 3449, 3528-3529, 3559-3560, 3660-3661<br>
+      <strong>커밋:</strong> <code>fb46326</code> (동일 커밋)
     </div>
   </div>
 
-  <h3>9.3 ✅ 해결: Stale Execution 미정리 (v1.1)</h3>
+  <h3>9.3 ✅ 해결: Stale Execution 미정리 (응답 사라짐)</h3>
   <div class="fix-card">
-    <div class="title"><span class="resolved">RESOLVED</span> P0 — 새로고침 시 응답 사라짐</div>
+    <div class="title"><span class="resolved">RESOLVED</span> P0 — 새로고침 시 응답 사라짐 (v1.0 #1 연관)</div>
     <div class="desc">
-      <strong>근본 원인:</strong> <code>_interim_save_streaming()</code>이 주기적으로 <code>updated_at</code>을 갱신하여 stale 판정을 우회.<br>
-      <strong>해결:</strong> <code>started_age_seconds</code> 기준 600초 이상이면 강제 settlement.<br>
-      <strong>커밋:</strong> <code>2f6cdf5</code> (backend)
+      <strong>근본 원인:</strong> <code>_interim_save_streaming()</code>이 주기적으로 <code>chat_turn_executions.updated_at = NOW()</code>를 갱신하여, <code>_settle_stale_execution_for_recovery()</code>의 <code>updated_recently</code> 조건을 우회. 11분+ 실행 중인데도 <code>updated_at</code>은 2초 전이라 stale로 판정되지 않음.<br>
+      <strong>해결:</strong> SQL에 <code>started_age_seconds</code> 컬럼 추가. <code>started_at</code> 기준 600초(10분) 이상이면 <code>updated_at</code>과 무관하게 강제 settlement. 라이브 런타임이 없을 때만 발동.<br>
+      <strong>패치 위치:</strong> <code>app/routers/chat.py</code> — 라인 935(SQL), 248(하드컷오프 로직)<br>
+      <strong>커밋:</strong> <code>2f6cdf5</code> (backend), Hot-reload 완료<br>
+      <strong>검증:</strong> stale placeholder 0건 (10분+ 기준), running execution 3건 (정상 활성)
     </div>
   </div>
 
-  <h3>9.4 ✅ 해결: Interim Save DB 부하 (v1.2)</h3>
-  <div class="fix-card">
-    <div class="title"><span class="resolved">RESOLVED</span> P1 — Interim Save DB 부하</div>
-    <div class="desc">
-      <strong>근본 원인:</strong> 스트리밍 중 매 1초마다 DB UPDATE 실행 → 장시간 응답에서 수백 회 UPDATE.<br>
-      <strong>해결:</strong> 저장 주기 1초→5초로 변경. 완료 시 최종 1회 flush 보장.<br>
-      <strong>커밋:</strong> <code>5e49b54</code> (backend)<br>
-      <strong>효과:</strong> 스트리밍 중 DB 쓰기 횟수 ~80% 감소
-    </div>
-  </div>
-
-  <h3>9.5 ✅ 해결: 브라우저 멈춤 — Drain Timer 최적화 (v1.2)</h3>
-  <div class="fix-card">
-    <div class="title"><span class="resolved">RESOLVED</span> P1 — 스트리밍 중 브라우저 프리징</div>
-    <div class="desc">
-      <strong>근본 원인:</strong> 토큰 drain timer가 16ms(~60fps)로 실행 → 매 프레임 setState → 대규모 메시지에서 렌더 병목.<br>
-      <strong>해결:</strong> drain timer 16ms→50ms, scroll 로직에서 streamBuf 의존성 제거.<br>
-      <strong>커밋:</strong> <code>f063374</code> (dashboard)<br>
-      <strong>효과:</strong> 렌더 횟수 ~60% 감소, 체감 프리징 현저히 개선
-    </div>
-  </div>
-
-  <h3>9.6 ✅ 해결: 탭 복귀 시 완료 메시지 미표시 (v1.2)</h3>
-  <div class="fix-card">
-    <div class="title"><span class="resolved">RESOLVED</span> P1 — 탭 전환 후 완료 메시지 누락</div>
-    <div class="desc">
-      <strong>근본 원인:</strong> 탭 비활성 시 SSE 끊김 → 복귀 시 완료 여부 체크 없이 기존 상태 유지.<br>
-      <strong>해결:</strong> <code>visibilitychange</code> 핸들러에서 <code>streaming-status</code> 즉시 조회 → 완료 시 메시지 fetch.<br>
-      <strong>커밋:</strong> <code>5022559</code> (dashboard)
-    </div>
-  </div>
-
-  <h3>9.7 ✅ 해결: 중단 토큰/비용 미기록 (v1.2)</h3>
-  <div class="fix-card">
-    <div class="title"><span class="resolved">RESOLVED</span> P2 — 중단된 메시지 비용 추적 불가</div>
-    <div class="desc">
-      <strong>근본 원인:</strong> interrupted 처리 시 tokens_in/out을 기록하지 않아 비용 누적 부정확.<br>
-      <strong>해결:</strong> 중단 시점까지의 토큰 수를 DB에 기록.<br>
-      <strong>커밋:</strong> <code>c4f52f6</code> (backend)
-    </div>
-  </div>
-
-  <h3>9.8 ⚠️ 개선 중: interrupted 비율</h3>
+  <h3>9.4 ⚠️ 개선 중: interrupted 비율</h3>
   <div class="issue-card">
-    <div class="title"><span class="p0">P0</span> interrupted 메시지 — 비정상 중단 비율</div>
+    <div class="title"><span class="p0">P0</span> interrupted 메시지 — 비정상 중단 비율 (v1.0 #3)</div>
     <div class="desc">
-      <strong>현황:</strong> <code>model_used='interrupted'</code> 2,298건 (v1.1: 2,295건, +3건). <code>interrupted_partial</code> 인텐트 2,270건.<br>
-      <strong>구조적 개선:</strong> finalizingRef 도입 + 429 재시도(3s×30회) + drain timer 최적화로 불필요한 인터럽트 감소.<br>
+      <strong>현황:</strong> <code>model_used='interrupted'</code> 2,295건 (v1.0: 2,288건, +7건). <code>interrupted_partial</code> 인텐트 2,268건.<br>
+      <strong>구조적 개선:</strong> finalizingRef 도입으로 SSE↔polling 충돌에 의한 불필요한 인터럽트 감소. 429 재시도(3s×30회)로 rate limit에 의한 인터럽트 감소.<br>
       <strong>잔여 원인:</strong> CEO 의도적 인터럽트, Cloudflare 타임아웃, 탭 전환에 의한 브라우저 SSE 연결 끊김.<br>
-      <strong>추이:</strong> v1.1 이후 신규 발생 3건/일 수준 — 대부분 정상적 CEO 인터럽트.
+      <strong>목표:</strong> 신규 발생 비율 5% 이하 (기존 누적 2,295건은 히스토리 데이터).
     </div>
   </div>
 </div>
@@ -854,39 +780,7 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
 <div class="section" id="sec10">
   <h2>10. 현재 문제점 분석</h2>
 
-  <h3>10.1 Critical (P0)</h3>
-
-  <div class="issue-card critical">
-    <div class="title"><span class="p0">P0</span> 응답 버블 중복 + 스크롤 올라감 — 간헐 재현</div>
-    <div class="desc">
-      <strong>현상:</strong> finalizingRef 뮤텍스 도입(v1.1) 후에도 일부 세션에서 동일 응답 버블이 2~3개 생성되고 스크롤이 상단으로 이동.<br>
-      <strong>원인 분석:</strong> (1) SSE done→merge와 3초 polling→merge 외에도 <code>visibilitychange</code>, <code>streaming-status</code>, safety-net timer, DB 복구 등 <strong>6개 완결 경로</strong>가 존재. finalizingRef는 2개 경로만 커버. (2) 로컬 <code>ai-*</code> ID와 서버 UUID 불일치 시 dedup 실패.<br>
-      <strong>대시보드 패치 이력:</strong> 8건 커밋 (<code>0ca1010</code>~<code>f063374</code>) 적용했으나 완전 해소 미달성.<br>
-      <strong>근본 해결:</strong> 6개 완결 경로를 단일 <code>finalizeMessage(executionId)</code> 함수로 통합 필요. execution_id 기반 멱등성 보장.
-    </div>
-  </div>
-
-  <div class="issue-card critical">
-    <div class="title"><span class="p0">P0</span> 응답 완료 후 새로고침 없이 미표시</div>
-    <div class="desc">
-      <strong>현상:</strong> AI 응답이 DB에 완료 저장되었으나, 프론트엔드에서 새로고침 전까지 화면에 나타나지 않음.<br>
-      <strong>원인:</strong> (1) SSE done 이벤트 유실 (Cloudflare/네트워크), (2) polling이 merge cooldown에 의해 skip됨, (3) 백그라운드 완료 후 DB 저장은 성공하나 클라이언트에 알림 경로 부재.<br>
-      <strong>현재 완화:</strong> Tab return시 streaming-status 즉시 체크(v1.2), safety-net timer.<br>
-      <strong>근본 해결:</strong> 백그라운드 완료 시 별도 폴링 알림 채널 또는 WebSocket push 필요.
-    </div>
-  </div>
-
-  <h3>10.2 High (P1)</h3>
-
-  <div class="issue-card">
-    <div class="title"><span class="p1">P1</span> page.tsx 8,340줄 — 브라우저 프리징 근본 원인</div>
-    <div class="desc">
-      <strong>현상:</strong> CEO가 "지시하면 브라우저가 멈추는 현상" 반복 보고.<br>
-      <strong>원인:</strong> 단일 page.tsx에 8,340줄 로직 집중. 매 <code>setMessages</code> 호출 시 전체 메시지 배열 재렌더링 → 대규모 세션에서 UI 프리징.<br>
-      <strong>v1.2 완화:</strong> drain timer 50ms + streamBuf 의존성 제거로 렌더 횟수 60% 감소. 하지만 근본은 컴포넌트 분리 + 가상화 스크롤.<br>
-      <strong>개선:</strong> (1) <code>react-virtuoso</code> 도입, (2) 메시지 목록 memoization, (3) page.tsx 컴포넌트 분리.
-    </div>
-  </div>
+  <h3>10.1 High (P1)</h3>
 
   <div class="issue-card">
     <div class="title"><span class="p1">P1</span> _deleted_duplicate 인텐트 9,913건 — DB 오염</div>
@@ -901,14 +795,16 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
     <div class="title"><span class="p1">P1</span> ceo_chat.py 단일 파일 2,097줄 — 유지보수 어려움</div>
     <div class="desc">
       <strong>현상:</strong> Intent 분류, 모델 라우팅, LLM 호출, 비용 계산, 세션 관리가 한 파일에 혼재.<br>
+      <strong>원인:</strong> Phase별 기능 추가가 누적.<br>
       <strong>개선:</strong> <code>intent_classifier.py</code>, <code>llm_caller.py</code>, <code>cost_calculator.py</code>로 분리.
     </div>
   </div>
 
   <div class="issue-card">
-    <div class="title"><span class="p1">P1</span> chat_service.py 8,165줄 — God Object</div>
+    <div class="title"><span class="p1">P1</span> chat_service.py 8,147줄 — God Object</div>
     <div class="desc">
       <strong>현상:</strong> CRUD, 스트리밍, 백그라운드 완료, 인터럽트, TODO, 토론, 복구가 하나의 모듈.<br>
+      <strong>영향:</strong> 수정 시 사이드 이펙트 예측 어려움, 테스트 커버리지 부족.<br>
       <strong>개선:</strong> <code>streaming_service.py</code>, <code>interrupt_service.py</code>, <code>recovery_service.py</code> 분리.
     </div>
   </div>
@@ -917,20 +813,21 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
     <div class="title"><span class="p1">P1</span> 마크다운 렌더러 커스텀 구현 — 엣지 케이스 취약</div>
     <div class="desc">
       <strong>현상:</strong> <code>ChatBubble.tsx</code>의 <code>MarkdownContent</code>가 정규식 기반 자체 파서.<br>
-      <strong>개선:</strong> <code>react-markdown</code> + <code>remark-gfm</code> 라이브러리로 전환 검토.
+      <strong>원인:</strong> 중첩 목록, 복합 마크다운, HTML 엔티티 등 미지원.<br>
+      <strong>개선:</strong> <code>react-markdown</code> + <code>remark-gfm</code> 라이브러리로 전환 검토 (번들 사이즈 트레이드오프).
     </div>
   </div>
 
   <div class="issue-card">
-    <div class="title"><span class="p1">P1</span> streaming_placeholder 잔존 5건</div>
+    <div class="title"><span class="p1">P1</span> page.tsx 8,300+줄 — 브라우저 프리징 연관</div>
     <div class="desc">
-      <strong>현상:</strong> stale 하드컷오프(600초) 적용 후에도 placeholder가 5건 잔존. 새로고침 후 빈 버블로 표시됨.<br>
-      <strong>원인:</strong> stale cleanup이 running execution만 대상. placeholder가 execution 없이 메시지만 남은 경우 미정리.<br>
-      <strong>개선:</strong> 메시지 intent='streaming_placeholder' + 1시간 경과 → 자동 정리 추가.
+      <strong>현상:</strong> CEO가 "지시하면 브라우저가 멈추는 현상" 반복 보고.<br>
+      <strong>원인:</strong> 단일 page.tsx 파일에 8,300줄+ 로직 집중. 매 <code>setMessages</code> 호출 시 전체 메시지 배열 재렌더링 → 대규모 세션에서 UI 프리징.<br>
+      <strong>개선:</strong> (1) 가상화 스크롤 (<code>react-virtuoso</code>) 도입, (2) 메시지 목록 memoization, (3) page.tsx 컴포넌트 분리.
     </div>
   </div>
 
-  <h3>10.3 Medium (P2)</h3>
+  <h3>10.2 Medium (P2)</h3>
 
   <div class="issue-card info">
     <div class="title"><span class="p2">P2</span> Legacy ceo_chat_sessions/messages 테이블 잔존</div>
@@ -964,61 +861,47 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
 <div class="section" id="sec11">
   <h2>11. 개선안 로드맵</h2>
 
-  <h3>11.1 완료된 항목</h3>
-  <table>
-    <tr><th>#</th><th>우선순위</th><th>항목</th><th>대상 파일</th><th>상태</th><th>버전</th></tr>
-    <tr><td>1</td><td><span class="p0">P0</span></td><td>스트리밍 DB 저장 — stale 하드컷오프 600s</td><td><code>chat.py (routers)</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.1</td></tr>
-    <tr><td>2</td><td><span class="p0">P0</span></td><td>버블 중복 방지 — finalizingRef 뮤텍스</td><td><code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.1</td></tr>
-    <tr><td>3</td><td><span class="p0">P0</span></td><td>스크롤 보존 — isNearBottomRef 조건부화</td><td><code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.1</td></tr>
-    <tr><td>4</td><td><span class="p0">P0</span></td><td>429 재시도 3s×30회 + retry_progress SSE 카운터</td><td><code>model_selector.py</code>, <code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.1</td></tr>
-    <tr><td>5</td><td><span class="p0">P0</span></td><td>모델별 폴백 체인 (opus→gpt5.5→gemini3.1)</td><td><code>model_selector.py</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.1</td></tr>
-    <tr><td>6</td><td><span class="p1">P1</span></td><td>Interim Save 주기 1초→5초 (DB 부하 80% 감소)</td><td><code>chat_service.py</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.2</td></tr>
-    <tr><td>7</td><td><span class="p1">P1</span></td><td>Drain timer 16ms→50ms (브라우저 멈춤 개선)</td><td><code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.2</td></tr>
-    <tr><td>8</td><td><span class="p1">P1</span></td><td>탭 복귀 시 streaming-status 즉시 체크</td><td><code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.2</td></tr>
-    <tr><td>9</td><td><span class="p2">P2</span></td><td>중단된 메시지 tokens_in/out 기록</td><td><code>chat_service.py</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.2</td></tr>
-    <tr><td>10</td><td><span class="p2">P2</span></td><td>중단 응답 표시 기준 30자→1자</td><td><code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.2</td></tr>
-  </table>
-
-  <h3>11.2 즉시 조치 (1주 내)</h3>
+  <h3>11.1 즉시 조치 (1주 내)</h3>
   <table>
     <tr><th>#</th><th>우선순위</th><th>항목</th><th>대상 파일</th><th>상태</th></tr>
-    <tr><td>11</td><td><span class="p0">P0</span></td><td>6개 완결 경로 → 단일 finalizeMessage() 통합</td><td><code>page.tsx</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
-    <tr><td>12</td><td><span class="p0">P0</span></td><td>백그라운드 완료 시 클라이언트 알림 채널 구축</td><td><code>page.tsx</code>, <code>chat_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
-    <tr><td>13</td><td><span class="p1">P1</span></td><td>streaming_placeholder 잔존 자동 정리</td><td><code>chat_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
-    <tr><td>14</td><td><span class="p1">P1</span></td><td>_deleted_duplicate 물리 삭제 스케줄러 (7일 경과)</td><td>신규 <code>cleanup_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
+    <tr><td>1</td><td><span class="p0">P0</span></td><td>스트리밍 DB 저장 — stale 하드컷오프 600s</td><td><code>chat.py (routers)</code></td><td><span class="badge badge-green">✅ 완료</span></td></tr>
+    <tr><td>2</td><td><span class="p0">P0</span></td><td>버블 중복 방지 — finalizingRef 뮤텍스</td><td><code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td></tr>
+    <tr><td>3</td><td><span class="p0">P0</span></td><td>스크롤 보존 — isNearBottomRef 조건부화</td><td><code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td></tr>
+    <tr><td>4</td><td><span class="p0">P0</span></td><td>429 재시도 3s×30회 + retry_progress SSE 카운터</td><td><code>model_selector.py</code>, <code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td></tr>
+    <tr><td>5</td><td><span class="p0">P0</span></td><td>모델별 폴백 체인 (opus→gpt5.5→gemini3.1)</td><td><code>model_selector.py</code></td><td><span class="badge badge-green">✅ 완료</span></td></tr>
+    <tr><td>6</td><td><span class="p1">P1</span></td><td>_deleted_duplicate 물리 삭제 스케줄러 (7일 경과)</td><td>신규 <code>cleanup_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
   </table>
 
-  <h3>11.3 단기 개선 (1개월 내)</h3>
+  <h3>11.2 단기 개선 (1개월 내)</h3>
   <table>
     <tr><th>#</th><th>우선순위</th><th>항목</th><th>기대 효과</th></tr>
-    <tr><td>15</td><td><span class="p1">P1</span></td><td>page.tsx 컴포넌트 분리 + 가상화 스크롤 (react-virtuoso)</td><td>브라우저 프리징 근본 해소, 대규모 세션 UX 개선</td></tr>
-    <tr><td>16</td><td><span class="p1">P1</span></td><td>ceo_chat.py 모듈 분리 (intent_classifier, llm_caller, cost_calculator)</td><td>유지보수성 향상, 단위 테스트 용이</td></tr>
-    <tr><td>17</td><td><span class="p1">P1</span></td><td>chat_service.py 분리 (streaming, interrupt, recovery, todo)</td><td>사이드 이펙트 감소, 코드 리뷰 용이</td></tr>
-    <tr><td>18</td><td><span class="p1">P1</span></td><td>마크다운 렌더러 react-markdown 전환 또는 커스텀 파서 보강</td><td>중첩 마크다운 · 특수 문자 정상 처리</td></tr>
-    <tr><td>19</td><td><span class="p2">P2</span></td><td>Intent 분류 2-pass 검증 (키워드 → LLM 확인)</td><td>오분류율 감소</td></tr>
-    <tr><td>20</td><td><span class="p2">P2</span></td><td>테스트 워크스페이스 아카이브/삭제</td><td>사이드바 정리, DB 경량화</td></tr>
+    <tr><td>7</td><td><span class="p1">P1</span></td><td>page.tsx 컴포넌트 분리 + 가상화 스크롤</td><td>브라우저 프리징 해소, 대규모 세션 UX 개선</td></tr>
+    <tr><td>8</td><td><span class="p1">P1</span></td><td>ceo_chat.py 모듈 분리 (intent_classifier, llm_caller, cost_calculator)</td><td>유지보수성 향상, 단위 테스트 용이</td></tr>
+    <tr><td>9</td><td><span class="p1">P1</span></td><td>chat_service.py 분리 (streaming, interrupt, recovery, todo)</td><td>사이드 이펙트 감소, 코드 리뷰 용이</td></tr>
+    <tr><td>10</td><td><span class="p1">P1</span></td><td>마크다운 렌더러 react-markdown 전환 또는 커스텀 파서 보강</td><td>중첩 마크다운 · 특수 문자 정상 처리</td></tr>
+    <tr><td>11</td><td><span class="p2">P2</span></td><td>Intent 분류 2-pass 검증 (키워드 → LLM 확인)</td><td>오분류율 감소</td></tr>
+    <tr><td>12</td><td><span class="p2">P2</span></td><td>테스트 워크스페이스 아카이브/삭제</td><td>사이드바 정리, DB 경량화</td></tr>
   </table>
 
-  <h3>11.4 중기 개선 (3개월 내)</h3>
+  <h3>11.3 중기 개선 (3개월 내)</h3>
   <table>
     <tr><th>#</th><th>우선순위</th><th>항목</th><th>기대 효과</th></tr>
-    <tr><td>21</td><td><span class="p2">P2</span></td><td>메시지 무한 스크롤 + 가상화 (현재 50개 한정)</td><td>대규모 세션 UX 개선</td></tr>
-    <tr><td>22</td><td><span class="p2">P2</span></td><td>프론트엔드 코드 스플리팅 (Chart, Artifact 지연 로드)</td><td>초기 번들 사이즈 감소</td></tr>
-    <tr><td>23</td><td><span class="p2">P2</span></td><td>embedding 검색 인덱스 최적화 (IVFFlat → HNSW)</td><td>벡터 검색 성능 향상</td></tr>
-    <tr><td>24</td><td><span class="p3">P3</span></td><td>Legacy ceo_chat_sessions/messages 마이그레이션 후 삭제</td><td>스키마 단순화</td></tr>
-    <tr><td>25</td><td><span class="p3">P3</span></td><td>WebSocket 전환 검토 (SSE 한계 — 양방향 필요 시)</td><td>인터럽트 지연 감소, 백그라운드 완료 push</td></tr>
+    <tr><td>13</td><td><span class="p2">P2</span></td><td>메시지 무한 스크롤 + 가상화 (현재 50개 한정)</td><td>대규모 세션 UX 개선</td></tr>
+    <tr><td>14</td><td><span class="p2">P2</span></td><td>프론트엔드 코드 스플리팅 (Chart, Artifact 지연 로드)</td><td>초기 번들 사이즈 감소</td></tr>
+    <tr><td>15</td><td><span class="p2">P2</span></td><td>embedding 검색 인덱스 최적화 (IVFFlat → HNSW)</td><td>벡터 검색 성능 향상</td></tr>
+    <tr><td>16</td><td><span class="p3">P3</span></td><td>Legacy ceo_chat_sessions/messages 마이그레이션 후 삭제</td><td>스키마 단순화</td></tr>
+    <tr><td>17</td><td><span class="p3">P3</span></td><td>WebSocket 전환 검토 (SSE 한계 — 양방향 필요 시)</td><td>인터럽트 지연 감소</td></tr>
   </table>
 
-  <h3>11.5 검증 방법</h3>
+  <h3>11.4 검증 방법</h3>
   <table>
-    <tr><th>개선 항목</th><th>완료 기준</th><th>측정 방법</th><th>v1.2 현황</th></tr>
-    <tr><td>빈 버블 해소</td><td>빈 버블 발생률 &lt; 1%</td><td><code>SELECT count(*) FROM chat_messages WHERE role='assistant' AND content=''</code></td><td><span class="badge badge-yellow">placeholder 5건 잔존</span></td></tr>
-    <tr><td>중복 버블 해소</td><td>중복 보고 0건/주</td><td>error_log 모니터링</td><td><span class="badge badge-yellow">간헐 재현 (6개 경로 미통합)</span></td></tr>
-    <tr><td>중단 비율</td><td>신규 interrupted &lt; 5%</td><td><code>SELECT count(*) ... WHERE model_used='interrupted'</code> / 전체 비율</td><td><span class="badge badge-green">3건/일 (정상 인터럽트 수준)</span></td></tr>
+    <tr><th>개선 항목</th><th>완료 기준</th><th>측정 방법</th><th>v1.1 현황</th></tr>
+    <tr><td>빈 버블 해소</td><td>빈 버블 발생률 &lt; 1%</td><td><code>SELECT count(*) FROM chat_messages WHERE role='assistant' AND content=''</code></td><td><span class="badge badge-green">stale 0건</span></td></tr>
+    <tr><td>중복 버블 해소</td><td>중복 보고 0건/주</td><td>error_log 모니터링</td><td><span class="badge badge-green">finalizingRef 적용</span></td></tr>
+    <tr><td>중단 비율</td><td>신규 interrupted &lt; 5%</td><td><code>SELECT count(*) ... WHERE model_used='interrupted'</code> / 전체 비율</td><td><span class="badge badge-yellow">구조 개선 적용</span></td></tr>
     <tr><td>DB 용량</td><td>_deleted_duplicate 0건</td><td>인텐트별 count 조회</td><td><span class="badge badge-yellow">9,913건 잔존</span></td></tr>
-    <tr><td>코드 분리</td><td>단일 파일 &lt; 1,500줄</td><td><code>wc -l</code></td><td><span class="badge badge-yellow">미착수 (page.tsx 8,340줄)</span></td></tr>
-    <tr><td>브라우저 프리징</td><td>프리징 보고 0건/주</td><td>CEO 피드백 + errorReporter</td><td><span class="badge badge-yellow">drain 최적화 적용, 근본 미해결</span></td></tr>
-    <tr><td>응답 미표시</td><td>새로고침 없이 100% 표시</td><td>E2E 테스트</td><td><span class="badge badge-yellow">tab return 체크 적용, 완전 해소 미달</span></td></tr>
+    <tr><td>코드 분리</td><td>단일 파일 &lt; 1,500줄</td><td><code>wc -l</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
+    <tr><td>브라우저 프리징</td><td>프리징 보고 0건/주</td><td>CEO 피드백 + errorReporter</td><td><span class="badge badge-yellow">미착수</span></td></tr>
   </table>
 </div>
 
@@ -1031,16 +914,15 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
 
   <table>
     <tr><th>버전</th><th>날짜</th><th>작성자</th><th>변경 내용</th><th>문서 링크</th></tr>
-    <tr><td><strong>v1.2.0</strong></td><td>2026-05-21</td><td>AADS CTO AI</td><td>성능 최적화 4건 반영 (interim_save, drain timer, tab return, token tracking), 운영 통계 갱신 (49,321건), P0 잔여 이슈 상세화, 로드맵 완료/미완료 분리, v1.1 아카이브</td><td><strong>현재 문서 (원본)</strong></td></tr>
-    <tr><td>v1.1.0</td><td>2026-05-21</td><td>AADS CTO AI</td><td>P0 이슈 3건 해결 반영, 429 재시도/폴백 체인 문서화, 운영 통계 업데이트</td><td><a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.1.html" style="color:var(--blue);">v1.1 아카이브</a></td></tr>
+    <tr><td><strong>v1.1.0</strong></td><td>2026-05-21</td><td>AADS CTO AI</td><td>P0 이슈 3건 해결 반영, 429 재시도/폴백 체인 문서화, 운영 통계 업데이트, 브라우저 프리징 이슈 P1 추가, 섹션 구조 변경 (해결 이슈 분리)</td><td><strong>현재 문서 (원본)</strong></td></tr>
     <tr><td>v1.0.0</td><td>2026-05-21</td><td>AADS CTO AI</td><td>최초 작성 — 기획/아키텍처/구현/DB/문제점/개선안 전수 분석</td><td><a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.0.html" style="color:var(--blue);">v1.0 아카이브</a></td></tr>
   </table>
 
   <h3>업데이트 규칙</h3>
   <table>
     <tr><th>변경 유형</th><th>버전 규칙</th><th>예시</th></tr>
-    <tr><td>섹션 내용 수정/추가</td><td>Patch (v1.2.x)</td><td>문제점 1건 추가 → v1.2.1</td></tr>
-    <tr><td>섹션 구조 변경</td><td>Minor (v1.x.0)</td><td>새 섹션 추가 → v1.3.0</td></tr>
+    <tr><td>섹션 내용 수정/추가</td><td>Patch (v1.1.x)</td><td>문제점 1건 추가 → v1.1.1</td></tr>
+    <tr><td>섹션 구조 변경</td><td>Minor (v1.x.0)</td><td>새 섹션 추가 → v1.2.0</td></tr>
     <tr><td>전체 재작성</td><td>Major (vX.0.0)</td><td>아키텍처 전면 변경 → v2.0.0</td></tr>
   </table>
 
@@ -1051,19 +933,15 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
     <tr><td>AADS Knowledge</td><td><code>docs/knowledge/AADS-KNOWLEDGE.md</code></td><td>아키텍처/파이프라인/교차검증 지식</td></tr>
     <tr><td>Shared Lessons</td><td><code>docs/shared-lessons/INDEX.md</code></td><td>프로젝트 간 공유 교훈</td></tr>
     <tr><td>CEO Directives</td><td>GitHub raw</td><td>CEO 절대 규칙 문서</td></tr>
-    <tr><td>v1.1 아카이브</td><td><code>docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.1.html</code></td><td>v1.1.0 (2026-05-21)</td></tr>
-    <tr><td>v1.0 아카이브</td><td><code>docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.0.html</code></td><td>v1.0.0 (2026-05-21)</td></tr>
+    <tr><td>v1.0 아카이브</td><td><code>docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.0.html</code></td><td>v1.0.0 원본 (2026-05-21)</td></tr>
   </table>
 </div>
 
 <!-- Footer -->
 <div style="text-align:center; padding:32px 0; color:var(--muted); font-size:0.8rem;">
-  <p>AADS Chat System Technical Document v1.2.0 · 2026-05-21 · 서버68</p>
+  <p>AADS Chat System Technical Document v1.1.0 · 2026-05-21 · 서버68</p>
   <p>이 문서는 코드 변경 시 함께 업데이트되어야 합니다.</p>
-  <p style="margin-top:8px;">
-    <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.1.html" style="color:var(--muted); text-decoration:underline;">📦 v1.1.0</a> · 
-    <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.0.html" style="color:var(--muted); text-decoration:underline;">📦 v1.0.0</a>
-  </p>
+  <p style="margin-top:8px;"><a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.0.html" style="color:var(--muted); text-decoration:underline;">📦 이전 버전: v1.0.0 아카이브</a></p>
 </div>
 
 </div><!-- container -->
