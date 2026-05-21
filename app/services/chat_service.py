@@ -3462,8 +3462,6 @@ def get_streaming_status(session_id: str) -> Optional[Dict[str, Any]]:
         tool_count: 도구 호출 횟수
         last_tool: 마지막 호출 도구 이름
     """
-    _STREAMING_MAX_AGE_SEC = 600  # 10분 이상 된 streaming state 자동 만료
-
     if session_id in _streaming_state:
         s = _streaming_state[session_id]
         is_completed = s.get("completed", False)
@@ -3475,10 +3473,13 @@ def get_streaming_status(session_id: str) -> Optional[Dict[str, Any]]:
             is_completed = True
             s["completed"] = True
 
-        # STUCK 방지: 10분 이상 된 미완료 state 자동 만료
+        # STUCK 방지: 도구활동 기반 max age + idle 120s 이상일 때만 만료
         if not is_completed:
             _started = s.get("started_at", 0)
-            if _started and (_bg_time.monotonic() - _started) > _STREAMING_MAX_AGE_SEC:
+            _max_age = 1800 if s.get("tool_count", 0) > 0 else 600
+            _last_evt = s.get("last_event_at", _started)
+            _idle = (_bg_time.monotonic() - _last_evt) if _last_evt else (_bg_time.monotonic() - _started) if _started else 0
+            if _started and (_bg_time.monotonic() - _started) > _max_age and _idle > 120:
                 logger.warning(f"streaming_state_expired session={session_id[:8]} age={_bg_time.monotonic() - _started:.0f}s")
                 is_completed = True
                 s["completed"] = True

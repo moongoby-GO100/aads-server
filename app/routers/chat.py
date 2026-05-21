@@ -246,11 +246,13 @@ async def _settle_stale_execution_for_recovery(
         )
     )
     _started_age = int(execution_row.get("started_age_seconds") or 0)
+    _updated_age = int(execution_row.get("updated_age_seconds") or 0)
     _has_tool_activity = _tc > 0 or bool(execution_row.get("last_event_id"))
     _hard_cutoff_sec = 900 if _has_tool_activity else 300
     _hard_stale_by_started_at = (
         not has_live_runtime
         and _started_age >= _hard_cutoff_sec
+        and _updated_age >= 120
     )
     if execution_row["updated_recently"] and not (
         _stale_empty_execution or _stale_progressed_execution or _stale_empty_no_runtime
