@@ -245,8 +245,14 @@ async def _settle_stale_execution_for_recovery(
             or _tc > 0
         )
     )
+    _started_age = int(execution_row.get("started_age_seconds") or 0)
+    _hard_stale_by_started_at = (
+        not has_live_runtime
+        and _started_age >= 600
+    )
     if execution_row["updated_recently"] and not (
         _stale_empty_execution or _stale_progressed_execution or _stale_empty_no_runtime
+        or _hard_stale_by_started_at
     ):
         return None
 
@@ -926,6 +932,7 @@ async def get_streaming_status(session_id: UUID):
                        te.last_event_id,
                        te.updated_at,
                        EXTRACT(EPOCH FROM (NOW() - te.updated_at))::int AS updated_age_seconds,
+                       EXTRACT(EPOCH FROM (NOW() - te.started_at))::int AS started_age_seconds,
                        (te.updated_at > NOW() - interval '5 minutes') AS updated_recently,
                        te.completed_at,
                        am.model_used AS assistant_model_used,
