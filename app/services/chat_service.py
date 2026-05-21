@@ -2425,6 +2425,11 @@ async def with_background_completion(
             # Redis 완료 마커/placeholder 삭제는 실제 done 이벤트를 본 경우에만 수행한다.
             # 서버 SIGTERM/CancelledError 중 finally가 실행되면 중간 응답을 완료로 오인할 수 있다.
             _completed_ok = bool(state.get("saw_done_event"))
+            if not _completed_ok and not state.get("_rate_limited") and not state.get("_producer_exception_type") and not state.get("_producer_incomplete_exit"):
+                _content_len = len((state.get("content") or "").strip())
+                if _content_len > 0:
+                    logger.info("bg_producer_inferred_completion session=%s content_len=%d", session_id[:8], _content_len)
+                    _completed_ok = True
             if _completed_ok:
                 try:
                     await _redis_stream.mark_stream_done(_stream_id_for_state(session_id, state))
@@ -2517,11 +2522,17 @@ async def with_background_completion(
                 _heartbeat_asyncio.create_task(_delayed_cleanup(session_id))
             logger.info(f"bg_producer_done session={session_id}")
 
-    # 기존 태스크가 있으면 취소 후 교체
+    # 기존 태스크가 있으면 partial flush 후 취소
     old_task = _active_bg_tasks.pop(session_id, None)
     if old_task and not old_task.done():
+        _old_state = _streaming_state.get(session_id)
+        if _old_state and _old_state.get("_accumulated_content"):
+            try:
+                await _interim_save_streaming(session_id, _old_state, force=True)
+            except Exception:
+                pass
         old_task.cancel(msg="superseded_by_new_execution")
-        logger.info(f"bg_task_replaced session={session_id}")
+        logger.info(f"bg_task_replaced session={session_id} (partial flushed)")
 
     # BUG-SESSION-MIX FIX: 새 producer 시작 전 잔류 streaming_placeholder 정리.
     # 의미 있는 부분 응답은 삭제하지 않고 interrupted assistant로 보존한다.
