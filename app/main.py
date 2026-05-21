@@ -1376,6 +1376,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/ops/usage-stats",  # 사용량 통계 (읽기전용)
     "/api/v1/ops/codex-usage",  # Codex 사용량 (읽기전용)
     "/api/v1/ops/claude-max-usage",  # Claude Max 사용량 (읽기전용)
+    "/static",  # 정적 파일 (기술문서/보고서/갤러리)
 )
 # 내부 모니터링 (verify_monitor_key로 별도 인증)
 _MONITOR_KEY_PATHS = (

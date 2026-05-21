@@ -491,3 +491,96 @@ export async function updateNodeContent(\
 
 ## [2026-05-20 14:20:39 KST] [aads-dashboard] deploy.sh
 - Chat-Direct 수정: run_remote_command: docker exec aads-server cat /var/log/supervisor/aads-api-stderr.log
+
+## [2026-05-20 14:59:32 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i 's/return (m.content || "").length > 30;/return (m.content || "").length 
+
+## [2026-05-20 15:12:39 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:   const [todoActionLoading, setTodoActio→  const [todoActionLoading, setTodoActio
+
+## [2026-05-20 15:16:07 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/patch_todo_manual.py
+
+## [2026-05-20 15:31:58 KST] [aads-dashboard] ../aads-dashboard/public/reports/auto-routing-strategy-2026.html
+- Chat-Direct 수정: write: ../aads-dashboard/public/reports/auto-routing-strategy-2026.html
+
+## [2026-05-20 15:34:33 KST] [aads-dashboard] public/reports/test_write.txt
+- Chat-Direct 수정: run_remote_command: python3 -c "open('/root/aads/aads-dashboard/public/reports/test_write.txt','w').
+
+## [2026-05-20 15:36:14 KST] [aads-dashboard] public/reports/auto-routing-strategy-2026.html
+- Chat-Direct 수정: run_remote_command: python3 -c '
+import pathlib
+p = pathlib.Path("/root/aads/aads-dashboard/public/r
+
+## [2026-05-20 18:03:57 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:               // P0-FIX: setMessages 후 스→              // P0-FIX: setMessages 후 스
+
+## [2026-05-20 18:04:00 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:           return replaceStreamingPlaceho→          return replaceStreamingPlaceho
+
+## [2026-05-20 18:04:01 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:               setMessages((prev) => repl→              setMessages((prev) => repl
+
+## [2026-05-20 18:06:24 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i '4858a\                  mergeCooldownUntilRef.current = Date.now() + 500
+
+## [2026-05-20 18:14:43 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:       if (container.scrollTop < 80 && ha→      if (container.scrollTop < 80 && ha
+
+## [2026-05-20 18:18:38 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: ps -p 5193 -o pid,etime 2>/dev/null
+
+## [2026-05-20 18:18:40 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/fix_bubble_scroll.py
+
+## [2026-05-21 07:40:51 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:         if (ss.just_completed) {
+       →        if (ss.just_completed) {
+       
+
+## [2026-05-21 07:41:43 KST] [aads-dashboard] src/app/chat/page.tsx.bak_20260521
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-dashboard/src/app/chat/page.tsx /root/aads/aads-dashboard/src
+
+## [2026-05-21 07:42:19 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: cat > /tmp/patch1.py << 'PYEOF'
+f = '/root/aads/aads-dashboard/src/app/chat/page
+
+## [2026-05-21 08:07:41 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:         if (ss.just_completed) {
+       →        if (ss.just_completed) {
+       
+
+## [2026-05-21 08:55:16 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: cat > /tmp/patch_dashboard_fallback.py << 'PYEOF'
+import re
+
+filepath = "/root/a
+
+## [2026-05-21 09:54:05 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:   }, [streaming]);
+
+  // FIX-4: 브리핑 렌더 후→  }, [streaming]);
+
+  // ── SAFETY-NET: 
+
+## [2026-05-21 09:54:59 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/patch_chat_safety_net.py
+
+## [2026-05-21 10:14:58 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:               }
+              // P0-FIX:→              } else {
+                /
+
+## [2026-05-21 10:15:06 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:     const timer = setTimeout(async () =>→    const timer = setTimeout(async () =>
+
+## [2026-05-21 10:15:08 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:       isNearBottomRef.current = containe→      isNearBottomRef.current = containe
+
+## [2026-05-21 10:15:10 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:   const _dupExists = prev.some((m) =>
+  →  const _dupExists = prev.some((m) =>
+  
+
+## [2026-05-21 10:17:51 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/patch_chat_fixes.py
