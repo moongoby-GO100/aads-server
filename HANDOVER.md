@@ -1414,3 +1414,10 @@
 - 검증: `python3 -m py_compile app/core/prompts/system_prompt_v2.py app/services/tool_executor.py` 통과. `pytest -q tests/unit/test_tool_executor_aliases.py tests/test_tool_awareness.py::test_tool_executor_dispatch_registered` 2건 통과. 운영 DB `prompt_assets`에는 `query_db` 문구가 없음을 확인했다.
 - 배포: `bash deploy.sh code`가 blue-green으로 전환되어 active API가 `aads-server-green`/`8102`로 변경됐다. `https://aads.newtalk.kr/api/v1/health` OK. active 컨테이너 내부에서 `query_db` alias와 `query_database` 프롬프트 문구 반영을 확인했다.
 - 주의: 대시보드 배포가 먼저 nginx 공통 락을 잡고 있어 API 배포가 대기했다. 이후 락 해제 후 순차 배포되어 공통 락 방어가 실제로 작동했다.
+
+## 2026-05-27 08:51 KST - Chat stale interrupt execution recovery
+
+- 배경: 세션 `f31f1238-fdc8-4405-8893-351226e06bda`에서 최신 `[추가 지시]` 2건이 DB에는 저장됐지만 assistant 응답과 `chat_turn_executions`가 생성되지 않아 "응답이 사라짐/응답 못함"으로 보였다.
+- 원인: `/chat/sessions/{session_id}/interrupt`가 인메모리 streaming flag만 보고 `queued=True`를 반환했다. 이전 실행이 DB 기준 stale/interrupted 상태여도 추가 지시를 user row로 저장하고 큐에만 넣어, 실제 LLM 실행으로 이어지지 않았다.
+- 조치: `app/routers/chat.py`에서 interrupt 접수 전 DB `current_execution_id`와 실행 age/progress를 확인하고 stale이면 `queued=false`로 거부하면서 인메모리 streaming 상태를 정리한다. `app/services/chat_service.py`에는 실행으로 연결되지 않은 최신 `[추가 지시]` row를 다음 정상 턴에 `[이전 추가 지시]`로 자동 회수하고 `intent='recovered_interrupt'`로 마킹하는 가드를 추가했다.
+- 검증: `python3 -m py_compile app/routers/chat.py app/services/chat_service.py` 통과. 대상 세션 기준 실행 미연결 최신 추가 지시 2건(`08:00`, `08:28 KST`)을 확인했다.

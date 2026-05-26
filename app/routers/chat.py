@@ -18,7 +18,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel, Field
 
-from app.core.interrupt_queue import is_streaming, push_interrupt
+from app.core.interrupt_queue import is_streaming, push_interrupt, set_streaming
 from app.models.chat import (
     ApproveDiffOut,
     ApproveDiffRequest,
@@ -1508,10 +1508,78 @@ async def interrupt_session(session_id: UUID, req: InterruptRequest):
     도구 루프 완료 시점에 model_selector.py가 has_interrupt() 체크 후 반영.
     AADS-FIX: 인터럽트 메시지를 DB에도 즉시 저장 (유실 방지)
     """
-    from app.core.interrupt_queue import push_interrupt, is_streaming
     sid = str(session_id)
 
     if is_streaming(sid):
+        accepts_interrupt = False
+        stale_reason = ""
+        try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT te.id::text AS execution_id,
+                           te.status,
+                           te.last_event_id,
+                           EXTRACT(EPOCH FROM (NOW() - te.updated_at))::int AS updated_age_seconds,
+                           EXTRACT(EPOCH FROM (NOW() - te.started_at))::int AS started_age_seconds,
+                           COALESCE(pm.content, am.content, '') AS partial_content,
+                           COALESCE(pm.tools_called, am.tools_called) AS tools_called
+                    FROM chat_sessions s
+                    LEFT JOIN chat_turn_executions te
+                      ON te.id = s.current_execution_id
+                    LEFT JOIN chat_messages am
+                      ON am.id = te.assistant_message_id
+                    LEFT JOIN LATERAL (
+                        SELECT content, tools_called
+                        FROM chat_messages
+                        WHERE execution_id = te.id
+                          AND intent = 'streaming_placeholder'
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    ) pm ON TRUE
+                    WHERE s.id = $1
+                    """,
+                    session_id,
+                )
+            if row and row["status"] in ("running", "retrying"):
+                _clean_partial = svc._strip_streaming_progress_markers(row["partial_content"] or "")
+                _tool_count, _last_tool = _extract_tool_progress(row["tools_called"])
+                _has_progress = (
+                    svc._has_meaningful_partial_content(_clean_partial)
+                    or bool(row["last_event_id"])
+                    or _tool_count > 0
+                )
+                _updated_age = int(row["updated_age_seconds"] or 0)
+                _started_age = int(row["started_age_seconds"] or 0)
+                _empty_stale = not _has_progress and _updated_age >= 150
+                _hard_stale = _started_age >= 900 and _updated_age >= 120
+                accepts_interrupt = not (_empty_stale or _hard_stale)
+                if not accepts_interrupt:
+                    stale_reason = (
+                        f"stale execution age={_started_age}s updated_age={_updated_age}s "
+                        f"tools={_tool_count} last_tool={_last_tool}"
+                    )
+            else:
+                stale_reason = "no running DB execution"
+        except Exception as e:
+            stale_reason = f"DB execution check failed: {e}"
+            accepts_interrupt = False
+
+        if not accepts_interrupt:
+            set_streaming(sid, False)
+            logger.warning(
+                "interrupt_rejected_stale_runtime session_id=%s reason=%s",
+                sid,
+                stale_reason,
+            )
+            return {
+                "queued": False,
+                "message": "현재 실행 중인 AI 응답이 DB 기준으로 없거나 오래되어 일반 메시지로 다시 전송해야 합니다.",
+                "reason": stale_reason,
+            }
+
         # DB에 즉시 저장 (유실 방지) — 스트리밍 중일 때만 저장
         try:
             from app.core.db_pool import get_pool

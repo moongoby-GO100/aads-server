@@ -5521,6 +5521,72 @@ async def send_message_stream(
                 logger.info(f"[AUTO_RESUME] session={session_id[:8]} re-processing after server restart")
                 intent_override = None  # 일반 흐름으로 전환
 
+            # DB에 저장됐지만 실행으로 연결되지 못한 stale interrupt를 다음 정상 턴에 회수한다.
+            # 과거 /interrupt가 메모리 streaming 상태만 믿고 queued=True를 반환하면
+            # 사용자 메시지는 저장되지만 chat_turn_executions가 생성되지 않아 화면상 "응답 없음"으로 보였다.
+            if not intent_override and not branch_point_msg_id:
+                try:
+                    _orphan_interrupt_rows = await conn.fetch(
+                        """
+                        SELECT m.id, m.content
+                        FROM chat_messages m
+                        WHERE m.session_id = $1
+                          AND m.role = 'user'
+                          AND m.content LIKE '[추가 지시]%%'
+                          AND COALESCE(m.intent, '') <> 'recovered_interrupt'
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM chat_turn_executions te
+                              WHERE te.user_message_id = m.id
+                          )
+                          AND m.created_at > COALESCE(
+                              (
+                                  SELECT MAX(te.started_at)
+                                  FROM chat_turn_executions te
+                                  WHERE te.session_id = $1
+                              ),
+                              TIMESTAMPTZ 'epoch'
+                          )
+                        ORDER BY m.created_at ASC
+                        LIMIT 5
+                        """,
+                        sid,
+                    )
+                    _orphan_lines: list[str] = []
+                    _orphan_ids: list[uuid.UUID] = []
+                    for _orphan in _orphan_interrupt_rows:
+                        _orphan_text = re.sub(
+                            r"^\[추가 지시\]\s*",
+                            "",
+                            str(_orphan["content"] or ""),
+                        ).strip()
+                        if not _orphan_text or _orphan_text in content:
+                            continue
+                        _orphan_lines.append(f"[이전 추가 지시] {_orphan_text}")
+                        _orphan_ids.append(_orphan["id"])
+                    if _orphan_lines:
+                        content = "\n".join(_orphan_lines) + "\n\n" + content
+                        await conn.execute(
+                            """
+                            UPDATE chat_messages
+                            SET intent = 'recovered_interrupt',
+                                edited_at = NOW()
+                            WHERE id = ANY($1::uuid[])
+                            """,
+                            _orphan_ids,
+                        )
+                        logger.info(
+                            "orphan_interrupts_recovered session=%s count=%s",
+                            session_id[:8],
+                            len(_orphan_ids),
+                        )
+                except Exception as _orphan_interrupt_err:
+                    logger.warning(
+                        "orphan_interrupt_recovery_failed session=%s error=%s",
+                        session_id[:8],
+                        str(_orphan_interrupt_err)[:160],
+                    )
+
             # 사용자 메시지 저장 (trigger 메시지는 intent로 구분)
             # model_override를 user 메시지의 model_used에 저장 → 재개 시 CEO 선택 모델 복원용
             # P2-2: branch 모드에서는 라우터에서 이미 저장했으므로 skip
