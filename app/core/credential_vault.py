@@ -68,16 +68,14 @@ def _get_fernet() -> Fernet:
     if _VAULT_KEY is None:
         key_str = os.getenv("VAULT_ENCRYPTION_KEY", "")
         if not key_str:
-            # 파일 폴백
             if os.path.exists(_VAULT_KEY_FILE):
                 key_str = open(_VAULT_KEY_FILE).read().strip()
             else:
-                # 최초 1회 자동 생성 + 파일 저장
                 key_str = Fernet.generate_key().decode()
                 os.makedirs(os.path.dirname(_VAULT_KEY_FILE), exist_ok=True)
                 with open(_VAULT_KEY_FILE, "w") as f:
                     f.write(key_str)
-                logger.info("vault_encryption_key_auto_generated", path=_VAULT_KEY_FILE)
+                logger.info("vault_encryption_key_auto_generated path=%s", _VAULT_KEY_FILE)
         _VAULT_KEY = key_str.encode()
     return Fernet(_VAULT_KEY)
 
@@ -125,11 +123,9 @@ async def list_credentials(
         item = dict(row)
         _normalize_json_fields(item)
         item["id"] = str(item["id"])
-        # 시간 필드 직렬화
         for tf in ("created_at", "updated_at", "last_used_at", "last_verified"):
             if item.get(tf):
                 item[tf] = item[tf].isoformat()
-        # 복호화 또는 마스킹
         try:
             username = decrypt_value(item["username_enc"])
         except Exception:
@@ -143,7 +139,6 @@ async def list_credentials(
         else:
             item["username"] = username
             item["password"] = "********"
-        # 원본 암호화 필드 제거
         item.pop("username_enc", None)
         item.pop("password_enc", None)
         results.append(item)
@@ -204,7 +199,6 @@ async def create_credential(
     username_enc = encrypt_value(username)
     password_enc = encrypt_value(password)
 
-    # extra_fields 내부 값도 암호화
     enc_extra = {}
     if extra_fields:
         for k, v in extra_fields.items():
@@ -330,7 +324,7 @@ async def get_login_credential(
     label: str = "기본",
     _auto_provision: bool = True,
 ) -> dict[str, Any] | None:
-    """서비스+프로젝트+라벨로 자격증명 조회 (복호화 포함, 자동 로그인용)."""
+    """서비스+프로젝트+라벨로 자격증명 조회. vault miss 시 auto_provision 폴백."""
     pool = get_pool()
     if project:
         row = await pool.fetchrow(
@@ -356,7 +350,6 @@ async def get_login_credential(
     item["username"] = decrypt_value(item["username_enc"])
     item["password"] = decrypt_value(item["password_enc"])
 
-    # extra_fields 복호화
     if item.get("extra_fields"):
         dec_extra = {}
         for k, v in item["extra_fields"].items():
@@ -431,28 +424,13 @@ async def _api_token_inject(page: Any, credential: dict[str, Any], step: dict[st
 
 
 async def execute_login_steps(page: Any, credential: dict[str, Any]) -> bool:
-    """Playwright page에 login_steps 시퀀스를 실행하여 자동 로그인.
-
-    login_steps 형식:
-    [
-        {"action": "navigate", "url": "https://..."},
-        {"action": "fill", "selector": "input#email", "value": "{{username}}"},
-        {"action": "fill", "selector": "input[type='password']", "value": "{{password}}"},
-        {"action": "click", "selector": "button[type='submit']"},
-        {"action": "wait", "ms": 3000},
-        {"action": "wait_for_url", "pattern": "/dashboard"},
-        {"action": "api_token_inject", "api_url": "https://...", "token_path": "token",
-         "storage_key": "aads_token", "redirect_url": "https://.../chat"},
-        {"action": "evaluate", "script": "() => console.log('hello')"}
-    ]
-    """
+    """Playwright page에 login_steps 시퀀스를 실행하여 자동 로그인."""
     steps = credential.get("login_steps", [])
     username = credential.get("username", "")
     password = credential.get("password", "")
 
     if not steps:
         login_url = credential.get("login_url")
-        # React 앱 감지: api_token_inject를 기본 전략으로 사용
         if login_url:
             inject_ok = await _api_token_inject(page, credential, {
                 "redirect_url": login_url.replace("/login", "/chat").replace("/signin", "/"),
@@ -460,7 +438,6 @@ async def execute_login_steps(page: Any, credential: dict[str, Any]) -> bool:
             if inject_ok:
                 await mark_used(credential["id"])
                 return True
-            # 폴백: 기존 폼 fill 방식
             await page.goto(login_url, wait_until="domcontentloaded", timeout=15000)
 
         email_input = page.locator("input[type='email'], input[name='email'], input[name='username'], input#email, input#username").first
@@ -474,10 +451,8 @@ async def execute_login_steps(page: Any, credential: dict[str, Any]) -> bool:
         await mark_used(credential["id"])
         return True
 
-    # 정의된 스텝 순차 실행
     for step in steps:
         action = step.get("action", "")
-        # 템플릿 변수 치환
         selector = step.get("selector", "")
         value = step.get("value", "")
         value = value.replace("{{username}}", username).replace("{{password}}", password)
@@ -523,144 +498,178 @@ async def execute_login_steps(page: Any, credential: dict[str, Any]) -> bool:
     return True
 
 
-# ── E2E Auto-Provisioning ─────────────────────────────────
+# ── Auto-Provision E2E Credentials ──────────────────────
 
-PROJECT_E2E_CONFIG: dict[str, dict[str, Any]] = {
+_PROVISION_CONFIG: dict[str, dict[str, Any]] = {
     "AADS": {
         "service": "aads-dashboard",
         "login_url": "https://aads.newtalk.kr/login",
-        "signup_api": None,
-        "login_api": "https://aads.newtalk.kr/api/auth/login",
-        "default_email": "ceo@newtalk.kr",
-        "default_password": "newtalk2024!",
+        "signup_api": "https://aads.newtalk.kr/api/v1/auth/signup",
+        "login_api": "https://aads.newtalk.kr/api/v1/auth/login",
+        "default_email": "e2e_auto@newtalk.kr",
+        "default_password": "E2eAuto!2026",
         "email_field": "email",
         "password_field": "password",
-        "token_path": "access_token",
-        "storage_key": "auth-token",
+        "token_path": "token",
+        "storage_key": "aads_token",
+        "member_db_table": "saas_users",
     },
     "KIS": {
-        "service": "kis-autotrade",
-        "login_url": "https://go100.kr/login",
-        "signup_api": None,
-        "login_api": "https://go100.kr/api/auth/login",
+        "service": "go100.newtalk.kr",
+        "login_url": "https://go100.newtalk.kr/login",
+        "signup_api": "https://go100.newtalk.kr/api/v1/auth/signup",
+        "login_api": "https://go100.newtalk.kr/api/v1/auth/login",
         "default_email": "admin@go100.com",
         "default_password": "Admin1234!",
         "email_field": "email",
         "password_field": "password",
         "token_path": "access_token",
-        "storage_key": "auth-token",
+        "storage_key": "go100_token",
     },
     "GO100": {
-        "service": "go100-web",
-        "login_url": "https://go100.kr/login",
-        "signup_api": None,
-        "login_api": "https://go100.kr/api/auth/login",
+        "service": "go100.newtalk.kr",
+        "login_url": "https://go100.newtalk.kr/login",
+        "signup_api": "https://go100.newtalk.kr/api/v1/auth/signup",
+        "login_api": "https://go100.newtalk.kr/api/v1/auth/login",
         "default_email": "admin@go100.com",
         "default_password": "Admin1234!",
         "email_field": "email",
         "password_field": "password",
         "token_path": "access_token",
-        "storage_key": "auth-token",
+        "storage_key": "go100_token",
     },
     "NTV2": {
-        "service": "newtalk-v2",
-        "login_url": "https://ntv2.newtalk.kr/login",
-        "signup_api": None,
-        "login_api": "https://ntv2.newtalk.kr/api/auth/login",
-        "default_email": "admin@newtalk.kr",
-        "default_password": "newtalk2024!",
+        "service": "newtalk-v2-admin",
+        "login_url": "https://v2.newtalk.kr/login",
+        "login_api": "https://v2.newtalk.kr/api/auth/login",
+        "default_email": "e2e_verify@newtalk.kr",
+        "default_password": "E2eAuto!2026",
         "email_field": "email",
         "password_field": "password",
-        "token_path": "access_token",
-        "storage_key": "auth-token",
+        "token_path": "token",
+        "storage_key": "ntv2_token",
     },
     "SF": {
-        "service": "sf-platform",
-        "login_url": "https://sf.newtalk.kr/login",
-        "signup_api": None,
-        "login_api": "https://sf.newtalk.kr/api/auth/login",
-        "default_email": "admin@newtalk.kr",
-        "default_password": "newtalk2024!",
+        "service": "shotflow.newtalk.kr",
+        "login_url": "https://shotflow.newtalk.kr/login",
+        "login_api": "https://ypvqgojexppcgilacxdz.supabase.co/auth/v1/token?grant_type=password",
+        "default_email": "e2e_auto@newtalk.kr",
+        "default_password": "E2eAuto!2026",
         "email_field": "email",
         "password_field": "password",
         "token_path": "access_token",
-        "storage_key": "auth-token",
+        "storage_key": "sf_token",
+        "extra_headers": {"apikey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlwdnFnb2pleHBwY2dpbGFjeGR6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA5MjA1NDYsImV4cCI6MjA4NjQ5NjU0Nn0.c7WFH6wmwCObdjPTdu0QObDFa5KO7CXo8gas0ocLSvs"},
     },
 }
 
 
-async def _fallback_from_member_db(project: str) -> dict[str, str] | None:
-    """AADS: saas_users 직접 조회. 타 프로젝트: config defaults 반환."""
-    cfg = PROJECT_E2E_CONFIG.get(project)
-    if not cfg:
-        return None
-
-    if project == "AADS":
-        try:
-            pool = get_pool()
-            row = await pool.fetchrow(
-                "SELECT email, password_hash FROM saas_users WHERE is_active = TRUE ORDER BY id LIMIT 1"
-            )
-            if row:
-                return {"email": row["email"], "password": cfg["default_password"]}
-        except Exception as e:
-            logger.warning("_fallback_from_member_db AADS query failed: %s", e)
-
-    return {"email": cfg["default_email"], "password": cfg["default_password"]}
+async def _fallback_from_member_db(project: str, config: dict[str, Any]) -> dict[str, str] | None:
+    """회원 DB에서 테스트 계정 조회 폴백."""
+    pool = get_pool()
+    table = config.get("member_db_table")
+    if not table:
+        return {"email": config["default_email"], "password": config["default_password"]}
+    try:
+        row = await pool.fetchrow(
+            f"SELECT email FROM {table} WHERE role = 'admin' AND is_active = TRUE LIMIT 1",
+        )
+        if row:
+            logger.info("_fallback_from_member_db: found admin in %s for %s", table, project)
+            return {"email": row["email"], "password": config["default_password"]}
+    except Exception as e:
+        logger.warning("_fallback_from_member_db: query failed for %s: %s", project, e)
+    return {"email": config["default_email"], "password": config["default_password"]}
 
 
-async def auto_provision_e2e_credential(project: str) -> dict | None:
-    """vault에 크리덴셜 없을 때 자동 프로비저닝: config defaults → login 검증 → vault 등록."""
-    cfg = PROJECT_E2E_CONFIG.get(project)
-    if not cfg:
+async def auto_provision_e2e_credential(project: str) -> dict[str, Any] | None:
+    """E2E 자격증명 자동 프로비저닝: signup API → login 검증 → 회원DB 폴백 → vault 등록."""
+    import aiohttp
+
+    project = project.upper()
+    config = _PROVISION_CONFIG.get(project)
+    if not config:
         logger.warning("auto_provision: unknown project %s", project)
         return None
 
-    fallback = await _fallback_from_member_db(project)
+    fallback = await _fallback_from_member_db(project, config)
     if not fallback:
-        logger.warning("auto_provision: no fallback for project %s", project)
         return None
 
     email = fallback["email"]
     password = fallback["password"]
-    logger.info("auto_provision: project=%s email=%s → registering to vault", project, email)
+    headers = config.get("extra_headers", {}).copy()
+    headers["Content-Type"] = "application/json"
+
+    signup_api = config.get("signup_api")
+    if signup_api:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    signup_api,
+                    json={config["email_field"]: email, config["password_field"]: password},
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                    ssl=False,
+                ) as resp:
+                    logger.info("auto_provision signup %s: %s", project, resp.status)
+        except Exception as e:
+            logger.info("auto_provision signup skipped for %s: %s", project, e)
+
+    login_ok = False
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                config["login_api"],
+                json={config["email_field"]: email, config["password_field"]: password},
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10),
+                ssl=False,
+            ) as resp:
+                if resp.status in (200, 201):
+                    login_ok = True
+                    logger.info("auto_provision login verified for %s", project)
+                else:
+                    body = await resp.text()
+                    logger.warning("auto_provision login failed %s: %s %s", project, resp.status, body[:200])
+    except Exception as e:
+        logger.warning("auto_provision login request failed %s: %s", project, e)
+
+    if not login_ok:
+        logger.warning("auto_provision: login verification failed for %s, registering anyway", project)
 
     try:
         cred = await create_credential(
-            service=cfg["service"],
-            project=project,
+            service=config["service"],
             username=email,
             password=password,
-            login_url=cfg["login_url"],
-            label="기본",
-            login_steps=[
-                {"action": "fill", "selector": f'input[name="{cfg["email_field"]}"]', "value": "__USERNAME__"},
-                {"action": "fill", "selector": f'input[name="{cfg["password_field"]}"]', "value": "__PASSWORD__"},
-                {"action": "click", "selector": 'button[type="submit"]'},
-                {"action": "wait", "selector": "nav", "timeout": 5000},
-            ],
-            extra_data={"auto_provisioned": True, "source": "config_defaults"},
+            project=project,
+            label="E2E 자동 검증용",
+            login_url=config.get("login_url"),
         )
-        logger.info("auto_provision: registered credential id=%s for project=%s", cred.get("id"), project)
+        logger.info("auto_provision: registered credential for %s id=%s", project, cred.get("id"))
         return cred
     except Exception as e:
-        logger.error("auto_provision: failed for project=%s error=%s", project, e)
+        logger.error("auto_provision: vault registration failed for %s: %s", project, e)
         return None
 
 
 async def ensure_all_project_credentials() -> dict[str, Any]:
-    """모든 프로젝트에 대해 vault 크리덴셜 존재 확인 + 없으면 자동 프로비저닝."""
+    """모든 프로젝트의 E2E 자격증명 존재 확인 및 자동 프로비저닝."""
     results = {}
-    for proj, cfg in PROJECT_E2E_CONFIG.items():
-        existing = await get_login_credential(cfg["service"], proj, _auto_provision=False)
-        if existing:
-            results[proj] = {"status": "exists", "id": existing["id"]}
+    for project in _PROVISION_CONFIG:
+        config = _PROVISION_CONFIG[project]
+        cred = await get_login_credential(
+            config["service"], project, "E2E 자동 검증용", _auto_provision=False,
+        )
+        if cred:
+            results[project] = {"status": "exists", "id": cred["id"]}
         else:
-            provisioned = await auto_provision_e2e_credential(proj)
+            provisioned = await auto_provision_e2e_credential(project)
             if provisioned:
-                results[proj] = {"status": "provisioned", "id": provisioned.get("id")}
+                results[project] = {"status": "provisioned", "id": provisioned.get("id")}
             else:
-                results[proj] = {"status": "failed"}
+                results[project] = {"status": "failed"}
     return results
 
 
@@ -729,16 +738,7 @@ _E2E_PROJECT_CONFIG: dict[str, dict[str, Any]] = {
 
 
 async def get_e2e_login_url(project: str, redirect: str | None = None, role: str | None = None) -> dict[str, Any]:
-    """프로젝트별 E2E 브라우저 자동 로그인 URL 생성.
-
-    Args:
-        project: AADS/GO100/NTV2/SF/KIS/NTV1_ADMIN/NTV1_RETAIL/NTV1_WHOLESALE
-        redirect: 로그인 후 이동 경로
-        role: NTV2 역할 (admin/md/purchaser/wholesale/retail/outsource)
-
-    Returns dict with keys: url, project, success, error (if failed).
-    For form_login configs: returns login_url + form_fields for browser_fill usage.
-    """
+    """프로젝트별 E2E 브라우저 자동 로그인 URL 생성."""
     import aiohttp
     from urllib.parse import quote
 

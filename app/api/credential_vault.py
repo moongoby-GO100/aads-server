@@ -139,7 +139,6 @@ async def api_test_login(body: LoginTestRequest) -> dict[str, Any]:
     if not login_url:
         raise HTTPException(status_code=400, detail="login_url이 설정되지 않았습니다")
 
-    # Playwright 브라우저로 실제 로그인 테스트
     try:
         from app.api.ceo_chat_tools import _get_or_create_browser_context
         browser_ctx = await _get_or_create_browser_context()
@@ -189,16 +188,15 @@ async def get_e2e_url(project: str, redirect: str | None = None, role: str | Non
 
 @router.post("/provision/{project}")
 async def api_provision_credential(project: str) -> dict[str, Any]:
-    """프로젝트별 E2E 크리덴셜 자동 프로비저닝."""
+    """단일 프로젝트 E2E 자격증명 자동 프로비저닝."""
     cred = await auto_provision_e2e_credential(project)
     if not cred:
-        raise HTTPException(status_code=400, detail=f"Failed to provision credential for {project}")
-    return {"status": "provisioned", "project": project, "id": cred.get("id")}
+        raise HTTPException(status_code=500, detail=f"프로비저닝 실패: {project}")
+    return {"status": "provisioned", "credential": cred}
 
 
 @router.post("/provision-all")
 async def api_provision_all() -> dict[str, Any]:
-    """전 프로젝트 E2E 크리덴셜 일괄 프로비저닝."""
+    """전체 프로젝트 E2E 자격증명 일괄 프로비저닝."""
     results = await ensure_all_project_credentials()
-    return {"status": "ok", "results": results}
-
+    return {"status": "completed", "results": results}
