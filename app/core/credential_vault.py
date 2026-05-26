@@ -543,7 +543,7 @@ _E2E_PROJECT_CONFIG: dict[str, dict[str, Any]] = {
         "api_url": "https://v2.newtalk.kr/api/auth/login",
         "token_path": "token",
         "e2e_url": "https://v2.newtalk.kr/reports/e2e-login.html#token={token}&role={role}&name=E2E&email=e2e_verify%40newtalk.kr&uid=79747&redirect=none",
-        "default_redirect": "/admin",
+        "default_redirect": "/dashboard",
         "default_role": "admin",
         "supported_roles": ["admin", "md", "purchaser", "wholesale", "retail", "outsource"],
         "url_encode_token": True,
