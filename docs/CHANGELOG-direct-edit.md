@@ -2747,3 +2747,15 @@ with open(
 
 ## [2026-05-26 16:06:57 KST] [aads-server] /tmp/deploy-dashboard-now.sh
 - Chat-Direct 수정: write: /tmp/deploy-dashboard-now.sh
+
+## [2026-05-26 16:08:13 KST] [aads-server] scripts/deploy-dashboard-bg.sh
+- Chat-Direct 수정: write: scripts/deploy-dashboard-bg.sh
+
+## [2026-05-26 16:13:43 KST] [aads-server] scripts/fix-displaydata.py
+- Chat-Direct 수정: write: scripts/fix-displaydata.py
+
+## [2026-05-26 16:14:20 KST] [aads-server] scripts/fix-displaydata2.py
+- Chat-Direct 수정: write: scripts/fix-displaydata2.py
+
+## [2026-05-26 16:16:54 KST] [aads-server] scripts/deploy-dash.sh
+- Chat-Direct 수정: write: scripts/deploy-dash.sh

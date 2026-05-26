@@ -669,3 +669,13 @@ with open(
 
 ## [2026-05-26 16:01:28 KST] [aads-dashboard] src/app/chat/page.tsx.bak.sse_done_v2.1779778882
 - Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/patch_chat_sse_done_v2.py
+
+## [2026-05-26 16:13:16 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:   ), [showAllTodos, todoItems]);
+
+  // ═→  ), [showAllTodos, todoItems]);
+
+  type
+
+## [2026-05-26 16:14:36 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/fix-displaydata2.py
