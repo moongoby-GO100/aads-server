@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AADS 채팅 시스템 기술문서 v1.3</title>
+<title>AADS 채팅 시스템 기술문서 v1.2</title>
 <style>
   :root {
     --bg: #0f172a; --card: #1e293b; --border: #334155;
@@ -127,8 +127,7 @@
 <div class="doc-header">
   <h1>AADS 채팅 시스템 기술문서</h1>
   <div class="subtitle">CEO Chat-First System — 기획 · 아키텍처 · 구현 · 문제점 · 개선안</div>
-  <span class="version-badge">📋 v1.3.0 · 2026-05-26 · 스트리밍 프리징 재발 조치 + 비동기 캡처 변환 + 배포 검증</span>
-  <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.2.html" class="version-badge old" style="text-decoration:none;">📦 v1.2.0</a>
+  <span class="version-badge">📋 v1.2.0 · 2026-05-21 · 성능 최적화 + 브라우저 멈춤 개선 + 통계 갱신</span>
   <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.1.html" class="version-badge old" style="text-decoration:none;">📦 v1.1.0</a>
   <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.0.html" class="version-badge old" style="text-decoration:none;">📦 v1.0.0</a>
   <div class="meta-grid">
@@ -827,18 +826,7 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
     </div>
   </div>
 
-  <h3>9.7 ✅ 해결: 브라우저 멈춤 재발 — 스트리밍 렌더 간격 완화 + 캡처 변환 비동기화 (v1.3)</h3>
-  <div class="fix-card">
-    <div class="title"><span class="resolved">RESOLVED</span> P0 — 긴 응답/화면캡처 지시 시 메인스레드 블로킹</div>
-    <div class="desc">
-      <strong>재발 원인:</strong> 긴 응답에서 150ms마다 전체 <code>streamBuf</code>를 React/Markdown 렌더 경로에 다시 넣고, 화면 키워드가 포함된 지시는 <code>String.fromCharCode(...bytes)</code> 기반 동기 base64 변환으로 전송 직전 브라우저를 멈출 수 있었다.<br>
-      <strong>해결:</strong> <code>src/app/chat/page.tsx</code>에서 스트리밍 드레인을 250ms tick + 450ms/900ms 최소 렌더 간격으로 완화하고 <code>startTransition</code>으로 낮은 우선순위 갱신 처리. 화면 캡처 변환은 <code>FileReader.readAsDataURL()</code> 기반 <code>fileToBase64()</code> helper로 통일했다.<br>
-      <strong>커밋:</strong> <code>8cf8314</code> (dashboard)<br>
-      <strong>배포/검증:</strong> blue-green 무중단 배포 완료. active 슬롯 <code>3101</code>, standby 슬롯 <code>3100</code> 모두 <code>AADS_RELEASE_SHA=8cf8314e1234</code>. <code>npx eslint src/app/chat/page.tsx</code> 오류 0건, <code>npm run build</code> 통과.
-    </div>
-  </div>
-
-  <h3>9.8 ✅ 해결: 중단 토큰/비용 미기록 (v1.2)</h3>
+  <h3>9.7 ✅ 해결: 중단 토큰/비용 미기록 (v1.2)</h3>
   <div class="fix-card">
     <div class="title"><span class="resolved">RESOLVED</span> P2 — 중단된 메시지 비용 추적 불가</div>
     <div class="desc">
@@ -848,7 +836,7 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
     </div>
   </div>
 
-  <h3>9.9 ⚠️ 개선 중: interrupted 비율</h3>
+  <h3>9.8 ⚠️ 개선 중: interrupted 비율</h3>
   <div class="issue-card">
     <div class="title"><span class="p0">P0</span> interrupted 메시지 — 비정상 중단 비율</div>
     <div class="desc">
@@ -891,12 +879,12 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
   <h3>10.2 High (P1)</h3>
 
   <div class="issue-card">
-    <div class="title"><span class="p1">P1</span> page.tsx 대형 단일 컴포넌트 — 브라우저 프리징 장기 리스크</div>
+    <div class="title"><span class="p1">P1</span> page.tsx 8,340줄 — 브라우저 프리징 근본 원인</div>
     <div class="desc">
-      <strong>현상:</strong> CEO가 "지시하면 브라우저가 멈추는 현상" 반복 보고. v1.3에서 스트리밍/캡처 전송 경로의 즉시 프리징 원인은 제거했으나, 대형 세션 장기 리스크는 남아 있음.<br>
+      <strong>현상:</strong> CEO가 "지시하면 브라우저가 멈추는 현상" 반복 보고.<br>
       <strong>원인:</strong> 단일 page.tsx에 8,340줄 로직 집중. 매 <code>setMessages</code> 호출 시 전체 메시지 배열 재렌더링 → 대규모 세션에서 UI 프리징.<br>
-      <strong>v1.3 완화:</strong> 긴 응답 스트리밍 렌더 간격 완화, <code>startTransition</code> 적용, 화면 캡처 base64 변환 비동기화.<br>
-      <strong>개선:</strong> (1) <code>react-virtuoso</code> 도입, (2) Markdown segment memoization, (3) page.tsx 컴포넌트 분리.
+      <strong>v1.2 완화:</strong> drain timer 50ms + streamBuf 의존성 제거로 렌더 횟수 60% 감소. 하지만 근본은 컴포넌트 분리 + 가상화 스크롤.<br>
+      <strong>개선:</strong> (1) <code>react-virtuoso</code> 도입, (2) 메시지 목록 memoization, (3) page.tsx 컴포넌트 분리.
     </div>
   </div>
 
@@ -989,48 +977,47 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
     <tr><td>8</td><td><span class="p1">P1</span></td><td>탭 복귀 시 streaming-status 즉시 체크</td><td><code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.2</td></tr>
     <tr><td>9</td><td><span class="p2">P2</span></td><td>중단된 메시지 tokens_in/out 기록</td><td><code>chat_service.py</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.2</td></tr>
     <tr><td>10</td><td><span class="p2">P2</span></td><td>중단 응답 표시 기준 30자→1자</td><td><code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.2</td></tr>
-    <tr><td>11</td><td><span class="p0">P0</span></td><td>긴 응답 스트리밍 렌더 간격 완화 + 캡처 base64 비동기 변환</td><td><code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.3</td></tr>
   </table>
 
   <h3>11.2 즉시 조치 (1주 내)</h3>
   <table>
     <tr><th>#</th><th>우선순위</th><th>항목</th><th>대상 파일</th><th>상태</th></tr>
-    <tr><td>12</td><td><span class="p0">P0</span></td><td>6개 완결 경로 → 단일 finalizeMessage() 통합</td><td><code>page.tsx</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
-    <tr><td>13</td><td><span class="p0">P0</span></td><td>백그라운드 완료 시 클라이언트 알림 채널 구축</td><td><code>page.tsx</code>, <code>chat_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
-    <tr><td>14</td><td><span class="p1">P1</span></td><td>streaming_placeholder 잔존 자동 정리</td><td><code>chat_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
-    <tr><td>15</td><td><span class="p1">P1</span></td><td>_deleted_duplicate 물리 삭제 스케줄러 (7일 경과)</td><td>신규 <code>cleanup_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
+    <tr><td>11</td><td><span class="p0">P0</span></td><td>6개 완결 경로 → 단일 finalizeMessage() 통합</td><td><code>page.tsx</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
+    <tr><td>12</td><td><span class="p0">P0</span></td><td>백그라운드 완료 시 클라이언트 알림 채널 구축</td><td><code>page.tsx</code>, <code>chat_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
+    <tr><td>13</td><td><span class="p1">P1</span></td><td>streaming_placeholder 잔존 자동 정리</td><td><code>chat_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
+    <tr><td>14</td><td><span class="p1">P1</span></td><td>_deleted_duplicate 물리 삭제 스케줄러 (7일 경과)</td><td>신규 <code>cleanup_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
   </table>
 
   <h3>11.3 단기 개선 (1개월 내)</h3>
   <table>
     <tr><th>#</th><th>우선순위</th><th>항목</th><th>기대 효과</th></tr>
-    <tr><td>16</td><td><span class="p1">P1</span></td><td>page.tsx 컴포넌트 분리 + 가상화 스크롤 (react-virtuoso)</td><td>v1.3 단기 완화 이후 남은 대규모 세션 프리징 리스크 근본 해소</td></tr>
-    <tr><td>17</td><td><span class="p1">P1</span></td><td>ceo_chat.py 모듈 분리 (intent_classifier, llm_caller, cost_calculator)</td><td>유지보수성 향상, 단위 테스트 용이</td></tr>
-    <tr><td>18</td><td><span class="p1">P1</span></td><td>chat_service.py 분리 (streaming, interrupt, recovery, todo)</td><td>사이드 이펙트 감소, 코드 리뷰 용이</td></tr>
-    <tr><td>19</td><td><span class="p1">P1</span></td><td>마크다운 렌더러 react-markdown 전환 또는 커스텀 파서 보강</td><td>중첩 마크다운 · 특수 문자 정상 처리</td></tr>
-    <tr><td>20</td><td><span class="p2">P2</span></td><td>Intent 분류 2-pass 검증 (키워드 → LLM 확인)</td><td>오분류율 감소</td></tr>
-    <tr><td>21</td><td><span class="p2">P2</span></td><td>테스트 워크스페이스 아카이브/삭제</td><td>사이드바 정리, DB 경량화</td></tr>
+    <tr><td>15</td><td><span class="p1">P1</span></td><td>page.tsx 컴포넌트 분리 + 가상화 스크롤 (react-virtuoso)</td><td>브라우저 프리징 근본 해소, 대규모 세션 UX 개선</td></tr>
+    <tr><td>16</td><td><span class="p1">P1</span></td><td>ceo_chat.py 모듈 분리 (intent_classifier, llm_caller, cost_calculator)</td><td>유지보수성 향상, 단위 테스트 용이</td></tr>
+    <tr><td>17</td><td><span class="p1">P1</span></td><td>chat_service.py 분리 (streaming, interrupt, recovery, todo)</td><td>사이드 이펙트 감소, 코드 리뷰 용이</td></tr>
+    <tr><td>18</td><td><span class="p1">P1</span></td><td>마크다운 렌더러 react-markdown 전환 또는 커스텀 파서 보강</td><td>중첩 마크다운 · 특수 문자 정상 처리</td></tr>
+    <tr><td>19</td><td><span class="p2">P2</span></td><td>Intent 분류 2-pass 검증 (키워드 → LLM 확인)</td><td>오분류율 감소</td></tr>
+    <tr><td>20</td><td><span class="p2">P2</span></td><td>테스트 워크스페이스 아카이브/삭제</td><td>사이드바 정리, DB 경량화</td></tr>
   </table>
 
   <h3>11.4 중기 개선 (3개월 내)</h3>
   <table>
     <tr><th>#</th><th>우선순위</th><th>항목</th><th>기대 효과</th></tr>
-    <tr><td>22</td><td><span class="p2">P2</span></td><td>메시지 무한 스크롤 + 가상화 (현재 50개 한정)</td><td>대규모 세션 UX 개선</td></tr>
-    <tr><td>23</td><td><span class="p2">P2</span></td><td>프론트엔드 코드 스플리팅 (Chart, Artifact 지연 로드)</td><td>초기 번들 사이즈 감소</td></tr>
-    <tr><td>24</td><td><span class="p2">P2</span></td><td>embedding 검색 인덱스 최적화 (IVFFlat → HNSW)</td><td>벡터 검색 성능 향상</td></tr>
-    <tr><td>25</td><td><span class="p3">P3</span></td><td>Legacy ceo_chat_sessions/messages 마이그레이션 후 삭제</td><td>스키마 단순화</td></tr>
-    <tr><td>26</td><td><span class="p3">P3</span></td><td>WebSocket 전환 검토 (SSE 한계 — 양방향 필요 시)</td><td>인터럽트 지연 감소, 백그라운드 완료 push</td></tr>
+    <tr><td>21</td><td><span class="p2">P2</span></td><td>메시지 무한 스크롤 + 가상화 (현재 50개 한정)</td><td>대규모 세션 UX 개선</td></tr>
+    <tr><td>22</td><td><span class="p2">P2</span></td><td>프론트엔드 코드 스플리팅 (Chart, Artifact 지연 로드)</td><td>초기 번들 사이즈 감소</td></tr>
+    <tr><td>23</td><td><span class="p2">P2</span></td><td>embedding 검색 인덱스 최적화 (IVFFlat → HNSW)</td><td>벡터 검색 성능 향상</td></tr>
+    <tr><td>24</td><td><span class="p3">P3</span></td><td>Legacy ceo_chat_sessions/messages 마이그레이션 후 삭제</td><td>스키마 단순화</td></tr>
+    <tr><td>25</td><td><span class="p3">P3</span></td><td>WebSocket 전환 검토 (SSE 한계 — 양방향 필요 시)</td><td>인터럽트 지연 감소, 백그라운드 완료 push</td></tr>
   </table>
 
   <h3>11.5 검증 방법</h3>
   <table>
-    <tr><th>개선 항목</th><th>완료 기준</th><th>측정 방법</th><th>v1.3 현황</th></tr>
+    <tr><th>개선 항목</th><th>완료 기준</th><th>측정 방법</th><th>v1.2 현황</th></tr>
     <tr><td>빈 버블 해소</td><td>빈 버블 발생률 &lt; 1%</td><td><code>SELECT count(*) FROM chat_messages WHERE role='assistant' AND content=''</code></td><td><span class="badge badge-yellow">placeholder 5건 잔존</span></td></tr>
     <tr><td>중복 버블 해소</td><td>중복 보고 0건/주</td><td>error_log 모니터링</td><td><span class="badge badge-yellow">간헐 재현 (6개 경로 미통합)</span></td></tr>
     <tr><td>중단 비율</td><td>신규 interrupted &lt; 5%</td><td><code>SELECT count(*) ... WHERE model_used='interrupted'</code> / 전체 비율</td><td><span class="badge badge-green">3건/일 (정상 인터럽트 수준)</span></td></tr>
     <tr><td>DB 용량</td><td>_deleted_duplicate 0건</td><td>인텐트별 count 조회</td><td><span class="badge badge-yellow">9,913건 잔존</span></td></tr>
     <tr><td>코드 분리</td><td>단일 파일 &lt; 1,500줄</td><td><code>wc -l</code></td><td><span class="badge badge-yellow">미착수 (page.tsx 8,340줄)</span></td></tr>
-    <tr><td>브라우저 프리징</td><td>프리징 보고 0건/주</td><td>CEO 피드백 + errorReporter</td><td><span class="badge badge-yellow">v1.3 단기 조치 완료, 대형 컴포넌트 분리 남음</span></td></tr>
+    <tr><td>브라우저 프리징</td><td>프리징 보고 0건/주</td><td>CEO 피드백 + errorReporter</td><td><span class="badge badge-yellow">drain 최적화 적용, 근본 미해결</span></td></tr>
     <tr><td>응답 미표시</td><td>새로고침 없이 100% 표시</td><td>E2E 테스트</td><td><span class="badge badge-yellow">tab return 체크 적용, 완전 해소 미달</span></td></tr>
   </table>
 </div>
@@ -1044,8 +1031,7 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
 
   <table>
     <tr><th>버전</th><th>날짜</th><th>작성자</th><th>변경 내용</th><th>문서 링크</th></tr>
-    <tr><td><strong>v1.3.0</strong></td><td>2026-05-26</td><td>AADS CTO AI</td><td>브라우저 멈춤 재발 원인 반영: 긴 응답 스트리밍 렌더 간격 완화, <code>startTransition</code> 적용, 화면 캡처 base64 변환 비동기화, 커밋 <code>8cf8314</code> blue-green 배포 검증</td><td><strong>현재 문서 (원본)</strong></td></tr>
-    <tr><td>v1.2.0</td><td>2026-05-21</td><td>AADS CTO AI</td><td>성능 최적화 4건 반영 (interim_save, drain timer, tab return, token tracking), 운영 통계 갱신 (49,321건), P0 잔여 이슈 상세화, 로드맵 완료/미완료 분리, v1.1 아카이브</td><td><a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.2.html" style="color:var(--blue);">v1.2 아카이브</a></td></tr>
+    <tr><td><strong>v1.2.0</strong></td><td>2026-05-21</td><td>AADS CTO AI</td><td>성능 최적화 4건 반영 (interim_save, drain timer, tab return, token tracking), 운영 통계 갱신 (49,321건), P0 잔여 이슈 상세화, 로드맵 완료/미완료 분리, v1.1 아카이브</td><td><strong>현재 문서 (원본)</strong></td></tr>
     <tr><td>v1.1.0</td><td>2026-05-21</td><td>AADS CTO AI</td><td>P0 이슈 3건 해결 반영, 429 재시도/폴백 체인 문서화, 운영 통계 업데이트</td><td><a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.1.html" style="color:var(--blue);">v1.1 아카이브</a></td></tr>
     <tr><td>v1.0.0</td><td>2026-05-21</td><td>AADS CTO AI</td><td>최초 작성 — 기획/아키텍처/구현/DB/문제점/개선안 전수 분석</td><td><a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.0.html" style="color:var(--blue);">v1.0 아카이브</a></td></tr>
   </table>
