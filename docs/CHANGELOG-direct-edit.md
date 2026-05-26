@@ -2696,3 +2696,13 @@ from app.core.db_pool import
 
 ## [2026-05-26 14:32:57 KST] [aads-server] .gitignore
 - Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && echo "app/static/gallery/media-*.jpg" >> .gitignore
+
+## [2026-05-26 14:34:09 KST] [aads-server] app/static/gallery/manifest.json
+- Chat-Direct 수정: run_remote_command: curl -s https://v2.newtalk.kr/api/auth/login -H "Content-Type: application/json"
+
+## [2026-05-26 14:34:13 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: curl -sf -o /dev/null -w "%{http_code}" https://aads.newtalk.kr/login
+
+## [2026-05-26 14:40:23 KST] [aads-server] app/core/credential_vault.py
+- Chat-Direct 수정: patch:         "default_redirect": "/admin",
+  →        "default_redirect": "/dashboard"
