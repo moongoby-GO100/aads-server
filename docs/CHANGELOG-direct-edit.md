@@ -2675,3 +2675,24 @@ from app.core.db_pool import
 
 ## [2026-05-26 14:11:43 KST] [aads-server] .gitignore
 - Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && echo "app/static/gallery/media-*.jpg" >> .gitignore
+
+## [2026-05-26 14:19:37 KST] [aads-server] scripts/fix_browser_freeze.py
+- Chat-Direct 수정: write: scripts/fix_browser_freeze.py
+
+## [2026-05-26 14:23:53 KST] [aads-server] nginx-aads-upstream.conf
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && node_modules/.bin/tsc --noEmit --pretty 2>&1 | g
+
+## [2026-05-26 14:24:43 KST] [aads-server] app/core/credential_vault.py
+- Chat-Direct 수정: patch:         "default_redirect": "/admin",
+  →        "default_redirect": "/dashboard"
+
+## [2026-05-26 14:28:06 KST] [aads-server] scripts/deploy_dashboard.sh
+- Chat-Direct 수정: write: scripts/deploy_dashboard.sh
+
+## [2026-05-26 14:32:33 KST] [aads-server] app/core/prompts/system_prompt_v2.py
+- Chat-Direct 수정: patch: ## E2E 검증 폴백 (R-E2E)
+- 브라우저 로그인이 실패하면 "E→## E2E 검증 폴백 (R-E2E)
+- 브라우저 로그인이 실패하면 "E
+
+## [2026-05-26 14:32:57 KST] [aads-server] .gitignore
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && echo "app/static/gallery/media-*.jpg" >> .gitignore

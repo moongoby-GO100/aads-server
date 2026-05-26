@@ -63,3 +63,4 @@ playwright/.auth/
 *.bak.*
 *.bak.*
 app/static/gallery/media-*.jpg
+app/static/gallery/media-*.jpg

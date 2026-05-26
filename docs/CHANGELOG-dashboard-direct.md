@@ -619,3 +619,12 @@ path = '/root/aads/aads-dashboard/src/app/chat/page.tsx'
 - Chat-Direct 수정: run_remote_command: python3 -c "
 html = '''<!DOCTYPE html>
 <html><head><meta charset=\"utf-8\"><titl
+
+## [2026-05-26 14:18:30 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:   const activeArtifact = filteredArtifac→  const activeArtifact = filteredArtifac
+
+## [2026-05-26 14:19:53 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/fix_browser_freeze.py
+
+## [2026-05-26 14:19:53 KST] [aads-dashboard] src/app/chat/page.tsx.bak_freeze_fix
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/fix_browser_freeze.py
