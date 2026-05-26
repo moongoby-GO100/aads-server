@@ -628,3 +628,44 @@ html = '''<!DOCTYPE html>
 
 ## [2026-05-26 14:19:53 KST] [aads-dashboard] src/app/chat/page.tsx.bak_freeze_fix
 - Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/fix_browser_freeze.py
+
+## [2026-05-26 14:55:59 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/fix_p1_memo_cap.py
+
+## [2026-05-26 14:55:59 KST] [aads-dashboard] src/app/chat/page.tsx.bak_p1_fix
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/fix_p1_memo_cap.py
+
+## [2026-05-26 15:05:53 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/fix_p1_memo_cap.py
+
+## [2026-05-26 15:24:04 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:             const alreadyHas = prev.some→            const alreadyHas = prev.some
+
+## [2026-05-26 15:24:27 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 -c "
+import re
+path = '/root/aads/aads-dashboard/src/app/chat/page.tsx'
+
+
+## [2026-05-26 15:40:29 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:             const alreadyHas = prev.some→            const alreadyHas = prev.some
+
+## [2026-05-26 15:41:45 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 -c "
+path = '/root/aads/aads-dashboard/src/app/chat/page.tsx'
+with open(
+
+## [2026-05-26 15:50:32 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch: function findAssistantMessageIndexForFin→function findAssistantMessageIndexForFin
+
+## [2026-05-26 15:53:17 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/patch_chat_sse_done_v2.py
+
+## [2026-05-26 15:53:17 KST] [aads-dashboard] src/app/chat/page.tsx.bak.sse_done_v2.1779778392
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/patch_chat_sse_done_v2.py
+
+## [2026-05-26 15:59:49 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch: function findAssistantMessageIndexForFin→function findAssistantMessageIndexForFin
+
+## [2026-05-26 16:01:28 KST] [aads-dashboard] src/app/chat/page.tsx.bak.sse_done_v2.1779778882
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/patch_chat_sse_done_v2.py

@@ -2706,3 +2706,44 @@ from app.core.db_pool import
 ## [2026-05-26 14:40:23 KST] [aads-server] app/core/credential_vault.py
 - Chat-Direct 수정: patch:         "default_redirect": "/admin",
   →        "default_redirect": "/dashboard"
+
+## [2026-05-26 14:55:40 KST] [aads-server] scripts/fix_p1_memo_cap.py
+- Chat-Direct 수정: write: scripts/fix_p1_memo_cap.py
+
+## [2026-05-26 15:05:41 KST] [aads-server] scripts/fix_p1_memo_cap.py
+- Chat-Direct 수정: write: scripts/fix_p1_memo_cap.py
+
+## [2026-05-26 15:18:16 KST] [aads-server] scripts/test_e2e_login.py
+- Chat-Direct 수정: write: scripts/test_e2e_login.py
+
+## [2026-05-26 15:19:22 KST] [aads-server] scripts/test_e2e_login.py
+- Chat-Direct 수정: write: scripts/test_e2e_login.py
+
+## [2026-05-26 15:20:45 KST] [aads-server] scripts/test_e2e_login.py
+- Chat-Direct 수정: write: scripts/test_e2e_login.py
+
+## [2026-05-26 15:26:12 KST] [aads-server] scripts/test_ntv1_login.py
+- Chat-Direct 수정: write: scripts/test_ntv1_login.py
+
+## [2026-05-26 15:26:15 KST] [aads-server] scripts/test_ntv1_login.py
+- Chat-Direct 수정: run_remote_command: python3 -c "
+path = '/root/aads/aads-dashboard/src/app/chat/page.tsx'
+with open(
+
+## [2026-05-26 15:27:49 KST] [aads-server] scripts/test_ntv1_login.py
+- Chat-Direct 수정: write: scripts/test_ntv1_login.py
+
+## [2026-05-26 15:28:39 KST] [aads-server] scripts/test_ntv1_verify.py
+- Chat-Direct 수정: write: scripts/test_ntv1_verify.py
+
+## [2026-05-26 15:31:46 KST] [aads-server] scripts/test_ntv1_verify.py
+- Chat-Direct 수정: write: scripts/test_ntv1_verify.py
+
+## [2026-05-26 15:53:01 KST] [aads-server] scripts/patch_chat_sse_done_v2.py
+- Chat-Direct 수정: write: scripts/patch_chat_sse_done_v2.py
+
+## [2026-05-26 16:01:14 KST] [aads-server] scripts/patch_chat_sse_done_v2.py
+- Chat-Direct 수정: write: scripts/patch_chat_sse_done_v2.py
+
+## [2026-05-26 16:06:57 KST] [aads-server] /tmp/deploy-dashboard-now.sh
+- Chat-Direct 수정: write: /tmp/deploy-dashboard-now.sh
