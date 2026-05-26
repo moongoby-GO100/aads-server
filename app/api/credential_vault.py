@@ -8,8 +8,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.core.credential_vault import (
+    auto_provision_e2e_credential,
     create_credential,
     delete_credential,
+    ensure_all_project_credentials,
     execute_login_steps,
     get_credential,
     get_e2e_login_url,
@@ -183,4 +185,20 @@ async def get_e2e_url(project: str, redirect: str | None = None, role: str | Non
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
     return result
+
+
+@router.post("/provision/{project}")
+async def api_provision_credential(project: str) -> dict[str, Any]:
+    """프로젝트별 E2E 크리덴셜 자동 프로비저닝."""
+    cred = await auto_provision_e2e_credential(project)
+    if not cred:
+        raise HTTPException(status_code=400, detail=f"Failed to provision credential for {project}")
+    return {"status": "provisioned", "project": project, "id": cred.get("id")}
+
+
+@router.post("/provision-all")
+async def api_provision_all() -> dict[str, Any]:
+    """전 프로젝트 E2E 크리덴셜 일괄 프로비저닝."""
+    results = await ensure_all_project_credentials()
+    return {"status": "ok", "results": results}
 

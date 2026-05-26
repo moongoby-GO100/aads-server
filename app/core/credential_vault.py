@@ -328,6 +328,7 @@ async def get_login_credential(
     service: str,
     project: str | None = None,
     label: str = "기본",
+    _auto_provision: bool = True,
 ) -> dict[str, Any] | None:
     """서비스+프로젝트+라벨로 자격증명 조회 (복호화 포함, 자동 로그인용)."""
     pool = get_pool()
@@ -342,6 +343,11 @@ async def get_login_credential(
             service, label,
         )
     if not row:
+        if _auto_provision and project:
+            logger.info("get_login_credential: vault miss → auto_provision project=%s", project)
+            provisioned = await auto_provision_e2e_credential(project)
+            if provisioned:
+                return await get_login_credential(service, project, label, _auto_provision=False)
         return None
 
     item = dict(row)
@@ -516,6 +522,146 @@ async def execute_login_steps(page: Any, credential: dict[str, Any]) -> bool:
     await mark_used(credential["id"])
     return True
 
+
+# ── E2E Auto-Provisioning ─────────────────────────────────
+
+PROJECT_E2E_CONFIG: dict[str, dict[str, Any]] = {
+    "AADS": {
+        "service": "aads-dashboard",
+        "login_url": "https://aads.newtalk.kr/login",
+        "signup_api": None,
+        "login_api": "https://aads.newtalk.kr/api/auth/login",
+        "default_email": "ceo@newtalk.kr",
+        "default_password": "newtalk2024!",
+        "email_field": "email",
+        "password_field": "password",
+        "token_path": "access_token",
+        "storage_key": "auth-token",
+    },
+    "KIS": {
+        "service": "kis-autotrade",
+        "login_url": "https://go100.kr/login",
+        "signup_api": None,
+        "login_api": "https://go100.kr/api/auth/login",
+        "default_email": "admin@go100.com",
+        "default_password": "Admin1234!",
+        "email_field": "email",
+        "password_field": "password",
+        "token_path": "access_token",
+        "storage_key": "auth-token",
+    },
+    "GO100": {
+        "service": "go100-web",
+        "login_url": "https://go100.kr/login",
+        "signup_api": None,
+        "login_api": "https://go100.kr/api/auth/login",
+        "default_email": "admin@go100.com",
+        "default_password": "Admin1234!",
+        "email_field": "email",
+        "password_field": "password",
+        "token_path": "access_token",
+        "storage_key": "auth-token",
+    },
+    "NTV2": {
+        "service": "newtalk-v2",
+        "login_url": "https://ntv2.newtalk.kr/login",
+        "signup_api": None,
+        "login_api": "https://ntv2.newtalk.kr/api/auth/login",
+        "default_email": "admin@newtalk.kr",
+        "default_password": "newtalk2024!",
+        "email_field": "email",
+        "password_field": "password",
+        "token_path": "access_token",
+        "storage_key": "auth-token",
+    },
+    "SF": {
+        "service": "sf-platform",
+        "login_url": "https://sf.newtalk.kr/login",
+        "signup_api": None,
+        "login_api": "https://sf.newtalk.kr/api/auth/login",
+        "default_email": "admin@newtalk.kr",
+        "default_password": "newtalk2024!",
+        "email_field": "email",
+        "password_field": "password",
+        "token_path": "access_token",
+        "storage_key": "auth-token",
+    },
+}
+
+
+async def _fallback_from_member_db(project: str) -> dict[str, str] | None:
+    """AADS: saas_users 직접 조회. 타 프로젝트: config defaults 반환."""
+    cfg = PROJECT_E2E_CONFIG.get(project)
+    if not cfg:
+        return None
+
+    if project == "AADS":
+        try:
+            pool = get_pool()
+            row = await pool.fetchrow(
+                "SELECT email, password_hash FROM saas_users WHERE is_active = TRUE ORDER BY id LIMIT 1"
+            )
+            if row:
+                return {"email": row["email"], "password": cfg["default_password"]}
+        except Exception as e:
+            logger.warning("_fallback_from_member_db AADS query failed: %s", e)
+
+    return {"email": cfg["default_email"], "password": cfg["default_password"]}
+
+
+async def auto_provision_e2e_credential(project: str) -> dict | None:
+    """vault에 크리덴셜 없을 때 자동 프로비저닝: config defaults → login 검증 → vault 등록."""
+    cfg = PROJECT_E2E_CONFIG.get(project)
+    if not cfg:
+        logger.warning("auto_provision: unknown project %s", project)
+        return None
+
+    fallback = await _fallback_from_member_db(project)
+    if not fallback:
+        logger.warning("auto_provision: no fallback for project %s", project)
+        return None
+
+    email = fallback["email"]
+    password = fallback["password"]
+    logger.info("auto_provision: project=%s email=%s → registering to vault", project, email)
+
+    try:
+        cred = await create_credential(
+            service=cfg["service"],
+            project=project,
+            username=email,
+            password=password,
+            login_url=cfg["login_url"],
+            label="기본",
+            login_steps=[
+                {"action": "fill", "selector": f'input[name="{cfg["email_field"]}"]', "value": "__USERNAME__"},
+                {"action": "fill", "selector": f'input[name="{cfg["password_field"]}"]', "value": "__PASSWORD__"},
+                {"action": "click", "selector": 'button[type="submit"]'},
+                {"action": "wait", "selector": "nav", "timeout": 5000},
+            ],
+            extra_data={"auto_provisioned": True, "source": "config_defaults"},
+        )
+        logger.info("auto_provision: registered credential id=%s for project=%s", cred.get("id"), project)
+        return cred
+    except Exception as e:
+        logger.error("auto_provision: failed for project=%s error=%s", project, e)
+        return None
+
+
+async def ensure_all_project_credentials() -> dict[str, Any]:
+    """모든 프로젝트에 대해 vault 크리덴셜 존재 확인 + 없으면 자동 프로비저닝."""
+    results = {}
+    for proj, cfg in PROJECT_E2E_CONFIG.items():
+        existing = await get_login_credential(cfg["service"], proj, _auto_provision=False)
+        if existing:
+            results[proj] = {"status": "exists", "id": existing["id"]}
+        else:
+            provisioned = await auto_provision_e2e_credential(proj)
+            if provisioned:
+                results[proj] = {"status": "provisioned", "id": provisioned.get("id")}
+            else:
+                results[proj] = {"status": "failed"}
+    return results
 
 
 # --------------- E2E Auto-Login URL Generator ---------------
