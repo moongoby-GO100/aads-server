@@ -689,7 +689,7 @@ _E2E_PROJECT_CONFIG: dict[str, dict[str, Any]] = {
         "label": "E2E 테스트 계정",
         "api_url": "https://go100.newtalk.kr/api/v1/auth/login",
         "token_path": "access_token",
-        "e2e_url": "https://go100.newtalk.kr/e2e-auth.html?token={token}&redirect={redirect}",
+        "e2e_url": "https://go100.newtalk.kr/auth/callback?token={token}&return_to={redirect}",
         "default_redirect": "/",
     },
     "NTV2": {
@@ -697,7 +697,7 @@ _E2E_PROJECT_CONFIG: dict[str, dict[str, Any]] = {
         "label": "V2 관리자",
         "api_url": "https://v2.newtalk.kr/api/auth/login",
         "token_path": "token",
-        "e2e_url": "https://v2.newtalk.kr/reports/e2e-login.html#token={token}&role={role}&name=E2E&email=e2e_verify%40newtalk.kr&uid=79747&redirect=none",
+        "e2e_url": "https://v2.newtalk.kr/reports/e2e-login.html?token={token}&role={role}&name=E2E&email=e2e_verify%40newtalk.kr&uid=79747&redirect={redirect}",
         "default_redirect": "/dashboard",
         "default_role": "admin",
         "supported_roles": ["admin", "md", "purchaser", "wholesale", "retail", "outsource"],
@@ -705,21 +705,21 @@ _E2E_PROJECT_CONFIG: dict[str, dict[str, Any]] = {
     },
     "NTV1_ADMIN": {
         "service": "newtalk-v1-admin",
-        "label": "관리자",
+        "label": "V1 관리자",
         "form_login": True,
         "login_url": "https://newtalk.kr/auth/login",
         "form_fields": {"login": "{username}", "password": "{password}"},
     },
     "NTV1_RETAIL": {
         "service": "newtalk-v1-retail",
-        "label": "소매",
+        "label": "V1 소매",
         "form_login": True,
         "login_url": "https://pick.newtalk.kr/auth/login",
         "form_fields": {"login": "{username}", "password": "{password}"},
     },
     "NTV1_WHOLESALE": {
         "service": "newtalk-v1-wholesale",
-        "label": "도매",
+        "label": "V1 도매",
         "form_login": True,
         "login_url": "https://newtalk.kr/auth/login",
         "form_fields": {"login": "{username}", "password": "{password}"},
@@ -736,10 +736,14 @@ _E2E_PROJECT_CONFIG: dict[str, dict[str, Any]] = {
     },
 }
 
+_E2E_TOKEN_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_E2E_TOKEN_CACHE_TTL_SECONDS = 180
+
 
 async def get_e2e_login_url(project: str, redirect: str | None = None, role: str | None = None) -> dict[str, Any]:
     """프로젝트별 E2E 브라우저 자동 로그인 URL 생성."""
     import aiohttp
+    import time
     from urllib.parse import quote
 
     project = project.upper()
@@ -751,7 +755,7 @@ async def get_e2e_login_url(project: str, redirect: str | None = None, role: str
         return {"success": False, "error": f"Unsupported project: {project}. Available: {list(_E2E_PROJECT_CONFIG.keys())}"}
 
     if config.get("form_login"):
-        cred = await get_login_credential(config["service"], "NTV2", config["label"])
+        cred = await get_login_credential(config["service"], "NTV2", config["label"], _auto_provision=False)
         if not cred:
             return {"success": False, "error": f"No credential found for {project}"}
         fields = {}
@@ -772,24 +776,31 @@ async def get_e2e_login_url(project: str, redirect: str | None = None, role: str
 
     username = cred.get("username", "")
     password = cred.get("password", "")
-    headers = config.get("extra_headers", {})
+    headers = dict(config.get("extra_headers", {}))
     headers["Content-Type"] = "application/json"
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                config["api_url"],
-                json={"email": username, "password": password},
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10),
-                ssl=False,
-            ) as resp:
-                if resp.status not in (200, 201):
-                    body = await resp.text()
-                    return {"success": False, "error": f"Auth API {resp.status}: {body[:200]}"}
-                data = await resp.json()
-    except Exception as e:
-        return {"success": False, "error": f"Auth request failed: {e}"}
+    cache_key = f"{project}:{config['api_url']}:{username}"
+    now = time.monotonic()
+    cached = _E2E_TOKEN_CACHE.get(cache_key)
+    if cached and now - cached[0] < _E2E_TOKEN_CACHE_TTL_SECONDS:
+        data = cached[1]
+    else:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    config["api_url"],
+                    json={"email": username, "password": password},
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                    ssl=False,
+                ) as resp:
+                    if resp.status not in (200, 201):
+                        body = await resp.text()
+                        return {"success": False, "error": f"Auth API {resp.status}: {body[:200]}"}
+                    data = await resp.json()
+                    _E2E_TOKEN_CACHE[cache_key] = (now, data)
+        except Exception as e:
+            return {"success": False, "error": f"Auth request failed: {e}"}
 
     token = data
     for key in config["token_path"].split("."):
@@ -805,10 +816,19 @@ async def get_e2e_login_url(project: str, redirect: str | None = None, role: str
     if config.get("url_encode_token"):
         token = quote(str(token), safe="")
 
-    redir = redirect or config["default_redirect"]
     selected_role = role or config.get("default_role", "")
     if "supported_roles" in config and selected_role not in config["supported_roles"]:
         selected_role = config["default_role"]
+    redir = redirect or config["default_redirect"]
+    if project == "NTV2" and (not redirect or redirect in {"/wholesale", "/retail", "/md", "/purchaser", "/outsource"}):
+        redir = {
+            "admin": "/admin/dashboard",
+            "md": "/md/dashboard",
+            "purchaser": "/purchaser/dashboard",
+            "wholesale": "/wholesale/dashboard",
+            "retail": "/retail/feed",
+            "outsource": "/outsource/dashboard",
+        }.get(selected_role, config["default_redirect"])
 
     url = config["e2e_url"].format(
         token=token, refresh_token=refresh_token, redirect=redir, role=selected_role,

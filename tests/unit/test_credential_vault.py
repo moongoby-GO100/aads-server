@@ -1,6 +1,11 @@
 import json
 
-from app.core.credential_vault import _coerce_json_dict, _coerce_json_list, _normalize_json_fields
+from app.core.credential_vault import (
+    _E2E_PROJECT_CONFIG,
+    _coerce_json_dict,
+    _coerce_json_list,
+    _normalize_json_fields,
+)
 
 
 def test_coerce_json_list_accepts_native_and_string_values():
@@ -35,3 +40,16 @@ def test_normalize_json_fields_updates_credential_item_in_place():
     assert _normalize_json_fields(item) is item
     assert item["extra_fields"] == {"source": "vault"}
     assert item["login_steps"] == [{"action": "wait", "ms": 1000}]
+
+
+def test_ntv1_e2e_labels_match_registered_vault_labels():
+    assert _E2E_PROJECT_CONFIG["NTV1_ADMIN"]["label"] == "V1 관리자"
+    assert _E2E_PROJECT_CONFIG["NTV1_WHOLESALE"]["label"] == "V1 도매"
+    assert _E2E_PROJECT_CONFIG["NTV1_RETAIL"]["label"] == "V1 소매"
+
+
+def test_ntv2_e2e_supported_roles_include_main_permission_groups():
+    roles = set(_E2E_PROJECT_CONFIG["NTV2"]["supported_roles"])
+
+    assert {"admin", "wholesale", "retail", "md"}.issubset(roles)
+    assert "{role}" in _E2E_PROJECT_CONFIG["NTV2"]["e2e_url"]
