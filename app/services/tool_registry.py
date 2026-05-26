@@ -2768,12 +2768,13 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     },
     "get_e2e_login_url": {
         "name": "get_e2e_login_url",
-        "description": "프로젝트별 E2E 브라우저 자동 로그인 URL 생성. 반환된 URL로 browser_navigate하면 즉시 로그인됨.",
+        "description": "프로젝트별 E2E 브라우저 자동 로그인 URL 생성. NTV2는 role 지정 가능(admin/md/wholesale/retail 등). NTV1은 폼 로그인 정보 반환.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "project": {"type": "string", "description": "프로젝트", "enum": ["AADS", "GO100", "NTV2", "SF", "KIS"]},
+                "project": {"type": "string", "description": "프로젝트", "enum": ["AADS", "GO100", "NTV2", "SF", "KIS", "NTV1_ADMIN", "NTV1_RETAIL", "NTV1_WHOLESALE"]},
                 "redirect": {"type": "string", "description": "로그인 후 이동할 경로 (선택)"},
+                "role": {"type": "string", "description": "NTV2 역할 (선택)", "enum": ["admin", "md", "purchaser", "wholesale", "retail", "outsource"]},
             },
             "required": ["project"],
         },

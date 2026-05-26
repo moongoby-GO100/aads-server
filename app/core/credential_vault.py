@@ -517,6 +517,7 @@ async def execute_login_steps(page: Any, credential: dict[str, Any]) -> bool:
     return True
 
 
+
 # --------------- E2E Auto-Login URL Generator ---------------
 
 _E2E_PROJECT_CONFIG: dict[str, dict[str, Any]] = {
@@ -541,9 +542,32 @@ _E2E_PROJECT_CONFIG: dict[str, dict[str, Any]] = {
         "label": "V2 관리자",
         "api_url": "https://v2.newtalk.kr/api/auth/login",
         "token_path": "token",
-        "e2e_url": "https://v2.newtalk.kr/reports/e2e-login.html#token={token}&role=retail&name=E2E&email=e2e_verify%40newtalk.kr&uid=79747&redirect=none",
+        "e2e_url": "https://v2.newtalk.kr/reports/e2e-login.html#token={token}&role={role}&name=E2E&email=e2e_verify%40newtalk.kr&uid=79747&redirect=none",
         "default_redirect": "/admin",
+        "default_role": "admin",
+        "supported_roles": ["admin", "md", "purchaser", "wholesale", "retail", "outsource"],
         "url_encode_token": True,
+    },
+    "NTV1_ADMIN": {
+        "service": "newtalk-v1-admin",
+        "label": "관리자",
+        "form_login": True,
+        "login_url": "https://newtalk.kr/auth/login",
+        "form_fields": {"login": "{username}", "password": "{password}"},
+    },
+    "NTV1_RETAIL": {
+        "service": "newtalk-v1-retail",
+        "label": "소매",
+        "form_login": True,
+        "login_url": "https://pick.newtalk.kr/auth/login",
+        "form_fields": {"login": "{username}", "password": "{password}"},
+    },
+    "NTV1_WHOLESALE": {
+        "service": "newtalk-v1-wholesale",
+        "label": "도매",
+        "form_login": True,
+        "login_url": "https://newtalk.kr/auth/login",
+        "form_fields": {"login": "{username}", "password": "{password}"},
     },
     "SF": {
         "service": "shotflow.newtalk.kr",
@@ -558,10 +582,16 @@ _E2E_PROJECT_CONFIG: dict[str, dict[str, Any]] = {
 }
 
 
-async def get_e2e_login_url(project: str, redirect: str | None = None) -> dict[str, Any]:
+async def get_e2e_login_url(project: str, redirect: str | None = None, role: str | None = None) -> dict[str, Any]:
     """프로젝트별 E2E 브라우저 자동 로그인 URL 생성.
 
+    Args:
+        project: AADS/GO100/NTV2/SF/KIS/NTV1_ADMIN/NTV1_RETAIL/NTV1_WHOLESALE
+        redirect: 로그인 후 이동 경로
+        role: NTV2 역할 (admin/md/purchaser/wholesale/retail/outsource)
+
     Returns dict with keys: url, project, success, error (if failed).
+    For form_login configs: returns login_url + form_fields for browser_fill usage.
     """
     import aiohttp
     from urllib.parse import quote
@@ -572,7 +602,23 @@ async def get_e2e_login_url(project: str, redirect: str | None = None) -> dict[s
 
     config = _E2E_PROJECT_CONFIG.get(project)
     if not config:
-        return {"success": False, "error": f"Unsupported project: {project}"}
+        return {"success": False, "error": f"Unsupported project: {project}. Available: {list(_E2E_PROJECT_CONFIG.keys())}"}
+
+    if config.get("form_login"):
+        cred = await get_login_credential(config["service"], "NTV2", config["label"])
+        if not cred:
+            return {"success": False, "error": f"No credential found for {project}"}
+        fields = {}
+        for k, v in config["form_fields"].items():
+            fields[k] = v.replace("{username}", cred["username"]).replace("{password}", cred["password"])
+        return {
+            "success": True,
+            "project": project,
+            "form_login": True,
+            "login_url": config["login_url"],
+            "form_fields": fields,
+            "instructions": f"browser_navigate({config['login_url']}) → browser_fill(각 필드) → browser_click(submit)",
+        }
 
     cred = await get_login_credential(config["service"], project, config["label"])
     if not cred:
@@ -614,6 +660,16 @@ async def get_e2e_login_url(project: str, redirect: str | None = None) -> dict[s
         token = quote(str(token), safe="")
 
     redir = redirect or config["default_redirect"]
-    url = config["e2e_url"].format(token=token, refresh_token=refresh_token, redirect=redir)
+    selected_role = role or config.get("default_role", "")
+    if "supported_roles" in config and selected_role not in config["supported_roles"]:
+        selected_role = config["default_role"]
 
-    return {"success": True, "url": url, "project": project}
+    url = config["e2e_url"].format(
+        token=token, refresh_token=refresh_token, redirect=redir, role=selected_role,
+    )
+
+    result = {"success": True, "url": url, "project": project}
+    if "supported_roles" in config:
+        result["role"] = selected_role
+        result["available_roles"] = config["supported_roles"]
+    return result

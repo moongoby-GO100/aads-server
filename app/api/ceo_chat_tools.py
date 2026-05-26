@@ -4100,15 +4100,25 @@ async def tool_credential_test_login(credential_id: str) -> str:
         return f"[ERROR] credential_test_login 실패: {e}"
 
 
-async def tool_get_e2e_login_url(project: str = "", redirect: str = "") -> str:
+
+async def tool_get_e2e_login_url(project: str = "", redirect: str = "", role: str = "") -> str:
     """프로젝트별 E2E 브라우저 자동 로그인 URL 생성."""
     from app.core.credential_vault import get_e2e_login_url as _get_url
     if not project:
-        return "[ERROR] project 파라미터 필수 (AADS/GO100/NTV2/SF/KIS)"
+        return "[ERROR] project 파라미터 필수 (AADS/GO100/NTV2/SF/KIS/NTV1_ADMIN/NTV1_RETAIL/NTV1_WHOLESALE)"
     try:
-        result = await _get_url(project, redirect or None)
+        result = await _get_url(project, redirect or None, role or None)
         if result.get("success"):
-            return f"[E2E Login URL] {result['project']}\n{result['url']}\n\n이 URL로 browser_navigate 하면 자동 로그인됩니다."
+            if result.get("form_login"):
+                lines = [f"[E2E Form Login] {result['project']}"]
+                lines.append(f"URL: {result['login_url']}")
+                lines.append(f"Fields: {result['form_fields']}")
+                lines.append(f"\n{result['instructions']}")
+                return "\n".join(lines)
+            msg = f"[E2E Login URL] {result['project']}\n{result['url']}\n\n이 URL로 browser_navigate 하면 자동 로그인됩니다."
+            if result.get("available_roles"):
+                msg += f"\n현재 역할: {result['role']} | 가능: {result['available_roles']}"
+            return msg
         return f"[ERROR] {result.get('error', 'Unknown')}"
     except Exception as e:
         return f"[ERROR] get_e2e_login_url 실패: {e}"
@@ -4187,6 +4197,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         return await tool_get_e2e_login_url(
             project=params.get("project", ""),
             redirect=params.get("redirect", ""),
+            role=params.get("role", ""),
         )
     # ── Browser 도구 (AADS-159) ─────────────────────────────────────────────
     elif name == "browser_connect":

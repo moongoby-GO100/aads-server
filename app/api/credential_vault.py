@@ -177,9 +177,10 @@ async def api_test_login(body: LoginTestRequest) -> dict[str, Any]:
 
 
 @router.get("/e2e-login-url/{project}")
-async def get_e2e_url(project: str, redirect: str | None = None):
+async def get_e2e_url(project: str, redirect: str | None = None, role: str | None = None):
     """프로젝트별 E2E 브라우저 자동 로그인 URL 생성. 파이프라인 검증용."""
-    result = await get_e2e_login_url(project, redirect)
+    result = await get_e2e_login_url(project, redirect, role)
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
     return result
+

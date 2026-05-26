@@ -549,6 +549,7 @@ class ToolExecutor:
             "credential_register": self._credential_register,
             "credential_test_login": self._credential_test_login,
             "get_e2e_login_url": self._get_e2e_login_url,
+            "get_e2e_login_url": self._get_e2e_login_url,
             # 첨부파일 재읽기
             "read_uploaded_file":     self._read_uploaded_file,
             # 작업 모니터
@@ -4738,6 +4739,11 @@ class ToolExecutor:
         """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
         from app.api.ceo_chat_tools import execute_tool
         return await execute_tool("credential_test_login", inp, "", "")
+
+    async def _get_e2e_login_url(self, inp: Dict[str, Any]) -> Any:
+        """E2E 브라우저 자동 로그인 URL 생성."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("get_e2e_login_url", inp, "", "")
 
     async def _get_e2e_login_url(self, inp: Dict[str, Any]) -> Any:
         """E2E 브라우저 자동 로그인 URL 생성."""
