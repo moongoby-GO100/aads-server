@@ -365,6 +365,65 @@ async def get_login_credential(
     return item
 
 
+async def _api_token_inject(page: Any, credential: dict[str, Any], step: dict[str, Any]) -> bool:
+    """API 호출로 JWT 토큰을 획득하여 브라우저에 직접 주입 (React 폼 우회)."""
+    import aiohttp
+
+    api_url = step.get("api_url", "")
+    if not api_url:
+        login_url = credential.get("login_url", "")
+        if login_url:
+            from urllib.parse import urlparse
+            parsed = urlparse(login_url)
+            api_url = f"{parsed.scheme}://{parsed.netloc}/api/v1/auth/login"
+    if not api_url:
+        logger.error("api_token_inject: api_url 미설정")
+        return False
+
+    username = credential.get("username", "")
+    password = credential.get("password", "")
+    email_field = step.get("email_field", "email")
+    password_field = step.get("password_field", "password")
+    token_path = step.get("token_path", "token")
+    storage_key = step.get("storage_key", "aads_token")
+    cookie_name = step.get("cookie_name", storage_key)
+    cookie_max_age = step.get("cookie_max_age", 604800)
+    redirect_url = step.get("redirect_url", "")
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                api_url,
+                json={email_field: username, password_field: password},
+                timeout=aiohttp.ClientTimeout(total=10),
+                ssl=False,
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    logger.error("api_token_inject: API %s returned %s: %s", api_url, resp.status, body[:200])
+                    return False
+                data = await resp.json()
+
+        token = data
+        for key in token_path.split("."):
+            token = token[key]
+
+        js_code = f"""() => {{
+            localStorage.setItem('{storage_key}', '{token}');
+            document.cookie = '{cookie_name}={token}; path=/; max-age={cookie_max_age}; SameSite=Lax';
+        }}"""
+        await page.evaluate(js_code)
+        logger.info("api_token_inject: token injected storage_key=%s", storage_key)
+
+        if redirect_url:
+            await page.goto(redirect_url, wait_until="domcontentloaded", timeout=15000)
+
+        return True
+    except Exception as e:
+        logger.error("api_token_inject failed: %s", e)
+        return False
+
+
 async def execute_login_steps(page: Any, credential: dict[str, Any]) -> bool:
     """Playwright page에 login_steps 시퀀스를 실행하여 자동 로그인.
 
@@ -375,7 +434,10 @@ async def execute_login_steps(page: Any, credential: dict[str, Any]) -> bool:
         {"action": "fill", "selector": "input[type='password']", "value": "{{password}}"},
         {"action": "click", "selector": "button[type='submit']"},
         {"action": "wait", "ms": 3000},
-        {"action": "wait_for_url", "pattern": "/dashboard"}
+        {"action": "wait_for_url", "pattern": "/dashboard"},
+        {"action": "api_token_inject", "api_url": "https://...", "token_path": "token",
+         "storage_key": "aads_token", "redirect_url": "https://.../chat"},
+        {"action": "evaluate", "script": "() => console.log('hello')"}
     ]
     """
     steps = credential.get("login_steps", [])
@@ -383,18 +445,23 @@ async def execute_login_steps(page: Any, credential: dict[str, Any]) -> bool:
     password = credential.get("password", "")
 
     if not steps:
-        # 스텝 미정의 시 기본 로그인 플로우
         login_url = credential.get("login_url")
+        # React 앱 감지: api_token_inject를 기본 전략으로 사용
         if login_url:
+            inject_ok = await _api_token_inject(page, credential, {
+                "redirect_url": login_url.replace("/login", "/chat").replace("/signin", "/"),
+            })
+            if inject_ok:
+                await mark_used(credential["id"])
+                return True
+            # 폴백: 기존 폼 fill 방식
             await page.goto(login_url, wait_until="domcontentloaded", timeout=15000)
-        # 이메일/아이디 입력
+
         email_input = page.locator("input[type='email'], input[name='email'], input[name='username'], input#email, input#username").first
         await email_input.clear(timeout=5000)
         await email_input.fill(username, timeout=5000)
-        # 비밀번호 입력
         pw_input = page.locator("input[type='password']").first
         await pw_input.fill(password, timeout=5000)
-        # 로그인 버튼
         login_btn = page.locator("button[type='submit'], button:has-text('로그인'), button:has-text('Login'), button:has-text('Sign in')").first
         await login_btn.click(timeout=5000)
         await page.wait_for_timeout(3000)
@@ -408,7 +475,6 @@ async def execute_login_steps(page: Any, credential: dict[str, Any]) -> bool:
         selector = step.get("selector", "")
         value = step.get("value", "")
         value = value.replace("{{username}}", username).replace("{{password}}", password)
-        # extra_fields 치환
         for ek, ev in credential.get("extra_fields", {}).items():
             value = value.replace(f"{{{{{ek}}}}}", str(ev))
 
@@ -429,8 +495,18 @@ async def execute_login_steps(page: Any, credential: dict[str, Any]) -> bool:
             elif action == "wait_for_url":
                 pattern = step.get("pattern", "")
                 await page.wait_for_url(f"**{pattern}**", timeout=10000)
+            elif action == "api_token_inject":
+                ok = await _api_token_inject(page, credential, step)
+                if not ok:
+                    return False
+            elif action == "evaluate":
+                script = step.get("script", "")
+                script = script.replace("{{username}}", username).replace("{{password}}", password)
+                for ek, ev in credential.get("extra_fields", {}).items():
+                    script = script.replace(f"{{{{{ek}}}}}", str(ev))
+                await page.evaluate(script)
             elif action == "screenshot":
-                pass  # 디버그용 — 필요 시 구현
+                pass
             else:
                 logger.warning("알 수 없는 login_step action: %s", action)
         except Exception as e:
@@ -439,3 +515,105 @@ async def execute_login_steps(page: Any, credential: dict[str, Any]) -> bool:
 
     await mark_used(credential["id"])
     return True
+
+
+# --------------- E2E Auto-Login URL Generator ---------------
+
+_E2E_PROJECT_CONFIG: dict[str, dict[str, Any]] = {
+    "AADS": {
+        "service": "aads-dashboard",
+        "label": "E2E 자동 검증용",
+        "api_url": "https://aads.newtalk.kr/api/v1/auth/login",
+        "token_path": "token",
+        "e2e_url": "https://aads.newtalk.kr/static/e2e-auth.html?token={token}&redirect={redirect}",
+        "default_redirect": "/",
+    },
+    "GO100": {
+        "service": "go100.newtalk.kr",
+        "label": "E2E 테스트 계정",
+        "api_url": "https://go100.newtalk.kr/api/v1/auth/login",
+        "token_path": "access_token",
+        "e2e_url": "https://go100.newtalk.kr/e2e-auth.html?token={token}&redirect={redirect}",
+        "default_redirect": "/",
+    },
+    "NTV2": {
+        "service": "newtalk-v2-admin",
+        "label": "V2 관리자",
+        "api_url": "https://v2.newtalk.kr/api/auth/login",
+        "token_path": "token",
+        "e2e_url": "https://v2.newtalk.kr/reports/e2e-login.html#token={token}&role=retail&name=E2E&email=e2e_verify%40newtalk.kr&uid=79747&redirect=none",
+        "default_redirect": "/admin",
+        "url_encode_token": True,
+    },
+    "SF": {
+        "service": "shotflow.newtalk.kr",
+        "label": "E2E 자동 검증용",
+        "api_url": "https://ypvqgojexppcgilacxdz.supabase.co/auth/v1/token?grant_type=password",
+        "token_path": "access_token",
+        "refresh_token_path": "refresh_token",
+        "e2e_url": "https://shotflow.newtalk.kr/e2e-auth.html?access_token={token}&refresh_token={refresh_token}&redirect={redirect}",
+        "default_redirect": "/dashboard",
+        "extra_headers": {"apikey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlwdnFnb2pleHBwY2dpbGFjeGR6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA5MjA1NDYsImV4cCI6MjA4NjQ5NjU0Nn0.c7WFH6wmwCObdjPTdu0QObDFa5KO7CXo8gas0ocLSvs"},
+    },
+}
+
+
+async def get_e2e_login_url(project: str, redirect: str | None = None) -> dict[str, Any]:
+    """프로젝트별 E2E 브라우저 자동 로그인 URL 생성.
+
+    Returns dict with keys: url, project, success, error (if failed).
+    """
+    import aiohttp
+    from urllib.parse import quote
+
+    project = project.upper()
+    if project == "KIS":
+        project = "GO100"
+
+    config = _E2E_PROJECT_CONFIG.get(project)
+    if not config:
+        return {"success": False, "error": f"Unsupported project: {project}"}
+
+    cred = await get_login_credential(config["service"], project, config["label"])
+    if not cred:
+        return {"success": False, "error": f"No credential found for {project}"}
+
+    username = cred.get("username", "")
+    password = cred.get("password", "")
+    headers = config.get("extra_headers", {})
+    headers["Content-Type"] = "application/json"
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                config["api_url"],
+                json={"email": username, "password": password},
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10),
+                ssl=False,
+            ) as resp:
+                if resp.status not in (200, 201):
+                    body = await resp.text()
+                    return {"success": False, "error": f"Auth API {resp.status}: {body[:200]}"}
+                data = await resp.json()
+    except Exception as e:
+        return {"success": False, "error": f"Auth request failed: {e}"}
+
+    token = data
+    for key in config["token_path"].split("."):
+        token = token[key]
+
+    refresh_token = ""
+    if "refresh_token_path" in config:
+        rt = data
+        for key in config["refresh_token_path"].split("."):
+            rt = rt[key]
+        refresh_token = str(rt)
+
+    if config.get("url_encode_token"):
+        token = quote(str(token), safe="")
+
+    redir = redirect or config["default_redirect"]
+    url = config["e2e_url"].format(token=token, refresh_token=refresh_token, redirect=redir)
+
+    return {"success": True, "url": url, "project": project}

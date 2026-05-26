@@ -12,6 +12,7 @@ from app.core.credential_vault import (
     delete_credential,
     execute_login_steps,
     get_credential,
+    get_e2e_login_url,
     get_login_credential,
     list_credentials,
     mark_verified,
@@ -173,3 +174,12 @@ async def api_test_login(body: LoginTestRequest) -> dict[str, Any]:
             "service": body.service,
             "message": str(e),
         }
+
+
+@router.get("/e2e-login-url/{project}")
+async def get_e2e_url(project: str, redirect: str | None = None):
+    """프로젝트별 E2E 브라우저 자동 로그인 URL 생성. 파이프라인 검증용."""
+    result = await get_e2e_login_url(project, redirect)
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
+    return result

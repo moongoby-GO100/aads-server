@@ -34,7 +34,7 @@ def extract_dict_keys(filepath: str, dict_pattern: str) -> set:
                 depth -= 1
             pos += 1
         block = content[start:pos-1]
-        for key_match in re.finditer(r'"([a-z_]+)":\s', block):
+        for key_match in re.finditer(r'"([a-z0-9_]+)":\s', block):
             keys.add(key_match.group(1))
     return keys
 
@@ -43,7 +43,7 @@ def extract_tool_definitions(filepath: str) -> set:
     """ceo_chat_tools.py TOOL_DEFINITIONS에서 name 추출."""
     content = Path(filepath).read_text()
     names = set()
-    for match in re.finditer(r'"name":\s*"([a-z_]+)"', content):
+    for match in re.finditer(r'"name":\s*"([a-z0-9_]+)"', content):
         names.add(match.group(1))
     return names
 
@@ -60,7 +60,7 @@ def extract_dispatch_keys(filepath: str) -> set:
         if in_dispatch:
             if line.strip() == '}':
                 break
-            m = re.search(r'"([a-z_]+)":', line)
+            m = re.search(r'"([a-z0-9_]+)":', line)
             if m:
                 keys.add(m.group(1))
     return keys
@@ -97,7 +97,7 @@ def extract_defer_loading_keys(filepath: str) -> set:
         if in_defer:
             if line.strip() == '}':
                 break
-            m = re.search(r'"([a-z_]+)":', line)
+            m = re.search(r'"([a-z0-9_]+)":', line)
             if m:
                 keys.add(m.group(1))
     return keys

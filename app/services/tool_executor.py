@@ -104,6 +104,7 @@ _LONG_TOOLS = frozenset({
     "local_model_install_test", "generate_music", "generate_three_d_asset",
     "search_all_projects", "deep_crawl", "deploy_safe",
     "search_crawl_match",
+    "credential_test_login",
 })
 
 # ── 파일별 동시 수정 방지 잠금 ─────────────────────────────────────────────
@@ -547,6 +548,7 @@ class ToolExecutor:
             "credential_list": self._credential_list,
             "credential_register": self._credential_register,
             "credential_test_login": self._credential_test_login,
+            "get_e2e_login_url": self._get_e2e_login_url,
             # 첨부파일 재읽기
             "read_uploaded_file":     self._read_uploaded_file,
             # 작업 모니터
@@ -4736,6 +4738,11 @@ class ToolExecutor:
         """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
         from app.api.ceo_chat_tools import execute_tool
         return await execute_tool("credential_test_login", inp, "", "")
+
+    async def _get_e2e_login_url(self, inp: Dict[str, Any]) -> Any:
+        """E2E 브라우저 자동 로그인 URL 생성."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("get_e2e_login_url", inp, "", "")
 
 # ─── 하위 호환성 ─────────────────────────────────────────────────────────────
 

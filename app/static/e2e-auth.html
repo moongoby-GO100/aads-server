@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>E2E Auth</title></head>
+<body>
+<script>
+(function(){
+  var p = new URLSearchParams(window.location.search);
+  var t = p.get('token');
+  var r = p.get('redirect') || '/chat';
+  if(t){
+    localStorage.setItem('aads_token', t);
+    document.cookie = 'aads_token=' + t + '; path=/; max-age=604800; SameSite=Lax';
+    window.location.href = r;
+  } else {
+    document.body.innerText = 'E2E Auth: token parameter required';
+  }
+})();
+</script>
+</body></html>

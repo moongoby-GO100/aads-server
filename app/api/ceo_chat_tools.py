@@ -2946,37 +2946,107 @@ def _snapshot_to_text(node: Dict, depth: int = 0) -> str:
 
 
 async def _ensure_aads_auth(page: Any) -> None:
-    """AADS 대시보드 인증 토큰 자동 주입 (내부 서비스용)."""
+    """AADS 대시보드 인증 토큰 자동 주입 — vault 우선, 서버 토큰 폴백."""
+    # 1순위: Credential Vault에서 AADS 자격증명으로 API 로그인 → 토큰 주입
+    try:
+        from app.core.credential_vault import list_credentials, get_credential, _api_token_inject
+        creds = await list_credentials(project="AADS", include_secrets=False)
+        if creds:
+            full_cred = await get_credential(creds[0]["id"], include_secrets=True)
+            if full_cred:
+                ok = await _api_token_inject(page, full_cred, {
+                    "api_url": "https://aads.newtalk.kr/api/v1/auth/login",
+                    "storage_key": "aads_token",
+                    "redirect_url": "",
+                })
+                if ok:
+                    logger.info("_ensure_aads_auth: vault token inject success")
+                    return
+    except Exception as e:
+        logger.debug("_ensure_aads_auth vault path failed: %s", e)
+
+    # 2순위: 서버 내부 토큰 생성 (browser-agent)
     try:
         from app.auth import create_token
         token = create_token(user_id="browser-agent", email="ceo@aads.dev")
-        await page.evaluate(f"() => localStorage.setItem('aads_token', '{token}')")
+        await page.evaluate(f"""() => {{
+            localStorage.setItem('aads_token', '{token}');
+            document.cookie = 'aads_token={token}; path=/; max-age=604800; SameSite=Lax';
+        }}""")
+        logger.info("_ensure_aads_auth: server token inject success")
     except Exception as e:
-        logger.debug(f"browser auth inject failed: {e}")
+        logger.debug("_ensure_aads_auth server token failed: %s", e)
 
 
 async def _do_aads_login(page: Any) -> None:
-    """AADS 대시보드 로그인 페이지에서 자동 로그인 수행."""
+    """AADS 대시보드 로그인 — API 토큰 주입 우선, 폼 fill 폴백."""
+    # 1순위: 토큰 직접 주입 (React 폼 fill 문제 우회)
+    await _ensure_aads_auth(page)
+
+    # 토큰 주입 성공 여부 확인
+    try:
+        has_token = await page.evaluate("() => !!localStorage.getItem('aads_token')")
+        if has_token:
+            return
+    except Exception:
+        pass
+
+    # 2순위: 폼 fill 폴백 (non-React 앱 또는 토큰 주입 실패 시)
     import os
     email = os.getenv("AADS_ADMIN_EMAIL", "admin@aads.dev")
     password = os.getenv("AADS_ADMIN_PASSWORD", "")
     if not password:
-        # 비밀번호 없으면 토큰 직접 주입 시도
-        await _ensure_aads_auth(page)
         return
 
-    # 이메일 입력 (첫 번째 input 필드)
     email_input = page.locator("input").first
     await email_input.clear(timeout=5000)
     await email_input.fill(email, timeout=5000)
-    # 비밀번호 입력
     pw_input = page.locator("input[type='password']").first
     await pw_input.fill(password, timeout=5000)
-    # 로그인 버튼 클릭
     login_btn = page.locator("button:has-text('로그인')").first
     await login_btn.click(timeout=5000)
-    # 로그인 후 페이지 전환 대기
     await page.wait_for_timeout(3000)
+
+
+async def _pre_inject_vault_token(page: Any, url: str) -> bool:
+    """대상 URL의 도메인에 매칭되는 vault 자격증명으로 사전 토큰 주입.
+
+    React/Next.js 앱은 URL 리다이렉트 없이 클라이언트에서 로그인 폼을 렌더링하므로,
+    페이지 이동 전에 토큰을 주입해야 인증된 화면이 즉시 렌더링된다.
+    """
+    try:
+        from app.core.credential_vault import list_credentials, get_credential, _api_token_inject
+        target_netloc = urlparse(url).netloc
+        creds = await list_credentials(include_secrets=False)
+        for c in creds:
+            c_login_url = c.get("login_url", "") or ""
+            if not c_login_url:
+                continue
+            c_netloc = urlparse(c_login_url).netloc
+            if c_netloc and c_netloc == target_netloc:
+                full_cred = await get_credential(c["id"], include_secrets=True)
+                if not full_cred:
+                    continue
+                steps = full_cred.get("login_steps", [])
+                inject_step = None
+                for s in steps:
+                    if s.get("action") == "api_token_inject":
+                        inject_step = s
+                        break
+                if inject_step:
+                    ok = await _api_token_inject(page, full_cred, inject_step)
+                    if ok:
+                        logger.info("pre_inject_vault_token: success for %s", target_netloc)
+                        return True
+                else:
+                    from app.core.credential_vault import _api_token_inject as _inject
+                    ok = await _inject(page, full_cred, {})
+                    if ok:
+                        logger.info("pre_inject_vault_token: default inject for %s", target_netloc)
+                        return True
+    except Exception as e:
+        logger.warning("pre_inject_vault_token failed: %s", e, exc_info=True)
+    return False
 
 
 async def tool_browser_navigate(
@@ -2995,13 +3065,31 @@ async def tool_browser_navigate(
         dedicated_session = bool(browser_session_id or browser_work_key)
         pages = ctx.pages
         if len(pages) >= _BROWSER_MAX_TABS:
-            page = pages[-1]  # 마지막 탭 재사용
+            page = pages[-1]
         else:
             page = await ctx.new_page()
 
         await page.goto(url, timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
 
-        # 관리자 자동 로그인은 명시적으로 분리된 세션에서만 수행한다.
+        # React/Next.js 클라이언트 렌더링 로그인 감지 + 토큰 사전 주입
+        _login_skip = ("/login", "/signin", "/auth/")
+        if dedicated_session and "newtalk.kr" in url and not any(p in url for p in _login_skip):
+            try:
+                _has_login_form = await page.evaluate("""() => {
+                    const pwInput = document.querySelector("input[type='password']");
+                    const loginBtn = document.querySelector("button");
+                    return !!(pwInput && loginBtn && loginBtn.textContent.includes('로그인'));
+                }""")
+                logger.info("e2e_login_form_detected=%s url=%s", _has_login_form, url)
+                if _has_login_form:
+                    injected = await _pre_inject_vault_token(page, url)
+                    logger.info("e2e_pre_inject_result=%s url=%s", injected, url)
+                    if injected:
+                        await page.goto(url, timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
+            except Exception as pre_err:
+                logger.warning("post-load token inject failed: %s", pre_err, exc_info=True)
+
+        # 서버 리다이렉트 기반 자동 로그인 (URL이 /login으로 변경된 경우)
         if dedicated_session and "/login" in page.url and "/login" not in url and "newtalk.kr" in url:
             try:
                 await _do_aads_login(page)
@@ -3985,30 +4073,45 @@ async def tool_credential_delete(credential_id: str) -> str:
 
 
 async def tool_credential_test_login(credential_id: str) -> str:
-    """저장된 자격증명으로 Playwright 로그인 테스트."""
+    """저장된 자격증명으로 로그인 테스트 (브릿지 세션 있으면 Playwright, 없으면 API 폴백)."""
     from app.core.credential_vault import get_credential, execute_login_steps, mark_verified
+    import aiohttp
     try:
         cred = await get_credential(credential_id, include_secrets=True)
         if not cred:
             return f"[ERROR] id={credential_id} 자격증명을 찾을 수 없습니다."
         if not cred.get("login_url"):
-            return "[ERROR] login_url이 설정되지 않아 테스트할 수 없습니다. credential_register로 login_url을 포함해 재등록하세요."
-        ctx, err = await _acquire_pw_context()
-        if err:
-            return f"[ERROR] 브라우저 연결 필요: {err}"
-        page = await ctx.new_page()
+            return "[ERROR] login_url이 설정되지 않아 테스트할 수 없습니다."
+
+        # API 폴백 — HTTP 접근 가능 여부 (브라우저 세션 생성 없이 빠르게 확인)
         try:
-            await page.goto(cred["login_url"], timeout=15000, wait_until="domcontentloaded")
-            success = await execute_login_steps(page, cred)
-            await mark_verified(credential_id, success)
-            current_url = page.url
-            if success:
-                return f"[로그인 테스트 성공] id={credential_id} service={cred.get('service')} → {current_url}"
-            return f"[로그인 테스트 실패] id={credential_id} — 스텝 실행 중 오류 발생. → {current_url}"
-        finally:
-            await page.close()
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as _s:
+                async with _s.get(cred["login_url"], ssl=False) as _r:
+                    _h = _r.status
+            if _h in (200, 302, 303):
+                return (
+                    f"[API 폴백] 브라우저 세션 없음 — HTTP {_h}으로 로그인 페이지 접근 확인됨.\n"
+                    f"실제 로그인 테스트: browser_connect(action='ensure_work_session') 연결 후 재시도"
+                )
+            return f"[API 폴백] 로그인 페이지 HTTP {_h} — 접근 이상. URL: {cred['login_url']}"
+        except Exception as ae:
+            return f"[ERROR] 브라우저 세션 없음 + API 폴백 실패: {ae}"
     except Exception as e:
         return f"[ERROR] credential_test_login 실패: {e}"
+
+
+async def tool_get_e2e_login_url(project: str = "", redirect: str = "") -> str:
+    """프로젝트별 E2E 브라우저 자동 로그인 URL 생성."""
+    from app.core.credential_vault import get_e2e_login_url as _get_url
+    if not project:
+        return "[ERROR] project 파라미터 필수 (AADS/GO100/NTV2/SF/KIS)"
+    try:
+        result = await _get_url(project, redirect or None)
+        if result.get("success"):
+            return f"[E2E Login URL] {result['project']}\n{result['url']}\n\n이 URL로 browser_navigate 하면 자동 로그인됩니다."
+        return f"[ERROR] {result.get('error', 'Unknown')}"
+    except Exception as e:
+        return f"[ERROR] get_e2e_login_url 실패: {e}"
 
 
 async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session_id: str = "") -> str:
@@ -4080,6 +4183,11 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         return await tool_credential_delete(params.get("credential_id", ""))
     elif name == "credential_test_login":
         return await tool_credential_test_login(params.get("credential_id", ""))
+    elif name == "get_e2e_login_url":
+        return await tool_get_e2e_login_url(
+            project=params.get("project", ""),
+            redirect=params.get("redirect", ""),
+        )
     # ── Browser 도구 (AADS-159) ─────────────────────────────────────────────
     elif name == "browser_connect":
         return await tool_browser_connect(

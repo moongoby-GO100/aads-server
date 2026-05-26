@@ -145,6 +145,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "credential_register": True,      # 온디맨드
     "credential_delete": True,        # 온디맨드
     "credential_test_login": True,    # 온디맨드
+    "get_e2e_login_url": True,        # 온디맨드
     # ── CEO 아젠다 관리 ────────────────────────────────────────────────
     "add_agenda": False,              # 핵심 — CEO/CTO 아젠다 등록
     "list_agendas": False,            # 핵심 — 아젠다 목록 조회
@@ -160,6 +161,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "db_safe_write": True,  # 자동 추가
     "notify_channel": True,  # 자동 추가
     "tool_layer_audit": True,  # 자동 추가
+    "crawl4ai_fetch": True,  # 자동 추가
 }
 
 # 도구 카테고리 안내 (시스템 프롬프트 주입용 — context_builder.py에서 사용)
@@ -2762,6 +2764,18 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "credential_id": {"type": "string", "description": "테스트할 자격증명 UUID"},
             },
             "required": ["credential_id"],
+        },
+    },
+    "get_e2e_login_url": {
+        "name": "get_e2e_login_url",
+        "description": "프로젝트별 E2E 브라우저 자동 로그인 URL 생성. 반환된 URL로 browser_navigate하면 즉시 로그인됨.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "description": "프로젝트", "enum": ["AADS", "GO100", "NTV2", "SF", "KIS"]},
+                "redirect": {"type": "string", "description": "로그인 후 이동할 경로 (선택)"},
+            },
+            "required": ["project"],
         },
     },
     # ── CEO 아젠다 관리 (AADS-CEO-AGENDA) ────────────────────────────────────

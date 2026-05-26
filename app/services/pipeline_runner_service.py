@@ -1576,6 +1576,11 @@ _VERIFICATION_CHECKLIST_TEMPLATE = """
 - [ ] 실패 기준: (이런 결과면 실패로 간주)
 - [ ] 서비스 재시작 확인: docker ps → container running
 - [ ] 에러 로그 0건: docker logs --since 60s | grep -i error
+- [ ] 브라우저 E2E 검증: UI 변경 시 필수. 아래 절차 수행:
+  1. GET /e2e/credentials/e2e-login-url/{PROJECT} → url 획득
+  2. browser_navigate(url) → 자동 로그인
+  3. browser_navigate(검증 대상 페이지)
+  4. browser_snapshot() 또는 browser_screenshot()으로 렌더링 확인
 
 RESULT 파일에 위 체크리스트 항목별 실행 결과를 반드시 포함하세요.
 """
