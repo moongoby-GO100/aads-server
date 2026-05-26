@@ -2078,3 +2078,600 @@ def _retr
 
 ## [2026-05-21 10:49:24 KST] [aads-server] docs/CHANGELOG-go100-direct.md
 - Chat-Direct 수정: run_remote_command: find /root/aads/aads-server -name "main.py" -path "*/app/*"
+
+## [2026-05-21 11:25:59 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch:                        EXTRACT(EPOCH FRO→                       EXTRACT(EPOCH FRO
+
+## [2026-05-21 11:26:27 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch:     _stale_progressed_execution = (
+    →    _stale_progressed_execution = (
+    
+
+## [2026-05-21 11:34:06 KST] [aads-server] app/static/gallery/media-3d36b1299c1f43f8.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "import py_compile; py_compile.compile('/app/
+
+## [2026-05-21 11:34:07 KST] [aads-server] app/static/gallery/media-a49e8485140d4386.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "import py_compile; py_compile.compile('/app/
+
+## [2026-05-21 11:34:08 KST] [aads-server] app/static/gallery/media-ae215adcad7646a5.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "import py_compile; py_compile.compile('/app/
+
+## [2026-05-21 11:35:10 KST] [aads-server] app/static/gallery/media-8759c9fd3b544721.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "UPDATE chat_turn_executions S
+
+## [2026-05-21 11:35:11 KST] [aads-server] app/static/gallery/media-f4fc2b3e7ca74293.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "UPDATE chat_turn_executions S
+
+## [2026-05-21 11:41:10 KST] [aads-server] app/static/gallery/media-9aee3fd14a3148ed.jpg
+- Chat-Direct 수정: run_remote_command: cat /tmp/dashboard-deploy.log 2>/dev/null | tail -20
+
+## [2026-05-21 11:41:11 KST] [aads-server] app/static/gallery/media-e03a4363e25b49bd.jpg
+- Chat-Direct 수정: run_remote_command: cat /tmp/dashboard-deploy.log 2>/dev/null | tail -20
+
+## [2026-05-21 11:41:13 KST] [aads-server] app/static/gallery/media-e8751898eb714c7b.jpg
+- Chat-Direct 수정: run_remote_command: cat /tmp/dashboard-deploy.log 2>/dev/null | tail -20
+
+## [2026-05-21 11:44:11 KST] [aads-server] app/static/gallery/media-0c88750d59214020.jpg
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git push origin main
+
+## [2026-05-21 11:44:12 KST] [aads-server] app/static/gallery/media-219a17cbcc224ac9.jpg
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git push origin main
+
+## [2026-05-21 12:11:02 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:         ctx, err = await _acquire_pw_con→        project = cred.get("project", ""
+
+## [2026-05-21 12:11:07 KST] [aads-server] app/core/prompts/system_prompt_v2.py
+- Chat-Direct 수정: patch: ## 비용: 품질 최우선, 효율 라우팅 유지. CEO 명시 선택은 절대 →## E2E 검증 폴백 (R-E2E)
+- 브라우저 로그인이 실패하면 "E
+
+## [2026-05-21 12:11:41 KST] [aads-server] app/services/qa_pipeline.py
+- Chat-Direct 수정: patch:     # test PASS but visual diff 있음 OR 25→    # test PASS but visual diff 있음 OR 25
+
+## [2026-05-21 12:11:57 KST] [aads-server] app/services/qa_pipeline.py
+- Chat-Direct 수정: patch:     except Exception as e:
+        logge→    except Exception as e:
+        logge
+
+## [2026-05-21 12:15:43 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:         project = cred.get("project", ""→        project = cred.get("project", ""
+
+## [2026-05-21 12:17:04 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:             ctx, err = await _aio.wait_f→            ctx, err = await _aio.wait_f
+
+## [2026-05-21 12:17:10 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:             import aiohttp
+            t→            import aiohttp
+            t
+
+## [2026-05-21 12:19:23 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch: async def tool_credential_test_login(cre→async def tool_credential_test_login(cre
+
+## [2026-05-21 12:21:51 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch: async def tool_credential_test_login(cre→async def tool_credential_test_login(cre
+
+## [2026-05-21 12:22:07 KST] [aads-server] app/static/gallery/media-fa9f04ee32e443f0.jpg
+- Chat-Direct 수정: run_remote_command: python3 -c "import ast; ast.parse(open('/root/aads/aads-server/app/api/ceo_chat_
+
+## [2026-05-21 12:23:08 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:         # Step 1: 활성 브라우저 브릿지 세션 확인 (imp→        # API 폴백 — HTTP 접근 가능 여부 (브라우저 세
+
+## [2026-05-21 12:25:22 KST] [aads-server] docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.0.html
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-server/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html /root/aads/aa
+
+## [2026-05-21 12:25:24 KST] [aads-server] docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.0.html
+- Chat-Direct 수정: run_remote_command: docker exec aads-server grep "API 폴백" /app/app/api/ceo_chat_tools.py
+
+## [2026-05-21 12:25:33 KST] [aads-server] app/static/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.0.html
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-server/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html /root/aads/aa
+
+## [2026-05-21 12:32:17 KST] [aads-server] docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html
+- Chat-Direct 수정: write: docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html
+
+## [2026-05-21 12:32:39 KST] [aads-server] app/static/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-server/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html /root/aads/aa
+
+## [2026-05-21 12:32:43 KST] [aads-server] app/static/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html
+- Chat-Direct 수정: run_remote_command: grep -n "_TOOL_TIMEOUT\|_LONG_TOOL_TIMEOUT\|_BROWSER_TOOL_TIMEOUT\|_LONG_TOOLS\|
+
+## [2026-05-21 12:34:11 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: patch:     "search_crawl_match",
+})→    "search_crawl_match",
+    "credentia
+
+## [2026-05-21 12:34:21 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git push origin main
+
+## [2026-05-21 12:38:35 KST] [aads-server] docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.0.html
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-server/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html /root/aads/aa
+
+## [2026-05-21 12:38:46 KST] [aads-server] app/static/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.0.html
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-server/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html /root/aads/aa
+
+## [2026-05-21 12:38:47 KST] [aads-server] docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html
+- Chat-Direct 수정: write: docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html
+
+## [2026-05-21 12:42:56 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:         ctx, err = await _acquire_pw_con→        project = cred.get("project", ""
+
+## [2026-05-21 12:42:57 KST] [aads-server] app/core/prompts/system_prompt_v2.py
+- Chat-Direct 수정: patch: ## 비용: 품질 최우선, 효율 라우팅 유지. CEO 명시 선택은 절대 →## E2E 검증 폴백 (R-E2E)
+- 브라우저 로그인이 실패하면 "E
+
+## [2026-05-21 12:43:04 KST] [aads-server] app/services/qa_pipeline.py
+- Chat-Direct 수정: patch:     # test PASS but visual diff 있음 OR 25→    # test PASS but visual diff 있음 OR 25
+
+## [2026-05-21 12:43:06 KST] [aads-server] app/services/qa_pipeline.py
+- Chat-Direct 수정: patch:     except Exception as e:
+        logge→    except Exception as e:
+        logge
+
+## [2026-05-21 12:44:23 KST] [aads-server] app/static/gallery/media-0b25329437c644c7.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -m pytest tests/ -k "credential" --tb=short -q 2
+
+## [2026-05-21 12:45:10 KST] [aads-server] app/static/gallery/media-379ed7ae518847ab.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-server tail -30 /tmp/aads-api.log
+
+## [2026-05-21 12:45:11 KST] [aads-server] app/static/gallery/media-6a17a2ce3ac94bfb.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-server tail -30 /tmp/aads-api.log
+
+## [2026-05-21 12:45:23 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:         project = cred.get("project", ""→        project = cred.get("project", ""
+
+## [2026-05-21 12:45:46 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:             ctx, err = await _aio.wait_f→            ctx, err = await _aio.wait_f
+
+## [2026-05-21 12:45:48 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:             import aiohttp
+            t→            import aiohttp
+            t
+
+## [2026-05-21 12:46:02 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch: async def tool_credential_test_login(cre→async def tool_credential_test_login(cre
+
+## [2026-05-21 12:47:07 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch: async def tool_credential_test_login(cre→async def tool_credential_test_login(cre
+
+## [2026-05-21 12:47:31 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:         # Step 1: 활성 브라우저 브릿지 세션 확인 (imp→        # API 폴백 — HTTP 접근 가능 여부 (브라우저 세
+
+## [2026-05-21 12:51:48 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch: async def _save_interrupted_partial_mess→async def _save_interrupted_partial_mess
+
+## [2026-05-21 12:52:03 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:         if pid:
+            updated = aw→        _ti = int(tokens_in or 0)
+      
+
+## [2026-05-21 12:52:32 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:             saved = await conn.fetchrow(→            saved = await conn.fetchrow(
+
+## [2026-05-21 12:52:36 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: patch:     "search_crawl_match",
+})→    "search_crawl_match",
+    "credentia
+
+## [2026-05-21 12:53:11 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 preserved_message = awai→                preserved_message = awai
+
+## [2026-05-21 12:53:23 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                         preserved_messag→                        preserved_messag
+
+## [2026-05-21 12:54:28 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                                 _preserv→                                _preserv
+
+## [2026-05-21 12:54:41 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                         _preserved_messa→                        _preserved_messa
+
+## [2026-05-21 13:04:34 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch: async def _save_interrupted_partial_mess→async def _save_interrupted_partial_mess
+
+## [2026-05-21 13:04:35 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:         if pid:
+            updated = aw→        _ti = int(tokens_in or 0)
+      
+
+## [2026-05-21 13:04:46 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:             saved = await conn.fetchrow(→            saved = await conn.fetchrow(
+
+## [2026-05-21 13:05:12 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 preserved_message = awai→                preserved_message = awai
+
+## [2026-05-21 13:05:13 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                         preserved_messag→                        preserved_messag
+
+## [2026-05-21 13:05:57 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                                 _preserv→                                _preserv
+
+## [2026-05-21 13:05:59 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                         _preserved_messa→                        _preserved_messa
+
+## [2026-05-21 13:14:50 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 if not _client_gone and →                if not _client_gone and 
+
+## [2026-05-21 13:17:17 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 if _client_gone:
+       →                if _client_gone:
+       
+
+## [2026-05-21 13:27:08 KST] [aads-server] app/static/gallery/media-08305ce29ae94c98.jpg
+- Chat-Direct 수정: run_remote_command: curl -s -X POST http://localhost:8100/api/v1/auth/login -H "Content-Type: applic
+
+## [2026-05-21 13:27:09 KST] [aads-server] app/static/gallery/media-603fb84353f14014.jpg
+- Chat-Direct 수정: run_remote_command: curl -s -X POST http://localhost:8100/api/v1/auth/login -H "Content-Type: applic
+
+## [2026-05-21 13:35:02 KST] [aads-server] app/core/credential_vault.py
+- Chat-Direct 수정: patch: async def execute_login_steps(page: Any,→async def _api_token_inject(page: Any, c
+
+## [2026-05-21 13:35:27 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch: async def _ensure_aads_auth(page: Any) -→async def _ensure_aads_auth(page: Any) -
+
+## [2026-05-21 13:37:12 KST] [aads-server] docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.1.html
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-server/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html /root/aads/aa
+
+## [2026-05-21 13:38:09 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch: async def tool_browser_navigate(
+    url→async def _pre_inject_vault_token(page: 
+
+## [2026-05-21 13:39:42 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:         # React/Next.js 앱 사전 토큰 주입 (URL →        await page.goto(url, timeout=_BR
+
+## [2026-05-21 13:44:03 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:     except Exception as e:
+        logge→    except Exception as e:
+        logge
+
+## [2026-05-21 13:44:12 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:                 if _has_login_form:
+    →                logger.info("e2e_login_f
+
+## [2026-05-21 13:44:46 KST] [aads-server] docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html
+- Chat-Direct 수정: write: docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html
+
+## [2026-05-21 13:46:41 KST] [aads-server] app/api/auth.py
+- Chat-Direct 수정: patch: """JWT 인증 API 라우터 — SaaS 회원가입 + 로그인"""
+f→"""JWT 인증 API 라우터 — SaaS 회원가입 + 로그인"""
+f
+
+## [2026-05-21 13:47:02 KST] [aads-server] app/api/auth.py
+- Chat-Direct 수정: patch: @router.get("/auth/me")
+async def get_me→@router.get("/auth/e2e-inject", response
+
+## [2026-05-21 13:48:09 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:     "/api/v1/auth/login",
+    "/api/v1/a→    "/api/v1/auth/login",
+    "/api/v1/a
+
+## [2026-05-21 13:48:15 KST] [aads-server] app/main.py
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-server/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html /root/aads/aa
+
+## [2026-05-21 13:48:23 KST] [aads-server] docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.1.html
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-server/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html /root/aads/aa
+
+## [2026-05-21 13:48:31 KST] [aads-server] docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html
+- Chat-Direct 수정: write: docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html
+
+## [2026-05-21 13:49:26 KST] [aads-server] app/api/auth.py
+- Chat-Direct 수정: patch: @router.get("/auth/e2e-inject", response→@router.get("/auth/login/e2e-inject", re
+
+## [2026-05-21 13:51:06 KST] [aads-server] app/static/gallery/media-e182d973b21c4232.jpg
+- Chat-Direct 수정: run_remote_command: grep -n "client_gone_auto_cancel\|_BG_AUTO_CANCEL\|superseded\|stale.*running\|C
+
+## [2026-05-21 13:58:07 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch:     _started_age = int(execution_row.get→    _started_age = int(execution_row.get
+
+## [2026-05-21 13:58:29 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:     # 기존 태스크가 있으면 취소 후 교체
+    old_task =→    # 기존 태스크가 있으면 partial flush 후 취소
+   
+
+## [2026-05-21 14:01:37 KST] [aads-server] app/static/e2e-auth.html
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-dashboard/public/e2e-auth.html /root/aads/aads-server/app/sta
+
+## [2026-05-21 14:04:01 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:             _completed_ok = bool(state.g→            _completed_ok = bool(state.g
+
+## [2026-05-21 14:07:15 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch:     _started_age = int(execution_row.get→    _started_age = int(execution_row.get
+
+## [2026-05-21 14:07:17 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:     # 기존 태스크가 있으면 취소 후 교체
+    old_task =→    # 기존 태스크가 있으면 partial flush 후 취소
+   
+
+## [2026-05-21 14:08:32 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:             _completed_ok = bool(state.g→            _completed_ok = bool(state.g
+
+## [2026-05-21 14:16:02 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch:     _started_age = int(execution_row.get→    _started_age = int(execution_row.get
+
+## [2026-05-21 14:16:11 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:     _STREAMING_MAX_AGE_SEC = 600  # 10분 →    if session_id in _streaming_state:
+ 
+
+## [2026-05-23 09:21:08 KST] [aads-server] app/static/gallery/media-2df90a2827994e1e.jpg
+- Chat-Direct 수정: run_remote_command: grep -n "def execute_login_steps" /root/aads/aads-server/app/core/credential_vau
+
+## [2026-05-23 09:21:10 KST] [aads-server] app/static/gallery/media-7edfc33dcd55415f.jpg
+- Chat-Direct 수정: run_remote_command: grep -n "def execute_login_steps" /root/aads/aads-server/app/core/credential_vau
+
+## [2026-05-23 09:21:11 KST] [aads-server] app/static/gallery/media-832ec959dfc94840.jpg
+- Chat-Direct 수정: run_remote_command: grep -n "def execute_login_steps" /root/aads/aads-server/app/core/credential_vau
+
+## [2026-05-23 09:21:12 KST] [aads-server] app/static/gallery/media-dd54de9b85fa4240.jpg
+- Chat-Direct 수정: run_remote_command: grep -n "def execute_login_steps" /root/aads/aads-server/app/core/credential_vau
+
+## [2026-05-23 09:21:13 KST] [aads-server] app/static/gallery/media-e6ba5092ca0d4cfe.jpg
+- Chat-Direct 수정: run_remote_command: grep -n "def execute_login_steps" /root/aads/aads-server/app/core/credential_vau
+
+## [2026-05-26 09:11:46 KST] [aads-server] app/core/credential_vault.py
+- Chat-Direct 수정: patch:     await mark_used(credential["id"])
+  →    await mark_used(credential["id"])
+  
+
+## [2026-05-26 09:12:02 KST] [aads-server] app/api/credential_vault.py
+- Chat-Direct 수정: patch: from app.core.credential_vault import (
+→from app.core.credential_vault import (
+
+
+## [2026-05-26 09:12:17 KST] [aads-server] app/api/credential_vault.py
+- Chat-Direct 수정: patch:     except Exception as e:
+        logge→    except Exception as e:
+        logge
+
+## [2026-05-26 09:12:40 KST] [aads-server] app/services/pipeline_runner_service.py
+- Chat-Direct 수정: patch: _VERIFICATION_CHECKLIST_TEMPLATE = """
+
+→_VERIFICATION_CHECKLIST_TEMPLATE = """
+
+
+
+## [2026-05-26 09:13:40 KST] [aads-server] app/core/credential_vault.py
+- Chat-Direct 수정: patch:         "extra_headers": {"apikey": os.g→        "extra_headers": {"apikey": "eyJ
+
+## [2026-05-26 09:17:21 KST] [aads-server] app/core/credential_vault.py
+- Chat-Direct 수정: patch:     "AADS": {
+        "service": "aads-d→    "AADS": {
+        "service": "aads-d
+
+## [2026-05-26 09:22:43 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:     elif name == "credential_test_login"→    elif name == "credential_test_login"
+
+## [2026-05-26 09:22:55 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch: async def execute_tool(name: str, params→async def tool_get_e2e_login_url(project
+
+## [2026-05-26 09:23:04 KST] [aads-server] app/services/tool_registry.py
+- Chat-Direct 수정: patch:     "credential_test_login": True,    # →    "credential_test_login": True,    # 
+
+## [2026-05-26 09:23:22 KST] [aads-server] app/services/tool_registry.py
+- Chat-Direct 수정: patch:     "credential_test_login": {
+        "→    "credential_test_login": {
+        "
+
+## [2026-05-26 09:23:34 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: patch:             "credential_test_login": sel→            "credential_test_login": sel
+
+## [2026-05-26 09:23:48 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: patch:     async def _credential_test_login(sel→    async def _credential_test_login(sel
+
+## [2026-05-26 09:30:17 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: patch:             "get_e2e_login_url": self._g→            "get_e2e_login_url": self._g
+
+## [2026-05-26 09:30:52 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: patch:         return await execute_tool("get_e→        return await execute_tool("get_e
+
+## [2026-05-26 09:32:11 KST] [aads-server] app/services/tool_registry.py
+- Chat-Direct 수정: patch:     "crawl4ai_fetch": True,  # 자동 추가
+   →    "crawl4ai_fetch": True,  # 자동 추가
+}
+
+## [2026-05-26 09:35:26 KST] [aads-server] scripts/check_tool_consistency.py
+- Chat-Direct 수정: patch:             m = re.search(r'"([a-z_]+)":→            m = re.search(r'"([a-z0-9_]+
+
+## [2026-05-26 09:35:58 KST] [aads-server] scripts/check_tool_consistency.py
+- Chat-Direct 수정: run_remote_command: sed -i 's/\[a-z_\]+/[a-z0-9_]+/g' /root/aads/aads-server/scripts/check_tool_cons
+
+## [2026-05-26 09:49:07 KST] [aads-server] app/core/credential_vault.py
+- Chat-Direct 수정: patch:     await mark_used(credential["id"])
+  →    await mark_used(credential["id"])
+  
+
+## [2026-05-26 09:49:09 KST] [aads-server] app/api/credential_vault.py
+- Chat-Direct 수정: patch: from app.core.credential_vault import (
+→from app.core.credential_vault import (
+
+
+## [2026-05-26 09:49:10 KST] [aads-server] app/api/credential_vault.py
+- Chat-Direct 수정: patch:     except Exception as e:
+        logge→    except Exception as e:
+        logge
+
+## [2026-05-26 09:49:18 KST] [aads-server] app/services/pipeline_runner_service.py
+- Chat-Direct 수정: patch: _VERIFICATION_CHECKLIST_TEMPLATE = """
+
+→_VERIFICATION_CHECKLIST_TEMPLATE = """
+
+
+
+## [2026-05-26 09:49:40 KST] [aads-server] app/core/credential_vault.py
+- Chat-Direct 수정: patch:         "extra_headers": {"apikey": os.g→        "extra_headers": {"apikey": "eyJ
+
+## [2026-05-26 09:51:05 KST] [aads-server] app/static/gallery/media-da89b2e8210e4919.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-server curl -s http://localhost:8080/e2e/credentials/e2e-login-
+
+## [2026-05-26 09:52:05 KST] [aads-server] app/static/gallery/media-dfbfcf168c5045d0.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-server curl -s https://go100.newtalk.kr/api/v1/auth/login -H "C
+
+## [2026-05-26 09:52:06 KST] [aads-server] app/static/gallery/media-ed396a120901417a.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-server curl -s https://go100.newtalk.kr/api/v1/auth/login -H "C
+
+## [2026-05-26 09:52:07 KST] [aads-server] app/core/credential_vault.py
+- Chat-Direct 수정: patch:     "AADS": {
+        "service": "aads-d→    "AADS": {
+        "service": "aads-d
+
+## [2026-05-26 09:54:10 KST] [aads-server] app/static/gallery/media-f4ba20f803d6464c.jpg
+- Chat-Direct 수정: run_remote_command: sed -n '2745,2780p' /root/aads/aads-server/app/services/tool_registry.py
+
+## [2026-05-26 09:55:08 KST] [aads-server] app/static/gallery/media-05b94774644d44f5.jpg
+- Chat-Direct 수정: run_remote_command: sed -n '4160,4180p' /root/aads/aads-server/app/api/ceo_chat_tools.py
+
+## [2026-05-26 09:55:09 KST] [aads-server] app/static/gallery/media-182b246f856d435e.jpg
+- Chat-Direct 수정: run_remote_command: sed -n '4160,4180p' /root/aads/aads-server/app/api/ceo_chat_tools.py
+
+## [2026-05-26 09:55:11 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:     elif name == "credential_test_login"→    elif name == "credential_test_login"
+
+## [2026-05-26 09:55:12 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch: async def execute_tool(name: str, params→async def tool_get_e2e_login_url(project
+
+## [2026-05-26 09:55:20 KST] [aads-server] app/services/tool_registry.py
+- Chat-Direct 수정: patch:     "credential_test_login": True,    # →    "credential_test_login": True,    # 
+
+## [2026-05-26 09:55:28 KST] [aads-server] app/services/tool_registry.py
+- Chat-Direct 수정: patch:     "credential_test_login": {
+        "→    "credential_test_login": {
+        "
+
+## [2026-05-26 09:55:34 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: patch:             "credential_test_login": sel→            "credential_test_login": sel
+
+## [2026-05-26 09:55:41 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: patch:     async def _credential_test_login(sel→    async def _credential_test_login(sel
+
+## [2026-05-26 09:56:11 KST] [aads-server] app/static/gallery/media-2bbca7b5e1094a36.jpg
+- Chat-Direct 수정: run_remote_command: grep "^TOOL_\|^_TOOL_\|^ALL_TOOL" /root/aads/aads-server/app/services/tool_regis
+
+## [2026-05-26 09:56:13 KST] [aads-server] app/static/gallery/media-c4c9d6a9cf93478d.jpg
+- Chat-Direct 수정: run_remote_command: grep "^TOOL_\|^_TOOL_\|^ALL_TOOL" /root/aads/aads-server/app/services/tool_regis
+
+## [2026-05-26 09:59:40 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: patch:             "get_e2e_login_url": self._g→            "get_e2e_login_url": self._g
+
+## [2026-05-26 09:59:52 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: patch:         return await execute_tool("get_e→        return await execute_tool("get_e
+
+## [2026-05-26 10:00:12 KST] [aads-server] app/static/gallery/media-1ef8a39e6baa4317.jpg
+- Chat-Direct 수정: run_remote_command: grep -c "get_e2e_login_url" /root/aads/aads-server/app/services/tool_executor.py
+
+## [2026-05-26 10:00:14 KST] [aads-server] app/static/gallery/media-919b4a75df96404d.jpg
+- Chat-Direct 수정: run_remote_command: grep -c "get_e2e_login_url" /root/aads/aads-server/app/services/tool_executor.py
+
+## [2026-05-26 10:00:57 KST] [aads-server] app/services/tool_registry.py
+- Chat-Direct 수정: patch:     "crawl4ai_fetch": True,  # 자동 추가
+   →    "crawl4ai_fetch": True,  # 자동 추가
+}
+
+## [2026-05-26 10:01:12 KST] [aads-server] app/static/gallery/media-39a885353d3f42fe.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 scripts/check_tool_consistency.py 2>&1 | tail -5
+
+## [2026-05-26 10:02:56 KST] [aads-server] scripts/check_tool_consistency.py
+- Chat-Direct 수정: patch:             m = re.search(r'"([a-z_]+)":→            m = re.search(r'"([a-z0-9_]+
+
+## [2026-05-26 10:10:00 KST] [aads-server] app/core/credential_vault.py
+- Chat-Direct 수정: patch:     "NTV2": {
+        "service": "newtal→    "NTV2": {
+        "service": "newtal
+
+## [2026-05-26 10:11:50 KST] [aads-server] app/core/credential_vault.py
+- Chat-Direct 수정: patch:     "NTV2": {
+        "service": "newtal→    "NTV2": {
+        "service": "newtal
+
+## [2026-05-26 10:12:12 KST] [aads-server] app/core/credential_vault.py
+- Chat-Direct 수정: patch: async def get_e2e_login_url(project: str→async def get_e2e_login_url(project: str
+
+## [2026-05-26 10:12:22 KST] [aads-server] app/api/credential_vault.py
+- Chat-Direct 수정: patch: @router.get("/e2e-login-url/{project}")
+→@router.get("/e2e-login-url/{project}")
+
+
+## [2026-05-26 10:13:17 KST] [aads-server] app/api/credential_vault.py
+- Chat-Direct 수정: patch: @router.get("/e2e-login-url/{project}")
+→@router.get("/e2e-login-url/{project}")
+
+
+## [2026-05-26 10:13:37 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch: async def tool_get_e2e_login_url(project→async def tool_get_e2e_login_url(project
+
+## [2026-05-26 10:14:37 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch: async def tool_get_e2e_login_url(project→async def tool_get_e2e_login_url(project
+
+## [2026-05-26 10:15:05 KST] [aads-server] app/api/ceo_chat_tools.py
+- Chat-Direct 수정: patch:     elif name == "get_e2e_login_url":
+  →    elif name == "get_e2e_login_url":
+  
+
+## [2026-05-26 10:15:24 KST] [aads-server] app/services/tool_registry.py
+- Chat-Direct 수정: patch:     "get_e2e_login_url": {
+        "name→    "get_e2e_login_url": {
+        "name
+
+## [2026-05-26 10:17:15 KST] [aads-server] app/services/tool_registry.py
+- Chat-Direct 수정: patch: "get_e2e_login_url": {
+        "name": "→"get_e2e_login_url": {
+        "name": "
+
+## [2026-05-26 10:19:30 KST] [aads-server] app/core/credential_vault.py
+- Chat-Direct 수정: patch:     if config.get("form_login"):
+       →    if config.get("form_login"):
+       
+
+## [2026-05-26 10:27:12 KST] [aads-server] app/static/gallery/media-0bf6599750bd4974.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "
+import asyncio, os
+from app.core.db_pool im
+
+## [2026-05-26 10:27:13 KST] [aads-server] app/static/gallery/media-59365ce712d546b7.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "
+import asyncio, os
+from app.core.db_pool im
+
+## [2026-05-26 10:30:16 KST] [aads-server] app/static/gallery/media-37fc50f8298a4aa1.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "
+import asyncio
+from app.core.db_pool import
+
+## [2026-05-26 10:30:18 KST] [aads-server] app/static/gallery/media-90fcc4e75de34fef.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "
+import asyncio
+from app.core.db_pool import
+
+## [2026-05-26 10:30:19 KST] [aads-server] app/static/gallery/media-9dd89b6f0d144665.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "
+import asyncio
+from app.core.db_pool import
+
+## [2026-05-26 11:05:12 KST] [aads-server] app/static/gallery/media-0decd772a4d344b0.jpg
+- Chat-Direct 수정: run_remote_command: strings /usr/local/bin/claude 2>/dev/null | grep -i "client_id\|oauth" | head -1
+
+## [2026-05-26 11:05:13 KST] [aads-server] app/static/gallery/media-2f678c1524614e19.jpg
+- Chat-Direct 수정: run_remote_command: strings /usr/local/bin/claude 2>/dev/null | grep -i "client_id\|oauth" | head -1
+
+## [2026-05-26 11:05:15 KST] [aads-server] app/static/gallery/media-f66a95163456435c.jpg
+- Chat-Direct 수정: run_remote_command: strings /usr/local/bin/claude 2>/dev/null | grep -i "client_id\|oauth" | head -1
+
+## [2026-05-26 11:12:10 KST] [aads-server] app/static/gallery/media-133f0ecbbac84866.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "get_e2e_login_url\|e2e-auth.html" /root/aads/aads-server/app --include
+
+## [2026-05-26 11:12:11 KST] [aads-server] app/static/gallery/media-6de9dba028794532.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "get_e2e_login_url\|e2e-auth.html" /root/aads/aads-server/app --include
+
+## [2026-05-26 11:12:12 KST] [aads-server] app/static/gallery/media-c894b0077cc74aa1.jpg
+- Chat-Direct 수정: run_remote_command: grep -rn "get_e2e_login_url\|e2e-auth.html" /root/aads/aads-server/app --include
+
+## [2026-05-26 12:01:05 KST] [aads-server] app/static/gallery/media-0900a61c3d334ca7.jpg
+- Chat-Direct 수정: run_remote_command: cat /tmp/ntv2_login.json
+
+## [2026-05-26 12:01:07 KST] [aads-server] app/static/gallery/media-df035156375a4e57.jpg
+- Chat-Direct 수정: run_remote_command: cat /tmp/ntv2_login.json
+
+## [2026-05-26 12:01:08 KST] [aads-server] app/static/gallery/media-e6b8235c1ac2411b.jpg
+- Chat-Direct 수정: run_remote_command: cat /tmp/ntv2_login.json
+
+## [2026-05-26 14:11:09 KST] [aads-server] app/core/prompts/system_prompt_v2.py
+- Chat-Direct 수정: patch: ## E2E 검증 폴백 (R-E2E)
+- 브라우저 로그인이 실패하면 "E→## E2E 검증 폴백 (R-E2E)
+- 브라우저 로그인이 실패하면 "E
+
+## [2026-05-26 14:11:43 KST] [aads-server] .gitignore
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && echo "app/static/gallery/media-*.jpg" >> .gitignore

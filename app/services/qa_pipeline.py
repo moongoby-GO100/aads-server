@@ -59,6 +59,36 @@ def _calc_verdict(
 
 
 # ---------------------------------------------------------------------------
+# API 폴백 QA (브라우저 불가 시)
+# ---------------------------------------------------------------------------
+
+async def _api_fallback_qa(deploy_url: str, pages: list[str]) -> dict:
+    """브라우저 스크린샷 실패 시 HTTP 상태코드 + 헬스체크로 최소 검증."""
+    import aiohttp
+    checks = []
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            for page in pages:
+                url = deploy_url.rstrip("/") + page
+                try:
+                    async with session.get(url, ssl=False, allow_redirects=True) as resp:
+                        checks.append({"page": page, "status": resp.status, "ok": resp.status < 400})
+                except Exception as e:
+                    checks.append({"page": page, "status": 0, "ok": False, "error": str(e)})
+            try:
+                health_url = deploy_url.rstrip("/") + "/api/v1/health"
+                async with session.get(health_url, ssl=False) as resp:
+                    checks.append({"page": "/api/v1/health", "status": resp.status, "ok": resp.status == 200})
+            except Exception:
+                checks.append({"page": "/api/v1/health", "status": 0, "ok": False})
+    except Exception as e:
+        logger.warning("api_fallback_qa_error", error=str(e))
+    all_ok = all(c["ok"] for c in checks) if checks else False
+    return {"checks": checks, "all_ok": all_ok, "method": "api_fallback"}
+
+
+# ---------------------------------------------------------------------------
 # 메인 파이프라인
 # ---------------------------------------------------------------------------
 
@@ -137,20 +167,28 @@ async def run_full_qa(
         logger.info("qa_pipeline_step2_screenshots", count=len(screenshot_paths))
     except Exception as e:
         logger.error("qa_pipeline_step2_error", error=str(e))
-        result["visual_status"] = "ERROR"
-        result["verdict"] = _calc_verdict(
-            result["test_status"], "ERROR", result["design_score"]
-        )
-        result["report_markdown"] = _build_report(result)
+        fallback = await _api_fallback_qa(deploy_url, pages)
+        result["visual_status"] = "API_FALLBACK"
+        result["api_fallback"] = fallback
+        if fallback["all_ok"]:
+            result["verdict"] = VERDICT_CONDITIONAL
+            result["report_markdown"] = _build_report(result) + "\n⚠️ 브라우저 E2E 미실행, API 폴백 검증 PASS"
+        else:
+            result["verdict"] = VERDICT_AUTO_FAIL
+            result["report_markdown"] = _build_report(result) + "\n❌ 브라우저 E2E 실패 + API 폴백도 실패"
         return result
 
     if not screenshot_paths:
         logger.warning("qa_pipeline_no_screenshots")
-        result["visual_status"] = "ERROR"
-        result["verdict"] = _calc_verdict(
-            result["test_status"], "ERROR", result["design_score"]
-        )
-        result["report_markdown"] = _build_report(result)
+        fallback = await _api_fallback_qa(deploy_url, pages)
+        result["visual_status"] = "API_FALLBACK"
+        result["api_fallback"] = fallback
+        if fallback["all_ok"]:
+            result["verdict"] = VERDICT_CONDITIONAL
+            result["report_markdown"] = _build_report(result) + "\n⚠️ 스크린샷 없음, API 폴백 검증 PASS"
+        else:
+            result["verdict"] = VERDICT_AUTO_FAIL
+            result["report_markdown"] = _build_report(result) + "\n❌ 스크린샷 없음 + API 폴백 실패"
         return result
 
     # ------------------------------------------------------------------

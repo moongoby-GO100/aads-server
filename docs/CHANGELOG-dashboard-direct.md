@@ -590,3 +590,32 @@ filepath = "/root/a
 
 ## [2026-05-21 10:49:22 KST] [aads-dashboard] src/app/chat/page.tsx
 - Chat-Direct 수정: run_remote_command: sed -i 's/      if (Date.now() < mergeCooldownUntilRef.current) return;/      \/
+
+## [2026-05-21 11:27:28 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && sed -i '3449s/.*/      if (isNearBottomRef.curre
+
+## [2026-05-21 11:30:34 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:   const mergeCooldownUntilRef = useRef(0→  const mergeCooldownUntilRef = useRef(0
+
+## [2026-05-21 12:55:22 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:     const handleTabFocusRefetch = () => →    const handleTabFocusRefetch = async 
+
+## [2026-05-21 12:55:41 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 -c "
+import re
+path = '/root/aads/aads-dashboard/src/app/chat/page.tsx'
+
+
+## [2026-05-21 13:06:11 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:     const handleTabFocusRefetch = () => →    const handleTabFocusRefetch = async 
+
+## [2026-05-21 13:16:05 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && sed -i 's/}, 16);/}, 50);/' src/app/chat/page.ts
+
+## [2026-05-21 13:58:09 KST] [aads-dashboard] ../aads-dashboard/public/e2e-auth.html
+- Chat-Direct 수정: write: ../aads-dashboard/public/e2e-auth.html
+
+## [2026-05-21 13:58:43 KST] [aads-dashboard] public/e2e-auth.html
+- Chat-Direct 수정: run_remote_command: python3 -c "
+html = '''<!DOCTYPE html>
+<html><head><meta charset=\"utf-8\"><titl

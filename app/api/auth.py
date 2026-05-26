@@ -1,5 +1,6 @@
 """JWT 인증 API 라우터 — SaaS 회원가입 + 로그인"""
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, Query
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, field_validator
 from typing import Optional
 import logging
@@ -101,6 +102,58 @@ async def login(req: LoginRequest):
         )
 
     raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다")
+
+
+@router.get("/auth/login/e2e-inject", response_class=HTMLResponse)
+async def e2e_inject(
+    credential_id: str = Query(..., description="Vault credential ID"),
+    redirect: str = Query("/chat", description="인증 후 리다이렉트 경로"),
+):
+    """E2E 자동 인증 — vault 자격증명으로 로그인 후 토큰을 브라우저에 주입."""
+    try:
+        from app.core.credential_vault import get_credential
+        cred = await get_credential(credential_id, include_secrets=True)
+        if not cred:
+            raise HTTPException(status_code=404, detail="자격증명 없음")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"자격증명 조회 실패: {e}")
+
+    email = cred.get("username", "")
+    password = cred.get("password", "")
+
+    if not auth_module.JWT_AVAILABLE:
+        raise HTTPException(status_code=503, detail="JWT 미설치")
+
+    await auth_module.ensure_saas_users_table()
+    token = None
+    saas_user = await auth_module.authenticate_saas_user(email, password)
+    if saas_user:
+        uid = str(saas_user["id"])
+        token = auth_module.create_token(uid, saas_user["email"])
+    elif auth_module.ADMIN_PASSWORD and auth_module.check_admin_credentials(email, password):
+        token = auth_module.create_token("admin", email, is_admin=True)
+
+    if not token:
+        raise HTTPException(status_code=401, detail="자격증명 인증 실패")
+
+    from app.core.credential_vault import mark_used
+    await mark_used(credential_id)
+    logger.info("e2e_inject: credential_id=%s email=%s redirect=%s", credential_id, email, redirect)
+
+    import html as html_mod
+    safe_redirect = html_mod.escape(redirect)
+    return HTMLResponse(f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>E2E Auth</title></head>
+<body>
+<script>
+localStorage.setItem('aads_token', '{token}');
+document.cookie = 'aads_token={token}; path=/; max-age=604800; SameSite=Lax';
+window.location.href = '{safe_redirect}';
+</script>
+<noscript>인증 완료 — JS가 필요합니다.</noscript>
+</body></html>""")
 
 
 @router.get("/auth/me")

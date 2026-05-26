@@ -1356,6 +1356,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/auth/login",
     "/api/v1/auth/register",
     "/api/v1/auth/me",
+    "/api/v1/auth/e2e-inject",
     "/docs",
     "/openapi.json",
     "/redoc",
