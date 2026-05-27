@@ -14552,3 +14552,82 @@ HC_B
 ## [2026-05-27 15:01:03 KST] [GO100] scripts/check_go100_frontend_deploy_safety.sh
 - Chat-Direct 수정: patch: # ──────────────────────────────────────→# ──────────────────────────────────────
 - finalize: pending
+
+## [2026-05-27 15:03:22 KST] [GO100] scripts/run-build-bg.sh
+- Chat-Direct 수정: write: scripts/run-build-bg.sh
+- finalize: pending
+
+## [2026-05-27 15:03:25 KST] [GO100] scripts/build_green.sh
+- Chat-Direct 수정: write: scripts/build_green.sh
+- finalize: pending
+
+## [2026-05-27 15:03:36 KST] [GO100] scripts/build-green.sh
+- Chat-Direct 수정: write: scripts/build-green.sh
+- finalize: pending
+
+## [2026-05-27 15:03:40 KST] [GO100] scripts/build-green.sh
+- Chat-Direct 수정: run_remote_command: bash -c 'nohup bash /root/kis-autotrade-v4/scripts/build_green.sh &'
+- finalize: pending
+
+## [2026-05-27 15:03:48 KST] [GO100] scripts/build-green-bg.sh
+- Chat-Direct 수정: write: scripts/build-green-bg.sh
+- finalize: pending
+
+## [2026-05-27 15:03:48 KST] [GO100] scripts/build_green.sh
+- Chat-Direct 수정: run_remote_command: bash -c 'nohup bash /root/kis-autotrade-v4/scripts/build_green.sh &'
+- finalize: pending
+
+## [2026-05-27 15:04:09 KST] [GO100] scripts/oneshot-build-deploy.sh
+- Chat-Direct 수정: write: scripts/oneshot-build-deploy.sh
+- finalize: pending
+
+## [2026-05-27 15:04:13 KST] [GO100] scripts/run_frontend_build_bg.sh
+- Chat-Direct 수정: write: scripts/run_frontend_build_bg.sh
+- finalize: pending
+
+## [2026-05-27 15:04:16 KST] [GO100] scripts/run_frontend_build_bg.sh
+- Chat-Direct 수정: run_remote_command: ls -la frontend/.next.green/ 2>/dev/null | head -10
+- finalize: pending
+
+## [2026-05-27 15:04:24 KST] [GO100] frontend/build-and-restart.sh
+- Chat-Direct 수정: write: frontend/build-and-restart.sh
+- finalize: pending
+
+## [2026-05-27 15:04:28 KST] [GO100] frontend/run-build-and-deploy.sh
+- Chat-Direct 수정: write: frontend/run-build-and-deploy.sh
+- finalize: pending
+
+## [2026-05-27 15:04:36 KST] [GO100] frontend/build-green.sh
+- Chat-Direct 수정: write: frontend/build-green.sh
+- finalize: pending
+
+## [2026-05-27 15:04:55 KST] [GO100] scripts/check_go100_frontend_deploy_safety.sh
+- Chat-Direct 수정: patch:     ! -name '*.bak*' \
+    ! -name '*.di→    ! -name '*.bak*' \
+    ! -name '*.di
+- finalize: pending
+
+## [2026-05-27 15:05:19 KST] [GO100] scripts/check_go100_frontend_deploy_safety.sh
+- Chat-Direct 수정: patch: if [ -f "$SAFE_ENTRY" ]; then
+    if gre→if [ -f "$SAFE_ENTRY" ]; then
+    if gre
+- finalize: pending
+
+## [2026-05-27 15:06:19 KST] [GO100] scripts/build_green_v2.sh
+- Chat-Direct 수정: write: scripts/build_green_v2.sh
+- finalize: pending
+
+## [2026-05-27 15:06:26 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: ## 2026-05-27 14:38 KST - GO100 백억이 시장데이→## 2026-05-27 15:06 KST - GO100 무중단 배포 운
+- finalize: pending
+
+## [2026-05-27 15:06:27 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: chmod +x scripts/build_green_v2.sh
+- finalize: pending
+
+## [2026-05-27 15:07:12 KST] [GO100] scripts/build_green_v2.sh
+- Chat-Direct 수정: patch: #!/bin/bash
+set -e
+cd /root/kis-autotrad→#!/bin/bash
+# Compatibility wrapper. Dir
+- finalize: pending

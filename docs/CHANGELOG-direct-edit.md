@@ -3215,3 +3215,24 @@ app/stati→app/static/gallery/media-*.jpg
 
 ## [2026-05-27 14:59:37 KST] [aads-server] docs/CHANGELOG-direct-edit.md
 - Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && grep -n "DEDUP\|dedup\|중복\|filter.*bubble\|merge
+
+## [2026-05-27 15:03:11 KST] [aads-server] app/static/gallery/manifest.json
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "import asyncio; from app.services.chat_servi
+
+## [2026-05-27 15:03:30 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: curl -s -o /dev/null -w "%{http_code} %{size_download} %{time_total}" "https://i
+
+## [2026-05-27 15:04:25 KST] [aads-server] scripts/scrape_platform_ranking.py
+- Chat-Direct 수정: patch: NTV2_IMPORT_URL = "https://newtalk.kr/ap→NTV2_IMPORT_URL = "https://newtalk.kr/ap
+
+## [2026-05-27 15:04:29 KST] [aads-server] scripts/scrape_platform_ranking.py
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && sed -n '5890,5900p' src/app/chat/page.tsx
+
+## [2026-05-27 15:04:35 KST] [aads-server] scripts/scrape_platform_ranking.py
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git add app/api/image.py app/services/media_generat
+
+## [2026-05-27 15:05:58 KST] [aads-server] scripts/scrape_platform_ranking.py
+- Chat-Direct 수정: patch: async def send_to_ntv2(data: dict) -> bo→async def send_to_ntv2(data: dict) -> bo
+
+## [2026-05-27 15:06:16 KST] [aads-server] .git/hooks/post-commit
+- Chat-Direct 수정: patch: python3 /root/aads/scripts/collect_env_s→python3 /root/aads/scripts/collect_env_s
