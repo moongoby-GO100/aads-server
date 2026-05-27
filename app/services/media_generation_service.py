@@ -756,6 +756,8 @@ class MediaGenerationService:
         provider: str | None = None,
         requested_by: str | None = None,
         session_id: str | None = None,
+        aspect_ratio: str | None = None,
+        image_size: str | None = None,
     ) -> dict[str, Any]:
         if not str(prompt or "").strip():
             raise ValueError("프롬프트를 입력하세요")
@@ -801,7 +803,7 @@ class MediaGenerationService:
             )
         try:
             if route.source in {"explicit", "db_default"}:
-                result = await self._generate_image_with_route(prompt, size, route)
+                result = await self._generate_image_with_route(prompt, size, route, aspect_ratio=aspect_ratio, image_size=image_size)
             else:
                 from app.services.image_service import image_service
 
@@ -842,14 +844,17 @@ class MediaGenerationService:
         prompt: str,
         size: str,
         route: MediaRoute,
+        *,
+        aspect_ratio: str | None = None,
+        image_size: str | None = None,
     ) -> dict[str, Any]:
         sanitized = _sanitize_prompt(prompt)
         if route.provider == "openai":
             return await self._generate_openai_image(sanitized, prompt, size, route.model_id)
         if route.provider == "google":
-            return await self._generate_google_image(sanitized, prompt, route.model_id)
+            return await self._generate_google_image(sanitized, prompt, route.model_id, aspect_ratio=aspect_ratio, image_size=image_size)
         if route.provider == "gemini":
-            return await self._generate_gemini_native_image(sanitized, prompt, route.model_id)
+            return await self._generate_gemini_native_image(sanitized, prompt, route.model_id, aspect_ratio=aspect_ratio, image_size=image_size)
         raise ValueError(route.reason or "provider unavailable")
 
     async def _generate_openai_image(
@@ -885,10 +890,16 @@ class MediaGenerationService:
         sanitized: str,
         original: str,
         model_id: str,
+        *,
+        aspect_ratio: str | None = None,
+        image_size: str | None = None,
     ) -> dict[str, Any]:
         from google import genai
         from google.genai import types
 
+        img_config = {"number_of_images": 1, "aspect_ratio": aspect_ratio or "1:1"}
+        if image_size and image_size in ("1K", "2K"):
+            img_config["image_size"] = image_size
         client = genai.Client(api_key=_secret_value(self.settings, "GOOGLE_API_KEY"))
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
@@ -896,7 +907,7 @@ class MediaGenerationService:
             lambda: client.models.generate_images(
                 model=model_id,
                 prompt=sanitized,
-                config=types.GenerateImagesConfig(number_of_images=1, aspect_ratio="1:1"),
+                config=types.GenerateImagesConfig(**img_config),
             ),
         )
         if not response.generated_images:
@@ -910,10 +921,22 @@ class MediaGenerationService:
         sanitized: str,
         original: str,
         model_id: str,
+        *,
+        aspect_ratio: str | None = None,
+        image_size: str | None = None,
     ) -> dict[str, Any]:
         model_id = _canonical_media_model_id(model_id)
         from google import genai
         from google.genai import types
+
+        gen_config: dict[str, Any] = {"response_modalities": ["IMAGE"]}
+        img_cfg: dict[str, str] = {}
+        if aspect_ratio:
+            img_cfg["aspect_ratio"] = aspect_ratio
+        if image_size and image_size in ("512", "1K", "2K", "4K"):
+            img_cfg["image_size"] = image_size
+        if img_cfg:
+            gen_config["image_config"] = types.ImageConfig(**img_cfg)
 
         client = genai.Client(api_key=_secret_value(self.settings, "GOOGLE_API_KEY"))
         loop = asyncio.get_event_loop()
@@ -922,9 +945,7 @@ class MediaGenerationService:
             lambda: client.models.generate_content(
                 model=model_id,
                 contents=sanitized,
-                config=types.GenerateContentConfig(
-                    response_modalities=["IMAGE"],
-                ),
+                config=types.GenerateContentConfig(**gen_config),
             ),
         )
         if not response.candidates:

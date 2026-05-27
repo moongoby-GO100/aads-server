@@ -3076,3 +3076,69 @@ app/stati
 - Chat-Direct 수정: patch: app/static/gallery/media-*.jpg
 app/stati→app/static/gallery/media-*.jpg
 app/stati
+
+## [2026-05-27 12:23:46 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git push origin main
+
+## [2026-05-27 12:26:51 KST] [aads-server] app/api/image.py
+- Chat-Direct 수정: patch: class ImageRequest(BaseModel):
+    promp→class ImageRequest(BaseModel):
+    promp
+
+## [2026-05-27 12:27:04 KST] [aads-server] app/api/image.py
+- Chat-Direct 수정: patch:         result = await media_generation_→        result = await media_generation_
+
+## [2026-05-27 12:27:16 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:     async def generate_image(
+        se→    async def generate_image(
+        se
+
+## [2026-05-27 12:27:32 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:                 result = await self._gen→                result = await self._gen
+
+## [2026-05-27 12:27:48 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:     async def _generate_image_with_route→    async def _generate_image_with_route
+
+## [2026-05-27 12:28:04 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:     async def _generate_google_image(
+  →    async def _generate_google_image(
+  
+
+## [2026-05-27 12:28:21 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:     async def _generate_gemini_native_im→    async def _generate_gemini_native_im
+
+## [2026-05-27 12:30:20 KST] [aads-server] app/static/gallery/manifest.json
+- Chat-Direct 수정: run_remote_command: curl -s -X POST https://aads.newtalk.kr/api/v1/image/generate -H "Content-Type: 
+
+## [2026-05-27 13:03:24 KST] [aads-server] /root/.git-credentials
+- Chat-Direct 수정: write: /root/.git-credentials
+
+## [2026-05-27 13:09:21 KST] [aads-server] /root/.git-credentials
+- Chat-Direct 수정: write: /root/.git-credentials
+
+## [2026-05-27 13:33:32 KST] [aads-server] ../.ssh/config
+- Chat-Direct 수정: write: ../.ssh/config
+
+## [2026-05-27 14:04:24 KST] [aads-server] tmp/NT-PRODUCT-REGISTRATION-UI-PLAN-v2.0-20260506.html
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && find tmp -type f -delete
+
+## [2026-05-27 14:04:24 KST] [aads-server] tmp/NT-PRODUCT-REGISTRATION-UI-PLAN-v2.0-20260506.html
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "UPDATE chat_turn_executions S
+
+## [2026-05-27 14:04:32 KST] [aads-server] tmp/inject_ui_plan_sitemap_link.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "UPDATE chat_turn_executions S
+
+## [2026-05-27 14:04:33 KST] [aads-server] tmp/inject_ui_plan_sitemap_link.py
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && find tmp -type f -delete
+
+## [2026-05-27 14:04:39 KST] [aads-server] tmp/patch_apache_v2_plan_alias.py
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && find tmp -type f -delete
+
+## [2026-05-27 14:04:40 KST] [aads-server] tmp/patch_apache_v2_plan_alias.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "UPDATE chat_turn_executions S
+
+## [2026-05-27 14:04:46 KST] [aads-server] tmp/patch_v2_nginx_plan_static.py
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && find tmp -type f -delete
+
+## [2026-05-27 14:04:47 KST] [aads-server] tmp/patch_v2_nginx_plan_static.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "UPDATE chat_turn_executions S
