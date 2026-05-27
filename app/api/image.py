@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
@@ -10,6 +11,8 @@ from fastapi.responses import Response, RedirectResponse
 from pydantic import BaseModel, Field
 
 from app.services.media_generation_service import media_generation_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -67,7 +70,7 @@ class GalleryDeleteRequest(BaseModel):
 @router.post("/generate")
 async def generate_image(req: ImageRequest):
     """채팅창에서 이미지 생성"""
-    print(f"[DEBUG-REF] reference_images={req.reference_images}, model_id={req.model_id}")
+    logger.info("image_generate_request reference_images=%s model_id=%s aspect_ratio=%s image_size=%s", req.reference_images, req.model_id, req.aspect_ratio, req.image_size)
     if not req.prompt.strip():
         raise HTTPException(status_code=400, detail="프롬프트를 입력하세요")
     try:

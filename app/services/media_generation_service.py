@@ -945,7 +945,7 @@ class MediaGenerationService:
 
         contents: list = [sanitized]
         if reference_images:
-            print(f"[gemini-native] reference_images received: {reference_images}")
+            logger.info("gemini_native_ref_images_received count=%d urls=%s", len(reference_images), reference_images)
             for img_url in reference_images[:3]:
                 try:
                     async with httpx.AsyncClient(timeout=15.0) as http_client:
@@ -953,9 +953,9 @@ class MediaGenerationService:
                         img_resp.raise_for_status()
                     mime = img_resp.headers.get("content-type", "image/jpeg").split(";")[0]
                     contents.append(types.Part.from_bytes(data=img_resp.content, mime_type=mime))
-                    print(f"[gemini-native] ref image loaded: {img_url} ({len(img_resp.content)} bytes, {mime})")
+                    logger.info("gemini_native_ref_image_loaded url=%s bytes=%d mime=%s", img_url, len(img_resp.content), mime)
                 except Exception as e:
-                    print(f"[gemini-native] ref image FAILED: {img_url} — {e}")
+                    logger.error("gemini_native_ref_image_failed url=%s error=%s", img_url, e)
 
         client = genai.Client(api_key=_secret_value(self.settings, "GOOGLE_API_KEY"))
         loop = asyncio.get_event_loop()

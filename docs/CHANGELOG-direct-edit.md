@@ -3303,3 +3303,26 @@ async def gene
 
 ## [2026-05-27 15:35:17 KST] [aads-server] app/static/gallery/manifest.json
 - Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git push
+
+## [2026-05-27 16:52:54 KST] [aads-server] app/api/image.py
+- Chat-Direct 수정: patch: """AADS media generation API."""
+from __→"""AADS media generation API."""
+from __
+
+## [2026-05-27 16:53:03 KST] [aads-server] app/api/image.py
+- Chat-Direct 수정: patch:     print(f"[DEBUG-REF] reference_images→    logger.info("image_generate_request 
+
+## [2026-05-27 16:53:42 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:             print(f"[gemini-native] refe→            logger.info("gemini_native_r
+
+## [2026-05-27 16:53:43 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:                     print(f"[gemini-nati→                    logger.info("gemini_
+
+## [2026-05-27 16:53:44 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:                     print(f"[gemini-nati→                    logger.error("gemini
+
+## [2026-05-27 17:02:11 KST] [aads-server] app/static/gallery/media-d242e75a0109425f.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server-green grep "image_generate_request\|gemini_native_ref" /
+
+## [2026-05-27 17:15:00 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:         # P1-FIX: just_completed=True 반환→        # P1-FIX→P0-FIX: just_completed 

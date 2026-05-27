@@ -14698,3 +14698,153 @@ scripts/fix-colors-*.py
 ## [2026-05-27 15:35:48 KST] [GO100] backend/app/services/go100/backtest/data_quality.py
 - Chat-Direct 수정: run_remote_command: grep -n "def.*strategy\|@router" /root/kis-autotrade-v4/backend/app/routers/go10
 - finalize: pending
+
+## [2026-05-27 16:45:04 KST] [GO100] backend/app/services/go100/backtest/minute_simulator.py
+- Chat-Direct 수정: patch:                 for _, bar in minute_bar→                rule_types = {
+         
+- finalize: pending
+
+## [2026-05-27 16:45:09 KST] [GO100] backend/app/services/go100/backtest/minute_simulator.py
+- Chat-Direct 수정: run_remote_command: curl -s -w "\n%{http_code}" -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cC
+- finalize: pending
+
+## [2026-05-27 16:45:27 KST] [GO100] backend/app/services/go100/backtest/minute_simulator.py
+- Chat-Direct 수정: patch:                         if not daily_ent→                        if not daily_ent
+- finalize: pending
+
+## [2026-05-27 16:46:04 KST] [GO100] backend/app/services/go100/backtest/minute_simulator.py
+- Chat-Direct 수정: patch:     def _evaluate_minute_exit(
+        s→    def _evaluate_limit_up_chase_intrada
+- finalize: pending
+
+## [2026-05-27 16:46:42 KST] [GO100] backend/scripts/go100_update_card119_backtest_universe.py
+- Chat-Direct 수정: write: backend/scripts/go100_update_card119_backtest_universe.py
+- finalize: pending
+
+## [2026-05-27 16:47:38 KST] [GO100] backend/scripts/go100_update_card119_backtest_universe.py
+- Chat-Direct 수정: patch: import asyncio
+import json
+from datetime→import asyncio
+import json
+import sys
+fr
+- finalize: pending
+
+## [2026-05-27 16:47:40 KST] [GO100] backend/scripts/go100_update_card119_backtest_universe.py
+- Chat-Direct 수정: run_remote_command: curl -s http://localhost:8002/health
+- finalize: pending
+
+## [2026-05-27 16:48:22 KST] [GO100] backend/scripts/go100_run_card119_backtest.py
+- Chat-Direct 수정: patch: async def _run(card_id: int, user_id: in→async def _run(
+    card_id: int,
+    us
+- finalize: pending
+
+## [2026-05-27 16:48:42 KST] [GO100] backend/scripts/go100_run_card119_backtest.py
+- Chat-Direct 수정: patch:     parser.add_argument("--days", type=i→    parser.add_argument("--days", type=i
+- finalize: pending
+
+## [2026-05-27 16:49:01 KST] [GO100] backend/scripts/go100_run_card119_backtest.py
+- Chat-Direct 수정: patch: import argparse
+import asyncio
+from date→import argparse
+import asyncio
+import sy
+- finalize: pending
+
+## [2026-05-27 17:11:19 KST] [GO100] frontend/src/go100/hooks/useChat.ts
+- Chat-Direct 수정: patch:         return pendingLocalMessages.leng→        const latestPersisted = msgs[msg
+- finalize: pending
+
+## [2026-05-27 17:11:38 KST] [GO100] frontend/src/go100/hooks/useChat.ts
+- Chat-Direct 수정: patch:                 return {
+               →                return {
+               
+- finalize: pending
+
+## [2026-05-27 17:11:59 KST] [GO100] frontend/src/go100/hooks/useChat.ts
+- Chat-Direct 수정: patch:                   ? {
+                  →                  ? {
+                  
+- finalize: pending
+
+## [2026-05-27 17:13:24 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: ## 2026-05-27 16:55 KST - GO100 #119 공용 →## 2026-05-27 17:13 KST - GO100 채팅 준비중 고
+- finalize: pending
+
+## [2026-05-27 17:23:16 KST] [GO100] backend/app/services/go100/execution_profile.py
+- Chat-Direct 수정: patch: def evaluate_go100_exit(
+    *,
+    curr→def evaluate_go100_exit(
+    *,
+    curr
+- finalize: pending
+
+## [2026-05-27 17:23:37 KST] [GO100] backend/app/services/go100/execution_profile.py
+- Chat-Direct 수정: patch:     ret_pct = (float(current_close) / fl→    ret_pct = (float(current_close) / fl
+- finalize: pending
+
+## [2026-05-27 17:24:04 KST] [GO100] backend/app/services/go100/execution_profile.py
+- Chat-Direct 수정: patch:         elif t == "time_stop":
+         →        elif t == "limit_up_failure_exit
+- finalize: pending
+
+## [2026-05-27 17:24:21 KST] [GO100] backend/app/services/go100/backtest/minute_simulator.py
+- Chat-Direct 수정: patch:                             pos.get("ent→                            pos.get("ent
+- finalize: pending
+
+## [2026-05-27 17:24:22 KST] [GO100] backend/app/services/go100/backtest/minute_simulator.py
+- Chat-Direct 수정: run_remote_command: sed -n '655,680p' frontend/src/go100/api/go100Api.ts
+- finalize: pending
+
+## [2026-05-27 17:24:38 KST] [GO100] backend/app/services/go100/backtest/minute_simulator.py
+- Chat-Direct 수정: patch:                             "entry_time"→                            "entry_time"
+- finalize: pending
+
+## [2026-05-27 17:24:54 KST] [GO100] backend/app/services/go100/backtest/minute_simulator.py
+- Chat-Direct 수정: patch:         peak_price: float,
+        curre→        peak_price: float,
+        curre
+- finalize: pending
+
+## [2026-05-27 17:25:14 KST] [GO100] backend/app/services/go100/backtest/minute_simulator.py
+- Chat-Direct 수정: patch:             peak_price=peak_price,
+     →            peak_price=peak_price,
+     
+- finalize: pending
+
+## [2026-05-27 17:25:32 KST] [GO100] backend/app/services/go100/backtest/ohlcv_cache.py
+- Chat-Direct 수정: patch: from typing import Optional→from typing import Any, Optional
+- finalize: pending
+
+## [2026-05-27 17:25:53 KST] [GO100] backend/app/services/go100/backtest/ohlcv_cache.py
+- Chat-Direct 수정: patch:         for col in ["open", "high", "low→        for col in ["open", "high", "low
+- finalize: pending
+
+## [2026-05-27 17:26:34 KST] [GO100] backend/app/services/go100/backtest/ohlcv_cache.py
+- Chat-Direct 수정: patch:     def get_ohlcv(
+        self,
+       →    async def _attach_shared_context(
+  
+- finalize: pending
+
+## [2026-05-27 17:26:56 KST] [GO100] backend/app/services/go100/backtest/signal_evaluator.py
+- Chat-Direct 수정: patch:             elif rule_type in {"theme_le→            elif rule_type == "theme_lea
+- finalize: pending
+
+## [2026-05-27 17:27:18 KST] [GO100] backend/app/services/go100/backtest/signal_evaluator.py
+- Chat-Direct 수정: patch:         if t in {"theme_leader_repeatabi→        if t == "theme_leader_repeatabil
+- finalize: pending
+
+## [2026-05-27 17:27:47 KST] [GO100] backend/app/services/go100/backtest/data_quality.py
+- Chat-Direct 수정: patch:     try:
+        snapshot = await db.exe→    try:
+        snapshot = await db.exe
+- finalize: pending
+
+## [2026-05-27 17:28:03 KST] [GO100] backend/app/services/go100/execution_profile.py
+- Chat-Direct 수정: patch:         "intraday_high_trail",
+    }
+)→        "intraday_high_trail",
+        "
+- finalize: pending

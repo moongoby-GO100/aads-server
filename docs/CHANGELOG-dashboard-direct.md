@@ -703,3 +703,9 @@ path = '/root/aads/aads-dashboard/src/app/chat/page.tsx'
 
 ## [2026-05-27 15:04:13 KST] [aads-dashboard] src/app/chat/page.tsx
 - Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && sed -i '5892a\        if (m.intent === "recovere
+
+## [2026-05-27 17:16:19 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:               // P0-FIX: setMessages 후 스→              // P0-FIX: setMessages 후 스
+
+## [2026-05-27 17:16:37 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i 's|mergeCooldownUntilRef.current = Date.now() + 8000;|mergeCooldownUntilR

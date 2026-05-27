@@ -3503,9 +3503,13 @@ def get_streaming_status(session_id: str) -> Optional[Dict[str, Any]]:
             "execution_id": s.get("execution_id"),
             "last_event_id": s.get("last_event_id"),
         }
-        # P1-FIX: just_completed=True 반환 후 즉시 state 제거 (one-shot)
+        # P1-FIX→P0-FIX: just_completed 반환 후 60초 유예 (one-shot 삭제 시 프론트 미수신 문제 해결)
         if is_completed:
-            _streaming_state.pop(session_id, None)
+            _completed_at = s.get("_completed_delivered_at")
+            if not _completed_at:
+                s["_completed_delivered_at"] = _bg_time.monotonic()
+            elif (_bg_time.monotonic() - _completed_at) > 60:
+                _streaming_state.pop(session_id, None)
         return result
 
     if session_id in _active_bg_tasks:
