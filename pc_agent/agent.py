@@ -59,6 +59,7 @@ SERVER_URL = os.getenv("AADS_SERVER_URL", "wss://aads.newtalk.kr/api/v1/pc-agent
 AGENT_SECRET = os.getenv("AADS_AGENT_TOKEN", os.getenv("PC_AGENT_SECRET", ""))
 HEARTBEAT_INTERVAL = 25  # 초
 RECONNECT_DELAY = 5  # 초
+MAX_RECONNECT_DELAY = 60  # 초 — 지수 백오프 상한
 AUTO_UPDATE_INTERVAL = 300  # 초 — 5분마다 서버 버전 확인 (HTTP 기반)
 
 # ── 단일 인스턴스 (Windows 뮤텍스) ────────────────────────────────────────
@@ -178,23 +179,30 @@ class PCAgent:
         self.hostname = platform.node()
         self.os_info = f"{platform.system()} {platform.release()} {platform.version()}"
         self._running = True
+        self.is_connected = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ws: Any | None = None
 
     async def run(self) -> None:
-        """메인 루프 — 서버 연결 + 재연결."""
+        """메인 루프 — 서버 연결 + 재연결 (지수 백오프)."""
         logger.info("PC Agent 시작 agent_id=%s hostname=%s", self.agent_id, self.hostname)
         self._loop = asyncio.get_running_loop()
+        delay = RECONNECT_DELAY
 
         while self._running:
             try:
                 await self._connect()
+                delay = RECONNECT_DELAY
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error("연결 오류: %s — %d초 후 재연결", e, RECONNECT_DELAY)
+                logger.error("연결 오류: %s — %d초 후 재연결", e, delay)
+            finally:
+                self.is_connected = False
             if self._running:
-                await asyncio.sleep(RECONNECT_DELAY)
+                logger.info("재연결 대기 %d초...", delay)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, MAX_RECONNECT_DELAY)
 
     async def _connect(self) -> None:
         """WebSocket 서버 연결."""
@@ -245,6 +253,9 @@ class PCAgent:
                 except Exception as e:
                     logger.warning("네트워크 정보 전송 실패 (무시): %s", e)
 
+                self.is_connected = True
+                logger.info("서버 등록 완료 — WebSocket 연결 활성")
+
                 # 하트비트 + 자동 업데이트 태스크 시작
                 heartbeat_task = asyncio.create_task(self._heartbeat(ws))
                 update_task = asyncio.create_task(self._auto_update_loop(ws))
@@ -269,6 +280,8 @@ class PCAgent:
                     heartbeat_task.cancel()
                     update_task.cancel()
                     self._ws = None
+                    self.is_connected = False
+                    logger.info("WebSocket 연결 해제")
 
         except websockets.ConnectionClosedError as e:
             if e.code == 4010:

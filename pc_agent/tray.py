@@ -2,7 +2,7 @@
 
 pystray 기반. launcher.py에서 별도 스레드로 실행됨.
 메뉴: 상태 보기 / 카카오 자동응답 ON·OFF / 로그 보기 / 설정 / 종료.
-상태: 연결됨(초록) / 연결 끊김(빨강) / 업데이트 중(노랑).
+상태: 연결됨(초록) / 재연결 중(노랑) / 연결 끊김(빨강).
 """
 from __future__ import annotations
 
@@ -20,8 +20,14 @@ logger = logging.getLogger("tray")
 # ---------------------------------------------------------------------------
 _COLORS = {
     "connected": (0, 200, 80),      # 초록
+    "reconnecting": (240, 200, 0),   # 노랑
     "disconnected": (220, 50, 50),   # 빨강
-    "updating": (240, 200, 0),       # 노랑
+}
+
+_STATUS_LABELS = {
+    "connected": "연결됨 — 정상 동작 중",
+    "reconnecting": "재연결 중 — 서버 연결 시도 중",
+    "disconnected": "연결 끊김 — 프로세스 종료됨",
 }
 
 INSTALL_DIR = Path(os.environ.get(
@@ -37,7 +43,6 @@ def _make_icon(color: tuple[int, int, int] = (0, 200, 80)):
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     draw.ellipse([4, 4, 60, 60], fill=(*color, 255))
-    # K 글자
     draw.text((22, 16), "K", fill=(255, 255, 255, 255))
     return img
 
@@ -46,13 +51,7 @@ def _make_icon(color: tuple[int, int, int] = (0, 200, 80)):
 # 트레이 생성
 # ---------------------------------------------------------------------------
 def create_tray(cfg: dict, agent_proc, on_quit: Callable) -> None:
-    """시스템 트레이 아이콘 생성 및 실행.
-
-    Args:
-        cfg: config.json 내용
-        agent_proc: 에이전트 subprocess.Popen
-        on_quit: 종료 시 콜백
-    """
+    """시스템 트레이 아이콘 생성 및 실행."""
     try:
         import pystray
         from pystray import MenuItem as Item
@@ -63,22 +62,18 @@ def create_tray(cfg: dict, agent_proc, on_quit: Callable) -> None:
     auto_reply_enabled = True
 
     def get_status() -> str:
-        """에이전트 프로세스 상태 확인."""
-        if agent_proc and agent_proc.poll() is None:
+        """실제 WebSocket 연결 상태 확인."""
+        if hasattr(agent_proc, 'is_connected') and agent_proc.is_connected:
             return "connected"
+        if agent_proc and agent_proc.poll() is None:
+            return "reconnecting"
         return "disconnected"
 
     def on_status(icon, item):
         """상태 보기."""
         status = get_status()
-        labels = {
-            "connected": "연결됨 — 정상 동작 중",
-            "disconnected": "연결 끊김 — 재시작 대기",
-            "updating": "업데이트 중...",
-        }
-        # 트레이 알림
         try:
-            icon.notify(labels.get(status, status), "KakaoBot 상태")
+            icon.notify(_STATUS_LABELS.get(status, status), "KakaoBot 상태")
         except Exception:
             pass
 
@@ -136,5 +131,4 @@ def create_tray(cfg: dict, agent_proc, on_quit: Callable) -> None:
         menu=menu,
     )
 
-    # 상태에 따라 아이콘 색상 업데이트 (별도 스레드는 launcher에서 관리)
     icon.run()

@@ -221,6 +221,10 @@ def run_agent(cfg: dict):
                 self._t = t
                 self._agent = agent_obj
 
+            @property
+            def is_connected(self) -> bool:
+                return bool(self._agent and getattr(self._agent, 'is_connected', False))
+
             def poll(self) -> int | None:
                 if self._t.is_alive():
                     return None

@@ -397,6 +397,18 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
 
 # ── REST API ──────────────────────────────────────────────────────────
 
+@router.get("/pc-agent/status")
+async def pc_agent_status():
+    """PC Agent 연결 상태 요약 조회."""
+    await _flush_pending_reload_disconnects()
+    agents = pc_agent_manager.list_agents()
+    return {
+        "status": "online" if agents else "offline",
+        "online_count": len(agents),
+        "agents": [a.model_dump(mode="json") for a in agents],
+    }
+
+
 @router.get("/pc-agent/agents")
 async def list_agents():
     """연결된 에이전트 목록 조회."""
