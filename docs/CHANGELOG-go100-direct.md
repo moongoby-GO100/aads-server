@@ -14310,3 +14310,43 @@ import loggin
 ## [2026-05-27 14:42:03 KST] [GO100] backend/app/services/go100/ai/realtime_guardrails.py
 - Chat-Direct 수정: patch:     if any(term in compact for term in (→    if not _is_market_data_research_quer
 - finalize: pending
+
+## [2026-05-27 14:42:20 KST] [GO100] frontend/src/go100/components/AutoTradeModal.tsx
+- Chat-Direct 수정: patch:     <div className="fixed inset-0 z-50 f→    <div className="fixed inset-0 z-50 f
+- finalize: pending
+
+## [2026-05-27 14:42:59 KST] [GO100] frontend/src/go100/components/AutoTradeModal.tsx
+- Chat-Direct 수정: patch:         <div className="mt-4 rounded-xl →        <div className="flex-1 overflow-
+- finalize: pending
+
+## [2026-05-27 14:43:18 KST] [GO100] frontend/src/go100/components/AutoTradeModal.tsx
+- Chat-Direct 수정: patch:         {error && (
+          <div class→        {error && (
+          <div class
+- finalize: pending
+
+## [2026-05-27 14:43:23 KST] [GO100] backend/app/services/go100/ai/data_coverage.py
+- Chat-Direct 수정: patch:     start_date, end_date = _extract_date→    start_date, end_date = _extract_date
+- finalize: pending
+
+## [2026-05-27 14:43:43 KST] [GO100] backend/app/services/go100/ai/data_coverage.py
+- Chat-Direct 수정: patch:         require_full_universe=bool(has_l→        require_full_universe=bool(has_l
+- finalize: pending
+
+## [2026-05-27 14:44:06 KST] [GO100] docs/technical/GO100_BAEKUK_CHAT_QUALITY_RUNTIME_CONTRACT.md
+- Chat-Direct 수정: patch: > Version: v1.1
+> Updated: 2026-05-27 14→> Version: v1.2
+> Updated: 2026-05-27 14
+- finalize: pending
+
+## [2026-05-27 14:44:26 KST] [GO100] docs/technical/GO100_BAEKUK_CHAT_QUALITY_RUNTIME_CONTRACT.md
+- Chat-Direct 수정: patch: | Bare day parsing | `26일자 ... 27일` styl→| Bare day parsing | `26일자 ... 27일` styl
+- finalize: pending
+
+## [2026-05-27 14:44:54 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: ## 2026-05-27 14:21 KST - GO100 백억이 상한가/→## 2026-05-27 14:38 KST - GO100 백억이 시장데이
+- finalize: pending
+
+## [2026-05-27 14:47:06 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
+- Chat-Direct 수정: patch:         _compact_message = re.sub(r"\s+"→        _compact_text = re.sub(r"\s+", "
+- finalize: pending
