@@ -3061,3 +3061,13 @@ _STATU
 - Chat-Direct 수정: patch: @router.get("/pc-agent/status")
 async de→@router.get("/pc-agent/status")
 async de
+
+## [2026-05-27 11:58:54 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch: @router.get("/pc-agent/status")
+async de→@router.get("/pc-agent/status")
+async de
+
+## [2026-05-27 12:15:09 KST] [aads-server] .gitignore
+- Chat-Direct 수정: patch: app/static/gallery/media-*.jpg
+app/stati→app/static/gallery/media-*.jpg
+app/stati

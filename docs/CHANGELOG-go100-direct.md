@@ -13640,3 +13640,117 @@ MARKET_CL
 ## [2026-05-27 11:57:58 KST] [GO100] frontend/public/go100_company_design_v3.html
 - Chat-Direct 수정: run_remote_command: cp reports/go100_company_design_v3_mockup.html frontend/public/go100_company_des
 - finalize: pending
+
+## [2026-05-27 12:00:50 KST] [GO100] backend/app/services/strategy/strategies/s_desk2_limit_up_chase.py
+- Chat-Direct 수정: patch: TRACK_WINDOW_START = "09:00"
+DISCOVERY_C→TRACK_WINDOW_START = "08:50"
+DISCOVERY_C
+- finalize: pending
+
+## [2026-05-27 12:01:34 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:     async def _handle_ready(self) -> Non→    async def _overlay_intraday_daily_ba
+- finalize: pending
+
+## [2026-05-27 12:01:57 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:                 try:
+                   →                try:
+                   
+- finalize: pending
+
+## [2026-05-27 12:02:22 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:                         for ohlcv_row in→                        for ohlcv_row in
+- finalize: pending
+
+## [2026-05-27 12:02:44 KST] [GO100] backend/app/services/data_pipeline/minute_to_daily.py
+- Chat-Direct 수정: patch: 분봉 → 일봉 집계: ohlcv_1m를 (stock_code, ts::d→분봉 → 일봉 집계: GO100 분봉(v4_ohlcv_minute)을 (
+- finalize: pending
+
+## [2026-05-27 12:03:00 KST] [GO100] backend/app/services/data_pipeline/minute_to_daily.py
+- Chat-Direct 수정: patch: logger = logging.getLogger("v4.minute_to→logger = logging.getLogger("go100.minute
+- finalize: pending
+
+## [2026-05-27 12:03:17 KST] [GO100] backend/app/services/data_pipeline/minute_to_daily.py
+- Chat-Direct 수정: patch:                 SELECT DISTINCT to_char(→                SELECT DISTINCT to_char(
+- finalize: pending
+
+## [2026-05-27 12:03:40 KST] [GO100] backend/app/services/data_pipeline/minute_to_daily.py
+- Chat-Direct 수정: patch:             # 조건: target_dates면 to_char(→            # 조건: target_dates면 to_char(
+- finalize: pending
+
+## [2026-05-27 12:04:10 KST] [GO100] backend/app/services/data_pipeline/minute_to_daily.py
+- Chat-Direct 수정: patch:                     SELECT COUNT(DISTINC→                    SELECT COUNT(DISTINC
+- finalize: pending
+
+## [2026-05-27 12:04:29 KST] [GO100] backend/app/services/data_pipeline/minute_to_daily.py
+- Chat-Direct 수정: patch:                 SELECT
+                 →                SELECT
+                 
+- finalize: pending
+
+## [2026-05-27 12:04:46 KST] [GO100] backend/app/services/data_pipeline/minute_to_daily.py
+- Chat-Direct 수정: patch:                 GROUP BY stock_code, ts:→                GROUP BY stock_code, tra
+- finalize: pending
+
+## [2026-05-27 12:05:03 KST] [GO100] backend/app/services/data_pipeline/minute_to_daily.py
+- Chat-Direct 수정: patch:                 SELECT COUNT(DISTINCT (s→                SELECT COUNT(DISTINCT (s
+- finalize: pending
+
+## [2026-05-27 12:05:20 KST] [GO100] backend/app/services/data_pipeline/minute_to_daily.py
+- Chat-Direct 수정: patch:                 SELECT COUNT(DISTINCT st→                SELECT COUNT(DISTINCT st
+- finalize: pending
+
+## [2026-05-27 12:05:37 KST] [GO100] backend/app/services/data_pipeline/minute_to_daily.py
+- Chat-Direct 수정: patch:                         "SELECT DISTINCT→                        "SELECT DISTINCT
+- finalize: pending
+
+## [2026-05-27 12:06:27 KST] [GO100] backend/scripts/go100_upsert_intraday_daily_from_realtime.py
+- Chat-Direct 수정: write: backend/scripts/go100_upsert_intraday_daily_from_realtime.py
+- finalize: pending
+
+## [2026-05-27 12:07:21 KST] [GO100] backend/app/services/data_pipeline/minute_to_daily.py
+- Chat-Direct 수정: patch:                 date_filter = " AND trad→                date_filter = " AND trad
+- finalize: pending
+
+## [2026-05-27 12:08:21 KST] [GO100] backend/app/services/data_pipeline/minute_to_daily.py
+- Chat-Direct 수정: patch:     ohlcv_1m에 데이터가 있는 거래일 목록 반환 (YYYYMMD→    GO100 분봉에 데이터가 있는 거래일 목록 반환 (YYYYMMD
+- finalize: pending
+
+## [2026-05-27 12:08:39 KST] [GO100] backend/app/services/data_pipeline/minute_to_daily.py
+- Chat-Direct 수정: patch:     ohlcv_1m → ohlcv_daily 집계.→    GO100 분봉 → ohlcv_daily 집계.
+- finalize: pending
+
+## [2026-05-27 12:09:18 KST] [GO100] reports/go100_company_design_v3_mockup.html
+- Chat-Direct 수정: patch: <div class="grid grid-cols-2 md:grid-col→<div class="grid grid-cols-2 md:grid-col
+- finalize: pending
+
+## [2026-05-27 12:09:20 KST] [GO100] backend/scripts/go100_check_card119_signals.py
+- Chat-Direct 수정: write: backend/scripts/go100_check_card119_signals.py
+- finalize: pending
+
+## [2026-05-27 12:09:42 KST] [GO100] reports/go100_company_design_v3_mockup.html
+- Chat-Direct 수정: patch: <span>기준일 2026-05-27 · 한국거래소</span>→<span>기준일 2026-05-27 15:30</span><span>출
+- finalize: pending
+
+## [2026-05-27 12:10:46 KST] [GO100] backend/app/services/strategy/strategies/s_desk2_limit_up_chase.py
+- Chat-Direct 수정: patch:         intraday_change_pct = (current_p→        realtime_change_pct = (desk_cand
+- finalize: pending
+
+## [2026-05-27 12:11:09 KST] [GO100] backend/app/services/strategy/strategies/s_desk2_limit_up_chase.py
+- Chat-Direct 수정: patch:             price_info = prices.get(tick→            price_info = prices.get(tick
+- finalize: pending
+
+## [2026-05-27 12:11:27 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:                            stock_code, o→                           stock_code, o
+- finalize: pending
+
+## [2026-05-27 12:11:46 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:                     "trade_amount": floa→                    "trade_amount": floa
+- finalize: pending
+
+## [2026-05-27 12:12:11 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:                                 "SELECT →                                "SELECT 
+- finalize: pending
+
+## [2026-05-27 12:14:31 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:                                 "ORDER B→                                "ORDER B
+- finalize: pending
