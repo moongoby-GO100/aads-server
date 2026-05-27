@@ -14350,3 +14350,67 @@ import loggin
 ## [2026-05-27 14:47:06 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
 - Chat-Direct 수정: patch:         _compact_message = re.sub(r"\s+"→        _compact_text = re.sub(r"\s+", "
 - finalize: pending
+
+## [2026-05-27 14:52:20 KST] [GO100] frontend/.next.green.tmp/BUILD_ID
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:21 KST] [GO100] frontend/.next.green.tmp/app-build-manifest.json
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:22 KST] [GO100] frontend/.next.green.tmp/app-path-routes-manifest.json
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:24 KST] [GO100] frontend/.next.green.tmp/build-manifest.json
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:25 KST] [GO100] frontend/.next.green.tmp/cache/eslint/.cache_1305j4j
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:26 KST] [GO100] frontend/.next.green.tmp/cache/webpack/client-production/0.pack
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:27 KST] [GO100] frontend/.next.green.tmp/cache/webpack/client-production/1.pack
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:29 KST] [GO100] frontend/.next.green.tmp/cache/webpack/client-production/2.pack
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:30 KST] [GO100] frontend/.next.green.tmp/cache/webpack/client-production/3.pack
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:31 KST] [GO100] frontend/.next.green.tmp/cache/webpack/client-production/4.pack
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:33 KST] [GO100] frontend/.next.green.tmp/cache/webpack/client-production/5.pack
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:34 KST] [GO100] frontend/.next.green.tmp/cache/webpack/client-production/6.pack
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:35 KST] [GO100] frontend/.next.green.tmp/cache/webpack/client-production/7.pack
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:37 KST] [GO100] frontend/.next.green.tmp/cache/webpack/client-production/index.pack
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:38 KST] [GO100] frontend/.next.green.tmp/cache/webpack/client-production/index.pack.old
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:39 KST] [GO100] frontend/.next.green.tmp/cache/webpack/edge-server-production/0.pack
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending

@@ -3166,3 +3166,43 @@ app/stati→app/static/gallery/media-*.jpg
 
 ## [2026-05-27 14:40:18 KST] [aads-server] docs/CHANGELOG-go100-direct.md
 - Chat-Direct 수정: run_remote_command: docker exec aads-dashboard-green find /app -name "page*.js" -path "*/chat/*" | h
+
+## [2026-05-27 14:51:01 KST] [aads-server] app/api/image.py
+- Chat-Direct 수정: patch: class ImageRequest(BaseModel):
+    promp→class ImageRequest(BaseModel):
+    promp
+
+## [2026-05-27 14:51:08 KST] [aads-server] app/api/image.py
+- Chat-Direct 수정: run_remote_command: curl -s http://localhost:8001/api/v1/pc-agent/connections 2>/dev/null | python3 
+
+## [2026-05-27 14:51:08 KST] [aads-server] app/api/image.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-dashboard find /app -name "page*.js" -path "*/chat/*" | head -3
+
+## [2026-05-27 14:51:15 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-dashboard find /app -name "page*.js" -path "*/chat/*" | head -3
+
+## [2026-05-27 14:51:16 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: curl -s http://localhost:8001/api/v1/pc-agent/connections 2>/dev/null | python3 
+
+## [2026-05-27 14:51:18 KST] [aads-server] app/api/image.py
+- Chat-Direct 수정: patch:         result = await media_generation_→        result = await media_generation_
+
+## [2026-05-27 14:51:33 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:     async def generate_image(
+        se→    async def generate_image(
+        se
+
+## [2026-05-27 14:51:42 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: run_remote_command: curl -s http://localhost:8001/api/v1/pc-agent/agents 2>/dev/null | python3 -m js
+
+## [2026-05-27 14:51:45 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:             if route.source in {"explici→            if route.source in {"explici
+
+## [2026-05-27 14:52:03 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:     async def _generate_image_with_route→    async def _generate_image_with_route
+
+## [2026-05-27 14:52:25 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:     async def _generate_gemini_native_im→    async def _generate_gemini_native_im
+
+## [2026-05-27 14:52:27 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "SELECT agent_id, status, last
