@@ -14220,3 +14220,7 @@ import loggin
 ## [2026-05-27 14:06:57 KST] [GO100] frontend/src/go100/components/command-center/StrategyTab.tsx
 - Chat-Direct 수정: patch:               <a href={s.detailHref} sty→              <a href={s.detailHref} sty
 - finalize: pending
+
+## [2026-05-27 14:11:26 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: ## 2026-05-27 14:06 KST - GO100 전략카드 ID →## 2026-05-27 14:10 KST - GO100 사이트 접속 장
+- finalize: pending
