@@ -14662,3 +14662,39 @@ scripts/fix-colors-*.py
 ## [2026-05-27 15:20:43 KST] [GO100] docs/HANDOVER.md
 - Chat-Direct 수정: run_remote_command: curl -s http://127.0.0.1:8299/health
 - finalize: pending
+
+## [2026-05-27 15:34:24 KST] [GO100] backend/app/services/go100/decision_logger.py
+- Chat-Direct 수정: write: backend/app/services/go100/decision_logger.py
+- finalize: pending
+
+## [2026-05-27 15:34:54 KST] [GO100] docs/go100/zero-downtime-frontend-deploy.md
+- Chat-Direct 수정: write: docs/go100/zero-downtime-frontend-deploy.md
+- finalize: pending
+
+## [2026-05-27 15:35:00 KST] [GO100] backend/app/services/go100/backtest/decision_audit.py
+- Chat-Direct 수정: write: backend/app/services/go100/backtest/decision_audit.py
+- finalize: pending
+
+## [2026-05-27 15:35:01 KST] [GO100] backend/app/services/go100/backtest/decision_audit.py
+- Chat-Direct 수정: run_remote_command: sed -n '795,810p' /root/kis-autotrade-v4/frontend/src/go100/pages/ScreenerPage.t
+- finalize: pending
+
+## [2026-05-27 15:35:01 KST] [GO100] backend/app/services/go100/backtest/decision_audit.py
+- Chat-Direct 수정: run_remote_command: find /root/kis-autotrade-v4/frontend/src/go100 -type f -name "*.tsx" -o -name "*
+- finalize: pending
+
+## [2026-05-27 15:35:20 KST] [GO100] docs/HANDOVER.md
+- Chat-Direct 수정: patch: # GO100 인수인계서 v15.0 — 프론트 blue/green 접속 →# GO100 인수인계서 v15.1 — 프론트 blue/green 배포 
+- finalize: pending
+
+## [2026-05-27 15:35:23 KST] [GO100] docs/HANDOVER.md
+- Chat-Direct 수정: run_remote_command: find /root/kis-autotrade-v4/backend -name "*screener*" -type f | head -20
+- finalize: pending
+
+## [2026-05-27 15:35:47 KST] [GO100] backend/app/services/go100/backtest/data_quality.py
+- Chat-Direct 수정: write: backend/app/services/go100/backtest/data_quality.py
+- finalize: pending
+
+## [2026-05-27 15:35:48 KST] [GO100] backend/app/services/go100/backtest/data_quality.py
+- Chat-Direct 수정: run_remote_command: grep -n "def.*strategy\|@router" /root/kis-autotrade-v4/backend/app/routers/go10
+- finalize: pending

@@ -3291,3 +3291,15 @@ async def gene
 
 ## [2026-05-27 15:32:12 KST] [aads-server] nginx-aads-upstream.conf.dashboard.bak
 - Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && nohup bash deploy.sh bluegreen > /tmp/dashboard-
+
+## [2026-05-27 15:34:29 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git add -A
+
+## [2026-05-27 15:34:31 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server grep "DEBUG-REF\|gemini-native" /var/log/aads-api.log
+
+## [2026-05-27 15:35:14 KST] [aads-server] app/static/gallery/manifest.json
+- Chat-Direct 수정: run_remote_command: docker exec aads-server git -C /root/aads/aads-server log --oneline -5
+
+## [2026-05-27 15:35:17 KST] [aads-server] app/static/gallery/manifest.json
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git push
