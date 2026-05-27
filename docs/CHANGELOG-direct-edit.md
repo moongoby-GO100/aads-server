@@ -3056,3 +3056,8 @@ _STATU
 
 ## [2026-05-27 11:04:29 KST] [aads-server] app/services/chat_service.py
 - Chat-Direct 수정: patch:             # F8: 클라이언트에 stream_reset 전송→            # F8: validator 거부 시 거부된 응답은
+
+## [2026-05-27 11:46:54 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch: @router.get("/pc-agent/status")
+async de→@router.get("/pc-agent/status")
+async de

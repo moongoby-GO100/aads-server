@@ -13586,3 +13586,57 @@ CLI_RELAY_RET
 ## [2026-05-27 11:46:13 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
 - Chat-Direct 수정: patch: from datetime import date, datetime, tim→from datetime import date, datetime, tim
 - finalize: pending
+
+## [2026-05-27 11:46:31 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch: MARKET_OPEN = dt_time(9, 0, 0)
+MARKET_CL→MARKET_OPEN = dt_time(9, 0, 0)
+MARKET_CL
+- finalize: pending
+
+## [2026-05-27 11:46:49 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:                     gp.take_profit_price→                    gp.take_profit_price
+- finalize: pending
+
+## [2026-05-27 11:47:03 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: run_remote_command: grep -R -n NEXT_PUBLIC_GO100_CHAT_STREAM frontend
+- finalize: pending
+
+## [2026-05-27 11:47:06 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:             (position_id, stock_code, qu→            (position_id, stock_code, qu
+- finalize: pending
+
+## [2026-05-27 11:47:21 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:                 "portfolio_id": portfoli→                "portfolio_id": portfoli
+- finalize: pending
+
+## [2026-05-27 11:47:43 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:     # ── 적응형 매도 조건 평가 ──────────────────→    # ── #119 상한가 실패 청산 평가 ─────────────
+- finalize: pending
+
+## [2026-05-27 11:48:07 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:                 elif pnl_pct <= -pos["sl→                elif pnl_pct <= -pos["sl
+- finalize: pending
+
+## [2026-05-27 11:49:26 KST] [GO100] backend/scripts/go100_update_card119_limit_up_close_rules.py
+- Chat-Direct 수정: write: backend/scripts/go100_update_card119_limit_up_close_rules.py
+- finalize: pending
+
+## [2026-05-27 11:53:22 KST] [GO100] backend/app/services/strategy/strategies/s_desk2_limit_up_chase.py
+- Chat-Direct 수정: patch:         sorted_bars = sorted(bars, key=l→        sorted_bars = sorted(bars, key=l
+- finalize: pending
+
+## [2026-05-27 11:53:40 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:                         WHERE od.stock_c→                        WHERE od.stock_c
+- finalize: pending
+
+## [2026-05-27 11:54:52 KST] [GO100] reports/go100_company_design_v3_mockup.html
+- Chat-Direct 수정: write: reports/go100_company_design_v3_mockup.html
+- finalize: pending
+
+## [2026-05-27 11:55:02 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:                     market_data["desk2_c→                    market_data["desk2_c
+- finalize: pending
+
+## [2026-05-27 11:57:58 KST] [GO100] frontend/public/go100_company_design_v3.html
+- Chat-Direct 수정: run_remote_command: cp reports/go100_company_design_v3_mockup.html frontend/public/go100_company_des
+- finalize: pending
