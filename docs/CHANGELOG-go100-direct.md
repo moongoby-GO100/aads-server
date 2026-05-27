@@ -14414,3 +14414,141 @@ import loggin
 ## [2026-05-27 14:52:39 KST] [GO100] frontend/.next.green.tmp/cache/webpack/edge-server-production/0.pack
 - Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
 - finalize: pending
+
+## [2026-05-27 14:52:40 KST] [GO100] frontend/.next.green.tmp/cache/webpack/edge-server-production/index.pack
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:42 KST] [GO100] frontend/.next.green.tmp/cache/webpack/server-production/0.pack
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:43 KST] [GO100] frontend/.next.green.tmp/cache/webpack/server-production/1.pack
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:45 KST] [GO100] frontend/.next.green.tmp/cache/webpack/server-production/2.pack
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:46 KST] [GO100] frontend/.next.green.tmp/cache/webpack/server-production/3.pack
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:47 KST] [GO100] frontend/.next.green.tmp/cache/webpack/server-production/index.pack
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:49 KST] [GO100] frontend/.next.green.tmp/cache/webpack/server-production/index.pack.old
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:50 KST] [GO100] frontend/.next.green.tmp/export-marker.json
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:51 KST] [GO100] frontend/.next.green.tmp/images-manifest.json
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:52 KST] [GO100] frontend/.next.green.tmp/next-minimal-server.js.nft.json
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:54 KST] [GO100] frontend/.next.green.tmp/next-server.js.nft.json
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:55 KST] [GO100] frontend/.next.green.tmp/package.json
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:56 KST] [GO100] frontend/.next.green.tmp/prerender-manifest.json
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:57 KST] [GO100] frontend/.next.green.tmp/react-loadable-manifest.json
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:52:59 KST] [GO100] frontend/.next.green.tmp/required-server-files.json
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:53:00 KST] [GO100] frontend/.next.green.tmp/routes-manifest.json
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:53:01 KST] [GO100] frontend/.next.green.tmp/server/app-paths-manifest.json
+- Chat-Direct 수정: run_remote_command: cd frontend && rm -rf .next.green.tmp && cp -a .next .next.green.tmp
+- finalize: pending
+
+## [2026-05-27 14:53:43 KST] [GO100] scripts/build_green_v2.sh
+- Chat-Direct 수정: write: scripts/build_green_v2.sh
+- finalize: pending
+
+## [2026-05-27 14:53:44 KST] [GO100] scripts/build_green_v2.sh
+- Chat-Direct 수정: run_remote_command: curl -s http://127.0.0.1:8787/health
+- finalize: pending
+
+## [2026-05-27 14:56:06 KST] [GO100] backend/app/routers/go100/ai_router.py
+- Chat-Direct 수정: patch:     async def event_generator():
+       →    persist_enabled = bool(session_id)
+ 
+- finalize: pending
+
+## [2026-05-27 14:58:26 KST] [GO100] .gitignore
+- Chat-Direct 수정: patch: frontend/.next.green.staging/
+frontend/.→frontend/.next.green.staging/
+frontend/.
+- finalize: pending
+
+## [2026-05-27 14:59:00 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: ## 2026-05-27 14:38 KST - GO100 백억이 시장데이→## 2026-05-27 14:56 KST - GO100 백억이 스트림 
+- finalize: pending
+
+## [2026-05-27 14:59:16 KST] [GO100] scripts/auto_sync_deploy.sh
+- Chat-Direct 수정: write: scripts/auto_sync_deploy.sh
+- finalize: pending
+
+## [2026-05-27 14:59:44 KST] [GO100] frontend/src/go100/components/AutoTradeModal.tsx
+- Chat-Direct 수정: patch:     <div className="fixed inset-0 z-50 f→    <div className="fixed inset-0 z-50 f
+- finalize: pending
+
+## [2026-05-27 14:59:44 KST] [GO100] scripts/deploy.sh
+- Chat-Direct 수정: patch: # --- 6. 헬스체크 ---
+echo "[6/6] 헬스체크"
+HC_B→# --- 6. 헬스체크 ---
+echo "[6/6] 헬스체크"
+HC_B
+- finalize: pending
+
+## [2026-05-27 14:59:52 KST] [GO100] frontend/src/go100/components/AutoTradeModal.tsx
+- Chat-Direct 수정: patch:         <div className="mt-4 rounded-xl →        <div className="flex-1 overflow-
+- finalize: pending
+
+## [2026-05-27 14:59:59 KST] [GO100] scripts/deploy.sh
+- Chat-Direct 수정: patch: echo "로그: tail -f /tmp/go100-frontend-de→echo "로그: tail -f /tmp/go100-frontend-de
+- finalize: pending
+
+## [2026-05-27 15:00:00 KST] [GO100] frontend/src/go100/components/AutoTradeModal.tsx
+- Chat-Direct 수정: patch:         {error && (
+          <div class→        {error && (
+          <div class
+- finalize: pending
+
+## [2026-05-27 15:00:18 KST] [GO100] scripts/build_green_v2.sh
+- Chat-Direct 수정: write: scripts/build_green_v2.sh
+- finalize: pending
+
+## [2026-05-27 15:00:31 KST] [GO100] scripts/check_go100_frontend_deploy_safety.sh
+- Chat-Direct 수정: patch: LOG="/tmp/go100-frontend-deploy.log"→LOG="/tmp/go100-frontend-deploy-bg.log"
+- finalize: pending
+
+## [2026-05-27 15:00:37 KST] [GO100] scripts/check_go100_frontend_deploy_safety.sh
+- Chat-Direct 수정: run_remote_command: cd frontend && npx next build 2>&1 | tail -20
+- finalize: pending
+
+## [2026-05-27 15:01:03 KST] [GO100] scripts/check_go100_frontend_deploy_safety.sh
+- Chat-Direct 수정: patch: # ──────────────────────────────────────→# ──────────────────────────────────────
+- finalize: pending

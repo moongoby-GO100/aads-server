@@ -3206,3 +3206,12 @@ app/stati→app/static/gallery/media-*.jpg
 
 ## [2026-05-27 14:52:27 KST] [aads-server] docs/CHANGELOG-go100-direct.md
 - Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "SELECT agent_id, status, last
+
+## [2026-05-27 14:59:30 KST] [aads-server] .git/hooks/post-commit
+- Chat-Direct 수정: patch: python3 /root/aads/scripts/collect_env_s→python3 /root/aads/scripts/collect_env_s
+
+## [2026-05-27 14:59:34 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git push origin main
+
+## [2026-05-27 14:59:37 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && grep -n "DEDUP\|dedup\|중복\|filter.*bubble\|merge
