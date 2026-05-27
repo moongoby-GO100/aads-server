@@ -18,7 +18,8 @@ sys.path.insert(0, '/root/aads/aads-server')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
 
-NTV2_IMPORT_URL = "https://newtalk.kr/api/admin/auto-sourcing/trends/import"
+NTV2_IMPORT_URL = "https://newtalk.kr/api/external/auto-sourcing/trends/import"
+NTV2_IMPORT_KEY = os.environ.get("AUTO_SOURCING_IMPORT_TOKEN", "")
 
 # 에이블리 카테고리별 랭킹 URL
 ABLY_CATEGORIES = {
@@ -251,10 +252,14 @@ async def scrape_platform(platform: str, categories: dict, extract_js: str) -> d
 
 
 async def send_to_ntv2(data: dict) -> bool:
-    """스크래핑 결과를 NTV2 API로 전송."""
+    """스크래핑 결과를 NTV2 외부 Import API로 전송."""
     try:
+        headers = {"Content-Type": "application/json"}
+        if NTV2_IMPORT_KEY:
+            headers["X-Import-Key"] = NTV2_IMPORT_KEY
+        data["scraper"] = data.pop("platform", "pc_agent")
         async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(NTV2_IMPORT_URL, json=data)
+            response = await client.post(NTV2_IMPORT_URL, json=data, headers=headers)
             if response.status_code == 200:
                 result = response.json()
                 logger.info(f"NTV2 전송 성공: {result}")
