@@ -308,8 +308,7 @@ async def lifespan(app: FastAPI):
                             updated_at = NOW(),
                             error_message = COALESCE(error_message, 'auto-settled by stale execution watchdog')
                         WHERE status IN ('running', 'retrying')
-                          AND started_at < NOW() - INTERVAL '5 minutes'
-                          AND updated_at < NOW() - INTERVAL '2 minutes'
+                          AND started_at < NOW() - INTERVAL '15 minutes'
                         RETURNING id, session_id
                         """
                     )
