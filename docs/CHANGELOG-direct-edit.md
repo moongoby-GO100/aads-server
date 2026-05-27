@@ -3279,3 +3279,15 @@ async def gene
 
 ## [2026-05-27 15:25:40 KST] [aads-server] app/services/media_generation_service.py
 - Chat-Direct 수정: patch:             logger.info(f"[gemini-native→            print(f"[gemini-native] refe
+
+## [2026-05-27 15:27:08 KST] [aads-server] app/static/gallery/manifest.json
+- Chat-Direct 수정: run_remote_command: docker ps --format "{{.Names}} {{.Status}}" | grep -E "aads-server|aads-dashboar
+
+## [2026-05-27 15:27:12 KST] [aads-server] app/static/gallery/manifest.json
+- Chat-Direct 수정: run_remote_command: docker exec aads-server ls /etc/supervisor/conf.d/
+
+## [2026-05-27 15:32:10 KST] [aads-server] nginx-aads-upstream.conf
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && nohup bash deploy.sh bluegreen > /tmp/dashboard-
+
+## [2026-05-27 15:32:12 KST] [aads-server] nginx-aads-upstream.conf.dashboard.bak
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && nohup bash deploy.sh bluegreen > /tmp/dashboard-
