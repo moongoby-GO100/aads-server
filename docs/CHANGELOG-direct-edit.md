@@ -3071,3 +3071,8 @@ async de
 - Chat-Direct 수정: patch: app/static/gallery/media-*.jpg
 app/stati→app/static/gallery/media-*.jpg
 app/stati
+
+## [2026-05-27 12:22:37 KST] [aads-server] .gitignore
+- Chat-Direct 수정: patch: app/static/gallery/media-*.jpg
+app/stati→app/static/gallery/media-*.jpg
+app/stati

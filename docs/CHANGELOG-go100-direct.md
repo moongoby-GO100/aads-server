@@ -13754,3 +13754,57 @@ DISCOVERY_C
 ## [2026-05-27 12:14:31 KST] [GO100] backend/app/services/system/orchestrator.py
 - Chat-Direct 수정: patch:                                 "ORDER B→                                "ORDER B
 - finalize: pending
+
+## [2026-05-27 12:16:34 KST] [GO100] backend/app/services/go100/ai/agent_core.py
+- Chat-Direct 수정: patch:         if saw_content and not saw_error→        if saw_content and saw_done and 
+- finalize: pending
+
+## [2026-05-27 12:17:09 KST] [GO100] backend/app/routers/go100/ai_router.py
+- Chat-Direct 수정: patch: def _extract_strategy_card_id(message: s→def _extract_strategy_card_id(message: s
+- finalize: pending
+
+## [2026-05-27 12:17:26 KST] [GO100] backend/app/routers/go100/ai_router.py
+- Chat-Direct 수정: patch: async def _append_server_coverage_preche→async def _append_server_coverage_preche
+- finalize: pending
+
+## [2026-05-27 12:17:50 KST] [GO100] backend/app/routers/go100/ai_router.py
+- Chat-Direct 수정: patch:         entities = (session_context or {→        inferred_card_id = await _infer_
+- finalize: pending
+
+## [2026-05-27 12:18:08 KST] [GO100] backend/app/routers/go100/ai_router.py
+- Chat-Direct 수정: patch:                 tool_calls = await _appe→                tool_calls = await _appe
+- finalize: pending
+
+## [2026-05-27 12:18:24 KST] [GO100] backend/app/routers/go100/ai_router.py
+- Chat-Direct 수정: patch:             tool_events = await _append_→            tool_events = await _append_
+- finalize: pending
+
+## [2026-05-27 12:19:25 KST] [GO100] backend/app/services/go100/ai/agent_core.py
+- Chat-Direct 수정: patch: async def _run_codex_relay_stream(
+    u→async def _run_codex_relay_stream(
+    u
+- finalize: pending
+
+## [2026-05-27 12:21:07 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:                                 "ORDER B→                                "ORDER B
+- finalize: pending
+
+## [2026-05-27 12:21:55 KST] [GO100] scripts/add_dark_mode.py
+- Chat-Direct 수정: write: scripts/add_dark_mode.py
+- finalize: pending
+
+## [2026-05-27 12:21:57 KST] [GO100] scripts/add_dark_mode.py
+- Chat-Direct 수정: run_remote_command: systemctl is-active go100-frontend
+- finalize: pending
+
+## [2026-05-27 12:22:01 KST] [GO100] scripts/add_dark_mode.py
+- Chat-Direct 수정: run_remote_command: curl http://127.0.0.1:8002/health
+- finalize: pending
+
+## [2026-05-27 12:22:07 KST] [GO100] frontend/src/go100/pages/CompanyAnalysisPage.tsx
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && python3 scripts/add_dark_mode.py
+- finalize: pending
+
+## [2026-05-27 12:22:33 KST] [GO100] backend/app/services/system/orchestrator.py
+- Chat-Direct 수정: patch:                                 "ORDER B→                                "ORDER B
+- finalize: pending
