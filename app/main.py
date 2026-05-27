@@ -294,6 +294,43 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("rate_limit_recovery_failed: %s", str(e)[:200])
 
+        async def _run_stale_execution_cleanup():
+            """Auto-settle stale running executions that block sessions."""
+            try:
+                from app.core.db_pool import get_pool as _sep
+                _pool = _sep()
+                async with _pool.acquire() as conn:
+                    settled = await conn.fetch(
+                        """
+                        UPDATE chat_turn_executions
+                        SET status = 'interrupted',
+                            completed_at = COALESCE(completed_at, NOW()),
+                            updated_at = NOW(),
+                            error_message = COALESCE(error_message, 'auto-settled by stale execution watchdog')
+                        WHERE status IN ('running', 'retrying')
+                          AND started_at < NOW() - INTERVAL '5 minutes'
+                          AND updated_at < NOW() - INTERVAL '2 minutes'
+                        RETURNING id, session_id
+                        """
+                    )
+                    if settled:
+                        _sids = list({r["session_id"] for r in settled})
+                        await conn.execute(
+                            """
+                            UPDATE chat_sessions
+                            SET current_execution_id = NULL, updated_at = NOW()
+                            WHERE id = ANY($1::uuid[])
+                              AND current_execution_id IS NOT NULL
+                            """,
+                            _sids,
+                        )
+                        logger.info(
+                            "stale_execution_watchdog: settled %d executions in %d sessions",
+                            len(settled), len(_sids),
+                        )
+            except Exception as e:
+                logger.warning("stale_execution_watchdog_failed: %s", str(e)[:200])
+
         scheduler = AsyncIOScheduler()
         # 2분마다 규칙 평가
         scheduler.add_job(_run_alert_evaluation, "interval", minutes=2, id="alert_eval")
@@ -301,6 +338,8 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(_run_healing_cycle, "interval", seconds=30, id="healing_cycle")
         # 60초마다 만료된 rate limit 자동 복구 + 모델 재활성화
         scheduler.add_job(_run_rate_limit_recovery, "interval", seconds=60, id="rate_limit_recovery")
+        # 90초마다 stale execution 자동 정리 (세션 차단 방지)
+        scheduler.add_job(_run_stale_execution_cleanup, "interval", seconds=90, id="stale_execution_watchdog")
         # 최신 LLM catalog 반영 — 기본 6시간 주기
         scheduler.add_job(
             _run_periodic_model_registry_sync,

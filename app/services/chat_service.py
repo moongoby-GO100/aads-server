@@ -6465,6 +6465,7 @@ async def send_message_stream(
                             response_text=full_response,
                             tools_called=bool(tools_called),
                             intent=intent,
+                            user_message=content,
                         )
                         if not _sdk_val.is_valid:
                             logger.error(f"sdk_path_validation_failed: {_sdk_val.violation_type} — {_sdk_val.message}")
@@ -6646,6 +6647,7 @@ async def send_message_stream(
                 response_text=full_response,
                 tools_called=bool(tools_called),
                 intent=intent,
+                user_message=content,
             )
             if not _auto_val.is_valid:
                 logger.error(f"autonomous_executor_validation_failed: {_auto_val.violation_type} — {_auto_val.message}")

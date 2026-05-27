@@ -145,28 +145,6 @@ def _is_confirmation_question(user_message: str) -> bool:
             return True
     return False
 
-# ─── 확인형 질문 예외 (짧은 yes/no 응답 허용) ────────────────────────────────
-
-_CONFIRMATION_QUESTION_PATTERNS: list[re.Pattern] = [
-    re.compile(r'(?:되는|된|반영되는|적용되는|나오는|들어가는|포함되는|돌아가는)\s*(?:거지|건지|거야|거냐|건가|거잖아)', re.IGNORECASE),
-    re.compile(r'(?:맞지|맞나|맞아)\s*\??$'),
-    re.compile(r'(?:된거야|된거지|된건가|됐나|됐지|됐어|했어|했나|했지)\s*\??$'),
-    re.compile(r'(?:있어|없어|있나|없나|있지|없지)\s*\??$'),
-]
-
-
-def _is_confirmation_question(user_message: str) -> bool:
-    """CEO의 단순 확인 질문(~거지?, ~맞지?, ~된거야?)을 감지한다."""
-    if not user_message:
-        return False
-    msg = user_message.strip()
-    if len(msg) > 120:
-        return False
-    for pat in _CONFIRMATION_QUESTION_PATTERNS:
-        if pat.search(msg):
-            return True
-    return False
-
 # ─── 검증 결과 ─────────────────────────────────────────────────────────────────
 
 
