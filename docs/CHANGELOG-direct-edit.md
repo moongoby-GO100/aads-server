@@ -3142,3 +3142,9 @@ app/stati
 
 ## [2026-05-27 14:04:47 KST] [aads-server] tmp/patch_v2_nginx_plan_static.py
 - Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "UPDATE chat_turn_executions S
+
+## [2026-05-27 14:06:45 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git push origin main 2>&1
+
+## [2026-05-27 14:07:07 KST] [aads-server] app/static/gallery/manifest.json
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && git push origin main 2>&1
