@@ -14286,3 +14286,27 @@ import loggin
 ## [2026-05-27 14:27:51 KST] [GO100] HANDOVER.md
 - Chat-Direct 수정: patch: ## 2026-05-27 14:10 KST - GO100 사이트 접속 장→## 2026-05-27 14:21 KST - GO100 백억이 상한가/
 - finalize: pending
+
+## [2026-05-27 14:40:08 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
+- Chat-Direct 수정: patch: def _contains_any(message: str | None, t→def _contains_any(message: str | None, t
+- finalize: pending
+
+## [2026-05-27 14:40:30 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
+- Chat-Direct 수정: patch: def _has_holdings_focus(intent: str, mes→def _has_holdings_focus(intent: str, mes
+- finalize: pending
+
+## [2026-05-27 14:40:57 KST] [GO100] backend/app/services/go100/ai/realtime_guardrails.py
+- Chat-Direct 수정: patch: def _needs_portfolio_context(intent: str→def _is_market_data_research_query(messa
+- finalize: pending
+
+## [2026-05-27 14:41:22 KST] [GO100] backend/app/services/go100/ai/realtime_guardrails.py
+- Chat-Direct 수정: patch: def _needs_account_holdings_context(mess→def _needs_account_holdings_context(mess
+- finalize: pending
+
+## [2026-05-27 14:41:42 KST] [GO100] backend/app/services/go100/ai/realtime_guardrails.py
+- Chat-Direct 수정: patch: def _needs_trade_context(intent: str, me→def _needs_trade_context(intent: str, me
+- finalize: pending
+
+## [2026-05-27 14:42:03 KST] [GO100] backend/app/services/go100/ai/realtime_guardrails.py
+- Chat-Direct 수정: patch:     if any(term in compact for term in (→    if not _is_market_data_research_quer
+- finalize: pending

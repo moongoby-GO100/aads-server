@@ -3163,3 +3163,6 @@ app/stati→app/static/gallery/media-*.jpg
 
 ## [2026-05-27 14:12:02 KST] [aads-server] .gitignore
 - Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && echo "scripts/deploy-dash.sh" >> .gitignore
+
+## [2026-05-27 14:40:18 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-dashboard-green find /app -name "page*.js" -path "*/chat/*" | h
