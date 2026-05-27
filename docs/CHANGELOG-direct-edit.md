@@ -3148,3 +3148,18 @@ app/stati
 
 ## [2026-05-27 14:07:07 KST] [aads-server] app/static/gallery/manifest.json
 - Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && git push origin main 2>&1
+
+## [2026-05-27 14:09:10 KST] [aads-server] .gitignore
+- Chat-Direct 수정: patch: app/static/gallery/media-*.jpg
+app/stati→app/static/gallery/media-*.jpg
+
+# 서버별 배포
+
+## [2026-05-27 14:11:09 KST] [aads-server] app/static/gallery/manifest.json
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git check-ignore -v scripts/deploy-dash.sh 2>&1
+
+## [2026-05-27 14:12:02 KST] [aads-server] .gitignore
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -t -c "SELECT count(*) FROM chat_
+
+## [2026-05-27 14:12:02 KST] [aads-server] .gitignore
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && echo "scripts/deploy-dash.sh" >> .gitignore
