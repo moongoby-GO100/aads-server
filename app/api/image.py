@@ -23,6 +23,7 @@ class ImageRequest(BaseModel):
     session_id: str | None = None
     aspect_ratio: str | None = None
     image_size: str | None = None
+    reference_images: list[str] | None = None
 
 
 class EditImageRequest(BaseModel):
@@ -78,6 +79,7 @@ async def generate_image(req: ImageRequest):
             session_id=req.session_id,
             aspect_ratio=req.aspect_ratio,
             image_size=req.image_size,
+            reference_images=req.reference_images,
         )
         return result
     except ValueError as e:

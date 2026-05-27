@@ -758,6 +758,7 @@ class MediaGenerationService:
         session_id: str | None = None,
         aspect_ratio: str | None = None,
         image_size: str | None = None,
+        reference_images: list[str] | None = None,
     ) -> dict[str, Any]:
         if not str(prompt or "").strip():
             raise ValueError("프롬프트를 입력하세요")
@@ -803,7 +804,7 @@ class MediaGenerationService:
             )
         try:
             if route.source in {"explicit", "db_default"}:
-                result = await self._generate_image_with_route(prompt, size, route, aspect_ratio=aspect_ratio, image_size=image_size)
+                result = await self._generate_image_with_route(prompt, size, route, aspect_ratio=aspect_ratio, image_size=image_size, reference_images=reference_images)
             else:
                 from app.services.image_service import image_service
 
@@ -847,6 +848,7 @@ class MediaGenerationService:
         *,
         aspect_ratio: str | None = None,
         image_size: str | None = None,
+        reference_images: list[str] | None = None,
     ) -> dict[str, Any]:
         sanitized = _sanitize_prompt(prompt)
         if route.provider == "openai":
@@ -854,7 +856,7 @@ class MediaGenerationService:
         if route.provider == "google":
             return await self._generate_google_image(sanitized, prompt, route.model_id, aspect_ratio=aspect_ratio, image_size=image_size)
         if route.provider == "gemini":
-            return await self._generate_gemini_native_image(sanitized, prompt, route.model_id, aspect_ratio=aspect_ratio, image_size=image_size)
+            return await self._generate_gemini_native_image(sanitized, prompt, route.model_id, aspect_ratio=aspect_ratio, image_size=image_size, reference_images=reference_images)
         raise ValueError(route.reason or "provider unavailable")
 
     async def _generate_openai_image(
@@ -924,6 +926,7 @@ class MediaGenerationService:
         *,
         aspect_ratio: str | None = None,
         image_size: str | None = None,
+        reference_images: list[str] | None = None,
     ) -> dict[str, Any]:
         model_id = _canonical_media_model_id(model_id)
         from google import genai
@@ -938,13 +941,26 @@ class MediaGenerationService:
         if img_cfg:
             gen_config["image_config"] = types.ImageConfig(**img_cfg)
 
+        contents: list = [sanitized]
+        if reference_images:
+            for img_url in reference_images[:3]:
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as http_client:
+                        img_resp = await http_client.get(str(img_url))
+                        img_resp.raise_for_status()
+                    mime = img_resp.headers.get("content-type", "image/jpeg").split(";")[0]
+                    contents.append(types.Part.from_bytes(data=img_resp.content, mime_type=mime))
+                except Exception:
+                    pass
+
         client = genai.Client(api_key=_secret_value(self.settings, "GOOGLE_API_KEY"))
         loop = asyncio.get_event_loop()
+        _contents = contents
         response = await loop.run_in_executor(
             None,
             lambda: client.models.generate_content(
                 model=model_id,
-                contents=sanitized,
+                contents=_contents,
                 config=types.GenerateContentConfig(**gen_config),
             ),
         )
