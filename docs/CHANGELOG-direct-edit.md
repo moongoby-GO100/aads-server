@@ -3236,3 +3236,46 @@ app/stati→app/static/gallery/media-*.jpg
 
 ## [2026-05-27 15:06:16 KST] [aads-server] .git/hooks/post-commit
 - Chat-Direct 수정: patch: python3 /root/aads/scripts/collect_env_s→python3 /root/aads/scripts/collect_env_s
+
+## [2026-05-27 15:08:10 KST] [aads-server] app/static/gallery/manifest.json
+- Chat-Direct 수정: run_remote_command: find /root/aads/aads-dashboard -name "*.lock" -newer /root/aads/aads-dashboard/d
+
+## [2026-05-27 15:08:12 KST] [aads-server] app/static/gallery/manifest.json
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "import asyncio; from app.services.chat_servi
+
+## [2026-05-27 15:08:17 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: grep -n "reference_images" /app/app/services/media_generation_service.py
+
+## [2026-05-27 15:08:19 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: find /root/aads/aads-dashboard -name "*.lock" -newer /root/aads/aads-dashboard/d
+
+## [2026-05-27 15:08:20 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "import asyncio; from app.services.chat_servi
+
+## [2026-05-27 15:08:26 KST] [aads-server] nginx-aads-upstream.conf
+- Chat-Direct 수정: run_remote_command: find /root/aads/aads-dashboard -name "*.lock" -newer /root/aads/aads-dashboard/d
+
+## [2026-05-27 15:08:27 KST] [aads-server] nginx-aads-upstream.conf.dashboard.bak
+- Chat-Direct 수정: run_remote_command: find /root/aads/aads-dashboard -name "*.lock" -newer /root/aads/aads-dashboard/d
+
+## [2026-05-27 15:08:28 KST] [aads-server] nginx-aads-upstream.conf
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "import asyncio; from app.services.chat_servi
+
+## [2026-05-27 15:08:29 KST] [aads-server] nginx-aads-upstream.conf.dashboard.bak
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "import asyncio; from app.services.chat_servi
+
+## [2026-05-27 15:17:06 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:         if reference_images:
+           →        if reference_images:
+           
+
+## [2026-05-27 15:17:11 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: run_remote_command: docker ps --format "{{.Names}} {{.Status}}" | grep dashboard
+
+## [2026-05-27 15:25:21 KST] [aads-server] app/api/image.py
+- Chat-Direct 수정: patch: @router.post("/generate")
+async def gene→@router.post("/generate")
+async def gene
+
+## [2026-05-27 15:25:40 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:             logger.info(f"[gemini-native→            print(f"[gemini-native] refe

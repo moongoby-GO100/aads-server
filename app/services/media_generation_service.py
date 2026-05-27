@@ -22,12 +22,14 @@ from types import SimpleNamespace
 from typing import Any, Callable, Mapping
 
 import httpx
+import logging
 
 try:
     from app.config import settings as app_settings
 except Exception:
     app_settings = SimpleNamespace(OPENAI_API_KEY="", GOOGLE_API_KEY="")
 
+logger = logging.getLogger(__name__)
 
 IMAGE_MODELS = (
     "gpt-image-2",
@@ -943,6 +945,7 @@ class MediaGenerationService:
 
         contents: list = [sanitized]
         if reference_images:
+            print(f"[gemini-native] reference_images received: {reference_images}")
             for img_url in reference_images[:3]:
                 try:
                     async with httpx.AsyncClient(timeout=15.0) as http_client:
@@ -950,8 +953,9 @@ class MediaGenerationService:
                         img_resp.raise_for_status()
                     mime = img_resp.headers.get("content-type", "image/jpeg").split(";")[0]
                     contents.append(types.Part.from_bytes(data=img_resp.content, mime_type=mime))
-                except Exception:
-                    pass
+                    print(f"[gemini-native] ref image loaded: {img_url} ({len(img_resp.content)} bytes, {mime})")
+                except Exception as e:
+                    print(f"[gemini-native] ref image FAILED: {img_url} — {e}")
 
         client = genai.Client(api_key=_secret_value(self.settings, "GOOGLE_API_KEY"))
         loop = asyncio.get_event_loop()

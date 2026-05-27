@@ -67,6 +67,7 @@ class GalleryDeleteRequest(BaseModel):
 @router.post("/generate")
 async def generate_image(req: ImageRequest):
     """채팅창에서 이미지 생성"""
+    print(f"[DEBUG-REF] reference_images={req.reference_images}, model_id={req.model_id}")
     if not req.prompt.strip():
         raise HTTPException(status_code=400, detail="프롬프트를 입력하세요")
     try:

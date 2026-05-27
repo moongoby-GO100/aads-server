@@ -697,3 +697,9 @@ with open(
 import re
 path = '/root/aads/aads-dashboard/src/app/chat/page.tsx'
 
+
+## [2026-05-27 15:04:12 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: curl -s -o /dev/null -w "%{http_code} %{size_download}" "https://item-img.vvic.c
+
+## [2026-05-27 15:04:13 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && sed -i '5892a\        if (m.intent === "recovere

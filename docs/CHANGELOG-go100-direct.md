@@ -14631,3 +14631,34 @@ set -e
 cd /root/kis-autotrad→#!/bin/bash
 # Compatibility wrapper. Dir
 - finalize: pending
+
+## [2026-05-27 15:07:58 KST] [GO100] .gitignore
+- Chat-Direct 수정: patch: # 일회성 색상 수정 스크립트
+scripts/fix-colors-*.py→# 일회성 색상 수정 스크립트
+scripts/fix-colors-*.py
+- finalize: pending
+
+## [2026-05-27 15:11:37 KST] [GO100] frontend/src/go100/components/AutoTradeModal.tsx
+- Chat-Direct 수정: patch:         <div className="flex-1 overflow-→        <div className="flex-1 overflow-
+- finalize: pending
+
+## [2026-05-27 15:13:06 KST] [GO100] scripts/build_green_now.sh
+- Chat-Direct 수정: write: scripts/build_green_now.sh
+- finalize: pending
+
+## [2026-05-27 15:17:20 KST] [GO100] scripts/build_green_now.sh
+- Chat-Direct 수정: write: scripts/build_green_now.sh
+- finalize: pending
+
+## [2026-05-27 15:18:38 KST] [GO100] scripts/cleanup_go100_frontend_artifacts.py
+- Chat-Direct 수정: write: scripts/cleanup_go100_frontend_artifacts.py
+- finalize: pending
+
+## [2026-05-27 15:20:42 KST] [GO100] docs/HANDOVER.md
+- Chat-Direct 수정: patch: # GO100 인수인계서 v14.8 — 유지보수 HTML 포털 추가
+> →# GO100 인수인계서 v15.0 — 프론트 blue/green 접속 
+- finalize: pending
+
+## [2026-05-27 15:20:43 KST] [GO100] docs/HANDOVER.md
+- Chat-Direct 수정: run_remote_command: curl -s http://127.0.0.1:8299/health
+- finalize: pending
