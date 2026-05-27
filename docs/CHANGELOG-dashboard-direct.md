@@ -679,3 +679,21 @@ with open(
 
 ## [2026-05-26 16:14:36 KST] [aads-dashboard] src/app/chat/page.tsx
 - Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/fix-displaydata2.py
+
+## [2026-05-26 18:13:01 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:         _drainTimer = setInterval(() => →        _drainTimer = setInterval(() => 
+
+## [2026-05-26 18:13:09 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:   // PERSIST-FIX: streaming 중 4초마다 strea→  // PERSIST-FIX: streaming 중 10초마다 stre
+
+## [2026-05-26 18:17:21 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i '4339s/}, 50);/}, 150);/' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-05-26 18:34:29 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: docker exec aads-dashboard-green find /app/.next/static/chunks -name "*.js" -pat
+
+## [2026-05-27 11:23:02 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 -c "
+import re
+path = '/root/aads/aads-dashboard/src/app/chat/page.tsx'
+

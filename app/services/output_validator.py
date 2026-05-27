@@ -123,6 +123,50 @@ _REPORT_REQUIRED_GROUPS: dict[str, tuple[str, ...]] = {
 _REPORT_MIN_STRUCTURE_CHARS = 280
 _STATUS_REPORT_MIN_STRUCTURE_CHARS = 180
 
+# ─── 확인형 질문 예외 (짧은 yes/no 응답 허용) ────────────────────────────────
+
+_CONFIRMATION_QUESTION_PATTERNS: list[re.Pattern] = [
+    re.compile(r'(?:되는|된|반영되는|적용되는|나오는|들어가는|포함되는|돌아가는)\s*(?:거지|건지|거야|거냐|건가|거잖아)', re.IGNORECASE),
+    re.compile(r'(?:맞지|맞나|맞아)\s*\??$'),
+    re.compile(r'(?:된거야|된거지|된건가|됐나|됐지|됐어|했어|했나|했지)\s*\??$'),
+    re.compile(r'(?:있어|없어|있나|없나|있지|없지)\s*\??$'),
+]
+
+
+def _is_confirmation_question(user_message: str) -> bool:
+    """CEO의 단순 확인 질문(~거지?, ~맞지?, ~된거야?)을 감지한다."""
+    if not user_message:
+        return False
+    msg = user_message.strip()
+    if len(msg) > 120:
+        return False
+    for pat in _CONFIRMATION_QUESTION_PATTERNS:
+        if pat.search(msg):
+            return True
+    return False
+
+# ─── 확인형 질문 예외 (짧은 yes/no 응답 허용) ────────────────────────────────
+
+_CONFIRMATION_QUESTION_PATTERNS: list[re.Pattern] = [
+    re.compile(r'(?:되는|된|반영되는|적용되는|나오는|들어가는|포함되는|돌아가는)\s*(?:거지|건지|거야|거냐|건가|거잖아)', re.IGNORECASE),
+    re.compile(r'(?:맞지|맞나|맞아)\s*\??$'),
+    re.compile(r'(?:된거야|된거지|된건가|됐나|됐지|됐어|했어|했나|했지)\s*\??$'),
+    re.compile(r'(?:있어|없어|있나|없나|있지|없지)\s*\??$'),
+]
+
+
+def _is_confirmation_question(user_message: str) -> bool:
+    """CEO의 단순 확인 질문(~거지?, ~맞지?, ~된거야?)을 감지한다."""
+    if not user_message:
+        return False
+    msg = user_message.strip()
+    if len(msg) > 120:
+        return False
+    for pat in _CONFIRMATION_QUESTION_PATTERNS:
+        if pat.search(msg):
+            return True
+    return False
+
 # ─── 검증 결과 ─────────────────────────────────────────────────────────────────
 
 
@@ -139,6 +183,7 @@ def validate_response(
     tools_called: bool,
     intent: str = "",
     tool_results_text: str = "",
+    user_message: str = "",
 ) -> ValidationResult:
     """
     모델 응답을 검증하여 거짓 보고 여부를 판단한다.
@@ -156,6 +201,8 @@ def validate_response(
     if intent in ("greeting", "casual", ""):
         return _OK
 
+    _skip_report_quality = _is_confirmation_question(user_message)
+
     # 도구가 호출된 응답 — XML 날조는 위에서 이미 검사, 데이터 불일치만 추가 검사
     if tools_called:
         if tool_results_text:
@@ -163,10 +210,11 @@ def validate_response(
             if _incon:
                 logger.error(f"[OutputValidator] INCONSISTENT_DATA detected: {_incon.message}")
                 return _incon
-        _report_quality = check_report_quality_structure(stripped, intent)
-        if _report_quality:
-            logger.warning(f"[OutputValidator] REPORT_STRUCTURE_WEAK detected: {_report_quality.message}")
-            return _report_quality
+        if not _skip_report_quality:
+            _report_quality = check_report_quality_structure(stripped, intent)
+            if _report_quality:
+                logger.warning(f"[OutputValidator] REPORT_STRUCTURE_WEAK detected: {_report_quality.message}")
+                return _report_quality
         return _OK
 
     # ── FABRICATED_DATA_TABLE: 도구 미호출인데 DB 조회 결과처럼 보이는 테이블 ──
@@ -176,10 +224,11 @@ def validate_response(
         return _fdt
 
     # ── REPORT_STRUCTURE_WEAK: 분석/보고 응답에 핵심 섹션이 빠진 경우 ──
-    _report_quality = check_report_quality_structure(stripped, intent)
-    if _report_quality:
-        logger.warning(f"[OutputValidator] REPORT_STRUCTURE_WEAK detected: {_report_quality.message}")
-        return _report_quality
+    if not _skip_report_quality:
+        _report_quality = check_report_quality_structure(stripped, intent)
+        if _report_quality:
+            logger.warning(f"[OutputValidator] REPORT_STRUCTURE_WEAK detected: {_report_quality.message}")
+            return _report_quality
 
     # ── EMPTY_PROMISE: 짧은 텍스트 + 빈 약속 패턴 ─────────────────────────
     if len(stripped) < 100:

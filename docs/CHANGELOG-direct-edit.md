@@ -2759,3 +2759,300 @@ with open(
 
 ## [2026-05-26 16:16:54 KST] [aads-server] scripts/deploy-dash.sh
 - Chat-Direct 수정: write: scripts/deploy-dash.sh
+
+## [2026-05-26 18:03:40 KST] [aads-server] tests/unit/test_credential_vault.py
+- Chat-Direct 수정: run_remote_command: docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" --filter name=aad
+
+## [2026-05-26 18:13:57 KST] [aads-server] tmp_perf_patch.py
+- Chat-Direct 수정: write: tmp_perf_patch.py
+
+## [2026-05-26 18:41:39 KST] [aads-server] scripts/scrape_platform_ranking.py
+- Chat-Direct 수정: write: scripts/scrape_platform_ranking.py
+
+## [2026-05-26 18:47:54 KST] [aads-server] scripts/scrape_platform_ranking.py
+- Chat-Direct 수정: write: scripts/scrape_platform_ranking.py
+
+## [2026-05-27 09:18:00 KST] [aads-server] scripts/scrape_platform_ranking.py
+- Chat-Direct 수정: patch: async def send_pc_agent_command(command:→_AGENT_ID_CACHE: str | None = None
+
+
+def
+
+## [2026-05-27 09:24:43 KST] [aads-server] scripts/scrape_platform_ranking.py
+- Chat-Direct 수정: patch: async def send_pc_agent_command(command:→_AGENT_ID_CACHE: str | None = None
+
+
+def
+
+## [2026-05-27 09:34:30 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch: @router.get("/pc-agent/agents")
+async de→@router.get("/pc-agent/status")
+async de
+
+## [2026-05-27 09:34:39 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch: HEARTBEAT_INTERVAL = 25  # 초
+RECONNECT_D→HEARTBEAT_INTERVAL = 25  # 초
+RECONNECT_D
+
+## [2026-05-27 09:34:46 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:         self._running = True
+        sel→        self._running = True
+        sel
+
+## [2026-05-27 09:34:54 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:     async def run(self) -> None:
+       →    async def run(self) -> None:
+       
+
+## [2026-05-27 09:35:10 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:                 # 하트비트 + 자동 업데이트 태스크 시작
+→                self.is_connected = True
+
+## [2026-05-27 09:35:16 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:                 finally:
+               →                finally:
+               
+
+## [2026-05-27 09:35:24 KST] [aads-server] pc_agent/launcher.py
+- Chat-Direct 수정: patch:             def poll(self) -> int | None→            @property
+            def is
+
+## [2026-05-27 09:35:34 KST] [aads-server] pc_agent/tray.py
+- Chat-Direct 수정: write: pc_agent/tray.py
+
+## [2026-05-27 09:35:53 KST] [aads-server] pc_agent/VERSION
+- Chat-Direct 수정: write: pc_agent/VERSION
+
+## [2026-05-27 09:46:07 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch: @router.get("/pc-agent/agents")
+async de→@router.get("/pc-agent/status")
+async de
+
+## [2026-05-27 09:46:14 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch: HEARTBEAT_INTERVAL = 25  # 초
+RECONNECT_D→HEARTBEAT_INTERVAL = 25  # 초
+RECONNECT_D
+
+## [2026-05-27 09:46:15 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: run_remote_command: curl -s http://localhost:8100/api/v1/pc-agent/status
+
+## [2026-05-27 09:46:15 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:         self._running = True
+        sel→        self._running = True
+        sel
+
+## [2026-05-27 09:46:16 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:     async def run(self) -> None:
+       →    async def run(self) -> None:
+       
+
+## [2026-05-27 09:46:18 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:                 # 하트비트 + 자동 업데이트 태스크 시작
+→                self.is_connected = True
+
+## [2026-05-27 09:46:25 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:                 finally:
+               →                finally:
+               
+
+## [2026-05-27 09:46:31 KST] [aads-server] pc_agent/launcher.py
+- Chat-Direct 수정: patch:             def poll(self) -> int | None→            @property
+            def is
+
+## [2026-05-27 09:46:39 KST] [aads-server] pc_agent/tray.py
+- Chat-Direct 수정: write: pc_agent/tray.py
+
+## [2026-05-27 09:46:40 KST] [aads-server] pc_agent/VERSION
+- Chat-Direct 수정: write: pc_agent/VERSION
+
+## [2026-05-27 09:59:50 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:             async with websockets.connec→            async with websockets.connec
+
+## [2026-05-27 09:59:52 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:                 self.is_connected = True→                self.is_connected = True
+
+## [2026-05-27 09:59:53 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:                     self._ws = None
+    →                    self._ws = None
+    
+
+## [2026-05-27 10:00:05 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:         while self._running:
+           →        reconnect_count = 0
+        whil
+
+## [2026-05-27 10:00:16 KST] [aads-server] pc_agent/launcher.py
+- Chat-Direct 수정: patch:             @property
+            def is→            @property
+            def is
+
+## [2026-05-27 10:01:34 KST] [aads-server] pc_agent/VERSION
+- Chat-Direct 수정: patch: 1.0.32→1.0.33
+
+## [2026-05-27 10:04:56 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:             async with websockets.connec→            async with websockets.connec
+
+## [2026-05-27 10:04:58 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:                 self.is_connected = True→                self.is_connected = True
+
+## [2026-05-27 10:04:59 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:                     self._ws = None
+    →                    self._ws = None
+    
+
+## [2026-05-27 10:05:00 KST] [aads-server] pc_agent/agent.py
+- Chat-Direct 수정: patch:         while self._running:
+           →        reconnect_count = 0
+        whil
+
+## [2026-05-27 10:05:03 KST] [aads-server] pc_agent/launcher.py
+- Chat-Direct 수정: patch:             @property
+            def is→            @property
+            def is
+
+## [2026-05-27 10:05:37 KST] [aads-server] pc_agent/VERSION
+- Chat-Direct 수정: patch: 1.0.32→1.0.33
+
+## [2026-05-27 10:12:43 KST] [aads-server] scripts/ably_scrape_test.py
+- Chat-Direct 수정: write: scripts/ably_scrape_test.py
+
+## [2026-05-27 10:13:47 KST] [aads-server] scripts/ably_api_discover.py
+- Chat-Direct 수정: write: scripts/ably_api_discover.py
+
+## [2026-05-27 10:14:44 KST] [aads-server] scripts/ably_extract_products.py
+- Chat-Direct 수정: write: scripts/ably_extract_products.py
+
+## [2026-05-27 10:15:40 KST] [aads-server] scripts/ably_intercept_headers.py
+- Chat-Direct 수정: write: scripts/ably_intercept_headers.py
+
+## [2026-05-27 10:15:43 KST] [aads-server] scripts/ably_intercept_headers.py
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && git log --oneline -5
+
+## [2026-05-27 10:15:46 KST] [aads-server] scripts/ably_intercept_headers.py
+- Chat-Direct 수정: run_remote_command: curl -s -o /dev/null -w "%{http_code} %{size_download}" http://localhost:8100/ap
+
+## [2026-05-27 10:17:00 KST] [aads-server] scripts/ably_full_scrape.py
+- Chat-Direct 수정: write: scripts/ably_full_scrape.py
+
+## [2026-05-27 10:18:17 KST] [aads-server] scripts/ably_dump_structure.py
+- Chat-Direct 수정: write: scripts/ably_dump_structure.py
+
+## [2026-05-27 10:19:51 KST] [aads-server] scripts/ably_categorize_and_store.py
+- Chat-Direct 수정: write: scripts/ably_categorize_and_store.py
+
+## [2026-05-27 10:19:53 KST] [aads-server] scripts/ably_categorize_and_store.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server grep -rn "stdout_logfile\|stderr_logfile\|program:aads" 
+
+## [2026-05-27 10:22:55 KST] [aads-server] data/ably_latest.json
+- Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/data/ably_latest.json /root/aads/aads-server/data/abl
+
+## [2026-05-27 10:22:56 KST] [aads-server] data/ably_latest.json
+- Chat-Direct 수정: run_remote_command: grep -rn "check_unverified\|quality.*valid\|보고.*품질\|report.*quality\|min_length\
+
+## [2026-05-27 10:23:06 KST] [aads-server] data/ably_best_20260527_1020.json
+- Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/data/ably_best_20260527_1020.json /root/aads/aads-ser
+
+## [2026-05-27 10:23:07 KST] [aads-server] data/ably_best_20260527_1020.json
+- Chat-Direct 수정: run_remote_command: grep -rn "validator\|quality_guard\|response_guard\|품질.*가드\|report_quality" app/
+
+## [2026-05-27 10:30:24 KST] [aads-server] /tmp/ably_scrape_test.py
+- Chat-Direct 수정: write: /tmp/ably_scrape_test.py
+
+## [2026-05-27 10:30:26 KST] [aads-server] scripts/ably_scrape_test.py
+- Chat-Direct 수정: write: scripts/ably_scrape_test.py
+
+## [2026-05-27 10:30:59 KST] [aads-server] scripts/ably_api_discover.py
+- Chat-Direct 수정: write: scripts/ably_api_discover.py
+
+## [2026-05-27 10:31:27 KST] [aads-server] scripts/ably_extract_products.py
+- Chat-Direct 수정: write: scripts/ably_extract_products.py
+
+## [2026-05-27 10:31:51 KST] [aads-server] scripts/ably_intercept_headers.py
+- Chat-Direct 수정: write: scripts/ably_intercept_headers.py
+
+## [2026-05-27 10:32:26 KST] [aads-server] scripts/ably_full_scrape.py
+- Chat-Direct 수정: write: scripts/ably_full_scrape.py
+
+## [2026-05-27 10:32:56 KST] [aads-server] scripts/ably_dump_structure.py
+- Chat-Direct 수정: write: scripts/ably_dump_structure.py
+
+## [2026-05-27 10:33:34 KST] [aads-server] scripts/ably_categorize_and_store.py
+- Chat-Direct 수정: write: scripts/ably_categorize_and_store.py
+
+## [2026-05-27 10:36:35 KST] [aads-server] scripts/zigzag_scrape.py
+- Chat-Direct 수정: write: scripts/zigzag_scrape.py
+
+## [2026-05-27 10:42:22 KST] [aads-server] scripts/zigzag_fast_scrape.py
+- Chat-Direct 수정: write: scripts/zigzag_fast_scrape.py
+
+## [2026-05-27 10:43:11 KST] [aads-server] data/zigzag_latest.json
+- Chat-Direct 수정: run_remote_command: python3 -c "import requests; r=requests.get('http://localhost:8000/api/v1/pc-age
+
+## [2026-05-27 10:43:13 KST] [aads-server] data/zigzag_latest.json
+- Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/data/zigzag_latest.json /root/aads/aads-server/data/z
+
+## [2026-05-27 10:43:24 KST] [aads-server] data/zigzag_best_20260527_1042.json
+- Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/data/zigzag_best_20260527_1042.json /root/aads/aads-s
+
+## [2026-05-27 10:43:36 KST] [aads-server] scripts/auto_collect_trends.sh
+- Chat-Direct 수정: write: scripts/auto_collect_trends.sh
+
+## [2026-05-27 10:48:04 KST] [aads-server] app/services/output_validator.py
+- Chat-Direct 수정: patch: _REPORT_MIN_STRUCTURE_CHARS = 280
+_STATU→_REPORT_MIN_STRUCTURE_CHARS = 280
+_STATU
+
+## [2026-05-27 10:48:17 KST] [aads-server] app/services/output_validator.py
+- Chat-Direct 수정: patch: def validate_response(
+    response_text→def validate_response(
+    response_text
+
+## [2026-05-27 10:48:35 KST] [aads-server] app/services/output_validator.py
+- Chat-Direct 수정: patch:     # 도구가 호출된 응답 — XML 날조는 위에서 이미 검사, 데이→    _skip_report_quality = _is_confirmat
+
+## [2026-05-27 10:48:49 KST] [aads-server] app/services/output_validator.py
+- Chat-Direct 수정: patch:     # ── REPORT_STRUCTURE_WEAK: 분석/보고 응답→    # ── REPORT_STRUCTURE_WEAK: 분석/보고 응답
+
+## [2026-05-27 10:49:06 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:         # 9.5 Layer ④: Output Validator →        # 9.5 Layer ④: Output Validator 
+
+## [2026-05-27 10:49:30 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:             if _retry_response.strip():
+→            if _retry_response.strip():
+
+
+## [2026-05-27 10:49:57 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 _critic_validation = _cr→                _critic_validation = _cr
+
+## [2026-05-27 10:54:19 KST] [aads-server] app/services/output_validator.py
+- Chat-Direct 수정: patch: _REPORT_MIN_STRUCTURE_CHARS = 280
+_STATU→_REPORT_MIN_STRUCTURE_CHARS = 280
+_STATU
+
+## [2026-05-27 10:54:26 KST] [aads-server] app/services/output_validator.py
+- Chat-Direct 수정: patch: def validate_response(
+    response_text→def validate_response(
+    response_text
+
+## [2026-05-27 10:54:34 KST] [aads-server] app/services/output_validator.py
+- Chat-Direct 수정: patch:     # 도구가 호출된 응답 — XML 날조는 위에서 이미 검사, 데이→    _skip_report_quality = _is_confirmat
+
+## [2026-05-27 10:54:41 KST] [aads-server] app/services/output_validator.py
+- Chat-Direct 수정: patch:     # ── REPORT_STRUCTURE_WEAK: 분석/보고 응답→    # ── REPORT_STRUCTURE_WEAK: 분석/보고 응답
+
+## [2026-05-27 10:54:49 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:         # 9.5 Layer ④: Output Validator →        # 9.5 Layer ④: Output Validator 
+
+## [2026-05-27 10:55:10 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:             if _retry_response.strip():
+→            if _retry_response.strip():
+
+
+## [2026-05-27 10:55:30 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 _critic_validation = _cr→                _critic_validation = _cr
+
+## [2026-05-27 11:00:43 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:             # F8: 클라이언트에 stream_reset 전송→            # F8: validator 거부 시 거부된 응답은
+
+## [2026-05-27 11:04:29 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:             # F8: 클라이언트에 stream_reset 전송→            # F8: validator 거부 시 거부된 응답은

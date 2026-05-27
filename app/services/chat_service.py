@@ -6969,20 +6969,14 @@ async def send_message_stream(
             response_text=full_response,
             tools_called=bool(tools_called),
             intent=intent,
+            user_message=content,
         )
         if not _validation.is_valid:
             logger.warning(
                 f"output_validator: {_validation.violation_type} — {_validation.message} "
                 f"(intent={intent}, model={model_used}, tokens_out={output_tokens})"
             )
-            # F8: 클라이언트에 stream_reset 전송 — 이전 잘못된 텍스트 초기화
-            _preserved_message = await _save_interrupted_partial_message(
-                session_id,
-                full_response,
-                reason=f"output_validator_{_validation.violation_type}",
-            )
-            if _preserved_message:
-                yield f"data: {json.dumps({'type': 'partial_preserved', 'message': _preserved_message})}\n\n"
+            # F8: validator 거부 시 거부된 응답은 DB 저장/화면 노출 안 함 — 버블 중복 방지
             yield f"data: {json.dumps({'type': 'stream_reset', 'reason': _validation.violation_type})}\n\n"
             # DB 저장 시 재시도 응답만 사용하도록 원본 응답 별도 보관
             _failed_response = full_response
@@ -7052,6 +7046,7 @@ async def send_message_stream(
                     response_text=_retry_response,
                     tools_called=bool(tools_called),
                     intent=intent,
+                    user_message=content,
                 )
                 if not _retry_validation.is_valid:
                     logger.error(
@@ -7165,6 +7160,7 @@ async def send_message_stream(
                     response_text=_critic_retry_response,
                     tools_called=bool(tools_called),
                     intent=intent,
+                    user_message=content,
                 )
                 if _critic_validation.is_valid:
                     full_response = _critic_retry_response

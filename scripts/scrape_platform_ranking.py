@@ -123,12 +123,56 @@ ZIGZAG_EXTRACT_JS = """
 """
 
 
-async def send_pc_agent_command(command: dict, timeout: int = 30) -> dict | None:
-    """PC Agent에 명령을 전송하고 결과를 반환."""
+_AGENT_ID_CACHE: str | None = None
+
+
+def _resolve_agent_id() -> str | None:
+    """현재 연결된 PC Agent 중 chrome_cdp/interactive_browser 보유 에이전트 자동 선택."""
+    global _AGENT_ID_CACHE
+    if _AGENT_ID_CACHE:
+        return _AGENT_ID_CACHE
     try:
         from app.services.pc_agent_manager import pc_agent_manager
-        result = await pc_agent_manager.send_command(command, timeout=timeout)
-        return result
+        agents = pc_agent_manager.list_agents()
+        if not agents:
+            return None
+        for info in agents:
+            caps = set(getattr(info, "capabilities", []) or [])
+            if {"chrome_cdp", "interactive_browser"} & caps:
+                _AGENT_ID_CACHE = info.agent_id
+                return info.agent_id
+        _AGENT_ID_CACHE = agents[0].agent_id
+        return _AGENT_ID_CACHE
+    except Exception as e:
+        logger.error(f"PC Agent 탐색 실패: {e}")
+        return None
+
+
+async def send_pc_agent_command(command: dict, timeout: int = 30) -> dict | None:
+    """PC Agent에 명령을 전송하고 결과를 반환.
+
+    command = {"type": <command_type>, ...params}
+    내부적으로 send_command(agent_id, command_type, params) -> command_id 호출 후
+    get_result(command_id, timeout)으로 결과 대기.
+    """
+    agent_id = _resolve_agent_id()
+    if not agent_id:
+        logger.error("PC Agent 미연결 (list_agents=빈배열). client 재실행 필요.")
+        return None
+    try:
+        from app.services.pc_agent_manager import pc_agent_manager
+        cmd = dict(command)
+        command_type = cmd.pop("type", None)
+        if not command_type:
+            logger.error(f"command type 누락: {command}")
+            return None
+        command_id = await pc_agent_manager.send_command(agent_id, command_type, cmd)
+        result = await pc_agent_manager.get_result(command_id, timeout=float(timeout))
+        return {
+            "status": getattr(result, "status", None),
+            "data": getattr(result, "result", None) or getattr(result, "data", None),
+            "error": getattr(result, "error", None),
+        }
     except Exception as e:
         logger.error(f"PC Agent 명령 실패: {e}")
         return None
