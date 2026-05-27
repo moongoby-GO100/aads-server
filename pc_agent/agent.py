@@ -189,14 +189,19 @@ class PCAgent:
         self._loop = asyncio.get_running_loop()
         delay = RECONNECT_DELAY
 
+        reconnect_count = 0
         while self._running:
             try:
+                reconnect_count += 1
+                if reconnect_count > 1:
+                    logger.info("재연결 시도 #%d (delay=%ds)", reconnect_count - 1, delay)
                 await self._connect()
                 delay = RECONNECT_DELAY
+                reconnect_count = 0
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error("연결 오류: %s — %d초 후 재연결", e, delay)
+                logger.error("연결 오류: %s — %d초 후 재연결 (시도 #%d)", e, delay, reconnect_count)
             finally:
                 self.is_connected = False
             if self._running:
@@ -218,6 +223,7 @@ class PCAgent:
                 ping_interval=20,
                 ping_timeout=20,
                 close_timeout=10,
+                open_timeout=15,
             ) as ws:
                 logger.info("서버 연결 성공")
                 self._ws = ws
