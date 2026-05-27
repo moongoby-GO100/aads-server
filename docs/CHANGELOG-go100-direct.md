@@ -14224,3 +14224,65 @@ import loggin
 ## [2026-05-27 14:11:26 KST] [GO100] HANDOVER.md
 - Chat-Direct 수정: patch: ## 2026-05-27 14:06 KST - GO100 전략카드 ID →## 2026-05-27 14:10 KST - GO100 사이트 접속 장
 - finalize: pending
+
+## [2026-05-27 14:19:18 KST] [GO100] backend/app/services/go100/strategy_whitepaper_service.py
+- Chat-Direct 수정: patch:     "holding_minutes": "최대 보유 시간",
+    "→    "holding_minutes": "최대 보유 시간",
+    "
+- finalize: pending
+
+## [2026-05-27 14:20:27 KST] [GO100] backend/app/services/go100/strategy_whitepaper_service.py
+- Chat-Direct 수정: patch:     "force_close_time": "강제 청산 시간",
+    →    "force_close_time": "강제 청산 시간",
+    
+- finalize: pending
+
+## [2026-05-27 14:21:13 KST] [GO100] backend/app/services/go100/strategy_whitepaper_service.py
+- Chat-Direct 수정: patch: def _rule_explanation(name: str, params:→def _rule_explanation(name: str, params:
+- finalize: pending
+
+## [2026-05-27 14:22:11 KST] [GO100] backend/app/services/go100/strategy_whitepaper_service.py
+- Chat-Direct 수정: patch:     "STRONG_TREND_UP": "강한 상승장",
+    "SI→    "STRONG_TREND_UP": "강한 상승장",
+    "SI
+- finalize: pending
+
+## [2026-05-27 14:24:00 KST] [GO100] backend/app/services/go100/strategy_whitepaper_service.py
+- Chat-Direct 수정: patch:     if raw_name:
+        name = str(raw_→    if raw_name:
+        name = str(raw_
+- finalize: pending
+
+## [2026-05-27 14:24:31 KST] [GO100] backend/app/services/go100/ai/data_coverage.py
+- Chat-Direct 수정: patch:     recent = re.search(r"최근(\d{1,3})일", →    recent = re.search(r"최근(\d{1,3})일", 
+- finalize: pending
+
+## [2026-05-27 14:24:54 KST] [GO100] backend/app/services/go100/ai/realtime_guardrails.py
+- Chat-Direct 수정: patch: def _needs_account_holdings_context(mess→def _needs_account_holdings_context(mess
+- finalize: pending
+
+## [2026-05-27 14:25:17 KST] [GO100] backend/app/services/go100/ai/data_coverage.py
+- Chat-Direct 수정: run_remote_command: python3 backend/scripts/go100_regenerate_strategy_whitepaper.py --card-id 119
+- finalize: pending
+
+## [2026-05-27 14:25:25 KST] [GO100] backend/app/services/go100/ai/realtime_guardrails.py
+- Chat-Direct 수정: run_remote_command: python3 backend/scripts/go100_regenerate_strategy_whitepaper.py --card-id 119
+- finalize: pending
+
+## [2026-05-27 14:25:31 KST] [GO100] backend/app/services/go100/strategy_whitepaper_service.py
+- Chat-Direct 수정: run_remote_command: python3 backend/scripts/go100_regenerate_strategy_whitepaper.py --card-id 119
+- finalize: pending
+
+## [2026-05-27 14:26:38 KST] [GO100] docs/technical/GO100_BAEKUK_CHAT_QUALITY_RUNTIME_CONTRACT.md
+- Chat-Direct 수정: patch: > Version: v1.0
+> Updated: 2026-05-27 12→> Version: v1.1
+> Updated: 2026-05-27 14
+- finalize: pending
+
+## [2026-05-27 14:26:59 KST] [GO100] docs/technical/GO100_BAEKUK_CHAT_QUALITY_RUNTIME_CONTRACT.md
+- Chat-Direct 수정: patch: | POST chat metadata | `data.tools_used`→| POST chat metadata | `data.tools_used`
+- finalize: pending
+
+## [2026-05-27 14:27:51 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: ## 2026-05-27 14:10 KST - GO100 사이트 접속 장→## 2026-05-27 14:21 KST - GO100 백억이 상한가/
+- finalize: pending
