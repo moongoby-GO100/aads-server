@@ -416,8 +416,20 @@ def main() -> None:
                         need, remote_ver = check_update(cfg)
                         if need:
                             download_update(cfg, remote_ver)
+                            # 다운로드 성공 후 retry 카운터 리셋
+                            retry_file = INSTALL_DIR / ".update_retry_count"
+                            try:
+                                retry_file.write_text("0", encoding="utf-8")
+                            except Exception:
+                                pass
                         else:
                             logger.info("self_update 신호였지만 서버 버전과 로컬 버전이 이미 일치")
+                            # 이미 일치 = 다운로드 불필요 → retry 카운터 리셋
+                            retry_file = INSTALL_DIR / ".update_retry_count"
+                            try:
+                                retry_file.write_text("0", encoding="utf-8")
+                            except Exception:
+                                pass
                     except Exception as e:
                         logger.error("self_update 다운로드 실패 — 기존 코드로 재기동 시도: %s", e)
                     time.sleep(5)

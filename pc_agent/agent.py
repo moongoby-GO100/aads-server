@@ -200,7 +200,7 @@ class PCAgent:
         first_fail_time: float | None = None
         # 서버측 의도/일시 종료 → 즉시 재연결 (지수 백오프 스킵)
         FAST_RECONNECT_CODES = {1000, 1001, 1005, 1006, 1011, 1012}
-        FAST_RECONNECT_DELAY = 1
+        FAST_RECONNECT_DELAY = 3
 
         while self._running:
             fast_reconnect = False
@@ -363,17 +363,52 @@ class PCAgent:
                 break
 
     async def _auto_update_loop(self, ws: Any) -> None:
-        """5분마다 서버 업데이트 확인 → 변경 있으면 재다운로드 + 재시작."""
+        """5분마다 서버 업데이트 확인 → 변경 있으면 재다운로드 + 재시작.
+
+        v1.0.37: cooldown + retry limit으로 무한 self_update 루프 방지.
+        """
         if updater is None:
             logger.warning("updater 모듈 미로드 — 자동 업데이트 비활성화")
             return
-        await asyncio.sleep(30)  # 시작 후 30초 대기
+
+        import time as _time
+        cooldown_file = INSTALL_DIR / ".last_update_ts"
+        max_retry_file = INSTALL_DIR / ".update_retry_count"
+
+        initial_delay = 30
+        try:
+            if cooldown_file.exists():
+                last_ts = float(cooldown_file.read_text(encoding="utf-8").strip())
+                elapsed = _time.time() - last_ts
+                if elapsed < 600:
+                    initial_delay = 600
+                    logger.info("최근 업데이트 %d초 전 — 다음 체크까지 %d초 대기 (cooldown)", int(elapsed), initial_delay)
+        except Exception:
+            pass
+
+        try:
+            retry_count = int(max_retry_file.read_text(encoding="utf-8").strip()) if max_retry_file.exists() else 0
+        except Exception:
+            retry_count = 0
+        if retry_count >= 3:
+            logger.warning("자동 업데이트 3회 연속 재시도 — 30분간 업데이트 체크 중단")
+            try:
+                max_retry_file.write_text("0", encoding="utf-8")
+            except Exception:
+                pass
+            await asyncio.sleep(1800)
+
+        await asyncio.sleep(initial_delay)
         while True:
             try:
                 has_update = await updater.check_for_updates()
                 if has_update:
-                    logger.info("자동 업데이트 감지! git pull + 재시작 진행")
-                    # 서버에 업데이트 알림
+                    logger.info("자동 업데이트 감지! 재시작 진행")
+                    try:
+                        cooldown_file.write_text(str(_time.time()), encoding="utf-8")
+                        max_retry_file.write_text(str(retry_count + 1), encoding="utf-8")
+                    except Exception:
+                        pass
                     await ws.send(json.dumps({
                         "type": "status",
                         "id": str(uuid.uuid4()),
@@ -385,7 +420,13 @@ class PCAgent:
                         await ws.close(code=4042, reason="self_update")
                     except Exception:
                         pass
-                    return  # 재시작되므로 여기까지 도달 안 함
+                    return
+                else:
+                    if retry_count > 0:
+                        try:
+                            max_retry_file.write_text("0", encoding="utf-8")
+                        except Exception:
+                            pass
             except Exception as e:
                 logger.debug("자동 업데이트 확인 실패: %s", e)
             await asyncio.sleep(AUTO_UPDATE_INTERVAL)
