@@ -1,8 +1,7 @@
 """KakaoBot SaaS — 시스템 트레이 아이콘.
 
 pystray 기반. launcher.py에서 별도 스레드로 실행됨.
-메뉴: 상태 보기 / 카카오 자동응답 ON·OFF / 로그 보기 / 설정 / 종료.
-상태: 연결됨(초록) / 재연결 중(노랑) / 연결 끊김(빨강).
+v1.0.40: 버전 표시, 트레이 숨기기/완전종료 분리, 확인 다이얼로그.
 """
 from __future__ import annotations
 
@@ -15,19 +14,10 @@ from typing import Callable
 
 logger = logging.getLogger("tray")
 
-# ---------------------------------------------------------------------------
-# 아이콘 생성 (Pillow로 단색 원)
-# ---------------------------------------------------------------------------
 _COLORS = {
-    "connected": (0, 200, 80),      # 초록
-    "reconnecting": (240, 200, 0),   # 노랑
-    "disconnected": (220, 50, 50),   # 빨강
-}
-
-_STATUS_LABELS = {
-    "connected": "연결됨 — 정상 동작 중",
-    "reconnecting": "재연결 중 — 서버 연결 시도 중",
-    "disconnected": "연결 끊김 — 프로세스 종료됨",
+    "connected": (0, 200, 80),
+    "reconnecting": (240, 200, 0),
+    "disconnected": (220, 50, 50),
 }
 
 INSTALL_DIR = Path(os.environ.get(
@@ -35,10 +25,17 @@ INSTALL_DIR = Path(os.environ.get(
     os.path.join(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"), "KakaoBot"),
 ))
 LOG_DIR = INSTALL_DIR / "logs"
+VERSION_FILE = INSTALL_DIR / "agent" / "VERSION"
+
+
+def _get_version() -> str:
+    try:
+        return VERSION_FILE.read_text(encoding="utf-8").strip()
+    except Exception:
+        return "?.?.?"
 
 
 def _make_icon(color: tuple[int, int, int] = (0, 200, 80)):
-    """64x64 단색 원 아이콘 생성."""
     from PIL import Image, ImageDraw
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -47,11 +44,7 @@ def _make_icon(color: tuple[int, int, int] = (0, 200, 80)):
     return img
 
 
-# ---------------------------------------------------------------------------
-# 트레이 생성
-# ---------------------------------------------------------------------------
 def create_tray(cfg: dict, agent_proc, on_quit: Callable) -> None:
-    """시스템 트레이 아이콘 생성 및 실행."""
     try:
         import pystray
         from pystray import MenuItem as Item
@@ -59,26 +52,32 @@ def create_tray(cfg: dict, agent_proc, on_quit: Callable) -> None:
         logger.warning("pystray 미설치 — 트레이 없이 실행")
         return
 
+    version = _get_version()
     auto_reply_enabled = True
 
     def get_status() -> str:
-        """실제 WebSocket 연결 상태 확인."""
-        if hasattr(agent_proc, 'is_connected') and agent_proc.is_connected:
+        if hasattr(agent_proc, "is_connected") and agent_proc.is_connected:
             return "connected"
         if agent_proc and agent_proc.poll() is None:
             return "reconnecting"
         return "disconnected"
 
-    def on_status(icon, item):
-        """상태 보기."""
+    def _status_text(item=None) -> str:
         status = get_status()
+        labels = {
+            "connected": "● 연결됨",
+            "reconnecting": "● 재연결 중",
+            "disconnected": "● 연결 끊김",
+        }
+        return f"{labels.get(status, status)} — v{version}"
+
+    def on_status(icon, item):
         try:
-            icon.notify(_STATUS_LABELS.get(status, status), "KakaoBot 상태")
+            icon.notify(_status_text(), "KakaoBot 상태")
         except Exception:
             pass
 
     def on_toggle_auto(icon, item):
-        """카카오 자동응답 ON/OFF 토글."""
         nonlocal auto_reply_enabled
         auto_reply_enabled = not auto_reply_enabled
         state = "ON" if auto_reply_enabled else "OFF"
@@ -90,7 +89,6 @@ def create_tray(cfg: dict, agent_proc, on_quit: Callable) -> None:
         icon.update_menu()
 
     def on_open_logs(icon, item):
-        """로그 폴더 열기."""
         log_path = str(LOG_DIR)
         if sys.platform == "win32":
             os.startfile(log_path)
@@ -98,16 +96,36 @@ def create_tray(cfg: dict, agent_proc, on_quit: Callable) -> None:
             subprocess.Popen(["xdg-open", log_path])
 
     def on_settings(icon, item):
-        """설정 파일 열기."""
         config_path = str(INSTALL_DIR / "config.json")
         if sys.platform == "win32":
             os.startfile(config_path)
         else:
             subprocess.Popen(["xdg-open", config_path])
 
+    def on_hide(icon, item):
+        logger.info("트레이 숨기기 — 에이전트 실행 유지")
+        try:
+            icon.notify("트레이를 숨겼습니다. 에이전트는 계속 실행 중입니다.", "KakaoBot")
+        except Exception:
+            pass
+        icon.visible = False
+
     def on_exit(icon, item):
-        """종료."""
-        logger.info("트레이에서 종료 요청")
+        try:
+            import tkinter as tk
+            from tkinter import messagebox
+            root = tk.Tk()
+            root.withdraw()
+            result = messagebox.askyesno(
+                "KakaoBot 종료",
+                "에이전트를 완전히 종료합니다.\nPC Agent 연결이 끊어집니다.\n\n정말 종료하시겠습니까?",
+            )
+            root.destroy()
+            if not result:
+                return
+        except Exception:
+            pass
+        logger.info("트레이에서 완전 종료 요청")
         on_quit()
         icon.stop()
 
@@ -115,19 +133,21 @@ def create_tray(cfg: dict, agent_proc, on_quit: Callable) -> None:
         return f"자동응답 {'ON ✓' if auto_reply_enabled else 'OFF'}"
 
     menu = pystray.Menu(
-        Item("상태 보기", on_status),
-        Item(auto_reply_text, on_toggle_auto),
+        Item(f"KakaoBot v{version}", on_status, enabled=False),
+        Item(_status_text, on_status),
         pystray.Menu.SEPARATOR,
+        Item(auto_reply_text, on_toggle_auto),
         Item("로그 보기", on_open_logs),
         Item("설정", on_settings),
         pystray.Menu.SEPARATOR,
-        Item("종료", on_exit),
+        Item("트레이 숨기기", on_hide),
+        Item("완전 종료", on_exit),
     )
 
     icon = pystray.Icon(
         name="KakaoBot",
         icon=_make_icon(_COLORS[get_status()]),
-        title="KakaoBot PC Agent",
+        title=f"KakaoBot PC Agent v{version}",
         menu=menu,
     )
 

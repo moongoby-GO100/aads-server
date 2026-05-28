@@ -614,6 +614,7 @@ async def stream_stop(agent_id: str):
 async def pc_agent_health():
     """PC Agent 서브시스템 상태."""
     await _flush_pending_reload_disconnects()
+    _ensure_offline_monitor()
     agents = pc_agent_manager.list_agents()
     return {
         "connected": len(agents),
@@ -626,3 +627,67 @@ async def pc_agent_health():
             for a in agents
         ],
     }
+
+
+# ── PC Agent Offline 모니터링 (120초 이상 시 텔레그램 알림) ──────────────
+
+_OFFLINE_MONITOR_TASK: asyncio.Task[Any] | None = None
+_OFFLINE_ALERT_SENT = False
+_OFFLINE_THRESHOLD = 120
+
+
+async def _offline_monitor_loop() -> None:
+    global _OFFLINE_ALERT_SENT
+    await asyncio.sleep(60)
+    while True:
+        try:
+            agents = pc_agent_manager.list_agents()
+            if not agents:
+                if not _OFFLINE_ALERT_SENT:
+                    from app.core.db_pool import get_pool
+                    pool = get_pool()
+                    async with pool.acquire() as conn:
+                        row = await conn.fetchrow(
+                            "SELECT created_at FROM pc_agent_connection_events "
+                            "WHERE event = 'disconnected' ORDER BY id DESC LIMIT 1"
+                        )
+                    if row:
+                        from datetime import timezone
+                        elapsed = (datetime.now(timezone.utc) - row["created_at"]).total_seconds()
+                        if elapsed >= _OFFLINE_THRESHOLD:
+                            _OFFLINE_ALERT_SENT = True
+                            try:
+                                from app.services.telegram_bot import get_telegram_bot
+                                bot = get_telegram_bot()
+                                if bot:
+                                    await bot.send_message(
+                                        f"⚠️ PC Agent offline {int(elapsed)}초 경과\n"
+                                        f"마지막 끊김: {row['created_at'].strftime('%H:%M KST')}"
+                                    )
+                            except Exception as e:
+                                logger.warning("pc_agent_offline_alert_fail: %s", e)
+            else:
+                if _OFFLINE_ALERT_SENT:
+                    _OFFLINE_ALERT_SENT = False
+                    try:
+                        from app.services.telegram_bot import get_telegram_bot
+                        bot = get_telegram_bot()
+                        if bot:
+                            await bot.send_message("✅ PC Agent 재연결됨")
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.debug("offline_monitor_err: %s", e)
+        await asyncio.sleep(30)
+
+
+def _ensure_offline_monitor() -> None:
+    global _OFFLINE_MONITOR_TASK
+    if _OFFLINE_MONITOR_TASK is not None and not _OFFLINE_MONITOR_TASK.done():
+        return
+    try:
+        loop = asyncio.get_running_loop()
+        _OFFLINE_MONITOR_TASK = loop.create_task(_offline_monitor_loop())
+        logger.info("pc_agent_offline_monitor_started")
+    except RuntimeError:
+        pass

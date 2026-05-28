@@ -350,9 +350,17 @@ class PCAgent:
             raise
 
     async def _heartbeat(self, ws: Any) -> None:
-        """주기적 하트비트 전송."""
+        """주기적 하트비트 전송. PC 절전 복귀 시 즉시 재연결 트리거."""
+        last_beat = asyncio.get_event_loop().time()
         while True:
             try:
+                now = asyncio.get_event_loop().time()
+                gap = now - last_beat
+                if gap > HEARTBEAT_INTERVAL * 3:
+                    logger.info("PC 절전 복귀 감지 (gap=%.1fs) — 즉시 재연결", gap)
+                    await ws.close(code=1000, reason="sleep_wake_reconnect")
+                    break
+                last_beat = now
                 await ws.send(json.dumps({
                     "type": "heartbeat",
                     "id": str(uuid.uuid4()),
