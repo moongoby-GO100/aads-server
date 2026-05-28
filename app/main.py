@@ -1317,7 +1317,14 @@ async def lifespan(app: FastAPI):
         )
         yield
 
-    # 종료 정리
+    # 종료 정리 — PC Agent WebSocket graceful-shutdown (SIGTERM/Docker 재시작 시 code=1012 전송)
+    try:
+        from app.services.pc_agent_manager import pc_agent_manager
+        _pc_closed = await pc_agent_manager.close_all_connections(reason="server_shutdown")
+        if _pc_closed:
+            logger.info("pc_agent_graceful_shutdown", closed=_pc_closed)
+    except Exception as _pc_err:
+        logger.warning(f"pc_agent_graceful_shutdown_failed: {_pc_err}")
     if scheduler:
         scheduler.shutdown(wait=False)
         logger.info("apscheduler_stopped")

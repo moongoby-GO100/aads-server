@@ -59,7 +59,8 @@ SERVER_URL = os.getenv("AADS_SERVER_URL", "wss://aads.newtalk.kr/api/v1/pc-agent
 AGENT_SECRET = os.getenv("AADS_AGENT_TOKEN", os.getenv("PC_AGENT_SECRET", ""))
 HEARTBEAT_INTERVAL = 25  # 초
 RECONNECT_DELAY = 5  # 초
-MAX_RECONNECT_DELAY = 60  # 초 — 지수 백오프 상한
+MAX_RECONNECT_DELAY = 30  # 초 — 지수 백오프 상한 (60→30으로 단축)
+MAX_RECONNECT_DURATION = 300  # 초 — 5분 연속 재연결 실패 시 프로세스 종료 → launcher가 재시작
 AUTO_UPDATE_INTERVAL = 300  # 초 — 5분마다 서버 버전 확인 (HTTP 기반)
 
 # ── 단일 인스턴스 (Windows 뮤텍스) ────────────────────────────────────────
@@ -190,6 +191,7 @@ class PCAgent:
         delay = RECONNECT_DELAY
 
         reconnect_count = 0
+        first_fail_time: float | None = None
         while self._running:
             try:
                 reconnect_count += 1
@@ -198,12 +200,21 @@ class PCAgent:
                 await self._connect()
                 delay = RECONNECT_DELAY
                 reconnect_count = 0
+                first_fail_time = None
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error("연결 오류: %s — %d초 후 재연결 (시도 #%d)", e, delay, reconnect_count)
+                if first_fail_time is None:
+                    first_fail_time = asyncio.get_event_loop().time()
             finally:
                 self.is_connected = False
+            # 5분 연속 재연결 실패 시 프로세스 종료 → launcher watchdog가 클린 재시작
+            if first_fail_time is not None:
+                elapsed = asyncio.get_event_loop().time() - first_fail_time
+                if elapsed > MAX_RECONNECT_DURATION:
+                    logger.error("재연결 %d초 연속 실패 — 프로세스 종료 (launcher가 재시작)", int(elapsed))
+                    break
             if self._running:
                 logger.info("재연결 대기 %d초...", delay)
                 await asyncio.sleep(delay)
@@ -220,8 +231,8 @@ class PCAgent:
         try:
             async with websockets.connect(
                 url,
-                ping_interval=20,
-                ping_timeout=20,
+                ping_interval=15,
+                ping_timeout=10,
                 close_timeout=10,
                 open_timeout=15,
             ) as ws:

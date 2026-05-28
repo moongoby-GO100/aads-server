@@ -396,7 +396,9 @@ def main() -> None:
 
     # 4) 에이전트 프로세스 감시 + 주기적 업데이트 확인
     UPDATE_INTERVAL = 3600  # 1시간마다 업데이트 확인
+    RECONNECT_WATCHDOG_TIMEOUT = 120  # 120초 이상 미연결 시 강제 재시작
     last_update_check = time.time()
+    disconnected_since = None
     _set_crash_count(0)  # 정상 시작 시 크래시 카운터 리셋
 
     try:
@@ -457,6 +459,26 @@ def main() -> None:
                         proc = run_agent(cfg)
                 except Exception as e:
                     logger.warning("주기적 업데이트 실패: %s", e)
+
+            # 연결 상태 watchdog — 장기 미연결 시 에이전트 강제 재시작
+            if hasattr(proc, 'is_connected') and not proc.is_connected:
+                if disconnected_since is None:
+                    disconnected_since = time.time()
+                elif time.time() - disconnected_since > RECONNECT_WATCHDOG_TIMEOUT:
+                    logger.warning("에이전트 %d초 이상 미연결 — 강제 재시작", RECONNECT_WATCHDOG_TIMEOUT)
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=10)
+                    except Exception:
+                        pass
+                    disconnected_since = None
+                    _set_crash_count(0)
+                    time.sleep(3)
+                    proc = run_agent(cfg)
+                    if proc is None:
+                        break
+            else:
+                disconnected_since = None
 
             time.sleep(2)
     except KeyboardInterrupt:
