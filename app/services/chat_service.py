@@ -1209,21 +1209,40 @@ async def cleanup_stale_streaming_placeholders(
             session_uuid = uuid.UUID(session_id)
             execution_id = row["execution_id"]
             execution_uuid = uuid.UUID(str(execution_id)) if execution_id else None
-            has_final_message = await conn.fetchval(
-                """
-                SELECT 1
-                FROM chat_messages
-                WHERE session_id = $1
-                  AND role = 'assistant'
-                  AND intent IS DISTINCT FROM 'streaming_placeholder'
-                  AND created_at >= (
-                      SELECT created_at FROM chat_messages WHERE id = $2
-                  )
-                LIMIT 1
-                """,
-                session_uuid,
-                row["id"],
-            )
+            if execution_uuid:
+                has_final_message = await conn.fetchval(
+                    """
+                    SELECT 1
+                    FROM chat_messages
+                    WHERE session_id = $1
+                      AND execution_id = $3
+                      AND role = 'assistant'
+                      AND intent IS DISTINCT FROM 'streaming_placeholder'
+                      AND created_at >= (
+                          SELECT created_at FROM chat_messages WHERE id = $2
+                      )
+                    LIMIT 1
+                    """,
+                    session_uuid,
+                    row["id"],
+                    execution_uuid,
+                )
+            else:
+                has_final_message = await conn.fetchval(
+                    """
+                    SELECT 1
+                    FROM chat_messages
+                    WHERE session_id = $1
+                      AND role = 'assistant'
+                      AND intent IS DISTINCT FROM 'streaming_placeholder'
+                      AND created_at >= (
+                          SELECT created_at FROM chat_messages WHERE id = $2
+                      )
+                    LIMIT 1
+                    """,
+                    session_uuid,
+                    row["id"],
+                )
 
             assistant_message_id = row["id"]
             if has_final_message:
@@ -1430,6 +1449,15 @@ async def _mark_execution_interrupted(
     pid = uuid.UUID(str(placeholder_id)) if placeholder_id else None
     # AADS: reason은 항상 문자열로 정규화 (bool/None이 전달돼도 reason[:1000] 안전)
     reason = str(reason) if not isinstance(reason, str) else reason
+    is_superseded_cancel = any(
+        token in reason
+        for token in (
+            "superseded",
+            "CancelledError",
+            "newer_user",
+            "new_execution",
+        )
+    )
 
     if pid is None:
         pid = await conn.fetchval(
@@ -1470,7 +1498,7 @@ async def _mark_execution_interrupted(
                 pid,
             )
             assistant_message_id = pid
-        elif delete_empty_placeholder:
+        elif delete_empty_placeholder or is_superseded_cancel:
             await conn.execute("DELETE FROM chat_messages WHERE id = $1", pid)
             assistant_message_id = None
         else:
@@ -1509,7 +1537,7 @@ async def _mark_execution_interrupted(
             eid,
         )
 
-    if assistant_message_id is None and "superseded_by_newer_user" not in reason:
+    if assistant_message_id is None and "superseded_by_newer_user" not in reason and not is_superseded_cancel:
         fallback_content = (
             "⚠️ _응답 생성이 중단되어 복구 응답을 만들지 못했습니다. "
             "같은 질문으로 다시 이어서 처리할 수 있습니다._"
@@ -2585,13 +2613,6 @@ async def with_background_completion(
                         """,
                         _final,
                         _ph["id"],
-                    )
-                    await _save_message(
-                        _conn,
-                        uuid.UUID(session_id),
-                        "assistant",
-                        "⚠️ _이전 응답이 중단되어 최종 응답을 만들지 못했습니다. 같은 질문으로 다시 이어서 처리할 수 있습니다._",
-                        model_used="interrupted",
                     )
                     _preserved_count += 1
                 else:
