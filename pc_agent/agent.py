@@ -200,7 +200,7 @@ class PCAgent:
         first_fail_time: float | None = None
         # 서버측 의도/일시 종료 → 즉시 재연결 (지수 백오프 스킵)
         FAST_RECONNECT_CODES = {1000, 1001, 1005, 1006, 1011, 1012}
-        FAST_RECONNECT_DELAY = 3
+        FAST_RECONNECT_DELAY = 1
 
         while self._running:
             fast_reconnect = False
