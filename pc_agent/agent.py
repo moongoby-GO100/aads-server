@@ -180,6 +180,7 @@ class PCAgent:
         self.hostname = platform.node()
         self.os_info = f"{platform.system()} {platform.release()} {platform.version()}"
         self._running = True
+        self._exit_for_update = False
         self.is_connected = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ws: Any | None = None
@@ -219,6 +220,11 @@ class PCAgent:
                 logger.info("재연결 대기 %d초...", delay)
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, MAX_RECONNECT_DELAY)
+
+        if self._exit_for_update:
+            logger.info("자동 업데이트 종료 - exit(42)")
+            release_single_instance()
+            raise SystemExit(42)
 
     async def _connect(self) -> None:
         """WebSocket 서버 연결."""
@@ -341,7 +347,12 @@ class PCAgent:
                         "id": str(uuid.uuid4()),
                         "payload": {"message": "자동 업데이트 감지, 재시작 중..."},
                     }))
-                    await updater.execute({"force": True})
+                    self._exit_for_update = True
+                    self._running = False
+                    try:
+                        await ws.close(code=4042, reason="self_update")
+                    except Exception:
+                        pass
                     return  # 재시작되므로 여기까지 도달 안 함
             except Exception as e:
                 logger.debug("자동 업데이트 확인 실패: %s", e)

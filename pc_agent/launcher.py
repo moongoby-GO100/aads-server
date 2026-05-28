@@ -426,6 +426,21 @@ def main() -> None:
                         break
                     continue
 
+                if ret == 0:
+                    try:
+                        need_upd, rv = check_update(cfg)
+                        if need_upd:
+                            logger.info("exit=0 VERSION mismatch - self-update")
+                            _set_crash_count(0)
+                            download_update(cfg, rv)
+                            time.sleep(3)
+                            proc = run_agent(cfg)
+                            if proc is None:
+                                break
+                            continue
+                    except Exception:
+                        pass
+
                 crash_n = _get_crash_count() + 1
                 _set_crash_count(crash_n)
                 logger.warning("에이전트 종료 (코드 %s) — 크래시 %d회", ret, crash_n)
