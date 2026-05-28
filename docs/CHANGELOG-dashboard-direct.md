@@ -709,3 +709,9 @@ path = '/root/aads/aads-dashboard/src/app/chat/page.tsx'
 
 ## [2026-05-27 17:16:37 KST] [aads-dashboard] src/app/chat/page.tsx
 - Chat-Direct 수정: run_remote_command: sed -i 's|mergeCooldownUntilRef.current = Date.now() + 8000;|mergeCooldownUntilR
+
+## [2026-05-27 18:21:30 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:   onRegenerate?: (msgId: string) => void→  onRegenerate?: (msgId: string, mode?: 
+
+## [2026-05-27 18:22:31 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i 's/onRegenerate?: (msgId: string) => void;/onRegenerate?: (msgId: string,

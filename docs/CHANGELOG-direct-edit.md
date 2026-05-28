@@ -3326,3 +3326,18 @@ from __
 
 ## [2026-05-27 17:15:00 KST] [aads-server] app/services/chat_service.py
 - Chat-Direct 수정: patch:         # P1-FIX: just_completed=True 반환→        # P1-FIX→P0-FIX: just_completed 
+
+## [2026-05-27 18:05:29 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: grep -rn "scheduler\|BackgroundTasks\|repeat_every\|startup\|on_startup\|lifespa
+
+## [2026-05-27 18:14:09 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:         async def _run_stale_execution_c→        async def _run_stale_execution_c
+
+## [2026-05-27 18:20:47 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch: @router.post("/chat/messages/{message_id→@router.post("/chat/messages/{message_id
+
+## [2026-05-27 18:35:18 KST] [aads-server] nginx-aads-upstream.conf
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "UPDATE chat_sessions SET curr
+
+## [2026-05-27 18:35:20 KST] [aads-server] nginx-aads-upstream.conf.dashboard.bak
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "UPDATE chat_sessions SET curr
