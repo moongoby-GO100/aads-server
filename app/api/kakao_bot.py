@@ -221,6 +221,7 @@ async def agent_download(format: str = Query(default=None)):
             headers={
                 "Content-Disposition": f'attachment; filename="kakaobot-setup-{version}.exe"',
                 "Content-Length": str(len(exe_bytes)),
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             },
         )
 
@@ -237,6 +238,8 @@ async def agent_download(format: str = Query(default=None)):
         headers={
             "Content-Disposition": f'attachment; filename="kakaobot-agent-{version}.zip"',
             "Content-Length": str(len(zip_bytes)),
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "ETag": f'"{version}-{len(zip_bytes)}"',
         },
     )
 
