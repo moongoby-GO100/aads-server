@@ -61,7 +61,7 @@ HEARTBEAT_INTERVAL = 25  # 초
 RECONNECT_DELAY = 5  # 초
 MAX_RECONNECT_DELAY = 30  # 초 — 지수 백오프 상한 (60→30으로 단축)
 MAX_RECONNECT_DURATION = 300  # 초 — 5분 연속 재연결 실패 시 프로세스 종료 → launcher가 재시작
-AUTO_UPDATE_INTERVAL = 300  # 초 — 5분마다 서버 버전 확인 (HTTP 기반)
+AUTO_UPDATE_INTERVAL = 600  # 초 — 10분마다 서버 버전 확인 (v1.0.38: 300→600 빈도 절감)
 
 # ── 단일 인스턴스 (Windows 뮤텍스) ────────────────────────────────────────
 
@@ -200,7 +200,7 @@ class PCAgent:
         first_fail_time: float | None = None
         # 서버측 의도/일시 종료 → 즉시 재연결 (지수 백오프 스킵)
         FAST_RECONNECT_CODES = {1000, 1001, 1005, 1006, 1011, 1012}
-        FAST_RECONNECT_DELAY = 3
+        FAST_RECONNECT_DELAY = 1
 
         while self._running:
             fast_reconnect = False
@@ -407,8 +407,8 @@ class PCAgent:
                     try:
                         cooldown_file.write_text(str(_time.time()), encoding="utf-8")
                         max_retry_file.write_text(str(retry_count + 1), encoding="utf-8")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.error("cooldown/retry 파일 쓰기 실패: %s (경로: %s)", e, cooldown_file)
                     await ws.send(json.dumps({
                         "type": "status",
                         "id": str(uuid.uuid4()),

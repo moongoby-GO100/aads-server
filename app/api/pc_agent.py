@@ -26,21 +26,15 @@ HEARTBEAT_INTERVAL = 30  # 초
 # hot-reload 시 기존 WebSocket 연결 상태 보존
 _prev_mod = _sys_reload.modules.get(__name__)
 if _prev_mod is not None and hasattr(_prev_mod, "_agent_connections"):
-    _pending_reload_disconnects: list[str] = list(
-        dict.fromkeys(
-            [
-                *getattr(_prev_mod, "_pending_reload_disconnects", []),
-                *_prev_mod._agent_connections.keys(),
-            ]
-        )
-    )
+    _agent_connections: dict[str, WebSocket] = dict(getattr(_prev_mod, '_agent_connections', {}))
+    _pending_reload_disconnects: list[str] = []
     _EVENT_TABLE_READY: bool = getattr(_prev_mod, "_EVENT_TABLE_READY", False)
     _EVENT_RECORD_FAILURE_COUNT: int = getattr(_prev_mod, "_EVENT_RECORD_FAILURE_COUNT", 0)
 else:
+    _agent_connections: dict[str, WebSocket] = {}
     _pending_reload_disconnects = []
     _EVENT_TABLE_READY = False
     _EVENT_RECORD_FAILURE_COUNT = 0
-_agent_connections: dict[str, WebSocket] = {}
 _RELOAD_DISCONNECT_FLUSH_TASK: asyncio.Task[Any] | None = None
 
 

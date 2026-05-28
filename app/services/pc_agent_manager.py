@@ -1919,5 +1919,12 @@ class PCAgentManager:
             return default
 
 
-# 싱글톤 인스턴스
+# 싱글톤 인스턴스 — hot-reload 시 기존 연결 보존
+import sys as _sys_mgr_reload
+_prev_mgr_mod = _sys_mgr_reload.modules.get(__name__)
 pc_agent_manager = PCAgentManager()
+if _prev_mgr_mod is not None:
+    _prev_mgr = getattr(_prev_mgr_mod, 'pc_agent_manager', None)
+    if _prev_mgr is not None and getattr(_prev_mgr, '_agents', None):
+        pc_agent_manager.__dict__.update(_prev_mgr.__dict__)
+        logger.info("pc_agent_manager_hot_reload agents=%d preserved", len(pc_agent_manager._agents))
