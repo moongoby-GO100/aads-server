@@ -1037,17 +1037,40 @@ def _chrome_not_running_error(port: int) -> Dict[str, Any]:
 # ── 커맨드 핸들러 ─────────────────────────────────────────────────────────
 
 async def browser_navigate(params: Dict[str, Any]) -> Dict[str, Any]:
-    """URL 이동. params: url(필수)"""
+    """URL 이동. params: url(필수), reuse_tab(선택, 기본true — 동일 도메인 탭 재사용)"""
     url = params.get("url", "")
     if not url:
         return {"status": "error", "data": {"error": "url 파라미터가 필요합니다"}}
 
     port = _effective_port(params)
+    reuse_tab = _as_bool(params.get("reuse_tab", True), default=True)
+    target_id = str(params.get("target_id", "") or "")
+    reused = False
+
+    if reuse_tab and not target_id:
+        try:
+            from urllib.parse import urlparse
+            target_domain = urlparse(url).netloc.lower()
+            if target_domain:
+                existing_targets = await _list_cdp_targets(port)
+                for t in existing_targets:
+                    if str(t.get("type") or "").lower() != "page":
+                        continue
+                    existing_url = str(t.get("url") or "")
+                    existing_domain = urlparse(existing_url).netloc.lower()
+                    if existing_domain == target_domain:
+                        target_id = str(t.get("id") or t.get("targetId") or "")
+                        reused = True
+                        logger.info("탭 재사용: domain=%s target_id=%s", target_domain, target_id)
+                        break
+        except Exception:
+            pass
+
     try:
         timeout_seconds = _resolve_timeout(params, param_name="page_timeout_seconds", default=CDP_COMMAND_TIMEOUT_SECONDS, maximum=90.0)
-        result = await _send_cdp_command(port, "Page.navigate", {"url": url}, timeout_seconds=timeout_seconds)
+        result = await _send_cdp_command(port, "Page.navigate", {"url": url}, timeout_seconds=timeout_seconds, target_id=target_id)
         _record_cdp_success(params, result.get("_target"))
-        logger.info("브라우저 이동: %s", url)
+        logger.info("브라우저 이동: %s (reused=%s)", url, reused)
         target = result.get("_target", {}) if isinstance(result, dict) else {}
         return {
             "status": "success",
@@ -1056,6 +1079,7 @@ async def browser_navigate(params: Dict[str, Any]) -> Dict[str, Any]:
                 "frameId": result.get("frameId", ""),
                 "target_id": target.get("id"),
                 "target_url": target.get("url"),
+                "reused_tab": reused,
             },
         }
     except CDPCommandError as exc:
@@ -1652,6 +1676,80 @@ async def browser_health(params: Dict[str, Any]) -> Dict[str, Any]:
         }
     except Exception as e:
         return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY}}
+
+
+async def browser_close_tab(params: Dict[str, Any]) -> Dict[str, Any]:
+    """탭 닫기. params: target_id(선택), url_pattern(선택), close_others(선택, 현재 탭 외 모두 닫기)."""
+    import re as _re
+
+    port = _effective_port(params)
+    target_id = str(params.get("target_id", "") or "").strip()
+    url_pattern = str(params.get("url_pattern", "") or "").strip()
+    close_others = _as_bool(params.get("close_others", False), default=False)
+    keep_last = _as_bool(params.get("keep_last", True), default=True)
+
+    try:
+        targets = await _list_cdp_targets(port)
+        pages = [
+            t for t in targets
+            if str(t.get("type") or "").lower() == "page" and str(t.get("webSocketDebuggerUrl") or "")
+        ]
+        if not pages:
+            return {"status": "success", "data": {"closed": 0, "remaining": 0, "message": "닫을 탭 없음"}}
+
+        to_close: list[dict[str, Any]] = []
+        if target_id:
+            to_close = [
+                t for t in pages
+                if str(t.get("id") or t.get("targetId") or "") == target_id
+            ]
+        elif url_pattern:
+            try:
+                compiled = _re.compile(url_pattern, _re.IGNORECASE)
+                to_close = [t for t in pages if compiled.search(str(t.get("url") or ""))]
+            except _re.error:
+                return {"status": "error", "data": {"error": f"잘못된 정규식: {url_pattern}"}}
+        elif close_others:
+            sorted_pages = sorted(pages, key=lambda t: _target_sort_key(t))
+            if len(sorted_pages) > 1:
+                to_close = sorted_pages[1:]
+
+        if not to_close:
+            return {"status": "success", "data": {"closed": 0, "remaining": len(pages), "message": "닫을 대상 없음"}}
+
+        if keep_last and len(to_close) >= len(pages):
+            to_close = to_close[:-1]
+
+        closed: list[dict[str, Any]] = []
+        browser_ws_url = await _get_browser_ws_url(port)
+        for tab in to_close:
+            tid = str(tab.get("id") or tab.get("targetId") or "")
+            if not tid:
+                continue
+            try:
+                await _send_cdp(
+                    browser_ws_url,
+                    "Target.closeTarget",
+                    {"targetId": tid},
+                    timeout_seconds=5,
+                )
+                closed.append({"id": tid, "url": str(tab.get("url") or ""), "title": str(tab.get("title") or "")})
+                logger.info("탭 닫기 완료: %s (%s)", tid, tab.get("url", ""))
+            except Exception as exc:
+                logger.warning("탭 닫기 실패: %s — %s", tid, exc)
+
+        return {
+            "status": "success",
+            "data": {
+                "closed": len(closed),
+                "closed_tabs": closed,
+                "remaining": len(pages) - len(closed),
+            },
+        }
+    except CDPCommandError as exc:
+        return _command_error_response(port, params, exc)
+    except Exception as e:
+        return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
 
 
 async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:

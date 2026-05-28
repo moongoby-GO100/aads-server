@@ -343,6 +343,11 @@ def format_result(command_type: str, result: Dict[str, Any] | None) -> str:
             return f"![브라우저 스크린샷](data:image/png;base64,{data['image']})"
         return "브라우저 스크린샷 캡처 완료 (이미지 데이터 없음)"
 
+    if command_type == "browser_close_tab":
+        closed = data.get("closed", 0) if isinstance(data, dict) else 0
+        remaining = data.get("remaining", "?") if isinstance(data, dict) else "?"
+        return f"탭 {closed}개 닫기 완료 (남은 탭: {remaining}개)"
+
     if command_type == "browser_launch":
         return "브라우저가 실행되었습니다."
 
