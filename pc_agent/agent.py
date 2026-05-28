@@ -363,70 +363,33 @@ class PCAgent:
                 break
 
     async def _auto_update_loop(self, ws: Any) -> None:
-        """5분마다 서버 업데이트 확인 → 변경 있으면 재다운로드 + 재시작.
+        """주기적 서버 업데이트 확인. 업데이트 감지 시 로그만 남기고 연결 유지.
+        실제 다운로드는 launcher의 주기적 체크(1시간)가 처리.
 
-        v1.0.37: cooldown + retry limit으로 무한 self_update 루프 방지.
+        v1.0.39: WebSocket 끊기 제거 — 연결 안정성 우선.
         """
         if updater is None:
             logger.warning("updater 모듈 미로드 — 자동 업데이트 비활성화")
             return
 
-        import time as _time
-        cooldown_file = INSTALL_DIR / ".last_update_ts"
-        max_retry_file = INSTALL_DIR / ".update_retry_count"
+        update_detect_count = 0
+        MAX_DETECTIONS = 2
 
-        initial_delay = 30
-        try:
-            if cooldown_file.exists():
-                last_ts = float(cooldown_file.read_text(encoding="utf-8").strip())
-                elapsed = _time.time() - last_ts
-                if elapsed < 600:
-                    initial_delay = 600
-                    logger.info("최근 업데이트 %d초 전 — 다음 체크까지 %d초 대기 (cooldown)", int(elapsed), initial_delay)
-        except Exception:
-            pass
-
-        try:
-            retry_count = int(max_retry_file.read_text(encoding="utf-8").strip()) if max_retry_file.exists() else 0
-        except Exception:
-            retry_count = 0
-        if retry_count >= 3:
-            logger.warning("자동 업데이트 3회 연속 재시도 — 30분간 업데이트 체크 중단")
-            try:
-                max_retry_file.write_text("0", encoding="utf-8")
-            except Exception:
-                pass
-            await asyncio.sleep(1800)
-
-        await asyncio.sleep(initial_delay)
+        await asyncio.sleep(60)
         while True:
             try:
                 has_update = await updater.check_for_updates()
                 if has_update:
-                    logger.info("자동 업데이트 감지! 재시작 진행")
-                    try:
-                        cooldown_file.write_text(str(_time.time()), encoding="utf-8")
-                        max_retry_file.write_text(str(retry_count + 1), encoding="utf-8")
-                    except Exception as e:
-                        logger.error("cooldown/retry 파일 쓰기 실패: %s (경로: %s)", e, cooldown_file)
-                    await ws.send(json.dumps({
-                        "type": "status",
-                        "id": str(uuid.uuid4()),
-                        "payload": {"message": "자동 업데이트 감지, 재시작 중..."},
-                    }))
-                    self._exit_for_update = True
-                    self._running = False
-                    try:
-                        await ws.close(code=4042, reason="self_update")
-                    except Exception:
-                        pass
-                    return
+                    update_detect_count += 1
+                    logger.info(
+                        "업데이트 감지 (%d/%d) — 연결 유지, launcher 주기 체크에서 처리",
+                        update_detect_count, MAX_DETECTIONS,
+                    )
+                    if update_detect_count >= MAX_DETECTIONS:
+                        logger.info("업데이트 %d회 감지 — 이 세션에서 추가 체크 중단", MAX_DETECTIONS)
+                        return
                 else:
-                    if retry_count > 0:
-                        try:
-                            max_retry_file.write_text("0", encoding="utf-8")
-                        except Exception:
-                            pass
+                    update_detect_count = 0
             except Exception as e:
                 logger.debug("자동 업데이트 확인 실패: %s", e)
             await asyncio.sleep(AUTO_UPDATE_INTERVAL)

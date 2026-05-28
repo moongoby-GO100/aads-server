@@ -92,12 +92,17 @@ async def check_for_updates() -> bool:
         if token:
             req.add_header("Authorization", f"Bearer {token}")
         req.add_header("User-Agent", "KakaoBot-Updater/1.0")
+        req.add_header("Cache-Control", "no-cache")
 
         resp = await asyncio.to_thread(_req.urlopen, req, timeout=10)
         info = _json.loads(resp.read().decode())
         remote_ver = info.get("version", "0.0.0")
         local_ver = _get_local_version()
 
+        logger.info(
+            "버전 체크: local=%r (path=%s, exists=%s) remote=%r",
+            local_ver, VERSION_FILE, VERSION_FILE.exists(), remote_ver,
+        )
         if remote_ver != local_ver:
             logger.info("업데이트 감지: 로컬=%s 서버=%s", local_ver, remote_ver)
             return True
