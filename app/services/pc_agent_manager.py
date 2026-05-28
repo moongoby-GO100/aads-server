@@ -389,13 +389,15 @@ class PCAgentManager:
                 error_code=_ERROR_PC_AGENT_OFFLINE,
             )
             try:
-                await conn.websocket.close(code=1012, reason=reason)
+                # v1.0.36: PC Agent가 1012 받으면 fast_reconnect (지수백오프 스킵)
+                # reason은 "server_restart" 그대로 — 클라이언트 로깅용
+                await conn.websocket.close(code=1012, reason=f"{reason}:fast_reconnect")
                 closed += 1
             except Exception:
                 pass
         self._agents.clear()
         self._streaming_subscribers.clear()
-        logger.info("pc_agent_all_connections_closed count=%d reason=%s", closed, reason)
+        logger.info("pc_agent_all_connections_closed count=%d reason=%s fast_reconnect=true", closed, reason)
         return closed
 
     # ── 조회 ──────────────────────────────────────────────────────

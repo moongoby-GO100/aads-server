@@ -186,14 +186,24 @@ class PCAgent:
         self._ws: Any | None = None
 
     async def run(self) -> None:
-        """메인 루프 — 서버 연결 + 재연결 (지수 백오프)."""
+        """메인 루프 — 서버 연결 + 재연결 (지수 백오프).
+
+        v1.0.36 (2026-05-28): 서버측 종료 코드(1012/1001/1006/1011)는
+        즉시 재연결(1초) — 지수 백오프 안 함. AADS hot-reload 시
+        ~6초 다운타임을 ~1초로 단축.
+        """
         logger.info("PC Agent 시작 agent_id=%s hostname=%s", self.agent_id, self.hostname)
         self._loop = asyncio.get_running_loop()
         delay = RECONNECT_DELAY
 
         reconnect_count = 0
         first_fail_time: float | None = None
+        # 서버측 의도/일시 종료 → 즉시 재연결 (지수 백오프 스킵)
+        FAST_RECONNECT_CODES = {1000, 1001, 1005, 1006, 1011, 1012}
+        FAST_RECONNECT_DELAY = 1
+
         while self._running:
+            fast_reconnect = False
             try:
                 reconnect_count += 1
                 if reconnect_count > 1:
@@ -204,6 +214,24 @@ class PCAgent:
                 first_fail_time = None
             except asyncio.CancelledError:
                 break
+            except websockets.ConnectionClosed as e:
+                code = getattr(e, "code", None) or 0
+                if code in FAST_RECONNECT_CODES:
+                    logger.info(
+                        "서버측 종료 (code=%s reason=%s) — 즉시 재연결",
+                        code, getattr(e, "reason", ""),
+                    )
+                    fast_reconnect = True
+                    delay = RECONNECT_DELAY
+                    reconnect_count = 0
+                    first_fail_time = None
+                else:
+                    logger.error(
+                        "연결 종료 (code=%s reason=%s) — %d초 후 재연결",
+                        code, getattr(e, "reason", ""), delay,
+                    )
+                    if first_fail_time is None:
+                        first_fail_time = asyncio.get_event_loop().time()
             except Exception as e:
                 logger.error("연결 오류: %s — %d초 후 재연결 (시도 #%d)", e, delay, reconnect_count)
                 if first_fail_time is None:
@@ -217,9 +245,13 @@ class PCAgent:
                     logger.error("재연결 %d초 연속 실패 — 프로세스 종료 (launcher가 재시작)", int(elapsed))
                     break
             if self._running:
-                logger.info("재연결 대기 %d초...", delay)
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, MAX_RECONNECT_DELAY)
+                if fast_reconnect:
+                    logger.info("fast_reconnect — %d초 대기", FAST_RECONNECT_DELAY)
+                    await asyncio.sleep(FAST_RECONNECT_DELAY)
+                else:
+                    logger.info("재연결 대기 %d초...", delay)
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, MAX_RECONNECT_DELAY)
 
         if self._exit_for_update:
             logger.info("자동 업데이트 종료 - exit(42)")
