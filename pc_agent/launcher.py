@@ -304,7 +304,9 @@ def main() -> None:
             "agent_token": token,
         }
         save_config(cfg)
-        register_startup()
+
+    # 매 실행마다 시작프로그램 등록 보장 (idempotent)
+    register_startup()
 
     # 1-b) 첫 실행 시 서버에 에이전트 등록
     if not cfg.get("registered"):
