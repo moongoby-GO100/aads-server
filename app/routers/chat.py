@@ -1713,15 +1713,14 @@ async def resume_interrupted(session_id: UUID):
 
 
 @router.post("/chat/messages/{message_id}/regenerate", tags=["chat-message"])
-async def regenerate_message(message_id: UUID, request: Request):
-    """AI 응답 재생성 — 해당 AI 메시지의 직전 user 메시지를 찾아 새 SSE 스트림 반환."""
+async def regenerate_message(message_id: UUID, request: Request, mode: str = "regenerate"):
+    """AI 응답 재생성 또는 이어서 생성. mode=continue: 중단 지점부터 이어서 생성."""
     from app.core.db_pool import get_pool
     pool = get_pool()
 
     async with pool.acquire() as conn:
-        # 1) message_id로 AI 응답 조회
         ai_msg = await conn.fetchrow(
-            "SELECT id, session_id, role, created_at FROM chat_messages WHERE id = $1",
+            "SELECT id, session_id, role, created_at, content FROM chat_messages WHERE id = $1",
             message_id,
         )
         if not ai_msg:
@@ -1729,7 +1728,6 @@ async def regenerate_message(message_id: UUID, request: Request):
         if ai_msg["role"] != "assistant":
             raise HTTPException(status_code=400, detail="regenerate는 AI 응답에만 사용 가능")
 
-        # 2) 직전 user 메시지 찾기
         user_msg = await conn.fetchrow(
             """SELECT id, content, attachments FROM chat_messages
                WHERE session_id = $1 AND created_at < $2 AND role = 'user'
@@ -1739,18 +1737,31 @@ async def regenerate_message(message_id: UUID, request: Request):
         if not user_msg:
             raise HTTPException(status_code=404, detail="이전 사용자 메시지를 찾을 수 없습니다")
 
-        # 3) 기존 AI 응답에 is_regenerated 마킹
-        await conn.execute(
-            "UPDATE chat_messages SET intent = 'regenerated' WHERE id = $1",
-            message_id,
-        )
+        if mode == "continue":
+            await conn.execute(
+                "UPDATE chat_messages SET intent = 'continued' WHERE id = $1",
+                message_id,
+            )
+        else:
+            await conn.execute(
+                "UPDATE chat_messages SET intent = 'regenerated' WHERE id = $1",
+                message_id,
+            )
 
     session_id_str = str(ai_msg["session_id"])
     content = user_msg["content"]
     import json as _json
     attachments = _json.loads(user_msg["attachments"]) if user_msg["attachments"] else []
 
-    # ContextVar 설정
+    if mode == "continue" and ai_msg["content"]:
+        partial = ai_msg["content"]
+        continue_suffix = (
+            "\n\n[이전 응답이 중단되었습니다. 아래 부분까지 생성되었으니 이어서 작성해주세요]\n"
+            f"{partial[-2000:]}\n"
+            "[위 내용에 이어서 자연스럽게 계속 작성하세요. 중복 없이 이어서.]"
+        )
+        content = content + continue_suffix
+
     from app.services.tool_executor import current_chat_session_id
     current_chat_session_id.set(session_id_str)
 
