@@ -975,6 +975,23 @@ async def _get_or_create_turn_execution(
             )
             return str(existing_execution_id)
 
+    # 새 지시가 기존 실행을 supersede하기 전에 메모리의 최신 partial을 DB에 먼저 flush한다.
+    # 기존에는 state["content"]가 있어도 "_accumulated_content" 키가 없으면 취소 직전 저장이
+    # 건너뛰어져, 화면에 잠깐 보인 "응답 중단/이어서" 버블이 강력 새로고침 후 사라질 수 있었다.
+    existing_state = _streaming_state.get(str(session_id))
+    if existing_state and (
+        _strip_streaming_progress_markers(existing_state.get("content", "")).strip()
+        or existing_state.get("tool_count", 0)
+    ):
+        try:
+            await _interim_save_streaming(str(session_id), existing_state, force=True)
+        except Exception as flush_err:
+            logger.warning(
+                "pre_supersede_partial_flush_failed session=%s error=%s",
+                str(session_id)[:8],
+                str(flush_err)[:160],
+            )
+
     await conn.execute(
         """
         UPDATE chat_turn_executions
@@ -987,6 +1004,27 @@ async def _get_or_create_turn_execution(
         """,
         session_id,
     )
+
+    # 중단된 실행의 streaming_placeholder를 즉시 interrupted_partial로 승격
+    # (cleanup_stale 대기 없이) — 강력 새로고침 후 버블 사라짐 방지
+    _orphan_placeholders = await conn.fetch(
+        "SELECT id, content FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder'",
+        session_id,
+    )
+    for _oph in _orphan_placeholders:
+        _cleaned = _format_stale_placeholder_content(_oph["content"] or "")
+        await conn.execute(
+            """
+            UPDATE chat_messages
+            SET intent = 'interrupted_partial',
+                model_used = 'interrupted',
+                content = $2,
+                edited_at = NOW()
+            WHERE id = $1
+            """,
+            _oph["id"],
+            _cleaned,
+        )
 
     execution_id = await conn.fetchval(
         """
@@ -1485,17 +1523,19 @@ async def _mark_execution_interrupted(
         if clean_partial:
             marker = "\n\n_(이전 응답은 중단 처리되었습니다. 최신 지시를 우선 처리합니다.)_"
             final_content = clean_partial if "최신 지시를 우선 처리" in clean_partial else clean_partial + marker
+            _intent = '_archived_partial' if is_superseded_cancel else 'interruption_notice'
             await conn.execute(
                 """
                 UPDATE chat_messages
                 SET content = $1,
-                    intent = 'interruption_notice',
+                    intent = $3,
                     model_used = 'interrupted',
                     edited_at = NOW()
                 WHERE id = $2
                 """,
                 final_content,
                 pid,
+                _intent,
             )
             assistant_message_id = pid
         elif delete_empty_placeholder or is_superseded_cancel:
@@ -1809,7 +1849,7 @@ async def _interrupt_execution_if_newer_user(
     return True
 
 
-async def _interim_save_streaming(session_id: str, state: Dict[str, Any]) -> None:
+async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, force: bool = False) -> None:
     """백그라운드 생성 중 중간 상태를 DB에 저장 (세션 이동 후 돌아왔을 때 보이도록).
     변경이 없으면 스킵 (1초 간격 호출 시 불필요한 DB write 방지).
     """
@@ -1821,10 +1861,10 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any]) -> Non
         # 변경 감지 + 최소 flush 간격 500ms (다중 경로 중복 방지)
         _te = state.get("tool_events", [])
         _save_key = f"{len(content)}:{tool_count}:{last_tool}:{len(_te)}"
-        if state.get("_last_save_key") == _save_key:
+        if not force and state.get("_last_save_key") == _save_key:
             return
         _now_flush = _bg_time.monotonic()
-        if state.get("_last_save_key") is not None and _now_flush - state.get("_last_flush_ts", 0) < 0.5:
+        if not force and state.get("_last_save_key") is not None and _now_flush - state.get("_last_flush_ts", 0) < 0.5:
             return
         state["_last_save_key"] = _save_key
         state["_last_flush_ts"] = _now_flush
@@ -2554,7 +2594,10 @@ async def with_background_completion(
     old_task = _active_bg_tasks.pop(session_id, None)
     if old_task and not old_task.done():
         _old_state = _streaming_state.get(session_id)
-        if _old_state and _old_state.get("_accumulated_content"):
+        if _old_state and (
+            _strip_streaming_progress_markers(_old_state.get("content", "")).strip()
+            or _old_state.get("tool_count", 0)
+        ):
             try:
                 await _interim_save_streaming(session_id, _old_state, force=True)
             except Exception:

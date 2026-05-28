@@ -1,5 +1,45 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-29 07:41 KST) - Chat partial persistence commit record
+- 배경: CEO가 세션 `93a6bddb-742d-44af-95d5-6958760284f8`에서 응답 중단/이어서 버블이 강력 새로고침 후 사라지는 현상에 대한 조치분 커밋/푸시와 문서 기록을 지시했다.
+- 조치 대상: `app/services/chat_service.py`, `app/routers/chat.py`, `HANDOVER.md`.
+- 핵심 변경:
+  - superseded 실행 전 메모리 partial을 `force=True`로 DB `streaming_placeholder`에 강제 flush하도록 보강했다.
+  - `force` 저장이 실제 동작하도록 `_interim_save_streaming(..., force=False)` 시그니처와 throttle 우회 로직을 추가했다.
+  - `/streaming-status`에서 실행 row에는 partial이 없지만 Redis stream에 delta가 남은 경우 DB placeholder를 자동 복원하도록 보강했다.
+  - superseded cancel에서 내용 있는 partial은 `_archived_partial`로 보존하고 빈 placeholder는 삭제해 새로고침 후 잘못된 중단 버블 표시를 줄였다.
+- 검증: `python3 -m py_compile app/services/chat_service.py app/routers/chat.py` 통과, `git diff --check -- app/services/chat_service.py app/routers/chat.py HANDOVER.md` 통과.
+- 주의: 대시보드 repo는 `origin/main` 대비 미푸시 커밋이 없으며, 현재 남은 변경은 과거 백업 파일 삭제/미추적 리포트라 이번 커밋 대상에서 제외한다.
+
+## 현재 진행 상태 (2026-05-28 14:08 KST) - Chat streaming completion one-shot retry hardening
+- 배경: CEO가 스트리밍 끊김 후 재시도 로직과 응답 완료 처리가 불안정하며, 완료된 응답이 새로고침 후에야 표시되는 잔여 문제 조치를 지시했다.
+- 확인: 현재 세션 `ac5278a7-2f13-4cd7-9aa1-83d41fb23c97`는 14:05 KST 실행 `4109830a-b0b9-4ebe-9cd4-22dfb796861e`가 `running`이고, DB에는 `streaming_placeholder`가 저장되어 화면 표시 가능한 상태다. 최근 2시간 assistant row에는 `streaming_placeholder` 2건, `interruption_notice` 3건, `interrupted_partial` 1건이 남아 있다.
+- 원인: 대시보드 `src/app/chat/page.tsx`의 SSE 종료 직후 완료 확인 주석은 300ms/2s/5s 3회 재확인이었지만 실제 호출은 300ms 1회뿐이었다. 최종 assistant 저장이 300ms 이후 도착하면 화면은 다음 interval 또는 새로고침까지 완료 전환을 놓칠 수 있었다.
+- 조치: SSE finally 직후 `streaming-status` 원샷 완료 확인을 300ms/2s/5s 3회로 보강하고, `just_completed=true` 감지 시 메시지 병합 결과가 비어도 `streamingSessionRef`, `streaming`, `streamBuf`를 반드시 해제하도록 수정했다.
+- 검증: `npx eslint src/app/chat/page.tsx` 통과(error 0, 기존 warning 21). 배포/커밋은 이 기록 작성 후 진행한다.
+
+## 현재 진행 상태 (2026-05-28 14:06 KST) - MCP `pipeline_runner_submit` 저장 실패 경로 복구
+- 배경: CEO가 MCP 도구 `pipeline_runner_submit` 호출 시 `{"detail":"작업 저장 실패"}`가 반환되지만 컨테이너 내부 `curl http://localhost:8080/api/v1/pipeline/jobs`는 성공하는 원인 확인과 조치를 요청했다.
+- 원인:
+  - MCP bridge/ToolExecutor 제출 경로 자체는 현재 `AADS_SESSION_ID`를 현재 채팅 세션으로 바인딩하고 내부 API 헤더를 붙여 정상 동작한다. 실제 MCP smoke job `runner-ffb9abd0`가 `queued`로 저장된 뒤 `no_changes`로 종료됐다.
+  - 제출 이후 211 러너에서 멈춘 별도 원인은 `/api/v1/ops/locks/*` 호출에 `x-monitor-key: internal-pipeline-call` 헤더가 없고 curl timeout도 없어 lock API에서 대기할 수 있었던 점이다.
+  - KIS는 `/root/webapp`로 잘못 매핑돼 `worktree_unavailable`이 발생했다. 실제 KIS/GO100 runner workdir은 `/root/kis-autotrade-v4`다.
+- 조치:
+  - `scripts/pipeline-runner.sh`: `AADS_INTERNAL_HEADER`, `AADS_CURL_TIMEOUT=10`을 추가하고 work/deploy lock acquire/release curl에 내부 헤더와 timeout을 적용했다.
+  - `scripts/pipeline-runner.sh`: KIS workdir 매핑을 `/root/webapp`에서 `/root/kis-autotrade-v4`로 수정했다.
+  - 서버211(`/root/scripts/pipeline-runner.sh`)과 서버114(`/root/scripts/pipeline-runner.sh`)에도 동일 lock header/timeout 패치를 반영했다. 서버211 KIS 매핑도 `/root/kis-autotrade-v4`로 확인했다.
+  - 서버68 `aads-pipeline-runner.service`를 14:08 KST 재시작해 로컬 스크립트 변경을 실행 프로세스에 반영했다.
+  - 검증 중 남은 smoke 프로세스 `runner-33fca4fe`, `runner-38ab1eea`는 DB/OS 기준 정리했다.
+- 검증:
+  - 실제 MCP 호출: `pipeline_runner_submit(project=AADS, size=XS)` → `runner-ffb9abd0`, DB 상태 `cancelled/no_changes`, `date` output `Thu May 28 14:06:26 KST 2026`.
+  - 전서버 smoke: AADS `runner-a81c1334`, KIS `runner-a9fad226`, GO100 `runner-87b70af4`, SF `runner-b8d8e849`, NTV2 `runner-3cef185c` 모두 `no_changes` 확인.
+  - `pytest -q tests/unit/test_runner_scope_defaults.py tests/unit/test_aads_tools_bridge.py` → 17 passed.
+  - `bash -n scripts/pipeline-runner.sh` 통과.
+  - DB active runner count 0 확인.
+- 배포/주의:
+  - 원격 runner script는 서버211/114에 직접 반영됐다.
+  - 로컬 AADS repo에는 `scripts/pipeline-runner.sh`와 이 `HANDOVER.md` 변경이 남아 있다. 커밋/푸시는 아직 수행하지 않았다.
+
 ## 현재 진행 상태 (2026-05-20 17:36 KST) - 동시 작업 동일파일 충돌 및 동시 배포 방어
 - 배경: CEO가 AI 동시 작업에서 의존성 문제, 동일 파일 수정 충돌, 동시 배포 시 nginx upstream 경합을 즉시 조치하라고 지시했다.
 - 조치:
@@ -1421,3 +1461,13 @@
 - 원인: `/chat/sessions/{session_id}/interrupt`가 인메모리 streaming flag만 보고 `queued=True`를 반환했다. 이전 실행이 DB 기준 stale/interrupted 상태여도 추가 지시를 user row로 저장하고 큐에만 넣어, 실제 LLM 실행으로 이어지지 않았다.
 - 조치: `app/routers/chat.py`에서 interrupt 접수 전 DB `current_execution_id`와 실행 age/progress를 확인하고 stale이면 `queued=false`로 거부하면서 인메모리 streaming 상태를 정리한다. `app/services/chat_service.py`에는 실행으로 연결되지 않은 최신 `[추가 지시]` row를 다음 정상 턴에 `[이전 추가 지시]`로 자동 회수하고 `intent='recovered_interrupt'`로 마킹하는 가드를 추가했다.
 - 검증: `python3 -m py_compile app/routers/chat.py app/services/chat_service.py` 통과. 대상 세션 기준 실행 미연결 최신 추가 지시 2건(`08:00`, `08:28 KST`)을 확인했다.
+
+## 2026-05-28 14:39 KST - Superseded stream partial flush fix
+
+- 배경: 세션 `93a6bddb-742d-44af-95d5-6958760284f8`에서 응답 중 `응답 중단/이어서` 버블이 보인 뒤 강력 새로고침 시 사라졌다는 보고가 있었다.
+- 확인: DB 기준 `14:25:57 KST` 실행 `d774cdbc-61fc-434c-8728-528b4198d703`은 `interrupted`였지만 `assistant_message_id`가 NULL이라 새로고침 후 복원할 assistant row가 없었다. 이후 `14:28:04 KST` 실행 `7132003f-b048-4d1a-9a37-3e61075fe910`은 `running`이며 `streaming_placeholder` row가 정상 갱신 중이었다.
+- 원인: 새 지시가 기존 실행을 supersede할 때 취소 직전 flush 호출이 `_interim_save_streaming(..., force=True)`로 되어 있었지만 함수가 `force` 인자를 받지 않아 TypeError가 조용히 무시됐다. 또한 flush 조건이 실제 누적 필드 `state["content"]`가 아니라 존재하지 않는 `_accumulated_content`를 봐서 마지막 partial 저장이 누락될 수 있었다.
+- 조치: `app/services/chat_service.py`에서 `_interim_save_streaming(..., force=False)`를 지원하고, force 모드에서는 save-key/throttle skip을 우회하게 했다. 새 execution 생성 전에도 기존 `_streaming_state[session_id]["content"]`를 DB `streaming_placeholder`로 강제 저장한 뒤 interrupted 처리하도록 보강했다.
+- 추가 조치: 배포/재연결 중 `running execution`은 남았지만 `assistant_message_id`와 `streaming_placeholder` row가 사라지는 상태가 재현되어, Redis stream `chat:stream:{execution_id}`에서 delta 2,178자를 복원해 현재 실행의 placeholder를 즉시 재생성했다. `app/routers/chat.py`의 `/streaming-status`에도 같은 상태를 감지하면 Redis stream에서 partial을 복원해 DB placeholder를 자동 생성하는 가드를 추가했다.
+- 검증: `python3 -m py_compile app/services/chat_service.py app/routers/chat.py` 통과. `bash deploy.sh bluegreen` 완료, deploy 검증 Health/DB/LLM 통과. 실제 `/etc/nginx/conf.d/aads-upstream.conf` 기준 active API는 `8100`, standby는 `8102`다.
+- 주의: 사라진 과거 `d774cdbc` 버블은 DB/Redis에 남은 실행 본문이 없어 사후 복원이 불가능하다. 현재 실행 `7132003f`는 Redis에서 복원해 화면 표시용 DB row를 다시 만들었다. PC Agent가 offline이라 브라우저 화면 캡처 E2E는 미실행했고 API/DB/컨테이너 검증으로 대체했다.

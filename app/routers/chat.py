@@ -1029,6 +1029,76 @@ async def get_streaming_status(session_id: UUID):
                     if _settled:
                         return await _finalize_streaming_status(session_id, _settled, conn)
                     _partial = execution_row["partial_content"] or ""
+                    if not _partial:
+                        try:
+                            from app.services import redis_stream as _redis_stream
+                            _redis_partial, _redis_done = await _redis_stream.reconstruct_from_stream(
+                                execution_row["execution_id"]
+                            )
+                            _redis_clean = svc._strip_streaming_progress_markers(_redis_partial or "")
+                            if _redis_clean and svc._has_meaningful_partial_content(_redis_clean):
+                                _restored_content = (
+                                    _redis_clean
+                                    + "\n\n⏳ _생성 중... (재연결 복구 중)_"
+                                )
+                                _restored_id = await conn.fetchval(
+                                    """
+                                    INSERT INTO chat_messages (
+                                        session_id, execution_id, role, content,
+                                        intent, model_used, tools_called,
+                                        created_at, edited_at
+                                    )
+                                    VALUES (
+                                        $1, $2, 'assistant', $3,
+                                        'streaming_placeholder', 'streaming', '[]'::jsonb,
+                                        NOW(), NOW()
+                                    )
+                                    ON CONFLICT (execution_id)
+                                      WHERE intent = 'streaming_placeholder'
+                                        AND execution_id IS NOT NULL
+                                    DO UPDATE
+                                      SET content = EXCLUDED.content,
+                                          edited_at = NOW()
+                                    RETURNING id
+                                    """,
+                                    session_id,
+                                    UUID(execution_row["execution_id"]),
+                                    _restored_content,
+                                )
+                                await conn.execute(
+                                    """
+                                    UPDATE chat_turn_executions
+                                    SET assistant_message_id = COALESCE(assistant_message_id, $2),
+                                        updated_at = NOW()
+                                    WHERE id = $1
+                                      AND status IN ('running', 'retrying')
+                                    """,
+                                    UUID(execution_row["execution_id"]),
+                                    _restored_id,
+                                )
+                                await conn.execute(
+                                    """
+                                    UPDATE chat_sessions
+                                    SET updated_at = NOW()
+                                    WHERE id = $1
+                                    """,
+                                    session_id,
+                                )
+                                _partial = _restored_content
+                                logger.warning(
+                                    "streaming_status_restored_placeholder_from_redis session=%s execution=%s len=%s done=%s",
+                                    str(session_id)[:8],
+                                    execution_row["execution_id"][:8],
+                                    len(_redis_clean),
+                                    _redis_done,
+                                )
+                        except Exception as _restore_err:
+                            logger.warning(
+                                "streaming_status_redis_restore_failed session=%s execution=%s error=%s",
+                                str(session_id)[:8],
+                                execution_row["execution_id"][:8],
+                                str(_restore_err)[:160],
+                            )
                     _tc, _lt = _extract_tool_progress(execution_row["tools_called"])
                     return await _finalize_streaming_status(session_id, {
                         "is_streaming": True,
