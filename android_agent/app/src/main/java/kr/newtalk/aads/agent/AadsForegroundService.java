@@ -5,23 +5,53 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
+import android.net.Uri;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
+import android.os.PowerManager;
+import android.provider.Settings;
+import android.util.Log;
 
 public final class AadsForegroundService extends Service implements AadsWebSocketClient.Listener {
+    private static final String TAG = "AadsForegroundService";
+
     static final String ACTION_START = "kr.newtalk.aads.agent.action.START";
     static final String ACTION_STOP = "kr.newtalk.aads.agent.action.STOP";
     static final String ACTION_STATE_CHANGED = "kr.newtalk.aads.agent.action.STATE_CHANGED";
+    static final String ACTION_NETWORK_RESTORED = "kr.newtalk.aads.agent.action.NETWORK_RESTORED";
+    static final String ACTION_WATCHDOG_RECONNECT = "kr.newtalk.aads.agent.action.WATCHDOG_RECONNECT";
 
     private static final String CHANNEL_ID = "aads_agent_connection";
     private static final int NOTIFICATION_ID = 231;
+    private static final long WATCHDOG_INTERVAL_MS = 90_000;
+    private static final long HEARTBEAT_TIMEOUT_MS = 120_000;
 
     private AadsWebSocketClient client;
     private String currentStatus = AgentStateStore.STATUS_DISCONNECTED;
     private String currentError = "";
     private String activeCommand = "";
+
+    private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
+    private long lastHeartbeatMs = 0;
+
+    private final Runnable watchdogRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (client == null) return;
+            if (lastHeartbeatMs > 0
+                    && System.currentTimeMillis() - lastHeartbeatMs > HEARTBEAT_TIMEOUT_MS
+                    && AgentStateStore.STATUS_CONNECTED.equals(currentStatus)) {
+                Log.w(TAG, "Watchdog: heartbeat timeout — forcing reconnect");
+                client.nudgeReconnect();
+            }
+            watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL_MS);
+        }
+    };
 
     @Override
     public void onCreate() {
@@ -29,24 +59,41 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
         createNotificationChannel();
         AgentStateStore.setStatus(this, AgentStateStore.STATUS_DISCONNECTED, "");
         AgentStateStore.setActiveCommand(this, "");
+        requestBatteryOptimizationExemption();
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? ACTION_START : intent.getAction();
         if (ACTION_STOP.equals(action)) {
+            stopWatchdog();
             stopClient();
             stopForeground(true);
             stopSelf();
             return START_NOT_STICKY;
         }
+        if (ACTION_NETWORK_RESTORED.equals(action)) {
+            if (client != null && AgentStateStore.STATUS_DISCONNECTED.equals(currentStatus)) {
+                Log.i(TAG, "Network restored — nudging immediate reconnect");
+                client.nudgeReconnect();
+            }
+            return START_STICKY;
+        }
+        if (ACTION_WATCHDOG_RECONNECT.equals(action)) {
+            if (client != null) {
+                client.nudgeReconnect();
+            }
+            return START_STICKY;
+        }
         startForegroundWithType(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
         startClient();
+        startWatchdog();
         return START_STICKY;
     }
 
     @Override
     public void onDestroy() {
+        stopWatchdog();
         stopClient();
         super.onDestroy();
     }
@@ -67,6 +114,7 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
 
     @Override
     public void onHeartbeat(long timestampMs) {
+        lastHeartbeatMs = timestampMs;
         AgentStateStore.setLastHeartbeat(this, timestampMs);
         broadcastState();
     }
@@ -100,6 +148,30 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
         AgentStateStore.setStatus(this, currentStatus, "");
         AgentStateStore.setActiveCommand(this, "");
         broadcastState();
+    }
+
+    private void startWatchdog() {
+        watchdogHandler.removeCallbacks(watchdogRunnable);
+        watchdogHandler.postDelayed(watchdogRunnable, WATCHDOG_INTERVAL_MS);
+    }
+
+    private void stopWatchdog() {
+        watchdogHandler.removeCallbacks(watchdogRunnable);
+    }
+
+    private void requestBatteryOptimizationExemption() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
+        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
+            try {
+                Intent exemption = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                exemption.setData(Uri.parse("package:" + getPackageName()));
+                exemption.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(exemption);
+            } catch (Exception e) {
+                Log.w(TAG, "Battery optimization exemption request failed", e);
+            }
+        }
     }
 
     private void promoteForegroundTypeForCommand(String commandType) {

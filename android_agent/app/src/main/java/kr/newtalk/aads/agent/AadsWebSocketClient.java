@@ -3,6 +3,7 @@ package kr.newtalk.aads.agent;
 import android.content.Context;
 import android.net.Uri;
 import android.os.Build;
+import android.util.Log;
 
 import org.json.JSONObject;
 
@@ -20,6 +21,8 @@ import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 
 final class AadsWebSocketClient {
+    private static final String TAG = "AadsWebSocketClient";
+
     interface Listener {
         void onState(String status, String error);
 
@@ -28,7 +31,7 @@ final class AadsWebSocketClient {
         void onCommandState(String commandType);
     }
 
-    private static final int[] BACKOFF_SECONDS = new int[]{5, 10, 20, 40, 60};
+    private static final int[] BACKOFF_SECONDS = new int[]{2, 5, 10, 20, 40, 60};
 
     private final Context context;
     private final AgentConfig config;
@@ -81,6 +84,20 @@ final class AadsWebSocketClient {
         commandExecutor.shutdownNow();
     }
 
+    void nudgeReconnect() {
+        if (!running.get()) return;
+        Log.i(TAG, "Nudge reconnect — cancelling pending backoff, connecting now");
+        if (reconnectFuture != null) {
+            reconnectFuture.cancel(false);
+        }
+        if (webSocket != null) {
+            try { webSocket.close(1000, "nudge"); } catch (Exception ignored) {}
+            webSocket = null;
+        }
+        attempt = 0;
+        scheduler.execute(this::connectNow);
+    }
+
     private void connectNow() {
         if (!running.get()) {
             return;
@@ -111,6 +128,7 @@ final class AadsWebSocketClient {
         JSONObject payload = new JSONObject();
         ResultJson.put(payload, "agent_id", config.agentId);
         ResultJson.put(payload, "device_type", AgentConfig.DEVICE_TYPE);
+        ResultJson.put(payload, "version", AgentConfig.VERSION);
         ResultJson.put(payload, "hostname", Build.MANUFACTURER + " " + Build.MODEL);
         ResultJson.put(payload, "os_info", "Android " + Build.VERSION.RELEASE + " SDK " + Build.VERSION.SDK_INT);
         ResultJson.put(payload, "capabilities", dispatcher.capabilities());
