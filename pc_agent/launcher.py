@@ -164,6 +164,34 @@ def register_startup() -> None:
         logger.warning("시작프로그램 등록 실패: %s", e)
 
 
+def register_watchdog_task() -> None:
+    """Windows Task Scheduler에 5분 간격 watchdog 등록 — 런처가 죽어도 자동 복구."""
+    if sys.platform != "win32":
+        return
+    try:
+        import subprocess
+        if getattr(sys, "frozen", False):
+            exe_path = f'"{sys.executable}"'
+        else:
+            exe_path = f'"{sys.executable}" "{os.path.abspath(__file__)}"'
+        result = subprocess.run(
+            ["schtasks", "/Create",
+             "/TN", "KakaoBotWatchdog",
+             "/TR", exe_path,
+             "/SC", "MINUTE", "/MO", "5",
+             "/RL", "HIGHEST",
+             "/F"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            logger.info("Task Scheduler watchdog 등록 완료 (5분 간격)")
+        else:
+            logger.warning("Task Scheduler watchdog 등록 실패: %s", result.stderr.strip())
+    except Exception as e:
+        logger.warning("Task Scheduler watchdog 등록 실패: %s", e)
+
+
+
 # ---------------------------------------------------------------------------
 # 에이전트 실행
 # ---------------------------------------------------------------------------
@@ -316,6 +344,7 @@ def main() -> None:
 
     # 매 실행마다 시작프로그램 등록 보장 (idempotent)
     register_startup()
+    register_watchdog_task()
 
     # 1-b) 첫 실행 시 서버에 에이전트 등록
     if not cfg.get("registered"):
