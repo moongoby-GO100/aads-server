@@ -80,7 +80,7 @@ _SEMAPHORE_ACQUIRE_TIMEOUT_SEC = float(os.getenv("CLAUDE_RELAY_ACQUIRE_TIMEOUT_S
 _semaphore = None  # 앱 시작 시 실제 이벤트 루프에서 생성 (Python 3.6 different loop 방지)
 
 # AADS-191: 세마포어 leak 진단/방지용 활성 lease 카운터
-_ACTIVE_LEASES = {"claude": 0, "codex": 0}
+_ACTIVE_LEASES = {"claude": 0, "codex": 0, "antigravity": 0}
 _STDERR_READ_TIMEOUT_SEC = float(os.getenv("CLAUDE_RELAY_STDERR_READ_TIMEOUT_SEC", "3"))
 
 # AADS-191B: lease registry — 세션별 슬롯 점유 현황 추적 (운영 가시성)
@@ -1347,6 +1347,12 @@ _CODEX_MODEL_MAP = {
     "gpt-5.3-codex": "gpt-5.3-codex",
 }
 
+_ANTIGRAVITY_MODEL_MAP = {
+    "antigravity": "gemini-3.5-flash",
+    "antigravity-pro": "gemini-3.1-pro-preview",
+    "antigravity-flash": "gemini-3.5-flash",
+}
+
 _CODEX_PROJECT_HINTS = {
     "AADS": "local_workdir=/root/aads/aads-server; dashboard=/root/aads/aads-dashboard; deploy=bash /root/aads/aads-server/deploy.sh or dashboard deploy.sh as requested",
     "KIS": "remote_server=server-211; remote_workdir=/root/kis-autotrade-v4; use SSH/MCP project=KIS for commit/push/deploy",
@@ -1738,6 +1744,158 @@ async def handle_codex_stream(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
+async def handle_antigravity_stream(request):
+    """Antigravity CLI (docker exec antigravity-test) -> NDJSON pseudo-streaming."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid JSON"}, status=400)
+    system_prompt = body.get("system_prompt", "")
+    messages_text = body.get("messages_text", "")
+    model = body.get("model", "antigravity")
+    session_id = body.get("session_id", "")
+    if not messages_text:
+        return web.json_response({"error": "messages_text required"}, status=400)
+    agy_model = _ANTIGRAVITY_MODEL_MAP.get(model, "gemini-3.5-flash")
+    prompt = messages_text
+    if system_prompt:
+        prompt = "[SYSTEM]\n" + system_prompt + "\n\n[USER]\n" + messages_text
+    try:
+        async with _SemaphoreLease(
+            _semaphore,
+            _SEMAPHORE_ACQUIRE_TIMEOUT_SEC,
+            "antigravity",
+            session_id,
+        ) as _lease:
+            response = web.StreamResponse(status=200, reason="OK", headers={
+                "Content-Type": "application/x-ndjson",
+                "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+            try:
+                await _stream_prepare(response, request)
+            except ConnectionResetError:
+                logger.info(
+                    "Antigravity response prepare skipped: client already closed session=%s",
+                    (session_id or "default")[:8],
+                )
+                return response
+            cmd = [
+                "docker", "exec", "antigravity-test",
+                "/root/.local/bin/agy",
+                "--print", prompt,
+                "--print-timeout", "5m",
+            ]
+            logger.info(
+                "Antigravity: model=%s agy_model=%s prompt_len=%d session=%s",
+                model, agy_model, len(prompt), (session_id or "default")[:8],
+            )
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE)
+            _lease.attach_proc(proc.pid, agy_model or "")
+            proc.stdin.close()
+            full_text = ""
+            try:
+                async for raw_line in _iter_ndjson_lines(proc.stdout, timeout_sec=360):
+                    line_text = raw_line.decode("utf-8", errors="replace").rstrip("\n")
+                    if not line_text:
+                        continue
+                    for i in range(0, len(line_text), 40):
+                        chunk = line_text[i:i + 40]
+                        await _stream_write(
+                            response,
+                            json.dumps({"type": "assistant", "subtype": "text",
+                                        "text": chunk}).encode() + b"\n",
+                        )
+                        await asyncio.sleep(0.015)
+                    full_text += line_text + "\n"
+            except ConnectionResetError:
+                logger.info("Antigravity relay client disconnected: session=%s",
+                            (session_id or "default")[:8])
+            except asyncio.TimeoutError:
+                logger.error("Antigravity timeout (360s): model=%s", agy_model)
+                try:
+                    await _stream_write(response,
+                        json.dumps({"type": "error",
+                                    "content": "Antigravity CLI timeout"}).encode() + b"\n")
+                except ConnectionResetError:
+                    logger.info("Antigravity timeout write skipped: session=%s",
+                                (session_id or "default")[:8])
+                proc.kill()
+            except Exception as exc:
+                logger.error("Antigravity stream error: %s", exc)
+                try:
+                    await _stream_write(response,
+                        json.dumps({"type": "error",
+                                    "content": str(exc)}).encode() + b"\n")
+                except ConnectionResetError:
+                    logger.info("Antigravity stream error write skipped: session=%s",
+                                (session_id or "default")[:8])
+            finally:
+                if proc.returncode is None:
+                    try:
+                        proc.terminate()
+                        await asyncio.wait_for(proc.wait(), timeout=5)
+                    except (asyncio.TimeoutError, ProcessLookupError):
+                        try:
+                            proc.kill()
+                        except ProcessLookupError:
+                            pass
+                if proc.stderr:
+                    try:
+                        stderr_bytes = await asyncio.wait_for(
+                            proc.stderr.read(), timeout=_STDERR_READ_TIMEOUT_SEC)
+                    except asyncio.TimeoutError:
+                        stderr_bytes = b""
+                        logger.warning(
+                            "Antigravity stderr_read_timeout: session=%s — forcing pipe close",
+                            (session_id or "default")[:8])
+                        try:
+                            proc.kill()
+                        except (ProcessLookupError, Exception):
+                            pass
+                    if stderr_bytes:
+                        logger.info("Antigravity stderr: %s",
+                                    stderr_bytes.decode("utf-8", errors="replace")[:500])
+                try:
+                    transport = getattr(proc, "_transport", None)
+                    if transport is not None:
+                        transport.close()
+                except Exception:
+                    pass
+            full_text = full_text.rstrip("\n")
+            try:
+                await _stream_write(response, json.dumps({
+                    "type": "result", "result": full_text,
+                    "input_tokens": 0,
+                    "output_tokens": len(full_text) // 4,
+                    "model": model,
+                }).encode() + b"\n")
+            except ConnectionResetError:
+                logger.info("Antigravity result write skipped: session=%s",
+                            (session_id or "default")[:8])
+            try:
+                await _stream_write_eof(response)
+            except ConnectionResetError:
+                logger.info("Antigravity write_eof skipped: session=%s",
+                            (session_id or "default")[:8])
+            return response
+    except asyncio.TimeoutError:
+        return web.json_response({
+            "error": "antigravity_relay_busy",
+            "error_type": "relay_semaphore_timeout",
+            "detail": "No Antigravity relay slot became available within %.1f seconds"
+                      % _SEMAPHORE_ACQUIRE_TIMEOUT_SEC,
+        }, status=503)
+    except Exception as e:
+        if _is_client_disconnect_error(e):
+            logger.info("Antigravity handler client disconnected: session=%s",
+                        (session_id or "default")[:8])
+            return web.Response(status=499)
+        logger.error("Antigravity handler error: %s", e)
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def handle_health(request):
     # AADS-191: 세마포어 leak 가시성을 위해 active_leases / semaphore_value 노출
     sem_value = None
@@ -1750,6 +1908,7 @@ async def handle_health(request):
               "auth_mode": "direct_oauth" if _DIRECT_OAUTH_ENABLED else "litellm_proxy",
               "claude_cmd_mode": _resolve_cli_command("claude").get("mode", "unknown"),
               "codex_cmd_mode": _resolve_cli_command("codex").get("mode", "unknown"),
+              "antigravity_cmd_mode": "docker_exec",
               "mcp_bridge_mode": _MCP_BRIDGE_MODE,
               "max_concurrent": _MAX_CONCURRENT,
               "semaphore_available": sem_value,
@@ -2015,6 +2174,7 @@ def create_app():
     app.on_startup.append(_on_startup)
     app.router.add_post("/stream", handle_stream)
     app.router.add_post("/codex-stream", handle_codex_stream)
+    app.router.add_post("/antigravity-stream", handle_antigravity_stream)
     app.router.add_get("/health", handle_health)
     app.router.add_get("/leases", handle_leases)
     app.router.add_get("/codex-usage", handle_codex_usage)

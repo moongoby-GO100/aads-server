@@ -798,6 +798,14 @@ _CODEX_MODEL_ALIASES = {
     "gpt-5.3 codex (codex cli)": "gpt-5.3-codex",
 }
 
+# Antigravity CLI 모델 (Google Pro OAuth, relay /antigravity-stream 경유)
+_ANTIGRAVITY_MODELS = {"antigravity", "antigravity-pro", "antigravity-flash"}
+_ANTIGRAVITY_MODEL_DISPLAY = {
+    "antigravity": "Antigravity (Gemini 3.5 Flash)",
+    "antigravity-pro": "Antigravity Pro (Gemini 3.1 Pro)",
+    "antigravity-flash": "Antigravity Flash (Gemini 3.5 Flash)",
+}
+
 
 def _canonical_codex_model_id(model: Any) -> str:
     value = str(model or "").strip()
@@ -883,7 +891,7 @@ _ALIBABA_MODELS = {
 }
 
 # LiteLLM OpenAI 호환 모델 (Gemini + Groq + DeepSeek + OpenRouter + Alibaba)
-_LITELLM_OPENAI_MODELS = _GEMINI_MODELS | _GROQ_MODELS | _DEEPSEEK_MODELS | _OPENROUTER_MODELS | _ALIBABA_MODELS | _KIMI_MODELS | _MINIMAX_MODELS | _OPENAI_MODELS | _CODEX_MODELS
+_LITELLM_OPENAI_MODELS = _GEMINI_MODELS | _GROQ_MODELS | _DEEPSEEK_MODELS | _OPENROUTER_MODELS | _ALIBABA_MODELS | _KIMI_MODELS | _MINIMAX_MODELS | _OPENAI_MODELS | _CODEX_MODELS | _ANTIGRAVITY_MODELS
 
 _OPENAI_COMPATIBLE_DIRECT_PROVIDERS = {"openai", "groq", "openrouter", "qwen", "kimi", "minimax"}
 _DIRECT_PROVIDER_BASE_URLS = {
@@ -1894,6 +1902,23 @@ async def call_stream(
             yield event
         if _had_error:
             yield {"type": "delta", "content": f"\n\n[{model} (Codex) 오류 → Gemini Flash 전환]\n\n"}
+            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools, session_id=session_id):
+                if event.get("type") in ("done", "model_info"):
+                    event = {**event, "model": model}
+                yield event
+        return
+
+    # Antigravity CLI 모델 → Relay /antigravity-stream 경유 (Google Pro OAuth, 실패 시 Gemini Flash 폴백)
+    if model in _ANTIGRAVITY_MODELS:
+        _had_error = False
+        async for event in _stream_antigravity_relay(model, system_prompt, messages, tools=tools, session_id=session_id):
+            if event.get("type") == "error":
+                _had_error = True
+                logger.warning(f"antigravity_fallback: {model} failed, falling back to gemini-2.5-flash")
+                break
+            yield event
+        if _had_error:
+            yield {"type": "delta", "content": f"\n\n[{model} (Antigravity) 오류 → Gemini Flash 전환]\n\n"}
             async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools, session_id=session_id):
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
@@ -3060,6 +3085,82 @@ async def _stream_codex_relay(
         }
         await asyncio.sleep(retry_delay)
         retry_messages = _build_codex_retry_messages(messages, partial_content)
+
+
+async def _stream_antigravity_relay_once(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    session_id: Optional[str] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """Antigravity CLI Relay (/antigravity-stream) 경유 Gemini 스트리밍. Google Pro OAuth."""
+    formatted = _format_messages_for_llm(messages, has_resume=False)
+    req_body = {
+        "model": model,
+        "system_prompt": system_prompt,
+        "messages_text": formatted,
+        "session_id": session_id or "",
+    }
+    display_model = _ANTIGRAVITY_MODEL_DISPLAY.get(model, model)
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
+            try:
+                hc = await client.get(f"{_CLAUDE_RELAY_URL}/health", timeout=5.0)
+                if hc.status_code != 200:
+                    yield {"type": "error", "content": f"Antigravity Relay not healthy: {hc.status_code}"}
+                    return
+            except Exception as hc_err:
+                yield {"type": "error", "content": f"Antigravity Relay unreachable: {hc_err}"}
+                return
+            async with client.stream(
+                "POST", f"{_CLAUDE_RELAY_URL}/antigravity-stream",
+                json=req_body, timeout=httpx.Timeout(300.0, connect=10.0),
+            ) as resp:
+                if resp.status_code != 200:
+                    body = await resp.aread()
+                    yield {"type": "error", "content": f"Antigravity Relay {resp.status_code}: {body.decode()[:200]}"}
+                    return
+                async for line in resp.aiter_lines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    evt_type = event.get("type", "")
+                    if evt_type == "assistant" and event.get("subtype") == "text":
+                        yield {"type": "delta", "content": event.get("text", "")}
+                    elif evt_type == "error":
+                        yield {"type": "error", "content": event.get("content", "Antigravity error")}
+                        return
+                    elif evt_type == "result":
+                        in_tok = event.get("input_tokens", 0)
+                        out_tok = event.get("output_tokens", 0)
+                        cost = _estimate_cost(model, in_tok, out_tok)
+                        yield {"type": "done", "model": display_model, "cost": str(cost),
+                               "input_tokens": in_tok, "output_tokens": out_tok}
+    except httpx.ConnectError as e:
+        yield {"type": "error", "content": f"Antigravity Relay connect failed: {e}"}
+    except httpx.ReadTimeout:
+        yield {"type": "error", "content": "Antigravity Relay timeout (300s)"}
+    except Exception as e:
+        logger.error(f"antigravity_relay_error: {e}")
+        yield {"type": "error", "content": str(e)}
+
+
+async def _stream_antigravity_relay(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    session_id: Optional[str] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    display_model = _ANTIGRAVITY_MODEL_DISPLAY.get(model, model)
+    yield {"type": "model_info", "model": display_model}
+    async for event in _stream_antigravity_relay_once(model, system_prompt, messages, tools=tools, session_id=session_id):
+        yield event
 
 
 async def _stream_agent_sdk(
