@@ -206,6 +206,14 @@ def run_agent(cfg: dict):
             except Exception:
                 pass
 
+        # 이전 에이전트의 Windows mutex 해제 (누수 방지 — 재시작 시 ERROR_ALREADY_EXISTS 차단)
+        old_agent = sys.modules.get("agent_module")
+        if old_agent and hasattr(old_agent, 'release_single_instance'):
+            try:
+                old_agent.release_single_instance()
+            except Exception:
+                pass
+
         # 이전 로드로 캐시된 모듈 제거 (재시작 시 stale 모듈 방지)
         stale = [k for k in sys.modules if k.startswith("commands") or k == "agent_module"]
         for k in stale:
