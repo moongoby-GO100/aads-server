@@ -691,3 +691,68 @@ def _ensure_offline_monitor() -> None:
         logger.info("pc_agent_offline_monitor_started")
     except RuntimeError:
         pass
+
+
+# ── Client log ingestion (v1.0.46) ─────────────────────────────────────
+@router.post("/pc-agent/client-log")
+async def ingest_client_log(payload: dict[str, Any]):
+    """PC 런처/에이전트의 ERROR/WARNING 로그를 서버에 수집한다.
+
+    payload 형식:
+    {
+      "agent_token": "<token>",
+      "agent_id": "<optional id>",
+      "source": "launcher" | "agent",
+      "level": "ERROR" | "WARNING" | "INFO",
+      "version": "1.0.46",
+      "hostname": "DESKTOP-...",
+      "message": "...",
+      "ts": "2026-05-29T15:21:00+09:00"
+    }
+    """
+    token = (payload.get("agent_token") or "").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="agent_token required")
+
+    if not (token == PC_AGENT_SECRET or await _verify_token_db(token)):
+        raise HTTPException(status_code=401, detail="invalid token")
+
+    agent_id = (payload.get("agent_id") or "unknown")[:64]
+    source = (payload.get("source") or "launcher")[:16]
+    level = (payload.get("level") or "INFO")[:8]
+    version = (payload.get("version") or "")[:32]
+    hostname = (payload.get("hostname") or "")[:64]
+    message = (payload.get("message") or "")[:4000]
+    ts = payload.get("ts") or datetime.utcnow().isoformat()
+
+    # 1) 서버 로그에 기록 — 즉시 원격 디버깅 가능
+    logger.warning(
+        "pc_agent_client_log src=%s lvl=%s agent=%s host=%s ver=%s ts=%s msg=%s",
+        source, level, agent_id, hostname, version, ts, message,
+    )
+
+    # 2) 이벤트 테이블에 INSERT (best-effort)
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO pc_agent_connection_events
+                    (agent_id, event_type, code, reason, metadata, created_at)
+                VALUES ($1, $2, $3, $4, $5::jsonb, NOW())
+                """,
+                agent_id,
+                f"client_log_{source}",
+                None,
+                f"{level}: {message[:200]}",
+                json.dumps({
+                    "source": source, "level": level, "version": version,
+                    "hostname": hostname, "ts": ts, "message": message,
+                }),
+            )
+    except Exception as e:
+        logger.debug("client_log_db_insert_failed: %s", e)
+
+    return {"ok": True}
+

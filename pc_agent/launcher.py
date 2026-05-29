@@ -48,6 +48,78 @@ logger = logging.getLogger("launcher")
 
 
 # ---------------------------------------------------------------------------
+# 원격 로그 업로드 핸들러 (v1.0.46) — ERROR/WARNING을 서버로 전송
+# ---------------------------------------------------------------------------
+class _RemoteLogHandler(logging.Handler):
+    """ERROR/WARNING 레벨 로그를 서버 /api/v1/pc-agent/client-log로 비동기 전송."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self._queue: list[dict] = []
+        self._lock = threading.Lock()
+        self._stop = False
+        self._worker = threading.Thread(target=self._run, daemon=True, name="LauncherRemoteLog")
+        self._worker.start()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            cfg = load_config() or {}
+            if not cfg.get("agent_token"):
+                return
+            ver = "unknown"
+            try:
+                ver = VERSION_FILE.read_text(encoding="utf-8").strip()
+            except Exception:
+                pass
+            entry = {
+                "agent_token": cfg["agent_token"],
+                "agent_id": cfg.get("agent_id", "unknown"),
+                "source": "launcher",
+                "level": record.levelname,
+                "version": ver,
+                "hostname": os.environ.get("COMPUTERNAME", ""),
+                "message": self.format(record),
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            }
+            with self._lock:
+                if len(self._queue) < 200:  # 큐 폭주 방지
+                    self._queue.append(entry)
+        except Exception:
+            pass  # 절대 로깅에서 예외 던지지 않음
+
+    def _run(self) -> None:
+        import json as _json
+        from urllib import request as _req
+        while not self._stop:
+            time.sleep(10)  # 10초마다 배치 전송
+            with self._lock:
+                batch = self._queue[:]
+                self._queue.clear()
+            for entry in batch:
+                try:
+                    data = _json.dumps(entry).encode()
+                    rq = _req.Request(
+                        f"{HTTP_BASE}/api/v1/pc-agent/client-log",
+                        data=data,
+                        headers={"Content-Type": "application/json"},
+                    )
+                    _req.urlopen(rq, timeout=10).read()
+                except Exception:
+                    pass  # 네트워크 실패 → 다음 배치에서 재시도하지 않음 (무한 누적 방지)
+
+
+def _install_remote_log_handler() -> None:
+    """로깅 시스템에 원격 핸들러 1회 설치 (중복 방지)."""
+    root = logging.getLogger()
+    if any(isinstance(h, _RemoteLogHandler) for h in root.handlers):
+        return
+    try:
+        root.addHandler(_RemoteLogHandler())
+    except Exception as e:
+        logger.debug("remote_log_handler_install_failed: %s", e)
+
+
+# ---------------------------------------------------------------------------
 # 설정 관리
 # ---------------------------------------------------------------------------
 def load_config() -> dict | None:
@@ -346,6 +418,9 @@ def main() -> None:
     register_startup()
     register_watchdog_task()
 
+    # 원격 로그 핸들러 설치 — ERROR/WARNING 시 서버에 자동 전송 (v1.0.46)
+    _install_remote_log_handler()
+
     # 1-b) 첫 실행 시 서버에 에이전트 등록
     if not cfg.get("registered"):
         try:
@@ -500,9 +575,14 @@ def main() -> None:
                             _set_crash_count(0)
                             download_update(cfg, rv)
                             time.sleep(3)
-                            proc = run_agent(cfg)
+                            try:
+                                proc = run_agent(cfg)
+                            except SystemExit:
+                                logger.error("exit=0 update run_agent() SystemExit — mutex 충돌, 재시도")
+                                proc = None
                             if proc is None:
-                                break
+                                # 무한 재시도 (break 금지) — 다음 루프에서 None 복구 분기로 진입
+                                continue
                             continue
                     except Exception:
                         pass
