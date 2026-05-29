@@ -739,12 +739,11 @@ async def ingest_client_log(payload: dict[str, Any]):
             await conn.execute(
                 """
                 INSERT INTO pc_agent_connection_events
-                    (agent_id, event_type, code, reason, metadata, created_at)
-                VALUES ($1, $2, $3, $4, $5::jsonb, NOW())
+                    (agent_id, event, reason, metadata)
+                VALUES ($1, $2, $3, $4::jsonb)
                 """,
                 agent_id,
                 f"client_log_{source}",
-                None,
                 f"{level}: {message[:200]}",
                 json.dumps({
                     "source": source, "level": level, "version": version,
