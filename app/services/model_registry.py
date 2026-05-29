@@ -342,7 +342,7 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
     "minimax": ("minimax-m2.7", "minimax-m2.5"),
 }
 
-_KEYLESS_PROVIDERS = {"codex"}
+_KEYLESS_PROVIDERS = {"codex", "antigravity"}  # relay 서버 경유, 별도 API key 불필요
 
 _DEEPSEEK_ALIAS_DEPRECATION_DATE = "2026-07-24"
 _DEEPSEEK_COMPATIBILITY_ALIASES = {
@@ -396,6 +396,7 @@ _PROVIDER_META = {
     "groq": {"display_name": "Groq", "manual_review": False},
     "openai": {"display_name": "OpenAI", "manual_review": False},
     "codex": {"display_name": "Codex CLI", "manual_review": False},
+    "antigravity": {"display_name": "Antigravity CLI", "manual_review": False},
     "deepseek": {"display_name": "DeepSeek", "manual_review": False},
     "openrouter": {"display_name": "OpenRouter", "manual_review": False},
     "qwen": {"display_name": "Qwen / DashScope", "manual_review": False},

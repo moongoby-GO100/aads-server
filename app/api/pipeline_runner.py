@@ -788,12 +788,12 @@ async def submit_job(req: JobSubmitRequest):
                        worker_model, model_override_reason, parallel_group, depends_on,
                        review_feedback, logs, created_at, updated_at)
                     VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, $7, $8,
-                            $9, $10, $11, $12,
-                            $13,
-                            CASE WHEN $13 = '' THEN '[]'::jsonb ELSE jsonb_build_array(jsonb_build_object(
+                            $9, $10, $11, $12::text,
+                            $13::text,
+                            CASE WHEN $13::text = '' THEN '[]'::jsonb ELSE jsonb_build_array(jsonb_build_object(
                               'ts', NOW()::text,
                               'event', 'file_conflict_auto_dependency',
-                              'depends_on', $12
+                              'depends_on', $12::text
                             )) END,
                             NOW(), NOW())
                     """,
@@ -1328,12 +1328,12 @@ async def submit_batch(req: BatchSubmitRequest):
                            worker_model, model_override_reason, parallel_group, depends_on,
                            review_feedback, logs, created_at, updated_at)
                         VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, $7, $8,
-                                $9, $10, $11, $12,
-                                $13,
-                                CASE WHEN $13 = '' THEN '[]'::jsonb ELSE jsonb_build_array(jsonb_build_object(
+                                $9, $10, $11, $12::text,
+                                $13::text,
+                                CASE WHEN $13::text = '' THEN '[]'::jsonb ELSE jsonb_build_array(jsonb_build_object(
                                   'ts', NOW()::text,
                                   'event', 'file_conflict_auto_dependency',
-                                  'depends_on', $12
+                                  'depends_on', $12::text
                                 )) END,
                                 NOW(), NOW())
                         """,

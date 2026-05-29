@@ -242,6 +242,12 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
                 _agent_connections.pop(agent_id, None)
             await websocket.close(code=4002, reason="first message must be register")
             return
+        device_type = (msg.payload or {}).get("device_type", "pc")
+        version = (msg.payload or {}).get("version", "")
+        await _record_agent_event(
+            agent_id, "connected",
+            metadata={"device_type": device_type, "version": version},
+        )
         pc_agent_manager.register_agent(agent_id, websocket, msg.payload)
     except (asyncio.TimeoutError, Exception) as exc:
         logger.error("pc_agent_ws_register_failed agent_id=%s err=%s", agent_id, exc)
@@ -656,12 +662,21 @@ async def _offline_monitor_loop() -> None:
                         elapsed = (datetime.now(timezone.utc) - row["created_at"]).total_seconds()
                         if elapsed >= _OFFLINE_THRESHOLD:
                             _OFFLINE_ALERT_SENT = True
+                            device_label = "Agent"
+                            try:
+                                meta = row.get("metadata") if hasattr(row, "get") else None
+                                if isinstance(meta, dict):
+                                    dt = meta.get("device_type", "")
+                                    if dt:
+                                        device_label = f"{dt.upper()} Agent"
+                            except Exception:
+                                pass
                             try:
                                 from app.services.telegram_bot import get_telegram_bot
                                 bot = get_telegram_bot()
                                 if bot:
                                     await bot.send_message(
-                                        f"⚠️ PC Agent offline {int(elapsed)}초 경과\n"
+                                        f"⚠️ {device_label} offline {int(elapsed)}초 경과\n"
                                         f"마지막 끊김: {row['created_at'].strftime('%H:%M KST')}"
                                     )
                             except Exception as e:
@@ -748,6 +763,7 @@ async def ingest_client_log(payload: dict[str, Any]):
                 json.dumps({
                     "source": source, "level": level, "version": version,
                     "hostname": hostname, "ts": ts, "message": message,
+                    "device_type": (payload.get("device_type") or "pc")[:16],
                 }),
             )
     except Exception as e:
