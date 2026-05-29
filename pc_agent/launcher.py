@@ -198,6 +198,14 @@ def run_agent(cfg: dict):
         if agent_dir_str not in sys.path:
             sys.path.insert(0, agent_dir_str)
 
+        # 이전 에이전트의 Windows mutex 해제 (누수 방지 — 재시작 시 ERROR_ALREADY_EXISTS 차단)
+        old_agent = sys.modules.get("agent_module")
+        if old_agent and hasattr(old_agent, 'release_single_instance'):
+            try:
+                old_agent.release_single_instance()
+            except Exception:
+                pass
+
         # 이전 로드로 캐시된 모듈 제거 (재시작 시 stale 모듈 방지)
         stale = [k for k in sys.modules if k.startswith("commands") or k == "agent_module"]
         for k in stale:
@@ -435,7 +443,11 @@ def main() -> None:
                     except Exception as e:
                         logger.error("self_update 다운로드 실패 — 기존 코드로 재기동 시도: %s", e)
                     time.sleep(5)
-                    proc = run_agent(cfg)
+                    try:
+                        proc = run_agent(cfg)
+                    except SystemExit:
+                        logger.error("self_update run_agent() SystemExit — mutex 충돌")
+                        proc = None
                     if proc is None:
                         break
                     continue
@@ -471,7 +483,11 @@ def main() -> None:
                         logger.error("강제 재다운로드 실패: %s", e)
 
                 time.sleep(5)
-                proc = run_agent(cfg)
+                try:
+                    proc = run_agent(cfg)
+                except SystemExit:
+                    logger.error("run_agent() SystemExit — mutex 충돌, 재시도")
+                    proc = None
                 if proc is None:
                     break
 
@@ -485,7 +501,11 @@ def main() -> None:
                         proc.terminate()
                         proc.wait(timeout=10)
                         download_update(cfg, remote_ver)
-                        proc = run_agent(cfg)
+                        try:
+                            proc = run_agent(cfg)
+                        except SystemExit:
+                            logger.error("update run_agent() SystemExit — mutex 충돌")
+                            proc = run_agent(cfg)
                 except Exception as e:
                     logger.warning("주기적 업데이트 실패: %s", e)
 
@@ -503,7 +523,11 @@ def main() -> None:
                     disconnected_since = None
                     _set_crash_count(0)
                     time.sleep(3)
-                    proc = run_agent(cfg)
+                    try:
+                        proc = run_agent(cfg)
+                    except SystemExit:
+                        logger.error("watchdog run_agent() SystemExit — mutex 충돌, 재시도")
+                        proc = None
                     if proc is None:
                         break
             else:

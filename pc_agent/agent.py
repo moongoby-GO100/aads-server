@@ -459,6 +459,7 @@ class PCAgent:
     def stop(self) -> None:
         """에이전트 종료."""
         self._running = False
+        release_single_instance()
         ws = self._ws
         loop = self._loop
         if ws is not None and loop is not None and loop.is_running():
