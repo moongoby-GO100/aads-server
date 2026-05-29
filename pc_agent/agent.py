@@ -175,7 +175,18 @@ class PCAgent:
     def __init__(self) -> None:
         # 단일 인스턴스 — main() 우회 시(launcher가 직접 PCAgent().run() 호출)에도 동작
         if not _acquire_single_instance():
-            raise SystemExit(0)
+            logger.warning("뮤텍스 미획득 — 다른 인스턴스 실행 중, run()에서 즉시 종료")
+            self._init_ok = False
+            self._running = False
+            self._exit_for_update = False
+            self.is_connected = False
+            self.agent_id = ""
+            self.hostname = ""
+            self.os_info = ""
+            self._loop = None
+            self._ws = None
+            return
+        self._init_ok = True
         self.agent_id = _get_persistent_agent_id()
         self.hostname = platform.node()
         self.os_info = f"{platform.system()} {platform.release()} {platform.version()}"
@@ -192,6 +203,9 @@ class PCAgent:
         즉시 재연결(1초) — 지수 백오프 안 함. AADS hot-reload 시
         ~6초 다운타임을 ~1초로 단축.
         """
+        if not getattr(self, '_init_ok', True):
+            logger.warning("초기화 실패 상태 — 즉시 종료 (launcher가 재시작)")
+            return
         logger.info("PC Agent 시작 agent_id=%s hostname=%s", self.agent_id, self.hostname)
         self._loop = asyncio.get_running_loop()
         delay = RECONNECT_DELAY

@@ -421,6 +421,16 @@ def main() -> None:
 
     try:
         while True:
+            if proc is None:
+                logger.error("proc is None — 에이전트 복구 시도")
+                time.sleep(5)
+                try:
+                    proc = run_agent(cfg)
+                except (SystemExit, Exception) as _e:
+                    logger.error("에이전트 복구 실패: %s", _e)
+                if proc is None:
+                    time.sleep(30)
+                    continue
             ret = proc.poll()
             if ret is not None:
                 if stop_requested.is_set():
@@ -509,11 +519,20 @@ def main() -> None:
                         proc.terminate()
                         proc.wait(timeout=10)
                         download_update(cfg, remote_ver)
-                        try:
-                            proc = run_agent(cfg)
-                        except SystemExit:
-                            logger.error("update run_agent() SystemExit — mutex 충돌")
-                            proc = run_agent(cfg)
+                        _new_proc = None
+                        for _retry in range(3):
+                            try:
+                                _new_proc = run_agent(cfg)
+                                if _new_proc is not None:
+                                    break
+                            except (SystemExit, Exception) as _re:
+                                logger.error("update run_agent() 실패 (시도 %d/3): %s", _retry + 1, _re)
+                                time.sleep(2)
+                        if _new_proc is not None:
+                            proc = _new_proc
+                        else:
+                            logger.error("업데이트 후 에이전트 재시작 실패 — 폴백 재다운로드")
+                            _force_redownload()
                 except Exception as e:
                     logger.warning("주기적 업데이트 실패: %s", e)
 
