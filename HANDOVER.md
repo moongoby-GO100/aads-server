@@ -8,6 +8,7 @@
   - `streaming-status`가 `is_streaming=true`와 `partial_content`를 반환할 때 프론트가 `streamingSessionRef`, `streaming`, `streamBuf`, 로컬 `streaming_placeholder`를 즉시 복원하도록 보강했다. 세션 복귀/강력 새로고침 직후 "응답이 있는지 화면 변화가 없는" 구간을 줄이는 목적이다.
   - `REPORT_STRUCTURE_WEAK` validator에 `요약/결론/현황/판정` 그룹과 수치·날짜·커밋 출처 태그 검사를 추가했다. 긴 보고에서 수치가 있으면 `[DB 조회]`, `[코드 확인]`, `[명령]`, `[미측정]` 같은 출처 표기를 요구한다.
   - 기술문서 원본을 v1.5.0으로 올리고 기존 원본은 `AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.4.html`로 아카이브했다.
+  - 백엔드 blue-green 재배포 중 Docker build context가 `app/static/gallery` 3.0GB 미디어를 포함해 `no space left on device`로 실패했다. 런타임에서는 `app/`이 bind mount되므로 이미지 빌드에는 필요 없는 `app/static/gallery`, `*.bak*`, `*.tmp`를 `.dockerignore`에 추가했다.
 - 검증:
   - `python3 -m py_compile app/services/output_validator.py` 통과.
   - `npx eslint src/app/chat/page.tsx` 통과(error 0, 기존 warning 21).

@@ -12,3 +12,7 @@ tmp
 backup
 browser-bridge-state
 .browser_bridge_state
+app/static/gallery
+*.bak
+*.bak_*
+*.tmp
