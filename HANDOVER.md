@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-29 17:31 KST) - Chat disappearing response terminal-race fix
+- 배경: CEO가 `/chat#b8a8651b-6226-46df-9a44-36a70e478959` 세션에서 "응답이 있었는데 사라졌다"고 재보고했고 즉시 조치를 지시했다.
+- 실측:
+  - 최신 실행 `2bea84f7-13b0-4d4b-8b49-655309b6a3a2`는 17:24:50 KST 시작 후 17:24:56 KST `interrupted`로 종료됐고 `assistant_message_id`가 비어 있었다.
+  - Redis Stream `chat:stream:2bea84f7-13b0-4d4b-8b49-655309b6a3a2`에는 `stream_start`, `model_info` 2개 이벤트만 있고 실제 `delta` 토큰은 0건이었다. 따라서 실제 본문 복구는 불가능했다.
+  - 직전 실행 `3282f432-c0a4-4abc-8a52-81344c55eee4`의 107자 partial은 DB에 `_archived_partial`로 남아 있었다.
+- 조치:
+  - `app/services/chat_service.py`: `_interim_save_streaming(..., force=True)`가 terminal race에서도 placeholder를 강제 upsert하고 execution의 `assistant_message_id`를 보존하도록 수정했다.
+  - `app/services/chat_service.py`: superseded cancel에서 placeholder가 없더라도 `partial_content`가 있으면 `_archived_partial` assistant 메시지를 새로 생성하도록 보강했다.
+  - `/root/aads/aads-dashboard/src/app/chat/page.tsx`: 의미 있는 `_archived_partial`/interrupted 계열 메시지는 짧더라도 draft로 취급하지 않아 새로고침/merge 후 화면에서 사라지지 않게 했다.
+  - DB: 최신 실행 `2bea84f7-13b0-4d4b-8b49-655309b6a3a2`에 실제 delta가 없음을 설명하는 `interrupted_partial` assistant row `0be43035-1142-4941-b9b2-3ba632db1c10`를 연결했다.
+- 검증:
+  - `python3 -m py_compile app/services/chat_service.py` 통과.
+  - `npx eslint src/app/chat/page.tsx` 통과(error 0, 기존 warning 21).
+  - DB 최신 8건 조회에서 `0be43035...` 복구 상태 메시지와 `bb825b1d...` archived partial이 확인됐다.
+- 주의: 서버/대시보드 워크트리에 기존 unrelated 변경이 많다. 커밋 시 `app/services/chat_service.py`, `HANDOVER.md`, 대시보드 `src/app/chat/page.tsx`만 선별한다.
+
 ## 현재 진행 상태 (2026-05-29 16:55 KST) - Chat streaming restore regression fix
 - 배경: CEO가 `/chat#b8a8651b-6226-46df-9a44-36a70e478959` 세션에서 응답 버블이 있다가 사라지고, 응답 중단/새로고침 후 완료 표시가 반복 재발한다고 보고했다.
 - 실측:

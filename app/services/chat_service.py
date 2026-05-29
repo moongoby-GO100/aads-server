@@ -1587,6 +1587,36 @@ async def _mark_execution_interrupted(
             eid,
         )
 
+    if assistant_message_id is None and clean_partial and is_superseded_cancel:
+        marker = "\n\n_(이전 응답은 중단 처리되었습니다. 최신 지시를 우선 처리합니다.)_"
+        final_content = clean_partial if "최신 지시를 우선 처리" in clean_partial else clean_partial + marker
+        assistant_message_id = await conn.fetchval(
+            """
+            INSERT INTO chat_messages (session_id, execution_id, role, content, model_used, intent, tools_called)
+            SELECT $1, $2, 'assistant', $3, 'interrupted', '_archived_partial', '[]'::jsonb
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM chat_messages
+                WHERE execution_id = $2
+                  AND role = 'assistant'
+            )
+            RETURNING id
+            """,
+            sid,
+            eid,
+            final_content,
+        )
+        if assistant_message_id:
+            await conn.execute(
+                """
+                UPDATE chat_sessions
+                SET message_count = message_count + 1,
+                    updated_at = NOW()
+                WHERE id = $1
+                """,
+                sid,
+            )
+
     if assistant_message_id is None and "superseded_by_newer_user" not in reason and not is_superseded_cancel:
         fallback_content = (
             "⚠️ _응답 생성이 중단되어 복구 응답을 만들지 못했습니다. "
@@ -1896,26 +1926,36 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
         async with pool.acquire() as conn:
             if _eid:
                 # pre-SELECT 제거: UPSERT의 WHERE EXISTS가 terminal 상태 자동 필터링
-                _row = await conn.fetchrow(
-                    """INSERT INTO chat_messages (session_id, execution_id, role, content, intent, model_used, tools_called)
-                       SELECT $1, $2, 'assistant', $3, 'streaming_placeholder', 'streaming', $4::jsonb
-                       WHERE EXISTS (
-                         SELECT 1 FROM chat_turn_executions
-                         WHERE id = $2
-                           AND status IN ('running', 'retrying')
-                           AND completed_at IS NULL
-                       )
-                       ON CONFLICT (execution_id) WHERE intent = 'streaming_placeholder' AND execution_id IS NOT NULL
-                       DO UPDATE SET content = EXCLUDED.content, tools_called = $4::jsonb, edited_at = NOW()
-                       WHERE EXISTS (
-                         SELECT 1 FROM chat_turn_executions
-                         WHERE id = $2
-                           AND status IN ('running', 'retrying')
-                           AND completed_at IS NULL
-                       )
-                       RETURNING id, (xmax = 0) AS is_new""",
-                    _sid, _eid, display_content, _tool_events_json,
-                )
+                if force:
+                    _row = await conn.fetchrow(
+                        """INSERT INTO chat_messages (session_id, execution_id, role, content, intent, model_used, tools_called)
+                           VALUES ($1, $2, 'assistant', $3, 'streaming_placeholder', 'streaming', $4::jsonb)
+                           ON CONFLICT (execution_id) WHERE intent = 'streaming_placeholder' AND execution_id IS NOT NULL
+                           DO UPDATE SET content = EXCLUDED.content, tools_called = $4::jsonb, edited_at = NOW()
+                           RETURNING id, (xmax = 0) AS is_new""",
+                        _sid, _eid, display_content, _tool_events_json,
+                    )
+                else:
+                    _row = await conn.fetchrow(
+                        """INSERT INTO chat_messages (session_id, execution_id, role, content, intent, model_used, tools_called)
+                           SELECT $1, $2, 'assistant', $3, 'streaming_placeholder', 'streaming', $4::jsonb
+                           WHERE EXISTS (
+                             SELECT 1 FROM chat_turn_executions
+                             WHERE id = $2
+                               AND status IN ('running', 'retrying')
+                               AND completed_at IS NULL
+                           )
+                           ON CONFLICT (execution_id) WHERE intent = 'streaming_placeholder' AND execution_id IS NOT NULL
+                           DO UPDATE SET content = EXCLUDED.content, tools_called = $4::jsonb, edited_at = NOW()
+                           WHERE EXISTS (
+                             SELECT 1 FROM chat_turn_executions
+                             WHERE id = $2
+                               AND status IN ('running', 'retrying')
+                               AND completed_at IS NULL
+                           )
+                           RETURNING id, (xmax = 0) AS is_new""",
+                        _sid, _eid, display_content, _tool_events_json,
+                    )
                 if not _row:
                     logger.info(
                         "interim_save_skipped_terminal_race session=%s execution=%s",
@@ -1933,8 +1973,7 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
                             last_event_id = COALESCE($5, last_event_id),
                             updated_at = NOW()
                         WHERE id = $2
-                          AND status IN ('running', 'retrying')
-                          AND completed_at IS NULL
+                          AND ($6::boolean OR (status IN ('running', 'retrying') AND completed_at IS NULL))
                         RETURNING id
                     )
                     UPDATE chat_sessions
@@ -1949,6 +1988,7 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
                     _is_new,
                     _row["id"] if _row else None,
                     state.get("last_event_id"),
+                    force,
                 )
             else:
                 # execution_id가 아직 없는 레거시/초기 상태 fallback
