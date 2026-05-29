@@ -1,5 +1,18 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-29 11:35 KST) - Chat streaming/report quality follow-up guardrails
+- 배경: CEO가 채팅 스트리밍 전수조사 이후 "다음단계 진행"을 지시했고, 보고 양식 개선이 실제로 어떻게 강제되는지 확인 가능한 조치를 요구했다.
+- 조치 대상: `tests/unit/test_output_validator.py`, `app/static/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html`, `docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html`, `docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.4.html`.
+- 핵심 변경:
+  - `output_validator.py`의 보고 품질 개선이 회귀되지 않도록 단위 테스트를 추가했다. 확인형 질문의 짧은 yes/no 허용, 짧은 부실 보고 차단, 수치 포함 장문 보고의 출처/표 요구, 구조화 보고 통과를 각각 검증한다.
+  - 기술문서 원본의 `<title>`이 v1.4로 남아 있던 불일치를 v1.5로 보정했다.
+  - `docs/` 원본 문서가 v1.3에 머물러 있던 문제를 보정해 `app/static/docs/`의 최신 원본과 동기화했고, `docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.4.html` 아카이브를 추가했다.
+- 검증 예정:
+  - `python3 -m pytest tests/unit/test_output_validator.py -q`
+  - `python3 -m py_compile app/services/output_validator.py`
+  - 문서 v1.5/v1.4 링크 문자열 확인.
+- 주의: 서버/대시보드 워크트리에 기존 unrelated 변경이 많으므로 커밋 시 이번 조치 파일만 선별 스테이징해야 한다.
+
 ## 현재 진행 상태 (2026-05-29 09:00 KST) - Chat streaming live display + report quality gate v1.5
 - 배경: CEO가 채팅창 스트리밍 실시간 표현/결과 응답을 전수 조사한 뒤 즉시 조치하라고 지시했고, 보고형 응답 양식이 부실하다는 재발 피드백을 추가로 줬다.
 - 조치 대상: 대시보드 `src/app/chat/page.tsx`, 백엔드 `app/services/output_validator.py`, 기술문서 `app/static/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html`, 아카이브 `app/static/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.4.html`.

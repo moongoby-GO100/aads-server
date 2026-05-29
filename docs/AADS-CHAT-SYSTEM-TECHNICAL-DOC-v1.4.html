@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AADS 채팅 시스템 기술문서 v1.5</title>
+<title>AADS 채팅 시스템 기술문서 v1.4</title>
 <style>
   :root {
     --bg: #0f172a; --card: #1e293b; --border: #334155;
@@ -127,8 +127,7 @@
 <div class="doc-header">
   <h1>AADS 채팅 시스템 기술문서</h1>
   <div class="subtitle">CEO Chat-First System — 기획 · 아키텍처 · 구현 · 문제점 · 개선안</div>
-  <span class="version-badge">📋 v1.5.0 · 2026-05-29 · 스트리밍 재진입 표시 보강 + 중단 이어서 버블 보존 + 보고품질 출처 태그 게이트</span>
-  <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.4.html" class="version-badge old" style="text-decoration:none;">📦 v1.4.0</a>
+  <span class="version-badge">📋 v1.4.0 · 2026-05-27 · Validator 확인형 예외 + Stale Execution Watchdog + 버블 중복 제거 + 의존성 수정</span>
   <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.3.html" class="version-badge old" style="text-decoration:none;">📦 v1.3.0</a>
   <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.2.html" class="version-badge old" style="text-decoration:none;">📦 v1.2.0</a>
   <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.1.html" class="version-badge old" style="text-decoration:none;">📦 v1.1.0</a>
@@ -840,37 +839,7 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
     </div>
   </div>
 
-  <h3>9.8 ✅ 해결: 강력 새로고침 후 중단/이어서 버블 미노출 (v1.5)</h3>
-  <div class="fix-card">
-    <div class="title"><span class="resolved">RESOLVED</span> P0 — 응답 중단 후 이어서 가능한 버블이 새로고침 로드에서 숨겨짐</div>
-    <div class="desc">
-      <strong>근본 원인:</strong> 대시보드 <code>page.tsx</code>의 draft 판정이 <code>interrupted_partial</code>을 길이 기준으로 임시 버블로 취급했고, 짧은 중단 안내 필터가 실제 이어서 가능한 중단 응답까지 숨길 수 있었다.<br>
-      <strong>해결:</strong> 의미 있는 <code>interrupted_partial</code>은 draft/short-interruption 필터에서 제외해 새로고침 후에도 화면에 남기고, 하단 <code>▶ 이어서</code> 버튼을 유지하도록 조정했다.<br>
-      <strong>대상:</strong> <code>src/app/chat/page.tsx</code>
-    </div>
-  </div>
-
-  <h3>9.9 ✅ 해결: 세션 복귀 시 진행 중 응답 실시간 표시 지연 (v1.5)</h3>
-  <div class="fix-card">
-    <div class="title"><span class="resolved">RESOLVED</span> P0 — 서버는 스트리밍 중인데 프론트가 대기 상태로만 보이는 현상</div>
-    <div class="desc">
-      <strong>근본 원인:</strong> <code>streaming-status</code>가 <code>is_streaming=true</code>와 <code>partial_content</code>를 반환해도 프론트가 <code>streaming</code>/<code>streamBuf</code>를 즉시 복원하지 않아 화면 변화가 늦게 보일 수 있었다.<br>
-      <strong>해결:</strong> 세션 복귀/강력 새로고침 후 서버가 진행 중이면 <code>streamingSessionRef</code>, <code>streaming</code>, <code>streamBuf</code>, 로컬 <code>streaming_placeholder</code>를 즉시 복원한다.<br>
-      <strong>대상:</strong> <code>src/app/chat/page.tsx</code>
-    </div>
-  </div>
-
-  <h3>9.10 ✅ 해결: 보고형 응답 구조 부실 재발 (v1.5)</h3>
-  <div class="fix-card">
-    <div class="title"><span class="resolved">RESOLVED</span> P1 — 보고서가 결론/출처/검증기준 없이 짧게 저장되는 문제</div>
-    <div class="desc">
-      <strong>근본 원인:</strong> 기존 <code>REPORT_STRUCTURE_WEAK</code> 검사는 문제점·원인·권장안·검증기준 중심이라, 요약/판정과 수치 출처 태그가 빠져도 통과할 수 있었다.<br>
-      <strong>해결:</strong> <code>output_validator.py</code>에 요약/결론 그룹과 수치·날짜·커밋 출처 태그 검사를 추가했다. 긴 보고에서 수치가 있으면 <code>[DB 조회]</code>, <code>[코드 확인]</code>, <code>[명령]</code>, <code>[미측정]</code> 같은 출처 표기를 요구한다.<br>
-      <strong>대상:</strong> <code>app/services/output_validator.py</code>
-    </div>
-  </div>
-
-  <h3>9.11 ✅ 해결: 중단 토큰/비용 미기록 (v1.2)</h3>
+  <h3>9.8 ✅ 해결: 중단 토큰/비용 미기록 (v1.2)</h3>
   <div class="fix-card">
     <div class="title"><span class="resolved">RESOLVED</span> P2 — 중단된 메시지 비용 추적 불가</div>
     <div class="desc">
@@ -880,7 +849,7 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
     </div>
   </div>
 
-  <h3>9.12 ⚠️ 개선 중: interrupted 비율</h3>
+  <h3>9.9 ⚠️ 개선 중: interrupted 비율</h3>
   <div class="issue-card">
     <div class="title"><span class="p0">P0</span> interrupted 메시지 — 비정상 중단 비율</div>
     <div class="desc">
@@ -1086,9 +1055,6 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
     <tr><td>14</td><td><span class="p0">P0</span></td><td>Stale Execution Watchdog (90초 주기 자동 정리)</td><td><code>main.py</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.4</td></tr>
     <tr><td>15</td><td><span class="p1">P1</span></td><td>Validator 거부 시 버블 중복 방지 (stream_reset)</td><td><code>chat_service.py</code>, <code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.4</td></tr>
     <tr><td>16</td><td><span class="p1">P1</span></td><td>브라우저 멈춤 추가 패치 (useMemo + 렌더링 cap 150 + scroll throttle)</td><td><code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.4</td></tr>
-    <tr><td>17</td><td><span class="p0">P0</span></td><td>강력 새로고침 후 interrupted_partial/이어서 버튼 보존</td><td><code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.5</td></tr>
-    <tr><td>18</td><td><span class="p0">P0</span></td><td>세션 복귀 시 streaming-status partial_content 즉시 화면 복원</td><td><code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.5</td></tr>
-    <tr><td>19</td><td><span class="p1">P1</span></td><td>보고형 응답 요약/출처 태그 validator 보강</td><td><code>output_validator.py</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.5</td></tr>
   </table>
 
   <h3>11.2 즉시 조치 (1주 내)</h3>
@@ -1143,8 +1109,7 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
 
   <table>
     <tr><th>버전</th><th>날짜</th><th>작성자</th><th>변경 내용</th><th>문서 링크</th></tr>
-    <tr><td><strong>v1.5.0</strong></td><td>2026-05-29</td><td>AADS CTO AI</td><td>강력 새로고침 후 중단/이어서 버블 보존, 세션 복귀 시 streaming-status partial_content 즉시 표시, 보고형 응답 요약/출처 태그 validator 보강</td><td><strong>현재 문서 (원본)</strong></td></tr>
-    <tr><td>v1.4.0</td><td>2026-05-27</td><td>AADS CTO AI</td><td>Validator 확인형 질문 예외, 코드 중복 제거, SDK/autonomous 경로 user_message 수정, Stale Execution Watchdog 90초 자동 정리, 버블 중복 저장 방지(stream_reset), 브라우저 멈춤 추가 패치(useMemo/cap/scroll), 의존성 전수 점검</td><td><a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.4.html" style="color:var(--blue);">v1.4 아카이브</a></td></tr>
+    <tr><td><strong>v1.4.0</strong></td><td>2026-05-27</td><td>AADS CTO AI</td><td>Validator 확인형 질문 예외, 코드 중복 제거, SDK/autonomous 경로 user_message 수정, Stale Execution Watchdog 90초 자동 정리, 버블 중복 저장 방지(stream_reset), 브라우저 멈춤 추가 패치(useMemo/cap/scroll), 의존성 전수 점검</td><td><strong>현재 문서 (원본)</strong></td></tr>
     <tr><td>v1.3.0</td><td>2026-05-26</td><td>AADS CTO AI</td><td>브라우저 멈춤 재발 원인 반영: 긴 응답 스트리밍 렌더 간격 완화, <code>startTransition</code> 적용, 화면 캡처 base64 변환 비동기화, 커밋 <code>8cf8314</code> blue-green 배포 검증</td><td><a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.3.html" style="color:var(--blue);">v1.3 아카이브</a></td></tr>
     <tr><td>v1.2.0</td><td>2026-05-21</td><td>AADS CTO AI</td><td>성능 최적화 4건 반영 (interim_save, drain timer, tab return, token tracking), 운영 통계 갱신 (49,321건), P0 잔여 이슈 상세화, 로드맵 완료/미완료 분리, v1.1 아카이브</td><td><a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.2.html" style="color:var(--blue);">v1.2 아카이브</a></td></tr>
     <tr><td>v1.1.0</td><td>2026-05-21</td><td>AADS CTO AI</td><td>P0 이슈 3건 해결 반영, 429 재시도/폴백 체인 문서화, 운영 통계 업데이트</td><td><a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.1.html" style="color:var(--blue);">v1.1 아카이브</a></td></tr>
@@ -1166,9 +1131,6 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
     <tr><td>AADS Knowledge</td><td><code>docs/knowledge/AADS-KNOWLEDGE.md</code></td><td>아키텍처/파이프라인/교차검증 지식</td></tr>
     <tr><td>Shared Lessons</td><td><code>docs/shared-lessons/INDEX.md</code></td><td>프로젝트 간 공유 교훈</td></tr>
     <tr><td>CEO Directives</td><td>GitHub raw</td><td>CEO 절대 규칙 문서</td></tr>
-    <tr><td>v1.4 아카이브</td><td><code>docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.4.html</code></td><td>v1.4.0 (2026-05-27)</td></tr>
-    <tr><td>v1.3 아카이브</td><td><code>docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.3.html</code></td><td>v1.3.0 (2026-05-26)</td></tr>
-    <tr><td>v1.2 아카이브</td><td><code>docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.2.html</code></td><td>v1.2.0 (2026-05-21)</td></tr>
     <tr><td>v1.1 아카이브</td><td><code>docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.1.html</code></td><td>v1.1.0 (2026-05-21)</td></tr>
     <tr><td>v1.0 아카이브</td><td><code>docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.0.html</code></td><td>v1.0.0 (2026-05-21)</td></tr>
   </table>
@@ -1176,10 +1138,9 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
 
 <!-- Footer -->
 <div style="text-align:center; padding:32px 0; color:var(--muted); font-size:0.8rem;">
-  <p>AADS Chat System Technical Document v1.5.0 · 2026-05-29 · 서버68</p>
+  <p>AADS Chat System Technical Document v1.4.0 · 2026-05-27 · 서버68</p>
   <p>이 문서는 코드 변경 시 함께 업데이트되어야 합니다.</p>
   <p style="margin-top:8px;">
-    <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.4.html" style="color:var(--muted); text-decoration:underline;">📦 v1.4.0</a> ·
     <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.3.html" style="color:var(--muted); text-decoration:underline;">📦 v1.3.0</a> ·
     <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.2.html" style="color:var(--muted); text-decoration:underline;">📦 v1.2.0</a> ·
     <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.1.html" style="color:var(--muted); text-decoration:underline;">📦 v1.1.0</a> ·
