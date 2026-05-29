@@ -16,6 +16,9 @@
   - `git diff --check` 통과.
   - validator smoke: 짧은 부실 보고는 `REPORT_STRUCTURE_WEAK`로 차단, 요약/표/출처/검증/다음단계 포함 보고는 통과.
   - `AADS-CHAT-SYSTEM-TECHNICAL-DOC.html` v1.5.0 문자열과 `AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.4.html` 아카이브 링크 확인.
+  - 대시보드 blue-green 배포 성공: active `aads-dashboard:3100`, standby `aads-dashboard-green:3101`, `AADS_RELEASE_SHA=200baeba8593`.
+  - 백엔드 blue-green 배포는 디스크 부족으로 빌드 실패했으나 active `aads-server:8100`은 계속 healthy였다. 런타임 bind mount 파일은 hot-reload로 반영했고 `reload-api.sh` 결과 66개 모듈 재로드 완료.
+  - API health: `https://aads.newtalk.kr/api/v1/health` `status=ok`. DB 기준 최근 24시간 running 실행 1건, stale running 0건, `streaming_placeholder` 2건, stale placeholder 0건.
 - 주의: 서버/대시보드 워크트리에 기존 백업 삭제 및 unrelated 미추적 파일이 많다. 커밋 시 이번 조치 파일만 선별 스테이징해야 한다.
 
 ## 현재 진행 상태 (2026-05-29 07:41 KST) - Chat partial persistence commit record
