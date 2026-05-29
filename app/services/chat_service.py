@@ -1068,7 +1068,17 @@ async def get_current_execution(session_id: str) -> Optional[Dict[str, Any]]:
             SELECT te.*
             FROM chat_sessions s
             JOIN chat_turn_executions te
-              ON te.id = s.current_execution_id
+              ON te.id = COALESCE(
+                  s.current_execution_id,
+                  (
+                      SELECT te_latest.id
+                      FROM chat_turn_executions te_latest
+                      WHERE te_latest.session_id = s.id
+                        AND te_latest.status IN ('running', 'retrying')
+                      ORDER BY te_latest.updated_at DESC
+                      LIMIT 1
+                  )
+              )
             WHERE s.id = $1
             """,
             uuid.UUID(session_id),
@@ -3959,7 +3969,17 @@ async def _session_has_running_execution(conn: asyncpg.Connection, session_id: u
             SELECT 1
             FROM chat_sessions s
             JOIN chat_turn_executions te
-              ON te.id = s.current_execution_id
+              ON te.id = COALESCE(
+                  s.current_execution_id,
+                  (
+                      SELECT te_latest.id
+                      FROM chat_turn_executions te_latest
+                      WHERE te_latest.session_id = s.id
+                        AND te_latest.status IN ('running', 'retrying')
+                      ORDER BY te_latest.updated_at DESC
+                      LIMIT 1
+                  )
+              )
             WHERE s.id = $1
               AND te.status IN ('running', 'retrying')
             LIMIT 1

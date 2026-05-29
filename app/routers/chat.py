@@ -950,7 +950,17 @@ async def get_streaming_status(session_id: UUID):
                        END AS tools_called
                 FROM chat_sessions s
                 LEFT JOIN chat_turn_executions te
-                  ON te.id = s.current_execution_id
+                  ON te.id = COALESCE(
+                      s.current_execution_id,
+                      (
+                          SELECT te_latest.id
+                          FROM chat_turn_executions te_latest
+                          WHERE te_latest.session_id = s.id
+                            AND te_latest.status IN ('running', 'retrying')
+                          ORDER BY te_latest.updated_at DESC
+                          LIMIT 1
+                      )
+                  )
                 LEFT JOIN chat_messages am
                   ON am.id = te.assistant_message_id
                 LEFT JOIN LATERAL (
@@ -1426,7 +1436,17 @@ async def get_last_response(session_id: UUID):
                    END AS tools_called
             FROM chat_sessions s
             LEFT JOIN chat_turn_executions te
-              ON te.id = s.current_execution_id
+              ON te.id = COALESCE(
+                  s.current_execution_id,
+                  (
+                      SELECT te_latest.id
+                      FROM chat_turn_executions te_latest
+                      WHERE te_latest.session_id = s.id
+                        AND te_latest.status IN ('running', 'retrying')
+                      ORDER BY te_latest.updated_at DESC
+                      LIMIT 1
+                  )
+              )
             LEFT JOIN chat_messages am
               ON am.id = te.assistant_message_id
             LEFT JOIN LATERAL (
@@ -1598,7 +1618,17 @@ async def interrupt_session(session_id: UUID, req: InterruptRequest):
                            COALESCE(pm.tools_called, am.tools_called) AS tools_called
                     FROM chat_sessions s
                     LEFT JOIN chat_turn_executions te
-                      ON te.id = s.current_execution_id
+                      ON te.id = COALESCE(
+                          s.current_execution_id,
+                          (
+                              SELECT te_latest.id
+                              FROM chat_turn_executions te_latest
+                              WHERE te_latest.session_id = s.id
+                                AND te_latest.status IN ('running', 'retrying')
+                              ORDER BY te_latest.updated_at DESC
+                              LIMIT 1
+                          )
+                      )
                     LEFT JOIN chat_messages am
                       ON am.id = te.assistant_message_id
                     LEFT JOIN LATERAL (
@@ -1717,7 +1747,17 @@ async def resume_interrupted(session_id: UUID):
             JOIN chat_workspaces w
               ON w.id = s.workspace_id
             LEFT JOIN chat_turn_executions te
-              ON te.id = s.current_execution_id
+              ON te.id = COALESCE(
+                  s.current_execution_id,
+                  (
+                      SELECT te_latest.id
+                      FROM chat_turn_executions te_latest
+                      WHERE te_latest.session_id = s.id
+                        AND te_latest.status IN ('running', 'retrying')
+                      ORDER BY te_latest.updated_at DESC
+                      LIMIT 1
+                  )
+              )
             LEFT JOIN chat_messages am
               ON am.id = te.assistant_message_id
             LEFT JOIN chat_messages um

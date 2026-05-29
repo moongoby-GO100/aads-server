@@ -1,5 +1,19 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-29 16:55 KST) - Chat streaming restore regression fix
+- 배경: CEO가 `/chat#b8a8651b-6226-46df-9a44-36a70e478959` 세션에서 응답 버블이 있다가 사라지고, 응답 중단/새로고침 후 완료 표시가 반복 재발한다고 보고했다.
+- 실측:
+  - 해당 세션 최신 실행 `9f8666c1-041f-4658-bf33-9efdc5479230`은 16:40:47 KST 시작 후 16:56:33 KST `completed`로 전환됐다.
+  - 최신 assistant 메시지 `1029dce0-7a41-47b7-8b63-65d2152ca28a`는 DB에 `intent=status_check`, `model_used=claude-haiku-4-5-20251001`, 길이 3,567자로 정상 저장되어 있다.
+  - 재발 원인으로 `chat_sessions.current_execution_id`가 비어 있을 때 `streaming-status`, `last-response`, `interrupt`, `resume-interrupted`, `get_current_execution()`이 최신 running 실행을 찾지 못하는 경로를 확인했다.
+- 조치:
+  - `app/routers/chat.py`: `streaming-status`, `last-response`, `interrupt`, `resume-interrupted` 조회가 `current_execution_id` 누락 시에도 같은 세션의 최신 `running/retrying` 실행을 fallback으로 찾도록 보강했다.
+  - `app/services/chat_service.py`: `get_current_execution()`과 `_session_has_running_execution()`도 같은 fallback을 사용하도록 보강했다.
+- 검증:
+  - `python3 -m py_compile app/routers/chat.py app/services/chat_service.py` 통과.
+  - 대시보드 쪽 복원 경로는 `/root/aads/aads-dashboard/HANDOVER.md` 동일 시각 기록 참조.
+- 주의: 서버 워크트리에는 기존 unrelated 변경이 남아 있으므로 커밋 시 `app/routers/chat.py`, `app/services/chat_service.py`, `HANDOVER.md`만 선별 스테이징한다.
+
 ## 현재 진행 상태 (2026-05-29 11:35 KST) - Chat streaming/report quality follow-up guardrails
 - 배경: CEO가 채팅 스트리밍 전수조사 이후 "다음단계 진행"을 지시했고, 보고 양식 개선이 실제로 어떻게 강제되는지 확인 가능한 조치를 요구했다.
 - 조치 대상: `tests/unit/test_output_validator.py`, `app/static/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html`, `docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html`, `docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.4.html`.
