@@ -1,5 +1,20 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-29 17:45 KST) - Chat placeholder deletion regression fix
+- 배경: CEO가 `b8a8651b-6226-46df-9a44-36a70e478959` 세션에서 응답 버블이 사라지고 새로고침 후 다른 상태로 보이는 재발 현상을 보고했다. 직전 보고의 미검증 표현은 폐기하고 DB/코드/명령으로 재확인했다.
+- 실측:
+  - 2026-05-29 17:45 KST 기준 최신 실행 `7b5626fc-6c78-41d1-a271-d46f0abeb148`은 17:46:09 KST `auto-settled by stale execution watchdog`로 `interrupted` 처리됐다.
+  - 연결된 assistant 메시지 `984b4614-c466-40a6-87c0-e2d977ae6791`는 길이 1,353자의 `streaming_placeholder`로 남아 있어, terminal 실행인데도 프론트가 임시 진행 버블로 다루는 상태였다.
+  - `_promote_inactive_streaming_placeholders()`가 같은 실행의 최종 응답이 아니라 세션 내 과거 정상 assistant 응답 전체를 검사해, 오래된 세션에서 현재 placeholder를 삭제할 수 있는 회귀를 확인했다.
+- 조치:
+  - `app/services/chat_service.py`: inactive placeholder 삭제 판단을 같은 `execution_id`의 정상 최종 응답 또는 execution_id가 없는 경우 placeholder 이후 생성된 정상 응답으로 제한했다. 과거 assistant 응답 때문에 현재 진행/복구 버블이 삭제되지 않게 했다.
+  - `app/main.py`: stale execution watchdog가 running 실행을 auto-settle할 때 해당 실행의 `streaming_placeholder`도 즉시 `interrupted_partial`/`interrupted`로 승격하도록 보강했다.
+  - DB 즉시 복구: 세션 `b8a8651b...`의 메시지 `984b4614...`를 `streaming_placeholder`에서 `interrupted_partial`로 전환하고 진행 마커를 제거했다. 보존 본문 길이 1,304자.
+- 검증:
+  - `python3 -m py_compile app/main.py app/services/chat_service.py` 통과.
+  - DB update returning 결과: `984b4614...`, `intent=interrupted_partial`, `model_used=interrupted`, `len=1304`.
+- 주의: 서버/대시보드 워크트리에 기존 unrelated 변경이 많다. 커밋 시 이번 조치 파일 `app/main.py`, `app/services/chat_service.py`, `HANDOVER.md`만 선별 스테이징한다.
+
 ## 현재 진행 상태 (2026-05-29 17:31 KST) - Chat disappearing response terminal-race fix
 - 배경: CEO가 `/chat#b8a8651b-6226-46df-9a44-36a70e478959` 세션에서 "응답이 있었는데 사라졌다"고 재보고했고 즉시 조치를 지시했다.
 - 실측:

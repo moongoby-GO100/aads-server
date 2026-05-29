@@ -4125,15 +4125,25 @@ async def _promote_inactive_streaming_placeholders(
             try:
                 _uid = _pid if isinstance(_pid, uuid.UUID) else uuid.UUID(str(_pid))
                 # promote 전 검사 1: 정상 저장된 메시지(model_used가 실제 모델명)가 이미 있는지 확인
-                _ph_content = await conn.fetchval("SELECT LEFT(content, 50) FROM chat_messages WHERE id = $1", _uid)
+                _ph_meta = await conn.fetchrow(
+                    "SELECT LEFT(content, 50) AS content_prefix, execution_id, created_at FROM chat_messages WHERE id = $1",
+                    _uid,
+                )
+                _ph_content = (_ph_meta["content_prefix"] if _ph_meta else "") or ""
+                _ph_execution_id = _ph_meta["execution_id"] if _ph_meta else None
+                _ph_created_at = _ph_meta["created_at"] if _ph_meta else None
                 _real_exists = await conn.fetchval(
                     """SELECT count(*) FROM chat_messages
                        WHERE session_id = $1 AND role = 'assistant'
                        AND id != $2
                        AND model_used IS NOT NULL
                        AND model_used NOT IN ('streaming', 'recovered', 'recovered_from_redis', 'stopped', 'interrupted', 'semantic_cache')
-                       AND intent IS DISTINCT FROM 'streaming_placeholder'""",
-                    sid, _uid,
+                       AND intent IS DISTINCT FROM 'streaming_placeholder'
+                       AND (
+                         ($3::uuid IS NOT NULL AND execution_id = $3)
+                         OR ($3::uuid IS NULL AND created_at >= $4::timestamptz)
+                       )""",
+                    sid, _uid, _ph_execution_id, _ph_created_at,
                 )
                 if _real_exists and _real_exists > 0:
                     # 정상 응답이 이미 있음 → placeholder만 삭제 (promote 불필요)

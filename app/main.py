@@ -314,6 +314,27 @@ async def lifespan(app: FastAPI):
                     )
                     if settled:
                         _sids = list({r["session_id"] for r in settled})
+                        _execution_ids = [r["id"] for r in settled]
+                        await conn.execute(
+                            """
+                            UPDATE chat_messages
+                            SET content = CASE
+                                    WHEN trim(COALESCE(content, '')) = ''
+                                        THEN '⚠️ 응답이 중단되었습니다. 다시 시도해 주세요.'
+                                    ELSE regexp_replace(
+                                        content,
+                                        E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$',
+                                        ''
+                                    )
+                                END,
+                                intent = 'interrupted_partial',
+                                model_used = 'interrupted',
+                                edited_at = NOW()
+                            WHERE execution_id = ANY($1::uuid[])
+                              AND intent = 'streaming_placeholder'
+                            """,
+                            _execution_ids,
+                        )
                         await conn.execute(
                             """
                             UPDATE chat_sessions
