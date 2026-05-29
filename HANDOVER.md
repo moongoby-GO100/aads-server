@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-05-29 09:00 KST) - Chat streaming live display + report quality gate v1.5
+- 배경: CEO가 채팅창 스트리밍 실시간 표현/결과 응답을 전수 조사한 뒤 즉시 조치하라고 지시했고, 보고형 응답 양식이 부실하다는 재발 피드백을 추가로 줬다.
+- 조치 대상: 대시보드 `src/app/chat/page.tsx`, 백엔드 `app/services/output_validator.py`, 기술문서 `app/static/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html`, 아카이브 `app/static/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.4.html`.
+- 핵심 변경:
+  - 의미 있는 `interrupted_partial` 메시지는 draft/short interruption 필터에서 제외해 강력 새로고침 후에도 중단 응답 버블과 `▶ 이어서` 버튼이 보존되도록 했다.
+  - `streaming-status`가 `is_streaming=true`와 `partial_content`를 반환할 때 프론트가 `streamingSessionRef`, `streaming`, `streamBuf`, 로컬 `streaming_placeholder`를 즉시 복원하도록 보강했다. 세션 복귀/강력 새로고침 직후 "응답이 있는지 화면 변화가 없는" 구간을 줄이는 목적이다.
+  - `REPORT_STRUCTURE_WEAK` validator에 `요약/결론/현황/판정` 그룹과 수치·날짜·커밋 출처 태그 검사를 추가했다. 긴 보고에서 수치가 있으면 `[DB 조회]`, `[코드 확인]`, `[명령]`, `[미측정]` 같은 출처 표기를 요구한다.
+  - 기술문서 원본을 v1.5.0으로 올리고 기존 원본은 `AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.4.html`로 아카이브했다.
+- 검증:
+  - `python3 -m py_compile app/services/output_validator.py` 통과.
+  - `npx eslint src/app/chat/page.tsx` 통과(error 0, 기존 warning 21).
+  - `npm run build` 통과(Next.js 16 production build, 52개 route 생성).
+  - `git diff --check` 통과.
+  - validator smoke: 짧은 부실 보고는 `REPORT_STRUCTURE_WEAK`로 차단, 요약/표/출처/검증/다음단계 포함 보고는 통과.
+  - `AADS-CHAT-SYSTEM-TECHNICAL-DOC.html` v1.5.0 문자열과 `AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.4.html` 아카이브 링크 확인.
+- 주의: 서버/대시보드 워크트리에 기존 백업 삭제 및 unrelated 미추적 파일이 많다. 커밋 시 이번 조치 파일만 선별 스테이징해야 한다.
+
 ## 현재 진행 상태 (2026-05-29 07:41 KST) - Chat partial persistence commit record
 - 배경: CEO가 세션 `93a6bddb-742d-44af-95d5-6958760284f8`에서 응답 중단/이어서 버블이 강력 새로고침 후 사라지는 현상에 대한 조치분 커밋/푸시와 문서 기록을 지시했다.
 - 조치 대상: `app/services/chat_service.py`, `app/routers/chat.py`, `HANDOVER.md`.

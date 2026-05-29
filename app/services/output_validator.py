@@ -70,6 +70,17 @@ _MARKDOWN_TABLE = re.compile(
     r'\|[^\n]+\|\s*\n\s*\|[\s\-:]+\|',
 )
 
+_SOURCE_TAG_PATTERN = re.compile(
+    r'\[(?:DB\s*조회|코드\s*확인|로그|명령|도구|검증|실측|출처|공식문서|미측정)[^\]]*\]',
+    re.IGNORECASE,
+)
+
+_QUANTIFIED_CLAIM_PATTERN = re.compile(
+    r'(?:\d[\d,]*(?:\.\d+)?\s*(?:건|개|행|초|분|시간|일|%|원|달러|GB|MB|줄|회)|'
+    r'\b\d{4}-\d{2}-\d{2}\b|KST|커밋|commit|hash)',
+    re.IGNORECASE,
+)
+
 # ─── 보고서 품질 구조 검사 ───────────────────────────────────────────────────
 
 _REPORT_QUALITY_INTENTS = frozenset({
@@ -106,6 +117,9 @@ _REPORT_QUALITY_INTENTS = frozenset({
 })
 
 _REPORT_REQUIRED_GROUPS: dict[str, tuple[str, ...]] = {
+    "summary_or_conclusion": (
+        "요약", "결론", "핵심", "현황", "판정",
+    ),
     "problem_or_risk": (
         "문제", "문제점", "이슈", "리스크", "위험", "한계", "차단", "주의", "누락",
     ),
@@ -308,12 +322,16 @@ def check_report_quality_structure(
     ]
     has_table = bool(_MARKDOWN_TABLE.search(text))
     has_next_action = ("→ 다음" in text) or ("→ 권장" in text) or ("다음 단계" in text)
+    has_source_tags = bool(_SOURCE_TAG_PATTERN.search(text))
+    has_quantified_claim = bool(_QUANTIFIED_CLAIM_PATTERN.search(text))
 
     structural_gaps = list(missing)
     if not has_table and len(text) >= 500:
         structural_gaps.append("table_or_matrix")
     if not has_next_action:
         structural_gaps.append("next_action")
+    if has_quantified_claim and not has_source_tags and len(text) >= 500:
+        structural_gaps.append("source_tags")
 
     if len(structural_gaps) < 2:
         return None
@@ -342,6 +360,7 @@ def _build_report_quality_retry_prompt(missing: list[str], reason: str) -> str:
         "1) 문제점/리스크, 2) 원인/근거(도구·DB·코드 출처), "
         "3) 개선 권장안(우선순위 포함), 4) 검증 방법/완료기준, "
         "5) → 다음 단계. "
+        "수치·날짜·커밋·상태값에는 [DB 조회], [코드 확인], [명령], [로그], [미측정] 같은 출처 태그를 붙이세요. "
         "비교 항목이 3개 이상이면 마크다운 표를 사용하고, 확인하지 못한 값은 미검증으로 표시하세요."
     )
 
