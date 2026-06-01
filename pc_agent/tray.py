@@ -44,7 +44,7 @@ def _make_icon(color: tuple[int, int, int] = (0, 200, 80)):
     return img
 
 
-def create_tray(cfg: dict, agent_proc, on_quit: Callable) -> None:
+def create_tray(cfg: dict, agent_proc_or_ref, on_quit: Callable) -> None:
     try:
         import pystray
         from pystray import MenuItem as Item
@@ -55,10 +55,17 @@ def create_tray(cfg: dict, agent_proc, on_quit: Callable) -> None:
     version = _get_version()
     auto_reply_enabled = True
 
+    def _get_proc():
+        """launcher가 에이전트를 재시작해도 항상 최신 인스턴스를 반환."""
+        if isinstance(agent_proc_or_ref, list):
+            return agent_proc_or_ref[0]
+        return agent_proc_or_ref
+
     def get_status() -> str:
-        if hasattr(agent_proc, "is_connected") and agent_proc.is_connected:
+        p = _get_proc()
+        if hasattr(p, "is_connected") and p.is_connected:
             return "connected"
-        if agent_proc and agent_proc.poll() is None:
+        if p and p.poll() is None:
             return "reconnecting"
         return "disconnected"
 

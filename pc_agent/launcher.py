@@ -491,18 +491,21 @@ def main() -> None:
 
     # 트레이를 별도 스레드에서 실행 (메인 스레드에서 프로세스 감시)
     stop_requested = threading.Event()
+    # mutable container로 전달하여 launcher가 proc을 교체해도 tray가 최신 인스턴스를 참조
+    proc_ref = [proc]
     try:
         from tray import create_tray
 
         def on_quit():
             """트레이 종료 콜백."""
             stop_requested.set()
-            if proc and proc.poll() is None:
-                proc.terminate()
+            p = proc_ref[0]
+            if p and p.poll() is None:
+                p.terminate()
 
         tray_thread = threading.Thread(
             target=create_tray,
-            args=(cfg, proc, on_quit),
+            args=(cfg, proc_ref, on_quit),
             daemon=True,
         )
         tray_thread.start()
@@ -518,6 +521,7 @@ def main() -> None:
 
     try:
         while True:
+            proc_ref[0] = proc  # tray가 항상 최신 에이전트 인스턴스를 참조
             if proc is None:
                 logger.error("proc is None — 에이전트 복구 시도")
                 time.sleep(5)

@@ -36,6 +36,10 @@ else:
     _EVENT_TABLE_READY = False
     _EVENT_RECORD_FAILURE_COUNT = 0
 _RELOAD_DISCONNECT_FLUSH_TASK: asyncio.Task[Any] | None = None
+# 같은 agent_id 동시 등록 시 레이스 컨디션 방지
+_agent_connect_locks: dict[str, asyncio.Lock] = {}
+if _prev_mod is not None and hasattr(_prev_mod, "_agent_connect_locks"):
+    _agent_connect_locks = dict(getattr(_prev_mod, "_agent_connect_locks", {}))
 
 
 async def _record_agent_event(
@@ -176,16 +180,23 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
         await _record_agent_event(agent_id, "auth_failed", reason="unauthorized")
         return
 
-    old_ws = _agent_connections.pop(agent_id, None)
-    if old_ws is not None:
-        try:
-            await old_ws.close(code=4010, reason="replaced_by_new")
-        except Exception:
-            pass
-        logger.info("pc_agent_ws_replaced agent_id=%s", agent_id)
-        await _record_agent_event(agent_id, "replaced", reason="replaced_by_new")
+    # 같은 agent_id의 동시 연결 레이스 컨디션 방지
+    if agent_id not in _agent_connect_locks:
+        _agent_connect_locks[agent_id] = asyncio.Lock()
+    connect_lock = _agent_connect_locks[agent_id]
 
-    await websocket.accept()
+    async with connect_lock:
+        old_ws = _agent_connections.pop(agent_id, None)
+        if old_ws is not None:
+            try:
+                await old_ws.close(code=4010, reason="replaced_by_new")
+            except Exception:
+                pass
+            logger.info("pc_agent_ws_replaced agent_id=%s", agent_id)
+            await _record_agent_event(agent_id, "replaced", reason="replaced_by_new")
+            await asyncio.sleep(0.1)  # 이전 연결 정리 시간 확보
+
+        await websocket.accept()
     _agent_connections[agent_id] = websocket
     connected_at = datetime.utcnow()
     logger.info("pc_agent_ws_connected agent_id=%s total=%d", agent_id, len(_agent_connections))
