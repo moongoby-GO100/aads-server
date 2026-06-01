@@ -12,7 +12,8 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any, AsyncGenerator, Dict, List, Optional
+import signal
+from typing import Any, AsyncGenerator, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,49 @@ _BUILTIN_ALLOWED: List[str] = [
 ]
 
 
+# ─── 활성 프로세스 추적 ──────────────────────────────────────────────────────
+
+_active_iterators: Dict[str, Any] = {}
+
+
+def _find_claude_child_pids() -> List[int]:
+    """컨테이너 내 claude CLI 자식 프로세스 PID 목록."""
+    pids = []
+    try:
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            pid = int(entry)
+            if pid <= 10:
+                continue
+            try:
+                with open(f"/proc/{pid}/cmdline", "rb") as f:
+                    cmdline = f.read().decode("utf-8", errors="replace")
+                if "claude" in cmdline and "stream-json" in cmdline:
+                    pids.append(pid)
+            except (OSError, PermissionError):
+                continue
+    except Exception:
+        pass
+    return pids
+
+
+def cleanup_orphan_claude_processes(exclude_pids: Optional[Set[int]] = None) -> int:
+    """고아 claude CLI 프로세스를 정리. 정리한 프로세스 수 반환."""
+    exclude = exclude_pids or set()
+    killed = 0
+    for pid in _find_claude_child_pids():
+        if pid in exclude:
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+            killed += 1
+            logger.info(f"orphan claude process killed: PID={pid}")
+        except (ProcessLookupError, PermissionError):
+            pass
+    return killed
+
+
 # ─── AADS 도구 → SDK MCP @tool 래퍼 ─────────────────────────────────────────
 
 def _build_aads_sdk_tools() -> list:
@@ -134,9 +178,6 @@ def _build_aads_sdk_tools() -> list:
             tool_args = dict(args or {})
             _sid = _active_chat_session_id
             if _sid and name in {"pipeline_runner_submit", "pipeline_runner_submit_batch"}:
-                # Runner jobs must be attributed to the chat tab that issued
-                # the tool call. Do not let a session_id copied from a URL in
-                # the prompt override the active chat session.
                 tool_args["session_id"] = _sid
             elif _sid and not str(tool_args.get("session_id") or "").strip():
                 tool_args["session_id"] = _sid
@@ -341,10 +382,14 @@ class AgentSDKService:
 
         options = self._build_options(resume_session_id=session_id, system_prompt=system_prompt)
         captured_session_id: Optional[str] = None
+        sdk_iter: Any = None
+        _pids_before = set(_find_claude_child_pids())
+        _stream_key = chat_session_id or id(self)
 
         try:
             HEARTBEAT_SSE = f'data: {json.dumps({"type": "heartbeat"})}\n\n'
             sdk_iter = sdk_query(prompt=prompt, options=options).__aiter__()
+            _active_iterators[str(_stream_key)] = sdk_iter
 
             while True:
                 # 8초 내에 SDK 메시지가 안 오면 heartbeat 전송 (Cloudflare 100s 대비)
@@ -380,6 +425,13 @@ class AgentSDKService:
                 else:
                     yield HEARTBEAT_SSE
 
+        except asyncio.CancelledError:
+            logger.warning(
+                f"AgentSDKService: 클라이언트 연결 종료 — "
+                f"세션={captured_session_id or chat_session_id} 프로세스 정리"
+            )
+            raise
+
         except CLINotFoundError:
             msg = "Claude Code CLI 미설치. 설치: pip install claude-agent-sdk"
             logger.error(f"AgentSDKService: {msg}")
@@ -397,6 +449,34 @@ class AgentSDKService:
             logger.exception(f"AgentSDKService: {msg}")
             yield f"data: {json.dumps({'type': 'error', 'content': msg})}\n\n"
             raise
+
+        finally:
+            _active_iterators.pop(str(_stream_key), None)
+            # SDK iterator 정리 — 내부 claude CLI 프로세스 종료 유도
+            if sdk_iter is not None:
+                try:
+                    await sdk_iter.aclose()
+                except Exception as _close_err:
+                    logger.debug(f"sdk_iter.aclose() 예외 (무시): {_close_err}")
+
+            # 안전망: 이 스트림에서 생성된 claude 프로세스 정리
+            _pids_after = set(_find_claude_child_pids())
+            _new_pids = _pids_after - _pids_before
+            for pid in _new_pids:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    logger.info(
+                        f"AgentSDKService: 스트림 종료 후 claude 프로세스 정리 "
+                        f"PID={pid} session={captured_session_id or chat_session_id}"
+                    )
+                except (ProcessLookupError, PermissionError):
+                    pass
+
+            _active_chat_session_id = None
+            logger.debug(
+                f"AgentSDKService: execute_stream 정리 완료 "
+                f"session={captured_session_id or chat_session_id}"
+            )
 
 
 # ─── 현재 실행 컨텍스트 ──────────────────────────────────────────────────────

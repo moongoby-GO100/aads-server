@@ -1291,6 +1291,29 @@ async def lifespan(app: FastAPI):
 
     _startup_asyncio.create_task(_periodic_rate_limit_cleanup())
 
+    # 고아 claude CLI 프로세스 주기적 정리 (응답 중단 방지)
+    async def _periodic_orphan_claude_reaper():
+        import asyncio as _reaper_asyncio
+        await _reaper_asyncio.sleep(60)
+        while True:
+            try:
+                from app.services.agent_sdk_service import (
+                    cleanup_orphan_claude_processes,
+                    _active_iterators,
+                    _find_claude_child_pids,
+                )
+                active_count = len(_active_iterators)
+                all_pids = set(_find_claude_child_pids())
+                if len(all_pids) > max(active_count + 1, 2):
+                    killed = cleanup_orphan_claude_processes()
+                    if killed:
+                        logger.warning(f"orphan_claude_reaper: {killed}개 프로세스 정리 (활성={active_count})")
+            except Exception as _e:
+                logger.debug(f"orphan_claude_reaper_failed: {_e}")
+            await _reaper_asyncio.sleep(120)
+
+    _startup_asyncio.create_task(_periodic_orphan_claude_reaper())
+
     # Claude Max 사용량 폴러 시작
     try:
         from app.services.oauth_usage_tracker import ensure_claude_max_poller_running

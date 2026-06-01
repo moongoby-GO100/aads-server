@@ -8,7 +8,7 @@ import os
 import time
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 router = APIRouter()
@@ -131,7 +131,7 @@ async def _stream_project_execution(project_id: str):
 
 
 @router.post("/projects/{project_id}/stream")
-async def stream_project(project_id: str):
+async def stream_project(project_id: str, request: Request):
     """프로젝트 실행 상태를 SSE로 스트리밍.
 
     Server-Sent Events 형식:
@@ -151,6 +151,8 @@ async def stream_project(project_id: str):
 
             stream_iter = _stream_project_execution(project_id).__aiter__()
             while True:
+                if await request.is_disconnected():
+                    break
                 try:
                     chunk = await asyncio.wait_for(
                         stream_iter.__anext__(),
