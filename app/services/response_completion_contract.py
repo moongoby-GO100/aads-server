@@ -133,9 +133,7 @@ def _has_disclosure(response_text: str) -> bool:
 
 
 def _looks_like_work_completion(response_text: str, user_msg: str, intent: str) -> bool:
-    text = f"{user_msg}\n{response_text}".lower()
-    if (intent or "") in _CODE_INTENTS:
-        return True
+    text = (response_text or "").lower()
     return any(marker.lower() in text for marker in _WORK_DONE_MARKERS)
 
 

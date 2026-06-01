@@ -2697,8 +2697,7 @@ async def with_background_completion(
             if not _completed_ok and not state.get("_rate_limited") and not state.get("_producer_exception_type") and not state.get("_producer_incomplete_exit"):
                 _content_len = len((state.get("content") or "").strip())
                 if _content_len > 0:
-                    logger.info("bg_producer_inferred_completion session=%s content_len=%d", session_id[:8], _content_len)
-                    _completed_ok = True
+                    logger.warning("bg_producer_no_done_event session=%s content_len=%d — NOT marking as completed", session_id[:8], _content_len)
             if _completed_ok:
                 try:
                     await _redis_stream.mark_stream_done(_stream_id_for_state(session_id, state))
