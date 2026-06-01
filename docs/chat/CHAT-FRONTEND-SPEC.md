@@ -1,6 +1,6 @@
 # AADS Chat Frontend 명세
 
-_v1.0 | 2026-04-02 | 최초 작성_
+_v1.1 | 2026-06-02 | 완료 아이콘/버블 표시 기준 보강_
 
 ## 1. 파일 구조
 
@@ -58,13 +58,26 @@ type SSEEventType =
   | "token"           // LLM 생성 토큰
   | "tool_start"      // 도구 호출 시작
   | "tool_result"     // 도구 호출 결과
-  | "done"            // 스트리밍 완료
+  | "done"            // 서버 완료 판정 통과 + DB 최종 저장 완료
   | "error"           // 에러 (recoverable 포함)
   | "heartbeat"       // 연결 유지용 (3초 간격)
   | "thinking"        // 사고 과정 요약
   | "cost"            // 비용 정보
   | "artifact"        // 아티팩트 생성
 ```
+
+프론트엔드는 `done`을 "LLM 토큰 수신 종료"가 아니라 "백엔드가 최종 완료보고 계약을 통과해 assistant 메시지를 저장했다"는 의미로 처리합니다. 따라서 완료 아이콘, 완료 토스트, 세션 completed 표시는 `done` 또는 `last-response.just_completed`로 최종 assistant가 확인된 경우에만 표시합니다.
+
+#### 완료/중단 표시 규칙
+
+| 서버 이벤트/상태 | 프론트 처리 |
+|------------------|-------------|
+| `done` | 서버 메시지 병합, streaming 해제, 완료 아이콘 표시 |
+| `last-response.just_completed=true` | 서버 최종 assistant로 교체/병합, 완료 아이콘 표시 |
+| `error.recoverable=true` + completion contract reason | 기존 버블 유지, 응답 중단/복구 가능 상태 표시, 완료 아이콘 금지 |
+| `interrupted_partial` | 부분 응답 표시, 이어쓰기/복구 경로 유지, 완료 아이콘 금지 |
+
+백엔드 자동 이어쓰기 중에는 별도 새 버블을 만들지 않고 기존 스트리밍 버블에 토큰을 이어붙이는 것이 원칙입니다.
 
 #### 끊김 복구 메커니즘 (A-1 ~ A-4, 2026-04-02 적용)
 
@@ -151,4 +164,5 @@ CSS 변수 기반 다크/라이트 모드. `types.ts`에서 `DARK`/`LIGHT` 객�
 
 | 버전 | 날짜 | 변경 |
 |------|------|------|
+| v1.1 | 2026-06-02 | done 의미를 최종 완료 판정 통과로 명확화, recoverable 중단 시 완료 아이콘 금지 규칙 추가 |
 | v1.0 | 2026-04-02 | 초기 작성 — 8파일 전체 명세 |

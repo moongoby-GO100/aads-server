@@ -1,6 +1,6 @@
 # AADS Chat Backend 명세
 
-_v1.0 | 2026-04-02 | 최초 작성_
+_v1.1 | 2026-06-02 | 완료 판정 계약 + 자동 이어쓰기 반영_
 
 ## 1. 파일 구조
 
@@ -17,6 +17,7 @@ app/
 │   ├── chat_service.py             — 비즈니스 로직 (4,158줄, 핵심)
 │   ├── chat_embedding_service.py   — 벡터 임베딩 서비스
 │   ├── chat_tools.py               — 도구 실행 엔진
+│   ├── response_completion_contract.py — 최종 완료보고 계약 검사
 │   └── redis_stream.py             — Redis Stream 토큰 버퍼 (190줄)
 ├── core/
 │   ├── anthropic_client.py         — LLM 클라이언트 (fallback 체인)
@@ -153,6 +154,31 @@ app.include_router(chat_v2_router, prefix="/api/v1", tags=["chat-v2"])  # L1065 
 | `trigger_ai_reaction()` | 1712 | AI 자동 반응 생성 |
 | `_extract_artifacts()` | 1321 | 응답에서 아티팩트 자동 추출 |
 
+#### 4.3.1 완료 판정 계약 / 자동 이어쓰기
+
+`send_message_stream()`은 LLM 토큰이 끝났다고 바로 `completed`로 마킹하지 않습니다.
+
+```
+LLM 응답 생성
+  → output_validator
+  → response_critic
+  → enforce_completion_contract()
+      ├─ 통과: _save_and_update_session() → execution completed → SSE done
+      └─ 미통과: 자동 이어쓰기 호출
+           ├─ 최대 AADS_COMPLETION_AUTO_CONTINUE_MAX=3회
+           ├─ continuation 토큰/도구 이벤트 스트리밍
+           └─ 미해결: interrupted_partial 저장 + recoverable error
+```
+
+| 상태 | 처리 |
+|------|------|
+| 완료 계약 통과 | assistant 최종 저장, execution `completed`, SSE `done` 전송 |
+| 완료 계약 미충족 후 자동 이어쓰기 성공 | 이어쓴 내용을 합쳐 최종 저장, execution `completed`, SSE `done` 전송 |
+| 최대 횟수 후 미충족 | partial 저장, execution `interrupted`, reason `completion_contract_unresolved:<violations>` |
+| 이어쓰기 응답 없음 | partial 저장, execution `interrupted`, reason `completion_contract_continue_empty:<violations>` |
+
+기본값은 `AADS_COMPLETION_AUTO_CONTINUE_MAX=3`입니다.
+
 ### 4.4 학습/메모리
 
 | 함수 | 줄 | 기능 |
@@ -189,8 +215,15 @@ Fallback 체인:
   ANTHROPIC_AUTH_TOKEN → ANTHROPIC_API_KEY_FALLBACK → Gemini (LiteLLM)
 ```
 
+## 7. 운영 설정
+
+| 설정 | 기본값 | 기능 |
+|------|--------|------|
+| `AADS_COMPLETION_AUTO_CONTINUE_MAX` | `3` | 최종 완료보고 미충족 시 동일 스트림 자동 이어쓰기 최대 횟수 |
+
 ## 버전 이력
 
 | 버전 | 날짜 | 변경 |
 |------|------|------|
+| v1.1 | 2026-06-02 | response_completion_contract, 자동 이어쓰기, 미해결 시 interrupted 처리 기준 추가 |
 | v1.0 | 2026-04-02 | 초기 작성 — 30+ API, 서비스 함수, Redis Stream |

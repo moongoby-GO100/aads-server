@@ -1,6 +1,6 @@
 # AADS Chat System — 전체 아키텍처 개요
 
-_v1.0 | 2026-04-02 | 최초 작성_
+_v1.1 | 2026-06-02 | 완료 판정 게이트 + 자동 이어쓰기 반영_
 
 ## 1. 시스템 개요
 
@@ -66,8 +66,15 @@ CEO 입력 → ChatInput.tsx → POST /api/v1/chat/messages/send
     → 도구 호출 (35+ MCP tools)
     → LLM 응답 생성 (Anthropic/Gemini)
     → SSE 토큰 스트리밍 (asyncio.Queue + Redis Stream 병행)
+    → Completion Contract Gate
+      ├─ 최종 완료보고 미충족 시 자동 이어쓰기 (최대 3회)
+      └─ 미해결 시 interrupted_partial 저장 + recoverable error
+    → DB 최종 저장
+    → SSE done 전송
   → 프론트엔드 EventSource 수신 → 실시간 렌더링
 ```
+
+`done` 이벤트는 단순히 LLM 스트림이 끝났다는 뜻이 아니라, 서버가 최종 응답을 DB에 저장했고 완료 판정 계약을 통과했다는 뜻으로만 사용합니다.
 
 ### 3.2 끊김 복구 흐름 (6계층 방어)
 ```
@@ -80,7 +87,26 @@ SSE 끊김 감지
   → [6] Nginx 600s + maxStreamTimeout 3600s
 ```
 
-### 3.3 세션/워크스페이스 구조
+### 3.3 완료 판정/자동 이어쓰기 흐름
+```
+LLM 1차 응답 종료
+  → output_validator / response_critic
+  → response_completion_contract 검사
+      ├─ 최종 완료보고 충족
+      │    → _save_and_update_session()
+      │    → execution completed
+      │    → SSE done + 프론트 완료 버블/아이콘
+      └─ 최종 완료보고 미충족
+           → 동일 스트림에서 자동 이어쓰기 호출
+           → 최대 AADS_COMPLETION_AUTO_CONTINUE_MAX=3회 반복
+           → 계속 미충족 시 interrupted_partial 저장
+           → execution interrupted
+           → recoverable error 전송 (완료 아이콘 금지)
+```
+
+이 게이트는 "응답이 생성되었다"와 "업무가 완료되었다"를 분리합니다. LLM이 최종 완료보고 없이 중간 보고, 진행 상황, 보정 안내만 남긴 경우에는 completed로 마킹하지 않고 계속 이어쓰기를 시도합니다.
+
+### 3.4 세션/워크스페이스 구조
 ```
 Workspace (프로젝트별)
   └── Session (대화 단위)
@@ -122,4 +148,5 @@ Workspace (프로젝트별)
 
 | 버전 | 날짜 | 변경 |
 |------|------|------|
+| v1.1 | 2026-06-02 | 완료 판정 게이트, 자동 이어쓰기, 미해결 시 completed 금지 정책 반영 |
 | v1.0 | 2026-04-02 | 초기 작성 — 전체 아키텍처/데이터흐름/기술스택 |

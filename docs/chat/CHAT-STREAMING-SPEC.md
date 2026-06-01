@@ -1,6 +1,6 @@
 # AADS Chat Streaming & 끊김 복구 명세
 
-_v1.1 | 2026-06-01 | resume delta terminal guard + interrupted_partial resume + watchdog grace_
+_v1.2 | 2026-06-02 | completion contract auto-continue + completed gate_
 
 ## 1. 프록시 체인
 
@@ -62,6 +62,8 @@ data: {"type": "done", "message_id": "uuid"}\n\n
 data: {"type": "error", "content": "...", "recoverable": true}\n\n
 data: {"type": "heartbeat"}\n\n
 ```
+
+`done`은 LLM API 스트림 종료 이벤트가 아닙니다. AADS에서는 서버가 최종 응답을 저장했고 `response_completion_contract`를 통과한 경우에만 `done`을 전송합니다.
 
 ## 3. 6계층 방어 체계
 
@@ -136,6 +138,25 @@ SSE 끊김 감지 (onerror)
   → _resume_single_stream(): LLM 재호출 → placeholder UPDATE (INSERT 아님!)
 ```
 
+### Layer 7: Completion Contract / 자동 이어쓰기 (서버)
+
+```
+LLM stream 종료
+  → output_validator / response_critic
+  → response_completion_contract 검사
+      ├─ 통과: DB 저장 → mark execution completed → SSE done
+      └─ 미통과: 동일 스트림에서 자동 이어쓰기
+           ├─ 최대 AADS_COMPLETION_AUTO_CONTINUE_MAX=3회
+           ├─ continuation 토큰/도구 이벤트도 기존 버블에 이어서 전송
+           └─ 계속 미통과 시 interrupted_partial + recoverable error
+```
+
+- 최종 완료보고가 없으면 `completed`로 마킹하지 않는다.
+- 자동 이어쓰기 중 heartbeat `phase=completion_auto_continue`를 보낼 수 있다.
+- 최대 횟수 이후에도 미해결이면 `completion_contract_unresolved:<violations>`로 중단 저장한다.
+- 이어쓰기 응답이 비어 있으면 `completion_contract_continue_empty:<violations>`로 중단 저장한다.
+- 이 경우 프론트는 완료 아이콘/완료 토스트를 표시하지 않고 복구 가능한 중단 상태로 처리한다.
+
 ## 4. 타임아웃 정렬표
 
 | 구간 | 값 | 비고 |
@@ -152,6 +173,7 @@ SSE 끊김 감지 (onerror)
 | waitingBg 안전장치 | 30s | 최종 방어선 |
 | BG_AUTO_CANCEL_SEC | 3900s | 연결 끊김 후 watchdog보다 먼저 정상 장시간 응답을 중단하지 않도록 65분 유지 |
 | BG active protection | 7200s | LLM/도구 이벤트가 계속 갱신되는 경우 최대 120분 보호 |
+| Completion auto-continue | 최대 3회 | `AADS_COMPLETION_AUTO_CONTINUE_MAX`, 최종 완료보고 미충족 시 동일 스트림에서 이어쓰기 |
 | Redis Stream TTL | 3600s | 완료 후 600s |
 | stale execution watchdog | 20~45분+ | no-token 20분/10분 idle, token 있음 45분/20분 idle, live runtime 제외 |
 
@@ -185,6 +207,8 @@ SSE 끊김 감지 (onerror)
 | stream-resume | routers/chat.py | `stream_resume()` L322 |
 | last-response | routers/chat.py | `get_last_response()` L419 |
 | 서버 복구 | chat_service.py | `resume_interrupted_streams()` L544 |
+| 완료 판정 계약 | response_completion_contract.py | `enforce_completion_contract()` |
+| 자동 이어쓰기 | chat_service.py | `send_message_stream()` completion auto-continue loop |
 | 프론트 SSE | page.tsx | `connectSSE()` / `invisibleRecovery()` |
 | 프론트 버블 유지 | page.tsx | A-1~A-4 (2026-04-02) |
 
@@ -192,5 +216,6 @@ SSE 끊김 감지 (onerror)
 
 | 버전 | 날짜 | 변경 |
 |------|------|------|
-| v1.0 | 2026-04-02 | 초기 작성 — 6계층 방어, 타임아웃표, A+B 적용 반영 |
+| v1.2 | 2026-06-02 | 최종 완료보고 전 completed 금지, completion contract auto-continue 최대 3회, 미해결 시 interrupted_partial 처리 |
 | v1.1 | 2026-06-01 | stream-resume delta-only 성공 오판 차단, interrupted_partial resume 대상화, watchdog idle/live-runtime 조건 보강 |
+| v1.0 | 2026-04-02 | 초기 작성 — 6계층 방어, 타임아웃표, A+B 적용 반영 |

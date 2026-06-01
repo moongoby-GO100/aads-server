@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AADS 채팅 시스템 기술문서 v1.6</title>
+<title>AADS 채팅 시스템 기술문서 v1.7</title>
 <style>
   :root {
     --bg: #0f172a; --card: #1e293b; --border: #334155;
@@ -127,7 +127,7 @@
 <div class="doc-header">
   <h1>AADS 채팅 시스템 기술문서</h1>
   <div class="subtitle">CEO Chat-First System — 기획 · 아키텍처 · 구현 · 문제점 · 개선안</div>
-  <span class="version-badge">📋 v1.6.0 · 2026-06-01 · stream-resume 성공 기준 보강 + interrupted_partial 이어쓰기 + watchdog grace 조정</span>
+  <span class="version-badge">📋 v1.7.0 · 2026-06-02 · completion contract 자동 이어쓰기 + 완료 판정 게이트</span>
   <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.4.html" class="version-badge old" style="text-decoration:none;">📦 v1.4.0</a>
   <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.3.html" class="version-badge old" style="text-decoration:none;">📦 v1.3.0</a>
   <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.2.html" class="version-badge old" style="text-decoration:none;">📦 v1.2.0</a>
@@ -219,6 +219,7 @@
     <tr><td>신뢰도 배지</td><td><span class="badge badge-green">운영중</span></td><td>db_realtime / ai_inference / mixed 구분 표시</td></tr>
     <tr><td>인라인 차트</td><td><span class="badge badge-green">운영중</span></td><td>```chart 코드펜스 → bar/line/pie 시각화</td></tr>
     <tr><td>중단 응답 보존</td><td><span class="badge badge-green">v1.2</span></td><td>1자 이상 부분 응답 DB 보존 + 화면 표시</td></tr>
+    <tr><td>최종 완료 판정</td><td><span class="badge badge-green">v1.7</span></td><td>최종 완료보고 전 completed 금지 + 자동 이어쓰기 최대 3회</td></tr>
   </table>
 </div>
 
@@ -579,7 +580,7 @@ gemini-3.1-pro:   → claude-opus-4-7 → gpt-5.5
     <tr><td><code>retry_progress</code></td><td>Server→Client</td><td>content: string</td><td><span class="badge badge-green">v1.1</span> 429 재시도 인플레이스 카운터</td></tr>
     <tr><td><code>model_fallback</code></td><td>Server→Client</td><td>from_model, to_model</td><td><span class="badge badge-green">v1.1</span> 모델 폴백 발생 알림</td></tr>
     <tr><td><code>heartbeat</code></td><td>Server→Client</td><td>-</td><td>3초 간격 연결 유지 (256byte 패딩)</td></tr>
-    <tr><td><code>done</code></td><td>Server→Client</td><td>model_used, tokens, cost</td><td>스트리밍 정상 완료</td></tr>
+    <tr><td><code>done</code></td><td>Server→Client</td><td>model_used, tokens, cost</td><td>최종 완료 판정 통과 + DB 저장 완료</td></tr>
     <tr><td><code>error</code></td><td>Server→Client</td><td>content: string</td><td>오류 (재시도 없이 종료)</td></tr>
     <tr><td><code>resume_done</code></td><td>Server→Client</td><td>-</td><td>stream-resume 재연결 완료</td></tr>
     <tr><td><code>partial_preserved</code></td><td>Server→Client</td><td>message: object</td><td>인터럽트 전 부분 응답 보존</td></tr>
@@ -603,7 +604,25 @@ gemini-3.1-pro:   → claude-opus-4-7 → gpt-5.5
   </div>
   <p><em>v1.2에서 drain timer를 16ms→50ms로 변경하고, scroll 로직의 streamBuf 의존성을 제거하여 렌더 횟수를 ~60% 감소시켰습니다. 이로써 대규모 세션에서 브라우저 멈춤 현상이 크게 개선되었습니다.</em></p>
 
-  <h3>6.3 Finalization 경합 방지 (v1.1 신규)</h3>
+  <h3>6.3 Completion Contract 자동 이어쓰기 (v1.7 신규)</h3>
+  <div class="diagram">
+<span class="highlight">[LLM stream 종료]</span>
+        │
+        ▼
+<span class="flow">output_validator / response_critic</span>
+        │
+        ▼
+<span class="flow">response_completion_contract 검사</span>
+        │
+        ├─ 통과 ─▶ DB 최종 저장 ─▶ execution completed ─▶ SSE done
+        │
+        └─ 미통과 ─▶ 동일 스트림 자동 이어쓰기 (최대 3회)
+                         ├─ 통과: 이어쓴 응답까지 합쳐 completed
+                         └─ 미해결: interrupted_partial + recoverable error
+  </div>
+  <p><em>v1.7부터 <code>done</code>은 LLM 토큰 종료가 아니라 최종 완료보고 계약 통과를 의미합니다. 최종 완료보고가 없으면 자동 이어쓰기를 시도하고, 계속 미충족 시 완료 아이콘을 띄우지 않도록 <code>completed</code> 대신 <code>interrupted</code>로 보존합니다.</em></p>
+
+  <h3>6.4 Finalization 경합 방지 (v1.1 신규)</h3>
   <div class="diagram">
 <span class="highlight">[SSE done 이벤트]</span>                    <span class="highlight">[Polling just_completed]</span>
          │                                       │
@@ -621,7 +640,7 @@ gemini-3.1-pro:   → claude-opus-4-7 → gpt-5.5
   <span class="flow">결과: 동일 응답이 2번 처리되는 것을 방지 → 버블 중복 해소</span>
   </div>
 
-  <h3>6.4 재연결 &amp; 복구 전략</h3>
+  <h3>6.5 재연결 &amp; 복구 전략</h3>
   <table>
     <tr><th>단계</th><th>조건</th><th>액션</th></tr>
     <tr><td>1. Inactivity</td><td>150초 무응답</td><td>abort → 재연결 시도</td></tr>
@@ -632,7 +651,7 @@ gemini-3.1-pro:   → claude-opus-4-7 → gpt-5.5
     <tr><td>6. Error Report</td><td>폴백도 실패</td><td>reportError() → 백엔드 기록, 사용자 에러 표시</td></tr>
   </table>
 
-  <h3>6.5 서버측 스트리밍 보호</h3>
+  <h3>6.6 서버측 스트리밍 보호</h3>
   <table>
     <tr><th>보호 메커니즘</th><th>설정</th><th>설명</th></tr>
     <tr><td>Heartbeat</td><td>3초 간격</td><td>Cloudflare 100s / Nginx 유휴 타임아웃 방어</td></tr>
@@ -955,6 +974,15 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
   </div>
 
   <div class="issue-card">
+    <div class="title"><span class="resolved">RESOLVED</span> P0 — 최종 완료보고 전 completed 오판</div>
+    <div class="desc">
+      <strong>현상:</strong> LLM이 중간 보고나 진행 상황만 생성한 뒤 스트림을 종료하면, 백엔드가 이를 <code>completed</code>로 저장하고 프론트에는 완료 아이콘이 표시될 수 있었다.<br>
+      <strong>근본 원인:</strong> 기존 완료 판정은 LLM stream 종료와 업무상 최종 완료보고를 충분히 분리하지 못했다. <code>response_completion_contract</code>는 경고를 덧붙였지만 완료 저장 자체를 막지 않았다.<br>
+      <strong>조치 (v1.7):</strong> <code>send_message_stream()</code> 완료 직전 <code>response_completion_contract</code>를 게이트로 실행한다. 최종 완료보고 미충족 시 동일 스트림에서 자동 이어쓰기를 최대 <code>AADS_COMPLETION_AUTO_CONTINUE_MAX=3</code>회 수행하고, 계속 미충족이면 <code>completion_contract_unresolved</code> 사유로 <code>interrupted_partial</code> 저장 + recoverable error를 전송한다. 이 경우 <code>done</code>은 전송하지 않는다.
+    </div>
+  </div>
+
+  <div class="issue-card">
     <div class="title"><span class="p1">P1</span> Validator 거부 시 버블 중복 저장</div>
     <div class="desc">
       <strong>현상:</strong> validator가 응답을 거부해도 <code>partial_preserved</code>로 DB 저장 + 화면 노출 → 동일 응답 2~3개 버블.<br>
@@ -1109,15 +1137,16 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
     <tr><td>20</td><td><span class="p0">P0</span></td><td>stream-resume 성공 기준 보강 + delta-only fallback</td><td><code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.6</td></tr>
     <tr><td>21</td><td><span class="p0">P0</span></td><td>interrupted_partial 수동/자동 이어쓰기 대상화</td><td><code>routers/chat.py</code>, <code>chat_service.py</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.6</td></tr>
     <tr><td>22</td><td><span class="p0">P0</span></td><td>stale execution watchdog live-runtime/idle grace 보강</td><td><code>main.py</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.6</td></tr>
+    <tr><td>23</td><td><span class="p0">P0</span></td><td>Completion Contract 자동 이어쓰기 + completed 게이트</td><td><code>chat_service.py</code>, <code>response_completion_contract.py</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.7</td></tr>
   </table>
 
   <h3>11.2 즉시 조치 (1주 내)</h3>
   <table>
     <tr><th>#</th><th>우선순위</th><th>항목</th><th>대상 파일</th><th>상태</th></tr>
-    <tr><td>12</td><td><span class="p0">P0</span></td><td>6개 완결 경로 → 단일 finalizeMessage() 통합</td><td><code>page.tsx</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
-    <tr><td>13</td><td><span class="p0">P0</span></td><td>백그라운드 완료 시 클라이언트 알림 채널 구축</td><td><code>page.tsx</code>, <code>chat_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
-    <tr><td>14</td><td><span class="p1">P1</span></td><td>streaming_placeholder 잔존 자동 정리</td><td><code>chat_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
-    <tr><td>15</td><td><span class="p1">P1</span></td><td>_deleted_duplicate 물리 삭제 스케줄러 (7일 경과)</td><td>신규 <code>cleanup_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
+    <tr><td>24</td><td><span class="p0">P0</span></td><td>6개 완결 경로 → 단일 finalizeMessage() 통합</td><td><code>page.tsx</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
+    <tr><td>25</td><td><span class="p0">P0</span></td><td>백그라운드 완료 시 클라이언트 알림 채널 구축</td><td><code>page.tsx</code>, <code>chat_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
+    <tr><td>26</td><td><span class="p1">P1</span></td><td>streaming_placeholder 잔존 자동 정리</td><td><code>chat_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
+    <tr><td>27</td><td><span class="p1">P1</span></td><td>_deleted_duplicate 물리 삭제 스케줄러 (7일 경과)</td><td>신규 <code>cleanup_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
   </table>
 
   <h3>11.3 단기 개선 (1개월 내)</h3>
@@ -1143,7 +1172,7 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
 
   <h3>11.5 검증 방법</h3>
   <table>
-    <tr><th>개선 항목</th><th>완료 기준</th><th>측정 방법</th><th>v1.3 현황</th></tr>
+    <tr><th>개선 항목</th><th>완료 기준</th><th>측정 방법</th><th>현재 현황</th></tr>
     <tr><td>빈 버블 해소</td><td>빈 버블 발생률 &lt; 1%</td><td><code>SELECT count(*) FROM chat_messages WHERE role='assistant' AND content=''</code></td><td><span class="badge badge-yellow">placeholder 5건 잔존</span></td></tr>
     <tr><td>중복 버블 해소</td><td>중복 보고 0건/주</td><td>error_log 모니터링</td><td><span class="badge badge-yellow">간헐 재현 (6개 경로 미통합)</span></td></tr>
     <tr><td>중단 비율</td><td>신규 interrupted &lt; 5%</td><td><code>SELECT count(*) ... WHERE model_used='interrupted'</code> / 전체 비율</td><td><span class="badge badge-green">3건/일 (정상 인터럽트 수준)</span></td></tr>
@@ -1151,6 +1180,7 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
     <tr><td>코드 분리</td><td>단일 파일 &lt; 1,500줄</td><td><code>wc -l</code></td><td><span class="badge badge-yellow">미착수 (page.tsx 8,340줄)</span></td></tr>
     <tr><td>브라우저 프리징</td><td>프리징 보고 0건/주</td><td>CEO 피드백 + errorReporter</td><td><span class="badge badge-yellow">v1.3 단기 조치 완료, 대형 컴포넌트 분리 남음</span></td></tr>
     <tr><td>응답 미표시</td><td>새로고침 없이 100% 표시</td><td>E2E 테스트</td><td><span class="badge badge-yellow">tab return 체크 적용, 완전 해소 미달</span></td></tr>
+    <tr><td>최종 완료보고 누락</td><td>최종 완료보고 전 completed 0건</td><td><code>completion_contract_unresolved</code> 로그 + CEO 피드백</td><td><span class="badge badge-green">v1.7 자동 이어쓰기/게이트 적용</span></td></tr>
   </table>
 </div>
 
@@ -1163,7 +1193,8 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
 
   <table>
     <tr><th>버전</th><th>날짜</th><th>작성자</th><th>변경 내용</th><th>문서 링크</th></tr>
-    <tr><td><strong>v1.6.0</strong></td><td>2026-06-01</td><td>AADS CTO AI</td><td>stream-resume delta-only 성공 오판 차단, resume_unavailable/timeout 시 서버 /resume fallback, interrupted_partial 이어쓰기 대상화, stale execution watchdog live-runtime/idle grace 보강</td><td><strong>현재 문서 (원본)</strong></td></tr>
+    <tr><td><strong>v1.7.0</strong></td><td>2026-06-02</td><td>AADS CTO AI</td><td>completion contract 자동 이어쓰기, 최종 완료보고 전 completed 금지, 미해결 시 interrupted_partial + recoverable error 처리, 완료 아이콘 표시 기준 문서화</td><td><strong>현재 문서 (원본)</strong></td></tr>
+    <tr><td>v1.6.0</td><td>2026-06-01</td><td>AADS CTO AI</td><td>stream-resume delta-only 성공 오판 차단, resume_unavailable/timeout 시 서버 /resume fallback, interrupted_partial 이어쓰기 대상화, stale execution watchdog live-runtime/idle grace 보강</td><td>현재 문서에 포함</td></tr>
     <tr><td>v1.5.0</td><td>2026-05-29</td><td>AADS CTO AI</td><td>강력 새로고침 후 중단/이어서 버블 보존, 세션 복귀 시 streaming-status partial_content 즉시 표시, 보고형 응답 요약/출처 태그 validator 보강</td><td>현재 문서에 포함</td></tr>
     <tr><td>v1.4.0</td><td>2026-05-27</td><td>AADS CTO AI</td><td>Validator 확인형 질문 예외, 코드 중복 제거, SDK/autonomous 경로 user_message 수정, Stale Execution Watchdog 90초 자동 정리, 버블 중복 저장 방지(stream_reset), 브라우저 멈춤 추가 패치(useMemo/cap/scroll), 의존성 전수 점검</td><td><a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.4.html" style="color:var(--blue);">v1.4 아카이브</a></td></tr>
     <tr><td>v1.3.0</td><td>2026-05-26</td><td>AADS CTO AI</td><td>브라우저 멈춤 재발 원인 반영: 긴 응답 스트리밍 렌더 간격 완화, <code>startTransition</code> 적용, 화면 캡처 base64 변환 비동기화, 커밋 <code>8cf8314</code> blue-green 배포 검증</td><td><a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.3.html" style="color:var(--blue);">v1.3 아카이브</a></td></tr>
@@ -1197,7 +1228,7 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
 
 <!-- Footer -->
 <div style="text-align:center; padding:32px 0; color:var(--muted); font-size:0.8rem;">
-  <p>AADS Chat System Technical Document v1.6.0 · 2026-06-01 · 서버68</p>
+  <p>AADS Chat System Technical Document v1.7.0 · 2026-06-02 · 서버68</p>
   <p>이 문서는 코드 변경 시 함께 업데이트되어야 합니다.</p>
   <p style="margin-top:8px;">
     <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.4.html" style="color:var(--muted); text-decoration:underline;">📦 v1.4.0</a> ·
