@@ -4,6 +4,17 @@ _v1.0 | 2026-04-02 | 최초 작성_
 
 ## 변경 이력 (최신순)
 
+### 2026-06-01
+
+| 커밋 | 변경 | 구분 |
+|------|------|------|
+| 2026-06-01 | **Watchdog auto retry**: stale execution watchdog이 45분+20분 정책으로 stale 실행을 감지했을 때 `retry_count < 2`이고 원 user 메시지가 남아 있으면 즉시 `retrying`으로 claim하고 `_resume_single_stream()`을 백그라운드 실행한다. 한도 초과나 재시도 불가 케이스만 기존처럼 `interrupted_partial`로 종료한다. | 🐛 Backend |
+
+Watchdog auto retry:
+- 기존 watchdog은 stale 실행을 `interrupted`로 terminalize해 세션 차단은 풀었지만, 사용자가 별도 `이어서 진행`을 보내기 전에는 자동 재개하지 않았다.
+- 개선 후 watchdog 후보 중 live background task가 없고 `retry_count < 2`인 실행은 `watchdog_auto_retry_scheduled policy=20m+10m_or_45m+20m` 사유로 `retrying` 전환, `retry_count+1`, `current_execution_id` 복원, placeholder anchor 보정 후 resume task를 띄운다.
+- `retry_count >= 2` 또는 원 user 메시지가 없는 실행은 자동 루프 방지를 위해 기존 중단 처리 경로를 유지한다.
+
 ### 2026-05-12
 
 | 커밋 | 변경 | 구분 |

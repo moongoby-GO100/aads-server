@@ -295,10 +295,15 @@ async def lifespan(app: FastAPI):
                 logger.warning("rate_limit_recovery_failed: %s", str(e)[:200])
 
         async def _run_stale_execution_cleanup():
-            """Auto-settle stale running executions that block sessions."""
+            """Auto-retry or settle stale running executions that block sessions."""
             try:
                 from app.core.db_pool import get_pool as _sep
-                from app.services.chat_service import get_active_bg_tasks as _get_active_bg_tasks
+                from app.services.chat_service import (
+                    _resume_single_stream as _watchdog_resume_single_stream,
+                    get_active_bg_tasks as _get_active_bg_tasks,
+                )
+                import asyncio as _watchdog_asyncio
+
                 _pool = _sep()
                 _active_sids = {
                     sid for sid, is_active in (_get_active_bg_tasks() or {}).items()
@@ -307,9 +312,179 @@ async def lifespan(app: FastAPI):
                 async with _pool.acquire() as conn:
                     candidates = await conn.fetch(
                         """
-                        SELECT id, session_id
-                        FROM chat_turn_executions
-                        WHERE status IN ('running', 'retrying')
+                        SELECT te.id,
+                               te.session_id,
+                               te.requested_model,
+                               te.retry_count,
+                               COALESCE(ph.id, te.assistant_message_id) AS assistant_message_id,
+                               COALESCE(ph.content, am.content, '') AS partial_content,
+                               COALESCE(um.content, '') AS last_user_msg,
+                               w.name AS workspace_name
+                        FROM chat_turn_executions te
+                        JOIN chat_sessions s
+                          ON s.id = te.session_id
+                        JOIN chat_workspaces w
+                          ON w.id = s.workspace_id
+                        LEFT JOIN chat_messages am
+                          ON am.id = te.assistant_message_id
+                        LEFT JOIN chat_messages um
+                          ON um.id = te.user_message_id
+                        LEFT JOIN LATERAL (
+                            SELECT id, content
+                            FROM chat_messages
+                            WHERE execution_id = te.id
+                              AND intent = 'streaming_placeholder'
+                            ORDER BY created_at DESC
+                            LIMIT 1
+                        ) ph ON TRUE
+                        WHERE te.status IN ('running', 'retrying')
+                          AND (
+                            (
+                              COALESCE(te.last_event_id, '') = ''
+                              AND te.started_at < NOW() - INTERVAL '20 minutes'
+                              AND te.updated_at < NOW() - INTERVAL '10 minutes'
+                            )
+                            OR (
+                              COALESCE(te.last_event_id, '') <> ''
+                              AND te.started_at < NOW() - INTERVAL '45 minutes'
+                              AND te.updated_at < NOW() - INTERVAL '20 minutes'
+                            )
+                          )
+                        """
+                    )
+                    _claimable = [
+                        r for r in candidates
+                        if str(r["session_id"]) not in _active_sids
+                    ]
+                    _retry_rows = [
+                        r for r in _claimable
+                        if (r["retry_count"] or 0) < 2 and (r["last_user_msg"] or "").strip()
+                    ]
+                    _retry_ids = [r["id"] for r in _retry_rows]
+                    _retry_claimed = []
+                    if _retry_ids:
+                        _retry_claimed = await conn.fetch(
+                            """
+                            UPDATE chat_turn_executions
+                            SET status = 'retrying',
+                                retry_count = retry_count + 1,
+                                completed_at = NULL,
+                                updated_at = NOW(),
+                                error_message = 'watchdog_auto_retry_scheduled policy=20m+10m_or_45m+20m'
+                            WHERE id = ANY($1::uuid[])
+                              AND status IN ('running', 'retrying')
+                              AND (
+                                (
+                                  COALESCE(last_event_id, '') = ''
+                                  AND started_at < NOW() - INTERVAL '20 minutes'
+                                  AND updated_at < NOW() - INTERVAL '10 minutes'
+                                )
+                                OR (
+                                  COALESCE(last_event_id, '') <> ''
+                                  AND started_at < NOW() - INTERVAL '45 minutes'
+                                  AND updated_at < NOW() - INTERVAL '20 minutes'
+                                )
+                              )
+                            RETURNING id
+                            """,
+                            _retry_ids,
+                        )
+                    _claimed_ids = {r["id"] for r in _retry_claimed}
+                    for row in _retry_rows:
+                        if row["id"] not in _claimed_ids:
+                            continue
+                        _sid = str(row["session_id"])
+                        _eid = str(row["id"])
+                        _placeholder_id = row["assistant_message_id"]
+                        if not _placeholder_id:
+                            _placeholder_id = await conn.fetchval(
+                                """
+                                INSERT INTO chat_messages (
+                                    session_id, execution_id, role, content, intent, model_used, tools_called
+                                )
+                                VALUES ($1::uuid, $2::uuid, 'assistant', $3, 'streaming_placeholder', 'streaming', '[]'::jsonb)
+                                ON CONFLICT (execution_id) WHERE intent = 'streaming_placeholder' AND execution_id IS NOT NULL
+                                DO UPDATE SET content = COALESCE(chat_messages.content, EXCLUDED.content), edited_at = NOW()
+                                RETURNING id
+                                """,
+                                _sid,
+                                _eid,
+                                row["partial_content"] or "",
+                            )
+                        await conn.execute(
+                            """
+                            UPDATE chat_turn_executions
+                            SET assistant_message_id = $2,
+                                updated_at = NOW()
+                            WHERE id = $1::uuid
+                            """,
+                            _eid,
+                            _placeholder_id,
+                        )
+                        await conn.execute(
+                            """
+                            UPDATE chat_sessions
+                            SET current_execution_id = $2,
+                                updated_at = NOW()
+                            WHERE id = $1
+                            """,
+                            row["session_id"],
+                            row["id"],
+                        )
+                        _resume_task = _watchdog_asyncio.create_task(
+                            _watchdog_resume_single_stream(
+                                _sid,
+                                _placeholder_id,
+                                row["partial_content"] or "",
+                                row["last_user_msg"] or "",
+                                row["workspace_name"] or "CEO",
+                                execution_id=_eid,
+                                requested_model=row["requested_model"],
+                            )
+                        )
+
+                        def _on_watchdog_resume_done(
+                            _task,
+                            _session_id=_sid,
+                            _execution_id=_eid,
+                        ):
+                            if _task.cancelled():
+                                logger.warning(
+                                    "watchdog_auto_retry_cancelled session=%s execution=%s",
+                                    _session_id[:8],
+                                    _execution_id[:8],
+                                )
+                                return
+                            _exc = _task.exception()
+                            if _exc:
+                                logger.error(
+                                    "watchdog_auto_retry_escaped session=%s execution=%s error=%s",
+                                    _session_id[:8],
+                                    _execution_id[:8],
+                                    _exc,
+                                )
+
+                        _resume_task.add_done_callback(_on_watchdog_resume_done)
+                    _settle_ids = [
+                        r["id"] for r in _claimable
+                        if r["id"] not in set(_retry_ids)
+                    ]
+                    if not _settle_ids:
+                        if _claimed_ids:
+                            logger.info(
+                                "stale_execution_watchdog: auto-retry scheduled %d executions",
+                                len(_claimed_ids),
+                            )
+                        return
+                    settled = await conn.fetch(
+                        """
+                        UPDATE chat_turn_executions
+                        SET status = 'interrupted',
+                            completed_at = COALESCE(completed_at, NOW()),
+                            updated_at = NOW(),
+                            error_message = COALESCE(error_message, 'auto-settled by stale execution watchdog')
+                        WHERE id = ANY($1::uuid[])
+                          AND status IN ('running', 'retrying')
                           AND (
                             (
                               COALESCE(last_event_id, '') = ''
@@ -322,23 +497,6 @@ async def lifespan(app: FastAPI):
                               AND updated_at < NOW() - INTERVAL '20 minutes'
                             )
                           )
-                        """
-                    )
-                    _settle_ids = [
-                        r["id"] for r in candidates
-                        if str(r["session_id"]) not in _active_sids
-                    ]
-                    if not _settle_ids:
-                        return
-                    settled = await conn.fetch(
-                        """
-                        UPDATE chat_turn_executions
-                        SET status = 'interrupted',
-                            completed_at = COALESCE(completed_at, NOW()),
-                            updated_at = NOW(),
-                            error_message = COALESCE(error_message, 'auto-settled by stale execution watchdog')
-                        WHERE id = ANY($1::uuid[])
-                          AND status IN ('running', 'retrying')
                         RETURNING id, session_id
                         """,
                         _settle_ids,
@@ -376,8 +534,8 @@ async def lifespan(app: FastAPI):
                             _sids,
                         )
                         logger.info(
-                            "stale_execution_watchdog: settled %d executions in %d sessions",
-                            len(settled), len(_sids),
+                            "stale_execution_watchdog: auto-retry scheduled %d, settled %d executions in %d sessions",
+                            len(_claimed_ids), len(settled), len(_sids),
                         )
             except Exception as e:
                 logger.warning("stale_execution_watchdog_failed: %s", str(e)[:200])
