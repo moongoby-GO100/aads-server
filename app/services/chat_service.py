@@ -2186,20 +2186,135 @@ async def with_background_completion(
         execution_id = state.get("execution_id")
         if not execution_id:
             return
+        execution_uuid = uuid.UUID(str(execution_id))
+        clean_content = _strip_streaming_progress_markers(state.get("content", ""))
+        if clean_content:
+            for tag in ("function_calls", "function_response", "function_results", "tool_results", "tool_call", "tool_response"):
+                clean_content = re.sub(rf'<{tag}>.*?</{tag}>', '', clean_content, flags=re.DOTALL)
+                clean_content = re.sub(rf'<{tag}>.*', '', clean_content, flags=re.DOTALL)
+            clean_content = re.sub(r'<invoke\s+name=[^>]*>.*?</invoke>', '', clean_content, flags=re.DOTALL)
+            clean_content = re.sub(r'<invoke\s+name=[^>]*>.*', '', clean_content, flags=re.DOTALL)
+            clean_content = clean_content.strip()
         pool = get_pool()
         async with pool.acquire() as conn:
-            await conn.execute(
-                """
-                UPDATE chat_turn_executions
-                SET status = 'completed',
-                    error_message = NULL,
-                    completed_at = COALESCE(completed_at, NOW()),
-                    updated_at = NOW()
-                WHERE id = $1
-                  AND status IN ('running', 'retrying')
-                """,
-                uuid.UUID(str(execution_id)),
-            )
+            async with conn.transaction():
+                exec_row = await conn.fetchrow(
+                    """
+                    SELECT id, session_id, assistant_message_id, requested_model, actual_model, status, completed_at
+                    FROM chat_turn_executions
+                    WHERE id = $1
+                    FOR UPDATE
+                    """,
+                    execution_uuid,
+                )
+                if (
+                    not exec_row
+                    or exec_row["status"] not in ("running", "retrying")
+                    or exec_row["completed_at"] is not None
+                ):
+                    return
+
+                assistant_row = None
+                if exec_row["assistant_message_id"]:
+                    assistant_row = await conn.fetchrow(
+                        "SELECT id, intent, content FROM chat_messages WHERE id = $1 AND role = 'assistant'",
+                        exec_row["assistant_message_id"],
+                    )
+                if not assistant_row:
+                    assistant_row = await conn.fetchrow(
+                        """
+                        SELECT id, intent, content
+                        FROM chat_messages
+                        WHERE execution_id = $1
+                          AND role = 'assistant'
+                        ORDER BY
+                          CASE WHEN intent = 'streaming_placeholder' THEN 1 ELSE 0 END,
+                          length(COALESCE(content, '')) DESC,
+                          created_at DESC
+                        LIMIT 1
+                        """,
+                        execution_uuid,
+                    )
+
+                if assistant_row and not clean_content:
+                    clean_content = _strip_streaming_progress_markers(assistant_row["content"] or "")
+                    clean_content = clean_content.strip()
+
+                if assistant_row and clean_content:
+                    assistant_message_id = assistant_row["id"]
+                    if assistant_row["intent"] == "streaming_placeholder":
+                        await conn.execute(
+                            """
+                            UPDATE chat_messages
+                            SET content = $1,
+                                intent = NULL,
+                                model_used = COALESCE($2, model_used),
+                                edited_at = NOW()
+                            WHERE id = $3
+                            """,
+                            clean_content,
+                            exec_row["actual_model"] or exec_row["requested_model"],
+                            assistant_message_id,
+                        )
+                elif clean_content:
+                    assistant_message_id = await conn.fetchval(
+                        """
+                        INSERT INTO chat_messages (session_id, execution_id, role, content, model_used, tools_called)
+                        VALUES ($1, $2, 'assistant', $3, $4, $5::jsonb)
+                        RETURNING id
+                        """,
+                        exec_row["session_id"],
+                        execution_uuid,
+                        clean_content,
+                        exec_row["actual_model"] or exec_row["requested_model"],
+                        json.dumps(normalize_tool_events(state.get("tool_events", []))),
+                    )
+                    await conn.execute(
+                        "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
+                        exec_row["session_id"],
+                    )
+                else:
+                    await _mark_execution_interrupted(
+                        conn,
+                        str(exec_row["session_id"]),
+                        str(execution_uuid),
+                        "completed_without_assistant_message",
+                        partial_content="",
+                    )
+                    logger.error(
+                        "execution_done_without_assistant_message session=%s execution=%s",
+                        str(exec_row["session_id"])[:8],
+                        str(execution_uuid)[:8],
+                    )
+                    return
+
+                await conn.execute(
+                    """
+                    UPDATE chat_turn_executions
+                    SET assistant_message_id = $2,
+                        status = 'completed',
+                        error_message = NULL,
+                        completed_at = COALESCE(completed_at, NOW()),
+                        updated_at = NOW()
+                    WHERE id = $1
+                      AND status IN ('running', 'retrying')
+                    """,
+                    execution_uuid,
+                    assistant_message_id,
+                )
+                await conn.execute(
+                    """
+                    UPDATE chat_sessions
+                    SET current_execution_id = CASE
+                            WHEN current_execution_id = $2 THEN NULL
+                            ELSE current_execution_id
+                        END,
+                        updated_at = NOW()
+                    WHERE id = $1
+                    """,
+                    exec_row["session_id"],
+                    execution_uuid,
+                )
 
     async def _regenerate_stream(session_id: str, partial_content: str, model: str = "claude-sonnet") -> AsyncGenerator[str, None]:
         """에러 후 재시도: 마지막 user 메시지를 기반으로 스트리밍 재생성."""
@@ -4900,6 +5015,33 @@ async def _save_and_update_session(
                 )
                 _assistant_msg_id = _saved_msg["id"] if _saved_msg else None
             if _execution_uuid:
+                if _assistant_msg_id is None:
+                    _assistant_msg_id = await conn.fetchval(
+                        """
+                        SELECT id
+                        FROM chat_messages
+                        WHERE execution_id = $1
+                          AND role = 'assistant'
+                          AND intent IS DISTINCT FROM 'streaming_placeholder'
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                        """,
+                        _execution_uuid,
+                    )
+                if _assistant_msg_id is None:
+                    logger.error(
+                        "final_save_missing_assistant_message session=%s execution=%s",
+                        str(sid)[:8],
+                        str(_execution_uuid)[:8],
+                    )
+                    await _mark_execution_interrupted(
+                        conn,
+                        str(sid),
+                        str(_execution_uuid),
+                        "final_save_missing_assistant_message",
+                        partial_content=content,
+                    )
+                    return
                 await conn.execute(
                     """
                     DELETE FROM chat_messages
