@@ -84,3 +84,24 @@ def test_structured_report_with_sources_passes():
     )
 
     assert result.is_valid is True
+
+
+def test_pipeline_runner_rejects_short_progress_log_as_final_response():
+    progress_log = (
+        "이전 커밋 `44f4eb67` 반영 상태와 5개 항목별 완료/미완료를 실측으로 확정하겠습니다."
+        "서버211에서 git 상태, 최근 커밋 내용, 서비스 상태, 카드 DB 상태를 병렬 실측합니다."
+        "이전 커밋 `44f4eb67`의 변경 내용과 현재 적용된 코드를 확인합니다."
+        "도구 로드 완료. 이전 작업 반영 여부를 항목별로 실측합니다."
+        "SSH 연결이 일시 끊겼습니다. 핵심 미완료 항목을 재확인합니다."
+        "서비스가 커밋 후 재시작되어 코드가 반영됐습니다. 남은 항목을 확정합니다."
+    )
+
+    result = validate_response(
+        progress_log,
+        tools_called=True,
+        intent="pipeline_runner",
+        user_message="이어서 진행해",
+    )
+
+    assert result.is_valid is False
+    assert result.violation_type == "PROGRESS_ONLY_RESPONSE"

@@ -6905,11 +6905,24 @@ async def send_message_stream(
                         )
                         if not _sdk_val.is_valid:
                             logger.error(f"sdk_path_validation_failed: {_sdk_val.violation_type} — {_sdk_val.message}")
-                            for _tag in ("function_calls", "function_response", "function_results", "tool_results"):
-                                full_response = re.sub(rf'<{_tag}>.*?</{_tag}>', '', full_response, flags=re.DOTALL)
-                                full_response = re.sub(rf'<{_tag}>.*', '', full_response, flags=re.DOTALL)
-                            full_response = re.sub(r'<invoke\s+name=[^>]*>.*?</invoke>', '', full_response, flags=re.DOTALL)
-                            full_response = re.sub(r'<invoke\s+name=[^>]*>.*', '', full_response, flags=re.DOTALL)
+                            await _save_interrupted_partial_message(
+                                session_id=session_id,
+                                content=full_response,
+                                reason=f"output_validator_sdk_failed:{_sdk_val.violation_type}",
+                                execution_id=_execution_id_str,
+                            )
+                            if _execution_id_str:
+                                async with get_pool().acquire() as _conn:
+                                    await _mark_execution_interrupted(
+                                        _conn,
+                                        session_id,
+                                        _execution_id_str,
+                                        f"output_validator_sdk_failed:{_sdk_val.violation_type}",
+                                        partial_content=full_response,
+                                        delete_empty_placeholder=False,
+                                    )
+                            yield f"data: {json.dumps({'type': 'error', 'content': _sdk_val.message, 'recoverable': True, 'reason': f'output_validator_sdk_failed:{_sdk_val.violation_type}', 'model': model_used, 'cost': str(cost_usd), 'input_tokens': 0, 'output_tokens': 0})}\n\n"
+                            return
                         await _save_and_update_session(
                             sid, full_response, model_used=model_used, intent=intent,
                             cost=cost_usd, tools_called=tools_called,
@@ -7087,11 +7100,24 @@ async def send_message_stream(
             )
             if not _auto_val.is_valid:
                 logger.error(f"autonomous_executor_validation_failed: {_auto_val.violation_type} — {_auto_val.message}")
-                for _tag in ("function_calls", "function_response", "function_results", "tool_results"):
-                    full_response = re.sub(rf'<{_tag}>.*?</{_tag}>', '', full_response, flags=re.DOTALL)
-                    full_response = re.sub(rf'<{_tag}>.*', '', full_response, flags=re.DOTALL)
-                full_response = re.sub(r'<invoke\s+name=[^>]*>.*?</invoke>', '', full_response, flags=re.DOTALL)
-                full_response = re.sub(r'<invoke\s+name=[^>]*>.*', '', full_response, flags=re.DOTALL)
+                await _save_interrupted_partial_message(
+                    session_id=session_id,
+                    content=full_response,
+                    reason=f"output_validator_autonomous_failed:{_auto_val.violation_type}",
+                    execution_id=_execution_id_str,
+                )
+                if _execution_id_str:
+                    async with get_pool().acquire() as _conn:
+                        await _mark_execution_interrupted(
+                            _conn,
+                            session_id,
+                            _execution_id_str,
+                            f"output_validator_autonomous_failed:{_auto_val.violation_type}",
+                            partial_content=full_response,
+                            delete_empty_placeholder=False,
+                        )
+                yield f"data: {json.dumps({'type': 'error', 'content': _auto_val.message, 'recoverable': True, 'reason': f'output_validator_autonomous_failed:{_auto_val.violation_type}', 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
+                return
             await _save_and_update_session(
                 sid, full_response, model_used=model_used, intent=intent,
                 cost=cost_usd, tools_called=tools_called,

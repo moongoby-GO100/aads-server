@@ -57,6 +57,56 @@ _CODE_INTENTS = {
     "runner_response",
 }
 
+_FINAL_REPORT_INTENTS = _CODE_INTENTS | {
+    "execution_verify",
+    "cto_verify",
+    "report",
+    "audit",
+    "diagnosis",
+    "debug",
+    "error_analysis",
+    "analysis",
+    "complex_analysis",
+    "status_check",
+    "task_query",
+    "health_check",
+}
+
+_PROGRESS_ONLY_MARKERS = (
+    "확인하겠습니다",
+    "확인해보겠습니다",
+    "실측하겠습니다",
+    "실측합니다",
+    "조회하겠습니다",
+    "점검하겠습니다",
+    "분석하겠습니다",
+    "파악하겠습니다",
+    "조사하겠습니다",
+    "살펴보겠습니다",
+    "진행하겠습니다",
+    "확인합니다",
+    "재확인합니다",
+    "확정하겠습니다",
+    "확정합니다",
+    "이제 ",
+    "먼저 ",
+)
+
+_FINAL_REPORT_EVIDENCE = (
+    "최종",
+    "결론",
+    "확인 결과",
+    "실측 결과",
+    "조치 결과",
+    "검증 결과",
+    "완료 보고",
+    "완료했습니다",
+    "완료됨",
+    "정상화",
+    "남은 리스크",
+    "다음 조치",
+)
+
 _COMMIT_DONE_RE = re.compile(
     r"(?:커밋|commit).{0,18}(?:완료|성공|했습니다|했음|됨|done|pushed)",
     re.IGNORECASE | re.DOTALL,
@@ -137,6 +187,28 @@ def _looks_like_work_completion(response_text: str, user_msg: str, intent: str) 
     return any(marker.lower() in text for marker in _WORK_DONE_MARKERS)
 
 
+def _looks_like_incomplete_final_report(response_text: str, user_msg: str, intent: str) -> bool:
+    normalized_intent = (intent or "").strip()
+    if normalized_intent not in _FINAL_REPORT_INTENTS:
+        return False
+
+    text = (response_text or "").strip()
+    if not text or len(text) > 900:
+        return False
+
+    progress_hits = sum(1 for marker in _PROGRESS_ONLY_MARKERS if marker in text)
+    if progress_hits == 0:
+        return False
+
+    if any(marker in text for marker in _FINAL_REPORT_EVIDENCE):
+        return False
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) <= 5:
+        return True
+    return progress_hits >= 2
+
+
 def _format_status(status: str) -> str:
     if status == "dirty":
         return "미커밋"
@@ -179,6 +251,14 @@ def _build_note(rows: list[dict[str, Any]], violations: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _build_final_report_note(violations: list[str]) -> str:
+    lines = ["", "", "⚠️ 완료 상태 보정"]
+    lines.append(f"- 보정 사유: {', '.join(violations)}")
+    lines.append("- 현재 응답은 최종 완료보고가 아니라 진행 안내/중간 로그로 판단됩니다.")
+    lines.append("- 원 요청에 대한 원인, 조치 내용, 검증 결과, 남은 리스크를 끝까지 작성해야 completed 처리할 수 있습니다.")
+    return "\n".join(lines)
+
+
 def evaluate_completion_contract(
     *,
     response_text: str,
@@ -194,11 +274,14 @@ def evaluate_completion_contract(
     response = response_text or ""
     document_rows = [row for row in all_rows if _is_documentation_path(row["file_path"])]
     pending_document_rows = [row for row in document_rows if row["status"] in _UNDEPLOYED_STATUSES]
+    final_report_missing = _looks_like_incomplete_final_report(response, user_msg, intent)
 
-    if not rows and not _DOCUMENT_DONE_RE.search(response):
+    if not rows and not _DOCUMENT_DONE_RE.search(response) and not final_report_missing:
         return CompletionContractResult(response_text=response_text)
 
     violations: list[str] = []
+    if final_report_missing:
+        violations.append("final_report_missing")
     if pending_rows and _COMMIT_DONE_RE.search(response):
         violations.append("commit_report_conflicts_with_ledger")
     if pending_rows and _PUSH_DONE_RE.search(response):
@@ -220,7 +303,11 @@ def evaluate_completion_contract(
             pending_files=[row["file_path"] for row in rows if row["file_path"]],
         )
 
-    note = _build_note(rows, violations)
+    note = (
+        _build_note(rows, violations)
+        if rows or any(v != "final_report_missing" for v in violations)
+        else _build_final_report_note(violations)
+    )
     base = (response_text or "").rstrip()
     adjusted = f"{base}{note}" if base else note.lstrip()
     return CompletionContractResult(

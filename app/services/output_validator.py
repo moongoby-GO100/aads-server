@@ -10,6 +10,7 @@ AADS-188C Phase 3 + R-CRITICAL-002: Output Validator — 거짓 보고 방지.
   FABRICATED_DATA_TABLE  — 도구 미호출 상태에서 DB 조회/결과처럼 보이는 마크다운 테이블 생성 (차단)
   INCONSISTENT_DATA      — 응답 내 수치가 동일 턴의 도구 결과와 모순되는 경우 (차단)
   REPORT_STRUCTURE_WEAK  — 보고/분석 응답이 문제점·원인·권장안·검증기준 없이 빈약한 경우 (재작성)
+  PROGRESS_ONLY_RESPONSE — 최종 결과 없이 진행 로그/예고로 끝나는 응답 (차단)
 """
 from __future__ import annotations
 
@@ -74,9 +75,12 @@ _COMPLETION_EVIDENCE_PATTERNS: List[str] = [
     "반영 완료",
     "수정 완료",
     "검증 완료",
-    "커밋",
-    "푸시",
-    "배포",
+    "커밋 완료",
+    "커밋했습니다",
+    "푸시 완료",
+    "푸시했습니다",
+    "배포 완료",
+    "배포했습니다",
     "정상화",
     "현재 상태",
 ]
@@ -148,6 +152,7 @@ _REPORT_QUALITY_INTENTS = frozenset({
     "error_analysis",
     "code_modify",
     "deploy",
+    "pipeline_runner",
     "pipeline",
     "git_ops",
     "execute",
