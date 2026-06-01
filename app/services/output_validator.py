@@ -44,6 +44,43 @@ _ACTION_VERBS: List[str] = [
     "살펴보", "파악해", "조사해", "체크해",
 ]
 
+_PROGRESS_ONLY_PATTERNS: List[str] = [
+    "확인하겠습니다",
+    "확인해보겠습니다",
+    "실측하겠습니다",
+    "실측합니다",
+    "조회하겠습니다",
+    "점검하겠습니다",
+    "분석하겠습니다",
+    "파악하겠습니다",
+    "조사하겠습니다",
+    "살펴보겠습니다",
+    "진행하겠습니다",
+    "로드하고",
+    "병렬 확인",
+    "병렬로",
+    "먼저 ",
+    "이제 ",
+]
+
+_COMPLETION_EVIDENCE_PATTERNS: List[str] = [
+    "결론",
+    "원인:",
+    "**원인",
+    "근본 원인",
+    "확인 결과",
+    "실측 결과",
+    "조치 완료",
+    "반영 완료",
+    "수정 완료",
+    "검증 완료",
+    "커밋",
+    "푸시",
+    "배포",
+    "정상화",
+    "현재 상태",
+]
+
 # ─── 날조 도구 결과 패턴 (XML) ────────────────────────────────────────────────
 
 _FABRICATED_XML_PATTERNS: List[re.Pattern] = [
@@ -159,6 +196,25 @@ def _is_confirmation_question(user_message: str) -> bool:
             return True
     return False
 
+
+def _looks_progress_only_response(response_text: str, intent: str) -> bool:
+    """완료 보고가 아니라 '지금 확인하겠다'는 진행 안내만 있는 응답을 차단한다."""
+    normalized_intent = (intent or "").strip()
+    if normalized_intent not in _REPORT_QUALITY_INTENTS:
+        return False
+    text = response_text.strip()
+    if not text or len(text) > 700:
+        return False
+    progress_hits = sum(1 for pattern in _PROGRESS_ONLY_PATTERNS if pattern in text)
+    if progress_hits < 1:
+        return False
+    if any(pattern in text for pattern in _COMPLETION_EVIDENCE_PATTERNS):
+        return False
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) <= 4:
+        return True
+    return progress_hits >= 2 and not _MARKDOWN_TABLE.search(text)
+
 # ─── 검증 결과 ─────────────────────────────────────────────────────────────────
 
 
@@ -194,6 +250,18 @@ def validate_response(
         return _OK
 
     _skip_report_quality = _is_confirmation_question(user_message)
+
+    if _looks_progress_only_response(stripped, intent):
+        return ValidationResult(
+            is_valid=False,
+            violation_type="PROGRESS_ONLY_RESPONSE",
+            message="진행 안내만 있고 질의/조치 결과가 없어 완료 응답으로 저장할 수 없습니다.",
+            retry_prompt=(
+                "방금 응답은 진행 안내뿐입니다. 지금까지 실제로 확인한 도구/DB/로그/코드 근거를 바탕으로 "
+                "원인, 조치 내용, 검증 결과, 남은 리스크를 포함한 최종 완료 보고를 작성하세요. "
+                "'확인하겠습니다' 같은 예고 문장으로 끝내지 마세요."
+            ),
+        )
 
     # 도구가 호출된 응답 — XML 날조는 위에서 이미 검사, 데이터 불일치만 추가 검사
     if tools_called:
