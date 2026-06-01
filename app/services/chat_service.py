@@ -2644,16 +2644,28 @@ async def with_background_completion(
     old_task = _active_bg_tasks.pop(session_id, None)
     if old_task and not old_task.done():
         _old_state = _streaming_state.get(session_id)
+        _had_content = False
         if _old_state and (
             _strip_streaming_progress_markers(_old_state.get("content", "")).strip()
             or _old_state.get("tool_count", 0)
         ):
+            _had_content = True
             try:
                 await _interim_save_streaming(session_id, _old_state, force=True)
             except Exception:
                 pass
         old_task.cancel(msg="superseded_by_new_execution")
-        logger.info(f"bg_task_replaced session={session_id} (partial flushed)")
+        if not _had_content and _old_state and _old_state.get("execution_id"):
+            try:
+                _pool = get_pool()
+                async with _pool.acquire() as _conn:
+                    await _conn.execute(
+                        "UPDATE chat_turn_executions SET status = 'interrupted', completed_at = NOW() WHERE id = $1 AND status = 'running'",
+                        uuid.UUID(str(_old_state["execution_id"])),
+                    )
+            except Exception:
+                pass
+        logger.info(f"bg_task_replaced session={session_id} partial_flushed={_had_content}")
 
     # BUG-SESSION-MIX FIX: 새 producer 시작 전 잔류 streaming_placeholder 정리.
     # 의미 있는 부분 응답은 삭제하지 않고 interrupted assistant로 보존한다.
