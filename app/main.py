@@ -1388,20 +1388,21 @@ async def lifespan(app: FastAPI):
     # 활성 스트리밍 태스크 drain (AADS-P0: 배포 시 응답 끊김 방지)
     try:
         import asyncio
-        from app.services.chat_service import _active_bg_tasks
+        from app.services.chat_service import _active_bg_tasks, preserve_active_streams_for_shutdown
         if _active_bg_tasks:
             _n_tasks = len(_active_bg_tasks)
-            logger.info(f"draining {_n_tasks} active background tasks before pool close...")
+            logger.info(f"preserving {_n_tasks} active background tasks before pool close...")
+            await preserve_active_streams_for_shutdown("api_shutdown_before_process_stop")
             for _sid, _task in list(_active_bg_tasks.items()):
                 if not _task.done():
                     _task.cancel()
             await asyncio.wait_for(
                 asyncio.gather(*list(_active_bg_tasks.values()), return_exceptions=True),
-                timeout=60,
+                timeout=180,
             )
             logger.info(f"drained {_n_tasks} background tasks")
     except asyncio.TimeoutError:
-        logger.warning("bg task drain timed out after 60s, proceeding with shutdown")
+        logger.warning("bg task drain timed out after 180s, proceeding with shutdown")
     except Exception as _drain_err:
         logger.warning(f"bg task drain error: {_drain_err}")
     # DB Connection Pool 종료 (AADS-CRITICAL-FIX #1)

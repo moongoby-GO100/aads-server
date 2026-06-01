@@ -202,6 +202,12 @@ def validate_response(
             if _incon:
                 logger.error(f"[OutputValidator] INCONSISTENT_DATA detected: {_incon.message}")
                 return _incon
+        # Do not turn a real tool-backed status/verification answer into a failed
+        # completed bubble just because its report shape is imperfect. Structural
+        # quality can be improved by the completion contract/critic path, but the
+        # actual tool-backed answer must remain deliverable.
+        if intent in {"status_check", "task_query", "health_check", "execution_verify"}:
+            return _OK
         if not _skip_report_quality:
             _report_quality = check_report_quality_structure(stripped, intent)
             if _report_quality:

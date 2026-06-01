@@ -497,12 +497,9 @@ echo "[deploy.sh] Phase 0.5: ✅ 코드 검증 통과"
 # ── Phase 1: 배포 실행 ──
 case "$MODE" in
     reload)
-        echo "[deploy.sh] Phase 1: fast reload aads-api (supervisorctl restart)"
-        # 배포 플래그
-        docker exec "$ACTIVE_CONTAINER" touch /tmp/aads_deploy_restart 2>/dev/null || true
-        # restart = SIGTERM + 자동 start (supervisord가 처리, 대기 루프 불필요)
-        docker exec "$ACTIVE_CONTAINER" supervisorctl restart aads-api
-        echo "[deploy.sh] Phase 1: supervisorctl restart 완료 — health check 대기..."
+        echo "[deploy.sh] Phase 1: stream-safe hot reload aads-api"
+        docker exec "$ACTIVE_CONTAINER" bash /app/scripts/reload-api.sh
+        echo "[deploy.sh] Phase 1: hot reload 완료 — health check 대기..."
         ;;
     code)
         echo "[deploy.sh] Phase 1: code deploy with stream-safe slot switch"
@@ -741,8 +738,7 @@ done
 if [[ "$HEALTH_OK" != "true" ]]; then
     echo "[deploy.sh] ❌ Phase 2 실패 — 롤백 시도..."
     if [[ "$MODE" == "code" ]]; then
-        docker exec "$ACTIVE_CONTAINER" supervisorctl restart aads-api || true
-        sleep 10
+        echo "[deploy.sh] active API 직접 재시작은 SSE 끊김 원인이므로 생략"
     fi
     notify "❌ 배포 실패 + 롤백 시도 (mode=${MODE})"
     exit 1
@@ -804,8 +800,7 @@ else
     echo "[deploy.sh] ❌ Phase 4 실패 — 롤백 시도..."
     echo "[deploy.sh] 에러: ${CHAT_TEST}"
     if [[ "$MODE" == "code" ]]; then
-        docker exec "$ACTIVE_CONTAINER" supervisorctl restart aads-api || true
-        sleep 10
+        echo "[deploy.sh] active API 직접 재시작은 SSE 끊김 원인이므로 생략"
     fi
     notify "❌ 채팅 기능 테스트 실패 + 롤백 (mode=${MODE}): ${CHAT_TEST:0:200}"
     exit 1

@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-01 15:35 KST) - Chat completion interruption immediate hardening
+- 배경: CEO가 `ac5278a7-2f13-4cd7-9aa1-83d41fb23c97` 세션에서 모든 채팅창 응답이 끝까지 완료되지 않고 끊기는 현상의 상태 확인, 코드/기획서 전수 조사, 즉시 조치를 요청했다.
+- 실측:
+  - 문제 세션은 2026-06-01 15:19:53 KST 기준 `current_execution_id=NULL`이며 최신 3건은 DB상 `completed`지만, assistant 본문 일부가 `⚠️ 요청을 처리하는 중 검증에 실패했습니다...` 고정 문구로 저장되어 정상 완료로 보기 어렵다.
+  - 2026-06-01 12:03~12:04 KST에는 `aads-api` supervisor restart가 있었고, 로그에 `Cancel 3 running task(s), timeout graceful shutdown exceeded`와 `CancelledError`가 남아 진행 중 SSE/LLM producer가 끊긴 증거가 있다.
+  - HANDOVER/배포 스크립트 조사 결과 과거에도 active API 직접 restart와 active-streams 오판이 SSE 끊김 원인으로 기록되어 있었고, 일부 배포/rollback 경로에 여전히 직접 restart 잔재가 있었다.
+- 조치:
+  - `app/services/chat_service.py`: SSE queue backpressure가 발생해도 producer/DB finalization을 중단하지 않고 클라이언트 전송만 best-effort drop으로 처리하게 변경했다.
+  - `app/services/chat_service.py`: output validator 재시도까지 실패하거나 빈 응답이면 고정 경고문을 `completed`로 저장하지 않고, partial을 `interrupted_partial`로 보존한 뒤 execution을 `interrupted`로 종료하도록 변경했다.
+  - `app/services/output_validator.py`: 도구 호출이 있는 `status_check/task_query/health_check/execution_verify` 응답은 보고서 구조 점수 때문에 폐기하지 않게 했다.
+  - `app/services/response_critic.py`: 같은 확인형 인텐트는 critic 재생성 경로를 건너뛰게 했다. `chat_service.py`에서도 critic 호출에 20초 timeout을 추가했다.
+  - `app/main.py`: API 종료 시 active stream을 먼저 forced interim save + interrupted 처리로 보존하고, drain timeout을 180초로 늘렸다.
+  - `supervisord.conf`: uvicorn graceful shutdown을 300초, supervisor stopwaitsecs를 360초로 늘려 장기 스트림 강제 취소 가능성을 낮췄다.
+  - `deploy.sh`: `reload` 모드는 supervisor restart 대신 `/app/scripts/reload-api.sh` hot-reload를 사용하게 했고, code 배포 실패/채팅 테스트 실패 rollback에서 active API 직접 restart를 생략하도록 변경했다.
+- 검증:
+  - `python3 -m py_compile app/services/chat_service.py app/services/output_validator.py app/services/response_critic.py app/main.py` 통과.
+  - 컨테이너 내부 동일 py_compile 통과, `bash -n deploy.sh` 및 컨테이너 내부 `/app/deploy.sh` syntax 통과.
+  - `/app/scripts/reload-api.sh` hot-reload 완료: `success=65 failed=0`, `tasks_pre=4 tasks_post=4 tasks_lost=0`.
+  - `/health` OK, `aads-server` healthy.
+- 주의: 이 조치는 API 프로세스 내부 producer 구조에서 가능한 즉시 안정화다. 완전한 무중단 보장은 LLM producer를 uvicorn 밖 worker/queue로 분리해야 한다.
+
 ## 현재 진행 상태 (2026-05-29 17:45 KST) - Chat placeholder deletion regression fix
 - 배경: CEO가 `b8a8651b-6226-46df-9a44-36a70e478959` 세션에서 응답 버블이 사라지고 새로고침 후 다른 상태로 보이는 재발 현상을 보고했다. 직전 보고의 미검증 표현은 폐기하고 DB/코드/명령으로 재확인했다.
 - 실측:

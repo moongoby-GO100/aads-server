@@ -2182,6 +2182,26 @@ async def with_background_completion(
         await _interim_save_streaming(session_id, state)
         return True
 
+    async def _queue_stream_item(item: Any, *, timeout: float = 5.0) -> bool:
+        """Send an SSE item without letting a detached browser block the LLM producer."""
+        if _client_gone:
+            return False
+        try:
+            await _heartbeat_asyncio.wait_for(queue.put(item), timeout=timeout)
+            return True
+        except _heartbeat_asyncio.TimeoutError:
+            state["_sse_queue_drop_count"] = int(state.get("_sse_queue_drop_count") or 0) + 1
+            logger.warning(
+                "sse_queue_backpressure_drop session=%s execution=%s queue_size=%s drops=%s",
+                session_id[:8],
+                str(state.get("execution_id") or "")[:8],
+                queue.qsize(),
+                state["_sse_queue_drop_count"],
+            )
+            # Client delivery is best-effort. Do not stop the LLM producer or DB finalization
+            # just because the browser/SSE queue is not draining.
+            return True
+
     async def _ensure_execution_completed_in_db() -> None:
         execution_id = state.get("execution_id")
         if not execution_id:
@@ -2413,7 +2433,9 @@ async def with_background_completion(
                 if _event_type == "stream_start" and state.get("execution_id"):
                     state["last_idle_save"] = _bg_time.monotonic()
                     await _interim_save_streaming(session_id, state)
-                await queue.put((chunk, _entry_id))
+                _queued = await _queue_stream_item((chunk, _entry_id))
+                if not _queued and not _client_gone:
+                    return
 
                 # 클라이언트 연결 중 1초마다 중간 저장 — heartbeat-only 구간 스킵 (중단 시 유실 최소화)
                 if not _client_gone and _event_type not in ("heartbeat", None, ""):
@@ -2470,7 +2492,7 @@ async def with_background_completion(
                             "max_attempts": _max_retries,
                             "content": f"⏳ 재시도 중 ({_retry_idx+1}/{_max_retries})...",
                         })
-                        await queue.put((f"data: {_retry_msg}\n\n", None))
+                        await _queue_stream_item((f"data: {_retry_msg}\n\n", None))
                     except Exception:
                         pass
 
@@ -2494,7 +2516,9 @@ async def with_background_completion(
                                     _token_idx += 1
                                 except Exception:
                                     pass
-                            await queue.put((chunk, _entry_id))
+                            _queued = await _queue_stream_item((chunk, _entry_id))
+                            if not _queued and not _client_gone:
+                                return
                             if 'data: {' in chunk:
                                 try:
                                     _d = json.loads(chunk[chunk.index('{'):chunk.rstrip().rindex('}') + 1])
@@ -2560,7 +2584,7 @@ async def with_background_completion(
                                 "from_model": _original_model,
                                 "to_model": _fb_model,
                             })
-                            await queue.put((f"data: {_fb_notify}\n\n", None))
+                            await _queue_stream_item((f"data: {_fb_notify}\n\n", None))
                             _fb_ok = False
                             _fb_cost = Decimal("0")
                             _fb_tokens_in = 0
@@ -2575,7 +2599,9 @@ async def with_background_completion(
                                         _token_idx += 1
                                     except Exception:
                                         pass
-                                await queue.put((chunk, _entry_id))
+                                _queued = await _queue_stream_item((chunk, _entry_id))
+                                if not _queued and not _client_gone:
+                                    return
                                 if 'data: {' in chunk:
                                     try:
                                         _d = json.loads(chunk[chunk.index('{'):chunk.rstrip().rindex('}') + 1])
@@ -2645,7 +2671,15 @@ async def with_background_completion(
             # heartbeat 태스크 정지 신호 (producer 완료 시 heartbeat 불필요)
             _hb_stop.set()
             try:
-                await queue.put(_SENTINEL)
+                await _heartbeat_asyncio.wait_for(gen.aclose(), timeout=5)
+            except Exception as _gen_close_err:
+                logger.debug(
+                    "stream_generator_aclose_failed session=%s error=%s",
+                    session_id[:8],
+                    _gen_close_err,
+                )
+            try:
+                queue.put_nowait(_SENTINEL)
             except Exception:
                 pass
             if _my_task is not None and _active_bg_tasks.get(session_id) is _my_task:
@@ -2905,7 +2939,7 @@ async def with_background_completion(
                 "content": "LLM 응답 시작이 지연되어 스트림을 중단했습니다. 현재 답변 버블은 중단 상태로 보존됩니다.",
                 "recoverable": True,
             }
-            await queue.put((f"data: {json.dumps(_error_msg)}\n\n", None))
+            await _queue_stream_item((f"data: {json.dumps(_error_msg)}\n\n", None))
         except Exception:
             pass
         try:
@@ -2927,7 +2961,7 @@ async def with_background_completion(
                 _timeout_mark_err,
             )
         try:
-            await queue.put(_SENTINEL)
+            queue.put_nowait(_SENTINEL)
         except Exception:
             pass
         if not task.done():
@@ -3030,6 +3064,62 @@ def get_active_bg_tasks() -> Dict[str, bool]:
     for sid in done_sids:
         _active_bg_tasks.pop(sid, None)
     return {sid: not task.done() for sid, task in _active_bg_tasks.items()}
+
+
+async def preserve_active_streams_for_shutdown(reason: str = "api_shutdown") -> int:
+    """Persist active chat partials before the API process is stopped."""
+    preserved = 0
+    for session_id, task in list(_active_bg_tasks.items()):
+        if task.done():
+            continue
+        state = _streaming_state.get(session_id, {})
+        execution_id = state.get("execution_id")
+        partial_content = state.get("content", "") or ""
+        try:
+            await _interim_save_streaming(session_id, state, force=True)
+        except Exception as save_err:
+            logger.warning(
+                "shutdown_interim_save_failed session=%s execution=%s error=%s",
+                session_id[:8],
+                str(execution_id or "")[:8],
+                save_err,
+            )
+        if execution_id:
+            try:
+                async with get_pool().acquire() as conn:
+                    await _mark_execution_interrupted(
+                        conn,
+                        session_id,
+                        str(execution_id),
+                        reason,
+                        partial_content=partial_content,
+                        delete_empty_placeholder=False,
+                    )
+                preserved += 1
+            except Exception as mark_err:
+                logger.warning(
+                    "shutdown_mark_interrupted_failed session=%s execution=%s error=%s",
+                    session_id[:8],
+                    str(execution_id)[:8],
+                    mark_err,
+                )
+        elif _strip_streaming_progress_markers(partial_content).strip():
+            try:
+                await _save_interrupted_partial_message(
+                    session_id,
+                    partial_content,
+                    reason=reason,
+                )
+                preserved += 1
+            except Exception as partial_err:
+                logger.warning(
+                    "shutdown_partial_save_failed session=%s error=%s",
+                    session_id[:8],
+                    partial_err,
+                )
+    if preserved:
+        logger.warning("shutdown_preserved_active_streams count=%s reason=%s", preserved, reason)
+    return preserved
 
 
 async def stop_session_streaming(session_id: str) -> Dict[str, Any]:
@@ -7334,9 +7424,27 @@ async def send_message_stream(
 
             # 재시도 응답도 검증 (날조 방지 — 재시도에서도 가짜 결과 차단)
             if not _retry_response.strip():
-                # 재시도도 빈 응답이면 안내 메시지로 대체 (AADS-236)
                 logger.error(f"retry_also_empty_response: session={session_id[:8] if session_id else 'unknown'}")
-                _retry_response = "⚠️ 응답을 생성하지 못했습니다. 잠시 후 다시 시도해주세요."
+                _partial_to_preserve = _failed_response
+                if _partial_to_preserve and _partial_to_preserve.strip():
+                    await _save_interrupted_partial_message(
+                        session_id=session_id,
+                        content=_partial_to_preserve,
+                        reason="output_validator_retry_empty",
+                        execution_id=_execution_id_str,
+                    )
+                if _execution_id_str:
+                    async with get_pool().acquire() as _conn:
+                        await _mark_execution_interrupted(
+                            _conn,
+                            session_id,
+                            _execution_id_str,
+                            "output_validator_retry_empty",
+                            partial_content=_partial_to_preserve,
+                            delete_empty_placeholder=False,
+                        )
+                yield f"data: {json.dumps({'type': 'error', 'content': '응답 재검증 결과가 비어 있어 완료 처리하지 않았습니다. 중간 응답은 보존했습니다.', 'recoverable': True, 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
+                return
             if _retry_response.strip():
                 _retry_validation = validate_response(
                     response_text=_retry_response,
@@ -7349,29 +7457,56 @@ async def send_message_stream(
                         f"output_validator_retry_also_failed: {_retry_validation.violation_type} — "
                         f"{_retry_validation.message} (intent={intent})"
                     )
-                    # 재시도도 실패하면 날조된 부분 제거하고 경고 메시지로 대체
-                    _retry_response = (
-                        "⚠️ 요청을 처리하는 중 검증에 실패했습니다. "
-                        "정확한 정보를 위해 도구를 직접 호출하여 확인해주세요."
+                    await _save_interrupted_partial_message(
+                        session_id=session_id,
+                        content=_retry_response,
+                        reason="output_validator_retry_failed",
+                        execution_id=_execution_id_str,
                     )
-                # F8: stream_reset했으므로 재시도 응답만 저장 (이전 실패 응답 제외)
+                    if _execution_id_str:
+                        async with get_pool().acquire() as _conn:
+                            await _mark_execution_interrupted(
+                                _conn,
+                                session_id,
+                                _execution_id_str,
+                                f"output_validator_retry_failed:{_retry_validation.violation_type}",
+                                partial_content=_retry_response,
+                                delete_empty_placeholder=False,
+                            )
+                    yield f"data: {json.dumps({'type': 'error', 'content': '응답 재검증에 실패해 완료 처리하지 않았습니다. 중간 응답은 보존했고 같은 지시로 다시 이어서 처리할 수 있습니다.', 'recoverable': True, 'reason': _retry_validation.violation_type, 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
+                    return
                 full_response = _retry_response
             else:
-                # 재시도도 빈 응답이면 안내 메시지로 대체
                 logger.error(f"retry_also_empty_response: session={session_id[:8]}")
-                full_response = "⚠️ Gemini 응답이 비어 있습니다. 잠시 후 다시 시도해주세요."
+                if _execution_id_str:
+                    async with get_pool().acquire() as _conn:
+                        await _mark_execution_interrupted(
+                            _conn,
+                            session_id,
+                            _execution_id_str,
+                            "output_validator_retry_empty",
+                            partial_content=_failed_response,
+                            delete_empty_placeholder=False,
+                        )
+                yield f"data: {json.dumps({'type': 'error', 'content': '응답 재검증 결과가 비어 있어 완료 처리하지 않았습니다.', 'recoverable': True})}\n\n"
+                return
 
         _critic_verdict = None
         try:
             from app.services.response_critic import critique_response
 
-            _critic_verdict = await critique_response(
-                user_msg=content,
-                ai_response=full_response,
-                intent=intent,
-                tools_called=tools_called,
-                session_id=session_id,
+            _critic_verdict = await _heartbeat_asyncio.wait_for(
+                critique_response(
+                    user_msg=content,
+                    ai_response=full_response,
+                    intent=intent,
+                    tools_called=tools_called,
+                    session_id=session_id,
+                ),
+                timeout=float(os.getenv("CRITIC_TIMEOUT_SEC", "20")),
             )
+        except _heartbeat_asyncio.TimeoutError:
+            logger.warning("response_critic_timeout session=%s", session_id[:8])
         except Exception as _critic_err:
             logger.warning(f"response_critic_failed: {_critic_err}")
 

@@ -22,6 +22,7 @@ _SCORE_THRESHOLD = float(os.getenv("CRITIC_THRESHOLD", "0.55"))
 # 스킵 대상 인텐트 (비용 절약)
 _SKIP_INTENTS = frozenset({
     "casual", "greeting", "acknowledge", "memory_recall", "workspace_switch",
+    "status_check", "task_query", "health_check", "execution_verify",
 })
 
 # 최소 응답 길이 (이 미만은 스킵)
