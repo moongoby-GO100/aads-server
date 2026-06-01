@@ -179,6 +179,114 @@ async def _finalize_streaming_status(session_id: UUID, result: Optional[dict], c
     return payload
 
 
+async def _ensure_running_placeholder_anchor(
+    conn,
+    session_id: UUID,
+    execution_id: str,
+    *,
+    partial_content: str = "",
+    tools_called: Any = None,
+    last_event_id: Optional[str] = None,
+) -> Optional[dict]:
+    """Repair the visible assistant bubble for a live execution."""
+    execution_uuid = UUID(execution_id)
+    existing = await conn.fetchrow(
+        """
+        SELECT id, content, tools_called
+        FROM chat_messages
+        WHERE execution_id = $1
+          AND intent = 'streaming_placeholder'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        execution_uuid,
+    )
+    if existing:
+        return existing
+
+    clean_partial = svc._strip_streaming_progress_markers(partial_content or "").strip()
+    if clean_partial:
+        display_content = clean_partial + "\n\n⏳ _생성 중... (표시 버블 복구됨)_"
+    else:
+        display_content = "⏳ _AI가 응답을 생성 중입니다... (표시 버블 복구됨)_"
+    tools_json = json.dumps(svc.normalize_tool_events(tools_called))
+    restored = await conn.fetchrow(
+        """
+        INSERT INTO chat_messages (
+            session_id, execution_id, role, content,
+            intent, model_used, tools_called,
+            created_at, edited_at
+        )
+        SELECT $1, $2, 'assistant', $3,
+               'streaming_placeholder', 'streaming', $4::jsonb,
+               NOW(), NOW()
+        WHERE EXISTS (
+            SELECT 1
+            FROM chat_turn_executions
+            WHERE id = $2
+              AND status IN ('running', 'retrying')
+              AND completed_at IS NULL
+        )
+        ON CONFLICT (execution_id)
+          WHERE intent = 'streaming_placeholder'
+            AND execution_id IS NOT NULL
+        DO UPDATE
+          SET content = EXCLUDED.content,
+              tools_called = EXCLUDED.tools_called,
+              edited_at = NOW()
+        RETURNING id, content, tools_called, (xmax = 0) AS is_new
+        """,
+        session_id,
+        execution_uuid,
+        display_content,
+        tools_json,
+    )
+    if not restored:
+        return None
+    await conn.execute(
+        """
+        WITH upd_exec AS (
+            UPDATE chat_turn_executions te
+            SET assistant_message_id = CASE
+                    WHEN te.assistant_message_id IS NULL
+                      OR NOT EXISTS (
+                          SELECT 1
+                          FROM chat_messages m
+                          WHERE m.id = te.assistant_message_id
+                      )
+                    THEN $2
+                    ELSE te.assistant_message_id
+                END,
+                last_event_id = COALESCE($3, te.last_event_id),
+                updated_at = NOW()
+            WHERE te.id = $1
+              AND te.status IN ('running', 'retrying')
+              AND te.completed_at IS NULL
+            RETURNING te.id
+        )
+        UPDATE chat_sessions
+        SET current_execution_id = $1,
+            message_count = CASE WHEN $4 THEN message_count + 1 ELSE message_count END,
+            updated_at = NOW()
+        WHERE id = $5
+          AND EXISTS (SELECT 1 FROM upd_exec)
+        """,
+        execution_uuid,
+        restored["id"],
+        last_event_id,
+        bool(restored["is_new"]),
+        session_id,
+    )
+    logger.warning(
+        "streaming_status_repaired_missing_placeholder session=%s execution=%s placeholder=%s is_new=%s",
+        str(session_id)[:8],
+        execution_id[:8],
+        str(restored["id"])[:8],
+        bool(restored["is_new"]),
+    )
+    return restored
+
+
 def _extract_tool_progress(tools_called: Any) -> tuple[int, str]:
     """Return tool progress from persisted tool events."""
     try:
@@ -940,6 +1048,7 @@ async def get_streaming_status(session_id: UUID):
                        (te.updated_at > NOW() - interval '5 minutes') AS updated_recently,
                        te.completed_at,
                        am.model_used AS assistant_model_used,
+                       pm.id::text AS placeholder_id,
                        CASE
                            WHEN te.status IN ('running', 'retrying') THEN COALESCE(pm.content, am.content)
                            ELSE COALESCE(am.content, pm.content)
@@ -964,7 +1073,7 @@ async def get_streaming_status(session_id: UUID):
                 LEFT JOIN chat_messages am
                   ON am.id = te.assistant_message_id
                 LEFT JOIN LATERAL (
-                    SELECT content, tools_called
+                    SELECT id, content, tools_called
                     FROM chat_messages
                     WHERE execution_id = te.id
                       AND intent = 'streaming_placeholder'
@@ -1109,6 +1218,19 @@ async def get_streaming_status(session_id: UUID):
                                 execution_row["execution_id"][:8],
                                 str(_restore_err)[:160],
                             )
+                    if not execution_row["placeholder_id"]:
+                        _restored_anchor = await _ensure_running_placeholder_anchor(
+                            conn,
+                            session_id,
+                            execution_row["execution_id"],
+                            partial_content=_partial,
+                            tools_called=execution_row["tools_called"],
+                            last_event_id=execution_row["last_event_id"],
+                        )
+                        if _restored_anchor:
+                            _partial = _restored_anchor["content"] or _partial
+                            execution_row = dict(execution_row)
+                            execution_row["tools_called"] = _restored_anchor["tools_called"]
                     _tc, _lt = _extract_tool_progress(execution_row["tools_called"])
                     return await _finalize_streaming_status(session_id, {
                         "is_streaming": True,
@@ -1426,6 +1548,7 @@ async def get_last_response(session_id: UUID):
                    te.updated_at,
                    EXTRACT(EPOCH FROM (NOW() - te.updated_at))::int AS updated_age_seconds,
                    (te.updated_at > NOW() - interval '5 minutes') AS updated_recently,
+                   pm.id::text AS placeholder_id,
                    CASE
                        WHEN te.status IN ('running', 'retrying') THEN COALESCE(pm.content, am.content)
                        ELSE COALESCE(am.content, pm.content)
@@ -1450,7 +1573,7 @@ async def get_last_response(session_id: UUID):
             LEFT JOIN chat_messages am
               ON am.id = te.assistant_message_id
             LEFT JOIN LATERAL (
-                SELECT content, tools_called
+                SELECT id, content, tools_called
                 FROM chat_messages
                 WHERE execution_id = te.id
                   AND intent = 'streaming_placeholder'
@@ -1471,6 +1594,15 @@ async def get_last_response(session_id: UUID):
             if _settled:
                 current_execution = None
             else:
+                if not current_execution["placeholder_id"]:
+                    await _ensure_running_placeholder_anchor(
+                        conn,
+                        session_id,
+                        current_execution["execution_id"],
+                        partial_content=current_execution["partial_content"] or "",
+                        tools_called=current_execution["tools_called"],
+                        last_event_id=current_execution["last_event_id"],
+                    )
                 return {"found": False, "generating": True}
 
         if current_execution and current_execution["status"] == "completed":

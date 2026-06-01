@@ -1970,7 +1970,16 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
                     """
                     WITH upd_exec AS (
                         UPDATE chat_turn_executions
-                        SET assistant_message_id = COALESCE(assistant_message_id, $4),
+                        SET assistant_message_id = CASE
+                                WHEN assistant_message_id IS NULL
+                                  OR NOT EXISTS (
+                                      SELECT 1
+                                      FROM chat_messages m
+                                      WHERE m.id = assistant_message_id
+                                  )
+                                THEN $4
+                                ELSE assistant_message_id
+                            END,
                             status = CASE WHEN completed_at IS NULL THEN 'running' ELSE status END,
                             last_event_id = COALESCE($5, last_event_id),
                             updated_at = NOW()
@@ -2047,6 +2056,47 @@ async def _delete_streaming_placeholder(
                 )
             if not placeholder:
                 return
+            if execution_id:
+                _live_execution = await conn.fetchval(
+                    """
+                    SELECT 1
+                    FROM chat_turn_executions
+                    WHERE id = $1
+                      AND status IN ('running', 'retrying')
+                      AND completed_at IS NULL
+                    LIMIT 1
+                    """,
+                    uuid.UUID(execution_id),
+                )
+                if _live_execution:
+                    await conn.execute(
+                        """
+                        UPDATE chat_turn_executions te
+                        SET assistant_message_id = CASE
+                                WHEN te.assistant_message_id IS NULL
+                                  OR NOT EXISTS (
+                                      SELECT 1
+                                      FROM chat_messages m
+                                      WHERE m.id = te.assistant_message_id
+                                  )
+                                THEN $2
+                                ELSE te.assistant_message_id
+                            END,
+                            updated_at = NOW()
+                        WHERE te.id = $1
+                          AND te.status IN ('running', 'retrying')
+                          AND te.completed_at IS NULL
+                        """,
+                        uuid.UUID(execution_id),
+                        placeholder["id"],
+                    )
+                    logger.warning(
+                        "placeholder_delete_skipped_live_execution session=%s execution=%s placeholder=%s",
+                        session_id[:8],
+                        str(execution_id)[:8],
+                        str(placeholder["id"])[:8],
+                    )
+                    return
 
             # 최종 응답이 이미 저장되었는지 확인
             # 1순위: placeholder보다 이전 user 메시지 이후에 정상 assistant 응답이 있는지 (race condition 완화)
