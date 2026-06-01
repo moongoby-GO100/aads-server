@@ -1734,6 +1734,7 @@ async def resume_interrupted(session_id: UUID):
         row = await conn.fetchrow(
             """
             SELECT te.id::text AS execution_id,
+                   te.status AS execution_status,
                    te.requested_model,
                    COALESCE(ph.id, te.assistant_message_id) AS placeholder_id,
                    COALESCE(ph.content, am.content, '') AS partial_content,
@@ -1777,7 +1778,7 @@ async def resume_interrupted(session_id: UUID):
         )
         if not row:
             row = await conn.fetchrow("""
-                SELECT NULL::text AS execution_id, NULL::text AS requested_model,
+                SELECT NULL::text AS execution_id, NULL::text AS execution_status, NULL::text AS requested_model,
                        m.id AS placeholder_id, m.content AS partial_content,
                        (SELECT content FROM chat_messages
                         WHERE session_id = m.session_id AND role = 'user'
@@ -1788,6 +1789,38 @@ async def resume_interrupted(session_id: UUID):
                 FROM chat_messages m
                 WHERE m.session_id = $1 AND m.intent = 'streaming_placeholder'
                 ORDER BY m.created_at DESC LIMIT 1
+            """, session_id)
+        if not row:
+            row = await conn.fetchrow("""
+                SELECT te.id::text AS execution_id,
+                       te.status AS execution_status,
+                       te.requested_model,
+                       am.id AS placeholder_id,
+                       am.content AS partial_content,
+                       COALESCE(um.content, (
+                           SELECT content FROM chat_messages
+                           WHERE session_id = te.session_id AND role = 'user'
+                           ORDER BY created_at DESC LIMIT 1
+                       )) AS last_user_msg,
+                       w.name AS workspace_name
+                FROM chat_turn_executions te
+                JOIN chat_sessions s ON s.id = te.session_id
+                JOIN chat_workspaces w ON w.id = s.workspace_id
+                JOIN chat_messages am ON am.id = te.assistant_message_id
+                LEFT JOIN chat_messages um ON um.id = te.user_message_id
+                WHERE te.session_id = $1
+                  AND te.status = 'interrupted'
+                  AND am.role = 'assistant'
+                  AND am.intent IN (
+                    'interrupted_partial',
+                    'interruption_notice',
+                    'regenerated',
+                    'continued',
+                    '_archived_partial'
+                  )
+                  AND length(trim(coalesce(am.content, ''))) > 0
+                ORDER BY GREATEST(te.updated_at, COALESCE(am.edited_at, am.created_at)) DESC
+                LIMIT 1
             """, session_id)
 
     if not row:
@@ -1803,7 +1836,26 @@ async def resume_interrupted(session_id: UUID):
             if (_rc or 0) >= 5:
                 return {"resumed": False, "message": f"재시도 한도 초과 (retry_count={_rc}). 새 메시지를 보내주세요."}
             await conn2.execute(
-                "UPDATE chat_turn_executions SET retry_count = retry_count + 1, updated_at = NOW() WHERE id = $1",
+                """
+                UPDATE chat_turn_executions
+                SET retry_count = retry_count + 1,
+                    status = 'retrying',
+                    completed_at = NULL,
+                    error_message = NULL,
+                    updated_at = NOW()
+                WHERE id = $1
+                  AND status IN ('running', 'retrying', 'interrupted')
+                """,
+                uuid.UUID(row["execution_id"]),
+            )
+            await conn2.execute(
+                """
+                UPDATE chat_sessions
+                SET current_execution_id = $2,
+                    updated_at = NOW()
+                WHERE id = $1
+                """,
+                session_id,
                 uuid.UUID(row["execution_id"]),
             )
 

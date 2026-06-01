@@ -1,6 +1,6 @@
 # AADS Chat Streaming & 끊김 복구 명세
 
-_v1.0 | 2026-04-02 | 최초 작성_
+_v1.1 | 2026-06-01 | resume delta terminal guard + interrupted_partial resume + watchdog grace_
 
 ## 1. 프록시 체인
 
@@ -99,7 +99,8 @@ SSE 끊김 감지 (onerror)
   ├─[1] stream-resume (GET /chat/sessions/{id}/stream-resume)
   │     ├─ Last-Event-ID 전송 → Redis Stream에서 이어읽기
   │     ├─ 최대 5회 재시도, 120s 타임아웃
-  │     ├─ 성공: 기존 버블에 delta 토큰 이어붙임 (깜빡임 없음)
+  │     ├─ delta 수신: 기존 버블에 토큰만 이어붙임 (성공 확정 아님)
+  │     ├─ 성공: resume_done 또는 DB 최종 응답 확인
   │     └─ 실패: Layer 5로
   │
   ├─[2] last-response 폴링 (GET /chat/sessions/{id}/last-response)
@@ -109,6 +110,7 @@ SSE 끊김 감지 (onerror)
   │
   └─[3] waitingBg (30s)
         ├─ 백그라운드 태스크 완료 대기
+        ├─ stream-resume 불가/타임아웃 시 POST /chat/sessions/{id}/resume으로 서버 이어쓰기 요청
         └─ 타임아웃: 에러 표시
 ```
 
@@ -149,6 +151,16 @@ SSE 끊김 감지 (onerror)
 | waitingBg 안전장치 | 30s | 최종 방어선 |
 | BG_AUTO_CANCEL_SEC | 300s | 5분 후 백그라운드 자동 취소 |
 | Redis Stream TTL | 3600s | 완료 후 600s |
+| stale execution watchdog | 20~45분+ | no-token 20분/10분 idle, token 있음 45분/20분 idle, live runtime 제외 |
+
+## 4.1 Watchdog / Resume 안전 규칙 (2026-06-01)
+
+- `delta` 수신만으로 stream-resume 성공을 확정하지 않는다.
+- `resume_done` 또는 `/last-response` 최종 assistant 확인이 있어야 streaming을 종료한다.
+- stream-resume이 `resume_unavailable`/`resume_timeout`을 반환하면 프론트는 polling으로 전환하고 서버 `/resume`을 1회 호출한다.
+- `/resume`은 `streaming_placeholder`뿐 아니라 최신 `interrupted_partial`/`interruption_notice`/`regenerated`/`continued` partial도 이어쓰기 대상으로 인정한다.
+- 중단된 execution을 재개할 때는 `retrying`, `completed_at=NULL`, `current_execution_id=<execution>`으로 복원한 뒤 `_resume_single_stream()`을 실행한다.
+- stale watchdog은 active background task가 있는 세션을 제외하고, `updated_at` idle 조건과 `last_event_id` 존재 여부에 따라 grace를 다르게 둔다.
 
 ## 5. 끊김 시 사용자 체감 (2026-04-02 A+B 적용 후)
 
@@ -179,3 +191,4 @@ SSE 끊김 감지 (onerror)
 | 버전 | 날짜 | 변경 |
 |------|------|------|
 | v1.0 | 2026-04-02 | 초기 작성 — 6계층 방어, 타임아웃표, A+B 적용 반영 |
+| v1.1 | 2026-06-01 | stream-resume delta-only 성공 오판 차단, interrupted_partial resume 대상화, watchdog idle/live-runtime 조건 보강 |

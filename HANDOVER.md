@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-01 16:55 KST) - Chat resume recovery hardening
+- 배경: CEO가 스트리밍 중 끊긴 뒤 `이어서` 진행이 실패하는 재발 원인 보고를 승인했고, 전체 조치 및 문서/기술문서 반영을 지시했다.
+- 실측:
+  - 최근 6시간 기준 중단 유형은 `auto-settled by stale execution watchdog`가 최다였다. claude-opus 11건, gpt-5.5 7건.
+  - 프론트 `page.tsx`는 stream-resume에서 `delta` 1개만 받아도 `resumed=true`로 간주했다. 이후 `resume_done` 없이 연결이 닫히면 polling fallback이 약해져 placeholder가 `interrupted_partial`로 굳을 수 있었다.
+  - 서버 `/chat/sessions/{id}/resume`은 `running/retrying` 또는 `streaming_placeholder` 중심이라 watchdog이 이미 `interrupted_partial`로 보존한 응답은 이어쓰기 대상에서 빠질 수 있었다.
+  - `app/main.py` stale watchdog은 `started_at < 15 minutes`만으로 running/retrying을 `interrupted` 처리해 장기 도구 실행/긴 답변을 과하게 접을 수 있었다.
+- 조치:
+  - 대시보드 `src/app/chat/page.tsx`: stream-resume에서 `delta`는 토큰 이어붙임으로만 처리하고, `resume_done` 또는 DB 최종 응답 확인 전에는 성공 종료하지 않게 변경했다. `resume_unavailable/resume_timeout` 또는 delta-only 종료 시 polling으로 전환하고 서버 `/resume`을 1회 호출한다.
+  - 서버 `app/routers/chat.py`: `/chat/sessions/{id}/resume`이 최신 `interrupted_partial/interruption_notice/regenerated/continued/_archived_partial` assistant도 이어쓰기 대상으로 찾게 했다.
+  - 서버 `app/routers/chat.py`: interrupted execution을 resume할 때 `status='retrying'`, `completed_at=NULL`, `current_execution_id=<execution>`으로 복원해 `_save_and_update_session()`의 최종 저장 조건을 통과하게 했다.
+  - 서버 `app/main.py`: stale execution watchdog이 active background task가 있는 세션을 제외하고, no-token 실행은 20분 시작/10분 idle, token/last_event_id가 있는 실행은 45분 시작/20분 idle 이후에만 settle하도록 완화했다.
+  - 기술문서 `docs/chat/CHAT-STREAMING-SPEC.md`: v1.1로 stream-resume 성공 조건, `/resume` fallback, interrupted_partial resume, watchdog grace 규칙을 반영했다.
+- 검증 예정:
+  - `python3 -m py_compile app/main.py app/routers/chat.py`
+  - `npm run build` in `/root/aads/aads-dashboard`
+  - hot-reload/server health 및 dashboard 배포 확인.
+
 ## 현재 진행 상태 (2026-06-01 15:35 KST) - Chat completion interruption immediate hardening
 - 배경: CEO가 `ac5278a7-2f13-4cd7-9aa1-83d41fb23c97` 세션에서 모든 채팅창 응답이 끝까지 완료되지 않고 끊기는 현상의 상태 확인, 코드/기획서 전수 조사, 즉시 조치를 요청했다.
 - 실측:

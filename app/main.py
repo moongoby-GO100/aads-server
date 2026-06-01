@@ -298,8 +298,38 @@ async def lifespan(app: FastAPI):
             """Auto-settle stale running executions that block sessions."""
             try:
                 from app.core.db_pool import get_pool as _sep
+                from app.services.chat_service import get_active_bg_tasks as _get_active_bg_tasks
                 _pool = _sep()
+                _active_sids = {
+                    sid for sid, is_active in (_get_active_bg_tasks() or {}).items()
+                    if is_active
+                }
                 async with _pool.acquire() as conn:
+                    candidates = await conn.fetch(
+                        """
+                        SELECT id, session_id
+                        FROM chat_turn_executions
+                        WHERE status IN ('running', 'retrying')
+                          AND (
+                            (
+                              COALESCE(last_event_id, '') = ''
+                              AND started_at < NOW() - INTERVAL '20 minutes'
+                              AND updated_at < NOW() - INTERVAL '10 minutes'
+                            )
+                            OR (
+                              COALESCE(last_event_id, '') <> ''
+                              AND started_at < NOW() - INTERVAL '45 minutes'
+                              AND updated_at < NOW() - INTERVAL '20 minutes'
+                            )
+                          )
+                        """
+                    )
+                    _settle_ids = [
+                        r["id"] for r in candidates
+                        if str(r["session_id"]) not in _active_sids
+                    ]
+                    if not _settle_ids:
+                        return
                     settled = await conn.fetch(
                         """
                         UPDATE chat_turn_executions
@@ -307,10 +337,11 @@ async def lifespan(app: FastAPI):
                             completed_at = COALESCE(completed_at, NOW()),
                             updated_at = NOW(),
                             error_message = COALESCE(error_message, 'auto-settled by stale execution watchdog')
-                        WHERE status IN ('running', 'retrying')
-                          AND started_at < NOW() - INTERVAL '15 minutes'
+                        WHERE id = ANY($1::uuid[])
+                          AND status IN ('running', 'retrying')
                         RETURNING id, session_id
-                        """
+                        """,
+                        _settle_ids,
                     )
                     if settled:
                         _sids = list({r["session_id"] for r in settled})

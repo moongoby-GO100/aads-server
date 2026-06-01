@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AADS 채팅 시스템 기술문서 v1.5</title>
+<title>AADS 채팅 시스템 기술문서 v1.6</title>
 <style>
   :root {
     --bg: #0f172a; --card: #1e293b; --border: #334155;
@@ -127,7 +127,7 @@
 <div class="doc-header">
   <h1>AADS 채팅 시스템 기술문서</h1>
   <div class="subtitle">CEO Chat-First System — 기획 · 아키텍처 · 구현 · 문제점 · 개선안</div>
-  <span class="version-badge">📋 v1.5.0 · 2026-05-29 · 스트리밍 재진입 표시 보강 + 중단 이어서 버블 보존 + 보고품질 출처 태그 게이트</span>
+  <span class="version-badge">📋 v1.6.0 · 2026-06-01 · stream-resume 성공 기준 보강 + interrupted_partial 이어쓰기 + watchdog grace 조정</span>
   <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.4.html" class="version-badge old" style="text-decoration:none;">📦 v1.4.0</a>
   <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.3.html" class="version-badge old" style="text-decoration:none;">📦 v1.3.0</a>
   <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.2.html" class="version-badge old" style="text-decoration:none;">📦 v1.2.0</a>
@@ -932,8 +932,25 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
     <div class="desc">
       <strong>현상:</strong> 죽은 <code>running</code> 실행이 세션을 차단하여 CEO가 응답 불가 상태에 빠짐. 수동 복구만 가능.<br>
       <strong>원인:</strong> <code>_settle_stale_execution_for_recovery</code>는 recovery/interrupt API 호출 시에만 실행. 백그라운드 자동 정리 없음.<br>
-      <strong>조치 (v1.4):</strong> <code>main.py</code>에 APScheduler 90초 주기 watchdog 추가. started_at > 5분 AND updated_at > 2분이면 <code>interrupted</code>로 전환, <code>current_execution_id</code> 해제.<br>
+      <strong>조치 (v1.4):</strong> <code>main.py</code>에 APScheduler 90초 주기 watchdog 추가.<br>
+      <strong>보강 (v1.6):</strong> active background task가 있는 세션은 제외하고, no-token 실행은 started_at 20분+updated_at idle 10분, last_event_id/token 활동이 있는 실행은 started_at 45분+updated_at idle 20분 이후에만 <code>interrupted</code>로 전환한다.<br>
       <strong>안전장치:</strong> <code>_interim_save_streaming</code>이 주기적으로 updated_at을 갱신하므로, 활성 실행은 절대 오탐되지 않음.
+    </div>
+  </div>
+
+  <div class="issue-card">
+    <div class="title"><span class="resolved">RESOLVED</span> P0 — stream-resume delta-only 성공 오판</div>
+    <div class="desc">
+      <strong>현상:</strong> SSE가 끊긴 뒤 Redis Stream에서 <code>delta</code>를 1개 이상 받으면 프론트가 resume 성공으로 판단했다. 이후 <code>resume_done</code> 없이 연결이 종료되면 polling fallback이 약해지고, 버블이 <code>interrupted_partial</code>로 굳어 이어쓰기 실패처럼 보였다.<br>
+      <strong>조치 (v1.6):</strong> <code>page.tsx</code>에서 <code>delta</code>는 토큰 이어붙임으로만 처리하고, <code>resume_done</code> 또는 DB 최종 응답 확인 전에는 성공 종료하지 않는다. <code>resume_unavailable</code>/<code>resume_timeout</code> 또는 delta-only 종료 시 polling으로 전환하고 서버 <code>/chat/sessions/{id}/resume</code>을 1회 호출한다.
+    </div>
+  </div>
+
+  <div class="issue-card">
+    <div class="title"><span class="resolved">RESOLVED</span> P0 — interrupted_partial 이어쓰기 대상 누락</div>
+    <div class="desc">
+      <strong>현상:</strong> watchdog이나 복구 경로가 <code>streaming_placeholder</code>를 <code>interrupted_partial</code>로 보존하면, 서버 <code>/resume</code>이 더 이상 이어쓰기 대상을 찾지 못할 수 있었다.<br>
+      <strong>조치 (v1.6):</strong> <code>routers/chat.py</code>의 <code>resume_interrupted()</code>가 최신 <code>interrupted_partial</code>, <code>interruption_notice</code>, <code>regenerated</code>, <code>continued</code>, <code>_archived_partial</code> assistant도 resume 대상으로 찾는다. interrupted execution은 <code>retrying</code>, <code>completed_at=NULL</code>, <code>current_execution_id</code> 복원 후 <code>_resume_single_stream()</code>으로 이어쓴다.
     </div>
   </div>
 
@@ -1089,6 +1106,9 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
     <tr><td>17</td><td><span class="p0">P0</span></td><td>강력 새로고침 후 interrupted_partial/이어서 버튼 보존</td><td><code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.5</td></tr>
     <tr><td>18</td><td><span class="p0">P0</span></td><td>세션 복귀 시 streaming-status partial_content 즉시 화면 복원</td><td><code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.5</td></tr>
     <tr><td>19</td><td><span class="p1">P1</span></td><td>보고형 응답 요약/출처 태그 validator 보강</td><td><code>output_validator.py</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.5</td></tr>
+    <tr><td>20</td><td><span class="p0">P0</span></td><td>stream-resume 성공 기준 보강 + delta-only fallback</td><td><code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.6</td></tr>
+    <tr><td>21</td><td><span class="p0">P0</span></td><td>interrupted_partial 수동/자동 이어쓰기 대상화</td><td><code>routers/chat.py</code>, <code>chat_service.py</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.6</td></tr>
+    <tr><td>22</td><td><span class="p0">P0</span></td><td>stale execution watchdog live-runtime/idle grace 보강</td><td><code>main.py</code></td><td><span class="badge badge-green">✅ 완료</span></td><td>v1.6</td></tr>
   </table>
 
   <h3>11.2 즉시 조치 (1주 내)</h3>
@@ -1143,7 +1163,8 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
 
   <table>
     <tr><th>버전</th><th>날짜</th><th>작성자</th><th>변경 내용</th><th>문서 링크</th></tr>
-    <tr><td><strong>v1.5.0</strong></td><td>2026-05-29</td><td>AADS CTO AI</td><td>강력 새로고침 후 중단/이어서 버블 보존, 세션 복귀 시 streaming-status partial_content 즉시 표시, 보고형 응답 요약/출처 태그 validator 보강</td><td><strong>현재 문서 (원본)</strong></td></tr>
+    <tr><td><strong>v1.6.0</strong></td><td>2026-06-01</td><td>AADS CTO AI</td><td>stream-resume delta-only 성공 오판 차단, resume_unavailable/timeout 시 서버 /resume fallback, interrupted_partial 이어쓰기 대상화, stale execution watchdog live-runtime/idle grace 보강</td><td><strong>현재 문서 (원본)</strong></td></tr>
+    <tr><td>v1.5.0</td><td>2026-05-29</td><td>AADS CTO AI</td><td>강력 새로고침 후 중단/이어서 버블 보존, 세션 복귀 시 streaming-status partial_content 즉시 표시, 보고형 응답 요약/출처 태그 validator 보강</td><td>현재 문서에 포함</td></tr>
     <tr><td>v1.4.0</td><td>2026-05-27</td><td>AADS CTO AI</td><td>Validator 확인형 질문 예외, 코드 중복 제거, SDK/autonomous 경로 user_message 수정, Stale Execution Watchdog 90초 자동 정리, 버블 중복 저장 방지(stream_reset), 브라우저 멈춤 추가 패치(useMemo/cap/scroll), 의존성 전수 점검</td><td><a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.4.html" style="color:var(--blue);">v1.4 아카이브</a></td></tr>
     <tr><td>v1.3.0</td><td>2026-05-26</td><td>AADS CTO AI</td><td>브라우저 멈춤 재발 원인 반영: 긴 응답 스트리밍 렌더 간격 완화, <code>startTransition</code> 적용, 화면 캡처 base64 변환 비동기화, 커밋 <code>8cf8314</code> blue-green 배포 검증</td><td><a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.3.html" style="color:var(--blue);">v1.3 아카이브</a></td></tr>
     <tr><td>v1.2.0</td><td>2026-05-21</td><td>AADS CTO AI</td><td>성능 최적화 4건 반영 (interim_save, drain timer, tab return, token tracking), 운영 통계 갱신 (49,321건), P0 잔여 이슈 상세화, 로드맵 완료/미완료 분리, v1.1 아카이브</td><td><a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.2.html" style="color:var(--blue);">v1.2 아카이브</a></td></tr>
@@ -1176,7 +1197,7 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
 
 <!-- Footer -->
 <div style="text-align:center; padding:32px 0; color:var(--muted); font-size:0.8rem;">
-  <p>AADS Chat System Technical Document v1.5.0 · 2026-05-29 · 서버68</p>
+  <p>AADS Chat System Technical Document v1.6.0 · 2026-06-01 · 서버68</p>
   <p>이 문서는 코드 변경 시 함께 업데이트되어야 합니다.</p>
   <p style="margin-top:8px;">
     <a href="AADS-CHAT-SYSTEM-TECHNICAL-DOC-v1.4.html" style="color:var(--muted); text-decoration:underline;">📦 v1.4.0</a> ·
