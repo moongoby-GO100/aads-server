@@ -3393,3 +3393,6 @@ from __
 
 ## [2026-06-01 11:24:07 KST] [aads-server] app/main.py
 - Chat-Direct 수정: patch:     _startup_asyncio.create_task(_period→    _startup_asyncio.create_task(_period
+
+## [2026-06-01 11:30:46 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server cat /proc/24235/cmdline
