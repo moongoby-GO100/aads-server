@@ -1534,7 +1534,7 @@ async def _mark_execution_interrupted(
             marker = "\n\n_(이전 응답은 중단 처리되었습니다. 최신 지시를 우선 처리합니다.)_"
             final_content = clean_partial if "최신 지시를 우선 처리" in clean_partial else clean_partial + marker
             _intent = '_archived_partial' if is_superseded_cancel else (
-                'interrupted_partial' if len(clean_partial) > 300 else 'interruption_notice'
+                'interrupted_partial' if len(clean_partial) > 50 else 'interruption_notice'
             )
             await conn.execute(
                 """
