@@ -16239,3 +16239,7 @@ class Go100LiveTradin→    return value
 
 def _build_skip_reaso
 - finalize: pending
+
+## [2026-06-01 11:32:15 KST] [GO100] backend/app/services/go100/execution/fill_sync_service.py
+- Chat-Direct 수정: patch:         # v4_trade_executions 동기화 (dashb→        # v4_trade_executions 동기화 (dashb
+- finalize: pending
