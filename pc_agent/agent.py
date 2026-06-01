@@ -15,10 +15,18 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict
 
-import websockets
+try:
+    import websockets
+except ImportError as _ws_err:
+    websockets = None  # type: ignore[assignment]
+    logging.getLogger("pc-agent").error("websockets 임포트 실패: %s", _ws_err)
 
 # 명령 모듈 임포트 — COMMAND_HANDLERS만 사용 (개별 임포트 금지: _safe_import 방어 무력화)
-from commands import COMMAND_HANDLERS
+try:
+    from commands import COMMAND_HANDLERS
+except Exception as _cmd_err:
+    COMMAND_HANDLERS = {}  # type: ignore[assignment,misc]
+    logging.getLogger("pc-agent").error("commands 임포트 실패: %s", _cmd_err)
 
 # updater는 자동업데이트 루프에서 직접 참조 필요 (방어적)
 try:
@@ -175,17 +183,24 @@ class PCAgent:
     def __init__(self) -> None:
         # 단일 인스턴스 — main() 우회 시(launcher가 직접 PCAgent().run() 호출)에도 동작
         if not _acquire_single_instance():
-            logger.warning("뮤텍스 미획득 — 다른 인스턴스 실행 중, run()에서 즉시 종료")
-            self._init_ok = False
-            self._running = False
-            self._exit_for_update = False
-            self.is_connected = False
-            self.agent_id = ""
-            self.hostname = ""
-            self.os_info = ""
-            self._loop = None
-            self._ws = None
-            return
+            import time as _time
+            for _retry in range(3):
+                logger.info("뮤텍스 대기 (%d/3)...", _retry + 1)
+                _time.sleep(2)
+                if _acquire_single_instance():
+                    break
+            else:
+                logger.warning("뮤텍스 미획득 — 다른 인스턴스 실행 중, run()에서 즉시 종료")
+                self._init_ok = False
+                self._running = False
+                self._exit_for_update = False
+                self.is_connected = False
+                self.agent_id = ""
+                self.hostname = ""
+                self.os_info = ""
+                self._loop = None
+                self._ws = None
+                return
         self._init_ok = True
         self.agent_id = _get_persistent_agent_id()
         self.hostname = platform.node()
@@ -196,6 +211,16 @@ class PCAgent:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ws: Any | None = None
 
+    def _get_version(self) -> str:
+        """VERSION 파일에서 에이전트 버전 읽기."""
+        try:
+            vf = Path(os.path.dirname(os.path.abspath(__file__))) / "VERSION"
+            if vf.exists():
+                return vf.read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
+        return "unknown"
+
     async def run(self) -> None:
         """메인 루프 — 서버 연결 + 재연결 (지수 백오프).
 
@@ -204,7 +229,12 @@ class PCAgent:
         ~6초 다운타임을 ~1초로 단축.
         """
         if not getattr(self, '_init_ok', True):
-            logger.warning("초기화 실패 상태 — 즉시 종료 (launcher가 재시작)")
+            logger.warning("초기화 실패 상태 — 60초 대기 후 종료 (빠른 재시작 루프 방지)")
+            await asyncio.sleep(60)
+            return
+        if websockets is None:
+            logger.error("websockets 모듈 없음 — 120초 대기 후 종료 (재다운로드 루프 방지)")
+            await asyncio.sleep(120)
             return
         logger.info("PC Agent 시작 agent_id=%s hostname=%s", self.agent_id, self.hostname)
         self._loop = asyncio.get_running_loop()
@@ -298,6 +328,7 @@ class PCAgent:
                     "payload": {
                         "hostname": self.hostname,
                         "os_info": self.os_info,
+                        "version": self._get_version(),
                         "capabilities": _collect_capabilities(),
                         "command_types": sorted(COMMAND_HANDLERS.keys()),
                     },
@@ -388,7 +419,7 @@ class PCAgent:
         """주기적 서버 업데이트 확인. 업데이트 감지 시 로그만 남기고 연결 유지.
         실제 다운로드는 launcher의 주기적 체크(1시간)가 처리.
 
-        v1.0.39: WebSocket 끊기 제거 — 연결 안정성 우선.
+        v1.0.50: ws.state 체크 — WS 끊김 시 좀비 태스크 종료 (좀비 update loop 버그 수정).
         """
         if updater is None:
             logger.warning("updater 모듈 미로드 — 자동 업데이트 비활성화")
@@ -399,6 +430,20 @@ class PCAgent:
 
         await asyncio.sleep(60)
         while True:
+            # v1.0.50: ws 살아있는지 매 사이클 확인 — 좀비 태스크 방지
+            try:
+                ws_state = getattr(ws, "state", None)
+                ws_closed = getattr(ws, "closed", False)
+                if ws_closed or (ws_state is not None and str(ws_state).endswith("CLOSED")):
+                    logger.info("_auto_update_loop: WS 끊김 감지 — 좀비 방지 종료")
+                    return
+                if not self.is_connected:
+                    logger.info("_auto_update_loop: is_connected=False — 좀비 방지 종료")
+                    return
+            except Exception:
+                # 상태 확인 자체 실패 = ws 비정상 → 종료
+                logger.info("_auto_update_loop: ws 상태 확인 실패 — 좀비 방지 종료")
+                return
             try:
                 has_update = await updater.check_for_updates()
                 if has_update:
