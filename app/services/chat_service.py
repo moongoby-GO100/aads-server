@@ -115,8 +115,9 @@ _streaming_state: Dict[str, Dict[str, Any]] = getattr(
 _stale_cleanup_task: _heartbeat_asyncio.Task | None = getattr(
     _sys.modules.get(__name__), "_stale_cleanup_task", None
 ) or None
-# 클라이언트 이탈 후 자동 종료 시간 (초)
-_BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "900"))  # 15분 (도구 실행 중 탭 전환 보호)
+# 클라이언트 이탈 후 자동 종료 시간 (초): stale watchdog(최대 45분+20분)보다 먼저
+# 정상 장시간 응답을 중단하지 않도록 기본 65분으로 둔다.
+_BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "3900"))
 _FIRST_RESPONSE_TIMEOUT_SEC = float(os.getenv("AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC", "180"))
 _FINALIZE_DB_RETRY_DELAYS = (0.5, 1.0, 2.0)
 _COOLDOWN_SECS_DEFAULT = 300
@@ -2501,9 +2502,10 @@ async def with_background_completion(
                     if now - state["last_save"] > 5:
                         state["last_save"] = now
                         await _maybe_interim_save_after_disconnect()
-                    # 클라이언트 이탈 후: LLM 활동 없으면 _BG_AUTO_CANCEL_SEC, 활동 중이면 최대 30분
+                    # 클라이언트 이탈 후: LLM 활동이 없더라도 watchdog 정책 전에는 자동 종료하지 않는다.
+                    # 활동 중인 장시간 작업은 최대 120분까지 보호한다.
                     _idle_since_last_event = now - state.get("last_event_at", _client_gone_since)
-                    _effective_cancel_sec = _BG_AUTO_CANCEL_SEC if _idle_since_last_event > 120 else min(_BG_AUTO_CANCEL_SEC * 3, 1800)
+                    _effective_cancel_sec = _BG_AUTO_CANCEL_SEC if _idle_since_last_event > 120 else max(_BG_AUTO_CANCEL_SEC, min(_BG_AUTO_CANCEL_SEC * 3, 7200))
                     if _client_gone_since and (now - _client_gone_since) > _effective_cancel_sec:
                         logger.warning(f"bg_auto_cancel: session={session_id[:8]} client gone for {now - _client_gone_since:.0f}s, auto-stopping")
                         await _maybe_interim_save_after_disconnect()

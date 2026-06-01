@@ -122,7 +122,8 @@ SSE 끊김 감지 (onerror)
   → Consumer만 중단
   → Producer 계속 실행 (LLM 응답 완료까지)
   → DB에 최종 응답 저장
-  → _BG_AUTO_CANCEL_SEC = 300s (5분 후 자동 취소)
+  → _BG_AUTO_CANCEL_SEC = 3900s (65분 후 자동 취소)
+  → LLM/도구 이벤트가 계속 갱신되면 최대 7200s(120분)까지 보호
 ```
 
 ### Layer 6: 서버 재시작 복구 (서버)
@@ -149,7 +150,8 @@ SSE 끊김 감지 (onerror)
 | stream-resume 재시도 | 최대 5회 | 지수 백오프 아님 |
 | last-response 폴링 | 3회 | 2s → 3s → 4.5s |
 | waitingBg 안전장치 | 30s | 최종 방어선 |
-| BG_AUTO_CANCEL_SEC | 300s | 5분 후 백그라운드 자동 취소 |
+| BG_AUTO_CANCEL_SEC | 3900s | 연결 끊김 후 watchdog보다 먼저 정상 장시간 응답을 중단하지 않도록 65분 유지 |
+| BG active protection | 7200s | LLM/도구 이벤트가 계속 갱신되는 경우 최대 120분 보호 |
 | Redis Stream TTL | 3600s | 완료 후 600s |
 | stale execution watchdog | 20~45분+ | no-token 20분/10분 idle, token 있음 45분/20분 idle, live runtime 제외 |
 

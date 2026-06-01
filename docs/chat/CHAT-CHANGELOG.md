@@ -8,7 +8,13 @@ _v1.0 | 2026-04-02 | 최초 작성_
 
 | 커밋 | 변경 | 구분 |
 |------|------|------|
+| 2026-06-02 | **Disconnect residual risk hardening**: 클라이언트 연결 끊김 후 background producer 자동취소 기본값을 65분으로 늘려 stale watchdog 정책보다 먼저 정상 장시간 응답을 중단하지 않게 하고, 프론트 streaming-stuck 판정은 토큰/이벤트/placeholder 진행 변화가 없을 때만 누적되도록 완화 | 🐛 Backend+Frontend |
 | 2026-06-01 | **Watchdog auto retry**: stale execution watchdog이 45분+20분 정책으로 stale 실행을 감지했을 때 `retry_count < 2`이고 원 user 메시지가 남아 있으면 즉시 `retrying`으로 claim하고 `_resume_single_stream()`을 백그라운드 실행한다. 한도 초과나 재시도 불가 케이스만 기존처럼 `interrupted_partial`로 종료한다. | 🐛 Backend |
+
+Disconnect residual risk hardening:
+- `BG_AUTO_CANCEL_SEC` 기본값을 900초에서 3900초(65분)로 조정했다. 브라우저/SSE 연결이 끊긴 상태에서도 watchdog의 45분+20분 stale 판정보다 먼저 producer가 `client_gone_auto_cancel`로 종료되지 않게 한다.
+- LLM/도구 이벤트가 계속 갱신되는 장시간 응답은 최대 7200초(120분)까지 background producer를 유지한다.
+- 프론트의 `STREAMING-STUCK` 안전장치는 단순 시간 누적이 아니라 `execution_id`, `last_event_id`, `placeholder_revision`, `message_revision`, partial 길이 변화가 없을 때만 카운트를 올린다. 정상적으로 토큰/placeholder가 갱신되는 긴 응답은 중단 표시로 바꾸지 않는다.
 
 Watchdog auto retry:
 - 기존 watchdog은 stale 실행을 `interrupted`로 terminalize해 세션 차단은 풀었지만, 사용자가 별도 `이어서 진행`을 보내기 전에는 자동 재개하지 않았다.
