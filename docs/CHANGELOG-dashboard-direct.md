@@ -715,3 +715,48 @@ path = '/root/aads/aads-dashboard/src/app/chat/page.tsx'
 
 ## [2026-05-27 18:22:31 KST] [aads-dashboard] src/app/chat/page.tsx
 - Chat-Direct 수정: run_remote_command: sed -i 's/onRegenerate?: (msgId: string) => void;/onRegenerate?: (msgId: string,
+
+## [2026-06-01 09:18:59 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:     }, 10000);
+    return () => {
+      →    }, 4000);
+    return () => {
+      c
+
+## [2026-06-01 09:19:53 KST] [aads-dashboard] src/app/chat/sedM1WE7o
+- Chat-Direct 수정: run_remote_command: cat /etc/systemd/system/tg-approval-bot.service
+
+## [2026-06-01 09:19:56 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i 's/}, 10000);/}, 4000);/' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-06-01 09:37:15 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:     }, 10000);
+    return () => {
+      →    }, 4000);
+    return () => {
+      c
+
+## [2026-06-01 10:08:58 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:         {msg.model_used === "interrupted→        {msg.model_used === "interrupted
+
+## [2026-06-01 10:10:01 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 - << 'PYEOF'
+path = "/root/aads/aads-dashboard/src/app/chat/page.tsx"
+ol
+
+## [2026-06-01 10:10:00 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -c "SELECT m.id, m.intent, m.session_id, 
+
+## [2026-06-01 10:10:23 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: du -sh /var/www/server/
+
+## [2026-06-01 10:16:03 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:       if (persistedContent.length > 0 &&→      if (persistedContent.length > 0 &&
+
+## [2026-06-01 10:26:46 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:   if (!isInterruptedType) return false;
+→  if (!isInterruptedType) return false;
+
+
+## [2026-06-01 10:27:19 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && sed -i '270s/return (message.content || "").trim

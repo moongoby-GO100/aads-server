@@ -3341,3 +3341,55 @@ from __
 
 ## [2026-05-27 18:35:20 KST] [aads-server] nginx-aads-upstream.conf.dashboard.bak
 - Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "UPDATE chat_sessions SET curr
+
+## [2026-06-01 09:17:01 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:     # 기존 태스크가 있으면 partial flush 후 취소
+   →    # 기존 태스크가 있으면 partial flush 후 취소
+   
+
+## [2026-06-01 09:36:05 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:     # 기존 태스크가 있으면 partial flush 후 취소
+   →    # 기존 태스크가 있으면 partial flush 후 취소
+   
+
+## [2026-06-01 09:53:17 KST] [aads-server] scripts/disk_emergency_cleanup.sh
+- Chat-Direct 수정: write: scripts/disk_emergency_cleanup.sh
+
+## [2026-06-01 09:53:21 KST] [aads-server] scripts/disk_emergency_cleanup.sh
+- Chat-Direct 수정: run_remote_command: du -sh /var/log/journal /var/log/nginx /var/log/docker_disk_cleanup.log 2>/dev/n
+
+## [2026-06-01 10:02:33 KST] [aads-server] ../scripts/backup.sh
+- Chat-Direct 수정: write: ../scripts/backup.sh
+
+## [2026-06-01 10:08:46 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:             _intent = '_archived_partial→            _intent = '_archived_partial
+
+## [2026-06-01 10:08:49 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: run_remote_command: ls -lh /root/webapp/data/
+
+## [2026-06-01 10:11:32 KST] [aads-server] scripts/disk_recovery.sh
+- Chat-Direct 수정: write: scripts/disk_recovery.sh
+
+## [2026-06-01 10:15:47 KST] [aads-server] scripts/disk_cleanup_v2.sh
+- Chat-Direct 수정: write: scripts/disk_cleanup_v2.sh
+
+## [2026-06-01 10:15:52 KST] [aads-server] scripts/disk_cleanup_v2.sh
+- Chat-Direct 수정: run_remote_command: sed -n '358,382p' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-06-01 10:25:59 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:             _intent = '_archived_partial→            _intent = '_archived_partial
+
+## [2026-06-01 10:26:12 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: run_remote_command: sleep 20 && docker ps --format "{{.Names}}\t{{.Status}}" | grep dashboard
+
+## [2026-06-01 11:22:19 KST] [aads-server] app/services/agent_sdk_service.py
+- Chat-Direct 수정: write: app/services/agent_sdk_service.py
+
+## [2026-06-01 11:22:43 KST] [aads-server] app/api/stream.py
+- Chat-Direct 수정: patch: from fastapi import APIRouter, HTTPExcep→from fastapi import APIRouter, HTTPExcep
+
+## [2026-06-01 11:23:03 KST] [aads-server] app/api/stream.py
+- Chat-Direct 수정: patch: @router.post("/projects/{project_id}/str→@router.post("/projects/{project_id}/str
+
+## [2026-06-01 11:24:07 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:     _startup_asyncio.create_task(_period→    _startup_asyncio.create_task(_period
