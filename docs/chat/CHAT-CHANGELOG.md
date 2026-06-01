@@ -8,8 +8,14 @@ _v1.0 | 2026-04-02 | 최초 작성_
 
 | 커밋 | 변경 | 구분 |
 |------|------|------|
+| 2026-06-02 | **Completion contract auto-continue**: LLM stream `done`만으로 업무 완료 처리하지 않고, 최종 완료보고 조건(`response_completion_contract`)을 만족하지 못하면 저장/완료 전에 최대 3회 같은 스트림에서 자동 이어쓰기를 실행한다. 그래도 완료보고가 아니면 `completed`로 저장하지 않고 partial 보존 + recoverable error로 종료해 완료 아이콘 오표시를 차단한다. | 🐛 Backend |
 | 2026-06-02 | **Disconnect residual risk hardening**: 클라이언트 연결 끊김 후 background producer 자동취소 기본값을 65분으로 늘려 stale watchdog 정책보다 먼저 정상 장시간 응답을 중단하지 않게 하고, 프론트 streaming-stuck 판정은 토큰/이벤트/placeholder 진행 변화가 없을 때만 누적되도록 완화 | 🐛 Backend+Frontend |
 | 2026-06-01 | **Watchdog auto retry**: stale execution watchdog이 45분+20분 정책으로 stale 실행을 감지했을 때 `retry_count < 2`이고 원 user 메시지가 남아 있으면 즉시 `retrying`으로 claim하고 `_resume_single_stream()`을 백그라운드 실행한다. 한도 초과나 재시도 불가 케이스만 기존처럼 `interrupted_partial`로 종료한다. | 🐛 Backend |
+
+Completion contract auto-continue:
+- `done` 이벤트는 “모델 스트림 종료”로만 보고, “업무 완료”는 completion contract 통과 여부로 별도 판정한다.
+- `missing_commit_push_disclosure`, ledger 충돌, 문서/배포 완료 미입증 등 완료보고 위반이 있으면 보정문을 붙여 바로 완료하지 않고 자동 continuation prompt를 실행한다.
+- continuation이 끝난 뒤에도 완료보고 조건을 만족하지 못하거나 이어쓰기 결과가 비어 있으면 `completion_contract_unresolved`/`completion_contract_continue_empty` 사유로 partial을 보존하고 execution을 interrupted 처리한다.
 
 Disconnect residual risk hardening:
 - `BG_AUTO_CANCEL_SEC` 기본값을 900초에서 3900초(65분)로 조정했다. 브라우저/SSE 연결이 끊긴 상태에서도 watchdog의 45분+20분 stale 판정보다 먼저 producer가 `client_gone_auto_cancel`로 종료되지 않게 한다.

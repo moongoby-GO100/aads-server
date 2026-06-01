@@ -119,6 +119,7 @@ _stale_cleanup_task: _heartbeat_asyncio.Task | None = getattr(
 # 정상 장시간 응답을 중단하지 않도록 기본 65분으로 둔다.
 _BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "3900"))
 _FIRST_RESPONSE_TIMEOUT_SEC = float(os.getenv("AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC", "180"))
+_COMPLETION_AUTO_CONTINUE_MAX = int(os.getenv("AADS_COMPLETION_AUTO_CONTINUE_MAX", "3"))
 _FINALIZE_DB_RETRY_DELAYS = (0.5, 1.0, 2.0)
 _COOLDOWN_SECS_DEFAULT = 300
 _RECOVERY_DEDUPE_MODEL_USED = {"recovered", "recovered_from_redis", "stopped", None}
@@ -7648,25 +7649,143 @@ async def send_message_stream(
                     full_response = _critic_retry_response
 
         _completion_contract = None
+        _completion_auto_continue_count = 0
         try:
             from app.services.response_completion_contract import enforce_completion_contract
 
-            _completion_contract = await enforce_completion_contract(
-                response_text=full_response,
-                user_msg=content,
-                session_id=session_id,
-                intent=intent,
-            )
-            if _completion_contract.adjusted:
-                full_response = _completion_contract.response_text
+            _auto_continue_max = max(0, _COMPLETION_AUTO_CONTINUE_MAX)
+            for _contract_attempt in range(_auto_continue_max + 1):
+                _completion_contract = await enforce_completion_contract(
+                    response_text=full_response,
+                    user_msg=content,
+                    session_id=session_id,
+                    intent=intent,
+                )
+                if not _completion_contract.adjusted:
+                    break
+
+                _violations = ",".join(_completion_contract.violation_types)
                 logger.warning(
-                    "completion_contract_adjusted session=%s violations=%s pending=%s",
+                    "completion_contract_needs_continue session=%s attempt=%s/%s violations=%s pending=%s",
                     session_id[:8],
-                    ",".join(_completion_contract.violation_types),
+                    min(_contract_attempt + 1, _auto_continue_max),
+                    _auto_continue_max,
+                    _violations,
                     _completion_contract.pending_count,
                 )
-                if _completion_contract.note:
-                    yield f"data: {json.dumps({'type': 'delta', 'content': _completion_contract.note})}\n\n"
+                if _contract_attempt >= _auto_continue_max:
+                    full_response = _completion_contract.response_text
+                    if _completion_contract.note:
+                        yield f"data: {json.dumps({'type': 'delta', 'content': _completion_contract.note})}\n\n"
+                    await _save_interrupted_partial_message(
+                        session_id=session_id,
+                        content=full_response,
+                        reason="completion_contract_unresolved",
+                        execution_id=_execution_id_str,
+                    )
+                    if _execution_id_str:
+                        async with get_pool().acquire() as _conn:
+                            await _mark_execution_interrupted(
+                                _conn,
+                                session_id,
+                                _execution_id_str,
+                                f"completion_contract_unresolved:{_violations}",
+                                partial_content=full_response,
+                                delete_empty_placeholder=False,
+                            )
+                    yield f"data: {json.dumps({'type': 'error', 'content': '최종 완료보고 조건을 만족하지 못해 완료 처리하지 않았습니다. 중간 응답은 보존했고 자동 이어쓰기를 재시도할 수 있습니다.', 'recoverable': True, 'reason': 'completion_contract_unresolved', 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
+                    return
+
+                _completion_auto_continue_count += 1
+                yield f"data: {json.dumps({'type': 'heartbeat', 'phase': 'completion_auto_continue', 'attempt': _completion_auto_continue_count})}\n\n"
+                _continue_messages = list(messages)
+                _continue_messages.append({"role": "assistant", "content": full_response.strip()})
+                _continue_messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "이전 응답은 최종 완료보고 조건을 만족하지 못했습니다. "
+                            "중간 보고로 끝내지 말고 남은 확인/조치/검증을 계속 수행하세요. "
+                            "응답 마지막에는 사용자의 원 요청에 대한 최종 완료보고를 명확히 작성하고, "
+                            "커밋/푸시/배포/문서/미완료 항목이 있으면 상태를 구체적으로 보고하세요. "
+                            f"완료 위반 사유: {_violations or 'completion_contract_adjusted'}"
+                        ),
+                    }
+                )
+                _continue_response = ""
+                async for event in call_stream(
+                    intent_result=intent_result,
+                    system_prompt=system_prompt,
+                    messages=_continue_messages,
+                    tools=tools_for_api,
+                    model_override=model_override,
+                    session_id=session_id,
+                ):
+                    etype = event.get("type", "")
+                    if etype == "heartbeat":
+                        yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                    elif etype == "delta":
+                        _delta = event.get("content", "")
+                        _continue_response += _delta
+                        yield f"data: {json.dumps({'type': 'delta', 'content': _delta})}\n\n"
+                    elif etype == "thinking":
+                        thinking_summary += event.get("thinking", "")
+                        yield f"data: {json.dumps({'type': 'thinking', 'thinking': event['thinking']})}\n\n"
+                    elif etype == "tool_use":
+                        tools_called.append(
+                            {
+                                "type": "tool_use",
+                                "tool_name": event["tool_name"],
+                                "tool_use_id": event.get("tool_use_id", ""),
+                                "tool_input": event.get("tool_input", {}),
+                            }
+                        )
+                        yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event.get('tool_use_id', ''), 'tool_input': event.get('tool_input', {})})}\n\n"
+                    elif etype == "tool_result":
+                        tool_result_payload = _tool_result_event_snapshot(event)
+                        tools_called.append(tool_result_payload)
+                        yield f"data: {json.dumps(_tool_result_event_snapshot(event, content_limit=300))}\n\n"
+                    elif etype == "yellow_limit":
+                        yield f"data: {json.dumps({'type': 'yellow_limit', 'content': event.get('content', ''), 'tool_name': event.get('tool_name', ''), 'consecutive_count': event.get('consecutive_count', 0)})}\n\n"
+                    elif etype == "done":
+                        model_used = event.get("model", model_used or intent_result.model)
+                        cost_usd += Decimal(str(event.get("cost", "0")))
+                        input_tokens += event.get("input_tokens", 0) or 0
+                        output_tokens += event.get("output_tokens", 0) or 0
+                        thinking_summary = event.get("thinking_summary") or thinking_summary
+                    elif etype == "error":
+                        logger.warning(
+                            "completion_auto_continue_error session=%s attempt=%s error=%s",
+                            session_id[:8],
+                            _completion_auto_continue_count,
+                            str(event.get("content") or "")[:160],
+                        )
+                        break
+
+                if not _continue_response.strip():
+                    full_response = _completion_contract.response_text
+                    if _completion_contract.note:
+                        yield f"data: {json.dumps({'type': 'delta', 'content': _completion_contract.note})}\n\n"
+                    await _save_interrupted_partial_message(
+                        session_id=session_id,
+                        content=full_response,
+                        reason="completion_contract_continue_empty",
+                        execution_id=_execution_id_str,
+                    )
+                    if _execution_id_str:
+                        async with get_pool().acquire() as _conn:
+                            await _mark_execution_interrupted(
+                                _conn,
+                                session_id,
+                                _execution_id_str,
+                                f"completion_contract_continue_empty:{_violations}",
+                                partial_content=full_response,
+                                delete_empty_placeholder=False,
+                            )
+                    yield f"data: {json.dumps({'type': 'error', 'content': '최종 완료보고 자동 이어쓰기 결과가 비어 있어 완료 처리하지 않았습니다. 중간 응답은 보존했습니다.', 'recoverable': True, 'reason': 'completion_contract_continue_empty', 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
+                    return
+
+                full_response = f"{full_response.rstrip()}\n\n{_continue_response.strip()}".strip()
         except Exception as _contract_err:
             logger.warning(f"completion_contract_check_failed: {_contract_err}")
 
