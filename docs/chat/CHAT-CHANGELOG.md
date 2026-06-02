@@ -8,6 +8,7 @@ _v1.0 | 2026-04-02 | 최초 작성_
 
 | 커밋 | 변경 | 구분 |
 |------|------|------|
+| 2026-06-02 | **Retry cap off-by-one fix**: 5번째 자동 이어쓰기 시도는 허용하고 6번째부터 cap 초과로 terminal 처리한다. `retry_count=4`에서 재개 예약 시 DB 값이 5로 증가하므로 `>=5` 판정은 마지막 허용 시도를 시작 직후 중단시키는 원인이었다. | 🐛 Backend |
 | 2026-06-02 | **Recovery auto-resume**: `/last-response`와 `/streaming-status`가 stale running execution을 정리할 때 partial 보존에서 끝내지 않고 retry budget이 남아 있으면 같은 execution을 `retrying`으로 복원해 `_resume_single_stream()`을 자동 예약한다. watchdog은 `chat_turn_executions` 전체를 대상으로 하므로 runner뿐 아니라 채팅 execution에도 적용된다는 범위를 문서화했다. | 🐛 Backend |
 | 2026-06-02 | **Progress-tail completion block**: 긴 응답이라도 마지막이 "이제 확인/수정/실행하겠습니다" 같은 진행 예정문이면 최종 완료보고가 아닌 것으로 판정한다. TODO 게이트 미완료 시 execution을 `interrupted`로 되돌리고, 프론트는 `quality_details`와 말미 패턴을 보고 `완료 전 중단`을 표시해 완료 아이콘 오표시를 차단한다. | 🐛 Backend+Frontend |
 | 2026-06-02 | **Reply-to content pollution fix**: `reply_to_id` 처리 시 이전 AI 응답 전문을 user `content`에 합쳐 저장하던 경로를 차단했다. DB/화면/검색에는 CEO가 입력한 원문 질문만 저장하고, 이전 응답 인용은 현재 턴 LLM 컨텍스트에만 주입한다. | 🐛 Backend |

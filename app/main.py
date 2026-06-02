@@ -1213,7 +1213,7 @@ async def lifespan(app: FastAPI):
                         )
                         logger.info("stale_force_interrupt: session=%s execution=%s stale=%ds", sid[:8], execution_id[:8], _stale_sec)
                         continue
-                    if (row.get("retry_count") or 0) >= 5:
+                    if (row.get("retry_count") or 0) > 5:
                         await _mei_exec(
                             conn,
                             sid,

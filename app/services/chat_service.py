@@ -3759,7 +3759,7 @@ async def _resume_single_stream(
                         'SELECT retry_count FROM chat_turn_executions WHERE id = $1',
                         _execution_uuid,
                     )
-                    if (_rc or 0) >= 5:
+                    if (_rc or 0) > 5:
                         logger.error(f'resume_hard_cap_exceeded: session={session_id[:8]} retry_count={_rc}')
                         _streaming_state.pop(session_id, None)
                         _active_bg_tasks.pop(session_id, None)

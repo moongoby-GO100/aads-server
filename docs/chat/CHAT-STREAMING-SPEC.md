@@ -197,6 +197,7 @@ LLM stream 종료
 - 실제 스트림 본문이 있고 완료 저장이 가능한 경우에는 대표 assistant row를 정상 모델명으로 승격하고 같은 execution의 `streaming_placeholder`/`interrupted_partial`/`interruption_notice` 중복 row를 삭제한다.
 - 수동 `/resume`도 execution을 `retrying`으로 바꿀 때 대표 interrupted assistant row를 `streaming_placeholder`/`streaming`으로 복원해야 한다. 그렇지 않으면 `/streaming-status`가 `retrying + model_used='interrupted'` 조합을 terminal 상태로 오판해 `assistant message already terminal`로 즉시 다시 중단시킨다.
 - startup/recovery scanner의 execution resume attempt cap은 `/resume`/`_resume_single_stream()`과 동일하게 5회로 유지한다. scanner만 2회 제한을 적용하면 수동 resume이 정상 시작된 직후 `execution_resume_attempt_limit_exceeded`로 다시 중단된다.
+- retry cap 판정은 "5회 초과"만 terminal cap으로 본다. `/resume`과 recovery scheduler가 `retry_count=4`에서 5번째 시도를 예약하면 실행 중 DB 값은 5가 되므로, `retry_count=5`를 cap 초과로 처리하면 마지막 허용 시도를 시작 직후 중단시키는 오류가 된다.
 
 ## 5. 끊김 시 사용자 체감 (2026-04-02 A+B 적용 후)
 
