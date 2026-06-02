@@ -887,3 +887,65 @@ async def test_send_message_stream_discussion_branch_uses_orchestrator():
     assert any('"type": "delta"' in chunk for chunk in chunks)
     assert any('"debate_id": "debate-5678"' in chunk for chunk in chunks)
     assert saved.await_args.args[1] == "## 종합 결론\n\n추천안"
+
+
+def test_strip_internal_continuation_context_removes_continue_scaffold():
+    content = (
+        "이어서 진행해\n\n"
+        "[이전 응답이 중단되었습니다. 아래 부분까지 생성되었으니 이어서 작성해주세요]\n"
+        "이전 assistant 본문\n"
+        "[위 내용에 이어서 자연스럽게 계속 작성하세요. 중복 없이 이어서.]"
+    )
+
+    assert chat_service._strip_internal_continuation_context(content) == "이어서 진행해"
+
+
+def test_strip_internal_continuation_context_preserves_visible_instruction_before_reply_quote():
+    content = (
+        "[이전 추가 지시] 관리자 메뉴 반영해\n\n"
+        "[CEO가 지정한 이전 AI 응답 (reply_to)]\n"
+        "이전 assistant 본문\n\n"
+        "[CEO 추가 지시]\n"
+        "관리자 메뉴 확인해"
+    )
+
+    assert (
+        chat_service._strip_internal_continuation_context(content)
+        == "[이전 추가 지시] 관리자 메뉴 반영해"
+    )
+
+
+def test_strip_internal_continuation_context_extracts_instruction_from_reply_quote_wrapper():
+    content = (
+        "[CEO가 지정한 이전 AI 응답 (reply_to)]\n"
+        "이전 assistant 본문\n\n"
+        "[CEO 추가 지시]\n"
+        "이어서 진행해"
+    )
+
+    assert chat_service._strip_internal_continuation_context(content) == "이어서 진행해"
+
+
+def test_strip_internal_continuation_context_defaults_reply_only_to_continue_instruction():
+    content = (
+        "[CEO가 지정한 이전 AI 응답 (reply_to)]\n"
+        "이전 assistant 본문만 저장된 오래된 오염 메시지"
+    )
+
+    assert chat_service._strip_internal_continuation_context(content) == "이어서 진행해"
+
+
+def test_strip_internal_continuation_context_removes_nested_scaffolds():
+    content = (
+        "[CEO가 지정한 이전 AI 응답 (reply_to)]\n"
+        "이전 assistant 본문\n\n"
+        "[CEO 추가 지시]\n"
+        "이어서 진행해\n\n"
+        "[이전 응답이 중단되었습니다. 아래 부분까지 생성되었으니 이어서 작성해주세요]\n"
+        "[CEO가 지정한 이전 AI 응답 (reply_to)]\n"
+        "중첩된 assistant 본문\n\n"
+        "[CEO 추가 지시]\n"
+        "중첩 지시"
+    )
+
+    assert chat_service._strip_internal_continuation_context(content) == "이어서 진행해"

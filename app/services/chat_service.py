@@ -221,6 +221,41 @@ def _promote_actionable_quoted_instruction(content: str) -> str:
         + "- 원인 확인만으로 끝내지 말고 가능한 도구 실행/코드 조치/화면 확인까지 수행한 뒤 보고하라."
     )
 
+
+def _strip_internal_continuation_context(content: str) -> str:
+    """Remove LLM-only reply/continue scaffolds from persisted user text."""
+    text = str(content or "").strip()
+    if not text:
+        return text
+
+    reply_marker = "[CEO가 지정한 이전 AI 응답 (reply_to)]"
+    ceo_marker = "[CEO 추가 지시]"
+    continue_marker = "[이전 응답이 중단되었습니다."
+    trailing_continue_marker = "[위 내용에 이어서 자연스럽게 계속 작성하세요. 중복 없이 이어서.]"
+
+    for _ in range(4):
+        previous = text
+
+        if text.startswith(reply_marker) and ceo_marker in text:
+            text = text.split(ceo_marker, 1)[1].strip()
+        elif text.startswith(reply_marker):
+            text = "이어서 진행해"
+        elif reply_marker in text:
+            text = text.split(reply_marker, 1)[0].strip()
+
+        if continue_marker in text:
+            text = text.split(continue_marker, 1)[0].strip()
+
+        if trailing_continue_marker in text:
+            text = text.split(trailing_continue_marker, 1)[0].strip()
+
+        text = text.strip()
+        if text == previous:
+            break
+
+    return text.strip() or "이어서 진행해"
+
+
 _SENTINEL = object()  # Queue 종료 신호
 _RESUME_SEMAPHORE = _heartbeat_asyncio.Semaphore(3)  # 동시 resume 최대 3개 (CEO 지시)
 
@@ -2402,6 +2437,7 @@ async def with_background_completion(
                 _sid,
             )
 
+        last_user = _strip_internal_continuation_context(last_user or "")
         if not last_user:
             return
 
@@ -5936,7 +5972,7 @@ async def send_message_stream(
 
         # Persist only the user's visible input. Reply/resume context may be
         # injected into the LLM prompt below, but must not pollute chat history.
-        persisted_user_content = content
+        persisted_user_content = _strip_internal_continuation_context(content)
 
         # ★ Phase A: DB 커넥션 사용 구간 — async with로 자동 반환 (LLM 스트리밍 전 해제)
         # Reply-to: 이전 AI 응답 지정 시 LLM 전용 인용 컨텍스트 주입

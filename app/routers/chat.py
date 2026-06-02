@@ -2043,18 +2043,12 @@ async def regenerate_message(message_id: UUID, request: Request, mode: str = "re
             )
 
     session_id_str = str(ai_msg["session_id"])
-    content = user_msg["content"]
+    content = svc._strip_internal_continuation_context(user_msg["content"])
     import json as _json
     attachments = _json.loads(user_msg["attachments"]) if user_msg["attachments"] else []
 
-    if mode == "continue" and ai_msg["content"]:
-        partial = ai_msg["content"]
-        continue_suffix = (
-            "\n\n[이전 응답이 중단되었습니다. 아래 부분까지 생성되었으니 이어서 작성해주세요]\n"
-            f"{partial[-2000:]}\n"
-            "[위 내용에 이어서 자연스럽게 계속 작성하세요. 중복 없이 이어서.]"
-        )
-        content = content + continue_suffix
+    if mode == "continue":
+        content = "이어서 진행해"
 
     from app.services.tool_executor import current_chat_session_id
     current_chat_session_id.set(session_id_str)

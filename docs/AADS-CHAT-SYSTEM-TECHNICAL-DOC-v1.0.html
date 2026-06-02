@@ -772,6 +772,18 @@ gemini-3.1-pro:   → claude-opus-4-7 → gpt-5.5
       <strong>목표:</strong> 신규 발생 비율 5% 이하 (기존 누적 2,295건은 히스토리 데이터).
     </div>
   </div>
+
+  <h3>9.5 ✅ 해결: 자동이어쓰기 내부 프롬프트 저장 오염</h3>
+  <div class="fix-card">
+    <div class="title"><span class="resolved">RESOLVED</span> P0 — continue/reply_to 컨텍스트가 사용자 메시지로 저장됨</div>
+    <div class="desc">
+      <strong>근본 원인:</strong> <code>regenerate_message(mode=continue)</code> 경로가 이전 assistant partial과 <code>[이전 응답이 중단되었습니다...]</code> 이어쓰기 지시를 <code>content</code>에 붙인 뒤 <code>send_message_stream()</code>으로 전달했고, 해당 문자열이 사용자 visible input으로 저장됨. 이후 자동이어쓰기와 output validator가 오염된 user history를 재사용해 진행중/완료 판정을 흔들 수 있었음.<br>
+      <strong>해결:</strong> <code>_strip_internal_continuation_context()</code>를 추가해 reply_to/continue 내부 프롬프트를 저장 전에 제거. router continue 경로는 사용자 메시지를 <code>이어서 진행해</code>로 저장하고, LLM 전용 이어쓰기 컨텍스트는 서비스 내부에서만 사용.<br>
+      <strong>패치 위치:</strong> <code>app/services/chat_service.py</code>, <code>app/routers/chat.py</code>, <code>tests/unit/test_chat_service.py</code><br>
+      <strong>데이터 정리:</strong> <code>d84b7c2c</code>, <code>2648cf77</code>, <code>ac5278a7</code> 세션의 오염 user 메시지 61건 정리. 정리 후 내부 마커 잔존 0건.<br>
+      <strong>검증:</strong> <code>py_compile</code> 통과, <code>pytest -q tests/unit/test_chat_service.py -k 'strip_internal_continuation_context'</code> 5건 통과.
+    </div>
+  </div>
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════════ -->
@@ -869,7 +881,8 @@ gemini-3.1-pro:   → claude-opus-4-7 → gpt-5.5
     <tr><td>3</td><td><span class="p0">P0</span></td><td>스크롤 보존 — isNearBottomRef 조건부화</td><td><code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td></tr>
     <tr><td>4</td><td><span class="p0">P0</span></td><td>429 재시도 3s×30회 + retry_progress SSE 카운터</td><td><code>model_selector.py</code>, <code>page.tsx</code></td><td><span class="badge badge-green">✅ 완료</span></td></tr>
     <tr><td>5</td><td><span class="p0">P0</span></td><td>모델별 폴백 체인 (opus→gpt5.5→gemini3.1)</td><td><code>model_selector.py</code></td><td><span class="badge badge-green">✅ 완료</span></td></tr>
-    <tr><td>6</td><td><span class="p1">P1</span></td><td>_deleted_duplicate 물리 삭제 스케줄러 (7일 경과)</td><td>신규 <code>cleanup_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
+    <tr><td>6</td><td><span class="p0">P0</span></td><td>continue/reply_to 내부 프롬프트 저장 방지 + 오염 데이터 정리</td><td><code>chat_service.py</code>, <code>chat.py</code></td><td><span class="badge badge-green">✅ 완료</span></td></tr>
+    <tr><td>7</td><td><span class="p1">P1</span></td><td>_deleted_duplicate 물리 삭제 스케줄러 (7일 경과)</td><td>신규 <code>cleanup_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
   </table>
 
   <h3>11.2 단기 개선 (1개월 내)</h3>
