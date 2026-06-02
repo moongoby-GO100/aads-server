@@ -192,6 +192,9 @@ LLM stream 종료
 - recovery endpoint(`/last-response`, `/streaming-status`)가 dead running execution을 정리할 때도 retry budget이 남아 있으면 `interrupted`에서 멈추지 않고 즉시 `retrying`으로 복원해 `_resume_single_stream()`을 예약한다. 프론트는 이 경우 `generating/recovering=true`로 유지한다.
 - watchdog은 runner 전용 테이블이 아니라 `chat_turn_executions` 전체를 스캔한다. 채팅 응답도 같은 execution 테이블을 쓰므로 watchdog/recovery 정책은 채팅 세션에도 적용된다. 단, live runtime이 있으면 건드리지 않고, dead/stale 실행만 자동 이어쓰기 또는 terminalize 대상이 된다.
 - 품질/완료계약 실패 자동 이어쓰기 역시 동일한 retry cap 5회를 사용한다. 자동 재시도 예약 시 `current_execution_id=<execution>`, `completed_at=NULL`, `status='retrying'`으로 복원해 프론트가 응답을 계속 진행 중으로 인식한다.
+- `with_background_completion()`의 DB 완료 보정은 `completed` 실행의 대표 assistant 메시지를 `interrupted_partial`/`interruption_notice`/`model_used='interrupted'` 상태로 남기면 안 된다.
+- 브라우저 강력 새로고침/SSE 단절 후 백그라운드 완료 보정 경로가 자체 스트림 본문 없이 기존 interrupted row만 발견하면 `completed`로 닫지 않고 `completion_contract_unresolved:completed_without_non_interrupted_assistant`로 되돌린 뒤 자동 이어쓰기를 예약한다.
+- 실제 스트림 본문이 있고 완료 저장이 가능한 경우에는 대표 assistant row를 정상 모델명으로 승격하고 같은 execution의 `streaming_placeholder`/`interrupted_partial`/`interruption_notice` 중복 row를 삭제한다.
 
 ## 5. 끊김 시 사용자 체감 (2026-04-02 A+B 적용 후)
 
@@ -223,6 +226,7 @@ LLM stream 종료
 
 | 버전 | 날짜 | 변경 |
 |------|------|------|
+| v1.6 | 2026-06-02 | BG completion 보정 경로에서 completed 실행이 interrupted 메타데이터를 가진 버블로 남아 완료전중단 아이콘이 표시되는 문제 방지 |
 | v1.5 | 2026-06-02 | output_validator/completion_contract/todo gate 중단 후 자동 완료보고 이어쓰기 예약 |
 | v1.4 | 2026-06-02 | recovery endpoint stale 정리 후 자동 이어쓰기 예약, watchdog 채팅 적용 범위 명시 |
 | v1.3 | 2026-06-02 | 긴 진행 예정문 말미/TODO 미완료 응답 completed 차단, 프론트 완료 아이콘 오표시 방지 |

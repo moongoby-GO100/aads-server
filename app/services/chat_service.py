@@ -2532,6 +2532,7 @@ async def with_background_completion(
             clean_content = re.sub(r'<invoke\s+name=[^>]*>.*?</invoke>', '', clean_content, flags=re.DOTALL)
             clean_content = re.sub(r'<invoke\s+name=[^>]*>.*', '', clean_content, flags=re.DOTALL)
             clean_content = clean_content.strip()
+        stream_clean_content = clean_content
         pool = get_pool()
         async with pool.acquire() as conn:
             async with conn.transaction():
@@ -2554,18 +2555,23 @@ async def with_background_completion(
                 assistant_row = None
                 if exec_row["assistant_message_id"]:
                     assistant_row = await conn.fetchrow(
-                        "SELECT id, intent, content FROM chat_messages WHERE id = $1 AND role = 'assistant'",
+                        "SELECT id, intent, model_used, content FROM chat_messages WHERE id = $1 AND role = 'assistant'",
                         exec_row["assistant_message_id"],
                     )
                 if not assistant_row:
                     assistant_row = await conn.fetchrow(
                         """
-                        SELECT id, intent, content
+                        SELECT id, intent, model_used, content
                         FROM chat_messages
                         WHERE execution_id = $1
                           AND role = 'assistant'
                         ORDER BY
-                          CASE WHEN intent = 'streaming_placeholder' THEN 1 ELSE 0 END,
+                          CASE
+                            WHEN intent = 'streaming_placeholder' THEN 3
+                            WHEN model_used = 'interrupted'
+                              OR intent IN ('interrupted_partial', 'interruption_notice') THEN 2
+                            ELSE 1
+                          END DESC,
                           length(COALESCE(content, '')) DESC,
                           created_at DESC
                         LIMIT 1
@@ -2577,9 +2583,35 @@ async def with_background_completion(
                     clean_content = _strip_streaming_progress_markers(assistant_row["content"] or "")
                     clean_content = clean_content.strip()
 
+                assistant_row_interrupted = bool(
+                    assistant_row
+                    and (
+                        assistant_row["intent"] in ("interrupted_partial", "interruption_notice")
+                        or assistant_row["model_used"] == "interrupted"
+                    )
+                )
+                if assistant_row_interrupted and not stream_clean_content:
+                    await _mark_execution_interrupted(
+                        conn,
+                        str(exec_row["session_id"]),
+                        str(execution_uuid),
+                        "completion_contract_unresolved:completed_without_non_interrupted_assistant",
+                        partial_content=clean_content,
+                    )
+                    logger.warning(
+                        "completion_guard_reopened_interrupted_assistant session=%s execution=%s",
+                        str(exec_row["session_id"])[:8],
+                        str(execution_uuid)[:8],
+                    )
+                    return
+
                 if assistant_row and clean_content:
                     assistant_message_id = assistant_row["id"]
-                    if assistant_row["intent"] == "streaming_placeholder":
+                    if (
+                        assistant_row["intent"] == "streaming_placeholder"
+                        or assistant_row["intent"] in ("interrupted_partial", "interruption_notice")
+                        or assistant_row["model_used"] == "interrupted"
+                    ):
                         await conn.execute(
                             """
                             UPDATE chat_messages
@@ -2593,6 +2625,20 @@ async def with_background_completion(
                             exec_row["actual_model"] or exec_row["requested_model"],
                             assistant_message_id,
                         )
+                    await conn.execute(
+                        """
+                        DELETE FROM chat_messages
+                        WHERE execution_id = $1
+                          AND role = 'assistant'
+                          AND id <> $2
+                          AND (
+                            intent IN ('streaming_placeholder', 'interrupted_partial', 'interruption_notice')
+                            OR model_used IN ('streaming', 'interrupted')
+                          )
+                        """,
+                        execution_uuid,
+                        assistant_message_id,
+                    )
                 elif clean_content:
                     assistant_message_id = await conn.fetchval(
                         """
