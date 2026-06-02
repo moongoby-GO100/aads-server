@@ -2181,6 +2181,27 @@ async def resume_interrupted(session_id: UUID):
                 session_id,
                 uuid.UUID(row["execution_id"]),
             )
+            if row["placeholder_id"]:
+                await conn2.execute(
+                    """
+                    UPDATE chat_messages
+                    SET intent = 'streaming_placeholder',
+                        model_used = 'streaming',
+                        edited_at = NOW()
+                    WHERE id = $1
+                      AND role = 'assistant'
+                      AND (
+                        intent IN (
+                          'interrupted_partial',
+                          'interruption_notice',
+                          'continued',
+                          '_archived_partial'
+                        )
+                        OR model_used = 'interrupted'
+                      )
+                    """,
+                    row["placeholder_id"],
+                )
 
     partial = row["partial_content"] or ""
     clean_partial = re.sub(r'\n\n⏳ _.*?_$', '', partial, flags=re.DOTALL).strip()

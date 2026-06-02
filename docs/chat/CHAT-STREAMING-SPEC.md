@@ -195,6 +195,7 @@ LLM stream 종료
 - `with_background_completion()`의 DB 완료 보정은 `completed` 실행의 대표 assistant 메시지를 `interrupted_partial`/`interruption_notice`/`model_used='interrupted'` 상태로 남기면 안 된다.
 - 브라우저 강력 새로고침/SSE 단절 후 백그라운드 완료 보정 경로가 자체 스트림 본문 없이 기존 interrupted row만 발견하면 `completed`로 닫지 않고 `completion_contract_unresolved:completed_without_non_interrupted_assistant`로 되돌린 뒤 자동 이어쓰기를 예약한다.
 - 실제 스트림 본문이 있고 완료 저장이 가능한 경우에는 대표 assistant row를 정상 모델명으로 승격하고 같은 execution의 `streaming_placeholder`/`interrupted_partial`/`interruption_notice` 중복 row를 삭제한다.
+- 수동 `/resume`도 execution을 `retrying`으로 바꿀 때 대표 interrupted assistant row를 `streaming_placeholder`/`streaming`으로 복원해야 한다. 그렇지 않으면 `/streaming-status`가 `retrying + model_used='interrupted'` 조합을 terminal 상태로 오판해 `assistant message already terminal`로 즉시 다시 중단시킨다.
 
 ## 5. 끊김 시 사용자 체감 (2026-04-02 A+B 적용 후)
 
@@ -226,6 +227,7 @@ LLM stream 종료
 
 | 버전 | 날짜 | 변경 |
 |------|------|------|
+| v1.7 | 2026-06-02 | manual `/resume` 직후 대표 interrupted row를 streaming placeholder로 복원해 상태조회가 retrying 실행을 terminal로 재중단하는 문제 방지 |
 | v1.6 | 2026-06-02 | BG completion 보정 경로에서 completed 실행이 interrupted 메타데이터를 가진 버블로 남아 완료전중단 아이콘이 표시되는 문제 방지 |
 | v1.5 | 2026-06-02 | output_validator/completion_contract/todo gate 중단 후 자동 완료보고 이어쓰기 예약 |
 | v1.4 | 2026-06-02 | recovery endpoint stale 정리 후 자동 이어쓰기 예약, watchdog 채팅 적용 범위 명시 |
