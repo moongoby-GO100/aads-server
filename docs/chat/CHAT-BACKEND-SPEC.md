@@ -1,6 +1,6 @@
 # AADS Chat Backend 명세
 
-_v1.1 | 2026-06-02 | 완료 판정 계약 + 자동 이어쓰기 반영_
+_v1.2 | 2026-06-02 | reply_to 저장 본문 오염 방지 반영_
 
 ## 1. 파일 구조
 
@@ -69,6 +69,14 @@ app.include_router(chat_v2_router, prefix="/api/v1", tags=["chat-v2"])  # L1065 
 | POST | `/chat/messages/{id}/regenerate` | 응답 재생성 |
 | POST | `/chat/messages/{id}/branch` | 대화 분기 |
 | GET | `/chat/sessions/{id}/branches` | 분기 목록 |
+
+#### 3.3.1 Reply-to 저장 규칙
+
+- `reply_to_id`는 UI 인용 표시와 LLM 현재 턴 컨텍스트 주입용 메타데이터다.
+- `chat_messages.content`에 저장하는 user 메시지는 CEO가 입력한 원문 질문만 포함해야 한다.
+- 이전 assistant 응답 전문, 자동 이어쓰기 scaffold, `[CEO가 지정한 이전 AI 응답 (reply_to)]` 같은 내부 컨텍스트 블록은 DB 저장 본문에 합치지 않는다.
+- LLM 호출이 이전 응답 맥락을 필요로 하면 `send_message_stream()` 내부에서 현재 턴 `raw_messages`에만 임시 주입한다.
+- 이 규칙을 어기면 질문 버블 하단에 이전 응답이 노출되고 검색/내보내기/학습 데이터가 오염된다.
 
 ### 3.4 Streaming 제어
 

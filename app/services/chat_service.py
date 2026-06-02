@@ -5934,8 +5934,12 @@ async def send_message_stream(
             _mentioned_projects = list(dict.fromkeys(p.upper() for p in _mention_matches))
             logger.info(f"[MENTION] session={session_id[:8]} projects={_mentioned_projects}")
 
+        # Persist only the user's visible input. Reply/resume context may be
+        # injected into the LLM prompt below, but must not pollute chat history.
+        persisted_user_content = content
+
         # ★ Phase A: DB 커넥션 사용 구간 — async with로 자동 반환 (LLM 스트리밍 전 해제)
-        # Reply-to: 이전 AI 응답 지정 시 인용 컨텍스트 주입
+        # Reply-to: 이전 AI 응답 지정 시 LLM 전용 인용 컨텍스트 주입
         _reply_to_uuid = None
         async with get_pool().acquire() as conn:
             if reply_to_id:
@@ -6034,13 +6038,13 @@ async def send_message_stream(
                     "WHERE session_id = $1 AND role = 'user' AND content = $2 "
                     "AND created_at > NOW() - interval '30 seconds' "
                     "ORDER BY created_at DESC LIMIT 1",
-                    sid, content,
+                    sid, persisted_user_content,
                 )
                 if existing_dup:
                     logger.info(f"user_msg_dedup session={session_id[:8]} — duplicate skipped")
                     _saved_user_message_id = existing_dup["id"]
                 else:
-                    _save_result = await _save_message(conn, sid, "user", content, model_used=model_override, intent=user_intent, attachments=attachments or [], reply_to_id=_reply_to_uuid, idempotency_key=idempotency_key)
+                    _save_result = await _save_message(conn, sid, "user", persisted_user_content, model_used=model_override, intent=user_intent, attachments=attachments or [], reply_to_id=_reply_to_uuid, idempotency_key=idempotency_key)
                     if _save_result is None and idempotency_key:
                         logger.info(f"idempotency_key_dedup session={session_id[:8]} key={idempotency_key[:8]}")
                         _saved_user_message_id = await conn.fetchval(
@@ -6079,7 +6083,7 @@ async def send_message_stream(
                 _learn_project = _mentioned_projects[0] if _mentioned_projects else None
                 _asyncio_learn.create_task(_detect_and_save_learning(
                     session_id=session_id,
-                    user_msg=content,
+                    user_msg=persisted_user_content,
                     project=_learn_project,
                 ))
 
@@ -6142,6 +6146,12 @@ async def send_message_stream(
                     sid,
                 )
                 raw_messages = [{"id": str(r["id"]), "role": r["role"], "content": r["content"]} for r in hist_rows]
+                if _saved_user_message_id:
+                    _saved_user_message_id_str = str(_saved_user_message_id)
+                    for _raw_msg in reversed(raw_messages):
+                        if _raw_msg.get("id") == _saved_user_message_id_str:
+                            _raw_msg["content"] = content
+                            break
 
             # 세션 누적 비용 조회 (프론트엔드 표시용)
             _session_cost_row = await conn.fetchrow(

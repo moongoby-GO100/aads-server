@@ -8,9 +8,15 @@ _v1.0 | 2026-04-02 | 최초 작성_
 
 | 커밋 | 변경 | 구분 |
 |------|------|------|
+| 2026-06-02 | **Reply-to content pollution fix**: `reply_to_id` 처리 시 이전 AI 응답 전문을 user `content`에 합쳐 저장하던 경로를 차단했다. DB/화면/검색에는 CEO가 입력한 원문 질문만 저장하고, 이전 응답 인용은 현재 턴 LLM 컨텍스트에만 주입한다. | 🐛 Backend |
 | 2026-06-02 | **Completion contract auto-continue**: LLM stream `done`만으로 업무 완료 처리하지 않고, 최종 완료보고 조건(`response_completion_contract`)을 만족하지 못하면 저장/완료 전에 최대 3회 같은 스트림에서 자동 이어쓰기를 실행한다. 그래도 완료보고가 아니면 `completed`로 저장하지 않고 partial 보존 + recoverable error로 종료해 완료 아이콘 오표시를 차단한다. | 🐛 Backend |
 | 2026-06-02 | **Disconnect residual risk hardening**: 클라이언트 연결 끊김 후 background producer 자동취소 기본값을 65분으로 늘려 stale watchdog 정책보다 먼저 정상 장시간 응답을 중단하지 않게 하고, 프론트 streaming-stuck 판정은 토큰/이벤트/placeholder 진행 변화가 없을 때만 누적되도록 완화 | 🐛 Backend+Frontend |
 | 2026-06-01 | **Watchdog auto retry**: stale execution watchdog이 45분+20분 정책으로 stale 실행을 감지했을 때 `retry_count < 2`이고 원 user 메시지가 남아 있으면 즉시 `retrying`으로 claim하고 `_resume_single_stream()`을 백그라운드 실행한다. 한도 초과나 재시도 불가 케이스만 기존처럼 `interrupted_partial`로 종료한다. | 🐛 Backend |
+
+Reply-to content pollution fix:
+- 원인: `send_message_stream()`이 `reply_to_id` 대상 assistant 본문을 `[CEO가 지정한 이전 AI 응답 (reply_to)]` 블록으로 현재 user `content` 앞에 붙인 뒤 그대로 `_save_message()`에 넘겼다. 그 결과 질문 버블 하단에 이전 AI 응답 전문이 노출되고, 검색/내보내기/학습 데이터도 오염됐다.
+- 조치: `persisted_user_content`를 도입해 DB 저장, 30초 중복검사, 학습 트리거에는 원문 사용자 입력만 사용한다. LLM 호출용 `raw_messages`의 현재 턴에만 인용 컨텍스트가 포함된 `content`를 주입한다.
+- 기대 효과: 화면에는 짧은 reply preview만 표시되고, 모델은 이전 응답 맥락을 계속 받을 수 있다. 기존 오염 row는 별도 정리 SQL로 사후 제거 대상이다.
 
 Completion contract auto-continue:
 - `done` 이벤트는 “모델 스트림 종료”로만 보고, “업무 완료”는 completion contract 통과 여부로 별도 판정한다.
