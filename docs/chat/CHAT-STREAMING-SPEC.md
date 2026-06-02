@@ -158,6 +158,8 @@ LLM stream 종료
 - 긴 응답이라도 마지막 문장이 "이제 확인/수정/실행하겠습니다" 같은 진행 예정문이면 최종 보고로 보지 않는다. `output_validator`와 `response_completion_contract`가 말미 500자를 검사해 `final_report_missing`으로 차단한다.
 - TODO 게이트가 미완료 항목을 감지하면 `_save_and_update_session()` 저장 직후 execution을 `interrupted`로 되돌리고 `todo_completion_gate_missing` 사유를 남긴다.
 - 이 경우 프론트는 완료 아이콘/완료 토스트를 표시하지 않고 복구 가능한 중단 상태로 처리한다.
+- `output_validator_*`, `completion_contract_unresolved:*`, `todo_completion_gate_missing*`처럼 최종 완료보고 품질/완료계약 실패로 중단된 경우에도 서버는 terminal `interrupted`에 멈추지 않는다. retry budget이 남고 최신 사용자 메시지로 대체되지 않았으면 같은 execution을 `retrying`으로 복원하고 `_resume_single_stream()`을 예약한다.
+- 이 자동 이어쓰기 재시도는 진행 로그 반복을 금지하고 원인/조치/검증/리스크가 포함된 최종 완료보고 생성을 지시한다. `CancelledError`, `superseded`, `newer_user`, `new_execution`, `assistant message already terminal` 계열은 정상 취소/대체로 보고 자동 재시도하지 않는다.
 
 ## 4. 타임아웃 정렬표
 
@@ -189,6 +191,7 @@ LLM stream 종료
 - stale watchdog은 active background task가 있는 세션을 제외하고, `updated_at` idle 조건과 `last_event_id` 존재 여부에 따라 grace를 다르게 둔다.
 - recovery endpoint(`/last-response`, `/streaming-status`)가 dead running execution을 정리할 때도 retry budget이 남아 있으면 `interrupted`에서 멈추지 않고 즉시 `retrying`으로 복원해 `_resume_single_stream()`을 예약한다. 프론트는 이 경우 `generating/recovering=true`로 유지한다.
 - watchdog은 runner 전용 테이블이 아니라 `chat_turn_executions` 전체를 스캔한다. 채팅 응답도 같은 execution 테이블을 쓰므로 watchdog/recovery 정책은 채팅 세션에도 적용된다. 단, live runtime이 있으면 건드리지 않고, dead/stale 실행만 자동 이어쓰기 또는 terminalize 대상이 된다.
+- 품질/완료계약 실패 자동 이어쓰기 역시 동일한 retry cap 5회를 사용한다. 자동 재시도 예약 시 `current_execution_id=<execution>`, `completed_at=NULL`, `status='retrying'`으로 복원해 프론트가 응답을 계속 진행 중으로 인식한다.
 
 ## 5. 끊김 시 사용자 체감 (2026-04-02 A+B 적용 후)
 
@@ -220,6 +223,7 @@ LLM stream 종료
 
 | 버전 | 날짜 | 변경 |
 |------|------|------|
+| v1.5 | 2026-06-02 | output_validator/completion_contract/todo gate 중단 후 자동 완료보고 이어쓰기 예약 |
 | v1.4 | 2026-06-02 | recovery endpoint stale 정리 후 자동 이어쓰기 예약, watchdog 채팅 적용 범위 명시 |
 | v1.3 | 2026-06-02 | 긴 진행 예정문 말미/TODO 미완료 응답 completed 차단, 프론트 완료 아이콘 오표시 방지 |
 | v1.2 | 2026-06-02 | 최종 완료보고 전 completed 금지, completion contract auto-continue 최대 3회, 미해결 시 interrupted_partial 처리 |

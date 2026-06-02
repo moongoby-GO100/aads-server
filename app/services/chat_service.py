@@ -57,6 +57,34 @@ def _safe_reset_context_var(ctx_var: _ContextVar, token, label: str = "") -> Non
             f"ctx_reset_skipped name={_var_name} label={label} err={type(_e).__name__}"
         )
 
+
+_AUTO_RESUME_INTERRUPTED_REASON_PREFIXES = (
+    "output_validator_autonomous_failed:",
+    "output_validator_retry_failed:",
+    "output_validator_retry_empty",
+    "completion_contract_unresolved:",
+    "todo_completion_gate_missing",
+    "retroactive_final_report_missing_after_audit",
+)
+
+
+def _should_auto_resume_interrupted_reason(reason: str) -> bool:
+    normalized = (reason or "").strip()
+    if not normalized:
+        return False
+    blocked_tokens = (
+        "CancelledError",
+        "superseded",
+        "newer_user",
+        "new_execution",
+        "resume_claimed_by:",
+        "assistant message already terminal",
+        "stale_superseded_by_newer_user_message",
+    )
+    if any(token in normalized for token in blocked_tokens):
+        return False
+    return normalized.startswith(_AUTO_RESUME_INTERRUPTED_REASON_PREFIXES)
+
 # AADS-191 Phase1: Redis Stream 토큰 버퍼링 (서버 재시작 시 스트리밍 복구)
 from app.services import redis_stream as _redis_stream
 
@@ -1518,6 +1546,185 @@ async def _execution_has_newer_user_message(conn, session_id: str, execution_id:
     return latest_at > execution_at
 
 
+async def _schedule_interrupted_auto_resume(
+    conn,
+    session_id: str,
+    execution_id: str,
+    assistant_message_id,
+    partial_content: str,
+    reason: str,
+) -> bool:
+    """복구 가능한 검증/완료계약 실패를 같은 실행의 자동 이어쓰기 작업으로 전환한다."""
+    if not _should_auto_resume_interrupted_reason(reason):
+        return False
+
+    sid = uuid.UUID(str(session_id))
+    eid = uuid.UUID(str(execution_id))
+    row = await conn.fetchrow(
+        """
+        SELECT te.retry_count,
+               te.requested_model,
+               s.current_execution_id,
+               COALESCE(um.content, '') AS last_user_msg,
+               w.name AS workspace_name
+        FROM chat_turn_executions te
+        JOIN chat_sessions s ON s.id = te.session_id
+        JOIN chat_workspaces w ON w.id = s.workspace_id
+        LEFT JOIN chat_messages um ON um.id = te.user_message_id
+        WHERE te.id = $1
+          AND te.session_id = $2
+        """,
+        eid,
+        sid,
+    )
+    if not row:
+        return False
+    retry_count = row["retry_count"] or 0
+    if retry_count >= 5:
+        logger.warning(
+            "interrupted_auto_resume_skip_hard_cap session=%s execution=%s retry_count=%s reason=%s",
+            session_id[:8],
+            execution_id[:8],
+            retry_count,
+            reason[:120],
+        )
+        return False
+    if not (row["last_user_msg"] or "").strip():
+        logger.warning(
+            "interrupted_auto_resume_skip_no_user session=%s execution=%s reason=%s",
+            session_id[:8],
+            execution_id[:8],
+            reason[:120],
+        )
+        return False
+    current_execution_id = row["current_execution_id"]
+    if current_execution_id and str(current_execution_id) != str(eid):
+        logger.info(
+            "interrupted_auto_resume_skip_newer_execution session=%s execution=%s current=%s reason=%s",
+            session_id[:8],
+            execution_id[:8],
+            str(current_execution_id)[:8],
+            reason[:120],
+        )
+        return False
+
+    clean_partial = _strip_streaming_progress_markers(partial_content or "").strip()
+    placeholder_id = assistant_message_id
+    placeholder_content = (
+        clean_partial + "\n\n⏳ _생성 중... (완료보고 자동 이어쓰기 중)_"
+        if clean_partial
+        else "⏳ _AI가 완료보고를 다시 생성 중입니다..._"
+    )
+    if placeholder_id:
+        await conn.execute(
+            """
+            UPDATE chat_messages
+            SET content = $2,
+                intent = 'streaming_placeholder',
+                model_used = 'streaming',
+                edited_at = NOW()
+            WHERE id = $1
+            """,
+            placeholder_id,
+            placeholder_content,
+        )
+    else:
+        placeholder_id = await conn.fetchval(
+            """
+            INSERT INTO chat_messages (
+                session_id, execution_id, role, content,
+                intent, model_used, tools_called
+            )
+            VALUES ($1, $2, 'assistant', $3, 'streaming_placeholder', 'streaming', '[]'::jsonb)
+            RETURNING id
+            """,
+            sid,
+            eid,
+            placeholder_content,
+        )
+
+    claimed = await conn.fetchval(
+        """
+        UPDATE chat_turn_executions
+        SET status = 'retrying',
+            retry_count = retry_count + 1,
+            assistant_message_id = $2,
+            completed_at = NULL,
+            error_message = $3,
+            updated_at = NOW()
+        WHERE id = $1
+          AND session_id = $4
+          AND status = 'interrupted'
+          AND retry_count < 5
+        RETURNING id
+        """,
+        eid,
+        placeholder_id,
+        f"interrupted_auto_retry_scheduled:{reason}"[:1000],
+        sid,
+    )
+    if not claimed:
+        return False
+
+    await conn.execute(
+        """
+        UPDATE chat_sessions
+        SET current_execution_id = $2,
+            updated_at = NOW()
+        WHERE id = $1
+        """,
+        sid,
+        eid,
+    )
+
+    recovery_instruction = (
+        "[자동 이어쓰기 지시]\n"
+        f"이전 응답은 `{reason[:180]}` 사유로 완료 응답 검증을 통과하지 못했습니다. "
+        "진행 로그, 도구 로드 안내, 다음 단계 예고를 반복하지 마세요. "
+        "지금까지 실제 확인한 사실만 사용해 최종 완료 보고를 작성하세요. "
+        "반드시 원인, 조치 내용, 검증 결과, 남은 리스크/다음 조치를 포함하세요. "
+        "커밋/푸시/배포/문서반영을 실제 수행하지 않았다면 완료했다고 보고하지 마세요."
+    )
+    task = _heartbeat_asyncio.create_task(
+        _resume_single_stream(
+            session_id,
+            placeholder_id,
+            clean_partial,
+            row["last_user_msg"] or "",
+            row["workspace_name"] or "CEO",
+            execution_id=execution_id,
+            requested_model=row["requested_model"],
+            recovery_instruction=recovery_instruction,
+        )
+    )
+    _active_bg_tasks[session_id] = task
+
+    def _on_auto_resume_done(_task, _sid=session_id, _eid=execution_id):
+        if _task.cancelled():
+            logger.warning("interrupted_auto_resume_cancelled session=%s execution=%s", _sid[:8], _eid[:8])
+            return
+        exc = _task.exception()
+        if exc:
+            logger.error(
+                "interrupted_auto_resume_failed session=%s execution=%s error=%s",
+                _sid[:8],
+                _eid[:8],
+                exc,
+            )
+        else:
+            logger.info("interrupted_auto_resume_completed session=%s execution=%s", _sid[:8], _eid[:8])
+
+    task.add_done_callback(_on_auto_resume_done)
+    logger.info(
+        "interrupted_auto_resume_scheduled session=%s execution=%s retry_count=%s reason=%s",
+        session_id[:8],
+        execution_id[:8],
+        retry_count + 1,
+        reason[:160],
+    )
+    return True
+
+
 async def _mark_execution_interrupted(
     conn,
     session_id: str,
@@ -1565,6 +1772,7 @@ async def _mark_execution_interrupted(
         )
 
     clean_partial = _strip_streaming_progress_markers(partial_content)
+    final_content = clean_partial
     assistant_message_id = pid
     if pid:
         if clean_partial:
@@ -1719,18 +1927,40 @@ async def _mark_execution_interrupted(
         eid,
     )
 
+    auto_resume_scheduled = False
+    if not is_superseded_cancel:
+        try:
+            auto_resume_scheduled = await _schedule_interrupted_auto_resume(
+                conn,
+                session_id,
+                execution_id,
+                assistant_message_id,
+                clean_partial,
+                reason,
+            )
+        except Exception as exc:
+            logger.error(
+                "interrupted_auto_resume_schedule_error session=%s execution=%s reason=%s error=%s",
+                session_id[:8],
+                execution_id[:8],
+                reason[:120],
+                exc,
+            )
+
     state = _streaming_state.get(str(session_id))
     if state and (
         not state.get("execution_id")
         or str(state.get("execution_id")) == str(execution_id)
     ):
         if clean_partial:
-            state["content"] = final_content
-        state["completed"] = True
+            state["content"] = final_content if not auto_resume_scheduled else (
+                clean_partial + "\n\n⏳ _생성 중... (완료보고 자동 이어쓰기 중)_"
+            )
+        state["completed"] = not auto_resume_scheduled
         state["updated_at"] = _bg_time.monotonic()
     task = _active_bg_tasks.get(str(session_id))
     current_task = _current_asyncio_task_or_none()
-    if task is not None and task is not current_task and not task.done():
+    if not auto_resume_scheduled and task is not None and task is not current_task and not task.done():
         task.cancel(msg=f"mark_interrupted:{reason[:80]}")
 
 
@@ -3445,6 +3675,7 @@ async def _resume_single_stream(
     workspace_name: str,
     execution_id: Optional[str] = None,
     requested_model: Optional[str] = None,
+    recovery_instruction: Optional[str] = None,
 ) -> None:
     """단일 세션의 중단된 스트리밍을 이어서 생성."""
     _resume_task = _heartbeat_asyncio.current_task()
@@ -3542,6 +3773,8 @@ async def _resume_single_stream(
             ) if partial_content else (
                 "[응답 복구 지침]\n서버 재시작으로 이전 응답 생성이 시작되지 못했습니다. 원래 사용자 지시에 처음부터 응답하세요."
             )
+            if recovery_instruction:
+                resume_instruction = f"{resume_instruction}\n\n{recovery_instruction}"
 
             # 3. 컨텍스트 빌드
             from app.services.context_builder import build_messages_context

@@ -235,5 +235,6 @@ edc3a77 feat: tool UI 접기/펼치기
 
 | 버전 | 날짜 | 변경 |
 |------|------|------|
+| v1.2 | 2026-06-02 | 응답중단 잔존 원인 추가 조치 — `output_validator_*`, `completion_contract_unresolved:*`, `todo_completion_gate_missing*` 경로가 terminal `interrupted`로 끝나 retry 0에 머무르던 문제를 자동 완료보고 이어쓰기로 전환. 정상 취소/새 지시 대체(`CancelledError`, `superseded`, `newer_user`, `new_execution`)는 자동 재시도 제외. |
 | v1.1 | 2026-04-30 | 스트리밍 중 배포 재시작 방지, blue/green resume owner 분리, DB placeholder 보존, e2e/브라우저 검증 기록 |
 | v1.0 | 2026-04-02 | 초기 작성 — 2026-03~04 변경 이력 통합 |
