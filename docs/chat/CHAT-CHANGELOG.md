@@ -8,6 +8,7 @@ _v1.0 | 2026-04-02 | 최초 작성_
 
 | 커밋 | 변경 | 구분 |
 |------|------|------|
+| 2026-06-02 | **Progress-tail completion block**: 긴 응답이라도 마지막이 "이제 확인/수정/실행하겠습니다" 같은 진행 예정문이면 최종 완료보고가 아닌 것으로 판정한다. TODO 게이트 미완료 시 execution을 `interrupted`로 되돌리고, 프론트는 `quality_details`와 말미 패턴을 보고 `완료 전 중단`을 표시해 완료 아이콘 오표시를 차단한다. | 🐛 Backend+Frontend |
 | 2026-06-02 | **Reply-to content pollution fix**: `reply_to_id` 처리 시 이전 AI 응답 전문을 user `content`에 합쳐 저장하던 경로를 차단했다. DB/화면/검색에는 CEO가 입력한 원문 질문만 저장하고, 이전 응답 인용은 현재 턴 LLM 컨텍스트에만 주입한다. | 🐛 Backend |
 | 2026-06-02 | **Completion contract auto-continue**: LLM stream `done`만으로 업무 완료 처리하지 않고, 최종 완료보고 조건(`response_completion_contract`)을 만족하지 못하면 저장/완료 전에 최대 3회 같은 스트림에서 자동 이어쓰기를 실행한다. 그래도 완료보고가 아니면 `completed`로 저장하지 않고 partial 보존 + recoverable error로 종료해 완료 아이콘 오표시를 차단한다. | 🐛 Backend |
 | 2026-06-02 | **Disconnect residual risk hardening**: 클라이언트 연결 끊김 후 background producer 자동취소 기본값을 65분으로 늘려 stale watchdog 정책보다 먼저 정상 장시간 응답을 중단하지 않게 하고, 프론트 streaming-stuck 판정은 토큰/이벤트/placeholder 진행 변화가 없을 때만 누적되도록 완화 | 🐛 Backend+Frontend |
@@ -22,6 +23,12 @@ Completion contract auto-continue:
 - `done` 이벤트는 “모델 스트림 종료”로만 보고, “업무 완료”는 completion contract 통과 여부로 별도 판정한다.
 - `missing_commit_push_disclosure`, ledger 충돌, 문서/배포 완료 미입증 등 완료보고 위반이 있으면 보정문을 붙여 바로 완료하지 않고 자동 continuation prompt를 실행한다.
 - continuation이 끝난 뒤에도 완료보고 조건을 만족하지 못하거나 이어쓰기 결과가 비어 있으면 `completion_contract_unresolved`/`completion_contract_continue_empty` 사유로 partial을 보존하고 execution을 interrupted 처리한다.
+
+Progress-tail completion block:
+- 2026-06-02 10:30~11:07 KST 세션 `d84b7c2c-64a5-4a80-9472-21170fd7d160`에서 assistant 본문이 4072자였지만 마지막 문장이 `이제 DB 수정과 코드 패치를 병렬 실행합니다.`로 끝나 completed 처리된 사례를 기준으로 보강했다.
+- 길이 제한 때문에 장문 진행 보고가 completion contract를 통과하던 허점을 제거했다. 말미 500자 안에 진행 예정문이 있으면 장문이라도 `final_report_missing`으로 처리한다.
+- TODO 게이트가 미완료 항목을 발견하면 저장된 assistant를 partial로 보존하되 execution은 `todo_completion_gate_missing`으로 `interrupted` 처리한다.
+- 프론트는 `quality_details.completion_gate_missing`, `completion_contract_adjusted`, `final_report_missing` 또는 말미 진행 예정문을 감지하면 `✅ 완료` 대신 `⚠️ 완료 전 중단`을 표시한다.
 
 Disconnect residual risk hardening:
 - `BG_AUTO_CANCEL_SEC` 기본값을 900초에서 3900초(65분)로 조정했다. 브라우저/SSE 연결이 끊긴 상태에서도 watchdog의 45분+20분 stale 판정보다 먼저 producer가 `client_gone_auto_cancel`로 종료되지 않게 한다.

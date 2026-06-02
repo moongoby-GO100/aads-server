@@ -155,6 +155,8 @@ LLM stream 종료
 - 자동 이어쓰기 중 heartbeat `phase=completion_auto_continue`를 보낼 수 있다.
 - 최대 횟수 이후에도 미해결이면 `completion_contract_unresolved:<violations>`로 중단 저장한다.
 - 이어쓰기 응답이 비어 있으면 `completion_contract_continue_empty:<violations>`로 중단 저장한다.
+- 긴 응답이라도 마지막 문장이 "이제 확인/수정/실행하겠습니다" 같은 진행 예정문이면 최종 보고로 보지 않는다. `output_validator`와 `response_completion_contract`가 말미 500자를 검사해 `final_report_missing`으로 차단한다.
+- TODO 게이트가 미완료 항목을 감지하면 `_save_and_update_session()` 저장 직후 execution을 `interrupted`로 되돌리고 `todo_completion_gate_missing` 사유를 남긴다.
 - 이 경우 프론트는 완료 아이콘/완료 토스트를 표시하지 않고 복구 가능한 중단 상태로 처리한다.
 
 ## 4. 타임아웃 정렬표
@@ -216,6 +218,7 @@ LLM stream 종료
 
 | 버전 | 날짜 | 변경 |
 |------|------|------|
+| v1.3 | 2026-06-02 | 긴 진행 예정문 말미/TODO 미완료 응답 completed 차단, 프론트 완료 아이콘 오표시 방지 |
 | v1.2 | 2026-06-02 | 최종 완료보고 전 completed 금지, completion contract auto-continue 최대 3회, 미해결 시 interrupted_partial 처리 |
 | v1.1 | 2026-06-01 | stream-resume delta-only 성공 오판 차단, interrupted_partial resume 대상화, watchdog idle/live-runtime 조건 보강 |
 | v1.0 | 2026-04-02 | 초기 작성 — 6계층 방어, 타임아웃표, A+B 적용 반영 |

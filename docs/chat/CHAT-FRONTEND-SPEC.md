@@ -76,6 +76,7 @@ type SSEEventType =
 | `last-response.just_completed=true` | 서버 최종 assistant로 교체/병합, 완료 아이콘 표시 |
 | `error.recoverable=true` + completion contract reason | 기존 버블 유지, 응답 중단/복구 가능 상태 표시, 완료 아이콘 금지 |
 | `interrupted_partial` | 부분 응답 표시, 이어쓰기/복구 경로 유지, 완료 아이콘 금지 |
+| assistant 말미가 진행 예정문이거나 `quality_details.completion_gate_missing=true` | `완료 전 중단` 표시, 완료 아이콘 금지 |
 
 백엔드 자동 이어쓰기 중에는 별도 새 버블을 만들지 않고 기존 스트리밍 버블에 토큰을 이어붙이는 것이 원칙입니다.
 
