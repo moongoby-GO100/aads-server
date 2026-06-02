@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import asyncio
 import structlog
 from typing import Any, List, Optional
 from uuid import UUID
@@ -314,6 +315,180 @@ def _has_live_streaming_runtime(session_id: UUID | str, cached_status: Optional[
     return bool(_task is not None and not _task.done())
 
 
+async def _schedule_recovery_auto_resume(
+    conn,
+    session_id: UUID,
+    execution_id: UUID,
+    assistant_message_id: Optional[UUID],
+    partial_content: str,
+) -> bool:
+    """Turn a recovered stale chat execution back into a retrying stream.
+
+    Recovery endpoints previously surfaced partial content and terminalized the
+    execution. For chat UX, a recoverable stale stream should keep answering
+    automatically when we still have the original user message and retry budget.
+    """
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT te.retry_count,
+                   te.requested_model,
+                   COALESCE(um.content, '') AS last_user_msg,
+                   w.name AS workspace_name
+            FROM chat_turn_executions te
+            JOIN chat_sessions s ON s.id = te.session_id
+            JOIN chat_workspaces w ON w.id = s.workspace_id
+            LEFT JOIN chat_messages um ON um.id = te.user_message_id
+            WHERE te.id = $1
+              AND te.session_id = $2
+            """,
+            execution_id,
+            session_id,
+        )
+        if not row:
+            return False
+        if (row["retry_count"] or 0) >= 5:
+            logger.warning(
+                "recovery_auto_resume_skip_hard_cap session=%s execution=%s retry_count=%s",
+                str(session_id)[:8],
+                str(execution_id)[:8],
+                row["retry_count"],
+            )
+            return False
+        if not (row["last_user_msg"] or "").strip():
+            logger.warning(
+                "recovery_auto_resume_skip_no_user session=%s execution=%s",
+                str(session_id)[:8],
+                str(execution_id)[:8],
+            )
+            return False
+
+        clean_partial = svc._strip_streaming_progress_markers(partial_content or "")
+        clean_partial = re.sub(
+            r"\n\n_\(응답이 중단되어 여기까지 보존되었습니다\.\)_\s*$",
+            "",
+            clean_partial,
+            flags=re.DOTALL,
+        ).strip()
+        placeholder_id = assistant_message_id
+        if placeholder_id:
+            await conn.execute(
+                """
+                UPDATE chat_messages
+                SET content = $2,
+                    intent = 'streaming_placeholder',
+                    model_used = 'streaming',
+                    edited_at = NOW()
+                WHERE id = $1
+                """,
+                placeholder_id,
+                (
+                    clean_partial
+                    + "\n\n⏳ _생성 중... (자동 이어쓰기 재시도 중)_"
+                    if clean_partial
+                    else "⏳ _AI가 응답을 다시 생성 중입니다..._"
+                ),
+            )
+        else:
+            placeholder_id = await conn.fetchval(
+                """
+                INSERT INTO chat_messages (
+                    session_id, execution_id, role, content,
+                    intent, model_used, tools_called
+                )
+                VALUES ($1, $2, 'assistant', $3, 'streaming_placeholder', 'streaming', '[]'::jsonb)
+                RETURNING id
+                """,
+                session_id,
+                execution_id,
+                (
+                    clean_partial
+                    + "\n\n⏳ _생성 중... (자동 이어쓰기 재시도 중)_"
+                    if clean_partial
+                    else "⏳ _AI가 응답을 다시 생성 중입니다..._"
+                ),
+            )
+
+        claimed = await conn.fetchval(
+            """
+            UPDATE chat_turn_executions
+            SET status = 'retrying',
+                retry_count = retry_count + 1,
+                assistant_message_id = $2,
+                completed_at = NULL,
+                error_message = 'recovery_auto_retry_scheduled',
+                updated_at = NOW()
+            WHERE id = $1
+              AND session_id = $3
+              AND status = 'interrupted'
+              AND retry_count < 5
+            RETURNING id
+            """,
+            execution_id,
+            placeholder_id,
+            session_id,
+        )
+        if not claimed:
+            return False
+
+        await conn.execute(
+            """
+            UPDATE chat_sessions
+            SET current_execution_id = $2,
+                updated_at = NOW()
+            WHERE id = $1
+            """,
+            session_id,
+            execution_id,
+        )
+
+        task = asyncio.create_task(
+            svc._resume_single_stream(
+                str(session_id),
+                placeholder_id,
+                clean_partial,
+                row["last_user_msg"] or "",
+                row["workspace_name"] or "CEO",
+                execution_id=str(execution_id),
+                requested_model=row["requested_model"],
+            )
+        )
+
+        def _on_recovery_resume_done(_task, _sid=str(session_id), _eid=str(execution_id)):
+            if _task.cancelled():
+                logger.warning(
+                    "recovery_auto_resume_cancelled session=%s execution=%s",
+                    _sid[:8],
+                    _eid[:8],
+                )
+                return
+            exc = _task.exception()
+            if exc:
+                logger.error(
+                    "recovery_auto_resume_error session=%s execution=%s error=%s",
+                    _sid[:8],
+                    _eid[:8],
+                    exc,
+                )
+
+        task.add_done_callback(_on_recovery_resume_done)
+        logger.info(
+            "recovery_auto_resume_scheduled session=%s execution=%s partial_len=%s",
+            str(session_id)[:8],
+            str(execution_id)[:8],
+            len(clean_partial),
+        )
+        return True
+    except Exception as exc:
+        logger.warning(
+            "recovery_auto_resume_schedule_failed session=%s execution=%s error=%s",
+            str(session_id)[:8],
+            str(execution_id)[:8],
+            exc,
+        )
+        return False
+
+
 async def _settle_stale_execution_for_recovery(
     conn,
     session_id: UUID,
@@ -434,9 +609,17 @@ async def _settle_stale_execution_for_recovery(
         session_id,
         _execution_uuid,
     )
+    _auto_retry_scheduled = await _schedule_recovery_auto_resume(
+        conn,
+        session_id,
+        _execution_uuid,
+        _assistant_id,
+        _clean_partial,
+    )
     return {
-        "is_streaming": False,
-        "just_completed": bool(_assistant_id and _clean_partial),
+        "is_streaming": bool(_auto_retry_scheduled),
+        "just_completed": bool(_assistant_id and _clean_partial and not _auto_retry_scheduled),
+        "auto_retry_scheduled": bool(_auto_retry_scheduled),
         "content_length": len(_clean_partial),
         "tool_count": _tc,
         "last_tool": _lt,
@@ -1592,6 +1775,14 @@ async def get_last_response(session_id: UUID):
                 has_live_runtime=_has_live_runtime,
             )
             if _settled:
+                if _settled.get("auto_retry_scheduled"):
+                    return {
+                        "found": False,
+                        "generating": True,
+                        "recovering": True,
+                        "execution_id": _settled.get("execution_id"),
+                        "last_event_id": _settled.get("last_event_id"),
+                    }
                 current_execution = None
             else:
                 if not current_execution["placeholder_id"]:

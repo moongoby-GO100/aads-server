@@ -187,6 +187,8 @@ LLM stream 종료
 - `/resume`은 `streaming_placeholder`뿐 아니라 최신 `interrupted_partial`/`interruption_notice`/`regenerated`/`continued` partial도 이어쓰기 대상으로 인정한다.
 - 중단된 execution을 재개할 때는 `retrying`, `completed_at=NULL`, `current_execution_id=<execution>`으로 복원한 뒤 `_resume_single_stream()`을 실행한다.
 - stale watchdog은 active background task가 있는 세션을 제외하고, `updated_at` idle 조건과 `last_event_id` 존재 여부에 따라 grace를 다르게 둔다.
+- recovery endpoint(`/last-response`, `/streaming-status`)가 dead running execution을 정리할 때도 retry budget이 남아 있으면 `interrupted`에서 멈추지 않고 즉시 `retrying`으로 복원해 `_resume_single_stream()`을 예약한다. 프론트는 이 경우 `generating/recovering=true`로 유지한다.
+- watchdog은 runner 전용 테이블이 아니라 `chat_turn_executions` 전체를 스캔한다. 채팅 응답도 같은 execution 테이블을 쓰므로 watchdog/recovery 정책은 채팅 세션에도 적용된다. 단, live runtime이 있으면 건드리지 않고, dead/stale 실행만 자동 이어쓰기 또는 terminalize 대상이 된다.
 
 ## 5. 끊김 시 사용자 체감 (2026-04-02 A+B 적용 후)
 
@@ -218,6 +220,7 @@ LLM stream 종료
 
 | 버전 | 날짜 | 변경 |
 |------|------|------|
+| v1.4 | 2026-06-02 | recovery endpoint stale 정리 후 자동 이어쓰기 예약, watchdog 채팅 적용 범위 명시 |
 | v1.3 | 2026-06-02 | 긴 진행 예정문 말미/TODO 미완료 응답 completed 차단, 프론트 완료 아이콘 오표시 방지 |
 | v1.2 | 2026-06-02 | 최종 완료보고 전 completed 금지, completion contract auto-continue 최대 3회, 미해결 시 interrupted_partial 처리 |
 | v1.1 | 2026-06-01 | stream-resume delta-only 성공 오판 차단, interrupted_partial resume 대상화, watchdog idle/live-runtime 조건 보강 |

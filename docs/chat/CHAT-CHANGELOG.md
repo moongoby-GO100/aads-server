@@ -8,6 +8,7 @@ _v1.0 | 2026-04-02 | 최초 작성_
 
 | 커밋 | 변경 | 구분 |
 |------|------|------|
+| 2026-06-02 | **Recovery auto-resume**: `/last-response`와 `/streaming-status`가 stale running execution을 정리할 때 partial 보존에서 끝내지 않고 retry budget이 남아 있으면 같은 execution을 `retrying`으로 복원해 `_resume_single_stream()`을 자동 예약한다. watchdog은 `chat_turn_executions` 전체를 대상으로 하므로 runner뿐 아니라 채팅 execution에도 적용된다는 범위를 문서화했다. | 🐛 Backend |
 | 2026-06-02 | **Progress-tail completion block**: 긴 응답이라도 마지막이 "이제 확인/수정/실행하겠습니다" 같은 진행 예정문이면 최종 완료보고가 아닌 것으로 판정한다. TODO 게이트 미완료 시 execution을 `interrupted`로 되돌리고, 프론트는 `quality_details`와 말미 패턴을 보고 `완료 전 중단`을 표시해 완료 아이콘 오표시를 차단한다. | 🐛 Backend+Frontend |
 | 2026-06-02 | **Reply-to content pollution fix**: `reply_to_id` 처리 시 이전 AI 응답 전문을 user `content`에 합쳐 저장하던 경로를 차단했다. DB/화면/검색에는 CEO가 입력한 원문 질문만 저장하고, 이전 응답 인용은 현재 턴 LLM 컨텍스트에만 주입한다. | 🐛 Backend |
 | 2026-06-02 | **Completion contract auto-continue**: LLM stream `done`만으로 업무 완료 처리하지 않고, 최종 완료보고 조건(`response_completion_contract`)을 만족하지 못하면 저장/완료 전에 최대 3회 같은 스트림에서 자동 이어쓰기를 실행한다. 그래도 완료보고가 아니면 `completed`로 저장하지 않고 partial 보존 + recoverable error로 종료해 완료 아이콘 오표시를 차단한다. | 🐛 Backend |
@@ -29,6 +30,12 @@ Progress-tail completion block:
 - 길이 제한 때문에 장문 진행 보고가 completion contract를 통과하던 허점을 제거했다. 말미 500자 안에 진행 예정문이 있으면 장문이라도 `final_report_missing`으로 처리한다.
 - TODO 게이트가 미완료 항목을 발견하면 저장된 assistant를 partial로 보존하되 execution은 `todo_completion_gate_missing`으로 `interrupted` 처리한다.
 - 프론트는 `quality_details.completion_gate_missing`, `completion_contract_adjusted`, `final_report_missing` 또는 말미 진행 예정문을 감지하면 `✅ 완료` 대신 `⚠️ 완료 전 중단`을 표시한다.
+
+Recovery auto-resume:
+- 기존 recovery endpoint는 dead running execution을 발견하면 partial을 `interrupted_partial`로 보존하고 `current_execution_id=NULL`로 비워 사용자가 `이어서 진행해`를 보내기 전까지 멈췄다.
+- 개선 후 retry budget이 남아 있고 원 user 메시지가 있으면 assistant row를 다시 `streaming_placeholder`로 복원하고 execution을 `retrying`, `completed_at=NULL`, `error_message='recovery_auto_retry_scheduled'`로 전환한 뒤 `_resume_single_stream()`을 자동 예약한다.
+- `/last-response`는 자동 재시도가 예약된 경우 `generating=true`, `recovering=true`를 반환해 프론트가 완료/중단으로 오판하지 않게 한다.
+- watchdog은 runner 전용이 아니라 `chat_turn_executions` 전체를 스캔한다. 채팅 응답도 같은 테이블을 사용하므로, live runtime이 사라진 stale 채팅 execution은 watchdog/recovery 정책 대상이 된다.
 
 Disconnect residual risk hardening:
 - `BG_AUTO_CANCEL_SEC` 기본값을 900초에서 3900초(65분)로 조정했다. 브라우저/SSE 연결이 끊긴 상태에서도 watchdog의 45분+20분 stale 판정보다 먼저 producer가 `client_gone_auto_cancel`로 종료되지 않게 한다.

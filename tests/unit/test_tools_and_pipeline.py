@@ -348,7 +348,7 @@ class TestOutputValidator:
         )
 
         assert result.is_valid is False
-        assert result.violation_type == "REPORT_STRUCTURE_WEAK"
+        assert result.violation_type == "PROGRESS_ONLY_RESPONSE"
 
     def test_status_report_quality_accepts_compact_structured_report(self):
         from app.services.output_validator import validate_response
@@ -594,6 +594,55 @@ class TestRegressions:
 
         assert settled is not None
         assert settled["just_completed"] is True
+
+    @pytest.mark.asyncio
+    async def test_recovery_auto_resume_restores_retrying_execution(self, monkeypatch):
+        """recovery 정리 후 retry budget이 있으면 자동 이어쓰기를 예약."""
+        from app.routers import chat as chat_router
+
+        execution_id = uuid4()
+        session_id = uuid4()
+        assistant_id = uuid4()
+        calls = {"execute": [], "fetchval": [], "resumed": []}
+
+        class FakeConn:
+            async def fetchrow(self, query, *args):
+                return {
+                    "retry_count": 0,
+                    "requested_model": "gpt-5.5",
+                    "last_user_msg": "원래 질문",
+                    "workspace_name": "CEO",
+                }
+
+            async def fetchval(self, query, *args):
+                calls["fetchval"].append((query, args))
+                if "UPDATE chat_turn_executions" in query:
+                    return execution_id
+                return None
+
+            async def execute(self, query, *args):
+                calls["execute"].append((query, args))
+
+        async def fake_resume(*args, **kwargs):
+            calls["resumed"].append((args, kwargs))
+
+        monkeypatch.setattr(chat_router.svc, "_strip_streaming_progress_markers", lambda text: text)
+        monkeypatch.setattr(chat_router.svc, "_resume_single_stream", fake_resume)
+
+        scheduled = await chat_router._schedule_recovery_auto_resume(
+            FakeConn(),
+            session_id,
+            execution_id,
+            assistant_id,
+            "partial answer\n\n_(응답이 중단되어 여기까지 보존되었습니다.)_",
+        )
+
+        await chat_router.asyncio.sleep(0)
+
+        assert scheduled is True
+        assert calls["resumed"]
+        assert any("status = 'retrying'" in query for query, _ in calls["fetchval"])
+        assert any("current_execution_id" in query for query, _ in calls["execute"])
 
     @pytest.mark.asyncio
     async def test_settle_stale_execution_keeps_recent_live_runtime(self, monkeypatch):
