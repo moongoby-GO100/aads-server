@@ -64,6 +64,16 @@ _PROGRESS_ONLY_PATTERNS: List[str] = [
     "이제 ",
 ]
 
+_PROGRESS_TAIL_RE = re.compile(
+    r"(?:"
+    r"(?:이제|먼저|다음으로|추가로|바로|곧)?\s*"
+    r".{0,80}?"
+    r"(?:확인|조회|점검|분석|파악|조사|검토|진행|실행|처리|수정|패치|적용|반영|준비)"
+    r"(?:하겠습니다|하겠습니?다|합니다|하겠습니다\.|합니다\.)"
+    r")\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
 _COMPLETION_EVIDENCE_PATTERNS: List[str] = [
     "결론",
     "원인:",
@@ -208,7 +218,12 @@ def _looks_progress_only_response(response_text: str, intent: str) -> bool:
     if normalized_intent not in _REPORT_QUALITY_INTENTS:
         return False
     text = response_text.strip()
-    if not text or len(text) > 700:
+    if not text:
+        return False
+    tail = text[-500:].strip()
+    if _PROGRESS_TAIL_RE.search(tail):
+        return True
+    if len(text) > 700:
         return False
     progress_hits = sum(1 for pattern in _PROGRESS_ONLY_PATTERNS if pattern in text)
     if progress_hits < 1:

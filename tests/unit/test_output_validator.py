@@ -105,3 +105,27 @@ def test_pipeline_runner_rejects_short_progress_log_as_final_response():
 
     assert result.is_valid is False
     assert result.violation_type == "PROGRESS_ONLY_RESPONSE"
+
+
+def test_pipeline_runner_rejects_long_tool_backed_progress_tail_as_final_response():
+    progress_log = (
+        "핵심 확인 완료. #119는 LIVE 상태이고 실매매 차단 조건도 확인했습니다. "
+        "근본 원인 요약: bet_amount가 현재가보다 작아 quantity=0이 되었습니다. "
+        "포트폴리오 잔고와 fund_pool 상태를 확인했고, signal_processor.py의 bet_size 계산 흐름도 확인했습니다. "
+        "추가 설명을 길게 작성하여 700자를 넘깁니다. 도구 호출이 있었더라도 마지막 문장이 실행 예고라면 "
+        "최종 완료 보고로 저장되면 안 됩니다. 사용자는 조치와 보고를 요청했으므로 실제 조치 결과, 검증 결과, "
+        "남은 리스크가 마지막에 포함되어야 합니다. 이 응답은 중간 실측 로그와 원인 요약은 포함하지만 "
+        "아직 DB 수정과 코드 패치를 끝냈다는 보고가 없습니다. 따라서 스트리밍이 정상 done을 내더라도 "
+        "completed bubble로 표시되면 안 됩니다. "
+        "이제 DB 수정과 코드 패치를 병렬 실행합니다."
+    )
+
+    result = validate_response(
+        progress_log,
+        tools_called=True,
+        intent="pipeline_runner",
+        user_message="즉시 권장조치 진행해 그리고 119카드 실매매 활성화 하고 보고해",
+    )
+
+    assert result.is_valid is False
+    assert result.violation_type == "PROGRESS_ONLY_RESPONSE"

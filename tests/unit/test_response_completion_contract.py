@@ -147,3 +147,29 @@ def test_completion_contract_blocks_short_progress_log_without_final_report():
     assert result.adjusted is True
     assert "final_report_missing" in result.violation_types
     assert "최종 완료보고가 아니라 진행 안내/중간 로그" in result.response_text
+
+
+def test_completion_contract_blocks_long_progress_tail_without_final_report():
+    progress_log = (
+        "핵심 확인 완료. #119는 LIVE 상태이고 실매매 차단 조건도 확인했습니다. "
+        "근본 원인 요약: bet_amount가 현재가보다 작아 quantity=0이 되었습니다. "
+        "포트폴리오 잔고와 fund_pool 상태를 확인했고, signal_processor.py의 bet_size 계산 흐름도 확인했습니다. "
+        "추가 설명을 길게 작성하여 900자를 넘깁니다. 완료보고 계약은 짧은 응답뿐 아니라 긴 진행 로그도 "
+        "마지막 문장이 실행 예고이면 완료로 인정하면 안 됩니다. 사용자는 조치와 보고를 요청했으므로 "
+        "조치 결과, 검증 결과, 남은 리스크가 마지막에 포함되어야 합니다. 이 응답은 중간 실측 로그와 "
+        "원인 요약은 포함하지만 아직 DB 수정과 코드 패치를 끝냈다는 보고가 없습니다. "
+        "따라서 스트리밍이 정상 done을 내더라도 completed bubble로 표시되면 안 됩니다. "
+        "문장을 더 늘려 길이 예외를 확실히 우회합니다. 운영 채팅에서는 도구 호출 이벤트가 많이 누적되더라도 "
+        "최종 완료보고가 없으면 미완료 상태로 보존되어야 합니다. "
+        "이제 DB 수정과 코드 패치를 병렬 실행합니다."
+    )
+
+    result = evaluate_completion_contract(
+        response_text=progress_log,
+        user_msg="즉시 권장조치 진행해 그리고 119카드 실매매 활성화 하고 보고해",
+        intent="pipeline_runner",
+        changes=[],
+    )
+
+    assert result.adjusted is True
+    assert "final_report_missing" in result.violation_types

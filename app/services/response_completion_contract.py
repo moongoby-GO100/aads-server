@@ -92,6 +92,16 @@ _PROGRESS_ONLY_MARKERS = (
     "먼저 ",
 )
 
+_PROGRESS_TAIL_RE = re.compile(
+    r"(?:"
+    r"(?:이제|먼저|다음으로|추가로|바로|곧)?\s*"
+    r".{0,80}?"
+    r"(?:확인|조회|점검|분석|파악|조사|검토|진행|실행|처리|수정|패치|적용|반영|준비)"
+    r"(?:하겠습니다|하겠습니?다|합니다|하겠습니다\.|합니다\.)"
+    r")\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
 _FINAL_REPORT_EVIDENCE = (
     "최종",
     "결론",
@@ -193,7 +203,11 @@ def _looks_like_incomplete_final_report(response_text: str, user_msg: str, inten
         return False
 
     text = (response_text or "").strip()
-    if not text or len(text) > 900:
+    if not text:
+        return False
+    if _PROGRESS_TAIL_RE.search(text[-500:].strip()):
+        return True
+    if len(text) > 900:
         return False
 
     progress_hits = sum(1 for marker in _PROGRESS_ONLY_MARKERS if marker in text)

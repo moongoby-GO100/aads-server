@@ -4369,7 +4369,7 @@ def _message_select_fields(fields: str) -> str:
             "id, session_id, role, LEFT(content, 200) AS content, "
             "LENGTH(content) AS content_length, "
             "(LENGTH(content) > 200) AS is_truncated, "
-            "intent, model_used, quality_score, created_at, edited_at, "
+            "intent, model_used, quality_score, quality_details, created_at, edited_at, "
             "bookmarked, "
             "(attachments IS NOT NULL AND attachments::text != '[]' AND attachments::text != 'null') AS has_attachments, "
             f"(jsonb_array_length({_tool_events}) > 0) AS has_tools, "
@@ -5082,6 +5082,23 @@ async def _save_and_update_session(
                 tools_called=normalized_tools_called,
                 conn=conn,
             )
+            if _execution_uuid and _todo_gate and not _todo_gate.get("all_completed", True):
+                _missing_titles = _todo_gate.get("missing_titles") or []
+                logger.warning(
+                    "todo_completion_gate_blocked_completed session=%s execution=%s missing=%s",
+                    str(sid)[:8],
+                    str(_execution_uuid)[:8],
+                    _missing_titles[:5],
+                )
+                await _mark_execution_interrupted(
+                    conn,
+                    str(sid),
+                    str(_execution_uuid),
+                    "todo_completion_gate_missing",
+                    partial_content=content,
+                    delete_empty_placeholder=False,
+                )
+                return
             if _execution_uuid:
                 _exec_row = await conn.fetchrow(
                     """
