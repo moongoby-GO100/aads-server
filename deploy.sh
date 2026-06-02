@@ -606,11 +606,12 @@ case "$MODE" in
         echo "[deploy.sh] ① ${NEW_CONTAINER} 빌드 + 시작..."
         docker compose $COMPOSE_FILE $PROFILE_CMD up -d --build --no-deps "$NEW_CONTAINER"
 
-        # ② 새 컨테이너 헬스체크 (최대 90초)
-        echo "[deploy.sh] ② ${NEW_CONTAINER} 헬스체크 (최대 90초)..."
+        # ② 새 컨테이너 헬스체크
+        BG_HEALTH_MAX_WAIT="${AADS_DEPLOY_BG_HEALTH_MAX_WAIT:-150}"
+        echo "[deploy.sh] ② ${NEW_CONTAINER} 헬스체크 (최대 ${BG_HEALTH_MAX_WAIT}초)..."
         BG_ELAPSED=0
         BG_OK=false
-        while [[ $BG_ELAPSED -lt 90 ]]; do
+        while [[ $BG_ELAPSED -lt "$BG_HEALTH_MAX_WAIT" ]]; do
             sleep 3
             BG_ELAPSED=$((BG_ELAPSED + 3))
             if curl -sf "http://127.0.0.1:${NEW_PORT}/api/v1/health" >/dev/null 2>&1; then
@@ -618,7 +619,7 @@ case "$MODE" in
                 BG_OK=true
                 break
             fi
-            echo "[deploy.sh] 대기중... ${BG_ELAPSED}/90초"
+            echo "[deploy.sh] 대기중... ${BG_ELAPSED}/${BG_HEALTH_MAX_WAIT}초"
         done
 
         if [[ "$BG_OK" != "true" ]]; then
