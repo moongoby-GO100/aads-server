@@ -2152,16 +2152,22 @@ async def resume_interrupted(session_id: UUID):
     # F-5: retry_count hard cap + increment for manual resume
     if row["execution_id"]:
         async with pool.acquire() as conn2:
-            _rc = await conn2.fetchval(
-                "SELECT retry_count FROM chat_turn_executions WHERE id = $1",
+            _cap_row = await conn2.fetchrow(
+                "SELECT retry_count, error_message FROM chat_turn_executions WHERE id = $1",
                 uuid.UUID(row["execution_id"]),
             )
-            if (_rc or 0) >= 5:
+            _rc = (_cap_row["retry_count"] if _cap_row else 0) or 0
+            _err = (_cap_row["error_message"] if _cap_row else "") or ""
+            _resume_cap_boundary = _rc == 5 and _err == "execution_resume_attempt_limit_exceeded"
+            if _rc > 5 or (_rc >= 5 and not _resume_cap_boundary):
                 return {"resumed": False, "message": f"재시도 한도 초과 (retry_count={_rc}). 새 메시지를 보내주세요."}
             await conn2.execute(
                 """
                 UPDATE chat_turn_executions
-                SET retry_count = retry_count + 1,
+                SET retry_count = CASE
+                        WHEN retry_count < 5 THEN retry_count + 1
+                        ELSE retry_count
+                    END,
                     status = 'retrying',
                     completed_at = NULL,
                     error_message = NULL,
