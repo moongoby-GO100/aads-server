@@ -31,6 +31,7 @@ DEFAULT_SERVER_URL = "wss://aads.newtalk.kr/api/v1/pc-agent/ws"
 HTTP_BASE = "https://aads.newtalk.kr"
 CRASH_COUNT_FILE = INSTALL_DIR / ".crash_count"
 MAX_CRASHES_BEFORE_REDOWNLOAD = 3
+MAX_REDOWNLOADS_PER_HOUR = 3
 SELF_UPDATE_EXIT_CODE = 42
 
 # ---------------------------------------------------------------------------
@@ -202,6 +203,39 @@ def _set_crash_count(n: int) -> None:
     """크래시 카운터 저장."""
     try:
         CRASH_COUNT_FILE.write_text(str(n), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _can_redownload() -> tuple[bool, int]:
+    """시간당 MAX_REDOWNLOADS_PER_HOUR 이내인지 확인.
+
+    반환: (허용 여부, 최근 1시간 시도 횟수)
+    .redownload_log 에 timestamp(float) 공백 구분 저장. 1시간 초과 항목 제거.
+    crash 분기 + exit=0 분기 + 주기 업데이트 분기가 공유하여 무한 다운로드 루프 차단.
+    """
+    rdl_file = INSTALL_DIR / ".redownload_log"
+    now = time.time()
+    try:
+        entries = [float(x) for x in rdl_file.read_text(encoding="utf-8").split() if x]
+    except Exception:
+        entries = []
+    entries = [t for t in entries if now - t < 3600]
+    return (len(entries) < MAX_REDOWNLOADS_PER_HOUR, len(entries))
+
+
+def _record_redownload() -> None:
+    """다운로드 시도 기록 — circuit breaker 카운팅."""
+    rdl_file = INSTALL_DIR / ".redownload_log"
+    now = time.time()
+    try:
+        entries = [float(x) for x in rdl_file.read_text(encoding="utf-8").split() if x]
+    except Exception:
+        entries = []
+    entries = [t for t in entries if now - t < 3600]
+    entries.append(now)
+    try:
+        rdl_file.write_text(" ".join(str(t) for t in entries), encoding="utf-8")
     except Exception:
         pass
 
@@ -575,8 +609,23 @@ def main() -> None:
                     try:
                         need_upd, rv = check_update(cfg)
                         if need_upd:
-                            logger.info("exit=0 VERSION mismatch - self-update")
+                            ok_dl, used = _can_redownload()
+                            if not ok_dl:
+                                logger.error(
+                                    "exit=0 VERSION mismatch but redownload circuit OPEN (%d/%d) — skip download",
+                                    used, MAX_REDOWNLOADS_PER_HOUR,
+                                )
+                                time.sleep(60)
+                                try:
+                                    proc = run_agent(cfg)
+                                except SystemExit:
+                                    proc = None
+                                if proc is None:
+                                    continue
+                                continue
+                            logger.info("exit=0 VERSION mismatch - self-update (redownload %d/%d)", used + 1, MAX_REDOWNLOADS_PER_HOUR)
                             _set_crash_count(0)
+                            _record_redownload()
                             download_update(cfg, rv)
                             time.sleep(3)
                             try:
@@ -590,21 +639,52 @@ def main() -> None:
                             continue
                     except Exception:
                         pass
+                    # exit code 0 with matching version = normal exit, not a crash
+                    logger.info("에이전트 정상 종료 (코드 0, 버전 일치) — 크래시 카운트 생략하고 재기동")
+                    time.sleep(5)
+                    try:
+                        proc = run_agent(cfg)
+                    except SystemExit:
+                        logger.error("exit=0 run_agent() SystemExit — mutex 충돌, 재시도")
+                        proc = None
+                    if proc is None:
+                        continue
+                    continue
 
                 crash_n = _get_crash_count() + 1
                 _set_crash_count(crash_n)
                 logger.warning("에이전트 종료 (코드 %s) — 크래시 %d회", ret, crash_n)
 
                 if crash_n >= MAX_CRASHES_BEFORE_REDOWNLOAD:
-                    logger.warning("크래시 %d회 → 에이전트 코드 강제 재다운로드", crash_n)
-                    _force_redownload()
-                    _set_crash_count(0)
+                    # --- redownload circuit breaker ---
+                    _rdl_file = INSTALL_DIR / ".redownload_log"
+                    _now = time.time()
                     try:
-                        need, remote_ver = check_update(cfg)
-                        if need:
-                            download_update(cfg, remote_ver)
-                    except Exception as e:
-                        logger.error("강제 재다운로드 실패: %s", e)
+                        _rdl_entries = [float(x) for x in _rdl_file.read_text(encoding="utf-8").split() if x]
+                    except Exception:
+                        _rdl_entries = []
+                    # keep only entries within the last hour
+                    _rdl_entries = [t for t in _rdl_entries if _now - t < 3600]
+                    if len(_rdl_entries) >= MAX_REDOWNLOADS_PER_HOUR:
+                        logger.error(
+                            "강제 재다운로드 횟수 초과 (%d회/시간) — 재다운로드 건너뜀, 5초 후 재시도",
+                            MAX_REDOWNLOADS_PER_HOUR,
+                        )
+                    else:
+                        logger.warning("크래시 %d회 → 에이전트 코드 강제 재다운로드", crash_n)
+                        _rdl_entries.append(_now)
+                        try:
+                            _rdl_file.write_text(" ".join(str(t) for t in _rdl_entries), encoding="utf-8")
+                        except Exception:
+                            pass
+                        _force_redownload()
+                        _set_crash_count(0)
+                        try:
+                            need, remote_ver = check_update(cfg)
+                            if need:
+                                download_update(cfg, remote_ver)
+                        except Exception as e:
+                            logger.error("강제 재다운로드 실패: %s", e)
 
                 time.sleep(5)
                 try:
@@ -620,10 +700,19 @@ def main() -> None:
                 last_update_check = time.time()
                 try:
                     need, remote_ver = check_update(cfg)
+                    ok_dl, used = (True, 0)
                     if need:
-                        logger.info("업데이트 발견: %s — 에이전트 재시작", remote_ver)
+                        ok_dl, used = _can_redownload()
+                    if need and not ok_dl:
+                        logger.error(
+                            "주기 업데이트 발견(%s) but redownload circuit OPEN (%d/%d) — skip",
+                            remote_ver, used, MAX_REDOWNLOADS_PER_HOUR,
+                        )
+                    elif need:
+                        logger.info("업데이트 발견: %s — 에이전트 재시작 (redownload %d/%d)", remote_ver, used + 1, MAX_REDOWNLOADS_PER_HOUR)
                         proc.terminate()
                         proc.wait(timeout=10)
+                        _record_redownload()
                         download_update(cfg, remote_ver)
                         _new_proc = None
                         for _retry in range(3):
