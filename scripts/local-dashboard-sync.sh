@@ -31,7 +31,8 @@ compute_source_hash() {
         -o -path './node_modules' -o -path './node_modules/*' \
         -o -path './.next' -o -path './.next/*' \
         -o -path './docs' -o -path './docs/*' \
-        -o -path './reports' -o -path './reports/*' \) -prune \
+        -o -path './reports' -o -path './reports/*' \
+        -o -path './deploy-logs' -o -path './deploy-logs/*' \) -prune \
         -o -type f \
         ! -name 'tsconfig.tsbuildinfo' \
         ! -name '.active_port' \
@@ -59,6 +60,7 @@ log "dashboard source changed (${OLD_HASH:0:8} → ${CURRENT_HASH:0:8}), deployi
 if bash "$DASHBOARD_DIR/deploy.sh" >> "$LOG" 2>&1; then
     echo "$CURRENT_HASH" > "$HASH_FILE"
     log "dashboard blue-green deploy done"
+    docker image prune -f --filter "dangling=true" >> "$LOG" 2>&1 || log "dashboard dangling image prune skipped"
 else
     log "dashboard deploy FAILED — kept current dashboard"
 fi
