@@ -1,5 +1,20 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-04 KST) - SaaS multitenant data model foundation
+- 배경: TASK_ID `AADS-SaaS-001-CANON` 선행 작업으로 AADS 단일 CEO 운영 DB를 tenant/organization 기반 SaaS 모델로 전환하기 위한 P0 스키마 토대를 요청받았다.
+- 조치:
+  - `migrations/100_saas_multitenant_foundation.sql`: `tenants`, `tenant_memberships`, `tenant_invites`를 추가하고 `internal` tenant를 seed한다. 기존 `saas_users`, `chat_workspaces`, `chat_sessions`, `chat_messages`는 `internal` tenant로 backfill한다.
+  - 동일 마이그레이션에서 `saas_users.default_tenant_id`, 핵심 채팅 테이블 `tenant_id`를 추가하고 FK, composite FK, unique 제약, tenant별 조회 인덱스를 구성했다.
+  - 기존 채팅 코드가 당장 `tenant_id`를 넘기지 않아도 깨지지 않도록 DB trigger가 `chat_sessions`는 workspace tenant에서, `chat_messages`는 session tenant에서 자동 상속하게 했다.
+  - `app/auth.py`, `app/api/auth.py`: 신규 SaaS 가입자를 default tenant membership에 넣고, 로그인/JWT/auth-me 응답에 `tenant_id`를 포함하도록 보강했다.
+  - `tests/unit/test_saas_multitenant_migration.py`: 마이그레이션의 핵심 테이블, backfill, FK/trigger/index 존재를 정적 검증하는 회귀 테스트를 추가했다.
+- 검증:
+  - `python3 -m pytest tests/unit/test_saas_multitenant_migration.py -q` 통과(3 passed).
+  - `python3 -m py_compile app/auth.py app/api/auth.py` 통과.
+- 미검증/주의:
+  - 운영 DB에 마이그레이션을 직접 적용하지 않았다.
+  - tenant별 API 접근제어 필터링은 다음 SaaS 작업 범위로 남아 있다. 이번 작업은 데이터 모델과 기본 귀속 기반 구축까지다.
+
 ## 현재 진행 상태 (2026-06-01 16:55 KST) - Chat resume recovery hardening
 - 배경: CEO가 스트리밍 중 끊긴 뒤 `이어서` 진행이 실패하는 재발 원인 보고를 승인했고, 전체 조치 및 문서/기술문서 반영을 지시했다.
 - 실측:

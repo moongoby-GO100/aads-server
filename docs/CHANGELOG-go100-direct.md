@@ -16243,3 +16243,48 @@ def _build_skip_reaso
 ## [2026-06-01 11:32:15 KST] [GO100] backend/app/services/go100/execution/fill_sync_service.py
 - Chat-Direct 수정: patch:         # v4_trade_executions 동기화 (dashb→        # v4_trade_executions 동기화 (dashb
 - finalize: pending
+
+## [2026-06-04 16:57:15 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: - 조치: frontend에서 pnpm build를 재실행해 produc→- 조치: frontend에서 pnpm build를 재실행해 produc
+- finalize: pending
+
+## [2026-06-04 16:58:24 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: python3 -c "from pathlib import Path; p=Path('HANDOVER.md'); old='- 조치: frontend
+- finalize: pending
+
+## [2026-06-04 16:59:16 KST] [GO100] scripts/update_card129_scenarioA.py
+- Chat-Direct 수정: write: scripts/update_card129_scenarioA.py
+- finalize: pending
+
+## [2026-06-04 17:01:25 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
+- Chat-Direct 수정: patch:     condition_terms = (
+        "전략", "전→    condition_terms = (
+        "전략", "전
+- finalize: pending
+
+## [2026-06-04 17:02:34 KST] [GO100] scripts/bt129_scenA_fast.py
+- Chat-Direct 수정: write: scripts/bt129_scenA_fast.py
+- finalize: pending
+
+## [2026-06-04 17:02:39 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
+- Chat-Direct 수정: patch:         _strategy_id = _extract_strategy→        _strategy_id = _extract_strategy
+- finalize: pending
+
+## [2026-06-04 17:03:46 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
+- Chat-Direct 수정: patch:         _has_strategy_context = any(
+   →        _has_strategy_context = _strateg
+- finalize: pending
+
+## [2026-06-04 17:04:56 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
+- Chat-Direct 수정: patch:             _append_tool_once(_tool_plan→            _append_tool_once(_tool_plan
+- finalize: pending
+
+## [2026-06-04 17:05:05 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: patch:             WITH go100 AS (
+            →            WITH active_accounts AS (
+  
+- finalize: pending
+
+## [2026-06-04 17:05:08 KST] [GO100] backend/app/routers/go100/portfolio_router.py
+- Chat-Direct 수정: run_remote_command: tail -10 /tmp/bt129_scenA.log
+- finalize: pending

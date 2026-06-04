@@ -43,6 +43,7 @@ class AuthResponse(BaseModel):
     email: str
     name: Optional[str] = None
     is_admin: bool = False
+    tenant_id: Optional[str] = None
 
 
 @router.post("/auth/register", response_model=AuthResponse)
@@ -62,7 +63,8 @@ async def register(req: RegisterRequest):
         raise HTTPException(status_code=500, detail="회원가입 처리 중 오류가 발생했습니다")
 
     uid = str(user["id"])  # DB returns int, JWT/response need str
-    token = auth_module.create_token(uid, user["email"])
+    tenant_id = str(user.get("default_tenant_id") or "") or None
+    token = auth_module.create_token(uid, user["email"], tenant_id=tenant_id)
     logger.info("SaaS 회원가입 완료: %s", req.email)
     return AuthResponse(
         token=token,
@@ -70,6 +72,7 @@ async def register(req: RegisterRequest):
         email=user["email"],
         name=user.get("name"),
         is_admin=False,
+        tenant_id=tenant_id,
     )
 
 
@@ -83,22 +86,26 @@ async def login(req: LoginRequest):
     saas_user = await auth_module.authenticate_saas_user(req.email, req.password)
     if saas_user:
         uid = str(saas_user["id"])  # DB returns int, JWT/response need str
-        token = auth_module.create_token(uid, saas_user["email"])
+        tenant_id = saas_user.get("tenant_id")
+        token = auth_module.create_token(uid, saas_user["email"], tenant_id=tenant_id)
         return AuthResponse(
             token=token,
             user_id=uid,
             email=saas_user["email"],
             name=saas_user.get("name"),
             is_admin=False,
+            tenant_id=tenant_id,
         )
 
     if auth_module.ADMIN_PASSWORD and auth_module.check_admin_credentials(req.email, req.password):
-        token = auth_module.create_token("admin", req.email, is_admin=True)
+        tenant_id = await auth_module.get_internal_tenant_id()
+        token = auth_module.create_token("admin", req.email, is_admin=True, tenant_id=tenant_id)
         return AuthResponse(
             token=token,
             user_id="admin",
             email=req.email,
             is_admin=True,
+            tenant_id=tenant_id,
         )
 
     raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다")
@@ -131,9 +138,14 @@ async def e2e_inject(
     saas_user = await auth_module.authenticate_saas_user(email, password)
     if saas_user:
         uid = str(saas_user["id"])
-        token = auth_module.create_token(uid, saas_user["email"])
+        token = auth_module.create_token(uid, saas_user["email"], tenant_id=saas_user.get("tenant_id"))
     elif auth_module.ADMIN_PASSWORD and auth_module.check_admin_credentials(email, password):
-        token = auth_module.create_token("admin", email, is_admin=True)
+        token = auth_module.create_token(
+            "admin",
+            email,
+            is_admin=True,
+            tenant_id=await auth_module.get_internal_tenant_id(),
+        )
 
     if not token:
         raise HTTPException(status_code=401, detail="자격증명 인증 실패")
@@ -171,4 +183,5 @@ async def get_me(authorization: Optional[str] = Header(None)):
         "user_id": payload.get("sub"),
         "email": payload.get("email"),
         "is_admin": payload.get("is_admin", False),
+        "tenant_id": payload.get("tenant_id"),
     }
