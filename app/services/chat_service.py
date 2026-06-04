@@ -1117,36 +1117,54 @@ async def _get_or_create_turn_execution(
     return str(execution_id)
 
 
-async def get_execution(execution_id: str) -> Optional[Dict[str, Any]]:
+async def get_execution(execution_id: str, tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     async with get_pool().acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT * FROM chat_turn_executions WHERE id = $1",
-            uuid.UUID(execution_id),
-        )
+        if tenant_id:
+            row = await conn.fetchrow(
+                """
+                SELECT te.*
+                  FROM chat_turn_executions te
+                  JOIN chat_sessions s ON s.id = te.session_id
+                 WHERE te.id = $1
+                   AND s.tenant_id = $2
+                """,
+                uuid.UUID(execution_id),
+                uuid.UUID(tenant_id),
+            )
+        else:
+            row = await conn.fetchrow(
+                "SELECT * FROM chat_turn_executions WHERE id = $1",
+                uuid.UUID(execution_id),
+            )
         return _row_to_dict(row) if row else None
 
 
-async def get_current_execution(session_id: str) -> Optional[Dict[str, Any]]:
+async def get_current_execution(session_id: str, tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     async with get_pool().acquire() as conn:
+        tenant_filter = "AND s.tenant_id = $2" if tenant_id else ""
+        args = [uuid.UUID(session_id)]
+        if tenant_id:
+            args.append(uuid.UUID(tenant_id))
         row = await conn.fetchrow(
-            """
+            f"""
             SELECT te.*
-            FROM chat_sessions s
-            JOIN chat_turn_executions te
-              ON te.id = COALESCE(
-                  s.current_execution_id,
-                  (
-                      SELECT te_latest.id
-                      FROM chat_turn_executions te_latest
-                      WHERE te_latest.session_id = s.id
-                        AND te_latest.status IN ('running', 'retrying')
-                      ORDER BY te_latest.updated_at DESC
-                      LIMIT 1
-                  )
-              )
-            WHERE s.id = $1
+              FROM chat_sessions s
+              JOIN chat_turn_executions te
+                ON te.id = COALESCE(
+                    s.current_execution_id,
+                    (
+                        SELECT te_latest.id
+                          FROM chat_turn_executions te_latest
+                         WHERE te_latest.session_id = s.id
+                           AND te_latest.status IN ('running', 'retrying')
+                         ORDER BY te_latest.updated_at DESC
+                         LIMIT 1
+                    )
+                )
+             WHERE s.id = $1
+               {tenant_filter}
             """,
-            uuid.UUID(session_id),
+            *args,
         )
         return _row_to_dict(row) if row else None
 
@@ -4304,13 +4322,20 @@ def _workspace_project_key(workspace_name: str) -> str:
     return key or "CEO"
 
 
-async def list_workspace_roles(workspace_id: str) -> List[Dict[str, Any]]:
+async def list_workspace_roles(workspace_id: str, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Return DB-backed role options for the selected workspace/project."""
     async with get_pool().acquire() as conn:
-        ws_row = await conn.fetchrow(
-            "SELECT name FROM chat_workspaces WHERE id = $1",
-            uuid.UUID(workspace_id),
-        )
+        if tenant_id:
+            ws_row = await conn.fetchrow(
+                "SELECT name FROM chat_workspaces WHERE id = $1 AND tenant_id = $2",
+                uuid.UUID(workspace_id),
+                uuid.UUID(tenant_id),
+            )
+        else:
+            ws_row = await conn.fetchrow(
+                "SELECT name FROM chat_workspaces WHERE id = $1",
+                uuid.UUID(workspace_id),
+            )
         if not ws_row:
             return []
 
@@ -4381,22 +4406,30 @@ async def list_workspace_roles(workspace_id: str) -> List[Dict[str, Any]]:
     return roles
 
 
-async def list_workspaces() -> List[Dict[str, Any]]:
+async def list_workspaces(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
     async with get_pool().acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT * FROM chat_workspaces ORDER BY created_at"
-        )
+        if tenant_id:
+            rows = await conn.fetch(
+                "SELECT * FROM chat_workspaces WHERE tenant_id = $1 ORDER BY created_at",
+                uuid.UUID(tenant_id),
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT * FROM chat_workspaces ORDER BY created_at"
+            )
         return [_row_to_dict(r) for r in rows]
 
 
-async def create_workspace(data: Dict[str, Any]) -> Dict[str, Any]:
+async def create_workspace(data: Dict[str, Any], tenant_id: Optional[str] = None) -> Dict[str, Any]:
     async with get_pool().acquire() as conn:
+        resolved_tenant_id = uuid.UUID(tenant_id) if tenant_id else None
         row = await conn.fetchrow(
             """
-            INSERT INTO chat_workspaces (name, system_prompt, files, settings, color, icon)
-            VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6)
+            INSERT INTO chat_workspaces (tenant_id, name, system_prompt, files, settings, color, icon)
+            VALUES (COALESCE($1, public.aads_internal_tenant_id()), $2, $3, $4::jsonb, $5::jsonb, $6, $7)
             RETURNING *
             """,
+            resolved_tenant_id,
             data["name"],
             data.get("system_prompt"),
             json.dumps(data.get("files", [])),
@@ -4407,7 +4440,7 @@ async def create_workspace(data: Dict[str, Any]) -> Dict[str, Any]:
         return _row_to_dict(row)
 
 
-async def update_workspace(workspace_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def update_workspace(workspace_id: str, data: Dict[str, Any], tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     async with get_pool().acquire() as conn:
         sets = []
         vals: List[Any] = []
@@ -4423,58 +4456,114 @@ async def update_workspace(workspace_id: str, data: Dict[str, Any]) -> Optional[
                 vals.append(json.dumps(data[jfield]))
                 idx += 1
         if not sets:
-            row = await conn.fetchrow("SELECT * FROM chat_workspaces WHERE id = $1", uuid.UUID(workspace_id))
+            if tenant_id:
+                row = await conn.fetchrow(
+                    "SELECT * FROM chat_workspaces WHERE id = $1 AND tenant_id = $2",
+                    uuid.UUID(workspace_id),
+                    uuid.UUID(tenant_id),
+                )
+            else:
+                row = await conn.fetchrow("SELECT * FROM chat_workspaces WHERE id = $1", uuid.UUID(workspace_id))
             return _row_to_dict(row) if row else None
         sets.append(f"updated_at = NOW()")
         vals.append(uuid.UUID(workspace_id))
+        where_clause = f"id = ${idx}"
+        if tenant_id:
+            idx += 1
+            vals.append(uuid.UUID(tenant_id))
+            where_clause += f" AND tenant_id = ${idx}"
         row = await conn.fetchrow(
-            f"UPDATE chat_workspaces SET {', '.join(sets)} WHERE id = ${idx} RETURNING *",
+            f"UPDATE chat_workspaces SET {', '.join(sets)} WHERE {where_clause} RETURNING *",
             *vals,
         )
         return _row_to_dict(row) if row else None
 
 
-async def delete_workspace(workspace_id: str) -> bool:
+async def delete_workspace(workspace_id: str, tenant_id: Optional[str] = None) -> bool:
     async with get_pool().acquire() as conn:
-        result = await conn.execute(
-            "DELETE FROM chat_workspaces WHERE id = $1", uuid.UUID(workspace_id)
-        )
+        if tenant_id:
+            result = await conn.execute(
+                "DELETE FROM chat_workspaces WHERE id = $1 AND tenant_id = $2",
+                uuid.UUID(workspace_id),
+                uuid.UUID(tenant_id),
+            )
+        else:
+            result = await conn.execute(
+                "DELETE FROM chat_workspaces WHERE id = $1", uuid.UUID(workspace_id)
+            )
         return result == "DELETE 1"
 
 
 # ─── Session CRUD ─────────────────────────────────────────────────────────────
 
-async def get_session(session_id: str) -> Optional[Dict[str, Any]]:
+async def get_session(session_id: str, tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """단일 세션 조회 (ID 기반)."""
     async with get_pool().acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT * FROM chat_sessions WHERE id = $1",
-            uuid.UUID(session_id),
-        )
+        if tenant_id:
+            row = await conn.fetchrow(
+                "SELECT * FROM chat_sessions WHERE id = $1 AND tenant_id = $2",
+                uuid.UUID(session_id),
+                uuid.UUID(tenant_id),
+            )
+        else:
+            row = await conn.fetchrow(
+                "SELECT * FROM chat_sessions WHERE id = $1",
+                uuid.UUID(session_id),
+            )
         return _row_to_dict(row) if row else None
 
 
-async def list_sessions(workspace_id: str, limit: int = 50, tag: Optional[str] = None) -> List[Dict[str, Any]]:
+async def list_sessions(workspace_id: str, limit: int = 50, tag: Optional[str] = None, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
     async with get_pool().acquire() as conn:
         if tag:
-            rows = await conn.fetch(
-                "SELECT * FROM chat_sessions WHERE workspace_id = $1 AND $3 = ANY(tags) ORDER BY pinned DESC, updated_at DESC LIMIT $2",
-                uuid.UUID(workspace_id),
-                limit,
-                tag,
-            )
+            if tenant_id:
+                rows = await conn.fetch(
+                    "SELECT * FROM chat_sessions WHERE workspace_id = $1 AND tenant_id = $4 AND $3 = ANY(tags) ORDER BY pinned DESC, updated_at DESC LIMIT $2",
+                    uuid.UUID(workspace_id),
+                    limit,
+                    tag,
+                    uuid.UUID(tenant_id),
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT * FROM chat_sessions WHERE workspace_id = $1 AND $3 = ANY(tags) ORDER BY pinned DESC, updated_at DESC LIMIT $2",
+                    uuid.UUID(workspace_id),
+                    limit,
+                    tag,
+                )
         else:
-            rows = await conn.fetch(
-                "SELECT * FROM chat_sessions WHERE workspace_id = $1 ORDER BY pinned DESC, updated_at DESC LIMIT $2",
-                uuid.UUID(workspace_id),
-                limit,
-            )
+            if tenant_id:
+                rows = await conn.fetch(
+                    "SELECT * FROM chat_sessions WHERE workspace_id = $1 AND tenant_id = $3 ORDER BY pinned DESC, updated_at DESC LIMIT $2",
+                    uuid.UUID(workspace_id),
+                    limit,
+                    uuid.UUID(tenant_id),
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT * FROM chat_sessions WHERE workspace_id = $1 ORDER BY pinned DESC, updated_at DESC LIMIT $2",
+                    uuid.UUID(workspace_id),
+                    limit,
+                )
         return [_row_to_dict(r) for r in rows]
 
 
-async def create_session(data: Dict[str, Any]) -> Dict[str, Any]:
+async def create_session(data: Dict[str, Any], tenant_id: Optional[str] = None) -> Dict[str, Any]:
     async with get_pool().acquire() as conn:
         ws_id = uuid.UUID(str(data["workspace_id"]))
+        resolved_tenant_id = uuid.UUID(tenant_id) if tenant_id else None
+        workspace_tenant_id = await conn.fetchval(
+            """
+            SELECT tenant_id
+              FROM chat_workspaces
+             WHERE id = $1
+               AND ($2::uuid IS NULL OR tenant_id = $2::uuid)
+            """,
+            ws_id,
+            resolved_tenant_id,
+        )
+        if not workspace_tenant_id:
+            raise ValueError("workspace_not_found_for_tenant")
         title = data.get("title")
 
         # 버전 관리형 세션명 자동 생성
@@ -4485,18 +4574,25 @@ async def create_session(data: Dict[str, Any]) -> Dict[str, Any]:
         role_key = (data.get("role_key") or "").strip() or None
         if not role_key:
             ws_settings_row = await conn.fetchrow(
-                "SELECT settings FROM chat_workspaces WHERE id = $1",
+                """
+                SELECT settings
+                  FROM chat_workspaces
+                 WHERE id = $1
+                   AND tenant_id = $2
+                """,
                 ws_id,
+                workspace_tenant_id,
             )
             ws_settings = _row_to_dict(ws_settings_row).get("settings") if ws_settings_row else {}
             if isinstance(ws_settings, dict):
                 role_key = str(ws_settings.get("default_role_key") or "").strip() or None
         row = await conn.fetchrow(
             """
-            INSERT INTO chat_sessions (workspace_id, title, current_model, role_key)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO chat_sessions (tenant_id, workspace_id, title, current_model, role_key)
+            VALUES ($1, $2, $3, $4, $5)
             RETURNING *
             """,
+            workspace_tenant_id,
             ws_id,
             title,
             current_model,
@@ -4548,7 +4644,7 @@ async def _generate_versioned_title(conn, ws_id: uuid.UUID) -> str:
     return f"{project_code}-{next_num:03d}"
 
 
-async def update_session(session_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def update_session(session_id: str, data: Dict[str, Any], tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     async with get_pool().acquire() as conn:
         sets = []
         vals: List[Any] = []
@@ -4567,22 +4663,41 @@ async def update_session(session_id: str, data: Dict[str, Any]) -> Optional[Dict
             vals.append(data["tags"])
             idx += 1
         if not sets:
-            row = await conn.fetchrow("SELECT * FROM chat_sessions WHERE id = $1", uuid.UUID(session_id))
+            if tenant_id:
+                row = await conn.fetchrow(
+                    "SELECT * FROM chat_sessions WHERE id = $1 AND tenant_id = $2",
+                    uuid.UUID(session_id),
+                    uuid.UUID(tenant_id),
+                )
+            else:
+                row = await conn.fetchrow("SELECT * FROM chat_sessions WHERE id = $1", uuid.UUID(session_id))
             return _row_to_dict(row) if row else None
         sets.append("updated_at = NOW()")
         vals.append(uuid.UUID(session_id))
+        where_clause = f"id = ${idx}"
+        if tenant_id:
+            idx += 1
+            vals.append(uuid.UUID(tenant_id))
+            where_clause += f" AND tenant_id = ${idx}"
         row = await conn.fetchrow(
-            f"UPDATE chat_sessions SET {', '.join(sets)} WHERE id = ${idx} RETURNING *",
+            f"UPDATE chat_sessions SET {', '.join(sets)} WHERE {where_clause} RETURNING *",
             *vals,
         )
         return _row_to_dict(row) if row else None
 
 
-async def delete_session(session_id: str) -> bool:
+async def delete_session(session_id: str, tenant_id: Optional[str] = None) -> bool:
     async with get_pool().acquire() as conn:
-        result = await conn.execute(
-            "DELETE FROM chat_sessions WHERE id = $1", uuid.UUID(session_id)
-        )
+        if tenant_id:
+            result = await conn.execute(
+                "DELETE FROM chat_sessions WHERE id = $1 AND tenant_id = $2",
+                uuid.UUID(session_id),
+                uuid.UUID(tenant_id),
+            )
+        else:
+            result = await conn.execute(
+                "DELETE FROM chat_sessions WHERE id = $1", uuid.UUID(session_id)
+            )
         return result == "DELETE 1"
 
 

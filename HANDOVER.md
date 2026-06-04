@@ -1605,3 +1605,11 @@
 - 추가 조치: 배포/재연결 중 `running execution`은 남았지만 `assistant_message_id`와 `streaming_placeholder` row가 사라지는 상태가 재현되어, Redis stream `chat:stream:{execution_id}`에서 delta 2,178자를 복원해 현재 실행의 placeholder를 즉시 재생성했다. `app/routers/chat.py`의 `/streaming-status`에도 같은 상태를 감지하면 Redis stream에서 partial을 복원해 DB placeholder를 자동 생성하는 가드를 추가했다.
 - 검증: `python3 -m py_compile app/services/chat_service.py app/routers/chat.py` 통과. `bash deploy.sh bluegreen` 완료, deploy 검증 Health/DB/LLM 통과. 실제 `/etc/nginx/conf.d/aads-upstream.conf` 기준 active API는 `8100`, standby는 `8102`다.
 - 주의: 사라진 과거 `d774cdbc` 버블은 DB/Redis에 남은 실행 본문이 없어 사후 복원이 불가능하다. 현재 실행 `7132003f`는 Redis에서 복원해 화면 표시용 DB row를 다시 만들었다. PC Agent가 offline이라 브라우저 화면 캡처 E2E는 미실행했고 API/DB/컨테이너 검증으로 대체했다.
+
+## 2026-06-04 17:20 KST - AADS-SaaS-002 tenant-aware RBAC context
+
+- 배경: AADS-SaaS-001 멀티테넌트 DB 기반 위에 JWT/session/current_user 로직에서 `current_tenant`/`current_membership` 컨텍스트를 제공하고 workspace/session 접근을 tenant-aware RBAC로 제한해야 했다.
+- 조치: `app/auth.py`에 `TenantRole(owner/admin/member/viewer)` enum, role rank policy, `get_current_tenant_context()`, `require_tenant_role()`을 추가했다. `get_current_user()`는 기존 반환 필드를 유지하면서 `current_tenant`, `current_membership`, `tenant_role`을 포함한다.
+- 조치: `ensure_saas_users_table()` 런타임 bootstrap이 `saas_users.role IN ('ceo','admin','owner')` 계정을 internal/default tenant owner membership으로 보존하도록 보강했다. 환경변수 기반 내부 admin 토큰은 internal tenant owner membership으로 합성된다.
+- 조치: `app/routers/chat.py`의 workspace/session CRUD와 session execution 조회에 viewer/member/admin 권한 의존성을 적용하고, `app/services/chat_service.py`의 workspace/session CRUD, workspace roles, execution 조회에 `tenant_id` scope를 추가했다. session 생성은 요청 tenant의 workspace에서만 가능하며 `chat_sessions.tenant_id`를 명시 저장한다.
+- 테스트: `tests/unit/test_tenant_rbac_policy.py`를 추가해 역할 순서, 라우터 권한 의존성, 서비스 tenant scope 계약을 검증하도록 했다.

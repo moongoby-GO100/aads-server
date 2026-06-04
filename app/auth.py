@@ -2,10 +2,11 @@ import os
 import time
 import hmac
 import logging
-from typing import Optional
+from enum import Enum
+from typing import Callable, Optional
 
 import structlog
-from fastapi import Header
+from fastapi import Depends, Header, HTTPException
 
 log = structlog.get_logger()
 
@@ -30,6 +31,21 @@ TOKEN_EXPIRE_HOURS = 24 * 7  # 7일
 
 ADMIN_EMAIL = os.getenv('AADS_ADMIN_EMAIL', 'admin@aads.dev')
 ADMIN_PASSWORD = os.getenv('AADS_ADMIN_PASSWORD', '')
+
+
+class TenantRole(str, Enum):
+    OWNER = 'owner'
+    ADMIN = 'admin'
+    MEMBER = 'member'
+    VIEWER = 'viewer'
+
+
+TENANT_ROLE_RANK = {
+    TenantRole.VIEWER: 10,
+    TenantRole.MEMBER: 20,
+    TenantRole.ADMIN: 30,
+    TenantRole.OWNER: 40,
+}
 
 if not SECRET_KEY:
     raise RuntimeError(
@@ -75,6 +91,27 @@ def check_admin_credentials(email: str, password: str) -> bool:
     return email_ok and pwd_ok
 
 
+def normalize_tenant_role(role: Optional[str]) -> Optional[TenantRole]:
+    try:
+        return TenantRole(str(role or '').strip().lower())
+    except ValueError:
+        return None
+
+
+def tenant_role_allows(role: Optional[str], minimum: TenantRole) -> bool:
+    normalized = normalize_tenant_role(role)
+    if not normalized:
+        return False
+    return TENANT_ROLE_RANK[normalized] >= TENANT_ROLE_RANK[minimum]
+
+
+def _tenant_role_from_user_role(user_role: Optional[str]) -> str:
+    role = str(user_role or '').strip().lower()
+    if role in ('ceo', 'owner', 'admin'):
+        return TenantRole.OWNER.value
+    return TenantRole.MEMBER.value
+
+
 # --- SaaS 회원 관리 ---
 
 async def _get_pool():
@@ -102,9 +139,11 @@ async def ensure_saas_users_table():
                 email TEXT UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
                 name TEXT,
+                role TEXT NOT NULL DEFAULT 'user',
                 created_at TIMESTAMPTZ DEFAULT now(),
                 updated_at TIMESTAMPTZ DEFAULT now()
             );
+            ALTER TABLE saas_users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';
 
             CREATE TABLE IF NOT EXISTS tenants (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -168,9 +207,20 @@ async def ensure_saas_users_table():
                 ALTER COLUMN default_tenant_id SET NOT NULL;
 
             INSERT INTO tenant_memberships (tenant_id, user_id, role, status)
-            SELECT default_tenant_id, id, 'member', 'active'
+            SELECT default_tenant_id,
+                   id,
+                   CASE WHEN role IN ('ceo', 'admin', 'owner') THEN 'owner' ELSE 'member' END,
+                   'active'
               FROM saas_users
-            ON CONFLICT (tenant_id, user_id) DO NOTHING;
+            ON CONFLICT (tenant_id, user_id) DO UPDATE
+               SET status = 'active',
+                   role = CASE
+                       WHEN tenant_memberships.role = 'owner' THEN 'owner'
+                       WHEN EXCLUDED.role = 'owner' THEN 'owner'
+                       ELSE tenant_memberships.role
+                   END,
+                   deleted_at = NULL,
+                   updated_at = now();
         """)
 
 
@@ -213,7 +263,7 @@ async def authenticate_saas_user(email: str, password: str) -> Optional[dict]:
         pool = await _ensure_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                """SELECT id, email, name, password_hash, default_tenant_id
+                """SELECT id, email, name, password_hash, default_tenant_id, role
                      FROM saas_users
                     WHERE email = $1
                       AND COALESCE(status, 'active') = 'active'
@@ -228,6 +278,7 @@ async def authenticate_saas_user(email: str, password: str) -> Optional[dict]:
                     'email': row['email'],
                     'name': row['name'],
                     'tenant_id': str(row['default_tenant_id']) if row['default_tenant_id'] else None,
+                    'role': row['role'],
                 }
             return None
     except Exception as e:
@@ -240,7 +291,7 @@ async def get_saas_user_by_email(email: str) -> Optional[dict]:
         pool = await _ensure_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                """SELECT id, email, name, default_tenant_id
+                """SELECT id, email, name, default_tenant_id, role
                      FROM saas_users
                     WHERE email = $1
                       AND deleted_at IS NULL""",
@@ -263,23 +314,133 @@ async def get_internal_tenant_id() -> Optional[str]:
         return None
 
 
+async def _load_tenant_context(user: dict, requested_tenant_id: Optional[str] = None) -> dict:
+    user_id = str(user.get('user_id') or '').strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail='Invalid token subject')
+
+    await ensure_saas_users_table()
+    token_tenant_id = str(user.get('tenant_id') or '').strip() or None
+    tenant_id = str(requested_tenant_id or '').strip() or token_tenant_id
+
+    if user.get('is_admin'):
+        internal_tenant_id = await get_internal_tenant_id()
+        if tenant_id and internal_tenant_id and tenant_id != internal_tenant_id:
+            raise HTTPException(status_code=403, detail='Tenant access denied')
+        tenant_id = internal_tenant_id
+        if not tenant_id:
+            raise HTTPException(status_code=503, detail='Internal tenant unavailable')
+        return {
+            'tenant': {
+                'id': tenant_id,
+                'slug': 'internal',
+                'name': 'AADS Internal',
+                'kind': 'internal',
+                'status': 'active',
+            },
+            'membership': {
+                'tenant_id': tenant_id,
+                'user_id': user_id,
+                'role': TenantRole.OWNER.value,
+                'status': 'active',
+            },
+        }
+
+    pool = await _ensure_pool()
+    async with pool.acquire() as conn:
+        if not tenant_id:
+            tenant_id = await conn.fetchval(
+                """SELECT default_tenant_id::text
+                     FROM saas_users
+                    WHERE id = $1
+                      AND COALESCE(status, 'active') = 'active'
+                      AND deleted_at IS NULL""",
+                user_id,
+            )
+        row = await conn.fetchrow(
+            """
+            SELECT t.id::text AS tenant_id,
+                   t.slug,
+                   t.name,
+                   t.kind,
+                   t.status AS tenant_status,
+                   tm.id::text AS membership_id,
+                   tm.role,
+                   tm.status AS membership_status
+              FROM tenant_memberships tm
+              JOIN tenants t ON t.id = tm.tenant_id
+             WHERE tm.user_id = $1
+               AND tm.tenant_id = $2::uuid
+               AND tm.status = 'active'
+               AND tm.deleted_at IS NULL
+               AND t.status = 'active'
+               AND t.deleted_at IS NULL
+             LIMIT 1
+            """,
+            user_id,
+            tenant_id,
+        )
+    if not row:
+        raise HTTPException(status_code=403, detail='Tenant membership required')
+    return {
+        'tenant': {
+            'id': row['tenant_id'],
+            'slug': row['slug'],
+            'name': row['name'],
+            'kind': row['kind'],
+            'status': row['tenant_status'],
+        },
+        'membership': {
+            'id': row['membership_id'],
+            'tenant_id': row['tenant_id'],
+            'user_id': user_id,
+            'role': row['role'],
+            'status': row['membership_status'],
+        },
+    }
+
+
 # ── FastAPI Dependency: JWT에서 현재 사용자 추출 ─────────────────────
-async def get_current_user(authorization: str = Header(None)) -> dict:
+async def get_current_user(
+    authorization: str = Header(None),
+    x_tenant_id: Optional[str] = Header(None, alias='X-Tenant-ID'),
+) -> dict:
     """Bearer 토큰에서 사용자 정보 추출. Depends()로 사용."""
     if not JWT_AVAILABLE:
-        from fastapi import HTTPException
         raise HTTPException(status_code=503, detail='JWT not available')
     if not authorization or not authorization.startswith('Bearer '):
-        from fastapi import HTTPException
         raise HTTPException(status_code=401, detail='Authorization header missing')
     token = authorization[7:]
     payload = verify_token(token)
     if not payload:
-        from fastapi import HTTPException
         raise HTTPException(status_code=401, detail='Invalid token')
-    return {
+    current_user = {
         'user_id': payload.get('sub'),
         'email': payload.get('email', ''),
         'is_admin': payload.get('is_admin', False),
         'tenant_id': payload.get('tenant_id'),
     }
+    context = await _load_tenant_context(current_user, requested_tenant_id=x_tenant_id)
+    current_user['current_tenant'] = context['tenant']
+    current_user['current_membership'] = context['membership']
+    current_user['tenant_id'] = context['tenant']['id']
+    current_user['tenant_role'] = context['membership']['role']
+    return current_user
+
+
+async def get_current_tenant_context(current_user: dict = Depends(get_current_user)) -> dict:
+    return {
+        'user': current_user,
+        'tenant': current_user['current_tenant'],
+        'membership': current_user['current_membership'],
+    }
+
+
+def require_tenant_role(minimum: TenantRole) -> Callable:
+    async def _dependency(context: dict = Depends(get_current_tenant_context)) -> dict:
+        role = context.get('membership', {}).get('role')
+        if not tenant_role_allows(role, minimum):
+            raise HTTPException(status_code=403, detail=f'{minimum.value} role required')
+        return context
+
+    return _dependency

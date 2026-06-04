@@ -14,12 +14,13 @@ from typing import Any, List, Optional
 from uuid import UUID
 import uuid
 
-from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel, Field
 
 from app.core.interrupt_queue import is_streaming, push_interrupt, set_streaming
+from app.auth import TenantRole, require_tenant_role
 from app.models.chat import (
     ApproveDiffOut,
     ApproveDiffRequest,
@@ -52,6 +53,14 @@ from app.services import chat_service as svc
 router = APIRouter()
 logger = structlog.get_logger(__name__)
 _CHAT_MESSAGES_HAS_EDITED_AT: Optional[bool] = None
+TenantContext = dict[str, Any]
+require_tenant_viewer = require_tenant_role(TenantRole.VIEWER)
+require_tenant_member = require_tenant_role(TenantRole.MEMBER)
+require_tenant_admin = require_tenant_role(TenantRole.ADMIN)
+
+
+def _tenant_id(context: TenantContext) -> str:
+    return str(context["tenant"]["id"])
 
 
 def _NOT_FOUND(name: str) -> HTTPException:
@@ -719,39 +728,52 @@ async def _settle_or_surface_orphan_placeholder(
 # ════════════════════════════════════════════════════════════════════════════════
 
 @router.get("/chat/workspaces", response_model=List[WorkspaceOut], tags=["chat-workspace"])
-async def get_workspaces():
+async def get_workspaces(context: TenantContext = Depends(require_tenant_viewer)):
     """전체 워크스페이스 목록."""
-    return await svc.list_workspaces()
+    return await svc.list_workspaces(tenant_id=_tenant_id(context))
 
 
 @router.get("/chat/workspaces/{workspace_id}/roles", tags=["chat-workspace"])
-async def get_workspace_roles(workspace_id: UUID):
+async def get_workspace_roles(
+    workspace_id: UUID,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
     """워크스페이스/프로젝트 기준 DB 역할 목록."""
-    roles = await svc.list_workspace_roles(str(workspace_id))
+    roles = await svc.list_workspace_roles(str(workspace_id), tenant_id=_tenant_id(context))
     if not roles:
         raise _NOT_FOUND("workspace")
     return {"roles": roles, "total": len(roles)}
 
 
 @router.post("/chat/workspaces", response_model=WorkspaceOut, status_code=201, tags=["chat-workspace"])
-async def create_workspace(req: WorkspaceCreate):
+async def create_workspace(
+    req: WorkspaceCreate,
+    context: TenantContext = Depends(require_tenant_admin),
+):
     """워크스페이스 생성."""
-    return await svc.create_workspace(req.model_dump())
+    return await svc.create_workspace(req.model_dump(), tenant_id=_tenant_id(context))
 
 
 @router.put("/chat/workspaces/{workspace_id}", response_model=WorkspaceOut, tags=["chat-workspace"])
-async def update_workspace(workspace_id: UUID, req: WorkspaceUpdate):
+async def update_workspace(
+    workspace_id: UUID,
+    req: WorkspaceUpdate,
+    context: TenantContext = Depends(require_tenant_admin),
+):
     """워크스페이스 수정."""
-    result = await svc.update_workspace(str(workspace_id), req.model_dump(exclude_none=True))
+    result = await svc.update_workspace(str(workspace_id), req.model_dump(exclude_none=True), tenant_id=_tenant_id(context))
     if not result:
         raise _NOT_FOUND("workspace")
     return result
 
 
 @router.delete("/chat/workspaces/{workspace_id}", status_code=204, tags=["chat-workspace"])
-async def delete_workspace(workspace_id: UUID):
+async def delete_workspace(
+    workspace_id: UUID,
+    context: TenantContext = Depends(require_tenant_admin),
+):
     """워크스페이스 삭제."""
-    ok = await svc.delete_workspace(str(workspace_id))
+    ok = await svc.delete_workspace(str(workspace_id), tenant_id=_tenant_id(context))
     if not ok:
         raise _NOT_FOUND("workspace")
 
@@ -761,57 +783,85 @@ async def delete_workspace(workspace_id: UUID):
 # ════════════════════════════════════════════════════════════════════════════════
 
 @router.get("/chat/sessions", response_model=List[SessionOut], tags=["chat-session"])
-async def get_sessions(workspace_id: UUID = Query(...), tag: Optional[str] = Query(None)):
+async def get_sessions(
+    workspace_id: UUID = Query(...),
+    tag: Optional[str] = Query(None),
+    context: TenantContext = Depends(require_tenant_viewer),
+):
     """워크스페이스 내 세션 목록. tag 파라미터로 필터 가능."""
-    return await svc.list_sessions(str(workspace_id), tag=tag)
+    return await svc.list_sessions(str(workspace_id), tag=tag, tenant_id=_tenant_id(context))
 
 
 @router.get("/chat/sessions/{session_id}", response_model=SessionOut, tags=["chat-session"])
-async def get_session(session_id: UUID):
+async def get_session(
+    session_id: UUID,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
     """단일 세션 조회 (해시 기반 세션 복원용)."""
-    result = await svc.get_session(str(session_id))
+    result = await svc.get_session(str(session_id), tenant_id=_tenant_id(context))
     if not result:
         raise _NOT_FOUND("session")
     return result
 
 
 @router.get("/chat/sessions/{session_id}/execution", response_model=ExecutionOut, tags=["chat-session"])
-async def get_session_execution(session_id: UUID):
+async def get_session_execution(
+    session_id: UUID,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
     """현재 세션의 최신 실행 조회."""
-    result = await svc.get_current_execution(str(session_id))
+    result = await svc.get_current_execution(str(session_id), tenant_id=_tenant_id(context))
     if not result:
         raise _NOT_FOUND("execution")
     return result
 
 
 @router.get("/chat/executions/{execution_id}", response_model=ExecutionOut, tags=["chat-session"])
-async def get_execution(execution_id: UUID):
+async def get_execution(
+    execution_id: UUID,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
     """단일 실행 조회."""
-    result = await svc.get_execution(str(execution_id))
+    result = await svc.get_execution(str(execution_id), tenant_id=_tenant_id(context))
     if not result:
         raise _NOT_FOUND("execution")
     return result
 
 
 @router.post("/chat/sessions", response_model=SessionOut, status_code=201, tags=["chat-session"])
-async def create_session(req: SessionCreate):
+async def create_session(
+    req: SessionCreate,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """세션 생성."""
-    return await svc.create_session(req.model_dump())
+    try:
+        return await svc.create_session(req.model_dump(), tenant_id=_tenant_id(context))
+    except ValueError as e:
+        if str(e) == "workspace_not_found_for_tenant":
+            raise _NOT_FOUND("workspace")
+        raise
 
 
 @router.put("/chat/sessions/{session_id}", response_model=SessionOut, tags=["chat-session"])
-async def update_session(session_id: UUID, req: SessionUpdate):
+async def update_session(
+    session_id: UUID,
+    req: SessionUpdate,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """세션 수정 (title, pinned)."""
-    result = await svc.update_session(str(session_id), req.model_dump(exclude_none=True))
+    result = await svc.update_session(str(session_id), req.model_dump(exclude_none=True), tenant_id=_tenant_id(context))
     if not result:
         raise _NOT_FOUND("session")
     return result
 
 
 @router.delete("/chat/sessions/{session_id}", status_code=204, tags=["chat-session"])
-async def delete_session(session_id: UUID):
+async def delete_session(
+    session_id: UUID,
+    context: TenantContext = Depends(require_tenant_admin),
+):
     """세션 삭제."""
-    ok = await svc.delete_session(str(session_id))
+    ok = await svc.delete_session(str(session_id), tenant_id=_tenant_id(context))
     if not ok:
         raise _NOT_FOUND("session")
 
