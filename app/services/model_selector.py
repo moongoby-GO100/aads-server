@@ -1370,6 +1370,7 @@ async def call_stream(
     tools: Optional[List[Dict[str, Any]]] = None,
     model_override: Optional[str] = None,
     session_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     인텐트 결과에 따라 LiteLLM 또는 Anthropic SDK로 SSE 스트리밍.
@@ -1421,6 +1422,28 @@ async def call_stream(
         logger.info("registered_model_alias_resolved: '%s' -> '%s'", model, resolved_model)
         model = resolved_model
         _qualified_provider = str((resolved_row or {}).get("provider") or _qualified_provider or "").strip().lower() or None
+
+    try:
+        from app.services.tenant_usage_limits import TenantUsageLimitExceeded, check_tenant_usage_limit
+        from app.services.tool_executor import resolve_bound_tenant_id
+
+        resolved_tenant_id = tenant_id or await resolve_bound_tenant_id(explicit_session_id=session_id or "")
+        if resolved_tenant_id:
+            await check_tenant_usage_limit(
+                resolved_tenant_id,
+                operation=f"model:{model}",
+                projected_calls=1,
+            )
+    except TenantUsageLimitExceeded as e:
+        yield {
+            "type": "error",
+            "content": e.decision.message,
+            "code": "tenant_usage_limit_exceeded",
+            "limit": e.decision.limit_name,
+        }
+        return
+    except Exception as e:
+        logger.warning("tenant_usage_preflight_failed: model=%s error=%s", model, str(e)[:120])
 
     # ── Dynamic Model Cascading (shadow/primary governance routing) ─────────
     _intent = getattr(intent_result, "intent", "")
@@ -3415,12 +3438,20 @@ async def _run_agent_sdk_with_key(
     # Agent SDK 경로: 헤더 없지만 토큰 사용량은 기록
     _sdk_tokens = _ap_get_tokens()
     _sdk_token = _sdk_tokens[0] if _sdk_tokens else ""
+    _tenant_id = ""
+    try:
+        from app.services.tool_executor import resolve_bound_tenant_id
+
+        _tenant_id = await resolve_bound_tenant_id(explicit_session_id=session_id or "")
+    except Exception:
+        _tenant_id = ""
     _log_oauth_usage(
         token=_sdk_token, model=sdk_model,
         input_tokens=in_tokens, output_tokens=out_tokens,
         cost_usd=cost,
         call_source="model_selector_sdk",
         session_id=session_id or "",
+        tenant_id=_tenant_id or None,
     )
     yield {
         "type": "done",

@@ -6129,6 +6129,7 @@ async def send_message_stream(
     branch_id: Optional[str] = None,
     branch_point_msg_id: Optional[str] = None,
     idempotency_key: Optional[str] = None,
+    tenant_id: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """
     AADS-185: 3계층 Context Engineering + IntentRouter + ModelSelector + Tool Use 루프.
@@ -6148,8 +6149,11 @@ async def send_message_stream(
     _todo_context_token_mid: Any = None  # AADS: L5246 set() 토큰 추적 (역순 reset용)
 
     try:
-        from app.services.tool_executor import current_chat_session_id
+        from app.services.tool_executor import current_chat_session_id, current_tenant_id, resolve_bound_tenant_id
         current_chat_session_id.set(session_id)
+        resolved_tenant_id = tenant_id or await resolve_bound_tenant_id(explicit_session_id=session_id)
+        if resolved_tenant_id:
+            current_tenant_id.set(resolved_tenant_id)
 
         from app.core.interrupt_queue import set_streaming, has_pending_interrupts, pop_pending_interrupts
         set_streaming(session_id, True)
@@ -7578,6 +7582,7 @@ async def send_message_stream(
                     tools=tools_for_api,
                     model_override=model_override,
                     session_id=session_id,
+                    tenant_id=resolved_tenant_id,
                 ):
                     etype = event.get("type", "")
                     if etype == "heartbeat":

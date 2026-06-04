@@ -133,6 +133,7 @@ async def call_llm_with_fallback(
     model: str = "claude-haiku-4-5-20251001",
     max_tokens: int = 256,
     system: Optional[str] = None,
+    tenant_id: Optional[str] = None,
 ) -> Optional[str]:
     """Claude 호출 + 실패 시 Gemini 폴백. 백그라운드 평가/추출용.
 
@@ -144,6 +145,11 @@ async def call_llm_with_fallback(
 
     Returns: 응답 텍스트 또는 None (전부 실패 시)
     """
+    if tenant_id:
+        from app.services.tenant_usage_limits import check_tenant_usage_limit
+
+        await check_tenant_usage_limit(tenant_id, operation=f"llm:{model}", projected_calls=1)
+
     # 비Claude 모델 → DashScope/LiteLLM 직접
     if not model.startswith("claude"):
         try:
@@ -186,6 +192,7 @@ async def call_llm_with_fallback(
                     headers=raw.headers,
                     call_source="anthropic_client",
                     duration_ms=duration_ms,
+                    tenant_id=tenant_id,
                 )
                 return resp.content[0].text
             except (httpx.ReadTimeout, anthropic.APITimeoutError) as e:
@@ -197,6 +204,7 @@ async def call_llm_with_fallback(
                     call_source="anthropic_client",
                     error_code="timeout",
                     duration_ms=duration_ms,
+                    tenant_id=tenant_id,
                 )
                 if retry_count < _CLAUDE_MAX_RETRIES:
                     wait = _retry_delay(retry_count, status_code=None)
@@ -229,6 +237,7 @@ async def call_llm_with_fallback(
                     call_source="anthropic_client",
                     error_code=error_code,
                     duration_ms=duration_ms,
+                    tenant_id=tenant_id,
                 )
                 if status_code == 429:
                     _429_count += 1
@@ -299,6 +308,7 @@ async def call_background_llm(
     prompt: str,
     system: str = "",
     max_tokens: int = 1000,
+    tenant_id: Optional[str] = None,
 ) -> str:
     """배경 서비스용 LLM 호출 — qwen-turbo(DashScope) 1순위, claude-haiku 폴백.
 
@@ -307,6 +317,10 @@ async def call_background_llm(
     OAuth 한도를 소비하지 않는 배경 작업에서 사용.
     """
     global _bg_qwen_fail_streak
+    if tenant_id:
+        from app.services.tenant_usage_limits import check_tenant_usage_limit
+
+        await check_tenant_usage_limit(tenant_id, operation="background_llm", projected_calls=1)
     t0 = time.time()
 
     # 1순위: qwen-turbo (DashScope 직접)
@@ -317,12 +331,13 @@ async def call_background_llm(
             await _bg_llm_log(
                 "background", "qwen-turbo", True,
                 latency_ms=int((time.time() - t0) * 1000),
+                tenant_id=tenant_id,
             )
             return result
     except Exception as e:
         logger.warning("call_background_llm_qwen_failed: %s", str(e)[:80])
         _bg_qwen_fail_streak += 1
-        await _bg_llm_log("background", "qwen-turbo", False, error_code="qwen_failed")
+        await _bg_llm_log("background", "qwen-turbo", False, error_code="qwen_failed", tenant_id=tenant_id)
         if _bg_qwen_fail_streak >= 3:  # qwen-turbo 조기 감지를 위해 3회로 낮춤 (AADS-204)
             await _notify_bg_llm_alert(_bg_qwen_fail_streak)
 
@@ -332,6 +347,7 @@ async def call_background_llm(
         system=system or None,
         model="claude-haiku-4-5-20251001",
         max_tokens=max_tokens,
+        tenant_id=tenant_id,
     )
     return fallback or ""
 
@@ -344,6 +360,7 @@ async def _bg_llm_log(
     error_code: Optional[str] = None,
     input_tokens: int = 0,
     output_tokens: int = 0,
+    tenant_id: Optional[str] = None,
 ) -> None:
     """bg_llm_usage_log 테이블에 호출 결과 INSERT. DB 실패 시 예외 무시."""
     try:
@@ -353,11 +370,11 @@ async def _bg_llm_log(
             await conn.execute(
                 """
                 INSERT INTO bg_llm_usage_log
-                  (service_name, model, success, input_tokens, output_tokens, latency_ms, error_code)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                  (service_name, model, success, input_tokens, output_tokens, latency_ms, error_code, tenant_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8::uuid, public.aads_internal_tenant_id()))
                 """,
                 service_name, model, success,
-                input_tokens, output_tokens, latency_ms, error_code,
+                input_tokens, output_tokens, latency_ms, error_code, tenant_id,
             )
     except Exception as e:
         logger.debug("bg_llm_log_failed: %s", str(e)[:80])
@@ -393,7 +410,12 @@ async def call_llm_messages_with_fallback(**kwargs) -> object:
     Raises:
         Exception: 모든 키에서 실패 시 마지막 예외를 raise
     """
+    tenant_id = kwargs.pop("tenant_id", None)
     _model = kwargs.get("model", "unknown")
+    if tenant_id:
+        from app.services.tenant_usage_limits import check_tenant_usage_limit
+
+        await check_tenant_usage_limit(tenant_id, operation=f"llm_messages:{_model}", projected_calls=1)
 
     # 비Claude 모델 → DashScope/LiteLLM 직접
     if not _model.startswith("claude"):
@@ -435,6 +457,7 @@ async def call_llm_messages_with_fallback(**kwargs) -> object:
                     headers=raw.headers,
                     call_source="anthropic_client_msg",
                     duration_ms=duration_ms,
+                    tenant_id=tenant_id,
                 )
                 return resp
             except (httpx.ReadTimeout, anthropic.APITimeoutError) as e:
@@ -446,6 +469,7 @@ async def call_llm_messages_with_fallback(**kwargs) -> object:
                     call_source="anthropic_client_msg",
                     error_code="timeout",
                     duration_ms=duration_ms,
+                    tenant_id=tenant_id,
                 )
                 if retry_count < _CLAUDE_MAX_RETRIES:
                     wait = _retry_delay(retry_count, status_code=None)
@@ -478,6 +502,7 @@ async def call_llm_messages_with_fallback(**kwargs) -> object:
                     call_source="anthropic_client_msg",
                     error_code=error_code,
                     duration_ms=duration_ms,
+                    tenant_id=tenant_id,
                 )
                 if status_code == 429:
                     _429_count += 1

@@ -1072,6 +1072,20 @@ async def send_message(
     if not session_id_str or not await svc.get_session(session_id_str, tenant_id=_tenant_id(context)):
         raise _NOT_FOUND("session")
 
+    tenant_id = _tenant_id(context)
+    from app.services.tenant_usage_limits import TenantUsageLimitExceeded, check_tenant_usage_limit
+    from app.services.tool_executor import current_tenant_id
+
+    current_tenant_id.set(tenant_id)
+    try:
+        await check_tenant_usage_limit(
+            tenant_id,
+            operation="chat:send_message",
+            projected_calls=1,
+        )
+    except TenantUsageLimitExceeded as e:
+        raise HTTPException(status_code=429, detail=e.decision.message) from e
+
     if is_streaming(session_id_str):
         push_interrupt(
             session_id_str,
@@ -1100,6 +1114,7 @@ async def send_message(
         model_override=model_override,
         reply_to_id=reply_to_id,
         idempotency_key=idempotency_key,
+        tenant_id=tenant_id,
     )
     # 클라이언트 연결 종료 시 백그라운드에서 LLM 생성 완료 → DB 저장 보장
     bg_stream = svc.with_background_completion(raw_stream, session_id=session_id_str)
