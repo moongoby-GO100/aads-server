@@ -174,10 +174,12 @@ def _local_pid_projects() -> set[str]:
 
     KIS/GO100/SF/NTV2 runners execute on remote servers, so checking their
     runner_pid against this host's /proc would create false stale positives.
+    AADS runners also execute from the host-side runner while this API usually
+    runs inside Docker, so PID cleanup must be explicitly opted in.
     """
-    raw = os.getenv("PIPELINE_RUNNER_LOCAL_PID_PROJECTS", "AADS")
+    raw = os.getenv("PIPELINE_RUNNER_LOCAL_PID_PROJECTS", "")
     projects = {item.strip().upper() for item in raw.split(",") if item.strip()}
-    return projects or set(_DEFAULT_LOCAL_PID_PROJECTS)
+    return projects
 
 
 def _is_local_runner_project(project: str | None) -> bool:

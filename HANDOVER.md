@@ -1613,3 +1613,9 @@
 - 조치: `ensure_saas_users_table()` 런타임 bootstrap이 `saas_users.role IN ('ceo','admin','owner')` 계정을 internal/default tenant owner membership으로 보존하도록 보강했다. 환경변수 기반 내부 admin 토큰은 internal tenant owner membership으로 합성된다.
 - 조치: `app/routers/chat.py`의 workspace/session CRUD와 session execution 조회에 viewer/member/admin 권한 의존성을 적용하고, `app/services/chat_service.py`의 workspace/session CRUD, workspace roles, execution 조회에 `tenant_id` scope를 추가했다. session 생성은 요청 tenant의 workspace에서만 가능하며 `chat_sessions.tenant_id`를 명시 저장한다.
 - 테스트: `tests/unit/test_tenant_rbac_policy.py`를 추가해 역할 순서, 라우터 권한 의존성, 서비스 tenant scope 계약을 검증하도록 했다.
+
+## 2026-06-04 17:40 KST - Pipeline Runner API stale PID guard hotfix
+
+- 배경: AADS-SaaS 후속 Runner 체인을 재개하는 중 API 상태 조회가 `runner_pid`를 `/proc`에서 직접 검사해 실행 중인 AADS Runner를 `process_died`로 오판했다. API는 Docker 컨테이너 안에서 실행되고 Runner는 호스트 프로세스로 실행되므로 PID namespace가 달라 false stale positive가 발생했다.
+- 조치: `app/api/pipeline_runner.py`의 `PIPELINE_RUNNER_LOCAL_PID_PROJECTS` 기본값을 빈 값으로 변경해 API PID cleanup을 명시 opt-in으로 좁혔다. 실제 stale 정리는 호스트에서 실행되는 `scripts/pipeline-runner.sh` watchdog이 담당한다.
+- 검증: `python3 -m py_compile app/api/pipeline_runner.py` 통과. 운영 중복 Runner `runner-8043ee55`, 순서 위반 `runner-a76fc169`는 정리했고 canonical P0-3 `runner-95607f66`만 실행 중으로 남겼다.
