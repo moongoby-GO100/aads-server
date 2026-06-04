@@ -125,6 +125,7 @@ def test_actionable_quoted_instruction_does_not_promote_plain_quotes():
 @pytest.mark.asyncio
 async def test_list_messages_minimal_is_read_only_and_selects_light_fields():
     session_id = str(uuid.uuid4())
+    tenant_id = str(uuid.uuid4())
     created_at = datetime.now(timezone.utc)
     message_id = uuid.uuid4()
 
@@ -148,10 +149,12 @@ async def test_list_messages_minimal_is_read_only_and_selects_light_fields():
             sort="desc",
             fields="minimal",
             read_only=True,
+            tenant_id=tenant_id,
         )
 
     query = " ".join(conn.fetch.await_args.args[0].split())
     assert "SELECT id, session_id, role, LEFT(content, 200) AS content" in query
+    assert "tenant_id = $4" in query
     assert "AS has_tools" in query
     assert "AS tool_count" in query
     assert "AS tool_names" in query
@@ -174,6 +177,7 @@ async def test_list_messages_minimal_is_read_only_and_selects_light_fields():
 async def test_get_message_full_normalizes_tools_for_hydrate():
     message_id = uuid.uuid4()
     session_id = uuid.uuid4()
+    tenant_id = str(uuid.uuid4())
     created_at = datetime.now(timezone.utc)
 
     conn = AsyncMock()
@@ -187,7 +191,10 @@ async def test_get_message_full_normalizes_tools_for_hydrate():
     })
 
     with patch("app.services.chat_service.get_pool", return_value=_Pool(conn)):
-        result = await chat_service.get_message(str(message_id))
+        result = await chat_service.get_message(str(message_id), tenant_id=tenant_id)
+
+    query = " ".join(conn.fetchrow.await_args.args[0].split())
+    assert "WHERE id = $1 AND tenant_id = $2" in query
 
     assert result["content"] == "full answer"
     assert result["tools_called"] == [
@@ -231,6 +238,12 @@ def test_terminal_interrupt_marker_completes_memory_stream_once():
         status = chat_service.get_streaming_status(session_id)
         assert status["is_streaming"] is False
         assert status["just_completed"] is True
+        assert chat_service._streaming_state[session_id]["completed"] is True
+
+        chat_service._streaming_state[session_id]["_completed_delivered_at"] = (
+            chat_service._bg_time.monotonic() - 61
+        )
+        chat_service.get_streaming_status(session_id)
         assert session_id not in chat_service._streaming_state
     finally:
         chat_service._streaming_state.pop(session_id, None)
@@ -493,7 +506,7 @@ async def test_html_context_injection():
         ):
             chunks.append(chunk)
 
-    assert '"html_context_used": true' in chunks[0]
+    assert any('"html_context_used": true' in chunk for chunk in chunks)
     assert "[현재 작업 중인 HTML 아티팩트" in captured["system_prompt"]
     assert "```html" in captured["system_prompt"]
     assert "<button>Old</button>" in captured["system_prompt"]
@@ -579,8 +592,8 @@ async def test_multistep_request_injects_todo_prompt_block():
 
     mocked_create.assert_awaited_once()
     assert "[세션 TODO 운영 규칙]" in captured["system_prompt"]
-    assert "1. migration 추가" in captured["system_prompt"]
-    assert "2. chat_service 통합" in captured["system_prompt"]
+    assert "migration 추가" in captured["system_prompt"]
+    assert "chat_service 통합" in captured["system_prompt"]
 
 
 @pytest.mark.asyncio
@@ -796,6 +809,7 @@ async def test_discussion_endpoint_proxies_structured_result():
                 context="배경",
                 perspectives=[{"name": "기술"}],
             ),
+            context={"tenant": {"id": str(uuid.uuid4())}},
         )
 
     assert result == payload

@@ -4012,7 +4012,7 @@ async def _infer_project_from_session(chat_session_id: str) -> str:
 
 # ── E2E Credential Vault 핸들러 ───────────────────────────────────────────────
 
-async def tool_credential_list(project: str = "", service: str = "") -> str:
+async def tool_credential_list(project: str = "", service: str = "", tenant_id: str = "") -> str:
     """Vault 자격증명 목록 조회 (비밀번호 마스킹)."""
     from app.core.credential_vault import list_credentials
     try:
@@ -4020,6 +4020,7 @@ async def tool_credential_list(project: str = "", service: str = "") -> str:
             project=project or None,
             service=service or None,
             include_secrets=False,
+            tenant_id=tenant_id or None,
         )
         if not creds:
             return "[Credential Vault] 등록된 자격증명이 없습니다."
@@ -4039,6 +4040,7 @@ async def tool_credential_register(
     service: str, username: str, password: str,
     project: str = "", label: str = "기본",
     login_url: str = "", login_steps: list = None,
+    tenant_id: str = "",
 ) -> str:
     """새 자격증명 등록 (Fernet 암호화)."""
     from app.core.credential_vault import create_credential
@@ -4051,6 +4053,7 @@ async def tool_credential_register(
             label=label or "기본",
             login_url=login_url or None,
             login_steps=login_steps,
+            tenant_id=tenant_id or None,
         )
         return (
             f"[Credential 등록 완료] id={result['id']} "
@@ -4060,11 +4063,11 @@ async def tool_credential_register(
         return f"[ERROR] credential_register 실패: {e}"
 
 
-async def tool_credential_delete(credential_id: str) -> str:
+async def tool_credential_delete(credential_id: str, tenant_id: str = "") -> str:
     """자격증명 소프트 삭제."""
     from app.core.credential_vault import delete_credential
     try:
-        ok = await delete_credential(credential_id)
+        ok = await delete_credential(credential_id, tenant_id=tenant_id or None)
         if ok:
             return f"[Credential 삭제 완료] id={credential_id} (소프트 삭제)"
         return f"[ERROR] id={credential_id} 를 찾을 수 없거나 이미 삭제됨"
@@ -4072,12 +4075,12 @@ async def tool_credential_delete(credential_id: str) -> str:
         return f"[ERROR] credential_delete 실패: {e}"
 
 
-async def tool_credential_test_login(credential_id: str) -> str:
+async def tool_credential_test_login(credential_id: str, tenant_id: str = "") -> str:
     """저장된 자격증명으로 로그인 테스트 (브릿지 세션 있으면 Playwright, 없으면 API 폴백)."""
     from app.core.credential_vault import get_credential, execute_login_steps, mark_verified
     import aiohttp
     try:
-        cred = await get_credential(credential_id, include_secrets=True)
+        cred = await get_credential(credential_id, include_secrets=True, tenant_id=tenant_id or None)
         if not cred:
             return f"[ERROR] id={credential_id} 자격증명을 찾을 수 없습니다."
         if not cred.get("login_url"):
@@ -4101,13 +4104,13 @@ async def tool_credential_test_login(credential_id: str) -> str:
 
 
 
-async def tool_get_e2e_login_url(project: str = "", redirect: str = "", role: str = "") -> str:
+async def tool_get_e2e_login_url(project: str = "", redirect: str = "", role: str = "", tenant_id: str = "") -> str:
     """프로젝트별 E2E 브라우저 자동 로그인 URL 생성."""
     from app.core.credential_vault import get_e2e_login_url as _get_url
     if not project:
         return "[ERROR] project 파라미터 필수 (AADS/GO100/NTV2/SF/KIS/NTV1_ADMIN/NTV1_RETAIL/NTV1_WHOLESALE)"
     try:
-        result = await _get_url(project, redirect or None, role or None)
+        result = await _get_url(project, redirect or None, role or None, tenant_id=tenant_id or None)
         if result.get("success"):
             if result.get("form_login"):
                 lines = [f"[E2E Form Login] {result['project']}"]
@@ -4178,6 +4181,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         return await tool_credential_list(
             project=params.get("project", ""),
             service=params.get("service", ""),
+            tenant_id=params.get("tenant_id", ""),
         )
     elif name == "credential_register":
         return await tool_credential_register(
@@ -4188,16 +4192,18 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             label=params.get("label", "기본"),
             login_url=params.get("login_url", ""),
             login_steps=params.get("login_steps"),
+            tenant_id=params.get("tenant_id", ""),
         )
     elif name == "credential_delete":
-        return await tool_credential_delete(params.get("credential_id", ""))
+        return await tool_credential_delete(params.get("credential_id", ""), tenant_id=params.get("tenant_id", ""))
     elif name == "credential_test_login":
-        return await tool_credential_test_login(params.get("credential_id", ""))
+        return await tool_credential_test_login(params.get("credential_id", ""), tenant_id=params.get("tenant_id", ""))
     elif name == "get_e2e_login_url":
         return await tool_get_e2e_login_url(
             project=params.get("project", ""),
             redirect=params.get("redirect", ""),
             role=params.get("role", ""),
+            tenant_id=params.get("tenant_id", ""),
         )
     # ── Browser 도구 (AADS-159) ─────────────────────────────────────────────
     elif name == "browser_connect":

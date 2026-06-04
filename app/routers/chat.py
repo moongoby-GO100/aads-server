@@ -910,6 +910,7 @@ async def _get_messages_payload(
     sort: str,
     include_streaming: bool,
     fields: str,
+    tenant_id: str,
 ) -> Any:
     read_only = fields == "minimal"
     # 레거시 offset 모드: offset이 명시적으로 전달되거나, sort=desc(배열 기대)인 경우
@@ -923,6 +924,7 @@ async def _get_messages_payload(
             include_streaming=include_streaming,
             fields=fields,
             read_only=read_only,
+            tenant_id=tenant_id,
         )
     # cursor 모드: PaginatedMessagesOut 반환 (항상 ASC)
     return await svc.list_messages_cursor(
@@ -932,6 +934,7 @@ async def _get_messages_payload(
         include_streaming=include_streaming,
         fields=fields,
         read_only=read_only,
+        tenant_id=tenant_id,
     )
 
 
@@ -945,6 +948,7 @@ async def get_messages(
     sort: str = Query("asc", pattern="^(asc|desc)$"),
     include_streaming: bool = Query(False, description="진행 중 streaming_placeholder 포함 여부"),
     fields: str = Query("full", pattern="^(full|minimal)$"),
+    context: TenantContext = Depends(require_tenant_viewer),
 ):
     """메시지 목록 — cursor 기반 페이지네이션 (offset 레거시 호환 유지)."""
     started_at = time.perf_counter()
@@ -956,6 +960,7 @@ async def get_messages(
         sort=sort,
         include_streaming=include_streaming,
         fields=fields,
+        tenant_id=_tenant_id(context),
     )
     _set_message_response_headers(response, started_at, payload)
     return payload
@@ -972,6 +977,7 @@ async def get_workspace_session_messages(
     sort: str = Query("asc", pattern="^(asc|desc)$"),
     include_streaming: bool = Query(False, description="진행 중 streaming_placeholder 포함 여부"),
     fields: str = Query("full", pattern="^(full|minimal)$"),
+    context: TenantContext = Depends(require_tenant_viewer),
 ):
     """워크스페이스 경로 메시지 목록 — 기존 /chat/messages와 동일한 응답 계약."""
     del workspace_id
@@ -984,13 +990,17 @@ async def get_workspace_session_messages(
         sort=sort,
         include_streaming=include_streaming,
         fields=fields,
+        tenant_id=_tenant_id(context),
     )
     _set_message_response_headers(response, started_at, payload)
     return payload
 
 
 @router.post("/chat/messages/send", tags=["chat-message"])
-async def send_message(request: Request):
+async def send_message(
+    request: Request,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """
     메시지 전송 — SSE 스트리밍 응답.
     Content-Type: text/event-stream
@@ -1059,7 +1069,10 @@ async def send_message(request: Request):
         reply_to_id = str(req.reply_to_id) if req.reply_to_id else None
         idempotency_key = req.idempotency_key if hasattr(req, 'idempotency_key') else None
 
-    if session_id_str and is_streaming(session_id_str):
+    if not session_id_str or not await svc.get_session(session_id_str, tenant_id=_tenant_id(context)):
+        raise _NOT_FOUND("session")
+
+    if is_streaming(session_id_str):
         push_interrupt(
             session_id_str,
             message=content,
@@ -1121,9 +1134,13 @@ class DiscussionResponse(BaseModel):
 
 
 @router.post("/chat/sessions/{session_id}/discussion", response_model=DiscussionResponse, tags=["chat-session"])
-async def run_discussion(session_id: UUID, req: DiscussionRequest):
+async def run_discussion(
+    session_id: UUID,
+    req: DiscussionRequest,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """세션 기준 다관점 토론 실행."""
-    if not await svc.get_session(str(session_id)):
+    if not await svc.get_session(str(session_id), tenant_id=_tenant_id(context)):
         raise _NOT_FOUND("session")
     return await svc.run_discussion(
         str(session_id),
@@ -1616,6 +1633,7 @@ async def stream_resume(
     last_event_id: Optional[str] = None,
     execution_id: Optional[UUID] = None,
     request: Request = None,
+    context: TenantContext = Depends(require_tenant_viewer),
 ):
     """SSE 재연결: Last-Event-ID 또는 offset 기반으로 끊긴 지점부터 이어서 스트리밍.
 
@@ -1630,7 +1648,7 @@ async def stream_resume(
     active_execution = str(execution_id) if execution_id else None
     if not active_execution:
         try:
-            current_execution = await svc.get_current_execution(sid)
+            current_execution = await svc.get_current_execution(sid, tenant_id=_tenant_id(context))
             if current_execution and current_execution.get("status") in ("running", "retrying"):
                 active_execution = str(current_execution["id"])
         except Exception:
@@ -1641,8 +1659,18 @@ async def stream_resume(
             pool = get_pool()
             async with pool.acquire() as conn:
                 _recent = await conn.fetchval(
-                    "SELECT id FROM chat_turn_executions WHERE session_id = $1 AND created_at > now() - interval '30 minutes' ORDER BY created_at DESC LIMIT 1",
+                    """
+                    SELECT te.id
+                      FROM chat_turn_executions te
+                      JOIN chat_sessions s ON s.id = te.session_id
+                     WHERE te.session_id = $1
+                       AND s.tenant_id = $2
+                       AND te.created_at > now() - interval '30 minutes'
+                     ORDER BY te.created_at DESC
+                     LIMIT 1
+                    """,
                     session_id,
+                    UUID(_tenant_id(context)),
                 )
                 if _recent:
                     active_execution = str(_recent)
@@ -2343,27 +2371,37 @@ async def regenerate_message(message_id: UUID, request: Request, mode: str = "re
 
 
 @router.put("/chat/messages/{message_id}/bookmark", response_model=MessageOut, tags=["chat-message"])
-async def toggle_bookmark(message_id: UUID):
+async def toggle_bookmark(
+    message_id: UUID,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """북마크 토글."""
-    result = await svc.toggle_bookmark(str(message_id))
+    result = await svc.toggle_bookmark(str(message_id), tenant_id=_tenant_id(context))
     if not result:
         raise _NOT_FOUND("message")
     return result
 
 
 @router.put("/chat/messages/{message_id}", response_model=MessageOut, tags=["chat-message"])
-async def update_message(message_id: UUID, req: MessageUpdateRequest):
+async def update_message(
+    message_id: UUID,
+    req: MessageUpdateRequest,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """사용자 메시지 내용 수정 (방식A: 수정 후 재전송용)."""
-    result = await svc.update_message(str(message_id), req.content)
+    result = await svc.update_message(str(message_id), req.content, tenant_id=_tenant_id(context))
     if not result:
         raise _NOT_FOUND("message")
     return result
 
 
 @router.delete("/chat/messages/{message_id}", tags=["chat-message"])
-async def delete_message(message_id: UUID):
+async def delete_message(
+    message_id: UUID,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """메시지 삭제 + 해당 AI 응답도 함께 삭제 (방식A: 수정재전송 시 기존 응답 제거)."""
-    deleted = await svc.delete_message_and_response(str(message_id))
+    deleted = await svc.delete_message_and_response(str(message_id), tenant_id=_tenant_id(context))
     if not deleted:
         raise _NOT_FOUND("message")
     return {"status": "deleted", "deleted_count": deleted}
@@ -2374,12 +2412,14 @@ async def search_messages(
     q: str = Query(..., min_length=1),
     workspace_id: Optional[UUID] = Query(None),
     limit: int = Query(20, le=100),
+    context: TenantContext = Depends(require_tenant_viewer),
 ):
     """FTS 전문 검색."""
     results = await svc.search_messages(
         query=q,
         workspace_id=str(workspace_id) if workspace_id else None,
         limit=limit,
+        tenant_id=_tenant_id(context),
     )
     return {"messages": results, "total": len(results)}
 
@@ -2389,10 +2429,11 @@ async def get_message_detail(
     message_id: UUID,
     response: Response,
     fields: str = Query("full", pattern="^(full|minimal)$"),
+    context: TenantContext = Depends(require_tenant_viewer),
 ):
     """단일 메시지 상세. fields=minimal 목록에서 도구박스/전체 본문을 lazy hydrate한다."""
     started_at = time.perf_counter()
-    result = await svc.get_message(str(message_id), fields=fields)
+    result = await svc.get_message(str(message_id), fields=fields, tenant_id=_tenant_id(context))
     if not result:
         raise _NOT_FOUND("message")
     _set_message_response_headers(response, started_at, result)
@@ -2526,45 +2567,64 @@ def get_diff_decision(session_id: str, tool_use_id: str) -> Optional[str]:
 # ════════════════════════════════════════════════════════════════════════════════
 
 @router.get("/chat/artifacts", response_model=List[ArtifactOut], response_model_by_alias=False, tags=["chat-artifact"])
-async def get_artifacts(session_id: Optional[UUID] = Query(None), workspace_id: Optional[UUID] = Query(None)):
+async def get_artifacts(
+    session_id: Optional[UUID] = Query(None),
+    workspace_id: Optional[UUID] = Query(None),
+    context: TenantContext = Depends(require_tenant_viewer),
+):
     """세션 또는 워크스페이스 내 아티팩트 목록."""
     return await svc.list_artifacts(
         session_id=str(session_id) if session_id else None,
         workspace_id=str(workspace_id) if workspace_id else None,
+        tenant_id=_tenant_id(context),
     )
 
 
 @router.get("/chat/artifacts/{artifact_id}", response_model=ArtifactOut, response_model_by_alias=False, tags=["chat-artifact"])
-async def get_artifact(artifact_id: UUID):
+async def get_artifact(
+    artifact_id: UUID,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
     """아티팩트 상세."""
-    result = await svc.get_artifact(str(artifact_id))
+    result = await svc.get_artifact(str(artifact_id), tenant_id=_tenant_id(context))
     if not result:
         raise _NOT_FOUND("artifact")
     return result
 
 
 @router.put("/chat/artifacts/{artifact_id}", response_model=ArtifactOut, response_model_by_alias=False, tags=["chat-artifact"])
-async def update_artifact(artifact_id: UUID, req: ArtifactUpdate):
+async def update_artifact(
+    artifact_id: UUID,
+    req: ArtifactUpdate,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """아티팩트 수정."""
-    result = await svc.update_artifact(str(artifact_id), req.model_dump(exclude_none=True))
+    result = await svc.update_artifact(str(artifact_id), req.model_dump(exclude_none=True), tenant_id=_tenant_id(context))
     if not result:
         raise _NOT_FOUND("artifact")
     return result
 
 
 @router.delete("/chat/artifacts/{artifact_id}", tags=["chat-artifact"])
-async def delete_artifact(artifact_id: UUID):
+async def delete_artifact(
+    artifact_id: UUID,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """아티팩트 삭제."""
-    deleted = await svc.delete_artifact(str(artifact_id))
+    deleted = await svc.delete_artifact(str(artifact_id), tenant_id=_tenant_id(context))
     if not deleted:
         raise _NOT_FOUND("artifact")
     return {"status": "deleted", "id": str(artifact_id)}
 
 
 @router.post("/chat/artifacts/{artifact_id}/export", tags=["chat-artifact"])
-async def export_artifact(artifact_id: UUID, req: ArtifactExportRequest):
+async def export_artifact(
+    artifact_id: UUID,
+    req: ArtifactExportRequest,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
     """아티팩트 내보내기 (pdf/md/html)."""
-    result = await svc.export_artifact(str(artifact_id), req.format)
+    result = await svc.export_artifact(str(artifact_id), req.format, tenant_id=_tenant_id(context))
     if not result:
         raise _NOT_FOUND("artifact")
     return Response(

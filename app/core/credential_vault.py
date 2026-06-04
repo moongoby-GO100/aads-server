@@ -90,18 +90,26 @@ def decrypt_value(ciphertext: str) -> str:
     return _get_fernet().decrypt(ciphertext.encode()).decode()
 
 
+def _require_tenant_uuid(tenant_id: str | None, operation: str) -> UUID:
+    if not tenant_id:
+        raise ValueError(f"tenant_scope_required:{operation}")
+    return UUID(str(tenant_id))
+
+
 # ── CRUD ───────────────────────────────────────────────
 
 async def list_credentials(
     project: str | None = None,
     service: str | None = None,
     include_secrets: bool = False,
+    tenant_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """자격증명 목록 조회. include_secrets=False면 암호 마스킹."""
+    tenant_uuid = _require_tenant_uuid(tenant_id, "list_credentials")
     pool = get_pool()
-    conditions: list[str] = ["is_active = TRUE"]
-    args: list[Any] = []
-    idx = 1
+    conditions: list[str] = ["tenant_id = $1", "is_active = TRUE"]
+    args: list[Any] = [tenant_uuid]
+    idx = 2
 
     if project:
         conditions.append(f"project = ${idx}")
@@ -149,12 +157,15 @@ async def list_credentials(
 async def get_credential(
     credential_id: str | UUID,
     include_secrets: bool = True,
+    tenant_id: str | None = None,
 ) -> dict[str, Any] | None:
     """단일 자격증명 조회 (복호화 포함)."""
+    tenant_uuid = _require_tenant_uuid(tenant_id, "get_credential")
     pool = get_pool()
     row = await pool.fetchrow(
-        "SELECT * FROM e2e_credentials WHERE id = $1",
+        "SELECT * FROM e2e_credentials WHERE id = $1 AND tenant_id = $2",
         credential_id if isinstance(credential_id, UUID) else UUID(credential_id),
+        tenant_uuid,
     )
     if not row:
         return None
@@ -193,8 +204,10 @@ async def create_credential(
     login_url: str | None = None,
     extra_fields: dict | None = None,
     login_steps: list | None = None,
+    tenant_id: str | None = None,
 ) -> dict[str, Any]:
     """새 자격증명 생성 (암호화 저장)."""
+    tenant_uuid = _require_tenant_uuid(tenant_id, "create_credential")
     pool = get_pool()
     username_enc = encrypt_value(username)
     password_enc = encrypt_value(password)
@@ -207,9 +220,9 @@ async def create_credential(
     row = await pool.fetchrow(
         """
         INSERT INTO e2e_credentials
-            (service, project, label, login_url, username_enc, password_enc, extra_fields, login_steps)
-        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb)
-        ON CONFLICT (service, COALESCE(project, '_ALL_'), label)
+            (tenant_id, service, project, label, login_url, username_enc, password_enc, extra_fields, login_steps)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb)
+        ON CONFLICT (tenant_id, service, COALESCE(project, '_ALL_'), label)
         DO UPDATE SET
             login_url = EXCLUDED.login_url,
             username_enc = EXCLUDED.username_enc,
@@ -220,25 +233,28 @@ async def create_credential(
             is_active = TRUE
         RETURNING id
         """,
-        service, project, label, login_url,
+        tenant_uuid, service, project, label, login_url,
         username_enc, password_enc,
         json.dumps(enc_extra), json.dumps(_coerce_json_list(login_steps)),
     )
 
     cred_id = str(row["id"])
     logger.info("자격증명 저장: service=%s project=%s label=%s id=%s", service, project, label, cred_id)
-    return await get_credential(cred_id, include_secrets=False)
+    return await get_credential(cred_id, include_secrets=False, tenant_id=tenant_id)
 
 
 async def update_credential(
     credential_id: str,
+    tenant_id: str | None = None,
     **kwargs,
 ) -> dict[str, Any] | None:
     """자격증명 수정. username/password/extra_fields 변경 시 재암호화."""
+    tenant_uuid = _require_tenant_uuid(tenant_id, "update_credential")
     pool = get_pool()
     existing = await pool.fetchrow(
-        "SELECT id FROM e2e_credentials WHERE id = $1",
+        "SELECT id FROM e2e_credentials WHERE id = $1 AND tenant_id = $2",
         UUID(credential_id),
+        tenant_uuid,
     )
     if not existing:
         return None
@@ -280,39 +296,46 @@ async def update_credential(
         idx += 1
 
     args.append(UUID(credential_id))
+    args.append(tenant_uuid)
     await pool.execute(
-        f"UPDATE e2e_credentials SET {', '.join(sets)} WHERE id = ${idx}",
+        f"UPDATE e2e_credentials SET {', '.join(sets)} WHERE id = ${idx} AND tenant_id = ${idx + 1}",
         *args,
     )
-    return await get_credential(credential_id, include_secrets=False)
+    return await get_credential(credential_id, include_secrets=False, tenant_id=tenant_id)
 
 
-async def delete_credential(credential_id: str) -> bool:
+async def delete_credential(credential_id: str, tenant_id: str | None = None) -> bool:
     """자격증명 소프트 삭제."""
+    tenant_uuid = _require_tenant_uuid(tenant_id, "delete_credential")
     pool = get_pool()
     result = await pool.execute(
-        "UPDATE e2e_credentials SET is_active = FALSE, updated_at = NOW() WHERE id = $1",
+        "UPDATE e2e_credentials SET is_active = FALSE, updated_at = NOW() WHERE id = $1 AND tenant_id = $2",
         UUID(credential_id),
+        tenant_uuid,
     )
     return result.endswith("1")
 
 
-async def mark_used(credential_id: str) -> None:
+async def mark_used(credential_id: str, tenant_id: str | None = None) -> None:
     """사용 시각 갱신."""
+    tenant_uuid = _require_tenant_uuid(tenant_id, "mark_used")
     pool = get_pool()
     await pool.execute(
-        "UPDATE e2e_credentials SET last_used_at = NOW() WHERE id = $1",
+        "UPDATE e2e_credentials SET last_used_at = NOW() WHERE id = $1 AND tenant_id = $2",
         UUID(credential_id),
+        tenant_uuid,
     )
 
 
-async def mark_verified(credential_id: str, success: bool = True) -> None:
+async def mark_verified(credential_id: str, success: bool = True, tenant_id: str | None = None) -> None:
     """로그인 검증 결과 기록."""
+    tenant_uuid = _require_tenant_uuid(tenant_id, "mark_verified")
     pool = get_pool()
     if success:
         await pool.execute(
-            "UPDATE e2e_credentials SET last_verified = NOW() WHERE id = $1",
+            "UPDATE e2e_credentials SET last_verified = NOW() WHERE id = $1 AND tenant_id = $2",
             UUID(credential_id),
+            tenant_uuid,
         )
 
 
@@ -323,25 +346,27 @@ async def get_login_credential(
     project: str | None = None,
     label: str = "기본",
     _auto_provision: bool = True,
+    tenant_id: str | None = None,
 ) -> dict[str, Any] | None:
     """서비스+프로젝트+라벨로 자격증명 조회. vault miss 시 auto_provision 폴백."""
+    tenant_uuid = _require_tenant_uuid(tenant_id, "get_login_credential")
     pool = get_pool()
     if project:
         row = await pool.fetchrow(
-            "SELECT * FROM e2e_credentials WHERE service = $1 AND project = $2 AND label = $3 AND is_active = TRUE",
-            service, project, label,
+            "SELECT * FROM e2e_credentials WHERE tenant_id = $1 AND service = $2 AND project = $3 AND label = $4 AND is_active = TRUE",
+            tenant_uuid, service, project, label,
         )
     else:
         row = await pool.fetchrow(
-            "SELECT * FROM e2e_credentials WHERE service = $1 AND project IS NULL AND label = $2 AND is_active = TRUE",
-            service, label,
+            "SELECT * FROM e2e_credentials WHERE tenant_id = $1 AND service = $2 AND project IS NULL AND label = $3 AND is_active = TRUE",
+            tenant_uuid, service, label,
         )
     if not row:
         if _auto_provision and project:
             logger.info("get_login_credential: vault miss → auto_provision project=%s", project)
-            provisioned = await auto_provision_e2e_credential(project)
+            provisioned = await auto_provision_e2e_credential(project, tenant_id=tenant_id)
             if provisioned:
-                return await get_login_credential(service, project, label, _auto_provision=False)
+                return await get_login_credential(service, project, label, _auto_provision=False, tenant_id=tenant_id)
         return None
 
     item = dict(row)
@@ -436,7 +461,7 @@ async def execute_login_steps(page: Any, credential: dict[str, Any]) -> bool:
                 "redirect_url": login_url.replace("/login", "/chat").replace("/signin", "/"),
             })
             if inject_ok:
-                await mark_used(credential["id"])
+                await mark_used(credential["id"], tenant_id=str(credential.get("tenant_id") or ""))
                 return True
             await page.goto(login_url, wait_until="domcontentloaded", timeout=15000)
 
@@ -448,7 +473,7 @@ async def execute_login_steps(page: Any, credential: dict[str, Any]) -> bool:
         login_btn = page.locator("button[type='submit'], button:has-text('로그인'), button:has-text('Login'), button:has-text('Sign in')").first
         await login_btn.click(timeout=5000)
         await page.wait_for_timeout(3000)
-        await mark_used(credential["id"])
+        await mark_used(credential["id"], tenant_id=str(credential.get("tenant_id") or ""))
         return True
 
     for step in steps:
@@ -494,7 +519,7 @@ async def execute_login_steps(page: Any, credential: dict[str, Any]) -> bool:
             logger.error("login_step 실행 실패: action=%s error=%s", action, e)
             return False
 
-    await mark_used(credential["id"])
+    await mark_used(credential["id"], tenant_id=str(credential.get("tenant_id") or ""))
     return True
 
 
@@ -582,9 +607,10 @@ async def _fallback_from_member_db(project: str, config: dict[str, Any]) -> dict
     return {"email": config["default_email"], "password": config["default_password"]}
 
 
-async def auto_provision_e2e_credential(project: str) -> dict[str, Any] | None:
+async def auto_provision_e2e_credential(project: str, tenant_id: str | None = None) -> dict[str, Any] | None:
     """E2E 자격증명 자동 프로비저닝: signup API → login 검증 → 회원DB 폴백 → vault 등록."""
     import aiohttp
+    _require_tenant_uuid(tenant_id, "auto_provision_e2e_credential")
 
     project = project.upper()
     config = _PROVISION_CONFIG.get(project)
@@ -646,6 +672,7 @@ async def auto_provision_e2e_credential(project: str) -> dict[str, Any] | None:
             project=project,
             label="E2E 자동 검증용",
             login_url=config.get("login_url"),
+            tenant_id=tenant_id,
         )
         logger.info("auto_provision: registered credential for %s id=%s", project, cred.get("id"))
         return cred
@@ -654,18 +681,19 @@ async def auto_provision_e2e_credential(project: str) -> dict[str, Any] | None:
         return None
 
 
-async def ensure_all_project_credentials() -> dict[str, Any]:
+async def ensure_all_project_credentials(tenant_id: str | None = None) -> dict[str, Any]:
     """모든 프로젝트의 E2E 자격증명 존재 확인 및 자동 프로비저닝."""
+    _require_tenant_uuid(tenant_id, "ensure_all_project_credentials")
     results = {}
     for project in _PROVISION_CONFIG:
         config = _PROVISION_CONFIG[project]
         cred = await get_login_credential(
-            config["service"], project, "E2E 자동 검증용", _auto_provision=False,
+            config["service"], project, "E2E 자동 검증용", _auto_provision=False, tenant_id=tenant_id,
         )
         if cred:
             results[project] = {"status": "exists", "id": cred["id"]}
         else:
-            provisioned = await auto_provision_e2e_credential(project)
+            provisioned = await auto_provision_e2e_credential(project, tenant_id=tenant_id)
             if provisioned:
                 results[project] = {"status": "provisioned", "id": provisioned.get("id")}
             else:
@@ -740,11 +768,12 @@ _E2E_TOKEN_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _E2E_TOKEN_CACHE_TTL_SECONDS = 180
 
 
-async def get_e2e_login_url(project: str, redirect: str | None = None, role: str | None = None) -> dict[str, Any]:
+async def get_e2e_login_url(project: str, redirect: str | None = None, role: str | None = None, tenant_id: str | None = None) -> dict[str, Any]:
     """프로젝트별 E2E 브라우저 자동 로그인 URL 생성."""
     import aiohttp
     import time
     from urllib.parse import quote
+    _require_tenant_uuid(tenant_id, "get_e2e_login_url")
 
     project = project.upper()
     if project == "KIS":
@@ -755,7 +784,7 @@ async def get_e2e_login_url(project: str, redirect: str | None = None, role: str
         return {"success": False, "error": f"Unsupported project: {project}. Available: {list(_E2E_PROJECT_CONFIG.keys())}"}
 
     if config.get("form_login"):
-        cred = await get_login_credential(config["service"], "NTV2", config["label"], _auto_provision=False)
+        cred = await get_login_credential(config["service"], "NTV2", config["label"], _auto_provision=False, tenant_id=tenant_id)
         if not cred:
             return {"success": False, "error": f"No credential found for {project}"}
         fields = {}
@@ -770,7 +799,7 @@ async def get_e2e_login_url(project: str, redirect: str | None = None, role: str
             "instructions": f"browser_navigate({config['login_url']}) → browser_fill(각 필드) → browser_click(submit)",
         }
 
-    cred = await get_login_credential(config["service"], project, config["label"])
+    cred = await get_login_credential(config["service"], project, config["label"], tenant_id=tenant_id)
     if not cred:
         return {"success": False, "error": f"No credential found for {project}"}
 

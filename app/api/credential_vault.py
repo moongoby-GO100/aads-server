@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.core.credential_vault import (
@@ -20,9 +20,17 @@ from app.core.credential_vault import (
     mark_verified,
     update_credential,
 )
+from app.auth import TenantRole, require_tenant_role
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/e2e/credentials", tags=["e2e-credentials"])
+TenantContext = dict[str, Any]
+require_tenant_viewer = require_tenant_role(TenantRole.VIEWER)
+require_tenant_member = require_tenant_role(TenantRole.MEMBER)
+
+
+def _tenant_id(context: TenantContext) -> str:
+    return str(context["tenant"]["id"])
 
 
 # ── Request/Response 모델 ──────────────────────────────
@@ -66,9 +74,10 @@ async def api_list_credentials(
     project: str | None = None,
     service: str | None = None,
     include_secrets: bool = False,
+    context: TenantContext = Depends(require_tenant_viewer),
 ) -> dict[str, Any]:
     """자격증명 목록 조회. include_secrets=true로 비밀번호 포함."""
-    items = await list_credentials(project=project, service=service, include_secrets=include_secrets)
+    items = await list_credentials(project=project, service=service, include_secrets=include_secrets, tenant_id=_tenant_id(context))
     return {"credentials": items, "count": len(items)}
 
 
@@ -76,16 +85,20 @@ async def api_list_credentials(
 async def api_get_credential(
     credential_id: str,
     include_secrets: bool = True,
+    context: TenantContext = Depends(require_tenant_viewer),
 ) -> dict[str, Any]:
     """단일 자격증명 상세 조회."""
-    item = await get_credential(credential_id, include_secrets=include_secrets)
+    item = await get_credential(credential_id, include_secrets=include_secrets, tenant_id=_tenant_id(context))
     if not item:
         raise HTTPException(status_code=404, detail="자격증명을 찾을 수 없습니다")
     return item
 
 
 @router.post("")
-async def api_create_credential(body: CredentialCreate) -> dict[str, Any]:
+async def api_create_credential(
+    body: CredentialCreate,
+    context: TenantContext = Depends(require_tenant_member),
+) -> dict[str, Any]:
     """새 자격증명 등록 (암호화 저장)."""
     result = await create_credential(
         service=body.service,
@@ -96,38 +109,50 @@ async def api_create_credential(body: CredentialCreate) -> dict[str, Any]:
         login_url=body.login_url,
         extra_fields=body.extra_fields,
         login_steps=body.login_steps,
+        tenant_id=_tenant_id(context),
     )
     return {"status": "created", "credential": result}
 
 
 @router.put("/{credential_id}")
-async def api_update_credential(credential_id: str, body: CredentialUpdate) -> dict[str, Any]:
+async def api_update_credential(
+    credential_id: str,
+    body: CredentialUpdate,
+    context: TenantContext = Depends(require_tenant_member),
+) -> dict[str, Any]:
     """자격증명 수정."""
     updates = body.model_dump(exclude_none=True)
     if not updates:
         raise HTTPException(status_code=400, detail="수정할 필드가 없습니다")
-    result = await update_credential(credential_id, **updates)
+    result = await update_credential(credential_id, tenant_id=_tenant_id(context), **updates)
     if not result:
         raise HTTPException(status_code=404, detail="자격증명을 찾을 수 없습니다")
     return {"status": "updated", "credential": result}
 
 
 @router.delete("/{credential_id}")
-async def api_delete_credential(credential_id: str) -> dict[str, Any]:
+async def api_delete_credential(
+    credential_id: str,
+    context: TenantContext = Depends(require_tenant_member),
+) -> dict[str, Any]:
     """자격증명 비활성화 (소프트 삭제)."""
-    success = await delete_credential(credential_id)
+    success = await delete_credential(credential_id, tenant_id=_tenant_id(context))
     if not success:
         raise HTTPException(status_code=404, detail="자격증명을 찾을 수 없습니다")
     return {"status": "deleted", "credential_id": credential_id}
 
 
 @router.post("/test-login")
-async def api_test_login(body: LoginTestRequest) -> dict[str, Any]:
+async def api_test_login(
+    body: LoginTestRequest,
+    context: TenantContext = Depends(require_tenant_member),
+) -> dict[str, Any]:
     """저장된 자격증명으로 실제 로그인 테스트 실행."""
     cred = await get_login_credential(
         service=body.service,
         project=body.project,
         label=body.label,
+        tenant_id=_tenant_id(context),
     )
     if not cred:
         raise HTTPException(
@@ -151,7 +176,7 @@ async def api_test_login(body: LoginTestRequest) -> dict[str, Any]:
             final_url = page.url
 
             if success:
-                await mark_verified(cred["id"], success=True)
+                await mark_verified(cred["id"], success=True, tenant_id=_tenant_id(context))
                 return {
                     "status": "success",
                     "service": body.service,
@@ -178,25 +203,35 @@ async def api_test_login(body: LoginTestRequest) -> dict[str, Any]:
 
 
 @router.get("/e2e-login-url/{project}")
-async def get_e2e_url(project: str, redirect: str | None = None, role: str | None = None):
+async def get_e2e_url(
+    project: str,
+    redirect: str | None = None,
+    role: str | None = None,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
     """프로젝트별 E2E 브라우저 자동 로그인 URL 생성. 파이프라인 검증용."""
-    result = await get_e2e_login_url(project, redirect, role)
+    result = await get_e2e_login_url(project, redirect, role, tenant_id=_tenant_id(context))
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
     return result
 
 
 @router.post("/provision/{project}")
-async def api_provision_credential(project: str) -> dict[str, Any]:
+async def api_provision_credential(
+    project: str,
+    context: TenantContext = Depends(require_tenant_member),
+) -> dict[str, Any]:
     """단일 프로젝트 E2E 자격증명 자동 프로비저닝."""
-    cred = await auto_provision_e2e_credential(project)
+    cred = await auto_provision_e2e_credential(project, tenant_id=_tenant_id(context))
     if not cred:
         raise HTTPException(status_code=500, detail=f"프로비저닝 실패: {project}")
     return {"status": "provisioned", "credential": cred}
 
 
 @router.post("/provision-all")
-async def api_provision_all() -> dict[str, Any]:
+async def api_provision_all(
+    context: TenantContext = Depends(require_tenant_member),
+) -> dict[str, Any]:
     """전체 프로젝트 E2E 자격증명 일괄 프로비저닝."""
-    results = await ensure_all_project_credentials()
+    results = await ensure_all_project_credentials(tenant_id=_tenant_id(context))
     return {"status": "completed", "results": results}

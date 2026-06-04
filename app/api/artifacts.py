@@ -14,11 +14,19 @@ from typing import Optional
 
 import asyncpg
 import structlog
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from app.auth import TenantRole, require_tenant_role
 
 router = APIRouter()
 logger = structlog.get_logger()
+TenantContext = dict[str, object]
+require_tenant_viewer = require_tenant_role(TenantRole.VIEWER)
+require_tenant_member = require_tenant_role(TenantRole.MEMBER)
+
+
+def _tenant_id(context: TenantContext) -> str:
+    return str(context["tenant"]["id"])  # type: ignore[index]
 
 
 # ─── Pydantic 모델 ────────────────────────────────────────────────────────────
@@ -55,7 +63,10 @@ def _db_url() -> str:
 
 @router.post("/artifacts", response_model=ArtifactResponse, status_code=201,
              summary="산출물 저장", tags=["artifacts"])
-async def create_artifact(req: CreateArtifactRequest):
+async def create_artifact(
+    req: CreateArtifactRequest,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """에이전트 산출물을 project_artifacts 테이블에 저장."""
     db_url = _db_url()
     if not db_url:
@@ -67,13 +78,14 @@ async def create_artifact(req: CreateArtifactRequest):
             row = await conn.fetchrow(
                 """
                 INSERT INTO project_artifacts
-                    (project_id, artifact_type, artifact_name, content,
+                    (tenant_id, project_id, artifact_type, artifact_name, content,
                      source_agent, source_task, version)
-                VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
+                VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6, $7, $8)
                 RETURNING id, project_id, artifact_type, artifact_name,
                           content::text, source_agent, source_task, version,
                           created_at::text
                 """,
+                _tenant_id(context),
                 req.project_id,
                 req.artifact_type,
                 req.artifact_name,
@@ -123,15 +135,16 @@ async def list_artifacts(
     type: Optional[str] = Query(None, description="artifact_type 필터"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    context: TenantContext = Depends(require_tenant_viewer),
 ):
     """project_id 및/또는 type으로 산출물 목록 조회."""
     db_url = _db_url()
     if not db_url:
         raise HTTPException(503, "Database not configured")
 
-    conditions = []
-    params: list = []
-    idx = 1
+    conditions = ["tenant_id = $1::uuid"]
+    params: list = [_tenant_id(context)]
+    idx = 2
 
     if project_id:
         conditions.append(f"project_id = ${idx}")
@@ -192,7 +205,10 @@ async def list_artifacts(
 
 @router.get("/artifacts/{artifact_id}", response_model=ArtifactResponse,
             summary="산출물 단건 조회", tags=["artifacts"])
-async def get_artifact(artifact_id: int):
+async def get_artifact(
+    artifact_id: int,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
     """artifact_id로 단건 산출물 조회."""
     db_url = _db_url()
     if not db_url:
@@ -207,8 +223,10 @@ async def get_artifact(artifact_id: int):
                        content::text, source_agent, source_task, version, created_at::text
                 FROM project_artifacts
                 WHERE id = $1
+                  AND tenant_id = $2::uuid
                 """,
                 artifact_id,
+                _tenant_id(context),
             )
         finally:
             await conn.close()

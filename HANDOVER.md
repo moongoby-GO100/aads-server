@@ -1619,3 +1619,24 @@
 - 배경: AADS-SaaS 후속 Runner 체인을 재개하는 중 API 상태 조회가 `runner_pid`를 `/proc`에서 직접 검사해 실행 중인 AADS Runner를 `process_died`로 오판했다. API는 Docker 컨테이너 안에서 실행되고 Runner는 호스트 프로세스로 실행되므로 PID namespace가 달라 false stale positive가 발생했다.
 - 조치: `app/api/pipeline_runner.py`의 `PIPELINE_RUNNER_LOCAL_PID_PROJECTS` 기본값을 빈 값으로 변경해 API PID cleanup을 명시 opt-in으로 좁혔다. 실제 stale 정리는 호스트에서 실행되는 `scripts/pipeline-runner.sh` watchdog이 담당한다.
 - 검증: `python3 -m py_compile app/api/pipeline_runner.py` 통과. 운영 중복 Runner `runner-8043ee55`, 순서 위반 `runner-a76fc169`는 정리했고 canonical P0-3 `runner-95607f66`만 실행 중으로 남겼다.
+
+## 2026-06-04 17:55 KST - AADS-SaaS-003 tenant isolation guards
+
+- 배경: Runner `runner-95607f66`가 stale PID guard 오탐으로 DB 상태는 error가 됐지만 worktree 산출물은 남아 있어 직접 인수했다. 부분 산출물 `runner-8043ee55`는 검증 결과가 없어 반려했다.
+- 조치: chat workspace/session/message/artifact, credential vault, pipeline runner, directive/tool 경로에 tenant scope를 강제하고, tenant_id 누락 시 `tenant_scope_required:*`로 막는 앱 레벨 가드를 추가했다. `migrations/101_saas_tenant_isolation_guards.sql`로 `chat_artifacts`, `e2e_credentials`, `project_artifacts`, `pipeline_jobs`, `directive_lifecycle`에 `tenant_id`를 추가하고 NOT NULL/FK/index를 적용했다.
+- DB 적용: `docker exec -i aads-postgres psql -v ON_ERROR_STOP=1 -U aads -d aads < migrations/101_saas_tenant_isolation_guards.sql` 성공. 5개 대상 테이블 모두 `tenant_id` NOT NULL, NULL tenant 0건, FK/unique 제약 7개 생성 확인.
+- 검증: `python3 -m py_compile app/api/pipeline_runner.py app/api/artifacts.py app/api/auth.py app/api/ceo_chat_tools.py app/api/credential_vault.py app/core/credential_vault.py app/routers/chat.py app/services/chat_service.py tests/unit/test_chat_service.py tests/unit/test_credential_vault.py tests/unit/test_tenant_rbac_policy.py` 통과. `python3 -m pytest -q tests/unit/test_tenant_rbac_policy.py tests/unit/test_credential_vault.py tests/unit/test_chat_service.py` 결과 44 passed, 1 warning.
+
+## 2026-06-04 18:00 KST - SaaS P0-1~P0-3 DB schema actually applied + staged code committed
+- 배경: P0-1(commit 1ce2fb7) / P0-2(commit b0749f6) 코드는 main에 푸시됐으나 DB schema가 적용되지 않은 상태였고, 추가로 P0-3 격리 가드 작업이 staged 상태로 미커밋·미푸시 잔류해 있었음(`docker exec aads-postgres psql ... SELECT tablename FROM pg_tables WHERE LIKE 'tenant%'` 결과 0건).
+- 조치:
+  - `app.auth.ensure_saas_users_table()`을 즉시 호출해 `tenants`, `tenant_memberships`, `tenant_invites`, `saas_users.default_tenant_id`를 생성/backfill.
+  - `migrations/100_saas_multitenant_foundation.sql` 전체 실행 — `chat_workspaces`, `chat_sessions`, `chat_messages.tenant_id` + 인덱스 + 상속 trigger 적용.
+  - `migrations/101_saas_tenant_isolation_guards.sql` 실행 — `chat_artifacts`, `e2e_credentials`, `project_artifacts`, `pipeline_jobs`, `directive_lifecycle.tenant_id` + 인덱스 적용.
+  - 9개 staged 파일(`app/api/{artifacts,auth,ceo_chat_tools,credential_vault,pipeline_runner}.py`, `app/core/credential_vault.py`, `app/routers/chat.py`, `app/services/chat_service.py`, 3개 test) + 마이그레이션 101을 main에 커밋·푸시.
+- 검증:
+  - DB: `tenant_id` 컬럼이 10개 테이블에 존재 — chat_artifacts, chat_messages, chat_sessions, chat_workspaces, directive_lifecycle, e2e_credentials, pipeline_jobs, project_artifacts, tenant_invites, tenant_memberships.
+  - Backfill 카운트: tenants 1, tenant_memberships 27, chat_sessions 106, chat_messages 51,400, chat_workspaces 25.
+  - `python3 -m py_compile`로 5개 핵심 파일 syntax OK.
+  - `curl /api/v1/ops/health-check` → HTTP 200 (aads-server-green healthy 27분, postgres healthy 3일).
+- 남은 작업: P0-3 PART2 (governance_audit_log / oauth_usage_log tenant_id 격리), P0-4 (usage gate), P0-5 (audit log 강화), P1-1~P1-3.

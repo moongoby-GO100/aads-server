@@ -12,11 +12,19 @@ import uuid
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
+from app.auth import TenantRole, require_tenant_role
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
+TenantContext = dict[str, object]
+require_tenant_viewer = require_tenant_role(TenantRole.VIEWER)
+require_tenant_member = require_tenant_role(TenantRole.MEMBER)
+
+
+def _tenant_id(context: TenantContext) -> str:
+    return str(context["tenant"]["id"])  # type: ignore[index]
 
 # H6 + M4: 허용 프로젝트 화이트리스트
 _VALID_PROJECTS = {"AADS", "KIS", "GO100", "SF", "NTV2"}
@@ -135,6 +143,7 @@ async def _find_active_file_conflict(
     *,
     project: str,
     target_files: set[str],
+    tenant_id: str,
     ignore_job_ids: set[str] | None = None,
 ) -> dict | None:
     """Return an active job touching one of target_files, if instruction paths overlap."""
@@ -146,11 +155,13 @@ async def _find_active_file_conflict(
         SELECT job_id, instruction, status, phase
         FROM pipeline_jobs
         WHERE project = $1
-          AND status = ANY($2::text[])
+          AND tenant_id = $2::uuid
+          AND status = ANY($3::text[])
         ORDER BY created_at DESC
         LIMIT 100
         """,
         project,
+        tenant_id,
         list(_ACTIVE_PIPELINE_STATUSES),
     )
     for row in rows:
@@ -211,7 +222,7 @@ def _parallel_scope(parallel_group: str | None) -> str:
     return (parallel_group or "").strip()
 
 
-async def _find_active_duplicate(conn, project: str, instruction_hash: str, parallel_group: str = ""):
+async def _find_active_duplicate(conn, project: str, instruction_hash: str, parallel_group: str = "", tenant_id: str = ""):
     scope = _parallel_scope(parallel_group)
     return await conn.fetchrow(
         """
@@ -220,7 +231,8 @@ async def _find_active_duplicate(conn, project: str, instruction_hash: str, para
         WHERE project = $1
           AND instruction_hash = $2
           AND COALESCE(parallel_group, '') = $3
-          AND status = ANY($4::text[])
+          AND tenant_id = $4::uuid
+          AND status = ANY($5::text[])
         ORDER BY
           CASE status
             WHEN 'running' THEN 0
@@ -238,12 +250,13 @@ async def _find_active_duplicate(conn, project: str, instruction_hash: str, para
         project,
         instruction_hash,
         scope,
+        tenant_id,
         list(_ACTIVE_PIPELINE_STATUSES),
     )
 
 
 async def _record_dedup_blocked(conn, *, job_id: str, req: "JobSubmitRequest",
-                                instruction_hash: str, existing) -> str:
+                                instruction_hash: str, existing, tenant_id: str) -> str:
     detail = (
         f"dedup_blocked: existing job {existing['job_id']} "
         f"is {existing['status']}/{existing['phase']}"
@@ -253,7 +266,7 @@ async def _record_dedup_blocked(conn, *, job_id: str, req: "JobSubmitRequest",
         INSERT INTO pipeline_jobs
           (job_id, project, instruction, instruction_hash, chat_session_id,
            status, phase, max_cycles, size, parallel_group, depends_on,
-           error_detail, review_feedback, logs, created_at, updated_at)
+           error_detail, review_feedback, logs, created_at, updated_at, tenant_id)
         VALUES ($1, $2, $3, $4, $5,
                 'cancelled', 'dedup_blocked', $6, $7, $8, $9,
                 $10, $11,
@@ -266,7 +279,7 @@ async def _record_dedup_blocked(conn, *, job_id: str, req: "JobSubmitRequest",
                   'parallel_scope', $15,
                   'auto_retryable', false
                 )),
-                NOW(), NOW())
+                NOW(), NOW(), $16::uuid)
         """,
         job_id,
         req.project,
@@ -283,6 +296,7 @@ async def _record_dedup_blocked(conn, *, job_id: str, req: "JobSubmitRequest",
         existing["status"],
         existing["phase"],
         _parallel_scope(req.parallel_group),
+        tenant_id,
     )
     logger.info("pipeline_runner.submit_dedup_blocked",
                 blocked_job_id=job_id,
@@ -293,14 +307,14 @@ async def _record_dedup_blocked(conn, *, job_id: str, req: "JobSubmitRequest",
 
 
 async def _record_blocked_dependency(conn, *, job_id: str, req: "JobSubmitRequest",
-                                     instruction_hash: str, dep_status: str) -> str:
+                                     instruction_hash: str, dep_status: str, tenant_id: str) -> str:
     detail = f"blocked_dependency: parent {req.depends_on} is {dep_status}"
     await conn.execute(
         """
         INSERT INTO pipeline_jobs
           (job_id, project, instruction, instruction_hash, chat_session_id,
            status, phase, max_cycles, size, parallel_group, depends_on,
-           error_detail, review_feedback, logs, created_at, updated_at)
+           error_detail, review_feedback, logs, created_at, updated_at, tenant_id)
         VALUES ($1, $2, $3, $4, $5,
                 'cancelled', 'blocked_dependency', $6, $7, $8, $9,
                 $10, $11,
@@ -311,7 +325,7 @@ async def _record_blocked_dependency(conn, *, job_id: str, req: "JobSubmitReques
                   'upstream_status', $13,
                   'auto_retryable', false
                 )),
-                NOW(), NOW())
+                NOW(), NOW(), $14::uuid)
         """,
         job_id,
         req.project,
@@ -326,6 +340,7 @@ async def _record_blocked_dependency(conn, *, job_id: str, req: "JobSubmitReques
         f"[Runner Guard] {detail}; auto_retryable=false",
         req.depends_on,
         dep_status,
+        tenant_id,
     )
     logger.info("pipeline_runner.submit_blocked_dependency",
                 blocked_job_id=job_id,
@@ -439,7 +454,7 @@ class JobApproveRequest(BaseModel):
         return v
 
 
-async def check_project_lock(conn, project: str, exclude_job_id: str | None = None, parallel_group: str = "") -> bool:
+async def check_project_lock(conn, project: str, exclude_job_id: str | None = None, parallel_group: str = "", tenant_id: str = "") -> bool:
     """프로젝트에 실행 중인(running/claimed) 작업이 상한에 도달했는지 확인. True면 잠김.
     AADS-211: parallel_group이 지정되면 같은 그룹 내 작업은 동시 실행 허용."""
     max_concurrent = _max_concurrent_per_project()
@@ -447,22 +462,22 @@ async def check_project_lock(conn, project: str, exclude_job_id: str | None = No
     if parallel_group:
         row = await conn.fetchrow(
             "SELECT count(*) as cnt FROM pipeline_jobs "
-            "WHERE project = $1 AND status IN ('running', 'claimed') "
-            "AND (parallel_group IS NULL OR parallel_group != $2)",
-            project, parallel_group,
+            "WHERE project = $1 AND tenant_id = $2::uuid AND status IN ('running', 'claimed') "
+            "AND (parallel_group IS NULL OR parallel_group != $3)",
+            project, tenant_id, parallel_group,
         )
         return (row["cnt"] or 0) >= max_concurrent
     if exclude_job_id:
         row = await conn.fetchrow(
             "SELECT count(*) as cnt FROM pipeline_jobs "
-            "WHERE project = $1 AND status IN ('running', 'claimed') AND job_id != $2",
-            project, exclude_job_id,
+            "WHERE project = $1 AND tenant_id = $2::uuid AND status IN ('running', 'claimed') AND job_id != $3",
+            project, tenant_id, exclude_job_id,
         )
     else:
         row = await conn.fetchrow(
             "SELECT count(*) as cnt FROM pipeline_jobs "
-            "WHERE project = $1 AND status IN ('running', 'claimed')",
-            project,
+            "WHERE project = $1 AND tenant_id = $2::uuid AND status IN ('running', 'claimed')",
+            project, tenant_id,
         )
     return (row["cnt"] or 0) >= max_concurrent
 
@@ -648,7 +663,10 @@ async def _cleanup_dead_local_runner_processes(conn, project: str, min_age_secon
 
 
 @router.post("/pipeline/jobs", response_model=JobSubmitResponse, tags=["pipeline-runner"])
-async def submit_job(req: JobSubmitRequest):
+async def submit_job(
+    req: JobSubmitRequest,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """작업 제출 — 같은 프로젝트에 running 작업이 있으면 queued 대기, 없으면 즉시 running."""
     from app.core.db_pool import get_pool
     pool = get_pool()
@@ -664,6 +682,14 @@ async def submit_job(req: JobSubmitRequest):
         async with pool.acquire() as conn:
             # 트랜잭션으로 lock 체크 + INSERT 원자성 보장
             async with conn.transaction():
+                tenant_id = _tenant_id(context)
+                session_tenant = await conn.fetchval(
+                    "SELECT tenant_id::text FROM chat_sessions WHERE id = $1::uuid AND tenant_id = $2::uuid",
+                    session_id,
+                    tenant_id,
+                )
+                if not session_tenant:
+                    raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
                 await _lock_instruction_hash(conn, instruction_hash)
                 await _cleanup_dead_local_runner_processes(conn, req.project)
                 # AADS-239: 중복 재사용 — 기존 작업 활용 (죽이기 → 재사용)
@@ -673,6 +699,7 @@ async def submit_job(req: JobSubmitRequest):
                     req.project,
                     instruction_hash,
                     req.parallel_group,
+                    tenant_id=tenant_id,
                 )
                 if existing:
                     detail = await _record_dedup_blocked(
@@ -681,6 +708,7 @@ async def submit_job(req: JobSubmitRequest):
                         req=req,
                         instruction_hash=instruction_hash,
                         existing=existing,
+                        tenant_id=tenant_id,
                     )
                     return JobSubmitResponse(
                         job_id=job_id,
@@ -692,19 +720,22 @@ async def submit_job(req: JobSubmitRequest):
                     """
                     SELECT job_id FROM pipeline_jobs
                     WHERE instruction_hash = $1
+                      AND tenant_id = $2::uuid
                       AND status = 'error'
                       AND created_at > NOW() - INTERVAL '2 hours'
                     ORDER BY created_at DESC LIMIT 1
                     FOR UPDATE
                     """,
                     instruction_hash,
+                    tenant_id,
                 )
                 if failed:
                     await conn.execute(
                         "UPDATE pipeline_jobs SET status = 'queued', phase = 'queued', "
                         "error_detail = NULL, runner_pid = NULL, updated_at = NOW() "
-                        "WHERE job_id = $1",
+                        "WHERE job_id = $1 AND tenant_id = $2::uuid",
                         failed["job_id"],
+                        tenant_id,
                     )
                     await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", failed["job_id"])
                     return JobSubmitResponse(
@@ -712,7 +743,7 @@ async def submit_job(req: JobSubmitRequest):
                         status="retrying",
                         message=f"이전 실패 작업을 재시도합니다: {failed['job_id']}",
                     )
-                locked = await check_project_lock(conn, req.project, parallel_group=req.parallel_group)
+                locked = await check_project_lock(conn, req.project, parallel_group=req.parallel_group, tenant_id=tenant_id)
                 worker_model, worker_model_reason = _normalize_worker_model_override(
                     req.worker_model,
                     req.worker_model_reason,
@@ -731,8 +762,9 @@ async def submit_job(req: JobSubmitRequest):
                 # AADS-211: depends_on 유효성 검사
                 if req.depends_on:
                     dep_row = await conn.fetchrow(
-                        "SELECT job_id, status FROM pipeline_jobs WHERE job_id = $1",
+                        "SELECT job_id, status FROM pipeline_jobs WHERE job_id = $1 AND tenant_id = $2::uuid",
                         req.depends_on,
+                        tenant_id,
                     )
                     if not dep_row:
                         detail = await _record_blocked_dependency(
@@ -741,6 +773,7 @@ async def submit_job(req: JobSubmitRequest):
                             req=req,
                             instruction_hash=instruction_hash,
                             dep_status="missing",
+                            tenant_id=tenant_id,
                         )
                         return JobSubmitResponse(
                             job_id=job_id,
@@ -755,6 +788,7 @@ async def submit_job(req: JobSubmitRequest):
                             req=req,
                             instruction_hash=instruction_hash,
                             dep_status=dep_row["status"],
+                            tenant_id=tenant_id,
                         )
                         return JobSubmitResponse(
                             job_id=job_id,
@@ -766,6 +800,7 @@ async def submit_job(req: JobSubmitRequest):
                         conn,
                         project=req.project,
                         target_files=target_files,
+                        tenant_id=tenant_id,
                     )
                     if conflict:
                         auto_depends_on = conflict["job_id"]
@@ -788,7 +823,7 @@ async def submit_job(req: JobSubmitRequest):
                       (job_id, project, instruction, instruction_hash, chat_session_id,
                        status, phase, max_cycles, model, size,
                        worker_model, model_override_reason, parallel_group, depends_on,
-                       review_feedback, logs, created_at, updated_at)
+                       review_feedback, logs, created_at, updated_at, tenant_id)
                     VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, $7, $8,
                             $9, $10, $11, $12::text,
                             $13::text,
@@ -797,16 +832,19 @@ async def submit_job(req: JobSubmitRequest):
                               'event', 'file_conflict_auto_dependency',
                               'depends_on', $12::text
                             )) END,
-                            NOW(), NOW())
+                            NOW(), NOW(), $14::uuid)
                     """,
                     job_id, req.project, req.instruction, instruction_hash,
                     session_id, req.max_cycles, model, size,
                     worker_model or None, worker_model_reason or None,
                     req.parallel_group or None, effective_depends_on,
                     auto_dependency_reason,
+                    tenant_id,
                 )
                 # P2-2: LISTEN/NOTIFY — 이벤트 드리븐 (asyncpg 소비자용)
                 await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", job_id)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("pipeline_runner.submit_fail", error=str(e))
         raise HTTPException(status_code=500, detail="작업 저장 실패")
@@ -831,14 +869,15 @@ async def list_jobs(
     project: Optional[str] = Query(None, max_length=10),
     session_id: Optional[str] = Query(None, max_length=36),
     limit: int = Query(20, ge=1, le=100),
+    context: TenantContext = Depends(require_tenant_viewer),
 ):
     """작업 목록 조회."""
     from app.core.db_pool import get_pool
     pool = get_pool()
 
-    conditions = []
-    params = []
-    idx = 1
+    conditions = ["tenant_id = $1::uuid"]
+    params = [_tenant_id(context)]
+    idx = 2
 
     if status:
         conditions.append(f"status = ${idx}")
@@ -901,7 +940,10 @@ async def list_jobs(
 
 
 @router.get("/pipeline/jobs/{job_id}", tags=["pipeline-runner"])
-async def get_job(job_id: str):
+async def get_job(
+    job_id: str,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
     """작업 상세 조회."""
     if not _JOB_ID_RE.match(job_id) and not job_id.startswith("pc-"):
         raise HTTPException(status_code=400, detail="유효하지 않은 job_id 형식")
@@ -911,7 +953,9 @@ async def get_job(job_id: str):
 
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT * FROM pipeline_jobs WHERE job_id = $1", job_id
+            "SELECT * FROM pipeline_jobs WHERE job_id = $1 AND tenant_id = $2::uuid",
+            job_id,
+            _tenant_id(context),
         )
 
     if not row:
@@ -1071,7 +1115,11 @@ async def notify_completion(job_id: str):
 
 
 @router.post("/pipeline/jobs/{job_id}/approve", tags=["pipeline-runner"])
-async def approve_or_reject(job_id: str, req: JobApproveRequest):
+async def approve_or_reject(
+    job_id: str,
+    req: JobApproveRequest,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """작업 승인/거부 — Runner가 감지하여 배포 또는 롤백."""
     if not _JOB_ID_RE.match(job_id) and not job_id.startswith("pc-"):
         raise HTTPException(status_code=400, detail="유효하지 않은 job_id 형식")
@@ -1086,11 +1134,12 @@ async def approve_or_reject(job_id: str, req: JobApproveRequest):
             SET status = $2,
                 review_feedback = COALESCE(review_feedback, '') || E'\n[CEO] ' || $3,
                 updated_at = NOW()
-            WHERE job_id = $1 AND status = 'awaiting_approval'
+            WHERE job_id = $1 AND tenant_id = $4::uuid AND status = 'awaiting_approval'
             """,
             job_id,
             "approved" if req.action == "approve" else "rejected",
             req.feedback or req.action,
+            _tenant_id(context),
         )
 
     affected = int(result.split()[-1]) if result else 0
@@ -1105,7 +1154,9 @@ async def approve_or_reject(job_id: str, req: JobApproveRequest):
         from app.services.autonomy_gate import record_task_result
         async with pool.acquire() as conn:
             job_row = await conn.fetchrow(
-                "SELECT project FROM pipeline_jobs WHERE job_id = $1", job_id
+                "SELECT project FROM pipeline_jobs WHERE job_id = $1 AND tenant_id = $2::uuid",
+                job_id,
+                _tenant_id(context),
             )
             if job_row:
                 if req.action == "approve":
@@ -1170,7 +1221,10 @@ class BatchSubmitRequest(BaseModel):
 
 
 @router.post("/pipeline/jobs/batch", tags=["pipeline-runner"])
-async def submit_batch(req: BatchSubmitRequest):
+async def submit_batch(
+    req: BatchSubmitRequest,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """복수 작업을 의존성 그래프로 한번에 제출.
     AADS-211: 채팅 AI(오케스트레이터)가 작업을 쪼갠 뒤 호출."""
     from app.core.db_pool import get_pool
@@ -1189,6 +1243,14 @@ async def submit_batch(req: BatchSubmitRequest):
     try:
         async with pool.acquire() as conn:
             async with conn.transaction():
+                tenant_id = _tenant_id(context)
+                session_tenant = await conn.fetchval(
+                    "SELECT tenant_id::text FROM chat_sessions WHERE id = $1::uuid AND tenant_id = $2::uuid",
+                    req.session_id,
+                    tenant_id,
+                )
+                if not session_tenant:
+                    raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
                 for item in req.jobs:
                     job_id = key_to_job_id[item.key]
                     depends_on = key_to_job_id.get(item.depends_on_key) if item.depends_on_key else None
@@ -1214,7 +1276,7 @@ async def submit_batch(req: BatchSubmitRequest):
 
                     # AADS-239: 멱등성 체크 (submit_job과 동일 로직)
                     # Step 1: 동일 hash + 동일 parallel_group 활성 상태 → blocked 기록
-                    existing = await _find_active_duplicate(conn, req.project, instruction_hash, pg)
+                    existing = await _find_active_duplicate(conn, req.project, instruction_hash, pg, tenant_id=tenant_id)
                     if existing:
                         detail = (
                             f"dedup_blocked: existing job {existing['job_id']} "
@@ -1226,7 +1288,7 @@ async def submit_batch(req: BatchSubmitRequest):
                               (job_id, project, instruction, instruction_hash, chat_session_id,
                                status, phase, max_cycles, model, size, worker_model,
                                model_override_reason, parallel_group, depends_on,
-                               error_detail, review_feedback, logs, created_at, updated_at)
+                               error_detail, review_feedback, logs, created_at, updated_at, tenant_id)
                             VALUES ($1, $2, $3, $4, $5,
                                     'cancelled', 'dedup_blocked', $6, $7, $8, $9,
                                     $10, $11, $12,
@@ -1238,7 +1300,7 @@ async def submit_batch(req: BatchSubmitRequest):
                                       'parallel_scope', $16,
                                       'auto_retryable', false
                                     )),
-                                    NOW(), NOW())
+                                    NOW(), NOW(), $17::uuid)
                             """,
                             job_id,
                             req.project,
@@ -1256,6 +1318,7 @@ async def submit_batch(req: BatchSubmitRequest):
                             f"[Runner Guard] {detail}; auto_retryable=false",
                             existing["job_id"],
                             _parallel_scope(pg),
+                            tenant_id,
                         )
                         results.append({
                             "key": item.key,
@@ -1274,18 +1337,21 @@ async def submit_batch(req: BatchSubmitRequest):
                         SELECT job_id FROM pipeline_jobs
                         WHERE instruction_hash = $1
                           AND status = 'error'
+                          AND tenant_id = $2::uuid
                           AND created_at > NOW() - INTERVAL '2 hours'
                         ORDER BY created_at DESC LIMIT 1
                         FOR UPDATE
                         """,
                         instruction_hash,
+                        tenant_id,
                     )
                     if failed:
                         await conn.execute(
                             "UPDATE pipeline_jobs SET status = 'queued', phase = 'queued', "
                             "error_detail = NULL, runner_pid = NULL, updated_at = NOW() "
-                            "WHERE job_id = $1",
+                            "WHERE job_id = $1 AND tenant_id = $2::uuid",
                             failed["job_id"],
+                            tenant_id,
                         )
                         key_to_job_id[item.key] = failed["job_id"]
                         await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", failed["job_id"])
@@ -1313,6 +1379,7 @@ async def submit_batch(req: BatchSubmitRequest):
                                 conn,
                                 project=req.project,
                                 target_files=item_target_files,
+                                tenant_id=tenant_id,
                                 ignore_job_ids=set(key_to_job_id.values()),
                             )
                             if conflict:
@@ -1328,7 +1395,7 @@ async def submit_batch(req: BatchSubmitRequest):
                           (job_id, project, instruction, instruction_hash, chat_session_id,
                            status, phase, max_cycles, model, size,
                            worker_model, model_override_reason, parallel_group, depends_on,
-                           review_feedback, logs, created_at, updated_at)
+                           review_feedback, logs, created_at, updated_at, tenant_id)
                         VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, $7, $8,
                                 $9, $10, $11, $12::text,
                                 $13::text,
@@ -1337,12 +1404,13 @@ async def submit_batch(req: BatchSubmitRequest):
                                   'event', 'file_conflict_auto_dependency',
                                   'depends_on', $12::text
                                 )) END,
-                                NOW(), NOW())
+                                NOW(), NOW(), $14::uuid)
                         """,
                         job_id, req.project, item.instruction, instruction_hash,
                         req.session_id, req.max_cycles, model, size,
                         worker_model or None, worker_model_reason or None, pg, depends_on,
                         auto_dependency_reason,
+                        tenant_id,
                     )
                     # P2-2: LISTEN/NOTIFY
                     await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", job_id)
@@ -1361,6 +1429,8 @@ async def submit_batch(req: BatchSubmitRequest):
 
     except HTTPException:
         raise
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("pipeline_runner.batch_submit_fail", error=str(e))
         raise HTTPException(status_code=500, detail="배치 저장 실패")
@@ -1376,7 +1446,10 @@ async def submit_batch(req: BatchSubmitRequest):
 
 
 @router.get("/pipeline/lock-status", tags=["pipeline-runner"])
-async def lock_status(project: str = Query(..., max_length=10)):
+async def lock_status(
+    project: str = Query(..., max_length=10),
+    context: TenantContext = Depends(require_tenant_viewer),
+):
     """프로젝트별 동시실행 Lock 상태 조회. Shell runner가 claim 전 호출."""
     if project not in _VALID_PROJECTS:
         raise HTTPException(status_code=400, detail="유효하지 않은 프로젝트")
@@ -1387,14 +1460,16 @@ async def lock_status(project: str = Query(..., max_length=10)):
     async with pool.acquire() as conn:
         running_row = await conn.fetchrow(
             "SELECT count(*) as cnt FROM pipeline_jobs "
-            "WHERE project = $1 AND status IN ('running', 'claimed')",
+            "WHERE project = $1 AND tenant_id = $2::uuid AND status IN ('running', 'claimed')",
             project,
+            _tenant_id(context),
         )
-        locked = await check_project_lock(conn, project)
+        locked = await check_project_lock(conn, project, tenant_id=_tenant_id(context))
         queued_row = await conn.fetchrow(
             "SELECT count(*) as cnt FROM pipeline_jobs "
-            "WHERE project = $1 AND status = 'queued'",
+            "WHERE project = $1 AND tenant_id = $2::uuid AND status = 'queued'",
             project,
+            _tenant_id(context),
         )
 
     return {

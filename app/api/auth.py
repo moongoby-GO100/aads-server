@@ -114,12 +114,13 @@ async def login(req: LoginRequest):
 @router.get("/auth/login/e2e-inject", response_class=HTMLResponse)
 async def e2e_inject(
     credential_id: str = Query(..., description="Vault credential ID"),
+    tenant_id: str = Query(..., description="Tenant ID that owns the vault credential"),
     redirect: str = Query("/chat", description="인증 후 리다이렉트 경로"),
 ):
     """E2E 자동 인증 — vault 자격증명으로 로그인 후 토큰을 브라우저에 주입."""
     try:
         from app.core.credential_vault import get_credential
-        cred = await get_credential(credential_id, include_secrets=True)
+        cred = await get_credential(credential_id, include_secrets=True, tenant_id=tenant_id)
         if not cred:
             raise HTTPException(status_code=404, detail="자격증명 없음")
     except HTTPException:
@@ -151,7 +152,7 @@ async def e2e_inject(
         raise HTTPException(status_code=401, detail="자격증명 인증 실패")
 
     from app.core.credential_vault import mark_used
-    await mark_used(credential_id)
+    await mark_used(credential_id, tenant_id=tenant_id)
     logger.info("e2e_inject: credential_id=%s email=%s redirect=%s", credential_id, email, redirect)
 
     import html as html_mod

@@ -76,3 +76,71 @@ def test_chat_service_crud_accepts_tenant_scope_and_filters_queries():
     assert "workspace_not_found_for_tenant" in service_source
     assert "INSERT INTO chat_sessions (tenant_id, workspace_id" in service_source
     assert "INSERT INTO chat_workspaces (tenant_id, name" in service_source
+
+
+def test_high_risk_chat_paths_require_tenant_scope_and_filter_by_tenant():
+    high_risk_functions = [
+        chat_service.list_messages,
+        chat_service.list_messages_cursor,
+        chat_service.get_message,
+        chat_service.toggle_bookmark,
+        chat_service.update_message,
+        chat_service.delete_message_and_response,
+        chat_service.search_messages,
+        chat_service.list_artifacts,
+        chat_service.get_artifact,
+        chat_service.update_artifact,
+        chat_service.delete_artifact,
+        chat_service.export_artifact,
+    ]
+
+    for fn in high_risk_functions:
+        assert "tenant_id" in inspect.signature(fn).parameters
+
+    source = "\n".join(inspect.getsource(fn) for fn in high_risk_functions)
+    assert "tenant_scope_required:" in inspect.getsource(chat_service._require_tenant_uuid)
+    assert "chat_messages WHERE session_id = $1 AND tenant_id" in source
+    assert "WHERE id = $1 AND tenant_id = $2" in source
+    assert "DELETE FROM chat_messages WHERE id = ANY($1::uuid[]) AND tenant_id" in source
+    assert "chat_artifacts WHERE id = $1 AND tenant_id = $2" in source
+    assert "DELETE FROM chat_artifacts WHERE id = $1 AND tenant_id = $2" in source
+
+
+def test_chat_router_message_and_artifact_routes_use_tenant_dependencies():
+    message_sources = [
+        inspect.getsource(chat_router.get_messages),
+        inspect.getsource(chat_router.get_workspace_session_messages),
+        inspect.getsource(chat_router.send_message),
+        inspect.getsource(chat_router.toggle_bookmark),
+        inspect.getsource(chat_router.update_message),
+        inspect.getsource(chat_router.delete_message),
+        inspect.getsource(chat_router.search_messages),
+        inspect.getsource(chat_router.get_message_detail),
+    ]
+    artifact_sources = [
+        inspect.getsource(chat_router.get_artifacts),
+        inspect.getsource(chat_router.get_artifact),
+        inspect.getsource(chat_router.update_artifact),
+        inspect.getsource(chat_router.delete_artifact),
+        inspect.getsource(chat_router.export_artifact),
+    ]
+
+    assert all("Depends(require_tenant_" in source for source in message_sources)
+    assert all("tenant_id=_tenant_id(context)" in source for source in message_sources)
+    assert all("Depends(require_tenant_" in source for source in artifact_sources)
+    assert all("tenant_id=_tenant_id(context)" in source for source in artifact_sources)
+
+
+def test_tenant_isolation_migration_scopes_high_risk_tables_without_rls():
+    from pathlib import Path
+
+    sql = Path("migrations/101_saas_tenant_isolation_guards.sql").read_text(encoding="utf-8")
+
+    for table in ("chat_artifacts", "e2e_credentials", "project_artifacts", "pipeline_jobs", "directive_lifecycle"):
+        assert f"ALTER TABLE {table}" in sql
+        assert "ADD COLUMN IF NOT EXISTS tenant_id UUID" in sql
+        assert f"idx_{table.split('_')[0]}" in sql or table in {"e2e_credentials", "directive_lifecycle"}
+
+    assert "ENABLE ROW LEVEL SECURITY" not in sql
+    assert "idx_e2e_cred_tenant_service_project_label" in sql
+    assert "fk_chat_artifacts_session_tenant" in sql

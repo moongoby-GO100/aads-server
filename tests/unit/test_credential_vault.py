@@ -1,5 +1,7 @@
 import json
+import inspect
 
+from app.core import credential_vault
 from app.core.credential_vault import (
     _E2E_PROJECT_CONFIG,
     _coerce_json_dict,
@@ -53,3 +55,25 @@ def test_ntv2_e2e_supported_roles_include_main_permission_groups():
 
     assert {"admin", "wholesale", "retail", "md"}.issubset(roles)
     assert "{role}" in _E2E_PROJECT_CONFIG["NTV2"]["e2e_url"]
+
+
+def test_credential_crud_requires_and_filters_tenant_scope():
+    funcs = [
+        credential_vault.list_credentials,
+        credential_vault.get_credential,
+        credential_vault.create_credential,
+        credential_vault.update_credential,
+        credential_vault.delete_credential,
+        credential_vault.mark_used,
+        credential_vault.mark_verified,
+        credential_vault.get_login_credential,
+    ]
+
+    for fn in funcs:
+        assert "tenant_id" in inspect.signature(fn).parameters
+
+    source = "\n".join(inspect.getsource(fn) for fn in funcs)
+    assert "tenant_scope_required:" in inspect.getsource(credential_vault._require_tenant_uuid)
+    assert "tenant_id = $1" in source
+    assert "WHERE id = $1 AND tenant_id = $2" in source
+    assert "ON CONFLICT (tenant_id, service, COALESCE(project, '_ALL_'), label)" in source
