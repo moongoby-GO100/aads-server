@@ -60,6 +60,7 @@ _USAGE_LOG_COLUMNS: Tuple[str, ...] = (
     "unified_7d_reset",
     "unified_fallback",
     "unified_fallback_pct",
+    "tenant_id",
 )
 
 # ── 토큰 → 슬롯 매핑 ──────────────────────────────────────────────────
@@ -186,6 +187,7 @@ def _usage_log_values(entry: Dict[str, Any]) -> Tuple[Any, ...]:
         rl.get("unified_7d_reset"),
         rl.get("unified_fallback"),
         rl.get("unified_fallback_pct"),
+        entry.get("tenant_id"),
     )
 
 
@@ -296,6 +298,7 @@ def log_usage(
     session_id: str = "",
     error_code: Optional[str] = None,
     duration_ms: int = 0,
+    tenant_id: Optional[str] = None,
 ) -> None:
     """사용량 기록 (buffered fire-and-forget). LLM 호출 직후 호출."""
     rl = parse_ratelimit_headers(headers)
@@ -324,6 +327,7 @@ def log_usage(
         "session_id": session_id or "",
         "error_code": error_code,
         "duration_ms": duration_ms,
+        "tenant_id": tenant_id,
     }
 
     try:

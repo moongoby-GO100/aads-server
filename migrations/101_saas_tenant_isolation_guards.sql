@@ -34,8 +34,7 @@ UPDATE project_artifacts
 UPDATE pipeline_jobs pj
    SET tenant_id = COALESCE(s.tenant_id, public.aads_internal_tenant_id())
   FROM chat_sessions s
- WHERE pj.chat_session_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-   AND pj.chat_session_id::uuid = s.id
+ WHERE pj.chat_session_id = s.id
    AND pj.tenant_id IS NULL;
 
 UPDATE pipeline_jobs
@@ -146,7 +145,6 @@ BEGIN
 END $$;
 
 DROP INDEX IF EXISTS idx_e2e_cred_service_project_label;
-DROP INDEX IF EXISTS idx_e2e_cred_unique;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_e2e_cred_tenant_service_project_label
     ON e2e_credentials (tenant_id, service, COALESCE(project, '_ALL_'), label);

@@ -278,6 +278,7 @@ class CostRecord(BaseModel):
     task_id: str
     project: str = "AADS"
     model: Optional[str] = None
+    tenant_id: Optional[str] = None
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float = 0.0
@@ -449,10 +450,10 @@ async def record_cost(req: CostRecord):
         try:
             await conn.execute("""
                 INSERT INTO cost_tracking (task_id, project, model, input_tokens,
-                    output_tokens, cost_usd, llm_calls)
-                VALUES ($1,$2,$3,$4,$5,$6,$7)
+                    output_tokens, cost_usd, llm_calls, tenant_id)
+                VALUES ($1,$2,$3,$4,$5,$6,$7, COALESCE($8::uuid, public.aads_internal_tenant_id()))
             """, req.task_id, req.project, req.model, req.input_tokens,
-                req.output_tokens, req.cost_usd, req.llm_calls)
+                req.output_tokens, req.cost_usd, req.llm_calls, req.tenant_id)
         finally:
             await conn.close()
         return {"ok": True}

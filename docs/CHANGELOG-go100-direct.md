@@ -16288,3 +16288,23 @@ def _build_skip_reaso
 ## [2026-06-04 17:05:08 KST] [GO100] backend/app/routers/go100/portfolio_router.py
 - Chat-Direct 수정: run_remote_command: tail -10 /tmp/bt129_scenA.log
 - finalize: pending
+
+## [2026-06-04 18:10:20 KST] [GO100] scripts/backtest_card129_rich5days.py
+- Chat-Direct 수정: run_remote_command: grep -n "strategy_id" backend/app/services/go100/ai/agent_plan.py
+- finalize: pending
+
+## [2026-06-04 18:24:47 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
+- Chat-Direct 수정: patch: def _extract_strategy_id_from_message(me→def _extract_strategy_id_from_message(me
+- finalize: pending
+
+## [2026-06-04 18:26:18 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
+- Chat-Direct 수정: patch: def build_agent_plan(
+    *,
+    message→def build_agent_plan(
+    *,
+    message
+- finalize: pending
+
+## [2026-06-04 18:27:29 KST] [GO100] backend/app/services/go100/ai/agent_plan.py
+- Chat-Direct 수정: patch:     broad_universe_research = _is_broad_→    broad_universe_research = _is_broad_
+- finalize: pending

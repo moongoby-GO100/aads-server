@@ -1,5 +1,17 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-04 KST) - AADS-SaaS-004 tenant usage limits
+- 변경:
+  - `migrations/102_saas_tenant_usage_limits.sql`
+  - `app/services/tenant_usage_limits.py`
+  - `app/services/oauth_usage_tracker.py`, `app/core/anthropic_client.py`
+  - `app/routers/chat.py`, `app/services/chat_service.py`, `app/services/model_selector.py`, `app/services/tool_executor.py`, `app/api/ops.py`
+  - `tests/unit/test_tenant_usage_limits.py`
+- 검증:
+  - `python3 -m pytest tests/unit/test_tenant_usage_limits.py -q`
+  - `python3 -m pytest tests/unit/test_tenant_rbac_policy.py tests/unit/test_saas_multitenant_migration.py tests/unit/test_tenant_usage_limits.py -q`
+  - `python3 -m py_compile app/services/tenant_usage_limits.py app/services/oauth_usage_tracker.py app/core/anthropic_client.py app/routers/chat.py app/services/chat_service.py app/services/model_selector.py app/services/tool_executor.py app/api/ops.py`
+
 ## 현재 진행 상태 (2026-06-04 KST) - SaaS multitenant data model foundation
 - 배경: TASK_ID `AADS-SaaS-001-CANON` 선행 작업으로 AADS 단일 CEO 운영 DB를 tenant/organization 기반 SaaS 모델로 전환하기 위한 P0 스키마 토대를 요청받았다.
 - 조치:

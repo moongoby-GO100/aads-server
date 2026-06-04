@@ -65,6 +65,9 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
 current_chat_session_id: contextvars.ContextVar[str] = contextvars.ContextVar(
     "current_chat_session_id", default=""
 )
+current_tenant_id: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "current_tenant_id", default=""
+)
 
 
 def _resolve_bound_chat_session_id(explicit_session_id: Any = "") -> str:
@@ -76,6 +79,21 @@ def _resolve_bound_chat_session_id(explicit_session_id: Any = "") -> str:
         from app.services.agent_sdk_service import get_active_chat_session_id
 
         return get_active_chat_session_id()
+    except Exception:
+        return ""
+
+
+async def resolve_bound_tenant_id(explicit_tenant_id: Any = "", explicit_session_id: Any = "") -> str:
+    tenant_id = str(current_tenant_id.get("") or explicit_tenant_id or "").strip()
+    if tenant_id:
+        return tenant_id
+    session_id = _resolve_bound_chat_session_id(explicit_session_id)
+    if not session_id:
+        return ""
+    try:
+        from app.services.tenant_usage_limits import resolve_tenant_id_for_session
+
+        return await resolve_tenant_id_for_session(session_id) or ""
     except Exception:
         return ""
 
@@ -361,6 +379,29 @@ class ToolExecutor:
         """
         try:
             tool_input = dict(tool_input or {})
+            tenant_id = await resolve_bound_tenant_id(
+                tool_input.get("tenant_id", ""),
+                tool_input.get("session_id", ""),
+            )
+            if tenant_id:
+                from app.services.tenant_usage_limits import TenantUsageLimitExceeded, check_tenant_usage_limit
+
+                try:
+                    await check_tenant_usage_limit(
+                        tenant_id,
+                        operation=f"tool:{tool_name}",
+                        projected_calls=1,
+                    )
+                except TenantUsageLimitExceeded as e:
+                    return json.dumps(
+                        {
+                            "error": "tenant_usage_limit_exceeded",
+                            "status": e.decision.status,
+                            "limit": e.decision.limit_name,
+                            "message": e.decision.message,
+                        },
+                        ensure_ascii=False,
+                    )
             if tool_name in {"pipeline_runner_submit", "pipeline_runner_submit_batch", "pipeline_c_start"}:
                 current_session = str(current_chat_session_id.get("") or "").strip()
                 supplied_session = str(tool_input.get("session_id", "") or "").strip()
