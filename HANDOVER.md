@@ -1,5 +1,18 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-04 19:11 KST) - SaaS usage preflight deploy complete
+- 배경: AADS SaaS tenant usage preflight 변경(`3a3e3be`)을 운영 blue-green 배포까지 이어서 완료하라는 CEO 지시가 있었다.
+- 조치:
+  - `deploy.sh bluegreen` 1차 실행은 target slot `aads-server-green:8102`의 active stream 1건으로 안전 차단됐다.
+  - DB 확인 결과 해당 `b03ea653...` 실행은 18:47 KST에 `interrupted`로 종료된 stale in-memory counter였으므로 `AADS_DEPLOY_ALLOW_BUSY_TARGET=true`로 target slot 재빌드를 진행했다.
+  - blue-green 전환이 `8100 -> 8102`로 완료됐고, `.active_port=8102`, `.active_container=aads-server-green`을 `a38adce chore(deploy): record active green slot`로 커밋/푸시했다.
+- 검증:
+  - deploy.sh 자체 검증: Python syntax/import, backend health, DB schema, chat table access, LLM service 통과. Frontend 변경 없음으로 QA skipped.
+  - 사후 확인: `curl http://127.0.0.1:8102/api/v1/health` OK, `aads-server-green` healthy, 루트 디스크 85%.
+- 남은 리스크:
+  - `deploy.sh` bluegreen 경로에 active stream drain 대기 블록이 중복되어 최대 120초 대기한다. 기능 장애는 아니지만 배포 지연 원인이므로 후속 정리 대상이다.
+  - `app/static/gallery/manifest.json`, `docs/CHANGELOG-direct-edit.md`, `docs/CHANGELOG-go100-direct.md`는 이번 AADS SaaS 배포와 직접 관련 없어 미커밋 상태로 보존했다.
+
 ## 현재 진행 상태 (2026-06-04 KST) - AADS-SaaS-004 tenant usage limits
 - 변경:
   - `migrations/102_saas_tenant_usage_limits.sql`
