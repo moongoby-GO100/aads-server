@@ -14,6 +14,10 @@ fi
 notify() {
     local msg="$1"
     logger "aads-watchdog: ${msg}"
+    if [[ -f /tmp/aads_watchdog_telegram_mute ]]; then
+        logger "aads-watchdog: telegram muted -- ${msg}"
+        return 0
+    fi
     if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
         curl -sf -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TELEGRAM_CHAT_ID}" \

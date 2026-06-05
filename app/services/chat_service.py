@@ -4318,6 +4318,9 @@ def _workspace_project_key(workspace_name: str) -> str:
         key = "CEO"
     else:
         key = name.strip()
+    _KNOWN_PROJECTS = {"AADS", "KIS", "GO100", "SF", "NTV2", "NAS", "CEO"}
+    if key not in _KNOWN_PROJECTS:
+        key = "CEO"
     return key or "CEO"
 
 

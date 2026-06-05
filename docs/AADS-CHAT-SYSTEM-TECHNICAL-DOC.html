@@ -1013,7 +1013,7 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
     <div class="desc">
       <strong>현상:</strong> 삭제 표시된 중복 메시지가 전체의 약 20%를 차지.<br>
       <strong>원인:</strong> dedup 로직이 "soft delete" (intent를 <code>_deleted_duplicate</code>로 변경) 방식으로, 실제 행은 삭제하지 않음.<br>
-      <strong>개선:</strong> 7일 경과 후 물리 삭제 스케줄러 (<code>cleanup_service.py</code>) 구축 필요.
+      <strong>조치:</strong> 7일 경과 후 물리 삭제 스케줄러 (<code>chat_cleanup_service.py</code>) 추가. 6시간 주기, 배치 1,000건, <code>CHAT_DELETED_DUPLICATE_CLEANUP_DRY_RUN</code> 지원.
     </div>
   </div>
 
@@ -1114,10 +1114,10 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
   <h3>11.2 즉시 조치 (1주 내)</h3>
   <table>
     <tr><th>#</th><th>우선순위</th><th>항목</th><th>대상 파일</th><th>상태</th></tr>
-    <tr><td>12</td><td><span class="p0">P0</span></td><td>6개 완결 경로 → 단일 finalizeMessage() 통합</td><td><code>page.tsx</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
-    <tr><td>13</td><td><span class="p0">P0</span></td><td>백그라운드 완료 시 클라이언트 알림 채널 구축</td><td><code>page.tsx</code>, <code>chat_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
-    <tr><td>14</td><td><span class="p1">P1</span></td><td>streaming_placeholder 잔존 자동 정리</td><td><code>chat_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
-    <tr><td>15</td><td><span class="p1">P1</span></td><td>_deleted_duplicate 물리 삭제 스케줄러 (7일 경과)</td><td>신규 <code>cleanup_service.py</code></td><td><span class="badge badge-yellow">미착수</span></td></tr>
+    <tr><td>12</td><td><span class="p0">P0</span></td><td>6개 완결 경로 → 단일 finalizeMessage() 통합</td><td><code>page.tsx</code></td><td><span class="badge badge-yellow">부분 완료: <code>requestServerFinalization()</code> 단일 DB 병합 helper 적용</span></td></tr>
+    <tr><td>13</td><td><span class="p0">P0</span></td><td>백그라운드 완료 시 클라이언트 알림 채널 구축</td><td><code>page.tsx</code>, <code>chat_service.py</code></td><td><span class="badge badge-yellow">부분 완료: SSE 완료/폴링 완료 후 0~5초 서버 최종응답 재병합</span></td></tr>
+    <tr><td>14</td><td><span class="p1">P1</span></td><td>streaming_placeholder 잔존 자동 정리</td><td><code>chat_service.py</code></td><td><span class="badge badge-green">완료: startup + 주기 cleanup task 연결</span></td></tr>
+    <tr><td>15</td><td><span class="p1">P1</span></td><td>_deleted_duplicate 물리 삭제 스케줄러 (7일 경과)</td><td><code>chat_cleanup_service.py</code>, <code>main.py</code></td><td><span class="badge badge-green">완료: 6시간 주기, dry-run 지원</span></td></tr>
   </table>
 
   <h3>11.3 단기 개선 (1개월 내)</h3>
@@ -1144,10 +1144,10 @@ slot_b = ANTHROPIC_AUTH_TOKEN_2    # 2순위
   <h3>11.5 검증 방법</h3>
   <table>
     <tr><th>개선 항목</th><th>완료 기준</th><th>측정 방법</th><th>v1.3 현황</th></tr>
-    <tr><td>빈 버블 해소</td><td>빈 버블 발생률 &lt; 1%</td><td><code>SELECT count(*) FROM chat_messages WHERE role='assistant' AND content=''</code></td><td><span class="badge badge-yellow">placeholder 5건 잔존</span></td></tr>
-    <tr><td>중복 버블 해소</td><td>중복 보고 0건/주</td><td>error_log 모니터링</td><td><span class="badge badge-yellow">간헐 재현 (6개 경로 미통합)</span></td></tr>
+    <tr><td>빈 버블 해소</td><td>빈 버블 발생률 &lt; 1%</td><td><code>SELECT count(*) FROM chat_messages WHERE role='assistant' AND content=''</code></td><td><span class="badge badge-green">1시간 이상 stale placeholder 0건 (2026-06-05 15:46 KST DB 조회)</span></td></tr>
+    <tr><td>중복 버블 해소</td><td>중복 보고 0건/주</td><td>error_log 모니터링</td><td><span class="badge badge-yellow">부분 완료: 최종응답 DB 병합 helper 통합, WebSocket push는 후속</span></td></tr>
     <tr><td>중단 비율</td><td>신규 interrupted &lt; 5%</td><td><code>SELECT count(*) ... WHERE model_used='interrupted'</code> / 전체 비율</td><td><span class="badge badge-green">3건/일 (정상 인터럽트 수준)</span></td></tr>
-    <tr><td>DB 용량</td><td>_deleted_duplicate 0건</td><td>인텐트별 count 조회</td><td><span class="badge badge-yellow">9,913건 잔존</span></td></tr>
+    <tr><td>DB 용량</td><td>_deleted_duplicate 0건</td><td>인텐트별 count 조회</td><td><span class="badge badge-yellow">9,913건 잔존, 스케줄러 배포 후 배치 삭제</span></td></tr>
     <tr><td>코드 분리</td><td>단일 파일 &lt; 1,500줄</td><td><code>wc -l</code></td><td><span class="badge badge-yellow">미착수 (page.tsx 8,340줄)</span></td></tr>
     <tr><td>브라우저 프리징</td><td>프리징 보고 0건/주</td><td>CEO 피드백 + errorReporter</td><td><span class="badge badge-yellow">v1.3 단기 조치 완료, 대형 컴포넌트 분리 남음</span></td></tr>
     <tr><td>응답 미표시</td><td>새로고침 없이 100% 표시</td><td>E2E 테스트</td><td><span class="badge badge-yellow">tab return 체크 적용, 완전 해소 미달</span></td></tr>

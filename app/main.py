@@ -784,6 +784,29 @@ async def lifespan(app: FastAPI):
                 logger.warning(f"pipeline_cleanup failed: {e}")
         scheduler.add_job(_run_pipeline_cleanup, "interval", hours=1, id="pipeline_cleanup", replace_existing=True)
 
+        async def _run_chat_deleted_duplicate_cleanup():
+            try:
+                from app.services.chat_cleanup_service import cleanup_deleted_duplicate_messages
+
+                result = await cleanup_deleted_duplicate_messages(
+                    retention_days=os.getenv("CHAT_DELETED_DUPLICATE_RETENTION_DAYS"),
+                    batch_size=os.getenv("CHAT_DELETED_DUPLICATE_CLEANUP_BATCH"),
+                    dry_run=os.getenv("CHAT_DELETED_DUPLICATE_CLEANUP_DRY_RUN", "false").lower() == "true",
+                )
+                if result.get("deleted") or result.get("dry_run"):
+                    logger.info("chat_deleted_duplicate_cleanup_result", result=result)
+            except Exception as e:
+                logger.warning(f"chat_deleted_duplicate_cleanup failed: {e}")
+        scheduler.add_job(
+            _run_chat_deleted_duplicate_cleanup,
+            "interval",
+            hours=6,
+            id="chat_deleted_duplicate_cleanup",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
         # AADS-241: awaiting_approval 자동 notify 폴러 (60초 주기)
         # 211서버 러너의 NOTIFY_AI http=fail 보정 — 채팅 AI가 반드시 검수 트리거되도록
         async def _trigger_pending_approvals():

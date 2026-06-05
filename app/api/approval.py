@@ -31,6 +31,20 @@ class ApprovalRequest(BaseModel):
     severity: str = "medium"   # critical, high, medium, low
 
 
+def _is_server68_nginx_request(req: ApprovalRequest) -> bool:
+    haystack = " ".join(
+        [
+            req.title or "",
+            req.description or "",
+            req.suggested_action or "",
+            req.action_command or "",
+        ]
+    ).lower()
+    return str(req.target_server) == "68" and (
+        "nginx" in haystack or "systemctl restart nginx" in haystack
+    )
+
+
 # --- 승인 요청 생성 ---
 @router.post("/approval/request")
 async def create_approval_request(
@@ -38,6 +52,18 @@ async def create_approval_request(
     auth: bool = Depends(verify_monitor_key),
 ):
     """승인 요청 생성 → 텔레그램 알림 발송."""
+    if _is_server68_nginx_request(req):
+        logger.warning(
+            "ignored_server68_nginx_approval_request",
+            title=req.title,
+            action_command=req.action_command,
+        )
+        return {
+            "status": "ignored_false_positive",
+            "reason": "server 68 host nginx alerts are handled by the host watchdog",
+            "telegram_sent": False,
+        }
+
     async with memory_store.pool.acquire() as conn:
         row = await conn.fetchrow("""
             INSERT INTO approval_queue

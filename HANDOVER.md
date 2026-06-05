@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-05 15:46 KST) - Chat improvement follow-up hardening
+- 배경: CEO가 직전 채팅창 개선안을 모두 조치하라고 지시했다.
+- 조치:
+  - 대시보드 `src/app/chat/page.tsx`: SSE `done`, `message_done`, polling `just_completed`, resume fallback 이후 서버 DB의 최종 assistant 메시지를 같은 경로로 재병합하는 `requestServerFinalization()` helper와 `stream_reset` visible draft 보존 로직이 현재 HEAD에 반영되어 있음을 확인하고 lint/build로 검증했다. 로컬 버블은 즉시 유지하고 0~5초 사이 서버 최종 row로 치환해 최종응답 미표시/중복 버블 가능성을 낮춘다.
+  - 서버 `app/services/chat_cleanup_service.py`: `_deleted_duplicate` soft-delete 메시지를 7일 보존 후 배치 물리 삭제하는 cleanup 서비스를 추가했다. dry-run과 batch/retention 환경변수를 지원한다.
+  - 서버 `app/main.py`: `chat_deleted_duplicate_cleanup` APScheduler job을 6시간 주기로 추가했다.
+  - 문서 `docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html`, `app/static/docs/AADS-CHAT-SYSTEM-TECHNICAL-DOC.html`: P0/P1 체크리스트와 검증 현황을 현재 조치 상태로 갱신했다.
+- 실측:
+  - 2026-06-05 15:46 KST DB 기준 `streaming_placeholder=3`, 1시간 이상 stale placeholder 0건, `_deleted_duplicate=9,913`.
+- 검증:
+  - `JWT_SECRET_KEY=test python3 -m pytest tests/unit/test_chat_service.py -q` 통과(33 passed, 1 warning).
+  - `python3 -m py_compile app/services/chat_cleanup_service.py app/services/chat_service.py app/main.py` 통과.
+  - `npx eslint src/app/chat/page.tsx` 통과(error 0, 기존 warning 23).
+  - `git diff --check` 서버/대시보드 대상 파일 통과.
+- 미완료/주의:
+  - 운영 배포, 커밋, 푸시는 아직 수행하지 않았다.
+  - WebSocket push 전환, `page.tsx`/`chat_service.py` 대형 파일 분리는 후속 구조개선 범위다.
+  - `_deleted_duplicate` 물리 삭제는 배포 후 스케줄러가 1,000건 배치로 진행한다.
+
 ## 현재 진행 상태 (2026-06-04 19:11 KST) - SaaS usage preflight deploy complete
 - 배경: AADS SaaS tenant usage preflight 변경(`3a3e3be`)을 운영 blue-green 배포까지 이어서 완료하라는 CEO 지시가 있었다.
 - 조치:

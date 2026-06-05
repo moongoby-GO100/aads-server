@@ -52,6 +52,22 @@ async def report_error(
     _rate: None = Depends(check_rate_limit),
 ):
     """에러 자동 기록. 동일 패턴이면 occurrence_count 증가."""
+    if req.error_type == "nginx_down" and str(req.server) == "68":
+        async with memory_store.pool.acquire() as conn:
+            nginx_state = await conn.fetchrow("""
+                SELECT last_status, consecutive_failures
+                FROM monitored_services
+                WHERE server='68' AND service_name='nginx'
+                LIMIT 1
+            """)
+            if nginx_state and nginx_state["last_status"] == "ok":
+                return {
+                    "status": "ignored_false_positive",
+                    "reason": "server 68 nginx is currently healthy",
+                    "last_status": nginx_state["last_status"],
+                    "consecutive_failures": nginx_state["consecutive_failures"],
+                }
+
     eh = _error_hash(req.error_type, req.source, req.message)
 
     async with memory_store.pool.acquire() as conn:

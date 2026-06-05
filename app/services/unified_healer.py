@@ -29,8 +29,6 @@ SAFE_COMMANDS = {
     "docker restart aads-postgres",
     "docker restart aads-redis",
     "docker restart aads-litellm",
-    "systemctl restart nginx",
-    "systemctl reload nginx",
     "docker stop -t 30 aads-server",
     "docker system prune -f",
     "/root/aads/aads-server/deploy.sh bluegreen",
@@ -41,8 +39,6 @@ SAFE_PREFIXES = [
     "docker restart ",
     "docker stop -t ",
     "docker compose restart ",
-    "systemctl restart ",
-    "systemctl reload ",
     "supervisorctl reload ",
 ]
 
@@ -63,8 +59,8 @@ ERROR_RECOVERY_MAP = {
     "container_exit": "docker restart {service}",
     "docker_crash": "docker restart {service}",
     "api_unreachable": "/root/aads/aads-server/deploy.sh bluegreen",
-    "nginx_down": "systemctl restart nginx",
-    "nginx_error": "systemctl reload nginx",
+    # Host nginx is outside the app container. Do not run systemctl from here.
+    # The host watchdog verifies nginx and rate-limits CEO alerts instead.
     "disk_space_critical": "docker system prune -f",
     "high_memory": "/root/aads/aads-server/deploy.sh bluegreen",
     "db_connection_error": "docker restart aads-postgres",
@@ -76,6 +72,13 @@ ERROR_RECOVERY_MAP = {
 _circuit_breaker: dict[str, dict] = {}
 CIRCUIT_BREAKER_MAX_FAILURES = 1  # 1회 실패로 즉시 차단 (무한 루프 방지)
 CIRCUIT_BREAKER_COOLDOWN_SEC = 1800  # 30분 쿨다운 (재시도 방지)
+
+
+def _is_server68_nginx_request(title: str, description: str, command: str, target_server: str) -> bool:
+    haystack = " ".join([title or "", description or "", command or ""]).lower()
+    return str(target_server) == "68" and (
+        "nginx" in haystack or "systemctl restart nginx" in haystack
+    )
 
 # ── DB 헬퍼 ──────────────────────────────────────────────────────────────────
 
@@ -355,6 +358,9 @@ async def _execute_command(command: str, target_server: str = "68") -> dict:
 
 async def _notify_telegram(message: str):
     """간단한 텔레그램 알림 (봇 모듈 임포트)."""
+    if "nginx" in message.lower() and "68" in message:
+        logger.warning("suppressed_server68_nginx_telegram", message=message[:200])
+        return
     try:
         from app.services.telegram_bot import get_telegram_bot
         bot = get_telegram_bot()
@@ -373,6 +379,14 @@ async def _create_approval_request(
     """approval_queue에 INSERT + 텔레그램 인라인 버튼 발송."""
     import urllib.request
     import urllib.error
+
+    if _is_server68_nginx_request(title, description, command, target_server):
+        logger.warning(
+            "ignored_server68_nginx_healer_approval",
+            title=title,
+            command=command,
+        )
+        return None
 
     row = await conn.fetchrow("""
         INSERT INTO approval_queue

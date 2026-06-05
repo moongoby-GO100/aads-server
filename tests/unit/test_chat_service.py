@@ -8,7 +8,7 @@ import uuid
 import pytest
 from fastapi import Response
 
-from app.services import chat_service
+from app.services import chat_cleanup_service, chat_service
 from app.routers import chat as chat_router
 from app.core import interrupt_queue
 
@@ -336,6 +336,53 @@ async def test_cleanup_stale_streaming_placeholders_skips_live_session():
     finally:
         chat_service._active_bg_tasks.pop(session_id, None)
         chat_service._streaming_state.pop(session_id, None)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_deleted_duplicate_messages_dry_run_does_not_delete():
+    session_id = uuid.uuid4()
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=[
+        {"id": uuid.uuid4(), "session_id": session_id},
+    ])
+    conn.fetchval = AsyncMock(return_value=12)
+    conn.execute = AsyncMock()
+
+    with patch("app.services.chat_cleanup_service.get_pool", return_value=_Pool(conn)):
+        result = await chat_cleanup_service.cleanup_deleted_duplicate_messages(
+            retention_days=7,
+            batch_size=100,
+            dry_run=True,
+        )
+
+    assert result["eligible"] == 12
+    assert result["deleted"] == 0
+    assert result["sessions_touched"] == 1
+    conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_deleted_duplicate_messages_deletes_and_recounts_sessions():
+    session_id = uuid.uuid4()
+    message_id = uuid.uuid4()
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(side_effect=[
+        [{"id": message_id, "session_id": session_id}],
+        [{"session_id": session_id}],
+    ])
+    conn.fetchval = AsyncMock(return_value=1)
+    conn.execute = AsyncMock()
+
+    with patch("app.services.chat_cleanup_service.get_pool", return_value=_Pool(conn)):
+        result = await chat_cleanup_service.cleanup_deleted_duplicate_messages(
+            retention_days=7,
+            batch_size=100,
+        )
+
+    executed_sql = [" ".join(call.args[0].split()) for call in conn.execute.await_args_list]
+    assert result["deleted"] == 1
+    assert result["sessions_touched"] == 1
+    assert any("UPDATE chat_sessions" in sql and "message_count" in sql for sql in executed_sql)
 
 
 @pytest.mark.asyncio
