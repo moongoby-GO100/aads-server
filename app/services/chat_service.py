@@ -65,6 +65,7 @@ _AUTO_RESUME_INTERRUPTED_REASON_PREFIXES = (
     "completion_contract_unresolved:",
     "todo_completion_gate_missing",
     "retroactive_final_report_missing_after_audit",
+    "background_producer_incomplete_exit",
 )
 
 

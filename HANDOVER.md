@@ -1692,3 +1692,9 @@
 - 기존 세션 보정: 메시지 `e0d77b02-86f7-4f58-87b2-b276a042647c`에 `completion_contract_adjusted=true`, `completion_gate_missing=true`, 위반 `awaiting_user_decision_without_completion`을 기록했다. 실행 `366ccc75-d30a-48d8-b60c-be31eb838160`은 `interrupted`로 보정했다.
 - 검증: `python3 -m pytest tests/unit/test_response_completion_contract.py -q` 결과 9 passed. 실제 재현 스니펫은 `adjusted=True`, violation `awaiting_user_decision_without_completion`으로 판정됨을 확인했다.
 - 배포 상태: 코드/DB 보정은 적용했으나 서버 배포와 git commit/push는 아직 수행하지 않았다. 대시보드 브라우저 E2E는 인증 토큰 필요로 미실행했다.
+
+## 2026-06-05 16:49 KST - Chat incomplete producer auto-resume
+- 배경: 최근 30분 `chat_turn_executions`에서 `background_producer_incomplete_exit` 3건이 확인됐다. 이는 provider/SSE generator가 `done` 이벤트 없이 끝났을 때 완료로 오표시하지 않는 보호 로직이지만, 자동 이어쓰기 대상이 아니어서 사용자에게 끊김으로 남았다.
+- 원인: `_AUTO_RESUME_INTERRUPTED_REASON_PREFIXES`에 `background_producer_incomplete_exit`가 없어 `_mark_execution_interrupted()` 이후 `_schedule_interrupted_auto_resume()`가 실행되지 않았다.
+- 조치: `app/services/chat_service.py`의 자동 resume 허용 prefix에 `background_producer_incomplete_exit`를 추가했다. 기존 retry_count hard cap(5회), newer execution 차단, superseded 차단은 그대로 유지한다.
+- 검증: `python3 -m py_compile app/services/chat_service.py` 및 서버 blue-green 배포 후 health/DB 실행 상태 확인 대상.
