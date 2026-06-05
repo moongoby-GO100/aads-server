@@ -117,6 +117,32 @@ _FINAL_REPORT_EVIDENCE = (
     "다음 조치",
 )
 
+_INCOMPLETE_WORK_MARKERS = (
+    "미구현",
+    "미완료",
+    "미적용",
+    "미실행",
+    "보류",
+    "대기",
+    "승인 필요",
+    "결정 대기",
+)
+
+_AWAITING_USER_TAIL_RE = re.compile(
+    r"(?:"
+    r"어떤\s*(?:항목|작업|부분).{0,80}(?:진행|처리|실행).{0,20}(?:할까요|하시겠습니까).{0,160}|"
+    r"(?:진행|실행|처리|배포|커밋|푸시).{0,40}하시겠습니까|"
+    r"(?:선택|승인|결정).{0,40}(?:해주세요|필요합니다|대기)|"
+    r"말씀해\s*주십시오"
+    r")\s*[?.!。]?\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+_FINAL_REPORT_VIOLATIONS = {
+    "final_report_missing",
+    "awaiting_user_decision_without_completion",
+}
+
 _COMMIT_DONE_RE = re.compile(
     r"(?:커밋|commit).{0,18}(?:완료|성공|했습니다|했음|됨|done|pushed)",
     re.IGNORECASE | re.DOTALL,
@@ -223,6 +249,27 @@ def _looks_like_incomplete_final_report(response_text: str, user_msg: str, inten
     return progress_hits >= 2
 
 
+def _looks_like_awaiting_user_decision_without_completion(response_text: str, user_msg: str, intent: str) -> bool:
+    normalized_intent = (intent or "").strip()
+    if normalized_intent not in _FINAL_REPORT_INTENTS:
+        return False
+
+    text = (response_text or "").strip()
+    if not text:
+        return False
+
+    tail = text[-700:].strip()
+    if not _AWAITING_USER_TAIL_RE.search(tail):
+        return False
+
+    has_incomplete_marker = any(marker in text for marker in _INCOMPLETE_WORK_MARKERS)
+    continuation_request = any(
+        marker in (user_msg or "")
+        for marker in ("이어서", "계속", "진행해", "조치해", "수정해", "해줘")
+    )
+    return has_incomplete_marker or continuation_request
+
+
 def _format_status(status: str) -> str:
     if status == "dirty":
         return "미커밋"
@@ -289,13 +336,16 @@ def evaluate_completion_contract(
     document_rows = [row for row in all_rows if _is_documentation_path(row["file_path"])]
     pending_document_rows = [row for row in document_rows if row["status"] in _UNDEPLOYED_STATUSES]
     final_report_missing = _looks_like_incomplete_final_report(response, user_msg, intent)
+    awaiting_user_decision = _looks_like_awaiting_user_decision_without_completion(response, user_msg, intent)
 
-    if not rows and not _DOCUMENT_DONE_RE.search(response) and not final_report_missing:
+    if not rows and not _DOCUMENT_DONE_RE.search(response) and not final_report_missing and not awaiting_user_decision:
         return CompletionContractResult(response_text=response_text)
 
     violations: list[str] = []
     if final_report_missing:
         violations.append("final_report_missing")
+    if awaiting_user_decision:
+        violations.append("awaiting_user_decision_without_completion")
     if pending_rows and _COMMIT_DONE_RE.search(response):
         violations.append("commit_report_conflicts_with_ledger")
     if pending_rows and _PUSH_DONE_RE.search(response):
@@ -319,7 +369,7 @@ def evaluate_completion_contract(
 
     note = (
         _build_note(rows, violations)
-        if rows or any(v != "final_report_missing" for v in violations)
+        if rows or any(v not in _FINAL_REPORT_VIOLATIONS for v in violations)
         else _build_final_report_note(violations)
     )
     base = (response_text or "").rstrip()

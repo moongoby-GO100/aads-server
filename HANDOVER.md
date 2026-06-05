@@ -1665,3 +1665,11 @@
   - `python3 -m py_compile`로 5개 핵심 파일 syntax OK.
   - `curl /api/v1/ops/health-check` → HTTP 200 (aads-server-green healthy 27분, postgres healthy 3일).
 - 남은 작업: P0-3 PART2 (governance_audit_log / oauth_usage_log tenant_id 격리), P0-4 (usage gate), P0-5 (audit log 강화), P1-1~P1-3.
+
+## 2026-06-05 15:35 KST - Chat completion contract awaiting-decision guard
+- 배경: 세션 `7e4a270f-0134-4f8b-bf6d-04b08e66e002`의 마지막 assistant 버블이 최종 완료보고 없이 `미구현` 항목을 남기고 "어떤 항목부터 진행할까요?"로 끝났지만, `chat_turn_executions.status='completed'`와 화면 완료 배지로 보일 수 있었다.
+- 원인: `response_completion_contract`는 짧은 진행 로그와 마지막 실행 예고는 차단했지만, 긴 응답 안에 일부 "완료된 항목"이 있고 마지막에 사용자 결정을 요청하는 형태는 최종 완료보고 누락으로 분류하지 못했다. 실행 status의 `completed`는 "SSE/provider 종료 후 assistant row 저장" 의미라, 업무 완료 상태와 혼동될 수 있다.
+- 조치: `app/services/response_completion_contract.py`에 `awaiting_user_decision_without_completion` 위반을 추가했다. 최종보고 대상 intent에서 응답 본문에 `미구현/미완료/대기/보류` 등이 남고 tail이 사용자 선택/승인/진행 여부 질문이면 completion contract가 보정하고 자동 이어쓰기/미완료 처리로 전환한다.
+- 기존 세션 보정: 메시지 `e0d77b02-86f7-4f58-87b2-b276a042647c`에 `completion_contract_adjusted=true`, `completion_gate_missing=true`, 위반 `awaiting_user_decision_without_completion`을 기록했다. 실행 `366ccc75-d30a-48d8-b60c-be31eb838160`은 `interrupted`로 보정했다.
+- 검증: `python3 -m pytest tests/unit/test_response_completion_contract.py -q` 결과 9 passed. 실제 재현 스니펫은 `adjusted=True`, violation `awaiting_user_decision_without_completion`으로 판정됨을 확인했다.
+- 배포 상태: 코드/DB 보정은 적용했으나 서버 배포와 git commit/push는 아직 수행하지 않았다. 대시보드 브라우저 E2E는 인증 토큰 필요로 미실행했다.

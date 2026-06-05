@@ -173,3 +173,29 @@ def test_completion_contract_blocks_long_progress_tail_without_final_report():
 
     assert result.adjusted is True
     assert "final_report_missing" in result.violation_types
+
+
+def test_completion_contract_blocks_awaiting_user_decision_with_incomplete_items():
+    response = (
+        "이전 작업 상태를 실측하고, 상품 기반 숏츠 테스트 영상 계획을 수립하겠습니다."
+        "\n\n**완료된 항목**\n"
+        "- Kling image2video 숏츠 테스트: 7건 중 5건 영상 생성 성공\n\n"
+        "**보고된 개선 필요사항 3건**\n\n"
+        "| 우선순위 | 항목 | 상태 |\n"
+        "|---------|------|------|\n"
+        "| P0 | 백그라운드 폴링 스케줄러 | 미구현 |\n"
+        "| P1 | 이미지 URL 전처리 | 미구현 |\n"
+        "| P2 | 생성 영상 자체 스토리지 저장 | 미구현 |\n\n"
+        "→ 어떤 항목부터 진행할까요? P0 폴링 스케줄러 구현을 권장합니다."
+    )
+
+    result = evaluate_completion_contract(
+        response_text=response,
+        user_msg="이어서 진행해",
+        intent="pipeline_runner",
+        changes=[],
+    )
+
+    assert result.adjusted is True
+    assert "awaiting_user_decision_without_completion" in result.violation_types
+    assert "최종 완료보고가 아니라 진행 안내/중간 로그" in result.response_text
