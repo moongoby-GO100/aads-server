@@ -1698,3 +1698,9 @@
 - 원인: `_AUTO_RESUME_INTERRUPTED_REASON_PREFIXES`에 `background_producer_incomplete_exit`가 없어 `_mark_execution_interrupted()` 이후 `_schedule_interrupted_auto_resume()`가 실행되지 않았다.
 - 조치: `app/services/chat_service.py`의 자동 resume 허용 prefix에 `background_producer_incomplete_exit`를 추가했다. 기존 retry_count hard cap(5회), newer execution 차단, superseded 차단은 그대로 유지한다.
 - 검증: `python3 -m py_compile app/services/chat_service.py` 및 서버 blue-green 배포 후 health/DB 실행 상태 확인 대상.
+
+## 2026-06-08 08:35 KST - Chat completion badge and resume-loop guard
+- 배경: 세션 `7e4a270f-0134-4f8b-bf6d-04b08e66e002`에서 `interrupted_partial`/`background_producer_incomplete_exit` 실행이 남았는데 화면에서는 완료처럼 보이거나 재시작이 반복될 수 있었다.
+- 원인: 대시보드 `src/app/chat/page.tsx`가 `interrupted_partial`, `interruption_notice`, `model_used='interrupted'` 메시지를 일부 polling/finalization 경로에서 final assistant 후보로 취급했고, 완료 배지는 `status`가 없으면 기본 완료로 렌더링했다. SSE 복구 실패 후 `/chat/sessions/{id}/resume`도 같은 세션/실행에서 반복 호출될 수 있었다.
+- 조치: `isTerminalIncompleteAssistantMessage()`를 추가해 완료 배지와 final assistant 후보에서 미완료/중단 응답을 제외했다. polling의 `hasNewFinalAi`, just_completed toast, tools-only 복구 경로도 `isFinalAssistantMessage()` 기준으로 통일했다. `/resume` 호출은 `requestResumeOnce()`로 세션+execution 기준 60초 in-flight/cooldown 가드를 적용했다.
+- 검증 대상: 대시보드 TypeScript/build, 커밋/푸시, dashboard blue-green 배포, `/api/v1/health` 및 대상 세션 DB 상태 재조회.
