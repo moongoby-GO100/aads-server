@@ -20,15 +20,15 @@ from datetime import datetime, timezone
 
 _ctx_temperature: contextvars.ContextVar[float] = contextvars.ContextVar('_ctx_temperature', default=0.2)
 
-import asyncpg
-import httpx
-from anthropic import AsyncAnthropic, APIStatusError, APIConnectionError, RateLimitError
-from app.config import Settings
-from app.core.llm_key_provider import get_api_key as _get_db_key, get_provider_keys as _get_provider_keys
-from app.services.model_registry import get_executable_model_ids as _get_registry_executable_model_ids
-from app.services.model_registry import list_registered_models as _list_registered_models
-from app.services.model_registry import normalize_provider as _normalize_registry_provider
-from app.services.intent_router import IntentResult
+import asyncpg  # noqa: E402
+import httpx  # noqa: E402
+from anthropic import AsyncAnthropic, APIStatusError, APIConnectionError, RateLimitError  # noqa: E402
+from app.config import Settings  # noqa: E402
+from app.core.llm_key_provider import get_api_key as _get_db_key, get_provider_keys as _get_provider_keys  # noqa: E402
+from app.services.model_registry import get_executable_model_ids as _get_registry_executable_model_ids  # noqa: E402
+from app.services.model_registry import list_registered_models as _list_registered_models  # noqa: E402
+from app.services.model_registry import normalize_provider as _normalize_registry_provider  # noqa: E402
+from app.services.intent_router import IntentResult  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +130,7 @@ _CLAUDE_RELAY_NAVER_FIRST = os.getenv("CLAUDE_RELAY_NAVER_FIRST", "false").lower
 _SLOT_COOLDOWN: Dict[str, float] = {}  # {slot: expire_timestamp}
 _COOLDOWN_SECS = 300  # 5분
 
-import re as _re_mod
+import re as _re_mod  # noqa: E402
 
 def _parse_quota_reset_seconds(error_msg: str) -> int:
     """에러 메시지에서 쿼터 복구 시간(초)을 파싱. 못 찾으면 _COOLDOWN_SECS 반환."""
@@ -184,12 +184,16 @@ def _parse_rl_reset_ms(headers=None):
         return None
     ra = headers.get("retry-after") or headers.get("Retry-After")
     if ra:
-        try: return _time_mod.time() + float(ra)
-        except (ValueError, TypeError): pass
+        try:
+            return _time_mod.time() + float(ra)
+        except (ValueError, TypeError):
+            pass
     rr = headers.get("x-ratelimit-reset") or headers.get("X-RateLimit-Reset")
     if rr:
-        try: return float(rr)
-        except (ValueError, TypeError): pass
+        try:
+            return float(rr)
+        except (ValueError, TypeError):
+            pass
     return None
 
 def _mark_slot_cooldown(slot: str, headers=None, duration_override: int = None) -> None:
@@ -213,14 +217,14 @@ def _is_slot_available(slot: str) -> bool:
     return False
 
 # Agent SDK OAuth 토큰 — auth_provider 경유 (R-AUTH)
-from app.core.auth_provider import (
+from app.core.auth_provider import (  # noqa: E402
     get_oauth_tokens as _ap_get_tokens,
     get_oauth_key_records_async as _ap_get_key_records_async,
     get_token_labels as _ap_get_labels,
     set_token_order as _ap_set_order,
 )
-from app.core.llm_key_provider import mark_key_rate_limited as _mark_key_rate_limited
-from app.services.oauth_usage_tracker import log_usage as _log_oauth_usage
+from app.core.llm_key_provider import mark_key_rate_limited as _mark_key_rate_limited  # noqa: E402
+from app.services.oauth_usage_tracker import log_usage as _log_oauth_usage  # noqa: E402
 
 
 def get_key_order() -> List[Dict[str, str]]:
@@ -2801,7 +2805,6 @@ async def _stream_cli_relay(
     session_id: Optional[str] = None,
     oauth_slot: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    sdk_model = _ANTHROPIC_MODEL_ID.get(model, model)
     retry_messages = messages
     partial_content = ""
 
@@ -3786,7 +3789,6 @@ def _map_cli_event(event: dict, session_id: Optional[str] = None) -> Optional[Li
             break
 
         # result 텍스트 (CLI가 최종 결과를 result 필드에도 넣음)
-        result_text = event.get("result", "")
         events = []
         # result에 텍스트가 있고 아직 delta로 안 보냈으면 보내기
         # (보통 assistant 이벤트에서 이미 보냄 — 중복 방지를 위해 스킵)
