@@ -19,7 +19,7 @@ PROJECT_MAP: Dict[str, Dict[str, str]] = {
     "GO100": {"server": "211.188.51.113", "workdir": "/root/kis-autotrade-v4", "lang": "python"},
     "SF":    {"server": "114.207.244.86", "port": "7916", "workdir": "/",                     "lang": "python"},
     "NTV2":  {"server": "114.207.244.86", "port": "7916", "workdir": "/srv/newtalk-v2", "lang": "php", "workdir_v2": "/srv/newtalk-v2"},
-    "AADS":  {"server": "host.docker.internal", "workdir": "/root", "lang": "python"},
+    "AADS":  {"server": "host.docker.internal", "workdir": "/root/aads/aads-server", "lang": "python"},
 }
 
 ALL_PROJECTS = list(PROJECT_MAP.keys())
@@ -41,7 +41,7 @@ def get_server(project: str) -> str:
 def get_server_by_number(server_num: str) -> dict:
     """서버 번호(211, 114, 68) → {server, workdir} 매핑."""
     _SERVER_NUM_MAP = {
-        "68": {"server": "host.docker.internal", "workdir": "/root"},
+        "68": {"server": "host.docker.internal", "workdir": "/root/aads/aads-server"},
         "211": {"server": "211.188.51.113", "workdir": "/root"},
         "114": {"server": "114.207.244.86", "port": "7916", "workdir": "/"},
     }
