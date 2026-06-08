@@ -30,7 +30,7 @@
   - `npm run build` 통과(Next.js 52 routes generated).
   - `curl https://aads.newtalk.kr/api/v1/health` 응답 `status=ok`; `curl https://aads.newtalk.kr/login` 응답 HTTP 200.
 - 미완료/주의:
-  - Backend 신규 blue-green 배포는 이 시점에 실행하지 않았다. 이유: `/api/v1/ops/active-streams`가 실행 중 스트림 6건을 반환했고, 백엔드 worktree에 이번 채팅 건과 무관한 staged/unstaged 변경이 다수 남아 있어 현재 파일 상태로 이미지를 재빌드하면 범위 밖 변경까지 운영 반영될 위험이 있다.
+  - Backend 신규 blue-green 배포는 안전 게이트에서 차단됐다. dirty worktree를 임시 stash로 분리해 clean HEAD 배포를 시도했으나, 전환 대상 `aads-server-green:8102`에 `d19a0e9e` 활성 스트림 1건이 있어 `deploy.sh bluegreen`이 재빌드 시 응답 끊김 위험으로 중단했다. 이후 stash는 원복했다.
   - 최근 24시간 `chat_turn_executions`는 `completed=65`, `interrupted=10`, `running=6`이며, 완료 평균 경과는 약 815.3초다. 빠른 완료 모드는 필요한 개선이지만 장기 도구 실행/외부 LLM 지연 자체를 0으로 만들지는 않는다.
 
 ## 현재 진행 상태 (2026-06-08 13:20 KST) - SaaS public signup internal tenant lockdown
