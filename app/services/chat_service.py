@@ -1307,6 +1307,24 @@ def _stream_interrupt_diagnostic_reason(
     return " ".join(part for part in parts if part)[:1000]
 
 
+def _looks_like_incomplete_progress_tail(text: str) -> bool:
+    clean = _strip_streaming_progress_markers(text or "").strip()
+    if not clean:
+        return True
+    tail = clean[-600:]
+    progress_tail = re.search(
+        r"(?:이제|먼저|다음으로|추가로|바로|곧|현재)?\s*.{0,120}"
+        r"(?:확인|조회|점검|분석|파악|조사|검토|진행|실행|처리|수정|패치|적용|반영|준비|로드|읽겠)"
+        r"(?:하겠습니다|합니다|하겠습니|하겠|중입니다)\.?\s*$",
+        tail,
+    )
+    if progress_tail:
+        return True
+    return bool(
+        re.search(r"(?:⏳|생성 중|응답 생성 중|조회 중|확인 중)\s*\.{0,3}\s*$", tail)
+    )
+
+
 def _get_live_streaming_session_ids() -> set[str]:
     active_sessions = {
         sid for sid, task in list(_active_bg_tasks.items())
@@ -2617,19 +2635,51 @@ async def _delete_streaming_placeholder(
                         )
                         logger.info(f"placeholder_dedup_deleted session={session_id[:8]} — same recovered already exists")
                     else:
-                        # intent=NULL로 보존 — 폴링에서도 계속 표시 (버블 유지)
+                        # 최종 응답 저장이 없으면 완료 후보로 보존하지 않는다.
+                        # intent=NULL/model_used=interrupted는 프론트에서 일반 assistant와 섞여
+                        # completed 실행의 마지막 버블처럼 보일 수 있다.
                         await conn.execute(
-                            "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'interrupted' WHERE id = $1",
+                            "UPDATE chat_messages SET content = $2, intent = 'interrupted_partial', model_used = 'interrupted' WHERE id = $1",
                             placeholder['id'], content,
                         )
-                        logger.warning(f"placeholder_promoted session={session_id[:8]} — final save missing, placeholder preserved as interrupted")
+                        if execution_id:
+                            await conn.execute(
+                                """
+                                UPDATE chat_turn_executions
+                                SET status = 'interrupted',
+                                    error_message = COALESCE(NULLIF(error_message, ''), 'final_save_missing_placeholder_preserved'),
+                                    completed_at = COALESCE(completed_at, NOW()),
+                                    updated_at = NOW(),
+                                    assistant_message_id = COALESCE(assistant_message_id, $2)
+                                WHERE id = $1
+                                  AND status IN ('running', 'retrying', 'completed')
+                                """,
+                                uuid.UUID(execution_id),
+                                placeholder['id'],
+                            )
+                        logger.warning(f"placeholder_interrupted_partial session={session_id[:8]} — final save missing, placeholder preserved as interrupted_partial")
                 else:
                     # [2026-05-20] 빈 placeholder도 DELETE 대신 안내로 보존 — 응답 버블 사라짐 방지
                     await conn.execute(
-                        "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'interrupted' WHERE id = $1",
+                        "UPDATE chat_messages SET content = $2, intent = 'interruption_notice', model_used = 'interrupted' WHERE id = $1",
                         placeholder['id'], "⚠️ 응답이 중단되었습니다. 다시 시도해 주세요.",
                     )
-                    logger.warning(f"empty_placeholder_preserved session={session_id[:8]} — interrupted notice")
+                    if execution_id:
+                        await conn.execute(
+                            """
+                            UPDATE chat_turn_executions
+                            SET status = 'interrupted',
+                                error_message = COALESCE(NULLIF(error_message, ''), 'final_save_missing_empty_placeholder'),
+                                completed_at = COALESCE(completed_at, NOW()),
+                                updated_at = NOW(),
+                                assistant_message_id = COALESCE(assistant_message_id, $2)
+                            WHERE id = $1
+                              AND status IN ('running', 'retrying', 'completed')
+                            """,
+                            uuid.UUID(execution_id),
+                            placeholder['id'],
+                        )
+                    logger.warning(f"empty_placeholder_interruption_notice session={session_id[:8]} — interrupted notice")
     except Exception as e:
         if raise_on_error:
             raise
@@ -2794,6 +2844,29 @@ async def with_background_completion(
 
                 if assistant_row and clean_content:
                     assistant_message_id = assistant_row["id"]
+                    if _looks_like_incomplete_progress_tail(clean_content):
+                        reason = _stream_interrupt_diagnostic_reason(
+                            "completion_guard_incomplete_progress_tail",
+                            state,
+                        )
+                        await _mark_execution_interrupted(
+                            conn,
+                            str(exec_row["session_id"]),
+                            str(execution_uuid),
+                            reason,
+                            partial_content=clean_content,
+                            placeholder_id=str(assistant_message_id),
+                            delete_empty_placeholder=False,
+                        )
+                        logger.warning(
+                            "completion_guard_blocked_incomplete_tail session=%s execution=%s assistant=%s reason=%s tail=%r",
+                            str(exec_row["session_id"])[:8],
+                            str(execution_uuid)[:8],
+                            str(assistant_message_id)[:8],
+                            reason[:300],
+                            clean_content[-180:],
+                        )
+                        return
                     if (
                         assistant_row["intent"] == "streaming_placeholder"
                         or assistant_row["intent"] in ("interrupted_partial", "interruption_notice")
@@ -2827,6 +2900,27 @@ async def with_background_completion(
                         assistant_message_id,
                     )
                 elif clean_content:
+                    if _looks_like_incomplete_progress_tail(clean_content):
+                        reason = _stream_interrupt_diagnostic_reason(
+                            "completion_guard_incomplete_progress_tail",
+                            state,
+                        )
+                        await _mark_execution_interrupted(
+                            conn,
+                            str(exec_row["session_id"]),
+                            str(execution_uuid),
+                            reason,
+                            partial_content=clean_content,
+                            delete_empty_placeholder=False,
+                        )
+                        logger.warning(
+                            "completion_guard_blocked_incomplete_tail session=%s execution=%s assistant=- reason=%s tail=%r",
+                            str(exec_row["session_id"])[:8],
+                            str(execution_uuid)[:8],
+                            reason[:300],
+                            clean_content[-180:],
+                        )
+                        return
                     assistant_message_id = await conn.fetchval(
                         """
                         INSERT INTO chat_messages (session_id, execution_id, role, content, model_used, tools_called)
@@ -2871,6 +2965,17 @@ async def with_background_completion(
                     """,
                     execution_uuid,
                     assistant_message_id,
+                )
+                logger.info(
+                    "completion_guard_marked_completed session=%s execution=%s assistant=%s content_len=%s saw_done=%s tool_count=%s last_tool=%s queue_drops=%s",
+                    str(exec_row["session_id"])[:8],
+                    str(execution_uuid)[:8],
+                    str(assistant_message_id)[:8],
+                    len(clean_content),
+                    bool(state.get("saw_done_event")),
+                    int(state.get("tool_count") or 0),
+                    _diagnostic_token(state.get("last_tool")),
+                    int(state.get("_sse_queue_drop_count") or 0),
                 )
                 await conn.execute(
                     """
@@ -4935,9 +5040,8 @@ async def _promote_inactive_streaming_placeholders(
     log_prefix: str,
 ) -> List[Dict[str, Any]]:
     """비활성 세션의 orphan placeholder 정리. 조회 전용 경로에서는 호출하지 않는다.
-    [2026-05-20] 빈/짧은 placeholder도 삭제하지 않고 '응답 중단' 안내로 보존 — 화면에서
-    응답 버블이 사라지는 현상(세션 ac5278a7) 방지. intent=NULL로 보존하여 후속 폴링에서도
-    유지되도록 한다."""
+    [2026-06-08] 최종 응답이 아닌 placeholder는 완료 후보가 되지 않도록
+    interrupted_partial/interruption_notice로 보존한다."""
     _promote_ids = []
     _empty_ids = []
     _remove_ids = []
@@ -4947,12 +5051,12 @@ async def _promote_inactive_streaming_placeholders(
             content = (msg.get("content") or "").strip()
             if content:
                 _promote_ids.append(msg["id"])
-                msg["intent"] = None
-                msg["model_used"] = "recovered"
+                msg["intent"] = "interrupted_partial"
+                msg["model_used"] = "interrupted"
             else:
                 # 빈/짧은 placeholder도 안내 메시지로 보존 — 버블 사라짐 방지
                 _empty_ids.append(msg["id"])
-                msg["intent"] = None
+                msg["intent"] = "interruption_notice"
                 msg["model_used"] = "interrupted"
                 msg["content"] = "⚠️ 응답이 중단되었습니다. 다시 시도해 주세요."
     if _promote_ids:
@@ -5006,10 +5110,8 @@ async def _promote_inactive_streaming_placeholders(
                     )
                     _remove_ids.append(_pid)
                 else:
-                    # intent=NULL로 보존 — 후속 폴링에서도 표시되도록 (interrupted_partial은
-                    # _AUTO_MESSAGE_EXCLUDE_FILTER로 가려져 버블이 사라지던 문제 회피)
                     await conn.execute(
-                        "UPDATE chat_messages SET intent = NULL, model_used = 'interrupted', "
+                        "UPDATE chat_messages SET intent = 'interrupted_partial', model_used = 'interrupted', "
                         "content = regexp_replace(content, E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$', '') "
                         "WHERE id = $1",
                         _uid,
@@ -5018,12 +5120,12 @@ async def _promote_inactive_streaming_placeholders(
                 logger.warning(f"{log_prefix}_promote_failed: {_pe}")
         logger.info(f"{log_prefix}_auto_promoted session={session_id[:8]} count={len(_promote_ids)}")
     if _empty_ids:
-        # 빈 placeholder도 DELETE 대신 안내 UPDATE로 보존 — 버블 유지
+        # 빈 placeholder도 DELETE 대신 명시적 중단 안내로 보존한다.
         for _eid in _empty_ids:
             try:
                 _uid = _eid if isinstance(_eid, uuid.UUID) else uuid.UUID(str(_eid))
                 await conn.execute(
-                    "UPDATE chat_messages SET content = $2, intent = NULL, model_used = 'interrupted' WHERE id = $1",
+                    "UPDATE chat_messages SET content = $2, intent = 'interruption_notice', model_used = 'interrupted' WHERE id = $1",
                     _uid, "⚠️ 응답이 중단되었습니다. 다시 시도해 주세요.",
                 )
             except Exception as _ee:

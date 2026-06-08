@@ -391,6 +391,55 @@ async def test_cleanup_overlong_running_executions_closes_live_task():
         chat_service._streaming_state.pop(session_id, None)
 
 
+def test_incomplete_progress_tail_is_not_completion_candidate():
+    assert chat_service._looks_like_incomplete_progress_tail(
+        "핵심 파일을 즉시 읽고 수정합니다. MCP 도구를 로드합니다."
+    )
+    assert chat_service._looks_like_incomplete_progress_tail(
+        "DB 상태를 추가 확인하겠습니다."
+    )
+    assert chat_service._looks_like_incomplete_progress_tail(
+        "응답 일부\n\n⏳ 생성 중..."
+    )
+
+
+def test_final_report_tail_is_completion_candidate():
+    assert not chat_service._looks_like_incomplete_progress_tail(
+        "수행 내역: 완료판정 가드를 적용했습니다.\n"
+        "검증: pytest 통과.\n"
+        "미완료: 브라우저 E2E는 미실행입니다."
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_streaming_placeholder_marks_final_missing_as_interrupted_partial():
+    session_id = str(uuid.uuid4())
+    execution_id = str(uuid.uuid4())
+    placeholder_id = uuid.uuid4()
+    placeholder_created_at = datetime.now(timezone.utc)
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value={
+        "id": placeholder_id,
+        "content": "부분 응답입니다.\n\n⏳ _생성 중..._",
+        "created_at": placeholder_created_at,
+    })
+    conn.fetchval = AsyncMock(side_effect=[
+        None,  # live execution
+        placeholder_created_at - timedelta(seconds=2),  # last user before placeholder
+        0,  # final assistant exists
+        0,  # duplicate recovered exists
+    ])
+    conn.execute = AsyncMock()
+
+    with patch("app.services.chat_service.get_pool", return_value=_Pool(conn)):
+        await chat_service._delete_streaming_placeholder(session_id, execution_id)
+
+    executed_sql = [" ".join(call.args[0].split()) for call in conn.execute.await_args_list]
+    assert any("intent = 'interrupted_partial'" in sql for sql in executed_sql)
+    assert any("UPDATE chat_turn_executions" in sql and "status = 'interrupted'" in sql for sql in executed_sql)
+    assert not any("intent = NULL, model_used = 'interrupted'" in sql for sql in executed_sql)
+
+
 @pytest.mark.asyncio
 async def test_cleanup_deleted_duplicate_messages_dry_run_does_not_delete():
     session_id = uuid.uuid4()

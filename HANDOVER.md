@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-08 10:39 KST) - SaaS implementation status verification
+- 배경: CEO가 SaaS 구현 현황, 현재 DB/저장공간 구성, 남은 확인/조치/검증을 중간 보고가 아닌 최종 완료보고 조건으로 재요청했다.
+- 조치:
+  - `docs/AADS-SaaS-implementation-status.md`를 추가해 SaaS 구현 흐름, API 계약, DB row count, plan policy, DB/서버 저장공간, 검증 결과, 후속 P0/P1을 문서화했다.
+  - 운영 DB는 `query_db`가 `tenant_not_found` 가드에 막혀 `docker exec aads-postgres psql`로 우회 실측했다.
+  - 현재 active API 슬롯은 `.active_port`와 nginx upstream 기준 8102임을 재확인했다.
+- 검증:
+  - `pytest tests/unit/test_tenant_rbac_policy.py -q` 통과(9 passed, 1 warning).
+  - `pytest tests/unit/test_model_routing_admin_static.py -q` 통과(4 passed).
+  - `curl http://127.0.0.1:8102/health` 정상.
+  - `curl http://127.0.0.1:8102/api/v1/ops/health-check`는 `pipeline_healthy=true`, `disk_pct=90.3`, `active_streams_executing=1`로 응답했다.
+- 미완료/주의:
+  - 저장공간은 `/` 90%, `/mnt/volume_sgp1_01` 100%라 P0 정리 대상이다.
+  - `query_db`가 tenant context 미주입 상태에서 차단되는 현상은 P0 후속 수정 대상이다.
+  - 현재 worktree에는 SaaS 문서와 무관한 기존 미커밋 파일들이 남아 있어 선별 커밋만 수행해야 한다.
+
 ## 현재 진행 상태 (2026-06-08 09:58 KST) - Kling paid media API verification
 - 배경: CEO가 Kling 유료 결제 후 이미지/동영상 생성 실테스트를 지시했다.
 - 조치:
@@ -1765,3 +1781,16 @@
 - 조치: `app/services/chat_service.py`에 `_stream_interrupt_diagnostic_reason()`을 추가해 `error_message`에 `age`, `idle`, `timeout`, `tool_count`, `last_tool`, `content_len`, `saw_done`, `first_response`, `last_event`, `client_gone`, `queue_drops`를 압축 저장한다. `_mark_execution_interrupted()` 시작/종료 로그를 추가해 중단 처리와 auto-resume 예약 여부를 execution 단위로 추적한다. SSE producer 상태에 `last_event_type`, `client_gone`, `client_gone_since`를 기록하도록 보강했다.
 - 검증: `python3 -m py_compile app/services/chat_service.py` 통과. `JWT_SECRET_KEY=test-secret-key python3 -m pytest tests/unit/test_chat_service.py -q` 결과 34 passed, 1 warning. 테스트는 하드 타임아웃 reason에 `age=3600s`, `timeout=2700s`, `content_len=16`이 포함되는지 검증하도록 갱신했다.
 - 배포 상태: 이 기록 시점에는 코드 수정과 테스트 완료, 커밋/푸시/배포는 이어서 진행 대상이다.
+
+## 2026-06-08 10:55 KST - Chat no-done completion guard and recovery UI
+- 배경: CEO가 "권장조치 진행"을 지시했다. 대상 문제는 SSE `done` 없이 응답이 끊긴 뒤 프론트가 부분 텍스트를 최종 assistant 버블처럼 확정하고, 백엔드가 진행형 꼬리 문장을 completed 실행으로 닫을 수 있는 경로다.
+- 조치:
+  - `app/services/chat_service.py`에 `_looks_like_incomplete_progress_tail()`을 추가했다. `확인하겠습니다/조회합니다/로드합니다/생성 중...` 같은 진행형 tail은 completed 처리 전 차단하고 `_mark_execution_interrupted()`로 닫는다.
+  - 완료 확정 시 `completion_guard_marked_completed` 구조화 로그를 남기고, 차단 시 `completion_guard_blocked_incomplete_tail` 로그에 `session/execution/assistant/reason/tail`을 남긴다.
+  - 대시보드 `src/app/chat/page.tsx`에서 SSE `done` 없이 `full` 텍스트만 있는 경우 `replaceStreamingPlaceholderWithFinal()`을 호출하지 않고, 기존 `streaming_placeholder` 버블에 partial만 보존한 채 polling/resume을 기다리도록 변경했다.
+- 검증:
+  - `JWT_SECRET_KEY=test-secret pytest tests/unit/test_chat_service.py -q` 결과 37 passed, 1 warning.
+  - `python3.11 -m py_compile app/services/chat_service.py` 통과.
+  - `npx eslint src/app/chat/page.tsx` 결과 0 errors, 기존 warning 23개.
+  - `npm run build` 결과 Next.js build 성공, 52 routes generated.
+- 주의: `npm run lint` 전체는 기존 전역 lint 부채 277 errors/69 warnings로 실패한다. 이번 수정 파일에는 새 lint error가 없다.
