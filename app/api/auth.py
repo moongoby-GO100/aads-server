@@ -1,7 +1,7 @@
 """JWT 인증 API 라우터 — SaaS 회원가입 + 로그인"""
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 import logging
 
@@ -18,11 +18,25 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class OnboardingInviteRequest(BaseModel):
+    email: str
+    role: str = "member"
+
+    @field_validator("email")
+    @classmethod
+    def onboarding_invite_email_format(cls, v: str) -> str:
+        v = v.strip().lower()
+        if "@" not in v or "." not in v.split("@")[-1]:
+            raise ValueError("유효하지 않은 이메일 형식입니다")
+        return v
+
+
 class RegisterRequest(BaseModel):
     email: str
     password: str
     name: Optional[str] = None
     organization_name: Optional[str] = None
+    team_invites: list[OnboardingInviteRequest] = Field(default_factory=list)
 
     @field_validator("email")
     @classmethod
@@ -47,6 +61,9 @@ class AuthResponse(BaseModel):
     name: Optional[str] = None
     is_admin: bool = False
     tenant_id: Optional[str] = None
+    onboarding_required: bool = False
+    tenant: Optional[dict] = None
+    invites: list[dict] = Field(default_factory=list)
 
 
 class TenantCreateRequest(BaseModel):
@@ -94,6 +111,19 @@ class TenantPlanUpdateRequest(BaseModel):
     plan_key: str
 
 
+class TenantOnboardingRequest(BaseModel):
+    organization_name: str
+    team_invites: list[OnboardingInviteRequest] = Field(default_factory=list)
+
+    @field_validator("organization_name")
+    @classmethod
+    def organization_name_required(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("조직명은 필수입니다")
+        return v
+
+
 def _user_id(context: dict) -> str:
     return str(context["user"]["user_id"])
 
@@ -130,6 +160,15 @@ async def register(req: RegisterRequest):
         plan_key="free",
     )
     tenant_id = str(tenant.get("tenant_id") or "") or None
+    invites = []
+    for invite in req.team_invites:
+        created_invite = await auth_module.create_tenant_invite(
+            tenant_id=str(tenant_id),
+            email=invite.email,
+            role=invite.role,
+            invited_by=uid,
+        )
+        invites.append(created_invite)
     token = auth_module.create_token(uid, user["email"], tenant_id=tenant_id)
     logger.info("SaaS 회원가입 완료: %s", req.email)
     return AuthResponse(
@@ -139,6 +178,9 @@ async def register(req: RegisterRequest):
         name=user.get("name"),
         is_admin=False,
         tenant_id=tenant_id,
+        onboarding_required=not bool(req.organization_name),
+        tenant=tenant,
+        invites=invites,
     )
 
 
@@ -152,15 +194,7 @@ async def login(req: LoginRequest):
     saas_user = await auth_module.authenticate_saas_user(req.email, req.password)
     if saas_user:
         uid = str(saas_user["id"])  # DB returns int, JWT/response need str
-        tenant_id = saas_user.get("tenant_id")
-        if not tenant_id:
-            tenant = await auth_module.ensure_customer_tenant_for_user(
-                user_id=uid,
-                email=saas_user["email"],
-                name=saas_user.get("name"),
-                plan_key="free",
-            )
-            tenant_id = tenant.get("tenant_id")
+        tenant_id = await auth_module.resolve_login_tenant_for_user(saas_user)
         token = auth_module.create_token(uid, saas_user["email"], tenant_id=tenant_id)
         return AuthResponse(
             token=token,
@@ -211,6 +245,37 @@ async def create_tenant(
     token = auth_module.create_token(str(user["user_id"]), str(user.get("email") or ""), tenant_id=tenant["tenant_id"])
     return {
         "tenant": tenant,
+        "token": token,
+    }
+
+
+@router.post("/auth/onboarding", status_code=201)
+async def complete_onboarding(
+    req: TenantOnboardingRequest,
+    context: dict = Depends(require_tenant_role(TenantRole.VIEWER)),
+):
+    """가입 직후 조직명과 팀원 초대 역할을 확정한다."""
+    tenant = await auth_module.create_tenant_for_user(
+        user_id=_user_id(context),
+        name=req.organization_name,
+        plan_key="free",
+    )
+    tenant_id = str(tenant["tenant_id"])
+    invites = []
+    for invite in req.team_invites:
+        invites.append(
+            await auth_module.create_tenant_invite(
+                tenant_id=tenant_id,
+                email=invite.email,
+                role=invite.role,
+                invited_by=_user_id(context),
+            )
+        )
+    user = context["user"]
+    token = auth_module.create_token(str(user["user_id"]), str(user.get("email") or ""), tenant_id=tenant_id)
+    return {
+        "tenant": tenant,
+        "invites": invites,
         "token": token,
     }
 

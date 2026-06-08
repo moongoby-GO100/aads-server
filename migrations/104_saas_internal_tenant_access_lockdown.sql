@@ -1,5 +1,5 @@
 -- 104: Lock down AADS internal tenant access for public SaaS accounts.
--- Public signups must use customer tenants; the internal tenant is CEO/admin only.
+-- Public signups must use customer tenants; the internal tenant is CEO/admin/system only.
 
 ALTER TABLE saas_users
     ALTER COLUMN default_tenant_id DROP DEFAULT;
@@ -37,7 +37,7 @@ UPDATE saas_users u
        updated_at = now()
   FROM internal_tenant
  WHERE u.default_tenant_id = internal_tenant.id
-   AND COALESCE(u.role, 'user') NOT IN ('ceo', 'admin', 'owner');
+   AND COALESCE(u.role, 'user') NOT IN ('ceo', 'admin', 'system');
 
 WITH internal_tenant AS (
     SELECT id
@@ -56,5 +56,4 @@ UPDATE tenant_memberships tm
    AND tm.user_id = u.id
    AND tm.status = 'active'
    AND tm.deleted_at IS NULL
-   AND COALESCE(u.role, 'user') NOT IN ('ceo', 'admin', 'owner')
-   AND tm.role NOT IN ('owner', 'admin');
+   AND COALESCE(u.role, 'user') NOT IN ('ceo', 'admin', 'system');

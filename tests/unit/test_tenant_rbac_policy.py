@@ -40,7 +40,7 @@ def test_auth_request_paths_do_not_run_saas_schema_ddl():
     assert "attach_internal_tenant=False" in inspect.getsource(auth_router.register)
     assert "attach_internal_tenant: bool = False" in inspect.getsource(auth_module.create_saas_user)
     assert "create_tenant_for_user" in inspect.getsource(auth_router.register)
-    assert "ensure_customer_tenant_for_user" in inspect.getsource(auth_router.login)
+    assert "resolve_login_tenant_for_user" in inspect.getsource(auth_router.login)
 
 
 def test_saas_onboarding_api_contract_exists_and_is_role_guarded():
@@ -50,6 +50,7 @@ def test_saas_onboarding_api_contract_exists_and_is_role_guarded():
     viewer_sources = [
         inspect.getsource(auth_router.list_my_tenants),
         inspect.getsource(auth_router.create_tenant),
+        inspect.getsource(auth_router.complete_onboarding),
         inspect.getsource(auth_router.switch_tenant),
         inspect.getsource(auth_router.get_tenant_usage),
     ]
@@ -64,6 +65,8 @@ def test_saas_onboarding_api_contract_exists_and_is_role_guarded():
     assert "_assert_path_tenant(context, tenant_id)" in inspect.getsource(auth_router.create_tenant_invite)
     assert "_assert_path_tenant(context, tenant_id)" in inspect.getsource(auth_router.update_tenant_plan)
     assert "get_tenant_usage_summary" in inspect.getsource(auth_router.get_tenant_usage)
+    assert "team_invites" in inspect.getsource(auth_router.RegisterRequest)
+    assert "TenantOnboardingRequest" in inspect.getsource(auth_router.complete_onboarding)
 
 
 def test_saas_onboarding_service_uses_invite_tokens_and_memberships():
@@ -73,6 +76,7 @@ def test_saas_onboarding_service_uses_invite_tokens_and_memberships():
         inspect.getsource(auth_module.accept_tenant_invite),
         inspect.getsource(auth_module.switch_user_tenant),
         inspect.getsource(auth_module.update_tenant_plan),
+        inspect.getsource(auth_module.resolve_login_tenant_for_user),
     ]
     source = "\n".join(service_sources)
 
@@ -82,6 +86,7 @@ def test_saas_onboarding_service_uses_invite_tokens_and_memberships():
     assert "tenant_memberships" in source
     assert "default_tenant_id" in source
     assert "jsonb_set" in inspect.getsource(auth_module.update_tenant_plan)
+    assert "Internal tenant invites are restricted" in inspect.getsource(auth_module.create_tenant_invite)
 
 
 def test_internal_tenant_is_admin_only_for_saas_users():
@@ -89,8 +94,11 @@ def test_internal_tenant_is_admin_only_for_saas_users():
     context_source = inspect.getsource(auth_module._load_tenant_context)
     bootstrap_source = inspect.getsource(auth_module.ensure_saas_users_table)
 
-    assert "t.kind <> 'internal' OR tm.role IN ('owner', 'admin')" in list_source
+    assert "_is_internal_tenant_principal" in list_source
     assert "Internal tenant requires admin role" in context_source
+    assert "Internal tenant requires CEO/admin/system allowlist" in context_source
+    assert "INTERNAL_TENANT_ALLOWED_ROLES = {'ceo', 'admin', 'system'}" in inspect.getsource(auth_module)
+    assert "ensure_customer_tenant_for_user" in inspect.getsource(auth_module.resolve_login_tenant_for_user)
     assert "t.kind = 'customer'" in inspect.getsource(auth_module.ensure_customer_tenant_for_user)
     assert "create_tenant_for_user" in inspect.getsource(auth_module.ensure_customer_tenant_for_user)
     assert "ALTER COLUMN default_tenant_id DROP DEFAULT" in bootstrap_source

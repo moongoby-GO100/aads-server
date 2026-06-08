@@ -35,6 +35,7 @@ TOKEN_EXPIRE_HOURS = 24 * 7  # 7일
 
 ADMIN_EMAIL = os.getenv('AADS_ADMIN_EMAIL', 'admin@aads.dev')
 ADMIN_PASSWORD = os.getenv('AADS_ADMIN_PASSWORD', '')
+INTERNAL_TENANT_ALLOWED_ROLES = {'ceo', 'admin', 'system'}
 
 
 class TenantRole(str, Enum):
@@ -114,6 +115,26 @@ def _tenant_role_from_user_role(user_role: Optional[str]) -> str:
     if role in ('ceo', 'owner', 'admin'):
         return TenantRole.OWNER.value
     return TenantRole.MEMBER.value
+
+
+def _internal_tenant_allowlist_emails() -> set[str]:
+    configured = os.getenv('AADS_INTERNAL_TENANT_ALLOWLIST_EMAILS', '')
+    emails = {
+        _normalize_email(email)
+        for email in configured.split(',')
+        if _normalize_email(email)
+    }
+    if ADMIN_EMAIL:
+        emails.add(_normalize_email(ADMIN_EMAIL))
+    return emails
+
+
+def _is_internal_tenant_principal(email: Optional[str], role: Optional[str]) -> bool:
+    normalized_role = str(role or '').strip().lower()
+    if normalized_role in INTERNAL_TENANT_ALLOWED_ROLES:
+        return True
+    normalized_email = _normalize_email(email or '')
+    return bool(normalized_email and normalized_email in _internal_tenant_allowlist_emails())
 
 
 # --- SaaS 회원 관리 ---
@@ -427,19 +448,32 @@ async def list_user_tenants(user_id: str) -> list[dict]:
                    tm.role,
                    tm.status AS membership_status,
                    tm.created_at,
-                   tm.updated_at
+                   tm.updated_at,
+                   u.email AS user_email,
+                   u.role AS user_role
               FROM tenant_memberships tm
               JOIN tenants t ON t.id = tm.tenant_id
+              JOIN saas_users u ON u.id = tm.user_id
              WHERE tm.user_id = $1
                AND tm.status = 'active'
                AND tm.deleted_at IS NULL
                AND t.deleted_at IS NULL
-               AND (t.kind <> 'internal' OR tm.role IN ('owner', 'admin'))
              ORDER BY t.kind = 'internal' DESC, t.created_at ASC
             """,
             user_id,
         )
-    return [dict(row) for row in rows]
+    tenants: list[dict] = []
+    for row in rows:
+        tenant = dict(row)
+        if str(tenant.get("kind") or "").lower() == "internal":
+            if str(tenant.get("role") or "").lower() not in {TenantRole.OWNER.value, TenantRole.ADMIN.value}:
+                continue
+            if not _is_internal_tenant_principal(tenant.get("user_email"), tenant.get("user_role")):
+                continue
+        tenant.pop("user_email", None)
+        tenant.pop("user_role", None)
+        tenants.append(tenant)
+    return tenants
 
 
 async def create_tenant_for_user(
@@ -570,6 +604,25 @@ async def ensure_customer_tenant_for_user(
     )
 
 
+async def resolve_login_tenant_for_user(user: dict) -> Optional[str]:
+    """Return the tenant a SaaS user should start in after login."""
+    user_id = str(user.get("id") or user.get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid user")
+
+    default_tenant_id = str(user.get("tenant_id") or user.get("default_tenant_id") or "").strip() or None
+    if _is_internal_tenant_principal(user.get("email"), user.get("role")) and default_tenant_id:
+        return default_tenant_id
+
+    tenant = await ensure_customer_tenant_for_user(
+        user_id=user_id,
+        email=str(user.get("email") or ""),
+        name=user.get("name"),
+        plan_key="free",
+    )
+    return str(tenant.get("tenant_id") or "") or None
+
+
 async def switch_user_tenant(user_id: str, tenant_id: str) -> dict:
     context = await _load_tenant_context({"user_id": user_id}, requested_tenant_id=tenant_id)
     pool = await _ensure_pool()
@@ -606,6 +659,20 @@ async def create_tenant_invite(
     normalized_email = _normalize_email(email)
     pool = await _ensure_pool()
     async with pool.acquire() as conn:
+        tenant_kind = await conn.fetchval(
+            """
+            SELECT kind
+              FROM tenants
+             WHERE id = $1::uuid
+               AND status = 'active'
+               AND deleted_at IS NULL
+            """,
+            tenant_id,
+        )
+        if not tenant_kind:
+            raise HTTPException(status_code=404, detail="Tenant not found")
+        if str(tenant_kind).lower() == "internal":
+            raise HTTPException(status_code=403, detail="Internal tenant invites are restricted")
         row = await conn.fetchrow(
             """
             INSERT INTO tenant_invites
@@ -828,9 +895,12 @@ async def _load_tenant_context(user: dict, requested_tenant_id: Optional[str] = 
                    t.status AS tenant_status,
                    tm.id::text AS membership_id,
                    tm.role,
-                   tm.status AS membership_status
+                   tm.status AS membership_status,
+                   u.email AS user_email,
+                   u.role AS user_role
               FROM tenant_memberships tm
               JOIN tenants t ON t.id = tm.tenant_id
+              JOIN saas_users u ON u.id = tm.user_id
              WHERE tm.user_id = $1
                AND tm.tenant_id = $2::uuid
                AND tm.status = 'active'
@@ -844,8 +914,11 @@ async def _load_tenant_context(user: dict, requested_tenant_id: Optional[str] = 
         )
     if not row:
         raise HTTPException(status_code=403, detail='Tenant membership required')
-    if str(row['kind']).lower() == 'internal' and str(row['role']).lower() not in {'owner', 'admin'}:
-        raise HTTPException(status_code=403, detail='Internal tenant requires admin role')
+    if str(row['kind']).lower() == 'internal':
+        if str(row['role']).lower() not in {'owner', 'admin'}:
+            raise HTTPException(status_code=403, detail='Internal tenant requires admin role')
+        if not _is_internal_tenant_principal(row['user_email'], row['user_role']):
+            raise HTTPException(status_code=403, detail='Internal tenant requires CEO/admin/system allowlist')
     return {
         'tenant': {
             'id': row['tenant_id'],

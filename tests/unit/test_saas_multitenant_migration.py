@@ -49,6 +49,15 @@ def test_saas_internal_tenant_lockdown_migration_removes_public_access():
     assert "ALTER COLUMN default_tenant_id DROP DEFAULT" in sql
     assert "ALTER COLUMN default_tenant_id DROP NOT NULL" in sql
     assert "preferred_customer_tenant" in sql
-    assert "COALESCE(u.role, 'user') NOT IN ('ceo', 'admin', 'owner')" in sql
-    assert "tm.role NOT IN ('owner', 'admin')" in sql
+    assert "COALESCE(u.role, 'user') NOT IN ('ceo', 'admin', 'system')" in sql
+
+
+def test_saas_customer_start_migration_enforces_internal_allowlist():
+    sql = Path("migrations/105_saas_customer_start_and_internal_allowlist.sql").read_text(encoding="utf-8")
+
+    assert "migration_105_customer_start" in sql
+    assert "COALESCE(u.role, 'user') NOT IN ('ceo', 'admin', 'system')" in sql
+    assert "COALESCE(u.role, 'user') IN ('ceo', 'admin', 'system')" in sql
+    assert "INSERT INTO tenant_memberships" in sql
+    assert "UPDATE saas_users" in sql
     assert "status = 'removed'" in sql
