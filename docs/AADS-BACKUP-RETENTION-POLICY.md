@@ -1,6 +1,6 @@
 # AADS Backup Retention Policy
 
-Updated: 2026-06-08 11:32 KST
+Updated: 2026-06-08 11:59 KST
 
 ## P0 Policy
 
@@ -21,7 +21,13 @@ Updated: 2026-06-08 11:32 KST
 
 - Cron backup script: `/root/aads/scripts/backup.sh`
 - Cron disk cleanup script: `/root/aads/scripts/disk_cleanup.sh`
+- Versioned backup mirror: `scripts/backup.sh`
 - Versioned cleanup mirror: `scripts/disk_cleanup_v2.sh`
+
+The cron runtime scripts live outside the `aads-server` git worktree. Any P0
+change to `/root/aads/scripts/backup.sh` or `/root/aads/scripts/disk_cleanup.sh`
+must be mirrored into the versioned files above before the task is considered
+complete.
 
 ## Completion Criteria
 
