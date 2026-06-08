@@ -1142,7 +1142,13 @@ class MediaGenerationService:
                 },
                 json=payload if payload is not None else None,
             )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            body = response.text[:1000]
+            raise ValueError(
+                f"Kling API HTTP {response.status_code}: {body}"
+            ) from exc
         data = response.json()
         code = data.get("code")
         if code not in (0, "0", None):

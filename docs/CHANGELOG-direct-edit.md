@@ -3429,3 +3429,110 @@ from __
         key = name.strip()
    →    else:
         key = name.strip()
+
+## [2026-06-08 08:21:39 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: patch:     "claude-opus":   "claude-opus-4-7",→    "claude-opus":   "claude-opus-4-8",
+
+## [2026-06-08 08:24:37 KST] [aads-server] app/services/model_registry.py
+- Chat-Direct 수정: patch: _ANTHROPIC_RUNTIME_MODEL_IDS = {
+    "cl→_ANTHROPIC_RUNTIME_MODEL_IDS = {
+    "cl
+
+## [2026-06-08 08:30:31 KST] [aads-server] app/api/llm_models.py
+- Chat-Direct 수정: patch: ('runner_llm','anthropic','claude-opus-4→('runner_llm','anthropic','claude-opus-4
+
+## [2026-06-08 08:31:26 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: patch: "claude-opus-4-7": "claude-opus"→"claude-opus-4-8": "claude-opus"
+
+## [2026-06-08 08:32:21 KST] [aads-server] app/llm/client.py
+- Chat-Direct 수정: patch: if "opus-4-7" not in real_model:→if "opus-4-8" not in real_model:
+
+## [2026-06-08 08:33:17 KST] [aads-server] app/services/model_registry.py
+- Chat-Direct 수정: patch: "claude-opus-4-7",→"claude-opus-4-8",
+
+## [2026-06-08 08:35:29 KST] [aads-server] app/api/llm_models.py
+- Chat-Direct 수정: patch: ('runner_llm','anthropic','claude-opus-4→('runner_llm','anthropic','claude-opus-4
+
+## [2026-06-08 08:36:24 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: patch: "claude-opus-4-7": "claude-opus"→"claude-opus-4-8": "claude-opus"
+
+## [2026-06-08 08:37:19 KST] [aads-server] app/llm/client.py
+- Chat-Direct 수정: patch: if "opus-4-7" not in real_model:→if "opus-4-8" not in real_model:
+
+## [2026-06-08 08:38:14 KST] [aads-server] app/services/model_registry.py
+- Chat-Direct 수정: patch: "claude-opus-4-7",→"claude-opus-4-8",
+
+## [2026-06-08 08:39:09 KST] [aads-server] app/services/pipeline_runner_service.py
+- Chat-Direct 수정: patch: "XL": "claude-opus-4-7",→"XL": "claude-opus-4-8",
+
+## [2026-06-08 08:40:04 KST] [aads-server] scripts/seed_prompt_assets.py
+- Chat-Direct 수정: patch: ["claude-opus-4-6", "claude-opus-4-7"]→["claude-opus-4-6", "claude-opus-4-8"]
+
+## [2026-06-08 08:43:40 KST] [aads-server] nginx-aads-upstream.conf
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "SELECT column_name FROM infor
+
+## [2026-06-08 08:47:17 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:     "claude-opus-4-7",
+    "gemini-3.1-p→    "claude-opus-4-8",
+    "gemini-3.1-p
+
+## [2026-06-08 08:47:19 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:         if lowered == "claude-opus-4-7":→        if lowered == "claude-opus-4-8":
+
+## [2026-06-08 08:48:05 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:     "claude-opus-4-7",
+    "gemini-3.1-p→    "claude-opus-4-8",
+    "gemini-3.1-p
+
+## [2026-06-08 08:49:00 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:         if lowered == "claude-opus-4-7":→        if lowered == "claude-opus-4-8":
+
+## [2026-06-08 08:49:55 KST] [aads-server] tests/unit/test_media_generation_service.py
+- Chat-Direct 수정: patch:     assert svc.recognize_model("claude-o→    assert svc.recognize_model("claude-o
+
+## [2026-06-08 08:49:56 KST] [aads-server] tests/unit/test_media_generation_service.py
+- Chat-Direct 수정: patch:         "claude-opus-4-7",
+        "gemi→        "claude-opus-4-8",
+        "gemi
+
+## [2026-06-08 08:49:57 KST] [aads-server] scripts/submit_aads187.py
+- Chat-Direct 수정: patch:           ('runner_llm','anthropic','cla→          ('runner_llm','anthropic','cla
+
+## [2026-06-08 08:52:37 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:     "claude-opus-4-7",→    "claude-opus-4-8",
+
+## [2026-06-08 08:54:05 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: patch:     "claude-opus-4-7",→    "claude-opus-4-8",
+
+## [2026-06-08 08:56:12 KST] [aads-server] tests/unit/test_media_generation_service.py
+- Chat-Direct 수정: run_remote_command: sed -i 's/"claude-opus-4-7"/"claude-opus-4-8"/g' /root/aads/aads-server/tests/un
+
+## [2026-06-08 08:58:00 KST] [aads-server] nginx-aads-upstream.conf
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git add app/services/media_generation_service.py te
+
+## [2026-06-08 08:58:01 KST] [aads-server] nginx-aads-upstream.conf.dashboard.bak
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git add app/services/media_generation_service.py te
+
+## [2026-06-08 09:16:14 KST] [aads-server] app/main.py
+- Chat-Direct 수정: run_remote_command: grep -n "diff\|review\|staged\|검수\|score\|code_review\|git_remote_commit" /root/
+
+## [2026-06-08 09:24:50 KST] [aads-server] migrations/103_kling_media_models.sql
+- Chat-Direct 수정: run_remote_command: docker exec aads-server bash -c "git --version && which git"
+
+## [2026-06-08 09:27:54 KST] [aads-server] app/core/project_config.py
+- Chat-Direct 수정: patch:     "AADS":  {"server": "host.docker.int→    "AADS":  {"server": "host.docker.int
+
+## [2026-06-08 09:29:04 KST] [aads-server] app/core/project_config.py
+- Chat-Direct 수정: write: app/core/project_config.py
+
+## [2026-06-08 09:56:22 KST] [aads-server] app/services/model_registry.py
+- Chat-Direct 수정: patch: async def _fetch_openai_models() -> tupl→async def _fetch_openai_models() -> tupl
+
+## [2026-06-08 09:58:45 KST] [aads-server] app/services/model_registry.py
+- Chat-Direct 수정: patch: async def _fetch_openai_models() -> tupl→async def _fetch_openai_models() -> tupl
+
+## [2026-06-08 10:04:09 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && ALLOW_AUTH_COMMIT=1 git commit -m "fix: OpenAI inte
+
+## [2026-06-08 10:14:45 KST] [aads-server] migrations/104_kling_v1_video_route.sql
+- Chat-Direct 수정: run_remote_command: find /root/aads -name "fix_ops_ruff.py" 2>/dev/null

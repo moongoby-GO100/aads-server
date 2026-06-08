@@ -760,3 +760,9 @@ ol
 
 ## [2026-06-01 10:27:19 KST] [aads-dashboard] src/app/chat/page.tsx
 - Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && sed -i '270s/return (message.content || "").trim
+
+## [2026-06-05 07:53:56 KST] [aads-dashboard] src/app/signup/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i 's@: {};@: { color: "#111827", backgroundColor: "#fff" };@' /root/aads/aa
+
+## [2026-06-05 07:54:05 KST] [aads-dashboard] src/app/login/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i 's@: {};@: { color: "#111827", backgroundColor: "#fff" };@' /root/aads/aa

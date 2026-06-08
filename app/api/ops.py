@@ -33,8 +33,9 @@ async def _get_stream_activity_snapshot(recent_minutes: int = 5) -> Dict[str, An
     from app.services.chat_service import get_active_bg_tasks
 
     active_map = get_active_bg_tasks()
-    executing_session_ids = [str(sid) for sid, active in active_map.items() if active]
-    executing_sessions = [_short_session_id(sid) for sid in executing_session_ids]
+    raw_executing_session_ids = [str(sid) for sid, active in active_map.items() if active]
+    raw_executing_set = set(raw_executing_session_ids)
+    db_running_session_ids: List[str] = []
     placeholder_session_ids: List[str] = []
     placeholder_sessions: List[str] = []
 
@@ -42,6 +43,14 @@ async def _get_stream_activity_snapshot(recent_minutes: int = 5) -> Dict[str, An
         from app.core.db_pool import get_pool as _gp
 
         async with _gp().acquire() as conn:
+            running_rows = await conn.fetch(
+                """
+                SELECT DISTINCT session_id::text AS session_id
+                FROM chat_turn_executions
+                WHERE status IN ('running', 'retrying')
+                  AND completed_at IS NULL
+                """
+            )
             rows = await conn.fetch(
                 """
                 SELECT DISTINCT ON (session_id)
@@ -53,19 +62,30 @@ async def _get_stream_activity_snapshot(recent_minutes: int = 5) -> Dict[str, An
                 """,
                 recent_minutes,
             )
+        db_running_session_ids = [row["session_id"] for row in running_rows]
         placeholder_session_ids = [row["session_id"] for row in rows]
         placeholder_sessions = [_short_session_id(row["session_id"]) for row in rows]
     except Exception as e:
         logger.warning("stream_activity_snapshot_failed", error=str(e))
 
-    executing_set = set(executing_session_ids)
+    db_running_set = set(db_running_session_ids)
     placeholder_set = set(placeholder_session_ids)
+    # Active task maps can retain a live asyncio task after DB finalization.
+    # Count it for deploy drain only when the DB still has an active turn or
+    # the UI still has a recent placeholder tied to the session.
+    executing_set = raw_executing_set & (db_running_set | placeholder_set)
+    executing_session_ids = sorted(executing_set)
+    executing_sessions = [_short_session_id(sid) for sid in executing_session_ids]
     recovery_pending_ids = [sid for sid in placeholder_session_ids if sid not in executing_set]
     visible_ids = list(executing_set | placeholder_set)
 
     return {
         "executing_count": len(executing_session_ids),
         "executing_sessions": executing_sessions,
+        "raw_executing_count": len(raw_executing_session_ids),
+        "raw_executing_sessions": [_short_session_id(sid) for sid in raw_executing_session_ids],
+        "db_running_count": len(db_running_session_ids),
+        "db_running_sessions": [_short_session_id(sid) for sid in db_running_session_ids],
         "placeholder_recent_count": len(placeholder_session_ids),
         "placeholder_recent_sessions": placeholder_sessions,
         "recovery_pending_count": len(recovery_pending_ids),
@@ -336,14 +356,6 @@ async def upsert_lifecycle(req: LifecycleUpdate):
         except Exception:
             pass
 
-    status_col_map = {
-        "queued": "queued_at",
-        "running": "started_at",
-        "completed": "completed_at",
-        "requeued": "queued_at",
-        "failed": "completed_at",
-    }
-    ts_col = status_col_map.get(req.status)
 
     try:
         conn = await _get_conn()
@@ -391,10 +403,12 @@ async def list_lifecycle(
     idx = 1
     if project:
         conditions.append(f"dl.project = ${idx}")
-        params.append(project); idx += 1
+        params.append(project)
+        idx += 1
     if status:
         conditions.append(f"dl.status = ${idx}")
-        params.append(status); idx += 1
+        params.append(status)
+        idx += 1
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     sql = f"""
         SELECT dl.id, dl.task_id, dl.project, dl.title, dl.server, dl.priority, dl.status,
@@ -472,7 +486,8 @@ async def cost_summary(
     idx = 2
     if project:
         conditions.append(f"project = ${idx}")
-        params.append(project); idx += 1
+        params.append(project)
+        idx += 1
     where = "WHERE " + " AND ".join(conditions)
     try:
         conn = await _get_conn()
@@ -545,7 +560,8 @@ async def list_commits(
     idx = 1
     if task_id:
         conditions.append(f"task_id = ${idx}")
-        params.append(task_id); idx += 1
+        params.append(task_id)
+        idx += 1
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     params.append(limit)
     try:
@@ -635,7 +651,8 @@ async def bridge_log(
     idx = 1
     if classification:
         conditions.append(f"classification = ${idx}")
-        params.append(classification); idx += 1
+        params.append(classification)
+        idx += 1
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     params.append(limit)
     try:
@@ -810,8 +827,8 @@ async def health_check():
                 _lines = _f.readlines()
             _mt = _ma = 0
             for _l in _lines:
-                if _l.startswith("MemTotal:"): _mt = int(_l.split()[1])
-                elif _l.startswith("MemAvailable:"): _ma = int(_l.split()[1])
+                if _l.startswith("MemTotal:"): _mt = int(_l.split()[1])  # noqa: E701
+                elif _l.startswith("MemAvailable:"): _ma = int(_l.split()[1]) # noqa: E701
             if _mt > 0:
                 infra["memory_pct"] = round((1 - _ma / _mt) * 100, 1)
         except Exception:
@@ -1144,11 +1161,11 @@ async def list_recovery_logs(
         try:
             conditions, params, idx = [], [], 1
             if issue_type:
-                conditions.append(f"issue_type = ${idx}"); params.append(issue_type); idx += 1
+                conditions.append(f"issue_type = ${idx}"); params.append(issue_type); idx += 1  # noqa: E702
             if result:
-                conditions.append(f"result = ${idx}"); params.append(result); idx += 1
+                conditions.append(f"result = ${idx}"); params.append(result); idx += 1  # noqa: E702
             if server:
-                conditions.append(f"affected_server = ${idx}"); params.append(server); idx += 1
+                conditions.append(f"affected_server = ${idx}"); params.append(server); idx += 1  # noqa: E702
             where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
             params.extend([limit, offset])
             rows = await conn.fetch(
@@ -1597,8 +1614,8 @@ async def ops_stream():
 
 # ─── AADS-168: Claude 프로세스 감시 데몬 API ─────────────────────────────────
 
-import glob as _glob
-import subprocess as _subprocess
+import glob as _glob # noqa: E402
+import subprocess as _subprocess # noqa: E402
 
 _WATCHDOG_LOG_DIR = "/root/aads/logs/watchdog_reports"
 _WATCHDOG_SCRIPT = "/root/aads/scripts/claude_watchdog.py"

@@ -59,7 +59,7 @@ _CLAUDE_MODEL_BY_SIZE = {
     "S":  "claude-haiku-4-5-20251001",
     "M":  "claude-sonnet-4-6",
     "L":  "claude-sonnet-4-6",
-    "XL": "claude-opus-4-7",
+    "XL": "claude-opus-4-8",
 }
 
 _LITELLM_FALLBACK_MODELS = {

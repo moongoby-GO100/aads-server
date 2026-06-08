@@ -81,7 +81,7 @@ INSTRUCTION = (
     "          ('audio','elevenlabs','eleven-v3',10,true,true,'ElevenLabs v3','system'),\n"
     "          ('audio','openai','tts-1-hd',20,true,false,'OpenAI TTS HD','system'),\n"
     "          ('audio','google','google-wavenet-tts',30,false,false,'WaveNet TTS','system'),\n"
-    "          ('runner_llm','anthropic','claude-opus-4-7',10,true,true,'Runner 기본','system'),\n"
+    "          ('runner_llm','anthropic','claude-opus-4-8',10,true,true,'Runner 기본','system'),\n"
     "          ('runner_llm','openai','gpt-5.5',20,true,false,'GPT-5.5 백업','system'),\n"
     "          ('runner_llm','google','gemini-2.5-pro',30,true,false,'Gemini 2.5 Pro 백업','system')\n"
     "        ON CONFLICT (route_key, provider, model_id) DO NOTHING\n"

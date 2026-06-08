@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-08 09:58 KST) - Kling paid media API verification
+- 배경: CEO가 Kling 유료 결제 후 이미지/동영상 생성 실테스트를 지시했다.
+- 조치:
+  - `llm_api_keys`에 저장된 `KLING_ACCESS_KEY`, `KLING_SECRET_KEY` 활성 상태를 확인했다.
+  - 실제 Kling API 호출 결과 영상 `kling-v2`는 현재 키에서 `code=1201, model is not supported`로 거부됨을 확인했다.
+  - `migrations/104_kling_v1_video_route.sql`을 추가하고 운영 DB에 적용해 현재 키에서 정상 제출되는 `kling-v1` 영상 라우트를 등록했다.
+  - `app/services/media_generation_service.py`의 Kling HTTP 오류 처리에서 응답 본문을 보존하도록 보강했다.
+- 검증:
+  - 컨테이너 기준 `python -m pytest tests/unit/test_media_generation_service.py -q` 통과(14 passed, 16 warnings).
+  - Kling 이미지 생성 job `media-943520858efe43d3`: `kling-v2-1`, `succeeded`, provider unit deduction `4`, URL 접근 `200 image/png`, 880,058 bytes.
+  - Kling 영상 생성 job `media-f15088f6f0324860`: `kling-v1`, `succeeded`, provider unit deduction `1`, URL 접근 `200 video/mp4`, 4,317,207 bytes.
+  - 영상 다운로드 도구는 기본 안전 경로에 `/tmp/aads-media/videos/media-f15088f6f0324860.mp4`를 기록했다. 로컬 셸의 `/tmp`와 도구 컨테이너 `/tmp`는 달라 직접 `ls`로는 확인되지 않았다.
+- 미완료/주의:
+  - 코드 변경과 신규 migration은 아직 커밋/푸시하지 않았다.
+  - 서버 컨테이너 재시작/blue-green 배포는 아직 수행하지 않았다. 현재 DB 라우트와 실행 중 코드 기준 실제 생성은 성공했지만, HTTP 오류 본문 보존 패치는 배포 후 운영 프로세스에 확실히 반영된다.
+
 ## 현재 진행 상태 (2026-06-08 09:55 KST) - SaaS P0/P1 onboarding API implementation
 - 배경: CEO가 AADS SaaS 전환의 P0/P1 즉시 구현 진행을 지시했다.
 - 조치:
