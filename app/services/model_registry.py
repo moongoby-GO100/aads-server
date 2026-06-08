@@ -357,7 +357,7 @@ _DEEPSEEK_LITELLM_RUNTIME_ALIASES = {
 }
 _ANTHROPIC_RUNTIME_MODEL_IDS = {
     "claude-sonnet": "claude-sonnet-4-6",
-    "claude-opus": "claude-opus-4-7",
+    "claude-opus": "claude-opus-4-8",
     "claude-opus-46": "claude-opus-4-6",
     "claude-haiku": "claude-haiku-4-5-20251001",
 }
@@ -370,7 +370,8 @@ _MODEL_ACCEPTED_ALIASES: dict[str, tuple[str, ...]] = {
         "claude-2.1",
     ),
     "claude-opus": (
-        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-4-8",
         "claude-opus-4-5",
         "claude-3-opus-20240229",
     ),
@@ -834,9 +835,12 @@ async def _get_anthropic_models_api_key_and_runtime_state() -> tuple[str, bool]:
 
 
 async def _fetch_openai_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    # [INTENTIONALLY_DISABLED] OpenAI 계열 전체 비활성 — API 키 미등록 상태가 아니라 의도적으로 미사용.
+    # 향후 OpenAI 계열(gpt-5, o3 등) 도입 시 이 주석 제거 후 DB에 API 키 등록 필요.
+    # 재활성 절차: 1) llm_provider_keys 테이블에 openai API 키 등록 → 2) sync 트리거 → 3) is_active=true 확인
     api_key = await _get_first_provider_key("openai")
     if not api_key:
-        return [], {"status": "skipped", "error": "missing_key"}
+        return [], {"status": "skipped", "error": "intentionally_disabled_no_key"}
     async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT_SECONDS) as client:
         response = await client.get(
             "https://api.openai.com/v1/models",
