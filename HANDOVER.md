@@ -10,11 +10,16 @@
 - 조치:
   - `migrations/106_saas_user_status_active_consistency.sql`: deleted/suspended SaaS 사용자의 `is_active`를 false로 보정하고, deleted 사용자의 `deleted_at`을 채운다.
   - 운영 DB에 migration 106을 적용했다. 결과는 `UPDATE 8`, `UPDATE 0`이며 `checkpoint_migrations`에 `v=106`을 기록했다.
+  - `migrations/107_saas_internal_allowlist_owner_cleanup.sql`: legacy `owner` role이 internal allowlist에 남지 않도록 bootstrap과 DB 정리 기준을 `ceo/admin/system`으로 고정한다.
+  - 운영 DB에 migration 107을 적용했다. 이미 상태가 정리되어 있어 결과는 `UPDATE 0`, `UPDATE 0`, `UPDATE 0`이며 `checkpoint_migrations`에 `v=107`을 기록했다.
   - `tests/unit/test_saas_multitenant_migration.py`: migration 106 정적 회귀 테스트를 추가했다.
+  - `tests/unit/test_tenant_rbac_policy.py`: migration 107과 e2e 로그인 tenant 보정, bootstrap allowlist 회귀 테스트를 추가했다.
 - 검증:
-  - `pytest -q tests/unit/test_tenant_rbac_policy.py tests/unit/test_saas_multitenant_migration.py tests/unit/test_tenant_usage_limits.py` 통과(21 passed, 기존 warning 1건).
+  - `pytest -q tests/unit/test_tenant_rbac_policy.py tests/unit/test_saas_multitenant_migration.py tests/unit/test_tenant_usage_limits.py` 통과(22 passed, 기존 warning 1건).
+  - `python3 -m py_compile app/auth.py app/api/auth.py` 통과.
   - 외부 API `https://aads.newtalk.kr/api/v1/health` 응답 `status=ok`.
   - OpenAPI active 슬롯에서 `/api/v1/auth/onboarding`, `/api/v1/auth/tenants`, `/api/v1/auth/tenants/{tenant_id}/invites`, `/api/v1/auth/invites/accept` 노출 확인.
+  - `bash /root/aads/aads-server/deploy.sh bluegreen` 재시도는 stale stream counter로 1차 차단됐고, DB running execution 0건 확인 후 `AADS_DEPLOY_ALLOW_BUSY_TARGET=true`로 target slot만 재빌드해 active port `8100`으로 전환했다.
 - 미완료/주의:
   - 새 migration 106과 테스트/HANDOVER 변경의 최종 커밋 SHA는 완료보고에서 별도 확인한다.
   - `app/static/gallery/manifest.json`은 런타임 생성물로 계속 dirty 상태가 될 수 있어 SaaS 변경 커밋에는 포함하지 않는다.

@@ -301,15 +301,15 @@ async def ensure_saas_users_table():
             UPDATE saas_users
                SET default_tenant_id = public.aads_internal_tenant_id()
              WHERE default_tenant_id IS NULL
-               AND role IN ('ceo', 'admin', 'owner');
+               AND role IN ('ceo', 'admin', 'system');
 
             INSERT INTO tenant_memberships (tenant_id, user_id, role, status)
             SELECT default_tenant_id,
                    id,
-                   CASE WHEN role IN ('ceo', 'admin', 'owner') THEN 'owner' ELSE 'member' END,
+                   CASE WHEN role IN ('ceo', 'admin', 'system') THEN 'owner' ELSE 'member' END,
                    'active'
               FROM saas_users
-             WHERE role IN ('ceo', 'admin', 'owner')
+             WHERE role IN ('ceo', 'admin', 'system')
                AND default_tenant_id IS NOT NULL
             ON CONFLICT (tenant_id, user_id) DO UPDATE
                SET status = 'active',

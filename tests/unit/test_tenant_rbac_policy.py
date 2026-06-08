@@ -1,5 +1,6 @@
 import inspect
 import os
+from pathlib import Path
 
 os.environ.setdefault("JWT_SECRET_KEY", "unit-test-secret")
 os.environ.setdefault("E2B_API_KEY", "unit-test-e2b-key")
@@ -106,7 +107,8 @@ def test_internal_tenant_is_admin_only_for_saas_users():
     assert "create_tenant_for_user" in inspect.getsource(auth_module.ensure_customer_tenant_for_user)
     assert "ALTER COLUMN default_tenant_id DROP DEFAULT" in bootstrap_source
     assert "ALTER COLUMN default_tenant_id DROP NOT NULL" in bootstrap_source
-    assert "WHERE role IN ('ceo', 'admin', 'owner')" in bootstrap_source
+    assert "WHERE role IN ('ceo', 'admin', 'system')" in bootstrap_source
+    assert "WHERE role IN ('ceo', 'admin', 'owner')" not in bootstrap_source
 
 
 def test_chat_router_uses_role_dependencies_for_workspace_and_session_access():
@@ -220,8 +222,6 @@ def test_chat_router_message_and_artifact_routes_use_tenant_dependencies():
 
 
 def test_tenant_isolation_migration_scopes_high_risk_tables_without_rls():
-    from pathlib import Path
-
     sql = Path("migrations/101_saas_tenant_isolation_guards.sql").read_text(encoding="utf-8")
 
     for table in ("chat_artifacts", "e2e_credentials", "project_artifacts", "pipeline_jobs", "directive_lifecycle"):
@@ -232,3 +232,12 @@ def test_tenant_isolation_migration_scopes_high_risk_tables_without_rls():
     assert "ENABLE ROW LEVEL SECURITY" not in sql
     assert "idx_e2e_cred_tenant_service_project_label" in sql
     assert "fk_chat_artifacts_session_tenant" in sql
+
+
+def test_internal_allowlist_cleanup_migration_removes_legacy_owner_access():
+    sql = Path("migrations/107_saas_internal_allowlist_owner_cleanup.sql").read_text(encoding="utf-8")
+
+    assert "slug = 'internal'" in sql
+    assert "NOT IN ('ceo', 'admin', 'system')" in sql
+    assert "default_tenant_id = NULL" in sql
+    assert "status = 'removed'" in sql
