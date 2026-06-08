@@ -71,6 +71,17 @@ def test_edit_intent_detection():
     assert not chat_service._is_html_edit_intent("")
 
 
+def test_runner_fast_path_prompt_block_instructs_batch_background_work():
+    prompt = chat_service._runner_fast_path_prompt_block()
+
+    assert "pipeline_runner_submit_batch" in prompt
+    assert "60초 이상" in prompt
+    assert "parallel_group" in prompt
+    assert "depends_on_key" in prompt
+    assert "XS 또는 S" in prompt
+    assert "채팅 응답을 완료" in prompt
+
+
 def test_dedupe_recovery_like_messages_keeps_longest_recovery_message():
     shared_prefix = "partial prefix answer " * 3
     messages = [

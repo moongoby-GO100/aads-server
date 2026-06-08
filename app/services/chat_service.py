@@ -205,6 +205,25 @@ def _response_mode_prompt_block(response_mode: str) -> str:
     )
 
 
+_RUNNER_FAST_PATH_POLICY = (
+    "\n\n[러너 병렬/백그라운드 우선 정책]\n"
+    "- 코드 수정, 파일 전수 점검, 도구 실행, 검증처럼 60초 이상 걸릴 가능성이 있거나 "
+    "독립 하위 작업이 2개 이상이면 채팅 본문에서 장시간 붙잡지 말고 "
+    "pipeline_runner_submit_batch를 우선 사용한다.\n"
+    "- 병렬 가능한 작업은 같은 parallel_group으로 묶고, 같은 파일을 만지는 작업만 "
+    "depends_on_key로 순차화한다.\n"
+    "- 단순 로그/오타/1파일 점검은 XS 또는 S, 일반 기능 수정은 M, "
+    "대규모 리팩터링/마이그레이션만 L/XL로 지정한다. "
+    "worker_model 직접 지정은 CEO가 명시했거나 인증/호환성 우회가 필요한 경우에만 사용한다.\n"
+    "- 러너로 넘긴 뒤에는 job_id, parallel_group, size, 예상 검증 항목을 짧게 보고하고 "
+    "채팅 응답을 완료한다. 진행 확인은 pipeline_runner_status로 재조회한다."
+)
+
+
+def _runner_fast_path_prompt_block() -> str:
+    return _RUNNER_FAST_PATH_POLICY
+
+
 _ACTIONABLE_QUOTE_CONTEXT_MARKERS = (
     "응답이 없",
     "응답을 못",
@@ -7179,7 +7198,11 @@ async def send_message_stream(
                 logger.error(f"context_builder failed, using raw fallback: {_ctx_err}")
                 system_prompt = base_prompt or "You are a helpful AI assistant."
                 messages = [{"role": m["role"], "content": m["content"]} for m in raw_messages[-20:]]
-            system_prompt = system_prompt + _response_mode_prompt_block(response_mode)
+            system_prompt = (
+                system_prompt
+                + _response_mode_prompt_block(response_mode)
+                + _runner_fast_path_prompt_block()
+            )
 
             # P2-7: 멘션된 프로젝트 컨텍스트를 system_prompt에 주입
             if _mentioned_projects:
