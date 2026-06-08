@@ -108,7 +108,7 @@ def test_ceo_model_strings_are_recognized():
     assert svc.recognize_model("sora-2-pro")["provider"] == "openai"
     assert svc.recognize_model("veo-3.1-generate-preview")["kind"] == "video"
     assert svc.recognize_model("gpt-5.5")["provider"] == "codex"
-    assert svc.recognize_model("claude-opus-4-7")["provider"] == "anthropic"
+    assert svc.recognize_model("claude-opus-4-8")["provider"] == "anthropic"
     assert svc.recognize_model("gemini-3.1-pro-preview")["provider"] == "gemini"
 
 
@@ -354,7 +354,7 @@ def test_model_routing_migration_seeds_ceo_models_and_preferences():
         "sora-2-pro",
         "veo-3.1-generate-preview",
         "gpt-5.5",
-        "claude-opus-4-7",
+        "claude-opus-4-8",
         "gemini-3.1-pro-preview",
     ):
         assert model_id in sql + hardening_sql

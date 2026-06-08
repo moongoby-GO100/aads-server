@@ -50,7 +50,7 @@ VIDEO_MODELS = (
 )
 LLM_ROUTING_MODELS = (
     "gpt-5.5",
-    "claude-opus-4-7",
+    "claude-opus-4-8",
     "gemini-3.1-pro-preview",
 )
 
@@ -199,7 +199,7 @@ class MediaGenerationService:
             return {"kind": "video", "provider": "google", "model_id": model}
         if lowered == "gpt-5.5":
             return {"kind": "llm", "provider": "codex", "model_id": model}
-        if lowered == "claude-opus-4-7":
+        if lowered == "claude-opus-4-8":
             return {"kind": "llm", "provider": "anthropic", "model_id": model}
         if lowered == "gemini-3.1-pro-preview":
             return {"kind": "llm", "provider": "gemini", "model_id": model}
