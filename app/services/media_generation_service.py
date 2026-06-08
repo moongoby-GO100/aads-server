@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import hmac
 import json
 import mimetypes
 import os
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -42,11 +45,24 @@ IMAGE_MODELS = (
     "gemini-2.5-flash-image",
     "gemini-3.1-flash-image-preview",
     "gemini-3-pro-image-preview",
+    "kling-v1",
+    "kling-v1-5",
+    "kling-v2",
+    "kling-v2-1",
+    "kling-v2-new",
 )
 VIDEO_MODELS = (
     "sora-2",
     "sora-2-pro",
     "veo-3.1-generate-preview",
+    "kling-2.0",
+    "kling-v1",
+    "kling-v1-5",
+    "kling-v1-6",
+    "kling-v2",
+    "kling-v2-1",
+    "kling-v2-5",
+    "kling-v3",
 )
 LLM_ROUTING_MODELS = (
     "gpt-5.5",
@@ -197,6 +213,8 @@ class MediaGenerationService:
             return {"kind": "video", "provider": "openai", "model_id": model}
         if lowered == "veo-3.1-generate-preview":
             return {"kind": "video", "provider": "google", "model_id": model}
+        if lowered.startswith("kling-") or lowered.startswith("kling-v"):
+            return {"kind": "video", "provider": "kling", "model_id": model}
         if lowered == "gpt-5.5":
             return {"kind": "llm", "provider": "codex", "model_id": model}
         if lowered == "claude-opus-4-8":
@@ -310,7 +328,16 @@ class MediaGenerationService:
                 or os.getenv("LITELLM_MASTER_KEY")
                 or _secret_value(self.settings, "GOOGLE_API_KEY")
             )
+        if normalized == "kling":
+            return bool(
+                os.getenv("KLING_ACCESS_KEY")
+                and os.getenv("KLING_SECRET_KEY")
+            )
         return False
+
+    async def _kling_configured(self) -> bool:
+        access_key, secret_key = await self._get_kling_credentials()
+        return bool(access_key and secret_key)
 
     def _default_model_for(self, kind: str, provider: str | None = None) -> str:
         if kind == "video":
@@ -439,6 +466,8 @@ class MediaGenerationService:
             requested_provider = "google" if _secret_value(self.settings, "GOOGLE_API_KEY") else "openai"
 
         configured = self._provider_configured(requested_provider)
+        if requested_provider == "kling" and not configured:
+            configured = await self._kling_configured()
         supported = self._route_supported(kind, requested_provider, requested_model)
         reason = ""
         if not enabled:
@@ -452,7 +481,7 @@ class MediaGenerationService:
             availability = "adapter_unavailable"
         else:
             availability = "available"
-        if not explicit_request and kind == "image" and availability != "available":
+        if not explicit_request and kind == "image" and availability != "available" and availability != "disabled":
             for fallback_provider, fallback_model in (
                 ("google", "imagen-4.0-generate-001"),
                 ("google", "imagen-4.0-fast-generate-001"),
@@ -490,6 +519,15 @@ class MediaGenerationService:
         if kind == "image":
             if provider == "pc_local":
                 return True
+            if provider == "kling":
+                return model_id in {
+                    "kling-v1",
+                    "kling-v1-5",
+                    "kling-v2",
+                    "kling-v2-1",
+                    "kling-v2-new",
+                    "kling-2.0",
+                }
             if provider == "gemini" and model_id in {
                 "gemini-3.1-flash-image-preview",
                 "gemini-3-pro-image-preview",
@@ -505,7 +543,20 @@ class MediaGenerationService:
                 return True
             return provider == "openai" and model_id in {"gpt-image-2", "gpt-image-1"}
         if kind == "video":
-            return provider == "pc_local"
+            if provider == "pc_local":
+                return True
+            if provider == "kling":
+                return model_id in {
+                    "kling-2.0",
+                    "kling-v1",
+                    "kling-v1-5",
+                    "kling-v1-6",
+                    "kling-v2",
+                    "kling-v2-1",
+                    "kling-v2-5",
+                    "kling-v3",
+                }
+            return False
         if kind in {"music", "model_3d"}:
             return provider == "pc_local"
         return False
@@ -770,8 +821,13 @@ class MediaGenerationService:
             provider=route.provider,
             model_id=route.model_id,
             prompt=prompt,
-            input_refs={"size": size},
-            status="queued" if route.provider == "pc_local" else "running",
+            input_refs={
+                "size": size,
+                "aspect_ratio": aspect_ratio,
+                "image_size": image_size,
+                "reference_images": reference_images or [],
+            },
+            status="queued" if route.provider in {"pc_local", "kling"} else "running",
             requested_by=requested_by,
             session_id=session_id,
         )
@@ -804,6 +860,23 @@ class MediaGenerationService:
                 input_refs={"size": size},
                 route=route,
             )
+        if route.provider == "kling":
+            try:
+                return await self._submit_kling_image_job(
+                    job=job,
+                    prompt=prompt,
+                    route=route,
+                    aspect_ratio=aspect_ratio,
+                    reference_images=reference_images,
+                    input_refs={"size": size, "aspect_ratio": aspect_ratio},
+                )
+            except Exception as exc:
+                return await self._mark_failed(
+                    job,
+                    code="PROVIDER_UNAVAILABLE",
+                    message=str(exc),
+                    route=route,
+                )
         try:
             if route.source in {"explicit", "db_default"}:
                 result = await self._generate_image_with_route(prompt, size, route, aspect_ratio=aspect_ratio, image_size=image_size, reference_images=reference_images)
@@ -984,6 +1057,296 @@ class MediaGenerationService:
                 return {"url": f"data:{mime};base64,{b64}", "provider": model_id, "prompt": original}
         raise ValueError(f"No image part found in Gemini {model_id} response")
 
+    @staticmethod
+    def _kling_base_url() -> str:
+        return os.getenv("KLING_API_BASE_URL", "https://api-singapore.klingai.com").rstrip("/")
+
+    @staticmethod
+    def _kling_model_name(model_id: str) -> str:
+        aliases = {
+            "kling-2.0": "kling-v2",
+            "kling-v2.0": "kling-v2",
+            "kling-v2.1": "kling-v2-1",
+            "kling-v2.5": "kling-v2-5",
+        }
+        normalized = str(model_id or "").strip().lower()
+        return aliases.get(normalized, str(model_id or "kling-v2").strip() or "kling-v2")
+
+    @staticmethod
+    def _strip_data_uri(value: Any) -> str:
+        text = str(value or "").strip()
+        if text.startswith("data:") and "," in text:
+            return text.split(",", 1)[1]
+        return text
+
+    @staticmethod
+    def _jwt_b64(data: bytes) -> str:
+        return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+    @classmethod
+    def _build_kling_jwt(cls, access_key: str, secret_key: str) -> str:
+        now = int(time.time())
+        header = {"alg": "HS256", "typ": "JWT"}
+        payload = {"iss": access_key, "exp": now + 1800, "nbf": now - 5}
+        signing_input = ".".join(
+            (
+                cls._jwt_b64(json.dumps(header, separators=(",", ":")).encode("utf-8")),
+                cls._jwt_b64(json.dumps(payload, separators=(",", ":")).encode("utf-8")),
+            )
+        )
+        signature = hmac.new(
+            secret_key.encode("utf-8"),
+            signing_input.encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        return f"{signing_input}.{cls._jwt_b64(signature)}"
+
+    async def _get_kling_credentials(self) -> tuple[str, str]:
+        access_key = os.getenv("KLING_ACCESS_KEY", "").strip()
+        secret_key = os.getenv("KLING_SECRET_KEY", "").strip()
+        if access_key and secret_key:
+            return access_key, secret_key
+
+        try:
+            from app.core.llm_key_provider import get_api_key, get_provider_key_records
+
+            access_key = access_key or (await get_api_key("KLING_ACCESS_KEY")).strip()
+            secret_key = secret_key or (await get_api_key("KLING_SECRET_KEY")).strip()
+            if access_key and secret_key:
+                return access_key, secret_key
+
+            for record in await get_provider_key_records("kling", include_rate_limited=False):
+                key_name = str(record.get("key_name") or "").upper()
+                value = str(record.get("value") or "").strip()
+                if key_name.endswith("ACCESS_KEY") or key_name.endswith("_AK"):
+                    access_key = access_key or value
+                elif key_name.endswith("SECRET_KEY") or key_name.endswith("_SK"):
+                    secret_key = secret_key or value
+        except Exception:
+            logger.exception("kling_credentials_lookup_failed")
+        return access_key, secret_key
+
+    async def _kling_request(self, method: str, endpoint: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        access_key, secret_key = await self._get_kling_credentials()
+        if not access_key or not secret_key:
+            raise ValueError("Kling credentials are not configured")
+        token = self._build_kling_jwt(access_key, secret_key)
+        url = f"{self._kling_base_url()}{endpoint}"
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.request(
+                method,
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json=payload if payload is not None else None,
+            )
+        response.raise_for_status()
+        data = response.json()
+        code = data.get("code")
+        if code not in (0, "0", None):
+            raise ValueError(f"Kling API error {code}: {data.get('message') or data}")
+        return data
+
+    @staticmethod
+    def _kling_task_payload(
+        *,
+        prompt: str,
+        model_id: str,
+        input_refs: dict[str, Any] | None = None,
+        aspect_ratio: str | None = None,
+    ) -> dict[str, Any]:
+        refs = dict(input_refs or {})
+        payload: dict[str, Any] = {
+            "model_name": MediaGenerationService._kling_model_name(model_id),
+            "prompt": str(prompt or "")[:2500],
+        }
+        for source_key, target_key in (
+            ("negative_prompt", "negative_prompt"),
+            ("mode", "mode"),
+            ("duration", "duration"),
+            ("callback_url", "callback_url"),
+            ("external_task_id", "external_task_id"),
+            ("cfg_scale", "cfg_scale"),
+            ("camera_control", "camera_control"),
+        ):
+            if refs.get(source_key) not in (None, ""):
+                payload[target_key] = refs[source_key]
+        payload["aspect_ratio"] = str(
+            refs.get("aspect_ratio") or aspect_ratio or "16:9"
+        )
+        return payload
+
+    @staticmethod
+    def _kling_status_to_job_status(task_status: str) -> str:
+        status = str(task_status or "").strip().lower()
+        if status in {"succeed", "success", "completed", "complete"}:
+            return "succeeded"
+        if status in {"failed", "failure", "error"}:
+            return "failed"
+        if status in {"processing", "running"}:
+            return "running"
+        return "queued"
+
+    @staticmethod
+    def _kling_first_result_url(data: Mapping[str, Any], kind: str) -> str | None:
+        task_result = _as_dict(data.get("task_result"))
+        if kind == "video":
+            videos = task_result.get("videos")
+            if isinstance(videos, list) and videos:
+                item = _as_dict(videos[0])
+                return item.get("url") or item.get("video_url")
+            return task_result.get("url") or task_result.get("video_url")
+        images = task_result.get("images")
+        if isinstance(images, list) and images:
+            item = _as_dict(images[0])
+            return item.get("url") or item.get("image_url")
+        return task_result.get("url") or task_result.get("image_url")
+
+    async def _submit_kling_image_job(
+        self,
+        *,
+        job: Mapping[str, Any],
+        prompt: str,
+        route: MediaRoute,
+        aspect_ratio: str | None,
+        reference_images: list[str] | None,
+        input_refs: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        refs = dict(input_refs or {})
+        payload = self._kling_task_payload(
+            prompt=prompt,
+            model_id=route.model_id,
+            input_refs=refs,
+            aspect_ratio=aspect_ratio,
+        )
+        image_value = refs.get("image") or refs.get("image_url") or refs.get("input_image")
+        if image_value:
+            payload["image"] = self._strip_data_uri(image_value)
+        if reference_images:
+            payload["subject_image_list"] = [
+                {"subject_image": self._strip_data_uri(image)}
+                for image in reference_images[:4]
+                if str(image or "").strip()
+            ]
+        if refs.get("scene_image"):
+            payload["scene_image"] = self._strip_data_uri(refs["scene_image"])
+        if refs.get("style_image"):
+            payload["style_image"] = self._strip_data_uri(refs["style_image"])
+        if refs.get("n"):
+            payload["n"] = refs["n"]
+        response = await self._kling_request("POST", "/v1/images/generations", payload)
+        data = _as_dict(response.get("data"))
+        provider_task_id = str(data.get("task_id") or "").strip()
+        provider_status = str(data.get("task_status") or "submitted")
+        metadata = {
+            "provider": route.provider,
+            "model_id": route.model_id,
+            "provider_task_id": provider_task_id,
+            "provider_status": provider_status,
+            "provider_endpoint": "/v1/images/generations",
+            "request_id": response.get("request_id"),
+        }
+        updated = await self.update_job_status(
+            str(job.get("job_id") or ""),
+            self._kling_status_to_job_status(provider_status),
+            result_metadata=metadata,
+        )
+        public = _public_job(updated or job)
+        public.update(
+            {
+                "job_id": job.get("job_id"),
+                "kind": "image",
+                "status": public.get("status") or "queued",
+                "provider": route.provider,
+                "model_id": route.model_id,
+                "provider_task_id": provider_task_id,
+                "availability": "submitted",
+            }
+        )
+        return public
+
+    async def _submit_kling_video_job(
+        self,
+        *,
+        job: Mapping[str, Any],
+        prompt: str,
+        route: MediaRoute,
+        input_refs: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        refs = dict(input_refs or {})
+        payload = self._kling_task_payload(prompt=prompt, model_id=route.model_id, input_refs=refs)
+        image_value = (
+            refs.get("image")
+            or refs.get("image_url")
+            or refs.get("start_frame")
+            or refs.get("reference_image")
+        )
+        endpoint = "/v1/videos/text2video"
+        if image_value:
+            endpoint = "/v1/videos/image2video"
+            payload["image"] = self._strip_data_uri(image_value)
+        if refs.get("image_tail"):
+            payload["image_tail"] = self._strip_data_uri(refs["image_tail"])
+        response = await self._kling_request("POST", endpoint, payload)
+        data = _as_dict(response.get("data"))
+        provider_task_id = str(data.get("task_id") or "").strip()
+        provider_status = str(data.get("task_status") or "submitted")
+        metadata = {
+            "provider": route.provider,
+            "model_id": route.model_id,
+            "provider_task_id": provider_task_id,
+            "provider_status": provider_status,
+            "provider_endpoint": endpoint,
+            "request_id": response.get("request_id"),
+        }
+        updated = await self.update_job_status(
+            str(job.get("job_id") or ""),
+            self._kling_status_to_job_status(provider_status),
+            result_metadata=metadata,
+        )
+        public = _public_job(updated or job)
+        public.update(
+            {
+                "job_id": job.get("job_id"),
+                "kind": "video",
+                "status": public.get("status") or "queued",
+                "provider": route.provider,
+                "model_id": route.model_id,
+                "provider_task_id": provider_task_id,
+                "availability": "submitted",
+            }
+        )
+        return public
+
+    async def _refresh_kling_job(self, job: Mapping[str, Any]) -> dict[str, Any]:
+        metadata = _as_dict(job.get("result_metadata"))
+        provider_task_id = str(metadata.get("provider_task_id") or "").strip()
+        endpoint = str(metadata.get("provider_endpoint") or "").strip()
+        if not provider_task_id or not endpoint:
+            return dict(job)
+        response = await self._kling_request("GET", f"{endpoint.rstrip('/')}/{provider_task_id}")
+        data = _as_dict(response.get("data"))
+        provider_status = str(data.get("task_status") or metadata.get("provider_status") or "")
+        status = self._kling_status_to_job_status(provider_status)
+        result_uri = self._kling_first_result_url(data, str(job.get("kind") or ""))
+        merged_metadata = {
+            **metadata,
+            "provider_status": provider_status,
+            "provider_response_updated_at": data.get("updated_at"),
+            "provider_final_unit_deduction": data.get("final_unit_deduction"),
+            "request_id": response.get("request_id") or metadata.get("request_id"),
+        }
+        error_message = data.get("task_status_msg") if status == "failed" else None
+        return await self.update_job_status(
+            str(job.get("job_id") or ""),
+            status,
+            result_uri=result_uri,
+            result_metadata=merged_metadata,
+            error_message=error_message,
+        )
+
     async def edit_image(
         self,
         prompt: str,
@@ -1157,6 +1520,21 @@ class MediaGenerationService:
                 input_refs=input_refs or {},
                 route=route,
             )
+        if route.provider == "kling":
+            try:
+                return await self._submit_kling_video_job(
+                    job=job,
+                    prompt=prompt,
+                    route=route,
+                    input_refs=input_refs or {},
+                )
+            except Exception as exc:
+                return await self._mark_failed(
+                    job,
+                    code="PROVIDER_UNAVAILABLE",
+                    message=str(exc),
+                    route=route,
+                )
         return await self._mark_failed(
             job,
             code="PROVIDER_UNAVAILABLE",
@@ -1255,6 +1633,11 @@ class MediaGenerationService:
                 "message": "media job not found or storage unavailable",
                 "job_id": job_id,
             }
+        if job.get("provider") == "kling" and job.get("status") not in TERMINAL_STATUSES:
+            try:
+                job = await self._refresh_kling_job(job)
+            except Exception as exc:
+                logger.warning("kling_media_status_refresh_failed job_id=%s error=%s", job_id, exc)
         return _public_job(job)
 
     async def video_status(self, job_id: str) -> dict[str, Any]:
@@ -1267,6 +1650,11 @@ class MediaGenerationService:
             }
         if job.get("kind") != "video":
             return {"error": "INVALID_JOB_KIND", "job_id": job_id, "kind": job.get("kind")}
+        if job.get("provider") == "kling" and job.get("status") not in TERMINAL_STATUSES:
+            try:
+                job = await self._refresh_kling_job(job)
+            except Exception as exc:
+                logger.warning("kling_video_status_refresh_failed job_id=%s error=%s", job_id, exc)
         return _public_job(job)
 
     async def video_download(

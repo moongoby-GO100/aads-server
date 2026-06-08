@@ -1711,3 +1711,18 @@
 - 조치: `app/services/chat_service.py`에 `cleanup_overlong_running_executions()`를 추가했다. 실행 `started_at` 기준 하드 타임아웃(`AADS_ACTIVE_STREAM_HARD_TIMEOUT_SEC`, 기본 2,700초)을 넘은 `running/retrying` 실행은 부분 응답을 보존하고 `interrupted`로 닫으며, 같은 프로세스의 active task/state도 취소·정리한다. startup cleanup과 주기 cleanup loop에서 이 함수를 먼저 실행하도록 `app/main.py`에 연결했다.
 - 운영 보정: 2026-06-08 09:17 KST에 단발 보정으로 30분 초과 running 3건을 `active_stream_hard_timeout_after_1800s` 사유의 `interrupted`로 닫았다. 보정 후 최근 24시간 상태는 `completed=6`, `interrupted=3`, `running=1`이며 running 1건은 현재 응답 세션이다.
 - 검증: `python3 -m py_compile app/services/chat_service.py app/main.py` 통과. `JWT_SECRET_KEY=test-secret pytest tests/unit/test_chat_service.py -k "cleanup_stale_streaming_placeholders or cleanup_overlong_running_executions"` 결과 3 passed. `git diff --check -- app/services/chat_service.py app/main.py tests/unit/test_chat_service.py` 통과. 전체 `git diff --check`는 기존 unrelated `docs/CHANGELOG-go100-direct.md` trailing whitespace로 실패했다.
+
+## 2026-06-08 09:28 KST - Kling media provider DB key + routing adapter
+- 배경: CEO가 Kling Access Key/Secret Key를 제공하고 이미지 생성·동영상 생성에 Kling 모델을 `llm_api_keys`, `llm_models`, `model_routing_preferences` 경로로 반영하도록 지시했다.
+- 조치:
+  - `app/services/media_generation_service.py`에 Kling provider adapter를 추가했다. Access Key/Secret Key로 HS256 JWT를 생성해 `https://api-singapore.klingai.com`에 Bearer 인증한다.
+  - 이미지 경로: `/v1/images/generations`; 동영상 경로: `/v1/videos/text2video`, image/image_url 입력 시 `/v1/videos/image2video`.
+  - `media_status()`/`video_status()`에서 Kling provider task 상태를 재조회해 `media_generation_jobs` 상태와 result URI를 갱신하도록 추가했다.
+  - `migrations/103_kling_media_models.sql`을 추가하고 운영 DB에 적용했다. `kling-2.0`, `kling-v2`, `kling-v2-1`, `kling-v2-new`, `kling-v3` 모델 및 image/video route를 등록했다.
+  - `llm_api_keys`에 `KLING_ACCESS_KEY`, `KLING_SECRET_KEY` 2건을 암호화 저장했다. 평문 키는 문서와 코드에 기록하지 않는다.
+- 검증:
+  - DB: `llm_api_keys` provider=`kling` 2건 active, `llm_models` provider=`kling` 5건, `model_routing_preferences` provider=`kling` 6건 확인.
+  - 라우팅: `resolve_route("video", model_id="kling-2.0")`, `resolve_route("image", model_id="kling-v2-1")`, `resolve_route("video", model_id="kling-v2")`, `resolve_route("video", model_id="kling-v3")` 모두 `configured=True`, `supported=True`, `availability='available'`.
+  - Kling API: 과금 없는 `GET /v1/images/generations?pageNum=1&pageSize=1` 호출 결과 `code=0`, `message='SUCCEED'`.
+  - 문법/테스트: `python3 -m py_compile app/services/media_generation_service.py app/api/llm_models.py` 통과. `pytest -q tests/unit/test_media_generation_service.py tests/unit/test_model_routing_admin_static.py` 결과 17 passed.
+- 남은 작업: 서버 blue-green 배포 후 `/api/v1/health`와 media routing API를 재검증해야 한다.

@@ -107,9 +107,24 @@ def test_ceo_model_strings_are_recognized():
     assert svc.recognize_model("gemini-3.1-flash-image-preview")["kind"] == "image"
     assert svc.recognize_model("sora-2-pro")["provider"] == "openai"
     assert svc.recognize_model("veo-3.1-generate-preview")["kind"] == "video"
+    assert svc.recognize_model("kling-v2")["provider"] == "kling"
+    assert svc._route_supported("image", "kling", "kling-v2-1") is True
+    assert svc._route_supported("video", "kling", "kling-v3") is True
     assert svc.recognize_model("gpt-5.5")["provider"] == "codex"
     assert svc.recognize_model("claude-opus-4-8")["provider"] == "anthropic"
     assert svc.recognize_model("gemini-3.1-pro-preview")["provider"] == "gemini"
+
+
+def test_kling_jwt_is_hs256_access_secret_token():
+    token = MediaGenerationService._build_kling_jwt("access-key", "secret-key")
+
+    parts = token.split(".")
+    assert len(parts) == 3
+    header = json.loads(base64.urlsafe_b64decode(parts[0] + "=="))
+    payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=="))
+    assert header["alg"] == "HS256"
+    assert payload["iss"] == "access-key"
+    assert payload["exp"] > payload["nbf"]
 
 
 @pytest.mark.asyncio
@@ -276,6 +291,35 @@ async def test_db_default_without_credentials_returns_not_configured():
 
 
 @pytest.mark.asyncio
+async def test_generate_kling_video_submits_provider_job(monkeypatch):
+    conn = _Conn()
+    svc = MediaGenerationService(settings_obj=_settings(), pool_provider=lambda: _Pool(conn))
+
+    async def fake_credentials():
+        return "access-key", "secret-key"
+
+    async def fake_request(method, endpoint, payload=None):
+        assert method == "POST"
+        assert endpoint == "/v1/videos/text2video"
+        assert payload["model_name"] == "kling-v2"
+        return {
+            "code": 0,
+            "request_id": "req_1",
+            "data": {"task_id": "kling_task_1", "task_status": "submitted"},
+        }
+
+    monkeypatch.setattr(svc, "_get_kling_credentials", fake_credentials)
+    monkeypatch.setattr(svc, "_kling_request", fake_request)
+
+    result = await svc.generate_video("make a product clip", model_id="kling-v2")
+
+    assert result["status"] == "queued"
+    assert result["provider"] == "kling"
+    assert result["provider_task_id"] == "kling_task_1"
+    assert conn.rows[result["job_id"]]["result_metadata"]["provider_endpoint"] == "/v1/videos/text2video"
+
+
+@pytest.mark.asyncio
 async def test_default_image_route_preserves_openai_fallback_when_google_missing(monkeypatch):
     conn = _Conn()
     svc = MediaGenerationService(
@@ -344,6 +388,7 @@ def test_media_generation_migration_contains_idempotent_job_table():
 def test_model_routing_migration_seeds_ceo_models_and_preferences():
     sql = Path("migrations/089_model_routing_preferences.sql").read_text()
     hardening_sql = Path("migrations/090_media_llm_routing_admin_hardening.sql").read_text()
+    kling_sql = Path("migrations/103_kling_media_models.sql").read_text()
 
     assert "CREATE TABLE IF NOT EXISTS model_routing_preferences" in sql
     for model_id in (
@@ -356,8 +401,12 @@ def test_model_routing_migration_seeds_ceo_models_and_preferences():
         "gpt-5.5",
         "claude-opus-4-8",
         "gemini-3.1-pro-preview",
+        "kling-2.0",
+        "kling-v2",
+        "kling-v2-1",
+        "kling-v3",
     ):
-        assert model_id in sql + hardening_sql
+        assert model_id in sql + hardening_sql + kling_sql
     assert "ON CONFLICT (route_key, provider, model_id)" in sql
     assert "CREATE TABLE IF NOT EXISTS runner_model_config" in hardening_sql
     assert "ON CONFLICT (size) DO NOTHING" in hardening_sql

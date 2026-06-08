@@ -63,7 +63,7 @@ WITH seed_models (
         ('openai', 'sora-2-pro', 'Sora 2 Pro', 'sora', 'media_video', FALSE, FALSE, TRUE, FALSE, FALSE, 'manual', 'sora-2-pro', 'manual_seed', 'review_required', TRUE, FALSE, '{"routing_note":"Video job routing is recorded; execution adapter returns PROVIDER_UNAVAILABLE until enabled."}'::jsonb, '{"video":true,"adapter_pending":true}'::jsonb),
         ('google', 'veo-3.1-generate-preview', 'Veo 3.1 Generate Preview', 'veo', 'media_video', FALSE, FALSE, TRUE, FALSE, FALSE, 'manual', 'veo-3.1-generate-preview', 'manual_seed', 'review_required', TRUE, FALSE, '{"routing_note":"Video job routing is recorded; execution adapter returns PROVIDER_UNAVAILABLE until enabled."}'::jsonb, '{"video":true,"adapter_pending":true}'::jsonb),
         ('codex', 'gpt-5.5', 'GPT-5.5 (Codex CLI)', 'codex', 'coding', TRUE, TRUE, FALSE, TRUE, TRUE, 'manual', 'gpt-5.5', 'manual_seed', 'verified', TRUE, TRUE, '{"routing_note":"Codex CLI model; keyless runtime."}'::jsonb, '{"coding":true,"thinking":true}'::jsonb),
-        ('anthropic', 'claude-opus-4-7', 'Claude Opus 4.7', 'claude', 'coding', TRUE, TRUE, FALSE, TRUE, FALSE, 'manual', 'claude-opus-4-7', 'manual_seed', 'not_configured', TRUE, FALSE, '{"routing_note":"Anthropic runtime uses OAuth auth token via central client/CLI relay; Models API may remain unavailable with OAuth only."}'::jsonb, '{"coding":true,"thinking":true}'::jsonb),
+        ('anthropic', 'claude-opus-4-8', 'Claude Opus 4.8', 'claude', 'coding', TRUE, TRUE, FALSE, TRUE, FALSE, 'manual', 'claude-opus-4-8', 'manual_seed', 'not_configured', TRUE, FALSE, '{"routing_note":"Anthropic runtime uses OAuth auth token via central client/CLI relay; Models API may remain unavailable with OAuth only."}'::jsonb, '{"coding":true,"thinking":true}'::jsonb),
         ('gemini', 'gemini-3.1-pro-preview', 'Gemini 3.1 Pro Preview', 'gemini', 'reasoning', TRUE, TRUE, TRUE, TRUE, FALSE, 'manual', 'gemini-3.1-pro-preview', 'manual_seed', 'not_configured', TRUE, FALSE, '{"routing_note":"LLM execution must go through LiteLLM proxy."}'::jsonb, '{"thinking":true,"vision":true,"coding":true}'::jsonb)
 )
 INSERT INTO llm_models (
@@ -122,7 +122,7 @@ VALUES
     ('video', 'openai', 'sora-2-pro', 20, TRUE, FALSE, 'Sora 2 Pro video route; adapter pending.', NOW(), 'migration_090'),
     ('video', 'google', 'veo-3.1-generate-preview', 30, TRUE, FALSE, 'Veo 3.1 video route; adapter pending.', NOW(), 'migration_090'),
     ('llm', 'codex', 'gpt-5.5', 10, TRUE, FALSE, 'Default LLM route visible to admin; Codex runtime is keyless.', NOW(), 'migration_090'),
-    ('llm', 'anthropic', 'claude-opus-4-7', 20, TRUE, FALSE, 'Anthropic OAuth runtime model. Uses central auth-token flow, not direct legacy API-key wiring.', NOW(), 'migration_090'),
+    ('llm', 'anthropic', 'claude-opus-4-8', 20, TRUE, FALSE, 'Anthropic OAuth runtime model. Uses central auth-token flow, not direct legacy API-key wiring.', NOW(), 'migration_090'),
     ('llm', 'gemini', 'gemini-3.1-pro-preview', 30, TRUE, FALSE, 'Gemini LLM route must execute through LiteLLM proxy.', NOW(), 'migration_090')
 ON CONFLICT (route_key, provider, model_id)
 DO UPDATE SET
@@ -194,7 +194,7 @@ INSERT INTO chat_model_preferences (
 )
 VALUES
     ('codex:gpt-5.5', 'codex', 'gpt-5.5', 10, FALSE, TRUE, TRUE, 'migration_090', NOW()),
-    ('anthropic:claude-opus-4-7', 'anthropic', 'claude-opus-4-7', 20, FALSE, TRUE, FALSE, 'migration_090', NOW()),
+    ('anthropic:claude-opus-4-8', 'anthropic', 'claude-opus-4-8', 20, FALSE, TRUE, FALSE, 'migration_090', NOW()),
     ('gemini:gemini-3.1-pro-preview', 'gemini', 'gemini-3.1-pro-preview', 30, FALSE, TRUE, FALSE, 'migration_090', NOW())
 ON CONFLICT (preference_key)
 DO UPDATE SET
@@ -221,12 +221,12 @@ DO UPDATE SET
 
 INSERT INTO runner_model_config (size, models, updated_at, updated_by)
 VALUES
-    ('XS', '["codex:gpt-5.5","litellm:gemini-3.1-pro-preview","claude-opus-4-7"]'::jsonb, NOW(), 'migration_090'),
-    ('S', '["codex:gpt-5.5","litellm:gemini-3.1-pro-preview","claude-opus-4-7"]'::jsonb, NOW(), 'migration_090'),
-    ('M', '["codex:gpt-5.5","litellm:gemini-3.1-pro-preview","claude-opus-4-7"]'::jsonb, NOW(), 'migration_090'),
-    ('L', '["codex:gpt-5.5","claude-opus-4-7","litellm:gemini-3.1-pro-preview"]'::jsonb, NOW(), 'migration_090'),
-    ('XL', '["claude-opus-4-7","codex:gpt-5.5","litellm:gemini-3.1-pro-preview"]'::jsonb, NOW(), 'migration_090'),
-    ('AI_REVIEW', '["codex:gpt-5.5","claude-opus-4-7","litellm:gemini-3.1-pro-preview"]'::jsonb, NOW(), 'migration_090')
+    ('XS', '["codex:gpt-5.5","litellm:gemini-3.1-pro-preview","claude-opus-4-8"]'::jsonb, NOW(), 'migration_090'),
+    ('S', '["codex:gpt-5.5","litellm:gemini-3.1-pro-preview","claude-opus-4-8"]'::jsonb, NOW(), 'migration_090'),
+    ('M', '["codex:gpt-5.5","litellm:gemini-3.1-pro-preview","claude-opus-4-8"]'::jsonb, NOW(), 'migration_090'),
+    ('L', '["codex:gpt-5.5","claude-opus-4-8","litellm:gemini-3.1-pro-preview"]'::jsonb, NOW(), 'migration_090'),
+    ('XL', '["claude-opus-4-8","codex:gpt-5.5","litellm:gemini-3.1-pro-preview"]'::jsonb, NOW(), 'migration_090'),
+    ('AI_REVIEW', '["codex:gpt-5.5","claude-opus-4-8","litellm:gemini-3.1-pro-preview"]'::jsonb, NOW(), 'migration_090')
 ON CONFLICT (size) DO NOTHING;
 
 COMMIT;
