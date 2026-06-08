@@ -61,3 +61,12 @@ def test_saas_customer_start_migration_enforces_internal_allowlist():
     assert "INSERT INTO tenant_memberships" in sql
     assert "UPDATE saas_users" in sql
     assert "status = 'removed'" in sql
+
+
+def test_saas_user_status_active_consistency_migration():
+    sql = Path("migrations/106_saas_user_status_active_consistency.sql").read_text(encoding="utf-8")
+
+    assert "COALESCE(status, 'active') = 'deleted'" in sql
+    assert "COALESCE(status, 'active') = 'suspended'" in sql
+    assert "is_active = FALSE" in sql
+    assert "deleted_at = COALESCE(deleted_at, now())" in sql

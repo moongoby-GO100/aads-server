@@ -67,6 +67,8 @@ def test_saas_onboarding_api_contract_exists_and_is_role_guarded():
     assert "get_tenant_usage_summary" in inspect.getsource(auth_router.get_tenant_usage)
     assert "team_invites" in inspect.getsource(auth_router.RegisterRequest)
     assert "TenantOnboardingRequest" in inspect.getsource(auth_router.complete_onboarding)
+    assert "finalize_customer_tenant_onboarding" in inspect.getsource(auth_router.complete_onboarding)
+    assert "create_tenant_for_user" not in inspect.getsource(auth_router.complete_onboarding)
 
 
 def test_saas_onboarding_service_uses_invite_tokens_and_memberships():
@@ -87,6 +89,7 @@ def test_saas_onboarding_service_uses_invite_tokens_and_memberships():
     assert "default_tenant_id" in source
     assert "jsonb_set" in inspect.getsource(auth_module.update_tenant_plan)
     assert "Internal tenant invites are restricted" in inspect.getsource(auth_module.create_tenant_invite)
+    assert "Customer tenant membership required" in inspect.getsource(auth_module.finalize_customer_tenant_onboarding)
 
 
 def test_internal_tenant_is_admin_only_for_saas_users():

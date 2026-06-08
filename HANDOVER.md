@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-08 14:37 KST) - SaaS P0/P1 tenant onboarding status consistency closeout
+- 배경: CEO가 internal tenant allowlist, 일반 사용자 customer 시작, tenant_memberships 기반 팀원 초대, 가입 직후 온보딩 P0/P1 개선안을 즉시 구현하라고 재지시했다. 직전 완료보고와 workspace ledger 보정이 충돌해 Git/DB/배포 상태를 재실측했다.
+- 실측:
+  - `HEAD`와 `origin/main`은 `4b858c8`로 일치한다.
+  - active API 슬롯은 `.active_port=8102`이며 `aads-server-green`이 healthy다.
+  - 운영 DB에서 active 일반 사용자 customer default 누락은 0건, active 일반 사용자 internal membership은 0건이다.
+  - `status='deleted'` 또는 `status='suspended'`인데 `is_active=true`로 남아 있던 SaaS 사용자 8건을 발견했다. 로그인 경로는 `status='active' AND deleted_at IS NULL`로 차단하지만, 운영 판정 오염을 막기 위해 별도 정합성 migration으로 보정했다.
+- 조치:
+  - `migrations/106_saas_user_status_active_consistency.sql`: deleted/suspended SaaS 사용자의 `is_active`를 false로 보정하고, deleted 사용자의 `deleted_at`을 채운다.
+  - 운영 DB에 migration 106을 적용했다. 결과는 `UPDATE 8`, `UPDATE 0`이며 `checkpoint_migrations`에 `v=106`을 기록했다.
+  - `tests/unit/test_saas_multitenant_migration.py`: migration 106 정적 회귀 테스트를 추가했다.
+- 검증:
+  - `pytest -q tests/unit/test_tenant_rbac_policy.py tests/unit/test_saas_multitenant_migration.py tests/unit/test_tenant_usage_limits.py` 통과(21 passed, 기존 warning 1건).
+  - 외부 API `https://aads.newtalk.kr/api/v1/health` 응답 `status=ok`.
+  - OpenAPI active 슬롯에서 `/api/v1/auth/onboarding`, `/api/v1/auth/tenants`, `/api/v1/auth/tenants/{tenant_id}/invites`, `/api/v1/auth/invites/accept` 노출 확인.
+- 미완료/주의:
+  - 새 migration 106과 테스트/HANDOVER 변경의 최종 커밋 SHA는 완료보고에서 별도 확인한다.
+  - `app/static/gallery/manifest.json`은 런타임 생성물로 계속 dirty 상태가 될 수 있어 SaaS 변경 커밋에는 포함하지 않는다.
+
 ## 현재 진행 상태 (2026-06-08 14:11 KST) - SaaS P0/P1 tenant onboarding finalization
 - 배경: CEO가 AADS 신규/기존 일반 사용자가 CEO internal tenant처럼 모든 데이터와 기능을 보지 못하게 하고, 팀원 초대와 가입 직후 온보딩을 tenant_memberships 기반으로 개선하라고 지시했다. 이전 보고가 커밋/푸시/배포 원장과 충돌하여 최종 확인/조치/검증을 재수행했다.
 - 조치:

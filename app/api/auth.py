@@ -255,10 +255,10 @@ async def complete_onboarding(
     context: dict = Depends(require_tenant_role(TenantRole.VIEWER)),
 ):
     """가입 직후 조직명과 팀원 초대 역할을 확정한다."""
-    tenant = await auth_module.create_tenant_for_user(
+    tenant = await auth_module.finalize_customer_tenant_onboarding(
         user_id=_user_id(context),
+        tenant_id=_tenant_id(context),
         name=req.organization_name,
-        plan_key="free",
     )
     tenant_id = str(tenant["tenant_id"])
     invites = []

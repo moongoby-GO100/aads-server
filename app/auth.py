@@ -553,6 +553,76 @@ async def create_tenant_for_user(
     return out
 
 
+async def finalize_customer_tenant_onboarding(
+    *,
+    user_id: str,
+    tenant_id: str,
+    name: str,
+) -> dict:
+    await require_saas_schema_ready()
+    tenant_name = str(name or "").strip()
+    if not tenant_name:
+        raise HTTPException(status_code=422, detail="Tenant name is required")
+
+    pool = await _ensure_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                SELECT t.id::text AS tenant_id,
+                       t.slug,
+                       t.name,
+                       t.kind,
+                       t.status,
+                       t.metadata,
+                       tm.id::text AS membership_id,
+                       tm.role,
+                       tm.status AS membership_status
+                  FROM tenant_memberships tm
+                  JOIN tenants t ON t.id = tm.tenant_id
+                 WHERE tm.user_id = $1
+                   AND tm.tenant_id = $2::uuid
+                   AND tm.status = 'active'
+                   AND tm.deleted_at IS NULL
+                   AND t.kind = 'customer'
+                   AND t.status = 'active'
+                   AND t.deleted_at IS NULL
+                 LIMIT 1
+                """,
+                user_id,
+                tenant_id,
+            )
+            if not row:
+                raise HTTPException(status_code=403, detail="Customer tenant membership required")
+            if str(row["role"]).lower() not in {TenantRole.OWNER.value, TenantRole.ADMIN.value}:
+                raise HTTPException(status_code=403, detail="Tenant admin role required")
+
+            tenant = await conn.fetchrow(
+                """
+                UPDATE tenants
+                   SET name = $1,
+                       updated_at = now()
+                 WHERE id = $2::uuid
+                RETURNING id::text AS tenant_id, slug, name, kind, status, metadata, created_at
+                """,
+                tenant_name,
+                tenant_id,
+            )
+            await conn.execute(
+                "UPDATE saas_users SET default_tenant_id = $1::uuid, updated_at = now() WHERE id = $2",
+                tenant_id,
+                user_id,
+            )
+
+    out = dict(tenant)
+    out["membership"] = {
+        "membership_id": row["membership_id"],
+        "role": row["role"],
+        "status": row["membership_status"],
+    }
+    return out
+
+
 async def ensure_customer_tenant_for_user(
     *,
     user_id: str,
