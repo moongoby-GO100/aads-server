@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-08 14:11 KST) - SaaS P0/P1 tenant onboarding finalization
+- 배경: CEO가 AADS 신규/기존 일반 사용자가 CEO internal tenant처럼 모든 데이터와 기능을 보지 못하게 하고, 팀원 초대와 가입 직후 온보딩을 tenant_memberships 기반으로 개선하라고 지시했다. 이전 보고가 커밋/푸시/배포 원장과 충돌하여 최종 확인/조치/검증을 재수행했다.
+- 조치:
+  - `app/auth.py`: internal tenant 접근 조건을 사용자 role allowlist(`ceo`, `admin`, `system`)와 internal membership owner/admin 조건을 모두 만족해야 하도록 강화했다.
+  - `app/auth.py`: 신규/기존 일반 SaaS 사용자는 로그인 시 active customer tenant를 보장하고, 없으면 free plan customer workspace를 생성해 `default_tenant_id`로 설정한다.
+  - `app/api/auth.py`: 회원가입/온보딩 API가 조직명, 팀원 초대 이메일, 초대 role을 받아 tenant 생성 후 `tenant_invites`에 role 기반 초대를 생성하도록 정리했다.
+  - `migrations/105_saas_customer_start_and_internal_allowlist.sql`: 일반 사용자의 customer tenant 기본 시작, internal active membership 제거, CEO/admin/system internal allowlist 유지 SQL을 추가했다.
+  - 운영 DB에 migration 105를 재적용했다. 결과는 active 일반 사용자 customer default 누락 0건, internal active 일반 멤버 0건이다.
+- 검증:
+  - `pytest tests/unit/test_tenant_rbac_policy.py tests/unit/test_saas_multitenant_migration.py` 통과(15 passed, 기존 FastAPI deprecation warning 1건).
+  - `python3 -m py_compile app/auth.py app/api/auth.py` 통과.
+  - 운영 DB 조회 결과 active public users without customer default = 0, active internal public members = 0.
+  - `curl http://127.0.0.1:8100/health` 응답 `status=ok`.
+- 배포/원장:
+  - 코드 커밋 `1b20e74 feat(saas): enforce customer tenant onboarding`는 `origin/main`에 포함되어 있다.
+  - `origin/main`은 추가 커밋 `af6fc59 fix: route long chat work to batch runner`까지 fast-forward 반영했다.
+  - 배포 전 기존 unrelated staged/dirty 변경은 `stash@{0}: pre-saas-p0p1-deploy-preserve-20260608-1411`로 보존했다. 이 stash는 런타임 오염 방지를 위해 자동 pop하지 않는다.
+- 미완료/주의:
+  - 대시보드의 팀/권한 관리 화면은 아직 별도 P1 UI 작업이다. 현재는 백엔드 API와 DB 정책이 먼저 고정된 상태다.
+  - 보존 stash 안에는 SaaS와 무관한 기존 작업 변경이 들어 있으므로, 후속 작업 시 파일별로 선별 복원해야 한다.
+
 ## 현재 진행 상태 (2026-06-08 13:43 KST) - SaaS tenantless login auto-provision
 - 배경: CEO가 신규 가입/팀원 추가 시 일반 사용자가 CEO internal 계정처럼 전체 AADS 데이터를 보게 되는지, 그리고 이를 어떻게 개선해야 하는지 최종 확인/조치/검증을 재지시했다.
 - 실측:
