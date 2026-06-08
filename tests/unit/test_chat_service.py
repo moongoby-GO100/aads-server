@@ -380,7 +380,10 @@ async def test_cleanup_overlong_running_executions_closes_live_task():
         args, kwargs = mark_interrupted.await_args
         assert args[1] == session_id
         assert args[2] == execution_id
-        assert args[3] == "active_stream_hard_timeout_after_2700s"
+        assert args[3].startswith("active_stream_hard_timeout_after_2700s")
+        assert "age=3600s" in args[3]
+        assert "timeout=2700s" in args[3]
+        assert "content_len=16" in args[3]
         assert kwargs["partial_content"] == "메모리의 오래 걸린 부분 응답"
         assert kwargs["placeholder_id"] == message_id
     finally:

@@ -1726,3 +1726,10 @@
   - Kling API: 과금 없는 `GET /v1/images/generations?pageNum=1&pageSize=1` 호출 결과 `code=0`, `message='SUCCEED'`.
   - 문법/테스트: `python3 -m py_compile app/services/media_generation_service.py app/api/llm_models.py` 통과. `pytest -q tests/unit/test_media_generation_service.py tests/unit/test_model_routing_admin_static.py` 결과 17 passed.
 - 남은 작업: 서버 blue-green 배포 후 `/api/v1/health`와 media routing API를 재검증해야 한다.
+
+## 2026-06-08 09:47 KST - Chat interruption diagnostic logging
+- 배경: CEO가 "응답이 중단되고 끊긴 후 재시도 로직이 정상 작동하는지, 끊김 원인을 정확하게 로그로 남기는지 확인하고 조치"를 지시했다. DB 실측상 최근 24시간 `chat_turn_executions`는 `completed=14`, `interrupted=3`, `running=2`였고, 중단 3건은 모두 `active_stream_hard_timeout_after_1800s`만 남아 세부 원인 분석이 어려웠다.
+- 원인: overlong cleanup이 실행 시작 시각 기준으로 장기 실행을 닫는 것은 정상이나, 저장 reason이 timeout 값만 담아 `client_gone`, 마지막 SSE 이벤트, 도구 진행, partial 길이, done 이벤트 수신 여부를 구분하지 못했다. 공통 `_mark_execution_interrupted()`도 terminal 처리와 auto-resume 예약 결과를 일관되게 남기지 않았다.
+- 조치: `app/services/chat_service.py`에 `_stream_interrupt_diagnostic_reason()`을 추가해 `error_message`에 `age`, `idle`, `timeout`, `tool_count`, `last_tool`, `content_len`, `saw_done`, `first_response`, `last_event`, `client_gone`, `queue_drops`를 압축 저장한다. `_mark_execution_interrupted()` 시작/종료 로그를 추가해 중단 처리와 auto-resume 예약 여부를 execution 단위로 추적한다. SSE producer 상태에 `last_event_type`, `client_gone`, `client_gone_since`를 기록하도록 보강했다.
+- 검증: `python3 -m py_compile app/services/chat_service.py` 통과. `JWT_SECRET_KEY=test-secret-key python3 -m pytest tests/unit/test_chat_service.py -q` 결과 34 passed, 1 warning. 테스트는 하드 타임아웃 reason에 `age=3600s`, `timeout=2700s`, `content_len=16`이 포함되는지 검증하도록 갱신했다.
+- 배포 상태: 이 기록 시점에는 코드 수정과 테스트 완료, 커밋/푸시/배포는 이어서 진행 대상이다.

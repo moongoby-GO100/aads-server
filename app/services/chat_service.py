@@ -1270,6 +1270,43 @@ def get_active_stream_hard_timeout_sec() -> int:
     )
 
 
+def _diagnostic_token(value: Any, *, limit: int = 80) -> str:
+    text = re.sub(r"\s+", "_", str(value or "")).strip("_")
+    return text[:limit] if text else "-"
+
+
+def _stream_interrupt_diagnostic_reason(
+    base_reason: str,
+    state: Optional[Dict[str, Any]] = None,
+    *,
+    age_seconds: Optional[int] = None,
+    timeout_sec: Optional[int] = None,
+) -> str:
+    """Build a compact reason that can be stored in chat_turn_executions.error_message."""
+    state = state or {}
+    now = _bg_time.monotonic()
+    started_at = float(state.get("started_at") or 0)
+    last_event_at = float(state.get("last_event_at") or started_at or 0)
+    age = int(age_seconds if age_seconds is not None else (now - started_at if started_at else 0))
+    idle = int(now - last_event_at) if last_event_at else 0
+    content_len = len(_strip_streaming_progress_markers(state.get("content", "") or ""))
+    parts = [
+        str(base_reason),
+        f"age={age}s",
+        f"idle={idle}s",
+        f"timeout={int(timeout_sec)}s" if timeout_sec is not None else "",
+        f"tool_count={int(state.get('tool_count') or 0)}",
+        f"last_tool={_diagnostic_token(state.get('last_tool'))}",
+        f"content_len={content_len}",
+        f"saw_done={bool(state.get('saw_done_event'))}",
+        f"first_response={bool(state.get('first_response_at'))}",
+        f"last_event={_diagnostic_token(state.get('last_event_type'))}",
+        f"client_gone={bool(state.get('client_gone'))}",
+        f"queue_drops={int(state.get('_sse_queue_drop_count') or 0)}",
+    ]
+    return " ".join(part for part in parts if part)[:1000]
+
+
 def _get_live_streaming_session_ids() -> set[str]:
     active_sessions = {
         sid for sid, task in list(_active_bg_tasks.items())
@@ -1349,6 +1386,12 @@ async def cleanup_overlong_running_executions(
             state = _streaming_state.get(session_id) or {}
             partial_content = state.get("content") or row["partial_content"] or ""
             placeholder_id = row["assistant_message_id"]
+            reason = _stream_interrupt_diagnostic_reason(
+                f"active_stream_hard_timeout_after_{timeout}s",
+                state,
+                age_seconds=int(row["age_seconds"] or 0),
+                timeout_sec=timeout,
+            )
 
             task = _active_bg_tasks.get(session_id)
             if session_id in live_sessions and task and not task.done():
@@ -1361,7 +1404,7 @@ async def cleanup_overlong_running_executions(
                 conn,
                 session_id,
                 execution_id,
-                f"active_stream_hard_timeout_after_{timeout}s",
+                reason,
                 partial_content=partial_content,
                 placeholder_id=placeholder_id,
                 delete_empty_placeholder=not bool(
@@ -1369,6 +1412,12 @@ async def cleanup_overlong_running_executions(
                 ),
             )
             closed += 1
+            logger.warning(
+                "overlong_running_execution_interrupted session=%s execution=%s reason=%s",
+                session_id[:8],
+                execution_id[:8],
+                reason,
+            )
 
         if closed:
             logger.warning(
@@ -1869,6 +1918,16 @@ async def _mark_execution_interrupted(
             "new_execution",
         )
     )
+    logger.warning(
+        "chat_execution_mark_interrupted session=%s execution=%s reason=%s partial_len=%s placeholder=%s delete_empty=%s superseded=%s",
+        str(session_id)[:8],
+        str(execution_id)[:8],
+        reason[:500],
+        len(_strip_streaming_progress_markers(partial_content or "")),
+        str(placeholder_id or "")[:8],
+        bool(delete_empty_placeholder),
+        is_superseded_cancel,
+    )
 
     if pid is None:
         pid = await conn.fetchval(
@@ -2065,6 +2124,13 @@ async def _mark_execution_interrupted(
                 reason[:120],
                 exc,
             )
+    logger.warning(
+        "chat_execution_interrupted_terminal session=%s execution=%s auto_resume=%s reason=%s",
+        str(session_id)[:8],
+        str(execution_id)[:8],
+        auto_resume_scheduled,
+        reason[:500],
+    )
 
     state = _streaming_state.get(str(session_id))
     if state and (
@@ -2604,6 +2670,8 @@ async def with_background_completion(
         "first_response_at": None,
         "last_idle_save": 0.0,
         "_last_content_len": None,
+        "client_gone": False,
+        "client_gone_since": None,
     }
     _streaming_state[session_id] = state
 
@@ -2878,6 +2946,8 @@ async def with_background_completion(
                         _d = json.loads(chunk[chunk.index('{'):chunk.rstrip().rindex('}') + 1])
                         _t = _d.get("type", "")
                         _event_type = _t
+                        if _t:
+                            state["last_event_type"] = _t
                         if _t == "stream_start":
                             _execution_id = _d.get("execution_id")
                             if _execution_id:
@@ -3532,6 +3602,8 @@ async def with_background_completion(
     except (GeneratorExit, _heartbeat_asyncio.CancelledError):
         _client_gone = True
         _client_gone_since = _bg_time.monotonic()
+        state["client_gone"] = True
+        state["client_gone_since"] = _client_gone_since
         # 즉시 중간 저장 (돌아왔을 때 바로 보이도록)
         _heartbeat_asyncio.create_task(_maybe_interim_save_after_disconnect())
         logger.info(f"client_disconnected session={session_id} — producer continues in background (auto-cancel in {_BG_AUTO_CANCEL_SEC}s), interim save triggered")
