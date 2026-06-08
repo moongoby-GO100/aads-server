@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-08 13:45 KST) - Chat response mode final verification ledger correction
+- 배경: CEO가 채팅창 AI 응답 완성도/완료 속도 개선 건에 대해 이전 완료보고가 커밋/푸시/배포/문서 원장과 충돌했다고 지적하고, 남은 확인/조치/검증을 계속 수행하라고 재지시했다.
+- 실측 정정:
+  - Backend repo HEAD는 `c1a9b09`이며 `origin/main`과 일치한다. 채팅 응답 모드 백엔드 변경 커밋 `9c31abb`는 현재 히스토리에 포함되어 있다.
+  - Dashboard repo HEAD는 `9cb0720`이며 `origin/main`과 일치한다. 실행 중 `aads-dashboard`/`aads-dashboard-green` 컨테이너 모두 `AADS_RELEASE_SHA=9cb0720174f0`로 응답 모드 UI 커밋이 배포되어 있다.
+  - 실행 중 `aads-server`/`aads-server-green` 컨테이너 내부 파일에서 `response_mode` 필드, 라우터 전달, 서비스 정규화/기록 코드가 확인됐다.
+- 검증:
+  - `pytest tests/unit/test_chat_response_mode.py tests/unit/test_response_completion_contract.py -q` 통과(12 passed).
+  - `python3 -m py_compile app/models/chat.py app/routers/chat.py app/services/chat_service.py` 통과.
+  - `npx eslint src/app/chat/page.tsx src/services/chatApi.ts` 통과(error 0, 기존 warning 23).
+  - `npm run build` 통과(Next.js 52 routes generated).
+  - `curl https://aads.newtalk.kr/api/v1/health` 응답 `status=ok`; `curl https://aads.newtalk.kr/login` 응답 HTTP 200.
+- 미완료/주의:
+  - Backend 신규 blue-green 배포는 이 시점에 실행하지 않았다. 이유: `/api/v1/ops/active-streams`가 실행 중 스트림 6건을 반환했고, 백엔드 worktree에 이번 채팅 건과 무관한 staged/unstaged 변경이 다수 남아 있어 현재 파일 상태로 이미지를 재빌드하면 범위 밖 변경까지 운영 반영될 위험이 있다.
+  - 최근 24시간 `chat_turn_executions`는 `completed=65`, `interrupted=10`, `running=6`이며, 완료 평균 경과는 약 815.3초다. 빠른 완료 모드는 필요한 개선이지만 장기 도구 실행/외부 LLM 지연 자체를 0으로 만들지는 않는다.
+
 ## 현재 진행 상태 (2026-06-08 13:20 KST) - SaaS public signup internal tenant lockdown
 - 배경: CEO가 AADS 신규 가입자가 CEO 계정처럼 모든 기능/데이터를 보게 되는지 확인하고 개선을 지시했다.
 - 조치:
