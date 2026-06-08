@@ -16,7 +16,7 @@
   - `python3 -m pytest tests/unit/test_media_generation_service.py` 통과(14 passed).
   - `python3 -m py_compile app/services/media_generation_service.py app/api/image.py` 통과.
   - `git diff --check -- app/services/media_generation_service.py tests/unit/test_media_generation_service.py` 통과.
-  - 2026-06-08 11:59 KST 실측 기준 `/`는 160G 중 134G 사용(84%), `/mnt/volume_sgp1_01`은 50G 중 34G 사용(71%)로 개선됐다.
+  - 2026-06-08 11:59 KST 실측 기준 `/`는 160G 중 135G 사용(85%), `/mnt/volume_sgp1_01`은 50G 중 34G 사용(71%)로 개선됐다.
   - `bash -n /root/aads/scripts/backup.sh /root/aads/scripts/disk_cleanup.sh scripts/disk_cleanup_v2.sh` 통과.
 - 미완료/주의:
   - `/mnt/volume_sgp1_01/aads-backups`에는 2026-06-07/2026-06-08 정상 백업 2개를 보존했다.
