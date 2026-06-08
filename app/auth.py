@@ -519,6 +519,57 @@ async def create_tenant_for_user(
     return out
 
 
+async def ensure_customer_tenant_for_user(
+    *,
+    user_id: str,
+    email: str,
+    name: Optional[str] = None,
+    plan_key: str = "free",
+) -> dict:
+    """Return an active customer tenant for a SaaS user, creating one if needed."""
+    await require_saas_schema_ready()
+    pool = await _ensure_pool()
+    async with pool.acquire() as conn:
+        existing = await conn.fetchrow(
+            """
+            SELECT t.id::text AS tenant_id,
+                   t.slug,
+                   t.name,
+                   t.kind,
+                   t.status,
+                   t.metadata,
+                   tm.id::text AS membership_id,
+                   tm.role,
+                   tm.status AS membership_status
+              FROM tenant_memberships tm
+              JOIN tenants t ON t.id = tm.tenant_id
+             WHERE tm.user_id = $1
+               AND tm.status = 'active'
+               AND tm.deleted_at IS NULL
+               AND t.kind = 'customer'
+               AND t.status = 'active'
+               AND t.deleted_at IS NULL
+             ORDER BY tm.created_at ASC
+             LIMIT 1
+            """,
+            user_id,
+        )
+        if existing:
+            await conn.execute(
+                "UPDATE saas_users SET default_tenant_id = $1::uuid, updated_at = now() WHERE id = $2",
+                existing["tenant_id"],
+                user_id,
+            )
+            return dict(existing)
+
+    workspace_name = (name and f"{name} Workspace") or f"{str(email).split('@')[0]} Workspace"
+    return await create_tenant_for_user(
+        user_id=user_id,
+        name=workspace_name,
+        plan_key=plan_key,
+    )
+
+
 async def switch_user_tenant(user_id: str, tenant_id: str) -> dict:
     context = await _load_tenant_context({"user_id": user_id}, requested_tenant_id=tenant_id)
     pool = await _ensure_pool()

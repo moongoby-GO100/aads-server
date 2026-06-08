@@ -40,6 +40,7 @@ def test_auth_request_paths_do_not_run_saas_schema_ddl():
     assert "attach_internal_tenant=False" in inspect.getsource(auth_router.register)
     assert "attach_internal_tenant: bool = False" in inspect.getsource(auth_module.create_saas_user)
     assert "create_tenant_for_user" in inspect.getsource(auth_router.register)
+    assert "ensure_customer_tenant_for_user" in inspect.getsource(auth_router.login)
 
 
 def test_saas_onboarding_api_contract_exists_and_is_role_guarded():
@@ -90,6 +91,8 @@ def test_internal_tenant_is_admin_only_for_saas_users():
 
     assert "t.kind <> 'internal' OR tm.role IN ('owner', 'admin')" in list_source
     assert "Internal tenant requires admin role" in context_source
+    assert "t.kind = 'customer'" in inspect.getsource(auth_module.ensure_customer_tenant_for_user)
+    assert "create_tenant_for_user" in inspect.getsource(auth_module.ensure_customer_tenant_for_user)
     assert "ALTER COLUMN default_tenant_id DROP DEFAULT" in bootstrap_source
     assert "ALTER COLUMN default_tenant_id DROP NOT NULL" in bootstrap_source
     assert "WHERE role IN ('ceo', 'admin', 'owner')" in bootstrap_source

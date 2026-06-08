@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-08 13:43 KST) - SaaS tenantless login auto-provision
+- 배경: CEO가 신규 가입/팀원 추가 시 일반 사용자가 CEO internal 계정처럼 전체 AADS 데이터를 보게 되는지, 그리고 이를 어떻게 개선해야 하는지 최종 확인/조치/검증을 재지시했다.
+- 실측:
+  - 운영 DB 기준 `internal` tenant active member는 0건이고, 일반 member 31건은 `removed` 상태다.
+  - `saas_users`는 37건이며, 그중 36건은 `default_tenant_id`가 NULL이다. 이 계정들은 CEO internal에 자동 연결되지는 않지만, 로그인 후 tenant context가 없어 403으로 막힐 수 있다.
+- 조치:
+  - `app/auth.py`: `ensure_customer_tenant_for_user()`를 추가했다. 사용자가 active customer tenant를 이미 갖고 있으면 `default_tenant_id`를 복구하고, 없으면 free plan customer workspace를 생성한다.
+  - `app/api/auth.py`: SaaS 로그인 성공 후 `tenant_id`가 비어 있으면 위 헬퍼를 호출해 빈 tenant 토큰 발급을 차단한다.
+  - `tests/unit/test_tenant_rbac_policy.py`: 로그인 경로가 customer tenant 보장을 호출하고, internal tenant가 아닌 customer tenant만 자동 보정 대상으로 삼는 회귀 테스트를 추가했다.
+- 검증:
+  - `python3 -m py_compile app/auth.py app/api/auth.py` 통과.
+  - `pytest -q tests/unit/test_tenant_rbac_policy.py tests/unit/test_saas_multitenant_migration.py` 통과(14 passed, 기존 FastAPI deprecation warning 1건).
+  - 운영 DB membership 분포 재조회 결과 `internal` active member 0건, removed member 31건으로 확인했다.
+- 미완료/주의:
+  - 기존 36개 tenantless 계정을 즉시 bulk 생성하지는 않았다. 로그인 시 lazy provision으로 처리하며, 대량 생성은 실제 고객/테스트 계정 분류 후 별도 SQL 배치로 수행하는 것이 안전하다.
+  - 대시보드 팀/테넌트 관리 UI는 여전히 별도 P1 구현 대상이다.
+
 ## 현재 진행 상태 (2026-06-08 13:45 KST) - Chat response mode final verification ledger correction
 - 배경: CEO가 채팅창 AI 응답 완성도/완료 속도 개선 건에 대해 이전 완료보고가 커밋/푸시/배포/문서 원장과 충돌했다고 지적하고, 남은 확인/조치/검증을 계속 수행하라고 재지시했다.
 - 실측 정정:

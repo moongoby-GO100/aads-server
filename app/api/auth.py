@@ -153,6 +153,14 @@ async def login(req: LoginRequest):
     if saas_user:
         uid = str(saas_user["id"])  # DB returns int, JWT/response need str
         tenant_id = saas_user.get("tenant_id")
+        if not tenant_id:
+            tenant = await auth_module.ensure_customer_tenant_for_user(
+                user_id=uid,
+                email=saas_user["email"],
+                name=saas_user.get("name"),
+                plan_key="free",
+            )
+            tenant_id = tenant.get("tenant_id")
         token = auth_module.create_token(uid, saas_user["email"], tenant_id=tenant_id)
         return AuthResponse(
             token=token,
