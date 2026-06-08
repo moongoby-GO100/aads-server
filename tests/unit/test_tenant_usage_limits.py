@@ -99,6 +99,12 @@ def test_internal_tenant_and_admin_override_bypass_hard_limit():
     assert override.status == "admin_override"
 
 
+def test_usage_summary_ratio_helper_handles_zero_and_decimal_limits():
+    assert limits._usage_ratio(50, 100) == 0.5
+    assert limits._usage_ratio(1, 0) == 0.0
+    assert limits._usage_ratio(Decimal("2.50"), Decimal("10.00")) == 0.25
+
+
 def test_tenant_usage_migration_extends_logs_and_policy_tables():
     sql = Path("migrations/102_saas_tenant_usage_limits.sql").read_text(encoding="utf-8")
 

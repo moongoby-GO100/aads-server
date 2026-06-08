@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-08 09:55 KST) - SaaS P0/P1 onboarding API implementation
+- 배경: CEO가 AADS SaaS 전환의 P0/P1 즉시 구현 진행을 지시했다.
+- 조치:
+  - `app/auth.py`: request-time DDL을 제거하는 `require_saas_schema_ready()` 가드를 추가하고, 사용자 조직 생성, 조직 목록, 테넌트 전환, 초대 생성/수락, 플랜 변경 서비스 함수를 추가했다.
+  - `app/api/auth.py`: `/api/v1/auth/tenants`, `/api/v1/auth/tenants/{tenant_id}/switch`, `/api/v1/auth/tenants/{tenant_id}/invites`, `/api/v1/auth/invites/accept`, `/api/v1/auth/tenants/{tenant_id}/usage`, `/api/v1/auth/tenants/{tenant_id}/plan` 계약을 추가했다.
+  - `app/services/tenant_usage_limits.py`: 플랜/월간 사용량/한도 비율을 JSON으로 반환하는 `get_tenant_usage_summary()`를 추가했다.
+  - `tests/unit/test_tenant_rbac_policy.py`, `tests/unit/test_tenant_usage_limits.py`: SaaS onboarding API 권한 가드, request-time DDL 금지, 초대/멤버십 서비스 계약, 사용량 비율 helper 회귀 테스트를 추가했다.
+- 검증:
+  - `python3 -m py_compile app/auth.py app/api/auth.py app/services/tenant_usage_limits.py` 통과.
+  - `pytest -q tests/unit/test_tenant_rbac_policy.py tests/unit/test_tenant_usage_limits.py` 통과(14 passed, 1 warning).
+  - `docker exec aads-postgres psql ... SELECT to_regclass(...)`로 `tenant_invites`, `tenant_plan_limits` 존재 확인.
+  - `tenant_invites` upsert, `tenant_memberships` invite accept upsert, tenant plan update SQL을 `PREPARE`로 검증 완료.
+- 미완료/주의:
+  - 운영 DB 마이그레이션 적용, 배포, 커밋, 푸시는 아직 수행하지 않았다.
+  - 현재 worktree에는 Kling/media/ops/nginx 등 기존 unrelated 변경이 함께 남아 있으므로 커밋 시 SaaS P0/P1 대상 파일만 선별해야 한다.
+
 ## 현재 진행 상태 (2026-06-05 15:46 KST) - Chat improvement follow-up hardening
 - 배경: CEO가 직전 채팅창 개선안을 모두 조치하라고 지시했다.
 - 조치:

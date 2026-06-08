@@ -4,7 +4,9 @@ import os
 os.environ.setdefault("JWT_SECRET_KEY", "unit-test-secret")
 os.environ.setdefault("E2B_API_KEY", "unit-test-e2b-key")
 
+import app.auth as auth_module
 from app.auth import TenantRole, tenant_role_allows
+from app.api import auth as auth_router
 from app.routers import chat as chat_router
 from app.services import chat_service
 
@@ -19,6 +21,65 @@ def test_tenant_role_policy_order():
     assert not tenant_role_allows("member", TenantRole.ADMIN)
     assert not tenant_role_allows("admin", TenantRole.OWNER)
     assert not tenant_role_allows("unknown", TenantRole.VIEWER)
+
+
+def test_auth_request_paths_do_not_run_saas_schema_ddl():
+    schema_check_source = inspect.getsource(auth_module.require_saas_schema_ready)
+    assert "CREATE TABLE" not in schema_check_source
+    assert "ALTER TABLE" not in schema_check_source
+    assert "CREATE OR REPLACE FUNCTION" not in schema_check_source
+
+    request_path_sources = [
+        inspect.getsource(auth_module._load_tenant_context),
+        inspect.getsource(auth_router.register),
+        inspect.getsource(auth_router.login),
+        inspect.getsource(auth_router.e2e_inject),
+    ]
+    assert all("require_saas_schema_ready" in source for source in request_path_sources)
+    assert all("ensure_saas_users_table" not in source for source in request_path_sources)
+    assert "attach_internal_tenant=False" in inspect.getsource(auth_router.register)
+    assert "create_tenant_for_user" in inspect.getsource(auth_router.register)
+
+
+def test_saas_onboarding_api_contract_exists_and_is_role_guarded():
+    public_sources = [
+        inspect.getsource(auth_router.accept_tenant_invite),
+    ]
+    viewer_sources = [
+        inspect.getsource(auth_router.list_my_tenants),
+        inspect.getsource(auth_router.create_tenant),
+        inspect.getsource(auth_router.switch_tenant),
+        inspect.getsource(auth_router.get_tenant_usage),
+    ]
+    admin_sources = [
+        inspect.getsource(auth_router.create_tenant_invite),
+        inspect.getsource(auth_router.update_tenant_plan),
+    ]
+
+    assert all("Depends(require_tenant_role(TenantRole.VIEWER))" in source for source in viewer_sources)
+    assert all("Depends(require_tenant_role(TenantRole.ADMIN))" in source for source in admin_sources)
+    assert all("accept_tenant_invite" in source for source in public_sources)
+    assert "_assert_path_tenant(context, tenant_id)" in inspect.getsource(auth_router.create_tenant_invite)
+    assert "_assert_path_tenant(context, tenant_id)" in inspect.getsource(auth_router.update_tenant_plan)
+    assert "get_tenant_usage_summary" in inspect.getsource(auth_router.get_tenant_usage)
+
+
+def test_saas_onboarding_service_uses_invite_tokens_and_memberships():
+    service_sources = [
+        inspect.getsource(auth_module.create_tenant_for_user),
+        inspect.getsource(auth_module.create_tenant_invite),
+        inspect.getsource(auth_module.accept_tenant_invite),
+        inspect.getsource(auth_module.switch_user_tenant),
+        inspect.getsource(auth_module.update_tenant_plan),
+    ]
+    source = "\n".join(service_sources)
+
+    assert "token_urlsafe" in source
+    assert "sha256" in inspect.getsource(auth_module._hash_invite_token)
+    assert "tenant_invites" in source
+    assert "tenant_memberships" in source
+    assert "default_tenant_id" in source
+    assert "jsonb_set" in inspect.getsource(auth_module.update_tenant_plan)
 
 
 def test_chat_router_uses_role_dependencies_for_workspace_and_session_access():

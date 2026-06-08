@@ -359,6 +359,59 @@ async def check_tenant_usage_limit(
     return decision
 
 
+def _usage_ratio(used: Decimal | int, limit: Decimal | int) -> float:
+    limit_decimal = _decimal(limit)
+    if limit_decimal <= 0:
+        return 0.0
+    ratio = _decimal(used) / limit_decimal
+    return float(round(ratio, 4))
+
+
+async def get_tenant_usage_summary(tenant_id: str) -> dict[str, Any]:
+    month = current_month_start()
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        tenant = await _fetch_tenant(conn, tenant_id)
+        policy = await _fetch_policy(conn, _tenant_plan_key(tenant), tenant)
+        usage = await _get_tenant_monthly_usage(conn, tenant_id, month)
+
+    decision = evaluate_usage_limit(
+        tenant_id=tenant_id,
+        operation="tenant_usage_summary",
+        usage=usage,
+        policy=policy,
+        projected_calls=0,
+    )
+    return {
+        "tenant_id": tenant_id,
+        "month_start": usage.month_start.isoformat(),
+        "status": decision.status,
+        "limit_name": decision.limit_name,
+        "allowed": decision.allowed,
+        "plan": {
+            "plan_key": policy.plan_key,
+            "monthly_token_limit": policy.monthly_token_limit,
+            "monthly_cost_limit_usd": str(policy.monthly_cost_limit_usd),
+            "monthly_call_limit": policy.monthly_call_limit,
+            "soft_limit_ratio": str(policy.soft_limit_ratio),
+            "hard_limit_ratio": str(policy.hard_limit_ratio),
+            "internal_exempt": policy.internal_exempt,
+        },
+        "usage": {
+            "calls": usage.calls,
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "total_tokens": usage.total_tokens,
+            "cost_usd": str(usage.cost_usd),
+        },
+        "ratios": {
+            "tokens": _usage_ratio(usage.total_tokens, policy.monthly_token_limit),
+            "cost": _usage_ratio(usage.cost_usd, policy.monthly_cost_limit_usd),
+            "calls": _usage_ratio(usage.calls, policy.monthly_call_limit),
+        },
+    }
+
+
 async def resolve_tenant_id_for_session(session_id: str) -> Optional[str]:
     if not session_id:
         return None

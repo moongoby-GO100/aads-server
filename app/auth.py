@@ -2,7 +2,11 @@ import os
 import time
 import hmac
 import logging
+import hashlib
+import re
+import secrets
 from enum import Enum
+from datetime import datetime, timezone
 from typing import Callable, Optional
 
 import structlog
@@ -120,12 +124,83 @@ async def _get_pool():
     return await asyncpg.create_pool(dsn, min_size=1, max_size=3)
 
 _pool = None
+_saas_schema_ready = False
+_TENANT_SLUG_PATTERN = re.compile(r"[^a-z0-9-]+")
 
 async def _ensure_pool():
     global _pool
     if _pool is None:
         _pool = await _get_pool()
     return _pool
+
+
+async def require_saas_schema_ready() -> None:
+    """Validate SaaS tenant schema without running request-time DDL."""
+    global _saas_schema_ready
+    if _saas_schema_ready:
+        return
+
+    pool = await _ensure_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT
+                to_regclass('public.saas_users') IS NOT NULL AS has_saas_users,
+                to_regclass('public.tenants') IS NOT NULL AS has_tenants,
+                to_regclass('public.tenant_memberships') IS NOT NULL AS has_tenant_memberships,
+                to_regclass('public.tenant_invites') IS NOT NULL AS has_tenant_invites,
+                EXISTS (
+                    SELECT 1
+                      FROM pg_proc p
+                      JOIN pg_namespace n ON n.oid = p.pronamespace
+                     WHERE n.nspname = 'public'
+                       AND p.proname = 'aads_internal_tenant_id'
+                ) AS has_internal_tenant_fn,
+                EXISTS (
+                    SELECT 1
+                      FROM information_schema.columns
+                     WHERE table_schema = 'public'
+                       AND table_name = 'saas_users'
+                       AND column_name IN ('default_tenant_id', 'status', 'deleted_at', 'role')
+                     GROUP BY table_name
+                    HAVING COUNT(DISTINCT column_name) = 4
+                ) AS has_saas_user_columns,
+                EXISTS (
+                    SELECT 1
+                      FROM information_schema.columns
+                     WHERE table_schema = 'public'
+                       AND table_name = 'tenant_memberships'
+                       AND column_name IN ('tenant_id', 'user_id', 'role', 'status', 'deleted_at')
+                     GROUP BY table_name
+                    HAVING COUNT(DISTINCT column_name) = 5
+                ) AS has_membership_columns
+            """
+        )
+        missing = [
+            name
+            for name in (
+                "has_saas_users",
+                "has_tenants",
+                "has_tenant_memberships",
+                "has_tenant_invites",
+                "has_internal_tenant_fn",
+                "has_saas_user_columns",
+                "has_membership_columns",
+            )
+            if not row or not row[name]
+        ]
+        if missing:
+            log.error("saas_schema_not_ready", missing=missing)
+            raise HTTPException(status_code=503, detail="SaaS schema is not initialized")
+
+        has_internal_tenant = await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM public.tenants WHERE slug = 'internal' AND deleted_at IS NULL)"
+        )
+        if not has_internal_tenant:
+            log.error("saas_internal_tenant_missing")
+            raise HTTPException(status_code=503, detail="Internal tenant is not initialized")
+
+    _saas_schema_ready = True
 
 
 async def ensure_saas_users_table():
@@ -224,7 +299,13 @@ async def ensure_saas_users_table():
         """)
 
 
-async def create_saas_user(email: str, password: str, name: Optional[str] = None) -> Optional[dict]:
+async def create_saas_user(
+    email: str,
+    password: str,
+    name: Optional[str] = None,
+    *,
+    attach_internal_tenant: bool = True,
+) -> Optional[dict]:
     if not BCRYPT_AVAILABLE:
         log.error('bcrypt_unavailable', detail='bcrypt not installed')
         return None
@@ -239,7 +320,7 @@ async def create_saas_user(email: str, password: str, name: Optional[str] = None
                        RETURNING id, email, name, default_tenant_id, created_at""",
                     email, password_hash, name
                 )
-                if row:
+                if row and attach_internal_tenant:
                     await conn.execute(
                         """INSERT INTO tenant_memberships (tenant_id, user_id, role, status)
                            VALUES ($1, $2, 'member', 'active')
@@ -314,12 +395,338 @@ async def get_internal_tenant_id() -> Optional[str]:
         return None
 
 
+def _normalize_email(email: str) -> str:
+    return str(email or "").strip().lower()
+
+
+def _normalize_tenant_slug(value: str) -> str:
+    slug = _TENANT_SLUG_PATTERN.sub("-", str(value or "").strip().lower())
+    slug = re.sub(r"-{2,}", "-", slug).strip("-")
+    return slug[:64] or "tenant"
+
+
+def _hash_invite_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+async def list_user_tenants(user_id: str) -> list[dict]:
+    await require_saas_schema_ready()
+    pool = await _ensure_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT t.id::text AS tenant_id,
+                   t.slug,
+                   t.name,
+                   t.kind,
+                   t.status,
+                   t.metadata,
+                   tm.role,
+                   tm.status AS membership_status,
+                   tm.created_at,
+                   tm.updated_at
+              FROM tenant_memberships tm
+              JOIN tenants t ON t.id = tm.tenant_id
+             WHERE tm.user_id = $1
+               AND tm.status = 'active'
+               AND tm.deleted_at IS NULL
+               AND t.deleted_at IS NULL
+             ORDER BY t.kind = 'internal' DESC, t.created_at ASC
+            """,
+            user_id,
+        )
+    return [dict(row) for row in rows]
+
+
+async def create_tenant_for_user(
+    *,
+    user_id: str,
+    name: str,
+    slug: Optional[str] = None,
+    plan_key: str = "free",
+) -> dict:
+    await require_saas_schema_ready()
+    tenant_name = str(name or "").strip()
+    if not tenant_name:
+        raise HTTPException(status_code=422, detail="Tenant name is required")
+
+    base_slug = _normalize_tenant_slug(slug or tenant_name)
+    plan = str(plan_key or "free").strip().lower()
+    pool = await _ensure_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            user_exists = await conn.fetchval(
+                """
+                SELECT EXISTS(
+                    SELECT 1 FROM saas_users
+                     WHERE id = $1 AND COALESCE(status, 'active') = 'active' AND deleted_at IS NULL
+                )
+                """,
+                user_id,
+            )
+            if not user_exists:
+                raise HTTPException(status_code=404, detail="User not found")
+
+            slug_candidate = base_slug
+            for suffix in range(0, 100):
+                if suffix:
+                    slug_candidate = f"{base_slug}-{suffix + 1}"
+                exists = await conn.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM tenants WHERE slug = $1 AND deleted_at IS NULL)",
+                    slug_candidate,
+                )
+                if not exists:
+                    break
+            else:
+                raise HTTPException(status_code=409, detail="Tenant slug is unavailable")
+
+            tenant = await conn.fetchrow(
+                """
+                INSERT INTO tenants (slug, name, kind, status, metadata, created_by)
+                VALUES ($1, $2, 'customer', 'active', jsonb_build_object('plan_key', $3), $4)
+                RETURNING id::text AS tenant_id, slug, name, kind, status, metadata, created_at
+                """,
+                slug_candidate,
+                tenant_name,
+                plan,
+                user_id,
+            )
+            membership = await conn.fetchrow(
+                """
+                INSERT INTO tenant_memberships (tenant_id, user_id, role, status)
+                VALUES ($1::uuid, $2, 'owner', 'active')
+                ON CONFLICT (tenant_id, user_id) DO UPDATE
+                   SET role = 'owner',
+                       status = 'active',
+                       deleted_at = NULL,
+                       updated_at = now()
+                RETURNING id::text AS membership_id, role, status
+                """,
+                tenant["tenant_id"],
+                user_id,
+            )
+            await conn.execute(
+                "UPDATE saas_users SET default_tenant_id = $1::uuid, updated_at = now() WHERE id = $2",
+                tenant["tenant_id"],
+                user_id,
+            )
+    out = dict(tenant)
+    out["membership"] = dict(membership) if membership else None
+    return out
+
+
+async def switch_user_tenant(user_id: str, tenant_id: str) -> dict:
+    context = await _load_tenant_context({"user_id": user_id}, requested_tenant_id=tenant_id)
+    pool = await _ensure_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE saas_users SET default_tenant_id = $1::uuid, updated_at = now() WHERE id = $2",
+            context["tenant"]["id"],
+            user_id,
+        )
+        user = await conn.fetchrow(
+            "SELECT id, email, name FROM saas_users WHERE id = $1 AND deleted_at IS NULL",
+            user_id,
+        )
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"user": dict(user), "context": context}
+
+
+async def create_tenant_invite(
+    *,
+    tenant_id: str,
+    email: str,
+    role: str,
+    invited_by: str,
+    expires_in_hours: int = 24 * 7,
+) -> dict:
+    await require_saas_schema_ready()
+    invite_role = normalize_tenant_role(role)
+    if invite_role not in {TenantRole.ADMIN, TenantRole.MEMBER, TenantRole.VIEWER}:
+        raise HTTPException(status_code=422, detail="Invite role must be admin, member, or viewer")
+
+    token = secrets.token_urlsafe(32)
+    token_hash = _hash_invite_token(token)
+    normalized_email = _normalize_email(email)
+    pool = await _ensure_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO tenant_invites
+                (tenant_id, email, token_hash, role, status, invited_by, expires_at)
+            VALUES ($1::uuid, $2, $3, $4, 'pending', $5, now() + ($6::text || ' hours')::interval)
+            ON CONFLICT (tenant_id, lower(email)) WHERE status = 'pending' AND deleted_at IS NULL
+            DO UPDATE SET token_hash = EXCLUDED.token_hash,
+                          role = EXCLUDED.role,
+                          invited_by = EXCLUDED.invited_by,
+                          expires_at = EXCLUDED.expires_at,
+                          updated_at = now()
+            RETURNING id::text AS invite_id, tenant_id::text, email, role, status, expires_at, created_at
+            """,
+            tenant_id,
+            normalized_email,
+            token_hash,
+            invite_role.value,
+            invited_by,
+            max(1, min(int(expires_in_hours or 1), 24 * 30)),
+        )
+    result = dict(row)
+    result["token"] = token
+    return result
+
+
+async def accept_tenant_invite(
+    *,
+    token: str,
+    password: str,
+    name: Optional[str] = None,
+) -> dict:
+    await require_saas_schema_ready()
+    if not token:
+        raise HTTPException(status_code=422, detail="Invite token is required")
+    if not password:
+        raise HTTPException(status_code=422, detail="Password is required")
+
+    token_hash = _hash_invite_token(token)
+    pool = await _ensure_pool()
+    async with pool.acquire() as conn:
+        invite = await conn.fetchrow(
+            """
+            SELECT id::text AS invite_id,
+                   tenant_id::text,
+                   email,
+                   role,
+                   status,
+                   expires_at
+              FROM tenant_invites
+             WHERE token_hash = $1
+               AND status = 'pending'
+               AND deleted_at IS NULL
+             LIMIT 1
+            """,
+            token_hash,
+        )
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite not found")
+
+    expires_at = invite["expires_at"]
+    if expires_at and expires_at.astimezone(timezone.utc) <= datetime.now(timezone.utc):
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE tenant_invites SET status = 'expired', updated_at = now() WHERE id = $1::uuid",
+                invite["invite_id"],
+            )
+        raise HTTPException(status_code=410, detail="Invite expired")
+
+    email = str(invite["email"])
+    user = await get_saas_user_by_email(email)
+    if user:
+        authed = await authenticate_saas_user(email, password)
+        if not authed:
+            raise HTTPException(status_code=401, detail="Password is required for existing user")
+        user_id = str(authed["id"])
+    else:
+        created = await create_saas_user(email, password, name, attach_internal_tenant=False)
+        if not created:
+            raise HTTPException(status_code=500, detail="Unable to create invited user")
+        user_id = str(created["id"])
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            membership = await conn.fetchrow(
+                """
+                INSERT INTO tenant_memberships (tenant_id, user_id, role, status, invited_by)
+                SELECT id.tenant_id::uuid, $2, id.role, 'active', ti.invited_by
+                  FROM (SELECT $1::uuid AS tenant_id, $3::text AS role) id
+                  JOIN tenant_invites ti ON ti.id = $4::uuid
+                ON CONFLICT (tenant_id, user_id) DO UPDATE
+                   SET role = EXCLUDED.role,
+                       status = 'active',
+                       deleted_at = NULL,
+                       updated_at = now()
+                RETURNING id::text AS membership_id, tenant_id::text, role, status
+                """,
+                invite["tenant_id"],
+                user_id,
+                invite["role"],
+                invite["invite_id"],
+            )
+            await conn.execute(
+                """
+                UPDATE tenant_invites
+                   SET status = 'accepted',
+                       accepted_by = $1,
+                       accepted_at = now(),
+                       updated_at = now()
+                 WHERE id = $2::uuid
+                """,
+                user_id,
+                invite["invite_id"],
+            )
+            await conn.execute(
+                "UPDATE saas_users SET default_tenant_id = $1::uuid, updated_at = now() WHERE id = $2",
+                invite["tenant_id"],
+                user_id,
+            )
+            user_row = await conn.fetchrow(
+                "SELECT id, email, name FROM saas_users WHERE id = $1",
+                user_id,
+            )
+    return {
+        "user": dict(user_row) if user_row else {"id": user_id, "email": email, "name": name},
+        "tenant_id": invite["tenant_id"],
+        "membership": dict(membership) if membership else None,
+    }
+
+
+async def update_tenant_plan(tenant_id: str, plan_key: str, updated_by: str) -> dict:
+    await require_saas_schema_ready()
+    plan = str(plan_key or "").strip().lower()
+    if not plan:
+        raise HTTPException(status_code=422, detail="plan_key is required")
+    pool = await _ensure_pool()
+    async with pool.acquire() as conn:
+        plan_exists = await conn.fetchval(
+            """
+            SELECT EXISTS(
+                SELECT 1 FROM tenant_plan_limits
+                 WHERE plan_key = $1 AND is_active = TRUE
+            )
+            """,
+            plan,
+        )
+        if not plan_exists:
+            raise HTTPException(status_code=404, detail="Plan not found")
+        row = await conn.fetchrow(
+            """
+            UPDATE tenants
+               SET metadata = jsonb_set(
+                       COALESCE(metadata, '{}'::jsonb),
+                       '{plan_key}',
+                       to_jsonb($2::text),
+                       true
+                   ) || jsonb_build_object('plan_updated_by', $3, 'plan_updated_at', now()::text),
+                   updated_at = now()
+             WHERE id = $1::uuid
+               AND deleted_at IS NULL
+             RETURNING id::text AS tenant_id, slug, name, kind, status, metadata
+            """,
+            tenant_id,
+            plan,
+            updated_by,
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    return dict(row)
+
+
 async def _load_tenant_context(user: dict, requested_tenant_id: Optional[str] = None) -> dict:
     user_id = str(user.get('user_id') or '').strip()
     if not user_id:
         raise HTTPException(status_code=401, detail='Invalid token subject')
 
-    await ensure_saas_users_table()
+    await require_saas_schema_ready()
     token_tenant_id = str(user.get('tenant_id') or '').strip() or None
     tenant_id = str(requested_tenant_id or '').strip() or token_tenant_id
 
