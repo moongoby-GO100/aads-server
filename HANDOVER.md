@@ -1,18 +1,21 @@
 # AADS HANDOVER
 
-## 현재 진행 상태 (2026-06-08 11:03 KST) - P0 storage pressure mitigation
+## 현재 진행 상태 (2026-06-08 11:35 KST) - P0 storage pressure mitigation
 - 배경: CEO가 서버5 이전으로 용량 문제가 해소되는지 재확인한 뒤 P0 즉시 조치를 지시했다.
 - 조치:
   - Docker build cache와 dangling image를 정리해 루트 디스크 사용률을 92%에서 86%로 낮췄다.
   - `app/services/media_generation_service.py`에서 이미지/편집 이미지 결과가 `data:*;base64`로 반환되면 DB 저장 전에 `app/static/media/generated/{kind}/` 파일로 외부화하고, `media_generation_jobs.result_uri`에는 `/static/...` URL만 저장하도록 변경했다.
   - `AADS_MEDIA_STATIC_DIR` 환경변수로 테스트/운영 저장 루트를 오버라이드할 수 있게 했다.
   - `tests/unit/test_media_generation_service.py`에 base64 결과가 DB에 남지 않고 정적 파일로 저장되는 회귀 테스트를 추가했다.
+  - 추가 P0 조치로 `/mnt/volume_sgp1_01/aads-backups`의 오래된 2026-06-03~2026-06-05 백업 3개와 0바이트 2026-06-08 백업을 제거했다.
+  - `/root/aads/backups`의 중복 2026-06-06 백업을 제거하고, 최신 2026-06-07/2026-06-08 백업은 보존했다.
 - 검증:
   - `python3 -m pytest tests/unit/test_media_generation_service.py` 통과(14 passed).
   - `python3 -m py_compile app/services/media_generation_service.py app/api/image.py` 통과.
   - `git diff --check -- app/services/media_generation_service.py tests/unit/test_media_generation_service.py` 통과.
+  - 2026-06-08 11:35 KST 실측 기준 `/`는 160G 중 134G 사용(84%), `/mnt/volume_sgp1_01`은 50G 중 31G 사용(65%)로 개선됐다.
 - 미완료/주의:
-  - `/mnt/volume_sgp1_01`은 여전히 100%이며 원인은 `/mnt/volume_sgp1_01/aads-backups`의 2026-06-03~2026-06-07 DB gzip 백업 5개다. 복구 정책 영향이 있어 CEO 승인 없이 삭제하지 않았다.
+  - `/mnt/volume_sgp1_01/aads-backups`에는 2026-06-06/2026-06-07 백업 2개를 보존했다.
   - 기존 `media_generation_jobs` base64 row 대량 외부화와 `VACUUM FULL`은 락/디스크 이중사용 위험이 있어 무중단 P0 범위에서 제외했다.
 
 ## 현재 진행 상태 (2026-06-08 10:39 KST) - SaaS implementation status verification
