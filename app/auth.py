@@ -463,7 +463,7 @@ async def create_tenant_for_user(
                 """
                 SELECT EXISTS(
                     SELECT 1 FROM saas_users
-                     WHERE id = $1 AND COALESCE(status, 'active') = 'active' AND deleted_at IS NULL
+                     WHERE id = $1::text AND COALESCE(status, 'active') = 'active' AND deleted_at IS NULL
                 )
                 """,
                 user_id,
@@ -487,7 +487,7 @@ async def create_tenant_for_user(
             tenant = await conn.fetchrow(
                 """
                 INSERT INTO tenants (slug, name, kind, status, metadata, created_by)
-                VALUES ($1, $2, 'customer', 'active', jsonb_build_object('plan_key', $3), $4)
+                VALUES ($1::text, $2::text, 'customer', 'active', jsonb_build_object('plan_key', $3::text), $4::text)
                 RETURNING id::text AS tenant_id, slug, name, kind, status, metadata, created_at
                 """,
                 slug_candidate,
@@ -510,7 +510,7 @@ async def create_tenant_for_user(
                 user_id,
             )
             await conn.execute(
-                "UPDATE saas_users SET default_tenant_id = $1::uuid, updated_at = now() WHERE id = $2",
+                "UPDATE saas_users SET default_tenant_id = $1::uuid, updated_at = now() WHERE id = $2::text",
                 tenant["tenant_id"],
                 user_id,
             )
