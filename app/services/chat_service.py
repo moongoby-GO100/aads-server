@@ -161,6 +161,7 @@ _RECOVERY_DEDUPE_MODEL_USED = {"recovered", "recovered_from_redis", "stopped", N
 _RECOVERY_PREFIX_LEN = 50
 _STALE_PLACEHOLDER_TIMEOUT_SEC_DEFAULT = 1200
 _STALE_CLEANUP_INTERVAL_SEC_DEFAULT = 300
+_ACTIVE_STREAM_HARD_TIMEOUT_SEC_DEFAULT = 2700
 _HISTORY_EXCLUDED_INTENTS = (
     "streaming_placeholder",
     "rate_limited",
@@ -1261,6 +1262,14 @@ def get_stale_cleanup_interval_sec() -> int:
     )
 
 
+def get_active_stream_hard_timeout_sec() -> int:
+    return _get_positive_env_int(
+        "AADS_ACTIVE_STREAM_HARD_TIMEOUT_SEC",
+        _ACTIVE_STREAM_HARD_TIMEOUT_SEC_DEFAULT,
+        minimum=600,
+    )
+
+
 def _get_live_streaming_session_ids() -> set[str]:
     active_sessions = {
         sid for sid, task in list(_active_bg_tasks.items())
@@ -1284,6 +1293,97 @@ def _format_stale_placeholder_content(content: str) -> str:
         "⚠️ _응답 생성이 중단되어 여기까지 보존된 내용이 없습니다. "
         "같은 질문으로 다시 요청할 수 있습니다._"
     )
+
+
+async def cleanup_overlong_running_executions(
+    *,
+    timeout_sec: Optional[int] = None,
+) -> Dict[str, int]:
+    """Close active/running chat executions that exceeded the hard age limit.
+
+    Stale placeholder cleanup is based on the placeholder touch time, but the
+    heartbeat/interim-save path can keep edited_at fresh indefinitely. This
+    guard uses execution started_at so a long-running background task cannot
+    keep the chat UI in a permanent "generating" state.
+    """
+    timeout = (
+        timeout_sec
+        if timeout_sec is not None
+        else get_active_stream_hard_timeout_sec()
+    )
+    timeout = max(int(timeout), 600)
+    live_sessions = _get_live_streaming_session_ids()
+
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT te.id::text AS execution_id,
+                   te.session_id::text AS session_id,
+                   COALESCE(ph.id, te.assistant_message_id)::text AS assistant_message_id,
+                   COALESCE(ph.content, am.content, '') AS partial_content,
+                   EXTRACT(EPOCH FROM (NOW() - COALESCE(te.started_at, te.created_at)))::int AS age_seconds
+            FROM chat_turn_executions te
+            LEFT JOIN chat_messages am
+              ON am.id = te.assistant_message_id
+            LEFT JOIN LATERAL (
+                SELECT id, content
+                FROM chat_messages
+                WHERE execution_id = te.id
+                  AND intent = 'streaming_placeholder'
+                ORDER BY COALESCE(edited_at, created_at) DESC
+                LIMIT 1
+            ) ph ON TRUE
+            WHERE te.status IN ('running', 'retrying')
+              AND te.completed_at IS NULL
+              AND COALESCE(te.started_at, te.created_at) < NOW() - ($1::int * INTERVAL '1 second')
+            ORDER BY COALESCE(te.started_at, te.created_at) ASC
+            """,
+            timeout,
+        )
+
+        closed = 0
+        cancelled_active = 0
+        for row in rows:
+            session_id = row["session_id"]
+            execution_id = row["execution_id"]
+            state = _streaming_state.get(session_id) or {}
+            partial_content = state.get("content") or row["partial_content"] or ""
+            placeholder_id = row["assistant_message_id"]
+
+            task = _active_bg_tasks.get(session_id)
+            if session_id in live_sessions and task and not task.done():
+                task.cancel(msg="active_stream_hard_timeout")
+                _active_bg_tasks.pop(session_id, None)
+                cancelled_active += 1
+            _streaming_state.pop(session_id, None)
+
+            await _mark_execution_interrupted(
+                conn,
+                session_id,
+                execution_id,
+                f"active_stream_hard_timeout_after_{timeout}s",
+                partial_content=partial_content,
+                placeholder_id=placeholder_id,
+                delete_empty_placeholder=not bool(
+                    _strip_streaming_progress_markers(partial_content).strip()
+                ),
+            )
+            closed += 1
+
+        if closed:
+            logger.warning(
+                "overlong_running_execution_cleanup closed=%s cancelled_active=%s timeout_sec=%s",
+                closed,
+                cancelled_active,
+                timeout,
+            )
+
+    return {
+        "scanned": len(rows),
+        "closed": closed,
+        "cancelled_active": cancelled_active,
+        "timeout_sec": timeout,
+    }
 
 
 async def cleanup_stale_streaming_placeholders(
@@ -1480,6 +1580,7 @@ async def _stale_placeholder_cleanup_loop() -> None:
         while True:
             await _heartbeat_asyncio.sleep(get_stale_cleanup_interval_sec())
             try:
+                await cleanup_overlong_running_executions()
                 await cleanup_stale_streaming_placeholders()
             except _heartbeat_asyncio.CancelledError:
                 raise

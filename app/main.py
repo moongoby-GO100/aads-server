@@ -1040,10 +1040,12 @@ async def lifespan(app: FastAPI):
 
     try:
         from app.services.chat_service import (
+            cleanup_overlong_running_executions as _startup_cleanup_overlong_running,
             cleanup_stale_streaming_placeholders as _startup_cleanup_stale_placeholders,
             ensure_stale_placeholder_cleanup_task as _ensure_stale_placeholder_cleanup_task,
         )
 
+        await _startup_cleanup_overlong_running()
         await _startup_cleanup_stale_placeholders()
         _ensure_stale_placeholder_cleanup_task()
     except Exception as _e:

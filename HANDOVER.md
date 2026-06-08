@@ -1704,3 +1704,10 @@
 - 원인: 대시보드 `src/app/chat/page.tsx`가 `interrupted_partial`, `interruption_notice`, `model_used='interrupted'` 메시지를 일부 polling/finalization 경로에서 final assistant 후보로 취급했고, 완료 배지는 `status`가 없으면 기본 완료로 렌더링했다. SSE 복구 실패 후 `/chat/sessions/{id}/resume`도 같은 세션/실행에서 반복 호출될 수 있었다.
 - 조치: `isTerminalIncompleteAssistantMessage()`를 추가해 완료 배지와 final assistant 후보에서 미완료/중단 응답을 제외했다. polling의 `hasNewFinalAi`, just_completed toast, tools-only 복구 경로도 `isFinalAssistantMessage()` 기준으로 통일했다. `/resume` 호출은 `requestResumeOnce()`로 세션+execution 기준 60초 in-flight/cooldown 가드를 적용했다.
 - 검증 대상: 대시보드 TypeScript/build, 커밋/푸시, dashboard blue-green 배포, `/api/v1/health` 및 대상 세션 DB 상태 재조회.
+
+## 2026-06-08 09:18 KST - Chat overlong running execution hard timeout
+- 배경: 최근 24시간 DB에서 `chat_turn_executions.status='running'` 4건과 `streaming_placeholder` 4건이 남아 있었고, 이 중 3건은 30분 이상 실행 중이라 채팅창이 계속 "응답 중"으로 보일 수 있었다.
+- 원인: 기존 `cleanup_stale_streaming_placeholders()`는 placeholder의 `edited_at` 기준으로 stale을 판단했다. heartbeat/interim-save가 계속 placeholder를 갱신하면 실행 시작 시각이 30~50분을 넘겨도 stale로 잡히지 않았다. 또한 `_active_bg_tasks/_streaming_state`에 live로 남은 세션은 cleanup이 건너뛰어 DB `running` row가 장기 잔류할 수 있었다.
+- 조치: `app/services/chat_service.py`에 `cleanup_overlong_running_executions()`를 추가했다. 실행 `started_at` 기준 하드 타임아웃(`AADS_ACTIVE_STREAM_HARD_TIMEOUT_SEC`, 기본 2,700초)을 넘은 `running/retrying` 실행은 부분 응답을 보존하고 `interrupted`로 닫으며, 같은 프로세스의 active task/state도 취소·정리한다. startup cleanup과 주기 cleanup loop에서 이 함수를 먼저 실행하도록 `app/main.py`에 연결했다.
+- 운영 보정: 2026-06-08 09:17 KST에 단발 보정으로 30분 초과 running 3건을 `active_stream_hard_timeout_after_1800s` 사유의 `interrupted`로 닫았다. 보정 후 최근 24시간 상태는 `completed=6`, `interrupted=3`, `running=1`이며 running 1건은 현재 응답 세션이다.
+- 검증: `python3 -m py_compile app/services/chat_service.py app/main.py` 통과. `JWT_SECRET_KEY=test-secret pytest tests/unit/test_chat_service.py -k "cleanup_stale_streaming_placeholders or cleanup_overlong_running_executions"` 결과 3 passed. `git diff --check -- app/services/chat_service.py app/main.py tests/unit/test_chat_service.py` 통과. 전체 `git diff --check`는 기존 unrelated `docs/CHANGELOG-go100-direct.md` trailing whitespace로 실패했다.

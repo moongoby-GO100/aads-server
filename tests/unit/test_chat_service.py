@@ -339,6 +339,56 @@ async def test_cleanup_stale_streaming_placeholders_skips_live_session():
 
 
 @pytest.mark.asyncio
+async def test_cleanup_overlong_running_executions_closes_live_task():
+    session_id = str(uuid.uuid4())
+    execution_id = str(uuid.uuid4())
+    message_id = str(uuid.uuid4())
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=[
+        {
+            "execution_id": execution_id,
+            "session_id": session_id,
+            "assistant_message_id": message_id,
+            "partial_content": "오래 걸린 부분 응답",
+            "age_seconds": 3600,
+        }
+    ])
+    cancelled = {"called": False, "msg": None}
+    task = SimpleNamespace(
+        done=lambda: False,
+        cancel=lambda msg=None: cancelled.update({"called": True, "msg": msg}),
+    )
+    chat_service._active_bg_tasks[session_id] = task
+    chat_service._streaming_state[session_id] = {
+        "content": "메모리의 오래 걸린 부분 응답",
+        "completed": False,
+        "started_at": chat_service._bg_time.monotonic() - 3600,
+    }
+
+    try:
+        with patch("app.services.chat_service.get_pool", return_value=_Pool(conn)), patch(
+            "app.services.chat_service._mark_execution_interrupted", new_callable=AsyncMock
+        ) as mark_interrupted:
+            result = await chat_service.cleanup_overlong_running_executions(timeout_sec=2700)
+
+        assert result["closed"] == 1
+        assert result["cancelled_active"] == 1
+        assert cancelled == {"called": True, "msg": "active_stream_hard_timeout"}
+        assert session_id not in chat_service._active_bg_tasks
+        assert session_id not in chat_service._streaming_state
+        mark_interrupted.assert_awaited_once()
+        args, kwargs = mark_interrupted.await_args
+        assert args[1] == session_id
+        assert args[2] == execution_id
+        assert args[3] == "active_stream_hard_timeout_after_2700s"
+        assert kwargs["partial_content"] == "메모리의 오래 걸린 부분 응답"
+        assert kwargs["placeholder_id"] == message_id
+    finally:
+        chat_service._active_bg_tasks.pop(session_id, None)
+        chat_service._streaming_state.pop(session_id, None)
+
+
+@pytest.mark.asyncio
 async def test_cleanup_deleted_duplicate_messages_dry_run_does_not_delete():
     session_id = uuid.uuid4()
     conn = AsyncMock()
