@@ -1828,4 +1828,10 @@
   - `python3 -m py_compile app/services/chat_service.py` 통과.
   - `JWT_SECRET_KEY=test-secret python3 -m pytest tests/unit/test_chat_service.py -q` 결과 39 passed, 1 warning. 신규 테스트 2건으로 active execution binding과 orphan insert block을 확인했다.
   - `npx eslint src/app/chat/page.tsx` 결과 0 errors, 기존 warning 23개.
-- 배포 상태: 코드 수정/문서기록/로컬 검증 완료. 커밋, 푸시, blue-green 배포는 아직 수행하지 않았다.
+- 배포 상태:
+  - 백엔드 커밋 `94d5d50 fix: trace orphan chat interruptions`를 `origin/main`에 push하고 blue-green 배포 완료. 2026-06-08 12:38 KST 확인 기준 `aads-server`는 `127.0.0.1:8100`에서 healthy.
+  - 대시보드 커밋 `f994dca fix: distinguish stale chat placeholders`를 `origin/main`에 push하고 blue-green 배포 완료. 2026-06-08 12:38 KST 확인 기준 `aads-dashboard`와 `aads-dashboard-green` 모두 healthy, 외부 `/chat`는 `/login?redirect=%2Fchat`로 307 정상 리다이렉트.
+  - 추가 확인: `curl http://127.0.0.1:8100/api/v1/health` 결과 `status=ok`, `graph_ready=true`.
+- 남은 리스크:
+  - 로그인된 브라우저로 실제 채팅 1회 송수신 E2E는 미실행. 배포 스크립트의 프론트 QA 단계도 `UNKNOWN`으로 통과 판정하지 않는다.
+  - 백엔드/대시보드 worktree에는 이번 작업 외 기존 unrelated 변경이 남아 있으므로 후속 커밋 시 파일 선별이 필요하다.
