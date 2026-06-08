@@ -41,3 +41,14 @@ def test_saas_multitenant_migration_keeps_legacy_inserts_tenant_safe():
     assert "idx_chat_workspaces_tenant_created" in sql
     assert "idx_chat_sessions_tenant_workspace_updated" in sql
     assert "idx_chat_messages_tenant_session_created" in sql
+
+
+def test_saas_internal_tenant_lockdown_migration_removes_public_access():
+    sql = Path("migrations/104_saas_internal_tenant_access_lockdown.sql").read_text(encoding="utf-8")
+
+    assert "ALTER COLUMN default_tenant_id DROP DEFAULT" in sql
+    assert "ALTER COLUMN default_tenant_id DROP NOT NULL" in sql
+    assert "preferred_customer_tenant" in sql
+    assert "COALESCE(u.role, 'user') NOT IN ('ceo', 'admin', 'owner')" in sql
+    assert "tm.role NOT IN ('owner', 'admin')" in sql
+    assert "status = 'removed'" in sql

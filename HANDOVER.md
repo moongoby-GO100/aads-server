@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-08 13:20 KST) - SaaS public signup internal tenant lockdown
+- 배경: CEO가 AADS 신규 가입자가 CEO 계정처럼 모든 기능/데이터를 보게 되는지 확인하고 개선을 지시했다.
+- 조치:
+  - `app/auth.py`: 공개 SaaS 사용자 생성 기본값을 internal tenant 미부착으로 바꾸고, runtime schema bootstrap이 일반 사용자를 internal tenant에 자동 가입시키지 않도록 수정했다.
+  - `app/auth.py`: 일반 사용자의 tenant 목록/컨텍스트 로딩에서 internal tenant는 owner/admin 멤버십만 허용하도록 차단했다.
+  - `migrations/104_saas_internal_tenant_access_lockdown.sql`: `saas_users.default_tenant_id`의 internal 기본값/NOT NULL을 제거하고, 일반 사용자 internal active membership을 removed로 정리하는 운영 DB migration을 추가했다.
+  - 운영 DB에 migration 104를 적용해 internal active member 28건을 removed 처리하고, internal 기본 tenant 사용자 35건을 NULL/customer로 정리했다.
+  - `tests/unit/test_tenant_rbac_policy.py`, `tests/unit/test_saas_multitenant_migration.py`: internal tenant가 CEO/admin 전용으로 유지되는 회귀 테스트를 추가했다.
+- 검증:
+  - `python3 -m py_compile app/auth.py app/api/auth.py` 통과.
+  - `pytest -q tests/unit/test_tenant_rbac_policy.py tests/unit/test_saas_multitenant_migration.py` 통과(14 passed).
+  - 운영 DB 조회 결과 internal active member는 0건, internal member removed는 31건, `saas_users.default_tenant_id`는 default 없음/nullable YES로 확인했다.
+- 미완료/주의:
+  - 대시보드 팀/테넌트 관리 UI는 아직 별도 구현 대상이다. 현재는 API 기반 초대/수락 흐름만 제공한다.
+  - 현재 worktree에는 Kling/media/nginx 등 기존 unrelated 미커밋 변경이 많으므로 커밋 시 이번 변경 파일만 선별해야 한다.
+
 ## 현재 진행 상태 (2026-06-08 13:13 KST) - Chat response quality/speed mode hardening
 - 배경: CEO가 채팅창 AI 응답 완성도를 높이는 방법과 응답 완료를 더 빠르게 만드는 방법을 물었고, 중간 보고가 아닌 실제 확인/조치/검증/최종보고 조건 준수를 재지시했다.
 - 조치:

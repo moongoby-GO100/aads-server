@@ -38,6 +38,7 @@ def test_auth_request_paths_do_not_run_saas_schema_ddl():
     assert all("require_saas_schema_ready" in source for source in request_path_sources)
     assert all("ensure_saas_users_table" not in source for source in request_path_sources)
     assert "attach_internal_tenant=False" in inspect.getsource(auth_router.register)
+    assert "attach_internal_tenant: bool = False" in inspect.getsource(auth_module.create_saas_user)
     assert "create_tenant_for_user" in inspect.getsource(auth_router.register)
 
 
@@ -80,6 +81,18 @@ def test_saas_onboarding_service_uses_invite_tokens_and_memberships():
     assert "tenant_memberships" in source
     assert "default_tenant_id" in source
     assert "jsonb_set" in inspect.getsource(auth_module.update_tenant_plan)
+
+
+def test_internal_tenant_is_admin_only_for_saas_users():
+    list_source = inspect.getsource(auth_module.list_user_tenants)
+    context_source = inspect.getsource(auth_module._load_tenant_context)
+    bootstrap_source = inspect.getsource(auth_module.ensure_saas_users_table)
+
+    assert "t.kind <> 'internal' OR tm.role IN ('owner', 'admin')" in list_source
+    assert "Internal tenant requires admin role" in context_source
+    assert "ALTER COLUMN default_tenant_id DROP DEFAULT" in bootstrap_source
+    assert "ALTER COLUMN default_tenant_id DROP NOT NULL" in bootstrap_source
+    assert "WHERE role IN ('ceo', 'admin', 'owner')" in bootstrap_source
 
 
 def test_chat_router_uses_role_dependencies_for_workspace_and_session_access():

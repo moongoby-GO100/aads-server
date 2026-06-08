@@ -273,13 +273,14 @@ async def ensure_saas_users_table():
             ALTER TABLE saas_users ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'
                 CHECK (status IN ('active', 'suspended', 'deleted'));
             ALTER TABLE saas_users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+            ALTER TABLE saas_users
+                ALTER COLUMN default_tenant_id DROP DEFAULT;
+            ALTER TABLE saas_users
+                ALTER COLUMN default_tenant_id DROP NOT NULL;
             UPDATE saas_users
                SET default_tenant_id = public.aads_internal_tenant_id()
-             WHERE default_tenant_id IS NULL;
-            ALTER TABLE saas_users
-                ALTER COLUMN default_tenant_id SET DEFAULT public.aads_internal_tenant_id();
-            ALTER TABLE saas_users
-                ALTER COLUMN default_tenant_id SET NOT NULL;
+             WHERE default_tenant_id IS NULL
+               AND role IN ('ceo', 'admin', 'owner');
 
             INSERT INTO tenant_memberships (tenant_id, user_id, role, status)
             SELECT default_tenant_id,
@@ -287,6 +288,8 @@ async def ensure_saas_users_table():
                    CASE WHEN role IN ('ceo', 'admin', 'owner') THEN 'owner' ELSE 'member' END,
                    'active'
               FROM saas_users
+             WHERE role IN ('ceo', 'admin', 'owner')
+               AND default_tenant_id IS NOT NULL
             ON CONFLICT (tenant_id, user_id) DO UPDATE
                SET status = 'active',
                    role = CASE
@@ -304,7 +307,7 @@ async def create_saas_user(
     password: str,
     name: Optional[str] = None,
     *,
-    attach_internal_tenant: bool = True,
+    attach_internal_tenant: bool = False,
 ) -> Optional[dict]:
     if not BCRYPT_AVAILABLE:
         log.error('bcrypt_unavailable', detail='bcrypt not installed')
@@ -431,6 +434,7 @@ async def list_user_tenants(user_id: str) -> list[dict]:
                AND tm.status = 'active'
                AND tm.deleted_at IS NULL
                AND t.deleted_at IS NULL
+               AND (t.kind <> 'internal' OR tm.role IN ('owner', 'admin'))
              ORDER BY t.kind = 'internal' DESC, t.created_at ASC
             """,
             user_id,
@@ -789,6 +793,8 @@ async def _load_tenant_context(user: dict, requested_tenant_id: Optional[str] = 
         )
     if not row:
         raise HTTPException(status_code=403, detail='Tenant membership required')
+    if str(row['kind']).lower() == 'internal' and str(row['role']).lower() not in {'owner', 'admin'}:
+        raise HTTPException(status_code=403, detail='Internal tenant requires admin role')
     return {
         'tenant': {
             'id': row['tenant_id'],
