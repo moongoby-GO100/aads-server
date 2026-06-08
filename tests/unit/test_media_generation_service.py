@@ -320,15 +320,17 @@ async def test_generate_kling_video_submits_provider_job(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_default_image_route_preserves_openai_fallback_when_google_missing(monkeypatch):
+async def test_default_image_route_externalizes_base64_result(monkeypatch, tmp_path: Path):
     conn = _Conn()
     svc = MediaGenerationService(
         settings_obj=_settings(openai_key="sk-test", google_key=""),
         pool_provider=lambda: _Pool(conn),
     )
+    monkeypatch.setenv("AADS_MEDIA_STATIC_DIR", str(tmp_path))
+    payload = base64.b64encode(b"image-bytes").decode()
 
     async def fake_generate(prompt, size):
-        return {"url": "data:image/png;base64,AAA", "provider": "gpt-image-1", "prompt": prompt}
+        return {"url": f"data:image/png;base64,{payload}", "provider": "gpt-image-1", "prompt": prompt}
 
     fake_module = SimpleNamespace(image_service=SimpleNamespace(generate=fake_generate))
     monkeypatch.setitem(sys.modules, "app.services.image_service", fake_module)
@@ -337,7 +339,12 @@ async def test_default_image_route_preserves_openai_fallback_when_google_missing
 
     assert result["status"] == "succeeded"
     assert result["provider"] == "gpt-image-1"
+    assert result["url"].startswith("/static/media/generated/image/")
     assert conn.rows[result["job_id"]]["provider"] == "openai"
+    assert conn.rows[result["job_id"]]["result_uri"].startswith("/static/media/generated/image/")
+    assert not conn.rows[result["job_id"]]["result_uri"].startswith("data:")
+    assert Path(conn.rows[result["job_id"]]["result_path"]).read_bytes() == b"image-bytes"
+    assert conn.rows[result["job_id"]]["result_metadata"]["base64_externalized"] is True
 
 
 @pytest.mark.asyncio

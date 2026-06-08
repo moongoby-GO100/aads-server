@@ -135,6 +135,19 @@ def _as_dict(value: Any) -> dict[str, Any]:
         return {}
 
 
+def _app_static_dir() -> Path:
+    configured = os.getenv("AADS_MEDIA_STATIC_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    return Path(__file__).resolve().parents[1] / "static"
+
+
+def _safe_job_filename(job_id: str, ext: str) -> str:
+    safe_job_id = re.sub(r"[^A-Za-z0-9_.-]", "_", str(job_id or "media"))
+    safe_ext = ext if ext.startswith(".") else f".{ext}"
+    return f"{safe_job_id}{safe_ext}"
+
+
 def _secret_value(settings_obj: Any, name: str) -> str:
     value = getattr(settings_obj, name, "") or ""
     getter = getattr(value, "get_secret_value", None)
@@ -688,6 +701,63 @@ class MediaGenerationService:
         except Exception as exc:
             return {"job_id": job_id, "status": status, "error": str(exc), "storage": "unavailable"}
 
+    def _save_data_uri_media(
+        self,
+        *,
+        job_id: str,
+        data_uri: str,
+        kind: str,
+    ) -> dict[str, Any] | None:
+        if not data_uri.startswith("data:") or "," not in data_uri:
+            return None
+        header, payload = data_uri.split(",", 1)
+        if ";base64" not in header or not payload:
+            return None
+
+        content_type = header[5:].split(";", 1)[0] or "application/octet-stream"
+        ext = mimetypes.guess_extension(content_type) or ".bin"
+        body = base64.b64decode(payload, validate=True)
+
+        static_root = _app_static_dir().resolve()
+        media_dir = (static_root / "media" / "generated" / kind).resolve()
+        media_dir.mkdir(parents=True, exist_ok=True)
+        target = (media_dir / _safe_job_filename(job_id, ext)).resolve()
+        target.relative_to(media_dir)
+        target.write_bytes(body)
+
+        public_path = "/" + target.relative_to(static_root).as_posix()
+        return {
+            "url": f"/static{public_path}",
+            "path": str(target),
+            "bytes": len(body),
+            "content_type": content_type,
+        }
+
+    def _externalize_media_result(
+        self,
+        *,
+        job_id: str,
+        kind: str,
+        result: dict[str, Any],
+        metadata: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any], str | None]:
+        uri = str(result.get("url") or "").strip()
+        if not uri.startswith("data:"):
+            return result, metadata, None
+        saved = self._save_data_uri_media(job_id=job_id, data_uri=uri, kind=kind)
+        if not saved:
+            return result, metadata, None
+        updated_result = dict(result)
+        updated_result["url"] = saved["url"]
+        updated_metadata = {
+            **metadata,
+            "storage": "static_file",
+            "bytes": saved["bytes"],
+            "content_type": saved["content_type"],
+            "base64_externalized": True,
+        }
+        return updated_result, updated_metadata, saved["path"]
+
     async def get_job(self, job_id: str) -> dict[str, Any] | None:
         pool = self._get_pool_or_none()
         if not pool:
@@ -892,10 +962,17 @@ class MediaGenerationService:
                 "model_id": route.model_id,
                 "size": size,
             }
+            result, metadata, result_path = self._externalize_media_result(
+                job_id=str(job.get("job_id") or ""),
+                kind="image",
+                result=result,
+                metadata=metadata,
+            )
             await self.update_job_status(
                 str(job.get("job_id") or ""),
                 "succeeded",
                 result_uri=result.get("url"),
+                result_path=result_path,
                 result_metadata=metadata,
             )
             result.update(
@@ -1423,11 +1500,19 @@ class MediaGenerationService:
                 size=size,
                 model_id=route.model_id,
             )
+            metadata = {"provider": route.provider, "model_id": route.model_id, "size": size}
+            result, metadata, result_path = self._externalize_media_result(
+                job_id=str(job.get("job_id") or ""),
+                kind="edit_image",
+                result=result,
+                metadata=metadata,
+            )
             await self.update_job_status(
                 str(job.get("job_id") or ""),
                 "succeeded",
                 result_uri=result.get("url"),
-                result_metadata={"provider": route.provider, "model_id": route.model_id, "size": size},
+                result_path=result_path,
+                result_metadata=metadata,
             )
             result.update(
                 {
