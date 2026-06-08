@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-08 13:13 KST) - Chat response quality/speed mode hardening
+- 배경: CEO가 채팅창 AI 응답 완성도를 높이는 방법과 응답 완료를 더 빠르게 만드는 방법을 물었고, 중간 보고가 아닌 실제 확인/조치/검증/최종보고 조건 준수를 재지시했다.
+- 조치:
+  - `app/models/chat.py`, `app/routers/chat.py`, `app/services/chat_service.py`: `response_mode` 요청 필드를 추가했다. 기본은 `quality`, 선택값 `fast`를 허용한다.
+  - `quality` 모드는 기존 응답 비평, output validator, completion contract 자동 이어쓰기를 유지하고 최종 완료보고 조건을 system prompt에 명시한다.
+  - `fast` 모드는 비평 재생성 및 completion contract 자동 이어쓰기를 생략해 완료 지연을 줄이고, 긴 조사는 미검증/후속 작업으로 분리하도록 system prompt를 주입한다.
+  - 최종 assistant 메시지의 `quality_details`에 `response_mode`, `duration_sec`, `tool_event_count`, `completion_auto_continue_count`, `critic_skipped`를 기록해 느린 원인을 DB에서 추적할 수 있게 했다.
+  - 대시보드 `src/app/chat/page.tsx`, `src/services/chatApi.ts`: 모델 선택 옆에 `완성 우선/빠른 완료` 셀렉터를 추가하고 JSON/FormData/branch 요청에 `response_mode`를 전달한다. 선택값은 localStorage에 보존한다.
+  - `tests/unit/test_chat_response_mode.py`를 추가해 모드 정규화와 prompt contract를 회귀 테스트한다.
+- 검증:
+  - `pytest tests/unit/test_chat_response_mode.py tests/unit/test_response_completion_contract.py -q` 통과(12 passed).
+  - `python3 -m py_compile app/models/chat.py app/routers/chat.py app/services/chat_service.py` 통과.
+  - `npx eslint src/app/chat/page.tsx src/services/chatApi.ts` 통과(error 0, 기존 warning 23).
+  - `curl http://127.0.0.1:8100/api/v1/health` 응답 `status=ok`.
+- 미완료/주의:
+  - 이 변경은 응답 완성도/속도 선택과 추적성을 강화하는 조치다. 외부 LLM/API 지연, 장기 도구 실행, 브라우저 연결 종료 자체를 100% 제거하지는 않는다.
+  - 현재 worktree에는 Kling/media/nginx/tenant 등 기존 unrelated 미커밋 변경이 많으므로 커밋 시 이번 변경 파일만 선별해야 한다.
+
 ## 현재 진행 상태 (2026-06-08 11:59 KST) - P0 storage pressure mitigation
 - 배경: CEO가 서버5 이전으로 용량 문제가 해소되는지 재확인한 뒤 P0 즉시 조치를 지시했다.
 - 조치:

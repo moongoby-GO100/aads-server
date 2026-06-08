@@ -86,6 +86,7 @@ class MessageSendRequest(BaseModel):
     content: str
     attachments: List[Any] = Field(default_factory=list)
     model_override: Optional[str] = None
+    response_mode: str = Field(default="quality", max_length=20)
     reply_to_id: Optional[uuid.UUID] = None
     idempotency_key: Optional[str] = Field(None, max_length=64)
 
@@ -98,6 +99,7 @@ class BranchCreateRequest(BaseModel):
     """특정 메시지 시점에서 새로운 분기 생성 요청."""
     content: str = Field(..., min_length=1)
     model_override: Optional[str] = None
+    response_mode: str = Field(default="quality", max_length=20)
     attachments: List[Any] = Field(default_factory=list)
 
 

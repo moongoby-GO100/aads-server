@@ -1020,6 +1020,7 @@ async def send_message(
         session_id_str = str(form.get("session_id", ""))
         content = _strip_codex_reconnect_notice(str(form.get("content", "")))
         model_override = form.get("model") or form.get("model_override") or None
+        response_mode = str(form.get("response_mode") or "quality")
         reply_to_id = str(form.get("reply_to_id")) if form.get("reply_to_id") else None
         idempotency_key = str(form.get("idempotency_key")) if form.get("idempotency_key") else None
         attachments = []
@@ -1065,6 +1066,7 @@ async def send_message(
         session_id_str = str(req.session_id)
         content = _strip_codex_reconnect_notice(req.content)
         model_override = req.model_override
+        response_mode = req.response_mode
         attachments = req.attachments
         reply_to_id = str(req.reply_to_id) if req.reply_to_id else None
         idempotency_key = req.idempotency_key if hasattr(req, 'idempotency_key') else None
@@ -1112,6 +1114,7 @@ async def send_message(
         content=content,
         attachments=attachments,
         model_override=model_override,
+        response_mode=response_mode,
         reply_to_id=reply_to_id,
         idempotency_key=idempotency_key,
         tenant_id=tenant_id,
@@ -2369,6 +2372,7 @@ async def regenerate_message(message_id: UUID, request: Request, mode: str = "re
         content=content,
         attachments=attachments,
         model_override=None,
+        response_mode="quality",
         reply_to_id=str(ai_msg["id"]),
     )
     bg_stream = svc.with_background_completion(raw_stream, session_id=session_id_str)
@@ -2502,6 +2506,7 @@ async def create_branch(message_id: UUID, req: BranchCreateRequest):
         content=req.content,
         attachments=req.attachments,
         model_override=req.model_override,
+        response_mode=req.response_mode,
         branch_id=str(branch_id),
         branch_point_msg_id=str(message_id),
     )

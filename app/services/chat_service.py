@@ -162,6 +162,9 @@ _RECOVERY_PREFIX_LEN = 50
 _STALE_PLACEHOLDER_TIMEOUT_SEC_DEFAULT = 1200
 _STALE_CLEANUP_INTERVAL_SEC_DEFAULT = 300
 _ACTIVE_STREAM_HARD_TIMEOUT_SEC_DEFAULT = 2700
+_RESPONSE_MODE_QUALITY = "quality"
+_RESPONSE_MODE_FAST = "fast"
+_VALID_RESPONSE_MODES = {_RESPONSE_MODE_QUALITY, _RESPONSE_MODE_FAST}
 _HISTORY_EXCLUDED_INTENTS = (
     "streaming_placeholder",
     "rate_limited",
@@ -178,6 +181,28 @@ def _history_intent_filter_sql(alias: str = "") -> str:
     prefix = f"{alias}." if alias else ""
     quoted = ", ".join(f"'{intent}'" for intent in _HISTORY_EXCLUDED_INTENTS)
     return f"AND COALESCE({prefix}intent, '') NOT IN ({quoted})"
+
+
+def _normalize_response_mode(response_mode: Optional[str]) -> str:
+    normalized = (response_mode or _RESPONSE_MODE_QUALITY).strip().lower()
+    return normalized if normalized in _VALID_RESPONSE_MODES else _RESPONSE_MODE_QUALITY
+
+
+def _response_mode_prompt_block(response_mode: str) -> str:
+    if response_mode == _RESPONSE_MODE_FAST:
+        return (
+            "\n\n[응답 모드: fast]\n"
+            "- 목표: 가능한 한 빨리 최종 응답을 완료한다.\n"
+            "- 필수 실측/수정/배포 지시가 아닌 경우 외부 도구 사용을 최소화한다.\n"
+            "- 불확실한 항목은 '미검증'으로 표시하고, 장시간 조사는 후속 작업으로 분리한다.\n"
+            "- 답변 마지막에는 커밋/푸시/배포/문서/미완료 상태를 짧게 명시한다."
+        )
+    return (
+        "\n\n[응답 모드: quality]\n"
+        "- 목표: 사용자의 원 요청을 완결성 있게 처리하고 최종 완료보고 조건을 만족한다.\n"
+        "- 코드/DB/배포/운영 조치가 있으면 실제 검증 결과와 남은 미완료 항목을 반드시 분리해 보고한다.\n"
+        "- 중간 보고로 끝내지 말고 가능한 확인, 조치, 검증을 이어서 수행한다."
+    )
 
 
 _ACTIONABLE_QUOTE_CONTEXT_MARKERS = (
@@ -6677,6 +6702,7 @@ async def send_message_stream(
     content: str,
     attachments: Optional[List[Any]] = None,
     model_override: Optional[str] = None,
+    response_mode: Optional[str] = None,
     intent_override: Optional[str] = None,
     uploaded_files: Optional[List[Any]] = None,
     reply_to_id: Optional[str] = None,
@@ -6689,12 +6715,13 @@ async def send_message_stream(
     AADS-185: 3계층 Context Engineering + IntentRouter + ModelSelector + Tool Use 루프.
     SSE 청크: data: {"type": "delta"|"thinking"|"tool_use"|"tool_result"|"done"|"error", ...}
     """
+    response_mode = _normalize_response_mode(response_mode)
     # AADS-186C: Langfuse 트레이스 시작
     _lf_trace = create_trace(
         name="chat_turn",
         session_id=session_id,
         user_id="CEO",
-        input_data={"content": content[:500], "model_override": model_override},
+        input_data={"content": content[:500], "model_override": model_override, "response_mode": response_mode},
     )
     _lf_span_intent = None
     _lf_span_llm = None
@@ -6713,6 +6740,12 @@ async def send_message_stream(
         set_streaming(session_id, True)
         sid = uuid.UUID(session_id)
         sid_short = session_id[:8]  # 로깅용 축약 (str 보장 — sid[:8] 직접 사용 금지)
+        logger.info(
+            "chat_response_mode_selected session=%s mode=%s model_override=%s",
+            sid_short,
+            response_mode,
+            model_override or "-",
+        )
         _html_context_state = await get_html_edit_context_state(session_id, content)
         _artifact_chain_kwargs = {
             "parent_artifact_id": _html_context_state.get("parent_artifact_id"),
@@ -7146,6 +7179,7 @@ async def send_message_stream(
                 logger.error(f"context_builder failed, using raw fallback: {_ctx_err}")
                 system_prompt = base_prompt or "You are a helpful AI assistant."
                 messages = [{"role": m["role"], "content": m["content"]} for m in raw_messages[-20:]]
+            system_prompt = system_prompt + _response_mode_prompt_block(response_mode)
 
             # P2-7: 멘션된 프로젝트 컨텍스트를 system_prompt에 주입
             if _mentioned_projects:
@@ -7952,6 +7986,7 @@ async def send_message_stream(
                 "excluded_history_intents": list(_HISTORY_EXCLUDED_INTENTS),
                 "conversation_history_limit": 200,
                 "cli_resume_policy": "inject compact recent turns, not latest-user-only",
+                "response_mode": response_mode,
             }
             logger.info(
                 f"[PROMPT_COMPILER] compiled assets={len(_prov.get('applied_assets') or [])} "
@@ -8552,18 +8587,21 @@ async def send_message_stream(
 
         _critic_verdict = None
         try:
-            from app.services.response_critic import critique_response
+            if response_mode == _RESPONSE_MODE_FAST:
+                logger.info("response_critic_skipped_fast_mode session=%s", session_id[:8])
+            else:
+                from app.services.response_critic import critique_response
 
-            _critic_verdict = await _heartbeat_asyncio.wait_for(
-                critique_response(
-                    user_msg=content,
-                    ai_response=full_response,
-                    intent=intent,
-                    tools_called=tools_called,
-                    session_id=session_id,
-                ),
-                timeout=float(os.getenv("CRITIC_TIMEOUT_SEC", "20")),
-            )
+                _critic_verdict = await _heartbeat_asyncio.wait_for(
+                    critique_response(
+                        user_msg=content,
+                        ai_response=full_response,
+                        intent=intent,
+                        tools_called=tools_called,
+                        session_id=session_id,
+                    ),
+                    timeout=float(os.getenv("CRITIC_TIMEOUT_SEC", "20")),
+                )
         except _heartbeat_asyncio.TimeoutError:
             logger.warning("response_critic_timeout session=%s", session_id[:8])
         except Exception as _critic_err:
@@ -8660,7 +8698,7 @@ async def send_message_stream(
         try:
             from app.services.response_completion_contract import enforce_completion_contract
 
-            _auto_continue_max = max(0, _COMPLETION_AUTO_CONTINUE_MAX)
+            _auto_continue_max = 0 if response_mode == _RESPONSE_MODE_FAST else max(0, _COMPLETION_AUTO_CONTINUE_MAX)
             for _contract_attempt in range(_auto_continue_max + 1):
                 _completion_contract = await enforce_completion_contract(
                     response_text=full_response,
@@ -8814,6 +8852,43 @@ async def send_message_stream(
             auto_save_check=True,
             **_artifact_chain_kwargs,
         )
+
+        try:
+            _duration_sec = round(__import__("time").monotonic() - _trace_start_time, 3)
+            _mode_details = json.dumps(
+                {
+                    "response_mode": response_mode,
+                    "duration_sec": _duration_sec,
+                    "tool_event_count": len(tools_called or []),
+                    "completion_auto_continue_count": _completion_auto_continue_count,
+                    "critic_skipped": response_mode == _RESPONSE_MODE_FAST,
+                },
+                ensure_ascii=False,
+            )
+            async with get_pool().acquire() as _mode_conn:
+                await _mode_conn.execute(
+                    """
+                    UPDATE chat_messages
+                    SET quality_details = COALESCE(quality_details, '{}'::jsonb) || $1::jsonb
+                    WHERE id = (
+                        SELECT id FROM chat_messages
+                        WHERE session_id = $2 AND role = 'assistant'
+                        ORDER BY created_at DESC LIMIT 1
+                    )
+                    """,
+                    _mode_details,
+                    sid,
+                )
+            logger.info(
+                "chat_response_mode_recorded session=%s mode=%s duration_sec=%.3f tools=%s auto_continue=%s",
+                session_id[:8],
+                response_mode,
+                _duration_sec,
+                len(tools_called or []),
+                _completion_auto_continue_count,
+            )
+        except Exception as _mode_save_err:
+            logger.warning("chat_response_mode_record_failed session=%s error=%s", session_id[:8], _mode_save_err)
 
         # ═══ Phase C-1.5: Output Validator violation → quality_details 기록 ═══
         if not _validation.is_valid:
