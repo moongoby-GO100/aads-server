@@ -1,5 +1,12 @@
 # AADS HANDOVER
 
+
+## 현재 진행 상태 (2026-06-09 08:49 KST) - SaaS P0/P1 DB 복구 및 hot-reload 완료
+- CEO role user에서 ceo로 복구, internal tenant 멤버십 active/owner로 복원
+- 양 슬롯 hot-reload: blue 48모듈, green 67모듈
+- 검증: HEAD=origin/main=b1d04af, 8102 active, health ok, auth API 정상
+- 미커밋: manifest.json, nginx upstream (SaaS 무관)
+- 후속: 대시보드 팀원 초대 UI (P1)
 ## 현재 진행 상태 (2026-06-08 14:37 KST) - SaaS P0/P1 tenant onboarding status consistency closeout
 - 배경: CEO가 internal tenant allowlist, 일반 사용자 customer 시작, tenant_memberships 기반 팀원 초대, 가입 직후 온보딩 P0/P1 개선안을 즉시 구현하라고 재지시했다. 직전 완료보고와 workspace ledger 보정이 충돌해 Git/DB/배포 상태를 재실측했다.
 - 실측:
