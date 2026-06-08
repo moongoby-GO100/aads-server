@@ -64,6 +64,7 @@ playwright/.auth/
 *.bak.*
 app/static/gallery/media-*.jpg
 app/static/gallery/media-*.jpg
+app/static/media/generated/
 scripts/deploy-dash.sh
 scripts/deploy-dashboard-bg.sh
 scripts/run_dashboard_deploy.sh
