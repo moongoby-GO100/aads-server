@@ -9,13 +9,17 @@
   - `tests/unit/test_media_generation_service.py`에 base64 결과가 DB에 남지 않고 정적 파일로 저장되는 회귀 테스트를 추가했다.
   - 추가 P0 조치로 `/mnt/volume_sgp1_01/aads-backups`의 오래된 2026-06-03~2026-06-05 백업 3개와 0바이트 2026-06-08 백업을 제거했다.
   - `/root/aads/backups`의 중복 2026-06-06 백업을 제거하고, 최신 2026-06-07/2026-06-08 백업은 보존했다.
+  - `/root/aads/scripts/backup.sh`: 임시 gzip 파일 생성 후 `gzip -t` 검증, 0바이트/손상 gzip 제거, 외장 최신 2개 보존 정책을 추가했다.
+  - `/root/aads/scripts/disk_cleanup.sh` 및 repo mirror `scripts/disk_cleanup_v2.sh`: 외장 30일 보존을 최신 2개 보존으로 바꾸고, 0바이트/손상 gzip 정리와 `/tmp` find precedence 버그를 수정했다.
+  - `docs/AADS-BACKUP-RETENTION-POLICY.md`에 루트 3일, 외장 최신 2개, 서버5/원격 30일 목표 정책을 문서화했다.
 - 검증:
   - `python3 -m pytest tests/unit/test_media_generation_service.py` 통과(14 passed).
   - `python3 -m py_compile app/services/media_generation_service.py app/api/image.py` 통과.
   - `git diff --check -- app/services/media_generation_service.py tests/unit/test_media_generation_service.py` 통과.
-  - 2026-06-08 11:35 KST 실측 기준 `/`는 160G 중 134G 사용(84%), `/mnt/volume_sgp1_01`은 50G 중 31G 사용(65%)로 개선됐다.
+  - 2026-06-08 11:49 KST 실측 기준 `/`는 160G 중 129G 사용(81%), `/mnt/volume_sgp1_01`은 50G 중 34G 사용(71%)로 개선됐다.
+  - `bash -n /root/aads/scripts/backup.sh /root/aads/scripts/disk_cleanup.sh scripts/disk_cleanup_v2.sh` 통과.
 - 미완료/주의:
-  - `/mnt/volume_sgp1_01/aads-backups`에는 2026-06-06/2026-06-07 백업 2개를 보존했다.
+  - `/mnt/volume_sgp1_01/aads-backups`에는 2026-06-07/2026-06-08 정상 백업 2개를 보존했다.
   - 기존 `media_generation_jobs` base64 row 대량 외부화와 `VACUUM FULL`은 락/디스크 이중사용 위험이 있어 무중단 P0 범위에서 제외했다.
 
 ## 현재 진행 상태 (2026-06-08 10:39 KST) - SaaS implementation status verification

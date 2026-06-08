@@ -14,15 +14,29 @@ BEFORE=$(df / --output=pcent | tail -1 | tr -d ' %')
 # 1. 백업 관리: 외장볼륨으로 동기화 + 루트 보관 3일
 echo "[BACKUP] 외장볼륨 동기화" >> "$LOG"
 mkdir -p "$BACKUP_DST"
-cp -n "$BACKUP_SRC"/*.sql.gz "$BACKUP_DST/" 2>/dev/null
+find "$BACKUP_SRC" "$BACKUP_DST" -maxdepth 1 -type f -name "aads_*.sql.gz" -size 0 -delete 2>/dev/null
+for f in "$BACKUP_SRC"/aads_*.sql.gz "$BACKUP_DST"/aads_*.sql.gz; do
+    [ -f "$f" ] || continue
+    gzip -t "$f" 2>/dev/null || {
+        echo "[BACKUP] 손상 gzip 삭제: $f" >> "$LOG"
+        rm -f "$f"
+    }
+done
+for f in "$BACKUP_SRC"/aads_*.sql.gz; do
+    [ -f "$f" ] || continue
+    cp -n "$f" "$BACKUP_DST/" 2>/dev/null || true
+done
 # 루트에서 3일 초과 백업 삭제
 find "$BACKUP_SRC" -name "*.sql.gz" -mtime +3 -delete 2>/dev/null
 find "$BACKUP_SRC" -name "*.sql" -mtime +1 -delete 2>/dev/null
 echo "[BACKUP] 루트 3일 보관, 외장볼륨 동기화 완료" >> "$LOG"
 
-# 2. 외장볼륨 백업 보관: 30일 초과 삭제
-find "$BACKUP_DST" -name "*.sql.gz" -mtime +30 -delete 2>/dev/null
-echo "[BACKUP-EXT] 외장볼륨 30일 보관" >> "$LOG"
+# 2. 외장볼륨 백업 보관: 최신 2개만 유지
+find "$BACKUP_DST" -maxdepth 1 -type f -name "aads_*.sql.gz" -printf '%T@ %p\n' \
+    | sort -nr \
+    | awk 'NR > 2 {print $2}' \
+    | xargs -r rm -f
+echo "[BACKUP-EXT] 외장볼륨 최신 2개 보관" >> "$LOG"
 
 # 3. Docker 정리 (강화)
 echo "[DOCKER] 미사용 리소스 정리" >> "$LOG"
@@ -41,7 +55,7 @@ echo "[LOG] 로그 정리 완료" >> "$LOG"
 # 5. 캐시 정리
 npm cache clean --force 2>/dev/null
 pip cache purge 2>/dev/null
-find /tmp -maxdepth 1 -name "pip-*" -o -name "npm-*" -mtime +1 -exec rm -r {} + 2>/dev/null
+find /tmp -maxdepth 1 \( -name "pip-*" -o -name "npm-*" \) -mtime +1 -exec rm -r {} + 2>/dev/null
 echo "[CACHE] 캐시 정리 완료" >> "$LOG"
 
 # 6. 갤러리 이미지: 60일 초과분 외장볼륨 이전
