@@ -24,7 +24,7 @@ from app.core.db_pool import get_pool
 logger = logging.getLogger(__name__)
 
 # P2-2: 분기 모드에서 AI 응답에 branch_id를 자동 부여하기 위한 ContextVar
-from contextvars import ContextVar as _ContextVar
+from contextvars import ContextVar as _ContextVar  # noqa: E402
 _current_branch_id: _ContextVar[Optional[str]] = _ContextVar("_current_branch_id", default=None)
 _current_execution_id: _ContextVar[Optional[str]] = _ContextVar("_current_execution_id", default=None)
 _artifact_extraction_context: _ContextVar[Optional[Dict[str, Any]]] = _ContextVar(
@@ -93,11 +93,11 @@ def _should_auto_resume_interrupted_reason(reason: str) -> bool:
     return normalized.startswith(_AUTO_RESUME_INTERRUPTED_REASON_PREFIXES)
 
 # AADS-191 Phase1: Redis Stream 토큰 버퍼링 (서버 재시작 시 스트리밍 복구)
-from app.services import redis_stream as _redis_stream
+from app.services import redis_stream as _redis_stream  # noqa: E402
 
 
 # ── SSE heartbeat wrapper ─────────────────────────────────────────
-import asyncio as _heartbeat_asyncio
+import asyncio as _heartbeat_asyncio  # noqa: E402
 
 
 async def with_heartbeat(
@@ -139,7 +139,7 @@ async def with_heartbeat(
 # 클라이언트 SSE 연결이 끊겨도 LLM 생성을 백그라운드에서 완료하여 DB에 저장.
 # 핵심: 생성 태스크(producer)와 SSE 전송(consumer)을 asyncio.Queue로 분리.
 # 클라이언트 disconnect → consumer만 중단, producer는 독립적으로 계속 실행.
-import sys as _sys
+import sys as _sys  # noqa: E402
 _active_bg_tasks: Dict[str, _heartbeat_asyncio.Task] = getattr(
     _sys.modules.get(__name__), '_active_bg_tasks', None
 ) or {}
@@ -304,7 +304,7 @@ _HTML_CONTEXT_HEAD_LEN = 5_000
 _HTML_CONTEXT_TAIL_LEN = 3_000
 _HTML_CONTEXT_MAX_AGE = timedelta(hours=24)
 
-import time as _bg_time
+import time as _bg_time  # noqa: E402
 
 
 def _dedupe_recovery_like_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1307,6 +1307,169 @@ def _stream_interrupt_diagnostic_reason(
     return " ".join(part for part in parts if part)[:1000]
 
 
+async def _resolve_stream_execution_binding(
+    conn,
+    session_id: uuid.UUID,
+    *,
+    execution_id: Optional[uuid.UUID] = None,
+    placeholder_id: Optional[uuid.UUID] = None,
+) -> tuple[Optional[uuid.UUID], Optional[uuid.UUID]]:
+    """Find the execution/placeholder pair for partial stream preservation."""
+    resolved_eid = execution_id
+    resolved_pid = placeholder_id
+
+    if resolved_pid and not resolved_eid:
+        resolved_eid = await conn.fetchval(
+            "SELECT execution_id FROM chat_messages WHERE id = $1",
+            resolved_pid,
+        )
+
+    if not resolved_eid:
+        resolved_eid = await conn.fetchval(
+            """
+            WITH candidates AS (
+                SELECT current_execution_id AS id, 0 AS priority
+                FROM chat_sessions
+                WHERE id = $1
+                  AND current_execution_id IS NOT NULL
+                UNION ALL
+                SELECT id, 1 AS priority
+                FROM chat_turn_executions
+                WHERE session_id = $1
+                  AND status IN ('running', 'retrying')
+                  AND completed_at IS NULL
+            )
+            SELECT te.id
+            FROM candidates c
+            JOIN chat_turn_executions te ON te.id = c.id
+            WHERE te.session_id = $1
+              AND te.status IN ('running', 'retrying')
+              AND te.completed_at IS NULL
+            ORDER BY c.priority ASC, te.updated_at DESC NULLS LAST, te.started_at DESC
+            LIMIT 1
+            """,
+            session_id,
+        )
+
+    if resolved_eid and not resolved_pid:
+        resolved_pid = await conn.fetchval(
+            """
+            SELECT id
+            FROM chat_messages
+            WHERE execution_id = $1
+              AND intent = 'streaming_placeholder'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            resolved_eid,
+        )
+
+    if not resolved_pid:
+        resolved_pid = await conn.fetchval(
+            """
+            SELECT id
+            FROM chat_messages
+            WHERE session_id = $1
+              AND intent = 'streaming_placeholder'
+              AND ($2::uuid IS NULL OR execution_id = $2)
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            session_id,
+            resolved_eid,
+        )
+
+    return resolved_eid, resolved_pid
+
+
+async def _mark_orphan_stream_placeholder(
+    conn,
+    session_id: uuid.UUID,
+    *,
+    placeholder_id: Optional[uuid.UUID] = None,
+    content: str = "",
+    reason: str = "orphan_placeholder_no_execution",
+) -> Optional[asyncpg.Record]:
+    target_id = placeholder_id
+    if not target_id:
+        target_id = await conn.fetchval(
+            """
+            SELECT id
+            FROM chat_messages
+            WHERE session_id = $1
+              AND intent = 'streaming_placeholder'
+              AND execution_id IS NULL
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            session_id,
+        )
+    if not target_id:
+        return None
+
+    payload = {
+        "interruption_reason": reason,
+        "orphan_placeholder_no_execution": True,
+        "orphan_content_len": len(_strip_streaming_progress_markers(content or "")),
+    }
+    if content:
+        return await conn.fetchrow(
+            """
+            UPDATE chat_messages
+            SET content = $1,
+                quality_details = COALESCE(quality_details, '{}'::jsonb) || $2::jsonb,
+                edited_at = NOW()
+            WHERE id = $3
+            RETURNING id, created_at::text AS created_at_text
+            """,
+            content,
+            json.dumps(payload),
+            target_id,
+        )
+    return await conn.fetchrow(
+        """
+        UPDATE chat_messages
+        SET quality_details = COALESCE(quality_details, '{}'::jsonb) || $1::jsonb,
+            edited_at = NOW()
+        WHERE id = $2
+        RETURNING id, created_at::text AS created_at_text
+        """,
+        json.dumps(payload),
+        target_id,
+    )
+
+
+def _log_stream_producer_exit(
+    session_id: str,
+    state: Dict[str, Any],
+    *,
+    reason: str,
+    level: int = logging.WARNING,
+) -> None:
+    clean_content = _strip_streaming_progress_markers(state.get("content", "") or "")
+    logger.log(
+        level,
+        (
+            "stream_producer_exit "
+            "session_id=%s execution_id=%s reason=%s content_len=%s "
+            "last_event_type=%s saw_done_event=%s client_gone=%s queue_drops=%s "
+            "tool_count=%s last_tool=%s first_response=%s last_event_id=%s"
+        ),
+        str(session_id),
+        str(state.get("execution_id") or ""),
+        _diagnostic_token(reason),
+        len(clean_content),
+        _diagnostic_token(state.get("last_event_type")),
+        bool(state.get("saw_done_event")),
+        bool(state.get("client_gone")),
+        int(state.get("_sse_queue_drop_count") or 0),
+        int(state.get("tool_count") or 0),
+        _diagnostic_token(state.get("last_tool")),
+        bool(state.get("first_response_at")),
+        _diagnostic_token(state.get("last_event_id")),
+    )
+
+
 def _looks_like_incomplete_progress_tail(text: str) -> bool:
     clean = _strip_streaming_progress_markers(text or "").strip()
     if not clean:
@@ -2196,32 +2359,29 @@ async def _save_interrupted_partial_message(
     pid = uuid.UUID(str(placeholder_id)) if placeholder_id else None
     async with get_pool().acquire() as conn:
         if eid is None or pid is None:
-            active_row = await conn.fetchrow(
-                """
-                SELECT te.id AS execution_id,
-                       COALESCE(
-                           te.assistant_message_id,
-                           (
-                               SELECT id
-                               FROM chat_messages
-                               WHERE execution_id = te.id
-                                 AND intent = 'streaming_placeholder'
-                               ORDER BY created_at DESC
-                               LIMIT 1
-                           )
-                       ) AS placeholder_id
-                FROM chat_turn_executions te
-                WHERE te.session_id = $1
-                  AND te.status IN ('running', 'retrying')
-                  AND te.completed_at IS NULL
-                ORDER BY te.started_at DESC
-                LIMIT 1
-                """,
+            eid, pid = await _resolve_stream_execution_binding(
+                conn,
                 sid,
+                execution_id=eid,
+                placeholder_id=pid,
             )
-            if active_row:
-                eid = eid or active_row["execution_id"]
-                pid = pid or active_row["placeholder_id"]
+
+        if eid is None:
+            orphan = await _mark_orphan_stream_placeholder(
+                conn,
+                sid,
+                placeholder_id=pid,
+                content=final_content,
+                reason="orphan_placeholder_no_execution",
+            )
+            logger.warning(
+                "interrupted_partial_orphan_blocked session=%s reason=%s len=%s placeholder=%s",
+                str(session_id)[:8],
+                reason,
+                len(final_content),
+                str(orphan["id"])[:8] if orphan else "-",
+            )
+            return None
 
         _ti = int(tokens_in or 0)
         _to = int(tokens_out or 0)
@@ -2294,6 +2454,14 @@ async def _save_interrupted_partial_message(
             saved_id = existing["id"]
             created_at_text = existing["created_at_text"]
         else:
+            if eid is None:
+                logger.warning(
+                    "interrupted_partial_insert_blocked_no_execution session=%s reason=%s len=%s",
+                    str(session_id)[:8],
+                    reason,
+                    len(final_content),
+                )
+                return None
             saved = await conn.fetchrow(
                 """
                 INSERT INTO chat_messages (session_id, execution_id, role, content, model_used, intent, tokens_in, tokens_out)
@@ -2472,20 +2640,63 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
                     force,
                 )
             else:
-                # execution_id가 아직 없는 레거시/초기 상태 fallback
-                _inserted = await conn.fetchval(
-                    """INSERT INTO chat_messages (session_id, role, content, intent, model_used, tools_called)
-                       VALUES ($1, 'assistant', $2, 'streaming_placeholder', 'streaming', $3::jsonb)
-                       ON CONFLICT (session_id) WHERE intent = 'streaming_placeholder'
-                       DO UPDATE SET content = EXCLUDED.content, tools_called = $3::jsonb, edited_at = NOW()
-                       RETURNING (xmax = 0) AS is_new""",
-                    _sid, display_content, _tool_events_json,
-                )
-                if _inserted:
-                    await conn.execute(
-                        "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
+                _resolved_eid, _resolved_pid = await _resolve_stream_execution_binding(conn, _sid)
+                if _resolved_eid:
+                    state["execution_id"] = str(_resolved_eid)
+                    _row = await conn.fetchrow(
+                        """INSERT INTO chat_messages (session_id, execution_id, role, content, intent, model_used, tools_called)
+                           VALUES ($1, $2, 'assistant', $3, 'streaming_placeholder', 'streaming', $4::jsonb)
+                           ON CONFLICT (execution_id) WHERE intent = 'streaming_placeholder' AND execution_id IS NOT NULL
+                           DO UPDATE SET content = EXCLUDED.content, tools_called = $4::jsonb, edited_at = NOW()
+                           RETURNING id, (xmax = 0) AS is_new""",
                         _sid,
+                        _resolved_eid,
+                        display_content,
+                        _tool_events_json,
                     )
+                    if _row:
+                        await conn.execute(
+                            """
+                            UPDATE chat_turn_executions
+                            SET assistant_message_id = COALESCE(assistant_message_id, $2),
+                                status = CASE WHEN completed_at IS NULL THEN 'running' ELSE status END,
+                                updated_at = NOW()
+                            WHERE id = $1
+                              AND status IN ('running', 'retrying')
+                              AND completed_at IS NULL
+                            """,
+                            _resolved_eid,
+                            _row["id"],
+                        )
+                        await conn.execute(
+                            """
+                            UPDATE chat_sessions
+                            SET message_count = CASE WHEN $3 THEN message_count + 1 ELSE message_count END,
+                                current_execution_id = $2,
+                                updated_at = NOW()
+                            WHERE id = $1
+                            """,
+                            _sid,
+                            _resolved_eid,
+                            bool(_row["is_new"]),
+                        )
+                else:
+                    # execution_id 없이 중단/진행 버블을 새로 만들지 않는다.
+                    # 기존 orphan placeholder가 있으면 원인만 기록해 완료 오표기를 막는다.
+                    _orphan = await _mark_orphan_stream_placeholder(
+                        conn,
+                        _sid,
+                        placeholder_id=_resolved_pid,
+                        content=display_content,
+                        reason="orphan_placeholder_no_execution",
+                    )
+                    logger.warning(
+                        "interim_save_orphan_placeholder_blocked session=%s content_len=%s placeholder=%s",
+                        session_id[:8],
+                        len(_strip_streaming_progress_markers(content or "")),
+                        str(_orphan["id"])[:8] if _orphan else "-",
+                    )
+                    return
         state["_last_content_len"] = len(content)
         _sc = state.get("_save_count", 0) + 1
         state["_save_count"] = _sc
@@ -2526,6 +2737,32 @@ async def _delete_streaming_placeholder(
                 )
             if not placeholder:
                 return
+            if not execution_id:
+                _resolved_eid, _resolved_pid = await _resolve_stream_execution_binding(
+                    conn,
+                    uuid.UUID(session_id),
+                    placeholder_id=placeholder["id"],
+                )
+                if _resolved_eid:
+                    execution_id = str(_resolved_eid)
+                    placeholder = await conn.fetchrow(
+                        "SELECT id, content, created_at FROM chat_messages WHERE id = $1",
+                        _resolved_pid or placeholder["id"],
+                    )
+                else:
+                    await _mark_orphan_stream_placeholder(
+                        conn,
+                        uuid.UUID(session_id),
+                        placeholder_id=placeholder["id"],
+                        content=placeholder["content"] or "",
+                        reason="orphan_placeholder_no_execution",
+                    )
+                    logger.warning(
+                        "placeholder_delete_orphan_blocked session=%s placeholder=%s",
+                        session_id[:8],
+                        str(placeholder["id"])[:8],
+                    )
+                    return
             if execution_id:
                 _live_execution = await conn.fetchval(
                     """
@@ -3353,6 +3590,22 @@ async def with_background_completion(
             # Redis 완료 마커/placeholder 삭제는 실제 done 이벤트를 본 경우에만 수행한다.
             # 서버 SIGTERM/CancelledError 중 finally가 실행되면 중간 응답을 완료로 오인할 수 있다.
             _completed_ok = bool(state.get("saw_done_event"))
+            _exit_reason = (
+                "completed"
+                if _completed_ok
+                else (
+                    str(state.get("_producer_exception_type") or "")
+                    or str(state.get("_producer_incomplete_exit") or "")
+                    or ("rate_limited" if state.get("_rate_limited") else "")
+                    or "missing_done_event"
+                )
+            )
+            _log_stream_producer_exit(
+                session_id,
+                state,
+                reason=_exit_reason,
+                level=logging.INFO if _completed_ok else logging.WARNING,
+            )
             if not _completed_ok and not state.get("_rate_limited") and not state.get("_producer_exception_type") and not state.get("_producer_incomplete_exit"):
                 _content_len = len((state.get("content") or "").strip())
                 if _content_len > 0:
@@ -3404,19 +3657,41 @@ async def with_background_completion(
                         async def _force_save_orphan_partial() -> None:
                             _pool = get_pool()
                             async with _pool.acquire() as _conn:
-                                _ph_id = await _conn.fetchval(
-                                    "SELECT id FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' ORDER BY created_at DESC LIMIT 1",
+                                _eid, _ph_id = await _resolve_stream_execution_binding(
+                                    _conn,
                                     uuid.UUID(str(session_id)),
                                 )
-                                if _ph_id:
-                                    _marker = "\n\n_(이전 응답은 중단 처리되었습니다. 최신 지시를 우선 처리합니다.)_"
-                                    await _conn.execute(
-                                        "UPDATE chat_messages SET content = $1, intent = 'interruption_notice', model_used = 'interrupted', edited_at = NOW() WHERE id = $2",
-                                        _partial_clean + _marker, _ph_id,
+                                if _eid:
+                                    state["execution_id"] = str(_eid)
+                                    await _save_interrupted_partial_message(
+                                        session_id,
+                                        _partial_clean,
+                                        reason="background_producer_incomplete_exit",
+                                        execution_id=str(_eid),
+                                        placeholder_id=str(_ph_id) if _ph_id else None,
                                     )
-                                    logger.info("force_saved_orphan_partial session=%s len=%d placeholder=%s", session_id[:8], len(_partial_clean), str(_ph_id)[:8])
+                                    logger.info(
+                                        "force_saved_partial_bound session=%s execution=%s len=%d placeholder=%s",
+                                        session_id[:8],
+                                        str(_eid)[:8],
+                                        len(_partial_clean),
+                                        str(_ph_id)[:8] if _ph_id else "-",
+                                    )
                                 else:
-                                    logger.warning("force_save_orphan_partial_no_placeholder session=%s len=%d", session_id[:8], len(_partial_clean))
+                                    _marker = "\n\n_(이전 응답은 중단 처리되었습니다. 최신 지시를 우선 처리합니다.)_"
+                                    _orphan = await _mark_orphan_stream_placeholder(
+                                        _conn,
+                                        uuid.UUID(str(session_id)),
+                                        placeholder_id=_ph_id,
+                                        content=_partial_clean + _marker,
+                                        reason="orphan_placeholder_no_execution",
+                                    )
+                                    logger.warning(
+                                        "force_save_orphan_partial_blocked session=%s len=%d placeholder=%s",
+                                        session_id[:8],
+                                        len(_partial_clean),
+                                        str(_orphan["id"])[:8] if _orphan else "-",
+                                    )
                         await _retry_background_finalize_step(
                             session_id=session_id,
                             execution_id=None,
@@ -6032,7 +6307,7 @@ async def run_discussion(
 
 
 # ── 재귀 방지 플래그: trigger_ai_reaction → send_message_stream → tool → trigger 무한 루프 차단 ──
-import time as _time
+import time as _time  # noqa: E402
 _ai_reaction_active: dict[str, float] = {}  # session_id → timestamp
 _ai_reaction_queue: dict[str, list[str]] = {}  # session_id → 대기 메시지 리스트
 _AI_REACTION_MAX_QUEUE = 5
@@ -6136,7 +6411,7 @@ async def trigger_ai_reaction(
             _ai_reaction_queue[session_id] = []
         q = _ai_reaction_queue[session_id]
         if len(q) >= _AI_REACTION_MAX_QUEUE:
-            dropped = q.pop(0)
+            dropped = q.pop(0)  # noqa: F841
             logger.warning(f"trigger_ai_reaction: queue full, dropped oldest for session={session_id[:8]}...")
         q.append(safe_message)
         logger.info(f"trigger_ai_reaction: queued (active) session={session_id[:8]}... queue_size={len(q)}")

@@ -441,6 +441,60 @@ async def test_delete_streaming_placeholder_marks_final_missing_as_interrupted_p
 
 
 @pytest.mark.asyncio
+async def test_save_interrupted_partial_binds_missing_execution_to_active_execution():
+    session_id = str(uuid.uuid4())
+    execution_id = uuid.uuid4()
+    placeholder_id = uuid.uuid4()
+    created_at = datetime.now(timezone.utc)
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(side_effect=[
+        execution_id,  # _resolve_stream_execution_binding: current/recent running execution
+        placeholder_id,  # _resolve_stream_execution_binding: placeholder for execution
+    ])
+    conn.fetchrow = AsyncMock(return_value={
+        "id": placeholder_id,
+        "created_at_text": created_at.isoformat(),
+    })
+    conn.execute = AsyncMock()
+
+    with patch("app.services.chat_service.get_pool", return_value=_Pool(conn)):
+        result = await chat_service._save_interrupted_partial_message(
+            session_id,
+            "부분 응답입니다.",
+            reason="background_producer_incomplete_exit",
+        )
+
+    assert result is not None
+    assert result["execution_id"] == str(execution_id)
+    executed_sql = [" ".join(call.args[0].split()) for call in conn.execute.await_args_list]
+    assert any("UPDATE chat_turn_executions" in sql for sql in executed_sql)
+
+
+@pytest.mark.asyncio
+async def test_save_interrupted_partial_blocks_orphan_insert_without_execution():
+    session_id = str(uuid.uuid4())
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(side_effect=[
+        None,  # active execution
+        None,  # session placeholder
+        None,  # orphan placeholder to mark
+    ])
+    conn.fetchrow = AsyncMock()
+    conn.execute = AsyncMock()
+
+    with patch("app.services.chat_service.get_pool", return_value=_Pool(conn)):
+        result = await chat_service._save_interrupted_partial_message(
+            session_id,
+            "실행 연결이 없는 부분 응답입니다.",
+            reason="background_producer_incomplete_exit",
+        )
+
+    assert result is None
+    executed_sql = [" ".join(call.args[0].split()) for call in conn.fetchrow.await_args_list]
+    assert not any("INSERT INTO chat_messages" in sql and "interrupted_partial" in sql for sql in executed_sql)
+
+
+@pytest.mark.asyncio
 async def test_cleanup_deleted_duplicate_messages_dry_run_does_not_delete():
     session_id = uuid.uuid4()
     conn = AsyncMock()

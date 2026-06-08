@@ -1816,3 +1816,16 @@
   - `npx eslint src/app/chat/page.tsx` 결과 0 errors, 기존 warning 23개.
   - `npm run build` 결과 Next.js build 성공, 52 routes generated.
 - 주의: `npm run lint` 전체는 기존 전역 lint 부채 277 errors/69 warnings로 실패한다. 이번 수정 파일에는 새 lint error가 없다.
+
+## 2026-06-08 12:18 KST - Chat orphan placeholder guard and producer exit trace
+- 배경: CEO가 P0/P1로 `execution_id=NULL` 중단 버블 저장 금지, producer 종료 구조화 로그, `streaming_placeholder` 프론트 상태 분리 표시를 즉시 조치하라고 지시했다.
+- 조치:
+  - `app/services/chat_service.py`에 `_resolve_stream_execution_binding()`을 추가했다. partial/placeholder 보존 시 `chat_sessions.current_execution_id`와 최근 `running/retrying` 실행을 우선 찾아 반드시 연결한다.
+  - 실행을 끝까지 못 찾으면 `interrupted_partial`/`interruption_notice` 신규 저장을 막고, 기존 orphan `streaming_placeholder`에만 `quality_details.interruption_reason='orphan_placeholder_no_execution'`을 기록한다.
+  - producer `finally`에서 `stream_producer_exit session_id/execution_id/reason/content_len/last_event_type/saw_done_event/client_gone/queue_drops/tool_count/last_tool/first_response/last_event_id` 구조화 로그를 항상 남긴다.
+  - 대시보드 `src/app/chat/page.tsx`는 비활성 `streaming_placeholder`를 더 이상 활성 생성 중으로 렌더하지 않고 `생성 중`, `재시도 대기`, `이어쓰기 가능`, `상태 확인 필요`, `중단됨`으로 분리 표시한다. 내용 있는 비활성 placeholder는 `▶ 이어서` 대상이 된다.
+- 검증:
+  - `python3 -m py_compile app/services/chat_service.py` 통과.
+  - `JWT_SECRET_KEY=test-secret python3 -m pytest tests/unit/test_chat_service.py -q` 결과 39 passed, 1 warning. 신규 테스트 2건으로 active execution binding과 orphan insert block을 확인했다.
+  - `npx eslint src/app/chat/page.tsx` 결과 0 errors, 기존 warning 23개.
+- 배포 상태: 코드 수정/문서기록/로컬 검증 완료. 커밋, 푸시, blue-green 배포는 아직 수행하지 않았다.
