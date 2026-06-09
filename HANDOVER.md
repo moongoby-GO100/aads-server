@@ -1,6 +1,17 @@
 # AADS HANDOVER
 
 
+## 현재 진행 상태 (2026-06-09 11:00 KST) - CEO Chat AI 리뷰 diff 판정 수정 완료
+- 배경: CEO Chat에서 비코드 파일(.md 등)만 커밋 시 AI 리뷰가 INVALID_REVIEW_INPUT(score=0.1)으로 차단
+- 원인: tool_run_remote_command가 빈 출력도 헤더로 감싸서 staged_diff.strip()이 truthy → 빈 diff가 code_reviewer로 전달
+- 수정 (app/api/ceo_chat_tools.py:2698, commit 7a2cdfd):
+  - Before: if staged_diff and staged_diff.strip() and "[ERROR]" not in staged_diff:
+  - After: if staged_diff and "diff --git" in staged_diff and "[ERROR]" not in staged_diff:
+- 파이프라인 러너는 별도 경로(_ssh_command → raw 출력)이므로 동일 버그 없음 확인
+- 검증: py_compile/AST 통과, blue/green 볼륨 마운트 반영 확인
+- HEAD: 7a2cdfd (push 완료)
+- 후속: 대시보드 팀원 초대/온보딩 UI (P1), 미커밋 운영파일 정리
+
 ## 현재 진행 상태 (2026-06-09 10:15 KST) - INVALID_GIT_DIFF 수정 완료
 - 배경: Pipeline Runner AI 리뷰에서 git diff HEAD가 빈 결과 반환 → INVALID_GIT_DIFF(score=0.1) 차단
 - 원인: Claude Code가 worktree에서 자체 커밋 → git diff HEAD(uncommitted만)는 빈 diff
