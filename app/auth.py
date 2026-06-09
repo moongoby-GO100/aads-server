@@ -768,6 +768,67 @@ async def create_tenant_invite(
     return result
 
 
+async def list_tenant_members(tenant_id: str) -> list[dict]:
+    await require_saas_schema_ready()
+    pool = await _ensure_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT tm.id::text AS membership_id,
+                   tm.tenant_id::text,
+                   tm.user_id,
+                   tm.role,
+                   tm.status,
+                   tm.created_at,
+                   tm.updated_at,
+                   u.email,
+                   u.name
+              FROM tenant_memberships tm
+              JOIN saas_users u ON u.id = tm.user_id
+             WHERE tm.tenant_id = $1::uuid
+               AND tm.deleted_at IS NULL
+               AND u.deleted_at IS NULL
+             ORDER BY
+                   CASE tm.role
+                       WHEN 'owner' THEN 1
+                       WHEN 'admin' THEN 2
+                       WHEN 'member' THEN 3
+                       ELSE 4
+                   END,
+                   lower(u.email)
+            """,
+            tenant_id,
+        )
+    return [dict(row) for row in rows]
+
+
+async def list_tenant_pending_invites(tenant_id: str) -> list[dict]:
+    await require_saas_schema_ready()
+    pool = await _ensure_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT ti.id::text AS invite_id,
+                   ti.tenant_id::text,
+                   ti.email,
+                   ti.role,
+                   ti.status,
+                   ti.expires_at,
+                   ti.created_at,
+                   ti.updated_at,
+                   u.email AS invited_by_email
+              FROM tenant_invites ti
+              LEFT JOIN saas_users u ON u.id = ti.invited_by
+             WHERE ti.tenant_id = $1::uuid
+               AND ti.status = 'pending'
+               AND ti.deleted_at IS NULL
+             ORDER BY ti.created_at DESC
+            """,
+            tenant_id,
+        )
+    return [dict(row) for row in rows]
+
+
 async def accept_tenant_invite(
     *,
     token: str,

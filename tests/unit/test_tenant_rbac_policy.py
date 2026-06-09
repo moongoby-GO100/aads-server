@@ -53,10 +53,12 @@ def test_saas_onboarding_api_contract_exists_and_is_role_guarded():
         inspect.getsource(auth_router.create_tenant),
         inspect.getsource(auth_router.complete_onboarding),
         inspect.getsource(auth_router.switch_tenant),
+        inspect.getsource(auth_router.list_tenant_members),
         inspect.getsource(auth_router.get_tenant_usage),
     ]
     admin_sources = [
         inspect.getsource(auth_router.create_tenant_invite),
+        inspect.getsource(auth_router.list_tenant_invites),
         inspect.getsource(auth_router.update_tenant_plan),
     ]
 
@@ -64,6 +66,8 @@ def test_saas_onboarding_api_contract_exists_and_is_role_guarded():
     assert all("Depends(require_tenant_role(TenantRole.ADMIN))" in source for source in admin_sources)
     assert all("accept_tenant_invite" in source for source in public_sources)
     assert "_assert_path_tenant(context, tenant_id)" in inspect.getsource(auth_router.create_tenant_invite)
+    assert "_assert_path_tenant(context, tenant_id)" in inspect.getsource(auth_router.list_tenant_members)
+    assert "_assert_path_tenant(context, tenant_id)" in inspect.getsource(auth_router.list_tenant_invites)
     assert "_assert_path_tenant(context, tenant_id)" in inspect.getsource(auth_router.update_tenant_plan)
     assert "get_tenant_usage_summary" in inspect.getsource(auth_router.get_tenant_usage)
     assert "team_invites" in inspect.getsource(auth_router.RegisterRequest)
@@ -80,6 +84,8 @@ def test_saas_onboarding_service_uses_invite_tokens_and_memberships():
         inspect.getsource(auth_module.switch_user_tenant),
         inspect.getsource(auth_module.update_tenant_plan),
         inspect.getsource(auth_module.resolve_login_tenant_for_user),
+        inspect.getsource(auth_module.list_tenant_members),
+        inspect.getsource(auth_module.list_tenant_pending_invites),
     ]
     source = "\n".join(service_sources)
 
@@ -91,6 +97,7 @@ def test_saas_onboarding_service_uses_invite_tokens_and_memberships():
     assert "jsonb_set" in inspect.getsource(auth_module.update_tenant_plan)
     assert "Internal tenant invites are restricted" in inspect.getsource(auth_module.create_tenant_invite)
     assert "Customer tenant membership required" in inspect.getsource(auth_module.finalize_customer_tenant_onboarding)
+    assert "token_hash" not in inspect.getsource(auth_module.list_tenant_pending_invites).split("SELECT", 1)[1]
 
 
 def test_internal_tenant_is_admin_only_for_saas_users():

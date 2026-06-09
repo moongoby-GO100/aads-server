@@ -313,6 +313,32 @@ async def create_tenant_invite(
     )
 
 
+@router.get("/auth/tenants/{tenant_id}/members")
+async def list_tenant_members(
+    tenant_id: str,
+    context: dict = Depends(require_tenant_role(TenantRole.VIEWER)),
+):
+    """조직 팀원 목록 조회."""
+    _assert_path_tenant(context, tenant_id)
+    return {
+        "tenant_id": tenant_id,
+        "members": await auth_module.list_tenant_members(tenant_id),
+    }
+
+
+@router.get("/auth/tenants/{tenant_id}/invites")
+async def list_tenant_invites(
+    tenant_id: str,
+    context: dict = Depends(require_tenant_role(TenantRole.ADMIN)),
+):
+    """조직 관리자용 pending 초대 목록 조회. 초대 token은 재노출하지 않는다."""
+    _assert_path_tenant(context, tenant_id)
+    return {
+        "tenant_id": tenant_id,
+        "invites": await auth_module.list_tenant_pending_invites(tenant_id),
+    }
+
+
 @router.post("/auth/invites/accept", response_model=AuthResponse)
 async def accept_tenant_invite(req: TenantInviteAcceptRequest):
     """초대 토큰 수락. 신규 사용자는 생성하고, 기존 사용자는 비밀번호로 본인 확인한다."""
