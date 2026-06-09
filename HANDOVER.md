@@ -1,5 +1,20 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-09 10:16 KST) - SaaS team onboarding final closeout revalidation
+- 목적: CEO가 직전 완료보고의 커밋/푸시/배포/문서 ledger 불일치를 지적하여, 실제 현재 상태를 재검증하고 최종 완료 기준을 다시 고정했다.
+- 재검증 결과:
+  - 서버 repo: `HEAD=bad3efd`, `origin/main=bad3efd` 일치. 커밋 `bad3efd docs: finalize team onboarding deployment report`까지 push 완료.
+  - 대시보드 repo: `HEAD=a89101f`, `origin/main=a89101f` 일치. 커밋 `a89101f fix(saas): preserve invite links after hydration`까지 push 완료.
+  - 백엔드 컨테이너 테스트: `docker exec aads-server python -m pytest tests/unit/test_tenant_rbac_policy.py tests/unit/test_tenant_usage_limits.py` 통과(16 passed, 기존 FastAPI warning 1건).
+  - 대시보드 한정 lint: `npm run lint -- src/app/team/page.tsx src/app/onboarding/page.tsx src/app/invite/accept/page.tsx src/lib/auth.ts src/middleware.ts src/components/ClientLayout.tsx src/components/Sidebar.tsx` 통과.
+  - 대시보드 production build: `npm run build` 통과. route 목록에 `/team`, `/onboarding`, `/invite/accept` 포함 확인.
+  - 운영 HTTP: `https://aads.newtalk.kr/team` 비로그인 307(`/login?redirect=%2Fteam`), `https://aads.newtalk.kr/invite/accept?token=test` 200 확인.
+  - OpenAPI: `/api/v1/auth/tenants/{tenant_id}/members`, `/api/v1/auth/tenants/{tenant_id}/invites`, `/api/v1/auth/invites/accept`, `/api/v1/auth/onboarding` 노출 확인.
+- 남은 주의:
+  - 서버 repo에는 `.active_container`, `.active_port`, `nginx-aads-upstream.conf`, gallery manifest/changelog/xlsx 등 unrelated runtime/export 변경이 남아 있다. 이번 closeout 커밋 대상이 아니므로 보존했다.
+  - 대시보드 repo에는 `public/exports/*.xlsx` untracked 파일이 남아 있다. 이번 SaaS UI 커밋 대상이 아니므로 보존했다.
+  - 인증 로그인 후 실제 초대 생성/수락 E2E는 CEO 계정 세션/자격증명 기반 브라우저 검증이 필요하여 이번 재검증에서는 미실행했다. API/HTTP/컨테이너 검증으로 대체했다.
+
 ## 현재 진행 상태 (2026-06-09 09:23 KST) - SaaS 팀원 초대/온보딩 대시보드 UI 구현
 - 배경: CEO가 AADS 팀원 추가와 신규 가입 온보딩을 dashboard에서 즉시 처리할 수 있게 구현하라고 지시했다.
 - 백엔드 구현:
