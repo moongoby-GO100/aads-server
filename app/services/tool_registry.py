@@ -146,6 +146,13 @@ _DEFER_LOADING: Dict[str, bool] = {
     "credential_delete": True,        # 온디맨드
     "credential_test_login": True,    # 온디맨드
     "get_e2e_login_url": True,        # 온디맨드
+    "google_sheets_register": True,   # 온디맨드
+    "google_sheets_read": True,       # 온디맨드
+    "google_sheets_update": True,     # 온디맨드
+    "google_sheets_append": True,     # 온디맨드
+    "google_sheets_write_records": True,  # 온디맨드
+    "google_sheets_clear": True,      # 온디맨드
+    "google_sheets_create": True,     # 온디맨드
     # ── CEO 아젠다 관리 ────────────────────────────────────────────────
     "add_agenda": False,              # 핵심 — CEO/CTO 아젠다 등록
     "list_agendas": False,            # 핵심 — 아젠다 목록 조회
@@ -2779,6 +2786,108 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "required": ["project"],
         },
     },
+    "google_sheets_register": {
+        "name": "google_sheets_register",
+        "description": "Google Sheets 서비스계정 JSON을 Vault에 암호화 등록합니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "service_account_json": {"type": "object", "description": "Google service-account JSON"},
+                "project": {"type": "string", "default": "AADS"},
+                "label": {"type": "string", "default": "default"},
+                "scopes": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["service_account_json"],
+        },
+    },
+    "google_sheets_read": {
+        "name": "google_sheets_read",
+        "description": "Google Sheets 범위를 읽습니다. spreadsheet_id는 URL 또는 ID 모두 허용.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "credential_id": {"type": "string"},
+                "spreadsheet_id": {"type": "string"},
+                "range_name": {"type": "string"},
+                "major_dimension": {"type": "string", "enum": ["ROWS", "COLUMNS"], "default": "ROWS"},
+            },
+            "required": ["credential_id", "spreadsheet_id", "range_name"],
+        },
+    },
+    "google_sheets_update": {
+        "name": "google_sheets_update",
+        "description": "Google Sheets 지정 범위를 2D values로 덮어씁니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "credential_id": {"type": "string"},
+                "spreadsheet_id": {"type": "string"},
+                "range_name": {"type": "string"},
+                "values": {"type": "array", "items": {"type": "array", "items": {}}},
+                "value_input_option": {"type": "string", "enum": ["RAW", "USER_ENTERED"], "default": "USER_ENTERED"},
+            },
+            "required": ["credential_id", "spreadsheet_id", "range_name", "values"],
+        },
+    },
+    "google_sheets_append": {
+        "name": "google_sheets_append",
+        "description": "Google Sheets 지정 범위 아래에 행을 추가합니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "credential_id": {"type": "string"},
+                "spreadsheet_id": {"type": "string"},
+                "range_name": {"type": "string"},
+                "values": {"type": "array", "items": {"type": "array", "items": {}}},
+                "value_input_option": {"type": "string", "enum": ["RAW", "USER_ENTERED"], "default": "USER_ENTERED"},
+                "insert_data_option": {"type": "string", "enum": ["INSERT_ROWS", "OVERWRITE"], "default": "INSERT_ROWS"},
+            },
+            "required": ["credential_id", "spreadsheet_id", "range_name", "values"],
+        },
+    },
+    "google_sheets_write_records": {
+        "name": "google_sheets_write_records",
+        "description": "dict 배열을 표 형태로 Google Sheets에 씁니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "credential_id": {"type": "string"},
+                "spreadsheet_id": {"type": "string"},
+                "range_name": {"type": "string"},
+                "records": {"type": "array", "items": {"type": "object"}},
+                "headers": {"type": "array", "items": {"type": "string"}},
+                "include_header": {"type": "boolean", "default": True},
+                "mode": {"type": "string", "enum": ["update", "append"], "default": "update"},
+            },
+            "required": ["credential_id", "spreadsheet_id", "range_name", "records"],
+        },
+    },
+    "google_sheets_clear": {
+        "name": "google_sheets_clear",
+        "description": "Google Sheets 지정 범위를 비웁니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "credential_id": {"type": "string"},
+                "spreadsheet_id": {"type": "string"},
+                "range_name": {"type": "string"},
+            },
+            "required": ["credential_id", "spreadsheet_id", "range_name"],
+        },
+    },
+    "google_sheets_create": {
+        "name": "google_sheets_create",
+        "description": "서비스계정 소유의 새 Google Spreadsheet를 생성합니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "credential_id": {"type": "string"},
+                "title": {"type": "string"},
+                "sheet_titles": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["credential_id", "title"],
+        },
+    },
     # ── CEO 아젠다 관리 (AADS-CEO-AGENDA) ────────────────────────────────────
     "add_agenda": {
         "name": "add_agenda",
@@ -2954,7 +3063,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
-    "action": ["directive_create", "create_design_modification_request", "todo_write", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status"],
+    "action": ["directive_create", "create_design_modification_request", "todo_write", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "google_sheets_register", "google_sheets_read", "google_sheets_update", "google_sheets_append", "google_sheets_write_records", "google_sheets_clear", "google_sheets_create", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status"],
     "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)

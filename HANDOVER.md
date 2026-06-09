@@ -1,5 +1,44 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-09 09:23 KST) - SaaS 팀원 초대/온보딩 대시보드 UI 구현
+- 배경: CEO가 AADS 팀원 추가와 신규 가입 온보딩을 dashboard에서 즉시 처리할 수 있게 구현하라고 지시했다.
+- 백엔드 구현:
+  - `app/auth.py`: `list_tenant_members`, `list_tenant_pending_invites` 추가. 기존 `tenant_memberships`, `tenant_invites`, `saas_users`만 조회하며 invite token hash는 노출하지 않는다.
+  - `app/api/auth.py`: `GET /api/v1/auth/tenants/{tenant_id}/members`, `GET /api/v1/auth/tenants/{tenant_id}/invites` 추가. members는 viewer 이상, pending invites는 admin 이상으로 제한하고 path tenant 검증을 적용했다.
+  - `tests/unit/test_tenant_rbac_policy.py`: 새 endpoint role guard, tenant path guard, invite token hash 비노출 정적 검증 추가.
+- 대시보드 구현:
+  - `src/app/team/page.tsx`: 조직 선택, tenant switch, 팀원 목록, pending 초대 목록, admin/owner 초대 링크 생성/복사 UI 추가.
+  - `src/app/invite/accept/page.tsx`: 공개 초대 수락 화면 추가. token, 이름, 비밀번호를 받아 수락 후 JWT 저장 및 `/chat` 이동.
+  - `src/app/onboarding/page.tsx`: 가입 직후 조직명/팀원 초대 제출 후 생성된 초대 링크를 표시/복사하도록 보강.
+  - `src/lib/auth.ts`: tenant/team/invite API client와 타입 추가.
+  - `src/middleware.ts`, `src/components/ClientLayout.tsx`, `src/components/Sidebar.tsx`: `/invite/accept` 공개 허용, sidebar 예외/Team 메뉴 추가.
+- 검증:
+  - `pytest tests/unit/test_tenant_rbac_policy.py -q` 통과(11 passed, 기존 warning 1건).
+  - `python3 -m py_compile app/auth.py app/api/auth.py` 통과.
+  - `npm run lint -- src/app/team/page.tsx src/app/onboarding/page.tsx src/app/invite/accept/page.tsx src/lib/auth.ts src/middleware.ts src/components/ClientLayout.tsx src/components/Sidebar.tsx` 통과.
+  - `npm run build` 통과, route 목록에 `/team`, `/invite/accept`, `/onboarding` 포함 확인.
+- 미완료/주의:
+  - 운영 DB 마이그레이션은 불필요(기존 SaaS 테이블 사용).
+  - 서버 repo와 dashboard repo 모두 기존 unrelated dirty 파일이 있어 선별 커밋 필요.
+  - 배포/푸시는 아직 수행하지 않았다.
+
+## 현재 진행 상태 (2026-06-09 09:13 KST) - Google Sheets Connector 1차 구현
+- 배경: CEO가 AADS에서 Google Spreadsheet 파일을 편집/운영 가능한지 확인 후 구현 진행을 지시했다.
+- 구현:
+  - `app/services/google_sheets_service.py`: 서비스계정 기반 Google Sheets 커넥터 신규 추가. Vault 등록, 시트 생성, 범위 읽기, 범위 덮어쓰기, 행 추가, 레코드(dict 배열) 쓰기, 범위 삭제 지원.
+  - `app/api/google_sheets.py`: `/api/v1/google-sheets/*` API 신규 추가. SaaS tenant RBAC를 적용해 조회는 viewer, 쓰기는 member 이상으로 제한.
+  - `app/core/credential_vault.py`: `include_secrets=True`일 때 encrypted `extra_fields`도 복호화되도록 보강.
+  - `app/api/ceo_chat_tools.py`, `app/services/tool_executor.py`, `app/services/tool_registry.py`: `google_sheets_*` 채팅 도구 등록 및 현재 채팅 tenant 자동 주입 보강.
+  - `pyproject.toml`: `google-api-python-client`, `google-auth` 의존성 추가.
+  - `tests/unit/test_google_sheets_service.py`: 서비스계정 검증, spreadsheet URL 파싱, 레코드 변환, 도구 등록 회귀 테스트 추가.
+- 운영 전제: 서비스계정 이메일을 대상 스프레드시트에 공유해야 기존 파일 읽기/쓰기가 가능하다. 새 시트 생성은 서비스계정 소유로 생성된다.
+- 추가 검증(2026-06-09 09:40 KST):
+  - `git diff --check -- HANDOVER.md app/api/ceo_chat_tools.py app/core/credential_vault.py app/main.py app/services/tool_executor.py app/services/tool_registry.py pyproject.toml app/api/google_sheets.py app/services/google_sheets_service.py tests/unit/test_google_sheets_service.py` 통과.
+  - `python3 -m compileall app/api/google_sheets.py app/services/google_sheets_service.py app/api/ceo_chat_tools.py app/services/tool_executor.py app/services/tool_registry.py app/core/credential_vault.py app/main.py` 통과.
+  - `JWT_SECRET_KEY=test python3 -c "from app.api.google_sheets import router; from app.services.google_sheets_service import google_sheets_service; print('ok', router.prefix, type(google_sheets_service).__name__)"` 통과.
+  - `python3 -c "import googleapiclient.discovery, google.oauth2.service_account; print('google-api-ok')"` 통과.
+  - `pytest tests/unit/test_google_sheets_service.py tests/unit/test_credential_vault.py tests/unit/test_tool_executor_aliases.py` 통과(15 passed).
+- 미완료: 실제 Google API E2E는 서비스계정 JSON이 없어 미실행. 커밋/푸시/배포는 기존 unrelated dirty 파일이 섞인 상태라 CEO 승인 후 선별 처리 필요.
 
 ## 현재 진행 상태 (2026-06-09 11:00 KST) - CEO Chat AI 리뷰 diff 판정 수정 완료
 - 배경: CEO Chat에서 비코드 파일(.md 등)만 커밋 시 AI 리뷰가 INVALID_REVIEW_INPUT(score=0.1)으로 차단

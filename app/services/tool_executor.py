@@ -590,6 +590,13 @@ class ToolExecutor:
             "credential_register": self._credential_register,
             "credential_test_login": self._credential_test_login,
             "get_e2e_login_url": self._get_e2e_login_url,
+            "google_sheets_register": self._google_sheets_register,
+            "google_sheets_read": self._google_sheets_read,
+            "google_sheets_update": self._google_sheets_update,
+            "google_sheets_append": self._google_sheets_append,
+            "google_sheets_write_records": self._google_sheets_write_records,
+            "google_sheets_clear": self._google_sheets_clear,
+            "google_sheets_create": self._google_sheets_create,
             # 첨부파일 재읽기
             "read_uploaded_file":     self._read_uploaded_file,
             # 작업 모니터
@@ -4784,6 +4791,48 @@ class ToolExecutor:
         """E2E 브라우저 자동 로그인 URL 생성."""
         from app.api.ceo_chat_tools import execute_tool
         return await execute_tool("get_e2e_login_url", inp, "", "")
+
+    async def _google_sheets_register(self, inp: Dict[str, Any]) -> Any:
+        """Register a Google Sheets service-account credential."""
+        from app.api.ceo_chat_tools import execute_tool
+        session_id = str(inp.get("session_id") or current_chat_session_id.get("") or "").strip()
+        return await execute_tool("google_sheets_register", inp, "", session_id)
+
+    async def _google_sheets_read(self, inp: Dict[str, Any]) -> Any:
+        """Read a Google Sheets range."""
+        from app.api.ceo_chat_tools import execute_tool
+        session_id = str(inp.get("session_id") or current_chat_session_id.get("") or "").strip()
+        return await execute_tool("google_sheets_read", inp, "", session_id)
+
+    async def _google_sheets_update(self, inp: Dict[str, Any]) -> Any:
+        """Update a Google Sheets range."""
+        from app.api.ceo_chat_tools import execute_tool
+        session_id = str(inp.get("session_id") or current_chat_session_id.get("") or "").strip()
+        return await execute_tool("google_sheets_update", inp, "", session_id)
+
+    async def _google_sheets_append(self, inp: Dict[str, Any]) -> Any:
+        """Append rows to Google Sheets."""
+        from app.api.ceo_chat_tools import execute_tool
+        session_id = str(inp.get("session_id") or current_chat_session_id.get("") or "").strip()
+        return await execute_tool("google_sheets_append", inp, "", session_id)
+
+    async def _google_sheets_write_records(self, inp: Dict[str, Any]) -> Any:
+        """Write records to Google Sheets."""
+        from app.api.ceo_chat_tools import execute_tool
+        session_id = str(inp.get("session_id") or current_chat_session_id.get("") or "").strip()
+        return await execute_tool("google_sheets_write_records", inp, "", session_id)
+
+    async def _google_sheets_clear(self, inp: Dict[str, Any]) -> Any:
+        """Clear a Google Sheets range."""
+        from app.api.ceo_chat_tools import execute_tool
+        session_id = str(inp.get("session_id") or current_chat_session_id.get("") or "").strip()
+        return await execute_tool("google_sheets_clear", inp, "", session_id)
+
+    async def _google_sheets_create(self, inp: Dict[str, Any]) -> Any:
+        """Create a Google Spreadsheet."""
+        from app.api.ceo_chat_tools import execute_tool
+        session_id = str(inp.get("session_id") or current_chat_session_id.get("") or "").strip()
+        return await execute_tool("google_sheets_create", inp, "", session_id)
 
 # ─── 하위 호환성 ─────────────────────────────────────────────────────────────
 

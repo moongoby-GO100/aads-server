@@ -187,6 +187,14 @@ async def get_credential(
             item["password"] = decrypt_value(item["password_enc"])
         except Exception:
             item["password"] = "[복호화 실패]"
+        if item.get("extra_fields"):
+            dec_extra = {}
+            for k, v in item["extra_fields"].items():
+                try:
+                    dec_extra[k] = decrypt_value(str(v))
+                except Exception:
+                    dec_extra[k] = v
+            item["extra_fields"] = dec_extra
     else:
         item["password"] = "********"
 

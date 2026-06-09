@@ -1689,6 +1689,112 @@ TOOL_DEFINITIONS: List[Dict] = [
             "required": ["credential_id"],
         },
     },
+    # ── Google Sheets 도구 ─────────────────────────────────────────────────
+    {
+        "name": "google_sheets_register",
+        "description": "Google Sheets 서비스계정 JSON을 Vault에 암호화 등록합니다. 등록 후 반환된 credential_id로 시트를 읽고 씁니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "service_account_json": {
+                    "type": "object",
+                    "description": "Google Cloud 서비스계정 JSON. private_key 포함 민감값이므로 응답에 노출하지 않습니다.",
+                },
+                "project": {"type": "string", "description": "AADS 프로젝트 범위 (기본 AADS)"},
+                "label": {"type": "string", "description": "Vault 라벨 (기본 default)"},
+                "scopes": {"type": "array", "items": {"type": "string"}, "description": "선택 OAuth scope 목록"},
+            },
+            "required": ["service_account_json"],
+        },
+    },
+    {
+        "name": "google_sheets_read",
+        "description": "Google Sheets 범위를 읽습니다. spreadsheet_id는 URL 또는 raw id 모두 허용합니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "credential_id": {"type": "string", "description": "Vault credential UUID"},
+                "spreadsheet_id": {"type": "string", "description": "Spreadsheet URL 또는 ID"},
+                "range_name": {"type": "string", "description": "A1 range 예: Sheet1!A1:C10"},
+                "major_dimension": {"type": "string", "enum": ["ROWS", "COLUMNS"], "default": "ROWS"},
+            },
+            "required": ["credential_id", "spreadsheet_id", "range_name"],
+        },
+    },
+    {
+        "name": "google_sheets_update",
+        "description": "Google Sheets 지정 범위를 values로 덮어씁니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "credential_id": {"type": "string"},
+                "spreadsheet_id": {"type": "string"},
+                "range_name": {"type": "string"},
+                "values": {"type": "array", "items": {"type": "array", "items": {}}},
+                "value_input_option": {"type": "string", "enum": ["RAW", "USER_ENTERED"], "default": "USER_ENTERED"},
+            },
+            "required": ["credential_id", "spreadsheet_id", "range_name", "values"],
+        },
+    },
+    {
+        "name": "google_sheets_append",
+        "description": "Google Sheets 지정 범위 아래에 행을 추가합니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "credential_id": {"type": "string"},
+                "spreadsheet_id": {"type": "string"},
+                "range_name": {"type": "string"},
+                "values": {"type": "array", "items": {"type": "array", "items": {}}},
+                "value_input_option": {"type": "string", "enum": ["RAW", "USER_ENTERED"], "default": "USER_ENTERED"},
+                "insert_data_option": {"type": "string", "enum": ["INSERT_ROWS", "OVERWRITE"], "default": "INSERT_ROWS"},
+            },
+            "required": ["credential_id", "spreadsheet_id", "range_name", "values"],
+        },
+    },
+    {
+        "name": "google_sheets_write_records",
+        "description": "dict 배열을 헤더 포함 표 형태로 Google Sheets에 씁니다. mode=update 또는 append.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "credential_id": {"type": "string"},
+                "spreadsheet_id": {"type": "string"},
+                "range_name": {"type": "string"},
+                "records": {"type": "array", "items": {"type": "object"}},
+                "headers": {"type": "array", "items": {"type": "string"}},
+                "include_header": {"type": "boolean", "default": True},
+                "mode": {"type": "string", "enum": ["update", "append"], "default": "update"},
+            },
+            "required": ["credential_id", "spreadsheet_id", "range_name", "records"],
+        },
+    },
+    {
+        "name": "google_sheets_clear",
+        "description": "Google Sheets 지정 범위를 비웁니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "credential_id": {"type": "string"},
+                "spreadsheet_id": {"type": "string"},
+                "range_name": {"type": "string"},
+            },
+            "required": ["credential_id", "spreadsheet_id", "range_name"],
+        },
+    },
+    {
+        "name": "google_sheets_create",
+        "description": "서비스계정 소유의 새 Google Spreadsheet를 생성합니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "credential_id": {"type": "string"},
+                "title": {"type": "string"},
+                "sheet_titles": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["credential_id", "title"],
+        },
+    },
 ]
 
 # ─── SSH 원격 접근 상수 (중앙 설정에서 import, AADS-165) ──────────────────────
@@ -4103,6 +4209,196 @@ async def tool_credential_test_login(credential_id: str, tenant_id: str = "") ->
         return f"[ERROR] credential_test_login 실패: {e}"
 
 
+def _missing_tenant_message(tool_name: str) -> str:
+    return (
+        f"[ERROR] {tool_name} 실패: tenant_id를 확인할 수 없습니다. "
+        "로그인된 채팅 세션에서 다시 실행하거나 tenant_id를 명시해 주세요."
+    )
+
+
+async def tool_google_sheets_register(
+    service_account_json: dict | str,
+    project: str = "AADS",
+    label: str = "default",
+    scopes: list[str] | None = None,
+    tenant_id: str = "",
+) -> str:
+    """Register a Google Sheets service account in the encrypted vault."""
+    if not tenant_id:
+        return _missing_tenant_message("google_sheets_register")
+    try:
+        from app.services.google_sheets_service import google_sheets_service
+
+        result = await google_sheets_service.register_service_account(
+            service_account_json=service_account_json,
+            project=project or "AADS",
+            label=label or "default",
+            scopes=scopes,
+            tenant_id=tenant_id,
+        )
+        return json.dumps({"status": "registered", **result}, ensure_ascii=False)
+    except Exception as e:
+        return f"[ERROR] google_sheets_register 실패: {e}"
+
+
+async def tool_google_sheets_read(
+    credential_id: str,
+    spreadsheet_id: str,
+    range_name: str,
+    major_dimension: str = "ROWS",
+    tenant_id: str = "",
+) -> str:
+    """Read a Google Sheets range."""
+    if not tenant_id:
+        return _missing_tenant_message("google_sheets_read")
+    try:
+        from app.services.google_sheets_service import google_sheets_service
+
+        result = await google_sheets_service.get_values(
+            credential_id=credential_id,
+            spreadsheet_id=spreadsheet_id,
+            range_name=range_name,
+            major_dimension=major_dimension or "ROWS",
+            tenant_id=tenant_id,
+        )
+        return json.dumps(result, ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"[ERROR] google_sheets_read 실패: {e}"
+
+
+async def tool_google_sheets_update(
+    credential_id: str,
+    spreadsheet_id: str,
+    range_name: str,
+    values: list,
+    value_input_option: str = "USER_ENTERED",
+    tenant_id: str = "",
+) -> str:
+    """Overwrite a Google Sheets range."""
+    if not tenant_id:
+        return _missing_tenant_message("google_sheets_update")
+    try:
+        from app.services.google_sheets_service import google_sheets_service
+
+        result = await google_sheets_service.update_values(
+            credential_id=credential_id,
+            spreadsheet_id=spreadsheet_id,
+            range_name=range_name,
+            values=values,
+            value_input_option=value_input_option or "USER_ENTERED",
+            tenant_id=tenant_id,
+        )
+        return json.dumps(result, ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"[ERROR] google_sheets_update 실패: {e}"
+
+
+async def tool_google_sheets_append(
+    credential_id: str,
+    spreadsheet_id: str,
+    range_name: str,
+    values: list,
+    value_input_option: str = "USER_ENTERED",
+    insert_data_option: str = "INSERT_ROWS",
+    tenant_id: str = "",
+) -> str:
+    """Append rows to a Google Sheets range."""
+    if not tenant_id:
+        return _missing_tenant_message("google_sheets_append")
+    try:
+        from app.services.google_sheets_service import google_sheets_service
+
+        result = await google_sheets_service.append_values(
+            credential_id=credential_id,
+            spreadsheet_id=spreadsheet_id,
+            range_name=range_name,
+            values=values,
+            value_input_option=value_input_option or "USER_ENTERED",
+            insert_data_option=insert_data_option or "INSERT_ROWS",
+            tenant_id=tenant_id,
+        )
+        return json.dumps(result, ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"[ERROR] google_sheets_append 실패: {e}"
+
+
+async def tool_google_sheets_write_records(
+    credential_id: str,
+    spreadsheet_id: str,
+    range_name: str,
+    records: list[dict],
+    headers: list[str] | None = None,
+    include_header: bool = True,
+    mode: str = "update",
+    tenant_id: str = "",
+) -> str:
+    """Write records as a table to Google Sheets."""
+    if not tenant_id:
+        return _missing_tenant_message("google_sheets_write_records")
+    try:
+        from app.services.google_sheets_service import google_sheets_service
+
+        result = await google_sheets_service.write_records(
+            credential_id=credential_id,
+            spreadsheet_id=spreadsheet_id,
+            range_name=range_name,
+            records=records,
+            headers=headers,
+            include_header=include_header,
+            mode=mode or "update",
+            tenant_id=tenant_id,
+        )
+        return json.dumps(result, ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"[ERROR] google_sheets_write_records 실패: {e}"
+
+
+async def tool_google_sheets_clear(
+    credential_id: str,
+    spreadsheet_id: str,
+    range_name: str,
+    tenant_id: str = "",
+) -> str:
+    """Clear a Google Sheets range."""
+    if not tenant_id:
+        return _missing_tenant_message("google_sheets_clear")
+    try:
+        from app.services.google_sheets_service import google_sheets_service
+
+        result = await google_sheets_service.clear_values(
+            credential_id=credential_id,
+            spreadsheet_id=spreadsheet_id,
+            range_name=range_name,
+            tenant_id=tenant_id,
+        )
+        return json.dumps(result, ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"[ERROR] google_sheets_clear 실패: {e}"
+
+
+async def tool_google_sheets_create(
+    credential_id: str,
+    title: str,
+    sheet_titles: list[str] | None = None,
+    tenant_id: str = "",
+) -> str:
+    """Create a Google Spreadsheet."""
+    if not tenant_id:
+        return _missing_tenant_message("google_sheets_create")
+    try:
+        from app.services.google_sheets_service import google_sheets_service
+
+        result = await google_sheets_service.create_spreadsheet(
+            credential_id=credential_id,
+            title=title,
+            sheet_titles=sheet_titles,
+            tenant_id=tenant_id,
+        )
+        return json.dumps(result, ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"[ERROR] google_sheets_create 실패: {e}"
+
+
 
 async def tool_get_e2e_login_url(project: str = "", redirect: str = "", role: str = "", tenant_id: str = "") -> str:
     """프로젝트별 E2E 브라우저 자동 로그인 URL 생성."""
@@ -4130,6 +4426,18 @@ async def tool_get_e2e_login_url(project: str = "", redirect: str = "", role: st
 async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session_id: str = "") -> str:
     """도구 이름과 파라미터로 실제 실행."""
     params = dict(params or {})
+    if not str(params.get("tenant_id") or "").strip():
+        try:
+            from app.services.tool_executor import resolve_bound_tenant_id
+
+            resolved_tenant = await resolve_bound_tenant_id(
+                "",
+                chat_session_id or params.get("session_id", ""),
+            )
+            if resolved_tenant:
+                params["tenant_id"] = resolved_tenant
+        except Exception:
+            pass
     if name in {"pipeline_runner_submit", "pipeline_runner_submit_batch", "pipeline_c_start"}:
         from app.services.tool_executor import _resolve_bound_chat_session_id, current_chat_session_id
 
@@ -4198,6 +4506,66 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         return await tool_credential_delete(params.get("credential_id", ""), tenant_id=params.get("tenant_id", ""))
     elif name == "credential_test_login":
         return await tool_credential_test_login(params.get("credential_id", ""), tenant_id=params.get("tenant_id", ""))
+    elif name == "google_sheets_register":
+        return await tool_google_sheets_register(
+            service_account_json=params.get("service_account_json", {}),
+            project=params.get("project", "AADS"),
+            label=params.get("label", "default"),
+            scopes=params.get("scopes"),
+            tenant_id=params.get("tenant_id", ""),
+        )
+    elif name == "google_sheets_read":
+        return await tool_google_sheets_read(
+            credential_id=params.get("credential_id", ""),
+            spreadsheet_id=params.get("spreadsheet_id", ""),
+            range_name=params.get("range_name", ""),
+            major_dimension=params.get("major_dimension", "ROWS"),
+            tenant_id=params.get("tenant_id", ""),
+        )
+    elif name == "google_sheets_update":
+        return await tool_google_sheets_update(
+            credential_id=params.get("credential_id", ""),
+            spreadsheet_id=params.get("spreadsheet_id", ""),
+            range_name=params.get("range_name", ""),
+            values=params.get("values", []),
+            value_input_option=params.get("value_input_option", "USER_ENTERED"),
+            tenant_id=params.get("tenant_id", ""),
+        )
+    elif name == "google_sheets_append":
+        return await tool_google_sheets_append(
+            credential_id=params.get("credential_id", ""),
+            spreadsheet_id=params.get("spreadsheet_id", ""),
+            range_name=params.get("range_name", ""),
+            values=params.get("values", []),
+            value_input_option=params.get("value_input_option", "USER_ENTERED"),
+            insert_data_option=params.get("insert_data_option", "INSERT_ROWS"),
+            tenant_id=params.get("tenant_id", ""),
+        )
+    elif name == "google_sheets_write_records":
+        return await tool_google_sheets_write_records(
+            credential_id=params.get("credential_id", ""),
+            spreadsheet_id=params.get("spreadsheet_id", ""),
+            range_name=params.get("range_name", ""),
+            records=params.get("records", []),
+            headers=params.get("headers"),
+            include_header=bool(params.get("include_header", True)),
+            mode=params.get("mode", "update"),
+            tenant_id=params.get("tenant_id", ""),
+        )
+    elif name == "google_sheets_clear":
+        return await tool_google_sheets_clear(
+            credential_id=params.get("credential_id", ""),
+            spreadsheet_id=params.get("spreadsheet_id", ""),
+            range_name=params.get("range_name", ""),
+            tenant_id=params.get("tenant_id", ""),
+        )
+    elif name == "google_sheets_create":
+        return await tool_google_sheets_create(
+            credential_id=params.get("credential_id", ""),
+            title=params.get("title", ""),
+            sheet_titles=params.get("sheet_titles"),
+            tenant_id=params.get("tenant_id", ""),
+        )
     elif name == "get_e2e_login_url":
         return await tool_get_e2e_login_url(
             project=params.get("project", ""),
