@@ -59,7 +59,12 @@
   - `JWT_SECRET_KEY=test python3 -c "from app.api.google_sheets import router; from app.services.google_sheets_service import google_sheets_service; print('ok', router.prefix, type(google_sheets_service).__name__)"` 통과.
   - `python3 -c "import googleapiclient.discovery, google.oauth2.service_account; print('google-api-ok')"` 통과.
   - `pytest tests/unit/test_google_sheets_service.py tests/unit/test_credential_vault.py tests/unit/test_tool_executor_aliases.py` 통과(15 passed).
-- 미완료: 실제 Google API E2E는 서비스계정 JSON이 없어 미실행. 커밋/푸시/배포는 기존 unrelated dirty 파일이 섞인 상태라 CEO 승인 후 선별 처리 필요.
+- 최종 재검증(2026-06-09 12:22 KST):
+  - 커밋/푸시: `59e4081 feat: add google sheets connector`가 현재 `origin/main` 이력에 포함됨. 현재 HEAD/origin/main은 `83b078b`.
+  - 런타임 반영: `curl http://localhost:8100/openapi.json`에서 `/api/v1/google-sheets/*` 경로 6개 노출 확인.
+  - 서버 상태: `aads-server` 컨테이너 healthy, `GET /api/v1/health` HTTP 200 확인.
+  - 회귀 테스트: `pytest tests/unit/test_google_sheets_service.py tests/unit/test_credential_vault.py tests/unit/test_tool_executor_aliases.py` 통과(15 passed).
+- 미완료: 실제 Google API E2E는 서비스계정 JSON 등록 전이라 미실행. `e2e_credentials`의 `service='google-sheets'` 활성 자격증명 count는 0건.
 
 ## 현재 진행 상태 (2026-06-09 11:00 KST) - CEO Chat AI 리뷰 diff 판정 수정 완료
 - 배경: CEO Chat에서 비코드 파일(.md 등)만 커밋 시 AI 리뷰가 INVALID_REVIEW_INPUT(score=0.1)으로 차단
