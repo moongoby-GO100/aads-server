@@ -12,15 +12,21 @@
   - `src/app/onboarding/page.tsx`: 가입 직후 조직명/팀원 초대 제출 후 생성된 초대 링크를 표시/복사하도록 보강.
   - `src/lib/auth.ts`: tenant/team/invite API client와 타입 추가.
   - `src/middleware.ts`, `src/components/ClientLayout.tsx`, `src/components/Sidebar.tsx`: `/invite/accept` 공개 허용, sidebar 예외/Team 메뉴 추가.
-- 검증:
-  - `pytest tests/unit/test_tenant_rbac_policy.py -q` 통과(11 passed, 기존 warning 1건).
-  - `python3 -m py_compile app/auth.py app/api/auth.py` 통과.
-  - `npm run lint -- src/app/team/page.tsx src/app/onboarding/page.tsx src/app/invite/accept/page.tsx src/lib/auth.ts src/middleware.ts src/components/ClientLayout.tsx src/components/Sidebar.tsx` 통과.
+- 최종 검증/배포(2026-06-09 10:10 KST):
+  - 서버 커밋 `dd11954 feat(saas): expose tenant team invite APIs`는 `origin/main`에 push 완료.
+  - 대시보드 커밋 `76fc6f6 feat(saas): add team onboarding dashboard`, `a89101f fix(saas): preserve invite links after hydration`는 `origin/main`에 push 완료.
+  - `pytest tests/unit/test_tenant_rbac_policy.py tests/unit/test_saas_multitenant_migration.py -q` 통과(17 passed, 기존 warning 1건).
+  - 신규 대시보드 파일 한정 `npx eslint src/app/team/page.tsx src/app/onboarding/page.tsx src/app/invite/accept/page.tsx src/lib/auth.ts src/middleware.ts src/components/ClientLayout.tsx src/components/Sidebar.tsx` 통과.
   - `npm run build` 통과, route 목록에 `/team`, `/invite/accept`, `/onboarding` 포함 확인.
+  - `bash /root/aads/aads-dashboard/deploy.sh` 성공. 활성 슬롯은 green, `AADS_RELEASE_SHA=a89101f5396f`, 외부 health 통과.
+  - `https://aads.newtalk.kr/team`은 비로그인 기준 `/login?redirect=%2Fteam`으로 307 redirect 확인.
+  - `https://aads.newtalk.kr/invite/accept`는 공개 200 확인.
+  - `https://aads.newtalk.kr/api/v1/health`는 `status=ok` 확인.
 - 미완료/주의:
   - 운영 DB 마이그레이션은 불필요(기존 SaaS 테이블 사용).
-  - 서버 repo와 dashboard repo 모두 기존 unrelated dirty 파일이 있어 선별 커밋 필요.
-  - 배포/푸시는 아직 수행하지 않았다.
+  - 전체 `npm run lint`는 기존 전역 lint 부채 276 errors/69 warnings 때문에 실패한다. 이번 신규 파일 한정 lint는 통과했다.
+  - 스크린샷 캡처는 PC agent offline, Visual QA는 배치 미지원으로 실패했다. R-E2E 폴백 기준 HTTP/API/컨테이너 검증으로 대체했다.
+  - 서버 repo와 dashboard repo에는 요청 범위와 무관한 기존 런타임/엑셀 산출물 dirty 파일이 남아 있어 선별 커밋 대상에서 제외했다.
 
 ## 현재 진행 상태 (2026-06-09 09:13 KST) - Google Sheets Connector 1차 구현
 - 배경: CEO가 AADS에서 Google Spreadsheet 파일을 편집/운영 가능한지 확인 후 구현 진행을 지시했다.
