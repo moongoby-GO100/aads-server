@@ -735,6 +735,9 @@ run_job() {
     fi
 
     log "▶ START job=$job_id project=$project target=${target_repo} workdir=$workdir"
+    # FIX(INVALID_GIT_DIFF): Claude 실행 전 HEAD SHA 캡처
+    local pre_exec_sha
+    pre_exec_sha=$(git -C "$workdir" rev-parse HEAD 2>/dev/null) || pre_exec_sha=""
     db_update "UPDATE pipeline_jobs SET status='running', phase='claude_code_work',
                started_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
     post_to_chat "$session_id" "🔧 [Pipeline Runner] 작업 시작: ${instruction:0:200}"
@@ -1067,10 +1070,20 @@ $out_tail")
 
     log "  DONE Phase1 job=$job_id"
 
-    # v2.1: 커밋하지 않음 — uncommitted diff 캡처 (승인 후 커밋)
+    # v2.2: committed(Claude가 커밋한 변경) + uncommitted diff 모두 캡처
     cd "$workdir"
     local git_diff=""
-    git_diff=$(git diff HEAD 2>/dev/null | head -c 50000) || true
+    local _current_head=""
+    _current_head=$(git rev-parse HEAD 2>/dev/null) || _current_head=""
+    if [[ -n "$pre_exec_sha" && -n "$_current_head" && "$pre_exec_sha" != "$_current_head" ]]; then
+        git_diff=$(git diff "${pre_exec_sha}..${_current_head}" 2>/dev/null | head -c 45000) || true
+        local _uncommitted=""
+        _uncommitted=$(git diff HEAD 2>/dev/null | head -c 5000) || true
+        [[ -n "${_uncommitted//[[:space:]]/}" ]] && git_diff="${git_diff}
+${_uncommitted}"
+    else
+        git_diff=$(git diff HEAD 2>/dev/null | head -c 50000) || true
+    fi
 
     if [[ -z "${git_diff//[[:space:]]/}" ]]; then
         log "  NO_CHANGES job=$job_id target=$target_repo — awaiting_approval 차단, cancelled 처리"
