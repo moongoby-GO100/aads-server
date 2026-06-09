@@ -2695,7 +2695,7 @@ async def tool_git_remote_commit(project: str, message: str) -> str:
     # ── 커밋 전 AI 코드 검수: staged diff를 독립 AI(Gemini)가 리뷰 ──
     try:
         staged_diff = await tool_run_remote_command(project, "git diff --cached -- '*.py' '*.ts' '*.tsx'")
-        if staged_diff and staged_diff.strip() and "[ERROR]" not in staged_diff:
+        if staged_diff and "diff --git" in staged_diff and "[ERROR]" not in staged_diff:
             from app.services.code_reviewer import review_code_diff
             verdict = await review_code_diff(
                 project=project,
