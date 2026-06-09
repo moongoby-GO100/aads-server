@@ -1,6 +1,16 @@
 # AADS HANDOVER
 
 
+## 현재 진행 상태 (2026-06-09 10:15 KST) - INVALID_GIT_DIFF 수정 완료
+- 배경: Pipeline Runner AI 리뷰에서 git diff HEAD가 빈 결과 반환 → INVALID_GIT_DIFF(score=0.1) 차단
+- 원인: Claude Code가 worktree에서 자체 커밋 → git diff HEAD(uncommitted만)는 빈 diff
+- 수정 (scripts/pipeline-runner.sh, commit ebae19f):
+  - L738-740: Claude 실행 전 pre_exec_sha 캡처
+  - L1073-1086: git diff pre_exec_sha..HEAD(committed) + git diff HEAD(uncommitted) 결합
+- 검증: bash -n 통과, 커밋+푸시 완료
+- HEAD: ebae19f
+- 후속: 대시보드 팀원 초대/온보딩 UI (P1)
+
 ## 현재 진행 상태 (2026-06-09 08:49 KST) - SaaS P0/P1 DB 복구 및 hot-reload 완료
 - CEO role user에서 ceo로 복구, internal tenant 멤버십 active/owner로 복원
 - 양 슬롯 hot-reload: blue 48모듈, green 67모듈
