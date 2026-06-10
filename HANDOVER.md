@@ -1,5 +1,52 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-10 15:37 KST) - Chat 대형 세션 artifact/resume 안정화
+- 배경: CEO가 권장조치 적용 전 의존성 문제와 오류 가능성을 확인하고, 문제가 없으면 즉시 조치하라고 지시했다.
+- 확인:
+  - 문제 세션 `266ab3aa-b0fd-46bb-8c54-01e4852c956f`는 메시지 541건, 아티팩트 294건, 아티팩트 본문 415,209자로 확인됐다.
+  - 백엔드 `/chat/artifacts`는 기본 `limit=60`, 최대 `100`, `offset` 지원으로 제한되어 있다.
+  - 대시보드 artifact API 호출부는 `limit/offset` 인자를 전달하도록 변경되어 있다.
+  - 채팅 페이지 inline resume 호출부에 `process.env.NEXT_PUBLIC_API_URL || ""`가 남아 있어 환경변수 미설정 시 상대경로 `/chat/...`로 나갈 위험이 있었다.
+- 조치:
+  - `/root/aads/aads-dashboard/src/app/chat/page.tsx`의 resume/replay fetch URL을 이미 import된 `BASE_URL` 기반으로 통일했다.
+  - 새 라이브러리나 런타임 의존성은 추가하지 않았다.
+- 검증:
+  - `python3 -m compileall app/services/chat_service.py app/routers/chat.py` 통과.
+  - `git diff --check -- app/services/chat_service.py app/routers/chat.py` 통과.
+  - `git diff --check -- src/app/chat/page.tsx src/hooks/useChatSSE.ts src/lib/api.ts src/services/chatApi.ts` 통과.
+  - `npx tsc --noEmit --pretty false` 통과.
+  - `npx eslint src/app/chat/page.tsx src/hooks/useChatSSE.ts src/services/chatApi.ts` 결과 0 errors, 23 warnings. 경고는 기존 unused/hook/img 규칙이다.
+  - `npx eslint src/lib/api.ts`는 기존 `any` 오류 141건 때문에 실패했다. 이번에 변경한 `getChatArtifacts` 라인은 `unknown[]`로 정리했다.
+  - 대시보드 전체 `npm run lint`는 기존 전역 부채로 실패했다: 268 errors, 69 warnings.
+  - AADS 전체 `git diff --check`는 기존 문서 파일의 trailing whitespace/conflict marker 때문에 실패했다.
+- 상태:
+  - 커밋/푸시/배포는 아직 수행하지 않았다.
+  - 브라우저 실사용 렌더링 3초 이내 완료 여부는 아직 미측정이다.
+
+## 현재 진행 상태 (2026-06-10 14:55 KST) - Chat auto routing default + SSE response recovery
+- 배경: CEO가 채팅창이 응답하지 않는 문제에 대해 AADS 자동라우팅 설정값 반영과 실제 응답 테스트를 지시했다.
+- 원인:
+  - `model_routing_preferences`의 `llm` 기본값은 `codex:gpt-5.5`였지만, `intent_router.py`의 `casual/greeting`은 `qwen-turbo`를 직접 지정했다.
+  - `intent_policies`의 `casual/greeting`도 `claude-haiku-4-5-20251001` 다운그레이드 정책이 남아 있었다.
+  - `chat_service.py`는 일부 자동 모델 센티널에서만 DB 기본값을 적용해, 자동 선택 인텐트가 DB 기본값을 우회할 수 있었다.
+  - `response_mode=fast`에서도 output validator 재검증 실패가 SSE `error`로 나가 프론트가 응답 실패처럼 처리할 수 있었다.
+- 조치:
+  - `app/services/intent_router.py`: `casual/greeting` 모델을 `auto-default-llm` 센티널로 변경했다.
+  - `app/services/model_selector.py`: `auto-default-llm`/legacy `qwen-turbo`는 DB `llm` 기본 모델로 치환하고, DB 기본값 적용 시 casual/greeting 다운그레이드를 건너뛰게 했다.
+  - `app/services/chat_service.py`: `model_override`가 없거나 `auto/mixture`이면 모든 인텐트에서 DB `llm` 기본 모델을 우선 적용하고, fast 모드 validator 실패는 치명 SSE error로 내보내지 않게 했다.
+  - DB `intent_policies`: `casual/greeting` default_model을 `codex:gpt-5.5`, `cascade_downgrade=false`로 갱신했다.
+- 검증:
+  - `python3 -m py_compile app/services/chat_service.py app/services/model_selector.py app/services/intent_router.py` 통과.
+  - `pytest tests/unit/test_model_selector_dynamic_routing.py::test_call_stream_uses_db_default_for_legacy_auto_qwen tests/unit/test_model_selector_dynamic_routing.py::test_call_stream_uses_db_default_for_auto_default_sentinel -q` 통과.
+  - `JWT_SECRET_KEY=test-secret pytest -q tests/unit/test_model_selector_dynamic_routing.py::test_call_stream_uses_db_default_for_legacy_auto_qwen tests/unit/test_model_selector_dynamic_routing.py::test_call_stream_uses_db_default_for_auto_default_sentinel tests/unit/test_chat_service.py::test_archive_interrupted_siblings_for_completed_execution_only_hides_same_execution_partials` 결과 3 passed.
+  - blue-green 배포 1회 성공 후 active slot은 `aads-server-green:8102`. 후속 전체 재배포는 standby 슬롯 활성 스트림 때문에 중단되어, `/api/v1/ops/hot-reload`로 `intent_router`, `model_selector`, `chat_service`를 active 컨테이너에 반영했다.
+  - API SSE 실응답 테스트: 새 세션 `13510a69-f888-4166-bba1-26d25dc307be`, `model_override=null`, `response_mode=fast`에서 `done=True`, `error_count=0`, `saved_model=GPT-5.5 (Codex CLI)`, 저장 응답 `라우팅 정상` 확인.
+  - 추가 API SSE 실응답 테스트: 새 세션 `57df0d65-3782-4a0b-a9f3-da6d297bcfa3`, `model_override=auto`, `response_mode=fast`에서 `done` 이벤트 수신, `requested_model=auto`, `actual_model=GPT-5.5 (Codex CLI)`, assistant 저장 응답 `네, 자동 라우팅 설정이 반영되어 현재 \`gpt-5.5\`로 응답 중입니다.` 확인.
+  - 추가 재검증(2026-06-10 15:19 KST): `tests/unit/test_chat_service.py::test_send_message_stream_applies_db_default_over_legacy_qwen` 회귀 테스트를 추가했다. `JWT_SECRET_KEY=test-secret` 기준 관련 3개 테스트 통과. Hot reload(`재로드=61개`) 후 새 세션 `1ec604ac-2387-4fdd-a250-357cee7bcd5e`, `model_override=auto`, `response_mode=fast`에서 `send_status=200`, `stream_done=True`, `stream_model=GPT-5.5 (Codex CLI)`, `delta_chars=18`, DB 저장 assistant `model_used=GPT-5.5 (Codex CLI)` 확인.
+- 운영 주의:
+  - Docker build cache 34.46GB를 정리해 `/` 여유 공간을 26GB로 회복했다.
+  - 현재 작업은 코드/DB/hot-reload 반영까지 완료했으나 커밋/푸시는 아직 하지 않았다.
+
 ## 현재 진행 상태 (2026-06-10 13:28 KST) - NewTalk AADS Chat E2E false-success 방지
 - 배경: `credential_test_login`이 NewTalk V2 로그인 화면에 머문 상태에서도 `status: success`를 반환하는 false-success를 실제 브라우저 snapshot으로 확인했다.
 - 조치:

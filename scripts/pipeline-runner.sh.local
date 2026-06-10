@@ -13,8 +13,12 @@
 # ═══════════════════════════════════════════════════════════════════════
 set -eo pipefail
 
+# general: normal Claude/Codex runner. litellm: claims only LiteLLM jobs.
+RUNNER_ENGINE_MODE="${RUNNER_ENGINE_MODE:-general}"
+RUNNER_LOCK_FILE="${RUNNER_LOCK_FILE:-/tmp/pipeline-runner-${RUNNER_ENGINE_MODE}.lock}"
+
 # P1: 중복 실행 방지 — 이미 실행 중이면 즉시 종료
-exec 9>/tmp/pipeline-runner.lock
+exec 9>"$RUNNER_LOCK_FILE"
 if ! flock -n 9; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] 이미 실행 중인 러너가 있습니다. 종료." >&2
     exit 0
@@ -33,7 +37,7 @@ POLL_INTERVAL="${POLL_INTERVAL:-5}"
 AADS_API_URL="${AADS_API_URL:-http://127.0.0.1:8100}"
 MAX_RUNTIME="${MAX_RUNTIME:-7200}"
 MAX_RETRIES="${MAX_RETRIES:-2}"               # H5: Claude 실패 시 재시도 횟수
-MAX_CONCURRENT_PER_PROJECT="${MAX_CONCURRENT_PER_PROJECT:-3}"  # 프로젝트당 동시 실행 수
+MAX_CONCURRENT_PER_PROJECT="${MAX_CONCURRENT_PER_PROJECT:-6}"  # 프로젝트당 동시 실행 수
 APPROVAL_TIMEOUT_HOURS="${APPROVAL_TIMEOUT_HOURS:-24}"  # H4: 승인 대기 타임아웃
 ARTIFACT_MAX_AGE_HOURS="${ARTIFACT_MAX_AGE_HOURS:-24}"  # H3: 임시파일 보존 시간
 LOG_DIR="/var/log/aads-pipeline"
@@ -42,6 +46,7 @@ RUNNER_HOSTNAME=$(hostname -s)
 
 # Claude Code 인증: current.env (oat 키) 사용 — API 키(api03) 사용 금지
 source ~/.claude/current.env 2>/dev/null || true
+source /root/scripts/runner.env 2>/dev/null || true
 export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LANGUAGE=en_US:en MANPATH=
 
 # 프로젝트별 workdir 매핑
@@ -52,6 +57,38 @@ declare -A PROJECT_WORKDIR=(
     ["SF"]="/data/shortflow"
     ["NTV2"]="/srv/newtalk-v2"
 )
+
+AADS_DASHBOARD_WORKDIR="${AADS_DASHBOARD_WORKDIR:-/root/aads/aads-dashboard}"
+
+is_aads_backend_instruction() {
+    local project="$1" instruction="$2"
+    [[ "$project" == "AADS" ]] || return 1
+    printf '%s' "$instruction" | grep -Eiq \
+        '(/root/aads/aads-server|(^|[^A-Za-z0-9_-])aads-server([^A-Za-z0-9_-]|$)|(^|[[:space:]/])migrations/|(^|[[:space:]/])app/(api|core|models|schemas|services|main\.py)|pipeline-runner\.sh|deploy\.sh)'
+}
+
+is_aads_dashboard_instruction() {
+    local project="$1" instruction="$2"
+    [[ "$project" == "AADS" ]] || return 1
+    printf '%s' "$instruction" | grep -Eiq \
+        '(/root/aads/aads-dashboard|(^|[^A-Za-z0-9_-])aads-dashboard([^A-Za-z0-9_-]|$)|src/(app|components)/chat|DiscussionPanel\.tsx|MarkdownRenderer\.tsx|ChatArtifactPanel\.tsx|ChatInput\.tsx|Artifact(Summary)?Panel\.tsx|package(-lock)?\.json|next\.config|tailwind\.config|tsconfig\.json)'
+}
+
+resolve_project_workdir() {
+    local project="$1" instruction="${2:-}"
+    if is_aads_backend_instruction "$project" "$instruction"; then
+        echo "${PROJECT_WORKDIR[$project]:-}"
+    elif is_aads_dashboard_instruction "$project" "$instruction"; then
+        echo "$AADS_DASHBOARD_WORKDIR"
+    else
+        echo "${PROJECT_WORKDIR[$project]:-}"
+    fi
+}
+
+get_job_instruction() {
+    local job_id="$1"
+    db_exec "SELECT instruction FROM pipeline_jobs WHERE job_id='${job_id}' LIMIT 1;" 2>/dev/null || true
+}
 
 # 프로젝트별 허용 목록 (M4: 화이트리스트 검증)
 VALID_PROJECTS="AADS KIS GO100 SF NTV2"
@@ -131,8 +168,10 @@ _psql_cmd() {
 db_exec() {
     # FIX: ASCII Record Separator(0x1E)를 필드 구분자로 사용
     # instruction에 | 문자가 포함되면 IFS='|' 파싱이 깨지는 버그 수정
+    # -q: UPDATE ... RETURNING 0 rows일 때 "UPDATE 0" command tag가 stdout에 섞여
+    #     job_id 처리 루프를 오염시키는 문제 방지.
     local out
-    out=$(_psql_cmd -t -A -F $'\x1e' -c "$1" 2>&1) || {
+    out=$(_psql_cmd -q -t -A -P footer=off -F $'\x1e' -c "$1" 2>&1) || {
         _notify_db_failure "$1"
         return 1
     }
@@ -141,6 +180,14 @@ db_exec() {
 
 db_update() {
     _psql_cmd -c "$1" >/dev/null 2>&1
+}
+
+get_job_status() {
+    local _job_id="$1"
+    [[ -z "$_job_id" ]] && { echo ""; return 0; }
+    local _status=""
+    _status=$(db_exec "SELECT status FROM pipeline_jobs WHERE job_id='${_job_id}' LIMIT 1;" 2>/dev/null | head -n1 | tr -d '[:space:]') || _status=""
+    echo "$_status"
 }
 
 # DB에서 size별 모델 우선순위 조회 (CEO 대시보드 runner_model_config 연동)
@@ -178,6 +225,23 @@ sql_escape() {
     echo "\$esc\$${val}\$esc\$"
 }
 
+looks_like_git_diff() {
+    local content="$1"
+    [[ -z "${content//[[:space:]]/}" ]] && return 1
+
+    if printf '%s\n' "$content" | grep -q '^diff --git a/.* b/.*$'; then
+        return 0
+    fi
+
+    if printf '%s\n' "$content" | grep -q '^--- ' \
+        && printf '%s\n' "$content" | grep -q '^+++ ' \
+        && printf '%s\n' "$content" | grep -q '^@@ '; then
+        return 0
+    fi
+
+    return 1
+}
+
 # ── 에러 분류 ─────────────────────────────────────────────────────────
 classify_error() {
     local exit_code="$1" stderr_file="$2" stdout_file="$3"
@@ -189,6 +253,12 @@ classify_error() {
 
     if [[ $exit_code -eq 124 ]] || echo "$combined" | grep -qi "timed out\|operation timed out"; then
         echo "timeout"
+    elif echo "$combined" | grep -qi "refresh_token_reused"; then
+        echo "codex_refresh_token_reused"
+    elif echo "$combined" | grep -qi "token_expired"; then
+        echo "codex_token_expired"
+    elif echo "$combined" | grep -qi "invalid api key\|invalid.?key"; then
+        echo "invalid_api_key"
     elif echo "$combined" | grep -qi "merge conflict\|CONFLICT\|git conflict"; then
         echo "git_conflict"
     elif echo "$combined" | grep -qi "SIGKILL\|kill -9\|Killed"; then
@@ -196,7 +266,13 @@ classify_error() {
     elif echo "$combined" | grep -qi "authentication\|unauthorized\| 401 "; then
         echo "auth_error"
     elif echo "$combined" | grep -qi "rate limit\|429\|quota exceeded"; then
-        echo "rate_limit"
+        local rate_line=""
+        rate_line=$(printf '%s\n' "$combined" | grep -iE -m1 "rate limit|429|quota exceeded|too many requests|you've hit your limit" | head -c 80)
+        if [[ -n "${rate_line//[[:space:]]/}" ]]; then
+            echo "rate_limit: ${rate_line}"
+        else
+            echo "rate_limit"
+        fi
     elif echo "$combined" | grep -qi "No space left\|ENOSPC\|disk full"; then
         echo "disk_full"
     elif echo "$combined" | grep -qi "SyntaxError\|syntax error"; then
@@ -214,10 +290,38 @@ classify_error() {
     fi
 }
 
+codex_auth_disabled_until() {
+    local marker="${AADS_CODEX_AUTH_DISABLED_FILE:-/tmp/aads-codex-auth-disabled-until}"
+    [[ -f "$marker" ]] || return 1
+    local until_ts
+    until_ts=$(cat "$marker" 2>/dev/null || echo 0)
+    [[ "$until_ts" =~ ^[0-9]+$ ]] || { rm -f "$marker" 2>/dev/null || true; return 1; }
+    local now_ts
+    now_ts=$(date +%s)
+    if [[ "$until_ts" -gt "$now_ts" ]]; then
+        echo "$until_ts"
+        return 0
+    fi
+    rm -f "$marker" 2>/dev/null || true
+    return 1
+}
+
+mark_codex_auth_disabled() {
+    local reason="$1"
+    local marker="${AADS_CODEX_AUTH_DISABLED_FILE:-/tmp/aads-codex-auth-disabled-until}"
+    local ttl="${AADS_CODEX_AUTH_DISABLED_TTL:-7200}"
+    [[ "$ttl" =~ ^[0-9]+$ ]] || ttl=7200
+    local until_ts=$(( $(date +%s) + ttl ))
+    printf '%s\n' "$until_ts" > "$marker" 2>/dev/null || true
+    log "  CODEX_AUTH_DISABLED_SET reason=${reason:0:80} until_epoch=$until_ts ttl=${ttl}s"
+}
+
 # ── 사전 검증 (Pre-validation) ─────────────────────────────────────────
 pre_validate() {
     local job_id="$1" project="$2" session_id="$3"
-    local workdir="${PROJECT_WORKDIR[$project]:-}"
+    local instruction="${4:-}"
+    local workdir
+    workdir=$(resolve_project_workdir "$project" "$instruction")
 
     # 방안 A: 원격 프로젝트 판별 — workdir이 서버68에 없으므로 로컬 체크 스킵
     local is_remote=false
@@ -262,7 +366,7 @@ _fail_job() {
     log "  FAIL_FAST job=$job_id type=$error_type: $detail"
     local safe_detail
     safe_detail=$(sql_escape "$detail")
-    db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
+    db_update "UPDATE pipeline_jobs SET status='error', phase='error',
                error_detail='${error_type}',
                result_output=${safe_detail},
                updated_at=NOW() WHERE job_id='${job_id}';"
@@ -312,6 +416,37 @@ promote_next_queued() {
     fi
 }
 
+cleanup_blocked_dependencies() {
+    local blocked_existing blocked_missing
+    blocked_existing=$(db_exec "UPDATE pipeline_jobs p SET status='cancelled',
+                                phase='blocked_dependency',
+                                error_detail='blocked_dependency: parent ' || p.depends_on || ' is ' || dep.status,
+                                review_feedback=COALESCE(p.review_feedback,'') || E'\n[Runner Guard] 선행 작업 ' || p.depends_on || ' 상태가 ' || dep.status || '라 자동 진행 불가 — blocked_dependency로 종결',
+                                updated_at=NOW()
+                                FROM pipeline_jobs dep
+                                WHERE p.depends_on = dep.job_id
+                                  AND p.status='queued'
+                                  AND p.phase='queued'
+                                  AND dep.status IN ('error','rejected','rejected_done','cancelled')
+                                RETURNING p.job_id;" 2>/dev/null) || true
+    blocked_missing=$(db_exec "UPDATE pipeline_jobs p SET status='cancelled',
+                               phase='blocked_dependency',
+                               error_detail='blocked_dependency: parent ' || p.depends_on || ' is missing',
+                               review_feedback=COALESCE(p.review_feedback,'') || E'\n[Runner Guard] 선행 작업 ' || p.depends_on || ' 이 DB에 없어 자동 진행 불가 — blocked_dependency로 종결',
+                               updated_at=NOW()
+                               WHERE p.status='queued'
+                                 AND p.phase='queued'
+                                 AND p.depends_on IS NOT NULL
+                                 AND NOT EXISTS (
+                                     SELECT 1 FROM pipeline_jobs dep
+                                     WHERE dep.job_id = p.depends_on
+                                 )
+                               RETURNING p.job_id;" 2>/dev/null) || true
+    if [[ -n "$blocked_existing$blocked_missing" ]]; then
+        log "  BLOCKED_DEPENDENCY_CLEANUP existing=${blocked_existing//$'\n'/,} missing=${blocked_missing//$'\n'/,}"
+    fi
+}
+
 # ── 중복 작업 확인 ─────────────────────────────────────────────────────
 compute_instruction_hash() {
     echo -n "${2}:${1}" | sha256sum | cut -d' ' -f1 | head -c 16
@@ -354,8 +489,8 @@ check_duplicate() {
         dup_status="${dup_status// /}"
         if [[ "$dup_status" != "done" ]]; then
             log "  DEDUP_BLOCK: 동일 작업 진행 중: $dup_job ($dup_status) — $job_id 차단"
-            db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
-                       error_detail='superseded: 기존 작업 ${dup_job} 계속 진행',
+            db_update "UPDATE pipeline_jobs SET status='cancelled', phase='dedup_blocked',
+                       error_detail='dedup_blocked: 기존 작업 ${dup_job} 계속 진행',
                        review_feedback=E'[중복 차단] 동일 작업 진행 중: ${dup_job} (${dup_status})',
                        updated_at=NOW() WHERE job_id='${job_id}';"
             return 1
@@ -413,7 +548,7 @@ _watchdog_check() {
             # 프로세스가 죽었는지 확인
             if ! kill -0 "$s_pid" 2>/dev/null; then
                 log "  WATCHDOG_DEAD_PROCESS: job=$s_job_id pid=$s_pid — error로 전환"
-                db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
+                db_update "UPDATE pipeline_jobs SET status='error', phase='error',
                            error_detail='process_died',
                            review_feedback=COALESCE(review_feedback,'') || E'\n[Watchdog] Claude Code 프로세스(PID=${s_pid}) 죽음 감지',
                            updated_at=NOW() WHERE job_id='${s_job_id}' AND status='running';"
@@ -434,6 +569,15 @@ _watchdog_check() {
 # C1: 채팅방 메시지 — session_id는 UUID 포맷 검증
 post_to_chat() {
     local session_id="$1" content="$2"
+    # anomaly 가드: 이미 error로 마킹된 job에 성공 메시지 차단
+    if [[ -n "${job_id:-}" && "$content" == *"✅"* && "$content" == *"배포 완료"* ]]; then
+        local _cur_status=""
+        _cur_status=$(get_job_status "$job_id" 2>/dev/null || echo "")
+        if [[ "$_cur_status" == "error" ]]; then
+            log "ANOMALY BLOCKED: error 상태 job에 성공 메시지 차단 ($job_id): $content"
+            return 0
+        fi
+    fi
     # UUID 포맷 검증 (C1: SQL 인젝션 방지)
     if [[ ! "$session_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
         log "  WARN: invalid session_id, skip chat post"
@@ -450,9 +594,17 @@ post_to_chat() {
 # 프로젝트별 동시실행 Lock: 같은 프로젝트에 running/claimed 작업이 있으면 claim하지 않음
 claim_queued_job() {
     local filter="$1"
+    local engine_predicate model_return_expr
+    if [[ "$RUNNER_ENGINE_MODE" == "litellm" ]]; then
+        engine_predicate="AND COALESCE(NULLIF(p.worker_model, ''), NULLIF(p.model, ''), '') LIKE 'litellm:%'"
+        model_return_expr="COALESCE(NULLIF(worker_model, ''), NULLIF(model, ''), 'auto')"
+    else
+        engine_predicate="AND NOT (COALESCE(NULLIF(p.worker_model, ''), NULLIF(p.model, ''), '') LIKE 'litellm:%' AND p.project IN ('GO100','KIS','SF','NTV2'))"
+        model_return_expr="COALESCE(NULLIF(worker_model, ''), 'auto')"
+    fi
     # instruction의 줄바꿈을 \\n으로 치환하여 단일행 RETURNING 보장
     # AADS-211: depends_on 체크 — 의존 작업이 done이 아니면 스킵
-    # 방안 B: litellm:* 모델 + 원격 프로젝트 → bash runner가 claim하지 않음 (litellm-runner가 처리)
+    # RUNNER_ENGINE_MODE=litellm: litellm:* 작업만 claim. general은 원격 litellm 작업을 전용 러너에 넘김.
     db_exec "UPDATE pipeline_jobs SET status='claimed', updated_at=NOW()
              WHERE job_id = (
                 SELECT p.job_id FROM pipeline_jobs p
@@ -463,12 +615,12 @@ claim_queued_job() {
                   AND (SELECT COUNT(*) FROM pipeline_jobs r
                        WHERE r.project = p.project
                          AND r.status IN ('running', 'claimed')
-                         AND r.job_id != p.job_id) < ${MAX_CONCURRENT_PER_PROJECT:-3}
-                  AND NOT (COALESCE(p.worker_model, '') LIKE 'litellm:%' AND p.project IN ('GO100','KIS','SF','NTV2'))
+                         AND r.job_id != p.job_id) < ${MAX_CONCURRENT_PER_PROJECT:-6}
+                  ${engine_predicate}
                 ORDER BY COALESCE(p.priority, 0) DESC, p.created_at ASC LIMIT 1
                 FOR UPDATE SKIP LOCKED
              )
-             RETURNING job_id, project, replace(replace(instruction, E'\\n', ' '), '|', ' '), chat_session_id, max_cycles, COALESCE(worker_model, 'auto'), COALESCE(size,'M');"
+             RETURNING job_id, project, replace(replace(instruction, E'\\n', ' '), '|', ' '), chat_session_id, max_cycles, ${model_return_expr}, COALESCE(size,'M');"
 }
 
 claim_approved_job() {
@@ -499,12 +651,17 @@ claim_rejected_job() {
 run_job() {
     local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5" job_model="${6:-auto}" job_size="${7:-M}"
     local output_file="$ARTIFACT_DIR/${job_id}.out" err_file="$ARTIFACT_DIR/${job_id}.err"
+    local workdir
+    workdir=$(resolve_project_workdir "$project" "$instruction")
+    local main_workdir="$workdir"
+    local target_repo="default"
+    if is_aads_dashboard_instruction "$project" "$instruction"; then
+        target_repo="aads-dashboard"
+    fi
 
     # 전역 변수 설정 — cleanup()에서 러너 종료 시 현재 작업을 에러로 마킹하기 위함
     _current_job_id="$job_id"
     _current_session_id="$session_id"
-    # 서브셸 전파용 파일 기록 — 부모 셸 또는 재시작된 러너가 읽어 잔여 작업 정리
-    echo "$job_id" > /tmp/.pipeline_current_job
     # 서브셸 전파용 파일 기록 — 부모 셸 또는 재시작된 러너가 읽어 잔여 작업 정리
     echo "$job_id" > /tmp/.pipeline_current_job
 
@@ -526,12 +683,11 @@ run_job() {
     fi
 
     # ── 사전 검증 (Pre-validation) ──
-    pre_validate "$job_id" "$project" "$session_id" || { _release_work_lock "$project" "$job_id"; return 1; }
+    pre_validate "$job_id" "$project" "$session_id" "$instruction" || { _release_work_lock "$project" "$job_id"; return 1; }
 
     # ── 중복 작업 확인 ──
     check_duplicate "$job_id" "$project" "$instruction" || { _release_work_lock "$project" "$job_id"; return 0; }
 
-    local workdir="${PROJECT_WORKDIR[$project]:-}"
     local use_worktree=false
     local worktree_dir=""
 
@@ -547,14 +703,41 @@ run_job() {
                 use_worktree=true
                 log "  WORKTREE: $worktree_dir 생성 (avail=${avail_gb}GB)"
             else
-                log "  WORKTREE_FAIL: fallback to main workdir"
+                log "  WORKTREE_FAIL: isolated worktree required; refusing main workdir fallback"
+                db_update "UPDATE pipeline_jobs SET status='error', phase='worktree_unavailable',
+                           error_detail='worktree_unavailable',
+                           review_feedback=COALESCE(review_feedback,'') || E'\n[Runner Guard] 병렬 실행 모드에서 worktree 생성 실패 — main 작업공간 fallback 차단',
+                           updated_at=NOW() WHERE job_id='${job_id}';"
+                post_to_chat "$session_id" "❌ [Pipeline Runner] worktree 생성 실패로 작업 차단: $job_id — main 작업공간 fallback을 금지했습니다."
+                _release_work_lock "$project" "$job_id"
+                _cleanup_artifacts "$job_id"
+                promote_next_queued "$project"
+                _current_job_id=""
+                _current_session_id=""
+                rm -f /tmp/.pipeline_current_job
+                return 1
             fi
         else
-            log "  WORKTREE_SKIP: 디스크 부족 ${avail_gb}GB < 5GB"
+            log "  WORKTREE_SKIP: 디스크 부족 ${avail_gb}GB < 5GB; refusing main workdir fallback"
+            db_update "UPDATE pipeline_jobs SET status='error', phase='worktree_disk_low',
+                       error_detail='worktree_disk_low',
+                       review_feedback=COALESCE(review_feedback,'') || E'\n[Runner Guard] 병렬 실행 모드에서 worktree 디스크 여유 부족 — main 작업공간 fallback 차단',
+                       updated_at=NOW() WHERE job_id='${job_id}';"
+            post_to_chat "$session_id" "❌ [Pipeline Runner] worktree 디스크 부족으로 작업 차단: $job_id (${avail_gb}GB < 5GB)"
+            _release_work_lock "$project" "$job_id"
+            _cleanup_artifacts "$job_id"
+            promote_next_queued "$project"
+            _current_job_id=""
+            _current_session_id=""
+            rm -f /tmp/.pipeline_current_job
+            return 1
         fi
     fi
 
-    log "▶ START job=$job_id project=$project workdir=$workdir"
+    log "▶ START job=$job_id project=$project target=${target_repo} workdir=$workdir"
+    # FIX(INVALID_GIT_DIFF): Claude 실행 전 HEAD SHA 캡처
+    local pre_exec_sha
+    pre_exec_sha=$(git -C "$workdir" rev-parse HEAD 2>/dev/null) || pre_exec_sha=""
     db_update "UPDATE pipeline_jobs SET status='running', phase='claude_code_work',
                started_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
     post_to_chat "$session_id" "🔧 [Pipeline Runner] 작업 시작: ${instruction:0:200}"
@@ -597,7 +780,11 @@ run_job() {
         if [[ "$job_model" == codex:* ]]; then
             MODEL_CYCLE=("$job_model" "$claude_primary" "$claude_primary" "$claude_secondary" "$claude_secondary")
         elif [[ "$job_model" == litellm:* ]]; then
-            MODEL_CYCLE=("$job_model" "$claude_primary" "$claude_primary" "$claude_secondary" "$claude_secondary")
+            if [[ "$RUNNER_ENGINE_MODE" == "litellm" ]]; then
+                MODEL_CYCLE=("$job_model")
+            else
+                MODEL_CYCLE=("$job_model" "$claude_primary" "$claude_primary" "$claude_secondary" "$claude_secondary")
+            fi
         elif [[ "$job_model" == "claude-"* ]]; then
             MODEL_CYCLE=("$job_model" "$job_model" "$claude_secondary" "$claude_secondary" "$claude_primary" "$claude_primary")
         else
@@ -614,8 +801,11 @@ run_job() {
     # C-4: 빈 토큰 가드 — 둘 다 비어있으면 즉시 실패 처리
     if [[ -z "$TOKEN_1" && -z "$TOKEN_2" ]]; then
         log "FATAL: ANTHROPIC_AUTH_TOKEN / _2 모두 비어있음 — job=$job_id 실패 처리"
-        db_exec "UPDATE pipeline_jobs SET status='error', phase='token_missing', updated_at=NOW() WHERE job_id='$job_id'" 2>/dev/null || true
-        send_message "$session_id" "🔴 [러너 토큰 없음] ANTHROPIC_AUTH_TOKEN 확인 필요 — job=$job_id" 2>/dev/null || true
+        db_update "UPDATE pipeline_jobs SET status='error', phase='token_missing',
+                   error_detail='token_missing',
+                   review_feedback=COALESCE(review_feedback,'') || E'\n[Auth] ANTHROPIC_AUTH_TOKEN / ANTHROPIC_AUTH_TOKEN_2 모두 비어있음',
+                   updated_at=NOW() WHERE job_id='$job_id'" 2>/dev/null || true
+        post_to_chat "$session_id" "🔴 [러너 토큰 없음] ANTHROPIC_AUTH_TOKEN 확인 필요 — job=$job_id"
         return 1
     fi
     # TOKEN_1이 비면 TOKEN_2로 대체
@@ -626,6 +816,7 @@ run_job() {
         exit_code=0
         cd "$workdir"
         local current_model="${MODEL_CYCLE[$attempt]}"
+        local effective_model="$current_model"
         local token_slot="${TOKEN_CYCLE[$attempt]}"
         local cycle_num=$(( attempt / 2 + 1 ))
 
@@ -666,23 +857,37 @@ run_job() {
 
 ${safe_instruction}"
 
-        log "  MODEL_FALLBACK job=$job_id model=$current_model cycle=$cycle_num attempt=$((attempt+1))/$total_attempts"
+        if [[ $attempt -eq 0 ]]; then
+            log "  MODEL_ATTEMPT job=$job_id model=$current_model cycle=$cycle_num attempt=1/$total_attempts"
+        else
+            log "  MODEL_FALLBACK job=$job_id model=$current_model cycle=$cycle_num attempt=$((attempt+1))/$total_attempts"
+        fi
+        if [[ "$current_model" == codex:* ]]; then
+            local codex_disabled_until=""
+            if codex_disabled_until=$(codex_auth_disabled_until); then
+                log "  CODEX_AUTH_DISABLED_SKIP job=$job_id model=$current_model until_epoch=$codex_disabled_until"
+                db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[Codex] ${current_model} skip: auth cooldown active until ${codex_disabled_until}' WHERE job_id='${job_id}';"
+                attempt=$((attempt + 1))
+                continue
+            fi
+        fi
         # Codex CLI Runner 분기 (codex: 접두사, ChatGPT Plus OAuth)
-        # 가용 모델: gpt-5.4, gpt-5.4-mini, gpt-5.3-codex (2026-04-14 실측)
+        # 가용 모델: gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex (2026-04-28 Codex catalog)
         # Pro 전용(gpt-5.4-pro, gpt-5.4-nano, gpt-5.3-codex-spark)은 ChatGPT Plus에서 미지원
         if [[ "$current_model" == codex:* ]]; then
             local codex_model_name="${current_model#codex:}"
             # 가용 모델 유효성 검증
             case "$codex_model_name" in
-                default|gpt-5.4|gpt-5.4-mini|gpt-5.3-codex) ;;
+                default|gpt-5.5|gpt-5.4|gpt-5.4-mini|gpt-5.3-codex) ;;
                 *)
-                    log "  CODEX_INVALID_MODEL job=$job_id model=$codex_model_name → fallback to gpt-5.4"
-                    codex_model_name="gpt-5.4"
+                    log "  CODEX_INVALID_MODEL job=$job_id model=$codex_model_name -> fallback to gpt-5.5"
+                    codex_model_name="gpt-5.5"
                     ;;
             esac
+            effective_model="codex:${codex_model_name}"
             log "  CODEX_RUNNER job=$job_id model=$codex_model_name"
             local codex_args=(exec --full-auto --ephemeral -C "$workdir")
-            # codex:default → 모델 미지정(기본 gpt-5.4), 그 외 → -m 지정
+            # codex:default -> 모델 미지정(Codex CLI 기본값), 그 외 -> -m 지정
             [[ "$codex_model_name" != "default" ]] && codex_args+=(-m "$codex_model_name")
             timeout "$MAX_RUNTIME" codex "${codex_args[@]}" "$safe_instruction" \
                 < /dev/null > "$output_file" 2> "$err_file" &
@@ -691,17 +896,34 @@ ${safe_instruction}"
         elif [[ "$current_model" == litellm:* ]]; then
             local llm_model_name="${current_model#litellm:}"
             log "  LITELLM_RUNNER job=$job_id model=$llm_model_name"
-            # instruction을 temp file로 전달 (docker exec arg에 멀티라인/대용량 문자열 깨짐 방지)
-            local instr_file="/root/aads/aads-server/scripts/.litellm_instr_${job_id}.txt"
-            printf '%s' "$safe_instruction" > "$instr_file"
-            timeout "$MAX_RUNTIME" docker exec aads-server python3 /app/scripts/litellm_runner.py \
-                --model "$llm_model_name" \
-                --instruction-file "/app/scripts/.litellm_instr_${job_id}.txt" \
-                --workdir "$workdir" \
-                > "$output_file" 2> "$err_file" &
+            # instruction을 temp file로 전달 (arg에 멀티라인/대용량 문자열 깨짐 방지)
+            local instr_file="${ARTIFACT_DIR}/.litellm_instr_${job_id}.txt"
+            if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'aads-server'; then
+                instr_file="/root/aads/aads-server/scripts/.litellm_instr_${job_id}.txt"
+                printf '%s' "$safe_instruction" > "$instr_file"
+                local container_instr="/app/scripts/.litellm_instr_${job_id}.txt"
+                timeout "$MAX_RUNTIME" docker exec aads-server python3 /app/scripts/litellm_runner.py \
+                    --model "$llm_model_name" \
+                    --instruction-file "$container_instr" \
+                    --workdir "$workdir" \
+                    > "$output_file" 2> "$err_file" &
+            else
+                printf '%s' "$safe_instruction" > "$instr_file"
+                export LITELLM_BASE_URL="${LITELLM_BASE_URL:-http://68.183.183.11:4000}"
+                export LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-litellm}"
+                local litellm_python="/root/aads-litellm-runner-venv/bin/python"
+                [[ -x "$litellm_python" ]] || litellm_python="python3"
+                timeout "$MAX_RUNTIME" "$litellm_python" /root/scripts/litellm_runner.py \
+                    --model "$llm_model_name" \
+                    --instruction-file "$instr_file" \
+                    --workdir "$workdir" \
+                    > "$output_file" 2> "$err_file" &
+            fi
             local claude_pid=$!
         else
-            timeout "$MAX_RUNTIME" claude --model "$current_model" -p --output-format text "$safe_instruction" \
+            # AADS-242: --dangerously-skip-permissions 추가 (비대화형 -p 모드에서 Write/Bash 권한 prompt 차단 방지)
+            # 원인: 권한 prompt 모드로 실행되면 Write/Bash가 모두 차단되어 result_output에 "권한 필요" 메시지만 남음
+            timeout "$MAX_RUNTIME" claude --model "$current_model" --dangerously-skip-permissions -p --output-format text "$safe_instruction" \
                 > "$output_file" 2> "$err_file" &
             local claude_pid=$!
         fi
@@ -726,6 +948,9 @@ ${safe_instruction}"
                 if grep -qiE "FAILED:|ERROR:|unauthorized|forbidden|invalid.?key|auth" "$err_file" 2>/dev/null; then
                     local _err_msg
                     _err_msg=$(head -3 "$err_file" | tr '\n' ' ' | head -c 100)
+                    if grep -qiE "refresh_token_reused|token_expired|Please log out and sign in again" "$err_file" 2>/dev/null; then
+                        mark_codex_auth_disabled "$_err_msg"
+                    fi
                     log "  CODEX_ERROR_SKIP job=$job_id reason='${_err_msg}' → immediate fallback"
                     db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[Codex] ${current_model} 즉시폴백: ${_err_msg:0:60}' WHERE job_id='${job_id}';"
                     break
@@ -748,6 +973,7 @@ ${safe_instruction}"
         fi
 
         # LiteLLM instruction temp file 정리
+        [[ -f "${ARTIFACT_DIR}/.litellm_instr_${job_id}.txt" ]] && rm -f "${ARTIFACT_DIR}/.litellm_instr_${job_id}.txt"
         [[ -f "/root/aads/aads-server/scripts/.litellm_instr_${job_id}.txt" ]] && rm -f "/root/aads/aads-server/scripts/.litellm_instr_${job_id}.txt"
 
         # 방어: Codex 출력 실패 감지
@@ -767,8 +993,8 @@ ${safe_instruction}"
 
         if [[ $exit_code -eq 0 ]]; then
             # actual_model 기록 — CEO가 어떤 모델이 실행했는지 추적 (2026-04-14)
-            db_update "UPDATE pipeline_jobs SET actual_model='${current_model}', updated_at=NOW() WHERE job_id='${job_id}';"
-            log "  ACTUAL_MODEL job=$job_id model=$current_model"
+            db_update "UPDATE pipeline_jobs SET actual_model='${effective_model}', updated_at=NOW() WHERE job_id='${job_id}';"
+            log "  ACTUAL_MODEL job=$job_id configured=$current_model actual=$effective_model"
             break
         fi
 
@@ -801,16 +1027,27 @@ ${safe_instruction}"
         local out_tail=""
         [[ -f "$output_file" ]] && out_tail=$(tail -100 "$output_file" | head -c 2000)
 
-        local safe_output safe_feedback safe_detail
+        local safe_output safe_feedback safe_error_detail
         safe_output=$(sql_escape "$output")
         safe_feedback=$(sql_escape "exit=$exit_code type=$error_type (${attempt}회 시도)
 --- stderr (마지막 2KB) ---
 $err_content
 --- stdout (마지막 100줄) ---
 $out_tail")
+        local error_detail_msg="${error_type}"
+        if [[ "$error_type" == *": "* ]]; then
+            :
+        elif [[ -n "$err_content" ]]; then
+            local first_line
+            first_line=$(printf '%s\n' "$err_content" | head -1 | tr '\r' ' ' | head -c 80)
+            if [[ -n "${first_line//[[:space:]]/}" ]]; then
+                error_detail_msg="${error_type}: ${first_line}"
+            fi
+        fi
+        safe_error_detail=$(sql_escape "$error_detail_msg")
 
-        db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
-                   error_detail='${error_type}',
+        db_update "UPDATE pipeline_jobs SET status='error', phase='error',
+                   error_detail=${safe_error_detail},
                    result_output=${safe_output},
                    review_feedback=COALESCE(review_feedback,'') || E'\n' || ${safe_feedback},
                    updated_at=NOW() WHERE job_id='${job_id}';"
@@ -819,7 +1056,7 @@ $out_tail")
         _cleanup_artifacts "$job_id"
         # worktree 정리
         if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
-            cd "${PROJECT_WORKDIR[$project]:-/tmp}"
+            cd "${main_workdir:-/tmp}"
             git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
             log "  WORKTREE_CLEANUP: /tmp/aads-wt-${job_id}"
         fi
@@ -833,53 +1070,108 @@ $out_tail")
 
     log "  DONE Phase1 job=$job_id"
 
-    # v2.1: 커밋하지 않음 — uncommitted diff 캡처 (승인 후 커밋)
+    # v2.2: committed(Claude가 커밋한 변경) + uncommitted diff 모두 캡처
     cd "$workdir"
     local git_diff=""
-    git_diff=$(git diff HEAD 2>/dev/null | head -c 50000) || true
+    local _current_head=""
+    _current_head=$(git rev-parse HEAD 2>/dev/null) || _current_head=""
+    if [[ -n "$pre_exec_sha" && -n "$_current_head" && "$pre_exec_sha" != "$_current_head" ]]; then
+        git_diff=$(git diff "${pre_exec_sha}..${_current_head}" 2>/dev/null | head -c 45000) || true
+        local _uncommitted=""
+        _uncommitted=$(git diff HEAD 2>/dev/null | head -c 5000) || true
+        [[ -n "${_uncommitted//[[:space:]]/}" ]] && git_diff="${git_diff}
+${_uncommitted}"
+    else
+        git_diff=$(git diff HEAD 2>/dev/null | head -c 50000) || true
+    fi
+
+    if [[ -z "${git_diff//[[:space:]]/}" ]]; then
+        log "  NO_CHANGES job=$job_id target=$target_repo — awaiting_approval 차단, cancelled 처리"
+        local no_change_reason="no_changes"
+        if [[ -f "$output_file" ]]; then
+            local out_first
+            out_first=$(head -1 "$output_file" 2>/dev/null | tr '\r' ' ' | head -c 60)
+            if [[ -n "${out_first//[[:space:]]/}" ]]; then
+                no_change_reason="no_changes: ${out_first}"
+            fi
+        fi
+        db_update "UPDATE pipeline_jobs SET status='cancelled', phase='no_changes',
+                   error_detail=$(sql_escape "$no_change_reason"),
+                   result_output=$(sql_escape "$output"),
+                   review_feedback=COALESCE(review_feedback,'') || E'\n[Runner Guard] 변경사항 0건 — 실제 대상 저장소에 반영된 diff가 없어 승인 대기로 보내지 않음',
+                   updated_at=NOW() WHERE job_id='${job_id}';"
+        post_to_chat "$session_id" "⚠️ [Pipeline Runner] 변경사항 0건으로 작업 종결: $job_id — 실제 대상 저장소(${target_repo})에 diff가 없어 승인 대기로 보내지 않았습니다."
+        _release_work_lock "$project" "$job_id"
+        _cleanup_artifacts "$job_id"
+        if [[ -d "$worktree_dir" ]]; then
+            cd "${main_workdir:-/tmp}"
+            git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
+            log "  WORKTREE_CLEANUP: $worktree_dir"
+        fi
+        _notify_ai "$job_id"
+        promote_next_queued "$project"
+        _current_job_id=""
+        _current_session_id=""
+        rm -f /tmp/.pipeline_current_job
+        return 1
+    fi
 
     # ═══ AI Reviewer 단계 — CEO 승인 전 독립 AI 리뷰 ═══
     local review_verdict="APPROVE"
     local review_score="1.0"
+    local review_flag_category=""
+    local review_needs_retry="false"
     if [[ -n "$git_diff" && ${#git_diff} -gt 10 ]]; then
-        log "  AI_REVIEW job=$job_id"
-        local review_response=""
-        # diff에서 변경 파일 목록 추출
-        local changed_files=""
-        changed_files=$(echo "$git_diff" | grep '^diff --git' | sed 's/diff --git a\///' | sed 's/ b\/.*//' | tr '\n' ',' | sed 's/,$//')
+        if looks_like_git_diff "$git_diff"; then
+            log "  AI_REVIEW job=$job_id"
+            local review_response=""
+            # diff에서 변경 파일 목록 추출
+            local changed_files=""
+            changed_files=$(echo "$git_diff" | grep '^diff --git' | sed 's/diff --git a\///' | sed 's/ b\/.*//' | tr '\n' ',' | sed 's/,$//')
 
-        # JSON body 생성 (jq 사용)
-        local review_body=""
-        review_body=$(jq -n \
-            --arg jid "$job_id" \
-            --arg proj "$project" \
-            --arg diff "$git_diff" \
-            --arg inst "$instruction" \
-            --arg files "$changed_files" \
-            '{job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}')
+            # JSON body 생성 (jq 사용)
+            local review_body=""
+            review_body=$(jq -n \
+                --arg jid "$job_id" \
+                --arg proj "$project" \
+                --arg diff "$git_diff" \
+                --arg inst "$instruction" \
+                --arg files "$changed_files" \
+                '{job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}')
 
-        local review_http_code=""
-        review_response=$(curl -4 -s -w "\n%{http_code}" -X POST "${AADS_API_URL}/api/v1/review/code-diff" \
-            -H "Content-Type: application/json" \
-            -d "$review_body" \
-            --max-time 30 2>/dev/null) || true
+            local review_http_code=""
+            review_response=$(curl -4 -s -w "\n%{http_code}" -X POST "${AADS_API_URL}/api/v1/review/code-diff" \
+                -H "Content-Type: application/json" \
+                -d "$review_body" \
+                --max-time 30 2>/dev/null) || true
 
-        review_http_code=$(echo "$review_response" | tail -1)
-        review_response=$(echo "$review_response" | sed '$d')
+            review_http_code=$(echo "$review_response" | tail -1)
+            review_response=$(echo "$review_response" | sed '$d')
 
-        if [[ "$review_http_code" == "200" ]] && [[ -n "$review_response" ]]; then
-            review_verdict=$(echo "$review_response" | jq -r '.verdict // "APPROVE"')
-            review_score=$(echo "$review_response" | jq -r '.score // "1.0"')
-            log "  AI_REVIEW_RESULT job=$job_id verdict=$review_verdict score=$review_score"
+            if [[ "$review_http_code" == "200" ]] && [[ -n "$review_response" ]]; then
+                review_verdict=$(echo "$review_response" | jq -r '.verdict // "APPROVE"')
+                review_score=$(echo "$review_response" | jq -r '.score // "1.0"')
+                review_flag_category=$(echo "$review_response" | jq -r '.flag_category // empty')
+                review_needs_retry=$(echo "$review_response" | jq -r '.needs_retry // false')
+                log "  AI_REVIEW_RESULT job=$job_id verdict=$review_verdict score=$review_score flag_category=${review_flag_category:-none} needs_retry=$review_needs_retry"
 
-            if [[ "$review_verdict" == "REQUEST_CHANGES" ]]; then
-                local review_issues=""
-                review_issues=$(echo "$review_response" | jq -r '.issues | join("; ")' 2>/dev/null || echo "")
-                log "  AI_REVIEW_REQUEST_CHANGES job=$job_id issues=$review_issues"
-                post_to_chat "$session_id" "🔍 [AI Reviewer] 코드 수정 요청 (score=${review_score}): ${review_issues:0:500}"
+                if [[ "$review_verdict" == "REQUEST_CHANGES" ]]; then
+                    local review_issues=""
+                    review_issues=$(echo "$review_response" | jq -r '.issues | join("; ")' 2>/dev/null || echo "")
+                    log "  AI_REVIEW_REQUEST_CHANGES job=$job_id issues=$review_issues"
+                    post_to_chat "$session_id" "🔍 [AI Reviewer] 코드 수정 요청 (score=${review_score}): ${review_issues:0:500}"
+                elif [[ "$review_verdict" == "FLAG" && -n "$review_flag_category" ]]; then
+                    log "  AI_REVIEW_FLAG job=$job_id category=$review_flag_category"
+                fi
+            else
+                log "  AI_REVIEW_SKIP job=$job_id (HTTP ${review_http_code:-timeout})"
             fi
         else
-            log "  AI_REVIEW_SKIP job=$job_id (HTTP ${review_http_code:-timeout})"
+            review_verdict="FLAG"
+            review_score="0.1"
+            review_flag_category="INVALID_GIT_DIFF"
+            review_needs_retry="true"
+            log "  AI_REVIEW_PRECHECK_FAIL job=$job_id category=$review_flag_category"
         fi
     fi
 
@@ -896,7 +1188,14 @@ $out_tail")
     elif [[ "$review_verdict" == "REQUEST_CHANGES" ]]; then
         review_badge="⚠️ AI 리뷰 수정 권고 (score=${review_score})"
     elif [[ "$review_verdict" == "FLAG" ]]; then
-        review_badge="🔴 AI 리뷰 경고 (score=${review_score})"
+        review_badge="🔴 AI 리뷰 경고"
+        if [[ -n "$review_flag_category" ]]; then
+            review_badge="${review_badge} [${review_flag_category}]"
+        fi
+        review_badge="${review_badge} (score=${review_score})"
+        if [[ "$review_needs_retry" == "true" ]]; then
+            review_badge="${review_badge} / 재시도 권장"
+        fi
     fi
 
     post_to_chat "$session_id" "🔔 [Pipeline Runner] 작업 완료 — ${review_badge}
@@ -962,10 +1261,18 @@ _cleanup_artifacts() {
 # ── 승인된 작업 배포 ──────────────────────────────────────────────────
 deploy_job() {
     local job_id="$1" project="$2" session_id="$3"
-    local workdir="${PROJECT_WORKDIR[$project]:-}"
+    local _job_instruction=""
+    _job_instruction=$(get_job_instruction "$job_id")
+    local workdir
+    workdir=$(resolve_project_workdir "$project" "$_job_instruction")
+    local target_repo="default"
+    if is_aads_dashboard_instruction "$project" "$_job_instruction"; then
+        target_repo="aads-dashboard"
+    fi
     [[ -z "$workdir" || ! -d "$workdir" ]] && return 1
 
-    log "▶ DEPLOY job=$job_id project=$project"
+    log "[deploy_job] start job_id=$job_id project=$project"
+    log "▶ DEPLOY job=$job_id project=$project target=$target_repo workdir=$workdir"
 
     # Redis deploy lock 획득 (동시 배포 방지)
     local deploy_lock_result=""
@@ -976,14 +1283,21 @@ deploy_job() {
         deploy_lock_result=$(curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/deploy/acquire?project=${project}&session_id=${job_id}" 2>/dev/null) || true
         if echo "$deploy_lock_result" | grep -q '"acquired":false'; then
             log "  DEPLOY_LOCK_FAIL job=$job_id — 배포 스킵"
+            db_update "UPDATE pipeline_jobs SET status='error', phase='deploy_lock_fail',
+                       error_detail='deploy_lock_fail',
+                       review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패] deploy lock 획득 실패 — 다른 배포가 장시간 점유',
+                       updated_at=NOW() WHERE job_id='${job_id}';"
             post_to_chat "$session_id" "⚠️ [Pipeline Runner] 배포 락 획득 실패 (다른 배포 진행 중): $job_id"
+            _release_deploy_lock "$project" "$job_id"
+            _notify_ai "$job_id"
+            promote_next_queued "$project"
             return 1
         fi
     fi
 
     post_to_chat "$session_id" "🚀 [Pipeline Runner] 배포 시작: $job_id"
 
-    local main_workdir="${PROJECT_WORKDIR[$project]:-}"
+    local main_workdir="$workdir"
     local worktree_dir="/tmp/aads-wt-${job_id}"
 
     # flock으로 같은 프로젝트 동시 배포 방지
@@ -991,12 +1305,23 @@ deploy_job() {
     (
         flock -w 300 200 || { log "  DEPLOY_LOCK_TIMEOUT: $project"; return 1; }
 
-        if [[ -d "$worktree_dir" ]]; then
-            cd "$worktree_dir"
-            git add -A 2>/dev/null || true
+        # FIX (P0-A): 커밋 전 HEAD SHA 캡처 — 커밋 후 frontend/ 변경 감지용 (git diff HEAD는 커밋 후 항상 빈값)
+        local _pre_sha=""
+        _pre_sha=$(git -C "$main_workdir" rev-parse HEAD 2>/dev/null) || _pre_sha=""
+        echo "$_pre_sha" > "/tmp/pipeline-pre-sha-${job_id}"
+
+            if [[ -d "$worktree_dir" ]]; then
+                cd "$worktree_dir"
+            local _wt_add_failed="false"
+            if ! git add -A 2>/dev/null; then
+                log "  WARN: worktree git add -A failed, using file-copy fallback"
+                _wt_add_failed="true"
+            fi
+            git reset -q -- .active_container .active_port 2>/dev/null || true
+
             local diff_content
             diff_content=$(git diff --cached HEAD 2>/dev/null) || true
-            if [[ -n "$diff_content" ]]; then
+            if [[ -n "$diff_content" && "$_wt_add_failed" != "true" ]]; then
                 cd "$main_workdir"
                 echo "$diff_content" | git apply --3way 2>/dev/null || {
                     log "  WORKTREE_MERGE_CONFLICT: $job_id"
@@ -1007,11 +1332,42 @@ deploy_job() {
                     cd "$main_workdir"
                 }
                 git add -A 2>/dev/null || true
+                git reset -q -- .active_container .active_port 2>/dev/null || true
+            else
+                # diff_content가 비어있어도 실제 변경 파일이 있을 수 있음 (git index 이상 등)
+                local _changed_files
+                _changed_files=$(cd "$worktree_dir" && git status --porcelain 2>/dev/null | awk '{print $NF}')
+                if [[ -z "$_changed_files" ]]; then
+                    # git status도 비면 find로 최근 수정 파일 탐색 (Claude 실행 시간 기준)
+                    _changed_files=$(find "$worktree_dir" -newer "$worktree_dir/.git" -type f \
+                        ! -path '*/.git/*' ! -path '*/__pycache__/*' ! -path '*/node_modules/*' \
+                        -printf '%P\n' 2>/dev/null)
+                fi
+                if [[ -n "$_changed_files" ]]; then
+                    log "  WORKTREE_DIFF_EMPTY_BUT_FILES_CHANGED: file-copy fallback"
+                    while IFS= read -r f; do
+                        [[ -z "$f" ]] && continue
+                        if [[ -f "$worktree_dir/$f" ]]; then
+                            mkdir -p "$main_workdir/$(dirname "$f")" 2>/dev/null || true
+                            if cp "$worktree_dir/$f" "$main_workdir/$f" 2>/dev/null; then
+                                log "    COPY: $f"
+                            else
+                                log "    COPY_FAIL: $f"
+                            fi
+                        fi
+                    done <<< "$_changed_files"
+                    cd "$main_workdir"
+                    git add -A 2>/dev/null || true
+                    git reset -q -- .active_container .active_port 2>/dev/null || true
+                else
+                    log "  WORKTREE_NO_CHANGES: $job_id"
+                fi
             fi
             cd "$main_workdir"
         else
             cd "$main_workdir"
             git add -A 2>/dev/null || true
+            git reset -q -- .active_container .active_port 2>/dev/null || true
         fi
 
         # .py 파일 변경 여부 감지 (커밋 전 staged 변경 기준)
@@ -1043,23 +1399,46 @@ deploy_job() {
         fi
         local _commit_result="ok"
 
-        if ! git commit -m "$_commit_msg" 2>/dev/null; then
+        local _commit_err="/tmp/pipeline-commit-${job_id}.err"
+        if ! ALLOW_AUTH_COMMIT=1 git commit -m "$_commit_msg" 2>"$_commit_err"; then
             if git diff --cached --quiet HEAD 2>/dev/null; then
                 log "  WARN: git commit skipped — no staged changes"
                 _commit_result="no_changes"
             else
-                log "  ERROR: git commit failed (hook or other error)"
+                local _commit_err_tail
+                _commit_err_tail=$(tail -20 "$_commit_err" 2>/dev/null | head -c 1500)
+                log "  ERROR: git commit failed (hook or other error): ${_commit_err_tail//$'\n'/ }"
                 _commit_result="commit_fail"
                 echo "$_commit_result" > "/tmp/pipeline-push-result-${job_id}"
+                local _commit_feedback
+                _commit_feedback=$(sql_escape "[commit_fail]
+${_commit_err_tail}")
+                db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n' || ${_commit_feedback} WHERE job_id='${job_id}';"
             fi
         else
+            local _new_sha
+            _new_sha=$(git -C "$main_workdir" rev-parse HEAD 2>/dev/null) || _new_sha=""
+            local _staged_count
+            _staged_count=$(git -C "$main_workdir" diff --stat "${_pre_sha}..${_new_sha}" 2>/dev/null | tail -1)
+            [[ -z "$_staged_count" ]] && _staged_count="stat_unavailable"
+            log "  COMMIT_OK: ${_new_sha:-unknown} (${_staged_count})"
+
             # commit 성공 — push 시도
-            if ! git push 2>/dev/null; then
-                log "  ERROR: git push failed"
+            local _push_err="/tmp/pipeline-push-${job_id}.err"
+            if ! git push 2>"$_push_err"; then
+                local _push_err_tail
+                _push_err_tail=$(tail -20 "$_push_err" 2>/dev/null | head -c 1500)
+                log "  ERROR: git push failed: ${_push_err_tail//$'\n'/ }"
+                local _push_feedback
+                _push_feedback=$(sql_escape "[push_fail]
+${_push_err_tail}")
+                db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n' || ${_push_feedback} WHERE job_id='${job_id}';"
                 echo "push_fail" > "/tmp/pipeline-push-result-${job_id}"
             else
                 log "  GIT_PUSH_OK job=$job_id"
                 echo "ok" > "/tmp/pipeline-push-result-${job_id}"
+                # HEARTBEAT: push 성공 후 updated_at 갱신 (deploy_timeout 20분 방지)
+                db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
             fi
         fi
 
@@ -1075,6 +1454,13 @@ deploy_job() {
     if [[ -f "/tmp/pipeline-push-result-${job_id}" ]]; then
         _push_result=$(cat "/tmp/pipeline-push-result-${job_id}" 2>/dev/null) || _push_result="unknown"
         rm -f "/tmp/pipeline-push-result-${job_id}" 2>/dev/null || true
+    fi
+
+    # FIX (P0-A): 커밋 전 SHA 복원 — GO100/SF/NTV2 frontend 변경 감지용
+    local _pre_sha=""
+    if [[ -f "/tmp/pipeline-pre-sha-${job_id}" ]]; then
+        _pre_sha=$(cat "/tmp/pipeline-pre-sha-${job_id}" 2>/dev/null) || _pre_sha=""
+        rm -f "/tmp/pipeline-pre-sha-${job_id}" 2>/dev/null || true
     fi
 
     if [[ "$_push_result" != "ok" ]]; then
@@ -1099,39 +1485,74 @@ deploy_job() {
 
     # ═══ 무중단 배포 v3.0 — build→swap→healthcheck→rollback ═══
     # 원칙: 빌드 중 기존 서비스 유지, 빌드 성공 후에만 교체, 실패 시 롤백
+    local _build_fail=""
+
     case "$project" in
         AADS)
             # 1) aads-server: 배포 방식 자동 선택 (Hot-Reload 우선)
             local _needs_build="false"
-            if git -C /root/aads/aads-server diff HEAD~1 --name-only 2>/dev/null | grep -qE '(Dockerfile|requirements|docker-compose)'; then
-                _needs_build="true"
-            fi
-
-            if [[ "$_needs_build" == "true" ]]; then
-                # Dockerfile/requirements/docker-compose 변경 → Blue-Green 무중단 배포
-                log "  BLUEGREEN aads-server 무중단 배포 시작 (빌드 파일 변경 감지)"
-                if bash /root/aads/aads-server/deploy.sh bluegreen 2>&1 | tail -20; then
-                    log "  BLUEGREEN aads-server 완료"
-                else
-                    log "  WARN: bluegreen 실패 — 기존 서비스 유지 (SSE 스트림 보호)"
-                fi
-            elif [[ "$_py_changed" == "true" ]]; then
-                # Python 코드만 변경 → Hot-Reload (0초 무중단)
-                log "  HOT-RELOAD: .py 변경 감지 — reload-api.sh 실행 (0초 무중단)"
-                if bash /root/aads/aads-server/scripts/reload-api.sh 2>&1 | tail -5; then
-                    log "  HOT-RELOAD: 완료 (무중단)"
-                else
-                    log "  HOT-RELOAD: 실패 — fallback: deploy.sh bluegreen (무중단)"
-                    bash /root/aads/aads-server/deploy.sh bluegreen 2>&1 | tail -10 || true
-                fi
+            if [[ "$target_repo" == "aads-dashboard" ]]; then
+                log "  SKIP aads-server deploy — dashboard-targeted AADS job"
             else
-                # 비Python 변경 (yml/md/yaml/sh/bak 등) → 서버 재시작 불필요
-                # SIGTERM 방지: deploy.sh code는 SIGTERM을 보내 SSE 스트림을 끊으므로 사용 금지
-                log "  SKIP-DEPLOY: 비Python 변경 — aads-server 재시작 불필요 (yml/md/yaml/sh 등)"
+                if git -C /root/aads/aads-server diff HEAD~1 --name-only 2>/dev/null | grep -qE '(Dockerfile|requirements|docker-compose)'; then
+                    _needs_build="true"
+                fi
+
+                if [[ "$_needs_build" == "true" ]]; then
+                    # Dockerfile/requirements/docker-compose 변경 → Blue-Green 무중단 배포
+                    log "  BLUEGREEN aads-server 무중단 배포 시작 (빌드 파일 변경 감지)"
+                    local _aads_deploy_log="/tmp/pipeline-deploy-aads-${job_id}.log"
+                    if bash /root/aads/aads-server/deploy.sh bluegreen >"$_aads_deploy_log" 2>&1; then
+                        tail -20 "$_aads_deploy_log" 2>/dev/null || true
+                        log "  BLUEGREEN aads-server 완료"
+                    else
+                        local _aads_deploy_tail
+                        _aads_deploy_tail=$(tail -20 "$_aads_deploy_log" 2>/dev/null | head -c 1500)
+                        log "  ERROR: bluegreen 실패 — 기존 서비스 유지 (SSE 스트림 보호): ${_aads_deploy_tail//$'\n'/ }"
+                        post_to_chat "$session_id" "🔴 [Runner] AADS bluegreen 배포 실패 — 기존 서비스 유지: ${_aads_deploy_tail:0:500}"
+                        _build_fail="${_build_fail:+${_build_fail};}aads-server:bluegreen_failed"
+                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-server-bluegreen] ' || $(sql_escape "$_aads_deploy_tail") WHERE job_id='${job_id}';"
+                    fi
+                    rm -f "$_aads_deploy_log" 2>/dev/null || true
+                elif [[ "$_py_changed" == "true" ]]; then
+                    # Python 코드만 변경 → Hot-Reload (0초 무중단)
+                    log "  HOT-RELOAD: .py 변경 감지 — reload-api.sh 실행 (0초 무중단)"
+                    local _aads_reload_log="/tmp/pipeline-reload-aads-${job_id}.log"
+                    if bash /root/aads/aads-server/scripts/reload-api.sh >"$_aads_reload_log" 2>&1; then
+                        tail -5 "$_aads_reload_log" 2>/dev/null || true
+                        log "  HOT-RELOAD: 완료 (무중단)"
+                    else
+                        local _reload_tail
+                        _reload_tail=$(tail -10 "$_aads_reload_log" 2>/dev/null | head -c 1000)
+                        log "  HOT-RELOAD: 실패 — fallback: deploy.sh bluegreen (무중단)"
+                        local _aads_fallback_log="/tmp/pipeline-reload-fallback-aads-${job_id}.log"
+                        if bash /root/aads/aads-server/deploy.sh bluegreen >"$_aads_fallback_log" 2>&1; then
+                            tail -10 "$_aads_fallback_log" 2>/dev/null || true
+                        else
+                            local _fallback_tail
+                            _fallback_tail=$(tail -20 "$_aads_fallback_log" 2>/dev/null | head -c 1500)
+                            log "  ERROR: hot-reload fallback bluegreen 실패: ${_fallback_tail//$'\n'/ }"
+                            post_to_chat "$session_id" "🔴 [Runner] AADS hot-reload 및 fallback 배포 실패: ${_fallback_tail:0:500}"
+                            _build_fail="${_build_fail:+${_build_fail};}aads-server:reload_and_bluegreen_failed"
+                            db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-server-reload] ' || $(sql_escape "${_reload_tail}
+${_fallback_tail}") WHERE job_id='${job_id}';"
+                        fi
+                        rm -f "$_aads_fallback_log" 2>/dev/null || true
+                    fi
+                    rm -f "$_aads_reload_log" 2>/dev/null || true
+                else
+                    # 비Python 변경 (yml/md/yaml/sh/bak 등) → 서버 재시작 불필요
+                    # SIGTERM 방지: deploy.sh code는 SIGTERM을 보내 SSE 스트림을 끊으므로 사용 금지
+                    log "  SKIP-DEPLOY: 비Python 변경 — aads-server 재시작 불필요 (yml/md/yaml/sh 등)"
+                fi
             fi
+            # HEARTBEAT: aads-server 배포 완료 후 갱신 (dashboard 빌드 전)
+            db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
 
             # 2) aads-dashboard: Docker 이미지 빌드 서비스 → build→swap
-            if [ -n "$(git -C /root/aads/aads-dashboard status --porcelain 2>/dev/null)" ]; then
+            if [[ "$target_repo" == "aads-dashboard" ]]; then
+                DASHBOARD_CHANGED=true
+            elif [ -n "$(git -C /root/aads/aads-dashboard status --porcelain 2>/dev/null)" ]; then
                 log "  COMMIT aads-dashboard changes"
                 git -C /root/aads/aads-dashboard add -A 2>/dev/null || true
                 git -C /root/aads/aads-dashboard commit -m "Pipeline-Runner: ${job_id} (dashboard)" 2>/dev/null || true
@@ -1144,60 +1565,64 @@ deploy_job() {
             DASHBOARD_LAST_COMMIT=$(git -C /root/aads/aads-dashboard log -1 --format=%ct 2>/dev/null || echo 0)
             CURRENT_TIME=$(date +%s)
             DIFF_SECONDS=$((CURRENT_TIME - DASHBOARD_LAST_COMMIT))
-            if [ "$DASHBOARD_CHANGED" = true ] || [ "$DIFF_SECONDS" -lt 600 ]; then
-                log "  BLUEGREEN aads-dashboard (${DIFF_SECONDS}s ago)"
-                # Dashboard도 직접 docker compose 교체 금지. 전용 blue-green 스크립트가
-                # standby 빌드 → health → nginx swap → 외부 health 순서로 처리한다.
-                if DASHBOARD_EXTERNAL_HEALTH_URL="https://aads.newtalk.kr/login" \
-                    bash /root/aads/aads-dashboard/deploy.sh 2>&1 | tail -30; then
-                    log "  aads-dashboard blue-green deploy complete"
-
-                    # ── QA 자동 실행: 대시보드 배포 후 프론트엔드 검증 ──
-                    log "  QA: 30초 대기 후 Visual QA 실행..."
-                    sleep 30
-                    local _qa_response=""
-                    _qa_response=$(curl -s -m 60 -X POST \
-                        -H "Content-Type: application/json" \
-                        -d '{"pages": ["/", "/chat", "/ops"]}' \
-                        "http://127.0.0.1:8100/api/v1/visual-qa/full-qa" 2>/dev/null) || true
-
-                    if [ -z "$_qa_response" ]; then
-                        log "  QA: WARN — QA API 호출 실패 (응답 없음), 배포는 계속 진행"
-                        post_to_chat "$session_id" "⚠️ [Runner] QA API 호출 실패 — 배포는 정상 완료, QA 수동 확인 필요"
-                    else
-                        local _qa_verdict=""
-                        _qa_verdict=$(echo "$_qa_response" | jq -r '.verdict // empty' 2>/dev/null) || true
-
-                        if echo "$_qa_verdict" | grep -qi "FAIL"; then
-                            local _qa_summary=""
-                            _qa_summary=$(echo "$_qa_response" | jq -r '.summary // "상세 정보 없음"' 2>/dev/null) || true
-                            log "  QA: FAIL — $_qa_verdict: $_qa_summary"
-                            post_to_chat "$session_id" "🔴 [Runner] 프론트엔드 QA FAIL [$_qa_verdict]: $_qa_summary (롤백 없음, 수동 확인 필요)"
-
-                            # 텔레그램 긴급 알림
-                            if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
-                                curl -s -m 10 -X POST \
-                                    "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-                                    -d "chat_id=${TELEGRAM_CHAT_ID}" \
-                                    -d "text=🔴 [AADS Runner] 프론트엔드 QA FAIL [$_qa_verdict]: ${_qa_summary}" \
-                                    -d "parse_mode=HTML" 2>/dev/null || true
-                            fi
-                        elif echo "$_qa_verdict" | grep -qi "PASS"; then
-                            log "  QA: PASS ✅ [$_qa_verdict]"
-                            post_to_chat "$session_id" "✅ [Runner] 프론트엔드 QA PASS [$_qa_verdict] — 대시보드 배포 검증 완료"
-                        elif echo "$_qa_verdict" | grep -qi "CEO\|CONDITIONAL"; then
-                            local _qa_summary=""
-                            _qa_summary=$(echo "$_qa_response" | jq -r '.summary // "상세 정보 없음"' 2>/dev/null) || true
-                            log "  QA: CONDITIONAL — $_qa_verdict: $_qa_summary"
-                            post_to_chat "$session_id" "⚠️ [Runner] 프론트엔드 QA 조건부 [$_qa_verdict]: $_qa_summary — CEO 확인 필요"
-                        else
-                            log "  QA: WARN — verdict 파싱 불가 ($_qa_verdict), 배포는 계속 진행"
-                            post_to_chat "$session_id" "⚠️ [Runner] QA 결과 불명확 [$_qa_verdict] — 배포는 정상 완료, 수동 확인 필요"
-                        fi
-                    fi
+            if [ "$DASHBOARD_CHANGED" = true ] || [ "$DIFF_SECONDS" -lt 3600 ]; then
+                log "  BLUEGREEN aads-dashboard — deploy.sh 호출 (헬스체크+롤백)"
+                local _dash_deploy_log="/tmp/pipeline-deploy-dashboard-${job_id}.log"
+                if bash /root/aads/aads-dashboard/deploy.sh >"$_dash_deploy_log" 2>&1; then
+                    tail -10 "$_dash_deploy_log" 2>/dev/null || true
+                    log "  DASHBOARD DEPLOY: 완료 (무중단, 헬스체크+롤백 포함)"
                 else
-                    log "  WARN: aads-dashboard blue-green deploy failed — 기존 서비스 유지"
-                    post_to_chat "$session_id" "⚠️ [Runner] 대시보드 blue-green 배포 실패 — 기존 버전 유지"
+                    local _dash_tail
+                    _dash_tail=$(tail -20 "$_dash_deploy_log" 2>/dev/null | head -c 1500)
+                    log "  ERROR: dashboard blue-green deploy 실패 — 직접 docker fallback 차단: ${_dash_tail//$'\n'/ }"
+                    post_to_chat "$session_id" "🔴 [Runner] AADS dashboard blue-green 배포 실패: ${_dash_tail:0:500}"
+                    _build_fail="${_build_fail:+${_build_fail};}aads-dashboard:deploy_failed"
+                    db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-dashboard] ' || $(sql_escape "${_dash_tail}") WHERE job_id='${job_id}';"
+                fi
+                rm -f "$_dash_deploy_log" 2>/dev/null || true
+
+                # ── QA 자동 실행: 대시보드 배포 후 프론트엔드 검증 ──
+                log "  QA: 30초 대기 후 Visual QA 실행..."
+                sleep 30
+                local _qa_response=""
+                _qa_response=$(curl -s -m 60 -X POST \
+                    -H "Content-Type: application/json" \
+                    -d '{"pages": ["/", "/chat", "/ops"]}' \
+                    "http://127.0.0.1:8100/api/v1/visual-qa/full-qa" 2>/dev/null) || true
+
+                if [ -z "$_qa_response" ]; then
+                    log "  QA: WARN — QA API 호출 실패 (응답 없음), 배포는 계속 진행"
+                    post_to_chat "$session_id" "⚠️ [Runner] QA API 호출 실패 — 배포는 정상 완료, QA 수동 확인 필요"
+                else
+                    local _qa_verdict=""
+                    _qa_verdict=$(echo "$_qa_response" | jq -r '.verdict // empty' 2>/dev/null) || true
+
+                    if echo "$_qa_verdict" | grep -qi "FAIL"; then
+                        local _qa_summary=""
+                        _qa_summary=$(echo "$_qa_response" | jq -r '.summary // "상세 정보 없음"' 2>/dev/null) || true
+                        log "  QA: FAIL — $_qa_verdict: $_qa_summary"
+                        post_to_chat "$session_id" "🔴 [Runner] 프론트엔드 QA FAIL [$_qa_verdict]: $_qa_summary (롤백 없음, 수동 확인 필요)"
+
+                        # 텔레그램 긴급 알림
+                        if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
+                            curl -s -m 10 -X POST \
+                                "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                                -d "chat_id=${TELEGRAM_CHAT_ID}" \
+                                -d "text=🔴 [AADS Runner] 프론트엔드 QA FAIL [$_qa_verdict]: ${_qa_summary}" \
+                                -d "parse_mode=HTML" 2>/dev/null || true
+                        fi
+                    elif echo "$_qa_verdict" | grep -qi "PASS"; then
+                        log "  QA: PASS ✅ [$_qa_verdict]"
+                        post_to_chat "$session_id" "✅ [Runner] 프론트엔드 QA PASS [$_qa_verdict] — 대시보드 배포 검증 완료"
+                    elif echo "$_qa_verdict" | grep -qi "CEO\|CONDITIONAL"; then
+                        local _qa_summary=""
+                        _qa_summary=$(echo "$_qa_response" | jq -r '.summary // "상세 정보 없음"' 2>/dev/null) || true
+                        log "  QA: CONDITIONAL — $_qa_verdict: $_qa_summary"
+                        post_to_chat "$session_id" "⚠️ [Runner] 프론트엔드 QA 조건부 [$_qa_verdict]: $_qa_summary — CEO 확인 필요"
+                    else
+                        log "  QA: WARN — verdict 파싱 불가 ($_qa_verdict), 배포는 계속 진행"
+                        post_to_chat "$session_id" "⚠️ [Runner] QA 결과 불명확 [$_qa_verdict] — 배포는 정상 완료, 수동 확인 필요"
+                    fi
                 fi
             else
                 log "  SKIP aads-dashboard rebuild (no recent commits, last: ${DIFF_SECONDS}s ago)"
@@ -1206,6 +1631,8 @@ deploy_job() {
         KIS)
             # KIS: systemd 서비스 → graceful restart (~2초)
             # kis-v41-api (port 8003), kis-webapp-api (port 8001)
+            # HEARTBEAT: 서비스 재시작 직전 갱신
+            db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
             systemctl restart kis-v41-api 2>/dev/null || true
             log "  RESTART kis-v41-api"
             # webapp은 별도 workdir이므로 변경 감지
@@ -1213,52 +1640,90 @@ deploy_job() {
                 git -C /root/webapp add -A 2>/dev/null || true
                 git -C /root/webapp commit -m "Pipeline-Runner: ${job_id} (webapp)" 2>/dev/null || true
                 git -C /root/webapp push 2>/dev/null || true
+                # HEARTBEAT: 서비스 재시작 직전 갱신
+                db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
                 systemctl restart kis-webapp-api 2>/dev/null || true
                 log "  RESTART kis-webapp-api"
             fi
             ;;
         GO100)
             # GO100 API: systemd → restart (~2초)
+            # HEARTBEAT: 서비스 재시작 직전 갱신
+            db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
             systemctl restart go100 2>/dev/null || true
             log "  RESTART go100 api"
             # GO100 Frontend: npm build → restart (빌드 중 기존 서비스 유지)
             local _fe_dir="/root/kis-autotrade-v4/frontend"
             if [ -d "$_fe_dir" ]; then
+                # FIX (P0-A): 커밋 전 SHA 기준으로 frontend 변경 감지 (git diff HEAD는 커밋 후 항상 빈값)
                 local _fe_changed=""
-                _fe_changed=$(git -C /root/kis-autotrade-v4 diff HEAD --name-only -- frontend/ 2>/dev/null) || true
+                if [[ -n "$_pre_sha" ]]; then
+                    _fe_changed=$(git -C /root/kis-autotrade-v4 diff "$_pre_sha" HEAD --name-only -- frontend/ 2>/dev/null) || true
+                else
+                    # FALLBACK: _pre_sha 비었을 때 HEAD~1..HEAD로 비교 (원 버그 재발 방지)
+                    _fe_changed=$(git -C /root/kis-autotrade-v4 diff HEAD~1 HEAD --name-only -- frontend/ 2>/dev/null) || true
+                fi
                 if [ -n "$_fe_changed" ]; then
-                    log "  ZERO-DOWNTIME go100-frontend build start"
+                    # HEARTBEAT: GO100 프론트엔드 BG 배포 시작 직전 갱신
+                    db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
+                    log "  ZERO-DOWNTIME go100-frontend build start (changed: $(echo "$_fe_changed" | wc -l) files)"
                     cd "$_fe_dir"
+                    # P1: build 전 BUILD_ID 캡처 (빌드 반영 검증용)
+                    local _old_build_id=""
+                    [ -f "$_fe_dir/.next/BUILD_ID" ] && _old_build_id=$(cat "$_fe_dir/.next/BUILD_ID" 2>/dev/null) || true
                     # Step 1: 빌드 (기존 next start 프로세스 유지)
                     if npx next build 2>&1 | tail -5; then
+                        # P1: build 후 BUILD_ID 검증 — 변경 없으면 빌드 미반영 경고
+                        local _new_build_id=""
+                        [ -f "$_fe_dir/.next/BUILD_ID" ] && _new_build_id=$(cat "$_fe_dir/.next/BUILD_ID" 2>/dev/null) || true
+                        if [[ -n "$_old_build_id" && "$_old_build_id" == "$_new_build_id" ]]; then
+                            log "  WARN: go100-frontend BUILD_ID unchanged ($_new_build_id) — 빌드 반영 안 됨"
+                            post_to_chat "$session_id" "⚠️ [Runner] GO100 프론트엔드 BUILD_ID 변경 없음 — 빌드 미반영 의심"
+                            _build_fail="go100-frontend:BUILD_ID_unchanged"
+                        fi
                         # Step 2: 빌드 성공 → restart (새 .next/ 반영)
+                        # HEARTBEAT: 서비스 재시작 직전 갱신
+                        db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
                         systemctl restart go100-frontend 2>/dev/null || true
-                        log "  go100-frontend zero-downtime restart complete"
+                        log "  go100-frontend zero-downtime restart complete (BUILD_ID=${_new_build_id:0:8})"
                     else
-                        log "  WARN: go100-frontend build failed — 기존 서비스 유지"
-                        post_to_chat "$session_id" "⚠️ [Runner] GO100 프론트엔드 빌드 실패 — 기존 버전 유지"
+                        log "  ERROR: go100-frontend build failed — 배포 error 처리"
+                        post_to_chat "$session_id" "🔴 [Runner] GO100 프론트엔드 빌드 실패"
+                        _build_fail="go100-frontend:build_failed"
                     fi
                 else
-                    log "  SKIP go100-frontend (no frontend changes)"
+                    log "  SKIP go100-frontend (no frontend changes since $_pre_sha)"
                 fi
             fi
             ;;
         SF)
             # ShortFlow: 볼륨마운트 서비스 → docker restart (~3초)
             local _sf_compose="/data/shortflow/docker-compose.yml"
+            # HEARTBEAT: 서비스 재시작 직전 갱신
+            db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
             docker restart shortflow-worker 2>/dev/null || true
             docker restart shortflow-dashboard 2>/dev/null || true
             log "  RESTART shortflow-worker, shortflow-dashboard"
             # saas-dashboard: Docker 이미지 빌드 → build→swap
+            # FIX (P0-A): 커밋 전 SHA 기준으로 변경 감지
             local _saas_changed=""
-            _saas_changed=$(git -C /data/shortflow diff HEAD --name-only -- saas-dashboard/ 2>/dev/null) || true
+            if [[ -n "$_pre_sha" ]]; then
+                _saas_changed=$(git -C /data/shortflow diff "$_pre_sha" HEAD --name-only -- saas-dashboard/ 2>/dev/null) || true
+            else
+                # FALLBACK: _pre_sha 비었을 때 HEAD~1..HEAD로 비교
+                _saas_changed=$(git -C /data/shortflow diff HEAD~1 HEAD --name-only -- saas-dashboard/ 2>/dev/null) || true
+            fi
             if [ -n "$_saas_changed" ]; then
+                # HEARTBEAT: SF 프론트엔드 BG 배포 시작 직전 갱신
+                db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
                 log "  ZERO-DOWNTIME shortflow-saas-dashboard"
                 if docker compose -f "$_sf_compose" build saas-dashboard 2>&1 | tail -5; then
                     docker compose -f "$_sf_compose" up -d --no-build saas-dashboard 2>/dev/null || true
                     log "  saas-dashboard zero-downtime swap complete"
                 else
-                    log "  WARN: saas-dashboard build failed — 기존 서비스 유지"
+                    log "  ERROR: saas-dashboard build failed — 배포 error 처리"
+                    post_to_chat "$session_id" "🔴 [Runner] SF saas-dashboard 빌드 실패"
+                    _build_fail="sf-saas:build_failed"
                 fi
             fi
             ;;
@@ -1268,22 +1733,38 @@ deploy_job() {
             docker exec newtalk-v2-app php artisan optimize 2>/dev/null || true
             log "  OPTIMIZE newtalk-v2-app (OPcache clear)"
             # NTV2 Frontend: Docker 이미지 빌드 → build→swap
+            # FIX (P0-A): 커밋 전 SHA 기준으로 변경 감지 (GO100/SF와 동일 패턴)
             local _ntv2_fe_changed=""
-            _ntv2_fe_changed=$(git -C /srv/newtalk-v2 diff HEAD --name-only -- frontend/ 2>/dev/null) || true
+            if [[ -n "$_pre_sha" ]]; then
+                _ntv2_fe_changed=$(git -C /srv/newtalk-v2 diff "$_pre_sha" HEAD --name-only -- frontend/ 2>/dev/null) || true
+            else
+                # FALLBACK: _pre_sha 비었을 때 HEAD~1..HEAD로 비교
+                _ntv2_fe_changed=$(git -C /srv/newtalk-v2 diff HEAD~1 HEAD --name-only -- frontend/ 2>/dev/null) || true
+            fi
             if [ -n "$_ntv2_fe_changed" ]; then
                 log "  ZERO-DOWNTIME newtalk-v2-frontend"
                 if docker compose -f "$_ntv2_compose" build frontend 2>&1 | tail -5; then
                     docker compose -f "$_ntv2_compose" up -d --no-build frontend 2>/dev/null || true
                     log "  newtalk-v2-frontend zero-downtime swap complete"
                 else
-                    log "  WARN: newtalk-v2-frontend build failed — 기존 서비스 유지"
+                    log "  ERROR: newtalk-v2-frontend build failed — 배포 error 처리"
+                    post_to_chat "$session_id" "🔴 [Runner] NTV2 frontend 빌드 실패"
+                    _build_fail="ntv2-frontend:build_failed"
                 fi
             fi
             # Reverb: 볼륨마운트 → restart
+            # HEARTBEAT: 서비스 재시작 직전 갱신
+            db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
             docker restart newtalk-v2-reverb 2>/dev/null || true
             log "  RESTART newtalk-v2-reverb"
             ;;
     esac
+
+    # HEARTBEAT: 서비스 배포 완료, 헬스체크 시작 전 갱신
+    db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
+
+    # HEARTBEAT: 서비스 배포 완료, 헬스체크 시작 전 갱신
+    db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
 
     # ═══ 헬스체크 (retry 루프 — 최대 60초, 5초 간격) ═══
     local health_ok="unknown"
@@ -1308,10 +1789,39 @@ deploy_job() {
         done
     fi
 
+    # ═══ 프론트엔드 헬스체크 (GO100/SF/NTV2) ═══
+    local frontend_health_ok="N/A"
+    local frontend_health_url=""
+    case "$project" in
+        GO100)  frontend_health_url="http://localhost:3002" ;;
+        SF)     frontend_health_url="http://localhost:3000" ;;
+        NTV2)   frontend_health_url="http://localhost:3000" ;;
+    esac
+
+    if [[ -n "$frontend_health_url" ]]; then
+        frontend_health_ok="FAIL"
+        for _fe_retry in 1 2 3; do
+            sleep 5
+            # 프론트 2xx/3xx 모두 OK (로그인 리다이렉트 대응)
+            if curl -sf -o /dev/null -w "%{http_code}" -m 10 "$frontend_health_url" 2>/dev/null | grep -qE "^[23]"; then
+                frontend_health_ok="OK"
+                break
+            fi
+            local _fe_code=""
+            _fe_code=$(curl -s -o /dev/null -w "%{http_code}" -m 10 "$frontend_health_url" 2>/dev/null)
+            _fe_code=${_fe_code:-000}
+            if [[ "$_fe_code" =~ ^[23] ]]; then
+                frontend_health_ok="OK"
+                break
+            fi
+            log "  프론트엔드 헬스체크 재시도 ${_fe_retry}/3 code=$_fe_code url=$frontend_health_url"
+        done
+    fi
+
     # ═══ 자동 롤백: health-check FAIL 시 이전 커밋으로 복구 ═══
-    if [[ "$health_ok" == "FAIL" ]]; then
-        log "  ROLLBACK_START job=$job_id project=$project — health-check 실패"
-        post_to_chat "$session_id" "🔴 [Pipeline Runner] health-check 실패 — 자동 롤백 시작: $job_id"
+    if [[ "$health_ok" == "FAIL" || "$frontend_health_ok" == "FAIL" ]]; then
+        log "  ROLLBACK_START job=$job_id project=$project — health-check 실패 (backend=$health_ok frontend=$frontend_health_ok)"
+        post_to_chat "$session_id" "🔴 [Pipeline Runner] health-check 실패 (backend=$health_ok frontend=$frontend_health_ok) — 자동 롤백 시작: $job_id"
 
         cd "$main_workdir" 2>/dev/null || cd "${PROJECT_WORKDIR[$project]:-}"
         if git revert --no-edit HEAD 2>/dev/null; then
@@ -1320,11 +1830,19 @@ deploy_job() {
 
             case "$project" in
                 AADS)
-                    # 롤백도 무중단 배포 사용 (SSE 스트림 보호)
-                    if bash /root/aads/aads-server/deploy.sh bluegreen 2>&1 | tail -10; then
-                        log "  ROLLBACK_DEPLOY: bluegreen 성공"
+                    if [[ "$target_repo" == "aads-dashboard" ]]; then
+                        if bash /root/aads/aads-dashboard/deploy.sh 2>&1 | tail -10; then
+                            log "  ROLLBACK_DEPLOY: dashboard deploy 성공"
+                        else
+                            log "  ROLLBACK_DEPLOY: dashboard deploy 실패 — 기존 서비스 유지"
+                        fi
                     else
-                        log "  ROLLBACK_DEPLOY: bluegreen 실패 — 기존 서비스 유지"
+                        # 롤백도 무중단 배포 사용 (SSE 스트림 보호)
+                        if bash /root/aads/aads-server/deploy.sh bluegreen 2>&1 | tail -10; then
+                            log "  ROLLBACK_DEPLOY: bluegreen 성공"
+                        else
+                            log "  ROLLBACK_DEPLOY: bluegreen 실패 — 기존 서비스 유지"
+                        fi
                     fi
                     ;;
                 KIS)
@@ -1360,7 +1878,7 @@ deploy_job() {
                     -d "parse_mode=HTML" 2>/dev/null || true
             fi
 
-            db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
+            db_update "UPDATE pipeline_jobs SET status='error', phase='health_check_fail_rollback',
                        error_detail='health_check_fail_rollback',
                        review_feedback=COALESCE(review_feedback,'') || E'\n[자동롤백] health-check 실패 → git revert → rollback_health=${rollback_health}',
                        updated_at=NOW() WHERE job_id='${job_id}';"
@@ -1378,12 +1896,22 @@ deploy_job() {
         fi
     fi
 
-    db_update "UPDATE pipeline_jobs SET status='done', phase='done',
-               review_feedback=COALESCE(review_feedback,'') || E'\n[v2.1][배포완료] health=${health_ok} by=${RUNNER_HOSTNAME}',
-               updated_at=NOW() WHERE job_id='${job_id}';"
-    _generate_wrap "$job_id" "$project" "${priority:-P2}" "${title:-$job_id}"
-    post_to_chat "$session_id" "✅ [Pipeline Runner] 배포 완료 (health=${health_ok})"
-    log "  DEPLOYED job=$job_id health=$health_ok"
+    # 최종 판정: 빌드 실패 플래그가 있으면 성공 처리 금지
+    if [[ -n "$_build_fail" ]]; then
+        db_update "UPDATE pipeline_jobs SET status='error', phase='build_fail',
+                   error_detail='${_build_fail}',
+                   review_feedback=COALESCE(review_feedback,'') || E'\n[v2.1][배포실패] backend_health=${health_ok} frontend_health=${frontend_health_ok} build_fail=${_build_fail}',
+                   updated_at=NOW() WHERE job_id='${job_id}';"
+        post_to_chat "$session_id" "🔴 [Pipeline Runner] 배포 부분 실패 — 빌드 실패 감지: ${_build_fail} (backend=${health_ok} frontend=${frontend_health_ok}): $job_id"
+        log "  DEPLOYED_PARTIAL_FAIL job=$job_id build_fail=$_build_fail"
+    else
+        db_update "UPDATE pipeline_jobs SET status='done', phase='done',
+                   review_feedback=COALESCE(review_feedback,'') || E'\n[v2.1][배포완료] backend_health=${health_ok} frontend_health=${frontend_health_ok} by=${RUNNER_HOSTNAME}',
+                   updated_at=NOW() WHERE job_id='${job_id}';"
+        _generate_wrap "$job_id" "$project" "${priority:-P2}" "${title:-$job_id}"
+        post_to_chat "$session_id" "✅ [Pipeline Runner] 배포 완료 (backend=${health_ok} frontend=${frontend_health_ok})"
+        log "  DEPLOYED job=$job_id backend_health=$health_ok frontend_health=$frontend_health_ok"
+    fi
 
     # Redis deploy lock 해제
     _release_deploy_lock "$project" "$job_id"
@@ -1393,7 +1921,7 @@ deploy_job() {
 
     # worktree 정리
     if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
-        cd "${PROJECT_WORKDIR[$project]:-/tmp}"
+        cd "$main_workdir"
         git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
         log "  WORKTREE_CLEANUP: /tmp/aads-wt-${job_id}"
     fi
@@ -1405,16 +1933,19 @@ deploy_job() {
 # ── 거부된 작업 원복 ──────────────────────────────────────────────────
 reject_job() {
     local job_id="$1" project="$2" session_id="$3"
-    local workdir="${PROJECT_WORKDIR[$project]:-}"
+    local _job_instruction=""
+    _job_instruction=$(get_job_instruction "$job_id")
+    local workdir
+    workdir=$(resolve_project_workdir "$project" "$_job_instruction")
     [[ -z "$workdir" || ! -d "$workdir" ]] && return 1
 
-    log "▶ REJECT job=$job_id project=$project"
+    log "▶ REJECT job=$job_id project=$project workdir=$workdir"
     cd "$workdir"
 
     # v2.2: 해당 Runner의 변경사항만 선택적 원복 (다른 Runner의 배포된 변경 보호)
     local worktree_dir="/tmp/aads-wt-${job_id}"
     if [[ -d "$worktree_dir" ]]; then
-        cd "${PROJECT_WORKDIR[$project]:-/tmp}"
+        cd "$workdir"
         git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
         log "  REJECT_WORKTREE_CLEANUP: $worktree_dir"
     else
@@ -1435,7 +1966,7 @@ reject_job() {
 
     # worktree 정리
     if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
-        cd "${PROJECT_WORKDIR[$project]:-/tmp}"
+        cd "$workdir"
         git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
         log "  WORKTREE_CLEANUP: /tmp/aads-wt-${job_id}"
     fi
@@ -1471,7 +2002,7 @@ _recover_stuck_jobs() {
                 log "  ZOMBIE_KILL: job=$z_job pid=$z_pid — SIGTERM 무시, SIGKILL 전송"
                 kill -9 "$z_pid" 2>/dev/null || true
             fi
-            db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
+            db_update "UPDATE pipeline_jobs SET status='error', phase='error',
                        error_detail='zombie_killed',
                        runner_pid=NULL,
                        review_feedback=COALESCE(review_feedback,'') || E'\n[Zombie Kill] PID=${z_pid} SIGTERM→SIGKILL, MAX_RUNTIME=${MAX_RUNTIME}s 초과',
@@ -1489,14 +2020,14 @@ _recover_stuck_jobs() {
         done <<< "$zombie_rows"
     fi
 
-    # BUG-7: deploying 상태 10분 초과 → error 전환
+    # BUG-7: deploying 상태 20분 초과 → error 전환
     local deploy_timed_out
     deploy_timed_out=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='error',
                                 error_detail='deploy_timeout',
-                                review_feedback=COALESCE(review_feedback,'') || E'\n[Deploy Timeout] deploying 상태 10분 초과',
+                                review_feedback=COALESCE(review_feedback,'') || E'\n[Deploy Timeout] deploying 상태 20분 초과',
                                 updated_at=NOW()
                                 WHERE status='deploying'
-                                  AND updated_at < NOW() - INTERVAL '10 minutes'
+                                  AND updated_at < NOW() - INTERVAL '20 minutes'
                                   $filter
                                 RETURNING job_id;" 2>/dev/null) || true
     if [[ -n "$deploy_timed_out" ]]; then
@@ -1510,7 +2041,7 @@ _recover_stuck_jobs() {
             _dt_session="${_dt_session// /}"
             _dt_project=$(db_exec "SELECT project FROM pipeline_jobs WHERE job_id='${_dt_id}';" 2>/dev/null) || true
             _dt_project="${_dt_project// /}"
-            post_to_chat "$_dt_session" "⏰ [Pipeline Runner] 배포 타임아웃 (10분 초과): $_dt_id — 자동 에러 처리됨"
+            post_to_chat "$_dt_session" "⏰ [Pipeline Runner] 배포 타임아웃 (20분 초과): $_dt_id — 자동 에러 처리됨"
             _notify_ai "$_dt_id"
             [[ -n "$_dt_project" ]] && promote_next_queued "$_dt_project"
         done <<< "$deploy_timed_out"
@@ -1647,7 +2178,7 @@ _check_runtime_alerts() {
 # ── 메인 루프 ─────────────────────────────────────────────────────────
 main() {
     _init_db_mode
-    log "═══ Pipeline Runner v2.1 시작 (승인→커밋→푸시→빌드→배포) poll=${POLL_INTERVAL}s, max_runtime=${MAX_RUNTIME}s, retries=${MAX_RETRIES} ═══"
+    log "═══ Pipeline Runner v2.1 시작 (mode=${RUNNER_ENGINE_MODE}, 승인→커밋→푸시→빌드→배포) poll=${POLL_INTERVAL}s, max_runtime=${MAX_RUNTIME}s, retries=${MAX_RETRIES} ═══"
 
     # 프로젝트 필터 구성
     local project_filter=""
@@ -1667,21 +2198,7 @@ main() {
     if [ -f /tmp/.pipeline_current_job ]; then
         prev_job=$(cat /tmp/.pipeline_current_job)
         if [ -n "$prev_job" ]; then
-            db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
-                       error_detail='runner_restarted',
-                       review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 재시작으로 중단]',
-                       updated_at=NOW() WHERE job_id='${prev_job}' AND status='running';" || true
-            log "WARN: 이전 running 작업 $prev_job 을 error로 정리 (러너 재시작)"
-        fi
-        rm -f /tmp/.pipeline_current_job
-    fi
-
-    # 파일 기반 잔여 job 정리 — 서브셸 전파 불가 문제 보완
-    # 러너가 재시작될 때, 이전 실행에서 running 상태로 남은 작업을 즉시 error로 마킹
-    if [ -f /tmp/.pipeline_current_job ]; then
-        prev_job=$(cat /tmp/.pipeline_current_job)
-        if [ -n "$prev_job" ]; then
-            db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
+            db_update "UPDATE pipeline_jobs SET status='error', phase='error',
                        error_detail='runner_restarted',
                        review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 재시작으로 중단]',
                        updated_at=NOW() WHERE job_id='${prev_job}' AND status='running';" || true
@@ -1717,6 +2234,9 @@ main() {
 
         # 방안A: 완료된 백그라운드 작업 정리
         _reap_bg_jobs
+
+        # 선행 작업이 실패/거부/누락된 queued 작업은 claim 전에 terminal 상태로 정리
+        cleanup_blocked_dependencies
 
         # 1) queued 작업 원자적 클레임 (C4)
         local pending
@@ -1768,6 +2288,7 @@ main() {
             _watchdog_check "$project_filter"
             _cleanup_old_artifacts
             _check_runtime_alerts "$project_filter"
+            cleanup_blocked_dependencies
         fi
 
         # P2-2: 적응형 폴링 — 작업 발견 시 즉시 재폴링, 유휴 시에만 대기
@@ -1801,7 +2322,7 @@ cleanup() {
         IFS='|' read -r _jid _sid <<< "${_bg_jobs[$_pid]}"
         kill "$_pid" 2>/dev/null || true
         wait "$_pid" 2>/dev/null || true
-        db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
+        db_update "UPDATE pipeline_jobs SET status='error', phase='error',
                    error_detail='runner_shutdown',
                    review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 종료로 중단]',
                    updated_at=NOW() WHERE job_id='${_jid}' AND status='running';" || true
@@ -1811,7 +2332,7 @@ cleanup() {
     done
     # 레거시 호환: 단일 작업 추적
     if [[ -n "$_current_job_id" ]] && ! printf '%s\n' "${_bg_jobs[@]}" | grep -q "$_current_job_id"; then
-        db_update "UPDATE pipeline_jobs SET status='cancelled', phase='superseded',
+        db_update "UPDATE pipeline_jobs SET status='error', phase='error',
                    error_detail='runner_shutdown',
                    review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 종료로 중단]',
                    updated_at=NOW() WHERE job_id='${_current_job_id}' AND status='running';" || true

@@ -223,6 +223,20 @@ def _looks_like_work_completion(response_text: str, user_msg: str, intent: str) 
     return any(marker.lower() in text for marker in _WORK_DONE_MARKERS)
 
 
+def _is_structured_next_action_tail(text: str) -> bool:
+    """Allow a complete report to end with a next-action recommendation."""
+    tail = (text or "")[-500:].strip()
+    if not (("→ 다음" in tail) or ("→ 권장" in tail) or ("다음 단계" in tail)):
+        return False
+
+    evidence_hits = sum(1 for marker in _FINAL_REPORT_EVIDENCE if marker in text)
+    has_source_or_table = bool(
+        re.search(r"\[(?:DB\s*조회|코드\s*확인|로그|명령|도구|검증|실측|출처|미측정)[^\]]*\]", text)
+        or re.search(r"\|[^\n]+\|\s*\n\s*\|[\s\-:]+\|", text)
+    )
+    return evidence_hits >= 2 and has_source_or_table
+
+
 def _looks_like_incomplete_final_report(response_text: str, user_msg: str, intent: str) -> bool:
     normalized_intent = (intent or "").strip()
     if normalized_intent not in _FINAL_REPORT_INTENTS:
@@ -232,6 +246,8 @@ def _looks_like_incomplete_final_report(response_text: str, user_msg: str, inten
     if not text:
         return False
     if _PROGRESS_TAIL_RE.search(text[-500:].strip()):
+        if _is_structured_next_action_tail(text):
+            return False
         return True
     if len(text) > 900:
         return False

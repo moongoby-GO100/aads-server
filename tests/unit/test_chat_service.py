@@ -82,6 +82,94 @@ def test_runner_fast_path_prompt_block_instructs_batch_background_work():
     assert "채팅 응답을 완료" in prompt
 
 
+def test_fast_response_mode_skips_completion_contract():
+    assert chat_service._should_enforce_completion_contract("fast") is False
+    assert chat_service._should_enforce_completion_contract("quality") is True
+
+
+@pytest.mark.asyncio
+async def test_send_message_stream_applies_db_default_over_legacy_qwen():
+    captured = {}
+    session_id = str(uuid.uuid4())
+    execution_id = uuid.uuid4()
+    conn = AsyncMock()
+
+    async def _mock_fetchrow(query, *args):
+        if "FROM chat_messages WHERE idempotency_key" in query:
+            return None
+        if "WHERE session_id = $1 AND role = 'user' AND content = $2" in query:
+            return None
+        if "FROM chat_workspaces w" in query:
+            return {
+                "workspace_id": uuid.uuid4(),
+                "workspace_name": "AADS",
+                "system_prompt": "BASE_SYSTEM",
+                "workspace_settings": {},
+                "role_key": "",
+                "session_settings": {},
+            }
+        if "FROM chat_session_stats" in query:
+            return {"cost_total": 0, "message_count": 0}
+        if "SELECT settings FROM chat_users" in query:
+            return {"settings": {}}
+        return None
+
+    conn.fetchrow = AsyncMock(side_effect=_mock_fetchrow)
+    conn.fetch = AsyncMock(return_value=[])
+    conn.fetchval = AsyncMock(return_value=execution_id)
+
+    async def _mock_call_stream(*, intent_result, **kwargs):
+        captured["model"] = intent_result.model
+        yield {"type": "delta", "content": "라우팅 정상"}
+        yield {"type": "done", "model": intent_result.model, "cost": "0", "input_tokens": 1, "output_tokens": 2}
+
+    saved = AsyncMock(return_value=None)
+
+    with (
+        patch("app.services.chat_service.get_pool", return_value=_Pool(conn)),
+        patch("app.services.chat_service.create_trace", return_value=None),
+        patch("app.services.chat_service._get_last_html_artifact", new=AsyncMock(return_value=None)),
+        patch(
+            "app.services.context_builder.build_messages_context",
+            new=AsyncMock(return_value=([{"role": "user", "content": "응답 테스트"}], "BASE_SYSTEM")),
+        ),
+        patch(
+            "app.services.intent_router.classify",
+            new=AsyncMock(return_value=SimpleNamespace(
+                intent="general",
+                model="qwen-turbo",
+                use_tools=False,
+                tool_group=None,
+                use_gemini_direct=True,
+                gemini_mode=None,
+            )),
+        ),
+        patch("app.services.model_selector._get_default_llm_model_from_db", new=AsyncMock(return_value="gpt-5.5")),
+        patch("app.services.contradiction_detector.detect_contradictions", new=AsyncMock(return_value="")),
+        patch("app.services.chat_embedding_service.embed_texts", new=AsyncMock(return_value=[])),
+        patch("app.services.semantic_cache.SemanticCache.lookup", new=AsyncMock(return_value=None)),
+        patch("app.services.output_validator.validate_response", return_value=SimpleNamespace(is_valid=True)),
+        patch("app.services.response_critic.critique_response", new=AsyncMock(return_value=None)),
+        patch("app.services.chat_service._save_message", new=AsyncMock(return_value={"id": uuid.uuid4()})),
+        patch("app.services.chat_service._save_and_update_session", new=saved),
+        patch("app.services.model_selector.call_stream", new=_mock_call_stream),
+    ):
+        chunks = [
+            chunk
+            async for chunk in chat_service.send_message_stream(
+                session_id=session_id,
+                content="응답 테스트",
+                attachments=[],
+                response_mode="fast",
+            )
+        ]
+
+    assert captured["model"] == "gpt-5.5"
+    assert any('"type": "delta"' in chunk for chunk in chunks)
+    assert saved.await_args.args[1] == "라우팅 정상"
+    assert saved.await_args.kwargs["model_used"] == "gpt-5.5"
+
+
 def test_dedupe_recovery_like_messages_keeps_longest_recovery_message():
     shared_prefix = "partial prefix answer " * 3
     messages = [
@@ -218,6 +306,30 @@ async def test_repair_completed_execution_message_flags_clears_interrupted_badge
     assert result[0]["model_used"] == "gpt-5.5"
     assert "응답이 중단" not in result[0]["content"]
     conn.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_archive_interrupted_siblings_for_completed_execution_only_hides_same_execution_partials():
+    execution_id = uuid.uuid4()
+    final_message_id = uuid.uuid4()
+    conn = AsyncMock()
+    conn.execute = AsyncMock(return_value="UPDATE 2")
+
+    result = await chat_service._archive_interrupted_siblings_for_completed_execution(
+        conn,
+        execution_id,
+        final_message_id,
+        reason="unit_completed",
+    )
+
+    assert result == 2
+    sql = " ".join(conn.execute.await_args.args[0].split())
+    assert "WHERE execution_id = $1" in sql
+    assert "AND id <> $2" in sql
+    assert "intent IN ('interrupted_partial', 'interruption_notice')" in sql
+    assert "quality_details" in sql
+    assert conn.execute.await_args.args[1] == execution_id
+    assert conn.execute.await_args.args[2] == final_message_id
 
 
 @pytest.mark.asyncio

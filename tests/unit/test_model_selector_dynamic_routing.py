@@ -108,6 +108,107 @@ async def test_call_stream_routes_dynamic_qwen_model_to_direct_provider(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_call_stream_uses_db_default_for_legacy_auto_qwen(monkeypatch):
+    captured = {}
+
+    async def _fake_get_db_key(*_args, **_kwargs):
+        return ""
+
+    async def _fake_default_model():
+        return "codex:gpt-5.5"
+
+    async def _fake_available_models():
+        return {"gpt-5.5"}
+
+    async def _fake_registry_row(_model_id: str, provider=None):
+        return None
+
+    async def _fake_claude_slots():
+        return {}
+
+    async def _fake_codex_stream(model, system_prompt, messages, tools=None, session_id=None):
+        captured["model"] = model
+        captured["system_prompt"] = system_prompt
+        yield {"type": "done", "model": model, "cost": "0", "input_tokens": 1, "output_tokens": 1}
+
+    async def _unexpected_litellm(*_args, **_kwargs):
+        raise AssertionError("legacy auto qwen should be replaced by the DB llm default")
+        yield
+
+    monkeypatch.setattr(model_selector, "_get_db_key", _fake_get_db_key)
+    monkeypatch.setattr(model_selector, "_get_default_llm_model_from_db", _fake_default_model)
+    monkeypatch.setattr(model_selector, "get_available_model_ids", _fake_available_models)
+    monkeypatch.setattr(model_selector, "_get_registered_model_row", _fake_registry_row)
+    monkeypatch.setattr(model_selector, "_get_claude_slot_records", _fake_claude_slots)
+    monkeypatch.setattr(model_selector, "_stream_codex_relay", _fake_codex_stream)
+    monkeypatch.setattr(model_selector, "_stream_litellm_openai", _unexpected_litellm)
+    monkeypatch.setattr(model_selector, "_stream_litellm", _unexpected_litellm)
+
+    events = [
+        event
+        async for event in model_selector.call_stream(
+            IntentResult(intent="casual", model="qwen-turbo", use_tools=False, tool_group=""),
+            "system prompt",
+            [{"role": "user", "content": "응답 테스트"}],
+        )
+    ]
+
+    assert captured["model"] == "gpt-5.5"
+    assert "`gpt-5.5`" in captured["system_prompt"]
+    assert events[-1]["type"] == "done"
+    assert events[-1]["model"] == "gpt-5.5"
+
+
+@pytest.mark.asyncio
+async def test_call_stream_uses_db_default_for_auto_default_sentinel(monkeypatch):
+    captured = {}
+
+    async def _fake_get_db_key(*_args, **_kwargs):
+        return ""
+
+    async def _fake_default_model():
+        return "codex:gpt-5.5"
+
+    async def _fake_available_models():
+        return {"gpt-5.5", "claude-haiku"}
+
+    async def _fake_registry_row(_model_id: str, provider=None):
+        return None
+
+    async def _fake_claude_slots():
+        return {}
+
+    async def _fake_codex_stream(model, system_prompt, messages, tools=None, session_id=None):
+        captured["model"] = model
+        yield {"type": "done", "model": model, "cost": "0", "input_tokens": 1, "output_tokens": 1}
+
+    async def _unexpected_claude_stream(*_args, **_kwargs):
+        raise AssertionError("auto-default-llm must use the DB llm default without casual downgrade")
+        yield
+
+    monkeypatch.setattr(model_selector, "_get_db_key", _fake_get_db_key)
+    monkeypatch.setattr(model_selector, "_get_default_llm_model_from_db", _fake_default_model)
+    monkeypatch.setattr(model_selector, "get_available_model_ids", _fake_available_models)
+    monkeypatch.setattr(model_selector, "_get_registered_model_row", _fake_registry_row)
+    monkeypatch.setattr(model_selector, "_get_claude_slot_records", _fake_claude_slots)
+    monkeypatch.setattr(model_selector, "_stream_codex_relay", _fake_codex_stream)
+    monkeypatch.setattr(model_selector, "_stream_cli_relay", _unexpected_claude_stream)
+
+    events = [
+        event
+        async for event in model_selector.call_stream(
+            IntentResult(intent="casual", model="auto-default-llm", use_tools=False, tool_group=""),
+            "system prompt",
+            [{"role": "user", "content": "응답 테스트"}],
+        )
+    ]
+
+    assert captured["model"] == "gpt-5.5"
+    assert events[-1]["type"] == "done"
+    assert events[-1]["model"] == "gpt-5.5"
+
+
+@pytest.mark.asyncio
 async def test_call_stream_executes_deepseek_compatibility_alias_as_canonical(monkeypatch):
     captured = {}
 
@@ -285,7 +386,7 @@ async def test_dashboard_intent_no_longer_downgrades_to_haiku(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_casual_intent_still_downgrades_to_haiku(monkeypatch):
+async def test_casual_intent_still_downgrades_to_haiku_when_not_db_default(monkeypatch):
     routed_models, events = await _collect_claude_route(
         monkeypatch,
         intent="casual",
@@ -641,11 +742,11 @@ def test_is_codex_retryable_error_distinguishes_transient_and_auth_errors():
     assert not model_selector._is_codex_retryable_error("You exceeded your current quota, please check your plan and billing details.")
 
 
-def test_relay_retry_policy_defaults_to_two_seconds_thirty_retries():
+def test_relay_retry_policy_defaults_to_three_seconds_thirty_retries():
     assert len(model_selector._CODEX_RETRY_DELAYS) == 30
-    assert set(model_selector._CODEX_RETRY_DELAYS) == {2.0}
+    assert set(model_selector._CODEX_RETRY_DELAYS) == {3.0}
     assert len(model_selector._CLI_RETRY_DELAYS) == 30
-    assert set(model_selector._CLI_RETRY_DELAYS) == {2.0}
+    assert set(model_selector._CLI_RETRY_DELAYS) == {3.0}
 
 
 def test_parse_quota_reset_seconds_handles_codex_cli_fixed_kst_time():
@@ -688,7 +789,10 @@ async def test_stream_codex_relay_retries_same_model_before_returning_done(monke
     ]
 
     assert events[0]["type"] == "model_info"
-    assert any("동일 모델로 다시 이어갑니다" in event.get("content", "") for event in events if event.get("type") == "delta")
+    retry_events = [event for event in events if event.get("type") == "retry_progress"]
+    assert retry_events
+    assert retry_events[0]["attempt"] == 1
+    assert retry_events[0]["max_attempts"] == 1
     assert events[-1]["type"] == "done"
     assert len(attempts) == 2
     assert attempts[1][-1]["role"] == "user"
@@ -721,7 +825,10 @@ async def test_stream_cli_relay_retries_same_model_before_returning_done(monkeyp
         )
     ]
 
-    assert any("동일 모델로 다시 이어갑니다" in event.get("content", "") for event in events if event.get("type") == "delta")
+    retry_events = [event for event in events if event.get("type") == "retry_progress"]
+    assert retry_events
+    assert retry_events[0]["attempt"] == 1
+    assert retry_events[0]["max_attempts"] == 1
     assert events[-1]["type"] == "done"
     assert len(attempts) == 2
     assert attempts[1][-1]["role"] == "user"

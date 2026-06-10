@@ -199,3 +199,32 @@ def test_completion_contract_blocks_awaiting_user_decision_with_incomplete_items
     assert result.adjusted is True
     assert "awaiting_user_decision_without_completion" in result.violation_types
     assert "최종 완료보고가 아니라 진행 안내/중간 로그" in result.response_text
+
+
+def test_completion_contract_allows_structured_report_next_action_tail():
+    response = """
+요약: stale 실행은 0건이고, 남은 리스크는 프론트 복원 경로의 상태 동기화 차이입니다. [DB 조회]
+
+| 항목 | 결과 | 근거 |
+|---|---:|---|
+| active running | 3건 | [DB 조회] |
+| stale running | 0건 | [DB 조회] |
+| streaming placeholder | 3건 | [DB 조회] |
+
+문제점/리스크: 저장 전 취소되면 강력 새로고침 후 복원 타이밍이 달라질 수 있습니다.
+원인/근거: 백엔드 partial flush와 프론트 dedup/filter 경로가 서로 다른 시점에 동작합니다. [코드 확인]
+개선 권장안: P0은 partial flush 보존, P1은 SSE/polling 상태 계층 분리입니다.
+검증 결과: 회귀 테스트와 DB 조회 기준으로 stale running 0건을 확인했습니다. [검증]
+
+→ 다음 단계: P1 상태 동기화 계층 분리 설계를 코드 단위로 진행합니다.
+"""
+
+    result = evaluate_completion_contract(
+        response_text=response,
+        user_msg="채팅 스트리밍 전수 조사 보고해",
+        intent="report",
+        changes=[],
+    )
+
+    assert result.adjusted is False
+    assert result.violation_types == []

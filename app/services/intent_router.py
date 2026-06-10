@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://aads-litellm:4000")
 LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
+AUTO_DEFAULT_LLM_MODEL = "auto-default-llm"
 
 # ─── 인텐트 → 모델/도구 매핑 ──────────────────────────────────────────────────
 
@@ -55,8 +56,8 @@ class IntentResult:
 
 INTENT_MAP: dict[str, dict] = {
     # ─── 도구 불필요 인텐트 ───────────────────────────────────────────────────
-    "casual":           {"model": "qwen-turbo",           "tools": False, "group": ""},
-    "greeting":         {"model": "qwen-turbo",           "tools": False, "group": ""},
+    "casual":           {"model": AUTO_DEFAULT_LLM_MODEL, "tools": False, "group": ""},
+    "greeting":         {"model": AUTO_DEFAULT_LLM_MODEL, "tools": False, "group": ""},
     "deep_research":    {"model": "gemini-pro",                  "tools": False, "group": "",        "gemini_direct": "deep_research"},
     "strategy":         {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
     "discussion":       {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
@@ -246,7 +247,7 @@ INTENT_META_RULES = ("인텐트", "인턴트", "intent", "라우팅", "오분류
 
 _DEFAULT_INTENT = IntentResult(
     intent="casual",
-    model="qwen-turbo",
+    model=AUTO_DEFAULT_LLM_MODEL,
     use_tools=False,
     tool_group="",
 )

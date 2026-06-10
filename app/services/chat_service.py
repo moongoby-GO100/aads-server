@@ -23,6 +23,9 @@ from app.core.db_pool import get_pool
 
 logger = logging.getLogger(__name__)
 
+_AUTO_ROUTED_DB_DEFAULT_MODELS = {"auto-default-llm", "qwen-turbo"}
+_AUTO_ROUTED_RESUME_SKIP_MODELS = {"auto-default-llm", "claude-haiku", "qwen-turbo", "gemini-flash-lite"}
+
 # P2-2: 분기 모드에서 AI 응답에 branch_id를 자동 부여하기 위한 ContextVar
 from contextvars import ContextVar as _ContextVar  # noqa: E402
 _current_branch_id: _ContextVar[Optional[str]] = _ContextVar("_current_branch_id", default=None)
@@ -186,6 +189,11 @@ def _history_intent_filter_sql(alias: str = "") -> str:
 def _normalize_response_mode(response_mode: Optional[str]) -> str:
     normalized = (response_mode or _RESPONSE_MODE_QUALITY).strip().lower()
     return normalized if normalized in _VALID_RESPONSE_MODES else _RESPONSE_MODE_QUALITY
+
+
+def _should_enforce_completion_contract(response_mode: str) -> bool:
+    """Fast mode must not turn a valid quick reply into a recoverable stream error."""
+    return response_mode != _RESPONSE_MODE_FAST
 
 
 def _response_mode_prompt_block(response_mode: str) -> str:
@@ -2374,6 +2382,49 @@ async def _mark_execution_interrupted(
         task.cancel(msg=f"mark_interrupted:{reason[:80]}")
 
 
+async def _archive_interrupted_siblings_for_completed_execution(
+    conn: asyncpg.Connection,
+    execution_id: uuid.UUID,
+    final_message_id: uuid.UUID,
+    *,
+    reason: str = "completed_execution_final_exists",
+) -> int:
+    """Hide stale interrupted bubbles once the same execution has a final answer."""
+    status = await conn.execute(
+        """
+        UPDATE chat_messages
+        SET intent = '_archived_partial',
+            quality_details = COALESCE(quality_details, '{}'::jsonb)
+                || jsonb_build_object(
+                    'archived_reason', $3::text,
+                    'archived_at', NOW(),
+                    'final_message_id', $2::text
+                ),
+            edited_at = NOW()
+        WHERE execution_id = $1
+          AND id <> $2
+          AND role = 'assistant'
+          AND intent IN ('interrupted_partial', 'interruption_notice')
+        """,
+        execution_id,
+        final_message_id,
+        reason,
+    )
+    try:
+        archived_count = int(str(status).split()[-1])
+    except Exception:
+        archived_count = 0
+    if archived_count:
+        logger.warning(
+            "completed_execution_archived_interrupted_siblings execution=%s final=%s count=%s reason=%s",
+            str(execution_id)[:8],
+            str(final_message_id)[:8],
+            archived_count,
+            reason,
+        )
+    return archived_count
+
+
 async def _save_interrupted_partial_message(
     session_id: str,
     content: str,
@@ -3246,6 +3297,12 @@ async def with_background_completion(
                     """,
                     execution_uuid,
                     assistant_message_id,
+                )
+                await _archive_interrupted_siblings_for_completed_execution(
+                    conn,
+                    execution_uuid,
+                    assistant_message_id,
+                    reason="completion_guard_marked_completed",
                 )
                 logger.info(
                     "completion_guard_marked_completed session=%s execution=%s assistant=%s content_len=%s saw_done=%s tool_count=%s last_tool=%s queue_drops=%s",
@@ -4487,8 +4544,12 @@ async def _resume_single_stream(
                         _user_model = None
                     if not _resume_model and _user_model:
                         from app.services.intent_router import get_model_for_override
-                        _resume_model = get_model_for_override(_user_model)
-                        logger.info(f"resume_model_from_user_override session={session_id[:8]} model={_resume_model}")
+                        _normalized_user = get_model_for_override(_user_model)
+                        if _normalized_user not in _AUTO_ROUTED_RESUME_SKIP_MODELS:
+                            _resume_model = _normalized_user
+                            logger.info(f"resume_model_from_user_override session={session_id[:8]} model={_resume_model}")
+                        else:
+                            logger.info(f"resume_model_skip_auto_routed_user session={session_id[:8]} skipped={_normalized_user}")
                     if not _resume_model:
                         # 2순위: 마지막 assistant 메시지의 실제 사용 모델
                         _asst_model = await conn.fetchval("""
@@ -4503,8 +4564,7 @@ async def _resume_single_stream(
                             from app.services.intent_router import get_model_for_override
                             _normalized_asst = get_model_for_override(_asst_model)
                             # 자동 라우팅 전용 모델은 resume 대상에서 제외 (CEO가 직접 선택하지 않는 모델)
-                            _AUTO_ROUTED_MODELS = {"claude-haiku", "qwen-turbo", "gemini-flash-lite"}
-                            if _normalized_asst not in _AUTO_ROUTED_MODELS:
+                            if _normalized_asst not in _AUTO_ROUTED_RESUME_SKIP_MODELS:
                                 _resume_model = _normalized_asst
                                 logger.info(f"resume_model_from_assistant session={session_id[:8]} model={_resume_model}")
                             else:
@@ -4525,8 +4585,17 @@ async def _resume_single_stream(
                 logger.warning(f"resume_model_lookup_failed session={session_id[:8]}: {_model_err}")
 
             if not _resume_model:
-                _resume_model = "claude-sonnet"
-                logger.info(f"resume_model_fallback session={session_id[:8]} model={_resume_model}")
+                try:
+                    from app.services.model_selector import _get_default_llm_model_from_db
+                    _resume_model = await _get_default_llm_model_from_db()
+                except Exception as _db_model_err:
+                    logger.warning(f"resume_model_db_default_failed session={session_id[:8]}: {_db_model_err}")
+                    _resume_model = None
+                if _resume_model:
+                    logger.info(f"resume_model_from_db_default session={session_id[:8]} model={_resume_model}")
+                else:
+                    _resume_model = "claude-sonnet"
+                    logger.info(f"resume_model_fallback session={session_id[:8]} model={_resume_model}")
 
             intent_result = IntentResult(
                 intent="status_check",
@@ -7646,6 +7715,24 @@ async def send_message_stream(
                 if not intent_result.tool_group:
                     intent_result.tool_group = "all"
 
+        if not model_override or str(model_override).strip() in ("mixture", "auto", ""):
+            try:
+                from app.services.model_selector import _get_default_llm_model_from_db
+                _db_default_model = await _get_default_llm_model_from_db()
+            except Exception as _db_default_err:
+                logger.warning(f"auto_route_db_default_lookup_failed session={session_id[:8]}: {_db_default_err}")
+                _db_default_model = None
+            if _db_default_model:
+                logger.info(
+                    "auto_route_db_default_applied session=%s intent=%s model=%s -> %s",
+                    session_id[:8],
+                    intent,
+                    intent_result.model,
+                    _db_default_model,
+                )
+                intent_result.model = _db_default_model
+                intent_result.use_gemini_direct = False
+
         if _execution_id_str:
             try:
                 async with get_pool().acquire() as _exec_conn:
@@ -8627,7 +8714,12 @@ async def send_message_stream(
             intent=intent,
             user_message=content,
         )
-        if not _validation.is_valid:
+        if not _validation.is_valid and response_mode == _RESPONSE_MODE_FAST:
+            logger.warning(
+                f"output_validator_fast_mode_bypass: {_validation.violation_type} — "
+                f"{_validation.message} (intent={intent}, model={model_used}, tokens_out={output_tokens})"
+            )
+        elif not _validation.is_valid:
             logger.warning(
                 f"output_validator: {_validation.violation_type} — {_validation.message} "
                 f"(intent={intent}, model={model_used}, tokens_out={output_tokens})"
@@ -8872,141 +8964,144 @@ async def send_message_stream(
         _completion_contract = None
         _completion_auto_continue_count = 0
         try:
-            from app.services.response_completion_contract import enforce_completion_contract
+            if _should_enforce_completion_contract(response_mode):
+                from app.services.response_completion_contract import enforce_completion_contract
 
-            _auto_continue_max = 0 if response_mode == _RESPONSE_MODE_FAST else max(0, _COMPLETION_AUTO_CONTINUE_MAX)
-            for _contract_attempt in range(_auto_continue_max + 1):
-                _completion_contract = await enforce_completion_contract(
-                    response_text=full_response,
-                    user_msg=content,
-                    session_id=session_id,
-                    intent=intent,
-                )
-                if not _completion_contract.adjusted:
-                    break
-
-                _violations = ",".join(_completion_contract.violation_types)
-                logger.warning(
-                    "completion_contract_needs_continue session=%s attempt=%s/%s violations=%s pending=%s",
-                    session_id[:8],
-                    min(_contract_attempt + 1, _auto_continue_max),
-                    _auto_continue_max,
-                    _violations,
-                    _completion_contract.pending_count,
-                )
-                if _contract_attempt >= _auto_continue_max:
-                    full_response = _completion_contract.response_text
-                    if _completion_contract.note:
-                        yield f"data: {json.dumps({'type': 'delta', 'content': _completion_contract.note})}\n\n"
-                    await _save_interrupted_partial_message(
+                _auto_continue_max = max(0, _COMPLETION_AUTO_CONTINUE_MAX)
+                for _contract_attempt in range(_auto_continue_max + 1):
+                    _completion_contract = await enforce_completion_contract(
+                        response_text=full_response,
+                        user_msg=content,
                         session_id=session_id,
-                        content=full_response,
-                        reason="completion_contract_unresolved",
-                        execution_id=_execution_id_str,
+                        intent=intent,
                     )
-                    if _execution_id_str:
-                        async with get_pool().acquire() as _conn:
-                            await _mark_execution_interrupted(
-                                _conn,
-                                session_id,
-                                _execution_id_str,
-                                f"completion_contract_unresolved:{_violations}",
-                                partial_content=full_response,
-                                delete_empty_placeholder=False,
-                            )
-                    yield f"data: {json.dumps({'type': 'error', 'content': '최종 완료보고 조건을 만족하지 못해 완료 처리하지 않았습니다. 중간 응답은 보존했고 자동 이어쓰기를 재시도할 수 있습니다.', 'recoverable': True, 'reason': 'completion_contract_unresolved', 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
-                    return
-
-                _completion_auto_continue_count += 1
-                yield f"data: {json.dumps({'type': 'heartbeat', 'phase': 'completion_auto_continue', 'attempt': _completion_auto_continue_count})}\n\n"
-                _continue_messages = list(messages)
-                _continue_messages.append({"role": "assistant", "content": full_response.strip()})
-                _continue_messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "이전 응답은 최종 완료보고 조건을 만족하지 못했습니다. "
-                            "중간 보고로 끝내지 말고 남은 확인/조치/검증을 계속 수행하세요. "
-                            "응답 마지막에는 사용자의 원 요청에 대한 최종 완료보고를 명확히 작성하고, "
-                            "커밋/푸시/배포/문서/미완료 항목이 있으면 상태를 구체적으로 보고하세요. "
-                            f"완료 위반 사유: {_violations or 'completion_contract_adjusted'}"
-                        ),
-                    }
-                )
-                _continue_response = ""
-                async for event in call_stream(
-                    intent_result=intent_result,
-                    system_prompt=system_prompt,
-                    messages=_continue_messages,
-                    tools=tools_for_api,
-                    model_override=model_override,
-                    session_id=session_id,
-                ):
-                    etype = event.get("type", "")
-                    if etype == "heartbeat":
-                        yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
-                    elif etype == "delta":
-                        _delta = event.get("content", "")
-                        _continue_response += _delta
-                        yield f"data: {json.dumps({'type': 'delta', 'content': _delta})}\n\n"
-                    elif etype == "thinking":
-                        thinking_summary += event.get("thinking", "")
-                        yield f"data: {json.dumps({'type': 'thinking', 'thinking': event['thinking']})}\n\n"
-                    elif etype == "tool_use":
-                        tools_called.append(
-                            {
-                                "type": "tool_use",
-                                "tool_name": event["tool_name"],
-                                "tool_use_id": event.get("tool_use_id", ""),
-                                "tool_input": event.get("tool_input", {}),
-                            }
-                        )
-                        yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event.get('tool_use_id', ''), 'tool_input': event.get('tool_input', {})})}\n\n"
-                    elif etype == "tool_result":
-                        tool_result_payload = _tool_result_event_snapshot(event)
-                        tools_called.append(tool_result_payload)
-                        yield f"data: {json.dumps(_tool_result_event_snapshot(event, content_limit=300))}\n\n"
-                    elif etype == "yellow_limit":
-                        yield f"data: {json.dumps({'type': 'yellow_limit', 'content': event.get('content', ''), 'tool_name': event.get('tool_name', ''), 'consecutive_count': event.get('consecutive_count', 0)})}\n\n"
-                    elif etype == "done":
-                        model_used = event.get("model", model_used or intent_result.model)
-                        cost_usd += Decimal(str(event.get("cost", "0")))
-                        input_tokens += event.get("input_tokens", 0) or 0
-                        output_tokens += event.get("output_tokens", 0) or 0
-                        thinking_summary = event.get("thinking_summary") or thinking_summary
-                    elif etype == "error":
-                        logger.warning(
-                            "completion_auto_continue_error session=%s attempt=%s error=%s",
-                            session_id[:8],
-                            _completion_auto_continue_count,
-                            str(event.get("content") or "")[:160],
-                        )
+                    if not _completion_contract.adjusted:
                         break
 
-                if not _continue_response.strip():
-                    full_response = _completion_contract.response_text
-                    if _completion_contract.note:
-                        yield f"data: {json.dumps({'type': 'delta', 'content': _completion_contract.note})}\n\n"
-                    await _save_interrupted_partial_message(
-                        session_id=session_id,
-                        content=full_response,
-                        reason="completion_contract_continue_empty",
-                        execution_id=_execution_id_str,
+                    _violations = ",".join(_completion_contract.violation_types)
+                    logger.warning(
+                        "completion_contract_needs_continue session=%s attempt=%s/%s violations=%s pending=%s",
+                        session_id[:8],
+                        min(_contract_attempt + 1, _auto_continue_max),
+                        _auto_continue_max,
+                        _violations,
+                        _completion_contract.pending_count,
                     )
-                    if _execution_id_str:
-                        async with get_pool().acquire() as _conn:
-                            await _mark_execution_interrupted(
-                                _conn,
-                                session_id,
-                                _execution_id_str,
-                                f"completion_contract_continue_empty:{_violations}",
-                                partial_content=full_response,
-                                delete_empty_placeholder=False,
-                            )
-                    yield f"data: {json.dumps({'type': 'error', 'content': '최종 완료보고 자동 이어쓰기 결과가 비어 있어 완료 처리하지 않았습니다. 중간 응답은 보존했습니다.', 'recoverable': True, 'reason': 'completion_contract_continue_empty', 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
-                    return
+                    if _contract_attempt >= _auto_continue_max:
+                        full_response = _completion_contract.response_text
+                        if _completion_contract.note:
+                            yield f"data: {json.dumps({'type': 'delta', 'content': _completion_contract.note})}\n\n"
+                        await _save_interrupted_partial_message(
+                            session_id=session_id,
+                            content=full_response,
+                            reason="completion_contract_unresolved",
+                            execution_id=_execution_id_str,
+                        )
+                        if _execution_id_str:
+                            async with get_pool().acquire() as _conn:
+                                await _mark_execution_interrupted(
+                                    _conn,
+                                    session_id,
+                                    _execution_id_str,
+                                    f"completion_contract_unresolved:{_violations}",
+                                    partial_content=full_response,
+                                    delete_empty_placeholder=False,
+                                )
+                        yield f"data: {json.dumps({'type': 'error', 'content': '최종 완료보고 조건을 만족하지 못해 완료 처리하지 않았습니다. 중간 응답은 보존했고 자동 이어쓰기를 재시도할 수 있습니다.', 'recoverable': True, 'reason': 'completion_contract_unresolved', 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
+                        return
 
-                full_response = f"{full_response.rstrip()}\n\n{_continue_response.strip()}".strip()
+                    _completion_auto_continue_count += 1
+                    yield f"data: {json.dumps({'type': 'heartbeat', 'phase': 'completion_auto_continue', 'attempt': _completion_auto_continue_count})}\n\n"
+                    _continue_messages = list(messages)
+                    _continue_messages.append({"role": "assistant", "content": full_response.strip()})
+                    _continue_messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "이전 응답은 최종 완료보고 조건을 만족하지 못했습니다. "
+                                "중간 보고로 끝내지 말고 남은 확인/조치/검증을 계속 수행하세요. "
+                                "응답 마지막에는 사용자의 원 요청에 대한 최종 완료보고를 명확히 작성하고, "
+                                "커밋/푸시/배포/문서/미완료 항목이 있으면 상태를 구체적으로 보고하세요. "
+                                f"완료 위반 사유: {_violations or 'completion_contract_adjusted'}"
+                            ),
+                        }
+                    )
+                    _continue_response = ""
+                    async for event in call_stream(
+                        intent_result=intent_result,
+                        system_prompt=system_prompt,
+                        messages=_continue_messages,
+                        tools=tools_for_api,
+                        model_override=model_override,
+                        session_id=session_id,
+                    ):
+                        etype = event.get("type", "")
+                        if etype == "heartbeat":
+                            yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                        elif etype == "delta":
+                            _delta = event.get("content", "")
+                            _continue_response += _delta
+                            yield f"data: {json.dumps({'type': 'delta', 'content': _delta})}\n\n"
+                        elif etype == "thinking":
+                            thinking_summary += event.get("thinking", "")
+                            yield f"data: {json.dumps({'type': 'thinking', 'thinking': event['thinking']})}\n\n"
+                        elif etype == "tool_use":
+                            tools_called.append(
+                                {
+                                    "type": "tool_use",
+                                    "tool_name": event["tool_name"],
+                                    "tool_use_id": event.get("tool_use_id", ""),
+                                    "tool_input": event.get("tool_input", {}),
+                                }
+                            )
+                            yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event.get('tool_use_id', ''), 'tool_input': event.get('tool_input', {})})}\n\n"
+                        elif etype == "tool_result":
+                            tool_result_payload = _tool_result_event_snapshot(event)
+                            tools_called.append(tool_result_payload)
+                            yield f"data: {json.dumps(_tool_result_event_snapshot(event, content_limit=300))}\n\n"
+                        elif etype == "yellow_limit":
+                            yield f"data: {json.dumps({'type': 'yellow_limit', 'content': event.get('content', ''), 'tool_name': event.get('tool_name', ''), 'consecutive_count': event.get('consecutive_count', 0)})}\n\n"
+                        elif etype == "done":
+                            model_used = event.get("model", model_used or intent_result.model)
+                            cost_usd += Decimal(str(event.get("cost", "0")))
+                            input_tokens += event.get("input_tokens", 0) or 0
+                            output_tokens += event.get("output_tokens", 0) or 0
+                            thinking_summary = event.get("thinking_summary") or thinking_summary
+                        elif etype == "error":
+                            logger.warning(
+                                "completion_auto_continue_error session=%s attempt=%s error=%s",
+                                session_id[:8],
+                                _completion_auto_continue_count,
+                                str(event.get("content") or "")[:160],
+                            )
+                            break
+
+                    if not _continue_response.strip():
+                        full_response = _completion_contract.response_text
+                        if _completion_contract.note:
+                            yield f"data: {json.dumps({'type': 'delta', 'content': _completion_contract.note})}\n\n"
+                        await _save_interrupted_partial_message(
+                            session_id=session_id,
+                            content=full_response,
+                            reason="completion_contract_continue_empty",
+                            execution_id=_execution_id_str,
+                        )
+                        if _execution_id_str:
+                            async with get_pool().acquire() as _conn:
+                                await _mark_execution_interrupted(
+                                    _conn,
+                                    session_id,
+                                    _execution_id_str,
+                                    f"completion_contract_continue_empty:{_violations}",
+                                    partial_content=full_response,
+                                    delete_empty_placeholder=False,
+                                )
+                        yield f"data: {json.dumps({'type': 'error', 'content': '최종 완료보고 자동 이어쓰기 결과가 비어 있어 완료 처리하지 않았습니다. 중간 응답은 보존했습니다.', 'recoverable': True, 'reason': 'completion_contract_continue_empty', 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
+                        return
+
+                    full_response = f"{full_response.rstrip()}\n\n{_continue_response.strip()}".strip()
+            else:
+                logger.info("completion_contract_skipped_fast_mode session=%s", session_id[:8])
         except Exception as _contract_err:
             logger.warning(f"completion_contract_check_failed: {_contract_err}")
 

@@ -71,3 +71,4 @@ scripts/run_dashboard_deploy.sh
 scripts/auto_collect_trends.sh
 test-results/
 tmp/
+exports/

@@ -212,6 +212,22 @@ def _is_confirmation_question(user_message: str) -> bool:
     return False
 
 
+def _is_structured_next_action_tail(text: str) -> bool:
+    """Do not treat a proper report's next-action footer as a progress-only answer."""
+    tail = (text or "")[-500:].strip()
+    if not (("→ 다음" in tail) or ("→ 권장" in tail) or ("다음 단계" in tail)):
+        return False
+
+    lowered = (text or "").lower()
+    group_hits = sum(
+        1
+        for keywords in _REPORT_REQUIRED_GROUPS.values()
+        if any(keyword.lower() in lowered for keyword in keywords)
+    )
+    has_evidence = bool(_MARKDOWN_TABLE.search(text) or _SOURCE_TAG_PATTERN.search(text))
+    return group_hits >= 4 and has_evidence
+
+
 def _looks_progress_only_response(response_text: str, intent: str) -> bool:
     """완료 보고가 아니라 '지금 확인하겠다'는 진행 안내만 있는 응답을 차단한다."""
     normalized_intent = (intent or "").strip()
@@ -222,6 +238,8 @@ def _looks_progress_only_response(response_text: str, intent: str) -> bool:
         return False
     tail = text[-500:].strip()
     if _PROGRESS_TAIL_RE.search(tail):
+        if _is_structured_next_action_tail(text):
+            return False
         return True
     if len(text) > 700:
         return False

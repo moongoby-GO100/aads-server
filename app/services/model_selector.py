@@ -374,6 +374,9 @@ async def _get_default_llm_model_from_db() -> Optional[str]:
     return None
 
 
+_AUTO_ROUTED_DB_DEFAULT_MODELS = {"auto-default-llm", "qwen-turbo"}
+
+
 def invalidate_intent_policy_cache() -> None:
     _INTENT_POLICY_CACHE["policies"] = {}
     _INTENT_POLICY_CACHE["expires_at"] = 0.0
@@ -1408,6 +1411,21 @@ async def call_stream(
     )
     model = _effective_override or intent_result.model
 
+    _db_default_applied = False
+    if not _effective_override and str(model or "").strip() in _AUTO_ROUTED_DB_DEFAULT_MODELS:
+        _db_default = await _get_default_llm_model_from_db()
+        if _db_default:
+            logger.info(
+                "auto_routed_model_db_default: intent=%s model=%s -> %s",
+                getattr(intent_result, "intent", ""),
+                model,
+                _db_default,
+            )
+            model = _db_default
+            _db_default_applied = True
+        else:
+            logger.warning("auto_routed_model_db_default_unavailable: keeping model=%s", model)
+
     # FIX-4: 빈 모델명 가드 — model이 None/빈문자열이면 DB 기본값 조회 후 폴백
     if not model or not str(model).strip():
         _db_default = await _get_default_llm_model_from_db()
@@ -1452,7 +1470,7 @@ async def call_stream(
     # ── Dynamic Model Cascading (shadow/primary governance routing) ─────────
     _intent = getattr(intent_result, "intent", "")
     _model_locked = getattr(intent_result, "model_locked", False)
-    if not _effective_override and not _model_locked:
+    if not _effective_override and not _model_locked and not _db_default_applied:
         _policy_model, _policy_reason = await _resolve_governed_intent_model(
             intent=_intent,
             current_model=model,
@@ -1469,6 +1487,12 @@ async def call_stream(
     else:
         if _model_locked:
             logger.info(f"cascade_skip: user explicitly selected '{model}', intent='{_intent}' — respecting user choice")
+        elif _db_default_applied:
+            logger.info(
+                "cascade_skip: DB default model '%s' selected for auto-routed intent='%s'",
+                model,
+                _intent,
+            )
 
     from app.services.intent_router import resolve_intent_temperature as _rit
     _ctx_temperature.set(await _rit(_intent))
