@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-10 16:49 KST) - Chat shutdown interruption auto-resume
+- 배경: CEO가 세션 `efccec7c-0788-4564-a2cf-265c63d075f0`에서 새 프로젝트/새 세션 지시가 계속 끊기는 원인 확인과 조치를 지시했다.
+- 실측 원인:
+  - 대상 세션 마지막 실행 `b6f0c7aa-b58f-40fd-a008-26b703d2cce8`은 `retry_count=4`, `status='interrupted'`, `error_message='api_shutdown_before_process_stop'`로 종료됐다.
+  - 세션 마지막 assistant 버블은 `interruption_notice`이며 정상 최종 응답이 저장되지 않았다.
+  - 현 컨테이너는 2026-06-10 16:14 KST 이후 재생성되어 해당 실행 시점 서버 로그는 남아 있지 않았고, DB 실행 원장이 확정 근거다.
+- 조치:
+  - `app/services/chat_service.py`: `api_shutdown_before_process_stop`/`api_shutdown`/`server_shutdown`/`deploy_shutdown`을 자동 이어쓰기 가능 사유로 등록했다.
+  - 배포/프로세스 종료 중단은 응답 품질 실패가 아니므로 `_schedule_interrupted_auto_resume()`에서 일반 retry budget을 소모하지 않게 했다. 안전 상한은 일반 5회, 프로세스 중단 8회로 분리했다.
+  - `tests/unit/test_tools_and_pipeline.py`: shutdown 중단 자동 재개가 retry_count를 올리지 않고, cap 8을 사용하는 회귀 테스트를 추가했다.
+- 검증:
+  - `python3 -m compileall app/services/chat_service.py` 통과.
+  - `JWT_SECRET_KEY=test-secret-key pytest tests/unit/test_tools_and_pipeline.py::TestRegressions::test_api_shutdown_auto_resume_does_not_consume_retry_budget tests/unit/test_tools_and_pipeline.py::TestRegressions::test_interrupted_auto_resume_schedules_completion_gate_retry -q` 결과 2 passed.
+  - `JWT_SECRET_KEY=test-secret-key pytest tests/unit/test_chat_service.py -q` 결과 45 passed, 1 warning.
+- 배포 상태: 본 기록 시점에는 코드/테스트/HANDOVER 수정 완료, 커밋/푸시/blue-green 배포 진행 대상이다.
+
 ## 현재 진행 상태 (2026-06-10 16:13 KST) - AADS upstream slot and gallery manifest deploy
 - 배경: CEO가 현재 작업트리 변경분의 커밋, 푸시, 배포 완료를 지시했다.
 - 변경 대상:

@@ -71,6 +71,13 @@ _AUTO_RESUME_INTERRUPTED_REASON_PREFIXES = (
     "background_producer_incomplete_exit",
 )
 
+_AUTO_RESUME_PROCESS_INTERRUPTION_PREFIXES = (
+    "api_shutdown_before_process_stop",
+    "api_shutdown",
+    "server_shutdown",
+    "deploy_shutdown",
+)
+
 
 def _require_tenant_uuid(tenant_id: Optional[str], operation: str) -> uuid.UUID:
     if not tenant_id:
@@ -93,7 +100,14 @@ def _should_auto_resume_interrupted_reason(reason: str) -> bool:
     )
     if any(token in normalized for token in blocked_tokens):
         return False
-    return normalized.startswith(_AUTO_RESUME_INTERRUPTED_REASON_PREFIXES)
+    return normalized.startswith(
+        _AUTO_RESUME_INTERRUPTED_REASON_PREFIXES
+        + _AUTO_RESUME_PROCESS_INTERRUPTION_PREFIXES
+    )
+
+
+def _is_process_interruption_reason(reason: str) -> bool:
+    return (reason or "").strip().startswith(_AUTO_RESUME_PROCESS_INTERRUPTION_PREFIXES)
 
 # AADS-191 Phase1: Redis Stream 토큰 버퍼링 (서버 재시작 시 스트리밍 복구)
 from app.services import redis_stream as _redis_stream  # noqa: E402
@@ -1981,7 +1995,9 @@ async def _schedule_interrupted_auto_resume(
     if not row:
         return False
     retry_count = row["retry_count"] or 0
-    if retry_count >= 5:
+    process_interruption = _is_process_interruption_reason(reason)
+    retry_limit = 8 if process_interruption else 5
+    if retry_count >= retry_limit:
         logger.warning(
             "interrupted_auto_resume_skip_hard_cap session=%s execution=%s retry_count=%s reason=%s",
             session_id[:8],
@@ -2048,7 +2064,10 @@ async def _schedule_interrupted_auto_resume(
         """
         UPDATE chat_turn_executions
         SET status = 'retrying',
-            retry_count = retry_count + 1,
+            retry_count = CASE
+                WHEN $5::boolean THEN retry_count
+                ELSE retry_count + 1
+            END,
             assistant_message_id = $2,
             completed_at = NULL,
             error_message = $3,
@@ -2056,13 +2075,15 @@ async def _schedule_interrupted_auto_resume(
         WHERE id = $1
           AND session_id = $4
           AND status = 'interrupted'
-          AND retry_count < 5
+          AND retry_count < $6
         RETURNING id
         """,
         eid,
         placeholder_id,
         f"interrupted_auto_retry_scheduled:{reason}"[:1000],
         sid,
+        process_interruption,
+        retry_limit,
     )
     if not claimed:
         return False
@@ -2120,7 +2141,7 @@ async def _schedule_interrupted_auto_resume(
         "interrupted_auto_resume_scheduled session=%s execution=%s retry_count=%s reason=%s",
         session_id[:8],
         execution_id[:8],
-        retry_count + 1,
+        retry_count if process_interruption else retry_count + 1,
         reason[:160],
     )
     return True
