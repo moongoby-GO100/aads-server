@@ -289,7 +289,10 @@ async def test_repair_completed_execution_message_flags_clears_interrupted_badge
         {
             "id": message_id,
             "execution_id": execution_id,
+            "assistant_message_id": message_id,
             "final_model": "gpt-5.5",
+            "content_len": 47,
+            "created_at": datetime.now(timezone.utc),
         }
     ])
     conn.execute = AsyncMock()
@@ -313,7 +316,66 @@ async def test_repair_completed_execution_message_flags_clears_interrupted_badge
     assert result[0]["intent"] is None
     assert result[0]["model_used"] == "gpt-5.5"
     assert "응답이 중단" not in result[0]["content"]
-    conn.execute.assert_awaited_once()
+    assert conn.execute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_repair_completed_execution_message_flags_archives_duplicate_terminal_bubbles():
+    execution_id = uuid.uuid4()
+    placeholder_id = uuid.uuid4()
+    interrupted_id = uuid.uuid4()
+    created_at = datetime.now(timezone.utc)
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=[
+        {
+            "id": placeholder_id,
+            "execution_id": execution_id,
+            "assistant_message_id": None,
+            "final_model": "gpt-5.5",
+            "content_len": 120,
+            "created_at": created_at,
+        },
+        {
+            "id": interrupted_id,
+            "execution_id": execution_id,
+            "assistant_message_id": None,
+            "final_model": "gpt-5.5",
+            "content_len": 220,
+            "created_at": created_at + timedelta(seconds=1),
+        },
+    ])
+    conn.execute = AsyncMock(return_value="UPDATE 1")
+    messages = [
+        {
+            "id": str(placeholder_id),
+            "role": "assistant",
+            "execution_id": str(execution_id),
+            "intent": "streaming_placeholder",
+            "model_used": "streaming",
+            "content": "짧은 부분 응답\n\n⏳ _생성 중..._",
+        },
+        {
+            "id": str(interrupted_id),
+            "role": "assistant",
+            "execution_id": str(execution_id),
+            "intent": "interrupted_partial",
+            "model_used": "interrupted",
+            "content": "더 긴 최종 응답입니다.\n\n_(이전 지시 응답은 여기까지 보존되고, 최신 지시를 이어서 처리합니다.)_",
+        },
+    ]
+
+    result = await chat_service._repair_completed_execution_message_flags(
+        conn,
+        messages,
+        "unit",
+    )
+
+    assert len(result) == 1
+    assert result[0]["id"] == str(interrupted_id)
+    assert result[0]["intent"] is None
+    assert result[0]["model_used"] == "gpt-5.5"
+    assert "이전 지시 응답" not in result[0]["content"]
+    assert conn.execute.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -334,7 +396,7 @@ async def test_archive_interrupted_siblings_for_completed_execution_only_hides_s
     sql = " ".join(conn.execute.await_args.args[0].split())
     assert "WHERE execution_id = $1" in sql
     assert "AND id <> $2" in sql
-    assert "intent IN ('interrupted_partial', 'interruption_notice')" in sql
+    assert "intent IN ('streaming_placeholder', 'interrupted_partial', 'interruption_notice')" in sql
     assert "quality_details" in sql
     assert conn.execute.await_args.args[1] == execution_id
     assert conn.execute.await_args.args[2] == final_message_id

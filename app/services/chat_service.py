@@ -2410,7 +2410,7 @@ async def _archive_interrupted_siblings_for_completed_execution(
     *,
     reason: str = "completed_execution_final_exists",
 ) -> int:
-    """Hide stale interrupted bubbles once the same execution has a final answer."""
+    """Hide stale terminal placeholders once the same execution has a final answer."""
     status = await conn.execute(
         """
         UPDATE chat_messages
@@ -2425,7 +2425,7 @@ async def _archive_interrupted_siblings_for_completed_execution(
         WHERE execution_id = $1
           AND id <> $2
           AND role = 'assistant'
-          AND intent IN ('interrupted_partial', 'interruption_notice')
+          AND intent IN ('streaming_placeholder', 'interrupted_partial', 'interruption_notice')
         """,
         execution_id,
         final_message_id,
@@ -5579,7 +5579,10 @@ async def _repair_completed_execution_message_flags(
         """
         SELECT m.id,
                te.id AS execution_id,
-               COALESCE(te.actual_model, te.requested_model, NULLIF(m.model_used, 'streaming')) AS final_model
+               te.assistant_message_id,
+               COALESCE(te.actual_model, te.requested_model, NULLIF(m.model_used, 'streaming')) AS final_model,
+               length(COALESCE(m.content, '')) AS content_len,
+               m.created_at
         FROM chat_messages m
         JOIN chat_turn_executions te
           ON te.id = m.execution_id
@@ -5598,7 +5601,35 @@ async def _repair_completed_execution_message_flags(
     if not rows:
         return messages
 
-    repair_by_id = {row["id"]: row for row in rows}
+    rows_by_execution: dict[uuid.UUID, list[Any]] = {}
+    for row in rows:
+        rows_by_execution.setdefault(row["execution_id"], []).append(row)
+
+    repair_by_id: dict[uuid.UUID, Any] = {}
+    archived_ids: set[str] = set()
+    for execution_id, execution_rows in rows_by_execution.items():
+        assistant_message_id = execution_rows[0]["assistant_message_id"]
+        keeper = None
+        if assistant_message_id:
+            keeper = next((row for row in execution_rows if row["id"] == assistant_message_id), None)
+        if keeper is None:
+            keeper = max(
+                execution_rows,
+                key=lambda row: (
+                    int(row["content_len"] or 0),
+                    row["created_at"] or datetime.min.replace(tzinfo=timezone.utc),
+                ),
+            )
+        repair_by_id[keeper["id"]] = keeper
+        archived = await _archive_interrupted_siblings_for_completed_execution(
+            conn,
+            execution_id,
+            keeper["id"],
+            reason=f"{log_prefix}_completed_execution_duplicate",
+        )
+        if archived:
+            archived_ids.update(str(row["id"]) for row in execution_rows if row["id"] != keeper["id"])
+
     await conn.execute(
         """
         UPDATE chat_messages m
@@ -5632,6 +5663,9 @@ async def _repair_completed_execution_message_flags(
     repaired_ids = {str(mid) for mid in repair_by_id}
     final_models = {str(row["id"]): row["final_model"] for row in rows}
     for msg in messages:
+        if str(msg.get("id")) in archived_ids:
+            msg["intent"] = "_archived_partial"
+            continue
         if str(msg.get("id")) in repaired_ids:
             msg["intent"] = None
             msg["model_used"] = final_models.get(str(msg.get("id"))) or msg.get("model_used")
@@ -5643,8 +5677,13 @@ async def _repair_completed_execution_message_flags(
             )
             content = re.sub(r"\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\s*$", "", content)
             msg["content"] = content
-    logger.warning("%s_repaired_completed_execution_flags count=%d", log_prefix, len(repaired_ids))
-    return messages
+    logger.warning(
+        "%s_repaired_completed_execution_flags count=%d archived=%d",
+        log_prefix,
+        len(repaired_ids),
+        len(archived_ids),
+    )
+    return [msg for msg in messages if str(msg.get("id")) not in archived_ids]
 
 
 async def list_messages(
@@ -6437,16 +6476,11 @@ async def _save_and_update_session(
                         partial_content=content,
                     )
                     return
-                await conn.execute(
-                    """
-                    DELETE FROM chat_messages
-                    WHERE execution_id = $1
-                      AND role = 'assistant'
-                      AND intent IN ('interrupted_partial', 'interruption_notice')
-                      AND ($2::uuid IS NULL OR id <> $2)
-                    """,
+                await _archive_interrupted_siblings_for_completed_execution(
+                    conn,
                     _execution_uuid,
                     _assistant_msg_id,
+                    reason="final_save_completed",
                 )
                 await conn.execute(
                     """
