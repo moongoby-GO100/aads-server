@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-10 19:01 KST) - NewTalk V1 admin AADS chat widget E2E fix
+- 배경: CEO가 `https://pick.newtalk.kr/root/members` 및 전체 V1 관리자 페이지에 AADS 채팅 아이콘이 반영되지 않는 문제를 지적했고, 최종 완료보고 조건 재충족을 지시했다.
+- 실측 원인:
+  - `pick.newtalk.kr/root/members`는 `/srv/newtalk-v2`가 아니라 레거시 `/home/newpigup3/views/root/*` 관리자 화면을 사용한다.
+  - 위젯 삽입은 `head.php` 공통 헤더에 들어갔지만, JS src가 `<?php echo VIEWS_DIR;?>/assets/js/aads-chat-widget.js`로 잡혀 실제 URL `/views/root/assets/js/aads-chat-widget.js`가 404였다.
+  - AADS 외부 채팅 full stream 경로는 `codex:gpt-5.5`로 들어간 뒤 `completion_guard_incomplete_progress_tail:final_save`에 걸려 placeholder가 남았다.
+- 조치:
+  - 레거시 서버 직접 파일: `/home/newpigup3/views/root/head.php`, `/home/newpigup3/views/bottom2.php`의 위젯 JS 경로를 `/views/assets/js/aads-chat-widget.js`로 수정했다. 수정 전 `.bak_aads_YYYYmmdd_HHMMSS` 백업을 남겼다.
+  - `app/services/external_chat_gateway.py`: NewTalk 위젯 `fast/direct/widget` 요청은 AADS full stream 대신 중앙 `call_llm_with_fallback()` 직접 호출로 처리하고, user/assistant 메시지를 `chat_messages`에 저장하도록 보강했다.
+- 검증:
+  - `curl -I https://pick.newtalk.kr/views/assets/js/aads-chat-widget.js` 결과 HTTP 200.
+  - `curl -i https://pick.newtalk.kr/aads-chat/config` 비로그인 결과 HTTP 401 `Unauthenticated.`로 관리자 보호 확인.
+  - PHP 렌더 검증: `auth_code=99`, host `pick.newtalk.kr`에서 위젯 `data-service=v1_new` 확인. `auth_code=80`에서는 위젯 미노출 확인.
+  - `/home/newpigup3/views/root` PHP 파일 130개 중 87개가 `head.php`를 포함한다. 나머지 43개는 인쇄/에디터/부분 템플릿/인덱스성 파일이라 일반 관리자 화면 전체 반영 범위에서 제외된다.
+  - `python3 -m py_compile app/services/external_chat_gateway.py` 통과.
+- 상태:
+  - AADS 코드 변경은 커밋/푸시/배포 진행 대상.
+  - `/home/newpigup3` 레거시 파일은 NTV2 Git 저장소 밖 직접 운영 파일이라 Git 커밋 대상이 아니다.
+
 ## 현재 진행 상태 (2026-06-10 16:49 KST) - Chat shutdown interruption auto-resume
 - 배경: CEO가 세션 `efccec7c-0788-4564-a2cf-265c63d075f0`에서 새 프로젝트/새 세션 지시가 계속 끊기는 원인 확인과 조치를 지시했다.
 - 실측 원인:

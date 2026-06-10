@@ -7,11 +7,13 @@ import os
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, AsyncGenerator, Literal
 
 import asyncpg
 import structlog
 
+from app.core.anthropic_client import call_llm_with_fallback
 from app.core.db_pool import get_pool
 from app.services import chat_service
 from app.services.tenant_usage_limits import (
@@ -33,6 +35,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "triage issues, explain workflows, and draft operational actions. "
     "Do not expose internal secrets or perform destructive actions."
 )
+DEFAULT_DIRECT_MODEL = "qwen-turbo"
 
 
 @dataclass(frozen=True)
@@ -77,6 +80,14 @@ def get_settings() -> ExternalChatSettings:
         model=os.getenv("AADS_EXTERNAL_CHAT_MODEL", "").strip(),
         unlimited_first=_truthy(os.getenv("AADS_EXTERNAL_CHAT_UNLIMITED_FIRST"), default=True),
         allowed_origins=_csv_env("AADS_EXTERNAL_CHAT_ALLOWED_ORIGINS"),
+    )
+
+
+def _direct_model(settings: ExternalChatSettings) -> str:
+    return (
+        settings.model
+        or os.getenv("AADS_EXTERNAL_CHAT_DIRECT_MODEL", "").strip()
+        or DEFAULT_DIRECT_MODEL
     )
 
 
@@ -376,6 +387,26 @@ async def send_message(
         metadata=metadata or {},
     )
 
+    if response_mode.strip().lower() in {"fast", "direct", "widget"}:
+        assistant_content, model_used = await send_direct_message(
+            session=session,
+            content=clean_content,
+            metadata=metadata or {},
+            settings=cfg,
+        )
+        return {
+            "external_session_id": session["id"],
+            "aads_session_id": session["aads_session_id"],
+            "assistant_message": assistant_content,
+            "usage_status": usage_status,
+            "soft_bypass": soft_bypass,
+            "stream": {
+                "direct": True,
+                "done": {"type": "done", "model": model_used},
+                "errors": [],
+            },
+        }
+
     token = set_soft_bypass_usage_limits(cfg.unlimited_first)
     try:
         assistant_content, stream_meta = await collect_chat_stream(
@@ -399,6 +430,67 @@ async def send_message(
         "soft_bypass": soft_bypass,
         "stream": stream_meta,
     }
+
+
+async def send_direct_message(
+    *,
+    session: dict[str, Any],
+    content: str,
+    metadata: dict[str, Any],
+    settings: ExternalChatSettings,
+) -> tuple[str, str]:
+    model = _direct_model(settings)
+    service = str(session.get("service") or "")
+    display_name = str(session.get("display_name") or "NewTalk admin")
+    system = (
+        f"{DEFAULT_SYSTEM_PROMPT}\n\n"
+        "Respond in Korean unless the user asks otherwise. "
+        "Keep the answer concise and operational. "
+        "If an action is risky or requires unavailable credentials, say so directly."
+    )
+    prompt = (
+        f"Provider: {session.get('provider')}\n"
+        f"Service: {service}\n"
+        f"Admin: {display_name}\n"
+        f"Metadata: {json.dumps(metadata, ensure_ascii=False)[:1000]}\n\n"
+        f"User message:\n{content}"
+    )
+    assistant_content = await call_llm_with_fallback(
+        prompt,
+        model=model,
+        max_tokens=700,
+        system=system,
+        tenant_id=session["tenant_id"],
+    )
+    assistant_content = (assistant_content or "").strip()
+    if not assistant_content:
+        raise RuntimeError("external_chat_empty_response")
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        user_msg = await chat_service._save_message(
+            conn,
+            uuid.UUID(session["aads_session_id"]),
+            "user",
+            content,
+            model_used=model,
+            intent="external_chat",
+            tools_called=[],
+        )
+        await chat_service._save_message(
+            conn,
+            uuid.UUID(session["aads_session_id"]),
+            "assistant",
+            assistant_content,
+            model_used=model,
+            intent="external_chat",
+            cost=Decimal("0"),
+            tokens_in=0,
+            tokens_out=0,
+            tools_called=[],
+            reply_to_id=uuid.UUID(str(user_msg["id"])) if user_msg else None,
+        )
+    return assistant_content, model
 
 
 async def collect_chat_stream(stream: AsyncGenerator[str, None]) -> tuple[str, dict[str, Any]]:
