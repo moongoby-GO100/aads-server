@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-10 11:44 KST) - NewTalk AADS Chat 메시지 전송 E2E 완료
+- 배경: env 활성화 후 관리자 세션 생성은 통과했지만, 실제 메시지 전송 E2E에서 AADS가 HTTP 500을 반환했다.
+- 원인:
+  - `external_chat_sessions.metadata`가 운영 DB 조회 결과에서 문자열로 반환되는 케이스가 있었고, 메시지 전송 시 `metadata.get()`을 직접 호출해 `AttributeError: 'str' object has no attribute 'get'`가 발생했다.
+- 조치:
+  - AADS `app/services/external_chat_gateway.py`에 metadata 정규화 헬퍼를 추가하고, DB row 변환/관리자 컨텍스트 판정에서 dict로 정규화하도록 수정했다.
+  - AADS `tests/unit/test_external_chat_gateway.py`에 JSON 문자열 metadata 관리자 판정 회귀 테스트를 추가했다.
+  - `bash scripts/reload-api.sh`로 active `aads-server:8100`에 hot reload를 적용했다.
+- 검증:
+  - `python3 -m py_compile app/services/external_chat_gateway.py app/api/external_chat.py` 통과.
+  - `python3 -m pytest tests/unit/test_external_chat_gateway.py -q` 결과 8 passed.
+  - NTV2 관리자 Sanctum 임시 토큰 기반 `/api/aads-chat/session?service=v2`는 HTTP 201.
+  - NTV2 관리자 Sanctum 임시 토큰 기반 `/api/aads-chat/sessions/{id}/messages`는 HTTP 200, `has_assistant_message=true`, `usage_status=internal_exempt`.
+- 커밋/푸시:
+  - AADS `266ee03 fix(chat): normalize external metadata`를 `origin/main`에 푸시했다.
+- 결론:
+  - 현재 운영 기준으로 NewTalk 관리자 로그인 컨텍스트에서 AADS 채팅창 활성화, 세션 생성, 메시지 전송/응답 수신까지 동작한다.
+
 ## 현재 진행 상태 (2026-06-10 11:35 KST) - NewTalk AADS Chat env 활성화/운영 검증 완료
 - 배경: CEO가 "뉴톡에 관리자가 로그인하면 채팅 활성화 되나?"에 대한 이전 답변이 최종 완료보고 조건을 만족하지 못했다고 지적했다.
 - 조치:
