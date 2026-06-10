@@ -1,5 +1,19 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-10 13:28 KST) - NewTalk AADS Chat E2E false-success 방지
+- 배경: `credential_test_login`이 NewTalk V2 로그인 화면에 머문 상태에서도 `status: success`를 반환하는 false-success를 실제 브라우저 snapshot으로 확인했다.
+- 조치:
+  - `app/core/credential_vault.py`의 `execute_login_steps()` 성공 판정을 강화했다.
+  - 로그인 URL(`/login`, `/auth/login`, `/signin`)에 그대로 머물거나 로그인 폼이 계속 보이면 실패로 반환한다.
+  - API token injection, 기본 ID/PW 입력, 커스텀 login_steps 모두 같은 최종 판정을 거치게 했다.
+- 검증:
+  - `python3 -m py_compile app/core/credential_vault.py app/api/ceo_chat_tools.py app/api/credential_vault.py` 통과.
+  - `JWT_SECRET_KEY=test-secret pytest -q tests/unit/test_credential_vault.py tests/unit/test_tools_and_pipeline.py tests/unit/test_browser_bridge.py` 결과 86 passed.
+  - `git diff --check -- app/core/credential_vault.py` 통과.
+- 운영:
+  - 직전 커밋 `e7ea1c8 fix(e2e): run credential login through browser bridge`는 push 및 blue-green 배포 완료. active slot은 `aads-server-green:8102`.
+  - 본 false-success 수정은 별도 커밋/푸시/배포 대상이다.
+
 ## 현재 진행 상태 (2026-06-10 13:07 KST) - NewTalk AADS Chat 브라우저 E2E 도구 보강
 - 배경: CEO가 NewTalk 관리자 로그인 후 AADS 채팅 아이콘 사용 흐름의 권장조치 즉시 구현을 지시했다.
 - 조치:
