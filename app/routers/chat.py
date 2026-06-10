@@ -2664,12 +2664,16 @@ def get_diff_decision(session_id: str, tool_use_id: str) -> Optional[str]:
 async def get_artifacts(
     session_id: Optional[UUID] = Query(None),
     workspace_id: Optional[UUID] = Query(None),
+    limit: int = Query(60, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     context: TenantContext = Depends(require_tenant_viewer),
 ):
     """세션 또는 워크스페이스 내 아티팩트 목록."""
     return await svc.list_artifacts(
         session_id=str(session_id) if session_id else None,
         workspace_id=str(workspace_id) if workspace_id else None,
+        limit=limit,
+        offset=offset,
         tenant_id=_tenant_id(context),
     )
 

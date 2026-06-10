@@ -9496,20 +9496,42 @@ async def search_messages(query: str, workspace_id: Optional[str] = None, limit:
 
 # ─── Artifact ────────────────────────────────────────────────────────────────
 
-async def list_artifacts(session_id: str = None, workspace_id: str = None, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
+async def list_artifacts(
+    session_id: str = None,
+    workspace_id: str = None,
+    tenant_id: Optional[str] = None,
+    limit: int = 60,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
     tenant_uuid = _require_tenant_uuid(tenant_id, "list_artifacts")
+    safe_limit = max(1, min(int(limit or 60), 100))
+    safe_offset = max(0, int(offset or 0))
     async with get_pool().acquire() as conn:
         if workspace_id:
             rows = await conn.fetch(
-                "SELECT * FROM chat_artifacts WHERE workspace_id = $1 AND tenant_id = $2 ORDER BY created_at DESC",
+                """
+                SELECT * FROM chat_artifacts
+                WHERE workspace_id = $1 AND tenant_id = $2
+                ORDER BY created_at DESC
+                LIMIT $3 OFFSET $4
+                """,
                 uuid.UUID(workspace_id),
                 tenant_uuid,
+                safe_limit,
+                safe_offset,
             )
         elif session_id:
             rows = await conn.fetch(
-                "SELECT * FROM chat_artifacts WHERE session_id = $1 AND tenant_id = $2 ORDER BY created_at DESC",
+                """
+                SELECT * FROM chat_artifacts
+                WHERE session_id = $1 AND tenant_id = $2
+                ORDER BY created_at DESC
+                LIMIT $3 OFFSET $4
+                """,
                 uuid.UUID(session_id),
                 tenant_uuid,
+                safe_limit,
+                safe_offset,
             )
         else:
             return []
