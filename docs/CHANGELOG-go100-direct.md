@@ -17498,3 +17498,7 @@ SERVICES→# V4.1 + V4.2 서비스 목록 (읽기 전용 조회)
 ## [2026-06-10 16:23:23 KST] [GO100] backend/app/routers/v4_data_collection.py
 - Chat-Direct 수정: patch:         "go100", "go100-frontend-blue", →        "go100", "go100-frontend-green",
 - finalize: pending
+
+## [2026-06-10 16:25:11 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: ## 2026-06-10 15:49 KST - GO100 limit-up→## 2026-06-10 16:25 KST - GO100 limit-up
+- finalize: pending
