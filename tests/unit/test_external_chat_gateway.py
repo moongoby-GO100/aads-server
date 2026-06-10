@@ -82,6 +82,14 @@ def test_external_chat_admin_context_required_by_default(monkeypatch):
 
     gateway.assert_admin_context({"roles": ["admin"]}, settings)
     gateway.assert_admin_context({"aads_admin_context": True}, settings)
+    gateway.assert_admin_context('{"aads_admin_context": true}', settings)
+
+
+def test_external_chat_metadata_string_normalization():
+    assert gateway.metadata_has_admin_context('{"newtalk_is_admin": true}')
+    assert gateway.metadata_has_admin_context('{"roles": ["admin"]}')
+    assert not gateway.metadata_has_admin_context('{"roles": ["member"]}')
+    assert not gateway.metadata_has_admin_context("not-json")
 
 
 def test_external_chat_admin_context_can_be_disabled(monkeypatch):

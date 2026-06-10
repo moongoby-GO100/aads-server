@@ -480,7 +480,7 @@ def widget_config(provider: Provider, service: ServiceKey) -> dict[str, Any]:
     }
 
 
-def assert_admin_context(metadata: dict[str, Any], settings: ExternalChatSettings | None = None) -> None:
+def assert_admin_context(metadata: dict[str, Any] | str | None, settings: ExternalChatSettings | None = None) -> None:
     cfg = settings or get_settings()
     if not cfg.admin_only:
         return
@@ -489,7 +489,8 @@ def assert_admin_context(metadata: dict[str, Any], settings: ExternalChatSetting
     raise PermissionError("external_chat_admin_required")
 
 
-def metadata_has_admin_context(metadata: dict[str, Any]) -> bool:
+def metadata_has_admin_context(metadata: dict[str, Any] | str | None) -> bool:
+    metadata = _metadata_dict(metadata)
     if _bool_like(metadata.get("aads_admin_context")):
         return True
     if _bool_like(metadata.get("is_admin")) or _bool_like(metadata.get("newtalk_is_admin")):
@@ -513,10 +514,23 @@ def _bool_like(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _metadata_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
 def _session_row_to_dict(row: asyncpg.Record | None) -> dict[str, Any]:
     if not row:
         return {}
     data = dict(row)
+    data["metadata"] = _metadata_dict(data.get("metadata"))
     for key in ("created_at", "updated_at", "last_seen_at"):
         value = data.get(key)
         if isinstance(value, datetime):
