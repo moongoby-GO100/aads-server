@@ -1,5 +1,16 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-10 16:04 KST) - Chat auto-default override 후속 커밋
+- 배경: 커밋/푸시/배포 진행 중 `auto-default-llm`/legacy `qwen-turbo`가 `model_override` 값으로 전달될 때 직접 모델 고정으로 오인될 수 있는 후속 diff가 작업트리에 남아 있음을 확인했다.
+- 조치:
+  - `app/services/chat_service.py`: `auto-default-llm`, `qwen-turbo`를 자동 기본 모델 요청으로 취급해 DB 기본 LLM 라우팅 경로를 타도록 보정했다.
+  - `app/services/model_selector.py`: `call_stream()`의 effective override 계산에서도 동일 센티널 값을 직접 모델 override에서 제외했다.
+- 검증:
+  - 최초 `pytest tests/unit/test_model_selector_dynamic_routing.py tests/unit/test_chat_service.py`는 `JWT_SECRET_KEY` 미설정으로 수집 단계 실패했다.
+  - `JWT_SECRET_KEY=test-secret pytest tests/unit/test_model_selector_dynamic_routing.py tests/unit/test_chat_service.py` 결과 66 passed, 1 warning.
+- 상태:
+  - 이 항목은 별도 커밋/푸시 후 백엔드 blue-green 재배포 대상이다.
+
 ## 현재 진행 상태 (2026-06-10 15:37 KST) - Chat 대형 세션 artifact/resume 안정화
 - 배경: CEO가 권장조치 적용 전 의존성 문제와 오류 가능성을 확인하고, 문제가 없으면 즉시 조치하라고 지시했다.
 - 확인:

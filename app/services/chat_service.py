@@ -7703,7 +7703,10 @@ async def send_message_stream(
             intent = "file_read"
             logger.info(f"[INTENT_OVERRIDE] file_read forced for content containing file keywords")
 
-        if model_override and model_override not in ("mixture", "auto"):
+        _model_override_value = str(model_override or "").strip()
+        _auto_default_requested = _model_override_value in _AUTO_ROUTED_DB_DEFAULT_MODELS
+
+        if model_override and model_override not in ("mixture", "auto") and not _auto_default_requested:
             intent_result.model = get_model_for_override(model_override)
             intent_result.model_locked = True
             intent_result.use_gemini_direct = False
@@ -7715,7 +7718,7 @@ async def send_message_stream(
                 if not intent_result.tool_group:
                     intent_result.tool_group = "all"
 
-        if not model_override or str(model_override).strip() in ("mixture", "auto", ""):
+        if not model_override or str(model_override).strip() in ("mixture", "auto", "") or _auto_default_requested:
             try:
                 from app.services.model_selector import _get_default_llm_model_from_db
                 _db_default_model = await _get_default_llm_model_from_db()

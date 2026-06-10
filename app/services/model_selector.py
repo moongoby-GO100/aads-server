@@ -1406,7 +1406,9 @@ async def call_stream(
     # 그렇지 않으면 model_override or intent 가 "mixture" 문자열이 되어 unknown → claude-sonnet 고정 등 오동작.
     _effective_override = (
         model_override
-        if model_override and str(model_override).strip() not in ("mixture", "auto", "")
+        if model_override
+        and str(model_override).strip() not in ("mixture", "auto", "")
+        and str(model_override).strip() not in _AUTO_ROUTED_DB_DEFAULT_MODELS
         else None
     )
     model = _effective_override or intent_result.model
