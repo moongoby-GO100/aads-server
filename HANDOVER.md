@@ -1,5 +1,19 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-10 16:13 KST) - AADS upstream slot and gallery manifest deploy
+- 배경: CEO가 현재 작업트리 변경분의 커밋, 푸시, 배포 완료를 지시했다.
+- 변경 대상:
+  - `nginx-aads-upstream.conf`: AADS API active upstream을 `8102`로 기록하고 `8100`을 backup 슬롯으로 기록한다.
+  - `nginx-aads-upstream.conf.dashboard.bak`: dashboard active upstream 백업 기록을 `3101` active / `3100` backup 상태로 맞춘다.
+  - `app/static/gallery/manifest.json`: 운영 갤러리 manifest 최신 생성 결과를 반영한다.
+- 검증 예정:
+  - manifest JSON 파싱 검증.
+  - nginx 설정 문법 검증.
+  - deploy script 문법 검증.
+  - blue-green 배포 후 API health 확인.
+- 상태:
+  - 커밋/푸시/배포 진행 중.
+
 ## 현재 진행 상태 (2026-06-10 16:06 KST) - Chat auto-default override 운영 반영
 - 배경: 커밋/푸시/배포 진행 중 `auto-default-llm`/legacy `qwen-turbo`가 `model_override` 값으로 전달될 때 직접 모델 고정으로 오인될 수 있는 후속 diff가 작업트리에 남아 있음을 확인했다.
 - 조치:
