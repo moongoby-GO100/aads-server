@@ -1,5 +1,25 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-10 11:09 KST) - NewTalk AADS Chat 관리자 전용 검증/배포 완료
+- 배경: 이전 완료보고가 ledger와 충돌했다는 CEO 지적에 따라 AADS/NTV2 커밋, 푸시, 배포, DB, 권한 노출 조건을 재실측했다.
+- 후속 조치:
+  - AADS `migrations/108_external_chat_gateway.sql`를 운영 PostgreSQL에 적용해 `external_chat_sessions`, `external_chat_usage_events` 테이블을 생성했다.
+  - AADS `deploy.sh bluegreen`을 실행해 `aads-server-green:8102`를 active 슬롯으로 전환했다.
+  - NTV2 `src/resources/views/welcome.blade.php`: V1 legacy script 삽입 조건을 `@auth` 단독에서 `admin` 또는 `super_admin` 역할 보유자로 좁혔다.
+  - NTV2 `docs/AADS-CHAT-EMBED.md`: V1 legacy 삽입 위치를 authenticated admin/super_admin layout으로 명시했다.
+- 검증:
+  - AADS `python3 -m pytest tests/unit/test_external_chat_gateway.py -q` 통과(7 passed).
+  - AADS active `http://localhost:8102/api/v1/health` 200 확인.
+  - AADS active OpenAPI에 `/api/v1/external/chat/config`, `/api/v1/external/chat/sessions`, `/api/v1/external/chat/sessions/{external_session_id}/messages` 노출 확인.
+  - AADS active `GET /api/v1/external/chat/config?provider=newtalk&service=v2`는 JWT 401이 아니라 Gateway 자체 `external_chat_not_configured` 503을 반환해 미들웨어 예외와 라우터 반영을 확인했다.
+  - NTV2 `php -l src/resources/views/welcome.blade.php` 통과.
+- 커밋/푸시:
+  - AADS: `b11fbdd feat(chat): add NewTalk external admin gateway`가 `HEAD -> main, origin/main`.
+  - NTV2: `34dddc1 fix: restrict legacy AADS chat embed to admins`가 `HEAD -> main, origin/main`.
+- 미완료/운영 필요:
+  - 실제 채팅 사용 활성화는 AADS `AADS_EXTERNAL_CHAT_TOKEN` 또는 `AADS_EXTERNAL_CHAT_TOKENS`/`AADS_EXTERNAL_CHAT_HMAC_SECRET`, NTV2 `AADS_CHAT_TOKEN` 설정 전까지 intentionally disabled 상태다.
+  - 브라우저 E2E는 토큰 설정 전이라 미실행했다. 현재는 API/코드/DB/배포 검증으로 대체했다.
+
 ## 현재 진행 상태 (2026-06-10 10:52 KST) - NewTalk External Chat Gateway 관리자 전용 보강
 - 배경: CEO가 NewTalk 내 AADS 채팅창이 관리자 권한에만 노출되는지 확인을 요청했다.
 - 조치:
