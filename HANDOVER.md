@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-10 11:50 KST) - NewTalk 관리자 로그인 AADS Chat 재검증 완료
+- 배경: CEO가 이전 응답의 커밋/푸시/배포/문서/검증 보고가 ledger와 충돌했다고 지적하여, 실제 운영 상태를 재실측했다.
+- 재확인 결과:
+  - AADS `main`은 `origin/main`과 동기화 상태이며, NewTalk external chat 관련 커밋 `d1c80c8`, `266ee03`, `41fa169`가 포함되어 있다.
+  - NTV2 `main`도 `origin/main`과 동기화 상태이며, `34dddc1 fix: restrict legacy AADS chat embed to admins`, `04aa807 feat: embed AADS admin chat gateway`가 포함되어 있다.
+  - AADS active 컨테이너 `aads-server:8100`은 healthy이며, `AADS_EXTERNAL_CHAT_ENABLED=true`, `AADS_EXTERNAL_CHAT_ADMIN_ONLY=true`, `AADS_EXTERNAL_CHAT_UNLIMITED_FIRST=true`, `AADS_EXTERNAL_CHAT_TOKEN` 존재를 확인했다.
+  - NTV2 `newtalk-v2-app` 런타임 env는 `.env.docker` 기준 `AADS_CHAT_ENABLED=true`, `AADS_CHAT_BASE_URL=https://aads.newtalk.kr/api/v1/external/chat`, `AADS_CHAT_SERVICE=v2`, `AADS_CHAT_TOKEN` 존재를 확인했다.
+- E2E 검증:
+  - AADS token 기반 `GET /api/v1/external/chat/config?provider=newtalk&service=v2`는 HTTP 200, `enabled=true`, `admin_only=true`, `usage_mode=soft_telemetry`를 반환했다.
+  - NTV2 관리자 Sanctum 임시 토큰 기반 `/api/aads-chat/config?service=v2`는 HTTP 200, `enabled=true`, `admin_only=true`.
+  - NTV2 관리자 Sanctum 임시 토큰 기반 `/api/aads-chat/session?service=v2`는 HTTP 201.
+  - NTV2 관리자 Sanctum 임시 토큰 기반 `/api/aads-chat/sessions/{id}/messages`는 HTTP 200, assistant 응답 길이 546자로 확인했다.
+  - NTV2 비관리자 Sanctum 임시 토큰 기반 `/api/aads-chat/config?service=v2`는 HTTP 403으로 차단됐다.
+  - 검증용 Sanctum 토큰은 검증 직후 삭제했다.
+- 결론:
+  - 현재 운영 기준으로 NewTalk 관리자가 로그인하면 AADS 채팅은 활성화되고 실제 메시지 송수신까지 동작한다.
+  - 일반/비관리자는 NTV2 route 레벨에서 차단된다.
+
 ## 현재 진행 상태 (2026-06-10 11:44 KST) - NewTalk AADS Chat 메시지 전송 E2E 완료
 - 배경: env 활성화 후 관리자 세션 생성은 통과했지만, 실제 메시지 전송 E2E에서 AADS가 HTTP 500을 반환했다.
 - 원인:
