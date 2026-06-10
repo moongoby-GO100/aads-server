@@ -464,39 +464,12 @@ async def execute_login_steps(page: Any, credential: dict[str, Any]) -> bool:
     password = credential.get("password", "")
     login_url = credential.get("login_url", "")
 
-    async def _login_form_visible() -> bool:
-        selectors = [
-            "input[type='password']",
-            "button[type='submit']",
-            "button:has-text('로그인')",
-            "button:has-text('Login')",
-            "button:has-text('Sign in')",
-        ]
-        for selector in selectors:
-            try:
-                if await page.locator(selector).first.is_visible(timeout=750):
-                    return True
-            except Exception:
-                continue
-        return False
-
-    async def _login_completed() -> bool:
-        if login_url:
-            current = urlparse(page.url)
-            target = urlparse(login_url)
-            current_path = (current.path or "/").rstrip("/") or "/"
-            target_path = (target.path or "/").rstrip("/") or "/"
-            login_paths = {target_path, "/login", "/auth/login", "/signin"}
-            if current.netloc == target.netloc and current_path in login_paths:
-                return False
-        return not await _login_form_visible()
-
     if not steps:
         if login_url:
             inject_ok = await _api_token_inject(page, credential, {
                 "redirect_url": login_url.replace("/login", "/chat").replace("/signin", "/"),
             })
-            if inject_ok and await _login_completed():
+            if inject_ok and await login_session_completed(page, login_url):
                 await mark_used(credential["id"], tenant_id=str(credential.get("tenant_id") or ""))
                 return True
             await page.goto(login_url, wait_until="domcontentloaded", timeout=15000)
@@ -509,7 +482,7 @@ async def execute_login_steps(page: Any, credential: dict[str, Any]) -> bool:
         login_btn = page.locator("button[type='submit'], button:has-text('로그인'), button:has-text('Login'), button:has-text('Sign in')").first
         await login_btn.click(timeout=5000)
         await page.wait_for_timeout(3000)
-        if not await _login_completed():
+        if not await login_session_completed(page, login_url):
             return False
         await mark_used(credential["id"], tenant_id=str(credential.get("tenant_id") or ""))
         return True
@@ -557,10 +530,39 @@ async def execute_login_steps(page: Any, credential: dict[str, Any]) -> bool:
             logger.error("login_step 실행 실패: action=%s error=%s", action, e)
             return False
 
-    success = await _login_completed()
+    success = await login_session_completed(page, login_url)
     if success:
         await mark_used(credential["id"], tenant_id=str(credential.get("tenant_id") or ""))
     return success
+
+
+async def login_session_completed(page: Any, login_url: str = "") -> bool:
+    """Return True only when the browser no longer appears to be on a login form."""
+
+    if login_url:
+        current = urlparse(getattr(page, "url", "") or "")
+        target = urlparse(login_url)
+        current_path = (current.path or "/").rstrip("/") or "/"
+        target_path = (target.path or "/").rstrip("/") or "/"
+        login_paths = {target_path, "/login", "/auth/login", "/signin"}
+        if current.netloc == target.netloc and current_path in login_paths:
+            return False
+
+    async def _visible(selector: str) -> bool:
+        try:
+            return bool(await page.locator(selector).first.is_visible(timeout=750))
+        except Exception:
+            return False
+
+    password_visible = await _visible("input[type='password']")
+    identity_visible = await _visible(
+        "input[type='email'], input[name='email'], input[name='username'], input#email, input#username"
+    )
+    submit_visible = await _visible(
+        "button[type='submit'], button:has-text('로그인'), button:has-text('Login'), button:has-text('Sign in')"
+    )
+
+    return not (password_visible or (identity_visible and submit_visible))
 
 
 # ── Auto-Provision E2E Credentials ──────────────────────

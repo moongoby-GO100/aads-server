@@ -7,9 +7,9 @@
   - 로그인 URL(`/login`, `/auth/login`, `/signin`)에 그대로 머물거나 로그인 폼이 계속 보이면 실패로 반환한다.
   - API token injection, 기본 ID/PW 입력, 커스텀 login_steps 모두 같은 최종 판정을 거치게 했다.
 - 검증:
-  - `python3 -m py_compile app/core/credential_vault.py app/api/ceo_chat_tools.py app/api/credential_vault.py` 통과.
-  - `JWT_SECRET_KEY=test-secret pytest -q tests/unit/test_credential_vault.py tests/unit/test_tools_and_pipeline.py tests/unit/test_browser_bridge.py` 결과 86 passed.
-  - `git diff --check -- app/core/credential_vault.py` 통과.
+  - `python3.11 -m py_compile app/core/credential_vault.py app/api/ceo_chat_tools.py app/services/tool_registry.py` 통과.
+  - `JWT_SECRET_KEY=test-secret-key-for-local-validation pytest tests/unit/test_credential_vault.py tests/unit/test_external_chat_gateway.py` 결과 18 passed.
+  - `credential_test_login` 실브라우저 검증에서 AADS 테스트 계정은 로그인 실패, NTV2 V2 관리자는 기존 로직상 success지만 최종 URL이 `/login`으로 남는 false-success 케이스를 확인했다.
 - 운영:
   - 직전 커밋 `e7ea1c8 fix(e2e): run credential login through browser bridge`는 push 및 blue-green 배포 완료. active slot은 `aads-server-green:8102`.
   - 본 false-success 수정은 별도 커밋/푸시/배포 대상이다.

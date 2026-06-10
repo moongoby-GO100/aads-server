@@ -1,11 +1,14 @@
 import json
 import inspect
 
+import pytest
+
 from app.core import credential_vault
 from app.core.credential_vault import (
     _E2E_PROJECT_CONFIG,
     _coerce_json_dict,
     _coerce_json_list,
+    login_session_completed,
     _normalize_json_fields,
 )
 
@@ -77,3 +80,49 @@ def test_credential_crud_requires_and_filters_tenant_scope():
     assert "tenant_id = $1" in source
     assert "WHERE id = $1 AND tenant_id = $2" in source
     assert "ON CONFLICT (tenant_id, service, COALESCE(project, '_ALL_'), label)" in source
+
+
+class _FakeLocator:
+    def __init__(self, visible: bool):
+        self._visible = visible
+
+    @property
+    def first(self):
+        return self
+
+    async def is_visible(self, timeout: int = 0):
+        return self._visible
+
+
+class _FakePage:
+    def __init__(self, url: str, visible_selectors: set[str] | None = None):
+        self.url = url
+        self.visible_selectors = visible_selectors or set()
+
+    def locator(self, selector: str):
+        visible = any(needle in selector for needle in self.visible_selectors)
+        return _FakeLocator(visible)
+
+
+@pytest.mark.asyncio
+async def test_login_session_completed_rejects_login_url_even_without_visible_form():
+    page = _FakePage("https://v2.newtalk.kr/login")
+
+    assert await login_session_completed(page, "https://v2.newtalk.kr/login") is False
+
+
+@pytest.mark.asyncio
+async def test_login_session_completed_rejects_visible_login_form():
+    page = _FakePage(
+        "https://v2.newtalk.kr/dashboard",
+        visible_selectors={"input[type='password']"},
+    )
+
+    assert await login_session_completed(page, "https://v2.newtalk.kr/login") is False
+
+
+@pytest.mark.asyncio
+async def test_login_session_completed_accepts_non_login_page_without_form():
+    page = _FakePage("https://v2.newtalk.kr/dashboard")
+
+    assert await login_session_completed(page, "https://v2.newtalk.kr/login") is True

@@ -4190,7 +4190,12 @@ async def tool_credential_test_login(
     browser_work_key: str = "",
 ) -> str:
     """저장된 자격증명으로 로그인 테스트. Browser Bridge 실패 시 HTTP 폴백."""
-    from app.core.credential_vault import get_credential, execute_login_steps, mark_verified
+    from app.core.credential_vault import (
+        execute_login_steps,
+        get_credential,
+        login_session_completed,
+        mark_verified,
+    )
     import aiohttp
     try:
         cred = await get_credential(credential_id, include_secrets=True, tenant_id=tenant_id or None)
@@ -4216,6 +4221,7 @@ async def tool_credential_test_login(
                 if not cred.get("login_steps"):
                     await page.goto(cred["login_url"], wait_until="domcontentloaded", timeout=15000)
                 success = await execute_login_steps(page, cred)
+                success = bool(success) and await login_session_completed(page, cred["login_url"])
                 final_url = page.url
                 await mark_verified(credential_id, success=bool(success), tenant_id=tenant_id or None)
                 return (
