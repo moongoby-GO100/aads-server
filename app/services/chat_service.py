@@ -5454,6 +5454,109 @@ async def _promote_inactive_streaming_placeholders(
     return [m for m in messages if str(m["id"]) not in _remove_set]
 
 
+async def _repair_completed_execution_message_flags(
+    conn: asyncpg.Connection,
+    messages: List[Dict[str, Any]],
+    log_prefix: str,
+) -> List[Dict[str, Any]]:
+    """Keep completed execution rows from rendering as interrupted bubbles.
+
+    Recovery and stale-placeholder paths may rewrite the assistant message before
+    they can terminalize the execution row. If the execution is already completed,
+    the execution ledger is the source of truth and the visible message must not
+    remain tagged as interrupted/streaming.
+    """
+    candidates: list[tuple[uuid.UUID, uuid.UUID]] = []
+    for msg in messages:
+        if msg.get("role") != "assistant" or not msg.get("execution_id") or not msg.get("id"):
+            continue
+        intent = str(msg.get("intent") or "")
+        model_used = str(msg.get("model_used") or "")
+        if (
+            intent in ("streaming_placeholder", "interrupted_partial", "interruption_notice", "_archived_partial")
+            or model_used in ("streaming", "interrupted", "stopped")
+        ):
+            try:
+                candidates.append((uuid.UUID(str(msg["id"])), uuid.UUID(str(msg["execution_id"]))))
+            except Exception:
+                continue
+    if not candidates:
+        return messages
+
+    message_ids = [mid for mid, _ in candidates]
+    execution_ids = list({eid for _, eid in candidates})
+    rows = await conn.fetch(
+        """
+        SELECT m.id,
+               te.id AS execution_id,
+               COALESCE(te.actual_model, te.requested_model, NULLIF(m.model_used, 'streaming')) AS final_model
+        FROM chat_messages m
+        JOIN chat_turn_executions te
+          ON te.id = m.execution_id
+        WHERE m.id = ANY($1::uuid[])
+          AND te.id = ANY($2::uuid[])
+          AND te.status = 'completed'
+          AND te.completed_at IS NOT NULL
+          AND (
+            m.intent IN ('streaming_placeholder', 'interrupted_partial', 'interruption_notice', '_archived_partial')
+            OR m.model_used IN ('streaming', 'interrupted', 'stopped')
+          )
+        """,
+        message_ids,
+        execution_ids,
+    )
+    if not rows:
+        return messages
+
+    repair_by_id = {row["id"]: row for row in rows}
+    await conn.execute(
+        """
+        UPDATE chat_messages m
+        SET intent = NULL,
+            model_used = COALESCE(r.final_model, NULLIF(m.model_used, 'interrupted'), m.model_used),
+            content = regexp_replace(
+                regexp_replace(
+                    m.content,
+                    E'\\n\\n_\\((?:응답이 중단되어 여기까지 보존되었습니다|이전 응답은 중단 처리되었습니다\\. 최신 지시를 우선 처리합니다|이전 지시 응답은 여기까지 보존되고, 최신 지시를 이어서 처리합니다)\\.\\)_\\s*$',
+                    ''
+                ),
+                E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$',
+                ''
+            ),
+            edited_at = NOW()
+        FROM (
+            SELECT m2.id,
+                   COALESCE(te.actual_model, te.requested_model, NULLIF(m2.model_used, 'streaming')) AS final_model
+            FROM chat_messages m2
+            JOIN chat_turn_executions te
+              ON te.id = m2.execution_id
+            WHERE m2.id = ANY($1::uuid[])
+              AND te.status = 'completed'
+              AND te.completed_at IS NOT NULL
+        ) r
+        WHERE m.id = r.id
+        """,
+        list(repair_by_id.keys()),
+    )
+
+    repaired_ids = {str(mid) for mid in repair_by_id}
+    final_models = {str(row["id"]): row["final_model"] for row in rows}
+    for msg in messages:
+        if str(msg.get("id")) in repaired_ids:
+            msg["intent"] = None
+            msg["model_used"] = final_models.get(str(msg.get("id"))) or msg.get("model_used")
+            content = str(msg.get("content") or "")
+            content = re.sub(
+                r"\n\n_\((?:응답이 중단되어 여기까지 보존되었습니다|이전 응답은 중단 처리되었습니다\. 최신 지시를 우선 처리합니다|이전 지시 응답은 여기까지 보존되고, 최신 지시를 이어서 처리합니다)\.\)_\s*$",
+                "",
+                content,
+            )
+            content = re.sub(r"\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\s*$", "", content)
+            msg["content"] = content
+    logger.warning("%s_repaired_completed_execution_flags count=%d", log_prefix, len(repaired_ids))
+    return messages
+
+
 async def list_messages(
     session_id: str,
     limit: int = 50,
@@ -5486,10 +5589,16 @@ async def list_messages(
         if fields == "minimal":
             return results
         results = [_apply_tool_summary(result) for result in results]
+        results = await _repair_completed_execution_message_flags(
+            conn, results, "list_messages",
+        )
         # 비활성 세션의 streaming_placeholder → 내용 있으면 recovered 전환, 없으면 제외
         if not _is_active and not read_only:
             results = await _promote_inactive_streaming_placeholders(
                 conn, session_id, results, "list_messages",
+            )
+            results = await _repair_completed_execution_message_flags(
+                conn, results, "list_messages_after_promote",
             )
         return _dedupe_recovery_like_messages(results)
 
@@ -5546,10 +5655,16 @@ async def list_messages_cursor(
             messages = messages[1:]  # 가장 오래된 1건(초과분) 제거 — dedup 전에 수행
         if fields != "minimal":
             messages = [_apply_tool_summary(message) for message in messages]
+            messages = await _repair_completed_execution_message_flags(
+                conn, messages, "list_messages_cursor",
+            )
             # 비활성 세션의 streaming_placeholder → 내용 있으면 recovered 전환, 없으면 제외
             if not _is_active and not read_only:
                 messages = await _promote_inactive_streaming_placeholders(
                     conn, session_id, messages, "list_messages_cursor",
+                )
+                messages = await _repair_completed_execution_message_flags(
+                    conn, messages, "list_messages_cursor_after_promote",
                 )
             messages = _dedupe_recovery_like_messages(messages)
         next_cursor = messages[0]["created_at"].isoformat() if has_more and messages else None
@@ -6137,6 +6252,25 @@ async def _save_and_update_session(
                     clean_content = re.sub(r'\n\n⏳ _.*?_', '', clean_content, flags=re.DOTALL)
                     clean_content = re.sub(r'^⏳ _[^\n]*_\s*', '', clean_content)
                     clean_content = clean_content.strip()
+                if _execution_uuid and _looks_like_incomplete_progress_tail(clean_content):
+                    logger.warning(
+                        "final_save_blocked_incomplete_progress_tail session=%s execution=%s content_len=%s tool_count=%s tail=%r",
+                        str(sid)[:8],
+                        str(_execution_uuid)[:8],
+                        len(clean_content or ""),
+                        len(normalized_tools_called or []),
+                        (clean_content or "")[-180:],
+                    )
+                    await _mark_execution_interrupted(
+                        conn,
+                        str(sid),
+                        str(_execution_uuid),
+                        "completion_guard_incomplete_progress_tail:final_save",
+                        partial_content=clean_content,
+                        placeholder_id=str(placeholder_id),
+                        delete_empty_placeholder=False,
+                    )
+                    return
                 await conn.execute(
                     """UPDATE chat_messages
                        SET content = $1, intent = $2, model_used = $3,
@@ -6157,6 +6291,25 @@ async def _save_and_update_session(
                 except Exception:
                     pass
             else:
+                if _execution_uuid and _looks_like_incomplete_progress_tail(content):
+                    clean_content = _strip_streaming_progress_markers(content or "").strip()
+                    logger.warning(
+                        "final_insert_blocked_incomplete_progress_tail session=%s execution=%s content_len=%s tool_count=%s tail=%r",
+                        str(sid)[:8],
+                        str(_execution_uuid)[:8],
+                        len(clean_content or ""),
+                        len(normalized_tools_called or []),
+                        (clean_content or "")[-180:],
+                    )
+                    await _mark_execution_interrupted(
+                        conn,
+                        str(sid),
+                        str(_execution_uuid),
+                        "completion_guard_incomplete_progress_tail:final_insert",
+                        partial_content=clean_content,
+                        delete_empty_placeholder=False,
+                    )
+                    return
                 _saved_msg = await _save_message(
                     conn, sid, "assistant", content,
                     execution_id=_execution_uuid,

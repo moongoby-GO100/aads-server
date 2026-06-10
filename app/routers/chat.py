@@ -627,7 +627,7 @@ async def _settle_stale_execution_for_recovery(
     )
     return {
         "is_streaming": bool(_auto_retry_scheduled),
-        "just_completed": bool(_assistant_id and _clean_partial and not _auto_retry_scheduled),
+        "just_completed": not bool(_auto_retry_scheduled),
         "auto_retry_scheduled": bool(_auto_retry_scheduled),
         "content_length": len(_clean_partial),
         "tool_count": _tc,
@@ -645,6 +645,65 @@ async def _settle_or_surface_orphan_placeholder(
     """Make a DB-only placeholder visible when no producer can finish it."""
     if not placeholder_row:
         return None
+
+    try:
+        execution_id = placeholder_row["execution_id"]
+    except Exception:
+        execution_id = None
+    if execution_id:
+        completed_exec = await conn.fetchrow(
+            """
+            SELECT id::text AS execution_id,
+                   last_event_id,
+                   COALESCE(actual_model, requested_model) AS final_model
+            FROM chat_turn_executions
+            WHERE id = $1
+              AND status = 'completed'
+              AND completed_at IS NOT NULL
+            """,
+            UUID(str(execution_id)),
+        )
+        if completed_exec:
+            updated = await conn.fetchrow(
+                """
+                UPDATE chat_messages
+                SET intent = NULL,
+                    model_used = COALESCE($2, NULLIF(model_used, 'streaming'), model_used),
+                    content = regexp_replace(
+                        regexp_replace(
+                            content,
+                            E'\\n\\n_\\((?:응답이 중단되어 여기까지 보존되었습니다|이전 응답은 중단 처리되었습니다\\. 최신 지시를 우선 처리합니다|이전 지시 응답은 여기까지 보존되고, 최신 지시를 이어서 처리합니다)\\.\\)_\\s*$',
+                            ''
+                        ),
+                        E'\\n*⏳ _(?:생성 중|AI가 응답을 생성 중).*?_\\s*$',
+                        ''
+                    ),
+                    edited_at = NOW()
+                WHERE id = $1
+                RETURNING id::text, content, tools_called, execution_id::text AS execution_id
+                """,
+                placeholder_row["id"],
+                completed_exec["final_model"],
+            )
+            _tc, _lt = _extract_tool_progress(updated["tools_called"] if updated else placeholder_row["tools_called"])
+            logger.warning(
+                "streaming_status_repaired_completed_placeholder session=%s execution=%s placeholder=%s",
+                str(session_id)[:8],
+                str(execution_id)[:8],
+                str(placeholder_row["id"])[:8],
+            )
+            return {
+                "found": True,
+                "status": {
+                    "is_streaming": False,
+                    "just_completed": True,
+                    "content_length": len((updated["content"] if updated else placeholder_row["content"]) or ""),
+                    "tool_count": _tc,
+                    "last_tool": _lt,
+                    "execution_id": completed_exec["execution_id"],
+                    "last_event_id": completed_exec["last_event_id"],
+                },
+            }
 
     _partial = placeholder_row["content"] or ""
     _clean_partial = svc._strip_streaming_progress_markers(_partial)
@@ -685,7 +744,7 @@ async def _settle_or_surface_orphan_placeholder(
             },
             "status": {
                 "is_streaming": False,
-                "just_completed": True,
+                "just_completed": False,
                 "content_length": len(_clean_partial),
                 "tool_count": _extract_tool_progress(placeholder_row["tools_called"])[0],
                 "last_tool": _extract_tool_progress(placeholder_row["tools_called"])[1],
@@ -1295,7 +1354,7 @@ async def get_streaming_status(session_id: UUID):
             memory_terminal_status = {
                 **status,
                 "is_streaming": False,
-                "just_completed": True,
+                "just_completed": False,
             }
         elif status.get("just_completed"):
             memory_terminal_status = status
@@ -1398,7 +1457,7 @@ async def get_streaming_status(session_id: UUID):
                     _tc, _lt = _extract_tool_progress(execution_row["tools_called"])
                     return await _finalize_streaming_status(session_id, {
                         "is_streaming": False,
-                        "just_completed": True,
+                        "just_completed": False,
                         "content_length": len(_partial),
                         "token_count": 0,
                         "tool_count": _tc,
@@ -1582,7 +1641,22 @@ async def get_streaming_status(session_id: UUID):
                     edited_at = NOW()
                 WHERE session_id = $1
                   AND intent = 'streaming_placeholder'
-                  AND created_at <= NOW() - interval '5 minutes'
+                  AND COALESCE(edited_at, created_at) <= NOW() - interval '5 minutes'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM chat_turn_executions te
+                      WHERE te.id = chat_messages.execution_id
+                        AND te.status IN ('running', 'retrying')
+                        AND te.completed_at IS NULL
+                        AND te.updated_at > NOW() - interval '5 minutes'
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM chat_turn_executions te_done
+                      WHERE te_done.id = chat_messages.execution_id
+                        AND te_done.status = 'completed'
+                        AND te_done.completed_at IS NOT NULL
+                  )
                 """,
                 session_id,
             )

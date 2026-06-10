@@ -2050,6 +2050,15 @@
 - 조치: `isTerminalIncompleteAssistantMessage()`를 추가해 완료 배지와 final assistant 후보에서 미완료/중단 응답을 제외했다. polling의 `hasNewFinalAi`, just_completed toast, tools-only 복구 경로도 `isFinalAssistantMessage()` 기준으로 통일했다. `/resume` 호출은 `requestResumeOnce()`로 세션+execution 기준 60초 in-flight/cooldown 가드를 적용했다.
 - 검증 대상: 대시보드 TypeScript/build, 커밋/푸시, dashboard blue-green 배포, `/api/v1/health` 및 대상 세션 DB 상태 재조회.
 
+## 2026-06-10 11:14 KST - Chat completion/interruption status contract fix
+- 배경: CEO가 세션 `d84b7c2c-64a5-4a80-9472-21170fd7d160`에서 응답 버블이 계속 `완료 전 중단`으로 보이고, 현재 세션에서도 마지막 응답이 완료처럼 보였다가 중단으로 바뀐 원인 확인과 P0 조치를 지시했다.
+- 실측 원인: `d84b...` 최신 실행은 `1b70d0a8` `running` + `streaming_placeholder`로 아직 완료 상태가 아니었다. 현재 세션의 `c902a1ef`는 새 사용자 지시로 superseded 되어 `_archived_partial/interrupted`로 보존됐다. 백엔드 `streaming-status`의 stale/orphan/interrupted 경로가 일부 `just_completed=True`를 반환해 프론트가 완료 토스트/완료 병합을 먼저 수행한 뒤 중단 상태로 재분류될 수 있었다.
+- 조치:
+  - `app/routers/chat.py`: stale execution settle, orphan placeholder surface, memory terminal interrupted, terminal interrupted assistant 경로에서 `just_completed=False`를 반환하도록 수정했다. 5분 초과 placeholder 정리는 `edited_at` 기준과 live running execution 예외 조건을 추가했다.
+  - `app/services/chat_service.py`: completed execution에 붙은 interrupted/streaming 메시지 플래그를 메시지 조회 시 보정하고, final save/final insert 전에 진행형 tail을 감지해 completed 대신 interrupted로 닫는 보강을 포함했다.
+- 검증: `python3 -m py_compile app/routers/chat.py app/services/chat_service.py` 통과. `JWT_SECRET_KEY=test-secret pytest -q tests/unit/test_chat_service.py tests/unit/test_response_completion_contract.py` 결과 49 passed, 1 warning.
+- 배포 상태: 본 기록 시점에는 코드 수정과 검증 완료, 커밋/푸시/blue-green 배포 진행 대상이다.
+
 ## 2026-06-08 09:18 KST - Chat overlong running execution hard timeout
 - 배경: 최근 24시간 DB에서 `chat_turn_executions.status='running'` 4건과 `streaming_placeholder` 4건이 남아 있었고, 이 중 3건은 30분 이상 실행 중이라 채팅창이 계속 "응답 중"으로 보일 수 있었다.
 - 원인: 기존 `cleanup_stale_streaming_placeholders()`는 placeholder의 `edited_at` 기준으로 stale을 판단했다. heartbeat/interim-save가 계속 placeholder를 갱신하면 실행 시작 시각이 30~50분을 넘겨도 stale로 잡히지 않았다. 또한 `_active_bg_tasks/_streaming_state`에 live로 남은 세션은 cleanup이 건너뛰어 DB `running` row가 장기 잔류할 수 있었다.
