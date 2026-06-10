@@ -1,5 +1,27 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-10 11:35 KST) - NewTalk AADS Chat env 활성화/운영 검증 완료
+- 배경: CEO가 "뉴톡에 관리자가 로그인하면 채팅 활성화 되나?"에 대한 이전 답변이 최종 완료보고 조건을 만족하지 못했다고 지적했다.
+- 조치:
+  - AADS `.env`에 `AADS_EXTERNAL_CHAT_ENABLED=true`, `AADS_EXTERNAL_CHAT_ADMIN_ONLY=true`, `AADS_EXTERNAL_CHAT_UNLIMITED_FIRST=true`, `AADS_EXTERNAL_CHAT_TOKEN`, 허용 origin, workspace name을 반영했다.
+  - NTV2 `/srv/newtalk-v2/.env.docker`, `/srv/newtalk-v2/src/.env`, `/srv/newtalk-v2/frontend/.env.local`에 AADS Chat 연동 env를 반영했다.
+  - NTV2 `docker compose up -d --no-deps app frontend` 실행 후 `newtalk-v2-app`, `newtalk-v2-frontend`를 갱신했고, `php artisan config:clear`로 Laravel 설정 캐시를 정리했다.
+  - AADS `AADS_DEPLOY_ALLOW_BUSY_TARGET=true bash /root/aads/aads-server/deploy.sh bluegreen` 실행으로 새 env가 반영된 `aads-server:8100`을 active 슬롯으로 전환했다.
+- 검증:
+  - AADS 배포 Phase 0.5~6 통과. active 슬롯은 `aads-server:8100`, 외부 `https://aads.newtalk.kr/api/v1/health`는 HTTP 200.
+  - AADS 외부 채팅 config 무인증 호출은 HTTP 401로 확인되어 `external_chat_not_configured` 503에서 "구성 완료 + 인증 필요" 상태로 전환됐다.
+  - AADS 내부 토큰 검증: `/api/v1/external/chat/config?provider=newtalk&service=v2`가 `enabled=true`, `admin_only=true`, `usage_mode=soft_telemetry`를 반환했다.
+  - AADS 비관리자 metadata 세션 생성은 HTTP 403 `external_chat_admin_required`, 관리자 metadata 세션 생성은 HTTP 201로 통과했다.
+  - NTV2 비로그인 `/api/aads-chat/config`는 HTTP 401로 차단됐다.
+  - NTV2 관리자 Sanctum 임시 토큰 기반 E2E에서 `v1_old`, `v1_new`, `v2` 모두 HTTP 200, `enabled=true`, `admin_only=true`를 반환했다. 임시 토큰은 검증 직후 삭제했다.
+  - NTV2 관리자 Sanctum 임시 토큰 기반 `/api/aads-chat/session?service=v2`는 HTTP 201로 세션 생성이 통과했다.
+- 결론:
+  - 현재 운영 기준으로 NewTalk 관리자 로그인 컨텍스트에서는 AADS 채팅이 활성화된다.
+  - 일반/비로그인 사용자는 NTV2 route와 AADS Gateway 양쪽에서 차단된다.
+- 미완료/주의:
+  - 실제 브라우저 로그인 E2E는 Vault 로그인 도구가 브라우저 세션을 인식하지 못해 API E2E로 대체했다.
+  - AADS deploy 스크립트의 active-stream drain 블록이 중복 실행되어 배포 시간이 불필요하게 길어지는 문제는 별도 개선 대상이다.
+
 ## 현재 진행 상태 (2026-06-10 11:09 KST) - NewTalk AADS Chat 관리자 전용 검증/배포 완료
 - 배경: 이전 완료보고가 ledger와 충돌했다는 CEO 지적에 따라 AADS/NTV2 커밋, 푸시, 배포, DB, 권한 노출 조건을 재실측했다.
 - 후속 조치:
