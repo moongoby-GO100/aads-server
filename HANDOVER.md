@@ -3,16 +3,16 @@
 ## 현재 진행 상태 (2026-06-10 16:13 KST) - AADS upstream slot and gallery manifest deploy
 - 배경: CEO가 현재 작업트리 변경분의 커밋, 푸시, 배포 완료를 지시했다.
 - 변경 대상:
-  - `nginx-aads-upstream.conf`: AADS API active upstream을 `8102`로 기록하고 `8100`을 backup 슬롯으로 기록한다.
+  - `nginx-aads-upstream.conf`: blue-green 배포 완료 후 AADS API active upstream을 실제 운영 상태인 `8100` active / `8102` backup으로 기록한다.
   - `nginx-aads-upstream.conf.dashboard.bak`: dashboard active upstream 백업 기록을 `3101` active / `3100` backup 상태로 맞춘다.
   - `app/static/gallery/manifest.json`: 운영 갤러리 manifest 최신 생성 결과를 반영한다.
 - 검증 예정:
   - manifest JSON 파싱 검증.
   - nginx 설정 문법 검증.
   - deploy script 문법 검증.
-  - blue-green 배포 후 API health 확인.
+  - blue-green 배포 후 API health 확인 완료.
 - 상태:
-  - 커밋/푸시/배포 진행 중.
+  - 커밋/푸시 완료. blue-green 배포 완료 후 active slot은 `aads-server:8100`.
 
 ## 현재 진행 상태 (2026-06-10 16:06 KST) - Chat auto-default override 운영 반영
 - 배경: 커밋/푸시/배포 진행 중 `auto-default-llm`/legacy `qwen-turbo`가 `model_override` 값으로 전달될 때 직접 모델 고정으로 오인될 수 있는 후속 diff가 작업트리에 남아 있음을 확인했다.
@@ -2287,3 +2287,9 @@
 - 남은 리스크:
   - 로그인된 브라우저로 실제 채팅 1회 송수신 E2E는 미실행. 배포 스크립트의 프론트 QA 단계도 `UNKNOWN`으로 통과 판정하지 않는다.
   - 백엔드/대시보드 worktree에는 이번 작업 외 기존 unrelated 변경이 남아 있으므로 후속 커밋 시 파일 선별이 필요하다.
+
+## 2026-06-10 16:20 KST - Runtime state and GO100 direct-change log deploy
+- 배경: CEO가 현재 AADS 변경분을 커밋, 푸시, 배포까지 진행하라고 지시했다.
+- 실측 범위: 대시보드 저장소는 clean이고, AADS 서버 저장소에는 `.active_container`, `.active_port`, `app/static/gallery/manifest.json`, `docs/CHANGELOG-go100-direct.md` 변경이 있었다.
+- 조치 계획: `git diff --check`에서 발견된 GO100 changelog trailing whitespace를 정리한 뒤, 런타임 상태/manifest/직접수정 로그/HANDOVER 기록을 함께 커밋한다.
+- 검증 대상: `git diff --check`, 커밋 후 push, `bash deploy.sh bluegreen`, 배포 후 `/api/v1/health` 및 git 상태 확인.
