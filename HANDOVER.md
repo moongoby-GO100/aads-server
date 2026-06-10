@@ -12,7 +12,8 @@
   - `credential_test_login` 실브라우저 검증에서 AADS 테스트 계정은 로그인 실패, NTV2 V2 관리자는 기존 로직상 success지만 최종 URL이 `/login`으로 남는 false-success 케이스를 확인했다.
 - 운영:
   - 직전 커밋 `e7ea1c8 fix(e2e): run credential login through browser bridge`는 push 및 blue-green 배포 완료. active slot은 `aads-server-green:8102`.
-  - 본 false-success 수정은 별도 커밋/푸시/배포 대상이다.
+  - false-success 수정 커밋 `68023f9 fix(e2e): reject credential login false positives`는 push 및 blue-green 배포 완료. active slot은 `aads-server:8100`.
+  - 현재 채팅에 붙어 있던 `aads-server-green` 기반 stale `mcp_servers.aads_tools_bridge` 프로세스는 종료했다. 기존 MCP transport는 닫혔으므로 새 채팅/재연결 후 active `aads-server` 브릿지를 사용해야 한다.
 
 ## 현재 진행 상태 (2026-06-10 13:07 KST) - NewTalk AADS Chat 브라우저 E2E 도구 보강
 - 배경: CEO가 NewTalk 관리자 로그인 후 AADS 채팅 아이콘 사용 흐름의 권장조치 즉시 구현을 지시했다.
