@@ -185,6 +185,42 @@ async def test_list_messages_minimal_is_read_only_and_selects_light_fields():
 
 
 @pytest.mark.asyncio
+async def test_repair_completed_execution_message_flags_clears_interrupted_badge():
+    message_id = uuid.uuid4()
+    execution_id = uuid.uuid4()
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=[
+        {
+            "id": message_id,
+            "execution_id": execution_id,
+            "final_model": "gpt-5.5",
+        }
+    ])
+    conn.execute = AsyncMock()
+    messages = [
+        {
+            "id": str(message_id),
+            "role": "assistant",
+            "execution_id": str(execution_id),
+            "intent": "interrupted_partial",
+            "model_used": "interrupted",
+            "content": "최종 보고입니다.\n\n_(응답이 중단되어 여기까지 보존되었습니다.)_",
+        }
+    ]
+
+    result = await chat_service._repair_completed_execution_message_flags(
+        conn,
+        messages,
+        "unit",
+    )
+
+    assert result[0]["intent"] is None
+    assert result[0]["model_used"] == "gpt-5.5"
+    assert "응답이 중단" not in result[0]["content"]
+    conn.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_get_message_full_normalizes_tools_for_hydrate():
     message_id = uuid.uuid4()
     session_id = uuid.uuid4()

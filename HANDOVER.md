@@ -2039,6 +2039,13 @@
 - 배포 상태: 코드/DB 보정은 적용했으나 서버 배포와 git commit/push는 아직 수행하지 않았다. 대시보드 브라우저 E2E는 인증 토큰 필요로 미실행했다.
 
 ## 2026-06-05 16:49 KST - Chat incomplete producer auto-resume
+## 2026-06-10 11:18 KST - Chat completed/interrupted badge P0 follow-up
+- 배경: CEO가 현재 AADS 채팅창 관리자 세션에서 마지막 응답이 `완료`로 보였다가 `응답중단`으로 바뀐 원인 확인과 권장 P0 조치를 지시했다.
+- 실측 원인: 현재 세션 `ac5278a7-2f13-4cd7-9aa1-83d41fb23c97`에서 `chat_turn_executions.status='completed'`인데 연결된 `chat_messages.intent/model_used`가 `_archived_partial` 또는 `interrupted`로 남은 불일치 10건이 확인됐다. 최신 실행 `c5a9859a`는 `running`, `error_message='recovery_auto_retry_scheduled'` 상태다.
+- 조치: 운영 DB에서 해당 세션의 `completed execution + interrupted/streaming message` 불일치 10건을 `intent=NULL`, `model_used=actual_model/requested_model` 기준으로 보정했다. 보정 후 동일 조건 count는 0건이다. 서버 컨테이너에는 `app/services/chat_service.py`의 `_repair_completed_execution_message_flags`와 `final_save_blocked_incomplete_progress_tail`, `app/routers/chat.py`의 completed placeholder repair 코드가 이미 반영되어 있음을 확인했다.
+- 검증: `python3 -m py_compile app/services/chat_service.py app/routers/chat.py` 통과. `JWT_SECRET_KEY=test-secret-key pytest tests/unit/test_chat_service.py -q` 결과 41 passed, 1 warning. 관련 streaming/recovery 회귀 테스트 7건도 7 passed, 1 warning. API health는 `status=ok`, `graph_ready=true`.
+- 배포/커밋 상태: 백엔드 P0 코드는 현재 컨테이너에 반영되어 있어 별도 재배포는 수행하지 않았다. 이번 턴 신규 파일 변경은 회귀 테스트 추가(`tests/unit/test_chat_service.py`)와 본 HANDOVER 기록이다. 커밋/푸시는 아직 수행하지 않았다.
+
 - 배경: 최근 30분 `chat_turn_executions`에서 `background_producer_incomplete_exit` 3건이 확인됐다. 이는 provider/SSE generator가 `done` 이벤트 없이 끝났을 때 완료로 오표시하지 않는 보호 로직이지만, 자동 이어쓰기 대상이 아니어서 사용자에게 끊김으로 남았다.
 - 원인: `_AUTO_RESUME_INTERRUPTED_REASON_PREFIXES`에 `background_producer_incomplete_exit`가 없어 `_mark_execution_interrupted()` 이후 `_schedule_interrupted_auto_resume()`가 실행되지 않았다.
 - 조치: `app/services/chat_service.py`의 자동 resume 허용 prefix에 `background_producer_incomplete_exit`를 추가했다. 기존 retry_count hard cap(5회), newer execution 차단, superseded 차단은 그대로 유지한다.
