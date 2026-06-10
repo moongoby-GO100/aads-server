@@ -3,6 +3,7 @@ AADS FastAPI 서버.
 lifespan으로 그래프 컴파일 + checkpointer + MCP 초기화.
 """
 from contextlib import asynccontextmanager
+import os
 
 import structlog
 from fastapi import FastAPI, Request
@@ -52,6 +53,7 @@ from app.api.llm_keys import router as llm_keys_router
 from app.api.llm_models import router as llm_models_router
 from app.api.braming import router as braming_router
 from app.api.project_docs import router as project_docs_router
+from app.api.external_chat import router as external_chat_router
 from app.routers.chat import router as chat_v2_router
 from app.config import settings
 from app.graph.builder import compile_graph
@@ -1643,7 +1645,22 @@ app = FastAPI(
 # H-07: CORS middleware — restrict to AADS dashboard origin
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://aads.newtalk.kr", "https://kakaobot.newtalk.kr", "http://localhost:3000", "http://localhost:3001", "http://5.104.86.116:3100", "http://5.104.86.116:8100"],
+    allow_origins=[
+        "https://aads.newtalk.kr",
+        "https://kakaobot.newtalk.kr",
+        "https://newtalk.kr",
+        "https://www.newtalk.kr",
+        "https://v2.newtalk.kr",
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://5.104.86.116:3100",
+        "http://5.104.86.116:8100",
+        *[
+            origin.strip()
+            for origin in os.getenv("AADS_EXTERNAL_CHAT_ALLOWED_ORIGINS", "").split(",")
+            if origin.strip()
+        ],
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1681,6 +1698,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/ops/usage-stats",  # 사용량 통계 (읽기전용)
     "/api/v1/ops/codex-usage",  # Codex 사용량 (읽기전용)
     "/api/v1/ops/claude-max-usage",  # Claude Max 사용량 (읽기전용)
+    "/api/v1/external/chat",  # 외부 서비스 임베드 채팅: 자체 service-token/HMAC 인증
     "/static",  # 정적 파일 (기술문서/보고서/갤러리)
 )
 # 내부 모니터링 (verify_monitor_key로 별도 인증)
@@ -1797,6 +1815,7 @@ app.include_router(braming_router)
 app.include_router(project_docs_router, prefix="/api/v1", tags=["project-docs"])
 app.include_router(terminal.router, prefix="/api/v1", tags=["terminal"])
 app.include_router(browser_bridge.router, prefix="/api/v1", tags=["browser-bridge"])
+app.include_router(external_chat_router, prefix="/api/v1", tags=["external-chat"])
 app.include_router(local_media_router)
 
 # 루트 /health — 모니터링 도구 호환 (인증 면제)

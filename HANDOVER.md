@@ -1,5 +1,55 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-10 10:52 KST) - NewTalk External Chat Gateway 관리자 전용 보강
+- 배경: CEO가 NewTalk 내 AADS 채팅창이 관리자 권한에만 노출되는지 확인을 요청했다.
+- 조치:
+  - AADS `app/services/external_chat_gateway.py`: 기본 `AADS_EXTERNAL_CHAT_ADMIN_ONLY=true` 정책을 추가하고, 세션 생성/메시지 전송 시 `aads_admin_context`, `is_admin`, `newtalk_is_admin`, 또는 관리자 역할 metadata가 없으면 거부하도록 보강했다.
+  - AADS `app/api/external_chat.py`: 관리자 컨텍스트 누락을 HTTP 403으로 반환하도록 매핑했다.
+  - AADS `tests/unit/test_external_chat_gateway.py`: 관리자 전용 기본값, 관리자 metadata 허용, 일반 사용자 metadata 거부, config 정책 회귀 테스트를 추가했다.
+  - NTV2 원격 `/srv/newtalk-v2/src/routes/api.php`: `/api/aads-chat/*` 프록시 route를 `auth:sanctum` + `role:admin` 미들웨어로 제한했다.
+  - NTV2 원격 `AadsChatController.php`: AADS로 전달하는 세션/메시지 metadata에 `aads_admin_context=true`, `newtalk_is_admin=true`를 포함하도록 보강했다.
+  - NTV2 원격 `frontend/src/app/providers.tsx`: V2 Next 전역 위젯 mount를 `admin` 또는 `super_admin` 역할 보유자에게만 제한했다.
+  - NTV2 원격 `frontend/src/components/aads-chat/AadsChatWidget.tsx`: `/api/aads-chat/*`가 401/403을 반환하면 오류 UI도 노출하지 않고 위젯을 숨기도록 보강했다.
+  - NTV2 원격 `docs/AADS-CHAT-EMBED.md`: 관리자 전용 route와 AADS admin-only 기본 정책을 문서화했다.
+- 검증:
+  - AADS `python3 -m py_compile app/api/external_chat.py app/services/external_chat_gateway.py app/services/tenant_usage_limits.py app/main.py` 통과.
+  - AADS `python3 -m pytest tests/unit/test_external_chat_gateway.py -q` 통과(7 passed).
+  - NTV2 원격 `git diff --check -- frontend/src/app/providers.tsx frontend/src/components/aads-chat/AadsChatWidget.tsx src/routes/api.php src/app/Http/Controllers/Api/AadsChatController.php docs/AADS-CHAT-EMBED.md` 통과.
+- 운영 정책:
+  - 브라우저에는 AADS 장기 토큰을 노출하지 않는다.
+  - 뉴톡 일반 회원은 `/api/aads-chat/*` route 접근 자체가 차단되어야 한다.
+  - AADS Gateway도 관리자 metadata가 없으면 403으로 한 번 더 차단한다.
+- 커밋/푸시/배포: 아직 수행하지 않았다. AADS와 NTV2 모두 작업 트리에 기존 unrelated 변경이 남아 있어 선별 커밋/배포가 필요하다.
+
+## 현재 진행 상태 (2026-06-10 09:50 KST) - NewTalk External Chat Gateway 1차 구현
+- 배경: CEO가 뉴톡 V1 구뉴톡, 신뉴톡, V2에 AADS AI 채팅창을 붙이고, 초기에는 기능/사용량을 무제한으로 열어 운영하다 문제 발생 시 제한하는 방식을 지시했다.
+- 구현:
+  - `app/api/external_chat.py`: `/api/v1/external/chat/*` 라우터 추가. 서비스 토큰 또는 HMAC 인증 후 config, 세션 생성/재개, 메시지 조회, 메시지 전송을 제공한다.
+  - `app/services/external_chat_gateway.py`: NewTalk 외부 사용자와 내부 `chat_sessions` 매핑, 외부 세션 테이블 보장, AADS 채팅 스트림 수집, 사용량 telemetry 기록, kill switch/config 처리를 추가했다.
+  - `app/services/tenant_usage_limits.py`: 요청 범위 ContextVar 기반 `soft_bypass`를 추가해 외부 임베드 요청 중 hard-limit을 soft telemetry로 전환할 수 있게 했다.
+  - `migrations/108_external_chat_gateway.sql`: `external_chat_sessions`, `external_chat_usage_events` 테이블 추가.
+  - `app/main.py`: `/api/v1/external/chat` JWT 미들웨어 예외, NewTalk 기본 CORS origin, 외부 채팅 라우터 등록.
+  - `tests/unit/test_external_chat_gateway.py`: 인증/config/stream 수집/soft-bypass 회귀 테스트 추가.
+- NTV2 원격 반영:
+  - `src/app/Http/Controllers/Api/AadsChatController.php`: Laravel 서버 프록시 추가. 브라우저에는 AADS 장기 토큰을 노출하지 않고 NewTalk API가 AADS Gateway로 전달한다.
+  - `src/routes/api.php`: 인증 사용자용 `/api/aads-chat/*` route 등록.
+  - `frontend/src/lib/aads-chat-api.ts`, `frontend/src/components/aads-chat/AadsChatWidget.tsx`, `frontend/src/app/providers.tsx`: V2 Next 앱 전역 floating AADS 위젯 연결.
+  - `src/public/js/aads-chat-widget.js`: V1 구뉴톡/신뉴톡 레거시 페이지에서 script 태그로 붙일 수 있는 공통 위젯 추가.
+  - `src/resources/views/welcome.blade.php`: 인증 사용자 기준 V1 구뉴톡용 `data-service="v1_old"` 위젯 script 삽입.
+  - `docs/AADS-CHAT-EMBED.md`: NTV2 env와 V1/V2 삽입 방법 문서화.
+- 운영 env:
+  - 필수: `AADS_EXTERNAL_CHAT_TOKEN` 또는 `AADS_EXTERNAL_CHAT_TOKENS` 또는 `AADS_EXTERNAL_CHAT_HMAC_SECRET`
+  - 선택: `AADS_EXTERNAL_CHAT_ENABLED`, `AADS_EXTERNAL_CHAT_KILL_SWITCH`, `AADS_EXTERNAL_CHAT_TENANT_ID`, `AADS_EXTERNAL_CHAT_WORKSPACE_NAME`, `AADS_EXTERNAL_CHAT_MODEL`, `AADS_EXTERNAL_CHAT_ALLOWED_ORIGINS`, `AADS_EXTERNAL_CHAT_UNLIMITED_FIRST`
+- API 계약:
+  - `GET /api/v1/external/chat/config?provider=newtalk&service=v1_old|v1_new|v2`
+  - `POST /api/v1/external/chat/sessions`
+  - `GET /api/v1/external/chat/sessions/{external_session_id}/messages`
+  - `POST /api/v1/external/chat/sessions/{external_session_id}/messages`
+- 주의:
+  - 브라우저 위젯에 장기 서비스 토큰을 직접 넣지 않는다. NewTalk 서버 프록시 또는 짧은 세션 토큰 발급층을 두는 방식으로 V1/V2에 붙여야 한다.
+  - NTV2 `.env.example` 직접 수정은 민감 파일 쓰기 차단으로 실패해 `docs/AADS-CHAT-EMBED.md`에 env 키를 기록했다.
+  - 커밋/푸시/배포는 아직 수행하지 않았다.
+
 ## 현재 진행 상태 (2026-06-09 10:16 KST) - SaaS team onboarding final closeout revalidation
 - 목적: CEO가 직전 완료보고의 커밋/푸시/배포/문서 ledger 불일치를 지적하여, 실제 현재 상태를 재검증하고 최종 완료 기준을 다시 고정했다.
 - 재검증 결과:

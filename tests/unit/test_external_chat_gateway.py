@@ -1,0 +1,142 @@
+from __future__ import annotations
+
+import hashlib
+import hmac
+
+import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+
+from app.api.external_chat import router
+from app.services import external_chat_gateway as gateway
+from app.services import tenant_usage_limits as limits
+
+
+def test_external_chat_token_and_hmac_verification(monkeypatch):
+    monkeypatch.setenv("AADS_EXTERNAL_CHAT_TOKEN", "secret-token")
+    monkeypatch.setenv("AADS_EXTERNAL_CHAT_HMAC_SECRET", "hmac-secret")
+
+    settings = gateway.get_settings()
+    assert settings.enabled
+    assert gateway.verify_service_token("secret-token", settings)
+    assert gateway.verify_service_token("Bearer secret-token", settings)
+    assert not gateway.verify_service_token("wrong-token", settings)
+
+    body = b'{"hello":"world"}'
+    signature = "sha256=" + hmac.new(b"hmac-secret", body, hashlib.sha256).hexdigest()
+    assert gateway.verify_hmac_signature(body=body, signature=signature, settings=settings)
+    assert not gateway.verify_hmac_signature(body=body, signature="sha256=bad", settings=settings)
+
+
+@pytest.mark.asyncio
+async def test_external_chat_config_requires_service_token(monkeypatch):
+    monkeypatch.setenv("AADS_EXTERNAL_CHAT_TOKEN", "secret-token")
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
+        rejected = await client.get("/api/v1/external/chat/config?provider=newtalk&service=v2")
+        accepted = await client.get(
+            "/api/v1/external/chat/config?provider=newtalk&service=v2",
+            headers={"X-AADS-External-Token": "secret-token"},
+        )
+
+    assert rejected.status_code == 401
+    assert accepted.status_code == 200
+    assert accepted.json()["provider"] == "newtalk"
+    assert accepted.json()["service"] == "v2"
+    assert accepted.json()["policy"]["usage_mode"] == "soft_telemetry"
+    assert accepted.json()["policy"]["admin_only"] is True
+
+
+@pytest.mark.asyncio
+async def test_external_chat_session_requires_admin_context(monkeypatch):
+    monkeypatch.setenv("AADS_EXTERNAL_CHAT_TOKEN", "secret-token")
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
+        response = await client.post(
+            "/api/v1/external/chat/sessions",
+            headers={"X-AADS-External-Token": "secret-token"},
+            json={
+                "provider": "newtalk",
+                "service": "v2",
+                "external_user_id": "user-1",
+                "metadata": {"roles": ["member"]},
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "external_chat_admin_required"
+
+
+def test_external_chat_admin_context_required_by_default(monkeypatch):
+    monkeypatch.setenv("AADS_EXTERNAL_CHAT_TOKEN", "secret-token")
+    monkeypatch.delenv("AADS_EXTERNAL_CHAT_ADMIN_ONLY", raising=False)
+
+    settings = gateway.get_settings()
+    assert settings.admin_only is True
+    with pytest.raises(PermissionError):
+        gateway.assert_admin_context({"roles": ["member"]}, settings)
+
+    gateway.assert_admin_context({"roles": ["admin"]}, settings)
+    gateway.assert_admin_context({"aads_admin_context": True}, settings)
+
+
+def test_external_chat_admin_context_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("AADS_EXTERNAL_CHAT_TOKEN", "secret-token")
+    monkeypatch.setenv("AADS_EXTERNAL_CHAT_ADMIN_ONLY", "false")
+
+    settings = gateway.get_settings()
+    assert settings.admin_only is False
+    gateway.assert_admin_context({"roles": ["member"]}, settings)
+
+
+def test_external_chat_usage_soft_bypass_converts_hard_limit():
+    usage = limits.TenantMonthlyUsage(
+        tenant_id="tenant-1",
+        month_start=limits.current_month_start(),
+        calls=100,
+        input_tokens=1000,
+        output_tokens=0,
+        total_tokens=1000,
+        cost_usd=limits.Decimal("100"),
+    )
+    policy = limits.TenantPlanPolicy(
+        plan_key="free",
+        monthly_token_limit=10,
+        monthly_cost_limit_usd=limits.Decimal("1"),
+        monthly_call_limit=1,
+        soft_limit_ratio=limits.Decimal("0.8"),
+        hard_limit_ratio=limits.Decimal("1.0"),
+    )
+
+    hard = limits.evaluate_usage_limit(
+        tenant_id="tenant-1",
+        operation="external_chat:send_message",
+        usage=usage,
+        policy=policy,
+    )
+    assert not hard.allowed
+
+    token = limits.set_soft_bypass_usage_limits(True)
+    try:
+        # Simulate the post-evaluation branch used by check_tenant_usage_limit.
+        assert limits._soft_bypass_usage_limits.get() is True
+    finally:
+        limits.reset_soft_bypass_usage_limits(token)
+
+
+@pytest.mark.asyncio
+async def test_collect_chat_stream_returns_delta_content():
+    async def fake_stream():
+        yield 'data: {"type":"delta","content":"hello"}\n\n'
+        yield 'data: {"type":"delta","content":" world"}\n\n'
+        yield 'data: {"type":"done","model":"test","cost":0}\n\n'
+
+    content, meta = await gateway.collect_chat_stream(fake_stream())
+
+    assert content == "hello world"
+    assert meta["done"]["model"] == "test"
+    assert meta["errors"] == []

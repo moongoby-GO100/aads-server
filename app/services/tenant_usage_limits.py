@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -11,6 +12,11 @@ import structlog
 from app.core.db_pool import get_pool
 
 logger = structlog.get_logger(__name__)
+
+_soft_bypass_usage_limits: ContextVar[bool] = ContextVar(
+    "soft_bypass_usage_limits",
+    default=False,
+)
 
 
 class TenantUsageLimitExceeded(Exception):
@@ -55,6 +61,15 @@ class UsageLimitDecision:
     limit_name: Optional[str] = None
     admin_override: bool = False
     internal_exempt: bool = False
+
+
+def set_soft_bypass_usage_limits(enabled: bool = True):
+    """Return a ContextVar token for request-scoped soft-only limit handling."""
+    return _soft_bypass_usage_limits.set(bool(enabled))
+
+
+def reset_soft_bypass_usage_limits(token) -> None:
+    _soft_bypass_usage_limits.reset(token)
 
 
 DEFAULT_PLAN_POLICIES: dict[str, TenantPlanPolicy] = {
@@ -338,6 +353,27 @@ async def check_tenant_usage_limit(
         projected_calls=projected_calls,
         admin_override=override,
     )
+    if not decision.allowed and _soft_bypass_usage_limits.get():
+        logger.warning(
+            "tenant_usage_soft_bypass",
+            tenant_id=tenant_id,
+            operation=operation,
+            limit=decision.limit_name,
+            plan=policy.plan_key,
+        )
+        return UsageLimitDecision(
+            allowed=True,
+            status="soft_bypass",
+            tenant_id=tenant_id,
+            operation=operation,
+            usage=decision.usage,
+            policy=decision.policy,
+            message="tenant hard limit recorded as soft bypass",
+            limit_name=decision.limit_name,
+            admin_override=decision.admin_override,
+            internal_exempt=decision.internal_exempt,
+        )
+
     if not decision.allowed:
         logger.warning(
             "tenant_usage_hard_limit",
