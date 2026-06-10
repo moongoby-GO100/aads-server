@@ -1,15 +1,18 @@
 # AADS HANDOVER
 
-## 현재 진행 상태 (2026-06-10 16:04 KST) - Chat auto-default override 후속 커밋
+## 현재 진행 상태 (2026-06-10 16:06 KST) - Chat auto-default override 운영 반영
 - 배경: 커밋/푸시/배포 진행 중 `auto-default-llm`/legacy `qwen-turbo`가 `model_override` 값으로 전달될 때 직접 모델 고정으로 오인될 수 있는 후속 diff가 작업트리에 남아 있음을 확인했다.
 - 조치:
   - `app/services/chat_service.py`: `auto-default-llm`, `qwen-turbo`를 자동 기본 모델 요청으로 취급해 DB 기본 LLM 라우팅 경로를 타도록 보정했다.
   - `app/services/model_selector.py`: `call_stream()`의 effective override 계산에서도 동일 센티널 값을 직접 모델 override에서 제외했다.
 - 검증:
-  - 최초 `pytest tests/unit/test_model_selector_dynamic_routing.py tests/unit/test_chat_service.py`는 `JWT_SECRET_KEY` 미설정으로 수집 단계 실패했다.
-  - `JWT_SECRET_KEY=test-secret pytest tests/unit/test_model_selector_dynamic_routing.py tests/unit/test_chat_service.py` 결과 66 passed, 1 warning.
+  - 컨테이너 문법 검증: `docker exec aads-server python -m py_compile /app/app/services/chat_service.py /app/app/services/model_selector.py` 통과.
+  - 로컬 회귀 테스트: `env JWT_SECRET_KEY=unit-test-secret AADS_ADMIN_PASSWORD=unit-test-password pytest -q tests/unit/test_chat_service.py::test_send_message_stream_applies_db_default_over_auto_routed_models` 결과 2 passed, 1 warning.
+  - 기존 모델 선택 회귀 테스트: `pytest -q tests/unit/test_model_selector_dynamic_routing.py::test_call_stream_uses_db_default_for_auto_default_sentinel tests/unit/test_model_selector_dynamic_routing.py::test_call_stream_uses_db_default_for_legacy_auto_qwen` 결과 2 passed.
+  - 운영 API SSE 실응답 테스트: 새 세션 `5697dc0c-8389-4668-a8a2-b462ef69ab4c`, `model_override=auto-default-llm`, `response_mode=fast`에서 `done=True`, stream model `GPT-5.5 (Codex CLI)`, DB assistant `model_used=GPT-5.5 (Codex CLI)` 저장 확인.
 - 상태:
-  - 이 항목은 별도 커밋/푸시 후 백엔드 blue-green 재배포 대상이다.
+  - `aads-server` 컨테이너 재시작 후 active `8100`에서 반영 확인 완료.
+  - 커밋/푸시는 아직 수행하지 않았다. 작업트리에는 unrelated 변경(`app/static/gallery/manifest.json`, `docs/CHANGELOG-go100-direct.md`, `nginx-aads-upstream.conf`)이 함께 남아 있으므로 선별 커밋 필요.
 
 ## 현재 진행 상태 (2026-06-10 15:37 KST) - Chat 대형 세션 artifact/resume 안정화
 - 배경: CEO가 권장조치 적용 전 의존성 문제와 오류 가능성을 확인하고, 문제가 없으면 즉시 조치하라고 지시했다.
