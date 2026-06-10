@@ -88,7 +88,14 @@ def test_fast_response_mode_skips_completion_contract():
 
 
 @pytest.mark.asyncio
-async def test_send_message_stream_applies_db_default_over_legacy_qwen():
+@pytest.mark.parametrize(
+    ("classified_model", "model_override"),
+    [
+        ("qwen-turbo", None),
+        ("auto-default-llm", "auto-default-llm"),
+    ],
+)
+async def test_send_message_stream_applies_db_default_over_auto_routed_models(classified_model, model_override):
     captured = {}
     session_id = str(uuid.uuid4())
     execution_id = uuid.uuid4()
@@ -137,7 +144,7 @@ async def test_send_message_stream_applies_db_default_over_legacy_qwen():
             "app.services.intent_router.classify",
             new=AsyncMock(return_value=SimpleNamespace(
                 intent="general",
-                model="qwen-turbo",
+                model=classified_model,
                 use_tools=False,
                 tool_group=None,
                 use_gemini_direct=True,
@@ -160,6 +167,7 @@ async def test_send_message_stream_applies_db_default_over_legacy_qwen():
                 session_id=session_id,
                 content="응답 테스트",
                 attachments=[],
+                model_override=model_override,
                 response_mode="fast",
             )
         ]
