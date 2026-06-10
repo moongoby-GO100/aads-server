@@ -1,5 +1,18 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-10 13:07 KST) - NewTalk AADS Chat 브라우저 E2E 도구 보강
+- 배경: CEO가 NewTalk 관리자 로그인 후 AADS 채팅 아이콘 사용 흐름의 권장조치 즉시 구현을 지시했다.
+- 조치:
+  - `app/api/ceo_chat_tools.py`의 `credential_test_login`이 HTTP 폴백에서 종료되지 않고 Browser Bridge/Playwright 컨텍스트를 확보해 `execute_login_steps()`를 실제 수행하도록 보강했다.
+  - `browser_session_id`, `browser_work_key` 입력을 도구 스키마와 실행 경로에 추가했다.
+  - `app/services/tool_registry.py`의 `credential_test_login` 스키마도 동일하게 갱신했다.
+- 검증:
+  - `python3.11 -m py_compile app/api/ceo_chat_tools.py app/services/tool_registry.py` 통과.
+  - `python3.11 -m pytest tests/unit/test_credential_vault.py tests/unit/test_external_chat_gateway.py` 결과 15 passed.
+  - `git diff --check -- app/api/ceo_chat_tools.py app/services/tool_registry.py` 통과.
+- 상태:
+  - 커밋/푸시/배포는 아직 수행하지 않았다. 기존 unrelated dirty 파일이 있어 이번 변경 파일만 선별 커밋해야 한다.
+
 ## 현재 진행 상태 (2026-06-10 11:50 KST) - NewTalk 관리자 로그인 AADS Chat 재검증 완료
 - 배경: CEO가 이전 응답의 커밋/푸시/배포/문서/검증 보고가 ledger와 충돌했다고 지적하여, 실제 운영 상태를 재실측했다.
 - 재확인 결과:

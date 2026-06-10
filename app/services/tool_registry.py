@@ -2764,11 +2764,13 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     },
     "credential_test_login": {
         "name": "credential_test_login",
-        "description": "저장된 자격증명으로 Playwright 로그인 테스트.",
+        "description": "저장된 자격증명으로 Browser Bridge/Playwright 로그인 테스트. 실패 시 HTTP 폴백 결과를 반환.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "credential_id": {"type": "string", "description": "테스트할 자격증명 UUID"},
+                "browser_session_id": {"type": "string", "description": "사용할 Browser Bridge session id (선택)"},
+                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 브라우저 세션 (선택)"},
             },
             "required": ["credential_id"],
         },

@@ -1680,11 +1680,13 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "credential_test_login",
-        "description": "저장된 자격증명으로 Playwright 로그인 테스트. 성공/실패 반환.",
+        "description": "저장된 자격증명으로 Browser Bridge/Playwright 로그인 테스트. 실패 시 HTTP 폴백 결과를 반환.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "credential_id": {"type": "string", "description": "테스트할 자격증명 UUID"},
+                "browser_session_id": {"type": "string", "description": "사용할 Browser Bridge session id (선택)"},
+                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 브라우저 세션 (선택)"},
             },
             "required": ["credential_id"],
         },
@@ -4181,8 +4183,13 @@ async def tool_credential_delete(credential_id: str, tenant_id: str = "") -> str
         return f"[ERROR] credential_delete 실패: {e}"
 
 
-async def tool_credential_test_login(credential_id: str, tenant_id: str = "") -> str:
-    """저장된 자격증명으로 로그인 테스트 (브릿지 세션 있으면 Playwright, 없으면 API 폴백)."""
+async def tool_credential_test_login(
+    credential_id: str,
+    tenant_id: str = "",
+    browser_session_id: str = "",
+    browser_work_key: str = "",
+) -> str:
+    """저장된 자격증명으로 로그인 테스트. Browser Bridge 실패 시 HTTP 폴백."""
     from app.core.credential_vault import get_credential, execute_login_steps, mark_verified
     import aiohttp
     try:
@@ -4192,19 +4199,47 @@ async def tool_credential_test_login(credential_id: str, tenant_id: str = "") ->
         if not cred.get("login_url"):
             return "[ERROR] login_url이 설정되지 않아 테스트할 수 없습니다."
 
-        # API 폴백 — HTTP 접근 가능 여부 (브라우저 세션 생성 없이 빠르게 확인)
+        browser_error = ""
+        try:
+            from app.browser_bridge.aads_adapter import acquire_browser_context
+
+            work_key = browser_work_key or f"e2e-{str(cred.get('service') or 'credential').lower().replace('_', '-')}"
+            ctx, err = await acquire_browser_context(
+                browser_session_id=browser_session_id or None,
+                browser_work_key=work_key if not browser_session_id else None,
+                url=cred["login_url"],
+            )
+            if err:
+                browser_error = err
+            else:
+                page = await ctx.new_page()
+                if not cred.get("login_steps"):
+                    await page.goto(cred["login_url"], wait_until="domcontentloaded", timeout=15000)
+                success = await execute_login_steps(page, cred)
+                final_url = page.url
+                await mark_verified(credential_id, success=bool(success), tenant_id=tenant_id or None)
+                return (
+                    "[Browser E2E 로그인 테스트]\n"
+                    f"status: {'success' if success else 'failed'}\n"
+                    f"final_url: {final_url}\n"
+                    f"browser_work_key: {work_key}"
+                )
+        except Exception as be:
+            browser_error = str(be)
+
+        # HTTP 폴백 — 브라우저 세션/로그인 스텝 실패 시 접근 가능 여부 확인
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as _s:
                 async with _s.get(cred["login_url"], ssl=False) as _r:
                     _h = _r.status
             if _h in (200, 302, 303):
                 return (
-                    f"[API 폴백] 브라우저 세션 없음 — HTTP {_h}으로 로그인 페이지 접근 확인됨.\n"
-                    f"실제 로그인 테스트: browser_connect(action='ensure_work_session') 연결 후 재시도"
+                    f"[API 폴백] Browser E2E 실패 — HTTP {_h}으로 로그인 페이지 접근 확인됨.\n"
+                    f"browser_error: {browser_error or '(none)'}"
                 )
             return f"[API 폴백] 로그인 페이지 HTTP {_h} — 접근 이상. URL: {cred['login_url']}"
         except Exception as ae:
-            return f"[ERROR] 브라우저 세션 없음 + API 폴백 실패: {ae}"
+            return f"[ERROR] Browser E2E 실패 + API 폴백 실패: browser_error={browser_error or '(none)'} api_error={ae}"
     except Exception as e:
         return f"[ERROR] credential_test_login 실패: {e}"
 
@@ -4505,7 +4540,12 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
     elif name == "credential_delete":
         return await tool_credential_delete(params.get("credential_id", ""), tenant_id=params.get("tenant_id", ""))
     elif name == "credential_test_login":
-        return await tool_credential_test_login(params.get("credential_id", ""), tenant_id=params.get("tenant_id", ""))
+        return await tool_credential_test_login(
+            params.get("credential_id", ""),
+            tenant_id=params.get("tenant_id", ""),
+            browser_session_id=params.get("browser_session_id", ""),
+            browser_work_key=params.get("browser_work_key", ""),
+        )
     elif name == "google_sheets_register":
         return await tool_google_sheets_register(
             service_account_json=params.get("service_account_json", {}),
