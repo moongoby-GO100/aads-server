@@ -2328,3 +2328,17 @@
 - 실측 범위: 대시보드 저장소는 clean이고, AADS 서버 저장소에는 `.active_container`, `.active_port`, `app/static/gallery/manifest.json`, `docs/CHANGELOG-go100-direct.md` 변경이 있었다.
 - 조치 계획: `git diff --check`에서 발견된 GO100 changelog trailing whitespace를 정리한 뒤, 런타임 상태/manifest/직접수정 로그/HANDOVER 기록을 함께 커밋한다.
 - 검증 대상: `git diff --check`, 커밋 후 push, `bash deploy.sh bluegreen`, 배포 후 `/api/v1/health` 및 git 상태 확인.
+
+## 2026-06-11 09:11 KST - Admin user signup and usage dashboard
+- 배경: CEO가 AADS 어드민에서 사용자 가입현황과 사용현황을 확인할 수 있는 페이지를 즉시 반영하라고 지시했다.
+- 조치:
+  - `app/api/admin_users.py`를 추가해 `GET /api/v1/admin/users/overview` 읽기 전용 집계 API를 구현했다.
+  - API는 `saas_users`, `tenants`, `tenant_memberships`, `tenant_invites`, `chat_sessions`, `chat_messages`, `oauth_usage_log`, `bg_llm_usage_log` 존재 여부를 확인한 뒤 가입자, 활성 사용자, customer tenant, 초대, 7일/선택 기간 호출·토큰·비용, 사용자별 최근 활동을 반환한다.
+  - `app/main.py`에 admin-users 라우터를 등록했다.
+  - 대시보드에 `/admin/users` 페이지를 추가하고 사이드바 `사용자 현황` 메뉴 및 `src/lib/api.ts` 호출 타입을 연결했다.
+- 검증:
+  - `python3 -m py_compile app/api/admin_users.py app/main.py` 통과.
+  - 운영 DB 직접 호출 기준 `total_users=40`, `active_users=32`, `customer_tenants=32`, `calls_window=5614`, `daily_len=14` 반환 확인.
+  - `npx eslint src/app/admin/users/page.tsx` 통과.
+  - `npx tsc --noEmit --pretty false` 통과.
+- 주의: 전체 `api.ts` lint는 기존 `no-explicit-any` 부채로 실패한다. 이번 신규 페이지 단독 lint와 TypeScript 검증은 통과했다.

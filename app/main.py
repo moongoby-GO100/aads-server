@@ -27,6 +27,7 @@ from app.api.documents import router as documents_router
 from app.api.governance import router as governance_router
 from app.api.ops import router as ops_router
 from app.api.admin import router as admin_router
+from app.api.admin_users import router as admin_users_router
 from app.api.lessons import router as lessons_router
 from app.api.strategy import router as strategy_router
 from app.api.plans import router as plans_router
@@ -1806,6 +1807,7 @@ app.include_router(kakao_bot_router, prefix="/api/v1", tags=["kakao-bot"])
 app.include_router(agenda_router, prefix="/api/v1/agenda", tags=["agenda"])
 app.include_router(hot_reload_router, prefix="/api/v1", tags=["hot-reload"])
 app.include_router(admin_router, prefix="/api/v1", tags=["admin"])
+app.include_router(admin_users_router, prefix="/api/v1", tags=["admin-users"])
 app.include_router(design_modifications.router, prefix="/api/v1", tags=["design-modifications"])
 app.include_router(credential_vault_router, prefix="/api/v1", tags=["credential-vault"])
 app.include_router(google_sheets.router, prefix="/api/v1", tags=["google-sheets"])
